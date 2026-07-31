@@ -236,6 +236,7 @@ test('failed live managed Metro shutdown preserves donor ownership before transf
   const registry = {
     getSessionStatus: (sessionId: string) =>
       sessionId === donorStatus.sessionId ? donorStatus : targetStatus,
+    validateHandoffInto: () => {},
     getHandoffOwner: () => donorStatus.sessionId,
     reserveManagedMetroHandoffCleanup: (_session: unknown, input: { handoffId: string }) => {
       reservation ??= {
@@ -615,6 +616,7 @@ test('stale adoption stops every durable cleanup resource before becoming operat
   };
   const registry = {
     getSessionStatus: () => status,
+    validateStaleAdoption: () => {},
     adoptStaleWithHandle: () => {
       status.state = 'handoff_cleanup';
       status.bindings = {
@@ -721,6 +723,7 @@ test('stale adoption reports its committed outcome for a never-integrated app', 
   };
   const registry = {
     getSessionStatus: () => status,
+    validateStaleAdoption: () => {},
     adoptStaleWithHandle: () => {
       status.state = 'source_bound';
       status.authorityVersion += 1;

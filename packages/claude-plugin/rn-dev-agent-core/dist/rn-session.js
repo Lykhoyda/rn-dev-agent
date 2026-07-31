@@ -8741,7 +8741,10 @@ var init_registry = __esm({
       reserveManagedMetroHandoffCleanup(target, input) {
         const now = this.#now();
         return this.#transaction(() => {
-          const context = this.#requireHandoffIntoContext(target, input, true);
+          const context = this.#requireHandoffIntoContext(target, input, {
+            allowExactReservationAfterExpiry: true,
+            commitRecipientRotation: true
+          });
           const active = this.#database.prepare(`SELECT operation_id FROM operations
            WHERE session_id = ?
               OR (session_id = ? AND profile NOT LIKE 'transition:%')
@@ -8780,7 +8783,10 @@ var init_registry = __esm({
       completeManagedMetroHandoffCleanup(target, input) {
         const now = this.#now();
         return this.#transaction(() => {
-          const context = this.#requireHandoffIntoContext(target, input, true);
+          const context = this.#requireHandoffIntoContext(target, input, {
+            allowExactReservationAfterExpiry: true,
+            commitRecipientRotation: true
+          });
           const reservation = context.reservation;
           if (!reservation) {
             throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "managed Metro shutdown has no durable handoff reservation");
@@ -8804,7 +8810,10 @@ var init_registry = __esm({
       refuseManagedMetroHandoffCleanup(target, input) {
         const now = this.#now();
         this.#transaction(() => {
-          const context = this.#requireHandoffIntoContext(target, input, true);
+          const context = this.#requireHandoffIntoContext(target, input, {
+            allowExactReservationAfterExpiry: true,
+            commitRecipientRotation: true
+          });
           const reservation = context.reservation;
           if (!reservation || reservation.phase !== "shutdown_reserved") {
             throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "managed Metro shutdown refusal does not match an active reservation");
@@ -8825,7 +8834,10 @@ var init_registry = __esm({
       }
       validateHandoffInto(target, input) {
         this.#transaction(() => {
-          this.#requireHandoffIntoContext(target, input, false);
+          this.#requireHandoffIntoContext(target, input, {
+            allowExactReservationAfterExpiry: false,
+            commitRecipientRotation: false
+          });
         });
       }
       acceptHandoff(input) {
@@ -8887,7 +8899,10 @@ var init_registry = __esm({
       acceptHandoffInto(target, input) {
         const now = this.#now();
         return this.#transaction(() => {
-          const context = this.#requireHandoffIntoContext(target, input, true);
+          const context = this.#requireHandoffIntoContext(target, input, {
+            allowExactReservationAfterExpiry: true,
+            commitRecipientRotation: true
+          });
           const { targetRow, handoff, prior, bindings } = context;
           const active = this.#database.prepare(`SELECT operation_id FROM operations
            WHERE session_id = ?
@@ -9279,18 +9294,31 @@ var init_registry = __esm({
           this.#fenceSession(prior.session_id, now);
         });
       }
-      adoptStaleWithHandle(target, handle, targetInstance, options = {}) {
+      #requireStaleAdoptionContext(target, handle, targetInstance) {
         const targetStatus = this.getSessionStatus(target.sessionId);
         const recovery = targetStatus?.bindings.recoveryHandles;
         const adoption = recovery?.adoptStale;
-        if (targetStatus?.state !== "blocked" || typeof adoption?.token !== "string" || typeof adoption.expiresMs !== "number" || adoption.expiresMs < this.#now() || typeof adoption.priorSessionId !== "string" || !this.#capabilityMatches(adoption.token, handle)) {
+        if (targetStatus?.state !== "blocked" || targetStatus.claimEpoch !== target.claimEpoch || typeof adoption?.token !== "string" || typeof adoption.expiresMs !== "number" || adoption.expiresMs < this.#now() || typeof adoption.priorSessionId !== "string" || !this.#capabilityMatches(adoption.token, handle)) {
           throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "stale adoption capability is invalid or expired");
         }
+        if (targetStatus.worker.instanceId !== targetInstance) {
+          throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "stale adoption target is not the recovery worker");
+        }
         const prior = this.getSessionStatus(adoption.priorSessionId);
-        if (prior?.claimEpoch !== adoption.priorClaimEpoch) {
+        if (!prior || prior.claimEpoch !== adoption.priorClaimEpoch) {
           throw new SessionAuthorityError("SESSION_OWNER_LOST", "stale adoption capability no longer matches the prior claim epoch");
         }
-        this.adoptStaleIntoBlocked(target, adoption.priorSessionId, targetInstance, options);
+        if (prior.sourceKey !== targetStatus.sourceKey || prior.worktreeKey !== targetStatus.worktreeKey || prior.appRootKey !== targetStatus.appRootKey) {
+          throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", "stale session does not belong to this exact source worktree");
+        }
+        return { priorSessionId: adoption.priorSessionId };
+      }
+      validateStaleAdoption(target, handle, targetInstance) {
+        this.#requireStaleAdoptionContext(target, handle, targetInstance);
+      }
+      adoptStaleWithHandle(target, handle, targetInstance, options = {}) {
+        const { priorSessionId } = this.#requireStaleAdoptionContext(target, handle, targetInstance);
+        this.adoptStaleIntoBlocked(target, priorSessionId, targetInstance, options);
       }
       verifyStaleAdoptionResumption(target, handle, targetInstance) {
         const status = this.getSessionStatus(target.sessionId);
@@ -9646,7 +9674,8 @@ var init_registry = __esm({
         }
         return row;
       }
-      #requireHandoffIntoContext(target, input, allowExactReservationAfterExpiry) {
+      #requireHandoffIntoContext(target, input, options) {
+        const { allowExactReservationAfterExpiry, commitRecipientRotation } = options;
         const targetRow = this.#requireRecoverableSession(target);
         if (targetRow.state !== "blocked") {
           throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "handoff acceptance is not available during cleanup");
@@ -9660,13 +9689,13 @@ var init_registry = __esm({
         if (!handoff) {
           throw new SessionAuthorityError("HANDOFF_NOT_FOUND", "handoff does not exist");
         }
-        if (handoff.consumed_ms !== null) {
-          throw new SessionAuthorityError("HANDOFF_ALREADY_CONSUMED", "handoff was already accepted");
-        }
         const expected = Buffer.from(handoff.token_hash, "hex");
         const actual = createHash5("sha256").update(input.token).digest();
         if (expected.length !== actual.length || !timingSafeEqual4(expected, actual)) {
           throw new SessionAuthorityError("HANDOFF_TOKEN_INVALID", "handoff capability is invalid");
+        }
+        if (handoff.consumed_ms !== null) {
+          throw new SessionAuthorityError("HANDOFF_ALREADY_CONSUMED", "handoff was already accepted");
         }
         const prior = asSession(this.#database.prepare(`SELECT session_id, source_key, worktree_key, app_root_key, state,
                   claim_epoch, authority_version, bindings_json
@@ -9711,23 +9740,25 @@ var init_registry = __esm({
             targetClaimEpoch: target.claimEpoch,
             targetInstance: input.targetInstance
           };
-          const handoffChanged = this.#database.prepare(`UPDATE handoffs SET target_instance = ?
-           WHERE handoff_id = ? AND target_instance = ? AND consumed_ms IS NULL`).run(input.targetInstance, handoff.handoff_id, reservation.targetInstance);
-          if (handoffChanged.changes !== 1) {
-            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "managed Metro handoff target changed during recipient rotation");
-          }
-          bindings = {
-            ...bindings,
-            managedMetroHandoffReservation: rotatedReservation
-          };
-          const donorChanged = this.#database.prepare(`UPDATE sessions
-           SET bindings_json = ?, authority_version = authority_version + 1, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ? AND state = 'handoff'`).run(JSON.stringify(bindings), this.#now(), prior.session_id, prior.claim_epoch);
-          if (donorChanged.changes !== 1) {
-            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "managed Metro donor authority changed during recipient rotation");
-          }
-          if (priorTarget.state === "blocked") {
-            this.#fenceSession(priorTarget.session_id, this.#now());
+          if (commitRecipientRotation) {
+            const handoffChanged = this.#database.prepare(`UPDATE handoffs SET target_instance = ?
+             WHERE handoff_id = ? AND target_instance = ? AND consumed_ms IS NULL`).run(input.targetInstance, handoff.handoff_id, reservation.targetInstance);
+            if (handoffChanged.changes !== 1) {
+              throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "managed Metro handoff target changed during recipient rotation");
+            }
+            bindings = {
+              ...bindings,
+              managedMetroHandoffReservation: rotatedReservation
+            };
+            const donorChanged = this.#database.prepare(`UPDATE sessions
+             SET bindings_json = ?, authority_version = authority_version + 1, updated_ms = ?
+             WHERE session_id = ? AND claim_epoch = ? AND state = 'handoff'`).run(JSON.stringify(bindings), this.#now(), prior.session_id, prior.claim_epoch);
+            if (donorChanged.changes !== 1) {
+              throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "managed Metro donor authority changed during recipient rotation");
+            }
+            if (priorTarget.state === "blocked") {
+              this.#fenceSession(priorTarget.session_id, this.#now());
+            }
           }
           handoff.target_instance = input.targetInstance;
           reservation = rotatedReservation;

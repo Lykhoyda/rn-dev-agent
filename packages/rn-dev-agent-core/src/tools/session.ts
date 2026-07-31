@@ -163,30 +163,25 @@ function durableBindingManifestSource(
   return verifiedManifestSource(binding?.manifestSource, binding?.manifestSha256);
 }
 
-function recoverableManifestSource(
-  appRoot: string,
-  binding: IntegrationBindingShape | undefined,
+function durableRestorationMaterial(
+  binding: IntegrationBindingShape | null | undefined,
 ): string | undefined {
-  let onDisk: string | undefined;
-  try {
-    onDisk = readPackageIntegrationInputs(appRoot).manifest;
-  } catch {
-    onDisk = undefined;
-  }
   const restoration =
     binding?.restoration?.phase === 'started' ? binding.restoration.manifestSource : undefined;
   const installation =
     binding?.installation?.phase === 'started' ? binding.installation.manifestSource : undefined;
   return (
-    verifiedManifestSource(onDisk, binding?.manifestSha256) ??
     verifiedManifestSource(restoration, binding?.manifestSha256) ??
     verifiedManifestSource(installation, binding?.manifestSha256) ??
-    durableBindingManifestSource(binding)
+    durableBindingManifestSource(binding ?? undefined)
   );
 }
 
 const MANIFEST_RECOVERY_GUIDANCE =
   'Restore the exact integration manifest at .rn-agent/integration/rn-session-integration.json from your own version control history or backups so it matches the manifest SHA-256 recorded on the binding';
+
+const TRANSFER_RECOVERY_GUIDANCE =
+  'Ownership transfer requires SHA-256-verified restoration material already durable inside the registry binding, and on-disk manifest bytes never authorize a transfer; if the owning session is still alive, restore the exact integration manifest at .rn-agent/integration/rn-session-integration.json from your own version control history or backups and let that owner run restore_integration with confirmed=true, otherwise recover from a trusted session-state-plus-manifest backup while the refusal fence remains.';
 
 const MISSING_DIGEST_GUIDANCE =
   'No trusted manifest SHA-256 digest is recorded on this binding, so no manifest bytes can be verified against it; operator recovery from a trusted session-state-plus-manifest backup is required while the refusal fence remains.';
@@ -204,6 +199,10 @@ function manifestRecoveryNextAction(
   return hasTrustedManifestDigest(binding)
     ? `${MANIFEST_RECOVERY_GUIDANCE}, then ${retry}.`
     : MISSING_DIGEST_GUIDANCE;
+}
+
+function manifestTransferNextAction(binding: IntegrationBindingShape | null | undefined): string {
+  return hasTrustedManifestDigest(binding) ? TRANSFER_RECOVERY_GUIDANCE : MISSING_DIGEST_GUIDANCE;
 }
 
 function describeIntegrationFileDiagnostics(appRoot: string): string {
@@ -1029,6 +1028,13 @@ export function createSessionHandler(
             'target worker identity is unavailable',
           );
         }
+        if (status.state !== 'handoff_cleanup') {
+          registry.validateHandoffInto(session, {
+            handoffId,
+            token,
+            targetInstance: status.worker.instanceId,
+          });
+        }
         let cleanup = status.bindings.handoffCleanup as
           | {
               metro?: Record<string, unknown>;
@@ -1048,21 +1054,17 @@ export function createSessionHandler(
             }
           | undefined;
         const acceptAppRoot = String(status.source.appRoot ?? '');
-        const retryAccept = 'retry accept_handoff with the same handoffId and token';
         if (status.state === 'handoff_cleanup') {
           const transferredBinding = status.bindings.packageIntegration as
             | IntegrationBindingShape
             | null
             | undefined;
-          if (
-            transferredBinding &&
-            !(acceptAppRoot && recoverableManifestSource(acceptAppRoot, transferredBinding))
-          ) {
+          if (transferredBinding && !durableRestorationMaterial(transferredBinding)) {
             throw new SessionAuthorityError(
               'SESSION_AUTHORITY_REQUIRED',
               `resumed handoff cleanup carries package-integration authority without a SHA-256-verified restoration manifest; cleanup refuses before any lifecycle mutation, and canonical files were inspected for diagnostics only (${describeIntegrationFileDiagnostics(acceptAppRoot)})`,
               undefined,
-              { nextAction: manifestRecoveryNextAction(transferredBinding, retryAccept) },
+              { nextAction: manifestTransferNextAction(transferredBinding) },
             );
           }
         } else {
@@ -1070,15 +1072,12 @@ export function createSessionHandler(
             | IntegrationBindingShape
             | null
             | undefined;
-          if (
-            donorBinding &&
-            !(acceptAppRoot && recoverableManifestSource(acceptAppRoot, donorBinding))
-          ) {
+          if (donorBinding && !durableRestorationMaterial(donorBinding)) {
             throw new SessionAuthorityError(
               'SESSION_AUTHORITY_REQUIRED',
               `handoff donor carries package-integration authority without a SHA-256-verified restoration manifest; acceptance refuses before any reservation, cleanup, transfer, or registry mutation, and canonical files were inspected for diagnostics only (${describeIntegrationFileDiagnostics(acceptAppRoot)})`,
               undefined,
-              { nextAction: manifestRecoveryNextAction(donorBinding, retryAccept) },
+              { nextAction: manifestTransferNextAction(donorBinding) },
             );
           }
         }
@@ -1307,15 +1306,11 @@ export function createSessionHandler(
             'SESSION_AUTHORITY_REQUIRED',
             `${subject} without a SHA-256-verified restoration manifest; recovery refuses before any transfer, cleanup, or registry mutation, and canonical files were inspected for diagnostics only (${describeIntegrationFileDiagnostics(adoptionAppRoot)})`,
             undefined,
-            {
-              nextAction: manifestRecoveryNextAction(
-                binding,
-                'retry adopt_stale with the same adoptionHandle',
-              ),
-            },
+            { nextAction: manifestTransferNextAction(binding) },
           );
         };
         if (current.state !== 'handoff_cleanup') {
+          registry.validateStaleAdoption(session, adoptionHandle, current.worker.instanceId);
           const recoveryHandles = current.bindings.recoveryHandles as
             | { adoptStale?: { priorSessionId?: unknown } }
             | undefined;
@@ -1328,10 +1323,7 @@ export function createSessionHandler(
                 | IntegrationBindingShape
                 | undefined)
             : undefined;
-          if (
-            priorIntegration &&
-            !(adoptionAppRoot && recoverableManifestSource(adoptionAppRoot, priorIntegration))
-          ) {
+          if (priorIntegration && !durableRestorationMaterial(priorIntegration)) {
             refuseManifestlessBinding(
               'stale session carries package-integration authority',
               priorIntegration,
@@ -1350,10 +1342,7 @@ export function createSessionHandler(
             | IntegrationBindingShape
             | null
             | undefined;
-          if (
-            transferredBinding &&
-            !(adoptionAppRoot && recoverableManifestSource(adoptionAppRoot, transferredBinding))
-          ) {
+          if (transferredBinding && !durableRestorationMaterial(transferredBinding)) {
             refuseManifestlessBinding(
               'resumed stale adoption carries package-integration authority',
               transferredBinding,
@@ -1382,11 +1371,7 @@ export function createSessionHandler(
             );
           }
           await (dependencies.stopHandoffRecorder ?? stopBoundRecorder)(recorderCleanup);
-          registry.completeHandoffCleanupResource(
-            session,
-            current.worker.instanceId,
-            'recorder',
-          );
+          registry.completeHandoffCleanupResource(session, current.worker.instanceId, 'recorder');
         }
         if (cleanup?.runner && typeof cleanup.runner.completedAt !== 'number') {
           const runnerCleanup = registry.beginHandoffCleanupResource(
@@ -1448,22 +1433,17 @@ export function createSessionHandler(
               'stale Metro cleanup binding disappeared while fenced',
             );
           }
-          const signerCapability = dependencies.getSignerCapability?.(
-            metroCleanup.sourceSessionId,
-          );
+          const signerCapability = dependencies.getSignerCapability?.(metroCleanup.sourceSessionId);
           if (!signerCapability) {
             throw new SessionAuthorityError(
               'SESSION_AUTHORITY_REQUIRED',
               'stale Metro cleanup requires the source session signer capability',
             );
           }
-          const stopped = await (dependencies.stopManagedMetro ?? stopManagedMetro)(
-            metroCleanup,
-            {
-              sessionId: metroCleanup.sourceSessionId,
-              signerCapability,
-            },
-          );
+          const stopped = await (dependencies.stopManagedMetro ?? stopManagedMetro)(metroCleanup, {
+            sessionId: metroCleanup.sourceSessionId,
+            signerCapability,
+          });
           if (!stopped) {
             throw new SessionAuthorityError(
               'METRO_AUTHORITY_MISMATCH',

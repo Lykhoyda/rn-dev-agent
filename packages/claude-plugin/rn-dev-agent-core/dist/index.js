@@ -27113,7 +27113,10 @@ var init_registry = __esm({
       reserveManagedMetroHandoffCleanup(target, input) {
         const now = this.#now();
         return this.#transaction(() => {
-          const context = this.#requireHandoffIntoContext(target, input, true);
+          const context = this.#requireHandoffIntoContext(target, input, {
+            allowExactReservationAfterExpiry: true,
+            commitRecipientRotation: true
+          });
           const active = this.#database.prepare(`SELECT operation_id FROM operations
            WHERE session_id = ?
               OR (session_id = ? AND profile NOT LIKE 'transition:%')
@@ -27152,7 +27155,10 @@ var init_registry = __esm({
       completeManagedMetroHandoffCleanup(target, input) {
         const now = this.#now();
         return this.#transaction(() => {
-          const context = this.#requireHandoffIntoContext(target, input, true);
+          const context = this.#requireHandoffIntoContext(target, input, {
+            allowExactReservationAfterExpiry: true,
+            commitRecipientRotation: true
+          });
           const reservation = context.reservation;
           if (!reservation) {
             throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "managed Metro shutdown has no durable handoff reservation");
@@ -27176,7 +27182,10 @@ var init_registry = __esm({
       refuseManagedMetroHandoffCleanup(target, input) {
         const now = this.#now();
         this.#transaction(() => {
-          const context = this.#requireHandoffIntoContext(target, input, true);
+          const context = this.#requireHandoffIntoContext(target, input, {
+            allowExactReservationAfterExpiry: true,
+            commitRecipientRotation: true
+          });
           const reservation = context.reservation;
           if (!reservation || reservation.phase !== "shutdown_reserved") {
             throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "managed Metro shutdown refusal does not match an active reservation");
@@ -27197,7 +27206,10 @@ var init_registry = __esm({
       }
       validateHandoffInto(target, input) {
         this.#transaction(() => {
-          this.#requireHandoffIntoContext(target, input, false);
+          this.#requireHandoffIntoContext(target, input, {
+            allowExactReservationAfterExpiry: false,
+            commitRecipientRotation: false
+          });
         });
       }
       acceptHandoff(input) {
@@ -27259,7 +27271,10 @@ var init_registry = __esm({
       acceptHandoffInto(target, input) {
         const now = this.#now();
         return this.#transaction(() => {
-          const context = this.#requireHandoffIntoContext(target, input, true);
+          const context = this.#requireHandoffIntoContext(target, input, {
+            allowExactReservationAfterExpiry: true,
+            commitRecipientRotation: true
+          });
           const { targetRow, handoff, prior, bindings } = context;
           const active = this.#database.prepare(`SELECT operation_id FROM operations
            WHERE session_id = ?
@@ -27651,18 +27666,31 @@ var init_registry = __esm({
           this.#fenceSession(prior.session_id, now);
         });
       }
-      adoptStaleWithHandle(target, handle, targetInstance, options = {}) {
+      #requireStaleAdoptionContext(target, handle, targetInstance) {
         const targetStatus = this.getSessionStatus(target.sessionId);
         const recovery = targetStatus?.bindings.recoveryHandles;
         const adoption = recovery?.adoptStale;
-        if (targetStatus?.state !== "blocked" || typeof adoption?.token !== "string" || typeof adoption.expiresMs !== "number" || adoption.expiresMs < this.#now() || typeof adoption.priorSessionId !== "string" || !this.#capabilityMatches(adoption.token, handle)) {
+        if (targetStatus?.state !== "blocked" || targetStatus.claimEpoch !== target.claimEpoch || typeof adoption?.token !== "string" || typeof adoption.expiresMs !== "number" || adoption.expiresMs < this.#now() || typeof adoption.priorSessionId !== "string" || !this.#capabilityMatches(adoption.token, handle)) {
           throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "stale adoption capability is invalid or expired");
         }
+        if (targetStatus.worker.instanceId !== targetInstance) {
+          throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "stale adoption target is not the recovery worker");
+        }
         const prior = this.getSessionStatus(adoption.priorSessionId);
-        if (prior?.claimEpoch !== adoption.priorClaimEpoch) {
+        if (!prior || prior.claimEpoch !== adoption.priorClaimEpoch) {
           throw new SessionAuthorityError("SESSION_OWNER_LOST", "stale adoption capability no longer matches the prior claim epoch");
         }
-        this.adoptStaleIntoBlocked(target, adoption.priorSessionId, targetInstance, options);
+        if (prior.sourceKey !== targetStatus.sourceKey || prior.worktreeKey !== targetStatus.worktreeKey || prior.appRootKey !== targetStatus.appRootKey) {
+          throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", "stale session does not belong to this exact source worktree");
+        }
+        return { priorSessionId: adoption.priorSessionId };
+      }
+      validateStaleAdoption(target, handle, targetInstance) {
+        this.#requireStaleAdoptionContext(target, handle, targetInstance);
+      }
+      adoptStaleWithHandle(target, handle, targetInstance, options = {}) {
+        const { priorSessionId } = this.#requireStaleAdoptionContext(target, handle, targetInstance);
+        this.adoptStaleIntoBlocked(target, priorSessionId, targetInstance, options);
       }
       verifyStaleAdoptionResumption(target, handle, targetInstance) {
         const status = this.getSessionStatus(target.sessionId);
@@ -28018,7 +28046,8 @@ var init_registry = __esm({
         }
         return row;
       }
-      #requireHandoffIntoContext(target, input, allowExactReservationAfterExpiry) {
+      #requireHandoffIntoContext(target, input, options) {
+        const { allowExactReservationAfterExpiry, commitRecipientRotation } = options;
         const targetRow = this.#requireRecoverableSession(target);
         if (targetRow.state !== "blocked") {
           throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "handoff acceptance is not available during cleanup");
@@ -28032,13 +28061,13 @@ var init_registry = __esm({
         if (!handoff) {
           throw new SessionAuthorityError("HANDOFF_NOT_FOUND", "handoff does not exist");
         }
-        if (handoff.consumed_ms !== null) {
-          throw new SessionAuthorityError("HANDOFF_ALREADY_CONSUMED", "handoff was already accepted");
-        }
         const expected = Buffer.from(handoff.token_hash, "hex");
         const actual = createHash6("sha256").update(input.token).digest();
         if (expected.length !== actual.length || !timingSafeEqual2(expected, actual)) {
           throw new SessionAuthorityError("HANDOFF_TOKEN_INVALID", "handoff capability is invalid");
+        }
+        if (handoff.consumed_ms !== null) {
+          throw new SessionAuthorityError("HANDOFF_ALREADY_CONSUMED", "handoff was already accepted");
         }
         const prior = asSession(this.#database.prepare(`SELECT session_id, source_key, worktree_key, app_root_key, state,
                   claim_epoch, authority_version, bindings_json
@@ -28083,23 +28112,25 @@ var init_registry = __esm({
             targetClaimEpoch: target.claimEpoch,
             targetInstance: input.targetInstance
           };
-          const handoffChanged = this.#database.prepare(`UPDATE handoffs SET target_instance = ?
-           WHERE handoff_id = ? AND target_instance = ? AND consumed_ms IS NULL`).run(input.targetInstance, handoff.handoff_id, reservation.targetInstance);
-          if (handoffChanged.changes !== 1) {
-            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "managed Metro handoff target changed during recipient rotation");
-          }
-          bindings = {
-            ...bindings,
-            managedMetroHandoffReservation: rotatedReservation
-          };
-          const donorChanged = this.#database.prepare(`UPDATE sessions
-           SET bindings_json = ?, authority_version = authority_version + 1, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ? AND state = 'handoff'`).run(JSON.stringify(bindings), this.#now(), prior.session_id, prior.claim_epoch);
-          if (donorChanged.changes !== 1) {
-            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "managed Metro donor authority changed during recipient rotation");
-          }
-          if (priorTarget.state === "blocked") {
-            this.#fenceSession(priorTarget.session_id, this.#now());
+          if (commitRecipientRotation) {
+            const handoffChanged = this.#database.prepare(`UPDATE handoffs SET target_instance = ?
+             WHERE handoff_id = ? AND target_instance = ? AND consumed_ms IS NULL`).run(input.targetInstance, handoff.handoff_id, reservation.targetInstance);
+            if (handoffChanged.changes !== 1) {
+              throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "managed Metro handoff target changed during recipient rotation");
+            }
+            bindings = {
+              ...bindings,
+              managedMetroHandoffReservation: rotatedReservation
+            };
+            const donorChanged = this.#database.prepare(`UPDATE sessions
+             SET bindings_json = ?, authority_version = authority_version + 1, updated_ms = ?
+             WHERE session_id = ? AND claim_epoch = ? AND state = 'handoff'`).run(JSON.stringify(bindings), this.#now(), prior.session_id, prior.claim_epoch);
+            if (donorChanged.changes !== 1) {
+              throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "managed Metro donor authority changed during recipient rotation");
+            }
+            if (priorTarget.state === "blocked") {
+              this.#fenceSession(priorTarget.session_id, this.#now());
+            }
           }
           handoff.target_instance = input.targetInstance;
           reservation = rotatedReservation;
@@ -62502,24 +62533,22 @@ function verifiedManifestSource(candidate, manifestSha256) {
 function durableBindingManifestSource(binding) {
   return verifiedManifestSource(binding?.manifestSource, binding?.manifestSha256);
 }
-function recoverableManifestSource(appRoot, binding) {
-  let onDisk;
-  try {
-    onDisk = readPackageIntegrationInputs(appRoot).manifest;
-  } catch {
-    onDisk = void 0;
-  }
+function durableRestorationMaterial(binding) {
   const restoration = binding?.restoration?.phase === "started" ? binding.restoration.manifestSource : void 0;
   const installation = binding?.installation?.phase === "started" ? binding.installation.manifestSource : void 0;
-  return verifiedManifestSource(onDisk, binding?.manifestSha256) ?? verifiedManifestSource(restoration, binding?.manifestSha256) ?? verifiedManifestSource(installation, binding?.manifestSha256) ?? durableBindingManifestSource(binding);
+  return verifiedManifestSource(restoration, binding?.manifestSha256) ?? verifiedManifestSource(installation, binding?.manifestSha256) ?? durableBindingManifestSource(binding ?? void 0);
 }
 var MANIFEST_RECOVERY_GUIDANCE = "Restore the exact integration manifest at .rn-agent/integration/rn-session-integration.json from your own version control history or backups so it matches the manifest SHA-256 recorded on the binding";
+var TRANSFER_RECOVERY_GUIDANCE = "Ownership transfer requires SHA-256-verified restoration material already durable inside the registry binding, and on-disk manifest bytes never authorize a transfer; if the owning session is still alive, restore the exact integration manifest at .rn-agent/integration/rn-session-integration.json from your own version control history or backups and let that owner run restore_integration with confirmed=true, otherwise recover from a trusted session-state-plus-manifest backup while the refusal fence remains.";
 var MISSING_DIGEST_GUIDANCE = "No trusted manifest SHA-256 digest is recorded on this binding, so no manifest bytes can be verified against it; operator recovery from a trusted session-state-plus-manifest backup is required while the refusal fence remains.";
 function hasTrustedManifestDigest(binding) {
   return typeof binding?.manifestSha256 === "string" && /^[0-9a-f]{64}$/.test(binding.manifestSha256);
 }
 function manifestRecoveryNextAction(binding, retry) {
   return hasTrustedManifestDigest(binding) ? `${MANIFEST_RECOVERY_GUIDANCE}, then ${retry}.` : MISSING_DIGEST_GUIDANCE;
+}
+function manifestTransferNextAction(binding) {
+  return hasTrustedManifestDigest(binding) ? TRANSFER_RECOVERY_GUIDANCE : MISSING_DIGEST_GUIDANCE;
 }
 function describeIntegrationFileDiagnostics(appRoot) {
   let state;
@@ -63051,21 +63080,27 @@ function createSessionHandler(runtime, dependencies = {}) {
         if (!status2?.worker.instanceId) {
           throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "target worker identity is unavailable");
         }
+        if (status2.state !== "handoff_cleanup") {
+          registry2.validateHandoffInto(session, {
+            handoffId,
+            token: token2,
+            targetInstance: status2.worker.instanceId
+          });
+        }
         let cleanup = status2.bindings.handoffCleanup;
         const priorSessionId = registry2.getHandoffOwner(handoffId);
         const priorStatus = priorSessionId ? registry2.getSessionStatus(priorSessionId) : null;
         const priorRunner = cleanup?.runner ?? priorStatus?.bindings.runner;
         const acceptAppRoot = String(status2.source.appRoot ?? "");
-        const retryAccept = "retry accept_handoff with the same handoffId and token";
         if (status2.state === "handoff_cleanup") {
           const transferredBinding = status2.bindings.packageIntegration;
-          if (transferredBinding && !(acceptAppRoot && recoverableManifestSource(acceptAppRoot, transferredBinding))) {
-            throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", `resumed handoff cleanup carries package-integration authority without a SHA-256-verified restoration manifest; cleanup refuses before any lifecycle mutation, and canonical files were inspected for diagnostics only (${describeIntegrationFileDiagnostics(acceptAppRoot)})`, void 0, { nextAction: manifestRecoveryNextAction(transferredBinding, retryAccept) });
+          if (transferredBinding && !durableRestorationMaterial(transferredBinding)) {
+            throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", `resumed handoff cleanup carries package-integration authority without a SHA-256-verified restoration manifest; cleanup refuses before any lifecycle mutation, and canonical files were inspected for diagnostics only (${describeIntegrationFileDiagnostics(acceptAppRoot)})`, void 0, { nextAction: manifestTransferNextAction(transferredBinding) });
           }
         } else {
           const donorBinding = priorStatus?.bindings.packageIntegration;
-          if (donorBinding && !(acceptAppRoot && recoverableManifestSource(acceptAppRoot, donorBinding))) {
-            throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", `handoff donor carries package-integration authority without a SHA-256-verified restoration manifest; acceptance refuses before any reservation, cleanup, transfer, or registry mutation, and canonical files were inspected for diagnostics only (${describeIntegrationFileDiagnostics(acceptAppRoot)})`, void 0, { nextAction: manifestRecoveryNextAction(donorBinding, retryAccept) });
+          if (donorBinding && !durableRestorationMaterial(donorBinding)) {
+            throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", `handoff donor carries package-integration authority without a SHA-256-verified restoration manifest; acceptance refuses before any reservation, cleanup, transfer, or registry mutation, and canonical files were inspected for diagnostics only (${describeIntegrationFileDiagnostics(acceptAppRoot)})`, void 0, { nextAction: manifestTransferNextAction(donorBinding) });
           }
         }
         if (status2.state !== "handoff_cleanup" && priorRunner && (typeof priorRunner.pid !== "number" || typeof priorRunner.processBirth !== "string" || inspectSessionOwner({
@@ -63201,15 +63236,14 @@ function createSessionHandler(runtime, dependencies = {}) {
         }
         const adoptionAppRoot = String(current.source.appRoot ?? "");
         const refuseManifestlessBinding = (subject, binding) => {
-          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", `${subject} without a SHA-256-verified restoration manifest; recovery refuses before any transfer, cleanup, or registry mutation, and canonical files were inspected for diagnostics only (${describeIntegrationFileDiagnostics(adoptionAppRoot)})`, void 0, {
-            nextAction: manifestRecoveryNextAction(binding, "retry adopt_stale with the same adoptionHandle")
-          });
+          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", `${subject} without a SHA-256-verified restoration manifest; recovery refuses before any transfer, cleanup, or registry mutation, and canonical files were inspected for diagnostics only (${describeIntegrationFileDiagnostics(adoptionAppRoot)})`, void 0, { nextAction: manifestTransferNextAction(binding) });
         };
         if (current.state !== "handoff_cleanup") {
+          registry2.validateStaleAdoption(session, adoptionHandle, current.worker.instanceId);
           const recoveryHandles = current.bindings.recoveryHandles;
           const priorSessionId = typeof recoveryHandles?.adoptStale?.priorSessionId === "string" ? recoveryHandles.adoptStale.priorSessionId : void 0;
           const priorIntegration = priorSessionId ? registry2.getSessionStatus(priorSessionId)?.bindings.packageIntegration : void 0;
-          if (priorIntegration && !(adoptionAppRoot && recoverableManifestSource(adoptionAppRoot, priorIntegration))) {
+          if (priorIntegration && !durableRestorationMaterial(priorIntegration)) {
             refuseManifestlessBinding("stale session carries package-integration authority", priorIntegration);
           }
           registry2.adoptStaleWithHandle(session, adoptionHandle, current.worker.instanceId, {
@@ -63218,7 +63252,7 @@ function createSessionHandler(runtime, dependencies = {}) {
         } else {
           registry2.verifyStaleAdoptionResumption(session, adoptionHandle, current.worker.instanceId);
           const transferredBinding = current.bindings.packageIntegration;
-          if (transferredBinding && !(adoptionAppRoot && recoverableManifestSource(adoptionAppRoot, transferredBinding))) {
+          if (transferredBinding && !durableRestorationMaterial(transferredBinding)) {
             refuseManifestlessBinding("resumed stale adoption carries package-integration authority", transferredBinding);
           }
         }

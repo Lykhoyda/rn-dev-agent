@@ -10,6 +10,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -320,7 +321,7 @@ test('r20: adopting a manifest-less legacy binding refuses before transfer even 
   }
 });
 
-test('restoring the exact manifest bytes is the supported recovery that unblocks adoption and restoration', async () => {
+test('a byte-exact on-disk manifest authorizes only the owner restore, never an adoption transfer', async () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-manifest-recovery-'));
   const stateHome = join(root, 'state');
   const previousStateHome = process.env.XDG_STATE_HOME;
@@ -344,38 +345,41 @@ test('restoring the exact manifest bytes is the supported recovery that unblocks
     assert.equal(applied.isError, undefined, applied.content[0]!.text);
     const manifestPath = join(appRoot, '.rn-agent', 'integration', 'rn-session-integration.json');
     const manifestBytes = readFileSync(manifestPath, 'utf8');
-    registry.updateBindings(prior, {
-      bindings: {
-        packageIntegration: {
-          version: 1,
-          installedBySessionId: 'session-prior',
-          manifestSha256: createHash('sha256').update(manifestBytes).digest('hex'),
-        },
-      },
-    });
-    unlinkSync(manifestPath);
+    const digestOnlyBinding = {
+      version: 1,
+      installedBySessionId: 'session-prior',
+      manifestSha256: createHash('sha256').update(manifestBytes).digest('hex'),
+    };
+    registry.updateBindings(prior, { bindings: { packageIntegration: digestOnlyBinding } });
 
     const handler = createSessionHandler(createRuntime(registry, adopter));
     const refused = await handler({ action: 'adopt_stale', adoptionHandle: handle });
     assert.equal(refused.isError, true);
-    assert.match(String(envelope(refused).error), /without a SHA-256-verified restoration manifest/);
+    const refusal = envelope(refused);
+    assert.match(
+      String(refusal.error),
+      /without a SHA-256-verified restoration manifest/,
+      'the byte-exact on-disk manifest must not satisfy transfer eligibility',
+    );
+    assert.match(
+      String((refusal.meta as { nextAction?: string })?.nextAction),
+      /never authorize a transfer/,
+    );
     assert.equal(registry.getSessionStatus('session-adopter')?.state, 'blocked');
+    assert.deepEqual(
+      registry.getSessionStatus('session-prior')?.bindings.packageIntegration,
+      digestOnlyBinding,
+    );
 
-    writeFileSync(manifestPath, manifestBytes);
-    const adopted = await handler({ action: 'adopt_stale', adoptionHandle: handle });
-    assert.equal(adopted.isError, undefined, adopted.content[0]!.text);
-    const adoptedEnvelope = envelope(adopted);
-    assert.deepEqual(adoptedEnvelope.data.integrationRestoration, {
-      required: true,
-      action: 'restore_integration',
-      installedBySessionId: 'session-prior',
-    });
-
-    const restored = await handler({ action: 'restore_integration', confirmed: true });
+    const restored = await priorHandler({ action: 'restore_integration', confirmed: true });
     assert.equal(restored.isError, undefined, restored.content[0]!.text);
     assert.equal(readFileSync(packagePath, 'utf8'), originalPackage);
     assert.equal(readFileSync(metroConfigPath, 'utf8'), originalMetroConfig);
-    assert.equal(registry.getSessionStatus('session-adopter')?.bindings.packageIntegration, null);
+    assert.equal(registry.getSessionStatus('session-prior')?.bindings.packageIntegration, null);
+
+    const adopted = await handler({ action: 'adopt_stale', adoptionHandle: handle });
+    assert.equal(adopted.isError, undefined, adopted.content[0]!.text);
+    assert.deepEqual(envelope(adopted).data.integrationRestoration, { required: false });
     const released = await handler({ action: 'release' });
     assert.equal(released.isError, undefined, released.content[0]!.text);
     registry.close();
@@ -718,9 +722,11 @@ test('a foreign worktree cannot adopt or reconcile the stale binding', async () 
     });
     const manifestless = await handler({ action: 'adopt_stale', adoptionHandle: handle });
     assert.equal(manifestless.isError, true);
-    assert.match(
-      String(envelope(manifestless).error),
-      /without a SHA-256-verified restoration manifest/,
+    assert.match(manifestless.content[0]!.text, /SOURCE_WORKTREE_MISMATCH/);
+    assert.doesNotMatch(
+      manifestless.content[0]!.text,
+      /SHA-256|rn-session-integration/,
+      'a foreign worktree must not learn the manifest state of the stale binding',
     );
     assert.deepEqual(
       registry.getSessionStatus('session-prior')?.bindings.packageIntegration,
@@ -1396,36 +1402,53 @@ test('resumed cleanup refuses before any mutation when the transferred binding l
       registryPath: layout.registry,
       priorIntegration: null,
     });
-    const { registry, prior, adopter, handle } = fixture;
+    const { prior, adopter, handle } = fixture;
+    let registry = fixture.registry;
 
     const priorHandler = createSessionHandler(createRuntime(registry, prior));
     const applied = await priorHandler({ action: 'apply_integration', confirmed: true });
     assert.equal(applied.isError, undefined, applied.content[0]!.text);
     const manifestPath = join(appRoot, '.rn-agent', 'integration', 'rn-session-integration.json');
-    const manifestBytes = readFileSync(manifestPath, 'utf8');
-    registry.updateBindings(prior, {
-      bindings: {
-        packageIntegration: {
-          version: 1,
-          installedBySessionId: 'session-prior',
-          manifestSha256: createHash('sha256').update(manifestBytes).digest('hex'),
-        },
-        observe: { port: 7396 },
-      },
-    });
+    registry.updateBindings(prior, { bindings: { observe: { port: 7396 } } });
+    const durableBinding = registry.getSessionStatus('session-prior')?.bindings
+      .packageIntegration as Record<string, unknown>;
+    assert.equal(typeof durableBinding.manifestSource, 'string');
+
+    const rewriteTransferredBinding = (packageIntegration: Record<string, unknown>) => {
+      registry.close();
+      const db = new DatabaseSync(layout.registry);
+      const row = db
+        .prepare('SELECT bindings_json FROM sessions WHERE session_id = ?')
+        .get('session-adopter') as { bindings_json: string };
+      const bindings = JSON.parse(row.bindings_json) as Record<string, unknown>;
+      bindings.packageIntegration = packageIntegration;
+      db.prepare('UPDATE sessions SET bindings_json = ? WHERE session_id = ?').run(
+        JSON.stringify(bindings),
+        'session-adopter',
+      );
+      db.close();
+      registry = fixture.reopen();
+    };
 
     let observeStops = 0;
     let failObserveStop = true;
-    const handler = createSessionHandler(createRuntime(registry, adopter), {
-      stopHandoffObserve: async () => {
-        if (failObserveStop) throw new Error('observe stop unavailable');
-        observeStops += 1;
-      },
-    });
+    const createHandler = () =>
+      createSessionHandler(createRuntime(registry, adopter), {
+        stopHandoffObserve: async () => {
+          if (failObserveStop) throw new Error('observe stop unavailable');
+          observeStops += 1;
+        },
+      });
+    let handler = createHandler();
 
     const crashed = await handler({ action: 'adopt_stale', adoptionHandle: handle });
     assert.equal(crashed.isError, true);
     assert.equal(registry.getSessionStatus('session-adopter')?.state, 'handoff_cleanup');
+    assert.deepEqual(
+      registry.getSessionStatus('session-adopter')?.bindings.packageIntegration,
+      durableBinding,
+      'a binding with durable restoration material transfers unchanged',
+    );
     failObserveStop = false;
 
     const wrongHandle = await handler({ action: 'adopt_stale', adoptionHandle: 'wrong-handle' });
@@ -1436,13 +1459,20 @@ test('resumed cleanup refuses before any mutation when the transferred binding l
     );
     assert.equal(observeStops, 0);
 
-    unlinkSync(manifestPath);
+    rewriteTransferredBinding({
+      version: durableBinding.version,
+      installedBySessionId: durableBinding.installedBySessionId,
+      manifestSha256: durableBinding.manifestSha256,
+    });
+    handler = createHandler();
+    assert.equal(readFileSync(manifestPath, 'utf8').length > 0, true);
     const versionBeforeRefusal = registry.getSessionStatus('session-adopter')?.authorityVersion;
     const refused = await handler({ action: 'adopt_stale', adoptionHandle: handle });
     assert.equal(refused.isError, true);
     assert.match(
       String(envelope(refused).error),
       /without a SHA-256-verified restoration manifest/,
+      'a byte-exact on-disk manifest must not satisfy resumed cleanup eligibility',
     );
     assert.equal(observeStops, 0, 'no cleanup may run for a manifest-less binding');
     assert.equal(registry.getSessionStatus('session-adopter')?.state, 'handoff_cleanup');
@@ -1453,7 +1483,9 @@ test('resumed cleanup refuses before any mutation when the transferred binding l
     );
     assert.ok(registry.getSessionStatus('session-adopter')?.bindings.packageIntegration);
 
-    writeFileSync(manifestPath, manifestBytes);
+    rewriteTransferredBinding(durableBinding);
+    handler = createHandler();
+    unlinkSync(manifestPath);
     const resumed = await handler({ action: 'adopt_stale', adoptionHandle: handle });
     assert.equal(resumed.isError, undefined, resumed.content[0]!.text);
     assert.equal(observeStops, 1);
@@ -1698,6 +1730,287 @@ test('initial accept_handoff refuses a manifest-less donor binding before any re
     assert.equal(registry.getHandoffOwner(capability.handoffId), 'session-donor');
     assert.equal(readFileSync(packagePath, 'utf8'), originalPackage);
     assert.equal(readFileSync(metroConfigPath, 'utf8'), originalMetro);
+    registry.close();
+  } finally {
+    if (previousStateHome === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = previousStateHome;
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test('a byte-exact on-disk donor manifest never authorizes handoff acceptance', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-accept-ondisk-only-'));
+  const stateHome = join(root, 'state');
+  const previousStateHome = process.env.XDG_STATE_HOME;
+  try {
+    const appRoot = createAppFixture(root);
+    process.env.XDG_STATE_HOME = stateHome;
+    const source = resolveSourceIdentity(appRoot);
+    const layout = createAuthorityStateLayout();
+    const registry = openSessionRegistry(layout.registry, { ownerStatus: () => 'match' });
+    const donor = registry.createSession({
+      sessionId: 'session-donor',
+      sourceKey: source.sourceKey,
+      worktreeKey: source.worktreeKey,
+      appRootKey: source.appRootKey,
+      supervisor: { pid: process.pid, token: 'donor-supervisor' },
+      source: { ...source },
+      bindings: { metroPort: 8248, observePort: 7396 },
+    });
+    registry.claimResources(donor, [
+      { type: 'source', key: source.worktreeKey },
+      { type: 'device', key: 'ios:54B03A8D-C9A7-4F97-8656-75E81DC3A68C' },
+    ]);
+    registry.updateBindings(donor, {
+      state: 'device_claimed',
+      bindings: {
+        device: {
+          platform: 'ios',
+          deviceId: '54B03A8D-C9A7-4F97-8656-75E81DC3A68C',
+          appId: 'com.rndevagent.testapp',
+        },
+      },
+    });
+    const donorHandler = createSessionHandler(createRuntime(registry, donor));
+    const applied = await donorHandler({ action: 'apply_integration', confirmed: true });
+    assert.equal(applied.isError, undefined, applied.content[0]!.text);
+    const manifestPath = join(appRoot, '.rn-agent', 'integration', 'rn-session-integration.json');
+    const manifestBytes = readFileSync(manifestPath, 'utf8');
+    const digestOnlyBinding = {
+      version: 1,
+      installedBySessionId: 'session-donor',
+      manifestSha256: createHash('sha256').update(manifestBytes).digest('hex'),
+    };
+    registry.updateBindings(donor, { bindings: { packageIntegration: digestOnlyBinding } });
+
+    const recipient = registry.createSession({
+      sessionId: 'session-recipient',
+      sourceKey: source.sourceKey,
+      worktreeKey: source.worktreeKey,
+      appRootKey: source.appRootKey,
+      supervisor: { pid: process.pid, token: 'recipient-supervisor' },
+      source: { ...source },
+      bindings: { metroPort: 8248, observePort: 7396 },
+    });
+    registry.updateBindings(recipient, {
+      state: 'blocked',
+      bindings: {
+        recoveryCapabilityHash: createHash('sha256').update('recovery-capability').digest('hex'),
+      },
+    });
+    registry.bindRecoveryWorker(
+      recipient,
+      { instanceId: 'recovery-worker', pid: process.pid, token: 'recovery-birth' },
+      'recovery-capability',
+    );
+    const recipientHandle = (
+      registry.getSessionStatus('session-recipient')?.bindings.recoveryHandles as
+        | { handoffRecipient?: { token?: string } }
+        | undefined
+    )?.handoffRecipient?.token;
+    assert.ok(typeof recipientHandle === 'string' && recipientHandle.length > 0);
+    const capability = registry.prepareHandoffForHandle(donor, { targetHandle: recipientHandle });
+
+    let cleanupCalls = 0;
+    const handler = createSessionHandler(createRuntime(registry, recipient), {
+      stopHandoffObserve: async () => {
+        cleanupCalls += 1;
+      },
+      stopHandoffRunner: async () => {
+        cleanupCalls += 1;
+      },
+      stopManagedMetro: async () => {
+        cleanupCalls += 1;
+        return true;
+      },
+      getSignerCapability: () => 'signer',
+    });
+    const donorBefore = registry.getSessionStatus('session-donor');
+
+    const refused = await handler({
+      action: 'accept_handoff',
+      handoffId: capability.handoffId,
+      token: capability.token,
+    });
+    assert.equal(refused.isError, true);
+    const refusal = envelope(refused);
+    assert.match(
+      String(refusal.error),
+      /without a SHA-256-verified restoration manifest/,
+      'the byte-exact on-disk manifest must not satisfy handoff transfer eligibility',
+    );
+    assert.match(
+      String((refusal.meta as { nextAction?: string })?.nextAction),
+      /never authorize a transfer/,
+    );
+    assert.equal(cleanupCalls, 0);
+    const donorAfter = registry.getSessionStatus('session-donor');
+    assert.equal(donorAfter?.state, 'handoff');
+    assert.equal(donorAfter?.authorityVersion, donorBefore?.authorityVersion);
+    assert.deepEqual(donorAfter?.bindings.packageIntegration, digestOnlyBinding);
+    assert.equal(registry.getSessionStatus('session-recipient')?.state, 'blocked');
+    assert.equal(registry.getHandoffOwner(capability.handoffId), 'session-donor');
+    assert.equal(readFileSync(manifestPath, 'utf8'), manifestBytes);
+    registry.close();
+  } finally {
+    if (previousStateHome === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = previousStateHome;
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test('an invalid handoff token returns only the canonical refusal without donor or file diagnostics', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-accept-bad-token-'));
+  const stateHome = join(root, 'state');
+  const previousStateHome = process.env.XDG_STATE_HOME;
+  try {
+    const appRoot = createAppFixture(root);
+    writeFileSync(
+      join(appRoot, 'package.json'),
+      `${JSON.stringify({ scripts: { ...ADAPTER_SENTINELS } }, null, 2)}\n`,
+    );
+    writeFileSync(join(appRoot, 'metro.config.js'), METRO_INTEGRATED);
+    process.env.XDG_STATE_HOME = stateHome;
+    const source = resolveSourceIdentity(appRoot);
+    const layout = createAuthorityStateLayout();
+    const registry = openSessionRegistry(layout.registry, { ownerStatus: () => 'match' });
+    const donor = registry.createSession({
+      sessionId: 'session-donor',
+      sourceKey: source.sourceKey,
+      worktreeKey: source.worktreeKey,
+      appRootKey: source.appRootKey,
+      supervisor: { pid: process.pid, token: 'donor-supervisor' },
+      source: { ...source },
+      bindings: { metroPort: 8248, observePort: 7396 },
+    });
+    registry.updateBindings(donor, {
+      state: 'device_claimed',
+      bindings: {
+        packageIntegration: { ...R20_LEGACY_BINDING },
+        observe: { port: 7396 },
+      },
+    });
+    const recipient = registry.createSession({
+      sessionId: 'session-recipient',
+      sourceKey: source.sourceKey,
+      worktreeKey: source.worktreeKey,
+      appRootKey: source.appRootKey,
+      supervisor: { pid: process.pid, token: 'recipient-supervisor' },
+      source: { ...source },
+      bindings: { metroPort: 8248, observePort: 7396 },
+    });
+    registry.updateBindings(recipient, {
+      state: 'blocked',
+      bindings: {
+        recoveryCapabilityHash: createHash('sha256').update('recovery-capability').digest('hex'),
+      },
+    });
+    registry.bindRecoveryWorker(
+      recipient,
+      { instanceId: 'recovery-worker', pid: process.pid, token: 'recovery-birth' },
+      'recovery-capability',
+    );
+    const recipientHandle = (
+      registry.getSessionStatus('session-recipient')?.bindings.recoveryHandles as
+        | { handoffRecipient?: { token?: string } }
+        | undefined
+    )?.handoffRecipient?.token;
+    assert.ok(typeof recipientHandle === 'string');
+    const capability = registry.prepareHandoffForHandle(donor, { targetHandle: recipientHandle });
+
+    let cleanupCalls = 0;
+    const handler = createSessionHandler(createRuntime(registry, recipient), {
+      stopHandoffObserve: async () => {
+        cleanupCalls += 1;
+      },
+      getSignerCapability: () => 'signer',
+    });
+    const donorBefore = registry.getSessionStatus('session-donor');
+    const recipientBefore = registry.getSessionStatus('session-recipient');
+
+    const refused = await handler({
+      action: 'accept_handoff',
+      handoffId: capability.handoffId,
+      token: 'not-the-capability-token',
+    });
+    assert.equal(refused.isError, true);
+    const refusal = envelope(refused);
+    assert.match(String(refusal.error), /handoff capability is invalid/);
+    const disclosed = refused.content[0]!.text;
+    assert.doesNotMatch(disclosed, /SHA-256|integrated|package-script|rn-session-integration/);
+    assert.doesNotMatch(disclosed, /session-donor/);
+    assert.equal(cleanupCalls, 0);
+    assert.equal(
+      registry.getSessionStatus('session-donor')?.authorityVersion,
+      donorBefore?.authorityVersion,
+    );
+    assert.equal(
+      registry.getSessionStatus('session-recipient')?.authorityVersion,
+      recipientBefore?.authorityVersion,
+    );
+    assert.equal(registry.getHandoffOwner(capability.handoffId), 'session-donor');
+
+    const eligible = await handler({
+      action: 'accept_handoff',
+      handoffId: capability.handoffId,
+      token: capability.token,
+    });
+    assert.equal(eligible.isError, true);
+    assert.match(
+      String(envelope(eligible).error),
+      /without a SHA-256-verified restoration manifest/,
+      'the valid capability must still reach the unchanged eligibility gate',
+    );
+    registry.close();
+  } finally {
+    if (previousStateHome === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = previousStateHome;
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test('an invalid adoption handle returns only the canonical refusal without prior-session diagnostics', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-adopt-bad-handle-'));
+  const stateHome = join(root, 'state');
+  const previousStateHome = process.env.XDG_STATE_HOME;
+  try {
+    const appRoot = createAppFixture(root);
+    writeFileSync(
+      join(appRoot, 'package.json'),
+      `${JSON.stringify({ scripts: { ...ADAPTER_SENTINELS } }, null, 2)}\n`,
+    );
+    writeFileSync(join(appRoot, 'metro.config.js'), METRO_INTEGRATED);
+    process.env.XDG_STATE_HOME = stateHome;
+    const layout = createAuthorityStateLayout();
+    const fixture = setupStaleAdoption({ appRoot, registryPath: layout.registry });
+    const { registry, adopter, handle } = fixture;
+    const handler = createSessionHandler(createRuntime(registry, adopter));
+    const adopterBefore = registry.getSessionStatus('session-adopter');
+    const priorBefore = registry.getSessionStatus('session-prior');
+
+    const refused = await handler({ action: 'adopt_stale', adoptionHandle: 'wrong-handle' });
+    assert.equal(refused.isError, true);
+    const refusal = envelope(refused);
+    assert.match(String(refusal.error), /stale adoption capability is invalid or expired/);
+    const disclosed = refused.content[0]!.text;
+    assert.doesNotMatch(disclosed, /SHA-256|integrated|package-script|rn-session-integration/);
+    assert.equal(
+      registry.getSessionStatus('session-adopter')?.authorityVersion,
+      adopterBefore?.authorityVersion,
+    );
+    assert.equal(
+      registry.getSessionStatus('session-prior')?.authorityVersion,
+      priorBefore?.authorityVersion,
+    );
+    assert.equal(registry.getSessionStatus('session-adopter')?.state, 'blocked');
+
+    const eligible = await handler({ action: 'adopt_stale', adoptionHandle: handle });
+    assert.equal(eligible.isError, true);
+    assert.match(
+      String(envelope(eligible).error),
+      /without a SHA-256-verified restoration manifest/,
+      'the valid capability must still reach the unchanged eligibility gate',
+    );
     registry.close();
   } finally {
     if (previousStateHome === undefined) delete process.env.XDG_STATE_HOME;

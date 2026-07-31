@@ -3,4 +3,4 @@
 'rn-dev-agent-plugin': patch
 ---
 
-Store the package-integration restoration manifest durably inside the session binding and make stale adoption, handoff acceptance and resumed cleanup, and restore_integration refuse before any transfer or mutation when a binding lacks a SHA-256-verified manifest, reporting file-state diagnostics and the supported manifest-recovery step instead of auto-reconciling.
+Store the package-integration restoration manifest durably inside the session binding, let on-disk manifest bytes authorize only the current owner's restore_integration, and make stale adoption, handoff acceptance, and resumed cleanup validate their capability non-mutatingly and refuse before any transfer or mutation unless the binding itself carries a SHA-256-verified restoration manifest, reporting file-state diagnostics and the supported recovery step instead of auto-reconciling.
