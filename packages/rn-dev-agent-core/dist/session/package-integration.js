@@ -3440,22 +3440,12 @@ function evaluatePackageIntegrationFileState(canonical, generated) {
                 : 'partial';
     return { verdict, markers };
 }
-function sameFileSnapshots(before, after) {
-    return (before.length === after.length &&
-        before.every((snapshot, index) => {
-            const current = after[index];
-            if (current?.name !== snapshot.name || current.mode !== snapshot.mode)
-                return false;
-            return snapshot.contents === null
-                ? current.contents === null
-                : current.contents !== null && current.contents.equals(snapshot.contents);
-        }));
-}
-export function openPackageIntegrationFileProof(appRootInput) {
+export function inspectPackageIntegrationFileState(appRootInput) {
     const appRoot = resolve(appRootInput);
     const app = openBoundDirectory(appRoot);
     let agent = null;
     let integration = null;
+    let primaryError;
     try {
         const canonical = readBoundDirectoryFiles(app, CANONICAL_INTEGRATION_FILES);
         agent = openOptionalBoundSubdirectory(app, '.rn-agent');
@@ -3465,62 +3455,14 @@ export function openPackageIntegrationFileProof(appRootInput) {
         const generated = integration
             ? readBoundDirectoryFiles(integration, GENERATED_INTEGRATION_FILES)
             : absentIntegrationSnapshots();
-        let closed = false;
-        return {
-            ...evaluatePackageIntegrationFileState(canonical, generated),
-            reverify: () => {
-                if (closed)
-                    return false;
-                let transientAgent = null;
-                let transientIntegration = null;
-                try {
-                    if (!sameFileSnapshots(canonical, readBoundDirectoryFiles(app, CANONICAL_INTEGRATION_FILES))) {
-                        return false;
-                    }
-                    let currentIntegration = integration;
-                    if (!currentIntegration) {
-                        transientAgent = agent ? null : openOptionalBoundSubdirectory(app, '.rn-agent');
-                        const currentAgent = agent ?? transientAgent;
-                        transientIntegration = currentAgent
-                            ? openOptionalBoundSubdirectory(currentAgent, 'integration')
-                            : null;
-                        currentIntegration = transientIntegration;
-                    }
-                    const generatedNow = currentIntegration
-                        ? readBoundDirectoryFiles(currentIntegration, GENERATED_INTEGRATION_FILES)
-                        : absentIntegrationSnapshots();
-                    return sameFileSnapshots(generated, generatedNow);
-                }
-                catch {
-                    return false;
-                }
-                finally {
-                    try {
-                        closeBoundDirectories([transientIntegration, transientAgent]);
-                    }
-                    catch { }
-                }
-            },
-            close: () => {
-                if (closed)
-                    return;
-                closed = true;
-                closeBoundDirectories([integration, agent, app]);
-            },
-        };
+        return evaluatePackageIntegrationFileState(canonical, generated);
     }
     catch (error) {
-        closeBoundDirectories([integration, agent, app], error);
+        primaryError = error;
         throw error;
     }
-}
-export function inspectPackageIntegrationFileState(appRootInput) {
-    const proof = openPackageIntegrationFileProof(appRootInput);
-    try {
-        return { verdict: proof.verdict, markers: proof.markers };
-    }
     finally {
-        proof.close();
+        closeBoundDirectories([integration, agent, app], primaryError);
     }
 }
 function openIntegrationDirectories(appRoot) {

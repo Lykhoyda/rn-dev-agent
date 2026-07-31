@@ -26752,7 +26752,6 @@ var init_registry = __esm({
           if (input.expectedAuthorityVersion !== void 0 && current.authority_version !== input.expectedAuthorityVersion) {
             throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "session authority version changed before binding commit");
           }
-          input.precondition?.();
           const bindings = {
             ...JSON.parse(current.bindings_json),
             ...input.bindings
@@ -27336,11 +27335,10 @@ var init_registry = __esm({
           };
         });
       }
-      beginHandoffCleanupResource(target, targetInstance, resource, options = {}) {
+      beginHandoffCleanupResource(target, targetInstance, resource) {
         const now = this.#now();
         return this.#transaction(() => {
           const row = this.#requireHandoffCleanupOwner(target, targetInstance);
-          options.precondition?.();
           const bindings = JSON.parse(row.bindings_json);
           const cleanup = bindings.handoffCleanup;
           const current = cleanup?.[resource];
@@ -27389,11 +27387,10 @@ var init_registry = __esm({
           return requested;
         });
       }
-      completeHandoffCleanupResource(target, targetInstance, resource, options = {}) {
+      completeHandoffCleanupResource(target, targetInstance, resource) {
         const now = this.#now();
         this.#transaction(() => {
           const row = this.#requireHandoffCleanupOwner(target, targetInstance);
-          options.precondition?.();
           const bindings = JSON.parse(row.bindings_json);
           const cleanup = bindings.handoffCleanup;
           const current = cleanup?.[resource];
@@ -27425,7 +27422,7 @@ var init_registry = __esm({
           }), now, target.sessionId, target.claimEpoch);
         });
       }
-      finishHandoffCleanup(target, targetInstance, options = {}) {
+      finishHandoffCleanup(target, targetInstance) {
         const now = this.#now();
         this.#transaction(() => {
           const row = asSession(this.#database.prepare(`SELECT state, claim_epoch, worker_instance, bindings_json
@@ -27441,7 +27438,6 @@ var init_registry = __esm({
               throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", `${resource} cleanup has not been durably completed`);
             }
           }
-          options.precondition?.();
           this.#database.prepare(`UPDATE sessions
            SET state = 'source_bound', bindings_json = ?,
                authority_version = authority_version + 1, updated_ms = ?
@@ -27536,7 +27532,6 @@ var init_registry = __esm({
           if (!prior || prior.claim_epoch !== priorStatus.claimEpoch || prior.source_key !== targetRow.source_key || prior.worktree_key !== targetRow.worktree_key || prior.app_root_key !== targetRow.app_root_key) {
             throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", "stale session does not belong to this exact source worktree");
           }
-          options.precondition?.();
           const priorBindings = JSON.parse(prior.bindings_json);
           const targetBindings = JSON.parse(targetRow.bindings_json);
           const priorCleanup = priorBindings.handoffCleanup && typeof priorBindings.handoffCleanup === "object" ? priorBindings.handoffCleanup : null;
@@ -56040,12 +56035,13 @@ function inspectAuthorityMigration(status, dependencies = {}) {
     const manifestVerified = (candidate) => typeof candidate === "string" && typeof integrationBinding.manifestSha256 === "string" && createHash7("sha256").update(candidate).digest("hex") === integrationBinding.manifestSha256;
     const manifestAvailable = manifestVerified(onDiskManifestText) || manifestVerified(integrationBinding.restoration?.phase === "started" ? integrationBinding.restoration.manifestSource : void 0) || manifestVerified(integrationBinding.installation?.phase === "started" ? integrationBinding.installation.manifestSource : void 0) || manifestVerified(integrationBinding.manifestSource);
     const effectiveOwnerSessionId = status.sessionId;
+    const trustedDigestRecorded = typeof integrationBinding.manifestSha256 === "string" && /^[0-9a-f]{64}$/.test(integrationBinding.manifestSha256);
     bindingDiagnostic = {
       installedBySessionId: typeof integrationBinding.installedBySessionId === "string" ? integrationBinding.installedBySessionId : null,
       effectiveOwnerSessionId,
       ownedByThisSession: effectiveOwnerSessionId === status.sessionId,
       manifestAvailable,
-      nextAction: manifestAvailable ? "Run restore_integration with confirmed=true to restore canonical files before release." : "Run restore_integration with confirmed=true; it reconciles the binding only when canonical files are provably unintegrated."
+      nextAction: manifestAvailable ? "Run restore_integration with confirmed=true to restore canonical files before release." : trustedDigestRecorded ? "Recover the SHA-256-authorized integration manifest from trusted version control history or backups, then retry restore_integration with confirmed=true." : "No trusted manifest digest is recorded for this binding; operator recovery from a trusted session-state-plus-manifest backup is required while the restoration fence remains."
     };
   }
   const legacyStateDetected = [
@@ -61830,19 +61826,12 @@ function evaluatePackageIntegrationFileState(canonical, generated) {
   const verdict = !readable ? "partial" : markers.length === 0 ? "unintegrated" : exactIos && exactAndroid && metroStart && metroEnd && !strayAdapterReference ? "integrated" : "partial";
   return { verdict, markers };
 }
-function sameFileSnapshots(before, after) {
-  return before.length === after.length && before.every((snapshot, index) => {
-    const current = after[index];
-    if (current?.name !== snapshot.name || current.mode !== snapshot.mode)
-      return false;
-    return snapshot.contents === null ? current.contents === null : current.contents !== null && current.contents.equals(snapshot.contents);
-  });
-}
-function openPackageIntegrationFileProof(appRootInput) {
+function inspectPackageIntegrationFileState(appRootInput) {
   const appRoot = resolve5(appRootInput);
   const app = openBoundDirectory(appRoot);
   let agent = null;
   let integration = null;
+  let primaryError;
   try {
     const canonical = readBoundDirectoryFiles(app, CANONICAL_INTEGRATION_FILES);
     agent = openOptionalBoundSubdirectory(app, ".rn-agent");
@@ -61850,54 +61839,12 @@ function openPackageIntegrationFileProof(appRootInput) {
       integration = openOptionalBoundSubdirectory(agent, "integration");
     }
     const generated = integration ? readBoundDirectoryFiles(integration, GENERATED_INTEGRATION_FILES) : absentIntegrationSnapshots();
-    let closed = false;
-    return {
-      ...evaluatePackageIntegrationFileState(canonical, generated),
-      reverify: () => {
-        if (closed)
-          return false;
-        let transientAgent = null;
-        let transientIntegration = null;
-        try {
-          if (!sameFileSnapshots(canonical, readBoundDirectoryFiles(app, CANONICAL_INTEGRATION_FILES))) {
-            return false;
-          }
-          let currentIntegration = integration;
-          if (!currentIntegration) {
-            transientAgent = agent ? null : openOptionalBoundSubdirectory(app, ".rn-agent");
-            const currentAgent = agent ?? transientAgent;
-            transientIntegration = currentAgent ? openOptionalBoundSubdirectory(currentAgent, "integration") : null;
-            currentIntegration = transientIntegration;
-          }
-          const generatedNow = currentIntegration ? readBoundDirectoryFiles(currentIntegration, GENERATED_INTEGRATION_FILES) : absentIntegrationSnapshots();
-          return sameFileSnapshots(generated, generatedNow);
-        } catch {
-          return false;
-        } finally {
-          try {
-            closeBoundDirectories([transientIntegration, transientAgent]);
-          } catch {
-          }
-        }
-      },
-      close: () => {
-        if (closed)
-          return;
-        closed = true;
-        closeBoundDirectories([integration, agent, app]);
-      }
-    };
+    return evaluatePackageIntegrationFileState(canonical, generated);
   } catch (error2) {
-    closeBoundDirectories([integration, agent, app], error2);
+    primaryError = error2;
     throw error2;
-  }
-}
-function inspectPackageIntegrationFileState(appRootInput) {
-  const proof2 = openPackageIntegrationFileProof(appRootInput);
-  try {
-    return { verdict: proof2.verdict, markers: proof2.markers };
   } finally {
-    proof2.close();
+    closeBoundDirectories([integration, agent, app], primaryError);
   }
 }
 function openIntegrationDirectories(appRoot) {
@@ -62566,8 +62513,27 @@ function recoverableManifestSource(appRoot, binding) {
   const installation = binding?.installation?.phase === "started" ? binding.installation.manifestSource : void 0;
   return verifiedManifestSource(onDisk, binding?.manifestSha256) ?? verifiedManifestSource(restoration, binding?.manifestSha256) ?? verifiedManifestSource(installation, binding?.manifestSha256) ?? durableBindingManifestSource(binding);
 }
-var RECONCILE_FILES_NEXT_ACTION = "Restore package.json and the Metro config to their pre-integration contents from your own version control history, then retry restore_integration with confirmed=true.";
-var RETRY_ADOPTION_NEXT_ACTION = "Restore package.json and the Metro config to their pre-integration contents from your own version control history, then retry adopt_stale with the same adoptionHandle.";
+var MANIFEST_RECOVERY_GUIDANCE = "Restore the exact integration manifest at .rn-agent/integration/rn-session-integration.json from your own version control history or backups so it matches the manifest SHA-256 recorded on the binding";
+var MISSING_DIGEST_GUIDANCE = "No trusted manifest SHA-256 digest is recorded on this binding, so no manifest bytes can be verified against it; operator recovery from a trusted session-state-plus-manifest backup is required while the refusal fence remains.";
+function hasTrustedManifestDigest(binding) {
+  return typeof binding?.manifestSha256 === "string" && /^[0-9a-f]{64}$/.test(binding.manifestSha256);
+}
+function manifestRecoveryNextAction(binding, retry) {
+  return hasTrustedManifestDigest(binding) ? `${MANIFEST_RECOVERY_GUIDANCE}, then ${retry}.` : MISSING_DIGEST_GUIDANCE;
+}
+function describeIntegrationFileDiagnostics(appRoot) {
+  let state;
+  if (!appRoot) {
+    state = { verdict: "partial", markers: ["app-root-unavailable"] };
+  } else {
+    try {
+      state = inspectPackageIntegrationFileState(appRoot);
+    } catch {
+      state = { verdict: "partial", markers: ["integration-files-uninspectable"] };
+    }
+  }
+  return `${state.verdict}: ${state.markers.join(", ") || "no-integration-markers"}`;
+}
 function assertPackageIntegrationInactive(bindings, action) {
   const activeBindings = [
     "metro",
@@ -62975,21 +62941,8 @@ function createSessionHandler(runtime, dependencies = {}) {
                 nextAction: "No package-integration binding is active for this session; proceed to release."
               });
             }
-            assertPackageIntegrationInactive(status2.bindings, input.action);
-            const fileState = inspectPackageIntegrationFileState(appRoot);
-            if (fileState.verdict !== "unintegrated") {
-              throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", `integration manifest is unavailable and canonical files are not provably unintegrated (${fileState.verdict}: ${fileState.markers.join(", ")})`, void 0, { nextAction: RECONCILE_FILES_NEXT_ACTION });
-            }
-            registry2.updateBindings(session, {
-              bindings: { packageIntegration: null }
-            });
-            return okResult({
-              restored: false,
-              reconciled: true,
-              verdict: "unintegrated",
-              packagePath,
-              manifestPath,
-              nextAction: "Canonical files are already unintegrated; apply_integration or release may proceed."
+            throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", `integration restoration requires a SHA-256-verified manifest and none is available; the binding is preserved and canonical files were inspected for diagnostics only (${describeIntegrationFileDiagnostics(appRoot)})`, void 0, {
+              nextAction: manifestRecoveryNextAction(integrationBinding, "retry restore_integration with confirmed=true")
             });
           }
           assertPackageIntegrationInactive(status2.bindings, input.action);
@@ -63102,6 +63055,19 @@ function createSessionHandler(runtime, dependencies = {}) {
         const priorSessionId = registry2.getHandoffOwner(handoffId);
         const priorStatus = priorSessionId ? registry2.getSessionStatus(priorSessionId) : null;
         const priorRunner = cleanup?.runner ?? priorStatus?.bindings.runner;
+        const acceptAppRoot = String(status2.source.appRoot ?? "");
+        const retryAccept = "retry accept_handoff with the same handoffId and token";
+        if (status2.state === "handoff_cleanup") {
+          const transferredBinding = status2.bindings.packageIntegration;
+          if (transferredBinding && !(acceptAppRoot && recoverableManifestSource(acceptAppRoot, transferredBinding))) {
+            throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", `resumed handoff cleanup carries package-integration authority without a SHA-256-verified restoration manifest; cleanup refuses before any lifecycle mutation, and canonical files were inspected for diagnostics only (${describeIntegrationFileDiagnostics(acceptAppRoot)})`, void 0, { nextAction: manifestRecoveryNextAction(transferredBinding, retryAccept) });
+          }
+        } else {
+          const donorBinding = priorStatus?.bindings.packageIntegration;
+          if (donorBinding && !(acceptAppRoot && recoverableManifestSource(acceptAppRoot, donorBinding))) {
+            throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", `handoff donor carries package-integration authority without a SHA-256-verified restoration manifest; acceptance refuses before any reservation, cleanup, transfer, or registry mutation, and canonical files were inspected for diagnostics only (${describeIntegrationFileDiagnostics(acceptAppRoot)})`, void 0, { nextAction: manifestRecoveryNextAction(donorBinding, retryAccept) });
+          }
+        }
         if (status2.state !== "handoff_cleanup" && priorRunner && (typeof priorRunner.pid !== "number" || typeof priorRunner.processBirth !== "string" || inspectSessionOwner({
           sessionId: priorSessionId ?? "unknown",
           pid: priorRunner.pid,
@@ -63234,185 +63200,104 @@ function createSessionHandler(runtime, dependencies = {}) {
           throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "recovery worker identity is unavailable");
         }
         const adoptionAppRoot = String(current.source.appRoot ?? "");
-        let integrationProof;
-        let adoptionFailure;
-        const proveUnintegrated = (subject) => {
-          const refuse = (verdict, markers) => {
-            throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", `${subject} whose manifest is unavailable and canonical files are not provably unintegrated (${verdict}: ${markers.join(", ")})`, void 0, { nextAction: RETRY_ADOPTION_NEXT_ACTION });
-          };
-          if (!adoptionAppRoot)
-            refuse("partial", ["app-root-unavailable"]);
-          const proof2 = openPackageIntegrationFileProof(adoptionAppRoot);
-          if (proof2.verdict !== "unintegrated") {
-            const { verdict, markers } = proof2;
-            proof2.close();
-            refuse(verdict, markers);
-          }
-          integrationProof = proof2;
-          dependencies.afterAdoptionIntegrationProof?.();
-        };
-        const assertIntegrationProofHolds = () => {
-          if (integrationProof && !integrationProof.reverify()) {
-            throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "canonical integration files changed after the unintegrated proof", void 0, { axis: "integration-file-proof", nextAction: RETRY_ADOPTION_NEXT_ACTION });
-          }
-        };
-        try {
-          if (current.state !== "handoff_cleanup") {
-            const recoveryHandles = current.bindings.recoveryHandles;
-            const priorSessionId = typeof recoveryHandles?.adoptStale?.priorSessionId === "string" ? recoveryHandles.adoptStale.priorSessionId : void 0;
-            const priorIntegration = priorSessionId ? registry2.getSessionStatus(priorSessionId)?.bindings.packageIntegration : void 0;
-            if (priorIntegration && !(adoptionAppRoot && recoverableManifestSource(adoptionAppRoot, priorIntegration))) {
-              proveUnintegrated("stale session carries package-integration authority");
-            }
-            registry2.adoptStaleWithHandle(session, adoptionHandle, current.worker.instanceId, {
-              expectedTargetAuthorityVersion: current.authorityVersion,
-              precondition: assertIntegrationProofHolds
-            });
-          } else {
-            registry2.verifyStaleAdoptionResumption(session, adoptionHandle, current.worker.instanceId);
-            const transferredBinding = current.bindings.packageIntegration;
-            if (transferredBinding && !(adoptionAppRoot && recoverableManifestSource(adoptionAppRoot, transferredBinding))) {
-              proveUnintegrated("resumed stale adoption carries package-integration authority");
-            }
-          }
-          const adopted = registry2.getSessionStatus(session.sessionId);
-          const cleanup = adopted?.bindings.handoffCleanup;
-          if (cleanup?.recorder && typeof cleanup.recorder.completedAt !== "number") {
-            const recorderCleanup = registry2.beginHandoffCleanupResource(session, current.worker.instanceId, "recorder", { precondition: assertIntegrationProofHolds });
-            if (!recorderCleanup) {
-              throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "stale recorder cleanup binding disappeared while fenced");
-            }
-            await (dependencies.stopHandoffRecorder ?? stopBoundRecorder)(recorderCleanup);
-            registry2.completeHandoffCleanupResource(session, current.worker.instanceId, "recorder", {
-              precondition: assertIntegrationProofHolds
-            });
-          }
-          if (cleanup?.runner && typeof cleanup.runner.completedAt !== "number") {
-            const runnerCleanup = registry2.beginHandoffCleanupResource(session, current.worker.instanceId, "runner", { precondition: assertIntegrationProofHolds });
-            if (!runnerCleanup) {
-              throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "stale runner cleanup binding disappeared while fenced");
-            }
-            if (dependencies.stopHandoffRunner) {
-              await dependencies.stopHandoffRunner(runnerCleanup);
-            } else {
-              await stopHandoffRunner(runnerCleanup, dependencies.probeProcessBirth, dependencies.signalProcess, dependencies.cleanupTimeoutMs);
-            }
-            registry2.completeHandoffCleanupResource(session, current.worker.instanceId, "runner", {
-              precondition: assertIntegrationProofHolds
-            });
-          }
-          if (cleanup?.observe && typeof cleanup.observe.completedAt !== "number") {
-            const observeCleanup = registry2.beginHandoffCleanupResource(session, current.worker.instanceId, "observe", { precondition: assertIntegrationProofHolds });
-            if (!observeCleanup) {
-              throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "stale Observe cleanup binding disappeared while fenced");
-            }
-            if (dependencies.stopHandoffObserve) {
-              await dependencies.stopHandoffObserve(observeCleanup);
-            } else {
-              await stopHandoffObserve(observeCleanup, dependencies.probeListener, dependencies.probeProcessBirth, dependencies.cleanupTimeoutMs);
-            }
-            registry2.completeHandoffCleanupResource(session, current.worker.instanceId, "observe", {
-              precondition: assertIntegrationProofHolds
-            });
-          }
-          if (cleanup?.metro && typeof cleanup.metro.completedAt !== "number") {
-            const metroCleanup = registry2.beginHandoffCleanupResource(session, current.worker.instanceId, "metro", { precondition: assertIntegrationProofHolds });
-            if (!metroCleanup || typeof metroCleanup.sourceSessionId !== "string") {
-              throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "stale Metro cleanup binding disappeared while fenced");
-            }
-            const signerCapability = dependencies.getSignerCapability?.(metroCleanup.sourceSessionId);
-            if (!signerCapability) {
-              throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "stale Metro cleanup requires the source session signer capability");
-            }
-            const stopped = await (dependencies.stopManagedMetro ?? stopManagedMetro)(metroCleanup, {
-              sessionId: metroCleanup.sourceSessionId,
-              signerCapability
-            });
-            if (!stopped) {
-              throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "stale managed Metro could not be stopped with exact process authority");
-            }
-            registry2.completeHandoffCleanupResource(session, current.worker.instanceId, "metro", {
-              precondition: assertIntegrationProofHolds
-            });
-          }
-          if (adopted?.state === "handoff_cleanup") {
-            registry2.finishHandoffCleanup(session, current.worker.instanceId, {
-              precondition: assertIntegrationProofHolds
-            });
-          }
-          const settled = registry2.getSessionStatus(session.sessionId);
-          const transferredIntegration = settled?.bindings.packageIntegration;
-          let integrationOutcome = {
-            integrationRestoration: { required: false }
-          };
-          if (transferredIntegration) {
-            const manifestAvailable = Boolean(adoptionAppRoot && recoverableManifestSource(adoptionAppRoot, transferredIntegration));
-            if (manifestAvailable) {
-              integrationOutcome = {
-                integrationRestoration: {
-                  required: true,
-                  action: "restore_integration",
-                  installedBySessionId: transferredIntegration.installedBySessionId
-                },
-                nextAction: "The adopter now owns integration restoration; call restore_integration with confirmed=true before release."
-              };
-            } else {
-              let reconciled = false;
-              if (settled && integrationProof) {
-                try {
-                  registry2.updateBindings(session, {
-                    bindings: { packageIntegration: null },
-                    expectedAuthorityVersion: settled.authorityVersion,
-                    precondition: assertIntegrationProofHolds
-                  });
-                  reconciled = true;
-                } catch (error2) {
-                  if (!(error2 instanceof SessionAuthorityError && error2.details?.axis === "integration-file-proof")) {
-                    throw error2;
-                  }
-                }
-              }
-              integrationOutcome = reconciled ? {
-                integrationReconciled: {
-                  cleared: true,
-                  verdict: "unintegrated",
-                  priorInstalledBySessionId: transferredIntegration.installedBySessionId,
-                  reason: "transferred integration binding had no recoverable manifest and canonical files are provably unintegrated"
-                }
-              } : {
-                integrationRestoration: {
-                  required: true,
-                  action: "restore_integration",
-                  blocked: true,
-                  installedBySessionId: transferredIntegration.installedBySessionId,
-                  reason: integrationProof ? "integration manifest is unavailable and canonical files changed after the unintegrated proof" : "integration manifest is unavailable and canonical files were never proven unintegrated for this adoption"
-                },
-                nextAction: RECONCILE_FILES_NEXT_ACTION
-              };
-            }
-          }
-          return okResult({
-            adopted: true,
-            session: projectPublicAuthorityStatus(runtime.status()),
-            ...integrationOutcome,
-            runner: {
-              adopted: false,
-              reason: "runner capability is never crash-adopted; reopen the exact device to bind a fresh runner"
-            }
+        const refuseManifestlessBinding = (subject, binding) => {
+          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", `${subject} without a SHA-256-verified restoration manifest; recovery refuses before any transfer, cleanup, or registry mutation, and canonical files were inspected for diagnostics only (${describeIntegrationFileDiagnostics(adoptionAppRoot)})`, void 0, {
+            nextAction: manifestRecoveryNextAction(binding, "retry adopt_stale with the same adoptionHandle")
           });
-        } catch (error2) {
-          adoptionFailure = error2;
-          throw error2;
-        } finally {
-          if (integrationProof) {
-            try {
-              integrationProof.close();
-            } catch (closeError) {
-              if (adoptionFailure === void 0)
-                throw closeError;
-            }
+        };
+        if (current.state !== "handoff_cleanup") {
+          const recoveryHandles = current.bindings.recoveryHandles;
+          const priorSessionId = typeof recoveryHandles?.adoptStale?.priorSessionId === "string" ? recoveryHandles.adoptStale.priorSessionId : void 0;
+          const priorIntegration = priorSessionId ? registry2.getSessionStatus(priorSessionId)?.bindings.packageIntegration : void 0;
+          if (priorIntegration && !(adoptionAppRoot && recoverableManifestSource(adoptionAppRoot, priorIntegration))) {
+            refuseManifestlessBinding("stale session carries package-integration authority", priorIntegration);
+          }
+          registry2.adoptStaleWithHandle(session, adoptionHandle, current.worker.instanceId, {
+            expectedTargetAuthorityVersion: current.authorityVersion
+          });
+        } else {
+          registry2.verifyStaleAdoptionResumption(session, adoptionHandle, current.worker.instanceId);
+          const transferredBinding = current.bindings.packageIntegration;
+          if (transferredBinding && !(adoptionAppRoot && recoverableManifestSource(adoptionAppRoot, transferredBinding))) {
+            refuseManifestlessBinding("resumed stale adoption carries package-integration authority", transferredBinding);
           }
         }
+        const adopted = registry2.getSessionStatus(session.sessionId);
+        const cleanup = adopted?.bindings.handoffCleanup;
+        if (cleanup?.recorder && typeof cleanup.recorder.completedAt !== "number") {
+          const recorderCleanup = registry2.beginHandoffCleanupResource(session, current.worker.instanceId, "recorder");
+          if (!recorderCleanup) {
+            throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "stale recorder cleanup binding disappeared while fenced");
+          }
+          await (dependencies.stopHandoffRecorder ?? stopBoundRecorder)(recorderCleanup);
+          registry2.completeHandoffCleanupResource(session, current.worker.instanceId, "recorder");
+        }
+        if (cleanup?.runner && typeof cleanup.runner.completedAt !== "number") {
+          const runnerCleanup = registry2.beginHandoffCleanupResource(session, current.worker.instanceId, "runner");
+          if (!runnerCleanup) {
+            throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "stale runner cleanup binding disappeared while fenced");
+          }
+          if (dependencies.stopHandoffRunner) {
+            await dependencies.stopHandoffRunner(runnerCleanup);
+          } else {
+            await stopHandoffRunner(runnerCleanup, dependencies.probeProcessBirth, dependencies.signalProcess, dependencies.cleanupTimeoutMs);
+          }
+          registry2.completeHandoffCleanupResource(session, current.worker.instanceId, "runner");
+        }
+        if (cleanup?.observe && typeof cleanup.observe.completedAt !== "number") {
+          const observeCleanup = registry2.beginHandoffCleanupResource(session, current.worker.instanceId, "observe");
+          if (!observeCleanup) {
+            throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "stale Observe cleanup binding disappeared while fenced");
+          }
+          if (dependencies.stopHandoffObserve) {
+            await dependencies.stopHandoffObserve(observeCleanup);
+          } else {
+            await stopHandoffObserve(observeCleanup, dependencies.probeListener, dependencies.probeProcessBirth, dependencies.cleanupTimeoutMs);
+          }
+          registry2.completeHandoffCleanupResource(session, current.worker.instanceId, "observe");
+        }
+        if (cleanup?.metro && typeof cleanup.metro.completedAt !== "number") {
+          const metroCleanup = registry2.beginHandoffCleanupResource(session, current.worker.instanceId, "metro");
+          if (!metroCleanup || typeof metroCleanup.sourceSessionId !== "string") {
+            throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "stale Metro cleanup binding disappeared while fenced");
+          }
+          const signerCapability = dependencies.getSignerCapability?.(metroCleanup.sourceSessionId);
+          if (!signerCapability) {
+            throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "stale Metro cleanup requires the source session signer capability");
+          }
+          const stopped = await (dependencies.stopManagedMetro ?? stopManagedMetro)(metroCleanup, {
+            sessionId: metroCleanup.sourceSessionId,
+            signerCapability
+          });
+          if (!stopped) {
+            throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "stale managed Metro could not be stopped with exact process authority");
+          }
+          registry2.completeHandoffCleanupResource(session, current.worker.instanceId, "metro");
+        }
+        if (adopted?.state === "handoff_cleanup") {
+          registry2.finishHandoffCleanup(session, current.worker.instanceId);
+        }
+        const settled = registry2.getSessionStatus(session.sessionId);
+        const transferredIntegration = settled?.bindings.packageIntegration;
+        const integrationOutcome = transferredIntegration ? {
+          integrationRestoration: {
+            required: true,
+            action: "restore_integration",
+            installedBySessionId: transferredIntegration.installedBySessionId
+          },
+          nextAction: "The adopter now owns integration restoration; call restore_integration with confirmed=true before release."
+        } : {
+          integrationRestoration: { required: false }
+        };
+        return okResult({
+          adopted: true,
+          session: projectPublicAuthorityStatus(runtime.status()),
+          ...integrationOutcome,
+          runner: {
+            adopted: false,
+            reason: "runner capability is never crash-adopted; reopen the exact device to bind a fresh runner"
+          }
+        });
       }
       const status = registry2.getSessionStatus(session.sessionId);
       if (!status) {

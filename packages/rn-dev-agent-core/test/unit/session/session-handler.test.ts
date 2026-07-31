@@ -8,6 +8,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:net';
@@ -201,6 +202,7 @@ test('failed live managed Metro shutdown preserves donor ownership before transf
   );
   const address = listener.address();
   assert.ok(address && typeof address !== 'string');
+  const donorManifestSource = '{"version":1,"adapter":"rn-session-adapter"}\n';
   const donorStatus = {
     sessionId: 'donor',
     state: 'handoff',
@@ -209,14 +211,15 @@ test('failed live managed Metro shutdown preserves donor ownership before transf
       packageIntegration: {
         version: 1,
         installedBySessionId: 'donor',
-        manifestSha256: 'a'.repeat(64),
+        manifestSha256: createHash('sha256').update(donorManifestSource).digest('hex'),
+        manifestSource: donorManifestSource,
       },
     } as Record<string, unknown>,
   };
   const targetStatus = {
     sessionId: 'target',
     state: 'blocked',
-    source: { kind: 'git' },
+    source: { kind: 'git', appRoot: join(tmpdir(), 'rn-session-absent-donor-app-root') },
     bindings: {} as Record<string, unknown>,
     worker: { instanceId: 'worker-target' },
   };

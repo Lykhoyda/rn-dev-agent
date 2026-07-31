@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import {
-  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -11,7 +10,6 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -19,12 +17,6 @@ import { openSessionRegistry } from '../../../dist/session/registry.js';
 import { resolveSourceIdentity } from '../../../dist/session/source-identity.js';
 import { createAuthorityStateLayout } from '../../../dist/session/state-root.js';
 import { createSessionHandler } from '../../../dist/tools/session.js';
-
-const cliPath = new URL('../../../dist/rn-session.js', import.meta.url).pathname;
-
-// r20: a durable packageIntegration binding must never outlive the only copy of
-// its restoration manifest, and a transferred legacy binding without a manifest
-// must be reconciled or refused instead of silently fencing apply and release.
 
 const R20_LEGACY_BINDING = {
   version: 1,
@@ -277,8 +269,8 @@ test('normal apply and restore with the on-disk manifest is unchanged', async ()
   }
 });
 
-test('r20: adopting a manifest-less legacy binding reconciles a provably unintegrated app to zero residue', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'rn-session-r20-reconcile-'));
+test('r20: adopting a manifest-less legacy binding refuses before transfer even when files are provably unintegrated', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-r20-refuse-unintegrated-'));
   const stateHome = join(root, 'state');
   const previousStateHome = process.env.XDG_STATE_HOME;
   try {
@@ -290,102 +282,103 @@ test('r20: adopting a manifest-less legacy binding reconciles a provably uninteg
     process.env.XDG_STATE_HOME = stateHome;
     const layout = createAuthorityStateLayout();
     const fixture = setupStaleAdoption({ appRoot, registryPath: layout.registry });
-    const { registry, adopter, handle, source } = fixture;
+    const { registry, adopter, handle } = fixture;
     const handler = createSessionHandler(createRuntime(registry, adopter));
-    const allocationProbe = await new Promise<number>((resolvePort, reject) => {
-      const server = createServer();
-      server.once('error', reject);
-      server.listen(0, '127.0.0.1', () => {
-        const port = (server.address() as { port: number }).port;
-        server.close(() => resolvePort(port));
-      });
-    });
-    const allocatedPort = registry.allocatePort({
-      service: 'metro',
-      worktreeKey: source.worktreeKey,
-      uid: 'r20-fixture',
-      base: allocationProbe,
-      span: 1,
-    });
-    assert.equal(allocatedPort, allocationProbe);
+    const adopterBefore = registry.getSessionStatus('session-adopter');
+    const priorBefore = registry.getSessionStatus('session-prior');
 
-    // Public status before adoption must already expose the fence it is about to inherit.
-    const priorStatusBinding = (
-      registry.getSessionStatus('session-prior')?.bindings.packageIntegration as {
-        installedBySessionId?: string;
-      } | null
-    )?.installedBySessionId;
-    assert.equal(priorStatusBinding, R20_LEGACY_BINDING.installedBySessionId);
-
-    const adoptedResult = await handler({ action: 'adopt_stale', adoptionHandle: handle });
-    assert.equal(adoptedResult.isError, undefined, adoptedResult.content[0]!.text);
-    const adoptedEnvelope = envelope(adoptedResult);
-    assert.deepEqual(adoptedEnvelope.data.integrationReconciled, {
-      cleared: true,
-      verdict: 'unintegrated',
-      priorInstalledBySessionId: R20_LEGACY_BINDING.installedBySessionId,
-      reason:
-        'transferred integration binding had no recoverable manifest and canonical files are provably unintegrated',
-    });
-    assert.equal(
-      registry.getSessionStatus('session-adopter')?.bindings.packageIntegration,
-      null,
-      'the impossible binding must not survive adoption',
+    const refused = await handler({ action: 'adopt_stale', adoptionHandle: handle });
+    assert.equal(refused.isError, true);
+    const refusal = envelope(refused);
+    assert.match(String(refusal.error), /without a SHA-256-verified restoration manifest/);
+    assert.match(
+      String(refusal.error),
+      /unintegrated: no-integration-markers/,
+      'an unintegrated verdict is reported as a diagnostic and never authorizes transfer',
+    );
+    assert.match(
+      String((refusal.meta as { nextAction?: string })?.nextAction),
+      /version control history/,
     );
 
-    // Status honesty: no phantom fence, and installed=false remains accurate.
-    const statusResult = await handler({ action: 'status' });
-    const statusEnvelope = envelope(statusResult);
-    const integrationDiagnostic = (
-      statusEnvelope.data.authority as {
-        migration: { packageIntegration: { installed: boolean; binding: unknown } };
-      }
-    ).migration.packageIntegration;
-    assert.equal(integrationDiagnostic.installed, false);
-    assert.equal(integrationDiagnostic.binding, null);
+    const adopterAfter = registry.getSessionStatus('session-adopter');
+    const priorAfter = registry.getSessionStatus('session-prior');
+    assert.equal(adopterAfter?.state, 'blocked');
+    assert.equal(adopterAfter?.authorityVersion, adopterBefore?.authorityVersion);
+    assert.equal(adopterAfter?.bindings.packageIntegration, undefined);
+    assert.equal(priorAfter?.state, 'device_claimed');
+    assert.equal(priorAfter?.authorityVersion, priorBefore?.authorityVersion);
+    assert.deepEqual(priorAfter?.bindings.packageIntegration, R20_LEGACY_BINDING);
+    assert.deepEqual(priorAfter?.claims, priorBefore?.claims);
+    assert.equal(readFileSync(packagePath, 'utf8'), originalPackage);
+    assert.equal(readFileSync(metroConfigPath, 'utf8'), originalMetroConfig);
+    registry.close();
+  } finally {
+    if (previousStateHome === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = previousStateHome;
+    rmSync(root, { force: true, recursive: true });
+  }
+});
 
-    // The r20 blocker: apply after safe reconciliation now succeeds.
-    const applied = await handler({ action: 'apply_integration', confirmed: true });
+test('restoring the exact manifest bytes is the supported recovery that unblocks adoption and restoration', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-manifest-recovery-'));
+  const stateHome = join(root, 'state');
+  const previousStateHome = process.env.XDG_STATE_HOME;
+  try {
+    const appRoot = createAppFixture(root);
+    const packagePath = join(appRoot, 'package.json');
+    const metroConfigPath = join(appRoot, 'metro.config.js');
+    const originalPackage = readFileSync(packagePath, 'utf8');
+    const originalMetroConfig = readFileSync(metroConfigPath, 'utf8');
+    process.env.XDG_STATE_HOME = stateHome;
+    const layout = createAuthorityStateLayout();
+    const fixture = setupStaleAdoption({
+      appRoot,
+      registryPath: layout.registry,
+      priorIntegration: null,
+    });
+    const { registry, prior, adopter, handle } = fixture;
+
+    const priorHandler = createSessionHandler(createRuntime(registry, prior));
+    const applied = await priorHandler({ action: 'apply_integration', confirmed: true });
     assert.equal(applied.isError, undefined, applied.content[0]!.text);
+    const manifestPath = join(appRoot, '.rn-agent', 'integration', 'rn-session-integration.json');
+    const manifestBytes = readFileSync(manifestPath, 'utf8');
+    registry.updateBindings(prior, {
+      bindings: {
+        packageIntegration: {
+          version: 1,
+          installedBySessionId: 'session-prior',
+          manifestSha256: createHash('sha256').update(manifestBytes).digest('hex'),
+        },
+      },
+    });
+    unlinkSync(manifestPath);
+
+    const handler = createSessionHandler(createRuntime(registry, adopter));
+    const refused = await handler({ action: 'adopt_stale', adoptionHandle: handle });
+    assert.equal(refused.isError, true);
+    assert.match(String(envelope(refused).error), /without a SHA-256-verified restoration manifest/);
+    assert.equal(registry.getSessionStatus('session-adopter')?.state, 'blocked');
+
+    writeFileSync(manifestPath, manifestBytes);
+    const adopted = await handler({ action: 'adopt_stale', adoptionHandle: handle });
+    assert.equal(adopted.isError, undefined, adopted.content[0]!.text);
+    const adoptedEnvelope = envelope(adopted);
+    assert.deepEqual(adoptedEnvelope.data.integrationRestoration, {
+      required: true,
+      action: 'restore_integration',
+      installedBySessionId: 'session-prior',
+    });
 
     const restored = await handler({ action: 'restore_integration', confirmed: true });
     assert.equal(restored.isError, undefined, restored.content[0]!.text);
     assert.equal(readFileSync(packagePath, 'utf8'), originalPackage);
     assert.equal(readFileSync(metroConfigPath, 'utf8'), originalMetroConfig);
-
+    assert.equal(registry.getSessionStatus('session-adopter')?.bindings.packageIntegration, null);
     const released = await handler({ action: 'release' });
     assert.equal(released.isError, undefined, released.content[0]!.text);
-
-    // Zero residue: adopter released with no claims, prior fenced stale, worktree empty.
-    const terminal = registry.getSessionStatus('session-adopter');
-    assert.equal(terminal?.state, 'released');
-    assert.deepEqual(terminal?.claims, []);
-    assert.equal(registry.getSessionStatus('session-prior')?.state, 'stale');
-    assert.deepEqual(registry.getSessionStatus('session-prior')?.claims, []);
-    assert.deepEqual(registry.findSessionsByWorktree(source.worktreeKey), []);
-
-    // The worktree's port allocation is no longer fenced: a different worktree
-    // reclaims it as an orphan once no live session remains.
-    assert.equal(
-      registry.allocatePort({
-        service: 'metro',
-        worktreeKey: 'other-worktree-key',
-        uid: 'r20-fixture',
-        base: allocationProbe,
-        span: 1,
-      }),
-      allocationProbe,
-    );
     registry.close();
-
-    // Zero residue at the canonical CLI boundary as well.
-    const feedback = spawnSync(process.execPath, [cliPath, 'feedback-json'], {
-      cwd: appRoot,
-      env: { ...process.env, XDG_STATE_HOME: stateHome },
-      encoding: 'utf8',
-    });
-    assert.notEqual(feedback.status, 0);
-    assert.match(feedback.stderr, /no live session matches this canonical worktree and app root/);
   } finally {
     if (previousStateHome === undefined) delete process.env.XDG_STATE_HOME;
     else process.env.XDG_STATE_HOME = previousStateHome;
@@ -415,8 +408,8 @@ test('adoption refuses before transfer when the manifest is gone but files still
     const refused = await handler({ action: 'adopt_stale', adoptionHandle: handle });
     assert.equal(refused.isError, true);
     const refusal = envelope(refused);
-    assert.match(String(refusal.error), /not provably unintegrated/);
-    assert.match(String(refusal.error), /integrated/);
+    assert.match(String(refusal.error), /without a SHA-256-verified restoration manifest/);
+    assert.match(String(refusal.error), /integrated: package-script-ios-adapter/);
     assert.match(
       String((refusal.meta as { nextAction?: string })?.nextAction),
       /version control history/,
@@ -462,7 +455,7 @@ test('adoption refuses before transfer when the prior binding is manifest-less a
     const refused = await handler({ action: 'adopt_stale', adoptionHandle: handle });
     assert.equal(refused.isError, true);
     const refusal = envelope(refused);
-    assert.match(String(refusal.error), /not provably unintegrated/);
+    assert.match(String(refusal.error), /without a SHA-256-verified restoration manifest/);
     assert.match(String(refusal.error), /app-root-unavailable/);
     assert.match(
       String((refusal.meta as { nextAction?: string })?.nextAction),
@@ -488,8 +481,8 @@ test('adoption refuses before transfer when the prior binding is manifest-less a
   }
 });
 
-test('restore_integration reconciliation is authenticated, deterministic, and idempotent', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'rn-session-reconcile-restore-'));
+test('restore_integration preserves a manifest-less binding and refuses deterministically', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-manifestless-restore-'));
   const stateHome = join(root, 'state');
   const previousStateHome = process.env.XDG_STATE_HOME;
   try {
@@ -517,30 +510,43 @@ test('restore_integration reconciliation is authenticated, deterministic, and id
     });
     const handler = createSessionHandler(createRuntime(registry, session));
 
-    const reconciled = await handler({ action: 'restore_integration', confirmed: true });
-    assert.equal(reconciled.isError, undefined, reconciled.content[0]!.text);
-    const reconciledEnvelope = envelope(reconciled);
-    assert.equal(reconciledEnvelope.data.restored, false);
-    assert.equal(reconciledEnvelope.data.reconciled, true);
-    assert.equal(reconciledEnvelope.data.verdict, 'unintegrated');
-    assert.equal(registry.getSessionStatus('session-reconcile')?.bindings.packageIntegration, null);
+    const versionBefore = registry.getSessionStatus('session-reconcile')?.authorityVersion;
+    const refused = await handler({ action: 'restore_integration', confirmed: true });
+    assert.equal(refused.isError, true);
+    const refusal = envelope(refused);
+    assert.match(String(refusal.error), /requires a SHA-256-verified manifest/);
+    assert.match(
+      String(refusal.error),
+      /unintegrated: no-integration-markers/,
+      'an unintegrated verdict is diagnostic only and never clears the binding',
+    );
+    assert.match(
+      String((refusal.meta as { nextAction?: string })?.nextAction),
+      /version control history/,
+    );
+    assert.deepEqual(
+      registry.getSessionStatus('session-reconcile')?.bindings.packageIntegration,
+      R20_LEGACY_BINDING,
+    );
+    assert.equal(registry.getSessionStatus('session-reconcile')?.authorityVersion, versionBefore);
     assert.equal(readFileSync(packagePath, 'utf8'), originalPackage);
     assert.equal(readFileSync(metroConfigPath, 'utf8'), originalMetroConfig);
 
-    // Repeating the recovery action mutates nothing and points at release.
     const repeated = await handler({ action: 'restore_integration', confirmed: true });
     assert.equal(repeated.isError, true);
-    const repeatedEnvelope = envelope(repeated);
-    assert.match(String(repeatedEnvelope.error), /unavailable for restoration/);
-    assert.match(
-      String((repeatedEnvelope.meta as { nextAction?: string })?.nextAction),
-      /proceed to release/,
+    assert.match(String(envelope(repeated).error), /requires a SHA-256-verified manifest/);
+    assert.deepEqual(
+      registry.getSessionStatus('session-reconcile')?.bindings.packageIntegration,
+      R20_LEGACY_BINDING,
     );
-    assert.equal(registry.getSessionStatus('session-reconcile')?.bindings.packageIntegration, null);
     assert.equal(readFileSync(packagePath, 'utf8'), originalPackage);
 
-    const released = await handler({ action: 'release' });
-    assert.equal(released.isError, undefined, released.content[0]!.text);
+    const blockedRelease = await handler({ action: 'release' });
+    assert.equal(blockedRelease.isError, true);
+    assert.match(
+      blockedRelease.content[0]!.text,
+      /package integration must be restored before session release/,
+    );
     registry.close();
   } finally {
     if (previousStateHome === undefined) delete process.env.XDG_STATE_HOME;
@@ -549,7 +555,7 @@ test('restore_integration reconciliation is authenticated, deterministic, and id
   }
 });
 
-test('reconciliation refuses integrated, partially integrated, and ambiguous canonical files', async () => {
+test('manifest-less restoration refuses integrated, partially integrated, and ambiguous canonical files', async () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-reconcile-refusals-'));
   const stateHome = join(root, 'state');
   const previousStateHome = process.env.XDG_STATE_HOME;
@@ -623,7 +629,7 @@ test('reconciliation refuses integrated, partially integrated, and ambiguous can
       const refused = await handler({ action: 'restore_integration', confirmed: true });
       assert.equal(refused.isError, true, scenario.name);
       const refusal = envelope(refused);
-      assert.match(String(refusal.error), /not provably unintegrated/, scenario.name);
+      assert.match(String(refusal.error), /requires a SHA-256-verified manifest/, scenario.name);
       assert.match(String(refusal.error), scenario.expected, scenario.name);
       assert.match(
         String((refusal.meta as { nextAction?: string })?.nextAction),
@@ -681,10 +687,18 @@ test('a foreign worktree cannot adopt or reconcile the stale binding', async () 
     ]);
     process.env.XDG_STATE_HOME = stateHome;
     const layout = createAuthorityStateLayout();
+    const durableManifestSource = '{"version":1,"adapter":"rn-session-adapter"}\n';
+    const durableBinding = {
+      version: 1,
+      installedBySessionId: R20_LEGACY_BINDING.installedBySessionId,
+      manifestSha256: createHash('sha256').update(durableManifestSource).digest('hex'),
+      manifestSource: durableManifestSource,
+    };
     const fixture = setupStaleAdoption({
       appRoot,
       registryPath: layout.registry,
       adopterAppRoot: foreignRoot,
+      priorIntegration: durableBinding,
     });
     const { registry, adopter, handle } = fixture;
     const handler = createSessionHandler(createRuntime(registry, adopter));
@@ -694,8 +708,23 @@ test('a foreign worktree cannot adopt or reconcile the stale binding', async () 
     assert.match(refused.content[0]!.text, /SOURCE_WORKTREE_MISMATCH/);
     assert.deepEqual(
       registry.getSessionStatus('session-prior')?.bindings.packageIntegration,
-      R20_LEGACY_BINDING,
+      durableBinding,
       'a foreign adopter must never transfer or clear the binding',
+    );
+    assert.equal(registry.getSessionStatus('session-prior')?.state, 'device_claimed');
+
+    registry.updateBindings(fixture.prior, {
+      bindings: { packageIntegration: { ...R20_LEGACY_BINDING } },
+    });
+    const manifestless = await handler({ action: 'adopt_stale', adoptionHandle: handle });
+    assert.equal(manifestless.isError, true);
+    assert.match(
+      String(envelope(manifestless).error),
+      /without a SHA-256-verified restoration manifest/,
+    );
+    assert.deepEqual(
+      registry.getSessionStatus('session-prior')?.bindings.packageIntegration,
+      R20_LEGACY_BINDING,
     );
     assert.equal(registry.getSessionStatus('session-prior')?.state, 'device_claimed');
     registry.close();
@@ -859,7 +888,7 @@ test('adoption refuses a corrupt on-disk manifest instead of claiming it restora
     const refused = await handler({ action: 'adopt_stale', adoptionHandle: handle });
     assert.equal(refused.isError, true);
     const refusal = envelope(refused);
-    assert.match(String(refusal.error), /not provably unintegrated/);
+    assert.match(String(refusal.error), /without a SHA-256-verified restoration manifest/);
     assert.match(String(refusal.error), /integration-file:rn-session-integration\.json/);
     assert.match(
       String((refusal.meta as { nextAction?: string })?.nextAction),
@@ -884,7 +913,7 @@ test('adoption refuses a corrupt on-disk manifest instead of claiming it restora
   }
 });
 
-test('adoption reconciles corrupt in-flight sources when files are provably unintegrated', async () => {
+test('adoption refuses corrupt in-flight sources even when files are provably unintegrated', async () => {
   const inflightShapes: Array<{ name: string; priorIntegration: Record<string, unknown> }> = [
     {
       name: 'installation',
@@ -902,7 +931,7 @@ test('adoption reconciles corrupt in-flight sources when files are provably unin
     },
   ];
   for (const shape of inflightShapes) {
-    const root = mkdtempSync(join(tmpdir(), `rn-session-corrupt-${shape.name}-reconcile-`));
+    const root = mkdtempSync(join(tmpdir(), `rn-session-corrupt-${shape.name}-refused-`));
     const stateHome = join(root, 'state');
     const previousStateHome = process.env.XDG_STATE_HOME;
     try {
@@ -919,23 +948,23 @@ test('adoption reconciles corrupt in-flight sources when files are provably unin
       const { registry, adopter, handle } = fixture;
       const handler = createSessionHandler(createRuntime(registry, adopter));
 
-      const adopted = await handler({ action: 'adopt_stale', adoptionHandle: handle });
-      assert.equal(adopted.isError, undefined, `${shape.name}: ${adopted.content[0]!.text}`);
-      const adoptedEnvelope = envelope(adopted);
-      assert.deepEqual(
-        adoptedEnvelope.data.integrationReconciled,
-        {
-          cleared: true,
-          verdict: 'unintegrated',
-          priorInstalledBySessionId: R20_LEGACY_BINDING.installedBySessionId,
-          reason:
-            'transferred integration binding had no recoverable manifest and canonical files are provably unintegrated',
-        },
+      const refused = await handler({ action: 'adopt_stale', adoptionHandle: handle });
+      assert.equal(refused.isError, true, shape.name);
+      const refusal = envelope(refused);
+      assert.match(
+        String(refusal.error),
+        /without a SHA-256-verified restoration manifest/,
         shape.name,
       );
-      assert.equal(
-        registry.getSessionStatus('session-adopter')?.bindings.packageIntegration,
-        null,
+      assert.match(
+        String(refusal.error),
+        /unintegrated: no-integration-markers/,
+        `${shape.name}: the unintegrated diagnostic must never authorize transfer or clearing`,
+      );
+      assert.equal(registry.getSessionStatus('session-adopter')?.state, 'blocked', shape.name);
+      assert.deepEqual(
+        registry.getSessionStatus('session-prior')?.bindings.packageIntegration,
+        shape.priorIntegration,
         `${shape.name}: a mismatching in-flight source must never survive as restoration authority`,
       );
       assert.equal(readFileSync(join(appRoot, 'package.json'), 'utf8'), packageBefore, shape.name);
@@ -992,8 +1021,12 @@ test('adoption refuses corrupt in-flight sources before transfer when files carr
       const refused = await handler({ action: 'adopt_stale', adoptionHandle: handle });
       assert.equal(refused.isError, true, shape.name);
       const refusal = envelope(refused);
-      assert.match(String(refusal.error), /not provably unintegrated/, shape.name);
-      assert.match(String(refusal.error), /integrated/, shape.name);
+      assert.match(
+        String(refusal.error),
+        /without a SHA-256-verified restoration manifest/,
+        shape.name,
+      );
+      assert.match(String(refusal.error), /integrated: package-script-ios-adapter/, shape.name);
       assert.match(
         String((refusal.meta as { nextAction?: string })?.nextAction),
         /version control history/,
@@ -1026,7 +1059,7 @@ test('adoption refuses corrupt in-flight sources before transfer when files carr
   }
 });
 
-test('restore_integration routes a corrupt on-disk manifest to reconciliation refusal', async () => {
+test('restore_integration refuses a corrupt on-disk manifest and preserves the binding', async () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-corrupt-restore-'));
   const stateHome = join(root, 'state');
   const previousStateHome = process.env.XDG_STATE_HOME;
@@ -1057,7 +1090,7 @@ test('restore_integration routes a corrupt on-disk manifest to reconciliation re
     const refused = await handler({ action: 'restore_integration', confirmed: true });
     assert.equal(refused.isError, true);
     const refusal = envelope(refused);
-    assert.match(String(refusal.error), /not provably unintegrated/);
+    assert.match(String(refusal.error), /requires a SHA-256-verified manifest/);
     assert.match(String(refusal.error), /integration-file:rn-session-integration\.json/);
     assert.match(
       String((refusal.meta as { nextAction?: string })?.nextAction),
@@ -1097,7 +1130,7 @@ test('status manifestAvailable requires a sha-verified manifest candidate', asyn
       binding: { ...R20_LEGACY_BINDING },
       installed: true,
       manifestAvailable: false,
-      nextAction: /provably unintegrated/,
+      nextAction: /version control history/,
     },
     {
       name: 'corrupt installation in-flight source',
@@ -1107,7 +1140,7 @@ test('status manifestAvailable requires a sha-verified manifest candidate', asyn
       },
       installed: false,
       manifestAvailable: false,
-      nextAction: /provably unintegrated/,
+      nextAction: /version control history/,
     },
     {
       name: 'corrupt restoration in-flight source',
@@ -1117,7 +1150,28 @@ test('status manifestAvailable requires a sha-verified manifest candidate', asyn
       },
       installed: false,
       manifestAvailable: false,
-      nextAction: /provably unintegrated/,
+      nextAction: /version control history/,
+    },
+    {
+      name: 'missing digest',
+      binding: {
+        version: 1,
+        installedBySessionId: R20_LEGACY_BINDING.installedBySessionId,
+      },
+      installed: false,
+      manifestAvailable: false,
+      nextAction: /No trusted manifest digest is recorded/,
+    },
+    {
+      name: 'malformed digest',
+      binding: {
+        version: 1,
+        installedBySessionId: R20_LEGACY_BINDING.installedBySessionId,
+        manifestSha256: R20_LEGACY_BINDING.manifestSha256.toUpperCase(),
+      },
+      installed: false,
+      manifestAvailable: false,
+      nextAction: /session-state-plus-manifest backup/,
     },
     {
       name: 'verified restoration in-flight source',
@@ -1192,9 +1246,17 @@ test('status manifestAvailable requires a sha-verified manifest candidate', asyn
       assert.match(String(diagnostic.binding?.nextAction), scenario.nextAction, scenario.name);
       assert.doesNotMatch(
         statusResult.content[0]!.text,
-        /manifestSource|manifestSha256|tampered|rn-session-adapter/,
-        `${scenario.name}: status must not expose manifest bytes or digests`,
+        /manifestSource|manifestSha256|tampered|rn-session-adapter|\.rn-agent|rn-session-integration/,
+        `${scenario.name}: status must not expose manifest bytes, digests, or manifest paths`,
       );
+      const recordedDigest = scenario.binding.manifestSha256;
+      if (typeof recordedDigest === 'string') {
+        assert.equal(
+          statusResult.content[0]!.text.includes(recordedDigest),
+          false,
+          `${scenario.name}: status must not expose the recorded digest value`,
+        );
+      }
       registry.close();
     } finally {
       if (previousStateHome === undefined) delete process.env.XDG_STATE_HOME;
@@ -1256,7 +1318,10 @@ test('status exposes a manifest-less binding fence with its recovery action', as
     );
     assert.equal(diagnostic.binding?.manifestAvailable, false);
     assert.match(String(diagnostic.binding?.nextAction), /restore_integration/);
-    assert.doesNotMatch(statusResult.content[0]!.text, /manifestSource/);
+    assert.doesNotMatch(
+      statusResult.content[0]!.text,
+      /manifestSource|\.rn-agent|rn-session-integration/,
+    );
 
     // The r20 apply refusal now names the supported recovery instead of a dead end.
     const refusedApply = await handler({ action: 'apply_integration', confirmed: true });
@@ -1275,72 +1340,7 @@ test('status exposes a manifest-less binding fence with its recovery action', as
   }
 });
 
-test('adoption refuses when canonical files change between proof and transfer', async () => {
-  const mutations: Array<{ name: string; mutate: (appRoot: string) => void }> = [
-    {
-      name: 'package.json',
-      mutate: (appRoot) =>
-        writeFileSync(
-          join(appRoot, 'package.json'),
-          `${JSON.stringify({ scripts: { ...ADAPTER_SENTINELS } }, null, 2)}\n`,
-        ),
-    },
-    {
-      name: 'metro config',
-      mutate: (appRoot) => writeFileSync(join(appRoot, 'metro.config.js'), METRO_INTEGRATED),
-    },
-    {
-      name: '.rn-agent/integration',
-      mutate: (appRoot) => void writeOnDiskManifest(appRoot, CORRUPT_MANIFEST_SOURCE),
-    },
-    {
-      name: 'package.json mode only',
-      mutate: (appRoot) => chmodSync(join(appRoot, 'package.json'), 0o444),
-    },
-  ];
-  for (const mutation of mutations) {
-    const root = mkdtempSync(join(tmpdir(), 'rn-session-proof-race-'));
-    const stateHome = join(root, 'state');
-    const previousStateHome = process.env.XDG_STATE_HOME;
-    try {
-      const appRoot = createAppFixture(root);
-      process.env.XDG_STATE_HOME = stateHome;
-      const layout = createAuthorityStateLayout();
-      const fixture = setupStaleAdoption({ appRoot, registryPath: layout.registry });
-      const { registry, adopter, handle } = fixture;
-      const handler = createSessionHandler(createRuntime(registry, adopter), {
-        afterAdoptionIntegrationProof: () => mutation.mutate(appRoot),
-      });
-
-      const refused = await handler({ action: 'adopt_stale', adoptionHandle: handle });
-      assert.equal(refused.isError, true, mutation.name);
-      assert.match(
-        String(envelope(refused).error),
-        /changed after the unintegrated proof/,
-        mutation.name,
-      );
-
-      assert.equal(registry.getSessionStatus('session-adopter')?.state, 'blocked', mutation.name);
-      assert.equal(
-        registry.getSessionStatus('session-prior')?.state,
-        'device_claimed',
-        mutation.name,
-      );
-      assert.deepEqual(
-        registry.getSessionStatus('session-prior')?.bindings.packageIntegration,
-        R20_LEGACY_BINDING,
-        mutation.name,
-      );
-      registry.close();
-    } finally {
-      if (previousStateHome === undefined) delete process.env.XDG_STATE_HOME;
-      else process.env.XDG_STATE_HOME = previousStateHome;
-      rmSync(root, { force: true, recursive: true });
-    }
-  }
-});
-
-test('adoption refuses a stale registry generation between proof and transfer', async () => {
+test('adoption refuses a stale registry generation between preflight and transfer', async () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-proof-generation-'));
   const stateHome = join(root, 'state');
   const previousStateHome = process.env.XDG_STATE_HOME;
@@ -1379,62 +1379,41 @@ test('adoption refuses a stale registry generation between proof and transfer', 
   }
 });
 
-test('a proof that fails during cleanup refuses the lifecycle mutation and keeps the binding', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'rn-session-proof-post-transfer-'));
+test('resumed cleanup refuses before any mutation when the transferred binding loses its verified manifest', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-resume-manifestless-'));
   const stateHome = join(root, 'state');
   const previousStateHome = process.env.XDG_STATE_HOME;
   try {
     const appRoot = createAppFixture(root);
-    const originalMetro = readFileSync(join(appRoot, 'metro.config.js'), 'utf8');
+    const packagePath = join(appRoot, 'package.json');
+    const metroConfigPath = join(appRoot, 'metro.config.js');
+    const originalPackage = readFileSync(packagePath, 'utf8');
+    const originalMetro = readFileSync(metroConfigPath, 'utf8');
     process.env.XDG_STATE_HOME = stateHome;
     const layout = createAuthorityStateLayout();
-    const fixture = setupStaleAdoption({ appRoot, registryPath: layout.registry });
+    const fixture = setupStaleAdoption({
+      appRoot,
+      registryPath: layout.registry,
+      priorIntegration: null,
+    });
     const { registry, prior, adopter, handle } = fixture;
-    registry.updateBindings(prior, { bindings: { observe: { port: 7396 } } });
-    let mutateDuringStop = true;
-    const handler = createSessionHandler(createRuntime(registry, adopter), {
-      stopHandoffObserve: async () => {
-        if (mutateDuringStop) writeFileSync(join(appRoot, 'metro.config.js'), METRO_INTEGRATED);
+
+    const priorHandler = createSessionHandler(createRuntime(registry, prior));
+    const applied = await priorHandler({ action: 'apply_integration', confirmed: true });
+    assert.equal(applied.isError, undefined, applied.content[0]!.text);
+    const manifestPath = join(appRoot, '.rn-agent', 'integration', 'rn-session-integration.json');
+    const manifestBytes = readFileSync(manifestPath, 'utf8');
+    registry.updateBindings(prior, {
+      bindings: {
+        packageIntegration: {
+          version: 1,
+          installedBySessionId: 'session-prior',
+          manifestSha256: createHash('sha256').update(manifestBytes).digest('hex'),
+        },
+        observe: { port: 7396 },
       },
     });
 
-    const refused = await handler({ action: 'adopt_stale', adoptionHandle: handle });
-    assert.equal(refused.isError, true);
-    assert.match(String(envelope(refused).error), /changed after the unintegrated proof/);
-    assert.equal(registry.getSessionStatus('session-adopter')?.state, 'handoff_cleanup');
-    assert.deepEqual(
-      registry.getSessionStatus('session-adopter')?.bindings.packageIntegration,
-      R20_LEGACY_BINDING,
-      'a binding whose proof expired must survive adoption',
-    );
-
-    mutateDuringStop = false;
-    writeFileSync(join(appRoot, 'metro.config.js'), originalMetro);
-    const resumed = await handler({ action: 'adopt_stale', adoptionHandle: handle });
-    assert.equal(resumed.isError, undefined, resumed.content[0]!.text);
-    assert.equal(registry.getSessionStatus('session-adopter')?.state, 'source_bound');
-    assert.equal(registry.getSessionStatus('session-adopter')?.bindings.packageIntegration, null);
-    registry.close();
-  } finally {
-    if (previousStateHome === undefined) delete process.env.XDG_STATE_HOME;
-    else process.env.XDG_STATE_HOME = previousStateHome;
-    rmSync(root, { force: true, recursive: true });
-  }
-});
-
-test('resumed handoff cleanup requires the bound proof before any cleanup or transition', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'rn-session-resume-proof-'));
-  const stateHome = join(root, 'state');
-  const previousStateHome = process.env.XDG_STATE_HOME;
-  try {
-    const appRoot = createAppFixture(root);
-    const originalPackage = readFileSync(join(appRoot, 'package.json'), 'utf8');
-    const originalMetro = readFileSync(join(appRoot, 'metro.config.js'), 'utf8');
-    process.env.XDG_STATE_HOME = stateHome;
-    const layout = createAuthorityStateLayout();
-    const fixture = setupStaleAdoption({ appRoot, registryPath: layout.registry });
-    const { registry, prior, adopter, handle } = fixture;
-    registry.updateBindings(prior, { bindings: { observe: { port: 7396 } } });
     let observeStops = 0;
     let failObserveStop = true;
     const handler = createSessionHandler(createRuntime(registry, adopter), {
@@ -1447,10 +1426,6 @@ test('resumed handoff cleanup requires the bound proof before any cleanup or tra
     const crashed = await handler({ action: 'adopt_stale', adoptionHandle: handle });
     assert.equal(crashed.isError, true);
     assert.equal(registry.getSessionStatus('session-adopter')?.state, 'handoff_cleanup');
-    assert.deepEqual(
-      registry.getSessionStatus('session-adopter')?.bindings.packageIntegration,
-      R20_LEGACY_BINDING,
-    );
     failObserveStop = false;
 
     const wrongHandle = await handler({ action: 'adopt_stale', adoptionHandle: 'wrong-handle' });
@@ -1461,37 +1436,40 @@ test('resumed handoff cleanup requires the bound proof before any cleanup or tra
     );
     assert.equal(observeStops, 0);
 
-    writeFileSync(
-      join(appRoot, 'package.json'),
-      `${JSON.stringify({ scripts: { ...ADAPTER_SENTINELS } }, null, 2)}\n`,
-    );
-    writeFileSync(join(appRoot, 'metro.config.js'), METRO_INTEGRATED);
+    unlinkSync(manifestPath);
     const versionBeforeRefusal = registry.getSessionStatus('session-adopter')?.authorityVersion;
     const refused = await handler({ action: 'adopt_stale', adoptionHandle: handle });
     assert.equal(refused.isError, true);
-    assert.match(String(envelope(refused).error), /not provably unintegrated/);
-    assert.match(String(envelope(refused).error), /integrated/);
-    assert.equal(observeStops, 0, 'no Observe cleanup may run before the bound proof succeeds');
+    assert.match(
+      String(envelope(refused).error),
+      /without a SHA-256-verified restoration manifest/,
+    );
+    assert.equal(observeStops, 0, 'no cleanup may run for a manifest-less binding');
     assert.equal(registry.getSessionStatus('session-adopter')?.state, 'handoff_cleanup');
     assert.equal(
       registry.getSessionStatus('session-adopter')?.authorityVersion,
       versionBeforeRefusal,
-      'no registry transition may happen before the bound proof succeeds',
+      'no registry transition may happen for a manifest-less binding',
     );
-    assert.deepEqual(
-      registry.getSessionStatus('session-adopter')?.bindings.packageIntegration,
-      R20_LEGACY_BINDING,
-    );
+    assert.ok(registry.getSessionStatus('session-adopter')?.bindings.packageIntegration);
 
-    writeFileSync(join(appRoot, 'package.json'), originalPackage);
-    writeFileSync(join(appRoot, 'metro.config.js'), originalMetro);
+    writeFileSync(manifestPath, manifestBytes);
     const resumed = await handler({ action: 'adopt_stale', adoptionHandle: handle });
     assert.equal(resumed.isError, undefined, resumed.content[0]!.text);
     assert.equal(observeStops, 1);
-    const reconciled = envelope(resumed).data.integrationReconciled as { cleared?: boolean };
-    assert.equal(reconciled.cleared, true);
-    assert.equal(registry.getSessionStatus('session-adopter')?.bindings.packageIntegration, null);
+    assert.deepEqual(envelope(resumed).data.integrationRestoration, {
+      required: true,
+      action: 'restore_integration',
+      installedBySessionId: 'session-prior',
+    });
     assert.equal(registry.getSessionStatus('session-adopter')?.state, 'source_bound');
+    assert.ok(registry.getSessionStatus('session-adopter')?.bindings.packageIntegration);
+
+    const restored = await handler({ action: 'restore_integration', confirmed: true });
+    assert.equal(restored.isError, undefined, restored.content[0]!.text);
+    assert.equal(readFileSync(packagePath, 'utf8'), originalPackage);
+    assert.equal(readFileSync(metroConfigPath, 'utf8'), originalMetro);
+    assert.equal(registry.getSessionStatus('session-adopter')?.bindings.packageIntegration, null);
     registry.close();
   } finally {
     if (previousStateHome === undefined) delete process.env.XDG_STATE_HOME;
@@ -1508,7 +1486,11 @@ test('a replacement recovery worker resumes a stale adoption with the preserved 
     const appRoot = createAppFixture(root);
     process.env.XDG_STATE_HOME = stateHome;
     const layout = createAuthorityStateLayout();
-    const fixture = setupStaleAdoption({ appRoot, registryPath: layout.registry });
+    const fixture = setupStaleAdoption({
+      appRoot,
+      registryPath: layout.registry,
+      priorIntegration: null,
+    });
     const { registry, prior, adopter, handle } = fixture;
     registry.updateBindings(prior, { bindings: { observe: { port: 7396 } } });
     let failObserveStop = true;
@@ -1545,60 +1527,177 @@ test('a replacement recovery worker resumes a stale adoption with the preserved 
   }
 });
 
-test('resumed cleanup refuses when files change after the proof and before any lifecycle mutation', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'rn-session-resume-proof-window-'));
+test('restore_integration reports that no trusted manifest digest exists when the binding lacks one', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-untrusted-digest-'));
   const stateHome = join(root, 'state');
   const previousStateHome = process.env.XDG_STATE_HOME;
   try {
     const appRoot = createAppFixture(root);
-    const originalMetro = readFileSync(join(appRoot, 'metro.config.js'), 'utf8');
     process.env.XDG_STATE_HOME = stateHome;
+    const source = resolveSourceIdentity(appRoot);
     const layout = createAuthorityStateLayout();
-    const fixture = setupStaleAdoption({ appRoot, registryPath: layout.registry });
-    const { registry, prior, adopter, handle } = fixture;
-    registry.updateBindings(prior, { bindings: { observe: { port: 7396 } } });
-    let observeStops = 0;
-    let failObserveStop = true;
-    let mutateAfterProof = false;
-    const handler = createSessionHandler(createRuntime(registry, adopter), {
-      afterAdoptionIntegrationProof: () => {
-        if (mutateAfterProof) writeFileSync(join(appRoot, 'metro.config.js'), METRO_INTEGRATED);
-      },
-      stopHandoffObserve: async () => {
-        if (failObserveStop) throw new Error('observe stop unavailable');
-        observeStops += 1;
+    const registry = openSessionRegistry(layout.registry, { ownerStatus: () => 'match' });
+    const session = registry.createSession({
+      sessionId: 'session-untrusted-digest',
+      sourceKey: source.sourceKey,
+      worktreeKey: source.worktreeKey,
+      appRootKey: source.appRootKey,
+      supervisor: { pid: process.pid, token: 'fixture' },
+      source: { ...source },
+      bindings: { metroPort: 8248 },
+    });
+    const untrustedBinding = {
+      version: 1,
+      installedBySessionId: R20_LEGACY_BINDING.installedBySessionId,
+      manifestSha256: R20_LEGACY_BINDING.manifestSha256.toUpperCase(),
+    };
+    registry.updateBindings(session, {
+      state: 'device_claimed',
+      bindings: { packageIntegration: untrustedBinding },
+    });
+    const handler = createSessionHandler(createRuntime(registry, session));
+
+    const refused = await handler({ action: 'restore_integration', confirmed: true });
+    assert.equal(refused.isError, true);
+    const refusal = envelope(refused);
+    assert.match(String(refusal.error), /requires a SHA-256-verified manifest/);
+    const nextAction = String((refusal.meta as { nextAction?: string })?.nextAction);
+    assert.match(nextAction, /No trusted manifest SHA-256 digest is recorded/);
+    assert.match(nextAction, /session-state-plus-manifest backup/);
+    assert.doesNotMatch(nextAction, /version control history/);
+    assert.deepEqual(
+      registry.getSessionStatus('session-untrusted-digest')?.bindings.packageIntegration,
+      untrustedBinding,
+    );
+    registry.close();
+  } finally {
+    if (previousStateHome === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = previousStateHome;
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test('initial accept_handoff refuses a manifest-less donor binding before any reservation or transfer', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-accept-manifestless-'));
+  const stateHome = join(root, 'state');
+  const previousStateHome = process.env.XDG_STATE_HOME;
+  try {
+    const appRoot = createAppFixture(root);
+    const packagePath = join(appRoot, 'package.json');
+    const metroConfigPath = join(appRoot, 'metro.config.js');
+    const originalPackage = readFileSync(packagePath, 'utf8');
+    const originalMetro = readFileSync(metroConfigPath, 'utf8');
+    process.env.XDG_STATE_HOME = stateHome;
+    const source = resolveSourceIdentity(appRoot);
+    const layout = createAuthorityStateLayout();
+    const registry = openSessionRegistry(layout.registry, { ownerStatus: () => 'match' });
+    const donor = registry.createSession({
+      sessionId: 'session-donor',
+      sourceKey: source.sourceKey,
+      worktreeKey: source.worktreeKey,
+      appRootKey: source.appRootKey,
+      supervisor: { pid: process.pid, token: 'donor-supervisor' },
+      source: { ...source },
+      bindings: { metroPort: 8248, observePort: 7396 },
+    });
+    registry.claimResources(donor, [
+      { type: 'source', key: source.worktreeKey },
+      { type: 'device', key: 'ios:54B03A8D-C9A7-4F97-8656-75E81DC3A68C' },
+    ]);
+    registry.updateBindings(donor, {
+      state: 'device_claimed',
+      bindings: {
+        packageIntegration: { ...R20_LEGACY_BINDING },
+        observe: { port: 7396 },
       },
     });
-
-    const crashed = await handler({ action: 'adopt_stale', adoptionHandle: handle });
-    assert.equal(crashed.isError, true);
-    assert.equal(registry.getSessionStatus('session-adopter')?.state, 'handoff_cleanup');
-    failObserveStop = false;
-
-    mutateAfterProof = true;
-    const versionBeforeRefusal = registry.getSessionStatus('session-adopter')?.authorityVersion;
-    const refused = await handler({ action: 'adopt_stale', adoptionHandle: handle });
-    assert.equal(refused.isError, true);
-    assert.match(String(envelope(refused).error), /changed after the unintegrated proof/);
-    assert.equal(observeStops, 0, 'no cleanup may run once the bound proof is invalidated');
-    assert.equal(registry.getSessionStatus('session-adopter')?.state, 'handoff_cleanup');
-    assert.equal(
-      registry.getSessionStatus('session-adopter')?.authorityVersion,
-      versionBeforeRefusal,
-      'no registry transition may happen once the bound proof is invalidated',
+    const recipient = registry.createSession({
+      sessionId: 'session-recipient',
+      sourceKey: source.sourceKey,
+      worktreeKey: source.worktreeKey,
+      appRootKey: source.appRootKey,
+      supervisor: { pid: process.pid, token: 'recipient-supervisor' },
+      source: { ...source },
+      bindings: { metroPort: 8248, observePort: 7396 },
+    });
+    registry.updateBindings(recipient, {
+      state: 'blocked',
+      bindings: {
+        recoveryCapabilityHash: createHash('sha256').update('recovery-capability').digest('hex'),
+      },
+    });
+    registry.bindRecoveryWorker(
+      recipient,
+      { instanceId: 'recovery-worker', pid: process.pid, token: 'recovery-birth' },
+      'recovery-capability',
     );
-    assert.deepEqual(
-      registry.getSessionStatus('session-adopter')?.bindings.packageIntegration,
-      R20_LEGACY_BINDING,
-    );
+    const recipientHandle = (
+      registry.getSessionStatus('session-recipient')?.bindings.recoveryHandles as
+        | { handoffRecipient?: { token?: string } }
+        | undefined
+    )?.handoffRecipient?.token;
+    assert.ok(typeof recipientHandle === 'string' && recipientHandle.length > 0);
+    const capability = registry.prepareHandoffForHandle(donor, { targetHandle: recipientHandle });
 
-    mutateAfterProof = false;
-    writeFileSync(join(appRoot, 'metro.config.js'), originalMetro);
-    const resumed = await handler({ action: 'adopt_stale', adoptionHandle: handle });
-    assert.equal(resumed.isError, undefined, resumed.content[0]!.text);
-    assert.equal(observeStops, 1);
-    assert.equal(registry.getSessionStatus('session-adopter')?.state, 'source_bound');
-    assert.equal(registry.getSessionStatus('session-adopter')?.bindings.packageIntegration, null);
+    let cleanupCalls = 0;
+    const handler = createSessionHandler(createRuntime(registry, recipient), {
+      stopHandoffObserve: async () => {
+        cleanupCalls += 1;
+      },
+      stopHandoffRunner: async () => {
+        cleanupCalls += 1;
+      },
+      stopHandoffRecorder: async () => {
+        cleanupCalls += 1;
+      },
+      stopManagedMetro: async () => {
+        cleanupCalls += 1;
+        return true;
+      },
+      getSignerCapability: () => 'signer',
+    });
+    const donorBefore = registry.getSessionStatus('session-donor');
+    const recipientBefore = registry.getSessionStatus('session-recipient');
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const refused = await handler({
+        action: 'accept_handoff',
+        handoffId: capability.handoffId,
+        token: capability.token,
+      });
+      assert.equal(refused.isError, true, `attempt ${attempt}`);
+      const refusal = envelope(refused);
+      assert.match(
+        String(refusal.error),
+        /without a SHA-256-verified restoration manifest/,
+        `attempt ${attempt}`,
+      );
+      assert.match(
+        String(refusal.error),
+        /unintegrated: no-integration-markers/,
+        `attempt ${attempt}`,
+      );
+      assert.match(
+        String((refusal.meta as { nextAction?: string })?.nextAction),
+        /version control history/,
+        `attempt ${attempt}`,
+      );
+    }
+
+    assert.equal(cleanupCalls, 0);
+    const donorAfter = registry.getSessionStatus('session-donor');
+    const recipientAfter = registry.getSessionStatus('session-recipient');
+    assert.equal(donorAfter?.state, 'handoff');
+    assert.equal(donorAfter?.authorityVersion, donorBefore?.authorityVersion);
+    assert.deepEqual(donorAfter?.bindings.packageIntegration, R20_LEGACY_BINDING);
+    assert.deepEqual(donorAfter?.claims, donorBefore?.claims);
+    assert.equal(recipientAfter?.state, 'blocked');
+    assert.equal(recipientAfter?.authorityVersion, recipientBefore?.authorityVersion);
+    assert.equal(recipientAfter?.bindings.packageIntegration, undefined);
+    assert.equal(recipientAfter?.bindings.handoffCleanup, undefined);
+    assert.equal(registry.getHandoffOwner(capability.handoffId), 'session-donor');
+    assert.equal(readFileSync(packagePath, 'utf8'), originalPackage);
+    assert.equal(readFileSync(metroConfigPath, 'utf8'), originalMetro);
     registry.close();
   } finally {
     if (previousStateHome === undefined) delete process.env.XDG_STATE_HOME;

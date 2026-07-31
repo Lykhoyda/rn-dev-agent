@@ -8380,7 +8380,6 @@ var init_registry = __esm({
           if (input.expectedAuthorityVersion !== void 0 && current.authority_version !== input.expectedAuthorityVersion) {
             throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "session authority version changed before binding commit");
           }
-          input.precondition?.();
           const bindings = {
             ...JSON.parse(current.bindings_json),
             ...input.bindings
@@ -8964,11 +8963,10 @@ var init_registry = __esm({
           };
         });
       }
-      beginHandoffCleanupResource(target, targetInstance, resource, options = {}) {
+      beginHandoffCleanupResource(target, targetInstance, resource) {
         const now = this.#now();
         return this.#transaction(() => {
           const row = this.#requireHandoffCleanupOwner(target, targetInstance);
-          options.precondition?.();
           const bindings = JSON.parse(row.bindings_json);
           const cleanup = bindings.handoffCleanup;
           const current = cleanup?.[resource];
@@ -9017,11 +9015,10 @@ var init_registry = __esm({
           return requested;
         });
       }
-      completeHandoffCleanupResource(target, targetInstance, resource, options = {}) {
+      completeHandoffCleanupResource(target, targetInstance, resource) {
         const now = this.#now();
         this.#transaction(() => {
           const row = this.#requireHandoffCleanupOwner(target, targetInstance);
-          options.precondition?.();
           const bindings = JSON.parse(row.bindings_json);
           const cleanup = bindings.handoffCleanup;
           const current = cleanup?.[resource];
@@ -9053,7 +9050,7 @@ var init_registry = __esm({
           }), now, target.sessionId, target.claimEpoch);
         });
       }
-      finishHandoffCleanup(target, targetInstance, options = {}) {
+      finishHandoffCleanup(target, targetInstance) {
         const now = this.#now();
         this.#transaction(() => {
           const row = asSession(this.#database.prepare(`SELECT state, claim_epoch, worker_instance, bindings_json
@@ -9069,7 +9066,6 @@ var init_registry = __esm({
               throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", `${resource} cleanup has not been durably completed`);
             }
           }
-          options.precondition?.();
           this.#database.prepare(`UPDATE sessions
            SET state = 'source_bound', bindings_json = ?,
                authority_version = authority_version + 1, updated_ms = ?
@@ -9164,7 +9160,6 @@ var init_registry = __esm({
           if (!prior || prior.claim_epoch !== priorStatus.claimEpoch || prior.source_key !== targetRow.source_key || prior.worktree_key !== targetRow.worktree_key || prior.app_root_key !== targetRow.app_root_key) {
             throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", "stale session does not belong to this exact source worktree");
           }
-          options.precondition?.();
           const priorBindings = JSON.parse(prior.bindings_json);
           const targetBindings = JSON.parse(targetRow.bindings_json);
           const priorCleanup = priorBindings.handoffCleanup && typeof priorBindings.handoffCleanup === "object" ? priorBindings.handoffCleanup : null;
@@ -15746,12 +15741,13 @@ function inspectAuthorityMigration(status, dependencies = {}) {
     const manifestVerified = (candidate) => typeof candidate === "string" && typeof integrationBinding.manifestSha256 === "string" && createHash7("sha256").update(candidate).digest("hex") === integrationBinding.manifestSha256;
     const manifestAvailable = manifestVerified(onDiskManifestText) || manifestVerified(integrationBinding.restoration?.phase === "started" ? integrationBinding.restoration.manifestSource : void 0) || manifestVerified(integrationBinding.installation?.phase === "started" ? integrationBinding.installation.manifestSource : void 0) || manifestVerified(integrationBinding.manifestSource);
     const effectiveOwnerSessionId = status.sessionId;
+    const trustedDigestRecorded = typeof integrationBinding.manifestSha256 === "string" && /^[0-9a-f]{64}$/.test(integrationBinding.manifestSha256);
     bindingDiagnostic = {
       installedBySessionId: typeof integrationBinding.installedBySessionId === "string" ? integrationBinding.installedBySessionId : null,
       effectiveOwnerSessionId,
       ownedByThisSession: effectiveOwnerSessionId === status.sessionId,
       manifestAvailable,
-      nextAction: manifestAvailable ? "Run restore_integration with confirmed=true to restore canonical files before release." : "Run restore_integration with confirmed=true; it reconciles the binding only when canonical files are provably unintegrated."
+      nextAction: manifestAvailable ? "Run restore_integration with confirmed=true to restore canonical files before release." : trustedDigestRecorded ? "Recover the SHA-256-authorized integration manifest from trusted version control history or backups, then retry restore_integration with confirmed=true." : "No trusted manifest digest is recorded for this binding; operator recovery from a trusted session-state-plus-manifest backup is required while the restoration fence remains."
     };
   }
   const legacyStateDetected = [

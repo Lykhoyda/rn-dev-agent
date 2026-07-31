@@ -888,7 +888,6 @@ export class SessionRegistry {
       expectedAuthorityVersion?: number;
       releaseResources?: readonly ResourceClaim[];
       claimResources?: readonly ResourceClaim[];
-      precondition?: () => void;
     },
   ): void {
     const now = this.#now();
@@ -903,7 +902,6 @@ export class SessionRegistry {
           'session authority version changed before binding commit',
         );
       }
-      input.precondition?.();
       const bindings = {
         ...(JSON.parse(current.bindings_json) as Record<string, unknown>),
         ...input.bindings,
@@ -2058,12 +2056,10 @@ export class SessionRegistry {
     target: SessionRef,
     targetInstance: string,
     resource: 'metro' | 'runner' | 'observe' | 'recorder',
-    options: { precondition?: () => void } = {},
   ): Record<string, unknown> | null {
     const now = this.#now();
     return this.#transaction(() => {
       const row = this.#requireHandoffCleanupOwner(target, targetInstance);
-      options.precondition?.();
       const bindings = JSON.parse(row.bindings_json) as Record<string, unknown>;
       const cleanup = bindings.handoffCleanup as Record<string, unknown> | undefined;
       const current = cleanup?.[resource];
@@ -2161,12 +2157,10 @@ export class SessionRegistry {
     target: SessionRef,
     targetInstance: string,
     resource: 'metro' | 'runner' | 'observe' | 'recorder',
-    options: { precondition?: () => void } = {},
   ): void {
     const now = this.#now();
     this.#transaction(() => {
       const row = this.#requireHandoffCleanupOwner(target, targetInstance);
-      options.precondition?.();
       const bindings = JSON.parse(row.bindings_json) as Record<string, unknown>;
       const cleanup = bindings.handoffCleanup as Record<string, unknown> | undefined;
       const current = cleanup?.[resource];
@@ -2217,11 +2211,7 @@ export class SessionRegistry {
     });
   }
 
-  finishHandoffCleanup(
-    target: SessionRef,
-    targetInstance: string,
-    options: { precondition?: () => void } = {},
-  ): void {
+  finishHandoffCleanup(target: SessionRef, targetInstance: string): void {
     const now = this.#now();
     this.#transaction(() => {
       const row = asSession(
@@ -2258,7 +2248,6 @@ export class SessionRegistry {
           );
         }
       }
-      options.precondition?.();
       this.#database
         .prepare(
           `UPDATE sessions
@@ -2394,7 +2383,7 @@ export class SessionRegistry {
     target: SessionRef,
     priorSessionId: string,
     targetInstance: string,
-    options: { expectedTargetAuthorityVersion?: number; precondition?: () => void } = {},
+    options: { expectedTargetAuthorityVersion?: number } = {},
   ): void {
     const priorStatus = this.getSessionStatus(priorSessionId);
     if (!priorStatus) {
@@ -2463,7 +2452,6 @@ export class SessionRegistry {
           'stale session does not belong to this exact source worktree',
         );
       }
-      options.precondition?.();
       const priorBindings = JSON.parse(prior.bindings_json) as Record<string, unknown>;
       const targetBindings = JSON.parse(targetRow.bindings_json) as Record<string, unknown>;
       const priorCleanup =
@@ -2705,7 +2693,7 @@ export class SessionRegistry {
     target: SessionRef,
     handle: string,
     targetInstance: string,
-    options: { expectedTargetAuthorityVersion?: number; precondition?: () => void } = {},
+    options: { expectedTargetAuthorityVersion?: number } = {},
   ): void {
     const targetStatus = this.getSessionStatus(target.sessionId);
     const recovery = targetStatus?.bindings.recoveryHandles as

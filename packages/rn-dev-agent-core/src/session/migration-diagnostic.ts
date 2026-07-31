@@ -130,6 +130,9 @@ export function inspectAuthorityMigration(
       ) ||
       manifestVerified(integrationBinding.manifestSource);
     const effectiveOwnerSessionId = status.sessionId;
+    const trustedDigestRecorded =
+      typeof integrationBinding.manifestSha256 === 'string' &&
+      /^[0-9a-f]{64}$/.test(integrationBinding.manifestSha256);
     bindingDiagnostic = {
       installedBySessionId:
         typeof integrationBinding.installedBySessionId === 'string'
@@ -140,7 +143,9 @@ export function inspectAuthorityMigration(
       manifestAvailable,
       nextAction: manifestAvailable
         ? 'Run restore_integration with confirmed=true to restore canonical files before release.'
-        : 'Run restore_integration with confirmed=true; it reconciles the binding only when canonical files are provably unintegrated.',
+        : trustedDigestRecorded
+          ? 'Recover the SHA-256-authorized integration manifest from trusted version control history or backups, then retry restore_integration with confirmed=true.'
+          : 'No trusted manifest digest is recorded for this binding; operator recovery from a trusted session-state-plus-manifest backup is required while the restoration fence remains.',
     };
   }
   const legacyStateDetected = [

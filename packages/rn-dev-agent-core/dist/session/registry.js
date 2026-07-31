@@ -461,7 +461,6 @@ export class SessionRegistry {
                 current.authority_version !== input.expectedAuthorityVersion) {
                 throw new SessionAuthorityError('AUTHORITY_LOST_DURING_OPERATION', 'session authority version changed before binding commit');
             }
-            input.precondition?.();
             const bindings = {
                 ...JSON.parse(current.bindings_json),
                 ...input.bindings,
@@ -1215,11 +1214,10 @@ export class SessionRegistry {
             };
         });
     }
-    beginHandoffCleanupResource(target, targetInstance, resource, options = {}) {
+    beginHandoffCleanupResource(target, targetInstance, resource) {
         const now = this.#now();
         return this.#transaction(() => {
             const row = this.#requireHandoffCleanupOwner(target, targetInstance);
-            options.precondition?.();
             const bindings = JSON.parse(row.bindings_json);
             const cleanup = bindings.handoffCleanup;
             const current = cleanup?.[resource];
@@ -1284,11 +1282,10 @@ export class SessionRegistry {
             return requested;
         });
     }
-    completeHandoffCleanupResource(target, targetInstance, resource, options = {}) {
+    completeHandoffCleanupResource(target, targetInstance, resource) {
         const now = this.#now();
         this.#transaction(() => {
             const row = this.#requireHandoffCleanupOwner(target, targetInstance);
-            options.precondition?.();
             const bindings = JSON.parse(row.bindings_json);
             const cleanup = bindings.handoffCleanup;
             const current = cleanup?.[resource];
@@ -1326,7 +1323,7 @@ export class SessionRegistry {
             }), now, target.sessionId, target.claimEpoch);
         });
     }
-    finishHandoffCleanup(target, targetInstance, options = {}) {
+    finishHandoffCleanup(target, targetInstance) {
         const now = this.#now();
         this.#transaction(() => {
             const row = asSession(this.#database
@@ -1349,7 +1346,6 @@ export class SessionRegistry {
                     throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', `${resource} cleanup has not been durably completed`);
                 }
             }
-            options.precondition?.();
             this.#database
                 .prepare(`UPDATE sessions
            SET state = 'source_bound', bindings_json = ?,
@@ -1470,7 +1466,6 @@ export class SessionRegistry {
                 prior.app_root_key !== targetRow.app_root_key) {
                 throw new SessionAuthorityError('SOURCE_WORKTREE_MISMATCH', 'stale session does not belong to this exact source worktree');
             }
-            options.precondition?.();
             const priorBindings = JSON.parse(prior.bindings_json);
             const targetBindings = JSON.parse(targetRow.bindings_json);
             const priorCleanup = priorBindings.handoffCleanup && typeof priorBindings.handoffCleanup === 'object'
