@@ -8307,6 +8307,8 @@ var init_registry = __esm({
             }
           }
           const expiresMs = now + 5 * 6e4;
+          const priorHandles = bindings.recoveryHandles;
+          const resumableAdoptStale = row.state === "handoff_cleanup" && priorHandles?.adoptStale && typeof priorHandles.adoptStale === "object" ? priorHandles.adoptStale : void 0;
           const recoveryHandles = {
             handoffRecipient: {
               token: randomBytes(32).toString("base64url"),
@@ -8320,7 +8322,7 @@ var init_registry = __esm({
                 priorSessionId: adoptionRequired.sessionId,
                 priorClaimEpoch: adoptionRequired.claimEpoch
               }
-            } : {}
+            } : resumableAdoptStale ? { adoptStale: resumableAdoptStale } : {}
           };
           this.#database.prepare("DELETE FROM operations WHERE session_id = ? AND claim_epoch = ?").run(session.sessionId, session.claimEpoch);
           this.#database.prepare(`UPDATE sessions
@@ -8378,6 +8380,7 @@ var init_registry = __esm({
           if (input.expectedAuthorityVersion !== void 0 && current.authority_version !== input.expectedAuthorityVersion) {
             throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "session authority version changed before binding commit");
           }
+          input.precondition?.();
           const bindings = {
             ...JSON.parse(current.bindings_json),
             ...input.bindings
@@ -8961,10 +8964,11 @@ var init_registry = __esm({
           };
         });
       }
-      beginHandoffCleanupResource(target, targetInstance, resource) {
+      beginHandoffCleanupResource(target, targetInstance, resource, options = {}) {
         const now = this.#now();
         return this.#transaction(() => {
           const row = this.#requireHandoffCleanupOwner(target, targetInstance);
+          options.precondition?.();
           const bindings = JSON.parse(row.bindings_json);
           const cleanup = bindings.handoffCleanup;
           const current = cleanup?.[resource];
@@ -9013,10 +9017,11 @@ var init_registry = __esm({
           return requested;
         });
       }
-      completeHandoffCleanupResource(target, targetInstance, resource) {
+      completeHandoffCleanupResource(target, targetInstance, resource, options = {}) {
         const now = this.#now();
         this.#transaction(() => {
           const row = this.#requireHandoffCleanupOwner(target, targetInstance);
+          options.precondition?.();
           const bindings = JSON.parse(row.bindings_json);
           const cleanup = bindings.handoffCleanup;
           const current = cleanup?.[resource];
@@ -9048,7 +9053,7 @@ var init_registry = __esm({
           }), now, target.sessionId, target.claimEpoch);
         });
       }
-      finishHandoffCleanup(target, targetInstance) {
+      finishHandoffCleanup(target, targetInstance, options = {}) {
         const now = this.#now();
         this.#transaction(() => {
           const row = asSession(this.#database.prepare(`SELECT state, claim_epoch, worker_instance, bindings_json
@@ -9064,6 +9069,7 @@ var init_registry = __esm({
               throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", `${resource} cleanup has not been durably completed`);
             }
           }
+          options.precondition?.();
           this.#database.prepare(`UPDATE sessions
            SET state = 'source_bound', bindings_json = ?,
                authority_version = authority_version + 1, updated_ms = ?
@@ -9127,7 +9133,7 @@ var init_registry = __esm({
         }
         return probe;
       }
-      adoptStaleIntoBlocked(target, priorSessionId, targetInstance) {
+      adoptStaleIntoBlocked(target, priorSessionId, targetInstance, options = {}) {
         const priorStatus = this.getSessionStatus(priorSessionId);
         if (!priorStatus) {
           throw new SessionAuthorityError("SESSION_OWNER_LOST", "stale session is unavailable");
@@ -9146,6 +9152,9 @@ var init_registry = __esm({
           if (targetRow.state !== "blocked") {
             throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "stale adoption is not available during handoff cleanup");
           }
+          if (options.expectedTargetAuthorityVersion !== void 0 && targetRow.authority_version !== options.expectedTargetAuthorityVersion) {
+            throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "session authority version changed after the adoption preflight proof");
+          }
           if (targetRow.worker_instance !== targetInstance) {
             throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "stale adoption target is not the recovery worker");
           }
@@ -9155,6 +9164,7 @@ var init_registry = __esm({
           if (!prior || prior.claim_epoch !== priorStatus.claimEpoch || prior.source_key !== targetRow.source_key || prior.worktree_key !== targetRow.worktree_key || prior.app_root_key !== targetRow.app_root_key) {
             throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", "stale session does not belong to this exact source worktree");
           }
+          options.precondition?.();
           const priorBindings = JSON.parse(prior.bindings_json);
           const targetBindings = JSON.parse(targetRow.bindings_json);
           const priorCleanup = priorBindings.handoffCleanup && typeof priorBindings.handoffCleanup === "object" ? priorBindings.handoffCleanup : null;
@@ -9274,7 +9284,7 @@ var init_registry = __esm({
           this.#fenceSession(prior.session_id, now);
         });
       }
-      adoptStaleWithHandle(target, handle, targetInstance) {
+      adoptStaleWithHandle(target, handle, targetInstance, options = {}) {
         const targetStatus = this.getSessionStatus(target.sessionId);
         const recovery = targetStatus?.bindings.recoveryHandles;
         const adoption = recovery?.adoptStale;
@@ -9285,7 +9295,15 @@ var init_registry = __esm({
         if (prior?.claimEpoch !== adoption.priorClaimEpoch) {
           throw new SessionAuthorityError("SESSION_OWNER_LOST", "stale adoption capability no longer matches the prior claim epoch");
         }
-        this.adoptStaleIntoBlocked(target, adoption.priorSessionId, targetInstance);
+        this.adoptStaleIntoBlocked(target, adoption.priorSessionId, targetInstance, options);
+      }
+      verifyStaleAdoptionResumption(target, handle, targetInstance) {
+        const status = this.getSessionStatus(target.sessionId);
+        const recovery = status?.bindings.recoveryHandles;
+        const token2 = recovery?.adoptStale?.token;
+        if (status?.state !== "handoff_cleanup" || status.claimEpoch !== target.claimEpoch || status.worker.instanceId !== targetInstance || typeof token2 !== "string" || !this.#capabilityMatches(token2, handle)) {
+          throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "stale adoption resumption requires the original adoption capability");
+        }
       }
       beginOperation(session, operation) {
         return this.#beginOperation(session, operation, false);
@@ -15727,9 +15745,11 @@ function inspectAuthorityMigration(status, dependencies = {}) {
   if (integrationBinding) {
     const manifestVerified = (candidate) => typeof candidate === "string" && typeof integrationBinding.manifestSha256 === "string" && createHash7("sha256").update(candidate).digest("hex") === integrationBinding.manifestSha256;
     const manifestAvailable = manifestVerified(onDiskManifestText) || manifestVerified(integrationBinding.restoration?.phase === "started" ? integrationBinding.restoration.manifestSource : void 0) || manifestVerified(integrationBinding.installation?.phase === "started" ? integrationBinding.installation.manifestSource : void 0) || manifestVerified(integrationBinding.manifestSource);
+    const effectiveOwnerSessionId = status.sessionId;
     bindingDiagnostic = {
       installedBySessionId: typeof integrationBinding.installedBySessionId === "string" ? integrationBinding.installedBySessionId : null,
-      ownedByThisSession: integrationBinding.installedBySessionId === status.sessionId,
+      effectiveOwnerSessionId,
+      ownedByThisSession: effectiveOwnerSessionId === status.sessionId,
       manifestAvailable,
       nextAction: manifestAvailable ? "Run restore_integration with confirmed=true to restore canonical files before release." : "Run restore_integration with confirmed=true; it reconciles the binding only when canonical files are provably unintegrated."
     };

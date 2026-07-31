@@ -367,6 +367,12 @@ export class SessionRegistry {
                 }
             }
             const expiresMs = now + 5 * 60_000;
+            const priorHandles = bindings.recoveryHandles;
+            const resumableAdoptStale = row.state === 'handoff_cleanup' &&
+                priorHandles?.adoptStale &&
+                typeof priorHandles.adoptStale === 'object'
+                ? priorHandles.adoptStale
+                : undefined;
             const recoveryHandles = {
                 handoffRecipient: {
                     token: randomBytes(32).toString('base64url'),
@@ -382,7 +388,9 @@ export class SessionRegistry {
                             priorClaimEpoch: adoptionRequired.claimEpoch,
                         },
                     }
-                    : {}),
+                    : resumableAdoptStale
+                        ? { adoptStale: resumableAdoptStale }
+                        : {}),
             };
             this.#database
                 .prepare('DELETE FROM operations WHERE session_id = ? AND claim_epoch = ?')
@@ -453,6 +461,7 @@ export class SessionRegistry {
                 current.authority_version !== input.expectedAuthorityVersion) {
                 throw new SessionAuthorityError('AUTHORITY_LOST_DURING_OPERATION', 'session authority version changed before binding commit');
             }
+            input.precondition?.();
             const bindings = {
                 ...JSON.parse(current.bindings_json),
                 ...input.bindings,
@@ -1206,10 +1215,11 @@ export class SessionRegistry {
             };
         });
     }
-    beginHandoffCleanupResource(target, targetInstance, resource) {
+    beginHandoffCleanupResource(target, targetInstance, resource, options = {}) {
         const now = this.#now();
         return this.#transaction(() => {
             const row = this.#requireHandoffCleanupOwner(target, targetInstance);
+            options.precondition?.();
             const bindings = JSON.parse(row.bindings_json);
             const cleanup = bindings.handoffCleanup;
             const current = cleanup?.[resource];
@@ -1274,10 +1284,11 @@ export class SessionRegistry {
             return requested;
         });
     }
-    completeHandoffCleanupResource(target, targetInstance, resource) {
+    completeHandoffCleanupResource(target, targetInstance, resource, options = {}) {
         const now = this.#now();
         this.#transaction(() => {
             const row = this.#requireHandoffCleanupOwner(target, targetInstance);
+            options.precondition?.();
             const bindings = JSON.parse(row.bindings_json);
             const cleanup = bindings.handoffCleanup;
             const current = cleanup?.[resource];
@@ -1315,7 +1326,7 @@ export class SessionRegistry {
             }), now, target.sessionId, target.claimEpoch);
         });
     }
-    finishHandoffCleanup(target, targetInstance) {
+    finishHandoffCleanup(target, targetInstance, options = {}) {
         const now = this.#now();
         this.#transaction(() => {
             const row = asSession(this.#database
@@ -1338,6 +1349,7 @@ export class SessionRegistry {
                     throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', `${resource} cleanup has not been durably completed`);
                 }
             }
+            options.precondition?.();
             this.#database
                 .prepare(`UPDATE sessions
            SET state = 'source_bound', bindings_json = ?,
@@ -1417,7 +1429,7 @@ export class SessionRegistry {
         }
         return probe;
     }
-    adoptStaleIntoBlocked(target, priorSessionId, targetInstance) {
+    adoptStaleIntoBlocked(target, priorSessionId, targetInstance, options = {}) {
         const priorStatus = this.getSessionStatus(priorSessionId);
         if (!priorStatus) {
             throw new SessionAuthorityError('SESSION_OWNER_LOST', 'stale session is unavailable');
@@ -1439,6 +1451,10 @@ export class SessionRegistry {
             if (targetRow.state !== 'blocked') {
                 throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', 'stale adoption is not available during handoff cleanup');
             }
+            if (options.expectedTargetAuthorityVersion !== undefined &&
+                targetRow.authority_version !== options.expectedTargetAuthorityVersion) {
+                throw new SessionAuthorityError('AUTHORITY_LOST_DURING_OPERATION', 'session authority version changed after the adoption preflight proof');
+            }
             if (targetRow.worker_instance !== targetInstance) {
                 throw new SessionAuthorityError('HANDOFF_TARGET_MISMATCH', 'stale adoption target is not the recovery worker');
             }
@@ -1454,6 +1470,7 @@ export class SessionRegistry {
                 prior.app_root_key !== targetRow.app_root_key) {
                 throw new SessionAuthorityError('SOURCE_WORKTREE_MISMATCH', 'stale session does not belong to this exact source worktree');
             }
+            options.precondition?.();
             const priorBindings = JSON.parse(prior.bindings_json);
             const targetBindings = JSON.parse(targetRow.bindings_json);
             const priorCleanup = priorBindings.handoffCleanup && typeof priorBindings.handoffCleanup === 'object'
@@ -1619,7 +1636,7 @@ export class SessionRegistry {
             this.#fenceSession(prior.session_id, now);
         });
     }
-    adoptStaleWithHandle(target, handle, targetInstance) {
+    adoptStaleWithHandle(target, handle, targetInstance, options = {}) {
         const targetStatus = this.getSessionStatus(target.sessionId);
         const recovery = targetStatus?.bindings.recoveryHandles;
         const adoption = recovery?.adoptStale;
@@ -1635,7 +1652,19 @@ export class SessionRegistry {
         if (prior?.claimEpoch !== adoption.priorClaimEpoch) {
             throw new SessionAuthorityError('SESSION_OWNER_LOST', 'stale adoption capability no longer matches the prior claim epoch');
         }
-        this.adoptStaleIntoBlocked(target, adoption.priorSessionId, targetInstance);
+        this.adoptStaleIntoBlocked(target, adoption.priorSessionId, targetInstance, options);
+    }
+    verifyStaleAdoptionResumption(target, handle, targetInstance) {
+        const status = this.getSessionStatus(target.sessionId);
+        const recovery = status?.bindings.recoveryHandles;
+        const token = recovery?.adoptStale?.token;
+        if (status?.state !== 'handoff_cleanup' ||
+            status.claimEpoch !== target.claimEpoch ||
+            status.worker.instanceId !== targetInstance ||
+            typeof token !== 'string' ||
+            !this.#capabilityMatches(token, handle)) {
+            throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', 'stale adoption resumption requires the original adoption capability');
+        }
     }
     beginOperation(session, operation) {
         return this.#beginOperation(session, operation, false);

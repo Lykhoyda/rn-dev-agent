@@ -125,3 +125,37 @@ test('blocked public status exposes only bounded opaque recovery handles', () =>
   });
   assert.equal(JSON.stringify(projected).includes('prior-secret'), false);
 });
+
+test('handoff_cleanup public status never exposes recovery tokens or capabilities', () => {
+  const projected = projectPublicAuthorityStatus({
+    available: true,
+    sessionId: 'session-secret',
+    sourceKey: 'source-secret',
+    worktreeKey: 'worktree-secret',
+    appRootKey: 'app-secret',
+    state: 'handoff_cleanup',
+    claimEpoch: 1,
+    authorityVersion: 3,
+    leaseUntilMs: 100,
+    source: { kind: 'git' },
+    bindings: {
+      recoveryHandles: {
+        handoffRecipient: { token: 'opaque-target', expiresMs: 5000 },
+        adoptStale: {
+          token: 'opaque-adopt',
+          expiresMs: 5000,
+          priorSessionId: 'prior-secret',
+        },
+      },
+      handoffCleanup: { observe: { port: 7396 } },
+    },
+    claims: [],
+    worker: { instanceId: 'worker-secret', pid: 1, birthAvailable: true },
+  });
+
+  assert.equal(projected.recovery, undefined);
+  const serialized = JSON.stringify(projected);
+  assert.equal(serialized.includes('opaque-adopt'), false);
+  assert.equal(serialized.includes('opaque-target'), false);
+  assert.equal(serialized.includes('prior-secret'), false);
+});

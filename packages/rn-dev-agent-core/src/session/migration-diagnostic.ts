@@ -31,6 +31,7 @@ export interface AuthorityMigrationDiagnostic {
     installed: boolean;
     binding: null | {
       installedBySessionId: string | null;
+      effectiveOwnerSessionId: string;
       ownedByThisSession: boolean;
       manifestAvailable: boolean;
       nextAction: string;
@@ -128,12 +129,14 @@ export function inspectAuthorityMigration(
           : undefined,
       ) ||
       manifestVerified(integrationBinding.manifestSource);
+    const effectiveOwnerSessionId = status.sessionId;
     bindingDiagnostic = {
       installedBySessionId:
         typeof integrationBinding.installedBySessionId === 'string'
           ? integrationBinding.installedBySessionId
           : null,
-      ownedByThisSession: integrationBinding.installedBySessionId === status.sessionId,
+      effectiveOwnerSessionId,
+      ownedByThisSession: effectiveOwnerSessionId === status.sessionId,
       manifestAvailable,
       nextAction: manifestAvailable
         ? 'Run restore_integration with confirmed=true to restore canonical files before release.'

@@ -13,11 +13,13 @@ import type { SessionStatus } from '../session/registry.js';
 import {
   applyPackageIntegration,
   inspectPackageIntegrationFileState,
+  openPackageIntegrationFileProof,
   previewMetroIntegration,
   previewPackageIntegration,
   readPackageIntegrationInputs,
   restorePackageIntegrationFiles,
   serializePackageIntegrationManifest,
+  type PackageIntegrationFileProof,
   type PackageIntegrationManifest,
 } from '../session/package-integration.js';
 import { dirname, join } from 'node:path';
@@ -119,6 +121,7 @@ interface SessionHandlerDependencies extends ManagedMetroStatusDependencies {
   };
   cleanupTimeoutMs?: number;
   deviceExists?: (platform: 'ios' | 'android', deviceId: string) => boolean;
+  afterAdoptionIntegrationProof?: () => void;
 }
 
 type SessionMetroBinding =
@@ -186,6 +189,9 @@ function recoverableManifestSource(
 
 const RECONCILE_FILES_NEXT_ACTION =
   'Restore package.json and the Metro config to their pre-integration contents from your own version control history, then retry restore_integration with confirmed=true.';
+
+const RETRY_ADOPTION_NEXT_ACTION =
+  'Restore package.json and the Metro config to their pre-integration contents from your own version control history, then retry adopt_stale with the same adoptionHandle.';
 
 function assertPackageIntegrationInactive(
   bindings: Record<string, unknown>,
@@ -1242,207 +1248,296 @@ export function createSessionHandler(
           );
         }
         const adoptionAppRoot = String(current.source.appRoot ?? '');
-        if (current.state !== 'handoff_cleanup') {
-          const recoveryHandles = current.bindings.recoveryHandles as
-            | { adoptStale?: { priorSessionId?: unknown } }
-            | undefined;
-          const priorSessionId =
-            typeof recoveryHandles?.adoptStale?.priorSessionId === 'string'
-              ? recoveryHandles.adoptStale.priorSessionId
-              : undefined;
-          const priorIntegration = priorSessionId
-            ? (registry.getSessionStatus(priorSessionId)?.bindings.packageIntegration as
-                | IntegrationBindingShape
-                | undefined)
-            : undefined;
-          if (
-            priorIntegration &&
-            adoptionAppRoot &&
-            !recoverableManifestSource(adoptionAppRoot, priorIntegration)
-          ) {
-            const fileState = inspectPackageIntegrationFileState(adoptionAppRoot);
-            if (fileState.verdict !== 'unintegrated') {
-              throw new SessionAuthorityError(
-                'SESSION_AUTHORITY_REQUIRED',
-                `stale session carries package-integration authority whose manifest is unavailable and canonical files are not provably unintegrated (${fileState.verdict}: ${fileState.markers.join(', ')})`,
-                undefined,
-                {
-                  nextAction:
-                    'Restore package.json and the Metro config to their pre-integration contents from your own version control history, then retry adopt_stale with the same adoptionHandle.',
-                },
-              );
-            }
-          }
-          registry.adoptStaleWithHandle(session, adoptionHandle, current.worker.instanceId);
-        }
-        const adopted = registry.getSessionStatus(session.sessionId);
-        const cleanup = adopted?.bindings.handoffCleanup as
-          | {
-              metro?: Record<string, unknown>;
-              runner?: Record<string, unknown>;
-              observe?: Record<string, unknown>;
-              recorder?: Record<string, unknown>;
-            }
-          | undefined;
-        if (cleanup?.recorder && typeof cleanup.recorder.completedAt !== 'number') {
-          const recorderCleanup = registry.beginHandoffCleanupResource(
-            session,
-            current.worker.instanceId,
-            'recorder',
-          );
-          if (!recorderCleanup) {
-            throw new SessionAuthorityError(
-              'RECORDING_AUTHORITY_MISMATCH',
-              'stale recorder cleanup binding disappeared while fenced',
-            );
-          }
-          await (dependencies.stopHandoffRecorder ?? stopBoundRecorder)(recorderCleanup);
-          registry.completeHandoffCleanupResource(session, current.worker.instanceId, 'recorder');
-        }
-        if (cleanup?.runner && typeof cleanup.runner.completedAt !== 'number') {
-          const runnerCleanup = registry.beginHandoffCleanupResource(
-            session,
-            current.worker.instanceId,
-            'runner',
-          );
-          if (!runnerCleanup) {
-            throw new SessionAuthorityError(
-              'RUNNER_ADOPTION_REQUIRED',
-              'stale runner cleanup binding disappeared while fenced',
-            );
-          }
-          if (dependencies.stopHandoffRunner) {
-            await dependencies.stopHandoffRunner(runnerCleanup);
-          } else {
-            await stopHandoffRunner(
-              runnerCleanup,
-              dependencies.probeProcessBirth,
-              dependencies.signalProcess,
-              dependencies.cleanupTimeoutMs,
-            );
-          }
-          registry.completeHandoffCleanupResource(session, current.worker.instanceId, 'runner');
-        }
-        if (cleanup?.observe && typeof cleanup.observe.completedAt !== 'number') {
-          const observeCleanup = registry.beginHandoffCleanupResource(
-            session,
-            current.worker.instanceId,
-            'observe',
-          );
-          if (!observeCleanup) {
-            throw new SessionAuthorityError(
-              'OBSERVE_AUTHORITY_MISMATCH',
-              'stale Observe cleanup binding disappeared while fenced',
-            );
-          }
-          if (dependencies.stopHandoffObserve) {
-            await dependencies.stopHandoffObserve(observeCleanup);
-          } else {
-            await stopHandoffObserve(
-              observeCleanup,
-              dependencies.probeListener,
-              dependencies.probeProcessBirth,
-              dependencies.cleanupTimeoutMs,
-            );
-          }
-          registry.completeHandoffCleanupResource(session, current.worker.instanceId, 'observe');
-        }
-        if (cleanup?.metro && typeof cleanup.metro.completedAt !== 'number') {
-          const metroCleanup = registry.beginHandoffCleanupResource(
-            session,
-            current.worker.instanceId,
-            'metro',
-          );
-          if (!metroCleanup || typeof metroCleanup.sourceSessionId !== 'string') {
-            throw new SessionAuthorityError(
-              'METRO_AUTHORITY_MISMATCH',
-              'stale Metro cleanup binding disappeared while fenced',
-            );
-          }
-          const signerCapability = dependencies.getSignerCapability?.(metroCleanup.sourceSessionId);
-          if (!signerCapability) {
+        let integrationProof: PackageIntegrationFileProof | undefined;
+        let adoptionFailure: unknown;
+        const proveUnintegrated = (subject: string): void => {
+          const refuse = (verdict: string, markers: readonly string[]): never => {
             throw new SessionAuthorityError(
               'SESSION_AUTHORITY_REQUIRED',
-              'stale Metro cleanup requires the source session signer capability',
+              `${subject} whose manifest is unavailable and canonical files are not provably unintegrated (${verdict}: ${markers.join(', ')})`,
+              undefined,
+              { nextAction: RETRY_ADOPTION_NEXT_ACTION },
             );
+          };
+          if (!adoptionAppRoot) refuse('partial', ['app-root-unavailable']);
+          const proof = openPackageIntegrationFileProof(adoptionAppRoot);
+          if (proof.verdict !== 'unintegrated') {
+            const { verdict, markers } = proof;
+            proof.close();
+            refuse(verdict, markers);
           }
-          const stopped = await (dependencies.stopManagedMetro ?? stopManagedMetro)(metroCleanup, {
-            sessionId: metroCleanup.sourceSessionId,
-            signerCapability,
-          });
-          if (!stopped) {
-            throw new SessionAuthorityError(
-              'METRO_AUTHORITY_MISMATCH',
-              'stale managed Metro could not be stopped with exact process authority',
-            );
-          }
-          registry.completeHandoffCleanupResource(session, current.worker.instanceId, 'metro');
-        }
-        if (adopted?.state === 'handoff_cleanup') {
-          registry.finishHandoffCleanup(session, current.worker.instanceId);
-        }
-        const settled = registry.getSessionStatus(session.sessionId);
-        const transferredIntegration = settled?.bindings.packageIntegration as
-          | IntegrationBindingShape
-          | undefined;
-        let integrationOutcome: Record<string, unknown> = {
-          integrationRestoration: { required: false },
+          integrationProof = proof;
+          dependencies.afterAdoptionIntegrationProof?.();
         };
-        if (transferredIntegration) {
-          const manifestAvailable = Boolean(
-            adoptionAppRoot && recoverableManifestSource(adoptionAppRoot, transferredIntegration),
-          );
-          if (manifestAvailable) {
-            integrationOutcome = {
-              integrationRestoration: {
-                required: true,
-                action: 'restore_integration',
-                installedBySessionId: transferredIntegration.installedBySessionId,
-              },
-              nextAction:
-                'The adopter now owns integration restoration; call restore_integration with confirmed=true before release.',
-            };
+        const assertIntegrationProofHolds = (): void => {
+          if (integrationProof && !integrationProof.reverify()) {
+            throw new SessionAuthorityError(
+              'SESSION_AUTHORITY_REQUIRED',
+              'canonical integration files changed after the unintegrated proof',
+              undefined,
+              { axis: 'integration-file-proof', nextAction: RETRY_ADOPTION_NEXT_ACTION },
+            );
+          }
+        };
+        try {
+          if (current.state !== 'handoff_cleanup') {
+            const recoveryHandles = current.bindings.recoveryHandles as
+              | { adoptStale?: { priorSessionId?: unknown } }
+              | undefined;
+            const priorSessionId =
+              typeof recoveryHandles?.adoptStale?.priorSessionId === 'string'
+                ? recoveryHandles.adoptStale.priorSessionId
+                : undefined;
+            const priorIntegration = priorSessionId
+              ? (registry.getSessionStatus(priorSessionId)?.bindings.packageIntegration as
+                  | IntegrationBindingShape
+                  | undefined)
+              : undefined;
+            if (
+              priorIntegration &&
+              !(adoptionAppRoot && recoverableManifestSource(adoptionAppRoot, priorIntegration))
+            ) {
+              proveUnintegrated('stale session carries package-integration authority');
+            }
+            registry.adoptStaleWithHandle(session, adoptionHandle, current.worker.instanceId, {
+              expectedTargetAuthorityVersion: current.authorityVersion,
+              precondition: assertIntegrationProofHolds,
+            });
           } else {
-            const fileState = adoptionAppRoot
-              ? inspectPackageIntegrationFileState(adoptionAppRoot)
-              : { verdict: 'partial' as const, markers: ['app-root-unavailable'] };
-            if (fileState.verdict === 'unintegrated') {
-              registry.updateBindings(session, {
-                bindings: { packageIntegration: null },
-              });
-              integrationOutcome = {
-                integrationReconciled: {
-                  cleared: true,
-                  verdict: 'unintegrated',
-                  priorInstalledBySessionId: transferredIntegration.installedBySessionId,
-                  reason:
-                    'transferred integration binding had no recoverable manifest and canonical files are provably unintegrated',
-                },
-              };
+            registry.verifyStaleAdoptionResumption(
+              session,
+              adoptionHandle,
+              current.worker.instanceId,
+            );
+            const transferredBinding = current.bindings.packageIntegration as
+              | IntegrationBindingShape
+              | null
+              | undefined;
+            if (
+              transferredBinding &&
+              !(adoptionAppRoot && recoverableManifestSource(adoptionAppRoot, transferredBinding))
+            ) {
+              proveUnintegrated('resumed stale adoption carries package-integration authority');
+            }
+          }
+          const adopted = registry.getSessionStatus(session.sessionId);
+          const cleanup = adopted?.bindings.handoffCleanup as
+            | {
+                metro?: Record<string, unknown>;
+                runner?: Record<string, unknown>;
+                observe?: Record<string, unknown>;
+                recorder?: Record<string, unknown>;
+              }
+            | undefined;
+          if (cleanup?.recorder && typeof cleanup.recorder.completedAt !== 'number') {
+            const recorderCleanup = registry.beginHandoffCleanupResource(
+              session,
+              current.worker.instanceId,
+              'recorder',
+              { precondition: assertIntegrationProofHolds },
+            );
+            if (!recorderCleanup) {
+              throw new SessionAuthorityError(
+                'RECORDING_AUTHORITY_MISMATCH',
+                'stale recorder cleanup binding disappeared while fenced',
+              );
+            }
+            await (dependencies.stopHandoffRecorder ?? stopBoundRecorder)(recorderCleanup);
+            registry.completeHandoffCleanupResource(
+              session,
+              current.worker.instanceId,
+              'recorder',
+              {
+                precondition: assertIntegrationProofHolds,
+              },
+            );
+          }
+          if (cleanup?.runner && typeof cleanup.runner.completedAt !== 'number') {
+            const runnerCleanup = registry.beginHandoffCleanupResource(
+              session,
+              current.worker.instanceId,
+              'runner',
+              { precondition: assertIntegrationProofHolds },
+            );
+            if (!runnerCleanup) {
+              throw new SessionAuthorityError(
+                'RUNNER_ADOPTION_REQUIRED',
+                'stale runner cleanup binding disappeared while fenced',
+              );
+            }
+            if (dependencies.stopHandoffRunner) {
+              await dependencies.stopHandoffRunner(runnerCleanup);
             } else {
+              await stopHandoffRunner(
+                runnerCleanup,
+                dependencies.probeProcessBirth,
+                dependencies.signalProcess,
+                dependencies.cleanupTimeoutMs,
+              );
+            }
+            registry.completeHandoffCleanupResource(session, current.worker.instanceId, 'runner', {
+              precondition: assertIntegrationProofHolds,
+            });
+          }
+          if (cleanup?.observe && typeof cleanup.observe.completedAt !== 'number') {
+            const observeCleanup = registry.beginHandoffCleanupResource(
+              session,
+              current.worker.instanceId,
+              'observe',
+              { precondition: assertIntegrationProofHolds },
+            );
+            if (!observeCleanup) {
+              throw new SessionAuthorityError(
+                'OBSERVE_AUTHORITY_MISMATCH',
+                'stale Observe cleanup binding disappeared while fenced',
+              );
+            }
+            if (dependencies.stopHandoffObserve) {
+              await dependencies.stopHandoffObserve(observeCleanup);
+            } else {
+              await stopHandoffObserve(
+                observeCleanup,
+                dependencies.probeListener,
+                dependencies.probeProcessBirth,
+                dependencies.cleanupTimeoutMs,
+              );
+            }
+            registry.completeHandoffCleanupResource(session, current.worker.instanceId, 'observe', {
+              precondition: assertIntegrationProofHolds,
+            });
+          }
+          if (cleanup?.metro && typeof cleanup.metro.completedAt !== 'number') {
+            const metroCleanup = registry.beginHandoffCleanupResource(
+              session,
+              current.worker.instanceId,
+              'metro',
+              { precondition: assertIntegrationProofHolds },
+            );
+            if (!metroCleanup || typeof metroCleanup.sourceSessionId !== 'string') {
+              throw new SessionAuthorityError(
+                'METRO_AUTHORITY_MISMATCH',
+                'stale Metro cleanup binding disappeared while fenced',
+              );
+            }
+            const signerCapability = dependencies.getSignerCapability?.(
+              metroCleanup.sourceSessionId,
+            );
+            if (!signerCapability) {
+              throw new SessionAuthorityError(
+                'SESSION_AUTHORITY_REQUIRED',
+                'stale Metro cleanup requires the source session signer capability',
+              );
+            }
+            const stopped = await (dependencies.stopManagedMetro ?? stopManagedMetro)(
+              metroCleanup,
+              {
+                sessionId: metroCleanup.sourceSessionId,
+                signerCapability,
+              },
+            );
+            if (!stopped) {
+              throw new SessionAuthorityError(
+                'METRO_AUTHORITY_MISMATCH',
+                'stale managed Metro could not be stopped with exact process authority',
+              );
+            }
+            registry.completeHandoffCleanupResource(session, current.worker.instanceId, 'metro', {
+              precondition: assertIntegrationProofHolds,
+            });
+          }
+          if (adopted?.state === 'handoff_cleanup') {
+            registry.finishHandoffCleanup(session, current.worker.instanceId, {
+              precondition: assertIntegrationProofHolds,
+            });
+          }
+          const settled = registry.getSessionStatus(session.sessionId);
+          const transferredIntegration = settled?.bindings.packageIntegration as
+            | IntegrationBindingShape
+            | undefined;
+          let integrationOutcome: Record<string, unknown> = {
+            integrationRestoration: { required: false },
+          };
+          if (transferredIntegration) {
+            const manifestAvailable = Boolean(
+              adoptionAppRoot && recoverableManifestSource(adoptionAppRoot, transferredIntegration),
+            );
+            if (manifestAvailable) {
               integrationOutcome = {
                 integrationRestoration: {
                   required: true,
                   action: 'restore_integration',
-                  blocked: true,
                   installedBySessionId: transferredIntegration.installedBySessionId,
-                  reason: `integration manifest is unavailable and canonical files are not provably unintegrated (${fileState.verdict}: ${fileState.markers.join(', ')})`,
                 },
-                nextAction: RECONCILE_FILES_NEXT_ACTION,
+                nextAction:
+                  'The adopter now owns integration restoration; call restore_integration with confirmed=true before release.',
               };
+            } else {
+              let reconciled = false;
+              if (settled && integrationProof) {
+                try {
+                  registry.updateBindings(session, {
+                    bindings: { packageIntegration: null },
+                    expectedAuthorityVersion: settled.authorityVersion,
+                    precondition: assertIntegrationProofHolds,
+                  });
+                  reconciled = true;
+                } catch (error) {
+                  if (
+                    !(
+                      error instanceof SessionAuthorityError &&
+                      error.details?.axis === 'integration-file-proof'
+                    )
+                  ) {
+                    throw error;
+                  }
+                }
+              }
+              integrationOutcome = reconciled
+                ? {
+                    integrationReconciled: {
+                      cleared: true,
+                      verdict: 'unintegrated',
+                      priorInstalledBySessionId: transferredIntegration.installedBySessionId,
+                      reason:
+                        'transferred integration binding had no recoverable manifest and canonical files are provably unintegrated',
+                    },
+                  }
+                : {
+                    integrationRestoration: {
+                      required: true,
+                      action: 'restore_integration',
+                      blocked: true,
+                      installedBySessionId: transferredIntegration.installedBySessionId,
+                      reason: integrationProof
+                        ? 'integration manifest is unavailable and canonical files changed after the unintegrated proof'
+                        : 'integration manifest is unavailable and canonical files were never proven unintegrated for this adoption',
+                    },
+                    nextAction: RECONCILE_FILES_NEXT_ACTION,
+                  };
+            }
+          }
+          return okResult({
+            adopted: true,
+            session: projectPublicAuthorityStatus(runtime.status()),
+            ...integrationOutcome,
+            runner: {
+              adopted: false,
+              reason:
+                'runner capability is never crash-adopted; reopen the exact device to bind a fresh runner',
+            },
+          });
+        } catch (error) {
+          adoptionFailure = error;
+          throw error;
+        } finally {
+          if (integrationProof) {
+            try {
+              integrationProof.close();
+            } catch (closeError) {
+              if (adoptionFailure === undefined) throw closeError;
             }
           }
         }
-        return okResult({
-          adopted: true,
-          session: projectPublicAuthorityStatus(runtime.status()),
-          ...integrationOutcome,
-          runner: {
-            adopted: false,
-            reason:
-              'runner capability is never crash-adopted; reopen the exact device to bind a fresh runner',
-          },
-        });
       }
 
       const status = registry.getSessionStatus(session.sessionId);

@@ -44,6 +44,46 @@ test('legacy files are diagnostic only and never disable strict enforcement', ()
   assert.equal(diagnostic.strictEnforcement, true);
 });
 
+test('pre-adoption binding reports the installer as the effective owner', () => {
+  const diagnostic = inspectAuthorityMigration({
+    ...status,
+    bindings: {
+      packageIntegration: {
+        version: 1,
+        installedBySessionId: 'session-a',
+        manifestSha256: 'unavailable',
+      },
+    },
+  });
+
+  assert.equal(diagnostic.packageIntegration.binding?.installedBySessionId, 'session-a');
+  assert.equal(diagnostic.packageIntegration.binding?.effectiveOwnerSessionId, 'session-a');
+  assert.equal(diagnostic.packageIntegration.binding?.ownedByThisSession, true);
+});
+
+test('post-adoption binding separates the historical installer from the effective owner', () => {
+  const diagnostic = inspectAuthorityMigration({
+    ...status,
+    sessionId: 'session-adopter',
+    bindings: {
+      packageIntegration: {
+        version: 1,
+        installedBySessionId: 'session-installer',
+        manifestSha256: 'unavailable',
+      },
+    },
+  });
+
+  const binding = diagnostic.packageIntegration.binding;
+  assert.equal(binding?.installedBySessionId, 'session-installer');
+  assert.equal(binding?.effectiveOwnerSessionId, 'session-adopter');
+  assert.equal(
+    binding?.ownedByThisSession,
+    true,
+    'the adopter holds restoration authority after transfer',
+  );
+});
+
 test('an existing .rn-agent directory without integration is a normal never-integrated app', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-migration-diagnostic-'));
   const appRoot = join(root, 'app');

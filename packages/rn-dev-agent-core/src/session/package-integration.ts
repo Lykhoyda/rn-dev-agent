@@ -16,6 +16,7 @@ import {
   readBoundDirectoryFiles,
   type BoundCasResult,
   type BoundDirectory,
+  type BoundFileSnapshot,
   type BoundOperationDependencies,
 } from './bound-directory.js';
 import { createBootErrorCaptureModule } from './metro-authority.js';
@@ -3496,82 +3497,163 @@ const GENERATED_INTEGRATION_FILES = [
   basename(METRO_RUNTIME_LOADS),
 ] as const;
 
-export function inspectPackageIntegrationFileState(
-  appRootInput: string,
+const CANONICAL_INTEGRATION_FILES = [
+  'package.json',
+  'metro.config.js',
+  'metro.config.cjs',
+] as const;
+
+function absentIntegrationSnapshots(): BoundFileSnapshot[] {
+  return GENERATED_INTEGRATION_FILES.map((name) => ({ contents: null, mode: 0o600, name }));
+}
+
+function evaluatePackageIntegrationFileState(
+  canonical: readonly BoundFileSnapshot[],
+  generated: readonly BoundFileSnapshot[],
 ): PackageIntegrationFileState {
+  const [packageSnapshot, metroJsSnapshot, metroCjsSnapshot] = canonical;
+  const markers: string[] = [];
+  let readable = true;
+  let scripts: Record<string, unknown> = {};
+  if (packageSnapshot?.contents) {
+    try {
+      const parsed = JSON.parse(packageSnapshot.contents.toString('utf8')) as PackageJson;
+      scripts = parsed.scripts && typeof parsed.scripts === 'object' ? parsed.scripts : {};
+    } catch {
+      readable = false;
+      markers.push('package-json-unreadable');
+    }
+  } else {
+    readable = false;
+    markers.push('package-json-missing');
+  }
+  const exactIos = scripts.ios === SENTINELS.ios;
+  const exactAndroid = scripts.android === SENTINELS.android;
+  if (exactIos) markers.push('package-script-ios-adapter');
+  if (exactAndroid) markers.push('package-script-android-adapter');
+  const strayAdapterReference = Object.entries(scripts).some(
+    ([name, script]) =>
+      typeof script === 'string' &&
+      script.includes('.rn-agent/integration/') &&
+      !(name === 'ios' && exactIos) &&
+      !(name === 'android' && exactAndroid),
+  );
+  if (strayAdapterReference) markers.push('package-script-adapter-reference');
+  const metroSnapshot = metroJsSnapshot?.contents ? metroJsSnapshot : metroCjsSnapshot;
+  let metroStart = false;
+  let metroEnd = false;
+  if (metroSnapshot?.contents) {
+    const metroSource = metroSnapshot.contents.toString('utf8');
+    metroStart = metroSource.includes(METRO_START);
+    metroEnd = metroSource.includes(METRO_END);
+    if (metroStart) markers.push('metro-sentinel-begin');
+    if (metroEnd) markers.push('metro-sentinel-end');
+  } else {
+    readable = false;
+    markers.push('metro-config-missing');
+  }
+  for (const snapshot of generated) {
+    if (snapshot?.contents) markers.push(`integration-file:${snapshot.name}`);
+  }
+  const verdict: PackageIntegrationFileVerdict = !readable
+    ? 'partial'
+    : markers.length === 0
+      ? 'unintegrated'
+      : exactIos && exactAndroid && metroStart && metroEnd && !strayAdapterReference
+        ? 'integrated'
+        : 'partial';
+  return { verdict, markers };
+}
+
+function sameFileSnapshots(
+  before: readonly BoundFileSnapshot[],
+  after: readonly BoundFileSnapshot[],
+): boolean {
+  return (
+    before.length === after.length &&
+    before.every((snapshot, index) => {
+      const current = after[index];
+      if (current?.name !== snapshot.name || current.mode !== snapshot.mode) return false;
+      return snapshot.contents === null
+        ? current.contents === null
+        : current.contents !== null && current.contents.equals(snapshot.contents);
+    })
+  );
+}
+
+export interface PackageIntegrationFileProof extends PackageIntegrationFileState {
+  reverify(): boolean;
+  close(): void;
+}
+
+export function openPackageIntegrationFileProof(appRootInput: string): PackageIntegrationFileProof {
   const appRoot = resolve(appRootInput);
   const app = openBoundDirectory(appRoot);
   let agent: BoundDirectory | null = null;
   let integration: BoundDirectory | null = null;
-  let primaryError: unknown;
   try {
-    const [packageSnapshot, metroJsSnapshot, metroCjsSnapshot] = readBoundDirectoryFiles(app, [
-      'package.json',
-      'metro.config.js',
-      'metro.config.cjs',
-    ]);
-    const markers: string[] = [];
-    let readable = true;
-    let scripts: Record<string, unknown> = {};
-    if (packageSnapshot?.contents) {
-      try {
-        const parsed = JSON.parse(packageSnapshot.contents.toString('utf8')) as PackageJson;
-        scripts = parsed.scripts && typeof parsed.scripts === 'object' ? parsed.scripts : {};
-      } catch {
-        readable = false;
-        markers.push('package-json-unreadable');
-      }
-    } else {
-      readable = false;
-      markers.push('package-json-missing');
-    }
-    const exactIos = scripts.ios === SENTINELS.ios;
-    const exactAndroid = scripts.android === SENTINELS.android;
-    if (exactIos) markers.push('package-script-ios-adapter');
-    if (exactAndroid) markers.push('package-script-android-adapter');
-    const strayAdapterReference = Object.entries(scripts).some(
-      ([name, script]) =>
-        typeof script === 'string' &&
-        script.includes('.rn-agent/integration/') &&
-        !(name === 'ios' && exactIos) &&
-        !(name === 'android' && exactAndroid),
-    );
-    if (strayAdapterReference) markers.push('package-script-adapter-reference');
-    const metroSnapshot = metroJsSnapshot?.contents ? metroJsSnapshot : metroCjsSnapshot;
-    let metroStart = false;
-    let metroEnd = false;
-    if (metroSnapshot?.contents) {
-      const metroSource = metroSnapshot.contents.toString('utf8');
-      metroStart = metroSource.includes(METRO_START);
-      metroEnd = metroSource.includes(METRO_END);
-      if (metroStart) markers.push('metro-sentinel-begin');
-      if (metroEnd) markers.push('metro-sentinel-end');
-    } else {
-      readable = false;
-      markers.push('metro-config-missing');
-    }
+    const canonical = readBoundDirectoryFiles(app, CANONICAL_INTEGRATION_FILES);
     agent = openOptionalBoundSubdirectory(app, '.rn-agent');
     if (agent) {
       integration = openOptionalBoundSubdirectory(agent, 'integration');
     }
-    if (integration) {
-      for (const generated of readBoundDirectoryFiles(integration, GENERATED_INTEGRATION_FILES)) {
-        if (generated?.contents) markers.push(`integration-file:${generated.name}`);
-      }
-    }
-    const verdict: PackageIntegrationFileVerdict = !readable
-      ? 'partial'
-      : markers.length === 0
-        ? 'unintegrated'
-        : exactIos && exactAndroid && metroStart && metroEnd && !strayAdapterReference
-          ? 'integrated'
-          : 'partial';
-    return { verdict, markers };
+    const generated = integration
+      ? readBoundDirectoryFiles(integration, GENERATED_INTEGRATION_FILES)
+      : absentIntegrationSnapshots();
+    let closed = false;
+    return {
+      ...evaluatePackageIntegrationFileState(canonical, generated),
+      reverify: () => {
+        if (closed) return false;
+        let transientAgent: BoundDirectory | null = null;
+        let transientIntegration: BoundDirectory | null = null;
+        try {
+          if (
+            !sameFileSnapshots(canonical, readBoundDirectoryFiles(app, CANONICAL_INTEGRATION_FILES))
+          ) {
+            return false;
+          }
+          let currentIntegration = integration;
+          if (!currentIntegration) {
+            transientAgent = agent ? null : openOptionalBoundSubdirectory(app, '.rn-agent');
+            const currentAgent = agent ?? transientAgent;
+            transientIntegration = currentAgent
+              ? openOptionalBoundSubdirectory(currentAgent, 'integration')
+              : null;
+            currentIntegration = transientIntegration;
+          }
+          const generatedNow = currentIntegration
+            ? readBoundDirectoryFiles(currentIntegration, GENERATED_INTEGRATION_FILES)
+            : absentIntegrationSnapshots();
+          return sameFileSnapshots(generated, generatedNow);
+        } catch {
+          return false;
+        } finally {
+          try {
+            closeBoundDirectories([transientIntegration, transientAgent]);
+          } catch {}
+        }
+      },
+      close: () => {
+        if (closed) return;
+        closed = true;
+        closeBoundDirectories([integration, agent, app]);
+      },
+    };
   } catch (error) {
-    primaryError = error;
+    closeBoundDirectories([integration, agent, app], error);
     throw error;
+  }
+}
+
+export function inspectPackageIntegrationFileState(
+  appRootInput: string,
+): PackageIntegrationFileState {
+  const proof = openPackageIntegrationFileProof(appRootInput);
+  try {
+    return { verdict: proof.verdict, markers: proof.markers };
   } finally {
-    closeBoundDirectories([integration, agent, app], primaryError);
+    proof.close();
   }
 }
 
