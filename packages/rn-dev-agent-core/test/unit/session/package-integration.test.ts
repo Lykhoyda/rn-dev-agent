@@ -4042,7 +4042,8 @@ test('copied adapter aborts pending build authority on every pre-completion fail
         .map((line) => JSON.parse(line));
     const deliveredToken = () => {
       const calls = readFileSync(preparePath, 'utf8').trim().split('\n');
-      return (JSON.parse(calls[calls.length - 1] as string) as { args: string[] }).args[2] as string;
+      return (JSON.parse(calls[calls.length - 1] as string) as { args: string[] })
+        .args[2] as string;
     };
 
     const rejected = spawnSync(process.execPath, [adapterPath, 'ios'], {
@@ -4229,7 +4230,11 @@ test('copied adapter arms interruption recovery before build preparation', () =>
       env: { ...environment, ADAPTER_PREPARE_SIGNAL: 'SIGTERM', ADAPTER_PREPARE_NO_SESSION: '1' },
     });
     assert.equal(preTokenSignal.signal, 'SIGTERM', preTokenSignal.stderr);
-    assert.equal(existsSync(abortPath), false, 'no abort capability may be fabricated before a token exists');
+    assert.equal(
+      existsSync(abortPath),
+      false,
+      'no abort capability may be fabricated before a token exists',
+    );
     assert.equal(existsSync(outputPath), false);
     assert.equal(existsSync(completionPath), false);
 
@@ -4259,7 +4264,10 @@ test('copied adapter arms interruption recovery before build preparation', () =>
       env: { ...environment, ADAPTER_PREPARE_INCOMPLETE: '1' },
     });
     assert.equal(incompleteBinding.status, 2);
-    assert.match(incompleteBinding.stderr, /SESSION_BUILD_IDENTITY_CONFLICT: session binding is incomplete/);
+    assert.match(
+      incompleteBinding.stderr,
+      /SESSION_BUILD_IDENTITY_CONFLICT: session binding is incomplete/,
+    );
     assert.deepEqual(readAbortCalls(), [
       { args: ['abort-build', 'ios', deliveredToken()], session: 'session-ios' },
     ]);
@@ -4291,7 +4299,11 @@ test('copied adapter arms interruption recovery before build preparation', () =>
       args: ['complete-build', 'ios', deliveredToken()],
       session: 'session-ios',
     });
-    assert.equal(existsSync(abortPath), false, 'a completed build must never be rolled back by a late signal');
+    assert.equal(
+      existsSync(abortPath),
+      false,
+      'a completed build must never be rolled back by a late signal',
+    );
 
     resetArtifacts();
     const strandedPublication = spawnSync(process.execPath, [adapterPath, 'ios'], {
@@ -4300,10 +4312,17 @@ test('copied adapter arms interruption recovery before build preparation', () =>
       env: { ...environment, ADAPTER_PREPARE_WINDOW_KILL: '1' },
     });
     assert.equal(strandedPublication.status, 2, strandedPublication.stderr);
-    assert.match(strandedPublication.stderr, /SESSION_AUTHORITY_REQUIRED: rn-session lookup failed/);
+    assert.match(
+      strandedPublication.stderr,
+      /SESSION_AUTHORITY_REQUIRED: rn-session lookup failed/,
+    );
     assert.match(strandedPublication.stderr, /pending build authority released/);
     assert.deepEqual(readAbortCalls(), [{ args: ['abort-build', 'ios', deliveredToken()] }]);
-    assert.equal(existsSync(outputPath), false, 'native build must not start after a stranded publication');
+    assert.equal(
+      existsSync(outputPath),
+      false,
+      'native build must not start after a stranded publication',
+    );
     assert.equal(existsSync(completionPath), false);
 
     resetArtifacts();
@@ -4348,7 +4367,10 @@ test('copied adapter arms interruption recovery before build preparation', () =>
       env: { ...environment, ADAPTER_PREPARE_TRUNCATE: '1' },
     });
     assert.equal(truncatedDelivery.status, 2);
-    assert.match(truncatedDelivery.stderr, /SESSION_BUILD_IDENTITY_CONFLICT: rn-session returned invalid JSON/);
+    assert.match(
+      truncatedDelivery.stderr,
+      /SESSION_BUILD_IDENTITY_CONFLICT: rn-session returned invalid JSON/,
+    );
     assert.match(truncatedDelivery.stderr, /pending build authority released/);
     assert.deepEqual(readAbortCalls(), [{ args: ['abort-build', 'ios', deliveredToken()] }]);
     assert.equal(existsSync(outputPath), false);

@@ -67,7 +67,7 @@ The session plan uses the current CLI contracts:
 
 | CLI | Exact device | Metro |
 | --- | --- | --- |
-| Expo iOS/Android | `--device` | `--port`, `RCT_METRO_PORT`, `--no-bundler` |
+| Expo iOS/Android | `--device` | `RCT_METRO_PORT`, `ORG_GRADLE_PROJECT_reactNativeDevServerPort`, `--no-bundler` |
 | Bare React Native iOS | `--udid` | `--port`, `RCT_METRO_PORT`, `--no-packager` |
 | Bare React Native Android | `--deviceId` | `--port`, `RCT_METRO_PORT`, `--no-packager` |
 

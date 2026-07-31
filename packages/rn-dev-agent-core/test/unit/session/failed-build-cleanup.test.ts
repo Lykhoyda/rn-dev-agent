@@ -7,7 +7,10 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { openSessionRegistry } from '../../../dist/session/registry.js';
 import { resolveSourceIdentity } from '../../../dist/session/source-identity.js';
-import { createAuthorityStateLayout, writeSessionSecret } from '../../../dist/session/state-root.js';
+import {
+  createAuthorityStateLayout,
+  writeSessionSecret,
+} from '../../../dist/session/state-root.js';
 import { createSessionHandler } from '../../../dist/tools/session.js';
 import { closeDeviceSession } from '../../../dist/tools/device-session-close.js';
 
@@ -116,7 +119,11 @@ test('prepare-build publishes only against a caller-delivered abort capability',
     const verify = openSessionRegistry(layout.registry, { ownerStatus: () => 'match' });
     const status = verify.getSessionStatus('session-prepare');
     verify.close();
-    assert.equal(status?.bindings.pendingBuild ?? null, null, 'a refused prepare-build must not publish');
+    assert.equal(
+      status?.bindings.pendingBuild ?? null,
+      null,
+      'a refused prepare-build must not publish',
+    );
     assert.equal(status?.state, 'device_claimed');
   } finally {
     if (previousStateHome === undefined) delete process.env.XDG_STATE_HOME;
