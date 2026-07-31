@@ -10092,9 +10092,9 @@ var init_project_config = __esm({
 
 // packages/rn-dev-agent-core/dist/agent-device-wrapper.js
 import { join as join12 } from "node:path";
-import { createHash as createHash7 } from "node:crypto";
+import { createHash as createHash8 } from "node:crypto";
 function getSessionFilePath() {
-  const projectId = createHash7("sha256").update(process.cwd()).digest("hex").slice(0, 12);
+  const projectId = createHash8("sha256").update(process.cwd()).digest("hex").slice(0, 12);
   return join12(getStateDir(), `session-${projectId}.json`);
 }
 var SESSION_FILE, LEGACY_SESSION_FILE, activeSession;
@@ -13978,6 +13978,7 @@ function sessionRuntimeDirectory(layout, sessionId) {
 }
 
 // packages/rn-dev-agent-core/dist/session/migration-diagnostic.js
+import { createHash as createHash7 } from "node:crypto";
 import { existsSync as existsSync7, readFileSync as readFileSync9 } from "node:fs";
 import { join as join8 } from "node:path";
 
@@ -15708,10 +15709,11 @@ function inspectAuthorityMigration(status, dependencies = {}) {
   const exists = dependencies.exists ?? existsSync7;
   const appRoot = typeof status.source.appRoot === "string" ? status.source.appRoot : "";
   let packageIntegrationInstalled = false;
+  let onDiskManifestText;
   if (appRoot) {
     try {
-      const manifestText = readPackageIntegrationManifest(appRoot, dependencies);
-      const manifest = manifestText ? JSON.parse(manifestText) : void 0;
+      onDiskManifestText = readPackageIntegrationManifest(appRoot, dependencies);
+      const manifest = onDiskManifestText ? JSON.parse(onDiskManifestText) : void 0;
       packageIntegrationInstalled = manifest?.version === 1;
     } catch (error) {
       if (error instanceof Error && error.message.includes("SESSION_INTEGRATION_PATH_UNSAFE") && !error.message.includes("ancestor is unavailable")) {
@@ -15719,6 +15721,18 @@ function inspectAuthorityMigration(status, dependencies = {}) {
       }
       packageIntegrationInstalled = false;
     }
+  }
+  const integrationBinding = status.bindings.packageIntegration;
+  let bindingDiagnostic = null;
+  if (integrationBinding) {
+    const manifestVerified = (candidate) => typeof candidate === "string" && typeof integrationBinding.manifestSha256 === "string" && createHash7("sha256").update(candidate).digest("hex") === integrationBinding.manifestSha256;
+    const manifestAvailable = manifestVerified(onDiskManifestText) || manifestVerified(integrationBinding.restoration?.phase === "started" ? integrationBinding.restoration.manifestSource : void 0) || manifestVerified(integrationBinding.installation?.phase === "started" ? integrationBinding.installation.manifestSource : void 0) || manifestVerified(integrationBinding.manifestSource);
+    bindingDiagnostic = {
+      installedBySessionId: typeof integrationBinding.installedBySessionId === "string" ? integrationBinding.installedBySessionId : null,
+      ownedByThisSession: integrationBinding.installedBySessionId === status.sessionId,
+      manifestAvailable,
+      nextAction: manifestAvailable ? "Run restore_integration with confirmed=true to restore canonical files before release." : "Run restore_integration with confirmed=true; it reconciles the binding only when canonical files are provably unintegrated."
+    };
   }
   const legacyStateDetected = [
     "/tmp/rn-dev-agent-session.json",
@@ -15738,7 +15752,8 @@ function inspectAuthorityMigration(status, dependencies = {}) {
     },
     packageIntegration: {
       supported: true,
-      installed: packageIntegrationInstalled
+      installed: packageIntegrationInstalled,
+      binding: bindingDiagnostic
     },
     strictEnforcement: true
   };

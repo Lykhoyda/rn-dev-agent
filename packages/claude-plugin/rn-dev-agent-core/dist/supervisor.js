@@ -50496,7 +50496,7 @@ var require_websocket = __commonJS({
     var http = __require("http");
     var net = __require("net");
     var tls = __require("tls");
-    var { randomBytes: randomBytes9, createHash: createHash21 } = __require("crypto");
+    var { randomBytes: randomBytes9, createHash: createHash22 } = __require("crypto");
     var { Duplex, Readable } = __require("stream");
     var { URL: URL2 } = __require("url");
     var PerMessageDeflate2 = require_permessage_deflate();
@@ -51164,7 +51164,7 @@ var require_websocket = __commonJS({
           abortHandshake(websocket, socket, "Invalid Upgrade header");
           return;
         }
-        const digest3 = createHash21("sha1").update(key + GUID).digest("base64");
+        const digest3 = createHash22("sha1").update(key + GUID).digest("base64");
         if (res.headers["sec-websocket-accept"] !== digest3) {
           abortHandshake(websocket, socket, "Invalid Sec-WebSocket-Accept header");
           return;
@@ -51533,7 +51533,7 @@ var require_websocket_server = __commonJS({
     var EventEmitter = __require("events");
     var http = __require("http");
     var { Duplex } = __require("stream");
-    var { createHash: createHash21 } = __require("crypto");
+    var { createHash: createHash22 } = __require("crypto");
     var extension2 = require_extension();
     var PerMessageDeflate2 = require_permessage_deflate();
     var subprotocol2 = require_subprotocol();
@@ -51840,7 +51840,7 @@ var require_websocket_server = __commonJS({
           );
         }
         if (this._state > RUNNING) return abortHandshake(socket, 503);
-        const digest3 = createHash21("sha1").update(key + GUID).digest("base64");
+        const digest3 = createHash22("sha1").update(key + GUID).digest("base64");
         const headers = [
           "HTTP/1.1 101 Switching Protocols",
           "Upgrade: websocket",
@@ -60410,6 +60410,7 @@ run().catch((error) => {
 });
 
 // packages/rn-dev-agent-core/dist/session/migration-diagnostic.js
+import { createHash as createHash12 } from "node:crypto";
 import { existsSync as existsSync27, readFileSync as readFileSync25 } from "node:fs";
 import { join as join33 } from "node:path";
 function readPackageIntegrationManifest(appRoot, dependencies) {
@@ -60442,10 +60443,11 @@ function inspectAuthorityMigration(status, dependencies = {}) {
   const exists = dependencies.exists ?? existsSync27;
   const appRoot = typeof status.source.appRoot === "string" ? status.source.appRoot : "";
   let packageIntegrationInstalled = false;
+  let onDiskManifestText;
   if (appRoot) {
     try {
-      const manifestText = readPackageIntegrationManifest(appRoot, dependencies);
-      const manifest = manifestText ? JSON.parse(manifestText) : void 0;
+      onDiskManifestText = readPackageIntegrationManifest(appRoot, dependencies);
+      const manifest = onDiskManifestText ? JSON.parse(onDiskManifestText) : void 0;
       packageIntegrationInstalled = manifest?.version === 1;
     } catch (error2) {
       if (error2 instanceof Error && error2.message.includes("SESSION_INTEGRATION_PATH_UNSAFE") && !error2.message.includes("ancestor is unavailable")) {
@@ -60453,6 +60455,18 @@ function inspectAuthorityMigration(status, dependencies = {}) {
       }
       packageIntegrationInstalled = false;
     }
+  }
+  const integrationBinding = status.bindings.packageIntegration;
+  let bindingDiagnostic = null;
+  if (integrationBinding) {
+    const manifestVerified = (candidate) => typeof candidate === "string" && typeof integrationBinding.manifestSha256 === "string" && createHash12("sha256").update(candidate).digest("hex") === integrationBinding.manifestSha256;
+    const manifestAvailable = manifestVerified(onDiskManifestText) || manifestVerified(integrationBinding.restoration?.phase === "started" ? integrationBinding.restoration.manifestSource : void 0) || manifestVerified(integrationBinding.installation?.phase === "started" ? integrationBinding.installation.manifestSource : void 0) || manifestVerified(integrationBinding.manifestSource);
+    bindingDiagnostic = {
+      installedBySessionId: typeof integrationBinding.installedBySessionId === "string" ? integrationBinding.installedBySessionId : null,
+      ownedByThisSession: integrationBinding.installedBySessionId === status.sessionId,
+      manifestAvailable,
+      nextAction: manifestAvailable ? "Run restore_integration with confirmed=true to restore canonical files before release." : "Run restore_integration with confirmed=true; it reconciles the binding only when canonical files are provably unintegrated."
+    };
   }
   const legacyStateDetected = [
     "/tmp/rn-dev-agent-session.json",
@@ -60472,7 +60486,8 @@ function inspectAuthorityMigration(status, dependencies = {}) {
     },
     packageIntegration: {
       supported: true,
-      installed: packageIntegrationInstalled
+      installed: packageIntegrationInstalled,
+      binding: bindingDiagnostic
     },
     strictEnforcement: true
   };
@@ -60569,7 +60584,7 @@ var init_build_receipt = __esm({
 
 // packages/rn-dev-agent-core/dist/session/install-authority.js
 import { execFileSync as execFileSync11 } from "node:child_process";
-import { createHash as createHash12 } from "node:crypto";
+import { createHash as createHash13 } from "node:crypto";
 import { lstatSync as lstatSync10, readFileSync as readFileSync26, readdirSync as readdirSync8, readlinkSync as readlinkSync4, realpathSync as realpathSync9, statSync as statSync10 } from "node:fs";
 import { isAbsolute as isAbsolute4, join as join34, relative as relative3 } from "node:path";
 function runText(command, args) {
@@ -60589,7 +60604,7 @@ function runBuffer(command, args) {
   });
 }
 function digest2(parts) {
-  const hash = createHash12("sha256");
+  const hash = createHash13("sha256");
   for (const part of parts) {
     hash.update(`${part.byteLength}:`);
     hash.update(part);
@@ -64274,6 +64289,76 @@ function readPackageIntegrationInputs(appRootInput, dependencies = {}) {
     closeBoundDirectories([integration, agent, app], primaryError);
   }
 }
+function inspectPackageIntegrationFileState(appRootInput) {
+  const appRoot = resolve8(appRootInput);
+  const app = openBoundDirectory(appRoot);
+  let agent = null;
+  let integration = null;
+  let primaryError;
+  try {
+    const [packageSnapshot, metroJsSnapshot, metroCjsSnapshot] = readBoundDirectoryFiles(app, [
+      "package.json",
+      "metro.config.js",
+      "metro.config.cjs"
+    ]);
+    const markers = [];
+    let readable = true;
+    let scripts = {};
+    if (packageSnapshot?.contents) {
+      try {
+        const parsed = JSON.parse(packageSnapshot.contents.toString("utf8"));
+        scripts = parsed.scripts && typeof parsed.scripts === "object" ? parsed.scripts : {};
+      } catch {
+        readable = false;
+        markers.push("package-json-unreadable");
+      }
+    } else {
+      readable = false;
+      markers.push("package-json-missing");
+    }
+    const exactIos = scripts.ios === SENTINELS.ios;
+    const exactAndroid = scripts.android === SENTINELS.android;
+    if (exactIos)
+      markers.push("package-script-ios-adapter");
+    if (exactAndroid)
+      markers.push("package-script-android-adapter");
+    const strayAdapterReference = Object.entries(scripts).some(([name, script]) => typeof script === "string" && script.includes(".rn-agent/integration/") && !(name === "ios" && exactIos) && !(name === "android" && exactAndroid));
+    if (strayAdapterReference)
+      markers.push("package-script-adapter-reference");
+    const metroSnapshot = metroJsSnapshot?.contents ? metroJsSnapshot : metroCjsSnapshot;
+    let metroStart = false;
+    let metroEnd = false;
+    if (metroSnapshot?.contents) {
+      const metroSource = metroSnapshot.contents.toString("utf8");
+      metroStart = metroSource.includes(METRO_START);
+      metroEnd = metroSource.includes(METRO_END);
+      if (metroStart)
+        markers.push("metro-sentinel-begin");
+      if (metroEnd)
+        markers.push("metro-sentinel-end");
+    } else {
+      readable = false;
+      markers.push("metro-config-missing");
+    }
+    agent = openOptionalBoundSubdirectory(app, ".rn-agent");
+    if (agent) {
+      integration = openOptionalBoundSubdirectory(agent, "integration");
+    }
+    if (integration) {
+      for (const generated of readBoundDirectoryFiles(integration, GENERATED_INTEGRATION_FILES)) {
+        if (generated?.contents)
+          markers.push(`integration-file:${generated.name}`);
+      }
+    }
+    const verdict = !readable ? "partial" : markers.length === 0 ? "unintegrated" : exactIos && exactAndroid && metroStart && metroEnd && !strayAdapterReference ? "integrated" : "partial";
+    return { verdict, markers };
+  } catch (error2) {
+    primaryError = error2;
+    throw error2;
+  } finally {
+    closeBoundDirectories([integration, agent, app], primaryError);
+  }
+}
 function openIntegrationDirectories(appRoot) {
   const app = openBoundDirectory(appRoot);
   try {
@@ -64547,7 +64632,7 @@ function restorePackageIntegrationFiles(input, dependencies = {}) {
     closeBoundDirectories([directories.integration, directories.agent, directories.app], primaryError);
   }
 }
-var ADAPTER, METRO_ADAPTER, AUTHORITY_MODULE, BOOT_ERROR_MODULE, METRO_RUNTIME_POLICY2, METRO_RUNTIME_LOADS, METRO_START, METRO_END, SENTINELS;
+var ADAPTER, METRO_ADAPTER, AUTHORITY_MODULE, BOOT_ERROR_MODULE, METRO_RUNTIME_POLICY2, METRO_RUNTIME_LOADS, METRO_START, METRO_END, SENTINELS, GENERATED_INTEGRATION_FILES;
 var init_package_integration = __esm({
   "packages/rn-dev-agent-core/dist/session/package-integration.js"() {
     "use strict";
@@ -64567,6 +64652,15 @@ var init_package_integration = __esm({
       ios: `node ${ADAPTER} ios`,
       android: `node ${ADAPTER} android`
     };
+    GENERATED_INTEGRATION_FILES = [
+      "rn-session-integration.json",
+      "rn-session-adapter.cjs",
+      "rn-session-metro.cjs",
+      "authority-marker.js",
+      "boot-error-capture.js",
+      "metro-runtime-policy.json",
+      basename4(METRO_RUNTIME_LOADS)
+    ];
   }
 });
 
@@ -64598,9 +64692,28 @@ var init_device_existence = __esm({
 // packages/rn-dev-agent-core/dist/tools/session.js
 import { dirname as dirname15, join as join36 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
-import { createHash as createHash13 } from "node:crypto";
+import { createHash as createHash14 } from "node:crypto";
 function sameMetroAuthority(current, next) {
   return current?.port === next.port && current.pid === next.pid && current.birth === next.birth && current.instanceId === next.instanceId && current.servingRoot === next.servingRoot && current.buildGeneration === next.buildGeneration && current.mode === next.mode;
+}
+function verifiedManifestSource(candidate, manifestSha256) {
+  if (typeof candidate !== "string" || typeof manifestSha256 !== "string")
+    return void 0;
+  return createHash14("sha256").update(candidate).digest("hex") === manifestSha256 ? candidate : void 0;
+}
+function durableBindingManifestSource(binding) {
+  return verifiedManifestSource(binding?.manifestSource, binding?.manifestSha256);
+}
+function recoverableManifestSource(appRoot, binding) {
+  let onDisk;
+  try {
+    onDisk = readPackageIntegrationInputs(appRoot).manifest;
+  } catch {
+    onDisk = void 0;
+  }
+  const restoration = binding?.restoration?.phase === "started" ? binding.restoration.manifestSource : void 0;
+  const installation = binding?.installation?.phase === "started" ? binding.installation.manifestSource : void 0;
+  return verifiedManifestSource(onDisk, binding?.manifestSha256) ?? verifiedManifestSource(restoration, binding?.manifestSha256) ?? verifiedManifestSource(installation, binding?.manifestSha256) ?? durableBindingManifestSource(binding);
 }
 function assertPackageIntegrationInactive(bindings, action) {
   const activeBindings = [
@@ -64990,7 +65103,7 @@ function createSessionHandler(runtime, dependencies = {}) {
         const integrationBinding = status2.bindings.packageIntegration;
         const installationManifestSource = integrationBinding?.installation?.phase === "started" && typeof integrationBinding.installation.manifestSource === "string" ? integrationBinding.installation.manifestSource : void 0;
         const restorationManifestSource = integrationBinding?.restoration?.phase === "started" && typeof integrationBinding.restoration.manifestSource === "string" ? integrationBinding.restoration.manifestSource : void 0;
-        const manifestSource = integrationInputs.manifest ?? restorationManifestSource ?? installationManifestSource;
+        const manifestSource = input.action === "restore_integration" && integrationBinding ? verifiedManifestSource(integrationInputs.manifest, integrationBinding?.manifestSha256) ?? verifiedManifestSource(restorationManifestSource, integrationBinding?.manifestSha256) ?? verifiedManifestSource(installationManifestSource, integrationBinding?.manifestSha256) ?? durableBindingManifestSource(integrationBinding) : integrationInputs.manifest ?? restorationManifestSource ?? installationManifestSource ?? durableBindingManifestSource(integrationBinding);
         let existing;
         try {
           existing = manifestSource === void 0 ? void 0 : JSON.parse(manifestSource);
@@ -65004,14 +65117,34 @@ function createSessionHandler(runtime, dependencies = {}) {
             throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "restore_integration requires confirmed=true");
           }
           if (!existing) {
-            throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "integration manifest is unavailable for restoration");
+            if (!integrationBinding) {
+              throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "integration manifest is unavailable for restoration", void 0, {
+                nextAction: "No package-integration binding is active for this session; proceed to release."
+              });
+            }
+            assertPackageIntegrationInactive(status2.bindings, input.action);
+            const fileState = inspectPackageIntegrationFileState(appRoot);
+            if (fileState.verdict !== "unintegrated") {
+              throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", `integration manifest is unavailable and canonical files are not provably unintegrated (${fileState.verdict}: ${fileState.markers.join(", ")})`, void 0, { nextAction: RECONCILE_FILES_NEXT_ACTION });
+            }
+            registry2.updateBindings(session, {
+              bindings: { packageIntegration: null }
+            });
+            return okResult({
+              restored: false,
+              reconciled: true,
+              verdict: "unintegrated",
+              packagePath,
+              manifestPath,
+              nextAction: "Canonical files are already unintegrated; apply_integration or release may proceed."
+            });
           }
           assertPackageIntegrationInactive(status2.bindings, input.action);
-          const manifestSha256 = createHash13("sha256").update(manifestSource ?? "").digest("hex");
+          const manifestSha256 = createHash14("sha256").update(manifestSource ?? "").digest("hex");
           if (integrationBinding?.version !== 1 || typeof integrationBinding.installedBySessionId !== "string" || integrationBinding.manifestSha256 !== manifestSha256) {
             throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "integration restoration requires the transferred manifest authority binding");
           }
-          if (!restorationManifestSource) {
+          if (restorationManifestSource !== manifestSource) {
             registry2.updateBindings(session, {
               bindings: {
                 packageIntegration: {
@@ -65048,11 +65181,13 @@ function createSessionHandler(runtime, dependencies = {}) {
         }
         assertPackageIntegrationInactive(status2.bindings, input.action);
         if (integrationBinding && !installationManifestSource) {
-          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "package integration is already owned by an active session lifecycle");
+          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "package integration is already owned by an active session lifecycle", void 0, {
+            nextAction: "Run restore_integration with confirmed=true to restore or reconcile the owning integration binding, then retry apply_integration."
+          });
         }
         preview.manifest.metroConfig = metroConfigPath.slice(appRoot.length + 1);
         const expectedManifestSource = installationManifestSource ?? serializePackageIntegrationManifest(preview.manifest);
-        const expectedManifestSha256 = createHash13("sha256").update(expectedManifestSource).digest("hex");
+        const expectedManifestSha256 = createHash14("sha256").update(expectedManifestSource).digest("hex");
         if (installationManifestSource && (integrationBinding?.version !== 1 || integrationBinding.installedBySessionId !== session.sessionId || integrationBinding.manifestSha256 !== expectedManifestSha256)) {
           throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "integration installation requires the original session manifest authority binding");
         }
@@ -65074,7 +65209,7 @@ function createSessionHandler(runtime, dependencies = {}) {
           if (!installedManifest) {
             throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: applied manifest is unavailable");
           }
-          if (createHash13("sha256").update(installedManifest).digest("hex") !== expectedManifestSha256) {
+          if (createHash14("sha256").update(installedManifest).digest("hex") !== expectedManifestSha256) {
             throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "applied integration manifest no longer matches its durable installation authority");
           }
           registry2.updateBindings(session, {
@@ -65082,7 +65217,8 @@ function createSessionHandler(runtime, dependencies = {}) {
               packageIntegration: {
                 version: 1,
                 installedBySessionId: session.sessionId,
-                manifestSha256: expectedManifestSha256
+                manifestSha256: expectedManifestSha256,
+                manifestSource: expectedManifestSource
               }
             }
           });
@@ -65244,7 +65380,19 @@ function createSessionHandler(runtime, dependencies = {}) {
         if (!current?.worker.instanceId) {
           throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "recovery worker identity is unavailable");
         }
+        const adoptionAppRoot = String(current.source.appRoot ?? "");
         if (current.state !== "handoff_cleanup") {
+          const recoveryHandles = current.bindings.recoveryHandles;
+          const priorSessionId = typeof recoveryHandles?.adoptStale?.priorSessionId === "string" ? recoveryHandles.adoptStale.priorSessionId : void 0;
+          const priorIntegration = priorSessionId ? registry2.getSessionStatus(priorSessionId)?.bindings.packageIntegration : void 0;
+          if (priorIntegration && adoptionAppRoot && !recoverableManifestSource(adoptionAppRoot, priorIntegration)) {
+            const fileState = inspectPackageIntegrationFileState(adoptionAppRoot);
+            if (fileState.verdict !== "unintegrated") {
+              throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", `stale session carries package-integration authority whose manifest is unavailable and canonical files are not provably unintegrated (${fileState.verdict}: ${fileState.markers.join(", ")})`, void 0, {
+                nextAction: "Restore package.json and the Metro config to their pre-integration contents from your own version control history, then retry adopt_stale with the same adoptionHandle."
+              });
+            }
+          }
           registry2.adoptStaleWithHandle(session, adoptionHandle, current.worker.instanceId);
         }
         const adopted = registry2.getSessionStatus(session.sessionId);
@@ -65302,9 +65450,54 @@ function createSessionHandler(runtime, dependencies = {}) {
         if (adopted?.state === "handoff_cleanup") {
           registry2.finishHandoffCleanup(session, current.worker.instanceId);
         }
+        const settled = registry2.getSessionStatus(session.sessionId);
+        const transferredIntegration = settled?.bindings.packageIntegration;
+        let integrationOutcome = {
+          integrationRestoration: { required: false }
+        };
+        if (transferredIntegration) {
+          const manifestAvailable = Boolean(adoptionAppRoot && recoverableManifestSource(adoptionAppRoot, transferredIntegration));
+          if (manifestAvailable) {
+            integrationOutcome = {
+              integrationRestoration: {
+                required: true,
+                action: "restore_integration",
+                installedBySessionId: transferredIntegration.installedBySessionId
+              },
+              nextAction: "The adopter now owns integration restoration; call restore_integration with confirmed=true before release."
+            };
+          } else {
+            const fileState = adoptionAppRoot ? inspectPackageIntegrationFileState(adoptionAppRoot) : { verdict: "partial", markers: ["app-root-unavailable"] };
+            if (fileState.verdict === "unintegrated") {
+              registry2.updateBindings(session, {
+                bindings: { packageIntegration: null }
+              });
+              integrationOutcome = {
+                integrationReconciled: {
+                  cleared: true,
+                  verdict: "unintegrated",
+                  priorInstalledBySessionId: transferredIntegration.installedBySessionId,
+                  reason: "transferred integration binding had no recoverable manifest and canonical files are provably unintegrated"
+                }
+              };
+            } else {
+              integrationOutcome = {
+                integrationRestoration: {
+                  required: true,
+                  action: "restore_integration",
+                  blocked: true,
+                  installedBySessionId: transferredIntegration.installedBySessionId,
+                  reason: `integration manifest is unavailable and canonical files are not provably unintegrated (${fileState.verdict}: ${fileState.markers.join(", ")})`
+                },
+                nextAction: RECONCILE_FILES_NEXT_ACTION
+              };
+            }
+          }
+        }
         return okResult({
           adopted: true,
           session: projectPublicAuthorityStatus(runtime.status()),
+          ...integrationOutcome,
           runner: {
             adopted: false,
             reason: "runner capability is never crash-adopted; reopen the exact device to bind a fresh runner"
@@ -65373,6 +65566,7 @@ function createSessionHandler(runtime, dependencies = {}) {
     }
   };
 }
+var RECONCILE_FILES_NEXT_ACTION;
 var init_session = __esm({
   "packages/rn-dev-agent-core/dist/tools/session.js"() {
     "use strict";
@@ -65389,6 +65583,7 @@ var init_session = __esm({
     init_device_arbiter();
     init_process_cleanup();
     init_device_existence();
+    RECONCILE_FILES_NEXT_ACTION = "Restore package.json and the Metro config to their pre-integration contents from your own version control history, then retry restore_integration with confirmed=true.";
   }
 });
 
@@ -73069,7 +73264,7 @@ var init_runtime = __esm({
 
 // packages/rn-dev-agent-core/dist/tools/device-record.js
 import { execFile as execFile23 } from "node:child_process";
-import { createHash as createHash14 } from "node:crypto";
+import { createHash as createHash15 } from "node:crypto";
 import { existsSync as existsSync31 } from "node:fs";
 import { promisify as promisify25 } from "node:util";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
@@ -73217,7 +73412,7 @@ function parseStatusOutput(stdout) {
   return active;
 }
 function recordingScope(args) {
-  return createHash14("sha256").update(`${args.sessionId}\0${args.claimEpoch}\0${args.platform}\0${args.deviceId}`).digest("hex");
+  return createHash15("sha256").update(`${args.sessionId}\0${args.claimEpoch}\0${args.platform}\0${args.deviceId}`).digest("hex");
 }
 function bindRecorderSession(runtime, args) {
   const available = runtime.requireAvailable();
@@ -73501,7 +73696,7 @@ var init_device_record = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/proof-capture.js
-import { createHash as createHash15 } from "node:crypto";
+import { createHash as createHash16 } from "node:crypto";
 function canonicalizeProofValue(value) {
   if (Array.isArray(value))
     return value.map(canonicalizeProofValue);
@@ -73513,14 +73708,14 @@ function hashProofArgs(params) {
   return hashProofValue(redact(params));
 }
 function hashProofValue(value) {
-  return createHash15("sha256").update(JSON.stringify(canonicalizeProofValue(value))).digest("hex");
+  return createHash16("sha256").update(JSON.stringify(canonicalizeProofValue(value))).digest("hex");
 }
 function proofRuntimeAuthorityMarker(input) {
   return hashProofValue(input);
 }
 function hashObservedValue(value) {
   const bytes = JSON.stringify(value) ?? String(value);
-  return createHash15("sha256").update(bytes).digest("hex");
+  return createHash16("sha256").update(bytes).digest("hex");
 }
 function resultEnvelope(result) {
   if (!result || typeof result !== "object")
@@ -74043,7 +74238,7 @@ var init_startup_integrity = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
-import { createHash as createHash16, randomUUID as randomUUID8 } from "node:crypto";
+import { createHash as createHash17, randomUUID as randomUUID8 } from "node:crypto";
 import { execFileSync as execFileSync13 } from "node:child_process";
 import { chmodSync as chmodSync4, closeSync as closeSync10, existsSync as existsSync32, fsyncSync, lstatSync as lstatSync12, mkdirSync as mkdirSync18, openSync as openSync10, readFileSync as readFileSync29, realpathSync as realpathSync10, renameSync as renameSync8, unlinkSync as unlinkSync10, writeFileSync as writeFileSync15 } from "node:fs";
 import { basename as basename6, dirname as dirname19, extname, isAbsolute as isAbsolute7, join as join41, relative as relative5, resolve as resolve10, sep as sep6 } from "node:path";
@@ -74079,7 +74274,7 @@ function evidenceTimingReasons(timestamps, videoDurationMs, steps) {
   return reasons;
 }
 function hashBytes(bytes) {
-  return createHash16("sha256").update(bytes).digest("hex");
+  return createHash17("sha256").update(bytes).digest("hex");
 }
 function captureProofWorkerStartup(argv = process.argv, attestation = readStartupIntegrityAttestation()) {
   let executedEntrypointPath = null;
@@ -74307,7 +74502,7 @@ function readProofActionIdentity(appProjectRoot, actionId) {
     return {
       id: actionId,
       version: String(action.state.revision),
-      sha256: createHash16("sha256").update(bytesAfter).digest("hex")
+      sha256: createHash17("sha256").update(bytesAfter).digest("hex")
     };
   } catch {
     return null;
@@ -75403,7 +75598,7 @@ var init_proof_capture2 = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/proof-media.js
-import { createHash as createHash17 } from "node:crypto";
+import { createHash as createHash18 } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { mkdir as mkdir2, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir as tmpdir11 } from "node:os";
@@ -75438,7 +75633,7 @@ async function hashAcceptedFile(path) {
   }
 }
 async function sha256File2(path) {
-  const hash = createHash17("sha256");
+  const hash = createHash18("sha256");
   const stream = createReadStream(path);
   for await (const chunk of stream)
     hash.update(chunk);
@@ -79719,7 +79914,7 @@ var init_target = __esm({
 // packages/rn-dev-agent-core/dist/domain/e2e-test.js
 import { dirname as dirname22, join as join51 } from "node:path";
 import { mkdirSync as mkdirSync20, writeFileSync as writeFileSync19, renameSync as renameSync9, readFileSync as readFileSync34, readdirSync as readdirSync13, existsSync as existsSync36 } from "node:fs";
-import { createHash as createHash18 } from "node:crypto";
+import { createHash as createHash19 } from "node:crypto";
 function e2eDirFor(projectRoot) {
   return join51(projectRoot, ".rn-agent", "e2e");
 }
@@ -79750,7 +79945,7 @@ function serializeLockedTest(meta) {
 ${meta.flow}`;
 }
 function hashBody(s) {
-  return createHash18("sha256").update(s).digest("hex");
+  return createHash19("sha256").update(s).digest("hex");
 }
 function freezeLockedTest(projectRoot, source, ctx) {
   const filePath = e2ePathFor(projectRoot, source.id);
@@ -80565,9 +80760,9 @@ var init_runner_binding = __esm({
 
 // packages/rn-dev-agent-core/dist/session/local-authority-probe.js
 import { execFileSync as execFileSync16 } from "node:child_process";
-import { createHash as createHash19 } from "node:crypto";
+import { createHash as createHash20 } from "node:crypto";
 function identity(value) {
-  return createHash19("sha256").update(JSON.stringify(value)).digest("hex");
+  return createHash20("sha256").update(JSON.stringify(value)).digest("hex");
 }
 function objectBinding(status, name) {
   const value = status.bindings[name];
@@ -80978,7 +81173,7 @@ var index_exports = {};
 __export(index_exports, {
   strictProofMonitor: () => strictProofMonitor
 });
-import { createHash as createHash20, createHmac as createHmac5, randomUUID as randomUUID9 } from "node:crypto";
+import { createHash as createHash21, createHmac as createHmac5, randomUUID as randomUUID9 } from "node:crypto";
 import { readFileSync as readFileSync39, rmSync as rmSync12 } from "node:fs";
 import { execFile as execFile27 } from "node:child_process";
 import { promisify as promisify29 } from "node:util";
@@ -81600,7 +81795,7 @@ var init_index = __esm({
           runnerInstanceId: runner?.instanceId,
           runnerPid: runner?.pid,
           runnerProcessBirth: runner?.processBirth,
-          runnerCapabilityHash: typeof runner?.capability === "string" ? createHash20("sha256").update(runner.capability).digest("hex") : void 0,
+          runnerCapabilityHash: typeof runner?.capability === "string" ? createHash21("sha256").update(runner.capability).digest("hex") : void 0,
           runnerPort: runner?.port,
           runnerClaim: status.claims.find((claim) => claim.type === "runner")?.key,
           deviceClaim: status.claims.find((claim) => claim.type === "device")?.key
@@ -82362,7 +82557,7 @@ var init_index = __esm({
           connectedAt: current.connectedAt
         }),
         errorCount: errors.length,
-        errorSha256: createHash20("sha256").update(errorBytes).digest("hex"),
+        errorSha256: createHash21("sha256").update(errorBytes).digest("hex"),
         device: identity2.device,
         runtime: identity2.runtime
       };

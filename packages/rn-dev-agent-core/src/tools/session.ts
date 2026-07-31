@@ -12,6 +12,7 @@ import type { BundleAuthorityBinding } from '../session/dev-client-authority.js'
 import type { SessionStatus } from '../session/registry.js';
 import {
   applyPackageIntegration,
+  inspectPackageIntegrationFileState,
   previewMetroIntegration,
   previewPackageIntegration,
   readPackageIntegrationInputs,
@@ -138,6 +139,53 @@ function sameMetroAuthority(
     current.mode === next.mode
   );
 }
+
+interface IntegrationBindingShape {
+  version?: unknown;
+  installedBySessionId?: unknown;
+  manifestSha256?: unknown;
+  manifestSource?: unknown;
+  installation?: { phase?: unknown; manifestSource?: unknown };
+  restoration?: { phase?: unknown; manifestSource?: unknown };
+}
+
+function verifiedManifestSource(candidate: unknown, manifestSha256: unknown): string | undefined {
+  if (typeof candidate !== 'string' || typeof manifestSha256 !== 'string') return undefined;
+  return createHash('sha256').update(candidate).digest('hex') === manifestSha256
+    ? candidate
+    : undefined;
+}
+
+function durableBindingManifestSource(
+  binding: IntegrationBindingShape | undefined,
+): string | undefined {
+  return verifiedManifestSource(binding?.manifestSource, binding?.manifestSha256);
+}
+
+function recoverableManifestSource(
+  appRoot: string,
+  binding: IntegrationBindingShape | undefined,
+): string | undefined {
+  let onDisk: string | undefined;
+  try {
+    onDisk = readPackageIntegrationInputs(appRoot).manifest;
+  } catch {
+    onDisk = undefined;
+  }
+  const restoration =
+    binding?.restoration?.phase === 'started' ? binding.restoration.manifestSource : undefined;
+  const installation =
+    binding?.installation?.phase === 'started' ? binding.installation.manifestSource : undefined;
+  return (
+    verifiedManifestSource(onDisk, binding?.manifestSha256) ??
+    verifiedManifestSource(restoration, binding?.manifestSha256) ??
+    verifiedManifestSource(installation, binding?.manifestSha256) ??
+    durableBindingManifestSource(binding)
+  );
+}
+
+const RECONCILE_FILES_NEXT_ACTION =
+  'Restore package.json and the Metro config to their pre-integration contents from your own version control history, then retry restore_integration with confirmed=true.';
 
 function assertPackageIntegrationInactive(
   bindings: Record<string, unknown>,
@@ -730,13 +778,7 @@ export function createSessionHandler(
         );
         const packageJson = JSON.parse(integrationInputs.packageJson) as Record<string, unknown>;
         const integrationBinding = status.bindings.packageIntegration as
-          | {
-              version?: unknown;
-              installedBySessionId?: unknown;
-              manifestSha256?: unknown;
-              installation?: { phase?: unknown; manifestSource?: unknown };
-              restoration?: { phase?: unknown; manifestSource?: unknown };
-            }
+          | IntegrationBindingShape
           | undefined;
         const installationManifestSource =
           integrationBinding?.installation?.phase === 'started' &&
@@ -749,7 +791,24 @@ export function createSessionHandler(
             ? integrationBinding.restoration.manifestSource
             : undefined;
         const manifestSource =
-          integrationInputs.manifest ?? restorationManifestSource ?? installationManifestSource;
+          input.action === 'restore_integration' && integrationBinding
+            ? (verifiedManifestSource(
+                integrationInputs.manifest,
+                integrationBinding?.manifestSha256,
+              ) ??
+              verifiedManifestSource(
+                restorationManifestSource,
+                integrationBinding?.manifestSha256,
+              ) ??
+              verifiedManifestSource(
+                installationManifestSource,
+                integrationBinding?.manifestSha256,
+              ) ??
+              durableBindingManifestSource(integrationBinding))
+            : (integrationInputs.manifest ??
+              restorationManifestSource ??
+              installationManifestSource ??
+              durableBindingManifestSource(integrationBinding));
         let existing: PackageIntegrationManifest | undefined;
         try {
           existing =
@@ -770,10 +829,39 @@ export function createSessionHandler(
             );
           }
           if (!existing) {
-            throw new SessionAuthorityError(
-              'SESSION_AUTHORITY_REQUIRED',
-              'integration manifest is unavailable for restoration',
-            );
+            if (!integrationBinding) {
+              throw new SessionAuthorityError(
+                'SESSION_AUTHORITY_REQUIRED',
+                'integration manifest is unavailable for restoration',
+                undefined,
+                {
+                  nextAction:
+                    'No package-integration binding is active for this session; proceed to release.',
+                },
+              );
+            }
+            assertPackageIntegrationInactive(status.bindings, input.action);
+            const fileState = inspectPackageIntegrationFileState(appRoot);
+            if (fileState.verdict !== 'unintegrated') {
+              throw new SessionAuthorityError(
+                'SESSION_AUTHORITY_REQUIRED',
+                `integration manifest is unavailable and canonical files are not provably unintegrated (${fileState.verdict}: ${fileState.markers.join(', ')})`,
+                undefined,
+                { nextAction: RECONCILE_FILES_NEXT_ACTION },
+              );
+            }
+            registry.updateBindings(session, {
+              bindings: { packageIntegration: null },
+            });
+            return okResult({
+              restored: false,
+              reconciled: true,
+              verdict: 'unintegrated',
+              packagePath,
+              manifestPath,
+              nextAction:
+                'Canonical files are already unintegrated; apply_integration or release may proceed.',
+            });
           }
           assertPackageIntegrationInactive(status.bindings, input.action);
           const manifestSha256 = createHash('sha256')
@@ -789,7 +877,7 @@ export function createSessionHandler(
               'integration restoration requires the transferred manifest authority binding',
             );
           }
-          if (!restorationManifestSource) {
+          if (restorationManifestSource !== manifestSource) {
             registry.updateBindings(session, {
               bindings: {
                 packageIntegration: {
@@ -832,6 +920,11 @@ export function createSessionHandler(
           throw new SessionAuthorityError(
             'SESSION_AUTHORITY_REQUIRED',
             'package integration is already owned by an active session lifecycle',
+            undefined,
+            {
+              nextAction:
+                'Run restore_integration with confirmed=true to restore or reconcile the owning integration binding, then retry apply_integration.',
+            },
           );
         }
         preview.manifest.metroConfig = metroConfigPath.slice(appRoot.length + 1);
@@ -883,6 +976,7 @@ export function createSessionHandler(
                 version: 1,
                 installedBySessionId: session.sessionId,
                 manifestSha256: expectedManifestSha256,
+                manifestSource: expectedManifestSource,
               },
             },
           });
@@ -1147,7 +1241,38 @@ export function createSessionHandler(
             'recovery worker identity is unavailable',
           );
         }
+        const adoptionAppRoot = String(current.source.appRoot ?? '');
         if (current.state !== 'handoff_cleanup') {
+          const recoveryHandles = current.bindings.recoveryHandles as
+            | { adoptStale?: { priorSessionId?: unknown } }
+            | undefined;
+          const priorSessionId =
+            typeof recoveryHandles?.adoptStale?.priorSessionId === 'string'
+              ? recoveryHandles.adoptStale.priorSessionId
+              : undefined;
+          const priorIntegration = priorSessionId
+            ? (registry.getSessionStatus(priorSessionId)?.bindings.packageIntegration as
+                | IntegrationBindingShape
+                | undefined)
+            : undefined;
+          if (
+            priorIntegration &&
+            adoptionAppRoot &&
+            !recoverableManifestSource(adoptionAppRoot, priorIntegration)
+          ) {
+            const fileState = inspectPackageIntegrationFileState(adoptionAppRoot);
+            if (fileState.verdict !== 'unintegrated') {
+              throw new SessionAuthorityError(
+                'SESSION_AUTHORITY_REQUIRED',
+                `stale session carries package-integration authority whose manifest is unavailable and canonical files are not provably unintegrated (${fileState.verdict}: ${fileState.markers.join(', ')})`,
+                undefined,
+                {
+                  nextAction:
+                    'Restore package.json and the Metro config to their pre-integration contents from your own version control history, then retry adopt_stale with the same adoptionHandle.',
+                },
+              );
+            }
+          }
           registry.adoptStaleWithHandle(session, adoptionHandle, current.worker.instanceId);
         }
         const adopted = registry.getSessionStatus(session.sessionId);
@@ -1256,9 +1381,62 @@ export function createSessionHandler(
         if (adopted?.state === 'handoff_cleanup') {
           registry.finishHandoffCleanup(session, current.worker.instanceId);
         }
+        const settled = registry.getSessionStatus(session.sessionId);
+        const transferredIntegration = settled?.bindings.packageIntegration as
+          | IntegrationBindingShape
+          | undefined;
+        let integrationOutcome: Record<string, unknown> = {
+          integrationRestoration: { required: false },
+        };
+        if (transferredIntegration) {
+          const manifestAvailable = Boolean(
+            adoptionAppRoot && recoverableManifestSource(adoptionAppRoot, transferredIntegration),
+          );
+          if (manifestAvailable) {
+            integrationOutcome = {
+              integrationRestoration: {
+                required: true,
+                action: 'restore_integration',
+                installedBySessionId: transferredIntegration.installedBySessionId,
+              },
+              nextAction:
+                'The adopter now owns integration restoration; call restore_integration with confirmed=true before release.',
+            };
+          } else {
+            const fileState = adoptionAppRoot
+              ? inspectPackageIntegrationFileState(adoptionAppRoot)
+              : { verdict: 'partial' as const, markers: ['app-root-unavailable'] };
+            if (fileState.verdict === 'unintegrated') {
+              registry.updateBindings(session, {
+                bindings: { packageIntegration: null },
+              });
+              integrationOutcome = {
+                integrationReconciled: {
+                  cleared: true,
+                  verdict: 'unintegrated',
+                  priorInstalledBySessionId: transferredIntegration.installedBySessionId,
+                  reason:
+                    'transferred integration binding had no recoverable manifest and canonical files are provably unintegrated',
+                },
+              };
+            } else {
+              integrationOutcome = {
+                integrationRestoration: {
+                  required: true,
+                  action: 'restore_integration',
+                  blocked: true,
+                  installedBySessionId: transferredIntegration.installedBySessionId,
+                  reason: `integration manifest is unavailable and canonical files are not provably unintegrated (${fileState.verdict}: ${fileState.markers.join(', ')})`,
+                },
+                nextAction: RECONCILE_FILES_NEXT_ACTION,
+              };
+            }
+          }
+        }
         return okResult({
           adopted: true,
           session: projectPublicAuthorityStatus(runtime.status()),
+          ...integrationOutcome,
           runner: {
             adopted: false,
             reason:
