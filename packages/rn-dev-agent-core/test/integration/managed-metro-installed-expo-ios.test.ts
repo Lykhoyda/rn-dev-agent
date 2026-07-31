@@ -534,7 +534,7 @@ async function writeMarker(buildGeneration) {
       appId,
       metroPort: port,
       sessionId,
-      buildToken: 'installed-expo-build',
+      buildToken: process.argv[4],
       simulator: true,
     }));
     return;

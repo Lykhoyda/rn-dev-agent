@@ -16402,10 +16402,14 @@ async function main() {
     }
     if (command === "prepare-build") {
       const platform = process.argv[3];
+      const deliveredBuildToken = process.argv[4];
       const device = status.bindings.device;
       const metro = status.bindings.metro;
       if (platform !== "ios" && platform !== "android" || device?.platform !== platform || typeof device.deviceId !== "string" || typeof device.appId !== "string" || typeof metro?.instanceId !== "string") {
         throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "an exact device/app and live Metro binding are required before build");
+      }
+      if (typeof deliveredBuildToken !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(deliveredBuildToken)) {
+        throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "prepare-build publishes only against a caller-delivered abort capability (canonical UUID)");
       }
       const appId = device.appId;
       const metroInstanceId = metro.instanceId;
@@ -16419,7 +16423,7 @@ async function main() {
         throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", metroInspection.status === "lost" ? `${metroInspection.reason}; ${recovery} before retrying` : "build requires authenticated managed Metro authority");
       }
       const buildGeneration = Math.max(Number(metro.buildGeneration ?? 0), Number(status.bindings.install?.buildGeneration ?? 0)) + 1;
-      const buildToken = randomUUID3();
+      const buildToken = deliveredBuildToken;
       const buildMetro = refreshManagedMetroBuildGeneration(metro, {
         sessionId: status.sessionId,
         buildGeneration,

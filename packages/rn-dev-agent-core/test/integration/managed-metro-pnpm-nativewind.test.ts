@@ -260,7 +260,7 @@ const metroModule = ${JSON.stringify(managedMetroModuleUrl)};
       appId: 'dev.fixture',
       metroPort: Number(process.env.FIXTURE_METRO_PORT),
       sessionId: 'fixture-session',
-      buildToken: 'fixture-build-token'
+      buildToken: process.argv[4]
     }));
     return;
   }

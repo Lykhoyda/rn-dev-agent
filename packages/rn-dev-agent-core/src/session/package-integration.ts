@@ -3010,6 +3010,7 @@ export function renderProjectAdapter(): string {
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { randomUUID } = require('node:crypto');
 
 const platform = process.argv[2];
 if (platform !== 'ios' && platform !== 'android') {
@@ -3030,23 +3031,24 @@ const sqliteFlag = (nodeMajor === 22 && nodeMinor >= 5) || (nodeMajor === 23 && 
   : [];
 let session = null;
 let sessionCli = null;
+let buildCapability = null;
 const MANAGED_BUILD_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'];
-const buildRecovery = { abortAttempted: false, abortFailure: null, completed: false };
+const buildRecovery = { abortAttempted: false, abortFailure: null, released: false, completed: false };
 function abortPendingBuild() {
-  if (!session || !sessionCli) return null;
-  if (typeof session.buildToken !== 'string' || typeof session.sessionId !== 'string') {
-    return 'session build capability is unavailable for abort';
-  }
-  const abort = spawnSync(process.execPath, [...sqliteFlag, sessionCli, 'abort-build', platform, session.buildToken], {
+  if (!buildCapability || !sessionCli) return null;
+  const abort = spawnSync(process.execPath, [...sqliteFlag, sessionCli, 'abort-build', platform, buildCapability.buildToken], {
     cwd: process.cwd(),
-    env: {
+    env: session && typeof session.sessionId === 'string' ? {
       ...process.env,
       RN_DEV_AGENT_SESSION_ID: session.sessionId,
-    },
+    } : process.env,
     encoding: 'utf8',
   });
   if (abort.error) return abort.error.message;
   if (abort.status !== 0) return String(abort.stderr).trim() || ('abort-build exited with status ' + abort.status);
+  let outcome = null;
+  try { outcome = JSON.parse(String(abort.stdout)); } catch {}
+  buildRecovery.released = !outcome || outcome.aborted !== false;
   return null;
 }
 function abortPendingBuildOnce() {
@@ -3058,7 +3060,7 @@ function abortPendingBuildOnce() {
   return buildRecovery.abortFailure;
 }
 function reportAbortOutcome(abortFailure) {
-  if (session && !buildRecovery.completed && !abortFailure) {
+  if (buildCapability && !buildRecovery.completed && !abortFailure && buildRecovery.released) {
     process.stderr.write('rn-session-adapter: pending build authority released; supported cleanup remains available\n');
   }
   if (abortFailure) {
@@ -3077,7 +3079,7 @@ function exitForBuildSignal(signal) {
   process.exit(1);
 }
 function onBuildTerminationSignal(signal) {
-  if (!session || buildRecovery.completed) exitForBuildSignal(signal);
+  if (!buildCapability || buildRecovery.completed) exitForBuildSignal(signal);
   const abortFailure = abortPendingBuildOnce();
   process.stderr.write('rn-session-adapter: terminated by ' + signal + ' before build completion\n');
   reportAbortOutcome(abortFailure);
@@ -3145,7 +3147,8 @@ function managedMetroProxyUrl(binding) {
       process.exit(2);
     }
     sessionCli = manifest.sessionCli;
-    let probe = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'prepare-build', platform], {
+    buildCapability = { buildToken: randomUUID() };
+    let probe = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'prepare-build', platform, buildCapability.buildToken], {
       cwd: process.cwd(),
       env: process.env,
       encoding: 'utf8',
@@ -3157,25 +3160,28 @@ function managedMetroProxyUrl(binding) {
         encoding: 'utf8',
       });
       if (metro.status !== 0) {
-        process.stderr.write(String(metro.stderr) || 'METRO_START_UNAVAILABLE: managed Metro failed\n');
-        process.exit(2);
+        await drainBuildTerminationSignals();
+        failBuild(2, String(metro.stderr).trim() || 'METRO_START_UNAVAILABLE: managed Metro failed');
       }
-      probe = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'prepare-build', platform], {
+      probe = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'prepare-build', platform, buildCapability.buildToken], {
         cwd: process.cwd(),
         env: process.env,
         encoding: 'utf8',
       });
     }
     if (probe.status === 0) {
-      try {
-        session = JSON.parse(probe.stdout);
-      } catch {
-        process.stderr.write('SESSION_BUILD_IDENTITY_CONFLICT: rn-session returned invalid JSON\n');
-        process.exit(2);
+      let parsed = null;
+      try { parsed = JSON.parse(probe.stdout); } catch {}
+      if (!parsed || typeof parsed !== 'object') {
+        await drainBuildTerminationSignals();
+        failBuild(2, 'SESSION_BUILD_IDENTITY_CONFLICT: rn-session returned invalid JSON');
       }
-    } else if (!String(probe.stderr).includes('no live session matches this canonical worktree')) {
-      process.stderr.write(String(probe.stderr) || 'SESSION_AUTHORITY_REQUIRED: rn-session lookup failed\n');
-      process.exit(2);
+      session = parsed;
+    } else if (String(probe.stderr).includes('no live session matches this canonical worktree')) {
+      buildCapability = null;
+    } else {
+      await drainBuildTerminationSignals();
+      failBuild(2, String(probe.stderr).trim() || 'SESSION_AUTHORITY_REQUIRED: rn-session lookup failed');
     }
   }
   await drainBuildTerminationSignals();
@@ -3183,6 +3189,9 @@ function managedMetroProxyUrl(binding) {
   if (session) {
     if (session.platform !== platform || typeof session.deviceId !== 'string' || typeof session.appId !== 'string' || !Number.isInteger(session.metroPort) || typeof session.sessionId !== 'string' || typeof session.buildToken !== 'string' || (session.simulator !== undefined && typeof session.simulator !== 'boolean')) {
       failBuild(2, 'SESSION_BUILD_IDENTITY_CONFLICT: session binding is incomplete');
+    }
+    if (!buildCapability || session.buildToken !== buildCapability.buildToken) {
+      failBuild(2, 'SESSION_BUILD_IDENTITY_CONFLICT: published build capability does not match the delivered capability');
     }
     if (!sessionCli) {
       failBuild(2, 'SESSION_AUTHORITY_REQUIRED: session build completion requires the package-local rn-session CLI');

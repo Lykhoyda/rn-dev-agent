@@ -129,7 +129,7 @@ test('generated adapter argv passes the shipped Expo CLI resolution end to end',
     chmodSync(join(binRoot, 'xcrun'), 0o755);
     writeFileSync(
       sessionCliPath,
-      "const args=process.argv.slice(2);if(args[0]==='prepare-build'){process.stdout.write(JSON.stringify({platform:'ios',deviceId:'F66756F3-A867-47EB-97E1-2B85D1902D4E',appId:'com.rndevagent.testapp',metroPort:8248,sessionId:'session-fixture',buildToken:'owned-build-token',simulator:true}));}else{process.stdout.write('{}\\n');}",
+      "const args=process.argv.slice(2);if(args[0]==='prepare-build'){process.stdout.write(JSON.stringify({platform:'ios',deviceId:'F66756F3-A867-47EB-97E1-2B85D1902D4E',appId:'com.rndevagent.testapp',metroPort:8248,sessionId:'session-fixture',buildToken:args[2],simulator:true}));}else{process.stdout.write('{}\\n');}",
     );
 
     const result = spawnSync(process.execPath, [adapterPath, 'ios'], {

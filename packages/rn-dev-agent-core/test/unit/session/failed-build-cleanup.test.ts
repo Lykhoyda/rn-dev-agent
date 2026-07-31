@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { openSessionRegistry } from '../../../dist/session/registry.js';
 import { resolveSourceIdentity } from '../../../dist/session/source-identity.js';
-import { createAuthorityStateLayout } from '../../../dist/session/state-root.js';
+import { createAuthorityStateLayout, writeSessionSecret } from '../../../dist/session/state-root.js';
 import { createSessionHandler } from '../../../dist/tools/session.js';
 import { closeDeviceSession } from '../../../dist/tools/device-session-close.js';
 
@@ -55,6 +55,75 @@ function runSessionCli(
     encoding: 'utf8',
   });
 }
+
+test('prepare-build publishes only against a caller-delivered abort capability', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-prepare-capability-'));
+  const stateHome = join(root, 'state');
+  const previousStateHome = process.env.XDG_STATE_HOME;
+  try {
+    const appRoot = createAppFixture(root);
+    process.env.XDG_STATE_HOME = stateHome;
+    const source = resolveSourceIdentity(appRoot);
+    const layout = createAuthorityStateLayout();
+    const metroPort = await allocateFreePort();
+    const registry = openSessionRegistry(layout.registry, { ownerStatus: () => 'match' });
+    const session = registry.createSession({
+      sessionId: 'session-prepare',
+      sourceKey: source.sourceKey,
+      worktreeKey: source.worktreeKey,
+      appRootKey: source.appRootKey,
+      supervisor: { pid: process.pid, token: 'fixture' },
+      source: { ...source },
+      bindings: { metroPort },
+    });
+    registry.updateBindings(session, {
+      state: 'device_claimed',
+      bindings: {
+        device: { platform: 'ios', deviceId: 'SIM-FIXTURE', appId: 'com.rndevagent.testapp' },
+        metro: { mode: 'external', instanceId: 'external-metro', port: metroPort },
+      },
+    });
+    registry.close();
+    writeSessionSecret(layout, session.sessionId, {
+      signerCapability: 'signer',
+      observeCapability: 'observe',
+      recoveryCapability: 'recovery',
+    });
+    const cliOptions = { appRoot, stateHome, sessionId: 'session-prepare' };
+
+    for (const args of [
+      ['prepare-build', 'ios'],
+      ['prepare-build', 'ios', ''],
+      ['prepare-build', 'ios', 'not-a-canonical-uuid'],
+      ['prepare-build', 'ios', 'ZZZZZZZZ-1111-2222-3333-444444444444'],
+    ]) {
+      const refused = runSessionCli(args, cliOptions);
+      assert.notEqual(refused.status, 0);
+      assert.match(refused.stderr, /caller-delivered abort capability/);
+    }
+
+    const delivered = runSessionCli(
+      ['prepare-build', 'ios', '4f9c2d61-8f4e-4a5b-9c3d-2e1f0a7b6c5d'],
+      cliOptions,
+    );
+    assert.notEqual(delivered.status, 0);
+    assert.match(
+      delivered.stderr,
+      /METRO_AUTHORITY_MISMATCH/,
+      'a canonical capability must pass the delivery gate and fail only on later authority checks',
+    );
+
+    const verify = openSessionRegistry(layout.registry, { ownerStatus: () => 'match' });
+    const status = verify.getSessionStatus('session-prepare');
+    verify.close();
+    assert.equal(status?.bindings.pendingBuild ?? null, null, 'a refused prepare-build must not publish');
+    assert.equal(status?.state, 'device_claimed');
+  } finally {
+    if (previousStateHome === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = previousStateHome;
+    rmSync(root, { force: true, recursive: true });
+  }
+});
 
 test('abort-build releases pending build authority only for the exact capability', async () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-abort-build-'));
