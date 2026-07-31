@@ -2968,45 +2968,8 @@ const sqliteFlag = (nodeMajor === 22 && nodeMinor >= 5) || (nodeMajor === 23 && 
   : [];
 let session = null;
 let sessionCli = null;
-if (typeof manifest.sessionCli === 'string' && !fs.existsSync(manifest.sessionCli)) {
-  process.stderr.write('SESSION_AUTHORITY_REQUIRED: integrated rn-session CLI is unavailable; reapply integration\n');
-  process.exit(2);
-}
-if (typeof manifest.sessionCli === 'string') {
-  sessionCli = manifest.sessionCli;
-  let probe = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'prepare-build', platform], {
-    cwd: process.cwd(),
-    env: process.env,
-    encoding: 'utf8',
-  });
-  if (probe.status !== 0 && String(probe.stderr).includes('live Metro binding')) {
-    const metro = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'ensure-metro'], {
-      cwd: process.cwd(),
-      env: process.env,
-      encoding: 'utf8',
-    });
-    if (metro.status !== 0) {
-      process.stderr.write(String(metro.stderr) || 'METRO_START_UNAVAILABLE: managed Metro failed\n');
-      process.exit(2);
-    }
-    probe = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'prepare-build', platform], {
-      cwd: process.cwd(),
-      env: process.env,
-      encoding: 'utf8',
-    });
-  }
-  if (probe.status === 0) {
-    try {
-      session = JSON.parse(probe.stdout);
-    } catch {
-      process.stderr.write('SESSION_BUILD_IDENTITY_CONFLICT: rn-session returned invalid JSON\n');
-      process.exit(2);
-    }
-  } else if (!String(probe.stderr).includes('no live session matches this canonical worktree')) {
-    process.stderr.write(String(probe.stderr) || 'SESSION_AUTHORITY_REQUIRED: rn-session lookup failed\n');
-    process.exit(2);
-  }
-}
+const MANAGED_BUILD_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'];
+const buildRecovery = { abortAttempted: false, abortFailure: null, completed: false };
 function abortPendingBuild() {
   if (!session || !sessionCli) return null;
   if (typeof session.buildToken !== 'string' || typeof session.sessionId !== 'string') {
@@ -3024,16 +2987,42 @@ function abortPendingBuild() {
   if (abort.status !== 0) return String(abort.stderr).trim() || ('abort-build exited with status ' + abort.status);
   return null;
 }
-function failBuild(code, message) {
-  const abortFailure = abortPendingBuild();
-  if (message) process.stderr.write(message + '\n');
-  if (session && !abortFailure) {
+function abortPendingBuildOnce() {
+  if (buildRecovery.completed) return null;
+  if (!buildRecovery.abortAttempted) {
+    buildRecovery.abortAttempted = true;
+    buildRecovery.abortFailure = abortPendingBuild();
+  }
+  return buildRecovery.abortFailure;
+}
+function reportAbortOutcome(abortFailure) {
+  if (session && !buildRecovery.completed && !abortFailure) {
     process.stderr.write('rn-session-adapter: pending build authority released; supported cleanup remains available\n');
   }
   if (abortFailure) {
     process.stderr.write('rn-session-adapter: pending build abort also failed: ' + abortFailure + '\n');
   }
+}
+function failBuild(code, message) {
+  const abortFailure = abortPendingBuildOnce();
+  if (message) process.stderr.write(message + '\n');
+  reportAbortOutcome(abortFailure);
   process.exit(code);
+}
+function exitForBuildSignal(signal) {
+  for (const name of MANAGED_BUILD_SIGNALS) process.removeAllListeners(name);
+  process.kill(process.pid, signal);
+  process.exit(1);
+}
+function onBuildTerminationSignal(signal) {
+  if (!session || buildRecovery.completed) exitForBuildSignal(signal);
+  const abortFailure = abortPendingBuildOnce();
+  process.stderr.write('rn-session-adapter: terminated by ' + signal + ' before build completion\n');
+  reportAbortOutcome(abortFailure);
+  exitForBuildSignal(signal);
+}
+function drainBuildTerminationSignals() {
+  return new Promise((resolve) => setImmediate(resolve));
 }
 function ensureValue(flag, value) {
   let found = false;
@@ -3083,110 +3072,158 @@ function managedMetroProxyUrl(binding) {
   }
   return metroUrl.origin;
 }
-let expoProxyUrl = null;
-if (session) {
-  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
-    process.on(signal, () => {});
+(async () => {
+  for (const signal of MANAGED_BUILD_SIGNALS) {
+    process.on(signal, () => onBuildTerminationSignal(signal));
   }
-  if (session.platform !== platform || typeof session.deviceId !== 'string' || typeof session.appId !== 'string' || !Number.isInteger(session.metroPort) || typeof session.sessionId !== 'string' || typeof session.buildToken !== 'string' || (session.simulator !== undefined && typeof session.simulator !== 'boolean')) {
-    failBuild(2, 'SESSION_BUILD_IDENTITY_CONFLICT: session binding is incomplete');
+  await drainBuildTerminationSignals();
+  if (typeof manifest.sessionCli === 'string') {
+    if (!fs.existsSync(manifest.sessionCli)) {
+      process.stderr.write('SESSION_AUTHORITY_REQUIRED: integrated rn-session CLI is unavailable; reapply integration\n');
+      process.exit(2);
+    }
+    sessionCli = manifest.sessionCli;
+    let probe = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'prepare-build', platform], {
+      cwd: process.cwd(),
+      env: process.env,
+      encoding: 'utf8',
+    });
+    if (probe.status !== 0 && String(probe.stderr).includes('live Metro binding')) {
+      const metro = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'ensure-metro'], {
+        cwd: process.cwd(),
+        env: process.env,
+        encoding: 'utf8',
+      });
+      if (metro.status !== 0) {
+        process.stderr.write(String(metro.stderr) || 'METRO_START_UNAVAILABLE: managed Metro failed\n');
+        process.exit(2);
+      }
+      probe = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'prepare-build', platform], {
+        cwd: process.cwd(),
+        env: process.env,
+        encoding: 'utf8',
+      });
+    }
+    if (probe.status === 0) {
+      try {
+        session = JSON.parse(probe.stdout);
+      } catch {
+        process.stderr.write('SESSION_BUILD_IDENTITY_CONFLICT: rn-session returned invalid JSON\n');
+        process.exit(2);
+      }
+    } else if (!String(probe.stderr).includes('no live session matches this canonical worktree')) {
+      process.stderr.write(String(probe.stderr) || 'SESSION_AUTHORITY_REQUIRED: rn-session lookup failed\n');
+      process.exit(2);
+    }
   }
-  if (!sessionCli) {
-    failBuild(2, 'SESSION_AUTHORITY_REQUIRED: session build completion requires the package-local rn-session CLI');
+  await drainBuildTerminationSignals();
+  let expoProxyUrl = null;
+  if (session) {
+    if (session.platform !== platform || typeof session.deviceId !== 'string' || typeof session.appId !== 'string' || !Number.isInteger(session.metroPort) || typeof session.sessionId !== 'string' || typeof session.buildToken !== 'string' || (session.simulator !== undefined && typeof session.simulator !== 'boolean')) {
+      failBuild(2, 'SESSION_BUILD_IDENTITY_CONFLICT: session binding is incomplete');
+    }
+    if (!sessionCli) {
+      failBuild(2, 'SESSION_AUTHORITY_REQUIRED: session build completion requires the package-local rn-session CLI');
+    }
+    const offset = command[0] === 'npx' ? 1 : 0;
+    const executable = command[offset];
+    const subcommand = command[offset + 1];
+    if (executable === 'expo' && subcommand === 'run:' + platform) {
+      ensureValue('--device', session.deviceId);
+      removeManagedPortFlag(String(session.metroPort));
+      ensureFlag('--no-bundler');
+      expoProxyUrl = managedMetroProxyUrl(session);
+    } else if (executable === 'react-native' && platform === 'ios' && subcommand === 'run-ios') {
+      ensureValue('--udid', session.deviceId);
+      ensureValue('--port', String(session.metroPort));
+      ensureFlag('--no-packager');
+    } else if (executable === 'react-native' && platform === 'android' && subcommand === 'run-android') {
+      ensureValue('--deviceId', session.deviceId);
+      ensureValue('--port', String(session.metroPort));
+      ensureFlag('--no-packager');
+    } else {
+      failBuild(2, 'SESSION_BUILD_COMMAND_UNSUPPORTED: command shape is not recognized');
+    }
   }
-  const offset = command[0] === 'npx' ? 1 : 0;
-  const executable = command[offset];
-  const subcommand = command[offset + 1];
-  if (executable === 'expo' && subcommand === 'run:' + platform) {
-    ensureValue('--device', session.deviceId);
-    removeManagedPortFlag(String(session.metroPort));
-    ensureFlag('--no-bundler');
-    expoProxyUrl = managedMetroProxyUrl(session);
-  } else if (executable === 'react-native' && platform === 'ios' && subcommand === 'run-ios') {
-    ensureValue('--udid', session.deviceId);
-    ensureValue('--port', String(session.metroPort));
-    ensureFlag('--no-packager');
-  } else if (executable === 'react-native' && platform === 'android' && subcommand === 'run-android') {
-    ensureValue('--deviceId', session.deviceId);
-    ensureValue('--port', String(session.metroPort));
-    ensureFlag('--no-packager');
-  } else {
-    failBuild(2, 'SESSION_BUILD_COMMAND_UNSUPPORTED: command shape is not recognized');
-  }
-}
 
-const child = spawnSync(command[0], command.slice(1), {
-  cwd: process.cwd(),
-  env: session ? {
-    ...process.env,
-    ORG_GRADLE_PROJECT_reactNativeDevServerPort: String(session.metroPort),
-    RCT_METRO_PORT: String(session.metroPort),
-    RN_DEV_AGENT_SESSION_ID: session.sessionId,
-    ...(expoProxyUrl ? { EXPO_PACKAGER_PROXY_URL: expoProxyUrl } : {}),
-  } : process.env,
-  stdio: 'inherit',
-});
-if (child.error) {
-  failBuild(1, 'rn-session-adapter: ' + child.error.message);
-}
-if (child.signal) {
-  failBuild(1, 'rn-session-adapter: native command terminated by signal ' + child.signal);
-}
-if (child.status !== 0) {
-  failBuild(
-    child.status === null ? 1 : child.status,
-    session ? 'rn-session-adapter: native command failed before build completion' : '',
-  );
-}
-if (session && platform === 'ios' && expoProxyUrl && session.simulator === true) {
-  const installed = spawnSync('xcrun', ['simctl', 'get_app_container', session.deviceId, session.appId, 'app'], {
+  const child = spawnSync(command[0], command.slice(1), {
     cwd: process.cwd(),
-    env: process.env,
-    encoding: 'utf8',
-    timeout: 30_000,
-  });
-  if (installed.error || installed.status !== 0 || !String(installed.stdout).trim()) {
-    failBuild(2, 'DEV_CLIENT_STARTUP_UNCONFIRMED: exact simulator app installation could not be proven');
-  }
-  process.stdout.write(
-    'rn-session-adapter: starting ' + session.appId + ' on simulator ' + session.deviceId +
-    ' with --initialUrl ' + expoProxyUrl + '\n'
-  );
-  const startup = spawnSync('xcrun', [
-    'simctl',
-    'launch',
-    '--terminate-running-process',
-    session.deviceId,
-    session.appId,
-    '--initialUrl',
-    expoProxyUrl,
-  ], {
-    cwd: process.cwd(),
-    env: process.env,
-    encoding: 'utf8',
-    timeout: 30_000,
-  });
-  if (startup.error || startup.status !== 0) {
-    const detail = startup.error?.message || String(startup.stderr).trim() || 'simulator launch failed';
-    failBuild(2, 'DEV_CLIENT_STARTUP_UNCONFIRMED: ' + detail);
-  }
-  process.stdout.write(String(startup.stdout));
-}
-if (session) {
-  const complete = spawnSync(process.execPath, [...sqliteFlag, sessionCli, 'complete-build', platform, session.buildToken], {
-    cwd: process.cwd(),
-    env: {
+    env: session ? {
       ...process.env,
+      ORG_GRADLE_PROJECT_reactNativeDevServerPort: String(session.metroPort),
+      RCT_METRO_PORT: String(session.metroPort),
       RN_DEV_AGENT_SESSION_ID: session.sessionId,
-    },
-    encoding: 'utf8',
+      ...(expoProxyUrl ? { EXPO_PACKAGER_PROXY_URL: expoProxyUrl } : {}),
+    } : process.env,
+    stdio: 'inherit',
   });
-  if (complete.status !== 0) {
-    failBuild(2, String(complete.stderr).trim() || 'APP_INSTALL_IDENTITY_CHANGED: build receipt could not be recorded');
+  await drainBuildTerminationSignals();
+  if (child.error) {
+    failBuild(1, 'rn-session-adapter: ' + child.error.message);
   }
-  process.stdout.write(String(complete.stdout));
-}
-process.exit(0);
+  if (child.signal) {
+    failBuild(1, 'rn-session-adapter: native command terminated by signal ' + child.signal);
+  }
+  if (child.status !== 0) {
+    failBuild(
+      child.status === null ? 1 : child.status,
+      session ? 'rn-session-adapter: native command failed before build completion' : '',
+    );
+  }
+  if (session && platform === 'ios' && expoProxyUrl && session.simulator === true) {
+    const installed = spawnSync('xcrun', ['simctl', 'get_app_container', session.deviceId, session.appId, 'app'], {
+      cwd: process.cwd(),
+      env: process.env,
+      encoding: 'utf8',
+      timeout: 30_000,
+    });
+    if (installed.error || installed.status !== 0 || !String(installed.stdout).trim()) {
+      failBuild(2, 'DEV_CLIENT_STARTUP_UNCONFIRMED: exact simulator app installation could not be proven');
+    }
+    process.stdout.write(
+      'rn-session-adapter: starting ' + session.appId + ' on simulator ' + session.deviceId +
+      ' with --initialUrl ' + expoProxyUrl + '\n'
+    );
+    const startup = spawnSync('xcrun', [
+      'simctl',
+      'launch',
+      '--terminate-running-process',
+      session.deviceId,
+      session.appId,
+      '--initialUrl',
+      expoProxyUrl,
+    ], {
+      cwd: process.cwd(),
+      env: process.env,
+      encoding: 'utf8',
+      timeout: 30_000,
+    });
+    if (startup.error || startup.status !== 0) {
+      const detail = startup.error?.message || String(startup.stderr).trim() || 'simulator launch failed';
+      failBuild(2, 'DEV_CLIENT_STARTUP_UNCONFIRMED: ' + detail);
+    }
+    process.stdout.write(String(startup.stdout));
+  }
+  if (session) {
+    const complete = spawnSync(process.execPath, [...sqliteFlag, sessionCli, 'complete-build', platform, session.buildToken], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        RN_DEV_AGENT_SESSION_ID: session.sessionId,
+      },
+      encoding: 'utf8',
+    });
+    if (complete.status !== 0) {
+      failBuild(2, String(complete.stderr).trim() || 'APP_INSTALL_IDENTITY_CHANGED: build receipt could not be recorded');
+    }
+    buildRecovery.completed = true;
+    process.stdout.write(String(complete.stdout));
+  }
+  await drainBuildTerminationSignals();
+  process.exit(0);
+})().catch((error) => {
+  failBuild(1, 'rn-session-adapter: unexpected failure: ' + (error && error.message ? error.message : String(error)));
+});
 `;
 }
 function snapshotBoundFiles(directory, directoryPath, names) {
