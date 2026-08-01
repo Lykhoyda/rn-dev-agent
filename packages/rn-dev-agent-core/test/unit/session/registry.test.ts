@@ -430,6 +430,78 @@ test('handoff into a live target transfers claims once and drops bundle and runn
   );
 });
 
+test('handoff cleanup resumption revalidates the consumed capability without mutation', () => {
+  const { registry, create } = fixture();
+  const owner = create('a', 'shared-worktree');
+  const target = create('b', 'shared-worktree');
+  registry.bindWorker(target, {
+    instanceId: 'worker-next',
+    pid: 202,
+    token: 'birth-worker-next',
+  });
+  registry.updateBindings(target, {
+    state: 'blocked',
+    bindings: { recoveryCapabilityHash: 'recovery-target' },
+  });
+  registry.claimResources(owner, [
+    { type: 'device', key: 'ios:device-1' },
+    { type: 'runner', key: 'ios:device-1:9100' },
+  ]);
+  registry.updateBindings(owner, {
+    state: 'ready',
+    bindings: {
+      device: { platform: 'ios', deviceId: 'device-1' },
+      runner: {
+        platform: 'ios',
+        deviceId: 'device-1',
+        port: 9100,
+        instanceId: 'old-runner',
+        capability: 'runner-capability',
+      },
+    },
+  });
+  const handoff = registry.prepareHandoff(owner, { targetInstance: 'worker-next' });
+  registry.acceptHandoffInto(target, { ...handoff, targetInstance: 'worker-next' });
+
+  const input = { ...handoff, targetInstance: 'worker-next' };
+  const refusal = /resumption requires the original handoff capability/;
+  const before = registry.getSessionStatus(target.sessionId).authorityVersion;
+  registry.validateHandoffCleanupResumption(target, input);
+  registry.validateHandoffCleanupResumption(target, input);
+  assert.throws(
+    () => registry.validateHandoffCleanupResumption(target, { ...input, token: 'wrong-token' }),
+    refusal,
+  );
+  assert.throws(
+    () =>
+      registry.validateHandoffCleanupResumption(target, { ...input, handoffId: 'other-handoff' }),
+    refusal,
+  );
+  assert.throws(
+    () =>
+      registry.validateHandoffCleanupResumption(target, {
+        ...input,
+        targetInstance: 'worker-stale',
+      }),
+    refusal,
+  );
+  assert.throws(
+    () =>
+      registry.validateHandoffCleanupResumption(
+        { ...target, claimEpoch: target.claimEpoch + 1 },
+        input,
+      ),
+    refusal,
+  );
+  assert.equal(registry.getSessionStatus(target.sessionId).authorityVersion, before);
+  assert.equal(registry.getSessionStatus(target.sessionId).state, 'handoff_cleanup');
+
+  registry.beginHandoffCleanupResource(target, 'worker-next', 'runner');
+  registry.completeHandoffCleanupResource(target, 'worker-next', 'runner');
+  registry.finishHandoffCleanup(target, 'worker-next');
+  assert.throws(() => registry.validateHandoffCleanupResumption(target, input), refusal);
+});
+
 test('only the active operation context may advance transition authority', async () => {
   const { registry, create } = fixture();
   const owner = create('a');

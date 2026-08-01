@@ -114,6 +114,7 @@ function cleanupRuntime(
   const registry = {
     getSessionStatus: () => status,
     getHandoffOwner: () => null,
+    validateHandoffCleanupResumption: () => {},
     beginHandoffCleanupResource: (_session, _worker, resource) => {
       const binding = status.bindings.handoffCleanup[resource];
       if (!binding) return null;

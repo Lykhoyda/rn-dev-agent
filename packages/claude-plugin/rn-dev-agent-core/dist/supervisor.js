@@ -16519,6 +16519,21 @@ var init_registry = __esm({
           });
         });
       }
+      validateHandoffCleanupResumption(target, input) {
+        this.#transaction(() => {
+          const row = asSession(this.#database.prepare(`SELECT state, claim_epoch, worker_instance, bindings_json
+             FROM sessions WHERE session_id = ?`).get(target.sessionId));
+          const bindings = row ? JSON.parse(row.bindings_json) : {};
+          const cleanup = bindings.handoffCleanup && typeof bindings.handoffCleanup === "object" ? bindings.handoffCleanup : null;
+          const handoff = this.#database.prepare("SELECT token_hash, consumed_ms FROM handoffs WHERE handoff_id = ?").get(input.handoffId);
+          const expected = Buffer.from(typeof handoff?.token_hash === "string" ? handoff.token_hash : "", "hex");
+          const actual = createHash9("sha256").update(input.token).digest();
+          const tokenMatches = expected.length === actual.length && timingSafeEqual2(expected, actual);
+          if (!row || row.state !== "handoff_cleanup" || row.claim_epoch !== target.claimEpoch || row.worker_instance !== input.targetInstance || cleanup?.handoffId !== input.handoffId || typeof handoff?.consumed_ms !== "number" || !tokenMatches) {
+            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "handoff cleanup resumption requires the original handoff capability");
+          }
+        });
+      }
       acceptHandoff(input) {
         const now = this.#now();
         return this.#transaction(() => {
@@ -16627,6 +16642,7 @@ var init_registry = __esm({
             pendingBuild: null,
             recoveryCapabilityHash: targetBindings.recoveryCapabilityHash,
             handoffCleanup: {
+              handoffId: handoff.handoff_id,
               metro: null,
               observe: bindings.observe && typeof bindings.observe === "object" ? {
                 ...bindings.observe,
@@ -65304,6 +65320,12 @@ function createSessionHandler(runtime, dependencies = {}) {
         }
         if (status2.state !== "handoff_cleanup") {
           registry2.validateHandoffInto(session, {
+            handoffId,
+            token: token2,
+            targetInstance: status2.worker.instanceId
+          });
+        } else {
+          registry2.validateHandoffCleanupResumption(session, {
             handoffId,
             token: token2,
             targetInstance: status2.worker.instanceId

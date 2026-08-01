@@ -680,6 +680,13 @@ export function createSessionHandler(runtime, dependencies = {}) {
                         targetInstance: status.worker.instanceId,
                     });
                 }
+                else {
+                    registry.validateHandoffCleanupResumption(session, {
+                        handoffId,
+                        token,
+                        targetInstance: status.worker.instanceId,
+                    });
+                }
                 let cleanup = status.bindings.handoffCleanup;
                 const priorSessionId = registry.getHandoffOwner(handoffId);
                 const priorStatus = priorSessionId ? registry.getSessionStatus(priorSessionId) : null;

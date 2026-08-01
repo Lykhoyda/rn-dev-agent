@@ -1034,6 +1034,12 @@ export function createSessionHandler(
             token,
             targetInstance: status.worker.instanceId,
           });
+        } else {
+          registry.validateHandoffCleanupResumption(session, {
+            handoffId,
+            token,
+            targetInstance: status.worker.instanceId,
+          });
         }
         let cleanup = status.bindings.handoffCleanup as
           | {

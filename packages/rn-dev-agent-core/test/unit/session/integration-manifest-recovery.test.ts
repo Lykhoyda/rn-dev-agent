@@ -1969,6 +1969,308 @@ test('an invalid handoff token returns only the canonical refusal without donor 
   }
 });
 
+test('interrupted handoff cleanup refuses resumption without the original handoff capability', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-resume-handoff-token-'));
+  const stateHome = join(root, 'state');
+  const previousStateHome = process.env.XDG_STATE_HOME;
+  try {
+    const appRoot = createAppFixture(root);
+    process.env.XDG_STATE_HOME = stateHome;
+    const source = resolveSourceIdentity(appRoot);
+    const layout = createAuthorityStateLayout();
+    const registry = openSessionRegistry(layout.registry, { ownerStatus: () => 'match' });
+    const donor = registry.createSession({
+      sessionId: 'session-donor',
+      sourceKey: source.sourceKey,
+      worktreeKey: source.worktreeKey,
+      appRootKey: source.appRootKey,
+      supervisor: { pid: process.pid, token: 'donor-supervisor' },
+      source: { ...source },
+      bindings: { metroPort: 8248, observePort: 7396 },
+    });
+    registry.claimResources(donor, [
+      { type: 'source', key: source.worktreeKey },
+      { type: 'observe-port', key: '7396' },
+      { type: 'device', key: 'ios:54B03A8D-C9A7-4F97-8656-75E81DC3A68C' },
+    ]);
+    registry.updateBindings(donor, {
+      state: 'device_claimed',
+      bindings: { observe: { port: 7396 } },
+    });
+    const recipient = registry.createSession({
+      sessionId: 'session-recipient',
+      sourceKey: source.sourceKey,
+      worktreeKey: source.worktreeKey,
+      appRootKey: source.appRootKey,
+      supervisor: { pid: process.pid, token: 'recipient-supervisor' },
+      source: { ...source },
+      bindings: { metroPort: 8248, observePort: 7396 },
+    });
+    registry.updateBindings(recipient, {
+      state: 'blocked',
+      bindings: {
+        recoveryCapabilityHash: createHash('sha256').update('recovery-capability').digest('hex'),
+      },
+    });
+    registry.bindRecoveryWorker(
+      recipient,
+      { instanceId: 'recovery-worker', pid: process.pid, token: 'recovery-birth' },
+      'recovery-capability',
+    );
+    const recipientHandle = (
+      registry.getSessionStatus('session-recipient')?.bindings.recoveryHandles as
+        | { handoffRecipient?: { token?: string } }
+        | undefined
+    )?.handoffRecipient?.token;
+    assert.ok(typeof recipientHandle === 'string');
+    const capability = registry.prepareHandoffForHandle(donor, { targetHandle: recipientHandle });
+
+    let observeStops = 0;
+    let failObserveStop = true;
+    const handler = createSessionHandler(createRuntime(registry, recipient), {
+      stopHandoffObserve: async () => {
+        if (failObserveStop) throw new Error('observe stop unavailable');
+        observeStops += 1;
+      },
+    });
+
+    const crashed = await handler({
+      action: 'accept_handoff',
+      handoffId: capability.handoffId,
+      token: capability.token,
+    });
+    assert.equal(crashed.isError, true);
+    assert.equal(registry.getSessionStatus('session-recipient')?.state, 'handoff_cleanup');
+    failObserveStop = false;
+    const versionAfterCrash = registry.getSessionStatus('session-recipient')?.authorityVersion;
+
+    const wrongToken = await handler({
+      action: 'accept_handoff',
+      handoffId: capability.handoffId,
+      token: 'not-the-capability-token',
+    });
+    assert.equal(wrongToken.isError, true);
+    assert.match(
+      String(envelope(wrongToken).error),
+      /resumption requires the original handoff capability/,
+    );
+    assert.doesNotMatch(
+      wrongToken.content[0]!.text,
+      /SHA-256|integrated|package-script|rn-session-integration|session-donor/,
+    );
+
+    const wrongHandoff = await handler({
+      action: 'accept_handoff',
+      handoffId: 'some-other-handoff',
+      token: capability.token,
+    });
+    assert.equal(wrongHandoff.isError, true);
+    assert.match(
+      String(envelope(wrongHandoff).error),
+      /resumption requires the original handoff capability/,
+    );
+
+    assert.equal(observeStops, 0, 'no cleanup may run for an unproven capability');
+    assert.equal(registry.getSessionStatus('session-recipient')?.state, 'handoff_cleanup');
+    assert.equal(
+      registry.getSessionStatus('session-recipient')?.authorityVersion,
+      versionAfterCrash,
+      'refused resumption must not mutate the registry',
+    );
+
+    registry.bindRecoveryWorker(
+      recipient,
+      { instanceId: 'recovery-worker-2', pid: process.pid, token: 'recovery-birth-2' },
+      'recovery-capability',
+    );
+    const resumed = await handler({
+      action: 'accept_handoff',
+      handoffId: capability.handoffId,
+      token: capability.token,
+    });
+    assert.equal(resumed.isError, undefined, resumed.content[0]!.text);
+    assert.equal(observeStops, 1);
+    assert.equal(registry.getSessionStatus('session-recipient')?.state, 'source_bound');
+    registry.close();
+  } finally {
+    if (previousStateHome === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = previousStateHome;
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test('resumed handoff cleanup validates the capability before manifest diagnostics', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-resume-handoff-manifest-'));
+  const stateHome = join(root, 'state');
+  const previousStateHome = process.env.XDG_STATE_HOME;
+  try {
+    const appRoot = createAppFixture(root);
+    process.env.XDG_STATE_HOME = stateHome;
+    const source = resolveSourceIdentity(appRoot);
+    const layout = createAuthorityStateLayout();
+    let registry = openSessionRegistry(layout.registry, { ownerStatus: () => 'match' });
+    const donor = registry.createSession({
+      sessionId: 'session-donor',
+      sourceKey: source.sourceKey,
+      worktreeKey: source.worktreeKey,
+      appRootKey: source.appRootKey,
+      supervisor: { pid: process.pid, token: 'donor-supervisor' },
+      source: { ...source },
+      bindings: { metroPort: 8248, observePort: 7396 },
+    });
+    registry.claimResources(donor, [
+      { type: 'source', key: source.worktreeKey },
+      { type: 'observe-port', key: '7396' },
+      { type: 'device', key: 'ios:54B03A8D-C9A7-4F97-8656-75E81DC3A68C' },
+    ]);
+    registry.updateBindings(donor, {
+      state: 'device_claimed',
+      bindings: {
+        device: {
+          platform: 'ios',
+          deviceId: '54B03A8D-C9A7-4F97-8656-75E81DC3A68C',
+          appId: 'com.rndevagent.testapp',
+        },
+      },
+    });
+    const donorHandler = createSessionHandler(createRuntime(registry, donor));
+    const applied = await donorHandler({ action: 'apply_integration', confirmed: true });
+    assert.equal(applied.isError, undefined, applied.content[0]!.text);
+    registry.updateBindings(donor, { bindings: { observe: { port: 7396 } } });
+    const durableBinding = registry.getSessionStatus('session-donor')?.bindings
+      .packageIntegration as Record<string, unknown>;
+    assert.equal(typeof durableBinding.manifestSource, 'string');
+
+    const recipient = registry.createSession({
+      sessionId: 'session-recipient',
+      sourceKey: source.sourceKey,
+      worktreeKey: source.worktreeKey,
+      appRootKey: source.appRootKey,
+      supervisor: { pid: process.pid, token: 'recipient-supervisor' },
+      source: { ...source },
+      bindings: { metroPort: 8248, observePort: 7396 },
+    });
+    registry.updateBindings(recipient, {
+      state: 'blocked',
+      bindings: {
+        recoveryCapabilityHash: createHash('sha256').update('recovery-capability').digest('hex'),
+      },
+    });
+    registry.bindRecoveryWorker(
+      recipient,
+      { instanceId: 'recovery-worker', pid: process.pid, token: 'recovery-birth' },
+      'recovery-capability',
+    );
+    const recipientHandle = (
+      registry.getSessionStatus('session-recipient')?.bindings.recoveryHandles as
+        | { handoffRecipient?: { token?: string } }
+        | undefined
+    )?.handoffRecipient?.token;
+    assert.ok(typeof recipientHandle === 'string');
+    const capability = registry.prepareHandoffForHandle(donor, { targetHandle: recipientHandle });
+
+    const rewriteTransferredBinding = (packageIntegration: Record<string, unknown>) => {
+      registry.close();
+      const db = new DatabaseSync(layout.registry);
+      const row = db
+        .prepare('SELECT bindings_json FROM sessions WHERE session_id = ?')
+        .get('session-recipient') as { bindings_json: string };
+      const bindings = JSON.parse(row.bindings_json) as Record<string, unknown>;
+      bindings.packageIntegration = packageIntegration;
+      db.prepare('UPDATE sessions SET bindings_json = ? WHERE session_id = ?').run(
+        JSON.stringify(bindings),
+        'session-recipient',
+      );
+      db.close();
+      registry = openSessionRegistry(layout.registry, { ownerStatus: () => 'match' });
+    };
+
+    let observeStops = 0;
+    let failObserveStop = true;
+    const createHandler = () =>
+      createSessionHandler(createRuntime(registry, recipient), {
+        stopHandoffObserve: async () => {
+          if (failObserveStop) throw new Error('observe stop unavailable');
+          observeStops += 1;
+        },
+      });
+    let handler = createHandler();
+
+    const crashed = await handler({
+      action: 'accept_handoff',
+      handoffId: capability.handoffId,
+      token: capability.token,
+    });
+    assert.equal(crashed.isError, true);
+    assert.equal(registry.getSessionStatus('session-recipient')?.state, 'handoff_cleanup');
+    failObserveStop = false;
+
+    rewriteTransferredBinding({
+      version: durableBinding.version,
+      installedBySessionId: durableBinding.installedBySessionId,
+      manifestSha256: durableBinding.manifestSha256,
+    });
+    handler = createHandler();
+    const versionBeforeRefusal = registry.getSessionStatus('session-recipient')?.authorityVersion;
+
+    const wrongToken = await handler({
+      action: 'accept_handoff',
+      handoffId: capability.handoffId,
+      token: 'not-the-capability-token',
+    });
+    assert.equal(wrongToken.isError, true);
+    assert.match(
+      String(envelope(wrongToken).error),
+      /resumption requires the original handoff capability/,
+    );
+    assert.doesNotMatch(
+      wrongToken.content[0]!.text,
+      /SHA-256|restoration manifest|integrated|package-script|rn-session-integration/,
+      'an unproven capability must not observe manifest or file diagnostics',
+    );
+
+    const manifestless = await handler({
+      action: 'accept_handoff',
+      handoffId: capability.handoffId,
+      token: capability.token,
+    });
+    assert.equal(manifestless.isError, true);
+    assert.match(
+      String(envelope(manifestless).error),
+      /without a SHA-256-verified restoration manifest/,
+      'the proven capability still meets the unchanged manifest eligibility gate',
+    );
+    assert.equal(observeStops, 0);
+    assert.equal(registry.getSessionStatus('session-recipient')?.state, 'handoff_cleanup');
+    assert.equal(
+      registry.getSessionStatus('session-recipient')?.authorityVersion,
+      versionBeforeRefusal,
+    );
+
+    rewriteTransferredBinding(durableBinding);
+    handler = createHandler();
+    const resumed = await handler({
+      action: 'accept_handoff',
+      handoffId: capability.handoffId,
+      token: capability.token,
+    });
+    assert.equal(resumed.isError, undefined, resumed.content[0]!.text);
+    assert.equal(observeStops, 1);
+    assert.equal(registry.getSessionStatus('session-recipient')?.state, 'source_bound');
+    assert.deepEqual(envelope(resumed).data.integrationRestoration, {
+      required: true,
+      action: 'restore_integration',
+      ownerSessionId: 'session-recipient',
+      installedBySessionId: 'session-donor',
+    });
+    registry.close();
+  } finally {
+    if (previousStateHome === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = previousStateHome;
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
 test('an invalid adoption handle returns only the canonical refusal without prior-session diagnostics', async () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-adopt-bad-handle-'));
   const stateHome = join(root, 'state');
