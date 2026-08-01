@@ -62,6 +62,8 @@ export interface HandoffCapability {
 
 export interface HandoffCleanupPlan {
   handoffId?: string;
+  targetSessionId?: string;
+  targetClaimEpoch?: number;
   metro?: Record<string, unknown>;
   observe?: Record<string, unknown>;
   runner?: Record<string, unknown>;
@@ -1815,6 +1817,8 @@ export class SessionRegistry {
         row.claim_epoch !== target.claimEpoch ||
         row.worker_instance !== input.targetInstance ||
         cleanup?.handoffId !== input.handoffId ||
+        cleanup?.targetSessionId !== target.sessionId ||
+        cleanup?.targetClaimEpoch !== target.claimEpoch ||
         typeof handoff?.consumed_ms !== 'number' ||
         !tokenMatches
       ) {
@@ -2058,6 +2062,8 @@ export class SessionRegistry {
             recoveryCapabilityHash: targetBindings.recoveryCapabilityHash,
             handoffCleanup: {
               handoffId: handoff.handoff_id,
+              targetSessionId: target.sessionId,
+              targetClaimEpoch: target.claimEpoch,
               metro: null,
               observe:
                 bindings.observe && typeof bindings.observe === 'object'

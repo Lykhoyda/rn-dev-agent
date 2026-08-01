@@ -502,6 +502,102 @@ test('handoff cleanup resumption revalidates the consumed capability without mut
   assert.throws(() => registry.validateHandoffCleanupResumption(target, input), refusal);
 });
 
+test('handoff cleanup resumption is bound to the accepting target session and claim epoch', () => {
+  const { registry, path, create, ownerStates } = fixture();
+  const owner = create('a', 'shared-worktree');
+  const cleanupOwner = create('b', 'shared-worktree');
+  const contender = create('c', 'shared-worktree');
+  registry.bindWorker(cleanupOwner, {
+    instanceId: 'worker-cleanup',
+    pid: 202,
+    token: 'birth-worker-cleanup',
+  });
+  registry.updateBindings(cleanupOwner, {
+    state: 'blocked',
+    bindings: {
+      recoveryCapabilityHash: createHash('sha256').update('recovery-cleanup').digest('hex'),
+    },
+  });
+  registry.bindWorker(contender, {
+    instanceId: 'worker-contender',
+    pid: 303,
+    token: 'birth-worker-contender',
+  });
+  registry.updateBindings(contender, {
+    state: 'blocked',
+    bindings: { recoveryCapabilityHash: 'recovery-contender' },
+  });
+  registry.claimResources(owner, [{ type: 'runner', key: 'ios:device-a:9100' }]);
+  registry.updateBindings(owner, {
+    state: 'ready',
+    bindings: {
+      runner: {
+        platform: 'ios',
+        deviceId: 'device-a',
+        port: 9100,
+        instanceId: 'runner-a',
+        capability: 'runner-capability-a',
+      },
+    },
+  });
+  const handoff = registry.prepareHandoff(owner, { targetInstance: 'worker-cleanup' });
+  registry.acceptHandoffInto(cleanupOwner, { ...handoff, targetInstance: 'worker-cleanup' });
+
+  const plan = registry.getSessionStatus(cleanupOwner.sessionId)?.bindings.handoffCleanup;
+  assert.equal(plan?.targetSessionId, cleanupOwner.sessionId);
+  assert.equal(plan?.targetClaimEpoch, cleanupOwner.claimEpoch);
+
+  const refusal = /resumption requires the original handoff capability/;
+  registry.bindRecoveryWorker(
+    cleanupOwner,
+    { instanceId: 'worker-cleanup-2', pid: 204, token: 'birth-worker-cleanup-2' },
+    'recovery-cleanup',
+  );
+  const rotatedInput = { ...handoff, targetInstance: 'worker-cleanup-2' };
+  registry.validateHandoffCleanupResumption(cleanupOwner, rotatedInput);
+
+  const database = new DatabaseSync(path);
+  const rewriteEpoch = (claimEpoch) => {
+    const row = database
+      .prepare('SELECT bindings_json FROM sessions WHERE session_id = ?')
+      .get(cleanupOwner.sessionId);
+    const bindings = JSON.parse(row.bindings_json);
+    bindings.handoffCleanup.targetClaimEpoch = claimEpoch;
+    database
+      .prepare('UPDATE sessions SET bindings_json = ? WHERE session_id = ?')
+      .run(JSON.stringify(bindings), cleanupOwner.sessionId);
+  };
+  rewriteEpoch(cleanupOwner.claimEpoch + 1);
+  assert.throws(
+    () => registry.validateHandoffCleanupResumption(cleanupOwner, rotatedInput),
+    refusal,
+  );
+  rewriteEpoch(cleanupOwner.claimEpoch);
+  database.close();
+  registry.validateHandoffCleanupResumption(cleanupOwner, rotatedInput);
+
+  ownerStates.set(cleanupOwner.sessionId, 'mismatch');
+  registry.adoptStaleIntoBlocked(contender, cleanupOwner.sessionId, 'worker-contender');
+  const transferred = registry.getSessionStatus(contender.sessionId);
+  assert.equal(transferred?.state, 'handoff_cleanup');
+  assert.equal(transferred?.bindings.handoffCleanup.targetSessionId, cleanupOwner.sessionId);
+  const before = transferred?.authorityVersion;
+  assert.throws(
+    () =>
+      registry.validateHandoffCleanupResumption(contender, {
+        ...handoff,
+        targetInstance: 'worker-contender',
+      }),
+    refusal,
+  );
+  assert.equal(registry.getSessionStatus(contender.sessionId)?.authorityVersion, before);
+  assert.equal(registry.getSessionStatus(contender.sessionId)?.state, 'handoff_cleanup');
+  registry.beginHandoffCleanupResource(contender, 'worker-contender', 'runner');
+  registry.completeHandoffCleanupResource(contender, 'worker-contender', 'runner');
+  registry.finishHandoffCleanup(contender, 'worker-contender');
+  assert.equal(registry.getSessionStatus(contender.sessionId)?.state, 'source_bound');
+});
+
 test('only the active operation context may advance transition authority', async () => {
   const { registry, create } = fixture();
   const owner = create('a');

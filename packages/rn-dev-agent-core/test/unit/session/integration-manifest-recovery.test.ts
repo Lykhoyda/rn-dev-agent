@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { openSessionRegistry } from '../../../dist/session/registry.js';
+import { projectPublicAuthorityStatus } from '../../../dist/session/public-status.js';
 import { resolveSourceIdentity } from '../../../dist/session/source-identity.js';
 import { createAuthorityStateLayout } from '../../../dist/session/state-root.js';
 import { createSessionHandler } from '../../../dist/tools/session.js';
@@ -2313,6 +2314,179 @@ test('an invalid adoption handle returns only the canonical refusal without prio
       /without a SHA-256-verified restoration manifest/,
       'the valid capability must still reach the unchanged eligibility gate',
     );
+    registry.close();
+  } finally {
+    if (previousStateHome === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = previousStateHome;
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test('stale adoption revokes the consumed handoff capability for resumed cleanup', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-adopted-handoff-revoked-'));
+  const stateHome = join(root, 'state');
+  const previousStateHome = process.env.XDG_STATE_HOME;
+  try {
+    const appRoot = createAppFixture(root);
+    process.env.XDG_STATE_HOME = stateHome;
+    const source = resolveSourceIdentity(appRoot);
+    const layout = createAuthorityStateLayout();
+    const ownerStates = new Map<string, string>();
+    const registry = openSessionRegistry(layout.registry, {
+      ownerStatus: ({ sessionId }) => ownerStates.get(sessionId) ?? 'match',
+    });
+    const donor = registry.createSession({
+      sessionId: 'session-donor',
+      sourceKey: source.sourceKey,
+      worktreeKey: source.worktreeKey,
+      appRootKey: source.appRootKey,
+      supervisor: { pid: process.pid, token: 'donor-supervisor' },
+      source: { ...source },
+      bindings: { metroPort: 8248, observePort: 7396 },
+    });
+    registry.claimResources(donor, [
+      { type: 'source', key: source.worktreeKey },
+      { type: 'observe-port', key: '7396' },
+      { type: 'device', key: 'ios:54B03A8D-C9A7-4F97-8656-75E81DC3A68C' },
+    ]);
+    registry.updateBindings(donor, {
+      state: 'device_claimed',
+      bindings: { observe: { port: 7396 } },
+    });
+    const recipient = registry.createSession({
+      sessionId: 'session-recipient',
+      sourceKey: source.sourceKey,
+      worktreeKey: source.worktreeKey,
+      appRootKey: source.appRootKey,
+      supervisor: { pid: process.pid, token: 'recipient-supervisor' },
+      source: { ...source },
+      bindings: { metroPort: 8248, observePort: 7396 },
+    });
+    registry.updateBindings(recipient, {
+      state: 'blocked',
+      bindings: {
+        recoveryCapabilityHash: createHash('sha256').update('recovery-capability').digest('hex'),
+      },
+    });
+    registry.bindRecoveryWorker(
+      recipient,
+      { instanceId: 'recovery-worker', pid: process.pid, token: 'recovery-birth' },
+      'recovery-capability',
+    );
+    const recipientHandle = (
+      registry.getSessionStatus('session-recipient')?.bindings.recoveryHandles as
+        | { handoffRecipient?: { token?: string } }
+        | undefined
+    )?.handoffRecipient?.token;
+    assert.ok(typeof recipientHandle === 'string');
+    const capability = registry.prepareHandoffForHandle(donor, { targetHandle: recipientHandle });
+
+    const recipientHandler = createSessionHandler(createRuntime(registry, recipient), {
+      stopHandoffObserve: async () => {
+        throw new Error('observe stop unavailable');
+      },
+    });
+    const crashed = await recipientHandler({
+      action: 'accept_handoff',
+      handoffId: capability.handoffId,
+      token: capability.token,
+    });
+    assert.equal(crashed.isError, true);
+    assert.equal(registry.getSessionStatus('session-recipient')?.state, 'handoff_cleanup');
+
+    const recipientPublic = JSON.stringify(
+      projectPublicAuthorityStatus(
+        {
+          available: true,
+          ...(registry.getSessionStatus('session-recipient') as object),
+        } as never,
+        { includeSessionId: true },
+      ),
+    );
+    assert.doesNotMatch(recipientPublic, /targetSessionId|targetClaimEpoch|handoffCleanup/);
+    assert.equal(recipientPublic.includes(capability.handoffId), false);
+    assert.equal(recipientPublic.includes(capability.token), false);
+
+    ownerStates.set('session-recipient', 'mismatch');
+    const contender = registry.createSession({
+      sessionId: 'session-contender',
+      sourceKey: source.sourceKey,
+      worktreeKey: source.worktreeKey,
+      appRootKey: source.appRootKey,
+      supervisor: { pid: process.pid, token: 'contender-supervisor' },
+      source: { ...source },
+      bindings: { metroPort: 8248, observePort: 7396 },
+    });
+    registry.updateBindings(contender, {
+      state: 'blocked',
+      bindings: {
+        recoveryCapabilityHash: createHash('sha256').update('contender-capability').digest('hex'),
+        adoptionRequired: { sessionId: 'session-recipient', claimEpoch: recipient.claimEpoch },
+      },
+    });
+    registry.bindRecoveryWorker(
+      contender,
+      { instanceId: 'contender-worker', pid: process.pid, token: 'contender-birth' },
+      'contender-capability',
+    );
+    const adoptionHandle = (
+      registry.getSessionStatus('session-contender')?.bindings.recoveryHandles as
+        | { adoptStale?: { token?: string } }
+        | undefined
+    )?.adoptStale?.token;
+    assert.ok(typeof adoptionHandle === 'string');
+
+    let observeStops = 0;
+    let failObserveStop = true;
+    const contenderHandler = createSessionHandler(createRuntime(registry, contender), {
+      stopHandoffObserve: async () => {
+        if (failObserveStop) throw new Error('observe stop unavailable');
+        observeStops += 1;
+      },
+    });
+    const interrupted = await contenderHandler({
+      action: 'adopt_stale',
+      adoptionHandle,
+    });
+    assert.equal(interrupted.isError, true);
+    assert.equal(registry.getSessionStatus('session-contender')?.state, 'handoff_cleanup');
+    const transferredPlan = registry.getSessionStatus('session-contender')?.bindings
+      .handoffCleanup as { handoffId?: string; targetSessionId?: string } | undefined;
+    assert.equal(transferredPlan?.handoffId, capability.handoffId);
+    assert.equal(transferredPlan?.targetSessionId, 'session-recipient');
+    failObserveStop = false;
+    const versionAfterTransfer = registry.getSessionStatus('session-contender')?.authorityVersion;
+
+    const replayed = await contenderHandler({
+      action: 'accept_handoff',
+      handoffId: capability.handoffId,
+      token: capability.token,
+    });
+    assert.equal(replayed.isError, true);
+    assert.match(
+      String(envelope(replayed).error),
+      /resumption requires the original handoff capability/,
+    );
+    assert.doesNotMatch(
+      replayed.content[0]!.text,
+      /SHA-256|integrated|package-script|rn-session-integration|session-donor/,
+    );
+    assert.equal(observeStops, 0, 'a transplanted handoff capability must not drive cleanup');
+    assert.equal(registry.getSessionStatus('session-contender')?.state, 'handoff_cleanup');
+    assert.equal(
+      registry.getSessionStatus('session-contender')?.authorityVersion,
+      versionAfterTransfer,
+      'refused resumption must not mutate the registry',
+    );
+
+    const resumed = await contenderHandler({
+      action: 'adopt_stale',
+      adoptionHandle,
+    });
+    assert.equal(resumed.isError, undefined, resumed.content[0]!.text);
+    assert.equal(observeStops, 1);
+    assert.notEqual(registry.getSessionStatus('session-contender')?.state, 'handoff_cleanup');
+    assert.doesNotMatch(resumed.content[0]!.text, /targetSessionId|targetClaimEpoch/);
     registry.close();
   } finally {
     if (previousStateHome === undefined) delete process.env.XDG_STATE_HOME;

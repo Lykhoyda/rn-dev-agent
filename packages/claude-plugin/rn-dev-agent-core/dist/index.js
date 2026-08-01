@@ -27222,7 +27222,7 @@ var init_registry = __esm({
           const expected = Buffer.from(typeof handoff?.token_hash === "string" ? handoff.token_hash : "", "hex");
           const actual = createHash6("sha256").update(input.token).digest();
           const tokenMatches = expected.length === actual.length && timingSafeEqual2(expected, actual);
-          if (!row || row.state !== "handoff_cleanup" || row.claim_epoch !== target.claimEpoch || row.worker_instance !== input.targetInstance || cleanup?.handoffId !== input.handoffId || typeof handoff?.consumed_ms !== "number" || !tokenMatches) {
+          if (!row || row.state !== "handoff_cleanup" || row.claim_epoch !== target.claimEpoch || row.worker_instance !== input.targetInstance || cleanup?.handoffId !== input.handoffId || cleanup?.targetSessionId !== target.sessionId || cleanup?.targetClaimEpoch !== target.claimEpoch || typeof handoff?.consumed_ms !== "number" || !tokenMatches) {
             throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "handoff cleanup resumption requires the original handoff capability");
           }
         });
@@ -27336,6 +27336,8 @@ var init_registry = __esm({
             recoveryCapabilityHash: targetBindings.recoveryCapabilityHash,
             handoffCleanup: {
               handoffId: handoff.handoff_id,
+              targetSessionId: target.sessionId,
+              targetClaimEpoch: target.claimEpoch,
               metro: null,
               observe: bindings.observe && typeof bindings.observe === "object" ? {
                 ...bindings.observe,

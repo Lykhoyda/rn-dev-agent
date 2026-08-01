@@ -1067,6 +1067,8 @@ export class SessionRegistry {
                 row.claim_epoch !== target.claimEpoch ||
                 row.worker_instance !== input.targetInstance ||
                 cleanup?.handoffId !== input.handoffId ||
+                cleanup?.targetSessionId !== target.sessionId ||
+                cleanup?.targetClaimEpoch !== target.claimEpoch ||
                 typeof handoff?.consumed_ms !== 'number' ||
                 !tokenMatches) {
                 throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', 'handoff cleanup resumption requires the original handoff capability');
@@ -1217,6 +1219,8 @@ export class SessionRegistry {
                 recoveryCapabilityHash: targetBindings.recoveryCapabilityHash,
                 handoffCleanup: {
                     handoffId: handoff.handoff_id,
+                    targetSessionId: target.sessionId,
+                    targetClaimEpoch: target.claimEpoch,
                     metro: null,
                     observe: bindings.observe && typeof bindings.observe === 'object'
                         ? {
