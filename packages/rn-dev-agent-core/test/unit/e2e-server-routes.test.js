@@ -62,6 +62,27 @@ test('POST /api/e2e/run with valid csrf triggers + returns result', async () => 
   });
 });
 
+test('POST /api/e2e/run does not expose a rejected dependency stack trace', async () => {
+  const failure = new Error('sensitive dependency detail');
+  failure.stack = '/private/service/file.ts:42';
+  await withServer(
+    E2E({
+      triggerRun: async () => {
+        throw failure;
+      },
+    }),
+    async (url) => {
+      const r = await fetch(url + '/api/e2e/run', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-csrf-token': 'tok1' },
+        body: '{}',
+      });
+      assert.equal(r.status, 500);
+      assert.deepEqual(await r.json(), { error: 'internal server error' });
+    },
+  );
+});
+
 test('GET /api/e2e/run is refused (405) — reads never run', async () => {
   await withServer(E2E(), async (url) => {
     const r = await fetch(url + '/api/e2e/run');

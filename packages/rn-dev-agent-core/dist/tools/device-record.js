@@ -1,16 +1,18 @@
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { okResult, failResult, warnResult } from '../utils.js';
-import { detectPlatform } from './platform-utils.js';
 import { pathHasTraversal } from '../domain/path-safety.js';
+import { probeProcessBirth } from '../session/process-birth.js';
+import { getWorkerAuthorityRuntime } from '../session/runtime.js';
+import { runRecordProofScript, stopBoundRecorder } from '../session/process-cleanup.js';
 // Safe by construction: only execFile (argv-based, no shell), never exec.
 // Mirrors the pattern in device-permission.ts and other shell-wrapping tools.
 const execFileAsync = promisify(execFile);
 const START_TIMEOUT_MS = 10_000;
-const STOP_TIMEOUT_MS = 60_000;
 const STATUS_TIMEOUT_MS = 5_000;
 const GIF_TIMEOUT_MS = 60_000;
 export function parseAllBootedIosDevices(jsonText) {
@@ -146,10 +148,10 @@ function defaultOutputPath(platform) {
     return `/tmp/rn-dev-agent-proof-${platform}-${Date.now()}.mp4`;
 }
 export function parseStartOutput(stdout) {
-    const match = stdout.match(/Recording started: platform=(?:ios|android) pid=(\d+) output=(.+?)\s*$/m);
+    const match = stdout.match(/Recording started: platform=(?:ios|android) pid=(\d+) birth=([a-f0-9]{64}) output=(.+?)\s*$/m);
     if (!match)
         return null;
-    return { pid: Number(match[1]), output: match[2].trim() };
+    return { pid: Number(match[1]), processBirth: match[2], output: match[3].trim() };
 }
 export function parseStopOutput(stdout) {
     const saved = [];
@@ -160,6 +162,9 @@ export function parseStopOutput(stdout) {
     }
     return saved;
 }
+export function parseRecorderFailure(stdout) {
+    return stdout.match(/^Recorder failed:\s*(.+)$/m)?.[1]?.trim() ?? null;
+}
 export function parseStatusOutput(stdout) {
     if (/^No active recordings/m.test(stdout))
         return [];
@@ -168,26 +173,58 @@ export function parseStatusOutput(stdout) {
     // `output=` with no value when the .path sidecar is missing (orphaned
     // .pid file from a crashed prior session). We still want operators to see
     // the dangling pid row instead of silently dropping it.
-    const re = /^(ios|android): pid=(\d+) status=(\w+) output=(.*?)\s*$/gm;
+    const re = /^(ios|android): pid=(\d+) birth=(\S+) status=(\w+) output=(.*?)\s*$/gm;
     let m;
     while ((m = re.exec(stdout)) !== null) {
         active.push({
             platform: m[1],
             pid: Number(m[2]),
-            status: m[3],
-            output: m[4].trim(),
+            processBirth: m[3],
+            status: m[4],
+            output: m[5].trim(),
         });
     }
     return active;
 }
-async function runStart(args) {
-    const platform = args.platform ?? (await detectPlatform());
-    if (!platform) {
-        return failResult('No iOS simulator or Android device detected. Boot a device or pass platform explicitly.', { code: 'NO_DEVICE' });
+function recordingScope(args) {
+    return createHash('sha256')
+        .update(`${args.sessionId}\0${args.claimEpoch}\0${args.platform}\0${args.deviceId}`)
+        .digest('hex');
+}
+export function bindRecorderSession(runtime, args) {
+    const available = runtime.requireAvailable();
+    const status = runtime.status();
+    if (!status.available)
+        throw new Error(`${status.code}: ${status.reason}`);
+    const device = status.bindings.device;
+    const platform = device?.platform;
+    const deviceId = device?.deviceId;
+    if ((platform !== 'ios' && platform !== 'android') || typeof deviceId !== 'string' || !deviceId) {
+        throw new Error('DEVICE_AUTHORITY_MISMATCH: recorder requires an exact claimed device');
     }
-    if (platform !== 'ios' && platform !== 'android') {
-        return failResult(`Unknown platform: "${platform}". Expected ios or android.`);
+    if (args.platform !== undefined && args.platform !== platform) {
+        throw new Error('DEVICE_AUTHORITY_MISMATCH: recorder platform contradicts the session');
     }
+    if (args.deviceId !== undefined && args.deviceId !== deviceId) {
+        throw new Error('DEVICE_AUTHORITY_MISMATCH: recorder device contradicts the session');
+    }
+    args.platform = platform;
+    args.deviceId = deviceId;
+    args.sessionId = status.sessionId;
+    args.claimEpoch = status.claimEpoch;
+    return { ...available, status, platform, deviceId };
+}
+async function runStart(args, runtime) {
+    let authority;
+    try {
+        authority = bindRecorderSession(runtime, args);
+    }
+    catch (error) {
+        return failResult(error instanceof Error ? error.message : String(error), {
+            code: 'SESSION_STALE',
+        });
+    }
+    const platform = authority.platform;
     if (args.outputPath && pathHasTraversal(args.outputPath)) {
         return failResult(`device_record: outputPath "${args.outputPath}" contains '..' traversal segments — refuse to write to a path that escapes its parent directory`, { code: 'INVALID_PATH' });
     }
@@ -212,23 +249,67 @@ async function runStart(args) {
         return failResult(`device_record: ${resolution.candidates.length} ${platform} ${argName === 'UDID' ? 'simulators booted' : 'devices connected'} — refusing to auto-pick to avoid recording the wrong device. ` +
             `Pass deviceId=<${argName}> to disambiguate:\n${list}`, { code: 'DEVICE_AMBIGUOUS', platform, candidates: resolution.candidates });
     }
-    const scriptArgs = ['start', platform, outputPath];
-    // Only forward an explicit id when we're picking from >1 candidate; the
-    // single-device case keeps the script's existing `booted`/auto path so
-    // we don't regress any environment where simctl's `booted` shorthand
-    // works differently than passing the literal UDID (defensive — both
-    // should be equivalent on Apple's side).
-    if (!resolution.autoSelected) {
-        scriptArgs.push(platform === 'ios' ? '--udid' : '--serial', resolution.deviceId);
-    }
-    try {
-        const { stdout } = await execFileAsync(getRecordScript(), scriptArgs, {
-            timeout: START_TIMEOUT_MS,
+    args.platform = platform;
+    args.deviceId = resolution.deviceId;
+    if (authority.status.bindings.recorder) {
+        return failResult('Recording already in progress for this session and device.', {
+            code: 'ALREADY_RECORDING',
         });
+    }
+    const scope = recordingScope({
+        sessionId: authority.status.sessionId,
+        claimEpoch: authority.status.claimEpoch,
+        platform,
+        deviceId: resolution.deviceId,
+    });
+    const script = getRecordScript();
+    const claimKey = `${platform}:${resolution.deviceId}`;
+    const scriptArgs = ['start', platform, outputPath, '--scope', scope];
+    scriptArgs.push(platform === 'ios' ? '--udid' : '--serial', resolution.deviceId);
+    try {
+        authority.registry.updateBindings(authority.session, {
+            bindings: {
+                recorder: {
+                    phase: 'starting',
+                    platform,
+                    deviceId: resolution.deviceId,
+                    output: outputPath,
+                    scope,
+                    script,
+                    claimKey,
+                    sessionId: authority.status.sessionId,
+                    claimEpoch: authority.status.claimEpoch,
+                },
+            },
+            claimResources: [{ type: 'recorder', key: claimKey }],
+        });
+        const { stdout } = await runRecordProofScript(script, scriptArgs, START_TIMEOUT_MS);
         const parsed = parseStartOutput(stdout);
         if (!parsed) {
-            return failResult(`Recording started but could not parse PID/output. Raw: ${stdout.trim()}`);
+            throw new Error(`Recording started but could not parse PID/output. Raw: ${stdout.trim()}`);
         }
+        const processIdentity = probeProcessBirth(parsed.pid);
+        if (processIdentity.status !== 'present' ||
+            processIdentity.birth.token !== parsed.processBirth) {
+            throw new Error('Recording started but its process identity could not be proven');
+        }
+        authority.registry.updateBindings(authority.session, {
+            bindings: {
+                recorder: {
+                    phase: 'recording',
+                    platform,
+                    deviceId: resolution.deviceId,
+                    output: parsed.output,
+                    scope,
+                    pid: parsed.pid,
+                    processBirth: parsed.processBirth,
+                    script,
+                    claimKey,
+                    sessionId: authority.status.sessionId,
+                    claimEpoch: authority.status.claimEpoch,
+                },
+            },
+        });
         return okResult({
             action: 'start',
             platform,
@@ -236,10 +317,30 @@ async function runStart(args) {
             autoSelected: resolution.autoSelected,
             output: parsed.output,
             pid: parsed.pid,
+            processBirth: parsed.processBirth,
             note: 'Call device_record action=stop to finalize. Android caps at 180s; iOS has no inherent cap but xcrun simctl io may stall on long captures.',
         });
     }
     catch (e) {
+        const aborted = await stopBoundRecorder({
+            phase: 'starting',
+            platform,
+            deviceId: resolution.deviceId,
+            output: outputPath,
+            scope,
+            script,
+            claimKey,
+            sessionId: authority.status.sessionId,
+            claimEpoch: authority.status.claimEpoch,
+        })
+            .then(() => true)
+            .catch(() => false);
+        if (aborted) {
+            authority.registry.updateBindings(authority.session, {
+                bindings: { recorder: null },
+                releaseResources: [{ type: 'recorder', key: claimKey }],
+            });
+        }
         const err = e;
         const detail = (err.stderr || '').trim() || (err.message || '').trim() || String(e);
         if (/No iOS simulator booted/.test(detail)) {
@@ -256,14 +357,36 @@ async function runStart(args) {
         return failResult(`record_proof.sh start failed: ${detail}`);
     }
 }
-async function runStop(args) {
+async function runStop(args, runtime) {
+    let authority;
+    try {
+        authority = bindRecorderSession(runtime, args);
+    }
+    catch (error) {
+        return failResult(error instanceof Error ? error.message : String(error), {
+            code: 'SESSION_STALE',
+        });
+    }
+    const recording = authority.status.bindings.recorder;
+    if (!recording) {
+        return warnResult({ saved: [] }, 'No active recording for this session and device.', {
+            code: 'NO_ACTIVE_RECORDING',
+        });
+    }
     let stopOutput = '';
     try {
-        const { stdout } = await execFileAsync(getRecordScript(), ['stop'], {
-            timeout: STOP_TIMEOUT_MS,
-            maxBuffer: 8 * 1024 * 1024,
+        stopOutput = await stopBoundRecorder(recording);
+        const claimKey = String(recording.claimKey ?? '');
+        authority.registry.updateBindings(authority.session, {
+            bindings: { recorder: null },
+            releaseResources: claimKey ? [{ type: 'recorder', key: claimKey }] : [],
         });
-        stopOutput = stdout;
+        const recorderFailure = parseRecorderFailure(stopOutput);
+        if (recorderFailure) {
+            return failResult(`Recording failed before it could be saved: ${recorderFailure}`, {
+                code: 'RECORDING_FAILED',
+            });
+        }
     }
     catch (e) {
         const err = e;
@@ -318,12 +441,25 @@ async function runStop(args) {
         ...(gifWarnings.length > 0 ? { gifWarnings } : {}),
     });
 }
-async function runStatus() {
+async function readScopedStatus(script, scope) {
+    const { stdout } = await runRecordProofScript(script, ['status', scope], STATUS_TIMEOUT_MS);
+    return parseStatusOutput(stdout);
+}
+async function runStatus(args, runtime) {
+    let authority;
     try {
-        const { stdout } = await execFileAsync(getRecordScript(), ['status'], {
-            timeout: STATUS_TIMEOUT_MS,
+        authority = bindRecorderSession(runtime, args);
+    }
+    catch (error) {
+        return failResult(error instanceof Error ? error.message : String(error), {
+            code: 'SESSION_STALE',
         });
-        const active = parseStatusOutput(stdout);
+    }
+    const recording = authority.status.bindings.recorder;
+    if (!recording)
+        return okResult({ action: 'status', active: [] });
+    try {
+        const active = await readScopedStatus(String(recording.script ?? ''), String(recording.scope ?? ''));
         return okResult({ action: 'status', active });
     }
     catch (e) {
@@ -332,14 +468,15 @@ async function runStatus() {
         return failResult(`record_proof.sh status failed: ${detail}`);
     }
 }
-export function createDeviceRecordHandler() {
+export function createDeviceRecordHandler(deps = {}) {
+    const runtime = deps.runtime ?? getWorkerAuthorityRuntime();
     return async (args) => {
         if (args.action === 'start')
-            return runStart(args);
+            return runStart(args, runtime);
         if (args.action === 'stop')
-            return runStop(args);
+            return runStop(args, runtime);
         if (args.action === 'status')
-            return runStatus();
+            return runStatus(args, runtime);
         return failResult(`Unknown action: "${args.action}". Expected start, stop, or status.`);
     };
 }

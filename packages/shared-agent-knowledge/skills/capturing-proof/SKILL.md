@@ -40,12 +40,13 @@ mkdir -p docs/proof/<feature-slug>
 
 ### Step 2: Environment check
 
-Call `cdp_status` to confirm the app is running and CDP is connected.
+Call `rn_session(action="status")` and require a ready exact session. Then call
+`cdp_status` to inspect passive CDP state.
 
 **Pre-recording readiness check (GH #8, #9):**
-1. Call `cdp_status` — this auto-detects and auto-dismisses the Dev Client
-   server picker if a device session is open (GH #9). If `cdp_status`
-   returns a warning about the picker, call it again after a few seconds.
+1. If the runtime is not pinned, call `rn_session(action="pin_dev_client")`.
+   Picker recovery may select only the canonical URL already bound to the
+   session; absence or ambiguity is `DEV_CLIENT_ENDPOINT_NOT_FOUND`.
 2. Call `cdp_navigation_state` — verify it returns a valid route name
    (not empty, not "DevClientLauncher", not "ServerPicker"). If still stuck,
    ask the user to select the Metro server manually.
@@ -111,13 +112,17 @@ flow until you can name what's missing.
 After the rehearsal flow has replayed clean, reset the app to the starting
 screen one more time, then start recording:
 
-```bash
+```text
 # iOS
-rn-record-proof start ios docs/proof/<slug>/flow-ios.mp4
+device_record(action="start", platform="ios", outputPath="docs/proof/<slug>/flow-ios.mp4")
 
 # Android
-rn-record-proof start android docs/proof/<slug>/flow-android.mp4
+device_record(action="start", platform="android", outputPath="docs/proof/<slug>/flow-android.mp4")
 ```
+
+`device_record` derives the private recorder scope from the fenced session and
+uses only its exact authority-bound device. A conflicting platform or device is
+refused.
 
 If recording fails to start, warn but continue — screenshots are the primary artifact.
 
@@ -157,14 +162,17 @@ recording — that's a flow bug, not a feature bug. Do not "fix it on camera."
 
 ### Step 5: Stop recording
 
-```bash
-rn-record-proof stop
+```text
+device_record(
+  action="stop",
+  gif=true,
+  gifPath="docs/proof/<slug>/flow-ios.gif"
+)
 ```
 
-Attempt GIF conversion:
-```bash
-rn-record-proof convert-gif docs/proof/<slug>/flow-ios.mp4 docs/proof/<slug>/flow-ios.gif
-```
+Stopping through `device_record` authenticates the recorder identity, resumes
+any pending finalization, and releases the session recorder claim only after
+cleanup succeeds.
 
 ### Step 5.5: Label the video (default)
 
@@ -270,6 +278,6 @@ Show the user:
 ## Prerequisites
 
 - iOS Simulator or Android Emulator running with the app loaded
-- Metro dev server running
+- Ready fenced session with the integrated Metro and signed app target
 - ffmpeg required for GIF conversion and video labeling (`brew install ffmpeg`)
 - Pillow auto-installed in a venv for label rendering (no manual setup needed)

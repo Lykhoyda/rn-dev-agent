@@ -1,0 +1,95 @@
+---
+title: "Parallel session authority"
+description: "How rn-dev-agent binds one worktree, build, Metro, device, runner, Observe UI, and proof run without ambient target selection."
+sidebar:
+  order: 3
+---
+
+rn-dev-agent gives every supervised MCP process a fenced session before its worker starts. A successful mutating or verification tool call is bound to that session; diagnostics may enumerate ambient state but are explicitly non-authoritative.
+
+```text
+controller + source
+        │
+        ├── deterministic Metro and Observe port claims
+        ├── exact installed app on one UUID or serial
+        ├── signed initial-bundle Metro marker
+        ├── capability-authenticated native runner
+        └── session-scoped Observe, action, E2E, and proof state
+```
+
+## Requirements
+
+The authority registry uses Node's built-in `node:sqlite` `DatabaseSync`. Node 22 launches it with `--experimental-sqlite`; if the API cannot load, tools return `AUTHORITY_STORE_UNAVAILABLE`. There is no JSON registry fallback and no warning-only authoritative mode.
+
+The registry lives in a private user-local `v2` state root. Its SQLite database, WAL/SHM files, session secrets, runner state, and Observe bootstrap state refuse symlinks and use private permissions. After any safe shared-corpus materialization described below, the integration mutation layer rejects a symlinked `.rn-agent` directory or symlinked path ancestor and fences each retained ancestor against replacement during reads, writes, rollback, and recovery.
+
+Lease timeouts are diagnostic signals, not authority to reclaim resources. A contender must exist and must conservatively prove the prior process dead; an expired lease with unknown process-birth identity returns `STALE_LEASE_NOT_RECLAIMABLE`.
+
+## Session lifecycle
+
+Use `rn_session` for staged transitions:
+
+1. `status` reports the redacted session and migration readiness without touching the app or device. If the bound managed Metro lifecycle is no longer live or its proof cannot be authenticated, status atomically clears active Metro and bundle authority, retains the cleanup binding, and reports the terminal reason.
+2. `preview_integration` shows the reversible `package.json` and Metro-config edits.
+3. `apply_integration` applies them only with `confirmed: true`.
+4. `bind_device` claims one exact platform, UUID/serial, and app ID. It refuses a nonexistent or unavailable device (`DEVICE_NOT_FOUND`), a device claimed by another live session (`DEVICE_CLAIM_CONFLICT`), and rebinding across an incompatible installed-artifact receipt (`DEVICE_RECEIPT_INCOMPATIBLE`).
+5. Literal `pnpm ios` or `pnpm android` starts or validates package-local Metro headlessly on the allocated port, injects the exact device and native-client port, and records the installed artifact receipt. For Expo commands the managed port travels through the build environment rather than Expo CLI arguments, because the installed Expo CLI rejects `--port` together with `--no-bundler`; a conflicting user-supplied port still refuses the build. After an iOS Expo build installs on the bound simulator, the adapter starts that exact app with the managed Metro URL as the Expo Dev Launcher initial URL; an ambient default-port Metro cannot capture the launch. If the native command exits for any reason before the build receipt is recorded, the adapter releases the pending build authority through an authenticated abort while preserving the original failure, so the supported `device_snapshot action=close` → `stop_metro` → `restore_integration` → `release` cleanup remains reachable.
+6. `pin_dev_client` launches the exact Expo URL or bare RN app and accepts only the target carrying the signed initial-bundle marker.
+7. `prepare_handoff` / `accept_handoff` transfer ownership explicitly, but never adopt a live runner, Observe server, or managed Metro. Acceptance durably records and proves each source-resource shutdown before completing, and binds the durable cleanup plan to the consumed handoff ID plus the exact accepting target session and claim epoch — never a plaintext capability token. Interrupted cleanup remains resumable only by re-presenting that consumed handoff ID and its original capability token to the same accepting session and claim epoch, which the registry revalidates non-mutatingly — together with the current target session reference, `handoff_cleanup` lifecycle, and currently authorized cleanup worker — before any donor lookup, diagnostics, or cleanup mutation; any mismatch returns only the canonical resumption refusal. Resumption therefore survives an authenticated recovery-worker respawn within the same accepting session and claim epoch, but once a stale adoption transfers the interrupted plan into a different recovery session the original handoff capability no longer authorizes `accept_handoff`; continuation flows only through `adopt_stale` with its adoption handle. When package integration is installed, the recipient becomes its restoration owner.
+8. After an integrated build, close the bound native runner with `device_snapshot action=close`, then call `stop_metro`. If `device_snapshot action=open` fails after starting a runner or while publishing its binding, it attempts to reap that runner and always releases the local device session and lock; an unconfirmed reap is reported alongside the primary failure. Close remains idempotent when the in-memory device session is already absent: it still finalizes retained runner authority, and it preserves the local session and device lock if finalization fails so the close can be retried. The iOS cold-rebuild recovery credit resets only when an authoritative iOS runner binding is actually released. Metro cleanup refuses while runner authority is active; after the runner closes, it proves the exact managed launcher, listener, port, and evidence endpoint stopped, then clears Metro and bundle authority while retaining the session and integration owner. Retrying an already-complete authenticated stop is idempotent. If cleanup authority was invalidated but the allocated port still listens, `stop_metro` returns `METRO_CLEANUP_PENDING` with the exact port and observed listener PID rather than signaling an unbound process or reporting success; retry after managed launcher cleanup. If only the session-owned evidence socket remains after every process and listener is proven absent, `confirmed: true` authorizes its removal only when no other session references it; a fully absent unauthenticated binding can likewise be released without signaling only after explicit confirmation.
+9. `restore_integration` with `confirmed: true` restores the package scripts and Metro config only after runtime authority is absent. A successful `apply_integration` also stores the restoration manifest inside the durable session binding, so restoration stays byte-exact even if the on-disk manifest copy is lost across crashes or adoptions. Restoration is authorized only by a SHA-256-verified manifest — durable in the binding or the exact on-disk copy. If a binding has no verified manifest anywhere, `restore_integration` refuses without clearing the binding or touching any file; deterministic inspection of `package.json`, the selected Metro config, and `.rn-agent/integration/` appears only as diagnostic markers in the refusal, never as authorization, and the supported recovery is restoring the exact manifest bytes (matching the recorded SHA-256) from your own version control history or backups before retrying. `adopt_stale` and `accept_handoff` — initial acceptance and resumed cleanup alike — first validate the presented capability non-mutatingly, so an invalid or expired handle or token refuses with the canonical capability error before any donor, binding, or file diagnostics, and then require restoration material already durable inside the binding before any reservation, transfer, cleanup, or registry mutation: an exact on-disk manifest copy authorizes only the current owner's `restore_integration` and never an ownership transfer, so a binding carrying durable SHA-256-verified restoration material transfers and reports the restoration duty, a binding without it refuses adoption, acceptance, or resumption outright, and `status` exposes any active binding fence with its owner, manifest availability, and next supported action.
+10. `release` refuses while package integration remains installed, then proves any remaining authority-bound runner, Observe server, and managed Metro stopped before releasing claims. Any unproven cleanup leaves the session claimed, so interrupted `device_snapshot action=close` → `stop_metro` → `restore_integration` → `release` sequences remain retryable.
+
+Status includes the exact opaque session ID so local workflows can remain pinned after handoff without exposing capabilities or device identities.
+
+One canonical app root has one supervisor. Starting another supervisor for the same root is single-instance takeover: the prior supervisor observes that its lock was reclaimed and shuts down, so two same-root supervisors are not cooperative handoff peers. Cooperative handoff instead uses a capability-bound recovery contender and the explicit `prepare_handoff` / `accept_handoff` sequence while the source session still owns its claims. After `release`, that supervisor's session is terminal and mutation returns `SESSION_OWNER_LOST`; start a new supervisor to create the successor session rather than expecting the released process to mint replacement authority.
+
+Supervisor shutdown follows the same fail-closed resource cleanup. It first reserves the session for closing and cancels active operations, then releases claims only after runner, Observe, and managed Metro teardown succeeds.
+
+Session initialization is transactional: if port allocation, resource claiming, shared-knowledge preparation, or receipt creation fails, partial claims are released before startup reports the failure.
+
+When no matching live session or installed integration is available, the copied package adapter runs the original package script and user arguments unchanged. An explicit session ID is accepted only for the current canonical worktree and app root. When a session exists, unsupported command shapes or conflicting explicit flags fail rather than falling through.
+
+## What each source identity proves
+
+Normal development uses a coarse Git worktree identity, or a declared root plus declared-manifest hash for non-Git apps. That identity remains stable while source files are edited. Strict proof additionally freezes the Git HEAD and dirty-content digest.
+
+The strict dirty digest covers tracked changes, every untracked file, and every ignored file except native build/cache roots such as CocoaPods, Gradle, Expo, and platform build outputs. Local `node_modules`, Yarn cache, unplugged dependency stores, and signed Metro runtime-policy inputs are streamed into the digest with limits of 50,000 entries, 128 MB per file, 512 MB total, and 128 path levels. This includes symlink targets and external resolver roots. Strict proof additionally requires Metro started by the managed launcher, a serving root contained by the bound worktree, Node.js 22.15 or newer, one exact terminal integration block, a signed initial-bundle marker, exact device and install bindings, and the source and dirty digest.
+
+Managed Metro permits native `.node` addons only when their canonical paths remain inside the attested project, app, or dependency roots. Before loading an addon, the launcher records its stable bytes in the signed runtime-evidence chain and publishes a protected acknowledgement that the Metro child can read but cannot modify; after loading, it records completion and verifies that the bytes did not change. An addon outside those roots fails with `RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON`, while missing, unstable, oversized, or unacknowledged evidence fails with `METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE`.
+
+Authenticated transform descendants receive isolated piped stdin so tools such as Tailwind can remain open for Metro's message exchange without inheriting the host terminal. If a child exits or does not complete its first authenticated exchange within the bounded watchdog, managed Metro records a signed `MANAGED_TRANSFORM_CHANNEL_STALLED` violation and reaps a timed-out child. That violation makes strict proof fail closed for the Metro generation instead of allowing a bundle request to hang indefinitely.
+
+On Darwin, `managed-sandbox-v1` reports an Apple-signed `/usr/bin/sandbox-exec`, Seatbelt containment proven by denial canaries, command-chain change detection at launch and receipt time, and executable mapping limited to attested runtime files and canonical `.node` addons under those same roots. Package-manager shell shims pass preflight through the same resolved command used for live launch, and live admission verifies the attested command executable. Other hosts report `unavailable`. This sandbox level is a receipt attribute, not a strict-proof precondition, and it does not claim resistance to another process running as the same OS user.
+
+The HMAC-signed runtime marker proves that the **initial bundle** came from the claimed Metro instance, session, worktree, app, platform, and build generation. It does not claim Fast Refresh source fidelity. After HMR, the coarse session binding still holds, while `sourceFidelity` remains `not-proven`.
+
+If marker signing is unavailable, Metro may emit an unsigned `unavailable` marker so development builds continue, but authoritative tools return `BUNDLE_HANDSHAKE_UNAVAILABLE`. The installed-app digest is captured once for each build generation and reused as that generation's install identity.
+
+## Tool authority
+
+All published tools have an exhaustive profile. Session-bound arguments omitted by legacy callers are filled only from the current session; a conflicting platform, device, app, port, or target returns a named authority error.
+
+Native runner reads and mutations use the exact install, Metro, device, and capability-authenticated runner identities, then prove that the bound app and device still appear on the authority-bound Metro's live target list. Cached native evidence can be consumed later only while its platform-specific runner and app-to-Metro origin remain live and authoritative. This origin check does not require a live CDP debugger seat. CDP reads and mutations additionally require the exact signed bundle target.
+
+Runner identity is immutable across an operation: process birth, endpoint capability, instance, session, claim epoch, device, app, and protocol must keep matching the binding. Operational health is checked separately and must report `ok: true`; transient health fields do not redefine identity. On iOS, `attachOnly: true` also requires an already-running target and preserves its process identity while activating it, otherwise the runner fails closed.
+
+Maestro-backed flows, including action replay, E2E lock, and E2E suite paths, transactionally park the bound native runner before dispatch. A `launchApp` stage is then followed by a managed relaunch of the exact bound app against the session's allocated Metro port; replay continues only after that exact device target re-registers. Nested replay paths inherit the same authority callbacks, so they cannot fall back to an ambient Metro. Once parked, runner authority is deliberately absent from postflight and receipt axes even when replay is refused, so a stale runner binding cannot survive the attempt.
+
+Every successful authoritative call receives a preflight/postflight authority receipt. If an axis changes during the handler, the outer result becomes `AUTHORITY_LOST_DURING_OPERATION`; a handler's apparent PASS is never preserved.
+
+## Observe, actions, proof, and feedback
+
+Observe uses its allocated port, random capability, and instance ID on every API, event-stream, state, and action request. A page from a crashed session cannot attach to a later listener.
+
+Mutable action sidecars, E2E runs, bundle state, and proof runtime state live under the session root. Recorder claims live in the session registry, while authenticated recorder sidecars and provisional media use a private user-local runtime directory; finalized media is published only to the requested output path. Canonical action YAML remains worktree knowledge. A shared `.rn-agent` symlink is materialized only when its complete corpus can be preserved; nested symlinks refuse migration.
+
+Strict proof receipts use schema v2 and include controller, source/dirty digest, install, Metro, initial-bundle marker, device, runner, proof, and per-event authority hashes. A worker replacement rejects an active proof rather than resuming it.
+
+The feedback collector reports only the current session's high-level authority, whether its allocated Metro is bound, and a count of other sessions. It never scans ports 8081/8082 as truth and never includes foreign ports, paths, PIDs, device IDs, app IDs, or capabilities.
+
+## Migration and threat boundary
+
+`rn_session status` reports store availability, registry compatibility, legacy-state detection, coarse handshake support, package integration, and the managed-sandbox tier. Legacy files are diagnostics only and are never trusted for mutation or adoption. A database from a newer schema is rejected without downgrade.
+
+This model prevents accidental cross-worktree targeting, stale-owner writes, and ambiguous local selection. It is not a security boundary against a hostile process already running as the same OS user.

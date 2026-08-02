@@ -101,13 +101,19 @@ test('cdp_network_body: hook branch drains buffer before body-cache lookup, retu
         bufDrained = true;
         return { value: JSON.stringify(payload) };
       }
-      if (expr.includes('__RN_AGENT_RESPONSE_BODIES__')) {
-        callOrder.push('body-cache');
-        // Mirror the shape the hook branch expects: JSON.stringify({body: '...'})
-        return { value: JSON.stringify({ body: '{"token":"abc"}' }) };
-      }
       // D502 freshness probe (__RN_AGENT.__v) — return a version number
       return { value: 13 };
+    },
+    send: async (method, params) => {
+      if (method === 'Runtime.evaluate') {
+        return { result: { objectId: 'body-cache' } };
+      }
+      if (method === 'Runtime.callFunctionOn') {
+        callOrder.push('body-cache');
+        assert.deepEqual(params.arguments, [{ value: 'q1' }]);
+        return { result: { value: JSON.stringify({ body: '{"token":"abc"}' }) } };
+      }
+      return {};
     },
   });
 

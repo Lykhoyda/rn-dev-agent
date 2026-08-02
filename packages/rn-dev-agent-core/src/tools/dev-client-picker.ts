@@ -149,50 +149,48 @@ export function parseFirstServerEntry(
   preferredPort?: number,
 ): string | null {
   if (typeof snapshot !== 'string' || snapshot.length === 0) return null;
+  if (preferredPort !== undefined) {
+    const exact = new Set<string>();
+    for (const match of snapshot.matchAll(PORT_PATTERN)) {
+      const host = match[1];
+      const portNum = Number.parseInt(match[2], 10);
+      if (portNum === preferredPort && looksLikeNetworkHost(host)) {
+        exact.add(`${host}:${portNum}`);
+      }
+    }
+    return exact.size === 1 ? [...exact][0] : null;
+  }
 
   const lines = snapshot
     .split('\n')
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
   const literalIps = new Set(['localhost', '127.0.0.1', '10.0.2.2']);
   for (const line of lines) {
     if (literalIps.has(line)) return line;
-    if (line.includes(':')) {
-      const head = line.split(':', 1)[0];
-      if (literalIps.has(head)) return line;
-    }
+    if (line.includes(':') && literalIps.has(line.split(':', 1)[0])) return line;
   }
 
-  // GH #523 sub-3: collect ALL port-pattern entries so we can rank instead of
-  // taking the first. Link-local (169.254.x) hosts are what the app auto-retries
-  // after a network change — they're stale by construction, so a routable entry
-  // (ideally one matching the project's Metro port) outranks them.
-  const entries: Array<{ entry: string; port: number; linkLocal: boolean }> = [];
+  const entries: Array<{ entry: string; linkLocal: boolean }> = [];
   for (const match of snapshot.matchAll(PORT_PATTERN)) {
     const host = match[1];
     const portNum = Number.parseInt(match[2], 10);
-    if (portNum < 80 || portNum > 65535) continue;
-    if (!looksLikeNetworkHost(host)) continue;
+    if (portNum < 80 || portNum > 65535 || !looksLikeNetworkHost(host)) continue;
     entries.push({
       entry: `${host}:${portNum}`,
-      port: portNum,
       linkLocal: host.startsWith('169.254.'),
     });
   }
   if (entries.length > 0) {
-    const pick =
-      (preferredPort !== undefined
-        ? entries.find((e) => !e.linkLocal && e.port === preferredPort)
-        : undefined) ??
-      entries.find((e) => !e.linkLocal) ??
-      entries[0];
-    return pick.entry;
+    return (entries.find((entry) => !entry.linkLocal) ?? entries[0]).entry;
   }
 
-  const headerIdx = lines.findIndex((line) => HEADER_PATTERNS.some((re) => re.test(line)));
-  if (headerIdx === -1) return null;
-  for (let i = headerIdx + 1; i < lines.length; i++) {
-    if (!FOOTER_ROWS.has(lines[i].toLowerCase())) return lines[i];
+  const headerIndex = lines.findIndex((line) =>
+    HEADER_PATTERNS.some((pattern) => pattern.test(line)),
+  );
+  if (headerIndex === -1) return null;
+  for (let index = headerIndex + 1; index < lines.length; index += 1) {
+    if (!FOOTER_ROWS.has(lines[index].toLowerCase())) return lines[index];
   }
   return null;
 }
@@ -224,7 +222,7 @@ async function dismissStaleServerErrorDialog(): Promise<boolean> {
       if (!found.ok || found.candidates.length === 0) continue;
       for (const label of ERROR_DIALOG_DISMISS_LABELS) {
         const button = await fetchCandidatesFn(label, true);
-        if (button.ok && button.candidates.length > 0) {
+        if (button.ok && button.candidates.length === 1) {
           const press = await pressCandidateFn(button.candidates[0] as FindCandidate, 'click');
           if (!press.isError) return true;
         }
@@ -272,6 +270,13 @@ export async function clearDevClientPickerIfPresent(
   platform?: 'ios' | 'android',
   preferredPort?: number,
 ): Promise<PickerOutcome | null> {
+  if (preferredPort === undefined) {
+    return {
+      dismissed: false,
+      platform: platform ?? null,
+      reason: 'Exact authority-bound Metro port is required; no picker row was selected.',
+    };
+  }
   // SessionState.platform is typed `string | undefined`, so narrow it to the
   // valid platforms before it can short-circuit the detectPlatform() fallback.
   const sessionPlatform = getActiveSession()?.platform;
@@ -340,7 +345,7 @@ export async function dismissPicker(preferredPort?: number): Promise<PickerResul
 
   if (target) {
     const findResult = await fetchCandidatesFn(target);
-    if (findResult.ok && findResult.candidates.length > 0) {
+    if (findResult.ok && findResult.candidates.length === 1) {
       const pressResult = await pressCandidateFn(
         findResult.candidates[0] as FindCandidate,
         'click',

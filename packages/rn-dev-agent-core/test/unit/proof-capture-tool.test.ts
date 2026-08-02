@@ -7,26 +7,131 @@ import { pathToFileURL } from 'node:url';
 import { test, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import Ajv from 'ajv';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StrictProofMonitor, type ProofObservation } from '../../dist/domain/proof-capture.js';
+import { instrumentStartupSource, STARTUP_INTEGRITY_SYMBOL } from '../../dist/startup-integrity.js';
 import {
   finalProofReceiptSchema,
   type EvidenceReview,
   type FinalProofReceipt,
 } from '../../dist/domain/proof-receipt.js';
 import {
+  captureProofWorkerStartup,
   createProofCaptureHandler,
+  isOfficialProofCandidateRemote,
   proofCaptureInputSchema,
   proofCapturePublishedInputSchema,
+  proofCandidateStartupMatches,
+  resolveProofCandidateEntrypoint,
   writeProofReceiptAtomic,
   type ProofCaptureArgs,
   type ProofCaptureDeps,
   type ProofReadiness,
 } from '../../dist/tools/proof-capture.js';
+import { createAuthorityGate } from '../../dist/session/authority-gate.js';
 import type { MediaValidationResult } from '../../dist/tools/proof-media.js';
 import type { MediaProcess, MediaValidationInput } from '../../dist/tools/proof-media.js';
 import type { DeviceRecordArgs } from '../../dist/tools/device-record.js';
 import { redact } from '../../dist/util/redact.js';
 import { failResult, okResult, type ToolResult } from '../../dist/utils.js';
+
+test('strict proof accepts only the exact GitHub repository remote', () => {
+  for (const remote of [
+    'https://github.com/Lykhoyda/rn-dev-agent.git',
+    'git@github.com:Lykhoyda/rn-dev-agent.git',
+    'ssh://git@github.com/Lykhoyda/rn-dev-agent.git',
+  ]) {
+    assert.equal(isOfficialProofCandidateRemote(remote), true);
+  }
+  for (const remote of [
+    'https://evilgithub.com/Lykhoyda/rn-dev-agent.git',
+    'git@evilgithub.com:Lykhoyda/rn-dev-agent.git',
+    'https://github.com/other/rn-dev-agent.git',
+    'file://github.com/Lykhoyda/rn-dev-agent',
+    'http://github.com/Lykhoyda/rn-dev-agent.git',
+    'git://github.com/Lykhoyda/rn-dev-agent.git',
+    'ssh://other@github.com/Lykhoyda/rn-dev-agent.git',
+  ]) {
+    assert.equal(isOfficialProofCandidateRemote(remote), false);
+  }
+});
+
+test('strict proof rejects a candidate path passed by a foreign wrapper', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'proof-entrypoint-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const coreBundle = join(
+    root,
+    'packages',
+    'codex-plugin',
+    'rn-dev-agent-core',
+    'dist',
+    'index.js',
+  );
+  await mkdir(dirname(coreBundle), { recursive: true });
+  await writeFile(coreBundle, 'export {};\n');
+
+  assert.equal(
+    resolveProofCandidateEntrypoint(root, [process.execPath, '/foreign/wrapper.js', coreBundle]),
+    null,
+  );
+  assert.equal(
+    resolveProofCandidateEntrypoint(root, [process.execPath, coreBundle])?.kind,
+    'core-index',
+  );
+});
+
+test('strict proof rejects restored disk bytes that differ from the startup bundle', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'proof-startup-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const coreBundle = join(
+    root,
+    'packages',
+    'codex-plugin',
+    'rn-dev-agent-core',
+    'dist',
+    'index.js',
+  );
+  await mkdir(dirname(coreBundle), { recursive: true });
+  const loaded = instrumentStartupSource(
+    pathToFileURL(coreBundle).href,
+    Buffer.from('tampered startup bytes\n'),
+  );
+  await writeFile(coreBundle, 'clean head bytes\n');
+  const startup = captureProofWorkerStartup([process.execPath, coreBundle], loaded.attestation);
+  const entrypoint = resolveProofCandidateEntrypoint(root, [process.execPath, coreBundle]);
+
+  assert.ok(entrypoint);
+  assert.equal(loaded.attestation.coreBundleSha256, HASH('tampered startup bytes\n'));
+  assert.equal(
+    proofCandidateStartupMatches(entrypoint, startup, HASH('clean head bytes\n')),
+    false,
+  );
+});
+
+test('startup loader attests the exact worker source supplied to Node', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'proof-loader-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const worker = join(root, 'worker.mjs');
+  const source = `console.log(JSON.stringify(globalThis[Symbol.for(${JSON.stringify(
+    STARTUP_INTEGRITY_SYMBOL,
+  )})]));\n`;
+  await writeFile(worker, source);
+
+  const stdout = execFileSync(
+    process.execPath,
+    ['--import', resolve(CORE_ROOT, 'dist/startup-integrity-register.js'), worker],
+    { encoding: 'utf8' },
+  );
+  const attestation = JSON.parse(stdout) as {
+    entrypointUrl: string;
+    coreBundleSha256: string;
+  };
+
+  assert.equal(attestation.entrypointUrl, pathToFileURL(await realpath(worker)).href);
+  assert.equal(attestation.coreBundleSha256, HASH(source));
+});
 
 const CORE_ROOT = resolve(import.meta.dirname, '../..');
 const SCHEMA_PATH = resolve(CORE_ROOT, 'schemas/proof-receipt.schema.json');
@@ -110,8 +215,26 @@ function assertionResult(path: string, verified = true): ToolResult {
   });
 }
 
+function withAuthorityReceipt(result: ToolResult): ToolResult {
+  const parsed = JSON.parse(result.content[0]!.text);
+  parsed.meta = {
+    ...parsed.meta,
+    authorityReceipt: {
+      version: 1,
+      sessionId: 'session-test',
+      claimEpoch: 1,
+      authorityVersion: 1,
+      axes: [{ axis: 'C', identity: 'controller-test' }],
+    },
+  };
+  return {
+    ...result,
+    content: [{ ...result.content[0]!, text: JSON.stringify(parsed) }, ...result.content.slice(1)],
+  };
+}
+
 function resultHash(result: ToolResult): string {
-  return HASH(JSON.stringify(result));
+  return HASH(JSON.stringify(withAuthorityReceipt(result)));
 }
 
 function baseReadiness(): ProofReadiness {
@@ -264,6 +387,8 @@ interface Harness {
   setGitInfo: (fn: () => { sha: string | null; dirty: boolean; changes: TestGitChange[] }) => void;
   setProofRootTracked: (value: boolean) => void;
   setReadiness: (fn: () => Promise<ProofReadiness>) => void;
+  setAuthorityVersion: (value: number) => void;
+  setAuthority: (fn: ProofCaptureDeps['authority']) => void;
   setActionIdentity: (value: { id: string; version: string; sha256: string } | null) => void;
   setActionIdentityReader: (
     fn: (actionId: string) => { id: string; version: string; sha256: string } | null,
@@ -339,6 +464,52 @@ function createHarness(t: TestContext, expectedProjectRoot = '/tmp/proof-project
     trustedActionIdentity();
   let actionIdentityReader = () => structuredClone(actionIdentity);
   let readinessImpl = async (): Promise<ProofReadiness> => structuredClone(readiness);
+  let authorityVersion = 2;
+  let authorityImpl: ProofCaptureDeps['authority'] = (runId) => ({
+    sessionId: 'session-test',
+    claimEpoch: 1,
+    authorityVersion,
+    controller: {
+      instanceId: 'worker-test',
+      pid: 42,
+      birthDigest: HASH('controller-birth'),
+    },
+    source: {
+      sourceKey: HASH('source'),
+      worktreeKey: HASH('worktree'),
+      appRootKey: HASH('app-root'),
+      head: SOURCE_SHA,
+      dirtyDigest: HASH('dirty'),
+    },
+    install: {
+      artifactDigest: HASH('artifact'),
+      buildGeneration: 1,
+      appId: 'dev.rnproof.fixture',
+    },
+    metro: {
+      port: 8081,
+      instanceId: 'metro-test',
+      pid: 43,
+      birthDigest: HASH('metro-birth'),
+      buildGeneration: 1,
+      sandbox: 'unavailable',
+    },
+    bundle: {
+      targetId: 'target-test',
+      connectionGeneration: 1,
+      markerDigest: HASH('marker'),
+      authorityScope: 'initial-bundle',
+      sourceFidelity: 'not-proven',
+    },
+    device: { platform: 'ios', deviceId: 'SIM-1' },
+    runner: {
+      instanceId: 'runner-test',
+      protocolVersion: 1,
+      capabilityDigest: HASH('runner-capability'),
+      processBirthDigest: HASH('runner-birth'),
+    },
+    proof: { runId },
+  });
   let recordedOutput = beginArgs(expectedProjectRoot).videoPath;
   let recordImpl = async (args: DeviceRecordArgs): Promise<ToolResult> => {
     if (args.action === 'status') return okResult({ action: 'status', active: [] });
@@ -365,6 +536,7 @@ function createHarness(t: TestContext, expectedProjectRoot = '/tmp/proof-project
     getGitInfo: () => gitImpl(),
     proofRootTracked: () => proofRootTracked,
     readiness: () => readinessImpl(),
+    authority: (runId) => authorityImpl(runId),
     record: async (args) => {
       recordCalls.push(structuredClone(args));
       return recordImpl(args);
@@ -418,6 +590,12 @@ function createHarness(t: TestContext, expectedProjectRoot = '/tmp/proof-project
     setReadiness: (fn) => {
       readinessImpl = fn;
     },
+    setAuthorityVersion: (value) => {
+      authorityVersion = value;
+    },
+    setAuthority: (fn) => {
+      authorityImpl = fn;
+    },
     setActionIdentity: (value) => {
       actionIdentity = value;
     },
@@ -440,7 +618,14 @@ function observe(
   status: 'PASS' | 'FAIL' = 'PASS',
 ): ProofObservation {
   harness.clock.value = atMs;
-  harness.monitor.record({ tool, params, status, latencyMs: 5, result });
+  const authoritativeResult = withAuthorityReceipt(result);
+  harness.monitor.record({
+    tool,
+    params,
+    status,
+    latencyMs: 5,
+    result: authoritativeResult,
+  });
   return harness.monitor.observations().at(-1)!;
 }
 
@@ -615,6 +800,23 @@ test('strict action schemas reject unknown and cross-action fields', () => {
   assert.equal(proofCaptureInputSchema.safeParse(beginArgs()).success, true);
 });
 
+test('strict proof union counterfactual rejects all five gate-bound identity keys', () => {
+  const parsed = proofCaptureInputSchema.safeParse({
+    ...beginArgs(),
+    platform: 'ios',
+    deviceId: 'SIM-1',
+    appId: 'dev.rnproof.fixture',
+    bundleId: 'dev.rnproof.fixture',
+    metroPort: 8081,
+  });
+
+  assert.equal(parsed.success, false);
+  if (parsed.success) return;
+  const issue = parsed.error.issues.find((candidate) => candidate.code === 'unrecognized_keys');
+  assert.ok(issue && issue.code === 'unrecognized_keys');
+  assert.deepEqual(issue.keys, ['platform', 'deviceId', 'appId', 'bundleId', 'metroPort']);
+});
+
 test('published proof schema is an object superset while handler schema stays branch-strict', () => {
   const published = proofCapturePublishedInputSchema.safeParse({
     action: 'status',
@@ -643,15 +845,233 @@ test('published proof schema is an object superset while handler schema stays br
   ]);
 });
 
-test('trackedTool preserves raw-shape registration and uses published object schema for proof', async () => {
-  const source = await readFile(resolve(CORE_ROOT, 'src/index.ts'), 'utf8');
-  const start = source.indexOf('function trackedTool(');
-  const end = source.indexOf('\n}\n\ntrackedTool(', start) + 2;
-  const trackedToolSource = source.slice(start, end);
-  assert.match(trackedToolSource, /schema instanceof z\.ZodType/);
-  assert.match(trackedToolSource, /server\.tool\(/);
-  assert.match(trackedToolSource, /server\.registerTool\(/);
-  assert.match(source, /proofCapturePublishedInputSchema,\s*proofCaptureHandler/);
+test('registered MCP proof surface preserves a complete begin_rehearsal payload', async (t) => {
+  const harness = createHarness(t);
+  const server = new McpServer({ name: 'proof-surface-test', version: '1.0.0' });
+  server.tool(
+    'proof_capture',
+    'Strict proof capture test surface.',
+    proofCapturePublishedInputSchema.shape,
+    harness.handler,
+  );
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: 'proof-surface-client', version: '1.0.0' });
+  t.after(async () => {
+    await client.close();
+    await server.close();
+  });
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+
+  const result = await client.callTool({
+    name: 'proof_capture',
+    arguments: beginArgs(),
+  });
+  const parsed = JSON.parse(result.content[0]!.text as string);
+
+  assert.equal(parsed.ok, true, JSON.stringify(parsed));
+  assert.deepEqual(parsed.data, { stage: 'rehearsing', runId: 'run-42' });
+});
+
+async function createGateComposedProofSurface(
+  t: TestContext,
+  options: { failFirstBeginPostflight?: boolean } = {},
+) {
+  const projectRoot = await realpath(await mkdtemp(join(tmpdir(), 'proof-gate-surface-')));
+  t.after(() => rm(projectRoot, { recursive: true, force: true }));
+  const harness = createHarness(t, projectRoot);
+  const bindings: Record<string, unknown> = {
+    install: {
+      digest: 'install-test',
+      platform: 'ios',
+      deviceId: 'SIM-1',
+      appId: 'dev.rnproof.fixture',
+    },
+    metro: { instanceId: 'metro-test', port: 8081 },
+    bundle: {
+      targetId: 'target-test',
+      connectionGeneration: 1,
+      authorityScope: 'initial-bundle',
+      sourceFidelity: 'not-proven',
+    },
+    device: { platform: 'ios', deviceId: 'SIM-1', appId: 'dev.rnproof.fixture' },
+    runner: { instanceId: 'runner-test' },
+    proof: null,
+  };
+  const status = {
+    available: true,
+    sessionId: 'session-test',
+    sourceKey: 'source-test',
+    worktreeKey: 'worktree-test',
+    appRootKey: 'app-test',
+    state: 'ready',
+    claimEpoch: 1,
+    authorityVersion: 2,
+    leaseUntilMs: Date.now() + 60_000,
+    source: { kind: 'git', appRoot: projectRoot },
+    bindings,
+    claims: [],
+    worker: { instanceId: 'worker-test', pid: 42, birthAvailable: true },
+  };
+  const replaceBindings = (
+    operation: {
+      operationId: string;
+      sessionId: string;
+      claimEpoch: number;
+      authorityVersion: number;
+    },
+    nextBindings: Record<string, unknown>,
+  ) => {
+    status.bindings = { ...status.bindings, ...nextBindings };
+    status.authorityVersion += 1;
+    return { ...operation, authorityVersion: status.authorityVersion };
+  };
+  const registry = {
+    beginOperation: (
+      _session: unknown,
+      input: { operationId: string; tool: string; profile: string },
+    ) => ({
+      operationId: input.operationId,
+      sessionId: status.sessionId,
+      claimEpoch: status.claimEpoch,
+      authorityVersion: status.authorityVersion,
+    }),
+    verifyOperation: () => undefined,
+    runWithOperation: async (
+      _operation: unknown,
+      callback: () => Promise<unknown>,
+    ): Promise<unknown> => callback(),
+    replaceBindingsDuringOperation: (
+      operation: {
+        operationId: string;
+        sessionId: string;
+        claimEpoch: number;
+        authorityVersion: number;
+      },
+      input: { bindings: Record<string, unknown> },
+    ) => replaceBindings(operation, input.bindings),
+    endOperationWithBindings: (_operation: unknown, nextBindings: Record<string, unknown>) => {
+      status.bindings = { ...status.bindings, ...nextBindings };
+      status.authorityVersion += 1;
+    },
+    commitPlatformAuthorityReceipts: () => undefined,
+    endOperation: () => undefined,
+    cancelOperation: () => undefined,
+  };
+  let failFirstBeginPostflight = options.failFirstBeginPostflight === true;
+  const gate = createAuthorityGate(
+    {
+      requireAvailable: () => ({
+        registry,
+        session: { sessionId: status.sessionId, claimEpoch: status.claimEpoch },
+      }),
+      status: () => status,
+    },
+    {
+      probe: async ({ axis, phase, tool, args }) => {
+        if (
+          failFirstBeginPostflight &&
+          phase === 'postflight' &&
+          axis === 'D' &&
+          tool === 'proof_capture' &&
+          args.action === 'begin_rehearsal'
+        ) {
+          failFirstBeginPostflight = false;
+          return { axis, identity: 'foreign-device' };
+        }
+        return { axis, identity: `${axis}-identity` };
+      },
+    },
+  );
+  const wrapped = gate.wrap('proof_capture', async (args) =>
+    harness.handler(args as ProofCaptureArgs),
+  );
+  const server = new McpServer({ name: 'proof-gate-surface-test', version: '1.0.0' });
+  server.tool(
+    'proof_capture',
+    'Strict proof capture gate-composition test surface.',
+    proofCapturePublishedInputSchema.shape,
+    async (args) => (await wrapped(args)) as ToolResult,
+  );
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: 'proof-gate-surface-client', version: '1.0.0' });
+  t.after(async () => {
+    await client.close();
+    await server.close();
+  });
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  return { client, projectRoot, status, wrapped };
+}
+
+test('gate-composed MCP proof surface accepts verified bound identity for every proof profile', async (t) => {
+  const surface = await createGateComposedProofSurface(t);
+  const begun = await surface.client.callTool({
+    name: 'proof_capture',
+    arguments: beginArgs(surface.projectRoot),
+  });
+  const beginEnvelope = JSON.parse(begun.content[0]!.text as string);
+
+  assert.equal(beginEnvelope.ok, true, JSON.stringify(beginEnvelope));
+  assert.deepEqual(beginEnvelope.data, { stage: 'rehearsing', runId: 'run-42' });
+
+  surface.status.bindings.install = null;
+  surface.status.bindings.metro = null;
+  surface.status.bindings.bundle = null;
+  surface.status.bindings.runner = null;
+  const discarded = await surface.client.callTool({
+    name: 'proof_capture',
+    arguments: { action: 'discard' },
+  });
+  const discardEnvelope = JSON.parse(discarded.content[0]!.text as string);
+
+  assert.equal(discardEnvelope.ok, true, JSON.stringify(discardEnvelope));
+  assert.deepEqual(discardEnvelope.data, { stage: 'idle', discarded: true });
+});
+
+test('failed gate-composed proof begin rolls back the real proof controller', async (t) => {
+  const surface = await createGateComposedProofSurface(t, {
+    failFirstBeginPostflight: true,
+  });
+  const rejected = await surface.client.callTool({
+    name: 'proof_capture',
+    arguments: beginArgs(surface.projectRoot),
+  });
+  const rejectedEnvelope = JSON.parse(rejected.content[0]!.text as string);
+
+  assert.equal(rejectedEnvelope.ok, false);
+  assert.equal(rejectedEnvelope.code, 'AUTHORITY_LOST_DURING_OPERATION');
+  assert.equal(surface.status.bindings.proof, null);
+
+  const retried = await surface.client.callTool({
+    name: 'proof_capture',
+    arguments: beginArgs(surface.projectRoot),
+  });
+  const retriedEnvelope = JSON.parse(retried.content[0]!.text as string);
+
+  assert.equal(retriedEnvelope.ok, true, JSON.stringify(retriedEnvelope));
+  assert.deepEqual(retriedEnvelope.data, { stage: 'rehearsing', runId: 'run-42' });
+  const discarded = await surface.client.callTool({
+    name: 'proof_capture',
+    arguments: { action: 'discard' },
+  });
+  assert.equal(JSON.parse(discarded.content[0]!.text as string).ok, true);
+});
+
+test('gate-composed proof handler rejects undeclared caller fields beyond bound identity', async (t) => {
+  const surface = await createGateComposedProofSurface(t);
+  const result = (await surface.wrapped({
+    ...beginArgs(surface.projectRoot),
+    untrustedField: true,
+  })) as ToolResult;
+  const parsed = envelope(result);
+
+  assert.equal(parsed.ok, false);
+  assert.deepEqual(parsed.meta, {
+    reasons: ['INVALID_PROOF_INPUT'],
+    stage: 'idle',
+    authoritative: false,
+  });
 });
 
 test('begin rejects root and artifact path attacks before monitor, recording, or file IO', async (t) => {
@@ -726,6 +1146,19 @@ test('begin accepts normalized distinct descendants of the injected project root
     (envelope(await harness.handler({ action: 'status' })).data as { stage: string }).stage,
     'rehearsing',
   );
+});
+
+test('begin preserves a specific managed-provenance refusal code', async (t) => {
+  const harness = createHarness(t);
+  harness.setAuthority(() => {
+    throw new Error(
+      'STRICT_PROOF_UNMANAGED_METRO: strict proof requires Metro started by the managed launcher',
+    );
+  });
+
+  const result = await harness.handler(beginArgs());
+
+  assert.deepEqual(reasons(result), ['STRICT_PROOF_UNMANAGED_METRO']);
 });
 
 test('begin binds each declared assertion wait to its canonical argument hash', async (t) => {
@@ -1555,6 +1988,22 @@ test('finalize rejects a review bound to another mechanical receipt', async (t) 
   });
 
   assert.ok(reasons(result).includes('EVIDENCE_REVIEW_TARGET_MISMATCH'), result.content[0]!.text);
+  assert.equal(harness.written.length, 0);
+});
+
+test('finalize rejects authority changed after mechanical validation', async (t) => {
+  const harness = createHarness(t);
+  await stoppedCapture(harness);
+  const validation = await harness.handler({ action: 'validate' });
+  assert.equal(envelope(validation).ok, true);
+  harness.setAuthorityVersion(3);
+
+  const result = await harness.handler({
+    action: 'finalize',
+    evidenceReview: validReview({ evidenceSha256: reviewTarget(validation) }),
+  });
+
+  assert.ok(reasons(result).includes('PROOF_AUTHORITY_CHANGED'), result.content[0]!.text);
   assert.equal(harness.written.length, 0);
 });
 

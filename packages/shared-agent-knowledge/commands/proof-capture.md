@@ -1,139 +1,84 @@
 ---
 command: proof-capture
-description: Capture PR-ready proof artifacts for a feature. Use --strict for a fail-closed proof_capture receipt; omit it for the interactive video, screenshots, and PR-body workflow.
+description: Capture PR-ready proof artifacts for a feature, with an attested fail-closed controller in strict mode.
 argument-hint: [--strict] <feature-slug> [description of flow to execute]
 allowed-tools: Bash, Read, Write, Edit, Glob, Grep, mcp__*cdp__*
 ---
 
 Capture PR proof artifacts for: $ARGUMENTS
 
-If `$ARGUMENTS` contains `--strict`, execute the strict machine workflow below.
-Otherwise, load the **capturing-proof** skill and execute its Protocol (Steps
-1–9) inline in this parent session. Use the first argument as
+If `$ARGUMENTS` contains `--strict`, execute the strict controller workflow
+below. Otherwise, load the **capturing-proof** skill and execute its Protocol
+(Steps 1–9) inline in this parent session. Use the first argument as
 `<feature-slug>` (ask the user if missing) and the remaining arguments as the
 flow description. The skill owns the interactive rehearsal gate, named
 Maestro-inexpressibility carve-out, validation checklist, PROOF.md, and
 PR-BODY.md generation; do not duplicate or improvise that protocol here.
 
-## Strict Machine Workflow (`--strict`)
+## Strict controller workflow
 
-`/rn-dev-agent:proof-capture --strict <feature-slug> [description]` is the
-human and agent entry point for the `proof_capture` tool. Every transition goes
-through `proof_capture`; no manual estimate or caller self-attestation can
-accept evidence.
+Call `proof_capture(action="contract")` first and retain the returned schema
+and digest as the receipt contract. The transition protocol is:
 
 ```text
-rehearsing -> rehearsed -> armed -> recording -> validating -> mechanically_accepted -> accepted
+begin_rehearsal -> finish_rehearsal -> arm -> start_recording
+  -> storyboard operations and proof_step assertions
+  -> stop_recording -> validate -> finalize
 ```
 
-### 1. Build the immutable proof context
+Before `begin_rehearsal`, resolve and pass the complete immutable context:
 
-Before beginning a session:
+- clean absolute Git project root and candidate root
+- unique lowercase kebab-case run id
+- fresh absolute receipt, video, contact-sheet, and screenshot paths beneath
+  `docs/proof/<run-id>/`
+- issue identity, exact pull-request head SHA, proof class, acceptance mappings,
+  fixture identity, and writer provider
+- one learned action with its id, runtime revision, and exact action-file SHA-256
+- at least three ordered storyboard steps whose source SHA equals clean `HEAD`
+- for every step, canonical operation arguments and hash, exact
+  `proof_step` arguments and hash, `verifyTestID`, screenshot path, and a
+  bounded `assertionWaitMs`
 
-1. Resolve the absolute Git worktree root and require a clean source tree.
-2. Resolve the issue, pull request head SHA, proof class, acceptance criteria,
-   fixture identity, and current writer provider. Stop before beginning if any
-   required value is unknown.
-3. Select one existing learned action and pin its id, runtime revision, and
-   SHA-256 of the exact `.rn-agent/actions/<id>.yaml` bytes. The action must not
-   change for the rest of the run.
-4. Create a unique lowercase kebab-case run id. All destinations must be fresh,
-   absolute descendants of `docs/proof/<run-id>/`: `proof.mp4`,
-   `proof-contact-sheet.jpg`, `proof-receipt.json`, and the declared screenshot
-   paths.
-5. Define a typed storyboard whose source SHA equals the clean Git `HEAD` and
-   whose operation and assertion argument hashes are computed from canonical recursively
-   key-sorted, redacted JSON.
-   Declare at least three storyboard steps, each with one result-bound screenshot and one passing assertion.
-6. For every step, declare the exact operation tool, operation argument hash,
-   assertion tool, `verifyTestID`, screenshot path, and `assertionWaitMs` from
-   0–10000. Bind `assertionArgsSha256` to the exact
-   `proof_step(verifyTestID=..., screenshotPath=..., waitMs=assertionWaitMs)`
-   arguments. Keep the first step at zero wait for start-state freshness. A
-   short bounded wait for later animated transitions lets assertions capture
-   stable destination states.
-7. When the driven app fixture lives outside this plugin repository, resolve the
-   absolute plugin worktree root and pass it as `candidateRoot`. The tool binds
-   that repository's `HEAD`, packaged core-bundle and runner-manifest digests,
-   and the live MCP process identity into the receipt, and refuses with
-   `CANDIDATE_SHA_MISMATCH` unless that SHA equals `pullRequest.headSha`.
+When the driven app is outside this plugin repository, `candidateRoot` is
+mandatory and must identify the exact candidate checkout. Any candidate SHA,
+packaged runtime, runner manifest, live MCP process, project root, Metro
+session, port, device, or build-output mismatch is a hard stop.
 
-Use the rehearsal duration reported by `finish_rehearsal`; do not estimate
-video time or label ranges manually:
+Execute the transitions exactly:
 
-```text
-minimum = floor(rehearsalDurationMs * 0.8)
-targetMaximum = min(ceil(rehearsalDurationMs * 1.5 + 10000), 120000)
-hardMaximum = targetMaximum + 5000
-```
+1. Call `begin_rehearsal` with the immutable context.
+2. Call only `cdp_run_action(autoRepair=false, forceReload=false,
+   proofReplay=true)` during rehearsal, then call `finish_rehearsal`.
+3. Restore the declared start state, run its exact `proof_step`, call `arm`,
+   and repeat that assertion.
+4. Call `start_recording`; never call `device_record` directly.
+5. Execute each storyboard operation once in order and immediately follow it
+   with its declared `proof_step`. Do not add undeclared tools.
+6. Call `stop_recording`, then `validate`.
+7. Give the mechanically accepted receipt and contact sheet to a
+   vision-capable reviewer whose provider differs from the writer. The review
+   must bind `writerProvider`, `evidenceSha256`, `resultHash`, and the exact
+   boolean verdicts required by the receipt schema.
+8. Call `finalize(evidenceReview=...)` and report only values from the accepted
+   finalized receipt.
 
-The adaptive target includes a 10-second API/device timing grace and is capped at two minutes.
-A clip above `targetMaximum` is accepted only when every frame, semantic, timing, Git/runtime/error, and final evidence-review gate passes.
-The five-second tolerance is not an independent bypass, and any clip above `hardMaximum` fails with `VIDEO_TOO_LONG`.
+The controller requires managed Metro ownership, a serving root contained by
+the bound worktree, a signed initial-bundle marker, exact device and install
+bindings, and the source and dirty digest. Darwin receipts report
+`managed-sandbox-v1` when the Apple-signed absolute-path Seatbelt sandbox and
+command-chain change detection are available; other hosts report `unavailable`.
+The sandbox level is evidence, not a strict-proof precondition.
+Do not record before the controller permits it, substitute screenshots for the
+required video, repair or reload during rehearsal or recording, reuse rejected
+artifacts, or report merge-ready evidence without a finalized accepted receipt.
 
-### 2. Execute every strict transition
+When stage is uncertain, call `status`. On rejection, print the stable reason
+code exactly, call `discard`, restore the clean start state, and begin a fresh
+session with fresh destinations. Strict output contains only the accepted
+receipt path, screenshot paths, local video path and SHA-256, contact-sheet
+path, action and storyboard hashes, or the exact invalidation reason.
 
-1. Start the session with the complete immutable context:
-   `proof_capture(action="begin_rehearsal", projectRoot=..., receiptPath=..., videoPath=..., contactSheetPath=..., writerProvider=..., runId=..., issue=..., pullRequest=..., proofClass=..., acceptanceMappings=..., fixture=..., proofAction=..., storyboard=..., candidateRoot=...)`.
-2. During rehearsal, call only
-   `cdp_run_action(actionId=..., autoRepair=false, forceReload=false, proofReplay=true)`.
-   Then immediately call `proof_capture(action="finish_rehearsal")`.
-3. Re-establish the declared start state and call the first step's exact
-   `proof_step`. Call `proof_capture(action="arm")`, then call the same start
-   assertion once more so recording start is bound to a fresh post-arm result.
-4. Call `proof_capture(action="start_recording")`. Do not call `device_record`
-   directly.
-5. Execute each storyboard operation once, in order. Immediately follow every
-   operation with its declared `proof_step`; do not add undeclared tools.
-6. Call `proof_capture(action="stop_recording")`. The tool owns recorder
-   shutdown, the saved-path check, and result-bound evidence derivation.
-7. Call `proof_capture(action="validate")`. The tool validates the event trace,
-   adaptive duration, hashes, screenshots, frame matches, contact sheet, Git
-   authority, device/runtime identity, Metro continuity, and error baseline.
-8. Give the mechanically accepted receipt and contact sheet to a vision-capable
-   reviewer whose provider differs from the writer. Require an independent
-   review with `exactFeature=true`, `irrelevantScreens=false`,
-   `debuggingFriction=false`, and `personalData=false`. The review must name its
-   provider, repeat the session's `writerProvider`, echo the validation result's
-   `reviewTargetSha256` as `evidenceSha256`, and bind the reviewed output with
-   `resultHash`. Then call
-   `proof_capture(action="finalize", evidenceReview=...)`.
-
-### 3. Fail closed
-
-Any video start, stop, path, device, media, or validation failure is a hard stop.
-Screenshots never downgrade or replace the required video.
-Strict mode never asks whether to re-record; discard the rejected capture and begin a fresh rehearsal.
-Do not provide GitHub drag-and-drop or PR-upload instructions in strict mode.
-
-Call `proof_capture(action="status")` when the current stage is uncertain. On
-rejection, print the returned stable reason code exactly, call
-`proof_capture(action="discard")`, restore the clean start state, and create a
-new session from `begin_rehearsal`. Never reuse a rejected clip, screenshot, or
-receipt destination.
-
-Repair, reload, restart, reset, Dev Client dismissal, or any other debugging during recording invalidates the capture.
-Action repair and reload are also
-forbidden during rehearsal: use
-`autoRepair=false, forceReload=false, proofReplay=true`. If the learned action
-needs repair, discard the session, repair and replay it outside strict capture,
-then begin again with its new identity and clean Git state.
-
-### Strict result
-
-Print only:
-
-- accepted receipt path
-- screenshot paths
-- local video path and SHA-256 hash
-- contact-sheet path
-- action and storyboard SHA-256 hashes
-- exact invalidation reason on failure
-
-Do not print time estimates, manual visual-validation claims, GIF/label status,
-PR-body instructions, or upload instructions. Read accepted values from the
-`finalize` receipt; never reconstruct or self-attest them.
-
-## Interactive Compatibility
+## Interactive workflow
 
 Interactive mode is delegated to the capturing-proof skill as described above.

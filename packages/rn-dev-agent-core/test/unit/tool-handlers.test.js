@@ -306,6 +306,27 @@ test('error_log: returns error entries', async () => {
   assert.equal(data.errors[0].message, 'TypeError');
 });
 
+test('error_log: returns bounded startup errors before helpers are injected', async () => {
+  const client = createMockClient({
+    helpersInjected: false,
+    evaluate: async () => ({
+      value: JSON.stringify([
+        {
+          message: 'Requiring unknown module "5481"',
+          isFatal: true,
+          type: 'startup',
+          timestamp: '2026-07-29T19:42:15.000Z',
+        },
+      ]),
+    }),
+  });
+  const handler = createErrorLogHandler(() => client);
+  const data = expectOk(await handler({ clear: false }));
+
+  assert.equal(data.count, 1);
+  assert.equal(data.errors[0].type, 'startup');
+});
+
 test('error_log: returns hint when no errors', async () => {
   const client = createMockClient({
     evaluate: async () => ({ value: JSON.stringify([]) }),

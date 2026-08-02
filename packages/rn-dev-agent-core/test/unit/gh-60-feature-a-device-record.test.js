@@ -7,36 +7,51 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   candidateRecordScripts,
+  parseRecorderFailure,
   parseStartOutput,
   parseStopOutput,
   parseStatusOutput,
   resolveRecordScript,
 } from '../../dist/tools/device-record.js';
 
+const processBirth = 'a'.repeat(64);
+
+test('parseRecorderFailure: extracts terminal supervisor failures', () => {
+  assert.equal(
+    parseRecorderFailure('Recorder failed: supervisor terminated unexpectedly\n'),
+    'supervisor terminated unexpectedly',
+  );
+  assert.equal(parseRecorderFailure('Saved: proof.mp4 (42 bytes)\n'), null);
+});
+
 // ── parseStartOutput ────────────────────────────────────────────────────
 
 test('parseStartOutput: extracts pid + output path on success', () => {
-  const stdout = 'Recording started: platform=ios pid=12345 output=/tmp/proof-ios.mp4\n';
+  const stdout = `Recording started: platform=ios pid=12345 birth=${processBirth} output=/tmp/proof-ios.mp4\n`;
   const parsed = parseStartOutput(stdout);
-  assert.deepEqual(parsed, { pid: 12345, output: '/tmp/proof-ios.mp4' });
+  assert.deepEqual(parsed, { pid: 12345, processBirth, output: '/tmp/proof-ios.mp4' });
 });
 
 test('parseStartOutput: handles android', () => {
-  const stdout = 'Recording started: platform=android pid=67890 output=/tmp/proof-android.mp4\n';
+  const stdout = `Recording started: platform=android pid=67890 birth=${processBirth} output=/tmp/proof-android.mp4\n`;
   const parsed = parseStartOutput(stdout);
-  assert.deepEqual(parsed, { pid: 67890, output: '/tmp/proof-android.mp4' });
+  assert.deepEqual(parsed, { pid: 67890, processBirth, output: '/tmp/proof-android.mp4' });
 });
 
 test('parseStartOutput: handles paths with spaces', () => {
-  const stdout = 'Recording started: platform=ios pid=42 output=/tmp/my proof file.mp4\n';
+  const stdout = `Recording started: platform=ios pid=42 birth=${processBirth} output=/tmp/my proof file.mp4\n`;
   const parsed = parseStartOutput(stdout);
-  assert.deepEqual(parsed, { pid: 42, output: '/tmp/my proof file.mp4' });
+  assert.deepEqual(parsed, { pid: 42, processBirth, output: '/tmp/my proof file.mp4' });
 });
 
 test('parseStartOutput: returns null when no match', () => {
   assert.equal(parseStartOutput(''), null);
   assert.equal(parseStartOutput('Error: No iOS simulator booted'), null);
   assert.equal(parseStartOutput('something unrelated'), null);
+  assert.equal(
+    parseStartOutput('Recording started: platform=ios pid=42 output=/tmp/proof.mp4'),
+    null,
+  );
 });
 
 // ── parseStopOutput ─────────────────────────────────────────────────────
@@ -93,17 +108,23 @@ test('parseStatusOutput: returns empty when no active recordings', () => {
 });
 
 test('parseStatusOutput: parses single recording line', () => {
-  const stdout = 'ios: pid=12345 status=recording output=/tmp/proof.mp4\n';
+  const stdout = 'ios: pid=12345 birth=birth-a status=recording output=/tmp/proof.mp4\n';
   const result = parseStatusOutput(stdout);
   assert.deepEqual(result, [
-    { platform: 'ios', pid: 12345, status: 'recording', output: '/tmp/proof.mp4' },
+    {
+      platform: 'ios',
+      pid: 12345,
+      processBirth: 'birth-a',
+      status: 'recording',
+      output: '/tmp/proof.mp4',
+    },
   ]);
 });
 
 test('parseStatusOutput: parses multiple platforms simultaneously', () => {
   const stdout = [
-    'ios: pid=111 status=recording output=/tmp/ios.mp4',
-    'android: pid=222 status=recording output=/tmp/android.mp4',
+    'ios: pid=111 birth=birth-ios status=recording output=/tmp/ios.mp4',
+    'android: pid=222 birth=birth-android status=recording output=/tmp/android.mp4',
     '',
   ].join('\n');
   const result = parseStatusOutput(stdout);
@@ -115,13 +136,13 @@ test('parseStatusOutput: parses multiple platforms simultaneously', () => {
 });
 
 test('parseStatusOutput: surfaces dead processes', () => {
-  const stdout = 'ios: pid=12345 status=dead output=/tmp/proof.mp4\n';
+  const stdout = 'ios: pid=12345 birth=birth-a status=dead output=/tmp/proof.mp4\n';
   const result = parseStatusOutput(stdout);
   assert.equal(result[0].status, 'dead');
 });
 
 test('parseStatusOutput: handles paths with spaces', () => {
-  const stdout = 'android: pid=42 status=recording output=/tmp/my proof file.mp4\n';
+  const stdout = 'android: pid=42 birth=birth-a status=recording output=/tmp/my proof file.mp4\n';
   const result = parseStatusOutput(stdout);
   assert.equal(result[0].output, '/tmp/my proof file.mp4');
 });
@@ -130,7 +151,7 @@ test('parseStatusOutput: surfaces orphaned pid rows with empty output (Gemini re
   // record_proof.sh:220 emits `output=` (empty) when the .path sidecar is
   // missing — orphaned .pid from a crashed prior session. The row must
   // surface so the operator can manually clean up, not be silently dropped.
-  const stdout = 'ios: pid=99999 status=dead output=\n';
+  const stdout = 'ios: pid=99999 birth=unbound status=dead output=\n';
   const result = parseStatusOutput(stdout);
   assert.equal(result.length, 1, 'orphaned pid row must NOT be dropped');
   assert.equal(result[0].pid, 99999);
@@ -166,7 +187,23 @@ test('createDeviceRecordHandler: status when script missing returns fail (not cr
   delete process.env.CLAUDE_PLUGIN_ROOT;
   try {
     const { createDeviceRecordHandler } = await import('../../dist/tools/device-record.js');
-    const handler = createDeviceRecordHandler();
+    const session = { sessionId: 'session-a', claimEpoch: 1 };
+    const runtime = {
+      requireAvailable: () => ({ registry: {}, session }),
+      status: () => ({
+        available: true,
+        sessionId: session.sessionId,
+        claimEpoch: session.claimEpoch,
+        bindings: {
+          device: { platform: 'ios', deviceId: 'device-a' },
+          recorder: {
+            script: process.env.RN_DEV_AGENT_RECORD_PROOF_SCRIPT,
+            scope: 'a'.repeat(64),
+          },
+        },
+      }),
+    };
+    const handler = createDeviceRecordHandler({ runtime });
     const result = await handler({ action: 'status' });
     // Script not found → execFile rejects → failResult
     assert.equal(result.isError, true);

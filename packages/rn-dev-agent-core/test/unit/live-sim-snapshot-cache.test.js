@@ -14,10 +14,16 @@ import assert from 'node:assert/strict';
 import {
   cacheSnapshot,
   getCachedSnapshot,
+  getCachedSnapshotEvidence,
   markSnapshotDirty,
   isSnapshotCacheValid,
+  setSnapshotAuthorityProvider,
+  validateCachedSnapshotAuthority,
 } from '../../dist/agent-device-wrapper.js';
-import { toolInvalidatesSnapshotCache } from '../../dist/observability/live-device.js';
+import {
+  resolveSnapshotInvalidationPlatform,
+  toolInvalidatesSnapshotCache,
+} from '../../dist/observability/live-device.js';
 
 const NODES = [{ ref: '@e0', label: 'Continue', type: 'Button', hittable: true }];
 
@@ -30,13 +36,13 @@ test('snapshot cache: a freshly cached snapshot is valid', () => {
 test('snapshot cache: a mutating verb invalidates the cache (content staleness)', () => {
   cacheSnapshot('ios', NODES);
   assert.equal(isSnapshotCacheValid('ios'), true);
-  markSnapshotDirty();
+  markSnapshotDirty('ios');
   assert.equal(isSnapshotCacheValid('ios'), false, 'a tap/press must invalidate the cache');
 });
 
 test('snapshot cache: re-caching after a mutation makes it valid (clean) again', () => {
   cacheSnapshot('ios', NODES);
-  markSnapshotDirty();
+  markSnapshotDirty('ios');
   assert.equal(isSnapshotCacheValid('ios'), false);
   cacheSnapshot('ios', NODES); // a fresh snapshot taken after the screen settled
   assert.equal(isSnapshotCacheValid('ios'), true);
@@ -54,13 +60,195 @@ test('snapshot cache: an over-age cache is invalid even when clean (TTL)', () =>
   assert.equal(isSnapshotCacheValid('ios', -1), false);
 });
 
-test('snapshot cache: dirty flag is global but validity is keyed per platform read', () => {
-  // markSnapshotDirty invalidates the active device's cache; a subsequent fresh
-  // cache for that platform clears it. (The bridge drives one device at a time.)
+test('snapshot cache invalidation is scoped to the mutated platform', () => {
+  cacheSnapshot('ios', NODES);
   cacheSnapshot('android', NODES);
+  markSnapshotDirty('ios');
+
+  assert.equal(isSnapshotCacheValid('ios'), false);
   assert.equal(isSnapshotCacheValid('android'), true);
-  markSnapshotDirty();
-  assert.equal(isSnapshotCacheValid('android'), false);
+  assert.equal(getCachedSnapshotEvidence('ios'), undefined);
+  assert.deepEqual(getCachedSnapshotEvidence('android')?.nodes, NODES);
+});
+
+test('capturing another platform cannot clean stale evidence', () => {
+  cacheSnapshot('ios', NODES);
+  markSnapshotDirty('ios');
+  cacheSnapshot('android', NODES);
+
+  assert.equal(getCachedSnapshotEvidence('ios'), undefined);
+  assert.deepEqual(getCachedSnapshotEvidence('android')?.nodes, NODES);
+});
+
+test('snapshot cache preserves exact per-platform receipts within one source generation', () => {
+  let platform = 'ios';
+  let deviceId = 'ios-device';
+  const valid = new Set();
+  setSnapshotAuthorityProvider({
+    current: () => ({
+      sessionId: 'session-a',
+      claimEpoch: 1,
+      sourceKey: 'source-a',
+      worktreeKey: 'worktree-a',
+      appRootKey: 'app-a',
+      platform,
+      deviceId,
+      appId: 'dev.example',
+      buildGeneration: 1,
+      installGeneration: `${platform}-install`,
+      artifactDigest: `${platform}-artifact`,
+      runnerInstanceId: `${platform}-runner`,
+      runnerPid: 123,
+      runnerProcessBirth: `${platform}-birth`,
+      runnerCapabilityHash: `${platform}-capability`,
+      runnerPort: platform === 'ios' ? 9100 : 9200,
+      runnerClaim: `${platform}:${deviceId}`,
+      deviceClaim: `${platform}:${deviceId}`,
+    }),
+    record: (receipt) => valid.add(JSON.stringify(receipt)),
+    validate: (receipt) => valid.has(JSON.stringify(receipt)),
+  });
+  cacheSnapshot('ios', NODES);
+  platform = 'android';
+  deviceId = 'android-device';
+  cacheSnapshot('android', NODES);
+
+  assert.deepEqual(getCachedSnapshot('ios')?.nodes, NODES);
+  assert.deepEqual(getCachedSnapshot('android')?.nodes, NODES);
+  setSnapshotAuthorityProvider(null);
+});
+
+test('snapshot cache rejects cross-session and stale-source receipts', () => {
+  let sessionId = 'session-a';
+  const source = {
+    claimEpoch: 1,
+    sourceKey: 'source-a',
+    worktreeKey: 'worktree-a',
+    appRootKey: 'app-a',
+    platform: 'ios',
+    deviceId: 'ios-device',
+    appId: 'dev.example',
+    buildGeneration: 1,
+    installGeneration: 'ios-install',
+    artifactDigest: 'ios-artifact',
+    runnerInstanceId: 'ios-runner',
+    runnerPid: 123,
+    runnerProcessBirth: 'ios-birth',
+    runnerCapabilityHash: 'ios-capability',
+    runnerPort: 9100,
+    runnerClaim: 'ios:ios-device',
+    deviceClaim: 'ios:ios-device',
+  };
+  const valid = new Set();
+  setSnapshotAuthorityProvider({
+    current: () => ({ ...source, sessionId }),
+    record: (receipt) => valid.add(JSON.stringify(receipt)),
+    validate: (receipt) => valid.has(JSON.stringify(receipt)),
+  });
+  cacheSnapshot('ios', NODES);
+  sessionId = 'session-b';
+
+  assert.equal(getCachedSnapshot('ios'), undefined);
+  setSnapshotAuthorityProvider(null);
+});
+
+test('snapshot cache rejects a receipt invalidated by persistent platform authority', () => {
+  let valid = true;
+  setSnapshotAuthorityProvider({
+    current: () => ({
+      sessionId: 'session-a',
+      claimEpoch: 1,
+      sourceKey: 'source-a',
+      worktreeKey: 'worktree-a',
+      appRootKey: 'app-a',
+      platform: 'ios',
+      deviceId: 'ios-device',
+      appId: 'dev.example',
+      buildGeneration: 1,
+      installGeneration: 'ios-install',
+      artifactDigest: 'ios-artifact',
+      runnerInstanceId: 'ios-runner',
+      runnerPid: 123,
+      runnerProcessBirth: 'ios-birth',
+      runnerCapabilityHash: 'ios-capability',
+      runnerPort: 9100,
+      runnerClaim: 'ios:ios-device',
+      deviceClaim: 'ios:ios-device',
+    }),
+    record: () => {},
+    validate: () => valid,
+  });
+  cacheSnapshot('ios', NODES);
+  valid = false;
+
+  assert.equal(getCachedSnapshot('ios'), undefined);
+  setSnapshotAuthorityProvider(null);
+});
+
+test('snapshot cache rejects unavailable live runner authority', async () => {
+  setSnapshotAuthorityProvider({
+    current: () => ({
+      sessionId: 'session-a',
+      claimEpoch: 1,
+      sourceKey: 'source-a',
+      worktreeKey: 'worktree-a',
+      appRootKey: 'app-a',
+      platform: 'ios',
+      deviceId: 'ios-device',
+      appId: 'dev.example',
+      buildGeneration: 1,
+      installGeneration: 'ios-install',
+      artifactDigest: 'ios-artifact',
+      runnerInstanceId: 'ios-runner',
+      runnerPid: 123,
+      runnerProcessBirth: 'ios-birth',
+      runnerCapabilityHash: 'ios-capability',
+      runnerPort: 9100,
+      runnerClaim: 'ios:ios-device:9100',
+      deviceClaim: 'ios:ios-device',
+    }),
+    record: () => {},
+    validate: () => true,
+    validateLive: async () => false,
+  });
+  cacheSnapshot('ios', NODES);
+
+  assert.equal(await validateCachedSnapshotAuthority('ios'), false);
+  setSnapshotAuthorityProvider(null);
+});
+
+test('snapshot evidence remains available after live runner authority is released', async () => {
+  setSnapshotAuthorityProvider({
+    current: () => ({
+      sessionId: 'session-a',
+      claimEpoch: 1,
+      sourceKey: 'source-a',
+      worktreeKey: 'worktree-a',
+      appRootKey: 'app-a',
+      platform: 'ios',
+      deviceId: 'ios-device',
+      appId: 'dev.example',
+      buildGeneration: 1,
+      installGeneration: 'ios-install',
+      artifactDigest: 'ios-artifact',
+      runnerInstanceId: 'ios-runner',
+      runnerPid: 123,
+      runnerProcessBirth: 'ios-birth',
+      runnerCapabilityHash: 'ios-capability',
+      runnerPort: 9100,
+      runnerClaim: 'ios:ios-device:9100',
+      deviceClaim: 'ios:ios-device',
+    }),
+    record: () => {},
+    validate: () => false,
+    validateEvidence: () => true,
+    validateLive: async () => false,
+  });
+  cacheSnapshot('ios', NODES);
+
+  assert.equal(await validateCachedSnapshotAuthority('ios'), false);
+  assert.deepEqual(getCachedSnapshotEvidence('ios')?.nodes, NODES);
+  setSnapshotAuthorityProvider(null);
 });
 
 // toolInvalidatesSnapshotCache: the FAIL-SAFE rule at the MCP tool boundary.
@@ -131,6 +319,38 @@ test('cache invalidation: device_find is a read unless it taps (action=click)', 
   assert.equal(toolInvalidatesSnapshotCache('device_find', { action: 'click' }), true);
 });
 
+test('cache invalidation: snapshot open invalidates while capture and close preserve', () => {
+  assert.equal(toolInvalidatesSnapshotCache('device_snapshot', { action: 'open' }), true);
+  assert.equal(toolInvalidatesSnapshotCache('device_snapshot', { action: 'snapshot' }), false);
+  assert.equal(toolInvalidatesSnapshotCache('device_snapshot', { action: 'close' }), false);
+});
+
+test('cache invalidation: snapshot open targets the requested platform', () => {
+  assert.equal(
+    resolveSnapshotInvalidationPlatform(
+      'device_snapshot',
+      { action: 'open', platform: 'android' },
+      'ios',
+    ),
+    'android',
+  );
+  assert.equal(
+    resolveSnapshotInvalidationPlatform('device_snapshot', { action: 'open' }, 'android'),
+    'android',
+  );
+  assert.equal(
+    resolveSnapshotInvalidationPlatform('rn_session', { platform: 'android' }, 'ios'),
+    'android',
+  );
+  assert.equal(resolveSnapshotInvalidationPlatform('cdp_reload', undefined, 'ios'), 'ios');
+});
+
+test('cache invalidation: session switching preserves evidence but app launch invalidates it', () => {
+  assert.equal(toolInvalidatesSnapshotCache('rn_session', { action: 'bind_device' }), false);
+  assert.equal(toolInvalidatesSnapshotCache('rn_session', { action: 'release' }), false);
+  assert.equal(toolInvalidatesSnapshotCache('rn_session', { action: 'pin_dev_client' }), true);
+});
+
 test('cache invalidation: fail-safe — an unknown/new tool invalidates by default', () => {
   assert.equal(toolInvalidatesSnapshotCache('some_future_tool_we_have_not_classified'), true);
 });
@@ -171,7 +391,23 @@ test('source guard: the central trackedTool boundary wires fail-safe cache inval
   );
   assert.match(
     src,
-    /markSnapshotDirty\(\)/,
+    /markSnapshotDirty\(/,
     'trackedTool must invalidate the cache for mutating tools',
   );
+  assert.match(
+    src,
+    /finally\s*\{[\s\S]*resolveSnapshotInvalidationPlatform\(/,
+    'trackedTool must resolve invalidation authority after the gate returns',
+  );
+});
+
+test('source guard: snapshot recovery invalidates before relaunching', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { fileURLToPath } = await import('node:url');
+  const { dirname, join } = await import('node:path');
+  const __dirname = dirname(fileURLToPath(import.meta.url));
+  for (const file of ['device-session.js', 'device-interact.js']) {
+    const src = readFileSync(join(__dirname, `../../dist/tools/${file}`), 'utf-8');
+    assert.match(src, /markSnapshotDirty\(session\?\.platform\)/);
+  }
 });

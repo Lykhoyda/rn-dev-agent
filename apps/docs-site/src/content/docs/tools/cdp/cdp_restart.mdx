@@ -1,16 +1,18 @@
 ---
 title: "cdp_restart"
-description: "In-process soft state reset"
+description: "Reset and reconnect the authority-bound Hermes client"
 ---
 
-In-process soft state reset. Disconnects the current CDP client, creates a fresh instance, and reconnects. Clears console/network/error ring buffers, background poll, reconnect state, and helpers-injected flag. Does NOT reload the MCP server binary — to load new dist/ after npm run build, fully quit and relaunch Claude Code. Pass hardReset=true to also kill the fast-runner xcodebuild rig and terminate+relaunch the target app via simctl — recovers from the "JS thread paused / app backgrounded" wedge (B154 shape) without requiring a manual /reload-plugins. Useful for recovering from stuck connection state (target drift, stale helpers after many reloads) without losing the CC session.
+Reset and reconnect the authority-bound Hermes client. hardReset relaunches only the exact claimed iOS simulator or Android device/app; success requires a fresh signed runtime binding committed under the operation fence.
 
 ## Parameters
 
 | Name | Type | Required | Default | Constraints | Description |
 |------|------|----------|---------|-------------|-------------|
 | `metroPort` | `unknown` | No |  |  | Override Metro port for reconnection (default: keep current) |
-| `platform` | `unknown` | No |  |  | Platform filter for reconnection (e.g. "ios", "android") |
+| `platform` | `unknown` | No |  |  | Authority-bound platform; conflicting values are refused |
+| `deviceId` | `unknown` | No |  |  | Authority-bound exact device identifier; normally injected by the session |
+| `appId` | `unknown` | No |  |  | Authority-bound exact app identifier; normally injected by the session |
 | `hardReset` | `unknown` | No |  |  |  |
 | `bundleId` | `unknown` | No |  |  |  |
 

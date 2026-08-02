@@ -69,7 +69,7 @@ NO-IMPACT**. Changelogs are SECONDARY — open the file and verify the claim bef
 | Profiling (heap / CPU) | `packages/rn-dev-agent-core/src/tools/profiling.ts` |
 | Maestro flow YAML / CLI flags / runner protocol | `packages/rn-dev-agent-core/src/maestro-invoke.ts` (flow built via `buildMaestroFlow` + `domain/maestro-validator.ts`, `--app-file` per GH #201, runner→CLI tiered dispatch), `packages/rn-dev-agent-core/src/tools/maestro-run.ts` |
 | agent-device verbs / args / protocol (Android) | `packages/rn-dev-agent-core/src/agent-device-wrapper.ts` (verbs `tap/fill/swipe/scroll/longpress/pinch/snapshot/screenshot/back`; args `--hold-ms`, `interactiveOnly`, `bundleId`), `packages/rn-dev-agent-core/src/runners/rn-android-runner-client.ts` |
-| Node minimum version | `packages/rn-dev-agent-core/package.json` → `engines.node` (`>=22`) |
+| Node minimum version | `packages/rn-dev-agent-core/package.json` → `engines.node` (`>=22.5`) |
 
 ## Step 3 — BREAKING is any of:
 

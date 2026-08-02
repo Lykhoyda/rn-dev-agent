@@ -22,7 +22,7 @@ const errClose = (error, code) => ({
 
 // Base deps factory: stopAndroidRunner is a no-op async spy by default.
 function makeDeps(overrides = {}) {
-  const calls = { clear: 0, stop: 0, stopAndroid: 0, release: 0, close: 0 };
+  const calls = { clear: 0, stop: 0, stopAndroid: 0, finalize: 0, release: 0, close: 0 };
   const deps = {
     hasActiveSession: () => true,
     closeUnderlyingSession: async () => {
@@ -38,6 +38,9 @@ function makeDeps(overrides = {}) {
     stopAndroidRunner: async () => {
       calls.stopAndroid++;
     },
+    finalizeSuccessfulClose: async () => {
+      calls.finalize++;
+    },
     releaseDeviceLock: () => {
       calls.release++;
     },
@@ -46,12 +49,13 @@ function makeDeps(overrides = {}) {
   return { deps, calls };
 }
 
-test('#244 no in-memory session → ok no-op; underlying close NOT called', async () => {
+test('#244 no in-memory session → finalizes authority without underlying close', async () => {
   const { deps, calls } = makeDeps({ hasActiveSession: () => false });
   const r = await closeDeviceSession(deps);
   assert.equal(r.isError, undefined);
   assert.match(r.content[0].text, /No active session to close/);
   assert.equal(calls.close, 0);
+  assert.equal(calls.finalize, 1);
 });
 
 test('#244 close succeeds → ok; cleanup all called once', async () => {
@@ -61,8 +65,37 @@ test('#244 close succeeds → ok; cleanup all called once', async () => {
   assert.equal(calls.clear, 1);
   assert.equal(calls.stop, 1);
   assert.equal(calls.stopAndroid, 1);
+  assert.equal(calls.finalize, 1);
   assert.equal(calls.release, 1);
   assert.equal(calls.close, 1);
+});
+
+test('#244 close finalization failure preserves session context and lock', async () => {
+  const { deps, calls } = makeDeps({
+    finalizeSuccessfulClose: async () => {
+      calls.finalize++;
+      throw new Error('RUNNER_AUTHORITY_RELEASE_FAILED');
+    },
+  });
+
+  await assert.rejects(() => closeDeviceSession(deps), /RUNNER_AUTHORITY_RELEASE_FAILED/);
+  assert.equal(calls.finalize, 1);
+  assert.equal(calls.clear, 0);
+  assert.equal(calls.release, 0);
+});
+
+test('#244 failed runner teardown preserves session context and lock', async () => {
+  const { deps, calls } = makeDeps({
+    stopFastRunner: async () => {
+      calls.stop++;
+      throw new Error('RUNNER_ADOPTION_REQUIRED: identity unknown');
+    },
+  });
+
+  await assert.rejects(() => closeDeviceSession(deps), /RUNNER_ADOPTION_REQUIRED/);
+  assert.equal(calls.clear, 0);
+  assert.equal(calls.stopAndroid, 0);
+  assert.equal(calls.release, 0);
 });
 
 test('#244 SESSION_NOT_FOUND after a flow → ok with sessionAlreadyGone; cleanup all called', async () => {
@@ -79,6 +112,7 @@ test('#244 SESSION_NOT_FOUND after a flow → ok with sessionAlreadyGone; cleanu
   assert.equal(calls.clear, 1);
   assert.equal(calls.stop, 1);
   assert.equal(calls.stopAndroid, 1);
+  assert.equal(calls.finalize, 1);
   assert.equal(calls.release, 1);
   assert.equal(calls.close, 1);
 });

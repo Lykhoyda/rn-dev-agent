@@ -51,9 +51,10 @@ test('GH#202 process exit releases the UDID lock', () => {
   assert.match(indexSrc, /releaseDeviceLockForSession/);
 });
 
-test('GH#202 Android open uses native resolvers (no UDID_RE parse from agent-device)', () => {
-  assert.match(sessionSrc, /resolveAndroidSerial\(/);
-  assert.match(sessionSrc, /resolveIosUdid\(/);
+test('GH#202 open requires the authority-injected exact device (no ambient resolver)', () => {
+  assert.doesNotMatch(sessionSrc, /resolveAndroidSerial\(/);
+  assert.doesNotMatch(sessionSrc, /resolveIosUdid\(/);
+  assert.match(sessionSrc, /Exact \$\{platform\} deviceId is required/);
   assert.match(sessionSrc, /acquireDeviceLockForSession\(lockPlatform, deviceId, appId\)/);
 });
 

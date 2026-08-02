@@ -1,9 +1,9 @@
 ---
 title: "cdp_repair_action"
-description: "Self-repair an L3 reusable action whose Maestro replay failed with SELECTOR_NOT_FOUND"
+description: "Repair a learned action using a fresh snapshot from the exact authority-bound device and capability-bound native runner"
 ---
 
-Self-repair an L3 reusable action whose Maestro replay failed with SELECTOR_NOT_FOUND. Loads the action from .rn-agent/actions/&lt;actionId&gt;.yaml, snapshots the live device, fuzzy-matches the failed testID against current testIDs (Levenshtein-based), and patches the YAML in place. Guardrails: refuses if a human edited the YAML since the agent last wrote (mtime check), refuses if the rolling-24h repair budget is exhausted (3 attempts/24h). On success, bumps revision, demotes status to "experimental" until the next clean replay re-validates, and appends a RepairRecord to the sidecar. Pass dryRun=true to preview the diff without writing.
+Repair a learned action using a fresh snapshot from the exact authority-bound device and capability-bound native runner.
 
 ## Parameters
 
@@ -15,6 +15,9 @@ Self-repair an L3 reusable action whose Maestro replay failed with SELECTOR_NOT_
 | `threshold` | `unknown` | No |  | min: 0, max: 1 |  |
 | `dryRun` | `unknown` | No |  |  |  |
 | `agentReasoning` | `unknown` | No |  |  |  |
+| `platform` | `unknown` | No |  |  | Authority-bound platform; conflicting values are refused |
+| `deviceId` | `unknown` | No |  |  | Authority-bound exact device identifier; normally injected by the session |
+| `appId` | `unknown` | No |  |  | Authority-bound app identifier; normally injected by the session |
 
 ## Usage
 

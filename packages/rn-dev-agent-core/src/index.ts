@@ -1,5 +1,5 @@
 import './env-setup.js';
-import { createHash } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { readFileSync, rmSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -13,7 +13,7 @@ import { okResult, failResult, warnResult, withConnection } from './utils.js';
 import { annotateMutationAbsence } from './verification/mutation-absence.js';
 import { loadVerificationConfig, getCachedProjectRoot } from './verification/config.js';
 import { logger } from './logger.js';
-import { createStatusHandler, targetMatchesSession } from './tools/status.js';
+import { createPassiveStatusHandler, targetMatchesSession } from './tools/status.js';
 import { createEvaluateHandler } from './tools/evaluate.js';
 import { createReloadHandler } from './tools/reload.js';
 import { createComponentTreeHandler } from './tools/component-tree.js';
@@ -62,7 +62,10 @@ import {
 } from './tools/device-interact.js';
 import { createDevicePermissionHandler } from './tools/device-permission.js';
 import { createDeviceResetStateHandler } from './tools/device-reset-state.js';
-import { createDeviceDeeplinkHandler } from './tools/device-deeplink.js';
+import {
+  androidDeeplinkCommandArgs,
+  createDeviceDeeplinkHandler,
+} from './tools/device-deeplink.js';
 import { createDismissDevClientPickerHandler } from './tools/dev-client-picker.js';
 import { createDeviceRecordHandler } from './tools/device-record.js';
 import {
@@ -79,6 +82,7 @@ import {
 import { validateMedia } from './tools/proof-media.js';
 import { proofRuntimeAuthorityMarker } from './domain/proof-capture.js';
 import {
+  acceptDeeplinkOpenConfirmation,
   createDeviceAcceptSystemDialogHandler,
   createDeviceDismissSystemDialogHandler,
 } from './tools/device-system-dialog.js';
@@ -90,11 +94,7 @@ import { createNavGraphHandler } from './tools/nav-graph.js';
 import { createDeviceBatchHandler } from './tools/device-batch.js';
 import { handleAutoLogin } from './tools/auto-login.js';
 import { createProofStepHandler } from './tools/proof-step.js';
-import {
-  createConnectHandler,
-  createDisconnectHandler,
-  createTargetsHandler,
-} from './tools/connection.js';
+import { createDisconnectHandler, createTargetsHandler } from './tools/connection.js';
 import { createRestartHandler } from './tools/restart.js';
 import { buildGracefulShutdown } from './lifecycle/graceful-shutdown.js';
 import { Lockfile, formatLockConflictMessage } from './lifecycle/lockfile.js';
@@ -106,7 +106,12 @@ import {
   foreignGateUdid,
 } from './lifecycle/foreign-flow-gate.js';
 import { getIosRuntimeMajorForUdid } from './domain/blind-probe-gate.js';
-import { getActiveSession, markSnapshotDirty } from './agent-device-wrapper.js';
+import {
+  getActiveSession,
+  markSnapshotDirty,
+  setSnapshotAuthorityProvider,
+  validateCachedSnapshotEvidenceAuthority,
+} from './agent-device-wrapper.js';
 import { createMaestroRunHandler } from './tools/maestro-run.js';
 import { createMaestroGenerateHandler } from './tools/maestro-generate.js';
 import { createMaestroTestAllHandler } from './tools/maestro-test-all.js';
@@ -122,15 +127,32 @@ import {
 import { createCrossPlatformVerifyHandler } from './tools/cross-platform-verify.js';
 import { createOpenDevToolsHandler } from './tools/open-devtools.js';
 import { createMetroEventsHandler } from './tools/metro-events.js';
-import { stopFastRunner } from './runners/rn-fast-runner-client.js';
+import {
+  clearFastRunnerAfterVerifiedStop,
+  probeFastRunnerAuthority,
+  resetRunnerRebuildBudgetForCurrentPlugin,
+  stopFastRunner,
+} from './runners/rn-fast-runner-client.js';
+import {
+  androidHealthMatchesAuthority,
+  probeAndroidRunnerHealthInfo,
+} from './runners/rn-android-runner-client.js';
+import {
+  captureInstalledArtifact,
+  captureInstallGeneration,
+  verifyInstalledArtifact,
+} from './session/install-authority.js';
+import { readProcessBirth } from './session/process-birth.js';
 import { ensureSingleRunner } from './runners/ensure-single-runner.js';
 import { addToolObserver, instrumentTool } from './observability/instrumentation.js';
 import { recorder } from './observability/recorder.js';
-import { StrictProofMonitor } from './domain/proof-capture.js';
+import { hashProofValue, StrictProofMonitor } from './domain/proof-capture.js';
+import type { ProofAuthority } from './domain/proof-receipt.js';
 import {
   maybeCaptureLiveFrame,
   isStateMutating,
   mayTriggerLiveCapture,
+  resolveSnapshotInvalidationPlatform,
   toolInvalidatesSnapshotCache,
   toolInvalidatesRetryBaseline,
   buildLiveDeps,
@@ -141,6 +163,7 @@ import {
   observeHandler,
   observeSchema,
   setObserveE2eDeps,
+  setObserveAuthorityDeps,
   setObserveMirror,
   setObserveStateDeps,
   startObserveServer,
@@ -154,7 +177,7 @@ import { buildMirrorTargetResolver } from './observability/mirror/target.js';
 import { createMirrorSource } from './observability/mirror/sources.js';
 import { parseAllAdbDevices } from './tools/device-record.js';
 import { createLockE2eTestHandler } from './tools/lock-e2e-test.js';
-import { createRunE2eSuiteHandler } from './tools/run-e2e-suite.js';
+import { createRunE2eSuiteHandler, type RunE2eSuiteArgs } from './tools/run-e2e-suite.js';
 import { recoverInterruptedRequests } from './domain/e2e-run-request.js';
 import { preflight, probeMetro } from './e2e/preflight.js';
 import { resolveIosUdid } from './tools/device-screenshot-raw.js';
@@ -165,6 +188,29 @@ import { loadIndex, loadRunRecord } from './domain/e2e-run.js';
 import { listActions } from './domain/action-inventory.js';
 import { loadAction } from './domain/action-store.js';
 import { loadE2eConfig, resolveParams } from './domain/e2e-config.js';
+import { getWorkerAuthorityRuntime } from './session/runtime.js';
+import { createSessionHandler } from './tools/session.js';
+import { bindNativeRunner, unbindNativeRunner } from './session/runner-binding.js';
+import { claimOptionalBundleAuthority, createAuthorityGate } from './session/authority-gate.js';
+import { createLocalAuthorityProbe } from './session/local-authority-probe.js';
+import { readJsonStateFile } from './util/secure-state-file.js';
+import {
+  boundConnectConflict,
+  buildBundleAuthorityBinding,
+  pinExactDevClient,
+} from './session/dev-client-authority.js';
+import {
+  verifyMetroAuthorityMarker,
+  type MetroAuthorityMarker,
+} from './session/metro-authority.js';
+import {
+  filterTargetsForExactDevice,
+  proveTargetDeviceAssociation,
+} from './session/target-device-authority.js';
+import type { SessionStatus } from './session/registry.js';
+import { strictProofSourceIdentity, type SourceIdentity } from './session/source-identity.js';
+import { verifyManagedMetroManagementProof } from './session/managed-metro.js';
+import { stopBoundRunner } from './session/process-cleanup.js';
 
 const pkgPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json');
 const pkgVersion = (JSON.parse(readFileSync(pkgPath, 'utf8')) as { version: string }).version;
@@ -301,6 +347,255 @@ export const strictProofMonitor = new StrictProofMonitor();
 addToolObserver((o) => recorder.record(o));
 addToolObserver((o) => strictProofMonitor.record(o));
 
+const authorityRuntime = getWorkerAuthorityRuntime();
+setSnapshotAuthorityProvider({
+  current: () => {
+    const status = authorityRuntime.status();
+    if (!status.available) return null;
+    const device = status.bindings.device as Record<string, unknown> | undefined;
+    const install = status.bindings.install as Record<string, unknown> | undefined;
+    const runner = status.bindings.runner as Record<string, unknown> | undefined;
+    return {
+      sessionId: status.sessionId,
+      claimEpoch: status.claimEpoch,
+      sourceKey: status.sourceKey,
+      worktreeKey: status.worktreeKey,
+      appRootKey: status.appRootKey,
+      platform: device?.platform,
+      deviceId: device?.deviceId,
+      appId: device?.appId,
+      buildGeneration: install?.buildGeneration,
+      installGeneration: install?.installGeneration,
+      artifactDigest: install?.artifactDigest,
+      runnerInstanceId: runner?.instanceId,
+      runnerPid: runner?.pid,
+      runnerProcessBirth: runner?.processBirth,
+      runnerCapabilityHash:
+        typeof runner?.capability === 'string'
+          ? createHash('sha256').update(runner.capability).digest('hex')
+          : undefined,
+      runnerPort: runner?.port,
+      runnerClaim: status.claims.find((claim) => claim.type === 'runner')?.key,
+      deviceClaim: status.claims.find((claim) => claim.type === 'device')?.key,
+    };
+  },
+  record: (receipt) => {
+    const { registry, session } = authorityRuntime.requireOperational();
+    registry.recordPlatformAuthorityReceipt(session, String(receipt.platform), {
+      ...receipt,
+    });
+  },
+  validate: (receipt) => {
+    try {
+      const { registry, session } = authorityRuntime.requireOperational();
+      if (
+        !registry.validatePlatformAuthorityReceipt(session, String(receipt.platform), {
+          ...receipt,
+        })
+      ) {
+        return false;
+      }
+      if (
+        typeof receipt.platform !== 'string' ||
+        typeof receipt.deviceId !== 'string' ||
+        typeof receipt.appId !== 'string' ||
+        typeof receipt.installGeneration !== 'string' ||
+        captureInstallGeneration({
+          platform: receipt.platform as 'ios' | 'android',
+          deviceId: receipt.deviceId,
+          appId: receipt.appId,
+        }) !== receipt.installGeneration
+      ) {
+        return false;
+      }
+      return (
+        typeof receipt.runnerPid === 'number' &&
+        typeof receipt.runnerProcessBirth === 'string' &&
+        readProcessBirth(receipt.runnerPid)?.token === receipt.runnerProcessBirth
+      );
+    } catch {
+      return false;
+    }
+  },
+  validateEvidence: (receipt) => {
+    try {
+      const { registry, session } = authorityRuntime.requireOperational();
+      if (
+        !registry.validatePlatformAuthorityReceipt(session, String(receipt.platform), {
+          ...receipt,
+        }) ||
+        (receipt.platform !== 'ios' && receipt.platform !== 'android') ||
+        typeof receipt.deviceId !== 'string' ||
+        typeof receipt.appId !== 'string' ||
+        typeof receipt.artifactDigest !== 'string' ||
+        typeof receipt.installGeneration !== 'string'
+      ) {
+        return false;
+      }
+      const observed = captureInstalledArtifact({
+        platform: receipt.platform,
+        deviceId: receipt.deviceId,
+        appId: receipt.appId,
+      });
+      verifyInstalledArtifact(
+        {
+          platform: receipt.platform,
+          deviceId: receipt.deviceId,
+          appId: receipt.appId,
+          artifactDigest: receipt.artifactDigest,
+          installGeneration: receipt.installGeneration,
+        },
+        observed,
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  },
+  validateLive: async (receipt) => {
+    try {
+      const { registry, session } = authorityRuntime.requireOperational();
+      const probe = registry.getPlatformAuthorityProbe(session, String(receipt.platform), {
+        ...receipt,
+      });
+      if (
+        !probe ||
+        captureInstallGeneration({
+          platform: probe.platform as 'ios' | 'android',
+          deviceId: probe.deviceId,
+          appId: probe.appId,
+        }) !== probe.installGeneration ||
+        readProcessBirth(probe.pid)?.token !== probe.processBirth
+      ) {
+        return false;
+      }
+      if (probe.platform === 'ios') {
+        return probeFastRunnerAuthority(probe);
+      }
+      if (probe.platform === 'android') {
+        const health = await probeAndroidRunnerHealthInfo(probe.port, probe.capability);
+        return health.ok === true && androidHealthMatchesAuthority(health, probe);
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  },
+  validateOrigin: async (receipt) => {
+    try {
+      const { registry, session } = authorityRuntime.requireOperational();
+      const probe = registry.getPlatformAuthorityProbe(session, String(receipt.platform), {
+        ...receipt,
+      });
+      const status = registry.getSessionStatus(session.sessionId);
+      if (!probe || !status || (probe.platform !== 'ios' && probe.platform !== 'android')) {
+        return false;
+      }
+      await localAuthorityProbe({
+        axis: 'A',
+        phase: 'preflight',
+        status: {
+          ...status,
+          bindings: {
+            ...status.bindings,
+            device: {
+              platform: probe.platform,
+              deviceId: probe.deviceId,
+              appId: probe.appId,
+            },
+          },
+        },
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  },
+});
+const localAuthorityProbe = createLocalAuthorityProbe({
+  runtime: authorityRuntime,
+  getClient,
+  getSecret: () =>
+    process.env.RN_DEV_AGENT_SESSION_SECRET_PATH
+      ? readJsonStateFile<{ signerCapability?: string; observeCapability?: string }>(
+          process.env.RN_DEV_AGENT_SESSION_SECRET_PATH,
+        )
+      : null,
+  proofActive: (runId) => strictProofMonitor.ownsRun(runId),
+});
+const authorityGate = createAuthorityGate(authorityRuntime, {
+  probe: async ({ axis, phase, status, tool, args }) =>
+    localAuthorityProbe({ axis, phase, status, tool, args }),
+  refreshRuntimeBinding: rebindSessionRuntime,
+  relaunchBoundRuntime: relaunchSessionRuntime,
+  onRunnerReleased: async (runner) => {
+    if (runner.platform !== 'ios') return;
+    const deviceId = typeof runner.deviceId === 'string' ? runner.deviceId : undefined;
+    await stopFastRunner(deviceId);
+    resetRunnerRebuildBudgetForCurrentPlugin();
+  },
+});
+setObserveAuthorityDeps({
+  resolve: () => {
+    const { registry, session } = authorityRuntime.requireAvailable();
+    const status = registry.getSessionStatus(session.sessionId);
+    const secret = process.env.RN_DEV_AGENT_SESSION_SECRET_PATH
+      ? readJsonStateFile<{ observeCapability?: string }>(
+          process.env.RN_DEV_AGENT_SESSION_SECRET_PATH,
+        )
+      : null;
+    const port = Number(status?.bindings.observePort);
+    if (!status || !secret?.observeCapability || !Number.isSafeInteger(port)) {
+      throw new Error('OBSERVE_AUTHORITY_MISMATCH: Observe authority is incomplete');
+    }
+    return {
+      port,
+      authority: {
+        sessionId: status.sessionId,
+        claimEpoch: status.claimEpoch,
+        instanceId: randomUUID(),
+        capability: secret.observeCapability,
+      },
+    };
+  },
+  bind: ({ port, authority }) => {
+    const { registry, session } = authorityRuntime.requireAvailable();
+    const controller = registry.getControllerBinding(session);
+    registry.updateBindings(session, {
+      bindings: {
+        observe: {
+          port,
+          sessionId: authority.sessionId,
+          claimEpoch: authority.claimEpoch,
+          instanceId: authority.instanceId,
+          cleanupCapability: authority.capability,
+          pid: controller.worker.pid,
+          processBirth: controller.worker.token,
+        },
+      },
+    });
+  },
+  unbind: (authority) => {
+    const { registry, session } = authorityRuntime.requireAvailable();
+    const status = registry.getSessionStatus(session.sessionId);
+    const observe = status?.bindings.observe as
+      | {
+          sessionId?: unknown;
+          claimEpoch?: unknown;
+          instanceId?: unknown;
+        }
+      | undefined;
+    if (
+      observe?.sessionId !== authority.sessionId ||
+      observe.claimEpoch !== authority.claimEpoch ||
+      observe.instanceId !== authority.instanceId
+    ) {
+      return;
+    }
+    registry.updateBindings(session, { bindings: { observe: null } });
+  },
+});
+
 // GH#186 Phase 6: the foreign-flow gate needs the active iOS session's udid
 // (registered here — a direct import inside the gate would cycle modules).
 setForeignGateUdidProvider(() => {
@@ -389,13 +684,16 @@ const liveDeps = buildLiveDeps({
 });
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function trackedTool(name: string, desc: string, schema: any, handler: any): void {
+function trackedTool(name: string, desc: string, schema: z.ZodRawShape, handler: any): void {
   const base = instrumentTool(
     name,
-    arbiterWrap(
+    authorityGate.wrap(
       name,
-      handler as (...args: unknown[]) => Promise<import('./utils.js').ToolResult>,
-    ) as (...args: unknown[]) => Promise<unknown>,
+      arbiterWrap(
+        name,
+        handler as (...args: unknown[]) => Promise<import('./utils.js').ToolResult>,
+      ) as (...args: unknown[]) => Promise<unknown>,
+    ),
   );
   // GH #321: the device_find snapshot-cache must be invalidated after ANY tool
   // that could change the screen — including JS-level mutations that bypass the
@@ -423,7 +721,12 @@ function trackedTool(name: string, desc: string, schema: any, handler: any): voi
       // same boundary as the GH #321 snapshot-cache dirty flag above it — see
       // toolInvalidatesRetryBaseline's doc comment for why native device verbs
       // are excluded (they manage it themselves via settle).
-      if (toolInvalidatesSnapshotCache(name, args)) markSnapshotDirty();
+      const snapshotPlatform = resolveSnapshotInvalidationPlatform(
+        name,
+        args,
+        getActiveSession()?.platform,
+      );
+      if (toolInvalidatesSnapshotCache(name, args)) markSnapshotDirty(snapshotPlatform);
       if (toolInvalidatesRetryBaseline(name, args)) invalidateLastSnapshotHash();
     }
     if (installLiveCapture && isStateMutating(name, args)) {
@@ -431,39 +734,427 @@ function trackedTool(name: string, desc: string, schema: any, handler: any): voi
     }
     return result;
   };
-  if (schema instanceof z.ZodType) {
-    server.registerTool(
-      name,
-      { description: desc, inputSchema: schema },
-      wrapped as typeof handler,
-    );
-  } else {
-    server.tool(name, desc, schema, wrapped as typeof handler);
+  server.tool(name, desc, schema, wrapped as typeof handler);
+}
+
+async function pinSessionDevClient(status: SessionStatus, options: { force: boolean }) {
+  const device = status.bindings.device as {
+    platform: 'ios' | 'android';
+    deviceId: string;
+    appId: string;
+  };
+  const metro = status.bindings.metro as {
+    port: number;
+    instanceId: string;
+    buildGeneration: number;
+  };
+  const install = status.bindings.install as { devClientUrl?: string };
+  const declaredDevice = status.bindings.device as { devClientUrl?: string };
+  const secret = process.env.RN_DEV_AGENT_SESSION_SECRET_PATH
+    ? readJsonStateFile<{ signerCapability?: string }>(process.env.RN_DEV_AGENT_SESSION_SECRET_PATH)
+    : null;
+  const devClientUrl = install.devClientUrl ?? declaredDevice.devClientUrl;
+  if (!secret?.signerCapability) {
+    throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: session signer is unavailable');
   }
+  if (options.force) {
+    const current = getClient();
+    await current.disconnect();
+    setClient(createClient(metro.port));
+  }
+  return pinExactDevClient(
+    {
+      sessionId: status.sessionId,
+      metroInstanceId: metro.instanceId,
+      worktreeKey: status.worktreeKey,
+      appId: device.appId,
+      platform: device.platform,
+      buildGeneration: metro.buildGeneration,
+      deviceId: device.deviceId,
+      metroPort: metro.port,
+      ...(devClientUrl ? { devClientUrl, expectedDevClientUrl: devClientUrl } : {}),
+      signerCapability: secret.signerCapability,
+    },
+    {
+      openUrl: async (platform, deviceId, url) => {
+        if (platform === 'ios') {
+          await execFileP('xcrun', ['simctl', 'openurl', deviceId, url]);
+        } else {
+          await execFileP('adb', androidDeeplinkCommandArgs(url, undefined, deviceId));
+        }
+      },
+      launchExactApp: async (platform, deviceId, appId) => {
+        if (platform === 'ios') {
+          await execFileP('xcrun', ['simctl', 'launch', deviceId, appId]);
+        } else {
+          await execFileP('adb', [
+            '-s',
+            deviceId,
+            'shell',
+            'monkey',
+            '--pct-syskeys',
+            '0',
+            '-p',
+            appId,
+            '-c',
+            'android.intent.category.LAUNCHER',
+            '1',
+          ]);
+        }
+      },
+      acceptIosOpenDialog: async () => {
+        const result = await acceptDeeplinkOpenConfirmation();
+        if (result && !result.tapped) {
+          throw new Error(
+            'DEV_CLIENT_ENDPOINT_NOT_FOUND: iOS open confirmation did not expose the exact Open action',
+          );
+        }
+      },
+      connectExact: async ({ metroPort, platform, appId, deviceId }) => {
+        return connectExactSessionTarget({ metroPort, platform, appId, deviceId }, 15_000);
+      },
+      readMarker: async () => {
+        const result = await getClient().evaluate(
+          'JSON.stringify(globalThis.__RN_DEV_AGENT_AUTHORITY__ ?? null)',
+        );
+        if (typeof result.value !== 'string') return null;
+        const parsed = JSON.parse(result.value) as {
+          status?: string;
+          marker?: MetroAuthorityMarker;
+        } | null;
+        return parsed?.status === 'signed' && parsed.marker
+          ? { status: 'signed' as const, marker: parsed.marker }
+          : null;
+      },
+    },
+  );
+}
+
+async function connectExactSessionTarget(
+  input: {
+    metroPort: number;
+    platform: 'ios' | 'android';
+    appId: string;
+    deviceId: string;
+  },
+  timeoutMs: number,
+): Promise<{ targetId: string; connectionGeneration: number; deviceId: string }> {
+  let exactClient = getClient();
+  if (exactClient.metroPort !== input.metroPort) {
+    await exactClient.disconnect();
+    exactClient = createClient(input.metroPort);
+    setClient(exactClient);
+  }
+  const deadline = Date.now() + timeoutMs;
+  let lastError: unknown;
+  do {
+    try {
+      const listed = await exactClient.listTargets(input.metroPort);
+      if (listed.port !== input.metroPort) {
+        throw new Error(
+          'CDP_TARGET_AUTHORITY_MISMATCH: target discovery escaped the allocated Metro port',
+        );
+      }
+      const sessionCandidates = listed.targets.filter((candidate) =>
+        targetMatchesSession(candidate, {
+          platform: input.platform,
+          bundleId: input.appId,
+        }),
+      );
+      const exactCandidates = await filterTargetsForExactDevice(
+        {
+          platform: input.platform,
+          deviceId: input.deviceId,
+          targets: sessionCandidates,
+        },
+        { execute: execFileP },
+      );
+      if (exactCandidates.length !== 1) {
+        throw new Error(
+          `CDP_TARGET_AUTHORITY_MISMATCH: expected one target on the exact device, found ${exactCandidates.length}`,
+        );
+      }
+      await exactClient.autoConnect(input.metroPort, {
+        platform: input.platform,
+        bundleId: input.appId,
+        targetId: exactCandidates[0]!.id,
+      });
+      const target = exactClient.connectedTarget;
+      if (
+        !target ||
+        exactClient.metroPort !== input.metroPort ||
+        !targetMatchesSession(target, {
+          platform: input.platform,
+          bundleId: input.appId,
+        })
+      ) {
+        throw new Error(
+          'CDP_TARGET_AUTHORITY_MISMATCH: exact dev-client target was not found on the claimed Metro',
+        );
+      }
+      await proveTargetDeviceAssociation(
+        {
+          platform: input.platform,
+          deviceId: input.deviceId,
+          targetDeviceName: target.deviceName,
+        },
+        { execute: execFileP },
+      );
+      return {
+        targetId: target.id,
+        connectionGeneration: exactClient.connectionGeneration,
+        deviceId: input.deviceId,
+      };
+    } catch (error) {
+      lastError = error;
+    }
+    if (Date.now() < deadline) {
+      await new Promise((resolveWait) => setTimeout(resolveWait, 250));
+    }
+  } while (Date.now() < deadline);
+  throw new Error(
+    'CDP_TARGET_AUTHORITY_MISMATCH: exact managed-Metro target did not re-register after launch',
+    { cause: lastError },
+  );
+}
+
+async function relaunchSessionRuntime(status: SessionStatus): Promise<void> {
+  const device = status.bindings.device as {
+    platform?: unknown;
+    deviceId?: unknown;
+    appId?: unknown;
+    devClientUrl?: unknown;
+  };
+  const metro = status.bindings.metro as { port?: unknown };
+  const install = status.bindings.install as { devClientUrl?: unknown };
+  const platform = device.platform;
+  const deviceId = device.deviceId;
+  const appId = device.appId;
+  const metroPort = metro.port;
+  if (
+    (platform !== 'ios' && platform !== 'android') ||
+    typeof deviceId !== 'string' ||
+    typeof appId !== 'string' ||
+    !Number.isSafeInteger(metroPort)
+  ) {
+    throw new Error('METRO_ORIGIN_MISMATCH: managed replay launch authority is incomplete');
+  }
+  const current = getClient();
+  await current.disconnect();
+  setClient(createClient(Number(metroPort)));
+  if (platform === 'ios') {
+    await execFileP('xcrun', [
+      'simctl',
+      'launch',
+      '--terminate-running-process',
+      deviceId,
+      appId,
+      '--initialUrl',
+      `http://127.0.0.1:${String(metroPort)}`,
+    ]);
+  } else {
+    const devClientUrl =
+      typeof install.devClientUrl === 'string'
+        ? install.devClientUrl
+        : typeof device.devClientUrl === 'string'
+          ? device.devClientUrl
+          : null;
+    if (!devClientUrl) {
+      throw new Error(
+        'DEV_CLIENT_ENDPOINT_NOT_FOUND: managed Android replay requires the exact Dev Client URL',
+      );
+    }
+    await execFileP('adb', [
+      ...androidDeeplinkCommandArgs(devClientUrl, undefined, deviceId),
+      '-p',
+      appId,
+    ]);
+  }
+  await connectExactSessionTarget(
+    { metroPort: Number(metroPort), platform, appId, deviceId },
+    15_000,
+  );
+}
+
+async function rebindSessionRuntime(status: SessionStatus): Promise<Record<string, unknown>> {
+  const device = status.bindings.device as {
+    platform: 'ios' | 'android';
+    deviceId: string;
+    appId: string;
+  };
+  const metro = status.bindings.metro as {
+    port: number;
+    instanceId: string;
+    buildGeneration: number;
+  };
+  const prior = status.bindings.bundle as Record<string, unknown> | null;
+  const install = status.bindings.install as { devClientUrl?: string };
+  const declaredDevice = status.bindings.device as { devClientUrl?: string };
+  const client = getClient();
+  const target = client.connectedTarget;
+  if (
+    !client.isConnected ||
+    !target ||
+    client.metroPort !== metro.port ||
+    !targetMatchesSession(target, {
+      platform: device.platform,
+      bundleId: device.appId,
+    })
+  ) {
+    throw new Error(
+      'CDP_TARGET_AUTHORITY_MISMATCH: runtime reset did not reconnect the exact session target',
+    );
+  }
+  await proveTargetDeviceAssociation(
+    {
+      platform: device.platform,
+      deviceId: device.deviceId,
+      targetDeviceName: target.deviceName,
+    },
+    { execute: execFileP },
+  );
+  const secret = process.env.RN_DEV_AGENT_SESSION_SECRET_PATH
+    ? readJsonStateFile<{ signerCapability?: string }>(process.env.RN_DEV_AGENT_SESSION_SECRET_PATH)
+    : null;
+  const evaluated = await client.evaluate(
+    'JSON.stringify(globalThis.__RN_DEV_AGENT_AUTHORITY__ ?? null)',
+  );
+  const outer =
+    typeof evaluated.value === 'string'
+      ? (JSON.parse(evaluated.value) as {
+          status?: string;
+          marker?: MetroAuthorityMarker;
+        } | null)
+      : null;
+  if (outer?.status !== 'signed' || !outer.marker || !secret?.signerCapability) {
+    throw new Error(
+      'BUNDLE_HANDSHAKE_UNAVAILABLE: runtime reset did not expose the signed session marker',
+    );
+  }
+  const verified = verifyMetroAuthorityMarker(outer.marker, secret.signerCapability, {
+    sessionId: status.sessionId,
+    metroInstanceId: metro.instanceId,
+    worktreeKey: status.worktreeKey,
+    appId: device.appId,
+    platform: device.platform,
+    buildGeneration: metro.buildGeneration,
+  });
+  const devClientUrl =
+    (typeof prior?.devClientUrl === 'string' ? prior.devClientUrl : undefined) ??
+    install.devClientUrl ??
+    declaredDevice.devClientUrl;
+  return buildBundleAuthorityBinding({
+    ...verified,
+    deviceId: device.deviceId,
+    metroPort: metro.port,
+    ...(devClientUrl ? { devClientUrl } : {}),
+    targetId: target.id,
+    connectionGeneration: client.connectionGeneration,
+  });
+}
+
+const getSessionSignerCapability = (sessionId?: string): string | null => {
+  const currentSecretPath = process.env.RN_DEV_AGENT_SESSION_SECRET_PATH;
+  if (!currentSecretPath) return null;
+  if (sessionId && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(sessionId)) return null;
+  const secretPath = sessionId
+    ? join(dirname(dirname(currentSecretPath)), sessionId, 'secret.json')
+    : currentSecretPath;
+  return readJsonStateFile<{ signerCapability?: string }>(secretPath)?.signerCapability ?? null;
+};
+const sessionHandler = createSessionHandler(authorityRuntime, {
+  getSignerCapability: getSessionSignerCapability,
+  pinDevClient: pinSessionDevClient,
+});
+const disconnectClientHandler = createDisconnectHandler(getClient, setClient, createClient);
+
+async function connectBoundSession(args: Record<string, unknown>) {
+  const status = authorityRuntime.status();
+  if (!status.available) {
+    return failResult(status.reason, status.code as import('./types.js').ToolErrorCode);
+  }
+  const conflict = boundConnectConflict(status, args);
+  if (conflict) return failResult(conflict.message, conflict.code);
+  return sessionHandler({ action: 'pin_dev_client', force: args.force === true });
+}
+
+async function disconnectBoundSession() {
+  const disconnected = await disconnectClientHandler({});
+  if (disconnected.isError) return disconnected;
+  const { registry, session } = authorityRuntime.requireAvailable();
+  const status = registry.getSessionStatus(session.sessionId);
+  const targetId = (status?.bindings.bundle as { targetId?: unknown } | undefined)?.targetId;
+  if (status && typeof targetId === 'string') {
+    registry.releaseResources(session, [
+      { type: 'target', key: `${String(status.bindings.metroPort)}:${targetId}` },
+    ]);
+    registry.updateBindings(session, {
+      state: 'device_bound',
+      bindings: { bundle: null },
+    });
+  }
+  return disconnected;
 }
 
 trackedTool(
+  'rn_session',
+  'Inspect and transition the fenced rn-dev-agent authority session. Status reconciles lost managed Metro authority without touching the app; bind, handoff, adoption, recovery, managed Metro cleanup, and release actions are fail-closed.',
+  {
+    action: z.enum([
+      'status',
+      'bind_device',
+      'bind_metro',
+      'pin_dev_client',
+      'prepare_handoff',
+      'cancel_handoff',
+      'accept_handoff',
+      'adopt_stale',
+      'recover_arbiter',
+      'preview_integration',
+      'apply_integration',
+      'restore_integration',
+      'stop_metro',
+      'release',
+    ]),
+    platform: z.enum(['ios', 'android']).optional(),
+    deviceId: z.string().optional(),
+    appId: z.string().optional(),
+    devClientUrl: z.string().url().optional(),
+    buildReceipt: z.record(z.unknown()).optional(),
+    metroPort: z.number().int().min(1).max(65535).optional(),
+    metroPid: z.number().int().positive().optional(),
+    metroInstanceId: z.string().optional(),
+    buildGeneration: z.number().int().nonnegative().optional(),
+    mode: z.enum(['managed', 'external']).optional(),
+    targetHandle: z.string().optional(),
+    ttlMs: z.number().int().min(5_000).max(300_000).optional(),
+    handoffId: z.string().optional(),
+    token: z.string().optional(),
+    adoptionHandle: z.string().optional(),
+    confirmed: z.boolean().optional(),
+    force: z.boolean().optional(),
+  },
+  sessionHandler,
+);
+
+trackedTool(
   'cdp_status',
-  'Get full environment status. Auto-connects if not connected. Returns Metro status, CDP connection, app info, capabilities, active errors, and RedBox/paused state. Call this FIRST before any testing.',
+  'Passively report the current authority session, Metro client, and CDP target without connecting, relaunching, dismissing UI, or choosing an ambient target.',
   {
     metroPort: z
       .number()
       .optional()
-      .describe('Override Metro port (default: auto-detect 8081/8082/19000/19006)'),
+      .describe('Diagnostic comparison only; cdp_status never changes the active Metro port'),
     platform: z
       .string()
       .optional()
       .describe(
         'Filter target by platform (e.g. "ios", "android") to avoid connecting to the wrong device in multi-simulator setups',
       ),
-    resetArbiter: z
-      .boolean()
-      .optional()
-      .describe(
-        'Clear a wedged in-memory device arbiter (a leaked plane lease refusing all flows). Escape hatch — cdp_status is unarbitrated so it always runs.',
-      ),
   },
-  createStatusHandler(getClient, setClient, createClient),
+  createPassiveStatusHandler(getClient, authorityRuntime, {
+    getSignerCapability: getSessionSignerCapability,
+  }),
 );
 
 trackedTool(
@@ -490,12 +1181,12 @@ trackedTool(
 
 trackedTool(
   'cdp_connect',
-  'Explicitly connect to a Hermes debug target. Use when you need to target a specific platform, port, or bundle, or reconnect after a manual disconnect. When multiple Hermes targets exist (common after app restarts on Expo Dev Client — zombie `host.exp.Exponent` pages linger alongside fresh app pages), pass `targetId` (exact id from cdp_targets) or `bundleId` (e.g. "com.myapp") to disambiguate. Use force=true to always reconnect regardless of current state.',
+  'Connect only the exact app target on the authority-bound Metro and commit its signed initial-bundle handshake. Omitted port/platform/app values come from the session; conflicts refuse.',
   {
     metroPort: z
       .number()
       .optional()
-      .describe('Metro port to connect to (default: auto-detect 8081/8082/19000/19006)'),
+      .describe('Must equal the authority-bound Metro port; omitted uses that exact port'),
     platform: z
       .string()
       .optional()
@@ -506,7 +1197,7 @@ trackedTool(
       .string()
       .optional()
       .describe(
-        'Exact Hermes target id (from cdp_targets). Highest-precedence filter — picks one target precisely. Use when multiple targets share a platform and bundleId is ambiguous.',
+        'Optional target already proven by this session; foreign or previously unbound IDs refuse',
       ),
     bundleId: z
       .string()
@@ -522,14 +1213,14 @@ trackedTool(
         'Force disconnect and reconnect even if already connected. Use to switch targets or recover from stale connections.',
       ),
   },
-  createConnectHandler(getClient, setClient, createClient),
+  connectBoundSession,
 );
 
 trackedTool(
   'cdp_disconnect',
-  'Cleanly disconnect from the current Hermes target. Closes WebSocket, stops auto-reconnect, and clears all state. A fresh connection can be established afterward via cdp_connect or cdp_status.',
+  'Disconnect the authority-bound Hermes target and transactionally invalidate its bundle/target claim.',
   {},
-  createDisconnectHandler(getClient, setClient, createClient),
+  disconnectBoundSession,
 );
 
 trackedTool(
@@ -553,7 +1244,7 @@ trackedTool(
 
 trackedTool(
   'cdp_reload',
-  'Trigger a full reload of the app. Auto-reconnects to the new Hermes target (waits up to 30s with 5 soft retries; on failure, falls back once to a 10s force-recreate that mirrors `cdp_connect force=true`). After Dev Client rebuilds, the app may need a manual restart (xcrun simctl terminate + launch) if both paths fail. When the force fallback recovers, `meta.recovered_via` is "force_reconnect" and `meta.proxy_was_active` indicates whether DevTools was attached (re-run cdp_open_devtools to re-attach).',
+  'Reload the authority-bound app and atomically replace its exact Hermes target claim. Recovery uses only the session device/app/Metro bindings and returns a failure unless the signed runtime marker is re-proven.',
   {
     full: z
       .boolean()
@@ -633,12 +1324,16 @@ trackedTool(
 
 trackedTool(
   'cdp_native_errors',
-  'Read native-level error logs for when JS-layer tools come up empty. iOS spawns `xcrun simctl log show`, Android uses `adb logcat -d`. Catches errors that fire BEFORE __RN_AGENT injects (missing native module, bundle load failure, native crash). Returns filtered + deduped error/fatal entries. Platform defaults to the CDP-connected target.',
+  'Read native-level errors from the exact authority-bound device. iOS uses simctl spawn for the claimed simulator; Android uses adb -s for the claimed serial.',
   {
     platform: z
       .enum(['ios', 'android'])
       .optional()
-      .describe('Target platform. Defaults to the currently-connected CDP target platform.'),
+      .describe('Authority-bound platform; conflicting values are refused'),
+    deviceId: z
+      .string()
+      .optional()
+      .describe('Authority-bound exact device identifier; normally injected by the session'),
     sinceSeconds: z
       .number()
       .int()
@@ -766,7 +1461,7 @@ trackedTool(
 
 trackedTool(
   'cdp_cpu_profile',
-  'Record a CPU profile for a specified duration. Returns the top hot functions sorted by hit count. Requires Profiler domain (check cdp_status domains.profiler).',
+  'Record a CPU profile for a specified duration. Returns the top hot functions sorted by hit count and reports when the Profiler domain is unavailable.',
   {
     durationMs: z
       .number()
@@ -782,11 +1477,9 @@ trackedTool(
 
 trackedTool(
   'cdp_object_inspect',
-  'Inspect a JS object by expression without flattening to JSON. Uses Runtime.getProperties for lazy, handle-based inspection. Good for large objects, cyclic refs, class instances.',
+  'Inspect a JS object by property path without flattening to JSON. Uses Runtime.getProperties for lazy, handle-based inspection. Good for large objects, cyclic refs, class instances.',
   {
-    expression: z
-      .string()
-      .describe('JS expression to evaluate and inspect (e.g. "globalThis.__REDUX_STORE__")'),
+    expression: z.string().describe('JS property path or primitive literal to inspect'),
     depth: z
       .number()
       .int()
@@ -1198,7 +1891,7 @@ trackedTool(
 
 trackedTool(
   'device_screenshot',
-  'Capture a screenshot of the active device screen. Returns the file path. Prefer JPEG for faster capture. When both iOS sim and Android emulator are booted, defaults to the platform of the currently connected CDP target. Output is auto-downscaled to maxWidth (default 800px) via macOS sips to keep LLM context costs predictable; pass maxWidth=0 to disable when full-resolution capture is needed (visual diffing). meta.resize describes what happened. Result may include meta.advisories[] (EPHEMERAL_PATH when saving to /tmp, FULL_RESOLUTION when maxWidth=0) — non-blocking nudges to use docs/proof/<feature>/<NN>-<step>.jpg for deliverables and the default 800px width for everyday captures.',
+  'Capture the exact authority-bound device screen. Returns the file path and preserves the session device identity in the authority receipt.',
   {
     path: z
       .string()
@@ -1211,7 +1904,11 @@ trackedTool(
     platform: z
       .enum(['ios', 'android'])
       .optional()
-      .describe('Target device platform. Defaults to the currently-connected CDP target platform.'),
+      .describe('Authority-bound platform; conflicting values are refused'),
+    deviceId: z
+      .string()
+      .optional()
+      .describe('Authority-bound exact device identifier; normally injected by the session'),
     maxWidth: z
       .number()
       .int()
@@ -1262,6 +1959,9 @@ trackedTool(
       ),
   },
   createDeviceSnapshotHandler({
+    bindRunner: (platform, deviceId, appId) =>
+      bindNativeRunner(authorityRuntime, { platform, deviceId, appId }),
+    unbindRunner: (beforeRelease) => unbindNativeRunner(authorityRuntime, beforeRelease),
     probeReactNativeUi: async (platform, deviceId, appId) => {
       const client = getClient();
       const filters = {
@@ -1524,7 +2224,7 @@ trackedTool(
 
 trackedTool(
   'device_permission',
-  'Grant, revoke, reset, or query app permissions on simulator/emulator. Uses xcrun simctl privacy (iOS) and adb shell pm/dumpsys (Android). query returns current permission state (Android only — iOS returns "unknown"). Use before testing permission-gated flows to ensure correct starting state.',
+  'Grant, revoke, reset, or query permissions for the authority-bound app on the exact claimed device.',
   {
     action: z
       .enum(['grant', 'revoke', 'reset', 'query'])
@@ -1536,24 +2236,38 @@ trackedTool(
       .describe(
         'Permission key: notifications, camera, microphone, location, location-always, photos, contacts, calendar, reminders, storage, all',
       ),
-    appId: z.string().describe('App bundle ID (e.g. "com.example.app")'),
-    platform: z
+    appId: z
       .string()
       .optional()
-      .describe('Force platform: "ios" or "android". Auto-detected if omitted.'),
+      .describe('Authority-bound app identifier; normally injected by the session'),
+    platform: z
+      .enum(['ios', 'android'])
+      .optional()
+      .describe('Authority-bound platform; conflicting values are refused'),
+    deviceId: z
+      .string()
+      .optional()
+      .describe('Authority-bound exact device identifier; normally injected by the session'),
   },
   createDevicePermissionHandler(),
 );
 
 trackedTool(
   'device_reset_state',
-  'One-shot preflight: revoke/reset permissions, clear MMKV storage keys, force-stop the app, then relaunch + reconnect CDP. Composes device_permission + cdp_mmkv + simctl/adb terminate+launch in one atomic call. Best-effort with per-step status — never silently rolls back. Sequence: permission → storage → terminate → launch → reconnect → helpers (→ optional nav_ready). On iOS, permission state is not queryable post-revoke (simctl limitation) — `ok: true` only means the shell-out exited 0. Returns { summary: {ok, failed, skipped}, steps: [...], reconnected, helpersInjected }.',
+  'Reset permissions/storage and relaunch the authority-bound app on its exact claimed device, then reconnect and re-prove the session target.',
   {
-    appId: z.string().describe('App bundle ID, e.g. "com.example.app".'),
+    appId: z
+      .string()
+      .optional()
+      .describe('Authority-bound app identifier; normally injected by the session'),
     platform: z
       .enum(['ios', 'android'])
       .optional()
-      .describe('Force platform. Auto-detected from booted devices if omitted.'),
+      .describe('Authority-bound platform; conflicting values are refused'),
+    deviceId: z
+      .string()
+      .optional()
+      .describe('Authority-bound exact device identifier; normally injected by the session'),
     permissions: z
       .array(
         z.union([
@@ -1594,7 +2308,7 @@ trackedTool(
 
 trackedTool(
   'device_deeplink',
-  'Open a deep link or universal URL on a simulator/emulator. Pass deviceId when multiple devices are active so the URL opens on the exact iOS simulator or Android device. Cross-platform: wraps xcrun simctl openurl (iOS) and adb shell am start -a VIEW -d (Android). Session-less — no need to call device_snapshot action=open first. Use to enter the app at a specific route when cdp_navigate is unavailable (RN 0.83 Bridgeless mode) or for universal-link testing.',
+  'Open a deep link on the exact authority-bound iOS simulator or Android device.',
   {
     url: z
       .string()
@@ -1602,15 +2316,22 @@ trackedTool(
     platform: z
       .enum(['ios', 'android'])
       .optional()
-      .describe(
-        'Force platform. Auto-detected from the active session or booted devices if omitted.',
-      ),
+      .describe('Authority-bound platform; conflicting values are refused'),
     deviceId: z
       .string()
       .min(1)
       .max(256)
       .optional()
-      .describe('Exact iOS simulator UDID or Android adb serial to receive the deep link.'),
+      .describe(
+        'Authority-bound exact iOS simulator UDID or Android adb serial; normally injected by the session',
+      ),
+    metroPort: z
+      .number()
+      .int()
+      .min(1)
+      .max(65535)
+      .optional()
+      .describe('Authority-bound Metro port used only for an exact picker row match'),
     packageName: z
       .string()
       .optional()
@@ -1628,14 +2349,14 @@ trackedTool(
     platform: z
       .enum(['ios', 'android'])
       .optional()
-      .describe('Force platform. Otherwise resolved from the active session or the booted device.'),
+      .describe('Authority-bound platform; conflicting values are refused'),
   },
   createDismissDevClientPickerHandler(() => getClient().metroPort),
 );
 
 trackedTool(
   'device_accept_system_dialog',
-  'Tap an OS-level system dialog button (outside the app accessibility tree) — e.g. "Open in App?", "Allow notifications", biometric prompts. On iOS with an open device session, the tap routes through the native rn-fast-runner, which sees SpringBoard-owned dialogs Maestro cannot; otherwise falls back to a Maestro label probe (SystemUI on Android, in-app alerts on iOS). Tries common accept labels by default (Allow, OK, Open, Continue, Yes). Call immediately after a permission trigger or deep link is expected to surface a system prompt.',
+  'Tap an OS-level accept button through the capability-bound runner on the exact session device.',
   {
     label: z
       .string()
@@ -1646,9 +2367,7 @@ trackedTool(
     platform: z
       .enum(['ios', 'android'])
       .optional()
-      .describe(
-        'Force platform. Auto-detected from the active session or booted devices if omitted.',
-      ),
+      .describe('Authority-bound platform; conflicting values are refused'),
     timeoutMs: z
       .number()
       .int()
@@ -1662,7 +2381,7 @@ trackedTool(
 
 trackedTool(
   'device_dismiss_system_dialog',
-  'Tap an OS-level system dialog dismiss button — e.g. "Cancel", "Don\u2019t Allow", "Deny", "Not Now". Same mechanism as device_accept_system_dialog (native rn-fast-runner path on iOS with a session, Maestro fallback) but for the negative action. Handles both ASCII and typographic apostrophes in "Don\u2019t Allow".',
+  'Tap an OS-level dismiss button through the capability-bound runner on the exact session device.',
   {
     label: z
       .string()
@@ -1673,9 +2392,7 @@ trackedTool(
     platform: z
       .enum(['ios', 'android'])
       .optional()
-      .describe(
-        'Force platform. Auto-detected from the active session or booted devices if omitted.',
-      ),
+      .describe('Authority-bound platform; conflicting values are refused'),
     timeoutMs: z
       .number()
       .int()
@@ -1784,6 +2501,111 @@ const proofReadiness = async (): Promise<ProofReadiness> => {
   };
 };
 
+function proofAuthority(runId: string): ProofAuthority {
+  const { registry, session } = authorityRuntime.requireAvailable();
+  const status = registry.getSessionStatus(session.sessionId);
+  if (!status) throw new Error('PROOF_AUTHORITY_MISMATCH: session is unavailable');
+  const controller = registry.getControllerBinding(session);
+  const install = status.bindings.install as Record<string, unknown> | undefined;
+  const metro = status.bindings.metro as Record<string, unknown> | undefined;
+  const bundle = status.bindings.bundle as Record<string, unknown> | undefined;
+  const device = status.bindings.device as Record<string, unknown> | undefined;
+  const runner = status.bindings.runner as Record<string, unknown> | undefined;
+  if (
+    !install ||
+    !metro ||
+    !bundle ||
+    !device ||
+    !runner ||
+    !controller.worker.instanceId ||
+    !controller.worker.pid ||
+    !controller.worker.token
+  ) {
+    throw new Error('PROOF_AUTHORITY_MISMATCH: strict authority chain is incomplete');
+  }
+  if (metro.mode !== 'managed') {
+    throw new Error(
+      'STRICT_PROOF_UNMANAGED_METRO: strict proof requires Metro started by the managed launcher',
+    );
+  }
+  const secret = process.env.RN_DEV_AGENT_SESSION_SECRET_PATH
+    ? readJsonStateFile<{ signerCapability?: string }>(process.env.RN_DEV_AGENT_SESSION_SECRET_PATH)
+    : null;
+  if (
+    !secret?.signerCapability ||
+    !verifyManagedMetroManagementProof(metro, {
+      sessionId: status.sessionId,
+      signerCapability: secret.signerCapability,
+    })
+  ) {
+    throw new Error('PROOF_AUTHORITY_MISMATCH: Metro management proof is invalid');
+  }
+  const source = strictProofSourceIdentity(status.source as unknown as SourceIdentity, {
+    metroRuntimePolicy: {
+      sessionId: status.sessionId,
+      metroInstanceId: metro.instanceId,
+      capability: createHmac('sha256', secret.signerCapability)
+        .update('metro-runtime-policy')
+        .digest('base64url'),
+      evidencePath: metro.runtimeEvidencePath,
+      evidenceSocket: metro.runtimeEvidenceSocket,
+      evidenceAuthority: metro.runtimeEvidenceAuthority,
+    },
+  });
+  const pendingProof = (status.bindings.proof as Record<string, unknown> | undefined)?.runId;
+  return {
+    sessionId: status.sessionId,
+    claimEpoch: status.claimEpoch,
+    authorityVersion: status.authorityVersion + (pendingProof === runId ? 0 : 1),
+    controller: {
+      instanceId: controller.worker.instanceId,
+      pid: controller.worker.pid,
+      birthDigest: hashProofValue(controller.worker.token),
+    },
+    source: {
+      sourceKey: source.sourceKey,
+      worktreeKey: source.worktreeKey,
+      appRootKey: source.appRootKey,
+      head: source.head,
+      dirtyDigest: source.dirtyDigest,
+    },
+    install: {
+      artifactDigest: String(install.artifactDigest),
+      buildGeneration: Number(install.buildGeneration),
+      appId: String(install.appId),
+    },
+    metro: {
+      port: Number(metro.port),
+      instanceId: String(metro.instanceId),
+      pid: Number(metro.pid),
+      birthDigest: hashProofValue(String(metro.birth)),
+      buildGeneration: Number(metro.buildGeneration),
+      sandbox:
+        metro.runtimeEvidenceAuthority === 'managed-sandbox-v1'
+          ? 'managed-sandbox-v1'
+          : 'unavailable',
+    },
+    bundle: {
+      targetId: String(bundle.targetId),
+      connectionGeneration: Number(bundle.connectionGeneration),
+      markerDigest: hashProofValue(bundle),
+      authorityScope: 'initial-bundle',
+      sourceFidelity: 'not-proven',
+    },
+    device: {
+      platform: device.platform as 'ios' | 'android',
+      deviceId: String(device.deviceId),
+    },
+    runner: {
+      instanceId: String(runner.instanceId),
+      protocolVersion: Number(runner.protocolVersion),
+      capabilityDigest: hashProofValue(String(runner.capability)),
+      processBirthDigest: hashProofValue(String(runner.processBirth)),
+    },
+    proof: { runId },
+  };
+}
+
 const proofCaptureHandler = createProofCaptureHandler({
   monitor: strictProofMonitor,
   projectRoot: () =>
@@ -1795,6 +2617,7 @@ const proofCaptureHandler = createProofCaptureHandler({
   getGitInfo: readProofGitInfo,
   proofRootTracked: proofRootHasTrackedEntries,
   readiness: proofReadiness,
+  authority: proofAuthority,
   record: createDeviceRecordHandler(),
   mediaProcess: {
     run: async (command, args) => {
@@ -1813,13 +2636,13 @@ const proofCaptureHandler = createProofCaptureHandler({
 trackedTool(
   'proof_capture',
   'Strict, stateful proof capture. Rehearses one pinned learned action, records the declared typed storyboard operations, validates result-bound screenshots and assertions, then writes an accepted receipt only after independent evidence review.',
-  proofCapturePublishedInputSchema,
+  proofCapturePublishedInputSchema.shape,
   proofCaptureHandler,
 );
 
 trackedTool(
   'device_record',
-  'Cross-platform screen recording for proof captures. Wraps xcrun simctl io recordVideo (iOS) and adb shell screenrecord (Android), auto-pulls Android files to the host, converts to MP4 with faststart via ffmpeg. Three actions: action="start" begins a background recording (returns pid + output path + the deviceId actually used); action="stop" finalizes ALL active recordings (returns saved files; pass gif=true to also produce GIFs via ffmpeg); action="status" lists active recordings. Android caps at 180s per recording. iOS may stall on long captures via xcrun simctl. GH #173: when more than one simulator is booted (or more than one Android device connected), start refuses to auto-pick to avoid recording the wrong device — pass deviceId=<UDID|serial> to disambiguate; the response echoes the deviceId actually used so you can verify. Session-less.',
+  'Record the exact authority-bound device for proof capture. Start validates that the claimed device is currently available and always forwards its literal identifier.',
   {
     action: z
       .enum(['start', 'stop', 'status'])
@@ -1829,7 +2652,7 @@ trackedTool(
     platform: z
       .enum(['ios', 'android'])
       .optional()
-      .describe('(start only) Force platform. Auto-detected from booted devices if omitted.'),
+      .describe('Authority-bound platform; conflicting values are refused'),
     outputPath: z
       .string()
       .optional()
@@ -1839,9 +2662,7 @@ trackedTool(
     deviceId: z
       .string()
       .optional()
-      .describe(
-        '(start only) Explicit target identifier (iOS UDID or Android serial). Required when more than one device of the same platform is booted/connected — without it, start fails with code=DEVICE_AMBIGUOUS and lists the candidates. Auto-selected when exactly one device is available.',
-      ),
+      .describe('Authority-bound exact device identifier; normally injected by the session'),
     gif: z
       .boolean()
       .optional()
@@ -2277,30 +3098,49 @@ trackedTool(
 
 trackedTool(
   'cdp_restart',
-  'In-process soft state reset. Disconnects the current CDP client, creates a fresh instance, and reconnects. Clears console/network/error ring buffers, background poll, reconnect state, and helpers-injected flag. Does NOT reload the MCP server binary — to load new dist/ after npm run build, fully quit and relaunch Claude Code. Pass hardReset=true to also kill the fast-runner xcodebuild rig and terminate+relaunch the target app via simctl — recovers from the "JS thread paused / app backgrounded" wedge (B154 shape) without requiring a manual /reload-plugins. Useful for recovering from stuck connection state (target drift, stale helpers after many reloads) without losing the CC session.',
+  'Reset and reconnect the authority-bound Hermes client. hardReset relaunches only the exact claimed iOS simulator or Android device/app; success requires a fresh signed runtime binding committed under the operation fence.',
   {
     metroPort: z
       .number()
       .optional()
       .describe('Override Metro port for reconnection (default: keep current)'),
     platform: z
+      .enum(['ios', 'android'])
+      .optional()
+      .describe('Authority-bound platform; conflicting values are refused'),
+    deviceId: z
       .string()
       .optional()
-      .describe('Platform filter for reconnection (e.g. "ios", "android")'),
+      .describe('Authority-bound exact device identifier; normally injected by the session'),
+    appId: z
+      .string()
+      .optional()
+      .describe('Authority-bound exact app identifier; normally injected by the session'),
     hardReset: z
       .boolean()
       .optional()
       .describe(
-        'Also kill fast-runner + simctl terminate+launch the connected bundle before reconnecting. iOS only for now. Use when the JS thread is paused (B154 shape).',
+        'Relaunch the exact session app on its claimed iOS or Android device before reconnecting.',
       ),
     bundleId: z
       .string()
       .optional()
       .describe(
-        'Manual bundleId override for hardReset (e.g. "com.example.app"). Use when the previous restart left the connectedTarget null and the module-cached bundleId is also missing.',
+        'Compatibility alias for the authority-bound appId; conflicting values are refused.',
       ),
   },
-  createRestartHandler(getClient, setClient, createClient),
+  createRestartHandler(getClient, setClient, createClient, {
+    stopFastRunner: async (_deviceId) => {
+      const { registry, session } = authorityRuntime.requireAvailable();
+      const status = registry.getSessionStatus(session.sessionId);
+      const runner = status?.bindings.runner as Record<string, unknown> | undefined;
+      if (runner) {
+        await stopBoundRunner(runner);
+        clearFastRunnerAfterVerifiedStop(runner);
+      }
+    },
+    unbindRunner: () => unbindNativeRunner(authorityRuntime),
+  }),
 );
 
 trackedTool(
@@ -2326,7 +3166,9 @@ trackedTool(
         'Match strategy: testID (exact identifier match), label (substring in accessibility label), any (try both)',
       ),
   },
-  createCrossPlatformVerifyHandler(),
+  createCrossPlatformVerifyHandler({
+    validateAuthority: validateCachedSnapshotEvidenceAuthority,
+  }),
 );
 
 trackedTool(
@@ -2542,7 +3384,7 @@ trackedTool(
 
 trackedTool(
   'cdp_repair_action',
-  'Self-repair an L3 reusable action whose Maestro replay failed with SELECTOR_NOT_FOUND. Loads the action from .rn-agent/actions/<actionId>.yaml, snapshots the live device, fuzzy-matches the failed testID against current testIDs (Levenshtein-based), and patches the YAML in place. Guardrails: refuses if a human edited the YAML since the agent last wrote (mtime check), refuses if the rolling-24h repair budget is exhausted (3 attempts/24h). On success, bumps revision, demotes status to "experimental" until the next clean replay re-validates, and appends a RepairRecord to the sidecar. Pass dryRun=true to preview the diff without writing.',
+  'Repair a learned action using a fresh snapshot from the exact authority-bound device and capability-bound native runner.',
   {
     actionId: z
       .string()
@@ -2573,6 +3415,18 @@ trackedTool(
       .describe(
         'Free-form one-liner the agent records in the RepairRecord. Helps audit "why did this repair happen". Max ~200 chars recommended.',
       ),
+    platform: z
+      .enum(['ios', 'android'])
+      .optional()
+      .describe('Authority-bound platform; conflicting values are refused'),
+    deviceId: z
+      .string()
+      .optional()
+      .describe('Authority-bound exact device identifier; normally injected by the session'),
+    appId: z
+      .string()
+      .optional()
+      .describe('Authority-bound app identifier; normally injected by the session'),
   },
   createRepairActionHandler(),
 );
@@ -2641,6 +3495,7 @@ trackedTool(
     replayDeps: makeReplayDeps,
     blindProbeContext,
     targetContext: getActiveSession,
+    claimBundleAuthority: claimOptionalBundleAuthority,
   }),
 );
 
@@ -2672,8 +3527,18 @@ const e2ePreflight = async (): Promise<ReturnType<typeof preflight>> => {
 
 const e2eReload = async (): Promise<boolean> => {
   if (!getClient().isConnected) return false;
+  const session = getActiveSession();
+  if (!session?.deviceId || !session.appId) return false;
   try {
-    const r = await createReloadHandler(getClient, setClient, createClient)({ full: true });
+    const r = await createReloadHandler(
+      getClient,
+      setClient,
+      createClient,
+    )({
+      full: true,
+      deviceId: session.deviceId,
+      appId: session.appId,
+    });
     return (JSON.parse(r.content[0].text) as { ok?: boolean })?.ok === true;
   } catch {
     return false;
@@ -2689,7 +3554,7 @@ const e2eSuiteHandler = createRunE2eSuiteHandler({
 
 trackedTool(
   'cdp_run_e2e_suite',
-  'Run all locked e2e tests strict (no repair) on the booted sim; persist a suite-run report with verdict + per-test results.',
+  'Run locked e2e tests strictly on the authority-bound session device and persist a session-scoped report.',
   {
     pattern: z.string().optional().describe('Regex filter over locked-test ids'),
     projectRoot: z.string().optional(),
@@ -2706,11 +3571,12 @@ const e2eCsrfToken = makeCsrfToken();
 const projectRootFor = (): string =>
   findProjectRoot({ bundleId: getActiveSession()?.appId }) ?? process.cwd();
 
-const triggerE2eRun = async (pattern?: string): Promise<unknown> => {
+const triggerE2eRun = async (args: RunE2eSuiteArgs): Promise<unknown> => {
   const L = arbiter.tryAcquire('flow', 'cdp_run_e2e_suite');
   if (!L.ok) return { ok: false, error: 'a flow is already running', code: L.code };
   try {
-    const r = await e2eSuiteHandler({ pattern, projectRoot: projectRootFor() });
+    args.projectRoot ??= projectRootFor();
+    const r = await e2eSuiteHandler(args);
     const env = JSON.parse(r.content[0].text) as {
       ok?: boolean;
       data?: { runId?: string | null; verdict?: string | null };
@@ -2731,11 +3597,26 @@ const runActionHandler = createRunActionHandler({
   replayDeps: makeReplayDeps,
   blindProbeContext,
   targetContext: getActiveSession,
+  claimBundleAuthority: claimOptionalBundleAuthority,
 });
+const observeRunActionHandler = authorityGate.wrap(
+  'cdp_run_action',
+  runActionHandler as (...args: unknown[]) => Promise<unknown>,
+);
+const observeTriggerRun = authorityGate.wrap('cdp_run_e2e_suite', async (...raw: unknown[]) => {
+  const args = (raw[0] ?? {}) as RunE2eSuiteArgs;
+  return okResult(await triggerE2eRun(args));
+});
+const gatedObserveState = (
+  tool: string,
+  handler: (...args: unknown[]) => Promise<unknown>,
+  args: Record<string, unknown>,
+): Promise<import('./utils.js').ToolResult> =>
+  authorityGate.wrap(tool, handler)(args) as Promise<import('./utils.js').ToolResult>;
 
 setObserveE2eDeps({
   token: e2eCsrfToken,
-  triggerRun: triggerE2eRun,
+  triggerRun: async (pattern) => observeTriggerRun({ pattern }),
   listRuns: async () => loadIndex(projectRootFor()),
   loadRun: async (id: string) => loadRunRecord(projectRootFor(), id),
   listActions: async () => listActions(projectRootFor()),
@@ -2753,15 +3634,17 @@ setObserveE2eDeps({
     const L = arbiter.tryAcquire('flow', `observe-run-action:${actionId}`);
     if (!L.ok) return { ok: false as const, error: 'device busy' };
     try {
-      const result = await runActionHandler({
+      const result = (await observeRunActionHandler({
         actionId,
         params,
         projectRoot: root,
         platform: (getActiveSession()?.platform ?? 'ios') as 'ios' | 'android',
         trigger: 'human',
-      });
+      })) as import('./utils.js').ToolResult;
       const text = result.content?.[0]?.text ?? '';
-      return { ok: true as const, output: text };
+      return result.isError
+        ? { ok: false as const, error: text }
+        : { ok: true as const, output: text };
     } catch (e: unknown) {
       return { ok: false as const, error: e instanceof Error ? e.message : String(e) };
     } finally {
@@ -2780,9 +3663,26 @@ setObserveStateDeps({
         : { ok: false, code: r.code };
     },
     handlers: {
-      route: () => createNavigationStateHandler(getClient, { annotate: false })({}),
-      store: () => createStoreStateHandler(getClient)({}),
-      tree: () => createComponentTreeHandler(getClient)({ depth: 4 }),
+      route: () =>
+        gatedObserveState(
+          'cdp_navigation_state',
+          createNavigationStateHandler(getClient, { annotate: false }) as (
+            ...args: unknown[]
+          ) => Promise<unknown>,
+          {},
+        ),
+      store: () =>
+        gatedObserveState(
+          'cdp_store_state',
+          createStoreStateHandler(getClient) as (...args: unknown[]) => Promise<unknown>,
+          {},
+        ),
+      tree: () =>
+        gatedObserveState(
+          'cdp_component_tree',
+          createComponentTreeHandler(getClient) as (...args: unknown[]) => Promise<unknown>,
+          { depth: 4 },
+        ),
     },
   }),
 });
@@ -2872,6 +3772,7 @@ const stopParentWatch = diagnosticContractProbe
       },
     });
 process.on('exit', () => stopParentWatch());
+process.on('exit', () => authorityRuntime.close());
 if (!diagnosticContractProbe) process.on('exit', () => removeObserveState());
 // GH #182 zombie class for observe-mirror: catch-all net alongside the shutdown()
 // path above. Covers cases that never call shutdown() at all — e.g. the fatal
@@ -2947,6 +3848,6 @@ main().catch((err) => {
   if (logger.logFilePath) {
     console.error(`CDP bridge log: ${logger.logFilePath}`);
   }
-  if (!diagnosticContractProbe) stopFastRunner(getActiveSession()?.deviceId);
+  if (!diagnosticContractProbe) void stopFastRunner(getActiveSession()?.deviceId);
   process.exit(1);
 });

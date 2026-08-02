@@ -44,8 +44,8 @@ export interface ReleaseAndroidSlotResult {
 }
 
 export interface ReleaseAndroidSlotDeps {
-  stopOwnRunner: (deviceId?: string) => Promise<void>;
-  adbForceStop: (pkg: string, serial: string[]) => Promise<void>;
+  stopOwnRunner: (deviceId?: string, signal?: AbortSignal) => Promise<void>;
+  adbForceStop: (pkg: string, serial: string[], signal?: AbortSignal) => Promise<void>;
   resolveSerial: (deviceId?: string) => string[];
   readDaemonPid: () => number | null;
   isAlive: (pid: number) => boolean;
@@ -60,11 +60,12 @@ export interface ReleaseAndroidSlotDeps {
 
 function defaultDeps(): ReleaseAndroidSlotDeps {
   return {
-    stopOwnRunner: (deviceId) => stopAndroidRunner(deviceId),
-    adbForceStop: async (pkg, serial) => {
+    stopOwnRunner: (deviceId, signal) => stopAndroidRunner(deviceId, signal),
+    adbForceStop: async (pkg, serial, signal) => {
       await execFile('adb', [...serial, 'shell', 'am', 'force-stop', pkg], {
         timeout: ADB_TIMEOUT_MS,
         encoding: 'utf8',
+        signal,
       });
     },
     resolveSerial: (deviceId) => (deviceId ? ['-s', deviceId] : getAdbSerial()),
@@ -102,9 +103,10 @@ function defaultDeps(): ReleaseAndroidSlotDeps {
  * `flow` lease (no concurrent device_* can re-grab the slot between release and bind).
  */
 export async function releaseAndroidInteractionSlot(
-  opts: { deviceId?: string } = {},
+  opts: { deviceId?: string; includeLegacy?: boolean; signal?: AbortSignal } = {},
   deps: ReleaseAndroidSlotDeps = defaultDeps(),
 ): Promise<ReleaseAndroidSlotResult> {
+  opts.signal?.throwIfAborted();
   const timings: Record<string, number> = {};
   const warnings: string[] = [];
   const forceStoppedPackages: string[] = [];
@@ -117,9 +119,11 @@ export async function releaseAndroidInteractionSlot(
   // reliably free the device-side slot on its own (system_server keeps it).
   const tStop = deps.now();
   try {
-    await deps.stopOwnRunner(opts.deviceId);
+    await deps.stopOwnRunner(opts.deviceId, opts.signal);
+    opts.signal?.throwIfAborted();
     stoppedOwnRunner = true;
   } catch (err) {
+    opts.signal?.throwIfAborted();
     warnings.push(`stopping the Android runner failed: ${msg(err)}`);
   }
   timings.stopOwnRunner = deps.now() - tStop;
@@ -130,14 +134,18 @@ export async function releaseAndroidInteractionSlot(
   try {
     const serial = deps.resolveSerial(opts.deviceId);
     for (const pkg of OWNED_PACKAGES) {
+      opts.signal?.throwIfAborted();
       try {
-        await deps.adbForceStop(pkg, serial);
+        await deps.adbForceStop(pkg, serial, opts.signal);
+        opts.signal?.throwIfAborted();
         forceStoppedPackages.push(pkg);
       } catch (err) {
+        opts.signal?.throwIfAborted();
         warnings.push(`am force-stop ${pkg} failed: ${msg(err)}`);
       }
     }
   } catch (err) {
+    opts.signal?.throwIfAborted();
     warnings.push(`resolveSerial failed: ${msg(err)}`);
   }
   timings.forceStop = deps.now() - tForceStop;
@@ -146,7 +154,7 @@ export async function releaseAndroidInteractionSlot(
   // belong to another project, so kill by SPECIFIC pid, never pkill, guarded
   // against our own process tree).
   const tLegacy = deps.now();
-  if (deps.killLegacy()) {
+  if (opts.includeLegacy !== false && deps.killLegacy()) {
     try {
       const pid = deps.readDaemonPid();
       let keepFiles = false;

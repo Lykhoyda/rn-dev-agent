@@ -4,8 +4,9 @@
  */
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { writeFileSync, existsSync, rmSync } from 'node:fs';
+import { existsSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { okResult, failResult } from '../utils.js';
 import { updateRefMapFromFlat, buildSnapshotVerdict, getCachedMetadata, } from '../fast-runner-ref-map.js';
 import { findFreePort } from './free-port.js';
@@ -16,6 +17,8 @@ import { RUNNER_PROTOCOL_VERSION, MIN_SUPPORTED_RUNNER_PROTOCOL, REQUIRED_ANDROI
 import { artifactProvenanceToState, resolveAndroidRunnerArtifacts } from './runner-artifacts.js';
 import { resolveNativeRunnerDir } from './runtime-paths.js';
 import { decideRecovery, generateCommandId, isAmbiguousTransportFailure, parseStatusProbeReply, } from './transport-recovery.js';
+import { readProcessBirth } from '../session/process-birth.js';
+import { openAuthorityStore } from '../session/authority-store.js';
 const execFileAsync = promisify(execFile);
 const DEFAULT_PORT = 22089;
 const READY_TIMEOUT_MS = 30_000;
@@ -30,16 +33,37 @@ const RN_ANDROID_RUNNER_DIR = resolveNativeRunnerDir('rn-android-runner');
 const GRADLEW = join(RN_ANDROID_RUNNER_DIR, 'gradlew');
 const APK_APP = join(RN_ANDROID_RUNNER_DIR, 'app', 'build', 'outputs', 'apk', 'debug', 'app-debug.apk');
 const APK_TEST = join(RN_ANDROID_RUNNER_DIR, 'app', 'build', 'outputs', 'apk', 'androidTest', 'debug', 'app-debug-androidTest.apk');
+const ANDROID_REBUILD_ROOT = join(RN_ANDROID_RUNNER_DIR, 'app', 'build');
+const ANDROID_REBUILD_LOCK_DATABASE = join(ANDROID_REBUILD_ROOT, '.authority-rebuild', 'lock.sqlite');
+const ANDROID_REBUILD_LOCK_STALE_MS = 15 * 60_000;
+const ANDROID_REBUILD_HEARTBEAT_MS = 60_000;
+const ANDROID_REBUILD_COMPLETION_RETRY_MS = 1_000;
+const ANDROID_REBUILD_COMPLETION_ATTEMPTS = 5;
+const ANDROID_REBUILD_CLEANUP_TIMEOUT_MS = 30_000;
+const ADB_CLEANUP_TIMEOUT_MS = 5_000;
 const GRADLE_BUILD_TIMEOUT_MS = 600_000; // cold assembleDebug can take minutes on a fresh machine
 const ADB_INSTALL_TIMEOUT_MS = 120_000;
+export function getAndroidRunnerState() {
+    return runnerState;
+}
 let runnerProcess = null;
 let runnerState = null;
 let fetchImpl = globalThis.fetch;
+let testAuthorityState = false;
 export function _setFetchForTest(fn) {
     fetchImpl = fn;
 }
 export function _setAndroidRunnerStateForTest(state) {
-    runnerState = state;
+    testAuthorityState = state !== null;
+    runnerState = state
+        ? {
+            ...state,
+            instanceId: state.instanceId ?? 'test-runner-instance',
+            sessionId: state.sessionId ?? 'test-session',
+            claimEpoch: state.claimEpoch ?? 1,
+            capability: state.capability ?? 'test-capability'.repeat(3),
+        }
+        : null;
 }
 export function androidStatePath(serial) {
     return runnerStatePath(`android-${serial}`);
@@ -171,6 +195,33 @@ export function buildInstrumentPortArgs(devicePort) {
 export function buildInstrumentVersionArgs(pluginVersion) {
     return pluginVersion ? ['-e', 'RN_PLUGIN_VERSION', pluginVersion] : [];
 }
+function androidRunnerAuthority(deviceId, appId) {
+    const sessionId = (testAuthorityState ? runnerState?.sessionId : undefined) ??
+        process.env.RN_DEV_AGENT_SESSION_ID;
+    const claimEpoch = (testAuthorityState ? runnerState?.claimEpoch : undefined) ??
+        Number(process.env.RN_DEV_AGENT_CLAIM_EPOCH);
+    if (!sessionId || !Number.isSafeInteger(claimEpoch) || claimEpoch < 1) {
+        throw new Error('SESSION_AUTHORITY_REQUIRED: native runner launch requires a fenced rn-dev-agent session');
+    }
+    return {
+        instanceId: randomUUID(),
+        sessionId,
+        claimEpoch,
+        capability: randomBytes(32).toString('base64url'),
+        deviceId,
+        appId,
+    };
+}
+export function buildInstrumentAuthorityArgs(authority) {
+    return Object.entries({
+        RN_RUNNER_INSTANCE_ID: authority.instanceId,
+        RN_RUNNER_SESSION_ID: authority.sessionId,
+        RN_RUNNER_CLAIM_EPOCH: String(authority.claimEpoch),
+        RN_RUNNER_CAPABILITY: authority.capability,
+        RN_RUNNER_DEVICE_ID: authority.deviceId,
+        RN_RUNNER_APP_ID: authority.appId,
+    }).flatMap(([key, value]) => ['-e', key, value]);
+}
 export function buildAdbInstallArgs(deviceId, apkPath) {
     return [...adbSerialArgs(deviceId), 'install', '-r', apkPath];
 }
@@ -202,30 +253,30 @@ export function resolveAndroidInstallAction(opts) {
  * (surfaced as RN_ANDROID_RUNNER_DOWN by the caller) when the SDK/Gradle/adb step fails.
  */
 async function ensureAndroidRunnerInstalled(deviceId, opts = {}) {
+    opts.signal?.throwIfAborted();
     // Fail fast if the target isn't online — never start a multi-minute cold build (or an
     // install) against an offline/absent device. (Codex review: avoid the build-then-fail trap.)
     try {
         const { stdout } = await execFileAsync('adb', [...adbSerialArgs(deviceId), 'get-state'], {
             timeout: 5_000,
+            signal: opts.signal,
         });
         if (stdout.trim() !== 'device')
             throw new Error(`adb state is "${stdout.trim()}"`);
     }
     catch (err) {
+        opts.signal?.throwIfAborted();
         throw new Error(`rn-android-runner: target device not online (adb get-state) — boot the emulator / connect the device. ` +
             `${err instanceof Error ? err.message : String(err)}`);
     }
     let pmOut = '';
     try {
-        pmOut = (await execFileAsync('adb', [
-            ...adbSerialArgs(deviceId),
-            'shell',
-            'pm',
-            'list',
-            'instrumentation',
-        ])).stdout;
+        pmOut = (await execFileAsync('adb', [...adbSerialArgs(deviceId), 'shell', 'pm', 'list', 'instrumentation'], {
+            signal: opts.signal,
+        })).stdout;
     }
     catch {
+        opts.signal?.throwIfAborted();
         // adb/pm unavailable → treat as not registered; the install/adb step below surfaces the real error.
     }
     // GH #382: resolve prebuilt APKs (verified cache → release download) before the
@@ -233,6 +284,7 @@ async function ensureAndroidRunnerInstalled(deviceId, opts = {}) {
     // the build-then-install branch is skipped (no gradlew on the user's machine).
     // Fail-open: build-local returns the Gradle output paths (unchanged cold path).
     const artifacts = await resolveAndroidRunnerArtifacts(getPluginVersion(), { appApk: APK_APP, testApk: APK_TEST }, undefined, opts.forceLocalBuild);
+    opts.signal?.throwIfAborted();
     const provenance = artifactProvenanceToState(artifacts.provenance);
     if (artifacts.note)
         pendingUpgradeNote = artifacts.note;
@@ -248,9 +300,11 @@ async function ensureAndroidRunnerInstalled(deviceId, opts = {}) {
                 cwd: RN_ANDROID_RUNNER_DIR,
                 timeout: GRADLE_BUILD_TIMEOUT_MS,
                 maxBuffer: 10 * 1024 * 1024,
+                signal: opts.signal,
             });
         }
         catch (err) {
+            opts.signal?.throwIfAborted();
             throw new Error(`rn-android-runner cold build failed (gradlew assembleDebug assembleDebugAndroidTest in ${RN_ANDROID_RUNNER_DIR}). ` +
                 `Ensure the Android SDK + a JDK are installed and on PATH. ${err instanceof Error ? err.message : String(err)}`);
         }
@@ -258,12 +312,16 @@ async function ensureAndroidRunnerInstalled(deviceId, opts = {}) {
     try {
         await execFileAsync('adb', buildAdbInstallArgs(deviceId, artifacts.appApk), {
             timeout: ADB_INSTALL_TIMEOUT_MS,
+            signal: opts.signal,
         });
+        opts.signal?.throwIfAborted();
         await execFileAsync('adb', buildAdbInstallArgs(deviceId, artifacts.testApk), {
             timeout: ADB_INSTALL_TIMEOUT_MS,
+            signal: opts.signal,
         });
     }
     catch (err) {
+        opts.signal?.throwIfAborted();
         throw new Error(`rn-android-runner APK install failed (adb install -r). Is the emulator/device online? ` +
             `${err instanceof Error ? err.message : String(err)}`);
     }
@@ -292,9 +350,21 @@ export function isAndroidRunnerAvailable() {
 export function shouldReuseAndroidRunner(state, deviceId) {
     if (state === null)
         return false;
-    if (!deviceId)
-        return true;
-    return state.deviceId === deviceId;
+    const sessionId = (testAuthorityState ? state.sessionId : undefined) ?? process.env.RN_DEV_AGENT_SESSION_ID;
+    const claimEpoch = (testAuthorityState ? state.claimEpoch : undefined) ??
+        Number(process.env.RN_DEV_AGENT_CLAIM_EPOCH);
+    if (!sessionId ||
+        !Number.isSafeInteger(claimEpoch) ||
+        state.sessionId !== sessionId ||
+        state.claimEpoch !== claimEpoch ||
+        typeof state.capability !== 'string' ||
+        state.capability.length < 32) {
+        return false;
+    }
+    return typeof deviceId === 'string' && state.deviceId === deviceId;
+}
+export function shouldReapAndroidRunnerBeforeStart(state, deviceId, isAvailable) {
+    return isAvailable && !shouldReuseAndroidRunner(state, deviceId);
 }
 /**
  * GH#243: HTTP-truthful readiness. The runner logs RN_ANDROID_RUNNER_LISTENER_READY,
@@ -312,8 +382,10 @@ export async function waitForAndroidRunnerHealth(port, opts = {}) {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), HEALTH_PROBE_TIMEOUT_MS);
         try {
+            const capability = opts.capability ?? (runnerState?.hostPort === port ? runnerState.capability : undefined);
             const resp = await fetchImpl(`http://127.0.0.1:${port}/health`, {
                 signal: controller.signal,
+                headers: capability ? { authorization: `Bearer ${capability}` } : {},
             });
             if (resp.ok) {
                 const body = (await resp.json());
@@ -331,6 +403,13 @@ export async function waitForAndroidRunnerHealth(port, opts = {}) {
     }
     return false;
 }
+export function androidHealthMatchesAuthority(info, expected) {
+    return (info.instanceId === expected.instanceId &&
+        info.sessionId === expected.sessionId &&
+        info.claimEpoch === expected.claimEpoch &&
+        info.deviceId === expected.deviceId &&
+        info.appId === expected.appId);
+}
 // Story 04 (#385): capabilities from the last successful /health probe. Warm
 // before any mutating verb — startAndroidRunner probes /health on the reuse
 // and readiness paths. Consumed by the settle engine.
@@ -341,12 +420,14 @@ export function getAndroidRunnerCapabilities() {
 export function _resetCapabilitiesForTest() {
     lastKnownCapabilities = [];
 }
-export async function probeAndroidRunnerHealthInfo(port) {
+export async function probeAndroidRunnerHealthInfo(port, capabilityOverride) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), HEALTH_PROBE_TIMEOUT_MS);
     try {
+        const capability = capabilityOverride ?? (runnerState?.hostPort === port ? runnerState.capability : undefined);
         const resp = await fetchImpl(`http://127.0.0.1:${port}/health`, {
             signal: controller.signal,
+            headers: capability ? { authorization: `Bearer ${capability}` } : {},
         });
         if (!resp.ok)
             return { reachable: false };
@@ -363,6 +444,7 @@ export async function probeAndroidRunnerHealthInfo(port) {
         else if (runnerState?.hostPort === port) {
             lastKnownCapabilities = [];
         }
+        const testIdentity = testAuthorityState && runnerState?.hostPort === port ? runnerState : null;
         return {
             reachable: true,
             ok: body.ok === true,
@@ -374,6 +456,31 @@ export async function probeAndroidRunnerHealthInfo(port) {
             ...(Array.isArray(body.commands)
                 ? { commands: body.commands.filter((c) => typeof c === 'string') }
                 : {}),
+            ...(typeof body.instanceId === 'string'
+                ? { instanceId: body.instanceId }
+                : testIdentity?.instanceId
+                    ? { instanceId: testIdentity.instanceId }
+                    : {}),
+            ...(typeof body.sessionId === 'string'
+                ? { sessionId: body.sessionId }
+                : testIdentity?.sessionId
+                    ? { sessionId: testIdentity.sessionId }
+                    : {}),
+            ...(typeof body.claimEpoch === 'number'
+                ? { claimEpoch: body.claimEpoch }
+                : typeof testIdentity?.claimEpoch === 'number'
+                    ? { claimEpoch: testIdentity.claimEpoch }
+                    : {}),
+            ...(typeof body.deviceId === 'string'
+                ? { deviceId: body.deviceId }
+                : testIdentity?.deviceId
+                    ? { deviceId: testIdentity.deviceId }
+                    : {}),
+            ...(typeof body.appId === 'string'
+                ? { appId: body.appId }
+                : testIdentity?.bundleId
+                    ? { appId: testIdentity.bundleId }
+                    : {}),
         };
     }
     catch {
@@ -401,9 +508,62 @@ export function consumePendingAndroidUpgradeNote() {
 // helper, which stops our runner then force-stops BOTH owned packages.
 // Dynamic import because release-android-slot.ts statically imports this
 // module — a static back-import would be a cycle.
-async function reapMismatchedAndroidRunner(deviceId) {
-    const { releaseAndroidInteractionSlot } = await import('./release-android-slot.js');
-    await releaseAndroidInteractionSlot(deviceId ? { deviceId } : {});
+export async function reapMismatchedAndroidRunner(state, release, verify, signal) {
+    signal?.throwIfAborted();
+    const deviceId = state?.deviceId;
+    if (!deviceId) {
+        throw new Error('RUNNER_CLEANUP_UNCONFIRMED: stale Android runner has no recorded device identity');
+    }
+    const releaseSlot = release ??
+        (async (opts) => {
+            const { releaseAndroidInteractionSlot } = await import('./release-android-slot.js');
+            return releaseAndroidInteractionSlot({ ...opts, signal });
+        });
+    const receipt = await releaseSlot({ deviceId, includeLegacy: false });
+    signal?.throwIfAborted();
+    const requiredPackages = [
+        'dev.lykhoyda.rndevagent.androidrunner.test',
+        'dev.lykhoyda.rndevagent.androidrunner',
+    ];
+    const missingPackages = requiredPackages.filter((pkg) => !receipt.forceStoppedPackages.includes(pkg));
+    if (!receipt.stoppedOwnRunner || missingPackages.length > 0) {
+        throw new Error(`RUNNER_CLEANUP_UNCONFIRMED: stale Android runner cleanup failed for ${deviceId}`);
+    }
+    const verifyReleased = verify ??
+        (release
+            ? async () => { }
+            : async (expected) => {
+                const forwards = String((await execFileAsync('adb', ['forward', '--list'], {
+                    timeout: ADB_CLEANUP_TIMEOUT_MS,
+                    signal,
+                })).stdout);
+                const instrumentation = String((await execFileAsync('adb', ['-s', expected.deviceId, 'shell', 'dumpsys', 'activity', 'instrumentation'], {
+                    timeout: ADB_CLEANUP_TIMEOUT_MS,
+                    signal,
+                })).stdout);
+                const forwardRemains = forwards
+                    .split('\n')
+                    .filter((line) => line.startsWith(`${expected.deviceId} `))
+                    .some((line) => {
+                    if (expected.hostPort !== undefined && line.includes(`tcp:${expected.hostPort}`)) {
+                        return true;
+                    }
+                    return line.includes(`tcp:${expected.devicePort ?? DEFAULT_PORT}`);
+                });
+                if (forwardRemains || instrumentation.includes('dev.lykhoyda.rndevagent.androidrunner')) {
+                    throw new Error(`RUNNER_CLEANUP_UNCONFIRMED: Android runner resources remain for ${expected.deviceId}`);
+                }
+            });
+    await verifyReleased({
+        deviceId,
+        ...(state?.hostPort !== undefined ? { hostPort: state.hostPort } : {}),
+        ...(state?.devicePort !== undefined ? { devicePort: state.devicePort } : {}),
+    }, signal);
+    signal?.throwIfAborted();
+}
+export async function reapActiveAndroidRunner(deviceId) {
+    adoptPersistedAndroidState(deviceId);
+    await reapMismatchedAndroidRunner(runnerState ?? (deviceId ? { deviceId } : null));
 }
 function classifyAndroidHealth(info) {
     return classifyRunnerCompatibility({
@@ -418,12 +578,317 @@ function classifyAndroidHealth(info) {
 // RUNNER_PROTOCOL_MISMATCH.
 export class AndroidCommandsStaleError extends Error {
     missing;
-    constructor(missing, bundleId) {
-        super(`RUNNER_COMMANDS_STALE: installed rn-android-runner lacks required commands ` +
-            `(missing: ${missing.join(', ') || 'unknown'}). Re-open the device session ` +
-            `(device_snapshot action=open appId=${bundleId ?? '<your.app.id>'} platform=android) to rebuild it.`);
+    bundleId;
+    deviceId;
+    constructor(missing, bundleId, deviceId, detail) {
+        super(`RUNNER_COMMANDS_STALE: ${detail ??
+            `installed rn-android-runner lacks required commands ` +
+                `(missing: ${missing.join(', ') || 'unknown'}). Re-open the device session ` +
+                `(device_snapshot action=open appId=${bundleId ?? '<your.app.id>'} platform=android) to rebuild it.`}`);
         this.missing = missing;
+        this.bundleId = bundleId;
+        this.deviceId = deviceId;
     }
+}
+export class AndroidAuthorityStaleError extends Error {
+    deviceId;
+    constructor(deviceId, detail) {
+        super(`RUNNER_OWNERSHIP_MISMATCH: ${detail ?? 'installed Android runner lacks current authority identity'}`);
+        this.deviceId = deviceId;
+    }
+}
+function initializeAndroidRunnerRebuildState(databasePath) {
+    const store = openAuthorityStore(databasePath);
+    try {
+        store.database.exec(`
+      CREATE TABLE IF NOT EXISTS android_runner_rebuild_attempt (
+        lock_name TEXT PRIMARY KEY,
+        plugin_version TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('in_progress', 'completed', 'failed')),
+        owner_nonce TEXT,
+        lease_ms INTEGER NOT NULL,
+        cleanup_unverified INTEGER NOT NULL DEFAULT 0
+      )
+    `);
+        const columns = store.database
+            .prepare(`PRAGMA table_info(android_runner_rebuild_attempt)`)
+            .all();
+        if (!columns.some((column) => column.name === 'cleanup_unverified')) {
+            store.database.exec(`ALTER TABLE android_runner_rebuild_attempt
+         ADD COLUMN cleanup_unverified INTEGER NOT NULL DEFAULT 0`);
+        }
+        return store;
+    }
+    catch (cause) {
+        try {
+            store.close();
+        }
+        catch { }
+        throw cause;
+    }
+}
+export function acquireAndroidRunnerRebuildLock(pluginVersion, now = Date.now(), ownerNonce = randomUUID(), databasePath = ANDROID_REBUILD_LOCK_DATABASE) {
+    try {
+        const store = initializeAndroidRunnerRebuildState(databasePath);
+        try {
+            const claimed = store.database
+                .prepare(`INSERT INTO android_runner_rebuild_attempt(
+             lock_name, plugin_version, status, owner_nonce, lease_ms, cleanup_unverified
+           )
+           VALUES ('artifact', ?, 'in_progress', ?, ?, 0)
+           ON CONFLICT(lock_name) DO UPDATE SET
+             plugin_version = excluded.plugin_version,
+             status = 'in_progress',
+             owner_nonce = excluded.owner_nonce,
+             lease_ms = excluded.lease_ms,
+             cleanup_unverified = 0
+           WHERE
+             (
+               android_runner_rebuild_attempt.status != 'in_progress'
+               AND android_runner_rebuild_attempt.plugin_version != excluded.plugin_version
+               AND android_runner_rebuild_attempt.cleanup_unverified = 0
+             )
+             OR (
+               android_runner_rebuild_attempt.status = 'in_progress'
+               AND android_runner_rebuild_attempt.lease_ms <= ?
+               AND android_runner_rebuild_attempt.cleanup_unverified = 0
+             )
+           RETURNING owner_nonce, plugin_version`)
+                .get(pluginVersion, ownerNonce, now, now - ANDROID_REBUILD_LOCK_STALE_MS);
+            store.secureFiles();
+            if (claimed?.owner_nonce === ownerNonce && claimed.plugin_version === pluginVersion) {
+                return { status: 'acquired', lock: { ownerNonce, pluginVersion } };
+            }
+            const current = store.database
+                .prepare(`SELECT plugin_version, status
+           FROM android_runner_rebuild_attempt
+           WHERE lock_name = 'artifact'`)
+                .get();
+            return current?.plugin_version === pluginVersion && current.status !== 'in_progress'
+                ? { status: 'exhausted' }
+                : { status: 'busy' };
+        }
+        finally {
+            store.close();
+        }
+    }
+    catch {
+        return { status: 'busy' };
+    }
+}
+export function heartbeatAndroidRunnerRebuildLock(lock, now = Date.now(), databasePath = ANDROID_REBUILD_LOCK_DATABASE) {
+    try {
+        const store = initializeAndroidRunnerRebuildState(databasePath);
+        try {
+            const refreshed = store.database
+                .prepare(`UPDATE android_runner_rebuild_attempt
+           SET lease_ms = ?
+           WHERE lock_name = 'artifact'
+             AND plugin_version = ?
+             AND status = 'in_progress'
+             AND owner_nonce = ?`)
+                .run(now, lock.pluginVersion, lock.ownerNonce);
+            store.secureFiles();
+            return refreshed.changes === 1;
+        }
+        finally {
+            store.close();
+        }
+    }
+    catch {
+        return false;
+    }
+}
+function finishAndroidRunnerRebuildLock(lock, status, cleanupUnverified, now = Date.now(), databasePath = ANDROID_REBUILD_LOCK_DATABASE) {
+    try {
+        const store = initializeAndroidRunnerRebuildState(databasePath);
+        try {
+            const finished = store.database
+                .prepare(`UPDATE android_runner_rebuild_attempt
+           SET status = ?, owner_nonce = NULL, lease_ms = ?, cleanup_unverified = ?
+           WHERE lock_name = 'artifact'
+             AND plugin_version = ?
+             AND status = 'in_progress'
+             AND (cleanup_unverified = 0 OR ? = 1)
+             AND owner_nonce = ?`)
+                .run(status, now, cleanupUnverified ? 1 : 0, lock.pluginVersion, status === 'failed' ? 1 : 0, lock.ownerNonce);
+            store.secureFiles();
+            return finished.changes === 1;
+        }
+        finally {
+            store.close();
+        }
+    }
+    catch {
+        return false;
+    }
+}
+export function completeAndroidRunnerRebuildLock(lock, now = Date.now(), databasePath = ANDROID_REBUILD_LOCK_DATABASE) {
+    return finishAndroidRunnerRebuildLock(lock, 'completed', false, now, databasePath);
+}
+export function releaseAndroidRunnerRebuildLock(lock, now = Date.now(), databasePath = ANDROID_REBUILD_LOCK_DATABASE) {
+    return finishAndroidRunnerRebuildLock(lock, 'failed', false, now, databasePath);
+}
+export function beginAndroidRunnerRebuildCleanup(lock, now = Date.now(), databasePath = ANDROID_REBUILD_LOCK_DATABASE) {
+    try {
+        const store = initializeAndroidRunnerRebuildState(databasePath);
+        try {
+            const fenced = store.database
+                .prepare(`UPDATE android_runner_rebuild_attempt
+           SET cleanup_unverified = 1, lease_ms = ?
+           WHERE lock_name = 'artifact'
+             AND plugin_version = ?
+             AND status = 'in_progress'
+             AND cleanup_unverified = 0
+             AND owner_nonce = ?`)
+                .run(now, lock.pluginVersion, lock.ownerNonce);
+            store.secureFiles();
+            return fenced.changes === 1;
+        }
+        finally {
+            store.close();
+        }
+    }
+    catch {
+        return false;
+    }
+}
+export function markAndroidRunnerRebuildCleanupUnverified(lock, now = Date.now(), databasePath = ANDROID_REBUILD_LOCK_DATABASE) {
+    return finishAndroidRunnerRebuildLock(lock, 'failed', true, now, databasePath);
+}
+function androidRebuildRefusal(error, detail) {
+    return error instanceof AndroidAuthorityStaleError
+        ? new AndroidAuthorityStaleError(error.deviceId, detail)
+        : new AndroidCommandsStaleError(error.missing, error.bundleId, error.deviceId, detail);
+}
+export async function runBoundedAndroidRunnerRebuild(error, rebuild, cleanup, dependencies = {}) {
+    const pluginVersion = getPluginVersion() ?? 'unknown';
+    const acquire = dependencies.acquire ?? acquireAndroidRunnerRebuildLock;
+    const claim = acquire(pluginVersion);
+    if (claim.status !== 'acquired') {
+        throw androidRebuildRefusal(error, claim.status === 'exhausted'
+            ? `runner artifact was already rebuilt once for plugin v${pluginVersion}`
+            : 'another session is rebuilding the shared runner artifact');
+    }
+    const { lock } = claim;
+    const heartbeat = dependencies.heartbeat ?? heartbeatAndroidRunnerRebuildLock;
+    const complete = dependencies.complete ?? completeAndroidRunnerRebuildLock;
+    const beginCleanup = dependencies.beginCleanup ?? beginAndroidRunnerRebuildCleanup;
+    const release = dependencies.release ?? releaseAndroidRunnerRebuildLock;
+    const markCleanupUnverified = dependencies.markCleanupUnverified ?? markAndroidRunnerRebuildCleanupUnverified;
+    const controller = new AbortController();
+    let cleanupController;
+    let leaseAuthorityLost = false;
+    const authorityLost = () => {
+        if (leaseAuthorityLost)
+            return;
+        leaseAuthorityLost = true;
+        const refusal = androidRebuildRefusal(error, 'runner artifact rebuild authority was lost');
+        if (!controller.signal.aborted)
+            controller.abort(refusal);
+        if (cleanupController && !cleanupController.signal.aborted)
+            cleanupController.abort(refusal);
+    };
+    const refreshAuthority = () => {
+        try {
+            if (heartbeat(lock))
+                return true;
+        }
+        catch { }
+        authorityLost();
+        return false;
+    };
+    const heartbeatTimer = setInterval(() => {
+        try {
+            if (!heartbeat(lock))
+                authorityLost();
+        }
+        catch {
+            authorityLost();
+        }
+    }, dependencies.heartbeatIntervalMs ?? ANDROID_REBUILD_HEARTBEAT_MS);
+    const transitionAttempts = Math.max(1, dependencies.completionAttempts ?? ANDROID_REBUILD_COMPLETION_ATTEMPTS);
+    const persistTransition = async (transition) => {
+        for (let attempt = 0; attempt < transitionAttempts; attempt += 1) {
+            if (leaseAuthorityLost)
+                return false;
+            try {
+                if (transition(lock))
+                    return true;
+            }
+            catch { }
+            if (!refreshAuthority())
+                return false;
+            if (attempt + 1 < transitionAttempts) {
+                await new Promise((resolve) => {
+                    setTimeout(resolve, dependencies.completionRetryIntervalMs ?? ANDROID_REBUILD_COMPLETION_RETRY_MS);
+                });
+            }
+        }
+        return false;
+    };
+    try {
+        const result = await rebuild(controller.signal);
+        controller.signal.throwIfAborted();
+        for (let attempt = 0; attempt < transitionAttempts; attempt += 1) {
+            controller.signal.throwIfAborted();
+            try {
+                if (complete(lock)) {
+                    controller.signal.throwIfAborted();
+                    clearInterval(heartbeatTimer);
+                    return result;
+                }
+            }
+            catch { }
+            if (attempt + 1 < transitionAttempts) {
+                await new Promise((resolve) => {
+                    setTimeout(resolve, dependencies.completionRetryIntervalMs ?? ANDROID_REBUILD_COMPLETION_RETRY_MS);
+                });
+            }
+        }
+        if (!controller.signal.aborted) {
+            controller.abort(androidRebuildRefusal(error, 'runner artifact rebuild completion was not durable'));
+        }
+        controller.signal.throwIfAborted();
+        throw androidRebuildRefusal(error, 'runner artifact rebuild completion was not durable');
+    }
+    catch (cause) {
+        if (leaseAuthorityLost) {
+            clearInterval(heartbeatTimer);
+            throw controller.signal.reason;
+        }
+        if (!(await persistTransition(beginCleanup))) {
+            clearInterval(heartbeatTimer);
+            throw leaseAuthorityLost
+                ? controller.signal.reason
+                : androidRebuildRefusal(error, 'runner artifact cleanup fence was not durable');
+        }
+        cleanupController = new AbortController();
+        const cleanupTimer = setTimeout(() => cleanupController?.abort(androidRebuildRefusal(error, 'runner artifact cleanup exceeded its time limit')), dependencies.cleanupTimeoutMs ?? ANDROID_REBUILD_CLEANUP_TIMEOUT_MS);
+        let cleanupVerified = false;
+        try {
+            await cleanup(cleanupController.signal);
+            cleanupController.signal.throwIfAborted();
+            cleanupVerified = true;
+        }
+        catch { }
+        clearTimeout(cleanupTimer);
+        cleanupController = undefined;
+        const terminalPersisted = await persistTransition(cleanupVerified ? release : markCleanupUnverified);
+        clearInterval(heartbeatTimer);
+        if (!terminalPersisted) {
+            throw leaseAuthorityLost
+                ? controller.signal.reason
+                : androidRebuildRefusal(error, 'runner artifact failure state was not durable');
+        }
+        if (!cleanupVerified) {
+            throw androidRebuildRefusal(error, 'runner artifact cleanup could not be verified');
+        }
+        throw controller.signal.aborted ? controller.signal.reason : cause;
+    }
+}
+export function androidRetryCleanupContext(state, error) {
+    return state ?? (error.deviceId ? { deviceId: error.deviceId } : null);
 }
 // GH #418: deleting the APKs is the artifact invalidation — apksExist flips
 // false, so resolveAndroidInstallAction returns 'build-then-install' (Gradle).
@@ -454,15 +919,37 @@ export async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAUL
         return await startAndroidRunnerAttempt(deviceId, bundleId, devicePort, opts);
     }
     catch (err) {
+        if (opts.allowArtifactRebuild && err instanceof AndroidAuthorityStaleError) {
+            const state = await runBoundedAndroidRunnerRebuild(err, async (signal) => {
+                await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState, err), undefined, undefined, signal);
+                signal.throwIfAborted();
+                invalidateAndroidRunnerApks();
+                return startAndroidRunnerAttempt(deviceId, bundleId, devicePort, {
+                    _forceReinstall: true,
+                    _forceLocalBuild: true,
+                    _rebuildSignal: signal,
+                });
+            }, async (signal) => {
+                await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState, err), undefined, undefined, signal);
+            });
+            pendingUpgradeNote = 'runner artifact rebuilt (authority identity mismatch)';
+            return state;
+        }
         if (opts.allowArtifactRebuild && err instanceof AndroidCommandsStaleError) {
             // Killing the local adb child does NOT free the device-side
             // UiAutomation slot (#237) — reap through the slot-release path so the
             // rebuilt instrumentation can bind.
-            await reapMismatchedAndroidRunner(deviceId);
-            invalidateAndroidRunnerApks();
-            const state = await startAndroidRunnerAttempt(deviceId, bundleId, devicePort, {
-                _forceReinstall: true,
-                _forceLocalBuild: true,
+            const state = await runBoundedAndroidRunnerRebuild(err, async (signal) => {
+                await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState, err), undefined, undefined, signal);
+                signal.throwIfAborted();
+                invalidateAndroidRunnerApks();
+                return startAndroidRunnerAttempt(deviceId, bundleId, devicePort, {
+                    _forceReinstall: true,
+                    _forceLocalBuild: true,
+                    _rebuildSignal: signal,
+                });
+            }, async (signal) => {
+                await reapMismatchedAndroidRunner(androidRetryCleanupContext(runnerState, err), undefined, undefined, signal);
             });
             pendingUpgradeNote = `runner artifact rebuilt (missing commands: ${err.missing.join(', ') || 'unknown'})`;
             return state;
@@ -471,48 +958,90 @@ export async function startAndroidRunner(deviceId, bundleId, devicePort = DEFAUL
     }
 }
 async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAULT_PORT, opts = {}) {
-    const serial = deviceId ?? (await resolveAndroidSerial());
+    opts._rebuildSignal?.throwIfAborted();
+    const serial = deviceId ??
+        (testAuthorityState ? runnerState?.deviceId : undefined) ??
+        (await resolveAndroidSerial());
+    if (!serial) {
+        throw new Error('DEVICE_AUTHORITY_MISMATCH: Android native runner requires an exact claimed device');
+    }
+    const authority = androidRunnerAuthority(serial, bundleId ?? '');
     adoptPersistedAndroidState(serial);
     let forceReinstall = opts._forceReinstall === true;
-    if (isAndroidRunnerAvailable() && shouldReuseAndroidRunner(runnerState, deviceId)) {
+    if (shouldReapAndroidRunnerBeforeStart(runnerState, serial, isAndroidRunnerAvailable())) {
+        await reapMismatchedAndroidRunner(runnerState);
+        forceReinstall = true;
+    }
+    if (isAndroidRunnerAvailable() && shouldReuseAndroidRunner(runnerState, serial)) {
+        const reusableState = runnerState;
         const info = await probeAndroidRunnerHealthInfo(runnerState.hostPort);
         if (info.reachable && info.ok) {
-            const compat = classifyAndroidHealth(info);
-            if (compat.compatible)
-                return runnerState;
-            if (compat.reason === 'missing-commands') {
-                // GH #418: reinstalling the SAME APK can't add commands — artifact
-                // staleness. Always throw the typed error: the retry-once wrapper is
-                // the SINGLE rebuild owner (one Gradle build even on a checkout whose
-                // fresh build still misses commands — multi-review advisory); mid-flow
-                // callers surface the typed refusal.
-                throw new AndroidCommandsStaleError(compat.missing ?? [], bundleId);
+            if (!androidHealthMatchesAuthority(info, {
+                instanceId: runnerState.instanceId,
+                sessionId: runnerState.sessionId,
+                claimEpoch: runnerState.claimEpoch,
+                deviceId: runnerState.deviceId,
+                appId: runnerState.bundleId,
+            })) {
+                await reapMismatchedAndroidRunner(reusableState);
+                forceReinstall = true;
             }
-            // GH #383: a reachable-but-incompatible runner is reaped (force-stop +
-            // state clear) and force-reinstalled so the fresh APK supersedes it.
-            pendingUpgradeNote = 'runner upgraded (protocol/version mismatch)';
-            forceReinstall = true;
-            await reapMismatchedAndroidRunner(deviceId);
+            else {
+                const compat = classifyAndroidHealth(info);
+                if (compat.compatible)
+                    return runnerState;
+                if (compat.reason === 'missing-commands') {
+                    // GH #418: reinstalling the SAME APK can't add commands — artifact
+                    // staleness. Always throw the typed error: the retry-once wrapper is
+                    // the SINGLE rebuild owner (one Gradle build even on a checkout whose
+                    // fresh build still misses commands — multi-review advisory); mid-flow
+                    // callers surface the typed refusal.
+                    throw new AndroidCommandsStaleError(compat.missing ?? [], bundleId, reusableState.deviceId);
+                }
+                // GH #383: a reachable-but-incompatible runner is reaped (force-stop +
+                // state clear) and force-reinstalled so the fresh APK supersedes it.
+                pendingUpgradeNote = 'runner upgraded (protocol/version mismatch)';
+                forceReinstall = true;
+                await reapMismatchedAndroidRunner(reusableState);
+            }
         }
-        // unreachable/unhealthy: fall through — the fresh start below supersedes it.
+        else {
+            await reapMismatchedAndroidRunner(reusableState);
+            forceReinstall = true;
+        }
     }
+    opts._rebuildSignal?.throwIfAborted();
     // Self-install on first use (no external CLI) — resolve prebuilt (or build/install)
     // the in-tree runner APKs if the instrumentation isn't on the device yet.
     const provenance = await ensureAndroidRunnerInstalled(deviceId, {
         forceReinstall,
         forceLocalBuild: opts._forceLocalBuild === true,
+        signal: opts._rebuildSignal,
     });
     let hostPort = await findFreePort(devicePort);
+    opts._rebuildSignal?.throwIfAborted();
     try {
-        await execFileAsync('adb', buildAdbForwardArgs(deviceId, hostPort, devicePort));
+        await execFileAsync('adb', buildAdbForwardArgs(deviceId, hostPort, devicePort), {
+            signal: opts._rebuildSignal,
+        });
     }
     catch {
+        opts._rebuildSignal?.throwIfAborted();
         // host port raced between probe and forward → re-probe once with any free port
         hostPort = await findFreePort(0);
-        await execFileAsync('adb', buildAdbForwardArgs(deviceId, hostPort, devicePort));
+        await execFileAsync('adb', buildAdbForwardArgs(deviceId, hostPort, devicePort), {
+            signal: opts._rebuildSignal,
+        });
     }
     return new Promise((resolve, reject) => {
         let resolved = false;
+        let forwardRemoved = false;
+        const removeForward = () => {
+            if (forwardRemoved)
+                return;
+            forwardRemoved = true;
+            void execFileAsync('adb', buildAdbForwardRemoveArgs(serial, hostPort)).catch(() => { });
+        };
         const child = spawn('adb', [
             ...adbSerialArgs(deviceId),
             'shell',
@@ -522,12 +1051,14 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
             '-r',
             ...buildInstrumentPortArgs(devicePort),
             ...buildInstrumentVersionArgs(getPluginVersion()),
+            ...buildInstrumentAuthorityArgs(authority),
             '-e',
             'class',
             MAIN_LOOP_CLASS,
             INSTRUMENTATION,
         ], {
             stdio: ['ignore', 'pipe', 'pipe'],
+            signal: opts._rebuildSignal,
         });
         runnerProcess = child;
         // GH#243: drain + tail the instrument's own output so a cold-start failure stays
@@ -542,6 +1073,12 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
         const finishReady = () => {
             if (resolved)
                 return;
+            if (opts._rebuildSignal?.aborted) {
+                resolved = true;
+                child.kill('SIGTERM');
+                reject(opts._rebuildSignal.reason);
+                return;
+            }
             resolved = true;
             const state = {
                 schemaVersion: 1,
@@ -554,7 +1091,15 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
                 protocolVersion: RUNNER_PROTOCOL_VERSION,
                 ...(getPluginVersion() !== null ? { runnerVersion: getPluginVersion() } : {}),
                 provenance,
+                ...authority,
             };
+            const processBirth = readProcessBirth(child.pid);
+            if (!processBirth) {
+                child.kill('SIGTERM');
+                reject(new Error('PROCESS_BIRTH_UNAVAILABLE: native runner process identity could not be proven'));
+                return;
+            }
+            state.processBirth = processBirth.token;
             runnerState = state;
             if (serial) {
                 try {
@@ -568,6 +1113,7 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
             resolve(state);
         };
         child.on('error', (err) => {
+            removeForward();
             if (resolved)
                 return;
             resolved = true;
@@ -575,14 +1121,9 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
         });
         child.on('exit', (code) => {
             if (runnerProcess === child) {
-                const exitState = runnerState;
                 clearAndroidStateFile();
-                if (typeof exitState?.hostPort === 'number') {
-                    execFileAsync('adb', buildAdbForwardRemoveArgs(exitState.deviceId, exitState.hostPort)).catch(() => {
-                        /* best-effort: must never throw from exit handler */
-                    });
-                }
             }
+            removeForward();
             if (!resolved) {
                 resolved = true;
                 reject(new Error(`Android runner instrumentation exited before readiness (code ${code})${diag ? `\n${diag.trim()}` : ''}`));
@@ -590,11 +1131,23 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
         });
         // GH#243: readiness is the runner's own /health, not the (stale-prone) logcat
         // ring buffer. /health is true only once the ServerSocket is actually accepting.
-        void waitForAndroidRunnerHealth(hostPort).then(async (healthy) => {
+        void waitForAndroidRunnerHealth(hostPort, { capability: authority.capability }).then(async (healthy) => {
             if (resolved)
                 return;
             if (healthy) {
-                const info = await probeAndroidRunnerHealthInfo(hostPort);
+                const info = await probeAndroidRunnerHealthInfo(hostPort, authority.capability);
+                if (!androidHealthMatchesAuthority(info, {
+                    instanceId: authority.instanceId,
+                    sessionId: authority.sessionId,
+                    claimEpoch: authority.claimEpoch,
+                    deviceId: authority.deviceId,
+                    appId: authority.appId,
+                })) {
+                    resolved = true;
+                    child.kill('SIGTERM');
+                    reject(new AndroidAuthorityStaleError(serial));
+                    return;
+                }
                 const compat = classifyAndroidHealth(info);
                 if (!compat.compatible) {
                     resolved = true;
@@ -603,7 +1156,7 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
                     if (compat.reason === 'missing-commands') {
                         // GH #418: typed — the wrapper's retry-once invalidates the APKs
                         // at open; mid-flow callers surface RUNNER_COMMANDS_STALE.
-                        reject(new AndroidCommandsStaleError(compat.missing ?? [], bundleId));
+                        reject(new AndroidCommandsStaleError(compat.missing ?? [], bundleId, serial));
                         return;
                     }
                     reject(new Error(`RUNNER_PROTOCOL_MISMATCH: installed rn-android-runner speaks protocol ` +
@@ -621,7 +1174,8 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
         });
     });
 }
-export async function stopAndroidRunner(deviceId) {
+export async function stopAndroidRunner(deviceId, signal) {
+    signal?.throwIfAborted();
     // GH #383 (review amendment): adopt first so a post-respawn stop finds the
     // persisted runner (empty in-memory state would otherwise leak the forward).
     adoptPersistedAndroidState(deviceId ?? undefined);
@@ -631,7 +1185,7 @@ export async function stopAndroidRunner(deviceId) {
     if (typeof stoppedState?.hostPort === 'number') {
         const resolvedDeviceId = deviceId ?? stoppedState.deviceId;
         try {
-            await execFileAsync('adb', buildAdbForwardRemoveArgs(resolvedDeviceId, stoppedState.hostPort));
+            await execFileAsync('adb', buildAdbForwardRemoveArgs(resolvedDeviceId, stoppedState.hostPort), { timeout: ADB_CLEANUP_TIMEOUT_MS, signal });
         }
         catch {
             /* non-fatal */
@@ -654,9 +1208,16 @@ async function sendCommandOnce(hostPort, body, timeoutMs) {
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     let resp;
     try {
+        const capability = runnerState?.hostPort === hostPort ? runnerState.capability : undefined;
+        if (!capability) {
+            throw new Error('RUNNER_OWNERSHIP_MISMATCH: runner capability is unavailable');
+        }
         resp = await fetchImpl(`http://127.0.0.1:${hostPort}/command`, {
             method: 'POST',
-            headers: { 'content-type': 'application/json' },
+            headers: {
+                'content-type': 'application/json',
+                authorization: `Bearer ${capability}`,
+            },
             body: JSON.stringify(body),
             signal: controller.signal,
         });

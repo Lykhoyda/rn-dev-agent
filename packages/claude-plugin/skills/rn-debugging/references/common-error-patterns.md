@@ -35,5 +35,5 @@ Use the `path` parameter on `cdp_store_state` to drill into specific keys.
 
 ## Network Requests Not Appearing
 
-1. RN < 0.83 — uses injected hooks. Check `cdp_status` → `capabilities.networkFallback`
+1. RN < 0.83 — uses injected hooks. Inspect the `cdp_network_log` result for fallback metadata
 2. Requests made before MCP connected — buffer only captures from connection time

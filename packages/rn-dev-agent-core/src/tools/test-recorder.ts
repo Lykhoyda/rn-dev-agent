@@ -11,6 +11,7 @@ import type { ToolResult } from '../utils.js';
 import { findProjectRoot } from '../nav-graph/storage.js';
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { sessionRecordingsDirectory } from '../session/runtime-paths.js';
 import {
   DEV_CHECK_JS,
   START_RECORDING_JS,
@@ -112,7 +113,7 @@ export function getRecordingsDir(
 ): string | null {
   const root = rootResolver();
   if (!root) return null;
-  return join(root, '.rn-agent', 'recordings');
+  return sessionRecordingsDirectory(root);
 }
 
 // B144: resolver factory that threads a bundleId into findProjectRoot so

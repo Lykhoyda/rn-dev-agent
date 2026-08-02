@@ -227,7 +227,7 @@ are documented exceptions, not defaults.
 | Read app state (Redux/Zustand/Jotai/RQ) | `cdp_store_state(path=…)` | `console.log` + log-tailing, dispatching probes via `cdp_evaluate` |
 | Read/clear app storage (MMKV) | `cdp_mmkv` (get/set/delete/has/keys/clear); `device_reset_state` for full reset preflight | raw Nitro poking via `cdp_evaluate`, `simctl uninstall` to clear state |
 | Inspect React internals | `cdp_component_tree(filter=…)`, `cdp_component_state` | guessing from screenshots, walking the fiber via raw `cdp_evaluate` |
-| Check connection / Metro / errors | `cdp_status` | `curl http://localhost:8081/json`, `xcrun simctl list`, `adb devices` |
+| Check session / connection / Metro | `rn_session(action="status")`, then `cdp_status` | ambient port or device scans as authority |
 | Read JS errors / console / network | `cdp_error_log`, `cdp_console_log`, `cdp_network_log` | `tail -f` log files, `adb logcat | grep` (those are NATIVE-error fallbacks only — see Error Recovery below) |
 | Reload the app | `cdp_reload` (auto-reconnects) | `xcrun simctl terminate … && launch …`, `adb shell am force-stop` |
 | Manage permissions | `device_permission(action=…)` | raw `xcrun simctl privacy`, `adb shell pm grant` |
@@ -245,7 +245,7 @@ default.
 
 | Condition | Escape | Why |
 |---|---|---|
-| Multiple Hermes targets, `cdp_connect` picked the wrong one | `curl -s http://localhost:8081/json` to enumerate, then `cdp_connect(targetId="…")` | The plugin can't disambiguate without the explicit ID |
+| Authority-bound Hermes target is missing | `cdp_targets` for diagnostics, then `cdp_connect` | Ambient targets may explain the mismatch but cannot replace the session binding |
 | `cdp_error_log` empty but app is broken | `collect_logs` (parallel JS+native) — drops to native log streams | Native crashes don't surface in the JS error buffer |
 | App fully crashed / picker stuck | `xcrun simctl terminate` + manual relaunch + `cdp_connect force: true` | When `cdp_reload` can't recover |
 
@@ -295,9 +295,11 @@ element, then stab at coords when confused.
 ### When to Use Which Tool
 
 #### "I need to check if the app is running"
-Use `cdp_status` — it checks Metro, CDP connection, app info, active errors, and RedBox state in one call.
-- **Do not** use `curl localhost:8081` or `xcrun simctl list` for routine status checks.
-- **Exception:** when multiple Hermes targets exist (common after reload spawns extras) and `cdp_connect` picks the wrong one, `curl -s http://localhost:8081/json` is the correct way to enumerate target IDs — pass the right one via `targetId:`.
+Use `rn_session(action="status")`, then passive `cdp_status` for the bound Metro
+and CDP target. Use `cdp_component_tree` and `cdp_error_log` for render and
+error health.
+- Use `rn_session(action="status")` first when the authority binding itself is in question.
+- **Do not** use ambient port or device scans to select a target.
 
 #### "I need to see what's on screen"
 - **Accessibility tree (for interaction):** `device_snapshot` — returns the full UI tree with @ref handles you can tap/fill. **First action on any new screen.**
@@ -367,7 +369,7 @@ Use `cdp_reload` — triggers a full reload with automatic reconnect and target 
 **If `cdp_reload` returns `reconnected: false` (30s deadline exceeded):**
 1. Wait 5-10s for Metro to fully rebuild
 2. Call `cdp_connect platform: "android"|"ios" force: true` to re-pin
-3. If multiple Hermes targets exist (reload sometimes spawns extras), use `targetId:` with the exact id from `curl -s http://localhost:8081/json`
+3. If multiple Hermes targets exist, use `cdp_targets` only to diagnose why the session-bound signed target is unavailable
 
 **iOS expo-dev-client dev menu:** `cdp_reload` best-effort auto-dismisses it after
 reconnect. If the bottom sheet is still covering the app, use
@@ -397,13 +399,12 @@ before proof recordings.
 
 If `device_list` shows more than one booted device (e.g., both an iOS simulator and an Android emulator):
 
-1. Call `cdp_status platform: "android"` or `platform: "ios"` to pin CDP to one target
+1. Inspect `rn_session(action="status")`, then call `cdp_connect` for the bound platform
 2. Pass `platform:` explicitly to **all** `device_*` tools thereafter
 
-While a `device_snapshot action=open` session is active, `cdp_status` is bound
-to that session's platform (and, on Android, its emulator/physical device
-class): requesting a different platform fails with `TARGET_SESSION_MISMATCH`
-instead of silently re-targeting — close the session first to switch.
+The fenced session owns the platform and exact device. `cdp_status` only reports
+the current client; conflicting authoritative tool arguments fail instead of
+silently re-targeting.
 
 An explicit `platform:` on `device_screenshot` resolves the booted device
 directly and captures via raw `simctl` / `adb` (GH #60 — fixed), so
@@ -421,12 +422,12 @@ Device automation on BOTH platforms is owned by in-tree runners that ship with t
 
 What this means in practice:
 
-- **Zero manual setup on either platform.** Runners resolve from a **prebuilt artifact** first — a SHA-256-checked local cache, then a download of the release asset matching the exact plugin version — and only fall back to an on-machine build (`xcodebuild` / Gradle) when no artifact is available. Resolution is fail-open: offline, 404, or checksum mismatch degrades to the local build with a one-line `meta.note`, never a hard failure. A local iOS cold build persists a reusable `.xctestrun`, so even self-built runners pay the multi-minute build at most once. Force a source build with `RN_RUNNER_BUILD=local`. `cdp_status` / `/rn-dev-agent:doctor` report provenance (`prebuilt v<X>` vs `local-built`).
-- **Runner staleness self-heals.** Runners version their wire protocol and enumerate supported commands in `/health`; the bridge reaps + reinstalls a stale runner transparently (one restart, `meta.note: "runner upgraded"`). `device_snapshot action=open` auto-invalidates and rebuilds an artifact missing required verbs; mid-flow tools refuse fast with `RUNNER_COMMANDS_STALE` instead of silently building. Only a mismatch that survives reinstall surfaces `RUNNER_PROTOCOL_MISMATCH` with exact rebuild commands. Handshake visible at `cdp_status` → `deviceSession.runnerProtocol`.
+- **Zero manual setup on either platform.** Runners resolve from a **prebuilt artifact** first — a SHA-256-checked local cache, then a download of the release asset matching the exact plugin version — and only fall back to an on-machine build (`xcodebuild` / Gradle) when no artifact is available. Resolution is fail-open: offline, 404, or checksum mismatch degrades to the local build with a one-line `meta.note`, never a hard failure. A local iOS cold build persists a reusable `.xctestrun`, so even self-built runners pay the multi-minute build at most once. Force a source build with `RN_RUNNER_BUILD=local`. Device results and `/rn-dev-agent:doctor` report provenance (`prebuilt v<X>` vs `local-built`).
+- **Runner staleness self-heals.** Runners version their wire protocol and enumerate supported commands in `/health`; the bridge reaps + reinstalls a stale runner transparently (one restart, `meta.note: "runner upgraded"`). `device_snapshot action=open` auto-invalidates and rebuilds an artifact missing required verbs; mid-flow tools refuse fast with `RUNNER_COMMANDS_STALE` instead of silently building. Only a mismatch that survives reinstall surfaces `RUNNER_PROTOCOL_MISMATCH` with exact rebuild commands.
 - **Legacy upstream `AgentDeviceRunner` apps** from an old install are detected and `simctl uninstall`ed at iOS device-open (an installed XCUITest runner relaunches itself into the foreground mid-flow, backgrounding your app and wedging CDP). Opt out with `RN_DEVICE_KILL_LEGACY=0`.
-- **XCTest's idle-wait (quiescence) is bypassed by default on iOS.** RN apps with looping animations/Reanimated worklets never report idle, which used to stall queries and snapshots. Opt out with `RN_QUIESCENCE_BYPASS=0`; audit via `meta.quiescenceBypass` and `cdp_status.deviceSession.runnerCapabilities`. `XCUIElement.typeText` runs its own internal sync, so `device_fill` may still hit a main-thread timeout. The client poisons and reaps that runner and succeeds only when an independent exact CDP readback proves the requested value (`meta.runnerTimeoutRecovery.verification: "exact-readback"`); otherwise it fails closed with `RUNNER_TIMEOUT`.
+- **XCTest's idle-wait (quiescence) is bypassed by default on iOS.** RN apps with looping animations/Reanimated worklets never report idle, which used to stall queries and snapshots. Opt out with `RN_QUIESCENCE_BYPASS=0`; audit via `meta.quiescenceBypass` on device results. `XCUIElement.typeText` runs its own internal sync, so `device_fill` may still hit a main-thread timeout. The client poisons and reaps that runner and succeeds only when an independent exact CDP readback proves the requested value (`meta.runnerTimeoutRecovery.verification: "exact-readback"`); otherwise it fails closed with `RUNNER_TIMEOUT`.
 - **Foreign automation is arbitrated, not collided with.** While a foreign Maestro/XCUITest session drives the target simulator, `device_*` and flow tools refuse fast with `BUSY_FOREIGN_FLOW` (~50 ms) instead of cascading into a runner leak. CDP reads stay free; `device_screenshot` still serves pixels via simctl. Disable with `RN_IOS_FOREIGN_GUARD=0`.
-- **The bridge survives Metro restarts.** The MCP entry point is a supervisor holding zero network sockets; killing whatever listens on 8081 kills only the worker, which is respawned with the session intact (`cdp_status` → `bridge.workerRestarts`). Opt out with `RN_BRIDGE_SUPERVISOR=0`.
+- **The bridge survives Metro restarts.** The MCP entry point is a supervisor holding zero network sockets; killing the bound Metro listener kills only the worker, which is respawned with the session intact. Opt out with `RN_BRIDGE_SUPERVISOR=0`.
 
 Built-in reliability layers on `device_*` interactions (all default-ON, each with an opt-out):
 
@@ -464,7 +465,7 @@ getBridge()?.registerStores({ auth: useAuthStore, cart: useCartStore });
 
 `getBridge()` returns null in production, so the optional-chain is a no-op — every assignment is tree-shaken from the release bundle. No `__DEV__` guards needed at the call site.
 
-If `cdp_navigate` fails with "Navigation ref not found" despite the fiber walk, the most likely causes are: (a) the app isn't fully bundled yet — wait for `cdp_status.helpersInjected: true`; (b) class-component root that doesn't expose a ref — use the bridge `registerNavRef` fallback; (c) a non-React-Navigation router — out of scope for this plugin's current tools.
+If `cdp_navigate` fails with "Navigation ref not found" despite the fiber walk, the most likely causes are: (a) the app isn't fully bundled yet — wait until a narrow `cdp_component_tree` call succeeds; (b) class-component root that doesn't expose a ref — use the bridge `registerNavRef` fallback; (c) a non-React-Navigation router — out of scope for this plugin's current tools.
 
 ### Portal modal coverage (react-native-actions-sheet, @gorhom/bottom-sheet, custom Modals)
 
@@ -505,8 +506,8 @@ the runner's settle engine.
 
 ### Anti-Patterns — Do Not Do
 
-1. `curl http://localhost:8081/json` — use `cdp_status` (except for multi-target enumeration, see above)
-2. `xcrun simctl list` / `adb devices` for status — use `cdp_status`
+1. Ambient Metro target scans — use `rn_session(action="status")`, `cdp_status`, and diagnostic-only `cdp_targets`
+2. `xcrun simctl list` / `adb devices` for authority — use `rn_session`; use `device_list` only for diagnostics
 3. `xcrun simctl openurl` / `adb shell am start` for in-app navigation — use `cdp_nav_graph` or `device_deeplink`
 4. `xcrun simctl` / `adb input` for UI taps — use `device_press` / `device_find`
 5. `device_press(ref=@eN)` with a stale ref from an earlier-screen snapshot (refs don't survive step transitions) — use `cdp_interact(testID=…)` or `device_batch.{find,press,fill}(testID=…)` for known testIDs, which re-resolve per call. Self-healing re-resolution catches the unique-match case, but ambiguous matches still fail with `STALE_REF`
@@ -522,24 +523,24 @@ the runner's settle engine.
 
 | Symptom | Diagnostic tool | Likely cause | Recovery |
 |---------|----------------|--------------|----------|
-| `cdp_status` fails | `curl localhost:8081/json` | Metro not running or wrong port | Start Metro, then `cdp_connect(port=XXXX)` |
+| `cdp_status` fails | `rn_session(action="status")` | Session Metro or target binding is unavailable | Use the integrated package script, then `cdp_connect` |
 | `cdp_component_tree` returns "No fiber roots" | Wait 2s, retry | App still mounting after reload | Retry; if persistent, `cdp_reload` |
 | `cdp_evaluate` returns `__RN_AGENT is not defined` | Automatic (retry) | Helpers lost after reload | Tool auto-re-injects; if stuck, `cdp_reload` |
-| Device tools return "no session" | `device_snapshot` | Session expired or device rebooted | `device_snapshot` starts a new session |
+| Device tools return "no session" | `rn_session(action="status")` | Authority session expired or lost its device binding | Restore the exact session binding before opening `device_snapshot` |
 | Blank screen, no JS errors | `collect_logs` | Native crash | Check native logs for crash stack |
 | `cdp_store_state` returns stale data | `device_snapshot` first | Read before React finished rendering | Always snapshot before store reads |
 | Network request missing | `cdp_network_log(filter="...")` | Request not yet made or filtered | Widen filter or check `cdp_console_log` for fetch errors |
 | `cdp_reload` reports `reconnected: false` | Wait 5-10s | New Hermes target not yet registered | `cdp_connect force: true`; if ambiguous target, pass `targetId:` |
 | `BUSY_FOREIGN_FLOW` refusal | `cdp_status` | A foreign Maestro/XCUITest session is driving the simulator | Wait for it to finish or stop the foreign automation; CDP reads and `device_screenshot` still work |
-| `RUNNER_COMMANDS_STALE` / `RUNNER_PROTOCOL_MISMATCH` | `cdp_status` → `deviceSession.runnerProtocol` | Runner artifact predates the installed plugin | `device_snapshot action=open` auto-invalidates + rebuilds; only a surviving mismatch needs the rebuild commands in the error |
-| `KEYBOARD_DISMISS_FAILED` refusal (iOS) | `device_snapshot` | A visible keyboard could not be proven hidden after the native control/swipe tiers and the optional injected JS tier, so no tap was performed | Connect CDP (`cdp_status`) so the JS tier can run, dismiss the keyboard explicitly, then retry with a fresh snapshot/ref |
+| `RUNNER_COMMANDS_STALE` / `RUNNER_PROTOCOL_MISMATCH` | failing `device_*` result | Runner artifact predates the installed plugin | `device_snapshot action=open` auto-invalidates + rebuilds; only a surviving mismatch needs the rebuild commands in the error |
+| `KEYBOARD_DISMISS_FAILED` refusal (iOS) | `device_snapshot` | A visible keyboard could not be proven hidden after the native control/swipe tiers and the optional injected JS tier, so no tap was performed | Connect CDP with `cdp_connect` so the JS tier can run, dismiss the keyboard explicitly, then retry with a fresh snapshot/ref |
 | `maestro_run` fails with `RUNTIME_DEGRADED` hint | — | Simulator runtime is wedged (taps report success, `onPress` never fires) | `xcrun simctl shutdown/boot` the simulator, relaunch, retry — don't chase app code |
 | `APP_NOT_INSTALLED` | — | Relaunch/recovery target isn't installed (e.g. after clearState) | Follow the `simctl install` advice in the error, then reconnect |
 | Replay fails, `meta.cdpJsFallback` present | `cdp_status` | iOS 26.x WDA reads an empty a11y tree (TRANSPORT_BLIND) | The CDP/JS replay fallback engages automatically; a `cdp-unreachable` skip means fix the CDP connection first |
 | All `cdp_*`/`device_*` tools missing after a Claude plugin upgrade | `/reload-plugins`, then inspect MCP inventory | The active Claude process still has the previous plugin snapshot | Reload Claude plugins; if the tools remain absent, exit and relaunch Claude Code. Do not describe Codex `/mcp verbose` as reconnect. |
-| Verifying against stale code with Metro running | `cdp_status` → `metro.candidates`, `projectRoot`/`servingCwd` | Connected Metro serves a different worktree | Point Metro at this worktree or `cdp_connect(port=…)` to the right one — the status warning names the mismatch |
+| Verifying against stale code with Metro running | `rn_session(action="status")`, then `cdp_status` | Session Metro or signed bundle does not match the worktree | Restart through the integrated package script and re-pin with `cdp_connect` |
 | `cdp_interact accessibilityLabel="..."` fails (label matching is fuzzy) | Prefer testID-keyed calls: `cdp_interact(testID="...")` or `device_batch` with `testID=` field. Fall back to `device_snapshot` + `device_press(ref="@eN")` only when no testID exists. | Label matching unreliable; testID matching is exact and fiber-tree-resolved | — |
-| "Disconnected due to opening a second DevTools window" / React Native DevTools keeps getting kicked | `cdp_status` → `autoConnect` field | RN allows one debugger frontend per app; bridge auto-reconnects by default (agent-first) | Set `RN_CDP_AUTOCONNECT=0` or `.rn-agent/config.json` → `{ "cdp": { "autoConnect": false } }`. Bridge then reconnects only on explicit tool calls and yields again when DevTools reopens. Note: **any** CDP tool call — including `cdp_status` — reclaims the seat while it runs; passive mode only stops *background* re-grabs. |
+| "Disconnected due to opening a second DevTools window" / React Native DevTools keeps getting kicked | `RN_CDP_AUTOCONNECT` and `.rn-agent/config.json` | RN allows one debugger frontend per app; bridge auto-reconnects by default (agent-first) | Set `RN_CDP_AUTOCONNECT=0` or `.rn-agent/config.json` → `{ "cdp": { "autoConnect": false } }`. `cdp_status` stays passive; `cdp_connect` and gated CDP tools reclaim the authority-bound seat when needed. |
 
 ### Authentication & Permission Pre-flight
 
@@ -552,7 +553,7 @@ Before testing **auth-gated features:**
 Before testing **permission-gated features:**
 1. `device_permission(action="query", permission="<name>")` — check current state
 2. Grant/revoke as needed — **remember: some permissions (camera/mic/location) kill the app process; notifications on Android usually do not**
-3. If revoked and the app died, relaunch + `cdp_status` to reconnect before continuing
+3. If revoked and the app died, relaunch + `cdp_connect` before continuing
 4. For a full clean-slate preflight (permissions + MMKV keys + force-stop + relaunch + reconnect), `device_reset_state` does it in one atomic call
 
 ### Verification Flow

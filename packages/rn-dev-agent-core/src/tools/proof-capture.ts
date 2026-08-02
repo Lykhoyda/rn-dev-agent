@@ -43,6 +43,7 @@ import {
   type FinalProofReceipt,
   type MechanicallyAcceptedProofReceipt,
   type ProofAction,
+  type ProofAuthority,
   type ProofDevice,
   type ProofRuntime,
   type ProofCandidateRuntime,
@@ -52,6 +53,10 @@ import {
 import type { DeviceRecordArgs } from './device-record.js';
 import { validateMedia, type MediaProcess, type MediaValidationInput } from './proof-media.js';
 import { failResult, okResult, type ToolResult } from '../utils.js';
+import {
+  readStartupIntegrityAttestation,
+  type StartupIntegrityAttestation,
+} from '../startup-integrity.js';
 
 const absolutePathSchema = z.string().min(1).refine(isAbsolute, 'path must be absolute');
 
@@ -177,6 +182,23 @@ export const proofCaptureInputSchema = z.discriminatedUnion('action', [
 export type ProofCaptureArgs = z.infer<typeof proofCaptureInputSchema>;
 type BeginRehearsalArgs = z.infer<typeof beginRehearsalSchema>;
 
+const proofGateBoundIdentityKeys = [
+  'platform',
+  'deviceId',
+  'appId',
+  'bundleId',
+  'metroPort',
+] as const;
+
+function proofActionPayload(unparsedArgs: unknown): unknown {
+  if (!unparsedArgs || typeof unparsedArgs !== 'object' || Array.isArray(unparsedArgs)) {
+    return unparsedArgs;
+  }
+  const payload = { ...(unparsedArgs as Record<string, unknown>) };
+  for (const key of proofGateBoundIdentityKeys) delete payload[key];
+  return payload;
+}
+
 export interface ProofReadiness {
   cdpAttached: boolean;
   helpersAttached: boolean;
@@ -213,6 +235,7 @@ export interface ProofCaptureDeps {
   readCandidateRuntime?: (root: string) => ProofCandidateRuntime;
   proofRootTracked: (root: string, proofRoot: string) => boolean;
   readiness: () => Promise<ProofReadiness>;
+  authority: (runId: string) => ProofAuthority;
   record: (args: DeviceRecordArgs) => Promise<ToolResult>;
   mediaProcess: MediaProcess;
   validateMedia: typeof validateMedia;
@@ -226,6 +249,7 @@ interface Session {
   context: BeginRehearsalArgs;
   actionIdentity: ProofAction;
   candidateRuntime: ProofCandidateRuntime | null;
+  authority: ProofAuthority;
   stage: ProofStage;
   invalidationReasons: string[];
   rehearsalStartedAt: Date;
@@ -310,6 +334,46 @@ function hashBytes(bytes: string | Buffer): string {
   return createHash('sha256').update(bytes).digest('hex');
 }
 
+export interface ProofWorkerStartup {
+  argv: readonly string[];
+  executedEntrypointPath: string | null;
+  loadedCoreBundlePath: string | null;
+  coreBundleSha256: string | null;
+}
+
+export function captureProofWorkerStartup(
+  argv: readonly string[] = process.argv,
+  attestation: StartupIntegrityAttestation | null = readStartupIntegrityAttestation(),
+): ProofWorkerStartup {
+  let executedEntrypointPath: string | null = null;
+  let loadedCoreBundlePath: string | null = null;
+  let coreBundleSha256: string | null = null;
+  try {
+    if (typeof argv[1] === 'string' && isAbsolute(argv[1])) {
+      executedEntrypointPath = realpathSync(argv[1]);
+    }
+  } catch {
+    executedEntrypointPath = null;
+  }
+  if (attestation) {
+    try {
+      loadedCoreBundlePath = realpathSync(fileURLToPath(attestation.entrypointUrl));
+      coreBundleSha256 = attestation.coreBundleSha256;
+    } catch {
+      loadedCoreBundlePath = null;
+      coreBundleSha256 = null;
+    }
+  }
+  return Object.freeze({
+    argv: Object.freeze([...argv]),
+    executedEntrypointPath,
+    loadedCoreBundlePath,
+    coreBundleSha256,
+  });
+}
+
+const proofWorkerStartup = captureProofWorkerStartup();
+
 export interface ProofCandidateEntrypoint {
   host: 'claude-plugin' | 'codex-plugin';
   coreBundle: string;
@@ -344,61 +408,65 @@ export function resolveProofCandidateEntrypoint(
   } catch {
     return null;
   }
-  // Only the executed script carries process authority. argv[1] is the entry
-  // module; argv[2] additionally covers the codex launcher, which execs the
-  // packaged core worker as its first argument. Scanning the full argv would
-  // let any unrelated process that merely PASSES the bundle path as an argument
-  // claim to be the plugin.
-  for (const authorityArg of argv.slice(1, 3)) {
-    if (typeof authorityArg !== 'string' || !isAbsolute(authorityArg)) continue;
-    let arg: string;
-    try {
-      arg = realpathSync(authorityArg);
-    } catch {
-      continue;
+  const authorityArg = argv[1];
+  if (typeof authorityArg !== 'string' || !isAbsolute(authorityArg)) return null;
+  let arg: string;
+  try {
+    arg = realpathSync(authorityArg);
+  } catch {
+    return null;
+  }
+  for (const host of ['claude-plugin', 'codex-plugin'] as const) {
+    const hostRoot = join(root, 'packages', host);
+    const coreIndex = realpathOrSelf(join(hostRoot, 'rn-dev-agent-core', 'dist', 'index.js'));
+    const coreSupervisor = realpathOrSelf(
+      join(hostRoot, 'rn-dev-agent-core', 'dist', 'supervisor.js'),
+    );
+    if (arg === coreIndex) {
+      return {
+        host,
+        coreBundle: coreIndex,
+        coreSupervisor,
+        authorityArg,
+        kind: 'core-index',
+      };
     }
-    for (const host of ['claude-plugin', 'codex-plugin'] as const) {
-      const hostRoot = join(root, 'packages', host);
-      // Both sides are realpath-normalized: a symlinked dist/ must not read as
-      // a foreign process.
-      const coreIndex = realpathOrSelf(join(hostRoot, 'rn-dev-agent-core', 'dist', 'index.js'));
-      const coreSupervisor = realpathOrSelf(
-        join(hostRoot, 'rn-dev-agent-core', 'dist', 'supervisor.js'),
-      );
-      if (arg === coreIndex) {
-        return {
-          host,
-          coreBundle: coreIndex,
-          coreSupervisor,
-          authorityArg,
-          kind: 'core-index',
-        };
-      }
-      if (arg === coreSupervisor) {
-        return {
-          host,
-          coreBundle: coreIndex,
-          coreSupervisor,
-          authorityArg,
-          kind: 'core-supervisor',
-        };
-      }
-      if (
-        host === 'codex-plugin' &&
-        arg === realpathOrSelf(join(hostRoot, 'bin', 'cdp-supervisor.js'))
-      ) {
-        if (!existsSync(coreIndex) || !existsSync(coreSupervisor)) return null;
-        return {
-          host,
-          coreBundle: coreIndex,
-          coreSupervisor,
-          authorityArg,
-          kind: 'codex-launcher',
-        };
-      }
+    if (arg === coreSupervisor) {
+      return {
+        host,
+        coreBundle: coreIndex,
+        coreSupervisor,
+        authorityArg,
+        kind: 'core-supervisor',
+      };
+    }
+    if (
+      host === 'codex-plugin' &&
+      arg === realpathOrSelf(join(hostRoot, 'bin', 'cdp-supervisor.js'))
+    ) {
+      if (!existsSync(coreIndex) || !existsSync(coreSupervisor)) return null;
+      return {
+        host,
+        coreBundle: coreIndex,
+        coreSupervisor,
+        authorityArg,
+        kind: 'codex-launcher',
+      };
     }
   }
   return null;
+}
+
+export function proofCandidateStartupMatches(
+  entrypoint: ProofCandidateEntrypoint,
+  startup: ProofWorkerStartup,
+  headCoreBundleSha256: string,
+): boolean {
+  return (
+    startup.executedEntrypointPath === realpathOrSelf(entrypoint.authorityArg) &&
+    startup.loadedCoreBundlePath === entrypoint.coreBundle &&
+    startup.coreBundleSha256 === headCoreBundleSha256
+  );
 }
 
 export function proofCandidateEntrypointEnvironmentMatches(
@@ -430,39 +498,128 @@ export function proofCandidateEntrypointEnvironmentMatches(
   return true;
 }
 
+export function proofCandidateCheckoutMatchesHead(
+  candidateRoot: string,
+  artifactPaths: readonly string[],
+): boolean {
+  return readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) !== null;
+}
+
+export function readProofCandidateHeadArtifacts(
+  candidateRoot: string,
+  artifactPaths: readonly string[],
+): Buffer[] | null {
+  try {
+    const root = realpathSync(candidateRoot);
+    const statusArgs = [
+      '-C',
+      root,
+      'status',
+      '--porcelain=v1',
+      '--untracked-files=all',
+      '--ignore-submodules=none',
+    ];
+    if (execFileSync('git', statusArgs, { encoding: 'utf8' }).trim()) return null;
+    const verifiedBytes: Buffer[] = [];
+    for (const artifactPath of artifactPaths) {
+      const resolvedArtifactPath = realpathSync(artifactPath);
+      const artifactRelativePath = relative(root, resolvedArtifactPath).split(sep).join('/');
+      if (
+        !artifactRelativePath ||
+        artifactRelativePath === '..' ||
+        artifactRelativePath.startsWith('../')
+      ) {
+        return null;
+      }
+      execFileSync('git', ['-C', root, 'ls-files', '--error-unmatch', artifactRelativePath]);
+      const headBytes = execFileSync('git', ['-C', root, 'show', `HEAD:${artifactRelativePath}`], {
+        maxBuffer: 128 * 1024 * 1024,
+      });
+      const artifactBytes = readFileSync(resolvedArtifactPath);
+      if (hashBytes(artifactBytes) !== hashBytes(headBytes)) return null;
+      verifiedBytes.push(artifactBytes);
+    }
+    return execFileSync('git', statusArgs, { encoding: 'utf8' }).trim() ? null : verifiedBytes;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Read dual proof authority from immutable candidate bytes. Nothing in this
  * block is caller-authored prose: Git, package digests, and the live MCP
  * process identity are captured at the strict-proof boundary.
  */
-export function readProofCandidateRuntime(candidateRoot: string): ProofCandidateRuntime {
-  const root = resolve(candidateRoot);
-  if (root !== candidateRoot) throw new Error('CANDIDATE_ROOT_NOT_NORMALIZED');
+export function readProofCandidateRuntime(
+  candidateRoot: string,
+  startup: ProofWorkerStartup = proofWorkerStartup,
+): ProofCandidateRuntime {
+  const root = realpathSync(resolve(candidateRoot));
   const sha = execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], {
     encoding: 'utf8',
   }).trim();
   const remote = execFileSync('git', ['-C', root, 'remote', 'get-url', 'origin'], {
     encoding: 'utf8',
   }).trim();
-  if (!/(?:github\.com[/:])Lykhoyda\/rn-dev-agent(?:\.git)?$/.test(remote)) {
+  if (!isOfficialProofCandidateRemote(remote)) {
     throw new Error('CANDIDATE_REPOSITORY_MISMATCH');
   }
 
-  const argv = [...process.argv];
+  const argv = [...startup.argv];
   const entrypoint = resolveProofCandidateEntrypoint(root, argv);
   if (!entrypoint || !proofCandidateEntrypointEnvironmentMatches(entrypoint, process.env)) {
     throw new Error('CANDIDATE_MCP_PROCESS_MISMATCH');
   }
   const { host, coreBundle } = entrypoint;
   const runnerManifest = join(root, 'packages', host, 'runner-manifest.json');
+  const artifacts = readProofCandidateHeadArtifacts(root, [coreBundle, runnerManifest]);
+  if (!artifacts) {
+    throw new Error('CANDIDATE_CHECKOUT_NOT_CLEAN');
+  }
+  const headCoreBundleSha256 = hashBytes(artifacts[0]!);
+  if (!proofCandidateStartupMatches(entrypoint, startup, headCoreBundleSha256)) {
+    throw new Error('CANDIDATE_MCP_PROCESS_MISMATCH');
+  }
+  const confirmedSha = execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], {
+    encoding: 'utf8',
+  }).trim();
+  if (confirmedSha !== sha) throw new Error('CANDIDATE_SHA_CHANGED');
 
   return proofCandidateRuntimeSchema.parse({
     repo: 'Lykhoyda/rn-dev-agent',
     sha,
-    coreBundleSha256: hashBytes(readFileSync(coreBundle)),
-    runnerManifestSha256: hashBytes(readFileSync(runnerManifest)),
+    coreBundleSha256: headCoreBundleSha256,
+    runnerManifestSha256: hashBytes(artifacts[1]!),
     mcp: { pid: process.pid, argv, cwd: process.cwd() },
   });
+}
+
+export function isOfficialProofCandidateRemote(remote: string): boolean {
+  if (!remote.includes('://')) {
+    return /^git@github\.com:Lykhoyda\/rn-dev-agent(?:\.git)?$/i.test(remote);
+  }
+  try {
+    const url = new URL(remote);
+    const pathMatches =
+      url.pathname === '/Lykhoyda/rn-dev-agent' || url.pathname === '/Lykhoyda/rn-dev-agent.git';
+    const transportMatches =
+      (url.protocol === 'https:' && !url.username && !url.password) ||
+      (url.protocol === 'ssh:' && url.username === 'git' && !url.password);
+    const portMatches =
+      !url.port ||
+      (url.protocol === 'https:' && url.port === '443') ||
+      (url.protocol === 'ssh:' && url.port === '22');
+    return (
+      transportMatches &&
+      portMatches &&
+      url.hostname.toLowerCase() === 'github.com' &&
+      !url.search &&
+      !url.hash &&
+      pathMatches
+    );
+  } catch {
+    return false;
+  }
 }
 
 function sameCandidateRuntime(left: ProofCandidateRuntime, right: ProofCandidateRuntime): boolean {
@@ -843,8 +1000,11 @@ export function writeProofReceiptAtomic(path: string, receipt: FinalProofReceipt
 
 export function createProofCaptureHandler(
   deps: ProofCaptureDeps,
-): (args: ProofCaptureArgs) => Promise<ToolResult> {
+): (args: unknown) => Promise<ToolResult> {
   let session: Session | null = null;
+  const authorityFailureCode = (error: unknown): string =>
+    /^([A-Z][A-Z0-9_]+):/.exec(error instanceof Error ? error.message : String(error))?.[1] ??
+    'PROOF_AUTHORITY_UNAVAILABLE';
 
   const contextIsCurrent = (active: Session): boolean => {
     try {
@@ -858,6 +1018,28 @@ export function createProofCaptureHandler(
     active.stage = 'rejected';
     active.invalidationReasons = ['PROOF_PATH_DRIFT'];
     return proofFailure(active.invalidationReasons, active.stage);
+  };
+
+  const currentAuthority = (
+    active: Session,
+  ): { ok: true; value: ProofAuthority } | { ok: false; reason: string } => {
+    try {
+      return { ok: true, value: deps.authority(active.context.runId) };
+    } catch (error) {
+      return { ok: false, reason: authorityFailureCode(error) };
+    }
+  };
+
+  const authorityMatches = (active: Session): boolean => {
+    const current = currentAuthority(active);
+    return current.ok && hashProofValue(current.value) === hashProofValue(active.authority);
+  };
+
+  const refreshAuthority = (active: Session): string | null => {
+    const current = currentAuthority(active);
+    if (!current.ok) return current.reason;
+    active.authority = current.value;
+    return null;
   };
 
   const artifactPaths = (active: Session): string[] => [
@@ -933,7 +1115,7 @@ export function createProofCaptureHandler(
     active.mayOwnRecorder = false;
     active.baseline = null;
     active.mechanicalReceipt = null;
-    deps.monitor.begin();
+    deps.monitor.begin(active.context.runId);
   };
 
   const rejectCapture = async (
@@ -1153,8 +1335,8 @@ export function createProofCaptureHandler(
     return { evidence, reasons: [...new Set(reasons)] };
   };
 
-  return async (unparsedArgs: ProofCaptureArgs): Promise<ToolResult> => {
-    const parsed = proofCaptureInputSchema.safeParse(unparsedArgs);
+  return async (unparsedArgs: unknown): Promise<ToolResult> => {
+    const parsed = proofCaptureInputSchema.safeParse(proofActionPayload(unparsedArgs));
     if (!parsed.success) {
       const action = (unparsedArgs as { action?: unknown })?.action;
       const reason = action === 'finalize' ? 'EVIDENCE_REVIEW_INVALID' : 'INVALID_PROOF_INPUT';
@@ -1248,11 +1430,18 @@ export function createProofCaptureHandler(
           return proofFailure(['CANDIDATE_SHA_MISMATCH'], 'idle');
         }
       }
+      let authority: ProofAuthority;
+      try {
+        authority = deps.authority(args.runId);
+      } catch (error) {
+        return proofFailure([authorityFailureCode(error)], 'idle');
+      }
       const startedAt = deps.now();
       session = {
         context: args,
         actionIdentity,
         candidateRuntime,
+        authority,
         stage: 'rehearsing',
         invalidationReasons: [],
         rehearsalStartedAt: startedAt,
@@ -1270,7 +1459,7 @@ export function createProofCaptureHandler(
         baseline: null,
         mechanicalReceipt: null,
       };
-      deps.monitor.begin();
+      deps.monitor.begin(args.runId);
       return okResult({ stage: session.stage, runId: args.runId });
     }
 
@@ -1323,7 +1512,7 @@ export function createProofCaptureHandler(
       active.invalidationReasons = [];
       active.armedObservationCount = null;
       active.freshStartAssertion = null;
-      deps.monitor.begin();
+      deps.monitor.begin(active.context.runId);
       return okResult({ stage: active.stage, durationMs });
     }
 
@@ -1441,6 +1630,9 @@ export function createProofCaptureHandler(
         return proofFailure(cleanedGitReasons, active.stage);
       }
       if (!stillAtStart()) return proofFailure(['START_STATE_DRIFT'], active.stage);
+      if (!authorityMatches(active)) {
+        return proofFailure(['PROOF_AUTHORITY_CHANGED'], active.stage);
+      }
       let statusResult: ToolResult;
       try {
         statusResult = await deps.record({ action: 'status' });
@@ -1474,10 +1666,14 @@ export function createProofCaptureHandler(
         ...(started.output !== active.context.videoPath ? ['RECORDING_PATH_MISMATCH'] : []),
       ];
       if (reasons.length > 0) return rejectCapture(active, reasons);
+      const startAuthorityFailure = refreshAuthority(active);
+      if (startAuthorityFailure) {
+        return rejectCapture(active, [startAuthorityFailure]);
+      }
       active.recordingStartedAt = deps.now();
       active.stage = 'recording';
       active.invalidationReasons = [];
-      deps.monitor.begin();
+      deps.monitor.begin(active.context.runId);
       return okResult({ stage: active.stage, deviceId: started.deviceId, output: started.output });
     }
 
@@ -1486,6 +1682,7 @@ export function createProofCaptureHandler(
       active.recordingEvents = deps.monitor.stop();
       active.recordingObservations = deps.monitor.observations();
       const pathDrifted = !contextIsCurrent(active);
+      const authorityChanged = !authorityMatches(active);
       const shutdown = await shutdownRecorder(active);
       if (pathDrifted) {
         active.stage = 'rejected';
@@ -1494,6 +1691,13 @@ export function createProofCaptureHandler(
       }
       if (!shutdown.confirmed || shutdown.reasons.length > 0) {
         return rejectCapture(active, shutdown.reasons);
+      }
+      if (authorityChanged) {
+        return rejectCapture(active, ['PROOF_AUTHORITY_CHANGED']);
+      }
+      const stopAuthorityFailure = refreshAuthority(active);
+      if (stopAuthorityFailure) {
+        return rejectCapture(active, [stopAuthorityFailure]);
       }
       const saved = shutdown.stopData?.saved;
       if (!Array.isArray(saved)) return rejectCapture(active, ['RECORDING_STOP_FAILED']);
@@ -1533,6 +1737,9 @@ export function createProofCaptureHandler(
       const evidenceReasons: string[] = [...derived.reasons];
       const trace = traceFor(active.context.storyboard, active.recordingEvents);
       evidenceReasons.push(...trace.reasons);
+      if (active.recordingEvents.some((event) => !event.authorityReceiptHash)) {
+        evidenceReasons.push('AUTHORITY_RECEIPT_MISSING');
+      }
       if (!derived.evidence) evidenceReasons.push('STEP_EVIDENCE_MISSING');
 
       const mediaInput: MediaValidationInput = {
@@ -1572,6 +1779,15 @@ export function createProofCaptureHandler(
 
       const git = readGit(active);
       const ready = await readReadiness();
+      try {
+        if (
+          hashProofValue(deps.authority(active.context.runId)) !== hashProofValue(active.authority)
+        ) {
+          evidenceReasons.push('PROOF_AUTHORITY_CHANGED');
+        }
+      } catch (error) {
+        evidenceReasons.push(authorityFailureCode(error));
+      }
       evidenceReasons.push(...(git.ok ? gitReasons(active, git.value, 'validation') : git.reasons));
       evidenceReasons.push(
         ...(ready.ok ? readinessReasons(ready.value, active.baseline) : ready.reasons),
@@ -1585,7 +1801,7 @@ export function createProofCaptureHandler(
       let receipt: MechanicallyAcceptedProofReceipt;
       try {
         receipt = mechanicallyAcceptedProofReceiptSchema.parse({
-          schemaVersion: 1,
+          schemaVersion: 2,
           runId: active.context.runId,
           issue: active.context.issue,
           pullRequest: active.context.pullRequest,
@@ -1598,6 +1814,7 @@ export function createProofCaptureHandler(
           },
           device: ready.value.device,
           runtime: ready.value.runtime,
+          authority: active.authority,
           ...(active.candidateRuntime ? { candidateRuntime: active.candidateRuntime } : {}),
           fixture: active.context.fixture,
           action: active.context.proofAction,
@@ -1661,11 +1878,22 @@ export function createProofCaptureHandler(
       if (review.evidenceSha256 !== hashProofValue(active.mechanicalReceipt)) {
         return proofFailure(['EVIDENCE_REVIEW_TARGET_MISMATCH'], active.stage);
       }
+      const acceptedAuthority = currentAuthority(active);
+      if (!acceptedAuthority.ok) {
+        return rejectCapture(active, [acceptedAuthority.reason]);
+      }
+      if (
+        hashProofValue(acceptedAuthority.value) !==
+        hashProofValue(active.mechanicalReceipt.authority)
+      ) {
+        return rejectCapture(active, ['PROOF_AUTHORITY_CHANGED']);
+      }
       const { verdict: _mechanicalVerdict, ...acceptedEvidence } = active.mechanicalReceipt;
       let finalReceipt: FinalProofReceipt;
       try {
         finalReceipt = finalProofReceiptSchema.parse({
           ...acceptedEvidence,
+          authority: acceptedAuthority.value,
           evidenceReview: review,
           verdict: 'accepted',
         });
@@ -1673,6 +1901,13 @@ export function createProofCaptureHandler(
         return proofFailure(['RECEIPT_CONSTRUCTION_FAILED'], active.stage);
       }
       if (!contextIsCurrent(active)) return rejectPathDrift(active);
+      const writeAuthority = currentAuthority(active);
+      if (!writeAuthority.ok) {
+        return rejectCapture(active, [writeAuthority.reason]);
+      }
+      if (hashProofValue(writeAuthority.value) !== hashProofValue(finalReceipt.authority)) {
+        return rejectCapture(active, ['PROOF_AUTHORITY_CHANGED']);
+      }
       try {
         deps.writeReceipt(active.context.receiptPath, finalReceipt);
       } catch {

@@ -1,194 +1,51 @@
-// GH #523 sub-2: cdp_restart hardReset reads the persisted bundleId store as
-// a fallback tier (after the module cache, before strict app.json) and writes
-// every observed bundleId back to the store, so a fresh bridge worker can
-// still relaunch the app.
-import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  createRestartHandler,
-  _resetRestartHandlerStateForTest,
-} from '../../dist/tools/restart.js';
-import { expectOk } from '../helpers/result-helpers.js';
+import { test } from 'node:test';
+import { createRestartHandler } from '../../dist/tools/restart.js';
 
-beforeEach(() => {
-  _resetRestartHandlerStateForTest();
-});
-
-function makeMockClient({ port = 8081, connected = false, target = null } = {}) {
-  const calls = { disconnect: 0, autoConnect: 0 };
-  const client = {
-    get metroPort() {
-      return port;
-    },
-    get isConnected() {
-      return connected;
-    },
-    get connectedTarget() {
-      return target;
-    },
-    disconnect: async () => {
-      calls.disconnect += 1;
-    },
-    autoConnect: async () => {
-      calls.autoConnect += 1;
-      connected = true;
-    },
+test('persisted bundle state is diagnostic-only and cannot drive a hard reset', async () => {
+  let persistedReads = 0;
+  let execCalls = 0;
+  const oldClient = {
+    metroPort: 8193,
+    isConnected: true,
+    connectedTarget: null,
+    async disconnect() {},
   };
-  return { client, calls };
-}
-
-function makeMockExecFile() {
-  const calls = [];
-  const execFile = async (cmd, args) => {
-    calls.push([cmd, ...args]);
-    return { stdout: '', stderr: '' };
+  const nextClient = {
+    metroPort: 8193,
+    isConnected: true,
+    connectedTarget: null,
+    async autoConnect() {},
   };
-  return { execFile, calls };
-}
-
-const noRealWorld = {
-  stopFastRunner: () => {},
-  sleep: async () => {},
-  resolveBundleIdStrict: () => null,
-  getSession: () => null,
-};
-
-test('hardReset on a fresh bridge falls back to the persisted store bundleId', async () => {
-  // Fresh bridge shape: no connectedTarget, no session, empty module cache.
-  const { client: oldClient } = makeMockClient({ target: null });
-  const { client: newClient } = makeMockClient();
-  const { execFile, calls: execCalls } = makeMockExecFile();
-
-  let currentClient = oldClient;
   const handler = createRestartHandler(
-    () => currentClient,
-    (c) => {
-      currentClient = c;
-    },
-    () => newClient,
+    () => oldClient as never,
+    () => {},
+    () => nextClient as never,
     {
-      ...noRealWorld,
-      execFile,
-      loadPersistedBundleId: (platform) => (platform === 'ios' ? 'com.persisted.app' : null),
+      loadPersistedBundleId: () => {
+        persistedReads += 1;
+        return 'com.persisted.app';
+      },
+      execFile: async () => {
+        execCalls += 1;
+        return { stdout: '', stderr: '' };
+      },
+      stopFastRunner: () => {},
     },
   );
 
-  const data = expectOk(await handler({ hardReset: true }));
-
-  const flat = execCalls.map((c) => c.join(' ')).join('|');
-  assert.match(flat, /simctl terminate booted com\.persisted\.app/);
-  assert.match(flat, /simctl launch booted com\.persisted\.app/);
-  assert.ok(
-    !data.hardResetSteps.join('|').includes('skip-simctl:no-bundleId'),
-    'must not degrade to the no-bundleId skip when the store has an id',
-  );
-  assert.equal(data.bundleId, 'com.persisted.app');
-});
-
-test('module cache outranks the persisted store', async () => {
-  // First restart observes a connectedTarget → seeds the module cache.
-  const withTarget = makeMockClient({
-    target: { description: 'com.cached.app', platform: 'ios' },
-  }).client;
-  const fresh1 = makeMockClient().client;
-  const fresh2 = makeMockClient().client;
-  const { execFile, calls: execCalls } = makeMockExecFile();
-
-  let currentClient = withTarget;
-  const clients = [fresh1, fresh2];
-  const handler = createRestartHandler(
-    () => currentClient,
-    (c) => {
-      currentClient = c;
-    },
-    () => clients.shift(),
-    {
-      ...noRealWorld,
-      execFile,
-      loadPersistedBundleId: () => 'com.persisted.app',
-    },
-  );
-
-  await handler({}); // soft restart seeds cache from connectedTarget
-  execCalls.length = 0;
-  const data = expectOk(await handler({ hardReset: true }));
-
-  const flat = execCalls.map((c) => c.join(' ')).join('|');
-  assert.match(flat, /simctl launch booted com\.cached\.app/, 'cache wins over store');
-  assert.equal(data.bundleId, 'com.cached.app');
-});
-
-test('an invalid bundleId from the store is dropped, not fed to simctl', async () => {
-  const { client: oldClient } = makeMockClient({ target: null });
-  const { client: newClient } = makeMockClient();
-  const { execFile, calls: execCalls } = makeMockExecFile();
-
-  let currentClient = oldClient;
-  const handler = createRestartHandler(
-    () => currentClient,
-    (c) => {
-      currentClient = c;
-    },
-    () => newClient,
-    {
-      ...noRealWorld,
-      execFile,
-      loadPersistedBundleId: () => 'rm -rf / ; com.evil',
-    },
-  );
-
-  const data = expectOk(await handler({ hardReset: true }));
-  assert.equal(execCalls.length, 0, 'no simctl with an invalid id');
-  assert.match(data.hardResetSteps.join('|'), /skip-simctl:invalid-bundleId/);
-});
-
-test('restart persists every observed bundleId (soft restart included)', async () => {
-  const withTarget = makeMockClient({
-    target: { description: 'com.observed.app', platform: 'ios' },
-  }).client;
-  const { client: newClient } = makeMockClient();
-  const persisted = [];
-
-  let currentClient = withTarget;
-  const handler = createRestartHandler(
-    () => currentClient,
-    (c) => {
-      currentClient = c;
-    },
-    () => newClient,
-    {
-      ...noRealWorld,
-      execFile: makeMockExecFile().execFile,
-      persistBundleId: (platform, bundleId) => persisted.push([platform, bundleId]),
-    },
-  );
-
-  await handler({});
-  assert.deepEqual(persisted, [['ios', 'com.observed.app']]);
-});
-
-test('restart persists the post-connect bundleId refresh', async () => {
-  const { client: oldClient } = makeMockClient({ target: null });
-  const { client: newClient } = makeMockClient();
-  Object.defineProperty(newClient, 'connectedTarget', {
-    get: () => ({ description: 'com.postconnect.app', platform: 'ios' }),
+  const result = await handler({
+    hardReset: true,
+    platform: 'ios',
+    deviceId: 'A7D2C7C9-A7DE-474D-95F2-7D2DF0EE44D3',
   });
-  const persisted = [];
+  const parsed = JSON.parse(result.content[0].text) as {
+    ok: boolean;
+    code?: string;
+  };
 
-  let currentClient = oldClient;
-  const handler = createRestartHandler(
-    () => currentClient,
-    (c) => {
-      currentClient = c;
-    },
-    () => newClient,
-    {
-      ...noRealWorld,
-      execFile: makeMockExecFile().execFile,
-      persistBundleId: (platform, bundleId) => persisted.push([platform, bundleId]),
-    },
-  );
-
-  await handler({});
-  assert.deepEqual(persisted, [['ios', 'com.postconnect.app']]);
+  assert.equal(parsed.ok, false);
+  assert.equal(parsed.code, 'APP_INSTALL_IDENTITY_CHANGED');
+  assert.equal(persistedReads, 0);
+  assert.equal(execCalls, 0);
 });

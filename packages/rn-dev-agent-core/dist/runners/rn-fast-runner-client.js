@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, readdirSync, mkdirSync, rmSync, statSync, readFileSync, writeFileSync, } from 'node:fs';
 import { okResult, failResult } from '../utils.js';
 import { updateRefMapFromFlat, buildSnapshotVerdict, getCachedMetadata, getFreshRefTarget, } from '../fast-runner-ref-map.js';
@@ -10,6 +11,7 @@ import { buildRunnerQuiescenceEnv } from './quiescence.js';
 import { artifactProvenanceToState, resolveIosRunnerArtifacts } from './runner-artifacts.js';
 import { resolveNativeRunnerDir } from './runtime-paths.js';
 import { decideRecovery, generateCommandId, isAmbiguousTransportFailure, parseStatusProbeReply, } from './transport-recovery.js';
+import { probeProcessBirth, readProcessBirth, } from '../session/process-birth.js';
 // Warm-launch ready gate. Overridable via RN_FAST_RUNNER_READY_TIMEOUT_MS
 // because a cold/slow CI simulator can need well over 30s to install + launch
 // + attach the XCUITest runner (device-proven on GitHub macos runners).
@@ -116,7 +118,12 @@ export function _resetCapabilitiesForTest() {
     lastKnownCapabilities = [];
 }
 export function _setFastRunnerStateForTest(state) {
-    runnerState = state;
+    runnerState = state
+        ? {
+            ...state,
+            capability: state.capability ?? 'test-capability'.repeat(3),
+        }
+        : null;
     runnerProcess = null;
     lastRunnerPostMortem = null;
 }
@@ -239,7 +246,7 @@ export function captureFastRunnerCommandAuthority() {
  * never call this.
  */
 export function _setRunnerStateForTest(state) {
-    runnerState = state;
+    _setFastRunnerStateForTest(state);
 }
 export function isFastRunnerAvailable() {
     if (!runnerState)
@@ -362,7 +369,23 @@ export const runnerRebuildBudget = {
             /* fail-open */
         }
     },
+    reset(pluginVersion) {
+        try {
+            const parsed = JSON.parse(readFileSync(REBUILD_BUDGET_FILE, 'utf8'));
+            if (parsed.pluginVersion === pluginVersion) {
+                rmSync(REBUILD_BUDGET_FILE, { force: true });
+            }
+        }
+        catch {
+            /* already absent or unreadable */
+        }
+    },
 };
+export function resetRunnerRebuildBudgetForCurrentPlugin() {
+    const pluginVersion = getPluginVersion();
+    if (pluginVersion !== null)
+        runnerRebuildBudget.reset(pluginVersion);
+}
 // GH #382: a one-line note ("downloaded prebuilt runner (~4 MB)" / "prebuilt
 // runner unavailable ...; building locally") set while startFastRunner resolves
 // artifacts. Consumed by the open / mid-flow dispatch paths and attached as a
@@ -404,7 +427,49 @@ function noteStaleHittableArtifact(capabilities) {
  * reused — that would drive the wrong simulator.
  */
 export function shouldReuseRunner(state, deviceId) {
-    return state !== null && state.deviceId === deviceId;
+    const authority = runnerAuthorityFromEnvironment(false);
+    return (state !== null &&
+        state.deviceId === deviceId &&
+        authority !== null &&
+        state.sessionId === authority.sessionId &&
+        state.claimEpoch === authority.claimEpoch &&
+        typeof state.capability === 'string' &&
+        state.capability.length >= 32);
+}
+function runnerAuthorityFromEnvironment(required) {
+    const sessionId = process.env.RN_DEV_AGENT_SESSION_ID;
+    const claimEpoch = Number(process.env.RN_DEV_AGENT_CLAIM_EPOCH);
+    if (!sessionId || !Number.isSafeInteger(claimEpoch) || claimEpoch < 1) {
+        if (!required)
+            return null;
+        throw new Error('SESSION_AUTHORITY_REQUIRED: native runner launch requires a fenced rn-dev-agent session');
+    }
+    return {
+        instanceId: randomUUID(),
+        sessionId,
+        claimEpoch,
+        capability: randomBytes(32).toString('base64url'),
+    };
+}
+export function buildRunnerAuthorityEnv(authority) {
+    const values = {
+        RN_RUNNER_INSTANCE_ID: authority.instanceId,
+        RN_RUNNER_SESSION_ID: authority.sessionId,
+        RN_RUNNER_CLAIM_EPOCH: String(authority.claimEpoch),
+        RN_RUNNER_CAPABILITY: authority.capability,
+    };
+    return Object.fromEntries(Object.entries(values).flatMap(([key, value]) => [
+        [key, value],
+        [`TEST_RUNNER_${key}`, value],
+    ]));
+}
+function buildRunnerTargetEnv(deviceId, appId) {
+    return {
+        RN_RUNNER_DEVICE_ID: deviceId,
+        TEST_RUNNER_RN_RUNNER_DEVICE_ID: deviceId,
+        RN_RUNNER_APP_ID: appId,
+        TEST_RUNNER_RN_RUNNER_APP_ID: appId,
+    };
 }
 // GH #383 (device-caught): xcodebuild only forwards TEST_RUNNER_-prefixed env
 // vars to the XCUITest process (prefix stripped), so the plain var alone never
@@ -425,6 +490,13 @@ export function buildRunnerPortEnv(port) {
     return {
         RN_FAST_RUNNER_PORT: value,
         TEST_RUNNER_RN_FAST_RUNNER_PORT: value,
+    };
+}
+export function buildRunnerAttachOnlyEnv(attachOnly) {
+    const value = attachOnly ? '1' : '0';
+    return {
+        RN_RUNNER_ATTACH_ONLY: value,
+        TEST_RUNNER_RN_RUNNER_ATTACH_ONLY: value,
     };
 }
 /**
@@ -488,6 +560,9 @@ opts = {}) {
     adoptPersistedFastRunnerState(deviceId);
     if (shouldReuseRunner(runnerState, deviceId))
         return runnerState;
+    if (runnerState)
+        await stopFastRunner(deviceId);
+    const authority = runnerAuthorityFromEnvironment(true);
     const desired = resolveRunnerRequestedPort(port);
     const projectPath = join(FAST_RUNNER_PROJECT, 'RnFastRunner', 'RnFastRunner.xcodeproj');
     if (!existsSync(projectPath)) {
@@ -524,7 +599,10 @@ opts = {}) {
                 ...process.env,
                 ...buildRunnerPortEnv(desired),
                 ...buildRunnerVersionEnv(getPluginVersion()),
+                ...buildRunnerAttachOnlyEnv(opts.attachOnly === true),
                 ...buildRunnerQuiescenceEnv(process.env),
+                ...buildRunnerAuthorityEnv(authority),
+                ...buildRunnerTargetEnv(deviceId, bundleId),
                 ...runnerTestFaultEnv,
             },
             stdio: ['ignore', 'pipe', 'pipe'],
@@ -563,7 +641,15 @@ opts = {}) {
                 ...(getPluginVersion() !== null ? { runnerVersion: getPluginVersion() } : {}),
                 provenance: artifactProvenanceToState(artifacts.provenance),
                 ...(result.quiescence !== undefined ? { quiescence: result.quiescence } : {}),
+                ...authority,
             };
+            const processBirth = readProcessBirth(child.pid);
+            if (!processBirth) {
+                child.kill('SIGTERM');
+                reject(new Error('PROCESS_BIRTH_UNAVAILABLE: native runner process identity could not be proven'));
+                return;
+            }
+            state.processBirth = processBirth.token;
             runnerState = state;
             if (Object.keys(runnerTestFaultEnv).length > 0)
                 runnerTestFaultForwarded = true;
@@ -608,21 +694,41 @@ opts = {}) {
 // GH #383 (review amendment): adoption-aware teardown. A post-respawn stop
 // (session close, restart, maestro park) would otherwise no-op against empty
 // in-memory state and leak the persisted runner — so adopt first, then reap.
-export function stopFastRunner(deviceId) {
+export async function stopFastRunner(deviceId) {
     adoptPersistedFastRunnerState(deviceId);
-    if (runnerProcess) {
-        runnerProcess.kill('SIGTERM');
-        runnerProcess = null;
+    await reapStaleFastRunner();
+}
+export function clearFastRunnerAfterVerifiedStop(binding) {
+    const expected = {
+        pid: Number(binding.pid),
+        processBirth: String(binding.processBirth ?? ''),
+        instanceId: String(binding.instanceId ?? ''),
+        deviceId: String(binding.deviceId ?? ''),
+    };
+    if (!Number.isSafeInteger(expected.pid) ||
+        !expected.processBirth ||
+        !expected.instanceId ||
+        !expected.deviceId) {
+        throw new Error('RUNNER_ADOPTION_REQUIRED: verified runner identity is incomplete');
     }
-    else if (runnerState?.pid) {
-        try {
-            process.kill(runnerState.pid, 'SIGTERM');
-        }
-        catch {
-            /* already dead */
-        }
+    const path = iosStatePath(expected.deviceId);
+    const persisted = readJsonStateFile(path);
+    const identityMatches = (observed) => observed.pid === expected.pid &&
+        observed.processBirth === expected.processBirth &&
+        observed.instanceId === expected.instanceId &&
+        observed.deviceId === expected.deviceId;
+    if ((runnerState && !identityMatches(runnerState)) ||
+        (persisted && !identityMatches(persisted))) {
+        throw new Error('RUNNER_ADOPTION_REQUIRED: local runner identity changed before cleanup');
     }
-    clearStateFile();
+    if (runnerProcess?.pid !== undefined && runnerProcess.pid !== expected.pid) {
+        throw new Error('RUNNER_ADOPTION_REQUIRED: local runner process changed before cleanup');
+    }
+    runnerState = null;
+    runnerProcess = null;
+    lastKnownCapabilities = [];
+    if (persisted !== null)
+        deleteStateFile(path);
 }
 export async function fastSwipe(x1, y1, x2, y2, durationMs, bundleId) {
     const body = { command: 'drag', x: x1, y: y1, x2, y2 };
@@ -660,7 +766,7 @@ function defaultProcessAlive(pid) {
         return false;
     }
 }
-async function defaultHttpProbe(port, timeoutMs) {
+async function defaultHttpProbe(port, timeoutMs, capabilityOverride) {
     // Use the same IPv4 loopback as the /command client (postCommand). The prior
     // [::1] here meant the health probe and the command channel could resolve to
     // different stacks, so a healthy IPv4 listener looked dead over IPv6.
@@ -670,7 +776,11 @@ async function defaultHttpProbe(port, timeoutMs) {
     try {
         // fetchImpl (not bare fetch) so the _setFetchForTest seam covers the health
         // probe like every other client call — production default is globalThis.fetch.
-        const res = await fetchImpl(url, { signal: controller.signal });
+        const capability = capabilityOverride ?? (runnerState?.port === port ? runnerState.capability : undefined);
+        const res = await fetchImpl(url, {
+            signal: controller.signal,
+            headers: capability ? { authorization: `Bearer ${capability}` } : {},
+        });
         if (!res.ok)
             return { ok: false, status: res.status };
         let bodyOk;
@@ -678,6 +788,11 @@ async function defaultHttpProbe(port, timeoutMs) {
         let runnerVersion;
         let capabilities;
         let commands;
+        let instanceId;
+        let sessionId;
+        let claimEpoch;
+        let deviceId;
+        let appId;
         try {
             const body = (await res.json());
             bodyOk = body.ok === true;
@@ -691,6 +806,16 @@ async function defaultHttpProbe(port, timeoutMs) {
             if (Array.isArray(body.commands)) {
                 commands = body.commands.filter((c) => typeof c === 'string');
             }
+            if (typeof body.instanceId === 'string')
+                instanceId = body.instanceId;
+            if (typeof body.sessionId === 'string')
+                sessionId = body.sessionId;
+            if (typeof body.claimEpoch === 'number')
+                claimEpoch = body.claimEpoch;
+            if (typeof body.deviceId === 'string')
+                deviceId = body.deviceId;
+            if (typeof body.appId === 'string')
+                appId = body.appId;
         }
         catch {
             bodyOk = false;
@@ -703,10 +828,31 @@ async function defaultHttpProbe(port, timeoutMs) {
             ...(runnerVersion !== undefined ? { runnerVersion } : {}),
             ...(capabilities !== undefined ? { capabilities } : {}),
             ...(commands !== undefined ? { commands } : {}),
+            ...(instanceId !== undefined ? { instanceId } : {}),
+            ...(sessionId !== undefined ? { sessionId } : {}),
+            ...(claimEpoch !== undefined ? { claimEpoch } : {}),
+            ...(deviceId !== undefined ? { deviceId } : {}),
+            ...(appId !== undefined ? { appId } : {}),
         };
     }
     finally {
         clearTimeout(timer);
+    }
+}
+export async function probeFastRunnerAuthority(input) {
+    try {
+        const result = await defaultHttpProbe(input.port, 2_000, input.capability);
+        return (result.ok &&
+            result.status === 200 &&
+            result.bodyOk === true &&
+            result.instanceId === input.instanceId &&
+            result.sessionId === input.sessionId &&
+            result.claimEpoch === input.claimEpoch &&
+            result.deviceId === input.deviceId &&
+            result.appId === input.appId);
+    }
+    catch {
+        return false;
     }
 }
 function clearStateFile() {
@@ -722,6 +868,26 @@ function clearStateFile() {
     runnerProcess = null;
     if (path)
         deleteStateFile(path);
+}
+function clearStateFileIfMatches(expected) {
+    const identityMatches = (observed) => observed.pid === expected.pid &&
+        observed.deviceId === expected.deviceId &&
+        observed.processBirth === expected.processBirth;
+    const path = iosStatePath(expected.deviceId);
+    const persisted = readJsonStateFile(path);
+    let clearedCurrent = false;
+    if (runnerState && identityMatches(runnerState)) {
+        runnerState = null;
+        clearedCurrent = true;
+    }
+    if (runnerProcess?.pid === expected.pid) {
+        runnerProcess = null;
+        clearedCurrent = true;
+    }
+    if (persisted && identityMatches(persisted))
+        deleteStateFile(path);
+    if (clearedCurrent)
+        lastKnownCapabilities = [];
 }
 export async function probeFastRunnerLivenessDetailed(deps = {}) {
     const getState = deps.getState ?? (() => runnerState);
@@ -741,6 +907,15 @@ export async function probeFastRunnerLivenessDetailed(deps = {}) {
         if (!(res.ok && res.status === 200 && res.bodyOk === true)) {
             lastKnownCapabilities = [];
             return { liveness: 'stale', staleReason: 'health' };
+        }
+        if (state.sessionId !== undefined &&
+            (res.instanceId !== state.instanceId ||
+                res.sessionId !== state.sessionId ||
+                res.claimEpoch !== state.claimEpoch ||
+                res.deviceId !== state.deviceId ||
+                res.appId !== state.bundleId)) {
+            lastKnownCapabilities = [];
+            return { liveness: 'stale', staleReason: 'authority-mismatch' };
         }
         const plugin = deps.pluginVersion !== undefined ? deps.pluginVersion : getPluginVersion();
         const compat = classifyRunnerCompatibility({
@@ -786,14 +961,55 @@ export async function probeFastRunnerLiveness(deps = {}) {
 }
 export async function reapStaleFastRunner(deps = {}) {
     const getState = deps.getState ?? (() => runnerState);
-    const processAlive = deps.processAlive ?? defaultProcessAlive;
     const sendSignal = deps.sendSignal ?? ((pid, sig) => process.kill(pid, sig));
     const sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
-    const clearState = deps.clearState ?? clearStateFile;
+    const clearState = deps.clearState ?? clearStateFileIfMatches;
     const graceMs = deps.graceMs ?? 500;
     const state = getState();
     if (!state)
         return;
+    const expectedBirth = typeof state.processBirth === 'string' ? { pid: state.pid, token: state.processBirth } : null;
+    if (!expectedBirth) {
+        const observed = deps.probeProcessBirth
+            ? deps.probeProcessBirth(state.pid)
+            : deps.processAlive
+                ? deps.processAlive(state.pid)
+                    ? { status: 'present' }
+                    : { status: 'absent' }
+                : probeProcessBirth(state.pid);
+        if (observed.status === 'absent') {
+            clearState(state);
+            return;
+        }
+        throw new Error('RUNNER_ADOPTION_REQUIRED: live persisted iOS runner lacks process-birth authority');
+    }
+    const probeExpected = () => {
+        if (deps.probeProcessBirth) {
+            const observed = deps.probeProcessBirth(expectedBirth.pid);
+            if (observed.status === 'unknown')
+                return 'unknown';
+            if (observed.status === 'absent')
+                return 'gone';
+            return observed.birth.token === expectedBirth.token ? 'match' : 'gone';
+        }
+        if (deps.matchesProcessBirth) {
+            return deps.matchesProcessBirth(expectedBirth) ? 'match' : 'gone';
+        }
+        const observed = probeProcessBirth(expectedBirth.pid);
+        if (observed.status === 'unknown')
+            return 'unknown';
+        if (observed.status === 'absent')
+            return 'gone';
+        return observed.birth.token === expectedBirth.token ? 'match' : 'gone';
+    };
+    const initial = probeExpected();
+    if (initial === 'unknown') {
+        throw new Error('RUNNER_ADOPTION_REQUIRED: iOS runner process identity is unproven');
+    }
+    if (initial === 'gone') {
+        clearState(state);
+        return;
+    }
     const spawnedChild = runnerProcess?.pid === state.pid ? runnerProcess : null;
     const spawnedExit = spawnedChild
         ? new Promise((resolve) => spawnedChild.once('exit', () => resolve()))
@@ -805,20 +1021,31 @@ export async function reapStaleFastRunner(deps = {}) {
         /* already dead */
     }
     await sleep(graceMs);
-    if (processAlive(state.pid)) {
-        try {
-            sendSignal(state.pid, 'SIGKILL');
-        }
-        catch {
-            /* race: died between checks */
-        }
+    const afterTerm = probeExpected();
+    if (afterTerm === 'unknown') {
+        throw new Error('RUNNER_ADOPTION_REQUIRED: iOS runner termination is unproven');
+    }
+    if (afterTerm === 'gone') {
+        clearState(state);
+        return;
+    }
+    try {
+        sendSignal(state.pid, 'SIGKILL');
+    }
+    catch {
+        /* race: died between checks */
     }
     if (spawnedExit) {
-        // Let the registered child exit handler publish exit/signal/output-tail
-        // evidence before timeout containment snapshots the postmortem.
         await Promise.race([spawnedExit, sleep(250)]);
     }
-    clearState();
+    else {
+        await sleep(50);
+    }
+    const afterKill = probeExpected();
+    if (afterKill !== 'gone') {
+        throw new Error('RUNNER_ADOPTION_REQUIRED: iOS runner termination is unproven');
+    }
+    clearState(state);
 }
 let fetchImpl = globalThis.fetch;
 export function _setFetchForTest(fn) {
@@ -845,9 +1072,16 @@ async function sendCommandOnce(port, body, timeoutMs) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
+        const capability = runnerState?.port === port ? runnerState.capability : undefined;
+        if (!capability) {
+            throw new Error('RUNNER_OWNERSHIP_MISMATCH: runner capability is unavailable');
+        }
         const resp = await fetchImpl(`http://127.0.0.1:${port}/command`, {
             method: 'POST',
-            headers: { 'content-type': 'application/json' },
+            headers: {
+                'content-type': 'application/json',
+                authorization: `Bearer ${capability}`,
+            },
             body: JSON.stringify(body),
             signal: controller.signal,
         });
@@ -1002,6 +1236,45 @@ async function containTypeTimeout(args, authorityBefore = captureFastRunnerComma
     return failResult(trigger === 'main-thread-timeout'
         ? 'RUNNER_TIMEOUT: rn-fast-runner main-thread execution timed out and independent exact CDP readback did not prove the requested value. The poisoned runner was contained before any further mutation.'
         : 'RUNNER_TIMEOUT: rn-fast-runner authority was lost after a success-shaped type response, and independent exact CDP readback did not prove the requested value. The triggering runner was contained without signaling any replacement.', 'RUNNER_TIMEOUT', { runnerTimeoutRecovery });
+}
+async function containRunnerTimeout(command, message, authorityBefore = captureFastRunnerCommandAuthority()) {
+    runnerPoisoned = true;
+    poisonHolders++;
+    let reapDisposition;
+    try {
+        if (authorityBefore && runnerState?.pid === authorityBefore.pid) {
+            poisonReap ??= reapStaleFastRunner();
+            await poisonReap;
+            reapDisposition = 'reaped';
+        }
+        else {
+            reapDisposition = runnerState ? 'replacement-preserved' : 'already-absent';
+        }
+    }
+    finally {
+        poisonHolders--;
+        if (poisonHolders <= 0) {
+            poisonHolders = 0;
+            poisonReap = null;
+            runnerPoisoned = false;
+        }
+    }
+    return failResult(message, 'RUNNER_TIMEOUT', {
+        runnerTimeoutRecovery: {
+            trigger: 'main-thread-timeout',
+            command: String(command),
+            poisoned: true,
+            reaped: reapDisposition === 'reaped',
+            reapDisposition,
+            runner: {
+                before: authorityBefore,
+                afterReapPid: runnerState?.pid ?? null,
+                stateCleared: runnerState === null,
+                nextMutationRequiresRespawn: runnerState === null,
+            },
+            containmentOrder: ['poison', 'reap', 'result'],
+        },
+    });
 }
 function hasRunnerTimeoutRecovery(result) {
     try {
@@ -1272,6 +1545,11 @@ export async function runIOS(args) {
     if (!resp.ok) {
         const message = resp.error?.message ?? 'runner returned !ok with no error';
         const code = resp.error?.code;
+        if (code === 'RUNNER_TIMEOUT') {
+            return args.command === 'type'
+                ? containTypeTimeout(args)
+                : containRunnerTimeout(args.command, message);
+        }
         if (args.command === 'type' &&
             typeof message === 'string' &&
             message.includes('main thread execution timed out')) {

@@ -10,7 +10,7 @@ description: >
 
 # Using rn-dev-agent
 
-The Codex rn-dev-agent surface provides **79 MCP tools**, **15 explicit workflow skills**, and **10 implicit domain skills**—exactly **25 native Codex skills**. The five packaged agent files are inline playbooks, not a native Codex subagent contract.
+The Codex rn-dev-agent surface provides an MCP tool suite, **15 explicit workflow skills**, and **10 implicit domain skills**—exactly **25 native Codex skills**. The five packaged agent files are inline playbooks, not a native Codex subagent contract.
 
 This skill is your front door. Before starting any RN work, use the decision tree below to route the user's intent to the right tool.
 

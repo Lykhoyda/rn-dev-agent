@@ -1,15 +1,30 @@
 import { okResult, failResult, withConnection } from '../utils.js';
 import { symbolicateErrors } from '../symbolicate.js';
+const READ_ERRORS_EXPRESSION = `(function() {
+  var startup = Array.isArray(globalThis.__RN_DEV_AGENT_BOOT_ERRORS__) ? globalThis.__RN_DEV_AGENT_BOOT_ERRORS__ : [];
+  var helper = [];
+  try {
+    if (globalThis.__RN_AGENT) helper = JSON.parse(globalThis.__RN_AGENT.getErrors());
+  } catch (error) {}
+  return JSON.stringify(startup.concat(Array.isArray(helper) ? helper : []));
+})()`;
+const CLEAR_ERRORS_EXPRESSION = `(function() {
+  if (Array.isArray(globalThis.__RN_DEV_AGENT_BOOT_ERRORS__)) globalThis.__RN_DEV_AGENT_BOOT_ERRORS__.length = 0;
+  try {
+    if (globalThis.__RN_AGENT) globalThis.__RN_AGENT.clearErrors();
+  } catch (error) {}
+  return 'cleared';
+})()`;
 export function createErrorLogHandler(getClient) {
     return withConnection(getClient, async (args, client) => {
         if (args.clear) {
-            const clearResult = await client.evaluate(client.helperExpr('clearErrors()'));
+            const clearResult = await client.evaluate(CLEAR_ERRORS_EXPRESSION);
             if (clearResult.error) {
                 return failResult(`Failed to clear errors: ${clearResult.error}`);
             }
             return okResult({ cleared: true });
         }
-        const result = await client.evaluate(client.helperExpr('getErrors()'));
+        const result = await client.evaluate(READ_ERRORS_EXPRESSION);
         if (result.error) {
             return failResult(`Error log error: ${result.error}`);
         }
@@ -35,5 +50,5 @@ export function createErrorLogHandler(getClient) {
         }
         const symbolicated = await symbolicateErrors(parsed, client.metroPort);
         return okResult({ errors: symbolicated, count: symbolicated.length });
-    });
+    }, { requireHelpers: false });
 }

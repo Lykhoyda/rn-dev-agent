@@ -74,6 +74,31 @@ test('gh-383 gate: health failure stays stale/health', async () => {
   assert.deepEqual(d, { liveness: 'stale', staleReason: 'health' });
 });
 
+test('iOS authority mismatch has a rebuild-eligible stale reason', async () => {
+  const state = {
+    ...STATE,
+    instanceId: 'expected-instance',
+    sessionId: 'expected-session',
+    claimEpoch: 7,
+  };
+  const d = await probeFastRunnerLivenessDetailed({
+    ...deps({}),
+    getState: () => state,
+    httpProbe: async () => ({
+      ok: true,
+      status: 200,
+      bodyOk: true,
+      instanceId: 'foreign-instance',
+      sessionId: 'expected-session',
+      claimEpoch: 7,
+      deviceId: state.deviceId,
+      appId: state.bundleId,
+    }),
+  });
+
+  assert.deepEqual(d, { liveness: 'stale', staleReason: 'authority-mismatch' });
+});
+
 test('gh-383 ensure: transparent upgrade returns ok + note', async () => {
   const probes = [{ liveness: 'stale', staleReason: 'legacy' }, { liveness: 'alive' }];
   let ensured = 0;

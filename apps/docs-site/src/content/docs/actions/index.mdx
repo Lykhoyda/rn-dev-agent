@@ -151,7 +151,7 @@ Self-repair handles **small UI drift** (a renamed `testID`, a moved button), not
 
 Action replay runs on a pinned maestro-runner version (currently `1.0.9`). The pin lives in
 `packages/rn-dev-agent-core/src/domain/engine-pin.ts` together with the engine's known quirks;
-`cdp_status` → `replayEngine` and `/doctor` report drift, so every session log records which
+Replay results and `/doctor` report drift, so every session log records which
 engine ran. A locally-newer or older install still works but warns once — untested upstream
 changes are how silent replay regressions arrive. Bumping the pin follows the upgrade ritual
 documented in that module: install the candidate with `--version`, replay the committed action

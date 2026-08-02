@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  _setFastRunnerStateForTest,
+  getFastRunnerState,
   probeFastRunnerLiveness,
   reapStaleFastRunner,
 } from '../../dist/runners/rn-fast-runner-client.js';
@@ -10,7 +12,30 @@ import { REQUIRED_IOS_COMMANDS } from '../../dist/runners/protocol.js';
 // Mirrors the injectable-deps pattern from test/unit/lockfile.test.js so we
 // never touch a real process, the real state file, or a real HTTP server.
 
-const STATE = { pid: 12345, port: 22088, deviceId: 'sim-1', bundleId: 'com.example' };
+const STATE = {
+  pid: 12345,
+  port: 22088,
+  deviceId: 'sim-1',
+  bundleId: 'com.example',
+  processBirth: 'birth-12345',
+};
+function birthProbe(...results) {
+  let index = 0;
+  return {
+    probeProcessBirth: () => results[Math.min(index++, results.length - 1)],
+  };
+}
+
+const MATCHING_BIRTH = {
+  status: 'present',
+  birth: { pid: STATE.pid, source: 'darwin-libproc', token: STATE.processBirth },
+};
+const REUSED_BIRTH = {
+  status: 'present',
+  birth: { pid: STATE.pid, source: 'darwin-libproc', token: 'replacement-birth' },
+};
+const ABSENT_BIRTH = { status: 'absent' };
+const UNKNOWN_BIRTH = { status: 'unknown' };
 
 // ── probe: dead paths ─────────────────────────────────────────────────
 
@@ -209,14 +234,9 @@ test('M7 reap: no-op when state is already null', async () => {
 test('M7 reap: SIGTERM succeeds — does not escalate to SIGKILL', async () => {
   const signals = [];
   let clearCalls = 0;
-  let processAliveCalls = 0;
   await reapStaleFastRunner({
+    ...birthProbe(MATCHING_BIRTH, ABSENT_BIRTH),
     getState: () => STATE,
-    processAlive: () => {
-      processAliveCalls++;
-      // After SIGTERM + grace wait, process is dead
-      return false;
-    },
     sendSignal: (pid, sig) => {
       signals.push([pid, sig]);
     },
@@ -231,7 +251,6 @@ test('M7 reap: SIGTERM succeeds — does not escalate to SIGKILL', async () => {
     [[STATE.pid, 'SIGTERM']],
     'only SIGTERM should be sent on graceful death',
   );
-  assert.equal(processAliveCalls, 1);
   assert.equal(clearCalls, 1, 'state must be cleared after successful reap');
 });
 
@@ -239,8 +258,8 @@ test('M7 reap: SIGTERM ignored → SIGKILL escalation', async () => {
   const signals = [];
   let clearCalls = 0;
   await reapStaleFastRunner({
+    ...birthProbe(MATCHING_BIRTH, MATCHING_BIRTH, ABSENT_BIRTH),
     getState: () => STATE,
-    processAlive: () => true, // refuses to die after SIGTERM
     sendSignal: (pid, sig) => {
       signals.push([pid, sig]);
     },
@@ -260,8 +279,8 @@ test('M7 reap: SIGTERM ignored → SIGKILL escalation', async () => {
 test('M7 reap: SIGTERM throws ESRCH (already dead) — clearState still called', async () => {
   let clearCalls = 0;
   await reapStaleFastRunner({
+    ...birthProbe(MATCHING_BIRTH, ABSENT_BIRTH),
     getState: () => STATE,
-    processAlive: () => false, // already gone
     sendSignal: (_pid, _sig) => {
       const err = new Error('ESRCH');
       err.code = 'ESRCH';
@@ -279,8 +298,8 @@ test('M7 reap: SIGTERM throws ESRCH (already dead) — clearState still called',
 test('M7 reap: graceMs override respected (fake sleep captures value)', async () => {
   let observedGrace = -1;
   await reapStaleFastRunner({
+    ...birthProbe(MATCHING_BIRTH, ABSENT_BIRTH),
     getState: () => STATE,
-    processAlive: () => false,
     sendSignal: () => {},
     sleep: async (ms) => {
       observedGrace = ms;
@@ -294,8 +313,8 @@ test('M7 reap: graceMs override respected (fake sleep captures value)', async ()
 test('M7 reap: default graceMs is 500', async () => {
   let observedGrace = -1;
   await reapStaleFastRunner({
+    ...birthProbe(MATCHING_BIRTH, ABSENT_BIRTH),
     getState: () => STATE,
-    processAlive: () => false,
     sendSignal: () => {},
     sleep: async (ms) => {
       observedGrace = ms;
@@ -303,4 +322,126 @@ test('M7 reap: default graceMs is 500', async () => {
     clearState: () => {},
   });
   assert.equal(observedGrace, 500);
+});
+
+test('M7 reap: reused PID clears state without sending a signal', async () => {
+  const signals = [];
+  let clearCalls = 0;
+  await reapStaleFastRunner({
+    getState: () => STATE,
+    ...birthProbe(REUSED_BIRTH),
+    sendSignal: (pid, signal) => signals.push([pid, signal]),
+    sleep: async () => assert.fail('reused PID must not enter the grace period'),
+    clearState: () => {
+      clearCalls++;
+    },
+  });
+  assert.deepEqual(signals, []);
+  assert.equal(clearCalls, 1);
+});
+
+test('M7 reap: live legacy state without process birth blocks replacement', async () => {
+  let clearCalls = 0;
+  await assert.rejects(
+    () =>
+      reapStaleFastRunner({
+        getState: () => ({ ...STATE, processBirth: undefined }),
+        processAlive: () => true,
+        sendSignal: () => assert.fail('unproven process must not be signalled'),
+        sleep: async () => assert.fail('unproven process must not enter the grace period'),
+        clearState: () => {
+          clearCalls++;
+        },
+      }),
+    /RUNNER_ADOPTION_REQUIRED/,
+  );
+  assert.equal(clearCalls, 0);
+});
+
+test('M7 reap: dead legacy state without process birth can be cleared', async () => {
+  let clearCalls = 0;
+  await reapStaleFastRunner({
+    getState: () => ({ ...STATE, processBirth: undefined }),
+    processAlive: () => false,
+    sendSignal: () => assert.fail('dead legacy process must not be signalled'),
+    sleep: async () => assert.fail('dead legacy process must not enter the grace period'),
+    clearState: () => {
+      clearCalls++;
+    },
+  });
+  assert.equal(clearCalls, 1);
+});
+
+test('M7 reap: PID reuse during grace prevents SIGKILL escalation', async () => {
+  const signals = [];
+  let clearCalls = 0;
+  await reapStaleFastRunner({
+    getState: () => STATE,
+    ...birthProbe(MATCHING_BIRTH, REUSED_BIRTH),
+    sendSignal: (pid, signal) => signals.push([pid, signal]),
+    sleep: async () => {},
+    clearState: () => {
+      clearCalls += 1;
+    },
+    graceMs: 0,
+  });
+  assert.deepEqual(signals, [[STATE.pid, 'SIGTERM']]);
+  assert.equal(clearCalls, 1);
+});
+
+test('M7 reap: unknown identity preserves state and blocks replacement', async () => {
+  let clearCalls = 0;
+  await assert.rejects(
+    () =>
+      reapStaleFastRunner({
+        getState: () => STATE,
+        ...birthProbe(UNKNOWN_BIRTH),
+        sendSignal: () => assert.fail('unknown process identity must not be signalled'),
+        sleep: async () => assert.fail('unknown process identity must not enter the grace period'),
+        clearState: () => {
+          clearCalls += 1;
+        },
+      }),
+    /RUNNER_ADOPTION_REQUIRED/,
+  );
+  assert.equal(clearCalls, 0);
+});
+
+test('M7 reap: unproven SIGKILL termination preserves state', async () => {
+  let clearCalls = 0;
+  await assert.rejects(
+    () =>
+      reapStaleFastRunner({
+        getState: () => STATE,
+        ...birthProbe(MATCHING_BIRTH, MATCHING_BIRTH, UNKNOWN_BIRTH),
+        sendSignal: () => {},
+        sleep: async () => {},
+        clearState: () => {
+          clearCalls += 1;
+        },
+        graceMs: 0,
+      }),
+    /RUNNER_ADOPTION_REQUIRED/,
+  );
+  assert.equal(clearCalls, 0);
+});
+
+test('M7 reap: completed teardown cannot clear a concurrent replacement', async () => {
+  const replacement = {
+    ...STATE,
+    pid: STATE.pid + 1,
+    processBirth: 'replacement-birth',
+  };
+  _setFastRunnerStateForTest(STATE);
+  await reapStaleFastRunner({
+    getState: () => STATE,
+    ...birthProbe(MATCHING_BIRTH, ABSENT_BIRTH),
+    sendSignal: () => {},
+    sleep: async () => {
+      _setFastRunnerStateForTest(replacement);
+    },
+    graceMs: 0,
+  });
+  assert.equal(getFastRunnerState()?.pid, replacement.pid);
+  _setFastRunnerStateForTest(null);
 });

@@ -5,7 +5,6 @@ import { handleDevClientPicker, isDevClientPickerShowing } from './dev-client-pi
 import { PickerBlockingBundleError } from '../cdp/connect.js';
 import { getSessionReloadCount } from './reload.js';
 import { supportsNativeMultiDebugger } from '../cdp/multiplexer.js';
-import { arbiter } from '../lifecycle/device-arbiter.js';
 import { recoverWedge } from '../cdp/recover-wedge.js';
 import { recoverDetached } from '../cdp/recover-detached.js';
 import type { DetachedRecoveryResult, RecoverDetachedDeps } from '../cdp/recover-detached.js';
@@ -28,6 +27,9 @@ import { getEngineStatus } from '../domain/engine-pin.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
 import type { ConnectFilters } from '../cdp/connect.js';
 import type { HermesTarget } from '../types.js';
+import type { WorkerAuthorityRuntime } from '../session/runtime.js';
+import { projectPublicAuthorityStatus } from '../session/public-status.js';
+import { reconcileManagedMetroStatus, type ManagedMetroStatusDependencies } from './session.js';
 
 export function sessionConnectFilters(
   session: ReturnType<typeof getActiveSession>,
@@ -64,6 +66,40 @@ export function targetMatchesSession(
   return true;
 }
 
+export function createPassiveStatusHandler(
+  getClient: () => CDPClient,
+  authorityRuntime: WorkerAuthorityRuntime,
+  statusDependencies: ManagedMetroStatusDependencies = {},
+) {
+  return async (args: { metroPort?: number; platform?: string }) => {
+    const client = getClient();
+    const target = client.connectedTarget;
+    const authority = reconcileManagedMetroStatus(authorityRuntime, statusDependencies);
+    return okResult({
+      authoritative: false,
+      authority: projectPublicAuthorityStatus(authority),
+      metro: {
+        port: client.metroPort,
+        requestedPort: args.metroPort ?? null,
+        connected: client.isConnected,
+      },
+      cdp: {
+        connected: client.isConnected,
+        target: target
+          ? {
+              platform: target.platform ?? null,
+              appBound: Boolean(targetBundleIdentity(target)),
+            }
+          : null,
+        requestedPlatform: args.platform ?? null,
+      },
+      nextAction: client.isConnected
+        ? 'Use rn_session status to inspect bindings before authoritative tools.'
+        : 'Use rn_session bind_metro and cdp_connect with the claimed exact port.',
+    });
+  };
+}
+
 // M10 / Phase 110: narrow `appInfo.architecture` to the StatusResult union.
 // Any unexpected value collapses to 'unknown' — defensive against future
 // helper versions that might emit new tokens we don't recognize yet.
@@ -96,14 +132,15 @@ export function computeMetroMismatch(args: {
 
 const STATUS_PROBE_EXPRESSION = `
 (function() {
-  var result = { appInfo: null, errorCount: 0, fiberTree: false, hasRedBox: false, helpersLoaded: false };
+  var startupErrors = Array.isArray(globalThis.__RN_DEV_AGENT_BOOT_ERRORS__) ? globalThis.__RN_DEV_AGENT_BOOT_ERRORS__ : [];
+  var result = { appInfo: null, errorCount: startupErrors.length, bootErrorCount: startupErrors.length, fiberTree: false, hasRedBox: startupErrors.length > 0, helpersLoaded: false };
   var agent = globalThis.__RN_AGENT;
   if (!agent) return JSON.stringify(result);
   result.helpersLoaded = true;
   try { result.appInfo = JSON.parse(agent.getAppInfo()); } catch(e) {}
-  try { result.errorCount = JSON.parse(agent.getErrors()).length; } catch(e) {}
+  try { result.errorCount += JSON.parse(agent.getErrors()).length; } catch(e) {}
   try { result.fiberTree = agent.isReady(); } catch(e) {}
-  try { result.hasRedBox = JSON.parse(agent.getTree({maxDepth:1})).warning === 'APP_HAS_REDBOX'; } catch(e) {}
+  try { result.hasRedBox = result.hasRedBox || JSON.parse(agent.getTree({maxDepth:1})).warning === 'APP_HAS_REDBOX'; } catch(e) {}
   return JSON.stringify(result);
 })()
 `;
@@ -113,27 +150,28 @@ async function buildStatusResult(client: CDPClient): Promise<StatusResult> {
   let errorCount = 0;
   let fiberTree = false;
   let hasRedBox = false;
+  let bootErrorCount = 0;
 
-  if (client.helpersInjected) {
-    const probeResult = await client.evaluate(STATUS_PROBE_EXPRESSION);
-    if (probeResult.value && typeof probeResult.value === 'string') {
-      try {
-        const probe = JSON.parse(probeResult.value) as {
-          appInfo: Record<string, unknown> | null;
-          errorCount: number;
-          fiberTree: boolean;
-          hasRedBox: boolean;
-          helpersLoaded: boolean;
-        };
-        if (probe.helpersLoaded) {
-          appInfo = probe.appInfo;
-          errorCount = probe.errorCount;
-          fiberTree = probe.fiberTree;
-          hasRedBox = probe.hasRedBox;
-        }
-      } catch {
-        /* probe failed */
+  const probeResult = await client.evaluate(STATUS_PROBE_EXPRESSION);
+  if (probeResult.value && typeof probeResult.value === 'string') {
+    try {
+      const probe = JSON.parse(probeResult.value) as {
+        appInfo: Record<string, unknown> | null;
+        errorCount: number;
+        bootErrorCount: number;
+        fiberTree: boolean;
+        hasRedBox: boolean;
+        helpersLoaded: boolean;
+      };
+      if (probe.helpersLoaded || probe.bootErrorCount > 0) {
+        appInfo = probe.appInfo;
+        errorCount = probe.errorCount;
+        bootErrorCount = probe.bootErrorCount;
+        fiberTree = probe.fiberTree;
+        hasRedBox = probe.hasRedBox || probe.bootErrorCount > 0;
       }
+    } catch {
+      /* probe failed */
     }
   }
 
@@ -202,6 +240,7 @@ async function buildStatusResult(client: CDPClient): Promise<StatusResult> {
       hasRedBox,
       isPaused: client.isPaused,
       errorCount,
+      bootErrorCount,
       architecture: narrowArchitecture(appInfo?.architecture),
     },
     capabilities: {
@@ -248,17 +287,7 @@ export function createStatusHandler(
   } = {},
 ) {
   const recoverDetachedFn = deps.recoverDetached ?? recoverDetached;
-  return async (args: { metroPort?: number; platform?: string; resetArbiter?: boolean }) => {
-    if (args?.resetArbiter) {
-      const arbiterReset = arbiter.reset('manual via cdp_status');
-      // Best-effort: still report normal status, annotated with what was cleared.
-      try {
-        const status = await buildStatusResult(getClient());
-        return okResult({ ...status, arbiterReset });
-      } catch {
-        return okResult({ arbiterReset });
-      }
-    }
+  return async (args: { metroPort?: number; platform?: string }) => {
     try {
       let client = getClient();
       const session = getActiveSession();
@@ -355,6 +384,7 @@ export function createStatusHandler(
                 const retryProbe = JSON.parse(retryResult.value) as {
                   appInfo: Record<string, unknown> | null;
                   errorCount: number;
+                  bootErrorCount: number;
                   fiberTree: boolean;
                   hasRedBox: boolean;
                 };
@@ -367,8 +397,9 @@ export function createStatusHandler(
                     : null;
                   status.app.dimensions =
                     (retryProbe.appInfo?.dimensions as { width: number; height: number }) ?? null;
-                  status.app.hasRedBox = retryProbe.hasRedBox;
+                  status.app.hasRedBox = retryProbe.hasRedBox || retryProbe.bootErrorCount > 0;
                   status.app.errorCount = retryProbe.errorCount;
+                  status.app.bootErrorCount = retryProbe.bootErrorCount;
                   status.app.isPaused = client.isPaused;
                   status.app.architecture = narrowArchitecture(retryProbe.appInfo?.architecture);
                   status.cdp.device = client.connectedTarget?.title ?? null;
@@ -438,6 +469,13 @@ export function createStatusHandler(
         return warnResult(
           status,
           `${reloadCount} full reloads in this session. NativeWind stylesheet may be corrupted — if the screen appears blank, restart Metro and relaunch the app.`,
+        );
+      }
+
+      if ((status.app.bootErrorCount ?? 0) > 0) {
+        return warnResult(
+          status,
+          'Fatal startup JS errors were captured before the helper boundary. Call cdp_error_log for bounded product error evidence before retrying the launch.',
         );
       }
 

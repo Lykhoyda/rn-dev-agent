@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createMockClient } from '../helpers/mock-cdp-client.js';
-import { parseEnvelope, expectOk } from '../helpers/result-helpers.js';
+import { parseEnvelope, expectOk, expectWarn } from '../helpers/result-helpers.js';
 import { createStatusHandler } from '../../dist/tools/status.js';
 import { narrowArchitecture } from '../../dist/tools/status.js';
 import { createCpuProfileHandler, OLD_ARCH_PROFILER_HINT } from '../../dist/tools/profiling.js';
@@ -32,6 +32,7 @@ test('M10 narrow: collapses anything else to "unknown"', () => {
 function buildStatusProbeResult(appInfo) {
   return JSON.stringify({
     appInfo,
+    bootErrorCount: 0,
     errorCount: 0,
     fiberTree: true,
     hasRedBox: false,
@@ -80,6 +81,31 @@ test('M10 status: app.architecture="unknown" when probe omits the field', async 
   );
   const data = expectOk(await handler({}));
   assert.equal(data.app.architecture, 'unknown');
+});
+
+test('status preserves fatal boot-error evidence after helpers load', async () => {
+  const client = createMockClient({
+    evaluate: async () => ({
+      value: JSON.stringify({
+        appInfo: { __DEV__: true, architecture: 'new' },
+        bootErrorCount: 1,
+        errorCount: 1,
+        fiberTree: false,
+        hasRedBox: false,
+        helpersLoaded: true,
+      }),
+    }),
+  });
+  const handler = createStatusHandler(
+    () => client,
+    () => {},
+    () => client,
+  );
+
+  const { data, warning } = expectWarn(await handler({}));
+  assert.equal(data.app.bootErrorCount, 1);
+  assert.equal(data.app.hasRedBox, true);
+  assert.match(warning, /cdp_error_log/);
 });
 
 test('M10 status: unexpected architecture string is narrowed to "unknown"', async () => {

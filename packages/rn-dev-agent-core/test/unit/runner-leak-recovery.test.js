@@ -99,9 +99,14 @@ test('skips recovery when alreadyRecovered=true', async () => {
 
 // ── recoverFromRunnerLeak: tier-1 attachOnly recovery ─────────────────
 
-test('tier-1 attachOnly success: returns recovered + tier=attach-only without escalating', async () => {
+test('tier-1 attachOnly success preserves the exact authority-bound device', async () => {
   const cleanNodes = [{ ref: 'a', label: 'MyApp', type: 'Application' }];
-  const ctx = { platform: 'ios', appId: 'com.example.app', sessionName: 's1' };
+  const ctx = {
+    platform: 'ios',
+    appId: 'com.example.app',
+    deviceId: 'SIM-EXACT',
+    sessionName: 's1',
+  };
   const deps = makeDepsRecording([
     { kind: 'close', result: okResult({}) },
     { kind: 'open', result: okResult({ id: 'sim-udid' }), assertAttachOnly: true },
@@ -118,6 +123,7 @@ test('tier-1 attachOnly success: returns recovered + tier=attach-only without es
   const openArgs = deps.calls.find((c) => c.kind === 'open').args;
   assert.equal(openArgs.appId, 'com.example.app');
   assert.equal(openArgs.platform, 'ios');
+  assert.equal(openArgs.deviceId, 'SIM-EXACT');
   assert.equal(openArgs.attachOnly, true);
 });
 

@@ -23,15 +23,15 @@ MCP tools are not inherited by spawned subagents. Use `rn-device-control` and
 
 ### Phase A — build/install preflight
 
-1. Require active `device_list` and `cdp_status` tools. If they are absent, stop
-   and route to the read-only discovery diagnosis.
-2. Select exactly one target platform/device and retain its exact iOS UDID or
-   Android serial as `<device-id>`. Stop on ambiguity.
-3. If `cdp_status` already reports the intended development app connected,
-   skip the build and continue to Phase B.
-4. Local mode: invoke the package helper with a separately quoted argv array
-   equivalent to:
-   `bash "<package-root>/scripts/expo_ensure_running.sh" "<platform>" --device-id "<device-id>"`.
+1. Require active `rn_session`, `device_list`, and `cdp_status` tools. If they
+   are absent, stop and route to the read-only discovery diagnosis.
+2. Require `rn_session(action="status")` to name the intended worktree,
+   platform, exact UUID/serial, and app ID. `device_list` is diagnostic only.
+3. If passive `cdp_status` reports that session's exact signed development app
+   connected, skip the build and continue to Phase B.
+4. Local mode: preview and confirm session integration, then run literal
+   `pnpm ios` or `pnpm android`; the adapter owns exact device, Metro, and
+   build/install receipt injection.
 5. EAS mode:
    - validate profile with `[A-Za-z0-9_-]+`;
    - enter one shell scope, create one caller-owned artifact directory with

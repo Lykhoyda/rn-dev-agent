@@ -4,7 +4,7 @@ import { freezeLockedTest, loadLockedTest } from '../domain/e2e-test.js';
 import { loadE2eConfig, resolveParams, secretValuesFor, redactSecrets, } from '../domain/e2e-config.js';
 import { getGitInfo as realGetGitInfo } from '../e2e/git-info.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
-import { createMaestroRunHandler } from './maestro-run.js';
+import { createMaestroRunHandler, nestedMaestroAuthorityCallbacks, } from './maestro-run.js';
 import { findProjectRoot } from '../nav-graph/storage.js';
 import { okResult, failResult } from '../utils.js';
 function readPassed(result) {
@@ -45,9 +45,14 @@ export async function lockE2eTestCore(args, deps = {}) {
     }
     const session = getSession();
     const platform = session?.platform ?? undefined;
-    const runArgs = { flowPath: action.filePath, platform };
+    const runArgs = {
+        flowPath: action.filePath,
+        platform,
+        ...(session?.deviceId ? { deviceId: session.deviceId } : {}),
+        ...nestedMaestroAuthorityCallbacks(args),
+    };
     if (resolvedParams)
-        runArgs['params'] = resolvedParams;
+        runArgs.params = resolvedParams;
     const result = await maestroRun(runArgs);
     const { passed, output } = readPassed(result);
     if (!passed) {

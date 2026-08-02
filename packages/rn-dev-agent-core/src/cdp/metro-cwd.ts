@@ -1,7 +1,11 @@
 import { execFileSync } from 'node:child_process';
-import { realpathSync } from 'node:fs';
+import { readlinkSync, realpathSync } from 'node:fs';
 import { resolve, sep } from 'node:path';
 import { findProjectRoot } from '../nav-graph/storage.js';
+import {
+  resolveTrustedSystemExecutable,
+  type TrustedSystemExecutableDependencies,
+} from '../util/trusted-system-executable.js';
 
 export const CWD_LSOF_TIMEOUT_MS = 800;
 
@@ -14,10 +18,8 @@ const defaultExec: ExecFn = (cmd, args) =>
     stdio: ['ignore', 'pipe', 'ignore'],
   });
 
-const pidCwdCache = new Map<number, string | null>();
-
 export function _resetMetroCwdCacheForTest(): void {
-  pidCwdCache.clear();
+  // Retained for compatibility with older tests and callers.
 }
 
 export function parseLsofPid(stdout: string): number | null {
@@ -38,24 +40,82 @@ export function parseLsofCwd(stdout: string): string | null {
   return null;
 }
 
-function pidForPort(port: number, exec: ExecFn): number | null {
+export function pidForPort(
+  port: number,
+  exec: ExecFn = defaultExec,
+  platform: NodeJS.Platform = process.platform,
+  executableDependencies: TrustedSystemExecutableDependencies = {},
+): number | null {
   try {
-    return parseLsofPid(exec('lsof', ['-ti', `tcp:${port}`, '-sTCP:LISTEN']));
+    if (platform === 'win32') {
+      const powershell = resolveTrustedSystemExecutable(
+        'powershell',
+        platform,
+        executableDependencies,
+      );
+      if (!powershell) return null;
+      const output = exec(powershell, [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        `(Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction Stop | Select-Object -First 1 -ExpandProperty OwningProcess)`,
+      ]);
+      const pid = Number.parseInt(output.trim(), 10);
+      return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
+    }
+    const lsof = resolveTrustedSystemExecutable('lsof', platform, executableDependencies);
+    return lsof ? parseLsofPid(exec(lsof, ['-ti', `tcp:${port}`, '-sTCP:LISTEN'])) : null;
   } catch {
     return null;
   }
 }
 
-function cwdForPid(pid: number, exec: ExecFn): string | null {
-  if (pidCwdCache.has(pid)) return pidCwdCache.get(pid) ?? null;
-  let cwd: string | null = null;
+export function parseWindowsMetroRoot(commandLine: string): string | null {
+  const explicitRoot =
+    /(?:^|\s)--(?:projectRoot|project-root)(?:=|\s+)(?:"([^"]+)"|'([^']+)'|(\S+))/i.exec(
+      commandLine,
+    );
+  const explicit = explicitRoot?.[1] ?? explicitRoot?.[2] ?? explicitRoot?.[3];
+  return explicit ?? null;
+}
+
+export function cwdForProcess(
+  pid: number,
+  platform: NodeJS.Platform = process.platform,
+  exec: ExecFn = defaultExec,
+  readLink: typeof readlinkSync = readlinkSync,
+  executableDependencies: TrustedSystemExecutableDependencies = {},
+): string | null {
   try {
-    cwd = parseLsofCwd(exec('lsof', ['-a', '-p', String(pid), '-d', 'cwd', '-Fn']));
+    if (platform === 'linux') {
+      return realpathOrResolve(readLink(`/proc/${pid}/cwd`));
+    }
+    if (platform === 'darwin') {
+      const lsof = resolveTrustedSystemExecutable('lsof', platform, executableDependencies);
+      if (!lsof) return null;
+      const cwd = parseLsofCwd(exec(lsof, ['-a', '-p', String(pid), '-d', 'cwd', '-Fn']));
+      return cwd ? realpathOrResolve(cwd) : null;
+    }
+    if (platform === 'win32') {
+      const powershell = resolveTrustedSystemExecutable(
+        'powershell',
+        platform,
+        executableDependencies,
+      );
+      if (!powershell) return null;
+      const commandLine = exec(powershell, [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}" -ErrorAction Stop).CommandLine`,
+      ]);
+      const root = parseWindowsMetroRoot(commandLine);
+      return root ? realpathOrResolve(root) : null;
+    }
+    return null;
   } catch {
-    cwd = null;
+    return null;
   }
-  pidCwdCache.set(pid, cwd);
-  return cwd;
 }
 
 function realpathOrResolve(p: string): string {
@@ -66,12 +126,15 @@ function realpathOrResolve(p: string): string {
   }
 }
 
-export function cwdForPort(port: number, exec: ExecFn = defaultExec): string | null {
-  if (exec === defaultExec && process.platform !== 'darwin') return null;
-  const pid = pidForPort(port, exec);
+export function cwdForPort(
+  port: number,
+  exec: ExecFn = defaultExec,
+  platform: NodeJS.Platform = process.platform,
+  executableDependencies: TrustedSystemExecutableDependencies = {},
+): string | null {
+  const pid = pidForPort(port, exec, platform, executableDependencies);
   if (pid == null) return null;
-  const cwd = cwdForPid(pid, exec);
-  return cwd ? realpathOrResolve(cwd) : null;
+  return cwdForProcess(pid, platform, exec, readlinkSync, executableDependencies);
 }
 
 export function pathMatchesRoot(
@@ -83,6 +146,16 @@ export function pathMatchesRoot(
   const b = realpathOrResolve(projectRoot);
   if (a === b) return true;
   return a.startsWith(b + sep) || b.startsWith(a + sep);
+}
+
+export function pathIsWithinRoot(
+  candidate: string | null,
+  root: string | null | undefined,
+): boolean {
+  if (!candidate || !root) return false;
+  const canonicalCandidate = realpathOrResolve(candidate);
+  const canonicalRoot = realpathOrResolve(root);
+  return canonicalCandidate === canonicalRoot || canonicalCandidate.startsWith(canonicalRoot + sep);
 }
 
 export function resolveBridgeProjectRoot(): string | null {

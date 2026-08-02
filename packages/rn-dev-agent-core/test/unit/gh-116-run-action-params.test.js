@@ -74,28 +74,36 @@ test('maestro_run: accepts well-formed params (key passes regex, value is string
   const handler = createMaestroRunHandler();
   // Use an invalid bundle ID so the call still fails fast (before exec)
   // but AFTER the param validation. That confirms params passed the gate.
-  const result = await handler({
-    inlineYaml: 'appId: com.test.app\n---\n- launchApp',
-    params: { TITLE: 'Buy milk', PRIORITY: 'high', _UNDERSCORED: 'ok', WITH123: 'ok' },
-    platform: 'ios',
-    appId: 'com.test.app',
-  });
+  let result;
+  let thrown;
+  try {
+    result = await handler({
+      inlineYaml: 'appId: com.test.app\n---\n- launchApp',
+      params: { TITLE: 'Buy milk', PRIORITY: 'high', _UNDERSCORED: 'ok', WITH123: 'ok' },
+      platform: 'ios',
+      appId: 'com.test.app',
+    });
+  } catch (error) {
+    thrown = error;
+  }
   // Either: passes param validation and fails later for an env reason
   // (no booted simulator / maestro-runner not installed), OR succeeds.
   // Either way, the error message must NOT mention "invalid param key".
-  if (result.isError) {
-    const env = JSON.parse(result.content[0].text);
-    assert.doesNotMatch(
-      env.error,
-      /invalid param key/i,
-      `unexpected param-key error: ${env.error}`,
-    );
-    assert.doesNotMatch(
-      env.error,
-      /non-string value/i,
-      `unexpected param-value error: ${env.error}`,
-    );
-  }
+  const errorMessage = thrown
+    ? String(thrown)
+    : result?.isError
+      ? JSON.parse(result.content[0].text).error
+      : '';
+  assert.doesNotMatch(
+    errorMessage,
+    /invalid param key/i,
+    `unexpected param-key error: ${errorMessage}`,
+  );
+  assert.doesNotMatch(
+    errorMessage,
+    /non-string value/i,
+    `unexpected param-value error: ${errorMessage}`,
+  );
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

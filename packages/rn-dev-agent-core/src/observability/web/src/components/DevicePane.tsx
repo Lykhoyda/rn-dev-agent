@@ -1,4 +1,5 @@
 import { useEffect, useState, type JSX } from 'react';
+import { observeUrl } from '../authority';
 import type { MirrorState } from '../types';
 
 interface DevicePaneProps {
@@ -69,9 +70,9 @@ export function DevicePane({
 
   const fallbackSrc =
     liveShotSeq != null
-      ? `/api/live-screenshot/${liveShotSeq}`
+      ? observeUrl(`/api/live-screenshot/${liveShotSeq}`)
       : fallbackSeq != null
-        ? `/api/screenshot/${fallbackSeq}`
+        ? observeUrl(`/api/screenshot/${fallbackSeq}`)
         : null;
 
   const onMirrorError = (): void => {
@@ -117,7 +118,7 @@ export function DevicePane({
           <div className="device-frame">
             <img
               data-testid="device-mirror"
-              src={`/api/device/mirror?t=${nonce}`}
+              src={observeUrl(`/api/device/mirror?t=${nonce}`)}
               alt="live device mirror"
               onError={onMirrorError}
             />

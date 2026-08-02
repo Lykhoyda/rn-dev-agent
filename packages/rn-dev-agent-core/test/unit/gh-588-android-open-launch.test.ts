@@ -5,9 +5,10 @@ import {
   buildAndroidPidofArgs,
   createDeviceSnapshotHandler,
   isAppRunning,
+  reopenSessionForRecovery,
   releaseDeviceLockForSession,
 } from '../../dist/tools/device-session.js';
-import { clearActiveSession } from '../../dist/agent-device-wrapper.js';
+import { clearActiveSession, getActiveSession } from '../../dist/agent-device-wrapper.js';
 import { okResult } from '../../dist/utils.js';
 
 const SERIAL = 'emulator-5560';
@@ -110,6 +111,30 @@ test('GH-588 final Android validation: device_snapshot open follows the proven e
   }
 });
 
+test('runner recovery rebinds durable authority through the production dependencies', async () => {
+  const calls: string[] = [];
+  try {
+    const result = await reopenSessionForRecovery(APP_ID, 'android', false, SERIAL, {
+      startAndroidRunner: async () => {
+        calls.push('start');
+      },
+      launchAndroidApp: async () => {
+        calls.push('launch');
+      },
+      probeAndroidUi: async () => okResult({ nodes: [] }),
+      probeReactNativeUi: async () => true,
+      bindRunner: async (platform, deviceId, appId) => {
+        calls.push(`bind:${platform}:${deviceId}:${appId}`);
+      },
+    });
+
+    assert.equal(result.isError, undefined);
+    assert.deepEqual(calls, ['start', 'launch', `bind:android:${SERIAL}:${APP_ID}`]);
+  } finally {
+    cleanup();
+  }
+});
+
 test('GH-588 final Android validation: attach-only does not accept an unrelated emulator', async () => {
   let runnerStarted = false;
   const handler = createDeviceSnapshotHandler({
@@ -141,10 +166,17 @@ test('GH-588 final Android validation: attach-only does not accept an unrelated 
 });
 
 test('GH-588 final Android validation: launcher failure is not masked as runner-down', async () => {
+  const calls: string[] = [];
   const handler = createDeviceSnapshotHandler({
-    startAndroidRunner: async () => undefined,
+    startAndroidRunner: async () => {
+      calls.push('start');
+    },
     launchAndroidApp: async () => {
+      calls.push('launch');
       throw new Error('launcher exited 251');
+    },
+    reapAndroidRunner: async () => {
+      calls.push('reap');
     },
   });
 
@@ -155,18 +187,165 @@ test('GH-588 final Android validation: launcher failure is not masked as runner-
     assert.equal(body.ok, false);
     assert.equal(body.code, 'APP_LAUNCH_FAILED');
     assert.match(body.error!, /launcher exited 251/);
+    assert.deepEqual(calls, ['start', 'launch', 'reap']);
+  } finally {
+    cleanup();
+  }
+});
+
+test('GH-588 final Android validation: readiness failure reaps the started runner', async () => {
+  const calls: string[] = [];
+  const handler = createDeviceSnapshotHandler({
+    startAndroidRunner: async () => {
+      calls.push('start');
+    },
+    launchAndroidApp: async () => {
+      calls.push('launch');
+    },
+    probeAndroidUi: async () => {
+      calls.push('ui');
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({ ok: false, code: 'ANDROID_UI_NOT_READY', error: 'not ready' }),
+          },
+        ],
+        isError: true,
+      };
+    },
+    reapAndroidRunner: async () => {
+      calls.push('reap');
+    },
+  });
+
+  try {
+    const body = envelope(
+      await handler({ action: 'open', platform: 'android', deviceId: SERIAL, appId: APP_ID }),
+    );
+    assert.equal(body.ok, false);
+    assert.equal(body.code, 'RN_ANDROID_RUNNER_DOWN');
+    assert.deepEqual(calls, ['start', 'launch', 'ui', 'reap']);
+  } finally {
+    cleanup();
+  }
+});
+
+function workingOpenDeps() {
+  return {
+    startAndroidRunner: async () => {},
+    launchAndroidApp: async () => {},
+    probeAndroidUi: async () => okResult({ nodes: [] }),
+    probeReactNativeUi: async () => true,
+  };
+}
+
+test('android reaper throw on open failure still releases the lock and reports both causes', async () => {
+  const handler = createDeviceSnapshotHandler({
+    startAndroidRunner: async () => {},
+    launchAndroidApp: async () => {
+      throw new Error('launcher exited 251');
+    },
+    reapAndroidRunner: async () => {
+      throw new Error(`RUNNER_CLEANUP_UNCONFIRMED: Android runner resources remain for ${SERIAL}`);
+    },
+  });
+  const reopenHandler = createDeviceSnapshotHandler(workingOpenDeps());
+
+  try {
+    const body = envelope(
+      await handler({ action: 'open', platform: 'android', deviceId: SERIAL, appId: APP_ID }),
+    );
+    assert.equal(body.ok, false);
+    assert.equal(body.code, 'APP_LAUNCH_FAILED');
+    assert.match(body.error!, /launcher exited 251/);
+    assert.match(body.error!, /RUNNER_CLEANUP_UNCONFIRMED/);
+    assert.equal(getActiveSession(), null);
+
+    const reopened = envelope(
+      await reopenHandler({ action: 'open', platform: 'android', deviceId: SERIAL, appId: APP_ID }),
+    );
+    assert.equal(reopened.ok, true, `lock must be reacquirable, got: ${reopened.error}`);
+  } finally {
+    cleanup();
+  }
+});
+
+test('bind failure reaps the runner, clears session state, and releases the lock', async () => {
+  const calls: string[] = [];
+  const handler = createDeviceSnapshotHandler({
+    ...workingOpenDeps(),
+    bindRunner: async () => {
+      throw new Error('RUNNER_OWNERSHIP_MISMATCH: durable claim lost');
+    },
+    reapAndroidRunner: async () => {
+      calls.push('reap');
+    },
+  });
+  const reopenHandler = createDeviceSnapshotHandler(workingOpenDeps());
+
+  try {
+    const body = envelope(
+      await handler({ action: 'open', platform: 'android', deviceId: SERIAL, appId: APP_ID }),
+    );
+    assert.equal(body.ok, false);
+    assert.equal(body.code, 'RUNNER_OWNERSHIP_MISMATCH');
+    assert.match(body.error!, /durable claim lost/);
+    assert.deepEqual(calls, ['reap']);
+    assert.equal(getActiveSession(), null);
+
+    const reopened = envelope(
+      await reopenHandler({ action: 'open', platform: 'android', deviceId: SERIAL, appId: APP_ID }),
+    );
+    assert.equal(reopened.ok, true, `lock must be reacquirable, got: ${reopened.error}`);
+  } finally {
+    cleanup();
+  }
+});
+
+test('android reaper throw on bind failure still clears session state and releases the lock', async () => {
+  const handler = createDeviceSnapshotHandler({
+    ...workingOpenDeps(),
+    bindRunner: async () => {
+      throw new Error('RUNNER_OWNERSHIP_MISMATCH: durable claim lost');
+    },
+    reapAndroidRunner: async () => {
+      throw new Error(`RUNNER_CLEANUP_UNCONFIRMED: Android runner resources remain for ${SERIAL}`);
+    },
+  });
+  const reopenHandler = createDeviceSnapshotHandler(workingOpenDeps());
+
+  try {
+    const body = envelope(
+      await handler({ action: 'open', platform: 'android', deviceId: SERIAL, appId: APP_ID }),
+    );
+    assert.equal(body.ok, false);
+    assert.equal(body.code, 'RUNNER_OWNERSHIP_MISMATCH');
+    assert.match(body.error!, /durable claim lost/);
+    assert.match(body.error!, /RUNNER_CLEANUP_UNCONFIRMED/);
+    assert.equal(getActiveSession(), null);
+
+    const reopened = envelope(
+      await reopenHandler({ action: 'open', platform: 'android', deviceId: SERIAL, appId: APP_ID }),
+    );
+    assert.equal(reopened.ok, true, `lock must be reacquirable, got: ${reopened.error}`);
   } finally {
     cleanup();
   }
 });
 
 test('GH-588 final Android validation: genuine runner startup failure remains runner-down', async () => {
+  const calls: string[] = [];
   const handler = createDeviceSnapshotHandler({
     startAndroidRunner: async () => {
+      calls.push('start');
       throw new Error('instrumentation exited before readiness');
     },
     launchAndroidApp: async () => {
       throw new Error('must not launch after runner failure');
+    },
+    reapAndroidRunner: async () => {
+      calls.push('reap');
     },
   });
 
@@ -177,6 +356,7 @@ test('GH-588 final Android validation: genuine runner startup failure remains ru
     assert.equal(body.ok, false);
     assert.equal(body.code, 'RN_ANDROID_RUNNER_DOWN');
     assert.match(body.error!, /instrumentation exited before readiness/);
+    assert.deepEqual(calls, ['start', 'reap']);
   } finally {
     cleanup();
   }

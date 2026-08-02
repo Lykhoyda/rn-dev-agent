@@ -1,4 +1,5 @@
 import { useEffect, useState, type JSX } from 'react';
+import { observeFetch } from '../authority';
 import type {
   E2eFlowResult,
   E2eProgress,
@@ -25,7 +26,7 @@ export function E2ePanel({ e2eProgress, e2eDoneCount }: E2ePanelProps): JSX.Elem
 
   const fetchHistory = async (): Promise<void> => {
     try {
-      const r = await fetch('/api/e2e/runs');
+      const r = await observeFetch('/api/e2e/runs');
       if (r.ok) setHistory((await r.json()) as E2eRunIndexEntry[]);
     } catch {
       /* non-fatal */
@@ -41,7 +42,7 @@ export function E2ePanel({ e2eProgress, e2eDoneCount }: E2ePanelProps): JSX.Elem
     setOpenRun(next);
     if (next && runDetails[next] === undefined) {
       setRunDetails((prev) => ({ ...prev, [next]: 'loading' }));
-      fetch(`/api/e2e/runs/${encodeURIComponent(next)}`)
+      observeFetch(`/api/e2e/runs/${encodeURIComponent(next)}`)
         .then(async (r) => {
           if (!r.ok) throw new Error(String(r.status));
           const detail = (await r.json()) as E2eRunDetail;
@@ -57,7 +58,7 @@ export function E2ePanel({ e2eProgress, e2eDoneCount }: E2ePanelProps): JSX.Elem
     setRunning(true);
     setResult(null);
     try {
-      const r = await fetch('/api/e2e/run', {
+      const r = await observeFetch('/api/e2e/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken() },
         body: '{}',

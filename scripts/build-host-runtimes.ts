@@ -8,6 +8,7 @@
 // hand-editing any generated copy is always wrong; edit the source and rerun:
 //   corepack yarn build:host-runtimes
 const {
+  chmodSync,
   cpSync,
   copyFileSync,
   existsSync,
@@ -25,6 +26,8 @@ const corePackageJson = join(coreRoot, 'package.json');
 const codexPluginRoot = join(repoRoot, 'packages', 'codex-plugin');
 const claudePluginRoot = join(repoRoot, 'packages', 'claude-plugin');
 const observeWebDistSource = join(coreRoot, 'dist', 'observability', 'web-dist');
+const darwinProcessBirthHelper = join(coreRoot, 'native', 'darwin-process-birth');
+const darwinProcessBirthManifest = `${darwinProcessBirthHelper}.json`;
 const sourceMapPath = join(repoRoot, 'packages', 'shared-agent-knowledge', 'source-map.json');
 const sourceMap = JSON.parse(readFileSync(sourceMapPath, 'utf8'));
 const codexAdaptation = sourceMap.hostAdaptations?.codex;
@@ -55,7 +58,33 @@ const esbuild = join(
   process.platform === 'win32' ? 'esbuild.cmd' : 'esbuild',
 );
 
-const RUNTIME_ENTRIES = ['supervisor.js', 'index.js', 'learned-actions.js'];
+const processBirthHelperBuild = spawnSync(
+  process.execPath,
+  [join(repoRoot, 'scripts', 'build-darwin-process-birth-helper.ts')],
+  {
+    cwd: repoRoot,
+    stdio: 'inherit',
+  },
+);
+if (processBirthHelperBuild.error) {
+  console.error(
+    `build-host-runtimes: failed to build Darwin process helper: ${processBirthHelperBuild.error.message}`,
+  );
+  process.exit(1);
+}
+if (processBirthHelperBuild.status !== 0) {
+  process.exit(processBirthHelperBuild.status ?? 1);
+}
+
+const RUNTIME_ENTRIES = [
+  'supervisor.js',
+  'index.js',
+  'learned-actions.js',
+  'sqlite-warning-filter.js',
+  'startup-integrity-loader.js',
+  'startup-integrity-register.js',
+  'rn-session.js',
+];
 
 // Helper scripts the Claude package's hooks and skills invoke at runtime.
 // The SessionStart hook (hooks/detect-rn-project.sh) resolves them from
@@ -87,6 +116,7 @@ for (const file of RUNTIME_ENTRIES) {
     process.exit(1);
   }
 }
+chmodSync(join(coreRoot, 'dist', 'supervisor.js'), 0o755);
 
 if (!existsSync(observeWebDistSource)) {
   console.error(`build-host-runtimes: missing observe web bundle at ${observeWebDistSource}`);
@@ -127,6 +157,13 @@ const codexRuntimeRoot = join(codexPluginRoot, 'rn-dev-agent-core');
 const claudeRuntimeRoot = join(claudePluginRoot, 'rn-dev-agent-core');
 mkdirSync(join(codexRuntimeRoot, 'dist'), { recursive: true });
 mkdirSync(join(claudeRuntimeRoot, 'dist'), { recursive: true });
+for (const runtimeRoot of [coreRoot, codexRuntimeRoot, claudeRuntimeRoot]) {
+  const target = join(runtimeRoot, 'dist', 'native', 'darwin-process-birth');
+  mkdirSync(dirname(target), { recursive: true });
+  copyFileSync(darwinProcessBirthHelper, target);
+  copyFileSync(darwinProcessBirthManifest, `${target}.json`);
+  chmodSync(target, 0o755);
+}
 
 for (const file of RUNTIME_ENTRIES) {
   const result = spawnSync(
@@ -229,6 +266,7 @@ for (const [runtimeRoot, runtimeName] of [
         version: corePackage.version,
         private: true,
         type: 'module',
+        engines: corePackage.engines,
       },
       null,
       2,

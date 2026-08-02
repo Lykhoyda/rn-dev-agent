@@ -1,17 +1,18 @@
 ---
 title: "device_deeplink"
-description: "Open a deep link or universal URL on a simulator/emulator"
+description: "Open a deep link on the exact authority-bound iOS simulator or Android device"
 ---
 
-Open a deep link or universal URL on a simulator/emulator. Pass deviceId when multiple devices are active so the URL opens on the exact iOS simulator or Android device. Cross-platform: wraps xcrun simctl openurl (iOS) and adb shell am start -a VIEW -d (Android). Session-less — no need to call device_snapshot action=open first. Use to enter the app at a specific route when cdp_navigate is unavailable (RN 0.83 Bridgeless mode) or for universal-link testing.
+Open a deep link on the exact authority-bound iOS simulator or Android device.
 
 ## Parameters
 
 | Name | Type | Required | Default | Constraints | Description |
 |------|------|----------|---------|-------------|-------------|
 | `url` | `unknown` | Yes |  |  | URL to open, e.g. "myapp://claims/new" or "https://example.com/page". |
-| `platform` | `unknown` | No |  |  |  |
-| `deviceId` | `unknown` | No |  | min: 1, max: 256 | Exact iOS simulator UDID or Android adb serial to receive the deep link. |
+| `platform` | `unknown` | No |  |  | Authority-bound platform; conflicting values are refused |
+| `deviceId` | `unknown` | No |  | min: 1, max: 256 |  |
+| `metroPort` | `unknown` | No |  | min: 1, max: 65535, integer | Authority-bound Metro port used only for an exact picker row match |
 | `packageName` | `unknown` | No |  |  |  |
 
 ## Usage

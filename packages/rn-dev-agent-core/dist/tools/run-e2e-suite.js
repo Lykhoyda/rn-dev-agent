@@ -3,7 +3,7 @@ import { classifyFlowResult, skippedResult, unloadableResult, computeVerdict, di
 import { loadE2eConfig, resolveParams, secretValuesFor, redactSecrets, } from '../domain/e2e-config.js';
 import { getGitInfo as realGetGitInfo } from '../e2e/git-info.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
-import { createMaestroRunHandler } from './maestro-run.js';
+import { createMaestroRunHandler, nestedMaestroAuthorityCallbacks, } from './maestro-run.js';
 import { findProjectRoot } from '../nav-graph/storage.js';
 import { okResult, warnResult, failResult } from '../utils.js';
 import { writeRequest, updateRequest, listRequests, TERMINAL_STATUSES, } from '../domain/e2e-run-request.js';
@@ -60,6 +60,7 @@ export async function runE2eSuiteCore(args, deps = {}) {
     const platform = session?.platform ?? 'ios';
     const deviceId = args.deviceId ?? session?.deviceId ?? null;
     const git = getGit(projectRoot);
+    const maestroAuthority = nestedMaestroAuthorityCallbacks(args);
     let metroReloaded = false;
     if (deps.runReload) {
         try {
@@ -90,7 +91,9 @@ export async function runE2eSuiteCore(args, deps = {}) {
             const result = await maestroRun({
                 flowPath: locked.filePath,
                 platform: platform,
+                ...(deviceId ? { deviceId } : {}),
                 params: resolved.params,
+                ...maestroAuthority,
             });
             const { passed, output } = readMaestro(result);
             const safeOutput = redactSecrets(output, secretValuesFor(config, resolved.params));
@@ -108,6 +111,8 @@ export async function runE2eSuiteCore(args, deps = {}) {
         const result = await maestroRun({
             flowPath: locked.filePath,
             platform: platform,
+            ...(deviceId ? { deviceId } : {}),
+            ...maestroAuthority,
         });
         const { passed, output } = readMaestro(result);
         results.push(classifyFlowResult({

@@ -104,7 +104,8 @@ unbooted, native crash on launch) — those need Step 0 first.
 ### Step 0: Identify the App
 Before running any commands, determine the app's actual identifiers:
 - **Bundle ID**: from `app.json` (`expo.ios.bundleIdentifier`, `expo.android.package`), `app.config.js/ts`, or `android/app/build.gradle`
-- **iOS binary name**: from the Xcode project name or `ls $(xcrun simctl get_app_container booted <bundle-id>)`
+- **iOS binary name**: from the Xcode project name or
+  `ls $(xcrun simctl get_app_container <bound-udid> <bundle-id>)`
 - **URI scheme**: from `app.json` or native config
 
 Replace all placeholder values (`com.example.app`, `YourApp`, `<app-bundle-id>`) in the commands below with these actual values.
@@ -130,16 +131,18 @@ details on exit code handling (2=ambiguous profiles, 3=no eas-cli, 4=no eas.json
 ### Step 1: Take a Screenshot
 Immediately capture the current screen state before anything changes:
 ```
-device_screenshot(platform="<ios|android>", path="/tmp/debug-start.png")
+rn_session(action="status")
+device_screenshot(platform="<bound-platform>", deviceId="<bound-uuid-or-serial>",
+                  path="/tmp/debug-start.png")
 ```
-Pass the platform from Step 0 explicitly — this runs before CDP connects, so
-there may be nothing to disambiguate a booted simulator + emulator pair. It
-serves pixels even when a flow owns the device (falls back to `simctl`/`adb`
-internally when the runner can't).
+Require the exact ready session before capture. A booted simulator or emulator
+is diagnostic state and never disambiguates the authoritative target.
 
 ### Step 2: Data Gathering
-First, connect and get environment health:
-- `cdp_status` -- auto-connects, returns Metro/CDP/app state, error count, RedBox
+First, inspect environment health:
+- `rn_session(action="status")` -- authority state and exact bindings
+- `cdp_status` -- passive Metro-client and CDP-target state
+- `cdp_connect` -- pin the exact signed session target when it is not connected
 
 Then, once connected, gather evidence in parallel:
 - `cdp_error_log` -- unhandled JS errors and promise rejections
@@ -159,7 +162,7 @@ Then, once connected, gather evidence in parallel:
 | console.error() | cdp_console_log(level="error") | MCP |
 | Native crash (iOS) | collect_logs(sources=["native_ios"]) | MCP |
 | Native crash (Android) | collect_logs(sources=["native_android"]) | MCP |
-| Metro bundle error | curl localhost:8081/status | bash |
+| Metro bundle error | cdp_metro_events | MCP |
 | Network failure | cdp_network_log (status=0 or missing) | MCP |
 
 **Key rule**: If CDP shows no errors but the app is broken, the problem
@@ -191,7 +194,7 @@ xcrun simctl spawn booted log show --last 5m \
 **If blank/white screen with no RedBox:**
 1. `cdp_component_tree(depth=1)` -- are there fiber roots? (Sanctioned exception to the always-filter rule: on a blank screen there may be no route name to filter by, and `depth=1` returns only root-level nodes — a presence probe, not a dump.) If no roots, app is still loading or crashed natively
 2. Check native logs (Step 3 — `collect_logs`, or the bash fallback if the bridge is down)
-3. Check Metro: `curl http://localhost:8081/status`
+3. Check Metro and bundling: `cdp_status`, then `cdp_metro_events`
 
 **If wrong data displayed:**
 1. `cdp_store_state(path="<slice>")` -- verify the store holds expected data
@@ -203,9 +206,9 @@ xcrun simctl spawn booted log show --last 5m \
 2. Compare against expected route from the feature implementation
 
 **If the app is frozen/unresponsive:**
-1. `cdp_status` -- is the debugger paused? (`isPaused: true`)
-2. If paused: `cdp_reload` to recover
-3. `cdp_evaluate` with a simple expression -- if it times out, JS thread is blocked
+1. Inspect passive `cdp_status` to confirm the bound target is still connected
+2. Run `cdp_evaluate` with a simple expression; a timeout means the JS thread is blocked
+3. Use `cdp_reload` to recover the authority-bound runtime
 
 ### Step 5: Apply Fix
 
@@ -224,10 +227,10 @@ round-trip, ~1,450 ms; a screenshot spends image tokens). Cheap signals first:
 `cdp_navigation_state`/`cdp_error_log`, then a screenshot for the visual record.
 
 After the fix:
-1. `cdp_status` -- confirm no errors, RedBox gone
+1. `rn_session(action="status")`, then passive `cdp_status` -- confirm the exact target remains bound and connected
 2. Confirm the fixed state cheaply (`expect_*` / `cdp_store_state`); take a
    screenshot to compare with Step 1 when a visual record is needed
-3. `cdp_error_log` -- confirm the error is cleared
+3. `cdp_component_tree` and `cdp_error_log` -- confirm the RedBox and error are cleared
 4. Re-run the failing user action with Maestro to confirm it works.
    Substitute placeholders with actual values from Step 0:
    ```bash

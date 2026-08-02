@@ -152,7 +152,7 @@ export function classifyExecError(err) {
     const e = err;
     const killed = e?.killed === true;
     const overflow = e?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
-    return { timedOut: killed && !overflow, outputTruncated: overflow };
+    return { timedOut: (killed || e?.code === 'ETIMEDOUT') && !overflow, outputTruncated: overflow };
 }
 // Headline for a failed maestro_run, built from STRUCTURED data so it never
 // re-embeds raw runner/app output. The raw fallbackMsg (err.message, which

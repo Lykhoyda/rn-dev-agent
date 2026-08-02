@@ -7,10 +7,11 @@ export interface CloseDeviceSessionDeps {
   clearActiveSession: () => void;
   // GH #383: adoption-aware teardown needs the closing session's deviceId so a
   // post-respawn stop reaps the persisted per-device runner instead of no-oping.
-  stopFastRunner: (deviceId?: string) => void;
+  stopFastRunner: (deviceId?: string) => void | Promise<void>;
   // GH #383: mirror stopFastRunner — pass the closing session's deviceId so a
   // post-respawn stop reaps the persisted per-device runner instead of no-oping.
   stopAndroidRunner: (deviceId?: string) => Promise<void>;
+  finalizeSuccessfulClose: () => void | Promise<void>;
   releaseDeviceLock: () => void;
   getDeviceId?: () => string | undefined;
 }
@@ -44,28 +45,30 @@ export function isBenignSessionGoneError(result: ToolResult): boolean {
 
 export async function closeDeviceSession(deps: CloseDeviceSessionDeps): Promise<ToolResult> {
   if (!deps.hasActiveSession()) {
+    await deps.finalizeSuccessfulClose();
     return okResult({ closed: true, message: 'No active session to close' });
   }
 
   // GH #383: read the closing session's deviceId before clearActiveSession()
   // wipes it, so the adoption-aware stopFastRunner reaps the right per-device runner.
   const deviceId = deps.getDeviceId?.();
+  const finalizeClose = async (): Promise<void> => {
+    await deps.stopFastRunner(deviceId);
+    await deps.stopAndroidRunner(deviceId);
+    await deps.finalizeSuccessfulClose();
+    deps.clearActiveSession();
+    deps.releaseDeviceLock();
+  };
 
   const result = await deps.closeUnderlyingSession();
 
   if (!result.isError) {
-    deps.clearActiveSession();
-    deps.stopFastRunner(deviceId);
-    await deps.stopAndroidRunner(deviceId);
-    deps.releaseDeviceLock();
+    await finalizeClose();
     return result;
   }
 
   if (isBenignSessionGoneError(result)) {
-    deps.clearActiveSession();
-    deps.stopFastRunner(deviceId);
-    await deps.stopAndroidRunner(deviceId);
-    deps.releaseDeviceLock();
+    await finalizeClose();
     return okResult({
       closed: true,
       sessionAlreadyGone: true,

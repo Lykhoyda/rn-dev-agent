@@ -5,7 +5,7 @@ const DEFAULT_TIMEOUT_MS = 3000;
 
 export interface GracefulShutdownDeps {
   getClient: () => CDPClient;
-  stopFastRunnerFn: () => void;
+  stopFastRunnerFn: () => void | Promise<void>;
   /**
    * Reaps observe-mirror capture children (idb/ffmpeg/simctl) — GH #182 zombie
    * class for the live-mirror subsystem. Optional: undefined when the mirror
@@ -52,7 +52,7 @@ export function buildGracefulShutdown(
         );
       }
       try {
-        deps.stopFastRunnerFn();
+        await deps.stopFastRunnerFn();
       } catch (err) {
         logger.warn(
           'MCP',

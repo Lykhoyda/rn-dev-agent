@@ -155,14 +155,16 @@ function deviceKey(): string {
  * lookup to the exact device this capture session opened on — a freshest-file
  * heuristic could silently read a stale or concurrent session's runner.
  */
-function discoverRunnerPort(): number {
+function discoverRunnerConnection(): { port: number; capability: string } {
   const path = runnerStatePath(`${PLATFORM}-${deviceKey()}`);
-  const state = readJsonStateFile<{ port?: number; hostPort?: number }>(path);
+  const state = readJsonStateFile<{ port?: number; hostPort?: number; capability?: string }>(path);
   const port = PLATFORM === 'ios' ? state?.port : (state?.hostPort ?? state?.port);
-  if (typeof port !== 'number') {
-    throw new Error(`no live runner port in ${path} — did the session open on this device?`);
+  if (typeof port !== 'number' || typeof state?.capability !== 'string' || !state.capability) {
+    throw new Error(
+      `no live runner port and capability in ${path} — did the session open on this device?`,
+    );
   }
-  return port;
+  return { port, capability: state.capability };
 }
 
 interface Captured {
@@ -175,17 +177,26 @@ interface Captured {
 // fail the capture, not hang it.
 const RAW_HTTP_TIMEOUT_MS = 35_000;
 
-async function rawGet(port: number, path: string): Promise<Captured> {
+function runnerHeaders(capability: string): Record<string, string> {
+  return { authorization: `Bearer ${capability}` };
+}
+
+async function rawGet(port: number, path: string, capability: string): Promise<Captured> {
   const resp = await fetch(`http://127.0.0.1:${port}${path}`, {
+    headers: runnerHeaders(capability),
     signal: AbortSignal.timeout(RAW_HTTP_TIMEOUT_MS),
   });
   return { httpStatus: resp.status, body: await resp.json() };
 }
 
-async function rawCommand(port: number, body: Record<string, unknown>): Promise<Captured> {
+async function rawCommand(
+  port: number,
+  body: Record<string, unknown>,
+  capability: string,
+): Promise<Captured> {
   const resp = await fetch(`http://127.0.0.1:${port}/command`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...runnerHeaders(capability) },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(RAW_HTTP_TIMEOUT_MS),
   });
@@ -283,8 +294,8 @@ async function main(): Promise<void> {
     // that captured a failure would pin the WRONG contract, so success-path
     // payloads are asserted healthy before anything is written (the unknown-
     // verb golden is the one deliberate error capture).
-    const port = discoverRunnerPort();
-    const health = await rawGet(port, '/health');
+    const { port, capability } = discoverRunnerConnection();
+    const health = await rawGet(port, '/health', capability);
     const healthBody = health.body as {
       ok?: boolean;
       runnerVersion?: string;
@@ -301,7 +312,11 @@ async function main(): Promise<void> {
       runnerPort: port,
     };
 
-    const rawSnap = await rawCommand(port, { command: 'snapshot', appBundleId: APP_ID });
+    const rawSnap = await rawCommand(
+      port,
+      { command: 'snapshot', appBundleId: APP_ID },
+      capability,
+    );
     const rawSnapBody = rawSnap.body as { ok?: boolean; data?: { nodes?: unknown[] } };
     if (
       rawSnap.httpStatus !== 200 ||
@@ -318,7 +333,7 @@ async function main(): Promise<void> {
     writeGolden('command-snapshot.json', rawSnap, stamp);
     writeGolden(
       'command-error.json',
-      await rawCommand(port, { command: 'gh437-unknown-command-probe' }),
+      await rawCommand(port, { command: 'gh437-unknown-command-probe' }, capability),
       { ...stamp, note: 'deliberately unknown verb — pins the error-envelope shape' },
     );
     writeGolden(

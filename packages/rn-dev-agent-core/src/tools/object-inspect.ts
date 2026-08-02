@@ -1,6 +1,9 @@
 import type { CDPClient } from '../cdp-client.js';
 import { okResult, failResult, withConnection } from '../utils.js';
 
+const SAFE_INSPECTION_EXPRESSION =
+  /^(?:-?(?:0|[1-9]\d*)(?:\.\d+)?|true|false|null|undefined|[$A-Z_a-z][$\w]*(?:\.[$A-Z_a-z][$\w]*)*)$/;
+
 interface PropertyDescriptor {
   name: string;
   value?: {
@@ -24,6 +27,9 @@ export function createObjectInspectHandler(getClient: () => CDPClient) {
     async (args: { expression: string; depth?: number; maxProperties?: number }, client) => {
       const depth = Math.min(Math.max(args.depth ?? 1, 0), 3);
       const maxProps = Math.min(Math.max(args.maxProperties ?? 20, 1), 100);
+      if (!SAFE_INSPECTION_EXPRESSION.test(args.expression)) {
+        return failResult('Object inspection requires a property path or literal');
+      }
 
       try {
         const evalResult = (await client.send('Runtime.evaluate', {

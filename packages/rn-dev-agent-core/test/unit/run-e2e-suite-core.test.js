@@ -153,6 +153,15 @@ test('param-needing locked test + config values → runs, maestroRun receives pa
     assert.equal(res.data.totals.skipped, 0);
     assert.ok(capturedArgs !== null, 'maestroRun must have been called for paid');
     assert.deepEqual(capturedArgs.params, { EMAIL: 'test@example.com' });
+    assert.equal(capturedArgs.deviceId, 'udid');
+    for (const callback of [
+      'claimNativeOrigin',
+      'completeNativeOrigin',
+      'relaunchManagedApp',
+      'completeRunnerPark',
+    ]) {
+      assert.equal(typeof capturedArgs[callback], 'function');
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

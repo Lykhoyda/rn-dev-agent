@@ -34,24 +34,8 @@ export function isAgentDeviceRunnerSentinel(nodes) {
 const DAEMON_SETTLE_MS = 600;
 const defaultSleep = (ms) => new Promise((r) => setTimeout(r, ms));
 /**
- * B119: attempt to recover from the runner-leak failure mode in two tiers.
- *
- *   Tier 1 — attachOnly reopen. Preserves the user's app state (JS heap,
- *   Hermes context, navigation stack, store state, form input). LIMITATION:
- *   agent-device's attachOnly mode opens a session WITHOUT passing the
- *   bundleId positional, so the daemon's SessionState.appBundleId stays
- *   unset — meaning the very condition that triggers the leak persists. In
- *   practice tier-1 will usually fail for this specific bug, but it's a
- *   cheap try and would help in any adjacent failure mode where attaching
- *   is enough.
- *
- *   Tier 2 — full app relaunch. Destructive (kills CDP context, drops
- *   in-memory state, resets navigation, wipes ring buffers) but gives the
- *   daemon a clean SessionState with appBundleId set.
- *
- * Returns { recovered: false } when prerequisites aren't met (no stored
- * appId, non-iOS, or already-attempted). Caller decides whether to map
- * that to a hard failure or a softer null/undefined sentinel.
+ * Recover by exact native reacquisition, then attach-only reopen, and only
+ * then a state-destructive full relaunch.
  */
 export async function recoverFromRunnerLeak(ctx, deps) {
     if (ctx.alreadyRecovered) {
@@ -79,7 +63,7 @@ export async function recoverFromRunnerLeak(ctx, deps) {
     if (tier1.phase === 'success') {
         return { recovered: true, result: tier1.result, tier: 'attach-only' };
     }
-    // Tier 2: full app relaunch — destructive but resets daemon state cleanly.
+    // Tier 2: full app relaunch — destructive but establishes fresh app state.
     const tier2 = await attemptRecoveryCycle(ctx, deps, false, sleep);
     if (tier2.phase === 'success') {
         return { recovered: true, result: tier2.result, tier: 'full-relaunch' };
@@ -110,6 +94,7 @@ async function attemptRecoveryCycle(ctx, deps, attachOnly, sleep) {
     const reopenResult = await deps.openSession({
         appId: ctx.appId,
         platform: 'ios',
+        ...(ctx.deviceId ? { deviceId: ctx.deviceId } : {}),
         sessionName: ctx.sessionName,
         attachOnly,
     });

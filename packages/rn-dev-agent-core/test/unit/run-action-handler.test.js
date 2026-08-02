@@ -212,11 +212,24 @@ test('run-action: proofReplay pass on an experimental action discloses no lifecy
 test('run-action: SELECTOR_NOT_FOUND → repair patched → retry passes; RunRecord shows AUTO_REPAIR_PASS-equivalent', async () => {
   project.seedAction('demo', fixtureYaml({ id: 'demo', selectors: ['fab-create-task'] }));
 
+  const maestroArgs = [];
+  let maestroAttempt = 0;
   const handler = createRunActionHandler({
-    maestroRun: fakeMaestroRun([FAIL_SELECTOR_ENV, PASS_ENV]),
+    maestroRun: async (args) => {
+      maestroArgs.push(args);
+      const env = [FAIL_SELECTOR_ENV, PASS_ENV][maestroAttempt++] ?? PASS_ENV;
+      return {
+        content: [{ type: 'text', text: JSON.stringify(env) }],
+        ...(env.ok === false ? { isError: true } : {}),
+      };
+    },
     repairAction: fakeRepairAction(REPAIR_PATCHED_ENV),
   });
-  const result = await handler({ actionId: 'demo', projectRoot: project.root });
+  const result = await handler({
+    actionId: 'demo',
+    appId: 'com.rndevagent.testapp',
+    projectRoot: project.root,
+  });
 
   assert.equal(result.isError, undefined, `unexpected fail: ${result.content[0].text}`);
   const env = JSON.parse(result.content[0].text);
@@ -238,6 +251,10 @@ test('run-action: SELECTOR_NOT_FOUND → repair patched → retry passes; RunRec
   assert.equal(typeof env.data.autoRepair.phases?.repairMs, 'number');
   assert.equal(typeof env.data.autoRepair.phases?.retryMs, 'number');
   assert.ok(env.data.autoRepair.phases.firstAttemptMs >= 0);
+  assert.deepEqual(
+    maestroArgs.map(({ appId }) => appId),
+    ['com.rndevagent.testapp', 'com.rndevagent.testapp'],
+  );
   assert.ok(env.data.autoRepair.phases.repairMs >= 0);
   assert.ok(env.data.autoRepair.phases.retryMs >= 0);
   // Sanity: total of phase durations should not exceed the orchestration's

@@ -1,11 +1,11 @@
 import { okResult, failResult, warnResult } from '../utils.js';
-import { detectPlatform } from './platform-utils.js';
 import { createDevicePermissionHandler } from './device-permission.js';
 import { isValidBundleId } from '../domain/maestro-validator.js';
 import { buildMmkvExpression } from './mmkv.js';
 import { terminateApp, launchApp } from './app-lifecycle.js';
 import { handleDevClientPicker } from './dev-client-picker.js';
 import { waitForNavigationReady } from './startup-replay.js';
+import { claimManagedNativeOriginAuthority, completeManagedNativeOriginAuthority, } from '../session/authority-gate.js';
 const RECONNECT_ATTEMPTS = 4;
 const RECONNECT_BACKOFF_MS = 2_000;
 const POST_LAUNCH_SETTLE_MS = 1_000;
@@ -18,7 +18,7 @@ function normalizePermissions(input) {
         ? { name: p, action: 'revoke' }
         : { name: p.name, action: p.action ?? 'revoke' });
 }
-async function runPermissionSteps(permissions, appId, platform) {
+async function runPermissionSteps(permissions, appId, platform, deviceId) {
     const handler = createDevicePermissionHandler();
     const results = [];
     for (const perm of permissions) {
@@ -29,6 +29,7 @@ async function runPermissionSteps(permissions, appId, platform) {
                 permission: perm.name,
                 appId,
                 platform,
+                deviceId,
             });
             const failed = r.isError === true;
             const parsed = failed ? safeParseError(r) : undefined;
@@ -259,6 +260,8 @@ function safeParseError(r) {
 export function createDeviceResetStateHandler(getClient, deps = {}) {
     const terminate = deps.terminateApp ?? terminateApp;
     const launch = deps.launchApp ?? launchApp;
+    const claimNativeOrigin = deps.claimNativeOrigin ?? claimManagedNativeOriginAuthority;
+    const completeNativeOrigin = deps.completeNativeOrigin ?? completeManagedNativeOriginAuthority;
     return async (args) => {
         if (!args.appId || typeof args.appId !== 'string') {
             return failResult('appId is required.', 'DEVICE_RESET_INVALID_ARGS');
@@ -270,7 +273,7 @@ export function createDeviceResetStateHandler(getClient, deps = {}) {
         if (!isValidBundleId(args.appId)) {
             return failResult(`Invalid appId "${String(args.appId).slice(0, 80)}" — must be reverse-DNS bundle identifier (e.g. com.example.app)`, 'DEVICE_RESET_INVALID_APPID');
         }
-        const platform = args.platform ?? (await detectPlatform());
+        const platform = args.platform;
         if (platform !== 'ios' && platform !== 'android') {
             return failResult('No iOS simulator or Android device detected. Pass platform explicitly.', 'DEVICE_RESET_INVALID_ARGS');
         }
@@ -293,14 +296,18 @@ export function createDeviceResetStateHandler(getClient, deps = {}) {
                 activeSessionDeviceId: sessionDeviceId,
             });
         }
-        const lifecycleDeviceId = sessionDeviceId;
+        const lifecycleDeviceId = args.deviceId ?? sessionDeviceId;
+        if (!lifecycleDeviceId) {
+            return failResult('device_reset_state requires the exact authority-bound deviceId', 'DEVICE_AUTHORITY_MISMATCH');
+        }
         const steps = [];
         let reconnected = false;
         let helpersInjected = false;
         let reconnectAttempted = false;
+        let launchSucceeded = false;
         // Step 1: permissions (no CDP needed).
         if (permissions.length > 0) {
-            const permResults = await runPermissionSteps(permissions, args.appId, platform);
+            const permResults = await runPermissionSteps(permissions, args.appId, platform, lifecycleDeviceId);
             steps.push(...permResults);
         }
         // Step 2: storage (CDP required — best-effort if disconnected).
@@ -348,6 +355,7 @@ export function createDeviceResetStateHandler(getClient, deps = {}) {
         if (relaunch) {
             const launchResult = await runLaunchStep(args.appId, platform, lifecycleDeviceId, launch);
             steps.push(launchResult);
+            launchSucceeded = launchResult.ok;
             if (launchResult.ok && waitForReady) {
                 // Re-fetch client AFTER launch in case anything swapped it. (No swap
                 // currently happens in this orchestrator, but defensive against
@@ -358,6 +366,7 @@ export function createDeviceResetStateHandler(getClient, deps = {}) {
                 steps.push(reconnectStep.step);
                 reconnected = reconnectStep.reconnected;
                 if (reconnected) {
+                    await claimNativeOrigin(args);
                     const helpersStep = await runHelpersStep(getClient());
                     steps.push(helpersStep.step);
                     helpersInjected = helpersStep.helpersInjected;
@@ -367,6 +376,7 @@ export function createDeviceResetStateHandler(getClient, deps = {}) {
                 }
             }
         }
+        await completeNativeOrigin(args, launchSucceeded && waitForReady && reconnected);
         const skipped = steps.filter((s) => s.code === 'CDP_NOT_CONNECTED').length;
         const okCount = steps.filter((s) => s.ok).length;
         const failed = steps.filter((s) => !s.ok).length - skipped;

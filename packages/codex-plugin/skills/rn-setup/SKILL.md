@@ -50,13 +50,13 @@ Read/report without mutation:
 
 | Check | Passive evidence | Guidance only |
 |---|---|---|
-| Node | `node --version` | Node 22+ command if missing/old |
+| Node | `node --version` | Node 22.18+ LTS command if missing/old |
 | Core package | selected package runtime files | marketplace refresh/materialization |
 | iOS runner | packaged Xcode project/artifact presence | one-time build command |
 | Android runner | packaged Gradle/APK presence | one-time Gradle command |
 | Maestro runner | version/help | package helper/install guidance |
 | iOS/Android devices | list-only platform commands | boot guidance |
-| Metro | localhost status read | app's start command |
+| Metro | `rn_session` and passive `cdp_status` reads | integrated package script |
 | CDP/app | prior supplied observation only | active `check-env` later |
 | ffmpeg/idb | version/help and install-state reads | exact install commands |
 | physical device | prerequisite file/tool reads | signing/pairing guidance |

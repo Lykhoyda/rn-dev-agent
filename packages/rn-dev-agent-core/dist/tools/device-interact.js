@@ -1,6 +1,6 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import { runNative, getActiveSession, clearActiveSession, getCachedScreenRect, getAdbSerial, cacheSnapshot, getCachedSnapshot, isSnapshotCacheValid, } from '../agent-device-wrapper.js';
+import { runNative, getActiveSession, clearActiveSession, getCachedScreenRect, getAdbSerial, cacheSnapshot, getCachedSnapshot, isSnapshotCacheValid, markSnapshotDirty, } from '../agent-device-wrapper.js';
 import { isFastRunnerAvailable, fastSwipe, stopFastRunner, adoptPersistedFastRunnerState, } from '../runners/rn-fast-runner-client.js';
 import { stopAndroidRunner } from '../runners/rn-android-runner-client.js';
 import { surfaceKeyboardGuard, healKeyboardOccludedTap, } from '../runners/keyboard-guard.js';
@@ -130,14 +130,20 @@ export async function fetchSnapshotNodes(allowCache = false) {
         return { ok: true, nodes: initialNodes };
     }
     const session = getActiveSession();
-    const recovery = await recoverFromRunnerLeak({ platform: session?.platform, appId: session?.appId, sessionName: session?.name }, {
+    markSnapshotDirty(session?.platform);
+    const recovery = await recoverFromRunnerLeak({
+        platform: session?.platform,
+        appId: session?.appId,
+        deviceId: session?.deviceId,
+        sessionName: session?.name,
+    }, {
         closeSession: async () => {
-            clearActiveSession();
-            stopFastRunner(session?.deviceId);
+            await stopFastRunner(session?.deviceId);
             await stopAndroidRunner(session?.deviceId);
+            clearActiveSession();
             return okResult({ closed: true });
         },
-        openSession: ({ appId, platform, attachOnly }) => reopenSessionForRecovery(appId, platform, attachOnly),
+        openSession: ({ appId, platform, deviceId, attachOnly }) => reopenSessionForRecovery(appId, platform, attachOnly, deviceId),
         resnapshot: () => runNative(['snapshot', '-i']),
         parseNodes: parseSnapshotEnvelope,
     });

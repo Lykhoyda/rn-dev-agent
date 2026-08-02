@@ -43,11 +43,11 @@ This is what separates `rn-feature-dev` from generic feature development. After 
 
 1. **Ensure simulator and navigate** to the feature screen
 2. **Baseline screenshot** and clear error buffer
-3. **Health check** via `cdp_status` — Metro, CDP, no RedBox, no errors
+3. **Authority and connection check** via `rn_session`, then passive `cdp_status`
 4. **Component verification** via `cdp_component_tree` — feature renders correctly
 5. **Interaction verification** — exercise the primary user action, verify side effects
 6. **State verification** via `cdp_store_state` — data shape matches design
-7. **Error regression check** — no new errors since baseline
+7. **Render and error regression check** via `cdp_component_tree` and `cdp_error_log`
 8. **Cross-platform comparison** — element-by-element iOS vs Android (when both available)
 
 All checks must pass before proceeding to review.
@@ -72,5 +72,5 @@ Produces a `docs/proof/<feature-slug>/` directory containing:
 ## Prerequisites
 
 - iOS Simulator or Android Emulator running with the app loaded
-- Metro dev server running
+- Ready fenced session with the integrated Metro and signed app target
 - For Zustand apps: `if (__DEV__) global.__ZUSTAND_STORES__ = { ... }` in app entry

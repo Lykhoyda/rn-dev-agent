@@ -7,7 +7,7 @@ import { foreignFlowGate, foreignGateUdid, foreignGateEnabled } from './foreign-
  * (CDP reads) and `interaction` (device_*) are shared and coexist. Refuse-fast,
  * never queue. MUST stay in-memory: persisting a lease recreates the #202
  * orphaned-lock bug. A leaked op-id would wedge all flows forever, so `reset()`
- * is the escape hatch (exposed via the unarbitrated cdp_status resetArbiter).
+ * is the escape hatch (exposed via the fenced, unarbitrated rn_session recovery transition).
  */
 export class DeviceSessionArbiter {
     flowLeaseHeldBy = null;
@@ -248,7 +248,7 @@ export function arbiterWrap(name, handler, inst = arbiter, foreign = {}) {
             const who = res.holder ? `${res.holder.tool} (${res.holder.plane})` : 'a Maestro flow';
             return failResult(`Refusing ${name}: blocked by ${who} on this device — reads and taps can't interleave ` +
                 `with a running Maestro flow. Retry after it completes; if it appears stuck, ` +
-                `run cdp_status({ resetArbiter: true }).`, res.code, { holder: res.holder, conflict: true });
+                `run rn_session({ action: "recover_arbiter", confirmed: true }).`, res.code, { holder: res.holder, conflict: true });
         }
         try {
             return await handler(...args);

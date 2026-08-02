@@ -1,4 +1,5 @@
 import { useState, type JSX } from 'react';
+import { observeFetch } from '../authority';
 import type { ActionRunState, ActionSummary } from '../types';
 import { csrfToken } from '../derive';
 
@@ -18,7 +19,7 @@ export function ActionsPanel({ actions }: ActionsPanelProps): JSX.Element {
   const run = async (a: ActionSummary): Promise<void> => {
     setStates((prev) => ({ ...prev, [a.id]: { running: true } }));
     try {
-      const r = await fetch('/api/e2e/actions/run', {
+      const r = await observeFetch('/api/e2e/actions/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken() },
         body: JSON.stringify({ actionId: a.id, params: paramValues[a.id] ?? {} }),

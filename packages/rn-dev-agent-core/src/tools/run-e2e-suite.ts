@@ -20,7 +20,11 @@ import {
 import type { E2eConfig } from '../domain/e2e-config.js';
 import { getGitInfo as realGetGitInfo } from '../e2e/git-info.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
-import { createMaestroRunHandler } from './maestro-run.js';
+import {
+  createMaestroRunHandler,
+  nestedMaestroAuthorityCallbacks,
+  type MaestroRunArgs,
+} from './maestro-run.js';
 import { findProjectRoot } from '../nav-graph/storage.js';
 import { okResult, warnResult, failResult } from '../utils.js';
 import type { ToolResult } from '../utils.js';
@@ -41,7 +45,7 @@ export interface RunE2eSuiteArgs {
 export interface RunE2eSuiteDeps {
   discover?: (projectRoot: string) => string[];
   load?: (projectRoot: string, id: string) => LockedE2eTest | null;
-  maestroRun?: (args: Record<string, unknown>) => Promise<ToolResult>;
+  maestroRun?: (args: MaestroRunArgs) => Promise<ToolResult>;
   getGitInfo?: (projectRoot: string) => { sha: string | null; dirty: boolean };
   getSession?: () => SessionState | null;
   now?: () => Date;
@@ -118,6 +122,7 @@ export async function runE2eSuiteCore(
   const platform = session?.platform ?? 'ios';
   const deviceId = args.deviceId ?? session?.deviceId ?? null;
   const git = getGit(projectRoot);
+  const maestroAuthority = nestedMaestroAuthorityCallbacks(args);
 
   let metroReloaded = false;
   if (deps.runReload) {
@@ -157,7 +162,9 @@ export async function runE2eSuiteCore(
       const result = await maestroRun({
         flowPath: locked.filePath,
         platform: platform as 'ios' | 'android',
+        ...(deviceId ? { deviceId } : {}),
         params: resolved.params,
+        ...maestroAuthority,
       });
       const { passed, output } = readMaestro(result);
       const safeOutput = redactSecrets(output, secretValuesFor(config, resolved.params));
@@ -177,6 +184,8 @@ export async function runE2eSuiteCore(
     const result = await maestroRun({
       flowPath: locked.filePath,
       platform: platform as 'ios' | 'android',
+      ...(deviceId ? { deviceId } : {}),
+      ...maestroAuthority,
     });
     const { passed, output } = readMaestro(result);
     results.push(

@@ -9,13 +9,14 @@ never be replaced.
 ## React Native development with rn-dev-agent
 
 This project uses **rn-dev-agent** for React Native development, device control,
-live CDP introspection, reusable-action replay, and strict proof. Codex uses the
-`cdp` MCP server, ten domain skills, and fifteen explicit workflow skills.
+live CDP introspection, reusable-action replay, and evidence capture. Codex uses
+the `cdp` MCP server, ten domain skills, and fifteen explicit workflow skills.
 Invoke a workflow as `$rn-dev-agent:<workflow> [request text]`.
 
 ### Mandatory preflight before app/device interaction
 
-1. Inspect the active MCP inventory and call `cdp_status` before app work.
+1. Inspect the active MCP inventory, call `rn_session(action="status")`, then
+   passive `cdp_status` before app work.
 2. Run `$rn-dev-agent:list-learned-actions [feature keyword]` before composing
    any `device_*` sequence.
 3. If a saved action covers all or part of the requested setup, replay it with
@@ -73,12 +74,13 @@ walk only the novel remainder. Persist a verified novel flow under
 
 ### Strict proof
 
-Strict proof is fail-closed. Use `$rn-dev-agent:proof-capture --strict`, a clean
-candidate tree, the actual issue/PR/head, a pinned learned action and hash, a
-typed storyboard, result-bound screenshots/assertions, and an independent
-reviewer provider. Repair, reload, reset, or undeclared interaction during
-recording invalidates the capture. Rejected media is discarded, never
-reclassified as accepted evidence.
+Strict proof is fail-closed and requires managed Metro ownership, a serving
+root contained by the bound worktree, a signed initial-bundle marker, exact
+device and install bindings, and the source and dirty digest.
+`$rn-dev-agent:proof-capture --strict` follows the proof controller contract;
+the optional Darwin managed-sandbox tier is reported in the receipt. Never
+substitute interactive artifacts or report merge-ready evidence without a
+finalized accepted receipt.
 
 ### Recovery truth
 
@@ -90,8 +92,8 @@ reclassified as accepted evidence.
 - If skills/tools are absent, use the documented external read-only health
   command. If tools are present but calls say `Transport closed`, relaunch the
   owning Codex process; do not kill a process owned by another host.
-- A callable `cdp_status` reporting no app is an app/setup problem, not missing
-  plugin discovery.
+- A callable `cdp_status` reporting no bound target is an app/session setup
+  problem, not missing plugin discovery.
 - Recovery diagnosis is read-only. It recommends commands but never installs,
   updates, removes, rewrites configuration, attaches to a device, controls
   Observe, or kills/restarts processes.

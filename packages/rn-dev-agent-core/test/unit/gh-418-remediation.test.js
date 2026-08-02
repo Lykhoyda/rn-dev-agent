@@ -12,6 +12,10 @@ const MISSING = {
   staleReason: 'missing-commands',
   missingCommands: ['keyboardDismiss'],
 };
+const AUTHORITY_MISMATCH = {
+  liveness: 'stale',
+  staleReason: 'authority-mismatch',
+};
 const freshBudget = () => {
   const rebuilt = new Set();
   return {
@@ -83,6 +87,51 @@ test('gh-418: at open, invalidate FIRST (no wasted stale respawn) → single ens
   });
 });
 
+test('at open, a respawn heals authority mismatch without rebuilding', async () => {
+  const probes = [AUTHORITY_MISMATCH, { liveness: 'alive' }];
+  let invalidated = 0;
+  let ensured = 0;
+  const res = await ensureRunnerForCommand('U1', 'com.example', {
+    ...base(),
+    allowArtifactRebuild: true,
+    probe: async () => probes.shift(),
+    ensure: async () => {
+      ensured++;
+    },
+    invalidateArtifact: () => invalidated++,
+  });
+
+  assert.equal(invalidated, 0);
+  assert.equal(ensured, 1);
+  assert.deepEqual(res, {
+    ok: true,
+    note: 'runner upgraded (authority identity mismatch)',
+  });
+});
+
+test('at open, persistent authority mismatch cold-rebuilds after one respawn', async () => {
+  const probes = [AUTHORITY_MISMATCH, AUTHORITY_MISMATCH, { liveness: 'alive' }];
+  let invalidated = 0;
+  let ensured = 0;
+  const res = await ensureRunnerForCommand('U1', 'com.example', {
+    ...base(),
+    allowArtifactRebuild: true,
+    probe: async () => probes.shift(),
+    ensure: async (_deviceId, _bundleId, opts) => {
+      ensured++;
+      if (ensured === 2) assert.equal(opts.forceLocalBuild, true);
+    },
+    invalidateArtifact: () => invalidated++,
+  });
+
+  assert.equal(invalidated, 1);
+  assert.equal(ensured, 2);
+  assert.deepEqual(res, {
+    ok: true,
+    note: 'runner artifact rebuilt (authority identity mismatch)',
+  });
+});
+
 test('gh-418: at open, rebuild budget already spent for this plugin version → refuse, no invalidation', async () => {
   const budget = freshBudget();
   budget.recordRebuild('0.99.0');
@@ -99,6 +148,28 @@ test('gh-418: at open, rebuild budget already spent for this plugin version → 
   assert.equal(res.ok, false);
   assert.equal(res.code, 'RUNNER_COMMANDS_STALE');
   assert.match(res.message, /already cold-rebuilt/i);
+});
+
+test('gh-418: authority mismatch after a prior rebuild exposes supported marker recovery', async () => {
+  const budget = freshBudget();
+  budget.recordRebuild('0.99.0');
+  const res = await ensureRunnerForCommand('U1', 'com.example', {
+    ...base(),
+    allowArtifactRebuild: true,
+    rebuildBudget: budget,
+    probe: async () => ({
+      liveness: 'stale',
+      staleReason: 'authority-mismatch',
+      runnerVersion: '0.1.0',
+    }),
+    ensure: async () => {},
+    invalidateArtifact: () => assert.fail('must not invalidate while the guard is present'),
+  });
+
+  assert.equal(res.ok, false);
+  assert.equal(res.code, 'RUNNER_OWNERSHIP_MISMATCH');
+  assert.match(res.message, /delete the runner build\/commands-rebuild\.json marker/);
+  assert.match(res.message, /re-open to retry/);
 });
 
 test('gh-418: at open, build lock held by another session → refuse, no invalidation', async () => {

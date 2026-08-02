@@ -5,24 +5,28 @@ export class StrictProofMonitor {
     events = [];
     observedResults = [];
     active = false;
+    activeRunId = null;
     constructor(now = Date.now) {
         this.now = now;
     }
-    begin() {
+    begin(runId = 'legacy') {
         this.events = [];
         this.observedResults = [];
         this.active = true;
+        this.activeRunId = runId;
     }
     record(event) {
         if (!this.active || event.tool === 'proof_capture')
             return;
         const ts = this.now();
+        const authorityReceiptHash = observedAuthorityReceiptHash(event.result);
         this.events.push({
             tool: event.tool,
             ok: event.status === 'PASS',
             ts,
             durationMs: event.latencyMs,
             argsHash: hashProofArgs(event.params),
+            ...(authorityReceiptHash ? { authorityReceiptHash } : {}),
         });
         this.observedResults.push({
             tool: event.tool,
@@ -32,6 +36,7 @@ export class StrictProofMonitor {
             resultHash: hashObservedValue(event.result),
             screenshotPath: observedScreenshotPath(event),
             assertionPassed: observedAssertionPassed(event),
+            ...(authorityReceiptHash ? { authorityReceiptHash } : {}),
         });
     }
     snapshot() {
@@ -40,6 +45,18 @@ export class StrictProofMonitor {
     stop() {
         this.active = false;
         return this.snapshot();
+    }
+    isActive(runId) {
+        return this.active && this.activeRunId === runId;
+    }
+    ownsRun(runId) {
+        return this.activeRunId === runId;
+    }
+    release(runId) {
+        if (this.activeRunId === runId) {
+            this.active = false;
+            this.activeRunId = null;
+        }
     }
     observations() {
         return structuredClone(this.observedResults);
@@ -69,7 +86,7 @@ function hashObservedValue(value) {
     const bytes = JSON.stringify(value) ?? String(value);
     return createHash('sha256').update(bytes).digest('hex');
 }
-function resultEnvelopeData(result) {
+function resultEnvelope(result) {
     if (!result || typeof result !== 'object')
         return null;
     const content = result.content;
@@ -79,12 +96,23 @@ function resultEnvelopeData(result) {
     if (typeof text !== 'string')
         return result;
     try {
-        const envelope = JSON.parse(text);
-        return envelope.data ?? envelope;
+        return JSON.parse(text);
     }
     catch {
         return result;
     }
+}
+function resultEnvelopeData(result) {
+    const envelope = resultEnvelope(result);
+    return envelope?.data ?? envelope;
+}
+function observedAuthorityReceiptHash(result) {
+    const envelope = resultEnvelope(result);
+    const meta = envelope?.meta;
+    if (!meta || typeof meta !== 'object')
+        return null;
+    const receipt = meta.authorityReceipt;
+    return receipt && typeof receipt === 'object' ? hashProofValue(receipt) : null;
 }
 function stringField(value, fields) {
     if (!value || typeof value !== 'object')
@@ -139,6 +167,7 @@ export const traceReasonCodes = [
     'UNDECLARED_READ_ONLY_TOOL',
     'STORYBOARD_OPERATION_MISSING',
     'STORYBOARD_ORDER_VIOLATION',
+    'AUTHORITY_RECEIPT_MISSING',
 ];
 const readOnlyTools = new Set([
     'cdp_status',

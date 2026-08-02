@@ -9,6 +9,7 @@ import {
   cacheSnapshot,
   getCachedSnapshot,
   isSnapshotCacheValid,
+  markSnapshotDirty,
 } from '../agent-device-wrapper.js';
 import {
   isFastRunnerAvailable,
@@ -188,17 +189,23 @@ export async function fetchSnapshotNodes(allowCache = false): Promise<SnapshotFe
   }
 
   const session = getActiveSession();
+  markSnapshotDirty(session?.platform);
   const recovery = await recoverFromRunnerLeak(
-    { platform: session?.platform, appId: session?.appId, sessionName: session?.name },
+    {
+      platform: session?.platform,
+      appId: session?.appId,
+      deviceId: session?.deviceId,
+      sessionName: session?.name,
+    },
     {
       closeSession: async () => {
-        clearActiveSession();
-        stopFastRunner(session?.deviceId);
+        await stopFastRunner(session?.deviceId);
         await stopAndroidRunner(session?.deviceId);
+        clearActiveSession();
         return okResult({ closed: true });
       },
-      openSession: ({ appId, platform, attachOnly }) =>
-        reopenSessionForRecovery(appId, platform, attachOnly),
+      openSession: ({ appId, platform, deviceId, attachOnly }) =>
+        reopenSessionForRecovery(appId, platform, attachOnly, deviceId),
       resnapshot: () => runNative(['snapshot', '-i']),
       parseNodes: parseSnapshotEnvelope,
     },

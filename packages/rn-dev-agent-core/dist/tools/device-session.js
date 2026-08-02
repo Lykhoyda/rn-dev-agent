@@ -1,10 +1,9 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import { runNative, setActiveSession, clearActiveSession, getActiveSession, ensureFastRunner, ensureRunnerForCommand, attachMetaNote, cacheSnapshot, getAdbSerial, } from '../agent-device-wrapper.js';
-import { consumePendingFastRunnerArtifactNote, stopFastRunner, } from '../runners/rn-fast-runner-client.js';
-import { stopAndroidRunner, resolveAndroidSerial, startAndroidRunner, runAndroid, consumePendingAndroidUpgradeNote, } from '../runners/rn-android-runner-client.js';
+import { runNative, setActiveSession, clearActiveSession, getActiveSession, ensureFastRunner, ensureRunnerForCommand, attachMetaNote, cacheSnapshot, markSnapshotDirty, getAdbSerial, } from '../agent-device-wrapper.js';
+import { consumePendingFastRunnerArtifactNote, resetRunnerRebuildBudgetForCurrentPlugin, stopFastRunner, } from '../runners/rn-fast-runner-client.js';
+import { stopAndroidRunner, reapActiveAndroidRunner, startAndroidRunner, runAndroid, consumePendingAndroidUpgradeNote, } from '../runners/rn-android-runner-client.js';
 import { launchApp } from './app-lifecycle.js';
-import { resolveIosUdid } from './device-screenshot-raw.js';
 import { markCdpStale } from '../cdp/recovery.js';
 import { detectAndroidExternalRunner, detectIosExternalRunner, foreignRunnerNotice, } from '../runners/external-runner-detect.js';
 import { ensureSingleRunner } from '../runners/ensure-single-runner.js';
@@ -57,10 +56,8 @@ export function deviceBusyMessage(deviceId, holder) {
         `Close that session or target a different simulator.`);
 }
 /**
- * B112 (D641): check whether a given bundleId is currently running on the
- * exact selected device. iOS uses that simulator UDID with `simctl spawn`;
- * Android uses that adb serial with `adb shell pidof`. Missing identity refuses
- * instead of consulting the ambiguous `booted` alias.
+ * Check app liveness on the exact selected device; never use an ambiguous
+ * simulator or adb target.
  */
 export async function isAppRunning(platform, bundleId, probes, deviceId) {
     const p = (platform ?? 'ios').toLowerCase();
@@ -141,6 +138,9 @@ export function createDeviceSnapshotHandler(deps = {}) {
                 encoding: 'utf8',
             });
         });
+    const ensureIosRunner = deps.ensureIosRunner ?? ensureRunnerForCommand;
+    const stopIosRunner = deps.stopIosRunner ?? stopFastRunner;
+    const reapAndroidRunner = deps.reapAndroidRunner ?? reapActiveAndroidRunner;
     return async (args) => {
         const action = args.action ?? 'snapshot';
         if (action === 'open') {
@@ -181,11 +181,9 @@ export function createDeviceSnapshotHandler(deps = {}) {
             const platform = (args.platform ?? 'ios').toLowerCase();
             const lockPlatform = platform === 'android' ? 'android' : 'ios';
             // GH#202 Phase 2 Task 4: resolve device id NATIVELY (no agent-device).
-            const deviceId = lockPlatform === 'android'
-                ? await resolveAndroidSerial(args.deviceId)
-                : await resolveIosUdid(args.deviceId);
+            const deviceId = args.deviceId?.trim();
             if (!deviceId) {
-                return failResult(`No booted ${platform} device found (or multiple booted — pass deviceId explicitly).`, 'NOT_CONNECTED');
+                return failResult(`Exact ${platform} deviceId is required; ambient booted/first-device selection is diagnostic only.`, 'DEVICE_AUTHORITY_MISMATCH');
             }
             // GH#202 Phase 1.5 / Task 4: acquire the lock BEFORE any side-effect.
             // On conflict, nothing has been launched yet — no teardown needed.
@@ -223,10 +221,12 @@ export function createDeviceSnapshotHandler(deps = {}) {
                     // GH #383: propagate its typed code (RUNNER_PROTOCOL_MISMATCH) when set.
                     // GH #418: open is the only entry allowed to invalidate a stale
                     // runner artifact and pay the cold rebuild (mid-flow refuses fast).
-                    const ready = await ensureRunnerForCommand(deviceId, appId, {
+                    const ready = await ensureIosRunner(deviceId, appId, {
                         allowArtifactRebuild: true,
+                        attachOnly: args.attachOnly === true,
                     });
                     if (!ready.ok) {
+                        await stopIosRunner(deviceId);
                         // GH #382: a failed start may have left a pending artifact note —
                         // discard it so it never leaks onto a later successful result.
                         consumePendingFastRunnerArtifactNote();
@@ -236,14 +236,16 @@ export function createDeviceSnapshotHandler(deps = {}) {
                     // GH #382: an upgrade note wins; otherwise surface the artifact note
                     // (e.g. "downloaded prebuilt runner (~4 MB)").
                     upgradeNote = ready.note ?? consumePendingFastRunnerArtifactNote();
-                    // A bare simctl launch foregrounds a running PID without relaunch —
-                    // safe whether or not attachOnly; ignore errors (app may be frontmost).
-                    await execFile('xcrun', ['simctl', 'launch', deviceId, appId], {
-                        timeout: 10_000,
-                        encoding: 'utf8',
-                    }).catch(() => {
-                        /* already frontmost is OK */
-                    });
+                    // Full-open foregrounding may be best-effort; attach-only activation
+                    // is performed by XCTest under target process-identity checks.
+                    if (!args.attachOnly) {
+                        await execFile('xcrun', ['simctl', 'launch', deviceId, appId], {
+                            timeout: 10_000,
+                            encoding: 'utf8',
+                        }).catch(() => {
+                            /* already frontmost is OK */
+                        });
+                    }
                 }
                 else {
                     // GH #418: open may invalidate stale runner APKs + Gradle-rebuild.
@@ -268,15 +270,30 @@ export function createDeviceSnapshotHandler(deps = {}) {
                 }
             }
             catch (err) {
-                releaseDeviceLockForSession();
+                let cleanupFailure;
+                try {
+                    if (lockPlatform === 'ios')
+                        await stopIosRunner(deviceId);
+                    else
+                        await reapAndroidRunner(deviceId);
+                }
+                catch (cleanupErr) {
+                    cleanupFailure = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
+                }
+                finally {
+                    releaseDeviceLockForSession();
+                }
                 // GH #383: startAndroidRunner may have set a pending upgrade note (reap
                 // on protocol mismatch) before throwing for an unrelated reason (adb
                 // forward race, exit-before-ready, spawn error). Discard it here so it
                 // doesn't leak onto the next successful Android result.
                 consumePendingAndroidUpgradeNote();
-                const msg = err instanceof Error ? err.message : String(err);
+                const rawMsg = err instanceof Error ? err.message : String(err);
+                const msg = cleanupFailure
+                    ? `${rawMsg}; runner cleanup also failed: ${cleanupFailure}`
+                    : rawMsg;
                 if (err instanceof AndroidAppLaunchError) {
-                    return failResult(err.message, 'APP_LAUNCH_FAILED');
+                    return failResult(msg, 'APP_LAUNCH_FAILED');
                 }
                 // GH #418: even the open-path rebuild couldn't produce a runner with
                 // the required commands — the checkout itself is suspect.
@@ -287,6 +304,9 @@ export function createDeviceSnapshotHandler(deps = {}) {
                 // distinct, actionable failure — surface it, not the generic runner-down.
                 if (msg.startsWith('RUNNER_PROTOCOL_MISMATCH')) {
                     return failResult(msg, 'RUNNER_PROTOCOL_MISMATCH');
+                }
+                if (msg.startsWith('RUNNER_OWNERSHIP_MISMATCH')) {
+                    return failResult(msg, 'RUNNER_OWNERSHIP_MISMATCH');
                 }
                 const code = lockPlatform === 'ios' ? 'RN_FAST_RUNNER_DOWN' : 'RN_ANDROID_RUNNER_DOWN';
                 return failResult(`Failed to start device runner: ${msg}`, code);
@@ -299,6 +319,31 @@ export function createDeviceSnapshotHandler(deps = {}) {
                 openedAt: new Date().toISOString(),
                 appId,
             });
+            try {
+                await deps.bindRunner?.(lockPlatform, deviceId, appId);
+            }
+            catch (error) {
+                let cleanupFailure;
+                try {
+                    if (lockPlatform === 'ios')
+                        await stopIosRunner(deviceId);
+                    else
+                        await reapAndroidRunner(deviceId);
+                }
+                catch (cleanupErr) {
+                    cleanupFailure = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
+                }
+                finally {
+                    clearActiveSession();
+                    releaseDeviceLockForSession();
+                }
+                const rawMessage = error instanceof Error ? error.message : String(error);
+                const code = /^([A-Z][A-Z0-9_]+):/.exec(rawMessage)?.[1] ?? 'RUNNER_OWNERSHIP_MISMATCH';
+                const message = cleanupFailure
+                    ? `${rawMessage}; runner cleanup also failed: ${cleanupFailure}`
+                    : rawMessage;
+                return failResult(message, code);
+            }
             // GH#202 Phase 2b: a genuinely-succeeded open is a fresh session — clear
             // the wedge-recovery budget. Placed AFTER the device-lock conflict
             // early-return so a refused DEVICE_BUSY open does NOT reset it.
@@ -419,15 +464,27 @@ export function createDeviceSnapshotHandler(deps = {}) {
             return upgradeNote ? attachMetaNote(result, upgradeNote) : result;
         }
         if (action === 'close') {
-            return closeDeviceSession({
+            const closingPlatform = getActiveSession()?.platform ?? args.platform;
+            const result = await closeDeviceSession({
                 hasActiveSession: () => getActiveSession() !== null,
                 closeUnderlyingSession: async () => okResult({ closed: true }),
                 clearActiveSession,
                 stopFastRunner,
-                stopAndroidRunner,
+                stopAndroidRunner: async (deviceId) => {
+                    if (getActiveSession()?.platform === 'android') {
+                        await reapActiveAndroidRunner(deviceId);
+                    }
+                },
+                finalizeSuccessfulClose: async () => {
+                    await deps.unbindRunner?.();
+                    if (closingPlatform === 'ios') {
+                        (deps.resetIosRunnerRebuildBudget ?? resetRunnerRebuildBudgetForCurrentPlugin)();
+                    }
+                },
                 releaseDeviceLock: releaseDeviceLockForSession,
                 getDeviceId: () => getActiveSession()?.deviceId,
             });
+            return result;
         }
         // action === 'snapshot'
         if (!getActiveSession()) {
@@ -439,7 +496,13 @@ export function createDeviceSnapshotHandler(deps = {}) {
         const nodes = parseSnapshotNodes(result);
         if (!result.isError && nodes && isAgentDeviceRunnerSentinel(nodes)) {
             const session = getActiveSession();
-            const recovery = await recoverFromRunnerLeak({ platform: session?.platform, appId: session?.appId, sessionName: session?.name }, {
+            markSnapshotDirty(session?.platform);
+            const recovery = await recoverFromRunnerLeak({
+                platform: session?.platform,
+                appId: session?.appId,
+                deviceId: session?.deviceId,
+                sessionName: session?.name,
+            }, {
                 // B130 (D659): the recovery close must also clear the local session
                 // state (activeSession → null, ref-map → empty, fast-runner stopped)
                 // so the post-recovery re-snapshot goes through the daemon/CLI path
@@ -449,21 +512,27 @@ export function createDeviceSnapshotHandler(deps = {}) {
                 // ref-map is stale (from pre-recovery) OR non-existent (after fresh
                 // session open), and fast-runner serves the (ref-less) snapshot.
                 closeSession: async () => {
-                    clearActiveSession(); // also clears refMap via its side-effect
-                    stopFastRunner(session?.deviceId);
+                    await stopFastRunner(session?.deviceId);
                     await stopAndroidRunner(session?.deviceId);
+                    await deps.unbindRunner?.();
+                    clearActiveSession();
                     return okResult({ closed: true });
                 },
-                openSession: ({ appId, platform, attachOnly }) => reopenSessionForRecovery(appId, platform, attachOnly),
+                openSession: ({ appId, platform, deviceId, attachOnly }) => reopenSessionForRecovery(appId, platform, attachOnly, deviceId, deps),
                 resnapshot: () => rawSnapshot(),
                 parseNodes: parseSnapshotNodes,
-                // GH #186: non-destructive reacquire tried before the destructive
-                // close/relaunch tiers. Only when we have the full iOS context
-                // (appId + deviceId) needed to re-foreground the app and restart the
-                // fast-runner; otherwise omitted so recovery falls back to the
-                // existing tiers.
-                reacquire: session?.platform === 'ios' && session?.appId && session?.deviceId
-                    ? () => reacquireIosTargetApp(session.appId, session.deviceId)
+                reacquire: session?.platform === 'ios' &&
+                    session?.appId &&
+                    session?.deviceId &&
+                    deps.bindRunner &&
+                    deps.unbindRunner
+                    ? () => reacquireIosTargetApp(session.appId, session.deviceId, {
+                        bindRunner: deps.bindRunner,
+                        ensureFastRunner,
+                        launchApp,
+                        stopFastRunner,
+                        unbindRunner: deps.unbindRunner,
+                    })
                     : undefined,
             });
             if (recovery.recovered) {
@@ -500,38 +569,18 @@ export function runnerLeakFailureHint(reason, session) {
     }
     return 'Manually close + reopen the session with action=open appId=<your.bundle.id> platform=ios (full launch, not attachOnly). Upstream: Callstack/agent-device, see B119/GH#35.';
 }
-/**
- * GH #186: non-destructive reacquire of the iOS target app after a runner-leak
- * sentinel. Both the daemon-leak and a maestro-eviction (a foreign XCUITest
- * session stealing focus) surface as the same sentinel, so rather than closing
- * the session + relaunching (~44s, drops JS/CDP state) we: stop the
- * (possibly evicted) fast-runner so it can't compete for focus, re-foreground
- * the TARGET app via simctl (displacing the foreign session), then restart the
- * fast-runner bound to the app. The caller (recoverFromRunnerLeak) re-snapshots
- * and only falls through to the destructive tiers if the sentinel persists.
- * Mirrors repair-action.ts:bringTargetAppToForeground, kept local here to keep
- * the dependency surface tight (same rationale as that copy).
- */
-async function reacquireIosTargetApp(appId, deviceId) {
+export async function reacquireIosTargetApp(appId, deviceId, dependencies) {
     try {
-        stopFastRunner(deviceId);
+        await dependencies.stopFastRunner(deviceId);
+        await dependencies.unbindRunner();
+        await dependencies.launchApp(appId, 'ios', deviceId);
+        await dependencies.ensureFastRunner(deviceId, appId);
+        await dependencies.bindRunner('ios', deviceId, appId);
+        return okResult({ reacquired: true, appId });
     }
-    catch {
-        /* best-effort — may already be dead */
+    catch (error) {
+        return failResult(`Runner authority reacquire failed: ${error instanceof Error ? error.message : String(error)}`, 'RUNNER_OWNERSHIP_MISMATCH');
     }
-    try {
-        await launchApp(appId, 'ios', deviceId);
-    }
-    catch {
-        /* best-effort — the sentinel re-check covers a failed foreground */
-    }
-    try {
-        await ensureFastRunner(deviceId, appId);
-    }
-    catch {
-        /* non-fatal — re-snapshot will surface a still-broken runner */
-    }
-    return okResult({ reacquired: true, appId });
 }
 async function rawSnapshot() {
     return runNative(['snapshot', '-i']);
@@ -575,7 +624,7 @@ function wrapWithMeta(result, meta) {
         return result;
     }
 }
-export async function reopenSessionForRecovery(appId, platform, attachOnly) {
+export async function reopenSessionForRecovery(appId, platform, attachOnly, deviceId, dependencies = {}) {
     // Always mint a fresh recovery name (Gemini G3): reusing the original
     // session name risks silently re-attaching to the corrupted session.
     const recoveryName = `rn-agent-recovery-${Date.now()}`;
@@ -585,9 +634,10 @@ export async function reopenSessionForRecovery(appId, platform, attachOnly) {
     // cleanly (acquireDeviceLockForSession releases any prior same-process lock
     // first), so there is no self-DEVICE_BUSY. This replaces the old
     // agent-device `open` RPC + envelope/UDID_RE parse.
-    return createDeviceSnapshotHandler()({
+    return createDeviceSnapshotHandler(dependencies)({
         action: 'open',
         appId,
+        deviceId,
         platform: platform,
         attachOnly,
         sessionName: recoveryName,

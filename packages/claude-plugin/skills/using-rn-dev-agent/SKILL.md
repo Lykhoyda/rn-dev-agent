@@ -10,7 +10,7 @@ description: >
 
 # Using rn-dev-agent
 
-The React Native development plugin for Claude Code and Codex. **79 MCP tools**, **5 agents**, **15 commands**, **10 skills**.
+The React Native development plugin for Claude Code and Codex. **5 agents**, **15 commands**, **10 skills**, and an MCP tool suite for live app work.
 
 This skill is your front door. Before starting any RN work, use the decision tree below to route the user's intent to the right tool.
 

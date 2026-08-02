@@ -167,7 +167,7 @@ export class SupervisorCore {
     }
     onWorkerExit(code, signal, shutdownRequested) {
         if (shutdownRequested)
-            return [{ kind: 'exit', code: 0 }];
+            return [{ kind: 'shutdown' }];
         this.lastExit = workerExitDetail(code, signal);
         const errors = [...this.pending].map((id) => ({
             kind: 'toClient',

@@ -48,15 +48,23 @@ import {
   runnerReportArgs,
 } from '../domain/maestro-runner-report.js';
 import type { SessionState } from '../types.js';
+import {
+  completeManagedRunnerParkAuthority,
+  claimManagedNativeOriginAuthority,
+  completeManagedNativeOriginAuthority,
+  relaunchManagedNativeOriginApp,
+} from '../session/authority-gate.js';
+import { SessionAuthorityError } from '../session/registry.js';
 
 const defaultExecFile = promisify(execFileCb);
 
 export interface FlowParkOpts {
   platform?: 'ios' | 'android';
   deviceId?: string;
-  stopFastRunner?: (deviceId?: string) => void;
+  stopFastRunner?: (deviceId?: string) => void | Promise<void>;
   markCdpStale?: () => void;
   releaseAndroidSlot?: (opts: { deviceId?: string }) => Promise<void>;
+  completeRunnerPark?: () => Promise<void>;
 }
 
 /**
@@ -74,8 +82,9 @@ export async function runFlowParked<T>(run: () => Promise<T>, opts: FlowParkOpts
       const release = opts.releaseAndroidSlot ?? defaultReleaseAndroidSlot;
       await release({ deviceId: opts.deviceId });
     } else {
-      (opts.stopFastRunner ?? defaultStopFastRunner)(opts.deviceId);
+      await (opts.stopFastRunner ?? defaultStopFastRunner)(opts.deviceId);
     }
+    await opts.completeRunnerPark?.();
     return await run();
   } finally {
     stale();
@@ -93,7 +102,7 @@ export function assembleMaestroArgs(baseArgs: string[], paramArgs: string[]): st
   return [...baseArgs.slice(0, -1), ...paramArgs, baseArgs[baseArgs.length - 1]];
 }
 
-interface MaestroRunArgs {
+export interface MaestroRunArgs {
   flowPath?: string;
   inlineYaml?: string;
   platform?: 'ios' | 'android';
@@ -112,6 +121,142 @@ interface MaestroRunArgs {
    * by construction (execFile, not exec).
    */
   params?: Record<string, string>;
+  claimNativeOrigin?: () => Promise<void>;
+  completeNativeOrigin?: (targetExpected: boolean) => Promise<void>;
+  relaunchManagedApp?: () => Promise<void>;
+  completeRunnerPark?: () => Promise<void>;
+}
+
+export interface MaestroAuthorityCallbacks {
+  claimNativeOrigin: () => Promise<void>;
+  completeNativeOrigin: (targetExpected: boolean) => Promise<void>;
+  relaunchManagedApp: () => Promise<void>;
+  completeRunnerPark: () => Promise<void>;
+}
+
+export function nestedMaestroAuthorityCallbacks(args: object): MaestroAuthorityCallbacks {
+  return {
+    claimNativeOrigin: () => claimManagedNativeOriginAuthority(args),
+    completeNativeOrigin: (targetExpected) =>
+      completeManagedNativeOriginAuthority(args, targetExpected),
+    relaunchManagedApp: () => relaunchManagedNativeOriginApp(args),
+    completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
+  };
+}
+
+interface AuthorityStage {
+  commands: unknown[];
+  requiresOrigin: boolean;
+}
+
+export class MaestroStageExecutionError<T> extends Error {
+  readonly completedResults: readonly T[];
+  readonly stageError: unknown;
+
+  constructor(completedResults: readonly T[], stageError: unknown) {
+    super(stageError instanceof Error ? stageError.message : String(stageError), {
+      cause: stageError,
+    });
+    this.name = 'MaestroStageExecutionError';
+    this.completedResults = [...completedResults];
+    this.stageError = stageError;
+  }
+}
+
+const lifecycleCommands = new Set(['launchApp', 'clearState', 'killApp', 'stopApp']);
+
+function commandName(command: unknown): string | null {
+  if (typeof command === 'string') return command;
+  if (!command || typeof command !== 'object' || Array.isArray(command)) return null;
+  const keys = Object.keys(command as Record<string, unknown>);
+  return keys.length === 1 ? keys[0]! : null;
+}
+
+function nestedLifecycleCommand(command: unknown): boolean {
+  if (!command || typeof command !== 'object' || Array.isArray(command)) return false;
+  const runFlow = (command as Record<string, unknown>).runFlow;
+  if (!runFlow || typeof runFlow !== 'object' || Array.isArray(runFlow)) return false;
+  const commands = (runFlow as Record<string, unknown>).commands;
+  return Array.isArray(commands) && commands.some(nestedLifecycleCommandOrSelf);
+}
+
+function nestedLifecycleCommandOrSelf(command: unknown): boolean {
+  const name = commandName(command);
+  return (name !== null && lifecycleCommands.has(name)) || nestedLifecycleCommand(command);
+}
+
+export function planMaestroAuthorityStages(commands: readonly unknown[]): {
+  stages: AuthorityStage[];
+  targetExpected: boolean;
+} {
+  const stages: AuthorityStage[] = [];
+  let pending: unknown[] = [];
+  let targetExpected = true;
+  const flushPending = (): void => {
+    if (pending.length === 0) return;
+    stages.push({ commands: pending, requiresOrigin: true });
+    pending = [];
+  };
+
+  for (const command of commands) {
+    const name = commandName(command);
+    if (nestedLifecycleCommand(command)) {
+      throw new MaestroValidationError(
+        'conditional runFlow commands cannot contain app lifecycle transitions',
+      );
+    }
+    if (name !== null && lifecycleCommands.has(name)) {
+      flushPending();
+      stages.push({ commands: [command], requiresOrigin: false });
+      targetExpected = name === 'launchApp';
+      continue;
+    }
+    pending.push(command);
+  }
+  flushPending();
+  return { stages, targetExpected };
+}
+
+export async function executeMaestroAuthorityStages<T>(
+  commands: readonly unknown[],
+  executeStage: (commands: readonly unknown[]) => Promise<T>,
+  claimOrigin: () => Promise<void>,
+  completeOrigin: (targetExpected: boolean) => Promise<void>,
+  relaunchManagedApp: () => Promise<void>,
+): Promise<T[]> {
+  const plan = planMaestroAuthorityStages(commands);
+  const results: T[] = [];
+  for (const stage of plan.stages) {
+    if (stage.requiresOrigin) await claimOrigin();
+    try {
+      results.push(await executeStage(stage.commands));
+      if (stage.commands.length === 1 && commandName(stage.commands[0]) === 'launchApp') {
+        await relaunchManagedApp();
+      }
+    } catch (error) {
+      await completeOrigin(false);
+      throw new MaestroStageExecutionError(results, error);
+    }
+  }
+  await completeOrigin(plan.targetExpected);
+  return results;
+}
+
+export function resolveMaestroFlowAppId(
+  boundAppId: string | undefined,
+  parsedAppId: string | undefined,
+): string | undefined {
+  if (boundAppId !== undefined && !isValidBundleId(boundAppId)) {
+    throw new MaestroValidationError(
+      `Invalid bundle ID for authority-bound app: ${JSON.stringify(boundAppId).slice(0, 80)}`,
+    );
+  }
+  if (boundAppId && parsedAppId && parsedAppId !== boundAppId) {
+    throw new MaestroValidationError(
+      `Flow appId ${parsedAppId} does not match authority-bound appId ${boundAppId}`,
+    );
+  }
+  return boundAppId ?? parsedAppId;
 }
 
 /** GH #116: Maestro env-style key pattern. Refuses anything that could
@@ -136,6 +281,10 @@ export interface MaestroRunDeps {
   getActiveSession?: () => SessionState | null;
   chooseDispatch?: typeof chooseMaestroDispatch;
   parkFlow?: typeof runFlowParked;
+  claimNativeOrigin?: () => Promise<void>;
+  completeNativeOrigin?: (targetExpected: boolean) => Promise<void>;
+  relaunchManagedApp?: () => Promise<void>;
+  now?: () => number;
   execFile?: (
     file: string,
     args: string[],
@@ -169,6 +318,7 @@ export function createMaestroRunHandler(
   const selectDispatch = deps.chooseDispatch ?? chooseMaestroDispatch;
   const parkFlow = deps.parkFlow ?? runFlowParked;
   const execute = deps.execFile ?? defaultExecFile;
+  const now = deps.now ?? Date.now;
   return async (args) => {
     // GH #116: validate params shape FIRST so a malformed payload is rejected
     // regardless of platform / dispatch-tier availability. CI envs without
@@ -237,6 +387,7 @@ export function createMaestroRunHandler(
     let flowFile: string;
     let rawYaml: string;
     let validatedContent: string;
+    let validatedCommands: unknown[];
     let headerAppId: string | undefined;
 
     if (args.inlineYaml) {
@@ -262,14 +413,11 @@ export function createMaestroRunHandler(
         ? { flowDir: dirname(args.flowPath), flowRoot: dirname(args.flowPath) }
         : {};
       const parsed = parseAndValidateFlow(rawYaml, runFlowOpts);
+      planMaestroAuthorityStages(parsed.commands);
+      validatedCommands = parsed.commands;
       flowHasHideKeyboard = flowContainsHideKeyboard(parsed.commands);
       const rawAppId = resolveAppId(args.appId, platform);
-      headerAppId = parsed.appId ?? (rawAppId && isValidBundleId(rawAppId) ? rawAppId : undefined);
-      if (rawAppId && !parsed.appId && !isValidBundleId(rawAppId)) {
-        return failResult(
-          `Refusing to run Maestro: invalid bundle ID '${String(rawAppId).slice(0, 80)}' from project config (Phase 134.1)`,
-        );
-      }
+      headerAppId = resolveMaestroFlowAppId(rawAppId || undefined, parsed.appId);
       validatedContent = buildMaestroFlow(
         headerAppId ? { appId: headerAppId } : {},
         parsed.commands,
@@ -299,6 +447,7 @@ export function createMaestroRunHandler(
     }
 
     const timeout = args.timeoutMs ?? 120_000;
+    const flowDeadline = now() + timeout;
 
     // GH #116: build the final argv. Start with the dispatch tier's
     // base args, then append `-e KEY=VALUE` pairs for any supplied
@@ -352,15 +501,49 @@ export function createMaestroRunHandler(
       // logs routinely exceeds Node's 1MB execFile default, which would kill
       // the child with ERR_CHILD_PROCESS_STDIO_MAXBUFFER and mask a passing
       // run as a failure.
-      const { stdout, stderr } = await parkFlow(
+      const managedAuthority = nestedMaestroAuthorityCallbacks(args);
+      const claimOrigin =
+        args.claimNativeOrigin ?? deps.claimNativeOrigin ?? managedAuthority.claimNativeOrigin;
+      const completeOrigin =
+        args.completeNativeOrigin ??
+        deps.completeNativeOrigin ??
+        managedAuthority.completeNativeOrigin;
+      const relaunchManagedApp =
+        args.relaunchManagedApp ?? deps.relaunchManagedApp ?? managedAuthority.relaunchManagedApp;
+      const stageResults = await parkFlow(
         () =>
-          execute(dispatch.binPath, finalArgs, {
-            timeout,
-            encoding: 'utf8',
-            maxBuffer: 10 * 1024 * 1024,
-          }),
-        { platform, deviceId: requestedDeviceId },
+          executeMaestroAuthorityStages(
+            validatedCommands,
+            async (commands) => {
+              const remainingTimeout = flowDeadline - now();
+              if (remainingTimeout <= 0) {
+                const error = new Error('Maestro flow timeout exhausted before the next stage');
+                Object.assign(error, { code: 'ETIMEDOUT' });
+                throw error;
+              }
+              writeFileSync(
+                flowFile,
+                buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, [...commands]),
+                'utf-8',
+              );
+              return execute(dispatch.binPath, finalArgs, {
+                timeout: remainingTimeout,
+                encoding: 'utf8',
+                maxBuffer: 10 * 1024 * 1024,
+              });
+            },
+            claimOrigin,
+            completeOrigin,
+            relaunchManagedApp,
+          ),
+        {
+          platform,
+          deviceId: requestedDeviceId,
+          completeRunnerPark: args.completeRunnerPark ?? managedAuthority.completeRunnerPark,
+        },
       );
+      const stdout = stageResults.map((result) => result.stdout).join('\n');
+      const stderr = stageResults.map((result) => result.stderr).join('\n');
 
       // combineRunnerOutput (not .trim()) so the step parser's leading-indent
       // anchor (B212) still sees the FIRST step line's indent — see GH #312.
@@ -445,7 +628,9 @@ export function createMaestroRunHandler(
       );
       return warnResult(warnAug.meta, warnAug.message);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      if (err instanceof SessionAuthorityError) throw err;
+      const stageError = err instanceof MaestroStageExecutionError ? err.stageError : err;
+      const msg = stageError instanceof Error ? stageError.message : String(stageError);
       // Multi-LLM review of PR #115 (Codex conf 95): when execFile
       // throws on timeout (or kill), Node attaches the partial stdout
       // and stderr to the error object. Preserve them in `data.output`
@@ -454,11 +639,21 @@ export function createMaestroRunHandler(
       // failure — e.g. a SELECTOR_NOT_FOUND emitted just before the
       // timeout boundary. Without this, auto-repair is silently
       // pessimised exactly when devices are slow / under load.
-      const errAny = err as { stdout?: unknown; stderr?: unknown };
-      const stdout = typeof errAny?.stdout === 'string' ? errAny.stdout : '';
-      const stderr = typeof errAny?.stderr === 'string' ? errAny.stderr : '';
+      const errAny = stageError as { stdout?: unknown; stderr?: unknown };
+      const completed =
+        err instanceof MaestroStageExecutionError
+          ? (err.completedResults as ReadonlyArray<{ stdout?: unknown; stderr?: unknown }>)
+          : [];
+      const stdout = [
+        ...completed.map((result) => (typeof result.stdout === 'string' ? result.stdout : '')),
+        typeof errAny?.stdout === 'string' ? errAny.stdout : '',
+      ].join('\n');
+      const stderr = [
+        ...completed.map((result) => (typeof result.stderr === 'string' ? result.stderr : '')),
+        typeof errAny?.stderr === 'string' ? errAny.stderr : '',
+      ].join('\n');
       const combined = combineRunnerOutput(stdout, stderr);
-      const { timedOut, outputTruncated } = classifyExecError(err);
+      const { timedOut, outputTruncated } = classifyExecError(stageError);
       const directEvidence = directRunnerEvidence(combined);
       const deviceAuthority = verifyMaestroDeviceAuthority({
         runner: dispatch.runner,
@@ -471,7 +666,9 @@ export function createMaestroRunHandler(
       const summary = buildStepSummary(combined, { failed: true });
       const spawnError =
         combined.length === 0 &&
-        ['ENOENT', 'EACCES'].includes(String((err as { code?: unknown } | null)?.code ?? ''));
+        ['ENOENT', 'EACCES'].includes(
+          String((stageError as { code?: unknown } | null)?.code ?? ''),
+        );
       const terminal = buildTerminalEvidence(combined, { timedOut, spawnError });
       const runnerResume = await buildRunnerResume(platform, fastHealthCheck);
       // A run that produced no output never reached the device, so there is no
@@ -530,7 +727,11 @@ export function createMaestroRunHandler(
       );
       return failResult(failAug.message, failAug.meta);
     } finally {
-      disposeRunnerReportDir(runnerReportDir);
+      try {
+        writeFileSync(flowFile, validatedContent, 'utf-8');
+      } finally {
+        disposeRunnerReportDir(runnerReportDir);
+      }
     }
   };
 }

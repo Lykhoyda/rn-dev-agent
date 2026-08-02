@@ -2,7 +2,6 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { okResult, failResult } from '../utils.js';
 import type { ToolResult } from '../utils.js';
-import { detectPlatform } from './platform-utils.js';
 import { isValidBundleId } from '../domain/maestro-validator.js';
 
 const execFileAsync = promisify(execFile);
@@ -46,12 +45,14 @@ interface PermissionArgs {
   permission: string;
   appId: string;
   platform?: string;
+  deviceId?: string;
 }
 
 async function iosPermission(
   action: string,
   permission: string,
   appId: string,
+  deviceId: string,
 ): Promise<ToolResult> {
   const iosKey = IOS_PERMISSIONS[permission];
   if (!iosKey) {
@@ -60,7 +61,7 @@ async function iosPermission(
   }
 
   try {
-    const args = ['simctl', 'privacy', 'booted', action, iosKey, appId];
+    const args = ['simctl', 'privacy', deviceId, action, iosKey, appId];
     const { stdout, stderr } = await execFileAsync('xcrun', args, { timeout: EXEC_TIMEOUT });
     return okResult({
       platform: 'ios',
@@ -79,12 +80,15 @@ async function androidPermission(
   action: string,
   permission: string,
   appId: string,
+  deviceId: string,
 ): Promise<ToolResult> {
   if (action === 'reset') {
     try {
-      const { stdout } = await execFileAsync('adb', ['shell', 'pm', 'reset-permissions', appId], {
-        timeout: EXEC_TIMEOUT,
-      });
+      const { stdout } = await execFileAsync(
+        'adb',
+        ['-s', deviceId, 'shell', 'pm', 'reset-permissions', appId],
+        { timeout: EXEC_TIMEOUT },
+      );
       return okResult({ platform: 'android', action: 'reset', appId, output: stdout.trim() });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -102,7 +106,7 @@ async function androidPermission(
   try {
     const { stdout, stderr } = await execFileAsync(
       'adb',
-      ['shell', 'pm', adbAction, appId, androidKey],
+      ['-s', deviceId, 'shell', 'pm', adbAction, appId, androidKey],
       { timeout: EXEC_TIMEOUT },
     );
     return okResult({
@@ -118,12 +122,18 @@ async function androidPermission(
   }
 }
 
-async function androidQueryPermission(permission: string, appId: string): Promise<ToolResult> {
+async function androidQueryPermission(
+  permission: string,
+  appId: string,
+  deviceId: string,
+): Promise<ToolResult> {
   if (permission === 'all') {
     try {
-      const { stdout } = await execFileAsync('adb', ['shell', 'dumpsys', 'package', appId], {
-        timeout: EXEC_TIMEOUT,
-      });
+      const { stdout } = await execFileAsync(
+        'adb',
+        ['-s', deviceId, 'shell', 'dumpsys', 'package', appId],
+        { timeout: EXEC_TIMEOUT },
+      );
       if (stdout.includes('Unable to find package')) {
         return failResult(`Package "${appId}" not installed on device`);
       }
@@ -152,9 +162,11 @@ async function androidQueryPermission(permission: string, appId: string): Promis
   }
 
   try {
-    const { stdout } = await execFileAsync('adb', ['shell', 'dumpsys', 'package', appId], {
-      timeout: EXEC_TIMEOUT,
-    });
+    const { stdout } = await execFileAsync(
+      'adb',
+      ['-s', deviceId, 'shell', 'dumpsys', 'package', appId],
+      { timeout: EXEC_TIMEOUT },
+    );
     if (stdout.includes('Unable to find package')) {
       return failResult(`Package "${appId}" not installed on device`);
     }
@@ -201,12 +213,7 @@ async function iosQueryPermission(permission: string, appId: string): Promise<To
 
 export function createDevicePermissionHandler(): (args: PermissionArgs) => Promise<ToolResult> {
   return async (args) => {
-    const platform = args.platform ?? (await detectPlatform());
-    if (!platform) return failResult('No iOS simulator or Android device detected');
-
-    // CDP-014: validate platform value before routing. Previously a typo
-    // such as "andriod" fell through to the Android branch and could
-    // mutate adb-side permissions on a wrong-platform misroute.
+    const platform = args.platform;
     if (platform !== 'ios' && platform !== 'android') {
       return failResult(
         `Invalid platform "${platform}". Supported values: "ios", "android".`,
@@ -226,14 +233,22 @@ export function createDevicePermissionHandler(): (args: PermissionArgs) => Promi
         'INVALID_APPID',
       );
     }
+    if (!args.deviceId) {
+      return failResult(
+        'device_permission requires the exact authority-bound deviceId',
+        'DEVICE_AUTHORITY_MISMATCH',
+      );
+    }
 
     if (args.action === 'query') {
       return platform === 'ios'
         ? iosQueryPermission(args.permission, args.appId)
-        : androidQueryPermission(args.permission, args.appId);
+        : androidQueryPermission(args.permission, args.appId, args.deviceId);
     }
 
-    if (platform === 'ios') return iosPermission(args.action, args.permission, args.appId);
-    return androidPermission(args.action, args.permission, args.appId);
+    if (platform === 'ios') {
+      return iosPermission(args.action, args.permission, args.appId, args.deviceId);
+    }
+    return androidPermission(args.action, args.permission, args.appId, args.deviceId);
   };
 }

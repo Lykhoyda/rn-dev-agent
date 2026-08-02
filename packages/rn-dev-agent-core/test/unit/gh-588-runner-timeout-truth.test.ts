@@ -147,6 +147,33 @@ test('GH-588 Slice C: mismatch and unavailable CDP fail closed as RUNNER_TIMEOUT
   }
 });
 
+test('GH-588 Slice C: a typed snapshot timeout poisons and reaps the exact runner', async () => {
+  state();
+  _setFetchForTest(async (_input, init) => {
+    const request = JSON.parse(String(init?.body ?? '{}')) as { command?: string };
+    assert.equal(request.command, 'snapshot');
+    return new Response(
+      JSON.stringify({
+        ok: false,
+        v: 2,
+        error: { code: 'RUNNER_TIMEOUT', message: 'main thread execution timed out' },
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    );
+  });
+
+  const result = body(await runIOS({ command: 'snapshot' }));
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'RUNNER_TIMEOUT');
+  assert.equal(getFastRunnerState(), null);
+  assert.equal(
+    (result.meta?.runnerTimeoutRecovery as { runner?: { stateCleared?: boolean } } | undefined)
+      ?.runner?.stateCleared,
+    true,
+  );
+});
+
 test('GH-588 Slice C: adopted runner postmortem is honestly unavailable', () => {
   state();
   assert.deepEqual(getRunnerPostMortem(), { available: false, provenance: 'adopted' });

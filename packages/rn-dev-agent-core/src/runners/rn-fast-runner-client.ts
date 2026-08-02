@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { join } from 'node:path';
+import { randomBytes, randomUUID } from 'node:crypto';
 import {
   existsSync,
   readdirSync,
@@ -47,6 +48,11 @@ import {
   isAmbiguousTransportFailure,
   parseStatusProbeReply,
 } from './transport-recovery.js';
+import {
+  probeProcessBirth,
+  readProcessBirth,
+  type ProcessBirthProbe,
+} from '../session/process-birth.js';
 
 // Warm-launch ready gate. Overridable via RN_FAST_RUNNER_READY_TIMEOUT_MS
 // because a cold/slow CI simulator can need well over 30s to install + launch
@@ -200,7 +206,12 @@ export function _resetCapabilitiesForTest(): void {
 }
 
 export function _setFastRunnerStateForTest(state: FastRunnerState | null): void {
-  runnerState = state;
+  runnerState = state
+    ? {
+        ...state,
+        capability: state.capability ?? 'test-capability'.repeat(3),
+      }
+    : null;
   runnerProcess = null;
   lastRunnerPostMortem = null;
 }
@@ -334,7 +345,7 @@ export function captureFastRunnerCommandAuthority(): FastRunnerCommandAuthority 
  * never call this.
  */
 export function _setRunnerStateForTest(state: FastRunnerState | null): void {
-  runnerState = state;
+  _setFastRunnerStateForTest(state);
 }
 
 export function isFastRunnerAvailable(): boolean {
@@ -475,7 +486,24 @@ export const runnerRebuildBudget = {
       /* fail-open */
     }
   },
+  reset(pluginVersion: string): void {
+    try {
+      const parsed = JSON.parse(readFileSync(REBUILD_BUDGET_FILE, 'utf8')) as {
+        pluginVersion?: string;
+      };
+      if (parsed.pluginVersion === pluginVersion) {
+        rmSync(REBUILD_BUDGET_FILE, { force: true });
+      }
+    } catch {
+      /* already absent or unreadable */
+    }
+  },
 };
+
+export function resetRunnerRebuildBudgetForCurrentPlugin(): void {
+  const pluginVersion = getPluginVersion();
+  if (pluginVersion !== null) runnerRebuildBudget.reset(pluginVersion);
+}
 
 // GH #382: a one-line note ("downloaded prebuilt runner (~4 MB)" / "prebuilt
 // runner unavailable ...; building locally") set while startFastRunner resolves
@@ -522,7 +550,64 @@ function noteStaleHittableArtifact(capabilities: string[] | undefined): void {
  * reused — that would drive the wrong simulator.
  */
 export function shouldReuseRunner(state: FastRunnerState | null, deviceId: string): boolean {
-  return state !== null && state.deviceId === deviceId;
+  const authority = runnerAuthorityFromEnvironment(false);
+  return (
+    state !== null &&
+    state.deviceId === deviceId &&
+    authority !== null &&
+    state.sessionId === authority.sessionId &&
+    state.claimEpoch === authority.claimEpoch &&
+    typeof state.capability === 'string' &&
+    state.capability.length >= 32
+  );
+}
+
+interface RunnerAuthority {
+  instanceId: string;
+  sessionId: string;
+  claimEpoch: number;
+  capability: string;
+}
+
+function runnerAuthorityFromEnvironment(required: boolean): RunnerAuthority | null {
+  const sessionId = process.env.RN_DEV_AGENT_SESSION_ID;
+  const claimEpoch = Number(process.env.RN_DEV_AGENT_CLAIM_EPOCH);
+  if (!sessionId || !Number.isSafeInteger(claimEpoch) || claimEpoch < 1) {
+    if (!required) return null;
+    throw new Error(
+      'SESSION_AUTHORITY_REQUIRED: native runner launch requires a fenced rn-dev-agent session',
+    );
+  }
+  return {
+    instanceId: randomUUID(),
+    sessionId,
+    claimEpoch,
+    capability: randomBytes(32).toString('base64url'),
+  };
+}
+
+export function buildRunnerAuthorityEnv(authority: RunnerAuthority): Record<string, string> {
+  const values: Record<string, string> = {
+    RN_RUNNER_INSTANCE_ID: authority.instanceId,
+    RN_RUNNER_SESSION_ID: authority.sessionId,
+    RN_RUNNER_CLAIM_EPOCH: String(authority.claimEpoch),
+    RN_RUNNER_CAPABILITY: authority.capability,
+  };
+  return Object.fromEntries(
+    Object.entries(values).flatMap(([key, value]) => [
+      [key, value],
+      [`TEST_RUNNER_${key}`, value],
+    ]),
+  );
+}
+
+function buildRunnerTargetEnv(deviceId: string, appId: string): Record<string, string> {
+  return {
+    RN_RUNNER_DEVICE_ID: deviceId,
+    TEST_RUNNER_RN_RUNNER_DEVICE_ID: deviceId,
+    RN_RUNNER_APP_ID: appId,
+    TEST_RUNNER_RN_RUNNER_APP_ID: appId,
+  };
 }
 
 // GH #383 (device-caught): xcodebuild only forwards TEST_RUNNER_-prefixed env
@@ -544,6 +629,14 @@ export function buildRunnerPortEnv(port: number): Record<string, string> {
   return {
     RN_FAST_RUNNER_PORT: value,
     TEST_RUNNER_RN_FAST_RUNNER_PORT: value,
+  };
+}
+
+export function buildRunnerAttachOnlyEnv(attachOnly: boolean): Record<string, string> {
+  const value = attachOnly ? '1' : '0';
+  return {
+    RN_RUNNER_ATTACH_ONLY: value,
+    TEST_RUNNER_RN_RUNNER_ATTACH_ONLY: value,
   };
 }
 
@@ -617,10 +710,12 @@ export async function startFastRunner(
   port?: number,
   // GH #382 (Codex P1): the #418 stale-command recovery forces a source rebuild
   // by bypassing the prebuilt artifact tier.
-  opts: { forceLocalBuild?: boolean } = {},
+  opts: { forceLocalBuild?: boolean; attachOnly?: boolean } = {},
 ): Promise<FastRunnerState> {
   adoptPersistedFastRunnerState(deviceId);
   if (shouldReuseRunner(runnerState, deviceId)) return runnerState!;
+  if (runnerState) await stopFastRunner(deviceId);
+  const authority = runnerAuthorityFromEnvironment(true)!;
 
   const desired = resolveRunnerRequestedPort(port);
 
@@ -668,7 +763,10 @@ export async function startFastRunner(
         ...process.env,
         ...buildRunnerPortEnv(desired),
         ...buildRunnerVersionEnv(getPluginVersion()),
+        ...buildRunnerAttachOnlyEnv(opts.attachOnly === true),
         ...buildRunnerQuiescenceEnv(process.env),
+        ...buildRunnerAuthorityEnv(authority),
+        ...buildRunnerTargetEnv(deviceId, bundleId),
         ...runnerTestFaultEnv,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -707,7 +805,19 @@ export async function startFastRunner(
         ...(getPluginVersion() !== null ? { runnerVersion: getPluginVersion()! } : {}),
         provenance: artifactProvenanceToState(artifacts.provenance),
         ...(result.quiescence !== undefined ? { quiescence: result.quiescence } : {}),
+        ...authority,
       };
+      const processBirth = readProcessBirth(child.pid!);
+      if (!processBirth) {
+        child.kill('SIGTERM');
+        reject(
+          new Error(
+            'PROCESS_BIRTH_UNAVAILABLE: native runner process identity could not be proven',
+          ),
+        );
+        return;
+      }
+      state.processBirth = processBirth.token;
       runnerState = state;
       if (Object.keys(runnerTestFaultEnv).length > 0) runnerTestFaultForwarded = true;
       quiescenceAnnouncementPending = true;
@@ -757,19 +867,46 @@ export async function startFastRunner(
 // GH #383 (review amendment): adoption-aware teardown. A post-respawn stop
 // (session close, restart, maestro park) would otherwise no-op against empty
 // in-memory state and leak the persisted runner — so adopt first, then reap.
-export function stopFastRunner(deviceId?: string): void {
+export async function stopFastRunner(deviceId?: string): Promise<void> {
   adoptPersistedFastRunnerState(deviceId);
-  if (runnerProcess) {
-    runnerProcess.kill('SIGTERM');
-    runnerProcess = null;
-  } else if (runnerState?.pid) {
-    try {
-      process.kill(runnerState.pid, 'SIGTERM');
-    } catch {
-      /* already dead */
-    }
+  await reapStaleFastRunner();
+}
+
+export function clearFastRunnerAfterVerifiedStop(binding: Record<string, unknown>): void {
+  const expected = {
+    pid: Number(binding.pid),
+    processBirth: String(binding.processBirth ?? ''),
+    instanceId: String(binding.instanceId ?? ''),
+    deviceId: String(binding.deviceId ?? ''),
+  };
+  if (
+    !Number.isSafeInteger(expected.pid) ||
+    !expected.processBirth ||
+    !expected.instanceId ||
+    !expected.deviceId
+  ) {
+    throw new Error('RUNNER_ADOPTION_REQUIRED: verified runner identity is incomplete');
   }
-  clearStateFile();
+  const path = iosStatePath(expected.deviceId);
+  const persisted = readJsonStateFile<Partial<FastRunnerState>>(path);
+  const identityMatches = (observed: Partial<FastRunnerState>): boolean =>
+    observed.pid === expected.pid &&
+    observed.processBirth === expected.processBirth &&
+    observed.instanceId === expected.instanceId &&
+    observed.deviceId === expected.deviceId;
+  if (
+    (runnerState && !identityMatches(runnerState)) ||
+    (persisted && !identityMatches(persisted))
+  ) {
+    throw new Error('RUNNER_ADOPTION_REQUIRED: local runner identity changed before cleanup');
+  }
+  if (runnerProcess?.pid !== undefined && runnerProcess.pid !== expected.pid) {
+    throw new Error('RUNNER_ADOPTION_REQUIRED: local runner process changed before cleanup');
+  }
+  runnerState = null;
+  runnerProcess = null;
+  lastKnownCapabilities = [];
+  if (persisted !== null) deleteStateFile(path);
 }
 
 // --- Legacy helper kept for device-interact.ts swipe path ---
@@ -851,6 +988,10 @@ export interface StateSnapshot {
   bundleId: string;
   /** Learned from /health; the spawn-time stamp is only the bridge's own version. */
   protocolVersion?: number;
+  instanceId?: string;
+  sessionId?: string;
+  claimEpoch?: number;
+  processBirth?: string;
 }
 
 export interface HttpProbeResult {
@@ -861,6 +1002,11 @@ export interface HttpProbeResult {
   runnerVersion?: string;
   capabilities?: string[];
   commands?: string[];
+  instanceId?: string;
+  sessionId?: string;
+  claimEpoch?: number;
+  deviceId?: string;
+  appId?: string;
 }
 
 export interface LivenessProbeDeps {
@@ -882,8 +1028,10 @@ export interface ReapDeps {
   getState?: () => StateSnapshot | null;
   processAlive?: (pid: number) => boolean;
   sendSignal?: (pid: number, sig: NodeJS.Signals) => void;
+  matchesProcessBirth?: (expected: { pid: number; token: string }) => boolean;
+  probeProcessBirth?: (pid: number) => ProcessBirthProbe;
   sleep?: (ms: number) => Promise<void>;
-  clearState?: () => void;
+  clearState?: (expected: StateSnapshot) => void;
   /** Time to wait between SIGTERM and SIGKILL escalation. Default 500ms. */
   graceMs?: number;
 }
@@ -897,7 +1045,11 @@ function defaultProcessAlive(pid: number): boolean {
   }
 }
 
-async function defaultHttpProbe(port: number, timeoutMs: number): Promise<HttpProbeResult> {
+async function defaultHttpProbe(
+  port: number,
+  timeoutMs: number,
+  capabilityOverride?: string,
+): Promise<HttpProbeResult> {
   // Use the same IPv4 loopback as the /command client (postCommand). The prior
   // [::1] here meant the health probe and the command channel could resolve to
   // different stacks, so a healthy IPv4 listener looked dead over IPv6.
@@ -907,13 +1059,23 @@ async function defaultHttpProbe(port: number, timeoutMs: number): Promise<HttpPr
   try {
     // fetchImpl (not bare fetch) so the _setFetchForTest seam covers the health
     // probe like every other client call — production default is globalThis.fetch.
-    const res = await fetchImpl(url, { signal: controller.signal });
+    const capability =
+      capabilityOverride ?? (runnerState?.port === port ? runnerState.capability : undefined);
+    const res = await fetchImpl(url, {
+      signal: controller.signal,
+      headers: capability ? { authorization: `Bearer ${capability}` } : {},
+    });
     if (!res.ok) return { ok: false, status: res.status };
     let bodyOk: boolean | undefined;
     let protocolVersion: number | undefined;
     let runnerVersion: string | undefined;
     let capabilities: string[] | undefined;
     let commands: string[] | undefined;
+    let instanceId: string | undefined;
+    let sessionId: string | undefined;
+    let claimEpoch: number | undefined;
+    let deviceId: string | undefined;
+    let appId: string | undefined;
     try {
       const body = (await res.json()) as {
         ok?: boolean;
@@ -921,6 +1083,11 @@ async function defaultHttpProbe(port: number, timeoutMs: number): Promise<HttpPr
         runnerVersion?: string;
         capabilities?: unknown;
         commands?: unknown;
+        instanceId?: string;
+        sessionId?: string;
+        claimEpoch?: number;
+        deviceId?: string;
+        appId?: string;
       };
       bodyOk = body.ok === true;
       if (typeof body.protocolVersion === 'number') protocolVersion = body.protocolVersion;
@@ -931,6 +1098,11 @@ async function defaultHttpProbe(port: number, timeoutMs: number): Promise<HttpPr
       if (Array.isArray(body.commands)) {
         commands = body.commands.filter((c): c is string => typeof c === 'string');
       }
+      if (typeof body.instanceId === 'string') instanceId = body.instanceId;
+      if (typeof body.sessionId === 'string') sessionId = body.sessionId;
+      if (typeof body.claimEpoch === 'number') claimEpoch = body.claimEpoch;
+      if (typeof body.deviceId === 'string') deviceId = body.deviceId;
+      if (typeof body.appId === 'string') appId = body.appId;
     } catch {
       bodyOk = false;
     }
@@ -942,9 +1114,40 @@ async function defaultHttpProbe(port: number, timeoutMs: number): Promise<HttpPr
       ...(runnerVersion !== undefined ? { runnerVersion } : {}),
       ...(capabilities !== undefined ? { capabilities } : {}),
       ...(commands !== undefined ? { commands } : {}),
+      ...(instanceId !== undefined ? { instanceId } : {}),
+      ...(sessionId !== undefined ? { sessionId } : {}),
+      ...(claimEpoch !== undefined ? { claimEpoch } : {}),
+      ...(deviceId !== undefined ? { deviceId } : {}),
+      ...(appId !== undefined ? { appId } : {}),
     };
   } finally {
     clearTimeout(timer);
+  }
+}
+
+export async function probeFastRunnerAuthority(input: {
+  port: number;
+  capability: string;
+  instanceId: string;
+  sessionId: string;
+  claimEpoch: number;
+  deviceId: string;
+  appId: string;
+}): Promise<boolean> {
+  try {
+    const result = await defaultHttpProbe(input.port, 2_000, input.capability);
+    return (
+      result.ok &&
+      result.status === 200 &&
+      result.bodyOk === true &&
+      result.instanceId === input.instanceId &&
+      result.sessionId === input.sessionId &&
+      result.claimEpoch === input.claimEpoch &&
+      result.deviceId === input.deviceId &&
+      result.appId === input.appId
+    );
+  } catch {
+    return false;
   }
 }
 
@@ -962,7 +1165,27 @@ function clearStateFile(): void {
   if (path) deleteStateFile(path);
 }
 
-export type FastRunnerStaleReason = 'health' | RunnerIncompatibilityReason;
+function clearStateFileIfMatches(expected: StateSnapshot): void {
+  const identityMatches = (observed: Partial<FastRunnerState>): boolean =>
+    observed.pid === expected.pid &&
+    observed.deviceId === expected.deviceId &&
+    observed.processBirth === expected.processBirth;
+  const path = iosStatePath(expected.deviceId);
+  const persisted = readJsonStateFile<Partial<FastRunnerState>>(path);
+  let clearedCurrent = false;
+  if (runnerState && identityMatches(runnerState)) {
+    runnerState = null;
+    clearedCurrent = true;
+  }
+  if (runnerProcess?.pid === expected.pid) {
+    runnerProcess = null;
+    clearedCurrent = true;
+  }
+  if (persisted && identityMatches(persisted)) deleteStateFile(path);
+  if (clearedCurrent) lastKnownCapabilities = [];
+}
+
+export type FastRunnerStaleReason = 'health' | 'authority-mismatch' | RunnerIncompatibilityReason;
 
 export interface FastRunnerLivenessDetail {
   liveness: FastRunnerLiveness;
@@ -996,6 +1219,17 @@ export async function probeFastRunnerLivenessDetailed(
     if (!(res.ok && res.status === 200 && res.bodyOk === true)) {
       lastKnownCapabilities = [];
       return { liveness: 'stale', staleReason: 'health' };
+    }
+    if (
+      state.sessionId !== undefined &&
+      (res.instanceId !== state.instanceId ||
+        res.sessionId !== state.sessionId ||
+        res.claimEpoch !== state.claimEpoch ||
+        res.deviceId !== state.deviceId ||
+        res.appId !== state.bundleId)
+    ) {
+      lastKnownCapabilities = [];
+      return { liveness: 'stale', staleReason: 'authority-mismatch' };
     }
     const plugin = deps.pluginVersion !== undefined ? deps.pluginVersion : getPluginVersion();
     const compat = classifyRunnerCompatibility(
@@ -1048,14 +1282,54 @@ export async function probeFastRunnerLiveness(
 
 export async function reapStaleFastRunner(deps: ReapDeps = {}): Promise<void> {
   const getState = deps.getState ?? (() => runnerState);
-  const processAlive = deps.processAlive ?? defaultProcessAlive;
   const sendSignal = deps.sendSignal ?? ((pid, sig) => process.kill(pid, sig));
   const sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
-  const clearState = deps.clearState ?? clearStateFile;
+  const clearState = deps.clearState ?? clearStateFileIfMatches;
   const graceMs = deps.graceMs ?? 500;
 
   const state = getState();
   if (!state) return;
+  const expectedBirth =
+    typeof state.processBirth === 'string' ? { pid: state.pid, token: state.processBirth } : null;
+  if (!expectedBirth) {
+    const observed = deps.probeProcessBirth
+      ? deps.probeProcessBirth(state.pid)
+      : deps.processAlive
+        ? deps.processAlive(state.pid)
+          ? { status: 'present' as const }
+          : { status: 'absent' as const }
+        : probeProcessBirth(state.pid);
+    if (observed.status === 'absent') {
+      clearState(state);
+      return;
+    }
+    throw new Error(
+      'RUNNER_ADOPTION_REQUIRED: live persisted iOS runner lacks process-birth authority',
+    );
+  }
+  const probeExpected = (): 'match' | 'gone' | 'unknown' => {
+    if (deps.probeProcessBirth) {
+      const observed = deps.probeProcessBirth(expectedBirth.pid);
+      if (observed.status === 'unknown') return 'unknown';
+      if (observed.status === 'absent') return 'gone';
+      return observed.birth.token === expectedBirth.token ? 'match' : 'gone';
+    }
+    if (deps.matchesProcessBirth) {
+      return deps.matchesProcessBirth(expectedBirth) ? 'match' : 'gone';
+    }
+    const observed = probeProcessBirth(expectedBirth.pid);
+    if (observed.status === 'unknown') return 'unknown';
+    if (observed.status === 'absent') return 'gone';
+    return observed.birth.token === expectedBirth.token ? 'match' : 'gone';
+  };
+  const initial = probeExpected();
+  if (initial === 'unknown') {
+    throw new Error('RUNNER_ADOPTION_REQUIRED: iOS runner process identity is unproven');
+  }
+  if (initial === 'gone') {
+    clearState(state);
+    return;
+  }
   const spawnedChild = runnerProcess?.pid === state.pid ? runnerProcess : null;
   const spawnedExit = spawnedChild
     ? new Promise<void>((resolve) => spawnedChild.once('exit', () => resolve()))
@@ -1067,19 +1341,29 @@ export async function reapStaleFastRunner(deps: ReapDeps = {}): Promise<void> {
     /* already dead */
   }
   await sleep(graceMs);
-  if (processAlive(state.pid)) {
-    try {
-      sendSignal(state.pid, 'SIGKILL');
-    } catch {
-      /* race: died between checks */
-    }
+  const afterTerm = probeExpected();
+  if (afterTerm === 'unknown') {
+    throw new Error('RUNNER_ADOPTION_REQUIRED: iOS runner termination is unproven');
+  }
+  if (afterTerm === 'gone') {
+    clearState(state);
+    return;
+  }
+  try {
+    sendSignal(state.pid, 'SIGKILL');
+  } catch {
+    /* race: died between checks */
   }
   if (spawnedExit) {
-    // Let the registered child exit handler publish exit/signal/output-tail
-    // evidence before timeout containment snapshots the postmortem.
     await Promise.race([spawnedExit, sleep(250)]);
+  } else {
+    await sleep(50);
   }
-  clearState();
+  const afterKill = probeExpected();
+  if (afterKill !== 'gone') {
+    throw new Error('RUNNER_ADOPTION_REQUIRED: iOS runner termination is unproven');
+  }
+  clearState(state);
 }
 
 // ─── /command HTTP client + runIOS() — used by the iOS short-circuit ────
@@ -1196,9 +1480,16 @@ async function sendCommandOnce(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
+    const capability = runnerState?.port === port ? runnerState.capability : undefined;
+    if (!capability) {
+      throw new Error('RUNNER_OWNERSHIP_MISMATCH: runner capability is unavailable');
+    }
     const resp = await fetchImpl(`http://127.0.0.1:${port}/command`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${capability}`,
+      },
       body: JSON.stringify(body),
       signal: controller.signal,
     });
@@ -1395,6 +1686,48 @@ async function containTypeTimeout(
     'RUNNER_TIMEOUT',
     { runnerTimeoutRecovery },
   );
+}
+
+async function containRunnerTimeout(
+  command: unknown,
+  message: string,
+  authorityBefore: FastRunnerCommandAuthority | null = captureFastRunnerCommandAuthority(),
+): Promise<ToolResult> {
+  runnerPoisoned = true;
+  poisonHolders++;
+  let reapDisposition: 'reaped' | 'already-absent' | 'replacement-preserved';
+  try {
+    if (authorityBefore && runnerState?.pid === authorityBefore.pid) {
+      poisonReap ??= reapStaleFastRunner();
+      await poisonReap;
+      reapDisposition = 'reaped';
+    } else {
+      reapDisposition = runnerState ? 'replacement-preserved' : 'already-absent';
+    }
+  } finally {
+    poisonHolders--;
+    if (poisonHolders <= 0) {
+      poisonHolders = 0;
+      poisonReap = null;
+      runnerPoisoned = false;
+    }
+  }
+  return failResult(message, 'RUNNER_TIMEOUT', {
+    runnerTimeoutRecovery: {
+      trigger: 'main-thread-timeout',
+      command: String(command),
+      poisoned: true,
+      reaped: reapDisposition === 'reaped',
+      reapDisposition,
+      runner: {
+        before: authorityBefore,
+        afterReapPid: runnerState?.pid ?? null,
+        stateCleared: runnerState === null,
+        nextMutationRequiresRespawn: runnerState === null,
+      },
+      containmentOrder: ['poison', 'reap', 'result'],
+    },
+  });
 }
 
 function hasRunnerTimeoutRecovery(result: ToolResult): boolean {
@@ -1677,6 +2010,11 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
   if (!resp.ok) {
     const message = resp.error?.message ?? 'runner returned !ok with no error';
     const code = resp.error?.code;
+    if (code === 'RUNNER_TIMEOUT') {
+      return args.command === 'type'
+        ? containTypeTimeout(args)
+        : containRunnerTimeout(args.command, message);
+    }
     if (
       args.command === 'type' &&
       typeof message === 'string' &&

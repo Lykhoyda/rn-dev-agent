@@ -166,7 +166,11 @@ The template lives at `${CLAUDE_PLUGIN_ROOT}/templates/rn-agent/` and contains: 
 
 ### E. Verification
 
-Run `cdp_status` to confirm the plugin can reach the app post-injection. If the app is currently running on a simulator and Metro is up, this should return `ok: true` with all features green. If not, surface the failure and ask the user to start Metro / boot a simulator first.
+Inspect `rn_session(action="status")`, then passive `cdp_status`, to confirm the
+intended session and target are bound. If connected, run a narrow
+`cdp_component_tree` query to verify the injected helpers. Otherwise surface
+the missing session axis and use the integrated package script; do not select
+an ambient Metro or device.
 
 ## Output
 

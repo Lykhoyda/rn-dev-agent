@@ -152,9 +152,9 @@ and get explicit confirmation.
 2. Follow codebase conventions strictly
 3. Update todos as you progress
 4. After all files are saved:
-   - If `requiresFullReload` is true: call `cdp_reload(full=true)` and wait
-     for reconnection
-   - Otherwise: wait 2 seconds for Fast Refresh to apply
+   - Fast Refresh is useful development feedback but does not prove source
+     fidelity. Before authoritative verification, call `cdp_reload(full=true)`,
+     wait for reconnection, and require the fresh signed initial-bundle marker.
 
 ---
 
@@ -171,43 +171,48 @@ Run this verification sequence in order. Stop and fix if any step fails.
 
 ### GATE: Environment Readiness (CRITICAL — GH #28)
 
-**Before ANY verification, confirm the environment is functional.**
-Call `cdp_status`. If it fails to connect:
+**Before ANY verification, confirm the environment is authoritative.**
+Call `rn_session(action="status")` and require the intended ready session, then
+call passive `cdp_status`. If the exact signed target is not connected:
 
 1. **DO NOT proceed to verification.** Do not fall back to raw bash commands.
 2. **DO NOT use `xcrun simctl`, `adb`, or `xcodebuild` as substitutes for
    CDP tools.** These bypass the plugin's connection management and error
    recovery, and produce a degraded experience.
 3. Instead, tell the user:
-   - "CDP connection failed. Please ensure Metro is running (`npx expo start`
-     or `npx react-native start`) and the app is loaded on a simulator."
+   - "CDP authority is unavailable. Run literal `pnpm ios` or `pnpm android`
+     through the confirmed session integration, then load the bound app."
    - "Run `/rn-dev-agent:check-env` to diagnose missing dependencies."
 4. If Metro is running but CDP still fails, check:
    - Is another debugger connected? (React Native DevTools, Flipper, Chrome)
    - Is the app on the Dev Client launcher instead of the actual app?
-   - Is the correct platform targeted? (`cdp_connect(platform="ios")`)
+   - Does `cdp_connect` resolve the session's exact signed target?
 
-**Only proceed to Step 0 after `cdp_status` returns `ok: true`.**
+**Only proceed to Step 0 after the session is ready and `cdp_status` reports
+the matching target.**
 
 ### Step 0: Ensure Simulator, Device Session & Navigate to Feature
 
-First, verify the simulator is running and CDP is connected:
-1. Call `device_list` to check for booted simulators/emulators
+First, verify the exact authority session and use device enumeration only as
+diagnostic context:
+1. Call `rn_session(action="status")`. Require the intended worktree session.
+   Call `device_list` only to diagnose available simulators/emulators.
 2. If no device is booted, attempt auto-recovery:
    - Run `rn-ensure-running <platform>`
    - If exit 0: call `cdp_status` to confirm connection
    - If the script fails: tell the user to boot a simulator and run
      `/rn-dev-agent:setup` to verify all dependencies are installed.
      Do not skip verification without user consent.
-3. Call `cdp_status` to confirm CDP connection before proceeding.
+3. Call `cdp_status` to inspect passive CDP state before proceeding.
 
 Then, ensure a device session is open for `device_*` tools:
-4. Check if `/tmp/rn-dev-agent-session.json` exists (via bash `cat`).
-   If absent or stale (older than 30 minutes), open a fresh session:
+4. Inspect `rn_session status`; never read or trust the legacy `/tmp` session
+   file. If the device is not bound, bind one explicit UUID/serial and app ID,
+   then open the compatibility device session with those exact values:
    ```
-   device_snapshot(action="open", platform="<platform from cdp_status>")
+   device_snapshot(action="open", platform="<bound platform>",
+                   deviceId="<bound UUID or serial>", appId="<bound app ID>")
    ```
-   Auto-detect `appId` — the tool resolves it from `app.json` if omitted.
    This enables `device_screenshot`, `device_find`, `device_press`, and
    `device_scroll` for the rest of the verification and proof phases.
    **NEVER skip this step** — without a session, all `device_*` calls fail
@@ -246,25 +251,14 @@ device_screenshot(path="/tmp/rn-feature-verify.jpg")
 
 ### Step 2: Health Check
 
-Call `cdp_status`. Gate on:
-- `metro.running` = true
-- `cdp.connected` = true
-- `app.dev` = true (not false)
-- `app.hasRedBox` = false
-- `app.isPaused` = false
-- `app.errorCount` = 0
+Call `rn_session(action="status")`, then passive `cdp_status`. Gate on the
+session being ready with bound Metro and bundle, and on `cdp.connected = true`.
+Then use `cdp_component_tree` for helper/render health and `cdp_error_log` for
+the error baseline; passive status deliberately does not duplicate those
+tool-owned facts.
 
-If `app.dev` is false: CDP is connected to the wrong JS context (common in
-RN 0.76+ Bridgeless mode with multiple Hermes targets). Call
-`cdp_reload(full=true)` to force reconnection — the target selection now
-probes `__DEV__` on each candidate. If still false after reload, ask the
-user to restart Metro.
-
-If `isPaused` is true: call `cdp_reload(full=true)` to recover, then
-restart Phase 5.5 from Step 0.
-
-If RedBox is showing: read `cdp_error_log`, fix the error in source,
-save, wait for Fast Refresh, then restart Phase 5.5 from Step 0.
+If the component-tree call reports missing helpers or a RedBox, reload the
+authority-bound app, fix any reported error, and restart Phase 5.5 from Step 0.
 
 ### Step 3: Component Verification
 
@@ -327,7 +321,7 @@ Present results as a table (use the actual screenshot path for the platform):
 |-------|--------|----------|
 | Navigation (cdp_navigation_state) | PASS/SKIP | current route |
 | Screenshot | PASS/FAIL | actual file path |
-| Health (cdp_status) | PASS/FAIL | errorCount, hasRedBox, isPaused |
+| Authority and connection | PASS/FAIL | `rn_session` bindings + passive `cdp_status` |
 | Component (cdp_component_tree) | PASS/FAIL | component found, props summary |
 | Interaction (device_find/device_press) | PASS/FAIL/SKIP | action + side effect verified |
 | State (cdp_store_state) | PASS/FAIL/SKIP | state shape summary |
@@ -423,11 +417,15 @@ persisted as a replayable action.
 **Protocol — single source of truth**: load the **capturing-proof** skill and
 run its Protocol steps with `<feature-slug>`. The pipeline adds these deltas:
 
-**Strict factory routing**: execute `/rn-dev-agent:proof-capture --strict` when
-the run is unattended, the PR will auto-merge, the caller asks for factory
-proof or merge-ready evidence, or a machine receipt is required. The controller
-consumes the resulting receipt. State, duration, and frame policy remain owned
-by the strict protocol; do not duplicate or reinterpret them here.
+**Strict factory routing**: when the run is unattended, the PR will auto-merge,
+or a machine receipt or merge-ready evidence is required, follow
+`/rn-dev-agent:proof-capture --strict`. Its command contract fails
+closed unless the proof controller verifies managed Metro ownership, the bound
+worktree serving root, a signed initial-bundle marker, exact device and install
+bindings, and the source and dirty digest. The optional Darwin managed-sandbox
+tier is reported in the receipt, not required for strict proof. Follow every
+controller transition and do not substitute interactive artifacts or report
+merge-ready evidence without its finalized accepted receipt.
 
 1. **The flow source is the architect's E2E Proof Flow table** from Phase 4 —
    execute it mechanically. Do NOT improvise, skip, or simplify steps; the
@@ -469,7 +467,7 @@ completing. Mark all todos complete.
 ## Prerequisites
 
 - iOS Simulator or Android Emulator running with the app loaded
-- Metro dev server running (`npx expo start` or `npx react-native start`)
+- Ready fenced session with the integrated Metro and signed app target
 - For Zustand apps: `if (__DEV__) global.__ZUSTAND_STORES__ = { ... }` in app entry
 
 ## Safety Constraints (GH #5)
@@ -491,8 +489,9 @@ completing. Mark all todos complete.
   in the Phase 7 summary.
 - **RedBox during verification**: Read `cdp_error_log`, fix source, reload,
   restart Phase 5.5.
-- **CDP not connecting**: Call `cdp_status` which auto-connects. If that
-  fails, check Metro is running (`curl http://localhost:8081/status`).
+- **CDP not connecting**: Inspect passive `cdp_status`, then call
+  `cdp_connect` for the exact session target. If that fails, repair the named
+  session or Metro authority axis; never select an ambient port.
 - **Debugger paused**: Call `cdp_reload(full=true)` to resume.
 - **Another debugger connected (code 1006)**: Ask user to close React Native
   DevTools, Flipper, or Chrome DevTools.
@@ -521,7 +520,7 @@ Each phase has shortcuts agents reach for. Don't.
 - About to skip a phase "because the feature is small"
 - About to add a dependency without asking the user first
 - Editing files outside the architect's blueprint "while I'm here"
-- About to call `rn-record-proof start` before the rehearsed flow has replayed clean (proof-capture protocol Step 2.5)
+- About to call `device_record(action="start")` before the rehearsed flow has replayed clean (proof-capture protocol Step 2.5)
 - About to use `device_*` exploratory calls during recording to "find the right testID"
 - About to take the `device_*` / `cdp_*` fallback path for the on-camera replay without naming the specific Maestro primitive that cannot express the step in PROOF.md "Deviations"
 - About to enter a fourth rehearsal-fix loop without escalating to the user
@@ -552,7 +551,7 @@ Each phase has shortcuts agents reach for. Don't.
 - Add `console.log` calls and leave them in committed code
 - Proceed past Phase 4 without user approval on architecture
 - Commit with `cdp_error_log` showing new errors
-- Start `rn-record-proof start` while still discovering testIDs, navigation paths, or state shapes — recording is for verified replay, not exploration
+- Start `device_record(action="start")` while still discovering testIDs, navigation paths, or state shapes — recording is for verified replay, not exploration
 
 ## Verification — Feature Complete When
 

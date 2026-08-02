@@ -4,6 +4,7 @@ import type { ToolResult } from '../utils.js';
 import { ObservabilityServer } from '../observability/server.js';
 import type { E2eServerDeps, StateServerDeps } from '../observability/server.js';
 import type { MirrorManager } from '../observability/mirror/manager.js';
+import type { ObserveAuthority } from '../observability/server.js';
 import { recorder } from '../observability/recorder.js';
 import { resolveObservePort } from '../project-config.js';
 import { writeObserveState, removeObserveState } from '../observability/observe-state.js';
@@ -29,6 +30,13 @@ let server: ObservabilityServer | null = null;
 let e2eDeps: E2eServerDeps | undefined;
 let mirrorManager: MirrorManager | undefined;
 let stateDeps: StateServerDeps | undefined;
+let authorityDeps:
+  | {
+      resolve(): { port: number; authority: ObserveAuthority };
+      bind(input: { port: number; authority: ObserveAuthority }): void;
+      unbind(authority: ObserveAuthority): void;
+    }
+  | undefined;
 
 export function setObserveE2eDeps(d: E2eServerDeps): void {
   e2eDeps = d;
@@ -42,7 +50,12 @@ export function setObserveMirror(m: MirrorManager): void {
   mirrorManager = m;
 }
 
+export function setObserveAuthorityDeps(deps: typeof authorityDeps): void {
+  authorityDeps = deps;
+}
+
 let starting: Promise<{ url: string; port: number }> | null = null;
+let boundAuthority: ObserveAuthority | null = null;
 
 /**
  * Start (or return) the module-global observability server on the resolved
@@ -55,11 +68,68 @@ let starting: Promise<{ url: string; port: number }> | null = null;
 export async function startObserveServer(): Promise<{ url: string; port: number }> {
   if (starting) return starting;
   starting = (async () => {
-    if (!server) server = new ObservabilityServer(recorder, e2eDeps, mirrorManager, stateDeps);
-    const { port } = resolveObservePort();
-    const res = await server.start(port);
-    writeObserveState(res.url, res.port);
-    return res;
+    const resolved = authorityDeps?.resolve();
+    if (!server) {
+      server = new ObservabilityServer(
+        recorder,
+        e2eDeps,
+        mirrorManager,
+        stateDeps,
+        resolved?.authority,
+        stopObserveServer,
+      );
+    }
+    const port = resolved?.port ?? resolveObservePort().port;
+    let bindAttempted = false;
+    let stateWriteAttempted = false;
+    try {
+      const res = await server.start(port);
+      if (resolved) {
+        bindAttempted = true;
+        authorityDeps?.bind({ port: res.port, authority: resolved.authority });
+        boundAuthority = resolved.authority;
+      }
+      stateWriteAttempted = true;
+      writeObserveState(res.url, res.port);
+      return res;
+    } catch (error) {
+      const failedServer = server;
+      server = null;
+      const cleanupErrors: unknown[] = [];
+      try {
+        await failedServer?.stop();
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
+      if (bindAttempted && resolved) {
+        try {
+          authorityDeps?.unbind(resolved.authority);
+          if (
+            boundAuthority?.sessionId === resolved.authority.sessionId &&
+            boundAuthority.claimEpoch === resolved.authority.claimEpoch &&
+            boundAuthority.instanceId === resolved.authority.instanceId
+          ) {
+            boundAuthority = null;
+          }
+        } catch (cleanupError) {
+          cleanupErrors.push(cleanupError);
+        }
+      }
+      if (stateWriteAttempted) {
+        try {
+          removeObserveState();
+        } catch (cleanupError) {
+          cleanupErrors.push(cleanupError);
+        }
+      }
+      if (cleanupErrors.length > 0) {
+        throw new AggregateError(
+          [error, ...cleanupErrors],
+          `OBSERVE_START_ROLLBACK_FAILED: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      throw error;
+    }
   })();
   try {
     return await starting;
@@ -69,7 +139,7 @@ export async function startObserveServer(): Promise<{ url: string; port: number 
   }
 }
 
-async function stopObserveServer(): Promise<void> {
+export async function stopObserveServer(): Promise<void> {
   if (starting) {
     try {
       await starting;
@@ -80,6 +150,8 @@ async function stopObserveServer(): Promise<void> {
   starting = null;
   await server?.stop();
   server = null;
+  if (boundAuthority) authorityDeps?.unbind(boundAuthority);
+  boundAuthority = null;
   removeObserveState();
 }
 

@@ -81,6 +81,7 @@ export default defineConfig({
           label: 'Core Concepts',
           items: [
             { label: 'Architecture', slug: 'architecture' },
+            { label: 'Parallel session authority', slug: 'session-authority' },
             { label: 'Actions', slug: 'actions' },
             { label: 'Troubleshooting Memory', slug: 'troubleshooting-memory' },
           ],

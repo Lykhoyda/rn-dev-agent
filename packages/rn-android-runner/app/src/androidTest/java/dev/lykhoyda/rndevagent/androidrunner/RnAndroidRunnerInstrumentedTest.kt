@@ -32,6 +32,15 @@ class RnAndroidRunnerInstrumentedTest {
         val port = args.getString("RN_ANDROID_RUNNER_PORT")?.toIntOrNull() ?: 22089
         this.port = port
         val pluginVersion = args.getString("RN_PLUGIN_VERSION")
+        val capability = requireNotNull(args.getString("RN_RUNNER_CAPABILITY"))
+        val authority = RunnerAuthority(
+            capability = capability,
+            instanceId = requireNotNull(args.getString("RN_RUNNER_INSTANCE_ID")),
+            sessionId = requireNotNull(args.getString("RN_RUNNER_SESSION_ID")),
+            claimEpoch = requireNotNull(args.getString("RN_RUNNER_CLAIM_EPOCH")).toLong(),
+            deviceId = requireNotNull(args.getString("RN_RUNNER_DEVICE_ID")),
+            appId = requireNotNull(args.getString("RN_RUNNER_APP_ID")),
+        )
 
         // Mirrors the iOS `withTemporaryScrollIdleTimeoutIfSupported` shim.
         // RN's main thread never reports quiescence when Reanimated/RAF worklets
@@ -47,7 +56,7 @@ class RnAndroidRunnerInstrumentedTest {
         Configurator.getInstance().setScrollAcknowledgmentTimeout(500)
 
         RunnerRuntime.dispatcher = CommandDispatcher(instrumentation, RunnerRuntime.journal)
-        server = CommandServer(port, pluginVersion)
+        server = CommandServer(port, pluginVersion, authority)
         server.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
 
         Log.i("RnAndroidRunner", "RN_ANDROID_RUNNER_LISTENER_READY")
@@ -95,6 +104,10 @@ class RnAndroidRunnerInstrumentedTest {
             connection.requestMethod = "POST"
             connection.doOutput = true
             connection.setRequestProperty("Content-Type", "application/json")
+            connection.setRequestProperty(
+                "Authorization",
+                "Bearer ${InstrumentationRegistry.getArguments().getString("RN_RUNNER_CAPABILITY")}",
+            )
             connection.outputStream.use { it.write(command.toString().toByteArray(Charsets.UTF_8)) }
             val stream = if (connection.responseCode < 400) connection.inputStream else connection.errorStream
             JSONObject(stream.bufferedReader(Charsets.UTF_8).use { it.readText() })

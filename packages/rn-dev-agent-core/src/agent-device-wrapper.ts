@@ -157,6 +157,7 @@ export function hasActiveSession(): boolean {
 // Updated by fetchSnapshotNodes() in device-interact.ts whenever a snapshot succeeds.
 interface CachedSnapshot {
   platform: string;
+  authorityReceipt: SnapshotAuthorityReceipt;
   // Lossless: the full runner nodes are stored (rect/enabled included) so a
   // cache-served device_find ranks and dedups identically to a fresh snapshot.
   nodes: {
@@ -173,6 +174,160 @@ interface CachedSnapshot {
 }
 
 const snapshotCache = new Map<string, CachedSnapshot>();
+const dirtySnapshotPlatforms = new Set<string>();
+let snapshotAuthorityProvider: {
+  current: () => Record<string, unknown> | null;
+  record: (receipt: SnapshotAuthorityReceipt) => void;
+  validate: (receipt: SnapshotAuthorityReceipt) => boolean;
+  validateEvidence?: (receipt: SnapshotAuthorityReceipt) => boolean;
+  validateLive?: (receipt: SnapshotAuthorityReceipt) => Promise<boolean>;
+  validateOrigin?: (receipt: SnapshotAuthorityReceipt) => Promise<boolean>;
+} | null = null;
+
+export interface SnapshotAuthorityReceipt {
+  sessionId: unknown;
+  claimEpoch: unknown;
+  sourceKey: unknown;
+  worktreeKey: unknown;
+  appRootKey: unknown;
+  platform: unknown;
+  deviceId: unknown;
+  buildGeneration: unknown;
+  installGeneration: unknown;
+  runnerInstanceId: unknown;
+  runnerClaim: unknown;
+  deviceClaim: unknown;
+  appId: unknown;
+  artifactDigest: unknown;
+  runnerPid: unknown;
+  runnerProcessBirth: unknown;
+  runnerCapabilityHash: unknown;
+  runnerPort: unknown;
+}
+
+export function setSnapshotAuthorityProvider(
+  provider: {
+    current: () => Record<string, unknown> | null;
+    record: (receipt: SnapshotAuthorityReceipt) => void;
+    validate: (receipt: SnapshotAuthorityReceipt) => boolean;
+    validateEvidence?: (receipt: SnapshotAuthorityReceipt) => boolean;
+    validateLive?: (receipt: SnapshotAuthorityReceipt) => Promise<boolean>;
+    validateOrigin?: (receipt: SnapshotAuthorityReceipt) => Promise<boolean>;
+  } | null,
+): void {
+  snapshotAuthorityProvider = provider;
+  snapshotCache.clear();
+  dirtySnapshotPlatforms.clear();
+}
+
+function currentSnapshotAuthority(platform: string): SnapshotAuthorityReceipt {
+  const authority = snapshotAuthorityProvider?.current();
+  const session = getActiveSession();
+  return {
+    sessionId: authority?.sessionId ?? null,
+    claimEpoch: authority?.claimEpoch ?? null,
+    sourceKey: authority?.sourceKey ?? null,
+    worktreeKey: authority?.worktreeKey ?? null,
+    appRootKey: authority?.appRootKey ?? null,
+    platform: authority?.platform ?? platform,
+    deviceId: authority?.deviceId ?? session?.deviceId ?? null,
+    buildGeneration: authority?.buildGeneration ?? null,
+    installGeneration: authority?.installGeneration ?? null,
+    runnerInstanceId: authority?.runnerInstanceId ?? null,
+    runnerClaim: authority?.runnerClaim ?? null,
+    deviceClaim: authority?.deviceClaim ?? null,
+    appId: authority?.appId ?? session?.appId ?? null,
+    artifactDigest: authority?.artifactDigest ?? null,
+    runnerPid: authority?.runnerPid ?? null,
+    runnerProcessBirth: authority?.runnerProcessBirth ?? null,
+    runnerCapabilityHash: authority?.runnerCapabilityHash ?? null,
+    runnerPort: authority?.runnerPort ?? null,
+  };
+}
+
+function snapshotAuthorityIsValid(receipt: SnapshotAuthorityReceipt, platform: string): boolean {
+  const current = currentSnapshotAuthority(platform);
+  if (receipt.sessionId === null) {
+    return (
+      current.sessionId === null &&
+      receipt.platform === platform &&
+      receipt.deviceId === current.deviceId
+    );
+  }
+  return Boolean(
+    receipt.platform === platform &&
+    receipt.sessionId === current.sessionId &&
+    receipt.claimEpoch === current.claimEpoch &&
+    receipt.sourceKey === current.sourceKey &&
+    receipt.worktreeKey === current.worktreeKey &&
+    receipt.appRootKey === current.appRootKey &&
+    receipt.deviceId !== null &&
+    receipt.installGeneration !== null &&
+    receipt.runnerInstanceId !== null &&
+    receipt.runnerClaim !== null &&
+    receipt.deviceClaim !== null &&
+    receipt.appId !== null &&
+    receipt.artifactDigest !== null &&
+    receipt.runnerPid !== null &&
+    receipt.runnerProcessBirth !== null &&
+    receipt.runnerCapabilityHash !== null &&
+    receipt.runnerPort !== null &&
+    snapshotAuthorityProvider?.validate(receipt),
+  );
+}
+
+function snapshotEvidenceAuthorityIsValid(
+  receipt: SnapshotAuthorityReceipt,
+  platform: string,
+): boolean {
+  if (receipt.sessionId === null) return snapshotAuthorityIsValid(receipt, platform);
+  return Boolean(
+    receipt.platform === platform &&
+    receipt.sessionId !== null &&
+    receipt.claimEpoch !== null &&
+    receipt.sourceKey !== null &&
+    receipt.worktreeKey !== null &&
+    receipt.appRootKey !== null &&
+    receipt.deviceId !== null &&
+    receipt.installGeneration !== null &&
+    receipt.appId !== null &&
+    receipt.artifactDigest !== null &&
+    snapshotAuthorityProvider?.validateEvidence?.(receipt),
+  );
+}
+
+export async function validateCachedSnapshotAuthority(platform: string): Promise<boolean> {
+  const snapshot = snapshotCache.get(platform);
+  if (!snapshot || !snapshotAuthorityIsValid(snapshot.authorityReceipt, platform)) return false;
+  if (snapshot.authorityReceipt.sessionId === null) return true;
+  return (await snapshotAuthorityProvider?.validateLive?.(snapshot.authorityReceipt)) === true;
+}
+
+export async function validateCachedSnapshotEvidenceAuthority(platform: string): Promise<boolean> {
+  const snapshot = snapshotCache.get(platform);
+  if (
+    !snapshot ||
+    dirtySnapshotPlatforms.has(platform) ||
+    !snapshotEvidenceAuthorityIsValid(snapshot.authorityReceipt, platform)
+  ) {
+    return false;
+  }
+  if (snapshot.authorityReceipt.sessionId === null) return true;
+  const [hasLiveRunner, hasLiveOrigin] = await Promise.all([
+    snapshotAuthorityProvider?.validateLive?.(snapshot.authorityReceipt),
+    snapshotAuthorityProvider?.validateOrigin?.(snapshot.authorityReceipt),
+  ]);
+  return hasLiveRunner === true && hasLiveOrigin === true;
+}
+
+export function getCachedSnapshotEvidence(platform: string): CachedSnapshot | undefined {
+  const snapshot = snapshotCache.get(platform);
+  return snapshot &&
+    !dirtySnapshotPlatforms.has(platform) &&
+    snapshotEvidenceAuthorityIsValid(snapshot.authorityReceipt, platform)
+    ? snapshot
+    : undefined;
+}
 
 // Live-sim speedup (GH #321): device_find reuses the snapshot it already
 // captured instead of re-snapshotting every call — but only while that snapshot
@@ -181,27 +336,42 @@ const snapshotCache = new Map<string, CachedSnapshot>();
 // AND within the TTL (coordinate-drift guard, mirrors MAX_REF_MAP_AGE_MS). The
 // dirty flag is the load-bearing correctness piece: a fresh-by-time but
 // stale-by-content cache would drive a wrong-element tap.
-let snapshotCacheDirty = true;
-
 export function cacheSnapshot(platform: string, nodes: CachedSnapshot['nodes']): void {
+  const authorityReceipt = currentSnapshotAuthority(platform);
+  if (authorityReceipt.sessionId !== null) snapshotAuthorityProvider?.record(authorityReceipt);
   snapshotCache.set(platform, {
     platform,
+    authorityReceipt,
     nodes,
     capturedAt: new Date().toISOString(),
     capturedAtMs: Date.now(),
   });
-  // A fresh snapshot is, by definition, a clean picture of the current screen.
-  snapshotCacheDirty = false;
+  dirtySnapshotPlatforms.delete(platform);
 }
 
 export function getCachedSnapshot(platform: string): CachedSnapshot | undefined {
-  return snapshotCache.get(platform);
+  const snapshot = snapshotCache.get(platform);
+  return snapshot &&
+    !dirtySnapshotPlatforms.has(platform) &&
+    snapshotAuthorityIsValid(snapshot.authorityReceipt, platform)
+    ? snapshot
+    : undefined;
 }
 
 // Called at the runNative dispatch choke point on any screen-mutating verb
 // (tap/press/fill/type/swipe/scroll/back/longpress/pinch/keyboard/drag).
-export function markSnapshotDirty(): void {
-  snapshotCacheDirty = true;
+export function markSnapshotDirty(platform?: string): void {
+  const authorityPlatform = snapshotAuthorityProvider?.current()?.platform;
+  const currentPlatform =
+    platform ??
+    (typeof authorityPlatform === 'string' ? authorityPlatform : activeSession?.platform);
+  if (currentPlatform) {
+    dirtySnapshotPlatforms.add(currentPlatform);
+    return;
+  }
+  for (const cachedPlatform of snapshotCache.keys()) {
+    dirtySnapshotPlatforms.add(cachedPlatform);
+  }
 }
 
 // True only when the cached snapshot is safe to reuse for targeting: present,
@@ -210,9 +380,10 @@ export function isSnapshotCacheValid(
   platform: string,
   maxAgeMs: number = MAX_REF_MAP_AGE_MS,
 ): boolean {
-  if (snapshotCacheDirty) return false;
+  if (dirtySnapshotPlatforms.has(platform)) return false;
   const entry = snapshotCache.get(platform);
   if (!entry) return false;
+  if (!snapshotAuthorityIsValid(entry.authorityReceipt, platform)) return false;
   return Date.now() - entry.capturedAtMs <= maxAgeMs;
 }
 
@@ -679,12 +850,13 @@ export interface EnsureRunnerDeps {
   ensure?: (
     deviceId: string,
     bundleId: string,
-    opts?: { forceLocalBuild?: boolean },
+    opts?: { forceLocalBuild?: boolean; attachOnly?: boolean },
   ) => Promise<void>;
   prebuilt?: () => boolean;
   adopt?: (deviceId: string | undefined) => void;
   /** GH #418: open-path only — permits DerivedData invalidation + cold rebuild. */
   allowArtifactRebuild?: boolean;
+  attachOnly?: boolean;
   /** GH #418: test seams for the rebuild tier. */
   invalidateArtifact?: () => void;
   reap?: () => Promise<void>;
@@ -720,25 +892,30 @@ async function rebuildStaleRunnerArtifact(
   bundleId: string,
   deps: EnsureRunnerDeps,
 ): Promise<EnsureRunnerResult> {
+  const authorityMismatch = first.staleReason === 'authority-mismatch';
   const missing = (first.missingCommands ?? []).join(', ') || 'unknown';
+  const code = authorityMismatch ? 'RUNNER_OWNERSHIP_MISMATCH' : 'RUNNER_COMMANDS_STALE';
   const plugin = deps.pluginVersion !== undefined ? deps.pluginVersion : getPluginVersion();
   const budget = deps.rebuildBudget ?? runnerRebuildBudget;
   if (plugin !== null && budget.alreadyRebuiltFor(plugin)) {
     return {
       ok: false,
-      code: 'RUNNER_COMMANDS_STALE',
-      message:
-        `rn-fast-runner was already cold-rebuilt once for plugin v${plugin} and still lacks ` +
-        `required commands (missing: ${missing}). If that rebuild failed transiently (sim ` +
-        `not booted, xcodebuild flake), delete the runner build/commands-rebuild.json marker ` +
-        `and re-open to retry; otherwise update or reinstall the plugin.`,
+      code,
+      message: authorityMismatch
+        ? `rn-fast-runner was already cold-rebuilt once for plugin v${plugin} and still reports an authority identity mismatch. ` +
+          `If that rebuild failed transiently, delete the runner build/commands-rebuild.json marker and re-open to retry; ` +
+          `otherwise update or reinstall the plugin.`
+        : `rn-fast-runner was already cold-rebuilt once for plugin v${plugin} and still lacks ` +
+          `required commands (missing: ${missing}). If that rebuild failed transiently (sim ` +
+          `not booted, xcodebuild flake), delete the runner build/commands-rebuild.json marker ` +
+          `and re-open to retry; otherwise update or reinstall the plugin.`,
     };
   }
   const acquire = deps.acquireBuildLock ?? acquireRunnerRebuildLock;
   if (!acquire()) {
     return {
       ok: false,
-      code: 'RUNNER_COMMANDS_STALE',
+      code,
       message:
         'another session is rebuilding the shared runner artifact — retry this open in a few minutes.',
     };
@@ -756,22 +933,31 @@ async function rebuildStaleRunnerArtifact(
     // GH #382 (Codex P1): force a source rebuild — a stale prebuilt artifact must
     // not be re-selected here, or the cold rebuild that heals the command surface
     // never runs.
-    await ensure(deviceId, bundleId, { forceLocalBuild: true });
+    await ensure(deviceId, bundleId, {
+      forceLocalBuild: true,
+      ...(deps.attachOnly === true ? { attachOnly: true } : {}),
+    });
   } finally {
     release();
   }
   const probe = deps.probe ?? probeFastRunnerLivenessDetailed;
   const rebuilt = await probe();
   if (rebuilt.liveness === 'alive') {
-    return { ok: true, note: `runner artifact rebuilt (missing commands: ${missing})` };
+    return {
+      ok: true,
+      note: authorityMismatch
+        ? 'runner artifact rebuilt (authority identity mismatch)'
+        : `runner artifact rebuilt (missing commands: ${missing})`,
+    };
   }
   return {
     ok: false,
-    code: 'RUNNER_COMMANDS_STALE',
-    message:
-      `rn-fast-runner still lacks required commands after a cold rebuild ` +
-      `(missing: ${(rebuilt.missingCommands ?? first.missingCommands ?? []).join(', ') || 'unknown'}). ` +
-      `The plugin checkout itself may be outdated — update the plugin, then re-open the device session.`,
+    code,
+    message: authorityMismatch
+      ? 'rn-fast-runner still reports an authority identity mismatch after a cold rebuild.'
+      : `rn-fast-runner still lacks required commands after a cold rebuild ` +
+        `(missing: ${(rebuilt.missingCommands ?? first.missingCommands ?? []).join(', ') || 'unknown'}). ` +
+        `The plugin checkout itself may be outdated — update the plugin, then re-open the device session.`,
   };
 }
 
@@ -820,32 +1006,62 @@ export async function ensureRunnerForCommand(
           `to rebuild it (cold build, several minutes).`,
       };
     }
+    if (first.staleReason === 'authority-mismatch') {
+      return {
+        ok: false,
+        code: 'RUNNER_OWNERSHIP_MISMATCH',
+        message:
+          `rn-fast-runner authority identity does not match this session. ` +
+          `Re-open the device session (device_snapshot action=open appId=${bundleId} platform=ios) to rebuild it.`,
+      };
+    }
     return { ok: false, message: decision.message };
   }
 
-  await ensure(decision.action === 'spawn' ? decision.deviceId : deviceId!, bundleId);
+  await ensure(
+    decision.action === 'spawn' ? decision.deviceId : deviceId!,
+    bundleId,
+    deps.attachOnly === true ? { attachOnly: true } : {},
+  );
   const after = await probe();
   if (after.liveness === 'alive') {
-    if (first.staleReason && PROTOCOL_STALE_REASONS.has(first.staleReason)) {
+    if (
+      first.staleReason &&
+      (PROTOCOL_STALE_REASONS.has(first.staleReason) || first.staleReason === 'authority-mismatch')
+    ) {
       return {
         ok: true,
         note:
           first.staleReason === 'missing-commands'
             ? 'runner upgraded (stale command surface)'
-            : 'runner upgraded (protocol/version mismatch)',
+            : first.staleReason === 'authority-mismatch'
+              ? 'runner upgraded (authority identity mismatch)'
+              : 'runner upgraded (protocol/version mismatch)',
       };
     }
     return { ok: true };
   }
   // GH #418: 'missing-commands' surviving a respawn means the ARTIFACT is
   // stale — mid-flow callers refuse fast (never a silent multi-minute build).
-  if (after.staleReason === 'missing-commands') {
+  if (
+    after.staleReason &&
+    (after.staleReason === 'missing-commands' || after.staleReason === 'authority-mismatch')
+  ) {
     // Open path, dead-runner-spawned-from-stale-prebuilt case: the first
     // probe said 'dead', so the up-front short-circuit couldn't fire — the
     // rebuild tier must still run here or the first open after an upgrade
     // errors and only the SECOND open heals (device-verify finding).
     if (deps.allowArtifactRebuild && deviceId) {
       return rebuildStaleRunnerArtifact(after, deviceId, bundleId, deps);
+    }
+    if (after.staleReason === 'authority-mismatch') {
+      return {
+        ok: false,
+        code: 'RUNNER_OWNERSHIP_MISMATCH',
+        message:
+          `rn-fast-runner authority identity does not match this session. ` +
+          `Re-open the device session (device_snapshot action=open appId=${bundleId} platform=ios) to rebuild it.`,
+      };
     }
     const missing = (after.missingCommands ?? []).join(', ') || 'unknown';
     return {
@@ -879,7 +1095,7 @@ export async function ensureFastRunner(
   deviceId: string,
   bundleId: string,
   // GH #382 (Codex P1): recovery forces a source rebuild by bypassing prebuilt.
-  opts: { forceLocalBuild?: boolean } = {},
+  opts: { forceLocalBuild?: boolean; attachOnly?: boolean } = {},
 ): Promise<void> {
   // M7/Phase-109: probe tri-state liveness instead of the PID-only
   // isFastRunnerAvailable(). A runner whose PID is alive but whose HTTP server
@@ -1454,6 +1670,9 @@ export async function runNative(
         // actionable failure — surface it rather than the generic runner-down.
         if (msg.startsWith('RUNNER_PROTOCOL_MISMATCH')) {
           return failResult(msg, 'RUNNER_PROTOCOL_MISMATCH');
+        }
+        if (msg.startsWith('RUNNER_OWNERSHIP_MISMATCH')) {
+          return failResult(msg, 'RUNNER_OWNERSHIP_MISMATCH');
         }
         return failResult(`rn-android-runner did not start: ${msg}`, 'RN_ANDROID_RUNNER_DOWN');
       }

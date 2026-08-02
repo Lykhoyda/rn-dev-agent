@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createMaestroRunHandler } from '../../dist/tools/maestro-run.js';
+import { readFileSync } from 'node:fs';
+import {
+  createMaestroRunHandler,
+  executeMaestroAuthorityStages,
+  planMaestroAuthorityStages,
+  resolveMaestroFlowAppId,
+} from '../../dist/tools/maestro-run.js';
 import { chooseMaestroDispatch } from '../../dist/tools/maestro-dispatch.js';
 import {
   shouldRejectMaestroDeviceAuthority,
@@ -33,6 +39,205 @@ function fakeRunnerDispatch() {
   if ('error' in dispatch) throw new Error(dispatch.error);
   return dispatch;
 }
+
+test('lifecycle stages re-prove origin before subsequent UI mutation', async () => {
+  const calls: string[] = [];
+  await executeMaestroAuthorityStages(
+    ['launchApp', { tapOn: { id: 'submit' } }, 'stopApp'],
+    async (commands) => {
+      const first = commands[0];
+      calls.push(
+        `execute:${typeof first === 'string' ? first : String(Object.keys(first as object)[0])}`,
+      );
+    },
+    async () => {
+      calls.push('claim');
+    },
+    async (targetExpected) => {
+      calls.push(`complete:${targetExpected}`);
+    },
+    async () => {
+      calls.push('relaunch:managed');
+    },
+  );
+
+  assert.deepEqual(calls, [
+    'execute:launchApp',
+    'relaunch:managed',
+    'claim',
+    'execute:tapOn',
+    'execute:stopApp',
+    'complete:false',
+  ]);
+  assert.throws(
+    () =>
+      planMaestroAuthorityStages([
+        { runFlow: { commands: ['launchApp', { tapOn: { id: 'submit' } }] } },
+      ]),
+    /cannot contain app lifecycle transitions/,
+  );
+  assert.throws(
+    () =>
+      planMaestroAuthorityStages([
+        { runFlow: { when: { visible: 'Continue' }, commands: ['launchApp'] } },
+      ]),
+    /cannot contain app lifecycle transitions/,
+  );
+});
+
+test('failed lifecycle stages invalidate target authority before propagating failure', async () => {
+  const calls: string[] = [];
+  await assert.rejects(
+    executeMaestroAuthorityStages(
+      ['launchApp'],
+      async () => {
+        calls.push('execute');
+        throw new Error('runner failed');
+      },
+      async () => {
+        calls.push('claim');
+      },
+      async (targetExpected) => {
+        calls.push(`complete:${targetExpected}`);
+      },
+      async () => {
+        calls.push('relaunch');
+      },
+    ),
+    /runner failed/,
+  );
+
+  assert.deepEqual(calls, ['execute', 'complete:false']);
+});
+
+test('failed grouped UI stages invalidate target authority after partial dispatch', async () => {
+  const calls: string[] = [];
+  await assert.rejects(
+    executeMaestroAuthorityStages(
+      [{ tapOn: { id: 'link' } }, { openLink: 'example://next' }],
+      async () => {
+        calls.push('execute');
+        throw new Error('later command failed');
+      },
+      async () => {
+        calls.push('claim');
+      },
+      async (targetExpected) => {
+        calls.push(`complete:${targetExpected}`);
+      },
+      async () => {
+        calls.push('relaunch');
+      },
+    ),
+    /later command failed/,
+  );
+
+  assert.deepEqual(calls, ['claim', 'execute', 'complete:false']);
+});
+
+test('later stage failures retain earlier device-authority evidence', async () => {
+  let stage = 0;
+  let flowFile = '';
+  const handler = createMaestroRunHandler({
+    getActiveSession: () => ({
+      name: 'exact',
+      platform: 'ios',
+      deviceId: EXACT,
+      appId: APP_ID,
+      openedAt: new Date(0).toISOString(),
+    }),
+    chooseDispatch: () => fakeRunnerDispatch(),
+    parkFlow: async (run) => run(),
+    claimNativeOrigin: async () => undefined,
+    completeNativeOrigin: async () => undefined,
+    execFile: async (_file, args) => {
+      flowFile = args.find((argument) => argument.endsWith('.yaml')) ?? '';
+      stage += 1;
+      if (stage === 1) return { stdout: runnerLog(FOREIGN), stderr: '' };
+      throw new Error('second stage failed before producing output');
+    },
+  });
+
+  const result = await handler({
+    inlineYaml: `appId: ${APP_ID}\n---\n- launchApp\n- tapOn: Continue`,
+    platform: 'ios',
+    deviceId: EXACT,
+  });
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.code, 'DEVICE_AUTHORITY_MISMATCH');
+  assert.match(envelope.meta.output, new RegExp(FOREIGN));
+  const restoredFlow = readFileSync(flowFile, 'utf8');
+  assert.match(restoredFlow, /- launchApp/);
+  assert.match(restoredFlow, /tapOn: Continue/);
+});
+
+test('staged execution shares one flow timeout budget', async () => {
+  const timeouts: number[] = [];
+  let now = 1_000;
+  const handler = createMaestroRunHandler({
+    getActiveSession: () => ({
+      name: 'exact',
+      platform: 'ios',
+      deviceId: EXACT,
+      appId: APP_ID,
+      openedAt: new Date(0).toISOString(),
+    }),
+    chooseDispatch: () => fakeRunnerDispatch(),
+    parkFlow: async (run) => run(),
+    claimNativeOrigin: async () => undefined,
+    completeNativeOrigin: async () => undefined,
+    relaunchManagedApp: async () => undefined,
+    now: () => now,
+    execFile: async (_file, _args, options) => {
+      timeouts.push(options.timeout);
+      now += 250;
+      return { stdout: runnerLog(EXACT), stderr: '' };
+    },
+  });
+
+  await handler({
+    inlineYaml: `appId: ${APP_ID}\n---\n- launchApp\n- tapOn: Continue`,
+    platform: 'ios',
+    deviceId: EXACT,
+    timeoutMs: 1_000,
+  });
+
+  assert.deepEqual(timeouts, [1_000, 750]);
+});
+
+test('flow headers cannot override the authority-bound app', async () => {
+  assert.equal(resolveMaestroFlowAppId(APP_ID, APP_ID), APP_ID);
+  assert.throws(
+    () => resolveMaestroFlowAppId(APP_ID, 'com.foreign.app'),
+    /does not match authority-bound appId/,
+  );
+
+  let dispatched = false;
+  const handler = createMaestroRunHandler({
+    getActiveSession: () => ({
+      name: 'exact',
+      platform: 'ios',
+      deviceId: EXACT,
+      appId: APP_ID,
+      openedAt: new Date(0).toISOString(),
+    }),
+    chooseDispatch: () => fakeRunnerDispatch(),
+    execFile: async () => {
+      dispatched = true;
+      return { stdout: runnerLog(EXACT), stderr: '' };
+    },
+  });
+  const result = await handler({
+    inlineYaml: 'appId: com.foreign.app\n---\n- launchApp',
+    platform: 'ios',
+    appId: APP_ID,
+  });
+
+  assert.equal(result.isError, true);
+  assert.match(envelope(result).error, /does not match authority-bound appId/);
+  assert.equal(dispatched, false);
+});
 
 function envelope(result: { content: Array<{ text: string }> }): Record<string, any> {
   return JSON.parse(result.content[0].text);
@@ -164,6 +369,9 @@ test('real maestro_run path forwards active UDID and accepts only matching direc
     }),
     chooseDispatch: () => fakeRunnerDispatch(),
     parkFlow: async (run) => run(),
+    claimNativeOrigin: async () => {},
+    completeNativeOrigin: async () => {},
+    relaunchManagedApp: async () => {},
     execFile: async (_file, args) => {
       argv = args;
       return { stdout: runnerLog(EXACT), stderr: '' };
@@ -193,6 +401,9 @@ test('an explicit deviceId matching the session in a different case is not a mis
     }),
     chooseDispatch: () => fakeRunnerDispatch(),
     parkFlow: async (run) => run(),
+    claimNativeOrigin: async () => {},
+    completeNativeOrigin: async () => {},
+    relaunchManagedApp: async () => {},
     execFile: async () => ({ stdout: runnerLog(EXACT), stderr: '' }),
   });
   const result = await handler({
@@ -230,6 +441,8 @@ test('real maestro_run path rejects exit-zero wrong-device/shared-WDA evidence',
       }),
       chooseDispatch: () => fakeRunnerDispatch(),
       parkFlow: async (run) => run(),
+      claimNativeOrigin: async () => {},
+      completeNativeOrigin: async () => {},
       execFile: async () => ({ stdout: output, stderr: '' }),
     });
     const result = await handler({
@@ -255,6 +468,8 @@ test('real maestro_run non-zero path preserves and rejects direct foreign-device
     }),
     chooseDispatch: () => fakeRunnerDispatch(),
     parkFlow: async (run) => run(),
+    claimNativeOrigin: async () => {},
+    completeNativeOrigin: async () => {},
     execFile: async () => {
       throw Object.assign(new Error('runner exited 1'), {
         stdout: runnerLog(FOREIGN),
@@ -330,6 +545,84 @@ test('cdp_run_action persists a verified direct report identity on success', asy
   const record = project.readSidecar('demo').runHistory.at(-1);
   assert.equal(record.status, 'pass');
   assert.equal(record.deviceId, EXACT, 'RunRecord must use the verified direct report identity');
+});
+
+test('cdp_run_action restores managed Metro attachment after launchApp before replay', async () => {
+  project.seedAction(
+    'managed-replay',
+    [
+      `appId: ${APP_ID}`,
+      '---',
+      '# id: managed-replay',
+      '# intent: replay against managed Metro',
+      '# tags: [fixture]',
+      '# mutates: false',
+      '# status: active',
+      '- launchApp',
+      '- tapOn:',
+      '    id: "fab-create-task"',
+      '',
+    ].join('\n'),
+  );
+  let attachedToManagedMetro = true;
+  const calls: string[] = [];
+  const maestroRun = createMaestroRunHandler({
+    getActiveSession: () => ({
+      name: 'exact',
+      platform: 'ios',
+      deviceId: EXACT,
+      appId: APP_ID,
+      openedAt: new Date(0).toISOString(),
+    }),
+    chooseDispatch: () => fakeRunnerDispatch(),
+    parkFlow: async (run) => run(),
+    execFile: async (_file, args) => {
+      const flowPath = args.find((argument) => argument.endsWith('.yaml'));
+      assert.ok(flowPath);
+      const flow = readFileSync(flowPath, 'utf8');
+      if (flow.includes('launchApp')) {
+        calls.push('runner-launch');
+        attachedToManagedMetro = false;
+      } else {
+        calls.push('runner-ui');
+        assert.equal(attachedToManagedMetro, true);
+      }
+      return { stdout: runnerLog(EXACT), stderr: '' };
+    },
+  });
+  const handler = createRunActionHandler({
+    maestroRun,
+    targetContext: () => ({ platform: 'ios', deviceId: EXACT, appId: APP_ID }),
+    blindProbeContext: async () => ({ deviceId: EXACT, iosRuntimeMajor: 26 }),
+    claimNativeOrigin: async () => {
+      calls.push('claim-origin');
+      assert.equal(attachedToManagedMetro, true);
+    },
+    completeNativeOrigin: async (_args, targetExpected) => {
+      calls.push(`complete-origin:${targetExpected}`);
+    },
+    relaunchManagedApp: async () => {
+      calls.push('relaunch-managed');
+      attachedToManagedMetro = true;
+    },
+  });
+
+  const result = await handler({
+    actionId: 'managed-replay',
+    projectRoot: project.root,
+    platform: 'ios',
+    autoRepair: false,
+    blindProbeMode: 'forbid',
+  });
+
+  assert.equal(envelope(result).ok, true, result.content[0]!.text);
+  assert.deepEqual(calls, [
+    'runner-launch',
+    'relaunch-managed',
+    'claim-origin',
+    'runner-ui',
+    'complete-origin:true',
+  ]);
 });
 
 test('cdp_run_action persists the direct wrong device and never requested metadata', async () => {

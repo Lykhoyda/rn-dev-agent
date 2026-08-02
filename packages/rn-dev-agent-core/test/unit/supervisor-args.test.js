@@ -1,6 +1,12 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { sqliteFlagForNode, workerSpawnArgs } from '../../dist/supervisor-args.js';
+import {
+  isSupportedNodeVersion,
+  sqliteFlagForNode,
+  supervisorRelaunchArgs,
+  unsupportedNodeVersionMessage,
+  workerSpawnArgs,
+} from '../../dist/supervisor-args.js';
 
 // ── sqliteFlagForNode ─────────────────────────────────────────────────────────
 // Flag is required for 22.5 ≤ v < 23.6 (inclusive on both ends of the integers).
@@ -48,38 +54,96 @@ describe('sqliteFlagForNode', () => {
   });
 });
 
+test('authority runtime rejects Node versions without node:sqlite', () => {
+  assert.equal(isSupportedNodeVersion('22.4.1'), false);
+  assert.equal(isSupportedNodeVersion('22.5.0'), true);
+  assert.equal(isSupportedNodeVersion('24.0.0'), true);
+  assert.equal(
+    unsupportedNodeVersionMessage('22.4.1'),
+    'rn-dev-agent requires Node.js >=22.5; current runtime is 22.4.1',
+  );
+  assert.equal(unsupportedNodeVersionMessage('22.5.0'), null);
+});
+
 // ── workerSpawnArgs ───────────────────────────────────────────────────────────
 
 describe('workerSpawnArgs', () => {
-  test('flag version: puts --experimental-sqlite BEFORE script, --no-lock AFTER', () => {
-    assert.deepEqual(workerSpawnArgs('/abs/dist/index.js', '22.6.0'), [
-      '--experimental-sqlite',
-      '/abs/dist/index.js',
-      '--no-lock',
-    ]);
+  test('flag version preloads the selective warning filter before the worker', () => {
+    assert.deepEqual(
+      workerSpawnArgs('/abs/dist/index.js', '/abs/dist/sqlite-warning-filter.js', '22.6.0'),
+      [
+        '--experimental-sqlite',
+        '--import',
+        '/abs/dist/sqlite-warning-filter.js',
+        '--import',
+        '/abs/dist/startup-integrity-register.js',
+        '/abs/dist/index.js',
+        '--no-lock',
+      ],
+    );
   });
 
-  test('no-flag version: script + --no-lock, no node flag prepended', () => {
-    assert.deepEqual(workerSpawnArgs('/abs/dist/index.js', '24.0.0'), [
-      '/abs/dist/index.js',
-      '--no-lock',
-    ]);
+  test('default-on version still preloads the selective warning filter', () => {
+    assert.deepEqual(
+      workerSpawnArgs('/abs/dist/index.js', '/abs/dist/sqlite-warning-filter.js', '24.0.0'),
+      [
+        '--import',
+        '/abs/dist/sqlite-warning-filter.js',
+        '--import',
+        '/abs/dist/startup-integrity-register.js',
+        '/abs/dist/index.js',
+        '--no-lock',
+      ],
+    );
   });
 
   test('22.4.0 (below threshold): no flag', () => {
-    assert.deepEqual(workerSpawnArgs('/abs/dist/index.js', '22.4.0'), [
-      '/abs/dist/index.js',
-      '--no-lock',
-    ]);
+    assert.deepEqual(
+      workerSpawnArgs('/abs/dist/index.js', '/abs/dist/sqlite-warning-filter.js', '22.4.0'),
+      [
+        '--import',
+        '/abs/dist/sqlite-warning-filter.js',
+        '--import',
+        '/abs/dist/startup-integrity-register.js',
+        '/abs/dist/index.js',
+        '--no-lock',
+      ],
+    );
   });
 
   test('forwards only the read-only diagnostic contract mode to the worker', () => {
     assert.deepEqual(
-      workerSpawnArgs('/abs/dist/index.js', '24.0.0', [
+      workerSpawnArgs('/abs/dist/index.js', '/abs/dist/sqlite-warning-filter.js', '24.0.0', [
         '--diagnostic-contract-probe',
         '--untrusted-worker-flag',
       ]),
-      ['/abs/dist/index.js', '--no-lock', '--diagnostic-contract-probe'],
+      [
+        '--import',
+        '/abs/dist/sqlite-warning-filter.js',
+        '--import',
+        '/abs/dist/startup-integrity-register.js',
+        '/abs/dist/index.js',
+        '--no-lock',
+        '--diagnostic-contract-probe',
+      ],
     );
   });
+});
+
+test('supervisor relaunch applies SQLite flags before preserving its arguments', () => {
+  assert.deepEqual(
+    supervisorRelaunchArgs(
+      '/abs/dist/supervisor.js',
+      '/abs/dist/sqlite-warning-filter.js',
+      '22.12.0',
+      ['--no-lock'],
+    ),
+    [
+      '--experimental-sqlite',
+      '--import',
+      '/abs/dist/sqlite-warning-filter.js',
+      '/abs/dist/supervisor.js',
+      '--no-lock',
+    ],
+  );
 });

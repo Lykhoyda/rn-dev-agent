@@ -16,8 +16,8 @@ Submit feedback or report a bug for the rn-dev-agent plugin. Collects sanitized 
 ## Steps
 
 1. **Ask feedback type** — bug report, feature request, or question
-2. **Collect environment context** — plugin version, OS, Node.js, simulator status, Metro status, recent tool activity (automated and sanitized)
-3. **Present sanitized data** — show exactly what will be sent, ask for confirmation
+2. **Collect environment context** — plugin version, OS, Node.js, simulator counts, current `rn_session` authority, own Metro allocation/binding, foreign-session count, and recent tool activity
+3. **Reconcile and preview** — compare the collector with live `rn_session status`, show exactly what will be sent, and ask for confirmation
 4. **Create GitHub issue** — submit via `gh` CLI to the plugin repository
 5. **Confirm** — report the issue URL
 
@@ -36,7 +36,8 @@ Submit feedback or report a bug for the rn-dev-agent plugin. Collects sanitized 
 - OS type and version
 - Node.js version
 - Simulator/emulator count
-- Metro running status
+- Current session authority state and own Metro allocated/bound status
+- Count of foreign sessions, without their ports or identities
 - Tool call names, pass/fail results, and latency
 - CDP connection status and error count
 

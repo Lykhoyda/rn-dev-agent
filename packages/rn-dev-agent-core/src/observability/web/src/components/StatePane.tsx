@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type JSX } from 'react';
+import { observeFetch } from '../authority';
 import type { ActionSummary, AgentEvent, E2eProgress } from '../types';
 import { fmtClock, pretty } from '../derive';
 import { ActionsPanel } from './ActionsPanel';
@@ -61,7 +62,7 @@ export function StatePane({
     const at = Date.now();
     setLoading(t);
     try {
-      const r = await fetch(`/api/state/${t}`);
+      const r = await observeFetch(`/api/state/${t}`);
       const env = (await r.json()) as {
         ok?: boolean;
         data?: unknown;
@@ -108,7 +109,7 @@ export function StatePane({
   useEffect(() => {
     const fetchActions = async (): Promise<void> => {
       try {
-        const r = await fetch('/api/e2e/actions');
+        const r = await observeFetch('/api/e2e/actions');
         if (r.ok) setActions((await r.json()) as ActionSummary[]);
       } catch {
         /* non-fatal */

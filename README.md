@@ -6,7 +6,7 @@
 
 A coding-agent plugin for **Claude Code** and **Codex** that turns an AI agent into a React Native development partner. It explores your codebase, designs architecture, implements features — then **proves everything works live on the simulator** by reading the component tree, store state, and navigation stack through the Chrome DevTools Protocol, driving the app like a user, and recording the evidence.
 
-**79 MCP tools** · **Claude: 15 slash commands + 10 skills** · **Codex: 15 explicit workflow skills + 10 domain skills (25 total)** · **118 best-practice rules** · [Full documentation](https://lykhoyda.github.io/rn-dev-agent/)
+**MCP tools for live React Native development** · **Claude: 15 slash commands + 10 skills** · **Codex: 15 explicit workflow skills + 10 domain skills (25 total)** · **118 best-practice rules** · [Full documentation](https://lykhoyda.github.io/rn-dev-agent/)
 
 ---
 
@@ -80,8 +80,8 @@ read-only and prints the exact commands for the user to confirm and run.
 | rn-android-runner (Android) | Android targets only | Prebuilt artifact on releases; Gradle build fallback on first use |
 | [maestro-runner](https://github.com/devicelab-dev/maestro-runner) | Yes | Yes (pinned engine, checksum-verified) |
 | iOS Simulator / Android Emulator | One platform | No |
-| Metro dev server | Yes | No |
-| CDP connection | Yes | Auto via `cdp_status` |
+| Session-bound Metro | Yes | Project integration starts or validates it through literal `pnpm ios` / `pnpm android` |
+| CDP connection | Yes | `rn_session` owns the binding; `cdp_status` is passive and `cdp_connect` pins the exact target |
 | ffmpeg | Optional (proof videos) | Yes |
 | idb + idb-companion | Optional (smooth observe-UI mirroring) | Yes |
 
@@ -169,23 +169,24 @@ An **action** is a saved Maestro flow the agent **emits** when verification pass
 
 ## MCP tools
 
-The plugin exposes **79 MCP tools** across five families ([full reference](https://lykhoyda.github.io/rn-dev-agent/tools/)):
+The plugin exposes MCP tools across six families ([full reference](https://lykhoyda.github.io/rn-dev-agent/tools/)):
 
 | Family | What it's for | Examples |
 |---|---|---|
+| **Session** | Fence one worktree, Metro, app, device, runner, Observe UI, and proof run | `rn_session` |
 | **CDP** | React internals via Chrome DevTools Protocol | `cdp_status`, `cdp_component_tree`, `cdp_store_state`, `cdp_evaluate`, `cdp_native_errors`, `cdp_navigate`, `collect_logs` |
 | **Device** | Native interaction with the simulator/emulator | `device_find`, `device_press`, `device_fill`, `device_screenshot`, `device_pick_date`, `device_batch` |
 | **Actions** | Record / replay / self-repair persistent flows | `cdp_run_action`, `cdp_repair_action`, `cdp_record_test_save_as_action`, `cdp_lock_e2e_test`, `cdp_run_e2e_suite` |
 | **Testing** | E2E replay and PR-ready proof | `proof_step`, `cross_platform_verify`, `maestro_run`, `maestro_test_all`, `cdp_auto_login` |
 | **Macro-Asserts** | State-assertive replays — internal state, not pixels | `expect_redux`, `expect_route`, `expect_visible_by_testid`, `expect_text` |
 
-The committed tool surface is asserted in CI against a golden registry (`packages/rn-dev-agent-core/test/fixtures/tool-registry.json`), so this count can't silently drift.
+The committed tool surface is asserted in CI against a golden registry (`packages/rn-dev-agent-core/test/fixtures/tool-registry.json`), so tool additions and removals can't silently drift.
 
 **Reliability features baked into the tool layer:**
 
 - **Self-healing taps** — a stale `@ref` is re-bound by identity (testID/label/role, unique match only), and a tap whose settle hash shows no UI change is re-tapped exactly once. Opt out with `RN_SELF_HEAL=0`.
 - **Quiescence bypass (iOS)** — XCTest's private idle-wait is disabled by default so apps with Reanimated/looping animations can't hang queries (the same WebDriverAgent-lineage technique Maestro uses). Opt out with `RN_QUIESCENCE_BYPASS=0`.
-- **Engine pinning** — maestro-runner installs a tested pin, checksum-verified fail-closed; `/doctor` and `cdp_status` report drift.
+- **Engine pinning** — maestro-runner installs a tested pin, checksum-verified fail-closed; replay results and `/doctor` report drift.
 - **Degraded-runtime detection** — when taps succeed but the app doesn't respond, results carry a "simulator likely wedged, reboot it" hint instead of a misleading "element not found."
 
 ## Specialized agents
@@ -223,8 +224,10 @@ Claude Code / Codex
   ├── Host workflows + shared domain knowledge
   │   Claude: commands/agents · Codex: explicit workflow/domain skills
   │
-  ├── MCP Server (CDP Bridge) ─── WebSocket → Metro → Hermes CDP
-  │   79 tools: component tree, store state, profiling, network,
+  ├── Fenced session authority ── worktree → Metro → app → device
+  │
+  ├── MCP Server (CDP Bridge) ─── WebSocket → bound Metro → Hermes CDP
+  │   Tools: component tree, store state, profiling, network,
   │   interaction, recording, self-healing replay
   │
   └── Device interaction
@@ -256,8 +259,8 @@ Claude Code / Codex
 
 | Problem | Solution |
 |---------|----------|
-| "Metro not found" | Start Metro: `npx expo start` or `npx react-native start` |
-| "No Hermes target" | Open the app on the simulator, ensure Hermes is enabled |
+| "Metro not found" | Inspect `rn_session(action="status")`, then use literal `pnpm ios` or `pnpm android` through the confirmed project integration |
+| "No Hermes target" | Open the bound app, inspect passive `cdp_status`, then use `cdp_connect` to pin the exact signed target |
 | CDP rejected (1006) | Close React Native DevTools, Flipper, or Chrome DevTools |
 | Zustand store error | Add `global.__ZUSTAND_STORES__` ([setup](https://lykhoyda.github.io/rn-dev-agent/getting-started/#zustand-stores-one-line)) |
 | Plugin not detected (Claude) | `/plugin install rn-dev-agent@rn-dev-agent` then `/reload-plugins` |
@@ -277,7 +280,7 @@ Claude Code / Codex
 | `device_fill` reports `RUNNER_TIMEOUT` | XCTest timed out on a non-cancellable type operation. The runner is poisoned/reaped; success is returned only when exact independent CDP readback proves the requested value (`meta.runnerTimeoutRecovery`, including runner PID/state/postmortem containment evidence). Otherwise reconnect CDP and retry from a fresh snapshot. |
 | Need an intentional coordinate tap | Use `device_press({x, y})` (or a batch press step with `x`/`y`). With a visible iOS keyboard, raw coordinates are geometry-unknown: the keyboard is proven hidden before the one tap. Prefer fresh refs for normal UI controls. |
 | Native logs include another device/app | Reopen the exact device session. `collect_logs` pins Android to that session's adb serial and iOS to that simulator plus the current target-app PID; it fails closed when exact scope cannot be resolved. When the probe runs and proves the app is not running, the stream stays pinned to that simulator and reports `scopes.native_ios.process = app-not-running-device-scoped` so a crash trail is still captured. |
-| Want XCTest's stock idle-waits back | Kill the running runner (`pkill -f RnFastRunnerUITests`), set `RN_QUIESCENCE_BYPASS=0`, reopen the device session. Audit via `cdp_status` → `deviceSession.runnerCapabilities` |
+| Want XCTest's stock idle-waits back | Kill the running runner (`pkill -f RnFastRunnerUITests`), set `RN_QUIESCENCE_BYPASS=0`, reopen the device session, and inspect the next device result's `meta.quiescenceBypass` |
 | Seeing `meta.reResolved` / `meta.tapRetried` | Self-healing taps at work (Story 05, #386). Disable per call with `retryIfNoChange: false` or globally with `RN_SELF_HEAL=0` |
 
 </details>
@@ -290,7 +293,7 @@ The `cdp_evaluate` tool runs arbitrary JavaScript in your app's Hermes runtime w
 
 - **Local dev environments only.** Do not point the plugin at production builds, store-signed apps, or any app holding real user data.
 - **Treat the agent like a developer with shell access to your laptop.** Any prompt that reaches `cdp_evaluate` (directly or through another tool) can read or mutate your app's runtime state.
-- **Don't connect to CDP targets you didn't intentionally launch.** The plugin filters Metro endpoints to `127.0.0.1`/`localhost`, but if multiple Hermes targets are running, double-check `cdp_targets`.
+- **Use the fenced session as CDP authority.** `rn_session` binds the intended worktree, Metro, app, and device; `cdp_targets` may explain ambient Hermes processes but never authorizes selecting one. See [Parallel session authority](https://lykhoyda.github.io/rn-dev-agent/session-authority/).
 
 The plugin makes no attempt to sandbox `cdp_evaluate`. If you need that, gate tool access through your agent's permission prompts rather than trusting the tool layer.
 

@@ -12,7 +12,7 @@ rn-dev-agent and the standalone **maestro-mcp** server can be used together: mae
 
 ## What happens on handback (already automatic)
 
-When an L2 call sees the runner-leak sentinel after a maestro run, the device-session performs a **state-preserving reacquire** — it re-foregrounds your app (no relaunch) and marks CDP stale so the next read transparently reconnects. You do **not** need a manual `cdp_status` re-pin (shipped in #188).
+When an L2 call sees the runner-leak sentinel after a maestro run, the device-session performs a **state-preserving reacquire** — it re-foregrounds your app (no relaunch) and marks CDP stale so the next read transparently reconnects. If recovery escalates to attach-only or full relaunch, it still reopens the exact authority-bound device instead of selecting an ambient simulator. You do **not** need a manual `cdp_status` re-pin (shipped in #188).
 
 ## The `FOREIGN_RUNNER_ACTIVE` warning
 
@@ -32,7 +32,7 @@ A `maestro_run` / `maestro_test_all` flow (rn-dev-agent's own L3) takes the devi
 
 ## Why there's no shared "WDA session" to ride (#210)
 
-A natural question: since maestro drives the device fine via WebDriverAgent, can `device_*` "ride" that WDA session instead of rn-fast-runner? No — maestro-runner spawns WDA **per flow** and tears it down when the flow exits, so there's no persistent session to attach to, and a WDA client would add a *second* XCUITest backend (the opposite of unifying). The coherent model is: **rn-fast-runner is the `device_*` backend** (it auto-spawns when prebuilt — `cdp_status.deviceSession` shows its `alive`/`stale`/`dead` state), **maestro/WDA is the flow engine**, and they're serialized. Mid-flow, use simctl for pixels and CDP reads for state/tree.
+A natural question: since maestro drives the device fine via WebDriverAgent, can `device_*` "ride" that WDA session instead of rn-fast-runner? No — maestro-runner spawns WDA **per flow** and tears it down when the flow exits, so there's no persistent session to attach to, and a WDA client would add a *second* XCUITest backend (the opposite of unifying). The coherent model is: **rn-fast-runner is the `device_*` backend** (it auto-spawns when prebuilt, and device calls report runner failures directly), **maestro/WDA is the flow engine**, and they're serialized. Mid-flow, use simctl for pixels and CDP reads for state/tree.
 
 ## Using rn-dev-agent with React Native DevTools
 

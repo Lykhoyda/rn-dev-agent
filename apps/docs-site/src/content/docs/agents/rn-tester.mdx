@@ -26,7 +26,10 @@ The tester agent verifies that an implemented feature works correctly on a live 
 
 ### Step 0: Environment Check
 
-Calls `cdp_status` to verify Metro, CDP, and app health. If not running, attempts auto-recovery via `expo_ensure_running.sh`. Stops on RedBox or paused debugger.
+Requires the intended `rn_session`, then uses passive `cdp_status` for the
+bound Metro/CDP target, `cdp_component_tree` for render health, and
+`cdp_error_log` for errors. Missing authority stops the run instead of
+selecting ambient state.
 
 ### Step 1: Understand the Feature
 

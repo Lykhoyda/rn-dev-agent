@@ -102,7 +102,7 @@ fi
       assert.equal(report.overall, 'healthy');
       assert.equal(report.materialization.status, 'EXACT_HEALTHY');
       assert.equal(report.mcpContractProbe.status, 'HEALTHY');
-      assert.equal(report.mcpContractProbe.toolCount, 79);
+      assert.equal(report.mcpContractProbe.toolCount, 80);
       assert.equal(report.directProofSchema.status, 'USABLE');
       assert.equal(existsSync(poisonMarker), false);
       assert.deepEqual(report.installation.matches, [

@@ -22,7 +22,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { chmodSync, readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -76,19 +76,37 @@ test('behavioral: stop survives a serial-less single-device Android state (repro
   const pidPrefix = join(base, 'rec');
   const hermetic = realSrc
     .replace('PID_PREFIX="/tmp/rn-dev-agent-record"', `PID_PREFIX="${pidPrefix}"`)
+    .replace('RUNTIME_DIR="${PID_PREFIX}.private-$(id -u)"', `RUNTIME_DIR="${base}"`)
     .replace('RAW_PREFIX="/tmp/rn-dev-agent-raw"', `RAW_PREFIX="${join(base, 'raw')}"`);
+  const fakeAdb = join(base, 'adb');
+  writeFileSync(
+    fakeAdb,
+    `#!/usr/bin/env bash
+if [[ "$*" == "get-state" ]]; then
+  echo device
+fi
+exit 0
+`,
+  );
+  chmodSync(fakeAdb, 0o755);
+  const scope = 'a'.repeat(64);
 
   const seedState = () => {
-    writeFileSync(`${pidPrefix}-android.pid`, '999999'); // dead pid → no wait loop
-    writeFileSync(`${pidPrefix}-android.path`, join(base, 'out.mp4'));
-    writeFileSync(`${pidPrefix}-android.device-path`, '/sdcard/gh374-nonexistent.mp4');
-    // deliberately NO `${pidPrefix}-android.serial`
+    writeFileSync(`${pidPrefix}-${scope}.pid`, '999999');
+    writeFileSync(`${pidPrefix}-${scope}.birth`, 'birth-token');
+    writeFileSync(`${pidPrefix}-${scope}.platform`, 'android');
+    writeFileSync(`${pidPrefix}-${scope}.path`, join(base, 'out.mp4'));
+    writeFileSync(`${pidPrefix}-${scope}.raw-path`, join(base, 'raw-android-123.mp4'));
+    writeFileSync(`${pidPrefix}-${scope}.device-path`, '/sdcard/gh374-nonexistent.mp4');
   };
   const runStop = (scriptText) => {
     const p = join(base, 'record_proof.sh');
     writeFileSync(p, scriptText);
     seedState();
-    const r = spawnSync('bash', [p, 'stop'], { encoding: 'utf8' });
+    const r = spawnSync('bash', [p, 'stop', scope, '999999', 'birth-token'], {
+      encoding: 'utf8',
+      env: { ...process.env, PATH: `${base}:${process.env.PATH}` },
+    });
     return `${r.stdout || ''}\n${r.stderr || ''}`;
   };
 

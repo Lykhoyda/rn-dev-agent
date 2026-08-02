@@ -14,7 +14,7 @@ repository root or Claude package. `No plugin hooks` is expected.
 
 ## Native surface
 
-- Stable MCP server key `cdp` and 79 tools.
+- Stable MCP server key `cdp` and the full MCP tool suite.
 - Ten implicit domain skills.
 - Fifteen explicit native workflow skills, invoked as
   `$rn-dev-agent:<workflow> [request text]`.

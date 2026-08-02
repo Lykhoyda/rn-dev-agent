@@ -399,7 +399,8 @@ test('repair-action: snapshot is Agent Device Runner sentinel → RUNNER_LEAK (B
   const env = JSON.parse(result.content[0].text);
   assert.equal(env.code, 'RUNNER_LEAK', `expected RUNNER_LEAK, got ${env.code}: ${env.error}`);
   assert.match(env.error, /Agent Device Runner/);
-  assert.match(JSON.stringify(env), /simctl launch booted/);
+  assert.match(JSON.stringify(env), /foreground on TEST-DEVICE-ID/);
+  assert.doesNotMatch(JSON.stringify(env), /\bbooted\b/);
 });
 
 test('repair-action: no candidate clears threshold → TESTID_NOT_FOUND', async () => {

@@ -24,9 +24,8 @@ Activates when Claude encounters crashes, blank screens, connection issues, erro
 | Store state | MCP | `cdp_store_state(path="...")` |
 | API calls | MCP | `cdp_network_log` |
 | Console output | MCP | `cdp_console_log(level="all")` |
-| Debugger paused? | MCP | `cdp_status` (reports isPaused) |
 | RedBox overlay? | MCP | `cdp_component_tree` (auto-detects) |
-| Metro alive? | bash | `curl localhost:8081/status` |
+| Metro alive? | MCP | `cdp_status` |
 | UI element tree | MCP | `device_snapshot` |
 | Runtime value | MCP | `cdp_evaluate(expression="...")` |
 
@@ -40,33 +39,32 @@ If `cdp_error_log` is empty but the app is broken, the problem is native.
 | Unhandled promise rejection | `cdp_error_log` |
 | RedBox overlay | `cdp_component_tree` (APP_HAS_REDBOX) |
 | console.error() | `cdp_console_log(level="error")` |
-| Metro bundle syntax error | `curl localhost:8081/status` |
+| Metro bundle syntax error | `cdp_metro_events` |
 | Native crash (iOS) | `collect_logs(sources=["native_ios"])` |
 | Native crash (Android) | `collect_logs(sources=["native_android"])` |
 | Network failure | `cdp_network_log` (status=0) |
 
-### Environment Status (`cdp_status`)
+### Environment authority and health
 
-Always called first. Decision tree:
-- `metro.running = false` means start Metro
-- `app.hasRedBox = true` means read `cdp_error_log`, fix, reload
-- `app.isPaused = true` means `cdp_reload`
-- `app.errorCount > 0` means check `cdp_error_log`
-- `capabilities.networkDomain = false` means network logging uses injected hooks (RN < 0.83)
-- `capabilities.fiberTree = false` means release build or non-Hermes engine
+Call `rn_session(action="status")` first, then passive `cdp_status`.
+
+- Missing Metro or bundle binding means repair the session through the integrated package script.
+- A disconnected exact target means open the bound app and call `cdp_connect`.
+- Use `cdp_component_tree` for helper and RedBox health.
+- Use `cdp_error_log` for active JavaScript errors.
 
 ### Connection Troubleshooting
 
 | Symptom | Fix |
 |---------|-----|
-| Metro not found | Start dev server: `npx expo start` |
-| No Hermes target | Wait for app to load, retry |
+| Metro not found | Inspect `rn_session`, then use literal `pnpm ios` or `pnpm android` |
+| No Hermes target | Wait for the bound app to load, then call `cdp_connect` |
 | Error code 1006 | Close other debugger UIs (DevTools, Flipper, Chrome) |
 | Evaluate timeout (5s) | Search for `debugger;` statements, check for long sync ops |
 | "hook not available" | Only works in `__DEV__` mode with Hermes |
 | APP_HAS_REDBOX | Read error log, fix code, reload |
 | "No store found" | Add `if (__DEV__) global.__ZUSTAND_STORES__ = { ... }` |
-| All CDP calls fail | Reload app and reconnect with `cdp_status` |
+| All CDP calls fail | Reload the bound app and reconnect with `cdp_connect` |
 
 ### CDP Technical Constraints
 
@@ -80,4 +78,4 @@ After `cdp_reload`, auto-reconnect waits up to 30 seconds. If `cdp_component_tre
 
 ### Metro Health Check
 
-The MCP server auto-discovers Metro on ports 8081, 8082, 19000, 19006. Pass `metroPort` to `cdp_status` for non-standard ports.
+Call `rn_session(action="status")` to inspect the bound Metro authority, then use `cdp_status` for passive runtime health and `cdp_metro_events` for bundle failures. Ambient default ports are diagnostic only and never establish session authority.

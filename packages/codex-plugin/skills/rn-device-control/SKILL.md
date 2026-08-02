@@ -18,11 +18,10 @@ caches.
 
 ## iOS Simulator (simctl)
 
-`booted` below is a convenience alias for a single-simulator machine. As soon as
-a second simulator is up it is ambiguous and silently targets the wrong device —
-substitute the exact UDID (`xcrun simctl list devices booted`), which is the same
-exact-device identity the plugin's own device session and Maestro replay authority
-are checked against.
+The raw commands below are non-authoritative diagnostics or manual maintenance.
+Never use the `booted` alias for plugin verification: require
+`rn_session(action="status")` and substitute its exact bound UDID. Prefer
+`device_*` tools, which enforce the session claim and return authority receipts.
 
 ### Boot and Manage Devices
 
@@ -58,11 +57,10 @@ xcrun simctl erase booted
 
 ### Deep Links
 
-```bash
-# Open a deep link in the booted simulator
-xcrun simctl openurl booted "myapp://home"
-xcrun simctl openurl booted "myapp://product/123"
-xcrun simctl openurl booted "myapp://checkout"
+```text
+device_deeplink(url="myapp://home")
+device_deeplink(url="myapp://product/123")
+device_deeplink(url="myapp://checkout")
 ```
 
 Prefer deep links over Maestro navigation flows — faster and more deterministic.
@@ -408,8 +406,8 @@ Before reaching for `device_screenshot`, ask what question you're answering:
   files will be cleaned by the OS and are unsafe for PR artifacts.
 
 **WHEN — pre-conditions:**
-- `cdp_status` returned `ok:true` (otherwise you may capture a black screen
-  or the wrong app)
+- `rn_session` is ready and passive `cdp_status` reports the exact bound target
+  connected (otherwise you may capture a black screen or the wrong app)
 - `cdp_navigation_state` returned a real route name — NOT `"DevClientLauncher"`,
   NOT `"ServerPicker"`, NOT empty/null. A screenshot of the dev-loader is
   noise; dismiss the picker first.

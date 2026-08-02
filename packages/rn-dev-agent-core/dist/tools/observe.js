@@ -17,6 +17,7 @@ let server = null;
 let e2eDeps;
 let mirrorManager;
 let stateDeps;
+let authorityDeps;
 export function setObserveE2eDeps(d) {
     e2eDeps = d;
 }
@@ -26,7 +27,11 @@ export function setObserveStateDeps(d) {
 export function setObserveMirror(m) {
     mirrorManager = m;
 }
+export function setObserveAuthorityDeps(deps) {
+    authorityDeps = deps;
+}
 let starting = null;
+let boundAuthority = null;
 /**
  * Start (or return) the module-global observability server on the resolved
  * port (env RN_AGENT_OBSERVE_PORT > .rn-agent/config.json observe.port > 7333).
@@ -39,12 +44,60 @@ export async function startObserveServer() {
     if (starting)
         return starting;
     starting = (async () => {
-        if (!server)
-            server = new ObservabilityServer(recorder, e2eDeps, mirrorManager, stateDeps);
-        const { port } = resolveObservePort();
-        const res = await server.start(port);
-        writeObserveState(res.url, res.port);
-        return res;
+        const resolved = authorityDeps?.resolve();
+        if (!server) {
+            server = new ObservabilityServer(recorder, e2eDeps, mirrorManager, stateDeps, resolved?.authority, stopObserveServer);
+        }
+        const port = resolved?.port ?? resolveObservePort().port;
+        let bindAttempted = false;
+        let stateWriteAttempted = false;
+        try {
+            const res = await server.start(port);
+            if (resolved) {
+                bindAttempted = true;
+                authorityDeps?.bind({ port: res.port, authority: resolved.authority });
+                boundAuthority = resolved.authority;
+            }
+            stateWriteAttempted = true;
+            writeObserveState(res.url, res.port);
+            return res;
+        }
+        catch (error) {
+            const failedServer = server;
+            server = null;
+            const cleanupErrors = [];
+            try {
+                await failedServer?.stop();
+            }
+            catch (cleanupError) {
+                cleanupErrors.push(cleanupError);
+            }
+            if (bindAttempted && resolved) {
+                try {
+                    authorityDeps?.unbind(resolved.authority);
+                    if (boundAuthority?.sessionId === resolved.authority.sessionId &&
+                        boundAuthority.claimEpoch === resolved.authority.claimEpoch &&
+                        boundAuthority.instanceId === resolved.authority.instanceId) {
+                        boundAuthority = null;
+                    }
+                }
+                catch (cleanupError) {
+                    cleanupErrors.push(cleanupError);
+                }
+            }
+            if (stateWriteAttempted) {
+                try {
+                    removeObserveState();
+                }
+                catch (cleanupError) {
+                    cleanupErrors.push(cleanupError);
+                }
+            }
+            if (cleanupErrors.length > 0) {
+                throw new AggregateError([error, ...cleanupErrors], `OBSERVE_START_ROLLBACK_FAILED: ${error instanceof Error ? error.message : String(error)}`);
+            }
+            throw error;
+        }
     })();
     try {
         return await starting;
@@ -54,7 +107,7 @@ export async function startObserveServer() {
         throw e;
     }
 }
-async function stopObserveServer() {
+export async function stopObserveServer() {
     if (starting) {
         try {
             await starting;
@@ -66,6 +119,9 @@ async function stopObserveServer() {
     starting = null;
     await server?.stop();
     server = null;
+    if (boundAuthority)
+        authorityDeps?.unbind(boundAuthority);
+    boundAuthority = null;
     removeObserveState();
 }
 export async function observeHandler(args) {

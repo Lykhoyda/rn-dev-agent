@@ -32,6 +32,7 @@ function envelope(result: { content: Array<{ text: string }> }) {
 test('GH-588 V4: lifecycle reset threads the matching active iOS session UDID to terminate and launch', async () => {
   const calls: Array<{ operation: string; appId: string; platform: string; deviceId?: string }> =
     [];
+  const completions: boolean[] = [];
   const handler = createDeviceResetStateHandler(() => client(), {
     getSession: () => ({ platform: 'ios', deviceId: UDID, appId: APP_ID }),
     terminateApp: async (appId, platform, deviceId) => {
@@ -39,6 +40,9 @@ test('GH-588 V4: lifecycle reset threads the matching active iOS session UDID to
     },
     launchApp: async (appId, platform, deviceId) => {
       calls.push({ operation: 'launch', appId, platform, deviceId });
+    },
+    completeNativeOrigin: async (_args, targetExpected) => {
+      completions.push(targetExpected);
     },
   });
 
@@ -64,6 +68,7 @@ test('GH-588 V4: lifecycle reset threads the matching active iOS session UDID to
       { step: 'launch', deviceId: UDID },
     ],
   );
+  assert.deepEqual(completions, [false]);
 });
 
 // A foreign-app session is not lifecycle authority for this bundle — but the
@@ -96,6 +101,7 @@ test('GH-588 V4: supplied iOS lifecycle identities are exact UDIDs or fail close
 
 test('GH-588 V4: lifecycle reset threads the matching active Android serial to terminate and launch', async () => {
   const calls: Array<{ operation: string; deviceId?: string }> = [];
+  const completions: boolean[] = [];
   const handler = createDeviceResetStateHandler(() => client(), {
     getSession: () => ({ platform: 'android', deviceId: SERIAL, appId: APP_ID }),
     terminateApp: async (_appId, _platform, deviceId) => {
@@ -103,6 +109,9 @@ test('GH-588 V4: lifecycle reset threads the matching active Android serial to t
     },
     launchApp: async (_appId, _platform, deviceId) => {
       calls.push({ operation: 'launch', deviceId });
+    },
+    completeNativeOrigin: async (_args, targetExpected) => {
+      completions.push(targetExpected);
     },
   });
 
@@ -120,6 +129,7 @@ test('GH-588 V4: lifecycle reset threads the matching active Android serial to t
     { operation: 'terminate', deviceId: SERIAL },
     { operation: 'launch', deviceId: SERIAL },
   ]);
+  assert.deepEqual(completions, [false]);
 });
 
 test('GH-588 V4: Android lifecycle argv binds adb to the exact serial or fails closed', () => {

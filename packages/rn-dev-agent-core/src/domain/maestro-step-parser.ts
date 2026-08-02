@@ -207,7 +207,7 @@ export function classifyExecError(err: unknown): ExecErrorClass {
   const e = err as { killed?: unknown; code?: unknown } | null;
   const killed = e?.killed === true;
   const overflow = e?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
-  return { timedOut: killed && !overflow, outputTruncated: overflow };
+  return { timedOut: (killed || e?.code === 'ETIMEDOUT') && !overflow, outputTruncated: overflow };
 }
 
 // Headline for a failed maestro_run, built from STRUCTURED data so it never

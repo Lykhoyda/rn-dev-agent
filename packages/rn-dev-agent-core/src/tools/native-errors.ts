@@ -98,19 +98,20 @@ function dedupeByMessage(entries: NativeError[]): NativeError[] {
 
 export interface ReadNativeErrorsOptions {
   platform?: string;
+  deviceId?: string;
   sinceSeconds?: number;
   limit?: number;
   runIOS?: () => Promise<string>;
   runAndroid?: () => Promise<string>;
 }
 
-async function defaultRunIOS(sinceSeconds: number): Promise<string> {
+async function defaultRunIOS(sinceSeconds: number, deviceId: string): Promise<string> {
   const { stdout } = await execFile(
     'xcrun',
     [
       'simctl',
       'spawn',
-      'booted',
+      deviceId,
       'log',
       'show',
       '--style',
@@ -123,13 +124,13 @@ async function defaultRunIOS(sinceSeconds: number): Promise<string> {
   return stdout;
 }
 
-async function defaultRunAndroid(sinceSeconds: number): Promise<string> {
+async function defaultRunAndroid(sinceSeconds: number, deviceId: string): Promise<string> {
   // adb logcat -d dumps recent buffer; -v time for parseable timestamps;
   // filter by severity (E/F) and cap via -t lines proxy for "last N seconds"
   // (logcat doesn't have an explicit "last Ns" flag; ~100 lines/s is a safe upper bound).
   const { stdout } = await execFile(
     'adb',
-    ['logcat', '-d', '-v', 'time', '-t', `${sinceSeconds * 100}`, '*:E'],
+    ['-s', deviceId, 'logcat', '-d', '-v', 'time', '-t', `${sinceSeconds * 100}`, '*:E'],
     { timeout: 10_000, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 },
   );
   return stdout;
@@ -152,11 +153,19 @@ export async function readNativeErrors(
   const platform = (opts.platform ?? 'ios').toLowerCase();
   const sinceSeconds = opts.sinceSeconds ?? 60;
   const limit = opts.limit ?? 10;
+  if (
+    !opts.deviceId &&
+    ((platform === 'android' && !opts.runAndroid) || (platform !== 'android' && !opts.runIOS))
+  ) {
+    throw new Error('DEVICE_AUTHORITY_MISMATCH: exact native log deviceId is required');
+  }
   const command = platform === 'android' ? 'adb logcat' : 'xcrun simctl spawn ... log show';
 
   try {
     if (platform === 'android') {
-      const out = await (opts.runAndroid ?? (() => defaultRunAndroid(sinceSeconds)))();
+      const out = await (
+        opts.runAndroid ?? (() => defaultRunAndroid(sinceSeconds, String(opts.deviceId)))
+      )();
       return {
         ok: true,
         entries: parseAndroidLog(out).slice(-limit),
@@ -165,7 +174,7 @@ export async function readNativeErrors(
         command,
       };
     }
-    const out = await (opts.runIOS ?? (() => defaultRunIOS(sinceSeconds)))();
+    const out = await (opts.runIOS ?? (() => defaultRunIOS(sinceSeconds, String(opts.deviceId))))();
     return {
       ok: true,
       entries: parseIOSLog(out).slice(-limit),
@@ -191,6 +200,7 @@ export async function readNativeErrors(
 export function createNativeErrorsHandler(getClient: () => CDPClient) {
   return async (args: {
     platform?: string;
+    deviceId?: string;
     sinceSeconds?: number;
     limit?: number;
   }): Promise<ToolResult> => {
@@ -201,6 +211,7 @@ export function createNativeErrorsHandler(getClient: () => CDPClient) {
     try {
       const result = await readNativeErrors({
         platform,
+        deviceId: args.deviceId,
         sinceSeconds: args.sinceSeconds,
         limit: args.limit,
       });

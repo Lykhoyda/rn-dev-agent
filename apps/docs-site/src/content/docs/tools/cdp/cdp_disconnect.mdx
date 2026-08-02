@@ -1,11 +1,11 @@
 ---
 title: "cdp_disconnect"
-description: "Cleanly disconnect from the current Hermes target"
+description: "Disconnect the authority-bound Hermes target and transactionally invalidate its bundle/target claim"
 sidebar:
   order: 2
 ---
 
-Cleanly disconnect from the current Hermes target. Closes WebSocket, stops auto-reconnect, and clears all state. A fresh connection can be established afterward via cdp_connect or cdp_status.
+Disconnect the authority-bound Hermes target and transactionally invalidate its bundle/target claim.
 
 This tool takes no parameters.
 
