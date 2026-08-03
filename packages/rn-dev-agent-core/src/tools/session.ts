@@ -46,7 +46,11 @@ import {
   stopBoundRunner,
 } from '../session/process-cleanup.js';
 import { deviceExistsOnHost } from '../session/device-existence.js';
-import { inspectAutomationDuty, recoverAutomationDuty } from '../session/managed-automation.js';
+import {
+  automationDutyStore,
+  inspectAutomationDuty,
+  recoverAutomationDuty,
+} from '../session/managed-automation.js';
 
 export interface SessionToolInput {
   action:
@@ -407,12 +411,18 @@ export function createSessionHandler(
             'recover_automation requires exact bound-device authority',
           );
         }
-        const recovered = await (dependencies.recoverAutomation ?? recoverAutomationDuty)({
+        const platform = device.platform as 'ios' | 'android';
+        const recoveryAuthority = {
           sessionId: status.sessionId,
           claimEpoch: status.claimEpoch,
-          platform: device.platform,
+          platform,
           deviceId: device.deviceId,
-        });
+        };
+        const recovered = dependencies.recoverAutomation
+          ? await dependencies.recoverAutomation(recoveryAuthority)
+          : await recoverAutomationDuty(recoveryAuthority, {
+              authorityStore: automationDutyStore(runtime),
+            });
         return okResult({ recovered, session: projectPublicAuthorityStatus(runtime.status()) });
       }
 
@@ -424,10 +434,11 @@ export function createSessionHandler(
         if (
           (device?.platform === 'ios' || device?.platform === 'android') &&
           typeof device.deviceId === 'string' &&
-          (dependencies.inspectAutomation ?? inspectAutomationDuty)(
-            device.platform,
-            device.deviceId,
-          )
+          (dependencies.inspectAutomation
+            ? dependencies.inspectAutomation(device.platform, device.deviceId)
+            : inspectAutomationDuty(device.platform, device.deviceId, {
+                authorityStore: automationDutyStore(runtime),
+              }))
         ) {
           throw new SessionAuthorityError(
             'AUTOMATION_CLEANUP_UNPROVEN',

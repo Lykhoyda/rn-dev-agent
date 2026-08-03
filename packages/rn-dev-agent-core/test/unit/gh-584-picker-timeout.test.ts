@@ -96,3 +96,16 @@ test('component attribution does not confuse day substrings with the year', asyn
   assert.equal(result.meta.failedAt, 'year');
   assert.equal(result.meta.failedValue, '2026');
 });
+
+test('component attribution consumes repeated selector values in execution order', async () => {
+  const handler = createDevicePickDateHandler(async () => ({
+    passed: false,
+    output: '    ✓ Tap on "June" (0.1s)\n    ✓ Tap on "2" (0.1s)\n    ✗ Tap on "2" (20.0s)',
+    flowFile: '/tmp/deleted.yaml',
+  }));
+  const result = envelope(await handler({ date: '0002-06-02', platform: 'ios' }));
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.meta.succeeded, ['month', 'day']);
+  assert.equal(result.meta.failedAt, 'year');
+  assert.equal(result.meta.failedValue, '2');
+});

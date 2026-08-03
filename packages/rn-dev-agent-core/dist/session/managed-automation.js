@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, unlinkSync } from 'node:fs';
 import { deleteStateFile, readJsonStateFile, runnerStatePath, writeJsonStateFileAtomic, } from '../util/secure-state-file.js';
 import { probeProcessBirth, readProcessBirth } from './process-birth.js';
+import { getWorkerAuthorityRuntime } from './runtime.js';
 const OUTPUT_LIMIT = 10 * 1024 * 1024;
 const TERM_GRACE_MS = 500;
 const ABSENCE_CONFIRM_MS = 2_000;
@@ -20,9 +21,71 @@ function rememberAutomationDuty(state) {
 function forgetAutomationDuty(platform, deviceId) {
     activeAutomationDuties.delete(automationDutyKey(platform, deviceId));
 }
-function currentAutomationDuty(platform, deviceId) {
+function currentAutomationDuty(platform, deviceId, authorityStore) {
     return (activeAutomationDuties.get(automationDutyKey(platform, deviceId)) ??
-        readPersistedAutomationState(platform, deviceId));
+        readPersistedAutomationState(platform, deviceId) ??
+        authorityStore?.read(platform, deviceId) ??
+        null);
+}
+function isAutomationDuty(value) {
+    if (!value || typeof value !== 'object')
+        return false;
+    const state = value;
+    if (state.schemaVersion !== 1 ||
+        (state.kind !== 'maestro-process-group' && state.kind !== 'maestro-cleanup-refusal') ||
+        typeof state.invocationId !== 'string' ||
+        typeof state.sessionId !== 'string' ||
+        !Number.isSafeInteger(state.claimEpoch) ||
+        (state.platform !== 'ios' && state.platform !== 'android') ||
+        typeof state.deviceId !== 'string' ||
+        typeof state.startedAt !== 'string' ||
+        typeof state.tool !== 'string') {
+        return false;
+    }
+    if (state.kind === 'maestro-cleanup-refusal')
+        return true;
+    const processState = value;
+    return (Number.isSafeInteger(processState.pid) &&
+        Number.isSafeInteger(processState.pgid) &&
+        typeof processState.processBirth === 'string' &&
+        Array.isArray(processState.attributedProcesses));
+}
+export function automationDutyStoreForSession(registry, session) {
+    return {
+        read(platform, deviceId) {
+            const status = registry.getSessionStatus(session.sessionId);
+            if (!status || status.claimEpoch !== session.claimEpoch)
+                return null;
+            const duty = status.bindings.automationDuty;
+            if (duty === null || duty === undefined)
+                return null;
+            if (!isAutomationDuty(duty) || duty.platform !== platform || duty.deviceId !== deviceId) {
+                throw new Error('AUTOMATION_CLEANUP_UNPROVEN: session automation duty is invalid');
+            }
+            return duty;
+        },
+        write(duty) {
+            registry.updateBindings(session, { bindings: { automationDuty: duty } });
+        },
+    };
+}
+export function automationDutyStore(runtime) {
+    const { registry, session } = runtime.requireAvailable();
+    return automationDutyStoreForSession(registry, session);
+}
+function defaultAutomationDutyStore(env) {
+    if (!env.RN_DEV_AGENT_REGISTRY_PATH ||
+        !env.RN_DEV_AGENT_WORKER_INSTANCE ||
+        !env.RN_DEV_AGENT_SESSION_ID ||
+        !env.RN_DEV_AGENT_CLAIM_EPOCH) {
+        return null;
+    }
+    return automationDutyStore(getWorkerAuthorityRuntime());
+}
+function clearAutomationDuty(platform, deviceId, authorityStore) {
+    authorityStore?.write(null);
+    forgetAutomationDuty(platform, deviceId);
+    deleteStateFile(automationStatePath(platform, deviceId));
 }
 function observeChildTerminal(child, timeoutMs) {
     let stop = () => { };
@@ -158,6 +221,40 @@ export async function spawnManagedProcessGroup(bin, args, options, dependencies 
     const listProcesses = dependencies.listProcesses ?? defaultListProcesses;
     const writeState = dependencies.writeState ?? writeJsonStateFileAtomic;
     const env = options.env ?? process.env;
+    const authorityStore = dependencies.authorityStore !== undefined
+        ? dependencies.authorityStore
+        : defaultAutomationDutyStore(env);
+    const authority = currentSessionAuthority(env);
+    const invocationId = randomUUID();
+    let refusalDuty;
+    if (authority && options.deviceId && authorityStore) {
+        refusalDuty = {
+            schemaVersion: 1,
+            kind: 'maestro-cleanup-refusal',
+            invocationId,
+            sessionId: authority.sessionId,
+            claimEpoch: authority.claimEpoch,
+            platform: options.platform,
+            deviceId: options.deviceId,
+            startedAt: new Date().toISOString(),
+            tool: options.tool,
+        };
+        try {
+            authorityStore.write(refusalDuty);
+        }
+        catch (error) {
+            return {
+                stdout: '',
+                stderr: '',
+                code: null,
+                signal: null,
+                timedOut: false,
+                cleanupProven: true,
+                cleanupEscalated: false,
+                error: `Failed to establish managed automation authority: ${error instanceof Error ? error.message : String(error)}`,
+            };
+        }
+    }
     const baseline = new Set();
     if (options.deviceId) {
         try {
@@ -179,6 +276,8 @@ export async function spawnManagedProcessGroup(bin, args, options, dependencies 
         });
     }
     catch (error) {
+        if (refusalDuty)
+            clearAutomationDuty(options.platform, refusalDuty.deviceId, authorityStore);
         return {
             stdout: '',
             stderr: '',
@@ -194,6 +293,8 @@ export async function spawnManagedProcessGroup(bin, args, options, dependencies 
     const pid = child.pid;
     if (!pid) {
         const terminal = await terminalObserver.result;
+        if (refusalDuty)
+            clearAutomationDuty(options.platform, refusalDuty.deviceId, authorityStore);
         return {
             stdout: '',
             stderr: '',
@@ -205,7 +306,6 @@ export async function spawnManagedProcessGroup(bin, args, options, dependencies 
             error: terminal.error ?? 'Managed automation process did not expose a PID',
         };
     }
-    const authority = currentSessionAuthority(env);
     const birth = readBirth(pid);
     const statePath = options.deviceId
         ? automationStatePath(options.platform, options.deviceId)
@@ -214,6 +314,9 @@ export async function spawnManagedProcessGroup(bin, args, options, dependencies 
     if (authority && options.deviceId && !birth) {
         const cleanup = await terminateProcessGroup(pid, signalGroup, delay);
         terminalObserver.stop();
+        if (cleanup.presence === 'absent') {
+            clearAutomationDuty(options.platform, options.deviceId, authorityStore);
+        }
         return {
             stdout: '',
             stderr: '',
@@ -229,7 +332,7 @@ export async function spawnManagedProcessGroup(bin, args, options, dependencies 
         state = {
             schemaVersion: 1,
             kind: 'maestro-process-group',
-            invocationId: randomUUID(),
+            invocationId,
             sessionId: authority.sessionId,
             claimEpoch: authority.claimEpoch,
             platform: options.platform,
@@ -242,15 +345,25 @@ export async function spawnManagedProcessGroup(bin, args, options, dependencies 
             attributedProcesses: [],
         };
         rememberAutomationDuty(state);
+        let persistenceError;
+        if (authorityStore) {
+            try {
+                authorityStore.write(state);
+            }
+            catch (error) {
+                persistenceError = error;
+            }
+        }
         try {
             writeState(statePath, state);
         }
         catch (error) {
+            persistenceError ??= error;
             const cleanup = await terminateProcessGroup(pid, signalGroup, delay);
             const cleanupProven = cleanup.presence === 'absent';
             terminalObserver.stop();
             if (cleanupProven)
-                forgetAutomationDuty(options.platform, options.deviceId);
+                clearAutomationDuty(options.platform, options.deviceId, authorityStore);
             return {
                 stdout: '',
                 stderr: '',
@@ -260,7 +373,7 @@ export async function spawnManagedProcessGroup(bin, args, options, dependencies 
                 cleanupProven,
                 cleanupEscalated: cleanup.escalated,
                 error: cleanupProven
-                    ? `Failed to persist managed automation state: ${error instanceof Error ? error.message : String(error)}`
+                    ? `Failed to persist managed automation state: ${persistenceError instanceof Error ? persistenceError.message : String(persistenceError)}`
                     : 'AUTOMATION_CLEANUP_UNPROVEN: managed automation state could not be persisted and process-group absence could not be confirmed',
             };
         }
@@ -325,11 +438,11 @@ export async function spawnManagedProcessGroup(bin, args, options, dependencies 
         }
         state.attributedProcesses = attributed;
         rememberAutomationDuty(state);
+        authorityStore?.write(state);
         writeState(statePath, state);
     }
     if (cleanupProven && statePath && options.deviceId) {
-        forgetAutomationDuty(options.platform, options.deviceId);
-        deleteStateFile(statePath);
+        clearAutomationDuty(options.platform, options.deviceId, authorityStore);
     }
     return {
         stdout: Buffer.concat(stdout).toString('utf8'),
@@ -348,13 +461,18 @@ export async function spawnManagedProcessGroup(bin, args, options, dependencies 
 }
 export function inspectAutomationDuty(platform, deviceId, dependencies = {}) {
     const path = automationStatePath(platform, deviceId);
-    const state = currentAutomationDuty(platform, deviceId);
+    const authorityStore = dependencies.authorityStore !== undefined
+        ? dependencies.authorityStore
+        : defaultAutomationDutyStore(process.env);
+    const state = currentAutomationDuty(platform, deviceId, authorityStore);
     if (!state) {
         if (existsSync(path)) {
             throw new Error('AUTOMATION_CLEANUP_UNPROVEN: persisted automation state is invalid');
         }
         return null;
     }
+    if (state.kind === 'maestro-cleanup-refusal')
+        return state;
     const signalGroup = dependencies.signalGroup ??
         ((pgid, signal) => {
             if (process.platform === 'win32')
@@ -364,20 +482,23 @@ export function inspectAutomationDuty(platform, deviceId, dependencies = {}) {
         });
     const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
     const group = groupPresence(state.pgid, signalGroup);
-    const descendantsPresent = state.attributedProcesses.some((owned) => {
+    const descendantsAbsent = state.attributedProcesses.every((owned) => {
         const observed = probeBirth(owned.pid);
-        return observed.status === 'present' && observed.birth.token === owned.processBirth;
+        return (observed.status === 'absent' ||
+            (observed.status === 'present' && observed.birth.token !== owned.processBirth));
     });
-    if (group === 'absent' && !descendantsPresent) {
-        forgetAutomationDuty(platform, deviceId);
-        deleteStateFile(automationStatePath(platform, deviceId));
+    if (group === 'absent' && descendantsAbsent) {
+        clearAutomationDuty(platform, deviceId, authorityStore);
         return null;
     }
     return state;
 }
 export async function recoverAutomationDuty(authority, dependencies = {}) {
     const path = automationStatePath(authority.platform, authority.deviceId);
-    const state = currentAutomationDuty(authority.platform, authority.deviceId);
+    const authorityStore = dependencies.authorityStore !== undefined
+        ? dependencies.authorityStore
+        : defaultAutomationDutyStore(process.env);
+    const state = currentAutomationDuty(authority.platform, authority.deviceId, authorityStore);
     if (!state) {
         if (existsSync(path)) {
             throw new Error('AUTOMATION_CLEANUP_UNPROVEN: persisted automation state is invalid');
@@ -386,6 +507,9 @@ export async function recoverAutomationDuty(authority, dependencies = {}) {
     }
     if (state.sessionId !== authority.sessionId || state.claimEpoch !== authority.claimEpoch) {
         throw new Error('AUTOMATION_CLEANUP_UNPROVEN: persisted automation belongs to another session epoch');
+    }
+    if (state.kind === 'maestro-cleanup-refusal') {
+        throw new Error('AUTOMATION_CLEANUP_UNPROVEN: cleanup is fenced without PID-birth recovery authority');
     }
     const delay = dependencies.sleep ?? sleep;
     const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
@@ -396,6 +520,8 @@ export async function recoverAutomationDuty(authority, dependencies = {}) {
             else
                 process.kill(-pgid, signal);
         });
+    const signalProcess = dependencies.signalProcess ?? process.kill;
+    let escalated = false;
     let presence = groupPresence(state.pgid, signalGroup);
     const leader = probeBirth(state.pid);
     if (presence === 'present') {
@@ -407,7 +533,6 @@ export async function recoverAutomationDuty(authority, dependencies = {}) {
         }
         catch { }
         presence = await waitForGroupAbsence(state.pgid, signalGroup, delay, TERM_GRACE_MS);
-        let escalated = false;
         if (presence === 'present') {
             escalated = true;
             try {
@@ -419,14 +544,10 @@ export async function recoverAutomationDuty(authority, dependencies = {}) {
         if (presence !== 'absent') {
             throw new Error('AUTOMATION_CLEANUP_UNPROVEN: process-group absence could not be confirmed');
         }
-        forgetAutomationDuty(authority.platform, authority.deviceId);
-        deleteStateFile(automationStatePath(authority.platform, authority.deviceId));
-        return { recovered: true, invocationId: state.invocationId, escalated };
     }
     if (presence === 'unknown') {
         throw new Error('AUTOMATION_CLEANUP_UNPROVEN: process-group presence is unknown');
     }
-    let escalated = false;
     for (const owned of state.attributedProcesses) {
         const observed = probeBirth(owned.pid);
         if (observed.status === 'unknown') {
@@ -438,7 +559,7 @@ export async function recoverAutomationDuty(authority, dependencies = {}) {
             throw new Error('AUTOMATION_CLEANUP_UNPROVEN: attributed PID birth changed; refusing cleanup');
         }
         try {
-            process.kill(owned.pid, 'SIGTERM');
+            signalProcess(owned.pid, 'SIGTERM');
         }
         catch { }
         await delay(TERM_GRACE_MS);
@@ -446,7 +567,7 @@ export async function recoverAutomationDuty(authority, dependencies = {}) {
         if (afterTerm.status === 'present' && afterTerm.birth.token === owned.processBirth) {
             escalated = true;
             try {
-                process.kill(owned.pid, 'SIGKILL');
+                signalProcess(owned.pid, 'SIGKILL');
             }
             catch { }
             await delay(50);
@@ -457,8 +578,7 @@ export async function recoverAutomationDuty(authority, dependencies = {}) {
             throw new Error('AUTOMATION_CLEANUP_UNPROVEN: attributed process absence could not be confirmed');
         }
     }
-    forgetAutomationDuty(authority.platform, authority.deviceId);
-    deleteStateFile(automationStatePath(authority.platform, authority.deviceId));
+    clearAutomationDuty(authority.platform, authority.deviceId, authorityStore);
     return { recovered: true, invocationId: state.invocationId, escalated };
 }
 export function removeTemporaryInlineFlow(path) {

@@ -14,7 +14,7 @@ import { inspectManagedMetroCleanupEvidence, inspectManagedMetroLifecycle, probe
 import { arbiter } from '../lifecycle/device-arbiter.js';
 import { stopBoundObserve, stopBoundRecorder, stopBoundRunner, } from '../session/process-cleanup.js';
 import { deviceExistsOnHost } from '../session/device-existence.js';
-import { inspectAutomationDuty, recoverAutomationDuty } from '../session/managed-automation.js';
+import { automationDutyStore, inspectAutomationDuty, recoverAutomationDuty, } from '../session/managed-automation.js';
 function sameMetroAuthority(current, next) {
     return (current?.port === next.port &&
         current.pid === next.pid &&
@@ -205,12 +205,18 @@ export function createSessionHandler(runtime, dependencies = {}) {
                     typeof device.deviceId !== 'string') {
                     throw new SessionAuthorityError('AUTOMATION_CLEANUP_UNPROVEN', 'recover_automation requires exact bound-device authority');
                 }
-                const recovered = await (dependencies.recoverAutomation ?? recoverAutomationDuty)({
+                const platform = device.platform;
+                const recoveryAuthority = {
                     sessionId: status.sessionId,
                     claimEpoch: status.claimEpoch,
-                    platform: device.platform,
+                    platform,
                     deviceId: device.deviceId,
-                });
+                };
+                const recovered = dependencies.recoverAutomation
+                    ? await dependencies.recoverAutomation(recoveryAuthority)
+                    : await recoverAutomationDuty(recoveryAuthority, {
+                        authorityStore: automationDutyStore(runtime),
+                    });
                 return okResult({ recovered, session: projectPublicAuthorityStatus(runtime.status()) });
             }
             const currentStatus = runtime.status();
@@ -218,7 +224,11 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 const device = currentStatus.bindings.device;
                 if ((device?.platform === 'ios' || device?.platform === 'android') &&
                     typeof device.deviceId === 'string' &&
-                    (dependencies.inspectAutomation ?? inspectAutomationDuty)(device.platform, device.deviceId)) {
+                    (dependencies.inspectAutomation
+                        ? dependencies.inspectAutomation(device.platform, device.deviceId)
+                        : inspectAutomationDuty(device.platform, device.deviceId, {
+                            authorityStore: automationDutyStore(runtime),
+                        }))) {
                     throw new SessionAuthorityError('AUTOMATION_CLEANUP_UNPROVEN', 'plugin-owned automation cleanup is unproven; run recover_automation with confirmed=true before session transitions');
                 }
             }
