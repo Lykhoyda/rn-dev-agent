@@ -264,13 +264,7 @@ export async function spawnManagedProcessGroup(
     try {
       signalGroup(pid, 'SIGTERM');
     } catch {}
-    presence = await waitForGroupAbsence(
-      pid,
-      signalGroup,
-      groupLiveness,
-      delay,
-      TERM_GRACE_MS,
-    );
+    presence = await waitForGroupAbsence(pid, signalGroup, groupLiveness, delay, TERM_GRACE_MS);
     if (presence === 'present') {
       cleanupEscalated = true;
       try {

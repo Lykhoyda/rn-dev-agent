@@ -14845,7 +14845,7 @@ var init_public_diagnostics = __esm({
     "use strict";
     init_registry();
     DEVICE_ID_RE = /\b[0-9A-F]{8}(?:-[0-9A-F]{4}){3}-[0-9A-F]{12}\b/gi;
-    POSIX_PATH_RE = /(?<![\w:])\/(?!\/)[^\n\r'"`<>|]*?(?=:\s|[,;)\]}](?:\s|$)|\s+[A-Za-z][\w-]*=|$)/g;
+    POSIX_PATH_RE = /(?<![\w:])\/(?!\/)[^\n\r'"`<>|]*?(?=['"`]|:\s|[,;)\]}](?:\s|$)|\s+[A-Za-z][\w-]*=|$)/g;
     MAX_PUBLIC_DIAGNOSTIC = 2e3;
   }
 });

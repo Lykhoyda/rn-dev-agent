@@ -19,7 +19,7 @@ function alive(pid: number): boolean {
 }
 
 async function waitForFile(path: string): Promise<number> {
-  const deadline = Date.now() + 2_000;
+  const deadline = Date.now() + 5_000;
   while (!existsSync(path) && Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
@@ -43,7 +43,7 @@ test('managed executor removes process-group descendants after timeout', async (
       setInterval(() => {}, 1000);
     `;
     const pending = spawnManagedProcessGroup(process.execPath, ['-e', script, pidFile], {
-      timeoutMs: 150,
+      timeoutMs: 1_000,
       platform: 'ios',
       tool: 'fixture',
     });

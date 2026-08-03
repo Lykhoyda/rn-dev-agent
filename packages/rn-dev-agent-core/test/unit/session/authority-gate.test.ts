@@ -357,6 +357,46 @@ test('inline Maestro parking tolerates its own authenticated controller generati
   assert.equal(status.bindings.runner, null);
 });
 
+test('inline Maestro parking still rejects an external controller generation advance', async () => {
+  const { runtime, registry, status } = fixture();
+  status.bindings.runner = {
+    platform: 'ios',
+    deviceId: 'device',
+    port: 9100,
+    instanceId: 'runner',
+  };
+  registry.replaceBindingsDuringOperation = (operation, input) => {
+    status.bindings = { ...status.bindings, ...input.bindings };
+    status.authorityVersion += 1;
+    return { ...operation, authorityVersion: status.authorityVersion };
+  };
+  registry.verifyOperation = (operation) => {
+    if (operation.authorityVersion !== status.authorityVersion) {
+      throw new SessionAuthorityError(
+        'AUTHORITY_LOST_DURING_OPERATION',
+        'an external controller generation replaced the active operation fence',
+      );
+    }
+  };
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => ({
+      axis,
+      identity: axis === 'C' ? `controller-v${status.authorityVersion}` : `${axis}-identity`,
+    }),
+  });
+
+  const result = await gate.wrap('device_pick_date', async (args) => {
+    await completeManagedRunnerParkAuthority(args);
+    status.authorityVersion += 1;
+    return okResult({ picked: true });
+  })({ date: '1990-06-15', platform: 'ios' });
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, false);
+  assert.equal(envelope.code, 'AUTHORITY_LOST_DURING_OPERATION');
+  assert.equal(envelope.data, undefined);
+});
+
 test('nested action replay can park runner authority without stranding a stale R binding', async () => {
   const { runtime, registry, status, calls } = fixture();
   const released: Array<Record<string, unknown>> = [];
