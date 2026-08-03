@@ -69,6 +69,18 @@ export function automationDutyStoreForSession(registry, session) {
         },
     };
 }
+export function automationDutyStoreForClosingSession(registry, session) {
+    const readable = automationDutyStoreForSession(registry, session);
+    return {
+        read: readable.read,
+        write(duty) {
+            if (duty !== null) {
+                throw new Error('AUTOMATION_CLEANUP_UNPROVEN: closing session cannot replace its duty');
+            }
+            registry.clearAutomationDutyDuringClose(session);
+        },
+    };
+}
 export function automationDutyStore(runtime) {
     const { registry, session } = runtime.requireAvailable();
     return automationDutyStoreForSession(registry, session);
@@ -438,8 +450,32 @@ export async function spawnManagedProcessGroup(bin, args, options, dependencies 
         }
         state.attributedProcesses = attributed;
         rememberAutomationDuty(state);
-        authorityStore?.write(state);
-        writeState(statePath, state);
+        let authorityUpdated = false;
+        let stateFileUpdated = false;
+        if (authorityStore) {
+            try {
+                authorityStore.write(state);
+                authorityUpdated = true;
+            }
+            catch { }
+        }
+        try {
+            writeState(statePath, state);
+            stateFileUpdated = true;
+        }
+        catch { }
+        if (!stateFileUpdated && (!authorityStore || !authorityUpdated)) {
+            return {
+                stdout: Buffer.concat(stdout).toString('utf8'),
+                stderr: Buffer.concat(stderr).toString('utf8'),
+                code: terminal.code,
+                signal: terminal.signal,
+                timedOut: terminal.timedOut,
+                cleanupProven: false,
+                cleanupEscalated,
+                error: 'AUTOMATION_CLEANUP_UNPROVEN: residual automation attribution could not be persisted',
+            };
+        }
     }
     if (cleanupProven && statePath && options.deviceId) {
         clearAutomationDuty(options.platform, options.deviceId, authorityStore);

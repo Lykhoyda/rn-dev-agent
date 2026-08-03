@@ -132,11 +132,21 @@ export function createDevicePickDateHandler(invoke = runMaestroInline) {
         let failed = components[0];
         let nextStepIndex = 0;
         for (const component of components) {
-            const relativeIndex = summary.steps
-                .slice(nextStepIndex)
-                .findIndex((step) => stepTargetsValue(step.name, component.value));
-            const observedIndex = relativeIndex < 0 ? -1 : nextStepIndex + relativeIndex;
-            const observed = observedIndex < 0 ? undefined : summary.steps[observedIndex];
+            let observedIndex = summary.steps.findIndex((step, index) => index >= nextStepIndex && stepTargetsValue(step.name, component.value));
+            let observed = observedIndex < 0 ? undefined : summary.steps[observedIndex];
+            while (observed?.status === 'fail') {
+                const retryIndex = summary.steps.findIndex((step, index) => index > observedIndex && stepTargetsValue(step.name, component.value));
+                if (retryIndex < 0)
+                    break;
+                const interveningComponent = summary.steps
+                    .slice(observedIndex + 1, retryIndex)
+                    .some((step) => components.some((candidate) => candidate.value !== component.value &&
+                    stepTargetsValue(step.name, candidate.value)));
+                if (interveningComponent)
+                    break;
+                observedIndex = retryIndex;
+                observed = summary.steps[observedIndex];
+            }
             if (observed?.status !== 'pass') {
                 failed = component;
                 break;

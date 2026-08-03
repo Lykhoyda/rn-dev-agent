@@ -689,3 +689,63 @@ test('supervisor close recovers authenticated automation before releasing the se
     },
   ]);
 });
+
+test('supervisor close clears a proven-absent durable automation duty', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'rn-supervisor-automation-close-'));
+  roots.push(stateDir);
+  const priorStateHome = process.env.XDG_STATE_HOME;
+  process.env.XDG_STATE_HOME = stateDir;
+  const authority = createSupervisorAuthority({
+    stateDir,
+    source: {
+      kind: 'git',
+      contentRoot: '/repo',
+      appRoot: '/repo',
+      sourceKey: 'source-key',
+      worktreeKey: 'worktree-key',
+      appRootKey: 'app-key',
+      head: 'abc123',
+    },
+    supervisorBirth: { pid: 101, source: 'linux-proc', token: 'supervisor-birth' },
+    uid: '501',
+    startHeartbeat: false,
+    ownerStatus: () => 'match',
+  });
+  authority.registry.updateBindings(authority.session, {
+    state: 'device_bound',
+    bindings: {
+      device: { platform: 'ios', deviceId: 'UDID-CLOSE', appId: 'com.example' },
+      automationDuty: {
+        schemaVersion: 1,
+        kind: 'maestro-process-group',
+        invocationId: 'invocation-close',
+        sessionId: authority.session.sessionId,
+        claimEpoch: authority.session.claimEpoch,
+        platform: 'ios',
+        deviceId: 'UDID-CLOSE',
+        pid: 2_000_000_000,
+        pgid: 2_000_000_000,
+        processBirth: 'absent-birth',
+        startedAt: new Date().toISOString(),
+        tool: 'device_pick_date',
+        attributedProcesses: [],
+      },
+    },
+  });
+  try {
+    await authority.close();
+    const registry = openSessionRegistry(authority.layout.registry, {
+      ownerStatus: () => 'match',
+    });
+    try {
+      const status = registry.getSessionStatus(authority.session.sessionId);
+      assert.equal(status?.state, 'released');
+      assert.equal(status?.bindings.automationDuty, null);
+    } finally {
+      registry.close();
+    }
+  } finally {
+    if (priorStateHome === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = priorStateHome;
+  }
+});

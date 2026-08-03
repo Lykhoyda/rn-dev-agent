@@ -3,7 +3,7 @@ import { stopBoundObserve, stopBoundRecorder, stopBoundRunner } from './process-
 import { openSessionRegistry } from './registry.js';
 import { ensureSharedKnowledgeRoot } from './shared-knowledge-root.js';
 import { stopManagedMetro } from './managed-metro.js';
-import { automationDutyStoreForSession, inspectAutomationDuty, recoverAutomationDuty, } from './managed-automation.js';
+import { automationDutyStoreForClosingSession, inspectAutomationDuty, recoverAutomationDuty, } from './managed-automation.js';
 import { createAuthorityStateLayout, sessionRuntimeDirectory, writeSessionPublicReceipt, writeSessionSecret, } from './state-root.js';
 const RELEASABLE_SESSION_STATES = new Set([
     'active',
@@ -178,7 +178,7 @@ export function createSupervisorAuthority(input, dependencies = {}) {
                     if ((device?.platform === 'ios' || device?.platform === 'android') &&
                         typeof device.deviceId === 'string') {
                         const platform = device.platform;
-                        const authorityStore = automationDutyStoreForSession(registry, session);
+                        const authorityStore = automationDutyStoreForClosingSession(registry, session);
                         const duty = dependencies.inspectAutomation
                             ? dependencies.inspectAutomation(platform, device.deviceId)
                             : inspectAutomationDuty(platform, device.deviceId, { authorityStore });

@@ -13450,6 +13450,20 @@ var init_registry = __esm({
         }
         return status;
       }
+      clearAutomationDutyDuringClose(session) {
+        const now = this.#now();
+        this.#transaction(() => {
+          const row = asSession(this.#database.prepare("SELECT state, claim_epoch, bindings_json FROM sessions WHERE session_id = ?").get(session.sessionId));
+          if (!row || row.state !== "closing" || row.claim_epoch !== session.claimEpoch) {
+            throw new SessionAuthorityError("SESSION_OWNER_LOST", "only the unchanged closing session may clear its automation duty");
+          }
+          const bindings = JSON.parse(String(row.bindings_json));
+          bindings.automationDuty = null;
+          this.#database.prepare(`UPDATE sessions
+           SET bindings_json = ?, authority_version = authority_version + 1, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ? AND state = 'closing'`).run(JSON.stringify(bindings), now, session.sessionId, session.claimEpoch);
+        });
+      }
       completeSessionClose(session) {
         const now = this.#now();
         this.#transaction(() => {
@@ -19563,6 +19577,18 @@ function automationDutyStoreForSession(registry2, session) {
     }
   };
 }
+function automationDutyStoreForClosingSession(registry2, session) {
+  const readable = automationDutyStoreForSession(registry2, session);
+  return {
+    read: readable.read,
+    write(duty) {
+      if (duty !== null) {
+        throw new Error("AUTOMATION_CLEANUP_UNPROVEN: closing session cannot replace its duty");
+      }
+      registry2.clearAutomationDutyDuringClose(session);
+    }
+  };
+}
 function automationDutyStore(runtime) {
   const { registry: registry2, session } = runtime.requireAvailable();
   return automationDutyStoreForSession(registry2, session);
@@ -19885,8 +19911,32 @@ async function spawnManagedProcessGroup(bin, args, options, dependencies = {}) {
     }
     state.attributedProcesses = attributed;
     rememberAutomationDuty(state);
-    authorityStore?.write(state);
-    writeState(statePath, state);
+    let authorityUpdated = false;
+    let stateFileUpdated = false;
+    if (authorityStore) {
+      try {
+        authorityStore.write(state);
+        authorityUpdated = true;
+      } catch {
+      }
+    }
+    try {
+      writeState(statePath, state);
+      stateFileUpdated = true;
+    } catch {
+    }
+    if (!stateFileUpdated && (!authorityStore || !authorityUpdated)) {
+      return {
+        stdout: Buffer.concat(stdout).toString("utf8"),
+        stderr: Buffer.concat(stderr).toString("utf8"),
+        code: terminal.code,
+        signal: terminal.signal,
+        timedOut: terminal.timedOut,
+        cleanupProven: false,
+        cleanupEscalated,
+        error: "AUTOMATION_CLEANUP_UNPROVEN: residual automation attribution could not be persisted"
+      };
+    }
   }
   if (cleanupProven && statePath && options.deviceId) {
     clearAutomationDuty(options.platform, options.deviceId, authorityStore);
@@ -77119,9 +77169,18 @@ function createDevicePickDateHandler(invoke = runMaestroInline) {
     let failed = components[0];
     let nextStepIndex = 0;
     for (const component of components) {
-      const relativeIndex = summary.steps.slice(nextStepIndex).findIndex((step) => stepTargetsValue(step.name, component.value));
-      const observedIndex = relativeIndex < 0 ? -1 : nextStepIndex + relativeIndex;
-      const observed = observedIndex < 0 ? void 0 : summary.steps[observedIndex];
+      let observedIndex = summary.steps.findIndex((step, index) => index >= nextStepIndex && stepTargetsValue(step.name, component.value));
+      let observed = observedIndex < 0 ? void 0 : summary.steps[observedIndex];
+      while (observed?.status === "fail") {
+        const retryIndex = summary.steps.findIndex((step, index) => index > observedIndex && stepTargetsValue(step.name, component.value));
+        if (retryIndex < 0)
+          break;
+        const interveningComponent = summary.steps.slice(observedIndex + 1, retryIndex).some((step) => components.some((candidate) => candidate.value !== component.value && stepTargetsValue(step.name, candidate.value)));
+        if (interveningComponent)
+          break;
+        observedIndex = retryIndex;
+        observed = summary.steps[observedIndex];
+      }
       if (observed?.status !== "pass") {
         failed = component;
         break;
@@ -84410,7 +84469,7 @@ function createSupervisorAuthority(input, dependencies = {}) {
           const device = status.bindings.device;
           if ((device?.platform === "ios" || device?.platform === "android") && typeof device.deviceId === "string") {
             const platform = device.platform;
-            const authorityStore = automationDutyStoreForSession(registry2, session);
+            const authorityStore = automationDutyStoreForClosingSession(registry2, session);
             const duty = dependencies.inspectAutomation ? dependencies.inspectAutomation(platform, device.deviceId) : inspectAutomationDuty(platform, device.deviceId, { authorityStore });
             if (duty) {
               const recoveryAuthority = {
