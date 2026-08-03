@@ -1,5 +1,13 @@
 # rn-dev-agent-plugin
 
+## 0.71.1
+
+### Patch Changes
+
+- 7937883: Coalesce helper setup and reinjection per execution world, require the exact helper version, and report bounded truthful helper-health evidence.
+- Updated dependencies [7937883]
+  - rn-dev-agent-core@0.66.1
+
 ## 0.71.0
 
 ### Minor Changes
