@@ -179,11 +179,10 @@ export function findResumeAnchor(
     : { found: true, index: scan.hits[0].index };
 }
 
+// GH #580: resumed suffixes report source indices, not suffix-relative indices.
 export async function replayFlow(
   steps: ReplayStep[],
   dispatch: ReplayDispatch,
-  // GH #580: a resumed suffix reports SOURCE step indices, not suffix-relative
-  // ones, so TRANSPORT_BLIND messages and failedStepIndex stay honest.
   opts: { indexOffset?: number; sourceIndex?: number } = {},
 ): Promise<ReplayResult> {
   const offset = opts.indexOffset ?? 0;

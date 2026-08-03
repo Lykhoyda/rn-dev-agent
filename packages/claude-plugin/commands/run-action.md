@@ -155,7 +155,7 @@ Example calls:
      diff .rn-agent/actions/<id>.yaml` to inspect.
    - **`outcome === 'failed'`**: post-repair retry still failed —
      `meta.underlyingFailure` carries the exact failure;
-     `data.retryOutput` has the trailing maestro output for deeper
+     `data.retryOutput` has bounded head-and-tail Maestro output for deeper
      diagnosis.
    - **`outcome === 'refused'`** with `refusedReason`: auto-repair declined
      (user disabled, file edited since load, repair budget exhausted, or

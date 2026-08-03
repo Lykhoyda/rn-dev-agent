@@ -109,8 +109,7 @@ const PATTERNS: Pattern[] = [
 const RUNNER_STEP_RE = /^[ \t]+([✓✗])\s+(\S.*\S|\S)\s*\(([\d.]+)s\)\s*$/;
 const REASON_LINE_RE = /^[ \t]+╰─\s+/;
 const ID_WAIT_STEP_RE = /^extendedWaitUntil:\s+visible\s+id=(['"])((?:(?!\1).)+)\1$/i;
-const ID_WAIT_REASON_RE =
-  /^[ \t]+╰─\s+Element (['"])#((?:(?!\1).)+)\1 not visible within\b/i;
+const ID_WAIT_REASON_RE = /^[ \t]+╰─\s+Element (['"])#((?:(?!\1).)+)\1 not visible within\b/i;
 
 function parseTerminalIdWait(
   output: string,
