@@ -1,7 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import type { CDPClient } from '../cdp-client.js';
 import { runNative, getActiveSession } from '../agent-device-wrapper.js';
@@ -14,6 +14,7 @@ import { foreignFlowGate } from '../lifecycle/foreign-flow-gate.js';
 import { pathHasTraversal } from '../domain/path-safety.js';
 import { parseAdbDevicesSerials } from '../runners/rn-android-runner-client.js';
 import { extractScreenshotPath, recorder } from '../observability/recorder.js';
+import { publicLocalPath, sanitizePublicDiagnostic } from '../util/public-diagnostics.js';
 
 // ── screenshot test seam (used by captureAndResizeScreenshot tests) ────────────
 type RunAgentDeviceFn = typeof runNative;
@@ -128,7 +129,11 @@ export function deriveScreenshotPath(
       `Screenshot path "${args.path}" starts with '~' which the bridge cannot expand (only a leading '~/' is expanded to the home directory). Pass an absolute path instead.`,
     );
   }
-  if (args.path) return args.path;
+  // simctl delegates the write to CoreSimulator, whose service resolves a
+  // relative path against `/` rather than this bridge's cwd. Normalize every
+  // caller-relative destination before dispatch so iOS and host-side paths
+  // address the same file.
+  if (args.path) return resolve(args.path);
   const ext = args.format === 'jpeg' ? 'jpg' : args.format === 'png' ? 'png' : 'jpg';
   // Add a short random suffix so two parallel calls in the same ms can't
   // clobber each other's output. deepsec MEDIUM: predictable /tmp files
@@ -357,10 +362,12 @@ export async function captureAndResizeScreenshot(args: ScreenshotArgs): Promise<
   // target path must never be diagnosed as a device-state problem.
   const targetDir = ensureScreenshotDir(requestedPath);
   if (!targetDir.ok) {
+    const publicPath = publicLocalPath(requestedPath);
+    const publicError = sanitizePublicDiagnostic(targetDir.error);
     return failResult(
-      `device_screenshot: target directory for "${requestedPath}" does not exist and could not be created (${targetDir.error}). The device is not at fault — fix the output path and retry.`,
+      `device_screenshot: target directory for "${publicPath}" does not exist and could not be created (${publicError}). The device is not at fault — fix the output path and retry.`,
       'SCREENSHOT_FAILED',
-      { reason: 'target-dir-unavailable', path: requestedPath },
+      { reason: 'target-dir-unavailable', path: publicPath },
     );
   }
   // GH #136 PR-B: when `platform:` is explicit, hard-fail instead of falling
@@ -382,16 +389,21 @@ export async function captureAndResizeScreenshot(args: ScreenshotArgs): Promise<
       },
     ],
   });
-  const rawResultFail = (platform: 'ios' | 'android', reason: string): ToolResult => {
+  const rawResultFail = (
+    platform: 'ios' | 'android',
+    raw: { reason: string; capture?: unknown },
+  ): ToolResult => {
     const cli = platform === 'ios' ? 'xcrun simctl' : 'adb';
     const hint =
-      reason === 'no-device'
-        ? `No booted ${platform === 'ios' ? 'iOS Simulator' : 'Android emulator'} was unambiguously resolvable by ${cli} — none booted, or several booted with no open device session. Boot exactly one, or open a session (device_snapshot action=open) to bind the target; if your emulator is 'offline'/'unauthorized', restart it.`
-        : `Capture command failed (${cli}). The device may be transitioning state (booting, OOM, locked). Retry once it stabilizes.`;
+      raw.reason === 'no-device'
+        ? `No booted ${platform === 'ios' ? 'iOS Simulator' : 'Android emulator'} was unambiguously resolvable by ${cli} — none booted, or several booted with no open device session. Boot exactly one, or open a session (device_snapshot action=open) to bind the target.`
+        : raw.capture
+          ? `The exact authority-bound ${cli} capture failed; inspect the structured exit/signal/timeout and sanitized stderr evidence below. No other device was tried.`
+          : `The exact ${cli} capture failed without backend evidence. No other device was tried.`;
     return failResult(
       `device_screenshot platform=${platform} failed: ${hint}`,
       'SCREENSHOT_FAILED',
-      { platform, reason },
+      { platform, reason: raw.reason, ...(raw.capture ? { capture: raw.capture } : {}) },
     );
   };
 
@@ -428,7 +440,7 @@ export async function captureAndResizeScreenshot(args: ScreenshotArgs): Promise<
   ) {
     const raw = await tryRawScreenshot(args.platform, requestedPath, sessionDeviceId);
     if (raw.ok) result = rawResultOk(raw.path, args.platform);
-    else return rawResultFail(args.platform, raw.reason);
+    else return rawResultFail(args.platform, raw);
   }
 
   if (!result) {

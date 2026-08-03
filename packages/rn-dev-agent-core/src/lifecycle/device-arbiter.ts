@@ -1,8 +1,10 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { failResult } from '../utils.js';
 import type { ToolResult } from '../utils.js';
 import { foreignFlowGate, foreignGateUdid, foreignGateEnabled } from './foreign-flow-gate.js';
 import type { ForeignFlowGate } from './foreign-flow-gate.js';
 import type { IosExternalRunnerWarning } from '../runners/external-runner-detect.js';
+import { sanitizeAutomationProcessLines } from '../util/public-diagnostics.js';
 
 export type Plane = 'introspection' | 'interaction' | 'flow';
 
@@ -62,6 +64,25 @@ export class DeviceSessionArbiter {
       return { ok: false, code: 'BUSY_FLOW_ACTIVE', holder: this.describeBlocker() };
     }
     return this.grant(plane, tool, false);
+  }
+
+  /** Promote only the currently held interaction lease when it is the sole op.
+   * Ordinary interactions remain interactions and therefore do not start the
+   * pinned post-flow grace window. Inline Maestro escalates lazily at dispatch. */
+  promoteToFlow(lease: Lease): AcquireResult {
+    const info = this.ops.get(lease.opId);
+    if (!info || info.plane === 'introspection') {
+      return { ok: false, code: 'BUSY_FLOW_ACTIVE', holder: this.describeBlocker() };
+    }
+    if (this.flowLeaseHeldBy === lease.opId) {
+      return { ok: true, lease: { plane: 'flow', opId: lease.opId } };
+    }
+    if (this.flowLeaseHeldBy !== null || this.ops.size !== 1) {
+      return { ok: false, code: 'BUSY_FLOW_ACTIVE', holder: this.describeBlocker() };
+    }
+    info.plane = 'flow';
+    this.flowLeaseHeldBy = lease.opId;
+    return { ok: true, lease: { plane: 'flow', opId: lease.opId } };
   }
 
   private grant(plane: Plane, tool: string, isFlow: boolean): AcquireOk {
@@ -134,6 +155,22 @@ export class DeviceSessionArbiter {
 }
 
 export const arbiter = new DeviceSessionArbiter();
+
+interface ActiveLeaseContext {
+  arbiter: DeviceSessionArbiter;
+  lease: Lease;
+  tool: string;
+}
+const activeLease = new AsyncLocalStorage<ActiveLeaseContext>();
+
+/** Dynamically enter the flow plane exactly when an inline Maestro fallback dispatches. */
+export function promoteCurrentOperationToManagedFlow(): AcquireResult {
+  const context = activeLease.getStore();
+  if (!context) {
+    return { ok: false, code: 'BUSY_FLOW_ACTIVE', holder: null };
+  }
+  return context.arbiter.promoteToFlow(context.lease);
+}
 
 // --- Plane classification ---------------------------------------------------
 // flow: tools that drive the whole device via Maestro OR relaunch the app —
@@ -244,15 +281,18 @@ function foreignRefusal(
   name: string,
   warning: IosExternalRunnerWarning,
   scanMs: number,
+  udid: string,
 ): ToolResult {
+  const safeLines = sanitizeAutomationProcessLines(warning.processLines, udid);
+  const safeWarning = { ...warning, processLines: safeLines };
   return failResult(
     `Refusing ${name}: a FOREIGN Maestro/XCUITest session is driving this simulator ` +
-      `(${warning.processLines[0] ?? 'detected via ps'}). L1 introspection stays safe — use ` +
+      `(${safeLines[0] ?? 'detected by the exact-device automation guard'}). L1 introspection stays safe — use ` +
       `cdp_component_tree / cdp_store_state / cdp_navigation_state for reads, and device_screenshot ` +
       `for pixels (simctl fallback). Retry taps/flows after the foreign run completes. ` +
       `Opt out of this guard with RN_IOS_FOREIGN_GUARD=0.`,
     'BUSY_FOREIGN_FLOW',
-    { foreignRunner: warning, conflict: true, timings_ms: { foreignScan: scanMs } },
+    { foreignRunner: safeWarning, conflict: true, timings_ms: { foreignScan: scanMs } },
   );
 }
 
@@ -285,22 +325,19 @@ export function arbiterWrap(
     // the plain BUSY_FLOW_ACTIVE refusal below already covers contenders),
     // and not within the teardown grace of our own just-released flow (the
     // dying driver still matches the detector; a fresh scan can't tell).
-    if (
-      plane !== 'introspection' &&
-      !inst.flowActive &&
-      inst.msSinceFlowReleased >= FOREIGN_GRACE_MS &&
-      enabled()
-    ) {
+    if (plane !== 'introspection' && !inst.flowActive) {
       const udid = getUdid();
       if (udid !== null) {
-        const check = await gate.check(udid);
-        if (check.active && check.warning) {
-          if (FLOW_FALLBACK_TOOLS.has(name)) {
-            // Same OS-level fallback contract as a local flow: pixels stay
-            // available via simctl (the handler routes by gate.lastActive).
-            return await handler(...args);
+        if (inst.msSinceFlowReleased >= FOREIGN_GRACE_MS && enabled()) {
+          const check = await gate.check(udid);
+          if (check.active && check.warning) {
+            if (FLOW_FALLBACK_TOOLS.has(name)) {
+              // Same OS-level fallback contract as a local flow: pixels stay
+              // available via simctl (the handler routes by gate.lastActive).
+              return await handler(...args);
+            }
+            return foreignRefusal(name, check.warning, check.scanMs, udid);
           }
-          return foreignRefusal(name, check.warning, check.scanMs);
         }
       }
     }
@@ -324,7 +361,9 @@ export function arbiterWrap(
       );
     }
     try {
-      return await handler(...args);
+      return await activeLease.run({ arbiter: inst, lease: res.lease, tool: name }, () =>
+        handler(...args),
+      );
     } finally {
       inst.release(res.lease);
     }

@@ -326,6 +326,77 @@ test('Maestro parking transactionally releases runner authority before dispatch'
   assert.equal(envelope.meta.authorityReceipt.axes.includes('R'), false);
 });
 
+test('inline Maestro parking tolerates its own authenticated controller generation advance', async () => {
+  const { runtime, registry, status } = fixture();
+  status.bindings.runner = {
+    platform: 'ios',
+    deviceId: 'device',
+    port: 9100,
+    instanceId: 'runner',
+  };
+  registry.replaceBindingsDuringOperation = (operation, input) => {
+    status.bindings = { ...status.bindings, ...input.bindings };
+    status.authorityVersion += 1;
+    return { ...operation, authorityVersion: status.authorityVersion };
+  };
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => ({
+      axis,
+      identity: axis === 'C' ? `controller-v${status.authorityVersion}` : `${axis}-identity`,
+    }),
+  });
+
+  const result = await gate.wrap('device_pick_date', async (args) => {
+    await completeManagedRunnerParkAuthority(args);
+    return okResult({ picked: true });
+  })({ date: '1990-06-15', platform: 'ios' });
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, true);
+  assert.equal(envelope.meta.authorityReceipt.authorityVersion, 10);
+  assert.equal(status.bindings.runner, null);
+});
+
+test('inline Maestro parking still rejects an external controller generation advance', async () => {
+  const { runtime, registry, status } = fixture();
+  status.bindings.runner = {
+    platform: 'ios',
+    deviceId: 'device',
+    port: 9100,
+    instanceId: 'runner',
+  };
+  registry.replaceBindingsDuringOperation = (operation, input) => {
+    status.bindings = { ...status.bindings, ...input.bindings };
+    status.authorityVersion += 1;
+    return { ...operation, authorityVersion: status.authorityVersion };
+  };
+  registry.verifyOperation = (operation) => {
+    if (operation.authorityVersion !== status.authorityVersion) {
+      throw new SessionAuthorityError(
+        'AUTHORITY_LOST_DURING_OPERATION',
+        'an external controller generation replaced the active operation fence',
+      );
+    }
+  };
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => ({
+      axis,
+      identity: axis === 'C' ? `controller-v${status.authorityVersion}` : `${axis}-identity`,
+    }),
+  });
+
+  const result = await gate.wrap('device_pick_date', async (args) => {
+    await completeManagedRunnerParkAuthority(args);
+    status.authorityVersion += 1;
+    return okResult({ picked: true });
+  })({ date: '1990-06-15', platform: 'ios' });
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, false);
+  assert.equal(envelope.code, 'AUTHORITY_LOST_DURING_OPERATION');
+  assert.equal(envelope.data, undefined);
+});
+
 test('nested action replay can park runner authority without stranding a stale R binding', async () => {
   const { runtime, registry, status, calls } = fixture();
   const released: Array<Record<string, unknown>> = [];
@@ -614,7 +685,7 @@ test('run-action claims bundle authority only when its CDP path is used', async 
     native.calls.some((call) => call.endsWith(':B')),
     false,
   );
-  assert.equal(native.calls.includes('refresh-binding'), true);
+  assert.equal(native.calls.includes('refresh-binding'), false);
 
   const cdp = fixture();
   cdp.status.bindings.bundle.targetId = 'target-a';
@@ -665,6 +736,33 @@ test('optional bundle admission propagates operation fence loss', async () => {
 
   assert.equal(envelope.ok, false);
   assert.equal(envelope.code, 'AUTHORITY_LOST_DURING_OPERATION');
+});
+
+test('optional bundle admission allows native replay when live B is unavailable', async () => {
+  const { runtime, status } = fixture();
+  status.bindings.bundle.targetId = 'target-a';
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => {
+      if (axis === 'B') {
+        throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: runtime marker is temporarily absent');
+      }
+      return { axis, identity: `${axis}-identity` };
+    },
+  });
+
+  const result = await gate.wrap('cdp_run_action', async (args) => {
+    assert.equal(await claimOptionalBundleAuthority(args), false);
+    return okResult({ transport: 'maestro' });
+  })({});
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, true);
+  assert.equal(envelope.meta.authorityInvalidated, undefined);
+  assert.equal(status.bindings.bundle.targetId, 'target-a');
+  assert.equal(
+    envelope.meta.authorityReceipt.axes.some((axis) => axis.axis === 'B'),
+    false,
+  );
 });
 
 test('optional bundle admission downgrades only a genuine bundle mismatch', async () => {
@@ -839,20 +937,14 @@ test('later verified bundle admission clears an earlier recovery failure', async
   );
 });
 
-test('native run-action invalidates an unrecoverable prior bundle without losing native proof', async () => {
-  const { calls, registry, runtime, status } = fixture();
+test('native run-action does not demand optional bundle recovery', async () => {
+  const { calls, runtime, status } = fixture();
   status.bindings.bundle.targetId = 'target-a';
   status.bindings.bundle.connectionGeneration = 1;
-  registry.replaceBindingsDuringOperation = (operation, input) => {
-    calls.push('replace-binding');
-    status.bindings = { ...status.bindings, ...input.bindings };
-    status.authorityVersion += 1;
-    return { ...operation, authorityVersion: operation.authorityVersion + 1 };
-  };
   const gate = createAuthorityGate(runtime, {
     probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
     refreshRuntimeBinding: async () => {
-      throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: target did not return');
+      throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: optional target did not return');
     },
   });
 
@@ -862,15 +954,16 @@ test('native run-action invalidates an unrecoverable prior bundle without losing
   const envelope = JSON.parse(result.content[0].text);
 
   assert.equal(envelope.ok, true);
-  assert.equal(envelope.meta.authorityInvalidated, true);
+  assert.equal(envelope.meta.authorityInvalidated, undefined);
+  assert.equal(status.bindings.bundle.targetId, 'target-a');
+  assert.equal(calls.includes('refresh-binding'), false);
   assert.equal(
     envelope.meta.authorityReceipt.axes.some((axis) => axis.axis === 'B'),
     false,
   );
-  assert.equal(status.bindings.bundle, null);
 });
 
-test('native run-action reconciles a replaced runtime target without claiming bundle proof', async () => {
+test('native run-action leaves an unclaimed optional bundle untouched', async () => {
   const { calls, runtime, status } = fixture();
   status.bindings.bundle.targetId = 'target-a';
   status.bindings.bundle.connectionGeneration = 1;
@@ -878,11 +971,6 @@ test('native run-action reconciles a replaced runtime target without claiming bu
     probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
     refreshRuntimeBinding: async () => {
       calls.push('refresh-binding');
-      status.bindings.bundle = {
-        ...status.bindings.bundle,
-        targetId: 'target-b',
-        connectionGeneration: 2,
-      };
       return status.bindings.bundle;
     },
   });
@@ -895,8 +983,9 @@ test('native run-action reconciles a replaced runtime target without claiming bu
   assert.equal(envelope.ok, true);
   assert.deepEqual(
     calls.filter((call) => call === 'refresh-binding' || call === 'replace-binding'),
-    ['refresh-binding', 'replace-binding'],
+    [],
   );
+  assert.equal(status.bindings.bundle.targetId, 'target-a');
   assert.equal(
     envelope.meta.authorityReceipt.axes.some((axis) => axis.axis === 'B'),
     false,

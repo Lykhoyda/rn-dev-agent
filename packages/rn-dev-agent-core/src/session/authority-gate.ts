@@ -89,6 +89,10 @@ export async function relaunchManagedNativeOriginApp(args: object): Promise<void
   await authority.relaunch();
 }
 
+export function hasManagedRunnerParkAuthority(args: object): boolean {
+  return typeof (args as AuthorityAwareArgs)[managedRunnerPark] === 'function';
+}
+
 export async function completeManagedRunnerParkAuthority(args: object): Promise<void> {
   const complete = (args as AuthorityAwareArgs)[managedRunnerPark];
   if (!complete) {
@@ -973,6 +977,7 @@ export function createAuthorityGate(
             tool,
             profile: profile.axes.join(''),
           });
+          const initialOperationAuthorityVersion = operation.authorityVersion;
           const before = await Promise.all(
             profile.axes.map((axis) =>
               dependencies.probe({ axis, phase: 'preflight', tool, profile, status, args }),
@@ -1278,7 +1283,7 @@ export function createAuthorityGate(
             tool === 'cdp_run_e2e_suite' ||
             tool === 'cdp_auto_login' ||
             (tool === 'cdp_nav_graph' && args.action === 'go') ||
-            (tool === 'cdp_run_action' && Boolean(status.bindings.bundle));
+            (tool === 'cdp_run_action' && (optionalBundleClaimed || optionalBundleRecoveryFailed));
           const reconcilesRuntimeTarget = directRuntimeReset || nestedRuntimeReset;
           let authorityInvalidated = false;
           if (directRuntimeReset && !resultSucceeded(result)) {
@@ -1399,7 +1404,15 @@ export function createAuthorityGate(
                 ],
               }
             : runnerAwareReceiptProfile;
+          // Gate-owned binding transitions (for example lazy runner parking)
+          // advance C's authority generation through the active operation CAS.
+          // Verify that exact advanced fence first, then tolerate only its C
+          // identity change. An external generation change still fails CAS.
+          const controllerGenerationAdvanced =
+            operation.authorityVersion !== initialOperationAuthorityVersion;
+          registry.verifyOperation(operation);
           for (const observation of allBefore) {
+            if (controllerGenerationAdvanced && observation.axis === 'C') continue;
             if ((runtimeTargetChanged || managedRuntimeTargetChanged) && observation.axis === 'B') {
               continue;
             }
@@ -1412,7 +1425,6 @@ export function createAuthorityGate(
               );
             }
           }
-          registry.verifyOperation(operation);
           if (
             tool === 'proof_capture' &&
             (args.action === 'finalize' || args.action === 'discard')

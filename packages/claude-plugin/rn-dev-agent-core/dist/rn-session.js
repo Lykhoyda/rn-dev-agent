@@ -10086,6 +10086,14 @@ var init_rn_fast_runner_client = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/util/public-diagnostics.js
+var init_public_diagnostics = __esm({
+  "packages/rn-dev-agent-core/dist/util/public-diagnostics.js"() {
+    "use strict";
+    init_registry();
+  }
+});
+
 // packages/rn-dev-agent-core/dist/tools/device-screenshot-raw.js
 import { execFile, spawn as spawn3 } from "node:child_process";
 import { promisify } from "node:util";
@@ -10093,6 +10101,7 @@ var execFileAsync;
 var init_device_screenshot_raw = __esm({
   "packages/rn-dev-agent-core/dist/tools/device-screenshot-raw.js"() {
     "use strict";
+    init_public_diagnostics();
     execFileAsync = promisify(execFile);
   }
 });
@@ -10494,47 +10503,18 @@ var init_maestro_run = __esm({
   }
 });
 
-// packages/rn-dev-agent-core/dist/maestro-invoke.js
-import { execFile as execFileCb4 } from "node:child_process";
-import { promisify as promisify5 } from "node:util";
-var execFile4;
-var init_maestro_invoke = __esm({
-  "packages/rn-dev-agent-core/dist/maestro-invoke.js"() {
+// packages/rn-dev-agent-core/dist/session/managed-automation.js
+var OUTPUT_LIMIT;
+var init_managed_automation = __esm({
+  "packages/rn-dev-agent-core/dist/session/managed-automation.js"() {
     "use strict";
-    init_project_config();
-    init_maestro_validator();
-    init_maestro_dispatch();
-    init_maestro_error_parser();
-    init_resolve_ios_app_file();
-    init_maestro_run();
-    init_agent_device_wrapper();
-    init_maestro_device_authority();
-    init_maestro_runner_report();
-    execFile4 = promisify5(execFileCb4);
-  }
-});
-
-// packages/rn-dev-agent-core/dist/tools/runner-leak-recovery.js
-var init_runner_leak_recovery = __esm({
-  "packages/rn-dev-agent-core/dist/tools/runner-leak-recovery.js"() {
-    "use strict";
-  }
-});
-
-// packages/rn-dev-agent-core/dist/tools/app-lifecycle.js
-import { execFile as execFileCb5 } from "node:child_process";
-import { promisify as promisify6 } from "node:util";
-var execFile5;
-var init_app_lifecycle = __esm({
-  "packages/rn-dev-agent-core/dist/tools/app-lifecycle.js"() {
-    "use strict";
-    execFile5 = promisify6(execFileCb5);
+    OUTPUT_LIMIT = 10 * 1024 * 1024;
   }
 });
 
 // packages/rn-dev-agent-core/dist/runners/external-runner-detect.js
-import { execFile as execFile6 } from "node:child_process";
-import { promisify as promisify7 } from "node:util";
+import { execFile as execFile4 } from "node:child_process";
+import { promisify as promisify5 } from "node:util";
 function executableBasename(command) {
   const executable = command.trimStart().split(/\s+/, 1)[0] ?? "";
   return executable.slice(executable.lastIndexOf("/") + 1);
@@ -10565,10 +10545,10 @@ function isIosExternalRunnerProcessLine(line) {
   }
   return false;
 }
-async function detectIosExternalRunner(execFileImpl = execFile6, udid) {
+async function detectIosExternalRunner(execFileImpl = execFile4, udid) {
   try {
     const opts = { timeout: 2e3, encoding: "utf8" };
-    const run = execFileImpl === execFile6 ? promisify7(execFileImpl) : execFileImpl;
+    const run = execFileImpl === execFile4 ? promisify5(execFileImpl) : execFileImpl;
     const { stdout } = await run("ps", ["axww", "-o", "pid=,command="], opts);
     const lines = stdout.split("\n").filter((line) => isIosExternalRunnerProcessLine(line)).filter((line) => !RN_FAST_RUNNER_RE.test(line)).filter((line) => udid ? line.includes(udid) : true).map((line) => line.trim()).filter((line) => line.length > 0);
     if (lines.length === 0)
@@ -10589,40 +10569,6 @@ var init_external_runner_detect = __esm({
     "use strict";
     SHELL_WRAPPERS = /^(?:sh|bash|zsh|dash|ksh|env)$/i;
     RN_FAST_RUNNER_RE = /RnFastRunner/i;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/cdp/discovery.js
-var init_discovery = __esm({
-  "packages/rn-dev-agent-core/dist/cdp/discovery.js"() {
-    "use strict";
-    init_logger();
-    init_maestro_validator();
-    init_metro_cwd();
-  }
-});
-
-// packages/rn-dev-agent-core/dist/runners/ensure-single-runner.js
-import { homedir as homedir3 } from "node:os";
-import { join as join13 } from "node:path";
-var DAEMON_JSON, DAEMON_LOCK;
-var init_ensure_single_runner = __esm({
-  "packages/rn-dev-agent-core/dist/runners/ensure-single-runner.js"() {
-    "use strict";
-    init_discovery();
-    DAEMON_JSON = join13(homedir3(), ".agent-device", "daemon.json");
-    DAEMON_LOCK = join13(homedir3(), ".agent-device", "daemon.lock");
-  }
-});
-
-// packages/rn-dev-agent-core/dist/runners/suppress-ios-autocorrect.js
-import { execFile as execFileCb6 } from "node:child_process";
-import { promisify as promisify8 } from "node:util";
-var execFile7;
-var init_suppress_ios_autocorrect = __esm({
-  "packages/rn-dev-agent-core/dist/runners/suppress-ios-autocorrect.js"() {
-    "use strict";
-    execFile7 = promisify8(execFileCb6);
   }
 });
 
@@ -10688,12 +10634,14 @@ var init_foreign_flow_gate = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/lifecycle/device-arbiter.js
-var DeviceSessionArbiter, arbiter;
+import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
+var DeviceSessionArbiter, arbiter, activeLease;
 var init_device_arbiter = __esm({
   "packages/rn-dev-agent-core/dist/lifecycle/device-arbiter.js"() {
     "use strict";
     init_utils();
     init_foreign_flow_gate();
+    init_public_diagnostics();
     DeviceSessionArbiter = class {
       flowLeaseHeldBy = null;
       ops = /* @__PURE__ */ new Map();
@@ -10713,6 +10661,24 @@ var init_device_arbiter = __esm({
           return { ok: false, code: "BUSY_FLOW_ACTIVE", holder: this.describeBlocker() };
         }
         return this.grant(plane, tool, false);
+      }
+      /** Promote only the currently held interaction lease when it is the sole op.
+       * Ordinary interactions remain interactions and therefore do not start the
+       * pinned post-flow grace window. Inline Maestro escalates lazily at dispatch. */
+      promoteToFlow(lease) {
+        const info = this.ops.get(lease.opId);
+        if (!info || info.plane === "introspection") {
+          return { ok: false, code: "BUSY_FLOW_ACTIVE", holder: this.describeBlocker() };
+        }
+        if (this.flowLeaseHeldBy === lease.opId) {
+          return { ok: true, lease: { plane: "flow", opId: lease.opId } };
+        }
+        if (this.flowLeaseHeldBy !== null || this.ops.size !== 1) {
+          return { ok: false, code: "BUSY_FLOW_ACTIVE", holder: this.describeBlocker() };
+        }
+        info.plane = "flow";
+        this.flowLeaseHeldBy = lease.opId;
+        return { ok: true, lease: { plane: "flow", opId: lease.opId } };
       }
       grant(plane, tool, isFlow) {
         const opId = this.nextOpId++;
@@ -10773,13 +10739,86 @@ var init_device_arbiter = __esm({
       }
     };
     arbiter = new DeviceSessionArbiter();
+    activeLease = new AsyncLocalStorage2();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/maestro-invoke.js
+var init_maestro_invoke = __esm({
+  "packages/rn-dev-agent-core/dist/maestro-invoke.js"() {
+    "use strict";
+    init_project_config();
+    init_maestro_validator();
+    init_maestro_dispatch();
+    init_maestro_error_parser();
+    init_resolve_ios_app_file();
+    init_maestro_run();
+    init_agent_device_wrapper();
+    init_maestro_device_authority();
+    init_maestro_runner_report();
+    init_managed_automation();
+    init_device_arbiter();
+    init_authority_gate();
+    init_utils();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/tools/runner-leak-recovery.js
+var init_runner_leak_recovery = __esm({
+  "packages/rn-dev-agent-core/dist/tools/runner-leak-recovery.js"() {
+    "use strict";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/tools/app-lifecycle.js
+import { execFile as execFileCb4 } from "node:child_process";
+import { promisify as promisify6 } from "node:util";
+var execFile5;
+var init_app_lifecycle = __esm({
+  "packages/rn-dev-agent-core/dist/tools/app-lifecycle.js"() {
+    "use strict";
+    execFile5 = promisify6(execFileCb4);
+  }
+});
+
+// packages/rn-dev-agent-core/dist/cdp/discovery.js
+var init_discovery = __esm({
+  "packages/rn-dev-agent-core/dist/cdp/discovery.js"() {
+    "use strict";
+    init_logger();
+    init_maestro_validator();
+    init_metro_cwd();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/runners/ensure-single-runner.js
+import { homedir as homedir3 } from "node:os";
+import { join as join13 } from "node:path";
+var DAEMON_JSON, DAEMON_LOCK;
+var init_ensure_single_runner = __esm({
+  "packages/rn-dev-agent-core/dist/runners/ensure-single-runner.js"() {
+    "use strict";
+    init_discovery();
+    DAEMON_JSON = join13(homedir3(), ".agent-device", "daemon.json");
+    DAEMON_LOCK = join13(homedir3(), ".agent-device", "daemon.lock");
+  }
+});
+
+// packages/rn-dev-agent-core/dist/runners/suppress-ios-autocorrect.js
+import { execFile as execFileCb5 } from "node:child_process";
+import { promisify as promisify7 } from "node:util";
+var execFile6;
+var init_suppress_ios_autocorrect = __esm({
+  "packages/rn-dev-agent-core/dist/runners/suppress-ios-autocorrect.js"() {
+    "use strict";
+    execFile6 = promisify7(execFileCb5);
   }
 });
 
 // packages/rn-dev-agent-core/dist/cdp/recover-wedge.js
-import { execFile as execFileCb7 } from "node:child_process";
-import { promisify as promisify9 } from "node:util";
-var execFile8;
+import { execFile as execFileCb6 } from "node:child_process";
+import { promisify as promisify8 } from "node:util";
+var execFile7;
 var init_recover_wedge = __esm({
   "packages/rn-dev-agent-core/dist/cdp/recover-wedge.js"() {
     "use strict";
@@ -10787,25 +10826,25 @@ var init_recover_wedge = __esm({
     init_rn_fast_runner_client();
     init_device_arbiter();
     init_recovery();
-    execFile8 = promisify9(execFileCb7);
+    execFile7 = promisify8(execFileCb6);
   }
 });
 
 // packages/rn-dev-agent-core/dist/cdp/app-installed-probe.js
-import { execFile as execFileCb8 } from "node:child_process";
-import { promisify as promisify10 } from "node:util";
-var execFile9;
+import { execFile as execFileCb7 } from "node:child_process";
+import { promisify as promisify9 } from "node:util";
+var execFile8;
 var init_app_installed_probe = __esm({
   "packages/rn-dev-agent-core/dist/cdp/app-installed-probe.js"() {
     "use strict";
-    execFile9 = promisify10(execFileCb8);
+    execFile8 = promisify9(execFileCb7);
   }
 });
 
 // packages/rn-dev-agent-core/dist/cdp/recover-detached.js
-import { execFile as execFileCb9 } from "node:child_process";
-import { promisify as promisify11 } from "node:util";
-var execFile10;
+import { execFile as execFileCb8 } from "node:child_process";
+import { promisify as promisify10 } from "node:util";
+var execFile9;
 var init_recover_detached = __esm({
   "packages/rn-dev-agent-core/dist/cdp/recover-detached.js"() {
     "use strict";
@@ -10815,7 +10854,7 @@ var init_recover_detached = __esm({
     init_recovery();
     init_app_installed_probe();
     init_maestro_validator();
-    execFile10 = promisify11(execFileCb9);
+    execFile9 = promisify10(execFileCb8);
   }
 });
 
@@ -10835,9 +10874,9 @@ var init_device_session_close = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/device-session.js
-import { execFile as execFileCb10 } from "node:child_process";
-import { promisify as promisify12 } from "node:util";
-var execFile11;
+import { execFile as execFileCb9 } from "node:child_process";
+import { promisify as promisify11 } from "node:util";
+var execFile10;
 var init_device_session = __esm({
   "packages/rn-dev-agent-core/dist/tools/device-session.js"() {
     "use strict";
@@ -10859,7 +10898,7 @@ var init_device_session = __esm({
     init_device_lock();
     init_device_arbiter();
     init_device_session_close();
-    execFile11 = promisify12(execFileCb10);
+    execFile10 = promisify11(execFileCb9);
   }
 });
 
@@ -10871,9 +10910,9 @@ var init_fill_verify = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/device-interact.js
-import { execFile as execFileCb11 } from "node:child_process";
-import { promisify as promisify13 } from "node:util";
-var execFile12;
+import { execFile as execFileCb10 } from "node:child_process";
+import { promisify as promisify12 } from "node:util";
+var execFile11;
 var init_device_interact = __esm({
   "packages/rn-dev-agent-core/dist/tools/device-interact.js"() {
     "use strict";
@@ -10889,7 +10928,7 @@ var init_device_interact = __esm({
     init_device_session();
     init_fast_runner_ref_map();
     init_fill_verify();
-    execFile12 = promisify13(execFileCb11);
+    execFile11 = promisify12(execFileCb10);
   }
 });
 
@@ -10922,8 +10961,8 @@ var init_free_port = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/runners/rn-android-runner-client.js
-import { spawn as spawn4, execFile as execFile13 } from "node:child_process";
-import { promisify as promisify14 } from "node:util";
+import { spawn as spawn4, execFile as execFile12 } from "node:child_process";
+import { promisify as promisify13 } from "node:util";
 import { join as join14 } from "node:path";
 var execFileAsync2, RN_ANDROID_RUNNER_DIR, GRADLEW, APK_APP, APK_TEST, ANDROID_REBUILD_ROOT, ANDROID_REBUILD_LOCK_DATABASE, ANDROID_REBUILD_LOCK_STALE_MS, fetchImpl2;
 var init_rn_android_runner_client = __esm({
@@ -10940,7 +10979,7 @@ var init_rn_android_runner_client = __esm({
     init_transport_recovery();
     init_process_birth();
     init_authority_store();
-    execFileAsync2 = promisify14(execFile13);
+    execFileAsync2 = promisify13(execFile12);
     RN_ANDROID_RUNNER_DIR = resolveNativeRunnerDir("rn-android-runner");
     GRADLEW = join14(RN_ANDROID_RUNNER_DIR, "gradlew");
     APK_APP = join14(RN_ANDROID_RUNNER_DIR, "app", "build", "outputs", "apk", "debug", "app-debug.apk");
@@ -10953,17 +10992,17 @@ var init_rn_android_runner_client = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/runners/release-android-slot.js
-import { execFile as execFileCb12 } from "node:child_process";
-import { promisify as promisify15 } from "node:util";
+import { execFile as execFileCb11 } from "node:child_process";
+import { promisify as promisify14 } from "node:util";
 import { homedir as homedir4 } from "node:os";
 import { join as join15 } from "node:path";
-var execFile14, DAEMON_JSON2, DAEMON_LOCK2, OWNED_PACKAGES;
+var execFile13, DAEMON_JSON2, DAEMON_LOCK2, OWNED_PACKAGES;
 var init_release_android_slot = __esm({
   "packages/rn-dev-agent-core/dist/runners/release-android-slot.js"() {
     "use strict";
     init_rn_android_runner_client();
     init_agent_device_wrapper();
-    execFile14 = promisify15(execFileCb12);
+    execFile13 = promisify14(execFileCb11);
     DAEMON_JSON2 = join15(homedir4(), ".agent-device", "daemon.json");
     DAEMON_LOCK2 = join15(homedir4(), ".agent-device", "daemon.lock");
     OWNED_PACKAGES = [
@@ -15872,11 +15911,11 @@ function projectPublicAuthorityStatus(status, options = {}) {
 
 // packages/rn-dev-agent-core/dist/session/process-cleanup.js
 init_release_android_slot();
-import { execFile as execFileCb13, spawn as spawn5 } from "node:child_process";
-import { promisify as promisify16 } from "node:util";
+import { execFile as execFileCb12, spawn as spawn5 } from "node:child_process";
+import { promisify as promisify15 } from "node:util";
 init_process_birth();
 init_registry();
-var execFile15 = promisify16(execFileCb13);
+var execFile14 = promisify15(execFileCb12);
 var RECORDER_POST_KILL_CONFIRM_MS = 2e3;
 function executeRecorderScript(script, args, options) {
   return new Promise((resolve5, reject) => {
@@ -16084,7 +16123,7 @@ async function stopBoundObserve(binding, listenerProbe = probeManagedMetroListen
     return observed.status === "listening" && observed.pid === pid ? "running" : "stopped";
   }, deadlineMs, "OBSERVE_AUTHORITY_MISMATCH", "Observe listener did not stop before the cleanup deadline");
 }
-async function stopBoundRunner(binding, processProbe = probeProcessBirth, signalProcess = process.kill, timeoutMs = 2e3, runAdb = async (args) => execFile15("adb", args, { timeout: 5e3, encoding: "utf8" })) {
+async function stopBoundRunner(binding, processProbe = probeProcessBirth, signalProcess = process.kill, timeoutMs = 2e3, runAdb = async (args) => execFile14("adb", args, { timeout: 5e3, encoding: "utf8" })) {
   const deadlineMs = Date.now() + timeoutMs;
   const pid = Number(binding.pid);
   const expectedBirth = String(binding.processBirth ?? "");

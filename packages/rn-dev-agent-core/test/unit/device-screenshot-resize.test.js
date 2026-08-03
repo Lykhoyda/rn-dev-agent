@@ -1,5 +1,6 @@
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { resolve } from 'node:path';
 import {
   resizeWithSips,
   parseSipsDimensions,
@@ -89,8 +90,15 @@ test('buildSipsResizeArgs forces JPEG format even when quality is undefined for 
 
 // ── deriveScreenshotPath ──────────────────────────────────────────────
 
-test('deriveScreenshotPath returns explicit path when provided', () => {
+test('deriveScreenshotPath returns an explicit absolute path when provided', () => {
   assert.equal(deriveScreenshotPath({ path: '/tmp/foo.jpg' }), '/tmp/foo.jpg');
+});
+
+test('deriveScreenshotPath resolves relative paths before CoreSimulator dispatch', () => {
+  assert.equal(
+    deriveScreenshotPath({ path: 'docs/proof/relative-shot.png' }),
+    resolve('docs/proof/relative-shot.png'),
+  );
 });
 
 test('deriveScreenshotPath defaults to .jpg when no path/format', () => {

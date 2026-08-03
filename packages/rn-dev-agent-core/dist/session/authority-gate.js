@@ -31,6 +31,9 @@ export async function relaunchManagedNativeOriginApp(args) {
     }
     await authority.relaunch();
 }
+export function hasManagedRunnerParkAuthority(args) {
+    return typeof args[managedRunnerPark] === 'function';
+}
 export async function completeManagedRunnerParkAuthority(args) {
     const complete = args[managedRunnerPark];
     if (!complete) {
@@ -710,6 +713,7 @@ export function createAuthorityGate(runtime, dependencies) {
                     tool,
                     profile: profile.axes.join(''),
                 });
+                const initialOperationAuthorityVersion = operation.authorityVersion;
                 const before = await Promise.all(profile.axes.map((axis) => dependencies.probe({ axis, phase: 'preflight', tool, profile, status, args })));
                 const optionalBefore = [];
                 const managedOriginObservations = [];
@@ -988,7 +992,7 @@ export function createAuthorityGate(runtime, dependencies) {
                 const nestedRuntimeReset = tool === 'cdp_run_e2e_suite' ||
                     tool === 'cdp_auto_login' ||
                     (tool === 'cdp_nav_graph' && args.action === 'go') ||
-                    (tool === 'cdp_run_action' && Boolean(status.bindings.bundle));
+                    (tool === 'cdp_run_action' && (optionalBundleClaimed || optionalBundleRecoveryFailed));
                 const reconcilesRuntimeTarget = directRuntimeReset || nestedRuntimeReset;
                 let authorityInvalidated = false;
                 if (directRuntimeReset && !resultSucceeded(result)) {
@@ -1091,7 +1095,15 @@ export function createAuthorityGate(runtime, dependencies) {
                         ],
                     }
                     : runnerAwareReceiptProfile;
+                // Gate-owned binding transitions (for example lazy runner parking)
+                // advance C's authority generation through the active operation CAS.
+                // Verify that exact advanced fence first, then tolerate only its C
+                // identity change. An external generation change still fails CAS.
+                const controllerGenerationAdvanced = operation.authorityVersion !== initialOperationAuthorityVersion;
+                registry.verifyOperation(operation);
                 for (const observation of allBefore) {
+                    if (controllerGenerationAdvanced && observation.axis === 'C')
+                        continue;
                     if ((runtimeTargetChanged || managedRuntimeTargetChanged) && observation.axis === 'B') {
                         continue;
                     }
@@ -1102,7 +1114,6 @@ export function createAuthorityGate(runtime, dependencies) {
                         throw new SessionAuthorityError('AUTHORITY_LOST_DURING_OPERATION', `${observation.axis} authority changed during the operation`);
                     }
                 }
-                registry.verifyOperation(operation);
                 if (tool === 'proof_capture' &&
                     (args.action === 'finalize' || args.action === 'discard')) {
                     const envelope = JSON.parse(result.content?.[0]?.text ?? '{}');

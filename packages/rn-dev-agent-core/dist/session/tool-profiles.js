@@ -42,6 +42,13 @@ const nativeMutation = [
 const hybridMutation = ['cdp_auto_login', 'cdp_run_e2e_suite'];
 const optionalHybridMutation = ['cdp_run_action'];
 const nativeDiagnostic = ['cdp_native_errors'];
+const inlineMaestroMutation = new Set([
+    'device_accept_system_dialog',
+    'device_dismiss_system_dialog',
+    'device_fill',
+    'device_pick_date',
+    'device_pick_value',
+]);
 const cdpRead = [
     'cdp_component_state',
     'cdp_component_tree',
@@ -250,7 +257,10 @@ export function authorityProfileFor(tool, args = {}) {
     const profile = profiles.get(tool);
     if (!profile)
         throw new Error(`UNPROFILED_AUTHORITY_TOOL: ${tool}`);
-    return profile;
+    // These tools remain ordinary interactions until their conditional Maestro
+    // fallback dispatches. Installing the lazy park callback here does not stop
+    // the runner and does not alter the non-flow teardown-grace invariant.
+    return inlineMaestroMutation.has(tool) ? { ...profile, managedRunnerPark: true } : profile;
 }
 export function assertAuthorityProfilesExhaustive(toolNames) {
     const expected = new Set(toolNames);
