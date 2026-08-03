@@ -61,6 +61,9 @@ export function createMockClient(overrides = {}) {
     get connectionGeneration() {
       return client._connectionGeneration;
     },
+    get helperWorldGeneration() {
+      return client._helperWorldGeneration;
+    },
     get consoleBuffer() {
       return consoleBuffer;
     },
@@ -124,6 +127,7 @@ export function createMockClient(overrides = {}) {
     _heapProfilerAvailable: true,
     _scripts: new Map(),
     _connectionGeneration: 1,
+    _helperWorldGeneration: 1,
     _autoConnectState: { enabled: true, source: 'default' },
     // M11 defaults: connectedAt=1_000_000 and timeNowFn returning 1_000_000
     // means "just connected, 0ms elapsed" — hint should NOT fire by default.
@@ -132,13 +136,13 @@ export function createMockClient(overrides = {}) {
     _timeNowFn: () => 1_000_000,
 
     // D502 freshness probe needs this — withConnection checks `typeof globalThis.__RN_AGENT`
-    // and expects a number. Returning 13 (helpers version) satisfies the probe so tests
-    // exercise the normal happy path, not the stale-helper re-injection recovery path.
+    // and expects the exact helper version. Returning 40 satisfies the probe so tests
+    // exercise the normal happy path, not stale-helper reinjection recovery.
     eventHandlers: new Map(),
 
     // --- Methods ---
     async evaluate(_expr, _awaitPromise) {
-      return { value: 13 };
+      return { value: 40 };
     },
 
     async autoConnect(_port, _platform) {
@@ -182,6 +186,21 @@ export function createMockClient(overrides = {}) {
     async reinjectHelpers() {
       client._helpersInjected = true;
       return true;
+    },
+
+    async probeHelperFreshness() {
+      const result = await client.evaluate(
+        "typeof globalThis.__RN_AGENT === 'object' && globalThis.__RN_AGENT !== null ? globalThis.__RN_AGENT.__v : null",
+      );
+      const version = typeof result.value === 'number' ? result.value : null;
+      return { fresh: version === 40, version, probed: true };
+    },
+
+    async probeHelperHealth(probeBudgetMs = 2000) {
+      if (client._helpersInjected) {
+        return { jsWorld: 'responsive', helper: 'current', probeBudgetMs };
+      }
+      return { jsWorld: 'responsive', helper: 'missing', probeBudgetMs };
     },
 
     async send(_method, _params) {

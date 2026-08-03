@@ -15,7 +15,30 @@ export function wireEventHandlers(
   getIsPaused: () => boolean,
   setIsPaused: (v: boolean) => void,
   getDeviceKey: () => string,
+  executionContexts?: {
+    created(params: {
+      context?: { id?: number; uniqueId?: string; auxData?: { isDefault?: boolean } };
+    }): void;
+    destroyed(params: { executionContextId?: number; executionContextUniqueId?: string }): void;
+    cleared(): void;
+  },
 ): void {
+  if (executionContexts) {
+    eventHandlers.set('Runtime.executionContextCreated', (params) => {
+      executionContexts.created(
+        params as {
+          context?: { id?: number; uniqueId?: string; auxData?: { isDefault?: boolean } };
+        },
+      );
+    });
+    eventHandlers.set('Runtime.executionContextDestroyed', (params) => {
+      executionContexts.destroyed(
+        params as { executionContextId?: number; executionContextUniqueId?: string },
+      );
+    });
+    eventHandlers.set('Runtime.executionContextsCleared', () => executionContexts.cleared());
+  }
+
   eventHandlers.set('Runtime.consoleAPICalled', (params: unknown) => {
     const p = params as { type: string; args?: Array<{ value?: unknown; description?: string }> };
     const text =

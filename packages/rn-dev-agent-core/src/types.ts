@@ -133,10 +133,9 @@ export interface StatusResult {
     supportsMultipleDebuggers: boolean;
     /**
      * D1202: explicit __RN_AGENT helpers status. true when the helper bundle
-     * is loaded into Hermes; false during the post-launch race window or when
-     * the JS world is hung. /doctor and `cdp_status` callers should treat
-     * false as "JS-tier tools (cdp_*) won't work — fall back to device_* or
-     * cdp_reload."
+     * is exactly current in the captured Hermes execution context; false
+     * during setup, context churn, or after missing/version-mismatched evidence.
+     * A false value alone does not prove that JavaScript is hung.
      */
     helpersInjected: boolean;
   };

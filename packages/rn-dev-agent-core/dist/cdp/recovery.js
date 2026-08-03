@@ -19,36 +19,9 @@ export function consumeCdpStale() {
     return was;
 }
 export async function probeFreshness(client, timeoutMs = FRESHNESS_PROBE_MS) {
-    if (!client.isConnected) {
-        return { fresh: false, version: null, probed: false };
-    }
-    let probeTimer;
-    try {
-        // If the timeout wins the race, this evaluate() promise is orphaned; attach
-        // a no-op catch so a later rejection (e.g. a mid-probe WebSocket close)
-        // can't surface as an unhandledRejection and crash the MCP process.
-        const evalPromise = client.evaluate('typeof globalThis.__RN_AGENT === "object" && globalThis.__RN_AGENT.__v');
-        evalPromise.catch(() => {
-            /* swallowed if the timeout already settled the race */
-        });
-        const result = await Promise.race([
-            evalPromise,
-            new Promise((resolve) => {
-                probeTimer = setTimeout(() => resolve({ error: 'timeout' }), timeoutMs);
-            }),
-        ]);
-        if (probeTimer)
-            clearTimeout(probeTimer);
-        if (result.error || typeof result.value !== 'number') {
-            return { fresh: false, version: null, probed: true };
-        }
-        return { fresh: true, version: result.value, probed: true };
-    }
-    catch {
-        if (probeTimer)
-            clearTimeout(probeTimer);
-        return { fresh: false, version: null, probed: true };
-    }
+    // The client owns the token/context fence and the actual CDP timeout. Only
+    // the exact shipped helper version is fresh; no orphaned outer race remains.
+    return client.probeHelperFreshness(timeoutMs);
 }
 export async function recoverFromStaleTarget(client) {
     if (!client.isConnected) {

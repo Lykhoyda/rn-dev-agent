@@ -138,7 +138,7 @@ Since MCP is pull-based (tools are called on demand), events that fire between c
 
 | Decision | Rationale |
 |----------|-----------|
-| Inject helpers ONCE on connect | ~2KB JS, then call `__RN_AGENT.*` — small payloads per call |
+| Coalesce helper setup and reinjection per execution world | Inject once for the current helper world, then call `__RN_AGENT.*` with small payloads |
 | 5-second timeout on ALL CDP calls | Prevents hanging promises |
 | RedBox detection before tree return | Check fiber root for LogBox/ErrorWindow, warn instead of returning error overlay |
 | `Debugger.paused` auto-resume | Prevents silent JS thread freeze from `debugger;` statements |

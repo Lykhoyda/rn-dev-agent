@@ -25946,31 +25946,7 @@ function consumeCdpStale() {
   return was;
 }
 async function probeFreshness(client2, timeoutMs = FRESHNESS_PROBE_MS) {
-  if (!client2.isConnected) {
-    return { fresh: false, version: null, probed: false };
-  }
-  let probeTimer;
-  try {
-    const evalPromise = client2.evaluate('typeof globalThis.__RN_AGENT === "object" && globalThis.__RN_AGENT.__v');
-    evalPromise.catch(() => {
-    });
-    const result = await Promise.race([
-      evalPromise,
-      new Promise((resolve10) => {
-        probeTimer = setTimeout(() => resolve10({ error: "timeout" }), timeoutMs);
-      })
-    ]);
-    if (probeTimer)
-      clearTimeout(probeTimer);
-    if (result.error || typeof result.value !== "number") {
-      return { fresh: false, version: null, probed: true };
-    }
-    return { fresh: true, version: result.value, probed: true };
-  } catch {
-    if (probeTimer)
-      clearTimeout(probeTimer);
-    return { fresh: false, version: null, probed: true };
-  }
+  return client2.probeHelperFreshness(timeoutMs);
 }
 async function recoverFromStaleTarget(client2) {
   if (!client2.isConnected) {
@@ -33135,18 +33111,28 @@ function isFreshnessCached(client2) {
   const entry = freshnessCache.get(client2);
   if (!entry)
     return false;
-  if (entry.generation !== client2.connectionGeneration)
+  if (entry.generation !== client2.helperWorldGeneration)
     return false;
   return Date.now() < entry.expiresAt;
 }
 function rememberFreshness(client2) {
   freshnessCache.set(client2, {
-    generation: client2.connectionGeneration,
+    generation: client2.helperWorldGeneration,
     expiresAt: Date.now() + FRESHNESS_CACHE_MS
   });
 }
 function forgetFreshness(client2) {
   freshnessCache.delete(client2);
+}
+async function helpersNotInjectedResult(client2, boundary) {
+  const helperHealth = await client2.probeHelperHealth(2e3);
+  if (helperHealth.jsWorld === "responsive" && helperHealth.helper === "current") {
+    rememberFreshness(client2);
+    return null;
+  }
+  forgetFreshness(client2);
+  const message = helperHealth.jsWorld === "timeout" ? `Helpers are not ready and the bounded ${helperHealth.probeBudgetMs}ms health probe received no response; JavaScript may be busy, paused, or blocked.` : helperHealth.jsWorld === "transport-error" ? "Helpers are not ready and their health could not be measured because the CDP transport failed." : helperHealth.jsWorld === "superseded" ? "Helpers are not ready because the JavaScript execution world changed during the bounded health probe." : helperHealth.helper === "version-mismatch" ? "Helpers are not ready because the responsive JavaScript world contains a different helper version." : helperHealth.helper === "missing" ? "Helpers are not ready because they are missing from the responsive JavaScript world." : "Helpers are not ready because the responsive JavaScript world contains an invalid helper value.";
+  return failResult(`${boundary === "stale-recovery" ? "Stale target recovery completed, but " : ""}${message} Fall back to device_* tools or call cdp_reload once.`, "HELPERS_NOT_INJECTED", { helperHealth });
 }
 function createStepTimer() {
   let last = Date.now();
@@ -33235,7 +33221,9 @@ function withConnection(getClient2, handler, options = {}) {
             }
           }
           if (!client2.helpersInjected) {
-            return failResult("Connected but helpers still not injected after passive wait, active re-inject, and Dev Client picker dismissal. The JS world may be hung. Fall back to device_* tools (XCTest path \u2014 no helpers required) or call cdp_reload to restart the bundle.", "HELPERS_NOT_INJECTED");
+            const helperError = await helpersNotInjectedResult(client2, "initial");
+            if (helperError)
+              return helperError;
           }
         }
       }
@@ -33323,7 +33311,14 @@ function withConnection(getClient2, handler, options = {}) {
               return failResult(`Retry after stale-target recovery failed: ${retryMsg}`, "STALE_TARGET", { originalError: message });
             }
           }
-          return failResult("Stale target recovery: reconnected but helpers not injected.", "HELPERS_NOT_INJECTED", { originalError: message });
+          const helperError = await helpersNotInjectedResult(client2, "stale-recovery");
+          if (helperError)
+            return helperError;
+          try {
+            return await handler(args, client2);
+          } catch {
+            return failResult("Retry after stale-target helper reconciliation failed.", "STALE_TARGET");
+          }
         }
         if (recovery.reason === "reconnect-failed") {
           return failResult(`Stale target recovery failed: ${recovery.error}`, "STALE_TARGET", {
@@ -48655,9 +48650,9 @@ var DETECT_EXPRESSION = `
   return JSON.stringify({ present: true, version: b.__v || null });
 })()
 `;
-async function detectBridge(client2) {
+async function detectBridge(client2, evaluate = (expression) => client2.evaluate(expression)) {
   try {
-    const result = await client2.evaluate(DETECT_EXPRESSION);
+    const result = await evaluate(DETECT_EXPRESSION);
     if (result.value && typeof result.value === "string") {
       return JSON.parse(result.value);
     }
@@ -51783,7 +51778,10 @@ function defaultTimeout(platform) {
 var REACT_READY_TIMEOUT_MS = 3e4;
 var REACT_READY_POLL_MS = 500;
 async function performSetup(opts) {
-  const { send, evaluate, port, connectedTarget, networkManager, getDeviceKey, setupEventHandlers, clearScripts, clearEventHandlers, probeWaits } = opts;
+  const { send, evaluate, setupHelpers, port, networkManager, getDeviceKey, setupEventHandlers, clearScripts, clearEventHandlers, probeWaits } = opts;
+  clearEventHandlers();
+  clearScripts();
+  setupEventHandlers();
   logger.debug("CDP", "Running setup: Runtime.enable, Debugger.enable...");
   await send("Runtime.enable", void 0, timeoutForMethod("Runtime.enable"));
   await send("Debugger.enable", void 0, timeoutForMethod("Debugger.enable"));
@@ -51809,24 +51807,8 @@ async function performSetup(opts) {
   ]);
   const profilerAvailable = profilerProbe.status === "fulfilled" && profilerProbe.value === true;
   const heapProfilerAvailable = heapProbe.status === "fulfilled" && heapProbe.value === true;
-  clearEventHandlers();
-  clearScripts();
-  setupEventHandlers();
-  await waitForReact(evaluate, REACT_READY_TIMEOUT_MS);
-  const helperResult = await evaluate(INJECTED_HELPERS);
-  if (helperResult.error) {
-    console.error("CDP: failed to inject helpers:", helperResult.error);
-    return {
-      networkMode,
-      helpersInjected: false,
-      logDomainEnabled,
-      profilerAvailable,
-      heapProfilerAvailable
-    };
-  }
-  const verify = await evaluate('typeof globalThis.__RN_AGENT === "object"');
-  if (verify.value !== true) {
-    console.error("CDP: helper injection succeeded but __RN_AGENT not found");
+  const helpersInjected = await setupHelpers(REACT_READY_TIMEOUT_MS);
+  if (!helpersInjected) {
     return {
       networkMode,
       helpersInjected: false,
@@ -51843,8 +51825,7 @@ async function performSetup(opts) {
     }
     networkDomainEnabled = false;
   }
-  logger.info("CDP", `Helpers injected (v${HELPERS_VERSION}), network mode: ${networkMode}`);
-  setActiveFlag(port, connectedTarget);
+  logger.info("CDP", `Helpers current (v${HELPERS_VERSION}), network mode: ${networkMode}`);
   if (networkMode === "cdp") {
     networkMode = await probeNetworkDomain({
       evaluate,
@@ -51892,19 +51873,6 @@ async function probeNetworkDomain(opts) {
   }
   logger.info("CDP", `Network.enable accepted but no events fired after ${waits.length} attempt(s) \u2014 falling back to hooks`);
   return "none";
-}
-async function reinjectHelpers(evaluate, waitTimeout) {
-  await waitForReact(evaluate, waitTimeout ?? REACT_READY_TIMEOUT_MS);
-  const helperResult = await evaluate(INJECTED_HELPERS);
-  if (helperResult.error) {
-    console.error("CDP: failed to re-inject helpers:", helperResult.error);
-    return false;
-  }
-  const verify = await evaluate('typeof globalThis.__RN_AGENT === "object"');
-  if (verify.value !== true) {
-    return false;
-  }
-  return true;
 }
 async function probeReactReachable(evaluate, budgetMs, pollMs = REACT_READY_POLL_MS) {
   const start = Date.now();
@@ -51996,7 +51964,16 @@ function handleMessage(data, pending2, eventHandlers, onConsoleHook) {
 }
 
 // packages/rn-dev-agent-core/dist/cdp/event-handlers.js
-function wireEventHandlers(eventHandlers, buffers, sendFn, getIsPaused, setIsPaused, getDeviceKey) {
+function wireEventHandlers(eventHandlers, buffers, sendFn, getIsPaused, setIsPaused, getDeviceKey, executionContexts) {
+  if (executionContexts) {
+    eventHandlers.set("Runtime.executionContextCreated", (params) => {
+      executionContexts.created(params);
+    });
+    eventHandlers.set("Runtime.executionContextDestroyed", (params) => {
+      executionContexts.destroyed(params);
+    });
+    eventHandlers.set("Runtime.executionContextsCleared", () => executionContexts.cleared());
+  }
   eventHandlers.set("Runtime.consoleAPICalled", (params) => {
     const p = params;
     const text = p.args?.map((a) => a.value !== void 0 ? String(a.value) : a.description ?? "").join(" ") ?? "";
@@ -52155,6 +52132,12 @@ var PickerBlockingBundleError = class extends Error {
     this.target = target;
   }
 };
+var ConnectionSetupSupersededError = class extends Error {
+  constructor() {
+    super("Connection setup superseded");
+    this.name = "ConnectionSetupSupersededError";
+  }
+};
 function shouldRunPickerProbe(intent, target) {
   return intent === "status" && target.vm !== "Hermes";
 }
@@ -52234,6 +52217,8 @@ async function discoverAndConnect(ctx, portHint, filters, discoverFn = discover,
       console.error("CDP: no target with __DEV__=true found, using last available target");
       connectedTarget = candidate;
     } catch (err) {
+      if (err instanceof ConnectionSetupSupersededError)
+        throw err;
       if (err instanceof PickerBlockingBundleError) {
         ctx.setState("disconnected");
         throw err;
@@ -52277,13 +52262,14 @@ async function connectToTarget(ctx, target, retries = 5, intent = "default") {
     }
     let handshakeOk = false;
     let probeTimedOut = false;
+    let attemptWs = null;
     try {
       const proxyUrl = ctx.getProxyUrl();
       const url = proxyUrl ?? target.webSocketDebuggerUrl;
       if (proxyUrl) {
         logger.info("CDP", `Routing via multiplexer proxy: ${proxyUrl}`);
       }
-      await connectWs(ctx, url);
+      attemptWs = await connectWs(ctx, url);
       handshakeOk = true;
       try {
         await ctx.sendWithTimeout("Runtime.evaluate", {
@@ -52305,14 +52291,20 @@ async function connectToTarget(ctx, target, retries = 5, intent = "default") {
       return;
     } catch (err) {
       if (err instanceof PickerBlockingBundleError) {
-        closeAndResetWs(ctx);
+        if (!closeConnectionAttempt(ctx, attemptWs)) {
+          throw new ConnectionSetupSupersededError();
+        }
         ctx.setConnectedTarget(null);
         ctx.setState("disconnected");
         throw err;
       }
       lastError = err instanceof Error ? err : new Error(String(err));
       attempts3.push({ handshakeOk, probeTimedOut });
-      closeAndResetWs(ctx);
+      if (!closeConnectionAttempt(ctx, attemptWs)) {
+        if (err instanceof ConnectionSetupSupersededError)
+          throw err;
+        throw new ConnectionSetupSupersededError();
+      }
       if (lastError.message.includes("refused")) {
         ctx.setState("disconnected");
         throw new Error("CDP connection refused. Is Metro running and the app loaded?");
@@ -52347,7 +52339,7 @@ function connectWs(ctx, url) {
       clearTimeout(guard);
       ctx.setWs(ws);
       ctx.setState("connected");
-      resolve10();
+      resolve10(ws);
     });
     ws.on("error", (err) => {
       if (!settled) {
@@ -52389,6 +52381,18 @@ function closeAndResetWs(ctx) {
     ctx.setWs(null);
   }
 }
+function closeConnectionAttempt(ctx, attemptWs) {
+  if (ctx.getWs() !== attemptWs)
+    return false;
+  if (!attemptWs)
+    return true;
+  attemptWs.removeAllListeners();
+  if (attemptWs.readyState === wrapper_default.OPEN || attemptWs.readyState === wrapper_default.CONNECTING) {
+    attemptWs.close();
+  }
+  ctx.setWs(null);
+  return true;
+}
 
 // packages/rn-dev-agent-core/dist/cdp-client.js
 init_project_config();
@@ -52408,6 +52412,16 @@ var CDPClient = class {
   reconnecting = false;
   disposed = false;
   _helpersInjected = false;
+  _helperWorldGeneration = 0;
+  _helperContext = null;
+  _helperToken = {
+    generation: 0,
+    ws: null,
+    targetId: null,
+    contextId: null,
+    contextUniqueId: null
+  };
+  _helperInjectionInFlight = null;
   _networkMode = "none";
   _isPaused = false;
   _connectedTarget = null;
@@ -52467,6 +52481,10 @@ var CDPClient = class {
   }
   get helpersInjected() {
     return this._helpersInjected;
+  }
+  /** Private helper-world epoch exposed only for process-local cache identity. */
+  get helperWorldGeneration() {
+    return this._helperWorldGeneration;
   }
   get metroPort() {
     return this._port;
@@ -52566,17 +52584,185 @@ var CDPClient = class {
   async reinjectHelpers(waitTimeout) {
     if (!this.isConnected)
       return false;
-    const ok = await reinjectHelpers((expr) => this.evaluate(expr), waitTimeout);
-    this._helpersInjected = ok;
-    if (ok) {
-      setActiveFlag(this._port, this._connectedTarget);
-      detectBridge(this).then((r) => {
-        this._bridgeDetected = r.present;
-        this._bridgeVersion = r.version;
-      }).catch(() => {
-      });
+    await waitForReact((expr) => this.evaluateCurrentHelperWorld(expr), waitTimeout);
+    return this.ensureCurrentHelpers("reinject_started");
+  }
+  /**
+   * One bounded, context-pinned health read used only at final
+   * HELPERS_NOT_INJECTED boundaries. It never returns app values or errors.
+   */
+  async probeHelperHealth(probeBudgetMs = 2e3) {
+    const token2 = this._helperToken;
+    if (!this.isHelperTokenCurrent(token2)) {
+      return { jsWorld: "superseded", helper: "unknown", probeBudgetMs };
     }
-    return ok;
+    const expression = `(function(){try{var d=Object.getOwnPropertyDescriptor(globalThis,'__RN_AGENT');if(!d)return 'missing';if(!('value' in d)||typeof d.value!=='object'||d.value===null)return 'invalid';var v=Object.getOwnPropertyDescriptor(d.value,'__v');if(!v||!('value' in v)||typeof v.value!=='number')return 'invalid';return v.value===${HELPERS_VERSION}?'current':'version-mismatch';}catch(_){return 'invalid';}})()`;
+    try {
+      const result = await this.evaluateForHelperToken(token2, expression, probeBudgetMs);
+      if (!this.isHelperTokenCurrent(token2)) {
+        return { jsWorld: "superseded", helper: "unknown", probeBudgetMs };
+      }
+      const helper = result.value === "current" || result.value === "missing" || result.value === "version-mismatch" || result.value === "invalid" ? result.value : "invalid";
+      if (helper === "current")
+        this.markHelpersReady(token2, "health_reconciled_current");
+      return { jsWorld: "responsive", helper, probeBudgetMs };
+    } catch (err) {
+      if (!this.isHelperTokenCurrent(token2)) {
+        return { jsWorld: "superseded", helper: "unknown", probeBudgetMs };
+      }
+      const timedOut = err instanceof Error && err.message.startsWith("CDP timeout (");
+      return {
+        jsWorld: timedOut ? "timeout" : "transport-error",
+        helper: "unknown",
+        probeBudgetMs
+      };
+    }
+  }
+  async probeHelperFreshness(timeoutMs = 2e3) {
+    if (!this.isConnected)
+      return { fresh: false, version: null, probed: false };
+    const token2 = this._helperToken;
+    try {
+      const result = await this.evaluateForHelperToken(token2, `typeof globalThis.__RN_AGENT === 'object' && globalThis.__RN_AGENT !== null ? globalThis.__RN_AGENT.__v : null`, timeoutMs);
+      if (!this.isHelperTokenCurrent(token2))
+        return { fresh: false, version: null, probed: true };
+      const version2 = typeof result.value === "number" ? result.value : null;
+      const fresh = version2 === HELPERS_VERSION;
+      if (!fresh) {
+        this.markHelpersUnready(token2, version2 === null ? "freshness_missing" : "freshness_version_mismatch");
+      }
+      return { fresh, version: version2, probed: true };
+    } catch {
+      this.markHelpersUnready(token2, "freshness_probe_failed");
+      return { fresh: false, version: null, probed: true };
+    }
+  }
+  invalidateHelperWorld(cause) {
+    this._helperWorldGeneration++;
+    this._helpersInjected = false;
+    this._bridgeDetected = false;
+    this._bridgeVersion = null;
+    clearActiveFlag();
+    this._helperToken = {
+      generation: this._helperWorldGeneration,
+      ws: this.ws,
+      targetId: this._connectedTarget?.id ?? null,
+      contextId: this._helperContext?.id ?? null,
+      contextUniqueId: this._helperContext?.uniqueId ?? null
+    };
+    logger.info("CDP", `Helper state invalidated cause=${cause} helperEpoch=${this._helperWorldGeneration} connectionGeneration=${this._connectionGeneration}`);
+  }
+  isHelperTokenCurrent(token2) {
+    return token2 === this._helperToken && token2.ws === this.ws && token2.targetId === (this._connectedTarget?.id ?? null);
+  }
+  async evaluateCurrentHelperWorld(expression) {
+    const token2 = this._helperToken;
+    try {
+      return await this.evaluateForHelperToken(token2, expression, defaultTimeout(this.effectivePlatform));
+    } catch {
+      return { error: "helper-world evaluation unavailable" };
+    }
+  }
+  async evaluateForHelperToken(token2, expression, timeoutMs) {
+    if (!this.isHelperTokenCurrent(token2))
+      throw new Error("helper world superseded");
+    const params = {
+      expression,
+      returnByValue: true
+    };
+    if (token2.contextId !== null)
+      params.contextId = token2.contextId;
+    const result = await this.sendWithTimeout("Runtime.evaluate", params, timeoutMs);
+    if (!this.isHelperTokenCurrent(token2))
+      throw new Error("helper world superseded");
+    if (result?.exceptionDetails)
+      return { error: "helper-world expression failed" };
+    return { value: result?.result?.value };
+  }
+  async ensureCurrentHelpers(cause) {
+    const token2 = this._helperToken;
+    if (!this.isHelperTokenCurrent(token2) || !this.isConnected)
+      return false;
+    if (this._helpersInjected)
+      return true;
+    if (this._helperInjectionInFlight?.token === token2) {
+      return this._helperInjectionInFlight.promise;
+    }
+    const slot = {
+      token: token2,
+      promise: Promise.resolve(false)
+    };
+    slot.promise = this.injectAndVerifyHelpers(token2, cause).finally(() => {
+      if (this._helperInjectionInFlight === slot)
+        this._helperInjectionInFlight = null;
+    });
+    this._helperInjectionInFlight = slot;
+    return slot.promise;
+  }
+  markHelpersUnready(token2, cause) {
+    if (!this.isHelperTokenCurrent(token2))
+      return false;
+    this._helpersInjected = false;
+    this._bridgeDetected = false;
+    this._bridgeVersion = null;
+    clearActiveFlag();
+    logger.warn("CDP", `Helper state unavailable cause=${cause} helperEpoch=${token2.generation} connectionGeneration=${this._connectionGeneration}`);
+    return false;
+  }
+  async injectAndVerifyHelpers(token2, cause) {
+    logger.info("CDP", `Helper injection ${cause} helperEpoch=${token2.generation} connectionGeneration=${this._connectionGeneration}`);
+    try {
+      const injected = await this.evaluateForHelperToken(token2, INJECTED_HELPERS, defaultTimeout(this.effectivePlatform));
+      if (injected.error) {
+        return this.markHelpersUnready(token2, cause === "setup_started" ? "setup_failed" : "reinject_failed");
+      }
+      const verified = await this.evaluateForHelperToken(token2, `typeof globalThis.__RN_AGENT === 'object' && globalThis.__RN_AGENT !== null && globalThis.__RN_AGENT.__v === ${HELPERS_VERSION}`, defaultTimeout(this.effectivePlatform));
+      if (verified.value !== true || !this.isHelperTokenCurrent(token2)) {
+        return this.markHelpersUnready(token2, cause === "setup_started" ? "setup_failed" : "reinject_failed");
+      }
+      this.markHelpersReady(token2, cause === "setup_started" ? "setup_current" : "reinject_current");
+      return true;
+    } catch {
+      return this.markHelpersUnready(token2, cause === "setup_started" ? "setup_failed" : "reinject_failed");
+    }
+  }
+  markHelpersReady(token2, cause) {
+    if (!this.isHelperTokenCurrent(token2))
+      return;
+    this._helpersInjected = true;
+    setActiveFlag(this._port, this._connectedTarget);
+    logger.info("CDP", `Helper state ready cause=${cause} helperEpoch=${token2.generation} connectionGeneration=${this._connectionGeneration}`);
+    detectBridge(this, (expression) => this.evaluateForHelperToken(token2, expression, defaultTimeout(this.effectivePlatform))).then((r) => {
+      if (!this.isHelperTokenCurrent(token2))
+        return;
+      this._bridgeDetected = r.present;
+      this._bridgeVersion = r.version;
+    }).catch(() => {
+    });
+  }
+  handleExecutionContextCreated(params) {
+    const id = params.context?.id;
+    if (typeof id !== "number" || params.context?.auxData?.isDefault === false)
+      return;
+    const next = { id, uniqueId: params.context?.uniqueId };
+    if (this._helperContext?.id === next.id && this._helperContext.uniqueId === next.uniqueId)
+      return;
+    this._helperContext = next;
+    this.invalidateHelperWorld("context_created");
+  }
+  handleExecutionContextDestroyed(params) {
+    if (!this._helperContext)
+      return;
+    const matchesId = params.executionContextId === this._helperContext.id;
+    const matchesUnique = params.executionContextUniqueId !== void 0 && params.executionContextUniqueId === this._helperContext.uniqueId;
+    if (!matchesId && !matchesUnique)
+      return;
+    this._helperContext = null;
+    this.invalidateHelperWorld("context_destroyed");
+  }
+  handleExecutionContextsCleared() {
+    this._helperContext = null;
+    this.invalidateHelperWorld("contexts_cleared");
   }
   async autoConnect(portHint, filtersOrPlatform, intent = "default") {
     const filters = typeof filtersOrPlatform === "string" ? { platform: filtersOrPlatform } : filtersOrPlatform ?? {};
@@ -52727,6 +52913,7 @@ var CDPClient = class {
     if (this.disposed)
       return;
     this.disposed = true;
+    this.invalidateHelperWorld("explicit_disconnect");
     resetState(this.buildResettableState());
     clearActiveFlag();
     this.stopBackgroundPoll();
@@ -52846,30 +53033,52 @@ var CDPClient = class {
   async setup() {
     this.ensureMetroEventsClient().catch(() => {
     });
+    const setupWs = this.ws;
+    const setupTargetId = this._connectedTarget?.id ?? null;
+    let setupHelperToken = null;
+    const assertSetupCurrent = () => {
+      const connectionIsCurrent = this.ws === setupWs && (this._connectedTarget?.id ?? null) === setupTargetId;
+      const helpersAreCurrent = setupHelperToken === null || this.isHelperTokenCurrent(setupHelperToken);
+      if (!connectionIsCurrent || !helpersAreCurrent) {
+        throw new ConnectionSetupSupersededError();
+      }
+    };
+    const sendForSetup = async (method, params, ms) => {
+      assertSetupCurrent();
+      const response = await this.sendWithTimeout(method, params, ms ?? timeoutForMethod(method, this.effectivePlatform));
+      assertSetupCurrent();
+      return response;
+    };
+    const evaluateForSetup = async (expression) => {
+      assertSetupCurrent();
+      const response = await this.evaluate(expression);
+      assertSetupCurrent();
+      return response;
+    };
     const result = await performSetup({
-      send: (method, params, ms) => this.sendWithTimeout(method, params, ms ?? timeoutForMethod(method, this.effectivePlatform)),
-      evaluate: (expr) => this.evaluate(expr),
+      send: sendForSetup,
+      evaluate: evaluateForSetup,
+      setupHelpers: async (waitTimeout) => {
+        assertSetupCurrent();
+        await waitForReact((expr) => this.evaluateCurrentHelperWorld(expr), waitTimeout);
+        assertSetupCurrent();
+        setupHelperToken = this._helperToken;
+        const helpersInjected = await this.ensureCurrentHelpers("setup_started");
+        assertSetupCurrent();
+        return helpersInjected;
+      },
       port: this._port,
-      connectedTarget: this._connectedTarget,
       networkManager: this._networkBufferManager,
       getDeviceKey: () => this.activeDeviceKey,
       setupEventHandlers: () => this.setupEventHandlers(),
       clearScripts: () => this._scripts.clear(),
       clearEventHandlers: () => this.eventHandlers.clear()
     });
+    assertSetupCurrent();
     this._networkMode = result.networkMode;
-    this._helpersInjected = result.helpersInjected;
     this._logDomainEnabled = result.logDomainEnabled;
     this._profilerAvailable = result.profilerAvailable;
     this._heapProfilerAvailable = result.heapProfilerAvailable;
-    if (result.helpersInjected) {
-      detectBridge(this).then((r) => {
-        this._bridgeDetected = r.present;
-        this._bridgeVersion = r.version;
-        logger.debug("CDP", `Bridge detection: present=${r.present}, version=${r.version}`);
-      }).catch(() => {
-      });
-    }
   }
   async ensureMetroEventsClient() {
     if (this._metroEventsClient && this._metroEventsClient.port !== this._port) {
@@ -52889,9 +53098,15 @@ var CDPClient = class {
       scripts: this._scripts
     }, (method, params, ms) => this.sendWithTimeout(method, params, ms ?? timeoutForMethod(method, this.effectivePlatform)), () => this._isPaused, (v) => {
       this._isPaused = v;
-    }, () => this.activeDeviceKey);
+    }, () => this.activeDeviceKey, {
+      created: (params) => this.handleExecutionContextCreated(params),
+      destroyed: (params) => this.handleExecutionContextDestroyed(params),
+      cleared: () => this.handleExecutionContextsCleared()
+    });
   }
   handleClose(code) {
+    this.ws = null;
+    this.invalidateHelperWorld("socket_closed");
     if (this._proxyUrl) {
       void this._suspendProxy();
     }
@@ -52932,6 +53147,8 @@ var CDPClient = class {
             this.ws.close();
           }
           this.ws = null;
+          this._helperContext = null;
+          this.invalidateHelperWorld("soft_reconnect");
         }
       },
       rejectAllPending: (reason) => this.rejectAllPending(reason),
@@ -52969,13 +53186,21 @@ var CDPClient = class {
       },
       getWs: () => this.ws,
       setWs: (ws) => {
+        if (this.ws === ws)
+          return;
         this.ws = ws;
+        this._helperContext = null;
+        this.invalidateHelperWorld(ws ? "socket_opened" : "socket_closed");
       },
       setHelpersInjected: (v) => {
-        this._helpersInjected = v;
+        if (!v)
+          this.invalidateHelperWorld("candidate_rejected");
       },
       setConnectedTarget: (t) => {
+        if (this._connectedTarget === t)
+          return;
         this._connectedTarget = t;
+        this.invalidateHelperWorld(t ? "candidate_selected" : "candidate_rejected");
       },
       setConnectedAt: (ms) => {
         this._connectedAt = ms;

@@ -9,9 +9,9 @@ const DETECT_EXPRESSION = `
   return JSON.stringify({ present: true, version: b.__v || null });
 })()
 `;
-export async function detectBridge(client) {
+export async function detectBridge(client, evaluate = (expression) => client.evaluate(expression)) {
     try {
-        const result = await client.evaluate(DETECT_EXPRESSION);
+        const result = await evaluate(DETECT_EXPRESSION);
         if (result.value && typeof result.value === 'string') {
             return JSON.parse(result.value);
         }
