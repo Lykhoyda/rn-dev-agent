@@ -8,7 +8,7 @@ import {
   consumePendingFastRunnerArtifactNote,
   _resetStaleHittableWarnForTest,
 } from '../../dist/runners/rn-fast-runner-client.js';
-import { REQUIRED_IOS_COMMANDS } from '../../dist/runners/protocol.js';
+import { REQUIRED_IOS_COMMANDS, REQUIRED_IOS_FEATURES } from '../../dist/runners/protocol.js';
 
 const STATE = { pid: 1, port: 22088, deviceId: 'U1', bundleId: 'com.example' };
 const deps = (probeBody, plugin = '0.58.0') => ({
@@ -25,7 +25,9 @@ const aliveBody = (capabilities) => ({
   protocolVersion: 1,
   runnerVersion: '0.58.0',
   commands: [...REQUIRED_IOS_COMMANDS],
-  ...(capabilities !== undefined ? { capabilities } : {}),
+  ...(capabilities !== undefined
+    ? { capabilities: [...REQUIRED_IOS_FEATURES, ...capabilities] }
+    : {}),
 });
 
 beforeEach(() => {
@@ -50,10 +52,12 @@ test('gh-519: artifact advertising HONEST_HITTABLE queues no note', async () => 
   assert.equal(consumePendingFastRunnerArtifactNote(), undefined);
 });
 
-test('gh-519: capabilities-less (pre-#385) alive artifact also warns — it predates #395 too', async () => {
+test('gh-656: capabilities-less artifact is stale before any hittable advisory', async () => {
   const d = await probeFastRunnerLivenessDetailed(deps(aliveBody(undefined)));
-  assert.equal(d.liveness, 'alive');
-  assert.match(consumePendingFastRunnerArtifactNote() ?? '', /hittable/i);
+  assert.equal(d.liveness, 'stale');
+  assert.equal(d.staleReason, 'missing-features');
+  assert.deepEqual(d.missingFeatures, [...REQUIRED_IOS_FEATURES]);
+  assert.equal(consumePendingFastRunnerArtifactNote(), undefined);
 });
 
 test('gh-519: advisory is warn-once per process', async () => {

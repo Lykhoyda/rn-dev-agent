@@ -34,6 +34,7 @@ import {
   RUNNER_PROTOCOL_VERSION,
   MIN_SUPPORTED_RUNNER_PROTOCOL,
   REQUIRED_IOS_COMMANDS,
+  REQUIRED_IOS_FEATURES,
   getPluginVersion,
   classifyRunnerCompatibility,
 } from './protocol.js';
@@ -203,6 +204,10 @@ export function getFastRunnerCapabilities(): string[] {
 
 export function _resetCapabilitiesForTest(): void {
   lastKnownCapabilities = [];
+}
+
+export function _setCapabilitiesForTest(capabilities: string[]): void {
+  lastKnownCapabilities = [...capabilities];
 }
 
 export function _setFastRunnerStateForTest(state: FastRunnerState | null): void {
@@ -1195,6 +1200,8 @@ export interface FastRunnerLivenessDetail {
   capabilities?: string[];
   /** GH #418: set only when staleReason === 'missing-commands'. */
   missingCommands?: string[];
+  /** GH #656: set only when staleReason === 'missing-features'. */
+  missingFeatures?: string[];
 }
 
 export async function probeFastRunnerLivenessDetailed(
@@ -1237,16 +1244,23 @@ export async function probeFastRunnerLivenessDetailed(
         ...(res.protocolVersion !== undefined ? { protocolVersion: res.protocolVersion } : {}),
         ...(res.runnerVersion !== undefined ? { runnerVersion: res.runnerVersion } : {}),
         ...(res.commands !== undefined ? { commands: res.commands } : {}),
+        ...(res.capabilities !== undefined ? { capabilities: res.capabilities } : {}),
       },
       plugin,
       REQUIRED_IOS_COMMANDS,
+      REQUIRED_IOS_FEATURES,
     );
     if (!compat.compatible) {
       lastKnownCapabilities = [];
       return {
         liveness: 'stale',
         staleReason: compat.reason,
-        ...(compat.missing !== undefined ? { missingCommands: compat.missing } : {}),
+        ...(compat.missing !== undefined && compat.reason === 'missing-commands'
+          ? { missingCommands: compat.missing }
+          : {}),
+        ...(compat.missing !== undefined && compat.reason === 'missing-features'
+          ? { missingFeatures: compat.missing }
+          : {}),
         ...(res.protocolVersion !== undefined
           ? { runnerProtocolVersion: res.protocolVersion }
           : {}),
@@ -1424,6 +1438,10 @@ export interface RunIOSArgs {
   _targetRef?: string;
   targetBounds?: { x: number; y: number; width: number; height: number };
   snapshotGeneration?: number;
+  snapshotNodeIndex?: number;
+  snapshotElementType?: string;
+  snapshotLabel?: string;
+  snapshotIdentifier?: string;
   keyboardStateAtSnapshot?: boolean;
   /** Independent CDP/helper readback; never serialized onto the runner wire. */
   _verifyExactReadback?: (
@@ -1434,7 +1452,7 @@ export interface RunIOSArgs {
 interface RunnerResponse {
   ok: boolean;
   data?: unknown;
-  error?: { message: string; code?: string };
+  error?: { message: string; code?: string; mutation?: string };
   v?: number;
 }
 
@@ -1881,6 +1899,10 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
   if (args.scope !== undefined) body.scope = args.scope;
   if (args.targetBounds !== undefined) body.targetBounds = args.targetBounds;
   if (args.snapshotGeneration !== undefined) body.snapshotGeneration = args.snapshotGeneration;
+  if (args.snapshotNodeIndex !== undefined) body.snapshotNodeIndex = args.snapshotNodeIndex;
+  if (args.snapshotElementType !== undefined) body.snapshotElementType = args.snapshotElementType;
+  if (args.snapshotLabel !== undefined) body.snapshotLabel = args.snapshotLabel;
+  if (args.snapshotIdentifier !== undefined) body.snapshotIdentifier = args.snapshotIdentifier;
   if (args.keyboardStateAtSnapshot !== undefined)
     body.keyboardStateAtSnapshot = args.keyboardStateAtSnapshot;
 
@@ -1897,6 +1919,20 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
     }
     return null;
   };
+
+  const isExactKeyboardTarget =
+    args.snapshotElementType === 'Key' || args.snapshotElementType === 'Keyboard';
+  if (
+    isExactKeyboardTarget &&
+    (runnerState?.protocolVersion === 1 ||
+      !lastKnownCapabilities.includes('EXACT_KEYBOARD_TARGET_GUARD'))
+  ) {
+    return failResult(
+      'RN_FAST_RUNNER_STALE: the active iOS runner cannot safely validate exact keyboard targets; reopen the device session to rebuild before retrying.',
+      'RN_FAST_RUNNER_STALE',
+      { missingFeatures: ['EXACT_KEYBOARD_TARGET_GUARD'], dispatched: false },
+    );
+  }
 
   let keyboardRelayoutRecovered = false;
   // Protocol-v1 runners ignore fresh-geometry fields. Enforce the corrected
@@ -1973,6 +2009,13 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
     body.y = Math.round(target.rect.y + target.rect.height / 2);
     body.targetBounds = target.rect;
     body.snapshotGeneration = target.snapshotGeneration;
+    body.snapshotNodeIndex = target.snapshotNodeIndex;
+    body.snapshotElementType = target.snapshotElementType;
+    if (target.snapshotLabel !== undefined) body.snapshotLabel = target.snapshotLabel;
+    else delete body.snapshotLabel;
+    if (target.snapshotIdentifier !== undefined)
+      body.snapshotIdentifier = target.snapshotIdentifier;
+    else delete body.snapshotIdentifier;
     if (target.keyboardStateAtSnapshot !== null)
       body.keyboardStateAtSnapshot = target.keyboardStateAtSnapshot;
     return true;
@@ -2022,11 +2065,21 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
     ) {
       return containTypeTimeout(args);
     }
-    const failExtras = recovery ? { transportRecovery: recovery } : undefined;
+    const mutation = resp.error?.mutation;
+    const failExtras = {
+      ...(recovery ? { transportRecovery: recovery } : {}),
+      ...(mutation !== undefined ? { mutation } : {}),
+    };
     if (code) {
-      return failResult(message, code as Parameters<typeof failResult>[1], failExtras);
+      return failResult(
+        message,
+        code as Parameters<typeof failResult>[1],
+        Object.keys(failExtras).length > 0 ? failExtras : undefined,
+      );
     }
-    return failExtras ? failResult(message, failExtras) : failResult(message);
+    return Object.keys(failExtras).length > 0
+      ? failResult(message, failExtras)
+      : failResult(message);
   }
 
   // Snapshot post-processing: feed the ref map so future press/fill calls

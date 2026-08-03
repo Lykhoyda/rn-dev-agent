@@ -297,14 +297,24 @@ and retry from a fresh snapshot — don't re-type blindly.
 
 ### KEYBOARD_DISMISS_FAILED
 
-A visible software keyboard could not be proven dismissed — the native
-dismiss control, then a native swipe, then (when CDP is connected) injected
-`Keyboard.dismiss()` all failed — so the guarded tap was refused before
-touching the screen. Older protocol-v1 runners surfaced this as
-`KEYBOARD_OCCLUDED`. Dismiss the keyboard yourself (e.g. `cdp_evaluate` →
-`Keyboard.dismiss()`) or fill via `device_fill`, which is JS-first and
-needs no keyboard, then retry from a fresh snapshot/ref. Opt the guard off
-with `RN_KEYBOARD_GUARD=0`.
+A visible software keyboard could not be proven dismissed. iOS automatically
+tries only a positively identified hide/dismiss button inside the keyboard,
+then (when CDP is connected) injected `Keyboard.dismiss()` with a fresh
+hidden-state post-check. It never swipes through keys, presses Return/Done, or
+activates an app accessory toolbar. If those safe tiers fail, the guarded app
+tap is refused. Connect CDP for the JS tier, or dismiss manually and retry from
+a fresh snapshot/ref.
+
+### KEYBOARD_TARGET_STALE
+
+An iOS `Key`/`Keyboard` ref no longer uniquely matches the runner's retained
+latest-snapshot record and the operation-local live keyboard. A missing
+software keyboard, changed layout/identity/frame, ambiguous match, forged
+metadata, or stale generation produces this mutation-free refusal; it does not
+enter keyboard-dismiss healing. Capture a fresh snapshot and retry the new ref.
+Raw coordinates and custom-keyboard Button/Other nodes never qualify as exact
+keyboard targets. A stale runner missing `EXACT_KEYBOARD_TARGET_GUARD` must be
+rebuilt by reopening the exact-device session before dispatch.
 
 ### DEVICE_BUSY
 

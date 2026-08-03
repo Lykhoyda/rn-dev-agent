@@ -1505,7 +1505,7 @@ trackedTool('device_find', 'Find a UI element by visible text and optionally int
         .optional()
         .describe('Pick the Nth candidate (0-based) when multiple elements match. Short-circuits AMBIGUOUS_MATCH.'),
 }, createDeviceFindHandler(getClient));
-trackedTool('device_press', 'Tap a UI element by its @ref from device_snapshot, or at explicit raw x/y coordinates. Pass exactly one target form. A guarded raw-coordinate tap dismisses any visible keyboard before the single tap. Supports double-tap, repeated taps, long hold, and post-tap focus settle. Requires an open session. Stale @refs self-heal by identity re-resolution (meta.reResolved); swallowed taps auto-retry once unless keyboard/transport recovery already consumed that retry budget.', {
+trackedTool('device_press', 'Tap a UI element by its @ref from device_snapshot, or at explicit raw x/y coordinates. Pass exactly one target form. On iOS, a latest-snapshot Key/Keyboard ref is runner-validated against the current live keyboard and activated exactly once (meta.keyboardGuard="keyboard_target"); stale, forged, missing-keyboard, or raw-coordinate targets never receive that exemption. Ordinary app-content taps dismiss only through a safe native hide/dismiss control or optional JS tier, then refresh and uniquely re-resolve before one tap. Supports double-tap, repeated taps, long hold, and post-tap focus settle. Requires an open session. Stale @refs self-heal by identity re-resolution (meta.reResolved); swallowed ordinary taps auto-retry once, but validated keyboard targets and keyboard/transport recovery never replay.', {
     ref: z
         .string()
         .optional()
@@ -1544,7 +1544,7 @@ trackedTool('device_press', 'Tap a UI element by its @ref from device_snapshot, 
     retryIfNoChange: z
         .boolean()
         .optional()
-        .describe('Story 05: when the tap produces no UI change, one automatic re-tap fires by default. Set false to disable (e.g. intentional no-op taps). RN_SELF_HEAL=0 disables globally.'),
+        .describe('Story 05: when an ordinary tap produces no UI change, one automatic re-tap fires by default. Validated iOS Key/Keyboard targets and transport/keyboard recovery are never replayed. Set false to disable for other taps (e.g. intentional no-op taps). RN_SELF_HEAL=0 disables globally.'),
 }, createDevicePressHandler(getClient));
 trackedTool('device_fill', 'Type text into an input field by its @ref from device_snapshot. Always re-taps the element first so keyboard focus is on the correct field even in sequential fills. On "no focused text input" errors, automatically falls back: Pressable→TextInput resolution (common RN design-system pattern where outer Pressable wraps inner TextInput) → coordinate re-tap + retry → Android adb input / iOS Maestro inputText. Check meta.fallbackUsed in the result to see which strategy succeeded. Requires an open session.', {
     ref: z.string().describe('Input field ref from device_snapshot (e.g. "e5" or "@e5")'),

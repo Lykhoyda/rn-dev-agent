@@ -231,9 +231,11 @@ export function updateRefMapFromFlat(nodes, freshness = {}) {
             continue;
         const key = node.ref.startsWith('@') ? node.ref.slice(1) : node.ref;
         refMap.set(key, node.rect);
+        const numericRef = /^e(\d+)$/.exec(key);
         const meta = {
             type: node.type,
             flatIndex: i,
+            snapshotNodeIndex: numericRef ? Number(numericRef[1]) : i,
             nodeCount: nodes.length,
             snapshotGeneration,
             keyboardStateAtSnapshot,
@@ -275,6 +277,10 @@ export function getFreshRefTarget(ref, opts = {}) {
     return {
         rect,
         snapshotGeneration: record.snapshotGeneration,
+        snapshotNodeIndex: record.snapshotNodeIndex,
+        snapshotElementType: record.type,
+        ...(record.label !== undefined ? { snapshotLabel: record.label } : {}),
+        ...(record.identifier !== undefined ? { snapshotIdentifier: record.identifier } : {}),
         keyboardStateAtSnapshot: record.keyboardStateAtSnapshot,
     };
 }

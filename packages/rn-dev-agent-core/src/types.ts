@@ -330,6 +330,7 @@ export type ToolErrorCode =
   // ref-map (snapshot is stale / UI re-rendered). Caller must device_snapshot
   // to refresh refs, then retry.
   | 'STALE_REF'
+  | 'KEYBOARD_TARGET_STALE'
   // GH #370/#379: iOS keyboard guard verify-or-refuse arm — the tap point is
   // under a keyboard with no dismiss control. The TS layer auto-heals via the
   // injected Keyboard.dismiss() when CDP is connected (#379).
@@ -365,6 +366,7 @@ export type ToolErrorCode =
   | 'RUNNER_DISABLED'
   // GH #383: runner speaks an incompatible wire protocol even after the
   // reap-and-reinstall path ran — stale prebuilt artifacts need a rebuild.
+  | 'RN_FAST_RUNNER_STALE'
   | 'RUNNER_PROTOCOL_MISMATCH'
   // E2E regression runner (2026-06-18)
   | 'NOT_FOUND'

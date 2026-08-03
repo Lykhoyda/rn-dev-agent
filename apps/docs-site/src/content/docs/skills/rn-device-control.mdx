@@ -101,14 +101,14 @@ Decision table for build workflows:
 | `no_keyboard` | No keyboard was visible |
 | `not_occluded` | Keyboard visible but the fresh target rectangle was clear of it |
 | `dismissed` | Android: keyboard was occluding the tap point and was dismissed first |
-| `auto_dismissed` | iOS: keyboard was dismissed before the tap (`meta.via` records the tier) |
+| `auto_dismissed` | iOS: keyboard was dismissed before the app tap (`meta.via` records the tier) |
+| `keyboard_target` | iOS: the exact latest-snapshot `Key`/`Keyboard` was re-proven live and activated once |
 
 Platform behavior differs because the dismissal mechanism differs:
 - **Android** — point containment + `pressBack` with a bounded wait for the UI to settle (~3.6s measured). Only fires when a real input-method window with sane bounds contains the tap point, so it never triggers an unrelated back-navigation.
-- **iOS** — fresh-geometry, dismiss-first. The keyboard frame is intersected with the target's **fresh** rectangle (validated against the current `snapshotGeneration`). If the geometry is stale or unknown while a keyboard is visible, the keyboard is always dismissed first, the snapshot/ref is refreshed, and the tap is retried once. Dismissal tiers are native dismiss control, native swipe, then injected `Keyboard.dismiss()` when CDP is connected; only when every tier fails is the tap **refused** with `KEYBOARD_DISMISS_FAILED` — no blind tap is ever dispatched under a visible keyboard.
+- **iOS exact keyboard target** — only a ref whose runner-retained generation, node index, canonical `Key`/`Keyboard` type, identity, and frame uniquely match the operation-local live keyboard qualifies. The tap must remain inside that exact current target, which is activated directly once. Raw coordinates, forged wire types, stale/ambiguous refs, relayout, missing software keyboards, case/region guesses, and custom-keyboard Button/Other nodes never qualify. `KEYBOARD_TARGET_STALE` performs no gesture or dismissal; take a fresh snapshot.
+- **iOS ordinary app target** — only a positively identified hide/dismiss button inside the keyboard may dismiss natively; Return/Done keys and app accessory toolbars are excluded. There is no automatic keyboard swipe. When CDP is connected, injected `Keyboard.dismiss()` remains available with a fresh hidden-state proof. After safe dismissal the snapshot/ref is refreshed, uniquely re-resolved, and tapped once. Otherwise `KEYBOARD_DISMISS_FAILED` refuses without a native gesture.
 
-If you hit `KEYBOARD_DISMISS_FAILED` on iOS: dismiss the keyboard yourself first (`device_fill`/`cdp_interact` type through the JS path and don't require the keyboard to be down, or tap a non-input area of the screen) and then retry the tap from a fresh snapshot.
-
-Opt out entirely with `RN_KEYBOARD_GUARD=0` (or `false`) if the guard gets in the way of a flow you control precisely.
+If you hit `KEYBOARD_DISMISS_FAILED` on iOS, connect CDP for the JS tier or dismiss manually, then retry the app target from a fresh snapshot. If an old runner lacks `EXACT_KEYBOARD_TARGET_GUARD`, reopen the exact-device session so it rebuilds before dispatch.
 
 Only `device_press`/`device_longpress`-style taps are guarded — `tapSeries`, text-based taps, swipes/scrolls/drags, and `doubleTap` are unaffected.

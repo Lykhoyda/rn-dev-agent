@@ -5,7 +5,7 @@ sidebar:
   order: 23
 ---
 
-Tap a UI element by its @ref from device_snapshot, or at explicit raw x/y coordinates. Pass exactly one target form. A guarded raw-coordinate tap dismisses any visible keyboard before the single tap. Supports double-tap, repeated taps, long hold, and post-tap focus settle. Requires an open session. Stale @refs self-heal by identity re-resolution (meta.reResolved); swallowed taps auto-retry once unless keyboard/transport recovery already consumed that retry budget.
+Tap a UI element by its @ref from device_snapshot, or at explicit raw x/y coordinates. Pass exactly one target form. On iOS, a latest-snapshot Key/Keyboard ref is runner-validated against the current live keyboard and activated exactly once (meta.keyboardGuard="keyboard_target"); stale, forged, missing-keyboard, or raw-coordinate targets never receive that exemption. Ordinary app-content taps dismiss only through a safe native hide/dismiss control or optional JS tier, then refresh and uniquely re-resolve before one tap. Supports double-tap, repeated taps, long hold, and post-tap focus settle. Requires an open session. Stale @refs self-heal by identity re-resolution (meta.reResolved); swallowed ordinary taps auto-retry once, but validated keyboard targets and keyboard/transport recovery never replay.
 
 ## Parameters
 

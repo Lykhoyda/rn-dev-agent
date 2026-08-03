@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { probeFastRunnerLivenessDetailed } from '../../dist/runners/rn-fast-runner-client.js';
 import { ensureRunnerForCommand } from '../../dist/agent-device-wrapper.js';
-import { REQUIRED_IOS_COMMANDS } from '../../dist/runners/protocol.js';
+import { REQUIRED_IOS_COMMANDS, REQUIRED_IOS_FEATURES } from '../../dist/runners/protocol.js';
 
 const STATE = { pid: 1, port: 22088, deviceId: 'U1', bundleId: 'com.example' };
 const deps = (probeBody, plugin = '0.58.0') => ({
@@ -26,12 +26,14 @@ test('gh-383 gate: healthy + matching protocol + version → alive', async () =>
       protocolVersion: 1,
       runnerVersion: '0.58.0',
       commands: [...REQUIRED_IOS_COMMANDS],
+      capabilities: [...REQUIRED_IOS_FEATURES],
     }),
   );
   assert.deepEqual(d, {
     liveness: 'alive',
     runnerProtocolVersion: 1,
     runnerVersion: '0.58.0',
+    capabilities: [...REQUIRED_IOS_FEATURES],
   });
 });
 
@@ -62,6 +64,7 @@ test('gh-383 gate: version check is fail-open when plugin version unknown', asyn
         protocolVersion: 1,
         runnerVersion: '0.0.1',
         commands: [...REQUIRED_IOS_COMMANDS],
+        capabilities: [...REQUIRED_IOS_FEATURES],
       },
       null,
     ),

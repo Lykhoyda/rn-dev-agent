@@ -3,11 +3,116 @@ import CoreGraphics
 
 final class KeyboardGuardTests: XCTestCase {
   func testProtocolV2FreshGeometryFieldsDecode() throws {
-    let json = #"{"command":"tap","x":10,"y":20,"targetBounds":{"x":1,"y":2,"width":3,"height":4},"snapshotGeneration":7,"keyboardStateAtSnapshot":true}"#
+    let json = #"{"command":"tap","x":10,"y":20,"targetBounds":{"x":1,"y":2,"width":3,"height":4},"snapshotGeneration":7,"snapshotNodeIndex":12,"snapshotElementType":"Key","snapshotLabel":"Q","snapshotIdentifier":"key-q","keyboardStateAtSnapshot":true}"#
     let command = try JSONDecoder().decode(Command.self, from: Data(json.utf8))
     XCTAssertEqual(command.targetBounds?.width, 3)
     XCTAssertEqual(command.snapshotGeneration, 7)
+    XCTAssertEqual(command.snapshotNodeIndex, 12)
+    XCTAssertEqual(command.snapshotElementType, "Key")
+    XCTAssertEqual(command.snapshotLabel, "Q")
+    XCTAssertEqual(command.snapshotIdentifier, "key-q")
     XCTAssertEqual(command.keyboardStateAtSnapshot, true)
+  }
+
+  private func keyboardCommand(
+    type: String = "Key",
+    generation: Int = 7,
+    index: Int = 12,
+    label: String = "Q",
+    x: Int = 1
+  ) throws -> Command {
+    let json = #"{"command":"tap","x":2,"y":4,"targetBounds":{"x":\#(x),"y":2,"width":3,"height":4},"snapshotGeneration":\#(generation),"snapshotNodeIndex":\#(index),"snapshotElementType":"\#(type)","snapshotLabel":"\#(label)","keyboardStateAtSnapshot":true}"#
+    return try JSONDecoder().decode(Command.self, from: Data(json.utf8))
+  }
+
+  private var retainedKey: RetainedSnapshotTarget {
+    RetainedSnapshotTarget(
+      generation: 7,
+      index: 12,
+      type: "Key",
+      label: "Q",
+      identifier: nil,
+      rect: SnapshotRect(x: 1, y: 2, width: 3, height: 4)
+    )
+  }
+
+  func testExactCanonicalRunnerOwnedKeyQualifies() throws {
+    XCTAssertEqual(
+      KeyboardGuard.validateKeyboardDescriptor(
+        command: try keyboardCommand(),
+        retained: retainedKey,
+        currentGeneration: 7,
+        appFrame: CGRect(x: 0, y: 0, width: 402, height: 874)
+      ),
+      .keyboardTarget
+    )
+  }
+
+  func testForgedStaleAndRelayoutKeyboardDescriptorsRefuse() throws {
+    let frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+    for command in [
+      try keyboardCommand(generation: 6),
+      try keyboardCommand(index: 13),
+      try keyboardCommand(label: "W"),
+      try keyboardCommand(x: 9)
+    ] {
+      XCTAssertEqual(
+        KeyboardGuard.validateKeyboardDescriptor(
+          command: command,
+          retained: retainedKey,
+          currentGeneration: 7,
+          appFrame: frame
+        ),
+        .stale
+      )
+    }
+    let forgedRetained = RetainedSnapshotTarget(
+      generation: 7,
+      index: 12,
+      type: "Button",
+      label: "Q",
+      identifier: nil,
+      rect: retainedKey.rect
+    )
+    XCTAssertEqual(
+      KeyboardGuard.validateKeyboardDescriptor(
+        command: try keyboardCommand(),
+        retained: forgedRetained,
+        currentGeneration: 7,
+        appFrame: frame
+      ),
+      .stale
+    )
+  }
+
+  func testOnlyExactCanonicalKeyboardTypesEnterTargetValidation() throws {
+    let frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+    for type in ["key", "KEY", "Button", "Other"] {
+      XCTAssertEqual(
+        KeyboardGuard.validateKeyboardDescriptor(
+          command: try keyboardCommand(type: type),
+          retained: retainedKey,
+          currentGeneration: 7,
+          appFrame: frame
+        ),
+        .ordinary
+      )
+    }
+  }
+
+  func testSafeDismissControlsExcludeDoneKeysAndExternalToolbars() {
+    XCTAssertTrue(KeyboardGuard.isSafeDismissControl(
+      type: "Button", label: "Hide keyboard", identifier: nil, insideKeyboard: true
+    ))
+    XCTAssertFalse(KeyboardGuard.isSafeDismissControl(
+      type: "Key", label: "Done", identifier: nil, insideKeyboard: true
+    ))
+    XCTAssertFalse(KeyboardGuard.isSafeDismissControl(
+      type: "Button", label: "Done", identifier: nil, insideKeyboard: true
+    ))
+    XCTAssertFalse(KeyboardGuard.isSafeDismissControl(
+      type: "Button", label: "Dismiss keyboard", identifier: nil, insideKeyboard: false
+    ))
   }
 
   func testTargetGeometryMustBeOnScreen() {

@@ -104,15 +104,15 @@ export async function waitForKeyboardHidden(refreshSnapshot, sleep = (ms) => new
     return last;
 }
 function nativeDismissTiers(via) {
-    return via === 'native-control' ? ['native-control'] : ['native-control', via];
+    return via === 'native-control' ? ['native-control'] : [via];
 }
 // The runner only answers KEYBOARD_DISMISS_FAILED after running its own native
 // tiers; any other error means the command never reached them.
 function nativeTiersAttempted(native) {
     if (!native.isError)
-        return ['native-control', 'native-swipe'];
+        return ['native-control'];
     const text = native.content?.[0]?.text ?? '';
-    return text.includes('KEYBOARD_DISMISS_FAILED') ? ['native-control', 'native-swipe'] : [];
+    return text.includes('KEYBOARD_DISMISS_FAILED') ? ['native-control'] : [];
 }
 /** Shared standalone/batch dismissal chain with an independent hidden-state check. */
 export async function dismissKeyboardWithParity(deps) {

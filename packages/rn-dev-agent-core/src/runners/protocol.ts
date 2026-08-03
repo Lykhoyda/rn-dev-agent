@@ -16,7 +16,8 @@ export type RunnerIncompatibilityReason =
   | 'protocol-older'
   | 'protocol-newer'
   | 'version-skew'
-  | 'missing-commands';
+  | 'missing-commands'
+  | 'missing-features';
 
 export type RunnerCompatibility =
   | { compatible: true }
@@ -39,6 +40,8 @@ export const REQUIRED_IOS_COMMANDS = [
   'status',
 ] as const satisfies readonly RunIOSArgs['command'][];
 
+export const REQUIRED_IOS_FEATURES = ['EXACT_KEYBOARD_TARGET_GUARD'] as const;
+
 export const REQUIRED_ANDROID_COMMANDS = [
   'tap',
   'type',
@@ -53,9 +56,15 @@ export const REQUIRED_ANDROID_COMMANDS = [
 ] as const satisfies readonly RunAndroidArgs['command'][];
 
 export function classifyRunnerCompatibility(
-  health: { protocolVersion?: number; runnerVersion?: string; commands?: string[] },
+  health: {
+    protocolVersion?: number;
+    runnerVersion?: string;
+    commands?: string[];
+    capabilities?: string[];
+  },
   pluginVersion: string | null,
   requiredCommands?: readonly string[],
+  requiredFeatures?: readonly string[],
 ): RunnerCompatibility {
   if (health.protocolVersion === undefined) return { compatible: false, reason: 'legacy' };
   if (health.protocolVersion < MIN_SUPPORTED_RUNNER_PROTOCOL) {
@@ -78,6 +87,13 @@ export function classifyRunnerCompatibility(
     const missing = requiredCommands.filter((c) => !advertised.has(c));
     if (missing.length > 0) {
       return { compatible: false, reason: 'missing-commands', missing };
+    }
+  }
+  if (requiredFeatures !== undefined) {
+    const advertised = new Set(health.capabilities ?? []);
+    const missing = requiredFeatures.filter((feature) => !advertised.has(feature));
+    if (missing.length > 0) {
+      return { compatible: false, reason: 'missing-features', missing };
     }
   }
   return { compatible: true };

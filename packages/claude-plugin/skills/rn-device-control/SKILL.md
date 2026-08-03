@@ -314,6 +314,7 @@ simctl/adb for interactive testing. There is no external `agent-device` CLI invo
 | Read UI element tree | `device_snapshot` | Returns @refs for subsequent interaction |
 | Tap an element by text | `device_find text="Sign In" action=click` | No testID needed |
 | Tap by element ref | `device_press ref=@e3` | After getting refs from snapshot |
+| Tap an iOS software-keyboard key | Fresh snapshot `Key`/`Keyboard` ref, then `device_press` | Runner proves the same live keyboard target and performs one gesture |
 | Fill a text input | `device_fill ref=@e5 text="hello"` | Clears and types with verification |
 | Scroll/swipe | `device_swipe direction=up` | Native gesture |
 | Navigate back | `device_back` | System back (Android) or gesture (iOS) |
@@ -333,6 +334,27 @@ simctl/adb for interactive testing. There is no external `agent-device` CLI invo
 
 6. device_snapshot action=close  → End session
 ```
+
+### iOS keyboard safety
+
+A `Key` or `Keyboard` ref from the latest iOS snapshot is intentional keyboard
+surface only when the runner's retained snapshot record and the operation-local
+live keyboard uniquely prove the same canonical type, generation, index,
+identity, frame, keyboard presence, and tap containment. The exact live target
+is activated once and reports `meta.keyboardGuard="keyboard_target"`; generic
+no-change retry never replays it. Raw coordinates, case/region guesses,
+Button/Other custom-keyboard nodes, forged metadata, and stale or relaid-out
+refs do not qualify. Take a fresh snapshot and retry after
+`KEYBOARD_TARGET_STALE`.
+
+For ordinary app-content targets, iOS may automatically use only a positively
+identified hide/dismiss button inside the keyboard, followed when available by
+the existing JS dismissal tier and hidden-state proof. It never swipes through
+the keyboard, presses Return/Done, or activates an app accessory toolbar. If no
+safe tier hides the keyboard, `KEYBOARD_DISMISS_FAILED` refuses without a
+native gesture; connect CDP for the JS tier or dismiss manually and refresh.
+Hardware keyboards and custom keyboards exposing controls as Button/Other do
+not gain inferred keyboard-key semantics.
 
 ### Fallback
 

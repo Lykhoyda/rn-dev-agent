@@ -256,6 +256,22 @@ extension RnFastRunnerTests {
     )
   }
 
+  func retainSnapshotTargets(_ nodes: [SnapshotNode]) {
+    retainedSnapshotTargets = Dictionary(uniqueKeysWithValues: nodes.map { node in
+      (
+        node.index,
+        RetainedSnapshotTarget(
+          generation: currentSnapshotGeneration,
+          index: node.index,
+          type: node.type,
+          label: node.label,
+          identifier: node.identifier,
+          rect: node.rect
+        )
+      )
+    })
+  }
+
   func snapshotRect(from frame: CGRect) -> SnapshotRect {
     return SnapshotRect(
       x: Double(frame.origin.x),
