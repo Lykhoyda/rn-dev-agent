@@ -1,0 +1,129 @@
+// GH #580 — maestro-runner 1.1.16/1.1.20 renders an ID wait miss as
+// `Element '#X' not visible within Ns`, a wording the parser did not know, so an
+// ordinary missing-selector failure was classified UNKNOWN and refused repair
+// with NOT_REPAIRABLE_KIND. These tests pin the new classification, the shapes it
+// must NOT claim, and the head+tail output contract that replaced the head-only
+// slice which only ever showed the WDA preamble.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { parseMaestroFailure, isAutoRepairable } from '../../dist/domain/maestro-error-parser.js';
+import { buildTerminalEvidence } from '../../dist/domain/maestro-step-parser.js';
+import { boundedOutput } from '../../dist/tools/run-action.js';
+
+// The exact live capture from the issue, at the runner's real 4-space indent.
+const RUNNER_1_1_20_STDOUT = [
+  'maestro-runner 1.1.20',
+  'Starting WDA on device 1234-ABCD',
+  '    ✓ launchApp (2.7s)',
+  '    ✗ extendedWaitUntil: visible id="fixture_never_exists" (1.2s)',
+  "      ╰─ Element '#fixture_never_exists' not visible within 1s (cause: context deadline exceeded)",
+].join('\n');
+
+test('gh-580: raw 1.1.20 ID-wait stdout classifies SELECTOR_NOT_FOUND with the exact id', () => {
+  const failure = parseMaestroFailure(RUNNER_1_1_20_STDOUT);
+  assert.equal(failure.kind, 'SELECTOR_NOT_FOUND');
+  assert.equal(failure.selector, 'fixture_never_exists');
+  assert.equal(failure.selectorKind, 'id');
+  assert.equal(isAutoRepairable(failure), true);
+});
+
+test('gh-580: the same wording survives buildTerminalEvidence as kind + exact selector', () => {
+  const terminal = buildTerminalEvidence(RUNNER_1_1_20_STDOUT);
+  assert.equal(terminal.exitClass, 'step-failure');
+  assert.equal(terminal.failureKind, 'SELECTOR_NOT_FOUND');
+  assert.equal(terminal.failureSelector, 'fixture_never_exists');
+  assert.equal(terminal.failedStep, 'extendedWaitUntil: visible id="fixture_never_exists"');
+
+  // …and the caller-side parse agrees when it reads terminal evidence instead
+  // of the (possibly truncated) stdout.
+  const failure = parseMaestroFailure('', terminal);
+  assert.equal(failure.kind, 'SELECTOR_NOT_FOUND');
+  assert.equal(failure.selector, 'fixture_never_exists');
+});
+
+test('gh-580: double-quoted rendering and ids containing quotes/# still extract exactly', () => {
+  const dq = parseMaestroFailure('  ╰─ Element "#user\'s-tasks" not visible within 15s');
+  assert.equal(dq.kind, 'SELECTOR_NOT_FOUND');
+  assert.equal(dq.selector, "user's-tasks");
+
+  const hashInside = parseMaestroFailure("  ╰─ Element '#tag#42' not visible within 2s");
+  assert.equal(hashInside.kind, 'SELECTOR_NOT_FOUND');
+  assert.equal(hashInside.selector, 'tag#42');
+});
+
+test('gh-580: text and regex waits are NOT reclassified — #334 owns that grammar', () => {
+  // No `#` marker → a text selector. Must stay UNKNOWN, not become a fake id.
+  const text = parseMaestroFailure("  ╰─ Element 'Continue' not visible within 15s");
+  assert.equal(text.kind, 'UNKNOWN');
+
+  const regex = parseMaestroFailure('  ╰─ Element ".*" not visible within 15s');
+  assert.equal(regex.kind, 'UNKNOWN');
+
+  // A selector-less deadline stays UNKNOWN too.
+  assert.equal(
+    parseMaestroFailure('  ╰─ Wait timed out (cause: context deadline exceeded)').kind,
+    'UNKNOWN',
+  );
+
+  // An empty id renders no selector to extract — refuse rather than invent one.
+  assert.equal(parseMaestroFailure("  ╰─ Element '#' not visible within 1s").kind, 'UNKNOWN');
+});
+
+test('gh-580: a killed process outranks a matching wait line — process TIMEOUT precedence', () => {
+  const terminal = buildTerminalEvidence(RUNNER_1_1_20_STDOUT, { timedOut: true });
+  assert.equal(terminal.exitClass, 'timed-out');
+  // The wait wording IS present and classified inside the terminal evidence…
+  assert.equal(terminal.failureKind, 'SELECTOR_NOT_FOUND');
+
+  // …but exitClass wins, so the run stays a non-repairable TIMEOUT and can never
+  // reach the YAML-rewriting repair path.
+  const failure = parseMaestroFailure(RUNNER_1_1_20_STDOUT, terminal);
+  assert.equal(failure.kind, 'TIMEOUT');
+  assert.equal(isAutoRepairable(failure), false);
+});
+
+test('gh-580: duplicated staged runner output does not change the classified selector', () => {
+  // Authority staging re-invokes the runner with the same argv, so a passing
+  // stage's narration is concatenated ahead of the failing stage's.
+  const staged = [
+    'maestro-runner 1.1.20',
+    '    ✓ launchApp (2.7s)',
+    'maestro-runner 1.1.20',
+    '    ✓ launchApp (1.1s)',
+    '    ✗ extendedWaitUntil: visible id="otp_field" (1.2s)',
+    "      ╰─ Element '#otp_field' not visible within 15s (cause: context deadline exceeded)",
+  ].join('\n');
+  const terminal = buildTerminalEvidence(staged);
+  assert.equal(terminal.failureKind, 'SELECTOR_NOT_FOUND');
+  assert.equal(terminal.failureSelector, 'otp_field');
+  assert.equal(parseMaestroFailure(staged).selector, 'otp_field');
+});
+
+test('gh-580: an earlier transient wait miss loses to the terminal one (GH #118 ordering)', () => {
+  const retried = [
+    "    ╰─ Element '#stale_transient' not visible within 1s",
+    '    ✓ tapOn: retry (0.4s)',
+    "    ╰─ Element '#real_terminal_target' not visible within 15s",
+  ].join('\n');
+  assert.equal(parseMaestroFailure(retried).selector, 'real_terminal_target');
+});
+
+test('gh-580: boundedOutput keeps head AND tail inside one 500-char budget', () => {
+  const short = 'maestro-runner 1.1.20\n    ✓ launchApp (2.7s)';
+  assert.equal(boundedOutput(short), short, 'output within budget is returned verbatim');
+  assert.equal(boundedOutput(''), '');
+
+  const head = 'H'.repeat(400);
+  const tail = "  ╰─ Element '#otp_field' not visible within 15s".padStart(400, 'T');
+  const long = head + tail;
+  const bounded = boundedOutput(long);
+
+  assert.equal(bounded.length, 500, 'exactly the budget, never more');
+  assert.equal(bounded.slice(0, 249), long.slice(0, 249), 'first 249 chars are the head');
+  assert.equal(bounded.slice(-248), long.slice(-248), 'last 248 chars are the tail');
+  assert.equal(bounded.slice(249, 252), '\n…\n', 'the elision is explicit');
+  assert.ok(
+    bounded.includes("Element '#otp_field' not visible within 15s"),
+    'the terminal failure at the tail now survives the bound (defect 3)',
+  );
+});

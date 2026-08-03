@@ -51,6 +51,16 @@ const PATTERNS = [
         re: /Element not found:\s*text=(['"])((?:(?!\1).)+)\1/i,
         build: (m, raw) => ({ kind: 'SELECTOR_NOT_FOUND', selectorKind: 'text', selector: m[2], raw }),
     },
+    // maestro-runner 1.1.16/1.1.20 ID-wait shape — issue #580.
+    // "Element '#X' not visible within 1s (cause: context deadline exceeded)".
+    // The `#` immediately after the opening quote is the runner's ID-selector
+    // marker: text and regex waits render without it and keep their current
+    // classification (issue #334 owns those). Process/global timeouts never reach
+    // the pattern list — parseMaestroFailure returns TIMEOUT on `exitClass` first.
+    {
+        re: /Element (['"])#((?:(?!\1).)+)\1 not visible within/i,
+        build: (m, raw) => ({ kind: 'SELECTOR_NOT_FOUND', selectorKind: 'id', selector: m[2], raw }),
+    },
     {
         re: /Element (['"])((?:(?!\1).)+)\1 (?:was )?not found/i,
         build: (m, raw) => ({

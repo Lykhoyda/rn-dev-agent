@@ -1,5 +1,5 @@
 import { parse as yamlParse } from 'yaml';
-import { normalizeSteps, replayFlow, firstTestId, } from '../domain/cdp-flow-replay.js';
+import { normalizeSteps, replayFlow, firstTestId, findResumeAnchor, } from '../domain/cdp-flow-replay.js';
 export function firstReplayTestId(bodyYaml, params) {
     try {
         const parsed = yamlParse(bodyYaml);
@@ -69,10 +69,27 @@ function isDisabled(props) {
     const a11y = props.accessibilityState;
     return props.disabled === true || a11y?.disabled === true || props.pointerEvents === 'none';
 }
-export async function runCdpReplay(bodyYaml, params, deps) {
+/**
+ * GH #580: `resumeAtSelector` replays only the suffix from the step targeting that
+ * selector. The anchor is found on the RAW body and normalization applies to the
+ * suffix alone, so unsupported commands in the executed prefix stop disqualifying
+ * the whole action. A refused anchor keeps start-at-zero.
+ */
+export async function runCdpReplay(bodyYaml, params, deps, opts = {}) {
     const parsed = yamlParse(bodyYaml);
-    const steps = normalizeSteps(parsed, params);
-    return replayFlow(steps, buildCdpDispatch(deps));
+    const resume = resolveResume(parsed, params, opts.resumeAtSelector);
+    const startIndex = resume.applied ? resume.startIndex : 0;
+    const steps = normalizeSteps(startIndex === 0 ? parsed : parsed.slice(startIndex), params);
+    const result = await replayFlow(steps, buildCdpDispatch(deps), { indexOffset: startIndex });
+    return { ...result, resume };
+}
+function resolveResume(parsed, params, selector) {
+    if (!selector || !Array.isArray(parsed))
+        return { applied: false, reason: 'not-requested' };
+    const anchor = findResumeAnchor(parsed, params, selector);
+    return anchor.found
+        ? { applied: true, selector, startIndex: anchor.index }
+        : { applied: false, reason: anchor.reason };
 }
 export function buildCdpDispatch(deps) {
     return {

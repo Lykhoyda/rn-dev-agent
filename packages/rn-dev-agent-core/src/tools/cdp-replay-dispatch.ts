@@ -3,6 +3,7 @@ import {
   normalizeSteps,
   replayFlow,
   firstTestId,
+  findResumeAnchor,
   type ReplayResult,
 } from '../domain/cdp-flow-replay.js';
 import type { ReplayDispatch } from '../domain/cdp-flow-replay.js';
@@ -78,14 +79,48 @@ function isDisabled(props: Record<string, unknown> | null): boolean {
   return props.disabled === true || a11y?.disabled === true || props.pointerEvents === 'none';
 }
 
+/** GH #580: why a reactive replay did or did not resume at the failed selector. */
+export type CdpReplayResume =
+  | { applied: true; selector: string; startIndex: number }
+  | {
+      applied: false;
+      reason: 'not-requested' | 'no-match' | 'ambiguous' | 'nested-match' | 'too-deep';
+    };
+
+export interface CdpReplayResult extends ReplayResult {
+  resume: CdpReplayResume;
+}
+
+/**
+ * GH #580: `resumeAtSelector` replays only the suffix from the step targeting that
+ * selector. The anchor is found on the RAW body and normalization applies to the
+ * suffix alone, so unsupported commands in the executed prefix stop disqualifying
+ * the whole action. A refused anchor keeps start-at-zero.
+ */
 export async function runCdpReplay(
   bodyYaml: string,
   params: Record<string, string>,
   deps: CdpReplayDeps,
-): Promise<ReplayResult> {
+  opts: { resumeAtSelector?: string | null } = {},
+): Promise<CdpReplayResult> {
   const parsed = yamlParse(bodyYaml) as unknown[];
-  const steps = normalizeSteps(parsed, params);
-  return replayFlow(steps, buildCdpDispatch(deps));
+  const resume = resolveResume(parsed, params, opts.resumeAtSelector);
+  const startIndex = resume.applied ? resume.startIndex : 0;
+  const steps = normalizeSteps(startIndex === 0 ? parsed : parsed.slice(startIndex), params);
+  const result = await replayFlow(steps, buildCdpDispatch(deps), { indexOffset: startIndex });
+  return { ...result, resume };
+}
+
+function resolveResume(
+  parsed: unknown[],
+  params: Record<string, string>,
+  selector: string | null | undefined,
+): CdpReplayResume {
+  if (!selector || !Array.isArray(parsed)) return { applied: false, reason: 'not-requested' };
+  const anchor = findResumeAnchor(parsed, params, selector);
+  return anchor.found
+    ? { applied: true, selector, startIndex: anchor.index }
+    : { applied: false, reason: anchor.reason };
 }
 
 export function buildCdpDispatch(deps: CdpReplayDeps): ReplayDispatch {

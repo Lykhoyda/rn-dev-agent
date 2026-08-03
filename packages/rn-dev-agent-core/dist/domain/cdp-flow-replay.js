@@ -24,9 +24,21 @@ export function normalizeSteps(body, params) {
         const key = keys[0];
         const v = raw[key];
         switch (key) {
-            case 'launchApp':
+            case 'launchApp': {
+                // GH #580: `simctl launch` cannot clear state (that needs uninstall +
+                // reinstall), so an unhonorable key must refuse, not silently drop.
+                if (isObj(v)) {
+                    const unsupported = Object.keys(v).filter((k) => k !== 'stopApp');
+                    if (unsupported.length > 0)
+                        throw new UnsupportedStepError(`launchApp (unsupported keys: ${unsupported.sort().join(', ')})`);
+                    // A non-boolean stopApp would coerce to false — different launch
+                    // semantics than the author wrote, which is the same silent lie.
+                    if ('stopApp' in v && typeof v.stopApp !== 'boolean')
+                        throw new UnsupportedStepError('launchApp (stopApp must be a boolean)');
+                }
                 out.push({ t: 'launch', stopApp: isObj(v) && v.stopApp === true });
                 break;
+            }
             case 'tapOn': {
                 const id = isObj(v) ? asString(v.id) : null;
                 if (!id)
@@ -76,12 +88,61 @@ export function firstTestId(steps) {
     }
     return null;
 }
-export async function replayFlow(steps, dispatch) {
+// Bound the walk so a pathologically nested action body cannot stall the scan.
+const MAX_ANCHOR_DEPTH = 20;
+// Counted, not OR-ed: two matches inside one step must stay detectably ambiguous.
+function countIdHits(node, params, selector, index, depth, nested, scan) {
+    if (depth > MAX_ANCHOR_DEPTH) {
+        scan.truncated = true;
+        return;
+    }
+    if (Array.isArray(node)) {
+        for (const child of node)
+            countIdHits(child, params, selector, index, depth + 1, nested, scan);
+        return;
+    }
+    if (!isObj(node))
+        return;
+    for (const [key, value] of Object.entries(node)) {
+        if (key === 'id' && typeof value === 'string' && interp(value, params) === selector) {
+            scan.hits.push({ index, nested });
+            continue;
+        }
+        countIdHits(value, params, selector, index, depth + 1, nested || key === 'commands', scan);
+    }
+}
+/**
+ * GH #580: locate the one source step targeting `selector` so a reactive fallback
+ * resumes there instead of replaying already-executed mutations. Anything but a
+ * single top-level occurrence refuses — resuming at an enclosing `runFlow` would
+ * redispatch the siblings preceding a nested match, and a truncated walk cannot
+ * prove a deeper duplicate does not exist.
+ */
+export function findResumeAnchor(body, params, selector) {
+    if (!selector)
+        return { found: false, reason: 'no-match' };
+    const scan = { hits: [], truncated: false };
+    body.forEach((raw, index) => countIdHits(raw, params, selector, index, 0, false, scan));
+    if (scan.truncated)
+        return { found: false, reason: 'too-deep' };
+    if (scan.hits.length === 0)
+        return { found: false, reason: 'no-match' };
+    if (scan.hits.length > 1)
+        return { found: false, reason: 'ambiguous' };
+    return scan.hits[0].nested
+        ? { found: false, reason: 'nested-match' }
+        : { found: true, index: scan.hits[0].index };
+}
+export async function replayFlow(steps, dispatch, 
+// GH #580: a resumed suffix reports SOURCE step indices, not suffix-relative
+// ones, so TRANSPORT_BLIND messages and failedStepIndex stay honest.
+opts = {}) {
+    const offset = opts.indexOffset ?? 0;
     const trace = [];
     let lastTapped = null;
     const fail = (i, reason) => ({
         passed: false,
-        failedStepIndex: i,
+        failedStepIndex: i + offset,
         reason,
         steps: trace,
     });
@@ -123,7 +184,7 @@ export async function replayFlow(steps, dispatch) {
                         if (!sub.passed) {
                             return {
                                 passed: false,
-                                failedStepIndex: i,
+                                failedStepIndex: i + offset,
                                 reason: sub.reason,
                                 steps: trace,
                             };

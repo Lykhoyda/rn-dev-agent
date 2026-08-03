@@ -126,7 +126,7 @@ Example calls:
        },
        durationMs,
        flowFile,
-       firstAttemptOutput?: string,     // first 500 chars of maestro stdout/stderr
+       firstAttemptOutput?: string,     // bounded maestro stdout/stderr: head + tail, 500 chars
        retryOutput?: string,            // present iff retriedAfterRepair === true
        retriedAfterRepair?: boolean
      }
@@ -139,8 +139,11 @@ Example calls:
 
    On failure (`ok: false`), the envelope's `error` message and
    `meta.underlyingFailure` carry the exact underlying Maestro failure
-   (the runner's headline error, or the failing step name) — read those
-   directly instead of digging through the maestro report output.
+   (the failing step name plus `KIND: selector` when the runner named one),
+   and `meta.failureKind` / `meta.failureSelector` expose the same evidence
+   structurally. Read those directly. The runner's HTML report is a
+   temporary artifact that is deleted after every run — no report path is
+   returned, and none should be looked for.
 
    Branch on `data.autoRepair.outcome`:
    - **`outcome === 'skipped'`** with `attempted: false`: happy path —
@@ -172,7 +175,6 @@ After execution, summarise:
 ```
 ✅ <flow-name> passed (16/16, 18.5s)
 Replayed: <command-line>
-Report: reports/2026-04-29_HH-MM-SS/report.html
 ```
 
 Or:
@@ -180,7 +182,6 @@ Or:
 ```
 ❌ <flow-name> failed at step <N> ("tapOn id: ...")
 Replayed: <command-line>
-Failing screenshot: reports/.../assets/flow-000/cmd-N-after.png
 Likely cause: <one-line diagnosis>
 Next step: <single concrete suggestion>
 ```
