@@ -643,7 +643,7 @@ export function resolveCachedIdentifier(ref) {
         return undefined;
     return getCachedMetadata(bareRef)?.identifier;
 }
-async function maestroFillFallback(ref, text, platform, clearFirst = false) {
+async function maestroFillFallback(ref, text, platform, clearFirst = false, authorityArgs) {
     const escapedRef = yamlEscape(ref.replace(/^@/, ''));
     const escapedText = yamlEscape(text);
     // When reached from the #191 verify-escalation, the field already holds the
@@ -654,7 +654,8 @@ async function maestroFillFallback(ref, text, platform, clearFirst = false) {
     const result = await runMaestroInline(yaml, {
         platform,
         slug: 'fill-fallback',
-        timeoutMs: 30_000,
+        timeoutMs: 120_000,
+        authorityArgs,
     });
     if (result.passed) {
         return okResult({ filled: true, method: 'maestro', length: text.length }, { meta: { fallbackUsed: 'maestro' } });
@@ -836,7 +837,7 @@ export function createDeviceFillHandler(getClient) {
                         String(decision.delayMs),
                     ], { settle: { enabled: false } });
                 }
-                const maestro = await maestroFillFallback(maestroTargetRef(), args.text, 'ios', true);
+                const maestro = await maestroFillFallback(maestroTargetRef(), args.text, 'ios', true, args);
                 if (!maestro.isError) {
                     const { outcome } = await nativeSettle(client, jsTestId, args.text, null, null);
                     if (outcome !== 'corrupted') {
@@ -910,7 +911,7 @@ export function createDeviceFillHandler(getClient) {
                         // append-prone adb tier below. Target the INNER input this branch
                         // just filled, not the outer Pressable wrapper.
                         if (classifyFillPrimaryError(resolved) === 'reject-ladder') {
-                            return maestroFillFallback(resolveCachedIdentifier(resolvedRef) ?? resolvedRef, args.text, 'android', true);
+                            return maestroFillFallback(resolveCachedIdentifier(resolvedRef) ?? resolvedRef, args.text, 'android', true, args);
                         }
                     }
                 }
@@ -937,7 +938,7 @@ export function createDeviceFillHandler(getClient) {
                 // fill above — a rejected retry means focus is fine but the field
                 // ignores sets; descend to the clear-first Maestro tier.
                 if (classifyFillPrimaryError(retry) === 'reject-ladder') {
-                    return maestroFillFallback(maestroTargetRef(), args.text, 'android', true);
+                    return maestroFillFallback(maestroTargetRef(), args.text, 'android', true, args);
                 }
             }
         }
@@ -948,7 +949,7 @@ export function createDeviceFillHandler(getClient) {
         // old value it would append and report success. Go straight to Maestro
         // with clearFirst so eraseText removes the stale value before inputText.
         if (descent === 'reject-ladder') {
-            return maestroFillFallback(maestroTargetRef(), args.text, 'android', true);
+            return maestroFillFallback(maestroTargetRef(), args.text, 'android', true, args);
         }
         // Fallback 2: platform-specific last resort. Story 10 (#391): chunked adb
         // is the deliberate LAST native tier — its `input text` transport cannot
@@ -970,7 +971,7 @@ export function createDeviceFillHandler(getClient) {
         }
         // Fallback 3: Maestro inputText (iOS, or Android if adb fallback also failed).
         const platform = androidSession ? 'android' : 'ios';
-        return maestroFillFallback(maestroTargetRef(), args.text, platform);
+        return maestroFillFallback(maestroTargetRef(), args.text, platform, false, args);
     });
 }
 // Default screen dimensions for common devices — used when screen rect cache is empty.

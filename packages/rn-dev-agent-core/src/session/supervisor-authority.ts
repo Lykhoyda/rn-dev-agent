@@ -6,6 +6,7 @@ import { openSessionRegistry } from './registry.js';
 import type { SourceIdentity } from './source-identity.js';
 import { ensureSharedKnowledgeRoot } from './shared-knowledge-root.js';
 import { stopManagedMetro, type ManagedMetroBinding } from './managed-metro.js';
+import { inspectAutomationDuty, recoverAutomationDuty } from './managed-automation.js';
 import {
   createAuthorityStateLayout,
   sessionRuntimeDirectory,
@@ -51,6 +52,8 @@ export function createSupervisorAuthority(
     stopBoundRunner?: typeof stopBoundRunner;
     stopBoundRecorder?: typeof stopBoundRecorder;
     stopBoundObserve?: typeof stopBoundObserve;
+    inspectAutomation?: typeof inspectAutomationDuty;
+    recoverAutomation?: typeof recoverAutomationDuty;
   } = {},
 ): SupervisorAuthority {
   if (!input.supervisorBirth) {
@@ -226,6 +229,24 @@ export function createSupervisorAuthority(
           status = registry.beginSessionClose(session);
         }
         if (status) {
+          const device = status.bindings.device as
+            | { platform?: unknown; deviceId?: unknown }
+            | undefined;
+          if (
+            (device?.platform === 'ios' || device?.platform === 'android') &&
+            typeof device.deviceId === 'string' &&
+            (dependencies.inspectAutomation ?? inspectAutomationDuty)(
+              device.platform,
+              device.deviceId,
+            )
+          ) {
+            await (dependencies.recoverAutomation ?? recoverAutomationDuty)({
+              sessionId: status.sessionId,
+              claimEpoch: status.claimEpoch,
+              platform: device.platform,
+              deviceId: device.deviceId,
+            });
+          }
           const recorder = status.bindings.recorder as Record<string, unknown> | null | undefined;
           if (recorder) {
             const claimKey = `${String(recorder.platform)}:${String(recorder.deviceId)}`;

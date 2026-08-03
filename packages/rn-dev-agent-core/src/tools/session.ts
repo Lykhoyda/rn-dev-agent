@@ -46,6 +46,7 @@ import {
   stopBoundRunner,
 } from '../session/process-cleanup.js';
 import { deviceExistsOnHost } from '../session/device-existence.js';
+import { inspectAutomationDuty, recoverAutomationDuty } from '../session/managed-automation.js';
 
 export interface SessionToolInput {
   action:
@@ -58,6 +59,7 @@ export interface SessionToolInput {
     | 'accept_handoff'
     | 'adopt_stale'
     | 'recover_arbiter'
+    | 'recover_automation'
     | 'preview_integration'
     | 'apply_integration'
     | 'restore_integration'
@@ -113,6 +115,8 @@ interface SessionHandlerDependencies extends ManagedMetroStatusDependencies {
   stopManagedMetroWithEvidence?: typeof stopManagedMetroWithEvidence;
   evidenceSocketExists?: (path: string) => boolean;
   removeEvidenceSocket?: (path: string) => void;
+  recoverAutomation?: typeof recoverAutomationDuty;
+  inspectAutomation?: typeof inspectAutomationDuty;
   resetArbiter?: (reason: string) => {
     clearedOps: number;
     hadFlow: boolean;
@@ -380,6 +384,58 @@ export function createSessionHandler(
       const { registry, session } = isRecovery
         ? runtime.requireRecovery()
         : runtime.requireOperational();
+      if (input.action === 'recover_automation') {
+        if (input.confirmed !== true) {
+          throw new SessionAuthorityError(
+            'SESSION_AUTHORITY_REQUIRED',
+            'recover_automation requires confirmed=true',
+          );
+        }
+        const status = runtime.status();
+        if (!status.available) {
+          throw new SessionAuthorityError(status.code, status.reason);
+        }
+        const device = status.bindings.device as
+          | { platform?: unknown; deviceId?: unknown }
+          | undefined;
+        if (
+          (device?.platform !== 'ios' && device?.platform !== 'android') ||
+          typeof device.deviceId !== 'string'
+        ) {
+          throw new SessionAuthorityError(
+            'AUTOMATION_CLEANUP_UNPROVEN',
+            'recover_automation requires exact bound-device authority',
+          );
+        }
+        const recovered = await (dependencies.recoverAutomation ?? recoverAutomationDuty)({
+          sessionId: status.sessionId,
+          claimEpoch: status.claimEpoch,
+          platform: device.platform,
+          deviceId: device.deviceId,
+        });
+        return okResult({ recovered, session: projectPublicAuthorityStatus(runtime.status()) });
+      }
+
+      const currentStatus = runtime.status();
+      if (currentStatus.available) {
+        const device = currentStatus.bindings.device as
+          | { platform?: unknown; deviceId?: unknown }
+          | undefined;
+        if (
+          (device?.platform === 'ios' || device?.platform === 'android') &&
+          typeof device.deviceId === 'string' &&
+          (dependencies.inspectAutomation ?? inspectAutomationDuty)(
+            device.platform,
+            device.deviceId,
+          )
+        ) {
+          throw new SessionAuthorityError(
+            'AUTOMATION_CLEANUP_UNPROVEN',
+            'plugin-owned automation cleanup is unproven; run recover_automation with confirmed=true before session transitions',
+          );
+        }
+      }
+
       if (input.action === 'recover_arbiter') {
         if (input.confirmed !== true) {
           throw new SessionAuthorityError(

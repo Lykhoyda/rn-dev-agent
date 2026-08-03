@@ -644,3 +644,48 @@ test('a supervisor without the source claim stays blocked and exposes the full a
     await prior.close();
   }
 });
+
+test('supervisor close recovers authenticated automation before releasing the session', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'rn-supervisor-automation-'));
+  roots.push(stateDir);
+  const calls: unknown[] = [];
+  const authority = createSupervisorAuthority(
+    {
+      stateDir,
+      source: {
+        kind: 'git',
+        contentRoot: '/repo',
+        appRoot: '/repo',
+        sourceKey: 'source-key',
+        worktreeKey: 'worktree-key',
+        appRootKey: 'app-key',
+        head: 'abc123',
+      },
+      supervisorBirth: { pid: 101, source: 'linux-proc', token: 'supervisor-birth' },
+      uid: '501',
+      startHeartbeat: false,
+      ownerStatus: () => 'match',
+    },
+    {
+      inspectAutomation: () => ({ invocationId: 'owned' }) as never,
+      recoverAutomation: async (input) => {
+        calls.push(input);
+        return { recovered: true };
+      },
+    },
+  );
+  authority.registry.updateBindings(authority.session, {
+    state: 'device_bound',
+    bindings: { device: { platform: 'ios', deviceId: 'UDID-A', appId: 'com.example' } },
+  });
+
+  await authority.close();
+  assert.deepEqual(calls, [
+    {
+      sessionId: authority.session.sessionId,
+      claimEpoch: authority.session.claimEpoch,
+      platform: 'ios',
+      deviceId: 'UDID-A',
+    },
+  ]);
+});

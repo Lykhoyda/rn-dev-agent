@@ -111,7 +111,8 @@ import { bindNativeRunner, unbindNativeRunner } from './session/runner-binding.j
 import { claimOptionalBundleAuthority, createAuthorityGate } from './session/authority-gate.js';
 import { createLocalAuthorityProbe } from './session/local-authority-probe.js';
 import { readJsonStateFile } from './util/secure-state-file.js';
-import { boundConnectConflict, buildBundleAuthorityBinding, pinExactDevClient, } from './session/dev-client-authority.js';
+import { buildBundleAuthorityBinding, pinExactDevClient } from './session/dev-client-authority.js';
+import { createRegisteredConnectHandler } from './session/registered-connect.js';
 import { verifyMetroAuthorityMarker, } from './session/metro-authority.js';
 import { filterTargetsForExactDevice, proveTargetDeviceAssociation, } from './session/target-device-authority.js';
 import { strictProofSourceIdentity } from './session/source-identity.js';
@@ -838,16 +839,7 @@ const sessionHandler = createSessionHandler(authorityRuntime, {
     pinDevClient: pinSessionDevClient,
 });
 const disconnectClientHandler = createDisconnectHandler(getClient, setClient, createClient);
-async function connectBoundSession(args) {
-    const status = authorityRuntime.status();
-    if (!status.available) {
-        return failResult(status.reason, status.code);
-    }
-    const conflict = boundConnectConflict(status, args);
-    if (conflict)
-        return failResult(conflict.message, conflict.code);
-    return sessionHandler({ action: 'pin_dev_client', force: args.force === true });
-}
+const connectBoundSession = createRegisteredConnectHandler(authorityRuntime, sessionHandler);
 async function disconnectBoundSession() {
     const disconnected = await disconnectClientHandler({});
     if (disconnected.isError)
@@ -877,6 +869,7 @@ trackedTool('rn_session', 'Inspect and transition the fenced rn-dev-agent author
         'accept_handoff',
         'adopt_stale',
         'recover_arbiter',
+        'recover_automation',
         'preview_integration',
         'apply_integration',
         'restore_integration',
@@ -1403,7 +1396,7 @@ trackedTool('collect_logs', 'Collect logs from multiple sources in parallel: JS 
 }, createCollectLogsHandler(getClient));
 // --- device tools (native interaction via in-tree runners) ---
 trackedTool('device_list', 'List all available iOS simulators and Android emulators. Returns device name, UDID, platform, and status. Use before device_snapshot action=open to confirm the target device.', {}, createDeviceListHandler());
-trackedTool('device_screenshot', 'Capture the exact authority-bound device screen. Returns the file path and preserves the session device identity in the authority receipt.', {
+trackedTool('device_screenshot', 'Capture the exact authority-bound device screen with no cross-device retry. Returns the file path; iOS failures preserve sanitized backend argv, exit/signal/timeout, stderr, output format/path, and a shortened receipt-bound device identity.', {
     path: z
         .string()
         .optional()
@@ -1700,7 +1693,7 @@ trackedTool('device_reset_state', 'Reset permissions/storage and relaunch the au
         .optional()
         .describe('After helpers, also wait for globalThis.__NAV_REF__ to expose a non-empty navigation state. Default false.'),
 }, createDeviceResetStateHandler(getClient, { getSession: getActiveSession }));
-trackedTool('device_deeplink', 'Open a deep link on the exact authority-bound iOS simulator or Android device.', {
+trackedTool('device_deeplink', 'Open a deep link on the exact authority-bound iOS simulator or Android device. On an open iOS session, best-effort accepts the native SpringBoard Open confirmation and reports meta.openDialogTapped.', {
     url: z
         .string()
         .describe('URL to open, e.g. "myapp://claims/new" or "https://example.com/page".'),
@@ -1732,7 +1725,7 @@ trackedTool('cdp_dismiss_dev_client_picker', 'Dismiss the Expo Dev Client "Devel
         .optional()
         .describe('Authority-bound platform; conflicting values are refused'),
 }, createDismissDevClientPickerHandler(() => getClient().metroPort));
-trackedTool('device_accept_system_dialog', 'Tap an OS-level accept button through the capability-bound runner on the exact session device.', {
+trackedTool('device_accept_system_dialog', 'Tap an OS-level accept button on the exact session device. iOS prefers the capability-bound native runner so SpringBoard-owned dialogs are reachable; DIALOG_BUTTON_NOT_FOUND returns availableButtons for an exact-label retry.', {
     label: z
         .string()
         .optional()
@@ -1745,9 +1738,9 @@ trackedTool('device_accept_system_dialog', 'Tap an OS-level accept button throug
         .number()
         .int()
         .min(1000)
-        .max(60000)
+        .max(120000)
         .optional()
-        .describe('Maestro invocation timeout (default 15000ms).'),
+        .describe('Whole fallback Maestro timeout (default 120000ms; native iOS runner path is preferred).'),
 }, createDeviceAcceptSystemDialogHandler());
 trackedTool('device_dismiss_system_dialog', 'Tap an OS-level dismiss button through the capability-bound runner on the exact session device.', {
     label: z
@@ -1762,9 +1755,9 @@ trackedTool('device_dismiss_system_dialog', 'Tap an OS-level dismiss button thro
         .number()
         .int()
         .min(1000)
-        .max(60000)
+        .max(120000)
         .optional()
-        .describe('Maestro invocation timeout (default 15000ms).'),
+        .describe('Whole fallback Maestro timeout (default 120000ms; native iOS runner path is preferred).'),
 }, createDeviceDismissSystemDialogHandler());
 const resolveNativeProofDevice = async () => {
     const session = getActiveSession();
@@ -2025,16 +2018,24 @@ trackedTool('device_pick_value', 'Select a value in a UIPickerView / Android pic
         .min(1000)
         .max(120000)
         .optional()
-        .describe('Maestro timeout (default 20000ms).'),
+        .describe('Whole Maestro flow timeout (default 120000ms).'),
 }, createDevicePickValueHandler());
-trackedTool('device_pick_date', 'Select a date in a UIDatePicker (wheels mode) / Android DatePicker. Parses YYYY-MM-DD or ISO 8601 and taps month name, day, and year in sequence. Known limitation: only wheels mode is supported — iOS 14+ inline calendar mode requires tapping calendar cells via device_find.', {
+trackedTool('device_pick_date', 'Select a visible date in a UIDatePicker (wheels mode) / Android DatePicker with one authority-bound Maestro flow and one whole-flow timeout. Rejects impossible calendar dates. Native off-screen wheel scrolling remains tracked separately in issue #27; inline calendar mode is unsupported.', {
     date: z
         .string()
         .describe('Target date — YYYY-MM-DD or full ISO 8601. Time component is ignored.'),
+    openerTestId: z
+        .string()
+        .optional()
+        .describe('Optional testID of the control that opens the date picker.'),
     pickerTestId: z
         .string()
         .optional()
-        .describe('Optional testID of the date picker — tapped first to ensure the picker is open.'),
+        .describe('Deprecated openerTestId alias retained for compatibility; it does not scope row taps.'),
+    pickerScopeTestId: z
+        .string()
+        .optional()
+        .describe('Optional picker-container testID used as childOf scope for month/day/year rows.'),
     platform: z
         .enum(['ios', 'android'])
         .optional()
@@ -2045,7 +2046,7 @@ trackedTool('device_pick_date', 'Select a date in a UIDatePicker (wheels mode) /
         .min(1000)
         .max(120000)
         .optional()
-        .describe('Maestro timeout (default 20000ms).'),
+        .describe('Whole Maestro flow timeout (default 120000ms; never divided by component count).'),
 }, createDevicePickDateHandler());
 trackedTool('device_focus_next', "Move keyboard focus to the next input field by tapping the soft keyboard's Next/Return/Done/Go button. Use in multi-field form flows where sequential device_press + device_fill calls leave focus stuck on the first field. Requires an open session and a visible keyboard.", {}, createDeviceFocusNextHandler());
 trackedTool('device_batch', 'Execute a sequence of UI interactions in ONE tool call. Eliminates LLM round-trip overhead. Steps: find/press/fill (testID OR text/ref), scroll/swipe (direction), back, wait (ms), hideKeyboard, snapshot, screenshot. Pass `testID` on find/press/fill for fresh fiber-tree resolution per step (eliminates stale-ref-across-step-transitions failures from cached refs). Fails fast on error unless step has optional=true OR continueOnError is true at the batch level; a step TIMEOUT always aborts the batch (the native operation may still be completing, so later steps are never started) regardless of optional/continueOnError.', {

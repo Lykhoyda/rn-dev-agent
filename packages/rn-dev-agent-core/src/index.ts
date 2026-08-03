@@ -194,11 +194,8 @@ import { bindNativeRunner, unbindNativeRunner } from './session/runner-binding.j
 import { claimOptionalBundleAuthority, createAuthorityGate } from './session/authority-gate.js';
 import { createLocalAuthorityProbe } from './session/local-authority-probe.js';
 import { readJsonStateFile } from './util/secure-state-file.js';
-import {
-  boundConnectConflict,
-  buildBundleAuthorityBinding,
-  pinExactDevClient,
-} from './session/dev-client-authority.js';
+import { buildBundleAuthorityBinding, pinExactDevClient } from './session/dev-client-authority.js';
+import { createRegisteredConnectHandler } from './session/registered-connect.js';
 import {
   verifyMetroAuthorityMarker,
   type MetroAuthorityMarker,
@@ -1068,15 +1065,7 @@ const sessionHandler = createSessionHandler(authorityRuntime, {
 });
 const disconnectClientHandler = createDisconnectHandler(getClient, setClient, createClient);
 
-async function connectBoundSession(args: Record<string, unknown>) {
-  const status = authorityRuntime.status();
-  if (!status.available) {
-    return failResult(status.reason, status.code as import('./types.js').ToolErrorCode);
-  }
-  const conflict = boundConnectConflict(status, args);
-  if (conflict) return failResult(conflict.message, conflict.code);
-  return sessionHandler({ action: 'pin_dev_client', force: args.force === true });
-}
+const connectBoundSession = createRegisteredConnectHandler(authorityRuntime, sessionHandler);
 
 async function disconnectBoundSession() {
   const disconnected = await disconnectClientHandler({});
@@ -1110,6 +1099,7 @@ trackedTool(
       'accept_handoff',
       'adopt_stale',
       'recover_arbiter',
+      'recover_automation',
       'preview_integration',
       'apply_integration',
       'restore_integration',
@@ -1891,7 +1881,7 @@ trackedTool(
 
 trackedTool(
   'device_screenshot',
-  'Capture the exact authority-bound device screen. Returns the file path and preserves the session device identity in the authority receipt.',
+  'Capture the exact authority-bound device screen with no cross-device retry. Returns the file path; iOS failures preserve sanitized backend argv, exit/signal/timeout, stderr, output format/path, and a shortened receipt-bound device identity.',
   {
     path: z
       .string()
@@ -2308,7 +2298,7 @@ trackedTool(
 
 trackedTool(
   'device_deeplink',
-  'Open a deep link on the exact authority-bound iOS simulator or Android device.',
+  'Open a deep link on the exact authority-bound iOS simulator or Android device. On an open iOS session, best-effort accepts the native SpringBoard Open confirmation and reports meta.openDialogTapped.',
   {
     url: z
       .string()
@@ -2356,7 +2346,7 @@ trackedTool(
 
 trackedTool(
   'device_accept_system_dialog',
-  'Tap an OS-level accept button through the capability-bound runner on the exact session device.',
+  'Tap an OS-level accept button on the exact session device. iOS prefers the capability-bound native runner so SpringBoard-owned dialogs are reachable; DIALOG_BUTTON_NOT_FOUND returns availableButtons for an exact-label retry.',
   {
     label: z
       .string()
@@ -2372,9 +2362,11 @@ trackedTool(
       .number()
       .int()
       .min(1000)
-      .max(60000)
+      .max(120000)
       .optional()
-      .describe('Maestro invocation timeout (default 15000ms).'),
+      .describe(
+        'Whole fallback Maestro timeout (default 120000ms; native iOS runner path is preferred).',
+      ),
   },
   createDeviceAcceptSystemDialogHandler(),
 );
@@ -2397,9 +2389,11 @@ trackedTool(
       .number()
       .int()
       .min(1000)
-      .max(60000)
+      .max(120000)
       .optional()
-      .describe('Maestro invocation timeout (default 15000ms).'),
+      .describe(
+        'Whole fallback Maestro timeout (default 120000ms; native iOS runner path is preferred).',
+      ),
   },
   createDeviceDismissSystemDialogHandler(),
 );
@@ -2700,22 +2694,32 @@ trackedTool(
       .min(1000)
       .max(120000)
       .optional()
-      .describe('Maestro timeout (default 20000ms).'),
+      .describe('Whole Maestro flow timeout (default 120000ms).'),
   },
   createDevicePickValueHandler(),
 );
 
 trackedTool(
   'device_pick_date',
-  'Select a date in a UIDatePicker (wheels mode) / Android DatePicker. Parses YYYY-MM-DD or ISO 8601 and taps month name, day, and year in sequence. Known limitation: only wheels mode is supported — iOS 14+ inline calendar mode requires tapping calendar cells via device_find.',
+  'Select a visible date in a UIDatePicker (wheels mode) / Android DatePicker with one authority-bound Maestro flow and one whole-flow timeout. Rejects impossible calendar dates. Native off-screen wheel scrolling remains tracked separately in issue #27; inline calendar mode is unsupported.',
   {
     date: z
       .string()
       .describe('Target date — YYYY-MM-DD or full ISO 8601. Time component is ignored.'),
+    openerTestId: z
+      .string()
+      .optional()
+      .describe('Optional testID of the control that opens the date picker.'),
     pickerTestId: z
       .string()
       .optional()
-      .describe('Optional testID of the date picker — tapped first to ensure the picker is open.'),
+      .describe(
+        'Deprecated openerTestId alias retained for compatibility; it does not scope row taps.',
+      ),
+    pickerScopeTestId: z
+      .string()
+      .optional()
+      .describe('Optional picker-container testID used as childOf scope for month/day/year rows.'),
     platform: z
       .enum(['ios', 'android'])
       .optional()
@@ -2726,7 +2730,7 @@ trackedTool(
       .min(1000)
       .max(120000)
       .optional()
-      .describe('Maestro timeout (default 20000ms).'),
+      .describe('Whole Maestro flow timeout (default 120000ms; never divided by component count).'),
   },
   createDevicePickDateHandler(),
 );

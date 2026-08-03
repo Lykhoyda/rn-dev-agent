@@ -1,5 +1,8 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { failResult } from '../utils.js';
 import { foreignFlowGate, foreignGateUdid, foreignGateEnabled } from './foreign-flow-gate.js';
+import { inspectAutomationDuty } from '../session/managed-automation.js';
+import { publicDeviceIdentity, sanitizeAutomationProcessLines, } from '../util/public-diagnostics.js';
 /**
  * GH#202 Phase 2a: in-memory serialization of the three device-control planes
  * for ONE bridge process. `flow` (Maestro) is exclusive — it cannot start while
@@ -28,6 +31,24 @@ export class DeviceSessionArbiter {
             return { ok: false, code: 'BUSY_FLOW_ACTIVE', holder: this.describeBlocker() };
         }
         return this.grant(plane, tool, false);
+    }
+    /** Promote only the currently held interaction lease when it is the sole op.
+     * Ordinary interactions remain interactions and therefore do not start the
+     * pinned post-flow grace window. Inline Maestro escalates lazily at dispatch. */
+    promoteToFlow(lease) {
+        const info = this.ops.get(lease.opId);
+        if (!info || info.plane === 'introspection') {
+            return { ok: false, code: 'BUSY_FLOW_ACTIVE', holder: this.describeBlocker() };
+        }
+        if (this.flowLeaseHeldBy === lease.opId) {
+            return { ok: true, lease: { plane: 'flow', opId: lease.opId } };
+        }
+        if (this.flowLeaseHeldBy !== null || this.ops.size !== 1) {
+            return { ok: false, code: 'BUSY_FLOW_ACTIVE', holder: this.describeBlocker() };
+        }
+        info.plane = 'flow';
+        this.flowLeaseHeldBy = lease.opId;
+        return { ok: true, lease: { plane: 'flow', opId: lease.opId } };
     }
     grant(plane, tool, isFlow) {
         const opId = this.nextOpId++;
@@ -88,6 +109,15 @@ export class DeviceSessionArbiter {
     }
 }
 export const arbiter = new DeviceSessionArbiter();
+const activeLease = new AsyncLocalStorage();
+/** Dynamically enter the flow plane exactly when an inline Maestro fallback dispatches. */
+export function promoteCurrentOperationToManagedFlow() {
+    const context = activeLease.getStore();
+    if (!context) {
+        return { ok: false, code: 'BUSY_FLOW_ACTIVE', holder: null };
+    }
+    return context.arbiter.promoteToFlow(context.lease);
+}
 // --- Plane classification ---------------------------------------------------
 // flow: tools that drive the whole device via Maestro OR relaunch the app —
 // exclusive, because either yanks the device out from under everything else.
@@ -186,12 +216,14 @@ const FLOW_FALLBACK_TOOLS = new Set(['device_screenshot']);
 /** GH#186: WDA teardown after our own flow takes seconds; within this window
  * the detector cannot distinguish our dying driver from a foreign one. */
 const FOREIGN_GRACE_MS = 10_000;
-function foreignRefusal(name, warning, scanMs) {
+function foreignRefusal(name, warning, scanMs, udid) {
+    const safeLines = sanitizeAutomationProcessLines(warning.processLines, udid);
+    const safeWarning = { ...warning, processLines: safeLines };
     return failResult(`Refusing ${name}: a FOREIGN Maestro/XCUITest session is driving this simulator ` +
-        `(${warning.processLines[0] ?? 'detected via ps'}). L1 introspection stays safe — use ` +
+        `(${safeLines[0] ?? 'detected by the exact-device automation guard'}). L1 introspection stays safe — use ` +
         `cdp_component_tree / cdp_store_state / cdp_navigation_state for reads, and device_screenshot ` +
         `for pixels (simctl fallback). Retry taps/flows after the foreign run completes. ` +
-        `Opt out of this guard with RN_IOS_FOREIGN_GUARD=0.`, 'BUSY_FOREIGN_FLOW', { foreignRunner: warning, conflict: true, timings_ms: { foreignScan: scanMs } });
+        `Opt out of this guard with RN_IOS_FOREIGN_GUARD=0.`, 'BUSY_FOREIGN_FLOW', { foreignRunner: safeWarning, conflict: true, timings_ms: { foreignScan: scanMs } });
 }
 /**
  * Wrap an MCP handler so it acquires its plane before running and releases
@@ -209,6 +241,17 @@ export function arbiterWrap(name, handler, inst = arbiter, foreign = {}) {
     const gate = foreign.gate ?? foreignFlowGate;
     const getUdid = foreign.getUdid ?? foreignGateUdid;
     const enabled = foreign.enabled ?? foreignGateEnabled;
+    const ownedAutomation = foreign.ownedAutomation ??
+        ((udid) => {
+            try {
+                return inspectAutomationDuty('ios', udid) !== null;
+            }
+            catch {
+                // Corrupt/unreadable persisted ownership can never authorize cleanup,
+                // but it must retain the refusal fence rather than look foreign/absent.
+                return true;
+            }
+        });
     return async (...args) => {
         // GH#186 Phase 6: a foreign Maestro session is an external flow-plane
         // holder. Checked for interaction/flow planes only (L1 reads never
@@ -224,6 +267,9 @@ export function arbiterWrap(name, handler, inst = arbiter, foreign = {}) {
             enabled()) {
             const udid = getUdid();
             if (udid !== null) {
+                if (ownedAutomation(udid)) {
+                    return failResult(`Refusing ${name}: cleanup of plugin-owned automation on ${publicDeviceIdentity(udid)} is unproven. Run rn_session({ action: "recover_automation", confirmed: true }); exact identity remains available only in local authority state.`, 'AUTOMATION_CLEANUP_UNPROVEN', { device: publicDeviceIdentity(udid), conflict: true });
+                }
                 const check = await gate.check(udid);
                 if (check.active && check.warning) {
                     if (FLOW_FALLBACK_TOOLS.has(name)) {
@@ -231,7 +277,7 @@ export function arbiterWrap(name, handler, inst = arbiter, foreign = {}) {
                         // available via simctl (the handler routes by gate.lastActive).
                         return await handler(...args);
                     }
-                    return foreignRefusal(name, check.warning, check.scanMs);
+                    return foreignRefusal(name, check.warning, check.scanMs, udid);
                 }
             }
         }
@@ -251,7 +297,7 @@ export function arbiterWrap(name, handler, inst = arbiter, foreign = {}) {
                 `run rn_session({ action: "recover_arbiter", confirmed: true }).`, res.code, { holder: res.holder, conflict: true });
         }
         try {
-            return await handler(...args);
+            return await activeLease.run({ arbiter: inst, lease: res.lease, tool: name }, () => handler(...args));
         }
         finally {
             inst.release(res.lease);

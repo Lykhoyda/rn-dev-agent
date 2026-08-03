@@ -1,0 +1,412 @@
+import { execFileSync, spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { existsSync, unlinkSync } from 'node:fs';
+import { deleteStateFile, readJsonStateFile, runnerStatePath, writeJsonStateFileAtomic, } from '../util/secure-state-file.js';
+import { probeProcessBirth, readProcessBirth } from './process-birth.js';
+const OUTPUT_LIMIT = 10 * 1024 * 1024;
+const TERM_GRACE_MS = 500;
+const ABSENCE_CONFIRM_MS = 2_000;
+const POLL_MS = 25;
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+export function automationStatePath(platform, deviceId) {
+    // Reuse the hardened runner-state namespace and atomic/symlink-refusing state
+    // file primitives. Automation is another transient runner ownership duty,
+    // not a second registry or ambient PID database.
+    return runnerStatePath(`automation-${platform}-${deviceId}`);
+}
+export function readPersistedAutomationState(platform, deviceId) {
+    const state = readJsonStateFile(automationStatePath(platform, deviceId));
+    if (state?.schemaVersion !== 1 ||
+        state.kind !== 'maestro-process-group' ||
+        typeof state.invocationId !== 'string' ||
+        typeof state.sessionId !== 'string' ||
+        !Number.isSafeInteger(state.claimEpoch) ||
+        state.platform !== platform ||
+        state.deviceId !== deviceId ||
+        !Number.isSafeInteger(state.pid) ||
+        !Number.isSafeInteger(state.pgid) ||
+        typeof state.processBirth !== 'string' ||
+        typeof state.startedAt !== 'string' ||
+        typeof state.tool !== 'string' ||
+        !Array.isArray(state.attributedProcesses)) {
+        return null;
+    }
+    return state;
+}
+function groupPresence(pgid, signalGroup) {
+    try {
+        signalGroup(pgid, 0);
+        return 'present';
+    }
+    catch (error) {
+        const code = error.code;
+        if (code === 'ESRCH')
+            return 'absent';
+        return 'unknown';
+    }
+}
+async function waitForGroupAbsence(pgid, signalGroup, delay, timeoutMs = ABSENCE_CONFIRM_MS) {
+    const deadline = Date.now() + timeoutMs;
+    while (true) {
+        const presence = groupPresence(pgid, signalGroup);
+        if (presence !== 'present')
+            return presence;
+        if (Date.now() >= deadline)
+            return 'present';
+        await delay(POLL_MS);
+    }
+}
+const AUTOMATION_TOKEN = /(?:maestro(?:-runner)?|xcodebuild|WebDriverAgentRunner-Runner)/i;
+export function selectExactDeviceAutomationPids(psOutput, deviceId) {
+    if (!deviceId)
+        return [];
+    const pids = [];
+    for (const line of psOutput.split('\n')) {
+        if (!line.includes(deviceId) || !AUTOMATION_TOKEN.test(line))
+            continue;
+        const pid = Number(line.trim().match(/^(\d+)\b/)?.[1]);
+        if (Number.isSafeInteger(pid) && pid > 0)
+            pids.push(pid);
+    }
+    return pids;
+}
+function defaultListProcesses() {
+    return execFileSync('ps', ['-A', '-ww', '-o', 'pid=,args='], {
+        encoding: 'utf8',
+        timeout: 3_000,
+    });
+}
+function currentSessionAuthority(env) {
+    const sessionId = env.RN_DEV_AGENT_SESSION_ID;
+    const claimEpoch = Number(env.RN_DEV_AGENT_CLAIM_EPOCH);
+    return sessionId && Number.isSafeInteger(claimEpoch) && claimEpoch > 0
+        ? { sessionId, claimEpoch }
+        : null;
+}
+function safeUnlink(path) {
+    try {
+        unlinkSync(path);
+    }
+    catch {
+        /* already gone */
+    }
+}
+/** Execute one owned subprocess tree. Timeout is a whole-flow deadline. */
+export async function spawnManagedProcessGroup(bin, args, options, dependencies = {}) {
+    const spawnProcess = dependencies.spawn ?? spawn;
+    const delay = dependencies.sleep ?? sleep;
+    const signalGroup = dependencies.signalGroup ??
+        ((pgid, signal) => {
+            if (process.platform === 'win32')
+                process.kill(pgid, signal);
+            else
+                process.kill(-pgid, signal);
+        });
+    const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
+    const listProcesses = dependencies.listProcesses ?? defaultListProcesses;
+    const env = options.env ?? process.env;
+    const baseline = new Set();
+    if (options.deviceId) {
+        try {
+            for (const pid of selectExactDeviceAutomationPids(listProcesses(), options.deviceId)) {
+                baseline.add(pid);
+            }
+        }
+        catch {
+            // Attribution is fallback-only. A failed pre-scan must not block the
+            // proven process-group path or broaden ownership.
+        }
+    }
+    let child;
+    try {
+        child = spawnProcess(bin, args, {
+            detached: process.platform !== 'win32',
+            env,
+            stdio: ['ignore', 'pipe', 'pipe'],
+        });
+    }
+    catch (error) {
+        return {
+            stdout: '',
+            stderr: '',
+            code: null,
+            signal: null,
+            timedOut: false,
+            cleanupProven: true,
+            cleanupEscalated: false,
+            error: error instanceof Error ? error.message : String(error),
+        };
+    }
+    const pid = child.pid;
+    if (!pid) {
+        child.kill('SIGKILL');
+        return {
+            stdout: '',
+            stderr: '',
+            code: null,
+            signal: null,
+            timedOut: false,
+            cleanupProven: true,
+            cleanupEscalated: false,
+            error: 'Managed automation process did not expose a PID',
+        };
+    }
+    const authority = currentSessionAuthority(env);
+    const birth = readProcessBirth(pid);
+    const statePath = options.deviceId
+        ? automationStatePath(options.platform, options.deviceId)
+        : undefined;
+    let state;
+    if (authority && options.deviceId && !birth) {
+        try {
+            signalGroup(pid, 'SIGTERM');
+        }
+        catch { }
+        let absence = await waitForGroupAbsence(pid, signalGroup, delay, TERM_GRACE_MS);
+        let escalated = false;
+        if (absence === 'present') {
+            escalated = true;
+            try {
+                signalGroup(pid, 'SIGKILL');
+            }
+            catch { }
+            absence = await waitForGroupAbsence(pid, signalGroup, delay);
+        }
+        return {
+            stdout: '',
+            stderr: '',
+            code: null,
+            signal: escalated ? 'SIGKILL' : 'SIGTERM',
+            timedOut: false,
+            cleanupProven: absence === 'absent',
+            cleanupEscalated: escalated,
+            error: 'AUTOMATION_CLEANUP_UNPROVEN: process-birth authority was unavailable before Maestro dispatch',
+        };
+    }
+    if (authority && options.deviceId && birth) {
+        state = {
+            schemaVersion: 1,
+            kind: 'maestro-process-group',
+            invocationId: randomUUID(),
+            sessionId: authority.sessionId,
+            claimEpoch: authority.claimEpoch,
+            platform: options.platform,
+            deviceId: options.deviceId,
+            pid,
+            pgid: pid,
+            processBirth: birth.token,
+            startedAt: new Date().toISOString(),
+            tool: options.tool,
+            attributedProcesses: [],
+        };
+        writeJsonStateFileAtomic(statePath, state);
+    }
+    const stdout = [];
+    const stderr = [];
+    let outputBytes = 0;
+    let overflow = false;
+    const collect = (target) => (chunk) => {
+        if (outputBytes >= OUTPUT_LIMIT) {
+            overflow = true;
+            return;
+        }
+        const remaining = OUTPUT_LIMIT - outputBytes;
+        target.push(chunk.subarray(0, remaining));
+        outputBytes += Math.min(chunk.length, remaining);
+        if (chunk.length > remaining)
+            overflow = true;
+    };
+    child.stdout.on('data', collect(stdout));
+    child.stderr.on('data', collect(stderr));
+    const terminal = await new Promise((resolve) => {
+        let settled = false;
+        let timer;
+        const done = (value) => {
+            if (settled)
+                return;
+            settled = true;
+            if (timer)
+                clearTimeout(timer);
+            resolve(value);
+        };
+        child.once('error', (error) => done({ code: null, signal: null, timedOut: false, error: error.message }));
+        child.once('close', (code, signal) => done({ code, signal, timedOut: false }));
+        timer = setTimeout(() => done({ code: null, signal: 'SIGTERM', timedOut: true }), options.timeoutMs);
+    });
+    let cleanupEscalated = false;
+    let presence = await waitForGroupAbsence(pid, signalGroup, delay, terminal.timedOut ? 0 : 250);
+    if (terminal.timedOut || overflow || presence === 'present') {
+        try {
+            signalGroup(pid, 'SIGTERM');
+        }
+        catch {
+            /* raced with exit */
+        }
+        presence = await waitForGroupAbsence(pid, signalGroup, delay, TERM_GRACE_MS);
+        if (presence === 'present') {
+            cleanupEscalated = true;
+            try {
+                signalGroup(pid, 'SIGKILL');
+            }
+            catch {
+                /* raced with exit */
+            }
+            presence = await waitForGroupAbsence(pid, signalGroup, delay);
+        }
+    }
+    let cleanupProven = presence === 'absent';
+    if (!cleanupProven && state && options.deviceId) {
+        // Conservative residual fallback: only newly observed, allowlisted
+        // automation processes whose argv names this exact device and whose PID
+        // birth can be attested become recoverable ownership identities.
+        const attributed = [];
+        try {
+            for (const candidate of selectExactDeviceAutomationPids(listProcesses(), options.deviceId)) {
+                if (baseline.has(candidate))
+                    continue;
+                const observed = probeBirth(candidate);
+                if (observed.status === 'present') {
+                    attributed.push({ pid: candidate, processBirth: observed.birth.token });
+                }
+            }
+        }
+        catch {
+            /* unproven remains fenced */
+        }
+        state.attributedProcesses = attributed;
+        writeJsonStateFileAtomic(statePath, state);
+    }
+    if (cleanupProven && statePath)
+        deleteStateFile(statePath);
+    return {
+        stdout: Buffer.concat(stdout).toString('utf8'),
+        stderr: Buffer.concat(stderr).toString('utf8'),
+        code: terminal.code,
+        signal: terminal.signal,
+        timedOut: terminal.timedOut,
+        cleanupProven,
+        cleanupEscalated,
+        ...(overflow
+            ? { error: 'Maestro output exceeded 10 MiB' }
+            : terminal.error
+                ? { error: terminal.error }
+                : {}),
+    };
+}
+export function inspectAutomationDuty(platform, deviceId, dependencies = {}) {
+    const path = automationStatePath(platform, deviceId);
+    const state = readPersistedAutomationState(platform, deviceId);
+    if (!state) {
+        if (existsSync(path)) {
+            throw new Error('AUTOMATION_CLEANUP_UNPROVEN: persisted automation state is invalid');
+        }
+        return null;
+    }
+    const signalGroup = dependencies.signalGroup ??
+        ((pgid, signal) => {
+            if (process.platform === 'win32')
+                process.kill(pgid, signal);
+            else
+                process.kill(-pgid, signal);
+        });
+    const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
+    const group = groupPresence(state.pgid, signalGroup);
+    const descendantsPresent = state.attributedProcesses.some((owned) => {
+        const observed = probeBirth(owned.pid);
+        return observed.status === 'present' && observed.birth.token === owned.processBirth;
+    });
+    if (group === 'absent' && !descendantsPresent) {
+        deleteStateFile(automationStatePath(platform, deviceId));
+        return null;
+    }
+    return state;
+}
+export async function recoverAutomationDuty(authority, dependencies = {}) {
+    const path = automationStatePath(authority.platform, authority.deviceId);
+    const state = readPersistedAutomationState(authority.platform, authority.deviceId);
+    if (!state) {
+        if (existsSync(path)) {
+            throw new Error('AUTOMATION_CLEANUP_UNPROVEN: persisted automation state is invalid');
+        }
+        return { recovered: false };
+    }
+    if (state.sessionId !== authority.sessionId || state.claimEpoch !== authority.claimEpoch) {
+        throw new Error('AUTOMATION_CLEANUP_UNPROVEN: persisted automation belongs to another session epoch');
+    }
+    const delay = dependencies.sleep ?? sleep;
+    const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
+    const signalGroup = dependencies.signalGroup ??
+        ((pgid, signal) => {
+            if (process.platform === 'win32')
+                process.kill(pgid, signal);
+            else
+                process.kill(-pgid, signal);
+        });
+    let presence = groupPresence(state.pgid, signalGroup);
+    const leader = probeBirth(state.pid);
+    if (presence === 'present') {
+        if (leader.status !== 'present' || leader.birth.token !== state.processBirth) {
+            throw new Error('AUTOMATION_CLEANUP_UNPROVEN: process-group leader identity cannot be proven');
+        }
+        try {
+            signalGroup(state.pgid, 'SIGTERM');
+        }
+        catch { }
+        presence = await waitForGroupAbsence(state.pgid, signalGroup, delay, TERM_GRACE_MS);
+        let escalated = false;
+        if (presence === 'present') {
+            escalated = true;
+            try {
+                signalGroup(state.pgid, 'SIGKILL');
+            }
+            catch { }
+            presence = await waitForGroupAbsence(state.pgid, signalGroup, delay);
+        }
+        if (presence !== 'absent') {
+            throw new Error('AUTOMATION_CLEANUP_UNPROVEN: process-group absence could not be confirmed');
+        }
+        deleteStateFile(automationStatePath(authority.platform, authority.deviceId));
+        return { recovered: true, invocationId: state.invocationId, escalated };
+    }
+    if (presence === 'unknown') {
+        throw new Error('AUTOMATION_CLEANUP_UNPROVEN: process-group presence is unknown');
+    }
+    let escalated = false;
+    for (const owned of state.attributedProcesses) {
+        const observed = probeBirth(owned.pid);
+        if (observed.status === 'unknown') {
+            throw new Error('AUTOMATION_CLEANUP_UNPROVEN: attributed process identity is unknown');
+        }
+        if (observed.status === 'absent')
+            continue;
+        if (observed.birth.token !== owned.processBirth) {
+            throw new Error('AUTOMATION_CLEANUP_UNPROVEN: attributed PID birth changed; refusing cleanup');
+        }
+        try {
+            process.kill(owned.pid, 'SIGTERM');
+        }
+        catch { }
+        await delay(TERM_GRACE_MS);
+        const afterTerm = probeBirth(owned.pid);
+        if (afterTerm.status === 'present' && afterTerm.birth.token === owned.processBirth) {
+            escalated = true;
+            try {
+                process.kill(owned.pid, 'SIGKILL');
+            }
+            catch { }
+            await delay(50);
+        }
+        const after = probeBirth(owned.pid);
+        if (after.status === 'unknown' ||
+            (after.status === 'present' && after.birth.token === owned.processBirth)) {
+            throw new Error('AUTOMATION_CLEANUP_UNPROVEN: attributed process absence could not be confirmed');
+        }
+    }
+    deleteStateFile(automationStatePath(authority.platform, authority.deviceId));
+    return { recovered: true, invocationId: state.invocationId, escalated };
+}
+export function removeTemporaryInlineFlow(path) {
+    safeUnlink(path);
+}

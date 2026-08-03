@@ -845,6 +845,7 @@ async function maestroFillFallback(
   text: string,
   platform: 'ios' | 'android',
   clearFirst = false,
+  authorityArgs?: object,
 ): Promise<ToolResult> {
   const escapedRef = yamlEscape(ref.replace(/^@/, ''));
   const escapedText = yamlEscape(text);
@@ -856,7 +857,8 @@ async function maestroFillFallback(
   const result = await runMaestroInline(yaml, {
     platform,
     slug: 'fill-fallback',
-    timeoutMs: 30_000,
+    timeoutMs: 120_000,
+    authorityArgs,
   });
   if (result.passed) {
     return okResult(
@@ -1087,7 +1089,7 @@ export function createDeviceFillHandler(
             { settle: { enabled: false } },
           );
         }
-        const maestro = await maestroFillFallback(maestroTargetRef(), args.text, 'ios', true);
+        const maestro = await maestroFillFallback(maestroTargetRef(), args.text, 'ios', true, args);
         if (!maestro.isError) {
           const { outcome } = await nativeSettle(client, jsTestId, args.text, null, null);
           if (outcome !== 'corrupted') {
@@ -1183,6 +1185,7 @@ export function createDeviceFillHandler(
                 args.text,
                 'android',
                 true,
+                args,
               );
             }
           }
@@ -1210,7 +1213,7 @@ export function createDeviceFillHandler(
         // fill above — a rejected retry means focus is fine but the field
         // ignores sets; descend to the clear-first Maestro tier.
         if (classifyFillPrimaryError(retry) === 'reject-ladder') {
-          return maestroFillFallback(maestroTargetRef(), args.text, 'android', true);
+          return maestroFillFallback(maestroTargetRef(), args.text, 'android', true, args);
         }
       }
     }
@@ -1222,7 +1225,7 @@ export function createDeviceFillHandler(
     // old value it would append and report success. Go straight to Maestro
     // with clearFirst so eraseText removes the stale value before inputText.
     if (descent === 'reject-ladder') {
-      return maestroFillFallback(maestroTargetRef(), args.text, 'android', true);
+      return maestroFillFallback(maestroTargetRef(), args.text, 'android', true, args);
     }
 
     // Fallback 2: platform-specific last resort. Story 10 (#391): chunked adb
@@ -1245,7 +1248,7 @@ export function createDeviceFillHandler(
 
     // Fallback 3: Maestro inputText (iOS, or Android if adb fallback also failed).
     const platform: 'ios' | 'android' = androidSession ? 'android' : 'ios';
-    return maestroFillFallback(maestroTargetRef(), args.text, platform);
+    return maestroFillFallback(maestroTargetRef(), args.text, platform, false, args);
   });
 }
 

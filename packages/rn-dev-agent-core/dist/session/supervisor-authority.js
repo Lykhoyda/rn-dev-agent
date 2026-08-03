@@ -3,6 +3,7 @@ import { stopBoundObserve, stopBoundRecorder, stopBoundRunner } from './process-
 import { openSessionRegistry } from './registry.js';
 import { ensureSharedKnowledgeRoot } from './shared-knowledge-root.js';
 import { stopManagedMetro } from './managed-metro.js';
+import { inspectAutomationDuty, recoverAutomationDuty } from './managed-automation.js';
 import { createAuthorityStateLayout, sessionRuntimeDirectory, writeSessionPublicReceipt, writeSessionSecret, } from './state-root.js';
 const RELEASABLE_SESSION_STATES = new Set([
     'active',
@@ -173,6 +174,17 @@ export function createSupervisorAuthority(input, dependencies = {}) {
                     status = registry.beginSessionClose(session);
                 }
                 if (status) {
+                    const device = status.bindings.device;
+                    if ((device?.platform === 'ios' || device?.platform === 'android') &&
+                        typeof device.deviceId === 'string' &&
+                        (dependencies.inspectAutomation ?? inspectAutomationDuty)(device.platform, device.deviceId)) {
+                        await (dependencies.recoverAutomation ?? recoverAutomationDuty)({
+                            sessionId: status.sessionId,
+                            claimEpoch: status.claimEpoch,
+                            platform: device.platform,
+                            deviceId: device.deviceId,
+                        });
+                    }
                     const recorder = status.bindings.recorder;
                     if (recorder) {
                         const claimKey = `${String(recorder.platform)}:${String(recorder.deviceId)}`;

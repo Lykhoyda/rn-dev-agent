@@ -89,6 +89,10 @@ export async function relaunchManagedNativeOriginApp(args: object): Promise<void
   await authority.relaunch();
 }
 
+export function hasManagedRunnerParkAuthority(args: object): boolean {
+  return typeof (args as AuthorityAwareArgs)[managedRunnerPark] === 'function';
+}
+
 export async function completeManagedRunnerParkAuthority(args: object): Promise<void> {
   const complete = (args as AuthorityAwareArgs)[managedRunnerPark];
   if (!complete) {
