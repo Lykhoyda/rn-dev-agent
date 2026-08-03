@@ -384,6 +384,27 @@ export async function spawnManagedProcessGroup(bin, args, options, dependencies 
         catch { }
         return stateFileUpdated || authorityUpdated;
     };
+    const persistProvenCleanup = (recoverableState) => {
+        recoverableState.attributedProcesses = [];
+        recoverableState.attributionComplete = true;
+        recoverableState.revision += 1;
+        rememberAutomationDuty(recoverableState);
+        let authorityUpdated = false;
+        let stateFileUpdated = false;
+        if (authorityStore) {
+            try {
+                authorityStore.write(recoverableState);
+                authorityUpdated = true;
+            }
+            catch { }
+        }
+        try {
+            writeState(statePath, recoverableState);
+            stateFileUpdated = true;
+        }
+        catch { }
+        return stateFileUpdated || authorityUpdated;
+    };
     if (authority && options.deviceId && !birth) {
         const cleanup = await terminateProcessGroup(pid, signalGroup, delay);
         terminalObserver.stop();
@@ -436,10 +457,19 @@ export async function spawnManagedProcessGroup(bin, args, options, dependencies 
             persistenceError ??= error;
             const cleanup = await terminateProcessGroup(pid, signalGroup, delay);
             const cleanupProven = cleanup.presence === 'absent';
-            const residualPersisted = cleanupProven || persistResidualAttribution(state);
+            const residualPersisted = cleanupProven
+                ? persistProvenCleanup(state)
+                : persistResidualAttribution(state);
             terminalObserver.stop();
-            if (cleanupProven)
-                clearAutomationDuty(options.platform, options.deviceId, authorityStore);
+            let clearError;
+            if (cleanupProven) {
+                try {
+                    clearAutomationDuty(options.platform, options.deviceId, authorityStore);
+                }
+                catch (error) {
+                    clearError = error;
+                }
+            }
             return {
                 stdout: '',
                 stderr: '',
@@ -448,11 +478,13 @@ export async function spawnManagedProcessGroup(bin, args, options, dependencies 
                 timedOut: false,
                 cleanupProven,
                 cleanupEscalated: cleanup.escalated,
-                error: cleanupProven
-                    ? `Failed to persist managed automation state: ${persistenceError instanceof Error ? persistenceError.message : String(persistenceError)}`
-                    : residualPersisted
-                        ? 'AUTOMATION_CLEANUP_UNPROVEN: process-group absence could not be confirmed'
-                        : 'AUTOMATION_CLEANUP_UNPROVEN: managed automation state and residual attribution could not be persisted',
+                error: clearError
+                    ? `AUTOMATION_CLEANUP_UNPROVEN: proven cleanup duty could not be cleared: ${clearError instanceof Error ? clearError.message : String(clearError)}`
+                    : cleanupProven
+                        ? `Failed to persist managed automation state: ${persistenceError instanceof Error ? persistenceError.message : String(persistenceError)}`
+                        : residualPersisted
+                            ? 'AUTOMATION_CLEANUP_UNPROVEN: process-group absence could not be confirmed'
+                            : 'AUTOMATION_CLEANUP_UNPROVEN: managed automation state and residual attribution could not be persisted',
             };
         }
     }
@@ -495,7 +527,8 @@ export async function spawnManagedProcessGroup(bin, args, options, dependencies 
             presence = await waitForGroupAbsence(pid, signalGroup, delay);
         }
     }
-    let cleanupProven = presence === 'absent';
+    const cleanupProven = presence === 'absent';
+    let dutyClearError;
     if (!cleanupProven && state && options.deviceId) {
         if (!persistResidualAttribution(state)) {
             return {
@@ -510,8 +543,14 @@ export async function spawnManagedProcessGroup(bin, args, options, dependencies 
             };
         }
     }
-    if (cleanupProven && statePath && options.deviceId) {
-        clearAutomationDuty(options.platform, options.deviceId, authorityStore);
+    if (cleanupProven && state && statePath && options.deviceId) {
+        persistProvenCleanup(state);
+        try {
+            clearAutomationDuty(options.platform, options.deviceId, authorityStore);
+        }
+        catch (error) {
+            dutyClearError = error;
+        }
     }
     return {
         stdout: Buffer.concat(stdout).toString('utf8'),
@@ -521,11 +560,15 @@ export async function spawnManagedProcessGroup(bin, args, options, dependencies 
         timedOut: terminal.timedOut,
         cleanupProven,
         cleanupEscalated,
-        ...(overflow
-            ? { error: 'Maestro output exceeded 10 MiB' }
-            : terminal.error
-                ? { error: terminal.error }
-                : {}),
+        ...(dutyClearError
+            ? {
+                error: `AUTOMATION_CLEANUP_UNPROVEN: proven cleanup duty could not be cleared: ${dutyClearError instanceof Error ? dutyClearError.message : String(dutyClearError)}`,
+            }
+            : overflow
+                ? { error: 'Maestro output exceeded 10 MiB' }
+                : terminal.error
+                    ? { error: terminal.error }
+                    : {}),
     };
 }
 export function inspectAutomationDuty(platform, deviceId, dependencies = {}) {

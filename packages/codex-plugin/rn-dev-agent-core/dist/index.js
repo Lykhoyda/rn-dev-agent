@@ -30632,6 +30632,27 @@ async function spawnManagedProcessGroup(bin, args, options, dependencies = {}) {
     }
     return stateFileUpdated || authorityUpdated;
   };
+  const persistProvenCleanup = (recoverableState) => {
+    recoverableState.attributedProcesses = [];
+    recoverableState.attributionComplete = true;
+    recoverableState.revision += 1;
+    rememberAutomationDuty(recoverableState);
+    let authorityUpdated = false;
+    let stateFileUpdated = false;
+    if (authorityStore) {
+      try {
+        authorityStore.write(recoverableState);
+        authorityUpdated = true;
+      } catch {
+      }
+    }
+    try {
+      writeState(statePath, recoverableState);
+      stateFileUpdated = true;
+    } catch {
+    }
+    return stateFileUpdated || authorityUpdated;
+  };
   if (authority && options.deviceId && !birth) {
     const cleanup = await terminateProcessGroup(pid, signalGroup, delay);
     terminalObserver.stop();
@@ -30682,10 +30703,16 @@ async function spawnManagedProcessGroup(bin, args, options, dependencies = {}) {
       persistenceError ??= error2;
       const cleanup = await terminateProcessGroup(pid, signalGroup, delay);
       const cleanupProven2 = cleanup.presence === "absent";
-      const residualPersisted = cleanupProven2 || persistResidualAttribution(state);
+      const residualPersisted = cleanupProven2 ? persistProvenCleanup(state) : persistResidualAttribution(state);
       terminalObserver.stop();
-      if (cleanupProven2)
-        clearAutomationDuty(options.platform, options.deviceId, authorityStore);
+      let clearError;
+      if (cleanupProven2) {
+        try {
+          clearAutomationDuty(options.platform, options.deviceId, authorityStore);
+        } catch (error3) {
+          clearError = error3;
+        }
+      }
       return {
         stdout: "",
         stderr: "",
@@ -30694,7 +30721,7 @@ async function spawnManagedProcessGroup(bin, args, options, dependencies = {}) {
         timedOut: false,
         cleanupProven: cleanupProven2,
         cleanupEscalated: cleanup.escalated,
-        error: cleanupProven2 ? `Failed to persist managed automation state: ${persistenceError instanceof Error ? persistenceError.message : String(persistenceError)}` : residualPersisted ? "AUTOMATION_CLEANUP_UNPROVEN: process-group absence could not be confirmed" : "AUTOMATION_CLEANUP_UNPROVEN: managed automation state and residual attribution could not be persisted"
+        error: clearError ? `AUTOMATION_CLEANUP_UNPROVEN: proven cleanup duty could not be cleared: ${clearError instanceof Error ? clearError.message : String(clearError)}` : cleanupProven2 ? `Failed to persist managed automation state: ${persistenceError instanceof Error ? persistenceError.message : String(persistenceError)}` : residualPersisted ? "AUTOMATION_CLEANUP_UNPROVEN: process-group absence could not be confirmed" : "AUTOMATION_CLEANUP_UNPROVEN: managed automation state and residual attribution could not be persisted"
       };
     }
   }
@@ -30733,7 +30760,8 @@ async function spawnManagedProcessGroup(bin, args, options, dependencies = {}) {
       presence = await waitForGroupAbsence(pid, signalGroup, delay);
     }
   }
-  let cleanupProven = presence === "absent";
+  const cleanupProven = presence === "absent";
+  let dutyClearError;
   if (!cleanupProven && state && options.deviceId) {
     if (!persistResidualAttribution(state)) {
       return {
@@ -30748,8 +30776,13 @@ async function spawnManagedProcessGroup(bin, args, options, dependencies = {}) {
       };
     }
   }
-  if (cleanupProven && statePath && options.deviceId) {
-    clearAutomationDuty(options.platform, options.deviceId, authorityStore);
+  if (cleanupProven && state && statePath && options.deviceId) {
+    persistProvenCleanup(state);
+    try {
+      clearAutomationDuty(options.platform, options.deviceId, authorityStore);
+    } catch (error2) {
+      dutyClearError = error2;
+    }
   }
   return {
     stdout: Buffer.concat(stdout).toString("utf8"),
@@ -30759,7 +30792,9 @@ async function spawnManagedProcessGroup(bin, args, options, dependencies = {}) {
     timedOut: terminal.timedOut,
     cleanupProven,
     cleanupEscalated,
-    ...overflow ? { error: "Maestro output exceeded 10 MiB" } : terminal.error ? { error: terminal.error } : {}
+    ...dutyClearError ? {
+      error: `AUTOMATION_CLEANUP_UNPROVEN: proven cleanup duty could not be cleared: ${dutyClearError instanceof Error ? dutyClearError.message : String(dutyClearError)}`
+    } : overflow ? { error: "Maestro output exceeded 10 MiB" } : terminal.error ? { error: terminal.error } : {}
   };
 }
 function inspectAutomationDuty(platform, deviceId, dependencies = {}) {
@@ -74604,7 +74639,7 @@ function stepTargetsQuotedValue(stepName, value) {
   return stepName.includes(`"${value}"`) || stepName.includes(`'${value}'`);
 }
 function stepTargetsIdValue(stepName, value) {
-  return /\btap(?:ping)?\s+on\s+(?:element\s+with\s+)?id\b/i.test(stepName) && stepTargetsQuotedValue(stepName, value);
+  return (/\btap(?:ping)?\s+on\s+(?:element\s+with\s+)?id\b/i.test(stepName) || /\btapOn\s*:\s*id\s*=/i.test(stepName)) && stepTargetsQuotedValue(stepName, value);
 }
 function stepTargetsTextValue(stepName, value) {
   return !stepTargetsIdValue(stepName, value) && stepTargetsQuotedValue(stepName, value);

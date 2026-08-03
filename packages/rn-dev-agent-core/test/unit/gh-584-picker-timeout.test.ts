@@ -158,7 +158,7 @@ test('uncoded executor error is preserved without component attribution', async 
 test('opener observation is excluded when its identifier equals a component value', async () => {
   const handler = createDevicePickDateHandler(async () => ({
     passed: false,
-    output: '    ✓ Tap on element with id "June" (0.1s)\n    ✗ Tap on "June" (20.0s)',
+    output: '    ✓ tapOn: id="June" (0.1s)\n    ✗ tapOn: text="June" (20.0s)',
     flowFile: '/tmp/deleted.yaml',
   }));
   const result = envelope(
