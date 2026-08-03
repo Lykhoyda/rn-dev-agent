@@ -1,5 +1,11 @@
 # rn-dev-agent-core
 
+## 0.66.2
+
+### Patch Changes
+
+- 802efa2: Allow runner-verified exact iOS keyboard targets to activate once while removing corruption-prone automatic keyboard swipes and rejecting stale runner artifacts.
+
 ## 0.66.1
 
 ### Patch Changes
