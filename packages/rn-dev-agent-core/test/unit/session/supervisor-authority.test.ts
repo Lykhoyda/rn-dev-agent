@@ -718,6 +718,8 @@ test('supervisor close clears a proven-absent durable automation duty', async ()
       automationDuty: {
         schemaVersion: 1,
         kind: 'maestro-process-group',
+        revision: 1,
+        attributionComplete: true,
         invocationId: 'invocation-close',
         sessionId: authority.session.sessionId,
         claimEpoch: authority.session.claimEpoch,

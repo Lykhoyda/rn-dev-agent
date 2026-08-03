@@ -22,10 +22,23 @@ function forgetAutomationDuty(platform, deviceId) {
     activeAutomationDuties.delete(automationDutyKey(platform, deviceId));
 }
 function currentAutomationDuty(platform, deviceId, authorityStore) {
-    return (activeAutomationDuties.get(automationDutyKey(platform, deviceId)) ??
-        readPersistedAutomationState(platform, deviceId) ??
-        authorityStore?.read(platform, deviceId) ??
-        null);
+    const active = activeAutomationDuties.get(automationDutyKey(platform, deviceId));
+    if (active)
+        return active;
+    const authority = authorityStore?.read(platform, deviceId) ?? null;
+    const file = readPersistedAutomationState(platform, deviceId);
+    if (!authority)
+        return file;
+    if (!file)
+        return authority;
+    if (authority.invocationId !== file.invocationId ||
+        authority.sessionId !== file.sessionId ||
+        authority.claimEpoch !== file.claimEpoch) {
+        return authority;
+    }
+    if (authority.kind === 'maestro-cleanup-refusal')
+        return file;
+    return authority.revision >= file.revision ? authority : file;
 }
 function isAutomationDuty(value) {
     if (!value || typeof value !== 'object')
@@ -45,7 +58,9 @@ function isAutomationDuty(value) {
     if (state.kind === 'maestro-cleanup-refusal')
         return true;
     const processState = value;
-    return (Number.isSafeInteger(processState.pid) &&
+    return (Number.isSafeInteger(processState.revision) &&
+        typeof processState.attributionComplete === 'boolean' &&
+        Number.isSafeInteger(processState.pid) &&
         Number.isSafeInteger(processState.pgid) &&
         typeof processState.processBirth === 'string' &&
         Array.isArray(processState.attributedProcesses));
@@ -129,6 +144,8 @@ export function readPersistedAutomationState(platform, deviceId) {
     const state = readJsonStateFile(automationStatePath(platform, deviceId));
     if (state?.schemaVersion !== 1 ||
         state.kind !== 'maestro-process-group' ||
+        !Number.isSafeInteger(state.revision) ||
+        typeof state.attributionComplete !== 'boolean' ||
         typeof state.invocationId !== 'string' ||
         typeof state.sessionId !== 'string' ||
         !Number.isSafeInteger(state.claimEpoch) ||
@@ -268,11 +285,13 @@ export async function spawnManagedProcessGroup(bin, args, options, dependencies 
         }
     }
     const baseline = new Set();
+    let baselineComplete = !options.deviceId;
     if (options.deviceId) {
         try {
             for (const pid of selectExactDeviceAutomationPids(listProcesses(), options.deviceId)) {
                 baseline.add(pid);
             }
+            baselineComplete = true;
         }
         catch {
             // Attribution is fallback-only. A failed pre-scan must not block the
@@ -323,6 +342,48 @@ export async function spawnManagedProcessGroup(bin, args, options, dependencies 
         ? automationStatePath(options.platform, options.deviceId)
         : undefined;
     let state;
+    const persistResidualAttribution = (recoverableState) => {
+        const attributed = [];
+        let attributionComplete = false;
+        if (baselineComplete && options.deviceId) {
+            try {
+                attributionComplete = true;
+                for (const candidate of selectExactDeviceAutomationPids(listProcesses(), options.deviceId)) {
+                    if (baseline.has(candidate))
+                        continue;
+                    const observed = probeBirth(candidate);
+                    if (observed.status === 'present') {
+                        attributed.push({ pid: candidate, processBirth: observed.birth.token });
+                    }
+                    else if (observed.status === 'unknown') {
+                        attributionComplete = false;
+                    }
+                }
+            }
+            catch {
+                attributionComplete = false;
+            }
+        }
+        recoverableState.attributedProcesses = attributed;
+        recoverableState.attributionComplete = attributionComplete;
+        recoverableState.revision += 1;
+        rememberAutomationDuty(recoverableState);
+        let authorityUpdated = false;
+        let stateFileUpdated = false;
+        if (authorityStore) {
+            try {
+                authorityStore.write(recoverableState);
+                authorityUpdated = true;
+            }
+            catch { }
+        }
+        try {
+            writeState(statePath, recoverableState);
+            stateFileUpdated = true;
+        }
+        catch { }
+        return stateFileUpdated || authorityUpdated;
+    };
     if (authority && options.deviceId && !birth) {
         const cleanup = await terminateProcessGroup(pid, signalGroup, delay);
         terminalObserver.stop();
@@ -344,6 +405,8 @@ export async function spawnManagedProcessGroup(bin, args, options, dependencies 
         state = {
             schemaVersion: 1,
             kind: 'maestro-process-group',
+            revision: 0,
+            attributionComplete: false,
             invocationId,
             sessionId: authority.sessionId,
             claimEpoch: authority.claimEpoch,
@@ -373,6 +436,7 @@ export async function spawnManagedProcessGroup(bin, args, options, dependencies 
             persistenceError ??= error;
             const cleanup = await terminateProcessGroup(pid, signalGroup, delay);
             const cleanupProven = cleanup.presence === 'absent';
+            const residualPersisted = cleanupProven || persistResidualAttribution(state);
             terminalObserver.stop();
             if (cleanupProven)
                 clearAutomationDuty(options.platform, options.deviceId, authorityStore);
@@ -386,7 +450,9 @@ export async function spawnManagedProcessGroup(bin, args, options, dependencies 
                 cleanupEscalated: cleanup.escalated,
                 error: cleanupProven
                     ? `Failed to persist managed automation state: ${persistenceError instanceof Error ? persistenceError.message : String(persistenceError)}`
-                    : 'AUTOMATION_CLEANUP_UNPROVEN: managed automation state could not be persisted and process-group absence could not be confirmed',
+                    : residualPersisted
+                        ? 'AUTOMATION_CLEANUP_UNPROVEN: process-group absence could not be confirmed'
+                        : 'AUTOMATION_CLEANUP_UNPROVEN: managed automation state and residual attribution could not be persisted',
             };
         }
     }
@@ -431,40 +497,7 @@ export async function spawnManagedProcessGroup(bin, args, options, dependencies 
     }
     let cleanupProven = presence === 'absent';
     if (!cleanupProven && state && options.deviceId) {
-        // Conservative residual fallback: only newly observed, allowlisted
-        // automation processes whose argv names this exact device and whose PID
-        // birth can be attested become recoverable ownership identities.
-        const attributed = [];
-        try {
-            for (const candidate of selectExactDeviceAutomationPids(listProcesses(), options.deviceId)) {
-                if (baseline.has(candidate))
-                    continue;
-                const observed = probeBirth(candidate);
-                if (observed.status === 'present') {
-                    attributed.push({ pid: candidate, processBirth: observed.birth.token });
-                }
-            }
-        }
-        catch {
-            /* unproven remains fenced */
-        }
-        state.attributedProcesses = attributed;
-        rememberAutomationDuty(state);
-        let authorityUpdated = false;
-        let stateFileUpdated = false;
-        if (authorityStore) {
-            try {
-                authorityStore.write(state);
-                authorityUpdated = true;
-            }
-            catch { }
-        }
-        try {
-            writeState(statePath, state);
-            stateFileUpdated = true;
-        }
-        catch { }
-        if (!stateFileUpdated && (!authorityStore || !authorityUpdated)) {
+        if (!persistResidualAttribution(state)) {
             return {
                 stdout: Buffer.concat(stdout).toString('utf8'),
                 stderr: Buffer.concat(stderr).toString('utf8'),
@@ -523,7 +556,7 @@ export function inspectAutomationDuty(platform, deviceId, dependencies = {}) {
         return (observed.status === 'absent' ||
             (observed.status === 'present' && observed.birth.token !== owned.processBirth));
     });
-    if (group === 'absent' && descendantsAbsent) {
+    if (group === 'absent' && state.attributionComplete && descendantsAbsent) {
         clearAutomationDuty(platform, deviceId, authorityStore);
         return null;
     }
@@ -613,6 +646,9 @@ export async function recoverAutomationDuty(authority, dependencies = {}) {
             (after.status === 'present' && after.birth.token === owned.processBirth)) {
             throw new Error('AUTOMATION_CLEANUP_UNPROVEN: attributed process absence could not be confirmed');
         }
+    }
+    if (!state.attributionComplete) {
+        throw new Error('AUTOMATION_CLEANUP_UNPROVEN: residual automation attribution is incomplete');
     }
     clearAutomationDuty(authority.platform, authority.deviceId, authorityStore);
     return { recovered: true, invocationId: state.invocationId, escalated };

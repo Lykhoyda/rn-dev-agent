@@ -416,6 +416,186 @@ test('residual attribution reaches the state file when the authority update fail
   }
 });
 
+for (const scenario of ['baseline', 'residual', 'birth'] as const) {
+  test(`${scenario} attribution uncertainty retains an incomplete fence`, async () => {
+    const prior = process.env.XDG_STATE_HOME;
+    const dir = mkdtempSync(join(tmpdir(), `rn-584-${scenario}-scan-`));
+    process.env.XDG_STATE_HOME = dir;
+    const deviceId = `UDID-${scenario.toUpperCase()}-SCAN`;
+    const child = Object.assign(new EventEmitter(), {
+      pid: scenario === 'baseline' ? 740 : scenario === 'residual' ? 750 : 755,
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      kill: () => true,
+    }) as unknown as ChildProcessWithoutNullStreams;
+    const durable = { duty: null as AutomationDuty | null };
+    let scans = 0;
+    try {
+      const pending = spawnManagedProcessGroup(
+        'maestro',
+        [],
+        {
+          timeoutMs: 10_000,
+          platform: 'ios',
+          deviceId,
+          tool: `fixture-${scenario}-scan`,
+          env: {
+            ...process.env,
+            RN_DEV_AGENT_SESSION_ID: `session-${scenario}-scan`,
+            RN_DEV_AGENT_CLAIM_EPOCH: '12',
+          },
+        },
+        {
+          spawn: (() => child) as typeof spawnChild,
+          readBirth: (pid) => ({ pid, source: 'linux-proc', token: 'leader-birth' }),
+          probeBirth: (pid) =>
+            scenario === 'birth'
+              ? { status: 'unknown' }
+              : {
+                  status: 'present',
+                  birth: { pid, source: 'linux-proc', token: 'foreign-birth' },
+                },
+          listProcesses: () => {
+            scans += 1;
+            if (
+              (scenario === 'baseline' && scans === 1) ||
+              (scenario === 'residual' && scans === 2)
+            ) {
+              throw new Error(`${scenario} scan unavailable`);
+            }
+            return scans === 1 ? '' : `799 xcodebuild test -destination id=${deviceId}`;
+          },
+          authorityStore: {
+            read: () => durable.duty,
+            write: (duty) => {
+              durable.duty = duty;
+            },
+          },
+          signalGroup: (_pgid, signal) => {
+            if (signal === 0) {
+              const error = new Error('unknown') as NodeJS.ErrnoException;
+              error.code = 'EPERM';
+              throw error;
+            }
+          },
+        },
+      );
+      setImmediate(() => child.emit('close', 1, null));
+      const result = await pending;
+      assert.equal(result.cleanupProven, false);
+      assert.equal(scans, scenario === 'baseline' ? 1 : 2);
+      const persisted = readPersistedAutomationState('ios', deviceId);
+      assert.equal(persisted?.attributionComplete, false);
+      assert.deepEqual(persisted?.attributedProcesses, []);
+      const duty = inspectAutomationDuty('ios', deviceId, {
+        authorityStore: null,
+        signalGroup: () => {
+          const error = new Error('absent') as NodeJS.ErrnoException;
+          error.code = 'ESRCH';
+          throw error;
+        },
+      });
+      assert.equal(duty?.kind, 'maestro-process-group');
+      await assert.rejects(
+        recoverAutomationDuty(
+          {
+            sessionId: `session-${scenario}-scan`,
+            claimEpoch: 12,
+            platform: 'ios',
+            deviceId,
+          },
+          {
+            authorityStore: null,
+            signalGroup: () => {
+              const error = new Error('absent') as NodeJS.ErrnoException;
+              error.code = 'ESRCH';
+              throw error;
+            },
+          },
+        ),
+        /attribution is incomplete/,
+      );
+      if (duty?.kind === 'maestro-process-group') duty.attributionComplete = true;
+      assert.equal(
+        inspectAutomationDuty('ios', deviceId, {
+          authorityStore: null,
+          signalGroup: () => {
+            const error = new Error('absent') as NodeJS.ErrnoException;
+            error.code = 'ESRCH';
+            throw error;
+          },
+        }),
+        null,
+      );
+    } finally {
+      if (prior === undefined) delete process.env.XDG_STATE_HOME;
+      else process.env.XDG_STATE_HOME = prior;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
+
+test('newer authority attribution outranks a stale state file', () => {
+  const prior = process.env.XDG_STATE_HOME;
+  const dir = mkdtempSync(join(tmpdir(), 'rn-584-duty-revision-'));
+  process.env.XDG_STATE_HOME = dir;
+  const base = {
+    schemaVersion: 1,
+    kind: 'maestro-process-group',
+    attributionComplete: true,
+    invocationId: 'invocation-revision',
+    sessionId: 'session-revision',
+    claimEpoch: 13,
+    platform: 'ios',
+    deviceId: 'UDID-REVISION',
+    pid: 760,
+    pgid: 760,
+    processBirth: 'leader-birth',
+    startedAt: new Date().toISOString(),
+    tool: 'device_pick_date',
+  } as const;
+  const durable = {
+    duty: {
+      ...base,
+      revision: 1,
+      attributedProcesses: [{ pid: 761, processBirth: 'escaped-birth' }],
+    } as AutomationDuty | null,
+  };
+  try {
+    writeJsonStateFileAtomic(automationStatePath('ios', 'UDID-REVISION'), {
+      ...base,
+      revision: 0,
+      attributedProcesses: [],
+    });
+    const duty = inspectAutomationDuty('ios', 'UDID-REVISION', {
+      authorityStore: {
+        read: () => durable.duty,
+        write: (value) => {
+          durable.duty = value;
+        },
+      },
+      signalGroup: () => {
+        const error = new Error('absent') as NodeJS.ErrnoException;
+        error.code = 'ESRCH';
+        throw error;
+      },
+      probeBirth: (pid) => ({
+        status: 'present',
+        birth: { pid, source: 'linux-proc', token: 'escaped-birth' },
+      }),
+    });
+    assert.equal(duty?.kind, 'maestro-process-group');
+    if (duty?.kind !== 'maestro-process-group') assert.fail('expected process duty');
+    assert.equal(duty.revision, 1);
+    assert.deepEqual(duty.attributedProcesses, [{ pid: 761, processBirth: 'escaped-birth' }]);
+    assert.equal(existsSync(automationStatePath('ios', 'UDID-REVISION')), true);
+  } finally {
+    if (prior === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = prior;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('authenticated recovery terminates only the matching group and clears proven state', async () => {
   const prior = process.env.XDG_STATE_HOME;
   const dir = mkdtempSync(join(tmpdir(), 'rn-584-recover-'));
@@ -425,6 +605,8 @@ test('authenticated recovery terminates only the matching group and clears prove
     writeJsonStateFileAtomic(path, {
       schemaVersion: 1,
       kind: 'maestro-process-group',
+      revision: 1,
+      attributionComplete: true,
       invocationId: 'invocation-good',
       sessionId: 'session-a',
       claimEpoch: 4,
@@ -476,6 +658,8 @@ test('recovery refuses PID-birth mismatch and leaves the authenticated duty inta
     const state = {
       schemaVersion: 1,
       kind: 'maestro-process-group',
+      revision: 1,
+      attributionComplete: true,
       invocationId: 'invocation-a',
       sessionId: 'session-a',
       claimEpoch: 4,
@@ -524,6 +708,8 @@ test('inspection retains the duty when an attributed identity probe is unknown',
     writeJsonStateFileAtomic(path, {
       schemaVersion: 1,
       kind: 'maestro-process-group',
+      revision: 1,
+      attributionComplete: true,
       invocationId: 'invocation-unknown',
       sessionId: 'session-unknown',
       claimEpoch: 9,
@@ -563,6 +749,8 @@ test('recovery verifies attributed identities after terminating a present group'
     writeJsonStateFileAtomic(path, {
       schemaVersion: 1,
       kind: 'maestro-process-group',
+      revision: 1,
+      attributionComplete: true,
       invocationId: 'invocation-group-descendant',
       sessionId: 'session-group-descendant',
       claimEpoch: 10,
