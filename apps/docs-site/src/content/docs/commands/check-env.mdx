@@ -35,7 +35,7 @@ from an ambient port or the first available device.
 | CDP code 1006 | Close React Native DevTools, Flipper, or Chrome DevTools |
 | `cdp_component_tree` reports RedBox | Run `/rn-dev-agent:debug-screen` |
 | Narrow gated CDP read times out | Check for a blocked JS thread, then use `cdp_reload` |
-| `HELPERS_NOT_INJECTED` | Use a `__DEV__` Hermes build; retry through the gated tool after reload |
+| `HELPERS_NOT_INJECTED` | Read bounded `meta.helperHealth`; use a `__DEV__` Hermes build and retry through the gated tool after reload |
 | No devices | Boot a simulator: `xcrun simctl boot "iPhone 16"` |
 
 ## When to Use

@@ -2,10 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import WebSocket from 'ws';
 import { CDPClient } from '../../dist/cdp-client.js';
-import {
-  closeConnectionAttempt,
-  ConnectionSetupSupersededError,
-} from '../../dist/cdp/connect.js';
+import { closeConnectionAttempt, ConnectionSetupSupersededError } from '../../dist/cdp/connect.js';
 import {
   HELPERS_VERSION,
   INJECTED_HELPERS,

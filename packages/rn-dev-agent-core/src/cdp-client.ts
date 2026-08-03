@@ -949,7 +949,11 @@ export class CDPClient {
         throw new ConnectionSetupSupersededError();
       }
     };
-    const sendForSetup = async (method: string, params?: unknown, ms?: number): Promise<unknown> => {
+    const sendForSetup = async (
+      method: string,
+      params?: unknown,
+      ms?: number,
+    ): Promise<unknown> => {
       assertSetupCurrent();
       const response = await this.sendWithTimeout(
         method,

@@ -52,6 +52,9 @@ Call `rn_session(action="status")` first, then passive `cdp_status`.
 - A disconnected exact target means open the bound app and call `cdp_connect`.
 - Use `cdp_component_tree` for helper and RedBox health.
 - Use `cdp_error_log` for active JavaScript errors.
+- For `HELPERS_NOT_INJECTED`, read bounded `meta.helperHealth` and follow the
+  packaged debugging skill's recovery order; a probe timeout does not prove a
+  JavaScript hang.
 
 ### Connection Troubleshooting
 
