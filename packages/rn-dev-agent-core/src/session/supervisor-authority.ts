@@ -6,7 +6,11 @@ import { openSessionRegistry } from './registry.js';
 import type { SourceIdentity } from './source-identity.js';
 import { ensureSharedKnowledgeRoot } from './shared-knowledge-root.js';
 import { stopManagedMetro, type ManagedMetroBinding } from './managed-metro.js';
-import { inspectAutomationDuty, recoverAutomationDuty } from './managed-automation.js';
+import {
+  automationDutyStoreForSession,
+  inspectAutomationDuty,
+  recoverAutomationDuty,
+} from './managed-automation.js';
 import {
   createAuthorityStateLayout,
   sessionRuntimeDirectory,
@@ -234,18 +238,26 @@ export function createSupervisorAuthority(
             | undefined;
           if (
             (device?.platform === 'ios' || device?.platform === 'android') &&
-            typeof device.deviceId === 'string' &&
-            (dependencies.inspectAutomation ?? inspectAutomationDuty)(
-              device.platform,
-              device.deviceId,
-            )
+            typeof device.deviceId === 'string'
           ) {
-            await (dependencies.recoverAutomation ?? recoverAutomationDuty)({
-              sessionId: status.sessionId,
-              claimEpoch: status.claimEpoch,
-              platform: device.platform,
-              deviceId: device.deviceId,
-            });
+            const platform = device.platform as 'ios' | 'android';
+            const authorityStore = automationDutyStoreForSession(registry, session);
+            const duty = dependencies.inspectAutomation
+              ? dependencies.inspectAutomation(platform, device.deviceId)
+              : inspectAutomationDuty(platform, device.deviceId, { authorityStore });
+            if (duty) {
+              const recoveryAuthority = {
+                sessionId: status.sessionId,
+                claimEpoch: status.claimEpoch,
+                platform,
+                deviceId: device.deviceId,
+              };
+              if (dependencies.recoverAutomation) {
+                await dependencies.recoverAutomation(recoveryAuthority);
+              } else {
+                await recoverAutomationDuty(recoveryAuthority, { authorityStore });
+              }
+            }
           }
           const recorder = status.bindings.recorder as Record<string, unknown> | null | undefined;
           if (recorder) {

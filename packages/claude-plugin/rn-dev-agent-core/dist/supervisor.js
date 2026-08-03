@@ -19457,6 +19457,128 @@ var init_maestro_run = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/session/runtime.js
+function unavailable(reason, fallbackCode) {
+  const matched = /^([A-Z][A-Z0-9_]+):/.exec(reason);
+  return new WorkerAuthorityRuntime(null, null, {
+    code: matched?.[1] ?? fallbackCode,
+    reason
+  });
+}
+function createWorkerAuthorityRuntime(environment = process.env, dependencies = {}) {
+  if (environment.RN_DEV_AGENT_AUTHORITY_ERROR) {
+    return unavailable(environment.RN_DEV_AGENT_AUTHORITY_ERROR, "AUTHORITY_STORE_UNAVAILABLE");
+  }
+  const sessionId = environment.RN_DEV_AGENT_SESSION_ID;
+  const claimEpoch = Number(environment.RN_DEV_AGENT_CLAIM_EPOCH);
+  const registryPath = environment.RN_DEV_AGENT_REGISTRY_PATH;
+  const workerInstance = environment.RN_DEV_AGENT_WORKER_INSTANCE;
+  if (!sessionId || !Number.isSafeInteger(claimEpoch) || claimEpoch < 1 || !registryPath || !workerInstance) {
+    return unavailable("SESSION_NOT_INITIALIZED: supervisor did not provide a complete authority context", "SESSION_NOT_INITIALIZED");
+  }
+  const birth = (dependencies.readBirth ?? readProcessBirth)(process.pid);
+  if (!birth) {
+    return unavailable("PROCESS_BIRTH_UNAVAILABLE: worker process birth could not be proven conservatively", "PROCESS_BIRTH_UNAVAILABLE");
+  }
+  try {
+    const registry2 = openSessionRegistry(registryPath, {
+      ownerStatus: dependencies.ownerStatus ?? inspectSessionOwner
+    });
+    const session = { sessionId, claimEpoch };
+    const status = registry2.getSessionStatus(sessionId);
+    const recoveryOnly = status?.state === "blocked" || status?.state === "handoff_cleanup";
+    if (recoveryOnly) {
+      const secretPath = environment.RN_DEV_AGENT_SESSION_SECRET_PATH;
+      const recoveryCapability = secretPath ? readJsonStateFile(secretPath)?.recoveryCapability : null;
+      if (!recoveryCapability) {
+        throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "blocked recovery capability is unavailable");
+      }
+      registry2.bindRecoveryWorker(session, { instanceId: workerInstance, pid: birth.pid, token: birth.token }, recoveryCapability);
+    } else {
+      registry2.bindWorker(session, {
+        instanceId: workerInstance,
+        pid: birth.pid,
+        token: birth.token
+      });
+    }
+    return new WorkerAuthorityRuntime(registry2, session, null, recoveryOnly);
+  } catch (error2) {
+    return unavailable(error2 instanceof Error ? error2.message : "AUTHORITY_STORE_UNAVAILABLE: worker authority could not be opened", "AUTHORITY_STORE_UNAVAILABLE");
+  }
+}
+function getWorkerAuthorityRuntime() {
+  sharedRuntime ??= createWorkerAuthorityRuntime();
+  return sharedRuntime;
+}
+var WorkerAuthorityRuntime, sharedRuntime;
+var init_runtime = __esm({
+  "packages/rn-dev-agent-core/dist/session/runtime.js"() {
+    "use strict";
+    init_process_birth();
+    init_process_owner();
+    init_registry();
+    init_secure_state_file();
+    WorkerAuthorityRuntime = class {
+      available;
+      #registry;
+      #session;
+      #unavailable;
+      #recoveryOnly;
+      constructor(registry2, session, unavailable2, recoveryOnly = false) {
+        this.#registry = registry2;
+        this.#session = session;
+        this.#unavailable = unavailable2;
+        this.available = registry2 !== null && session !== null;
+        this.#recoveryOnly = recoveryOnly;
+      }
+      requireAvailable() {
+        if (!this.#registry || !this.#session) {
+          throw new SessionAuthorityError(this.#unavailable?.code ?? "SESSION_NOT_INITIALIZED", this.#unavailable?.reason ?? "authority session is unavailable");
+        }
+        return { registry: this.#registry, session: this.#session };
+      }
+      requireOperational() {
+        const available = this.requireAvailable();
+        const status = this.status();
+        if (status.available && (status.state === "blocked" || status.state === "handoff_cleanup")) {
+          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "blocked contender exposes only accept_handoff and adopt_stale recovery");
+        }
+        return available;
+      }
+      requireRecovery() {
+        const available = this.requireAvailable();
+        const status = this.status();
+        if (!this.#recoveryOnly || !status.available || status.state !== "blocked" && status.state !== "handoff_cleanup") {
+          throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "session is not a capability-bound recovery contender");
+        }
+        return available;
+      }
+      status() {
+        if (!this.#registry || !this.#session) {
+          return {
+            available: false,
+            code: this.#unavailable?.code ?? "SESSION_NOT_INITIALIZED",
+            reason: this.#unavailable?.reason ?? "authority session is unavailable"
+          };
+        }
+        const status = this.#registry.getSessionStatus(this.#session.sessionId);
+        if (!status) {
+          return {
+            available: false,
+            code: "SESSION_OWNER_LOST",
+            reason: "session is no longer present in the authority registry"
+          };
+        }
+        return { available: true, ...status };
+      }
+      close() {
+        this.#registry?.close();
+      }
+    };
+    sharedRuntime = null;
+  }
+});
+
 // packages/rn-dev-agent-core/dist/session/managed-automation.js
 import { execFileSync as execFileSync8, spawn as spawn3 } from "node:child_process";
 import { randomUUID as randomUUID4 } from "node:crypto";
@@ -19473,8 +19595,54 @@ function rememberAutomationDuty(state) {
 function forgetAutomationDuty(platform, deviceId) {
   activeAutomationDuties.delete(automationDutyKey(platform, deviceId));
 }
-function currentAutomationDuty(platform, deviceId) {
-  return activeAutomationDuties.get(automationDutyKey(platform, deviceId)) ?? readPersistedAutomationState(platform, deviceId);
+function currentAutomationDuty(platform, deviceId, authorityStore) {
+  return activeAutomationDuties.get(automationDutyKey(platform, deviceId)) ?? readPersistedAutomationState(platform, deviceId) ?? authorityStore?.read(platform, deviceId) ?? null;
+}
+function isAutomationDuty(value) {
+  if (!value || typeof value !== "object")
+    return false;
+  const state = value;
+  if (state.schemaVersion !== 1 || state.kind !== "maestro-process-group" && state.kind !== "maestro-cleanup-refusal" || typeof state.invocationId !== "string" || typeof state.sessionId !== "string" || !Number.isSafeInteger(state.claimEpoch) || state.platform !== "ios" && state.platform !== "android" || typeof state.deviceId !== "string" || typeof state.startedAt !== "string" || typeof state.tool !== "string") {
+    return false;
+  }
+  if (state.kind === "maestro-cleanup-refusal")
+    return true;
+  const processState = value;
+  return Number.isSafeInteger(processState.pid) && Number.isSafeInteger(processState.pgid) && typeof processState.processBirth === "string" && Array.isArray(processState.attributedProcesses);
+}
+function automationDutyStoreForSession(registry2, session) {
+  return {
+    read(platform, deviceId) {
+      const status = registry2.getSessionStatus(session.sessionId);
+      if (!status || status.claimEpoch !== session.claimEpoch)
+        return null;
+      const duty = status.bindings.automationDuty;
+      if (duty === null || duty === void 0)
+        return null;
+      if (!isAutomationDuty(duty) || duty.platform !== platform || duty.deviceId !== deviceId) {
+        throw new Error("AUTOMATION_CLEANUP_UNPROVEN: session automation duty is invalid");
+      }
+      return duty;
+    },
+    write(duty) {
+      registry2.updateBindings(session, { bindings: { automationDuty: duty } });
+    }
+  };
+}
+function automationDutyStore(runtime) {
+  const { registry: registry2, session } = runtime.requireAvailable();
+  return automationDutyStoreForSession(registry2, session);
+}
+function defaultAutomationDutyStore(env) {
+  if (!env.RN_DEV_AGENT_REGISTRY_PATH || !env.RN_DEV_AGENT_WORKER_INSTANCE || !env.RN_DEV_AGENT_SESSION_ID || !env.RN_DEV_AGENT_CLAIM_EPOCH) {
+    return null;
+  }
+  return automationDutyStore(getWorkerAuthorityRuntime());
+}
+function clearAutomationDuty(platform, deviceId, authorityStore) {
+  authorityStore?.write(null);
+  forgetAutomationDuty(platform, deviceId);
+  deleteStateFile(automationStatePath(platform, deviceId));
 }
 function observeChildTerminal(child, timeoutMs) {
   let stop = () => {
@@ -19588,6 +19756,37 @@ async function spawnManagedProcessGroup(bin, args, options, dependencies = {}) {
   const listProcesses = dependencies.listProcesses ?? defaultListProcesses;
   const writeState = dependencies.writeState ?? writeJsonStateFileAtomic;
   const env = options.env ?? process.env;
+  const authorityStore = dependencies.authorityStore !== void 0 ? dependencies.authorityStore : defaultAutomationDutyStore(env);
+  const authority = currentSessionAuthority(env);
+  const invocationId = randomUUID4();
+  let refusalDuty;
+  if (authority && options.deviceId && authorityStore) {
+    refusalDuty = {
+      schemaVersion: 1,
+      kind: "maestro-cleanup-refusal",
+      invocationId,
+      sessionId: authority.sessionId,
+      claimEpoch: authority.claimEpoch,
+      platform: options.platform,
+      deviceId: options.deviceId,
+      startedAt: (/* @__PURE__ */ new Date()).toISOString(),
+      tool: options.tool
+    };
+    try {
+      authorityStore.write(refusalDuty);
+    } catch (error2) {
+      return {
+        stdout: "",
+        stderr: "",
+        code: null,
+        signal: null,
+        timedOut: false,
+        cleanupProven: true,
+        cleanupEscalated: false,
+        error: `Failed to establish managed automation authority: ${error2 instanceof Error ? error2.message : String(error2)}`
+      };
+    }
+  }
   const baseline = /* @__PURE__ */ new Set();
   if (options.deviceId) {
     try {
@@ -19605,6 +19804,8 @@ async function spawnManagedProcessGroup(bin, args, options, dependencies = {}) {
       stdio: ["ignore", "pipe", "pipe"]
     });
   } catch (error2) {
+    if (refusalDuty)
+      clearAutomationDuty(options.platform, refusalDuty.deviceId, authorityStore);
     return {
       stdout: "",
       stderr: "",
@@ -19620,6 +19821,8 @@ async function spawnManagedProcessGroup(bin, args, options, dependencies = {}) {
   const pid = child.pid;
   if (!pid) {
     const terminal2 = await terminalObserver.result;
+    if (refusalDuty)
+      clearAutomationDuty(options.platform, refusalDuty.deviceId, authorityStore);
     return {
       stdout: "",
       stderr: "",
@@ -19631,13 +19834,15 @@ async function spawnManagedProcessGroup(bin, args, options, dependencies = {}) {
       error: terminal2.error ?? "Managed automation process did not expose a PID"
     };
   }
-  const authority = currentSessionAuthority(env);
   const birth = readBirth(pid);
   const statePath = options.deviceId ? automationStatePath(options.platform, options.deviceId) : void 0;
   let state;
   if (authority && options.deviceId && !birth) {
     const cleanup = await terminateProcessGroup(pid, signalGroup, delay);
     terminalObserver.stop();
+    if (cleanup.presence === "absent") {
+      clearAutomationDuty(options.platform, options.deviceId, authorityStore);
+    }
     return {
       stdout: "",
       stderr: "",
@@ -19653,7 +19858,7 @@ async function spawnManagedProcessGroup(bin, args, options, dependencies = {}) {
     state = {
       schemaVersion: 1,
       kind: "maestro-process-group",
-      invocationId: randomUUID4(),
+      invocationId,
       sessionId: authority.sessionId,
       claimEpoch: authority.claimEpoch,
       platform: options.platform,
@@ -19666,14 +19871,23 @@ async function spawnManagedProcessGroup(bin, args, options, dependencies = {}) {
       attributedProcesses: []
     };
     rememberAutomationDuty(state);
+    let persistenceError;
+    if (authorityStore) {
+      try {
+        authorityStore.write(state);
+      } catch (error2) {
+        persistenceError = error2;
+      }
+    }
     try {
       writeState(statePath, state);
     } catch (error2) {
+      persistenceError ??= error2;
       const cleanup = await terminateProcessGroup(pid, signalGroup, delay);
       const cleanupProven2 = cleanup.presence === "absent";
       terminalObserver.stop();
       if (cleanupProven2)
-        forgetAutomationDuty(options.platform, options.deviceId);
+        clearAutomationDuty(options.platform, options.deviceId, authorityStore);
       return {
         stdout: "",
         stderr: "",
@@ -19682,7 +19896,7 @@ async function spawnManagedProcessGroup(bin, args, options, dependencies = {}) {
         timedOut: false,
         cleanupProven: cleanupProven2,
         cleanupEscalated: cleanup.escalated,
-        error: cleanupProven2 ? `Failed to persist managed automation state: ${error2 instanceof Error ? error2.message : String(error2)}` : "AUTOMATION_CLEANUP_UNPROVEN: managed automation state could not be persisted and process-group absence could not be confirmed"
+        error: cleanupProven2 ? `Failed to persist managed automation state: ${persistenceError instanceof Error ? persistenceError.message : String(persistenceError)}` : "AUTOMATION_CLEANUP_UNPROVEN: managed automation state could not be persisted and process-group absence could not be confirmed"
       };
     }
   }
@@ -19737,11 +19951,11 @@ async function spawnManagedProcessGroup(bin, args, options, dependencies = {}) {
     }
     state.attributedProcesses = attributed;
     rememberAutomationDuty(state);
+    authorityStore?.write(state);
     writeState(statePath, state);
   }
   if (cleanupProven && statePath && options.deviceId) {
-    forgetAutomationDuty(options.platform, options.deviceId);
-    deleteStateFile(statePath);
+    clearAutomationDuty(options.platform, options.deviceId, authorityStore);
   }
   return {
     stdout: Buffer.concat(stdout).toString("utf8"),
@@ -19756,13 +19970,16 @@ async function spawnManagedProcessGroup(bin, args, options, dependencies = {}) {
 }
 function inspectAutomationDuty(platform, deviceId, dependencies = {}) {
   const path = automationStatePath(platform, deviceId);
-  const state = currentAutomationDuty(platform, deviceId);
+  const authorityStore = dependencies.authorityStore !== void 0 ? dependencies.authorityStore : defaultAutomationDutyStore(process.env);
+  const state = currentAutomationDuty(platform, deviceId, authorityStore);
   if (!state) {
     if (existsSync16(path)) {
       throw new Error("AUTOMATION_CLEANUP_UNPROVEN: persisted automation state is invalid");
     }
     return null;
   }
+  if (state.kind === "maestro-cleanup-refusal")
+    return state;
   const signalGroup = dependencies.signalGroup ?? ((pgid, signal) => {
     if (process.platform === "win32")
       process.kill(pgid, signal);
@@ -19771,20 +19988,20 @@ function inspectAutomationDuty(platform, deviceId, dependencies = {}) {
   });
   const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
   const group = groupPresence(state.pgid, signalGroup);
-  const descendantsPresent = state.attributedProcesses.some((owned) => {
+  const descendantsAbsent = state.attributedProcesses.every((owned) => {
     const observed = probeBirth(owned.pid);
-    return observed.status === "present" && observed.birth.token === owned.processBirth;
+    return observed.status === "absent" || observed.status === "present" && observed.birth.token !== owned.processBirth;
   });
-  if (group === "absent" && !descendantsPresent) {
-    forgetAutomationDuty(platform, deviceId);
-    deleteStateFile(automationStatePath(platform, deviceId));
+  if (group === "absent" && descendantsAbsent) {
+    clearAutomationDuty(platform, deviceId, authorityStore);
     return null;
   }
   return state;
 }
 async function recoverAutomationDuty(authority, dependencies = {}) {
   const path = automationStatePath(authority.platform, authority.deviceId);
-  const state = currentAutomationDuty(authority.platform, authority.deviceId);
+  const authorityStore = dependencies.authorityStore !== void 0 ? dependencies.authorityStore : defaultAutomationDutyStore(process.env);
+  const state = currentAutomationDuty(authority.platform, authority.deviceId, authorityStore);
   if (!state) {
     if (existsSync16(path)) {
       throw new Error("AUTOMATION_CLEANUP_UNPROVEN: persisted automation state is invalid");
@@ -19794,6 +20011,9 @@ async function recoverAutomationDuty(authority, dependencies = {}) {
   if (state.sessionId !== authority.sessionId || state.claimEpoch !== authority.claimEpoch) {
     throw new Error("AUTOMATION_CLEANUP_UNPROVEN: persisted automation belongs to another session epoch");
   }
+  if (state.kind === "maestro-cleanup-refusal") {
+    throw new Error("AUTOMATION_CLEANUP_UNPROVEN: cleanup is fenced without PID-birth recovery authority");
+  }
   const delay = dependencies.sleep ?? sleep2;
   const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
   const signalGroup = dependencies.signalGroup ?? ((pgid, signal) => {
@@ -19802,6 +20022,8 @@ async function recoverAutomationDuty(authority, dependencies = {}) {
     else
       process.kill(-pgid, signal);
   });
+  const signalProcess = dependencies.signalProcess ?? process.kill;
+  let escalated = false;
   let presence = groupPresence(state.pgid, signalGroup);
   const leader = probeBirth(state.pid);
   if (presence === "present") {
@@ -19813,9 +20035,8 @@ async function recoverAutomationDuty(authority, dependencies = {}) {
     } catch {
     }
     presence = await waitForGroupAbsence(state.pgid, signalGroup, delay, TERM_GRACE_MS);
-    let escalated2 = false;
     if (presence === "present") {
-      escalated2 = true;
+      escalated = true;
       try {
         signalGroup(state.pgid, "SIGKILL");
       } catch {
@@ -19825,14 +20046,10 @@ async function recoverAutomationDuty(authority, dependencies = {}) {
     if (presence !== "absent") {
       throw new Error("AUTOMATION_CLEANUP_UNPROVEN: process-group absence could not be confirmed");
     }
-    forgetAutomationDuty(authority.platform, authority.deviceId);
-    deleteStateFile(automationStatePath(authority.platform, authority.deviceId));
-    return { recovered: true, invocationId: state.invocationId, escalated: escalated2 };
   }
   if (presence === "unknown") {
     throw new Error("AUTOMATION_CLEANUP_UNPROVEN: process-group presence is unknown");
   }
-  let escalated = false;
   for (const owned of state.attributedProcesses) {
     const observed = probeBirth(owned.pid);
     if (observed.status === "unknown") {
@@ -19844,7 +20061,7 @@ async function recoverAutomationDuty(authority, dependencies = {}) {
       throw new Error("AUTOMATION_CLEANUP_UNPROVEN: attributed PID birth changed; refusing cleanup");
     }
     try {
-      process.kill(owned.pid, "SIGTERM");
+      signalProcess(owned.pid, "SIGTERM");
     } catch {
     }
     await delay(TERM_GRACE_MS);
@@ -19852,7 +20069,7 @@ async function recoverAutomationDuty(authority, dependencies = {}) {
     if (afterTerm.status === "present" && afterTerm.birth.token === owned.processBirth) {
       escalated = true;
       try {
-        process.kill(owned.pid, "SIGKILL");
+        signalProcess(owned.pid, "SIGKILL");
       } catch {
       }
       await delay(50);
@@ -19862,8 +20079,7 @@ async function recoverAutomationDuty(authority, dependencies = {}) {
       throw new Error("AUTOMATION_CLEANUP_UNPROVEN: attributed process absence could not be confirmed");
     }
   }
-  forgetAutomationDuty(authority.platform, authority.deviceId);
-  deleteStateFile(automationStatePath(authority.platform, authority.deviceId));
+  clearAutomationDuty(authority.platform, authority.deviceId, authorityStore);
   return { recovered: true, invocationId: state.invocationId, escalated };
 }
 function removeTemporaryInlineFlow(path) {
@@ -19875,6 +20091,7 @@ var init_managed_automation = __esm({
     "use strict";
     init_secure_state_file();
     init_process_birth();
+    init_runtime();
     OUTPUT_LIMIT = 10 * 1024 * 1024;
     TERM_GRACE_MS = 500;
     ABSENCE_CONFIRM_MS = 2e3;
@@ -65841,18 +66058,24 @@ function createSessionHandler(runtime, dependencies = {}) {
         if (device?.platform !== "ios" && device?.platform !== "android" || typeof device.deviceId !== "string") {
           throw new SessionAuthorityError("AUTOMATION_CLEANUP_UNPROVEN", "recover_automation requires exact bound-device authority");
         }
-        const recovered = await (dependencies.recoverAutomation ?? recoverAutomationDuty)({
+        const platform = device.platform;
+        const recoveryAuthority = {
           sessionId: status2.sessionId,
           claimEpoch: status2.claimEpoch,
-          platform: device.platform,
+          platform,
           deviceId: device.deviceId
+        };
+        const recovered = dependencies.recoverAutomation ? await dependencies.recoverAutomation(recoveryAuthority) : await recoverAutomationDuty(recoveryAuthority, {
+          authorityStore: automationDutyStore(runtime)
         });
         return okResult({ recovered, session: projectPublicAuthorityStatus(runtime.status()) });
       }
       const currentStatus = runtime.status();
       if (currentStatus.available) {
         const device = currentStatus.bindings.device;
-        if ((device?.platform === "ios" || device?.platform === "android") && typeof device.deviceId === "string" && (dependencies.inspectAutomation ?? inspectAutomationDuty)(device.platform, device.deviceId)) {
+        if ((device?.platform === "ios" || device?.platform === "android") && typeof device.deviceId === "string" && (dependencies.inspectAutomation ? dependencies.inspectAutomation(device.platform, device.deviceId) : inspectAutomationDuty(device.platform, device.deviceId, {
+          authorityStore: automationDutyStore(runtime)
+        }))) {
           throw new SessionAuthorityError("AUTOMATION_CLEANUP_UNPROVEN", "plugin-owned automation cleanup is unproven; run recover_automation with confirmed=true before session transitions");
         }
       }
@@ -74175,128 +74398,6 @@ var init_device_deeplink = __esm({
   }
 });
 
-// packages/rn-dev-agent-core/dist/session/runtime.js
-function unavailable(reason, fallbackCode) {
-  const matched = /^([A-Z][A-Z0-9_]+):/.exec(reason);
-  return new WorkerAuthorityRuntime(null, null, {
-    code: matched?.[1] ?? fallbackCode,
-    reason
-  });
-}
-function createWorkerAuthorityRuntime(environment = process.env, dependencies = {}) {
-  if (environment.RN_DEV_AGENT_AUTHORITY_ERROR) {
-    return unavailable(environment.RN_DEV_AGENT_AUTHORITY_ERROR, "AUTHORITY_STORE_UNAVAILABLE");
-  }
-  const sessionId = environment.RN_DEV_AGENT_SESSION_ID;
-  const claimEpoch = Number(environment.RN_DEV_AGENT_CLAIM_EPOCH);
-  const registryPath = environment.RN_DEV_AGENT_REGISTRY_PATH;
-  const workerInstance = environment.RN_DEV_AGENT_WORKER_INSTANCE;
-  if (!sessionId || !Number.isSafeInteger(claimEpoch) || claimEpoch < 1 || !registryPath || !workerInstance) {
-    return unavailable("SESSION_NOT_INITIALIZED: supervisor did not provide a complete authority context", "SESSION_NOT_INITIALIZED");
-  }
-  const birth = (dependencies.readBirth ?? readProcessBirth)(process.pid);
-  if (!birth) {
-    return unavailable("PROCESS_BIRTH_UNAVAILABLE: worker process birth could not be proven conservatively", "PROCESS_BIRTH_UNAVAILABLE");
-  }
-  try {
-    const registry2 = openSessionRegistry(registryPath, {
-      ownerStatus: dependencies.ownerStatus ?? inspectSessionOwner
-    });
-    const session = { sessionId, claimEpoch };
-    const status = registry2.getSessionStatus(sessionId);
-    const recoveryOnly = status?.state === "blocked" || status?.state === "handoff_cleanup";
-    if (recoveryOnly) {
-      const secretPath = environment.RN_DEV_AGENT_SESSION_SECRET_PATH;
-      const recoveryCapability = secretPath ? readJsonStateFile(secretPath)?.recoveryCapability : null;
-      if (!recoveryCapability) {
-        throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "blocked recovery capability is unavailable");
-      }
-      registry2.bindRecoveryWorker(session, { instanceId: workerInstance, pid: birth.pid, token: birth.token }, recoveryCapability);
-    } else {
-      registry2.bindWorker(session, {
-        instanceId: workerInstance,
-        pid: birth.pid,
-        token: birth.token
-      });
-    }
-    return new WorkerAuthorityRuntime(registry2, session, null, recoveryOnly);
-  } catch (error2) {
-    return unavailable(error2 instanceof Error ? error2.message : "AUTHORITY_STORE_UNAVAILABLE: worker authority could not be opened", "AUTHORITY_STORE_UNAVAILABLE");
-  }
-}
-function getWorkerAuthorityRuntime() {
-  sharedRuntime ??= createWorkerAuthorityRuntime();
-  return sharedRuntime;
-}
-var WorkerAuthorityRuntime, sharedRuntime;
-var init_runtime = __esm({
-  "packages/rn-dev-agent-core/dist/session/runtime.js"() {
-    "use strict";
-    init_process_birth();
-    init_process_owner();
-    init_registry();
-    init_secure_state_file();
-    WorkerAuthorityRuntime = class {
-      available;
-      #registry;
-      #session;
-      #unavailable;
-      #recoveryOnly;
-      constructor(registry2, session, unavailable2, recoveryOnly = false) {
-        this.#registry = registry2;
-        this.#session = session;
-        this.#unavailable = unavailable2;
-        this.available = registry2 !== null && session !== null;
-        this.#recoveryOnly = recoveryOnly;
-      }
-      requireAvailable() {
-        if (!this.#registry || !this.#session) {
-          throw new SessionAuthorityError(this.#unavailable?.code ?? "SESSION_NOT_INITIALIZED", this.#unavailable?.reason ?? "authority session is unavailable");
-        }
-        return { registry: this.#registry, session: this.#session };
-      }
-      requireOperational() {
-        const available = this.requireAvailable();
-        const status = this.status();
-        if (status.available && (status.state === "blocked" || status.state === "handoff_cleanup")) {
-          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "blocked contender exposes only accept_handoff and adopt_stale recovery");
-        }
-        return available;
-      }
-      requireRecovery() {
-        const available = this.requireAvailable();
-        const status = this.status();
-        if (!this.#recoveryOnly || !status.available || status.state !== "blocked" && status.state !== "handoff_cleanup") {
-          throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "session is not a capability-bound recovery contender");
-        }
-        return available;
-      }
-      status() {
-        if (!this.#registry || !this.#session) {
-          return {
-            available: false,
-            code: this.#unavailable?.code ?? "SESSION_NOT_INITIALIZED",
-            reason: this.#unavailable?.reason ?? "authority session is unavailable"
-          };
-        }
-        const status = this.#registry.getSessionStatus(this.#session.sessionId);
-        if (!status) {
-          return {
-            available: false,
-            code: "SESSION_OWNER_LOST",
-            reason: "session is no longer present in the authority registry"
-          };
-        }
-        return { available: true, ...status };
-      }
-      close() {
-        this.#registry?.close();
-      }
-    };
-    sharedRuntime = null;
-  }
-});
-
 // packages/rn-dev-agent-core/dist/tools/device-record.js
 import { execFile as execFile22 } from "node:child_process";
 import { createHash as createHash15 } from "node:crypto";
@@ -77082,13 +77183,17 @@ function createDevicePickDateHandler(invoke = runMaestroInline) {
     const summary = buildStepSummary(result.output, { failed: true });
     const succeeded = [];
     let failed = components[0];
+    let nextStepIndex = 0;
     for (const component of components) {
-      const observed = summary.steps.find((step) => stepTargetsValue(step.name, component.value));
+      const relativeIndex = summary.steps.slice(nextStepIndex).findIndex((step) => stepTargetsValue(step.name, component.value));
+      const observedIndex = relativeIndex < 0 ? -1 : nextStepIndex + relativeIndex;
+      const observed = observedIndex < 0 ? void 0 : summary.steps[observedIndex];
       if (observed?.status !== "pass") {
         failed = component;
         break;
       }
       succeeded.push(component.name);
+      nextStepIndex = observedIndex + 1;
     }
     const code = result.errorCode ?? (result.timedOut ? "PICK_DATE_TIMEOUT" : "PICK_DATE_INCOMPLETE");
     const reason = result.timedOut ? `Date-picker flow timed out after ${args.timeoutMs ?? DEFAULT_PICKER_TIMEOUT_MS}ms while attempting ${failed.name} "${failed.value}".` : `Date-picker flow could not select ${failed.name} "${failed.value}". Calendar mode and off-screen wheel scrolling remain unsupported; issue #27 tracks native wheel adjustment.`;
@@ -84369,13 +84474,23 @@ function createSupervisorAuthority(input, dependencies = {}) {
         }
         if (status) {
           const device = status.bindings.device;
-          if ((device?.platform === "ios" || device?.platform === "android") && typeof device.deviceId === "string" && (dependencies.inspectAutomation ?? inspectAutomationDuty)(device.platform, device.deviceId)) {
-            await (dependencies.recoverAutomation ?? recoverAutomationDuty)({
-              sessionId: status.sessionId,
-              claimEpoch: status.claimEpoch,
-              platform: device.platform,
-              deviceId: device.deviceId
-            });
+          if ((device?.platform === "ios" || device?.platform === "android") && typeof device.deviceId === "string") {
+            const platform = device.platform;
+            const authorityStore = automationDutyStoreForSession(registry2, session);
+            const duty = dependencies.inspectAutomation ? dependencies.inspectAutomation(platform, device.deviceId) : inspectAutomationDuty(platform, device.deviceId, { authorityStore });
+            if (duty) {
+              const recoveryAuthority = {
+                sessionId: status.sessionId,
+                claimEpoch: status.claimEpoch,
+                platform,
+                deviceId: device.deviceId
+              };
+              if (dependencies.recoverAutomation) {
+                await dependencies.recoverAutomation(recoveryAuthority);
+              } else {
+                await recoverAutomationDuty(recoveryAuthority, { authorityStore });
+              }
+            }
           }
           const recorder2 = status.bindings.recorder;
           if (recorder2) {

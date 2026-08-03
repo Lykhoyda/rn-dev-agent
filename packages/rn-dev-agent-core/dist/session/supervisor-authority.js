@@ -3,7 +3,7 @@ import { stopBoundObserve, stopBoundRecorder, stopBoundRunner } from './process-
 import { openSessionRegistry } from './registry.js';
 import { ensureSharedKnowledgeRoot } from './shared-knowledge-root.js';
 import { stopManagedMetro } from './managed-metro.js';
-import { inspectAutomationDuty, recoverAutomationDuty } from './managed-automation.js';
+import { automationDutyStoreForSession, inspectAutomationDuty, recoverAutomationDuty, } from './managed-automation.js';
 import { createAuthorityStateLayout, sessionRuntimeDirectory, writeSessionPublicReceipt, writeSessionSecret, } from './state-root.js';
 const RELEASABLE_SESSION_STATES = new Set([
     'active',
@@ -176,14 +176,26 @@ export function createSupervisorAuthority(input, dependencies = {}) {
                 if (status) {
                     const device = status.bindings.device;
                     if ((device?.platform === 'ios' || device?.platform === 'android') &&
-                        typeof device.deviceId === 'string' &&
-                        (dependencies.inspectAutomation ?? inspectAutomationDuty)(device.platform, device.deviceId)) {
-                        await (dependencies.recoverAutomation ?? recoverAutomationDuty)({
-                            sessionId: status.sessionId,
-                            claimEpoch: status.claimEpoch,
-                            platform: device.platform,
-                            deviceId: device.deviceId,
-                        });
+                        typeof device.deviceId === 'string') {
+                        const platform = device.platform;
+                        const authorityStore = automationDutyStoreForSession(registry, session);
+                        const duty = dependencies.inspectAutomation
+                            ? dependencies.inspectAutomation(platform, device.deviceId)
+                            : inspectAutomationDuty(platform, device.deviceId, { authorityStore });
+                        if (duty) {
+                            const recoveryAuthority = {
+                                sessionId: status.sessionId,
+                                claimEpoch: status.claimEpoch,
+                                platform,
+                                deviceId: device.deviceId,
+                            };
+                            if (dependencies.recoverAutomation) {
+                                await dependencies.recoverAutomation(recoveryAuthority);
+                            }
+                            else {
+                                await recoverAutomationDuty(recoveryAuthority, { authorityStore });
+                            }
+                        }
                     }
                     const recorder = status.bindings.recorder;
                     if (recorder) {

@@ -7855,6 +7855,38 @@ var init_metro_binding = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/session/process-owner.js
+function defaultProcessState(pid) {
+  try {
+    process.kill(pid, 0);
+    return "alive";
+  } catch (error) {
+    const code = error.code;
+    if (code === "ESRCH")
+      return "dead";
+    if (code === "EPERM")
+      return "alive";
+    return "unknown";
+  }
+}
+function inspectSessionOwner(owner, dependencies = {}) {
+  const state = (dependencies.processState ?? defaultProcessState)(owner.pid);
+  if (state === "dead")
+    return "mismatch";
+  if (state === "unknown")
+    return "unknown";
+  const observed = (dependencies.readBirth ?? readProcessBirth)(owner.pid);
+  if (!observed)
+    return "unknown";
+  return observed.token === owner.token ? "match" : "mismatch";
+}
+var init_process_owner = __esm({
+  "packages/rn-dev-agent-core/dist/session/process-owner.js"() {
+    "use strict";
+    init_process_birth();
+  }
+});
+
 // packages/rn-dev-agent-core/dist/session/authority-store.js
 import { chmodSync, lstatSync as lstatSync3, mkdirSync as mkdirSync3, statSync as statSync3 } from "node:fs";
 import { createRequire } from "node:module";
@@ -10503,6 +10535,17 @@ var init_maestro_run = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/session/runtime.js
+var init_runtime = __esm({
+  "packages/rn-dev-agent-core/dist/session/runtime.js"() {
+    "use strict";
+    init_process_birth();
+    init_process_owner();
+    init_registry();
+    init_secure_state_file();
+  }
+});
+
 // packages/rn-dev-agent-core/dist/session/managed-automation.js
 var OUTPUT_LIMIT;
 var init_managed_automation = __esm({
@@ -10510,6 +10553,7 @@ var init_managed_automation = __esm({
     "use strict";
     init_secure_state_file();
     init_process_birth();
+    init_runtime();
     OUTPUT_LIMIT = 10 * 1024 * 1024;
   }
 });
@@ -13833,34 +13877,8 @@ async function stopManagedMetro(binding, input, dependencies = {}) {
   return removeManagedMetroEvidenceSocketSafely(binding.runtimeEvidenceSocket, dependencies);
 }
 
-// packages/rn-dev-agent-core/dist/session/process-owner.js
-init_process_birth();
-function defaultProcessState(pid) {
-  try {
-    process.kill(pid, 0);
-    return "alive";
-  } catch (error) {
-    const code = error.code;
-    if (code === "ESRCH")
-      return "dead";
-    if (code === "EPERM")
-      return "alive";
-    return "unknown";
-  }
-}
-function inspectSessionOwner(owner, dependencies = {}) {
-  const state = (dependencies.processState ?? defaultProcessState)(owner.pid);
-  if (state === "dead")
-    return "mismatch";
-  if (state === "unknown")
-    return "unknown";
-  const observed = (dependencies.readBirth ?? readProcessBirth)(owner.pid);
-  if (!observed)
-    return "unknown";
-  return observed.token === owner.token ? "match" : "mismatch";
-}
-
 // packages/rn-dev-agent-core/dist/rn-session.js
+init_process_owner();
 init_registry();
 
 // packages/rn-dev-agent-core/dist/session/source-identity.js

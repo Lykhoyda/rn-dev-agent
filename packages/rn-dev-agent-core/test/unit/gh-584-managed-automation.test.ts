@@ -16,6 +16,7 @@ import {
   recoverAutomationDuty,
   selectExactDeviceAutomationPids,
   spawnManagedProcessGroup,
+  type AutomationDuty,
 } from '../../dist/session/managed-automation.js';
 import { writeJsonStateFileAtomic } from '../../dist/util/secure-state-file.js';
 
@@ -162,6 +163,13 @@ test('failed state persistence retains an authenticated fence until recovery', a
   const dir = mkdtempSync(join(tmpdir(), 'rn-584-memory-fence-'));
   process.env.XDG_STATE_HOME = dir;
   let cleanupUnknown = false;
+  const durable = { duty: null as AutomationDuty | null };
+  const authorityStore = {
+    read: () => durable.duty,
+    write: (duty: AutomationDuty | null) => {
+      durable.duty = duty;
+    },
+  };
   const managedChild = Object.assign(new EventEmitter(), {
     pid: 700,
     stdout: new PassThrough(),
@@ -198,10 +206,17 @@ test('failed state persistence retains an authenticated fence until recovery', a
           }
         },
         sleep: async () => {},
+        authorityStore,
       },
     );
     assert.equal(result.cleanupProven, false);
-    const duty = inspectAutomationDuty('ios', 'UDID-FENCED', { signalGroup: () => {} });
+    assert.equal(durable.duty?.kind, 'maestro-process-group');
+    const duty = inspectAutomationDuty('ios', 'UDID-FENCED', {
+      signalGroup: () => {},
+      authorityStore,
+    });
+    assert.equal(duty?.kind, 'maestro-process-group');
+    if (duty?.kind !== 'maestro-process-group') assert.fail('expected recoverable duty');
     assert.equal(duty?.processBirth, 'fenced-birth');
     assert.equal(duty?.pid, managedChild?.pid);
 
@@ -229,15 +244,77 @@ test('failed state persistence retains an authenticated fence until recovery', a
           birth: { pid, source: 'linux-proc', token: 'fenced-birth' },
         }),
         sleep: async () => {},
+        authorityStore,
       },
     );
     assert.equal(recovered.recovered, true);
-    assert.equal(inspectAutomationDuty('ios', 'UDID-FENCED'), null);
+    assert.equal(durable.duty, null);
+    assert.equal(inspectAutomationDuty('ios', 'UDID-FENCED', { authorityStore }), null);
   } finally {
     if (prior === undefined) delete process.env.XDG_STATE_HOME;
     else process.env.XDG_STATE_HOME = prior;
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('missing process birth retains a durable refusal-only duty when cleanup is unproven', async () => {
+  const durable = { duty: null as AutomationDuty | null };
+  const authorityStore = {
+    read: () => durable.duty,
+    write: (duty: AutomationDuty | null) => {
+      durable.duty = duty;
+    },
+  };
+  const child = Object.assign(new EventEmitter(), {
+    pid: 702,
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    kill: () => true,
+  }) as unknown as ChildProcessWithoutNullStreams;
+  let killing = false;
+  const result = await spawnManagedProcessGroup(
+    'maestro',
+    [],
+    {
+      timeoutMs: 10_000,
+      platform: 'ios',
+      deviceId: 'UDID-NO-BIRTH',
+      tool: 'fixture-no-birth',
+      env: {
+        ...process.env,
+        RN_DEV_AGENT_SESSION_ID: 'session-no-birth',
+        RN_DEV_AGENT_CLAIM_EPOCH: '8',
+      },
+    },
+    {
+      spawn: (() => child) as typeof spawnChild,
+      readBirth: () => null,
+      authorityStore,
+      signalGroup: (_pgid, signal) => {
+        if (signal === 'SIGKILL') killing = true;
+        if (signal === 0 && killing) {
+          const error = new Error('unknown') as NodeJS.ErrnoException;
+          error.code = 'EPERM';
+          throw error;
+        }
+      },
+      sleep: async () => {},
+    },
+  );
+  assert.equal(result.cleanupProven, false);
+  assert.equal(durable.duty?.kind, 'maestro-cleanup-refusal');
+  await assert.rejects(
+    recoverAutomationDuty(
+      {
+        sessionId: 'session-no-birth',
+        claimEpoch: 8,
+        platform: 'ios',
+        deviceId: 'UDID-NO-BIRTH',
+      },
+      { authorityStore },
+    ),
+    /without PID-birth recovery authority/,
+  );
 });
 
 test('asynchronous spawn errors are observed before PID validation', async () => {
@@ -352,6 +429,117 @@ test('recovery refuses PID-birth mismatch and leaves the authenticated duty inta
       /PID birth changed/,
     );
     assert.equal(existsSync(path), true);
+  } finally {
+    if (prior === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = prior;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('inspection retains the duty when an attributed identity probe is unknown', () => {
+  const prior = process.env.XDG_STATE_HOME;
+  const dir = mkdtempSync(join(tmpdir(), 'rn-584-unknown-descendant-'));
+  process.env.XDG_STATE_HOME = dir;
+  try {
+    const path = automationStatePath('ios', 'UDID-UNKNOWN');
+    writeJsonStateFileAtomic(path, {
+      schemaVersion: 1,
+      kind: 'maestro-process-group',
+      invocationId: 'invocation-unknown',
+      sessionId: 'session-unknown',
+      claimEpoch: 9,
+      platform: 'ios',
+      deviceId: 'UDID-UNKNOWN',
+      pid: 710,
+      pgid: 710,
+      processBirth: 'leader-birth',
+      startedAt: new Date().toISOString(),
+      tool: 'device_pick_date',
+      attributedProcesses: [{ pid: 711, processBirth: 'descendant-birth' }],
+    });
+    const duty = inspectAutomationDuty('ios', 'UDID-UNKNOWN', {
+      signalGroup: () => {
+        const error = new Error('absent') as NodeJS.ErrnoException;
+        error.code = 'ESRCH';
+        throw error;
+      },
+      probeBirth: () => ({ status: 'unknown' }),
+      authorityStore: null,
+    });
+    assert.equal(duty?.kind, 'maestro-process-group');
+    assert.equal(existsSync(path), true);
+  } finally {
+    if (prior === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = prior;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('recovery verifies attributed identities after terminating a present group', async () => {
+  const prior = process.env.XDG_STATE_HOME;
+  const dir = mkdtempSync(join(tmpdir(), 'rn-584-group-descendant-'));
+  process.env.XDG_STATE_HOME = dir;
+  try {
+    const path = automationStatePath('ios', 'UDID-GROUP-DESCENDANT');
+    writeJsonStateFileAtomic(path, {
+      schemaVersion: 1,
+      kind: 'maestro-process-group',
+      invocationId: 'invocation-group-descendant',
+      sessionId: 'session-group-descendant',
+      claimEpoch: 10,
+      platform: 'ios',
+      deviceId: 'UDID-GROUP-DESCENDANT',
+      pid: 720,
+      pgid: 720,
+      processBirth: 'leader-birth',
+      startedAt: new Date().toISOString(),
+      tool: 'device_pick_date',
+      attributedProcesses: [{ pid: 721, processBirth: 'escaped-birth' }],
+    });
+    let groupPresent = true;
+    let descendantPresent = true;
+    const processSignals: Array<[number, NodeJS.Signals]> = [];
+    const recovered = await recoverAutomationDuty(
+      {
+        sessionId: 'session-group-descendant',
+        claimEpoch: 10,
+        platform: 'ios',
+        deviceId: 'UDID-GROUP-DESCENDANT',
+      },
+      {
+        authorityStore: null,
+        signalGroup: (_pgid, signal) => {
+          if (signal === 0 && !groupPresent) {
+            const error = new Error('absent') as NodeJS.ErrnoException;
+            error.code = 'ESRCH';
+            throw error;
+          }
+          if (signal === 'SIGTERM') groupPresent = false;
+        },
+        probeBirth: (pid) => {
+          if (pid === 720) {
+            return {
+              status: 'present',
+              birth: { pid, source: 'linux-proc', token: 'leader-birth' },
+            };
+          }
+          return descendantPresent
+            ? {
+                status: 'present',
+                birth: { pid, source: 'linux-proc', token: 'escaped-birth' },
+              }
+            : { status: 'absent' };
+        },
+        signalProcess: (pid, signal) => {
+          processSignals.push([pid, signal]);
+          descendantPresent = false;
+        },
+        sleep: async () => {},
+      },
+    );
+    assert.equal(recovered.recovered, true);
+    assert.deepEqual(processSignals, [[721, 'SIGTERM']]);
+    assert.equal(existsSync(path), false);
   } finally {
     if (prior === undefined) delete process.env.XDG_STATE_HOME;
     else process.env.XDG_STATE_HOME = prior;

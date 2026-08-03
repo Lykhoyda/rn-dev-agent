@@ -130,13 +130,19 @@ export function createDevicePickDateHandler(invoke = runMaestroInline) {
         const summary = buildStepSummary(result.output, { failed: true });
         const succeeded = [];
         let failed = components[0];
+        let nextStepIndex = 0;
         for (const component of components) {
-            const observed = summary.steps.find((step) => stepTargetsValue(step.name, component.value));
+            const relativeIndex = summary.steps
+                .slice(nextStepIndex)
+                .findIndex((step) => stepTargetsValue(step.name, component.value));
+            const observedIndex = relativeIndex < 0 ? -1 : nextStepIndex + relativeIndex;
+            const observed = observedIndex < 0 ? undefined : summary.steps[observedIndex];
             if (observed?.status !== 'pass') {
                 failed = component;
                 break;
             }
             succeeded.push(component.name);
+            nextStepIndex = observedIndex + 1;
         }
         const code = result.errorCode ?? (result.timedOut ? 'PICK_DATE_TIMEOUT' : 'PICK_DATE_INCOMPLETE');
         const reason = result.timedOut
