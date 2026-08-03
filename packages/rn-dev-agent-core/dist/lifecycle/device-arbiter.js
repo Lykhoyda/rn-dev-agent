@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { failResult } from '../utils.js';
 import { foreignFlowGate, foreignGateUdid, foreignGateEnabled } from './foreign-flow-gate.js';
-import { sanitizeAutomationProcessLines, } from '../util/public-diagnostics.js';
+import { sanitizeAutomationProcessLines } from '../util/public-diagnostics.js';
 /**
  * GH#202 Phase 2a: in-memory serialization of the three device-control planes
  * for ONE bridge process. `flow` (Maestro) is exclusive — it cannot start while
