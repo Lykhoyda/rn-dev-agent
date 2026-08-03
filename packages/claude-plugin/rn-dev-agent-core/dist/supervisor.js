@@ -57076,6 +57076,7 @@ var init_cdp_client = __esm({
           }
           return { fresh, version: version2, probed: true };
         } catch {
+          this.markHelpersUnready(token2, "freshness_probe_failed");
           return { fresh: false, version: null, probed: true };
         }
       }
@@ -57084,6 +57085,7 @@ var init_cdp_client = __esm({
         this._helpersInjected = false;
         this._bridgeDetected = false;
         this._bridgeVersion = null;
+        clearActiveFlag();
         this._helperToken = {
           generation: this._helperWorldGeneration,
           ws: this.ws,
@@ -57146,6 +57148,7 @@ var init_cdp_client = __esm({
         this._helpersInjected = false;
         this._bridgeDetected = false;
         this._bridgeVersion = null;
+        clearActiveFlag();
         logger.warn("CDP", `Helper state unavailable cause=${cause} helperEpoch=${token2.generation} connectionGeneration=${this._connectionGeneration}`);
         return false;
       }
@@ -57473,12 +57476,38 @@ var init_cdp_client = __esm({
       async setup() {
         this.ensureMetroEventsClient().catch(() => {
         });
+        const setupWs = this.ws;
+        const setupTargetId = this._connectedTarget?.id ?? null;
+        let setupHelperToken = null;
+        const assertSetupCurrent = () => {
+          const connectionIsCurrent = this.ws === setupWs && (this._connectedTarget?.id ?? null) === setupTargetId;
+          const helpersAreCurrent = setupHelperToken === null || this.isHelperTokenCurrent(setupHelperToken);
+          if (!connectionIsCurrent || !helpersAreCurrent)
+            throw new Error("setup superseded");
+        };
+        const sendForSetup = async (method, params, ms) => {
+          assertSetupCurrent();
+          const response = await this.sendWithTimeout(method, params, ms ?? timeoutForMethod(method, this.effectivePlatform));
+          assertSetupCurrent();
+          return response;
+        };
+        const evaluateForSetup = async (expression) => {
+          assertSetupCurrent();
+          const response = await this.evaluate(expression);
+          assertSetupCurrent();
+          return response;
+        };
         const result = await performSetup({
-          send: (method, params, ms) => this.sendWithTimeout(method, params, ms ?? timeoutForMethod(method, this.effectivePlatform)),
-          evaluate: (expr) => this.evaluate(expr),
+          send: sendForSetup,
+          evaluate: evaluateForSetup,
           setupHelpers: async (waitTimeout) => {
+            assertSetupCurrent();
             await waitForReact((expr) => this.evaluateCurrentHelperWorld(expr), waitTimeout);
-            return this.ensureCurrentHelpers("setup_started");
+            assertSetupCurrent();
+            setupHelperToken = this._helperToken;
+            const helpersInjected = await this.ensureCurrentHelpers("setup_started");
+            assertSetupCurrent();
+            return helpersInjected;
           },
           port: this._port,
           networkManager: this._networkBufferManager,
@@ -57487,6 +57516,7 @@ var init_cdp_client = __esm({
           clearScripts: () => this._scripts.clear(),
           clearEventHandlers: () => this.eventHandlers.clear()
         });
+        assertSetupCurrent();
         this._networkMode = result.networkMode;
         this._logDomainEnabled = result.logDomainEnabled;
         this._profilerAvailable = result.profilerAvailable;

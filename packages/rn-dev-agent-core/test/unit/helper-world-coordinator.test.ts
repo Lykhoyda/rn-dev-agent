@@ -5,12 +5,13 @@ import { CDPClient } from '../../dist/cdp-client.js';
 import {
   HELPERS_VERSION,
   INJECTED_HELPERS,
+  NETWORK_HOOK_SCRIPT,
   REACT_READY_PROBE_JS,
 } from '../../dist/injected-helpers.js';
 import { helpersNotInjectedResult } from '../../dist/utils.js';
 import { performSetup } from '../../dist/cdp/setup.js';
 import { DeviceBufferManager } from '../../dist/ring-buffer.js';
-import type { NetworkEntry } from '../../dist/types.js';
+import type { EvaluateResult, NetworkEntry } from '../../dist/types.js';
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -256,6 +257,60 @@ test('freshness mismatch invalidates ready evidence before reinjection', async (
   assert.equal(client.helpersInjected, true);
   response = HELPERS_VERSION + 1;
   assert.equal((await client.probeHelperFreshness(20)).fresh, false);
+  assert.equal(client.helpersInjected, false);
+});
+
+test('freshness probe failure invalidates ready evidence before reinjection', async () => {
+  let shouldFail = false;
+  const client = makeConnectedClient(async (_method, params) => {
+    if (shouldFail) throw new Error('transport unavailable');
+    if (params.expression?.includes("Object.getOwnPropertyDescriptor(globalThis,'__RN_AGENT')")) {
+      return valueResponse('current');
+    }
+    return valueResponse(HELPERS_VERSION);
+  });
+  assert.equal((await client.probeHelperHealth(20)).helper, 'current');
+  assert.equal(client.helpersInjected, true);
+  shouldFail = true;
+  assert.equal((await client.probeHelperFreshness(20)).fresh, false);
+  assert.equal(client.helpersInjected, false);
+});
+
+test('superseded setup cannot commit connection capability state', async () => {
+  const hook = deferred<EvaluateResult>();
+  const hookStarted = deferred<void>();
+  const client = makeConnectedClient(async (method, params) => {
+    if (method === 'Network.enable') throw new Error('unsupported');
+    if (params?.expression === REACT_READY_PROBE_JS) return valueResponse(true);
+    if (params?.expression === INJECTED_HELPERS) return valueResponse(undefined);
+    if (params?.expression?.includes(`__v === ${HELPERS_VERSION}`)) return valueResponse(true);
+    if (params?.expression?.includes('__RN_DEV_BRIDGE__')) {
+      return valueResponse(JSON.stringify({ present: false, version: null }));
+    }
+    return valueResponse(undefined);
+  });
+  Reflect.set(client, 'ensureMetroEventsClient', async () => {});
+  Reflect.set(client, 'evaluate', async (expression: string) => {
+    assert.equal(expression, NETWORK_HOOK_SCRIPT);
+    hookStarted.resolve();
+    return hook.promise;
+  });
+  Reflect.set(client, '_networkMode', 'hook');
+  Reflect.set(client, '_logDomainEnabled', false);
+  Reflect.set(client, '_profilerAvailable', false);
+  Reflect.set(client, '_heapProfilerAvailable', false);
+
+  const setup = (Reflect.get(client, 'setup') as () => Promise<void>).call(client);
+  await hookStarted.promise;
+  const created = Reflect.get(client, 'handleExecutionContextCreated') as (params: unknown) => void;
+  created.call(client, { context: { id: 9, uniqueId: 'replacement' } });
+  hook.resolve({ value: undefined });
+
+  await assert.rejects(setup, /setup superseded/);
+  assert.equal(client.networkMode, 'hook');
+  assert.equal(client.logDomainEnabled, false);
+  assert.equal(client.profilerAvailable, false);
+  assert.equal(client.heapProfilerAvailable, false);
   assert.equal(client.helpersInjected, false);
 });
 
