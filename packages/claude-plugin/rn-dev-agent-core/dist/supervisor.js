@@ -56634,6 +56634,8 @@ async function discoverAndConnect(ctx, portHint, filters, discoverFn = discover,
       console.error("CDP: no target with __DEV__=true found, using last available target");
       connectedTarget = candidate;
     } catch (err) {
+      if (err instanceof ConnectionSetupSupersededError)
+        throw err;
       if (err instanceof PickerBlockingBundleError) {
         ctx.setState("disconnected");
         throw err;
@@ -56677,13 +56679,14 @@ async function connectToTarget(ctx, target, retries = 5, intent = "default") {
     }
     let handshakeOk = false;
     let probeTimedOut = false;
+    let attemptWs = null;
     try {
       const proxyUrl = ctx.getProxyUrl();
       const url = proxyUrl ?? target.webSocketDebuggerUrl;
       if (proxyUrl) {
         logger.info("CDP", `Routing via multiplexer proxy: ${proxyUrl}`);
       }
-      await connectWs(ctx, url);
+      attemptWs = await connectWs(ctx, url);
       handshakeOk = true;
       try {
         await ctx.sendWithTimeout("Runtime.evaluate", {
@@ -56704,15 +56707,21 @@ async function connectToTarget(ctx, target, retries = 5, intent = "default") {
       await ctx.setup();
       return;
     } catch (err) {
+      if (err instanceof ConnectionSetupSupersededError)
+        throw err;
       if (err instanceof PickerBlockingBundleError) {
-        closeAndResetWs(ctx);
+        if (!closeConnectionAttempt(ctx, attemptWs)) {
+          throw new ConnectionSetupSupersededError();
+        }
         ctx.setConnectedTarget(null);
         ctx.setState("disconnected");
         throw err;
       }
       lastError = err instanceof Error ? err : new Error(String(err));
       attempts3.push({ handshakeOk, probeTimedOut });
-      closeAndResetWs(ctx);
+      if (!closeConnectionAttempt(ctx, attemptWs)) {
+        throw new ConnectionSetupSupersededError();
+      }
       if (lastError.message.includes("refused")) {
         ctx.setState("disconnected");
         throw new Error("CDP connection refused. Is Metro running and the app loaded?");
@@ -56747,7 +56756,7 @@ function connectWs(ctx, url) {
       clearTimeout(guard);
       ctx.setWs(ws);
       ctx.setState("connected");
-      resolve11();
+      resolve11(ws);
     });
     ws.on("error", (err) => {
       if (!settled) {
@@ -56789,7 +56798,19 @@ function closeAndResetWs(ctx) {
     ctx.setWs(null);
   }
 }
-var PICKER_PROBE_BUDGET_MS, PickerBlockingBundleError;
+function closeConnectionAttempt(ctx, attemptWs) {
+  if (ctx.getWs() !== attemptWs)
+    return false;
+  if (!attemptWs)
+    return true;
+  attemptWs.removeAllListeners();
+  if (attemptWs.readyState === wrapper_default.OPEN || attemptWs.readyState === wrapper_default.CONNECTING) {
+    attemptWs.close();
+  }
+  ctx.setWs(null);
+  return true;
+}
+var PICKER_PROBE_BUDGET_MS, PickerBlockingBundleError, ConnectionSetupSupersededError;
 var init_connect = __esm({
   "packages/rn-dev-agent-core/dist/cdp/connect.js"() {
     "use strict";
@@ -56811,6 +56832,12 @@ var init_connect = __esm({
         super(`Dev Client picker appears to be blocking the bundle: React was not reachable on target "${target.title}" (vm=${target.vm}). If the Expo "Development servers" picker is showing on the simulator, select your Metro server, then retry cdp_status. (If the bundle is still building, just retry.)`);
         this.name = "PickerBlockingBundleError";
         this.target = target;
+      }
+    };
+    ConnectionSetupSupersededError = class extends Error {
+      constructor() {
+        super("Connection setup superseded");
+        this.name = "ConnectionSetupSupersededError";
       }
     };
   }
@@ -57482,8 +57509,9 @@ var init_cdp_client = __esm({
         const assertSetupCurrent = () => {
           const connectionIsCurrent = this.ws === setupWs && (this._connectedTarget?.id ?? null) === setupTargetId;
           const helpersAreCurrent = setupHelperToken === null || this.isHelperTokenCurrent(setupHelperToken);
-          if (!connectionIsCurrent || !helpersAreCurrent)
-            throw new Error("setup superseded");
+          if (!connectionIsCurrent || !helpersAreCurrent) {
+            throw new ConnectionSetupSupersededError();
+          }
         };
         const sendForSetup = async (method, params, ms) => {
           assertSetupCurrent();

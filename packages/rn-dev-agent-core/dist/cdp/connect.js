@@ -31,6 +31,12 @@ export class PickerBlockingBundleError extends Error {
         this.target = target;
     }
 }
+export class ConnectionSetupSupersededError extends Error {
+    constructor() {
+        super('Connection setup superseded');
+        this.name = 'ConnectionSetupSupersededError';
+    }
+}
 /**
  * GH #184: run the bounded picker probe only for a status-intent connect against
  * a non-Hermes target. Hermes targets are skipped so a genuinely slow Hermes
@@ -134,6 +140,8 @@ intent = 'default') {
         catch (err) {
             // GH #184: picker-blocking affects the whole bundle — every other
             // candidate is the same stale C++ target, so don't waste a probe on each.
+            if (err instanceof ConnectionSetupSupersededError)
+                throw err;
             if (err instanceof PickerBlockingBundleError) {
                 ctx.setState('disconnected');
                 throw err;
@@ -211,6 +219,7 @@ async function connectToTarget(ctx, target, retries = 5, intent = 'default') {
         }
         let handshakeOk = false;
         let probeTimedOut = false;
+        let attemptWs = null;
         try {
             // M1b: ride the multiplexer when _proxyUrl is set (from CDPClient.startProxy).
             // Falls back to the target's direct webSocketDebuggerUrl when no proxy is active.
@@ -219,7 +228,7 @@ async function connectToTarget(ctx, target, retries = 5, intent = 'default') {
             if (proxyUrl) {
                 logger.info('CDP', `Routing via multiplexer proxy: ${proxyUrl}`);
             }
-            await connectWs(ctx, url);
+            attemptWs = await connectWs(ctx, url);
             handshakeOk = true;
             // D594: Early stale-target detection — quick probe before full setup
             try {
@@ -250,17 +259,23 @@ async function connectToTarget(ctx, target, retries = 5, intent = 'default') {
             return;
         }
         catch (err) {
+            if (err instanceof ConnectionSetupSupersededError)
+                throw err;
             // GH #184: the picker-blocking abort is deterministic, not transient —
             // don't burn the retry budget on it; clean up and surface it immediately.
             if (err instanceof PickerBlockingBundleError) {
-                closeAndResetWs(ctx);
+                if (!closeConnectionAttempt(ctx, attemptWs)) {
+                    throw new ConnectionSetupSupersededError();
+                }
                 ctx.setConnectedTarget(null);
                 ctx.setState('disconnected');
                 throw err;
             }
             lastError = err instanceof Error ? err : new Error(String(err));
             attempts.push({ handshakeOk, probeTimedOut });
-            closeAndResetWs(ctx);
+            if (!closeConnectionAttempt(ctx, attemptWs)) {
+                throw new ConnectionSetupSupersededError();
+            }
             if (lastError.message.includes('refused')) {
                 ctx.setState('disconnected');
                 throw new Error('CDP connection refused. Is Metro running and the app loaded?');
@@ -300,7 +315,7 @@ function connectWs(ctx, url) {
             clearTimeout(guard);
             ctx.setWs(ws);
             ctx.setState('connected');
-            resolve();
+            resolve(ws);
         });
         ws.on('error', (err) => {
             if (!settled) {
@@ -344,4 +359,16 @@ function closeAndResetWs(ctx) {
         }
         ctx.setWs(null);
     }
+}
+export function closeConnectionAttempt(ctx, attemptWs) {
+    if (ctx.getWs() !== attemptWs)
+        return false;
+    if (!attemptWs)
+        return true;
+    attemptWs.removeAllListeners();
+    if (attemptWs.readyState === WebSocket.OPEN || attemptWs.readyState === WebSocket.CONNECTING) {
+        attemptWs.close();
+    }
+    ctx.setWs(null);
+    return true;
 }

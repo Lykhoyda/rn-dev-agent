@@ -13,7 +13,7 @@ import { sendWithTimeout as sendMsg, rejectAllPending as rejectPending, handleMe
 import { wireEventHandlers, parseNetworkHookMessage as parseNetHook, } from './cdp/event-handlers.js';
 import { discoverForList } from './cdp/discovery.js';
 import { helperExpr as helperExprFn, bridgeWithFallback as bridgeWithFallbackFn, } from './cdp/helper-expr.js';
-import { autoConnect as autoConnectFn, discoverAndConnect as discoverAndConnectFn, } from './cdp/connect.js';
+import { autoConnect as autoConnectFn, ConnectionSetupSupersededError, discoverAndConnect as discoverAndConnectFn, } from './cdp/connect.js';
 import { resolveAutoConnect } from './project-config.js';
 import { handleClose as handleCloseFn, reconnect as reconnectFn, softReconnect as softReconnectFn, startBackgroundPoll as startBgPoll, stopBackgroundPoll as stopBgPoll, } from './cdp/reconnection.js';
 export class CDPClient {
@@ -742,8 +742,9 @@ export class CDPClient {
         const assertSetupCurrent = () => {
             const connectionIsCurrent = this.ws === setupWs && (this._connectedTarget?.id ?? null) === setupTargetId;
             const helpersAreCurrent = setupHelperToken === null || this.isHelperTokenCurrent(setupHelperToken);
-            if (!connectionIsCurrent || !helpersAreCurrent)
-                throw new Error('setup superseded');
+            if (!connectionIsCurrent || !helpersAreCurrent) {
+                throw new ConnectionSetupSupersededError();
+            }
         };
         const sendForSetup = async (method, params, ms) => {
             assertSetupCurrent();

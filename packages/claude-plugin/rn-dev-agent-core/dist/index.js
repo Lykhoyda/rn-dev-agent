@@ -52132,6 +52132,12 @@ var PickerBlockingBundleError = class extends Error {
     this.target = target;
   }
 };
+var ConnectionSetupSupersededError = class extends Error {
+  constructor() {
+    super("Connection setup superseded");
+    this.name = "ConnectionSetupSupersededError";
+  }
+};
 function shouldRunPickerProbe(intent, target) {
   return intent === "status" && target.vm !== "Hermes";
 }
@@ -52211,6 +52217,8 @@ async function discoverAndConnect(ctx, portHint, filters, discoverFn = discover,
       console.error("CDP: no target with __DEV__=true found, using last available target");
       connectedTarget = candidate;
     } catch (err) {
+      if (err instanceof ConnectionSetupSupersededError)
+        throw err;
       if (err instanceof PickerBlockingBundleError) {
         ctx.setState("disconnected");
         throw err;
@@ -52254,13 +52262,14 @@ async function connectToTarget(ctx, target, retries = 5, intent = "default") {
     }
     let handshakeOk = false;
     let probeTimedOut = false;
+    let attemptWs = null;
     try {
       const proxyUrl = ctx.getProxyUrl();
       const url = proxyUrl ?? target.webSocketDebuggerUrl;
       if (proxyUrl) {
         logger.info("CDP", `Routing via multiplexer proxy: ${proxyUrl}`);
       }
-      await connectWs(ctx, url);
+      attemptWs = await connectWs(ctx, url);
       handshakeOk = true;
       try {
         await ctx.sendWithTimeout("Runtime.evaluate", {
@@ -52281,15 +52290,21 @@ async function connectToTarget(ctx, target, retries = 5, intent = "default") {
       await ctx.setup();
       return;
     } catch (err) {
+      if (err instanceof ConnectionSetupSupersededError)
+        throw err;
       if (err instanceof PickerBlockingBundleError) {
-        closeAndResetWs(ctx);
+        if (!closeConnectionAttempt(ctx, attemptWs)) {
+          throw new ConnectionSetupSupersededError();
+        }
         ctx.setConnectedTarget(null);
         ctx.setState("disconnected");
         throw err;
       }
       lastError = err instanceof Error ? err : new Error(String(err));
       attempts3.push({ handshakeOk, probeTimedOut });
-      closeAndResetWs(ctx);
+      if (!closeConnectionAttempt(ctx, attemptWs)) {
+        throw new ConnectionSetupSupersededError();
+      }
       if (lastError.message.includes("refused")) {
         ctx.setState("disconnected");
         throw new Error("CDP connection refused. Is Metro running and the app loaded?");
@@ -52324,7 +52339,7 @@ function connectWs(ctx, url) {
       clearTimeout(guard);
       ctx.setWs(ws);
       ctx.setState("connected");
-      resolve10();
+      resolve10(ws);
     });
     ws.on("error", (err) => {
       if (!settled) {
@@ -52365,6 +52380,18 @@ function closeAndResetWs(ctx) {
     }
     ctx.setWs(null);
   }
+}
+function closeConnectionAttempt(ctx, attemptWs) {
+  if (ctx.getWs() !== attemptWs)
+    return false;
+  if (!attemptWs)
+    return true;
+  attemptWs.removeAllListeners();
+  if (attemptWs.readyState === wrapper_default.OPEN || attemptWs.readyState === wrapper_default.CONNECTING) {
+    attemptWs.close();
+  }
+  ctx.setWs(null);
+  return true;
 }
 
 // packages/rn-dev-agent-core/dist/cdp-client.js
@@ -53012,8 +53039,9 @@ var CDPClient = class {
     const assertSetupCurrent = () => {
       const connectionIsCurrent = this.ws === setupWs && (this._connectedTarget?.id ?? null) === setupTargetId;
       const helpersAreCurrent = setupHelperToken === null || this.isHelperTokenCurrent(setupHelperToken);
-      if (!connectionIsCurrent || !helpersAreCurrent)
-        throw new Error("setup superseded");
+      if (!connectionIsCurrent || !helpersAreCurrent) {
+        throw new ConnectionSetupSupersededError();
+      }
     };
     const sendForSetup = async (method, params, ms) => {
       assertSetupCurrent();

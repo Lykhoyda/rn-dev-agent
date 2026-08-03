@@ -3,6 +3,10 @@ import test from 'node:test';
 import WebSocket from 'ws';
 import { CDPClient } from '../../dist/cdp-client.js';
 import {
+  closeConnectionAttempt,
+  ConnectionSetupSupersededError,
+} from '../../dist/cdp/connect.js';
+import {
   HELPERS_VERSION,
   INJECTED_HELPERS,
   NETWORK_HOOK_SCRIPT,
@@ -306,12 +310,39 @@ test('superseded setup cannot commit connection capability state', async () => {
   created.call(client, { context: { id: 9, uniqueId: 'replacement' } });
   hook.resolve({ value: undefined });
 
-  await assert.rejects(setup, /setup superseded/);
+  await assert.rejects(setup, ConnectionSetupSupersededError);
   assert.equal(client.networkMode, 'hook');
   assert.equal(client.logDomainEnabled, false);
   assert.equal(client.profilerAvailable, false);
   assert.equal(client.heapProfilerAvailable, false);
   assert.equal(client.helpersInjected, false);
+});
+
+test('stale connection-attempt cleanup cannot close the replacement socket', () => {
+  const replacementWs = {
+    readyState: WebSocket.OPEN,
+    removeAllListeners: () => {},
+    close: () => {},
+  } as unknown as WebSocket;
+  let currentWs: WebSocket | null = replacementWs;
+  let staleClosed = false;
+  const staleWs = {
+    readyState: WebSocket.OPEN,
+    removeAllListeners: () => {},
+    close: () => {
+      staleClosed = true;
+    },
+  } as unknown as WebSocket;
+  const ctx = {
+    getWs: () => currentWs,
+    setWs: (ws: WebSocket | null) => {
+      currentWs = ws;
+    },
+  };
+
+  assert.equal(closeConnectionAttempt(ctx, staleWs), false);
+  assert.equal(staleClosed, false);
+  assert.equal(currentWs, replacementWs);
 });
 
 test('legacy one-context fallback omits contextId and freshness requires exact version', async () => {

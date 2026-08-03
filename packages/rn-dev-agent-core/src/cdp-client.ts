@@ -28,6 +28,7 @@ import {
 } from './cdp/helper-expr.js';
 import {
   autoConnect as autoConnectFn,
+  ConnectionSetupSupersededError,
   discoverAndConnect as discoverAndConnectFn,
 } from './cdp/connect.js';
 import type { ConnectContext, ConnectFilters, ConnectIntent } from './cdp/connect.js';
@@ -944,7 +945,9 @@ export class CDPClient {
         this.ws === setupWs && (this._connectedTarget?.id ?? null) === setupTargetId;
       const helpersAreCurrent =
         setupHelperToken === null || this.isHelperTokenCurrent(setupHelperToken);
-      if (!connectionIsCurrent || !helpersAreCurrent) throw new Error('setup superseded');
+      if (!connectionIsCurrent || !helpersAreCurrent) {
+        throw new ConnectionSetupSupersededError();
+      }
     };
     const sendForSetup = async (method: string, params?: unknown, ms?: number): Promise<unknown> => {
       assertSetupCurrent();
