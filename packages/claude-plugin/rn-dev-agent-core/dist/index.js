@@ -52290,8 +52290,6 @@ async function connectToTarget(ctx, target, retries = 5, intent = "default") {
       await ctx.setup();
       return;
     } catch (err) {
-      if (err instanceof ConnectionSetupSupersededError)
-        throw err;
       if (err instanceof PickerBlockingBundleError) {
         if (!closeConnectionAttempt(ctx, attemptWs)) {
           throw new ConnectionSetupSupersededError();
@@ -52303,6 +52301,8 @@ async function connectToTarget(ctx, target, retries = 5, intent = "default") {
       lastError = err instanceof Error ? err : new Error(String(err));
       attempts3.push({ handshakeOk, probeTimedOut });
       if (!closeConnectionAttempt(ctx, attemptWs)) {
+        if (err instanceof ConnectionSetupSupersededError)
+          throw err;
         throw new ConnectionSetupSupersededError();
       }
       if (lastError.message.includes("refused")) {

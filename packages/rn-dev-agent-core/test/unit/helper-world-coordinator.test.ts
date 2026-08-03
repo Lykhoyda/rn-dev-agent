@@ -318,7 +318,7 @@ test('superseded setup cannot commit connection capability state', async () => {
   assert.equal(client.helpersInjected, false);
 });
 
-test('stale connection-attempt cleanup cannot close the replacement socket', () => {
+test('connection-attempt cleanup preserves replacements and closes owned sockets', () => {
   const replacementWs = {
     readyState: WebSocket.OPEN,
     removeAllListeners: () => {},
@@ -343,6 +343,11 @@ test('stale connection-attempt cleanup cannot close the replacement socket', () 
   assert.equal(closeConnectionAttempt(ctx, staleWs), false);
   assert.equal(staleClosed, false);
   assert.equal(currentWs, replacementWs);
+
+  currentWs = staleWs;
+  assert.equal(closeConnectionAttempt(ctx, staleWs), true);
+  assert.equal(staleClosed, true);
+  assert.equal(currentWs, null);
 });
 
 test('legacy one-context fallback omits contextId and freshness requires exact version', async () => {

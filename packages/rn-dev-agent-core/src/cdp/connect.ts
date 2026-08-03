@@ -354,7 +354,6 @@ async function connectToTarget(
       await ctx.setup();
       return;
     } catch (err) {
-      if (err instanceof ConnectionSetupSupersededError) throw err;
       // GH #184: the picker-blocking abort is deterministic, not transient —
       // don't burn the retry budget on it; clean up and surface it immediately.
       if (err instanceof PickerBlockingBundleError) {
@@ -368,6 +367,7 @@ async function connectToTarget(
       lastError = err instanceof Error ? err : new Error(String(err));
       attempts.push({ handshakeOk, probeTimedOut });
       if (!closeConnectionAttempt(ctx, attemptWs)) {
+        if (err instanceof ConnectionSetupSupersededError) throw err;
         throw new ConnectionSetupSupersededError();
       }
       if (lastError.message.includes('refused')) {
