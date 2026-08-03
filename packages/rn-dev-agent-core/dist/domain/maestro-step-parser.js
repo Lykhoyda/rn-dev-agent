@@ -3,14 +3,8 @@
 // I/O, fail-open: unparseable output yields []. Generalizes the #263 step-line
 // parser (tap-latency.ts derives parseTapLatencies from parseSteps).
 import { parseMaestroFailure } from './maestro-error-parser.js';
-// Strip ANSI SGR/color escape sequences. execFile output is usually un-colored
-// (child stdout is a pipe, not a TTY) but maestro-runner is not guaranteed to
-// honor that, and a glyph-anchored match breaks on a colored `✓`. Built via
-// fromCharCode(27) (ESC) to keep a raw control char out of the source/regex.
-const ANSI_RE = new RegExp(String.fromCharCode(27) + '\\[[0-9;]*m', 'g');
-export function stripAnsi(s) {
-    return s.replace(ANSI_RE, '');
-}
+import { stripAnsi } from './ansi.js';
+export { stripAnsi } from './ansi.js';
 // `<indent>{✓|✗} <name> (N.Ns)` — the leading `[ \t]+` anchors on the runner's
 // line shape: real steps are indented with spaces (live renderer: 4 spaces,
 // nested runFlow sub-steps 6+), so an unindented (column-0) line shaped like a

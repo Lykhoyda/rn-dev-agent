@@ -1,23 +1,4 @@
-// Issue #104 — pure parser for Maestro CLI / maestro-runner failure output.
-//
-// `maestro_run` returns the combined stdout+stderr in `data.output`. To
-// auto-repair, we need to classify the failure and extract the failed
-// selector. This module owns that classification — pure regex over the
-// raw output text, no I/O, fully unit-testable.
-//
-// Maestro emits failures in a few canonical shapes (verified against
-// Maestro 1.40+ output, maestro-runner 0.x, and maestro-runner 1.0.9):
-//
-//   - "Element with id 'X' not found"
-//   - "Element with text 'X' not found"
-//   - 'Assertion failed: "X" not visible'
-//   - "Timed out waiting for element 'X'"
-//   - "Element 'X' is not visible"  (assertion variant)
-//   - "Element not found: id='X'"   (maestro-runner 1.0.x shape — issue #105)
-//
-// The parser tries each known shape in order and returns the first
-// match. If none match, returns `{ kind: 'UNKNOWN', raw }` so the caller
-// can decide whether to surface it verbatim or escalate to the user.
+import { stripAnsi } from './ansi.js';
 // Order matters: more-specific patterns first.
 //
 // Matched-quote pattern `(['"])((?:(?!\1).)+)\1` captures a testID
@@ -82,7 +63,7 @@ const REASON_LINE_RE = /^[ \t]+╰─\s+/;
 const ID_WAIT_STEP_RE = /^extendedWaitUntil:\s+visible\s+id=(['"])((?:(?!\1).)+)\1$/i;
 const ID_WAIT_REASON_RE = /^[ \t]+╰─\s+Element (['"])#((?:(?!\1).)+)\1 not visible within\b/i;
 function parseTerminalIdWait(output, suppliedFailedStep) {
-    const lines = output.split('\n');
+    const lines = stripAnsi(output).split('\n');
     let terminalStep;
     for (let index = 0; index < lines.length; index++) {
         const match = RUNNER_STEP_RE.exec(lines[index]);

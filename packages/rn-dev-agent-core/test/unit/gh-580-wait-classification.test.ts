@@ -190,6 +190,21 @@ test('gh-580: an unrelated trailing app timeout log cannot hide terminal ID evid
   assert.equal(failure.selector, 'expected');
 });
 
+test('gh-580: ANSI-colored terminal step and reason preserve raw evidence', () => {
+  const esc = String.fromCharCode(27);
+  const output = [
+    `${esc}[31m    ✗ extendedWaitUntil: visible id="colored" (15.0s)${esc}[0m`,
+    `${esc}[31m      ╰─ Element '#colored' not visible within 15s${esc}[0m`,
+  ].join('\n');
+  const failure = parseMaestroFailure(output);
+  assert.equal(failure.kind, 'SELECTOR_NOT_FOUND');
+  assert.equal(failure.selector, 'colored');
+  assert.equal(failure.raw, output);
+  const terminal = buildTerminalEvidence(output);
+  assert.equal(terminal.failureKind, 'SELECTOR_NOT_FOUND');
+  assert.equal(terminal.failureSelector, 'colored');
+});
+
 test('gh-580: boundedOutput keeps head AND tail inside one 500-char budget', () => {
   const short = 'maestro-runner 1.1.20\n    ✓ launchApp (2.7s)';
   assert.equal(boundedOutput(short), short, 'output within budget is returned verbatim');

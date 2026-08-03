@@ -1,3 +1,5 @@
+import { stripAnsi } from './ansi.js';
+
 // Issue #104 — pure parser for Maestro CLI / maestro-runner failure output.
 //
 // `maestro_run` returns the combined stdout+stderr in `data.output`. To
@@ -114,7 +116,7 @@ function parseTerminalIdWait(
   output: string,
   suppliedFailedStep: string | undefined,
 ): MaestroFailure | null {
-  const lines = output.split('\n');
+  const lines = stripAnsi(output).split('\n');
   let terminalStep: { index: number; status: string; name: string } | undefined;
   for (let index = 0; index < lines.length; index++) {
     const match = RUNNER_STEP_RE.exec(lines[index]);

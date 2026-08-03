@@ -4,6 +4,9 @@
 // parser (tap-latency.ts derives parseTapLatencies from parseSteps).
 
 import { parseMaestroFailure } from './maestro-error-parser.js';
+import { stripAnsi } from './ansi.js';
+
+export { stripAnsi } from './ansi.js';
 
 export interface MaestroStep {
   index: number;
@@ -11,15 +14,6 @@ export interface MaestroStep {
   verb: string;
   status: 'pass' | 'fail';
   durationMs: number;
-}
-
-// Strip ANSI SGR/color escape sequences. execFile output is usually un-colored
-// (child stdout is a pipe, not a TTY) but maestro-runner is not guaranteed to
-// honor that, and a glyph-anchored match breaks on a colored `✓`. Built via
-// fromCharCode(27) (ESC) to keep a raw control char out of the source/regex.
-const ANSI_RE = new RegExp(String.fromCharCode(27) + '\\[[0-9;]*m', 'g');
-export function stripAnsi(s: string): string {
-  return s.replace(ANSI_RE, '');
 }
 
 // `<indent>{✓|✗} <name> (N.Ns)` — the leading `[ \t]+` anchors on the runner's

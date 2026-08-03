@@ -27621,9 +27621,21 @@ var init_maestro_dispatch = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/domain/ansi.js
+function stripAnsi(value) {
+  return value.replace(ANSI_RE, "");
+}
+var ANSI_RE;
+var init_ansi = __esm({
+  "packages/rn-dev-agent-core/dist/domain/ansi.js"() {
+    "use strict";
+    ANSI_RE = new RegExp(String.fromCharCode(27) + "\\[[0-9;]*m", "g");
+  }
+});
+
 // packages/rn-dev-agent-core/dist/domain/maestro-error-parser.js
 function parseTerminalIdWait(output, suppliedFailedStep) {
-  const lines = output.split("\n");
+  const lines = stripAnsi(output).split("\n");
   let terminalStep;
   for (let index = 0; index < lines.length; index++) {
     const match = RUNNER_STEP_RE.exec(lines[index]);
@@ -27714,6 +27726,7 @@ var PATTERNS, RUNNER_STEP_RE, REASON_LINE_RE, ID_WAIT_STEP_RE, ID_WAIT_REASON_RE
 var init_maestro_error_parser = __esm({
   "packages/rn-dev-agent-core/dist/domain/maestro-error-parser.js"() {
     "use strict";
+    init_ansi();
     PATTERNS = [
       {
         re: /Element with id (['"])((?:(?!\1).)+)\1 (?:was )?not found/i,
@@ -28046,9 +28059,6 @@ var init_engine_pin = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/maestro-step-parser.js
-function stripAnsi(s) {
-  return s.replace(ANSI_RE, "");
-}
 function cap(s) {
   return s.length > MAX_FIELD ? s.slice(0, MAX_FIELD) + "\u2026" : s;
 }
@@ -28147,12 +28157,13 @@ function formatFailureHeadline(summary, cls, fallbackMsg) {
   }
   return `Maestro flow failed: ${fallbackMsg.slice(0, 500)}`;
 }
-var ANSI_RE, STEP_RE, MAX_FIELD, MAX_STEPS, WDA_TOKEN_RE, WDA_FAILURE_RE;
+var STEP_RE, MAX_FIELD, MAX_STEPS, WDA_TOKEN_RE, WDA_FAILURE_RE;
 var init_maestro_step_parser = __esm({
   "packages/rn-dev-agent-core/dist/domain/maestro-step-parser.js"() {
     "use strict";
     init_maestro_error_parser();
-    ANSI_RE = new RegExp(String.fromCharCode(27) + "\\[[0-9;]*m", "g");
+    init_ansi();
+    init_ansi();
     STEP_RE = /^[ \t]+([✓✗])\s+(\S.*\S|\S)\s*\(([\d.]+)s\)\s*$/;
     MAX_FIELD = 200;
     MAX_STEPS = 1e3;

@@ -10225,10 +10225,20 @@ var init_maestro_dispatch = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/domain/ansi.js
+var ANSI_RE;
+var init_ansi = __esm({
+  "packages/rn-dev-agent-core/dist/domain/ansi.js"() {
+    "use strict";
+    ANSI_RE = new RegExp(String.fromCharCode(27) + "\\[[0-9;]*m", "g");
+  }
+});
+
 // packages/rn-dev-agent-core/dist/domain/maestro-error-parser.js
 var init_maestro_error_parser = __esm({
   "packages/rn-dev-agent-core/dist/domain/maestro-error-parser.js"() {
     "use strict";
+    init_ansi();
   }
 });
 
@@ -10252,12 +10262,12 @@ var init_engine_pin = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/maestro-step-parser.js
-var ANSI_RE;
 var init_maestro_step_parser = __esm({
   "packages/rn-dev-agent-core/dist/domain/maestro-step-parser.js"() {
     "use strict";
     init_maestro_error_parser();
-    ANSI_RE = new RegExp(String.fromCharCode(27) + "\\[[0-9;]*m", "g");
+    init_ansi();
+    init_ansi();
   }
 });
 
