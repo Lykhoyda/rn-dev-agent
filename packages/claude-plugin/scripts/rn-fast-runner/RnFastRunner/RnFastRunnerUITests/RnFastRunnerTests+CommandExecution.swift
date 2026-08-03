@@ -253,14 +253,13 @@ extension RnFastRunnerTests {
             ok: false,
             error: ErrorPayload(code: "KEYBOARD_RELAYOUT_REQUIRED", message: "Keyboard dismissed; refresh the snapshot and re-resolve the target before one retry. No tap was performed.", mutation: "none")
           )
-        case .keyboardTarget(let element, let point, let expectedFrame):
+        case .keyboardTarget(let retained, let point):
           var activated = false
           let timing = measureGesture {
             activated = activateKeyboardTarget(
               app: activeApp,
-              element,
-              point: point,
-              expectedFrame: expectedFrame
+              retained: retained,
+              point: point
             )
           }
           guard activated else {
@@ -431,14 +430,13 @@ extension RnFastRunnerTests {
           ok: false,
           error: ErrorPayload(code: "KEYBOARD_RELAYOUT_REQUIRED", message: "Keyboard dismissed; refresh the snapshot and re-resolve the target before one retry. No long press was performed.", mutation: "none")
         )
-      case .keyboardTarget(let element, let point, let expectedFrame):
+      case .keyboardTarget(let retained, let point):
         var activated = false
         let timing = measureGesture {
           activated = activateKeyboardTarget(
             app: activeApp,
-            element,
+            retained: retained,
             point: point,
-            expectedFrame: expectedFrame,
             duration: duration
           )
         }

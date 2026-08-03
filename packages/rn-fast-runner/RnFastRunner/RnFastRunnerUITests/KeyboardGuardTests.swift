@@ -138,6 +138,37 @@ final class KeyboardGuardTests: XCTestCase {
     ))
   }
 
+  func testLiveResolutionRejectsOccludedAndChangedIdentityAtSameFrame() {
+    let frame = CGRect(x: 1, y: 2, width: 3, height: 4)
+    XCTAssertTrue(KeyboardGuard.matchesLiveKeyboardTarget(
+      retained: retainedKey,
+      candidateType: "Key",
+      candidateLabel: "Q",
+      candidateIdentifier: nil,
+      candidateFrame: frame,
+      exists: true,
+      hittable: true
+    ))
+    XCTAssertFalse(KeyboardGuard.matchesLiveKeyboardTarget(
+      retained: retainedKey,
+      candidateType: "Key",
+      candidateLabel: "Q",
+      candidateIdentifier: nil,
+      candidateFrame: frame,
+      exists: true,
+      hittable: false
+    ))
+    XCTAssertFalse(KeyboardGuard.matchesLiveKeyboardTarget(
+      retained: retainedKey,
+      candidateType: "Key",
+      candidateLabel: "W",
+      candidateIdentifier: nil,
+      candidateFrame: frame,
+      exists: true,
+      hittable: true
+    ))
+  }
+
   func testSafeDismissControlsExcludeDoneKeysAndExternalToolbars() {
     XCTAssertTrue(KeyboardGuard.isSafeDismissControl(
       type: "Button", label: "Hide keyboard", identifier: nil, insideKeyboard: true

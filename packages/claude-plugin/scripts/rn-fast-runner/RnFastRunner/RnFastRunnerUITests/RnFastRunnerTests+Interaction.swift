@@ -9,7 +9,7 @@ enum RunnerInteractionOutcome {
 
 enum KeyboardGuardAction {
   case proceed(String)
-  case keyboardTarget(XCUIElement, CGPoint, CGRect)
+  case keyboardTarget(RetainedSnapshotTarget, CGPoint)
   case targetStale
   case dismissFailed
   case relayoutRequired
@@ -386,17 +386,9 @@ extension RnFastRunnerTests {
       return .targetStale
     case .keyboardTarget:
       guard let retained,
-            keyboardFrameIfVisible(app: app) != nil,
-            let live = resolveLiveKeyboardTarget(app: app, retained: retained),
-            live.frame.contains(CGPoint(x: tapX, y: tapY))
+            keyboardFrameIfVisible(app: app) != nil
       else { return .targetStale }
-      let expectedFrame = CGRect(
-        x: retained.rect.x,
-        y: retained.rect.y,
-        width: retained.rect.width,
-        height: retained.rect.height
-      )
-      return .keyboardTarget(live, CGPoint(x: tapX, y: tapY), expectedFrame)
+      return .keyboardTarget(retained, CGPoint(x: tapX, y: tapY))
     case .ordinary:
       break
     }
@@ -453,51 +445,54 @@ extension RnFastRunnerTests {
     })
     guard exceptionMessage == nil else { return nil }
     let matches = candidates.filter { element in
-      guard element.exists, element.isHittable,
-            elementTypeName(element.elementType) == retained.type,
-            KeyboardGuard.approximatelyEqual(
-              element.frame,
-              CGRect(
-                x: retained.rect.x,
-                y: retained.rect.y,
-                width: retained.rect.width,
-                height: retained.rect.height
-              )
-            )
-      else { return false }
+      let exists = element.exists
+      let hittable = element.isHittable
+      guard exists, hittable else { return false }
       guard let snapshot = try? element.snapshot() else { return false }
       let snapshotLabel = aggregatedLabel(for: snapshot)
         ?? snapshot.label.trimmingCharacters(in: .whitespacesAndNewlines)
       let label = snapshotLabel.isEmpty ? nil : snapshotLabel
       let snapshotIdentifier = snapshot.identifier.trimmingCharacters(in: .whitespacesAndNewlines)
       let identifier = snapshotIdentifier.isEmpty ? nil : snapshotIdentifier
-      return label == retained.label && identifier == retained.identifier
+      return KeyboardGuard.matchesLiveKeyboardTarget(
+        retained: retained,
+        candidateType: elementTypeName(element.elementType),
+        candidateLabel: label,
+        candidateIdentifier: identifier,
+        candidateFrame: element.frame,
+        exists: exists,
+        hittable: hittable
+      )
     }
     return matches.count == 1 ? matches[0] : nil
   }
 
   func activateKeyboardTarget(
     app: XCUIApplication,
-    _ element: XCUIElement,
+    retained: RetainedSnapshotTarget,
     point: CGPoint,
-    expectedFrame: CGRect,
     duration: TimeInterval? = nil
   ) -> Bool {
+    guard let element = resolveLiveKeyboardTarget(app: app, retained: retained) else {
+      return false
+    }
     let frame = element.frame
+    let expectedFrame = CGRect(
+      x: retained.rect.x,
+      y: retained.rect.y,
+      width: retained.rect.width,
+      height: retained.rect.height
+    )
     guard KeyboardGuard.canActivateKeyboardTarget(
       expectedFrame: expectedFrame,
       liveFrame: frame,
       keyboardFrame: keyboardFrameIfVisible(app: app),
       point: point
     ) else { return false }
-    let origin = element.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
-    let coordinate = origin.withOffset(
-      CGVector(dx: point.x - frame.minX, dy: point.y - frame.minY)
-    )
     if let duration {
-      coordinate.press(forDuration: duration)
+      element.press(forDuration: duration)
     } else {
-      coordinate.tap()
+      element.tap()
     }
     return true
   }

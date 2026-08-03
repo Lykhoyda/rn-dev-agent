@@ -58,6 +58,29 @@ enum KeyboardGuard {
       && liveFrame.contains(point)
   }
 
+  static func matchesLiveKeyboardTarget(
+    retained: RetainedSnapshotTarget,
+    candidateType: String,
+    candidateLabel: String?,
+    candidateIdentifier: String?,
+    candidateFrame: CGRect,
+    exists: Bool,
+    hittable: Bool
+  ) -> Bool {
+    let retainedFrame = CGRect(
+      x: retained.rect.x,
+      y: retained.rect.y,
+      width: retained.rect.width,
+      height: retained.rect.height
+    )
+    return exists
+      && hittable
+      && candidateType == retained.type
+      && candidateLabel == retained.label
+      && candidateIdentifier == retained.identifier
+      && approximatelyEqual(candidateFrame, retainedFrame)
+  }
+
   static func isSafeDismissControl(
     type: String,
     label: String?,
