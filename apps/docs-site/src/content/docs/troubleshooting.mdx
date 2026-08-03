@@ -251,12 +251,9 @@ still work mid-flow; taps are refused on purpose until the flow ends.
 
 A plugin-owned Maestro subprocess ended or timed out, but bounded SIGTERM /
 SIGKILL cleanup could not positively confirm that its detached process group
-and conservatively attributed exact-device descendants are absent. The session
-keeps a private authenticated recovery duty and refuses transitions rather
-than mislabelling the process as foreign. Run
-`rn_session(action="recover_automation", confirmed=true)`. Recovery acts only
-when session, claim epoch, device, PID, and process birth still match; changed,
-ambiguous, unrelated-device, and genuinely foreign processes are never killed.
+is absent. The response includes a redacted process-group identity and a manual
+`kill -TERM -<pgid>` command. Run that command and retry in the same bridge;
+the bridge refuses another inline run for the device until absence is observed.
 
 ### DEVICE_AUTHORITY_MISMATCH
 

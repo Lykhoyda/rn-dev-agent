@@ -1094,20 +1094,19 @@ export function createDeviceFillHandler(
           );
         }
         const maestro = await maestroFillFallback(maestroTargetRef(), args.text, 'ios', true, args);
-        if (!maestro.isError) {
-          const { outcome } = await nativeSettle(client, jsTestId, args.text, null, null);
-          if (outcome !== 'corrupted') {
-            return okResult(
-              { filled: true, method: 'maestro', length: args.text.length },
-              {
-                meta: {
-                  textEntryPath: 'maestro',
-                  verify: jsVerifyMeta(outcome),
-                  timings_ms: { nativeType: Date.now() - tNative },
-                },
+        if (maestro.isError) return maestro;
+        const { outcome } = await nativeSettle(client, jsTestId, args.text, null, null);
+        if (outcome !== 'corrupted') {
+          return okResult(
+            { filled: true, method: 'maestro', length: args.text.length },
+            {
+              meta: {
+                textEntryPath: 'maestro',
+                verify: jsVerifyMeta(outcome),
+                timings_ms: { nativeType: Date.now() - tNative },
               },
-            );
-          }
+            },
+          );
         }
         return failResult(
           'Text entry could not be verified after retype + maestro fallback',

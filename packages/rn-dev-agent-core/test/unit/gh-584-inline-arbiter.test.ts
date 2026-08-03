@@ -41,7 +41,6 @@ test('foreign automation refusal reuses the public sanitizer', async () => {
         }),
       },
       getUdid: () => '7A6033C8-9291-4B0B-80B9-46024EEDF7D7',
-      ownedAutomation: () => false,
     },
   );
   const result = body(await wrapped({}));
@@ -89,40 +88,6 @@ test('inline Maestro dynamically promotes only when fallback dispatches', async 
   assert.equal(arbiter.msSinceFlowReleased, 0);
 });
 
-test('owned automation remains fenced during grace and with the foreign guard disabled', async () => {
-  for (const scenario of [
-    { elapsedMs: 0, enabled: true },
-    { elapsedMs: 20_000, enabled: false },
-  ]) {
-    let now = 0;
-    const arbiter = new DeviceSessionArbiter(() => now);
-    const flow = arbiter.tryAcquire('flow', 'maestro_run');
-    assert.equal(flow.ok, true);
-    if (!flow.ok) continue;
-    arbiter.release(flow.lease);
-    now = scenario.elapsedMs;
-    let gateCalls = 0;
-    const wrapped = arbiterWrap(
-      'device_press',
-      async () => ({ content: [{ type: 'text', text: '{"ok":true}' }] }),
-      arbiter,
-      {
-        gate: {
-          check: async () => {
-            gateCalls += 1;
-            return { active: false, warning: null, scanMs: 0 };
-          },
-        },
-        getUdid: () => 'UDID-A',
-        enabled: () => scenario.enabled,
-        ownedAutomation: () => true,
-      },
-    );
-    assert.equal(body(await wrapped({})).code, 'AUTOMATION_CLEANUP_UNPROVEN');
-    assert.equal(gateCalls, 0);
-  }
-});
-
 test('authoritative Maestro refusals preserve code and cleanup evidence', () => {
   const refusal = maestroRefusalResult(
     {
@@ -135,6 +100,10 @@ test('authoritative Maestro refusals preserve code and cleanup evidence', () => 
       exitCode: null,
       signal: 'SIGKILL',
       cleanupEscalated: true,
+      cleanupRefusal: {
+        processGroup: 'owned-process-group',
+        manualCommand: 'kill -TERM -4242',
+      },
     },
     'fallback',
     { operation: 'fill-or-dialog' },
@@ -146,4 +115,5 @@ test('authoritative Maestro refusals preserve code and cleanup evidence', () => 
   assert.equal(result.meta.timedOut, true);
   assert.equal(result.meta.signal, 'SIGKILL');
   assert.equal(result.meta.cleanupEscalated, true);
+  assert.equal(result.meta.cleanupRefusal.manualCommand, 'kill -TERM -4242');
 });

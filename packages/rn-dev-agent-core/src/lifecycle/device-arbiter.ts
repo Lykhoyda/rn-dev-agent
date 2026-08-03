@@ -4,7 +4,6 @@ import type { ToolResult } from '../utils.js';
 import { foreignFlowGate, foreignGateUdid, foreignGateEnabled } from './foreign-flow-gate.js';
 import type { ForeignFlowGate } from './foreign-flow-gate.js';
 import type { IosExternalRunnerWarning } from '../runners/external-runner-detect.js';
-import { inspectAutomationDuty } from '../session/managed-automation.js';
 import {
   publicDeviceIdentity,
   sanitizeAutomationProcessLines,
@@ -279,7 +278,6 @@ export interface ForeignGateOpts {
   gate?: ForeignFlowGate;
   getUdid?: () => string | null;
   enabled?: () => boolean;
-  ownedAutomation?: (udid: string) => boolean;
 }
 
 function foreignRefusal(
@@ -321,17 +319,6 @@ export function arbiterWrap(
   const gate = foreign.gate ?? foreignFlowGate;
   const getUdid = foreign.getUdid ?? foreignGateUdid;
   const enabled = foreign.enabled ?? foreignGateEnabled;
-  const ownedAutomation =
-    foreign.ownedAutomation ??
-    ((udid: string) => {
-      try {
-        return inspectAutomationDuty('ios', udid) !== null;
-      } catch {
-        // Corrupt/unreadable persisted ownership can never authorize cleanup,
-        // but it must retain the refusal fence rather than look foreign/absent.
-        return true;
-      }
-    });
   return async (...args: unknown[]): Promise<ToolResult> => {
     // GH#186 Phase 6: a foreign Maestro session is an external flow-plane
     // holder. Checked for interaction/flow planes only (L1 reads never
@@ -344,13 +331,6 @@ export function arbiterWrap(
     if (plane !== 'introspection' && !inst.flowActive) {
       const udid = getUdid();
       if (udid !== null) {
-        if (ownedAutomation(udid)) {
-          return failResult(
-            `Refusing ${name}: cleanup of plugin-owned automation on ${publicDeviceIdentity(udid)} is unproven. Run rn_session({ action: "recover_automation", confirmed: true }); exact identity remains available only in local authority state.`,
-            'AUTOMATION_CLEANUP_UNPROVEN',
-            { device: publicDeviceIdentity(udid), conflict: true },
-          );
-        }
         if (inst.msSinceFlowReleased >= FOREIGN_GRACE_MS && enabled()) {
           const check = await gate.check(udid);
           if (check.active && check.warning) {
