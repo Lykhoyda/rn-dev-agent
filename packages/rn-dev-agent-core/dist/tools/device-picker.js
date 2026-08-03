@@ -1,10 +1,8 @@
 import { okResult, failResult, warnResult } from '../utils.js';
 import { runMaestroInline, yamlEscape } from '../maestro-invoke.js';
 import { detectPlatform } from './platform-utils.js';
-import { shouldRejectMaestroDeviceAuthority } from '../domain/maestro-device-authority.js';
-const DEFAULT_PICKER_TIMEOUT_MS = 20_000;
-// Names of months used to decompose an ISO date into tappable picker values.
-// Full English names — matches the strings UIDatePicker exposes via accessibility.
+import { buildStepSummary } from '../domain/maestro-step-parser.js';
+const DEFAULT_PICKER_TIMEOUT_MS = 120_000;
 const MONTH_NAMES = [
     'January',
     'February',
@@ -19,17 +17,24 @@ const MONTH_NAMES = [
     'November',
     'December',
 ];
-const ISO_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})/;
-function parseISODate(date) {
-    // Accept YYYY-MM-DD, YYYY-MM-DDTHH:mm, and full ISO 8601. Ignore time component.
+const ISO_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})(?:$|T)/;
+export function parseISODate(date) {
     const match = date.match(ISO_DATE_PATTERN);
     if (!match)
         return null;
     const year = Number(match[1]);
     const month = Number(match[2]);
     const day = Number(match[3]);
-    if (month < 1 || month > 12 || day < 1 || day > 31)
+    if (!Number.isSafeInteger(year) || year < 1 || year > 9999)
         return null;
+    const candidate = new Date(0);
+    candidate.setUTCHours(0, 0, 0, 0);
+    candidate.setUTCFullYear(year, month - 1, day);
+    if (candidate.getUTCFullYear() !== year ||
+        candidate.getUTCMonth() !== month - 1 ||
+        candidate.getUTCDate() !== day) {
+        return null;
+    }
     return { year, month, day, monthName: MONTH_NAMES[month - 1] };
 }
 function buildOpenPickerSteps(pickerTestId) {
@@ -37,7 +42,13 @@ function buildOpenPickerSteps(pickerTestId) {
         return '';
     return `- tapOn:\n    id: "${yamlEscape(pickerTestId)}"\n    optional: true\n`;
 }
-export function createDevicePickValueHandler() {
+function dateTapStep(value, pickerScopeTestId) {
+    const scope = pickerScopeTestId
+        ? `\n    childOf:\n      id: "${yamlEscape(pickerScopeTestId)}"`
+        : '';
+    return `- tapOn:\n    text: "${yamlEscape(value)}"${scope}`;
+}
+export function createDevicePickValueHandler(invoke = runMaestroInline) {
     return async (args) => {
         if (!args.value) {
             return failResult('value is required', { code: 'INVALID_ARGS' });
@@ -50,29 +61,30 @@ export function createDevicePickValueHandler() {
         }
         const open = buildOpenPickerSteps(args.pickerTestId);
         const yaml = `${open}- tapOn:\n    text: "${yamlEscape(args.value)}"`;
-        const result = await runMaestroInline(yaml, {
+        const result = await invoke(yaml, {
             platform,
             timeoutMs: args.timeoutMs ?? DEFAULT_PICKER_TIMEOUT_MS,
             slug: 'pick-value',
+            authorityArgs: args,
         });
         if (result.passed) {
             return okResult({ picked: true, value: args.value, platform });
         }
         if (result.error) {
             return failResult(`Pick value failed: ${result.error}`, {
-                code: 'PICK_FAILED',
+                code: result.errorCode ?? 'PICK_FAILED',
                 value: args.value,
                 flowFile: result.flowFile,
             });
         }
-        return warnResult({ picked: false, value: args.value, output: result.output.slice(0, 500) }, `Value "${args.value}" was not tappable. The picker may not be open, or the value may not be visible in the current scroll position (scroll-to-visible is not yet implemented).`, { code: 'VALUE_NOT_VISIBLE' });
+        return warnResult({ picked: false, value: args.value, output: result.output.slice(0, 500) }, `Value "${args.value}" was not tappable. The picker may not be open, or the value may not be visible in the current scroll position (scroll-to-visible is tracked separately in issue #27).`, { code: 'VALUE_NOT_VISIBLE' });
     };
 }
-export function createDevicePickDateHandler() {
+export function createDevicePickDateHandler(invoke = runMaestroInline) {
     return async (args) => {
         const parsed = parseISODate(args.date);
         if (!parsed) {
-            return failResult(`Invalid date "${args.date}". Expected YYYY-MM-DD or ISO 8601.`, {
+            return failResult(`Invalid date "${args.date}". Expected a real YYYY-MM-DD calendar date or ISO 8601 timestamp.`, {
                 code: 'INVALID_ARGS',
             });
         }
@@ -82,59 +94,58 @@ export function createDevicePickDateHandler() {
                 code: 'NO_DEVICE',
             });
         }
-        // Run each wheel component as a separate non-optional flow. First failure stops
-        // the chain and returns which components succeeded. This avoids the all-optional
-        // false-positive trap where Maestro exits 0 with zero steps run.
         const components = [
             { name: 'month', value: parsed.monthName },
-            { name: 'day', value: parsed.day },
-            { name: 'year', value: parsed.year },
+            { name: 'day', value: String(parsed.day) },
+            { name: 'year', value: String(parsed.year) },
         ];
-        const succeeded = [];
-        const perStepTimeout = Math.round((args.timeoutMs ?? DEFAULT_PICKER_TIMEOUT_MS) / components.length);
-        // Open the picker first (optional — already-open pickers are a no-op).
-        if (args.pickerTestId) {
-            const openYaml = `- tapOn:\n    id: "${yamlEscape(args.pickerTestId)}"\n    optional: true`;
-            const openResult = await runMaestroInline(openYaml, {
+        const opener = args.openerTestId ?? args.pickerTestId;
+        const yaml = [
+            buildOpenPickerSteps(opener).trimEnd(),
+            ...components.map((component) => dateTapStep(component.value, args.pickerScopeTestId)),
+        ]
+            .filter(Boolean)
+            .join('\n');
+        // One whole-flow deadline: iOS Maestro cold start is approximately 114 s,
+        // so dividing 20 s across three independent WDA launches guaranteed the
+        // first component would time out regardless of selector visibility.
+        const result = await invoke(yaml, {
+            platform,
+            timeoutMs: args.timeoutMs ?? DEFAULT_PICKER_TIMEOUT_MS,
+            slug: 'pick-date',
+            authorityArgs: args,
+        });
+        if (result.passed) {
+            return okResult({
+                picked: true,
+                date: args.date,
+                parsed: { year: parsed.year, month: parsed.month, day: parsed.day },
                 platform,
-                timeoutMs: 4_000,
-                slug: 'pick-date-open',
+                succeeded: components.map((component) => component.name),
             });
-            // An optional tap may legitimately do nothing, but a device-authority
-            // refusal means the flow was never proven to run on the requested device.
-            // Discarding the result made that refusal completely invisible.
-            if (openResult.deviceAuthority &&
-                shouldRejectMaestroDeviceAuthority(openResult.deviceAuthority)) {
-                return failResult(openResult.error ?? 'Maestro device authority refused while opening the picker.', 'DEVICE_AUTHORITY_MISMATCH', { platform, deviceAuthority: openResult.deviceAuthority });
-            }
         }
-        for (const comp of components) {
-            const yaml = `- tapOn:\n    text: "${yamlEscape(String(comp.value))}"`;
-            const result = await runMaestroInline(yaml, {
-                platform,
-                timeoutMs: perStepTimeout,
-                slug: `pick-date-${comp.name}`,
-            });
-            if (result.passed) {
-                succeeded.push(comp.name);
-            }
-            else {
-                return warnResult({
-                    picked: false,
-                    date: args.date,
-                    succeeded,
-                    failedAt: comp.name,
-                    failedValue: String(comp.value),
-                    error: result.error,
-                }, `Picker could not tap ${comp.name} "${comp.value}". Common causes: calendar mode (not wheels), value not visible in current scroll position, or ambiguous text match. Pass pickerTestId to scope taps to the picker.`, { code: 'PICK_DATE_INCOMPLETE' });
-            }
-        }
-        return okResult({
-            picked: true,
+        const summary = buildStepSummary(result.output, { failed: true });
+        const succeeded = components
+            .filter((component) => summary.steps.some((step) => step.status === 'pass' && step.name.includes(component.value)))
+            .map((component) => component.name);
+        const selector = summary.reason?.selector ?? summary.failedStep?.name ?? null;
+        const failed = components.find((component) => selector?.includes(component.value) || !succeeded.includes(component.name)) ?? components[0];
+        const code = result.errorCode ?? (result.timedOut ? 'PICK_DATE_TIMEOUT' : 'PICK_DATE_INCOMPLETE');
+        const reason = result.timedOut
+            ? `Date-picker flow timed out after ${args.timeoutMs ?? DEFAULT_PICKER_TIMEOUT_MS}ms while attempting ${failed.name} "${failed.value}".`
+            : `Date-picker flow could not select ${failed.name} "${failed.value}". Calendar mode and off-screen wheel scrolling remain unsupported; issue #27 tracks native wheel adjustment.`;
+        return failResult(reason, code, {
+            picked: false,
             date: args.date,
-            parsed: { year: parsed.year, month: parsed.month, day: parsed.day },
             platform,
             succeeded,
+            completedOperations: succeeded,
+            failedAt: failed.name,
+            failedValue: failed.value,
+            selectorFailure: summary.reason,
+            terminalStep: summary.failedStep,
+            error: result.error,
+            output: result.output.slice(0, 500),
         });
     };
 }

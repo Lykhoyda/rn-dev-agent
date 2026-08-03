@@ -242,9 +242,21 @@ guard with `RN_IOS_FOREIGN_GUARD=0`.
 
 ### BUSY_FLOW_ACTIVE
 
-Your own Maestro flow holds the device (L3 is exclusive). Reads
-(`cdp_component_tree`, `cdp_store_state`) still work mid-flow; taps are
-refused on purpose until the flow ends.
+Your own Maestro flow holds the device (L3 is exclusive). Conditional picker,
+fill, and dialog fallbacks dynamically enter this plane only when inline
+Maestro actually dispatches. Reads (`cdp_component_tree`, `cdp_store_state`)
+still work mid-flow; taps are refused on purpose until the flow ends.
+
+### AUTOMATION_CLEANUP_UNPROVEN
+
+A plugin-owned Maestro subprocess ended or timed out, but bounded SIGTERM /
+SIGKILL cleanup could not positively confirm that its detached process group
+and conservatively attributed exact-device descendants are absent. The session
+keeps a private authenticated recovery duty and refuses transitions rather
+than mislabelling the process as foreign. Run
+`rn_session(action="recover_automation", confirmed=true)`. Recovery acts only
+when session, claim epoch, device, PID, and process birth still match; changed,
+ambiguous, unrelated-device, and genuinely foreign processes are never killed.
 
 ### DEVICE_AUTHORITY_MISMATCH
 
@@ -316,12 +328,25 @@ Raw coordinates and custom-keyboard Button/Other nodes never qualify as exact
 keyboard targets. A stale runner missing `EXACT_KEYBOARD_TARGET_GUARD` must be
 rebuilt by reopening the exact-device session before dispatch.
 
-### DEVICE_BUSY
+### DEVICE_BUSY / DEVICE_CLAIM_CONFLICT
 
-An in-flight compatibility device session holds this exact simulator. Wait for
-that operation or close its owner. Cross-worktree ownership conflicts surface
-as `DEVICE_CLAIM_CONFLICT` and require explicit handoff or conservatively
-proven stale adoption; heartbeat or sleep expiry alone does not reclaim them.
+`DEVICE_BUSY` means an in-flight compatibility operation holds this exact
+simulator; wait for that operation or close its owner. `DEVICE_CLAIM_CONFLICT`
+means another live worktree session owns the resource and requires explicit
+handoff or conservatively proven stale adoption; heartbeat or sleep expiry
+alone does not reclaim it. As a capacity workaround, boot a different free
+simulator, bind it through `rn_session bind_device`, and run the normal managed
+build/install receipt flow. Do not force-steal or manually install an unrelated
+snapshot to bypass authority.
+
+### Native iOS deep-link dialog remains visible
+
+Prefer `device_deeplink`; on an open exact iOS session it uses the native runner
+to accept SpringBoard **Open** and reports `meta.openDialogTapped`. If the URL
+was opened externally or the confirmation remains, call
+`device_accept_system_dialog(label="Open")`. A
+`DIALOG_BUTTON_NOT_FOUND` result includes `availableButtons`; retry one exact
+label and never use coordinate guesses.
 
 ### STALE_REF
 

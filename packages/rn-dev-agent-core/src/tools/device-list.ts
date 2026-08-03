@@ -382,16 +382,21 @@ export async function captureAndResizeScreenshot(args: ScreenshotArgs): Promise<
       },
     ],
   });
-  const rawResultFail = (platform: 'ios' | 'android', reason: string): ToolResult => {
+  const rawResultFail = (
+    platform: 'ios' | 'android',
+    raw: { reason: string; capture?: unknown },
+  ): ToolResult => {
     const cli = platform === 'ios' ? 'xcrun simctl' : 'adb';
     const hint =
-      reason === 'no-device'
-        ? `No booted ${platform === 'ios' ? 'iOS Simulator' : 'Android emulator'} was unambiguously resolvable by ${cli} — none booted, or several booted with no open device session. Boot exactly one, or open a session (device_snapshot action=open) to bind the target; if your emulator is 'offline'/'unauthorized', restart it.`
-        : `Capture command failed (${cli}). The device may be transitioning state (booting, OOM, locked). Retry once it stabilizes.`;
+      raw.reason === 'no-device'
+        ? `No booted ${platform === 'ios' ? 'iOS Simulator' : 'Android emulator'} was unambiguously resolvable by ${cli} — none booted, or several booted with no open device session. Boot exactly one, or open a session (device_snapshot action=open) to bind the target.`
+        : raw.capture
+          ? `The exact authority-bound ${cli} capture failed; inspect the structured exit/signal/timeout and sanitized stderr evidence below. No other device was tried.`
+          : `The exact ${cli} capture failed without backend evidence. No other device was tried.`;
     return failResult(
       `device_screenshot platform=${platform} failed: ${hint}`,
       'SCREENSHOT_FAILED',
-      { platform, reason },
+      { platform, reason: raw.reason, ...(raw.capture ? { capture: raw.capture } : {}) },
     );
   };
 
@@ -428,7 +433,7 @@ export async function captureAndResizeScreenshot(args: ScreenshotArgs): Promise<
   ) {
     const raw = await tryRawScreenshot(args.platform, requestedPath, sessionDeviceId);
     if (raw.ok) result = rawResultOk(raw.path, args.platform);
-    else return rawResultFail(args.platform, raw.reason);
+    else return rawResultFail(args.platform, raw);
   }
 
   if (!result) {

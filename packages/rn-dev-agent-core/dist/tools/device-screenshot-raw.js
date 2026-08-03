@@ -19,9 +19,10 @@
  * spawning real `xcrun`/`adb` subprocesses.
  */
 import { execFile, spawn } from 'node:child_process';
-import { createWriteStream, renameSync, unlinkSync } from 'node:fs';
+import { createWriteStream, renameSync, statSync, unlinkSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
+import { publicDeviceIdentity, sanitizePublicDiagnostic } from '../util/public-diagnostics.js';
 const execFileAsync = promisify(execFile);
 // GH #422: the single-pick parseSimctlBootedUDID was removed — first-booted
 // selection was a silent wrong-device capture once raw became the primary iOS
@@ -143,18 +144,73 @@ const defaultAndroidResolver = () => resolveAndroidEmu();
 export function simctlScreenshotType(path) {
     return /\.png$/i.test(path) ? 'png' : 'jpeg';
 }
-const defaultIosCapturer = async (udid, path) => {
+export async function captureIosScreenshot(udid, path, execute = execFileAsync) {
+    const format = simctlScreenshotType(path);
+    const exactArgv = ['simctl', 'io', udid, 'screenshot', `--type=${format}`, path];
+    const publicArgv = [
+        'xcrun',
+        ...exactArgv.map((arg) => (arg === udid ? publicDeviceIdentity(udid) : arg)),
+    ];
+    const base = {
+        backend: 'simctl',
+        argv: publicArgv,
+        outputPath: path,
+        format,
+        device: publicDeviceIdentity(udid),
+        localDiagnostic: {
+            identitySource: 'authority-session-state',
+            instruction: 'Resolve the exact device only from the local rn_session authority state, then replay this argv without changing device.',
+        },
+    };
     try {
-        await execFileAsync('xcrun', ['simctl', 'io', udid, 'screenshot', `--type=${simctlScreenshotType(path)}`, path], {
+        const result = await execute('xcrun', exactArgv, {
             timeout: 15_000,
             maxBuffer: 1024 * 1024,
+            encoding: 'utf8',
         });
-        return true;
+        let bytes = 0;
+        try {
+            bytes = statSync(path).size;
+        }
+        catch {
+            bytes = 0;
+        }
+        if (bytes <= 0) {
+            return {
+                ...base,
+                ok: false,
+                exitCode: 0,
+                signal: null,
+                timedOut: false,
+                stderr: 'simctl exited successfully but did not produce a non-empty output file',
+            };
+        }
+        return {
+            ...base,
+            ok: true,
+            exitCode: 0,
+            signal: null,
+            timedOut: false,
+            stderr: sanitizePublicDiagnostic(result.stderr ?? '', { deviceIds: [udid] }),
+            bytes,
+        };
     }
-    catch {
-        return false;
+    catch (error) {
+        const failure = error;
+        return {
+            ...base,
+            ok: false,
+            exitCode: typeof failure.code === 'number' ? failure.code : null,
+            signal: failure.signal ?? null,
+            timedOut: failure.killed === true || failure.code === 'ETIMEDOUT',
+            stderr: sanitizePublicDiagnostic(failure.stderr ?? failure.message ?? 'simctl failed', {
+                deviceIds: [udid],
+                maxLength: 2_000,
+            }),
+        };
     }
-};
+}
+const defaultIosCapturer = captureIosScreenshot;
 export function resolveCaptureOutcome(streamFinished, procCode) {
     if (!streamFinished)
         return 'pending';
@@ -304,8 +360,13 @@ export async function tryRawScreenshot(platform, path, preferredDeviceId) {
     if (!id)
         return { ok: false, reason: 'no-device' };
     try {
-        const ok = await capturer(id, path);
-        return ok ? { ok: true, path } : { ok: false, reason: 'capture-failed' };
+        const capture = await capturer(id, path);
+        if (typeof capture === 'boolean') {
+            return capture ? { ok: true, path } : { ok: false, reason: 'capture-failed' };
+        }
+        return capture.ok
+            ? { ok: true, path, capture }
+            : { ok: false, reason: 'capture-failed', capture };
     }
     catch {
         // Raw is the primary iOS path since GH #422 — a thrown capturer error

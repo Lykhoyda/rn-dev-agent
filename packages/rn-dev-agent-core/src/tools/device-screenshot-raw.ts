@@ -19,15 +19,33 @@
  * spawning real `xcrun`/`adb` subprocesses.
  */
 import { execFile, spawn } from 'node:child_process';
-import { createWriteStream, renameSync, unlinkSync } from 'node:fs';
+import { createWriteStream, renameSync, statSync, unlinkSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import type { Readable } from 'node:stream';
 import { promisify } from 'node:util';
+import { publicDeviceIdentity, sanitizePublicDiagnostic } from '../util/public-diagnostics.js';
 
 const execFileAsync = promisify(execFile);
 
 export type RawResolver = () => Promise<string | null>;
-export type RawCapturer = (idOrUdid: string, path: string) => Promise<boolean>;
+export interface RawCaptureEvidence {
+  ok: boolean;
+  backend: 'simctl' | 'adb';
+  argv: string[];
+  exitCode: number | null;
+  signal: string | null;
+  timedOut: boolean;
+  stderr: string;
+  outputPath: string;
+  format: 'png' | 'jpeg';
+  bytes?: number;
+  device: string;
+  localDiagnostic: {
+    identitySource: 'authority-session-state';
+    instruction: string;
+  };
+}
+export type RawCapturer = (idOrUdid: string, path: string) => Promise<boolean | RawCaptureEvidence>;
 
 interface SimctlDevice {
   udid: string;
@@ -165,21 +183,89 @@ export function simctlScreenshotType(path: string): 'png' | 'jpeg' {
   return /\.png$/i.test(path) ? 'png' : 'jpeg';
 }
 
-const defaultIosCapturer: RawCapturer = async (udid, path) => {
+export type IosScreenshotExecutor = (
+  file: string,
+  args: string[],
+  options: { timeout: number; maxBuffer: number; encoding: 'utf8' },
+) => Promise<{ stdout: string; stderr: string }>;
+
+export async function captureIosScreenshot(
+  udid: string,
+  path: string,
+  execute: IosScreenshotExecutor = execFileAsync as unknown as IosScreenshotExecutor,
+): Promise<RawCaptureEvidence> {
+  const format = simctlScreenshotType(path);
+  const exactArgv = ['simctl', 'io', udid, 'screenshot', `--type=${format}`, path];
+  const publicArgv = [
+    'xcrun',
+    ...exactArgv.map((arg) => (arg === udid ? publicDeviceIdentity(udid) : arg)),
+  ];
+  const base = {
+    backend: 'simctl' as const,
+    argv: publicArgv,
+    outputPath: path,
+    format,
+    device: publicDeviceIdentity(udid),
+    localDiagnostic: {
+      identitySource: 'authority-session-state' as const,
+      instruction:
+        'Resolve the exact device only from the local rn_session authority state, then replay this argv without changing device.',
+    },
+  };
   try {
-    await execFileAsync(
-      'xcrun',
-      ['simctl', 'io', udid, 'screenshot', `--type=${simctlScreenshotType(path)}`, path],
-      {
-        timeout: 15_000,
-        maxBuffer: 1024 * 1024,
-      },
-    );
-    return true;
-  } catch {
-    return false;
+    const result = await execute('xcrun', exactArgv, {
+      timeout: 15_000,
+      maxBuffer: 1024 * 1024,
+      encoding: 'utf8',
+    });
+    let bytes = 0;
+    try {
+      bytes = statSync(path).size;
+    } catch {
+      bytes = 0;
+    }
+    if (bytes <= 0) {
+      return {
+        ...base,
+        ok: false,
+        exitCode: 0,
+        signal: null,
+        timedOut: false,
+        stderr: 'simctl exited successfully but did not produce a non-empty output file',
+      };
+    }
+    return {
+      ...base,
+      ok: true,
+      exitCode: 0,
+      signal: null,
+      timedOut: false,
+      stderr: sanitizePublicDiagnostic(result.stderr ?? '', { deviceIds: [udid] }),
+      bytes,
+    };
+  } catch (error) {
+    const failure = error as {
+      code?: number | string;
+      signal?: string | null;
+      killed?: boolean;
+      stderr?: string;
+      message?: string;
+    };
+    return {
+      ...base,
+      ok: false,
+      exitCode: typeof failure.code === 'number' ? failure.code : null,
+      signal: failure.signal ?? null,
+      timedOut: failure.killed === true || failure.code === 'ETIMEDOUT',
+      stderr: sanitizePublicDiagnostic(failure.stderr ?? failure.message ?? 'simctl failed', {
+        deviceIds: [udid],
+        maxLength: 2_000,
+      }),
+    };
   }
-};
+}
+
+const defaultIosCapturer: RawCapturer = captureIosScreenshot;
 
 /**
  * Pure decision helper exported for unit tests. Returns the success/failure
@@ -357,8 +443,8 @@ export function _resetForTest(): void {
 export type RawScreenshotFailureReason = 'no-device' | 'capture-failed';
 
 export type RawScreenshotResult =
-  | { ok: true; path: string }
-  | { ok: false; reason: RawScreenshotFailureReason };
+  | { ok: true; path: string; capture?: RawCaptureEvidence }
+  | { ok: false; reason: RawScreenshotFailureReason; capture?: RawCaptureEvidence };
 
 export async function tryRawScreenshot(
   platform: 'ios' | 'android',
@@ -373,8 +459,13 @@ export async function tryRawScreenshot(
   const id = preferredDeviceId ?? (await resolver());
   if (!id) return { ok: false, reason: 'no-device' };
   try {
-    const ok = await capturer(id, path);
-    return ok ? { ok: true, path } : { ok: false, reason: 'capture-failed' };
+    const capture = await capturer(id, path);
+    if (typeof capture === 'boolean') {
+      return capture ? { ok: true, path } : { ok: false, reason: 'capture-failed' };
+    }
+    return capture.ok
+      ? { ok: true, path, capture }
+      : { ok: false, reason: 'capture-failed', capture };
   } catch {
     // Raw is the primary iOS path since GH #422 — a thrown capturer error
     // (fs validation, spawn failure) must honor the result contract.

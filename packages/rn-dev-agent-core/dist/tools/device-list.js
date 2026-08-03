@@ -291,12 +291,14 @@ export async function captureAndResizeScreenshot(args) {
             },
         ],
     });
-    const rawResultFail = (platform, reason) => {
+    const rawResultFail = (platform, raw) => {
         const cli = platform === 'ios' ? 'xcrun simctl' : 'adb';
-        const hint = reason === 'no-device'
-            ? `No booted ${platform === 'ios' ? 'iOS Simulator' : 'Android emulator'} was unambiguously resolvable by ${cli} — none booted, or several booted with no open device session. Boot exactly one, or open a session (device_snapshot action=open) to bind the target; if your emulator is 'offline'/'unauthorized', restart it.`
-            : `Capture command failed (${cli}). The device may be transitioning state (booting, OOM, locked). Retry once it stabilizes.`;
-        return failResult(`device_screenshot platform=${platform} failed: ${hint}`, 'SCREENSHOT_FAILED', { platform, reason });
+        const hint = raw.reason === 'no-device'
+            ? `No booted ${platform === 'ios' ? 'iOS Simulator' : 'Android emulator'} was unambiguously resolvable by ${cli} — none booted, or several booted with no open device session. Boot exactly one, or open a session (device_snapshot action=open) to bind the target.`
+            : raw.capture
+                ? `The exact authority-bound ${cli} capture failed; inspect the structured exit/signal/timeout and sanitized stderr evidence below. No other device was tried.`
+                : `The exact ${cli} capture failed without backend evidence. No other device was tried.`;
+        return failResult(`device_screenshot platform=${platform} failed: ${hint}`, 'SCREENSHOT_FAILED', { platform, reason: raw.reason, ...(raw.capture ? { capture: raw.capture } : {}) });
     };
     let result;
     // GH#186: a foreign flow routes pixels to simctl exactly like a local one.
@@ -324,7 +326,7 @@ export async function captureAndResizeScreenshot(args) {
         if (raw.ok)
             result = rawResultOk(raw.path, args.platform);
         else
-            return rawResultFail(args.platform, raw.reason);
+            return rawResultFail(args.platform, raw);
     }
     if (!result) {
         // route === 'runner' (NO flow — runAgentDevice can never run while a flow is active here).

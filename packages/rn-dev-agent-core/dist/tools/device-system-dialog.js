@@ -134,41 +134,40 @@ export async function acceptDeeplinkOpenConfirmation() {
     await sleepFn(OPEN_CONFIRMATION_RETRY_DELAY_MS);
     return tapSystemDialogViaRunner(OPEN_CONFIRMATION_LABELS);
 }
-// Per-label timeout when sequentially probing dialog buttons. Intentionally short —
-// if the label is not visible, Maestro should fail fast so we can try the next label.
-const PER_LABEL_TIMEOUT_MS = 4_000;
-async function tapSystemDialog(labels, platform, totalTimeoutMs, slug) {
-    // Sequential single-label flows. Each flow has one NON-optional tapOn — so
-    // Maestro's exit code actually reflects whether the tap happened. First success wins.
-    // This is slower than an all-optional flow (up to N * per_label_timeout) but correct:
-    // the all-optional pattern silently returns passed=true when nothing was tapped.
-    const deadline = Date.now() + totalTimeoutMs;
-    const attempts = [];
-    for (const label of labels) {
-        // Clamp each probe to the time actually left, not a fixed slice of the
-        // original total — otherwise the deadline only gates *starting* a probe and
-        // the default 8-label list could run ~8×4s past a 15s `timeoutMs`.
-        const remainingMs = deadline - Date.now();
-        if (remainingMs <= 0) {
-            return warnResult({ tapped: false, platform, triedLabels: labels, attempts }, `System dialog probe exceeded ${totalTimeoutMs}ms without a match.`, { code: 'DIALOG_NOT_FOUND' });
-        }
-        const perLabelMs = Math.min(PER_LABEL_TIMEOUT_MS, remainingMs);
-        const yaml = `- tapOn:\n    text: "${yamlEscape(label)}"`;
-        const result = await runMaestroInline(yaml, { platform, timeoutMs: perLabelMs, slug });
-        if (result.passed) {
-            return okResult({ tapped: true, platform, matchedLabel: label, triedLabels: labels });
-        }
-        // A device-authority refusal is fail-closed: the flow never proved it ran on
-        // the requested device, so it must not be downgraded to "no dialog found".
-        if (result.deviceAuthority && shouldRejectMaestroDeviceAuthority(result.deviceAuthority)) {
-            return failResult(result.error ?? 'Maestro device authority refused during system dialog probe.', 'DEVICE_AUTHORITY_MISMATCH', { platform, label, triedLabels: labels, deviceAuthority: result.deviceAuthority });
-        }
-        attempts.push({
-            label,
-            error: result.error,
-            output: result.output ? result.output.slice(0, 200) : undefined,
+const DEFAULT_DIALOG_TIMEOUT_MS = 120_000;
+function regexEscape(value) {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+async function tapSystemDialog(labels, platform, totalTimeoutMs, slug, authorityArgs) {
+    // One non-optional regex selector keeps correctness (a miss exits non-zero)
+    // without paying a fresh iOS WDA cold start for every candidate label.
+    const selector = `^(?:${labels.map(regexEscape).join('|')})$`;
+    const yaml = `- tapOn:\n    text: "${yamlEscape(selector)}"`;
+    const result = await runMaestroInline(yaml, {
+        platform,
+        timeoutMs: totalTimeoutMs,
+        slug,
+        authorityArgs,
+    });
+    if (result.passed) {
+        return okResult({ tapped: true, platform, triedLabels: labels, selector });
+    }
+    if (result.deviceAuthority && shouldRejectMaestroDeviceAuthority(result.deviceAuthority)) {
+        return failResult(result.error ?? 'Maestro device authority refused during system dialog probe.', 'DEVICE_AUTHORITY_MISMATCH', { platform, triedLabels: labels, deviceAuthority: result.deviceAuthority });
+    }
+    if (result.errorCode === 'AUTOMATION_CLEANUP_UNPROVEN') {
+        return failResult(result.error ?? 'Automation cleanup is unproven.', result.errorCode, {
+            platform,
+            triedLabels: labels,
         });
     }
+    const attempts = [
+        {
+            selector,
+            error: result.error,
+            output: result.output ? result.output.slice(0, 200) : undefined,
+        },
+    ];
     // GH #545: on iOS a Maestro miss can also mean the dialog is SpringBoard-owned
     // and simply invisible to Maestro — point at the runner path and the
     // last-resort SpringBoard restart instead of implying the dialog isn't there.
@@ -222,7 +221,7 @@ async function handleSystemDialog(args, iosDefaults, androidDefaults, slug) {
             }, `A system dialog${runner.dialogTitle ? ` ("${runner.dialogTitle}")` : ''} is on screen but none of the probed labels matched its buttons. Retry with label set to one of availableButtons.`, { code: 'DIALOG_BUTTON_NOT_FOUND' });
         }
     }
-    return tapSystemDialog(labels, platform, args.timeoutMs ?? 15_000, slug);
+    return tapSystemDialog(labels, platform, args.timeoutMs ?? DEFAULT_DIALOG_TIMEOUT_MS, slug, args);
 }
 export function createDeviceAcceptSystemDialogHandler() {
     return async (args) => handleSystemDialog(args, ACCEPT_LABELS_IOS, ACCEPT_LABELS_ANDROID, 'sys-accept');

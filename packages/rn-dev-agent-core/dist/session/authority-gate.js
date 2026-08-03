@@ -31,6 +31,9 @@ export async function relaunchManagedNativeOriginApp(args) {
     }
     await authority.relaunch();
 }
+export function hasManagedRunnerParkAuthority(args) {
+    return typeof args[managedRunnerPark] === 'function';
+}
 export async function completeManagedRunnerParkAuthority(args) {
     const complete = args[managedRunnerPark];
     if (!complete) {

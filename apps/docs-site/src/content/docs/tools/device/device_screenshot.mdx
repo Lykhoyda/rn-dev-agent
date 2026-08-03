@@ -1,11 +1,11 @@
 ---
 title: "device_screenshot"
-description: "Capture the exact authority-bound device screen"
+description: "Capture the exact authority-bound device screen with no cross-device retry"
 sidebar:
   order: 20
 ---
 
-Capture the exact authority-bound device screen. Returns the file path and preserves the session device identity in the authority receipt.
+Capture the exact authority-bound device screen with no cross-device retry. Returns the file path; iOS failures preserve sanitized backend argv, exit/signal/timeout, stderr, output format/path, and a shortened receipt-bound device identity.
 
 ## Parameters
 
