@@ -93,11 +93,11 @@ Decision table for build workflows:
 
 ### Keyboard-occlusion guard
 
-`device_press` and `device_longpress` guard against tapping through a software keyboard by default. Before the tap lands, the runner checks whether a visible keyboard's frame (a sanity-checked rect — min height 120pt iOS / 150px Android, so a predictive-text accessory bar doesn't count) collides with the target and dismisses it first if so.
+`device_press` and `device_longpress` guard against tapping through a software keyboard by default. For ordinary app targets, the runner checks whether a visible keyboard's frame (a sanity-checked rect — min height 120pt iOS / 150px Android, so a predictive-text accessory bar doesn't count) collides with the target before choosing a safe dismissal or refusal. Exact iOS keyboard targets take the separately validated activation path below.
 
 | `meta.keyboardGuard` | Meaning |
 |---|---|
-| `off` | Guard disabled (`RN_KEYBOARD_GUARD=0`) |
+| `off` | Ordinary-target guard disabled (`RN_KEYBOARD_GUARD=0`); exact iOS keyboard validation and raw-coordinate keyboard refusal remain enforced |
 | `no_keyboard` | No keyboard was visible |
 | `not_occluded` | Keyboard visible but the fresh target rectangle was clear of it |
 | `dismissed` | Android: keyboard was occluding the tap point and was dismissed first |

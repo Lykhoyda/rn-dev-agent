@@ -331,9 +331,8 @@ export type ToolErrorCode =
   // to refresh refs, then retry.
   | 'STALE_REF'
   | 'KEYBOARD_TARGET_STALE'
-  // GH #370/#379: iOS keyboard guard verify-or-refuse arm — the tap point is
-  // under a keyboard with no dismiss control. The TS layer auto-heals via the
-  // injected Keyboard.dismiss() when CDP is connected (#379).
+  // GH #370/#379: iOS keyboard guard verify-or-refuse arm. The TS layer may
+  // retry after injected Keyboard.dismiss() proves the keyboard hidden (#379).
   | 'KEYBOARD_OCCLUDED'
   | 'KEYBOARD_DISMISS_FAILED'
   | 'RUNNER_TIMEOUT'
@@ -364,9 +363,10 @@ export type ToolErrorCode =
   | 'NO_NATIVE_ROUTE'
   // eradicate-agent-device Phase 2 Task 9: RN_ANDROID_RUNNER=0 set explicitly — disabled by operator.
   | 'RUNNER_DISABLED'
+  // GH #656: runner lacks the feature required for exact keyboard targeting.
+  | 'RN_FAST_RUNNER_STALE'
   // GH #383: runner speaks an incompatible wire protocol even after the
   // reap-and-reinstall path ran — stale prebuilt artifacts need a rebuild.
-  | 'RN_FAST_RUNNER_STALE'
   | 'RUNNER_PROTOCOL_MISMATCH'
   // E2E regression runner (2026-06-18)
   | 'NOT_FOUND'
