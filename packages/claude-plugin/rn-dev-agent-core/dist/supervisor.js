@@ -16929,6 +16929,37 @@ var init_maestro_dispatch = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/maestro-error-parser.js
+function parseTerminalIdWait(output, suppliedFailedStep) {
+  const lines = output.split("\n");
+  let terminalStep;
+  for (let index = 0; index < lines.length; index++) {
+    const match = RUNNER_STEP_RE.exec(lines[index]);
+    if (match)
+      terminalStep = { index, status: match[1], name: match[2] };
+  }
+  if (terminalStep?.status === "\u2713")
+    return null;
+  if (suppliedFailedStep && terminalStep && terminalStep.name !== suppliedFailedStep)
+    return null;
+  const failedStep = suppliedFailedStep ?? terminalStep?.name;
+  if (!failedStep || terminalStep && terminalStep.status !== "\u2717")
+    return null;
+  const stepMatch = ID_WAIT_STEP_RE.exec(failedStep);
+  if (!stepMatch)
+    return null;
+  const reasonLine = lines.slice(terminalStep ? terminalStep.index + 1 : 0).filter((line) => REASON_LINE_RE.test(line)).at(-1);
+  if (!reasonLine)
+    return null;
+  const reasonMatch = ID_WAIT_REASON_RE.exec(reasonLine);
+  if (!reasonMatch || reasonMatch[2] !== stepMatch[2])
+    return null;
+  return {
+    kind: "SELECTOR_NOT_FOUND",
+    selectorKind: "id",
+    selector: stepMatch[2],
+    raw: output
+  };
+}
 function parseMaestroFailure(output, terminal) {
   const raw = typeof output === "string" ? output : "";
   if (terminal?.exitClass === "timed-out") {
@@ -16959,15 +16990,19 @@ function parseMaestroFailure(output, terminal) {
     return { kind: "UNKNOWN", raw: "" };
   }
   output = raw;
+  const terminalIdWait = parseTerminalIdWait(output, terminal?.failedStep);
+  if (terminalIdWait)
+    return terminalIdWait;
   const lines = output.split("\n");
-  const terminalFailureLine = [...lines].reverse().find((line) => /Element (['"])(?:(?!\1).)+\1 not visible within/i.test(line) || /\bWait timed out\b/i.test(line) || PATTERNS.some(({ re }) => re.test(line)));
-  if (terminalFailureLine) {
-    for (const { re, build } of PATTERNS) {
-      const m = terminalFailureLine.match(re);
+  for (const { re, build } of PATTERNS) {
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i];
+      if (!line)
+        continue;
+      const m = line.match(re);
       if (m)
         return build(m, output);
     }
-    return { kind: "UNKNOWN", raw: output };
   }
   for (const { re, build } of PATTERNS) {
     const m = output.match(re);
@@ -16982,7 +17017,7 @@ function isAutoRepairable(failure) {
 function outputIndicatesFlowFailure(output) {
   return /^\s*(?:\[FAILED\]|(?:Test|Flow) FAILED\b|FAILED\s*$)/m.test(output);
 }
-var PATTERNS;
+var PATTERNS, RUNNER_STEP_RE, REASON_LINE_RE, ID_WAIT_STEP_RE, ID_WAIT_REASON_RE;
 var init_maestro_error_parser = __esm({
   "packages/rn-dev-agent-core/dist/domain/maestro-error-parser.js"() {
     "use strict";
@@ -17004,16 +17039,6 @@ var init_maestro_error_parser = __esm({
       {
         re: /Element not found:\s*text=(['"])((?:(?!\1).)+)\1/i,
         build: (m, raw) => ({ kind: "SELECTOR_NOT_FOUND", selectorKind: "text", selector: m[2], raw })
-      },
-      // maestro-runner 1.1.16/1.1.20 ID-wait shape — issue #580.
-      // "Element '#X' not visible within 1s (cause: context deadline exceeded)".
-      // The `#` immediately after the opening quote is the runner's ID-selector
-      // marker: text and regex waits render without it and keep their current
-      // classification (issue #334 owns those). Process/global timeouts never reach
-      // the pattern list — parseMaestroFailure returns TIMEOUT on `exitClass` first.
-      {
-        re: /Element (['"])#((?:(?!\1).)+)\1 not visible within/i,
-        build: (m, raw) => ({ kind: "SELECTOR_NOT_FOUND", selectorKind: "id", selector: m[2], raw })
       },
       {
         re: /Element (['"])((?:(?!\1).)+)\1 (?:was )?not found/i,
@@ -17041,6 +17066,10 @@ var init_maestro_error_parser = __esm({
         build: (m, raw) => ({ kind: "ASSERTION_FAILED", selector: m[2], raw })
       }
     ];
+    RUNNER_STEP_RE = /^[ \t]+([✓✗])\s+(\S.*\S|\S)\s*\(([\d.]+)s\)\s*$/;
+    REASON_LINE_RE = /^[ \t]+╰─\s+/;
+    ID_WAIT_STEP_RE = /^extendedWaitUntil:\s+visible\s+id=(['"])((?:(?!\1).)+)\1$/i;
+    ID_WAIT_REASON_RE = /^[ \t]+╰─\s+Element (['"])#((?:(?!\1).)+)\1 not visible within\b/i;
   }
 });
 
@@ -17366,8 +17395,8 @@ function findFailedStep(steps) {
 function lastObservedStep(steps) {
   return steps.length ? steps[steps.length - 1] : null;
 }
-function summarizeReason(output) {
-  const f = parseMaestroFailure(output);
+function summarizeReason(output, failedStep) {
+  const f = parseMaestroFailure(output, failedStep ? { failedStep } : void 0);
   if (f.kind === "UNKNOWN" || f.kind === "WDA_BOOTSTRAP_FAILED")
     return null;
   const selector = "selector" in f ? f.selector ?? null : null;
@@ -17375,10 +17404,11 @@ function summarizeReason(output) {
 }
 function buildStepSummary(output, opts) {
   const steps = parseSteps(output);
+  const failedStep = opts.failed ? findFailedStep(steps) : null;
   return {
     steps,
-    failedStep: opts.failed ? findFailedStep(steps) : null,
-    reason: opts.failed ? summarizeReason(output) : null,
+    failedStep,
+    reason: opts.failed ? summarizeReason(output, failedStep?.name) : null,
     lastStep: lastObservedStep(steps)
   };
 }

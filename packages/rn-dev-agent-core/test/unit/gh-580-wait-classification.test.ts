@@ -42,11 +42,21 @@ test('gh-580: the same wording survives buildTerminalEvidence as kind + exact se
 });
 
 test('gh-580: double-quoted rendering and ids containing quotes/# still extract exactly', () => {
-  const dq = parseMaestroFailure('  ╰─ Element "#user\'s-tasks" not visible within 15s');
+  const dq = parseMaestroFailure(
+    [
+      '    ✗ extendedWaitUntil: visible id="user\'s-tasks" (15.0s)',
+      '      ╰─ Element "#user\'s-tasks" not visible within 15s',
+    ].join('\n'),
+  );
   assert.equal(dq.kind, 'SELECTOR_NOT_FOUND');
   assert.equal(dq.selector, "user's-tasks");
 
-  const hashInside = parseMaestroFailure("  ╰─ Element '#tag#42' not visible within 2s");
+  const hashInside = parseMaestroFailure(
+    [
+      "    ✗ extendedWaitUntil: visible id='tag#42' (2.0s)",
+      "      ╰─ Element '#tag#42' not visible within 2s",
+    ].join('\n'),
+  );
   assert.equal(hashInside.kind, 'SELECTOR_NOT_FOUND');
   assert.equal(hashInside.selector, 'tag#42');
 });
@@ -102,7 +112,7 @@ test('gh-580: duplicated staged runner output does not change the classified sel
 test('gh-580: an earlier transient wait miss loses to the terminal one (GH #118 ordering)', () => {
   const retried = [
     "    ╰─ Element '#stale_transient' not visible within 1s",
-    '    ✓ tapOn: retry (0.4s)',
+    '    ✗ extendedWaitUntil: visible id="real_terminal_target" (15.0s)',
     "    ╰─ Element '#real_terminal_target' not visible within 15s",
   ].join('\n');
   assert.equal(parseMaestroFailure(retried).selector, 'real_terminal_target');
@@ -111,8 +121,8 @@ test('gh-580: an earlier transient wait miss loses to the terminal one (GH #118 
 test('gh-580: an earlier ID wait cannot outrank a terminal text or regex wait', () => {
   for (const terminalSelector of ["'Continue'", '".*"']) {
     const output = [
-      '    ✗ extendedWaitUntil: visible text="Continue" (15.0s)',
       "      ╰─ Element '#stale_transient' not visible within 1s",
+      '    ✗ extendedWaitUntil: visible text="Continue" (15.0s)',
       `      ╰─ Element ${terminalSelector} not visible within 15s`,
     ].join('\n');
     assert.equal(parseMaestroFailure(output).kind, 'UNKNOWN');
@@ -123,6 +133,7 @@ test('gh-580: an earlier ID wait cannot outrank a terminal text or regex wait', 
 test('gh-580: an earlier ID wait cannot cross a selector-less timeout barrier', () => {
   const output = [
     "      ╰─ Element '#stale_transient' not visible within 1s",
+    '    ✗ extendedWaitUntil: visible text="Continue" (15.0s)',
     '      ╰─ Wait timed out (cause: context deadline exceeded)',
   ].join('\n');
   const failure = parseMaestroFailure(output);
@@ -145,9 +156,11 @@ test('gh-580: an earlier ID wait cannot outrank a terminal assertion or timeout'
     },
   ] as const;
   for (const { terminal, kind, selector } of cases) {
-    const output = ["      ╰─ Element '#stale_transient' not visible within 1s", terminal].join(
-      '\n',
-    );
+    const output = [
+      "      ╰─ Element '#stale_transient' not visible within 1s",
+      '    ✗ assertVisible: id="ready" (15.0s)',
+      terminal,
+    ].join('\n');
     const failure = parseMaestroFailure(output);
     assert.equal(failure.kind, kind);
     assert.equal(failure.selector, selector);
@@ -155,6 +168,26 @@ test('gh-580: an earlier ID wait cannot outrank a terminal assertion or timeout'
     assert.equal(evidence.failureKind, kind);
     assert.equal(evidence.failureSelector, selector);
   }
+});
+
+test('gh-580: mismatched terminal step and reason IDs stay UNKNOWN', () => {
+  const output = [
+    '    ✗ extendedWaitUntil: visible id="expected" (15.0s)',
+    "      ╰─ Element '#other' not visible within 15s",
+  ].join('\n');
+  assert.equal(parseMaestroFailure(output).kind, 'UNKNOWN');
+  assert.equal(buildTerminalEvidence(output).failureKind, undefined);
+});
+
+test('gh-580: an unrelated trailing app timeout log cannot hide terminal ID evidence', () => {
+  const output = [
+    '    ✗ extendedWaitUntil: visible id="expected" (15.0s)',
+    "      ╰─ Element '#expected' not visible within 15s",
+    'console: Wait timed out while refreshing analytics',
+  ].join('\n');
+  const failure = parseMaestroFailure(output);
+  assert.equal(failure.kind, 'SELECTOR_NOT_FOUND');
+  assert.equal(failure.selector, 'expected');
 });
 
 test('gh-580: boundedOutput keeps head AND tail inside one 500-char budget', () => {

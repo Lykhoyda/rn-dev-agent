@@ -106,8 +106,8 @@ export interface ReasonSummary {
 // Project parseMaestroFailure to {kind, selector}, DROPPING its `raw` field —
 // every MaestroFailure variant carries `raw` = the full unsliced output, which
 // must not be re-embedded into the result (it would defeat the output slice).
-export function summarizeReason(output: string): ReasonSummary | null {
-  const f = parseMaestroFailure(output);
+export function summarizeReason(output: string, failedStep?: string): ReasonSummary | null {
+  const f = parseMaestroFailure(output, failedStep ? { failedStep } : undefined);
   if (f.kind === 'UNKNOWN' || f.kind === 'WDA_BOOTSTRAP_FAILED') return null;
   const selector = 'selector' in f ? (f.selector ?? null) : null;
   return { kind: f.kind, selector: selector === null ? null : cap(selector) };
@@ -125,10 +125,11 @@ export interface StepSummary {
 // a PASSED run must not report a failedStep (mirrors parseMaestroFailure GH#118).
 export function buildStepSummary(output: string, opts: { failed: boolean }): StepSummary {
   const steps = parseSteps(output);
+  const failedStep = opts.failed ? findFailedStep(steps) : null;
   return {
     steps,
-    failedStep: opts.failed ? findFailedStep(steps) : null,
-    reason: opts.failed ? summarizeReason(output) : null,
+    failedStep,
+    reason: opts.failed ? summarizeReason(output, failedStep?.name) : null,
     lastStep: lastObservedStep(steps),
   };
 }
