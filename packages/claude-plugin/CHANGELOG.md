@@ -1,5 +1,13 @@
 # rn-dev-agent-plugin
 
+## 0.71.3
+
+### Patch Changes
+
+- 8cd1ea2: Fix inline Maestro cold-start timeouts and authority transitions, bridge-lifetime cleanup refusal, optional learned-action bundle gating, truthful date-picker failures, and sanitized exact-device iOS screenshots with relative-path support.
+- Updated dependencies [8cd1ea2]
+  - rn-dev-agent-core@0.66.3
+
 ## 0.71.2
 
 ### Patch Changes

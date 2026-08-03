@@ -1,5 +1,11 @@
 # rn-dev-agent-core
 
+## 0.66.3
+
+### Patch Changes
+
+- 8cd1ea2: Fix inline Maestro cold-start timeouts and authority transitions, bridge-lifetime cleanup refusal, optional learned-action bundle gating, truthful date-picker failures, and sanitized exact-device iOS screenshots with relative-path support.
+
 ## 0.66.2
 
 ### Patch Changes
