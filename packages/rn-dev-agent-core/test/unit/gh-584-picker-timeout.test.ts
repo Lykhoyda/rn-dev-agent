@@ -140,10 +140,25 @@ test('executor refusal does not fabricate a component failure', async () => {
   assert.equal(result.meta.failedValue, undefined);
 });
 
+test('uncoded executor error is preserved without component attribution', async () => {
+  const handler = createDevicePickDateHandler(async () => ({
+    passed: false,
+    output: '',
+    flowFile: '/tmp/deleted.yaml',
+    error: 'Maestro runner not found',
+  }));
+  const result = envelope(await handler({ date: '2026-06-02', platform: 'ios' }));
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'PICK_DATE_INCOMPLETE');
+  assert.equal(result.error, 'Maestro runner not found');
+  assert.equal(result.meta.failedAt, undefined);
+  assert.equal(result.meta.failedValue, undefined);
+});
+
 test('opener observation is excluded when its identifier equals a component value', async () => {
   const handler = createDevicePickDateHandler(async () => ({
     passed: false,
-    output: '    ✓ Tap on "June" (0.1s)\n    ✗ Tap on "June" (20.0s)',
+    output: '    ✓ Tap on element with id "June" (0.1s)\n    ✗ Tap on "June" (20.0s)',
     flowFile: '/tmp/deleted.yaml',
   }));
   const result = envelope(
@@ -159,7 +174,7 @@ test('opener retry outcome is fully excluded from component attribution', async 
   const handler = createDevicePickDateHandler(async () => ({
     passed: false,
     output:
-      '    ✗ Tap on "June" (0.1s)\n    ✓ Tap on "June" (0.1s)\n    ✗ Tap on "June" (20.0s)',
+      '    ✗ Tap on element with id "June" (0.1s)\n    ✓ Tap on element with id "June" (0.1s)\n    ✗ Tap on "June" (20.0s)',
     flowFile: '/tmp/deleted.yaml',
   }));
   const result = envelope(
@@ -168,4 +183,19 @@ test('opener retry outcome is fully excluded from component attribution', async 
   assert.equal(result.ok, false);
   assert.deepEqual(result.meta.succeeded, []);
   assert.equal(result.meta.failedAt, 'month');
+});
+
+test('missing opener evidence does not consume matching component evidence', async () => {
+  const handler = createDevicePickDateHandler(async () => ({
+    passed: false,
+    output: '    ✓ Tap on "June" (0.1s)\n    ✗ Tap on "2" (20.0s)',
+    flowFile: '/tmp/deleted.yaml',
+  }));
+  const result = envelope(
+    await handler({ date: '2026-06-02', platform: 'ios', openerTestId: 'June' }),
+  );
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.meta.succeeded, ['month']);
+  assert.equal(result.meta.failedAt, 'day');
+  assert.equal(result.meta.failedValue, '2');
 });

@@ -74534,8 +74534,14 @@ function dateTapStep(value, pickerScopeTestId) {
   return `- tapOn:
     text: "${yamlEscape(value)}"${scope}`;
 }
-function stepTargetsValue(stepName, value) {
+function stepTargetsQuotedValue(stepName, value) {
   return stepName.includes(`"${value}"`) || stepName.includes(`'${value}'`);
+}
+function stepTargetsIdValue(stepName, value) {
+  return /\btap(?:ping)?\s+on\s+(?:element\s+with\s+)?id\b/i.test(stepName) && stepTargetsQuotedValue(stepName, value);
+}
+function stepTargetsTextValue(stepName, value) {
+  return !stepTargetsIdValue(stepName, value) && stepTargetsQuotedValue(stepName, value);
 }
 function createDevicePickValueHandler(invoke = runMaestroInline) {
   return async (args) => {
@@ -74617,17 +74623,28 @@ function createDevicePickDateHandler(invoke = runMaestroInline) {
     if (refusal)
       return refusal;
     const summary = buildStepSummary(result.output, { failed: true });
+    const observedComponentFailure = summary.steps.some((step) => step.status === "fail" && components.some((component) => stepTargetsTextValue(step.name, component.value)));
+    if (result.error && !result.timedOut && !observedComponentFailure) {
+      return failResult(result.error, "PICK_DATE_INCOMPLETE", {
+        picked: false,
+        date: args.date,
+        platform,
+        selectorFailure: summary.reason,
+        terminalStep: summary.failedStep,
+        output: result.output.slice(0, 500)
+      });
+    }
     const succeeded = [];
     let failed;
     let nextStepIndex = 0;
-    const terminalTarget = (startIndex, value) => {
-      let observedIndex = summary.steps.findIndex((step, index) => index >= startIndex && stepTargetsValue(step.name, value));
+    const terminalTarget = (startIndex, value, matchesTarget) => {
+      let observedIndex = summary.steps.findIndex((step, index) => index >= startIndex && matchesTarget(step.name, value));
       let observed = observedIndex < 0 ? void 0 : summary.steps[observedIndex];
       while (observed?.status === "fail") {
-        const retryIndex = summary.steps.findIndex((step, index) => index > observedIndex && stepTargetsValue(step.name, value));
+        const retryIndex = summary.steps.findIndex((step, index) => index > observedIndex && matchesTarget(step.name, value));
         if (retryIndex < 0)
           break;
-        const interveningComponent = summary.steps.slice(observedIndex + 1, retryIndex).some((step) => components.some((candidate) => candidate.value !== value && stepTargetsValue(step.name, candidate.value)));
+        const interveningComponent = summary.steps.slice(observedIndex + 1, retryIndex).some((step) => components.some((candidate) => candidate.value !== value && stepTargetsTextValue(step.name, candidate.value)));
         if (interveningComponent)
           break;
         observedIndex = retryIndex;
@@ -74636,12 +74653,12 @@ function createDevicePickDateHandler(invoke = runMaestroInline) {
       return { observed, observedIndex };
     };
     if (opener) {
-      const openerOutcome = terminalTarget(0, opener);
+      const openerOutcome = terminalTarget(0, opener, stepTargetsIdValue);
       if (openerOutcome.observedIndex >= 0)
         nextStepIndex = openerOutcome.observedIndex + 1;
     }
     for (const component of components) {
-      const { observed, observedIndex } = terminalTarget(nextStepIndex, component.value);
+      const { observed, observedIndex } = terminalTarget(nextStepIndex, component.value, stepTargetsTextValue);
       if (observed?.status !== "pass") {
         failed = component;
         break;
