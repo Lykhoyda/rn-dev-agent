@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createDevicePickDateHandler, parseISODate } from '../../dist/tools/device-picker.js';
+import {
+  createDevicePickDateHandler,
+  createDevicePickValueHandler,
+  parseISODate,
+} from '../../dist/tools/device-picker.js';
 
 function body(result: { content: Array<{ text: string }> }): Record<string, any> {
   return JSON.parse(result.content[0]!.text) as Record<string, any>;
@@ -99,5 +103,26 @@ test('cleanup refusal preserves its typed code without picker attribution', asyn
   assert.equal(result.code, 'AUTOMATION_CLEANUP_UNPROVEN');
   assert.equal(result.meta.failedAt, undefined);
   assert.equal(result.meta.succeeded, undefined);
+  assert.equal(result.meta.cleanupRefusal.manualCommand, 'kill -TERM -4242');
+});
+
+test('value picker preserves the authoritative cleanup refusal envelope', async () => {
+  const handler = createDevicePickValueHandler(async () => ({
+    passed: false,
+    error: 'AUTOMATION_CLEANUP_UNPROVEN: cleanup unknown',
+    errorCode: 'AUTOMATION_CLEANUP_UNPROVEN',
+    output: '',
+    flowFile: '/tmp/flow.yaml',
+    timedOut: true,
+    cleanupEscalated: true,
+    cleanupRefusal: {
+      processGroup: 'owned-process-group',
+      manualCommand: 'kill -TERM -4242',
+    },
+  }));
+  const result = body(await handler({ value: 'August', platform: 'ios' }));
+  assert.equal(result.code, 'AUTOMATION_CLEANUP_UNPROVEN');
+  assert.equal(result.meta.picked, false);
+  assert.equal(result.meta.value, 'August');
   assert.equal(result.meta.cleanupRefusal.manualCommand, 'kill -TERM -4242');
 });

@@ -95,8 +95,14 @@ export function getMaestroRunnerPath(): string | null {
 export async function runMaestroInline(
   yaml: string,
   opts: MaestroInvokeOptions,
+  dependencies: {
+    chooseDispatch?: typeof chooseMaestroDispatch;
+    spawnManaged?: typeof spawnManagedProcessGroup;
+  } = {},
 ): Promise<MaestroInvokeResult> {
-  const dispatch = chooseMaestroDispatch({ platform: opts.platform });
+  const dispatch = (dependencies.chooseDispatch ?? chooseMaestroDispatch)({
+    platform: opts.platform,
+  });
   if ('error' in dispatch) {
     return { passed: false, output: '', flowFile: '', error: dispatch.error };
   }
@@ -199,7 +205,7 @@ export async function runMaestroInline(
     );
     const finalArgs = assembleMaestroArgs(baseArgs, runnerReportArgs(runnerReportDir));
     const execute = () =>
-      spawnManagedProcessGroup(dispatch.binPath, finalArgs, {
+      (dependencies.spawnManaged ?? spawnManagedProcessGroup)(dispatch.binPath, finalArgs, {
         timeoutMs: timeout,
         platform: opts.platform,
         deviceId: requestedDeviceId,
@@ -258,7 +264,7 @@ export async function runMaestroInline(
         cleanupEscalated: execution.cleanupEscalated,
       };
     }
-    if (execution.error && execution.code === null) {
+    if (execution.error) {
       return {
         passed: false,
         output,

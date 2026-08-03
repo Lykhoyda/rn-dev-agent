@@ -1,7 +1,7 @@
 import { basename, isAbsolute } from 'node:path';
 import { shortAuthorityIdentity } from '../session/registry.js';
 const DEVICE_ID_RE = /\b[0-9A-F]{8}(?:-[0-9A-F]{4}){3}-[0-9A-F]{12}\b/gi;
-const POSIX_PATH_RE = /(?:\/(?:Users|home|private|tmp|var\/folders)\/[^\s:'"),\]]+)+/g;
+const POSIX_PATH_RE = /(?<![\w:])\/(?!\/)[^\n\r'"`<>|]*?(?=:\s|[,;)\]}](?:\s|$)|\s+[A-Za-z][\w-]*=|$)/g;
 const MAX_PUBLIC_DIAGNOSTIC = 2_000;
 export function publicDeviceIdentity(deviceId) {
     return `device-${shortAuthorityIdentity(deviceId).slice(0, 12)}`;

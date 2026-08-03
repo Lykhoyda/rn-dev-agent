@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { unlinkSync } from 'node:fs';
+import { readdirSync, readFileSync, unlinkSync } from 'node:fs';
 const OUTPUT_LIMIT = 10 * 1024 * 1024;
 const TERM_GRACE_MS = 500;
 const ABSENCE_CONFIRM_MS = 2_000;
@@ -17,19 +17,51 @@ function cleanupRefusal(pgid) {
         manualCommand: `kill -TERM -${pgid}`,
     };
 }
-function groupPresence(pgid, signalGroup) {
+function processGroupLiveness(pgid) {
+    if (process.platform !== 'linux')
+        return 'unknown';
+    try {
+        for (const entry of readdirSync('/proc', { withFileTypes: true })) {
+            if (!entry.isDirectory() || !/^\d+$/.test(entry.name))
+                continue;
+            let stat;
+            try {
+                stat = readFileSync(`/proc/${entry.name}/stat`, 'utf8');
+            }
+            catch (error) {
+                if (error.code === 'ENOENT')
+                    continue;
+                return 'unknown';
+            }
+            const commandEnd = stat.lastIndexOf(')');
+            if (commandEnd < 0)
+                return 'unknown';
+            const fields = stat
+                .slice(commandEnd + 1)
+                .trim()
+                .split(/\s+/);
+            if (Number(fields[2]) === pgid && fields[0] !== 'Z')
+                return 'live';
+        }
+        return 'no-live-members';
+    }
+    catch {
+        return 'unknown';
+    }
+}
+function groupPresence(pgid, signalGroup, groupLiveness) {
     try {
         signalGroup(pgid, 0);
-        return 'present';
+        return groupLiveness(pgid) === 'no-live-members' ? 'absent' : 'present';
     }
     catch (error) {
         return error.code === 'ESRCH' ? 'absent' : 'unknown';
     }
 }
-async function waitForGroupAbsence(pgid, signalGroup, delay, timeoutMs = ABSENCE_CONFIRM_MS) {
+async function waitForGroupAbsence(pgid, signalGroup, groupLiveness, delay, timeoutMs = ABSENCE_CONFIRM_MS) {
     const deadline = Date.now() + timeoutMs;
     while (true) {
-        const presence = groupPresence(pgid, signalGroup);
+        const presence = groupPresence(pgid, signalGroup, groupLiveness);
         if (presence !== 'present')
             return presence;
         if (Date.now() >= deadline)
@@ -38,7 +70,7 @@ async function waitForGroupAbsence(pgid, signalGroup, delay, timeoutMs = ABSENCE
     }
 }
 function observeChildTerminal(child, timeoutMs) {
-    let stop = () => { };
+    let closeResult = null;
     const result = new Promise((resolve) => {
         let settled = false;
         let timer;
@@ -51,20 +83,22 @@ function observeChildTerminal(child, timeoutMs) {
             resolve(value);
         };
         child.once('error', (error) => done({ code: null, signal: null, timedOut: false, error: error.message }));
-        child.once('close', (code, signal) => done({ code, signal, timedOut: false }));
-        timer = setTimeout(() => done({ code: null, signal: 'SIGTERM', timedOut: true }), timeoutMs);
-        stop = () => done({ code: null, signal: null, timedOut: false });
+        child.once('close', (code, signal) => {
+            closeResult = { code, signal, timedOut: false };
+            done(closeResult);
+        });
+        timer = setTimeout(() => done({ code: null, signal: null, timedOut: true }), timeoutMs);
     });
-    return { result, stop };
+    return { result, observedClose: () => closeResult };
 }
-function activeRefusal(platform, deviceId, signalGroup) {
+function activeRefusal(platform, deviceId, signalGroup, groupLiveness) {
     if (!deviceId)
         return null;
     const key = cleanupKey(platform, deviceId);
     const refusal = activeCleanupRefusals.get(key);
     if (!refusal)
         return null;
-    if (groupPresence(refusal.pgid, signalGroup) === 'absent') {
+    if (groupPresence(refusal.pgid, signalGroup, groupLiveness) === 'absent') {
         activeCleanupRefusals.delete(key);
         return null;
     }
@@ -80,7 +114,8 @@ export async function spawnManagedProcessGroup(bin, args, options, dependencies 
             else
                 process.kill(-pgid, signal);
         });
-    const refusal = activeRefusal(options.platform, options.deviceId, signalGroup);
+    const groupLiveness = dependencies.groupLiveness ?? processGroupLiveness;
+    const refusal = activeRefusal(options.platform, options.deviceId, signalGroup, groupLiveness);
     if (refusal) {
         return {
             stdout: '',
@@ -148,20 +183,20 @@ export async function spawnManagedProcessGroup(bin, args, options, dependencies 
     child.stderr.on('data', collect(stderr));
     const terminal = await terminalObserver.result;
     let cleanupEscalated = false;
-    let presence = await waitForGroupAbsence(pid, signalGroup, delay, terminal.timedOut ? 0 : 250);
+    let presence = await waitForGroupAbsence(pid, signalGroup, groupLiveness, delay, terminal.timedOut ? 0 : 250);
     if (terminal.timedOut || overflow || presence === 'present') {
         try {
             signalGroup(pid, 'SIGTERM');
         }
         catch { }
-        presence = await waitForGroupAbsence(pid, signalGroup, delay, TERM_GRACE_MS);
+        presence = await waitForGroupAbsence(pid, signalGroup, groupLiveness, delay, TERM_GRACE_MS);
         if (presence === 'present') {
             cleanupEscalated = true;
             try {
                 signalGroup(pid, 'SIGKILL');
             }
             catch { }
-            presence = await waitForGroupAbsence(pid, signalGroup, delay);
+            presence = await waitForGroupAbsence(pid, signalGroup, groupLiveness, delay);
         }
     }
     const cleanupProven = presence === 'absent';
@@ -172,11 +207,14 @@ export async function spawnManagedProcessGroup(bin, args, options, dependencies 
             public: unproven,
         });
     }
+    const observedTerminal = terminal.timedOut
+        ? (terminalObserver.observedClose() ?? terminal)
+        : terminal;
     return {
         stdout: Buffer.concat(stdout).toString('utf8'),
         stderr: Buffer.concat(stderr).toString('utf8'),
-        code: terminal.code,
-        signal: terminal.signal,
+        code: observedTerminal.code,
+        signal: observedTerminal.signal,
         timedOut: terminal.timedOut,
         cleanupProven,
         cleanupEscalated,

@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
+import { runMaestroInline } from '../../dist/maestro-invoke.js';
 import { spawnManagedProcessGroup } from '../../dist/session/managed-automation.js';
 
 function alive(pid: number): boolean {
@@ -26,7 +27,7 @@ async function waitForFile(path: string): Promise<number> {
 }
 
 async function waitForChildClose(child: ChildProcess | null): Promise<void> {
-  if (!child || child.exitCode !== null) return;
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
   await once(child, 'close');
 }
 
@@ -59,6 +60,7 @@ test('managed executor removes process-group descendants after timeout', async (
 test('managed executor escalates a resistant process group to SIGKILL', async () => {
   let child: ChildProcess | null = null;
   let killed = false;
+  let closed = false;
   const result = await spawnManagedProcessGroup(
     process.execPath,
     ['-e', "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"],
@@ -66,23 +68,99 @@ test('managed executor escalates a resistant process group to SIGKILL', async ()
     {
       spawn: ((bin, args, options) => {
         child = spawnChild(bin, args, options);
+        child.once('close', () => {
+          closed = true;
+        });
         return child;
       }) as typeof spawnChild,
       signalGroup: (_pgid, signal) => {
         if (signal === 'SIGKILL') {
           child?.kill(signal);
           killed = true;
-        } else if (signal === 0 && killed) {
-          const error = new Error('absent') as NodeJS.ErrnoException;
-          error.code = 'ESRCH';
-          throw error;
         }
       },
+      groupLiveness: () => (killed && closed ? 'no-live-members' : 'live'),
     },
   );
   await waitForChildClose(child);
   assert.equal(result.cleanupProven, true);
   assert.equal(result.cleanupEscalated, true);
+  assert.equal(result.signal, 'SIGKILL');
+});
+
+test('zombie-only process groups count as absent and do not retain a refusal', async () => {
+  const child = Object.assign(new EventEmitter(), {
+    pid: 4343,
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+  });
+  const pending = spawnManagedProcessGroup(
+    'maestro',
+    [],
+    { timeoutMs: 1_000, platform: 'ios', deviceId: 'UDID-ZOMBIE', tool: 'zombie' },
+    {
+      spawn: (() => child) as typeof spawnChild,
+      signalGroup: () => {},
+      groupLiveness: () => 'no-live-members',
+    },
+  );
+  setImmediate(() => child.emit('close', 0, null));
+  const result = await pending;
+  assert.equal(result.cleanupProven, true);
+  assert.equal(result.cleanupRefusal, undefined);
+});
+
+test('output overflow remains an executor failure after exit zero', async () => {
+  const child = Object.assign(new EventEmitter(), {
+    pid: 4444,
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+  });
+  const pending = spawnManagedProcessGroup(
+    'maestro',
+    [],
+    { timeoutMs: 1_000, platform: 'ios', tool: 'overflow' },
+    {
+      spawn: (() => child) as typeof spawnChild,
+      signalGroup: () => {},
+      groupLiveness: () => 'no-live-members',
+    },
+  );
+  setImmediate(() => {
+    child.stdout.write(Buffer.alloc(10 * 1024 * 1024 + 1, 'x'));
+    child.emit('close', 0, null);
+  });
+  const result = await pending;
+  assert.equal(result.code, 0);
+  assert.equal(result.error, 'Maestro output exceeded 10 MiB');
+  assert.equal(result.cleanupProven, true);
+});
+
+test('inline Maestro cannot pass an output-overflow execution that exits zero', async () => {
+  const result = await runMaestroInline(
+    '- tapOn: Continue',
+    { platform: 'ios', appId: 'com.example.app' },
+    {
+      chooseDispatch: (() => ({
+        runner: 'maestro',
+        binPath: '/fake/maestro',
+        buildArgs: () => [],
+      })) as never,
+      spawnManaged: async () => ({
+        stdout: '',
+        stderr: '',
+        code: 0,
+        signal: null,
+        timedOut: false,
+        cleanupProven: true,
+        cleanupEscalated: false,
+        error: 'Maestro output exceeded 10 MiB',
+      }),
+    },
+  );
+  assert.equal(result.passed, false);
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.error, 'Maestro output exceeded 10 MiB');
 });
 
 test('spawn-before-PID failure returns its own error', async () => {
@@ -127,7 +205,7 @@ test('unproven cleanup returns manual guidance and refuses the same bridge devic
     'maestro',
     [],
     { timeoutMs: 1_000, platform: 'ios', deviceId: 'UDID-FENCED', tool: 'first' },
-    { spawn, signalGroup },
+    { spawn, signalGroup, groupLiveness: () => 'unknown' },
   );
   setImmediate(() => child.emit('close', 1, null));
   const unproven = await first;
@@ -141,7 +219,7 @@ test('unproven cleanup returns manual guidance and refuses the same bridge devic
     'maestro',
     [],
     { timeoutMs: 1_000, platform: 'ios', deviceId: 'UDID-FENCED', tool: 'second' },
-    { spawn, signalGroup },
+    { spawn, signalGroup, groupLiveness: () => 'unknown' },
   );
   assert.equal(refused.cleanupProven, false);
   assert.equal(refused.cleanupRefusal?.manualCommand, 'kill -TERM -4242');

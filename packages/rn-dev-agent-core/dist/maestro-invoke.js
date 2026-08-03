@@ -38,8 +38,10 @@ export function getMaestroRunnerPath() {
     const path = join(homedir(), '.maestro-runner', 'bin', 'maestro-runner');
     return existsSync(path) ? path : null;
 }
-export async function runMaestroInline(yaml, opts) {
-    const dispatch = chooseMaestroDispatch({ platform: opts.platform });
+export async function runMaestroInline(yaml, opts, dependencies = {}) {
+    const dispatch = (dependencies.chooseDispatch ?? chooseMaestroDispatch)({
+        platform: opts.platform,
+    });
     if ('error' in dispatch) {
         return { passed: false, output: '', flowFile: '', error: dispatch.error };
     }
@@ -120,7 +122,7 @@ export async function runMaestroInline(yaml, opts) {
         runnerReportDir = createRunnerReportDir(dispatch.runner, 'rn-maestro-inline-report');
         const baseArgs = dispatch.buildArgs(opts.platform, flowFile, appFileResolution.appFile, requestedDeviceId);
         const finalArgs = assembleMaestroArgs(baseArgs, runnerReportArgs(runnerReportDir));
-        const execute = () => spawnManagedProcessGroup(dispatch.binPath, finalArgs, {
+        const execute = () => (dependencies.spawnManaged ?? spawnManagedProcessGroup)(dispatch.binPath, finalArgs, {
             timeoutMs: timeout,
             platform: opts.platform,
             deviceId: requestedDeviceId,
@@ -177,7 +179,7 @@ export async function runMaestroInline(yaml, opts) {
                 cleanupEscalated: execution.cleanupEscalated,
             };
         }
-        if (execution.error && execution.code === null) {
+        if (execution.error) {
             return {
                 passed: false,
                 output,

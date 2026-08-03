@@ -142,9 +142,17 @@ test('default iOS capturer preserves exit/signal/timeout and validates a non-emp
 });
 
 test('shared public sanitizer strips foreign automation paths, usernames, and full IDs', () => {
-  const raw = `81263 /Users/antonlykhoyda/Library/Developer/CoreSimulator/Devices/${UDID}/WebDriverAgentRunner-Runner`;
+  const raw = `81263 /Users/antonlykhoyda/My Project/Devices/${UDID}/WebDriverAgentRunner-Runner`;
   const lines = sanitizeAutomationProcessLines([raw], UDID);
   assert.equal(lines.length, 1);
   assert.match(lines[0]!, /pid=81263 executable=WebDriverAgentRunner-Runner device-/);
   assert.doesNotMatch(lines[0]!, /antonlykhoyda|7A6033C8|\/Users\//);
+
+  const diagnostic = sanitizePublicDiagnostic(
+    'capture /workspace/repo/output.png: failed beside /Users/alice/My Project/failure.png',
+  );
+  assert.equal(
+    diagnostic,
+    'capture <local-path>/output.png: failed beside <local-path>/failure.png',
+  );
 });

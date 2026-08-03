@@ -106,6 +106,12 @@ export function createDevicePickValueHandler(
     if (result.passed) {
       return okResult({ picked: true, value: args.value, platform });
     }
+    const refusal = maestroRefusalResult(result, 'Maestro value picker flow was refused.', {
+      picked: false,
+      value: args.value,
+      platform,
+    });
+    if (refusal) return refusal;
     if (result.error) {
       return failResult(`Pick value failed: ${result.error}`, {
         code: result.errorCode ?? 'PICK_FAILED',
