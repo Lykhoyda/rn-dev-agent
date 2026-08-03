@@ -130,7 +130,7 @@ test('replayFlow happy path: type routes to last tapped, all pass', async () => 
 });
 
 test('replayFlow runFlow recurses only when whenVisible present', async () => {
-  const d = mockDispatch({ visible: ['tabs'] }); // onboarding NOT visible, tabs IS visible
+  const d = mockDispatch({ visible: ['onboarding', 'tabs'] });
   const r = await replayFlow(
     [
       { t: 'runFlow', whenVisible: 'onboarding', commands: [{ t: 'tap', id: 'done' }] },
@@ -139,6 +139,10 @@ test('replayFlow runFlow recurses only when whenVisible present', async () => {
     d,
   );
   assert.equal(r.passed, true);
+  assert.deepEqual(
+    r.steps.map((step) => step.sourceIndex),
+    [0, 1],
+  );
 });
 
 test('replayFlow fails the step when a target is disabled (no false green)', async () => {

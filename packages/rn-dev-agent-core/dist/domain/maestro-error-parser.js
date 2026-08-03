@@ -60,6 +60,7 @@ const PATTERNS = [
     {
         re: /Element (['"])#((?:(?!\1).)+)\1 not visible within/i,
         build: (m, raw) => ({ kind: 'SELECTOR_NOT_FOUND', selectorKind: 'id', selector: m[2], raw }),
+        terminalWaitOnly: true,
     },
     {
         re: /Element (['"])((?:(?!\1).)+)\1 (?:was )?not found/i,
@@ -144,7 +145,16 @@ export function parseMaestroFailure(output, terminal) {
     }
     output = raw;
     const lines = output.split('\n');
-    for (const { re, build } of PATTERNS) {
+    const terminalWaitLine = [...lines]
+        .reverse()
+        .find((line) => /Element (['"])(?:(?!\1).)+\1 not visible within/i.test(line));
+    for (const { re, build, terminalWaitOnly } of PATTERNS) {
+        if (terminalWaitOnly) {
+            const m = terminalWaitLine?.match(re);
+            if (m)
+                return build(m, output);
+            continue;
+        }
         for (let i = lines.length - 1; i >= 0; i--) {
             const line = lines[i];
             if (!line)
@@ -156,7 +166,9 @@ export function parseMaestroFailure(output, terminal) {
     }
     // Fallback: whole-buffer scan for inputs without line breaks or for
     // any pattern that happens to straddle a `\n`.
-    for (const { re, build } of PATTERNS) {
+    for (const { re, build, terminalWaitOnly } of PATTERNS) {
+        if (terminalWaitOnly)
+            continue;
         const m = output.match(re);
         if (m)
             return build(m, output);

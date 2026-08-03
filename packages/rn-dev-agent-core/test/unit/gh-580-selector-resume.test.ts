@@ -214,6 +214,10 @@ test('gh-580: a unique selector resumes at its source step and skips prior mutat
   assert.equal(result.passed, true);
   assert.deepEqual(result.resume, { applied: true, selector: 'otp_sheet', startIndex: 3 });
   assert.deepEqual(
+    result.steps.map((step) => step.sourceIndex),
+    [3, 4],
+  );
+  assert.deepEqual(
     calls,
     ['press:otp_submit'],
     'launch, the login tap and the email inputText were NOT redispatched',
@@ -629,3 +633,41 @@ test('gh-580: the warn path (runner exit 0 with failures) reports kind + selecto
     'the warn path used to degrade to a bare stdout slice',
   );
 });
+
+for (const retryShape of ['warn', 'throw'] as const) {
+  test(`gh-580: a ${retryShape} post-repair failure keeps structural terminal evidence`, async () => {
+    project.seedAction('register', actionYaml(['- tapOn:', '    id: "otp"']));
+    let maestroCalls = 0;
+    const handler = createRunActionHandler({
+      maestroRun: async (...args: unknown[]) => {
+        maestroCalls++;
+        return maestroCalls === 1
+          ? waitFailureEnvelope('otp')(...(args as []))
+          : waitFailureEnvelope('otp_retry', retryShape)(...(args as []));
+      },
+      repairAction: async () => ({
+        content: [
+          {
+            type: 'text' as const,
+            text: JSON.stringify({
+              ok: true,
+              data: {
+                patched: true,
+                oldSelector: 'otp',
+                newSelector: 'otp_retry',
+                score: 0.9,
+              },
+            }),
+          },
+        ],
+      }),
+    });
+
+    const env = readEnvelope(await handler({ actionId: 'register', projectRoot: project.root }));
+    assert.equal(env.ok, false);
+    assert.equal(env.meta.failureKind, 'SELECTOR_NOT_FOUND');
+    assert.equal(env.meta.failureSelector, 'otp_retry');
+    assert.equal(env.meta.terminal.failureKind, 'SELECTOR_NOT_FOUND');
+    assert.equal(env.meta.terminal.failureSelector, 'otp_retry');
+  });
+}

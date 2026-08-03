@@ -775,6 +775,10 @@ export function createRunActionHandler(deps = {}) {
             const retryPassed = retryEnv.ok === true && retryEnv.data?.passed === true;
             const retryOutput = readMaestroOutput(retryEnv);
             const retryFailureDetail = readMaestroFailureDetail(retryEnv, retryOutput);
+            const retryTerminal = readMaestroTerminal(retryEnv);
+            const retryFailure = !retryPassed
+                ? parseMaestroFailure(retryOutput, retryTerminal)
+                : undefined;
             const retryDeviceAuthority = readMaestroDeviceAuthority(retryEnv);
             probeDeviceId = retryDeviceAuthority?.reportedDeviceId ?? observedDeviceId;
             if (retryEnv.code === 'DEVICE_AUTHORITY_MISMATCH') {
@@ -810,18 +814,10 @@ export function createRunActionHandler(deps = {}) {
             // when retry failed; same-selector failures (= patch didn't work)
             // are implicit in the existing diff.
             let nextFailedSelector;
-            if (!retryPassed) {
-                try {
-                    const retryFailure = parseMaestroFailure(retryOutput, readMaestroTerminal(retryEnv));
-                    if (retryFailure.kind === 'SELECTOR_NOT_FOUND' &&
-                        retryFailure.selector &&
-                        retryFailure.selector !== repairData.newSelector) {
-                        nextFailedSelector = retryFailure.selector;
-                    }
-                }
-                catch {
-                    /* best-effort — don't fail the run because the parser hiccuped */
-                }
+            if (retryFailure?.kind === 'SELECTOR_NOT_FOUND' &&
+                retryFailure.selector &&
+                retryFailure.selector !== repairData.newSelector) {
+                nextFailedSelector = retryFailure.selector;
             }
             const autoRepair = {
                 attempted: true,
@@ -867,6 +863,11 @@ export function createRunActionHandler(deps = {}) {
                 firstAttemptOutput: boundedOutput(firstOutput),
                 retryOutput: boundedOutput(retryOutput),
                 underlyingFailure: retryFailureDetail,
+                ...(retryFailure ? { failureKind: retryFailure.kind } : {}),
+                ...(retryFailure && 'selector' in retryFailure && retryFailure.selector
+                    ? { failureSelector: retryFailure.selector }
+                    : {}),
+                terminal: retryTerminal,
             });
         }
         catch (err) {

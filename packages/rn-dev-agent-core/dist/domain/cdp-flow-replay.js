@@ -140,9 +140,10 @@ opts = {}) {
     const offset = opts.indexOffset ?? 0;
     const trace = [];
     let lastTapped = null;
+    const sourceIndex = (i) => opts.sourceIndex ?? i + offset;
     const fail = (i, reason) => ({
         passed: false,
-        failedStepIndex: i + offset,
+        failedStepIndex: sourceIndex(i),
         reason,
         steps: trace,
     });
@@ -152,53 +153,63 @@ opts = {}) {
             switch (s.t) {
                 case 'launch':
                     await dispatch.launch(s.stopApp);
-                    trace.push({ t: s.t, ok: true });
+                    trace.push({ sourceIndex: sourceIndex(i), t: s.t, ok: true });
                     break;
                 case 'tap':
                     await dispatch.press(s.id);
                     lastTapped = s.id;
-                    trace.push({ t: s.t, target: s.id, ok: true });
+                    trace.push({ sourceIndex: sourceIndex(i), t: s.t, target: s.id, ok: true });
                     break;
                 case 'type': {
                     if (!lastTapped)
                         return fail(i, 'inputText before any tapOn — no focus target');
                     await dispatch.type(lastTapped, s.text);
-                    trace.push({ t: s.t, target: lastTapped, ok: true });
+                    trace.push({ sourceIndex: sourceIndex(i), t: s.t, target: lastTapped, ok: true });
                     break;
                 }
                 case 'assert': {
                     const ok = await dispatch.isVisible(s.id);
-                    trace.push({ t: s.t, target: s.id, ok });
+                    trace.push({ sourceIndex: sourceIndex(i), t: s.t, target: s.id, ok });
                     if (!ok)
                         return fail(i, `assertVisible: "${s.id}" not present in CDP tree`);
                     break;
                 }
                 case 'wait':
                     await dispatch.settle();
-                    trace.push({ t: s.t, ok: true });
+                    trace.push({ sourceIndex: sourceIndex(i), t: s.t, ok: true });
                     break;
                 case 'runFlow': {
                     if (await dispatch.isVisible(s.whenVisible)) {
-                        const sub = await replayFlow(s.commands, dispatch);
+                        const sub = await replayFlow(s.commands, dispatch, { sourceIndex: sourceIndex(i) });
                         trace.push(...sub.steps);
                         if (!sub.passed) {
                             return {
                                 passed: false,
-                                failedStepIndex: i + offset,
+                                failedStepIndex: sourceIndex(i),
                                 reason: sub.reason,
                                 steps: trace,
                             };
                         }
                     }
                     else {
-                        trace.push({ t: s.t, target: s.whenVisible, ok: true });
+                        trace.push({
+                            sourceIndex: sourceIndex(i),
+                            t: s.t,
+                            target: s.whenVisible,
+                            ok: true,
+                        });
                     }
                     break;
                 }
             }
         }
         catch (e) {
-            trace.push({ t: s.t, target: 'id' in s ? s.id : undefined, ok: false });
+            trace.push({
+                sourceIndex: sourceIndex(i),
+                t: s.t,
+                target: 'id' in s ? s.id : undefined,
+                ok: false,
+            });
             return fail(i, e instanceof Error ? e.message : String(e));
         }
     }

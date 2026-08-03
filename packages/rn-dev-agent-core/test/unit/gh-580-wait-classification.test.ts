@@ -108,6 +108,18 @@ test('gh-580: an earlier transient wait miss loses to the terminal one (GH #118 
   assert.equal(parseMaestroFailure(retried).selector, 'real_terminal_target');
 });
 
+test('gh-580: an earlier ID wait cannot outrank a terminal text or regex wait', () => {
+  for (const terminalSelector of ["'Continue'", '".*"']) {
+    const output = [
+      '    ✗ extendedWaitUntil: visible text="Continue" (15.0s)',
+      "      ╰─ Element '#stale_transient' not visible within 1s",
+      `      ╰─ Element ${terminalSelector} not visible within 15s`,
+    ].join('\n');
+    assert.equal(parseMaestroFailure(output).kind, 'UNKNOWN');
+    assert.equal(buildTerminalEvidence(output).failureKind, undefined);
+  }
+});
+
 test('gh-580: boundedOutput keeps head AND tail inside one 500-char budget', () => {
   const short = 'maestro-runner 1.1.20\n    ✓ launchApp (2.7s)';
   assert.equal(boundedOutput(short), short, 'output within budget is returned verbatim');

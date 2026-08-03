@@ -16960,7 +16960,14 @@ function parseMaestroFailure(output, terminal) {
   }
   output = raw;
   const lines = output.split("\n");
-  for (const { re, build } of PATTERNS) {
+  const terminalWaitLine = [...lines].reverse().find((line) => /Element (['"])(?:(?!\1).)+\1 not visible within/i.test(line));
+  for (const { re, build, terminalWaitOnly } of PATTERNS) {
+    if (terminalWaitOnly) {
+      const m = terminalWaitLine?.match(re);
+      if (m)
+        return build(m, output);
+      continue;
+    }
     for (let i = lines.length - 1; i >= 0; i--) {
       const line = lines[i];
       if (!line)
@@ -16970,7 +16977,9 @@ function parseMaestroFailure(output, terminal) {
         return build(m, output);
     }
   }
-  for (const { re, build } of PATTERNS) {
+  for (const { re, build, terminalWaitOnly } of PATTERNS) {
+    if (terminalWaitOnly)
+      continue;
     const m = output.match(re);
     if (m)
       return build(m, output);
@@ -17014,7 +17023,8 @@ var init_maestro_error_parser = __esm({
       // the pattern list — parseMaestroFailure returns TIMEOUT on `exitClass` first.
       {
         re: /Element (['"])#((?:(?!\1).)+)\1 not visible within/i,
-        build: (m, raw) => ({ kind: "SELECTOR_NOT_FOUND", selectorKind: "id", selector: m[2], raw })
+        build: (m, raw) => ({ kind: "SELECTOR_NOT_FOUND", selectorKind: "id", selector: m[2], raw }),
+        terminalWaitOnly: true
       },
       {
         re: /Element (['"])((?:(?!\1).)+)\1 (?:was )?not found/i,
@@ -71159,9 +71169,10 @@ async function replayFlow(steps, dispatch, opts = {}) {
   const offset = opts.indexOffset ?? 0;
   const trace = [];
   let lastTapped = null;
+  const sourceIndex = (i) => opts.sourceIndex ?? i + offset;
   const fail3 = (i, reason) => ({
     passed: false,
-    failedStepIndex: i + offset,
+    failedStepIndex: sourceIndex(i),
     reason,
     steps: trace
   });
@@ -71171,51 +71182,61 @@ async function replayFlow(steps, dispatch, opts = {}) {
       switch (s.t) {
         case "launch":
           await dispatch.launch(s.stopApp);
-          trace.push({ t: s.t, ok: true });
+          trace.push({ sourceIndex: sourceIndex(i), t: s.t, ok: true });
           break;
         case "tap":
           await dispatch.press(s.id);
           lastTapped = s.id;
-          trace.push({ t: s.t, target: s.id, ok: true });
+          trace.push({ sourceIndex: sourceIndex(i), t: s.t, target: s.id, ok: true });
           break;
         case "type": {
           if (!lastTapped)
             return fail3(i, "inputText before any tapOn \u2014 no focus target");
           await dispatch.type(lastTapped, s.text);
-          trace.push({ t: s.t, target: lastTapped, ok: true });
+          trace.push({ sourceIndex: sourceIndex(i), t: s.t, target: lastTapped, ok: true });
           break;
         }
         case "assert": {
           const ok = await dispatch.isVisible(s.id);
-          trace.push({ t: s.t, target: s.id, ok });
+          trace.push({ sourceIndex: sourceIndex(i), t: s.t, target: s.id, ok });
           if (!ok)
             return fail3(i, `assertVisible: "${s.id}" not present in CDP tree`);
           break;
         }
         case "wait":
           await dispatch.settle();
-          trace.push({ t: s.t, ok: true });
+          trace.push({ sourceIndex: sourceIndex(i), t: s.t, ok: true });
           break;
         case "runFlow": {
           if (await dispatch.isVisible(s.whenVisible)) {
-            const sub = await replayFlow(s.commands, dispatch);
+            const sub = await replayFlow(s.commands, dispatch, { sourceIndex: sourceIndex(i) });
             trace.push(...sub.steps);
             if (!sub.passed) {
               return {
                 passed: false,
-                failedStepIndex: i + offset,
+                failedStepIndex: sourceIndex(i),
                 reason: sub.reason,
                 steps: trace
               };
             }
           } else {
-            trace.push({ t: s.t, target: s.whenVisible, ok: true });
+            trace.push({
+              sourceIndex: sourceIndex(i),
+              t: s.t,
+              target: s.whenVisible,
+              ok: true
+            });
           }
           break;
         }
       }
     } catch (e) {
-      trace.push({ t: s.t, target: "id" in s ? s.id : void 0, ok: false });
+      trace.push({
+        sourceIndex: sourceIndex(i),
+        t: s.t,
+        target: "id" in s ? s.id : void 0,
+        ok: false
+      });
       return fail3(i, e instanceof Error ? e.message : String(e));
     }
   }
@@ -71962,6 +71983,8 @@ function createRunActionHandler(deps = {}) {
       const retryPassed = retryEnv.ok === true && retryEnv.data?.passed === true;
       const retryOutput = readMaestroOutput(retryEnv);
       const retryFailureDetail = readMaestroFailureDetail(retryEnv, retryOutput);
+      const retryTerminal = readMaestroTerminal(retryEnv);
+      const retryFailure = !retryPassed ? parseMaestroFailure(retryOutput, retryTerminal) : void 0;
       const retryDeviceAuthority = readMaestroDeviceAuthority(retryEnv);
       probeDeviceId = retryDeviceAuthority?.reportedDeviceId ?? observedDeviceId;
       if (retryEnv.code === "DEVICE_AUTHORITY_MISMATCH") {
@@ -71984,14 +72007,8 @@ function createRunActionHandler(deps = {}) {
       const repairScore = repairEnv.data?.score;
       const repairTimestamp = reloadedAction.state.repairHistory.length > 0 ? reloadedAction.state.repairHistory[reloadedAction.state.repairHistory.length - 1].timestamp : void 0;
       let nextFailedSelector;
-      if (!retryPassed) {
-        try {
-          const retryFailure = parseMaestroFailure(retryOutput, readMaestroTerminal(retryEnv));
-          if (retryFailure.kind === "SELECTOR_NOT_FOUND" && retryFailure.selector && retryFailure.selector !== repairData.newSelector) {
-            nextFailedSelector = retryFailure.selector;
-          }
-        } catch {
-        }
+      if (retryFailure?.kind === "SELECTOR_NOT_FOUND" && retryFailure.selector && retryFailure.selector !== repairData.newSelector) {
+        nextFailedSelector = retryFailure.selector;
       }
       const autoRepair = {
         attempted: true,
@@ -72036,7 +72053,10 @@ function createRunActionHandler(deps = {}) {
         writes: writeDisclosure("auto-repair", persisted),
         firstAttemptOutput: boundedOutput(firstOutput),
         retryOutput: boundedOutput(retryOutput),
-        underlyingFailure: retryFailureDetail
+        underlyingFailure: retryFailureDetail,
+        ...retryFailure ? { failureKind: retryFailure.kind } : {},
+        ...retryFailure && "selector" in retryFailure && retryFailure.selector ? { failureSelector: retryFailure.selector } : {},
+        terminal: retryTerminal
       });
     } catch (err) {
       if (err instanceof SessionAuthorityError)
