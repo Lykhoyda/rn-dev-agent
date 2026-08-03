@@ -7855,38 +7855,6 @@ var init_metro_binding = __esm({
   }
 });
 
-// packages/rn-dev-agent-core/dist/session/process-owner.js
-function defaultProcessState(pid) {
-  try {
-    process.kill(pid, 0);
-    return "alive";
-  } catch (error) {
-    const code = error.code;
-    if (code === "ESRCH")
-      return "dead";
-    if (code === "EPERM")
-      return "alive";
-    return "unknown";
-  }
-}
-function inspectSessionOwner(owner, dependencies = {}) {
-  const state = (dependencies.processState ?? defaultProcessState)(owner.pid);
-  if (state === "dead")
-    return "mismatch";
-  if (state === "unknown")
-    return "unknown";
-  const observed = (dependencies.readBirth ?? readProcessBirth)(owner.pid);
-  if (!observed)
-    return "unknown";
-  return observed.token === owner.token ? "match" : "mismatch";
-}
-var init_process_owner = __esm({
-  "packages/rn-dev-agent-core/dist/session/process-owner.js"() {
-    "use strict";
-    init_process_birth();
-  }
-});
-
 // packages/rn-dev-agent-core/dist/session/authority-store.js
 import { chmodSync, lstatSync as lstatSync3, mkdirSync as mkdirSync3, statSync as statSync3 } from "node:fs";
 import { createRequire } from "node:module";
@@ -8635,20 +8603,6 @@ var init_registry = __esm({
           throw new SessionAuthorityError("SESSION_OWNER_LOST", "session close reservation did not persist");
         }
         return status;
-      }
-      clearAutomationDutyDuringClose(session) {
-        const now = this.#now();
-        this.#transaction(() => {
-          const row = asSession(this.#database.prepare("SELECT state, claim_epoch, bindings_json FROM sessions WHERE session_id = ?").get(session.sessionId));
-          if (!row || row.state !== "closing" || row.claim_epoch !== session.claimEpoch) {
-            throw new SessionAuthorityError("SESSION_OWNER_LOST", "only the unchanged closing session may clear its automation duty");
-          }
-          const bindings = JSON.parse(String(row.bindings_json));
-          bindings.automationDuty = null;
-          this.#database.prepare(`UPDATE sessions
-           SET bindings_json = ?, authority_version = authority_version + 1, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ? AND state = 'closing'`).run(JSON.stringify(bindings), now, session.sessionId, session.claimEpoch);
-        });
       }
       completeSessionClose(session) {
         const now = this.#now();
@@ -10549,25 +10503,11 @@ var init_maestro_run = __esm({
   }
 });
 
-// packages/rn-dev-agent-core/dist/session/runtime.js
-var init_runtime = __esm({
-  "packages/rn-dev-agent-core/dist/session/runtime.js"() {
-    "use strict";
-    init_process_birth();
-    init_process_owner();
-    init_registry();
-    init_secure_state_file();
-  }
-});
-
 // packages/rn-dev-agent-core/dist/session/managed-automation.js
 var OUTPUT_LIMIT;
 var init_managed_automation = __esm({
   "packages/rn-dev-agent-core/dist/session/managed-automation.js"() {
     "use strict";
-    init_secure_state_file();
-    init_process_birth();
-    init_runtime();
     OUTPUT_LIMIT = 10 * 1024 * 1024;
   }
 });
@@ -10701,7 +10641,6 @@ var init_device_arbiter = __esm({
     "use strict";
     init_utils();
     init_foreign_flow_gate();
-    init_managed_automation();
     init_public_diagnostics();
     DeviceSessionArbiter = class {
       flowLeaseHeldBy = null;
@@ -13891,8 +13830,34 @@ async function stopManagedMetro(binding, input, dependencies = {}) {
   return removeManagedMetroEvidenceSocketSafely(binding.runtimeEvidenceSocket, dependencies);
 }
 
+// packages/rn-dev-agent-core/dist/session/process-owner.js
+init_process_birth();
+function defaultProcessState(pid) {
+  try {
+    process.kill(pid, 0);
+    return "alive";
+  } catch (error) {
+    const code = error.code;
+    if (code === "ESRCH")
+      return "dead";
+    if (code === "EPERM")
+      return "alive";
+    return "unknown";
+  }
+}
+function inspectSessionOwner(owner, dependencies = {}) {
+  const state = (dependencies.processState ?? defaultProcessState)(owner.pid);
+  if (state === "dead")
+    return "mismatch";
+  if (state === "unknown")
+    return "unknown";
+  const observed = (dependencies.readBirth ?? readProcessBirth)(owner.pid);
+  if (!observed)
+    return "unknown";
+  return observed.token === owner.token ? "match" : "mismatch";
+}
+
 // packages/rn-dev-agent-core/dist/rn-session.js
-init_process_owner();
 init_registry();
 
 // packages/rn-dev-agent-core/dist/session/source-identity.js

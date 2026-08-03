@@ -31,6 +31,7 @@ export function maestroRefusalResult(result, fallbackMessage, meta) {
         exitCode: result.exitCode,
         signal: result.signal,
         cleanupEscalated: result.cleanupEscalated,
+        ...(result.cleanupRefusal ? { cleanupRefusal: result.cleanupRefusal } : {}),
     });
 }
 export function getMaestroRunnerPath() {
@@ -148,16 +149,20 @@ export async function runMaestroInline(yaml, opts) {
         }
         const output = (execution.stdout + '\n' + execution.stderr).trim();
         if (!execution.cleanupProven) {
+            const guidance = execution.cleanupRefusal
+                ? ` Process group: ${execution.cleanupRefusal.processGroup}. Run ${execution.cleanupRefusal.manualCommand}, then retry in this bridge process.`
+                : '';
             return {
                 passed: false,
                 output,
                 flowFile,
-                error: 'AUTOMATION_CLEANUP_UNPROVEN: Maestro ended, but owned process-group absence could not be confirmed. Run rn_session({ action: "recover_automation", confirmed: true }).',
+                error: `AUTOMATION_CLEANUP_UNPROVEN: Maestro ended, but owned process-group absence could not be confirmed.${guidance}`,
                 errorCode: 'AUTOMATION_CLEANUP_UNPROVEN',
                 timedOut: execution.timedOut,
                 exitCode: execution.code,
                 signal: execution.signal,
                 cleanupEscalated: execution.cleanupEscalated,
+                ...(execution.cleanupRefusal ? { cleanupRefusal: execution.cleanupRefusal } : {}),
             };
         }
         if (execution.timedOut) {

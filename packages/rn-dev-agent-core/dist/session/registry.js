@@ -746,24 +746,6 @@ export class SessionRegistry {
         }
         return status;
     }
-    clearAutomationDutyDuringClose(session) {
-        const now = this.#now();
-        this.#transaction(() => {
-            const row = asSession(this.#database
-                .prepare('SELECT state, claim_epoch, bindings_json FROM sessions WHERE session_id = ?')
-                .get(session.sessionId));
-            if (!row || row.state !== 'closing' || row.claim_epoch !== session.claimEpoch) {
-                throw new SessionAuthorityError('SESSION_OWNER_LOST', 'only the unchanged closing session may clear its automation duty');
-            }
-            const bindings = JSON.parse(String(row.bindings_json));
-            bindings.automationDuty = null;
-            this.#database
-                .prepare(`UPDATE sessions
-           SET bindings_json = ?, authority_version = authority_version + 1, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ? AND state = 'closing'`)
-                .run(JSON.stringify(bindings), now, session.sessionId, session.claimEpoch);
-        });
-    }
     completeSessionClose(session) {
         const now = this.#now();
         this.#transaction(() => {

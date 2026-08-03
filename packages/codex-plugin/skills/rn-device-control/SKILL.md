@@ -364,8 +364,8 @@ If the runner itself is down, the bridge returns an actionable `RN_FAST_RUNNER_D
 | Screenshot command hangs | Device not fully booted | Wait for home screen, verify with `adb shell getprop sys.boot_completed` |
 | `uiautomator dump` fails | Screen off or system UI blocking | Wake screen: `adb shell input keyevent KEYEVENT_WAKEUP` |
 | `pidof` not found | Older Android version (< API 24) | Use `ps | grep` fallback shown in Native Logs section |
-| `AUTOMATION_CLEANUP_UNPROVEN` | Plugin-owned inline Maestro cleanup could not be proven | Run `rn_session(action="recover_automation", confirmed=true)`; it refuses changed PID births, another device, or another session epoch |
-| `BUSY_FOREIGN_FLOW` | Genuinely foreign Maestro/XCTest owns the exact device | Wait for that owner; do not use `recover_automation` or force-kill it |
+| `AUTOMATION_CLEANUP_UNPROVEN` | Plugin-owned inline Maestro cleanup could not be proven | Run the returned manual `kill -TERM -<pgid>` command, then retry in the same bridge process |
+| `BUSY_FOREIGN_FLOW` | Genuinely foreign Maestro/XCTest owns the exact device | Wait for that owner; do not force-kill it |
 | `DEVICE_BUSY` / `DEVICE_CLAIM_CONFLICT` | In-flight compatibility operation / another live worktree claim | Wait or close the operation for `DEVICE_BUSY`; use explicit handoff or bind a different free simulator for claim conflict—never force-steal |
 
 ---

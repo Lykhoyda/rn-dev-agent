@@ -869,7 +869,6 @@ trackedTool('rn_session', 'Inspect and transition the fenced rn-dev-agent author
         'accept_handoff',
         'adopt_stale',
         'recover_arbiter',
-        'recover_automation',
         'preview_integration',
         'apply_integration',
         'restore_integration',

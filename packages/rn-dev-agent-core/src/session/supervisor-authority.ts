@@ -7,11 +7,6 @@ import type { SourceIdentity } from './source-identity.js';
 import { ensureSharedKnowledgeRoot } from './shared-knowledge-root.js';
 import { stopManagedMetro, type ManagedMetroBinding } from './managed-metro.js';
 import {
-  automationDutyStoreForClosingSession,
-  inspectAutomationDuty,
-  recoverAutomationDuty,
-} from './managed-automation.js';
-import {
   createAuthorityStateLayout,
   sessionRuntimeDirectory,
   writeSessionPublicReceipt,
@@ -56,8 +51,6 @@ export function createSupervisorAuthority(
     stopBoundRunner?: typeof stopBoundRunner;
     stopBoundRecorder?: typeof stopBoundRecorder;
     stopBoundObserve?: typeof stopBoundObserve;
-    inspectAutomation?: typeof inspectAutomationDuty;
-    recoverAutomation?: typeof recoverAutomationDuty;
   } = {},
 ): SupervisorAuthority {
   if (!input.supervisorBirth) {
@@ -233,32 +226,6 @@ export function createSupervisorAuthority(
           status = registry.beginSessionClose(session);
         }
         if (status) {
-          const device = status.bindings.device as
-            | { platform?: unknown; deviceId?: unknown }
-            | undefined;
-          if (
-            (device?.platform === 'ios' || device?.platform === 'android') &&
-            typeof device.deviceId === 'string'
-          ) {
-            const platform = device.platform as 'ios' | 'android';
-            const authorityStore = automationDutyStoreForClosingSession(registry, session);
-            const duty = dependencies.inspectAutomation
-              ? dependencies.inspectAutomation(platform, device.deviceId)
-              : inspectAutomationDuty(platform, device.deviceId, { authorityStore });
-            if (duty) {
-              const recoveryAuthority = {
-                sessionId: status.sessionId,
-                claimEpoch: status.claimEpoch,
-                platform,
-                deviceId: device.deviceId,
-              };
-              if (dependencies.recoverAutomation) {
-                await dependencies.recoverAutomation(recoveryAuthority);
-              } else {
-                await recoverAutomationDuty(recoveryAuthority, { authorityStore });
-              }
-            }
-          }
           const recorder = status.bindings.recorder as Record<string, unknown> | null | undefined;
           if (recorder) {
             const claimKey = `${String(recorder.platform)}:${String(recorder.deviceId)}`;
