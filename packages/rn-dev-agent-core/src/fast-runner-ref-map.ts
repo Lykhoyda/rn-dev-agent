@@ -53,6 +53,7 @@ export interface RefSignature {
 
 interface StoredRefRecord extends RefMetadata {
   flatIndex: number;
+  snapshotNodeIndex: number;
   nodeCount: number;
   snapshotGeneration: number;
   keyboardStateAtSnapshot: boolean | null;
@@ -352,9 +353,11 @@ export function updateRefMapFromFlat(
     const key = node.ref.startsWith('@') ? node.ref.slice(1) : node.ref;
     refMap.set(key, node.rect);
 
+    const numericRef = /^e(\d+)$/.exec(key);
     const meta: StoredRefRecord = {
       type: node.type,
       flatIndex: i,
+      snapshotNodeIndex: numericRef ? Number(numericRef[1]) : i,
       nodeCount: nodes.length,
       snapshotGeneration,
       keyboardStateAtSnapshot,
@@ -385,6 +388,10 @@ export function updateRefMapFromFlat(
 export interface FreshRefTarget {
   rect: ElementRect;
   snapshotGeneration: number;
+  snapshotNodeIndex: number;
+  snapshotElementType: string;
+  snapshotLabel?: string;
+  snapshotIdentifier?: string;
   keyboardStateAtSnapshot: boolean | null;
 }
 
@@ -406,6 +413,10 @@ export function getFreshRefTarget(
   return {
     rect,
     snapshotGeneration: record.snapshotGeneration,
+    snapshotNodeIndex: record.snapshotNodeIndex,
+    snapshotElementType: record.type,
+    ...(record.label !== undefined ? { snapshotLabel: record.label } : {}),
+    ...(record.identifier !== undefined ? { snapshotIdentifier: record.identifier } : {}),
     keyboardStateAtSnapshot: record.keyboardStateAtSnapshot,
   };
 }

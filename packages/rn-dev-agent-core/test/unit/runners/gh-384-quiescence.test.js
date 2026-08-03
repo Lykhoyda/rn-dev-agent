@@ -153,13 +153,13 @@ test('liveness detail carries capabilities from /health', async () => {
       status: 200,
       bodyOk: true,
       protocolVersion: 1,
-      capabilities: ['QUIESCENCE_BYPASS'],
+      capabilities: ['QUIESCENCE_BYPASS', 'EXACT_KEYBOARD_TARGET_GUARD'],
       commands: [...REQUIRED_IOS_COMMANDS],
     }),
     pluginVersion: null,
   });
   assert.equal(detail.liveness, 'alive');
-  assert.deepEqual(detail.capabilities, ['QUIESCENCE_BYPASS']);
+  assert.deepEqual(detail.capabilities, ['QUIESCENCE_BYPASS', 'EXACT_KEYBOARD_TARGET_GUARD']);
 });
 
 test('deviceSession health surfaces runnerCapabilities', async () => {

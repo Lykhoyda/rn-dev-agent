@@ -226,6 +226,22 @@ test('runner-native auto-dismiss (data.keyboardGuard, pre-lift), hierarchy uncha
   assert.equal(env.meta.tapRetried, undefined);
 });
 
+test('exact keyboard target, hierarchy unchanged → key gesture is never repeated', async () => {
+  let dispatches = 0;
+  const result = await settleWithRetryIfNoChange(
+    okResult({ tapped: true, keyboardGuard: 'keyboard_target' }),
+    async () => {
+      dispatches++;
+      return okResult({ tapped: true });
+    },
+    ctx,
+    policy,
+    depsWith([unchanged]),
+  );
+  assert.equal(dispatches, 0);
+  assert.equal(parse(result).meta.noUiChange, true);
+});
+
 test('control: data.keyboardGuard no_keyboard does not consume the retry budget', async () => {
   let dispatches = 0;
   await settleWithRetryIfNoChange(

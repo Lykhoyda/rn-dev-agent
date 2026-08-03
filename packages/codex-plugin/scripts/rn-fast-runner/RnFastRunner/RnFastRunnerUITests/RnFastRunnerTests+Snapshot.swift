@@ -256,6 +256,22 @@ extension RnFastRunnerTests {
     )
   }
 
+  func retainSnapshotTargets(_ nodes: [SnapshotNode]) {
+    retainedSnapshotTargets = Dictionary(uniqueKeysWithValues: nodes.map { node in
+      (
+        node.index,
+        RetainedSnapshotTarget(
+          generation: currentSnapshotGeneration,
+          index: node.index,
+          type: node.type,
+          label: node.label,
+          identifier: node.identifier,
+          rect: node.rect
+        )
+      )
+    })
+  }
+
   func snapshotRect(from frame: CGRect) -> SnapshotRect {
     return SnapshotRect(
       x: Double(frame.origin.x),
@@ -372,7 +388,7 @@ extension RnFastRunnerTests {
     return .infinite
   }
 
-  private func aggregatedLabel(for snapshot: XCUIElementSnapshot, depth: Int = 0) -> String? {
+  func aggregatedLabel(for snapshot: XCUIElementSnapshot, depth: Int = 0) -> String? {
     if depth > 4 { return nil }
     let text = snapshot.label.trimmingCharacters(in: .whitespacesAndNewlines)
     if !text.isEmpty { return text }

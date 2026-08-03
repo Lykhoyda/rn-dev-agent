@@ -19777,9 +19777,11 @@ function updateRefMapFromFlat(nodes, freshness = {}) {
       continue;
     const key = node.ref.startsWith("@") ? node.ref.slice(1) : node.ref;
     refMap.set(key, node.rect);
+    const numericRef = /^e(\d+)$/.exec(key);
     const meta = {
       type: node.type,
       flatIndex: i,
+      snapshotNodeIndex: numericRef ? Number(numericRef[1]) : i,
       nodeCount: nodes.length,
       snapshotGeneration,
       keyboardStateAtSnapshot
@@ -19812,6 +19814,10 @@ function getFreshRefTarget(ref, opts = {}) {
   return {
     rect,
     snapshotGeneration: record2.snapshotGeneration,
+    snapshotNodeIndex: record2.snapshotNodeIndex,
+    snapshotElementType: record2.type,
+    ...record2.label !== void 0 ? { snapshotLabel: record2.label } : {},
+    ...record2.identifier !== void 0 ? { snapshotIdentifier: record2.identifier } : {},
     keyboardStateAtSnapshot: record2.keyboardStateAtSnapshot
   };
 }
@@ -19977,13 +19983,13 @@ async function waitForKeyboardHidden(refreshSnapshot, sleep6 = (ms) => new Promi
   return last;
 }
 function nativeDismissTiers(via) {
-  return via === "native-control" ? ["native-control"] : ["native-control", via];
+  return via === "native-control" ? ["native-control"] : [via];
 }
 function nativeTiersAttempted(native) {
   if (!native.isError)
-    return ["native-control", "native-swipe"];
+    return ["native-control"];
   const text = native.content?.[0]?.text ?? "";
-  return text.includes("KEYBOARD_DISMISS_FAILED") ? ["native-control", "native-swipe"] : [];
+  return text.includes("KEYBOARD_DISMISS_FAILED") ? ["native-control"] : [];
 }
 async function dismissKeyboardWithParity(deps) {
   const native = await deps.nativeDismiss();
@@ -20243,7 +20249,7 @@ var init_runtime_paths = __esm({
 
 // packages/rn-dev-agent-core/dist/runners/protocol.js
 import { readFileSync as readFileSync6 } from "node:fs";
-function classifyRunnerCompatibility(health, pluginVersion, requiredCommands) {
+function classifyRunnerCompatibility(health, pluginVersion, requiredCommands, requiredFeatures) {
   if (health.protocolVersion === void 0)
     return { compatible: false, reason: "legacy" };
   if (health.protocolVersion < MIN_SUPPORTED_RUNNER_PROTOCOL) {
@@ -20260,6 +20266,13 @@ function classifyRunnerCompatibility(health, pluginVersion, requiredCommands) {
     const missing = requiredCommands.filter((c) => !advertised.has(c));
     if (missing.length > 0) {
       return { compatible: false, reason: "missing-commands", missing };
+    }
+  }
+  if (requiredFeatures !== void 0) {
+    const advertised = new Set(health.capabilities ?? []);
+    const missing = requiredFeatures.filter((feature) => !advertised.has(feature));
+    if (missing.length > 0) {
+      return { compatible: false, reason: "missing-features", missing };
     }
   }
   return { compatible: true };
@@ -20280,7 +20293,7 @@ function getPluginVersion() {
   }
   return cachedPluginVersion;
 }
-var RUNNER_PROTOCOL_VERSION, MIN_SUPPORTED_RUNNER_PROTOCOL, REQUIRED_IOS_COMMANDS, REQUIRED_ANDROID_COMMANDS, cachedPluginVersion;
+var RUNNER_PROTOCOL_VERSION, MIN_SUPPORTED_RUNNER_PROTOCOL, REQUIRED_IOS_COMMANDS, REQUIRED_IOS_FEATURES, REQUIRED_ANDROID_COMMANDS, cachedPluginVersion;
 var init_protocol = __esm({
   "packages/rn-dev-agent-core/dist/runners/protocol.js"() {
     "use strict";
@@ -20299,6 +20312,7 @@ var init_protocol = __esm({
       "keyboardDismiss",
       "status"
     ];
+    REQUIRED_IOS_FEATURES = ["EXACT_KEYBOARD_TARGET_GUARD"];
     REQUIRED_ANDROID_COMMANDS = [
       "tap",
       "type",
@@ -20898,6 +20912,7 @@ __export(rn_fast_runner_client_exports, {
   _resetCapabilitiesForTest: () => _resetCapabilitiesForTest,
   _resetQuiescenceAnnouncementForTest: () => _resetQuiescenceAnnouncementForTest,
   _resetStaleHittableWarnForTest: () => _resetStaleHittableWarnForTest,
+  _setCapabilitiesForTest: () => _setCapabilitiesForTest,
   _setFastRunnerStateForTest: () => _setFastRunnerStateForTest,
   _setFetchForTest: () => _setFetchForTest,
   _setHttpTimeoutForTest: () => _setHttpTimeoutForTest,
@@ -21010,6 +21025,9 @@ function getFastRunnerCapabilities() {
 }
 function _resetCapabilitiesForTest() {
   lastKnownCapabilities = [];
+}
+function _setCapabilitiesForTest(capabilities) {
+  lastKnownCapabilities = [...capabilities];
 }
 function _setFastRunnerStateForTest(state) {
   runnerState = state ? {
@@ -21611,14 +21629,16 @@ async function probeFastRunnerLivenessDetailed(deps = {}) {
     const compat = classifyRunnerCompatibility({
       ...res.protocolVersion !== void 0 ? { protocolVersion: res.protocolVersion } : {},
       ...res.runnerVersion !== void 0 ? { runnerVersion: res.runnerVersion } : {},
-      ...res.commands !== void 0 ? { commands: res.commands } : {}
-    }, plugin, REQUIRED_IOS_COMMANDS);
+      ...res.commands !== void 0 ? { commands: res.commands } : {},
+      ...res.capabilities !== void 0 ? { capabilities: res.capabilities } : {}
+    }, plugin, REQUIRED_IOS_COMMANDS, REQUIRED_IOS_FEATURES);
     if (!compat.compatible) {
       lastKnownCapabilities = [];
       return {
         liveness: "stale",
         staleReason: compat.reason,
-        ...compat.missing !== void 0 ? { missingCommands: compat.missing } : {},
+        ...compat.missing !== void 0 && compat.reason === "missing-commands" ? { missingCommands: compat.missing } : {},
+        ...compat.missing !== void 0 && compat.reason === "missing-features" ? { missingFeatures: compat.missing } : {},
         ...res.protocolVersion !== void 0 ? { runnerProtocolVersion: res.protocolVersion } : {},
         ...res.runnerVersion !== void 0 ? { runnerVersion: res.runnerVersion } : {}
       };
@@ -22026,6 +22046,14 @@ async function runIOS(args) {
     body.targetBounds = args.targetBounds;
   if (args.snapshotGeneration !== void 0)
     body.snapshotGeneration = args.snapshotGeneration;
+  if (args.snapshotNodeIndex !== void 0)
+    body.snapshotNodeIndex = args.snapshotNodeIndex;
+  if (args.snapshotElementType !== void 0)
+    body.snapshotElementType = args.snapshotElementType;
+  if (args.snapshotLabel !== void 0)
+    body.snapshotLabel = args.snapshotLabel;
+  if (args.snapshotIdentifier !== void 0)
+    body.snapshotIdentifier = args.snapshotIdentifier;
   if (args.keyboardStateAtSnapshot !== void 0)
     body.keyboardStateAtSnapshot = args.keyboardStateAtSnapshot;
   const mapRunnerDispatchError = (err) => {
@@ -22038,6 +22066,10 @@ async function runIOS(args) {
     }
     return null;
   };
+  const isExactKeyboardTarget = args.snapshotElementType === "Key" || args.snapshotElementType === "Keyboard";
+  if (isExactKeyboardTarget && (runnerState?.protocolVersion === 1 || !lastKnownCapabilities.includes("EXACT_KEYBOARD_TARGET_GUARD"))) {
+    return failResult("RN_FAST_RUNNER_STALE: the active iOS runner cannot safely validate exact keyboard targets; reopen the device session to rebuild before retrying.", "RN_FAST_RUNNER_STALE", { missingFeatures: ["EXACT_KEYBOARD_TARGET_GUARD"], dispatched: false });
+  }
   let keyboardRelayoutRecovered = false;
   if (withKeyboardGuard({}, args.command, process.env).guardKeyboard === true && runnerState?.protocolVersion === 1) {
     try {
@@ -22097,6 +22129,16 @@ async function runIOS(args) {
     body.y = Math.round(target.rect.y + target.rect.height / 2);
     body.targetBounds = target.rect;
     body.snapshotGeneration = target.snapshotGeneration;
+    body.snapshotNodeIndex = target.snapshotNodeIndex;
+    body.snapshotElementType = target.snapshotElementType;
+    if (target.snapshotLabel !== void 0)
+      body.snapshotLabel = target.snapshotLabel;
+    else
+      delete body.snapshotLabel;
+    if (target.snapshotIdentifier !== void 0)
+      body.snapshotIdentifier = target.snapshotIdentifier;
+    else
+      delete body.snapshotIdentifier;
     if (target.keyboardStateAtSnapshot !== null)
       body.keyboardStateAtSnapshot = target.keyboardStateAtSnapshot;
     return true;
@@ -22136,11 +22178,15 @@ async function runIOS(args) {
     if (args.command === "type" && typeof message === "string" && message.includes("main thread execution timed out")) {
       return containTypeTimeout(args);
     }
-    const failExtras = recovery ? { transportRecovery: recovery } : void 0;
+    const mutation = resp.error?.mutation;
+    const failExtras = {
+      ...recovery ? { transportRecovery: recovery } : {},
+      ...mutation !== void 0 ? { mutation } : {}
+    };
     if (code) {
-      return failResult(message, code, failExtras);
+      return failResult(message, code, Object.keys(failExtras).length > 0 ? failExtras : void 0);
     }
-    return failExtras ? failResult(message, failExtras) : failResult(message);
+    return Object.keys(failExtras).length > 0 ? failResult(message, failExtras) : failResult(message);
   }
   if (args.command === "snapshot" && resp.data && typeof resp.data === "object") {
     const data = resp.data;
@@ -24414,6 +24460,10 @@ function buildRunIOSArgs(cliArgs, bundleId) {
           ...target ? {
             targetBounds: target.rect,
             snapshotGeneration: target.snapshotGeneration,
+            snapshotNodeIndex: target.snapshotNodeIndex,
+            snapshotElementType: target.snapshotElementType,
+            ...target.snapshotLabel !== void 0 ? { snapshotLabel: target.snapshotLabel } : {},
+            ...target.snapshotIdentifier !== void 0 ? { snapshotIdentifier: target.snapshotIdentifier } : {},
             keyboardStateAtSnapshot: target.keyboardStateAtSnapshot
           } : {},
           ...bundleId ? { bundleId } : {}
@@ -24708,17 +24758,21 @@ function decideRunnerSpawn(input) {
   }
   return { action: "spawn", deviceId: input.deviceId };
 }
+function isArtifactStaleReason(reason) {
+  return reason === "missing-commands" || reason === "missing-features";
+}
 async function rebuildStaleRunnerArtifact(first, deviceId, bundleId, deps) {
   const authorityMismatch = first.staleReason === "authority-mismatch";
-  const missing = (first.missingCommands ?? []).join(", ") || "unknown";
-  const code = authorityMismatch ? "RUNNER_OWNERSHIP_MISMATCH" : "RUNNER_COMMANDS_STALE";
+  const missing = (first.missingCommands ?? first.missingFeatures ?? []).join(", ") || "unknown";
+  const missingKind = first.staleReason === "missing-features" ? "features" : "commands";
+  const code = authorityMismatch ? "RUNNER_OWNERSHIP_MISMATCH" : first.staleReason === "missing-features" ? "RN_FAST_RUNNER_STALE" : "RUNNER_COMMANDS_STALE";
   const plugin = deps.pluginVersion !== void 0 ? deps.pluginVersion : getPluginVersion();
   const budget = deps.rebuildBudget ?? runnerRebuildBudget;
   if (plugin !== null && budget.alreadyRebuiltFor(plugin)) {
     return {
       ok: false,
       code,
-      message: authorityMismatch ? `rn-fast-runner was already cold-rebuilt once for plugin v${plugin} and still reports an authority identity mismatch. If that rebuild failed transiently, delete the runner build/commands-rebuild.json marker and re-open to retry; otherwise update or reinstall the plugin.` : `rn-fast-runner was already cold-rebuilt once for plugin v${plugin} and still lacks required commands (missing: ${missing}). If that rebuild failed transiently (sim not booted, xcodebuild flake), delete the runner build/commands-rebuild.json marker and re-open to retry; otherwise update or reinstall the plugin.`
+      message: authorityMismatch ? `rn-fast-runner was already cold-rebuilt once for plugin v${plugin} and still reports an authority identity mismatch. If that rebuild failed transiently, delete the runner build/commands-rebuild.json marker and re-open to retry; otherwise update or reinstall the plugin.` : `rn-fast-runner was already cold-rebuilt once for plugin v${plugin} and still lacks required ${missingKind} (missing: ${missing}). If that rebuild failed transiently (sim not booted, xcodebuild flake), delete the runner build/commands-rebuild.json marker and re-open to retry; otherwise update or reinstall the plugin.`
     };
   }
   const acquire = deps.acquireBuildLock ?? acquireRunnerRebuildLock;
@@ -24750,13 +24804,13 @@ async function rebuildStaleRunnerArtifact(first, deviceId, bundleId, deps) {
   if (rebuilt.liveness === "alive") {
     return {
       ok: true,
-      note: authorityMismatch ? "runner artifact rebuilt (authority identity mismatch)" : `runner artifact rebuilt (missing commands: ${missing})`
+      note: authorityMismatch ? "runner artifact rebuilt (authority identity mismatch)" : `runner artifact rebuilt (missing ${missingKind}: ${missing})`
     };
   }
   return {
     ok: false,
     code,
-    message: authorityMismatch ? "rn-fast-runner still reports an authority identity mismatch after a cold rebuild." : `rn-fast-runner still lacks required commands after a cold rebuild (missing: ${(rebuilt.missingCommands ?? first.missingCommands ?? []).join(", ") || "unknown"}). The plugin checkout itself may be outdated \u2014 update the plugin, then re-open the device session.`
+    message: authorityMismatch ? "rn-fast-runner still reports an authority identity mismatch after a cold rebuild." : `rn-fast-runner still lacks required ${missingKind} after a cold rebuild (missing: ${(rebuilt.missingCommands ?? rebuilt.missingFeatures ?? first.missingCommands ?? first.missingFeatures ?? []).join(", ") || "unknown"}). The plugin checkout itself may be outdated \u2014 update the plugin, then re-open the device session.`
   };
 }
 async function ensureRunnerForCommand(deviceId, bundleId, deps = {}) {
@@ -24766,19 +24820,20 @@ async function ensureRunnerForCommand(deviceId, bundleId, deps = {}) {
   const adopt = deps.adopt ?? adoptPersistedFastRunnerState;
   adopt(deviceId ?? void 0);
   const first = await probe();
-  if (first.staleReason === "missing-commands" && deps.allowArtifactRebuild && deviceId) {
+  if (isArtifactStaleReason(first.staleReason) && deps.allowArtifactRebuild && deviceId) {
     return rebuildStaleRunnerArtifact(first, deviceId, bundleId, deps);
   }
   const decision = decideRunnerSpawn({ liveness: first.liveness, prebuilt: prebuilt(), deviceId });
   if (decision.action === "proceed")
     return { ok: true };
   if (decision.action === "error" && !(deps.allowArtifactRebuild && deviceId)) {
-    if (first.staleReason === "missing-commands") {
-      const missing = (first.missingCommands ?? []).join(", ") || "unknown";
+    if (isArtifactStaleReason(first.staleReason)) {
+      const missing = (first.missingCommands ?? first.missingFeatures ?? []).join(", ") || "unknown";
+      const kind = first.staleReason === "missing-features" ? "features" : "commands";
       return {
         ok: false,
-        code: "RUNNER_COMMANDS_STALE",
-        message: `rn-fast-runner artifact lacks required commands (missing: ${missing}). Re-open the device session (device_snapshot action=open appId=${bundleId} platform=ios) to rebuild it (cold build, several minutes).`
+        code: first.staleReason === "missing-features" ? "RN_FAST_RUNNER_STALE" : "RUNNER_COMMANDS_STALE",
+        message: `rn-fast-runner artifact lacks required ${kind} (missing: ${missing}). Re-open the device session (device_snapshot action=open appId=${bundleId} platform=ios) to rebuild it (cold build, several minutes).`
       };
     }
     if (first.staleReason === "authority-mismatch") {
@@ -24796,12 +24851,12 @@ async function ensureRunnerForCommand(deviceId, bundleId, deps = {}) {
     if (first.staleReason && (PROTOCOL_STALE_REASONS.has(first.staleReason) || first.staleReason === "authority-mismatch")) {
       return {
         ok: true,
-        note: first.staleReason === "missing-commands" ? "runner upgraded (stale command surface)" : first.staleReason === "authority-mismatch" ? "runner upgraded (authority identity mismatch)" : "runner upgraded (protocol/version mismatch)"
+        note: first.staleReason === "missing-commands" ? "runner upgraded (stale command surface)" : first.staleReason === "missing-features" ? "runner upgraded (stale feature surface)" : first.staleReason === "authority-mismatch" ? "runner upgraded (authority identity mismatch)" : "runner upgraded (protocol/version mismatch)"
       };
     }
     return { ok: true };
   }
-  if (after.staleReason && (after.staleReason === "missing-commands" || after.staleReason === "authority-mismatch")) {
+  if (after.staleReason && (isArtifactStaleReason(after.staleReason) || after.staleReason === "authority-mismatch")) {
     if (deps.allowArtifactRebuild && deviceId) {
       return rebuildStaleRunnerArtifact(after, deviceId, bundleId, deps);
     }
@@ -24812,11 +24867,12 @@ async function ensureRunnerForCommand(deviceId, bundleId, deps = {}) {
         message: `rn-fast-runner authority identity does not match this session. Re-open the device session (device_snapshot action=open appId=${bundleId} platform=ios) to rebuild it.`
       };
     }
-    const missing = (after.missingCommands ?? []).join(", ") || "unknown";
+    const missing = (after.missingCommands ?? after.missingFeatures ?? []).join(", ") || "unknown";
+    const kind = after.staleReason === "missing-features" ? "features" : "commands";
     return {
       ok: false,
-      code: "RUNNER_COMMANDS_STALE",
-      message: `rn-fast-runner artifact lacks required commands (missing: ${missing}). Re-open the device session (device_snapshot action=open appId=${bundleId} platform=ios) to rebuild it (cold build, several minutes).`
+      code: after.staleReason === "missing-features" ? "RN_FAST_RUNNER_STALE" : "RUNNER_COMMANDS_STALE",
+      message: `rn-fast-runner artifact lacks required ${kind} (missing: ${missing}). Re-open the device session (device_snapshot action=open appId=${bundleId} platform=ios) to rebuild it (cold build, several minutes).`
     };
   }
   if (after.staleReason && PROTOCOL_STALE_REASONS.has(after.staleReason)) {
@@ -24920,13 +24976,16 @@ function selfHealEnabled(env) {
   return v !== "0" && v !== "false";
 }
 function tapRetryPolicy(cliArgs, builtCommand, x, y, opts) {
-  const eligible = RETRYABLE_TAP_COMMANDS.has(builtCommand) && opts.retryIfNoChange !== false && selfHealEnabled(process.env) && !cliArgs.includes("--double-tap") && !cliArgs.includes("--count") && !cliArgs.includes("--hold-ms") && x !== void 0 && y !== void 0;
+  const ref = cliArgs[1];
+  const exactTarget = ref?.startsWith("@") ? getFreshRefTarget(ref) : null;
+  const keyboardTarget = exactTarget?.snapshotElementType === "Key" || exactTarget?.snapshotElementType === "Keyboard";
+  const eligible = !keyboardTarget && RETRYABLE_TAP_COMMANDS.has(builtCommand) && opts.retryIfNoChange !== false && selfHealEnabled(process.env) && !cliArgs.includes("--double-tap") && !cliArgs.includes("--count") && !cliArgs.includes("--hold-ms") && x !== void 0 && y !== void 0;
   return { eligible, targetKey: `${builtCommand}@${x},${y}` };
 }
 function hasConsumedTapRetryBudget(result) {
   try {
     const env = JSON.parse(result.content[0].text);
-    return env.meta?.transportRecovery !== void 0 || env.meta?.keyboardGuard === "auto_dismissed" || env.data?.keyboardGuard === "auto_dismissed";
+    return env.meta?.transportRecovery !== void 0 || env.meta?.keyboardGuard === "auto_dismissed" || env.data?.keyboardGuard === "auto_dismissed" || env.meta?.keyboardGuard === "keyboard_target" || env.data?.keyboardGuard === "keyboard_target";
   } catch {
     return false;
   }
@@ -25050,6 +25109,12 @@ async function runNative(cliArgs, opts = {}) {
       ios._verifyExactReadback = opts.verifyTypeReadback;
     }
     let healMeta = null;
+    if (ios._staleRef) {
+      const cachedTarget = getCachedMetadata(ios._staleRef);
+      if (cachedTarget?.type === "Key" || cachedTarget?.type === "Keyboard") {
+        return failResult("KEYBOARD_TARGET_STALE: the latest-snapshot keyboard target is stale; no gesture was performed. Refresh the snapshot and retry.", "KEYBOARD_TARGET_STALE", { mutation: "none" });
+      }
+    }
     if (ios._staleRef && selfHealEnabled(process.env)) {
       const healed = await healStaleRef(ios._staleRef, () => runIOS2({
         command: "snapshot",
@@ -25229,7 +25294,8 @@ var init_agent_device_wrapper = __esm({
       "version-skew",
       // GH #418: a respawn can fix a runner PROCESS older than the on-disk
       // artifact; artifact staleness surviving the respawn is handled separately.
-      "missing-commands"
+      "missing-commands",
+      "missing-features"
     ]);
     _runAgentDeviceOverrideForTest = null;
     _testSeamFused = false;
@@ -80649,7 +80715,7 @@ trackedTool("device_find", 'Find a UI element by visible text and optionally int
   exact: external_exports.boolean().optional().describe("Require exact label match (case-sensitive). Skips fuzzy matching entirely."),
   index: external_exports.number().int().min(0).optional().describe("Pick the Nth candidate (0-based) when multiple elements match. Short-circuits AMBIGUOUS_MATCH.")
 }, createDeviceFindHandler(getClient));
-trackedTool("device_press", "Tap a UI element by its @ref from device_snapshot, or at explicit raw x/y coordinates. Pass exactly one target form. A guarded raw-coordinate tap dismisses any visible keyboard before the single tap. Supports double-tap, repeated taps, long hold, and post-tap focus settle. Requires an open session. Stale @refs self-heal by identity re-resolution (meta.reResolved); swallowed taps auto-retry once unless keyboard/transport recovery already consumed that retry budget.", {
+trackedTool("device_press", 'Tap a UI element by its @ref from device_snapshot, or at explicit raw x/y coordinates. Pass exactly one target form. On iOS, a latest-snapshot Key/Keyboard ref is runner-validated against the current live keyboard and activated exactly once (meta.keyboardGuard="keyboard_target"); stale, forged, missing-keyboard, or raw-coordinate targets never receive that exemption. Ordinary app-content taps dismiss only through a safe native hide/dismiss control or optional JS tier, then refresh and uniquely re-resolve before one tap. Supports double-tap, repeated taps, long hold, and post-tap focus settle. Requires an open session. Stale ordinary app @refs self-heal by identity re-resolution (meta.reResolved); stale iOS Key/Keyboard refs refuse with KEYBOARD_TARGET_STALE and mutation:none. Swallowed ordinary taps auto-retry once, but validated keyboard targets and keyboard/transport recovery never replay.', {
   ref: external_exports.string().optional().describe('Element ref from device_snapshot (e.g. "e3" or "@e3"). Omit when using x/y.'),
   x: external_exports.number().optional().describe("Raw tap X coordinate; requires y and no ref"),
   y: external_exports.number().optional().describe("Raw tap Y coordinate; requires x and no ref"),
@@ -80658,7 +80724,7 @@ trackedTool("device_press", "Tap a UI element by its @ref from device_snapshot, 
   holdMs: external_exports.number().int().min(0).max(1e4).optional().describe("Hold duration in ms (for long-press via ref)"),
   waitForFocusMs: external_exports.number().int().min(0).max(5e3).optional().describe("Sleep this many ms after tap to let keyboard focus settle \u2014 useful in sequential press+fill flows where focus would otherwise not propagate."),
   settleTimeoutMs: external_exports.number().int().min(500).max(3e4).optional().describe("Override the post-action settle budget in ms (default 6000). Settle waits for the UI to stabilize after the action; see meta.settle in the result. Budget knob only \u2014 RN_SETTLE=0 disables settle."),
-  retryIfNoChange: external_exports.boolean().optional().describe("Story 05: when the tap produces no UI change, one automatic re-tap fires by default. Set false to disable (e.g. intentional no-op taps). RN_SELF_HEAL=0 disables globally.")
+  retryIfNoChange: external_exports.boolean().optional().describe("Story 05: when an ordinary tap produces no UI change, one automatic re-tap fires by default. Validated iOS Key/Keyboard targets and transport/keyboard recovery are never replayed. Set false to disable for other taps (e.g. intentional no-op taps). RN_SELF_HEAL=0 disables globally.")
 }, createDevicePressHandler(getClient));
 trackedTool("device_fill", 'Type text into an input field by its @ref from device_snapshot. Always re-taps the element first so keyboard focus is on the correct field even in sequential fills. On "no focused text input" errors, automatically falls back: Pressable\u2192TextInput resolution (common RN design-system pattern where outer Pressable wraps inner TextInput) \u2192 coordinate re-tap + retry \u2192 Android adb input / iOS Maestro inputText. Check meta.fallbackUsed in the result to see which strategy succeeded. Requires an open session.', {
   ref: external_exports.string().describe('Input field ref from device_snapshot (e.g. "e5" or "@e5")'),

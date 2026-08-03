@@ -68,6 +68,7 @@ class RnFastRunnerTests: XCTestCase {
   let scrollInteractionIdleTimeoutDefault: TimeInterval = 1.0
   var needsPostSnapshotInteractionDelay = false
   var currentSnapshotGeneration = 0
+  var retainedSnapshotTargets: [Int: RetainedSnapshotTarget] = [:]
   var needsFirstInteractionDelay = false
   let interactiveTypes: Set<XCUIElement.ElementType> = [
     .button,

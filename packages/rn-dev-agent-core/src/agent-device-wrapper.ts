@@ -485,6 +485,14 @@ export function buildRunIOSArgs(
             ? {
                 targetBounds: target.rect,
                 snapshotGeneration: target.snapshotGeneration,
+                snapshotNodeIndex: target.snapshotNodeIndex,
+                snapshotElementType: target.snapshotElementType,
+                ...(target.snapshotLabel !== undefined
+                  ? { snapshotLabel: target.snapshotLabel }
+                  : {}),
+                ...(target.snapshotIdentifier !== undefined
+                  ? { snapshotIdentifier: target.snapshotIdentifier }
+                  : {}),
                 keyboardStateAtSnapshot: target.keyboardStateAtSnapshot!,
               }
             : {}),
@@ -878,7 +886,12 @@ const PROTOCOL_STALE_REASONS = new Set([
   // GH #418: a respawn can fix a runner PROCESS older than the on-disk
   // artifact; artifact staleness surviving the respawn is handled separately.
   'missing-commands',
+  'missing-features',
 ]);
+
+function isArtifactStaleReason(reason: string | undefined): boolean {
+  return reason === 'missing-commands' || reason === 'missing-features';
+}
 
 // GH #418: the open-path rebuild tier. A respawn reuses the same build
 // artifact, so 'missing-commands' can only be fixed by invalidating
@@ -893,8 +906,13 @@ async function rebuildStaleRunnerArtifact(
   deps: EnsureRunnerDeps,
 ): Promise<EnsureRunnerResult> {
   const authorityMismatch = first.staleReason === 'authority-mismatch';
-  const missing = (first.missingCommands ?? []).join(', ') || 'unknown';
-  const code = authorityMismatch ? 'RUNNER_OWNERSHIP_MISMATCH' : 'RUNNER_COMMANDS_STALE';
+  const missing = (first.missingCommands ?? first.missingFeatures ?? []).join(', ') || 'unknown';
+  const missingKind = first.staleReason === 'missing-features' ? 'features' : 'commands';
+  const code = authorityMismatch
+    ? 'RUNNER_OWNERSHIP_MISMATCH'
+    : first.staleReason === 'missing-features'
+      ? 'RN_FAST_RUNNER_STALE'
+      : 'RUNNER_COMMANDS_STALE';
   const plugin = deps.pluginVersion !== undefined ? deps.pluginVersion : getPluginVersion();
   const budget = deps.rebuildBudget ?? runnerRebuildBudget;
   if (plugin !== null && budget.alreadyRebuiltFor(plugin)) {
@@ -906,7 +924,7 @@ async function rebuildStaleRunnerArtifact(
           `If that rebuild failed transiently, delete the runner build/commands-rebuild.json marker and re-open to retry; ` +
           `otherwise update or reinstall the plugin.`
         : `rn-fast-runner was already cold-rebuilt once for plugin v${plugin} and still lacks ` +
-          `required commands (missing: ${missing}). If that rebuild failed transiently (sim ` +
+          `required ${missingKind} (missing: ${missing}). If that rebuild failed transiently (sim ` +
           `not booted, xcodebuild flake), delete the runner build/commands-rebuild.json marker ` +
           `and re-open to retry; otherwise update or reinstall the plugin.`,
     };
@@ -947,7 +965,7 @@ async function rebuildStaleRunnerArtifact(
       ok: true,
       note: authorityMismatch
         ? 'runner artifact rebuilt (authority identity mismatch)'
-        : `runner artifact rebuilt (missing commands: ${missing})`,
+        : `runner artifact rebuilt (missing ${missingKind}: ${missing})`,
     };
   }
   return {
@@ -955,8 +973,8 @@ async function rebuildStaleRunnerArtifact(
     code,
     message: authorityMismatch
       ? 'rn-fast-runner still reports an authority identity mismatch after a cold rebuild.'
-      : `rn-fast-runner still lacks required commands after a cold rebuild ` +
-        `(missing: ${(rebuilt.missingCommands ?? first.missingCommands ?? []).join(', ') || 'unknown'}). ` +
+      : `rn-fast-runner still lacks required ${missingKind} after a cold rebuild ` +
+        `(missing: ${(rebuilt.missingCommands ?? rebuilt.missingFeatures ?? first.missingCommands ?? first.missingFeatures ?? []).join(', ') || 'unknown'}). ` +
         `The plugin checkout itself may be outdated — update the plugin, then re-open the device session.`,
   };
 }
@@ -981,7 +999,7 @@ export async function ensureRunnerForCommand(
   const first = await probe();
   // GH #418: artifact staleness at open — a respawn launches the same stale
   // .xctestrun, so skip it and invalidate up front (multi-LLM review amendment).
-  if (first.staleReason === 'missing-commands' && deps.allowArtifactRebuild && deviceId) {
+  if (isArtifactStaleReason(first.staleReason) && deps.allowArtifactRebuild && deviceId) {
     return rebuildStaleRunnerArtifact(first, deviceId, bundleId, deps);
   }
   const decision = decideRunnerSpawn({ liveness: first.liveness, prebuilt: prebuilt(), deviceId });
@@ -995,13 +1013,18 @@ export async function ensureRunnerForCommand(
     // GH #418 (multi-review): a stale runner missing commands surfaces the
     // typed refusal even when nothing is prebuilt — not the generic
     // not-prebuilt message, whose code would be RN_FAST_RUNNER_DOWN.
-    if (first.staleReason === 'missing-commands') {
-      const missing = (first.missingCommands ?? []).join(', ') || 'unknown';
+    if (isArtifactStaleReason(first.staleReason)) {
+      const missing =
+        (first.missingCommands ?? first.missingFeatures ?? []).join(', ') || 'unknown';
+      const kind = first.staleReason === 'missing-features' ? 'features' : 'commands';
       return {
         ok: false,
-        code: 'RUNNER_COMMANDS_STALE',
+        code:
+          first.staleReason === 'missing-features'
+            ? 'RN_FAST_RUNNER_STALE'
+            : 'RUNNER_COMMANDS_STALE',
         message:
-          `rn-fast-runner artifact lacks required commands (missing: ${missing}). ` +
+          `rn-fast-runner artifact lacks required ${kind} (missing: ${missing}). ` +
           `Re-open the device session (device_snapshot action=open appId=${bundleId} platform=ios) ` +
           `to rebuild it (cold build, several minutes).`,
       };
@@ -1034,9 +1057,11 @@ export async function ensureRunnerForCommand(
         note:
           first.staleReason === 'missing-commands'
             ? 'runner upgraded (stale command surface)'
-            : first.staleReason === 'authority-mismatch'
-              ? 'runner upgraded (authority identity mismatch)'
-              : 'runner upgraded (protocol/version mismatch)',
+            : first.staleReason === 'missing-features'
+              ? 'runner upgraded (stale feature surface)'
+              : first.staleReason === 'authority-mismatch'
+                ? 'runner upgraded (authority identity mismatch)'
+                : 'runner upgraded (protocol/version mismatch)',
       };
     }
     return { ok: true };
@@ -1045,7 +1070,7 @@ export async function ensureRunnerForCommand(
   // stale — mid-flow callers refuse fast (never a silent multi-minute build).
   if (
     after.staleReason &&
-    (after.staleReason === 'missing-commands' || after.staleReason === 'authority-mismatch')
+    (isArtifactStaleReason(after.staleReason) || after.staleReason === 'authority-mismatch')
   ) {
     // Open path, dead-runner-spawned-from-stale-prebuilt case: the first
     // probe said 'dead', so the up-front short-circuit couldn't fire — the
@@ -1063,12 +1088,14 @@ export async function ensureRunnerForCommand(
           `Re-open the device session (device_snapshot action=open appId=${bundleId} platform=ios) to rebuild it.`,
       };
     }
-    const missing = (after.missingCommands ?? []).join(', ') || 'unknown';
+    const missing = (after.missingCommands ?? after.missingFeatures ?? []).join(', ') || 'unknown';
+    const kind = after.staleReason === 'missing-features' ? 'features' : 'commands';
     return {
       ok: false,
-      code: 'RUNNER_COMMANDS_STALE',
+      code:
+        after.staleReason === 'missing-features' ? 'RN_FAST_RUNNER_STALE' : 'RUNNER_COMMANDS_STALE',
       message:
-        `rn-fast-runner artifact lacks required commands (missing: ${missing}). ` +
+        `rn-fast-runner artifact lacks required ${kind} (missing: ${missing}). ` +
         `Re-open the device session (device_snapshot action=open appId=${bundleId} platform=ios) ` +
         `to rebuild it (cold build, several minutes).`,
     };
@@ -1316,7 +1343,12 @@ export function tapRetryPolicy(
   y: number | undefined,
   opts: { retryIfNoChange?: boolean },
 ): TapRetryPolicy {
+  const ref = cliArgs[1];
+  const exactTarget = ref?.startsWith('@') ? getFreshRefTarget(ref) : null;
+  const keyboardTarget =
+    exactTarget?.snapshotElementType === 'Key' || exactTarget?.snapshotElementType === 'Keyboard';
   const eligible =
+    !keyboardTarget &&
     RETRYABLE_TAP_COMMANDS.has(builtCommand) &&
     opts.retryIfNoChange !== false &&
     selfHealEnabled(process.env) &&
@@ -1340,7 +1372,9 @@ function hasConsumedTapRetryBudget(result: ToolResult): boolean {
     return (
       env.meta?.transportRecovery !== undefined ||
       env.meta?.keyboardGuard === 'auto_dismissed' ||
-      env.data?.keyboardGuard === 'auto_dismissed'
+      env.data?.keyboardGuard === 'auto_dismissed' ||
+      env.meta?.keyboardGuard === 'keyboard_target' ||
+      env.data?.keyboardGuard === 'keyboard_target'
     );
   } catch {
     return false;
@@ -1549,6 +1583,16 @@ export async function runNative(
       ios._verifyExactReadback = opts.verifyTypeReadback;
     }
     let healMeta: Record<string, unknown> | null = null;
+    if (ios._staleRef) {
+      const cachedTarget = getCachedMetadata(ios._staleRef);
+      if (cachedTarget?.type === 'Key' || cachedTarget?.type === 'Keyboard') {
+        return failResult(
+          'KEYBOARD_TARGET_STALE: the latest-snapshot keyboard target is stale; no gesture was performed. Refresh the snapshot and retry.',
+          'KEYBOARD_TARGET_STALE',
+          { mutation: 'none' },
+        );
+      }
+    }
     if (ios._staleRef && selfHealEnabled(process.env)) {
       const healed = await healStaleRef(ios._staleRef, () =>
         runIOS({

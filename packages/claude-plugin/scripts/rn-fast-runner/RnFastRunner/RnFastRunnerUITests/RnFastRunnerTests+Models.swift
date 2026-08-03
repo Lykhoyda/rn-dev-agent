@@ -62,6 +62,10 @@ struct Command: Codable {
   var guardKeyboard: Bool? = nil
   var targetBounds: SnapshotRect? = nil
   var snapshotGeneration: Int? = nil
+  var snapshotNodeIndex: Int? = nil
+  var snapshotElementType: String? = nil
+  var snapshotLabel: String? = nil
+  var snapshotIdentifier: String? = nil
   var keyboardStateAtSnapshot: Bool? = nil
 }
 
@@ -206,10 +210,12 @@ struct DataPayload: Codable {
 struct ErrorPayload: Codable {
   let code: String?
   let message: String
+  let mutation: String?
 
-  init(code: String? = nil, message: String) {
+  init(code: String? = nil, message: String, mutation: String? = nil) {
     self.code = code
     self.message = message
+    self.mutation = mutation
   }
 }
 
@@ -244,6 +250,15 @@ struct SnapshotNode: Codable {
   let parentIndex: Int?
   let hiddenContentAbove: Bool?
   let hiddenContentBelow: Bool?
+}
+
+struct RetainedSnapshotTarget {
+  let generation: Int
+  let index: Int
+  let type: String
+  let label: String?
+  let identifier: String?
+  let rect: SnapshotRect
 }
 
 struct SnapshotOptions {

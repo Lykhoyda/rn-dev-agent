@@ -224,7 +224,7 @@ extension RnFastRunnerTests {
       if let x = command.x, let y = command.y {
         let touchFrame = resolvedTouchVisualizationFrame(app: activeApp, x: x, y: y)
         let keyboardGuardStartMs = currentUptimeMs()
-        let keyboardGuardStatus = applyKeyboardGuard(
+        let keyboardGuardAction = applyKeyboardGuard(
           app: activeApp,
           tapX: x,
           tapY: y,
@@ -232,17 +232,54 @@ extension RnFastRunnerTests {
           enabled: command.guardKeyboard != false
         )
         let keyboardGuardMs = currentUptimeMs() - keyboardGuardStartMs
-        if keyboardGuardStatus == "dismiss_failed" {
+        let keyboardGuardStatus: String
+        switch keyboardGuardAction {
+        case .targetStale:
           return Response(
             ok: false,
-            error: ErrorPayload(code: "KEYBOARD_DISMISS_FAILED", message: "KEYBOARD_DISMISS_FAILED: visible keyboard could not be dismissed by native control/swipe; no tap was performed. The client may attempt its JS tier.")
+            error: ErrorPayload(
+              code: "KEYBOARD_TARGET_STALE",
+              message: "KEYBOARD_TARGET_STALE: the latest-snapshot keyboard target no longer uniquely matches the live keyboard; no gesture was performed. Refresh the snapshot and retry.",
+              mutation: "none"
+            )
           )
-        }
-        if keyboardGuardStatus == "auto_dismissed_requires_reresolve" {
+        case .dismissFailed:
           return Response(
             ok: false,
-            error: ErrorPayload(code: "KEYBOARD_RELAYOUT_REQUIRED", message: "Keyboard dismissed; refresh the snapshot and re-resolve the target before one retry. No tap was performed.")
+            error: ErrorPayload(code: "KEYBOARD_DISMISS_FAILED", message: "KEYBOARD_DISMISS_FAILED: no safe native hide/dismiss control proved the keyboard hidden; no tap or swipe was performed. The client may attempt its JS tier.", mutation: "none")
           )
+        case .relayoutRequired:
+          return Response(
+            ok: false,
+            error: ErrorPayload(code: "KEYBOARD_RELAYOUT_REQUIRED", message: "Keyboard dismissed; refresh the snapshot and re-resolve the target before one retry. No tap was performed.", mutation: "none")
+          )
+        case .keyboardTarget(let retained, let point):
+          var activated = false
+          let timing = measureGesture {
+            activated = activateKeyboardTarget(
+              app: activeApp,
+              retained: retained,
+              point: point
+            )
+          }
+          guard activated else {
+            return Response(
+              ok: false,
+              error: ErrorPayload(code: "KEYBOARD_TARGET_STALE", message: "KEYBOARD_TARGET_STALE: the keyboard target changed before activation; no gesture was performed.", mutation: "none")
+            )
+          }
+          return Response(
+            ok: true,
+            data: DataPayload(
+              message: "tapped",
+              gestureStartUptimeMs: timing.gestureStartUptimeMs,
+              gestureEndUptimeMs: timing.gestureEndUptimeMs,
+              keyboardGuard: "keyboard_target",
+              keyboardGuardMs: keyboardGuardMs
+            )
+          )
+        case .proceed(let status):
+          keyboardGuardStatus = status
         }
         var outcome = RunnerInteractionOutcome.performed
         let timing = measureGesture {
@@ -368,7 +405,7 @@ extension RnFastRunnerTests {
       let duration = (command.durationMs ?? 800) / 1000.0
       let touchFrame = resolvedTouchVisualizationFrame(app: activeApp, x: x, y: y)
       let keyboardGuardStartMs = currentUptimeMs()
-      let keyboardGuardStatus = applyKeyboardGuard(
+      let keyboardGuardAction = applyKeyboardGuard(
         app: activeApp,
         tapX: x,
         tapY: y,
@@ -376,17 +413,51 @@ extension RnFastRunnerTests {
         enabled: command.guardKeyboard != false
       )
       let keyboardGuardMs = currentUptimeMs() - keyboardGuardStartMs
-      if keyboardGuardStatus == "dismiss_failed" {
+      let keyboardGuardStatus: String
+      switch keyboardGuardAction {
+      case .targetStale:
         return Response(
           ok: false,
-          error: ErrorPayload(code: "KEYBOARD_DISMISS_FAILED", message: "KEYBOARD_DISMISS_FAILED: visible keyboard could not be dismissed by native control/swipe; no tap was performed. The client may attempt its JS tier.")
+          error: ErrorPayload(code: "KEYBOARD_TARGET_STALE", message: "KEYBOARD_TARGET_STALE: the keyboard target changed before activation; no gesture was performed.", mutation: "none")
         )
-      }
-      if keyboardGuardStatus == "auto_dismissed_requires_reresolve" {
+      case .dismissFailed:
         return Response(
           ok: false,
-          error: ErrorPayload(code: "KEYBOARD_RELAYOUT_REQUIRED", message: "Keyboard dismissed; refresh the snapshot and re-resolve the target before one retry. No tap was performed.")
+          error: ErrorPayload(code: "KEYBOARD_DISMISS_FAILED", message: "KEYBOARD_DISMISS_FAILED: no safe native hide/dismiss control proved the keyboard hidden; no long press or swipe was performed. The client may attempt its JS tier.", mutation: "none")
         )
+      case .relayoutRequired:
+        return Response(
+          ok: false,
+          error: ErrorPayload(code: "KEYBOARD_RELAYOUT_REQUIRED", message: "Keyboard dismissed; refresh the snapshot and re-resolve the target before one retry. No long press was performed.", mutation: "none")
+        )
+      case .keyboardTarget(let retained, let point):
+        var activated = false
+        let timing = measureGesture {
+          activated = activateKeyboardTarget(
+            app: activeApp,
+            retained: retained,
+            point: point,
+            duration: duration
+          )
+        }
+        guard activated else {
+          return Response(
+            ok: false,
+            error: ErrorPayload(code: "KEYBOARD_TARGET_STALE", message: "KEYBOARD_TARGET_STALE: the keyboard target changed before activation; no gesture was performed.", mutation: "none")
+          )
+        }
+        return Response(
+          ok: true,
+          data: DataPayload(
+            message: "long pressed",
+            gestureStartUptimeMs: timing.gestureStartUptimeMs,
+            gestureEndUptimeMs: timing.gestureEndUptimeMs,
+            keyboardGuard: "keyboard_target",
+            keyboardGuardMs: keyboardGuardMs
+          )
+        )
+      case .proceed(let status):
+        keyboardGuardStatus = status
       }
       var outcome = RunnerInteractionOutcome.performed
       let timing = measureGesture {
@@ -638,12 +709,12 @@ extension RnFastRunnerTests {
         scope: command.scope,
         raw: command.raw ?? false
       )
-      if options.raw {
-        needsPostSnapshotInteractionDelay = true
-        return Response(ok: true, data: snapshotRaw(app: activeApp, options: options))
-      }
+      let payload = options.raw
+        ? snapshotRaw(app: activeApp, options: options)
+        : snapshotFast(app: activeApp, options: options)
+      retainSnapshotTargets(payload.nodes ?? [])
       needsPostSnapshotInteractionDelay = true
-      return Response(ok: true, data: snapshotFast(app: activeApp, options: options))
+      return Response(ok: true, data: payload)
     case .screenshot:
       let screenshot: XCUIScreenshot
 #if os(macOS)
@@ -742,7 +813,7 @@ extension RnFastRunnerTests {
           ok: false,
           error: ErrorPayload(
             code: "KEYBOARD_DISMISS_FAILED",
-            message: "Unable to dismiss the iOS keyboard via native dismiss control or swipe"
+            message: "Unable to dismiss the iOS keyboard via a safe native hide/dismiss control"
           )
         )
       }

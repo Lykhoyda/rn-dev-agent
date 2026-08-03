@@ -9,7 +9,7 @@ import {
   _setRunnerStateForTest,
   _setFetchForTest,
 } from '../../dist/runners/rn-fast-runner-client.js';
-import { REQUIRED_IOS_COMMANDS } from '../../dist/runners/protocol.js';
+import { REQUIRED_IOS_COMMANDS, REQUIRED_IOS_FEATURES } from '../../dist/runners/protocol.js';
 
 const STATE = { pid: 1, port: 22088, deviceId: 'U1', bundleId: 'com.example' };
 const deps = (probeBody, plugin = '0.99.0') => ({
@@ -19,7 +19,13 @@ const deps = (probeBody, plugin = '0.99.0') => ({
   clearState: () => {},
   pluginVersion: plugin,
 });
-const HEALTHY = { ok: true, status: 200, bodyOk: true, protocolVersion: 1 };
+const HEALTHY = {
+  ok: true,
+  status: 200,
+  bodyOk: true,
+  protocolVersion: 1,
+  capabilities: [...REQUIRED_IOS_FEATURES],
+};
 
 test('gh-418 gate: full command surface → alive', async () => {
   const d = await probeFastRunnerLivenessDetailed(

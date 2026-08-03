@@ -136,15 +136,15 @@ export interface KeyboardDismissDeps {
 }
 
 function nativeDismissTiers(via: string): string[] {
-  return via === 'native-control' ? ['native-control'] : ['native-control', via];
+  return via === 'native-control' ? ['native-control'] : [via];
 }
 
 // The runner only answers KEYBOARD_DISMISS_FAILED after running its own native
 // tiers; any other error means the command never reached them.
 function nativeTiersAttempted(native: ToolResult): string[] {
-  if (!native.isError) return ['native-control', 'native-swipe'];
+  if (!native.isError) return ['native-control'];
   const text = native.content?.[0]?.text ?? '';
-  return text.includes('KEYBOARD_DISMISS_FAILED') ? ['native-control', 'native-swipe'] : [];
+  return text.includes('KEYBOARD_DISMISS_FAILED') ? ['native-control'] : [];
 }
 
 /** Shared standalone/batch dismissal chain with an independent hidden-state check. */

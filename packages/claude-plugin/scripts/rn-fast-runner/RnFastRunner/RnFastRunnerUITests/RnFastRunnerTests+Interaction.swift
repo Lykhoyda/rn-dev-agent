@@ -7,6 +7,14 @@ enum RunnerInteractionOutcome {
   case unsupported(String)
 }
 
+enum KeyboardGuardAction {
+  case proceed(String)
+  case keyboardTarget(RetainedSnapshotTarget, CGPoint)
+  case targetStale
+  case dismissFailed
+  case relayoutRequired
+}
+
 // MARK: - tvOS Remote Stubs
 //
 // The TvRemote module was intentionally dropped at import time (see
@@ -337,24 +345,16 @@ extension RnFastRunnerTests {
     let visible = isKeyboardVisible(app: app)
     return (wasVisible: true, dismissed: !visible, visible: visible, via: "native-control")
 #else
-    // Control first: a swipe that starts on a letter key initiates QuickPath
-    // slide-typing and silently mutates the focused field (device-proven).
+    // Automatic dismissal is mutation-sensitive. Only a positively identified
+    // hide/dismiss button inside the keyboard is safe; never drag through keys,
+    // synthesize Return/Done, or activate an app-owned accessory toolbar.
     if tapKeyboardDismissControl(app: app) {
       sleepFor(0.2)
       if !isKeyboardVisible(app: app) {
         return (wasVisible: true, dismissed: true, visible: false, via: "native-control")
       }
     }
-
-    swipeKeyboardDownFromTopEdge(app: app)
-    sleepFor(0.2)
-    let visible = isKeyboardVisible(app: app)
-    return (
-      wasVisible: true,
-      dismissed: !visible,
-      visible: visible,
-      via: visible ? nil : "native-swipe"
-    )
+    return (wasVisible: true, dismissed: false, visible: true, via: nil)
 #endif
   }
 
@@ -371,15 +371,42 @@ extension RnFastRunnerTests {
     tapY: Double,
     command: Command,
     enabled: Bool
-  ) -> String {
+  ) -> KeyboardGuardAction {
 #if os(tvOS)
-    return "off"
+    return .proceed("off")
 #else
-    guard enabled else { return "off" }
-    guard let keyboardFrame = keyboardFrameIfVisible(app: app) else { return "no_keyboard" }
+    let retained = command.snapshotNodeIndex.flatMap { retainedSnapshotTargets[$0] }
+    switch KeyboardGuard.validateKeyboardDescriptor(
+      command: command,
+      retained: retained,
+      currentGeneration: currentSnapshotGeneration,
+      appFrame: app.frame
+    ) {
+    case .stale:
+      return .targetStale
+    case .keyboardTarget:
+      guard let retained,
+            keyboardFrameIfVisible(app: app) != nil
+      else { return .targetStale }
+      return .keyboardTarget(retained, CGPoint(x: tapX, y: tapY))
+    case .ordinary:
+      break
+    }
+    if command.targetBounds == nil,
+       let keyboardFrame = keyboardFrameIfVisible(app: app),
+       keyboardFrame.contains(CGPoint(x: tapX, y: tapY)) {
+      return .targetStale
+    }
+    guard enabled else { return .proceed("off") }
 
+    guard let keyboardFrame = keyboardFrameIfVisible(app: app) else {
+      return .proceed("no_keyboard")
+    }
     let targetRect = command.targetBounds.map {
       CGRect(x: $0.x, y: $0.y, width: $0.width, height: $0.height)
+    }
+    if targetRect == nil {
+      return .proceed("not_occluded")
     }
     let targetOnScreen = targetRect.map {
       KeyboardGuard.isProvenOnScreen(appFrame: app.frame, targetRect: $0)
@@ -395,58 +422,95 @@ extension RnFastRunnerTests {
          targetRect: targetRect,
          minHeight: 120
        ) {
-      return "not_occluded"
+      return .proceed("not_occluded")
     }
 
-    // Captain-corrected policy: unknown geometry is never blind-tapped under
-    // a visible keyboard. Dismiss first; ref-based callers then re-snapshot
-    // and re-resolve before their one retry.
     let dismissal = dismissKeyboard(app: app)
-    guard dismissal.dismissed && !dismissal.visible else { return "dismiss_failed" }
-    return targetRect == nil ? "auto_dismissed" : "auto_dismissed_requires_reresolve"
+    guard dismissal.dismissed && !dismissal.visible else { return .dismissFailed }
+    return targetRect == nil ? .proceed("auto_dismissed") : .relayoutRequired
 #endif
   }
 
-  private func swipeKeyboardDownFromTopEdge(app: XCUIApplication) {
-#if os(tvOS)
-    return
-#else
-    let keyboard = app.keyboards.firstMatch
-    guard keyboard.exists else { return }
-    // Anchor on the keyboard's very top edge (predictive/accessory band) rather
-    // than its centre, so the drag never begins on a letter key.
-    let start = keyboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.02))
-    let end = keyboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 1.5))
-    start.press(forDuration: 0.05, thenDragTo: end)
-#endif
+  private func resolveLiveKeyboardTarget(
+    app: XCUIApplication,
+    retained: RetainedSnapshotTarget
+  ) -> XCUIElement? {
+    var candidates: [XCUIElement] = []
+    let exceptionMessage = RunnerObjCExceptionCatcher.catchException({
+      if retained.type == "Keyboard" {
+        candidates = app.keyboards.allElementsBoundByIndex
+      } else if retained.type == "Key" {
+        candidates = app.keyboards.keys.allElementsBoundByIndex
+      }
+    })
+    guard exceptionMessage == nil else { return nil }
+    let matches = candidates.filter { element in
+      let exists = element.exists
+      let hittable = element.isHittable
+      guard exists, hittable else { return false }
+      guard let snapshot = try? element.snapshot() else { return false }
+      let snapshotLabel = aggregatedLabel(for: snapshot)
+        ?? snapshot.label.trimmingCharacters(in: .whitespacesAndNewlines)
+      let label = snapshotLabel.isEmpty ? nil : snapshotLabel
+      let snapshotIdentifier = snapshot.identifier.trimmingCharacters(in: .whitespacesAndNewlines)
+      let identifier = snapshotIdentifier.isEmpty ? nil : snapshotIdentifier
+      return KeyboardGuard.matchesLiveKeyboardTarget(
+        retained: retained,
+        candidateType: elementTypeName(element.elementType),
+        candidateLabel: label,
+        candidateIdentifier: identifier,
+        candidateFrame: element.frame,
+        exists: exists,
+        hittable: hittable
+      )
+    }
+    return matches.count == 1 ? matches[0] : nil
+  }
+
+  func activateKeyboardTarget(
+    app: XCUIApplication,
+    retained: RetainedSnapshotTarget,
+    point: CGPoint,
+    duration: TimeInterval? = nil
+  ) -> Bool {
+    guard let element = resolveLiveKeyboardTarget(app: app, retained: retained) else {
+      return false
+    }
+    let frame = element.frame
+    let expectedFrame = CGRect(
+      x: retained.rect.x,
+      y: retained.rect.y,
+      width: retained.rect.width,
+      height: retained.rect.height
+    )
+    guard KeyboardGuard.canActivateKeyboardTarget(
+      expectedFrame: expectedFrame,
+      liveFrame: frame,
+      keyboardFrame: keyboardFrameIfVisible(app: app),
+      point: point
+    ) else { return false }
+    if let duration {
+      element.press(forDuration: duration)
+    } else {
+      element.tap()
+    }
+    return true
   }
 
   private func tapKeyboardDismissControl(app: XCUIApplication) -> Bool {
 #if os(tvOS)
     return false
 #else
-    let keyboardFrame = app.keyboards.firstMatch.frame
-    for label in ["Hide keyboard", "Dismiss keyboard", "Done"] {
-      let candidates = [
-        app.keyboards.buttons[label],
-        app.keyboards.keys[label],
-        app.keyboards.toolbars.buttons[label],
-      ]
-      if let hittable = candidates.first(where: { $0.exists && $0.isHittable }) {
-        hittable.tap()
-        return true
-      }
-
-      let toolbarButtonPredicate = NSPredicate(
-        format: "label == %@ OR identifier == %@",
-        label,
-        label
-      )
-      let toolbarButtons = app.toolbars.buttons
-        .matching(toolbarButtonPredicate)
-        .allElementsBoundByIndex
-      if let hittable = toolbarButtons.first(where: {
-        $0.exists && $0.isHittable && isKeyboardAccessoryControl($0, keyboardFrame: keyboardFrame)
+    for label in ["Hide keyboard", "Dismiss keyboard"] {
+      let predicate = NSPredicate(format: "label == %@ OR identifier == %@", label, label)
+      let candidates = app.keyboards.buttons.matching(predicate).allElementsBoundByIndex
+      if let hittable = candidates.first(where: {
+        $0.exists && $0.isHittable && KeyboardGuard.isSafeDismissControl(
+          type: elementTypeName($0.elementType),
+          label: $0.label.isEmpty ? nil : $0.label,
+          identifier: $0.identifier.isEmpty ? nil : $0.identifier,
+          insideKeyboard: true
+        )
       }) {
         hittable.tap()
         return true
@@ -456,13 +520,6 @@ extension RnFastRunnerTests {
 #endif
   }
 
-  private func isKeyboardAccessoryControl(_ element: XCUIElement, keyboardFrame: CGRect) -> Bool {
-    let frame = element.frame
-    guard !frame.isEmpty && !keyboardFrame.isEmpty else {
-      return false
-    }
-    return frame.intersects(keyboardFrame) || abs(frame.maxY - keyboardFrame.minY) <= 80
-  }
 
   private func moveCaretToEnd(element: XCUIElement) {
 #if os(tvOS)

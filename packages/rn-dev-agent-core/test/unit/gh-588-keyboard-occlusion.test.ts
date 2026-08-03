@@ -35,6 +35,9 @@ test('GH-588 Slice D: guarded ref carries versioned fresh bounds and keyboard st
   assert.deepEqual(getFreshRefTarget('@e7'), {
     rect: node.rect,
     snapshotGeneration: 41,
+    snapshotNodeIndex: 7,
+    snapshotElementType: 'Button',
+    snapshotIdentifier: 'wizard-next-btn',
     keyboardStateAtSnapshot: true,
   });
   const args = buildRunIOSArgs(['press', '@e7']);
@@ -96,7 +99,7 @@ test('GH-588 Slice D: hideKeyboard reaches JS, polls to proven hidden state, and
   };
   assert.equal(envelope.ok, true);
   assert.equal(envelope.data?.via, 'js');
-  assert.deepEqual(envelope.data?.attemptedTiers, ['native-control', 'native-swipe', 'js']);
+  assert.deepEqual(envelope.data?.attemptedTiers, ['native-control', 'js']);
   assert.equal(snapshots, 2);
 });
 

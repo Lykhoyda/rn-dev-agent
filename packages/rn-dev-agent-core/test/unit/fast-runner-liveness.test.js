@@ -6,7 +6,7 @@ import {
   probeFastRunnerLiveness,
   reapStaleFastRunner,
 } from '../../dist/runners/rn-fast-runner-client.js';
-import { REQUIRED_IOS_COMMANDS } from '../../dist/runners/protocol.js';
+import { REQUIRED_IOS_COMMANDS, REQUIRED_IOS_FEATURES } from '../../dist/runners/protocol.js';
 
 // M7 / D666 — hermetic tests for the tri-state fast-runner liveness probe.
 // Mirrors the injectable-deps pattern from test/unit/lockfile.test.js so we
@@ -83,6 +83,7 @@ test('M7 probe: returns alive when PID lives and /health returns {ok:true}', asy
       bodyOk: true,
       protocolVersion: 1,
       commands: [...REQUIRED_IOS_COMMANDS],
+      capabilities: [...REQUIRED_IOS_FEATURES],
     }),
     pluginVersion: null,
   });

@@ -23,6 +23,7 @@ export const REQUIRED_IOS_COMMANDS = [
     'keyboardDismiss',
     'status',
 ];
+export const REQUIRED_IOS_FEATURES = ['EXACT_KEYBOARD_TARGET_GUARD'];
 export const REQUIRED_ANDROID_COMMANDS = [
     'tap',
     'type',
@@ -35,7 +36,7 @@ export const REQUIRED_ANDROID_COMMANDS = [
     'dismissKeyboard',
     'status',
 ];
-export function classifyRunnerCompatibility(health, pluginVersion, requiredCommands) {
+export function classifyRunnerCompatibility(health, pluginVersion, requiredCommands, requiredFeatures) {
     if (health.protocolVersion === undefined)
         return { compatible: false, reason: 'legacy' };
     if (health.protocolVersion < MIN_SUPPORTED_RUNNER_PROTOCOL) {
@@ -56,6 +57,13 @@ export function classifyRunnerCompatibility(health, pluginVersion, requiredComma
         const missing = requiredCommands.filter((c) => !advertised.has(c));
         if (missing.length > 0) {
             return { compatible: false, reason: 'missing-commands', missing };
+        }
+    }
+    if (requiredFeatures !== undefined) {
+        const advertised = new Set(health.capabilities ?? []);
+        const missing = requiredFeatures.filter((feature) => !advertised.has(feature));
+        if (missing.length > 0) {
+            return { compatible: false, reason: 'missing-features', missing };
         }
     }
     return { compatible: true };

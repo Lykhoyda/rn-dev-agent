@@ -279,7 +279,7 @@ test('GH-588 V6: success-shaped fill fails closed when settle observes runner au
           ok: true,
           protocolVersion: 2,
           runnerVersion: pluginVersion,
-          capabilities: ['SCREEN_STATIC', 'HONEST_HITTABLE'],
+          capabilities: ['SCREEN_STATIC', 'HONEST_HITTABLE', 'EXACT_KEYBOARD_TARGET_GUARD'],
           commands: REQUIRED_IOS_COMMANDS,
         }),
         { status: 200, headers: { 'content-type': 'application/json' } },
