@@ -14,6 +14,7 @@ import {
   sanitizeAutomationProcessLines,
   sanitizePublicDiagnostic,
 } from '../../dist/util/public-diagnostics.js';
+import { captureAndResizeScreenshot } from '../../dist/tools/device-list.js';
 
 const UDID = '7A6033C8-9291-4B0B-80B9-46024EEDF7D7';
 
@@ -45,17 +46,59 @@ test('iOS screenshot failure preserves structured backend evidence without cross
     }),
   });
   try {
-    const result = await tryRawScreenshot('ios', '/proof/failure.jpg', UDID);
+    const localPath = '/Users/alice/checkout/proof/failure.jpg';
+    const result = await tryRawScreenshot('ios', localPath, UDID);
     assert.equal(result.ok, false);
     assert.equal(resolverCalls, 0);
     assert.equal(result.capture?.backend, 'simctl');
     assert.equal(result.capture?.exitCode, 2);
-    assert.equal(result.capture?.outputPath, '/proof/failure.jpg');
+    assert.equal(result.capture?.outputPath, '<local-path>/failure.jpg');
+    assert.equal(result.capture?.argv.at(-1), '<output-path>');
     assert.equal(result.capture?.format, 'jpeg');
     assert.doesNotMatch(JSON.stringify(result), new RegExp(UDID));
-    assert.doesNotMatch(JSON.stringify(result), /Users\/alice/);
+    assert.doesNotMatch(JSON.stringify(result), /Users\/alice|checkout\/proof/);
   } finally {
     _resetForTest();
+  }
+});
+
+test('public screenshot failure sanitizes every absolute path evidence field', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'rn-584-public-shot-'));
+  const path = join(dir, 'private-checkout', 'failure.png');
+  _setForTest({
+    iosCapturer: async (id, outputPath) => ({
+      ok: false,
+      backend: 'simctl',
+      argv: ['xcrun', 'simctl', 'io', id, 'screenshot', outputPath],
+      exitCode: 1,
+      signal: null,
+      timedOut: false,
+      stderr: `permission denied at ${outputPath}`,
+      outputPath,
+      format: 'png',
+      device: id,
+      localDiagnostic: {
+        identitySource: 'authority-session-state',
+        instruction: 'resolve exact identity locally',
+      },
+    }),
+  });
+  try {
+    const result = await captureAndResizeScreenshot({
+      path,
+      platform: 'ios',
+      platformExplicit: true,
+      deviceId: UDID,
+    });
+    const envelope = JSON.parse(result.content[0]!.text) as Record<string, any>;
+    assert.equal(envelope.ok, false);
+    assert.equal(envelope.meta.capture.outputPath, '<local-path>/failure.png');
+    assert.equal(envelope.meta.capture.argv.at(-1), '<output-path>');
+    assert.doesNotMatch(JSON.stringify(envelope), new RegExp(dir));
+    assert.doesNotMatch(JSON.stringify(envelope), new RegExp(UDID));
+  } finally {
+    _resetForTest();
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 
@@ -75,6 +118,8 @@ test('default iOS capturer preserves exit/signal/timeout and validates a non-emp
     assert.equal(failure.exitCode, 9);
     assert.equal(failure.signal, 'SIGTERM');
     assert.equal(failure.timedOut, true);
+    assert.equal(failure.outputPath, `<local-path>/shot.png`);
+    assert.doesNotMatch(JSON.stringify(failure), new RegExp(dir));
     assert.doesNotMatch(failure.stderr, /Users\/alice|7A6033C8/);
 
     const empty = await captureIosScreenshot(UDID, path, async () => ({ stdout: '', stderr: '' }));

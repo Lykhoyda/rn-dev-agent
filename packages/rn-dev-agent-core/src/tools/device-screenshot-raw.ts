@@ -23,7 +23,11 @@ import { createWriteStream, renameSync, statSync, unlinkSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import type { Readable } from 'node:stream';
 import { promisify } from 'node:util';
-import { publicDeviceIdentity, sanitizePublicDiagnostic } from '../util/public-diagnostics.js';
+import {
+  publicDeviceIdentity,
+  publicLocalPath,
+  sanitizePublicDiagnostic,
+} from '../util/public-diagnostics.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -208,7 +212,7 @@ export async function captureIosScreenshot(
   const base = {
     backend: 'simctl' as const,
     argv: publicArgv,
-    outputPath: path,
+    outputPath: publicLocalPath(path),
     format,
     device: publicDeviceIdentity(udid),
     localDiagnostic: {
@@ -468,9 +472,23 @@ export async function tryRawScreenshot(
     if (typeof capture === 'boolean') {
       return capture ? { ok: true, path } : { ok: false, reason: 'capture-failed' };
     }
-    return capture.ok
-      ? { ok: true, path, capture }
-      : { ok: false, reason: 'capture-failed', capture };
+    // Capturer seams are internal, but their evidence becomes public here.
+    // Sanitize again at this boundary so injected/alternate capturers cannot
+    // leak a full device ID or caller-local absolute path.
+    const publicCapture: RawCaptureEvidence = {
+      ...capture,
+      argv: capture.argv.map((arg) =>
+        arg === path || arg === capture.outputPath
+          ? '<output-path>'
+          : sanitizePublicDiagnostic(arg, { deviceIds: [id] }),
+      ),
+      outputPath: publicLocalPath(capture.outputPath),
+      stderr: sanitizePublicDiagnostic(capture.stderr, { deviceIds: [id], maxLength: 2_000 }),
+      device: publicDeviceIdentity(id),
+    };
+    return publicCapture.ok
+      ? { ok: true, path, capture: publicCapture }
+      : { ok: false, reason: 'capture-failed', capture: publicCapture };
   } catch {
     // Raw is the primary iOS path since GH #422 — a thrown capturer error
     // (fs validation, spawn failure) must honor the result contract.

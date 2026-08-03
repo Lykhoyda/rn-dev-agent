@@ -17,7 +17,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 
 const RAW_MOD = '../../dist/tools/device-screenshot-raw.js';
@@ -66,6 +66,39 @@ test('explicit-platform raw path: parent directory is created before the capture
   }
 });
 
+test('relative iOS path is resolved to the bridge cwd before simctl capture', async (t) => {
+  const raw = await import(RAW_MOD);
+  const deviceList = await import(DEVICE_LIST_MOD);
+  const base = makeTmpBase();
+  const previousCwd = process.cwd();
+  t.after(() => {
+    process.chdir(previousCwd);
+    rmSync(base, { recursive: true, force: true });
+  });
+  process.chdir(base);
+  let capturedPath = null;
+  raw._setForTest({
+    iosResolver: async () => 'UDID-RELATIVE',
+    iosCapturer: async (_udid, path) => {
+      capturedPath = path;
+      return true;
+    },
+  });
+  try {
+    const result = await deviceList.captureAndResizeScreenshot({
+      path: 'docs/proof/relative.png',
+      platform: 'ios',
+      platformExplicit: true,
+    });
+    const envelope = parseEnvelope(result);
+    assert.equal(envelope.ok, true);
+    assert.equal(capturedPath, resolve('docs/proof/relative.png'));
+    assert.equal(existsSync(dirname(capturedPath)), true);
+  } finally {
+    raw._resetForTest();
+  }
+});
+
 test('mkdir failure (file blocks an intermediate segment): honest target-dir error, no device-state guess, no capture attempt', async (t) => {
   const raw = await import(RAW_MOD);
   const deviceList = await import(DEVICE_LIST_MOD);
@@ -103,7 +136,9 @@ test('mkdir failure (file blocks an intermediate segment): honest target-dir err
       'must not blame device state for a filesystem precondition',
     );
     assert.match(envelope.error, /directory/i, 'must name the directory problem');
-    assert.ok(envelope.error.includes(target), 'must include the offending path');
+    assert.match(envelope.error, /<local-path>\/01\.jpg/);
+    assert.equal(envelope.meta.path, '<local-path>/01.jpg');
+    assert.doesNotMatch(JSON.stringify(envelope), new RegExp(base));
     assert.equal(resolverCalls, 0, 'must short-circuit before probing devices');
     assert.equal(capturerCalls, 0, 'must short-circuit before any capture');
   } finally {

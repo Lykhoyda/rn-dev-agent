@@ -2998,7 +2998,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve10.call(this, root, ref);
+      let _sch = resolve11.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a = root.localRefs) === null || _a === void 0 ? void 0 : _a[ref];
         const { schemaId } = this.opts;
@@ -3025,7 +3025,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve10(root, ref) {
+    function resolve11(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -3750,7 +3750,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve10(baseURI, relativeURI, options) {
+    function resolve11(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const resolved = resolveComponent(parse3(baseURI, schemelessOptions), parse3(relativeURI, schemelessOptions), schemelessOptions, true);
       schemelessOptions.skipEscape = true;
@@ -4007,7 +4007,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve: resolve10,
+      resolve: resolve11,
       resolveComponent,
       equal,
       serialize: serialize2,
@@ -19968,7 +19968,7 @@ function keyboardVisibility(result) {
     return null;
   }
 }
-async function waitForKeyboardHidden(refreshSnapshot, sleep7 = (ms) => new Promise((resolve10) => setTimeout(resolve10, ms))) {
+async function waitForKeyboardHidden(refreshSnapshot, sleep7 = (ms) => new Promise((resolve11) => setTimeout(resolve11, ms))) {
   let last = "unknown";
   for (let attempt = 0; attempt < KEYBOARD_POSTCHECK_ATTEMPTS; attempt += 1) {
     const visible = keyboardVisibility(await refreshSnapshot());
@@ -21291,7 +21291,7 @@ function buildRunnerTestFaultEnv(env) {
   };
 }
 function runXcodebuildToExit(args, timeoutMs) {
-  return new Promise((resolve10, reject) => {
+  return new Promise((resolve11, reject) => {
     const child = spawn("xcodebuild", args, { stdio: ["ignore", "ignore", "pipe"] });
     let stderrTail = "";
     const timer = setTimeout(() => {
@@ -21309,7 +21309,7 @@ function runXcodebuildToExit(args, timeoutMs) {
     child.on("exit", (code) => {
       clearTimeout(timer);
       if (code === 0)
-        resolve10();
+        resolve11();
       else
         reject(new Error(`xcodebuild ${args[0]} failed (code ${code})${stderrTail ? `: ${stderrTail.trim()}` : ""}`));
     });
@@ -21350,7 +21350,7 @@ async function startFastRunner(deviceId, bundleId, port, opts = {}) {
   }
   const launch = plan[plan.length - 1];
   const runnerTestFaultEnv = runnerTestFaultForwarded ? {} : buildRunnerTestFaultEnv(process.env);
-  return new Promise((resolve10, reject) => {
+  return new Promise((resolve11, reject) => {
     const child = spawn("xcodebuild", launch.args, {
       env: {
         ...process.env,
@@ -21416,7 +21416,7 @@ async function startFastRunner(deviceId, bundleId, port, opts = {}) {
       } catch {
       }
       cleanupLegacyTmpState();
-      resolve10(state);
+      resolve11(state);
     };
     child.stdout.setEncoding("utf-8");
     child.stdout.on("data", (chunk) => handleChunk(chunk, "stdout"));
@@ -21708,7 +21708,7 @@ async function reapStaleFastRunner(deps = {}) {
     return;
   }
   const spawnedChild = runnerProcess?.pid === state.pid ? runnerProcess : null;
-  const spawnedExit = spawnedChild ? new Promise((resolve10) => spawnedChild.once("exit", () => resolve10())) : null;
+  const spawnedExit = spawnedChild ? new Promise((resolve11) => spawnedChild.once("exit", () => resolve11())) : null;
   try {
     sendSignal(state.pid, "SIGTERM");
   } catch {
@@ -21938,7 +21938,7 @@ async function verifyTypeResultAfterSettle(args, result, authorityBefore) {
       if (health.liveness === "alive")
         return result;
       if (attempt < POST_SETTLE_HEALTH_ATTEMPTS - 1) {
-        await new Promise((resolve10) => setTimeout(resolve10, POST_SETTLE_HEALTH_RETRY_MS));
+        await new Promise((resolve11) => setTimeout(resolve11, POST_SETTLE_HEALTH_RETRY_MS));
       }
     }
   }
@@ -24495,7 +24495,7 @@ var init_registry = __esm({
             if (Date.now() >= deadline) {
               throw new SessionAuthorityError("AUTHORITY_STORE_BUSY", "authority registry remained contended past the retry deadline");
             }
-            await new Promise((resolve10) => setTimeout(resolve10, retryDelayMs));
+            await new Promise((resolve11) => setTimeout(resolve11, retryDelayMs));
           }
         }
       }
@@ -24504,9 +24504,12 @@ var init_registry = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/util/public-diagnostics.js
-import { basename } from "node:path";
+import { basename, isAbsolute as isAbsolute2 } from "node:path";
 function publicDeviceIdentity(deviceId) {
   return `device-${shortAuthorityIdentity(deviceId).slice(0, 12)}`;
+}
+function publicLocalPath(path) {
+  return isAbsolute2(path) ? `<local-path>/${basename(path)}` : path;
 }
 function sanitizePublicDiagnostic(value, options = {}) {
   let safe = value.replace(/[^\t\n\r\x20-\x7e]/g, "?");
@@ -24635,7 +24638,7 @@ async function captureIosScreenshot(udid, path, execute = execFileAsync) {
   const base = {
     backend: "simctl",
     argv: publicArgv,
-    outputPath: path,
+    outputPath: publicLocalPath(path),
     format,
     device: publicDeviceIdentity(udid),
     localDiagnostic: {
@@ -24714,7 +24717,14 @@ async function tryRawScreenshot(platform, path, preferredDeviceId) {
     if (typeof capture === "boolean") {
       return capture ? { ok: true, path } : { ok: false, reason: "capture-failed" };
     }
-    return capture.ok ? { ok: true, path, capture } : { ok: false, reason: "capture-failed", capture };
+    const publicCapture = {
+      ...capture,
+      argv: capture.argv.map((arg) => arg === path || arg === capture.outputPath ? "<output-path>" : sanitizePublicDiagnostic(arg, { deviceIds: [id] })),
+      outputPath: publicLocalPath(capture.outputPath),
+      stderr: sanitizePublicDiagnostic(capture.stderr, { deviceIds: [id], maxLength: 2e3 }),
+      device: publicDeviceIdentity(id)
+    };
+    return publicCapture.ok ? { ok: true, path, capture: publicCapture } : { ok: false, reason: "capture-failed", capture: publicCapture };
   } catch {
     return { ok: false, reason: "capture-failed" };
   }
@@ -24745,7 +24755,7 @@ var init_device_screenshot_raw = __esm({
       stdio: ["ignore", "pipe", "pipe"]
     });
     androidSpawn = defaultAndroidSpawn;
-    defaultAndroidCapturer = async (emuId, path) => new Promise((resolve10) => {
+    defaultAndroidCapturer = async (emuId, path) => new Promise((resolve11) => {
       let settled = false;
       let streamFinished = false;
       let procCode = null;
@@ -24771,7 +24781,7 @@ var init_device_screenshot_raw = __esm({
           return;
         settled = true;
         clearTimeout(timer);
-        resolve10(ok);
+        resolve11(ok);
       };
       const maybeSettle = () => {
         const outcome = resolveCaptureOutcome(streamFinished, procCode);
@@ -24840,7 +24850,7 @@ var init_no_change_tracker = __esm({
 // packages/rn-dev-agent-core/dist/runners/free-port.js
 import { createServer as createServer2 } from "node:net";
 function findFreePort(preferred) {
-  return new Promise((resolve10, reject) => {
+  return new Promise((resolve11, reject) => {
     const tryListen = (port, fallbackToAny) => {
       const srv = createServer2();
       srv.once("error", (err) => {
@@ -24856,7 +24866,7 @@ function findFreePort(preferred) {
           srv.close(() => reject(new Error("findFreePort: OS returned port 0")));
           return;
         }
-        srv.close(() => resolve10(chosen));
+        srv.close(() => resolve11(chosen));
       });
     };
     tryListen(preferred, true);
@@ -24914,7 +24924,7 @@ function defaultDeps() {
     kill: (pid, sig) => process.kill(pid, sig),
     fileExists: (p) => existsSync10(p),
     removeFile: (p) => unlinkSync4(p),
-    delay: (ms) => new Promise((resolve10) => setTimeout(resolve10, ms)),
+    delay: (ms) => new Promise((resolve11) => setTimeout(resolve11, ms)),
     killLegacy: () => process.env.RN_DEVICE_KILL_LEGACY !== "0",
     now: () => Date.now()
   };
@@ -25679,8 +25689,8 @@ async function runBoundedAndroidRunnerRebuild(error2, rebuild, cleanup, dependen
       if (!refreshAuthority())
         return false;
       if (attempt + 1 < transitionAttempts) {
-        await new Promise((resolve10) => {
-          setTimeout(resolve10, dependencies.completionRetryIntervalMs ?? ANDROID_REBUILD_COMPLETION_RETRY_MS);
+        await new Promise((resolve11) => {
+          setTimeout(resolve11, dependencies.completionRetryIntervalMs ?? ANDROID_REBUILD_COMPLETION_RETRY_MS);
         });
       }
     }
@@ -25700,8 +25710,8 @@ async function runBoundedAndroidRunnerRebuild(error2, rebuild, cleanup, dependen
       } catch {
       }
       if (attempt + 1 < transitionAttempts) {
-        await new Promise((resolve10) => {
-          setTimeout(resolve10, dependencies.completionRetryIntervalMs ?? ANDROID_REBUILD_COMPLETION_RETRY_MS);
+        await new Promise((resolve11) => {
+          setTimeout(resolve11, dependencies.completionRetryIntervalMs ?? ANDROID_REBUILD_COMPLETION_RETRY_MS);
         });
       }
     }
@@ -25858,7 +25868,7 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
       signal: opts._rebuildSignal
     });
   }
-  return new Promise((resolve10, reject) => {
+  return new Promise((resolve11, reject) => {
     let resolved = false;
     let forwardRemoved = false;
     const removeForward = () => {
@@ -25931,7 +25941,7 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
         }
       }
       cleanupLegacyTmpState();
-      resolve10(state);
+      resolve11(state);
     };
     child.on("error", (err) => {
       removeForward();
@@ -28206,8 +28216,8 @@ async function probeDev(client2, timeoutMs) {
     });
     const result = await Promise.race([
       evalPromise,
-      new Promise((resolve10) => {
-        timer = setTimeout(() => resolve10({ error: "probe timeout" }), timeoutMs);
+      new Promise((resolve11) => {
+        timer = setTimeout(() => resolve11({ error: "probe timeout" }), timeoutMs);
       })
     ]);
     if (timer)
@@ -28705,7 +28715,7 @@ var init_tool_profiles = __esm({
 // packages/rn-dev-agent-core/dist/session/authority-gate.js
 import { randomUUID as randomUUID4 } from "node:crypto";
 import { realpathSync as realpathSync4 } from "node:fs";
-import { isAbsolute as isAbsolute2, relative, resolve as resolve2 } from "node:path";
+import { isAbsolute as isAbsolute3, relative, resolve as resolve2 } from "node:path";
 async function claimOptionalBundleAuthority(args) {
   return await args[optionalBundleAdmission]?.() ?? false;
 }
@@ -28872,12 +28882,12 @@ function bindSourcePaths(status, args) {
     }
     let candidate;
     try {
-      candidate = realpathSync4(isAbsolute2(supplied) ? supplied : resolve2(appRoot, supplied));
+      candidate = realpathSync4(isAbsolute3(supplied) ? supplied : resolve2(appRoot, supplied));
     } catch {
       throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", `${field2} cannot be resolved within the active app root`);
     }
     const child = relative(appRoot, candidate);
-    if (child === ".." || child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute2(child)) {
+    if (child === ".." || child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute3(child)) {
       throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", `${field2} is outside the active session app root`);
     }
     args[field2] = candidate;
@@ -29279,6 +29289,7 @@ function createAuthorityGate(runtime, dependencies) {
           tool,
           profile: profile.axes.join("")
         });
+        const initialOperationAuthorityVersion = operation.authorityVersion;
         const before = await Promise.all(profile.axes.map((axis) => dependencies.probe({ axis, phase: "preflight", tool, profile, status, args })));
         const optionalBefore = [];
         const managedOriginObservations = [];
@@ -29539,7 +29550,7 @@ function createAuthorityGate(runtime, dependencies) {
         }
         publishedProofFinalize = tool === "proof_capture" && args.action === "finalize" && resultIsCanonicalSuccess(result);
         const directRuntimeReset = tool === "cdp_reload" || tool === "cdp_restart";
-        const nestedRuntimeReset = tool === "cdp_run_e2e_suite" || tool === "cdp_auto_login" || tool === "cdp_nav_graph" && args.action === "go" || tool === "cdp_run_action" && Boolean(status.bindings.bundle);
+        const nestedRuntimeReset = tool === "cdp_run_e2e_suite" || tool === "cdp_auto_login" || tool === "cdp_nav_graph" && args.action === "go" || tool === "cdp_run_action" && (optionalBundleClaimed || optionalBundleRecoveryFailed);
         const reconcilesRuntimeTarget = directRuntimeReset || nestedRuntimeReset;
         let authorityInvalidated = false;
         if (directRuntimeReset && !resultSucceeded(result)) {
@@ -29624,7 +29635,11 @@ function createAuthorityGate(runtime, dependencies) {
             ...finalManagedBundle ? ["B"] : []
           ]
         } : runnerAwareReceiptProfile;
+        const controllerGenerationAdvanced = operation.authorityVersion !== initialOperationAuthorityVersion;
+        registry2.verifyOperation(operation);
         for (const observation of allBefore) {
+          if (controllerGenerationAdvanced && observation.axis === "C")
+            continue;
           if ((runtimeTargetChanged || managedRuntimeTargetChanged) && observation.axis === "B") {
             continue;
           }
@@ -29635,7 +29650,6 @@ function createAuthorityGate(runtime, dependencies) {
             throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", `${observation.axis} authority changed during the operation`);
           }
         }
-        registry2.verifyOperation(operation);
         if (tool === "proof_capture" && (args.action === "finalize" || args.action === "discard")) {
           const envelope = JSON.parse(result.content?.[0]?.text ?? "{}");
           if (envelope.ok === true) {
@@ -30154,7 +30168,7 @@ var init_maestro_run = __esm({
 import { spawn as spawn4 } from "node:child_process";
 import { unlinkSync as unlinkSync6 } from "node:fs";
 function sleep3(ms) {
-  return new Promise((resolve10) => setTimeout(resolve10, ms));
+  return new Promise((resolve11) => setTimeout(resolve11, ms));
 }
 function cleanupKey(platform, deviceId) {
   return `${platform}:${deviceId}`;
@@ -30187,7 +30201,7 @@ async function waitForGroupAbsence(pgid, signalGroup, delay, timeoutMs = ABSENCE
 function observeChildTerminal(child, timeoutMs) {
   let stop = () => {
   };
-  const result = new Promise((resolve10) => {
+  const result = new Promise((resolve11) => {
     let settled = false;
     let timer;
     const done = (value) => {
@@ -30196,7 +30210,7 @@ function observeChildTerminal(child, timeoutMs) {
       settled = true;
       if (timer)
         clearTimeout(timer);
-      resolve10(value);
+      resolve11(value);
     };
     child.once("error", (error2) => done({ code: null, signal: null, timedOut: false, error: error2.message }));
     child.once("close", (code, signal) => done({ code, signal, timedOut: false }));
@@ -31222,7 +31236,7 @@ function defaultDeps2() {
     },
     fileExists: (path) => existsSync17(path),
     removeFile: (path) => unlinkSync7(path),
-    delay: (ms) => new Promise((resolve10) => setTimeout(resolve10, ms)),
+    delay: (ms) => new Promise((resolve11) => setTimeout(resolve11, ms)),
     listApps: (udid) => execFileSync7("xcrun", ["simctl", "listapps", udid], {
       encoding: "utf8",
       timeout: 5e3,
@@ -45970,7 +45984,7 @@ var Protocol = class {
           return;
         }
         const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-        await new Promise((resolve10) => setTimeout(resolve10, pollInterval));
+        await new Promise((resolve11) => setTimeout(resolve11, pollInterval));
         options?.signal?.throwIfAborted();
       }
     } catch (error2) {
@@ -45987,7 +46001,7 @@ var Protocol = class {
    */
   request(request2, resultSchema, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-    return new Promise((resolve10, reject) => {
+    return new Promise((resolve11, reject) => {
       const earlyReject = (error2) => {
         reject(error2);
       };
@@ -46065,7 +46079,7 @@ var Protocol = class {
           if (!parseResult.success) {
             reject(parseResult.error);
           } else {
-            resolve10(parseResult.data);
+            resolve11(parseResult.data);
           }
         } catch (error2) {
           reject(error2);
@@ -46326,12 +46340,12 @@ var Protocol = class {
       }
     } catch {
     }
-    return new Promise((resolve10, reject) => {
+    return new Promise((resolve11, reject) => {
       if (signal.aborted) {
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
         return;
       }
-      const timeoutId = setTimeout(resolve10, interval);
+      const timeoutId = setTimeout(resolve11, interval);
       signal.addEventListener("abort", () => {
         clearTimeout(timeoutId);
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -47431,7 +47445,7 @@ var McpServer = class {
     let task = createTaskResult.task;
     const pollInterval = task.pollInterval ?? 5e3;
     while (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
-      await new Promise((resolve10) => setTimeout(resolve10, pollInterval));
+      await new Promise((resolve11) => setTimeout(resolve11, pollInterval));
       const updatedTask = await extra.taskStore.getTask(taskId);
       if (!updatedTask) {
         throw new McpError(ErrorCode.InternalError, `Task ${taskId} not found during polling`);
@@ -48080,12 +48094,12 @@ var StdioServerTransport = class {
     this.onclose?.();
   }
   send(message) {
-    return new Promise((resolve10) => {
+    return new Promise((resolve11) => {
       const json = serializeMessage(message);
       if (this._stdout.write(json)) {
-        resolve10();
+        resolve11();
       } else {
-        this._stdout.once("drain", resolve10);
+        this._stdout.once("drain", resolve11);
       }
     });
   }
@@ -48637,7 +48651,7 @@ var MetroEventsClient = class {
   async connectOnce() {
     this.state = "connecting";
     const url = `ws://${this.opts.host}:${this.opts.port}/events`;
-    return new Promise((resolve10) => {
+    return new Promise((resolve11) => {
       const ws = new wrapper_default(url, {
         headers: { Origin: metroOrigin(url) }
       });
@@ -48651,7 +48665,7 @@ var MetroEventsClient = class {
         this._connectionEpoch += 1;
         this.reconnectAttempt = 0;
         logger.info(this.opts.logTag, `connected to ${url}`);
-        resolve10();
+        resolve11();
       };
       const onFail = (reason) => {
         if (outcome !== null)
@@ -48659,7 +48673,7 @@ var MetroEventsClient = class {
         outcome = "failed";
         logger.debug(this.opts.logTag, `connect failed: ${reason}`);
         this.scheduleReconnect();
-        resolve10();
+        resolve11();
       };
       ws.once("open", onOpen);
       ws.once("error", (err) => onFail(err instanceof Error ? err.message : String(err)));
@@ -48837,7 +48851,7 @@ var CDPMultiplexer = class {
     logger.info(this.opts.logTag, "multiplexer stopped");
   }
   startConsumerServer() {
-    return new Promise((resolve10, reject) => {
+    return new Promise((resolve11, reject) => {
       this.httpServer = createServer();
       this.wss = new import_websocket_server.default({
         server: this.httpServer,
@@ -48869,12 +48883,12 @@ var CDPMultiplexer = class {
           return;
         }
         this.boundPort = addr.port;
-        resolve10(addr.port);
+        resolve11(addr.port);
       });
     });
   }
   connectHermes() {
-    return new Promise((resolve10, reject) => {
+    return new Promise((resolve11, reject) => {
       const ws = new wrapper_default(this.opts.hermesUrl, {
         headers: { Origin: metroOrigin(this.opts.hermesUrl) }
       });
@@ -48885,7 +48899,7 @@ var CDPMultiplexer = class {
           ws.send(msg3);
         this.hermesBuffer = [];
         logger.info(this.opts.logTag, `connected to upstream Hermes at ${this.opts.hermesUrl}`);
-        resolve10();
+        resolve11();
       };
       const onError = (err) => {
         ws.off("open", onOpen);
@@ -49063,8 +49077,8 @@ var CDPMultiplexer = class {
       this.wss = null;
     }
     if (this.httpServer) {
-      await new Promise((resolve10) => {
-        this.httpServer?.close(() => resolve10());
+      await new Promise((resolve11) => {
+        this.httpServer?.close(() => resolve11());
       });
       this.httpServer = null;
     }
@@ -52367,13 +52381,13 @@ function sendWithTimeout(ws, pending2, nextId, method, params, ms) {
   if (!ws || ws.readyState !== wrapper_default.OPEN) {
     return Promise.reject(new Error("WebSocket not connected"));
   }
-  return new Promise((resolve10, reject) => {
+  return new Promise((resolve11, reject) => {
     const id = nextId();
     const timer = setTimeout(() => {
       pending2.delete(id);
       reject(new Error(`CDP timeout (${ms}ms): ${method}. JS thread may be blocked, paused on a breakpoint, or waiting on an unresolved promise.`));
     }, ms);
-    pending2.set(id, { resolve: resolve10, reject, timer });
+    pending2.set(id, { resolve: resolve11, reject, timer });
     try {
       if (!ws || ws.readyState !== wrapper_default.OPEN) {
         throw new Error("WebSocket closed between check and send");
@@ -52776,7 +52790,7 @@ async function connectToTarget(ctx, target, retries = 5, intent = "default") {
   throw new Error(formatConnectFailureMessage(retries, attempts3, target.description ?? null, lastError?.message ?? null));
 }
 function connectWs(ctx, url) {
-  return new Promise((resolve10, reject) => {
+  return new Promise((resolve11, reject) => {
     const ws = new wrapper_default(url, {
       handshakeTimeout: 5e3,
       maxPayload: 100 * 1024 * 1024,
@@ -52798,7 +52812,7 @@ function connectWs(ctx, url) {
       clearTimeout(guard);
       ctx.setWs(ws);
       ctx.setState("connected");
-      resolve10(ws);
+      resolve11(ws);
     });
     ws.on("error", (err) => {
       if (!settled) {
@@ -56881,7 +56895,7 @@ function verifyBuildReceipt(receipt2, capability, expected) {
 import { execFileSync as execFileSync8 } from "node:child_process";
 import { createHash as createHash8 } from "node:crypto";
 import { lstatSync as lstatSync8, readFileSync as readFileSync22, readdirSync as readdirSync6, readlinkSync as readlinkSync2, realpathSync as realpathSync6, statSync as statSync8 } from "node:fs";
-import { isAbsolute as isAbsolute3, join as join30, relative as relative2 } from "node:path";
+import { isAbsolute as isAbsolute4, join as join30, relative as relative2 } from "node:path";
 function runText(command, args) {
   return execFileSync8(command, [...args], {
     encoding: "utf8",
@@ -56932,7 +56946,7 @@ function iosAppFiles(appPath, dependencies) {
 function assertIosSymlinkContained(appPath, path, realpath) {
   const target = realpath(path);
   const child = relative2(realpath(appPath), target);
-  if (child === ".." || child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute3(child)) {
+  if (child === ".." || child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute4(child)) {
     throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS app symlink escapes the installed bundle");
   }
 }
@@ -58961,7 +58975,7 @@ async function stopManagedMetroProcesses(input, dependencies) {
   const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
   const probeListener = dependencies.probeListener ?? probeManagedMetroListener;
   const signalTree = dependencies.signalTree ?? signalProcessTree;
-  const wait = dependencies.wait ?? ((ms) => new Promise((resolve10) => setTimeout(resolve10, ms)));
+  const wait = dependencies.wait ?? ((ms) => new Promise((resolve11) => setTimeout(resolve11, ms)));
   const inspect = () => {
     const launcher = exactProcessState(input.launcher, probeBirth(input.launcher.pid));
     const listener = input.listener ? exactProcessState(input.listener, probeBirth(input.listener.pid)) : "stopped";
@@ -59091,7 +59105,7 @@ async function stopManagedMetroWithEvidence(binding, input, dependencies = {}) {
 
 // packages/rn-dev-agent-core/dist/session/package-integration.js
 import { closeSync as closeSync6, constants as constants4, fstatSync as fstatSync4, lstatSync as lstatSync9, openSync as openSync6, readFileSync as readFileSync25 } from "node:fs";
-import { basename as basename5, isAbsolute as isAbsolute4, join as join31, relative as relative3, resolve as resolve5, sep as sep4 } from "node:path";
+import { basename as basename5, isAbsolute as isAbsolute5, join as join31, relative as relative3, resolve as resolve5, sep as sep4 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/session/metro-authority.js
 import { createHmac as createHmac3, createSecretKey, timingSafeEqual as timingSafeEqual5 } from "node:crypto";
@@ -62403,7 +62417,7 @@ function assertBoundCleanup(result) {
 }
 function assertNoSymlinkPath(root, candidate) {
   const child = relative3(root, candidate);
-  if (child === ".." || child.startsWith(`..${sep4}`) || isAbsolute4(child)) {
+  if (child === ".." || child.startsWith(`..${sep4}`) || isAbsolute5(child)) {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration path escapes the app root");
   }
   let current = root;
@@ -62899,7 +62913,7 @@ init_registry();
 var execFile14 = promisify16(execFileCb13);
 var RECORDER_POST_KILL_CONFIRM_MS = 2e3;
 function executeRecorderScript(script, args, options) {
-  return new Promise((resolve10, reject) => {
+  return new Promise((resolve11, reject) => {
     const child = spawn7(script, args, {
       detached: process.platform !== "win32",
       env: options.env,
@@ -62927,7 +62941,7 @@ function executeRecorderScript(script, args, options) {
       if (error2)
         reject(error2);
       else
-        resolve10(result);
+        resolve11(result);
     };
     const signal = (value) => {
       if (child.pid === void 0)
@@ -63044,7 +63058,7 @@ async function waitForExactStopped(probe, deadlineMs, code, message) {
     if (Date.now() >= deadlineMs) {
       throw new SessionAuthorityError(code, message);
     }
-    await new Promise((resolve10) => setTimeout(resolve10, 25));
+    await new Promise((resolve11) => setTimeout(resolve11, 25));
   }
 }
 async function stopBoundObserve(binding, listenerProbe = probeManagedMetroListener, processProbe = probeProcessBirth, timeoutMs = 2e3, request2 = fetch) {
@@ -65275,7 +65289,7 @@ init_utils();
 import { mkdirSync as mkdirSync15 } from "node:fs";
 import { execFile as execFile17 } from "node:child_process";
 import { promisify as promisify19 } from "node:util";
-import { dirname as dirname14, join as join33 } from "node:path";
+import { dirname as dirname14, join as join33, resolve as resolve7 } from "node:path";
 import { homedir as homedir9 } from "node:os";
 
 // packages/rn-dev-agent-core/dist/tools/device-screenshot-resize.js
@@ -65422,7 +65436,7 @@ init_rn_android_runner_client();
 
 // packages/rn-dev-agent-core/dist/observability/recorder.js
 import { closeSync as closeSync7, constants as constants5, fstatSync as fstatSync5, openSync as openSync7, readSync as readSync3 } from "node:fs";
-import { isAbsolute as isAbsolute5 } from "node:path";
+import { isAbsolute as isAbsolute6 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/util/redact.js
 import { homedir as homedir8 } from "node:os";
@@ -65661,7 +65675,7 @@ var SHOT_REGISTRY_CAP = 64;
 function extractScreenshotPath(result) {
   const data = unwrapResult(result)?.data ?? result?.data;
   const p = data?.path ?? data?.message;
-  return typeof p === "string" && isAbsolute5(p) && (p.endsWith(".jpg") || p.endsWith(".jpeg") || p.endsWith(".png")) ? p : null;
+  return typeof p === "string" && isAbsolute6(p) && (p.endsWith(".jpg") || p.endsWith(".jpeg") || p.endsWith(".png")) ? p : null;
 }
 function readShotBounded(p) {
   let fd;
@@ -65745,7 +65759,7 @@ var Recorder = class {
    * whatever path the pipeline actually captured to.
    */
   registerCapturedScreenshot(p) {
-    if (typeof p !== "string" || !isAbsolute5(p))
+    if (typeof p !== "string" || !isAbsolute6(p))
       return;
     this.trustedShotPaths.delete(p);
     this.trustedShotPaths.add(p);
@@ -65828,6 +65842,7 @@ var Recorder = class {
 var recorder = new Recorder();
 
 // packages/rn-dev-agent-core/dist/tools/device-list.js
+init_public_diagnostics();
 var runAgentDeviceFn2 = runNative;
 var execFileAsync3 = promisify19(execFile17);
 var defaultExec2 = (cmd, args) => execFileAsync3(cmd, args);
@@ -65878,7 +65893,7 @@ function deriveScreenshotPath(args, now = Date.now, rand = Math.random) {
     throw new TildeScreenshotPathError(`Screenshot path "${args.path}" starts with '~' which the bridge cannot expand (only a leading '~/' is expanded to the home directory). Pass an absolute path instead.`);
   }
   if (args.path)
-    return args.path;
+    return resolve7(args.path);
   const ext = args.format === "jpeg" ? "jpg" : args.format === "png" ? "png" : "jpg";
   const suffix = rand().toString(36).slice(2, 8);
   return `/tmp/rn-screenshot-${now()}-${suffix}.${ext}`;
@@ -65987,7 +66002,9 @@ async function captureAndResizeScreenshot(args) {
   const advisories = computeScreenshotAdvisories(args, requestedPath);
   const targetDir = ensureScreenshotDir(requestedPath);
   if (!targetDir.ok) {
-    return failResult(`device_screenshot: target directory for "${requestedPath}" does not exist and could not be created (${targetDir.error}). The device is not at fault \u2014 fix the output path and retry.`, "SCREENSHOT_FAILED", { reason: "target-dir-unavailable", path: requestedPath });
+    const publicPath = publicLocalPath(requestedPath);
+    const publicError = sanitizePublicDiagnostic(targetDir.error);
+    return failResult(`device_screenshot: target directory for "${publicPath}" does not exist and could not be created (${publicError}). The device is not at fault \u2014 fix the output path and retry.`, "SCREENSHOT_FAILED", { reason: "target-dir-unavailable", path: publicPath });
   }
   const rawResultOk = (path, platform) => ({
     content: [
@@ -66395,10 +66412,10 @@ function createDeviceBatchHandler(getClient2) {
       let stepTimedOut = false;
       const result = await Promise.race([
         executeStep(step, getClient2),
-        new Promise((resolve10) => {
+        new Promise((resolve11) => {
           stepTimer = setTimeout(() => {
             stepTimedOut = true;
-            resolve10(failResult(`Step ${i + 1} timed out after ${stepTimeout}ms; remaining steps were not started because the native operation may still be completing`));
+            resolve11(failResult(`Step ${i + 1} timed out after ${stepTimeout}ms; remaining steps were not started because the native operation may still be completing`));
           }, stepTimeout);
         })
       ]);
@@ -69845,7 +69862,7 @@ async function collectNativeIos(durationMs, signal, deviceId, bundleId, onResolv
     return [];
   const pid = await resolveIosAppPid(deviceId, bundleId, signal);
   onResolvedPid?.(pid);
-  return new Promise((resolve10, reject) => {
+  return new Promise((resolve11, reject) => {
     const entries = [];
     let killed = false;
     let killedByUs = false;
@@ -69914,7 +69931,7 @@ async function collectNativeIos(durationMs, signal, deviceId, bundleId, onResolv
       if (!killedByUs && code !== 0 && entries.length === 0) {
         reject(new Error(`xcrun simctl log stream exited ${code}: ${stderrBuf.slice(0, 200)}`));
       } else {
-        resolve10(entries);
+        resolve11(entries);
       }
     });
     proc.on("error", (err) => {
@@ -69979,7 +69996,7 @@ function buildAndroidLogcatArgs(serial) {
 function collectNativeAndroid(durationMs, signal, serial) {
   if (signal.aborted)
     return Promise.resolve([]);
-  return new Promise((resolve10, reject) => {
+  return new Promise((resolve11, reject) => {
     const entries = [];
     const year = (/* @__PURE__ */ new Date()).getFullYear();
     const killMs = durationMs > 0 ? durationMs : 100;
@@ -70047,7 +70064,7 @@ function collectNativeAndroid(durationMs, signal, serial) {
       if (!killedByUs && code !== 0 && entries.length === 0) {
         reject(new Error(`adb logcat exited ${code}: ${stderrBuf.slice(0, 200)}`));
       } else {
-        resolve10(entries);
+        resolve11(entries);
       }
     });
     proc.on("error", (err) => {
@@ -71896,7 +71913,7 @@ function createDeviceRecordHandler(deps = {}) {
 import { createHash as createHash14, randomUUID as randomUUID7 } from "node:crypto";
 import { execFileSync as execFileSync11 } from "node:child_process";
 import { chmodSync as chmodSync4, closeSync as closeSync8, existsSync as existsSync30, fsyncSync, lstatSync as lstatSync10, mkdirSync as mkdirSync17, openSync as openSync8, readFileSync as readFileSync27, realpathSync as realpathSync9, renameSync as renameSync7, unlinkSync as unlinkSync10, writeFileSync as writeFileSync14 } from "node:fs";
-import { basename as basename7, dirname as dirname17, extname, isAbsolute as isAbsolute6, join as join37, relative as relative4, resolve as resolve7, sep as sep6 } from "node:path";
+import { basename as basename7, dirname as dirname17, extname, isAbsolute as isAbsolute7, join as join37, relative as relative4, resolve as resolve8, sep as sep6 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 
 // packages/rn-dev-agent-core/dist/domain/proof-capture.js
@@ -72425,7 +72442,7 @@ function readStartupIntegrityAttestation() {
 }
 
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
-var absolutePathSchema = external_exports.string().min(1).refine(isAbsolute6, "path must be absolute");
+var absolutePathSchema = external_exports.string().min(1).refine(isAbsolute7, "path must be absolute");
 var beginRehearsalSchema = external_exports.object({
   action: external_exports.literal("begin_rehearsal"),
   projectRoot: absolutePathSchema,
@@ -72550,7 +72567,7 @@ function captureProofWorkerStartup(argv = process.argv, attestation = readStartu
   let loadedCoreBundlePath = null;
   let coreBundleSha256 = null;
   try {
-    if (typeof argv[1] === "string" && isAbsolute6(argv[1])) {
+    if (typeof argv[1] === "string" && isAbsolute7(argv[1])) {
       executedEntrypointPath = realpathSync9(argv[1]);
     }
   } catch {
@@ -72588,7 +72605,7 @@ function resolveProofCandidateEntrypoint(candidateRoot, argv) {
     return null;
   }
   const authorityArg = argv[1];
-  if (typeof authorityArg !== "string" || !isAbsolute6(authorityArg))
+  if (typeof authorityArg !== "string" || !isAbsolute7(authorityArg))
     return null;
   let arg;
   try {
@@ -72637,7 +72654,7 @@ function proofCandidateStartupMatches(entrypoint, startup, headCoreBundleSha256)
 }
 function proofCandidateEntrypointEnvironmentMatches(entrypoint, env) {
   const normalizedOverride = (value) => {
-    if (!value || !isAbsolute6(value))
+    if (!value || !isAbsolute7(value))
       return value ? null : "";
     try {
       return realpathSync9(value);
@@ -72695,7 +72712,7 @@ function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
   }
 }
 function readProofCandidateRuntime(candidateRoot, startup = proofWorkerStartup) {
-  const root = realpathSync9(resolve7(candidateRoot));
+  const root = realpathSync9(resolve8(candidateRoot));
   const sha = execFileSync11("git", ["-C", root, "rev-parse", "HEAD"], {
     encoding: "utf8"
   }).trim();
@@ -72779,16 +72796,16 @@ function readProofActionIdentity(appProjectRoot, actionId) {
   }
 }
 function isNormalizedDescendant(root, path) {
-  if (!isAbsolute6(root) || !isAbsolute6(path) || resolve7(root) !== root || resolve7(path) !== path) {
+  if (!isAbsolute7(root) || !isAbsolute7(path) || resolve8(root) !== root || resolve8(path) !== path) {
     return false;
   }
   const fromRoot = relative4(root, path);
-  return fromRoot.length > 0 && fromRoot !== ".." && !fromRoot.startsWith(`..${sep6}`) && !isAbsolute6(fromRoot);
+  return fromRoot.length > 0 && fromRoot !== ".." && !fromRoot.startsWith(`..${sep6}`) && !isAbsolute7(fromRoot);
 }
 function hasExistingSymlink(root, path) {
   const parts = relative4(root, path).split(sep6);
   for (let length = 0; length <= parts.length; length += 1) {
-    const candidate = resolve7(root, ...parts.slice(0, length));
+    const candidate = resolve8(root, ...parts.slice(0, length));
     try {
       if (lstatSync10(candidate).isSymbolicLink())
         return true;
@@ -72798,7 +72815,7 @@ function hasExistingSymlink(root, path) {
   return false;
 }
 function validCaptureContext(args, expectedRoot) {
-  if (!expectedRoot || args.projectRoot !== expectedRoot || resolve7(expectedRoot) !== expectedRoot) {
+  if (!expectedRoot || args.projectRoot !== expectedRoot || resolve8(expectedRoot) !== expectedRoot) {
     return false;
   }
   if (!/^[a-z0-9][a-z0-9-]*$/.test(args.runId))
@@ -72826,7 +72843,7 @@ function proofRootExists(args) {
   }
 }
 function resolveProofWorktreeRoot(detectedProjectRoot) {
-  if (!detectedProjectRoot || !isAbsolute6(detectedProjectRoot) || resolve7(detectedProjectRoot) !== detectedProjectRoot) {
+  if (!detectedProjectRoot || !isAbsolute7(detectedProjectRoot) || resolve8(detectedProjectRoot) !== detectedProjectRoot) {
     return null;
   }
   try {
@@ -72834,7 +72851,7 @@ function resolveProofWorktreeRoot(detectedProjectRoot) {
       cwd: detectedProjectRoot,
       encoding: "utf8"
     }).trim();
-    return root && isAbsolute6(root) && resolve7(root) === root ? root : null;
+    return root && isAbsolute7(root) && resolve8(root) === root ? root : null;
   } catch {
     return null;
   }
@@ -72952,8 +72969,8 @@ function traceFor(storyboard, events) {
 function readProofContractAt(moduleUrl = import.meta.url) {
   const moduleDir = dirname17(fileURLToPath4(moduleUrl));
   const candidates = [
-    resolve7(moduleDir, "../../schemas/proof-receipt.schema.json"),
-    resolve7(moduleDir, "../schemas/proof-receipt.schema.json")
+    resolve8(moduleDir, "../../schemas/proof-receipt.schema.json"),
+    resolve8(moduleDir, "../schemas/proof-receipt.schema.json")
   ];
   for (const path of candidates) {
     try {
@@ -72967,7 +72984,7 @@ function readProofContractAt(moduleUrl = import.meta.url) {
 function writeProofReceiptAtomic(path, receipt2) {
   const directory = dirname17(path);
   mkdirSync17(directory, { recursive: true, mode: 448 });
-  const temporary = resolve7(directory, `.${randomUUID7()}.proof-receipt.tmp`);
+  const temporary = resolve8(directory, `.${randomUUID7()}.proof-receipt.tmp`);
   let descriptor = null;
   try {
     descriptor = openSync8(temporary, "wx", 384);
@@ -73161,7 +73178,7 @@ function createProofCaptureHandler(deps) {
     ].map((path) => repositoryPath(active, path));
     const requiredOutputs = new Set(phase === "finalized" ? [...proofOutputs, repositoryPath(active, active.context.receiptPath)] : proofOutputs);
     const allowedOutputs = phase === "setup" ? observedSetupScreenshots(active) : phase === "clean" ? /* @__PURE__ */ new Set() : requiredOutputs;
-    const invalidChange = git.changes.some((change) => isAbsolute6(change.path) || change.path === ".." || change.path.startsWith("../") || change.indexStatus !== "?" || change.worktreeStatus !== "?" || change.sourcePath !== void 0);
+    const invalidChange = git.changes.some((change) => isAbsolute7(change.path) || change.path === ".." || change.path.startsWith("../") || change.indexStatus !== "?" || change.worktreeStatus !== "?" || change.sourcePath !== void 0);
     const changedPaths = new Set(git.changes.map((change) => change.path.replaceAll("\\", "/")));
     const unrelated = [...changedPaths].some((path) => !allowedOutputs.has(path));
     const missing = (phase === "validation" || phase === "finalized") && [...requiredOutputs].some((path) => !changedPaths.has(path));
@@ -75802,10 +75819,10 @@ function buildGracefulShutdown(deps) {
       }
     })();
     let timeoutHandle = null;
-    const timeout = new Promise((resolve10) => {
+    const timeout = new Promise((resolve11) => {
       timeoutHandle = setTimeout(() => {
         logger.warn("MCP", `shutdown: cleanup timeout after ${timeoutMs}ms, forcing exit`);
-        resolve10();
+        resolve11();
       }, timeoutMs);
     });
     await Promise.race([cleanup, timeout]);
@@ -75820,7 +75837,7 @@ import { createHash as createHash16 } from "node:crypto";
 import { execFileSync as execFileSync13 } from "node:child_process";
 import { closeSync as closeSync9, existsSync as existsSync32, mkdirSync as mkdirSync18, openSync as openSync9, readFileSync as readFileSync29, statSync as statSync13, unlinkSync as unlinkSync11, writeFileSync as writeFileSync16, writeSync as writeSync3 } from "node:fs";
 import { tmpdir as tmpdir11, userInfo as userInfo2 } from "node:os";
-import { join as join40, resolve as resolve8 } from "node:path";
+import { join as join40, resolve as resolve9 } from "node:path";
 var DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
 var DEFAULT_PROCESS_NAME_NEEDLE = "cdp-bridge";
 var DEFAULT_STALE_MS2 = 9e4;
@@ -75864,7 +75881,7 @@ function defaultSelfPpid() {
   return typeof process.ppid === "number" ? process.ppid : 0;
 }
 function hashProjectRoot(projectRoot) {
-  return createHash16("md5").update(resolve8(projectRoot)).digest("hex").slice(0, 8);
+  return createHash16("md5").update(resolve9(projectRoot)).digest("hex").slice(0, 8);
 }
 var Lockfile = class {
   opts;
@@ -77256,20 +77273,20 @@ var ObservabilityServer = class {
   // handle() fire-and-forgets the async routes, so a rejecting await here
   // would crash the process on an oversized/aborted request (GH #438 review).
   readBody(req) {
-    return new Promise((resolve10) => {
+    return new Promise((resolve11) => {
       let body = "";
       let bytes = 0;
       req.on("data", (chunk) => {
         bytes += chunk.length;
         if (bytes > 65536) {
           req.destroy();
-          resolve10(null);
+          resolve11(null);
           return;
         }
         body += chunk.toString();
       });
-      req.on("end", () => resolve10(body));
-      req.on("error", () => resolve10(null));
+      req.on("end", () => resolve11(body));
+      req.on("error", () => resolve11(null));
     });
   }
   json(res, status, obj) {
@@ -77400,7 +77417,7 @@ var ObservabilityServer = class {
   }
 };
 function listen(server3, port) {
-  return new Promise((resolve10, reject) => {
+  return new Promise((resolve11, reject) => {
     const onErr = (e) => {
       server3.removeListener("error", onErr);
       reject(e);
@@ -77409,7 +77426,7 @@ function listen(server3, port) {
     server3.listen(port, HOST, () => {
       server3.removeListener("error", onErr);
       const addr = server3.address();
-      resolve10(typeof addr === "object" && addr ? addr.port : port);
+      resolve11(typeof addr === "object" && addr ? addr.port : port);
     });
   });
 }
@@ -77697,7 +77714,7 @@ var RestartGate = class {
 var SIMCTL_HINT = "install idb for smoother mirroring (brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install fb-idb)";
 var IDB_HINT = "idb not found \u2014 brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install fb-idb";
 var FFMPEG_HINT = "ffmpeg not found \u2014 run scripts/ensure-ffmpeg.sh or brew install ffmpeg";
-var sleep6 = (ms) => new Promise((resolve10) => setTimeout(resolve10, ms));
+var sleep6 = (ms) => new Promise((resolve11) => setTimeout(resolve11, ms));
 var scheduleAfter = (fn, delayMs) => {
   if (delayMs <= 0)
     setImmediate(fn);
@@ -77706,8 +77723,8 @@ var scheduleAfter = (fn, delayMs) => {
 };
 var defaultSpawn = (cmd, args) => spawn9(cmd, args, { stdio: ["pipe", "pipe", "pipe"] });
 async function detectIdb(execFileFn = execFile25) {
-  return new Promise((resolve10) => {
-    execFileFn("idb", ["--help"], { timeout: 3e3 }, (err) => resolve10(!err));
+  return new Promise((resolve11) => {
+    execFileFn("idb", ["--help"], { timeout: 3e3 }, (err) => resolve11(!err));
   });
 }
 function isEnoent(err) {
@@ -77838,7 +77855,7 @@ var IosSimctlLoopSource = class {
 };
 function defaultExecJpeg(cmd, args, signal) {
   const outPath = args[args.length - 1];
-  return new Promise((resolve10, reject) => {
+  return new Promise((resolve11, reject) => {
     execFile25(cmd, args, { maxBuffer: 16 * 1024 * 1024, timeout: 1e4, signal }, (err) => {
       if (err) {
         reject(err);
@@ -77847,7 +77864,7 @@ function defaultExecJpeg(cmd, args, signal) {
       readFile2(outPath).then((buf) => {
         void unlink(outPath).catch(() => {
         });
-        resolve10(buf);
+        resolve11(buf);
       }).catch((readErr) => {
         void unlink(outPath).catch(() => {
         });
@@ -78899,15 +78916,15 @@ function preflight(input) {
   return { ok: true };
 }
 function probeMetro(port, timeoutMs = 1500) {
-  return new Promise((resolve10) => {
+  return new Promise((resolve11) => {
     const req = request({ host: "127.0.0.1", port, path: "/status", method: "GET", timeout: timeoutMs }, (res) => {
       res.resume();
-      resolve10((res.statusCode ?? 500) < 500);
+      resolve11((res.statusCode ?? 500) < 500);
     });
-    req.on("error", () => resolve10(false));
+    req.on("error", () => resolve11(false));
     req.on("timeout", () => {
       req.destroy();
-      resolve10(false);
+      resolve11(false);
     });
     req.end();
   });
@@ -79036,7 +79053,7 @@ init_metro_cwd();
 import { createHash as createHash18, createHmac as createHmac4, randomBytes as randomBytes7, timingSafeEqual as timingSafeEqual7 } from "node:crypto";
 import { execFileSync as execFileSync15 } from "node:child_process";
 import { closeSync as closeSync10, constants as constants6, existsSync as existsSync38, fstatSync as fstatSync6, lstatSync as lstatSync12, openSync as openSync10, readdirSync as readdirSync14, readFileSync as readFileSync38, readlinkSync as readlinkSync3, readSync as readSync4, realpathSync as realpathSync10 } from "node:fs";
-import { dirname as dirname21, isAbsolute as isAbsolute7, join as join53, relative as relative5, resolve as resolve9 } from "node:path";
+import { dirname as dirname21, isAbsolute as isAbsolute8, join as join53, relative as relative5, resolve as resolve10 } from "node:path";
 function digest2(parts) {
   const hash = createHash18("sha256");
   for (const part of parts) {
@@ -79214,7 +79231,7 @@ function updateDependencyPath(hash, path, label, state) {
 }
 function isContained(root, candidate) {
   const child = relative5(root, candidate);
-  return child !== ".." && !child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) && !isAbsolute7(child);
+  return child !== ".." && !child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) && !isAbsolute8(child);
 }
 function isExcludedRuntimePath(root, candidate) {
   const entry = relative5(root, candidate).split("\\").join("/");
@@ -79556,7 +79573,7 @@ function dependencyStoreRoots(identity2, git, pathExists) {
       break;
     ancestor = parent;
   }
-  const roots = [...new Set(entries.map((entry) => resolve9(identity2.contentRoot, entry)))].sort();
+  const roots = [...new Set(entries.map((entry) => resolve10(identity2.contentRoot, entry)))].sort();
   for (const root of roots) {
     assertContained(identity2.contentRoot, root, "STRICT_PROOF_DEPENDENCY_PATH_ESCAPE");
   }
@@ -79593,7 +79610,7 @@ ${stderr}`.toLowerCase().includes("not a git repository");
 }
 function assertContained(root, candidate, code) {
   const child = relative5(root, candidate);
-  if (child === ".." || child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute7(child)) {
+  if (child === ".." || child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute8(child)) {
     throw new Error(`${code}: path is outside the declared content root`);
   }
 }
@@ -79601,11 +79618,11 @@ function resolveDeclaredIdentity(appRoot, dependencies, canonicalize) {
   if (!dependencies.declaredRoot || !dependencies.declaredManifests?.length) {
     throw new Error("NON_GIT_MANIFEST_REQUIRED: non-Git authority needs an explicit root and manifest list");
   }
-  const contentRoot = canonicalize(resolve9(dependencies.declaredRoot));
+  const contentRoot = canonicalize(resolve10(dependencies.declaredRoot));
   assertContained(contentRoot, appRoot, "NON_GIT_ROOT_MISMATCH");
   const manifestParts = [];
   for (const entry of [...dependencies.declaredManifests].sort()) {
-    const manifest = canonicalize(resolve9(contentRoot, entry));
+    const manifest = canonicalize(resolve10(contentRoot, entry));
     assertContained(contentRoot, manifest, "NON_GIT_MANIFEST_OUTSIDE_ROOT");
     manifestParts.push(relative5(contentRoot, manifest), readFileSync38(manifest));
   }
@@ -79624,13 +79641,13 @@ function resolveDeclaredIdentity(appRoot, dependencies, canonicalize) {
 }
 function resolveSourceIdentity(inputRoot, dependencies = {}) {
   const canonicalize = dependencies.canonicalize ?? realpathSync10;
-  const appRoot = canonicalize(resolve9(inputRoot));
+  const appRoot = canonicalize(resolve10(inputRoot));
   const git = dependencies.git ?? defaultGit;
   try {
     const contentRoot = canonicalize(git(appRoot, ["rev-parse", "--show-toplevel"]));
     assertContained(contentRoot, appRoot, "APP_ROOT_OUTSIDE_WORKTREE");
     const commonRaw = git(appRoot, ["rev-parse", "--git-common-dir"]);
-    const commonDirectory = canonicalize(isAbsolute7(commonRaw) ? commonRaw : join53(appRoot, commonRaw));
+    const commonDirectory = canonicalize(isAbsolute8(commonRaw) ? commonRaw : join53(appRoot, commonRaw));
     const head = git(appRoot, ["rev-parse", "HEAD"]);
     const appRelative = relative5(contentRoot, appRoot) || ".";
     return {
@@ -79678,7 +79695,7 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
     return match?.[1] ? [match[1]] : [];
   });
   for (const entry of gitlinks) {
-    const submodule = resolve9(identity2.contentRoot, entry);
+    const submodule = resolve10(identity2.contentRoot, entry);
     assertContained(identity2.contentRoot, submodule, "STRICT_PROOF_PATH_ESCAPE");
     const status = git(submodule, [
       "status",
@@ -79707,7 +79724,7 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
   }
   let totalBytes = 0;
   for (const [classification, entry] of sourceEntries) {
-    const file = resolve9(identity2.contentRoot, entry);
+    const file = resolve10(identity2.contentRoot, entry);
     assertContained(identity2.contentRoot, file, "STRICT_PROOF_PATH_ESCAPE");
     const stat2 = lstatSync12(file);
     updateFramed(dirtyHash, classification);
@@ -81116,7 +81133,7 @@ trackedTool("device_snapshot", "Manage device sessions and capture UI snapshots.
       const probe = await client2.evaluate('typeof globalThis.__RN_AGENT !== "undefined" && globalThis.__RN_AGENT.isReady() === true').catch(() => ({ value: false }));
       if (probe.value === true)
         return true;
-      await new Promise((resolve10) => setTimeout(resolve10, 250));
+      await new Promise((resolve11) => setTimeout(resolve11, 250));
     }
     return false;
   }

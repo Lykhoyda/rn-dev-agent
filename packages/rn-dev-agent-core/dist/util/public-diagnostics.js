@@ -1,10 +1,14 @@
-import { basename } from 'node:path';
+import { basename, isAbsolute } from 'node:path';
 import { shortAuthorityIdentity } from '../session/registry.js';
 const DEVICE_ID_RE = /\b[0-9A-F]{8}(?:-[0-9A-F]{4}){3}-[0-9A-F]{12}\b/gi;
 const POSIX_PATH_RE = /(?:\/(?:Users|home|private|tmp|var\/folders)\/[^\s:'"),\]]+)+/g;
 const MAX_PUBLIC_DIAGNOSTIC = 2_000;
 export function publicDeviceIdentity(deviceId) {
     return `device-${shortAuthorityIdentity(deviceId).slice(0, 12)}`;
+}
+/** Keep a useful basename without exposing a caller's absolute local path. */
+export function publicLocalPath(path) {
+    return isAbsolute(path) ? `<local-path>/${basename(path)}` : path;
 }
 /**
  * Bound subprocess diagnostics are useful, but raw stderr/ps output can carry a
