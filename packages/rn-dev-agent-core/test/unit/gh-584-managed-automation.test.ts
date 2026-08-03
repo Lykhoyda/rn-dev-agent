@@ -159,6 +159,90 @@ test('managed executor terminates the process group when ownership state cannot 
   assert.equal(alive(managedPid), false);
 });
 
+test('proven cleanup remains recoverable when the first duty clear fails', async () => {
+  const prior = process.env.XDG_STATE_HOME;
+  const dir = mkdtempSync(join(tmpdir(), 'rn-584-proven-clear-'));
+  process.env.XDG_STATE_HOME = dir;
+  const durable = { duty: null as AutomationDuty | null };
+  let rejectClear = true;
+  const authorityStore = {
+    read: () => durable.duty,
+    write: (duty: AutomationDuty | null) => {
+      if (duty === null && rejectClear) {
+        rejectClear = false;
+        throw new Error('registry clear unavailable');
+      }
+      durable.duty = duty;
+    },
+  };
+  const child = Object.assign(new EventEmitter(), {
+    pid: 699,
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    kill: () => true,
+  }) as unknown as ChildProcessWithoutNullStreams;
+  try {
+    const pending = spawnManagedProcessGroup(
+      'maestro',
+      [],
+      {
+        timeoutMs: 10_000,
+        platform: 'ios',
+        deviceId: 'UDID-PROVEN-CLEAR',
+        tool: 'fixture-proven-clear',
+        env: {
+          ...process.env,
+          RN_DEV_AGENT_SESSION_ID: 'session-proven-clear',
+          RN_DEV_AGENT_CLAIM_EPOCH: '6',
+        },
+      },
+      {
+        spawn: (() => child) as typeof spawnChild,
+        readBirth: (pid) => ({ pid, source: 'linux-proc', token: 'leader-birth' }),
+        listProcesses: () => '',
+        authorityStore,
+        signalGroup: () => {
+          const error = new Error('absent') as NodeJS.ErrnoException;
+          error.code = 'ESRCH';
+          throw error;
+        },
+      },
+    );
+    setImmediate(() => child.emit('close', 0, null));
+    const result = await pending;
+    assert.equal(result.cleanupProven, true);
+    assert.match(result.error ?? '', /proven cleanup duty could not be cleared/);
+    assert.equal(durable.duty?.kind, 'maestro-process-group');
+    if (durable.duty?.kind !== 'maestro-process-group') assert.fail('expected process duty');
+    assert.equal(durable.duty.attributionComplete, true);
+    assert.deepEqual(durable.duty.attributedProcesses, []);
+
+    const recovered = await recoverAutomationDuty(
+      {
+        sessionId: 'session-proven-clear',
+        claimEpoch: 6,
+        platform: 'ios',
+        deviceId: 'UDID-PROVEN-CLEAR',
+      },
+      {
+        authorityStore,
+        signalGroup: () => {
+          const error = new Error('absent') as NodeJS.ErrnoException;
+          error.code = 'ESRCH';
+          throw error;
+        },
+      },
+    );
+    assert.equal(recovered.recovered, true);
+    assert.equal(durable.duty, null);
+    assert.equal(existsSync(automationStatePath('ios', 'UDID-PROVEN-CLEAR')), false);
+  } finally {
+    if (prior === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = prior;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('failed state persistence retains an authenticated fence until recovery', async () => {
   const prior = process.env.XDG_STATE_HOME;
   const dir = mkdtempSync(join(tmpdir(), 'rn-584-memory-fence-'));

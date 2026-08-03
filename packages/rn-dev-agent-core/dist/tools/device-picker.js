@@ -52,7 +52,8 @@ function stepTargetsQuotedValue(stepName, value) {
     return stepName.includes(`"${value}"`) || stepName.includes(`'${value}'`);
 }
 function stepTargetsIdValue(stepName, value) {
-    return (/\btap(?:ping)?\s+on\s+(?:element\s+with\s+)?id\b/i.test(stepName) &&
+    return ((/\btap(?:ping)?\s+on\s+(?:element\s+with\s+)?id\b/i.test(stepName) ||
+        /\btapOn\s*:\s*id\s*=/i.test(stepName)) &&
         stepTargetsQuotedValue(stepName, value));
 }
 function stepTargetsTextValue(stepName, value) {

@@ -523,6 +523,25 @@ export async function spawnManagedProcessGroup(
     } catch {}
     return stateFileUpdated || authorityUpdated;
   };
+  const persistProvenCleanup = (recoverableState: PersistedAutomationState): boolean => {
+    recoverableState.attributedProcesses = [];
+    recoverableState.attributionComplete = true;
+    recoverableState.revision += 1;
+    rememberAutomationDuty(recoverableState);
+    let authorityUpdated = false;
+    let stateFileUpdated = false;
+    if (authorityStore) {
+      try {
+        authorityStore.write(recoverableState);
+        authorityUpdated = true;
+      } catch {}
+    }
+    try {
+      writeState(statePath!, recoverableState);
+      stateFileUpdated = true;
+    } catch {}
+    return stateFileUpdated || authorityUpdated;
+  };
   if (authority && options.deviceId && !birth) {
     const cleanup = await terminateProcessGroup(pid, signalGroup, delay);
     terminalObserver.stop();
@@ -574,9 +593,18 @@ export async function spawnManagedProcessGroup(
       persistenceError ??= error;
       const cleanup = await terminateProcessGroup(pid, signalGroup, delay);
       const cleanupProven = cleanup.presence === 'absent';
-      const residualPersisted = cleanupProven || persistResidualAttribution(state);
+      const residualPersisted = cleanupProven
+        ? persistProvenCleanup(state)
+        : persistResidualAttribution(state);
       terminalObserver.stop();
-      if (cleanupProven) clearAutomationDuty(options.platform, options.deviceId, authorityStore);
+      let clearError: unknown;
+      if (cleanupProven) {
+        try {
+          clearAutomationDuty(options.platform, options.deviceId, authorityStore);
+        } catch (error) {
+          clearError = error;
+        }
+      }
       return {
         stdout: '',
         stderr: '',
@@ -585,8 +613,10 @@ export async function spawnManagedProcessGroup(
         timedOut: false,
         cleanupProven,
         cleanupEscalated: cleanup.escalated,
-        error: cleanupProven
-          ? `Failed to persist managed automation state: ${persistenceError instanceof Error ? persistenceError.message : String(persistenceError)}`
+        error: clearError
+          ? `AUTOMATION_CLEANUP_UNPROVEN: proven cleanup duty could not be cleared: ${clearError instanceof Error ? clearError.message : String(clearError)}`
+          : cleanupProven
+            ? `Failed to persist managed automation state: ${persistenceError instanceof Error ? persistenceError.message : String(persistenceError)}`
           : residualPersisted
             ? 'AUTOMATION_CLEANUP_UNPROVEN: process-group absence could not be confirmed'
             : 'AUTOMATION_CLEANUP_UNPROVEN: managed automation state and residual attribution could not be persisted',
@@ -633,7 +663,8 @@ export async function spawnManagedProcessGroup(
     }
   }
 
-  let cleanupProven = presence === 'absent';
+  const cleanupProven = presence === 'absent';
+  let dutyClearError: unknown;
   if (!cleanupProven && state && options.deviceId) {
     if (!persistResidualAttribution(state)) {
       return {
@@ -649,8 +680,13 @@ export async function spawnManagedProcessGroup(
       };
     }
   }
-  if (cleanupProven && statePath && options.deviceId) {
-    clearAutomationDuty(options.platform, options.deviceId, authorityStore);
+  if (cleanupProven && state && statePath && options.deviceId) {
+    persistProvenCleanup(state);
+    try {
+      clearAutomationDuty(options.platform, options.deviceId, authorityStore);
+    } catch (error) {
+      dutyClearError = error;
+    }
   }
 
   return {
@@ -661,7 +697,11 @@ export async function spawnManagedProcessGroup(
     timedOut: terminal.timedOut,
     cleanupProven,
     cleanupEscalated,
-    ...(overflow
+    ...(dutyClearError
+      ? {
+          error: `AUTOMATION_CLEANUP_UNPROVEN: proven cleanup duty could not be cleared: ${dutyClearError instanceof Error ? dutyClearError.message : String(dutyClearError)}`,
+        }
+      : overflow
       ? { error: 'Maestro output exceeded 10 MiB' }
       : terminal.error
         ? { error: terminal.error }

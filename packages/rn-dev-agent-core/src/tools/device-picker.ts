@@ -87,7 +87,8 @@ function stepTargetsQuotedValue(stepName: string, value: string): boolean {
 
 function stepTargetsIdValue(stepName: string, value: string): boolean {
   return (
-    /\btap(?:ping)?\s+on\s+(?:element\s+with\s+)?id\b/i.test(stepName) &&
+    (/\btap(?:ping)?\s+on\s+(?:element\s+with\s+)?id\b/i.test(stepName) ||
+      /\btapOn\s*:\s*id\s*=/i.test(stepName)) &&
     stepTargetsQuotedValue(stepName, value)
   );
 }
