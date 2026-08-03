@@ -671,3 +671,61 @@ for (const retryShape of ['warn', 'throw'] as const) {
     assert.equal(env.meta.terminal.failureSelector, 'otp_retry');
   });
 }
+
+test('gh-580: a killed post-repair retry persists and returns TIMEOUT', async () => {
+  project.seedAction('register', actionYaml(['- tapOn:', '    id: "otp"']));
+  let maestroCalls = 0;
+  const handler = createRunActionHandler({
+    maestroRun: async (...args: unknown[]) => {
+      maestroCalls++;
+      if (maestroCalls === 1) return waitFailureEnvelope('otp')(...(args as []));
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: JSON.stringify({
+              ok: false,
+              error: 'Maestro flow timed out after step "extendedWaitUntil"',
+              data: {
+                passed: false,
+                output: "Element '#otp_retry' not visible within 15s",
+                terminal: {
+                  completedSteps: 1,
+                  exitClass: 'timed-out',
+                  failureKind: 'SELECTOR_NOT_FOUND',
+                  failureSelector: 'otp_retry',
+                },
+              },
+            }),
+          },
+        ],
+        isError: true as const,
+      };
+    },
+    repairAction: async () => ({
+      content: [
+        {
+          type: 'text' as const,
+          text: JSON.stringify({
+            ok: true,
+            data: {
+              patched: true,
+              oldSelector: 'otp',
+              newSelector: 'otp_retry',
+              score: 0.9,
+            },
+          }),
+        },
+      ],
+    }),
+  });
+
+  const env = readEnvelope(await handler({ actionId: 'register', projectRoot: project.root }));
+  assert.equal(env.ok, false);
+  assert.equal(env.code, undefined);
+  assert.equal(env.meta.failureKind, 'TIMEOUT');
+  assert.equal(env.meta.failureSelector, 'otp_retry');
+  assert.equal(env.meta.terminal.exitClass, 'timed-out');
+  const sidecar = project.readSidecar('register');
+  assert.equal(sidecar.runHistory.at(-1)?.failureCode, 'TIMEOUT');
+});

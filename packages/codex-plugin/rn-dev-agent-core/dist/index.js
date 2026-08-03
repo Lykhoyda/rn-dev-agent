@@ -27653,26 +27653,16 @@ function parseMaestroFailure(output, terminal) {
   }
   output = raw;
   const lines = output.split("\n");
-  const terminalWaitLine = [...lines].reverse().find((line) => /Element (['"])(?:(?!\1).)+\1 not visible within/i.test(line));
-  for (const { re, build, terminalWaitOnly } of PATTERNS) {
-    if (terminalWaitOnly) {
-      const m = terminalWaitLine?.match(re);
-      if (m)
-        return build(m, output);
-      continue;
-    }
-    for (let i = lines.length - 1; i >= 0; i--) {
-      const line = lines[i];
-      if (!line)
-        continue;
-      const m = line.match(re);
+  const terminalFailureLine = [...lines].reverse().find((line) => /Element (['"])(?:(?!\1).)+\1 not visible within/i.test(line) || PATTERNS.some(({ re }) => re.test(line)));
+  if (terminalFailureLine) {
+    for (const { re, build } of PATTERNS) {
+      const m = terminalFailureLine.match(re);
       if (m)
         return build(m, output);
     }
+    return { kind: "UNKNOWN", raw: output };
   }
-  for (const { re, build, terminalWaitOnly } of PATTERNS) {
-    if (terminalWaitOnly)
-      continue;
+  for (const { re, build } of PATTERNS) {
     const m = output.match(re);
     if (m)
       return build(m, output);
@@ -27716,8 +27706,7 @@ var init_maestro_error_parser = __esm({
       // the pattern list — parseMaestroFailure returns TIMEOUT on `exitClass` first.
       {
         re: /Element (['"])#((?:(?!\1).)+)\1 not visible within/i,
-        build: (m, raw) => ({ kind: "SELECTOR_NOT_FOUND", selectorKind: "id", selector: m[2], raw }),
-        terminalWaitOnly: true
+        build: (m, raw) => ({ kind: "SELECTOR_NOT_FOUND", selectorKind: "id", selector: m[2], raw })
       },
       {
         re: /Element (['"])((?:(?!\1).)+)\1 (?:was )?not found/i,
@@ -69502,6 +69491,7 @@ function createRunActionHandler(deps = {}) {
       const retryFailureDetail = readMaestroFailureDetail(retryEnv, retryOutput);
       const retryTerminal = readMaestroTerminal(retryEnv);
       const retryFailure = !retryPassed ? parseMaestroFailure(retryOutput, retryTerminal) : void 0;
+      const retryClassification = retryFailure ? classifyFailure(retryFailure) : void 0;
       const retryDeviceAuthority = readMaestroDeviceAuthority(retryEnv);
       probeDeviceId = retryDeviceAuthority?.reportedDeviceId ?? observedDeviceId;
       if (retryEnv.code === "DEVICE_AUTHORITY_MISMATCH") {
@@ -69545,7 +69535,7 @@ function createRunActionHandler(deps = {}) {
         timestamp: (/* @__PURE__ */ new Date()).toISOString(),
         durationMs: Date.now() - t0,
         status: retryPassed ? "pass" : "fail",
-        failureCode: retryPassed ? void 0 : "SELECTOR_NOT_FOUND",
+        failureCode: retryClassification?.actionCode,
         failureDetail: retryPassed ? void 0 : retryFailureDetail.slice(0, 1e3),
         trigger,
         autoRepair
@@ -69564,7 +69554,8 @@ function createRunActionHandler(deps = {}) {
           retryOutput: boundedOutput(retryOutput)
         });
       }
-      return failResult(`cdp_run_action: ${args.actionId} still failing after auto-repair (${repairData.oldSelector} \u2192 ${repairData.newSelector}): ${retryFailureDetail}`, "TESTID_NOT_FOUND", {
+      const retryMessage = `cdp_run_action: ${args.actionId} still failing after auto-repair (${repairData.oldSelector} \u2192 ${repairData.newSelector}): ${retryFailureDetail}`;
+      const retryMeta = {
         actionId: args.actionId,
         autoRepair,
         writes: writeDisclosure("auto-repair", persisted),
@@ -69574,7 +69565,8 @@ function createRunActionHandler(deps = {}) {
         ...retryFailure ? { failureKind: retryFailure.kind } : {},
         ...retryFailure && "selector" in retryFailure && retryFailure.selector ? { failureSelector: retryFailure.selector } : {},
         terminal: retryTerminal
-      });
+      };
+      return retryClassification?.toolCode ? failResult(retryMessage, retryClassification.toolCode, retryMeta) : failResult(retryMessage, retryMeta);
     } catch (err) {
       if (err instanceof SessionAuthorityError)
         throw err;

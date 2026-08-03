@@ -120,6 +120,32 @@ test('gh-580: an earlier ID wait cannot outrank a terminal text or regex wait', 
   }
 });
 
+test('gh-580: an earlier ID wait cannot outrank a terminal assertion or timeout', () => {
+  const cases = [
+    {
+      terminal: '      ╰─ Assertion failed: "ready" not visible',
+      kind: 'ASSERTION_FAILED',
+      selector: 'ready',
+    },
+    {
+      terminal: '      ╰─ Timed out waiting for element "spinner"',
+      kind: 'TIMEOUT',
+      selector: 'spinner',
+    },
+  ] as const;
+  for (const { terminal, kind, selector } of cases) {
+    const output = ["      ╰─ Element '#stale_transient' not visible within 1s", terminal].join(
+      '\n',
+    );
+    const failure = parseMaestroFailure(output);
+    assert.equal(failure.kind, kind);
+    assert.equal(failure.selector, selector);
+    const evidence = buildTerminalEvidence(output);
+    assert.equal(evidence.failureKind, kind);
+    assert.equal(evidence.failureSelector, selector);
+  }
+});
+
 test('gh-580: boundedOutput keeps head AND tail inside one 500-char budget', () => {
   const short = 'maestro-runner 1.1.20\n    ✓ launchApp (2.7s)';
   assert.equal(boundedOutput(short), short, 'output within budget is returned verbatim');

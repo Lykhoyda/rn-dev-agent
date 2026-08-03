@@ -1055,6 +1055,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       const retryFailure = !retryPassed
         ? parseMaestroFailure(retryOutput, retryTerminal)
         : undefined;
+      const retryClassification = retryFailure ? classifyFailure(retryFailure) : undefined;
       const retryDeviceAuthority = readMaestroDeviceAuthority(retryEnv);
       probeDeviceId = retryDeviceAuthority?.reportedDeviceId ?? observedDeviceId;
 
@@ -1125,7 +1126,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         timestamp: new Date().toISOString(),
         durationMs: Date.now() - t0,
         status: retryPassed ? 'pass' : 'fail',
-        failureCode: retryPassed ? undefined : 'SELECTOR_NOT_FOUND',
+        failureCode: retryClassification?.actionCode,
         failureDetail: retryPassed ? undefined : retryFailureDetail.slice(0, 1000),
         trigger,
         autoRepair,
@@ -1146,23 +1147,23 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         });
       }
 
-      return failResult(
-        `cdp_run_action: ${args.actionId} still failing after auto-repair (${repairData.oldSelector} → ${repairData.newSelector}): ${retryFailureDetail}`,
-        'TESTID_NOT_FOUND',
-        {
-          actionId: args.actionId,
-          autoRepair,
-          writes: writeDisclosure('auto-repair', persisted),
-          firstAttemptOutput: boundedOutput(firstOutput),
-          retryOutput: boundedOutput(retryOutput),
-          underlyingFailure: retryFailureDetail,
-          ...(retryFailure ? { failureKind: retryFailure.kind } : {}),
-          ...(retryFailure && 'selector' in retryFailure && retryFailure.selector
-            ? { failureSelector: retryFailure.selector }
-            : {}),
-          terminal: retryTerminal,
-        },
-      );
+      const retryMessage = `cdp_run_action: ${args.actionId} still failing after auto-repair (${repairData.oldSelector} → ${repairData.newSelector}): ${retryFailureDetail}`;
+      const retryMeta = {
+        actionId: args.actionId,
+        autoRepair,
+        writes: writeDisclosure('auto-repair', persisted),
+        firstAttemptOutput: boundedOutput(firstOutput),
+        retryOutput: boundedOutput(retryOutput),
+        underlyingFailure: retryFailureDetail,
+        ...(retryFailure ? { failureKind: retryFailure.kind } : {}),
+        ...(retryFailure && 'selector' in retryFailure && retryFailure.selector
+          ? { failureSelector: retryFailure.selector }
+          : {}),
+        terminal: retryTerminal,
+      };
+      return retryClassification?.toolCode
+        ? failResult(retryMessage, retryClassification.toolCode, retryMeta)
+        : failResult(retryMessage, retryMeta);
     } catch (err) {
       if (err instanceof SessionAuthorityError) throw err;
       // Multi-LLM review of PR #115 (Gemini conf 95): top-level catch

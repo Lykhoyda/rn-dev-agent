@@ -779,6 +779,7 @@ export function createRunActionHandler(deps = {}) {
             const retryFailure = !retryPassed
                 ? parseMaestroFailure(retryOutput, retryTerminal)
                 : undefined;
+            const retryClassification = retryFailure ? classifyFailure(retryFailure) : undefined;
             const retryDeviceAuthority = readMaestroDeviceAuthority(retryEnv);
             probeDeviceId = retryDeviceAuthority?.reportedDeviceId ?? observedDeviceId;
             if (retryEnv.code === 'DEVICE_AUTHORITY_MISMATCH') {
@@ -837,7 +838,7 @@ export function createRunActionHandler(deps = {}) {
                 timestamp: new Date().toISOString(),
                 durationMs: Date.now() - t0,
                 status: retryPassed ? 'pass' : 'fail',
-                failureCode: retryPassed ? undefined : 'SELECTOR_NOT_FOUND',
+                failureCode: retryClassification?.actionCode,
                 failureDetail: retryPassed ? undefined : retryFailureDetail.slice(0, 1000),
                 trigger,
                 autoRepair,
@@ -856,7 +857,8 @@ export function createRunActionHandler(deps = {}) {
                     retryOutput: boundedOutput(retryOutput),
                 });
             }
-            return failResult(`cdp_run_action: ${args.actionId} still failing after auto-repair (${repairData.oldSelector} → ${repairData.newSelector}): ${retryFailureDetail}`, 'TESTID_NOT_FOUND', {
+            const retryMessage = `cdp_run_action: ${args.actionId} still failing after auto-repair (${repairData.oldSelector} → ${repairData.newSelector}): ${retryFailureDetail}`;
+            const retryMeta = {
                 actionId: args.actionId,
                 autoRepair,
                 writes: writeDisclosure('auto-repair', persisted),
@@ -868,7 +870,10 @@ export function createRunActionHandler(deps = {}) {
                     ? { failureSelector: retryFailure.selector }
                     : {}),
                 terminal: retryTerminal,
-            });
+            };
+            return retryClassification?.toolCode
+                ? failResult(retryMessage, retryClassification.toolCode, retryMeta)
+                : failResult(retryMessage, retryMeta);
         }
         catch (err) {
             if (err instanceof SessionAuthorityError)

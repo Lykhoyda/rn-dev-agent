@@ -60,7 +60,6 @@ const PATTERNS = [
     {
         re: /Element (['"])#((?:(?!\1).)+)\1 not visible within/i,
         build: (m, raw) => ({ kind: 'SELECTOR_NOT_FOUND', selectorKind: 'id', selector: m[2], raw }),
-        terminalWaitOnly: true,
     },
     {
         re: /Element (['"])((?:(?!\1).)+)\1 (?:was )?not found/i,
@@ -88,30 +87,6 @@ const PATTERNS = [
         build: (m, raw) => ({ kind: 'ASSERTION_FAILED', selector: m[2], raw }),
     },
 ];
-/**
- * Parse the full Maestro stdout+stderr text and classify the failure.
- *
- * Two-axis selection — pattern-specificity dominates, line-position breaks
- * ties within a pattern:
- *
- *   1. Outer loop walks PATTERNS in order (most-specific first). The first
- *      pattern that hits ANY line wins, regardless of where that line sits.
- *      Preserves the existing invariant that the 1.0.9 `id=` shape outranks
- *      the catch-all `Element 'X' not found`.
- *
- *   2. Inner loop scans lines from END to START. Within a single pattern,
- *      the LAST matching line (the terminal failure) wins — earlier matches
- *      are typically transient retries that maestro-runner reports as
- *      `[INFO]` before the auto-retry succeeds. GH #118: PR #115's
- *      first-match-anywhere scan captured a transient retry selector and
- *      sent it to `cdp_repair_action`, wasting a 24h-budget slot.
- *
- * Falls back to a whole-buffer scan when no line matches a known pattern —
- * preserves prior-art behavior for single-line inputs and any pattern that
- * happens to span a line boundary (none today, but defensive).
- *
- * Returns `UNKNOWN` if no pattern matches at all.
- */
 export function parseMaestroFailure(output, terminal) {
     const raw = typeof output === 'string' ? output : '';
     if (terminal?.exitClass === 'timed-out') {
@@ -145,30 +120,21 @@ export function parseMaestroFailure(output, terminal) {
     }
     output = raw;
     const lines = output.split('\n');
-    const terminalWaitLine = [...lines]
+    const terminalFailureLine = [...lines]
         .reverse()
-        .find((line) => /Element (['"])(?:(?!\1).)+\1 not visible within/i.test(line));
-    for (const { re, build, terminalWaitOnly } of PATTERNS) {
-        if (terminalWaitOnly) {
-            const m = terminalWaitLine?.match(re);
-            if (m)
-                return build(m, output);
-            continue;
-        }
-        for (let i = lines.length - 1; i >= 0; i--) {
-            const line = lines[i];
-            if (!line)
-                continue;
-            const m = line.match(re);
+        .find((line) => /Element (['"])(?:(?!\1).)+\1 not visible within/i.test(line) ||
+        PATTERNS.some(({ re }) => re.test(line)));
+    if (terminalFailureLine) {
+        for (const { re, build } of PATTERNS) {
+            const m = terminalFailureLine.match(re);
             if (m)
                 return build(m, output);
         }
+        return { kind: 'UNKNOWN', raw: output };
     }
     // Fallback: whole-buffer scan for inputs without line breaks or for
     // any pattern that happens to straddle a `\n`.
-    for (const { re, build, terminalWaitOnly } of PATTERNS) {
-        if (terminalWaitOnly)
-            continue;
+    for (const { re, build } of PATTERNS) {
         const m = output.match(re);
         if (m)
             return build(m, output);
