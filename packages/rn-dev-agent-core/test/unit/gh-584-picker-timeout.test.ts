@@ -123,3 +123,49 @@ test('component attribution uses the terminal outcome after a transient retry', 
   assert.equal(result.meta.failedAt, 'year');
   assert.equal(result.meta.failedValue, '2026');
 });
+
+test('executor refusal does not fabricate a component failure', async () => {
+  const handler = createDevicePickDateHandler(async () => ({
+    passed: false,
+    output:
+      '    ✓ Tap on "June" (0.1s)\n    ✓ Tap on "2" (0.1s)\n    ✓ Tap on "2026" (0.1s)',
+    flowFile: '/tmp/deleted.yaml',
+    error: 'plugin-owned automation cleanup is unproven',
+    errorCode: 'AUTOMATION_CLEANUP_UNPROVEN',
+  }));
+  const result = envelope(await handler({ date: '2026-06-02', platform: 'ios' }));
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'AUTOMATION_CLEANUP_UNPROVEN');
+  assert.equal(result.meta.failedAt, undefined);
+  assert.equal(result.meta.failedValue, undefined);
+});
+
+test('opener observation is excluded when its identifier equals a component value', async () => {
+  const handler = createDevicePickDateHandler(async () => ({
+    passed: false,
+    output: '    ✓ Tap on "June" (0.1s)\n    ✗ Tap on "June" (20.0s)',
+    flowFile: '/tmp/deleted.yaml',
+  }));
+  const result = envelope(
+    await handler({ date: '2026-06-02', platform: 'ios', openerTestId: 'June' }),
+  );
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.meta.succeeded, []);
+  assert.equal(result.meta.failedAt, 'month');
+  assert.equal(result.meta.failedValue, 'June');
+});
+
+test('opener retry outcome is fully excluded from component attribution', async () => {
+  const handler = createDevicePickDateHandler(async () => ({
+    passed: false,
+    output:
+      '    ✗ Tap on "June" (0.1s)\n    ✓ Tap on "June" (0.1s)\n    ✗ Tap on "June" (20.0s)',
+    flowFile: '/tmp/deleted.yaml',
+  }));
+  const result = envelope(
+    await handler({ date: '2026-06-02', platform: 'ios', openerTestId: 'June' }),
+  );
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.meta.succeeded, []);
+  assert.equal(result.meta.failedAt, 'month');
+});

@@ -1,5 +1,5 @@
 import { okResult, failResult, warnResult } from '../utils.js';
-import { runMaestroInline, yamlEscape } from '../maestro-invoke.js';
+import { maestroRefusalResult, runMaestroInline, yamlEscape } from '../maestro-invoke.js';
 import { detectPlatform } from './platform-utils.js';
 import { buildStepSummary } from '../domain/maestro-step-parser.js';
 const DEFAULT_PICKER_TIMEOUT_MS = 120_000;
@@ -127,26 +127,41 @@ export function createDevicePickDateHandler(invoke = runMaestroInline) {
                 succeeded: components.map((component) => component.name),
             });
         }
+        const refusal = maestroRefusalResult(result, 'Maestro date picker flow was refused.', {
+            picked: false,
+            date: args.date,
+            platform,
+        });
+        if (refusal)
+            return refusal;
         const summary = buildStepSummary(result.output, { failed: true });
         const succeeded = [];
-        let failed = components[0];
+        let failed;
         let nextStepIndex = 0;
-        for (const component of components) {
-            let observedIndex = summary.steps.findIndex((step, index) => index >= nextStepIndex && stepTargetsValue(step.name, component.value));
+        const terminalTarget = (startIndex, value) => {
+            let observedIndex = summary.steps.findIndex((step, index) => index >= startIndex && stepTargetsValue(step.name, value));
             let observed = observedIndex < 0 ? undefined : summary.steps[observedIndex];
             while (observed?.status === 'fail') {
-                const retryIndex = summary.steps.findIndex((step, index) => index > observedIndex && stepTargetsValue(step.name, component.value));
+                const retryIndex = summary.steps.findIndex((step, index) => index > observedIndex && stepTargetsValue(step.name, value));
                 if (retryIndex < 0)
                     break;
                 const interveningComponent = summary.steps
                     .slice(observedIndex + 1, retryIndex)
-                    .some((step) => components.some((candidate) => candidate.value !== component.value &&
-                    stepTargetsValue(step.name, candidate.value)));
+                    .some((step) => components.some((candidate) => candidate.value !== value && stepTargetsValue(step.name, candidate.value)));
                 if (interveningComponent)
                     break;
                 observedIndex = retryIndex;
                 observed = summary.steps[observedIndex];
             }
+            return { observed, observedIndex };
+        };
+        if (opener) {
+            const openerOutcome = terminalTarget(0, opener);
+            if (openerOutcome.observedIndex >= 0)
+                nextStepIndex = openerOutcome.observedIndex + 1;
+        }
+        for (const component of components) {
+            const { observed, observedIndex } = terminalTarget(nextStepIndex, component.value);
             if (observed?.status !== 'pass') {
                 failed = component;
                 break;
@@ -155,6 +170,18 @@ export function createDevicePickDateHandler(invoke = runMaestroInline) {
             nextStepIndex = observedIndex + 1;
         }
         const code = result.errorCode ?? (result.timedOut ? 'PICK_DATE_TIMEOUT' : 'PICK_DATE_INCOMPLETE');
+        if (!failed) {
+            return failResult(result.error ?? 'Date-picker flow failed after selecting every component.', code, {
+                picked: false,
+                date: args.date,
+                platform,
+                succeeded,
+                completedOperations: succeeded,
+                selectorFailure: summary.reason,
+                terminalStep: summary.failedStep,
+                output: result.output.slice(0, 500),
+            });
+        }
         const reason = result.timedOut
             ? `Date-picker flow timed out after ${args.timeoutMs ?? DEFAULT_PICKER_TIMEOUT_MS}ms while attempting ${failed.name} "${failed.value}".`
             : `Date-picker flow could not select ${failed.name} "${failed.value}". Calendar mode and off-screen wheel scrolling remain unsupported; issue #27 tracks native wheel adjustment.`;
