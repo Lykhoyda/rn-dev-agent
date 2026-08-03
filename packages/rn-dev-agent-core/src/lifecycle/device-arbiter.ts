@@ -341,12 +341,7 @@ export function arbiterWrap(
     // the plain BUSY_FLOW_ACTIVE refusal below already covers contenders),
     // and not within the teardown grace of our own just-released flow (the
     // dying driver still matches the detector; a fresh scan can't tell).
-    if (
-      plane !== 'introspection' &&
-      !inst.flowActive &&
-      inst.msSinceFlowReleased >= FOREIGN_GRACE_MS &&
-      enabled()
-    ) {
+    if (plane !== 'introspection' && !inst.flowActive) {
       const udid = getUdid();
       if (udid !== null) {
         if (ownedAutomation(udid)) {
@@ -356,14 +351,16 @@ export function arbiterWrap(
             { device: publicDeviceIdentity(udid), conflict: true },
           );
         }
-        const check = await gate.check(udid);
-        if (check.active && check.warning) {
-          if (FLOW_FALLBACK_TOOLS.has(name)) {
-            // Same OS-level fallback contract as a local flow: pixels stay
-            // available via simctl (the handler routes by gate.lastActive).
-            return await handler(...args);
+        if (inst.msSinceFlowReleased >= FOREIGN_GRACE_MS && enabled()) {
+          const check = await gate.check(udid);
+          if (check.active && check.warning) {
+            if (FLOW_FALLBACK_TOOLS.has(name)) {
+              // Same OS-level fallback contract as a local flow: pixels stay
+              // available via simctl (the handler routes by gate.lastActive).
+              return await handler(...args);
+            }
+            return foreignRefusal(name, check.warning, check.scanMs, udid);
           }
-          return foreignRefusal(name, check.warning, check.scanMs, udid);
         }
       }
     }

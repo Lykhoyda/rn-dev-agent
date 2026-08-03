@@ -1,5 +1,5 @@
 import { okResult, failResult, warnResult } from '../utils.js';
-import { runMaestroInline, yamlEscape } from '../maestro-invoke.js';
+import { maestroRefusalResult, runMaestroInline, yamlEscape } from '../maestro-invoke.js';
 import { detectPlatform } from './platform-utils.js';
 import { fetchSnapshotNodes, pressCandidate } from './device-interact.js';
 import { hasActiveSession, getActiveSession } from '../agent-device-wrapper.js';
@@ -155,12 +155,12 @@ async function tapSystemDialog(labels, platform, totalTimeoutMs, slug, authority
     if (result.deviceAuthority && shouldRejectMaestroDeviceAuthority(result.deviceAuthority)) {
         return failResult(result.error ?? 'Maestro device authority refused during system dialog probe.', 'DEVICE_AUTHORITY_MISMATCH', { platform, triedLabels: labels, deviceAuthority: result.deviceAuthority });
     }
-    if (result.errorCode === 'AUTOMATION_CLEANUP_UNPROVEN') {
-        return failResult(result.error ?? 'Automation cleanup is unproven.', result.errorCode, {
-            platform,
-            triedLabels: labels,
-        });
-    }
+    const refusal = maestroRefusalResult(result, 'Maestro system dialog fallback was refused.', {
+        platform,
+        triedLabels: labels,
+    });
+    if (refusal)
+        return refusal;
     const attempts = [
         {
             selector,

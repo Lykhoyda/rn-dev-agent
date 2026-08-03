@@ -13,6 +13,7 @@ import { collectDirectRunnerEvidence, createRunnerReportDir, disposeRunnerReport
 import { removeTemporaryInlineFlow, spawnManagedProcessGroup, } from './session/managed-automation.js';
 import { promoteCurrentOperationToManagedFlow } from './lifecycle/device-arbiter.js';
 import { completeManagedRunnerParkAuthority, hasManagedRunnerParkAuthority, } from './session/authority-gate.js';
+import { failResult } from './utils.js';
 export function yamlEscape(s) {
     return s
         .replace(/\\/g, '\\\\')
@@ -20,6 +21,17 @@ export function yamlEscape(s) {
         .replace(/\n/g, '\\n')
         .replace(/\r/g, '\\r')
         .replace(/\t/g, '\\t');
+}
+export function maestroRefusalResult(result, fallbackMessage, meta) {
+    if (!result.errorCode)
+        return null;
+    return failResult(result.error ?? fallbackMessage, result.errorCode, {
+        ...meta,
+        timedOut: result.timedOut,
+        exitCode: result.exitCode,
+        signal: result.signal,
+        cleanupEscalated: result.cleanupEscalated,
+    });
 }
 export function getMaestroRunnerPath() {
     const path = join(homedir(), '.maestro-runner', 'bin', 'maestro-runner');

@@ -34,6 +34,7 @@ import {
   completeManagedRunnerParkAuthority,
   hasManagedRunnerParkAuthority,
 } from './session/authority-gate.js';
+import { failResult, type ToolResult } from './utils.js';
 
 export interface MaestroInvokeOptions {
   platform: 'ios' | 'android';
@@ -66,6 +67,21 @@ export interface MaestroInvokeResult {
   signal?: NodeJS.Signals | null;
   cleanupEscalated?: boolean;
   deviceAuthority?: MaestroDeviceAuthority;
+}
+
+export function maestroRefusalResult(
+  result: MaestroInvokeResult,
+  fallbackMessage: string,
+  meta: Record<string, unknown>,
+): ToolResult | null {
+  if (!result.errorCode) return null;
+  return failResult(result.error ?? fallbackMessage, result.errorCode, {
+    ...meta,
+    timedOut: result.timedOut,
+    exitCode: result.exitCode,
+    signal: result.signal,
+    cleanupEscalated: result.cleanupEscalated,
+  });
 }
 
 export function getMaestroRunnerPath(): string | null {
