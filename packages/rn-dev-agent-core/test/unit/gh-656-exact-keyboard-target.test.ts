@@ -1,6 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildRunIOSArgs, tapRetryPolicy } from '../../dist/agent-device-wrapper.js';
+import { spawn } from 'node:child_process';
+import {
+  _setActiveSessionForTest,
+  buildRunIOSArgs,
+  runNative,
+  tapRetryPolicy,
+} from '../../dist/agent-device-wrapper.js';
 import {
   clearRefMap,
   getFreshRefTarget,
@@ -14,6 +20,7 @@ import {
 } from '../../dist/runners/rn-fast-runner-client.js';
 import {
   classifyRunnerCompatibility,
+  _setPluginVersionForTest,
   REQUIRED_IOS_COMMANDS,
   REQUIRED_IOS_FEATURES,
 } from '../../dist/runners/protocol.js';
@@ -182,4 +189,54 @@ test('GH-656: typed keyboard target stale is non-healable', () => {
   );
   assert.equal(isKeyboardOccludedRefusal(stale), false);
   assert.match(stale.content[0]!.text, /"mutation":"none"/);
+});
+
+test('GH-656: stale cached keyboard ref refuses before generic iOS healing', async (t) => {
+  const realNow = Date.now;
+  Date.now = () => 0;
+  seed();
+  Date.now = realNow;
+
+  const dummy = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+    stdio: 'ignore',
+  });
+  t.after(() => {
+    dummy.kill('SIGKILL');
+    _setPluginVersionForTest(undefined);
+    _setActiveSessionForTest(null);
+    _setFastRunnerStateForTest(null);
+    _setCapabilitiesForTest([]);
+    _setFetchForTest(globalThis.fetch);
+    Date.now = realNow;
+  });
+  _setPluginVersionForTest(null);
+  _setActiveSessionForTest({
+    platform: 'ios',
+    deviceId: 'gh656-device',
+    appId: 'dev.fixture',
+  });
+  _setFastRunnerStateForTest({ ...state(), pid: dummy.pid! });
+  let snapshotDispatches = 0;
+  _setFetchForTest(async (_url, init) => {
+    if ((init?.method ?? 'GET') === 'GET') {
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          protocolVersion: 2,
+          capabilities: ['EXACT_KEYBOARD_TARGET_GUARD'],
+          commands: REQUIRED_IOS_COMMANDS,
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    }
+    const body = JSON.parse(String(init?.body)) as { command?: string };
+    if (body.command === 'snapshot') snapshotDispatches += 1;
+    throw new Error('stale keyboard target must not dispatch');
+  });
+
+  const result = await runNative(['press', '@e7'], { platform: 'ios' });
+  assert.equal(result.isError, true);
+  assert.match(result.content[0]!.text, /KEYBOARD_TARGET_STALE/);
+  assert.match(result.content[0]!.text, /"mutation":"none"/);
+  assert.equal(snapshotDispatches, 0);
 });

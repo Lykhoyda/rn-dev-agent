@@ -9,7 +9,7 @@ enum RunnerInteractionOutcome {
 
 enum KeyboardGuardAction {
   case proceed(String)
-  case keyboardTarget(XCUIElement, CGPoint)
+  case keyboardTarget(XCUIElement, CGPoint, CGRect)
   case targetStale
   case dismissFailed
   case relayoutRequired
@@ -375,7 +375,6 @@ extension RnFastRunnerTests {
 #if os(tvOS)
     return .proceed("off")
 #else
-    guard enabled else { return .proceed("off") }
     let retained = command.snapshotNodeIndex.flatMap { retainedSnapshotTargets[$0] }
     switch KeyboardGuard.validateKeyboardDescriptor(
       command: command,
@@ -386,14 +385,27 @@ extension RnFastRunnerTests {
     case .stale:
       return .targetStale
     case .keyboardTarget:
-      guard keyboardFrameIfVisible(app: app) != nil,
-            let live = resolveLiveKeyboardTarget(app: app, retained: retained!),
+      guard let retained,
+            keyboardFrameIfVisible(app: app) != nil,
+            let live = resolveLiveKeyboardTarget(app: app, retained: retained),
             live.frame.contains(CGPoint(x: tapX, y: tapY))
       else { return .targetStale }
-      return .keyboardTarget(live, CGPoint(x: tapX, y: tapY))
+      let expectedFrame = CGRect(
+        x: retained.rect.x,
+        y: retained.rect.y,
+        width: retained.rect.width,
+        height: retained.rect.height
+      )
+      return .keyboardTarget(live, CGPoint(x: tapX, y: tapY), expectedFrame)
     case .ordinary:
       break
     }
+    if command.targetBounds == nil,
+       let keyboardFrame = keyboardFrameIfVisible(app: app),
+       keyboardFrame.contains(CGPoint(x: tapX, y: tapY)) {
+      return .targetStale
+    }
+    guard enabled else { return .proceed("off") }
 
     guard let keyboardFrame = keyboardFrameIfVisible(app: app) else {
       return .proceed("no_keyboard")
@@ -401,16 +413,8 @@ extension RnFastRunnerTests {
     let targetRect = command.targetBounds.map {
       CGRect(x: $0.x, y: $0.y, width: $0.width, height: $0.height)
     }
-    // Raw coordinates inside the live keyboard are neither an exact keyboard
-    // target nor stable app content. Refuse without running any dismissal tier:
-    // hiding the keyboard would turn the same coordinates into an app-content
-    // tap, violating the caller's original surface.
     if targetRect == nil {
-      return KeyboardGuard.shouldDismiss(
-        keyboardFrame: keyboardFrame,
-        tapPoint: CGPoint(x: tapX, y: tapY),
-        minHeight: 120
-      ) ? .dismissFailed : .proceed("not_occluded")
+      return .proceed("not_occluded")
     }
     let targetOnScreen = targetRect.map {
       KeyboardGuard.isProvenOnScreen(appFrame: app.frame, targetRect: $0)
@@ -461,19 +465,31 @@ extension RnFastRunnerTests {
               )
             )
       else { return false }
-      let label = element.label.isEmpty ? nil : element.label
-      let identifier = element.identifier.isEmpty ? nil : element.identifier
+      guard let snapshot = try? element.snapshot() else { return false }
+      let snapshotLabel = aggregatedLabel(for: snapshot)
+        ?? snapshot.label.trimmingCharacters(in: .whitespacesAndNewlines)
+      let label = snapshotLabel.isEmpty ? nil : snapshotLabel
+      let snapshotIdentifier = snapshot.identifier.trimmingCharacters(in: .whitespacesAndNewlines)
+      let identifier = snapshotIdentifier.isEmpty ? nil : snapshotIdentifier
       return label == retained.label && identifier == retained.identifier
     }
     return matches.count == 1 ? matches[0] : nil
   }
 
   func activateKeyboardTarget(
+    app: XCUIApplication,
     _ element: XCUIElement,
     point: CGPoint,
+    expectedFrame: CGRect,
     duration: TimeInterval? = nil
-  ) {
+  ) -> Bool {
     let frame = element.frame
+    guard KeyboardGuard.canActivateKeyboardTarget(
+      expectedFrame: expectedFrame,
+      liveFrame: frame,
+      keyboardFrame: keyboardFrameIfVisible(app: app),
+      point: point
+    ) else { return false }
     let origin = element.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
     let coordinate = origin.withOffset(
       CGVector(dx: point.x - frame.minX, dy: point.y - frame.minY)
@@ -483,6 +499,7 @@ extension RnFastRunnerTests {
     } else {
       coordinate.tap()
     }
+    return true
   }
 
   private func tapKeyboardDismissControl(app: XCUIApplication) -> Bool {

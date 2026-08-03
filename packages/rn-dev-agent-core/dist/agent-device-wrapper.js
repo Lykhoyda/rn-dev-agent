@@ -1243,6 +1243,12 @@ export async function runNative(cliArgs, opts = {}) {
             ios._verifyExactReadback = opts.verifyTypeReadback;
         }
         let healMeta = null;
+        if (ios._staleRef) {
+            const cachedTarget = getCachedMetadata(ios._staleRef);
+            if (cachedTarget?.type === 'Key' || cachedTarget?.type === 'Keyboard') {
+                return failResult('KEYBOARD_TARGET_STALE: the latest-snapshot keyboard target is stale; no gesture was performed. Refresh the snapshot and retry.', 'KEYBOARD_TARGET_STALE', { mutation: 'none' });
+            }
+        }
         if (ios._staleRef && selfHealEnabled(process.env)) {
             const healed = await healStaleRef(ios._staleRef, () => runIOS({
                 command: 'snapshot',

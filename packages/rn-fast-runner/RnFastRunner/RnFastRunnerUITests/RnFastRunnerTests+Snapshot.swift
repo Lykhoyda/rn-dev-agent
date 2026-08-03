@@ -388,7 +388,7 @@ extension RnFastRunnerTests {
     return .infinite
   }
 
-  private func aggregatedLabel(for snapshot: XCUIElementSnapshot, depth: Int = 0) -> String? {
+  func aggregatedLabel(for snapshot: XCUIElementSnapshot, depth: Int = 0) -> String? {
     if depth > 4 { return nil }
     let text = snapshot.label.trimmingCharacters(in: .whitespacesAndNewlines)
     if !text.isEmpty { return text }

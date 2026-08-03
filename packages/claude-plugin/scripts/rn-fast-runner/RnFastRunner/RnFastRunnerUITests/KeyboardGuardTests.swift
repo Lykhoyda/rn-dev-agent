@@ -85,7 +85,7 @@ final class KeyboardGuardTests: XCTestCase {
     )
   }
 
-  func testOnlyExactCanonicalKeyboardTypesEnterTargetValidation() throws {
+  func testCanonicalRetainedTargetsCannotBeDowngraded() throws {
     let frame = CGRect(x: 0, y: 0, width: 402, height: 874)
     for type in ["key", "KEY", "Button", "Other"] {
       XCTAssertEqual(
@@ -95,9 +95,47 @@ final class KeyboardGuardTests: XCTestCase {
           currentGeneration: 7,
           appFrame: frame
         ),
-        .ordinary
+        .stale
       )
     }
+  }
+
+  func testOrdinaryRetainedTargetsRemainOrdinary() throws {
+    let retainedButton = RetainedSnapshotTarget(
+      generation: 7,
+      index: 12,
+      type: "Button",
+      label: "Q",
+      identifier: nil,
+      rect: retainedKey.rect
+    )
+    XCTAssertEqual(
+      KeyboardGuard.validateKeyboardDescriptor(
+        command: try keyboardCommand(type: "Button"),
+        retained: retainedButton,
+        currentGeneration: 7,
+        appFrame: CGRect(x: 0, y: 0, width: 402, height: 874)
+      ),
+      .ordinary
+    )
+  }
+
+  func testFinalActivationRejectsRelayoutAndKeyboardAbsence() {
+    let expected = CGRect(x: 1, y: 2, width: 30, height: 40)
+    let keyboard = CGRect(x: 0, y: 0, width: 100, height: 100)
+    let point = CGPoint(x: 15, y: 20)
+    XCTAssertTrue(KeyboardGuard.canActivateKeyboardTarget(
+      expectedFrame: expected, liveFrame: expected, keyboardFrame: keyboard, point: point
+    ))
+    XCTAssertFalse(KeyboardGuard.canActivateKeyboardTarget(
+      expectedFrame: expected,
+      liveFrame: expected.offsetBy(dx: 4, dy: 0),
+      keyboardFrame: keyboard,
+      point: point
+    ))
+    XCTAssertFalse(KeyboardGuard.canActivateKeyboardTarget(
+      expectedFrame: expected, liveFrame: expected, keyboardFrame: nil, point: point
+    ))
   }
 
   func testSafeDismissControlsExcludeDoneKeysAndExternalToolbars() {

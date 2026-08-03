@@ -253,9 +253,21 @@ extension RnFastRunnerTests {
             ok: false,
             error: ErrorPayload(code: "KEYBOARD_RELAYOUT_REQUIRED", message: "Keyboard dismissed; refresh the snapshot and re-resolve the target before one retry. No tap was performed.", mutation: "none")
           )
-        case .keyboardTarget(let element, let point):
+        case .keyboardTarget(let element, let point, let expectedFrame):
+          var activated = false
           let timing = measureGesture {
-            activateKeyboardTarget(element, point: point)
+            activated = activateKeyboardTarget(
+              app: activeApp,
+              element,
+              point: point,
+              expectedFrame: expectedFrame
+            )
+          }
+          guard activated else {
+            return Response(
+              ok: false,
+              error: ErrorPayload(code: "KEYBOARD_TARGET_STALE", message: "KEYBOARD_TARGET_STALE: the keyboard target changed before activation; no gesture was performed.", mutation: "none")
+            )
           }
           return Response(
             ok: true,
@@ -419,9 +431,22 @@ extension RnFastRunnerTests {
           ok: false,
           error: ErrorPayload(code: "KEYBOARD_RELAYOUT_REQUIRED", message: "Keyboard dismissed; refresh the snapshot and re-resolve the target before one retry. No long press was performed.", mutation: "none")
         )
-      case .keyboardTarget(let element, let point):
+      case .keyboardTarget(let element, let point, let expectedFrame):
+        var activated = false
         let timing = measureGesture {
-          activateKeyboardTarget(element, point: point, duration: duration)
+          activated = activateKeyboardTarget(
+            app: activeApp,
+            element,
+            point: point,
+            expectedFrame: expectedFrame,
+            duration: duration
+          )
+        }
+        guard activated else {
+          return Response(
+            ok: false,
+            error: ErrorPayload(code: "KEYBOARD_TARGET_STALE", message: "KEYBOARD_TARGET_STALE: the keyboard target changed before activation; no gesture was performed.", mutation: "none")
+          )
         }
         return Response(
           ok: true,

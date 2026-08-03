@@ -15,11 +15,15 @@ enum KeyboardGuard {
     currentGeneration: Int,
     appFrame: CGRect
   ) -> KeyboardTargetValidation {
-    guard let claimedType = command.snapshotElementType,
-          canonicalKeyboardTypes.contains(claimedType) else {
+    let claimedType = command.snapshotElementType
+    let claimedKeyboardTarget = claimedType.map(canonicalKeyboardTypes.contains) == true
+    let retainedKeyboardTarget = retained.map { canonicalKeyboardTypes.contains($0.type) } == true
+    guard claimedKeyboardTarget || retainedKeyboardTarget else {
       return .ordinary
     }
-    guard let retained,
+    guard let claimedType,
+          canonicalKeyboardTypes.contains(claimedType),
+          let retained,
           command.snapshotGeneration == currentGeneration,
           command.snapshotGeneration == retained.generation,
           command.snapshotNodeIndex == retained.index,
@@ -40,6 +44,18 @@ enum KeyboardGuard {
           isProvenOnScreen(appFrame: appFrame, targetRect: claimedRect)
     else { return .stale }
     return .keyboardTarget
+  }
+
+  static func canActivateKeyboardTarget(
+    expectedFrame: CGRect,
+    liveFrame: CGRect,
+    keyboardFrame: CGRect?,
+    point: CGPoint
+  ) -> Bool {
+    guard let keyboardFrame else { return false }
+    return approximatelyEqual(liveFrame, expectedFrame)
+      && keyboardFrame.contains(point)
+      && liveFrame.contains(point)
   }
 
   static func isSafeDismissControl(
