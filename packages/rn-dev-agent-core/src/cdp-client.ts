@@ -6,7 +6,8 @@ import { CDPMultiplexer } from './cdp/multiplexer.js';
 import type { MultiplexerOptions } from './cdp/multiplexer.js';
 import { detectBridge } from './bridge-detector.js';
 import { logger } from './logger.js';
-import { performSetup, reinjectHelpers as reinjectHelpersFn } from './cdp/setup.js';
+import { performSetup, waitForReact } from './cdp/setup.js';
+import { HELPERS_VERSION, INJECTED_HELPERS } from './injected-helpers.js';
 import { resetState, setActiveFlag, clearActiveFlag, sleep } from './cdp/state.js';
 import type { ResettableState } from './cdp/state.js';
 import { defaultTimeout, timeoutForMethod } from './cdp/timeout-config.js';
@@ -66,6 +67,25 @@ export class CDPClient {
   private reconnecting = false;
   private disposed = false;
   private _helpersInjected = false;
+  private _helperWorldGeneration = 0;
+  private _helperContext: { id: number; uniqueId?: string } | null = null;
+  private _helperToken: {
+    generation: number;
+    ws: WebSocket | null;
+    targetId: string | null;
+    contextId: number | null;
+    contextUniqueId: string | null;
+  } = {
+    generation: 0,
+    ws: null,
+    targetId: null,
+    contextId: null,
+    contextUniqueId: null,
+  };
+  private _helperInjectionInFlight: {
+    token: CDPClient['_helperToken'];
+    promise: Promise<boolean>;
+  } | null = null;
   private _networkMode: 'cdp' | 'hook' | 'none' = 'none';
   private _isPaused = false;
   private _connectedTarget: HermesTarget | null = null;
@@ -136,6 +156,10 @@ export class CDPClient {
   }
   get helpersInjected(): boolean {
     return this._helpersInjected;
+  }
+  /** Private helper-world epoch exposed only for process-local cache identity. */
+  get helperWorldGeneration(): number {
+    return this._helperWorldGeneration;
   }
   get metroPort(): number {
     return this._port;
@@ -239,18 +263,286 @@ export class CDPClient {
 
   async reinjectHelpers(waitTimeout?: number): Promise<boolean> {
     if (!this.isConnected) return false;
-    const ok = await reinjectHelpersFn((expr) => this.evaluate(expr), waitTimeout);
-    this._helpersInjected = ok;
-    if (ok) {
-      setActiveFlag(this._port, this._connectedTarget);
-      detectBridge(this)
-        .then((r) => {
-          this._bridgeDetected = r.present;
-          this._bridgeVersion = r.version;
-        })
-        .catch(() => {});
+    // Caller-specific React readiness stays outside the shared injection core.
+    await waitForReact((expr) => this.evaluateCurrentHelperWorld(expr), waitTimeout);
+    return this.ensureCurrentHelpers('reinject_started');
+  }
+
+  /**
+   * One bounded, context-pinned health read used only at final
+   * HELPERS_NOT_INJECTED boundaries. It never returns app values or errors.
+   */
+  async probeHelperHealth(probeBudgetMs = 2000): Promise<{
+    jsWorld: 'responsive' | 'timeout' | 'transport-error' | 'superseded';
+    helper: 'current' | 'missing' | 'version-mismatch' | 'invalid' | 'unknown';
+    probeBudgetMs: number;
+  }> {
+    const token = this._helperToken;
+    if (!this.isHelperTokenCurrent(token)) {
+      return { jsWorld: 'superseded', helper: 'unknown', probeBudgetMs };
     }
-    return ok;
+    const expression = `(function(){try{var d=Object.getOwnPropertyDescriptor(globalThis,'__RN_AGENT');if(!d)return 'missing';if(!('value' in d)||typeof d.value!=='object'||d.value===null)return 'invalid';var v=Object.getOwnPropertyDescriptor(d.value,'__v');if(!v||!('value' in v)||typeof v.value!=='number')return 'invalid';return v.value===${HELPERS_VERSION}?'current':'version-mismatch';}catch(_){return 'invalid';}})()`;
+    try {
+      const result = await this.evaluateForHelperToken(token, expression, probeBudgetMs);
+      if (!this.isHelperTokenCurrent(token)) {
+        return { jsWorld: 'superseded', helper: 'unknown', probeBudgetMs };
+      }
+      const helper =
+        result.value === 'current' ||
+        result.value === 'missing' ||
+        result.value === 'version-mismatch' ||
+        result.value === 'invalid'
+          ? result.value
+          : 'invalid';
+      if (helper === 'current') this.markHelpersReady(token, 'health_reconciled_current');
+      return { jsWorld: 'responsive', helper, probeBudgetMs };
+    } catch (err) {
+      if (!this.isHelperTokenCurrent(token)) {
+        return { jsWorld: 'superseded', helper: 'unknown', probeBudgetMs };
+      }
+      const timedOut = err instanceof Error && err.message.startsWith('CDP timeout (');
+      return {
+        jsWorld: timedOut ? 'timeout' : 'transport-error',
+        helper: 'unknown',
+        probeBudgetMs,
+      };
+    }
+  }
+
+  async probeHelperFreshness(timeoutMs = 2000): Promise<{
+    fresh: boolean;
+    version: number | null;
+    probed: boolean;
+  }> {
+    if (!this.isConnected) return { fresh: false, version: null, probed: false };
+    const token = this._helperToken;
+    try {
+      const result = await this.evaluateForHelperToken(
+        token,
+        `typeof globalThis.__RN_AGENT === 'object' && globalThis.__RN_AGENT !== null ? globalThis.__RN_AGENT.__v : null`,
+        timeoutMs,
+      );
+      if (!this.isHelperTokenCurrent(token)) return { fresh: false, version: null, probed: true };
+      const version = typeof result.value === 'number' ? result.value : null;
+      const fresh = version === HELPERS_VERSION;
+      if (!fresh) {
+        this.markHelpersUnready(
+          token,
+          version === null ? 'freshness_missing' : 'freshness_version_mismatch',
+        );
+      }
+      return { fresh, version, probed: true };
+    } catch {
+      return { fresh: false, version: null, probed: true };
+    }
+  }
+
+  private invalidateHelperWorld(
+    cause:
+      | 'socket_opened'
+      | 'socket_closed'
+      | 'explicit_disconnect'
+      | 'soft_reconnect'
+      | 'candidate_selected'
+      | 'candidate_rejected'
+      | 'context_created'
+      | 'context_destroyed'
+      | 'contexts_cleared',
+  ): void {
+    this._helperWorldGeneration++;
+    this._helpersInjected = false;
+    this._bridgeDetected = false;
+    this._bridgeVersion = null;
+    this._helperToken = {
+      generation: this._helperWorldGeneration,
+      ws: this.ws,
+      targetId: this._connectedTarget?.id ?? null,
+      contextId: this._helperContext?.id ?? null,
+      contextUniqueId: this._helperContext?.uniqueId ?? null,
+    };
+    logger.info(
+      'CDP',
+      `Helper state invalidated cause=${cause} helperEpoch=${this._helperWorldGeneration} connectionGeneration=${this._connectionGeneration}`,
+    );
+  }
+
+  private isHelperTokenCurrent(token: CDPClient['_helperToken']): boolean {
+    return (
+      token === this._helperToken &&
+      token.ws === this.ws &&
+      token.targetId === (this._connectedTarget?.id ?? null)
+    );
+  }
+
+  private async evaluateCurrentHelperWorld(expression: string): Promise<EvaluateResult> {
+    const token = this._helperToken;
+    try {
+      return await this.evaluateForHelperToken(
+        token,
+        expression,
+        defaultTimeout(this.effectivePlatform),
+      );
+    } catch {
+      return { error: 'helper-world evaluation unavailable' };
+    }
+  }
+
+  private async evaluateForHelperToken(
+    token: CDPClient['_helperToken'],
+    expression: string,
+    timeoutMs: number,
+  ): Promise<EvaluateResult> {
+    if (!this.isHelperTokenCurrent(token)) throw new Error('helper world superseded');
+    const params: { expression: string; returnByValue: true; contextId?: number } = {
+      expression,
+      returnByValue: true,
+    };
+    if (token.contextId !== null) params.contextId = token.contextId;
+    const result = (await this.sendWithTimeout('Runtime.evaluate', params, timeoutMs)) as {
+      result?: { value?: unknown };
+      exceptionDetails?: unknown;
+    };
+    if (!this.isHelperTokenCurrent(token)) throw new Error('helper world superseded');
+    if (result?.exceptionDetails) return { error: 'helper-world expression failed' };
+    return { value: result?.result?.value };
+  }
+
+  private async ensureCurrentHelpers(
+    cause: 'setup_started' | 'reinject_started',
+  ): Promise<boolean> {
+    const token = this._helperToken;
+    if (!this.isHelperTokenCurrent(token) || !this.isConnected) return false;
+    if (this._helpersInjected) return true;
+    if (this._helperInjectionInFlight?.token === token) {
+      return this._helperInjectionInFlight.promise;
+    }
+
+    const slot = {
+      token,
+      promise: Promise.resolve(false) as Promise<boolean>,
+    };
+    slot.promise = this.injectAndVerifyHelpers(token, cause).finally(() => {
+      // Identity cleanup: an old world's late finally cannot clear a newer slot.
+      if (this._helperInjectionInFlight === slot) this._helperInjectionInFlight = null;
+    });
+    this._helperInjectionInFlight = slot;
+    return slot.promise;
+  }
+
+  private markHelpersUnready(
+    token: CDPClient['_helperToken'],
+    cause: 'setup_failed' | 'reinject_failed' | 'freshness_missing' | 'freshness_version_mismatch',
+  ): false {
+    if (!this.isHelperTokenCurrent(token)) return false;
+    this._helpersInjected = false;
+    this._bridgeDetected = false;
+    this._bridgeVersion = null;
+    logger.warn(
+      'CDP',
+      `Helper state unavailable cause=${cause} helperEpoch=${token.generation} connectionGeneration=${this._connectionGeneration}`,
+    );
+    return false;
+  }
+
+  private async injectAndVerifyHelpers(
+    token: CDPClient['_helperToken'],
+    cause: 'setup_started' | 'reinject_started',
+  ): Promise<boolean> {
+    logger.info(
+      'CDP',
+      `Helper injection ${cause} helperEpoch=${token.generation} connectionGeneration=${this._connectionGeneration}`,
+    );
+    try {
+      const injected = await this.evaluateForHelperToken(
+        token,
+        INJECTED_HELPERS,
+        defaultTimeout(this.effectivePlatform),
+      );
+      if (injected.error) {
+        return this.markHelpersUnready(
+          token,
+          cause === 'setup_started' ? 'setup_failed' : 'reinject_failed',
+        );
+      }
+      const verified = await this.evaluateForHelperToken(
+        token,
+        `typeof globalThis.__RN_AGENT === 'object' && globalThis.__RN_AGENT !== null && globalThis.__RN_AGENT.__v === ${HELPERS_VERSION}`,
+        defaultTimeout(this.effectivePlatform),
+      );
+      if (verified.value !== true || !this.isHelperTokenCurrent(token)) {
+        return this.markHelpersUnready(
+          token,
+          cause === 'setup_started' ? 'setup_failed' : 'reinject_failed',
+        );
+      }
+      this.markHelpersReady(
+        token,
+        cause === 'setup_started' ? 'setup_current' : 'reinject_current',
+      );
+      return true;
+    } catch {
+      // Expected transport/context replacement failures are a bounded false;
+      // stale worlds are intentionally not allowed to log a current transition.
+      return this.markHelpersUnready(
+        token,
+        cause === 'setup_started' ? 'setup_failed' : 'reinject_failed',
+      );
+    }
+  }
+
+  private markHelpersReady(
+    token: CDPClient['_helperToken'],
+    cause: 'setup_current' | 'reinject_current' | 'health_reconciled_current',
+  ): void {
+    if (!this.isHelperTokenCurrent(token)) return;
+    this._helpersInjected = true;
+    setActiveFlag(this._port, this._connectedTarget);
+    logger.info(
+      'CDP',
+      `Helper state ready cause=${cause} helperEpoch=${token.generation} connectionGeneration=${this._connectionGeneration}`,
+    );
+    detectBridge(this, (expression) =>
+      this.evaluateForHelperToken(token, expression, defaultTimeout(this.effectivePlatform)),
+    )
+      .then((r) => {
+        if (!this.isHelperTokenCurrent(token)) return;
+        this._bridgeDetected = r.present;
+        this._bridgeVersion = r.version;
+      })
+      .catch(() => {});
+  }
+
+  private handleExecutionContextCreated(params: {
+    context?: { id?: number; uniqueId?: string; auxData?: { isDefault?: boolean } };
+  }): void {
+    const id = params.context?.id;
+    // Modern RN marks its announced runtime as the default context. Ignore
+    // explicitly auxiliary contexts; legacy one-context backends omit auxData.
+    if (typeof id !== 'number' || params.context?.auxData?.isDefault === false) return;
+    const next = { id, uniqueId: params.context?.uniqueId };
+    if (this._helperContext?.id === next.id && this._helperContext.uniqueId === next.uniqueId)
+      return;
+    this._helperContext = next;
+    this.invalidateHelperWorld('context_created');
+  }
+
+  private handleExecutionContextDestroyed(params: {
+    executionContextId?: number;
+    executionContextUniqueId?: string;
+  }): void {
+    if (!this._helperContext) return;
+    const matchesId = params.executionContextId === this._helperContext.id;
+    const matchesUnique =
+      params.executionContextUniqueId !== undefined &&
+      params.executionContextUniqueId === this._helperContext.uniqueId;
+    if (!matchesId && !matchesUnique) return;
+    this._helperContext = null;
+    this.invalidateHelperWorld('context_destroyed');
+  }
+
+  private handleExecutionContextsCleared(): void {
+    this._helperContext = null;
+    this.invalidateHelperWorld('contexts_cleared');
   }
 
   async autoConnect(
@@ -452,6 +744,7 @@ export class CDPClient {
     // caller sees already-disposed and returns cleanly.
     if (this.disposed) return;
     this.disposed = true;
+    this.invalidateHelperWorld('explicit_disconnect');
     resetState(this.buildResettableState());
     clearActiveFlag();
     this.stopBackgroundPoll();
@@ -643,8 +936,11 @@ export class CDPClient {
           ms ?? timeoutForMethod(method, this.effectivePlatform),
         ),
       evaluate: (expr) => this.evaluate(expr),
+      setupHelpers: async (waitTimeout) => {
+        await waitForReact((expr) => this.evaluateCurrentHelperWorld(expr), waitTimeout);
+        return this.ensureCurrentHelpers('setup_started');
+      },
       port: this._port,
-      connectedTarget: this._connectedTarget,
       networkManager: this._networkBufferManager,
       getDeviceKey: () => this.activeDeviceKey,
       setupEventHandlers: () => this.setupEventHandlers(),
@@ -652,19 +948,10 @@ export class CDPClient {
       clearEventHandlers: () => this.eventHandlers.clear(),
     });
     this._networkMode = result.networkMode;
-    this._helpersInjected = result.helpersInjected;
+    // Helper state is owned exclusively by the token-scoped coordinator.
     this._logDomainEnabled = result.logDomainEnabled;
     this._profilerAvailable = result.profilerAvailable;
     this._heapProfilerAvailable = result.heapProfilerAvailable;
-    if (result.helpersInjected) {
-      detectBridge(this)
-        .then((r) => {
-          this._bridgeDetected = r.present;
-          this._bridgeVersion = r.version;
-          logger.debug('CDP', `Bridge detection: present=${r.present}, version=${r.version}`);
-        })
-        .catch(() => {});
-    }
   }
 
   private async ensureMetroEventsClient(): Promise<void> {
@@ -703,10 +990,18 @@ export class CDPClient {
         this._isPaused = v;
       },
       () => this.activeDeviceKey,
+      {
+        created: (params) => this.handleExecutionContextCreated(params),
+        destroyed: (params) => this.handleExecutionContextDestroyed(params),
+        cleared: () => this.handleExecutionContextsCleared(),
+      },
     );
   }
 
   private handleClose(code: number): void {
+    // Invalidate synchronously before reconnect/reset can await or select a new world.
+    this.ws = null;
+    this.invalidateHelperWorld('socket_closed');
     // B132: if the proxy is active when the upstream closes, suspend it BEFORE
     // the reconnect loop fires. `_suspendProxy` clears `_proxyUrl` synchronously
     // at its start (before the first await), so by the time `reconnect()` calls
@@ -760,6 +1055,8 @@ export class CDPClient {
             this.ws.close();
           }
           this.ws = null;
+          this._helperContext = null;
+          this.invalidateHelperWorld('soft_reconnect');
         }
       },
       rejectAllPending: (reason) => this.rejectAllPending(reason),
@@ -798,13 +1095,18 @@ export class CDPClient {
       },
       getWs: () => this.ws,
       setWs: (ws) => {
+        if (this.ws === ws) return;
         this.ws = ws;
+        this._helperContext = null;
+        this.invalidateHelperWorld(ws ? 'socket_opened' : 'socket_closed');
       },
       setHelpersInjected: (v) => {
-        this._helpersInjected = v;
+        if (!v) this.invalidateHelperWorld('candidate_rejected');
       },
       setConnectedTarget: (t) => {
+        if (this._connectedTarget === t) return;
         this._connectedTarget = t;
+        this.invalidateHelperWorld(t ? 'candidate_selected' : 'candidate_rejected');
       },
       setConnectedAt: (ms) => {
         this._connectedAt = ms;

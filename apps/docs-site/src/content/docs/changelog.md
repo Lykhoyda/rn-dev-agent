@@ -5,6 +5,24 @@ description: "Release history for rn-dev-agent"
 
 ## Claude plugin
 
+### 0.71.0
+
+#### Minor Changes
+
+- 784c880: Add fail-closed fenced worktree sessions with exact build, Metro, device, runner, Observe, and strict-proof authority.
+
+#### Patch Changes
+
+- 784c880: Store the package-integration restoration manifest durably inside the session binding, let on-disk manifest bytes authorize only the current owner's restore_integration, and make stale adoption, handoff acceptance, and resumed cleanup validate their capability non-mutatingly — resumed handoff cleanup now re-proves the exact consumed handoff and its original token against a durable cleanup binding pinned to the accepting target session and claim epoch, so a stale-adoption transfer revokes the old handoff capability in favor of the adoption handle — and refuse before any transfer or mutation unless the binding itself carries a SHA-256-verified restoration manifest, reporting file-state diagnostics and the supported recovery step instead of auto-reconciling.
+- 784c880: Launch Expo session builds with a command shape the installed Expo CLI accepts and release pending build authority through an authenticated abort when the native command fails before completion.
+- 784c880: Guarantee single-emission signed Metro startup with gate-composed strict-proof input handling, pre-helper error evidence, allocated-port exact-device reconnects, and authoritative migration, runner, and stale-Metro recovery.
+- Updated dependencies [784c880]
+- Updated dependencies [784c880]
+- Updated dependencies [784c880]
+- Updated dependencies [784c880]
+- Updated dependencies [784c880]
+  - rn-dev-agent-core@0.66.0
+
 ### 0.70.10
 
 #### Patch Changes
@@ -1204,6 +1222,19 @@ identifier, hittable? }`, with a `fullNodeCount`. Far fewer tokens; `@ref`s for
   #188 shipped these to `main` with no version bump, leaving them undeliverable to marketplace installs; this patch publishes them.
 
 ## Core MCP server
+
+### 0.66.0
+
+#### Minor Changes
+
+- 784c880: Add fail-closed fenced worktree sessions with exact build, Metro, device, runner, Observe, and strict-proof authority.
+
+#### Patch Changes
+
+- 784c880: Store the package-integration restoration manifest durably inside the session binding, let on-disk manifest bytes authorize only the current owner's restore_integration, and make stale adoption, handoff acceptance, and resumed cleanup validate their capability non-mutatingly — resumed handoff cleanup now re-proves the exact consumed handoff and its original token against a durable cleanup binding pinned to the accepting target session and claim epoch, so a stale-adoption transfer revokes the old handoff capability in favor of the adoption handle — and refuse before any transfer or mutation unless the binding itself carries a SHA-256-verified restoration manifest, reporting file-state diagnostics and the supported recovery step instead of auto-reconciling.
+- 784c880: Launch Expo session builds with a command shape the installed Expo CLI accepts and release pending build authority through an authenticated abort when the native command fails before completion.
+- 784c880: Give authenticated managed-Metro descendants an open stdin so Tailwind-backed transforms cannot stall, and fail typed instead of hanging when a child's first authenticated exchange never completes.
+- 784c880: Guarantee single-emission signed Metro startup with gate-composed strict-proof input handling, pre-helper error evidence, allocated-port exact-device reconnects, and authoritative migration, runner, and stale-Metro recovery.
 
 ### 0.65.8
 

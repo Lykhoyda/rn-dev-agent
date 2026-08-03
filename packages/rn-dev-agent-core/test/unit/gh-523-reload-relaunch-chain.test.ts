@@ -15,6 +15,7 @@ function mockClient({
     connectedTarget: { id: 'target', platform, description: appId },
     proxyDesired: false,
     helpersInjected: true,
+    helperWorldGeneration: 1,
     async disconnect() {
       this.isConnected = false;
     },
@@ -31,6 +32,12 @@ function mockClient({
     },
     async reinjectHelpers() {
       return true;
+    },
+    async probeHelperFreshness() {
+      return { fresh: true, version: 40, probed: true };
+    },
+    async probeHelperHealth(probeBudgetMs = 2000) {
+      return { jsWorld: 'responsive', helper: 'current', probeBudgetMs };
     },
   };
 }

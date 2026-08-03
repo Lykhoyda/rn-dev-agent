@@ -53,6 +53,7 @@ function makeHarness({ enableThrows = false, bufferGrowsOnProbe = false } = {}) 
     opts: {
       send,
       evaluate,
+      setupHelpers: async () => true,
       port: 8081,
       connectedTarget: null,
       networkManager,

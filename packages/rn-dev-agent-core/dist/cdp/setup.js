@@ -1,11 +1,16 @@
-import { HELPERS_VERSION, INJECTED_HELPERS, NETWORK_CB_BUFFERED_SCRIPT, NETWORK_HOOK_SCRIPT, REACT_READY_PROBE_JS, } from '../injected-helpers.js';
+import { HELPERS_VERSION, NETWORK_CB_BUFFERED_SCRIPT, NETWORK_HOOK_SCRIPT, REACT_READY_PROBE_JS, } from '../injected-helpers.js';
 import { logger } from '../logger.js';
-import { setActiveFlag, sleep } from './state.js';
+import { sleep } from './state.js';
 import { CDP_TIMEOUT_FAST, timeoutForMethod } from './timeout-config.js';
 export const REACT_READY_TIMEOUT_MS = 30_000;
 export const REACT_READY_POLL_MS = 500;
 export async function performSetup(opts) {
-    const { send, evaluate, port, connectedTarget, networkManager, getDeviceKey, setupEventHandlers, clearScripts, clearEventHandlers, probeWaits, } = opts;
+    const { send, evaluate, setupHelpers, port, networkManager, getDeviceKey, setupEventHandlers, clearScripts, clearEventHandlers, probeWaits, } = opts;
+    // Runtime.enable may synchronously announce the current execution context.
+    // Install lifecycle observation first so helper-world identity cannot miss it.
+    clearEventHandlers();
+    clearScripts();
+    setupEventHandlers();
     logger.debug('CDP', 'Running setup: Runtime.enable, Debugger.enable...');
     await send('Runtime.enable', undefined, timeoutForMethod('Runtime.enable'));
     await send('Debugger.enable', undefined, timeoutForMethod('Debugger.enable'));
@@ -39,24 +44,10 @@ export async function performSetup(opts) {
     ]);
     const profilerAvailable = profilerProbe.status === 'fulfilled' && profilerProbe.value === true;
     const heapProfilerAvailable = heapProbe.status === 'fulfilled' && heapProbe.value === true;
-    clearEventHandlers();
-    clearScripts();
-    setupEventHandlers();
-    await waitForReact(evaluate, REACT_READY_TIMEOUT_MS);
-    const helperResult = await evaluate(INJECTED_HELPERS);
-    if (helperResult.error) {
-        console.error('CDP: failed to inject helpers:', helperResult.error);
-        return {
-            networkMode,
-            helpersInjected: false,
-            logDomainEnabled,
-            profilerAvailable,
-            heapProfilerAvailable,
-        };
-    }
-    const verify = await evaluate('typeof globalThis.__RN_AGENT === "object"');
-    if (verify.value !== true) {
-        console.error('CDP: helper injection succeeded but __RN_AGENT not found');
+    // Connect setup and reinjection share one token-keyed payload + exact-version
+    // verification operation. The React-ready budget remains caller-specific.
+    const helpersInjected = await setupHelpers(REACT_READY_TIMEOUT_MS);
+    if (!helpersInjected) {
         return {
             networkMode,
             helpersInjected: false,
@@ -79,8 +70,7 @@ export async function performSetup(opts) {
         }
         networkDomainEnabled = false;
     }
-    logger.info('CDP', `Helpers injected (v${HELPERS_VERSION}), network mode: ${networkMode}`);
-    setActiveFlag(port, connectedTarget);
+    logger.info('CDP', `Helpers current (v${HELPERS_VERSION}), network mode: ${networkMode}`);
     // D626 (B1 fix): Probe whether Network.enable actually delivers events.
     // GH #59 #9: a single 500ms probe is too tight after platform switches /
     // reload — the fresh JS context needs time to flush the probe fetch through
@@ -160,19 +150,6 @@ export async function probeNetworkDomain(opts) {
     }
     logger.info('CDP', `Network.enable accepted but no events fired after ${waits.length} attempt(s) — falling back to hooks`);
     return 'none';
-}
-export async function reinjectHelpers(evaluate, waitTimeout) {
-    await waitForReact(evaluate, waitTimeout ?? REACT_READY_TIMEOUT_MS);
-    const helperResult = await evaluate(INJECTED_HELPERS);
-    if (helperResult.error) {
-        console.error('CDP: failed to re-inject helpers:', helperResult.error);
-        return false;
-    }
-    const verify = await evaluate('typeof globalThis.__RN_AGENT === "object"');
-    if (verify.value !== true) {
-        return false;
-    }
-    return true;
 }
 /**
  * GH #184: bounded variant of waitForReact that RETURNS whether React became

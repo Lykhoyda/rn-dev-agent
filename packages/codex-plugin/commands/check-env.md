@@ -29,7 +29,7 @@ If issues are found, suggest the appropriate fix:
 | CDP code 1006 | Close React Native DevTools, Flipper, Chrome DevTools |
 | `cdp_component_tree` reports RedBox | Run `$rn-dev-agent:debug-screen` |
 | Narrow gated CDP read times out | Check for a blocked JS thread, then use `cdp_reload` |
-| `HELPERS_NOT_INJECTED` | Use a `__DEV__` Hermes build; retry through the gated tool after reload |
+| `HELPERS_NOT_INJECTED` | Read bounded `meta.helperHealth`; use a `__DEV__` Hermes build and retry through the gated tool after reload |
 | No devices in device_list | Boot a simulator: `xcrun simctl boot "iPhone 16"` or start an emulator |
 
 Present results clearly with a pass/fail indicator for each subsystem.

@@ -1,27 +1,47 @@
 import { hasActiveSession } from './agent-device-wrapper.js';
 import { handleDevClientPicker } from './tools/dev-client-picker.js';
 import { probeFreshness, recoverFromStaleTarget, consumeCdpStale } from './cdp/recovery.js';
-// S1 (D631): cache the freshness probe for up to 2s per (client, generation).
-// Eliminates a CDP round-trip on back-to-back tool calls while still invalidating
-// on reconnect (connectionGeneration bumps) and on any failure (cache is never set).
+// Cache exact-version freshness for up to 2s per private helper world. Public
+// connectionGeneration intentionally advances only after successful setup and
+// therefore cannot fence reset/context churn.
 const FRESHNESS_CACHE_MS = 2000;
 const freshnessCache = new WeakMap();
 function isFreshnessCached(client) {
     const entry = freshnessCache.get(client);
     if (!entry)
         return false;
-    if (entry.generation !== client.connectionGeneration)
+    if (entry.generation !== client.helperWorldGeneration)
         return false;
     return Date.now() < entry.expiresAt;
 }
 function rememberFreshness(client) {
     freshnessCache.set(client, {
-        generation: client.connectionGeneration,
+        generation: client.helperWorldGeneration,
         expiresAt: Date.now() + FRESHNESS_CACHE_MS,
     });
 }
 function forgetFreshness(client) {
     freshnessCache.delete(client);
+}
+export async function helpersNotInjectedResult(client, boundary) {
+    const helperHealth = await client.probeHelperHealth(2000);
+    if (helperHealth.jsWorld === 'responsive' && helperHealth.helper === 'current') {
+        rememberFreshness(client);
+        return null;
+    }
+    forgetFreshness(client);
+    const message = helperHealth.jsWorld === 'timeout'
+        ? `Helpers are not ready and the bounded ${helperHealth.probeBudgetMs}ms health probe received no response; JavaScript may be busy, paused, or blocked.`
+        : helperHealth.jsWorld === 'transport-error'
+            ? 'Helpers are not ready and their health could not be measured because the CDP transport failed.'
+            : helperHealth.jsWorld === 'superseded'
+                ? 'Helpers are not ready because the JavaScript execution world changed during the bounded health probe.'
+                : helperHealth.helper === 'version-mismatch'
+                    ? 'Helpers are not ready because the responsive JavaScript world contains a different helper version.'
+                    : helperHealth.helper === 'missing'
+                        ? 'Helpers are not ready because they are missing from the responsive JavaScript world.'
+                        : 'Helpers are not ready because the responsive JavaScript world contains an invalid helper value.';
+    return failResult(`${boundary === 'stale-recovery' ? 'Stale target recovery completed, but ' : ''}${message} Fall back to device_* tools or call cdp_reload once.`, 'HELPERS_NOT_INJECTED', { helperHealth });
 }
 // Per-step timing collector for the `meta.timings_ms` convention (CLAUDE.md):
 // instrument variable-cost paths (dispatch, snapshot, repair, reconnect) so the
@@ -113,11 +133,8 @@ export function withConnection(getClient, handler, options = {}) {
                 // world is ~6-7s, not 3s. That's still well under the user-visible
                 // 30s picker fallback.
                 //
-                // Concurrency: two simultaneous withConnection callers can both reach
-                // this branch and both fire reinjectHelpers. The injected bundle is
-                // idempotent (reassigns globalThis.__RN_AGENT), so this is wasted
-                // work but not a correctness bug. Coalescing is tracked as a future
-                // optimization in GitHub Issues.
+                // Concurrent callers and connect-time setup share one helper-world
+                // payload+exact-version operation inside CDPClient.
                 if (!client.helpersInjected && client.isConnected) {
                     try {
                         const reinjected = await client.reinjectHelpers(3_000);
@@ -142,7 +159,9 @@ export function withConnection(getClient, handler, options = {}) {
                         }
                     }
                     if (!client.helpersInjected) {
-                        return failResult('Connected but helpers still not injected after passive wait, active re-inject, and Dev Client picker dismissal. The JS world may be hung. Fall back to device_* tools (XCTest path — no helpers required) or call cdp_reload to restart the bundle.', 'HELPERS_NOT_INJECTED');
+                        const helperError = await helpersNotInjectedResult(client, 'initial');
+                        if (helperError)
+                            return helperError;
                     }
                 }
             }
@@ -252,7 +271,15 @@ export function withConnection(getClient, handler, options = {}) {
                             return failResult(`Retry after stale-target recovery failed: ${retryMsg}`, 'STALE_TARGET', { originalError: message });
                         }
                     }
-                    return failResult('Stale target recovery: reconnected but helpers not injected.', 'HELPERS_NOT_INJECTED', { originalError: message });
+                    const helperError = await helpersNotInjectedResult(client, 'stale-recovery');
+                    if (helperError)
+                        return helperError;
+                    try {
+                        return await handler(args, client);
+                    }
+                    catch {
+                        return failResult('Retry after stale-target helper reconciliation failed.', 'STALE_TARGET');
+                    }
                 }
                 if (recovery.reason === 'reconnect-failed') {
                     return failResult(`Stale target recovery failed: ${recovery.error}`, 'STALE_TARGET', {

@@ -140,8 +140,8 @@ injection; passive status deliberately does not duplicate helper capability
 state.
 
 If it returns `HELPERS_NOT_INJECTED`:
-- The gated call already attempted reinjection. If it still fails, the JS world is hung — Hermes is up but `__RN_AGENT` won't land.
-- Surface this in the table as MISSING with action: "JS-tier tools (`cdp_interact`, `cdp_component_tree`, `cdp_store_state`, `cdp_navigation_state`) will fail with HELPERS_NOT_INJECTED. Fall back to `device_*` tools (XCTest path — no helpers required) for UI work, or call `cdp_reload` once to rebuild the JS context. If you also see `app.hasRedBox: true` or `app.errorCount > 0`, fix those first — `cdp_reload` won't help if the bundle itself errors out."
+- The gated call already attempted reinjection and then ran one bounded health probe. Read `meta.helperHealth`: bounded timeout means only "no response within the reported budget," not proof of a hung world; responsive results distinguish missing, version-mismatched, and invalid helpers. Responsive/current evidence is reconciled automatically and does not emit this error.
+- Surface this in the table as MISSING with action: "JS-tier tools (`cdp_interact`, `cdp_component_tree`, `cdp_store_state`, `cdp_navigation_state`) will fail with HELPERS_NOT_INJECTED. Report the fixed `meta.helperHealth` categories, fall back to `device_*` tools (XCTest path — no helpers required) for UI work, or call `cdp_reload` once to rebuild the JS context. If you also see `app.hasRedBox: true` or `app.errorCount > 0`, fix those first — `cdp_reload` won't help if the bundle itself errors out."
 - Also mention: don't sit in a status retry loop; use the gated helper result.
 
 ### 9. ffmpeg (optional — for video recording)

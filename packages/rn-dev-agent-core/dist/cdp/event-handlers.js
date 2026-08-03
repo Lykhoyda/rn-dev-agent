@@ -1,4 +1,13 @@
-export function wireEventHandlers(eventHandlers, buffers, sendFn, getIsPaused, setIsPaused, getDeviceKey) {
+export function wireEventHandlers(eventHandlers, buffers, sendFn, getIsPaused, setIsPaused, getDeviceKey, executionContexts) {
+    if (executionContexts) {
+        eventHandlers.set('Runtime.executionContextCreated', (params) => {
+            executionContexts.created(params);
+        });
+        eventHandlers.set('Runtime.executionContextDestroyed', (params) => {
+            executionContexts.destroyed(params);
+        });
+        eventHandlers.set('Runtime.executionContextsCleared', () => executionContexts.cleared());
+    }
     eventHandlers.set('Runtime.consoleAPICalled', (params) => {
         const p = params;
         const text = p.args

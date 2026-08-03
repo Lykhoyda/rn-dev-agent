@@ -110,7 +110,7 @@ When a `cdp_*` tool returns `code: HELPERS_NOT_INJECTED`, the bridge has already
 3. Attempted a Dev Client picker dismissal (in case a native overlay was blocking React)
 4. Waited up to another 30s if the picker was dismissed
 
-So when this error appears, **the JS world is genuinely hung** — Hermes is up but `__RN_AGENT` won't land. Two recovery paths, in order:
+The final error includes `meta.helperHealth`: `jsWorld` is one of `responsive`, `timeout`, `transport-error`, or `superseded`; `helper` is one of `current`, `missing`, `version-mismatch`, `invalid`, or `unknown`; and `probeBudgetMs` reports the bounded probe budget. A timeout proves only that the probe received no response within that budget — JavaScript may be busy, paused, or blocked. A responsive/current result is reconciled automatically and the gated call continues, so an emitted error describes missing, mismatched, invalid, unmeasurable, or superseded helper evidence rather than claiming a genuine hang. Use these two recovery paths, in order:
 
 | Step | Action | Why |
 |------|--------|-----|
