@@ -4,10 +4,7 @@ import type { ToolResult } from '../utils.js';
 import { foreignFlowGate, foreignGateUdid, foreignGateEnabled } from './foreign-flow-gate.js';
 import type { ForeignFlowGate } from './foreign-flow-gate.js';
 import type { IosExternalRunnerWarning } from '../runners/external-runner-detect.js';
-import {
-  publicDeviceIdentity,
-  sanitizeAutomationProcessLines,
-} from '../util/public-diagnostics.js';
+import { sanitizeAutomationProcessLines } from '../util/public-diagnostics.js';
 
 export type Plane = 'introspection' | 'interaction' | 'flow';
 
