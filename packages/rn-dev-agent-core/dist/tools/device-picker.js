@@ -133,8 +133,8 @@ export function createDevicePickDateHandler(invoke = runMaestroInline) {
         const code = result.errorCode ?? (result.timedOut ? 'PICK_DATE_TIMEOUT' : 'PICK_DATE_INCOMPLETE');
         const reason = result.timedOut
             ? `Date-picker flow timed out after ${args.timeoutMs ?? DEFAULT_PICKER_TIMEOUT_MS}ms.`
-            : result.error ??
-                'Date-picker flow did not complete. Calendar mode and off-screen wheel scrolling remain unsupported; issue #27 tracks native wheel adjustment.';
+            : (result.error ??
+                'Date-picker flow did not complete. Calendar mode and off-screen wheel scrolling remain unsupported; issue #27 tracks native wheel adjustment.');
         return failResult(reason, code, {
             picked: false,
             date: args.date,
