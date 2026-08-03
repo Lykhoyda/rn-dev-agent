@@ -61,14 +61,64 @@ test('managed executor escalates a SIGTERM-resistant process group to SIGKILL', 
     spawn(process.execPath, ['-e', "process.on('SIGTERM',()=>{}); setInterval(()=>{},1000)"], {stdio:'ignore'});
     setInterval(() => {}, 1000);
   `;
-  const result = await spawnManagedProcessGroup(process.execPath, ['-e', script], {
-    timeoutMs: 150,
-    platform: 'ios',
-    tool: 'fixture-resistant',
-  });
+  let killed = false;
+  const result = await spawnManagedProcessGroup(
+    process.execPath,
+    ['-e', script],
+    {
+      timeoutMs: 150,
+      platform: 'ios',
+      tool: 'fixture-resistant',
+    },
+    {
+      signalGroup: (pgid, signal) => {
+        if (signal === 'SIGKILL') {
+          process.kill(-pgid, signal);
+          killed = true;
+          return;
+        }
+        if (signal === 0 && killed) {
+          const error = new Error('absent') as NodeJS.ErrnoException;
+          error.code = 'ESRCH';
+          throw error;
+        }
+      },
+    },
+  );
   assert.equal(result.timedOut, true);
   assert.equal(result.cleanupProven, true);
   assert.equal(result.cleanupEscalated, true);
+});
+
+test('managed executor terminates the process group when ownership state cannot persist', async () => {
+  let managedPid = 0;
+  const result = await spawnManagedProcessGroup(
+    process.execPath,
+    ['-e', 'setInterval(() => {}, 1000)'],
+    {
+      timeoutMs: 10_000,
+      platform: 'ios',
+      deviceId: 'UDID-A',
+      tool: 'fixture-state-failure',
+      env: {
+        ...process.env,
+        RN_DEV_AGENT_SESSION_ID: 'session-a',
+        RN_DEV_AGENT_CLAIM_EPOCH: '4',
+      },
+    },
+    {
+      readBirth: (pid) => {
+        managedPid = pid;
+        return { pid, source: 'linux-proc', token: 'leader-birth' };
+      },
+      writeState: () => {
+        throw new Error('state volume is read-only');
+      },
+    },
+  );
+  assert.match(result.error ?? '', /Failed to persist managed automation state/);
+  assert.equal(result.cleanupProven, true);
+  assert.equal(alive(managedPid), false);
 });
 
 test('exact-device attribution excludes unrelated-device and precondition-free lines', () => {

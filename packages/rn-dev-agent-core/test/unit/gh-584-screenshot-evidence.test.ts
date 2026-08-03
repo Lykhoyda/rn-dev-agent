@@ -88,6 +88,8 @@ test('default iOS capturer preserves exit/signal/timeout and validates a non-emp
     assert.equal(success.ok, true);
     assert.equal(success.bytes, 4);
     assert.deepEqual(success.argv.slice(0, 3), ['xcrun', 'simctl', 'io']);
+    assert.equal(success.argv.at(-1), '<output-path>');
+    assert.doesNotMatch(JSON.stringify(success.argv), new RegExp(path));
     assert.equal(success.format, 'png');
   } finally {
     rmSync(dir, { recursive: true, force: true });

@@ -198,7 +198,12 @@ export async function captureIosScreenshot(
   const exactArgv = ['simctl', 'io', udid, 'screenshot', `--type=${format}`, path];
   const publicArgv = [
     'xcrun',
-    ...exactArgv.map((arg) => (arg === udid ? publicDeviceIdentity(udid) : arg)),
+    'simctl',
+    'io',
+    publicDeviceIdentity(udid),
+    'screenshot',
+    `--type=${format}`,
+    '<output-path>',
   ];
   const base = {
     backend: 'simctl' as const,

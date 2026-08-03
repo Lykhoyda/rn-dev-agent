@@ -27,7 +27,7 @@ import { resolveBundleId } from '../project-config.js';
 import { withSession } from '../utils.js';
 import type { ToolResult } from '../utils.js';
 import { okResult, failResult, createStepTimer } from '../utils.js';
-import { runMaestroInline, yamlEscape } from '../maestro-invoke.js';
+import { maestroRefusalResult, runMaestroInline, yamlEscape } from '../maestro-invoke.js';
 import { isAgentDeviceRunnerSentinel, recoverFromRunnerLeak } from './runner-leak-recovery.js';
 import type { RecoveryTier } from './runner-leak-recovery.js';
 import { reopenSessionForRecovery } from './device-session.js';
@@ -866,6 +866,10 @@ async function maestroFillFallback(
       { meta: { fallbackUsed: 'maestro' } },
     );
   }
+  const refusal = maestroRefusalResult(result, 'Maestro fill fallback was refused.', {
+    tried: ['primary', 'retap', platform === 'android' ? 'adb' : 'maestro'],
+  });
+  if (refusal) return refusal;
   return failResult(
     `device_fill fell through all fallbacks. Last error: ${result.error ?? result.output.slice(0, 200)}`,
     {

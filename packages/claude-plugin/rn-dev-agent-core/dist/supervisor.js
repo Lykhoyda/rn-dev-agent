@@ -14885,7 +14885,12 @@ async function captureIosScreenshot(udid, path, execute = execFileAsync) {
   const exactArgv = ["simctl", "io", udid, "screenshot", `--type=${format}`, path];
   const publicArgv = [
     "xcrun",
-    ...exactArgv.map((arg) => arg === udid ? publicDeviceIdentity(udid) : arg)
+    "simctl",
+    "io",
+    publicDeviceIdentity(udid),
+    "screenshot",
+    `--type=${format}`,
+    "<output-path>"
   ];
   const base = {
     backend: "simctl",
@@ -19425,6 +19430,21 @@ async function waitForGroupAbsence(pgid, signalGroup, delay, timeoutMs = ABSENCE
     await delay(POLL_MS);
   }
 }
+async function terminateProcessGroup(pgid, signalGroup, delay) {
+  try {
+    signalGroup(pgid, "SIGTERM");
+  } catch {
+  }
+  let presence = await waitForGroupAbsence(pgid, signalGroup, delay, TERM_GRACE_MS);
+  if (presence !== "present")
+    return { presence, escalated: false };
+  try {
+    signalGroup(pgid, "SIGKILL");
+  } catch {
+  }
+  presence = await waitForGroupAbsence(pgid, signalGroup, delay);
+  return { presence, escalated: true };
+}
 function selectExactDeviceAutomationPids(psOutput, deviceId) {
   if (!deviceId)
     return [];
@@ -19464,8 +19484,10 @@ async function spawnManagedProcessGroup(bin, args, options, dependencies = {}) {
     else
       process.kill(-pgid, signal);
   });
+  const readBirth = dependencies.readBirth ?? readProcessBirth;
   const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
   const listProcesses = dependencies.listProcesses ?? defaultListProcesses;
+  const writeState = dependencies.writeState ?? writeJsonStateFileAtomic;
   const env = options.env ?? process.env;
   const baseline = /* @__PURE__ */ new Set();
   if (options.deviceId) {
@@ -19510,32 +19532,19 @@ async function spawnManagedProcessGroup(bin, args, options, dependencies = {}) {
     };
   }
   const authority = currentSessionAuthority(env);
-  const birth = readProcessBirth(pid);
+  const birth = readBirth(pid);
   const statePath = options.deviceId ? automationStatePath(options.platform, options.deviceId) : void 0;
   let state;
   if (authority && options.deviceId && !birth) {
-    try {
-      signalGroup(pid, "SIGTERM");
-    } catch {
-    }
-    let absence = await waitForGroupAbsence(pid, signalGroup, delay, TERM_GRACE_MS);
-    let escalated = false;
-    if (absence === "present") {
-      escalated = true;
-      try {
-        signalGroup(pid, "SIGKILL");
-      } catch {
-      }
-      absence = await waitForGroupAbsence(pid, signalGroup, delay);
-    }
+    const cleanup = await terminateProcessGroup(pid, signalGroup, delay);
     return {
       stdout: "",
       stderr: "",
       code: null,
-      signal: escalated ? "SIGKILL" : "SIGTERM",
+      signal: cleanup.escalated ? "SIGKILL" : "SIGTERM",
       timedOut: false,
-      cleanupProven: absence === "absent",
-      cleanupEscalated: escalated,
+      cleanupProven: cleanup.presence === "absent",
+      cleanupEscalated: cleanup.escalated,
       error: "AUTOMATION_CLEANUP_UNPROVEN: process-birth authority was unavailable before Maestro dispatch"
     };
   }
@@ -19555,7 +19564,22 @@ async function spawnManagedProcessGroup(bin, args, options, dependencies = {}) {
       tool: options.tool,
       attributedProcesses: []
     };
-    writeJsonStateFileAtomic(statePath, state);
+    try {
+      writeState(statePath, state);
+    } catch (error2) {
+      const cleanup = await terminateProcessGroup(pid, signalGroup, delay);
+      const cleanupProven2 = cleanup.presence === "absent";
+      return {
+        stdout: "",
+        stderr: "",
+        code: null,
+        signal: cleanup.escalated ? "SIGKILL" : "SIGTERM",
+        timedOut: false,
+        cleanupProven: cleanupProven2,
+        cleanupEscalated: cleanup.escalated,
+        error: cleanupProven2 ? `Failed to persist managed automation state: ${error2 instanceof Error ? error2.message : String(error2)}` : "AUTOMATION_CLEANUP_UNPROVEN: managed automation state could not be persisted and process-group absence could not be confirmed"
+      };
+    }
   }
   const stdout = [];
   const stderr = [];
@@ -19621,7 +19645,7 @@ async function spawnManagedProcessGroup(bin, args, options, dependencies = {}) {
     } catch {
     }
     state.attributedProcesses = attributed;
-    writeJsonStateFileAtomic(statePath, state);
+    writeState(statePath, state);
   }
   if (cleanupProven && statePath)
     deleteStateFile(statePath);
@@ -19969,18 +19993,20 @@ function arbiterWrap(name, handler, inst = arbiter, foreign = {}) {
     }
   });
   return async (...args) => {
-    if (plane !== "introspection" && !inst.flowActive && inst.msSinceFlowReleased >= FOREIGN_GRACE_MS && enabled()) {
+    if (plane !== "introspection" && !inst.flowActive) {
       const udid = getUdid();
       if (udid !== null) {
         if (ownedAutomation(udid)) {
           return failResult(`Refusing ${name}: cleanup of plugin-owned automation on ${publicDeviceIdentity(udid)} is unproven. Run rn_session({ action: "recover_automation", confirmed: true }); exact identity remains available only in local authority state.`, "AUTOMATION_CLEANUP_UNPROVEN", { device: publicDeviceIdentity(udid), conflict: true });
         }
-        const check2 = await gate.check(udid);
-        if (check2.active && check2.warning) {
-          if (FLOW_FALLBACK_TOOLS.has(name)) {
-            return await handler(...args);
+        if (inst.msSinceFlowReleased >= FOREIGN_GRACE_MS && enabled()) {
+          const check2 = await gate.check(udid);
+          if (check2.active && check2.warning) {
+            if (FLOW_FALLBACK_TOOLS.has(name)) {
+              return await handler(...args);
+            }
+            return foreignRefusal(name, check2.warning, check2.scanMs, udid);
           }
-          return foreignRefusal(name, check2.warning, check2.scanMs, udid);
         }
       }
     }
@@ -20183,6 +20209,17 @@ import { homedir as homedir5, tmpdir as tmpdir6 } from "node:os";
 function yamlEscape(s) {
   return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n").replace(/\r/g, "\\r").replace(/\t/g, "\\t");
 }
+function maestroRefusalResult(result, fallbackMessage, meta) {
+  if (!result.errorCode)
+    return null;
+  return failResult(result.error ?? fallbackMessage, result.errorCode, {
+    ...meta,
+    timedOut: result.timedOut,
+    exitCode: result.exitCode,
+    signal: result.signal,
+    cleanupEscalated: result.cleanupEscalated
+  });
+}
 function getMaestroRunnerPath() {
   const path = join18(homedir5(), ".maestro-runner", "bin", "maestro-runner");
   return existsSync17(path) ? path : null;
@@ -20365,6 +20402,7 @@ var init_maestro_invoke = __esm({
     init_managed_automation();
     init_device_arbiter();
     init_authority_gate();
+    init_utils();
   }
 });
 
@@ -22572,6 +22610,11 @@ async function maestroFillFallback(ref, text, platform, clearFirst = false, auth
   if (result.passed) {
     return okResult({ filled: true, method: "maestro", length: text.length }, { meta: { fallbackUsed: "maestro" } });
   }
+  const refusal = maestroRefusalResult(result, "Maestro fill fallback was refused.", {
+    tried: ["primary", "retap", platform === "android" ? "adb" : "maestro"]
+  });
+  if (refusal)
+    return refusal;
   return failResult(`device_fill fell through all fallbacks. Last error: ${result.error ?? result.output.slice(0, 200)}`, {
     code: "FILL_FAILED",
     tried: ["primary", "retap", platform === "android" ? "adb" : "maestro"]
@@ -73765,12 +73808,12 @@ async function tapSystemDialog(labels, platform, totalTimeoutMs, slug, authority
   if (result.deviceAuthority && shouldRejectMaestroDeviceAuthority(result.deviceAuthority)) {
     return failResult(result.error ?? "Maestro device authority refused during system dialog probe.", "DEVICE_AUTHORITY_MISMATCH", { platform, triedLabels: labels, deviceAuthority: result.deviceAuthority });
   }
-  if (result.errorCode === "AUTOMATION_CLEANUP_UNPROVEN") {
-    return failResult(result.error ?? "Automation cleanup is unproven.", result.errorCode, {
-      platform,
-      triedLabels: labels
-    });
-  }
+  const refusal = maestroRefusalResult(result, "Maestro system dialog fallback was refused.", {
+    platform,
+    triedLabels: labels
+  });
+  if (refusal)
+    return refusal;
   const attempts3 = [
     {
       selector,

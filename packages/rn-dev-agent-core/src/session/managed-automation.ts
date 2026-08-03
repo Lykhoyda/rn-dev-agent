@@ -59,8 +59,10 @@ interface ManagedProcessDependencies {
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   signalGroup?: (pgid: number, signal: NodeJS.Signals | 0) => void;
+  readBirth?: typeof readProcessBirth;
   probeBirth?: (pid: number) => ProcessBirthProbe;
   listProcesses?: () => string;
+  writeState?: typeof writeJsonStateFileAtomic;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -130,6 +132,23 @@ async function waitForGroupAbsence(
   }
 }
 
+async function terminateProcessGroup(
+  pgid: number,
+  signalGroup: (pgid: number, signal: NodeJS.Signals | 0) => void,
+  delay: (ms: number) => Promise<void>,
+): Promise<{ presence: 'absent' | 'present' | 'unknown'; escalated: boolean }> {
+  try {
+    signalGroup(pgid, 'SIGTERM');
+  } catch {}
+  let presence = await waitForGroupAbsence(pgid, signalGroup, delay, TERM_GRACE_MS);
+  if (presence !== 'present') return { presence, escalated: false };
+  try {
+    signalGroup(pgid, 'SIGKILL');
+  } catch {}
+  presence = await waitForGroupAbsence(pgid, signalGroup, delay);
+  return { presence, escalated: true };
+}
+
 const AUTOMATION_TOKEN = /(?:maestro(?:-runner)?|xcodebuild|WebDriverAgentRunner-Runner)/i;
 
 export function selectExactDeviceAutomationPids(psOutput: string, deviceId: string): number[] {
@@ -184,8 +203,10 @@ export async function spawnManagedProcessGroup(
       if (process.platform === 'win32') process.kill(pgid, signal);
       else process.kill(-pgid, signal);
     });
+  const readBirth = dependencies.readBirth ?? readProcessBirth;
   const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
   const listProcesses = dependencies.listProcesses ?? defaultListProcesses;
+  const writeState = dependencies.writeState ?? writeJsonStateFileAtomic;
   const env = options.env ?? process.env;
   const baseline = new Set<number>();
   if (options.deviceId) {
@@ -234,32 +255,21 @@ export async function spawnManagedProcessGroup(
   }
 
   const authority = currentSessionAuthority(env);
-  const birth = readProcessBirth(pid);
+  const birth = readBirth(pid);
   const statePath = options.deviceId
     ? automationStatePath(options.platform, options.deviceId)
     : undefined;
   let state: PersistedAutomationState | undefined;
   if (authority && options.deviceId && !birth) {
-    try {
-      signalGroup(pid, 'SIGTERM');
-    } catch {}
-    let absence = await waitForGroupAbsence(pid, signalGroup, delay, TERM_GRACE_MS);
-    let escalated = false;
-    if (absence === 'present') {
-      escalated = true;
-      try {
-        signalGroup(pid, 'SIGKILL');
-      } catch {}
-      absence = await waitForGroupAbsence(pid, signalGroup, delay);
-    }
+    const cleanup = await terminateProcessGroup(pid, signalGroup, delay);
     return {
       stdout: '',
       stderr: '',
       code: null,
-      signal: escalated ? 'SIGKILL' : 'SIGTERM',
+      signal: cleanup.escalated ? 'SIGKILL' : 'SIGTERM',
       timedOut: false,
-      cleanupProven: absence === 'absent',
-      cleanupEscalated: escalated,
+      cleanupProven: cleanup.presence === 'absent',
+      cleanupEscalated: cleanup.escalated,
       error:
         'AUTOMATION_CLEANUP_UNPROVEN: process-birth authority was unavailable before Maestro dispatch',
     };
@@ -280,7 +290,24 @@ export async function spawnManagedProcessGroup(
       tool: options.tool,
       attributedProcesses: [],
     };
-    writeJsonStateFileAtomic(statePath!, state);
+    try {
+      writeState(statePath!, state);
+    } catch (error) {
+      const cleanup = await terminateProcessGroup(pid, signalGroup, delay);
+      const cleanupProven = cleanup.presence === 'absent';
+      return {
+        stdout: '',
+        stderr: '',
+        code: null,
+        signal: cleanup.escalated ? 'SIGKILL' : 'SIGTERM',
+        timedOut: false,
+        cleanupProven,
+        cleanupEscalated: cleanup.escalated,
+        error: cleanupProven
+          ? `Failed to persist managed automation state: ${error instanceof Error ? error.message : String(error)}`
+          : 'AUTOMATION_CLEANUP_UNPROVEN: managed automation state could not be persisted and process-group absence could not be confirmed',
+      };
+    }
   }
 
   const stdout: Buffer[] = [];
@@ -367,7 +394,7 @@ export async function spawnManagedProcessGroup(
       /* unproven remains fenced */
     }
     state.attributedProcesses = attributed;
-    writeJsonStateFileAtomic(statePath!, state);
+    writeState(statePath!, state);
   }
   if (cleanupProven && statePath) deleteStateFile(statePath);
 
