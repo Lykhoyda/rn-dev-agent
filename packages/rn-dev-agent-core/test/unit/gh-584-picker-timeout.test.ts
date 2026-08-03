@@ -1,9 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {
-  createDevicePickDateHandler,
-  parseISODate,
-} from '../../dist/tools/device-picker.js';
+import { createDevicePickDateHandler, parseISODate } from '../../dist/tools/device-picker.js';
 
 function body(result: { content: Array<{ text: string }> }): Record<string, any> {
   return JSON.parse(result.content[0]!.text) as Record<string, any>;
