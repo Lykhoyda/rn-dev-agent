@@ -154,6 +154,7 @@ export function parseMaestroFailure(
     .find(
       (line) =>
         /Element (['"])(?:(?!\1).)+\1 not visible within/i.test(line) ||
+        /\bWait timed out\b/i.test(line) ||
         PATTERNS.some(({ re }) => re.test(line)),
     );
   if (terminalFailureLine) {

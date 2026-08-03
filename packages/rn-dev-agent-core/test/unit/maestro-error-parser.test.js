@@ -310,13 +310,18 @@ test('parser: 1.0.9 shape — full realistic maestro-runner 1.0.9 stderr', () =>
   assert.equal(out.selector, 'task-mark-all-done');
 });
 
-test('parser: 1.0.9 id= shape has priority over the generic fallback', () => {
-  // The 1.0.9 id= pattern is more specific than the catch-all "Element 'X' not found".
-  // Pattern order in maestro-error-parser.ts MUST keep id-shape ahead of the fallback.
-  // If a regression reorders patterns, this test catches it.
+test('parser: 1.0.9 id= shape has priority on the same terminal line', () => {
+  const out = parseMaestroFailure(
+    "Element not found: id='specific-id'; also seen: Element 'fallback-id' not found",
+  );
+  assert.equal(out.selectorKind, 'id');
+  assert.equal(out.selector, 'specific-id');
+});
+
+test('parser: the newest failure line outranks an earlier more-specific shape', () => {
   const out = parseMaestroFailure(
     "Element not found: id='specific-id'\nAlso seen: Element 'fallback-id' not found",
   );
-  assert.equal(out.selectorKind, 'id', 'id= shape must win over fallback when both present');
-  assert.equal(out.selector, 'specific-id');
+  assert.equal(out.selectorKind, 'unknown');
+  assert.equal(out.selector, 'fallback-id');
 });

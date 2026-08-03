@@ -120,6 +120,17 @@ test('gh-580: an earlier ID wait cannot outrank a terminal text or regex wait', 
   }
 });
 
+test('gh-580: an earlier ID wait cannot cross a selector-less timeout barrier', () => {
+  const output = [
+    "      ╰─ Element '#stale_transient' not visible within 1s",
+    '      ╰─ Wait timed out (cause: context deadline exceeded)',
+  ].join('\n');
+  const failure = parseMaestroFailure(output);
+  assert.equal(failure.kind, 'UNKNOWN');
+  assert.equal(isAutoRepairable(failure), false);
+  assert.equal(buildTerminalEvidence(output).failureKind, undefined);
+});
+
 test('gh-580: an earlier ID wait cannot outrank a terminal assertion or timeout', () => {
   const cases = [
     {
