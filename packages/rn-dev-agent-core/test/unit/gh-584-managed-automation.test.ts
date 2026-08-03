@@ -1,10 +1,18 @@
 import assert from 'node:assert/strict';
+import {
+  spawn as spawnChild,
+  type ChildProcess,
+  type ChildProcessWithoutNullStreams,
+} from 'node:child_process';
+import { EventEmitter, once } from 'node:events';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import {
   automationStatePath,
+  inspectAutomationDuty,
   recoverAutomationDuty,
   selectExactDeviceAutomationPids,
   spawnManagedProcessGroup,
@@ -26,6 +34,12 @@ async function waitForFile(path: string): Promise<number> {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   return Number(readFileSync(path, 'utf8'));
+}
+
+async function waitForChildClose(child: ChildProcess | null): Promise<void> {
+  if (!child || child.exitCode !== null) return;
+  if (child.signalCode !== null && child.stdout?.closed && child.stderr?.closed) return;
+  await once(child, 'close');
 }
 
 test('managed executor removes process-group descendants after timeout', async () => {
@@ -56,11 +70,10 @@ test('managed executor removes process-group descendants after timeout', async (
 
 test('managed executor escalates a SIGTERM-resistant process group to SIGKILL', async () => {
   const script = `
-    const { spawn } = require('node:child_process');
     process.on('SIGTERM', () => {});
-    spawn(process.execPath, ['-e', "process.on('SIGTERM',()=>{}); setInterval(()=>{},1000)"], {stdio:'ignore'});
     setInterval(() => {}, 1000);
   `;
+  let resistantChild: ChildProcess | null = null;
   let killed = false;
   const result = await spawnManagedProcessGroup(
     process.execPath,
@@ -71,9 +84,13 @@ test('managed executor escalates a SIGTERM-resistant process group to SIGKILL', 
       tool: 'fixture-resistant',
     },
     {
-      signalGroup: (pgid, signal) => {
+      spawn: ((bin, args, options) => {
+        resistantChild = spawnChild(bin, args, options);
+        return resistantChild;
+      }) as typeof spawnChild,
+      signalGroup: (_pgid, signal) => {
         if (signal === 'SIGKILL') {
-          process.kill(-pgid, signal);
+          resistantChild?.kill(signal);
           killed = true;
           return;
         }
@@ -85,6 +102,7 @@ test('managed executor escalates a SIGTERM-resistant process group to SIGKILL', 
       },
     },
   );
+  await waitForChildClose(resistantChild);
   assert.equal(result.timedOut, true);
   assert.equal(result.cleanupProven, true);
   assert.equal(result.cleanupEscalated, true);
@@ -92,6 +110,8 @@ test('managed executor escalates a SIGTERM-resistant process group to SIGKILL', 
 
 test('managed executor terminates the process group when ownership state cannot persist', async () => {
   let managedPid = 0;
+  let managedChild: ChildProcess | null = null;
+  let terminated = false;
   const result = await spawnManagedProcessGroup(
     process.execPath,
     ['-e', 'setInterval(() => {}, 1000)'],
@@ -107,6 +127,10 @@ test('managed executor terminates the process group when ownership state cannot 
       },
     },
     {
+      spawn: ((bin, args, options) => {
+        managedChild = spawnChild(bin, args, options);
+        return managedChild;
+      }) as typeof spawnChild,
       readBirth: (pid) => {
         managedPid = pid;
         return { pid, source: 'linux-proc', token: 'leader-birth' };
@@ -114,11 +138,116 @@ test('managed executor terminates the process group when ownership state cannot 
       writeState: () => {
         throw new Error('state volume is read-only');
       },
+      signalGroup: (_pgid, signal) => {
+        if (signal === 'SIGTERM') {
+          managedChild?.kill('SIGKILL');
+          terminated = true;
+        }
+        if (signal === 0 && terminated) {
+          const error = new Error('absent') as NodeJS.ErrnoException;
+          error.code = 'ESRCH';
+          throw error;
+        }
+      },
     },
   );
+  await waitForChildClose(managedChild);
   assert.match(result.error ?? '', /Failed to persist managed automation state/);
   assert.equal(result.cleanupProven, true);
   assert.equal(alive(managedPid), false);
+});
+
+test('failed state persistence retains an authenticated fence until recovery', async () => {
+  const prior = process.env.XDG_STATE_HOME;
+  const dir = mkdtempSync(join(tmpdir(), 'rn-584-memory-fence-'));
+  process.env.XDG_STATE_HOME = dir;
+  let cleanupUnknown = false;
+  const managedChild = Object.assign(new EventEmitter(), {
+    pid: 700,
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    kill: () => true,
+  }) as unknown as ChildProcessWithoutNullStreams;
+  try {
+    const result = await spawnManagedProcessGroup(
+      process.execPath,
+      ['-e', 'setInterval(() => {}, 1000)'],
+      {
+        timeoutMs: 10_000,
+        platform: 'ios',
+        deviceId: 'UDID-FENCED',
+        tool: 'fixture-unproven-state-failure',
+        env: {
+          ...process.env,
+          RN_DEV_AGENT_SESSION_ID: 'session-fenced',
+          RN_DEV_AGENT_CLAIM_EPOCH: '7',
+        },
+      },
+      {
+        spawn: (() => managedChild) as typeof spawnChild,
+        readBirth: (pid) => ({ pid, source: 'linux-proc', token: 'fenced-birth' }),
+        writeState: () => {
+          throw new Error('state volume is read-only');
+        },
+        signalGroup: (_pgid, signal) => {
+          if (signal === 'SIGKILL') cleanupUnknown = true;
+          if (signal === 0 && cleanupUnknown) {
+            const error = new Error('unknown') as NodeJS.ErrnoException;
+            error.code = 'EPERM';
+            throw error;
+          }
+        },
+        sleep: async () => {},
+      },
+    );
+    assert.equal(result.cleanupProven, false);
+    const duty = inspectAutomationDuty('ios', 'UDID-FENCED', { signalGroup: () => {} });
+    assert.equal(duty?.processBirth, 'fenced-birth');
+    assert.equal(duty?.pid, managedChild?.pid);
+
+    let present = true;
+    const recovered = await recoverAutomationDuty(
+      {
+        sessionId: 'session-fenced',
+        claimEpoch: 7,
+        platform: 'ios',
+        deviceId: 'UDID-FENCED',
+      },
+      {
+        signalGroup: (_pgid, signal) => {
+          if (signal === 0 && !present) {
+            const error = new Error('absent') as NodeJS.ErrnoException;
+            error.code = 'ESRCH';
+            throw error;
+          }
+          if (signal === 'SIGTERM') {
+            present = false;
+          }
+        },
+        probeBirth: (pid) => ({
+          status: 'present',
+          birth: { pid, source: 'linux-proc', token: 'fenced-birth' },
+        }),
+        sleep: async () => {},
+      },
+    );
+    assert.equal(recovered.recovered, true);
+    assert.equal(inspectAutomationDuty('ios', 'UDID-FENCED'), null);
+  } finally {
+    if (prior === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = prior;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('asynchronous spawn errors are observed before PID validation', async () => {
+  const result = await spawnManagedProcessGroup('/definitely/missing/rn-maestro', [], {
+    timeoutMs: 1_000,
+    platform: 'ios',
+    tool: 'fixture-spawn-error',
+  });
+  assert.equal(result.cleanupProven, true);
+  assert.match(result.error ?? '', /ENOENT/);
 });
 
 test('exact-device attribution excludes unrelated-device and precondition-free lines', () => {

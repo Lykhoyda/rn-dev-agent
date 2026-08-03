@@ -81,6 +81,10 @@ function dateTapStep(value: string, pickerScopeTestId?: string): string {
   return `- tapOn:\n    text: "${yamlEscape(value)}"${scope}`;
 }
 
+function stepTargetsValue(stepName: string, value: string): boolean {
+  return stepName.includes(`"${value}"`) || stepName.includes(`'${value}'`);
+}
+
 export function createDevicePickValueHandler(
   invoke: typeof runMaestroInline = runMaestroInline,
 ): (args: PickValueArgs) => Promise<ToolResult> {
@@ -175,16 +179,16 @@ export function createDevicePickDateHandler(
     }
 
     const summary = buildStepSummary(result.output, { failed: true });
-    const succeeded = components
-      .filter((component) =>
-        summary.steps.some((step) => step.status === 'pass' && step.name.includes(component.value)),
-      )
-      .map((component) => component.name);
-    const selector = summary.reason?.selector ?? summary.failedStep?.name ?? null;
-    const failed =
-      components.find(
-        (component) => selector?.includes(component.value) || !succeeded.includes(component.name),
-      ) ?? components[0];
+    const succeeded: Array<(typeof components)[number]['name']> = [];
+    let failed: (typeof components)[number] = components[0];
+    for (const component of components) {
+      const observed = summary.steps.find((step) => stepTargetsValue(step.name, component.value));
+      if (observed?.status !== 'pass') {
+        failed = component;
+        break;
+      }
+      succeeded.push(component.name);
+    }
     const code =
       result.errorCode ?? (result.timedOut ? 'PICK_DATE_TIMEOUT' : 'PICK_DATE_INCOMPLETE');
     const reason = result.timedOut
