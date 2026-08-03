@@ -10,6 +10,40 @@ const POLL_MS = 25;
 function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
+const activeAutomationDuties = new Map();
+function automationDutyKey(platform, deviceId) {
+    return `${platform}:${deviceId}`;
+}
+function rememberAutomationDuty(state) {
+    activeAutomationDuties.set(automationDutyKey(state.platform, state.deviceId), state);
+}
+function forgetAutomationDuty(platform, deviceId) {
+    activeAutomationDuties.delete(automationDutyKey(platform, deviceId));
+}
+function currentAutomationDuty(platform, deviceId) {
+    return (activeAutomationDuties.get(automationDutyKey(platform, deviceId)) ??
+        readPersistedAutomationState(platform, deviceId));
+}
+function observeChildTerminal(child, timeoutMs) {
+    let stop = () => { };
+    const result = new Promise((resolve) => {
+        let settled = false;
+        let timer;
+        const done = (value) => {
+            if (settled)
+                return;
+            settled = true;
+            if (timer)
+                clearTimeout(timer);
+            resolve(value);
+        };
+        child.once('error', (error) => done({ code: null, signal: null, timedOut: false, error: error.message }));
+        child.once('close', (code, signal) => done({ code, signal, timedOut: false }));
+        timer = setTimeout(() => done({ code: null, signal: 'SIGTERM', timedOut: true }), timeoutMs);
+        stop = () => done({ code: null, signal: null, timedOut: false });
+    });
+    return { result, stop };
+}
 export function automationStatePath(platform, deviceId) {
     // Reuse the hardened runner-state namespace and atomic/symlink-refusing state
     // file primitives. Automation is another transient runner ownership duty,
@@ -156,9 +190,10 @@ export async function spawnManagedProcessGroup(bin, args, options, dependencies 
             error: error instanceof Error ? error.message : String(error),
         };
     }
+    const terminalObserver = observeChildTerminal(child, options.timeoutMs);
     const pid = child.pid;
     if (!pid) {
-        child.kill('SIGKILL');
+        const terminal = await terminalObserver.result;
         return {
             stdout: '',
             stderr: '',
@@ -167,7 +202,7 @@ export async function spawnManagedProcessGroup(bin, args, options, dependencies 
             timedOut: false,
             cleanupProven: true,
             cleanupEscalated: false,
-            error: 'Managed automation process did not expose a PID',
+            error: terminal.error ?? 'Managed automation process did not expose a PID',
         };
     }
     const authority = currentSessionAuthority(env);
@@ -178,6 +213,7 @@ export async function spawnManagedProcessGroup(bin, args, options, dependencies 
     let state;
     if (authority && options.deviceId && !birth) {
         const cleanup = await terminateProcessGroup(pid, signalGroup, delay);
+        terminalObserver.stop();
         return {
             stdout: '',
             stderr: '',
@@ -205,12 +241,16 @@ export async function spawnManagedProcessGroup(bin, args, options, dependencies 
             tool: options.tool,
             attributedProcesses: [],
         };
+        rememberAutomationDuty(state);
         try {
             writeState(statePath, state);
         }
         catch (error) {
             const cleanup = await terminateProcessGroup(pid, signalGroup, delay);
             const cleanupProven = cleanup.presence === 'absent';
+            terminalObserver.stop();
+            if (cleanupProven)
+                forgetAutomationDuty(options.platform, options.deviceId);
             return {
                 stdout: '',
                 stderr: '',
@@ -242,21 +282,7 @@ export async function spawnManagedProcessGroup(bin, args, options, dependencies 
     };
     child.stdout.on('data', collect(stdout));
     child.stderr.on('data', collect(stderr));
-    const terminal = await new Promise((resolve) => {
-        let settled = false;
-        let timer;
-        const done = (value) => {
-            if (settled)
-                return;
-            settled = true;
-            if (timer)
-                clearTimeout(timer);
-            resolve(value);
-        };
-        child.once('error', (error) => done({ code: null, signal: null, timedOut: false, error: error.message }));
-        child.once('close', (code, signal) => done({ code, signal, timedOut: false }));
-        timer = setTimeout(() => done({ code: null, signal: 'SIGTERM', timedOut: true }), options.timeoutMs);
-    });
+    const terminal = await terminalObserver.result;
     let cleanupEscalated = false;
     let presence = await waitForGroupAbsence(pid, signalGroup, delay, terminal.timedOut ? 0 : 250);
     if (terminal.timedOut || overflow || presence === 'present') {
@@ -298,10 +324,13 @@ export async function spawnManagedProcessGroup(bin, args, options, dependencies 
             /* unproven remains fenced */
         }
         state.attributedProcesses = attributed;
+        rememberAutomationDuty(state);
         writeState(statePath, state);
     }
-    if (cleanupProven && statePath)
+    if (cleanupProven && statePath && options.deviceId) {
+        forgetAutomationDuty(options.platform, options.deviceId);
         deleteStateFile(statePath);
+    }
     return {
         stdout: Buffer.concat(stdout).toString('utf8'),
         stderr: Buffer.concat(stderr).toString('utf8'),
@@ -319,7 +348,7 @@ export async function spawnManagedProcessGroup(bin, args, options, dependencies 
 }
 export function inspectAutomationDuty(platform, deviceId, dependencies = {}) {
     const path = automationStatePath(platform, deviceId);
-    const state = readPersistedAutomationState(platform, deviceId);
+    const state = currentAutomationDuty(platform, deviceId);
     if (!state) {
         if (existsSync(path)) {
             throw new Error('AUTOMATION_CLEANUP_UNPROVEN: persisted automation state is invalid');
@@ -340,6 +369,7 @@ export function inspectAutomationDuty(platform, deviceId, dependencies = {}) {
         return observed.status === 'present' && observed.birth.token === owned.processBirth;
     });
     if (group === 'absent' && !descendantsPresent) {
+        forgetAutomationDuty(platform, deviceId);
         deleteStateFile(automationStatePath(platform, deviceId));
         return null;
     }
@@ -347,7 +377,7 @@ export function inspectAutomationDuty(platform, deviceId, dependencies = {}) {
 }
 export async function recoverAutomationDuty(authority, dependencies = {}) {
     const path = automationStatePath(authority.platform, authority.deviceId);
-    const state = readPersistedAutomationState(authority.platform, authority.deviceId);
+    const state = currentAutomationDuty(authority.platform, authority.deviceId);
     if (!state) {
         if (existsSync(path)) {
             throw new Error('AUTOMATION_CLEANUP_UNPROVEN: persisted automation state is invalid');
@@ -389,6 +419,7 @@ export async function recoverAutomationDuty(authority, dependencies = {}) {
         if (presence !== 'absent') {
             throw new Error('AUTOMATION_CLEANUP_UNPROVEN: process-group absence could not be confirmed');
         }
+        forgetAutomationDuty(authority.platform, authority.deviceId);
         deleteStateFile(automationStatePath(authority.platform, authority.deviceId));
         return { recovered: true, invocationId: state.invocationId, escalated };
     }
@@ -426,6 +457,7 @@ export async function recoverAutomationDuty(authority, dependencies = {}) {
             throw new Error('AUTOMATION_CLEANUP_UNPROVEN: attributed process absence could not be confirmed');
         }
     }
+    forgetAutomationDuty(authority.platform, authority.deviceId);
     deleteStateFile(automationStatePath(authority.platform, authority.deviceId));
     return { recovered: true, invocationId: state.invocationId, escalated };
 }
