@@ -81,8 +81,19 @@ function dateTapStep(value: string, pickerScopeTestId?: string): string {
   return `- tapOn:\n    text: "${yamlEscape(value)}"${scope}`;
 }
 
-function stepTargetsValue(stepName: string, value: string): boolean {
+function stepTargetsQuotedValue(stepName: string, value: string): boolean {
   return stepName.includes(`"${value}"`) || stepName.includes(`'${value}'`);
+}
+
+function stepTargetsIdValue(stepName: string, value: string): boolean {
+  return (
+    /\btap(?:ping)?\s+on\s+(?:element\s+with\s+)?id\b/i.test(stepName) &&
+    stepTargetsQuotedValue(stepName, value)
+  );
+}
+
+function stepTargetsTextValue(stepName: string, value: string): boolean {
+  return !stepTargetsIdValue(stepName, value) && stepTargetsQuotedValue(stepName, value);
 }
 
 export function createDevicePickValueHandler(
@@ -186,17 +197,37 @@ export function createDevicePickDateHandler(
     if (refusal) return refusal;
 
     const summary = buildStepSummary(result.output, { failed: true });
+    const observedComponentFailure = summary.steps.some(
+      (step) =>
+        step.status === 'fail' &&
+        components.some((component) => stepTargetsTextValue(step.name, component.value)),
+    );
+    if (result.error && !result.timedOut && !observedComponentFailure) {
+      return failResult(result.error, 'PICK_DATE_INCOMPLETE', {
+        picked: false,
+        date: args.date,
+        platform,
+        selectorFailure: summary.reason,
+        terminalStep: summary.failedStep,
+        output: result.output.slice(0, 500),
+      });
+    }
+
     const succeeded: Array<(typeof components)[number]['name']> = [];
     let failed: (typeof components)[number] | undefined;
     let nextStepIndex = 0;
-    const terminalTarget = (startIndex: number, value: string) => {
+    const terminalTarget = (
+      startIndex: number,
+      value: string,
+      matchesTarget: (stepName: string, targetValue: string) => boolean,
+    ) => {
       let observedIndex = summary.steps.findIndex(
-        (step, index) => index >= startIndex && stepTargetsValue(step.name, value),
+        (step, index) => index >= startIndex && matchesTarget(step.name, value),
       );
       let observed = observedIndex < 0 ? undefined : summary.steps[observedIndex];
       while (observed?.status === 'fail') {
         const retryIndex = summary.steps.findIndex(
-          (step, index) => index > observedIndex && stepTargetsValue(step.name, value),
+          (step, index) => index > observedIndex && matchesTarget(step.name, value),
         );
         if (retryIndex < 0) break;
         const interveningComponent = summary.steps
@@ -204,7 +235,7 @@ export function createDevicePickDateHandler(
           .some((step) =>
             components.some(
               (candidate) =>
-                candidate.value !== value && stepTargetsValue(step.name, candidate.value),
+                candidate.value !== value && stepTargetsTextValue(step.name, candidate.value),
             ),
           );
         if (interveningComponent) break;
@@ -214,11 +245,15 @@ export function createDevicePickDateHandler(
       return { observed, observedIndex };
     };
     if (opener) {
-      const openerOutcome = terminalTarget(0, opener);
+      const openerOutcome = terminalTarget(0, opener, stepTargetsIdValue);
       if (openerOutcome.observedIndex >= 0) nextStepIndex = openerOutcome.observedIndex + 1;
     }
     for (const component of components) {
-      const { observed, observedIndex } = terminalTarget(nextStepIndex, component.value);
+      const { observed, observedIndex } = terminalTarget(
+        nextStepIndex,
+        component.value,
+        stepTargetsTextValue,
+      );
       if (observed?.status !== 'pass') {
         failed = component;
         break;
