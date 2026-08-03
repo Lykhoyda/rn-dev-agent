@@ -13,6 +13,7 @@ import test from 'node:test';
 import {
   automationStatePath,
   inspectAutomationDuty,
+  readPersistedAutomationState,
   recoverAutomationDuty,
   selectExactDeviceAutomationPids,
   spawnManagedProcessGroup,
@@ -335,6 +336,84 @@ test('exact-device attribution excludes unrelated-device and precondition-free l
     '104 unrelated UDID-A',
   ].join('\n');
   assert.deepEqual(selectExactDeviceAutomationPids(ps, 'UDID-A'), [101, 103]);
+});
+
+test('residual attribution reaches the state file when the authority update fails', async () => {
+  const prior = process.env.XDG_STATE_HOME;
+  const dir = mkdtempSync(join(tmpdir(), 'rn-584-residual-persistence-'));
+  process.env.XDG_STATE_HOME = dir;
+  const child = Object.assign(new EventEmitter(), {
+    pid: 730,
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    kill: () => true,
+  }) as unknown as ChildProcessWithoutNullStreams;
+  let authorityWrites = 0;
+  let processScans = 0;
+  try {
+    const pending = spawnManagedProcessGroup(
+      'maestro',
+      [],
+      {
+        timeoutMs: 10_000,
+        platform: 'ios',
+        deviceId: 'UDID-RESIDUAL',
+        tool: 'fixture-residual-persistence',
+        env: {
+          ...process.env,
+          RN_DEV_AGENT_SESSION_ID: 'session-residual',
+          RN_DEV_AGENT_CLAIM_EPOCH: '11',
+        },
+      },
+      {
+        spawn: (() => child) as typeof spawnChild,
+        readBirth: (pid) => ({ pid, source: 'linux-proc', token: 'leader-birth' }),
+        probeBirth: (pid) => ({
+          status: 'present',
+          birth: { pid, source: 'linux-proc', token: 'escaped-birth' },
+        }),
+        listProcesses: () => {
+          processScans += 1;
+          return processScans === 1 ? '' : '731 xcodebuild test -destination id=UDID-RESIDUAL';
+        },
+        authorityStore: {
+          read: () => null,
+          write: () => {
+            authorityWrites += 1;
+            if (authorityWrites === 3) throw new Error('registry unavailable');
+          },
+        },
+        signalGroup: (_pgid, signal) => {
+          if (signal === 0) {
+            const error = new Error('unknown') as NodeJS.ErrnoException;
+            error.code = 'EPERM';
+            throw error;
+          }
+        },
+      },
+    );
+    setImmediate(() => child.emit('close', 1, null));
+    const result = await pending;
+    assert.equal(result.cleanupProven, false);
+    assert.deepEqual(
+      readPersistedAutomationState('ios', 'UDID-RESIDUAL')?.attributedProcesses,
+      [{ pid: 731, processBirth: 'escaped-birth' }],
+    );
+    assert.equal(authorityWrites, 3);
+  } finally {
+    inspectAutomationDuty('ios', 'UDID-RESIDUAL', {
+      authorityStore: null,
+      signalGroup: () => {
+        const error = new Error('absent') as NodeJS.ErrnoException;
+        error.code = 'ESRCH';
+        throw error;
+      },
+      probeBirth: () => ({ status: 'absent' }),
+    });
+    if (prior === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = prior;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('authenticated recovery terminates only the matching group and clears proven state', async () => {

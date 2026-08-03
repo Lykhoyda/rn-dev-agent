@@ -7,7 +7,7 @@ import type { SourceIdentity } from './source-identity.js';
 import { ensureSharedKnowledgeRoot } from './shared-knowledge-root.js';
 import { stopManagedMetro, type ManagedMetroBinding } from './managed-metro.js';
 import {
-  automationDutyStoreForSession,
+  automationDutyStoreForClosingSession,
   inspectAutomationDuty,
   recoverAutomationDuty,
 } from './managed-automation.js';
@@ -241,7 +241,7 @@ export function createSupervisorAuthority(
             typeof device.deviceId === 'string'
           ) {
             const platform = device.platform as 'ios' | 'android';
-            const authorityStore = automationDutyStoreForSession(registry, session);
+            const authorityStore = automationDutyStoreForClosingSession(registry, session);
             const duty = dependencies.inspectAutomation
               ? dependencies.inspectAutomation(platform, device.deviceId)
               : inspectAutomationDuty(platform, device.deviceId, { authorityStore });

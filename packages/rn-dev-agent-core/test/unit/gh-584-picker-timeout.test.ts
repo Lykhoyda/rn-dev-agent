@@ -109,3 +109,17 @@ test('component attribution consumes repeated selector values in execution order
   assert.equal(result.meta.failedAt, 'year');
   assert.equal(result.meta.failedValue, '2');
 });
+
+test('component attribution uses the terminal outcome after a transient retry', async () => {
+  const handler = createDevicePickDateHandler(async () => ({
+    passed: false,
+    output:
+      '    ✗ Tap on "June" (0.1s)\n    ✓ Tap on "June" (0.1s)\n    ✓ Tap on "2" (0.1s)\n    ✗ Tap on "2026" (20.0s)',
+    flowFile: '/tmp/deleted.yaml',
+  }));
+  const result = envelope(await handler({ date: '2026-06-02', platform: 'ios' }));
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.meta.succeeded, ['month', 'day']);
+  assert.equal(result.meta.failedAt, 'year');
+  assert.equal(result.meta.failedValue, '2026');
+});
