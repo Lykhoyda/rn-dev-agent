@@ -12,9 +12,23 @@ import { spawnManagedProcessGroup } from '../../dist/session/managed-automation.
 function alive(pid: number): boolean {
   try {
     process.kill(pid, 0);
-    return true;
   } catch {
     return false;
+  }
+
+  if (process.platform !== 'linux') return true;
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const commandEnd = stat.lastIndexOf(')');
+    return (
+      commandEnd < 0 ||
+      stat
+        .slice(commandEnd + 1)
+        .trim()
+        .split(/\s+/, 1)[0] !== 'Z'
+    );
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ENOENT';
   }
 }
 
