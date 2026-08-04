@@ -62,7 +62,7 @@ final class TextInputTargetTests: XCTestCase {
       descriptorLabel: nil,
       descriptorRect: rect,
       sameGeneration: true,
-      requireIdentifierFrameMatch: true
+      requireFrameMatch: true
     )
     let same = TextInputTarget.resolve(
       candidates: [candidate(identifier: "email", frame: rect)],
@@ -71,10 +71,25 @@ final class TextInputTargetTests: XCTestCase {
       descriptorLabel: nil,
       descriptorRect: rect,
       sameGeneration: true,
-      requireIdentifierFrameMatch: true
+      requireFrameMatch: true
     )
     XCTAssertEqual(moved, .absent)
     XCTAssertEqual(same, .unique(0))
+  }
+
+  func testRequiredLabelFrameRejectsMovedReplacement() {
+    let result = TextInputTarget.resolve(
+      candidates: [
+        candidate(label: "Email", frame: CGRect(x: 0, y: 400, width: 300, height: 44))
+      ],
+      descriptorType: "TextField",
+      descriptorIdentifier: nil,
+      descriptorLabel: "Email",
+      descriptorRect: rect,
+      sameGeneration: true,
+      requireFrameMatch: true
+    )
+    XCTAssertEqual(result, .absent)
   }
 
   func testSoleSameTypeFieldDoesNotBindWithoutIdentityProof() {

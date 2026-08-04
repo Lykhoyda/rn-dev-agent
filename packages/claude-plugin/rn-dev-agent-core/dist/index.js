@@ -33802,10 +33802,30 @@ async function performExactFill(args, client2, tiers) {
       verifyTypeReadback: exactTypeReadback(client2, fiberId)
     });
     if (primary.isError) {
+      const mutation = extractMutationDisposition(primary);
       if (isSetTextRejectedError(primary)) {
+        if (mutation === "possible") {
+          return fillFailure("TEXT_ENTRY_UNVERIFIED", `device_fill's native attempt may have mutated the field before rejecting text entry: ${extractErrorText(primary)}`, { mutation: "possible", pathsTried });
+        }
+        if (mutation === "observed") {
+          mutationSeen = "observed";
+          const verification3 = await finalVerification(client2, binding, fiberId, args.text);
+          lastVerification = verification3;
+          if (verification3.verified) {
+            return verifiedFillResult("native", args.text.length, {
+              textEntryPath: attempt === 0 ? "native" : "native-retype",
+              verifiedOracle: verification3.oracle,
+              recovered: "post-error-exact-readback",
+              retypes: attempt,
+              timings_ms: { nativeType: Date.now() - tNative }
+            });
+          }
+          if (!verification3.observedMismatch) {
+            return fillFailure("TEXT_ENTRY_UNVERIFIED", "device_fill observed a rejected native mutation but could not prove a stable mismatch; not retrying.", { mutation: "possible", pathsTried, verification: verification3 });
+          }
+        }
         break;
       }
-      const mutation = extractMutationDisposition(primary);
       if (mutation === "none") {
         if (mutationSeen !== "none") {
           return fillFailure("TEXT_ENTRY_UNVERIFIED", `device_fill's corrective native attempt was refused after an earlier mutation: ${extractErrorText(primary)}`, { mutation: "possible", pathsTried });

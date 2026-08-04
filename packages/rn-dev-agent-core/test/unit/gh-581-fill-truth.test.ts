@@ -371,6 +371,44 @@ test('gh-581: SET_TEXT_REJECTED without a Maestro tier fails truthfully', async 
   assert.equal(envelope(result as never).code, 'TEXT_ENTRY_UNVERIFIED');
 });
 
+test('gh-581: possible SET_TEXT_REJECTED hard-fails without verification', async () => {
+  const { result, calls } = await withFillSeam(
+    {
+      fill: () => failResult('rejected', 'SET_TEXT_REJECTED', { mutation: 'possible' }),
+      verify: () => okResult({ verifyVerdict: 'exact', verifyStable: true }),
+    },
+    () => performExactFill({ ref: '@e3', text: 'value' }, null, NATIVE_ONLY),
+  );
+  const env = envelope(result as never);
+  assert.equal(env.code, 'TEXT_ENTRY_UNVERIFIED');
+  assert.equal(env.meta.mutation, 'possible');
+  assert.equal(calls.filter((call) => call.cliArgs[0] === 'verify-input').length, 0);
+});
+
+test('gh-581: observed SET_TEXT_REJECTED requires independent verification', async () => {
+  const exact = await withFillSeam(
+    {
+      fill: () => failResult('rejected', 'SET_TEXT_REJECTED', { mutation: 'observed' }),
+      verify: () => okResult({ verifyVerdict: 'exact', verifyStable: true }),
+    },
+    () => performExactFill({ ref: '@e3', text: 'value' }, null, NATIVE_ONLY),
+  );
+  assert.equal(envelope(exact.result as never).data.filled, true);
+  assert.equal(exact.calls.filter((call) => call.cliArgs[0] === 'verify-input').length, 1);
+
+  const mismatch = await withFillSeam(
+    {
+      fill: () => failResult('rejected', 'SET_TEXT_REJECTED', { mutation: 'observed' }),
+      verify: () => okResult({ verifyVerdict: 'mismatch', verifyStable: true }),
+    },
+    () => performExactFill({ ref: '@e3', text: 'value' }, null, NATIVE_ONLY),
+  );
+  const mismatchEnv = envelope(mismatch.result as never);
+  assert.equal(mismatchEnv.code, 'TEXT_ENTRY_UNVERIFIED');
+  assert.equal(mismatchEnv.meta.mutation, 'observed');
+  assert.equal(mismatch.calls.filter((call) => call.cliArgs[0] === 'verify-input').length, 1);
+});
+
 test('gh-581: android parity — EditText fixtures, same arbiter, same success rule', async () => {
   const androidNodes = [
     {

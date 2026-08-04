@@ -762,7 +762,7 @@ extension RnFastRunnerTests {
             app: activeApp,
             descriptor: descriptor,
             sameGeneration: sameGeneration,
-            requireIdentifierFrameMatch: true
+            requireFrameMatch: true
           ) {
           case .bound(let element):
             verifyTarget = element

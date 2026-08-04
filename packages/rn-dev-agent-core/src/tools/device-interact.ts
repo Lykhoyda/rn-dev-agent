@@ -1068,10 +1068,9 @@ export async function performExactFill(
   // Capture the positional ref's identity BEFORE the binding snapshot so a
   // refreshed generation can only rebind by identity, never by recycled id.
   const cleanRefForSignature = args.ref.replace(/^@/, '');
-  const priorSignature =
-    /^e\d+$/.test(cleanRefForSignature)
-      ? getCachedSignature(cleanRefForSignature)
-      : null;
+  const priorSignature = /^e\d+$/.test(cleanRefForSignature)
+    ? getCachedSignature(cleanRefForSignature)
+    : null;
 
   const snap = await fetchSnapshotNodes(true);
   if (!snap.ok) {
@@ -1190,10 +1189,38 @@ export async function performExactFill(
       },
     );
     if (primary.isError) {
+      const mutation = extractMutationDisposition(primary);
       if (isSetTextRejectedError(primary)) {
+        if (mutation === 'possible') {
+          return fillFailure(
+            'TEXT_ENTRY_UNVERIFIED',
+            `device_fill's native attempt may have mutated the field before rejecting text entry: ${extractErrorText(primary)}`,
+            { mutation: 'possible', pathsTried },
+          );
+        }
+        if (mutation === 'observed') {
+          mutationSeen = 'observed';
+          const verification = await finalVerification(client, binding, fiberId, args.text);
+          lastVerification = verification;
+          if (verification.verified) {
+            return verifiedFillResult('native', args.text.length, {
+              textEntryPath: attempt === 0 ? 'native' : 'native-retype',
+              verifiedOracle: verification.oracle,
+              recovered: 'post-error-exact-readback',
+              retypes: attempt,
+              timings_ms: { nativeType: Date.now() - tNative },
+            });
+          }
+          if (!verification.observedMismatch) {
+            return fillFailure(
+              'TEXT_ENTRY_UNVERIFIED',
+              'device_fill observed a rejected native mutation but could not prove a stable mismatch; not retrying.',
+              { mutation: 'possible', pathsTried, verification },
+            );
+          }
+        }
         break;
       }
-      const mutation = extractMutationDisposition(primary);
       if (mutation === 'none') {
         if (mutationSeen !== 'none') {
           return fillFailure(
@@ -1308,7 +1335,8 @@ export async function performExactFill(
   }
   const maestro = await maestroFillAttempt(maestroId, args.text, platform, args);
   if (!maestro.attempted) {
-    if (maestro.refusal) return attachFillFailureDisposition(maestro.refusal, 'possible', pathsTried);
+    if (maestro.refusal)
+      return attachFillFailureDisposition(maestro.refusal, 'possible', pathsTried);
     return fillFailure(
       'TEXT_ENTRY_UNVERIFIED',
       'device_fill fell through all tiers; the Maestro attempt did not run cleanly.',

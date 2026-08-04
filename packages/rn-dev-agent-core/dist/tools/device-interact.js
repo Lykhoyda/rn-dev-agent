@@ -867,10 +867,30 @@ export async function performExactFill(args, client, tiers) {
             verifyTypeReadback: exactTypeReadback(client, fiberId),
         });
         if (primary.isError) {
+            const mutation = extractMutationDisposition(primary);
             if (isSetTextRejectedError(primary)) {
+                if (mutation === 'possible') {
+                    return fillFailure('TEXT_ENTRY_UNVERIFIED', `device_fill's native attempt may have mutated the field before rejecting text entry: ${extractErrorText(primary)}`, { mutation: 'possible', pathsTried });
+                }
+                if (mutation === 'observed') {
+                    mutationSeen = 'observed';
+                    const verification = await finalVerification(client, binding, fiberId, args.text);
+                    lastVerification = verification;
+                    if (verification.verified) {
+                        return verifiedFillResult('native', args.text.length, {
+                            textEntryPath: attempt === 0 ? 'native' : 'native-retype',
+                            verifiedOracle: verification.oracle,
+                            recovered: 'post-error-exact-readback',
+                            retypes: attempt,
+                            timings_ms: { nativeType: Date.now() - tNative },
+                        });
+                    }
+                    if (!verification.observedMismatch) {
+                        return fillFailure('TEXT_ENTRY_UNVERIFIED', 'device_fill observed a rejected native mutation but could not prove a stable mismatch; not retrying.', { mutation: 'possible', pathsTried, verification });
+                    }
+                }
                 break;
             }
-            const mutation = extractMutationDisposition(primary);
             if (mutation === 'none') {
                 if (mutationSeen !== 'none') {
                     return fillFailure('TEXT_ENTRY_UNVERIFIED', `device_fill's corrective native attempt was refused after an earlier mutation: ${extractErrorText(primary)}`, { mutation: 'possible', pathsTried });

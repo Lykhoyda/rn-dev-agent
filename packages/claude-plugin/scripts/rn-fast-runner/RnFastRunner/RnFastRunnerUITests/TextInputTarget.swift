@@ -40,14 +40,14 @@ enum TextInputTarget {
     descriptorLabel: String?,
     descriptorRect: CGRect,
     sameGeneration: Bool,
-    requireIdentifierFrameMatch: Bool = false
+    requireFrameMatch: Bool = false
   ) -> Resolution {
     if let id = descriptorIdentifier, !id.isEmpty {
       let byId = candidates.enumerated().filter { $0.element.identifier == id }
       if byId.count > 1 { return .ambiguous }
       guard let match = byId.first else { return .absent }
       guard match.element.type == descriptorType else { return .absent }
-      if requireIdentifierFrameMatch && !framesMatch(match.element.frame, descriptorRect) {
+      if requireFrameMatch && !framesMatch(match.element.frame, descriptorRect) {
         return .absent
       }
       return .unique(match.offset)
@@ -57,7 +57,12 @@ enum TextInputTarget {
     if typed.isEmpty { return .absent }
     if let label = descriptorLabel, !label.isEmpty {
       let byLabel = typed.filter { $0.element.label == label }
-      if byLabel.count == 1 { return .unique(byLabel[0].offset) }
+      if byLabel.count == 1 {
+        if requireFrameMatch && !framesMatch(byLabel[0].element.frame, descriptorRect) {
+          return .absent
+        }
+        return .unique(byLabel[0].offset)
+      }
       return byLabel.count > 1 ? .ambiguous : .absent
     }
     let byFrame = typed.filter { framesMatch($0.element.frame, descriptorRect) }

@@ -290,7 +290,7 @@ extension RnFastRunnerTests {
     app: XCUIApplication,
     descriptor: ExactInputDescriptor,
     sameGeneration: Bool,
-    requireIdentifierFrameMatch: Bool = false
+    requireFrameMatch: Bool = false
   ) -> ExactInputResolution {
     let live = liveInputCandidates(app: app)
     // Fail closed if any candidate's attributes cannot be read exception-safely.
@@ -303,7 +303,7 @@ extension RnFastRunnerTests {
       descriptorLabel: descriptor.label,
       descriptorRect: descriptor.rect,
       sameGeneration: sameGeneration,
-      requireIdentifierFrameMatch: requireIdentifierFrameMatch
+      requireFrameMatch: requireFrameMatch
     ) {
     case .unique(let index):
       return .bound(live[index])
@@ -443,7 +443,12 @@ extension RnFastRunnerTests {
           "the target descriptor is not from the runner's current snapshot generation; refresh the snapshot and rebind the input before typing"
         ))
       }
-      switch resolveExactTextInput(app: app, descriptor: descriptor, sameGeneration: true) {
+      switch resolveExactTextInput(
+        app: app,
+        descriptor: descriptor,
+        sameGeneration: true,
+        requireFrameMatch: true
+      ) {
       case .bound(let element):
         return .bound(element, descriptor: descriptor, resolution: "descriptor")
       case .ambiguous:

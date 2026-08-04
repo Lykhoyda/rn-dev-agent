@@ -232,7 +232,21 @@ class TextInputRecipeTest {
             frame,
             requireFrame = true,
         )
+        val shiftedRecordedTarget = TextInputRecipe.resolveIdentifier(
+            listOf(
+                TextInputRecipe.TargetIdentity(
+                    "android.widget.EditText",
+                    "email",
+                    TextInputRecipe.TargetFrame(0, 400, 300, 444),
+                ),
+            ),
+            "android.widget.EditText",
+            "email",
+            null,
+            requireFrame = false,
+        )
         assertEquals(TextInputRecipe.TargetResolution.Ambiguous, duplicate)
         assertEquals(TextInputRecipe.TargetResolution.Absent, moved)
+        assertEquals(TextInputRecipe.TargetResolution.Unique(0), shiftedRecordedTarget)
     }
 }
