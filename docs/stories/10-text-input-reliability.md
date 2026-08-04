@@ -1,10 +1,12 @@
 # Story 10 — Text-input reliability recipes (iOS two-burst typing, Android ACTION_SET_TEXT)
 
-**Status:** Proposed (2026-07-02)
+**Status:** Shipped in 0.69.0; fill truth and fallback details superseded by issue #581
 **Epic:** [Maestro adoption](README.md)
 **Impact:** Kills the dropped-keystroke / mangled-unicode flake class at the runner layer; lets `device_fill`'s 4-tier fallback fan-out shrink instead of grow
 **Effort:** M
 **Depends on:** Story 04 (settle replaces the fixed focus delay); complements Story 07 (`inputText` under native replay)
+
+This file preserves the Story 10 design record. The [device_fill tool reference](../../apps/docs-site/src/content/docs/tools/device/device_fill.mdx) owns the current exact-target, verification, and retry contract.
 
 ## Problem
 

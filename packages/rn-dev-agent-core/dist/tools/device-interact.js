@@ -706,7 +706,7 @@ function attachFillFailureDisposition(result, mutation, pathsTried) {
         const envelope = JSON.parse(result.content[0]?.text ?? '{}');
         const error = typeof envelope.error === 'string' ? envelope.error : 'Text entry was refused.';
         const meta = {
-            ...(envelope.meta ?? {}),
+            ...envelope.meta,
             mutation,
             pathsTried,
             hint: mutation === 'none'

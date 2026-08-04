@@ -1,17 +1,17 @@
 ---
 title: "device_fill"
-description: "Type text into an input field by its @ref or testID from device_snapshot, with verified truth (GH #581): the tool binds exactly ONE input (a direct TextInput ref/testID, or a `${name}-pressable` wrapper uniquely mapped to its inner `${name}` input), skips the focus tap only when that exact input is already focused, and returns filled:true ONLY after a stable exact post-settle read-back (fiber value for controlled inputs, native read for uncontrolled; meta"
+description: "Type text into an input field by its @ref or testID from device_snapshot, binding exactly one direct TextInput or one `${name}-pressable` wrapper uniquely mapped to its inner `${name}` input before mutation"
 sidebar:
   order: 24
 ---
 
-Type text into an input field by its @ref or testID from device_snapshot, with verified truth (GH #581): the tool binds exactly ONE input (a direct TextInput ref/testID, or a `$\{name\}-pressable` wrapper uniquely mapped to its inner `$\{name\}` input), skips the focus tap only when that exact input is already focused, and returns filled:true ONLY after a stable exact post-settle read-back (fiber value for controlled inputs, native read for uncontrolled; meta.verify is always "exact" on success). Tiers: controlled inputs fill via onChangeText, others via the native runner, with a clear-first retype and a clear-first Maestro attempt for observed wrong values. Unverifiable outcomes hard-fail: NO_TEXT_INPUT_TARGET means nothing was typed (rebind after a fresh snapshot); TEXT_ENTRY_UNVERIFIED means an attempt ran but the exact value could not be proven — check meta.mutation: "none" = safe to retry after a fresh snapshot; "observed" = the field holds a wrong value, take a fresh snapshot and re-read before a corrective fill; "possible" = do NOT retry the same ref — take a fresh device_snapshot, rebind the input by identity, and read its state first (a blind retry can double-type). Secure fields verify only when controlled (masked native values are never proof); empty text is a verified clear. Requires an open session.
+Type text into an input field by its @ref or testID from device_snapshot, binding exactly one direct TextInput or one `$\{name\}-pressable` wrapper uniquely mapped to its inner `$\{name\}` input before mutation. The tool skips the focus tap only when that exact input is already focused and returns filled:true ONLY after a stable exact post-settle read-back (fiber value for controlled inputs, native read for uncontrolled; meta.verify is always "exact" on success). Tiers: controlled inputs fill via onChangeText, others via the native runner, with a clear-first retype and a clear-first Maestro attempt for observed wrong values. Unverifiable outcomes hard-fail: NO_TEXT_INPUT_TARGET means nothing was typed (rebind after a fresh snapshot); TEXT_ENTRY_UNVERIFIED means an attempt ran but the exact value could not be proven — check meta.mutation: "none" = safe to retry after a fresh snapshot; "observed" = the field holds a wrong value, take a fresh snapshot and re-read before a corrective fill; "possible" = do NOT retry the same ref — take a fresh device_snapshot, rebind the input by identity, and read its state first (a blind retry can double-type). Secure fields verify only when controlled (masked native values are never proof); empty text is a verified clear. Requires an open session.
 
 ## Parameters
 
 | Name | Type | Required | Default | Constraints | Description |
 |------|------|----------|---------|-------------|-------------|
-| `ref` | `string` | Yes |  |  | Input field ref from device_snapshot (e.g. "e5" or "@e5"), or a testID |
+| `ref` | `string` | Yes |  |  | Input ref from device_snapshot (for example "@e5"), or a testID |
 | `text` | `string` | Yes |  |  | Text to type into the field (empty string = verified clear) |
 | `waitForKeyboardMs` | `unknown` | No |  | min: 0, max: 5000, integer |  |
 | `testID` | `unknown` | No |  |  |  |

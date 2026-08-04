@@ -969,7 +969,7 @@ function attachFillFailureDisposition(
     };
     const error = typeof envelope.error === 'string' ? envelope.error : 'Text entry was refused.';
     const meta = {
-      ...(envelope.meta ?? {}),
+      ...envelope.meta,
       mutation,
       pathsTried,
       hint:
