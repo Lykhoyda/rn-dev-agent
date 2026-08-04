@@ -39,13 +39,18 @@ enum TextInputTarget {
     descriptorIdentifier: String?,
     descriptorLabel: String?,
     descriptorRect: CGRect,
-    sameGeneration: Bool
+    sameGeneration: Bool,
+    requireIdentifierFrameMatch: Bool = false
   ) -> Resolution {
     if let id = descriptorIdentifier, !id.isEmpty {
       let byId = candidates.enumerated().filter { $0.element.identifier == id }
       if byId.count > 1 { return .ambiguous }
       guard let match = byId.first else { return .absent }
-      return match.element.type == descriptorType ? .unique(match.offset) : .absent
+      guard match.element.type == descriptorType else { return .absent }
+      if requireIdentifierFrameMatch && !framesMatch(match.element.frame, descriptorRect) {
+        return .absent
+      }
+      return .unique(match.offset)
     }
     guard sameGeneration else { return .absent }
     let typed = candidates.enumerated().filter { $0.element.type == descriptorType }

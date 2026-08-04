@@ -2034,6 +2034,7 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
 
   let resp: RunnerResponse;
   let recovery: TransportRecovery | undefined;
+  let commandAuthorityBefore = captureFastRunnerCommandAuthority();
   try {
     ({ resp, recovery } = await postCommandWithRecovery(
       withKeyboardGuard(body, args.command, process.env) as Record<string, unknown>,
@@ -2044,8 +2045,8 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
     const m = err instanceof Error ? err.message : String(err);
     if (m.startsWith('RUNNER_TIMEOUT')) {
       return args.command === 'type'
-        ? containTypeTimeout(args)
-        : containRunnerTimeout(args.command, m);
+        ? containTypeTimeout(args, commandAuthorityBefore)
+        : containRunnerTimeout(args.command, m, commandAuthorityBefore);
     }
     throw err;
   }
@@ -2053,9 +2054,22 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
     if (!(await refreshTargetAfterKeyboard())) {
       return refreshFailure.result ?? staleAfterKeyboardDismissal(args._targetRef);
     }
-    ({ resp, recovery } = await postCommandWithRecovery(
-      withKeyboardGuard(body, args.command, process.env) as Record<string, unknown>,
-    ));
+    commandAuthorityBefore = captureFastRunnerCommandAuthority();
+    try {
+      ({ resp, recovery } = await postCommandWithRecovery(
+        withKeyboardGuard(body, args.command, process.env) as Record<string, unknown>,
+      ));
+    } catch (err) {
+      const mapped = mapRunnerDispatchError(err);
+      if (mapped) return mapped;
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.startsWith('RUNNER_TIMEOUT')) {
+        return args.command === 'type'
+          ? containTypeTimeout(args, commandAuthorityBefore)
+          : containRunnerTimeout(args.command, message, commandAuthorityBefore);
+      }
+      throw err;
+    }
     keyboardRelayoutRecovered = true;
   }
   const recoveryMeta = recovery ? { transportRecovery: recovery } : {};
@@ -2065,15 +2079,15 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
     const code = resp.error?.code;
     if (code === 'RUNNER_TIMEOUT') {
       return args.command === 'type'
-        ? containTypeTimeout(args)
-        : containRunnerTimeout(args.command, message);
+        ? containTypeTimeout(args, commandAuthorityBefore)
+        : containRunnerTimeout(args.command, message, commandAuthorityBefore);
     }
     if (
       args.command === 'type' &&
       typeof message === 'string' &&
       message.includes('main thread execution timed out')
     ) {
-      return containTypeTimeout(args);
+      return containTypeTimeout(args, commandAuthorityBefore);
     }
     const mutation = resp.error?.mutation;
     const failExtras = {

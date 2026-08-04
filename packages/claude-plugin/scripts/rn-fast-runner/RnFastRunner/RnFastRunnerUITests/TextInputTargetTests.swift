@@ -52,6 +52,31 @@ final class TextInputTargetTests: XCTestCase {
     XCTAssertEqual(result, .absent)
   }
 
+  func testVerificationIdentifierRequiresDescriptorFrame() {
+    let moved = TextInputTarget.resolve(
+      candidates: [
+        candidate(identifier: "email", frame: CGRect(x: 0, y: 400, width: 300, height: 44))
+      ],
+      descriptorType: "TextField",
+      descriptorIdentifier: "email",
+      descriptorLabel: nil,
+      descriptorRect: rect,
+      sameGeneration: true,
+      requireIdentifierFrameMatch: true
+    )
+    let same = TextInputTarget.resolve(
+      candidates: [candidate(identifier: "email", frame: rect)],
+      descriptorType: "TextField",
+      descriptorIdentifier: "email",
+      descriptorLabel: nil,
+      descriptorRect: rect,
+      sameGeneration: true,
+      requireIdentifierFrameMatch: true
+    )
+    XCTAssertEqual(moved, .absent)
+    XCTAssertEqual(same, .unique(0))
+  }
+
   func testSoleSameTypeFieldDoesNotBindWithoutIdentityProof() {
     // An old Email descriptor must not rebind to the lone remaining field
     // whose frame moved elsewhere.

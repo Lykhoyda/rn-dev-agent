@@ -51,8 +51,22 @@ const NODES = [
   },
 ];
 
+function signatureFor(ref: string, nodes = NODES) {
+  const clean = ref.replace(/^@/, '');
+  const index = nodes.findIndex((node) => node.ref.replace(/^@/, '') === clean);
+  const node = nodes[index];
+  return node
+    ? {
+        type: node.type,
+        identifier: node.identifier,
+        flatIndex: index,
+        nodeCount: nodes.length,
+      }
+    : null;
+}
+
 test('gh-581 bind: wrapper maps to its unique inner input, focus stays on the wrapper', () => {
-  const out = bindExactFillTarget(NODES as never, '@e10');
+  const out = bindExactFillTarget(NODES as never, '@e10', signatureFor('@e10') as never);
   assert.ok(out.ok, (out as { detail?: string }).detail);
   assert.deepEqual((out as { binding: unknown }).binding, {
     inputRef: '@e11',
@@ -64,13 +78,13 @@ test('gh-581 bind: wrapper maps to its unique inner input, focus stays on the wr
 });
 
 test('gh-581 bind: secure inner input is flagged', () => {
-  const out = bindExactFillTarget(NODES as never, '@e20');
+  const out = bindExactFillTarget(NODES as never, '@e20', signatureFor('@e20') as never);
   assert.ok(out.ok);
   assert.equal((out as { binding: { secure: boolean } }).binding.secure, true);
 });
 
 test('gh-581 bind: direct input ref and bare testID both bind', () => {
-  const byRef = bindExactFillTarget(NODES as never, '@e30');
+  const byRef = bindExactFillTarget(NODES as never, '@e30', signatureFor('@e30') as never);
   assert.ok(byRef.ok);
   assert.equal((byRef as { binding: { wrapper: boolean } }).binding.wrapper, false);
   const byTestId = bindExactFillTarget(NODES as never, 'plain-input');
@@ -98,7 +112,7 @@ test('gh-581 bind: duplicate wrapper mapping is rejected', () => {
       rect: { x: 0, y: 70, width: 10, height: 10 },
     },
   ];
-  const out = bindExactFillTarget(nodes as never, '@e10');
+  const out = bindExactFillTarget(nodes as never, '@e10', signatureFor('@e10') as never);
   assert.ok(!out.ok);
   assert.match((out as { detail: string }).detail, /ambiguous/);
 });
@@ -127,7 +141,7 @@ test('gh-581 bind: wrapper with no inner input is rejected (no first-match fallb
       rect: { x: 0, y: 0, width: 10, height: 10 },
     },
   ];
-  const out = bindExactFillTarget(nodes as never, '@e1');
+  const out = bindExactFillTarget(nodes as never, '@e1', signatureFor('@e1', nodes) as never);
   assert.ok(!out.ok);
   assert.match((out as { detail: string }).detail, /no recognized input/);
 });
@@ -152,20 +166,33 @@ test('gh-581 bind: wrapper whose sibling matches by id but not type is rejected'
 });
 
 test('gh-581 bind: non-input, non-wrapper elements are rejected', () => {
-  const out = bindExactFillTarget(NODES as never, '@e12');
+  const out = bindExactFillTarget(NODES as never, '@e12', signatureFor('@e12') as never);
   assert.ok(!out.ok);
   assert.match((out as { detail: string }).detail, /not a recognized text input/);
 });
 
 test('gh-581 bind: a positional ref absent from the snapshot is rejected', () => {
-  const out = bindExactFillTarget(NODES as never, '@e99');
+  const signature = { type: 'TextField', identifier: 'missing', flatIndex: 99, nodeCount: 100 };
+  const out = bindExactFillTarget(NODES as never, '@e99', signature as never);
   assert.ok(!out.ok);
 });
 
 test('gh-581 bind: a bare eN-shaped string binds as a positional ref', () => {
-  const out = bindExactFillTarget(NODES as never, 'e30');
+  const out = bindExactFillTarget(NODES as never, 'e30', signatureFor('e30') as never);
   assert.ok(out.ok);
   assert.equal((out as { binding: { inputRef: string } }).binding.inputRef, '@e30');
+});
+
+test('gh-581 bind: positional refs reject missing or type-only prior identity', () => {
+  const missing = bindExactFillTarget(NODES as never, '@e30');
+  const typeOnly = bindExactFillTarget(
+    [{ ref: '@e1', type: 'TextField', rect: { x: 0, y: 0, width: 10, height: 10 } }] as never,
+    '@e1',
+    { type: 'TextField', flatIndex: 0, nodeCount: 1 } as never,
+  );
+  assert.ok(!missing.ok);
+  assert.ok(!typeOnly.ok);
+  assert.match((missing as { detail: string }).detail, /no robust pre-refresh identity/);
 });
 
 test('gh-581 bind: an unchanged positional slot still requires unique identity', () => {

@@ -289,7 +289,8 @@ extension RnFastRunnerTests {
   func resolveExactTextInput(
     app: XCUIApplication,
     descriptor: ExactInputDescriptor,
-    sameGeneration: Bool
+    sameGeneration: Bool,
+    requireIdentifierFrameMatch: Bool = false
   ) -> ExactInputResolution {
     let live = liveInputCandidates(app: app)
     // Fail closed if any candidate's attributes cannot be read exception-safely.
@@ -301,7 +302,8 @@ extension RnFastRunnerTests {
       descriptorIdentifier: descriptor.identifier,
       descriptorLabel: descriptor.label,
       descriptorRect: descriptor.rect,
-      sameGeneration: sameGeneration
+      sameGeneration: sameGeneration,
+      requireIdentifierFrameMatch: requireIdentifierFrameMatch
     ) {
     case .unique(let index):
       return .bound(live[index])

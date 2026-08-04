@@ -12490,6 +12490,7 @@ async function runIOS(args) {
   }
   let resp;
   let recovery;
+  let commandAuthorityBefore = captureFastRunnerCommandAuthority();
   try {
     ({ resp, recovery } = await postCommandWithRecovery(withKeyboardGuard(body, args.command, process.env)));
   } catch (err) {
@@ -12498,7 +12499,7 @@ async function runIOS(args) {
       return mapped;
     const m = err instanceof Error ? err.message : String(err);
     if (m.startsWith("RUNNER_TIMEOUT")) {
-      return args.command === "type" ? containTypeTimeout(args) : containRunnerTimeout(args.command, m);
+      return args.command === "type" ? containTypeTimeout(args, commandAuthorityBefore) : containRunnerTimeout(args.command, m, commandAuthorityBefore);
     }
     throw err;
   }
@@ -12506,7 +12507,19 @@ async function runIOS(args) {
     if (!await refreshTargetAfterKeyboard()) {
       return refreshFailure.result ?? staleAfterKeyboardDismissal(args._targetRef);
     }
-    ({ resp, recovery } = await postCommandWithRecovery(withKeyboardGuard(body, args.command, process.env)));
+    commandAuthorityBefore = captureFastRunnerCommandAuthority();
+    try {
+      ({ resp, recovery } = await postCommandWithRecovery(withKeyboardGuard(body, args.command, process.env)));
+    } catch (err) {
+      const mapped = mapRunnerDispatchError(err);
+      if (mapped)
+        return mapped;
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.startsWith("RUNNER_TIMEOUT")) {
+        return args.command === "type" ? containTypeTimeout(args, commandAuthorityBefore) : containRunnerTimeout(args.command, message, commandAuthorityBefore);
+      }
+      throw err;
+    }
     keyboardRelayoutRecovered = true;
   }
   const recoveryMeta = recovery ? { transportRecovery: recovery } : {};
@@ -12515,10 +12528,10 @@ async function runIOS(args) {
     const message = resp.error?.message ?? "runner returned !ok with no error";
     const code = resp.error?.code;
     if (code === "RUNNER_TIMEOUT") {
-      return args.command === "type" ? containTypeTimeout(args) : containRunnerTimeout(args.command, message);
+      return args.command === "type" ? containTypeTimeout(args, commandAuthorityBefore) : containRunnerTimeout(args.command, message, commandAuthorityBefore);
     }
     if (args.command === "type" && typeof message === "string" && message.includes("main thread execution timed out")) {
-      return containTypeTimeout(args);
+      return containTypeTimeout(args, commandAuthorityBefore);
     }
     const mutation = resp.error?.mutation;
     const failExtras = {
@@ -23090,6 +23103,13 @@ function bindExactFillTarget(nodes, rawRef, priorSignature) {
   const positional = /^e\d+$/.test(clean);
   let node;
   if (positional) {
+    const hasRobustIdentity = priorSignature !== null && priorSignature !== void 0 && ((priorSignature.identifier?.trim().length ?? 0) > 0 || (priorSignature.label?.trim().length ?? 0) > 0);
+    if (!hasRobustIdentity) {
+      return {
+        ok: false,
+        detail: `ref @${clean} has no robust pre-refresh identity for unique rebinding`
+      };
+    }
     node = nodes.find((n) => cleanNodeRef(n) === clean);
     if (!node) {
       return { ok: false, detail: `ref @${clean} is not in the current snapshot generation` };
@@ -23440,6 +23460,7 @@ async function maestroFillAttempt(targetId, text, platform, authorityArgs) {
 async function performExactFill(args, client2, tiers) {
   const platform = isAndroidSession() ? "android" : "ios";
   const pathsTried = [];
+  let mutationSeen = "none";
   const cleanRefForSignature = args.ref.replace(/^@/, "");
   const priorSignature = /^e\d+$/.test(cleanRefForSignature) ? getCachedSignature(cleanRefForSignature) : null;
   const snap = await fetchSnapshotNodes(true);
@@ -23469,6 +23490,7 @@ async function performExactFill(args, client2, tiers) {
         return fillFailure("TEXT_ENTRY_UNVERIFIED", "The JS fill dispatch failed after it may have reached the app; not typing again.", { mutation: "possible", pathsTried });
       }
       if (js.handled) {
+        mutationSeen = "observed";
         if (js.outcome === "exact") {
           const verification = await finalVerification(client2, binding, fiberId, args.text);
           if (verification.verified) {
@@ -23496,7 +23518,7 @@ async function performExactFill(args, client2, tiers) {
   pathsTried.push("native");
   if (tiers.abortSignal?.aborted) {
     return fillFailure("TEXT_ENTRY_UNVERIFIED", "device_fill was cancelled before native typing.", {
-      mutation: "none",
+      mutation: mutationSeen === "none" ? "none" : "possible",
       pathsTried
     });
   }
@@ -23508,7 +23530,6 @@ async function performExactFill(args, client2, tiers) {
   };
   const tNative = Date.now();
   let lastVerification = null;
-  let sawSetTextRejected = false;
   for (let attempt = 0; attempt <= MAX_NATIVE_RETYPE; attempt++) {
     const clearFirst = attempt > 0 || args.text.length === 0;
     const primary = await runNative(["fill", binding.inputRef, args.text, ...clearFirst ? ["--clear-first"] : []], {
@@ -23518,11 +23539,13 @@ async function performExactFill(args, client2, tiers) {
     });
     if (primary.isError) {
       if (isSetTextRejectedError(primary)) {
-        sawSetTextRejected = true;
         break;
       }
       const mutation = extractMutationDisposition(primary);
       if (mutation === "none") {
+        if (mutationSeen !== "none") {
+          return fillFailure("TEXT_ENTRY_UNVERIFIED", `device_fill's corrective native attempt was refused after an earlier mutation: ${extractErrorText(primary)}`, { mutation: "possible", pathsTried });
+        }
         const code = extractErrorCode(primary);
         return fillFailure(code === "FOCUS_TARGET_OCCLUDED" ? "FOCUS_TARGET_OCCLUDED" : "NO_TEXT_INPUT_TARGET", `device_fill's native attempt was refused before mutation: ${extractErrorText(primary)}`, { mutation: "none", pathsTried });
       }
@@ -23536,8 +23559,13 @@ async function performExactFill(args, client2, tiers) {
           timings_ms: { nativeType: Date.now() - tNative }
         });
       }
-      return fillFailure("TEXT_ENTRY_UNVERIFIED", `device_fill's native attempt failed and the field could not be verified: ${extractErrorText(primary)}`, { mutation, pathsTried, verification: verification2 });
+      return fillFailure("TEXT_ENTRY_UNVERIFIED", `device_fill's native attempt failed and the field could not be verified: ${extractErrorText(primary)}`, {
+        mutation: mutationSeen === "none" ? mutation : "possible",
+        pathsTried,
+        verification: verification2
+      });
     }
+    mutationSeen = "observed";
     const primarySettle = extractSettleMeta(primary);
     const primaryTyping = extractTypingMeta(primary);
     const verification = await finalVerification(client2, binding, fiberId, args.text);
@@ -23572,7 +23600,7 @@ async function performExactFill(args, client2, tiers) {
   }
   if (!tiers.maestro) {
     return fillFailure("TEXT_ENTRY_UNVERIFIED", "device_fill could not verify the fill and this caller does not use the Maestro tier.", {
-      mutation: sawSetTextRejected ? "observed" : "observed",
+      mutation: mutationSeen,
       pathsTried,
       verification: lastVerification ?? void 0
     });
@@ -23583,7 +23611,7 @@ async function performExactFill(args, client2, tiers) {
   }
   const maestroId = binding.inputTestId ?? resolveCachedIdentifier(binding.inputRef);
   if (!maestroId) {
-    return fillFailure("TEXT_ENTRY_UNVERIFIED", "device_fill could not verify the fill and the input has no testID for the Maestro tier.", { mutation: "observed", pathsTried, verification: lastVerification ?? void 0 });
+    return fillFailure("TEXT_ENTRY_UNVERIFIED", "device_fill could not verify the fill and the input has no testID for the Maestro tier.", { mutation: mutationSeen, pathsTried, verification: lastVerification ?? void 0 });
   }
   const maestro = await maestroFillAttempt(maestroId, args.text, platform, args);
   if (!maestro.attempted) {

@@ -353,6 +353,16 @@ export function bindExactFillTarget(nodes, rawRef, priorSignature) {
     const positional = /^e\d+$/.test(clean);
     let node;
     if (positional) {
+        const hasRobustIdentity = priorSignature !== null &&
+            priorSignature !== undefined &&
+            ((priorSignature.identifier?.trim().length ?? 0) > 0 ||
+                (priorSignature.label?.trim().length ?? 0) > 0);
+        if (!hasRobustIdentity) {
+            return {
+                ok: false,
+                detail: `ref @${clean} has no robust pre-refresh identity for unique rebinding`,
+            };
+        }
         node = nodes.find((n) => cleanNodeRef(n) === clean);
         if (!node) {
             return { ok: false, detail: `ref @${clean} is not in the current snapshot generation` };
@@ -771,6 +781,7 @@ const MAX_NATIVE_RETYPE = 2;
 export async function performExactFill(args, client, tiers) {
     const platform = isAndroidSession() ? 'android' : 'ios';
     const pathsTried = [];
+    let mutationSeen = 'none';
     // Capture the positional ref's identity BEFORE the binding snapshot so a
     // refreshed generation can only rebind by identity, never by recycled id.
     const cleanRefForSignature = args.ref.replace(/^@/, '');
@@ -806,6 +817,7 @@ export async function performExactFill(args, client, tiers) {
                 return fillFailure('TEXT_ENTRY_UNVERIFIED', 'The JS fill dispatch failed after it may have reached the app; not typing again.', { mutation: 'possible', pathsTried });
             }
             if (js.handled) {
+                mutationSeen = 'observed';
                 if (js.outcome === 'exact') {
                     const verification = await finalVerification(client, binding, fiberId, args.text);
                     if (verification.verified) {
@@ -835,7 +847,7 @@ export async function performExactFill(args, client, tiers) {
     pathsTried.push('native');
     if (tiers.abortSignal?.aborted) {
         return fillFailure('TEXT_ENTRY_UNVERIFIED', 'device_fill was cancelled before native typing.', {
-            mutation: 'none',
+            mutation: mutationSeen === 'none' ? 'none' : 'possible',
             pathsTried,
         });
     }
@@ -847,7 +859,6 @@ export async function performExactFill(args, client, tiers) {
     };
     const tNative = Date.now();
     let lastVerification = null;
-    let sawSetTextRejected = false;
     for (let attempt = 0; attempt <= MAX_NATIVE_RETYPE; attempt++) {
         const clearFirst = attempt > 0 || args.text.length === 0;
         const primary = await runNative(['fill', binding.inputRef, args.text, ...(clearFirst ? ['--clear-first'] : [])], {
@@ -857,11 +868,13 @@ export async function performExactFill(args, client, tiers) {
         });
         if (primary.isError) {
             if (isSetTextRejectedError(primary)) {
-                sawSetTextRejected = true;
                 break;
             }
             const mutation = extractMutationDisposition(primary);
             if (mutation === 'none') {
+                if (mutationSeen !== 'none') {
+                    return fillFailure('TEXT_ENTRY_UNVERIFIED', `device_fill's corrective native attempt was refused after an earlier mutation: ${extractErrorText(primary)}`, { mutation: 'possible', pathsTried });
+                }
                 const code = extractErrorCode(primary);
                 return fillFailure(code === 'FOCUS_TARGET_OCCLUDED' ? 'FOCUS_TARGET_OCCLUDED' : 'NO_TEXT_INPUT_TARGET', `device_fill's native attempt was refused before mutation: ${extractErrorText(primary)}`, { mutation: 'none', pathsTried });
             }
@@ -877,8 +890,13 @@ export async function performExactFill(args, client, tiers) {
                     timings_ms: { nativeType: Date.now() - tNative },
                 });
             }
-            return fillFailure('TEXT_ENTRY_UNVERIFIED', `device_fill's native attempt failed and the field could not be verified: ${extractErrorText(primary)}`, { mutation, pathsTried, verification });
+            return fillFailure('TEXT_ENTRY_UNVERIFIED', `device_fill's native attempt failed and the field could not be verified: ${extractErrorText(primary)}`, {
+                mutation: mutationSeen === 'none' ? mutation : 'possible',
+                pathsTried,
+                verification,
+            });
         }
+        mutationSeen = 'observed';
         const primarySettle = extractSettleMeta(primary);
         const primaryTyping = extractTypingMeta(primary);
         const verification = await finalVerification(client, binding, fiberId, args.text);
@@ -915,7 +933,7 @@ export async function performExactFill(args, client, tiers) {
     // or a runner-proven SET_TEXT_REJECTED — both safe for clear-first entry.
     if (!tiers.maestro) {
         return fillFailure('TEXT_ENTRY_UNVERIFIED', 'device_fill could not verify the fill and this caller does not use the Maestro tier.', {
-            mutation: sawSetTextRejected ? 'observed' : 'observed',
+            mutation: mutationSeen,
             pathsTried,
             verification: lastVerification ?? undefined,
         });
@@ -926,7 +944,7 @@ export async function performExactFill(args, client, tiers) {
     }
     const maestroId = binding.inputTestId ?? resolveCachedIdentifier(binding.inputRef);
     if (!maestroId) {
-        return fillFailure('TEXT_ENTRY_UNVERIFIED', 'device_fill could not verify the fill and the input has no testID for the Maestro tier.', { mutation: 'observed', pathsTried, verification: lastVerification ?? undefined });
+        return fillFailure('TEXT_ENTRY_UNVERIFIED', 'device_fill could not verify the fill and the input has no testID for the Maestro tier.', { mutation: mutationSeen, pathsTried, verification: lastVerification ?? undefined });
     }
     const maestro = await maestroFillAttempt(maestroId, args.text, platform, args);
     if (!maestro.attempted) {

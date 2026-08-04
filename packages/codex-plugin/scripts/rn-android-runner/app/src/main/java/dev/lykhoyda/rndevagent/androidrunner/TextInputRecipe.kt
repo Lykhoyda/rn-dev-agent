@@ -59,6 +59,43 @@ object TextInputRecipe {
         return "mismatch"
     }
 
+    data class TargetFrame(val left: Int, val top: Int, val right: Int, val bottom: Int)
+
+    data class TargetIdentity(
+        val type: String,
+        val identifier: String?,
+        val frame: TargetFrame,
+    )
+
+    sealed interface TargetResolution {
+        data class Unique(val index: Int) : TargetResolution
+        data object Ambiguous : TargetResolution
+        data object Absent : TargetResolution
+    }
+
+    private fun framesMatch(a: TargetFrame, b: TargetFrame, tolerance: Int = 8): Boolean =
+        kotlin.math.abs((a.left + a.right) - (b.left + b.right)) <= tolerance * 2 &&
+            kotlin.math.abs((a.top + a.bottom) - (b.top + b.bottom)) <= tolerance * 2 &&
+            kotlin.math.abs((a.right - a.left) - (b.right - b.left)) <= tolerance &&
+            kotlin.math.abs((a.bottom - a.top) - (b.bottom - b.top)) <= tolerance
+
+    fun resolveIdentifier(
+        candidates: List<TargetIdentity>,
+        expectedType: String?,
+        identifier: String,
+        expectedFrame: TargetFrame?,
+        requireFrame: Boolean,
+    ): TargetResolution {
+        val matches = candidates.withIndex().filter { it.value.identifier == identifier }
+        if (matches.size > 1) return TargetResolution.Ambiguous
+        val match = matches.firstOrNull() ?: return TargetResolution.Absent
+        if (expectedType != null && match.value.type != expectedType) return TargetResolution.Absent
+        if (requireFrame && (expectedFrame == null || !framesMatch(match.value.frame, expectedFrame))) {
+            return TargetResolution.Absent
+        }
+        return TargetResolution.Unique(match.index)
+    }
+
     data class KeyStroke(val keyCode: Int, val shift: Boolean)
 
     // android.view.KeyEvent constants, inlined as plain Ints so this object

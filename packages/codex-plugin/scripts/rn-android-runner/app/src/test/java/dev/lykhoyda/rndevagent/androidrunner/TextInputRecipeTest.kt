@@ -205,4 +205,34 @@ class TextInputRecipeTest {
         assertEquals("exact", TextInputRecipe.classifyVerify("", "", secure = false))
         assertEquals("ambiguous", TextInputRecipe.classifyVerify("", "Enter name", secure = false))
     }
+
+    @Test
+    fun targetResolutionRejectsCrossClassDuplicatesAndMovedReplacement() {
+        val frame = TextInputRecipe.TargetFrame(0, 100, 300, 144)
+        val duplicate = TextInputRecipe.resolveIdentifier(
+            listOf(
+                TextInputRecipe.TargetIdentity("android.widget.EditText", "email", frame),
+                TextInputRecipe.TargetIdentity("android.widget.AutoCompleteTextView", "email", frame),
+            ),
+            "android.widget.EditText",
+            "email",
+            frame,
+            requireFrame = true,
+        )
+        val moved = TextInputRecipe.resolveIdentifier(
+            listOf(
+                TextInputRecipe.TargetIdentity(
+                    "android.widget.EditText",
+                    "email",
+                    TextInputRecipe.TargetFrame(0, 400, 300, 444),
+                ),
+            ),
+            "android.widget.EditText",
+            "email",
+            frame,
+            requireFrame = true,
+        )
+        assertEquals(TextInputRecipe.TargetResolution.Ambiguous, duplicate)
+        assertEquals(TextInputRecipe.TargetResolution.Absent, moved)
+    }
 }

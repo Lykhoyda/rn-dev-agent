@@ -246,6 +246,23 @@ test('gh-581: stable mismatch retypes clear-first against the same target, then 
   assert.equal(env.meta.verify, 'exact');
 });
 
+test('gh-581: corrective refusal cannot erase an earlier mutation', async () => {
+  const { result, calls } = await withFillSeam(
+    {
+      fill: (_call, fillCount) =>
+        fillCount === 1
+          ? okResult({ typed: true })
+          : failResult('target moved', 'FOCUS_TARGET_OCCLUDED', { mutation: 'none' }),
+      verify: () => okResult({ verifyVerdict: 'mismatch', verifyStable: true }),
+    },
+    () => performExactFill({ ref: '@e3', text: 'value' }, null, NATIVE_ONLY),
+  );
+  const env = envelope(result as never);
+  assert.equal(env.code, 'TEXT_ENTRY_UNVERIFIED');
+  assert.equal(env.meta.mutation, 'possible');
+  assert.equal(calls.filter((call) => call.cliArgs[0] === 'fill').length, 2);
+});
+
 test('gh-581: secure uncontrolled masked value hard-fails and is not retried', async () => {
   const { result, calls } = await withFillSeam(
     { verify: () => okResult({ verifyVerdict: 'secure-masked', verifyStable: true }) },

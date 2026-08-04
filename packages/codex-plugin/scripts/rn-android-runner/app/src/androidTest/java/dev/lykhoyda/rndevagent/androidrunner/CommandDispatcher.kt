@@ -468,6 +468,31 @@ class CommandDispatcher(
     private fun strictlyContains(outer: Rect, inner: Rect): Boolean =
         outer != inner && outer.contains(inner)
 
+    private fun describedBounds(cmd: JSONObject): Rect? {
+        val bounds = cmd.optJSONObject("targetBounds") ?: return null
+        return Rect(
+            bounds.getDouble("x").roundToInt(),
+            bounds.getDouble("y").roundToInt(),
+            (bounds.getDouble("x") + bounds.getDouble("width")).roundToInt(),
+            (bounds.getDouble("y") + bounds.getDouble("height")).roundToInt(),
+        )
+    }
+
+    private fun targetIdentities(candidates: List<UiObject2>): List<TextInputRecipe.TargetIdentity> =
+        candidates.map { candidate ->
+            val bounds = candidate.visibleBounds
+            TextInputRecipe.TargetIdentity(
+                type = candidate.className ?: "",
+                identifier = objectIdentifier(candidate),
+                frame = TextInputRecipe.TargetFrame(
+                    bounds.left,
+                    bounds.top,
+                    bounds.right,
+                    bounds.bottom,
+                ),
+            )
+        }
+
     // Exact binding tiers mirroring the iOS runner: unique identifier across
     // ALL recognized inputs, then unique bounds-equality, then a unique (or
     // strictly nested) point hit. Never "first match", never ambient focus for
@@ -481,31 +506,34 @@ class CommandDispatcher(
     private fun resolveExactTypeTarget(cmd: JSONObject): ResolvedInput {
         val identifier = cmd.optString("snapshotIdentifier").ifBlank { null }
         val expectedClass = cmd.optString("snapshotElementType").ifBlank { null }
-        val candidates = inputCandidates().filter {
-            expectedClass == null || (it.className ?: "") == expectedClass
-        }
+        val allCandidates = inputCandidates()
         if (identifier != null) {
-            val byId = candidates.filter { objectIdentifier(it) == identifier }
-            if (byId.size > 1) {
-                throw NoTextInputTargetException(
-                    "NO_TEXT_INPUT_TARGET: identifier \"$identifier\" matches ${byId.size} text inputs; no typing was performed"
+            return when (
+                val resolution = TextInputRecipe.resolveIdentifier(
+                    targetIdentities(allCandidates),
+                    expectedClass,
+                    identifier,
+                    null,
+                    requireFrame = false,
+                )
+            ) {
+                is TextInputRecipe.TargetResolution.Unique -> ResolvedInput(
+                    allCandidates[resolution.index],
+                    "identifier",
+                )
+                TextInputRecipe.TargetResolution.Ambiguous -> throw NoTextInputTargetException(
+                    "NO_TEXT_INPUT_TARGET: identifier \"$identifier\" matches multiple text inputs; no typing was performed"
+                )
+                TextInputRecipe.TargetResolution.Absent -> throw NoTextInputTargetException(
+                    "NO_TEXT_INPUT_TARGET: no text input matches identifier \"$identifier\"; no typing was performed"
                 )
             }
-            return ResolvedInput(
-                byId.firstOrNull() ?: throw NoTextInputTargetException(
-                    "NO_TEXT_INPUT_TARGET: no text input matches identifier \"$identifier\"; no typing was performed"
-                ),
-                "identifier",
-            )
         }
-        val boundsJson = cmd.optJSONObject("targetBounds")
-        if (boundsJson != null) {
-            val described = Rect(
-                boundsJson.getDouble("x").roundToInt(),
-                boundsJson.getDouble("y").roundToInt(),
-                (boundsJson.getDouble("x") + boundsJson.getDouble("width")).roundToInt(),
-                (boundsJson.getDouble("y") + boundsJson.getDouble("height")).roundToInt(),
-            )
+        val candidates = allCandidates.filter {
+            expectedClass == null || (it.className ?: "") == expectedClass
+        }
+        val described = describedBounds(cmd)
+        if (described != null) {
             val byBounds = candidates.filter { boundsMatch(it.visibleBounds, described) }
             if (byBounds.size > 1) {
                 throw NoTextInputTargetException(
@@ -560,24 +588,52 @@ class CommandDispatcher(
             recorded.snapshotElementType == optionalString(cmd, "snapshotElementType") &&
             recorded.snapshotIdentifier == optionalString(cmd, "snapshotIdentifier")
         if (recorded != null && descriptorAgrees) {
+            val identifierMatches = recorded.identifier?.let { identifier ->
+                candidates.filter { objectIdentifier(it) == identifier }
+            }
+            if (identifierMatches != null && identifierMatches.size > 1) {
+                lostVerdict = "ambiguous"
+            }
             val byRecord = candidates.filter {
                 (it.className ?: "") == recorded.className &&
                     objectIdentifier(it) == recorded.identifier &&
                     boundsMatch(it.visibleBounds, recorded.bounds)
             }
-            if (byRecord.size == 1) target = byRecord[0]
+            when {
+                lostVerdict == "ambiguous" -> Unit
+                byRecord.size == 1 -> target = byRecord[0]
+                byRecord.size > 1 -> lostVerdict = "ambiguous"
+            }
         }
-        if (target == null) {
+        if (target == null && lostVerdict != "ambiguous") {
             val identifier = cmd.optString("snapshotIdentifier").ifBlank { null }
             val expectedClass = cmd.optString("snapshotElementType").ifBlank { null }
+            val described = describedBounds(cmd)
             if (identifier != null) {
-                val byId = candidates.filter {
-                    objectIdentifier(it) == identifier &&
-                        (expectedClass == null || (it.className ?: "") == expectedClass)
+                val frame = described?.let {
+                    TextInputRecipe.TargetFrame(it.left, it.top, it.right, it.bottom)
+                }
+                when (
+                    val resolution = TextInputRecipe.resolveIdentifier(
+                        targetIdentities(candidates),
+                        expectedClass,
+                        identifier,
+                        frame,
+                        requireFrame = true,
+                    )
+                ) {
+                    is TextInputRecipe.TargetResolution.Unique -> target = candidates[resolution.index]
+                    TextInputRecipe.TargetResolution.Ambiguous -> lostVerdict = "ambiguous"
+                    TextInputRecipe.TargetResolution.Absent -> Unit
+                }
+            } else if (described != null) {
+                val byFrame = candidates.filter {
+                    (expectedClass == null || (it.className ?: "") == expectedClass) &&
+                        boundsMatch(it.visibleBounds, described)
                 }
                 when {
-                    byId.size == 1 -> target = byId[0]
-                    byId.size > 1 -> lostVerdict = "ambiguous"
+                    byFrame.size == 1 -> target = byFrame[0]
+                    byFrame.size > 1 -> lostVerdict = "ambiguous"
                 }
             }
         }

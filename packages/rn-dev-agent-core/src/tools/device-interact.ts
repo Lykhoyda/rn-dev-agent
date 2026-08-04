@@ -514,6 +514,17 @@ export function bindExactFillTarget(
   const positional = /^e\d+$/.test(clean);
   let node: SnapshotNode | undefined;
   if (positional) {
+    const hasRobustIdentity =
+      priorSignature !== null &&
+      priorSignature !== undefined &&
+      ((priorSignature.identifier?.trim().length ?? 0) > 0 ||
+        (priorSignature.label?.trim().length ?? 0) > 0);
+    if (!hasRobustIdentity) {
+      return {
+        ok: false,
+        detail: `ref @${clean} has no robust pre-refresh identity for unique rebinding`,
+      };
+    }
     node = nodes.find((n) => cleanNodeRef(n) === clean);
     if (!node) {
       return { ok: false, detail: `ref @${clean} is not in the current snapshot generation` };
@@ -1052,6 +1063,7 @@ export async function performExactFill(
 ): Promise<ToolResult> {
   const platform: 'ios' | 'android' = isAndroidSession() ? 'android' : 'ios';
   const pathsTried: string[] = [];
+  let mutationSeen: FillMutationDisposition = 'none';
 
   // Capture the positional ref's identity BEFORE the binding snapshot so a
   // refreshed generation can only rebind by identity, never by recycled id.
@@ -1112,6 +1124,7 @@ export async function performExactFill(
         );
       }
       if (js.handled) {
+        mutationSeen = 'observed';
         if (js.outcome === 'exact') {
           const verification = await finalVerification(client, binding, fiberId, args.text);
           if (verification.verified) {
@@ -1154,7 +1167,7 @@ export async function performExactFill(
   pathsTried.push('native');
   if (tiers.abortSignal?.aborted) {
     return fillFailure('TEXT_ENTRY_UNVERIFIED', 'device_fill was cancelled before native typing.', {
-      mutation: 'none',
+      mutation: mutationSeen === 'none' ? 'none' : 'possible',
       pathsTried,
     });
   }
@@ -1166,7 +1179,6 @@ export async function performExactFill(
   };
   const tNative = Date.now();
   let lastVerification: FinalVerification | null = null;
-  let sawSetTextRejected = false;
   for (let attempt = 0; attempt <= MAX_NATIVE_RETYPE; attempt++) {
     const clearFirst = attempt > 0 || args.text.length === 0;
     const primary = await runNative(
@@ -1179,11 +1191,17 @@ export async function performExactFill(
     );
     if (primary.isError) {
       if (isSetTextRejectedError(primary)) {
-        sawSetTextRejected = true;
         break;
       }
       const mutation = extractMutationDisposition(primary);
       if (mutation === 'none') {
+        if (mutationSeen !== 'none') {
+          return fillFailure(
+            'TEXT_ENTRY_UNVERIFIED',
+            `device_fill's corrective native attempt was refused after an earlier mutation: ${extractErrorText(primary)}`,
+            { mutation: 'possible', pathsTried },
+          );
+        }
         const code = extractErrorCode(primary);
         return fillFailure(
           code === 'FOCUS_TARGET_OCCLUDED' ? 'FOCUS_TARGET_OCCLUDED' : 'NO_TEXT_INPUT_TARGET',
@@ -1206,9 +1224,14 @@ export async function performExactFill(
       return fillFailure(
         'TEXT_ENTRY_UNVERIFIED',
         `device_fill's native attempt failed and the field could not be verified: ${extractErrorText(primary)}`,
-        { mutation, pathsTried, verification },
+        {
+          mutation: mutationSeen === 'none' ? mutation : 'possible',
+          pathsTried,
+          verification,
+        },
       );
     }
+    mutationSeen = 'observed';
     const primarySettle = extractSettleMeta(primary);
     const primaryTyping = extractTypingMeta(primary);
     const verification = await finalVerification(client, binding, fiberId, args.text);
@@ -1261,7 +1284,7 @@ export async function performExactFill(
       'TEXT_ENTRY_UNVERIFIED',
       'device_fill could not verify the fill and this caller does not use the Maestro tier.',
       {
-        mutation: sawSetTextRejected ? 'observed' : 'observed',
+        mutation: mutationSeen,
         pathsTried,
         verification: lastVerification ?? undefined,
       },
@@ -1280,7 +1303,7 @@ export async function performExactFill(
     return fillFailure(
       'TEXT_ENTRY_UNVERIFIED',
       'device_fill could not verify the fill and the input has no testID for the Maestro tier.',
-      { mutation: 'observed', pathsTried, verification: lastVerification ?? undefined },
+      { mutation: mutationSeen, pathsTried, verification: lastVerification ?? undefined },
     );
   }
   const maestro = await maestroFillAttempt(maestroId, args.text, platform, args);

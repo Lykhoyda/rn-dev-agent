@@ -761,7 +761,8 @@ extension RnFastRunnerTests {
           switch resolveExactTextInput(
             app: activeApp,
             descriptor: descriptor,
-            sameGeneration: sameGeneration
+            sameGeneration: sameGeneration,
+            requireIdentifierFrameMatch: true
           ) {
           case .bound(let element):
             verifyTarget = element
