@@ -64,21 +64,21 @@ object TextInputRecipe {
     fun recordedDescriptorAgrees(
         recordedGeneration: Int?,
         recordedNodeIndex: Int?,
-        recordedElementType: String?,
-        recordedIdentifier: String?,
+        recordedLiveType: String?,
+        recordedLiveIdentifier: String?,
         requestedGeneration: Int?,
         requestedNodeIndex: Int?,
         requestedElementType: String?,
         requestedIdentifier: String?,
     ): Boolean {
-        if (recordedGeneration == null || recordedNodeIndex == null || recordedElementType == null) {
+        if (recordedGeneration == null || recordedNodeIndex == null || recordedLiveType == null) {
             return false
         }
-        if (!INPUT_TYPE_PATTERN.matches(recordedElementType)) return false
+        if (!INPUT_TYPE_PATTERN.matches(recordedLiveType)) return false
         return recordedGeneration == requestedGeneration &&
             recordedNodeIndex == requestedNodeIndex &&
-            recordedElementType == requestedElementType &&
-            recordedIdentifier == requestedIdentifier
+            recordedLiveType == requestedElementType &&
+            recordedLiveIdentifier == requestedIdentifier
     }
 
     data class TargetFrame(val left: Int, val top: Int, val right: Int, val bottom: Int)

@@ -413,8 +413,6 @@ class CommandDispatcher(
         val bounds: Rect,
         val snapshotGeneration: Int?,
         val snapshotNodeIndex: Int?,
-        val snapshotElementType: String?,
-        val snapshotIdentifier: String?,
     )
 
     private var recordedTypeTarget: RecordedTypeTarget? = null
@@ -433,8 +431,6 @@ class CommandDispatcher(
                 bounds = Rect(target.visibleBounds),
                 snapshotGeneration = optionalInt(cmd, "snapshotGeneration"),
                 snapshotNodeIndex = optionalInt(cmd, "snapshotNodeIndex"),
-                snapshotElementType = optionalString(cmd, "snapshotElementType"),
-                snapshotIdentifier = optionalString(cmd, "snapshotIdentifier"),
             )
         } catch (e: StaleObjectException) {
             null
@@ -579,8 +575,8 @@ class CommandDispatcher(
         val descriptorAgrees = recorded != null && TextInputRecipe.recordedDescriptorAgrees(
             recorded.snapshotGeneration,
             recorded.snapshotNodeIndex,
-            recorded.snapshotElementType,
-            recorded.snapshotIdentifier,
+            recorded.className,
+            recorded.identifier,
             optionalInt(cmd, "snapshotGeneration"),
             optionalInt(cmd, "snapshotNodeIndex"),
             optionalString(cmd, "snapshotElementType"),

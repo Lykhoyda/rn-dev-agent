@@ -256,6 +256,30 @@ class TextInputRecipeTest {
                 null,
             ),
         )
+        assertFalse(
+            TextInputRecipe.recordedDescriptorAgrees(
+                7,
+                12,
+                "android.widget.EditText",
+                "runtime-email",
+                7,
+                12,
+                "android.widget.EditText",
+                null,
+            ),
+        )
+        assertFalse(
+            TextInputRecipe.recordedDescriptorAgrees(
+                7,
+                12,
+                "android.widget.AutoCompleteTextView",
+                "email",
+                7,
+                12,
+                "android.widget.EditText",
+                "email",
+            ),
+        )
     }
 
     @Test
