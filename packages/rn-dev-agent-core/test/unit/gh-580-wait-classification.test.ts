@@ -109,6 +109,91 @@ test('gh-580: duplicated staged runner output does not change the classified sel
   assert.equal(parseMaestroFailure(staged).selector, 'otp_field');
 });
 
+// Captured verbatim from maestro-runner 1.1.20 driving a dedicated iOS 26.4
+// simulator (PR #665 live validation): the runner renders ONE failure as a
+// detailed ID-bearing block followed by a selector-less summary that repeats the
+// identical reason. `findFailedStep` takes the LAST step, so the terse summary
+// became the failed step and the exact ID was lost to UNKNOWN.
+const RUNNER_1_1_20_DUPLICATE_SUMMARY = [
+  'maestro-runner 1.1.20',
+  '    ✗ extendedWaitUntil: visible id="rn580_terminal_missing" (1.2s)',
+  "      ╰─ Element '#rn580_terminal_missing' not visible within 1.1s (cause: context deadline exceeded)",
+  '',
+  '    ✗ extendedWaitUntil (1.4s)',
+  "      ╰─ Element '#rn580_terminal_missing' not visible within 1.1s (cause: context deadline exceeded)",
+].join('\n');
+
+test('gh-580: a selector-less duplicate summary does not erase the real terminal ID', () => {
+  const terminal = buildTerminalEvidence(RUNNER_1_1_20_DUPLICATE_SUMMARY);
+  assert.equal(terminal.exitClass, 'step-failure');
+  assert.equal(terminal.failureKind, 'SELECTOR_NOT_FOUND');
+  assert.equal(terminal.failureSelector, 'rn580_terminal_missing');
+
+  const failure = parseMaestroFailure(RUNNER_1_1_20_DUPLICATE_SUMMARY, terminal);
+  assert.equal(failure.kind, 'SELECTOR_NOT_FOUND');
+  assert.equal(failure.selector, 'rn580_terminal_missing');
+  assert.equal(isAutoRepairable(failure), true);
+
+  // …and from raw stdout alone, with no terminal evidence supplied.
+  const fromRaw = parseMaestroFailure(RUNNER_1_1_20_DUPLICATE_SUMMARY);
+  assert.equal(fromRaw.kind, 'SELECTOR_NOT_FOUND');
+  assert.equal(fromRaw.selector, 'rn580_terminal_missing');
+  assert.equal(fromRaw.selectorKind, 'id');
+});
+
+test('gh-580: a killed process still outranks the duplicate-summary rendering', () => {
+  const terminal = buildTerminalEvidence(RUNNER_1_1_20_DUPLICATE_SUMMARY, { timedOut: true });
+  assert.equal(terminal.exitClass, 'timed-out');
+  const failure = parseMaestroFailure(RUNNER_1_1_20_DUPLICATE_SUMMARY, terminal);
+  assert.equal(failure.kind, 'TIMEOUT');
+  assert.equal(isAutoRepairable(failure), false);
+});
+
+test('gh-580: only a byte-identical repeated reason counts as a duplicate rendering', () => {
+  // Different ID in the terminal reason → the earlier block is a DIFFERENT
+  // failure, so nothing binds and the stale ID cannot be promoted.
+  const mismatched = [
+    '    ✗ extendedWaitUntil: visible id="stale_id" (1.2s)',
+    "      ╰─ Element '#stale_id' not visible within 1.1s",
+    '    ✗ extendedWaitUntil (1.4s)',
+    "      ╰─ Element '#different_id' not visible within 1.1s",
+  ].join('\n');
+  assert.equal(parseMaestroFailure(mismatched).kind, 'UNKNOWN');
+
+  // Same ID but a different reason line (different timeout) is likewise not a
+  // duplicate rendering — refuse rather than assume.
+  const differentReason = [
+    '    ✗ extendedWaitUntil: visible id="otp" (1.2s)',
+    "      ╰─ Element '#otp' not visible within 1.1s",
+    '    ✗ extendedWaitUntil (9.0s)',
+    "      ╰─ Element '#otp' not visible within 9s",
+  ].join('\n');
+  assert.equal(parseMaestroFailure(differentReason).kind, 'UNKNOWN');
+
+  // A passing step between the blocks ends the duplicate chain.
+  const interrupted = [
+    '    ✗ extendedWaitUntil: visible id="otp" (1.2s)',
+    "      ╰─ Element '#otp' not visible within 1.1s",
+    '    ✓ tapOn: retry (0.4s)',
+    '    ✗ extendedWaitUntil (1.4s)',
+    "      ╰─ Element '#otp' not visible within 1.1s",
+  ].join('\n');
+  assert.equal(parseMaestroFailure(interrupted).kind, 'UNKNOWN');
+});
+
+test('gh-580: a selector-less summary cannot borrow an unrelated earlier ID wait', () => {
+  // The terminal reason is text-shaped, so no ID may bind even though an
+  // ID-bearing block appears earlier in the stream.
+  const output = [
+    '    ✗ extendedWaitUntil: visible id="stale_id" (1.2s)',
+    "      ╰─ Element '#stale_id' not visible within 1.1s",
+    '    ✗ extendedWaitUntil (1.4s)',
+    "      ╰─ Element 'Continue' not visible within 1.1s",
+  ].join('\n');
+  assert.equal(parseMaestroFailure(output).kind, 'UNKNOWN');
+  assert.equal(buildTerminalEvidence(output).failureKind, undefined);
+});
+
 test('gh-580: an earlier transient wait miss loses to the terminal one (GH #118 ordering)', () => {
   const retried = [
     "    ╰─ Element '#stale_transient' not visible within 1s",

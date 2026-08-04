@@ -27634,6 +27634,31 @@ var init_ansi = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/maestro-error-parser.js
+function blockReasons(lines, stepIndex) {
+  const reasons = [];
+  for (let i = stepIndex + 1; i < lines.length; i++) {
+    if (RUNNER_STEP_RE.test(lines[i]))
+      break;
+    if (REASON_LINE_RE.test(lines[i]))
+      reasons.push(lines[i]);
+  }
+  return reasons;
+}
+function idWaitStepAmongDuplicates(lines, terminalIndex, terminalReason2) {
+  for (let i = terminalIndex - 1; i >= 0; i--) {
+    const step = RUNNER_STEP_RE.exec(lines[i]);
+    if (!step)
+      continue;
+    if (step[1] !== "\u2717")
+      return null;
+    if (!blockReasons(lines, i).includes(terminalReason2))
+      return null;
+    const stepMatch = ID_WAIT_STEP_RE.exec(step[2]);
+    if (stepMatch)
+      return stepMatch;
+  }
+  return null;
+}
 function parseTerminalIdWait(output, suppliedFailedStep) {
   const lines = stripAnsi(output).split("\n");
   let terminalStep;
@@ -27649,14 +27674,14 @@ function parseTerminalIdWait(output, suppliedFailedStep) {
   const failedStep = suppliedFailedStep ?? terminalStep?.name;
   if (!failedStep || terminalStep && terminalStep.status !== "\u2717")
     return null;
-  const stepMatch = ID_WAIT_STEP_RE.exec(failedStep);
-  if (!stepMatch)
-    return null;
   const reasonLine = lines.slice(terminalStep ? terminalStep.index + 1 : 0).filter((line) => REASON_LINE_RE.test(line)).at(-1);
   if (!reasonLine)
     return null;
   const reasonMatch = ID_WAIT_REASON_RE.exec(reasonLine);
-  if (!reasonMatch || reasonMatch[2] !== stepMatch[2])
+  if (!reasonMatch)
+    return null;
+  const stepMatch = ID_WAIT_STEP_RE.exec(failedStep) ?? (terminalStep ? idWaitStepAmongDuplicates(lines, terminalStep.index, reasonLine) : null);
+  if (!stepMatch || reasonMatch[2] !== stepMatch[2])
     return null;
   return {
     kind: "SELECTOR_NOT_FOUND",

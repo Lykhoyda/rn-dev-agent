@@ -111,6 +111,37 @@ const REASON_LINE_RE = /^[ \t]+╰─\s+/;
 const ID_WAIT_STEP_RE = /^extendedWaitUntil:\s+visible\s+id=(['"])((?:(?!\1).)+)\1$/i;
 const ID_WAIT_REASON_RE = /^[ \t]+╰─\s+Element (['"])#((?:(?!\1).)+)\1 not visible within\b/i;
 
+// The reason lines belonging to one step block: everything up to the next step line.
+function blockReasons(lines: string[], stepIndex: number): string[] {
+  const reasons: string[] = [];
+  for (let i = stepIndex + 1; i < lines.length; i++) {
+    if (RUNNER_STEP_RE.test(lines[i])) break;
+    if (REASON_LINE_RE.test(lines[i])) reasons.push(lines[i]);
+  }
+  return reasons;
+}
+
+// GH #580: maestro-runner 1.1.20 can render ONE failure as two blocks — a detailed
+// step naming the id, then a selector-less summary repeating the identical reason.
+// Requiring a byte-identical reason is what makes borrowing that id safe.
+function idWaitStepAmongDuplicates(
+  lines: string[],
+  terminalIndex: number,
+  terminalReason: string,
+): RegExpExecArray | null {
+  for (let i = terminalIndex - 1; i >= 0; i--) {
+    const step = RUNNER_STEP_RE.exec(lines[i]);
+    if (!step) continue;
+    // A passing step, or a failure whose own reason differs, ends the duplicate
+    // chain: only a block repeating this exact reason is the same failure.
+    if (step[1] !== '✗') return null;
+    if (!blockReasons(lines, i).includes(terminalReason)) return null;
+    const stepMatch = ID_WAIT_STEP_RE.exec(step[2]);
+    if (stepMatch) return stepMatch;
+  }
+  return null;
+}
+
 function parseTerminalIdWait(
   output: string,
   suppliedFailedStep: string | undefined,
@@ -125,15 +156,17 @@ function parseTerminalIdWait(
   if (suppliedFailedStep && terminalStep && terminalStep.name !== suppliedFailedStep) return null;
   const failedStep = suppliedFailedStep ?? terminalStep?.name;
   if (!failedStep || (terminalStep && terminalStep.status !== '✗')) return null;
-  const stepMatch = ID_WAIT_STEP_RE.exec(failedStep);
-  if (!stepMatch) return null;
   const reasonLine = lines
     .slice(terminalStep ? terminalStep.index + 1 : 0)
     .filter((line) => REASON_LINE_RE.test(line))
     .at(-1);
   if (!reasonLine) return null;
   const reasonMatch = ID_WAIT_REASON_RE.exec(reasonLine);
-  if (!reasonMatch || reasonMatch[2] !== stepMatch[2]) return null;
+  if (!reasonMatch) return null;
+  const stepMatch =
+    ID_WAIT_STEP_RE.exec(failedStep) ??
+    (terminalStep ? idWaitStepAmongDuplicates(lines, terminalStep.index, reasonLine) : null);
+  if (!stepMatch || reasonMatch[2] !== stepMatch[2]) return null;
   return {
     kind: 'SELECTOR_NOT_FOUND',
     selectorKind: 'id',
