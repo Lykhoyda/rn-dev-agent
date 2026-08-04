@@ -1,5 +1,11 @@
 # rn-dev-agent-core
 
+## 0.66.4
+
+### Patch Changes
+
+- 89bdf7a: Classify maestro-runner 1.1.x ID-wait misses as SELECTOR_NOT_FOUND, surface bounded head+tail failure evidence with the exact selector on every terminal path, resume reactive CDP/JS replay at the failed selector instead of redispatching executed mutations, and refuse launchApp keys the CDP transport cannot honor.
+
 ## 0.66.3
 
 ### Patch Changes
