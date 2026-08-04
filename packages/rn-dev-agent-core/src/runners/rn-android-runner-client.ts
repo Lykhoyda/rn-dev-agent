@@ -153,6 +153,8 @@ export interface RunAndroidArgs {
   interactiveOnly?: boolean;
   outPath?: string;
   /** GH #581: exact input identity + declared focus point for type/verifyInput. */
+  snapshotGeneration?: number;
+  snapshotNodeIndex?: number;
   snapshotIdentifier?: string;
   snapshotElementType?: string;
   targetBounds?: { x: number; y: number; width: number; height: number };
@@ -1916,6 +1918,8 @@ export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
   if (args.timeoutMs !== undefined) body.timeoutMs = args.timeoutMs;
   if (args.scale !== undefined) body.scale = args.scale;
   if (args.interactiveOnly !== undefined) body.interactiveOnly = args.interactiveOnly;
+  if (args.snapshotGeneration !== undefined) body.snapshotGeneration = args.snapshotGeneration;
+  if (args.snapshotNodeIndex !== undefined) body.snapshotNodeIndex = args.snapshotNodeIndex;
   if (args.snapshotIdentifier !== undefined) body.snapshotIdentifier = args.snapshotIdentifier;
   if (args.snapshotElementType !== undefined) body.snapshotElementType = args.snapshotElementType;
   if (args.targetBounds !== undefined) body.targetBounds = args.targetBounds;

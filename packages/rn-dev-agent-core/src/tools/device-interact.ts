@@ -39,7 +39,6 @@ import {
   type RefSignature,
 } from '../fast-runner-ref-map.js';
 import {
-  resolveJsTestId,
   attemptJsFill,
   settleRead,
   probeInputState,
@@ -512,7 +511,7 @@ export function bindExactFillTarget(
   priorSignature?: RefSignature | null,
 ): ExactBindOutcome {
   const clean = rawRef.replace(/^@/, '');
-  const positional = rawRef.startsWith('@') && /^e\d+$/.test(clean);
+  const positional = /^e\d+$/.test(clean);
   let node: SnapshotNode | undefined;
   if (positional) {
     node = nodes.find((n) => cleanNodeRef(n) === clean);
@@ -520,28 +519,19 @@ export function bindExactFillTarget(
       return { ok: false, detail: `ref @${clean} is not in the current snapshot generation` };
     }
     if (priorSignature) {
-      const matchesPrior =
-        node.type === priorSignature.type &&
-        node.label === priorSignature.label &&
-        node.identifier === priorSignature.identifier;
-      if (!matchesPrior) {
-        // Strictly-unique identity rebinding only — the shared refreshRef
-        // flat-index tie-breaker is a heal heuristic for taps and is never
-        // sufficient license for text mutation.
-        const matches = nodes.filter(
-          (n) =>
-            (n.type ?? '') === priorSignature.type &&
-            n.label === priorSignature.label &&
-            n.identifier === priorSignature.identifier,
-        );
-        if (matches.length !== 1) {
-          return {
-            ok: false,
-            detail: `ref @${clean} no longer denotes the element it was captured for and its identity ${matches.length > 1 ? 'matches multiple elements' : 'is absent'} in the current snapshot`,
-          };
-        }
-        node = matches[0];
+      const matches = nodes.filter(
+        (n) =>
+          (n.type ?? '') === priorSignature.type &&
+          n.label === priorSignature.label &&
+          n.identifier === priorSignature.identifier,
+      );
+      if (matches.length !== 1) {
+        return {
+          ok: false,
+          detail: `ref @${clean} identity ${matches.length > 1 ? 'matches multiple elements' : 'is absent'} in the current snapshot`,
+        };
       }
+      node = matches[0];
     }
   } else {
     const matches = nodes.filter((n) => n.identifier === clean);
@@ -733,7 +723,7 @@ interface FillArgs {
   text: string;
   /** Bounded in-operation focus wait forwarded to the runner (default 1500ms). */
   waitForKeyboardMs?: number;
-  /** #191: explicit testID for the fiber oracle; resolved from ref's cached identifier when omitted. */
+  /** Explicit fiber testID; it must equal the exact bound input's current identifier. */
   testID?: string;
   /** Story 04 (#385): per-call settle budget override in ms. */
   settleTimeoutMs?: number;
@@ -850,6 +840,15 @@ function extractErrorText(result: ToolResult): string {
   }
 }
 
+function extractErrorCode(result: ToolResult): string | undefined {
+  try {
+    const envelope = JSON.parse(result.content[0]?.text ?? '{}') as { code?: unknown };
+    return typeof envelope.code === 'string' ? envelope.code : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 const NATIVE_VERIFY_VERDICTS = new Set([
   'exact',
   'mismatch',
@@ -922,7 +921,7 @@ interface FillFailureOpts {
 }
 
 function fillFailure(
-  code: 'NO_TEXT_INPUT_TARGET' | 'TEXT_ENTRY_UNVERIFIED',
+  code: 'NO_TEXT_INPUT_TARGET' | 'FOCUS_TARGET_OCCLUDED' | 'TEXT_ENTRY_UNVERIFIED',
   message: string,
   opts: FillFailureOpts,
 ): ToolResult {
@@ -944,6 +943,38 @@ function fillFailure(
         ? 'No text was entered. Refresh the snapshot (device_snapshot action=snapshot) and rebind the input before retrying.'
         : 'The field may have been mutated. Read the field state (device_snapshot or the fiber) before any manual retry — do not blindly re-run device_fill.'),
   });
+}
+
+function attachFillFailureDisposition(
+  result: ToolResult,
+  mutation: FillMutationDisposition,
+  pathsTried: string[],
+): ToolResult {
+  try {
+    const envelope = JSON.parse(result.content[0]?.text ?? '{}') as {
+      error?: unknown;
+      code?: unknown;
+      meta?: Record<string, unknown>;
+    };
+    const error = typeof envelope.error === 'string' ? envelope.error : 'Text entry was refused.';
+    const meta = {
+      ...(envelope.meta ?? {}),
+      mutation,
+      pathsTried,
+      hint:
+        mutation === 'none'
+          ? 'No text was entered. Refresh the snapshot (device_snapshot action=snapshot) and rebind the input before retrying.'
+          : 'The field may have been mutated. Read the field state (device_snapshot or the fiber) before any manual retry — do not blindly re-run device_fill.',
+    };
+    return typeof envelope.code === 'string'
+      ? failResult(error, envelope.code as never, meta)
+      : failResult(error, meta);
+  } catch {
+    return fillFailure('TEXT_ENTRY_UNVERIFIED', 'Text entry was refused.', {
+      mutation,
+      pathsTried,
+    });
+  }
 }
 
 async function clearControlledValue(client: CDPClient, testID: string): Promise<boolean> {
@@ -1008,6 +1039,7 @@ const MAX_NATIVE_RETYPE = 2;
 export interface ExactFillTiers {
   js: boolean;
   maestro: boolean;
+  abortSignal?: AbortSignal;
 }
 
 // GH #581 exact fill orchestrator (device_fill and device_batch's fill step):
@@ -1018,7 +1050,6 @@ export async function performExactFill(
   client: CDPClient | null,
   tiers: ExactFillTiers,
 ): Promise<ToolResult> {
-  const ref = args.ref.startsWith('@') ? args.ref : `@${args.ref}`;
   const platform: 'ios' | 'android' = isAndroidSession() ? 'android' : 'ios';
   const pathsTried: string[] = [];
 
@@ -1026,14 +1057,18 @@ export async function performExactFill(
   // refreshed generation can only rebind by identity, never by recycled id.
   const cleanRefForSignature = args.ref.replace(/^@/, '');
   const priorSignature =
-    args.ref.startsWith('@') && /^e\d+$/.test(cleanRefForSignature)
+    /^e\d+$/.test(cleanRefForSignature)
       ? getCachedSignature(cleanRefForSignature)
       : null;
 
   const snap = await fetchSnapshotNodes(true);
   if (!snap.ok) {
     if (snap.reason === 'runner-leak-unrecovered') {
-      return runnerLeakFailResult(args.ref, snap.recoveryReason);
+      return attachFillFailureDisposition(
+        runnerLeakFailResult(args.ref, snap.recoveryReason),
+        'none',
+        pathsTried,
+      );
     }
     return fillFailure(
       'NO_TEXT_INPUT_TARGET',
@@ -1051,13 +1086,14 @@ export async function performExactFill(
   }
   const binding = bind.binding;
 
-  const jsTestId = client
-    ? resolveJsTestId(ref, {
-        explicitTestId: args.testID,
-        cachedIdentifier: resolveCachedIdentifier(ref),
-      })
-    : null;
-  const fiberId = binding.inputTestId ?? jsTestId;
+  if (args.testID && args.testID !== binding.inputTestId) {
+    return fillFailure(
+      'NO_TEXT_INPUT_TARGET',
+      `device_fill could not prove that testID "${args.testID}" identifies the bound input. No text was entered.`,
+      { mutation: 'none', pathsTried },
+    );
+  }
+  const fiberId = binding.inputTestId;
   const evalSeam = client ? { evaluate: (e: string) => client.evaluate(e) } : null;
 
   // Controlled inputs go through the fiber; the probe never fires handlers, so
@@ -1077,14 +1113,21 @@ export async function performExactFill(
       }
       if (js.handled) {
         if (js.outcome === 'exact') {
-          const confirmed = await finalFiberVerify(evalSeam, fiberId, args.text);
-          if (confirmed === 'exact') {
+          const verification = await finalVerification(client, binding, fiberId, args.text);
+          if (verification.verified) {
             return verifiedFillResult('js-onChangeText', args.text.length, {
               textEntryPath: 'js',
-              verifiedOracle: 'fiber',
+              verifiedOracle: verification.oracle,
               handler: js.handler,
               timings_ms: { jsType: Date.now() - tJs },
             });
+          }
+          if (!verification.observedMismatch) {
+            return fillFailure(
+              'TEXT_ENTRY_UNVERIFIED',
+              'The controlled fill could not be verified against the bound native input; not retrying.',
+              { mutation: 'possible', pathsTried, verification },
+            );
           }
         }
         if (js.outcome === 'unreadable') {
@@ -1109,6 +1152,12 @@ export async function performExactFill(
   }
 
   pathsTried.push('native');
+  if (tiers.abortSignal?.aborted) {
+    return fillFailure('TEXT_ENTRY_UNVERIFIED', 'device_fill was cancelled before native typing.', {
+      mutation: 'none',
+      pathsTried,
+    });
+  }
   const focusCenter = isRefMapFresh() ? refCenter(binding.focusRef) : null;
   const exactTarget = {
     inputRef: binding.inputRef,
@@ -1135,15 +1184,16 @@ export async function performExactFill(
       }
       const mutation = extractMutationDisposition(primary);
       if (mutation === 'none') {
+        const code = extractErrorCode(primary);
         return fillFailure(
-          'NO_TEXT_INPUT_TARGET',
+          code === 'FOCUS_TARGET_OCCLUDED' ? 'FOCUS_TARGET_OCCLUDED' : 'NO_TEXT_INPUT_TARGET',
           `device_fill's native attempt was refused before mutation: ${extractErrorText(primary)}`,
           { mutation: 'none', pathsTried },
         );
       }
       // Runner-timeout discipline: never resend; only an exact independent
       // read-back may promote a possibly-mutating failure to success.
-      const verification = await finalVerification(client, binding, jsTestId, args.text);
+      const verification = await finalVerification(client, binding, fiberId, args.text);
       if (verification.verified) {
         return verifiedFillResult('native', args.text.length, {
           textEntryPath: attempt === 0 ? 'native' : 'native-retype',
@@ -1161,7 +1211,7 @@ export async function performExactFill(
     }
     const primarySettle = extractSettleMeta(primary);
     const primaryTyping = extractTypingMeta(primary);
-    const verification = await finalVerification(client, binding, jsTestId, args.text);
+    const verification = await finalVerification(client, binding, fiberId, args.text);
     lastVerification = verification;
     if (verification.verified) {
       return verifiedFillResult('native', args.text.length, {
@@ -1187,7 +1237,21 @@ export async function performExactFill(
       }
       break;
     }
+    if (tiers.abortSignal?.aborted) {
+      return fillFailure(
+        'TEXT_ENTRY_UNVERIFIED',
+        'device_fill was cancelled after a native attempt; no corrective retype was dispatched.',
+        { mutation: 'possible', pathsTried, verification },
+      );
+    }
     await sleep(decision.delayMs);
+    if (tiers.abortSignal?.aborted) {
+      return fillFailure(
+        'TEXT_ENTRY_UNVERIFIED',
+        'device_fill was cancelled before a corrective retype was dispatched.',
+        { mutation: 'possible', pathsTried, verification },
+      );
+    }
   }
 
   // Corrective Maestro tier: reachable only after an observed stable mismatch
@@ -1204,6 +1268,13 @@ export async function performExactFill(
     );
   }
   pathsTried.push('maestro');
+  if (tiers.abortSignal?.aborted) {
+    return fillFailure(
+      'TEXT_ENTRY_UNVERIFIED',
+      'device_fill was cancelled before the Maestro correction was dispatched.',
+      { mutation: 'possible', pathsTried, verification: lastVerification ?? undefined },
+    );
+  }
   const maestroId = binding.inputTestId ?? resolveCachedIdentifier(binding.inputRef);
   if (!maestroId) {
     return fillFailure(
@@ -1214,14 +1285,14 @@ export async function performExactFill(
   }
   const maestro = await maestroFillAttempt(maestroId, args.text, platform, args);
   if (!maestro.attempted) {
-    if (maestro.refusal) return maestro.refusal;
+    if (maestro.refusal) return attachFillFailureDisposition(maestro.refusal, 'possible', pathsTried);
     return fillFailure(
       'TEXT_ENTRY_UNVERIFIED',
       'device_fill fell through all tiers; the Maestro attempt did not run cleanly.',
-      { mutation: 'observed', pathsTried, verification: lastVerification ?? undefined },
+      { mutation: 'possible', pathsTried, verification: lastVerification ?? undefined },
     );
   }
-  const maestroVerification = await finalVerification(client, binding, jsTestId, args.text);
+  const maestroVerification = await finalVerification(client, binding, fiberId, args.text);
   if (maestroVerification.verified) {
     return verifiedFillResult('maestro', args.text.length, {
       textEntryPath: 'maestro',

@@ -1401,6 +1401,10 @@ export async function runAndroid(args) {
         body.scale = args.scale;
     if (args.interactiveOnly !== undefined)
         body.interactiveOnly = args.interactiveOnly;
+    if (args.snapshotGeneration !== undefined)
+        body.snapshotGeneration = args.snapshotGeneration;
+    if (args.snapshotNodeIndex !== undefined)
+        body.snapshotNodeIndex = args.snapshotNodeIndex;
     if (args.snapshotIdentifier !== undefined)
         body.snapshotIdentifier = args.snapshotIdentifier;
     if (args.snapshotElementType !== undefined)

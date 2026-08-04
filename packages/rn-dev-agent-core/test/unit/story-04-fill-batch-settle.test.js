@@ -35,6 +35,13 @@ test('buildRunAndroidArgs fill honors --at-x/--at-y pin', () => {
   assert.equal(args._staleRef, undefined);
 });
 
+test('buildRunAndroidArgs preserves leading-dash fill and verify text', () => {
+  const fill = buildRunAndroidArgs(['fill', '@e3', '-1']);
+  const verify = buildRunAndroidArgs(['verify-input', '@e3', '-1']);
+  assert.equal(fill.text, '-1');
+  assert.equal(verify.text, '-1');
+});
+
 test('batch delay: explicit always wins; settle on → 0, settle off → legacy 300', async () => {
   const { resolveBatchDelayMs } = await import('../../dist/tools/device-batch.js');
   assert.equal(resolveBatchDelayMs(500, {}), 500);

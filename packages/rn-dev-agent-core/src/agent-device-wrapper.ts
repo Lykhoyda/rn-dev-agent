@@ -709,6 +709,8 @@ function decorateExactTargetAndroid(
   android.x = Math.round(target.rect.x + target.rect.width / 2);
   android.y = Math.round(target.rect.y + target.rect.height / 2);
   android.targetBounds = target.rect;
+  android.snapshotGeneration = target.snapshotGeneration;
+  android.snapshotNodeIndex = target.snapshotNodeIndex;
   android.snapshotElementType = target.snapshotElementType;
   if (target.snapshotIdentifier !== undefined) {
     android.snapshotIdentifier = target.snapshotIdentifier;
@@ -773,13 +775,13 @@ export function buildRunAndroidArgs(
     }
 
     case 'verify-input': {
-      const text = positionals.slice(1).join(' ');
+      const text = cliArgs[2] ?? '';
       return { command: 'verifyInput', text, ...withBundle };
     }
     case 'fill':
     case 'type': {
-      const ref = positionals[0];
-      const text = positionals.slice(1).join(' ');
+      const ref = cliArgs[1];
+      const text = cliArgs[2] ?? '';
       // Story 04 (#385) M2 guard — mirrors buildRunIOSArgs: a --at-x/--at-y pin
       // bypasses @ref re-resolution so a settle-refreshed map can't retarget.
       const atX = optionValue(cliArgs, '--at-x');
@@ -1748,6 +1750,7 @@ export async function runNative(
     'press',
     'fill',
     'type',
+    'verify-input',
     'back',
     'screenshot',
     'keyboard',

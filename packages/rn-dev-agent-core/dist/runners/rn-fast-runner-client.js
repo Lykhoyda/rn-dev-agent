@@ -1567,8 +1567,10 @@ export async function runIOS(args) {
         if (mapped)
             return mapped;
         const m = err instanceof Error ? err.message : String(err);
-        if (args.command === 'type' && m.startsWith('RUNNER_TIMEOUT')) {
-            return containTypeTimeout(args);
+        if (m.startsWith('RUNNER_TIMEOUT')) {
+            return args.command === 'type'
+                ? containTypeTimeout(args)
+                : containRunnerTimeout(args.command, m);
         }
         throw err;
     }

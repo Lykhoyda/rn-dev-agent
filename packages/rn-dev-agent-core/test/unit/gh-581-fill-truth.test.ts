@@ -282,6 +282,19 @@ test('gh-581: runner refusal with mutation none maps to NO_TEXT_INPUT_TARGET', a
   assert.equal(env.meta.mutation, 'none');
 });
 
+test('gh-581: occluded focus preserves its mutation-free refusal code', async () => {
+  const { result } = await withFillSeam(
+    {
+      fill: () =>
+        failResult('focus point is occluded', 'FOCUS_TARGET_OCCLUDED', { mutation: 'none' }),
+    },
+    () => performExactFill({ ref: '@e3', text: 'value' }, null, NATIVE_ONLY),
+  );
+  const env = envelope(result as never);
+  assert.equal(env.code, 'FOCUS_TARGET_OCCLUDED');
+  assert.equal(env.meta.mutation, 'none');
+});
+
 test('gh-581: possibly-mutating runner failure recovers ONLY via exact read-back', async () => {
   const recovered = await withFillSeam(
     {
@@ -399,12 +412,16 @@ test('gh-581: readable fiber/native disagreement hard-fails without retype', asy
 
 test('gh-581: device_batch fill uses the same arbiter and cannot soft-accept', async () => {
   const { createDeviceBatchHandler } = await import('../../dist/tools/device-batch.js');
-  const { result } = await withFillSeam(
+  const { result, calls } = await withFillSeam(
     { verify: () => okResult({ verifyVerdict: 'unreadable', verifyStable: false }) },
     async () => {
       const handler = createDeviceBatchHandler();
       return handler({
-        steps: [{ action: 'fill', ref: '@e3', text: 'value' }],
+        steps: [
+          { action: 'fill', ref: '@e3', text: 'value', optional: true },
+          { action: 'fill', ref: '@e3', text: 'later' },
+        ],
+        continueOnError: true,
         finalSnapshot: 'none',
         delayMs: 0,
       });
@@ -417,6 +434,9 @@ test('gh-581: device_batch fill uses the same arbiter and cannot soft-accept', a
   const serialized = JSON.stringify(env);
   assert.ok(!serialized.includes('"filled":true'), 'batch must not soft-accept an unverified fill');
   assert.ok(stepResults.length > 0 || env.ok === false, 'batch surfaced the step outcome');
+  assert.equal(env.meta.failed_step.meta.mutation, 'possible');
+  assert.match(env.meta.failed_step.meta.hint, /do not blindly/);
+  assert.equal(calls.filter((c) => c.cliArgs[0] === 'fill').length, 1);
 });
 
 test('gh-581: controlled input fills via the fiber and verifies exact without native typing', async () => {
@@ -428,14 +448,69 @@ test('gh-581: controlled input fills via the fiber and verifies exact without na
       return { controlled: true, handlerCalled: 'onChangeText', valueBefore: '' };
     },
   });
-  const { result, calls } = await withFillSeam({}, () =>
-    performExactFill({ ref: '@e2', text: 'Anna' }, client, { js: true, maestro: false }),
+  const { result, calls } = await withFillSeam(
+    { verify: () => okResult({ verifyVerdict: 'exact', verifyStable: true }) },
+    () => performExactFill({ ref: '@e2', text: 'Anna' }, client, { js: true, maestro: false }),
   );
   assert.ok(!(result as { isError?: boolean }).isError);
   const env = envelope(result as never);
   assert.deepEqual(env.data, { filled: true, method: 'js-onChangeText', length: 4 });
   assert.equal(env.meta.verify, 'exact');
   assert.ok(!calls.some((c) => c.cliArgs[0] === 'fill'), 'no native typing after fiber success');
+});
+
+test('gh-581: native target loss vetoes controlled fiber success', async () => {
+  let value = '';
+  const client = fakeClient({
+    read: () => ({ value, controlled: true }),
+    typeText: () => {
+      value = 'Anna';
+      return { controlled: true, handlerCalled: 'onChangeText', valueBefore: '' };
+    },
+  });
+  const { result, calls } = await withFillSeam(
+    { verify: () => okResult({ verifyVerdict: 'target-lost', verifyStable: false }) },
+    () => performExactFill({ ref: '@e2', text: 'Anna' }, client, { js: true, maestro: false }),
+  );
+  const env = envelope(result as never);
+  assert.equal(env.code, 'TEXT_ENTRY_UNVERIFIED');
+  assert.equal(env.meta.mutation, 'possible');
+  assert.ok(calls.some((c) => c.cliArgs[0] === 'verify-input'));
+  assert.ok(!calls.some((c) => c.cliArgs[0] === 'fill'));
+});
+
+test('gh-581: conflicting explicit testID rejects before any mutation', async () => {
+  const { result, calls } = await withFillSeam({}, () =>
+    performExactFill(
+      { ref: '@e2', testID: 'last-name', text: 'Anna' },
+      fakeClient({ read: () => ({ value: '', controlled: true }) }),
+      { js: true, maestro: false },
+    ),
+  );
+  const env = envelope(result as never);
+  assert.equal(env.code, 'NO_TEXT_INPUT_TARGET');
+  assert.equal(env.meta.mutation, 'none');
+  assert.ok(!calls.some((c) => c.cliArgs[0] === 'fill'));
+});
+
+test('gh-581: cancellation after mismatch prevents corrective retype', async () => {
+  const abortController = new AbortController();
+  const { result, calls } = await withFillSeam(
+    {
+      verify: () => {
+        abortController.abort();
+        return okResult({ verifyVerdict: 'mismatch', verifyStable: true });
+      },
+    },
+    () =>
+      performExactFill({ ref: '@e3', text: 'value' }, null, {
+        ...NATIVE_ONLY,
+        abortSignal: abortController.signal,
+      }),
+  );
+  const env = envelope(result as never);
+  assert.equal(env.meta.mutation, 'possible');
+  assert.equal(calls.filter((c) => c.cliArgs[0] === 'fill').length, 1);
 });
 
 test('gh-581: uncontrolled probe skips the JS tier entirely (no handler double-fire)', async () => {

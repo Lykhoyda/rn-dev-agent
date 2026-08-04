@@ -162,18 +162,31 @@ test('gh-581 bind: a positional ref absent from the snapshot is rejected', () =>
   assert.ok(!out.ok);
 });
 
-test('gh-581 bind: a bare eN-shaped string binds as a testID, not a position', () => {
-  const nodes = [
+test('gh-581 bind: a bare eN-shaped string binds as a positional ref', () => {
+  const out = bindExactFillTarget(NODES as never, 'e30');
+  assert.ok(out.ok);
+  assert.equal((out as { binding: { inputRef: string } }).binding.inputRef, '@e30');
+});
+
+test('gh-581 bind: an unchanged positional slot still requires unique identity', () => {
+  const duplicated = [
+    ...NODES,
     {
-      ref: '@e1',
-      identifier: 'e123',
+      ref: '@e31',
+      identifier: 'plain-input',
       type: 'TextField',
-      rect: { x: 0, y: 0, width: 10, height: 10 },
+      rect: { x: 0, y: 80, width: 10, height: 10 },
     },
   ];
-  const out = bindExactFillTarget(nodes as never, 'e123');
-  assert.ok(out.ok);
-  assert.equal((out as { binding: { inputRef: string } }).binding.inputRef, '@e1');
+  const signature = {
+    type: 'TextField',
+    identifier: 'plain-input',
+    flatIndex: 5,
+    nodeCount: NODES.length,
+  };
+  const out = bindExactFillTarget(duplicated as never, '@e30', signature as never);
+  assert.ok(!out.ok);
+  assert.match((out as { detail: string }).detail, /matches multiple elements/);
 });
 
 test('gh-581 bind: positional ref with a shifted identity rebinds by signature or rejects', () => {

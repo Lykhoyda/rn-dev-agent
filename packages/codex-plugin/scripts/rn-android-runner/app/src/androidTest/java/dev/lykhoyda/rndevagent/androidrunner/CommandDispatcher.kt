@@ -285,6 +285,7 @@ class CommandDispatcher(
     }
 
     private fun type(cmd: JSONObject): JSONObject {
+        recordedTypeTarget = null
         val text = cmd.optString("text")
         // GH #581: bind the declared input exactly — never "click then use
         // whatever is focused". One operation resolves the target, skips the
@@ -396,7 +397,7 @@ class CommandDispatcher(
         // landed, so a keyevent pass could double-apply. Report honestly and
         // let the bridge's own verification layers arbitrate.
 
-        recordTypeTarget(target)
+        recordTypeTarget(target, cmd)
         // GH #581: requested text is never echoed back (secret safety).
         return JSONObject()
             .put("typed", true)
@@ -412,16 +413,30 @@ class CommandDispatcher(
         val className: String,
         val identifier: String?,
         val bounds: Rect,
+        val snapshotGeneration: Int?,
+        val snapshotNodeIndex: Int?,
+        val snapshotElementType: String?,
+        val snapshotIdentifier: String?,
     )
 
     private var recordedTypeTarget: RecordedTypeTarget? = null
 
-    private fun recordTypeTarget(target: UiObject2) {
+    private fun optionalInt(cmd: JSONObject, key: String): Int? =
+        if (cmd.has(key) && !cmd.isNull(key)) cmd.getInt(key) else null
+
+    private fun optionalString(cmd: JSONObject, key: String): String? =
+        cmd.optString(key).ifBlank { null }
+
+    private fun recordTypeTarget(target: UiObject2, cmd: JSONObject) {
         recordedTypeTarget = try {
             RecordedTypeTarget(
                 className = target.className ?: "",
                 identifier = objectIdentifier(target),
                 bounds = Rect(target.visibleBounds),
+                snapshotGeneration = optionalInt(cmd, "snapshotGeneration"),
+                snapshotNodeIndex = optionalInt(cmd, "snapshotNodeIndex"),
+                snapshotElementType = optionalString(cmd, "snapshotElementType"),
+                snapshotIdentifier = optionalString(cmd, "snapshotIdentifier"),
             )
         } catch (e: StaleObjectException) {
             null
@@ -449,6 +464,9 @@ class CommandDispatcher(
             abs(a.centerY() - b.centerY()) <= tolerance &&
             abs(a.width() - b.width()) <= tolerance &&
             abs(a.height() - b.height()) <= tolerance
+
+    private fun strictlyContains(outer: Rect, inner: Rect): Boolean =
+        outer != inner && outer.contains(inner)
 
     // Exact binding tiers mirroring the iOS runner: unique identifier across
     // ALL recognized inputs, then unique bounds-equality, then a unique (or
@@ -513,7 +531,7 @@ class CommandDispatcher(
                 containing.size == 1 -> return ResolvedInput(containing[0], "point")
                 else -> {
                     for (i in 0 until containing.size - 1) {
-                        if (!containing[i + 1].visibleBounds.contains(containing[i].visibleBounds)) {
+                        if (!strictlyContains(containing[i + 1].visibleBounds, containing[i].visibleBounds)) {
                             throw NoTextInputTargetException(
                                 "NO_TEXT_INPUT_TARGET: multiple non-nested text inputs overlap ($px, $py); bind the input's ref/testID and retry"
                             )
@@ -536,7 +554,12 @@ class CommandDispatcher(
         val recorded = recordedTypeTarget
         var target: UiObject2? = null
         var lostVerdict = "target-lost"
-        if (recorded != null) {
+        val descriptorAgrees = recorded != null &&
+            recorded.snapshotGeneration == optionalInt(cmd, "snapshotGeneration") &&
+            recorded.snapshotNodeIndex == optionalInt(cmd, "snapshotNodeIndex") &&
+            recorded.snapshotElementType == optionalString(cmd, "snapshotElementType") &&
+            recorded.snapshotIdentifier == optionalString(cmd, "snapshotIdentifier")
+        if (recorded != null && descriptorAgrees) {
             val byRecord = candidates.filter {
                 (it.className ?: "") == recorded.className &&
                     objectIdentifier(it) == recorded.identifier &&
@@ -546,8 +569,12 @@ class CommandDispatcher(
         }
         if (target == null) {
             val identifier = cmd.optString("snapshotIdentifier").ifBlank { null }
+            val expectedClass = cmd.optString("snapshotElementType").ifBlank { null }
             if (identifier != null) {
-                val byId = candidates.filter { objectIdentifier(it) == identifier }
+                val byId = candidates.filter {
+                    objectIdentifier(it) == identifier &&
+                        (expectedClass == null || (it.className ?: "") == expectedClass)
+                }
                 when {
                     byId.size == 1 -> target = byId[0]
                     byId.size > 1 -> lostVerdict = "ambiguous"

@@ -261,6 +261,8 @@ interface StepResult {
   success: boolean;
   durationMs: number;
   error?: string;
+  code?: string;
+  meta?: Record<string, unknown>;
   data?: unknown;
 }
 
@@ -313,7 +315,11 @@ async function guardedBatchPress(
   });
 }
 
-async function executeStep(step: BatchStep, getClient?: () => CDPClient): Promise<ToolResult> {
+async function executeStep(
+  step: BatchStep,
+  getClient?: () => CDPClient,
+  abortSignal?: AbortSignal,
+): Promise<ToolResult> {
   switch (step.action) {
     case 'find': {
       // Phase 125: testID-keyed find re-resolves via snapshot per call.
@@ -419,11 +425,14 @@ async function executeStep(step: BatchStep, getClient?: () => CDPClient): Promis
       // GH #581: batch fills route through the same exact-target orchestrator
       // and final-verification arbiter as device_fill (no JS/Maestro tiers —
       // batch stays a scripted native surface, but truth rules are identical).
-      if (step.text === undefined) return failResult('fill requires text');
+      if (step.text === undefined) {
+        return failResult('fill requires text', { mutation: 'none' });
+      }
       const targetRef = step.testID ?? step.ref;
       if (!targetRef) {
         return failResult(
           'fill requires ref or testID. Use a find+tap step first to focus the field, or pass testID for fresh resolution.',
+          { mutation: 'none' },
         );
       }
       const client = getClient ? cdpClientOrNull(getClient) : null;
@@ -434,7 +443,11 @@ async function executeStep(step: BatchStep, getClient?: () => CDPClient): Promis
           settleTimeoutMs: step.settle === false ? 0 : BATCH_STEP_SETTLE_BUDGET_MS,
         },
         client,
-        { js: false, maestro: false },
+        {
+          js: false,
+          maestro: false,
+          ...(abortSignal ? { abortSignal } : {}),
+        },
       );
     }
     case 'swipe': {
@@ -540,15 +553,26 @@ export function createDeviceBatchHandler(
       const stepTimeout = step.timeoutMs ?? 15_000;
       let stepTimer: ReturnType<typeof setTimeout> | undefined;
       let stepTimedOut = false;
+      const abortController = new AbortController();
       const result = await Promise.race([
-        executeStep(step, getClient),
+        executeStep(step, getClient, abortController.signal),
         new Promise<ToolResult>((resolve) => {
           stepTimer = setTimeout(() => {
             stepTimedOut = true;
+            abortController.abort();
             resolve(
-              failResult(
-                `Step ${i + 1} timed out after ${stepTimeout}ms; remaining steps were not started because the native operation may still be completing`,
-              ),
+              step.action === 'fill'
+                ? failResult(
+                    `Step ${i + 1} timed out after ${stepTimeout}ms; the fill may have mutated the field and no correction or later step will be started`,
+                    'TEXT_ENTRY_UNVERIFIED',
+                    {
+                      mutation: 'possible',
+                      hint: 'Read the field state before any manual retry — do not blindly re-run the fill.',
+                    },
+                  )
+                : failResult(
+                    `Step ${i + 1} timed out after ${stepTimeout}ms; remaining steps were not started because the native operation may still be completing`,
+                  ),
             );
           }, stepTimeout);
         }),
@@ -566,8 +590,14 @@ export function createDeviceBatchHandler(
 
       if (!success) {
         try {
-          const parsed = JSON.parse(result.content[0].text) as { error?: string };
+          const parsed = JSON.parse(result.content[0].text) as {
+            error?: string;
+            code?: string;
+            meta?: Record<string, unknown>;
+          };
           stepResult.error = parsed.error;
+          stepResult.code = parsed.code;
+          stepResult.meta = parsed.meta;
         } catch {
           /* ignore */
         }
@@ -590,7 +620,9 @@ export function createDeviceBatchHandler(
       // start a later OTP/form fill behind a timed-out mutation: that is the
       // interleaving boundary. Timeout therefore overrides optional and
       // continueOnError, while ordinary failures retain their legacy policy.
-      if (!success && (!step.optional || stepTimedOut)) {
+      const possibleFillFailure =
+        !success && step.action === 'fill' && stepResult.meta?.mutation === 'possible';
+      if (!success && (!step.optional || stepTimedOut || possibleFillFailure)) {
         // Capture failure screenshot regardless of continueOnError so the
         // diagnostic trail isn't lost.
         if (screenshotOn === 'failure' || screenshotOn === 'each') {
@@ -605,7 +637,7 @@ export function createDeviceBatchHandler(
           }
         }
 
-        if (continueOnError && !stepTimedOut) {
+        if (continueOnError && !stepTimedOut && !possibleFillFailure) {
           // Phase 125: record the failure and proceed. failedStep stays null
           // so the batch returns success-shape with failure_count populated.
           failureRecords.push(stepResult);
