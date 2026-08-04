@@ -191,21 +191,32 @@ function scanFlows(): FlowsResult {
 
 function collectFlowRoots(start: string): string[] {
   // D1208: .rn-agent/actions/ is the single source of plugin-managed flows.
-  const candidates = new Set<string>();
-  const own = path.join(start, '.rn-agent', 'actions');
-  candidates.add(own);
-  // Sibling test-app convention
+  // NOTE: local spellings must come first so an inherited symlink is reported locally.
+  const candidates: string[] = [path.join(start, '.rn-agent', 'actions')];
+  const ta2 = path.join(start, 'test-app', '.rn-agent', 'actions');
+  if (fs.existsSync(ta2)) candidates.push(ta2);
   const parent = path.dirname(start);
   if (fs.existsSync(parent)) {
     for (const sib of safeReaddir(parent)) {
       const ta = path.join(parent, sib, 'test-app', '.rn-agent', 'actions');
-      if (fs.existsSync(ta)) candidates.add(ta);
+      if (fs.existsSync(ta)) candidates.push(ta);
     }
   }
-  // Direct test-app under cwd
-  const ta2 = path.join(start, 'test-app', '.rn-agent', 'actions');
-  if (fs.existsSync(ta2)) candidates.add(ta2);
-  return Array.from(candidates);
+  // Dedupe by resolved identity so a symlinked corpus and its source count once.
+  const seen = new Set<string>();
+  const roots: string[] = [];
+  for (const candidate of candidates) {
+    let identity = candidate;
+    try {
+      identity = fs.realpathSync(candidate);
+    } catch {
+      // Unresolvable candidates keep their literal spelling; scanFlows skips missing roots.
+    }
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    roots.push(candidate);
+  }
+  return roots;
 }
 
 interface FlowMeta {

@@ -228,7 +228,10 @@ export interface ProofGitInfo {
 
 export interface ProofCaptureDeps {
   monitor: StrictProofMonitor;
+  /** Session app root — what `projectRoot` arguments must equal after authority binding. */
   projectRoot: () => string | null;
+  /** Git worktree root that anchors proof artifacts; must contain the app root. */
+  proofAnchor: () => string | null;
   readActionIdentity: (actionId: string) => ProofAction | null;
   getGitInfo: (root: string) => ProofGitInfo;
   /** Injectable only for deterministic tests; production reads candidate bytes itself. */
@@ -247,6 +250,8 @@ export interface ProofCaptureDeps {
 
 interface Session {
   context: BeginRehearsalArgs;
+  /** Git worktree root that anchors docs/proof; equals the app root only for root-level apps. */
+  proofAnchor: string;
   actionIdentity: ProofAction;
   candidateRuntime: ProofCandidateRuntime | null;
   authority: ProofAuthority;
@@ -699,21 +704,29 @@ function hasExistingSymlink(root: string, path: string): boolean {
   return false;
 }
 
-function validCaptureContext(args: BeginRehearsalArgs, expectedRoot: string | null): boolean {
+// NOTE: authority binds `projectRoot` to the app root, so docs/proof is anchored separately.
+function validCaptureContext(
+  args: BeginRehearsalArgs,
+  appRoot: string | null,
+  proofAnchor: string | null,
+): boolean {
   if (
-    !expectedRoot ||
-    args.projectRoot !== expectedRoot ||
-    resolve(expectedRoot) !== expectedRoot
+    !appRoot ||
+    !proofAnchor ||
+    args.projectRoot !== appRoot ||
+    resolve(appRoot) !== appRoot ||
+    resolve(proofAnchor) !== proofAnchor ||
+    !containsPath(proofAnchor, appRoot)
   ) {
     return false;
   }
   if (!/^[a-z0-9][a-z0-9-]*$/.test(args.runId)) return false;
-  const proofRoot = join(expectedRoot, 'docs', 'proof', args.runId);
+  const proofRoot = join(proofAnchor, 'docs', 'proof', args.runId);
   const screenshots = args.storyboard.steps.map((step) => step.screenshotPath);
   const destinations = [args.receiptPath, args.videoPath, args.contactSheetPath, ...screenshots];
   if (
     destinations.some(
-      (path) => !isNormalizedDescendant(proofRoot, path) || hasExistingSymlink(expectedRoot, path),
+      (path) => !isNormalizedDescendant(proofRoot, path) || hasExistingSymlink(proofAnchor, path),
     ) ||
     new Set(destinations).size !== destinations.length
   ) {
@@ -737,8 +750,15 @@ function validCaptureContext(args: BeginRehearsalArgs, expectedRoot: string | nu
   );
 }
 
-function proofRootExists(args: BeginRehearsalArgs): boolean {
-  const proofRoot = join(args.projectRoot, 'docs', 'proof', args.runId);
+/** True when `child` is `parent` or a normalized descendant of it. */
+function containsPath(parent: string, child: string): boolean {
+  if (parent === child) return true;
+  const rel = relative(parent, child);
+  return rel.length > 0 && !rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel);
+}
+
+function proofRootExists(args: BeginRehearsalArgs, proofAnchor: string): boolean {
+  const proofRoot = join(proofAnchor, 'docs', 'proof', args.runId);
   try {
     lstatSync(proofRoot);
     return true;
@@ -1008,7 +1028,11 @@ export function createProofCaptureHandler(
 
   const contextIsCurrent = (active: Session): boolean => {
     try {
-      return validCaptureContext(active.context, deps.projectRoot());
+      const anchor = deps.proofAnchor();
+      return (
+        validCaptureContext(active.context, deps.projectRoot(), anchor) &&
+        anchor === active.proofAnchor
+      );
     } catch {
       return false;
     }
@@ -1140,7 +1164,7 @@ export function createProofCaptureHandler(
     active: Session,
   ): { ok: true; value: ProofGitInfo } | { ok: false; reasons: string[] } => {
     try {
-      const value = deps.getGitInfo(active.context.projectRoot);
+      const value = deps.getGitInfo(active.proofAnchor);
       if (!Array.isArray(value.changes)) return { ok: false, reasons: ['GIT_READ_FAILED'] };
       return { ok: true, value };
     } catch {
@@ -1181,7 +1205,7 @@ export function createProofCaptureHandler(
   };
 
   const repositoryPath = (active: Session, path: string): string =>
-    relative(active.context.projectRoot, path).replaceAll(sep, '/');
+    relative(active.proofAnchor, path).replaceAll(sep, '/');
 
   const observedSetupScreenshots = (active: Session): Set<string> => {
     const owned = new Set<string>();
@@ -1384,14 +1408,16 @@ export function createProofCaptureHandler(
       if (session && session.stage !== 'accepted') {
         return proofFailure(['PROOF_SESSION_ACTIVE'], session.stage);
       }
-      let expectedRoot: string | null = null;
+      let appRoot: string | null = null;
+      let proofAnchor: string | null = null;
       try {
-        expectedRoot = deps.projectRoot();
+        appRoot = deps.projectRoot();
+        proofAnchor = deps.proofAnchor();
       } catch {
         // An unresolved project root is never caller-recoverable proof identity.
       }
       if (
-        !validCaptureContext(args, expectedRoot) ||
+        !validCaptureContext(args, appRoot, proofAnchor) ||
         args.storyboard.proofClass !== args.proofClass ||
         args.storyboard.actionId !== args.proofAction.id
       ) {
@@ -1408,14 +1434,14 @@ export function createProofCaptureHandler(
         return proofFailure(['PROOF_ACTION_IDENTITY_MISMATCH'], 'idle');
       }
       try {
-        const proofRoot = join(args.projectRoot, 'docs', 'proof', args.runId);
-        if (deps.proofRootTracked(args.projectRoot, proofRoot)) {
+        const proofRoot = join(proofAnchor!, 'docs', 'proof', args.runId);
+        if (deps.proofRootTracked(proofAnchor!, proofRoot)) {
           return proofFailure(['PROOF_ROOT_TRACKED'], 'idle');
         }
       } catch {
         return proofFailure(['PROOF_ROOT_TRACKED_CHECK_FAILED'], 'idle');
       }
-      if (proofRootExists(args)) {
+      if (proofRootExists(args, proofAnchor!)) {
         return proofFailure(['PROOF_ROOT_NOT_FRESH'], 'idle');
       }
       let candidateRuntime: ProofCandidateRuntime | null = null;
@@ -1439,6 +1465,7 @@ export function createProofCaptureHandler(
       const startedAt = deps.now();
       session = {
         context: args,
+        proofAnchor: proofAnchor!,
         actionIdentity,
         candidateRuntime,
         authority,

@@ -109,21 +109,32 @@ function scanFlows() {
   return { items: items.slice(0, flags.max), roots };
 }
 function collectFlowRoots(start) {
-  const candidates = /* @__PURE__ */ new Set();
-  const own = path.join(start, ".rn-agent", "actions");
-  candidates.add(own);
+  const candidates = [path.join(start, ".rn-agent", "actions")];
+  const ta2 = path.join(start, "test-app", ".rn-agent", "actions");
+  if (fs.existsSync(ta2))
+    candidates.push(ta2);
   const parent = path.dirname(start);
   if (fs.existsSync(parent)) {
     for (const sib of safeReaddir(parent)) {
       const ta = path.join(parent, sib, "test-app", ".rn-agent", "actions");
       if (fs.existsSync(ta))
-        candidates.add(ta);
+        candidates.push(ta);
     }
   }
-  const ta2 = path.join(start, "test-app", ".rn-agent", "actions");
-  if (fs.existsSync(ta2))
-    candidates.add(ta2);
-  return Array.from(candidates);
+  const seen = /* @__PURE__ */ new Set();
+  const roots = [];
+  for (const candidate of candidates) {
+    let identity = candidate;
+    try {
+      identity = fs.realpathSync(candidate);
+    } catch {
+    }
+    if (seen.has(identity))
+      continue;
+    seen.add(identity);
+    roots.push(candidate);
+  }
+  return roots;
 }
 function parseFlowMeta(text) {
   const appIdMatch = text.match(/^appId:\s*([^\s#]+)/m);

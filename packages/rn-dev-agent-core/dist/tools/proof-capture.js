@@ -480,18 +480,22 @@ function hasExistingSymlink(root, path) {
     }
     return false;
 }
-function validCaptureContext(args, expectedRoot) {
-    if (!expectedRoot ||
-        args.projectRoot !== expectedRoot ||
-        resolve(expectedRoot) !== expectedRoot) {
+// NOTE: authority binds `projectRoot` to the app root, so docs/proof is anchored separately.
+function validCaptureContext(args, appRoot, proofAnchor) {
+    if (!appRoot ||
+        !proofAnchor ||
+        args.projectRoot !== appRoot ||
+        resolve(appRoot) !== appRoot ||
+        resolve(proofAnchor) !== proofAnchor ||
+        !containsPath(proofAnchor, appRoot)) {
         return false;
     }
     if (!/^[a-z0-9][a-z0-9-]*$/.test(args.runId))
         return false;
-    const proofRoot = join(expectedRoot, 'docs', 'proof', args.runId);
+    const proofRoot = join(proofAnchor, 'docs', 'proof', args.runId);
     const screenshots = args.storyboard.steps.map((step) => step.screenshotPath);
     const destinations = [args.receiptPath, args.videoPath, args.contactSheetPath, ...screenshots];
-    if (destinations.some((path) => !isNormalizedDescendant(proofRoot, path) || hasExistingSymlink(expectedRoot, path)) ||
+    if (destinations.some((path) => !isNormalizedDescendant(proofRoot, path) || hasExistingSymlink(proofAnchor, path)) ||
         new Set(destinations).size !== destinations.length) {
         return false;
     }
@@ -507,8 +511,15 @@ function validCaptureContext(args, expectedRoot) {
                 waitMs: step.assertionWaitMs,
             })));
 }
-function proofRootExists(args) {
-    const proofRoot = join(args.projectRoot, 'docs', 'proof', args.runId);
+/** True when `child` is `parent` or a normalized descendant of it. */
+function containsPath(parent, child) {
+    if (parent === child)
+        return true;
+    const rel = relative(parent, child);
+    return rel.length > 0 && !rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel);
+}
+function proofRootExists(args, proofAnchor) {
+    const proofRoot = join(proofAnchor, 'docs', 'proof', args.runId);
     try {
         lstatSync(proofRoot);
         return true;
@@ -720,7 +731,9 @@ export function createProofCaptureHandler(deps) {
         'PROOF_AUTHORITY_UNAVAILABLE';
     const contextIsCurrent = (active) => {
         try {
-            return validCaptureContext(active.context, deps.projectRoot());
+            const anchor = deps.proofAnchor();
+            return (validCaptureContext(active.context, deps.projectRoot(), anchor) &&
+                anchor === active.proofAnchor);
         }
         catch {
             return false;
@@ -840,7 +853,7 @@ export function createProofCaptureHandler(deps) {
     };
     const readGit = (active) => {
         try {
-            const value = deps.getGitInfo(active.context.projectRoot);
+            const value = deps.getGitInfo(active.proofAnchor);
             if (!Array.isArray(value.changes))
                 return { ok: false, reasons: ['GIT_READ_FAILED'] };
             return { ok: true, value };
@@ -879,7 +892,7 @@ export function createProofCaptureHandler(deps) {
             ? []
             : ['PROOF_ACTION_IDENTITY_CHANGED'];
     };
-    const repositoryPath = (active, path) => relative(active.context.projectRoot, path).replaceAll(sep, '/');
+    const repositoryPath = (active, path) => relative(active.proofAnchor, path).replaceAll(sep, '/');
     const observedSetupScreenshots = (active) => {
         const owned = new Set();
         for (const observation of deps.monitor.observations()) {
@@ -1051,14 +1064,16 @@ export function createProofCaptureHandler(deps) {
             if (session && session.stage !== 'accepted') {
                 return proofFailure(['PROOF_SESSION_ACTIVE'], session.stage);
             }
-            let expectedRoot = null;
+            let appRoot = null;
+            let proofAnchor = null;
             try {
-                expectedRoot = deps.projectRoot();
+                appRoot = deps.projectRoot();
+                proofAnchor = deps.proofAnchor();
             }
             catch {
                 // An unresolved project root is never caller-recoverable proof identity.
             }
-            if (!validCaptureContext(args, expectedRoot) ||
+            if (!validCaptureContext(args, appRoot, proofAnchor) ||
                 args.storyboard.proofClass !== args.proofClass ||
                 args.storyboard.actionId !== args.proofAction.id) {
                 return proofFailure(['INVALID_PROOF_CONTEXT'], 'idle');
@@ -1076,15 +1091,15 @@ export function createProofCaptureHandler(deps) {
                 return proofFailure(['PROOF_ACTION_IDENTITY_MISMATCH'], 'idle');
             }
             try {
-                const proofRoot = join(args.projectRoot, 'docs', 'proof', args.runId);
-                if (deps.proofRootTracked(args.projectRoot, proofRoot)) {
+                const proofRoot = join(proofAnchor, 'docs', 'proof', args.runId);
+                if (deps.proofRootTracked(proofAnchor, proofRoot)) {
                     return proofFailure(['PROOF_ROOT_TRACKED'], 'idle');
                 }
             }
             catch {
                 return proofFailure(['PROOF_ROOT_TRACKED_CHECK_FAILED'], 'idle');
             }
-            if (proofRootExists(args)) {
+            if (proofRootExists(args, proofAnchor)) {
                 return proofFailure(['PROOF_ROOT_NOT_FRESH'], 'idle');
             }
             let candidateRuntime = null;
@@ -1110,6 +1125,7 @@ export function createProofCaptureHandler(deps) {
             const startedAt = deps.now();
             session = {
                 context: args,
+                proofAnchor: proofAnchor,
                 actionIdentity,
                 candidateRuntime,
                 authority,

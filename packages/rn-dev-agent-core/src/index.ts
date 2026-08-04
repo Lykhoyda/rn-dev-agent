@@ -2735,7 +2735,8 @@ function proofAuthority(runId: string): ProofAuthority {
 
 const proofCaptureHandler = createProofCaptureHandler({
   monitor: strictProofMonitor,
-  projectRoot: () =>
+  projectRoot: () => findProjectRoot({ bundleId: getActiveSession()?.appId }),
+  proofAnchor: () =>
     resolveProofWorktreeRoot(findProjectRoot({ bundleId: getActiveSession()?.appId })),
   readActionIdentity: (actionId) => {
     const appProjectRoot = findProjectRoot({ bundleId: getActiveSession()?.appId });

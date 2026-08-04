@@ -265,8 +265,9 @@ function baseReadiness(): ProofReadiness {
 
 function beginArgs(
   projectRoot = '/tmp/proof-project',
+  proofAnchor = projectRoot,
 ): Extract<ProofCaptureArgs, { action: 'begin_rehearsal' }> {
-  const proofRoot = join(projectRoot, 'docs', 'proof', 'run-42');
+  const proofRoot = join(proofAnchor, 'docs', 'proof', 'run-42');
   return {
     action: 'begin_rehearsal',
     projectRoot,
@@ -377,6 +378,7 @@ interface Harness {
   removed: string[];
   written: FinalProofReceipt[];
   mediaCalls: Array<{ process: MediaProcess; input: MediaValidationInput }>;
+  setProofAnchor: (value: string | null) => void;
   setRecord: (fn: (args: DeviceRecordArgs) => Promise<ToolResult>) => void;
   setMedia: (result: MediaValidationResult) => void;
   setMediaImpl: (
@@ -432,7 +434,12 @@ function successfulMedia(args = beginArgs()): Extract<MediaValidationResult, { o
   };
 }
 
-function createHarness(t: TestContext, expectedProjectRoot = '/tmp/proof-project'): Harness {
+function createHarness(
+  t: TestContext,
+  expectedProjectRoot = '/tmp/proof-project',
+  expectedProofAnchor = expectedProjectRoot,
+): Harness {
+  let anchorValue: string | null = expectedProofAnchor;
   const clock = { value: 1_800_000_000_000 };
   const monitor = new StrictProofMonitor(() => clock.value);
   const readiness = baseReadiness();
@@ -444,12 +451,14 @@ function createHarness(t: TestContext, expectedProjectRoot = '/tmp/proof-project
   const mediaProcess: MediaProcess = {
     run: async () => ({ stdout: '', stderr: '' }),
   };
-  let mediaResult: MediaValidationResult = successfulMedia(beginArgs(expectedProjectRoot));
+  let mediaResult: MediaValidationResult = successfulMedia(
+    beginArgs(expectedProjectRoot, expectedProofAnchor),
+  );
   let mediaImpl = async (): Promise<MediaValidationResult> => structuredClone(mediaResult);
   let removeImpl = async (): Promise<void> => undefined;
   let writeImpl = (path: string, receipt: FinalProofReceipt): void => {
     written.push(structuredClone(receipt));
-    const repositoryPath = path.slice(expectedProjectRoot.length + 1);
+    const repositoryPath = path.slice(expectedProofAnchor.length + 1);
     if (!git.changes.some((change) => change.path === repositoryPath)) {
       git.changes.push({ path: repositoryPath, indexStatus: '?', worktreeStatus: '?' });
       git.dirty = true;
@@ -532,6 +541,7 @@ function createHarness(t: TestContext, expectedProjectRoot = '/tmp/proof-project
   const deps: ProofCaptureDeps = {
     monitor,
     projectRoot: () => expectedProjectRoot,
+    proofAnchor: () => anchorValue,
     readActionIdentity: (actionId) => actionIdentityReader(actionId),
     getGitInfo: () => gitImpl(),
     proofRootTracked: () => proofRootTracked,
@@ -566,6 +576,9 @@ function createHarness(t: TestContext, expectedProjectRoot = '/tmp/proof-project
     removed,
     written,
     mediaCalls,
+    setProofAnchor: (value) => {
+      anchorValue = value;
+    },
     setRecord: (fn) => {
       recordImpl = fn;
     },
@@ -1154,6 +1167,58 @@ test('begin accepts normalized distinct descendants of the injected project root
   );
 });
 
+test('begin accepts a nested app root anchored at the git worktree root (GH #357)', async (t) => {
+  const anchor = await mkdtemp(join(tmpdir(), 'strict-proof-anchor-'));
+  t.after(() => rm(anchor, { recursive: true, force: true }));
+  const appRoot = join(anchor, 'apps', 'mobile');
+  const harness = createHarness(t, appRoot, anchor);
+
+  const result = await harness.handler(beginArgs(appRoot, anchor));
+
+  assert.equal(envelope(result).ok, true, result.content[0]!.text);
+  assert.equal(
+    (envelope(await harness.handler({ action: 'status' })).data as { stage: string }).stage,
+    'rehearsing',
+  );
+});
+
+test('begin refuses an app root outside the proof anchor', async (t) => {
+  const anchor = await mkdtemp(join(tmpdir(), 'strict-proof-anchor-out-'));
+  const outside = await mkdtemp(join(tmpdir(), 'strict-proof-outside-'));
+  t.after(() => rm(anchor, { recursive: true, force: true }));
+  t.after(() => rm(outside, { recursive: true, force: true }));
+  const harness = createHarness(t, outside, anchor);
+
+  const result = await harness.handler(beginArgs(outside, anchor));
+
+  assert.ok(reasons(result).includes('INVALID_PROOF_CONTEXT'), result.content[0]!.text);
+});
+
+test('begin refuses destinations outside the anchor proof root', async (t) => {
+  const anchor = await mkdtemp(join(tmpdir(), 'strict-proof-dest-'));
+  t.after(() => rm(anchor, { recursive: true, force: true }));
+  const appRoot = join(anchor, 'apps', 'mobile');
+  const harness = createHarness(t, appRoot, anchor);
+  const args = beginArgs(appRoot, anchor);
+  args.videoPath = join(appRoot, 'docs', 'proof', 'run-42', 'proof.mp4');
+
+  const result = await harness.handler(args);
+
+  assert.ok(reasons(result).includes('INVALID_PROOF_CONTEXT'), result.content[0]!.text);
+});
+
+test('begin refuses when the proof anchor is unresolvable', async (t) => {
+  const anchor = await mkdtemp(join(tmpdir(), 'strict-proof-noanchor-'));
+  t.after(() => rm(anchor, { recursive: true, force: true }));
+  const appRoot = join(anchor, 'apps', 'mobile');
+  const harness = createHarness(t, appRoot, appRoot);
+  harness.setProofAnchor(null);
+
+  const result = await harness.handler(beginArgs(appRoot, anchor));
+
+  assert.ok(reasons(result).includes('INVALID_PROOF_CONTEXT'), result.content[0]!.text);
+});
+
 test('begin preserves a specific managed-provenance refusal code', async (t) => {
   const harness = createHarness(t);
   harness.setAuthority(() => {
@@ -1370,6 +1435,9 @@ test('contract is sessionless and returns the exact package schema bytes and dig
     monitor,
     projectRoot: () => {
       throw new Error('contract must not resolve a project');
+    },
+    proofAnchor: () => {
+      throw new Error('contract must not resolve a proof anchor');
     },
     readActionIdentity: () => {
       throw new Error('contract must not read an action');
