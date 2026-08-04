@@ -92,6 +92,22 @@ enum TextInputTarget {
     return matches.isEmpty ? .absent : .ambiguous
   }
 
+  static func recordedRequestAgrees(
+    recorded: CandidateAttributes,
+    recordedGeneration: Int,
+    recordedNodeIndex: Int?,
+    descriptorType: String,
+    descriptorIdentifier: String?,
+    descriptorGeneration: Int?,
+    requestedNodeIndex: Int?
+  ) -> Bool {
+    guard let descriptorGeneration, let recordedNodeIndex, let requestedNodeIndex else { return false }
+    return recorded.type == descriptorType
+      && recorded.identifier == descriptorIdentifier
+      && recordedGeneration == descriptorGeneration
+      && recordedNodeIndex == requestedNodeIndex
+  }
+
   enum VerifyVerdict: String {
     case exact
     case mismatch

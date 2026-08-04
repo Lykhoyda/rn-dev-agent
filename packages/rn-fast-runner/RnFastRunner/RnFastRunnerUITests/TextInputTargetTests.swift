@@ -209,6 +209,64 @@ final class TextInputTargetTests: XCTestCase {
     XCTAssertEqual(same, .unique(0))
   }
 
+  func testRecordedRequestRequiresExactNodeAndDescriptorAgreement() {
+    let recorded = candidate(identifier: "email")
+    XCTAssertTrue(TextInputTarget.recordedRequestAgrees(
+      recorded: recorded,
+      recordedGeneration: 7,
+      recordedNodeIndex: 12,
+      descriptorType: "TextField",
+      descriptorIdentifier: "email",
+      descriptorGeneration: 7,
+      requestedNodeIndex: 12
+    ))
+    XCTAssertFalse(TextInputTarget.recordedRequestAgrees(
+      recorded: recorded,
+      recordedGeneration: 7,
+      recordedNodeIndex: nil,
+      descriptorType: "TextField",
+      descriptorIdentifier: "email",
+      descriptorGeneration: 7,
+      requestedNodeIndex: 12
+    ))
+    XCTAssertFalse(TextInputTarget.recordedRequestAgrees(
+      recorded: recorded,
+      recordedGeneration: 7,
+      recordedNodeIndex: 12,
+      descriptorType: "TextField",
+      descriptorIdentifier: "email",
+      descriptorGeneration: 7,
+      requestedNodeIndex: nil
+    ))
+    XCTAssertFalse(TextInputTarget.recordedRequestAgrees(
+      recorded: recorded,
+      recordedGeneration: 7,
+      recordedNodeIndex: 12,
+      descriptorType: "TextView",
+      descriptorIdentifier: "email",
+      descriptorGeneration: 7,
+      requestedNodeIndex: 12
+    ))
+    XCTAssertFalse(TextInputTarget.recordedRequestAgrees(
+      recorded: recorded,
+      recordedGeneration: 7,
+      recordedNodeIndex: 12,
+      descriptorType: "TextField",
+      descriptorIdentifier: "other",
+      descriptorGeneration: 7,
+      requestedNodeIndex: 12
+    ))
+    XCTAssertFalse(TextInputTarget.recordedRequestAgrees(
+      recorded: recorded,
+      recordedGeneration: 7,
+      recordedNodeIndex: 12,
+      descriptorType: "TextField",
+      descriptorIdentifier: "email",
+      descriptorGeneration: 8,
+      requestedNodeIndex: 12
+    ))
+  }
+
   func testClassifyExactAndMismatch() {
     XCTAssertEqual(
       TextInputTarget.classifyValue(expected: "hello", rawValue: "hello", placeholder: nil, isSecure: false),

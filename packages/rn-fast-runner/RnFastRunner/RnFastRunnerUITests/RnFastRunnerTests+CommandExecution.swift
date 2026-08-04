@@ -732,17 +732,17 @@ extension RnFastRunnerTests {
         // identity the caller asked to verify; a conflicting record is never
         // silently substituted. Fall back to descriptor rebinding.
         let verifyDescriptor = exactInputDescriptor(from: command)
-        let recordAgreesWithRequest: Bool
+        var recordAgreesWithRequest = false
         if let recorded = lastExactTypeTarget, let descriptor = verifyDescriptor {
-          let indexAgrees =
-            command.snapshotNodeIndex == nil || recorded.nodeIndex == nil
-            || command.snapshotNodeIndex == recorded.nodeIndex
-          recordAgreesWithRequest =
-            descriptor.identifier == recorded.attributes.identifier
-            && descriptor.type == recorded.attributes.type
-            && indexAgrees
-        } else {
-          recordAgreesWithRequest = true
+          recordAgreesWithRequest = TextInputTarget.recordedRequestAgrees(
+            recorded: recorded.attributes,
+            recordedGeneration: recorded.generation,
+            recordedNodeIndex: recorded.nodeIndex,
+            descriptorType: descriptor.type,
+            descriptorIdentifier: descriptor.identifier,
+            descriptorGeneration: descriptor.generation,
+            requestedNodeIndex: command.snapshotNodeIndex
+          )
         }
         if let recorded = lastExactTypeTarget,
            recorded.generation == currentSnapshotGeneration,

@@ -292,7 +292,7 @@ class CommandDispatcher(
         // focus tap only when THAT input is focused, otherwise taps the
         // declared focus point and proves the same input gained focus.
         val resolved = resolveExactTypeTarget(cmd)
-        var target = resolved.obj
+        val target = resolved.obj
         var focusTap = "skipped-exact-focused"
         if (!isFocusedSafely(target)) {
             val bounds = target.visibleBounds
@@ -308,23 +308,21 @@ class CommandDispatcher(
                 }
             }
             device.click(fx, fy)
-            // UiObject2 handles go stale across re-renders, so the focus poll
-            // re-resolves by the SAME unique identity instead of pinning the
-            // pre-tap handle.
             val deadline = SystemClock.uptimeMillis() + cmd.optLong("focusWaitMs", 1500L)
-            var focusedTarget: UiObject2? = null
+            var focused = false
             while (true) {
-                val rebound = resolveExactTypeTargetOrNull(cmd)
-                if (rebound != null && isFocusedSafely(rebound.obj)) {
-                    focusedTarget = rebound.obj
+                if (isFocusedSafely(target)) {
+                    focused = true
                     break
                 }
                 if (SystemClock.uptimeMillis() >= deadline) break
                 SystemClock.sleep(100)
             }
-            target = focusedTarget ?: throw TextTargetFocusFailedException(
-                "TEXT_TARGET_FOCUS_FAILED: the bound input did not gain focus after tapping the declared focus target; no typing was performed. Increase waitForKeyboardMs or refresh the snapshot and retry."
-            )
+            if (!focused) {
+                throw TextTargetFocusFailedException(
+                    "TEXT_TARGET_FOCUS_FAILED: the bound input did not gain focus after tapping the declared focus target; no typing was performed. Increase waitForKeyboardMs or refresh the snapshot and retry."
+                )
+            }
             focusTap = "performed"
         }
 
@@ -497,12 +495,6 @@ class CommandDispatcher(
     // ALL recognized inputs, then unique bounds-equality, then a unique (or
     // strictly nested) point hit. Never "first match", never ambient focus for
     // a supplied target.
-    private fun resolveExactTypeTargetOrNull(cmd: JSONObject): ResolvedInput? = try {
-        resolveExactTypeTarget(cmd)
-    } catch (e: TypedRunnerException) {
-        null
-    }
-
     private fun resolveExactTypeTarget(cmd: JSONObject): ResolvedInput {
         val identifier = cmd.optString("snapshotIdentifier").ifBlank { null }
         val expectedClass = cmd.optString("snapshotElementType").ifBlank { null }
