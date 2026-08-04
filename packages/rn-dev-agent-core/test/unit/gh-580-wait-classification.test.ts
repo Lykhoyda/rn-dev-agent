@@ -7,7 +7,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseMaestroFailure, isAutoRepairable } from '../../dist/domain/maestro-error-parser.js';
-import { buildTerminalEvidence } from '../../dist/domain/maestro-step-parser.js';
+import {
+  buildStepSummary,
+  buildTerminalEvidence,
+} from '../../dist/domain/maestro-step-parser.js';
 import { boundedOutput } from '../../dist/tools/run-action.js';
 
 // The exact live capture from the issue, at the runner's real 4-space indent.
@@ -192,6 +195,37 @@ test('gh-580: a selector-less summary cannot borrow an unrelated earlier ID wait
   ].join('\n');
   assert.equal(parseMaestroFailure(output).kind, 'UNKNOWN');
   assert.equal(buildTerminalEvidence(output).failureKind, undefined);
+});
+
+test('gh-580: a terminal text wait cannot borrow a duplicate ID-shaped reason', () => {
+  const output = [
+    '    ✗ extendedWaitUntil: visible id="otp" (1.2s)',
+    "      ╰─ Element '#otp' not visible within 1.1s",
+    '    ✗ extendedWaitUntil: visible text="#otp" (1.4s)',
+    "      ╰─ Element '#otp' not visible within 1.1s",
+  ].join('\n');
+  assert.equal(parseMaestroFailure(output).kind, 'UNKNOWN');
+  assert.equal(buildTerminalEvidence(output).failureKind, undefined);
+});
+
+test('gh-580: exact long IDs survive bounded display projection', () => {
+  const selector = `terminal_${'x'.repeat(220)}`;
+  const output = [
+    `    ✗ extendedWaitUntil: visible id="${selector}" (1.2s)`,
+    `      ╰─ Element '#${selector}' not visible within 1.1s`,
+  ].join('\n');
+  const summary = buildStepSummary(output, { failed: true });
+  assert.equal(summary.failedStep?.name.length, 201);
+  assert.equal(summary.reason?.selector?.length, 201);
+
+  const terminal = buildTerminalEvidence(output);
+  assert.equal(terminal.failureKind, 'SELECTOR_NOT_FOUND');
+  assert.equal(terminal.failureSelector, selector);
+  assert.equal(terminal.failedStep, `extendedWaitUntil: visible id="${selector}"`);
+
+  const failure = parseMaestroFailure('', terminal);
+  assert.equal(failure.kind, 'SELECTOR_NOT_FOUND');
+  assert.equal(failure.selector, selector);
 });
 
 test('gh-580: an earlier transient wait miss loses to the terminal one (GH #118 ordering)', () => {

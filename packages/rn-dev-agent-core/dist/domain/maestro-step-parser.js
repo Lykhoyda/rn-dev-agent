@@ -41,7 +41,7 @@ const MAX_STEPS = 1000;
 export function combineRunnerOutput(stdout, stderr) {
     return (stdout + '\n' + stderr).replace(/^[\r\n]+/, '').trimEnd();
 }
-export function parseSteps(output) {
+function parseExactSteps(output) {
     if (!output || typeof output !== 'string')
         return [];
     const steps = [];
@@ -59,13 +59,19 @@ export function parseSteps(output) {
             continue;
         steps.push({
             index: index++,
-            name: cap(name),
+            name,
             verb,
             status: m[1] === '✓' ? 'pass' : 'fail',
             durationMs: Math.round(seconds * 1000),
         });
     }
     return steps.length > MAX_STEPS ? steps.slice(-MAX_STEPS) : steps;
+}
+function boundStep(step) {
+    return { ...step, name: cap(step.name) };
+}
+export function parseSteps(output) {
+    return parseExactSteps(output).map(boundStep);
 }
 // The TERMINAL failed step: the last parsed step iff it failed. maestro-runner
 // stops at the first real failure, so the terminal ✗ is the last parsed step; a
@@ -81,23 +87,36 @@ export function lastObservedStep(steps) {
 // Project parseMaestroFailure to {kind, selector}, DROPPING its `raw` field —
 // every MaestroFailure variant carries `raw` = the full unsliced output, which
 // must not be re-embedded into the result (it would defeat the output slice).
-export function summarizeReason(output, failedStep) {
+function summarizeExactReason(output, failedStep) {
     const f = parseMaestroFailure(output, failedStep ? { failedStep } : undefined);
     if (f.kind === 'UNKNOWN' || f.kind === 'WDA_BOOTSTRAP_FAILED')
         return null;
     const selector = 'selector' in f ? (f.selector ?? null) : null;
-    return { kind: f.kind, selector: selector === null ? null : cap(selector) };
+    return { kind: f.kind, selector };
+}
+export function summarizeReason(output, failedStep) {
+    const reason = summarizeExactReason(output, failedStep);
+    if (!reason)
+        return null;
+    return { ...reason, selector: reason.selector === null ? null : cap(reason.selector) };
 }
 // failedStep/reason are populated ONLY when the run's terminal verdict is fail
 // (opts.failed). maestro-runner logs transient retries; a fail-then-retry-✓ on
 // a PASSED run must not report a failedStep (mirrors parseMaestroFailure GH#118).
 export function buildStepSummary(output, opts) {
-    const steps = parseSteps(output);
-    const failedStep = opts.failed ? findFailedStep(steps) : null;
+    const exactSteps = parseExactSteps(output);
+    const exactFailedStep = opts.failed ? findFailedStep(exactSteps) : null;
+    const exactReason = opts.failed ? summarizeExactReason(output, exactFailedStep?.name) : null;
+    const steps = exactSteps.map(boundStep);
     return {
         steps,
-        failedStep,
-        reason: opts.failed ? summarizeReason(output, failedStep?.name) : null,
+        failedStep: exactFailedStep ? boundStep(exactFailedStep) : null,
+        reason: exactReason
+            ? {
+                ...exactReason,
+                selector: exactReason.selector === null ? null : cap(exactReason.selector),
+            }
+            : null,
         lastStep: lastObservedStep(steps),
     };
 }
@@ -112,7 +131,9 @@ function isWdaFailureLine(line) {
     return WDA_TOKEN_RE.test(line) && WDA_FAILURE_RE.test(line);
 }
 export function buildTerminalEvidence(output, opts = {}) {
-    const summary = buildStepSummary(output, { failed: true });
+    const exactSteps = parseExactSteps(output);
+    const failedStep = findFailedStep(exactSteps);
+    const reason = summarizeExactReason(output, failedStep?.name);
     const bootstrapEvidence = stripAnsi(output)
         .split('\n')
         .filter((line) => isWdaFailureLine(line))
@@ -122,18 +143,18 @@ export function buildTerminalEvidence(output, opts = {}) {
         ? 'timed-out'
         : opts.spawnError
             ? 'spawn-error'
-            : summary.steps.length === 0
+            : exactSteps.length === 0
                 ? 'before-first-step'
                 : 'step-failure';
     return {
-        completedSteps: summary.steps.filter((step) => step.status === 'pass').length,
-        ...(summary.failedStep ? { failedStep: summary.failedStep.name } : {}),
+        completedSteps: exactSteps.filter((step) => step.status === 'pass').length,
+        ...(failedStep ? { failedStep: failedStep.name } : {}),
         exitClass,
         ...(bootstrapEvidence ? { bootstrapEvidence } : {}),
-        ...(summary.reason
+        ...(reason
             ? {
-                failureKind: summary.reason.kind,
-                failureSelector: summary.reason.selector,
+                failureKind: reason.kind,
+                failureSelector: reason.selector,
             }
             : {}),
     };

@@ -27680,7 +27680,7 @@ function parseTerminalIdWait(output, suppliedFailedStep) {
   const reasonMatch = ID_WAIT_REASON_RE.exec(reasonLine);
   if (!reasonMatch)
     return null;
-  const stepMatch = ID_WAIT_STEP_RE.exec(failedStep) ?? (terminalStep ? idWaitStepAmongDuplicates(lines, terminalStep.index, reasonLine) : null);
+  const stepMatch = ID_WAIT_STEP_RE.exec(failedStep) ?? (terminalStep && SELECTOR_LESS_ID_WAIT_SUMMARY_RE.test(failedStep) ? idWaitStepAmongDuplicates(lines, terminalStep.index, reasonLine) : null);
   if (!stepMatch || reasonMatch[2] !== stepMatch[2])
     return null;
   return {
@@ -27747,7 +27747,7 @@ function isAutoRepairable(failure) {
 function outputIndicatesFlowFailure(output) {
   return /^\s*(?:\[FAILED\]|(?:Test|Flow) FAILED\b|FAILED\s*$)/m.test(output);
 }
-var PATTERNS, RUNNER_STEP_RE, REASON_LINE_RE, ID_WAIT_STEP_RE, ID_WAIT_REASON_RE;
+var PATTERNS, RUNNER_STEP_RE, REASON_LINE_RE, ID_WAIT_STEP_RE, SELECTOR_LESS_ID_WAIT_SUMMARY_RE, ID_WAIT_REASON_RE;
 var init_maestro_error_parser = __esm({
   "packages/rn-dev-agent-core/dist/domain/maestro-error-parser.js"() {
     "use strict";
@@ -27800,6 +27800,7 @@ var init_maestro_error_parser = __esm({
     RUNNER_STEP_RE = /^[ \t]+([✓✗])\s+(\S.*\S|\S)\s*\(([\d.]+)s\)\s*$/;
     REASON_LINE_RE = /^[ \t]+╰─\s+/;
     ID_WAIT_STEP_RE = /^extendedWaitUntil:\s+visible\s+id=(['"])((?:(?!\1).)+)\1$/i;
+    SELECTOR_LESS_ID_WAIT_SUMMARY_RE = /^extendedWaitUntil$/;
     ID_WAIT_REASON_RE = /^[ \t]+╰─\s+Element (['"])#((?:(?!\1).)+)\1 not visible within\b/i;
   }
 });
@@ -28090,7 +28091,7 @@ function cap(s) {
 function combineRunnerOutput(stdout, stderr) {
   return (stdout + "\n" + stderr).replace(/^[\r\n]+/, "").trimEnd();
 }
-function parseSteps(output) {
+function parseExactSteps(output) {
   if (!output || typeof output !== "string")
     return [];
   const steps = [];
@@ -28108,13 +28109,19 @@ function parseSteps(output) {
       continue;
     steps.push({
       index: index++,
-      name: cap(name),
+      name,
       verb,
       status: m[1] === "\u2713" ? "pass" : "fail",
       durationMs: Math.round(seconds * 1e3)
     });
   }
   return steps.length > MAX_STEPS ? steps.slice(-MAX_STEPS) : steps;
+}
+function boundStep(step) {
+  return { ...step, name: cap(step.name) };
+}
+function parseSteps(output) {
+  return parseExactSteps(output).map(boundStep);
 }
 function findFailedStep(steps) {
   const last = steps.length ? steps[steps.length - 1] : null;
@@ -28123,20 +28130,25 @@ function findFailedStep(steps) {
 function lastObservedStep(steps) {
   return steps.length ? steps[steps.length - 1] : null;
 }
-function summarizeReason(output, failedStep) {
+function summarizeExactReason(output, failedStep) {
   const f = parseMaestroFailure(output, failedStep ? { failedStep } : void 0);
   if (f.kind === "UNKNOWN" || f.kind === "WDA_BOOTSTRAP_FAILED")
     return null;
   const selector = "selector" in f ? f.selector ?? null : null;
-  return { kind: f.kind, selector: selector === null ? null : cap(selector) };
+  return { kind: f.kind, selector };
 }
 function buildStepSummary(output, opts) {
-  const steps = parseSteps(output);
-  const failedStep = opts.failed ? findFailedStep(steps) : null;
+  const exactSteps = parseExactSteps(output);
+  const exactFailedStep = opts.failed ? findFailedStep(exactSteps) : null;
+  const exactReason = opts.failed ? summarizeExactReason(output, exactFailedStep?.name) : null;
+  const steps = exactSteps.map(boundStep);
   return {
     steps,
-    failedStep,
-    reason: opts.failed ? summarizeReason(output, failedStep?.name) : null,
+    failedStep: exactFailedStep ? boundStep(exactFailedStep) : null,
+    reason: exactReason ? {
+      ...exactReason,
+      selector: exactReason.selector === null ? null : cap(exactReason.selector)
+    } : null,
     lastStep: lastObservedStep(steps)
   };
 }
@@ -28144,17 +28156,19 @@ function isWdaFailureLine(line) {
   return WDA_TOKEN_RE.test(line) && WDA_FAILURE_RE.test(line);
 }
 function buildTerminalEvidence(output, opts = {}) {
-  const summary = buildStepSummary(output, { failed: true });
+  const exactSteps = parseExactSteps(output);
+  const failedStep = findFailedStep(exactSteps);
+  const reason = summarizeExactReason(output, failedStep?.name);
   const bootstrapEvidence = stripAnsi(output).split("\n").filter((line) => isWdaFailureLine(line)).join("\n").slice(0, 500);
-  const exitClass = opts.timedOut ? "timed-out" : opts.spawnError ? "spawn-error" : summary.steps.length === 0 ? "before-first-step" : "step-failure";
+  const exitClass = opts.timedOut ? "timed-out" : opts.spawnError ? "spawn-error" : exactSteps.length === 0 ? "before-first-step" : "step-failure";
   return {
-    completedSteps: summary.steps.filter((step) => step.status === "pass").length,
-    ...summary.failedStep ? { failedStep: summary.failedStep.name } : {},
+    completedSteps: exactSteps.filter((step) => step.status === "pass").length,
+    ...failedStep ? { failedStep: failedStep.name } : {},
     exitClass,
     ...bootstrapEvidence ? { bootstrapEvidence } : {},
-    ...summary.reason ? {
-      failureKind: summary.reason.kind,
-      failureSelector: summary.reason.selector
+    ...reason ? {
+      failureKind: reason.kind,
+      failureSelector: reason.selector
     } : {}
   };
 }

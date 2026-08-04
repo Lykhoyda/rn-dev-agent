@@ -61,6 +61,7 @@ const PATTERNS = [
 const RUNNER_STEP_RE = /^[ \t]+([✓✗])\s+(\S.*\S|\S)\s*\(([\d.]+)s\)\s*$/;
 const REASON_LINE_RE = /^[ \t]+╰─\s+/;
 const ID_WAIT_STEP_RE = /^extendedWaitUntil:\s+visible\s+id=(['"])((?:(?!\1).)+)\1$/i;
+const SELECTOR_LESS_ID_WAIT_SUMMARY_RE = /^extendedWaitUntil$/;
 const ID_WAIT_REASON_RE = /^[ \t]+╰─\s+Element (['"])#((?:(?!\1).)+)\1 not visible within\b/i;
 // The reason lines belonging to one step block: everything up to the next step line.
 function blockReasons(lines, stepIndex) {
@@ -118,7 +119,9 @@ function parseTerminalIdWait(output, suppliedFailedStep) {
     if (!reasonMatch)
         return null;
     const stepMatch = ID_WAIT_STEP_RE.exec(failedStep) ??
-        (terminalStep ? idWaitStepAmongDuplicates(lines, terminalStep.index, reasonLine) : null);
+        (terminalStep && SELECTOR_LESS_ID_WAIT_SUMMARY_RE.test(failedStep)
+            ? idWaitStepAmongDuplicates(lines, terminalStep.index, reasonLine)
+            : null);
     if (!stepMatch || reasonMatch[2] !== stepMatch[2])
         return null;
     return {
