@@ -7,10 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseMaestroFailure, isAutoRepairable } from '../../dist/domain/maestro-error-parser.js';
-import {
-  buildStepSummary,
-  buildTerminalEvidence,
-} from '../../dist/domain/maestro-step-parser.js';
+import { buildStepSummary, buildTerminalEvidence } from '../../dist/domain/maestro-step-parser.js';
 import { boundedOutput } from '../../dist/tools/run-action.js';
 
 // The exact live capture from the issue, at the runner's real 4-space indent.
