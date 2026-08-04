@@ -246,6 +246,88 @@ Expected outputs:
   out-of-band (or upstream LICENSE absence got fixed). Surface the resync
   command; do not auto-run.
 
+### 14. Linked worktree — private rn-dev-agent context
+
+A linked `git worktree` is populated from the commit only, so untracked private
+resources never arrive. The plugin shares exactly one `.rn-agent` subpath —
+`actions/`, the learned-action corpus — and (on Claude) root `CLAUDE.local.md`.
+Everything else under `.rn-agent/` is per-worktree runtime state and stays local.
+
+**Resolve the RN app root first.** The helper maps an *explicit* app-relative
+path and never guesses one. Use the directory holding the app's `package.json`
+with a `react-native`/`expo` dependency — that is `$PWD` for a single-app repo,
+but in a monorepo it is the nested app directory (e.g. `apps/mobile`). Ask the
+user if it is ambiguous; do not pass `$PWD` blindly.
+
+**Resolve the packaged helper for this host.** It ships inside each host package:
+
+- Claude: `${CLAUDE_PLUGIN_ROOT}/rn-dev-agent-core/dist/worktree-inheritance.js`
+- Codex: resolve `<package-root>` from this exact workflow skill's `SKILL.md`
+  path (the same directory that provides `bin/cdp-supervisor.js`; Codex does not
+  define `CLAUDE_PLUGIN_ROOT` and caches must never be scanned), then use
+  `<package-root>/rn-dev-agent-core/dist/worktree-inheritance.js`
+
+Verify the resolved file exists before invoking it; if it does not, report the
+row as MISSING with the plugin-reinstall guidance rather than guessing a path.
+
+Read-only probe; it never mutates and never prints a private path:
+
+```bash
+node "<helper>" plan --host <claude|codex> --app-root "<verified app root>" --json
+```
+
+Read the JSON in this order:
+
+1. **`refusal` first.** A non-empty `refusal` of `NO_PRIMARY`, `AMBIGUOUS`, or
+   `PRIMARY_APP_MISSING` means the layout cannot be resolved safely (bare or
+   separate-git-dir primary, multiple verified candidates, missing nested app).
+   Report it as the row's status and skip resource processing — never guess a
+   source. A refusal plan legitimately has an empty `resources` array, so never
+   read an empty list as "nothing to report". Still run and report `hook status`:
+   the integration is diagnosed independently of the plan.
+2. **Then `kind`.** `"primary"` means this is not a linked worktree → N/A.
+3. **Then each resource.** Map `state` to:
+
+- `LINK_VALID_SAFE` — OK, inherited and hidden from Git.
+- `TRACKED` — N/A (Git-managed team regime; never inherited or replaced).
+- `DEST_MISSING` — MISSING; `/rn-dev-agent:setup` offers to link it.
+- `IGNORE_UNSAFE` / `LINK_VALID_GIT_VISIBLE` — WARN: Git can see the path. Show
+  the returned `remediation`, which names the app-relative **file-form** rule
+  (`/<path>`, no trailing slash) to add to your own local ignore policy. Never
+  edit the tracked `.gitignore` or `info/exclude` for the user, and never print
+  the existing contents of either.
+- `LINK_STALE_SOURCE_AVAILABLE` — BROKEN; `/rn-dev-agent:setup` repairs it after
+  an explicit confirmation.
+- `LINK_STALE_SOURCE_MISSING`, `LINK_FOREIGN`, `COLLISION_FILE`,
+  `COLLISION_DIRECTORY`, `SOURCE_MISSING`, `SOURCE_WRONG_TYPE`,
+  `PERMISSION_DENIED` — report the state and its `remediation`; nothing is
+  changed automatically.
+
+A `refusal` of `NO_PRIMARY`, `AMBIGUOUS`, or `PRIMARY_APP_MISSING` means the
+layout cannot be resolved safely (bare or separate-git-dir primary, multiple
+candidates, missing nested app). Report it; never guess a source.
+
+Also report the automatic integration, using the same resolved helper path:
+
+```bash
+node "<helper>" hook status
+```
+
+`installed` / `absent` / `foreign-hook` / `composed-hook` /
+`hooks-path-configured`. Only `/rn-dev-agent:setup` installs it, and it never
+overwrites another hook or a managed `core.hooksPath`.
+
+**This check never mutates.** Linking, repairing, and installing the hook belong
+to `/rn-dev-agent:setup` Step 0, which previews and asks per resource, replans
+immediately before applying, and requires a second confirmation for a repair.
+
+**`CLAUDE.local.md` loads at Claude launch.** A link that already reported
+`LINK_VALID_SAFE` before this session started was loaded normally — report it as
+OK. But a link **created or repaired during this session** is not read by it:
+say the link takes effect in the next session, never that it is available now.
+Only the `post-checkout` integration makes it exist *before* an agent starts in a
+newly created worktree.
+
 ## Output format
 
 Present results as a table:
@@ -267,6 +349,7 @@ Present results as a table:
 | Physical devices | N/A (none connected) OR "Android USB reverse: OK" / "iOS: idb-companion missing — install with brew" | Run installed command if iOS-companion missing |
 | Plugin version | OK (latest) / BEHIND (installed X, latest Y) / OFFLINE / AHEAD (dev install) | Run: `/plugin update rn-dev-agent` if BEHIND |
 | Vercel rules sync | OK (N rules, fetched X days ago) / STALE (> 30 days) / MISSING / DRIFT / N/A (installed plugin) | Repo checkout only: node scripts/sync-vercel-skills.mjs --fix --ref \<sha\> |
+| Linked worktree — private context | N/A (primary worktree) / REFUSED (NO_PRIMARY \| AMBIGUOUS \| PRIMARY_APP_MISSING) / per resource: `<app-relative path>`: OK (LINK_VALID_SAFE) \| N/A (TRACKED) \| MISSING \| WARN (IGNORE_UNSAFE \| LINK_VALID_GIT_VISIBLE) \| BROKEN, repairable (LINK_STALE_SOURCE_AVAILABLE) \| BROKEN, no source (LINK_STALE_SOURCE_MISSING) \| BLOCKED (LINK_FOREIGN \| COLLISION_* \| SOURCE_* \| PERMISSION_DENIED). Claude reports both resources; Codex reports `.rn-agent/actions` and `CLAUDE.local.md: N/A (Claude-only)`. Append `hook: installed / absent / foreign-hook / composed-hook / hooks-path-configured` in every case, including on a refusal. | MISSING or BROKEN-repairable: `/rn-dev-agent:setup` (asks per resource; a repair needs a second confirmation). BROKEN-no-source: report only — restore the canonical source first; nothing can be repaired. WARN: add the shown app-relative file-form rule to your own local ignore policy — doctor never edits ignore files. REFUSED/BLOCKED: report only; never guess a source or overwrite local content. |
 
 If any critical check fails (CDP bridge, **rn-fast-runner on iOS targets**, **rn-android-runner on Android targets**, Metro, or simulator), provide step-by-step instructions to fix it. Do not proceed with feature development until all critical checks pass. Note: iOS-only setups do NOT need `rn-android-runner`; Android-only setups do NOT need `rn-fast-runner` build artifacts.
 

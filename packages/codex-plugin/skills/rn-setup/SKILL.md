@@ -62,6 +62,23 @@ Read/report without mutation:
 | physical device | prerequisite file/tool reads | signing/pairing guidance |
 | Vercel rules | packaged rules index/checker presence | refresh package if missing |
 | auto-connect | environment/project config read | informational only |
+| linked worktree private context | packaged `rn-dev-agent-core/dist/worktree-inheritance.js` `plan --host codex --app-root <verified RN app root> --json` plus `hook status` | `$rn-dev-agent:setup` links or repairs after per-resource consent |
+
+For the linked-worktree row, resolve the helper from `<package-root>` derived
+from this `SKILL.md` path and verify it exists; never scan caches. Resolve the RN
+app root explicitly from its `package.json` React Native/Expo dependency and
+never guess it. Read `refusal` first — `NO_PRIMARY`, `AMBIGUOUS`, and
+`PRIMARY_APP_MISSING` are the row status and legitimately carry no resources —
+then `kind: "primary"` as N/A, then the `rn-agent-actions` regime, app-relative
+destination, and state. Report `hook status` in every case. Codex shares only
+`.rn-agent/actions`; report Claude local instructions as N/A (Claude-only) and
+never create, append, replace, or symlink them. `IGNORE_UNSAFE` and
+`LINK_VALID_GIT_VISIBLE` are warnings whose remediation is the shown app-relative
+file-form rule for the user's own local ignore policy — never edit a tracked
+ignore file or the common exclude, and never print either file's contents.
+`LINK_STALE_SOURCE_AVAILABLE` is repairable by setup; `LINK_STALE_SOURCE_MISSING`
+is report-only. Never print an absolute private source path or read a private
+file.
 
 Doctor never runs a runner build, installer, update, MCP app call, Observe
 control, or cleanup. It prints commands for later user confirmation.

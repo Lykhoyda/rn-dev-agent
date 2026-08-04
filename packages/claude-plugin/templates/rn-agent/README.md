@@ -52,6 +52,42 @@ tests, that's yours alone. The plugin doesn't read it.
 Self-repair is bounded: max 3 attempts per action per 24h; failure codes
 other than `SELECTOR_NOT_FOUND` escalate without auto-fix.
 
+## Linked Git worktrees
+
+`git worktree add` populates a worktree from the commit only, so anything here
+that is untracked never arrives. If you keep this directory **fully private**
+(never committed), a fresh worktree starts with no learned actions at all.
+
+The plugin supports that private setup as a first-class configuration, and it
+shares **exactly one subpath**:
+
+| Path | Shared? | Why |
+|---|---|---|
+| `actions/` | **yes** | The canonical learned-action corpus — the flow inventory every consumer reads (`cdp_run_action`, `maestro_test_all`, the learned-action inventory). Sharing it is the point: one corpus, every worktree. See the ownership note below. |
+| `state/`, `recordings/`, `snapshots/`, `diag/`, `index.json`, `local/` | no | Per-worktree runtime state, including the action SQLite database and its WAL. The session runtime root must be a real directory. |
+| `integration/` | no | Session integration refuses any symlinked component under it and fails closed on one. |
+| `nav-graph.yaml`, `skeleton.yaml` | no | Derived from the app source on *this* branch; sharing them across branches serves stale data. |
+| `config.json`, `e2e.config.json`, `fixtures/`, `proposals/`, `dev-bridge.ts`, `globals.d.ts`, `.scaffold-version` | no | Project scaffold and per-worktree output. |
+| `.rn-agent/` itself | **never** | A whole-directory symlink is not a supported layout: the session supervisor materializes it back into a real directory — copying your private content into the worktree — and refuses outright when the target tree contains nested symlinks. |
+
+Because `actions/` is linked *inside* a real local `.rn-agent/` directory, the
+common directory-form ignore rule (`.rn-agent/`) already hides it, so `git
+status` stays clean. Root `CLAUDE.local.md` is shared too on Claude hosts, and
+it needs its own rule — use the **file form** (`/CLAUDE.local.md`, no trailing
+slash), since a directory-form pattern does not match a symlink.
+
+Nothing is shared automatically without your consent. `/rn-dev-agent:doctor`
+reports the state read-only; `/rn-dev-agent:setup` previews and asks per
+resource, and can install a local `post-checkout` hook so ordinary `git worktree
+add` prepares the context before an agent starts. That hook is untracked, scoped
+to your repository, and never replaces an existing hook or a managed
+`core.hooksPath`. `git worktree add --no-checkout`, and tools that bypass Git
+hooks, still need `/rn-dev-agent:setup` in the new worktree.
+
+If `.rn-agent/` is **committed** (the default team regime), none of this
+applies: Git delivers `actions/` to every worktree and the plugin never inherits
+or replaces a Git-managed path.
+
 ## Learn more
 
 - [Actions guide](https://lykhoyda.github.io/rn-dev-agent/actions/) —

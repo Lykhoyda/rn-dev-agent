@@ -33,6 +33,64 @@ Before every write, show the exact proposed content/diff and ask **"Apply this
 change? [y/n]"**. A decline is recorded and never treated as consent for another
 step.
 
+### 0. Linked worktree — private rn-dev-agent context
+
+Run before A–D. A linked `git worktree` never receives untracked private
+resources, and Step D would otherwise scaffold an independent `.rn-agent`,
+forking the corpus.
+
+Resolve `<helper>` as `<package-root>/rn-dev-agent-core/dist/worktree-inheritance.js`
+from this workflow's `SKILL.md` path — never a launcher-only environment
+variable. Resolve the RN app root explicitly (the directory whose `package.json`
+declares `react-native`/`expo`); never guess it. Then plan read-only:
+
+```bash
+node "<helper>" plan --host codex --app-root "<verified app root>" --json
+```
+
+Codex shares only `rn-agent-actions` (`.rn-agent/actions`). Report Claude local
+instructions as `CLAUDE.local.md: N/A (Claude-only)` and never create, append,
+replace, or symlink `CLAUDE.md` or `CLAUDE.local.md`.
+
+1. Read `refusal` first (`NO_PRIMARY`, `AMBIGUOUS`, `PRIMARY_APP_MISSING`); such
+   a plan legitimately has no resources. Report it and skip to Step A.
+2. **Pre-scaffold guard:** blocks every Step D operation that could materialize
+   `.rn-agent/actions` — first-time scaffold and partial-add alike. If
+   `rn-agent-actions` is `DEST_MISSING`,
+   `LINK_STALE_SOURCE_AVAILABLE`, or `IGNORE_UNSAFE` while `sourcePresent` is
+   true, block those writes until the user explicitly chooses inherit or
+   independent.
+3. Preview the single resource, ask, then apply only that resource. The helper
+   replans immediately before mutating and refuses on any change:
+
+   ```bash
+   node "<helper>" apply --host codex --app-root "<verified app root>" \
+     --resource rn-agent-actions
+   ```
+
+   A repair additionally needs `--allow-repair` and a second explicit
+   confirmation. Report partial outcomes honestly.
+4. `IGNORE_UNSAFE` and `LINK_VALID_GIT_VISIBLE` both mean Git can see the
+   path — treat each as blocking: show the helper's app-relative **file-form**
+   rule, let the user add it to their own local ignore policy, and replan until
+   the state is safe before continuing. Never edit the tracked `.gitignore` or the
+   common `info/exclude`, and never print either file's existing contents.
+5. `TRACKED` is the Git-managed team regime: report and move on.
+6. Offer the local `post-checkout` integration after explicit consent:
+
+   ```bash
+   node "<helper>" hook install --host codex --app-root "<verified app root>"
+   ```
+
+   It is untracked, scoped to this repository, and refuses rather than touching
+   an existing `post-checkout` hook or a managed `core.hooksPath`, printing an
+   exact manual composition snippet instead. `git worktree add --no-checkout`
+   and hook-bypassing tools still need this workflow in the new worktree.
+
+Never print an absolute private source path and never read a private file's
+contents. Only `.rn-agent/actions` is ever shared; every other `.rn-agent`
+subpath is per-worktree runtime or branch-derived state.
+
 ### A. Managed Codex instructions in AGENTS.md
 
 The package template is `<package-root>/AGENTS-MD-TEMPLATE.md`. Its managed body
@@ -57,6 +115,10 @@ nothing.
 
 ### B. Navigation reference instrumentation
 
+0. **Bridge prerequisite.** Steps B/C import `./.rn-agent/dev-bridge`, which only
+   Step D creates. Never inject an import for a module that does not exist: if
+   `.rn-agent/dev-bridge.ts` is absent, run Step D's local scaffold first, and if
+   the user declines it, skip Steps B and C entirely and record that.
 1. If an app is already connected from a prior active workflow, a separately
    consented active probe may evaluate `__RN_AGENT.findNavRef()`. The passive
    health phase itself never performs this call.
@@ -89,10 +151,13 @@ The package source is `<package-root>/templates/rn-agent/` and contains the
 version marker, README, `.gitignore`, skeleton, dev bridge, global types,
 Vercel config, and empty action/fixture/proposal markers.
 
-1. **Symlink guard:** if project `.rn-agent` is a symlink, validate the resolved
-   target's scaffold version and `dev-bridge.ts`, then skip scaffold writes.
-   Never partial-add through it. The per-worktree `tsconfig` check below still
-   applies.
+1. **Symlink guard:** Step 0 gates this step — never first-time-scaffold while a
+   canonical private corpus is available and unchosen. Never scaffold,
+   partial-add, or write through a symlinked subpath such as an inherited
+   `.rn-agent/actions`; scaffold the worktree-local files around it. If project
+   `.rn-agent` is itself a symlink (legacy whole-directory layout), skip scaffold
+   writes entirely and point at Step 0's migration. The per-worktree `tsconfig`
+   check below still applies in every case.
 2. Existing directory/current version: write nothing.
 3. Existing/stale directory: list only missing template files. Never overwrite
    user files. Ignore a missing `.gitkeep` when its directory already has real

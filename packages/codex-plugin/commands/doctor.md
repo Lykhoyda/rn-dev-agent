@@ -52,6 +52,29 @@ physical-device prerequisites, packaged Vercel rules, and CDP auto-connect
 configuration. Do not call `cdp_status`: it can attach. Device/app/CDP state is
 `UNKNOWN` unless supplied from a prior structured observation.
 
+Also report **linked-worktree private context**, read-only. Resolve the packaged
+helper as `<package-root>/rn-dev-agent-core/dist/worktree-inheritance.js` from
+this workflow's `SKILL.md` path — never a launcher-only environment variable —
+and run `plan --host codex --app-root <verified RN app root> --json`. Resolve the
+RN app root explicitly (the directory whose `package.json` declares
+`react-native`/`expo`); never guess it.
+
+Read `refusal` first: `NO_PRIMARY`, `AMBIGUOUS`, or `PRIMARY_APP_MISSING` is the
+row's status, and such a plan legitimately has an empty `resources` array. Then
+`kind: "primary"` means N/A. Otherwise report the `rn-agent-actions` regime,
+app-relative destination, and state. Then, in every case — including a refusal
+and a primary worktree — run and report the integration status:
+
+```bash
+node "<helper>" hook status
+```
+
+Codex shares only the
+`.rn-agent/actions` corpus; report Claude local instructions as
+`CLAUDE.local.md: N/A (Claude-only)` and never create, append, replace, or
+symlink them. Never print an absolute private source path, never read a private
+file, and never link or repair inside doctor.
+
 For missing components, print exact commands but do not offer to execute them
 inside doctor. Plugin recovery order is user-confirmed marketplace upgrade,
 materialization with `codex plugin add rn-dev-agent@rn-dev-agent --json`, Codex

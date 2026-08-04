@@ -1,0 +1,708 @@
+import { spawnSync } from 'node:child_process';
+import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, statSync, symlinkSync, unlinkSync, } from 'node:fs';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+// The only `.rn-agent` subpath proven shareable across linked worktrees.
+// Derivation and the exclusion evidence live in templates/rn-agent/README.md.
+export const SHAREABLE_RESOURCES = [
+    {
+        id: 'rn-agent-actions',
+        label: 'learned action corpus (.rn-agent/actions)',
+        type: 'directory',
+        anchor: 'app',
+        path: '.rn-agent/actions',
+        parent: '.rn-agent',
+        hosts: ['claude', 'codex'],
+    },
+    {
+        id: 'claude-local-md',
+        label: 'Claude local instructions (CLAUDE.local.md)',
+        type: 'file',
+        anchor: 'worktree-root',
+        path: 'CLAUDE.local.md',
+        hosts: ['claude'],
+    },
+];
+const GIT_ENV_OVERRIDES = [
+    'GIT_DIR',
+    'GIT_WORK_TREE',
+    'GIT_INDEX_FILE',
+    'GIT_COMMON_DIR',
+    'GIT_OBJECT_DIRECTORY',
+    'GIT_NAMESPACE',
+];
+function gitEnvironment() {
+    const env = { ...process.env };
+    for (const key of GIT_ENV_OVERRIDES)
+        delete env[key];
+    return env;
+}
+function git(cwd, args) {
+    const result = spawnSync('git', args, {
+        cwd,
+        encoding: 'utf8',
+        env: gitEnvironment(),
+        stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    if (result.error || result.status !== 0)
+        return { ok: false, stdout: '' };
+    return { ok: true, stdout: (result.stdout ?? '').replace(/\n$/, '') };
+}
+function canonical(path) {
+    try {
+        return realpathSync(path);
+    }
+    catch {
+        return null;
+    }
+}
+function contained(parent, child) {
+    if (parent === child)
+        return true;
+    const rel = relative(parent, child);
+    return rel !== '' && !rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel);
+}
+function toPosix(path) {
+    return sep === '/' ? path : path.split(sep).join('/');
+}
+/** Same RN-project predicate as nav-graph/storage.ts — dependency-declared, never inferred. */
+export function isRnAppRoot(directory) {
+    const manifest = join(directory, 'package.json');
+    try {
+        const parsed = JSON.parse(readFileSync(manifest, 'utf8'));
+        const deps = { ...parsed.dependencies, ...parsed.devDependencies };
+        return Boolean(deps['react-native'] || deps['expo']);
+    }
+    catch {
+        return false;
+    }
+}
+export function parseWorktreeRecords(porcelain) {
+    const records = [];
+    let current = null;
+    for (const line of porcelain.split('\n')) {
+        if (line.startsWith('worktree ')) {
+            if (current)
+                records.push(current);
+            current = { path: line.slice('worktree '.length), bare: false, prunable: false };
+            continue;
+        }
+        if (!current)
+            continue;
+        if (line === 'bare')
+            current.bare = true;
+        if (line === 'prunable' || line.startsWith('prunable '))
+            current.prunable = true;
+    }
+    if (current)
+        records.push(current);
+    return records;
+}
+function verifiedPrimaries(worktreeRoot, commonDir) {
+    const listing = git(worktreeRoot, ['worktree', 'list', '--porcelain']);
+    if (!listing.ok)
+        return [];
+    const verified = new Set();
+    for (const record of parseWorktreeRecords(listing.stdout)) {
+        if (record.bare || record.prunable)
+            continue;
+        const candidate = canonical(record.path);
+        if (!candidate)
+            continue;
+        try {
+            if (!statSync(candidate).isDirectory())
+                continue;
+        }
+        catch {
+            continue;
+        }
+        const top = git(candidate, ['rev-parse', '--show-toplevel']);
+        if (!top.ok || canonical(top.stdout) !== candidate)
+            continue;
+        const candidateGitDir = git(candidate, ['rev-parse', '--path-format=absolute', '--git-dir']);
+        const candidateCommon = git(candidate, [
+            'rev-parse',
+            '--path-format=absolute',
+            '--git-common-dir',
+        ]);
+        if (!candidateGitDir.ok || !candidateCommon.ok)
+            continue;
+        const resolvedGitDir = canonical(candidateGitDir.stdout);
+        const resolvedCommon = canonical(candidateCommon.stdout);
+        if (!resolvedGitDir || !resolvedCommon)
+            continue;
+        if (resolvedCommon !== commonDir || resolvedGitDir !== resolvedCommon)
+            continue;
+        verified.add(candidate);
+    }
+    return [...verified];
+}
+export function resolveWorktreeLayout(input) {
+    const cwd = canonical(input.cwd);
+    if (!cwd)
+        return { refusal: 'NOT_GIT' };
+    const insideWorkTree = git(cwd, ['rev-parse', '--is-inside-work-tree']);
+    if (!insideWorkTree.ok) {
+        const bare = git(cwd, ['rev-parse', '--is-bare-repository']);
+        if (bare.ok && bare.stdout === 'true')
+            return { refusal: 'BARE' };
+        return { refusal: 'NOT_GIT' };
+    }
+    if (insideWorkTree.stdout !== 'true')
+        return { refusal: 'BARE' };
+    const top = git(cwd, ['rev-parse', '--show-toplevel']);
+    const gitDirRaw = git(cwd, ['rev-parse', '--path-format=absolute', '--git-dir']);
+    const commonRaw = git(cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+    if (!top.ok || !gitDirRaw.ok || !commonRaw.ok)
+        return { refusal: 'GIT_UNAVAILABLE' };
+    const worktreeRoot = canonical(top.stdout);
+    const gitDir = canonical(gitDirRaw.stdout);
+    const commonDir = canonical(commonRaw.stdout);
+    if (!worktreeRoot || !gitDir || !commonDir)
+        return { refusal: 'GIT_UNAVAILABLE' };
+    const appRootInput = canonical(input.appRoot ? resolve(input.appRoot) : cwd);
+    if (!appRootInput)
+        return { refusal: 'NOT_RN_APP' };
+    if (!contained(worktreeRoot, appRootInput))
+        return { refusal: 'APP_OUTSIDE_WORKTREE' };
+    if (!input.allowNonRnApp && !isRnAppRoot(appRootInput))
+        return { refusal: 'NOT_RN_APP' };
+    const appRelative = worktreeRoot === appRootInput ? '.' : toPosix(relative(worktreeRoot, appRootInput));
+    const base = {
+        kind: gitDir === commonDir ? 'primary' : 'linked',
+        worktreeRoot,
+        commonDir,
+        gitDir,
+        appRoot: appRootInput,
+        appRelative,
+    };
+    if (base.kind === 'primary')
+        return base;
+    const primaries = verifiedPrimaries(worktreeRoot, commonDir);
+    if (primaries.length === 0)
+        return { ...base, refusal: 'NO_PRIMARY' };
+    if (primaries.length > 1)
+        return { ...base, refusal: 'AMBIGUOUS' };
+    const primaryRoot = primaries[0];
+    const primaryAppRoot = appRelative === '.' ? primaryRoot : join(primaryRoot, appRelative);
+    if (!contained(primaryRoot, primaryAppRoot))
+        return { ...base, refusal: 'PRIMARY_APP_MISSING' };
+    let primaryAppReal = null;
+    try {
+        if (lstatSync(primaryAppRoot).isDirectory())
+            primaryAppReal = canonical(primaryAppRoot);
+    }
+    catch {
+        primaryAppReal = null;
+    }
+    if (!primaryAppReal || !contained(primaryRoot, primaryAppReal)) {
+        return { ...base, refusal: 'PRIMARY_APP_MISSING' };
+    }
+    return { ...base, primaryRoot, primaryAppRoot };
+}
+function classifySource(path, type) {
+    let link;
+    try {
+        link = lstatSync(path);
+    }
+    catch (error) {
+        const code = error.code;
+        if (code === 'EACCES' || code === 'EPERM')
+            return 'PERMISSION_DENIED';
+        return 'MISSING';
+    }
+    if (link.isSymbolicLink()) {
+        const target = canonical(path);
+        if (!target)
+            return 'MISSING';
+        try {
+            const resolved = statSync(target);
+            return (type === 'directory' ? resolved.isDirectory() : resolved.isFile())
+                ? 'AVAILABLE'
+                : 'WRONG_TYPE';
+        }
+        catch {
+            return 'MISSING';
+        }
+    }
+    if (type === 'directory')
+        return link.isDirectory() ? 'AVAILABLE' : 'WRONG_TYPE';
+    return link.isFile() ? 'AVAILABLE' : 'WRONG_TYPE';
+}
+function classifyDestination(path, sourcePath, type) {
+    let link;
+    try {
+        link = lstatSync(path, { bigint: true });
+    }
+    catch (error) {
+        const code = error.code;
+        if (code === 'EACCES' || code === 'EPERM')
+            return { state: 'PERMISSION_DENIED' };
+        return { state: 'MISSING' };
+    }
+    if (!link.isSymbolicLink()) {
+        if (link.isDirectory())
+            return { state: 'DIRECTORY' };
+        return { state: 'FILE' };
+    }
+    const evidence = { dev: String(link.dev), ino: String(link.ino) };
+    const resolved = canonical(path);
+    if (!resolved)
+        return { state: 'LINK_STALE', evidence };
+    const expected = sourcePath ? canonical(sourcePath) : null;
+    if (!expected || resolved !== expected)
+        return { state: 'LINK_FOREIGN', evidence };
+    try {
+        const stats = statSync(resolved);
+        const typeOk = type === 'directory' ? stats.isDirectory() : stats.isFile();
+        return { state: typeOk ? 'LINK_VALID' : 'LINK_FOREIGN', evidence };
+    }
+    catch {
+        return { state: 'LINK_STALE', evidence };
+    }
+}
+function isTracked(worktreeRoot, relativePath) {
+    const listed = git(worktreeRoot, ['ls-files', '--', relativePath]);
+    return listed.ok && listed.stdout.trim().length > 0;
+}
+function isIgnoreSafe(worktreeRoot, relativePath) {
+    const result = spawnSync('git', ['check-ignore', '--no-index', '-q', '--', relativePath], {
+        cwd: worktreeRoot,
+        encoding: 'utf8',
+        env: gitEnvironment(),
+        stdio: 'ignore',
+    });
+    return !result.error && result.status === 0;
+}
+export function resourcesForHost(host) {
+    return SHAREABLE_RESOURCES.filter((resource) => resource.hosts.includes(host));
+}
+function anchorFor(layout, resource) {
+    if (resource.anchor === 'worktree-root') {
+        return { local: layout.worktreeRoot, source: layout.primaryRoot ?? '' };
+    }
+    return { local: layout.appRoot, source: layout.primaryAppRoot ?? '' };
+}
+function destinationRelative(layout, resource) {
+    if (resource.anchor === 'worktree-root')
+        return resource.path;
+    return layout.appRelative === '.' ? resource.path : `${layout.appRelative}/${resource.path}`;
+}
+export function planInheritance(input) {
+    // A branch without the nested app can still inherit worktree-root resources, so the
+    // RN-app gate is relaxed only when every requested resource is root-anchored.
+    const rootOnly = input.rootResourcesOnly === true &&
+        SHAREABLE_RESOURCES.filter((r) => !input.resources || input.resources.includes(r.id)).every((r) => r.anchor === 'worktree-root');
+    const layout = resolveWorktreeLayout({
+        cwd: input.cwd,
+        appRoot: input.appRoot,
+        allowNonRnApp: rootOnly,
+    });
+    if (!('worktreeRoot' in layout)) {
+        return {
+            layout: {
+                kind: 'primary',
+                worktreeRoot: '',
+                commonDir: '',
+                gitDir: '',
+                appRoot: '',
+                appRelative: '.',
+            },
+            host: input.host,
+            resources: [],
+            refusal: layout.refusal,
+        };
+    }
+    if (layout.refusal || layout.kind === 'primary') {
+        return { layout, host: input.host, resources: [], refusal: layout.refusal };
+    }
+    const selected = resourcesForHost(input.host).filter((resource) => !input.resources || input.resources.includes(resource.id));
+    const resources = selected.map((resource) => planResource(layout, resource));
+    return { layout, host: input.host, resources };
+}
+function planResource(layout, resource) {
+    const anchor = anchorFor(layout, resource);
+    const destination = join(anchor.local, resource.path);
+    const destinationRel = destinationRelative(layout, resource);
+    const source = anchor.source ? join(anchor.source, resource.path) : undefined;
+    const sourceState = source ? classifySource(source, resource.type) : 'MISSING';
+    const { state: destinationState, evidence } = classifyDestination(destination, source, resource.type);
+    const ignoreSafe = isIgnoreSafe(layout.worktreeRoot, destinationRel);
+    const parentLinked = resource.parent !== undefined && isSymlink(join(anchor.local, resource.parent));
+    const base = {
+        id: resource.id,
+        label: resource.label,
+        destination: toPosix(destinationRel),
+        sourceState,
+        destinationState,
+        ignoreSafe,
+        evidence,
+    };
+    const gitManaged = isTracked(layout.worktreeRoot, destinationRel) ||
+        (resource.parent !== undefined &&
+            isTracked(layout.worktreeRoot, toPosix(layout.appRelative === '.' ? resource.parent : `${layout.appRelative}/${resource.parent}`)));
+    if (gitManaged) {
+        return {
+            ...base,
+            regime: 'GIT_MANAGED',
+            state: 'TRACKED',
+            action: 'none',
+            remediation: 'Git owns this path; the tracked/team regime is never replaced or inherited.',
+        };
+    }
+    const regime = sourceState === 'AVAILABLE' ? 'PRIVATE_SOURCE_AVAILABLE' : 'NO_SOURCE';
+    if (parentLinked) {
+        return {
+            ...base,
+            regime,
+            state: 'LINK_FOREIGN',
+            action: 'none',
+            remediation: `The whole "${resource.parent}" directory is a symlink (legacy layout). Nothing is written through it; /rn-dev-agent:setup migrates it to the split layout.`,
+        };
+    }
+    if (destinationState === 'PERMISSION_DENIED' || sourceState === 'PERMISSION_DENIED') {
+        return {
+            ...base,
+            regime,
+            state: 'PERMISSION_DENIED',
+            action: 'none',
+            remediation: 'Permission denied while inspecting this path; fix permissions and re-run.',
+        };
+    }
+    if (destinationState === 'FILE') {
+        return { ...base, regime, state: 'COLLISION_FILE', action: 'none', remediation: LOCAL_CONTENT };
+    }
+    if (destinationState === 'DIRECTORY') {
+        return {
+            ...base,
+            regime,
+            state: 'COLLISION_DIRECTORY',
+            action: 'none',
+            remediation: LOCAL_CONTENT,
+        };
+    }
+    if (destinationState === 'LINK_VALID') {
+        return {
+            ...base,
+            regime,
+            state: ignoreSafe ? 'LINK_VALID_SAFE' : 'LINK_VALID_GIT_VISIBLE',
+            action: 'none',
+            remediation: ignoreSafe ? undefined : ignoreRemediation(base.destination),
+        };
+    }
+    if (destinationState === 'LINK_FOREIGN') {
+        return {
+            ...base,
+            regime,
+            state: 'LINK_FOREIGN',
+            action: 'none',
+            remediation: 'Destination is a symlink to something else; /rn-dev-agent:setup can re-point it after explicit confirmation.',
+        };
+    }
+    if (destinationState === 'LINK_STALE') {
+        if (sourceState !== 'AVAILABLE') {
+            return {
+                ...base,
+                regime,
+                state: 'LINK_STALE_SOURCE_MISSING',
+                action: 'none',
+                remediation: 'Destination is a broken symlink and no canonical source is available; restore the source first.',
+            };
+        }
+        return {
+            ...base,
+            regime,
+            state: 'LINK_STALE_SOURCE_AVAILABLE',
+            action: 'repair',
+            remediation: 'Run /rn-dev-agent:setup to repair the broken link after confirmation.',
+        };
+    }
+    if (sourceState === 'MISSING') {
+        return {
+            ...base,
+            regime,
+            state: 'SOURCE_MISSING',
+            action: 'none',
+            remediation: 'No canonical source in the primary worktree; nothing to inherit.',
+        };
+    }
+    if (sourceState === 'WRONG_TYPE') {
+        return {
+            ...base,
+            regime,
+            state: 'SOURCE_WRONG_TYPE',
+            action: 'none',
+            remediation: `Canonical source is not a ${resource.type}; refusing to link.`,
+        };
+    }
+    if (!ignoreSafe) {
+        return {
+            ...base,
+            regime,
+            state: 'IGNORE_UNSAFE',
+            action: 'none',
+            remediation: ignoreRemediation(base.destination),
+        };
+    }
+    return { ...base, regime, state: 'DEST_MISSING', action: 'link' };
+}
+const LOCAL_CONTENT = 'Local real content is present; it is never overwritten and is not shared.';
+function ignoreRemediation(destination) {
+    return `Git would see this path. Add the file-form rule "/${destination}" (no trailing slash) to your own local ignore policy, then re-run.`;
+}
+function isSymlink(path) {
+    try {
+        return lstatSync(path).isSymbolicLink();
+    }
+    catch {
+        return false;
+    }
+}
+// The parent must be a real directory inside the local anchor, both before and
+// after the link is created — otherwise a swapped parent could redirect the write.
+function bindLinkParent(destination, anchor) {
+    const parent = destination.slice(0, destination.lastIndexOf(sep));
+    if (!parent)
+        return null;
+    if (!existsSync(parent))
+        mkdirSync(parent, { recursive: true, mode: 0o700 });
+    try {
+        const stats = lstatSync(parent, { bigint: true });
+        if (stats.isSymbolicLink() || !stats.isDirectory())
+            return null;
+        const real = canonical(parent);
+        if (!real || !contained(anchor, real))
+            return null;
+        return { dev: String(stats.dev), ino: String(stats.ino) };
+    }
+    catch {
+        return null;
+    }
+}
+function sameDirectoryIdentity(path, expected) {
+    try {
+        const stats = lstatSync(path, { bigint: true });
+        return (!stats.isSymbolicLink() &&
+            stats.isDirectory() &&
+            String(stats.dev) === expected.dev &&
+            String(stats.ino) === expected.ino);
+    }
+    catch {
+        return false;
+    }
+}
+export function applyInheritance(input) {
+    const plan = planInheritance(input);
+    const outcomes = [];
+    let applied = 0;
+    for (const resourcePlan of plan.resources) {
+        const spec = SHAREABLE_RESOURCES.find((entry) => entry.id === resourcePlan.id);
+        const anchor = anchorFor(plan.layout, spec);
+        const destination = join(anchor.local, spec.path);
+        const source = anchor.source ? join(anchor.source, spec.path) : undefined;
+        if (resourcePlan.action === 'none') {
+            outcomes.push({
+                id: resourcePlan.id,
+                applied: false,
+                state: resourcePlan.state,
+                result: resourcePlan.state === 'LINK_VALID_SAFE' ? 'converged' : 'skipped',
+                reason: resourcePlan.remediation,
+            });
+            continue;
+        }
+        if (resourcePlan.action === 'repair' && !input.allowRepair) {
+            outcomes.push({
+                id: resourcePlan.id,
+                applied: false,
+                state: resourcePlan.state,
+                result: 'skipped',
+                reason: 'repair requires explicit confirmation',
+            });
+            continue;
+        }
+        const revalidated = planResource(plan.layout, spec);
+        if (revalidated.state !== resourcePlan.state || revalidated.action !== resourcePlan.action) {
+            outcomes.push({
+                id: resourcePlan.id,
+                applied: false,
+                state: revalidated.state,
+                result: 'refused',
+                reason: 'state changed between plan and apply; re-plan and retry',
+            });
+            continue;
+        }
+        if (revalidated.action === 'repair') {
+            if (!removeStaleLink(destination, revalidated.evidence)) {
+                outcomes.push({
+                    id: resourcePlan.id,
+                    applied: false,
+                    state: revalidated.state,
+                    result: 'refused',
+                    reason: 'stale link changed between plan and apply',
+                });
+                continue;
+            }
+        }
+        const outcome = createLink(source, destination, plan.layout, spec, revalidated.action);
+        if (outcome.result === 'linked' || outcome.result === 'repaired')
+            applied += 1;
+        outcomes.push({ ...outcome, id: resourcePlan.id });
+    }
+    return { outcomes, applied, requested: plan.resources.length, refusal: plan.refusal };
+}
+function removeStaleLink(destination, evidence) {
+    try {
+        const current = lstatSync(destination, { bigint: true });
+        if (!current.isSymbolicLink())
+            return false;
+        if (!evidence)
+            return false;
+        if (String(current.dev) !== evidence.dev || String(current.ino) !== evidence.ino)
+            return false;
+        unlinkSync(destination);
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
+function probeLinkTarget(parentIdentity, destination, source, spec) {
+    const parent = destination.slice(0, destination.lastIndexOf(sep));
+    const probe = join(parent, `.rn-dev-agent-probe.${process.pid}.${probeCounter++}`);
+    const refuse = (state, reason) => ({
+        applied: false,
+        state,
+        result: 'refused',
+        reason,
+    });
+    try {
+        symlinkSync(source, probe, spec.type === 'directory' ? 'dir' : 'file');
+    }
+    catch {
+        return refuse('PERMISSION_DENIED', 'could not verify the link target before creating it');
+    }
+    try {
+        const resolved = canonical(probe);
+        if (!resolved || resolved !== canonical(source)) {
+            return refuse('SOURCE_MISSING', 'the canonical source disappeared before the link was created');
+        }
+        const stats = statSync(resolved);
+        const typeOk = spec.type === 'directory' ? stats.isDirectory() : stats.isFile();
+        if (!typeOk)
+            return refuse('SOURCE_WRONG_TYPE', `the canonical source is not a ${spec.type}`);
+        if (!sameDirectoryIdentity(parent, parentIdentity)) {
+            return refuse('COLLISION_DIRECTORY', 'the destination parent changed during apply');
+        }
+        return null;
+    }
+    catch {
+        return refuse('SOURCE_MISSING', 'the canonical source could not be verified');
+    }
+    finally {
+        try {
+            unlinkSync(probe);
+        }
+        catch {
+            /* the probe name is unique to this process; a failure leaves nothing shared */
+        }
+    }
+}
+let probeCounter = 0;
+function createLink(source, destination, layout, spec, action) {
+    const anchor = anchorFor(layout, spec).local;
+    const parentIdentity = bindLinkParent(destination, anchor);
+    if (!parentIdentity) {
+        return {
+            applied: false,
+            state: 'COLLISION_DIRECTORY',
+            result: 'refused',
+            reason: 'destination parent is not a real directory inside this worktree',
+        };
+    }
+    // Prove the link would resolve to the right kind of target BEFORE the destination
+    // exists, using a uniquely-named probe only this process can own. That makes "never
+    // create a dangling link" structural instead of something rollback has to undo.
+    const probe = probeLinkTarget(parentIdentity, destination, source, spec);
+    if (probe)
+        return probe;
+    try {
+        symlinkSync(source, destination, spec.type === 'directory' ? 'dir' : 'file');
+    }
+    catch (error) {
+        const code = error.code;
+        if (code === 'EEXIST') {
+            const settled = planResource(layout, spec);
+            if (settled.state === 'LINK_VALID_SAFE') {
+                return { applied: false, state: settled.state, result: 'converged' };
+            }
+            return {
+                applied: false,
+                state: settled.state,
+                result: 'refused',
+                reason: 'destination appeared during apply; nothing was overwritten',
+            };
+        }
+        if (code === 'EACCES' || code === 'EPERM') {
+            return {
+                applied: false,
+                state: 'PERMISSION_DENIED',
+                result: 'refused',
+                reason: 'permission denied creating the link',
+            };
+        }
+        return {
+            applied: false,
+            state: 'DEST_MISSING',
+            result: 'refused',
+            reason: 'link creation failed',
+        };
+    }
+    const createdIdentity = linkIdentity(destination);
+    const parentDirectory = destination.slice(0, destination.lastIndexOf(sep));
+    const settled = planResource(layout, spec);
+    if (!sameDirectoryIdentity(parentDirectory, parentIdentity) ||
+        settled.state !== 'LINK_VALID_SAFE') {
+        const removed = rollbackLink(destination, source, createdIdentity);
+        return {
+            applied: false,
+            state: settled.state,
+            result: 'refused',
+            reason: removed
+                ? 'the link did not settle valid and safe; it was removed'
+                : 'the link did not settle valid and safe and could not be removed — inspect it manually',
+        };
+    }
+    return {
+        applied: true,
+        state: 'LINK_VALID_SAFE',
+        result: action === 'repair' ? 'repaired' : 'linked',
+    };
+}
+function linkIdentity(path) {
+    try {
+        const stats = lstatSync(path, { bigint: true });
+        if (!stats.isSymbolicLink())
+            return null;
+        return { dev: String(stats.dev), ino: String(stats.ino) };
+    }
+    catch {
+        return null;
+    }
+}
+// Removes only the exact inode this call created, and returns proof of removal.
+function rollbackLink(destination, source, created) {
+    if (!created)
+        return false;
+    try {
+        const current = linkIdentity(destination);
+        if (!current || current.dev !== created.dev || current.ino !== created.ino)
+            return false;
+        if (readlinkSync(destination) !== source)
+            return false;
+        unlinkSync(destination);
+        lstatSync(destination);
+        return false;
+    }
+    catch (error) {
+        return error.code === 'ENOENT';
+    }
+}
