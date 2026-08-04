@@ -27621,7 +27621,75 @@ var init_maestro_dispatch = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/domain/ansi.js
+function stripAnsi(value) {
+  return value.replace(ANSI_RE, "");
+}
+var ANSI_RE;
+var init_ansi = __esm({
+  "packages/rn-dev-agent-core/dist/domain/ansi.js"() {
+    "use strict";
+    ANSI_RE = new RegExp(String.fromCharCode(27) + "\\[[0-9;]*m", "g");
+  }
+});
+
 // packages/rn-dev-agent-core/dist/domain/maestro-error-parser.js
+function blockReasons(lines, stepIndex) {
+  const reasons = [];
+  for (let i = stepIndex + 1; i < lines.length; i++) {
+    if (RUNNER_STEP_RE.test(lines[i]))
+      break;
+    if (REASON_LINE_RE.test(lines[i]))
+      reasons.push(lines[i]);
+  }
+  return reasons;
+}
+function idWaitStepAmongDuplicates(lines, terminalIndex, terminalReason2) {
+  for (let i = terminalIndex - 1; i >= 0; i--) {
+    const step = RUNNER_STEP_RE.exec(lines[i]);
+    if (!step)
+      continue;
+    if (step[1] !== "\u2717")
+      return null;
+    if (!blockReasons(lines, i).includes(terminalReason2))
+      return null;
+    const stepMatch = ID_WAIT_STEP_RE.exec(step[2]);
+    if (stepMatch)
+      return stepMatch;
+  }
+  return null;
+}
+function parseTerminalIdWait(output, suppliedFailedStep) {
+  const lines = stripAnsi(output).split("\n");
+  let terminalStep;
+  for (let index = 0; index < lines.length; index++) {
+    const match = RUNNER_STEP_RE.exec(lines[index]);
+    if (match)
+      terminalStep = { index, status: match[1], name: match[2] };
+  }
+  if (terminalStep?.status === "\u2713")
+    return null;
+  if (suppliedFailedStep && terminalStep && terminalStep.name !== suppliedFailedStep)
+    return null;
+  const failedStep = suppliedFailedStep ?? terminalStep?.name;
+  if (!failedStep || terminalStep && terminalStep.status !== "\u2717")
+    return null;
+  const reasonLine = lines.slice(terminalStep ? terminalStep.index + 1 : 0).filter((line) => REASON_LINE_RE.test(line)).at(-1);
+  if (!reasonLine)
+    return null;
+  const reasonMatch = ID_WAIT_REASON_RE.exec(reasonLine);
+  if (!reasonMatch)
+    return null;
+  const stepMatch = ID_WAIT_STEP_RE.exec(failedStep) ?? (terminalStep && SELECTOR_LESS_ID_WAIT_SUMMARY_RE.test(failedStep) ? idWaitStepAmongDuplicates(lines, terminalStep.index, reasonLine) : null);
+  if (!stepMatch || reasonMatch[2] !== stepMatch[2])
+    return null;
+  return {
+    kind: "SELECTOR_NOT_FOUND",
+    selectorKind: "id",
+    selector: stepMatch[2],
+    raw: output
+  };
+}
 function parseMaestroFailure(output, terminal) {
   const raw = typeof output === "string" ? output : "";
   if (terminal?.exitClass === "timed-out") {
@@ -27652,6 +27720,9 @@ function parseMaestroFailure(output, terminal) {
     return { kind: "UNKNOWN", raw: "" };
   }
   output = raw;
+  const terminalIdWait = parseTerminalIdWait(output, terminal?.failedStep);
+  if (terminalIdWait)
+    return terminalIdWait;
   const lines = output.split("\n");
   for (const { re, build } of PATTERNS) {
     for (let i = lines.length - 1; i >= 0; i--) {
@@ -27676,10 +27747,11 @@ function isAutoRepairable(failure) {
 function outputIndicatesFlowFailure(output) {
   return /^\s*(?:\[FAILED\]|(?:Test|Flow) FAILED\b|FAILED\s*$)/m.test(output);
 }
-var PATTERNS;
+var PATTERNS, RUNNER_STEP_RE, REASON_LINE_RE, ID_WAIT_STEP_RE, SELECTOR_LESS_ID_WAIT_SUMMARY_RE, ID_WAIT_REASON_RE;
 var init_maestro_error_parser = __esm({
   "packages/rn-dev-agent-core/dist/domain/maestro-error-parser.js"() {
     "use strict";
+    init_ansi();
     PATTERNS = [
       {
         re: /Element with id (['"])((?:(?!\1).)+)\1 (?:was )?not found/i,
@@ -27725,6 +27797,11 @@ var init_maestro_error_parser = __esm({
         build: (m, raw) => ({ kind: "ASSERTION_FAILED", selector: m[2], raw })
       }
     ];
+    RUNNER_STEP_RE = /^[ \t]+([✓✗])\s+(\S.*\S|\S)\s*\(([\d.]+)s\)\s*$/;
+    REASON_LINE_RE = /^[ \t]+╰─\s+/;
+    ID_WAIT_STEP_RE = /^extendedWaitUntil:\s+visible\s+id=(['"])((?:(?!\1).)+)\1$/i;
+    SELECTOR_LESS_ID_WAIT_SUMMARY_RE = /^extendedWaitUntil$/;
+    ID_WAIT_REASON_RE = /^[ \t]+╰─\s+Element (['"])#((?:(?!\1).)+)\1 not visible within\b/i;
   }
 });
 
@@ -28008,16 +28085,13 @@ var init_engine_pin = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/maestro-step-parser.js
-function stripAnsi(s) {
-  return s.replace(ANSI_RE, "");
-}
 function cap(s) {
   return s.length > MAX_FIELD ? s.slice(0, MAX_FIELD) + "\u2026" : s;
 }
 function combineRunnerOutput(stdout, stderr) {
   return (stdout + "\n" + stderr).replace(/^[\r\n]+/, "").trimEnd();
 }
-function parseSteps(output) {
+function parseExactSteps(output) {
   if (!output || typeof output !== "string")
     return [];
   const steps = [];
@@ -28035,13 +28109,19 @@ function parseSteps(output) {
       continue;
     steps.push({
       index: index++,
-      name: cap(name),
+      name,
       verb,
       status: m[1] === "\u2713" ? "pass" : "fail",
       durationMs: Math.round(seconds * 1e3)
     });
   }
   return steps.length > MAX_STEPS ? steps.slice(-MAX_STEPS) : steps;
+}
+function boundStep(step) {
+  return { ...step, name: cap(step.name) };
+}
+function parseSteps(output) {
+  return parseExactSteps(output).map(boundStep);
 }
 function findFailedStep(steps) {
   const last = steps.length ? steps[steps.length - 1] : null;
@@ -28050,19 +28130,25 @@ function findFailedStep(steps) {
 function lastObservedStep(steps) {
   return steps.length ? steps[steps.length - 1] : null;
 }
-function summarizeReason(output) {
-  const f = parseMaestroFailure(output);
+function summarizeExactReason(output, failedStep) {
+  const f = parseMaestroFailure(output, failedStep ? { failedStep } : void 0);
   if (f.kind === "UNKNOWN" || f.kind === "WDA_BOOTSTRAP_FAILED")
     return null;
   const selector = "selector" in f ? f.selector ?? null : null;
-  return { kind: f.kind, selector: selector === null ? null : cap(selector) };
+  return { kind: f.kind, selector };
 }
 function buildStepSummary(output, opts) {
-  const steps = parseSteps(output);
+  const exactSteps = parseExactSteps(output);
+  const exactFailedStep = opts.failed ? findFailedStep(exactSteps) : null;
+  const exactReason = opts.failed ? summarizeExactReason(output, exactFailedStep?.name) : null;
+  const steps = exactSteps.map(boundStep);
   return {
     steps,
-    failedStep: opts.failed ? findFailedStep(steps) : null,
-    reason: opts.failed ? summarizeReason(output) : null,
+    failedStep: exactFailedStep ? boundStep(exactFailedStep) : null,
+    reason: exactReason ? {
+      ...exactReason,
+      selector: exactReason.selector === null ? null : cap(exactReason.selector)
+    } : null,
     lastStep: lastObservedStep(steps)
   };
 }
@@ -28070,17 +28156,19 @@ function isWdaFailureLine(line) {
   return WDA_TOKEN_RE.test(line) && WDA_FAILURE_RE.test(line);
 }
 function buildTerminalEvidence(output, opts = {}) {
-  const summary = buildStepSummary(output, { failed: true });
+  const exactSteps = parseExactSteps(output);
+  const failedStep = findFailedStep(exactSteps);
+  const reason = summarizeExactReason(output, failedStep?.name);
   const bootstrapEvidence = stripAnsi(output).split("\n").filter((line) => isWdaFailureLine(line)).join("\n").slice(0, 500);
-  const exitClass = opts.timedOut ? "timed-out" : opts.spawnError ? "spawn-error" : summary.steps.length === 0 ? "before-first-step" : "step-failure";
+  const exitClass = opts.timedOut ? "timed-out" : opts.spawnError ? "spawn-error" : exactSteps.length === 0 ? "before-first-step" : "step-failure";
   return {
-    completedSteps: summary.steps.filter((step) => step.status === "pass").length,
-    ...summary.failedStep ? { failedStep: summary.failedStep.name } : {},
+    completedSteps: exactSteps.filter((step) => step.status === "pass").length,
+    ...failedStep ? { failedStep: failedStep.name } : {},
     exitClass,
     ...bootstrapEvidence ? { bootstrapEvidence } : {},
-    ...summary.reason ? {
-      failureKind: summary.reason.kind,
-      failureSelector: summary.reason.selector
+    ...reason ? {
+      failureKind: reason.kind,
+      failureSelector: reason.selector
     } : {}
   };
 }
@@ -28108,12 +28196,13 @@ function formatFailureHeadline(summary, cls, fallbackMsg) {
   }
   return `Maestro flow failed: ${fallbackMsg.slice(0, 500)}`;
 }
-var ANSI_RE, STEP_RE, MAX_FIELD, MAX_STEPS, WDA_TOKEN_RE, WDA_FAILURE_RE;
+var STEP_RE, MAX_FIELD, MAX_STEPS, WDA_TOKEN_RE, WDA_FAILURE_RE;
 var init_maestro_step_parser = __esm({
   "packages/rn-dev-agent-core/dist/domain/maestro-step-parser.js"() {
     "use strict";
     init_maestro_error_parser();
-    ANSI_RE = new RegExp(String.fromCharCode(27) + "\\[[0-9;]*m", "g");
+    init_ansi();
+    init_ansi();
     STEP_RE = /^[ \t]+([✓✗])\s+(\S.*\S|\S)\s*\(([\d.]+)s\)\s*$/;
     MAX_FIELD = 200;
     MAX_STEPS = 1e3;
@@ -68597,9 +68686,17 @@ function normalizeSteps(body, params) {
     const key = keys[0];
     const v = raw[key];
     switch (key) {
-      case "launchApp":
+      case "launchApp": {
+        if (isObj(v)) {
+          const unsupported = Object.keys(v).filter((k) => k !== "stopApp");
+          if (unsupported.length > 0)
+            throw new UnsupportedStepError(`launchApp (unsupported keys: ${unsupported.sort().join(", ")})`);
+          if ("stopApp" in v && typeof v.stopApp !== "boolean")
+            throw new UnsupportedStepError("launchApp (stopApp must be a boolean)");
+        }
         out.push({ t: "launch", stopApp: isObj(v) && v.stopApp === true });
         break;
+      }
       case "tapOn": {
         const id = isObj(v) ? asString(v.id) : null;
         if (!id)
@@ -68649,12 +68746,48 @@ function firstTestId(steps) {
   }
   return null;
 }
-async function replayFlow(steps, dispatch) {
+var MAX_ANCHOR_DEPTH = 20;
+function countIdHits(node, params, selector, index, depth, nested, scan) {
+  if (depth > MAX_ANCHOR_DEPTH) {
+    scan.truncated = true;
+    return;
+  }
+  if (Array.isArray(node)) {
+    for (const child of node)
+      countIdHits(child, params, selector, index, depth + 1, nested, scan);
+    return;
+  }
+  if (!isObj(node))
+    return;
+  for (const [key, value] of Object.entries(node)) {
+    if (key === "id" && typeof value === "string" && interp(value, params) === selector) {
+      scan.hits.push({ index, nested });
+      continue;
+    }
+    countIdHits(value, params, selector, index, depth + 1, nested || key === "commands", scan);
+  }
+}
+function findResumeAnchor(body, params, selector) {
+  if (!selector)
+    return { found: false, reason: "no-match" };
+  const scan = { hits: [], truncated: false };
+  body.forEach((raw, index) => countIdHits(raw, params, selector, index, 0, false, scan));
+  if (scan.truncated)
+    return { found: false, reason: "too-deep" };
+  if (scan.hits.length === 0)
+    return { found: false, reason: "no-match" };
+  if (scan.hits.length > 1)
+    return { found: false, reason: "ambiguous" };
+  return scan.hits[0].nested ? { found: false, reason: "nested-match" } : { found: true, index: scan.hits[0].index };
+}
+async function replayFlow(steps, dispatch, opts = {}) {
+  const offset = opts.indexOffset ?? 0;
   const trace = [];
   let lastTapped = null;
+  const sourceIndex = (i) => opts.sourceIndex ?? i + offset;
   const fail3 = (i, reason) => ({
     passed: false,
-    failedStepIndex: i,
+    failedStepIndex: sourceIndex(i),
     reason,
     steps: trace
   });
@@ -68664,51 +68797,61 @@ async function replayFlow(steps, dispatch) {
       switch (s.t) {
         case "launch":
           await dispatch.launch(s.stopApp);
-          trace.push({ t: s.t, ok: true });
+          trace.push({ sourceIndex: sourceIndex(i), t: s.t, ok: true });
           break;
         case "tap":
           await dispatch.press(s.id);
           lastTapped = s.id;
-          trace.push({ t: s.t, target: s.id, ok: true });
+          trace.push({ sourceIndex: sourceIndex(i), t: s.t, target: s.id, ok: true });
           break;
         case "type": {
           if (!lastTapped)
             return fail3(i, "inputText before any tapOn \u2014 no focus target");
           await dispatch.type(lastTapped, s.text);
-          trace.push({ t: s.t, target: lastTapped, ok: true });
+          trace.push({ sourceIndex: sourceIndex(i), t: s.t, target: lastTapped, ok: true });
           break;
         }
         case "assert": {
           const ok = await dispatch.isVisible(s.id);
-          trace.push({ t: s.t, target: s.id, ok });
+          trace.push({ sourceIndex: sourceIndex(i), t: s.t, target: s.id, ok });
           if (!ok)
             return fail3(i, `assertVisible: "${s.id}" not present in CDP tree`);
           break;
         }
         case "wait":
           await dispatch.settle();
-          trace.push({ t: s.t, ok: true });
+          trace.push({ sourceIndex: sourceIndex(i), t: s.t, ok: true });
           break;
         case "runFlow": {
           if (await dispatch.isVisible(s.whenVisible)) {
-            const sub = await replayFlow(s.commands, dispatch);
+            const sub = await replayFlow(s.commands, dispatch, { sourceIndex: sourceIndex(i) });
             trace.push(...sub.steps);
             if (!sub.passed) {
               return {
                 passed: false,
-                failedStepIndex: i,
+                failedStepIndex: sourceIndex(i),
                 reason: sub.reason,
                 steps: trace
               };
             }
           } else {
-            trace.push({ t: s.t, target: s.whenVisible, ok: true });
+            trace.push({
+              sourceIndex: sourceIndex(i),
+              t: s.t,
+              target: s.whenVisible,
+              ok: true
+            });
           }
           break;
         }
       }
     } catch (e) {
-      trace.push({ t: s.t, target: "id" in s ? s.id : void 0, ok: false });
+      trace.push({
+        sourceIndex: sourceIndex(i),
+        t: s.t,
+        target: "id" in s ? s.id : void 0,
+        ok: false
+      });
       return fail3(i, e instanceof Error ? e.message : String(e));
     }
   }
@@ -68773,10 +68916,19 @@ function isDisabled(props) {
   const a11y = props.accessibilityState;
   return props.disabled === true || a11y?.disabled === true || props.pointerEvents === "none";
 }
-async function runCdpReplay(bodyYaml, params, deps) {
+async function runCdpReplay(bodyYaml, params, deps, opts = {}) {
   const parsed = (0, import_yaml4.parse)(bodyYaml);
-  const steps = normalizeSteps(parsed, params);
-  return replayFlow(steps, buildCdpDispatch(deps));
+  const resume = resolveResume(parsed, params, opts.resumeAtSelector);
+  const startIndex = resume.applied ? resume.startIndex : 0;
+  const steps = normalizeSteps(startIndex === 0 ? parsed : parsed.slice(startIndex), params);
+  const result = await replayFlow(steps, buildCdpDispatch(deps), { indexOffset: startIndex });
+  return { ...result, resume };
+}
+function resolveResume(parsed, params, selector) {
+  if (!selector || !Array.isArray(parsed))
+    return { applied: false, reason: "not-requested" };
+  const anchor = findResumeAnchor(parsed, params, selector);
+  return anchor.found ? { applied: true, selector, startIndex: anchor.index } : { applied: false, reason: anchor.reason };
 }
 function buildCdpDispatch(deps) {
   return {
@@ -68922,13 +69074,34 @@ function readMaestroDeviceAuthority(env) {
     return env.data.deviceAuthority;
   return env.meta?.deviceAuthority;
 }
+function terminalReason(terminal) {
+  if (!terminal?.failureKind)
+    return "";
+  return ` (${terminal.failureKind}${terminal.failureSelector ? `: ${terminal.failureSelector}` : ""})`;
+}
 function readMaestroFailureDetail(env, output) {
   if (typeof env.error === "string" && env.error.trim())
     return env.error.trim();
-  const failedStep = env.meta?.failedStep;
-  if (typeof failedStep?.name === "string")
-    return `Maestro flow failed at step "${failedStep.name}"`;
-  return output.trim().slice(0, 1e3) || "Maestro runner returned no failure detail";
+  const terminal = readMaestroTerminal(env);
+  const reason = terminalReason(terminal);
+  const metaStep = env.meta?.failedStep;
+  const dataStep = env.data?.failedStep;
+  const stepName = typeof metaStep?.name === "string" ? metaStep.name : typeof dataStep?.name === "string" ? dataStep.name : terminal?.failedStep;
+  if (stepName)
+    return `Maestro flow failed at step "${stepName}"${reason}`;
+  if (reason)
+    return `Maestro flow failed${reason.trim()}`;
+  return boundedOutput(output.trim(), 1e3) || "Maestro runner returned no failure detail";
+}
+var OUTPUT_BUDGET = 500;
+var OUTPUT_ELISION = "\n\u2026\n";
+function boundedOutput(output, budget = OUTPUT_BUDGET) {
+  const text = typeof output === "string" ? output : "";
+  if (text.length <= budget)
+    return text;
+  const room = budget - OUTPUT_ELISION.length;
+  const head = Math.ceil(room / 2);
+  return text.slice(0, head) + OUTPUT_ELISION + text.slice(text.length - (room - head));
 }
 function mapRefusedReason(repairCode, repairError) {
   if (repairCode === "SNAPSHOT_FAILED")
@@ -69165,7 +69338,7 @@ function createRunActionHandler(deps = {}) {
           writes: writeDisclosure(promotionDisclosure(persisted2), persisted2),
           durationMs: Date.now() - t0,
           flowFile: action.filePath,
-          firstAttemptOutput: firstOutput.slice(0, 500)
+          firstAttemptOutput: boundedOutput(firstOutput)
         });
       }
       const failure = parseMaestroFailure(firstOutput, readMaestroTerminal(firstEnv));
@@ -69215,8 +69388,17 @@ function createRunActionHandler(deps = {}) {
               reason: probeOutcome.sawTree ? "testid-not-in-tree" : "cdp-unreachable"
             };
           } else {
+            const maestroEvidence = {
+              failureKind: failure.kind,
+              ...failure.kind === "SELECTOR_NOT_FOUND" ? { failureSelector: failure.selector } : {},
+              underlyingFailure: firstFailureDetail,
+              terminal: readMaestroTerminal(firstEnv),
+              firstAttemptOutput: boundedOutput(firstOutput)
+            };
             try {
-              const replay = await runCdpReplay(action.body, args.params ?? {}, replayDeps);
+              const replay = await runCdpReplay(action.body, args.params ?? {}, replayDeps, {
+                resumeAtSelector: failure.kind === "SELECTOR_NOT_FOUND" ? failure.selector : null
+              });
               const status = replay.passed ? "pass" : "fail";
               const autoRepair2 = {
                 attempted: false,
@@ -69245,17 +69427,20 @@ function createRunActionHandler(deps = {}) {
                   autoRepair: autoRepair2,
                   writes: writeDisclosure(promotionDisclosure(persisted2), persisted2),
                   durationMs: Date.now() - t0,
-                  flowFile: action.filePath
+                  flowFile: action.filePath,
+                  resume: replay.resume
                 });
               }
               return failResult(`cdp_run_action: ${args.actionId} replayed via CDP/JS (WDA transport-blind) and failed at step ${replay.failedStepIndex}: ${replay.reason}`, "TRANSPORT_BLIND", {
                 actionId: args.actionId,
                 transport: "cdp-js",
-                failedStepIndex: replay.failedStepIndex
+                failedStepIndex: replay.failedStepIndex,
+                resume: replay.resume,
+                ...maestroEvidence
               });
             } catch (e) {
               if (e instanceof UnsupportedStepError) {
-                return failResult(`cdp_run_action: ${args.actionId} cannot replay via CDP/JS \u2014 ${e.message}. This action uses a step type the iOS 26.x fallback doesn't support; run on iOS 18 (WDA works there).`, "UNSUPPORTED_STEP", { actionId: args.actionId, stepKey: e.stepKey });
+                return failResult(`cdp_run_action: ${args.actionId} cannot replay via CDP/JS \u2014 ${e.message}. This action uses a step type the iOS 26.x fallback doesn't support; run on iOS 18 (WDA works there).`, "UNSUPPORTED_STEP", { actionId: args.actionId, stepKey: e.stepKey, ...maestroEvidence });
               }
               throw e;
             }
@@ -69287,9 +69472,12 @@ function createRunActionHandler(deps = {}) {
         const meta = {
           actionId: args.actionId,
           failureKind: failure.kind,
+          // GH #580: the selector belongs in the envelope structurally, not only
+          // inside the human headline the caller would have to re-parse.
+          ..."selector" in failure && failure.selector ? { failureSelector: failure.selector } : {},
           underlyingFailure: firstFailureDetail,
           autoRepair: autoRepair2,
-          firstAttemptOutput: firstOutput.slice(0, 500),
+          firstAttemptOutput: boundedOutput(firstOutput),
           terminal: readMaestroTerminal(firstEnv),
           runnerResume: firstEnv.meta?.runnerResume,
           ...cdpJsFallback ? { cdpJsFallback } : {}
@@ -69326,15 +69514,21 @@ function createRunActionHandler(deps = {}) {
           durationMs: Date.now() - t0,
           status: "fail",
           failureCode: "SELECTOR_NOT_FOUND",
-          failureDetail: firstOutput.slice(0, 500),
+          // GH #580: the structured detail carries kind + selector; the bounded
+          // stdout slice can lose the failing line to later runner narration.
+          failureDetail: firstFailureDetail.slice(0, 1e3),
           trigger,
           autoRepair: autoRepair2
         });
-        return failResult(`cdp_run_action: ${args.actionId} failed with SELECTOR_NOT_FOUND; auto-repair refused (${refusedReason}): ${repairEnv.error ?? "unknown"}`, refusedReason === "TRANSPORT_BLIND" ? "TRANSPORT_BLIND" : "TESTID_NOT_FOUND", {
+        return failResult(`cdp_run_action: ${args.actionId} failed with SELECTOR_NOT_FOUND (${failure.selector}); auto-repair refused (${refusedReason}): ${repairEnv.error ?? "unknown"}`, refusedReason === "TRANSPORT_BLIND" ? "TRANSPORT_BLIND" : "TESTID_NOT_FOUND", {
           actionId: args.actionId,
+          failureKind: failure.kind,
+          failureSelector: failure.selector,
+          underlyingFailure: firstFailureDetail,
+          terminal: readMaestroTerminal(firstEnv),
           autoRepair: autoRepair2,
           repairError: repairEnv.error,
-          firstAttemptOutput: firstOutput.slice(0, 500)
+          firstAttemptOutput: boundedOutput(firstOutput)
         });
       }
       const repairData = repairEnv.data;
@@ -69375,6 +69569,9 @@ function createRunActionHandler(deps = {}) {
       const retryPassed = retryEnv.ok === true && retryEnv.data?.passed === true;
       const retryOutput = readMaestroOutput(retryEnv);
       const retryFailureDetail = readMaestroFailureDetail(retryEnv, retryOutput);
+      const retryTerminal = readMaestroTerminal(retryEnv);
+      const retryFailure = !retryPassed ? parseMaestroFailure(retryOutput, retryTerminal) : void 0;
+      const retryClassification = retryFailure ? classifyFailure(retryFailure) : void 0;
       const retryDeviceAuthority = readMaestroDeviceAuthority(retryEnv);
       probeDeviceId = retryDeviceAuthority?.reportedDeviceId ?? observedDeviceId;
       if (retryEnv.code === "DEVICE_AUTHORITY_MISMATCH") {
@@ -69397,14 +69594,8 @@ function createRunActionHandler(deps = {}) {
       const repairScore = repairEnv.data?.score;
       const repairTimestamp = reloadedAction.state.repairHistory.length > 0 ? reloadedAction.state.repairHistory[reloadedAction.state.repairHistory.length - 1].timestamp : void 0;
       let nextFailedSelector;
-      if (!retryPassed) {
-        try {
-          const retryFailure = parseMaestroFailure(retryOutput, readMaestroTerminal(retryEnv));
-          if (retryFailure.kind === "SELECTOR_NOT_FOUND" && retryFailure.selector && retryFailure.selector !== repairData.newSelector) {
-            nextFailedSelector = retryFailure.selector;
-          }
-        } catch {
-        }
+      if (retryFailure?.kind === "SELECTOR_NOT_FOUND" && retryFailure.selector && retryFailure.selector !== repairData.newSelector) {
+        nextFailedSelector = retryFailure.selector;
       }
       const autoRepair = {
         attempted: true,
@@ -69424,7 +69615,7 @@ function createRunActionHandler(deps = {}) {
         timestamp: (/* @__PURE__ */ new Date()).toISOString(),
         durationMs: Date.now() - t0,
         status: retryPassed ? "pass" : "fail",
-        failureCode: retryPassed ? void 0 : "SELECTOR_NOT_FOUND",
+        failureCode: retryClassification?.actionCode,
         failureDetail: retryPassed ? void 0 : retryFailureDetail.slice(0, 1e3),
         trigger,
         autoRepair
@@ -69440,17 +69631,22 @@ function createRunActionHandler(deps = {}) {
           durationMs: Date.now() - t0,
           flowFile: reloadedAction.filePath,
           retriedAfterRepair: true,
-          retryOutput: retryOutput.slice(0, 500)
+          retryOutput: boundedOutput(retryOutput)
         });
       }
-      return failResult(`cdp_run_action: ${args.actionId} still failing after auto-repair (${repairData.oldSelector} \u2192 ${repairData.newSelector}): ${retryFailureDetail}`, "TESTID_NOT_FOUND", {
+      const retryMessage = `cdp_run_action: ${args.actionId} still failing after auto-repair (${repairData.oldSelector} \u2192 ${repairData.newSelector}): ${retryFailureDetail}`;
+      const retryMeta = {
         actionId: args.actionId,
         autoRepair,
         writes: writeDisclosure("auto-repair", persisted),
-        firstAttemptOutput: firstOutput.slice(0, 500),
-        retryOutput: retryOutput.slice(0, 500),
-        underlyingFailure: retryFailureDetail
-      });
+        firstAttemptOutput: boundedOutput(firstOutput),
+        retryOutput: boundedOutput(retryOutput),
+        underlyingFailure: retryFailureDetail,
+        ...retryFailure ? { failureKind: retryFailure.kind } : {},
+        ...retryFailure && "selector" in retryFailure && retryFailure.selector ? { failureSelector: retryFailure.selector } : {},
+        terminal: retryTerminal
+      };
+      return retryClassification?.toolCode ? failResult(retryMessage, retryClassification.toolCode, retryMeta) : failResult(retryMessage, retryMeta);
     } catch (err) {
       if (err instanceof SessionAuthorityError)
         throw err;

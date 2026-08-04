@@ -4,6 +4,9 @@
 // parser (tap-latency.ts derives parseTapLatencies from parseSteps).
 
 import { parseMaestroFailure } from './maestro-error-parser.js';
+import { stripAnsi } from './ansi.js';
+
+export { stripAnsi } from './ansi.js';
 
 export interface MaestroStep {
   index: number;
@@ -11,15 +14,6 @@ export interface MaestroStep {
   verb: string;
   status: 'pass' | 'fail';
   durationMs: number;
-}
-
-// Strip ANSI SGR/color escape sequences. execFile output is usually un-colored
-// (child stdout is a pipe, not a TTY) but maestro-runner is not guaranteed to
-// honor that, and a glyph-anchored match breaks on a colored `✓`. Built via
-// fromCharCode(27) (ESC) to keep a raw control char out of the source/regex.
-const ANSI_RE = new RegExp(String.fromCharCode(27) + '\\[[0-9;]*m', 'g');
-export function stripAnsi(s: string): string {
-  return s.replace(ANSI_RE, '');
 }
 
 // `<indent>{✓|✗} <name> (N.Ns)` — the leading `[ \t]+` anchors on the runner's
@@ -62,7 +56,7 @@ export function combineRunnerOutput(stdout: string, stderr: string): string {
   return (stdout + '\n' + stderr).replace(/^[\r\n]+/, '').trimEnd();
 }
 
-export function parseSteps(output: string): MaestroStep[] {
+function parseExactSteps(output: string): MaestroStep[] {
   if (!output || typeof output !== 'string') return [];
   const steps: MaestroStep[] = [];
   let index = 0;
@@ -76,13 +70,21 @@ export function parseSteps(output: string): MaestroStep[] {
     if (!Number.isFinite(seconds)) continue;
     steps.push({
       index: index++,
-      name: cap(name),
+      name,
       verb,
       status: m[1] === '✓' ? 'pass' : 'fail',
       durationMs: Math.round(seconds * 1000),
     });
   }
   return steps.length > MAX_STEPS ? steps.slice(-MAX_STEPS) : steps;
+}
+
+function boundStep(step: MaestroStep): MaestroStep {
+  return { ...step, name: cap(step.name) };
+}
+
+export function parseSteps(output: string): MaestroStep[] {
+  return parseExactSteps(output).map(boundStep);
 }
 
 // The TERMINAL failed step: the last parsed step iff it failed. maestro-runner
@@ -106,11 +108,17 @@ export interface ReasonSummary {
 // Project parseMaestroFailure to {kind, selector}, DROPPING its `raw` field —
 // every MaestroFailure variant carries `raw` = the full unsliced output, which
 // must not be re-embedded into the result (it would defeat the output slice).
-export function summarizeReason(output: string): ReasonSummary | null {
-  const f = parseMaestroFailure(output);
+function summarizeExactReason(output: string, failedStep?: string): ReasonSummary | null {
+  const f = parseMaestroFailure(output, failedStep ? { failedStep } : undefined);
   if (f.kind === 'UNKNOWN' || f.kind === 'WDA_BOOTSTRAP_FAILED') return null;
   const selector = 'selector' in f ? (f.selector ?? null) : null;
-  return { kind: f.kind, selector: selector === null ? null : cap(selector) };
+  return { kind: f.kind, selector };
+}
+
+export function summarizeReason(output: string, failedStep?: string): ReasonSummary | null {
+  const reason = summarizeExactReason(output, failedStep);
+  if (!reason) return null;
+  return { ...reason, selector: reason.selector === null ? null : cap(reason.selector) };
 }
 
 export interface StepSummary {
@@ -124,11 +132,19 @@ export interface StepSummary {
 // (opts.failed). maestro-runner logs transient retries; a fail-then-retry-✓ on
 // a PASSED run must not report a failedStep (mirrors parseMaestroFailure GH#118).
 export function buildStepSummary(output: string, opts: { failed: boolean }): StepSummary {
-  const steps = parseSteps(output);
+  const exactSteps = parseExactSteps(output);
+  const exactFailedStep = opts.failed ? findFailedStep(exactSteps) : null;
+  const exactReason = opts.failed ? summarizeExactReason(output, exactFailedStep?.name) : null;
+  const steps = exactSteps.map(boundStep);
   return {
     steps,
-    failedStep: opts.failed ? findFailedStep(steps) : null,
-    reason: opts.failed ? summarizeReason(output) : null,
+    failedStep: exactFailedStep ? boundStep(exactFailedStep) : null,
+    reason: exactReason
+      ? {
+          ...exactReason,
+          selector: exactReason.selector === null ? null : cap(exactReason.selector),
+        }
+      : null,
     lastStep: lastObservedStep(steps),
   };
 }
@@ -166,7 +182,9 @@ export function buildTerminalEvidence(
   output: string,
   opts: { timedOut?: boolean; spawnError?: boolean } = {},
 ): MaestroTerminalEvidence {
-  const summary = buildStepSummary(output, { failed: true });
+  const exactSteps = parseExactSteps(output);
+  const failedStep = findFailedStep(exactSteps);
+  const reason = summarizeExactReason(output, failedStep?.name);
   const bootstrapEvidence = stripAnsi(output)
     .split('\n')
     .filter((line) => isWdaFailureLine(line))
@@ -176,18 +194,18 @@ export function buildTerminalEvidence(
     ? 'timed-out'
     : opts.spawnError
       ? 'spawn-error'
-      : summary.steps.length === 0
+      : exactSteps.length === 0
         ? 'before-first-step'
         : 'step-failure';
   return {
-    completedSteps: summary.steps.filter((step) => step.status === 'pass').length,
-    ...(summary.failedStep ? { failedStep: summary.failedStep.name } : {}),
+    completedSteps: exactSteps.filter((step) => step.status === 'pass').length,
+    ...(failedStep ? { failedStep: failedStep.name } : {}),
     exitClass,
     ...(bootstrapEvidence ? { bootstrapEvidence } : {}),
-    ...(summary.reason
+    ...(reason
       ? {
-          failureKind: summary.reason.kind,
-          failureSelector: summary.reason.selector,
+          failureKind: reason.kind,
+          failureSelector: reason.selector,
         }
       : {}),
   };

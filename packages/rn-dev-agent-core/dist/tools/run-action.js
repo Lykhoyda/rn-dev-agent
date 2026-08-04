@@ -118,19 +118,50 @@ function readMaestroDeviceAuthority(env) {
         return env.data.deviceAuthority;
     return env.meta?.deviceAuthority;
 }
+function terminalReason(terminal) {
+    if (!terminal?.failureKind)
+        return '';
+    return ` (${terminal.failureKind}${terminal.failureSelector ? `: ${terminal.failureSelector}` : ''})`;
+}
 /**
  * maestro_run builds its headline from the full runner stream before slicing
  * data.output/meta.output. Keep that headline as the authoritative failure
  * detail so cdp_run_action never reduces a useful terminal step to UNKNOWN just
  * because the report preamble consumed the bounded output field.
+ *
+ * GH #580: the WARN path (runner exit 0 with failures) carries no `env.error` and
+ * puts its step summary in `data`, not `meta`, so it degraded to a bare slice.
  */
 function readMaestroFailureDetail(env, output) {
     if (typeof env.error === 'string' && env.error.trim())
         return env.error.trim();
-    const failedStep = env.meta?.failedStep;
-    if (typeof failedStep?.name === 'string')
-        return `Maestro flow failed at step "${failedStep.name}"`;
-    return output.trim().slice(0, 1000) || 'Maestro runner returned no failure detail';
+    const terminal = readMaestroTerminal(env);
+    const reason = terminalReason(terminal);
+    const metaStep = env.meta?.failedStep;
+    const dataStep = env.data?.failedStep;
+    const stepName = typeof metaStep?.name === 'string'
+        ? metaStep.name
+        : typeof dataStep?.name === 'string'
+            ? dataStep.name
+            : terminal?.failedStep;
+    if (stepName)
+        return `Maestro flow failed at step "${stepName}"${reason}`;
+    if (reason)
+        return `Maestro flow failed${reason.trim()}`;
+    return boundedOutput(output.trim(), 1000) || 'Maestro runner returned no failure detail';
+}
+// GH #580 defect 3: the terminal failure sits at the TAIL of runner stdout while
+// the head carries the WDA preamble, so a head-only slice showed only the preamble.
+// Over-budget input always returns exactly `budget` characters.
+const OUTPUT_BUDGET = 500;
+const OUTPUT_ELISION = '\n…\n';
+export function boundedOutput(output, budget = OUTPUT_BUDGET) {
+    const text = typeof output === 'string' ? output : '';
+    if (text.length <= budget)
+        return text;
+    const room = budget - OUTPUT_ELISION.length;
+    const head = Math.ceil(room / 2);
+    return text.slice(0, head) + OUTPUT_ELISION + text.slice(text.length - (room - head));
 }
 /**
  * Map repair-action's failResult code → an AutoRepairRefusedReason.
@@ -453,7 +484,7 @@ export function createRunActionHandler(deps = {}) {
                     writes: writeDisclosure(promotionDisclosure(persisted), persisted),
                     durationMs: Date.now() - t0,
                     flowFile: action.filePath,
-                    firstAttemptOutput: firstOutput.slice(0, 500),
+                    firstAttemptOutput: boundedOutput(firstOutput),
                 });
             }
             // ─── First attempt failed — classify ─────────────────────────────
@@ -528,8 +559,23 @@ export function createRunActionHandler(deps = {}) {
                         };
                     }
                     else {
+                        // GH #580: what Maestro actually reported, carried onto every fallback
+                        // failure return so the caller never has to re-derive it from stdout.
+                        const maestroEvidence = {
+                            failureKind: failure.kind,
+                            ...(failure.kind === 'SELECTOR_NOT_FOUND'
+                                ? { failureSelector: failure.selector }
+                                : {}),
+                            underlyingFailure: firstFailureDetail,
+                            terminal: readMaestroTerminal(firstEnv),
+                            firstAttemptOutput: boundedOutput(firstOutput),
+                        };
                         try {
-                            const replay = await runCdpReplay(action.body, args.params ?? {}, replayDeps);
+                            // GH #580: resume at the proven failed selector; UNKNOWN failed before
+                            // any step, so it keeps start-at-zero.
+                            const replay = await runCdpReplay(action.body, args.params ?? {}, replayDeps, {
+                                resumeAtSelector: failure.kind === 'SELECTOR_NOT_FOUND' ? failure.selector : null,
+                            });
                             const status = replay.passed ? 'pass' : 'fail';
                             const autoRepair = {
                                 attempted: false,
@@ -562,17 +608,20 @@ export function createRunActionHandler(deps = {}) {
                                     writes: writeDisclosure(promotionDisclosure(persisted), persisted),
                                     durationMs: Date.now() - t0,
                                     flowFile: action.filePath,
+                                    resume: replay.resume,
                                 });
                             }
                             return failResult(`cdp_run_action: ${args.actionId} replayed via CDP/JS (WDA transport-blind) and failed at step ${replay.failedStepIndex}: ${replay.reason}`, 'TRANSPORT_BLIND', {
                                 actionId: args.actionId,
                                 transport: 'cdp-js',
                                 failedStepIndex: replay.failedStepIndex,
+                                resume: replay.resume,
+                                ...maestroEvidence,
                             });
                         }
                         catch (e) {
                             if (e instanceof UnsupportedStepError) {
-                                return failResult(`cdp_run_action: ${args.actionId} cannot replay via CDP/JS — ${e.message}. This action uses a step type the iOS 26.x fallback doesn't support; run on iOS 18 (WDA works there).`, 'UNSUPPORTED_STEP', { actionId: args.actionId, stepKey: e.stepKey });
+                                return failResult(`cdp_run_action: ${args.actionId} cannot replay via CDP/JS — ${e.message}. This action uses a step type the iOS 26.x fallback doesn't support; run on iOS 18 (WDA works there).`, 'UNSUPPORTED_STEP', { actionId: args.actionId, stepKey: e.stepKey, ...maestroEvidence });
                             }
                             throw e;
                         }
@@ -610,9 +659,14 @@ export function createRunActionHandler(deps = {}) {
                 const meta = {
                     actionId: args.actionId,
                     failureKind: failure.kind,
+                    // GH #580: the selector belongs in the envelope structurally, not only
+                    // inside the human headline the caller would have to re-parse.
+                    ...('selector' in failure && failure.selector
+                        ? { failureSelector: failure.selector }
+                        : {}),
                     underlyingFailure: firstFailureDetail,
                     autoRepair,
-                    firstAttemptOutput: firstOutput.slice(0, 500),
+                    firstAttemptOutput: boundedOutput(firstOutput),
                     terminal: readMaestroTerminal(firstEnv),
                     runnerResume: firstEnv.meta?.runnerResume,
                     ...(cdpJsFallback ? { cdpJsFallback } : {}),
@@ -660,15 +714,21 @@ export function createRunActionHandler(deps = {}) {
                     durationMs: Date.now() - t0,
                     status: 'fail',
                     failureCode: 'SELECTOR_NOT_FOUND',
-                    failureDetail: firstOutput.slice(0, 500),
+                    // GH #580: the structured detail carries kind + selector; the bounded
+                    // stdout slice can lose the failing line to later runner narration.
+                    failureDetail: firstFailureDetail.slice(0, 1000),
                     trigger,
                     autoRepair,
                 });
-                return failResult(`cdp_run_action: ${args.actionId} failed with SELECTOR_NOT_FOUND; auto-repair refused (${refusedReason}): ${repairEnv.error ?? 'unknown'}`, refusedReason === 'TRANSPORT_BLIND' ? 'TRANSPORT_BLIND' : 'TESTID_NOT_FOUND', {
+                return failResult(`cdp_run_action: ${args.actionId} failed with SELECTOR_NOT_FOUND (${failure.selector}); auto-repair refused (${refusedReason}): ${repairEnv.error ?? 'unknown'}`, refusedReason === 'TRANSPORT_BLIND' ? 'TRANSPORT_BLIND' : 'TESTID_NOT_FOUND', {
                     actionId: args.actionId,
+                    failureKind: failure.kind,
+                    failureSelector: failure.selector,
+                    underlyingFailure: firstFailureDetail,
+                    terminal: readMaestroTerminal(firstEnv),
                     autoRepair,
                     repairError: repairEnv.error,
-                    firstAttemptOutput: firstOutput.slice(0, 500),
+                    firstAttemptOutput: boundedOutput(firstOutput),
                 });
             }
             // ─── Repair succeeded — replay once ──────────────────────────────
@@ -715,6 +775,11 @@ export function createRunActionHandler(deps = {}) {
             const retryPassed = retryEnv.ok === true && retryEnv.data?.passed === true;
             const retryOutput = readMaestroOutput(retryEnv);
             const retryFailureDetail = readMaestroFailureDetail(retryEnv, retryOutput);
+            const retryTerminal = readMaestroTerminal(retryEnv);
+            const retryFailure = !retryPassed
+                ? parseMaestroFailure(retryOutput, retryTerminal)
+                : undefined;
+            const retryClassification = retryFailure ? classifyFailure(retryFailure) : undefined;
             const retryDeviceAuthority = readMaestroDeviceAuthority(retryEnv);
             probeDeviceId = retryDeviceAuthority?.reportedDeviceId ?? observedDeviceId;
             if (retryEnv.code === 'DEVICE_AUTHORITY_MISMATCH') {
@@ -750,18 +815,10 @@ export function createRunActionHandler(deps = {}) {
             // when retry failed; same-selector failures (= patch didn't work)
             // are implicit in the existing diff.
             let nextFailedSelector;
-            if (!retryPassed) {
-                try {
-                    const retryFailure = parseMaestroFailure(retryOutput, readMaestroTerminal(retryEnv));
-                    if (retryFailure.kind === 'SELECTOR_NOT_FOUND' &&
-                        retryFailure.selector &&
-                        retryFailure.selector !== repairData.newSelector) {
-                        nextFailedSelector = retryFailure.selector;
-                    }
-                }
-                catch {
-                    /* best-effort — don't fail the run because the parser hiccuped */
-                }
+            if (retryFailure?.kind === 'SELECTOR_NOT_FOUND' &&
+                retryFailure.selector &&
+                retryFailure.selector !== repairData.newSelector) {
+                nextFailedSelector = retryFailure.selector;
             }
             const autoRepair = {
                 attempted: true,
@@ -781,7 +838,7 @@ export function createRunActionHandler(deps = {}) {
                 timestamp: new Date().toISOString(),
                 durationMs: Date.now() - t0,
                 status: retryPassed ? 'pass' : 'fail',
-                failureCode: retryPassed ? undefined : 'SELECTOR_NOT_FOUND',
+                failureCode: retryClassification?.actionCode,
                 failureDetail: retryPassed ? undefined : retryFailureDetail.slice(0, 1000),
                 trigger,
                 autoRepair,
@@ -797,17 +854,26 @@ export function createRunActionHandler(deps = {}) {
                     durationMs: Date.now() - t0,
                     flowFile: reloadedAction.filePath,
                     retriedAfterRepair: true,
-                    retryOutput: retryOutput.slice(0, 500),
+                    retryOutput: boundedOutput(retryOutput),
                 });
             }
-            return failResult(`cdp_run_action: ${args.actionId} still failing after auto-repair (${repairData.oldSelector} → ${repairData.newSelector}): ${retryFailureDetail}`, 'TESTID_NOT_FOUND', {
+            const retryMessage = `cdp_run_action: ${args.actionId} still failing after auto-repair (${repairData.oldSelector} → ${repairData.newSelector}): ${retryFailureDetail}`;
+            const retryMeta = {
                 actionId: args.actionId,
                 autoRepair,
                 writes: writeDisclosure('auto-repair', persisted),
-                firstAttemptOutput: firstOutput.slice(0, 500),
-                retryOutput: retryOutput.slice(0, 500),
+                firstAttemptOutput: boundedOutput(firstOutput),
+                retryOutput: boundedOutput(retryOutput),
                 underlyingFailure: retryFailureDetail,
-            });
+                ...(retryFailure ? { failureKind: retryFailure.kind } : {}),
+                ...(retryFailure && 'selector' in retryFailure && retryFailure.selector
+                    ? { failureSelector: retryFailure.selector }
+                    : {}),
+                terminal: retryTerminal,
+            };
+            return retryClassification?.toolCode
+                ? failResult(retryMessage, retryClassification.toolCode, retryMeta)
+                : failResult(retryMessage, retryMeta);
         }
         catch (err) {
             if (err instanceof SessionAuthorityError)

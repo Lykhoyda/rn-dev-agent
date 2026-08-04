@@ -1,23 +1,4 @@
-// Issue #104 — pure parser for Maestro CLI / maestro-runner failure output.
-//
-// `maestro_run` returns the combined stdout+stderr in `data.output`. To
-// auto-repair, we need to classify the failure and extract the failed
-// selector. This module owns that classification — pure regex over the
-// raw output text, no I/O, fully unit-testable.
-//
-// Maestro emits failures in a few canonical shapes (verified against
-// Maestro 1.40+ output, maestro-runner 0.x, and maestro-runner 1.0.9):
-//
-//   - "Element with id 'X' not found"
-//   - "Element with text 'X' not found"
-//   - 'Assertion failed: "X" not visible'
-//   - "Timed out waiting for element 'X'"
-//   - "Element 'X' is not visible"  (assertion variant)
-//   - "Element not found: id='X'"   (maestro-runner 1.0.x shape — issue #105)
-//
-// The parser tries each known shape in order and returns the first
-// match. If none match, returns `{ kind: 'UNKNOWN', raw }` so the caller
-// can decide whether to surface it verbatim or escalate to the user.
+import { stripAnsi } from './ansi.js';
 // Order matters: more-specific patterns first.
 //
 // Matched-quote pattern `(['"])((?:(?!\1).)+)\1` captures a testID
@@ -77,30 +58,79 @@ const PATTERNS = [
         build: (m, raw) => ({ kind: 'ASSERTION_FAILED', selector: m[2], raw }),
     },
 ];
-/**
- * Parse the full Maestro stdout+stderr text and classify the failure.
- *
- * Two-axis selection — pattern-specificity dominates, line-position breaks
- * ties within a pattern:
- *
- *   1. Outer loop walks PATTERNS in order (most-specific first). The first
- *      pattern that hits ANY line wins, regardless of where that line sits.
- *      Preserves the existing invariant that the 1.0.9 `id=` shape outranks
- *      the catch-all `Element 'X' not found`.
- *
- *   2. Inner loop scans lines from END to START. Within a single pattern,
- *      the LAST matching line (the terminal failure) wins — earlier matches
- *      are typically transient retries that maestro-runner reports as
- *      `[INFO]` before the auto-retry succeeds. GH #118: PR #115's
- *      first-match-anywhere scan captured a transient retry selector and
- *      sent it to `cdp_repair_action`, wasting a 24h-budget slot.
- *
- * Falls back to a whole-buffer scan when no line matches a known pattern —
- * preserves prior-art behavior for single-line inputs and any pattern that
- * happens to span a line boundary (none today, but defensive).
- *
- * Returns `UNKNOWN` if no pattern matches at all.
- */
+const RUNNER_STEP_RE = /^[ \t]+([✓✗])\s+(\S.*\S|\S)\s*\(([\d.]+)s\)\s*$/;
+const REASON_LINE_RE = /^[ \t]+╰─\s+/;
+const ID_WAIT_STEP_RE = /^extendedWaitUntil:\s+visible\s+id=(['"])((?:(?!\1).)+)\1$/i;
+const SELECTOR_LESS_ID_WAIT_SUMMARY_RE = /^extendedWaitUntil$/;
+const ID_WAIT_REASON_RE = /^[ \t]+╰─\s+Element (['"])#((?:(?!\1).)+)\1 not visible within\b/i;
+// The reason lines belonging to one step block: everything up to the next step line.
+function blockReasons(lines, stepIndex) {
+    const reasons = [];
+    for (let i = stepIndex + 1; i < lines.length; i++) {
+        if (RUNNER_STEP_RE.test(lines[i]))
+            break;
+        if (REASON_LINE_RE.test(lines[i]))
+            reasons.push(lines[i]);
+    }
+    return reasons;
+}
+// GH #580: maestro-runner 1.1.20 can render ONE failure as two blocks — a detailed
+// step naming the id, then a selector-less summary repeating the identical reason.
+// Requiring a byte-identical reason is what makes borrowing that id safe.
+function idWaitStepAmongDuplicates(lines, terminalIndex, terminalReason) {
+    for (let i = terminalIndex - 1; i >= 0; i--) {
+        const step = RUNNER_STEP_RE.exec(lines[i]);
+        if (!step)
+            continue;
+        // A passing step, or a failure whose own reason differs, ends the duplicate
+        // chain: only a block repeating this exact reason is the same failure.
+        if (step[1] !== '✗')
+            return null;
+        if (!blockReasons(lines, i).includes(terminalReason))
+            return null;
+        const stepMatch = ID_WAIT_STEP_RE.exec(step[2]);
+        if (stepMatch)
+            return stepMatch;
+    }
+    return null;
+}
+function parseTerminalIdWait(output, suppliedFailedStep) {
+    const lines = stripAnsi(output).split('\n');
+    let terminalStep;
+    for (let index = 0; index < lines.length; index++) {
+        const match = RUNNER_STEP_RE.exec(lines[index]);
+        if (match)
+            terminalStep = { index, status: match[1], name: match[2] };
+    }
+    if (terminalStep?.status === '✓')
+        return null;
+    if (suppliedFailedStep && terminalStep && terminalStep.name !== suppliedFailedStep)
+        return null;
+    const failedStep = suppliedFailedStep ?? terminalStep?.name;
+    if (!failedStep || (terminalStep && terminalStep.status !== '✗'))
+        return null;
+    const reasonLine = lines
+        .slice(terminalStep ? terminalStep.index + 1 : 0)
+        .filter((line) => REASON_LINE_RE.test(line))
+        .at(-1);
+    if (!reasonLine)
+        return null;
+    const reasonMatch = ID_WAIT_REASON_RE.exec(reasonLine);
+    if (!reasonMatch)
+        return null;
+    const stepMatch = ID_WAIT_STEP_RE.exec(failedStep) ??
+        (terminalStep && SELECTOR_LESS_ID_WAIT_SUMMARY_RE.test(failedStep)
+            ? idWaitStepAmongDuplicates(lines, terminalStep.index, reasonLine)
+            : null);
+    if (!stepMatch || reasonMatch[2] !== stepMatch[2])
+        return null;
+    return {
+        kind: 'SELECTOR_NOT_FOUND',
+        selectorKind: 'id',
+        selector: stepMatch[2],
+        raw: output,
+    };
+}
 export function parseMaestroFailure(output, terminal) {
     const raw = typeof output === 'string' ? output : '';
     if (terminal?.exitClass === 'timed-out') {
@@ -133,6 +163,9 @@ export function parseMaestroFailure(output, terminal) {
         return { kind: 'UNKNOWN', raw: '' };
     }
     output = raw;
+    const terminalIdWait = parseTerminalIdWait(output, terminal?.failedStep);
+    if (terminalIdWait)
+        return terminalIdWait;
     const lines = output.split('\n');
     for (const { re, build } of PATTERNS) {
         for (let i = lines.length - 1; i >= 0; i--) {
