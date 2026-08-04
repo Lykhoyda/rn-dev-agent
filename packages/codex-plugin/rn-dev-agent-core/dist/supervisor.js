@@ -10877,6 +10877,9 @@ var init_protocol = __esm({
     REQUIRED_IOS_COMMANDS = [
       "tap",
       "type",
+      // GH #581: exact post-settle fill verification. Gating on this command
+      // rejects/rebuilds pre-#581 artifacts whose `type` still blind-types.
+      "verifyInput",
       "drag",
       "longPress",
       "pinch",
@@ -10890,6 +10893,8 @@ var init_protocol = __esm({
     REQUIRED_ANDROID_COMMANDS = [
       "tap",
       "type",
+      // GH #581: same exact-verification gate as iOS.
+      "verifyInput",
       "drag",
       "longPress",
       "pinch",
@@ -12201,18 +12206,17 @@ async function containTypeTimeout(args, authorityBefore = captureFastRunnerComma
       pidPreserved: "unverified",
       activateLaunchedApp: "unverified",
       semantics: "runner host is lazily relaunched; target activation semantics are unchanged"
-    },
-    ...verification.actual !== void 0 ? { actual: verification.actual } : {}
+    }
+    // GH #581: never carry the actual field value — the verdict alone ships.
   };
   if (verification.matches) {
     return okResult({
       typed: true,
-      text: args.text,
       recovered: true,
       verification: "exact-readback"
     }, { meta: { runnerTimeoutRecovery } });
   }
-  return failResult(trigger === "main-thread-timeout" ? "RUNNER_TIMEOUT: rn-fast-runner main-thread execution timed out and independent exact CDP readback did not prove the requested value. The poisoned runner was contained before any further mutation." : "RUNNER_TIMEOUT: rn-fast-runner authority was lost after a success-shaped type response, and independent exact CDP readback did not prove the requested value. The triggering runner was contained without signaling any replacement.", "RUNNER_TIMEOUT", { runnerTimeoutRecovery });
+  return failResult(trigger === "main-thread-timeout" ? "RUNNER_TIMEOUT: rn-fast-runner main-thread execution timed out and independent exact CDP readback did not prove the requested value. The poisoned runner was contained before any further mutation." : "RUNNER_TIMEOUT: rn-fast-runner authority was lost after a success-shaped type response, and independent exact CDP readback did not prove the requested value. The triggering runner was contained without signaling any replacement.", "RUNNER_TIMEOUT", { mutation: "possible", runnerTimeoutRecovery });
 }
 async function containRunnerTimeout(command, message, authorityBefore = captureFastRunnerCommandAuthority()) {
   runnerPoisoned = true;
@@ -12339,6 +12343,7 @@ async function runIOS(args) {
       cachedMetadata: getCachedMetadata(args._staleRef),
       reResolution: "self-heal-disabled",
       candidates: [],
+      mutation: "none",
       hint: "Call device_snapshot action=snapshot to refresh refs, then retry the action with the new ref."
     });
   }
@@ -12387,6 +12392,12 @@ async function runIOS(args) {
     body.snapshotIdentifier = args.snapshotIdentifier;
   if (args.keyboardStateAtSnapshot !== void 0)
     body.keyboardStateAtSnapshot = args.keyboardStateAtSnapshot;
+  if (args.focusX !== void 0)
+    body.focusX = args.focusX;
+  if (args.focusY !== void 0)
+    body.focusY = args.focusY;
+  if (args.focusWaitMs !== void 0)
+    body.focusWaitMs = args.focusWaitMs;
   const mapRunnerDispatchError = (err) => {
     const m = err instanceof Error ? err.message : String(err);
     if (m.startsWith("RUNNER_PROTOCOL_MISMATCH")) {
@@ -12606,7 +12617,7 @@ var init_rn_fast_runner_client = __esm({
     runnerTestFaultForwarded = false;
     fetchImpl = globalThis.fetch;
     httpTimeoutOverrideMs = null;
-    SLOW_RUNNER_COMMANDS = /* @__PURE__ */ new Set(["type", "snapshot", "screenshot"]);
+    SLOW_RUNNER_COMMANDS = /* @__PURE__ */ new Set(["type", "verifyInput", "snapshot", "screenshot"]);
     STATUS_PROBE_TIMEOUT_MS = 2e3;
     POST_SETTLE_HEALTH_ATTEMPTS = 2;
     POST_SETTLE_HEALTH_RETRY_MS = 250;
@@ -16136,19 +16147,24 @@ function buildRunIOSArgs(cliArgs, bundleId) {
       }
       return { command: "tap", x, y, ...bundleId ? { bundleId } : {} };
     }
+    case "verify-input": {
+      const text = cliArgs[2] ?? "";
+      return { command: "verifyInput", text, ...bundleId ? { bundleId } : {} };
+    }
     case "fill":
     case "type": {
-      const ref = positionals[0];
-      const text = positionals.slice(1).join(" ");
-      const delayRaw = optionValue(cliArgs, "--delay-ms");
+      const ref = cliArgs[1];
+      const text = cliArgs[2] ?? "";
+      const flagArgs = cliArgs.slice(3);
+      const delayRaw = optionValue(flagArgs, "--delay-ms");
       const delayMs = delayRaw !== void 0 && !Number.isNaN(Number(delayRaw)) ? Number(delayRaw) : void 0;
       const extra = {};
       if (delayMs !== void 0)
         extra.delayMs = delayMs;
-      if (cliArgs.includes("--clear-first"))
+      if (flagArgs.includes("--clear-first"))
         extra.clearFirst = true;
-      const atX = optionValue(cliArgs, "--at-x");
-      const atY = optionValue(cliArgs, "--at-y");
+      const atX = optionValue(flagArgs, "--at-x");
+      const atY = optionValue(flagArgs, "--at-y");
       if (atX !== void 0 && atY !== void 0) {
         const px = Number(atX), py = Number(atY);
         if (Number.isFinite(px) && Number.isFinite(py)) {
@@ -16181,6 +16197,9 @@ function buildRunIOSArgs(cliArgs, bundleId) {
           ...extra,
           ...bundleId ? { bundleId } : {}
         };
+      }
+      if (cliArgs.length === 2) {
+        return { command: "type", text: ref ?? "", ...bundleId ? { bundleId } : {} };
       }
       return { command: "type", text, ...extra, ...bundleId ? { bundleId } : {} };
     }
@@ -16257,6 +16276,57 @@ function buildRunIOSArgs(cliArgs, bundleId) {
       throw new Error(`buildRunIOSArgs: unsupported command "${cmd ?? "<empty>"}"`);
   }
 }
+function exactTargetRebindFailure(inputRef) {
+  return failResult(`Exact input ${inputRef} could not be rebound in the current snapshot generation \u2014 nothing was dispatched. Refresh the snapshot and rebind the input.`, "NO_TEXT_INPUT_TARGET", { mutation: "none" });
+}
+function decorateExactTargetIOS(ios, exact) {
+  const target = getFreshRefTarget(exact.inputRef, { allowUnknownKeyboardState: true });
+  if (!target)
+    return exactTargetRebindFailure(exact.inputRef);
+  delete ios._staleRef;
+  ios.x = Math.round(target.rect.x + target.rect.width / 2);
+  ios.y = Math.round(target.rect.y + target.rect.height / 2);
+  ios.targetBounds = target.rect;
+  ios.snapshotGeneration = target.snapshotGeneration;
+  ios.snapshotNodeIndex = target.snapshotNodeIndex;
+  ios.snapshotElementType = target.snapshotElementType;
+  if (target.snapshotLabel !== void 0)
+    ios.snapshotLabel = target.snapshotLabel;
+  if (target.snapshotIdentifier !== void 0)
+    ios.snapshotIdentifier = target.snapshotIdentifier;
+  if (target.keyboardStateAtSnapshot !== null) {
+    ios.keyboardStateAtSnapshot = target.keyboardStateAtSnapshot;
+  }
+  if (exact.focusX !== void 0)
+    ios.focusX = exact.focusX;
+  if (exact.focusY !== void 0)
+    ios.focusY = exact.focusY;
+  if (exact.focusWaitMs !== void 0)
+    ios.focusWaitMs = exact.focusWaitMs;
+  return null;
+}
+function decorateExactTargetAndroid(android, exact) {
+  const target = getFreshRefTarget(exact.inputRef, { allowUnknownKeyboardState: true });
+  if (!target)
+    return exactTargetRebindFailure(exact.inputRef);
+  delete android._staleRef;
+  android.x = Math.round(target.rect.x + target.rect.width / 2);
+  android.y = Math.round(target.rect.y + target.rect.height / 2);
+  android.targetBounds = target.rect;
+  android.snapshotElementType = target.snapshotElementType;
+  if (target.snapshotIdentifier !== void 0) {
+    android.snapshotIdentifier = target.snapshotIdentifier;
+  }
+  if (exact.focusX !== void 0)
+    android.focusX = exact.focusX;
+  if (exact.focusY !== void 0)
+    android.focusY = exact.focusY;
+  if (exact.focusWaitMs !== void 0)
+    android.focusWaitMs = exact.focusWaitMs;
+  if (exact.secure !== void 0)
+    android.secureInput = exact.secure;
+  return null;
+}
 function optionValue(cliArgs, flag) {
   const i = cliArgs.indexOf(flag);
   if (i === -1)
@@ -16298,6 +16368,10 @@ function buildRunAndroidArgs(cliArgs, bundleId) {
         throw new Error(`buildRunAndroidArgs: tap requires a @ref or numeric x, y`);
       }
       return { command: "tap", x, y, ...withBundle };
+    }
+    case "verify-input": {
+      const text = positionals.slice(1).join(" ");
+      return { command: "verifyInput", text, ...withBundle };
     }
     case "fill":
     case "type": {
@@ -16766,6 +16840,14 @@ async function runNative(cliArgs, opts = {}) {
     if (ios.command === "type" && opts.verifyTypeReadback) {
       ios._verifyExactReadback = opts.verifyTypeReadback;
     }
+    if ((ios.command === "type" || ios.command === "verifyInput") && opts.exactTarget) {
+      const decorated = decorateExactTargetIOS(ios, opts.exactTarget);
+      if (decorated)
+        return decorated;
+    }
+    if (ios.command === "verifyInput" && !opts.exactTarget) {
+      return failResult("verify-input requires an exact bound input (internal dispatch without exactTarget)", "NO_TEXT_INPUT_TARGET", { mutation: "none" });
+    }
     let healMeta = null;
     if (ios._staleRef) {
       const cachedTarget = getCachedMetadata(ios._staleRef);
@@ -16855,6 +16937,14 @@ async function runNative(cliArgs, opts = {}) {
     }
     const { runAndroid: runAndroid2, consumePendingAndroidUpgradeNote: consumePendingAndroidUpgradeNote2 } = await Promise.resolve().then(() => (init_rn_android_runner_client(), rn_android_runner_client_exports));
     const android = buildRunAndroidArgs(cliArgs, appId);
+    if ((android.command === "type" || android.command === "verifyInput") && opts.exactTarget) {
+      const decorated = decorateExactTargetAndroid(android, opts.exactTarget);
+      if (decorated)
+        return decorated;
+    }
+    if (android.command === "verifyInput" && !opts.exactTarget) {
+      return failResult("verify-input requires an exact bound input (internal dispatch without exactTarget)", "NO_TEXT_INPUT_TARGET", { mutation: "none" });
+    }
     let healMeta = null;
     if (android._staleRef && selfHealEnabled(process.env)) {
       const healed = await healStaleRef(android._staleRef, () => runAndroid2({
@@ -16924,6 +17014,7 @@ var init_agent_device_wrapper = __esm({
       "press",
       "fill",
       "type",
+      "verify-input",
       "back",
       "screenshot",
       "keyboard",
@@ -22587,20 +22678,38 @@ var init_device_session = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/fill-verify.js
-function classifyFillVerification(input) {
-  const { text, valueAfter, priorValueAfter } = input;
-  if (valueAfter === null)
-    return "unverifiable";
-  if (valueAfter === text)
-    return "verified-exact";
-  if (text.length === 0)
-    return "corrupted";
-  if (valueAfter.length > 0 && valueAfter.length >= HALF * text.length)
-    return "verified-transformed";
-  if (priorValueAfter !== void 0 && priorValueAfter !== null && valueAfter !== "" && valueAfter === priorValueAfter) {
-    return "verified-transformed";
+function classifyFiberVerification(input) {
+  if (input.valueAfter === null)
+    return "unreadable";
+  return input.valueAfter === input.text ? "exact" : "mismatch";
+}
+function combineVerificationOracles(fiber, native, nativeStable) {
+  const targetCompromised = native === "ambiguous" || native === "target-lost";
+  const fiberReadable = fiber === "exact" || fiber === "mismatch";
+  let verified = false;
+  let oracle = "none";
+  if (!targetCompromised) {
+    if (fiber === "exact" && native === "exact" && nativeStable) {
+      verified = true;
+      oracle = "fiber+native";
+    } else if (fiber === "exact" && native !== "mismatch") {
+      verified = true;
+      oracle = "fiber";
+    } else if (!fiberReadable && native === "exact" && nativeStable) {
+      verified = true;
+      oracle = "native";
+    }
   }
-  return "corrupted";
+  const anyExact = fiber === "exact" || native === "exact";
+  const observedMismatch = !verified && !targetCompromised && !anyExact && (fiber === "mismatch" || native === "mismatch" && nativeStable);
+  return {
+    verified,
+    oracle,
+    fiber,
+    native,
+    nativeStable,
+    observedMismatch
+  };
 }
 function resolveJsTestId(ref, opts = {}) {
   if (opts.explicitTestId && opts.explicitTestId.length > 0)
@@ -22614,11 +22723,10 @@ function resolveJsTestId(ref, opts = {}) {
     return null;
   return stripped;
 }
-function decideNativeRetype(outcome, attemptsSoFar, maxAttempts) {
-  if (outcome !== "corrupted")
-    return { action: "accept" };
-  if (attemptsSoFar >= maxAttempts)
+function decideNativeRetype(verification, attemptsSoFar, maxAttempts) {
+  if (!verification.observedMismatch || attemptsSoFar >= maxAttempts) {
     return { action: "escalate" };
+  }
   return { action: "retype", delayMs: RETYPE_DELAY_MS };
 }
 async function readInputValueOnce(deps, testID) {
@@ -22632,6 +22740,12 @@ async function readInputValueOnce(deps, testID) {
   } catch {
   }
   return null;
+}
+async function probeInputState(deps, testID) {
+  const read = await readInputValueOnce(deps, testID);
+  if (!read)
+    return { readable: false, controlled: false, value: null };
+  return { readable: true, controlled: read.controlled, value: read.value };
 }
 async function settleRead(deps, testID, text, valueBefore) {
   const sleep7 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
@@ -22656,52 +22770,87 @@ async function settleRead(deps, testID, text, valueBefore) {
     return { value: null, controlled: false };
   return { value, controlled };
 }
+async function finalFiberVerify(deps, testID, text) {
+  const sleep7 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  let previous = null;
+  let last = null;
+  for (let i = 0; i < FINAL_VERIFY_TRIES; i++) {
+    const read = await readInputValueOnce(deps, testID);
+    if (read) {
+      if (read.value === text && read.controlled) {
+        await sleep7(FIBER_CONFIRM_DELAY_MS);
+        const confirm = await readInputValueOnce(deps, testID);
+        if (confirm && confirm.value === text && confirm.controlled)
+          return "exact";
+        return "unreadable";
+      }
+      previous = last;
+      last = read;
+    } else {
+      previous = null;
+      last = null;
+    }
+    if (i < FINAL_VERIFY_TRIES - 1)
+      await sleep7(FINAL_VERIFY_DELAY_MS);
+  }
+  if (last !== null && previous !== null && last.value !== null && last.controlled && previous.controlled && last.value === previous.value) {
+    return "mismatch";
+  }
+  return "unreadable";
+}
 async function attemptJsFill(deps, testID, text) {
   let probe;
   try {
     const expr = "__RN_AGENT.interact(" + JSON.stringify({ action: "typeText", testID, text, verify: true }) + ")";
     const r = await deps.evaluate(expr);
-    if (r.error || typeof r.value !== "string")
-      return { handled: false };
+    if (r.error || typeof r.value !== "string") {
+      return { handled: false, dispatchUncertain: true };
+    }
     probe = JSON.parse(r.value);
   } catch {
-    return { handled: false };
+    return { handled: false, dispatchUncertain: true };
   }
   if (probe.error)
     return { handled: false };
   if (probe.controlled === void 0)
-    return { handled: false };
+    return { handled: false, dispatchUncertain: true };
   if (probe.handlerCalled === false || probe.handlerCalled === void 0)
     return { handled: false };
   const valueBefore = typeof probe.valueBefore === "string" ? probe.valueBefore : null;
   const settled = await settleRead(deps, testID, text, valueBefore);
+  let outcome = settled.controlled ? classifyFiberVerification({ text, valueAfter: settled.value }) : "unreadable";
+  if (outcome === "mismatch") {
+    const sleep7 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+    await sleep7(FIBER_CONFIRM_DELAY_MS);
+    const confirm = await readInputValueOnce(deps, testID);
+    if (confirm && confirm.value === text && confirm.controlled) {
+      outcome = "exact";
+    } else if (!confirm || !confirm.controlled || confirm.value === null || confirm.value !== settled.value) {
+      outcome = "unreadable";
+    }
+  }
   return {
     handled: true,
-    outcome: classifyFillVerification({
-      text,
-      valueAfter: settled.value,
-      controlled: settled.controlled
-    }),
-    valueAfter: settled.value,
+    outcome,
     controlled: settled.controlled,
     handler: typeof probe.handlerCalled === "string" ? probe.handlerCalled : void 0
   };
 }
-var HALF, SNAPSHOT_REF_TOKEN, RETYPE_DELAY_MS, READ_SETTLE_TRIES, READ_SETTLE_DELAY_MS;
+var SNAPSHOT_REF_TOKEN, RETYPE_DELAY_MS, READ_SETTLE_TRIES, READ_SETTLE_DELAY_MS, FIBER_CONFIRM_DELAY_MS, FINAL_VERIFY_TRIES, FINAL_VERIFY_DELAY_MS;
 var init_fill_verify = __esm({
   "packages/rn-dev-agent-core/dist/tools/fill-verify.js"() {
     "use strict";
-    HALF = 0.5;
     SNAPSHOT_REF_TOKEN = /^e\d+$/;
     RETYPE_DELAY_MS = 40;
     READ_SETTLE_TRIES = 5;
     READ_SETTLE_DELAY_MS = 80;
+    FIBER_CONFIRM_DELAY_MS = 150;
+    FINAL_VERIFY_TRIES = 6;
+    FINAL_VERIFY_DELAY_MS = 100;
   }
 });
 
 // packages/rn-dev-agent-core/dist/tools/device-interact.js
-import { execFile as execFileCb10 } from "node:child_process";
-import { promisify as promisify12 } from "node:util";
 function candidateFromNode(n) {
   return {
     ref: n.ref,
@@ -22935,18 +23084,97 @@ function createDeviceFindHandler(getClient2) {
     });
   });
 }
-function findInputForPressable(nodes, pressableRef) {
-  if (!nodes)
-    return null;
-  const cleanRef = pressableRef.replace(/^@/, "");
-  const pressableNode = nodes.find((n) => n.ref === cleanRef);
-  if (!pressableNode?.identifier?.endsWith(PRESSABLE_SUFFIX))
-    return null;
-  const baseId = pressableNode.identifier.slice(0, -PRESSABLE_SUFFIX.length);
-  if (!baseId)
-    return null;
-  const inputNode = nodes.find((n) => n.identifier === baseId && n.type !== void 0 && TEXT_INPUT_TYPES.has(n.type));
-  return inputNode ? `@${inputNode.ref}` : null;
+function isRecognizedInputType(type) {
+  if (!type)
+    return false;
+  return IOS_INPUT_TYPES.has(type) || ANDROID_INPUT_TYPE_RE.test(type);
+}
+function isSecureInputNode(node) {
+  return node.type === "SecureTextField" || node.secure === true;
+}
+function cleanNodeRef(node) {
+  return node.ref.startsWith("@") ? node.ref.slice(1) : node.ref;
+}
+function bindExactFillTarget(nodes, rawRef, priorSignature) {
+  const clean = rawRef.replace(/^@/, "");
+  const positional = rawRef.startsWith("@") && /^e\d+$/.test(clean);
+  let node;
+  if (positional) {
+    node = nodes.find((n) => cleanNodeRef(n) === clean);
+    if (!node) {
+      return { ok: false, detail: `ref @${clean} is not in the current snapshot generation` };
+    }
+    if (priorSignature) {
+      const matchesPrior = node.type === priorSignature.type && node.label === priorSignature.label && node.identifier === priorSignature.identifier;
+      if (!matchesPrior) {
+        const matches = nodes.filter((n) => (n.type ?? "") === priorSignature.type && n.label === priorSignature.label && n.identifier === priorSignature.identifier);
+        if (matches.length !== 1) {
+          return {
+            ok: false,
+            detail: `ref @${clean} no longer denotes the element it was captured for and its identity ${matches.length > 1 ? "matches multiple elements" : "is absent"} in the current snapshot`
+          };
+        }
+        node = matches[0];
+      }
+    }
+  } else {
+    const matches = nodes.filter((n) => n.identifier === clean);
+    if (matches.length === 0) {
+      return { ok: false, detail: `no element with testID "${clean}" in the current snapshot` };
+    }
+    if (matches.length > 1) {
+      return {
+        ok: false,
+        detail: `testID "${clean}" matches ${matches.length} elements \u2014 duplicate identifiers cannot bind an exact input`
+      };
+    }
+    node = matches[0];
+  }
+  if (isRecognizedInputType(node.type)) {
+    return {
+      ok: true,
+      binding: {
+        inputRef: `@${cleanNodeRef(node)}`,
+        inputTestId: node.identifier ?? null,
+        focusRef: `@${cleanNodeRef(node)}`,
+        wrapper: false,
+        secure: isSecureInputNode(node)
+      }
+    };
+  }
+  const id = node.identifier;
+  if (id?.endsWith(PRESSABLE_SUFFIX)) {
+    const base = id.slice(0, -PRESSABLE_SUFFIX.length);
+    if (base) {
+      const inputs = nodes.filter((n) => n.identifier === base && isRecognizedInputType(n.type));
+      if (inputs.length === 1) {
+        return {
+          ok: true,
+          binding: {
+            inputRef: `@${cleanNodeRef(inputs[0])}`,
+            inputTestId: base,
+            focusRef: `@${cleanNodeRef(node)}`,
+            wrapper: true,
+            secure: isSecureInputNode(inputs[0])
+          }
+        };
+      }
+      if (inputs.length > 1) {
+        return {
+          ok: false,
+          detail: `wrapper "${id}" maps to ${inputs.length} inputs with testID "${base}" \u2014 ambiguous`
+        };
+      }
+      return {
+        ok: false,
+        detail: `wrapper "${id}" has no recognized input with testID "${base}" in the current snapshot`
+      };
+    }
+  }
+  return {
+    ok: false,
+    detail: `element @${cleanNodeRef(node)} (${node.type ?? "unknown type"}) is not a recognized text input \u2014 pass the inner input's ref or testID`
+  };
 }
 function settleOpts(args) {
   return args.settleTimeoutMs !== void 0 ? { settle: { timeoutMs: args.settleTimeoutMs } } : {};
@@ -23024,47 +23252,6 @@ function createDeviceLongPressHandler(getClient2) {
     return result;
   });
 }
-function splitChunkAroundPercentS(chunk) {
-  const parts = chunk.split("%s");
-  if (parts.length === 1)
-    return [chunk];
-  const segments = [];
-  for (let i = 0; i < parts.length; i++) {
-    if (i > 0) {
-      segments.push("%");
-      const rest = "s" + parts[i];
-      if (rest.length > 0)
-        segments.push(rest);
-    } else if (parts[i].length > 0) {
-      segments.push(parts[i]);
-    }
-  }
-  return segments;
-}
-function buildAdbInputTextArgv(chunk) {
-  const escaped = chunk.replace(/ /g, "%s").replace(/'/g, "'\\''");
-  return ["shell", "input", "text", `'${escaped}'`];
-}
-function isAdbInputTextSafe(text) {
-  return /^[\x20-\x7E]*$/.test(text);
-}
-async function androidClipboardFill(text) {
-  try {
-    const serial = getAdbSerial();
-    for (let i = 0; i < text.length; i += ANDROID_INPUT_CHUNK_SIZE) {
-      const chunk = text.slice(i, i + ANDROID_INPUT_CHUNK_SIZE);
-      const segments = splitChunkAroundPercentS(chunk);
-      for (const seg of segments) {
-        const argvTail = buildAdbInputTextArgv(seg);
-        await execFile11("adb", [...serial, ...argvTail], { timeout: 1e4 });
-      }
-    }
-    return okResult({ filled: true, method: "adb-chunked-input", length: text.length });
-  } catch (err) {
-    const msg3 = err instanceof Error ? err.message : String(err);
-    return failResult(`Android text input failed: ${msg3}`);
-  }
-}
 function isAndroidSession() {
   const session = getActiveSession();
   if (session?.platform === "android")
@@ -23072,25 +23259,6 @@ function isAndroidSession() {
   if (session?.platform)
     return false;
   return !!process.env.ANDROID_SERIAL;
-}
-function focusDelayAfterPreTap(preTapEnvelopeText, waitForKeyboardMs) {
-  if (waitForKeyboardMs !== void 0)
-    return waitForKeyboardMs;
-  if (preTapEnvelopeText) {
-    try {
-      const envelope = JSON.parse(preTapEnvelopeText);
-      if (envelope.meta?.settle !== void 0)
-        return 0;
-    } catch {
-    }
-  }
-  return FOCUS_DELAY_MS;
-}
-function isNoFocusedInputError(result) {
-  if (!result.isError)
-    return false;
-  const text = result.content?.[0]?.text ?? "";
-  return NO_FOCUSED_INPUT_RE.test(text);
 }
 function isSetTextRejectedError(result) {
   if (!result.isError)
@@ -23102,15 +23270,6 @@ function isSetTextRejectedError(result) {
   } catch {
     return false;
   }
-}
-function classifyFillPrimaryError(primary) {
-  if (!primary.isError)
-    return "return-primary";
-  if (isSetTextRejectedError(primary))
-    return "reject-ladder";
-  if (isNoFocusedInputError(primary))
-    return "refocus-ladder";
-  return "return-primary";
 }
 function extractTypingMeta(result) {
   try {
@@ -23151,54 +23310,81 @@ function cdpClientOrNull(getClient2) {
     return null;
   }
 }
-function jsVerifyMeta(outcome) {
-  return outcome === "verified-exact" ? "exact" : outcome === "verified-transformed" ? "transformed" : "unverifiable";
-}
 function resolveCachedIdentifier(ref) {
   const bareRef2 = ref.replace(/^@/, "");
   if (!isRefMapFresh() || lookupRef(bareRef2) === null)
     return void 0;
   return getCachedMetadata(bareRef2)?.identifier;
 }
-async function maestroFillFallback(ref, text, platform, clearFirst = false, authorityArgs) {
-  const escapedRef = yamlEscape(ref.replace(/^@/, ""));
-  const escapedText = yamlEscape(text);
-  const clearStep = clearFirst ? "\n- eraseText" : "";
-  const yaml2 = `- tapOn:
-    id: "${escapedRef}"${clearStep}
-- inputText: "${escapedText}"`;
-  const result = await runMaestroInline(yaml2, {
-    platform,
-    slug: "fill-fallback",
-    timeoutMs: 12e4,
-    authorityArgs
-  });
-  if (result.passed) {
-    return okResult({ filled: true, method: "maestro", length: text.length }, { meta: { fallbackUsed: "maestro" } });
+function extractMutationDisposition(result) {
+  try {
+    const envelope = JSON.parse(result.content[0]?.text ?? "{}");
+    const m = envelope.meta?.mutation;
+    if (m === "none" || m === "observed" || m === "possible")
+      return m;
+  } catch {
   }
-  const refusal = maestroRefusalResult(result, "Maestro fill fallback was refused.", {
-    tried: ["primary", "retap", platform === "android" ? "adb" : "maestro"]
+  return "possible";
+}
+function extractErrorText(result) {
+  try {
+    const envelope = JSON.parse(result.content[0]?.text ?? "{}");
+    return typeof envelope.error === "string" ? envelope.error : "unknown runner error";
+  } catch {
+    return "unknown runner error";
+  }
+}
+async function runNativeVerifyInput(binding, text) {
+  const result = await runNative(["verify-input", binding.inputRef, text], {
+    settle: { enabled: false },
+    exactTarget: { inputRef: binding.inputRef, secure: binding.secure }
   });
-  if (refusal)
-    return refusal;
-  return failResult(`device_fill fell through all fallbacks. Last error: ${result.error ?? result.output.slice(0, 200)}`, {
-    code: "FILL_FAILED",
-    tried: ["primary", "retap", platform === "android" ? "adb" : "maestro"]
+  if (result.isError)
+    return { verdict: "unavailable", stable: false };
+  try {
+    const envelope = JSON.parse(result.content[0].text);
+    const v = envelope.data?.verifyVerdict;
+    if (typeof v === "string" && NATIVE_VERIFY_VERDICTS.has(v)) {
+      return { verdict: v, stable: envelope.data?.verifyStable === true };
+    }
+  } catch {
+  }
+  return { verdict: "unavailable", stable: false };
+}
+async function finalVerification(client2, binding, jsTestId, text) {
+  const fiberId = binding.inputTestId ?? jsTestId;
+  let fiber = "unavailable";
+  if (client2 && fiberId) {
+    fiber = await finalFiberVerify({ evaluate: (e) => client2.evaluate(e) }, fiberId, text);
+  }
+  const native = await runNativeVerifyInput(binding, text);
+  return combineVerificationOracles(fiber, native.verdict, native.stable);
+}
+function verifiedFillResult(method, textLength, meta) {
+  return okResult({ filled: true, method, length: textLength }, { meta: { ...meta, verify: "exact" } });
+}
+function fillFailure(code, message, opts) {
+  return failResult(message, code, {
+    mutation: opts.mutation,
+    pathsTried: opts.pathsTried,
+    ...opts.verification ? {
+      verification: {
+        fiber: opts.verification.fiber,
+        native: opts.verification.native,
+        nativeStable: opts.verification.nativeStable
+      }
+    } : {},
+    hint: opts.hint ?? (opts.mutation === "none" ? "No text was entered. Refresh the snapshot (device_snapshot action=snapshot) and rebind the input before retrying." : "The field may have been mutated. Read the field state (device_snapshot or the fiber) before any manual retry \u2014 do not blindly re-run device_fill.")
   });
 }
-async function nativeSettle(client2, testID, text, settleAnchor, stabilityPrior) {
-  if (!client2 || !testID)
-    return { outcome: "unverifiable", value: null };
-  const settled = await settleRead({ evaluate: (e) => client2.evaluate(e) }, testID, text, settleAnchor);
-  return {
-    outcome: classifyFillVerification({
-      text,
-      valueAfter: settled.value,
-      priorValueAfter: stabilityPrior,
-      controlled: settled.controlled
-    }),
-    value: settled.value
-  };
+async function clearControlledValue(client2, testID) {
+  try {
+    await client2.evaluate("__RN_AGENT.interact(" + JSON.stringify({ action: "typeText", testID, text: "" }) + ")");
+  } catch {
+    return false;
+  }
+  const settled = await settleRead({ evaluate: (e) => client2.evaluate(e) }, testID, "", null);
+  return settled.value === "";
 }
 function exactTypeReadback(client2, testID) {
   if (!client2 || !testID)
@@ -23216,184 +23402,177 @@ function exactTypeReadback(client2, testID) {
     }
   };
 }
-async function readValueBefore(client2, testID) {
-  if (!client2 || !testID)
-    return null;
-  const settled = await settleRead({ evaluate: (e) => client2.evaluate(e) }, testID, " __rn_never__", null);
-  return settled.value;
+async function maestroFillAttempt(targetId, text, platform, authorityArgs) {
+  const escapedRef = yamlEscape(targetId.replace(/^@/, ""));
+  const escapedText = yamlEscape(text);
+  const yaml2 = `- tapOn:
+    id: "${escapedRef}"
+- eraseText
+- inputText: "${escapedText}"`;
+  const result = await runMaestroInline(yaml2, {
+    platform,
+    slug: "fill-fallback",
+    timeoutMs: 12e4,
+    authorityArgs
+  });
+  if (result.passed)
+    return { attempted: true };
+  const refusal = maestroRefusalResult(result, "Maestro fill fallback was refused.", {
+    tried: ["js", "native", "maestro"]
+  });
+  if (refusal)
+    return { attempted: false, refusal };
+  return { attempted: false };
+}
+async function performExactFill(args, client2, tiers) {
+  const ref = args.ref.startsWith("@") ? args.ref : `@${args.ref}`;
+  const platform = isAndroidSession() ? "android" : "ios";
+  const pathsTried = [];
+  const cleanRefForSignature = args.ref.replace(/^@/, "");
+  const priorSignature = args.ref.startsWith("@") && /^e\d+$/.test(cleanRefForSignature) ? getCachedSignature(cleanRefForSignature) : null;
+  const snap = await fetchSnapshotNodes(true);
+  if (!snap.ok) {
+    if (snap.reason === "runner-leak-unrecovered") {
+      return runnerLeakFailResult(args.ref, snap.recoveryReason);
+    }
+    return fillFailure("NO_TEXT_INPUT_TARGET", `device_fill could not snapshot the screen to bind "${args.ref}" (${snap.reason}); no text was entered.`, { mutation: "none", pathsTried });
+  }
+  const bind = bindExactFillTarget(snap.nodes, args.ref, priorSignature);
+  if (!bind.ok) {
+    return fillFailure("NO_TEXT_INPUT_TARGET", `device_fill could not bind an exact input: ${bind.detail}. No text was entered.`, { mutation: "none", pathsTried });
+  }
+  const binding = bind.binding;
+  const jsTestId = client2 ? resolveJsTestId(ref, {
+    explicitTestId: args.testID,
+    cachedIdentifier: resolveCachedIdentifier(ref)
+  }) : null;
+  const fiberId = binding.inputTestId ?? jsTestId;
+  const evalSeam = client2 ? { evaluate: (e) => client2.evaluate(e) } : null;
+  if (tiers.js && client2 && evalSeam && fiberId) {
+    const probe = await probeInputState(evalSeam, fiberId);
+    if (probe.readable && probe.controlled) {
+      pathsTried.push("js");
+      const tJs = Date.now();
+      const js = await attemptJsFill(evalSeam, fiberId, args.text);
+      if (!js.handled && js.dispatchUncertain) {
+        return fillFailure("TEXT_ENTRY_UNVERIFIED", "The JS fill dispatch failed after it may have reached the app; not typing again.", { mutation: "possible", pathsTried });
+      }
+      if (js.handled) {
+        if (js.outcome === "exact") {
+          const confirmed = await finalFiberVerify(evalSeam, fiberId, args.text);
+          if (confirmed === "exact") {
+            return verifiedFillResult("js-onChangeText", args.text.length, {
+              textEntryPath: "js",
+              verifiedOracle: "fiber",
+              handler: js.handler,
+              timings_ms: { jsType: Date.now() - tJs }
+            });
+          }
+        }
+        if (js.outcome === "unreadable") {
+          return fillFailure("TEXT_ENTRY_UNVERIFIED", "The onChangeText handler fired but the resulting value is unreadable \u2014 app state may have changed; not retrying.", { mutation: "possible", pathsTried });
+        }
+        const cleared = await clearControlledValue(client2, fiberId);
+        if (!cleared) {
+          return fillFailure("TEXT_ENTRY_UNVERIFIED", "device_fill could not verify the JS fill and could not prove a clean clear; not retrying.", { mutation: "possible", pathsTried });
+        }
+      }
+    }
+  }
+  pathsTried.push("native");
+  const focusCenter = isRefMapFresh() ? refCenter(binding.focusRef) : null;
+  const exactTarget = {
+    inputRef: binding.inputRef,
+    ...focusCenter ? { focusX: focusCenter.x, focusY: focusCenter.y } : {},
+    ...args.waitForKeyboardMs !== void 0 ? { focusWaitMs: args.waitForKeyboardMs } : {}
+  };
+  const tNative = Date.now();
+  let lastVerification = null;
+  let sawSetTextRejected = false;
+  for (let attempt = 0; attempt <= MAX_NATIVE_RETYPE; attempt++) {
+    const clearFirst = attempt > 0 || args.text.length === 0;
+    const primary = await runNative(["fill", binding.inputRef, args.text, ...clearFirst ? ["--clear-first"] : []], {
+      ...attempt === 0 ? settleOpts(args) : { settle: { enabled: false } },
+      exactTarget,
+      verifyTypeReadback: exactTypeReadback(client2, fiberId)
+    });
+    if (primary.isError) {
+      if (isSetTextRejectedError(primary)) {
+        sawSetTextRejected = true;
+        break;
+      }
+      const mutation = extractMutationDisposition(primary);
+      if (mutation === "none") {
+        return fillFailure("NO_TEXT_INPUT_TARGET", `device_fill's native attempt was refused before mutation: ${extractErrorText(primary)}`, { mutation: "none", pathsTried });
+      }
+      const verification2 = await finalVerification(client2, binding, jsTestId, args.text);
+      if (verification2.verified) {
+        return verifiedFillResult("native", args.text.length, {
+          textEntryPath: attempt === 0 ? "native" : "native-retype",
+          verifiedOracle: verification2.oracle,
+          recovered: "post-error-exact-readback",
+          retypes: attempt,
+          timings_ms: { nativeType: Date.now() - tNative }
+        });
+      }
+      return fillFailure("TEXT_ENTRY_UNVERIFIED", `device_fill's native attempt failed and the field could not be verified: ${extractErrorText(primary)}`, { mutation, pathsTried, verification: verification2 });
+    }
+    const primarySettle = extractSettleMeta(primary);
+    const primaryTyping = extractTypingMeta(primary);
+    const verification = await finalVerification(client2, binding, jsTestId, args.text);
+    lastVerification = verification;
+    if (verification.verified) {
+      return verifiedFillResult("native", args.text.length, {
+        textEntryPath: attempt === 0 ? "native" : "native-retype",
+        verifiedOracle: verification.oracle,
+        retypes: attempt,
+        ...primaryTyping ? { typing: primaryTyping } : {},
+        ...primarySettle.settle !== void 0 ? { settle: primarySettle.settle } : {},
+        timings_ms: {
+          nativeType: Date.now() - tNative,
+          ...primarySettle.settleMs !== void 0 ? { settle: primarySettle.settleMs } : {}
+        }
+      });
+    }
+    const decision = decideNativeRetype(verification, attempt, MAX_NATIVE_RETYPE);
+    if (decision.action === "escalate") {
+      if (!verification.observedMismatch) {
+        return fillFailure("TEXT_ENTRY_UNVERIFIED", "device_fill typed but the final read-back is inconclusive; not retrying.", { mutation: "possible", pathsTried, verification });
+      }
+      break;
+    }
+    await sleep3(decision.delayMs);
+  }
+  if (!tiers.maestro) {
+    return fillFailure("TEXT_ENTRY_UNVERIFIED", "device_fill could not verify the fill and this caller does not use the Maestro tier.", {
+      mutation: sawSetTextRejected ? "observed" : "observed",
+      pathsTried,
+      verification: lastVerification ?? void 0
+    });
+  }
+  pathsTried.push("maestro");
+  const maestroId = binding.inputTestId ?? resolveCachedIdentifier(binding.inputRef);
+  if (!maestroId) {
+    return fillFailure("TEXT_ENTRY_UNVERIFIED", "device_fill could not verify the fill and the input has no testID for the Maestro tier.", { mutation: "observed", pathsTried, verification: lastVerification ?? void 0 });
+  }
+  const maestro = await maestroFillAttempt(maestroId, args.text, platform, args);
+  if (!maestro.attempted) {
+    if (maestro.refusal)
+      return maestro.refusal;
+    return fillFailure("TEXT_ENTRY_UNVERIFIED", "device_fill fell through all tiers; the Maestro attempt did not run cleanly.", { mutation: "observed", pathsTried, verification: lastVerification ?? void 0 });
+  }
+  const maestroVerification = await finalVerification(client2, binding, jsTestId, args.text);
+  if (maestroVerification.verified) {
+    return verifiedFillResult("maestro", args.text.length, {
+      textEntryPath: "maestro",
+      verifiedOracle: maestroVerification.oracle,
+      timings_ms: { nativeType: Date.now() - tNative }
+    });
+  }
+  return fillFailure("TEXT_ENTRY_UNVERIFIED", "Text entry could not be verified after native and Maestro attempts.", { mutation: "possible", pathsTried, verification: maestroVerification });
 }
 function createDeviceFillHandler(getClient2) {
-  return withSession(async (args) => {
-    const ref = args.ref.startsWith("@") ? args.ref : `@${args.ref}`;
-    const androidSession = isAndroidSession();
-    const maestroTargetRef = () => resolveCachedIdentifier(ref) ?? ref;
-    const client2 = cdpClientOrNull(getClient2);
-    const cachedIdentifier = resolveCachedIdentifier(ref);
-    const jsTestId = client2 ? resolveJsTestId(ref, { explicitTestId: args.testID, cachedIdentifier }) : null;
-    if (client2 && jsTestId) {
-      const tJs = Date.now();
-      const js = await attemptJsFill({ evaluate: (e) => client2.evaluate(e) }, jsTestId, args.text);
-      if (js.handled && js.outcome && js.outcome !== "corrupted") {
-        return okResult({ filled: true, method: "js-onChangeText", length: args.text.length }, {
-          meta: {
-            textEntryPath: "js",
-            verify: jsVerifyMeta(js.outcome),
-            handler: js.handler,
-            timings_ms: { jsType: Date.now() - tJs }
-          }
-        });
-      }
-      if (js.handled && js.controlled) {
-        try {
-          await client2.evaluate("__RN_AGENT.interact(" + JSON.stringify({ action: "typeText", testID: jsTestId, text: "" }) + ")");
-        } catch {
-        }
-      }
-    }
-    const pinned = isRefMapFresh() ? refCenter(ref) : null;
-    const pinArgs = pinned ? ["--at-x", String(pinned.x), "--at-y", String(pinned.y)] : [];
-    const preTap = pinned ? await runNative(["press", String(pinned.x), String(pinned.y)], settleOpts(args)) : await runNative(["press", ref], settleOpts(args));
-    if (preTap.isError) {
-    } else {
-      const delay = focusDelayAfterPreTap(preTap.content?.[0]?.text, args.waitForKeyboardMs);
-      if (delay > 0)
-        await sleep3(delay);
-    }
-    const primary = await runNative(["fill", ref, args.text, ...pinArgs], {
-      ...settleOpts(args),
-      verifyTypeReadback: exactTypeReadback(client2, jsTestId)
-    });
-    if (!primary.isError) {
-      if (client2 && jsTestId && !androidSession) {
-        const tNative = Date.now();
-        const primarySettle = extractSettleMeta(primary);
-        const primaryTyping = extractTypingMeta(primary);
-        let settleAnchor = await readValueBefore(client2, jsTestId);
-        let stabilityPrior = null;
-        for (let attempt = 0; attempt <= MAX_NATIVE_RETYPE; attempt++) {
-          const { outcome: outcome2, value } = await nativeSettle(client2, jsTestId, args.text, settleAnchor, stabilityPrior);
-          const decision = decideNativeRetype(outcome2, attempt, MAX_NATIVE_RETYPE);
-          if (decision.action === "accept") {
-            return okResult({ filled: true, method: "native", length: args.text.length }, {
-              meta: {
-                textEntryPath: attempt === 0 ? "native" : "native-retype",
-                verify: jsVerifyMeta(outcome2),
-                retypes: attempt,
-                ...primaryTyping ? { typing: primaryTyping } : {},
-                ...primarySettle.settle !== void 0 ? { settle: primarySettle.settle } : {},
-                timings_ms: {
-                  nativeType: Date.now() - tNative,
-                  ...primarySettle.settleMs !== void 0 ? { settle: primarySettle.settleMs } : {}
-                }
-              }
-            });
-          }
-          if (decision.action === "escalate")
-            break;
-          settleAnchor = value;
-          stabilityPrior = value;
-          await runNative([
-            "fill",
-            ref,
-            args.text,
-            ...pinArgs,
-            "--clear-first",
-            "--delay-ms",
-            String(decision.delayMs)
-          ], { settle: { enabled: false } });
-        }
-        const maestro = await maestroFillFallback(maestroTargetRef(), args.text, "ios", true, args);
-        if (maestro.isError)
-          return maestro;
-        const { outcome } = await nativeSettle(client2, jsTestId, args.text, null, null);
-        if (outcome !== "corrupted") {
-          return okResult({ filled: true, method: "maestro", length: args.text.length }, {
-            meta: {
-              textEntryPath: "maestro",
-              verify: jsVerifyMeta(outcome),
-              timings_ms: { nativeType: Date.now() - tNative }
-            }
-          });
-        }
-        return failResult("Text entry could not be verified after retype + maestro fallback", "TEXT_ENTRY_UNVERIFIED", {
-          expectedLength: args.text.length,
-          pathsTried: ["js", "native", "native-retype", "maestro"]
-        });
-      }
-      return primary;
-    }
-    const descent = classifyFillPrimaryError(primary);
-    if (descent === "return-primary") {
-      return primary;
-    }
-    if (descent === "refocus-ladder") {
-      const snap = await fetchSnapshotNodes();
-      if (snap.ok) {
-        const resolvedRef = findInputForPressable(snap.nodes, ref);
-        if (resolvedRef && resolvedRef !== ref) {
-          const innerPin = isRefMapFresh() ? refCenter(resolvedRef) : null;
-          const innerPinArgs = innerPin ? ["--at-x", String(innerPin.x), "--at-y", String(innerPin.y)] : [];
-          const innerTap = innerPin ? await runNative(["press", String(innerPin.x), String(innerPin.y)], settleOpts(args)) : await runNative(["press", resolvedRef], settleOpts(args));
-          if (!innerTap.isError) {
-            const delay = focusDelayAfterPreTap(innerTap.content?.[0]?.text, args.waitForKeyboardMs);
-            if (delay > 0)
-              await sleep3(delay);
-            const resolved = await runNative(["fill", resolvedRef, args.text, ...innerPinArgs], {
-              ...settleOpts(args),
-              verifyTypeReadback: exactTypeReadback(client2, resolveCachedIdentifier(resolvedRef) ?? null)
-            });
-            if (!resolved.isError) {
-              try {
-                const envelope = JSON.parse(resolved.content[0].text);
-                return okResult(envelope.data, {
-                  meta: { ...envelope.meta, fallbackUsed: "pressable-resolution", resolvedRef }
-                });
-              } catch {
-                return resolved;
-              }
-            }
-            if (classifyFillPrimaryError(resolved) === "reject-ladder") {
-              return maestroFillFallback(resolveCachedIdentifier(resolvedRef) ?? resolvedRef, args.text, "android", true, args);
-            }
-          }
-        }
-      }
-      const retryTap = await runNative(["press", ref]);
-      if (!retryTap.isError) {
-        await sleep3(300);
-        const retry = await runNative(["fill", ref, args.text], {
-          verifyTypeReadback: exactTypeReadback(client2, jsTestId)
-        });
-        if (!retry.isError) {
-          try {
-            const envelope = JSON.parse(retry.content[0].text);
-            return okResult(envelope.data, { meta: { fallbackUsed: "retap" } });
-          } catch {
-            return retry;
-          }
-        }
-        if (classifyFillPrimaryError(retry) === "reject-ladder") {
-          return maestroFillFallback(maestroTargetRef(), args.text, "android", true, args);
-        }
-      }
-    }
-    if (descent === "reject-ladder") {
-      return maestroFillFallback(maestroTargetRef(), args.text, "android", true, args);
-    }
-    if (androidSession && isAdbInputTextSafe(args.text)) {
-      const adbResult = await androidClipboardFill(args.text);
-      if (!adbResult.isError) {
-        try {
-          const envelope = JSON.parse(adbResult.content[0].text);
-          return okResult(envelope.data, { meta: { fallbackUsed: "adb" } });
-        } catch {
-          return adbResult;
-        }
-      }
-    }
-    const platform = androidSession ? "android" : "ios";
-    return maestroFillFallback(maestroTargetRef(), args.text, platform, false, args);
-  });
+  return withSession(async (args) => performExactFill(args, cdpClientOrNull(getClient2), { js: true, maestro: true }));
 }
 function computeSwipeFromDirection(direction, screen) {
   const cx = Math.round(screen.width / 2);
@@ -23739,7 +23918,7 @@ function decideScrollDirection(element, screen) {
     return "right";
   return null;
 }
-var execFile11, TYPE_PRIORITY_FOR_TAP, TEXT_INPUT_TYPES, PRESSABLE_SUFFIX, ANDROID_INPUT_CHUNK_SIZE, FOCUS_DELAY_MS, NO_FOCUSED_INPUT_RE, MAX_NATIVE_RETYPE, DEFAULT_SCREEN, SWIPE_FRACTION, DEFAULT_SWIPE_DURATION_MS, NEXT_KEY_LABELS;
+var TYPE_PRIORITY_FOR_TAP, IOS_INPUT_TYPES, ANDROID_INPUT_TYPE_RE, PRESSABLE_SUFFIX, NATIVE_VERIFY_VERDICTS, MAX_NATIVE_RETYPE, DEFAULT_SCREEN, SWIPE_FRACTION, DEFAULT_SWIPE_DURATION_MS, NEXT_KEY_LABELS;
 var init_device_interact = __esm({
   "packages/rn-dev-agent-core/dist/tools/device-interact.js"() {
     "use strict";
@@ -23755,7 +23934,6 @@ var init_device_interact = __esm({
     init_device_session();
     init_fast_runner_ref_map();
     init_fill_verify();
-    execFile11 = promisify12(execFileCb10);
     TYPE_PRIORITY_FOR_TAP = {
       Button: 100,
       Cell: 95,
@@ -23766,11 +23944,17 @@ var init_device_interact = __esm({
       Image: 25,
       ScrollView: 10
     };
-    TEXT_INPUT_TYPES = /* @__PURE__ */ new Set(["TextField", "SecureTextField", "TextView", "EditText"]);
+    IOS_INPUT_TYPES = /* @__PURE__ */ new Set(["TextField", "SecureTextField", "SearchField", "TextView"]);
+    ANDROID_INPUT_TYPE_RE = /.+\.(\w*EditText|\w*AutoCompleteTextView)$/;
     PRESSABLE_SUFFIX = "-pressable";
-    ANDROID_INPUT_CHUNK_SIZE = 10;
-    FOCUS_DELAY_MS = 150;
-    NO_FOCUSED_INPUT_RE = /no focused text input|no focused element|element is not focused/i;
+    NATIVE_VERIFY_VERDICTS = /* @__PURE__ */ new Set([
+      "exact",
+      "mismatch",
+      "unreadable",
+      "secure-masked",
+      "target-lost",
+      "ambiguous"
+    ]);
     MAX_NATIVE_RETYPE = 2;
     DEFAULT_SCREEN = { width: 402, height: 874 };
     SWIPE_FRACTION = 0.4;
@@ -24349,8 +24533,8 @@ __export(rn_android_runner_client_exports, {
   stopAndroidRunner: () => stopAndroidRunner,
   waitForAndroidRunnerHealth: () => waitForAndroidRunnerHealth
 });
-import { spawn as spawn4, execFile as execFile12 } from "node:child_process";
-import { promisify as promisify13 } from "node:util";
+import { spawn as spawn4, execFile as execFile11 } from "node:child_process";
+import { promisify as promisify12 } from "node:util";
 import { existsSync as existsSync19, rmSync as rmSync7, writeFileSync as writeFileSync9 } from "node:fs";
 import { tmpdir as tmpdir8 } from "node:os";
 import { randomBytes as randomBytes4, randomUUID as randomUUID4 } from "node:crypto";
@@ -25402,6 +25586,8 @@ function mapRunnerNodesToFlat2(nodes) {
       flat.enabled = n.enabled;
     if (n.hittable !== void 0)
       flat.hittable = n.hittable;
+    if (n.secure !== void 0)
+      flat.secure = n.secure;
     out.push(flat);
   }
   return out;
@@ -25415,6 +25601,7 @@ async function runAndroid(args) {
       cachedMetadata: getCachedMetadata(args._staleRef),
       reResolution: "self-heal-disabled",
       candidates: [],
+      mutation: "none",
       hint: "Call device_snapshot action=snapshot to refresh refs, then retry the action with the new ref."
     });
   }
@@ -25445,6 +25632,20 @@ async function runAndroid(args) {
     body.scale = args.scale;
   if (args.interactiveOnly !== void 0)
     body.interactiveOnly = args.interactiveOnly;
+  if (args.snapshotIdentifier !== void 0)
+    body.snapshotIdentifier = args.snapshotIdentifier;
+  if (args.snapshotElementType !== void 0)
+    body.snapshotElementType = args.snapshotElementType;
+  if (args.targetBounds !== void 0)
+    body.targetBounds = args.targetBounds;
+  if (args.focusX !== void 0)
+    body.focusX = args.focusX;
+  if (args.focusY !== void 0)
+    body.focusY = args.focusY;
+  if (args.focusWaitMs !== void 0)
+    body.focusWaitMs = args.focusWaitMs;
+  if (args.secureInput !== void 0)
+    body.secureInput = args.secureInput;
   let resp;
   let recovery;
   try {
@@ -25480,12 +25681,19 @@ async function runAndroid(args) {
     const message = resp.error?.message ?? "Android runner returned !ok with no error";
     const code = resp.error?.code;
     if (args.command === "type" && typeof message === "string" && (message.includes("Could not detect idle state") || message.includes("window-content-idle") || message.includes("Idle timeout exceeded"))) {
-      return okResult({ typed: true, text: args.text }, { meta: { sideEffectSucceeded: true, runnerTimeoutShim: true, ...recoveryMeta } });
+      return failResult("rn-android-runner type hit the window-idle timeout after dispatching the mutation; the field value is unverified", "TYPE_IDLE_TIMEOUT", { mutation: "possible", runnerTimeoutShim: true, ...recoveryMeta });
     }
-    const failExtras = recovery ? { transportRecovery: recovery } : void 0;
-    if (code)
-      return failResult(message, code, failExtras);
-    return failExtras ? failResult(message, failExtras) : failResult(message);
+    const VALID_MUTATIONS = /* @__PURE__ */ new Set(["none", "observed", "possible"]);
+    const rawMutation = resp.error?.mutation;
+    const mutation = rawMutation !== void 0 && VALID_MUTATIONS.has(rawMutation) ? rawMutation : args.command === "type" || args.command === "fill" ? "possible" : void 0;
+    const failExtras = {
+      ...recovery ? { transportRecovery: recovery } : {},
+      ...mutation !== void 0 ? { mutation } : {}
+    };
+    if (code) {
+      return failResult(message, code, Object.keys(failExtras).length > 0 ? failExtras : void 0);
+    }
+    return Object.keys(failExtras).length > 0 ? failResult(message, failExtras) : failResult(message);
   }
   if (args.command === "snapshot" && resp.data && typeof resp.data === "object") {
     const data = resp.data;
@@ -25527,7 +25735,7 @@ var init_rn_android_runner_client = __esm({
     init_transport_recovery();
     init_process_birth();
     init_authority_store();
-    execFileAsync2 = promisify13(execFile12);
+    execFileAsync2 = promisify12(execFile11);
     DEFAULT_PORT = 22089;
     READY_TIMEOUT_MS2 = 3e4;
     INSTRUMENTATION = "dev.lykhoyda.rndevagent.androidrunner.test/androidx.test.runner.AndroidJUnitRunner";
@@ -25583,8 +25791,8 @@ __export(release_android_slot_exports, {
   isProtectedPid: () => isProtectedPid,
   releaseAndroidInteractionSlot: () => releaseAndroidInteractionSlot
 });
-import { execFile as execFileCb11 } from "node:child_process";
-import { promisify as promisify14 } from "node:util";
+import { execFile as execFileCb10 } from "node:child_process";
+import { promisify as promisify13 } from "node:util";
 import { existsSync as existsSync20, readFileSync as readFileSync18, unlinkSync as unlinkSync8 } from "node:fs";
 import { homedir as homedir7 } from "node:os";
 import { join as join22 } from "node:path";
@@ -25595,7 +25803,7 @@ function defaultDeps3() {
   return {
     stopOwnRunner: (deviceId, signal) => stopAndroidRunner(deviceId, signal),
     adbForceStop: async (pkg, serial, signal) => {
-      await execFile13("adb", [...serial, "shell", "am", "force-stop", pkg], {
+      await execFile12("adb", [...serial, "shell", "am", "force-stop", pkg], {
         timeout: ADB_TIMEOUT_MS,
         encoding: "utf8",
         signal
@@ -25716,13 +25924,13 @@ async function releaseAndroidInteractionSlot(opts = {}, deps = defaultDeps3()) {
 function msg2(err) {
   return err instanceof Error ? err.message : String(err);
 }
-var execFile13, DAEMON_JSON2, DAEMON_LOCK2, DAEMON_FILES2, SIGKILL_GRACE_MS2, ADB_TIMEOUT_MS, OWNED_PACKAGES;
+var execFile12, DAEMON_JSON2, DAEMON_LOCK2, DAEMON_FILES2, SIGKILL_GRACE_MS2, ADB_TIMEOUT_MS, OWNED_PACKAGES;
 var init_release_android_slot = __esm({
   "packages/rn-dev-agent-core/dist/runners/release-android-slot.js"() {
     "use strict";
     init_rn_android_runner_client();
     init_agent_device_wrapper();
-    execFile13 = promisify14(execFileCb11);
+    execFile12 = promisify13(execFileCb10);
     DAEMON_JSON2 = join22(homedir7(), ".agent-device", "daemon.json");
     DAEMON_LOCK2 = join22(homedir7(), ".agent-device", "daemon.lock");
     DAEMON_FILES2 = [DAEMON_JSON2, DAEMON_LOCK2];
@@ -27093,8 +27301,8 @@ setInterval(() => {}, 1 << 30);
 });
 
 // packages/rn-dev-agent-core/dist/session/process-cleanup.js
-import { execFile as execFileCb12, spawn as spawn6 } from "node:child_process";
-import { promisify as promisify15 } from "node:util";
+import { execFile as execFileCb11, spawn as spawn6 } from "node:child_process";
+import { promisify as promisify14 } from "node:util";
 function executeRecorderScript(script, args, options) {
   return new Promise((resolve11, reject) => {
     const child = spawn6(script, args, {
@@ -27301,7 +27509,7 @@ async function stopBoundObserve(binding, listenerProbe = probeManagedMetroListen
     return observed.status === "listening" && observed.pid === pid ? "running" : "stopped";
   }, deadlineMs, "OBSERVE_AUTHORITY_MISMATCH", "Observe listener did not stop before the cleanup deadline");
 }
-async function stopBoundRunner(binding, processProbe = probeProcessBirth, signalProcess = process.kill, timeoutMs = 2e3, runAdb = async (args) => execFile14("adb", args, { timeout: 5e3, encoding: "utf8" })) {
+async function stopBoundRunner(binding, processProbe = probeProcessBirth, signalProcess = process.kill, timeoutMs = 2e3, runAdb = async (args) => execFile13("adb", args, { timeout: 5e3, encoding: "utf8" })) {
   const deadlineMs = Date.now() + timeoutMs;
   const pid = Number(binding.pid);
   const expectedBirth = String(binding.processBirth ?? "");
@@ -27399,7 +27607,7 @@ async function stopBoundRecorder(binding, _processProbe = probeProcessBirth, run
     throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", `recorder termination is unproven: ${error2 instanceof Error ? error2.message : String(error2)}`);
   }
 }
-var execFile14, RECORDER_POST_KILL_CONFIRM_MS;
+var execFile13, RECORDER_POST_KILL_CONFIRM_MS;
 var init_process_cleanup = __esm({
   "packages/rn-dev-agent-core/dist/session/process-cleanup.js"() {
     "use strict";
@@ -27407,7 +27615,7 @@ var init_process_cleanup = __esm({
     init_managed_metro();
     init_process_birth();
     init_registry();
-    execFile14 = promisify15(execFileCb12);
+    execFile13 = promisify14(execFileCb11);
     RECORDER_POST_KILL_CONFIRM_MS = 2e3;
   }
 });
@@ -59352,8 +59560,8 @@ var init_target_device_authority = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/reload.js
-import { execFile as execFileCb13 } from "node:child_process";
-import { promisify as promisify16 } from "node:util";
+import { execFile as execFileCb12 } from "node:child_process";
+import { promisify as promisify15 } from "node:util";
 function captureClientState(client2) {
   const target = client2.connectedTarget;
   return {
@@ -59424,9 +59632,9 @@ async function resolveExactReloadTargetId(client2, captured, authorityTarget, ex
   return exactCandidates[0].id;
 }
 async function recoverAfterFailedReconnect(getClient2, setClient2, createClient2, captured, deps = {}, authorityTarget) {
-  const execFile27 = deps.execFile ?? defaultExecFile2;
+  const execFile26 = deps.execFile ?? defaultExecFile2;
   const sleep7 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
-  const resolveExactTargetId = deps.resolveExactTargetId ?? ((client2, state, target) => resolveExactReloadTargetId(client2, state, target, execFile27));
+  const resolveExactTargetId = deps.resolveExactTargetId ?? ((client2, state, target) => resolveExactReloadTargetId(client2, state, target, execFile26));
   const first = await forceReconnect(getClient2(), setClient2, createClient2, captured, authorityTarget, authorityTarget ? resolveExactTargetId : void 0);
   if (first.ok) {
     return {
@@ -59447,12 +59655,12 @@ async function recoverAfterFailedReconnect(getClient2, setClient2, createClient2
   const platform = authorityTarget.platform;
   try {
     if (platform === "ios") {
-      await execFile27("xcrun", ["simctl", "terminate", deviceId, bundleId], {
+      await execFile26("xcrun", ["simctl", "terminate", deviceId, bundleId], {
         timeout: 5e3
       });
       steps.push(`simctl terminate ${bundleId}:ok`);
     } else {
-      await execFile27("adb", ["-s", deviceId, "shell", "am", "force-stop", bundleId], {
+      await execFile26("adb", ["-s", deviceId, "shell", "am", "force-stop", bundleId], {
         timeout: 5e3
       });
       steps.push(`adb force-stop ${bundleId}:ok`);
@@ -59462,12 +59670,12 @@ async function recoverAfterFailedReconnect(getClient2, setClient2, createClient2
   }
   try {
     if (platform === "ios") {
-      await execFile27("xcrun", ["simctl", "launch", deviceId, bundleId], {
+      await execFile26("xcrun", ["simctl", "launch", deviceId, bundleId], {
         timeout: 8e3
       });
       steps.push(`simctl launch ${bundleId}:ok`);
     } else {
-      await execFile27("adb", [
+      await execFile26("adb", [
         "-s",
         deviceId,
         "shell",
@@ -59625,7 +59833,7 @@ var init_reload = __esm({
     init_maestro_validator();
     init_status();
     init_target_device_authority();
-    defaultExecFile2 = promisify16(execFileCb13);
+    defaultExecFile2 = promisify15(execFileCb12);
     sessionReloadCount = 0;
     SOFT_RECONNECT_DEADLINE_MS = 3e4;
     SOFT_RECONNECT_ATTEMPTS = 5;
@@ -67893,8 +68101,8 @@ var init_error_log = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/native-errors.js
-import { execFile as execFileCb14 } from "node:child_process";
-import { promisify as promisify17 } from "node:util";
+import { execFile as execFileCb13 } from "node:child_process";
+import { promisify as promisify16 } from "node:util";
 function parseIOSLog(stdout) {
   const entries = [];
   for (const line of stdout.split("\n")) {
@@ -67942,7 +68150,7 @@ function dedupeByMessage(entries) {
   return out;
 }
 async function defaultRunIOS(sinceSeconds, deviceId) {
-  const { stdout } = await execFile15("xcrun", [
+  const { stdout } = await execFile14("xcrun", [
     "simctl",
     "spawn",
     deviceId,
@@ -67956,7 +68164,7 @@ async function defaultRunIOS(sinceSeconds, deviceId) {
   return stdout;
 }
 async function defaultRunAndroid(sinceSeconds, deviceId) {
-  const { stdout } = await execFile15("adb", ["-s", deviceId, "logcat", "-d", "-v", "time", "-t", `${sinceSeconds * 100}`, "*:E"], { timeout: 1e4, encoding: "utf8", maxBuffer: 10 * 1024 * 1024 });
+  const { stdout } = await execFile14("adb", ["-s", deviceId, "logcat", "-d", "-v", "time", "-t", `${sinceSeconds * 100}`, "*:E"], { timeout: 1e4, encoding: "utf8", maxBuffer: 10 * 1024 * 1024 });
   return stdout;
 }
 async function readNativeErrors(opts = {}) {
@@ -68026,12 +68234,12 @@ function createNativeErrorsHandler(getClient2) {
     }
   };
 }
-var execFile15, IOS_NOISE_PATTERNS, ANDROID_NOISE_PATTERNS;
+var execFile14, IOS_NOISE_PATTERNS, ANDROID_NOISE_PATTERNS;
 var init_native_errors = __esm({
   "packages/rn-dev-agent-core/dist/tools/native-errors.js"() {
     "use strict";
     init_utils();
-    execFile15 = promisify17(execFileCb14);
+    execFile14 = promisify16(execFileCb13);
     IOS_NOISE_PATTERNS = [
       /Cannot find native module/i,
       /Module \w+ is not a registered callable module/i,
@@ -68844,13 +69052,13 @@ var init_diagnostic_renderers = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/device-screenshot-resize.js
-import { execFile as execFileCb15 } from "node:child_process";
-import { promisify as promisify18 } from "node:util";
+import { execFile as execFileCb14 } from "node:child_process";
+import { promisify as promisify17 } from "node:util";
 import { statSync as statSync11 } from "node:fs";
 async function checkSipsAvailable(deps) {
   if (sipsAvailable !== null)
     return sipsAvailable;
-  const runner = deps.exec ?? execFile16;
+  const runner = deps.exec ?? execFile15;
   try {
     await runner("sips", ["--version"], { timeout: 1500 });
     sipsAvailable = true;
@@ -68867,7 +69075,7 @@ function parseSipsDimensions(stdout) {
   return { width: parseInt(wMatch[1], 10), height: parseInt(hMatch[1], 10) };
 }
 async function getDimensions(path, deps) {
-  const runner = deps.exec ?? execFile16;
+  const runner = deps.exec ?? execFile15;
   try {
     const { stdout } = await runner("sips", ["-g", "pixelWidth", "-g", "pixelHeight", path], {
       timeout: 5e3,
@@ -68906,7 +69114,7 @@ async function resizeWithSips(path, opts = {}, deps = {}) {
   }
   const fileSize = deps.fileSize ?? defaultFileSize;
   const originalBytes = fileSize(path);
-  const runner = deps.exec ?? execFile16;
+  const runner = deps.exec ?? execFile15;
   const quality = opts.quality ?? DEFAULT_QUALITY;
   try {
     await runner("sips", buildSipsResizeArgs(path, maxWidth, quality), { timeout: 1e4 });
@@ -68924,11 +69132,11 @@ async function resizeWithSips(path, opts = {}, deps = {}) {
     newBytes
   };
 }
-var execFile16, DEFAULT_MAX_WIDTH, DEFAULT_QUALITY, sipsAvailable, defaultFileSize;
+var execFile15, DEFAULT_MAX_WIDTH, DEFAULT_QUALITY, sipsAvailable, defaultFileSize;
 var init_device_screenshot_resize = __esm({
   "packages/rn-dev-agent-core/dist/tools/device-screenshot-resize.js"() {
     "use strict";
-    execFile16 = promisify18(execFileCb15);
+    execFile15 = promisify17(execFileCb14);
     DEFAULT_MAX_WIDTH = 800;
     DEFAULT_QUALITY = 85;
     sipsAvailable = null;
@@ -69417,8 +69625,8 @@ var init_recorder = __esm({
 
 // packages/rn-dev-agent-core/dist/tools/device-list.js
 import { mkdirSync as mkdirSync16 } from "node:fs";
-import { execFile as execFile17 } from "node:child_process";
-import { promisify as promisify19 } from "node:util";
+import { execFile as execFile16 } from "node:child_process";
+import { promisify as promisify18 } from "node:util";
 import { dirname as dirname16, join as join36, resolve as resolve9 } from "node:path";
 import { homedir as homedir9 } from "node:os";
 function parseSimctlDevicesAll(jsonText) {
@@ -69661,7 +69869,7 @@ var init_device_list = __esm({
     init_recorder();
     init_public_diagnostics();
     runAgentDeviceFn2 = runNative;
-    execFileAsync3 = promisify19(execFile17);
+    execFileAsync3 = promisify18(execFile16);
     defaultExec2 = (cmd, args) => execFileAsync3(cmd, args);
     execFn = defaultExec2;
     PathTraversalScreenshotError = class extends Error {
@@ -69880,27 +70088,18 @@ async function executeStep(step, getClient2) {
       return failResult("press requires ref, testID, or both x and y coordinates");
     }
     case "fill": {
-      if (!step.text)
+      if (step.text === void 0)
         return failResult("fill requires text");
-      if (step.testID) {
-        const { refs, envelope, snapshotFailed } = await resolveTestIDViaSnapshot(step.testID);
-        if (snapshotFailed) {
-          return failResult(`Snapshot failed while resolving testID "${step.testID}" for fill \u2014 agent-device unreachable`, "SNAPSHOT_FAILED", { testID: step.testID, envelope: envelope?.slice(0, 500) });
-        }
-        if (refs.length > 1)
-          return ambiguousTestIDFail(step.testID, refs);
-        const ref2 = refs[0];
-        if (!ref2) {
-          return failResult(`testID "${step.testID}" not found in current UI snapshot`, "TESTID_NOT_FOUND", {
-            testID: step.testID
-          });
-        }
-        return runNative(["fill", `@${ref2}`, step.text], stepSettleOpts(step));
-      }
-      if (!step.ref)
+      const targetRef = step.testID ?? step.ref;
+      if (!targetRef) {
         return failResult("fill requires ref or testID. Use a find+tap step first to focus the field, or pass testID for fresh resolution.");
-      const ref = step.ref.startsWith("@") ? step.ref : `@${step.ref}`;
-      return runNative(["fill", ref, step.text], stepSettleOpts(step));
+      }
+      const client2 = getClient2 ? cdpClientOrNull(getClient2) : null;
+      return performExactFill({
+        ref: targetRef,
+        text: step.text,
+        settleTimeoutMs: step.settle === false ? 0 : BATCH_STEP_SETTLE_BUDGET_MS
+      }, client2, { js: false, maestro: false });
     }
     case "swipe": {
       if (!step.direction)
@@ -72518,8 +72717,8 @@ var init_cdp_replay_dispatch = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/blind-probe-gate.js
-import { execFile as execFileCb16 } from "node:child_process";
-import { promisify as promisify20 } from "node:util";
+import { execFile as execFileCb15 } from "node:child_process";
+import { promisify as promisify19 } from "node:util";
 function evaluateBlindProbeGate(input) {
   if (input.platform === "android")
     return { atRisk: null };
@@ -72555,7 +72754,7 @@ function parseIosRuntimeMajorForUdid(simctlJson, udid) {
   }
   return null;
 }
-async function getIosRuntimeMajorForUdid(udid, execFn2 = (cmd, args) => execFile18(cmd, args, { timeout: 5e3, encoding: "utf8" })) {
+async function getIosRuntimeMajorForUdid(udid, execFn2 = (cmd, args) => execFile17(cmd, args, { timeout: 5e3, encoding: "utf8" })) {
   if (runtimeCache.has(udid))
     return runtimeCache.get(udid) ?? null;
   try {
@@ -72567,11 +72766,11 @@ async function getIosRuntimeMajorForUdid(udid, execFn2 = (cmd, args) => execFile
     return null;
   }
 }
-var execFile18, WDA_BLIND_MIN_IOS_MAJOR, RECENT_WINDOW, runtimeCache;
+var execFile17, WDA_BLIND_MIN_IOS_MAJOR, RECENT_WINDOW, runtimeCache;
 var init_blind_probe_gate = __esm({
   "packages/rn-dev-agent-core/dist/domain/blind-probe-gate.js"() {
     "use strict";
-    execFile18 = promisify20(execFileCb16);
+    execFile17 = promisify19(execFileCb15);
     WDA_BLIND_MIN_IOS_MAJOR = 26;
     RECENT_WINDOW = 5;
     runtimeCache = /* @__PURE__ */ new Map();
@@ -73607,8 +73806,8 @@ var init_interact = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/collect-logs.js
-import { execFile as execFileCb17, spawn as spawn8 } from "node:child_process";
-import { promisify as promisify21 } from "node:util";
+import { execFile as execFileCb16, spawn as spawn8 } from "node:child_process";
+import { promisify as promisify20 } from "node:util";
 function normalizeTimestamp(ts) {
   if (!ts)
     return (/* @__PURE__ */ new Date()).toISOString();
@@ -73680,7 +73879,7 @@ function buildIosLogStreamArgs(deviceId, pid) {
 async function resolveIosAppPid(deviceId, bundleId, signal) {
   let stdout;
   try {
-    ({ stdout } = await execFile19("xcrun", ["simctl", "spawn", deviceId, "launchctl", "list"], {
+    ({ stdout } = await execFile18("xcrun", ["simctl", "spawn", deviceId, "launchctl", "list"], {
       timeout: PID_PROBE_TIMEOUT_MS,
       signal
     }));
@@ -74044,13 +74243,13 @@ function createCollectLogsHandler(getClient2) {
     }
   };
 }
-var execFile19, SIGKILL_GRACE_MS3, PID_PROBE_TIMEOUT_MS, LOGCAT_RE, ANDROID_LEVEL_MAP;
+var execFile18, SIGKILL_GRACE_MS3, PID_PROBE_TIMEOUT_MS, LOGCAT_RE, ANDROID_LEVEL_MAP;
 var init_collect_logs = __esm({
   "packages/rn-dev-agent-core/dist/tools/collect-logs.js"() {
     "use strict";
     init_agent_device_wrapper();
     init_utils();
-    execFile19 = promisify21(execFileCb17);
+    execFile18 = promisify20(execFileCb16);
     SIGKILL_GRACE_MS3 = 1500;
     PID_PROBE_TIMEOUT_MS = 5e3;
     LOGCAT_RE = /^(\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2}\.\d{3})\s+(\d+)\s+\d+\s+([VDIWEFS])\s+([\w./-]+)\s*:\s*(.*)$/;
@@ -74067,8 +74266,8 @@ var init_collect_logs = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/device-permission.js
-import { execFile as execFile20 } from "node:child_process";
-import { promisify as promisify22 } from "node:util";
+import { execFile as execFile19 } from "node:child_process";
+import { promisify as promisify21 } from "node:util";
 function escapeRegex2(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -74219,7 +74418,7 @@ var init_device_permission = __esm({
     "use strict";
     init_utils();
     init_maestro_validator();
-    execFileAsync4 = promisify22(execFile20);
+    execFileAsync4 = promisify21(execFile19);
     EXEC_TIMEOUT = 1e4;
     IOS_PERMISSIONS = {
       notifications: "notifications",
@@ -75085,8 +75284,8 @@ var init_device_system_dialog = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/device-deeplink.js
-import { execFile as execFileCb18 } from "node:child_process";
-import { promisify as promisify23 } from "node:util";
+import { execFile as execFileCb17 } from "node:child_process";
+import { promisify as promisify22 } from "node:util";
 function iosDeeplinkCommandArgs(url, deviceId) {
   if (!deviceId)
     throw new Error("DEVICE_AUTHORITY_MISMATCH: exact iOS deviceId is required");
@@ -75094,7 +75293,7 @@ function iosDeeplinkCommandArgs(url, deviceId) {
 }
 async function openIosDeeplink(url, deviceId) {
   try {
-    const { stdout, stderr } = await execFile21("xcrun", iosDeeplinkCommandArgs(url, deviceId), {
+    const { stdout, stderr } = await execFile20("xcrun", iosDeeplinkCommandArgs(url, deviceId), {
       timeout: EXEC_TIMEOUT_MS
     });
     return okResult({
@@ -75138,7 +75337,7 @@ function androidDeeplinkCommandArgs(url, packageName, deviceId) {
 async function openAndroidDeeplink(url, packageName, deviceId) {
   const args = androidDeeplinkCommandArgs(url, packageName, deviceId);
   try {
-    const { stdout, stderr } = await execFile21("adb", args, { timeout: EXEC_TIMEOUT_MS });
+    const { stdout, stderr } = await execFile20("adb", args, { timeout: EXEC_TIMEOUT_MS });
     const output = (stdout || stderr).trim();
     if (/Error:|Error type \d|Warning: Activity not started|No Activity found|Status: error/i.test(output)) {
       return failResult(`adb am start reported error: ${output.slice(0, 300)}`, {
@@ -75223,7 +75422,7 @@ function createDeviceDeeplinkHandler(deps = {}) {
     }
   };
 }
-var execFile21, EXEC_TIMEOUT_MS;
+var execFile20, EXEC_TIMEOUT_MS;
 var init_device_deeplink = __esm({
   "packages/rn-dev-agent-core/dist/tools/device-deeplink.js"() {
     "use strict";
@@ -75233,7 +75432,7 @@ var init_device_deeplink = __esm({
     init_dev_client_picker();
     init_device_system_dialog();
     init_authority_gate();
-    execFile21 = promisify23(execFileCb18);
+    execFile20 = promisify22(execFileCb17);
     EXEC_TIMEOUT_MS = 1e4;
   }
 });
@@ -75393,10 +75592,10 @@ var init_runtime = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/device-record.js
-import { execFile as execFile22 } from "node:child_process";
+import { execFile as execFile21 } from "node:child_process";
 import { createHash as createHash15 } from "node:crypto";
 import { existsSync as existsSync31 } from "node:fs";
-import { promisify as promisify24 } from "node:util";
+import { promisify as promisify23 } from "node:util";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 import { dirname as dirname18, join as join39 } from "node:path";
 function parseAllBootedIosDevices(jsonText) {
@@ -75818,7 +76017,7 @@ var init_device_record = __esm({
     init_process_birth();
     init_runtime();
     init_process_cleanup();
-    execFileAsync5 = promisify24(execFile22);
+    execFileAsync5 = promisify23(execFile21);
     START_TIMEOUT_MS = 1e4;
     STATUS_TIMEOUT_MS = 5e3;
     GIF_TIMEOUT_MS = 6e4;
@@ -79232,8 +79431,8 @@ var init_nav_graph = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/auto-login.js
-import { execFile as execFileCb19 } from "node:child_process";
-import { promisify as promisify25 } from "node:util";
+import { execFile as execFileCb18 } from "node:child_process";
+import { promisify as promisify24 } from "node:util";
 import { existsSync as existsSync33, readFileSync as readFileSync31, writeFileSync as writeFileSync16, readdirSync as readdirSync10 } from "node:fs";
 import { join as join42 } from "node:path";
 import { homedir as homedir10 } from "node:os";
@@ -79364,7 +79563,7 @@ async function handleAutoLogin(client2, opts = {}) {
     };
   }
   try {
-    await runFlowParked(() => execFile23(runnerPath, ["--platform", platform, "test", wrapperPath], {
+    await runFlowParked(() => execFile22(runnerPath, ["--platform", platform, "test", wrapperPath], {
       timeout: 12e4,
       encoding: "utf8"
     }), {
@@ -79398,7 +79597,7 @@ async function handleAutoLogin(client2, opts = {}) {
     flow: flowPath
   };
 }
-var execFile23, AUTH_ROUTE_PATTERNS, LOGIN_FLOW_PRIORITY;
+var execFile22, AUTH_ROUTE_PATTERNS, LOGIN_FLOW_PRIORITY;
 var init_auto_login = __esm({
   "packages/rn-dev-agent-core/dist/tools/auto-login.js"() {
     "use strict";
@@ -79407,7 +79606,7 @@ var init_auto_login = __esm({
     init_project_config();
     init_maestro_validator();
     init_maestro_run();
-    execFile23 = promisify25(execFileCb19);
+    execFile22 = promisify24(execFileCb18);
     AUTH_ROUTE_PATTERNS = [
       "login",
       "signin",
@@ -79628,8 +79827,8 @@ var init_connection = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/restart.js
-import { execFile as execFileCb20 } from "node:child_process";
-import { promisify as promisify26 } from "node:util";
+import { execFile as execFileCb19 } from "node:child_process";
+import { promisify as promisify25 } from "node:util";
 function safeSimctlTarget(deviceId) {
   return deviceId && SIMULATOR_UDID_RE.test(deviceId) ? deviceId : null;
 }
@@ -79658,7 +79857,7 @@ async function resolveExactRestartTargetId(client2, input, execute) {
   return exactCandidates[0].id;
 }
 function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) {
-  const execFile27 = deps.execFile ?? defaultExecFile3;
+  const execFile26 = deps.execFile ?? defaultExecFile3;
   const stopFastRunner2 = deps.stopFastRunner ?? stopFastRunner;
   const unbindRunner = deps.unbindRunner ?? (() => {
   });
@@ -79666,7 +79865,7 @@ function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) 
   const probeAppInstalledFn = deps.probeAppInstalled ?? probeAppInstalled;
   const snapshotHintFn = deps.snapshotHint ?? snapshotHintForBundleId;
   const resetDetachedBudgetFn = deps.resetDetachedBudget ?? resetDetachedRecoveryCounter;
-  const resolveExactTargetId = deps.resolveExactTargetId ?? ((client2, input) => resolveExactRestartTargetId(client2, input, execFile27));
+  const resolveExactTargetId = deps.resolveExactTargetId ?? ((client2, input) => resolveExactRestartTargetId(client2, input, execFile26));
   async function doRestart(args) {
     try {
       logger.info("MCP", `cdp_restart: in-process state reset requested (hardReset=${!!args.hardReset})`);
@@ -79699,7 +79898,7 @@ function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) 
             return failResult("cdp_restart refused a non-exact iOS simulator identifier", "DEVICE_AUTHORITY_MISMATCH");
           }
           try {
-            await execFile27("xcrun", ["simctl", "terminate", targetUdid, bundleId], {
+            await execFile26("xcrun", ["simctl", "terminate", targetUdid, bundleId], {
               timeout: 5e3
             });
             hardResetSteps.push(`simctl terminate ${bundleId}:ok`);
@@ -79707,7 +79906,7 @@ function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) 
             hardResetSteps.push(`simctl terminate:warn(${err instanceof Error ? err.message : err})`);
           }
           try {
-            await execFile27("xcrun", ["simctl", "launch", targetUdid, bundleId], { timeout: 8e3 });
+            await execFile26("xcrun", ["simctl", "launch", targetUdid, bundleId], { timeout: 8e3 });
             hardResetSteps.push(`simctl launch ${bundleId}:ok`);
           } catch (err) {
             const msg3 = err instanceof Error ? err.message : String(err);
@@ -79727,11 +79926,11 @@ function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) 
           await sleep7(3e3);
         } else if (bundleId && targetPlatform === "android") {
           try {
-            await execFile27("adb", ["-s", args.deviceId, "shell", "am", "force-stop", bundleId], {
+            await execFile26("adb", ["-s", args.deviceId, "shell", "am", "force-stop", bundleId], {
               timeout: 5e3
             });
             hardResetSteps.push(`adb force-stop ${bundleId}:ok`);
-            await execFile27("adb", [
+            await execFile26("adb", [
               "-s",
               args.deviceId,
               "shell",
@@ -79830,7 +80029,7 @@ var init_restart = __esm({
     init_maestro_validator();
     init_status();
     init_target_device_authority();
-    defaultExecFile3 = promisify26(execFileCb20);
+    defaultExecFile3 = promisify25(execFileCb19);
     SIMULATOR_UDID_RE = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
     inflightRestart = null;
   }
@@ -79989,8 +80188,8 @@ var init_maestro_generate = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/maestro-test-all.js
-import { execFile as execFileCb21 } from "node:child_process";
-import { promisify as promisify27 } from "node:util";
+import { execFile as execFileCb20 } from "node:child_process";
+import { promisify as promisify26 } from "node:util";
 import { existsSync as existsSync35, readdirSync as readdirSync11, readFileSync as readFileSync32, writeFileSync as writeFileSync18 } from "node:fs";
 import { join as join44 } from "node:path";
 import { tmpdir as tmpdir12 } from "node:os";
@@ -80112,7 +80311,7 @@ function createMaestroTestAllHandler() {
           writeFileSync18(safeFlowFile, buildMaestroFlow(parsedAppId !== void 0 ? { appId: parsedAppId } : {}, [
             ...commands
           ]), "utf-8");
-          return execFile24(flowDispatch.binPath, finalArgs, {
+          return execFile23(flowDispatch.binPath, finalArgs, {
             timeout: remainingTimeout,
             encoding: "utf8",
             maxBuffer: 10 * 1024 * 1024
@@ -80210,7 +80409,7 @@ function createMaestroTestAllHandler() {
     return okResult(summary);
   };
 }
-var execFile24;
+var execFile23;
 var init_maestro_test_all = __esm({
   "packages/rn-dev-agent-core/dist/tools/maestro-test-all.js"() {
     "use strict";
@@ -80226,7 +80425,7 @@ var init_maestro_test_all = __esm({
     init_maestro_runner_report();
     init_authority_gate();
     init_registry();
-    execFile24 = promisify27(execFileCb21);
+    execFile23 = promisify26(execFileCb20);
   }
 });
 
@@ -81517,11 +81716,11 @@ var init_jpeg_stream = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/observability/mirror/sources.js
-import { spawn as spawn9, execFile as execFile25 } from "node:child_process";
+import { spawn as spawn9, execFile as execFile24 } from "node:child_process";
 import { readFile as readFile2, unlink } from "node:fs/promises";
 import { tmpdir as tmpdir14 } from "node:os";
 import { join as join49 } from "node:path";
-async function detectIdb(execFileFn = execFile25) {
+async function detectIdb(execFileFn = execFile24) {
   return new Promise((resolve11) => {
     execFileFn("idb", ["--help"], { timeout: 3e3 }, (err) => resolve11(!err));
   });
@@ -81532,7 +81731,7 @@ function isEnoent(err) {
 function defaultExecJpeg(cmd, args, signal) {
   const outPath = args[args.length - 1];
   return new Promise((resolve11, reject) => {
-    execFile25(cmd, args, { maxBuffer: 16 * 1024 * 1024, timeout: 1e4, signal }, (err) => {
+    execFile24(cmd, args, { maxBuffer: 16 * 1024 * 1024, timeout: 1e4, signal }, (err) => {
       if (err) {
         reject(err);
         return;
@@ -83513,8 +83712,8 @@ __export(index_exports, {
 });
 import { createHash as createHash21, createHmac as createHmac5, randomUUID as randomUUID9 } from "node:crypto";
 import { readFileSync as readFileSync40, rmSync as rmSync11 } from "node:fs";
-import { execFile as execFile26 } from "node:child_process";
-import { promisify as promisify28 } from "node:util";
+import { execFile as execFile25 } from "node:child_process";
+import { promisify as promisify27 } from "node:util";
 import { fileURLToPath as fileURLToPath6 } from "node:url";
 import { dirname as dirname23, join as join55 } from "node:path";
 function trackedTool(name, desc, schema, handler) {
@@ -84120,7 +84319,7 @@ var init_index = __esm({
       const status = authorityRuntime.status();
       return status.available && status.bindings.bundle ? client.createReplacement(port) : new CDPClient(port);
     };
-    execFileP = promisify28(execFile26);
+    execFileP = promisify27(execFile25);
     mustOk = (res, what) => {
       const env = JSON.parse(res.content[0].text);
       if (env.ok === false)
@@ -84857,10 +85056,10 @@ var init_index = __esm({
       settleTimeoutMs: external_exports.number().int().min(500).max(3e4).optional().describe("Override the post-action settle budget in ms (default 6000). Settle waits for the UI to stabilize after the action; see meta.settle in the result. Budget knob only \u2014 RN_SETTLE=0 disables settle."),
       retryIfNoChange: external_exports.boolean().optional().describe("Story 05: when an ordinary tap produces no UI change, one automatic re-tap fires by default. Validated iOS Key/Keyboard targets and transport/keyboard recovery are never replayed. Set false to disable for other taps (e.g. intentional no-op taps). RN_SELF_HEAL=0 disables globally.")
     }, createDevicePressHandler(getClient));
-    trackedTool("device_fill", 'Type text into an input field by its @ref from device_snapshot. Always re-taps the element first so keyboard focus is on the correct field even in sequential fills. On "no focused text input" errors, automatically falls back: Pressable\u2192TextInput resolution (common RN design-system pattern where outer Pressable wraps inner TextInput) \u2192 coordinate re-tap + retry \u2192 Android adb input / iOS Maestro inputText. Check meta.fallbackUsed in the result to see which strategy succeeded. Requires an open session.', {
-      ref: external_exports.string().describe('Input field ref from device_snapshot (e.g. "e5" or "@e5")'),
-      text: external_exports.string().describe("Text to type into the field"),
-      waitForKeyboardMs: external_exports.number().int().min(0).max(5e3).optional().describe("Wait between pre-tap and fill probe in ms (default 150). Bump to 500-1000ms when filling Pressable-wrapped TextInputs on slow keyboard animations to give RN native focus dispatch time to land."),
+    trackedTool("device_fill", 'Type text into an input field by its @ref or testID from device_snapshot, with verified truth (GH #581): the tool binds exactly ONE input (a direct TextInput ref/testID, or a `${name}-pressable` wrapper uniquely mapped to its inner `${name}` input), skips the focus tap only when that exact input is already focused, and returns filled:true ONLY after a stable exact post-settle read-back (fiber value for controlled inputs, native read for uncontrolled; meta.verify is always "exact" on success). Tiers: controlled inputs fill via onChangeText, others via the native runner, with a clear-first retype and a clear-first Maestro attempt for observed wrong values. Unverifiable outcomes hard-fail: NO_TEXT_INPUT_TARGET means nothing was typed (rebind after a fresh snapshot); TEXT_ENTRY_UNVERIFIED means an attempt ran but the exact value could not be proven \u2014 check meta.mutation: "none" = safe to retry after a fresh snapshot; "observed" = the field holds a wrong value, take a fresh snapshot and re-read before a corrective fill; "possible" = do NOT retry the same ref \u2014 take a fresh device_snapshot, rebind the input by identity, and read its state first (a blind retry can double-type). Secure fields verify only when controlled (masked native values are never proof); empty text is a verified clear. Requires an open session.', {
+      ref: external_exports.string().describe('Input field ref from device_snapshot (e.g. "e5" or "@e5"), or a testID'),
+      text: external_exports.string().describe("Text to type into the field (empty string = verified clear)"),
+      waitForKeyboardMs: external_exports.number().int().min(0).max(5e3).optional().describe("Bounded wait for the exact input to gain focus after the in-operation focus tap (default 1500). Bump to 3000-5000ms for slow keyboard animations on Pressable-wrapped TextInputs."),
       testID: external_exports.string().optional().describe("Explicit testID for the JS-first fill path; resolved from the ref's cached snapshot identifier when omitted. Pass this when the ref is not a snapshot token."),
       settleTimeoutMs: external_exports.number().int().min(500).max(3e4).optional().describe("Override the post-action settle budget in ms (default 6000). Settle waits for the UI to stabilize after the action; see meta.settle in the result. Budget knob only \u2014 RN_SETTLE=0 disables settle.")
     }, createDeviceFillHandler(getClient));

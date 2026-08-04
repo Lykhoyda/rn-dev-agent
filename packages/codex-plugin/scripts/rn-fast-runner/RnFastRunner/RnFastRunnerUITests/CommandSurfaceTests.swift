@@ -6,7 +6,7 @@ final class CommandSurfaceTests: XCTestCase {
   func testAllCasesCoverBridgeRequiredVerbs() {
     let advertised = Set(CommandType.allCases.map(\.rawValue))
     let required: Set<String> = [
-      "tap", "type", "drag", "longPress", "pinch",
+      "tap", "type", "verifyInput", "drag", "longPress", "pinch",
       "snapshot", "screenshot", "back", "keyboardDismiss",
     ]
     XCTAssertTrue(

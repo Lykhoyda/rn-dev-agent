@@ -1,11 +1,8 @@
-import { execFile as execFileCb } from 'node:child_process';
-import { promisify } from 'node:util';
 import {
   runNative,
   getActiveSession,
   clearActiveSession,
   getCachedScreenRect,
-  getAdbSerial,
   cacheSnapshot,
   getCachedSnapshot,
   isSnapshotCacheValid,
@@ -33,17 +30,26 @@ import type { RecoveryTier } from './runner-leak-recovery.js';
 import { reopenSessionForRecovery } from './device-session.js';
 import type { FlatNode } from '../fast-runner-ref-map.js';
 import type { CDPClient } from '../cdp-client.js';
-import { getCachedMetadata, isRefMapFresh, lookupRef, refCenter } from '../fast-runner-ref-map.js';
+import {
+  getCachedMetadata,
+  getCachedSignature,
+  isRefMapFresh,
+  lookupRef,
+  refCenter,
+  type RefSignature,
+} from '../fast-runner-ref-map.js';
 import {
   resolveJsTestId,
   attemptJsFill,
   settleRead,
-  classifyFillVerification,
+  probeInputState,
+  finalFiberVerify,
+  combineVerificationOracles,
   decideNativeRetype,
-  type FillVerifyOutcome,
+  type FiberVerifyOutcome,
+  type NativeVerifyVerdict,
+  type FinalVerification,
 } from './fill-verify.js';
-
-const execFile = promisify(execFileCb);
 
 export interface SnapshotNode {
   ref: string;
@@ -51,6 +57,8 @@ export interface SnapshotNode {
   identifier?: string;
   type?: string;
   hittable?: boolean;
+  /** GH #581: Android password fields (iOS secure inputs are typed SecureTextField). */
+  secure?: boolean;
   rect?: { x: number; y: number; width: number; height: number };
 }
 
@@ -462,37 +470,137 @@ export function isDaemonTimeoutError(text: string): boolean {
   );
 }
 
-// B122: helper to resolve a Pressable-wrapping ref to its inner TextInput ref.
-// Common RN design-system pattern: outer Pressable with testID `${name}-pressable`
-// imperatively focuses an inner TextInput whose testID is `${name}`. When
-// device_fill targets the Pressable directly, the focus hasn't propagated to
-// the TextInput by the time we probe — primary fill fails with "no focused
-// text input to clear". Re-resolving to the inner TextInput's ref and re-tapping
-// directly forces native focus into the right element.
-//
-// Heuristic — both must hold:
-//   1. The ref's node has identifier ending in `-pressable`.
-//   2. There is a sibling/descendant node whose identifier === stripped(identifier)
-//      AND whose type is one of TextField, SecureTextField, or TextView.
-//
-// Returns the resolved ref (with leading `@`) or null if no match.
-const TEXT_INPUT_TYPES = new Set(['TextField', 'SecureTextField', 'TextView', 'EditText']);
+// GH #581: exact fill-target binding. Bind exactly one current-generation
+// input to the caller's direct ref/testID, or uniquely map a
+// `${base}-pressable` wrapper to exactly one `${base}` recognized input in the
+// same snapshot. Zero/duplicate/conflicting matches reject without mutation.
+const IOS_INPUT_TYPES = new Set(['TextField', 'SecureTextField', 'SearchField', 'TextView']);
+const ANDROID_INPUT_TYPE_RE = /.+\.(\w*EditText|\w*AutoCompleteTextView)$/;
 const PRESSABLE_SUFFIX = '-pressable';
 
-export function findInputForPressable(
-  nodes: SnapshotNode[] | null,
-  pressableRef: string,
-): string | null {
-  if (!nodes) return null;
-  const cleanRef = pressableRef.replace(/^@/, '');
-  const pressableNode = nodes.find((n) => n.ref === cleanRef);
-  if (!pressableNode?.identifier?.endsWith(PRESSABLE_SUFFIX)) return null;
-  const baseId = pressableNode.identifier.slice(0, -PRESSABLE_SUFFIX.length);
-  if (!baseId) return null;
-  const inputNode = nodes.find(
-    (n) => n.identifier === baseId && n.type !== undefined && TEXT_INPUT_TYPES.has(n.type),
-  );
-  return inputNode ? `@${inputNode.ref}` : null;
+export function isRecognizedInputType(type: string | undefined): boolean {
+  if (!type) return false;
+  return IOS_INPUT_TYPES.has(type) || ANDROID_INPUT_TYPE_RE.test(type);
+}
+
+function isSecureInputNode(node: SnapshotNode): boolean {
+  return node.type === 'SecureTextField' || node.secure === true;
+}
+
+export interface ExactFillBinding {
+  inputRef: string;
+  inputTestId: string | null;
+  focusRef: string;
+  wrapper: boolean;
+  secure: boolean;
+}
+
+export type ExactBindOutcome =
+  | { ok: true; binding: ExactFillBinding }
+  | { ok: false; detail: string };
+
+function cleanNodeRef(node: SnapshotNode): string {
+  return node.ref.startsWith('@') ? node.ref.slice(1) : node.ref;
+}
+
+// A positional @eN may only bind when its identity still matches the
+// signature captured BEFORE this binding snapshot; a shifted generation
+// rebinds by unique identity or rejects — never by recycled position.
+export function bindExactFillTarget(
+  nodes: SnapshotNode[],
+  rawRef: string,
+  priorSignature?: RefSignature | null,
+): ExactBindOutcome {
+  const clean = rawRef.replace(/^@/, '');
+  const positional = rawRef.startsWith('@') && /^e\d+$/.test(clean);
+  let node: SnapshotNode | undefined;
+  if (positional) {
+    node = nodes.find((n) => cleanNodeRef(n) === clean);
+    if (!node) {
+      return { ok: false, detail: `ref @${clean} is not in the current snapshot generation` };
+    }
+    if (priorSignature) {
+      const matchesPrior =
+        node.type === priorSignature.type &&
+        node.label === priorSignature.label &&
+        node.identifier === priorSignature.identifier;
+      if (!matchesPrior) {
+        // Strictly-unique identity rebinding only — the shared refreshRef
+        // flat-index tie-breaker is a heal heuristic for taps and is never
+        // sufficient license for text mutation.
+        const matches = nodes.filter(
+          (n) =>
+            (n.type ?? '') === priorSignature.type &&
+            n.label === priorSignature.label &&
+            n.identifier === priorSignature.identifier,
+        );
+        if (matches.length !== 1) {
+          return {
+            ok: false,
+            detail: `ref @${clean} no longer denotes the element it was captured for and its identity ${matches.length > 1 ? 'matches multiple elements' : 'is absent'} in the current snapshot`,
+          };
+        }
+        node = matches[0];
+      }
+    }
+  } else {
+    const matches = nodes.filter((n) => n.identifier === clean);
+    if (matches.length === 0) {
+      return { ok: false, detail: `no element with testID "${clean}" in the current snapshot` };
+    }
+    if (matches.length > 1) {
+      return {
+        ok: false,
+        detail: `testID "${clean}" matches ${matches.length} elements — duplicate identifiers cannot bind an exact input`,
+      };
+    }
+    node = matches[0];
+  }
+  if (isRecognizedInputType(node.type)) {
+    return {
+      ok: true,
+      binding: {
+        inputRef: `@${cleanNodeRef(node)}`,
+        inputTestId: node.identifier ?? null,
+        focusRef: `@${cleanNodeRef(node)}`,
+        wrapper: false,
+        secure: isSecureInputNode(node),
+      },
+    };
+  }
+  const id = node.identifier;
+  if (id?.endsWith(PRESSABLE_SUFFIX)) {
+    const base = id.slice(0, -PRESSABLE_SUFFIX.length);
+    if (base) {
+      const inputs = nodes.filter((n) => n.identifier === base && isRecognizedInputType(n.type));
+      if (inputs.length === 1) {
+        return {
+          ok: true,
+          binding: {
+            inputRef: `@${cleanNodeRef(inputs[0])}`,
+            inputTestId: base,
+            focusRef: `@${cleanNodeRef(node)}`,
+            wrapper: true,
+            secure: isSecureInputNode(inputs[0]),
+          },
+        };
+      }
+      if (inputs.length > 1) {
+        return {
+          ok: false,
+          detail: `wrapper "${id}" maps to ${inputs.length} inputs with testID "${base}" — ambiguous`,
+        };
+      }
+      return {
+        ok: false,
+        detail: `wrapper "${id}" has no recognized input with testID "${base}" in the current snapshot`,
+      };
+    }
+  }
+  return {
+    ok: false,
+    detail: `element @${cleanNodeRef(node)} (${node.type ?? 'unknown type'}) is not a recognized text input — pass the inner input's ref or testID`,
+  };
 }
 
 // --- Press (enhanced with doubleTap, count, holdMs, waitForFocusMs) ---
@@ -618,90 +726,17 @@ export function createDeviceLongPressHandler(
   });
 }
 
-// --- Fill (with Android workaround) ---
+// --- Fill (exact target + final verification — GH #581) ---
 
 interface FillArgs {
   ref: string;
   text: string;
-  /**
-   * B122: how long to wait between the pre-tap and the fill probe. Defaults to
-   * 150ms (FOCUS_DELAY_MS). Bump to 500-1000ms when filling a Pressable-wrapped
-   * TextInput on slow keyboard animations — gives RN's native focus dispatch
-   * time to land before the probe.
-   */
+  /** Bounded in-operation focus wait forwarded to the runner (default 1500ms). */
   waitForKeyboardMs?: number;
-  /** #191: explicit testID for the JS-first path; resolved from ref's cached identifier when omitted. */
+  /** #191: explicit testID for the fiber oracle; resolved from ref's cached identifier when omitted. */
   testID?: string;
   /** Story 04 (#385): per-call settle budget override in ms. */
   settleTimeoutMs?: number;
-}
-
-// Story 10 (#391): this helper (and the chunked `adb shell input text` path it
-// serves) survives ONLY in device_fill's last-resort tier — see
-// docs/stories/10-text-input-reliability.md. The transport cannot represent
-// emoji/IME-composed text; the runner's ACTION_SET_TEXT is the primary.
-//
-// Splits a chunk into segments where no segment, after space→%s encoding,
-// will contain a user-literal %s. Android's `input text` interprets %s as
-// space — the ONLY special sequence it recognizes (empirically verified:
-// %%, %p, %n, %d, %t, %S, lone %, trailing % all pass through literally).
-// There is no escape mechanism (no %% → %, no \%s). The fix (B97) is to
-// ensure % and s from user text never appear adjacent in the same `input
-// text` call: send % alone, then s... in the next call.
-export function splitChunkAroundPercentS(chunk: string): string[] {
-  const parts = chunk.split('%s');
-  if (parts.length === 1) return [chunk];
-  const segments: string[] = [];
-  for (let i = 0; i < parts.length; i++) {
-    if (i > 0) {
-      segments.push('%');
-      const rest = 's' + parts[i];
-      if (rest.length > 0) segments.push(rest);
-    } else if (parts[i].length > 0) {
-      segments.push(parts[i]);
-    }
-  }
-  return segments;
-}
-
-// Builds the argv tail for a single `input text` call. The chunk MUST NOT
-// contain a user-literal %s — use splitChunkAroundPercentS first.
-// Wraps in a single-quoted shell string because `adb shell <argv...>` joins
-// argv with spaces and sends to the Android remote shell as a raw command
-// line (it does NOT per-argument-escape). Single-quote wrapping prevents
-// shell metacharacter expansion ($, `, &, |, <, >, etc.); embedded single
-// quotes are escaped via the POSIX `'\''` dance.
-export function buildAdbInputTextArgv(chunk: string): string[] {
-  const escaped = chunk.replace(/ /g, '%s').replace(/'/g, "'\\''");
-  return ['shell', 'input', 'text', `'${escaped}'`];
-}
-
-const ANDROID_INPUT_CHUNK_SIZE = 10;
-
-// Story 10 (#391, codex P2): `adb shell input text` only round-trips printable
-// ASCII — non-ASCII can be silently mangled while adb still exits 0, turning a
-// corrupted fill into a reported success. The adb tier is gated on this.
-export function isAdbInputTextSafe(text: string): boolean {
-  // eslint-disable-next-line no-control-regex
-  return /^[\x20-\x7E]*$/.test(text);
-}
-
-async function androidClipboardFill(text: string): Promise<ToolResult> {
-  try {
-    const serial = getAdbSerial();
-    for (let i = 0; i < text.length; i += ANDROID_INPUT_CHUNK_SIZE) {
-      const chunk = text.slice(i, i + ANDROID_INPUT_CHUNK_SIZE);
-      const segments = splitChunkAroundPercentS(chunk);
-      for (const seg of segments) {
-        const argvTail = buildAdbInputTextArgv(seg);
-        await execFile('adb', [...serial, ...argvTail], { timeout: 10000 });
-      }
-    }
-    return okResult({ filled: true, method: 'adb-chunked-input', length: text.length });
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return failResult(`Android text input failed: ${msg}`);
-  }
 }
 
 function isAndroidSession(): boolean {
@@ -711,38 +746,8 @@ function isAndroidSession(): boolean {
   return !!process.env.ANDROID_SERIAL;
 }
 
-const FOCUS_DELAY_MS = 150;
-
-// #385: explicit waitForKeyboardMs always wins (B122 Pressable-wrapped
-// inputs); a pre-tap whose envelope carries meta.settle already waited for UI
-// stability, so the fixed 150ms is only the settle-less fallback.
-export function focusDelayAfterPreTap(
-  preTapEnvelopeText: string | undefined,
-  waitForKeyboardMs: number | undefined,
-): number {
-  if (waitForKeyboardMs !== undefined) return waitForKeyboardMs;
-  if (preTapEnvelopeText) {
-    try {
-      const envelope = JSON.parse(preTapEnvelopeText) as { meta?: { settle?: unknown } };
-      if (envelope.meta?.settle !== undefined) return 0;
-    } catch {
-      /* fall through to legacy delay */
-    }
-  }
-  return FOCUS_DELAY_MS;
-}
-const NO_FOCUSED_INPUT_RE = /no focused text input|no focused element|element is not focused/i;
-
-function isNoFocusedInputError(result: ToolResult): boolean {
-  if (!result.isError) return false;
-  const text = result.content?.[0]?.text ?? '';
-  return NO_FOCUSED_INPUT_RE.test(text);
-}
-
-// Story 10 (#391): the Android runner's focused field ignored ACTION_SET_TEXT
-// (and any applicable keyevent fallback). Focus itself is healthy, so the
-// pressable-resolution / re-tap tiers would be wasted work — descend straight
-// to the platform last resorts.
+// Story 10 (#391): the Android runner proved setText AND keyevents don't land —
+// descend to the clear-first Maestro tier instead of re-tapping healthy focus.
 function isSetTextRejectedError(result: ToolResult): boolean {
   if (!result.isError) return false;
   const text = result.content?.[0]?.text ?? '';
@@ -752,17 +757,6 @@ function isSetTextRejectedError(result: ToolResult): boolean {
   } catch {
     return false;
   }
-}
-
-export type FillPrimaryDescent = 'return-primary' | 'refocus-ladder' | 'reject-ladder';
-
-// Story 10 (#391): pure descent decision for the primary native fill outcome —
-// the ladder's arbiter, kept extractable so ordering stays unit-tested.
-export function classifyFillPrimaryError(primary: ToolResult): FillPrimaryDescent {
-  if (!primary.isError) return 'return-primary';
-  if (isSetTextRejectedError(primary)) return 'reject-ladder';
-  if (isNoFocusedInputError(primary)) return 'refocus-ladder';
-  return 'return-primary';
 }
 
 // Story 10 (#391): typing telemetry the iOS runner attaches to its `type`
@@ -806,20 +800,13 @@ function extractSettleMeta(result: ToolResult): { settle?: unknown; settleMs?: n
   }
 }
 
-function cdpClientOrNull(getClient: () => CDPClient): CDPClient | null {
+export function cdpClientOrNull(getClient: () => CDPClient): CDPClient | null {
   try {
     const c = getClient();
     return c && c.isConnected ? c : null;
   } catch {
     return null;
   }
-}
-function jsVerifyMeta(outcome: FillVerifyOutcome): 'exact' | 'transformed' | 'unverifiable' {
-  return outcome === 'verified-exact'
-    ? 'exact'
-    : outcome === 'verified-transformed'
-      ? 'transformed'
-      : 'unverifiable';
 }
 
 // Multi-review "H3" guard: a cached identifier may only seed the JS-first
@@ -831,85 +818,144 @@ function jsVerifyMeta(outcome: FillVerifyOutcome): 'exact' | 'transformed' | 'un
 // getCachedMetadata can return an OLD-generation identifier even when the map
 // is otherwise fresh. lookupRef reads refMap, which IS still cleared every
 // generation, so `lookupRef(ref) !== null` proves the ref exists in the
-// CURRENT generation — restoring H3 (a testID reused across screens, e.g.
-// 'input-email' on both Login and Signup, can no longer resolve to a
-// retained-but-stale generation's identifier).
+// CURRENT generation.
 export function resolveCachedIdentifier(ref: string): string | undefined {
   const bareRef = ref.replace(/^@/, '');
   if (!isRefMapFresh() || lookupRef(bareRef) === null) return undefined;
   return getCachedMetadata(bareRef)?.identifier;
 }
 
-async function maestroFillFallback(
-  ref: string,
-  text: string,
-  platform: 'ios' | 'android',
-  clearFirst = false,
-  authorityArgs?: object,
-): Promise<ToolResult> {
-  const escapedRef = yamlEscape(ref.replace(/^@/, ''));
-  const escapedText = yamlEscape(text);
-  // When reached from the #191 verify-escalation, the field already holds the
-  // corrupted text, so inputText alone would append. eraseText first so the
-  // fallback can actually recover (multi-review M3).
-  const clearStep = clearFirst ? '\n- eraseText' : '';
-  const yaml = `- tapOn:\n    id: "${escapedRef}"${clearStep}\n- inputText: "${escapedText}"`;
-  const result = await runMaestroInline(yaml, {
-    platform,
-    slug: 'fill-fallback',
-    timeoutMs: 120_000,
-    authorityArgs,
-  });
-  if (result.passed) {
-    return okResult(
-      { filled: true, method: 'maestro', length: text.length },
-      { meta: { fallbackUsed: 'maestro' } },
-    );
+export type FillMutationDisposition = 'none' | 'observed' | 'possible';
+
+// Conservative default: an unlabeled failure after dispatch may have mutated.
+export function extractMutationDisposition(result: ToolResult): FillMutationDisposition {
+  try {
+    const envelope = JSON.parse(result.content[0]?.text ?? '{}') as {
+      meta?: { mutation?: unknown };
+    };
+    const m = envelope.meta?.mutation;
+    if (m === 'none' || m === 'observed' || m === 'possible') return m;
+  } catch {
+    /* fall through */
   }
-  const refusal = maestroRefusalResult(result, 'Maestro fill fallback was refused.', {
-    tried: ['primary', 'retap', platform === 'android' ? 'adb' : 'maestro'],
+  return 'possible';
+}
+
+function extractErrorText(result: ToolResult): string {
+  try {
+    const envelope = JSON.parse(result.content[0]?.text ?? '{}') as { error?: string };
+    return typeof envelope.error === 'string' ? envelope.error : 'unknown runner error';
+  } catch {
+    return 'unknown runner error';
+  }
+}
+
+const NATIVE_VERIFY_VERDICTS = new Set([
+  'exact',
+  'mismatch',
+  'unreadable',
+  'secure-masked',
+  'target-lost',
+  'ambiguous',
+]);
+
+async function runNativeVerifyInput(
+  binding: ExactFillBinding,
+  text: string,
+): Promise<{ verdict: NativeVerifyVerdict; stable: boolean }> {
+  const result = await runNative(['verify-input', binding.inputRef, text], {
+    settle: { enabled: false },
+    exactTarget: { inputRef: binding.inputRef, secure: binding.secure },
   });
-  if (refusal) return refusal;
-  return failResult(
-    `device_fill fell through all fallbacks. Last error: ${result.error ?? result.output.slice(0, 200)}`,
-    {
-      code: 'FILL_FAILED',
-      tried: ['primary', 'retap', platform === 'android' ? 'adb' : 'maestro'],
-    },
+  if (result.isError) return { verdict: 'unavailable', stable: false };
+  try {
+    const envelope = JSON.parse(result.content[0].text) as {
+      data?: { verifyVerdict?: string; verifyStable?: boolean };
+    };
+    const v = envelope.data?.verifyVerdict;
+    if (typeof v === 'string' && NATIVE_VERIFY_VERDICTS.has(v)) {
+      return { verdict: v as NativeVerifyVerdict, stable: envelope.data?.verifyStable === true };
+    }
+  } catch {
+    /* fall through */
+  }
+  return { verdict: 'unavailable', stable: false };
+}
+
+// The single fill arbiter's evidence gatherer: fiber oracle (controlled
+// inputs) + native verifyInput (uncontrolled inputs), combined per the GH #581
+// contract — disagreement is inconclusive, inconclusive is failure.
+async function finalVerification(
+  client: CDPClient | null,
+  binding: ExactFillBinding,
+  jsTestId: string | null,
+  text: string,
+): Promise<FinalVerification> {
+  const fiberId = binding.inputTestId ?? jsTestId;
+  let fiber: FiberVerifyOutcome | 'unavailable' = 'unavailable';
+  if (client && fiberId) {
+    fiber = await finalFiberVerify({ evaluate: (e) => client.evaluate(e) }, fiberId, text);
+  }
+  const native = await runNativeVerifyInput(binding, text);
+  return combineVerificationOracles(fiber, native.verdict, native.stable);
+}
+
+type FillMethod = 'js-onChangeText' | 'native' | 'maestro';
+
+// The ONLY producer of public fill success (single-success-rule invariant).
+function verifiedFillResult(
+  method: FillMethod,
+  textLength: number,
+  meta: Record<string, unknown>,
+): ToolResult {
+  return okResult(
+    { filled: true, method, length: textLength },
+    { meta: { ...meta, verify: 'exact' } },
   );
 }
 
-const MAX_NATIVE_RETYPE = 2;
+interface FillFailureOpts {
+  mutation: FillMutationDisposition;
+  pathsTried: string[];
+  verification?: FinalVerification;
+  hint?: string;
+}
 
-// `settleAnchor` is the value the read polls AWAY from (to detect a debounced
-// flush); `stabilityPrior` is the prior *attempt*'s settled value, fed to the
-// stability rule. They differ on attempt 0: a fresh fill has an anchor (its
-// post-fill value) but NO stability prior — seeding the prior from the anchor
-// would let a stable char-drop ("hel") classify as 'transformed' and skip the
-// retype, defeating the #191 fix (multi-review L4). So attempt 0 passes prior=null.
-async function nativeSettle(
-  client: CDPClient | null,
-  testID: string | null,
-  text: string,
-  settleAnchor: string | null,
-  stabilityPrior: string | null,
-): Promise<{ outcome: FillVerifyOutcome; value: string | null }> {
-  if (!client || !testID) return { outcome: 'unverifiable', value: null };
-  const settled = await settleRead(
-    { evaluate: (e) => client.evaluate(e) },
-    testID,
-    text,
-    settleAnchor,
-  );
-  return {
-    outcome: classifyFillVerification({
-      text,
-      valueAfter: settled.value,
-      priorValueAfter: stabilityPrior,
-      controlled: settled.controlled,
-    }),
-    value: settled.value,
-  };
+function fillFailure(
+  code: 'NO_TEXT_INPUT_TARGET' | 'TEXT_ENTRY_UNVERIFIED',
+  message: string,
+  opts: FillFailureOpts,
+): ToolResult {
+  return failResult(message, code, {
+    mutation: opts.mutation,
+    pathsTried: opts.pathsTried,
+    ...(opts.verification
+      ? {
+          verification: {
+            fiber: opts.verification.fiber,
+            native: opts.verification.native,
+            nativeStable: opts.verification.nativeStable,
+          },
+        }
+      : {}),
+    hint:
+      opts.hint ??
+      (opts.mutation === 'none'
+        ? 'No text was entered. Refresh the snapshot (device_snapshot action=snapshot) and rebind the input before retrying.'
+        : 'The field may have been mutated. Read the field state (device_snapshot or the fiber) before any manual retry — do not blindly re-run device_fill.'),
+  });
+}
+
+async function clearControlledValue(client: CDPClient, testID: string): Promise<boolean> {
+  try {
+    await client.evaluate(
+      '__RN_AGENT.interact(' + JSON.stringify({ action: 'typeText', testID, text: '' }) + ')',
+    );
+  } catch {
+    return false;
+  }
+  const settled = await settleRead({ evaluate: (e) => client.evaluate(e) }, testID, '', null);
+  return settled.value === '';
 }
 
 function exactTypeReadback(
@@ -930,329 +976,272 @@ function exactTypeReadback(
   };
 }
 
-async function readValueBefore(
+// Post-mutation corrective tier: always clear-first (eraseText) so a
+// corrective attempt never appends; Maestro exit status is attempt evidence
+// only and never public success. Failure output is not echoed (it can embed
+// the flow's inputText).
+async function maestroFillAttempt(
+  targetId: string,
+  text: string,
+  platform: 'ios' | 'android',
+  authorityArgs?: object,
+): Promise<{ attempted: boolean; refusal?: ToolResult }> {
+  const escapedRef = yamlEscape(targetId.replace(/^@/, ''));
+  const escapedText = yamlEscape(text);
+  const yaml = `- tapOn:\n    id: "${escapedRef}"\n- eraseText\n- inputText: "${escapedText}"`;
+  const result = await runMaestroInline(yaml, {
+    platform,
+    slug: 'fill-fallback',
+    timeoutMs: 120_000,
+    authorityArgs,
+  });
+  if (result.passed) return { attempted: true };
+  const refusal = maestroRefusalResult(result, 'Maestro fill fallback was refused.', {
+    tried: ['js', 'native', 'maestro'],
+  });
+  if (refusal) return { attempted: false, refusal };
+  return { attempted: false };
+}
+
+const MAX_NATIVE_RETYPE = 2;
+
+export interface ExactFillTiers {
+  js: boolean;
+  maestro: boolean;
+}
+
+// GH #581 exact fill orchestrator (device_fill and device_batch's fill step):
+// bind exactly one input, mutate through the runner's single exact operation,
+// and emit success only from the final verification arbiter.
+export async function performExactFill(
+  args: FillArgs,
   client: CDPClient | null,
-  testID: string | null,
-): Promise<string | null> {
-  if (!client || !testID) return null;
-  const settled = await settleRead(
-    { evaluate: (e) => client.evaluate(e) },
-    testID,
-    ' __rn_never__',
-    null,
+  tiers: ExactFillTiers,
+): Promise<ToolResult> {
+  const ref = args.ref.startsWith('@') ? args.ref : `@${args.ref}`;
+  const platform: 'ios' | 'android' = isAndroidSession() ? 'android' : 'ios';
+  const pathsTried: string[] = [];
+
+  // Capture the positional ref's identity BEFORE the binding snapshot so a
+  // refreshed generation can only rebind by identity, never by recycled id.
+  const cleanRefForSignature = args.ref.replace(/^@/, '');
+  const priorSignature =
+    args.ref.startsWith('@') && /^e\d+$/.test(cleanRefForSignature)
+      ? getCachedSignature(cleanRefForSignature)
+      : null;
+
+  const snap = await fetchSnapshotNodes(true);
+  if (!snap.ok) {
+    if (snap.reason === 'runner-leak-unrecovered') {
+      return runnerLeakFailResult(args.ref, snap.recoveryReason);
+    }
+    return fillFailure(
+      'NO_TEXT_INPUT_TARGET',
+      `device_fill could not snapshot the screen to bind "${args.ref}" (${snap.reason}); no text was entered.`,
+      { mutation: 'none', pathsTried },
+    );
+  }
+  const bind = bindExactFillTarget(snap.nodes, args.ref, priorSignature);
+  if (!bind.ok) {
+    return fillFailure(
+      'NO_TEXT_INPUT_TARGET',
+      `device_fill could not bind an exact input: ${bind.detail}. No text was entered.`,
+      { mutation: 'none', pathsTried },
+    );
+  }
+  const binding = bind.binding;
+
+  const jsTestId = client
+    ? resolveJsTestId(ref, {
+        explicitTestId: args.testID,
+        cachedIdentifier: resolveCachedIdentifier(ref),
+      })
+    : null;
+  const fiberId = binding.inputTestId ?? jsTestId;
+  const evalSeam = client ? { evaluate: (e: string) => client.evaluate(e) } : null;
+
+  // Controlled inputs go through the fiber; the probe never fires handlers, so
+  // uncontrolled inputs skip straight to native (no double-mutation window).
+  if (tiers.js && client && evalSeam && fiberId) {
+    const probe = await probeInputState(evalSeam, fiberId);
+    if (probe.readable && probe.controlled) {
+      pathsTried.push('js');
+      const tJs = Date.now();
+      const js = await attemptJsFill(evalSeam, fiberId, args.text);
+      if (!js.handled && js.dispatchUncertain) {
+        return fillFailure(
+          'TEXT_ENTRY_UNVERIFIED',
+          'The JS fill dispatch failed after it may have reached the app; not typing again.',
+          { mutation: 'possible', pathsTried },
+        );
+      }
+      if (js.handled) {
+        if (js.outcome === 'exact') {
+          const confirmed = await finalFiberVerify(evalSeam, fiberId, args.text);
+          if (confirmed === 'exact') {
+            return verifiedFillResult('js-onChangeText', args.text.length, {
+              textEntryPath: 'js',
+              verifiedOracle: 'fiber',
+              handler: js.handler,
+              timings_ms: { jsType: Date.now() - tJs },
+            });
+          }
+        }
+        if (js.outcome === 'unreadable') {
+          return fillFailure(
+            'TEXT_ENTRY_UNVERIFIED',
+            'The onChangeText handler fired but the resulting value is unreadable — app state may have changed; not retrying.',
+            { mutation: 'possible', pathsTried },
+          );
+        }
+        // Readable but not (stably) exact: correct clear-first via the same
+        // handler, prove the clear, then descend to the native tier.
+        const cleared = await clearControlledValue(client, fiberId);
+        if (!cleared) {
+          return fillFailure(
+            'TEXT_ENTRY_UNVERIFIED',
+            'device_fill could not verify the JS fill and could not prove a clean clear; not retrying.',
+            { mutation: 'possible', pathsTried },
+          );
+        }
+      }
+    }
+  }
+
+  pathsTried.push('native');
+  const focusCenter = isRefMapFresh() ? refCenter(binding.focusRef) : null;
+  const exactTarget = {
+    inputRef: binding.inputRef,
+    ...(focusCenter ? { focusX: focusCenter.x, focusY: focusCenter.y } : {}),
+    ...(args.waitForKeyboardMs !== undefined ? { focusWaitMs: args.waitForKeyboardMs } : {}),
+  };
+  const tNative = Date.now();
+  let lastVerification: FinalVerification | null = null;
+  let sawSetTextRejected = false;
+  for (let attempt = 0; attempt <= MAX_NATIVE_RETYPE; attempt++) {
+    const clearFirst = attempt > 0 || args.text.length === 0;
+    const primary = await runNative(
+      ['fill', binding.inputRef, args.text, ...(clearFirst ? ['--clear-first'] : [])],
+      {
+        ...(attempt === 0 ? settleOpts(args) : { settle: { enabled: false } }),
+        exactTarget,
+        verifyTypeReadback: exactTypeReadback(client, fiberId),
+      },
+    );
+    if (primary.isError) {
+      if (isSetTextRejectedError(primary)) {
+        sawSetTextRejected = true;
+        break;
+      }
+      const mutation = extractMutationDisposition(primary);
+      if (mutation === 'none') {
+        return fillFailure(
+          'NO_TEXT_INPUT_TARGET',
+          `device_fill's native attempt was refused before mutation: ${extractErrorText(primary)}`,
+          { mutation: 'none', pathsTried },
+        );
+      }
+      // Runner-timeout discipline: never resend; only an exact independent
+      // read-back may promote a possibly-mutating failure to success.
+      const verification = await finalVerification(client, binding, jsTestId, args.text);
+      if (verification.verified) {
+        return verifiedFillResult('native', args.text.length, {
+          textEntryPath: attempt === 0 ? 'native' : 'native-retype',
+          verifiedOracle: verification.oracle,
+          recovered: 'post-error-exact-readback',
+          retypes: attempt,
+          timings_ms: { nativeType: Date.now() - tNative },
+        });
+      }
+      return fillFailure(
+        'TEXT_ENTRY_UNVERIFIED',
+        `device_fill's native attempt failed and the field could not be verified: ${extractErrorText(primary)}`,
+        { mutation, pathsTried, verification },
+      );
+    }
+    const primarySettle = extractSettleMeta(primary);
+    const primaryTyping = extractTypingMeta(primary);
+    const verification = await finalVerification(client, binding, jsTestId, args.text);
+    lastVerification = verification;
+    if (verification.verified) {
+      return verifiedFillResult('native', args.text.length, {
+        textEntryPath: attempt === 0 ? 'native' : 'native-retype',
+        verifiedOracle: verification.oracle,
+        retypes: attempt,
+        ...(primaryTyping ? { typing: primaryTyping } : {}),
+        ...(primarySettle.settle !== undefined ? { settle: primarySettle.settle } : {}),
+        timings_ms: {
+          nativeType: Date.now() - tNative,
+          ...(primarySettle.settleMs !== undefined ? { settle: primarySettle.settleMs } : {}),
+        },
+      });
+    }
+    const decision = decideNativeRetype(verification, attempt, MAX_NATIVE_RETYPE);
+    if (decision.action === 'escalate') {
+      if (!verification.observedMismatch) {
+        return fillFailure(
+          'TEXT_ENTRY_UNVERIFIED',
+          'device_fill typed but the final read-back is inconclusive; not retrying.',
+          { mutation: 'possible', pathsTried, verification },
+        );
+      }
+      break;
+    }
+    await sleep(decision.delayMs);
+  }
+
+  // Corrective Maestro tier: reachable only after an observed stable mismatch
+  // or a runner-proven SET_TEXT_REJECTED — both safe for clear-first entry.
+  if (!tiers.maestro) {
+    return fillFailure(
+      'TEXT_ENTRY_UNVERIFIED',
+      'device_fill could not verify the fill and this caller does not use the Maestro tier.',
+      {
+        mutation: sawSetTextRejected ? 'observed' : 'observed',
+        pathsTried,
+        verification: lastVerification ?? undefined,
+      },
+    );
+  }
+  pathsTried.push('maestro');
+  const maestroId = binding.inputTestId ?? resolveCachedIdentifier(binding.inputRef);
+  if (!maestroId) {
+    return fillFailure(
+      'TEXT_ENTRY_UNVERIFIED',
+      'device_fill could not verify the fill and the input has no testID for the Maestro tier.',
+      { mutation: 'observed', pathsTried, verification: lastVerification ?? undefined },
+    );
+  }
+  const maestro = await maestroFillAttempt(maestroId, args.text, platform, args);
+  if (!maestro.attempted) {
+    if (maestro.refusal) return maestro.refusal;
+    return fillFailure(
+      'TEXT_ENTRY_UNVERIFIED',
+      'device_fill fell through all tiers; the Maestro attempt did not run cleanly.',
+      { mutation: 'observed', pathsTried, verification: lastVerification ?? undefined },
+    );
+  }
+  const maestroVerification = await finalVerification(client, binding, jsTestId, args.text);
+  if (maestroVerification.verified) {
+    return verifiedFillResult('maestro', args.text.length, {
+      textEntryPath: 'maestro',
+      verifiedOracle: maestroVerification.oracle,
+      timings_ms: { nativeType: Date.now() - tNative },
+    });
+  }
+  return fillFailure(
+    'TEXT_ENTRY_UNVERIFIED',
+    'Text entry could not be verified after native and Maestro attempts.',
+    { mutation: 'possible', pathsTried, verification: maestroVerification },
   );
-  return settled.value;
 }
 
 export function createDeviceFillHandler(
   getClient: () => CDPClient,
 ): (args: FillArgs) => Promise<ToolResult> {
-  return withSession(async (args) => {
-    const ref = args.ref.startsWith('@') ? args.ref : `@${args.ref}`;
-    const androidSession = isAndroidSession();
-
-    // Codex P2 round-3 (#564): @eN snapshot refs are runner-ephemeral, not app
-    // testIDs — Maestro's `tapOn: id:` can only match the element's REAL
-    // identifier. Resolve it whenever the ref map still knows it; otherwise
-    // pass the ref through unchanged (pre-existing behavior for bare refs).
-    const maestroTargetRef = () => resolveCachedIdentifier(ref) ?? ref;
-
-    // Story 10 (#391): the historical Android unsafe-char/length short-circuit
-    // to chunked adb is gone. It predated the in-tree runner ("the Android path
-    // is already a fallback for agent-device fill") — but agent-device was
-    // eradicated, `fill` always reaches rn-android-runner, and its
-    // ACTION_SET_TEXT primary is atomic and full-Unicode. Routing emoji/long
-    // text to `adb input text` first was routing it to the ONE tier that
-    // cannot represent it. Chunked adb survives only as Fallback 2 below.
-
-    // #191 prong 1 — JS-first dispatch. Opportunistic: CDP connected AND ref→testID.
-    // resolveCachedIdentifier gates on BOTH ref-map freshness AND current-generation
-    // presence (multi-review H3, restored post-#386 signature retention — see its
-    // doc comment) so a stale/retained-but-absent ref can't map @eN to a reused
-    // testID on a since-navigated screen. Explicit args.testID is caller-asserted
-    // and stays ungated. Never returns the field's value (could be a password) — the
-    // `verify` classification conveys success without echoing the text (multi-review BLOCKER).
-    const client = cdpClientOrNull(getClient);
-    const cachedIdentifier = resolveCachedIdentifier(ref);
-    const jsTestId = client
-      ? resolveJsTestId(ref, { explicitTestId: args.testID, cachedIdentifier })
-      : null;
-    if (client && jsTestId) {
-      const tJs = Date.now();
-      const js = await attemptJsFill({ evaluate: (e) => client.evaluate(e) }, jsTestId, args.text);
-      if (js.handled && js.outcome && js.outcome !== 'corrupted') {
-        return okResult(
-          { filled: true, method: 'js-onChangeText', length: args.text.length },
-          {
-            meta: {
-              textEntryPath: 'js',
-              verify: jsVerifyMeta(js.outcome),
-              handler: js.handler,
-              timings_ms: { jsType: Date.now() - tJs },
-            },
-          },
-        );
-      }
-      // Fall-through (no handler, or JS fired but corrupted). If a handler DID fire on a
-      // controlled input, clear the value it set via onChangeText('') so the native
-      // re-type below doesn't double-apply onto debounced/partial JS text (multi-review H2).
-      if (js.handled && js.controlled) {
-        try {
-          await client.evaluate(
-            '__RN_AGENT.interact(' +
-              JSON.stringify({ action: 'typeText', testID: jsTestId, text: '' }) +
-              ')',
-          );
-        } catch {
-          /* best-effort clear */
-        }
-      }
-    }
-
-    // #385: resolve the target's coords ONCE. The pre-tap's settle re-snapshots
-    // and rebuilds the @ref map (post-keyboard screen), so a later @ref
-    // re-resolution inside this call could target a different element.
-    const pinned = isRefMapFresh() ? refCenter(ref) : null;
-    const pinArgs = pinned ? ['--at-x', String(pinned.x), '--at-y', String(pinned.y)] : [];
-
-    // G6: Always tap before fill so keyboard focus lands on this @ref, even in sequential
-    // press+fill+press+fill flows where the previous call left focus on a different field.
-    const preTap = pinned
-      ? await runNative(['press', String(pinned.x), String(pinned.y)], settleOpts(args))
-      : await runNative(['press', ref], settleOpts(args));
-    if (preTap.isError) {
-      // If we can't even tap the element, fall straight through to fill — it may still
-      // work via the fast-runner coordinate path, and we want its error message, not ours.
-    } else {
-      const delay = focusDelayAfterPreTap(preTap.content?.[0]?.text, args.waitForKeyboardMs);
-      if (delay > 0) await sleep(delay);
-    }
-
-    const primary = await runNative(['fill', ref, args.text, ...pinArgs], {
-      ...settleOpts(args),
-      verifyTypeReadback: exactTypeReadback(client, jsTestId),
-    });
-    if (!primary.isError) {
-      // #191 prong 2/3 — native read-back verification + corrective clear/retype.
-      // iOS-only: the corrective retype needs the runner's --clear-first, which the
-      // Android agent-device path does not honor — a retype there would APPEND and
-      // make corruption worse (multi-review H1). Android keeps the legacy result.
-      if (client && jsTestId && !androidSession) {
-        const tNative = Date.now();
-        // #385: the verified-native path re-wraps the result — carry the
-        // primary fill's settle telemetry forward instead of dropping it.
-        const primarySettle = extractSettleMeta(primary);
-        // Story 10 (#391): same for the runner's typing telemetry.
-        const primaryTyping = extractTypingMeta(primary);
-        let settleAnchor = await readValueBefore(client, jsTestId);
-        let stabilityPrior: string | null = null;
-        for (let attempt = 0; attempt <= MAX_NATIVE_RETYPE; attempt++) {
-          const { outcome, value } = await nativeSettle(
-            client,
-            jsTestId,
-            args.text,
-            settleAnchor,
-            stabilityPrior,
-          );
-          const decision = decideNativeRetype(outcome, attempt, MAX_NATIVE_RETYPE);
-          if (decision.action === 'accept') {
-            return okResult(
-              { filled: true, method: 'native', length: args.text.length },
-              {
-                meta: {
-                  textEntryPath: attempt === 0 ? 'native' : 'native-retype',
-                  verify: jsVerifyMeta(outcome),
-                  retypes: attempt,
-                  ...(primaryTyping ? { typing: primaryTyping } : {}),
-                  ...(primarySettle.settle !== undefined ? { settle: primarySettle.settle } : {}),
-                  timings_ms: {
-                    nativeType: Date.now() - tNative,
-                    ...(primarySettle.settleMs !== undefined
-                      ? { settle: primarySettle.settleMs }
-                      : {}),
-                  },
-                },
-              },
-            );
-          }
-          if (decision.action === 'escalate') break;
-          settleAnchor = value;
-          stabilityPrior = value;
-          // #385: retypes skip settle — the nativeSettle CDP read-back that
-          // follows is their stability check; a UI-settle here only adds latency.
-          await runNative(
-            [
-              'fill',
-              ref,
-              args.text,
-              ...pinArgs,
-              '--clear-first',
-              '--delay-ms',
-              String(decision.delayMs),
-            ],
-            { settle: { enabled: false } },
-          );
-        }
-        const maestro = await maestroFillFallback(maestroTargetRef(), args.text, 'ios', true, args);
-        if (maestro.isError) return maestro;
-        const { outcome } = await nativeSettle(client, jsTestId, args.text, null, null);
-        if (outcome !== 'corrupted') {
-          return okResult(
-            { filled: true, method: 'maestro', length: args.text.length },
-            {
-              meta: {
-                textEntryPath: 'maestro',
-                verify: jsVerifyMeta(outcome),
-                timings_ms: { nativeType: Date.now() - tNative },
-              },
-            },
-          );
-        }
-        return failResult(
-          'Text entry could not be verified after retype + maestro fallback',
-          'TEXT_ENTRY_UNVERIFIED',
-          {
-            expectedLength: args.text.length,
-            pathsTried: ['js', 'native', 'native-retype', 'maestro'],
-          },
-        );
-      }
-      return primary;
-    }
-
-    // G4 + Story 10 (#391): descend only for focus errors (refocus ladder) or
-    // a runner-rejected set (reject ladder — skips the refocus tiers below,
-    // since focus was healthy). Everything else surfaces as-is.
-    const descent = classifyFillPrimaryError(primary);
-    if (descent === 'return-primary') {
-      return primary;
-    }
-
-    if (descent === 'refocus-ladder') {
-      // B122: Pressable→TextInput resolution. Common RN design-system pattern is
-      // an outer Pressable (testID `${name}-pressable`) that imperatively focuses
-      // an inner TextInput (testID `${name}`). The Pressable absorbs the tap and
-      // the focus dispatches asynchronously, so by the time we probe, focus
-      // hasn't propagated. Resolve to the inner ref and tap THAT directly — much
-      // more reliable than waiting + retapping the wrapper.
-      const snap = await fetchSnapshotNodes();
-      if (snap.ok) {
-        const resolvedRef = findInputForPressable(snap.nodes, ref);
-        if (resolvedRef && resolvedRef !== ref) {
-          // #385: same pin-once guard as the primary path — the inner tap's settle
-          // re-snapshots and renumbers the positional map, so the fill must not
-          // re-resolve resolvedRef afterwards (fetchSnapshotNodes above just
-          // refreshed the map, so the pin resolves against the current screen).
-          const innerPin = isRefMapFresh() ? refCenter(resolvedRef) : null;
-          const innerPinArgs = innerPin
-            ? ['--at-x', String(innerPin.x), '--at-y', String(innerPin.y)]
-            : [];
-          const innerTap = innerPin
-            ? await runNative(['press', String(innerPin.x), String(innerPin.y)], settleOpts(args))
-            : await runNative(['press', resolvedRef], settleOpts(args));
-          if (!innerTap.isError) {
-            const delay = focusDelayAfterPreTap(
-              innerTap.content?.[0]?.text,
-              args.waitForKeyboardMs,
-            );
-            if (delay > 0) await sleep(delay);
-            const resolved = await runNative(['fill', resolvedRef, args.text, ...innerPinArgs], {
-              ...settleOpts(args),
-              verifyTypeReadback: exactTypeReadback(
-                client,
-                resolveCachedIdentifier(resolvedRef) ?? null,
-              ),
-            });
-            if (!resolved.isError) {
-              try {
-                const envelope = JSON.parse(resolved.content[0].text) as {
-                  ok: true;
-                  data: unknown;
-                  meta?: Record<string, unknown>;
-                };
-                return okResult(envelope.data, {
-                  meta: { ...envelope.meta, fallbackUsed: 'pressable-resolution', resolvedRef },
-                });
-              } catch {
-                return resolved;
-              }
-            }
-            // Codex P2 round-3 (#564): this refocus retry can be the FIRST fill
-            // that reaches a focused field — if IT comes back SET_TEXT_REJECTED,
-            // hand over to the reject ladder (clear-first Maestro), never the
-            // append-prone adb tier below. Target the INNER input this branch
-            // just filled, not the outer Pressable wrapper.
-            if (classifyFillPrimaryError(resolved) === 'reject-ladder') {
-              return maestroFillFallback(
-                resolveCachedIdentifier(resolvedRef) ?? resolvedRef,
-                args.text,
-                'android',
-                true,
-                args,
-              );
-            }
-          }
-        }
-      }
-
-      // Fallback 1: coordinate re-tap + retry fill. Re-tap gives the UI another chance
-      // to propagate focus from a wrapping Pressable to the inner TextInput.
-      const retryTap = await runNative(['press', ref]);
-      if (!retryTap.isError) {
-        await sleep(300);
-        const retry = await runNative(['fill', ref, args.text], {
-          verifyTypeReadback: exactTypeReadback(client, jsTestId),
-        });
-        if (!retry.isError) {
-          // Re-wrap the okResult to attach the fallback marker.
-          try {
-            const envelope = JSON.parse(retry.content[0].text) as { ok: true; data: unknown };
-            return okResult(envelope.data, { meta: { fallbackUsed: 'retap' } });
-          } catch {
-            return retry;
-          }
-        }
-        // Codex P2 round-3 (#564): same reclassification as the resolved-ref
-        // fill above — a rejected retry means focus is fine but the field
-        // ignores sets; descend to the clear-first Maestro tier.
-        if (classifyFillPrimaryError(retry) === 'reject-ladder') {
-          return maestroFillFallback(maestroTargetRef(), args.text, 'android', true, args);
-        }
-      }
-    }
-
-    // Codex P2 round-2 (#564): the reject ladder never touches adb. The runner
-    // already proved setText AND keyevents don't land — `adb shell input text`
-    // is the same keyevent injection, minus pacing and focus control, and it
-    // inserts at the cursor (AOSP Input.java), so on a field still holding its
-    // old value it would append and report success. Go straight to Maestro
-    // with clearFirst so eraseText removes the stale value before inputText.
-    if (descent === 'reject-ladder') {
-      return maestroFillFallback(maestroTargetRef(), args.text, 'android', true, args);
-    }
-
-    // Fallback 2: platform-specific last resort. Story 10 (#391): chunked adb
-    // is the deliberate LAST native tier — its `input text` transport cannot
-    // represent emoji/IME-composed text, so it only runs after the runner's
-    // setText/keyevent tiers (and any refocus re-taps) have failed, and only
-    // for text it can actually represent (codex P2: adb can exit 0 after
-    // mangling non-ASCII, which would mask the honest Maestro tier below).
-    if (androidSession && isAdbInputTextSafe(args.text)) {
-      const adbResult = await androidClipboardFill(args.text);
-      if (!adbResult.isError) {
-        try {
-          const envelope = JSON.parse(adbResult.content[0].text) as { ok: true; data: unknown };
-          return okResult(envelope.data, { meta: { fallbackUsed: 'adb' } });
-        } catch {
-          return adbResult;
-        }
-      }
-    }
-
-    // Fallback 3: Maestro inputText (iOS, or Android if adb fallback also failed).
-    const platform: 'ios' | 'android' = androidSession ? 'android' : 'ios';
-    return maestroFillFallback(maestroTargetRef(), args.text, platform, false, args);
-  });
+  return withSession(async (args) =>
+    performExactFill(args, cdpClientOrNull(getClient), { js: true, maestro: true }),
+  );
 }
 
 // --- Swipe (coordinate-based with direction shortcut) ---

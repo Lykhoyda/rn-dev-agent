@@ -1355,6 +1355,8 @@ function mapRunnerNodesToFlat(nodes) {
             flat.enabled = n.enabled;
         if (n.hittable !== undefined)
             flat.hittable = n.hittable;
+        if (n.secure !== undefined)
+            flat.secure = n.secure;
         out.push(flat);
     }
     return out;
@@ -1368,6 +1370,7 @@ export async function runAndroid(args) {
             cachedMetadata: getCachedMetadata(args._staleRef),
             reResolution: 'self-heal-disabled',
             candidates: [],
+            mutation: 'none',
             hint: 'Call device_snapshot action=snapshot to refresh refs, then retry the action with the new ref.',
         });
     }
@@ -1398,6 +1401,20 @@ export async function runAndroid(args) {
         body.scale = args.scale;
     if (args.interactiveOnly !== undefined)
         body.interactiveOnly = args.interactiveOnly;
+    if (args.snapshotIdentifier !== undefined)
+        body.snapshotIdentifier = args.snapshotIdentifier;
+    if (args.snapshotElementType !== undefined)
+        body.snapshotElementType = args.snapshotElementType;
+    if (args.targetBounds !== undefined)
+        body.targetBounds = args.targetBounds;
+    if (args.focusX !== undefined)
+        body.focusX = args.focusX;
+    if (args.focusY !== undefined)
+        body.focusY = args.focusY;
+    if (args.focusWaitMs !== undefined)
+        body.focusWaitMs = args.focusWaitMs;
+    if (args.secureInput !== undefined)
+        body.secureInput = args.secureInput;
     let resp;
     let recovery;
     try {
@@ -1461,12 +1478,31 @@ export async function runAndroid(args) {
             (message.includes('Could not detect idle state') ||
                 message.includes('window-content-idle') ||
                 message.includes('Idle timeout exceeded'))) {
-            return okResult({ typed: true, text: args.text }, { meta: { sideEffectSucceeded: true, runnerTimeoutShim: true, ...recoveryMeta } });
+            // GH #581: UIAutomator's idle-detection failure fires AFTER the text
+            // landed (Task 10 live trials), but that is attempt evidence, not field
+            // truth — fail with mutation:'possible' so only the arbiter's exact
+            // read-back can promote it. Never echoes the requested text.
+            return failResult('rn-android-runner type hit the window-idle timeout after dispatching the mutation; the field value is unverified', 'TYPE_IDLE_TIMEOUT', { mutation: 'possible', runnerTimeoutShim: true, ...recoveryMeta });
         }
-        const failExtras = recovery ? { transportRecovery: recovery } : undefined;
-        if (code)
-            return failResult(message, code, failExtras);
-        return failExtras ? failResult(message, failExtras) : failResult(message);
+        // GH #581: mutating-command failures always carry a valid disposition;
+        // absent/invalid ones conservatively become 'possible'.
+        const VALID_MUTATIONS = new Set(['none', 'observed', 'possible']);
+        const rawMutation = resp.error?.mutation;
+        const mutation = rawMutation !== undefined && VALID_MUTATIONS.has(rawMutation)
+            ? rawMutation
+            : args.command === 'type' || args.command === 'fill'
+                ? 'possible'
+                : undefined;
+        const failExtras = {
+            ...(recovery ? { transportRecovery: recovery } : {}),
+            ...(mutation !== undefined ? { mutation } : {}),
+        };
+        if (code) {
+            return failResult(message, code, Object.keys(failExtras).length > 0 ? failExtras : undefined);
+        }
+        return Object.keys(failExtras).length > 0
+            ? failResult(message, failExtras)
+            : failResult(message);
     }
     if (args.command === 'snapshot' && resp.data && typeof resp.data === 'object') {
         const data = resp.data;

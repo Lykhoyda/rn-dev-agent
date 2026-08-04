@@ -44,6 +44,21 @@ object TextInputRecipe {
             SetTextOutcome.REJECTED -> false
         }
 
+    // GH #581 verifyInput verdicts. A secure field's display is never content
+    // proof (only emptiness is provable), and UiAutomator surfaces the HINT as
+    // text for an empty field, so a non-empty read against an empty
+    // expectation is `ambiguous` (leftover text vs hint indistinguishable).
+    fun classifyVerify(expected: String, raw: String?, secure: Boolean): String {
+        if (raw == null) return "unreadable"
+        if (secure) {
+            if (expected.isEmpty()) return if (raw.isEmpty()) "exact" else "ambiguous"
+            return "secure-masked"
+        }
+        if (raw == expected) return "exact"
+        if (expected.isEmpty()) return if (raw.isEmpty()) "exact" else "ambiguous"
+        return "mismatch"
+    }
+
     data class KeyStroke(val keyCode: Int, val shift: Boolean)
 
     // android.view.KeyEvent constants, inlined as plain Ints so this object

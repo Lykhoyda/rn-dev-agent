@@ -1071,7 +1071,7 @@ export function _setHttpTimeoutForTest(ms) {
 // returning the success-shaped message we depend on, and large trees take a
 // while to serialize), so they get a window wider than that internal cap.
 // Everything else is a fast interaction and must not hang past HTTP_TIMEOUT_MS.
-const SLOW_RUNNER_COMMANDS = new Set(['type', 'snapshot', 'screenshot']);
+const SLOW_RUNNER_COMMANDS = new Set(['type', 'verifyInput', 'snapshot', 'screenshot']);
 function commandTimeoutMs(command) {
     if (httpTimeoutOverrideMs !== null)
         return httpTimeoutOverrideMs;
@@ -1232,19 +1232,18 @@ async function containTypeTimeout(args, authorityBefore = captureFastRunnerComma
             activateLaunchedApp: 'unverified',
             semantics: 'runner host is lazily relaunched; target activation semantics are unchanged',
         },
-        ...(verification.actual !== undefined ? { actual: verification.actual } : {}),
+        // GH #581: never carry the actual field value — the verdict alone ships.
     };
     if (verification.matches) {
         return okResult({
             typed: true,
-            text: args.text,
             recovered: true,
             verification: 'exact-readback',
         }, { meta: { runnerTimeoutRecovery } });
     }
     return failResult(trigger === 'main-thread-timeout'
         ? 'RUNNER_TIMEOUT: rn-fast-runner main-thread execution timed out and independent exact CDP readback did not prove the requested value. The poisoned runner was contained before any further mutation.'
-        : 'RUNNER_TIMEOUT: rn-fast-runner authority was lost after a success-shaped type response, and independent exact CDP readback did not prove the requested value. The triggering runner was contained without signaling any replacement.', 'RUNNER_TIMEOUT', { runnerTimeoutRecovery });
+        : 'RUNNER_TIMEOUT: rn-fast-runner authority was lost after a success-shaped type response, and independent exact CDP readback did not prove the requested value. The triggering runner was contained without signaling any replacement.', 'RUNNER_TIMEOUT', { mutation: 'possible', runnerTimeoutRecovery });
 }
 async function containRunnerTimeout(command, message, authorityBefore = captureFastRunnerCommandAuthority()) {
     runnerPoisoned = true;
@@ -1396,6 +1395,7 @@ export async function runIOS(args) {
             cachedMetadata: getCachedMetadata(args._staleRef),
             reResolution: 'self-heal-disabled',
             candidates: [],
+            mutation: 'none',
             hint: 'Call device_snapshot action=snapshot to refresh refs, then retry the action with the new ref.',
         });
     }
@@ -1444,6 +1444,12 @@ export async function runIOS(args) {
         body.snapshotIdentifier = args.snapshotIdentifier;
     if (args.keyboardStateAtSnapshot !== undefined)
         body.keyboardStateAtSnapshot = args.keyboardStateAtSnapshot;
+    if (args.focusX !== undefined)
+        body.focusX = args.focusX;
+    if (args.focusY !== undefined)
+        body.focusY = args.focusY;
+    if (args.focusWaitMs !== undefined)
+        body.focusWaitMs = args.focusWaitMs;
     // Transport-level refusals must surface as typed results from every runner
     // round trip, not just the main dispatch — `withSession` does not catch, so a
     // raw throw from the keyboard preamble becomes an MCP-level crash.

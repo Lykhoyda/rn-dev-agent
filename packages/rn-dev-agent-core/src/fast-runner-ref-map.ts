@@ -25,6 +25,8 @@ export interface FlatNode {
   rect: ElementRect;
   enabled?: boolean;
   hittable?: boolean;
+  /** GH #581: Android password fields; never cached beyond the snapshot nodes. */
+  secure?: boolean;
 }
 
 interface XCUITreeNode {

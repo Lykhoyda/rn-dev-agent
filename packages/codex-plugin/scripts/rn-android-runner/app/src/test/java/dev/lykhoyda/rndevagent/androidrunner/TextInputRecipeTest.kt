@@ -181,4 +181,28 @@ class TextInputRecipeTest {
     fun emptyTextIsNotKeyEventTypable() {
         assertFalse(TextInputRecipe.isKeyEventTypable(""))
     }
+
+    // GH #581: verifyInput classification — exact-only truth, secure fields
+    // never prove content, empty-expectation reads are hint-ambiguous.
+    @Test
+    fun classifyVerifyExactAndMismatch() {
+        assertEquals("exact", TextInputRecipe.classifyVerify("hello", "hello", secure = false))
+        assertEquals("mismatch", TextInputRecipe.classifyVerify("hello", "world", secure = false))
+        assertEquals("mismatch", TextInputRecipe.classifyVerify("hello", "hel", secure = false))
+        assertEquals("unreadable", TextInputRecipe.classifyVerify("hello", null, secure = false))
+    }
+
+    @Test
+    fun classifyVerifySecureNeverProvesContent() {
+        assertEquals("secure-masked", TextInputRecipe.classifyVerify("value-a", "•••••••", secure = true))
+        assertEquals("secure-masked", TextInputRecipe.classifyVerify("value-a", "value-a", secure = true))
+        assertEquals("exact", TextInputRecipe.classifyVerify("", "", secure = true))
+        assertEquals("ambiguous", TextInputRecipe.classifyVerify("", "•••", secure = true))
+    }
+
+    @Test
+    fun classifyVerifyEmptyExpectationIsHintAmbiguous() {
+        assertEquals("exact", TextInputRecipe.classifyVerify("", "", secure = false))
+        assertEquals("ambiguous", TextInputRecipe.classifyVerify("", "Enter name", secure = false))
+    }
 }

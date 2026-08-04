@@ -3,7 +3,9 @@ import { settleEnabled } from '../lifecycle/settle.js';
 import {
   buildDirectionalScrollCliArgs,
   buildDirectionalSwipeCliArgs,
+  cdpClientOrNull,
   fetchFindCandidates,
+  performExactFill,
   pressCandidate,
 } from './device-interact.js';
 import { withSession, okResult, failResult } from '../utils.js';
@@ -414,35 +416,26 @@ async function executeStep(step: BatchStep, getClient?: () => CDPClient): Promis
       return failResult('press requires ref, testID, or both x and y coordinates');
     }
     case 'fill': {
-      if (!step.text) return failResult('fill requires text');
-      if (step.testID) {
-        const { refs, envelope, snapshotFailed } = await resolveTestIDViaSnapshot(step.testID);
-        if (snapshotFailed) {
-          return failResult(
-            `Snapshot failed while resolving testID "${step.testID}" for fill — agent-device unreachable`,
-            'SNAPSHOT_FAILED',
-            { testID: step.testID, envelope: envelope?.slice(0, 500) },
-          );
-        }
-        if (refs.length > 1) return ambiguousTestIDFail(step.testID, refs);
-        const ref = refs[0];
-        if (!ref) {
-          return failResult(
-            `testID "${step.testID}" not found in current UI snapshot`,
-            'TESTID_NOT_FOUND',
-            {
-              testID: step.testID,
-            },
-          );
-        }
-        return runNative(['fill', `@${ref}`, step.text], stepSettleOpts(step));
-      }
-      if (!step.ref)
+      // GH #581: batch fills route through the same exact-target orchestrator
+      // and final-verification arbiter as device_fill (no JS/Maestro tiers —
+      // batch stays a scripted native surface, but truth rules are identical).
+      if (step.text === undefined) return failResult('fill requires text');
+      const targetRef = step.testID ?? step.ref;
+      if (!targetRef) {
         return failResult(
           'fill requires ref or testID. Use a find+tap step first to focus the field, or pass testID for fresh resolution.',
         );
-      const ref = step.ref.startsWith('@') ? step.ref : `@${step.ref}`;
-      return runNative(['fill', ref, step.text], stepSettleOpts(step));
+      }
+      const client = getClient ? cdpClientOrNull(getClient) : null;
+      return performExactFill(
+        {
+          ref: targetRef,
+          text: step.text,
+          settleTimeoutMs: step.settle === false ? 0 : BATCH_STEP_SETTLE_BUDGET_MS,
+        },
+        client,
+        { js: false, maestro: false },
+      );
     }
     case 'swipe': {
       if (!step.direction) return failResult('swipe requires direction');
