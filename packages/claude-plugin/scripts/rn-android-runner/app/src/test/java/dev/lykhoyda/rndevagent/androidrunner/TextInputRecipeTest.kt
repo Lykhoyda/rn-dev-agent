@@ -207,6 +207,58 @@ class TextInputRecipeTest {
     }
 
     @Test
+    fun recordedDescriptorRequiresPresentRecognizedIdentity() {
+        assertTrue(
+            TextInputRecipe.recordedDescriptorAgrees(
+                7,
+                12,
+                "android.widget.EditText",
+                "email",
+                7,
+                12,
+                "android.widget.EditText",
+                "email",
+            ),
+        )
+        assertFalse(
+            TextInputRecipe.recordedDescriptorAgrees(
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+            ),
+        )
+        assertFalse(
+            TextInputRecipe.recordedDescriptorAgrees(
+                7,
+                null,
+                "android.widget.EditText",
+                null,
+                7,
+                null,
+                "android.widget.EditText",
+                null,
+            ),
+        )
+        assertFalse(
+            TextInputRecipe.recordedDescriptorAgrees(
+                7,
+                12,
+                "EditText",
+                null,
+                7,
+                12,
+                "EditText",
+                null,
+            ),
+        )
+    }
+
+    @Test
     fun targetResolutionRejectsCrossClassDuplicatesAndMovedReplacement() {
         val frame = TextInputRecipe.TargetFrame(0, 100, 300, 144)
         val duplicate = TextInputRecipe.resolveIdentifier(

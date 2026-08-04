@@ -576,11 +576,16 @@ class CommandDispatcher(
         val recorded = recordedTypeTarget
         var target: UiObject2? = null
         var lostVerdict = "target-lost"
-        val descriptorAgrees = recorded != null &&
-            recorded.snapshotGeneration == optionalInt(cmd, "snapshotGeneration") &&
-            recorded.snapshotNodeIndex == optionalInt(cmd, "snapshotNodeIndex") &&
-            recorded.snapshotElementType == optionalString(cmd, "snapshotElementType") &&
-            recorded.snapshotIdentifier == optionalString(cmd, "snapshotIdentifier")
+        val descriptorAgrees = recorded != null && TextInputRecipe.recordedDescriptorAgrees(
+            recorded.snapshotGeneration,
+            recorded.snapshotNodeIndex,
+            recorded.snapshotElementType,
+            recorded.snapshotIdentifier,
+            optionalInt(cmd, "snapshotGeneration"),
+            optionalInt(cmd, "snapshotNodeIndex"),
+            optionalString(cmd, "snapshotElementType"),
+            optionalString(cmd, "snapshotIdentifier"),
+        )
         if (recorded != null && descriptorAgrees) {
             if (recorded.identifier != null) {
                 when (

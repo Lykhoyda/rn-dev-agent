@@ -10,6 +10,8 @@ package dev.lykhoyda.rndevagent.androidrunner
 object TextInputRecipe {
     const val KEYEVENT_PACING_MS = 75L
 
+    private val INPUT_TYPE_PATTERN = Regex(".+\\.(\\w*EditText|\\w*AutoCompleteTextView)$")
+
     enum class SetTextOutcome { ACCEPTED, TRANSFORMED, REJECTED, UNVERIFIED }
 
     // Read-back classification after a set attempt:
@@ -57,6 +59,26 @@ object TextInputRecipe {
         if (raw == expected) return "exact"
         if (expected.isEmpty()) return if (raw.isEmpty()) "exact" else "ambiguous"
         return "mismatch"
+    }
+
+    fun recordedDescriptorAgrees(
+        recordedGeneration: Int?,
+        recordedNodeIndex: Int?,
+        recordedElementType: String?,
+        recordedIdentifier: String?,
+        requestedGeneration: Int?,
+        requestedNodeIndex: Int?,
+        requestedElementType: String?,
+        requestedIdentifier: String?,
+    ): Boolean {
+        if (recordedGeneration == null || recordedNodeIndex == null || recordedElementType == null) {
+            return false
+        }
+        if (!INPUT_TYPE_PATTERN.matches(recordedElementType)) return false
+        return recordedGeneration == requestedGeneration &&
+            recordedNodeIndex == requestedNodeIndex &&
+            recordedElementType == requestedElementType &&
+            recordedIdentifier == requestedIdentifier
     }
 
     data class TargetFrame(val left: Int, val top: Int, val right: Int, val bottom: Int)
