@@ -1,5 +1,11 @@
 # rn-dev-agent-core
 
+## 0.66.6
+
+### Patch Changes
+
+- 5b0a93f: Keep `.rn-agent` real and worktree-local by inheriting only `.rn-agent/actions` through consented setup and repository-local post-checkout integration, keeping SessionStart report-only, and migrating recognized legacy root links without copying mutable integration or session state.
+
 ## 0.66.5
 
 ### Patch Changes
