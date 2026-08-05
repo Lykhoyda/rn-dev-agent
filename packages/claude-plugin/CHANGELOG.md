@@ -1,5 +1,13 @@
 # rn-dev-agent-plugin
 
+## 0.71.7
+
+### Patch Changes
+
+- 3ee229d: Keep managed Metro descendants strict by default while allowing only Expo's canonical runtime-version manifest utility without session capability and requiring exact managed launch provenance.
+- Updated dependencies [3ee229d]
+  - rn-dev-agent-core@0.66.7
+
 ## 0.71.6
 
 ### Patch Changes
