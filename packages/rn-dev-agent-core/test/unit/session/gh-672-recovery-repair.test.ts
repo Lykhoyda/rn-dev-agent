@@ -89,7 +89,13 @@ function blockedContender() {
 
 function adoptionHandle(registry: ReturnType<typeof openSessionRegistry>, sessionId: string) {
   const handles = registry.getSessionStatus(sessionId)?.bindings.recoveryHandles as
-    | { adoptStale?: { token?: string; expiresMs?: number } }
+    | {
+        adoptStale?: {
+          token?: string;
+          expiresMs?: number;
+          previous?: { token?: string; expiresMs?: number };
+        };
+      }
     | undefined;
   return handles?.adoptStale;
 }
@@ -155,6 +161,146 @@ test('GH#672: a still-fresh adoption handle survives a refresh unchanged', () =>
     'a handle a caller may have just read must not be invalidated',
   );
   assert.equal(adoptionHandle(f.registry, 'b')?.token, minted?.token);
+});
+
+test('GH#672: grace rotation keeps both tokens valid only through the prior expiry', () => {
+  const f = blockedContender();
+  const original = adoptionHandle(f.registry, 'b')!;
+  f.advance(HANDLE_TTL_MS - 60_000);
+
+  assert.equal(
+    f.registry.refreshRecoveryHandles(
+      f.contender,
+      { instanceId: RECOVERY_WORKER },
+      RECOVERY_CAPABILITY,
+    ),
+    true,
+  );
+  const replacement = adoptionHandle(f.registry, 'b')!;
+  assert.notEqual(replacement.token, original.token);
+  assert.equal(replacement.previous?.token, original.token);
+  assert.equal(replacement.previous?.expiresMs, original.expiresMs);
+  f.registry.validateStaleAdoption(f.contender, original.token!, RECOVERY_WORKER);
+  f.registry.validateStaleAdoption(f.contender, replacement.token!, RECOVERY_WORKER);
+
+  f.advance(60_001);
+  assert.throws(
+    () => f.registry.validateStaleAdoption(f.contender, original.token!, RECOVERY_WORKER),
+    (error: { code?: string }) => error.code === 'HANDOFF_NOT_AUTHORIZED',
+  );
+  assert.equal(
+    f.registry.refreshRecoveryHandles(
+      f.contender,
+      { instanceId: RECOVERY_WORKER },
+      RECOVERY_CAPABILITY,
+    ),
+    true,
+  );
+  assert.equal(adoptionHandle(f.registry, 'b')?.previous, undefined);
+});
+
+test('GH#672: status calls straddling renewal preserve the earlier returned handle', () => {
+  const f = blockedContender();
+  f.advance(HANDLE_TTL_MS - 60_001);
+  const earlier = adoptionHandle(f.registry, 'b')!;
+  assert.equal(
+    f.registry.refreshRecoveryHandles(
+      f.contender,
+      { instanceId: RECOVERY_WORKER },
+      RECOVERY_CAPABILITY,
+    ),
+    false,
+  );
+
+  f.advance(2);
+  assert.equal(
+    f.registry.refreshRecoveryHandles(
+      f.contender,
+      { instanceId: RECOVERY_WORKER },
+      RECOVERY_CAPABILITY,
+    ),
+    true,
+  );
+  f.registry.validateStaleAdoption(f.contender, earlier.token!, RECOVERY_WORKER);
+});
+
+test('GH#672: handoff recipient overlap accepts the prior token', () => {
+  const f = blockedContender();
+  const handles = f.registry.getSessionStatus('b')?.bindings.recoveryHandles as {
+    handoffRecipient?: { token?: string };
+  };
+  const prior = handles.handoffRecipient?.token;
+  f.advance(HANDLE_TTL_MS - 60_000);
+  f.registry.refreshRecoveryHandles(
+    f.contender,
+    { instanceId: RECOVERY_WORKER },
+    RECOVERY_CAPABILITY,
+  );
+
+  const handoff = f.registry.prepareHandoff(f.owner, { targetHandle: prior });
+  assert.ok(handoff.handoffId);
+});
+
+test('GH#672: a rotated token cannot authorize another session', () => {
+  const f = blockedContender();
+  const other = f.create('c', 'worktree-1', { metroPort: 8248, observePort: 7396 });
+  f.registry.updateBindings(other, {
+    state: 'blocked',
+    bindings: {
+      recoveryCapabilityHash: createHash('sha256').update(RECOVERY_CAPABILITY).digest('hex'),
+      adoptionRequired: { sessionId: f.owner.sessionId, claimEpoch: f.owner.claimEpoch },
+    },
+  });
+  f.registry.bindRecoveryWorker(
+    other,
+    { instanceId: 'other-recovery-worker', pid: 9002, token: 'other-recovery-birth' },
+    RECOVERY_CAPABILITY,
+  );
+  f.advance(HANDLE_TTL_MS - 60_000);
+  f.registry.refreshRecoveryHandles(
+    f.contender,
+    { instanceId: RECOVERY_WORKER },
+    RECOVERY_CAPABILITY,
+  );
+  const token = adoptionHandle(f.registry, 'b')?.token;
+
+  assert.throws(
+    () => f.registry.validateStaleAdoption(other, token!, 'other-recovery-worker'),
+    (error: { code?: string }) => error.code === 'HANDOFF_NOT_AUTHORIZED',
+  );
+});
+
+test('GH#672: handoff cleanup status exposes a rotatable authenticated resume handle', () => {
+  const f = blockedContender();
+  f.registry.claimResources(f.owner, [{ type: 'runner', key: 'ios:sim-1:9200' }]);
+  f.registry.updateBindings(f.owner, {
+    state: 'device_claimed',
+    bindings: {
+      device: { platform: 'ios', deviceId: 'sim-1' },
+      runner: {
+        platform: 'ios',
+        deviceId: 'sim-1',
+        port: 9200,
+        capability: 'runner-capability',
+        instanceId: 'runner-instance',
+      },
+    },
+  });
+  f.ownerStates.set('a', 'mismatch');
+  const original = adoptionHandle(f.registry, 'b')!;
+  f.registry.adoptStaleWithHandle(f.contender, original.token!, RECOVERY_WORKER);
+  f.advance(HANDLE_TTL_MS - 60_000);
+  f.registry.refreshRecoveryHandles(
+    f.contender,
+    { instanceId: RECOVERY_WORKER },
+    RECOVERY_CAPABILITY,
+  );
+  const replacement = adoptionHandle(f.registry, 'b')!;
+  const projected = advertisedRecovery(f.registry, 'b', f.now());
+
+  assert.equal(projected.recovery?.adoptionHandle, replacement.token);
+  f.registry.verifyStaleAdoptionResumption(f.contender, original.token!, RECOVERY_WORKER);
+  f.registry.verifyStaleAdoptionResumption(f.contender, replacement.token!, RECOVERY_WORKER);
 });
 
 test('GH#672: handle refresh is capability- and worker-bound', () => {
@@ -389,9 +535,8 @@ test('GH#672: a crash mid-release resumes the durable journal instead of restart
   });
   f.registry.beginStaleResourceRelease(f.live, offer.token, 'live-worker');
   f.registry.completeStaleResourceRelease(f.live, 'live-worker', 'recorder');
+  f.advance(HANDLE_TTL_MS + 1);
 
-  // Crash after the recorder stopped: the dead owner's bindings are already emptied, so
-  // a re-derived plan would silently drop the outstanding runner obligation.
   const resumed = f.registry.beginStaleResourceRelease(f.live, offer.token, 'live-worker');
   assert.equal(typeof resumed.recorder?.completedAt, 'number');
   assert.equal(resumed.runner?.completedAt, null);
@@ -407,6 +552,22 @@ test('GH#672: a crash mid-release resumes the durable journal instead of restart
   f.registry.completeStaleResourceRelease(f.live, 'live-worker', 'runner');
   f.registry.finishStaleResourceRelease(f.live, 'live-worker');
   assert.equal(f.registry.getClaim('device', 'ios:sim-1'), null);
+});
+
+test('GH#672: device rebinding is refused while its cleanup journal is incomplete', () => {
+  const f = deadDeviceOwner();
+  const offer = f.registry.prepareStaleResourceRelease(f.live, {
+    platform: 'ios',
+    deviceId: 'sim-1',
+  });
+  f.registry.beginStaleResourceRelease(f.live, offer.token, 'live-worker');
+
+  assert.throws(
+    () => f.registry.claimResources(f.live, [{ type: 'device', key: 'ios:sim-1' }]),
+    (error: { code?: string }) => error.code === 'AUTOMATION_CLEANUP_UNPROVEN',
+  );
+  f.registry.claimResources(f.live, [{ type: 'device', key: 'ios:sim-2' }]);
+  assert.equal(f.registry.getClaim('device', 'ios:sim-2')?.sessionId, 'live');
 });
 
 test('GH#672: releasing a device with no foreign claim is refused, not silently granted', () => {
@@ -448,6 +609,66 @@ test('GH#672: a device id containing a SQL wildcard never releases a neighbour r
     'dead',
     'the `_` in a device id must not match another device as a LIKE wildcard',
   );
+});
+
+test('GH#672: stale adoption inherits every transferred device cleanup obligation', async () => {
+  const f = deadDeviceOwner();
+  const offer = f.registry.prepareStaleResourceRelease(f.live, {
+    platform: 'ios',
+    deviceId: 'sim-1',
+  });
+  f.registry.beginStaleResourceRelease(f.live, offer.token, 'live-worker');
+  f.registry.completeStaleResourceRelease(f.live, 'live-worker', 'recorder');
+  f.ownerStates.set('live', 'mismatch');
+
+  const adopter = f.create('adopter', 'worktree-mine', {
+    metroPort: 8248,
+    observePort: 7396,
+  });
+  f.registry.updateBindings(adopter, {
+    state: 'blocked',
+    bindings: {
+      recoveryCapabilityHash: createHash('sha256').update(RECOVERY_CAPABILITY).digest('hex'),
+      adoptionRequired: { sessionId: f.live.sessionId, claimEpoch: f.live.claimEpoch },
+    },
+  });
+  f.registry.bindRecoveryWorker(
+    adopter,
+    { instanceId: 'adopter-worker', pid: 9200, token: 'adopter-birth' },
+    RECOVERY_CAPABILITY,
+  );
+  const handle = adoptionHandle(f.registry, 'adopter')?.token;
+  f.registry.adoptStaleWithHandle(adopter, handle!, 'adopter-worker');
+
+  const transferred = f.registry.getSessionStatus('adopter');
+  const cleanup = transferred?.bindings.handoffCleanup as {
+    runner?: Record<string, unknown>;
+    recorder?: Record<string, unknown>;
+  };
+  assert.equal(cleanup.runner?.port, 9200);
+  assert.equal(typeof cleanup.recorder?.completedAt, 'number');
+  assert.equal(f.registry.getClaim('device', 'ios:sim-1')?.sessionId, 'adopter');
+  assert.equal(f.registry.getClaim('runner', 'ios:sim-1:9200')?.sessionId, 'adopter');
+
+  const stopped: string[] = [];
+  const runtime = new WorkerAuthorityRuntime(f.registry, adopter, null, true, RECOVERY_CAPABILITY);
+  const handler = createSessionHandler(runtime as never, {
+    deviceExists: () => true,
+    stopHandoffRunner: async () => {
+      stopped.push('runner');
+    },
+    stopHandoffRecorder: async () => {
+      stopped.push('recorder');
+    },
+  });
+  const result = await handler({ action: 'adopt_stale', adoptionHandle: handle });
+
+  assert.equal(result.isError, undefined, result.content[0]!.text);
+  assert.deepEqual(stopped, ['runner']);
+  assert.equal(f.registry.getSessionStatus('adopter')?.state, 'source_bound');
+  assert.equal(f.registry.getClaim('device', 'ios:sim-1'), null);
+  assert.equal(f.registry.getClaim('runner', 'ios:sim-1:9200'), null);
+  assert.equal(f.registry.getClaim('recorder', 'ios:sim-1'), null);
 });
 
 function envelope(result: { content: Array<{ text: string }> }) {

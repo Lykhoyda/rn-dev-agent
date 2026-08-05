@@ -40,7 +40,7 @@ export function projectPublicAuthorityStatus(
     | undefined;
   const adoptionHandle = liveHandle(recovery?.adoptStale, now);
   const recoveryStatus =
-    status.state === 'blocked' && recovery
+    (status.state === 'blocked' || status.state === 'handoff_cleanup') && recovery
       ? {
           handoffRecipientHandle: liveHandle(recovery.handoffRecipient, now),
           handoffRecipientExpiresMs:

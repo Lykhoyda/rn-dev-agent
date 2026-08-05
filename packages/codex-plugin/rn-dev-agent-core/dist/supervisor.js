@@ -13123,6 +13123,11 @@ var init_registry = __esm({
         const now = this.#now();
         return this.#transaction(() => {
           const owner = this.#requireSession(session);
+          const bindings = JSON.parse(owner.bindings_json);
+          const staleDeviceCleanup = bindings.staleDeviceCleanup;
+          if (staleDeviceCleanup && typeof staleDeviceCleanup.platform === "string" && typeof staleDeviceCleanup.deviceId === "string" && resources.some((resource) => resource.type === "device" && resource.key === `${staleDeviceCleanup.platform}:${staleDeviceCleanup.deviceId}`)) {
+            throw new SessionAuthorityError("AUTOMATION_CLEANUP_UNPROVEN", "device rebinding is refused while stale cleanup remains incomplete");
+          }
           for (const resource of resources) {
             const claim = this.#findConflictingClaim(resource);
             if (!claim || claim.session_id === session.sessionId && claim.claim_epoch === session.claimEpoch) {
@@ -13325,24 +13330,31 @@ var init_registry = __esm({
           if (!handles || typeof handles !== "object")
             return false;
           const expiresMs = now + RECOVERY_HANDLE_TTL_MS;
-          let rotated = false;
+          let changed = false;
           const next = { ...handles };
           for (const name of ["handoffRecipient", "adoptStale"]) {
             const handle = handles[name];
             if (!handle || typeof handle !== "object")
               continue;
             const current = handle;
+            const previous = current.previous;
+            const previousExpired = previous && typeof previous.expiresMs === "number" && previous.expiresMs < now;
+            const retained = previousExpired ? { ...current, previous: void 0 } : current;
+            if (previousExpired)
+              changed = true;
             if (typeof current.expiresMs === "number" && current.expiresMs > now + RECOVERY_HANDLE_RENEW_MS) {
+              next[name] = retained;
               continue;
             }
             next[name] = {
-              ...current,
+              ...retained,
+              previous: typeof current.token === "string" && typeof current.expiresMs === "number" && current.expiresMs >= now ? { token: current.token, expiresMs: current.expiresMs } : void 0,
               token: randomBytes3(32).toString("base64url"),
               expiresMs
             };
-            rotated = true;
+            changed = true;
           }
-          if (!rotated)
+          if (!changed)
             return false;
           this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ?
@@ -13506,7 +13518,7 @@ var init_registry = __esm({
           const current = this.#requireSession(session);
           const bindings = JSON.parse(current.bindings_json);
           const offer = bindings.staleDeviceRelease;
-          if (!offer || typeof offer.token !== "string" || typeof offer.expiresMs !== "number" || offer.expiresMs < now || typeof offer.platform !== "string" || typeof offer.deviceId !== "string" || typeof offer.priorSessionId !== "string" || typeof offer.priorClaimEpoch !== "number" || !this.#capabilityMatches(offer.token, handle)) {
+          if (!offer || typeof offer.token !== "string" || typeof offer.expiresMs !== "number" || typeof offer.platform !== "string" || typeof offer.deviceId !== "string" || typeof offer.priorSessionId !== "string" || typeof offer.priorClaimEpoch !== "number" || !this.#capabilityMatches(offer.token, handle)) {
             throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "stale device release capability is invalid or expired");
           }
           if (current.worker_instance !== workerInstance) {
@@ -13523,6 +13535,9 @@ var init_registry = __esm({
               runner: resumed.runner ?? null,
               recorder: resumed.recorder ?? null
             };
+          }
+          if (offer.expiresMs < now) {
+            throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "stale device release capability is invalid or expired");
           }
           const prior = this.#requireProvenDeadOwner(offer.priorSessionId, offer.priorClaimEpoch);
           const priorBindings = JSON.parse(prior.bindings_json);
@@ -13964,7 +13979,7 @@ var init_registry = __esm({
               const bindings = JSON.parse(target.bindings_json);
               const handles = bindings.recoveryHandles;
               const handle = handles?.handoffRecipient;
-              if (typeof handle?.token === "string" && typeof handle.expiresMs === "number" && handle.expiresMs >= now && this.#capabilityMatches(handle.token, input.targetHandle)) {
+              if (handle && this.#recoveryHandleMatches(handle, input.targetHandle, now)) {
                 targetInstance = typeof handle.workerInstance === "string" ? handle.workerInstance : void 0;
                 this.#database.prepare("UPDATE sessions SET bindings_json = ? WHERE session_id = ?").run(JSON.stringify({
                   ...bindings,
@@ -14388,13 +14403,27 @@ var init_registry = __esm({
               throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", `${resource} cleanup has not been durably completed`);
             }
           }
+          const staleDeviceCleanup = bindings.staleDeviceCleanup;
+          if (staleDeviceCleanup && typeof staleDeviceCleanup.platform === "string" && typeof staleDeviceCleanup.deviceId === "string") {
+            const deviceKey = `${staleDeviceCleanup.platform}:${staleDeviceCleanup.deviceId}`;
+            for (const claim of this.#deviceFamilyClaims(deviceKey)) {
+              if (claim.session_id !== target.sessionId || claim.claim_epoch !== target.claimEpoch) {
+                continue;
+              }
+              this.#database.prepare(`DELETE FROM claims
+               WHERE resource_type = ? AND resource_key = ?
+                 AND session_id = ? AND claim_epoch = ?`).run(claim.resource_type, claim.resource_key, target.sessionId, target.claimEpoch);
+            }
+          }
           this.#database.prepare(`UPDATE sessions
            SET state = 'source_bound', bindings_json = ?,
                authority_version = authority_version + 1, updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ? AND state = 'handoff_cleanup'`).run(JSON.stringify({
             ...bindings,
             handoffCleanup: null,
-            recoveryHandles: null
+            recoveryHandles: null,
+            staleDeviceCleanup: null,
+            staleDeviceRelease: null
           }), now, target.sessionId, target.claimEpoch);
         });
       }
@@ -14484,13 +14513,15 @@ var init_registry = __esm({
           }
           const priorBindings = JSON.parse(prior.bindings_json);
           const targetBindings = JSON.parse(targetRow.bindings_json);
+          const priorStaleDeviceCleanup = priorBindings.staleDeviceCleanup && typeof priorBindings.staleDeviceCleanup === "object" ? priorBindings.staleDeviceCleanup : null;
           const priorCleanup = priorBindings.handoffCleanup && typeof priorBindings.handoffCleanup === "object" ? priorBindings.handoffCleanup : null;
           const resumesCleanup = prior.state === "handoff_cleanup" && priorCleanup !== null;
           if (prior.state === "handoff_cleanup" && !resumesCleanup) {
             throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "stale handoff cleanup state has no durable cleanup plan");
           }
           if (resumesCleanup) {
-            const resumesMetroCleanup = priorCleanup.metro !== null && typeof priorCleanup.metro === "object";
+            const mergedCleanup = this.#mergeStaleDeviceCleanup(priorCleanup, priorStaleDeviceCleanup);
+            const resumesMetroCleanup = mergedCleanup.metro !== null && typeof mergedCleanup.metro === "object";
             this.#database.prepare(`UPDATE claims SET session_id = ?, claim_epoch = ?, lease_until_ms = ?
              WHERE session_id = ? AND claim_epoch = ?`).run(target.sessionId, target.claimEpoch, now + this.#leaseMs, prior.session_id, prior.claim_epoch);
             this.#database.prepare(`UPDATE sessions
@@ -14510,7 +14541,8 @@ var init_registry = __esm({
               recorder: null,
               observe: null,
               proof: null,
-              handoffCleanup: priorCleanup
+              handoffCleanup: mergedCleanup,
+              staleDeviceCleanup: priorStaleDeviceCleanup
             }), now, target.sessionId, target.claimEpoch);
             this.#fenceSession(prior.session_id, now);
             return;
@@ -14519,26 +14551,32 @@ var init_registry = __esm({
            WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(prior.session_id, prior.claim_epoch);
           const priorMetro = priorBindings.metro && typeof priorBindings.metro === "object" ? priorBindings.metro : null;
           const metroCleanup = priorBindings.metroCleanup && typeof priorBindings.metroCleanup === "object" ? priorBindings.metroCleanup : priorMetro?.mode === "managed" ? priorMetro : null;
-          const runnerCleanup = priorBindings.runner && typeof priorBindings.runner === "object" ? priorBindings.runner : null;
+          const runnerCleanup = priorBindings.runner && typeof priorBindings.runner === "object" ? priorBindings.runner : priorStaleDeviceCleanup?.runner && typeof priorStaleDeviceCleanup.runner === "object" ? priorStaleDeviceCleanup.runner : null;
           const observeCleanup = priorBindings.observe && typeof priorBindings.observe === "object" ? priorBindings.observe : null;
-          const recorderCleanup = priorBindings.recorder && typeof priorBindings.recorder === "object" ? priorBindings.recorder : null;
+          const recorderCleanup = priorBindings.recorder && typeof priorBindings.recorder === "object" ? priorBindings.recorder : priorStaleDeviceCleanup?.recorder && typeof priorStaleDeviceCleanup.recorder === "object" ? priorStaleDeviceCleanup.recorder : null;
+          const runnerFromStale = runnerCleanup === priorStaleDeviceCleanup?.runner;
+          const recorderFromStale = recorderCleanup === priorStaleDeviceCleanup?.recorder;
           if (activeOperation?.profile === "transition:ensure-metro" && !metroCleanup && !priorBindings.metro) {
             throw new SessionAuthorityError("SESSION_OPERATION_ACTIVE", "stale Metro transition has not published exact cleanup authority");
           }
           let runnerClaimKey = null;
           if (runnerCleanup) {
-            runnerClaimKey = `${String(runnerCleanup.platform)}:${String(runnerCleanup.deviceId)}:${String(runnerCleanup.port)}`;
-            const runnerClaim = this.#findClaim("runner", runnerClaimKey);
-            if (runnerClaim?.session_id !== prior.session_id || runnerClaim.claim_epoch !== prior.claim_epoch) {
-              throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "stale runner cleanup claim no longer matches the authenticated binding");
+            runnerClaimKey = runnerFromStale ? String(runnerCleanup.claimKey) : `${String(runnerCleanup.platform)}:${String(runnerCleanup.deviceId)}:${String(runnerCleanup.port)}`;
+            if (typeof runnerCleanup.completedAt !== "number") {
+              const runnerClaim = this.#findClaim("runner", runnerClaimKey);
+              if (runnerClaim?.session_id !== prior.session_id || runnerClaim.claim_epoch !== prior.claim_epoch) {
+                throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "stale runner cleanup claim no longer matches the authenticated binding");
+              }
             }
           }
           let recorderClaimKey = null;
           if (recorderCleanup) {
-            recorderClaimKey = `${String(recorderCleanup.platform)}:${String(recorderCleanup.deviceId)}`;
-            const recorderClaim = this.#findClaim("recorder", recorderClaimKey);
-            if (recorderClaim?.session_id !== prior.session_id || recorderClaim.claim_epoch !== prior.claim_epoch) {
-              throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "stale recorder cleanup claim no longer matches the authenticated binding");
+            recorderClaimKey = recorderFromStale ? String(recorderCleanup.claimKey) : `${String(recorderCleanup.platform)}:${String(recorderCleanup.deviceId)}`;
+            if (typeof recorderCleanup.completedAt !== "number") {
+              const recorderClaim = this.#findClaim("recorder", recorderClaimKey);
+              if (recorderClaim?.session_id !== prior.session_id || recorderClaim.claim_epoch !== prior.claim_epoch) {
+                throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "stale recorder cleanup claim no longer matches the authenticated binding");
+              }
             }
           }
           if (observeCleanup) {
@@ -14553,7 +14591,7 @@ var init_registry = __esm({
              AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device', 'runner', 'recorder')`).run(prior.session_id, prior.claim_epoch);
           this.#database.prepare(`UPDATE claims SET session_id = ?, claim_epoch = ?, lease_until_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`).run(target.sessionId, target.claimEpoch, now + this.#leaseMs, prior.session_id, prior.claim_epoch);
-          const cleanupRequired = Boolean(metroCleanup || runnerCleanup || observeCleanup || recorderCleanup);
+          const cleanupRequired = Boolean(metroCleanup || runnerCleanup || observeCleanup || recorderCleanup || priorStaleDeviceCleanup);
           const sameMetro = Number(priorMetro?.port) === Number(targetBindings.metroPort);
           this.#database.prepare(`UPDATE sessions
            SET state = ?, bindings_json = ?, authority_version = authority_version + 1,
@@ -14572,6 +14610,7 @@ var init_registry = __esm({
             recorder: null,
             observe: null,
             proof: null,
+            staleDeviceCleanup: priorStaleDeviceCleanup,
             handoffCleanup: cleanupRequired ? {
               metro: metroCleanup ? {
                 ...metroCleanup,
@@ -14579,13 +14618,13 @@ var init_registry = __esm({
                 stopRequestedAt: null,
                 completedAt: null
               } : null,
-              runner: runnerCleanup ? {
+              runner: runnerCleanup ? runnerFromStale ? runnerCleanup : {
                 ...runnerCleanup,
                 claimKey: runnerClaimKey,
                 stopRequestedAt: null,
                 completedAt: null
               } : null,
-              recorder: recorderCleanup ? {
+              recorder: recorderCleanup ? recorderFromStale ? recorderCleanup : {
                 ...recorderCleanup,
                 claimKey: recorderClaimKey,
                 stopRequestedAt: null,
@@ -14605,7 +14644,7 @@ var init_registry = __esm({
         const targetStatus = this.getSessionStatus(target.sessionId);
         const recovery = targetStatus?.bindings.recoveryHandles;
         const adoption = recovery?.adoptStale;
-        if (targetStatus?.state !== "blocked" || targetStatus.claimEpoch !== target.claimEpoch || typeof adoption?.token !== "string" || typeof adoption.expiresMs !== "number" || adoption.expiresMs < this.#now() || typeof adoption.priorSessionId !== "string" || !this.#capabilityMatches(adoption.token, handle)) {
+        if (targetStatus?.state !== "blocked" || targetStatus.claimEpoch !== target.claimEpoch || typeof adoption?.token !== "string" || typeof adoption.expiresMs !== "number" || typeof adoption.priorSessionId !== "string" || !this.#recoveryHandleMatches(adoption, handle, this.#now())) {
           throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "stale adoption capability is invalid or expired");
         }
         if (targetStatus.worker.instanceId !== targetInstance) {
@@ -14630,8 +14669,8 @@ var init_registry = __esm({
       verifyStaleAdoptionResumption(target, handle, targetInstance) {
         const status = this.getSessionStatus(target.sessionId);
         const recovery = status?.bindings.recoveryHandles;
-        const token2 = recovery?.adoptStale?.token;
-        if (status?.state !== "handoff_cleanup" || status.claimEpoch !== target.claimEpoch || status.worker.instanceId !== targetInstance || typeof token2 !== "string" || !this.#capabilityMatches(token2, handle)) {
+        const adoption = recovery?.adoptStale;
+        if (status?.state !== "handoff_cleanup" || status.claimEpoch !== target.claimEpoch || status.worker.instanceId !== targetInstance || !adoption || !this.#recoveryHandleMatches(adoption, handle, this.#now())) {
           throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "stale adoption resumption requires the original adoption capability");
         }
       }
@@ -15163,6 +15202,34 @@ var init_registry = __esm({
         const expectedDigest = createHash7("sha256").update(expected).digest();
         const actualDigest = createHash7("sha256").update(actual).digest();
         return timingSafeEqual2(expectedDigest, actualDigest);
+      }
+      #recoveryHandleMatches(handle, actual, now) {
+        if (typeof handle.token === "string" && typeof handle.expiresMs === "number" && handle.expiresMs >= now && this.#capabilityMatches(handle.token, actual)) {
+          return true;
+        }
+        const previous = handle.previous;
+        return Boolean(previous && typeof previous.token === "string" && typeof previous.expiresMs === "number" && previous.expiresMs >= now && this.#capabilityMatches(previous.token, actual));
+      }
+      #mergeStaleDeviceCleanup(cleanup, staleDeviceCleanup) {
+        if (!staleDeviceCleanup)
+          return cleanup;
+        const merged = { ...cleanup };
+        for (const resource of ["runner", "recorder"]) {
+          const current = cleanup[resource];
+          const stale = staleDeviceCleanup[resource];
+          if (!stale || typeof stale !== "object")
+            continue;
+          if (current && typeof current === "object") {
+            const currentKey = current.claimKey;
+            const staleKey = stale.claimKey;
+            if (currentKey !== staleKey) {
+              throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", `stale ${resource} cleanup conflicts with the existing handoff plan`);
+            }
+          } else {
+            merged[resource] = stale;
+          }
+        }
+        return merged;
       }
       #fenceSession(sessionId, now) {
         this.#database.prepare("DELETE FROM claims WHERE session_id = ?").run(sessionId);
@@ -61951,7 +62018,7 @@ function projectPublicAuthorityStatus(status, options = {}) {
   const now = (options.now ?? Date.now)();
   const recovery = status.bindings.recoveryHandles;
   const adoptionHandle = liveHandle(recovery?.adoptStale, now);
-  const recoveryStatus = status.state === "blocked" && recovery ? {
+  const recoveryStatus = (status.state === "blocked" || status.state === "handoff_cleanup") && recovery ? {
     handoffRecipientHandle: liveHandle(recovery.handoffRecipient, now),
     handoffRecipientExpiresMs: typeof recovery.handoffRecipient?.expiresMs === "number" ? recovery.handoffRecipient.expiresMs : void 0,
     adoptionRequired: Boolean(recovery.adoptStale),

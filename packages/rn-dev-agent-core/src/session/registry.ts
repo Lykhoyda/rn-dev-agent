@@ -583,6 +583,26 @@ export class SessionRegistry {
 
     return this.#transaction(() => {
       const owner = this.#requireSession(session);
+      const bindings = JSON.parse(owner.bindings_json) as Record<string, unknown>;
+      const staleDeviceCleanup = bindings.staleDeviceCleanup as
+        | Record<string, unknown>
+        | null
+        | undefined;
+      if (
+        staleDeviceCleanup &&
+        typeof staleDeviceCleanup.platform === 'string' &&
+        typeof staleDeviceCleanup.deviceId === 'string' &&
+        resources.some(
+          (resource) =>
+            resource.type === 'device' &&
+            resource.key === `${staleDeviceCleanup.platform}:${staleDeviceCleanup.deviceId}`,
+        )
+      ) {
+        throw new SessionAuthorityError(
+          'AUTOMATION_CLEANUP_UNPROVEN',
+          'device rebinding is refused while stale cleanup remains incomplete',
+        );
+      }
 
       for (const resource of resources) {
         const claim = this.#findConflictingClaim(resource);
@@ -983,26 +1003,38 @@ export class SessionRegistry {
       const handles = bindings.recoveryHandles as Record<string, unknown> | null | undefined;
       if (!handles || typeof handles !== 'object') return false;
       const expiresMs = now + RECOVERY_HANDLE_TTL_MS;
-      let rotated = false;
+      let changed = false;
       const next: Record<string, unknown> = { ...handles };
       for (const name of ['handoffRecipient', 'adoptStale'] as const) {
         const handle = handles[name];
         if (!handle || typeof handle !== 'object') continue;
         const current = handle as Record<string, unknown>;
+        const previous = current.previous as Record<string, unknown> | null | undefined;
+        const previousExpired =
+          previous && typeof previous.expiresMs === 'number' && previous.expiresMs < now;
+        const retained = previousExpired ? { ...current, previous: undefined } : current;
+        if (previousExpired) changed = true;
         if (
           typeof current.expiresMs === 'number' &&
           current.expiresMs > now + RECOVERY_HANDLE_RENEW_MS
         ) {
+          next[name] = retained;
           continue;
         }
         next[name] = {
-          ...current,
+          ...retained,
+          previous:
+            typeof current.token === 'string' &&
+            typeof current.expiresMs === 'number' &&
+            current.expiresMs >= now
+              ? { token: current.token, expiresMs: current.expiresMs }
+              : undefined,
           token: randomBytes(32).toString('base64url'),
           expiresMs,
         };
-        rotated = true;
+        changed = true;
       }
-      if (!rotated) return false;
+      if (!changed) return false;
       this.#database
         .prepare(
           `UPDATE sessions SET bindings_json = ?, updated_ms = ?
@@ -1275,7 +1307,6 @@ export class SessionRegistry {
         !offer ||
         typeof offer.token !== 'string' ||
         typeof offer.expiresMs !== 'number' ||
-        offer.expiresMs < now ||
         typeof offer.platform !== 'string' ||
         typeof offer.deviceId !== 'string' ||
         typeof offer.priorSessionId !== 'string' ||
@@ -1296,9 +1327,6 @@ export class SessionRegistry {
       const platform = offer.platform;
       const deviceId = offer.deviceId;
       const deviceKey = `${platform}:${deviceId}`;
-      // Resumable: once the claims moved the obligations are OURS, so a crash between
-      // transfer and completion must replay the durable journal rather than re-derive it
-      // from a prior owner whose bindings were already emptied.
       const resumed = bindings.staleDeviceCleanup as Record<string, unknown> | null | undefined;
       if (
         resumed &&
@@ -1313,6 +1341,12 @@ export class SessionRegistry {
           runner: (resumed.runner as Record<string, unknown> | null) ?? null,
           recorder: (resumed.recorder as Record<string, unknown> | null) ?? null,
         };
+      }
+      if (offer.expiresMs < now) {
+        throw new SessionAuthorityError(
+          'HANDOFF_NOT_AUTHORIZED',
+          'stale device release capability is invalid or expired',
+        );
       }
       const prior = this.#requireProvenDeadOwner(offer.priorSessionId, offer.priorClaimEpoch);
       const priorBindings = JSON.parse(prior.bindings_json) as Record<string, unknown>;
@@ -2168,10 +2202,12 @@ export class SessionRegistry {
             | undefined;
           const handle = handles?.handoffRecipient;
           if (
-            typeof handle?.token === 'string' &&
-            typeof handle.expiresMs === 'number' &&
-            handle.expiresMs >= now &&
-            this.#capabilityMatches(handle.token, input.targetHandle)
+            handle &&
+            this.#recoveryHandleMatches(
+              handle as unknown as Record<string, unknown>,
+              input.targetHandle,
+              now,
+            )
           ) {
             targetInstance =
               typeof handle.workerInstance === 'string' ? handle.workerInstance : undefined;
@@ -3001,6 +3037,29 @@ export class SessionRegistry {
           );
         }
       }
+      const staleDeviceCleanup = bindings.staleDeviceCleanup as
+        | Record<string, unknown>
+        | null
+        | undefined;
+      if (
+        staleDeviceCleanup &&
+        typeof staleDeviceCleanup.platform === 'string' &&
+        typeof staleDeviceCleanup.deviceId === 'string'
+      ) {
+        const deviceKey = `${staleDeviceCleanup.platform}:${staleDeviceCleanup.deviceId}`;
+        for (const claim of this.#deviceFamilyClaims(deviceKey)) {
+          if (claim.session_id !== target.sessionId || claim.claim_epoch !== target.claimEpoch) {
+            continue;
+          }
+          this.#database
+            .prepare(
+              `DELETE FROM claims
+               WHERE resource_type = ? AND resource_key = ?
+                 AND session_id = ? AND claim_epoch = ?`,
+            )
+            .run(claim.resource_type, claim.resource_key, target.sessionId, target.claimEpoch);
+        }
+      }
       this.#database
         .prepare(
           `UPDATE sessions
@@ -3013,6 +3072,8 @@ export class SessionRegistry {
             ...bindings,
             handoffCleanup: null,
             recoveryHandles: null,
+            staleDeviceCleanup: null,
+            staleDeviceRelease: null,
           }),
           now,
           target.sessionId,
@@ -3207,6 +3268,10 @@ export class SessionRegistry {
       }
       const priorBindings = JSON.parse(prior.bindings_json) as Record<string, unknown>;
       const targetBindings = JSON.parse(targetRow.bindings_json) as Record<string, unknown>;
+      const priorStaleDeviceCleanup =
+        priorBindings.staleDeviceCleanup && typeof priorBindings.staleDeviceCleanup === 'object'
+          ? (priorBindings.staleDeviceCleanup as Record<string, unknown>)
+          : null;
       const priorCleanup =
         priorBindings.handoffCleanup && typeof priorBindings.handoffCleanup === 'object'
           ? (priorBindings.handoffCleanup as Record<string, unknown>)
@@ -3219,8 +3284,9 @@ export class SessionRegistry {
         );
       }
       if (resumesCleanup) {
+        const mergedCleanup = this.#mergeStaleDeviceCleanup(priorCleanup, priorStaleDeviceCleanup);
         const resumesMetroCleanup =
-          priorCleanup.metro !== null && typeof priorCleanup.metro === 'object';
+          mergedCleanup.metro !== null && typeof mergedCleanup.metro === 'object';
         this.#database
           .prepare(
             `UPDATE claims SET session_id = ?, claim_epoch = ?, lease_until_ms = ?
@@ -3255,7 +3321,8 @@ export class SessionRegistry {
               recorder: null,
               observe: null,
               proof: null,
-              handoffCleanup: priorCleanup,
+              handoffCleanup: mergedCleanup,
+              staleDeviceCleanup: priorStaleDeviceCleanup,
             }),
             now,
             target.sessionId,
@@ -3283,7 +3350,9 @@ export class SessionRegistry {
       const runnerCleanup =
         priorBindings.runner && typeof priorBindings.runner === 'object'
           ? (priorBindings.runner as Record<string, unknown>)
-          : null;
+          : priorStaleDeviceCleanup?.runner && typeof priorStaleDeviceCleanup.runner === 'object'
+            ? (priorStaleDeviceCleanup.runner as Record<string, unknown>)
+            : null;
       const observeCleanup =
         priorBindings.observe && typeof priorBindings.observe === 'object'
           ? (priorBindings.observe as Record<string, unknown>)
@@ -3291,7 +3360,12 @@ export class SessionRegistry {
       const recorderCleanup =
         priorBindings.recorder && typeof priorBindings.recorder === 'object'
           ? (priorBindings.recorder as Record<string, unknown>)
-          : null;
+          : priorStaleDeviceCleanup?.recorder &&
+              typeof priorStaleDeviceCleanup.recorder === 'object'
+            ? (priorStaleDeviceCleanup.recorder as Record<string, unknown>)
+            : null;
+      const runnerFromStale = runnerCleanup === priorStaleDeviceCleanup?.runner;
+      const recorderFromStale = recorderCleanup === priorStaleDeviceCleanup?.recorder;
       if (
         activeOperation?.profile === 'transition:ensure-metro' &&
         !metroCleanup &&
@@ -3304,34 +3378,40 @@ export class SessionRegistry {
       }
       let runnerClaimKey: string | null = null;
       if (runnerCleanup) {
-        runnerClaimKey = `${String(runnerCleanup.platform)}:${String(
-          runnerCleanup.deviceId,
-        )}:${String(runnerCleanup.port)}`;
-        const runnerClaim = this.#findClaim('runner', runnerClaimKey);
-        if (
-          runnerClaim?.session_id !== prior.session_id ||
-          runnerClaim.claim_epoch !== prior.claim_epoch
-        ) {
-          throw new SessionAuthorityError(
-            'RUNNER_OWNERSHIP_MISMATCH',
-            'stale runner cleanup claim no longer matches the authenticated binding',
-          );
+        runnerClaimKey = runnerFromStale
+          ? String(runnerCleanup.claimKey)
+          : `${String(runnerCleanup.platform)}:${String(runnerCleanup.deviceId)}:${String(
+              runnerCleanup.port,
+            )}`;
+        if (typeof runnerCleanup.completedAt !== 'number') {
+          const runnerClaim = this.#findClaim('runner', runnerClaimKey);
+          if (
+            runnerClaim?.session_id !== prior.session_id ||
+            runnerClaim.claim_epoch !== prior.claim_epoch
+          ) {
+            throw new SessionAuthorityError(
+              'RUNNER_OWNERSHIP_MISMATCH',
+              'stale runner cleanup claim no longer matches the authenticated binding',
+            );
+          }
         }
       }
       let recorderClaimKey: string | null = null;
       if (recorderCleanup) {
-        recorderClaimKey = `${String(recorderCleanup.platform)}:${String(
-          recorderCleanup.deviceId,
-        )}`;
-        const recorderClaim = this.#findClaim('recorder', recorderClaimKey);
-        if (
-          recorderClaim?.session_id !== prior.session_id ||
-          recorderClaim.claim_epoch !== prior.claim_epoch
-        ) {
-          throw new SessionAuthorityError(
-            'RECORDING_AUTHORITY_MISMATCH',
-            'stale recorder cleanup claim no longer matches the authenticated binding',
-          );
+        recorderClaimKey = recorderFromStale
+          ? String(recorderCleanup.claimKey)
+          : `${String(recorderCleanup.platform)}:${String(recorderCleanup.deviceId)}`;
+        if (typeof recorderCleanup.completedAt !== 'number') {
+          const recorderClaim = this.#findClaim('recorder', recorderClaimKey);
+          if (
+            recorderClaim?.session_id !== prior.session_id ||
+            recorderClaim.claim_epoch !== prior.claim_epoch
+          ) {
+            throw new SessionAuthorityError(
+              'RECORDING_AUTHORITY_MISMATCH',
+              'stale recorder cleanup claim no longer matches the authenticated binding',
+            );
+          }
         }
       }
       if (observeCleanup) {
@@ -3368,7 +3448,11 @@ export class SessionRegistry {
           prior.claim_epoch,
         );
       const cleanupRequired = Boolean(
-        metroCleanup || runnerCleanup || observeCleanup || recorderCleanup,
+        metroCleanup ||
+        runnerCleanup ||
+        observeCleanup ||
+        recorderCleanup ||
+        priorStaleDeviceCleanup,
       );
       const sameMetro = Number(priorMetro?.port) === Number(targetBindings.metroPort);
       this.#database
@@ -3398,6 +3482,7 @@ export class SessionRegistry {
             recorder: null,
             observe: null,
             proof: null,
+            staleDeviceCleanup: priorStaleDeviceCleanup,
             handoffCleanup: cleanupRequired
               ? {
                   metro: metroCleanup
@@ -3409,20 +3494,24 @@ export class SessionRegistry {
                       }
                     : null,
                   runner: runnerCleanup
-                    ? {
-                        ...runnerCleanup,
-                        claimKey: runnerClaimKey,
-                        stopRequestedAt: null,
-                        completedAt: null,
-                      }
+                    ? runnerFromStale
+                      ? runnerCleanup
+                      : {
+                          ...runnerCleanup,
+                          claimKey: runnerClaimKey,
+                          stopRequestedAt: null,
+                          completedAt: null,
+                        }
                     : null,
                   recorder: recorderCleanup
-                    ? {
-                        ...recorderCleanup,
-                        claimKey: recorderClaimKey,
-                        stopRequestedAt: null,
-                        completedAt: null,
-                      }
+                    ? recorderFromStale
+                      ? recorderCleanup
+                      : {
+                          ...recorderCleanup,
+                          claimKey: recorderClaimKey,
+                          stopRequestedAt: null,
+                          completedAt: null,
+                        }
                     : null,
                   observe: observeCleanup
                     ? {
@@ -3464,9 +3553,8 @@ export class SessionRegistry {
       targetStatus.claimEpoch !== target.claimEpoch ||
       typeof adoption?.token !== 'string' ||
       typeof adoption.expiresMs !== 'number' ||
-      adoption.expiresMs < this.#now() ||
       typeof adoption.priorSessionId !== 'string' ||
-      !this.#capabilityMatches(adoption.token, handle)
+      !this.#recoveryHandleMatches(adoption as Record<string, unknown>, handle, this.#now())
     ) {
       throw new SessionAuthorityError(
         'HANDOFF_NOT_AUTHORIZED',
@@ -3516,15 +3604,15 @@ export class SessionRegistry {
   verifyStaleAdoptionResumption(target: SessionRef, handle: string, targetInstance: string): void {
     const status = this.getSessionStatus(target.sessionId);
     const recovery = status?.bindings.recoveryHandles as
-      | { adoptStale?: { token?: unknown } }
+      | { adoptStale?: Record<string, unknown> }
       | undefined;
-    const token = recovery?.adoptStale?.token;
+    const adoption = recovery?.adoptStale;
     if (
       status?.state !== 'handoff_cleanup' ||
       status.claimEpoch !== target.claimEpoch ||
       status.worker.instanceId !== targetInstance ||
-      typeof token !== 'string' ||
-      !this.#capabilityMatches(token, handle)
+      !adoption ||
+      !this.#recoveryHandleMatches(adoption, handle, this.#now())
     ) {
       throw new SessionAuthorityError(
         'HANDOFF_NOT_AUTHORIZED',
@@ -4511,6 +4599,51 @@ export class SessionRegistry {
     const expectedDigest = createHash('sha256').update(expected).digest();
     const actualDigest = createHash('sha256').update(actual).digest();
     return timingSafeEqual(expectedDigest, actualDigest);
+  }
+
+  #recoveryHandleMatches(handle: Record<string, unknown>, actual: string, now: number): boolean {
+    if (
+      typeof handle.token === 'string' &&
+      typeof handle.expiresMs === 'number' &&
+      handle.expiresMs >= now &&
+      this.#capabilityMatches(handle.token, actual)
+    ) {
+      return true;
+    }
+    const previous = handle.previous as Record<string, unknown> | null | undefined;
+    return Boolean(
+      previous &&
+      typeof previous.token === 'string' &&
+      typeof previous.expiresMs === 'number' &&
+      previous.expiresMs >= now &&
+      this.#capabilityMatches(previous.token, actual),
+    );
+  }
+
+  #mergeStaleDeviceCleanup(
+    cleanup: Record<string, unknown>,
+    staleDeviceCleanup: Record<string, unknown> | null,
+  ): Record<string, unknown> {
+    if (!staleDeviceCleanup) return cleanup;
+    const merged = { ...cleanup };
+    for (const resource of ['runner', 'recorder'] as const) {
+      const current = cleanup[resource];
+      const stale = staleDeviceCleanup[resource];
+      if (!stale || typeof stale !== 'object') continue;
+      if (current && typeof current === 'object') {
+        const currentKey = (current as Record<string, unknown>).claimKey;
+        const staleKey = (stale as Record<string, unknown>).claimKey;
+        if (currentKey !== staleKey) {
+          throw new SessionAuthorityError(
+            'HANDOFF_NOT_AUTHORIZED',
+            `stale ${resource} cleanup conflicts with the existing handoff plan`,
+          );
+        }
+      } else {
+        merged[resource] = stale;
+      }
+    }
+    return merged;
   }
 
   #fenceSession(sessionId: string, now: number): void {
