@@ -3718,10 +3718,14 @@ test(
       const sessionCli = join(root, 'rn-session.js');
       writeFileSync(sessionCli, '');
 
-      applyPackageIntegration({ appRoot: root, sessionCli });
+      const boundOperationDependencies = {
+        recoveryTimeoutMs: 15_000,
+        timeoutMs: 15_000,
+      };
+      applyPackageIntegration({ appRoot: root, sessionCli }, { boundOperationDependencies });
       assert.equal(statSync(packagePath).mode & 0o777, 0o600);
       assert.equal(statSync(metroPath).mode & 0o777, 0o600);
-      restorePackageIntegrationFiles({ appRoot: root });
+      restorePackageIntegrationFiles({ appRoot: root }, { boundOperationDependencies });
 
       assert.deepEqual(JSON.parse(readFileSync(packagePath, 'utf8')), packageJson);
       assert.equal(readFileSync(metroPath, 'utf8'), metroBefore);

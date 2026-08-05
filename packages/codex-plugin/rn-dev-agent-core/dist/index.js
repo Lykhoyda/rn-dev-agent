@@ -64777,7 +64777,7 @@ function restorePackageIntegrationFiles(input, dependencies = {}) {
         replacement: packageOutput,
         mode: packageSnapshot.mode
       }
-    ]);
+    ], dependencies.boundOperationDependencies);
     applied.push({
       snapshot: packageSnapshot,
       written: packageOutput,
@@ -64794,7 +64794,7 @@ function restorePackageIntegrationFiles(input, dependencies = {}) {
         replacement: metroOutput,
         mode: metroSnapshot.mode
       }
-    ]);
+    ], dependencies.boundOperationDependencies);
     applied.push({
       snapshot: metroSnapshot,
       written: metroOutput,
