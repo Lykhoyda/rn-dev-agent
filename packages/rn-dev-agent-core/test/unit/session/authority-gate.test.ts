@@ -1427,11 +1427,11 @@ test('repeated Observe start is an authoritative idempotent read of the existing
   assert.equal(envelope.meta.authorityTransition, undefined);
   assert.deepEqual(
     calls.filter((call) => call.startsWith('preflight:')),
-    ['preflight:C', 'preflight:S', 'preflight:O'],
+    ['preflight:C', 'preflight:S'],
   );
 });
 
-test('Observe stop requires only controller, source, and Observe authority', async () => {
+test('Observe stop requires only controller and source authority', async () => {
   const { runtime, status, calls } = fixture();
   status.bindings.bundle = null;
   status.bindings.runner = null;
@@ -1452,8 +1452,105 @@ test('Observe stop requires only controller, source, and Observe authority', asy
   assert.equal(envelope.ok, true);
   assert.deepEqual(
     calls.filter((call) => call.startsWith('preflight:')),
-    ['preflight:C', 'preflight:S', 'preflight:O'],
+    ['preflight:C', 'preflight:S'],
   );
+  assert.deepEqual(
+    calls.filter((call) => call.startsWith('postflight:')),
+    ['postflight:C', 'postflight:S'],
+  );
+});
+
+test('Observe start and restart admit with a live Session only, matching autostart degraded mode', async () => {
+  for (const action of ['start', 'restart']) {
+    const { runtime, status, calls } = fixture();
+    status.state = 'source_bound';
+    status.bindings = {
+      install: null,
+      metro: null,
+      bundle: null,
+      device: null,
+      runner: null,
+      observe: null,
+      proof: null,
+    };
+    const gate = createAuthorityGate(runtime, {
+      probe: async ({ axis, phase }) => {
+        calls.push(`${phase}:${axis}`);
+        return { axis, identity: `${axis}-identity` };
+      },
+    });
+
+    const result = await gate.wrap('observe', async () => {
+      status.bindings.observe = { instanceId: 'observe-new' };
+      status.authorityVersion += 1;
+      return okResult({ running: true });
+    })({ action });
+    const envelope = JSON.parse(result.content[0].text);
+
+    assert.equal(envelope.ok, true, `observe ${action} must admit at source_bound`);
+    assert.equal(envelope.meta.authorityTransition, true);
+    assert.deepEqual(
+      calls.filter((call) => call.startsWith('preflight:')),
+      ['preflight:C', 'preflight:S'],
+    );
+    assert.deepEqual(
+      calls.filter((call) => call.startsWith('postflight:')),
+      ['postflight:C', 'postflight:S'],
+    );
+  }
+});
+
+test('Observe stop with no bound child is an idempotent authoritative no-op', async () => {
+  const { runtime, status, calls } = fixture();
+  status.bindings.observe = null;
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis, phase }) => {
+      calls.push(`${phase}:${axis}`);
+      return { axis, identity: `${axis}-identity` };
+    },
+  });
+
+  const result = await gate.wrap('observe', async () => okResult({ running: false }))({
+    action: 'stop',
+  });
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, true);
+  assert.equal(envelope.meta.authorityTransition, undefined);
+  assert.deepEqual(
+    calls.filter((call) => call.startsWith('preflight:')),
+    ['preflight:C', 'preflight:S'],
+  );
+});
+
+test('Observe e2e panel tools still require full authority at a session-bound-only state', async () => {
+  for (const tool of ['cdp_run_e2e_suite', 'cdp_run_action']) {
+    const { runtime, status } = fixture();
+    status.state = 'source_bound';
+    status.bindings = {
+      install: null,
+      metro: null,
+      bundle: null,
+      device: null,
+      runner: null,
+      observe: null,
+      proof: null,
+    };
+    let dispatched = false;
+    const gate = createAuthorityGate(runtime, {
+      probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+    });
+
+    const result = await gate.wrap(tool, async () => {
+      dispatched = true;
+      return okResult({ started: true });
+    })({});
+    const envelope = JSON.parse(result.content[0].text);
+
+    assert.equal(envelope.ok, false, `${tool} must refuse without full authority`);
+    assert.equal(envelope.code, 'APP_INSTALL_IDENTITY_CHANGED');
+    assert.equal(dispatched, false);
+  }
 });
 
 test('unbound CDP disconnect is an idempotent authoritative operation', async () => {
@@ -1770,9 +1867,12 @@ test('runner transitions and idempotent Observe starts probe their exact axes', 
   })({ action: 'start' });
   assert.deepEqual(
     calls.filter((call) => call.startsWith('preflight:')),
-    ['preflight:C', 'preflight:S', 'preflight:O'],
+    ['preflight:C', 'preflight:S'],
   );
-  assert.ok(calls.includes('postflight:O'));
+  assert.deepEqual(
+    calls.filter((call) => call.startsWith('postflight:')),
+    ['postflight:C', 'postflight:S'],
+  );
 });
 
 test('runner close authenticates dead retained ownership after runtime loss', async () => {

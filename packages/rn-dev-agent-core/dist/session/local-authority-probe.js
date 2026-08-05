@@ -325,21 +325,6 @@ export function createLocalAuthorityProbe(dependencies) {
                 }),
             };
         }
-        if (axis === 'O') {
-            const observe = objectBinding(status, 'observe');
-            const port = Number(observe.port);
-            const capability = dependencies.getSecret()?.observeCapability ?? '';
-            const observed = await fetchJson(`http://127.0.0.1:${port}/api/authority`, {
-                headers: {
-                    authorization: `Bearer ${capability}`,
-                    'x-rn-observe-instance': String(observe.instanceId ?? ''),
-                },
-            });
-            if (observed.sessionId !== status.sessionId || observed.instanceId !== observe.instanceId) {
-                throw new SessionAuthorityError('OBSERVE_AUTHORITY_MISMATCH', 'Observe endpoint no longer matches the session binding');
-            }
-            return { axis, identity: identity(observed) };
-        }
         const proof = objectBinding(status, 'proof');
         const runId = String(proof.runId ?? '');
         if (!runId || !dependencies.proofActive?.(runId)) {

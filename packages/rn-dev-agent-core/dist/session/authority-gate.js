@@ -47,7 +47,6 @@ const axisBinding = {
     B: 'bundle',
     D: 'device',
     R: 'runner',
-    O: 'observe',
     P: 'proof',
 };
 const axisErrors = {
@@ -59,7 +58,6 @@ const axisErrors = {
     B: 'BUNDLE_HANDSHAKE_UNAVAILABLE',
     D: 'DEVICE_AUTHORITY_MISMATCH',
     R: 'RUNNER_OWNERSHIP_MISMATCH',
-    O: 'OBSERVE_AUTHORITY_MISMATCH',
     P: 'PROOF_AUTHORITY_MISMATCH',
 };
 function requireCompleteAxes(status, profile) {
@@ -495,14 +493,9 @@ export function createAuthorityGate(runtime, dependencies) {
             }
             if (runtimeStatus.available &&
                 tool === 'observe' &&
-                args.action === 'start' &&
-                runtimeStatus.bindings.observe) {
-                profile = {
-                    kind: 'authoritative',
-                    axes: ['C', 'S', 'O'],
-                    mutation: false,
-                    liveBundleProbe: false,
-                };
+                ((args.action === 'start' && runtimeStatus.bindings.observe) ||
+                    (args.action === 'stop' && !runtimeStatus.bindings.observe))) {
+                profile = baseProfile;
             }
             if (runtimeStatus.available &&
                 tool === 'cdp_disconnect' &&
@@ -559,24 +552,14 @@ export function createAuthorityGate(runtime, dependencies) {
                                 before: ['C', 'S', 'D'],
                                 after: ['C', 'S', 'D'],
                             }
-                        : tool === 'observe'
-                            ? args.action === 'stop'
+                        : tool === 'rn_session' && args.action === 'prepare_handoff'
+                            ? { before: [...profile.axes], after: [] }
+                            : tool === 'cdp_restart' && args.hardReset === true && args.platform === 'ios'
                                 ? {
-                                    before: ['C', 'S', 'O'],
-                                    after: ['C', 'S'],
+                                    before: [...profile.axes],
+                                    after: profile.axes.filter((axis) => axis !== 'R'),
                                 }
-                                : {
-                                    before: ['C', 'S', 'I', 'M', 'B', 'D', 'R'],
-                                    after: ['C', 'S', 'I', 'M', 'B', 'D', 'R', 'O'],
-                                }
-                            : tool === 'rn_session' && args.action === 'prepare_handoff'
-                                ? { before: [...profile.axes], after: [] }
-                                : tool === 'cdp_restart' && args.hardReset === true && args.platform === 'ios'
-                                    ? {
-                                        before: [...profile.axes],
-                                        after: profile.axes.filter((axis) => axis !== 'R'),
-                                    }
-                                    : { before: [...profile.axes], after: [...profile.axes] };
+                                : { before: [...profile.axes], after: [...profile.axes] };
                     requireCompleteAxes(status, { ...profile, axes: transitionAxes.before });
                     const operationInput = {
                         operationId: randomUUID(),

@@ -154,6 +154,24 @@ test('native crash diagnostics do not require Metro or bundle authority', () => 
   assert.equal(profile.mutation, false);
 });
 
+test('Observe is a session-scoped read-only child', () => {
+  const profile = authorityProfileFor('observe');
+
+  assert.equal(profile.kind, 'authoritative');
+  assert.deepEqual(profile.axes, ['C', 'S']);
+  assert.equal(profile.mutation, false);
+  assert.equal(profile.liveBundleProbe, false);
+});
+
+test('the retired O axis appears in no tool profile', () => {
+  for (const tool of registered) {
+    const profile = authorityProfileFor(tool);
+    for (const axes of [profile.axes, profile.postflightAxes ?? [], profile.optionalAxes ?? []]) {
+      assert.equal(axes.includes('O'), false, `${tool} must not carry the retired O axis`);
+    }
+  }
+});
+
 test('iOS hard reset transitions through runner authority', () => {
   const profile = authorityProfileFor('cdp_restart', { hardReset: true, platform: 'ios' });
 

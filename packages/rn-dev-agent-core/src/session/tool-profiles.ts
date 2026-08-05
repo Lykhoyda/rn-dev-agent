@@ -1,4 +1,4 @@
-export type AuthorityAxis = 'C' | 'S' | 'I' | 'M' | 'A' | 'B' | 'D' | 'R' | 'O' | 'P';
+export type AuthorityAxis = 'C' | 'S' | 'I' | 'M' | 'A' | 'B' | 'D' | 'R' | 'P';
 
 export interface AuthorityProfile {
   kind: 'diagnostic' | 'transition' | 'authoritative';
@@ -184,11 +184,13 @@ add(cdpMutation, {
   mutation: true,
   liveBundleProbe: true,
 });
+// Read-only Session child: admits with a live session only (autostart parity);
+// its mutating e2e web routes keep the full gates of the tools they invoke.
 add(observe, {
   kind: 'authoritative',
-  axes: ['C', 'S', 'I', 'M', 'B', 'D', 'O'],
+  axes: ['C', 'S'],
   mutation: false,
-  liveBundleProbe: true,
+  liveBundleProbe: false,
 });
 add(proof, {
   kind: 'authoritative',
