@@ -48592,6 +48592,23 @@ var INJECTED_HELPERS = `
       return leftProps.onChangeText === rightProps.onChangeText &&
         (isAncestorOf(left, right) || isAncestorOf(right, left));
     }
+    function dedupeLineages(matches) {
+      var lineages = [];
+      for (var i = 0; i < matches.length; i++) {
+        var fiber = matches[i];
+        var duplicate = false;
+        for (var j = 0; j < lineages.length; j++) {
+          var other = lineages[j];
+          if (fiber === other || fiber === other.alternate || fiber.alternate === other ||
+              isAncestorOf(fiber, other) || isAncestorOf(other, fiber)) {
+            duplicate = true;
+            break;
+          }
+        }
+        if (!duplicate) lineages.push(fiber);
+      }
+      return lineages;
+    }
     function dedupeControlled(matches) {
       var owners = [];
       for (var i = 0; i < matches.length; i++) {
@@ -48647,18 +48664,22 @@ var INJECTED_HELPERS = `
       var selected = collectByTestID(testID);
       if (selected.truncated) return { failure: result('failure', { code: 'TEXT_ENTRY_UNVERIFIED', mutation: 'none', reason: 'unreadable' }) };
       if (selected.matches.length === 0) return { failure: result('failure', { code: 'NO_TEXT_INPUT_TARGET', mutation: 'none', reason: 'target-lost' }) };
-      var owners = dedupeControlled(selected.matches);
-      if (owners.length > 1) return { failure: result('failure', { code: 'NO_TEXT_INPUT_TARGET', mutation: 'none', reason: 'ambiguous' }) };
-      if (owners.length === 0) {
-        var textInputs = selected.matches.filter(isTextInputFiber);
-        if (textInputs.length === 1) return { nativeEligible: true };
-        if (textInputs.length > 1) return { failure: result('failure', { code: 'NO_TEXT_INPUT_TARGET', mutation: 'none', reason: 'ambiguous' }) };
+      if (dedupeLineages(selected.matches).length > 1) return { failure: result('failure', { code: 'NO_TEXT_INPUT_TARGET', mutation: 'none', reason: 'ambiguous' }) };
+      var ownerMatches = selected.matches;
+      var directTextInputs = selected.matches.filter(isTextInputFiber);
+      var isDirectInput = dedupeLineages(directTextInputs).length === 1;
+      if (!isDirectInput) {
         var descendants = collectDescendants(selected.matches);
         if (descendants.truncated) return { failure: result('failure', { code: 'TEXT_ENTRY_UNVERIFIED', mutation: 'none', reason: 'unreadable' }) };
-        owners = dedupeControlled(descendants.matches);
-        if (owners.length > 1) return { failure: result('failure', { code: 'NO_TEXT_INPUT_TARGET', mutation: 'none', reason: 'ambiguous' }) };
-        if (owners.length === 0) return { failure: result('failure', { code: 'NO_TEXT_INPUT_TARGET', mutation: 'none', reason: 'not-controlled' }) };
+        ownerMatches = descendants.matches;
       }
+      var textInputLineages = dedupeLineages(ownerMatches.filter(isTextInputFiber));
+      if (textInputLineages.length !== 1) {
+        return { failure: result('failure', { code: 'NO_TEXT_INPUT_TARGET', mutation: 'none', reason: textInputLineages.length ? 'ambiguous' : 'not-controlled' }) };
+      }
+      var owners = dedupeControlled(ownerMatches);
+      if (owners.length > 1) return { failure: result('failure', { code: 'NO_TEXT_INPUT_TARGET', mutation: 'none', reason: 'ambiguous' }) };
+      if (owners.length === 0) return isDirectInput ? { nativeEligible: true } : { failure: result('failure', { code: 'NO_TEXT_INPUT_TARGET', mutation: 'none', reason: 'not-controlled' }) };
       var owner = owners[0];
       var props = owner.memoizedProps || {};
       if (props.secureTextEntry === true) return { failure: result('failure', { code: 'TEXT_ENTRY_UNVERIFIED', mutation: 'none', reason: 'secure' }) };

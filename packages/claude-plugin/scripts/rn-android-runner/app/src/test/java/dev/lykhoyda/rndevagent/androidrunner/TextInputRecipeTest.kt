@@ -5,6 +5,30 @@ import org.junit.Test
 
 class TextInputRecipeTest {
     @Test
+    fun incompleteTraversalIsUnreadableEvenWithOneObservedMatch() {
+        assertEquals(
+            TextInputRecipe.ExactResolution.UNREADABLE,
+            TextInputRecipe.classifyResolution(matchCount = 1, traversalComplete = false),
+        )
+    }
+
+    @Test
+    fun completeTraversalClassifiesMissingUniqueAndAmbiguous() {
+        assertEquals(
+            TextInputRecipe.ExactResolution.MISSING,
+            TextInputRecipe.classifyResolution(matchCount = 0, traversalComplete = true),
+        )
+        assertEquals(
+            TextInputRecipe.ExactResolution.UNIQUE,
+            TextInputRecipe.classifyResolution(matchCount = 1, traversalComplete = true),
+        )
+        assertEquals(
+            TextInputRecipe.ExactResolution.AMBIGUOUS,
+            TextInputRecipe.classifyResolution(matchCount = 2, traversalComplete = true),
+        )
+    }
+
+    @Test
     fun directAccessibilityReadbackIsExact() {
         assertEquals(
             TextInputRecipe.ExactReadback.EXACT,
