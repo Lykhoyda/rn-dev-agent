@@ -1,7 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { runFillCoordinator, type FillOwnerResult } from '../../dist/tools/fill-coordinator.js';
-import { mustStopBatchAfterFillFailure } from '../../dist/tools/device-batch.js';
+import { createDeviceBatchHandler } from '../../dist/tools/device-batch.js';
+import {
+  _setActiveSessionForTest,
+  _setRunAgentDeviceForTest,
+} from '../../dist/agent-device-wrapper.js';
+import { okResult } from '../../dist/utils.js';
+import { isExactTextInputType } from '../../dist/tools/device-interact.js';
 
 const request = { descriptor: { testID: 'field', nativeType: 'TextField' }, text: 'canary' };
 
@@ -154,8 +160,72 @@ test('controlled dispatch timeout is possible mutation and is never replayed', a
   assert.equal(nativeCalls, 0);
 });
 
-test('batch stops after every failed fill that may have mutated', () => {
-  assert.equal(mustStopBatchAfterFillFailure('none'), false);
-  assert.equal(mustStopBatchAfterFillFailure('observed'), true);
-  assert.equal(mustStopBatchAfterFillFailure('possible'), true);
+test('qualified Android editable types remain exact-fill candidates', () => {
+  assert.equal(isExactTextInputType('android.widget.EditText'), true);
+  assert.equal(isExactTextInputType('androidx.appcompat.widget.AppCompatEditText'), true);
+  assert.equal(isExactTextInputType('android.widget.Button'), false);
+});
+
+test('batch executes the coordinator and stops before its sentinel after possible mutation', async () => {
+  _setActiveSessionForTest({ platform: 'android', deviceId: 'emulator-test', appId: 'dev.test' });
+  const nativeCalls: string[][] = [];
+  _setRunAgentDeviceForTest(async (args) => {
+    nativeCalls.push(args);
+    if (args[0] === 'snapshot') {
+      return okResult({
+        nodes: [
+          {
+            ref: 'e1',
+            type: 'android.widget.EditText',
+            identifier: 'field',
+            enabled: true,
+            hittable: true,
+          },
+        ],
+      });
+    }
+    return okResult({ pressed: true });
+  });
+  const client = {
+    isConnected: true,
+    helpersInjected: true,
+    evaluate: async () => ({
+      value: {
+        kind: 'failure',
+        code: 'TEXT_ENTRY_UNVERIFIED',
+        mutation: 'possible',
+        reason: 'dispatch-uncertain',
+      },
+    }),
+  };
+
+  try {
+    const result = await createDeviceBatchHandler(() => client as never)({
+      steps: [
+        { action: 'fill', testID: 'field', text: 'canary', optional: true },
+        { action: 'press', x: 10, y: 20 },
+      ],
+      continueOnError: true,
+      screenshotOn: 'none',
+      finalSnapshot: 'none',
+      delayMs: 0,
+    });
+    const envelope = JSON.parse(result.content[0]!.text) as {
+      meta?: {
+        failed_step?: { action?: string; meta?: { mutation?: string } };
+        results?: unknown[];
+      };
+    };
+    assert.equal(result.isError, true);
+    assert.equal(envelope.meta?.failed_step?.action, 'fill');
+    assert.equal(envelope.meta?.failed_step?.meta?.mutation, 'possible');
+    assert.equal(envelope.meta?.results?.length, 1);
+    assert.equal(
+      nativeCalls.some((args) => args[0] === 'press'),
+      false,
+    );
+  } finally {
+    _setRunAgentDeviceForTest(null);
+    _setActiveSessionForTest(null);
+  }
 });
