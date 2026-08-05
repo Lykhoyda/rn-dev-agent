@@ -1005,7 +1005,7 @@ export async function performExactFill(args, client, tiers, deps = {}) {
     if (tiers.abortSignal?.aborted) {
         return fillFailure('TEXT_ENTRY_UNVERIFIED', 'device_fill was cancelled before the Maestro correction was dispatched.', { mutation: 'possible', pathsTried, verification: lastVerification ?? undefined });
     }
-    const maestroId = binding.inputTestId ?? resolveCachedIdentifier(binding.inputRef);
+    const maestroId = binding.inputTestId;
     if (!maestroId) {
         return fillFailure('TEXT_ENTRY_UNVERIFIED', 'device_fill could not verify the fill and the input has no testID for the Maestro tier.', { mutation: mutationSeen, pathsTried, verification: lastVerification ?? undefined });
     }

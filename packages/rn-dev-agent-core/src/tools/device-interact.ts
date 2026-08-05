@@ -1405,7 +1405,7 @@ export async function performExactFill(
       { mutation: 'possible', pathsTried, verification: lastVerification ?? undefined },
     );
   }
-  const maestroId = binding.inputTestId ?? resolveCachedIdentifier(binding.inputRef);
+  const maestroId = binding.inputTestId;
   if (!maestroId) {
     return fillFailure(
       'TEXT_ENTRY_UNVERIFIED',

@@ -435,6 +435,50 @@ test('gh-581: Maestro verification rebinds by testID after runner parking', asyn
   );
 });
 
+test('gh-581: Maestro refuses an identifierless binding after ref recycling', async () => {
+  const original = [
+    {
+      ref: '@e1',
+      identifier: '',
+      label: 'Search',
+      type: 'android.widget.EditText',
+      rect: { x: 40, y: 110, width: 320, height: 40 },
+    },
+  ];
+  const replacement = [{ ...original[0], identifier: 'replacement-input' }];
+  let maestroAttempts = 0;
+  const { result, calls } = await withFillSeam(
+    {
+      platform: 'android',
+      nodes: original as never,
+      fill: () => {
+        updateRefMapFromFlat(replacement as never, {
+          snapshotGeneration: 9,
+          keyboardVisible: false,
+        });
+        return failResult('rejected', 'SET_TEXT_REJECTED', { mutation: 'none' });
+      },
+    },
+    () =>
+      performExactFill(
+        { ref: '@e1', text: 'value' },
+        null,
+        { js: false, maestro: true },
+        {
+          maestroFillAttempt: async () => {
+            maestroAttempts += 1;
+            return { attempted: true };
+          },
+        },
+      ),
+  );
+  const env = envelope(result as never);
+  assert.equal(env.code, 'TEXT_ENTRY_UNVERIFIED');
+  assert.match(env.error, /no testID/);
+  assert.equal(maestroAttempts, 0);
+  assert.equal(calls.filter((call) => call.cliArgs[0] === 'verify-input').length, 0);
+});
+
 test('gh-581: possible SET_TEXT_REJECTED hard-fails without verification', async () => {
   const { result, calls } = await withFillSeam(
     {

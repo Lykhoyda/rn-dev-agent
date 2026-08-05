@@ -33623,12 +33623,6 @@ function cdpClientOrNull(getClient2) {
     return null;
   }
 }
-function resolveCachedIdentifier(ref) {
-  const bareRef2 = ref.replace(/^@/, "");
-  if (!isRefMapFresh() || lookupRef(bareRef2) === null)
-    return void 0;
-  return getCachedMetadata(bareRef2)?.identifier;
-}
 function extractMutationDisposition(result) {
   try {
     const envelope = JSON.parse(result.content[0]?.text ?? "{}");
@@ -33952,7 +33946,7 @@ async function performExactFill(args, client2, tiers, deps = {}) {
   if (tiers.abortSignal?.aborted) {
     return fillFailure("TEXT_ENTRY_UNVERIFIED", "device_fill was cancelled before the Maestro correction was dispatched.", { mutation: "possible", pathsTried, verification: lastVerification ?? void 0 });
   }
-  const maestroId = binding.inputTestId ?? resolveCachedIdentifier(binding.inputRef);
+  const maestroId = binding.inputTestId;
   if (!maestroId) {
     return fillFailure("TEXT_ENTRY_UNVERIFIED", "device_fill could not verify the fill and the input has no testID for the Maestro tier.", { mutation: mutationSeen, pathsTried, verification: lastVerification ?? void 0 });
   }
