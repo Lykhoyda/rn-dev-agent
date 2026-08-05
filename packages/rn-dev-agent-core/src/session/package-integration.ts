@@ -4156,14 +4156,18 @@ export function restorePackageIntegrationFiles(
     const packageOutput = Buffer.from(
       `${JSON.stringify(restorePackageIntegration(packageJson, manifest), null, 2)}\n`,
     );
-    const packageResult = casReplaceBoundBatch(directories.app, [
-      {
-        snapshot: packageSnapshot,
-        expected: packageSnapshot.contents,
-        replacement: packageOutput,
-        mode: packageSnapshot.mode,
-      },
-    ]);
+    const packageResult = casReplaceBoundBatch(
+      directories.app,
+      [
+        {
+          snapshot: packageSnapshot,
+          expected: packageSnapshot.contents,
+          replacement: packageOutput,
+          mode: packageSnapshot.mode,
+        },
+      ],
+      dependencies.boundOperationDependencies,
+    );
     applied.push({
       snapshot: packageSnapshot,
       written: packageOutput,
@@ -4173,14 +4177,18 @@ export function restorePackageIntegrationFiles(
     dependencies.afterWrite?.(packagePath);
     assertBoundCleanup(packageResult);
     const metroOutput = Buffer.from(restoreMetroIntegration(metroSource));
-    const metroResult = casReplaceBoundBatch(directories.app, [
-      {
-        snapshot: metroSnapshot,
-        expected: metroSnapshot.contents,
-        replacement: metroOutput,
-        mode: metroSnapshot.mode,
-      },
-    ]);
+    const metroResult = casReplaceBoundBatch(
+      directories.app,
+      [
+        {
+          snapshot: metroSnapshot,
+          expected: metroSnapshot.contents,
+          replacement: metroOutput,
+          mode: metroSnapshot.mode,
+        },
+      ],
+      dependencies.boundOperationDependencies,
+    );
     applied.push({
       snapshot: metroSnapshot,
       written: metroOutput,
