@@ -71,6 +71,13 @@ test('gh-581 bind: wrapper maps to its unique inner input, focus stays on the wr
   assert.deepEqual((out as { binding: unknown }).binding, {
     inputRef: '@e11',
     inputTestId: 'email',
+    inputSignature: {
+      type: 'TextField',
+      label: undefined,
+      identifier: 'email',
+      flatIndex: 1,
+      nodeCount: NODES.length,
+    },
     focusRef: '@e10',
     wrapper: true,
     secure: false,
@@ -252,6 +259,13 @@ test('gh-581 bind: positional ref with a shifted identity rebinds by signature o
 
   const gone = bindExactFillTarget([shifted[0]] as never, '@e11', signature as never);
   assert.ok(!gone.ok, 'absent identity must reject, never serve the recycled position');
+
+  const movedWithoutReplacement = bindExactFillTarget([shifted[1]] as never, '@e11', signature as never);
+  assert.ok(movedWithoutReplacement.ok, 'a unique stable identity may move when its old ref disappears');
+  assert.equal(
+    (movedWithoutReplacement as { binding: { inputRef: string } }).binding.inputRef,
+    '@e13',
+  );
 
   // Same node count as the signature: the shared refreshRef flat-index
   // tie-breaker must NOT license mutation — duplicates stay ambiguous.

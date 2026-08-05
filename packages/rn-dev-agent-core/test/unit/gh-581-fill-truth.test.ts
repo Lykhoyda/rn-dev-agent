@@ -51,6 +51,7 @@ interface Call {
 interface SeamConfig {
   platform?: 'ios' | 'android';
   nodes?: typeof NODES;
+  snapshot?: (count: number) => typeof NODES;
   fill?: (call: Call, fillCount: number) => ReturnType<typeof okResult>;
   verify?: (call: Call, verifyCount: number) => ReturnType<typeof okResult>;
 }
@@ -68,11 +69,20 @@ async function withFillSeam<T>(
   const calls: Call[] = [];
   let fillCount = 0;
   let verifyCount = 0;
+  let snapshotCount = 0;
   let lastFill: { target: string; text: string } | null = null;
   _setRunAgentDeviceForTest(async (cliArgs: string[], opts: Record<string, unknown>) => {
     const call = { cliArgs, opts };
     calls.push(call);
-    if (cliArgs[0] === 'snapshot') return okResult({ nodes });
+    if (cliArgs[0] === 'snapshot') {
+      snapshotCount += 1;
+      const snapshotNodes = config.snapshot?.(snapshotCount) ?? nodes;
+      updateRefMapFromFlat(snapshotNodes as never, {
+        snapshotGeneration: 6 + snapshotCount,
+        keyboardVisible: false,
+      });
+      return okResult({ nodes: snapshotNodes });
+    }
     if (cliArgs[0] === 'fill') {
       fillCount += 1;
       lastFill = { target: cliArgs[1], text: cliArgs[2] };
@@ -158,6 +168,23 @@ test('gh-581: direct testID ref binds without a wrapper', async () => {
   const fill = calls.find((c) => c.cliArgs[0] === 'fill')!;
   assert.equal(fill.cliArgs[1], '@e3');
   assert.equal((fill.opts.exactTarget as { focusX: number }).focusX, 200);
+});
+
+test('gh-581: final verification rebinds after settle recycles the positional ref', async () => {
+  const shifted = NODES.map((node) =>
+    node.identifier === 'last-name' ? { ...node, ref: '@e8' } : node,
+  );
+  const { result, calls } = await withFillSeam(
+    {
+      snapshot: (count) => (count === 1 ? NODES : shifted),
+      verify: () => okResult({ verifyVerdict: 'exact', verifyStable: true }),
+    },
+    () => performExactFill({ ref: '@e3', text: 'Ng' }, null, NATIVE_ONLY),
+  );
+  assert.ok(!(result as { isError?: boolean }).isError, envelope(result as never).error);
+  const verify = calls.find((call) => call.cliArgs[0] === 'verify-input')!;
+  assert.equal(verify.cliArgs[1], '@e8');
+  assert.equal((verify.opts.exactTarget as { inputRef: string }).inputRef, '@e8');
 });
 
 test('gh-581: duplicate wrapper mapping rejects without mutation', async () => {

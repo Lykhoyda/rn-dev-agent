@@ -8,6 +8,7 @@ import android.accessibilityservice.AccessibilityServiceInfo
 import android.app.Instrumentation
 import android.content.Intent
 import android.graphics.Rect
+import android.os.Build
 import android.os.SystemClock
 import android.util.Base64
 import android.view.KeyEvent
@@ -650,7 +651,8 @@ class CommandDispatcher(
         var stable = false
         for (attempt in 0 until 3) {
             val raw = readTargetText(bound)
-            verdict = TextInputRecipe.classifyVerify(expected, raw, secure)
+            val hint = readTargetHint(bound)
+            verdict = TextInputRecipe.classifyVerify(expected, raw, hint, secure)
             if (havePrevious && previous == raw) {
                 stable = true
                 break
@@ -671,6 +673,15 @@ class CommandDispatcher(
         device.waitForIdle(500)
         return try {
             target.text
+        } catch (e: StaleObjectException) {
+            null
+        }
+    }
+
+    private fun readTargetHint(target: UiObject2): String? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return null
+        return try {
+            target.hint
         } catch (e: StaleObjectException) {
             null
         }

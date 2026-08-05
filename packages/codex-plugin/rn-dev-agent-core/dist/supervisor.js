@@ -23098,6 +23098,15 @@ function isSecureInputNode(node) {
 function cleanNodeRef(node) {
   return node.ref.startsWith("@") ? node.ref.slice(1) : node.ref;
 }
+function signatureForNode(nodes, node) {
+  return {
+    type: node.type ?? "",
+    label: node.label,
+    identifier: node.identifier,
+    flatIndex: nodes.indexOf(node),
+    nodeCount: nodes.length
+  };
+}
 function bindExactFillTarget(nodes, rawRef, priorSignature) {
   const clean = rawRef.replace(/^@/, "");
   const positional = /^e\d+$/.test(clean);
@@ -23110,20 +23119,15 @@ function bindExactFillTarget(nodes, rawRef, priorSignature) {
         detail: `ref @${clean} has no robust pre-refresh identity for unique rebinding`
       };
     }
-    node = nodes.find((n) => cleanNodeRef(n) === clean);
-    if (!node) {
-      return { ok: false, detail: `ref @${clean} is not in the current snapshot generation` };
+    const signature = priorSignature;
+    const matches = nodes.filter((n) => (n.type ?? "") === signature.type && n.label === signature.label && n.identifier === signature.identifier);
+    if (matches.length !== 1) {
+      return {
+        ok: false,
+        detail: `ref @${clean} identity ${matches.length > 1 ? "matches multiple elements" : "is absent"} in the current snapshot`
+      };
     }
-    if (priorSignature) {
-      const matches = nodes.filter((n) => (n.type ?? "") === priorSignature.type && n.label === priorSignature.label && n.identifier === priorSignature.identifier);
-      if (matches.length !== 1) {
-        return {
-          ok: false,
-          detail: `ref @${clean} identity ${matches.length > 1 ? "matches multiple elements" : "is absent"} in the current snapshot`
-        };
-      }
-      node = matches[0];
-    }
+    node = matches[0];
   } else {
     const matches = nodes.filter((n) => n.identifier === clean);
     if (matches.length === 0) {
@@ -23143,6 +23147,7 @@ function bindExactFillTarget(nodes, rawRef, priorSignature) {
       binding: {
         inputRef: `@${cleanNodeRef(node)}`,
         inputTestId: node.identifier ?? null,
+        inputSignature: signatureForNode(nodes, node),
         focusRef: `@${cleanNodeRef(node)}`,
         wrapper: false,
         secure: isSecureInputNode(node)
@@ -23160,6 +23165,7 @@ function bindExactFillTarget(nodes, rawRef, priorSignature) {
           binding: {
             inputRef: `@${cleanNodeRef(inputs[0])}`,
             inputTestId: base,
+            inputSignature: signatureForNode(nodes, inputs[0]),
             focusRef: `@${cleanNodeRef(node)}`,
             wrapper: true,
             secure: isSecureInputNode(inputs[0])
@@ -23366,13 +23372,23 @@ async function runNativeVerifyInput(binding, text) {
   }
   return { verdict: "unavailable", stable: false };
 }
+async function rebindExactFillTarget(binding) {
+  const snap = await fetchSnapshotNodes();
+  if (!snap.ok)
+    return null;
+  const rebound = bindExactFillTarget(snap.nodes, binding.inputTestId ?? binding.inputRef, binding.inputSignature);
+  return rebound.ok ? rebound.binding : null;
+}
 async function finalVerification(client2, binding, jsTestId, text) {
   const fiberId = binding.inputTestId ?? jsTestId;
   let fiber = "unavailable";
   if (client2 && fiberId) {
     fiber = await finalFiberVerify({ evaluate: (e) => client2.evaluate(e) }, fiberId, text);
   }
-  const native = await runNativeVerifyInput(binding, text);
+  const rebound = await rebindExactFillTarget(binding);
+  if (!rebound)
+    return combineVerificationOracles(fiber, "target-lost", false);
+  const native = await runNativeVerifyInput(rebound, text);
   return combineVerificationOracles(fiber, native.verdict, native.stable);
 }
 function verifiedFillResult(method, textLength, meta) {

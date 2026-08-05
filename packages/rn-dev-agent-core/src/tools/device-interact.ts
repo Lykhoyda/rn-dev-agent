@@ -489,6 +489,7 @@ function isSecureInputNode(node: SnapshotNode): boolean {
 export interface ExactFillBinding {
   inputRef: string;
   inputTestId: string | null;
+  inputSignature: RefSignature;
   focusRef: string;
   wrapper: boolean;
   secure: boolean;
@@ -500,6 +501,16 @@ export type ExactBindOutcome =
 
 function cleanNodeRef(node: SnapshotNode): string {
   return node.ref.startsWith('@') ? node.ref.slice(1) : node.ref;
+}
+
+function signatureForNode(nodes: SnapshotNode[], node: SnapshotNode): RefSignature {
+  return {
+    type: node.type ?? '',
+    label: node.label,
+    identifier: node.identifier,
+    flatIndex: nodes.indexOf(node),
+    nodeCount: nodes.length,
+  };
 }
 
 // A positional @eN may only bind when its identity still matches the
@@ -525,25 +536,20 @@ export function bindExactFillTarget(
         detail: `ref @${clean} has no robust pre-refresh identity for unique rebinding`,
       };
     }
-    node = nodes.find((n) => cleanNodeRef(n) === clean);
-    if (!node) {
-      return { ok: false, detail: `ref @${clean} is not in the current snapshot generation` };
+    const signature = priorSignature as RefSignature;
+    const matches = nodes.filter(
+      (n) =>
+        (n.type ?? '') === signature.type &&
+        n.label === signature.label &&
+        n.identifier === signature.identifier,
+    );
+    if (matches.length !== 1) {
+      return {
+        ok: false,
+        detail: `ref @${clean} identity ${matches.length > 1 ? 'matches multiple elements' : 'is absent'} in the current snapshot`,
+      };
     }
-    if (priorSignature) {
-      const matches = nodes.filter(
-        (n) =>
-          (n.type ?? '') === priorSignature.type &&
-          n.label === priorSignature.label &&
-          n.identifier === priorSignature.identifier,
-      );
-      if (matches.length !== 1) {
-        return {
-          ok: false,
-          detail: `ref @${clean} identity ${matches.length > 1 ? 'matches multiple elements' : 'is absent'} in the current snapshot`,
-        };
-      }
-      node = matches[0];
-    }
+    node = matches[0];
   } else {
     const matches = nodes.filter((n) => n.identifier === clean);
     if (matches.length === 0) {
@@ -563,6 +569,7 @@ export function bindExactFillTarget(
       binding: {
         inputRef: `@${cleanNodeRef(node)}`,
         inputTestId: node.identifier ?? null,
+        inputSignature: signatureForNode(nodes, node),
         focusRef: `@${cleanNodeRef(node)}`,
         wrapper: false,
         secure: isSecureInputNode(node),
@@ -580,6 +587,7 @@ export function bindExactFillTarget(
           binding: {
             inputRef: `@${cleanNodeRef(inputs[0])}`,
             inputTestId: base,
+            inputSignature: signatureForNode(nodes, inputs[0]),
             focusRef: `@${cleanNodeRef(node)}`,
             wrapper: true,
             secure: isSecureInputNode(inputs[0]),
@@ -892,6 +900,19 @@ async function runNativeVerifyInput(
   return { verdict: 'unavailable', stable: false };
 }
 
+async function rebindExactFillTarget(
+  binding: ExactFillBinding,
+): Promise<ExactFillBinding | null> {
+  const snap = await fetchSnapshotNodes();
+  if (!snap.ok) return null;
+  const rebound = bindExactFillTarget(
+    snap.nodes,
+    binding.inputTestId ?? binding.inputRef,
+    binding.inputSignature,
+  );
+  return rebound.ok ? rebound.binding : null;
+}
+
 // The single fill arbiter's evidence gatherer: fiber oracle (controlled
 // inputs) + native verifyInput (uncontrolled inputs), combined per the GH #581
 // contract — disagreement is inconclusive, inconclusive is failure.
@@ -906,7 +927,9 @@ async function finalVerification(
   if (client && fiberId) {
     fiber = await finalFiberVerify({ evaluate: (e) => client.evaluate(e) }, fiberId, text);
   }
-  const native = await runNativeVerifyInput(binding, text);
+  const rebound = await rebindExactFillTarget(binding);
+  if (!rebound) return combineVerificationOracles(fiber, 'target-lost', false);
+  const native = await runNativeVerifyInput(rebound, text);
   return combineVerificationOracles(fiber, native.verdict, native.stable);
 }
 
