@@ -112,13 +112,14 @@ failure_families:
       - home screen shown after text input
       - ANR during long text input on Android
     recovery:
-      - use device_fill (auto-chunks long input on Android)
+      - use device_fill (one exact owner with stable exact read-back)
       - avoid special characters in direct adb input
       - split input into shorter chunks (< 30 chars)
     notes: >
       Android dispatches text as individual key events. Special characters (+, @, #)
       and long strings (> 30 chars) can overwhelm the input method causing ANR or
-      crash. The device_fill tool auto-detects Android and chunks input (GH #7).
+      crash. device_fill avoids ambient adb typing by using one exact owner and
+      stable exact read-back.
 
   - id: FF_AUTH_GATE
     name: App on auth screen — not logged in

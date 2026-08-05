@@ -501,7 +501,7 @@ Device control commands are low-level — agents reach for bash too readily.
 |--------|---------|
 | "I need a screenshot fast — `xcrun simctl io booted screenshot` is simpler" | `device_screenshot` handles path conventions, format fallbacks, and works cross-platform with the same call. Use it. |
 | "I'll `xcrun simctl launch` to restart — faster than going through the plugin" | `cdp_reload` (full=true) is the supported path, auto-reconnects CDP, and re-injects helpers. `simctl launch` loses the CDP session. |
-| "I'll `adb shell input text` directly instead of `device_fill`" | `device_fill` handles percent-escaping (B97), `%s` literals, and shell quoting. Direct `adb input text` breaks on spaces and special characters silently. |
+| "I'll `adb shell input text` directly instead of `device_fill`" | `device_fill` resolves one exact owner and requires stable exact read-back. Raw adb input proves neither the target nor the final value. |
 | "I need to read UI — `xcrun simctl ui` gives hierarchy" | For React components, use `cdp_component_tree`. For the native a11y tree, use `device_snapshot`. Both give structured data agents can filter — raw `simctl ui` output is lossy. |
 | "The simulator isn't booted, I'll `xcrun simctl boot` quickly" | Fine for one-off boots. But if you're booting to run the agent, `device_list` first — the user may already have a target booted, and you'd boot a different one. |
 | "Let me screenshot to see what's on screen" | Use `device_snapshot` — returns the a11y tree with `@ref` handles in ~5ms vs ~150ms for a screenshot, and the JSON is far cheaper in LLM context than an image. Screenshot only when a human needs to see it. |

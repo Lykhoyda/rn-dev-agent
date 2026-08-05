@@ -49,7 +49,7 @@ platform_quirks:
 
     - id: PQ_ANDROID_TEXT_INPUT_CRASH
       quirk: adb shell input text crashes app with special chars (+, @, #) or long strings
-      workaround: device_fill auto-chunks input on Android. For manual adb, split into <30 char chunks and escape special chars.
+      workaround: device_fill performs one exact accessibility mutation with stable exact read-back. Do not use manual adb text input for fills.
 
     - id: PQ_ANDROID_PLAY_PROTECT
       quirk: Google Play Protect on emulators can silently block test APK installations

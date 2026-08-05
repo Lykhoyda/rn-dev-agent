@@ -326,20 +326,8 @@ export function isDaemonTimeoutError(text) {
         t.includes('daemon error: daemon') ||
         /\bdaemon\b.*\btimed?\s?out\b/.test(t));
 }
-// B122: helper to resolve a Pressable-wrapping ref to its inner TextInput ref.
-// Common RN design-system pattern: outer Pressable with testID `${name}-pressable`
-// imperatively focuses an inner TextInput whose testID is `${name}`. When
-// device_fill targets the Pressable directly, the focus hasn't propagated to
-// the TextInput by the time we probe — primary fill fails with "no focused
-// text input to clear". Re-resolving to the inner TextInput's ref and re-tapping
-// directly forces native focus into the right element.
-//
-// Heuristic — both must hold:
-//   1. The ref's node has identifier ending in `-pressable`.
-//   2. There is a sibling/descendant node whose identifier === stripped(identifier)
-//      AND whose type is one of TextField, SecureTextField, or TextView.
-//
-// Returns the resolved ref (with leading `@`) or null if no match.
+// Compatibility helper for callers mapping `${name}-pressable` to `${name}`;
+// exact fill proves controlled wrapper ownership through the fiber instead.
 const TEXT_INPUT_TYPES = new Set(['TextField', 'SecureTextField', 'TextView', 'EditText']);
 const PRESSABLE_SUFFIX = '-pressable';
 export function isExactTextInputType(type) {
