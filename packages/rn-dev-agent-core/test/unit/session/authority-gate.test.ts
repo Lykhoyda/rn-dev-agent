@@ -194,6 +194,41 @@ test('disconnected sessions without recoverable policy fail before dispatch', as
   assert.equal(dispatched, false);
 });
 
+test('handler-time reconnect is rebound before bundle postflight', async () => {
+  const { calls, runtime, status } = fixture();
+  status.bindings.metro.port = 8193;
+  status.bindings.bundle.targetId = 'preflight-target';
+  status.bindings.bundle.connectionGeneration = 1;
+  let recoveryCalls = 0;
+  const gate = createAuthorityGate(runtime, {
+    recoverRuntimeConnection: async () => {
+      recoveryCalls += 1;
+      calls.push(`recover-runtime:${recoveryCalls}`);
+      return recoveryCalls === 2;
+    },
+    refreshRuntimeBinding: async () => ({
+      ...status.bindings.bundle,
+      targetId: 'post-handler-target',
+      connectionGeneration: 2,
+    }),
+    probe: async ({ axis, phase, status: probedStatus }) => {
+      if (axis === 'B' && phase === 'postflight') {
+        assert.equal(probedStatus.bindings.bundle.targetId, 'post-handler-target');
+        assert.equal(probedStatus.bindings.bundle.connectionGeneration, 2);
+      }
+      calls.push(`${phase}:${axis}`);
+      return { axis, identity: `${axis}-identity` };
+    },
+  });
+
+  const result = await gate.wrap('cdp_console_log', async () => okResult({ entries: [] }))({});
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, true);
+  assert.ok(calls.indexOf('recover-runtime:2') < calls.indexOf('postflight:B'));
+  assert.ok(calls.indexOf('replace-binding') < calls.indexOf('postflight:B'));
+});
+
 test('postflight drift rejects the result instead of returning a false success', async () => {
   const { runtime } = fixture();
   let postflight = false;

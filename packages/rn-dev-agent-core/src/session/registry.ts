@@ -408,6 +408,18 @@ export class SessionRegistry {
       : undefined;
   }
 
+  hasActiveBundleOperation(session: SessionRef): boolean {
+    return Boolean(
+      this.#database
+        .prepare(
+          `SELECT operation_id FROM operations
+           WHERE session_id = ? AND claim_epoch = ? AND instr(profile, 'B') > 0
+           LIMIT 1`,
+        )
+        .get(session.sessionId, session.claimEpoch),
+    );
+  }
+
   createSession(input: {
     sessionId: string;
     sourceKey: string;

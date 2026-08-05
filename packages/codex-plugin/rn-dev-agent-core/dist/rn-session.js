@@ -8144,6 +8144,11 @@ var init_registry = __esm({
            AND authority_version = ?`).get(operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
         return session && isFenceableState(session.state) && session.claim_epoch === operation.claimEpoch && session.authority_version === operation.authorityVersion && active ? operation : void 0;
       }
+      hasActiveBundleOperation(session) {
+        return Boolean(this.#database.prepare(`SELECT operation_id FROM operations
+           WHERE session_id = ? AND claim_epoch = ? AND instr(profile, 'B') > 0
+           LIMIT 1`).get(session.sessionId, session.claimEpoch));
+      }
       createSession(input) {
         const now = this.#now();
         this.#database.prepare(`INSERT INTO sessions(

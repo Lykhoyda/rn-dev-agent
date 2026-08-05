@@ -22754,6 +22754,11 @@ var init_registry = __esm({
            AND authority_version = ?`).get(operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
         return session && isFenceableState(session.state) && session.claim_epoch === operation.claimEpoch && session.authority_version === operation.authorityVersion && active ? operation : void 0;
       }
+      hasActiveBundleOperation(session) {
+        return Boolean(this.#database.prepare(`SELECT operation_id FROM operations
+           WHERE session_id = ? AND claim_epoch = ? AND instr(profile, 'B') > 0
+           LIMIT 1`).get(session.sessionId, session.claimEpoch));
+      }
       createSession(input) {
         const now = this.#now();
         this.#database.prepare(`INSERT INTO sessions(
@@ -29170,6 +29175,19 @@ function invalidateRuntimeBundle(registry2, operation, status, onInvalidated) {
   onInvalidated?.();
   return nextOperation;
 }
+async function reconcileRecoverableRuntime(runtime, dependencies, registry2, operation, status, profile) {
+  if (!profile.axes.includes("B") || !dependencies.recoverRuntimeConnection) {
+    return { operation, status, runtimeTargetChanged: false };
+  }
+  const recovered = await registry2.runWithOperation(operation, () => dependencies.recoverRuntimeConnection(status));
+  if (!recovered)
+    return { operation, status, runtimeTargetChanged: false };
+  if (!dependencies.refreshRuntimeBinding) {
+    throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", "authoritative reconnect cannot commit without a binding refresh");
+  }
+  const bundle = await dependencies.refreshRuntimeBinding(status);
+  return reconcileRuntimeBundleReplacement(runtime, registry2, operation, status, status.bindings.bundle, status.bindings.metro, bundle);
+}
 function createAuthorityGate(runtime, dependencies) {
   return {
     wrap: (tool, handler) => async (...handlerArgs) => {
@@ -29415,20 +29433,9 @@ function createAuthorityGate(runtime, dependencies) {
           tool,
           profile: profile.axes.join("")
         });
-        if (profile.axes.includes("B") && dependencies.recoverRuntimeConnection) {
-          const recovered = await registry2.runWithOperation(operation, () => dependencies.recoverRuntimeConnection(status));
-          if (recovered) {
-            if (!dependencies.refreshRuntimeBinding) {
-              throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", "authoritative reconnect cannot commit without a binding refresh");
-            }
-            const priorBundle = status.bindings.bundle;
-            const metro = status.bindings.metro;
-            const bundle = await dependencies.refreshRuntimeBinding(status);
-            const reconciliation = reconcileRuntimeBundleReplacement(runtime, registry2, operation, status, priorBundle, metro, bundle);
-            operation = reconciliation.operation;
-            status = reconciliation.status;
-          }
-        }
+        const preflightRecovery = await reconcileRecoverableRuntime(runtime, dependencies, registry2, operation, status, profile);
+        operation = preflightRecovery.operation;
+        status = preflightRecovery.status;
         const initialOperationAuthorityVersion = operation.authorityVersion;
         const before = await Promise.all(profile.axes.map((axis) => dependencies.probe({ axis, phase: "preflight", tool, profile, status, args })));
         const optionalBefore = [];
@@ -29673,6 +29680,13 @@ function createAuthorityGate(runtime, dependencies) {
         }
         registry2.verifyOperation(operation);
         const result = await registry2.runWithOperation(operation, () => handler(...handlerArgs));
+        let runtimeTargetChanged = false;
+        if (resultSucceeded(result)) {
+          const postHandlerRecovery = await reconcileRecoverableRuntime(runtime, dependencies, registry2, operation, status, profile);
+          operation = postHandlerRecovery.operation;
+          status = postHandlerRecovery.status;
+          runtimeTargetChanged = postHandlerRecovery.runtimeTargetChanged;
+        }
         const containedRunner = containedRunnerAuthority(result, status.bindings.runner);
         if (containedRunner?.runnerAbsent) {
           registry2.verifyOperation(operation);
@@ -29700,7 +29714,6 @@ function createAuthorityGate(runtime, dependencies) {
             nextAction: 'Run rn_session action "pin_dev_client" before another CDP operation.'
           });
         }
-        let runtimeTargetChanged = false;
         if (reconcilesRuntimeTarget && (resultSucceeded(result) || nestedRuntimeReset)) {
           const priorBundle = status.bindings.bundle;
           const metro = status.bindings.metro;
@@ -29736,7 +29749,7 @@ function createAuthorityGate(runtime, dependencies) {
             const reconciliation = reconcileRuntimeBundleReplacement(runtime, registry2, operation, status, priorBundle, metro, bundle);
             operation = reconciliation.operation;
             status = reconciliation.status;
-            runtimeTargetChanged = reconciliation.runtimeTargetChanged;
+            runtimeTargetChanged ||= reconciliation.runtimeTargetChanged;
           }
         }
         const effectiveProfile = optionalBefore.length > 0 ? { ...profile, axes: [...profile.axes, ...optionalBefore.map(({ axis }) => axis)] } : profile;
@@ -33824,6 +33837,15 @@ function withConnection(getClient2, handler, options = {}) {
   return async (args) => {
     const client2 = getClient2();
     try {
+      if (client2.reconnectState.active) {
+        const deadline = Date.now() + 3e4;
+        while (client2.reconnectState.active && Date.now() < deadline) {
+          await new Promise((resolveWait) => setTimeout(resolveWait, 500));
+        }
+        if (client2.reconnectState.active || !client2.isConnected) {
+          return failResult("Reconnection timed out. Call cdp_status to retry.", "RECONNECT_TIMEOUT");
+        }
+      }
       if (!client2.isConnected) {
         try {
           await client2.autoConnect();
@@ -33831,10 +33853,10 @@ function withConnection(getClient2, handler, options = {}) {
           const msg3 = connectErr instanceof Error ? connectErr.message : String(connectErr);
           if (msg3.includes("Already connecting")) {
             const deadline = Date.now() + 3e4;
-            while (!client2.isConnected && Date.now() < deadline) {
+            while ((!client2.isConnected || client2.reconnectState.active) && Date.now() < deadline) {
               await new Promise((r) => setTimeout(r, 500));
             }
-            if (!client2.isConnected) {
+            if (!client2.isConnected || client2.reconnectState.active) {
               return failResult("Reconnection timed out. Call cdp_status to retry.", "RECONNECT_TIMEOUT");
             }
           } else {
@@ -80865,8 +80887,6 @@ var authorityGate = createAuthorityGate(authorityRuntime, {
   probe: async ({ axis, phase, status, tool, args }) => localAuthorityProbe({ axis, phase, status, tool, args }),
   recoverRuntimeConnection: async (status) => {
     const current = getClient();
-    if (current.isConnected)
-      return false;
     const metro = status.bindings.metro;
     const device = status.bindings.device;
     const metroPort = metro?.port;
@@ -80878,8 +80898,19 @@ var authorityGate = createAuthorityGate(authorityRuntime, {
     })) {
       return false;
     }
-    await current.autoConnect();
-    return true;
+    if (current.reconnectState.active) {
+      const deadline = Date.now() + 3e4;
+      while (current.reconnectState.active && Date.now() < deadline) {
+        await new Promise((resolveWait) => setTimeout(resolveWait, 500));
+      }
+      if (current.reconnectState.active || !current.isConnected) {
+        throw new Error("RECONNECT_TIMEOUT: authoritative background reconnect did not complete");
+      }
+    } else if (!current.isConnected) {
+      await current.autoConnect();
+    }
+    const bundle = status.bindings.bundle;
+    return current.connectedTarget?.id !== bundle?.targetId || current.connectionGeneration !== bundle?.connectionGeneration;
   },
   refreshRuntimeBinding: rebindSessionRuntime,
   relaunchBoundRuntime: relaunchSessionRuntime,
@@ -81266,7 +81297,7 @@ async function reconcileAuthoritativeConnection(connectedClient) {
     throw new Error("BUNDLE_HANDSHAKE_UNAVAILABLE: session authority is unavailable");
   await reconcileAuthoritativeBundle(status, {
     verifyRuntime: () => rebindSessionRuntime(status),
-    hasActiveOperation: () => available.registry.currentOperation() !== void 0,
+    hasActiveOperation: () => available.registry.currentOperation() !== void 0 || available.registry.hasActiveBundleOperation(available.session),
     commit: (input) => available.registry.updateBindings(available.session, input)
   });
 }

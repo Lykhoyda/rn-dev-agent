@@ -59,6 +59,33 @@ test('withConnection auto-connects when client is disconnected', async () => {
   assert.equal(parseEnvelope(result).ok, true);
 });
 
+test('withConnection joins an active reconnect before dispatch', async () => {
+  const reconnectState = { active: true, lastAttempt: null, attemptCount: 1 };
+  const client = createMockClient({
+    _isConnected: false,
+    reconnectState,
+  });
+  let dispatched = false;
+  setTimeout(() => {
+    client._isConnected = true;
+    reconnectState.active = false;
+  }, 10);
+
+  const handler = withConnection(
+    () => client,
+    async () => {
+      dispatched = true;
+      return okResult({ recovered: true });
+    },
+    { requireHelpers: false },
+  );
+  const result = await handler({});
+
+  assert.equal(parseEnvelope(result).ok, true);
+  assert.equal(dispatched, true);
+  assert.equal(reconnectState.active, false);
+});
+
 // ── Auto-connect failure ──────────────────────────────────────────────
 
 test('withConnection returns failResult when autoConnect throws', async () => {

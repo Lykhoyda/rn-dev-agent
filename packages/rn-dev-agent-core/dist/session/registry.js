@@ -180,6 +180,13 @@ export class SessionRegistry {
             ? operation
             : undefined;
     }
+    hasActiveBundleOperation(session) {
+        return Boolean(this.#database
+            .prepare(`SELECT operation_id FROM operations
+           WHERE session_id = ? AND claim_epoch = ? AND instr(profile, 'B') > 0
+           LIMIT 1`)
+            .get(session.sessionId, session.claimEpoch));
+    }
     createSession(input) {
         const now = this.#now();
         this.#database

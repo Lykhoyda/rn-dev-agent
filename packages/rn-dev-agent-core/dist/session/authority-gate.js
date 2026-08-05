@@ -420,6 +420,19 @@ function invalidateRuntimeBundle(registry, operation, status, onInvalidated) {
     onInvalidated?.();
     return nextOperation;
 }
+async function reconcileRecoverableRuntime(runtime, dependencies, registry, operation, status, profile) {
+    if (!profile.axes.includes('B') || !dependencies.recoverRuntimeConnection) {
+        return { operation, status, runtimeTargetChanged: false };
+    }
+    const recovered = await registry.runWithOperation(operation, () => dependencies.recoverRuntimeConnection(status));
+    if (!recovered)
+        return { operation, status, runtimeTargetChanged: false };
+    if (!dependencies.refreshRuntimeBinding) {
+        throw new SessionAuthorityError('BUNDLE_HANDSHAKE_UNAVAILABLE', 'authoritative reconnect cannot commit without a binding refresh');
+    }
+    const bundle = await dependencies.refreshRuntimeBinding(status);
+    return reconcileRuntimeBundleReplacement(runtime, registry, operation, status, status.bindings.bundle, status.bindings.metro, bundle);
+}
 export function createAuthorityGate(runtime, dependencies) {
     return {
         wrap: (tool, handler) => async (...handlerArgs) => {
@@ -715,20 +728,9 @@ export function createAuthorityGate(runtime, dependencies) {
                     tool,
                     profile: profile.axes.join(''),
                 });
-                if (profile.axes.includes('B') && dependencies.recoverRuntimeConnection) {
-                    const recovered = await registry.runWithOperation(operation, () => dependencies.recoverRuntimeConnection(status));
-                    if (recovered) {
-                        if (!dependencies.refreshRuntimeBinding) {
-                            throw new SessionAuthorityError('BUNDLE_HANDSHAKE_UNAVAILABLE', 'authoritative reconnect cannot commit without a binding refresh');
-                        }
-                        const priorBundle = status.bindings.bundle;
-                        const metro = status.bindings.metro;
-                        const bundle = await dependencies.refreshRuntimeBinding(status);
-                        const reconciliation = reconcileRuntimeBundleReplacement(runtime, registry, operation, status, priorBundle, metro, bundle);
-                        operation = reconciliation.operation;
-                        status = reconciliation.status;
-                    }
-                }
+                const preflightRecovery = await reconcileRecoverableRuntime(runtime, dependencies, registry, operation, status, profile);
+                operation = preflightRecovery.operation;
+                status = preflightRecovery.status;
                 const initialOperationAuthorityVersion = operation.authorityVersion;
                 const before = await Promise.all(profile.axes.map((axis) => dependencies.probe({ axis, phase: 'preflight', tool, profile, status, args })));
                 const optionalBefore = [];
@@ -985,6 +987,13 @@ export function createAuthorityGate(runtime, dependencies) {
                 }
                 registry.verifyOperation(operation);
                 const result = await registry.runWithOperation(operation, () => handler(...handlerArgs));
+                let runtimeTargetChanged = false;
+                if (resultSucceeded(result)) {
+                    const postHandlerRecovery = await reconcileRecoverableRuntime(runtime, dependencies, registry, operation, status, profile);
+                    operation = postHandlerRecovery.operation;
+                    status = postHandlerRecovery.status;
+                    runtimeTargetChanged = postHandlerRecovery.runtimeTargetChanged;
+                }
                 const containedRunner = containedRunnerAuthority(result, status.bindings.runner);
                 if (containedRunner?.runnerAbsent) {
                     registry.verifyOperation(operation);
@@ -1018,7 +1027,6 @@ export function createAuthorityGate(runtime, dependencies) {
                         nextAction: 'Run rn_session action "pin_dev_client" before another CDP operation.',
                     });
                 }
-                let runtimeTargetChanged = false;
                 if (reconcilesRuntimeTarget && (resultSucceeded(result) || nestedRuntimeReset)) {
                     const priorBundle = status.bindings.bundle;
                     const metro = status.bindings.metro;
@@ -1056,7 +1064,7 @@ export function createAuthorityGate(runtime, dependencies) {
                         const reconciliation = reconcileRuntimeBundleReplacement(runtime, registry, operation, status, priorBundle, metro, bundle);
                         operation = reconciliation.operation;
                         status = reconciliation.status;
-                        runtimeTargetChanged = reconciliation.runtimeTargetChanged;
+                        runtimeTargetChanged ||= reconciliation.runtimeTargetChanged;
                     }
                 }
                 const effectiveProfile = optionalBefore.length > 0

@@ -534,7 +534,6 @@ const authorityGate = createAuthorityGate(authorityRuntime, {
     localAuthorityProbe({ axis, phase, status, tool, args }),
   recoverRuntimeConnection: async (status) => {
     const current = getClient();
-    if (current.isConnected) return false;
     const metro = status.bindings.metro as { port?: unknown } | undefined;
     const device = status.bindings.device as
       | { platform?: unknown; appId?: unknown }
@@ -553,8 +552,24 @@ const authorityGate = createAuthorityGate(authorityRuntime, {
     ) {
       return false;
     }
-    await current.autoConnect();
-    return true;
+    if (current.reconnectState.active) {
+      const deadline = Date.now() + 30_000;
+      while (current.reconnectState.active && Date.now() < deadline) {
+        await new Promise((resolveWait) => setTimeout(resolveWait, 500));
+      }
+      if (current.reconnectState.active || !current.isConnected) {
+        throw new Error('RECONNECT_TIMEOUT: authoritative background reconnect did not complete');
+      }
+    } else if (!current.isConnected) {
+      await current.autoConnect();
+    }
+    const bundle = status.bindings.bundle as
+      | { targetId?: unknown; connectionGeneration?: unknown }
+      | undefined;
+    return (
+      current.connectedTarget?.id !== bundle?.targetId ||
+      current.connectionGeneration !== bundle?.connectionGeneration
+    );
   },
   refreshRuntimeBinding: rebindSessionRuntime,
   relaunchBoundRuntime: relaunchSessionRuntime,
@@ -1126,7 +1141,9 @@ async function reconcileAuthoritativeConnection(connectedClient: CDPClient): Pro
   if (!status) throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: session authority is unavailable');
   await reconcileAuthoritativeBundle(status, {
     verifyRuntime: () => rebindSessionRuntime(status),
-    hasActiveOperation: () => available.registry.currentOperation() !== undefined,
+    hasActiveOperation: () =>
+      available.registry.currentOperation() !== undefined ||
+      available.registry.hasActiveBundleOperation(available.session),
     commit: (input) => available.registry.updateBindings(available.session, input),
   });
 }

@@ -642,6 +642,21 @@ test('ended operations are absent from inherited async context', async () => {
   assert.equal(await deferred, undefined);
 });
 
+test('active bundle operations are visible outside inherited context', () => {
+  const { registry, create } = fixture();
+  const owner = create('a');
+  const operation = registry.beginOperation(owner, {
+    operationId: 'operation-bundle-reconnect',
+    tool: 'cdp_console_log',
+    profile: 'CSIMBD',
+  });
+
+  assert.equal(registry.currentOperation(), undefined);
+  assert.equal(registry.hasActiveBundleOperation(owner), true);
+  registry.endOperation(operation);
+  assert.equal(registry.hasActiveBundleOperation(owner), false);
+});
+
 test('session release requires package integration restoration at every registry boundary', () => {
   const { registry, create } = fixture();
   const owner = create('a');

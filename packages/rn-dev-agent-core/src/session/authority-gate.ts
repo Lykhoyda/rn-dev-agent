@@ -625,6 +625,43 @@ function invalidateRuntimeBundle(
   return nextOperation;
 }
 
+async function reconcileRecoverableRuntime(
+  runtime: AuthorityGateRuntime,
+  dependencies: AuthorityGateDependencies,
+  registry: SessionRegistry,
+  operation: OperationRef,
+  status: SessionStatus,
+  profile: AuthorityProfile,
+): Promise<{
+  operation: OperationRef;
+  status: SessionStatus;
+  runtimeTargetChanged: boolean;
+}> {
+  if (!profile.axes.includes('B') || !dependencies.recoverRuntimeConnection) {
+    return { operation, status, runtimeTargetChanged: false };
+  }
+  const recovered = await registry.runWithOperation(operation, () =>
+    dependencies.recoverRuntimeConnection!(status),
+  );
+  if (!recovered) return { operation, status, runtimeTargetChanged: false };
+  if (!dependencies.refreshRuntimeBinding) {
+    throw new SessionAuthorityError(
+      'BUNDLE_HANDSHAKE_UNAVAILABLE',
+      'authoritative reconnect cannot commit without a binding refresh',
+    );
+  }
+  const bundle = await dependencies.refreshRuntimeBinding(status);
+  return reconcileRuntimeBundleReplacement(
+    runtime,
+    registry,
+    operation,
+    status,
+    status.bindings.bundle as Record<string, unknown> | undefined,
+    status.bindings.metro as Record<string, unknown> | undefined,
+    bundle,
+  );
+}
+
 export function createAuthorityGate(
   runtime: AuthorityGateRuntime,
   dependencies: AuthorityGateDependencies,
@@ -992,33 +1029,16 @@ export function createAuthorityGate(
             tool,
             profile: profile.axes.join(''),
           });
-          if (profile.axes.includes('B') && dependencies.recoverRuntimeConnection) {
-            const recovered = await registry.runWithOperation(operation, () =>
-              dependencies.recoverRuntimeConnection!(status),
-            );
-            if (recovered) {
-              if (!dependencies.refreshRuntimeBinding) {
-                throw new SessionAuthorityError(
-                  'BUNDLE_HANDSHAKE_UNAVAILABLE',
-                  'authoritative reconnect cannot commit without a binding refresh',
-                );
-              }
-              const priorBundle = status.bindings.bundle as Record<string, unknown> | undefined;
-              const metro = status.bindings.metro as Record<string, unknown> | undefined;
-              const bundle = await dependencies.refreshRuntimeBinding(status);
-              const reconciliation = reconcileRuntimeBundleReplacement(
-                runtime,
-                registry,
-                operation,
-                status,
-                priorBundle,
-                metro,
-                bundle,
-              );
-              operation = reconciliation.operation;
-              status = reconciliation.status;
-            }
-          }
+          const preflightRecovery = await reconcileRecoverableRuntime(
+            runtime,
+            dependencies,
+            registry,
+            operation,
+            status,
+            profile,
+          );
+          operation = preflightRecovery.operation;
+          status = preflightRecovery.status;
           const initialOperationAuthorityVersion = operation.authorityVersion;
           const before = await Promise.all(
             profile.axes.map((axis) =>
@@ -1306,6 +1326,20 @@ export function createAuthorityGate(
           }
           registry.verifyOperation(operation);
           const result = await registry.runWithOperation(operation, () => handler(...handlerArgs));
+          let runtimeTargetChanged = false;
+          if (resultSucceeded(result)) {
+            const postHandlerRecovery = await reconcileRecoverableRuntime(
+              runtime,
+              dependencies,
+              registry,
+              operation,
+              status,
+              profile,
+            );
+            operation = postHandlerRecovery.operation;
+            status = postHandlerRecovery.status;
+            runtimeTargetChanged = postHandlerRecovery.runtimeTargetChanged;
+          }
           const containedRunner = containedRunnerAuthority(
             result,
             status.bindings.runner as Record<string, unknown> | null | undefined,
@@ -1350,7 +1384,6 @@ export function createAuthorityGate(
               nextAction: 'Run rn_session action "pin_dev_client" before another CDP operation.',
             });
           }
-          let runtimeTargetChanged = false;
           if (reconcilesRuntimeTarget && (resultSucceeded(result) || nestedRuntimeReset)) {
             const priorBundle = status.bindings.bundle as Record<string, unknown> | undefined;
             const metro = status.bindings.metro as Record<string, unknown> | undefined;
@@ -1406,7 +1439,7 @@ export function createAuthorityGate(
               );
               operation = reconciliation.operation;
               status = reconciliation.status;
-              runtimeTargetChanged = reconciliation.runtimeTargetChanged;
+              runtimeTargetChanged ||= reconciliation.runtimeTargetChanged;
             }
           }
           const effectiveProfile =
