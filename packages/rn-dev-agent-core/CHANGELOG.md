@@ -1,5 +1,11 @@
 # rn-dev-agent-core
 
+## 0.66.5
+
+### Patch Changes
+
+- e7c04dc: Keep session-bound Dev Client discovery and reconnect, reload, and restart recovery on the exact managed Metro port, and recognize modern Bridgeless Hermes targets whose inspector metadata omits the legacy `vm` field, while continuing to require the signed runtime marker before authority becomes ready.
+
 ## 0.66.4
 
 ### Patch Changes
