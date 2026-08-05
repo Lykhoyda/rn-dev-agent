@@ -96,9 +96,9 @@ test('prepare-build publishes only against a caller-delivered abort capability',
 
     for (const args of [
       ['prepare-build', 'ios'],
-      ['prepare-build', 'ios', ''],
-      ['prepare-build', 'ios', 'not-a-canonical-uuid'],
-      ['prepare-build', 'ios', 'ZZZZZZZZ-1111-2222-3333-444444444444'],
+      ['prepare-build', 'ios', '', 'expo'],
+      ['prepare-build', 'ios', 'not-a-canonical-uuid', 'expo'],
+      ['prepare-build', 'ios', 'ZZZZZZZZ-1111-2222-3333-444444444444', 'expo'],
     ]) {
       const refused = runSessionCli(args, cliOptions);
       assert.notEqual(refused.status, 0);
@@ -106,7 +106,7 @@ test('prepare-build publishes only against a caller-delivered abort capability',
     }
 
     const delivered = runSessionCli(
-      ['prepare-build', 'ios', '4f9c2d61-8f4e-4a5b-9c3d-2e1f0a7b6c5d'],
+      ['prepare-build', 'ios', '4f9c2d61-8f4e-4a5b-9c3d-2e1f0a7b6c5d', 'expo'],
       cliOptions,
     );
     assert.notEqual(delivered.status, 0);

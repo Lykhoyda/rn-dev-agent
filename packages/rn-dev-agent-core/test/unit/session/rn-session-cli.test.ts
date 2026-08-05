@@ -458,7 +458,7 @@ test('package-local CLI refuses external Metro for managed startup and builds', 
 
     for (const args of [
       ['ensure-metro'],
-      ['prepare-build', 'ios', 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'],
+      ['prepare-build', 'ios', 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', 'expo'],
     ]) {
       const result = spawnSync(process.execPath, [cliPath, ...args], {
         cwd: appRoot,
@@ -613,7 +613,7 @@ test('package-local CLI reserves Metro, build, and release operations before cle
     });
 
     for (const args of [
-      ['prepare-build', 'ios', 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'],
+      ['prepare-build', 'ios', 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', 'expo'],
       ['ensure-metro'],
       ['release'],
     ]) {

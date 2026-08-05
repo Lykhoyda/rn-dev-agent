@@ -652,11 +652,21 @@ async function pinSessionDevClient(status, options) {
     const device = status.bindings.device;
     const metro = status.bindings.metro;
     const install = status.bindings.install;
-    const declaredDevice = status.bindings.device;
     const secret = process.env.RN_DEV_AGENT_SESSION_SECRET_PATH
         ? readJsonStateFile(process.env.RN_DEV_AGENT_SESSION_SECRET_PATH)
         : null;
-    const devClientUrl = install.devClientUrl ?? declaredDevice.devClientUrl;
+    if (install?.platform !== device.platform ||
+        install.deviceId !== device.deviceId ||
+        install.appId !== device.appId ||
+        install.metroPort !== metro.port ||
+        install.buildGeneration !== metro.buildGeneration) {
+        throw new Error('BUILD_RECEIPT_INVALID: exact launch provenance is unavailable');
+    }
+    const devClientUrl = typeof install.devClientUrl === 'string' ? install.devClientUrl : undefined;
+    if (install.buildKind !== 'expo' && install.buildKind !== 'bare-react-native') {
+        throw new Error('BUILD_RECEIPT_INVALID: exact build command provenance is unavailable');
+    }
+    const runtimeKind = install.buildKind === 'expo' ? 'expo-dev-client' : 'bare-react-native';
     if (!secret?.signerCapability) {
         throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: session signer is unavailable');
     }
@@ -675,6 +685,7 @@ async function pinSessionDevClient(status, options) {
         buildGeneration: metro.buildGeneration,
         deviceId: device.deviceId,
         metroPort: metro.port,
+        runtimeKind,
         ...(devClientUrl ? { devClientUrl, expectedDevClientUrl: devClientUrl } : {}),
         signerCapability: secret.signerCapability,
     }, {
@@ -723,6 +734,30 @@ async function pinSessionDevClient(status, options) {
             return parsed?.status === 'signed' && parsed.marker
                 ? { status: 'signed', marker: parsed.marker }
                 : null;
+        },
+        readManagedManifest: async ({ host, metroPort, platform }) => {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 15_000);
+            try {
+                const response = await fetch(`http://${host}:${metroPort}/`, {
+                    headers: {
+                        accept: 'multipart/mixed,application/expo+json,application/json',
+                        'expo-platform': platform,
+                    },
+                    signal: controller.signal,
+                });
+                return {
+                    body: await response.text(),
+                    contentType: response.headers.get('content-type') ?? '',
+                    status: response.status,
+                };
+            }
+            catch (error) {
+                throw new Error(`METRO_MANIFEST_ENDPOINT_MISMATCH: managed manifest request failed: ${error instanceof Error ? error.message : String(error)}`);
+            }
+            finally {
+                clearTimeout(timer);
+            }
         },
     });
     getClient().setAuthoritativeSessionPolicy(createAuthoritativeSessionPolicy(status));

@@ -58,6 +58,7 @@ export function renderMetroIntegrationAdapter(): string {
   return `'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
+const { AsyncLocalStorage } = require('node:async_hooks');
 const { createHash, createHmac, randomBytes } = require('node:crypto');
 const childProcess = require('node:child_process');
 const { execFileSync } = childProcess;
@@ -1223,6 +1224,268 @@ function descendantError() {
   error.code = 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION';
   return error;
 }
+const manifestUtilityCapability = Object.freeze({});
+const manifestUtilityScope = new AsyncLocalStorage();
+function withinManifestUtilityBoundary() {
+  return (
+    manifestUtilityScope.getStore() === manifestUtilityCapability &&
+    !descendantNonce &&
+    workerThreads.isMainThread
+  );
+}
+function canonicalPackageFile(resolvedFile, packageName, relativePath) {
+  let cursor = path.dirname(resolvedFile);
+  while (true) {
+    try {
+      const packageManifestPath = path.join(cursor, 'package.json');
+      const manifest = JSON.parse(fs.readFileSync(packageManifestPath, 'utf8'));
+      if (manifest.name === packageName) {
+        const packageSegments = packageName.split('/');
+        const rootSegments = fs.realpathSync(cursor).split(path.sep);
+        const nodeModulesIndex = rootSegments.lastIndexOf('node_modules');
+        if (
+          nodeModulesIndex < 0 ||
+          rootSegments.length !== nodeModulesIndex + packageSegments.length + 1 ||
+          packageSegments.some(
+            (segment, index) => rootSegments[nodeModulesIndex + index + 1] !== segment,
+          )
+        ) {
+          return null;
+        }
+        const expected = fs.realpathSync(path.join(cursor, relativePath));
+        return expected === resolvedFile ? expected : null;
+      }
+    } catch {}
+    const parent = path.dirname(cursor);
+    if (parent === cursor) return null;
+    cursor = parent;
+  }
+}
+function resolveInvocationExecutable(command, cwd, environmentEntries) {
+  if (typeof command !== 'string' || command.length === 0) return null;
+  const environment = privateObjectFromEntries(environmentEntries);
+  const candidates = path.isAbsolute(command)
+    ? [command]
+    : command.includes('/') || command.includes('\\\\')
+      ? [path.resolve(cwd, command)]
+      : String(environment.PATH || environment.Path || environment.path || '')
+          .split(path.delimiter)
+          .filter(Boolean)
+          .map((directory) => path.resolve(directory, command));
+  for (let index = 0; index < candidates.length; index += 1) {
+    try {
+      const resolved = fs.realpathSync(candidates[index]);
+      if (fs.statSync(resolved).isFile()) return resolved;
+    } catch {}
+  }
+  return null;
+}
+function isExpoUpdatesRuntimeVersionInvocation(command, args, cwd, environmentEntries) {
+  if (!intrinsicArrayIsArray(args)) return false;
+  const resolvedCommand = resolveInvocationExecutable(command, cwd, environmentEntries);
+  if (
+    !resolvedCommand ||
+    !canonicalPackageFile(resolvedCommand, 'expo-updates', 'bin/cli.js')
+  ) {
+    return false;
+  }
+  if (args.length !== 3 && args.length !== 4) return false;
+  if (
+    args[0] !== 'runtimeversion:resolve' ||
+    args[1] !== '--platform' ||
+    (args[2] !== 'ios' && args[2] !== 'android')
+  ) {
+    return false;
+  }
+  return args.length === 3 || args[3] === '--debug';
+}
+function installExpoManifestUtilityBoundary() {
+  const originalLoad = moduleApi._load;
+  const originalResolveFilename = moduleApi._resolveFilename;
+  const wrappedConstructors = new IntrinsicWeakSet();
+  intrinsicDefineProperty(moduleApi, '_load', {
+    configurable: false,
+    enumerable: true,
+    value(request, parent, isMain) {
+      const loaded = intrinsicReflectApply(originalLoad, this, [request, parent, isMain]);
+      let resolved;
+      try {
+        const filename = intrinsicReflectApply(originalResolveFilename, moduleApi, [
+          request,
+          parent,
+          isMain,
+        ]);
+        resolved = typeof filename === 'string' ? fs.realpathSync(filename) : null;
+      } catch {
+        return loaded;
+      }
+      if (
+        !resolved ||
+        !canonicalPackageFile(
+          resolved,
+          '@expo/cli',
+          'build/src/start/server/middleware/ExpoGoManifestHandlerMiddleware.js',
+        )
+      ) {
+        return loaded;
+      }
+      const Middleware = loaded?.ExpoGoManifestHandlerMiddleware;
+      if (typeof Middleware !== 'function' || privateWeakSetHas(wrappedConstructors, Middleware)) {
+        return loaded;
+      }
+      const original = Middleware.prototype?.handleRequestAsync;
+      if (typeof original !== 'function') throw descendantError();
+      privateWeakSetAdd(wrappedConstructors, Middleware);
+      intrinsicDefineProperty(Middleware.prototype, 'handleRequestAsync', {
+        configurable: false,
+        enumerable: false,
+        value(...args) {
+          if (!(this instanceof Middleware)) throw descendantError();
+          return manifestUtilityScope.run(manifestUtilityCapability, () =>
+            intrinsicReflectApply(original, this, args),
+          );
+        },
+        writable: false,
+      });
+      return loaded;
+    },
+    writable: false,
+  });
+}
+installExpoManifestUtilityBoundary();
+const utilityStdioStreams = new IntrinsicSet([
+  'ignore',
+  'inherit',
+  'overlapped',
+  'pipe',
+]);
+function utilityChildStdio(stdio) {
+  if (stdio === undefined || stdio === null) return stdio;
+  if (!intrinsicArrayIsArray(stdio)) {
+    if (!privateSetHas(utilityStdioStreams, stdio)) throw descendantError();
+    return stdio;
+  }
+  const normalized = [...stdio];
+  for (let index = 0; index < normalized.length; index += 1) {
+    const value = normalized[index];
+    if (value === undefined || value === null || value === 'ignore') continue;
+    if (index >= 3) throw descendantError();
+    if (privateSetHas(utilityStdioStreams, value)) continue;
+    if (value === 0 || value === 1 || value === 2) continue;
+    throw descendantError();
+  }
+  return normalized;
+}
+function utilityChildArguments(args, optionsIndex, options) {
+  const nextArgs = [...args];
+  const candidate = nextArgs[optionsIndex];
+  if (typeof candidate === 'function') {
+    nextArgs.splice(optionsIndex, 0, options);
+  } else {
+    nextArgs[optionsIndex] = options;
+  }
+  return nextArgs;
+}
+function recordUtilityInvocation(mode, command, args, cwd) {
+  persistLoaderObservation(
+    'unattested-utility',
+    canonicalAuthorityJson({
+      version: 1,
+      mode,
+      lane: 'manifest-utility',
+      proofBearing: false,
+      command: typeof command === 'string' ? command : null,
+      argumentDigest: createHash('sha256')
+        .update(
+          canonicalAuthorityJson(
+            intrinsicArrayIsArray(args)
+              ? privateArrayMap(args, (value) => (typeof value === 'string' ? value : null))
+              : [],
+          ),
+        )
+        .digest('hex'),
+      cwd,
+      authority: {
+        sessionId: authoritySessionId,
+        metroInstanceId: authorityMetroInstanceId,
+        contentRoot: authorityContentRoot,
+        appRoot: authorityAppRoot,
+        parentIdentity: currentIdentity,
+        parentNonce: currentAuthorityNonce,
+      },
+    }),
+  );
+}
+// Utility children get no RN_DEV_AGENT_* capability, evidence descriptor, or authority NODE_OPTIONS.
+function runManifestUtility(original, receiver, args, optionsIndex, mode) {
+  const candidate = args[optionsIndex];
+  const rawOptions = candidate && typeof candidate === 'object' ? { ...candidate } : {};
+  if (rawOptions.shell || rawOptions.signal !== undefined) throw descendantError();
+  if (rawOptions.execPath !== undefined || rawOptions.execArgv !== undefined) {
+    throw descendantError();
+  }
+  const cwd = invocationCwd(rawOptions.cwd);
+  const environmentEntries = normalizedInvocationEnvironment(rawOptions.env);
+  if (
+    mode !== 'node' ||
+    !withinManifestUtilityBoundary() ||
+    !isExpoUpdatesRuntimeVersionInvocation(args[0], args[1], cwd, environmentEntries)
+  ) {
+    throw descendantError();
+  }
+  const stdio = utilityChildStdio(rawOptions.stdio);
+  const utilityOptions = {
+    ...rawOptions,
+    cwd,
+    env: privateObjectFromEntries(environmentEntries),
+    ...(stdio === undefined || stdio === null ? {} : { stdio }),
+  };
+  const utilityArgs = utilityChildArguments(args, optionsIndex, utilityOptions);
+  recordUtilityInvocation(mode, args[0], args[1], cwd);
+  const nonce = randomBytes(16).toString('hex');
+  const spawnAuthorization =
+    mode === 'sync'
+      ? undefined
+      : {
+          environment: utilityOptions.env,
+          lifecycleContext: lifecycleContext('child-lifecycle', nonce),
+          receiver: undefined,
+        };
+  if (spawnAuthorization) {
+    if (activeChildSpawnAuthorization) throw descendantError();
+    activeChildSpawnAuthorization = spawnAuthorization;
+  }
+  let child;
+  try {
+    child = intrinsicReflectApply(original, receiver, utilityArgs);
+  } finally {
+    if (spawnAuthorization) {
+      activeChildSpawnAuthorization = undefined;
+      if (spawnAuthorization.receiver) {
+        privateWeakMapDelete(authorizedChildSpawns, spawnAuthorization.receiver);
+      }
+    }
+  }
+  if (spawnAuthorization && child && typeof child === 'object') {
+    const context = spawnAuthorization.lifecycleContext;
+    const target = {
+      pid: typeof child.pid === 'number' ? child.pid : undefined,
+      context,
+    };
+    privateWeakMapSet(childLifecycleContexts, child, context);
+    privateWeakMapSet(childLifecycleTargets, child, target);
+    if (target.pid !== undefined) {
+      const pid = target.pid;
+      privateMapSet(processLifecycleTargets, pid, target);
+      child.once?.('exit', () => {
+        if (privateMapGet(processLifecycleTargets, pid) === target) {
+          privateMapDelete(processLifecycleTargets, pid);
+        }
+      });
+    }
+  }
+  return child;
+}
 const CHILD_EXCHANGE_STALL_CODE = 'MANAGED_TRANSFORM_CHANNEL_STALLED';
 function childExchangeStallBound() {
   const configured = Number(process.env.RN_DEV_AGENT_METRO_CHILD_STALL_MS);
@@ -1831,6 +2094,9 @@ function fenceChildProcessMethod(name, optionsIndex, mode) {
       const args = [...receivedArgs];
       if (Array.isArray(args[1])) args[1] = [...args[1]];
       const index = typeof optionsIndex === 'function' ? optionsIndex(args) : optionsIndex;
+      if (mode !== 'fork' && withinManifestUtilityBoundary()) {
+        return runManifestUtility(original, this, args, index, mode);
+      }
       const nonce = randomBytes(16).toString('hex');
       const candidate = args[index];
       const rawOptions = candidate && typeof candidate === 'object' ? { ...candidate } : {};
@@ -2779,7 +3045,7 @@ function withPolicyRefresh(callback, getConfig, includeReturnedPaths) {
       throw error;
     };
     try {
-      const result = callback.apply(this, args);
+      const result = intrinsicReflectApply(callback, this, args);
       return result && typeof result.then === 'function' ? result.then(finish, fail) : finish(result);
     } catch (error) {
       return fail(error);
@@ -2808,7 +3074,7 @@ function withAuthorityPolyfills(callback, marker, bootErrorCapture) {
     bootErrorCapture,
   ];
   return function (...args) {
-    const result = typeof callback === 'function' ? callback.apply(this, args) : [];
+    const result = typeof callback === 'function' ? intrinsicReflectApply(callback, this, args) : [];
     return result && typeof result.then === 'function' ? result.then(prepend) : prepend(result);
   };
 }
@@ -2864,9 +3130,9 @@ module.exports = function withRnDevAgentAuthority(config) {
         true,
       ),
       getModulesRunBeforeMainModule(entryFile) {
-        const result = (typeof original === 'function' ? original(entryFile) : []).filter(
-          (candidate) => candidate !== marker && candidate !== bootErrorCapture,
-        );
+        const result = (
+          typeof original === 'function' ? intrinsicReflectApply(original, undefined, [entryFile]) : []
+        ).filter((candidate) => candidate !== marker && candidate !== bootErrorCapture);
         runtimePolicy(finalConfig, result);
         return result;
       },
@@ -3033,6 +3299,7 @@ const sqliteFlag = (nodeMajor === 22 && nodeMinor >= 5) || (nodeMajor === 23 && 
 let session = null;
 let sessionCli = null;
 let buildCapability = null;
+let buildKind = null;
 const MANAGED_BUILD_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'];
 const buildRecovery = { abortAttempted: false, abortFailure: null, released: false, completed: false };
 function abortPendingBuild() {
@@ -3147,9 +3414,24 @@ function managedMetroProxyUrl(binding) {
       process.stderr.write('SESSION_AUTHORITY_REQUIRED: integrated rn-session CLI is unavailable; reapply integration\n');
       process.exit(2);
     }
+    const commandOffset = command[0] === 'npx' ? 1 : 0;
+    const commandExecutable = command[commandOffset];
+    const commandSubcommand = command[commandOffset + 1];
+    buildKind =
+      commandExecutable === 'expo' && commandSubcommand === 'run:' + platform
+        ? 'expo'
+        : commandExecutable === 'react-native' &&
+            ((platform === 'ios' && commandSubcommand === 'run-ios') ||
+              (platform === 'android' && commandSubcommand === 'run-android'))
+          ? 'bare-react-native'
+          : null;
+    if (!buildKind) {
+      process.stderr.write('SESSION_BUILD_COMMAND_UNSUPPORTED: command shape is not recognized\n');
+      process.exit(2);
+    }
     sessionCli = manifest.sessionCli;
     buildCapability = { buildToken: randomUUID() };
-    let probe = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'prepare-build', platform, buildCapability.buildToken], {
+    let probe = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'prepare-build', platform, buildCapability.buildToken, buildKind], {
       cwd: process.cwd(),
       env: process.env,
       encoding: 'utf8',
@@ -3164,7 +3446,7 @@ function managedMetroProxyUrl(binding) {
         await drainBuildTerminationSignals();
         failBuild(2, String(metro.stderr).trim() || 'METRO_START_UNAVAILABLE: managed Metro failed');
       }
-      probe = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'prepare-build', platform, buildCapability.buildToken], {
+      probe = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'prepare-build', platform, buildCapability.buildToken, buildKind], {
         cwd: process.cwd(),
         env: process.env,
         encoding: 'utf8',
@@ -3197,24 +3479,19 @@ function managedMetroProxyUrl(binding) {
     if (!sessionCli) {
       failBuild(2, 'SESSION_AUTHORITY_REQUIRED: session build completion requires the package-local rn-session CLI');
     }
-    const offset = command[0] === 'npx' ? 1 : 0;
-    const executable = command[offset];
-    const subcommand = command[offset + 1];
-    if (executable === 'expo' && subcommand === 'run:' + platform) {
+    if (buildKind === 'expo') {
       ensureValue('--device', session.deviceId);
       removeManagedPortFlag(String(session.metroPort));
       ensureFlag('--no-bundler');
       expoProxyUrl = managedMetroProxyUrl(session);
-    } else if (executable === 'react-native' && platform === 'ios' && subcommand === 'run-ios') {
+    } else if (platform === 'ios') {
       ensureValue('--udid', session.deviceId);
       ensureValue('--port', String(session.metroPort));
       ensureFlag('--no-packager');
-    } else if (executable === 'react-native' && platform === 'android' && subcommand === 'run-android') {
+    } else {
       ensureValue('--deviceId', session.deviceId);
       ensureValue('--port', String(session.metroPort));
       ensureFlag('--no-packager');
-    } else {
-      failBuild(2, 'SESSION_BUILD_COMMAND_UNSUPPORTED: command shape is not recognized');
     }
   }
 

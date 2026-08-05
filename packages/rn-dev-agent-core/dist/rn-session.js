@@ -337,6 +337,7 @@ async function main() {
         if (command === 'prepare-build') {
             const platform = process.argv[3];
             const deliveredBuildToken = process.argv[4];
+            const buildKind = process.argv[5];
             const device = status.bindings.device;
             const metro = status.bindings.metro;
             if ((platform !== 'ios' && platform !== 'android') ||
@@ -349,6 +350,9 @@ async function main() {
             if (typeof deliveredBuildToken !== 'string' ||
                 !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(deliveredBuildToken)) {
                 throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'prepare-build publishes only against a caller-delivered abort capability (canonical UUID)');
+            }
+            if (buildKind !== 'expo' && buildKind !== 'bare-react-native') {
+                throw new SessionAuthorityError('SESSION_BUILD_COMMAND_UNSUPPORTED', 'prepare-build requires the parsed native build command kind');
             }
             const appId = device.appId;
             const metroInstanceId = metro.instanceId;
@@ -419,7 +423,7 @@ async function main() {
                         releaseResources,
                         bindings: {
                             metro: buildMetro,
-                            pendingBuild: { buildToken, platform, buildGeneration },
+                            pendingBuild: { buildToken, platform, buildGeneration, buildKind },
                             bundle: null,
                             runner: null,
                             recorder: null,
@@ -439,6 +443,7 @@ async function main() {
                 metroPort: Number(status.bindings.metroPort),
                 sessionId: status.sessionId,
                 buildToken,
+                buildKind,
                 ...(platform === 'ios' ? { simulator: true } : {}),
                 ...(typeof device.devClientUrl === 'string' ? { devClientUrl: device.devClientUrl } : {}),
             })}\n`);
@@ -458,7 +463,8 @@ async function main() {
             const pending = status.bindings.pendingBuild;
             if (pending?.buildToken !== buildToken ||
                 pending.platform !== platform ||
-                !Number.isSafeInteger(pending.buildGeneration)) {
+                !Number.isSafeInteger(pending.buildGeneration) ||
+                (pending.buildKind !== 'expo' && pending.buildKind !== 'bare-react-native')) {
                 throw new SessionAuthorityError('SESSION_BUILD_IDENTITY_CONFLICT', 'build completion capability is stale or foreign');
             }
             const signerCapability = readSigner(status);
@@ -479,6 +485,7 @@ async function main() {
                 artifactDigest: installed.artifactDigest,
                 installGeneration: installed.installGeneration,
                 buildGeneration: Number(pending.buildGeneration),
+                buildKind: pending.buildKind,
                 ...(typeof device.devClientUrl === 'string' ? { devClientUrl: device.devClientUrl } : {}),
             }, signerCapability);
             status.registry.claimResources({ sessionId: status.sessionId, claimEpoch: status.claimEpoch }, [{ type: 'device', key: `${platform}:${device.deviceId}` }]);

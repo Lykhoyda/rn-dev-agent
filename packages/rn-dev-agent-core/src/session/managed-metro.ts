@@ -946,6 +946,7 @@ evidence.on('data', (chunk) => {
           'native-addon-request',
           'native-addon-completion',
           'stability',
+          'unattested-utility',
         ].includes(payload.kind) ||
         typeof payload.value !== 'string' ||
         (payload.kind === 'input' || payload.kind === 'stability'
