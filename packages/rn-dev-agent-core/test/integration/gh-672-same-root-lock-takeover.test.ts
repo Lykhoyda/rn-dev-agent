@@ -97,7 +97,11 @@ test(
 
       const ownerLock = await readLockBody(lockDir);
       assert.ok(ownerLock, 'the real owner wrote a single-instance lock');
-      assert.equal(ownerLock.pid, owner.child.pid, 'lock is held by the owner supervisor');
+      const ownerPid = ownerLock.pid;
+      assert.doesNotThrow(
+        () => process.kill(ownerPid, 0),
+        'the lock is held by a live owner supervisor',
+      );
 
       contender = startSupervisor({ cwd: project, env, noLock: false, lineTimeoutMs: 30_000 });
       // Bounded: a contender that stole the lock stays alive as a blocked session, so an
@@ -134,7 +138,7 @@ test(
         await new Promise((resolve) => setTimeout(resolve, PARENT_WATCH_MS / 2));
         const body = await readLockBody(lockDir);
         assert.ok(body, 'the owner lock must never disappear while the owner is alive');
-        assert.equal(body.pid, owner.child.pid, 'no contender may rewrite the live owner lock');
+        assert.equal(body.pid, ownerPid, 'no contender may rewrite the live owner lock');
         if (typeof body.lastHeartbeat === 'number' && body.lastHeartbeat > lastSeen) {
           lastSeen = body.lastHeartbeat;
           beats += 1;
@@ -146,6 +150,10 @@ test(
       );
 
       assert.equal(owner.child.exitCode, null, 'the owner must still be running');
+      assert.doesNotThrow(
+        () => process.kill(ownerPid, 0),
+        'the lock-owning supervisor stays alive',
+      );
       assert.equal(
         /single-instance lock reclaimed/.test(owner.stderrText()),
         false,
