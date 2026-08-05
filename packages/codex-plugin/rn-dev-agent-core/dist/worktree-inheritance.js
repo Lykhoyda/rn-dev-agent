@@ -195,21 +195,58 @@ function resolveWorktreeLayout(input) {
   }
   return { ...base, primaryRoot, primaryAppRoot };
 }
-function classifySource(path, type) {
-  let link;
-  try {
-    link = lstatSync(path);
-  } catch (error) {
-    const code = error.code;
-    if (code === "EACCES" || code === "EPERM")
-      return "PERMISSION_DENIED";
-    return "MISSING";
+function classifySource(path, type, boundary) {
+  const rel = relative(boundary, path);
+  if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    return { state: "WRONG_TYPE" };
   }
-  if (link.isSymbolicLink())
-    return "WRONG_TYPE";
-  if (type === "directory")
-    return link.isDirectory() ? "AVAILABLE" : "WRONG_TYPE";
-  return link.isFile() ? "AVAILABLE" : "WRONG_TYPE";
+  const paths = [boundary];
+  let cursor = boundary;
+  for (const component of rel.split(sep).filter(Boolean)) {
+    cursor = join(cursor, component);
+    paths.push(cursor);
+  }
+  const inspect = () => {
+    const evidence = [];
+    for (let index = 0; index < paths.length; index += 1) {
+      let node;
+      try {
+        node = lstatSync(paths[index], { bigint: true });
+      } catch (error) {
+        const code = error.code;
+        if (code === "EACCES" || code === "EPERM")
+          return { state: "PERMISSION_DENIED" };
+        return { state: "MISSING" };
+      }
+      if (node.isSymbolicLink())
+        return { state: "WRONG_TYPE" };
+      const isLeaf = index === paths.length - 1;
+      const typeOk = isLeaf ? type === "directory" ? node.isDirectory() : node.isFile() : node.isDirectory();
+      if (!typeOk)
+        return { state: "WRONG_TYPE" };
+      evidence.push({ dev: String(node.dev), ino: String(node.ino) });
+    }
+    const resolved = canonical(path);
+    if (!resolved || !contained(boundary, resolved))
+      return { state: "WRONG_TYPE" };
+    return { state: "AVAILABLE", evidence };
+  };
+  const before = inspect();
+  if (before.state !== "AVAILABLE")
+    return before;
+  const after = inspect();
+  if (after.state !== "AVAILABLE" || !sameSourceEvidence(before.evidence, after.evidence)) {
+    return { state: "WRONG_TYPE" };
+  }
+  return after;
+}
+function sameSourceEvidence(left, right) {
+  if (!left || !right)
+    return left === right;
+  return left.length === right.length && left.every((identity, index) => {
+    const candidate = right[index];
+    return identity.dev === candidate.dev && identity.ino === candidate.ino;
+  });
 }
 function classifyDestination(path, sourcePath, type) {
   let link;
@@ -302,8 +339,13 @@ function planResource(layout, resource) {
   const destination = join(anchor.local, resource.path);
   const destinationRel = destinationRelative(layout, resource);
   const source = anchor.source ? join(anchor.source, resource.path) : void 0;
-  const sourceState = source ? classifySource(source, resource.type) : "MISSING";
-  const { state: destinationState, evidence } = classifyDestination(destination, source, resource.type);
+  const sourceBoundary = layout.primaryRoot;
+  const sourceBefore = source && sourceBoundary ? classifySource(source, resource.type, sourceBoundary) : { state: "MISSING" };
+  const { state: destinationState, evidence } = classifyDestination(destination, sourceBefore.state === "AVAILABLE" ? source : void 0, resource.type);
+  const sourceAfter = source && sourceBoundary ? classifySource(source, resource.type, sourceBoundary) : { state: "MISSING" };
+  const sourceStable = sourceBefore.state === sourceAfter.state && sameSourceEvidence(sourceBefore.evidence, sourceAfter.evidence);
+  const sourceState = sourceStable ? sourceAfter.state : "WRONG_TYPE";
+  const sourceEvidence = sourceStable ? sourceAfter.evidence : void 0;
   const linkedParent = resource.parent !== void 0 ? classifyLegacyParent(layout, anchor.local, resource.parent) : null;
   const parentRelative = resource.parent === void 0 ? void 0 : toPosix(layout.appRelative === "." ? resource.parent : `${layout.appRelative}/${resource.parent}`);
   const ignoreSafe = isIgnoreSafe(layout.worktreeRoot, destinationRel) || linkedParent !== null && parentRelative !== void 0 && (isIgnoreSafe(layout.worktreeRoot, parentRelative) || isIgnoreSafe(layout.worktreeRoot, `${parentRelative}/`));
@@ -314,7 +356,8 @@ function planResource(layout, resource) {
     sourceState,
     destinationState,
     ignoreSafe,
-    evidence
+    evidence,
+    sourceEvidence
   };
   const gitManaged = isTracked(layout.worktreeRoot, destinationRel) || resource.parent !== void 0 && isTracked(layout.worktreeRoot, toPosix(layout.appRelative === "." ? resource.parent : `${layout.appRelative}/${resource.parent}`));
   if (gitManaged) {
@@ -376,6 +419,15 @@ function planResource(layout, resource) {
     };
   }
   if (destinationState === "LINK_VALID") {
+    if (sourceState !== "AVAILABLE") {
+      return {
+        ...base,
+        regime,
+        state: sourceState === "WRONG_TYPE" ? "SOURCE_WRONG_TYPE" : "SOURCE_MISSING",
+        action: "none",
+        remediation: "The existing link no longer has a safe canonical source."
+      };
+    }
     return {
       ...base,
       regime,
@@ -494,6 +546,19 @@ function applyInheritance(input) {
     const destination = join(anchor.local, spec.path);
     const source = anchor.source ? join(anchor.source, spec.path) : void 0;
     if (resourcePlan.action === "none") {
+      if (resourcePlan.state === "LINK_VALID_SAFE") {
+        const revalidated2 = planResource(plan.layout, spec);
+        if (revalidated2.state !== resourcePlan.state || !sameSourceEvidence(revalidated2.sourceEvidence, resourcePlan.sourceEvidence)) {
+          outcomes.push({
+            id: resourcePlan.id,
+            applied: false,
+            state: revalidated2.state,
+            result: "refused",
+            reason: "source changed while validating the existing link"
+          });
+          continue;
+        }
+      }
       outcomes.push({
         id: resourcePlan.id,
         applied: false,
@@ -514,7 +579,7 @@ function applyInheritance(input) {
       continue;
     }
     const revalidated = planResource(plan.layout, spec);
-    if (revalidated.state !== resourcePlan.state || revalidated.action !== resourcePlan.action) {
+    if (revalidated.state !== resourcePlan.state || revalidated.action !== resourcePlan.action || !sameSourceEvidence(revalidated.sourceEvidence, resourcePlan.sourceEvidence)) {
       outcomes.push({
         id: resourcePlan.id,
         applied: false,
@@ -525,7 +590,7 @@ function applyInheritance(input) {
       continue;
     }
     if (revalidated.action === "migrate") {
-      const outcome2 = migrateLegacyRoot(source, destination, plan.layout, spec);
+      const outcome2 = migrateLegacyRoot(source, destination, plan.layout, spec, revalidated.sourceEvidence);
       if (outcome2.result === "repaired")
         applied += 1;
       outcomes.push({ ...outcome2, id: resourcePlan.id });
@@ -543,19 +608,28 @@ function applyInheritance(input) {
         continue;
       }
     }
-    const outcome = createLink(source, destination, plan.layout, spec, revalidated.action);
+    const outcome = createLink(source, destination, plan.layout, spec, revalidated.action, revalidated.sourceEvidence);
     if (outcome.result === "linked" || outcome.result === "repaired")
       applied += 1;
     outcomes.push({ ...outcome, id: resourcePlan.id });
   }
   return { outcomes, applied, requested: plan.resources.length, refusal: plan.refusal };
 }
-function migrateLegacyRoot(source, destination, layout, spec) {
+function migrateLegacyRoot(source, destination, layout, spec, sourceEvidence) {
   const root = join(layout.appRoot, spec.parent);
   const staged = `${root}.local.${process.pid}.${probeCounter++}`;
   const backup = `${root}.legacy.${process.pid}.${probeCounter++}`;
   let original = null;
   try {
+    const sourceCheck = classifySource(source, spec.type, layout.primaryRoot);
+    if (sourceCheck.state !== "AVAILABLE" || !sameSourceEvidence(sourceCheck.evidence, sourceEvidence)) {
+      return {
+        applied: false,
+        state: "SOURCE_WRONG_TYPE",
+        result: "refused",
+        reason: "canonical source changed before migration"
+      };
+    }
     const rootStats = lstatSync(root, { bigint: true });
     if (!rootStats.isSymbolicLink()) {
       return {
@@ -593,7 +667,7 @@ function migrateLegacyRoot(source, destination, layout, spec) {
       throw error;
     }
     const settled = planResource(layout, spec);
-    if (settled.state !== "LINK_VALID_SAFE") {
+    if (settled.state !== "LINK_VALID_SAFE" || !sameSourceEvidence(settled.sourceEvidence, sourceEvidence)) {
       rmSync(root, { force: true, recursive: true });
       renameSync(backup, root);
       return {
@@ -647,7 +721,7 @@ function removeStaleLink(destination, evidence) {
     return false;
   }
 }
-function probeLinkTarget(parentIdentity, destination, source, spec) {
+function probeLinkTarget(parentIdentity, destination, source, sourceBoundary, sourceEvidence, spec) {
   const parent = destination.slice(0, destination.lastIndexOf(sep));
   const probe = join(parent, `.rn-dev-agent-probe.${process.pid}.${probeCounter++}`);
   const refuse = (state, reason) => ({
@@ -662,6 +736,10 @@ function probeLinkTarget(parentIdentity, destination, source, spec) {
     return refuse("PERMISSION_DENIED", "could not verify the link target before creating it");
   }
   try {
+    const sourceCheck = classifySource(source, spec.type, sourceBoundary);
+    if (sourceCheck.state !== "AVAILABLE" || !sameSourceEvidence(sourceCheck.evidence, sourceEvidence)) {
+      return refuse("SOURCE_WRONG_TYPE", "the canonical source changed before link creation");
+    }
     const resolved = canonical(probe);
     if (!resolved || resolved !== canonical(source)) {
       return refuse("SOURCE_MISSING", "the canonical source disappeared before the link was created");
@@ -684,7 +762,7 @@ function probeLinkTarget(parentIdentity, destination, source, spec) {
   }
 }
 var probeCounter = 0;
-function createLink(source, destination, layout, spec, action) {
+function createLink(source, destination, layout, spec, action, sourceEvidence) {
   const anchor = anchorFor(layout, spec).local;
   const parentIdentity = bindLinkParent(destination, anchor);
   if (!parentIdentity) {
@@ -695,7 +773,7 @@ function createLink(source, destination, layout, spec, action) {
       reason: "destination parent is not a real directory inside this worktree"
     };
   }
-  const probe = probeLinkTarget(parentIdentity, destination, source, spec);
+  const probe = probeLinkTarget(parentIdentity, destination, source, layout.primaryRoot, sourceEvidence, spec);
   if (probe)
     return probe;
   try {
@@ -732,7 +810,7 @@ function createLink(source, destination, layout, spec, action) {
   const createdIdentity = linkIdentity(destination);
   const parentDirectory = destination.slice(0, destination.lastIndexOf(sep));
   const settled = planResource(layout, spec);
-  if (!sameDirectoryIdentity(parentDirectory, parentIdentity) || settled.state !== "LINK_VALID_SAFE") {
+  if (!sameDirectoryIdentity(parentDirectory, parentIdentity) || settled.state !== "LINK_VALID_SAFE" || !sameSourceEvidence(settled.sourceEvidence, sourceEvidence)) {
     const removed = rollbackLink(destination, source, createdIdentity);
     return {
       applied: false,

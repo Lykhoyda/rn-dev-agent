@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -40,10 +41,11 @@ function git(cwd: string, args: string[]): string {
   return (result.stdout ?? '').trim();
 }
 
-function cli(cwd: string, args: string[], entry = CLI) {
+function cli(cwd: string, args: string[], entry = CLI, env: NodeJS.ProcessEnv = process.env) {
   const result = spawnSync(process.execPath, [entry, ...args], {
     cwd,
     encoding: 'utf8',
+    env,
     timeout: 60_000,
   });
   if (result.error) throw result.error;
@@ -280,6 +282,78 @@ test('foreign canonical actions links are refused without creating a write path'
     assert.equal(report.applied, 0);
     assert.equal(existsSync(join(worktree, '.rn-agent', 'actions')), false);
     assert.equal(readFileSync(join(foreign, 'sentinel'), 'utf8'), 'UNCHANGED');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('foreign canonical action ancestors and existing links are refused', () => {
+  const fixture = makeFixture();
+  try {
+    const primaryApp = appPath(fixture.primary, fixture.appRelative);
+    const foreign = join(fixture.root, 'foreign-root');
+    mkdirSync(join(foreign, 'actions'), { recursive: true });
+    writeFileSync(join(foreign, 'actions', 'sentinel'), 'UNCHANGED');
+    symlinkSync(foreign, join(primaryApp, '.rn-agent'), 'dir');
+    const worktree = addWorktree(fixture);
+
+    const missingPlan = planInheritance({ cwd: worktree, appRoot: worktree, host: 'claude' });
+    assert.equal(missingPlan.resources[0].sourceState, 'WRONG_TYPE');
+    assert.equal(missingPlan.resources[0].state, 'SOURCE_WRONG_TYPE');
+
+    mkdirSync(join(worktree, '.rn-agent'));
+    symlinkSync(
+      join(primaryApp, '.rn-agent', 'actions'),
+      join(worktree, '.rn-agent', 'actions'),
+      'dir',
+    );
+    const linkedPlan = planInheritance({ cwd: worktree, appRoot: worktree, host: 'claude' });
+    assert.notEqual(linkedPlan.resources[0].state, 'LINK_VALID_SAFE');
+    assert.equal(
+      applyInheritance({ cwd: worktree, appRoot: worktree, host: 'claude' }).outcomes[0].result,
+      'skipped',
+    );
+    assert.equal(readFileSync(join(foreign, 'actions', 'sentinel'), 'utf8'), 'UNCHANGED');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('source identity swaps between plan and apply are refused', () => {
+  const fixture = makeFixture();
+  try {
+    const primaryApp = seedPrivateCorpus(fixture);
+    const worktree = addWorktree(fixture);
+    const wrapperDirectory = join(fixture.root, 'bin');
+    const wrapper = join(wrapperDirectory, 'git');
+    const marker = join(fixture.root, 'source-swapped');
+    const source = join(primaryApp, '.rn-agent', 'actions');
+    const realGit = spawnSync('/bin/sh', ['-c', 'command -v git'], {
+      encoding: 'utf8',
+    }).stdout.trim();
+    mkdirSync(wrapperDirectory);
+    writeFileSync(
+      wrapper,
+      '#!/bin/sh\nif [ "$1" = "check-ignore" ] && [ ! -e "$RN_SWAP_MARKER" ]; then\n  "$RN_REAL_GIT" "$@"\n  result=$?\n  mv "$RN_SWAP_SOURCE" "$RN_SWAP_SOURCE.before"\n  mkdir "$RN_SWAP_SOURCE"\n  : > "$RN_SWAP_MARKER"\n  exit "$result"\nfi\nexec "$RN_REAL_GIT" "$@"\n',
+    );
+    chmodSync(wrapper, 0o700);
+
+    const result = cli(
+      worktree,
+      ['apply', '--host', 'claude', '--app-root', worktree, '--json'],
+      CLI,
+      {
+        ...process.env,
+        PATH: `${wrapperDirectory}:${process.env.PATH ?? ''}`,
+        RN_REAL_GIT: realGit,
+        RN_SWAP_MARKER: marker,
+        RN_SWAP_SOURCE: source,
+      },
+    );
+    const report = JSON.parse(result.stdout) as { outcomes: Array<{ result: string }> };
+    assert.equal(result.status, 3);
+    assert.equal(report.outcomes[0].result, 'refused');
+    assert.equal(existsSync(join(worktree, '.rn-agent', 'actions')), false);
   } finally {
     fixture.cleanup();
   }
