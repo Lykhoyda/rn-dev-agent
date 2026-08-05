@@ -159,6 +159,9 @@ export class SessionRegistry {
     runWithOperation(operation, callback) {
         return this.#operationContext.run(operation, callback);
     }
+    currentOperation() {
+        return this.#operationContext.getStore();
+    }
     createSession(input) {
         const now = this.#now();
         this.#database

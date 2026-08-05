@@ -13025,6 +13025,9 @@ var init_registry = __esm({
       runWithOperation(operation, callback) {
         return this.#operationContext.run(operation, callback);
       }
+      currentOperation() {
+        return this.#operationContext.getStore();
+      }
       createSession(input) {
         const now = this.#now();
         this.#database.prepare(`INSERT INTO sessions(
@@ -57462,6 +57465,22 @@ var init_connect = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/cdp-client.js
+async function discoverAuthoritativeTarget(policy, requestedFilters, discoverFn = discoverExactPort) {
+  const result = await discoverFn(policy.port, {
+    ...requestedFilters,
+    ...policy.filters,
+    targetId: void 0,
+    preferredBundleId: void 0
+  });
+  if (result.errorCode || result.targets.length === 0)
+    return result;
+  const targetId = await policy.resolveTargetId(result.targets);
+  const target = result.targets.find((candidate) => candidate.id === targetId);
+  if (!target) {
+    throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: exact-device resolver returned a target outside the managed Metro result");
+  }
+  return { ...result, targets: [target] };
+}
 var CDPClient;
 var init_cdp_client = __esm({
   "packages/rn-dev-agent-core/dist/cdp-client.js"() {
@@ -57484,7 +57503,7 @@ var init_cdp_client = __esm({
     init_connect();
     init_project_config();
     init_reconnection();
-    CDPClient = class {
+    CDPClient = class _CDPClient {
       ws = null;
       msgId = 0;
       slotId = 0;
@@ -57536,6 +57555,7 @@ var init_cdp_client = __esm({
       _reconnectAttemptCount = 0;
       // Resolved once per process — env/config don't change mid-session.
       _autoConnectResolution = null;
+      _authoritativeSessionPolicy;
       // M1b (Phase 100+): multiplexer proxy state. When `_proxyUrl` is non-null, the
       // CDP WebSocket routes through `_multiplexer` instead of connecting directly to
       // Hermes. Lets React Native DevTools share the same Hermes target on RN < 0.85.
@@ -57854,24 +57874,79 @@ var init_cdp_client = __esm({
       }
       async autoConnect(portHint, filtersOrPlatform, intent = "default") {
         const filters = typeof filtersOrPlatform === "string" ? { platform: filtersOrPlatform } : filtersOrPlatform ?? {};
-        return autoConnect(this.buildConnectCtx(), this._exactDiscoveryPort ?? portHint, filters, intent, this._reconnectDiscover);
+        return this.connectWithCurrentPolicy(portHint, filters, intent);
       }
       async listTargets(portHint) {
+        if (this._authoritativeSessionPolicy) {
+          return listTargetsOnExactPort(this._authoritativeSessionPolicy.port);
+        }
         return discoverForList(this._port, portHint);
       }
       async connectExact(port, filters, intent = "default") {
         this._reconnectDiscover = discoverExactPort;
         this._exactDiscoveryPort = port;
-        return autoConnect(this.buildConnectCtx(), port, filters, intent, discoverExactPort);
+        return this.connectWithCurrentPolicy(port, filters, intent);
       }
       async listTargetsExact(port) {
-        return listTargetsOnExactPort(port);
+        return listTargetsOnExactPort(this._authoritativeSessionPolicy?.port ?? port);
+      }
+      setAuthoritativeSessionPolicy(policy) {
+        this._authoritativeSessionPolicy = policy;
+        this._exactDiscoveryPort = policy.port;
+        this._reconnectDiscover = discoverExactPort;
+      }
+      clearAuthoritativeSessionPolicy() {
+        this._authoritativeSessionPolicy = void 0;
+        this._exactDiscoveryPort = void 0;
+        this._reconnectDiscover = void 0;
+      }
+      createReplacement(port) {
+        const replacement = new _CDPClient(port, this._timeNowFn);
+        if (this._authoritativeSessionPolicy) {
+          replacement.setAuthoritativeSessionPolicy(this._authoritativeSessionPolicy);
+        }
+        return replacement;
       }
       _connectFilters = {};
       _reconnectDiscover;
       _exactDiscoveryPort;
+      authoritativeDiscover = async (_port, filtersOrPlatform) => {
+        const policy = this._authoritativeSessionPolicy;
+        if (!policy)
+          throw new Error("Authoritative session policy is unavailable");
+        const filters = typeof filtersOrPlatform === "string" ? { platform: filtersOrPlatform } : filtersOrPlatform ?? {};
+        return discoverAuthoritativeTarget(policy, filters);
+      };
+      async connectWithCurrentPolicy(portHint, filters, intent) {
+        const policy = this._authoritativeSessionPolicy;
+        const result = await autoConnect(this.buildConnectCtx(), policy?.port ?? this._exactDiscoveryPort ?? portHint, policy ? { ...filters, ...policy.filters, targetId: void 0 } : filters, intent, policy ? this.authoritativeDiscover : this._reconnectDiscover);
+        await this.verifyAuthoritativeConnection();
+        return result;
+      }
       async discoverAndConnect(portHint, filters) {
-        return discoverAndConnect(this.buildConnectCtx(), this._exactDiscoveryPort ?? portHint, filters, this._reconnectDiscover);
+        const policy = this._authoritativeSessionPolicy;
+        const result = await discoverAndConnect(this.buildConnectCtx(), policy?.port ?? this._exactDiscoveryPort ?? portHint, policy ? { ...filters ?? {}, ...policy.filters, targetId: void 0 } : filters, policy ? this.authoritativeDiscover : this._reconnectDiscover);
+        await this.verifyAuthoritativeConnection();
+        return result;
+      }
+      async verifyAuthoritativeConnection() {
+        if (!this._authoritativeSessionPolicy)
+          return;
+        try {
+          await this._authoritativeSessionPolicy.verifyAndReconcile(this);
+        } catch (error2) {
+          this.rejectAllPending(new Error("Authoritative runtime verification failed"));
+          if (this.ws) {
+            this.ws.removeAllListeners();
+            if (this.ws.readyState === wrapper_default.OPEN || this.ws.readyState === wrapper_default.CONNECTING) {
+              this.ws.close();
+            }
+            this.ws = null;
+          }
+          resetState(this.buildResettableState());
+          clearActiveFlag();
+          throw error2;
+        }
       }
       async softReconnect() {
         const wasProxyActive = this._proxyUrl !== null;
@@ -82174,6 +82249,25 @@ var init_local_authority_probe = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/dev-client-authority.js
+async function reconcileAuthoritativeBundle(status, dependencies) {
+  const prior = status.bindings.bundle;
+  if (!prior) {
+    throw new Error("BUNDLE_HANDSHAKE_UNAVAILABLE: durable bundle authority is unavailable");
+  }
+  const bundle = await dependencies.verifyRuntime();
+  if (dependencies.hasActiveOperation())
+    return;
+  const priorTargetId = String(prior.targetId);
+  const nextTargetId = String(bundle.targetId);
+  const metroPort = String(status.bindings.metroPort);
+  dependencies.commit({
+    expectedAuthorityVersion: status.authorityVersion,
+    state: "ready",
+    bindings: { bundle },
+    releaseResources: priorTargetId !== nextTargetId ? [{ type: "target", key: `${metroPort}:${priorTargetId}` }] : [],
+    claimResources: priorTargetId !== nextTargetId ? [{ type: "target", key: `${metroPort}:${nextTargetId}` }] : []
+  });
+}
 function buildBundleAuthorityBinding(input) {
   return {
     sessionId: input.sessionId,
@@ -82338,10 +82432,11 @@ async function pinSessionDevClient(status, options) {
   }
   if (options.force) {
     const current = getClient();
+    current.clearAuthoritativeSessionPolicy();
     await current.disconnect();
     setClient(createClient(metro.port));
   }
-  return pinExactDevClient({
+  const bundle = await pinExactDevClient({
     sessionId: status.sessionId,
     metroInstanceId: metro.instanceId,
     worktreeKey: status.worktreeKey,
@@ -82396,6 +82491,28 @@ async function pinSessionDevClient(status, options) {
       return parsed?.status === "signed" && parsed.marker ? { status: "signed", marker: parsed.marker } : null;
     }
   });
+  getClient().setAuthoritativeSessionPolicy(createAuthoritativeSessionPolicy(status));
+  return bundle;
+}
+function createAuthoritativeSessionPolicy(status) {
+  const device = status.bindings.device;
+  const metroPort = Number(status.bindings.metroPort);
+  return {
+    port: metroPort,
+    filters: { platform: device.platform, bundleId: device.appId },
+    resolveTargetId: async (targets) => {
+      const exactCandidates = await filterTargetsForExactDevice({
+        platform: device.platform,
+        deviceId: device.deviceId,
+        targets
+      }, { execute: execFileP });
+      if (exactCandidates.length !== 1) {
+        throw new Error(`CDP_TARGET_AUTHORITY_MISMATCH: expected one target on the exact device, found ${exactCandidates.length}`);
+      }
+      return exactCandidates[0].id;
+    },
+    verifyAndReconcile: reconcileAuthoritativeConnection
+  };
 }
 async function connectExactSessionTarget(input, timeoutMs) {
   let exactClient = getClient();
@@ -82535,6 +82652,20 @@ async function rebindSessionRuntime(status) {
     connectionGeneration: client2.connectionGeneration
   });
 }
+async function reconcileAuthoritativeConnection(connectedClient) {
+  if (getClient() !== connectedClient) {
+    throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: authoritative client was replaced");
+  }
+  const available = authorityRuntime.requireAvailable();
+  const status = available.registry.getSessionStatus(available.session.sessionId);
+  if (!status)
+    throw new Error("BUNDLE_HANDSHAKE_UNAVAILABLE: session authority is unavailable");
+  await reconcileAuthoritativeBundle(status, {
+    verifyRuntime: () => rebindSessionRuntime(status),
+    hasActiveOperation: () => available.registry.currentOperation() !== void 0,
+    commit: (input) => available.registry.updateBindings(available.session, input)
+  });
+}
 async function disconnectBoundSession() {
   const disconnected = await disconnectClientHandler({});
   if (disconnected.isError)
@@ -82551,6 +82682,7 @@ async function disconnectBoundSession() {
       bindings: { bundle: null }
     });
   }
+  getClient().clearAuthoritativeSessionPolicy();
   return disconnected;
 }
 function proofAuthority(runId) {
@@ -82674,7 +82806,7 @@ async function main() {
     });
   }
 }
-var pkgPath, pkgVersion, lockfile, diagnosticContractProbe, noLock, client, getClient, setClient, createClient, execFileP, mustOk, makeReplayDeps, server2, strictProofMonitor, authorityRuntime, localAuthorityProbe, authorityGate, blindProbeContext, mirrorCfg, mirrorManager2, liveEnabled, liveDeps, getSessionSignerCapability, sessionHandler, disconnectClientHandler, connectBoundSession, resolveNativeProofDevice, proofReadiness, proofCaptureHandler, e2ePreflight, e2eReload, e2eSuiteHandler, e2eCsrfToken, projectRootFor, triggerE2eRun, runActionHandler, observeRunActionHandler, observeTriggerRun, gatedObserveState, shutdown, stopParentWatch;
+var pkgPath, pkgVersion, lockfile, diagnosticContractProbe, noLock, client, getClient, setClient, createClient, execFileP, mustOk, makeReplayDeps, server2, strictProofMonitor, authorityRuntime, localAuthorityProbe, authorityGate, blindProbeContext, mirrorCfg, mirrorManager2, liveEnabled, liveDeps, persistedAuthorityStatus, getSessionSignerCapability, sessionHandler, disconnectClientHandler, connectBoundSession, resolveNativeProofDevice, proofReadiness, proofCaptureHandler, e2ePreflight, e2eReload, e2eSuiteHandler, e2eCsrfToken, projectRootFor, triggerE2eRun, runActionHandler, observeRunActionHandler, observeTriggerRun, gatedObserveState, shutdown, stopParentWatch;
 var init_index = __esm({
   "packages/rn-dev-agent-core/dist/index.js"() {
     "use strict";
@@ -82827,7 +82959,10 @@ var init_index = __esm({
     setClient = (c) => {
       client = c;
     };
-    createClient = (port) => new CDPClient(port);
+    createClient = (port) => {
+      const status = authorityRuntime.status();
+      return status.available && status.bindings.bundle ? client.createReplacement(port) : new CDPClient(port);
+    };
     execFileP = promisify28(execFile26);
     mustOk = (res, what) => {
       const env = JSON.parse(res.content[0].text);
@@ -83146,6 +83281,10 @@ var init_index = __esm({
       },
       isMirrorActive: () => mirrorManager2?.isStreaming() ?? false
     });
+    persistedAuthorityStatus = authorityRuntime.status();
+    if (persistedAuthorityStatus.available && persistedAuthorityStatus.bindings.bundle) {
+      getClient().setAuthoritativeSessionPolicy(createAuthoritativeSessionPolicy(persistedAuthorityStatus));
+    }
     getSessionSignerCapability = (sessionId) => {
       const currentSecretPath = process.env.RN_DEV_AGENT_SESSION_SECRET_PATH;
       if (!currentSecretPath)

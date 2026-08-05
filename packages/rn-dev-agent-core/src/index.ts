@@ -194,7 +194,11 @@ import { bindNativeRunner, unbindNativeRunner } from './session/runner-binding.j
 import { claimOptionalBundleAuthority, createAuthorityGate } from './session/authority-gate.js';
 import { createLocalAuthorityProbe } from './session/local-authority-probe.js';
 import { readJsonStateFile } from './util/secure-state-file.js';
-import { buildBundleAuthorityBinding, pinExactDevClient } from './session/dev-client-authority.js';
+import {
+  buildBundleAuthorityBinding,
+  pinExactDevClient,
+  reconcileAuthoritativeBundle,
+} from './session/dev-client-authority.js';
 import { createRegisteredConnectHandler } from './session/registered-connect.js';
 import {
   verifyMetroAuthorityMarker,
@@ -263,7 +267,12 @@ const getClient = (): CDPClient => client;
 const setClient = (c: CDPClient): void => {
   client = c;
 };
-const createClient = (port: number): CDPClient => new CDPClient(port);
+const createClient = (port: number): CDPClient => {
+  const status = authorityRuntime.status();
+  return status.available && status.bindings.bundle
+    ? client.createReplacement(port)
+    : new CDPClient(port);
+};
 
 const execFileP = promisify(execFile);
 
@@ -756,10 +765,11 @@ async function pinSessionDevClient(status: SessionStatus, options: { force: bool
   }
   if (options.force) {
     const current = getClient();
+    current.clearAuthoritativeSessionPolicy();
     await current.disconnect();
     setClient(createClient(metro.port));
   }
-  return pinExactDevClient(
+  const bundle = await pinExactDevClient(
     {
       sessionId: status.sessionId,
       metroInstanceId: metro.instanceId,
@@ -825,6 +835,38 @@ async function pinSessionDevClient(status: SessionStatus, options: { force: bool
       },
     },
   );
+  getClient().setAuthoritativeSessionPolicy(createAuthoritativeSessionPolicy(status));
+  return bundle;
+}
+
+function createAuthoritativeSessionPolicy(status: SessionStatus) {
+  const device = status.bindings.device as {
+    platform: 'ios' | 'android';
+    deviceId: string;
+    appId: string;
+  };
+  const metroPort = Number(status.bindings.metroPort);
+  return {
+    port: metroPort,
+    filters: { platform: device.platform, bundleId: device.appId },
+    resolveTargetId: async (targets: import('./types.js').HermesTarget[]) => {
+      const exactCandidates = await filterTargetsForExactDevice(
+        {
+          platform: device.platform,
+          deviceId: device.deviceId,
+          targets,
+        },
+        { execute: execFileP },
+      );
+      if (exactCandidates.length !== 1) {
+        throw new Error(
+          `CDP_TARGET_AUTHORITY_MISMATCH: expected one target on the exact device, found ${exactCandidates.length}`,
+        );
+      }
+      return exactCandidates[0]!.id;
+    },
+    verifyAndReconcile: reconcileAuthoritativeConnection,
+  };
 }
 
 async function connectExactSessionTarget(
@@ -1050,6 +1092,27 @@ async function rebindSessionRuntime(status: SessionStatus): Promise<Record<strin
   });
 }
 
+async function reconcileAuthoritativeConnection(connectedClient: CDPClient): Promise<void> {
+  if (getClient() !== connectedClient) {
+    throw new Error('CDP_TARGET_AUTHORITY_MISMATCH: authoritative client was replaced');
+  }
+  const available = authorityRuntime.requireAvailable();
+  const status = available.registry.getSessionStatus(available.session.sessionId);
+  if (!status) throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: session authority is unavailable');
+  await reconcileAuthoritativeBundle(status, {
+    verifyRuntime: () => rebindSessionRuntime(status),
+    hasActiveOperation: () => available.registry.currentOperation() !== undefined,
+    commit: (input) => available.registry.updateBindings(available.session, input),
+  });
+}
+
+const persistedAuthorityStatus = authorityRuntime.status();
+if (persistedAuthorityStatus.available && persistedAuthorityStatus.bindings.bundle) {
+  getClient().setAuthoritativeSessionPolicy(
+    createAuthoritativeSessionPolicy(persistedAuthorityStatus),
+  );
+}
+
 const getSessionSignerCapability = (sessionId?: string): string | null => {
   const currentSecretPath = process.env.RN_DEV_AGENT_SESSION_SECRET_PATH;
   if (!currentSecretPath) return null;
@@ -1082,6 +1145,7 @@ async function disconnectBoundSession() {
       bindings: { bundle: null },
     });
   }
+  getClient().clearAuthoritativeSessionPolicy();
   return disconnected;
 }
 

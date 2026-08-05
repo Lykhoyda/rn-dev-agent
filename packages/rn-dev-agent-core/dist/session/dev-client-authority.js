@@ -1,4 +1,27 @@
 import { verifyMetroAuthorityMarker } from './metro-authority.js';
+export async function reconcileAuthoritativeBundle(status, dependencies) {
+    const prior = status.bindings.bundle;
+    if (!prior) {
+        throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: durable bundle authority is unavailable');
+    }
+    const bundle = await dependencies.verifyRuntime();
+    if (dependencies.hasActiveOperation())
+        return;
+    const priorTargetId = String(prior.targetId);
+    const nextTargetId = String(bundle.targetId);
+    const metroPort = String(status.bindings.metroPort);
+    dependencies.commit({
+        expectedAuthorityVersion: status.authorityVersion,
+        state: 'ready',
+        bindings: { bundle },
+        releaseResources: priorTargetId !== nextTargetId
+            ? [{ type: 'target', key: `${metroPort}:${priorTargetId}` }]
+            : [],
+        claimResources: priorTargetId !== nextTargetId
+            ? [{ type: 'target', key: `${metroPort}:${nextTargetId}` }]
+            : [],
+    });
+}
 export function buildBundleAuthorityBinding(input) {
     return {
         sessionId: input.sessionId,

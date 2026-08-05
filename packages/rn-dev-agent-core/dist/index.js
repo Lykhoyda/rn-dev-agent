@@ -111,7 +111,7 @@ import { bindNativeRunner, unbindNativeRunner } from './session/runner-binding.j
 import { claimOptionalBundleAuthority, createAuthorityGate } from './session/authority-gate.js';
 import { createLocalAuthorityProbe } from './session/local-authority-probe.js';
 import { readJsonStateFile } from './util/secure-state-file.js';
-import { buildBundleAuthorityBinding, pinExactDevClient } from './session/dev-client-authority.js';
+import { buildBundleAuthorityBinding, pinExactDevClient, reconcileAuthoritativeBundle, } from './session/dev-client-authority.js';
 import { createRegisteredConnectHandler } from './session/registered-connect.js';
 import { verifyMetroAuthorityMarker, } from './session/metro-authority.js';
 import { filterTargetsForExactDevice, proveTargetDeviceAssociation, } from './session/target-device-authority.js';
@@ -169,7 +169,12 @@ const getClient = () => client;
 const setClient = (c) => {
     client = c;
 };
-const createClient = (port) => new CDPClient(port);
+const createClient = (port) => {
+    const status = authorityRuntime.status();
+    return status.available && status.bindings.bundle
+        ? client.createReplacement(port)
+        : new CDPClient(port);
+};
 const execFileP = promisify(execFile);
 // Parse an MCP envelope; throw when the handler reported failure.
 const mustOk = (res, what) => {
@@ -602,10 +607,11 @@ async function pinSessionDevClient(status, options) {
     }
     if (options.force) {
         const current = getClient();
+        current.clearAuthoritativeSessionPolicy();
         await current.disconnect();
         setClient(createClient(metro.port));
     }
-    return pinExactDevClient({
+    const bundle = await pinExactDevClient({
         sessionId: status.sessionId,
         metroInstanceId: metro.instanceId,
         worktreeKey: status.worktreeKey,
@@ -664,6 +670,28 @@ async function pinSessionDevClient(status, options) {
                 : null;
         },
     });
+    getClient().setAuthoritativeSessionPolicy(createAuthoritativeSessionPolicy(status));
+    return bundle;
+}
+function createAuthoritativeSessionPolicy(status) {
+    const device = status.bindings.device;
+    const metroPort = Number(status.bindings.metroPort);
+    return {
+        port: metroPort,
+        filters: { platform: device.platform, bundleId: device.appId },
+        resolveTargetId: async (targets) => {
+            const exactCandidates = await filterTargetsForExactDevice({
+                platform: device.platform,
+                deviceId: device.deviceId,
+                targets,
+            }, { execute: execFileP });
+            if (exactCandidates.length !== 1) {
+                throw new Error(`CDP_TARGET_AUTHORITY_MISMATCH: expected one target on the exact device, found ${exactCandidates.length}`);
+            }
+            return exactCandidates[0].id;
+        },
+        verifyAndReconcile: reconcileAuthoritativeConnection,
+    };
 }
 async function connectExactSessionTarget(input, timeoutMs) {
     let exactClient = getClient();
@@ -823,6 +851,24 @@ async function rebindSessionRuntime(status) {
         connectionGeneration: client.connectionGeneration,
     });
 }
+async function reconcileAuthoritativeConnection(connectedClient) {
+    if (getClient() !== connectedClient) {
+        throw new Error('CDP_TARGET_AUTHORITY_MISMATCH: authoritative client was replaced');
+    }
+    const available = authorityRuntime.requireAvailable();
+    const status = available.registry.getSessionStatus(available.session.sessionId);
+    if (!status)
+        throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: session authority is unavailable');
+    await reconcileAuthoritativeBundle(status, {
+        verifyRuntime: () => rebindSessionRuntime(status),
+        hasActiveOperation: () => available.registry.currentOperation() !== undefined,
+        commit: (input) => available.registry.updateBindings(available.session, input),
+    });
+}
+const persistedAuthorityStatus = authorityRuntime.status();
+if (persistedAuthorityStatus.available && persistedAuthorityStatus.bindings.bundle) {
+    getClient().setAuthoritativeSessionPolicy(createAuthoritativeSessionPolicy(persistedAuthorityStatus));
+}
 const getSessionSignerCapability = (sessionId) => {
     const currentSecretPath = process.env.RN_DEV_AGENT_SESSION_SECRET_PATH;
     if (!currentSecretPath)
@@ -856,6 +902,7 @@ async function disconnectBoundSession() {
             bindings: { bundle: null },
         });
     }
+    getClient().clearAuthoritativeSessionPolicy();
     return disconnected;
 }
 trackedTool('rn_session', 'Inspect and transition the fenced rn-dev-agent authority session. Status reconciles lost managed Metro authority without touching the app; bind, handoff, adoption, recovery, managed Metro cleanup, and release actions are fail-closed.', {

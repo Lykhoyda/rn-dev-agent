@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { CDPClient } from '../../../dist/cdp-client.js';
+import {
+  CDPClient,
+  discoverAuthoritativeTarget,
+} from '../../../dist/cdp-client.js';
 import { discoverExactPort, listTargetsOnExactPort } from '../../../dist/cdp/discovery.js';
 
 const managedPort = 8341;
@@ -88,6 +91,63 @@ test('exact-port discovery survives reconnects and ordinary entry points for the
     assert.deepEqual(requested, [`http://127.0.0.1:${managedPort}/json/list`]);
   } finally {
     await client.disconnect();
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('authoritative discovery re-resolves rotated target IDs from the managed port', async () => {
+  const requestedFilters: Record<string, unknown>[] = [];
+  const selected = await discoverAuthoritativeTarget(
+    {
+      port: managedPort,
+      filters: { platform: 'ios', bundleId: 'com.example.app' },
+      resolveTargetId: async (targets) => targets[0]!.id,
+      verifyAndReconcile: async () => {},
+    },
+    { targetId: 'stale-target', platform: 'android', bundleId: 'com.foreign.app' },
+    async (port, filters) => {
+      requestedFilters.push(filters as Record<string, unknown>);
+      return { port, targets: [bridgelessTarget({ id: 'rotated-target' })] };
+    },
+  );
+
+  assert.equal(selected.port, managedPort);
+  assert.equal(selected.targets[0]?.id, 'rotated-target');
+  assert.deepEqual(requestedFilters, [
+    {
+      targetId: undefined,
+      platform: 'ios',
+      bundleId: 'com.example.app',
+      preferredBundleId: undefined,
+    },
+  ]);
+});
+
+test('replacement clients retain exact-port policy across ordinary entry points', async () => {
+  const client = new CDPClient(ambientPort);
+  client.setAuthoritativeSessionPolicy({
+    port: managedPort,
+    filters: { platform: 'ios', bundleId: 'com.example.app' },
+    resolveTargetId: async () => 'managed-target',
+    verifyAndReconcile: async () => {
+      throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: signed marker rejected');
+    },
+  });
+  const replacement = client.createReplacement(ambientPort);
+  const originalFetch = globalThis.fetch;
+  const requested: string[] = [];
+  globalThis.fetch = (async (url: string | URL | Request) => {
+    requested.push(String(url));
+    return { json: async () => [] } as unknown as Response;
+  }) as typeof fetch;
+  try {
+    await replacement.listTargets(ambientPort);
+    assert.deepEqual(requested, [`http://127.0.0.1:${managedPort}/json/list`]);
+    await assert.rejects(replacement.autoConnect(ambientPort), /PLATFORM_TARGET_NOT_FOUND/);
+    assert.equal(replacement.isConnected, false);
+  } finally {
+    await client.disconnect();
+    await replacement.disconnect();
     globalThis.fetch = originalFetch;
   }
 });

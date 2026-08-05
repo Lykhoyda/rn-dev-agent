@@ -376,6 +376,10 @@ export class SessionRegistry {
     return this.#operationContext.run(operation, callback);
   }
 
+  currentOperation(): OperationRef | undefined {
+    return this.#operationContext.getStore();
+  }
+
   createSession(input: {
     sessionId: string;
     sourceKey: string;
