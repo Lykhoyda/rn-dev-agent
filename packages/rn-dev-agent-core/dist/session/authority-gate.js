@@ -357,6 +357,19 @@ function resultIsCanonicalSuccess(result) {
         return false;
     }
 }
+function resultAllowsOriginProof(result) {
+    const first = result?.content?.[0];
+    if (!first?.text)
+        return true;
+    try {
+        const envelope = JSON.parse(first.text);
+        const provenance = envelope.meta?.snapshotProvenance;
+        return provenance?.source !== 'cache' || provenance.originAuthority === 'proven';
+    }
+    catch {
+        return true;
+    }
+}
 function proofDiscardConfirmed(result) {
     if (!result || typeof result !== 'object')
         return false;
@@ -1194,9 +1207,12 @@ export function createAuthorityGate(runtime, dependencies) {
                 const finalManagedBundle = managedOriginCompletedWithTarget
                     ? managedBundleObservations.at(-1)
                     : undefined;
-                const receiptObservations = finalOrigin
-                    ? [...after, finalOrigin, ...(finalManagedBundle ? [finalManagedBundle] : [])]
-                    : [...after, ...(optionalNativeOriginProven ? optionalNativeOriginAfter : [])];
+                const resultOriginProvenanceAllowsProof = resultAllowsOriginProof(result);
+                const effectiveFinalOrigin = resultOriginProvenanceAllowsProof ? finalOrigin : undefined;
+                const effectiveOptionalNativeOriginProven = resultOriginProvenanceAllowsProof && optionalNativeOriginProven;
+                const receiptObservations = effectiveFinalOrigin
+                    ? [...after, effectiveFinalOrigin, ...(finalManagedBundle ? [finalManagedBundle] : [])]
+                    : [...after, ...(effectiveOptionalNativeOriginProven ? optionalNativeOriginAfter : [])];
                 const receiptBaseProfile = managedTargetAbsent
                     ? {
                         ...effectiveProfile,
@@ -1209,7 +1225,7 @@ export function createAuthorityGate(runtime, dependencies) {
                         axes: receiptBaseProfile.axes.filter((axis) => axis !== 'R'),
                     }
                     : receiptBaseProfile;
-                const receiptProfile = finalOrigin
+                const receiptProfile = effectiveFinalOrigin
                     ? {
                         ...runnerAwareReceiptProfile,
                         axes: [
@@ -1218,7 +1234,7 @@ export function createAuthorityGate(runtime, dependencies) {
                             ...(finalManagedBundle ? ['B'] : []),
                         ],
                     }
-                    : optionalNativeOriginProven
+                    : effectiveOptionalNativeOriginProven
                         ? {
                             ...runnerAwareReceiptProfile,
                             axes: [...runnerAwareReceiptProfile.axes, 'M', 'A'],
@@ -1254,7 +1270,10 @@ export function createAuthorityGate(runtime, dependencies) {
                         operation = null;
                     }
                 }
-                const nativeOriginProven = profile.axes.includes('A') || Boolean(finalOrigin) || optionalNativeOriginProven;
+                const nativeOriginProven = resultOriginProvenanceAllowsProof &&
+                    (profile.axes.includes('A') ||
+                        Boolean(effectiveFinalOrigin) ||
+                        effectiveOptionalNativeOriginProven);
                 if (!resultIsCanonicalSuccess(result)) {
                     return addMeta(result, {
                         authoritative: false,

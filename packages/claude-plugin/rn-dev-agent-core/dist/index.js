@@ -29683,6 +29683,18 @@ function resultIsCanonicalSuccess(result) {
     return false;
   }
 }
+function resultAllowsOriginProof(result) {
+  const first = result?.content?.[0];
+  if (!first?.text)
+    return true;
+  try {
+    const envelope = JSON.parse(first.text);
+    const provenance = envelope.meta?.snapshotProvenance;
+    return provenance?.source !== "cache" || provenance.originAuthority === "proven";
+  } catch {
+    return true;
+  }
+}
 function proofDiscardConfirmed(result) {
   if (!result || typeof result !== "object")
     return false;
@@ -30399,7 +30411,10 @@ function createAuthorityGate(runtime, dependencies) {
         })));
         const finalOrigin = managedOriginCompletedWithTarget ? managedOriginObservations.at(-1) : void 0;
         const finalManagedBundle = managedOriginCompletedWithTarget ? managedBundleObservations.at(-1) : void 0;
-        const receiptObservations = finalOrigin ? [...after, finalOrigin, ...finalManagedBundle ? [finalManagedBundle] : []] : [...after, ...optionalNativeOriginProven ? optionalNativeOriginAfter : []];
+        const resultOriginProvenanceAllowsProof = resultAllowsOriginProof(result);
+        const effectiveFinalOrigin = resultOriginProvenanceAllowsProof ? finalOrigin : void 0;
+        const effectiveOptionalNativeOriginProven = resultOriginProvenanceAllowsProof && optionalNativeOriginProven;
+        const receiptObservations = effectiveFinalOrigin ? [...after, effectiveFinalOrigin, ...finalManagedBundle ? [finalManagedBundle] : []] : [...after, ...effectiveOptionalNativeOriginProven ? optionalNativeOriginAfter : []];
         const receiptBaseProfile = managedTargetAbsent ? {
           ...effectiveProfile,
           axes: effectiveProfile.axes.filter((axis) => axis !== "B")
@@ -30408,14 +30423,14 @@ function createAuthorityGate(runtime, dependencies) {
           ...receiptBaseProfile,
           axes: receiptBaseProfile.axes.filter((axis) => axis !== "R")
         } : receiptBaseProfile;
-        const receiptProfile = finalOrigin ? {
+        const receiptProfile = effectiveFinalOrigin ? {
           ...runnerAwareReceiptProfile,
           axes: [
             ...runnerAwareReceiptProfile.axes,
             "A",
             ...finalManagedBundle ? ["B"] : []
           ]
-        } : optionalNativeOriginProven ? {
+        } : effectiveOptionalNativeOriginProven ? {
           ...runnerAwareReceiptProfile,
           axes: [...runnerAwareReceiptProfile.axes, "M", "A"]
         } : runnerAwareReceiptProfile;
@@ -30444,7 +30459,7 @@ function createAuthorityGate(runtime, dependencies) {
             operation = null;
           }
         }
-        const nativeOriginProven = profile.axes.includes("A") || Boolean(finalOrigin) || optionalNativeOriginProven;
+        const nativeOriginProven = resultOriginProvenanceAllowsProof && (profile.axes.includes("A") || Boolean(effectiveFinalOrigin) || effectiveOptionalNativeOriginProven);
         if (!resultIsCanonicalSuccess(result)) {
           return addMeta2(result, {
             authoritative: false,
@@ -33158,8 +33173,16 @@ async function fetchSnapshotNodes(allowCache = false) {
     const platform2 = getActiveSession()?.platform;
     if (platform2 && isSnapshotCacheValid(platform2)) {
       const cached2 = getCachedSnapshot(platform2);
-      if (cached2)
-        return { ok: true, nodes: cached2.nodes };
+      if (cached2) {
+        return {
+          ok: true,
+          nodes: cached2.nodes,
+          provenance: {
+            source: "cache",
+            originAuthority: cached2.authorityReceipt.originAuthority
+          }
+        };
+      }
     }
   }
   const first = await runNative(["snapshot", "-i"]);
@@ -33172,7 +33195,11 @@ async function fetchSnapshotNodes(allowCache = false) {
     const platform2 = getActiveSession()?.platform;
     if (platform2)
       cacheSnapshot(platform2, initialNodes);
-    return { ok: true, nodes: initialNodes };
+    return {
+      ok: true,
+      nodes: initialNodes,
+      provenance: { source: "fresh", originAuthority: "not-proven" }
+    };
   }
   const session2 = getActiveSession();
   markSnapshotDirty(session2?.platform);
@@ -33203,7 +33230,12 @@ async function fetchSnapshotNodes(allowCache = false) {
   const platform = getActiveSession()?.platform;
   if (platform)
     cacheSnapshot(platform, recoveredNodes);
-  return { ok: true, nodes: recoveredNodes, recoveredTier: recovery.tier };
+  return {
+    ok: true,
+    nodes: recoveredNodes,
+    provenance: { source: "fresh", originAuthority: "not-proven" },
+    recoveredTier: recovery.tier
+  };
 }
 function emptyCaptureFailResult(query) {
   return failResult(`Snapshot returned zero nodes \u2014 cannot distinguish an empty screen from a degraded capture` + (query !== void 0 ? `; not asserting "${query}" is absent` : "") + `. Confirm the screen with device_screenshot or cdp_component_tree, then retry.`, { code: "SNAPSHOT_DEGRADED", ...query !== void 0 ? { query } : {} });
@@ -33222,7 +33254,12 @@ async function fetchFindCandidates(query, exact = false, allowCache = false) {
   });
   const ranked = rankSnapshotNodes(matched);
   const candidates = ranked.slice(0, 10).map(candidateFromNode);
-  return { ok: true, candidates, recoveredTier: snap.recoveredTier };
+  return {
+    ok: true,
+    candidates,
+    provenance: snap.provenance,
+    recoveredTier: snap.recoveredTier
+  };
 }
 function runnerLeakFailResult(query, recoveryReason) {
   const queryHint = query ? ` (while resolving "${query}")` : "";
@@ -33241,13 +33278,21 @@ async function pressCandidate(candidate, action, getClient2) {
   }
   return okResult({ ref: candidate.ref, label: candidate.label, testID: candidate.testID });
 }
-function tagPressIfRecovered(result, tier) {
-  if (!tier || result.isError)
-    return result;
+function tagFindSnapshot(result, provenance, tier) {
   try {
     const envelope = JSON.parse(result.content[0].text);
-    envelope.meta = { ...envelope.meta, recovered: "agent-device-runner-leak", recoveryTier: tier };
-    return { content: [{ type: "text", text: JSON.stringify(envelope) }] };
+    envelope.meta = {
+      ...envelope.meta,
+      snapshotProvenance: provenance,
+      ...tier ? { recovered: "agent-device-runner-leak", recoveryTier: tier } : {}
+    };
+    return {
+      ...result,
+      content: [
+        { type: "text", text: JSON.stringify(envelope) },
+        ...result.content.slice(1)
+      ]
+    };
   } catch {
     return result;
   }
@@ -33265,28 +33310,33 @@ function createDeviceFindHandler(getClient2) {
         }
         return failResult(`Snapshot unavailable \u2014 cannot resolve ${args.exact ? "exact" : "index-based"} match for "${args.text}". Retry after device_snapshot action=open/snapshot.`, { code: "SNAPSHOT_UNAVAILABLE", query: args.text });
       }
-      const { candidates, recoveredTier } = find;
+      const { candidates, provenance, recoveredTier } = find;
+      const tagResult = (result) => tagFindSnapshot(result, provenance, recoveredTier);
       if (candidates.length === 0) {
-        return failResult(`No element matches "${args.text}" (exact=${args.exact === true})`, {
+        return tagResult(failResult(`No element matches "${args.text}" (exact=${args.exact === true})`, {
           code: "NOT_FOUND",
           query: args.text
-        });
+        }));
       }
       if (args.index !== void 0) {
         if (args.index < 0 || args.index >= candidates.length) {
-          return failResult(`index ${args.index} out of range (got ${candidates.length} candidates)`, { code: "INDEX_OUT_OF_RANGE", count: candidates.length, candidates });
+          return tagResult(failResult(`index ${args.index} out of range (got ${candidates.length} candidates)`, {
+            code: "INDEX_OUT_OF_RANGE",
+            count: candidates.length,
+            candidates
+          }));
         }
-        return tagPressIfRecovered(await pressCandidate(candidates[args.index], args.action, getClient2), recoveredTier);
+        return tagResult(await pressCandidate(candidates[args.index], args.action, getClient2));
       }
       if (candidates.length === 1) {
-        return tagPressIfRecovered(await pressCandidate(candidates[0], args.action, getClient2), recoveredTier);
+        return tagResult(await pressCandidate(candidates[0], args.action, getClient2));
       }
-      return failResult(`AMBIGUOUS_MATCH: exact "${args.text}" matched ${candidates.length} elements`, {
+      return tagResult(failResult(`AMBIGUOUS_MATCH: exact "${args.text}" matched ${candidates.length} elements`, {
         code: "AMBIGUOUS_MATCH",
         query: args.text,
         candidates,
         hint: "Add index: N to pick one."
-      });
+      }));
     }
     const activeSession2 = getActiveSession();
     const usesInTreeRunner = activeSession2?.platform === "ios" || activeSession2?.platform === "android" && process.env.RN_ANDROID_RUNNER !== "0";
@@ -33304,25 +33354,26 @@ function createDeviceFindHandler(getClient2) {
           query: args.text
         });
       }
-      const { candidates, recoveredTier } = find;
+      const { candidates, provenance, recoveredTier } = find;
+      const tagResult = (result) => tagFindSnapshot(result, provenance, recoveredTier);
       const recoveredMeta = recoveredTier ? { recoveredTier } : {};
       if (candidates.length === 0) {
-        return failResult(`No element matches "${args.text}"`, {
+        return tagResult(failResult(`No element matches "${args.text}"`, {
           code: "NOT_FOUND",
           query: args.text,
           ...recoveredMeta
-        });
+        }));
       }
       if (candidates.length === 1) {
-        return tagPressIfRecovered(await pressCandidate(candidates[0], args.action, getClient2), recoveredTier);
+        return tagResult(await pressCandidate(candidates[0], args.action, getClient2));
       }
-      return failResult(`AMBIGUOUS_MATCH: "${args.text}" matched ${candidates.length} elements. Use device_press with one of these refs, or retry with index: N.`, {
+      return tagResult(failResult(`AMBIGUOUS_MATCH: "${args.text}" matched ${candidates.length} elements. Use device_press with one of these refs, or retry with index: N.`, {
         code: "AMBIGUOUS_MATCH",
         query: args.text,
         candidates,
         ...recoveredMeta,
         hint: 'Pick the correct ref (prefer one with hittable=true) and call device_press(ref="...") directly, or call device_find again with index: N.'
-      });
+      }));
     }
     return failResult(`device_find requires an in-tree runner \u2014 iOS (rn-fast-runner) or Android with RN_ANDROID_RUNNER unset/non-zero (rn-android-runner). Active session: ${activeSession2?.platform ?? "none"}.`, {
       code: "IN_TREE_RUNNER_REQUIRED",

@@ -941,6 +941,39 @@ test('raw native control upgrades only a fully stable optional origin', async ()
   assert.deepEqual(promotedCheckpoints, [23, 23]);
 });
 
+test('raw native reads cannot launder an origin-unproven cached snapshot', async () => {
+  const { runtime } = fixture();
+  let promoted = false;
+  const gate = createAuthorityGate(runtime, {
+    snapshotCaptureCheckpoint: () => 23,
+    promoteSnapshotOrigin: () => {
+      promoted = true;
+    },
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+  });
+
+  const result = await gate.wrap('device_find', async () =>
+    okResult(
+      { ref: '@e0', label: 'Continue' },
+      {
+        meta: {
+          snapshotProvenance: { source: 'cache', originAuthority: 'not-proven' },
+        },
+      },
+    ),
+  )({ text: 'Continue' });
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, true);
+  assert.equal(envelope.meta.originAuthority, 'not-proven');
+  assert.equal(envelope.meta.authorityReceipt.originAuthority, 'not-proven');
+  assert.equal(promoted, false);
+  assert.equal(
+    envelope.meta.authorityReceipt.axes.some(({ axis }) => axis === 'M' || axis === 'A'),
+    false,
+  );
+});
+
 test('strict verdict, learned-action, and proof consumers refuse missing managed origin', async () => {
   for (const [tool, args] of [
     ['cross_platform_verify', {}],
