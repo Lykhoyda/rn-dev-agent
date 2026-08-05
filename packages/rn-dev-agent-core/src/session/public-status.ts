@@ -12,8 +12,7 @@ export type PublicSessionPhase = 'selected' | 'building' | 'running' | 'closing'
 const SELECTED_STATES = new Set(['active', 'source_bound', 'device_claimed', 'metro_bound']);
 const RUNNING_STATES = new Set(['device_bound', 'runtime_bound', 'ready']);
 
-// ADR §2.3 (L0): additive happy-path projection; non-operational states keep only
-// their internal name in `detail`.
+// ADR §2.3 (L0): non-operational states keep only their internal name in `detail`.
 function derivePublicPhase(state: string, buildPending: boolean): PublicSessionPhase | undefined {
   if (state === 'closing') return 'closing';
   if (!SELECTED_STATES.has(state) && !RUNNING_STATES.has(state)) return undefined;

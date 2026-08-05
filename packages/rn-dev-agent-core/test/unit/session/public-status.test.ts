@@ -233,8 +233,7 @@ function operationalStatus(state: string, bindings: Record<string, unknown> = {}
   };
 }
 
-// ADR §2.3 (L0): the grouped projection is additive — phase + group sub-objects appear
-// alongside every legacy field, never instead of one.
+// ADR §2.3 (L0): the grouped projection appears alongside every legacy field.
 test('L0: phase folds pre-install operational states into selected', () => {
   for (const state of ['active', 'source_bound', 'device_claimed', 'metro_bound']) {
     assert.equal(projectPublicAuthorityStatus(operationalStatus(state)).phase, 'selected', state);
