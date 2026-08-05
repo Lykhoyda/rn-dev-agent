@@ -13041,6 +13041,21 @@ var init_registry = __esm({
            WHERE session_id = ? AND claim_epoch = ? AND instr(profile, 'B') > 0
            LIMIT 1`).get(session.sessionId, session.claimEpoch));
       }
+      operationHasAxis(operation, axis) {
+        this.verifyOperation(operation);
+        return Boolean(this.#database.prepare(`SELECT operation_id FROM operations
+           WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
+             AND authority_version = ? AND instr(profile, ?) > 0`).get(operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion, axis));
+      }
+      claimOperationAxis(operation, axis) {
+        this.#transaction(() => {
+          this.verifyOperation(operation);
+          this.#database.prepare(`UPDATE operations
+           SET profile = CASE WHEN instr(profile, ?) > 0 THEN profile ELSE profile || ? END
+           WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
+             AND authority_version = ?`).run(axis, axis, operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
+        });
+      }
       createSession(input) {
         const now = this.#now();
         this.#database.prepare(`INSERT INTO sessions(
@@ -18459,7 +18474,7 @@ function invalidateRuntimeBundle(registry2, operation, status, onInvalidated) {
   return nextOperation;
 }
 async function reconcileRecoverableRuntime(runtime, dependencies, registry2, operation, status, profile) {
-  if (!profile.axes.includes("B") || !dependencies.recoverRuntimeConnection) {
+  if (!dependencies.recoverRuntimeConnection || !profile.axes.includes("B") && !registry2.operationHasAxis(operation, "B")) {
     return { operation, status, runtimeTargetChanged: false };
   }
   const recovered = await registry2.runWithOperation(operation, () => dependencies.recoverRuntimeConnection(status));
@@ -18742,6 +18757,7 @@ function createAuthorityGate(runtime, dependencies) {
               }
               if (!currentStatus.bindings.bundle)
                 return false;
+              registry2.claimOperationAxis(operation, "B");
               let observation;
               try {
                 observation = await dependencies.probe({
@@ -18964,12 +18980,10 @@ function createAuthorityGate(runtime, dependencies) {
         registry2.verifyOperation(operation);
         const result = await registry2.runWithOperation(operation, () => handler(...handlerArgs));
         let runtimeTargetChanged = false;
-        if (resultSucceeded(result)) {
-          const postHandlerRecovery = await reconcileRecoverableRuntime(runtime, dependencies, registry2, operation, status, profile);
-          operation = postHandlerRecovery.operation;
-          status = postHandlerRecovery.status;
-          runtimeTargetChanged = postHandlerRecovery.runtimeTargetChanged;
-        }
+        const postHandlerRecovery = await reconcileRecoverableRuntime(runtime, dependencies, registry2, operation, status, profile);
+        operation = postHandlerRecovery.operation;
+        status = postHandlerRecovery.status;
+        runtimeTargetChanged = postHandlerRecovery.runtimeTargetChanged;
         const containedRunner = containedRunnerAuthority(result, status.bindings.runner);
         if (containedRunner?.runnerAbsent) {
           registry2.verifyOperation(operation);

@@ -657,6 +657,23 @@ test('active bundle operations are visible outside inherited context', () => {
   assert.equal(registry.hasActiveBundleOperation(owner), false);
 });
 
+test('optional bundle ownership is durably added to an active operation', () => {
+  const { registry, create } = fixture();
+  const owner = create('a');
+  const operation = registry.beginOperation(owner, {
+    operationId: 'operation-optional-bundle',
+    tool: 'cdp_run_action',
+    profile: 'CSIMDR',
+  });
+
+  assert.equal(registry.operationHasAxis(operation, 'B'), false);
+  assert.equal(registry.hasActiveBundleOperation(owner), false);
+  registry.claimOperationAxis(operation, 'B');
+  assert.equal(registry.operationHasAxis(operation, 'B'), true);
+  assert.equal(registry.hasActiveBundleOperation(owner), true);
+  registry.endOperation(operation);
+});
+
 test('session release requires package integration restoration at every registry boundary', () => {
   const { registry, create } = fixture();
   const owner = create('a');

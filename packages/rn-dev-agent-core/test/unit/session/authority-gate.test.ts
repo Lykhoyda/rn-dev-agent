@@ -12,6 +12,7 @@ import { failResult, okResult } from '../../../dist/utils.js';
 
 function fixture() {
   const calls = [];
+  const operationAxes = new Set();
   const status = {
     available: true,
     sessionId: 'session-a',
@@ -48,6 +49,8 @@ function fixture() {
   const registry = {
     beginOperation: (_session, input) => {
       calls.push(`begin:${input.tool}`);
+      operationAxes.clear();
+      for (const axis of input.profile) operationAxes.add(axis);
       return {
         operationId: input.operationId,
         sessionId: 'session-a',
@@ -69,6 +72,11 @@ function fixture() {
       return status.claims.find((claim) => claim.type === type && claim.key === key) ?? null;
     },
     verifyOperation: () => calls.push('cas'),
+    operationHasAxis: (_operation, axis) => operationAxes.has(axis),
+    claimOperationAxis: (_operation, axis) => {
+      calls.push(`claim-operation-axis:${axis}`);
+      operationAxes.add(axis);
+    },
     runWithOperation: async (_operation, callback) => callback(),
     commitPlatformAuthorityReceipts: () => calls.push('commit-receipts'),
     endOperation: () => calls.push('end'),
@@ -227,6 +235,61 @@ test('handler-time reconnect is rebound before bundle postflight', async () => {
   assert.equal(envelope.ok, true);
   assert.ok(calls.indexOf('recover-runtime:2') < calls.indexOf('postflight:B'));
   assert.ok(calls.indexOf('replace-binding') < calls.indexOf('postflight:B'));
+});
+
+test('failed handler preserves its error after reconnect reconciliation', async () => {
+  const { calls, runtime, status } = fixture();
+  status.bindings.bundle.targetId = 'preflight-target';
+  status.bindings.bundle.connectionGeneration = 1;
+  let recoveryCalls = 0;
+  const gate = createAuthorityGate(runtime, {
+    recoverRuntimeConnection: async () => {
+      recoveryCalls += 1;
+      return recoveryCalls === 2;
+    },
+    refreshRuntimeBinding: async () => ({
+      ...status.bindings.bundle,
+      targetId: 'error-target',
+      connectionGeneration: 2,
+    }),
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+  });
+
+  const result = await gate.wrap('cdp_console_log', async () =>
+    failResult('runtime loader rejected the bundle', 'LOAD_FAILED'),
+  )({});
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, false);
+  assert.equal(envelope.code, 'LOAD_FAILED');
+  assert.equal(envelope.error, 'runtime loader rejected the bundle');
+  assert.equal(status.bindings.bundle.targetId, 'error-target');
+  assert.equal(status.bindings.bundle.connectionGeneration, 2);
+  assert.ok(calls.includes('replace-binding'));
+});
+
+test('optional bundle admission records durable operation ownership', async () => {
+  const { calls, runtime, status } = fixture();
+  status.bindings.bundle.targetId = 'target-a';
+  let recoveryCalls = 0;
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+    recoverRuntimeConnection: async () => {
+      recoveryCalls += 1;
+      return false;
+    },
+    refreshRuntimeBinding: async () => status.bindings.bundle,
+  });
+
+  const result = await gate.wrap('cdp_run_action', async (args) => {
+    assert.equal(await claimOptionalBundleAuthority(args), true);
+    return okResult({ transport: 'cdp-js' });
+  })({});
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, true);
+  assert.ok(calls.includes('claim-operation-axis:B'));
+  assert.equal(recoveryCalls, 1);
 });
 
 test('postflight drift rejects the result instead of returning a false success', async () => {

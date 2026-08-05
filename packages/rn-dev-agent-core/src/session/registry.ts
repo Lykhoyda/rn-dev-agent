@@ -6,6 +6,7 @@ import {
   type AuthorityDatabaseCtor,
 } from './authority-store.js';
 import { probeMetroListener } from './metro-binding.js';
+import type { AuthorityAxis } from './tool-profiles.js';
 
 const INITIALIZATION_WAIT = new Int32Array(new SharedArrayBuffer(4));
 export const AUTHORITY_REGISTRY_SCHEMA_VERSION = 4;
@@ -418,6 +419,46 @@ export class SessionRegistry {
         )
         .get(session.sessionId, session.claimEpoch),
     );
+  }
+
+  operationHasAxis(operation: OperationRef, axis: AuthorityAxis): boolean {
+    this.verifyOperation(operation);
+    return Boolean(
+      this.#database
+        .prepare(
+          `SELECT operation_id FROM operations
+           WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
+             AND authority_version = ? AND instr(profile, ?) > 0`,
+        )
+        .get(
+          operation.operationId,
+          operation.sessionId,
+          operation.claimEpoch,
+          operation.authorityVersion,
+          axis,
+        ),
+    );
+  }
+
+  claimOperationAxis(operation: OperationRef, axis: AuthorityAxis): void {
+    this.#transaction(() => {
+      this.verifyOperation(operation);
+      this.#database
+        .prepare(
+          `UPDATE operations
+           SET profile = CASE WHEN instr(profile, ?) > 0 THEN profile ELSE profile || ? END
+           WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
+             AND authority_version = ?`,
+        )
+        .run(
+          axis,
+          axis,
+          operation.operationId,
+          operation.sessionId,
+          operation.claimEpoch,
+          operation.authorityVersion,
+        );
+    });
   }
 
   createSession(input: {

@@ -187,6 +187,25 @@ export class SessionRegistry {
            LIMIT 1`)
             .get(session.sessionId, session.claimEpoch));
     }
+    operationHasAxis(operation, axis) {
+        this.verifyOperation(operation);
+        return Boolean(this.#database
+            .prepare(`SELECT operation_id FROM operations
+           WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
+             AND authority_version = ? AND instr(profile, ?) > 0`)
+            .get(operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion, axis));
+    }
+    claimOperationAxis(operation, axis) {
+        this.#transaction(() => {
+            this.verifyOperation(operation);
+            this.#database
+                .prepare(`UPDATE operations
+           SET profile = CASE WHEN instr(profile, ?) > 0 THEN profile ELSE profile || ? END
+           WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
+             AND authority_version = ?`)
+                .run(axis, axis, operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
+        });
+    }
     createSession(input) {
         const now = this.#now();
         this.#database

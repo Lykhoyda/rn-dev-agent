@@ -637,7 +637,10 @@ async function reconcileRecoverableRuntime(
   status: SessionStatus;
   runtimeTargetChanged: boolean;
 }> {
-  if (!profile.axes.includes('B') || !dependencies.recoverRuntimeConnection) {
+  if (
+    !dependencies.recoverRuntimeConnection ||
+    (!profile.axes.includes('B') && !registry.operationHasAxis(operation, 'B'))
+  ) {
     return { operation, status, runtimeTargetChanged: false };
   }
   const recovered = await registry.runWithOperation(operation, () =>
@@ -1064,6 +1067,7 @@ export function createAuthorityGate(
                   throw new SessionAuthorityError(currentStatus.code, currentStatus.reason);
                 }
                 if (!currentStatus.bindings.bundle) return false;
+                registry!.claimOperationAxis(operation!, 'B');
                 let observation: AuthorityObservation;
                 try {
                   observation = await dependencies.probe({
@@ -1327,19 +1331,17 @@ export function createAuthorityGate(
           registry.verifyOperation(operation);
           const result = await registry.runWithOperation(operation, () => handler(...handlerArgs));
           let runtimeTargetChanged = false;
-          if (resultSucceeded(result)) {
-            const postHandlerRecovery = await reconcileRecoverableRuntime(
-              runtime,
-              dependencies,
-              registry,
-              operation,
-              status,
-              profile,
-            );
-            operation = postHandlerRecovery.operation;
-            status = postHandlerRecovery.status;
-            runtimeTargetChanged = postHandlerRecovery.runtimeTargetChanged;
-          }
+          const postHandlerRecovery = await reconcileRecoverableRuntime(
+            runtime,
+            dependencies,
+            registry,
+            operation,
+            status,
+            profile,
+          );
+          operation = postHandlerRecovery.operation;
+          status = postHandlerRecovery.status;
+          runtimeTargetChanged = postHandlerRecovery.runtimeTargetChanged;
           const containedRunner = containedRunnerAuthority(
             result,
             status.bindings.runner as Record<string, unknown> | null | undefined,
