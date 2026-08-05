@@ -1,11 +1,19 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
+import {
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, test } from 'node:test';
 import { createSupervisorAuthority } from '../../../dist/session/supervisor-authority.js';
 import { openSessionRegistry } from '../../../dist/session/registry.js';
-import { createAuthorityStateLayout } from '../../../dist/session/state-root.js';
 
 const roots = [];
 
@@ -80,49 +88,44 @@ test('supervisor refuses to manufacture authority without process-birth proof', 
   );
 });
 
-test('supervisor initialization releases claims when shared knowledge setup fails', () => {
-  const root = mkdtempSync(join(tmpdir(), 'rn-supervisor-init-rollback-'));
+test('supervisor startup never materializes or writes through a root symlink', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-supervisor-local-root-'));
   roots.push(root);
   const stateDir = join(root, 'state');
   const project = join(root, 'project');
-  const corpus = join(root, 'corpus');
+  const foreign = join(root, 'foreign');
   mkdirSync(project);
-  mkdirSync(corpus);
-  mkdirSync(join(root, 'foreign'));
-  symlinkSync(join(root, 'foreign'), join(corpus, 'nested-link'));
-  symlinkSync(corpus, join(project, '.rn-agent'));
+  mkdirSync(foreign);
+  writeFileSync(join(foreign, 'integration.json'), 'FOREIGN-AUTHORITY');
+  symlinkSync(foreign, join(project, '.rn-agent'));
 
-  assert.throws(
-    () =>
-      createSupervisorAuthority({
-        stateDir,
-        sessionId: 'failed-initialization',
-        source: {
-          kind: 'git',
-          contentRoot: project,
-          appRoot: project,
-          sourceKey: 'source-key',
-          worktreeKey: 'worktree-key',
-          appRootKey: 'app-key',
-          head: 'abc123',
-        },
-        supervisorBirth: { pid: 101, source: 'linux-proc', token: 'supervisor-birth' },
-        uid: '501',
-        startHeartbeat: false,
-        ownerStatus: () => 'match',
-      }),
-    /SHARED_KNOWLEDGE_ROOT_UNSAFE/,
-  );
-
-  const registry = openSessionRegistry(createAuthorityStateLayout(stateDir).registry, {
+  const authority = createSupervisorAuthority({
+    stateDir,
+    source: {
+      kind: 'git',
+      contentRoot: project,
+      appRoot: project,
+      sourceKey: 'source-key',
+      worktreeKey: 'worktree-key',
+      appRootKey: 'app-key',
+      head: 'abc123',
+    },
+    supervisorBirth: { pid: 101, source: 'linux-proc', token: 'supervisor-birth' },
+    uid: '501',
+    startHeartbeat: false,
     ownerStatus: () => 'match',
   });
+
   try {
-    const status = registry.getSessionStatus('failed-initialization');
-    assert.equal(status?.state, 'released');
-    assert.deepEqual(status?.claims, []);
+    assert.equal(
+      authority.registry.getSessionStatus(authority.session.sessionId)?.state,
+      'source_bound',
+    );
+    assert.equal(lstatSync(join(project, '.rn-agent')).isSymbolicLink(), true);
+    assert.deepEqual(readdirSync(foreign), ['integration.json']);
+    assert.equal(readFileSync(join(foreign, 'integration.json'), 'utf8'), 'FOREIGN-AUTHORITY');
   } finally {
-    registry.close();
+    await authority.close();
   }
 });
 
@@ -575,13 +578,20 @@ test('supervisor close retains authority when durable Metro cleanup is unproven'
   }
 });
 
-test('a supervisor without the source claim stays blocked and exposes the full adoption ID', async () => {
-  const stateDir = mkdtempSync(join(tmpdir(), 'rn-supervisor-authority-'));
-  roots.push(stateDir);
+test('a blocked supervisor never touches a foreign .rn-agent root', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-supervisor-authority-'));
+  roots.push(root);
+  const stateDir = join(root, 'state');
+  const project = join(root, 'project');
+  const foreign = join(root, 'foreign');
+  mkdirSync(project);
+  mkdirSync(foreign);
+  writeFileSync(join(foreign, 'sentinel'), 'UNCHANGED');
+  symlinkSync(foreign, join(project, '.rn-agent'));
   const source = {
     kind: 'git' as const,
-    contentRoot: '/repo',
-    appRoot: '/repo/apps/mobile',
+    contentRoot: project,
+    appRoot: project,
     sourceKey: 'source-key',
     worktreeKey: 'worktree-key',
     appRootKey: 'app-key',
@@ -610,6 +620,9 @@ test('a supervisor without the source claim stays blocked and exposes the full a
     const status = blocked.registry.getSessionStatus(blocked.session.sessionId);
     assert.ok(status);
     assert.equal(status.state, 'blocked');
+    assert.equal(lstatSync(join(project, '.rn-agent')).isSymbolicLink(), true);
+    assert.deepEqual(readdirSync(foreign), ['sentinel']);
+    assert.equal(readFileSync(join(foreign, 'sentinel'), 'utf8'), 'UNCHANGED');
     assert.equal((status.bindings.adoptionRequired as { sessionId?: string }).sessionId, priorId);
     assert.throws(
       () =>

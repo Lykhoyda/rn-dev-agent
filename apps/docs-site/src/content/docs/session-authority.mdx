@@ -84,7 +84,7 @@ Every successful authoritative call receives a preflight/postflight authority re
 
 Observe uses its allocated port, random capability, and instance ID on every API, event-stream, state, and action request. A page from a crashed session cannot attach to a later listener.
 
-Mutable action sidecars, E2E runs, bundle state, and proof runtime state live under the session root. Recorder claims live in the session registry, while authenticated recorder sidecars and provisional media use a private user-local runtime directory; finalized media is published only to the requested output path. Canonical action YAML remains worktree knowledge. A shared `.rn-agent` symlink is materialized only when its complete corpus can be preserved; nested symlinks refuse migration.
+Mutable action sidecars, E2E runs, bundle state, and proof runtime state live under the session root. Recorder claims live in the session registry, while authenticated recorder sidecars and provisional media use a private user-local runtime directory; finalized media is published only to the requested output path. Canonical action YAML remains worktree knowledge. For a private untracked corpus, consented setup or repository-local post-checkout integration may link only `.rn-agent/actions` inside a real worktree-local `.rn-agent`; mutable integration, session state, recordings, generated launchers, and runtime data remain local, while root and unsafe nested symlinks fail closed.
 
 Strict proof receipts use schema v2 and include controller, source/dirty digest, install, Metro, initial-bundle marker, device, runner, proof, and per-event authority hashes. A worker replacement rejects an active proof rather than resuming it.
 

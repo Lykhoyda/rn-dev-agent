@@ -8,7 +8,7 @@ Run the rn-dev-agent onboarding flow. Two phases: diagnose what's installed, the
 
 ## Phase 1 — Diagnose
 
-Invoke the `rn-setup` skill (same as `/rn-dev-agent:doctor`). Walk all 16 prerequisite checks and present the table.
+Invoke the `rn-setup` skill (same as `/rn-dev-agent:doctor`). Walk all 17 prerequisite checks and present the table.
 
 **Abort thresholds.** Only the rows that block ALL plugin functionality count as critical for onboarding:
 
@@ -18,15 +18,25 @@ Invoke the `rn-setup` skill (same as `/rn-dev-agent:doctor`). Walk all 16 prereq
 
 ## Phase 2 — Inject project instructions
 
-Once diagnostics pass, perform the five steps below (A–D inject; E verifies). **Each step must show the proposed change to the user (diff or new-file content) BEFORE writing.** Ask "Apply this change? [y/n]" and wait for confirmation. Skipped steps are recorded but don't abort the flow.
+Once diagnostics pass, perform the steps below (Step 0 and A–D inject; E verifies). **Each step must show the proposed change to the user (diff or new-file content) BEFORE writing.** Ask "Apply this change? [y/n]" and wait for confirmation. Skipped steps are recorded but don't abort the flow.
+
+### 0. Linked-worktree action inheritance
+
+Run this before every scaffold write. Resolve the RN app root (the nested app directory in a monorepo), then plan with the packaged helper:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/rn-dev-agent-core/dist/worktree-inheritance.js" plan --host claude --app-root "$APP_ROOT" --json
+```
+
+The only inheritable resource is `.rn-agent/actions`. `TRACKED` remains Git-owned. For `DEST_MISSING`, preview and ask before running `apply`. For `LEGACY_ROOT_LINK`, explain that migration replaces only the recognized whole-root link with a real local `.rn-agent` plus an actions link; it never copies `integration/`, `state/`, recordings, launchers, or runtime data. Ask a second time, then pass `--allow-repair`. Refuse `LINK_FOREIGN`, collisions, unavailable sources, and Git-visible private links. Never print a source path or inspect action bodies.
+
+Offer `hook install --host claude --app-root "$APP_ROOT"` after separate consent. The repository-local `post-checkout` hook prepares ordinary future worktrees before SessionStart; it never overwrites an existing hook or managed `core.hooksPath`. SessionStart is report-only. Worktrees created with `--no-checkout` still need setup before launch.
 
 ### A. CLAUDE.md project instructions
 
 The plugin's full operating manual lives at `${CLAUDE_PLUGIN_ROOT}/CLAUDE-MD-TEMPLATE.md`. It documents the operating modes (Exploration/Debugging/Verification), tool selection guidance, multi-device routing escape hatches, anti-patterns, error-recovery patterns, and verification flow. Without this in the user's project CLAUDE.md, agents working on the project don't know which plugin tools to prefer.
 
-1. **Symlink-inherited worktree preflight.** If `<cwd>/.rn-agent` is a symlink (`[ -L .rn-agent ]`), the corpus is inherited from a sibling core checkout (the documented git-worktree pattern: `.rn-agent` — and usually `CLAUDE.local.md` — symlinked back to core so every worktree shares one action corpus and one manual). Run two checks before anything is written:
-   - **Scaffold health (protects Steps B/C):** resolve the target (`readlink`) and confirm it exists and contains `.scaffold-version` and `dev-bridge.ts`. If it doesn't, STOP the whole setup here with: *"inherited scaffold at `<target>` is missing or stale — run `/setup` in the core checkout first, then re-run here."* Steps B/C inject imports of `./.rn-agent/dev-bridge`; running them against a broken inherited scaffold leaves the worktree with code that cannot resolve, and Step D's guard below will (correctly) refuse to repair a symlinked corpus.
-   - **Manual short-circuit (Step A only):** the symlink alone does NOT prove the manual is loaded — the SessionStart hook links `.rn-agent` but does not create `CLAUDE.local.md`. Skip the rest of Step A only when the marker `## React Native Development (rn-dev-agent)` is present in `<cwd>/CLAUDE.local.md`, with the note: *"manual inherited via CLAUDE.local.md from `<resolved core path>`; skipping template injection."* Do NOT append the template to `CLAUDE.md` in that case — the manual is already loaded from `CLAUDE.local.md`, and appending would duplicate the entire block; a stale inherited manual is refreshed in the core checkout, not through the worktree. If the marker is absent, offer to complete the worktree wiring by symlinking the core checkout's `CLAUDE.local.md` into the worktree (preferred — keeps one shared manual); only fall back to the normal injection path below if the user declines.
+1. **Worktree preflight.** Step 0 must leave `.rn-agent` as a real local directory before Steps B–D write. A recognized legacy root link must be migrated with consent; a foreign root link blocks setup. `.rn-agent/actions` may be the one supported inherited symlink and must not be scaffolded over. Claude instruction files are not inherited by this mechanism.
 2. Check whether `CLAUDE.md` exists in the current working directory.
 3. Read `${CLAUDE_PLUGIN_ROOT}/CLAUDE-MD-TEMPLATE.md`. The template body to inject is everything AFTER the first `---` separator line — the lines before that separator are author-facing instructions for the template itself, not for the user's project. Find the separator dynamically (don't trust a hardcoded line number; the preamble may grow).
 4. Inject or refresh:
@@ -131,7 +141,7 @@ The template lives at `${CLAUDE_PLUGIN_ROOT}/templates/rn-agent/` and contains: 
 
 `vercel-rules.config.json` is the user-editable opt-in/opt-out surface for the Vercel rule audit hook (`/rn-dev-agent:check-vercel-rules`). It defines `enabledCategories`, `severityOverrides`, `baselinePath`, and `auditHook.enabled`. Default config enables all categories; severity is taken from upstream rule frontmatter.
 
-1. **Detect existing scaffold.** **Symlink guard first:** if `<cwd>/.rn-agent` is a symlink (`[ -L .rn-agent ]`), the corpus is inherited from a sibling core checkout (git-worktree pattern). Resolve the target (`readlink`), read the target's `.scaffold-version`, and skip the scaffold/partial-add steps (D.1a–D.5) with the note: *"scaffold v<X> inherited via symlink from `<target>`; skipping."* Never first-time-scaffold over a symlink and never partial-add into a symlinked corpus — the files are shared with the core checkout, so scaffold updates belong there (run `/setup` in the core checkout instead). **Step D.6 (tsconfig include touch-up) still runs**: `tsconfig.json` is a per-worktree file, so the `.rn-agent/dev-bridge.ts` + `.rn-agent/globals.d.ts` include entries must be checked in THIS worktree even when the scaffold itself is inherited. Otherwise, treat `<cwd>/.rn-agent/` as already scaffolded if ANY of these signals are present:
+1. **Detect existing scaffold.** **Step 0 guard first:** `.rn-agent` itself must be a real local directory; never scaffold through a root symlink. `.rn-agent/actions` may be the supported inherited symlink. Exclude that subtree from first-time and partial-add copies, but scaffold every other file locally. Treat `<cwd>/.rn-agent/` as already scaffolded if ANY of these signals are present:
    - `.rn-agent/.scaffold-version` exists (canonical marker)
    - Any of `.rn-agent/state/`, `.rn-agent/recordings/`, `.rn-agent/snapshots/`, `.rn-agent/diag/` exist (runtime dirs created by tools — proof the plugin has run)
    - `.rn-agent/actions/` contains any `*.yaml` file
@@ -197,7 +207,7 @@ Re-running `/rn-dev-agent:setup` on an already-onboarded project must be safe:
 - Nav ref: detects existing `globalThis.__NAV_REF__` assignment, skips.
 - Zustand: detects existing `globalThis.__ZUSTAND_STORES__` assignment, skips.
 - `.rn-agent/` scaffold: reads `.rn-agent/.scaffold-version`. If equal to the template's version, skips. If older, lists template files missing from the project and offers to add only those (never overwrites existing files). Presence of any runtime dir (`state/`, `recordings/`, `snapshots/`, `diag/`) or any `actions/*.yaml` also counts as proof the scaffold has run, even if `.scaffold-version` is missing.
-- Symlink-inherited worktree: `.rn-agent` is a symlink to a sibling core checkout; the wiring is complete when the manual marker also lives in `CLAUDE.local.md`. Step A skips template injection only when that marker is present (and offers to complete the symlink wiring when it isn't); Step D skips scaffold/partial-add but still checks the worktree's own `tsconfig.json` include. A missing/stale inherited scaffold halts setup before Steps B/C with a pointer to the core checkout. Nothing in the shared corpus is ever mutated from the worktree.
+- Linked worktree: Step 0 replans every time. `.rn-agent` remains real and local; only `.rn-agent/actions` may link to the verified primary app. Mutable integration, state, recordings, generated launchers, and runtime data stay local.
 
 Tell the user up-front when nothing needs to be injected.
 
@@ -211,7 +221,7 @@ Tell the user up-front when nothing needs to be injected.
 6. Overwrite any file inside `<cwd>/.rn-agent/` during partial-add. The user may have hand-edited `skeleton.yaml`, `actions/*.yaml`, or `nav-graph.yaml` between scaffolds — only add files that don't already exist.
 7. Use `cp -r src/* dst/` for the scaffold copy. The glob skips dotfiles on some shells; `.gitignore` and `.scaffold-version` would silently disappear. Use `cp -RL src/. dst/` (note the trailing `/.`) or Node's `fs.cpSync(src, dst, { recursive: true })`.
 8. Symlink `templates/rn-agent/` to the workspace test-app's `.rn-agent/`. Marketplace packaging would break and the workspace's app-specific testIDs would leak into every consumer project.
-9. Scaffold, partial-add, or template-append through a symlink-inherited worktree (`.rn-agent` is a symlink; the manual marker lives in `CLAUDE.local.md` when wiring is complete). The shared corpus belongs to the sibling core checkout — mutating it from a worktree duplicates the manual or corrupts the corpus. Short-circuit per Steps A.1 / D.1, but DO still run the per-worktree tsconfig touch-up (D.6) and DO halt before Steps B/C when the inherited scaffold is missing or stale.
+9. Symlink the whole `.rn-agent` root, accept a foreign root link, or copy mutable data from a legacy target. Use the packaged helper; only `.rn-agent/actions` may be inherited.
 
 ## When NOT to use `/rn-dev-agent:setup`
 

@@ -1,7 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { stopBoundObserve, stopBoundRecorder, stopBoundRunner } from './process-cleanup.js';
 import { openSessionRegistry } from './registry.js';
-import { ensureSharedKnowledgeRoot } from './shared-knowledge-root.js';
 import { stopManagedMetro } from './managed-metro.js';
 import { createAuthorityStateLayout, sessionRuntimeDirectory, writeSessionPublicReceipt, writeSessionSecret, } from './state-root.js';
 const RELEASABLE_SESSION_STATES = new Set([
@@ -95,9 +94,6 @@ export function createSupervisorAuthority(input, dependencies = {}) {
             throw error;
         }
     });
-    const sharedKnowledge = adoptionRequired
-        ? { migrated: false }
-        : initialize(() => ensureSharedKnowledgeRoot(input.source.appRoot));
     initialize(() => registry.updateBindings(session, {
         state: adoptionRequired ? 'blocked' : 'source_bound',
         bindings: {
@@ -127,7 +123,6 @@ export function createSupervisorAuthority(input, dependencies = {}) {
         worktreeKey: input.source.worktreeKey.slice(0, 12),
         metroPort,
         observePort,
-        sharedKnowledgeMigrated: sharedKnowledge.migrated,
     }));
     let heartbeat = null;
     if (input.startHeartbeat !== false) {

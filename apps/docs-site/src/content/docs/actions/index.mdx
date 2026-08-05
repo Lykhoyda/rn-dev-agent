@@ -170,7 +170,7 @@ attempt (`RunRecord.blindProbe` records the routing; disable with `RN_BLIND_PROB
 
 - **Not a magic auto-tester.** Self-repair handles small UI drift; it doesn't fix broken features.
 - **Not a replacement for hand-written E2E tests.** If you maintain a `.maestro/` suite for CI, the plugin doesn't touch it. Actions and your team's E2E suite live separately.
-- **Not isolated from your project.** Actions live in `.rn-agent/actions/`, alongside the skeleton and other plugin-managed files. Commit them — they're as much a part of your project as `__tests__/`.
+- **Project knowledge by default.** Actions live in `.rn-agent/actions/`, alongside the skeleton and other plugin-managed files, and tracked corpora should be committed like `__tests__/`. Fully private corpora are also supported: setup can inherit only `actions/` into linked worktrees while keeping integration, session state, recordings, generated launchers, and runtime data worktree-local.
 
 ## See also
 
