@@ -13283,6 +13283,15 @@ var init_registry = __esm({
           const expiresMs = now + RECOVERY_HANDLE_TTL_MS;
           const priorHandles = bindings.recoveryHandles;
           const resumableAdoptStale = row.state === "handoff_cleanup" && priorHandles?.adoptStale && typeof priorHandles.adoptStale === "object" ? priorHandles.adoptStale : void 0;
+          const reboundAdoptStale = resumableAdoptStale ? {
+            ...resumableAdoptStale,
+            previous: typeof resumableAdoptStale.token === "string" && typeof resumableAdoptStale.expiresMs === "number" && resumableAdoptStale.expiresMs >= now ? {
+              token: resumableAdoptStale.token,
+              expiresMs: resumableAdoptStale.expiresMs
+            } : void 0,
+            token: randomBytes3(32).toString("base64url"),
+            expiresMs
+          } : void 0;
           const recoveryHandles = {
             handoffRecipient: {
               token: randomBytes3(32).toString("base64url"),
@@ -13296,7 +13305,7 @@ var init_registry = __esm({
                 priorSessionId: adoptionRequired.sessionId,
                 priorClaimEpoch: adoptionRequired.claimEpoch
               }
-            } : resumableAdoptStale ? { adoptStale: resumableAdoptStale } : {}
+            } : reboundAdoptStale ? { adoptStale: reboundAdoptStale } : {}
           };
           this.#database.prepare("DELETE FROM operations WHERE session_id = ? AND claim_epoch = ?").run(session.sessionId, session.claimEpoch);
           this.#database.prepare(`UPDATE sessions

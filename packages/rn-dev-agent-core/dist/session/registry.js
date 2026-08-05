@@ -452,6 +452,21 @@ export class SessionRegistry {
                 typeof priorHandles.adoptStale === 'object'
                 ? priorHandles.adoptStale
                 : undefined;
+            const reboundAdoptStale = resumableAdoptStale
+                ? {
+                    ...resumableAdoptStale,
+                    previous: typeof resumableAdoptStale.token === 'string' &&
+                        typeof resumableAdoptStale.expiresMs === 'number' &&
+                        resumableAdoptStale.expiresMs >= now
+                        ? {
+                            token: resumableAdoptStale.token,
+                            expiresMs: resumableAdoptStale.expiresMs,
+                        }
+                        : undefined,
+                    token: randomBytes(32).toString('base64url'),
+                    expiresMs,
+                }
+                : undefined;
             const recoveryHandles = {
                 handoffRecipient: {
                     token: randomBytes(32).toString('base64url'),
@@ -467,8 +482,8 @@ export class SessionRegistry {
                             priorClaimEpoch: adoptionRequired.claimEpoch,
                         },
                     }
-                    : resumableAdoptStale
-                        ? { adoptStale: resumableAdoptStale }
+                    : reboundAdoptStale
+                        ? { adoptStale: reboundAdoptStale }
                         : {}),
             };
             this.#database

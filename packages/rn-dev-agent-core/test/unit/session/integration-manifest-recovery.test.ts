@@ -1547,6 +1547,13 @@ test('a replacement recovery worker resumes a stale adoption with the preserved 
       'recovery-capability',
     );
     const statusResult = await handler({ action: 'status' });
+    const reboundHandle = (
+      envelope(statusResult).data.authority as {
+        recovery?: { adoptionHandle?: unknown };
+      }
+    ).recovery?.adoptionHandle;
+    assert.equal(typeof reboundHandle, 'string');
+    assert.notEqual(reboundHandle, handle);
     assert.equal(
       statusResult.content[0]!.text.includes(handle),
       false,
