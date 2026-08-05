@@ -1,5 +1,13 @@
 # rn-dev-agent-plugin
 
+## 0.71.8
+
+### Patch Changes
+
+- 76a6045: Stop a second supervisor for the same app root from misreading the live owner as a reused PID and stealing its single-instance lock, keep blocked contenders from opening operational children, rotate expired adoption handles so `status` never advertises a capability `adopt_stale` refuses, add a bounded capability-authenticated release for a proven-dead device or runner owner discovered after startup that transfers only the exact device cleanup obligations, and report whether recovery needs a transport restart, an attach, or an adoption.
+- Updated dependencies [76a6045]
+  - rn-dev-agent-core@0.66.8
+
 ## 0.71.7
 
 ### Patch Changes
