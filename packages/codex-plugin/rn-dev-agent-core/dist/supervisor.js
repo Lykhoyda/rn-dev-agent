@@ -16018,9 +16018,7 @@ function currentSnapshotAuthority(platform) {
     runnerProcessBirth: authority?.runnerProcessBirth ?? null,
     runnerCapabilityHash: authority?.runnerCapabilityHash ?? null,
     runnerPort: authority?.runnerPort ?? null,
-    // Capture starts unproven. The outer authority gate upgrades only snapshots
-    // created by an operation whose optional/required M+A probes also survive
-    // postflight unchanged.
+    // The outer gate upgrades only captures whose M+A authority survives postflight.
     originAuthority: "not-proven"
   };
 }
