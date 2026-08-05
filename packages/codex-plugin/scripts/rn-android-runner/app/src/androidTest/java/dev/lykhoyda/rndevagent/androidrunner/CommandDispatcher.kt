@@ -645,20 +645,25 @@ class CommandDispatcher(
         val bound = target
             ?: return JSONObject().put("verifyVerdict", lostVerdict).put("verifyStable", false)
         val secure = cmd.optBoolean("secureInput", false)
-        var previous: String? = null
-        var havePrevious = false
+        var previous: TextInputRecipe.VerifyObservation? = null
         var verdict = "unreadable"
         var stable = false
         for (attempt in 0 until 3) {
             val raw = readTargetText(bound)
             val hint = readTargetHint(bound)
-            verdict = TextInputRecipe.classifyVerify(expected, raw, hint.value, hint.known, secure)
-            if (havePrevious && previous == raw) {
+            val observation = TextInputRecipe.verifyObservation(
+                expected,
+                raw,
+                hint.value,
+                hint.known,
+                secure,
+            )
+            verdict = observation.verdict
+            if (previous == observation) {
                 stable = true
                 break
             }
-            previous = raw
-            havePrevious = true
+            previous = observation
             if (attempt < 2) SystemClock.sleep(150)
         }
         return JSONObject().put("verifyVerdict", verdict).put("verifyStable", stable)

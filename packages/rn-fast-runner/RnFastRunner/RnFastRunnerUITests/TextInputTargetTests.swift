@@ -321,6 +321,28 @@ final class TextInputTargetTests: XCTestCase {
     )
   }
 
+  func testVerifyObservationIncludesPlaceholderAndVerdict() {
+    let ambiguous = TextInputTarget.verifyObservation(
+      expected: "Search",
+      rawValue: "Search",
+      placeholder: "Search",
+      isSecure: false
+    )
+    let exact = TextInputTarget.verifyObservation(
+      expected: "Search",
+      rawValue: "Search",
+      placeholder: nil,
+      isSecure: false
+    )
+    XCTAssertNotEqual(ambiguous, exact)
+    XCTAssertEqual(exact, TextInputTarget.verifyObservation(
+      expected: "Search",
+      rawValue: "Search",
+      placeholder: nil,
+      isSecure: false
+    ))
+  }
+
   func testInputTypeRecognition() {
     XCTAssertTrue(TextInputTarget.isInputTypeName("TextField"))
     XCTAssertTrue(TextInputTarget.isInputTypeName("TextView"))

@@ -75,6 +75,7 @@ test('gh-581 bind: wrapper maps to its unique inner input, focus stays on the wr
       type: 'TextField',
       label: undefined,
       identifier: 'email',
+      rect: { x: 0, y: 10, width: 10, height: 10 },
       flatIndex: 1,
       nodeCount: NODES.length,
     },
@@ -99,7 +100,7 @@ test('gh-581 bind: direct input ref and bare testID both bind', () => {
   assert.equal((byTestId as { binding: { inputRef: string } }).binding.inputRef, '@e30');
 });
 
-test('gh-581 bind: blank Android identifiers rebind by signature, not empty testID', () => {
+test('gh-581 bind: blank Android identifiers rebind by type and frame', () => {
   const original = [
     {
       ref: '@e1',
@@ -116,6 +117,7 @@ test('gh-581 bind: blank Android identifiers rebind by signature, not empty test
       type: 'android.widget.EditText',
       identifier: '',
       label: 'Search',
+      rect: { x: 0, y: 0, width: 10, height: 10 },
       flatIndex: 0,
       nodeCount: 1,
     },
@@ -128,13 +130,22 @@ test('gh-581 bind: blank Android identifiers rebind by signature, not empty test
   ).binding;
   assert.equal(binding.inputTestId, null);
 
-  const replacement = [{ ...original[0], ref: '@e2', label: 'Other input' }];
+  const typed = [{ ...original[0], ref: '@e2', label: 'typed value' }];
   const rebound = bindExactFillTarget(
-    replacement as never,
+    typed as never,
     binding.inputTestId ?? binding.inputRef,
     binding.inputSignature as never,
   );
-  assert.ok(!rebound.ok);
+  assert.ok(rebound.ok);
+  assert.equal((rebound as { binding: { inputRef: string } }).binding.inputRef, '@e2');
+
+  const replacement = [{ ...typed[0], rect: { x: 100, y: 100, width: 10, height: 10 } }];
+  const replaced = bindExactFillTarget(
+    replacement as never,
+    binding.inputRef,
+    binding.inputSignature as never,
+  );
+  assert.ok(!replaced.ok);
 });
 
 test('gh-581 bind: Android fully-qualified EditText is recognized; bare EditText is not', () => {

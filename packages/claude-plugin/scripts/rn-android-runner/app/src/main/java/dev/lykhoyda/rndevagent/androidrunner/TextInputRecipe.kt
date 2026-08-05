@@ -14,6 +14,13 @@ object TextInputRecipe {
 
     enum class SetTextOutcome { ACCEPTED, TRANSFORMED, REJECTED, UNVERIFIED }
 
+    data class VerifyObservation(
+        val raw: String?,
+        val hint: String?,
+        val hintKnown: Boolean,
+        val verdict: String,
+    )
+
     // Read-back classification after a set attempt:
     //   ACCEPTED    — field now holds exactly the requested text.
     //   TRANSFORMED — field changed to something else (input mask, uppercase
@@ -69,6 +76,19 @@ object TextInputRecipe {
         if (raw == expected) return if (!hintKnown || placeholderEqual) "ambiguous" else "exact"
         return "mismatch"
     }
+
+    fun verifyObservation(
+        expected: String,
+        raw: String?,
+        hint: String?,
+        hintKnown: Boolean,
+        secure: Boolean,
+    ): VerifyObservation = VerifyObservation(
+        raw,
+        hint,
+        hintKnown,
+        classifyVerify(expected, raw, hint, hintKnown, secure),
+    )
 
     fun recordedDescriptorAgrees(
         recordedGeneration: Int?,

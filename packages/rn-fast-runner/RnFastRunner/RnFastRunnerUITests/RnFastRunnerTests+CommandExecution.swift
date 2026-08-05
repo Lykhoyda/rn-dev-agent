@@ -783,25 +783,21 @@ extension RnFastRunnerTests {
       var verdict = TextInputTarget.VerifyVerdict.unreadable
       var stable = false
       withTemporaryScrollIdleTimeoutIfSupported(activeApp) {
-        // Stability: two consecutive identical raw reads make the verdict
-        // final; a still-settling value reports stable=false and hard-fails
-        // upstream instead of promoting a transient exact.
-        var previousRaw: String?
-        var havePrevious = false
+        var previous: TextInputTarget.VerifyObservation?
         for attempt in 0..<3 {
           let read = readExactInputValue(verifyElement)
-          verdict = TextInputTarget.classifyValue(
+          let observation = TextInputTarget.verifyObservation(
             expected: expected,
             rawValue: read.raw,
             placeholder: read.placeholder,
             isSecure: isSecure
           )
-          if havePrevious && previousRaw == read.raw {
+          verdict = observation.verdict
+          if previous == observation {
             stable = true
             break
           }
-          previousRaw = read.raw
-          havePrevious = true
+          previous = observation
           if attempt < 2 { Thread.sleep(forTimeInterval: 0.15) }
         }
       }

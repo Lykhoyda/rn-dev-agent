@@ -117,6 +117,12 @@ enum TextInputTarget {
     case ambiguous
   }
 
+  struct VerifyObservation: Equatable {
+    let rawValue: String?
+    let placeholder: String?
+    let verdict: VerifyVerdict
+  }
+
   // Secret-free read classification. An empty XCUI text field reports its
   // placeholder as `value`, so a placeholder-equal read cannot prove either
   // emptiness or a typed value — both cases classify `ambiguous`; secure
@@ -145,5 +151,23 @@ enum TextInputTarget {
       return placeholderEqual ? .ambiguous : .exact
     }
     return .mismatch
+  }
+
+  static func verifyObservation(
+    expected: String,
+    rawValue: String?,
+    placeholder: String?,
+    isSecure: Bool
+  ) -> VerifyObservation {
+    VerifyObservation(
+      rawValue: rawValue,
+      placeholder: placeholder,
+      verdict: classifyValue(
+        expected: expected,
+        rawValue: rawValue,
+        placeholder: placeholder,
+        isSecure: isSecure
+      )
+    )
   }
 }

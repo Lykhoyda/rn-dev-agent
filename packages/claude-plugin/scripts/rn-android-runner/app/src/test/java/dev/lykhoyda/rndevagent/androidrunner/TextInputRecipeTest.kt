@@ -218,6 +218,14 @@ class TextInputRecipeTest {
     }
 
     @Test
+    fun verifyObservationRequiresVerdictAndHintProvenanceAgreement() {
+        val ambiguous = TextInputRecipe.verifyObservation("Search", "Search", "Search", true, secure = false)
+        val exact = TextInputRecipe.verifyObservation("Search", "Search", null, true, secure = false)
+        assertFalse(ambiguous == exact)
+        assertEquals(exact, TextInputRecipe.verifyObservation("Search", "Search", null, true, secure = false))
+    }
+
+    @Test
     fun recordedDescriptorRequiresPresentRecognizedIdentity() {
         assertTrue(
             TextInputRecipe.recordedDescriptorAgrees(

@@ -353,9 +353,16 @@ function signatureForNode(nodes, node) {
         type: node.type ?? '',
         label: node.label,
         identifier: node.identifier,
+        rect: node.rect,
         flatIndex: nodes.indexOf(node),
         nodeCount: nodes.length,
     };
+}
+function rectsMatch(a, b, tolerance = 8) {
+    return (Math.abs(a.x + a.width / 2 - (b.x + b.width / 2)) <= tolerance &&
+        Math.abs(a.y + a.height / 2 - (b.y + b.height / 2)) <= tolerance &&
+        Math.abs(a.width - b.width) <= tolerance &&
+        Math.abs(a.height - b.height) <= tolerance);
 }
 // A positional @eN may only bind when its identity still matches the
 // signature captured BEFORE this binding snapshot; a shifted generation
@@ -368,7 +375,8 @@ export function bindExactFillTarget(nodes, rawRef, priorSignature) {
         const hasRobustIdentity = priorSignature !== null &&
             priorSignature !== undefined &&
             ((priorSignature.identifier?.trim().length ?? 0) > 0 ||
-                (priorSignature.label?.trim().length ?? 0) > 0);
+                (priorSignature.label?.trim().length ?? 0) > 0 ||
+                priorSignature.rect !== undefined);
         if (!hasRobustIdentity) {
             return {
                 ok: false,
@@ -376,9 +384,17 @@ export function bindExactFillTarget(nodes, rawRef, priorSignature) {
             };
         }
         const signature = priorSignature;
-        const matches = nodes.filter((n) => (n.type ?? '') === signature.type &&
-            n.label === signature.label &&
-            n.identifier === signature.identifier);
+        const signatureIdentifier = inputTestId(signature.identifier);
+        const matches = nodes.filter((n) => {
+            if ((n.type ?? '') !== signature.type)
+                return false;
+            if (signatureIdentifier !== null)
+                return n.identifier === signatureIdentifier;
+            if (signature.rect !== undefined && n.rect !== undefined) {
+                return rectsMatch(n.rect, signature.rect);
+            }
+            return n.label === signature.label && inputTestId(n.identifier) === null;
+        });
         if (matches.length !== 1) {
             return {
                 ok: false,
@@ -804,9 +820,11 @@ export async function performExactFill(args, client, tiers) {
     // Capture the positional ref's identity BEFORE the binding snapshot so a
     // refreshed generation can only rebind by identity, never by recycled id.
     const cleanRefForSignature = args.ref.replace(/^@/, '');
-    const priorSignature = /^e\d+$/.test(cleanRefForSignature)
+    const cachedSignature = /^e\d+$/.test(cleanRefForSignature)
         ? getCachedSignature(cleanRefForSignature)
         : null;
+    const cachedRect = cachedSignature ? lookupRef(cleanRefForSignature) : null;
+    const priorSignature = cachedSignature && cachedRect ? { ...cachedSignature, rect: cachedRect } : cachedSignature;
     const snap = await fetchSnapshotNodes(true);
     if (!snap.ok) {
         if (snap.reason === 'runner-leak-unrecovered') {
