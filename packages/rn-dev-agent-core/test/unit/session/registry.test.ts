@@ -619,6 +619,68 @@ test('only the active operation context may advance transition authority', async
   registry.endOperation(operation);
 });
 
+test('ended operations are absent from inherited async context', async () => {
+  const { registry, create } = fixture();
+  const owner = create('a');
+  const operation = registry.beginOperation(owner, {
+    operationId: 'operation-stale-context',
+    tool: 'cdp_reload',
+    profile: 'CSIMBD',
+  });
+  let release;
+  const deferred = registry.runWithOperation(
+    operation,
+    () =>
+      new Promise((resolve) => {
+        release = () => resolve(registry.currentOperation());
+      }),
+  );
+
+  assert.deepEqual(registry.currentOperation(), undefined);
+  registry.endOperation(operation);
+  release();
+  assert.equal(await deferred, undefined);
+});
+
+test('active bundle operations are visible outside inherited context', () => {
+  const { registry, create } = fixture();
+  const owner = create('a');
+  const operation = registry.beginOperation(owner, {
+    operationId: 'operation-bundle-reconnect',
+    tool: 'cdp_console_log',
+    profile: 'CSIMBD',
+  });
+
+  assert.equal(registry.currentOperation(), undefined);
+  assert.equal(registry.hasActiveBundleOperation(owner), true);
+  registry.endOperation(operation);
+  assert.equal(registry.hasActiveBundleOperation(owner), false);
+});
+
+test('optional bundle admission is pending before rejection or promotion', () => {
+  const { registry, create } = fixture();
+  const owner = create('a');
+  const operation = registry.beginOperation(owner, {
+    operationId: 'operation-optional-bundle',
+    tool: 'cdp_run_action',
+    profile: 'CSIMDR',
+  });
+
+  assert.equal(registry.operationHasAxis(operation, 'B'), false);
+  assert.equal(registry.hasActiveBundleOperation(owner), false);
+  registry.beginOperationAxisAdmission(operation, 'B');
+  assert.equal(registry.operationHasAxis(operation, 'B'), false);
+  assert.equal(registry.hasActiveBundleOperation(owner), true);
+  registry.completeOperationAxisAdmission(operation, 'B', false);
+  assert.equal(registry.operationHasAxis(operation, 'B'), false);
+  assert.equal(registry.hasActiveBundleOperation(owner), false);
+  registry.beginOperationAxisAdmission(operation, 'B');
+  registry.completeOperationAxisAdmission(operation, 'B', true);
+  assert.equal(registry.operationHasAxis(operation, 'B'), true);
+  assert.equal(registry.hasActiveBundleOperation(owner), true);
+  registry.endOperation(operation);
+});
+
 test('session release requires package integration restoration at every registry boundary', () => {
   const { registry, create } = fixture();
   const owner = create('a');

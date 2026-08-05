@@ -7,7 +7,14 @@ import {
 
 beforeEach(() => _resetRestartHandlerStateForTest());
 
-function client({ port = 8193, connected = true, autoConnect, target } = {}) {
+function client({
+  port = 8193,
+  connected = true,
+  autoConnect,
+  connectExact,
+  listTargetsExact,
+  target,
+} = {}) {
   return {
     metroPort: port,
     isConnected: connected,
@@ -20,6 +27,14 @@ function client({ port = 8193, connected = true, autoConnect, target } = {}) {
     async autoConnect(...args) {
       if (autoConnect) return autoConnect(...args);
       this.isConnected = true;
+    },
+    async connectExact(...args) {
+      if (connectExact) return connectExact(...args);
+      this.isConnected = true;
+    },
+    async listTargetsExact(...args) {
+      if (listTargetsExact) return listTargetsExact(...args);
+      return { port, targets: [] };
     },
   };
 }
@@ -39,10 +54,18 @@ function envelope(result) {
   return JSON.parse(result.content[0].text);
 }
 
+function exactRestartDeps(overrides = {}) {
+  return {
+    resolveExactTargetId: async () => 'target',
+    ...overrides,
+  };
+}
+
 test('soft restart reconnects with the exact platform, app, and Metro binding', async () => {
   let received;
   const next = client({
-    autoConnect: async (...args) => {
+    autoConnect: async () => assert.fail('restart must not use ordinary discovery'),
+    connectExact: async (...args) => {
       received = args;
       next.isConnected = true;
     },
@@ -52,6 +75,7 @@ test('soft restart reconnects with the exact platform, app, and Metro binding', 
     h.getClient,
     h.setClient,
     h.createClient,
+    exactRestartDeps(),
   )({
     metroPort: 8193,
     platform: 'ios',
@@ -60,13 +84,74 @@ test('soft restart reconnects with the exact platform, app, and Metro binding', 
   });
 
   assert.equal(envelope(result).ok, true);
-  assert.deepEqual(received, [8193, { platform: 'ios', bundleId: 'com.example.app' }]);
+  assert.deepEqual(received, [
+    8193,
+    { platform: 'ios', bundleId: 'com.example.app', targetId: 'target' },
+  ]);
+});
+
+test('restart resolves the exact device target without probing ambient Metro', async () => {
+  const deviceId = 'A7D2C7C9-A7DE-474D-95F2-7D2DF0EE44D3';
+  const calls = [];
+  const next = client({
+    autoConnect: async () => assert.fail('restart must not use ordinary discovery'),
+    listTargetsExact: async (port) => {
+      calls.push(['listTargetsExact', port]);
+      return {
+        port,
+        targets: [
+          {
+            id: 'exact-target',
+            platform: 'ios',
+            description: 'com.example.app',
+            appId: 'com.example.app',
+            deviceName: 'Owned Simulator',
+          },
+        ],
+      };
+    },
+    connectExact: async (...args) => {
+      calls.push(['connectExact', ...args]);
+      next.isConnected = true;
+    },
+  });
+  const h = harness(client({ port: 8193 }), next);
+  const result = await createRestartHandler(h.getClient, h.setClient, h.createClient, {
+    execFile: async (file, args) => {
+      assert.equal(file, 'xcrun');
+      assert.deepEqual(args, ['simctl', 'list', 'devices', '--json']);
+      return {
+        stdout: JSON.stringify({
+          devices: {
+            runtime: [{ udid: deviceId, name: 'Owned Simulator', state: 'Booted' }],
+          },
+        }),
+        stderr: '',
+      };
+    },
+  })({
+    metroPort: 8193,
+    platform: 'ios',
+    deviceId,
+    appId: 'com.example.app',
+  });
+
+  assert.equal(envelope(result).ok, true);
+  assert.deepEqual(calls, [
+    ['listTargetsExact', 8193],
+    [
+      'connectExact',
+      8193,
+      { platform: 'ios', bundleId: 'com.example.app', targetId: 'exact-target' },
+    ],
+  ]);
 });
 
 test('a reconnect failure is an error, never a successful connected:false receipt', async () => {
   const next = client({
     connected: false,
-    autoConnect: async () => {
+    autoConnect: async () => assert.fail('restart must not use ordinary discovery'),
+    connectExact: async () => {
       throw new Error('no exact target');
     },
   });
@@ -75,6 +160,7 @@ test('a reconnect failure is an error, never a successful connected:false receip
     h.getClient,
     h.setClient,
     h.createClient,
+    exactRestartDeps(),
   )({
     metroPort: 8193,
     platform: 'ios',
@@ -90,15 +176,20 @@ test('a reconnect failure is an error, never a successful connected:false receip
 test('iOS hard reset addresses only the exact simulator and app', async () => {
   const calls = [];
   const h = harness();
-  const result = await createRestartHandler(h.getClient, h.setClient, h.createClient, {
-    execFile: async (command, args) => {
-      calls.push([command, ...args]);
-      return { stdout: '', stderr: '' };
-    },
-    stopFastRunner: (deviceId) => calls.push(['stopFastRunner', deviceId]),
-    unbindRunner: () => calls.push(['unbindRunner']),
-    sleep: async () => {},
-  })({
+  const result = await createRestartHandler(
+    h.getClient,
+    h.setClient,
+    h.createClient,
+    exactRestartDeps({
+      execFile: async (command, args) => {
+        calls.push([command, ...args]);
+        return { stdout: '', stderr: '' };
+      },
+      stopFastRunner: (deviceId) => calls.push(['stopFastRunner', deviceId]),
+      unbindRunner: () => calls.push(['unbindRunner']),
+      sleep: async () => {},
+    }),
+  )({
     hardReset: true,
     metroPort: 8193,
     platform: 'ios',
@@ -118,17 +209,22 @@ test('iOS hard reset addresses only the exact simulator and app', async () => {
 test('iOS hard reset retains runner authority when exact shutdown is unproven', async () => {
   const calls = [];
   const h = harness();
-  const result = await createRestartHandler(h.getClient, h.setClient, h.createClient, {
-    execFile: async (command, args) => {
-      calls.push([command, ...args]);
-      return { stdout: '', stderr: '' };
-    },
-    stopFastRunner: async () => {
-      throw new Error('runner process did not stop');
-    },
-    unbindRunner: () => calls.push(['unbindRunner']),
-    sleep: async () => {},
-  })({
+  const result = await createRestartHandler(
+    h.getClient,
+    h.setClient,
+    h.createClient,
+    exactRestartDeps({
+      execFile: async (command, args) => {
+        calls.push([command, ...args]);
+        return { stdout: '', stderr: '' };
+      },
+      stopFastRunner: async () => {
+        throw new Error('runner process did not stop');
+      },
+      unbindRunner: () => calls.push(['unbindRunner']),
+      sleep: async () => {},
+    }),
+  )({
     hardReset: true,
     metroPort: 8193,
     platform: 'ios',
@@ -159,17 +255,22 @@ test('Android hard reset uses adb -s for force-stop and launch', async () => {
     },
   });
   const h = harness(old, next);
-  const result = await createRestartHandler(h.getClient, h.setClient, h.createClient, {
-    execFile: async (command, args) => {
-      calls.push([command, ...args]);
-      return { stdout: '', stderr: '' };
-    },
-    stopFastRunner: () => {},
-    unbindRunner: () => {
-      unbound = true;
-    },
-    sleep: async () => {},
-  })({
+  const result = await createRestartHandler(
+    h.getClient,
+    h.setClient,
+    h.createClient,
+    exactRestartDeps({
+      execFile: async (command, args) => {
+        calls.push([command, ...args]);
+        return { stdout: '', stderr: '' };
+      },
+      stopFastRunner: () => {},
+      unbindRunner: () => {
+        unbound = true;
+      },
+      sleep: async () => {},
+    }),
+  )({
     hardReset: true,
     metroPort: 8193,
     platform: 'android',
@@ -197,13 +298,18 @@ test('Android hard reset uses adb -s for force-stop and launch', async () => {
 test('hard reset refuses missing authority and literal booted without side effects', async () => {
   const calls = [];
   const h = harness();
-  const handler = createRestartHandler(h.getClient, h.setClient, h.createClient, {
-    execFile: async (command, args) => {
-      calls.push([command, ...args]);
-      return { stdout: '', stderr: '' };
-    },
-    stopFastRunner: () => {},
-  });
+  const handler = createRestartHandler(
+    h.getClient,
+    h.setClient,
+    h.createClient,
+    exactRestartDeps({
+      execFile: async (command, args) => {
+        calls.push([command, ...args]);
+        return { stdout: '', stderr: '' };
+      },
+      stopFastRunner: () => {},
+    }),
+  );
 
   const missing = envelope(await handler({ hardReset: true, platform: 'ios', deviceId: 'booted' }));
   assert.equal(missing.code, 'APP_INSTALL_IDENTITY_CHANGED');
@@ -226,11 +332,16 @@ test('concurrent restart returns a typed failure instead of restarted:false succ
     release = resolve;
   });
   const h = harness();
-  const handler = createRestartHandler(h.getClient, h.setClient, h.createClient, {
-    sleep: async () => blocker,
-    execFile: async () => ({ stdout: '', stderr: '' }),
-    stopFastRunner: () => {},
-  });
+  const handler = createRestartHandler(
+    h.getClient,
+    h.setClient,
+    h.createClient,
+    exactRestartDeps({
+      sleep: async () => blocker,
+      execFile: async () => ({ stdout: '', stderr: '' }),
+      stopFastRunner: () => {},
+    }),
+  );
   const args = {
     hardReset: true,
     platform: 'ios',

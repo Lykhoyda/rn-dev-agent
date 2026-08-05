@@ -35,6 +35,51 @@ export interface BundleAuthorityBinding extends MetroAuthorityBinding, Record<st
   sourceFidelity: 'not-proven';
 }
 
+interface AuthoritativeBundleStatus {
+  authorityVersion: number;
+  bindings: Record<string, unknown> & { bundle?: unknown; metroPort?: unknown };
+}
+
+interface AuthoritativeBundleCommit {
+  expectedAuthorityVersion: number;
+  state: 'ready';
+  bindings: { bundle: Record<string, unknown> };
+  releaseResources: Array<{ type: 'target'; key: string }>;
+  claimResources: Array<{ type: 'target'; key: string }>;
+}
+
+export async function reconcileAuthoritativeBundle(
+  status: AuthoritativeBundleStatus,
+  dependencies: {
+    verifyRuntime(): Promise<Record<string, unknown>>;
+    hasActiveOperation(): boolean;
+    commit(input: AuthoritativeBundleCommit): void;
+  },
+): Promise<void> {
+  const prior = status.bindings.bundle as Record<string, unknown> | null | undefined;
+  if (!prior) {
+    throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: durable bundle authority is unavailable');
+  }
+  const bundle = await dependencies.verifyRuntime();
+  if (dependencies.hasActiveOperation()) return;
+  const priorTargetId = String(prior.targetId);
+  const nextTargetId = String(bundle.targetId);
+  const metroPort = String(status.bindings.metroPort);
+  dependencies.commit({
+    expectedAuthorityVersion: status.authorityVersion,
+    state: 'ready',
+    bindings: { bundle },
+    releaseResources:
+      priorTargetId !== nextTargetId
+        ? [{ type: 'target', key: `${metroPort}:${priorTargetId}` }]
+        : [],
+    claimResources:
+      priorTargetId !== nextTargetId
+        ? [{ type: 'target', key: `${metroPort}:${nextTargetId}` }]
+        : [],
+  });
+}
+
 export function buildBundleAuthorityBinding(
   input: MetroAuthorityBinding & {
     deviceId: string;

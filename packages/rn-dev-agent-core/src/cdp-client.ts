@@ -21,7 +21,12 @@ import {
   wireEventHandlers,
   parseNetworkHookMessage as parseNetHook,
 } from './cdp/event-handlers.js';
-import { discoverForList } from './cdp/discovery.js';
+import {
+  discoverExactPort,
+  discoverForList,
+  listTargetsOnExactPort,
+  type DiscoveryResult,
+} from './cdp/discovery.js';
 import {
   helperExpr as helperExprFn,
   bridgeWithFallback as bridgeWithFallbackFn,
@@ -51,6 +56,35 @@ import type {
   CDPClientState,
   EvaluateResult,
 } from './types.js';
+
+export interface AuthoritativeSessionPolicy {
+  port: number;
+  filters: Pick<ConnectFilters, 'platform' | 'bundleId'>;
+  resolveTargetId(targets: HermesTarget[]): Promise<string>;
+  verifyAndReconcile(client: CDPClient): Promise<void>;
+}
+
+export async function discoverAuthoritativeTarget(
+  policy: AuthoritativeSessionPolicy,
+  requestedFilters: ConnectFilters,
+  discoverFn: typeof discoverExactPort = discoverExactPort,
+): Promise<DiscoveryResult> {
+  const result = await discoverFn(policy.port, {
+    ...requestedFilters,
+    ...policy.filters,
+    targetId: undefined,
+    preferredBundleId: undefined,
+  });
+  if (result.errorCode || result.targets.length === 0) return result;
+  const targetId = await policy.resolveTargetId(result.targets);
+  const target = result.targets.find((candidate) => candidate.id === targetId);
+  if (!target) {
+    throw new Error(
+      'CDP_TARGET_AUTHORITY_MISMATCH: exact-device resolver returned a target outside the managed Metro result',
+    );
+  }
+  return { ...result, targets: [target] };
+}
 
 export class CDPClient {
   private ws: WebSocket | null = null;
@@ -119,6 +153,7 @@ export class CDPClient {
 
   // Resolved once per process — env/config don't change mid-session.
   private _autoConnectResolution: AutoConnectResolution | null = null;
+  private _authoritativeSessionPolicy: AuthoritativeSessionPolicy | undefined;
 
   // M1b (Phase 100+): multiplexer proxy state. When `_proxyUrl` is non-null, the
   // CDP WebSocket routes through `_multiplexer` instead of connecting directly to
@@ -563,17 +598,122 @@ export class CDPClient {
       typeof filtersOrPlatform === 'string'
         ? { platform: filtersOrPlatform }
         : (filtersOrPlatform ?? {});
-    return autoConnectFn(this.buildConnectCtx(), portHint, filters, intent);
+    return this.connectWithCurrentPolicy(portHint, filters, intent);
   }
 
   async listTargets(portHint?: number): Promise<{ port: number; targets: HermesTarget[] }> {
+    if (this._authoritativeSessionPolicy) {
+      return listTargetsOnExactPort(this._authoritativeSessionPolicy.port);
+    }
     return discoverForList(this._port, portHint);
   }
 
+  async connectExact(
+    port: number,
+    filters: ConnectFilters,
+    intent: ConnectIntent = 'default',
+  ): Promise<string> {
+    this._reconnectDiscover = discoverExactPort;
+    this._exactDiscoveryPort = port;
+    return this.connectWithCurrentPolicy(port, filters, intent);
+  }
+
+  async listTargetsExact(port: number): Promise<{ port: number; targets: HermesTarget[] }> {
+    return listTargetsOnExactPort(this._authoritativeSessionPolicy?.port ?? port);
+  }
+
+  setAuthoritativeSessionPolicy(policy: AuthoritativeSessionPolicy): void {
+    this._authoritativeSessionPolicy = policy;
+    this._exactDiscoveryPort = policy.port;
+    this._reconnectDiscover = discoverExactPort;
+  }
+
+  clearAuthoritativeSessionPolicy(): void {
+    this._authoritativeSessionPolicy = undefined;
+    this._exactDiscoveryPort = undefined;
+    this._reconnectDiscover = undefined;
+  }
+
+  matchesAuthoritativeSessionPolicy(
+    port: number,
+    filters: Pick<ConnectFilters, 'platform' | 'bundleId'>,
+  ): boolean {
+    const policy = this._authoritativeSessionPolicy;
+    return (
+      policy?.port === port &&
+      policy.filters.platform === filters.platform &&
+      policy.filters.bundleId?.toLowerCase() === filters.bundleId?.toLowerCase()
+    );
+  }
+
+  createReplacement(port: number): CDPClient {
+    const replacement = new CDPClient(port, this._timeNowFn);
+    if (this._authoritativeSessionPolicy) {
+      replacement.setAuthoritativeSessionPolicy(this._authoritativeSessionPolicy);
+    }
+    return replacement;
+  }
+
   private _connectFilters: ConnectFilters = {};
+  private _reconnectDiscover: typeof discoverExactPort | undefined;
+  private _exactDiscoveryPort: number | undefined;
+
+  private authoritativeDiscover: typeof discoverExactPort = async (_port, filtersOrPlatform) => {
+    const policy = this._authoritativeSessionPolicy;
+    if (!policy) throw new Error('Authoritative session policy is unavailable');
+    const filters =
+      typeof filtersOrPlatform === 'string'
+        ? { platform: filtersOrPlatform }
+        : (filtersOrPlatform ?? {});
+    return discoverAuthoritativeTarget(policy, filters);
+  };
+
+  private async connectWithCurrentPolicy(
+    portHint: number | undefined,
+    filters: ConnectFilters,
+    intent: ConnectIntent,
+  ): Promise<string> {
+    const policy = this._authoritativeSessionPolicy;
+    const result = await autoConnectFn(
+      this.buildConnectCtx(),
+      policy?.port ?? this._exactDiscoveryPort ?? portHint,
+      policy ? { ...filters, ...policy.filters, targetId: undefined } : filters,
+      intent,
+      policy ? this.authoritativeDiscover : this._reconnectDiscover,
+    );
+    await this.verifyAuthoritativeConnection();
+    return result;
+  }
 
   private async discoverAndConnect(portHint?: number, filters?: ConnectFilters): Promise<string> {
-    return discoverAndConnectFn(this.buildConnectCtx(), portHint, filters);
+    const policy = this._authoritativeSessionPolicy;
+    const result = await discoverAndConnectFn(
+      this.buildConnectCtx(),
+      policy?.port ?? this._exactDiscoveryPort ?? portHint,
+      policy ? { ...filters, ...policy.filters, targetId: undefined } : filters,
+      policy ? this.authoritativeDiscover : this._reconnectDiscover,
+    );
+    await this.verifyAuthoritativeConnection();
+    return result;
+  }
+
+  private async verifyAuthoritativeConnection(): Promise<void> {
+    if (!this._authoritativeSessionPolicy) return;
+    try {
+      await this._authoritativeSessionPolicy.verifyAndReconcile(this);
+    } catch (error) {
+      this.rejectAllPending(new Error('Authoritative runtime verification failed'));
+      if (this.ws) {
+        this.ws.removeAllListeners();
+        if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
+          this.ws.close();
+        }
+        this.ws = null;
+      }
+      resetState(this.buildResettableState());
+      clearActiveFlag();
+      throw error;
+    }
   }
 
   async softReconnect(): Promise<string> {

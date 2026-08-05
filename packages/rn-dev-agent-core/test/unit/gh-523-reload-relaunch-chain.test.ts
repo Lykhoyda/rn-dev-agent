@@ -12,6 +12,7 @@ function mockClient({
   return {
     metroPort: 8193,
     isConnected: connected,
+    reconnectState: { active: false },
     connectedTarget: { id: 'target', platform, description: appId },
     proxyDesired: false,
     helpersInjected: true,
@@ -22,6 +23,9 @@ function mockClient({
     async autoConnect() {
       if (autoConnectFails) throw new Error('no exact target');
       this.isConnected = true;
+    },
+    async connectExact() {
+      return this.autoConnect();
     },
     async softReconnect() {
       if (softReconnectFails) throw new Error('no exact target');
@@ -238,7 +242,7 @@ test('reload recovery failure is a typed error rather than reconnected:false suc
   const parsed = JSON.parse(result.content[0].text);
 
   assert.equal(parsed.ok, false);
-  assert.equal(parsed.code, 'RECONNECT_TIMEOUT');
+  assert.equal(parsed.code, 'RECONNECT_TIMEOUT', JSON.stringify(parsed));
   assert.equal(parsed.meta.reconnected, false);
   assert.equal(result.isError, true);
 });

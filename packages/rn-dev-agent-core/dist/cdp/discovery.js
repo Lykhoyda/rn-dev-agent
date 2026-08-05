@@ -517,6 +517,33 @@ export function selectMetroPort(attached, runningPorts, ctx) {
         warning: `Multiple live Metros with an attached app: ${list}. Picked :${chosen}. Pass metroPort explicitly to choose a different worktree.`,
     };
 }
+export async function discoverExactPort(currentPort, platformFilterOrFilters) {
+    const filters = typeof platformFilterOrFilters === 'string'
+        ? { platform: platformFilterOrFilters }
+        : (platformFilterOrFilters ?? {});
+    const raw = await fetchTargets(currentPort, DISCOVERY_TIMEOUT_MS * 2);
+    const validTargets = filterValidTargets(raw).filter((target) => {
+        try {
+            const { hostname, port } = new URL(target.webSocketDebuggerUrl);
+            return (hostname === '127.0.0.1' || hostname === 'localhost') && Number(port) === currentPort;
+        }
+        catch {
+            return false;
+        }
+    });
+    inferPlatforms(validTargets);
+    const { targets, warning, errorCode } = selectTarget(validTargets, filters);
+    return {
+        port: currentPort,
+        targets,
+        ...(warning ? { warning } : {}),
+        ...(errorCode ? { errorCode, candidates: validTargets } : {}),
+    };
+}
+export async function listTargetsOnExactPort(port) {
+    const result = await discoverExactPort(port);
+    return { port, targets: result.targets };
+}
 export async function discover(currentPort, platformFilterOrFilters) {
     const filters = typeof platformFilterOrFilters === 'string'
         ? { platform: platformFilterOrFilters }

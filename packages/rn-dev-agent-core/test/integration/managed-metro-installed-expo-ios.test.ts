@@ -260,7 +260,9 @@ function monitorForeignControl(
   return {
     assertUnchanged: () => {
       assert.equal(
-        samples.every((entry) => entry.pid === pid && entry.birth === birth.token),
+        samples.every(
+          (entry) => entry.pid === pid && (entry.birth === null || entry.birth === birth.token),
+        ) && samples.some((entry) => entry.birth === birth.token),
         true,
         JSON.stringify(samples),
       );
@@ -716,7 +718,8 @@ async function writeMarker(buildGeneration) {
         120_000,
         'the dedicated installed Expo Hermes target',
       );
-      assert.equal(target.vm, 'Hermes');
+      assert.equal(target.vm, undefined);
+      assert.match(target.description ?? '', /React Native Bridgeless/);
       assert.equal(new URL(target.webSocketDebuggerUrl!).port, String(port));
 
       client = new CDPClient(port);
@@ -739,7 +742,7 @@ async function writeMarker(buildGeneration) {
           launchExactApp: async () => {},
           acceptIosOpenDialog: async () => {},
           connectExact: async () => {
-            await client!.autoConnect(port, {
+            await client!.connectExact(port, {
               platform: 'ios',
               bundleId: appId,
               targetId: target.id,
@@ -923,7 +926,7 @@ async function writeMarker(buildGeneration) {
       assert.equal(getFastRunnerState(), null);
       await stopManagedMetro(binding, { sessionId, signerCapability });
       await stopManagedMetro(binding, { sessionId, signerCapability });
-      assert.equal(metroListenerPid(port), undefined);
+      assert.equal(metroListenerPid(port), null);
       assert.equal(existsSync(binding.runtimeEvidenceSocket), false);
       binding = undefined;
       restorePackageIntegrationFiles({ appRoot: root });

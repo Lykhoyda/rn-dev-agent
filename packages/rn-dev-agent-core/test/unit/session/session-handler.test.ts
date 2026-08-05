@@ -1166,6 +1166,7 @@ test('forced dev-client pin invalidates the prior target before recreating the c
       }),
     },
     {
+      onBundleInvalidated: () => calls.push('clear-client-policy'),
       pinDevClient: async (_status, options) => {
         assert.equal(options.force, true);
         calls.push('recreate-client');
@@ -1180,6 +1181,7 @@ test('forced dev-client pin invalidates the prior target before recreating the c
   assert.deepEqual(calls, [
     'release:8193:target-a',
     'clear-bundle',
+    'clear-client-policy',
     'recreate-client',
     'claim:8193:target-b',
     'bind-bundle',

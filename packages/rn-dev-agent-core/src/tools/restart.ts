@@ -9,6 +9,8 @@ import type { SnapshotHint } from '../cdp/app-installed-probe.js';
 import { resetDetachedRecoveryCounter } from '../cdp/recover-detached.js';
 import { snapshotHintForBundleId } from './resolve-ios-app-file.js';
 import { isValidBundleId } from '../domain/maestro-validator.js';
+import { targetMatchesSession } from './status.js';
+import { filterTargetsForExactDevice } from '../session/target-device-authority.js';
 import type { ToolResult } from '../utils.js';
 
 const defaultExecFile = promisify(execFileCb);
@@ -25,6 +27,14 @@ export interface RestartHandlerDeps {
   probeAppInstalled?: (udid: string, appId: string) => Promise<boolean | null>;
   snapshotHint?: (appId: string) => SnapshotHint | null;
   resetDetachedBudget?: () => void;
+  resolveExactTargetId?: (client: CDPClient, input: ExactRestartTarget) => Promise<string>;
+}
+
+interface ExactRestartTarget {
+  metroPort: number;
+  platform: 'ios' | 'android';
+  deviceId: string;
+  appId: string;
 }
 
 export interface RestartArgs {
@@ -42,6 +52,44 @@ const SIMULATOR_UDID_RE = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9
 
 function safeSimctlTarget(deviceId: string | undefined): string | null {
   return deviceId && SIMULATOR_UDID_RE.test(deviceId) ? deviceId : null;
+}
+
+async function resolveExactRestartTargetId(
+  client: CDPClient,
+  input: ExactRestartTarget,
+  execute: NonNullable<RestartHandlerDeps['execFile']>,
+): Promise<string> {
+  const listed = await client.listTargetsExact(input.metroPort);
+  if (listed.port !== input.metroPort) {
+    throw new Error(
+      'CDP_TARGET_AUTHORITY_MISMATCH: restart target discovery escaped the allocated Metro port',
+    );
+  }
+  const sessionCandidates = listed.targets.filter((candidate) =>
+    targetMatchesSession(candidate, {
+      platform: input.platform,
+      bundleId: input.appId,
+    }),
+  );
+  const exactCandidates = await filterTargetsForExactDevice(
+    {
+      platform: input.platform,
+      deviceId: input.deviceId,
+      targets: sessionCandidates,
+    },
+    {
+      execute: async (file, args) => {
+        const result = await execute(file, args, { timeout: 5_000 });
+        return { stdout: result.stdout };
+      },
+    },
+  );
+  if (exactCandidates.length !== 1) {
+    throw new Error(
+      `CDP_TARGET_AUTHORITY_MISMATCH: expected one restart target on the exact device, found ${exactCandidates.length}`,
+    );
+  }
+  return exactCandidates[0]!.id;
 }
 
 let inflightRestart: Promise<ToolResult> | null = null;
@@ -63,6 +111,9 @@ export function createRestartHandler(
   const probeAppInstalledFn = deps.probeAppInstalled ?? probeAppInstalled;
   const snapshotHintFn = deps.snapshotHint ?? snapshotHintForBundleId;
   const resetDetachedBudgetFn = deps.resetDetachedBudget ?? resetDetachedRecoveryCounter;
+  const resolveExactTargetId =
+    deps.resolveExactTargetId ??
+    ((client, input) => resolveExactRestartTargetId(client, input, execFile));
 
   async function doRestart(args: RestartArgs): Promise<ToolResult> {
     try {
@@ -218,9 +269,24 @@ export function createRestartHandler(
       let connected = false;
       let connectError: string | undefined;
       try {
-        await newClient.autoConnect(args.metroPort, {
-          platform: args.platform as 'ios' | 'android' | undefined,
+        const reconnectPort = args.metroPort ?? preservedPort;
+        const reconnectPlatform =
+          targetPlatform === 'ios' || targetPlatform === 'android' ? targetPlatform : null;
+        if (!reconnectPlatform || !args.deviceId || !args.appId || !isValidBundleId(args.appId)) {
+          throw new Error(
+            'CDP_TARGET_AUTHORITY_MISMATCH: restart requires the exact session port, platform, device, and app',
+          );
+        }
+        const targetId = await resolveExactTargetId(newClient, {
+          metroPort: reconnectPort,
+          platform: reconnectPlatform,
+          deviceId: args.deviceId,
+          appId: args.appId,
+        });
+        await newClient.connectExact(reconnectPort, {
+          platform: reconnectPlatform,
           bundleId: args.appId,
+          targetId,
         });
         connected = newClient.isConnected;
       } catch (err) {

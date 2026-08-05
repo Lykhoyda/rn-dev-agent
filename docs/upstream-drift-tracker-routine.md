@@ -63,7 +63,7 @@ NO-IMPACT**. Changelogs are SECONDARY — open the file and verify the claim bef
 | Upstream change touches… | Verify against |
 |---|---|
 | Inspector handshake / origin / CSRF gates | `packages/rn-dev-agent-core/src/ws-origin.ts` → `metroOrigin()` (must clear BOTH the loopback gate and Expo's `isMatchingOrigin` host-match gate; today `http://127.0.0.1:{port}`) |
-| Inspector target discovery (`/json` endpoint, target fields) | `packages/rn-dev-agent-core/src/cdp/discovery.ts` → `GET /json/list`; depends on `webSocketDebuggerUrl`, `title`, `vm === 'Hermes'`, `description`, `deviceName` (Metro 0.76+), and the `title.includes('Experimental')` exclusion |
+| Inspector target discovery (`/json` endpoint, target fields) | `packages/rn-dev-agent-core/src/cdp/discovery.ts` → `GET /json/list`; depends on `webSocketDebuggerUrl`, `title`, optional legacy `vm`, `description`, `appId`, `deviceName` (Metro 0.76+), and the `title.includes('Experimental')` exclusion. Modern Bridgeless Hermes targets may omit `vm`; session authority therefore requires the signed runtime marker rather than inferring readiness from target metadata. |
 | Hermes CDP domain support | `packages/rn-dev-agent-core/src/cdp/setup.ts` → `Runtime.enable`, `Debugger.enable`, `Network.enable` (+ hook-fallback probe, D626), `Log.enable`, `Profiler.enable`, `HeapProfiler.enable` |
 | Fiber-tree / React internals walk | `packages/rn-dev-agent-core/src/injected-helpers.ts`, `bridge-detector.ts` |
 | Profiling (heap / CPU) | `packages/rn-dev-agent-core/src/tools/profiling.ts` |
@@ -73,8 +73,10 @@ NO-IMPACT**. Changelogs are SECONDARY — open the file and verify the claim bef
 
 ## Step 3 — BREAKING is any of:
 
-- A Metro `/json/list` **endpoint path change**, target **field rename/removal**, or `vm`
-  value change (e.g. `Hermes` → something else) — breaks target discovery.
+- A Metro `/json/list` **endpoint path change**, a required target **field rename/removal**, or
+  metadata changes that leave neither the legacy `vm` signal nor recognized React Native
+  metadata — breaks target discovery. Omitting optional legacy `vm` alone is not breaking;
+  verify readiness against the [session-authority contract](../apps/docs-site/src/content/docs/session-authority.mdx).
 - A **new or changed origin gate** (a third gate beyond loopback + Expo host-match, or a
   change to what host the inspector accepts) — re-breaks the B177/B178 handshake.
 - A **CDP domain we `.enable()` now rejected/removed** by the bundled Hermes

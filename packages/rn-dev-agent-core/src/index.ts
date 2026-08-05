@@ -194,7 +194,11 @@ import { bindNativeRunner, unbindNativeRunner } from './session/runner-binding.j
 import { claimOptionalBundleAuthority, createAuthorityGate } from './session/authority-gate.js';
 import { createLocalAuthorityProbe } from './session/local-authority-probe.js';
 import { readJsonStateFile } from './util/secure-state-file.js';
-import { buildBundleAuthorityBinding, pinExactDevClient } from './session/dev-client-authority.js';
+import {
+  buildBundleAuthorityBinding,
+  pinExactDevClient,
+  reconcileAuthoritativeBundle,
+} from './session/dev-client-authority.js';
 import { createRegisteredConnectHandler } from './session/registered-connect.js';
 import {
   verifyMetroAuthorityMarker,
@@ -263,7 +267,12 @@ const getClient = (): CDPClient => client;
 const setClient = (c: CDPClient): void => {
   client = c;
 };
-const createClient = (port: number): CDPClient => new CDPClient(port);
+const createClient = (port: number): CDPClient => {
+  const status = authorityRuntime.status();
+  return status.available && status.bindings.bundle
+    ? client.createReplacement(port)
+    : new CDPClient(port);
+};
 
 const execFileP = promisify(execFile);
 
@@ -523,8 +532,74 @@ const localAuthorityProbe = createLocalAuthorityProbe({
 const authorityGate = createAuthorityGate(authorityRuntime, {
   probe: async ({ axis, phase, status, tool, args }) =>
     localAuthorityProbe({ axis, phase, status, tool, args }),
+  recoverRuntimeConnection: async (status) => {
+    const current = getClient();
+    const metro = status.bindings.metro as { port?: unknown } | undefined;
+    const device = status.bindings.device as { platform?: unknown; appId?: unknown } | undefined;
+    const metroPort = metro?.port;
+    const platform = device?.platform;
+    const appId = device?.appId;
+    if (
+      !Number.isSafeInteger(metroPort) ||
+      (platform !== 'ios' && platform !== 'android') ||
+      typeof appId !== 'string' ||
+      !current.matchesAuthoritativeSessionPolicy(Number(metroPort), {
+        platform,
+        bundleId: appId,
+      })
+    ) {
+      return false;
+    }
+    if (current.reconnectState.active) {
+      const deadline = Date.now() + 30_000;
+      while (current.reconnectState.active && Date.now() < deadline) {
+        await new Promise((resolveWait) => setTimeout(resolveWait, 500));
+      }
+      if (current.reconnectState.active || !current.isConnected) {
+        throw new Error('RECONNECT_TIMEOUT: authoritative background reconnect did not complete');
+      }
+    } else if (!current.isConnected) {
+      await current.autoConnect();
+    }
+    const bundle = status.bindings.bundle as
+      | { targetId?: unknown; connectionGeneration?: unknown }
+      | undefined;
+    return (
+      current.connectedTarget?.id !== bundle?.targetId ||
+      current.connectionGeneration !== bundle?.connectionGeneration
+    );
+  },
+  runtimeConnectionChanged: (status) => {
+    const current = getClient();
+    const metro = status.bindings.metro as { port?: unknown } | undefined;
+    const device = status.bindings.device as { platform?: unknown; appId?: unknown } | undefined;
+    const metroPort = metro?.port;
+    const platform = device?.platform;
+    const appId = device?.appId;
+    if (
+      !Number.isSafeInteger(metroPort) ||
+      (platform !== 'ios' && platform !== 'android') ||
+      typeof appId !== 'string' ||
+      !current.matchesAuthoritativeSessionPolicy(Number(metroPort), {
+        platform,
+        bundleId: appId,
+      }) ||
+      current.reconnectState.active ||
+      !current.isConnected
+    ) {
+      return false;
+    }
+    const bundle = status.bindings.bundle as
+      | { targetId?: unknown; connectionGeneration?: unknown }
+      | undefined;
+    return (
+      current.connectedTarget?.id !== bundle?.targetId ||
+      current.connectionGeneration !== bundle?.connectionGeneration
+    );
+  },
   refreshRuntimeBinding: rebindSessionRuntime,
   relaunchBoundRuntime: relaunchSessionRuntime,
+  onRuntimeBundleInvalidated: () => getClient().clearAuthoritativeSessionPolicy(),
   onRunnerReleased: async (runner) => {
     if (runner.platform !== 'ios') return;
     const deviceId = typeof runner.deviceId === 'string' ? runner.deviceId : undefined;
@@ -754,12 +829,13 @@ async function pinSessionDevClient(status: SessionStatus, options: { force: bool
   if (!secret?.signerCapability) {
     throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: session signer is unavailable');
   }
+  const current = getClient();
+  current.clearAuthoritativeSessionPolicy();
   if (options.force) {
-    const current = getClient();
     await current.disconnect();
     setClient(createClient(metro.port));
   }
-  return pinExactDevClient(
+  const bundle = await pinExactDevClient(
     {
       sessionId: status.sessionId,
       metroInstanceId: metro.instanceId,
@@ -825,6 +901,38 @@ async function pinSessionDevClient(status: SessionStatus, options: { force: bool
       },
     },
   );
+  getClient().setAuthoritativeSessionPolicy(createAuthoritativeSessionPolicy(status));
+  return bundle;
+}
+
+function createAuthoritativeSessionPolicy(status: SessionStatus) {
+  const device = status.bindings.device as {
+    platform: 'ios' | 'android';
+    deviceId: string;
+    appId: string;
+  };
+  const metroPort = Number(status.bindings.metroPort);
+  return {
+    port: metroPort,
+    filters: { platform: device.platform, bundleId: device.appId },
+    resolveTargetId: async (targets: import('./types.js').HermesTarget[]) => {
+      const exactCandidates = await filterTargetsForExactDevice(
+        {
+          platform: device.platform,
+          deviceId: device.deviceId,
+          targets,
+        },
+        { execute: execFileP },
+      );
+      if (exactCandidates.length !== 1) {
+        throw new Error(
+          `CDP_TARGET_AUTHORITY_MISMATCH: expected one target on the exact device, found ${exactCandidates.length}`,
+        );
+      }
+      return exactCandidates[0]!.id;
+    },
+    verifyAndReconcile: reconcileAuthoritativeConnection,
+  };
 }
 
 async function connectExactSessionTarget(
@@ -846,7 +954,7 @@ async function connectExactSessionTarget(
   let lastError: unknown;
   do {
     try {
-      const listed = await exactClient.listTargets(input.metroPort);
+      const listed = await exactClient.listTargetsExact(input.metroPort);
       if (listed.port !== input.metroPort) {
         throw new Error(
           'CDP_TARGET_AUTHORITY_MISMATCH: target discovery escaped the allocated Metro port',
@@ -871,7 +979,7 @@ async function connectExactSessionTarget(
           `CDP_TARGET_AUTHORITY_MISMATCH: expected one target on the exact device, found ${exactCandidates.length}`,
         );
       }
-      await exactClient.autoConnect(input.metroPort, {
+      await exactClient.connectExact(input.metroPort, {
         platform: input.platform,
         bundleId: input.appId,
         targetId: exactCandidates[0]!.id,
@@ -1050,6 +1158,29 @@ async function rebindSessionRuntime(status: SessionStatus): Promise<Record<strin
   });
 }
 
+async function reconcileAuthoritativeConnection(connectedClient: CDPClient): Promise<void> {
+  if (getClient() !== connectedClient) {
+    throw new Error('CDP_TARGET_AUTHORITY_MISMATCH: authoritative client was replaced');
+  }
+  const available = authorityRuntime.requireAvailable();
+  const status = available.registry.getSessionStatus(available.session.sessionId);
+  if (!status) throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: session authority is unavailable');
+  await reconcileAuthoritativeBundle(status, {
+    verifyRuntime: () => rebindSessionRuntime(status),
+    hasActiveOperation: () =>
+      available.registry.currentOperation() !== undefined ||
+      available.registry.hasActiveBundleOperation(available.session),
+    commit: (input) => available.registry.updateBindings(available.session, input),
+  });
+}
+
+const persistedAuthorityStatus = authorityRuntime.status();
+if (persistedAuthorityStatus.available && persistedAuthorityStatus.bindings.bundle) {
+  getClient().setAuthoritativeSessionPolicy(
+    createAuthoritativeSessionPolicy(persistedAuthorityStatus),
+  );
+}
+
 const getSessionSignerCapability = (sessionId?: string): string | null => {
   const currentSecretPath = process.env.RN_DEV_AGENT_SESSION_SECRET_PATH;
   if (!currentSecretPath) return null;
@@ -1062,6 +1193,7 @@ const getSessionSignerCapability = (sessionId?: string): string | null => {
 const sessionHandler = createSessionHandler(authorityRuntime, {
   getSignerCapability: getSessionSignerCapability,
   pinDevClient: pinSessionDevClient,
+  onBundleInvalidated: () => getClient().clearAuthoritativeSessionPolicy(),
 });
 const disconnectClientHandler = createDisconnectHandler(getClient, setClient, createClient);
 
@@ -1082,6 +1214,7 @@ async function disconnectBoundSession() {
       bindings: { bundle: null },
     });
   }
+  getClient().clearAuthoritativeSessionPolicy();
   return disconnected;
 }
 
@@ -1143,6 +1276,7 @@ trackedTool(
   },
   createPassiveStatusHandler(getClient, authorityRuntime, {
     getSignerCapability: getSessionSignerCapability,
+    onBundleInvalidated: () => getClient().clearAuthoritativeSessionPolicy(),
   }),
 );
 
@@ -1214,9 +1348,9 @@ trackedTool(
 
 trackedTool(
   'cdp_targets',
-  'List available Hermes debug targets without connecting. Shows all valid targets from Metro with their IDs, titles, and VM type. Highlights which target is currently connected (if any). Use to inspect what is available before calling cdp_connect.',
+  'List available Hermes debug targets without connecting. An authoritative session lists only its exact managed Metro port; a fresh non-authoritative client keeps ordinary port discovery. Shows target IDs, titles, optional legacy VM metadata, and the currently connected target.',
   {
-    metroPort: z.number().optional().describe('Metro port to scan (default: auto-detect)'),
+    metroPort: z.number().optional().describe('Session port; otherwise an ordinary discovery hint'),
   },
   createTargetsHandler(getClient),
 );
@@ -3106,7 +3240,7 @@ trackedTool(
     metroPort: z
       .number()
       .optional()
-      .describe('Override Metro port for reconnection (default: keep current)'),
+      .describe('Authority-bound Metro port; conflicting values are refused'),
     platform: z
       .enum(['ios', 'android'])
       .optional()

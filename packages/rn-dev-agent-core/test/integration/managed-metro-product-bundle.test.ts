@@ -53,14 +53,35 @@ async function availablePort(): Promise<number> {
   });
 }
 
-function prepareFixture(root: string, maxWorkers: number): void {
+function prepareFixture(
+  root: string,
+  maxWorkers: number,
+  metroConfig: 'default' | 'nativewind',
+): void {
   cpSync(fixtureRoot, root, { recursive: true });
   writeFileSync(join(root, '.gitignore'), 'node_modules/\nios/\n.expo/\n.rn-agent/runtime/\n');
+  if (metroConfig === 'default') {
+    writeFileSync(
+      join(root, 'App.tsx'),
+      `import { Text, View } from 'react-native';
+
+export default function App() {
+  return <View><Text>Managed Metro is ready</Text></View>;
+}
+`,
+    );
+  }
   writeFileSync(
     join(root, 'metro.config.js'),
-    `const { getDefaultConfig } = require('expo/metro-config');
+    metroConfig === 'nativewind'
+      ? `const { getDefaultConfig } = require('expo/metro-config');
 const { withNativeWind } = require('nativewind/metro');
 const config = withNativeWind(getDefaultConfig(__dirname), { input: './global.css' });
+config.maxWorkers = ${maxWorkers};
+module.exports = config;
+`
+      : `const { getDefaultConfig } = require('expo/metro-config');
+const config = getDefaultConfig(__dirname);
 config.maxWorkers = ${maxWorkers};
 module.exports = config;
 `,
@@ -262,9 +283,14 @@ function productRuntimeContext(bundleUrl: string): {
 // NativeWind's Tailwind CLI child. That child exits on stdin EOF, so a descendant fence that maps
 // child stdin to /dev/null stalls every bundle request without any simulator involved.
 for (const transport of [
-  { maxWorkers: 1, name: 'in-band transform transport' },
-  { maxWorkers: 4, name: 'forked worker transform transport' },
-]) {
+  { maxWorkers: 4, metroConfig: 'default', name: 'default Expo config' },
+  { maxWorkers: 1, metroConfig: 'nativewind', name: 'NativeWind in-band transform transport' },
+  {
+    maxWorkers: 4,
+    metroConfig: 'nativewind',
+    name: 'NativeWind forked worker transform transport',
+  },
+] as const) {
   test(
     `managed Metro serves the product bundle over the ${transport.name}`,
     {
@@ -279,7 +305,7 @@ for (const transport of [
       let binding: ManagedMetroBinding | undefined;
       let integrationApplied = false;
       try {
-        prepareFixture(root, transport.maxWorkers);
+        prepareFixture(root, transport.maxWorkers, transport.metroConfig);
         mkdirSync(runtimeRoot, { recursive: true });
         const source = resolveSourceIdentity(root);
         applyPackageIntegration({ appRoot: root, sessionCli: join(root, 'rn-session.cjs') });

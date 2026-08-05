@@ -5,6 +5,7 @@ import {
   boundConnectConflict,
   buildBundleAuthorityBinding,
   pinExactDevClient,
+  reconcileAuthoritativeBundle,
 } from '../../../dist/session/dev-client-authority.js';
 
 const expected = {
@@ -124,6 +125,96 @@ test('bare RN pin launches the exact claimed app without inventing a dev-client 
   assert.deepEqual(calls[0], ['launch', 'ios', 'IOS-UUID', 'com.example.app']);
   assert.equal(binding.launchMethod, 'app');
   assert.equal(binding.devClientUrl, undefined);
+});
+
+test('loader or error targets remain rejected until the exact runtime exposes its signed marker', async () => {
+  const marker = buildSignedMetroMarker(expected, 'private-signer-capability');
+  let markerAvailable = false;
+  let launches = 0;
+  const dependencies = {
+    openUrl: async () => {},
+    launchExactApp: async () => {
+      launches += 1;
+    },
+    acceptIosOpenDialog: async () => {},
+    connectExact: async () => ({
+      targetId: 'bridgeless-target-without-vm',
+      connectionGeneration: launches,
+      deviceId: 'IOS-UUID',
+    }),
+    readMarker: async () =>
+      markerAvailable ? ({ status: 'signed' as const, marker } as const) : null,
+  };
+  const input = {
+    ...expected,
+    deviceId: 'IOS-UUID',
+    metroPort: 8341,
+    signerCapability: 'private-signer-capability',
+  };
+
+  await assert.rejects(pinExactDevClient(input, dependencies), (error: unknown) => {
+    assert.ok(error instanceof Error);
+    assert.match(error.message, /^BUNDLE_HANDSHAKE_UNAVAILABLE:/);
+    assert.doesNotMatch(error.message, /private-signer-capability|IOS-UUID|com\.example\.app/);
+    return true;
+  });
+
+  markerAvailable = true;
+  const recovered = await pinExactDevClient(input, dependencies);
+  assert.equal(recovered.targetId, 'bridgeless-target-without-vm');
+  assert.equal(recovered.connectionGeneration, 2);
+  assert.equal(launches, 2);
+});
+
+test('verified reconnect atomically replaces rotated target and generation authority', async () => {
+  const commits: Record<string, unknown>[] = [];
+  await reconcileAuthoritativeBundle(
+    {
+      authorityVersion: 12,
+      bindings: {
+        metroPort: 8341,
+        bundle: { targetId: 'target-old', connectionGeneration: 3 },
+      },
+    },
+    {
+      verifyRuntime: async () => ({ targetId: 'target-new', connectionGeneration: 4 }),
+      hasActiveOperation: () => false,
+      commit: (input) => commits.push(input),
+    },
+  );
+
+  assert.deepEqual(commits, [
+    {
+      expectedAuthorityVersion: 12,
+      state: 'ready',
+      bindings: { bundle: { targetId: 'target-new', connectionGeneration: 4 } },
+      releaseResources: [{ type: 'target', key: '8341:target-old' }],
+      claimResources: [{ type: 'target', key: '8341:target-new' }],
+    },
+  ]);
+});
+
+test('signed-marker rejection prevents durable reconnect reconciliation', async () => {
+  let committed = false;
+  await assert.rejects(
+    reconcileAuthoritativeBundle(
+      {
+        authorityVersion: 12,
+        bindings: { metroPort: 8341, bundle: { targetId: 'target-old' } },
+      },
+      {
+        verifyRuntime: async () => {
+          throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: signed marker rejected');
+        },
+        hasActiveOperation: () => false,
+        commit: () => {
+          committed = true;
+        },
+      },
+    ),
+    /BUNDLE_HANDSHAKE_UNAVAILABLE/,
+  );
+  assert.equal(committed, false);
 });
 
 test('dev-client pinning rejects a target not proven on the claimed device', async () => {

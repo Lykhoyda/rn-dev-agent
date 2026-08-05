@@ -101,7 +101,9 @@ export async function forceReconnect(
         : {}),
     };
     await raceWithTimeout(
-      newClient.autoConnect(captured.port, filters),
+      authorityTarget
+        ? newClient.connectExact(captured.port, filters)
+        : newClient.autoConnect(captured.port, filters),
       FORCE_FALLBACK_TIMEOUT_MS,
       'force_reconnect',
     );
@@ -136,7 +138,7 @@ async function resolveExactReloadTargetId(
   authorityTarget: ReloadAuthorityTarget,
   execute: NonNullable<ReloadHandlerDeps['execFile']>,
 ): Promise<string> {
-  const listed = await client.listTargets(captured.port);
+  const listed = await client.listTargetsExact(captured.port);
   if (listed.port !== captured.port) {
     throw new Error(
       'CDP_TARGET_AUTHORITY_MISMATCH: reload target discovery escaped the allocated Metro port',

@@ -17,7 +17,8 @@ export interface PendingCall {
 export interface HermesTarget {
   id: string;
   title: string;
-  vm: string;
+  /** Legacy inspector metadata. Modern Bridgeless Hermes targets may omit this field. */
+  vm?: string;
   webSocketDebuggerUrl: string;
   description?: string;
   /** Metro may expose the exact application identifier separately from description. */

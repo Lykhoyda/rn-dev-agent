@@ -104,6 +104,7 @@ export async function autoConnect(
   portHint?: number,
   filters?: ConnectFilters,
   intent: ConnectIntent = 'default',
+  discoverFn: typeof discover = discover,
 ): Promise<string> {
   if (ctx.getState() === 'connecting' || ctx.isReconnecting()) {
     throw new Error('Already connecting to Metro...');
@@ -123,7 +124,7 @@ export async function autoConnect(
     const resolved = resolveBundleId(effective.platform ?? 'ios');
     if (resolved) effective.preferredBundleId = resolved;
   }
-  return discoverAndConnect(ctx, portHint, effective, discover, intent);
+  return discoverAndConnect(ctx, portHint, effective, discoverFn, intent);
 }
 
 export async function discoverAndConnect(

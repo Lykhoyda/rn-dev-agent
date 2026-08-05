@@ -12,6 +12,8 @@ import { failResult, okResult } from '../../../dist/utils.js';
 
 function fixture() {
   const calls = [];
+  const operationAxes = new Set();
+  const pendingOperationAxes = new Set();
   const status = {
     available: true,
     sessionId: 'session-a',
@@ -48,6 +50,9 @@ function fixture() {
   const registry = {
     beginOperation: (_session, input) => {
       calls.push(`begin:${input.tool}`);
+      operationAxes.clear();
+      pendingOperationAxes.clear();
+      for (const axis of input.profile) operationAxes.add(axis);
       return {
         operationId: input.operationId,
         sessionId: 'session-a',
@@ -69,6 +74,16 @@ function fixture() {
       return status.claims.find((claim) => claim.type === type && claim.key === key) ?? null;
     },
     verifyOperation: () => calls.push('cas'),
+    operationHasAxis: (_operation, axis) => operationAxes.has(axis),
+    beginOperationAxisAdmission: (_operation, axis) => {
+      calls.push(`begin-operation-axis:${axis}`);
+      pendingOperationAxes.add(axis);
+    },
+    completeOperationAxisAdmission: (_operation, axis, admitted) => {
+      calls.push(`complete-operation-axis:${axis}:${admitted}`);
+      pendingOperationAxes.delete(axis);
+      if (admitted) operationAxes.add(axis);
+    },
     runWithOperation: async (_operation, callback) => callback(),
     commitPlatformAuthorityReceipts: () => calls.push('commit-receipts'),
     endOperation: () => calls.push('end'),
@@ -126,6 +141,229 @@ test('authoritative tools receive preflight/postflight receipts and an immediate
   );
   assert.ok(calls.indexOf('cas') < calls.indexOf('dispatch'));
   assert.equal(calls.at(-1), 'end');
+});
+
+test('restored authoritative sessions reconnect and rebind before B preflight', async () => {
+  const { calls, runtime, status } = fixture();
+  status.bindings.metro.port = 8193;
+  status.bindings.bundle.targetId = 'persisted-target';
+  status.bindings.bundle.connectionGeneration = 1;
+  let recovered = false;
+  const gate = createAuthorityGate(runtime, {
+    recoverRuntimeConnection: async () => {
+      calls.push('recover-runtime');
+      recovered = true;
+      return true;
+    },
+    refreshRuntimeBinding: async () => {
+      calls.push('refresh-binding');
+      return {
+        ...status.bindings.bundle,
+        targetId: 'restored-target',
+        connectionGeneration: 2,
+      };
+    },
+    probe: async ({ axis, phase, status: probedStatus }) => {
+      if (axis === 'B') {
+        assert.equal(recovered, true);
+        assert.equal(probedStatus.bindings.bundle.targetId, 'restored-target');
+        assert.equal(probedStatus.bindings.bundle.connectionGeneration, 2);
+      }
+      calls.push(`${phase}:${axis}`);
+      return { axis, identity: `${axis}-identity` };
+    },
+  });
+
+  const result = await gate.wrap('cdp_console_log', async () => okResult({ entries: [] }))({});
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, true);
+  assert.ok(calls.indexOf('recover-runtime') < calls.indexOf('preflight:B'));
+  assert.ok(calls.indexOf('replace-binding') < calls.indexOf('preflight:B'));
+});
+
+test('disconnected sessions without recoverable policy fail before dispatch', async () => {
+  const { runtime } = fixture();
+  let dispatched = false;
+  const gate = createAuthorityGate(runtime, {
+    recoverRuntimeConnection: async () => false,
+    probe: async ({ axis }) => {
+      if (axis === 'B') {
+        throw new SessionAuthorityError(
+          'BUNDLE_HANDSHAKE_UNAVAILABLE',
+          'persisted exact session policy is unavailable',
+        );
+      }
+      return { axis, identity: `${axis}-identity` };
+    },
+  });
+
+  const result = await gate.wrap('cdp_console_log', async () => {
+    dispatched = true;
+    return okResult({ entries: [] });
+  })({});
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, false);
+  assert.equal(envelope.code, 'BUNDLE_HANDSHAKE_UNAVAILABLE');
+  assert.equal(dispatched, false);
+});
+
+test('handler-time reconnect is rebound before bundle postflight', async () => {
+  const { calls, runtime, status } = fixture();
+  status.bindings.metro.port = 8193;
+  status.bindings.bundle.targetId = 'preflight-target';
+  status.bindings.bundle.connectionGeneration = 1;
+  let recoveryCalls = 0;
+  const gate = createAuthorityGate(runtime, {
+    recoverRuntimeConnection: async () => {
+      recoveryCalls += 1;
+      calls.push(`recover-runtime:${recoveryCalls}`);
+      return recoveryCalls === 2;
+    },
+    refreshRuntimeBinding: async () => ({
+      ...status.bindings.bundle,
+      targetId: 'post-handler-target',
+      connectionGeneration: 2,
+    }),
+    probe: async ({ axis, phase, status: probedStatus }) => {
+      if (axis === 'B' && phase === 'postflight') {
+        assert.equal(probedStatus.bindings.bundle.targetId, 'post-handler-target');
+        assert.equal(probedStatus.bindings.bundle.connectionGeneration, 2);
+      }
+      calls.push(`${phase}:${axis}`);
+      return { axis, identity: `${axis}-identity` };
+    },
+  });
+
+  const result = await gate.wrap('cdp_console_log', async () => okResult({ entries: [] }))({});
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, true);
+  assert.ok(calls.indexOf('recover-runtime:2') < calls.indexOf('postflight:B'));
+  assert.ok(calls.indexOf('replace-binding') < calls.indexOf('postflight:B'));
+});
+
+test('failed handler preserves its error after reconnect reconciliation', async () => {
+  const { calls, runtime, status } = fixture();
+  status.bindings.bundle.targetId = 'preflight-target';
+  status.bindings.bundle.connectionGeneration = 1;
+  let recoveryCalls = 0;
+  const gate = createAuthorityGate(runtime, {
+    recoverRuntimeConnection: async () => {
+      recoveryCalls += 1;
+      return false;
+    },
+    runtimeConnectionChanged: () => true,
+    refreshRuntimeBinding: async () => ({
+      ...status.bindings.bundle,
+      targetId: 'error-target',
+      connectionGeneration: 2,
+    }),
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+  });
+
+  const result = await gate.wrap('cdp_console_log', async () =>
+    failResult('runtime loader rejected the bundle', 'LOAD_FAILED'),
+  )({});
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, false);
+  assert.equal(envelope.code, 'LOAD_FAILED');
+  assert.equal(envelope.error, 'runtime loader rejected the bundle');
+  assert.equal(status.bindings.bundle.targetId, 'error-target');
+  assert.equal(status.bindings.bundle.connectionGeneration, 2);
+  assert.ok(calls.includes('replace-binding'));
+  assert.equal(recoveryCalls, 1);
+});
+
+test('failed reconnect does not start a second recovery cycle', async () => {
+  const { runtime } = fixture();
+  let recoveryCalls = 0;
+  let changedChecks = 0;
+  const gate = createAuthorityGate(runtime, {
+    recoverRuntimeConnection: async () => {
+      recoveryCalls += 1;
+      return false;
+    },
+    runtimeConnectionChanged: () => {
+      changedChecks += 1;
+      return false;
+    },
+    refreshRuntimeBinding: async () => {
+      throw new Error('unexpected binding refresh');
+    },
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+  });
+
+  const result = await gate.wrap('cdp_console_log', async () =>
+    failResult('Reconnection timed out. Call cdp_status to retry.', 'RECONNECT_TIMEOUT'),
+  )({});
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.code, 'RECONNECT_TIMEOUT');
+  assert.equal(recoveryCalls, 1);
+  assert.equal(changedChecks, 1);
+});
+
+test('optional bundle admission records durable operation ownership', async () => {
+  const { calls, runtime, status } = fixture();
+  status.bindings.bundle.targetId = 'target-a';
+  let recoveryCalls = 0;
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+    recoverRuntimeConnection: async () => {
+      recoveryCalls += 1;
+      return false;
+    },
+    refreshRuntimeBinding: async () => status.bindings.bundle,
+  });
+
+  const result = await gate.wrap('cdp_run_action', async (args) => {
+    assert.equal(await claimOptionalBundleAuthority(args), true);
+    return okResult({ transport: 'cdp-js' });
+  })({});
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, true);
+  assert.ok(calls.includes('begin-operation-axis:B'));
+  assert.ok(calls.includes('complete-operation-axis:B:true'));
+  assert.equal(recoveryCalls, 1);
+});
+
+test('optional bundle rejection clears pending ownership before native fallback', async () => {
+  const { calls, runtime, status } = fixture();
+  status.bindings.bundle.targetId = 'target-a';
+  let recoveryCalls = 0;
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => {
+      if (axis === 'B') {
+        throw new SessionAuthorityError(
+          'BUNDLE_HANDSHAKE_UNAVAILABLE',
+          'optional runtime marker is unavailable',
+        );
+      }
+      return { axis, identity: `${axis}-identity` };
+    },
+    recoverRuntimeConnection: async () => {
+      recoveryCalls += 1;
+      throw new Error('unexpected optional fallback recovery');
+    },
+    refreshRuntimeBinding: async () => {
+      throw new Error('unexpected optional fallback refresh');
+    },
+  });
+
+  const result = await gate.wrap('cdp_run_action', async (args) => {
+    assert.equal(await claimOptionalBundleAuthority(args), false);
+    return okResult({ transport: 'maestro' });
+  })({});
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, true);
+  assert.ok(calls.includes('begin-operation-axis:B'));
+  assert.ok(calls.includes('complete-operation-axis:B:false'));
+  assert.equal(recoveryCalls, 0);
 });
 
 test('postflight drift rejects the result instead of returning a false success', async () => {
@@ -595,6 +833,7 @@ test('failed reload invalidates stale bundle authority under the active fence', 
   status.bindings.bundle.targetId = 'old-target';
   const gate = createAuthorityGate(runtime, {
     probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+    onRuntimeBundleInvalidated: () => calls.push('clear-client-policy'),
   });
 
   const result = await gate.wrap('cdp_reload', async () => ({
@@ -616,6 +855,7 @@ test('failed reload invalidates stale bundle authority under the active fence', 
   assert.equal(envelope.code, 'RECONNECT_TIMEOUT');
   assert.equal(envelope.meta.authorityInvalidated, true);
   assert.equal(calls.filter((call) => call === 'replace-binding').length, 1);
+  assert.equal(calls.filter((call) => call === 'clear-client-policy').length, 1);
   assert.equal(
     calls.some((call) => call === 'postflight:B'),
     false,
@@ -705,7 +945,7 @@ test('run-action claims bundle authority only when its CDP path is used', async 
 
   assert.deepEqual(
     cdp.calls.filter((call) => call.endsWith(':B')),
-    ['preflight:B', 'postflight:B'],
+    ['begin-operation-axis:B', 'preflight:B', 'postflight:B'],
   );
   assert.equal(
     envelope.meta.authorityReceipt.axes.some((axis) => axis.axis === 'B'),

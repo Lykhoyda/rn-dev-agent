@@ -133,6 +133,18 @@ export function withConnection<T>(
   return async (args: T): Promise<ToolResult> => {
     const client = getClient();
     try {
+      if (client.reconnectState.active) {
+        const deadline = Date.now() + 30_000;
+        while (client.reconnectState.active && Date.now() < deadline) {
+          await new Promise((resolveWait) => setTimeout(resolveWait, 500));
+        }
+        if (client.reconnectState.active || !client.isConnected) {
+          return failResult(
+            'Reconnection timed out. Call cdp_status to retry.',
+            'RECONNECT_TIMEOUT',
+          );
+        }
+      }
       if (!client.isConnected) {
         try {
           await client.autoConnect();
@@ -141,10 +153,10 @@ export function withConnection<T>(
           if (msg.includes('Already connecting')) {
             // Reconnection in progress — wait up to 30s for it to complete (B89)
             const deadline = Date.now() + 30_000;
-            while (!client.isConnected && Date.now() < deadline) {
+            while ((!client.isConnected || client.reconnectState.active) && Date.now() < deadline) {
               await new Promise((r) => setTimeout(r, 500));
             }
-            if (!client.isConnected) {
+            if (!client.isConnected || client.reconnectState.active) {
               return failResult(
                 'Reconnection timed out. Call cdp_status to retry.',
                 'RECONNECT_TIMEOUT',

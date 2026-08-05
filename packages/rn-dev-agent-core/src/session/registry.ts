@@ -6,6 +6,7 @@ import {
   type AuthorityDatabaseCtor,
 } from './authority-store.js';
 import { probeMetroListener } from './metro-binding.js';
+import type { AuthorityAxis } from './tool-profiles.js';
 
 const INITIALIZATION_WAIT = new Int32Array(new SharedArrayBuffer(4));
 export const AUTHORITY_REGISTRY_SCHEMA_VERSION = 4;
@@ -374,6 +375,134 @@ export class SessionRegistry {
 
   runWithOperation<T>(operation: OperationRef, callback: () => Promise<T>): Promise<T> {
     return this.#operationContext.run(operation, callback);
+  }
+
+  currentOperation(): OperationRef | undefined {
+    const operation = this.#operationContext.getStore();
+    if (!operation) return undefined;
+    const session = asSession(
+      this.#database
+        .prepare(
+          `SELECT state, claim_epoch, authority_version
+           FROM sessions WHERE session_id = ?`,
+        )
+        .get(operation.sessionId),
+    );
+    const active = this.#database
+      .prepare(
+        `SELECT operation_id FROM operations
+         WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
+           AND authority_version = ?`,
+      )
+      .get(
+        operation.operationId,
+        operation.sessionId,
+        operation.claimEpoch,
+        operation.authorityVersion,
+      );
+    return session &&
+      isFenceableState(session.state) &&
+      session.claim_epoch === operation.claimEpoch &&
+      session.authority_version === operation.authorityVersion &&
+      active
+      ? operation
+      : undefined;
+  }
+
+  hasActiveBundleOperation(session: SessionRef): boolean {
+    return Boolean(
+      this.#database
+        .prepare(
+          `SELECT operation_id FROM operations
+           WHERE session_id = ? AND claim_epoch = ? AND instr(profile, 'B') > 0
+           LIMIT 1`,
+        )
+        .get(session.sessionId, session.claimEpoch),
+    );
+  }
+
+  operationHasAxis(operation: OperationRef, axis: AuthorityAxis): boolean {
+    this.verifyOperation(operation);
+    const pendingAxis = `~${axis}`;
+    return Boolean(
+      this.#database
+        .prepare(
+          `SELECT operation_id FROM operations
+           WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
+             AND authority_version = ?
+             AND instr(replace(profile, ?, ''), ?) > 0`,
+        )
+        .get(
+          operation.operationId,
+          operation.sessionId,
+          operation.claimEpoch,
+          operation.authorityVersion,
+          pendingAxis,
+          axis,
+        ),
+    );
+  }
+
+  beginOperationAxisAdmission(operation: OperationRef, axis: AuthorityAxis): void {
+    const pendingAxis = `~${axis}`;
+    this.#transaction(() => {
+      this.verifyOperation(operation);
+      this.#database
+        .prepare(
+          `UPDATE operations
+           SET profile = CASE
+             WHEN instr(replace(profile, ?, ''), ?) > 0 OR instr(profile, ?) > 0 THEN profile
+             ELSE profile || ?
+           END
+           WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
+             AND authority_version = ?`,
+        )
+        .run(
+          pendingAxis,
+          axis,
+          pendingAxis,
+          pendingAxis,
+          operation.operationId,
+          operation.sessionId,
+          operation.claimEpoch,
+          operation.authorityVersion,
+        );
+    });
+  }
+
+  completeOperationAxisAdmission(
+    operation: OperationRef,
+    axis: AuthorityAxis,
+    admitted: boolean,
+  ): void {
+    const pendingAxis = `~${axis}`;
+    this.#transaction(() => {
+      this.verifyOperation(operation);
+      this.#database
+        .prepare(
+          `UPDATE operations
+           SET profile = CASE
+             WHEN ? = 0 THEN replace(profile, ?, '')
+             WHEN instr(replace(profile, ?, ''), ?) > 0 THEN replace(profile, ?, '')
+             ELSE replace(profile, ?, '') || ?
+           END
+           WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
+             AND authority_version = ?`,
+        )
+        .run(
+          admitted ? 1 : 0,
+          pendingAxis,
+          pendingAxis,
+          axis,
+          pendingAxis,
+          pendingAxis,
+          axis,
+          operation.operationId,
+          operation.sessionId,
+          operation.claimEpoch,
+          operation.authorityVersion,
+        );
+    });
   }
 
   createSession(input: {
