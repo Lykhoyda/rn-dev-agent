@@ -1425,9 +1425,9 @@ export interface RunIOSArgs {
   compact?: boolean;
   depth?: number;
   scope?: string;
-  /** #191: per-character typing delay (ms) for the corrective retype. */
+  /** Optional per-character delay for explicit native type commands. */
   delayMs?: number;
-  /** #191: clear the field before typing (the runner only clears on this flag). */
+  /** Clear before an explicit native type command. */
   clearFirst?: boolean;
   /**
    * Internal sentinel: when buildRunIOSArgs() in agent-device-wrapper resolves
