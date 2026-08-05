@@ -47,10 +47,23 @@ export function parseExpoManifestBody(body) {
     return manifest;
 }
 // Manifest output is non-proof-bearing: the only accepted claim is the exact managed endpoint.
-export function verifyManagedManifestLaunchAsset(body, endpoint) {
-    const manifest = parseExpoManifestBody(body);
+export function verifyManagedManifestLaunchAsset(response, endpoint) {
+    if (response.status < 200 || response.status >= 300) {
+        throw manifestError(`manifest request returned HTTP ${response.status}`);
+    }
+    const contentType = response.contentType.split(';', 1)[0]?.trim().toLowerCase();
+    if (contentType !== 'application/expo+json' &&
+        contentType !== 'application/json' &&
+        contentType !== 'multipart/mixed') {
+        throw manifestError('manifest response content type is not an Expo manifest');
+    }
+    const isMultipart = response.body.trimStart().startsWith('--');
+    if ((contentType === 'multipart/mixed') !== isMultipart) {
+        throw manifestError('manifest response body does not match its content type');
+    }
+    const manifest = parseExpoManifestBody(response.body);
     if (!manifest)
-        return null;
+        throw manifestError('manifest response is malformed');
     const url = manifest.launchAsset.url;
     let parsed;
     try {

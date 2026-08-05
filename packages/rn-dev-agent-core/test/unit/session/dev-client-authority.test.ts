@@ -17,6 +17,12 @@ const expected = {
   buildGeneration: 2,
 };
 
+const exactManifestResponse = {
+  body: JSON.stringify({ launchAsset: { url: 'http://127.0.0.1:8341/index.bundle' } }),
+  contentType: 'application/expo+json',
+  status: 200,
+};
+
 test('bundle authority reconstruction is complete without a prior binding', () => {
   const binding = buildBundleAuthorityBinding({
     ...expected,
@@ -48,6 +54,7 @@ test('dev-client pin opens only the declared URL on the exact device and binds i
       metroPort: 8341,
       devClientUrl: 'example://expo-development-client/?url=http%3A%2F%2Flocalhost%3A8341',
       expectedDevClientUrl: 'example://expo-development-client/?url=http%3A%2F%2Flocalhost%3A8341',
+      runtimeKind: 'expo-dev-client',
       signerCapability: 'signer',
     },
     {
@@ -58,6 +65,7 @@ test('dev-client pin opens only the declared URL on the exact device and binds i
         return { targetId: 'target-a', connectionGeneration: 7, deviceId: 'IOS-UUID' };
       },
       readMarker: async () => ({ status: 'signed', marker }),
+      readManagedManifest: async () => exactManifestResponse,
     },
   );
 
@@ -76,6 +84,7 @@ test('dev-client pin refuses any URL drift and never falls back to a picker row'
         metroPort: 8341,
         devClientUrl: 'example://foreign',
         expectedDevClientUrl: 'example://expected',
+        runtimeKind: 'expo-dev-client',
         signerCapability: 'signer',
       },
       {
@@ -103,6 +112,7 @@ test('bare RN pin launches the exact claimed app without inventing a dev-client 
       ...expected,
       deviceId: 'IOS-UUID',
       metroPort: 8341,
+      runtimeKind: 'bare-react-native',
       signerCapability: 'signer',
     },
     {
@@ -149,6 +159,7 @@ test('loader or error targets remain rejected until the exact runtime exposes it
     ...expected,
     deviceId: 'IOS-UUID',
     metroPort: 8341,
+    runtimeKind: 'bare-react-native' as const,
     signerCapability: 'private-signer-capability',
   };
 
@@ -225,6 +236,7 @@ test('dev-client pinning rejects a target not proven on the claimed device', asy
         ...expected,
         deviceId: 'IOS-UUID',
         metroPort: 8341,
+        runtimeKind: 'bare-react-native',
         signerCapability: 'signer',
       },
       {
@@ -284,6 +296,9 @@ test('dev-client pin refuses a manifest whose launch asset leaves the managed en
     ...expected,
     deviceId: 'IOS-UUID',
     metroPort: 8341,
+    devClientUrl: 'example://expo-development-client/?url=http%3A%2F%2F127.0.0.1%3A8341',
+    expectedDevClientUrl: 'example://expo-development-client/?url=http%3A%2F%2F127.0.0.1%3A8341',
+    runtimeKind: 'expo-dev-client' as const,
     signerCapability: 'signer',
   };
   const dependencies = (manifest) => ({
@@ -300,7 +315,11 @@ test('dev-client pin refuses a manifest whose launch asset leaves the managed en
       assert.equal(host, '127.0.0.1');
       assert.equal(metroPort, 8341);
       assert.equal(platform, 'ios');
-      return manifest;
+      return {
+        body: manifest,
+        contentType: 'application/expo+json',
+        status: 200,
+      };
     },
   });
 
@@ -326,9 +345,23 @@ test('dev-client pin refuses a manifest whose launch asset leaves the managed en
     ),
   );
   assert.equal(exact.targetId, 'target-a');
-  assert.deepEqual(launched, ['app']);
+  assert.deepEqual(launched, ['url']);
 
-  const bareReactNative = await pinExactDevClient(input, dependencies('packager-status:running'));
+  const bareReactNative = await pinExactDevClient(
+    {
+      ...expected,
+      deviceId: 'IOS-UUID',
+      metroPort: 8341,
+      runtimeKind: 'bare-react-native',
+      signerCapability: 'signer',
+    },
+    {
+      ...dependencies('packager-status:running'),
+      readManagedManifest: async () => {
+        throw new Error('bare React Native must not be classified from an HTTP response');
+      },
+    },
+  );
   assert.equal(bareReactNative.targetId, 'target-a');
-  assert.deepEqual(launched, ['app', 'app']);
+  assert.deepEqual(launched, ['url', 'app']);
 });

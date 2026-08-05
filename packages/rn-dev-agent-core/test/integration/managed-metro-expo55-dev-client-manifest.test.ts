@@ -121,7 +121,11 @@ async function fetchBounded(url: string, timeoutMs: number, headers: Record<stri
   try {
     const response = await fetch(url, { headers, signal: controller.signal });
     const body = Buffer.from(await response.arrayBuffer());
-    return { body, status: response.status };
+    return {
+      body,
+      headers: Object.fromEntries(response.headers.entries()),
+      status: response.status,
+    };
   } finally {
     clearTimeout(timer);
   }
@@ -202,11 +206,14 @@ test(
           200,
           `${request.name} manifest failed: ${manifest.body.toString('utf8').slice(0, 400)}`,
         );
-        const verified = verifyManagedManifestLaunchAsset(manifest.body.toString('utf8'), {
-          host: '127.0.0.1',
-          port,
-        });
-        assert.ok(verified, `${request.name} response was not an Expo manifest`);
+        const verified = verifyManagedManifestLaunchAsset(
+          {
+            body: manifest.body.toString('utf8'),
+            contentType: String(manifest.headers['content-type'] ?? ''),
+            status: manifest.status,
+          },
+          { host: '127.0.0.1', port },
+        );
         assert.equal(new URL(verified.bundleUrl).port, String(port));
         launchAssetUrl = verified.bundleUrl;
         console.log(

@@ -63222,40 +63222,135 @@ function descendantError() {
   error.code = 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION';
   return error;
 }
-const bundleAuthorityScope = new AsyncLocalStorage();
-function withinBundleAuthority() {
-  return bundleAuthorityScope.getStore() === true;
-}
-function runWithinBundleAuthority(callback, receiver, args) {
-  return bundleAuthorityScope.run(true, () =>
-    intrinsicReflectApply(callback, receiver, args),
-  );
-}
-function withBundleAuthorityScope(callback) {
-  if (typeof callback !== 'function') return callback;
-  const scoped = function (...args) {
-    return runWithinBundleAuthority(callback, this, args);
-  };
-  return Object.assign(scoped, callback);
-}
-// Manifest middleware shares the bundler process, so the lane is chosen by dynamic authority scope.
-let managedConfigAdapterApplied = false;
-function manifestUtilityLaneAvailable() {
+const manifestUtilityCapability = Object.freeze({});
+const manifestUtilityScope = new AsyncLocalStorage();
+function withinManifestUtilityBoundary() {
   return (
-    managedConfigAdapterApplied &&
+    manifestUtilityScope.getStore() === manifestUtilityCapability &&
     !descendantNonce &&
-    workerThreads.isMainThread &&
-    !withinBundleAuthority()
+    workerThreads.isMainThread
   );
 }
-function isNodeExecutableCommand(command) {
-  if (typeof command !== 'string') return false;
-  try {
-    return fs.realpathSync(command) === nodeExecutable;
-  } catch {
-    return false;
+function canonicalPackageFile(resolvedFile, packageName, relativePath) {
+  let cursor = path.dirname(resolvedFile);
+  while (true) {
+    try {
+      const packageManifestPath = path.join(cursor, 'package.json');
+      const manifest = JSON.parse(fs.readFileSync(packageManifestPath, 'utf8'));
+      if (manifest.name === packageName) {
+        const packageSegments = packageName.split('/');
+        const rootSegments = fs.realpathSync(cursor).split(path.sep);
+        const nodeModulesIndex = rootSegments.lastIndexOf('node_modules');
+        if (
+          nodeModulesIndex < 0 ||
+          rootSegments.length !== nodeModulesIndex + packageSegments.length + 1 ||
+          packageSegments.some(
+            (segment, index) => rootSegments[nodeModulesIndex + index + 1] !== segment,
+          )
+        ) {
+          return null;
+        }
+        const expected = fs.realpathSync(path.join(cursor, relativePath));
+        return expected === resolvedFile ? expected : null;
+      }
+    } catch {}
+    const parent = path.dirname(cursor);
+    if (parent === cursor) return null;
+    cursor = parent;
   }
 }
+function resolveInvocationExecutable(command, cwd, environmentEntries) {
+  if (typeof command !== 'string' || command.length === 0) return null;
+  const environment = privateObjectFromEntries(environmentEntries);
+  const candidates = path.isAbsolute(command)
+    ? [command]
+    : command.includes('/') || command.includes('\\\\')
+      ? [path.resolve(cwd, command)]
+      : String(environment.PATH || environment.Path || environment.path || '')
+          .split(path.delimiter)
+          .filter(Boolean)
+          .map((directory) => path.resolve(directory, command));
+  for (let index = 0; index < candidates.length; index += 1) {
+    try {
+      const resolved = fs.realpathSync(candidates[index]);
+      if (fs.statSync(resolved).isFile()) return resolved;
+    } catch {}
+  }
+  return null;
+}
+function isExpoUpdatesRuntimeVersionInvocation(command, args, cwd, environmentEntries) {
+  if (!intrinsicArrayIsArray(args)) return false;
+  const resolvedCommand = resolveInvocationExecutable(command, cwd, environmentEntries);
+  if (
+    !resolvedCommand ||
+    !canonicalPackageFile(resolvedCommand, 'expo-updates', 'bin/cli.js')
+  ) {
+    return false;
+  }
+  if (args.length !== 3 && args.length !== 4) return false;
+  if (
+    args[0] !== 'runtimeversion:resolve' ||
+    args[1] !== '--platform' ||
+    (args[2] !== 'ios' && args[2] !== 'android')
+  ) {
+    return false;
+  }
+  return args.length === 3 || args[3] === '--debug';
+}
+function installExpoManifestUtilityBoundary() {
+  const originalLoad = moduleApi._load;
+  const originalResolveFilename = moduleApi._resolveFilename;
+  const wrappedConstructors = new IntrinsicWeakSet();
+  intrinsicDefineProperty(moduleApi, '_load', {
+    configurable: false,
+    enumerable: true,
+    value(request, parent, isMain) {
+      const loaded = intrinsicReflectApply(originalLoad, this, [request, parent, isMain]);
+      let resolved;
+      try {
+        const filename = intrinsicReflectApply(originalResolveFilename, moduleApi, [
+          request,
+          parent,
+          isMain,
+        ]);
+        resolved = typeof filename === 'string' ? fs.realpathSync(filename) : null;
+      } catch {
+        return loaded;
+      }
+      if (
+        !resolved ||
+        !canonicalPackageFile(
+          resolved,
+          '@expo/cli',
+          'build/src/start/server/middleware/ExpoGoManifestHandlerMiddleware.js',
+        )
+      ) {
+        return loaded;
+      }
+      const Middleware = loaded?.ExpoGoManifestHandlerMiddleware;
+      if (typeof Middleware !== 'function' || privateWeakSetHas(wrappedConstructors, Middleware)) {
+        return loaded;
+      }
+      const original = Middleware.prototype?.handleRequestAsync;
+      if (typeof original !== 'function') throw descendantError();
+      privateWeakSetAdd(wrappedConstructors, Middleware);
+      intrinsicDefineProperty(Middleware.prototype, 'handleRequestAsync', {
+        configurable: false,
+        enumerable: false,
+        value(...args) {
+          if (!(this instanceof Middleware)) throw descendantError();
+          return manifestUtilityScope.run(manifestUtilityCapability, () =>
+            intrinsicReflectApply(original, this, args),
+          );
+        },
+        writable: false,
+      });
+      return loaded;
+    },
+    writable: false,
+  });
+}
+installExpoManifestUtilityBoundary();
 const utilityStdioStreams = new IntrinsicSet([
   'ignore',
   'inherit',
@@ -63329,6 +63424,13 @@ function runManifestUtility(original, receiver, args, optionsIndex, mode) {
   }
   const cwd = invocationCwd(rawOptions.cwd);
   const environmentEntries = normalizedInvocationEnvironment(rawOptions.env);
+  if (
+    mode !== 'node' ||
+    !withinManifestUtilityBoundary() ||
+    !isExpoUpdatesRuntimeVersionInvocation(args[0], args[1], cwd, environmentEntries)
+  ) {
+    throw descendantError();
+  }
   const stdio = utilityChildStdio(rawOptions.stdio);
   const utilityOptions = {
     ...rawOptions,
@@ -63990,11 +64092,7 @@ function fenceChildProcessMethod(name, optionsIndex, mode) {
       const args = [...receivedArgs];
       if (Array.isArray(args[1])) args[1] = [...args[1]];
       const index = typeof optionsIndex === 'function' ? optionsIndex(args) : optionsIndex;
-      if (
-        mode !== 'fork' &&
-        !isNodeExecutableCommand(args[0]) &&
-        manifestUtilityLaneAvailable()
-      ) {
+      if (mode !== 'fork' && withinManifestUtilityBoundary()) {
         return runManifestUtility(original, this, args, index, mode);
       }
       const nonce = randomBytes(16).toString('hex');
@@ -64132,53 +64230,6 @@ function rejectChildProcessMethod(name) {
     enumerable: true,
     value() {
       throw descendantError();
-    },
-    writable: false,
-  });
-}
-const promisifyCustom = Symbol.for('nodejs.util.promisify.custom');
-function fenceUtilityChildProcessMethod(name, optionsIndex, mode) {
-  const original = childProcess[name];
-  const hadCustomPromisify = typeof original?.[promisifyCustom] === 'function';
-  Object.defineProperty(childProcess, name, {
-    configurable: false,
-    enumerable: true,
-    value(...receivedArgs) {
-      const args = [...receivedArgs];
-      if (Array.isArray(args[1])) args[1] = [...args[1]];
-      const index = typeof optionsIndex === 'function' ? optionsIndex(args) : optionsIndex;
-      if (isNodeExecutableCommand(args[0]) || !manifestUtilityLaneAvailable()) {
-        throw descendantError();
-      }
-      return runManifestUtility(original, this, args, index, mode);
-    },
-    writable: false,
-  });
-  if (!hadCustomPromisify) return;
-  const fenced = childProcess[name];
-  Object.defineProperty(fenced, promisifyCustom, {
-    configurable: false,
-    enumerable: false,
-    value(...customArgs) {
-      let settleResolve;
-      let settleReject;
-      const promise = new Promise((resolve, reject) => {
-        settleResolve = resolve;
-        settleReject = reject;
-      });
-      promise.child = intrinsicReflectApply(fenced, this, [
-        ...customArgs,
-        (error, stdout, stderr) => {
-          if (error) {
-            error.stdout = stdout;
-            error.stderr = stderr;
-            settleReject(error);
-            return;
-          }
-          settleResolve({ stdout, stderr });
-        },
-      ]);
-      return promise;
     },
     writable: false,
   });
@@ -64338,9 +64389,9 @@ if (canAuthenticateChildProcesses) {
   fenceChildProcessMethod('spawnSync', optionalArgsIndex, 'sync');
   fenceChildProcessMethod('fork', optionalArgsIndex, 'fork');
   rejectChildProcessMethod('exec');
+  rejectChildProcessMethod('execFile');
+  rejectChildProcessMethod('execFileSync');
   rejectChildProcessMethod('execSync');
-  fenceUtilityChildProcessMethod('execFile', optionalArgsIndex, 'node');
-  fenceUtilityChildProcessMethod('execFileSync', optionalArgsIndex, 'sync');
   fenceWorkers();
 }
 function digestRuntimeFile(file) {
@@ -64992,7 +65043,7 @@ function withPolicyRefresh(callback, getConfig, includeReturnedPaths) {
       throw error;
     };
     try {
-      const result = runWithinBundleAuthority(callback, this, args);
+      const result = intrinsicReflectApply(callback, this, args);
       return result && typeof result.then === 'function' ? result.then(finish, fail) : finish(result);
     } catch (error) {
       return fail(error);
@@ -65021,8 +65072,7 @@ function withAuthorityPolyfills(callback, marker, bootErrorCapture) {
     bootErrorCapture,
   ];
   return function (...args) {
-    const result =
-      typeof callback === 'function' ? runWithinBundleAuthority(callback, this, args) : [];
+    const result = typeof callback === 'function' ? intrinsicReflectApply(callback, this, args) : [];
     return result && typeof result.then === 'function' ? result.then(prepend) : prepend(result);
   };
 }
@@ -65030,7 +65080,6 @@ module.exports = function withRnDevAgentAuthority(config) {
   if (config && typeof config.then === 'function') {
     return config.then(withRnDevAgentAuthority);
   }
-  managedConfigAdapterApplied = true;
   const current = config || {};
   const resolver = current.resolver || {};
   const transformer = current.transformer || {};
@@ -65048,9 +65097,6 @@ module.exports = function withRnDevAgentAuthority(config) {
       ...(Array.isArray(resolver.nodeModulesPaths) ? { nodeModulesPaths: [...resolver.nodeModulesPaths] } : {}),
       ...(resolver.extraNodeModules && typeof resolver.extraNodeModules === 'object'
         ? { extraNodeModules: { ...resolver.extraNodeModules } }
-        : {}),
-      ...(typeof resolver.resolveRequest === 'function'
-        ? { resolveRequest: withBundleAuthorityScope(resolver.resolveRequest) }
         : {}),
     },
     transformer: {
@@ -65083,9 +65129,7 @@ module.exports = function withRnDevAgentAuthority(config) {
       ),
       getModulesRunBeforeMainModule(entryFile) {
         const result = (
-          typeof original === 'function'
-            ? runWithinBundleAuthority(original, undefined, [entryFile])
-            : []
+          typeof original === 'function' ? intrinsicReflectApply(original, undefined, [entryFile]) : []
         ).filter((candidate) => candidate !== marker && candidate !== bootErrorCapture);
         runtimePolicy(finalConfig, result);
         return result;
@@ -82621,10 +82665,21 @@ function parseExpoManifestBody(body) {
     return null;
   return manifest;
 }
-function verifyManagedManifestLaunchAsset(body, endpoint) {
-  const manifest = parseExpoManifestBody(body);
+function verifyManagedManifestLaunchAsset(response, endpoint) {
+  if (response.status < 200 || response.status >= 300) {
+    throw manifestError(`manifest request returned HTTP ${response.status}`);
+  }
+  const contentType = response.contentType.split(";", 1)[0]?.trim().toLowerCase();
+  if (contentType !== "application/expo+json" && contentType !== "application/json" && contentType !== "multipart/mixed") {
+    throw manifestError("manifest response content type is not an Expo manifest");
+  }
+  const isMultipart = response.body.trimStart().startsWith("--");
+  if (contentType === "multipart/mixed" !== isMultipart) {
+    throw manifestError("manifest response body does not match its content type");
+  }
+  const manifest = parseExpoManifestBody(response.body);
   if (!manifest)
-    return null;
+    throw manifestError("manifest response is malformed");
   const url = manifest.launchAsset.url;
   let parsed;
   try {
@@ -82730,19 +82785,23 @@ async function pinExactDevClient(input, dependencies) {
   if (input.devClientUrl !== input.expectedDevClientUrl) {
     throw new Error("DEV_CLIENT_ENDPOINT_NOT_FOUND: declared dev-client URL does not match the session endpoint");
   }
+  if (input.runtimeKind === "expo-dev-client" && !input.devClientUrl || input.runtimeKind === "bare-react-native" && input.devClientUrl) {
+    throw new Error("DEV_CLIENT_ENDPOINT_NOT_FOUND: launch kind contradicts the signed build provenance");
+  }
   const managedManifestHost = "127.0.0.1";
-  if (dependencies.readManagedManifest) {
-    const manifest = await dependencies.readManagedManifest({
+  if (input.runtimeKind === "expo-dev-client") {
+    if (!dependencies.readManagedManifest) {
+      throw new Error("METRO_MANIFEST_ENDPOINT_MISMATCH: managed manifest verification is unavailable");
+    }
+    const response = await dependencies.readManagedManifest({
       host: managedManifestHost,
       metroPort: input.metroPort,
       platform: input.platform
     });
-    if (manifest !== null) {
-      verifyManagedManifestLaunchAsset(manifest, {
-        host: managedManifestHost,
-        port: input.metroPort
-      });
-    }
+    verifyManagedManifestLaunchAsset(response, {
+      host: managedManifestHost,
+      port: input.metroPort
+    });
   }
   if (input.devClientUrl) {
     await dependencies.openUrl(input.platform, input.deviceId, input.devClientUrl, input.appId);
@@ -82850,9 +82909,12 @@ async function pinSessionDevClient(status, options) {
   const device = status.bindings.device;
   const metro = status.bindings.metro;
   const install = status.bindings.install;
-  const declaredDevice = status.bindings.device;
   const secret = process.env.RN_DEV_AGENT_SESSION_SECRET_PATH ? readJsonStateFile(process.env.RN_DEV_AGENT_SESSION_SECRET_PATH) : null;
-  const devClientUrl = install.devClientUrl ?? declaredDevice.devClientUrl;
+  if (install?.platform !== device.platform || install.deviceId !== device.deviceId || install.appId !== device.appId || install.metroPort !== metro.port || install.buildGeneration !== metro.buildGeneration) {
+    throw new Error("BUILD_RECEIPT_INVALID: exact launch provenance is unavailable");
+  }
+  const devClientUrl = typeof install.devClientUrl === "string" ? install.devClientUrl : void 0;
+  const runtimeKind = devClientUrl ? "expo-dev-client" : "bare-react-native";
   if (!secret?.signerCapability) {
     throw new Error("BUNDLE_HANDSHAKE_UNAVAILABLE: session signer is unavailable");
   }
@@ -82871,6 +82933,7 @@ async function pinSessionDevClient(status, options) {
     buildGeneration: metro.buildGeneration,
     deviceId: device.deviceId,
     metroPort: metro.port,
+    runtimeKind,
     ...devClientUrl ? { devClientUrl, expectedDevClientUrl: devClientUrl } : {},
     signerCapability: secret.signerCapability
   }, {
@@ -82927,9 +82990,13 @@ async function pinSessionDevClient(status, options) {
           },
           signal: controller.signal
         });
-        return response.ok ? await response.text() : null;
-      } catch {
-        return null;
+        return {
+          body: await response.text(),
+          contentType: response.headers.get("content-type") ?? "",
+          status: response.status
+        };
+      } catch (error2) {
+        throw new Error(`METRO_MANIFEST_ENDPOINT_MISMATCH: managed manifest request failed: ${error2 instanceof Error ? error2.message : String(error2)}`);
       } finally {
         clearTimeout(timer);
       }

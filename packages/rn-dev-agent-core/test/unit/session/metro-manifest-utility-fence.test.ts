@@ -11,6 +11,8 @@ const unsupportedPlatform = process.platform === 'win32';
 interface Harness {
   adapterPath: string;
   environment: NodeJS.ProcessEnv;
+  expoManifestModulePath: string;
+  expoUpdatesCliPath: string;
   integration: string;
   probePath: string;
   probeOutput: string;
@@ -39,6 +41,34 @@ function createHarness(name: string): Harness {
   mkdirSync(integration, { recursive: true });
   const adapterPath = join(integration, 'rn-session-metro.cjs');
   writeFileSync(adapterPath, renderMetroIntegrationAdapter());
+  const expoCliRoot = join(root, 'node_modules', '@expo', 'cli');
+  const expoManifestModulePath = join(
+    expoCliRoot,
+    'build',
+    'src',
+    'start',
+    'server',
+    'middleware',
+    'ExpoGoManifestHandlerMiddleware.js',
+  );
+  mkdirSync(dirname(expoManifestModulePath), { recursive: true });
+  writeFileSync(join(expoCliRoot, 'package.json'), JSON.stringify({ name: '@expo/cli' }));
+  writeFileSync(
+    expoManifestModulePath,
+    `class ExpoGoManifestHandlerMiddleware {
+  constructor(operation) { this.operation = operation; }
+  handleRequestAsync() { return this.operation(); }
+}
+exports.ExpoGoManifestHandlerMiddleware = ExpoGoManifestHandlerMiddleware;
+`,
+  );
+  const expoUpdatesRoot = join(root, 'node_modules', 'expo-updates');
+  const expoUpdatesCliPath = join(expoUpdatesRoot, 'bin', 'cli.js');
+  mkdirSync(dirname(expoUpdatesCliPath), { recursive: true });
+  writeFileSync(
+    join(expoUpdatesRoot, 'package.json'),
+    JSON.stringify({ name: 'expo-updates', bin: { 'expo-updates': 'bin/cli.js' } }),
+  );
   const probeOutput = join(root, 'probe-environment.txt');
   const probePath = join(root, 'platform-utility');
   writeFileSync(
@@ -52,9 +82,20 @@ exit 0
 `,
   );
   chmodSync(probePath, 0o755);
+  writeFileSync(
+    expoUpdatesCliPath,
+    `#!/usr/bin/env node
+const fs = require('node:fs');
+fs.writeFileSync(${JSON.stringify(probeOutput)}, Object.entries(process.env).map(([key, value]) => key + '=' + value).join('\\n') + '\\nRN_PROBE_ARGS=' + process.argv.slice(2).join(' ') + '\\n');
+if (process.env.PROBE_SLEEP === '1') setTimeout(() => {}, 30000);
+`,
+  );
+  chmodSync(expoUpdatesCliPath, 0o755);
   return {
     adapterPath,
     environment: metroPolicyEnvironment(adapterPath),
+    expoManifestModulePath,
+    expoUpdatesCliPath,
     integration,
     probePath,
     probeOutput,
@@ -81,6 +122,11 @@ function readObservations(harness: Harness): Array<{ kind: string; value: string
 const composePreamble = (harness: Harness) =>
   `const compose = require(${JSON.stringify(harness.adapterPath)}); const childProcess = require('node:child_process'); const config = compose({});`;
 
+const manifestPreamble = (harness: Harness) =>
+  `${composePreamble(harness)}
+const { ExpoGoManifestHandlerMiddleware } = require(${JSON.stringify(harness.expoManifestModulePath)});
+const runManifest = (operation) => new ExpoGoManifestHandlerMiddleware(operation).handleRequestAsync();`;
+
 test(
   'manifest utilities run outside bundle authority with every session capability stripped',
   { skip: unsupportedPlatform },
@@ -89,9 +135,11 @@ test(
     try {
       const result = runFenced(
         harness,
-        `${composePreamble(harness)}
-const child = childProcess.spawnSync(${JSON.stringify(harness.probePath)}, ['runtimeversion:resolve']);
-if (child.status !== 0) { console.error(String(child.stderr)); process.exit(2); }`,
+        `${manifestPreamble(harness)}
+runManifest(() => {
+  const child = childProcess.spawn(${JSON.stringify(harness.expoUpdatesCliPath)}, ['runtimeversion:resolve', '--platform', 'ios']);
+  child.once('exit', (code) => { if (code !== 0) process.exit(2); });
+});`,
       );
       assert.equal(result.status, 0, result.stderr);
 
@@ -105,7 +153,7 @@ if (child.status !== 0) { console.error(String(child.stderr)); process.exit(2); 
         false,
         'manifest utility inherited the Metro evidence descriptor',
       );
-      assert.ok(observed.includes('RN_PROBE_ARGS=runtimeversion:resolve'));
+      assert.ok(observed.includes('RN_PROBE_ARGS=runtimeversion:resolve --platform ios'));
 
       const observations = readObservations(harness);
       const utility = observations.filter((entry) => entry.kind === 'unattested-utility');
@@ -115,7 +163,7 @@ if (child.status !== 0) { console.error(String(child.stderr)); process.exit(2); 
         lane: string;
         proofBearing: boolean;
       };
-      assert.equal(record.command, harness.probePath);
+      assert.equal(record.command, harness.expoUpdatesCliPath);
       assert.equal(record.lane, 'manifest-utility');
       assert.equal(record.proofBearing, false);
       assert.equal(
@@ -130,14 +178,14 @@ if (child.status !== 0) { console.error(String(child.stderr)); process.exit(2); 
 );
 
 test(
-  'a PATH-substituted platform utility cannot enter bundle authority',
+  'PATH substitution cannot impersonate the canonical Expo updates utility',
   { skip: unsupportedPlatform },
   () => {
     const harness = createHarness('path-substitution');
     try {
       const maliciousBin = join(harness.root, 'malicious-bin');
       mkdirSync(maliciousBin, { recursive: true });
-      const substituted = join(maliciousBin, 'xcodebuild');
+      const substituted = join(maliciousBin, 'expo-updates');
       writeFileSync(
         substituted,
         `#!/bin/sh
@@ -153,33 +201,21 @@ exit 0
       };
       const result = runFenced(
         harness,
-        `${composePreamble(harness)}
-const child = childProcess.spawnSync('xcodebuild', ['-version']);
-if (child.status !== 0) { console.error(String(child.stderr)); process.exit(2); }`,
+        `${manifestPreamble(harness)}
+runManifest(() => {
+  try { childProcess.spawn('expo-updates', ['runtimeversion:resolve', '--platform', 'ios']); }
+  catch (error) {
+    if (error?.code === 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') process.exit(0);
+  }
+  process.exit(2);
+});`,
         environment,
       );
       assert.equal(result.status, 0, result.stderr);
-
-      const observed = readFileSync(harness.probeOutput, 'utf8').split('\n').filter(Boolean);
-      assert.deepEqual(
-        observed.filter(
-          (line) => line.startsWith('RN_DEV_AGENT_') || line.startsWith('NODE_OPTIONS='),
-        ),
-        [],
-        'PATH-substituted binary inherited session capability',
-      );
-
-      const observations = readObservations(harness);
       assert.equal(
-        observations.some((entry) => entry.kind === 'launch'),
+        readObservations(harness).some((entry) => entry.kind === 'unattested-utility'),
         false,
-        'PATH-substituted binary must not be recorded as an attested descendant',
       );
-      const record = JSON.parse(
-        observations.find((entry) => entry.kind === 'unattested-utility')!.value,
-      ) as { command: string; proofBearing: boolean };
-      assert.equal(record.command, 'xcodebuild');
-      assert.equal(record.proofBearing, false);
     } finally {
       rmSync(harness.root, { force: true, recursive: true });
     }
@@ -187,7 +223,7 @@ if (child.status !== 0) { console.error(String(child.stderr)); process.exit(2); 
 );
 
 test(
-  'bundle-producing config callbacks keep refusing unauthorized descendants',
+  'config load and deferred callbacks remain strict by default',
   { skip: unsupportedPlatform },
   () => {
     const harness = createHarness('attested-scope');
@@ -199,6 +235,12 @@ const childProcess = require('node:child_process');
 const probe = ${JSON.stringify(harness.probePath)};
 const refusals = [];
 const attempt = (run) => { try { run(); refusals.push('accepted'); } catch (error) { refusals.push(error?.code); } };
+setTimeout(() => {
+  attempt(() => childProcess.spawnSync(probe, []));
+  if (refusals.length !== 6) process.exit(3);
+  if (refusals.some((code) => code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION')) process.exit(4);
+}, 1);
+attempt(() => childProcess.spawnSync(probe, []));
 const scoped = compose({
   resolver: { resolveRequest: () => { attempt(() => childProcess.spawnSync(probe, [])); return {}; } },
   serializer: { getPolyfills: () => { attempt(() => childProcess.spawnSync(probe, [])); attempt(() => childProcess.execFileSync(probe, [])); return []; } },
@@ -207,11 +249,7 @@ const scoped = compose({
 scoped.serializer.getPolyfills({ platform: 'ios' });
 scoped.resolver.resolveRequest({}, 'x', 'ios');
 scoped.transformer.getTransformOptions([], {}, () => []);
-if (refusals.length !== 4) process.exit(3);
-if (refusals.some((code) => code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION')) {
-  console.error(JSON.stringify(refusals));
-  process.exit(4);
-}`,
+`,
       );
       assert.equal(result.status, 0, result.stderr);
       assert.equal(
@@ -306,28 +344,29 @@ if (child.status !== 0) { console.error(String(child.stderr)); process.exit(chil
 );
 
 test(
-  'the manifest utility lane refuses shells, Node laundering, and descriptor inheritance',
+  'the manifest utility adapter refuses shells, interpreters, project scripts, and argument drift',
   { skip: unsupportedPlatform },
   () => {
     const harness = createHarness('refusals');
     try {
       const result = runFenced(
         harness,
-        `${composePreamble(harness)}
+        `${manifestPreamble(harness)}
 const probe = ${JSON.stringify(harness.probePath)};
 const refusals = [];
 const attempt = (run) => { try { run(); refusals.push('accepted'); } catch (error) { refusals.push(error?.code); } };
-attempt(() => childProcess.exec(probe));
-attempt(() => childProcess.execSync(probe));
-attempt(() => childProcess.spawnSync(probe, [], { shell: true }));
-attempt(() => childProcess.execFileSync(probe, [], { shell: true }));
-attempt(() => childProcess.spawnSync(process.execPath, ['-e', 'process.exit(0)']));
-attempt(() => childProcess.execFileSync(process.execPath, ['-e', 'process.exit(0)']));
-attempt(() => childProcess.spawnSync(probe, [], { stdio: ['pipe', 'pipe', 'pipe', 9] }));
-if (refusals.some((code) => code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION')) {
-  console.error(JSON.stringify(refusals));
-  process.exit(3);
-}`,
+runManifest(() => {
+  attempt(() => childProcess.exec(probe));
+  attempt(() => childProcess.spawn('/bin/sh', ['-c', 'true']));
+  attempt(() => childProcess.spawn('/usr/bin/osascript', ['-e', 'return 1']));
+  attempt(() => childProcess.spawn('node', ['-e', 'process.exit(0)']));
+  attempt(() => childProcess.spawn(probe, []));
+  attempt(() => childProcess.spawn(${JSON.stringify(harness.expoUpdatesCliPath)}, ['runtimeversion:resolve', '--platform', 'web']));
+  attempt(() => childProcess.spawnSync(${JSON.stringify(harness.expoUpdatesCliPath)}, ['runtimeversion:resolve', '--platform', 'ios']));
+  attempt(() => childProcess.execFile(${JSON.stringify(harness.expoUpdatesCliPath)}, ['runtimeversion:resolve', '--platform', 'ios']));
+  attempt(() => childProcess.spawn(${JSON.stringify(harness.expoUpdatesCliPath)}, ['runtimeversion:resolve', '--platform', 'ios'], { shell: true }));
+  if (refusals.length !== 9 || refusals.some((code) => code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION')) process.exit(3);
+});`,
       );
       assert.equal(result.status, 0, result.stderr);
     } finally {
@@ -337,7 +376,7 @@ if (refusals.some((code) => code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUT
 );
 
 test(
-  'the manifest utility lane is closed until the managed Metro config adapter runs',
+  'the utility adapter is closed outside the verified manifest boundary',
   { skip: unsupportedPlatform },
   () => {
     const harness = createHarness('unsettled');
@@ -346,12 +385,13 @@ test(
         harness,
         `const childProcess = require('node:child_process');
 let code;
-try { childProcess.spawnSync(${JSON.stringify(harness.probePath)}, []); code = 'accepted'; }
+try { childProcess.spawn(${JSON.stringify(harness.expoUpdatesCliPath)}, ['runtimeversion:resolve', '--platform', 'ios']); code = 'accepted'; }
 catch (error) { code = error?.code; }
 if (code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') { console.error(code); process.exit(3); }
 require(${JSON.stringify(harness.adapterPath)})({});
-const child = childProcess.spawnSync(${JSON.stringify(harness.probePath)}, []);
-if (child.status !== 0) process.exit(4);`,
+try { childProcess.spawn(${JSON.stringify(harness.expoUpdatesCliPath)}, ['runtimeversion:resolve', '--platform', 'ios']); code = 'accepted'; }
+catch (error) { code = error?.code; }
+if (code !== 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION') process.exit(4);`,
       );
       assert.equal(result.status, 0, result.stderr);
     } finally {
@@ -366,17 +406,16 @@ test(
   () => {
     const harness = createHarness('lifecycle');
     try {
-      const lingering = join(harness.root, 'lingering-utility');
-      writeFileSync(lingering, '#!/bin/sh\nsleep 30\n');
-      chmodSync(lingering, 0o755);
       const result = runFenced(
         harness,
-        `${composePreamble(harness)}
-const child = childProcess.spawn(${JSON.stringify(lingering)}, []);
-child.once('spawn', () => {
-  if (child.kill('SIGTERM') !== true) process.exit(3);
+        `${manifestPreamble(harness)}
+runManifest(() => {
+  const child = childProcess.spawn(${JSON.stringify(harness.expoUpdatesCliPath)}, ['runtimeversion:resolve', '--platform', 'ios'], { env: { ...process.env, PROBE_SLEEP: '1' } });
+  child.once('spawn', () => {
+    if (child.kill('SIGTERM') !== true) process.exit(3);
+  });
+  child.once('exit', () => process.exit(0));
 });
-child.once('exit', () => process.exit(0));
 setTimeout(() => process.exit(4), 10000);`,
       );
       assert.equal(result.status, 0, result.stderr);

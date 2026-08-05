@@ -30,10 +30,13 @@ function multipartManifest(url: string): string {
 
 test('exact managed launch assets are accepted from JSON and multipart manifests', () => {
   const url = 'http://127.0.0.1:8081/index.ts.bundle?platform=ios&dev=true';
-  for (const body of [manifest(url), multipartManifest(url)]) {
-    const verified = verifyManagedManifestLaunchAsset(body, endpoint);
-    assert.equal(verified?.bundleUrl, url);
-    assert.equal(verified?.runtimeVersion, '1.0.0');
+  for (const response of [
+    { body: manifest(url), contentType: 'application/expo+json; charset=utf-8', status: 200 },
+    { body: multipartManifest(url), contentType: 'multipart/mixed; boundary=test', status: 200 },
+  ]) {
+    const verified = verifyManagedManifestLaunchAsset(response, endpoint);
+    assert.equal(verified.bundleUrl, url);
+    assert.equal(verified.runtimeVersion, '1.0.0');
   }
 });
 
@@ -48,22 +51,46 @@ test('launch assets served from another endpoint are refused', () => {
     '/index.bundle',
   ]) {
     assert.throws(
-      () => verifyManagedManifestLaunchAsset(manifest(url), endpoint),
+      () =>
+        verifyManagedManifestLaunchAsset(
+          { body: manifest(url), contentType: 'application/expo+json', status: 200 },
+          endpoint,
+        ),
       /METRO_MANIFEST_ENDPOINT_MISMATCH/,
       `expected ${url} to be refused`,
     );
   }
 });
 
-test('non-Expo responses are reported as absent rather than refused', () => {
-  for (const body of [
-    'packager-status:running',
-    '<!DOCTYPE html><html></html>',
-    JSON.stringify({ launchAsset: { key: 'bundle' } }),
-    JSON.stringify([{ launchAsset: { url: 'http://127.0.0.1:8081/index.bundle' } }]),
-    '',
+test('ambiguous, malformed, and failed managed manifest responses are refused', () => {
+  for (const response of [
+    { body: 'packager-status:running', contentType: 'text/plain', status: 200 },
+    { body: '<!DOCTYPE html><html></html>', contentType: 'text/html', status: 200 },
+    {
+      body: JSON.stringify({ launchAsset: { key: 'bundle' } }),
+      contentType: 'application/expo+json',
+      status: 200,
+    },
+    {
+      body: JSON.stringify([{ launchAsset: { url: 'http://127.0.0.1:8081/index.bundle' } }]),
+      contentType: 'application/json',
+      status: 200,
+    },
+    { body: '', contentType: 'application/expo+json', status: 200 },
+    { body: manifest('http://127.0.0.1:8081/index.bundle'), contentType: '', status: 200 },
+    {
+      body: manifest('http://127.0.0.1:8081/index.bundle'),
+      contentType: 'application/expo+json',
+      status: 503,
+    },
   ]) {
-    assert.equal(parseExpoManifestBody(body), null);
-    assert.equal(verifyManagedManifestLaunchAsset(body, endpoint), null);
+    assert.throws(
+      () => verifyManagedManifestLaunchAsset(response, endpoint),
+      /METRO_MANIFEST_ENDPOINT_MISMATCH/,
+    );
   }
+});
+
+test('body parsing remains a non-authoritative helper', () => {
+  assert.equal(parseExpoManifestBody('packager-status:running'), null);
 });

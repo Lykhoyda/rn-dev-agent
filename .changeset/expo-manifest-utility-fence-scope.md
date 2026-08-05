@@ -3,4 +3,4 @@
 "rn-dev-agent-plugin": patch
 ---
 
-Scope managed Metro's descendant fence to bundle-producing code so Expo Dev Client manifest requests succeed while their platform utilities run without any session capability, and require the manifest launch asset to resolve to the exact managed endpoint.
+Keep managed Metro descendants strict by default while allowing only Expo's canonical runtime-version manifest utility without session capability and requiring exact managed launch provenance.

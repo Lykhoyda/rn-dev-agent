@@ -820,12 +820,30 @@ async function pinSessionDevClient(status: SessionStatus, options: { force: bool
     instanceId: string;
     buildGeneration: number;
   };
-  const install = status.bindings.install as { devClientUrl?: string };
-  const declaredDevice = status.bindings.device as { devClientUrl?: string };
+  const install = status.bindings.install as
+    | {
+        appId?: unknown;
+        buildGeneration?: unknown;
+        devClientUrl?: unknown;
+        deviceId?: unknown;
+        metroPort?: unknown;
+        platform?: unknown;
+      }
+    | undefined;
   const secret = process.env.RN_DEV_AGENT_SESSION_SECRET_PATH
     ? readJsonStateFile<{ signerCapability?: string }>(process.env.RN_DEV_AGENT_SESSION_SECRET_PATH)
     : null;
-  const devClientUrl = install.devClientUrl ?? declaredDevice.devClientUrl;
+  if (
+    install?.platform !== device.platform ||
+    install.deviceId !== device.deviceId ||
+    install.appId !== device.appId ||
+    install.metroPort !== metro.port ||
+    install.buildGeneration !== metro.buildGeneration
+  ) {
+    throw new Error('BUILD_RECEIPT_INVALID: exact launch provenance is unavailable');
+  }
+  const devClientUrl = typeof install.devClientUrl === 'string' ? install.devClientUrl : undefined;
+  const runtimeKind = devClientUrl ? 'expo-dev-client' : 'bare-react-native';
   if (!secret?.signerCapability) {
     throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: session signer is unavailable');
   }
@@ -845,6 +863,7 @@ async function pinSessionDevClient(status: SessionStatus, options: { force: bool
       buildGeneration: metro.buildGeneration,
       deviceId: device.deviceId,
       metroPort: metro.port,
+      runtimeKind,
       ...(devClientUrl ? { devClientUrl, expectedDevClientUrl: devClientUrl } : {}),
       signerCapability: secret.signerCapability,
     },
@@ -910,9 +929,17 @@ async function pinSessionDevClient(status: SessionStatus, options: { force: bool
             },
             signal: controller.signal,
           });
-          return response.ok ? await response.text() : null;
-        } catch {
-          return null;
+          return {
+            body: await response.text(),
+            contentType: response.headers.get('content-type') ?? '',
+            status: response.status,
+          };
+        } catch (error) {
+          throw new Error(
+            `METRO_MANIFEST_ENDPOINT_MISMATCH: managed manifest request failed: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
         } finally {
           clearTimeout(timer);
         }

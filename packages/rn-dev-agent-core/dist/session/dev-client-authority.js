@@ -77,19 +77,24 @@ export async function pinExactDevClient(input, dependencies) {
     if (input.devClientUrl !== input.expectedDevClientUrl) {
         throw new Error('DEV_CLIENT_ENDPOINT_NOT_FOUND: declared dev-client URL does not match the session endpoint');
     }
+    if ((input.runtimeKind === 'expo-dev-client' && !input.devClientUrl) ||
+        (input.runtimeKind === 'bare-react-native' && input.devClientUrl)) {
+        throw new Error('DEV_CLIENT_ENDPOINT_NOT_FOUND: launch kind contradicts the signed build provenance');
+    }
     const managedManifestHost = '127.0.0.1';
-    if (dependencies.readManagedManifest) {
-        const manifest = await dependencies.readManagedManifest({
+    if (input.runtimeKind === 'expo-dev-client') {
+        if (!dependencies.readManagedManifest) {
+            throw new Error('METRO_MANIFEST_ENDPOINT_MISMATCH: managed manifest verification is unavailable');
+        }
+        const response = await dependencies.readManagedManifest({
             host: managedManifestHost,
             metroPort: input.metroPort,
             platform: input.platform,
         });
-        if (manifest !== null) {
-            verifyManagedManifestLaunchAsset(manifest, {
-                host: managedManifestHost,
-                port: input.metroPort,
-            });
-        }
+        verifyManagedManifestLaunchAsset(response, {
+            host: managedManifestHost,
+            port: input.metroPort,
+        });
     }
     if (input.devClientUrl) {
         await dependencies.openUrl(input.platform, input.deviceId, input.devClientUrl, input.appId);
