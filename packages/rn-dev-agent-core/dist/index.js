@@ -1044,8 +1044,8 @@ trackedTool('cdp_connect', 'Connect only the exact app target on the authority-b
         .describe('Force disconnect and reconnect even if already connected. Use to switch targets or recover from stale connections.'),
 }, connectBoundSession);
 trackedTool('cdp_disconnect', 'Disconnect the authority-bound Hermes target and transactionally invalidate its bundle/target claim.', {}, disconnectBoundSession);
-trackedTool('cdp_targets', 'List available Hermes debug targets without connecting. Shows all valid targets from Metro with their IDs, titles, and VM type. Highlights which target is currently connected (if any). Use to inspect what is available before calling cdp_connect.', {
-    metroPort: z.number().optional().describe('Metro port to scan (default: auto-detect)'),
+trackedTool('cdp_targets', 'List available Hermes debug targets without connecting. An authoritative session lists only its exact managed Metro port; a fresh non-authoritative client keeps ordinary port discovery. Shows target IDs, titles, optional legacy VM metadata, and the currently connected target.', {
+    metroPort: z.number().optional().describe('Session port; otherwise an ordinary discovery hint'),
 }, createTargetsHandler(getClient));
 trackedTool('cdp_evaluate', 'CAUTION: Executes arbitrary JavaScript directly in the Hermes runtime with no sandboxing. Use only when no specific tool covers the need. Has a 5-second timeout. The Hermes dev runtime has NO Node `require()` — Metro bundles modules internally and only the live React tree is reachable. Use cdp_mmkv for storage R/W, cdp_dispatch for Redux/Zustand state changes, cdp_component_tree / cdp_store_state for introspection. Reach for raw evaluate only when no targeted tool fits.', {
     expression: z.string().describe('JavaScript expression to evaluate'),
@@ -2410,7 +2410,7 @@ trackedTool('cdp_restart', 'Reset and reconnect the authority-bound Hermes clien
     metroPort: z
         .number()
         .optional()
-        .describe('Override Metro port for reconnection (default: keep current)'),
+        .describe('Authority-bound Metro port; conflicting values are refused'),
     platform: z
         .enum(['ios', 'android'])
         .optional()

@@ -690,7 +690,7 @@ export class CDPClient {
     const result = await discoverAndConnectFn(
       this.buildConnectCtx(),
       policy?.port ?? this._exactDiscoveryPort ?? portHint,
-      policy ? { ...(filters ?? {}), ...policy.filters, targetId: undefined } : filters,
+      policy ? { ...filters, ...policy.filters, targetId: undefined } : filters,
       policy ? this.authoritativeDiscover : this._reconnectDiscover,
     );
     await this.verifyAuthoritativeConnection();

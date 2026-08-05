@@ -58018,7 +58018,7 @@ var init_cdp_client = __esm({
       }
       async discoverAndConnect(portHint, filters) {
         const policy = this._authoritativeSessionPolicy;
-        const result = await discoverAndConnect(this.buildConnectCtx(), policy?.port ?? this._exactDiscoveryPort ?? portHint, policy ? { ...filters ?? {}, ...policy.filters, targetId: void 0 } : filters, policy ? this.authoritativeDiscover : this._reconnectDiscover);
+        const result = await discoverAndConnect(this.buildConnectCtx(), policy?.port ?? this._exactDiscoveryPort ?? portHint, policy ? { ...filters, ...policy.filters, targetId: void 0 } : filters, policy ? this.authoritativeDiscover : this._reconnectDiscover);
         await this.verifyAuthoritativeConnection();
         return result;
       }
@@ -83505,8 +83505,8 @@ var init_index = __esm({
       force: external_exports.boolean().optional().default(false).describe("Force disconnect and reconnect even if already connected. Use to switch targets or recover from stale connections.")
     }, connectBoundSession);
     trackedTool("cdp_disconnect", "Disconnect the authority-bound Hermes target and transactionally invalidate its bundle/target claim.", {}, disconnectBoundSession);
-    trackedTool("cdp_targets", "List available Hermes debug targets without connecting. Shows all valid targets from Metro with their IDs, titles, and VM type. Highlights which target is currently connected (if any). Use to inspect what is available before calling cdp_connect.", {
-      metroPort: external_exports.number().optional().describe("Metro port to scan (default: auto-detect)")
+    trackedTool("cdp_targets", "List available Hermes debug targets without connecting. An authoritative session lists only its exact managed Metro port; a fresh non-authoritative client keeps ordinary port discovery. Shows target IDs, titles, optional legacy VM metadata, and the currently connected target.", {
+      metroPort: external_exports.number().optional().describe("Session port; otherwise an ordinary discovery hint")
     }, createTargetsHandler(getClient));
     trackedTool("cdp_evaluate", "CAUTION: Executes arbitrary JavaScript directly in the Hermes runtime with no sandboxing. Use only when no specific tool covers the need. Has a 5-second timeout. The Hermes dev runtime has NO Node `require()` \u2014 Metro bundles modules internally and only the live React tree is reachable. Use cdp_mmkv for storage R/W, cdp_dispatch for Redux/Zustand state changes, cdp_component_tree / cdp_store_state for introspection. Reach for raw evaluate only when no targeted tool fits.", {
       expression: external_exports.string().describe("JavaScript expression to evaluate"),
@@ -84134,7 +84134,7 @@ var init_index = __esm({
     }, createRecordTestLoadHandler(getClient));
     trackedTool("cdp_record_test_list", "List saved recordings under <projectRoot>/.rn-agent/recordings/. Returns the directory path and an array of recording names (without .json extension), sorted alphabetically.", {}, createRecordTestListHandler(getClient));
     trackedTool("cdp_restart", "Reset and reconnect the authority-bound Hermes client. hardReset relaunches only the exact claimed iOS simulator or Android device/app; success requires a fresh signed runtime binding committed under the operation fence.", {
-      metroPort: external_exports.number().optional().describe("Override Metro port for reconnection (default: keep current)"),
+      metroPort: external_exports.number().optional().describe("Authority-bound Metro port; conflicting values are refused"),
       platform: external_exports.enum(["ios", "android"]).optional().describe("Authority-bound platform; conflicting values are refused"),
       deviceId: external_exports.string().optional().describe("Authority-bound exact device identifier; normally injected by the session"),
       appId: external_exports.string().optional().describe("Authority-bound exact app identifier; normally injected by the session"),

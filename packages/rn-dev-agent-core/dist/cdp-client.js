@@ -485,7 +485,7 @@ export class CDPClient {
     }
     async discoverAndConnect(portHint, filters) {
         const policy = this._authoritativeSessionPolicy;
-        const result = await discoverAndConnectFn(this.buildConnectCtx(), policy?.port ?? this._exactDiscoveryPort ?? portHint, policy ? { ...(filters ?? {}), ...policy.filters, targetId: undefined } : filters, policy ? this.authoritativeDiscover : this._reconnectDiscover);
+        const result = await discoverAndConnectFn(this.buildConnectCtx(), policy?.port ?? this._exactDiscoveryPort ?? portHint, policy ? { ...filters, ...policy.filters, targetId: undefined } : filters, policy ? this.authoritativeDiscover : this._reconnectDiscover);
         await this.verifyAuthoritativeConnection();
         return result;
     }

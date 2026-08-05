@@ -1,9 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import {
-  CDPClient,
-  discoverAuthoritativeTarget,
-} from '../../../dist/cdp-client.js';
+import { CDPClient, discoverAuthoritativeTarget } from '../../../dist/cdp-client.js';
 import { discoverExactPort, listTargetsOnExactPort } from '../../../dist/cdp/discovery.js';
 
 const managedPort = 8341;

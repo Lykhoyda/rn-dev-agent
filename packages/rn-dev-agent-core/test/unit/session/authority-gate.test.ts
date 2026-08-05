@@ -945,7 +945,7 @@ test('run-action claims bundle authority only when its CDP path is used', async 
 
   assert.deepEqual(
     cdp.calls.filter((call) => call.endsWith(':B')),
-    ['preflight:B', 'postflight:B'],
+    ['begin-operation-axis:B', 'preflight:B', 'postflight:B'],
   );
   assert.equal(
     envelope.meta.authorityReceipt.axes.some((axis) => axis.axis === 'B'),

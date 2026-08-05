@@ -111,8 +111,7 @@ export function withConnection(getClient, handler, options = {}) {
                     if (msg.includes('Already connecting')) {
                         // Reconnection in progress — wait up to 30s for it to complete (B89)
                         const deadline = Date.now() + 30_000;
-                        while ((!client.isConnected || client.reconnectState.active) &&
-                            Date.now() < deadline) {
+                        while ((!client.isConnected || client.reconnectState.active) && Date.now() < deadline) {
                             await new Promise((r) => setTimeout(r, 500));
                         }
                         if (!client.isConnected || client.reconnectState.active) {
