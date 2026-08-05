@@ -35,6 +35,8 @@ struct Command: Codable {
   let commandId: String?
   let appBundleId: String?
   let text: String?
+  let exactIdentifier: String?
+  let exactType: String?
   let delayMs: Int?
   let clearFirst: Bool?
   let action: String?
@@ -147,6 +149,9 @@ struct DataPayload: Codable {
   // how long the keyboard-presence wait blocked before the first keystroke.
   let typingBurst: Bool?
   let keyboardWaitMs: Int?
+  let filled: Bool?
+  let verify: String?
+  let focusedBefore: Bool?
 
   init(
     message: String? = nil,
@@ -175,7 +180,10 @@ struct DataPayload: Codable {
     via: String? = nil,
     `static`: Bool? = nil,
     typingBurst: Bool? = nil,
-    keyboardWaitMs: Int? = nil
+    keyboardWaitMs: Int? = nil,
+    filled: Bool? = nil,
+    verify: String? = nil,
+    focusedBefore: Bool? = nil
   ) {
     self.message = message
     self.text = text
@@ -204,6 +212,9 @@ struct DataPayload: Codable {
     self.`static` = `static`
     self.typingBurst = typingBurst
     self.keyboardWaitMs = keyboardWaitMs
+    self.filled = filled
+    self.verify = verify
+    self.focusedBefore = focusedBefore
   }
 }
 
@@ -211,11 +222,13 @@ struct ErrorPayload: Codable {
   let code: String?
   let message: String
   let mutation: String?
+  let reason: String?
 
-  init(code: String? = nil, message: String, mutation: String? = nil) {
+  init(code: String? = nil, message: String, mutation: String? = nil, reason: String? = nil) {
     self.code = code
     self.message = message
     self.mutation = mutation
+    self.reason = reason
   }
 }
 

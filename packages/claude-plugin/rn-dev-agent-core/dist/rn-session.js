@@ -2052,7 +2052,7 @@ var require_YAMLMap = __commonJS({
       static from(schema, obj, ctx) {
         const { keepUndefined, replacer } = ctx;
         const map = new this(schema);
-        const add2 = (key, value) => {
+        const add = (key, value) => {
           if (typeof replacer === "function")
             value = replacer.call(obj, key, value);
           else if (Array.isArray(replacer) && !replacer.includes(key))
@@ -2062,10 +2062,10 @@ var require_YAMLMap = __commonJS({
         };
         if (obj instanceof Map) {
           for (const [key, value] of obj)
-            add2(key, value);
+            add(key, value);
         } else if (obj && typeof obj === "object") {
           for (const key of Object.keys(obj))
-            add2(key, obj[key]);
+            add(key, obj[key]);
         }
         if (typeof schema.sortMapEntries === "function") {
           map.items.sort(schema.sortMapEntries);
@@ -9255,14 +9255,14 @@ var init_registry = __esm({
           if (!reservation || reservation.phase !== "shutdown_reserved") {
             throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "managed Metro shutdown refusal does not match an active reservation");
           }
-          const sourceState2 = this.#database.prepare("SELECT source_state FROM handoffs WHERE handoff_id = ?").get(input.handoffId);
-          if (typeof sourceState2?.source_state !== "string") {
+          const sourceState = this.#database.prepare("SELECT source_state FROM handoffs WHERE handoff_id = ?").get(input.handoffId);
+          if (typeof sourceState?.source_state !== "string") {
             throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "handoff source state is unavailable for donor restoration");
           }
           this.#database.prepare(`UPDATE sessions
            SET state = ?, bindings_json = ?, authority_version = authority_version + 1,
                updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ? AND state = 'handoff'`).run(sourceState2.source_state, JSON.stringify({
+           WHERE session_id = ? AND claim_epoch = ? AND state = 'handoff'`).run(sourceState.source_state, JSON.stringify({
             ...context.bindings,
             managedMetroHandoffReservation: null
           }), now, context.prior.session_id, context.prior.claim_epoch);
@@ -10698,73 +10698,21 @@ var init_platform_utils = __esm({
   }
 });
 
-// packages/rn-dev-agent-core/dist/domain/maestro-validator.js
-var import_yaml2;
-var init_maestro_validator = __esm({
-  "packages/rn-dev-agent-core/dist/domain/maestro-validator.js"() {
-    "use strict";
-    import_yaml2 = __toESM(require_dist(), 1);
-  }
-});
-
-// packages/rn-dev-agent-core/dist/tools/maestro-dispatch.js
-var init_maestro_dispatch = __esm({
-  "packages/rn-dev-agent-core/dist/tools/maestro-dispatch.js"() {
+// packages/rn-dev-agent-core/dist/tools/runner-leak-recovery.js
+var init_runner_leak_recovery = __esm({
+  "packages/rn-dev-agent-core/dist/tools/runner-leak-recovery.js"() {
     "use strict";
   }
 });
 
-// packages/rn-dev-agent-core/dist/domain/ansi.js
-var ANSI_RE;
-var init_ansi = __esm({
-  "packages/rn-dev-agent-core/dist/domain/ansi.js"() {
-    "use strict";
-    ANSI_RE = new RegExp(String.fromCharCode(27) + "\\[[0-9;]*m", "g");
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/maestro-error-parser.js
-var init_maestro_error_parser = __esm({
-  "packages/rn-dev-agent-core/dist/domain/maestro-error-parser.js"() {
-    "use strict";
-    init_ansi();
-  }
-});
-
-// packages/rn-dev-agent-core/dist/tools/resolve-ios-app-file.js
-var init_resolve_ios_app_file = __esm({
-  "packages/rn-dev-agent-core/dist/tools/resolve-ios-app-file.js"() {
-    "use strict";
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/engine-pin.js
-import { execFile as execFileCb2, spawnSync as spawnSync2 } from "node:child_process";
+// packages/rn-dev-agent-core/dist/tools/app-lifecycle.js
+import { execFile as execFileCb2 } from "node:child_process";
 import { promisify as promisify3 } from "node:util";
 var execFile3;
-var init_engine_pin = __esm({
-  "packages/rn-dev-agent-core/dist/domain/engine-pin.js"() {
+var init_app_lifecycle = __esm({
+  "packages/rn-dev-agent-core/dist/tools/app-lifecycle.js"() {
     "use strict";
-    init_maestro_invoke();
     execFile3 = promisify3(execFileCb2);
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/maestro-step-parser.js
-var init_maestro_step_parser = __esm({
-  "packages/rn-dev-agent-core/dist/domain/maestro-step-parser.js"() {
-    "use strict";
-    init_maestro_error_parser();
-    init_ansi();
-    init_ansi();
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/tap-latency.js
-var init_tap_latency = __esm({
-  "packages/rn-dev-agent-core/dist/domain/tap-latency.js"() {
-    "use strict";
-    init_maestro_step_parser();
   }
 });
 
@@ -10775,245 +10723,9 @@ var init_recovery = __esm({
   }
 });
 
-// packages/rn-dev-agent-core/dist/domain/maestro-device-authority.js
-var init_maestro_device_authority = __esm({
-  "packages/rn-dev-agent-core/dist/domain/maestro-device-authority.js"() {
-    "use strict";
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/maestro-runner-report.js
-var init_maestro_runner_report = __esm({
-  "packages/rn-dev-agent-core/dist/domain/maestro-runner-report.js"() {
-    "use strict";
-  }
-});
-
-// packages/rn-dev-agent-core/dist/session/tool-profiles.js
-function add(names, profile) {
-  for (const name of names) {
-    if (profiles.has(name))
-      throw new Error(`DUPLICATE_AUTHORITY_PROFILE: ${name}`);
-    profiles.set(name, profile);
-  }
-}
-var diagnostic, transition, sourceState, nativeRead, nativeMutation, hybridMutation, optionalHybridMutation, nativeDiagnostic, cdpRead, cdpMutation, observe, proof, profiles;
-var init_tool_profiles = __esm({
-  "packages/rn-dev-agent-core/dist/session/tool-profiles.js"() {
-    "use strict";
-    diagnostic = ["cdp_status", "cdp_targets", "device_list"];
-    transition = ["rn_session", "cdp_connect", "cdp_disconnect"];
-    sourceState = [
-      "cdp_nav_graph",
-      "cdp_record_test_generate",
-      "cdp_record_test_list",
-      "cdp_record_test_load",
-      "cdp_record_test_save",
-      "cdp_record_test_save_as_action",
-      "maestro_generate"
-    ];
-    nativeRead = [
-      "cross_platform_verify",
-      "device_find",
-      "device_screenshot",
-      "device_snapshot"
-    ];
-    nativeMutation = [
-      "cdp_lock_e2e_test",
-      "cdp_repair_action",
-      "device_accept_system_dialog",
-      "device_back",
-      "device_batch",
-      "device_deeplink",
-      "device_dismiss_system_dialog",
-      "device_fill",
-      "device_focus_next",
-      "device_longpress",
-      "device_permission",
-      "device_pick_date",
-      "device_pick_value",
-      "device_pinch",
-      "device_press",
-      "device_record",
-      "device_reset_state",
-      "device_scroll",
-      "device_scrollintoview",
-      "device_swipe",
-      "maestro_run",
-      "maestro_test_all"
-    ];
-    hybridMutation = ["cdp_auto_login", "cdp_run_e2e_suite"];
-    optionalHybridMutation = ["cdp_run_action"];
-    nativeDiagnostic = ["cdp_native_errors"];
-    cdpRead = [
-      "cdp_component_state",
-      "cdp_component_tree",
-      "cdp_console_log",
-      "cdp_cpu_profile",
-      "cdp_diagnostic_renderers",
-      "cdp_error_log",
-      "cdp_heap_usage",
-      "cdp_metro_events",
-      "cdp_navigation_state",
-      "cdp_network_body",
-      "cdp_network_log",
-      "cdp_object_inspect",
-      "cdp_open_devtools",
-      "cdp_store_state",
-      "cdp_wait_for_network",
-      "collect_logs",
-      "expect_redux",
-      "expect_route",
-      "expect_text",
-      "expect_visible_by_testid"
-    ];
-    cdpMutation = [
-      "cdp_dev_settings",
-      "cdp_dismiss_dev_client_picker",
-      "cdp_dispatch",
-      "cdp_evaluate",
-      "cdp_exception_breakpoint",
-      "cdp_interact",
-      "cdp_mmkv",
-      "cdp_navigate",
-      "cdp_record_test_annotate",
-      "cdp_record_test_start",
-      "cdp_record_test_stop",
-      "cdp_reload",
-      "cdp_restart",
-      "cdp_set_shared_value"
-    ];
-    observe = ["observe"];
-    proof = ["proof_capture", "proof_step"];
-    profiles = /* @__PURE__ */ new Map();
-    add(diagnostic, {
-      kind: "diagnostic",
-      axes: [],
-      mutation: false,
-      liveBundleProbe: false
-    });
-    add(transition, {
-      kind: "transition",
-      axes: ["C", "S"],
-      mutation: true,
-      liveBundleProbe: false
-    });
-    add(sourceState, {
-      kind: "authoritative",
-      axes: ["C", "S"],
-      mutation: true,
-      liveBundleProbe: false
-    });
-    add(nativeRead, {
-      kind: "authoritative",
-      axes: ["C", "S", "I", "M", "A", "D", "R"],
-      mutation: false,
-      liveBundleProbe: false
-    });
-    add(nativeMutation, {
-      kind: "authoritative",
-      axes: ["C", "S", "I", "M", "A", "D", "R"],
-      mutation: true,
-      liveBundleProbe: false
-    });
-    add(hybridMutation, {
-      kind: "authoritative",
-      axes: ["C", "S", "I", "M", "B", "D", "R"],
-      mutation: true,
-      liveBundleProbe: true
-    });
-    add(optionalHybridMutation, {
-      kind: "authoritative",
-      axes: ["C", "S", "I", "M", "D", "R"],
-      optionalAxes: ["B"],
-      managedOrigin: true,
-      managedRunnerPark: true,
-      mutation: true,
-      liveBundleProbe: true
-    });
-    add(nativeDiagnostic, {
-      kind: "authoritative",
-      axes: ["C", "S", "I", "D"],
-      mutation: false,
-      liveBundleProbe: false
-    });
-    add(cdpRead, {
-      kind: "authoritative",
-      axes: ["C", "S", "I", "M", "B", "D"],
-      mutation: false,
-      liveBundleProbe: true
-    });
-    add(cdpMutation, {
-      kind: "authoritative",
-      axes: ["C", "S", "I", "M", "B", "D"],
-      mutation: true,
-      liveBundleProbe: true
-    });
-    add(observe, {
-      kind: "authoritative",
-      axes: ["C", "S", "I", "M", "B", "D", "O"],
-      mutation: false,
-      liveBundleProbe: true
-    });
-    add(proof, {
-      kind: "authoritative",
-      axes: ["C", "S", "I", "M", "B", "D", "R", "P"],
-      mutation: true,
-      liveBundleProbe: true
-    });
-  }
-});
-
-// packages/rn-dev-agent-core/dist/session/authority-gate.js
-var init_authority_gate = __esm({
-  "packages/rn-dev-agent-core/dist/session/authority-gate.js"() {
-    "use strict";
-    init_utils();
-    init_registry();
-    init_tool_profiles();
-  }
-});
-
-// packages/rn-dev-agent-core/dist/tools/maestro-run.js
-import { execFile as execFileCb3 } from "node:child_process";
-import { promisify as promisify4 } from "node:util";
-var defaultExecFile;
-var init_maestro_run = __esm({
-  "packages/rn-dev-agent-core/dist/tools/maestro-run.js"() {
-    "use strict";
-    init_utils();
-    init_engine_pin();
-    init_agent_device_wrapper();
-    init_project_config();
-    init_maestro_dispatch();
-    init_resolve_ios_app_file();
-    init_maestro_validator();
-    init_maestro_error_parser();
-    init_tap_latency();
-    init_maestro_step_parser();
-    init_rn_fast_runner_client();
-    init_release_android_slot();
-    init_recovery();
-    init_maestro_device_authority();
-    init_maestro_runner_report();
-    init_authority_gate();
-    init_registry();
-    defaultExecFile = promisify4(execFileCb3);
-  }
-});
-
-// packages/rn-dev-agent-core/dist/session/managed-automation.js
-var OUTPUT_LIMIT;
-var init_managed_automation = __esm({
-  "packages/rn-dev-agent-core/dist/session/managed-automation.js"() {
-    "use strict";
-    OUTPUT_LIMIT = 10 * 1024 * 1024;
-  }
-});
-
 // packages/rn-dev-agent-core/dist/runners/external-runner-detect.js
 import { execFile as execFile4 } from "node:child_process";
-import { promisify as promisify5 } from "node:util";
+import { promisify as promisify4 } from "node:util";
 function executableBasename(command) {
   const executable = command.trimStart().split(/\s+/, 1)[0] ?? "";
   return executable.slice(executable.lastIndexOf("/") + 1);
@@ -11047,7 +10759,7 @@ function isIosExternalRunnerProcessLine(line) {
 async function detectIosExternalRunner(execFileImpl = execFile4, udid) {
   try {
     const opts = { timeout: 2e3, encoding: "utf8" };
-    const run = execFileImpl === execFile4 ? promisify5(execFileImpl) : execFileImpl;
+    const run = execFileImpl === execFile4 ? promisify4(execFileImpl) : execFileImpl;
     const { stdout } = await run("ps", ["axww", "-o", "pid=,command="], opts);
     const lines = stdout.split("\n").filter((line) => isIosExternalRunnerProcessLine(line)).filter((line) => !RN_FAST_RUNNER_RE.test(line)).filter((line) => udid ? line.includes(udid) : true).map((line) => line.trim()).filter((line) => line.length > 0);
     if (lines.length === 0)
@@ -11068,6 +10780,49 @@ var init_external_runner_detect = __esm({
     "use strict";
     SHELL_WRAPPERS = /^(?:sh|bash|zsh|dash|ksh|env)$/i;
     RN_FAST_RUNNER_RE = /RnFastRunner/i;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/maestro-validator.js
+var import_yaml2;
+var init_maestro_validator = __esm({
+  "packages/rn-dev-agent-core/dist/domain/maestro-validator.js"() {
+    "use strict";
+    import_yaml2 = __toESM(require_dist(), 1);
+  }
+});
+
+// packages/rn-dev-agent-core/dist/cdp/discovery.js
+var init_discovery = __esm({
+  "packages/rn-dev-agent-core/dist/cdp/discovery.js"() {
+    "use strict";
+    init_logger();
+    init_maestro_validator();
+    init_metro_cwd();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/runners/ensure-single-runner.js
+import { homedir as homedir3 } from "node:os";
+import { join as join13 } from "node:path";
+var DAEMON_JSON, DAEMON_LOCK;
+var init_ensure_single_runner = __esm({
+  "packages/rn-dev-agent-core/dist/runners/ensure-single-runner.js"() {
+    "use strict";
+    init_discovery();
+    DAEMON_JSON = join13(homedir3(), ".agent-device", "daemon.json");
+    DAEMON_LOCK = join13(homedir3(), ".agent-device", "daemon.lock");
+  }
+});
+
+// packages/rn-dev-agent-core/dist/runners/suppress-ios-autocorrect.js
+import { execFile as execFileCb3 } from "node:child_process";
+import { promisify as promisify5 } from "node:util";
+var execFile5;
+var init_suppress_ios_autocorrect = __esm({
+  "packages/rn-dev-agent-core/dist/runners/suppress-ios-autocorrect.js"() {
+    "use strict";
+    execFile5 = promisify5(execFileCb3);
   }
 });
 
@@ -11242,82 +10997,10 @@ var init_device_arbiter = __esm({
   }
 });
 
-// packages/rn-dev-agent-core/dist/maestro-invoke.js
-var init_maestro_invoke = __esm({
-  "packages/rn-dev-agent-core/dist/maestro-invoke.js"() {
-    "use strict";
-    init_project_config();
-    init_maestro_validator();
-    init_maestro_dispatch();
-    init_maestro_error_parser();
-    init_resolve_ios_app_file();
-    init_maestro_run();
-    init_agent_device_wrapper();
-    init_maestro_device_authority();
-    init_maestro_runner_report();
-    init_managed_automation();
-    init_device_arbiter();
-    init_authority_gate();
-    init_utils();
-  }
-});
-
-// packages/rn-dev-agent-core/dist/tools/runner-leak-recovery.js
-var init_runner_leak_recovery = __esm({
-  "packages/rn-dev-agent-core/dist/tools/runner-leak-recovery.js"() {
-    "use strict";
-  }
-});
-
-// packages/rn-dev-agent-core/dist/tools/app-lifecycle.js
+// packages/rn-dev-agent-core/dist/cdp/recover-wedge.js
 import { execFile as execFileCb4 } from "node:child_process";
 import { promisify as promisify6 } from "node:util";
-var execFile5;
-var init_app_lifecycle = __esm({
-  "packages/rn-dev-agent-core/dist/tools/app-lifecycle.js"() {
-    "use strict";
-    execFile5 = promisify6(execFileCb4);
-  }
-});
-
-// packages/rn-dev-agent-core/dist/cdp/discovery.js
-var init_discovery = __esm({
-  "packages/rn-dev-agent-core/dist/cdp/discovery.js"() {
-    "use strict";
-    init_logger();
-    init_maestro_validator();
-    init_metro_cwd();
-  }
-});
-
-// packages/rn-dev-agent-core/dist/runners/ensure-single-runner.js
-import { homedir as homedir3 } from "node:os";
-import { join as join13 } from "node:path";
-var DAEMON_JSON, DAEMON_LOCK;
-var init_ensure_single_runner = __esm({
-  "packages/rn-dev-agent-core/dist/runners/ensure-single-runner.js"() {
-    "use strict";
-    init_discovery();
-    DAEMON_JSON = join13(homedir3(), ".agent-device", "daemon.json");
-    DAEMON_LOCK = join13(homedir3(), ".agent-device", "daemon.lock");
-  }
-});
-
-// packages/rn-dev-agent-core/dist/runners/suppress-ios-autocorrect.js
-import { execFile as execFileCb5 } from "node:child_process";
-import { promisify as promisify7 } from "node:util";
 var execFile6;
-var init_suppress_ios_autocorrect = __esm({
-  "packages/rn-dev-agent-core/dist/runners/suppress-ios-autocorrect.js"() {
-    "use strict";
-    execFile6 = promisify7(execFileCb5);
-  }
-});
-
-// packages/rn-dev-agent-core/dist/cdp/recover-wedge.js
-import { execFile as execFileCb6 } from "node:child_process";
-import { promisify as promisify8 } from "node:util";
-var execFile7;
 var init_recover_wedge = __esm({
   "packages/rn-dev-agent-core/dist/cdp/recover-wedge.js"() {
     "use strict";
@@ -11325,25 +11008,25 @@ var init_recover_wedge = __esm({
     init_rn_fast_runner_client();
     init_device_arbiter();
     init_recovery();
-    execFile7 = promisify8(execFileCb6);
+    execFile6 = promisify6(execFileCb4);
   }
 });
 
 // packages/rn-dev-agent-core/dist/cdp/app-installed-probe.js
-import { execFile as execFileCb7 } from "node:child_process";
-import { promisify as promisify9 } from "node:util";
-var execFile8;
+import { execFile as execFileCb5 } from "node:child_process";
+import { promisify as promisify7 } from "node:util";
+var execFile7;
 var init_app_installed_probe = __esm({
   "packages/rn-dev-agent-core/dist/cdp/app-installed-probe.js"() {
     "use strict";
-    execFile8 = promisify9(execFileCb7);
+    execFile7 = promisify7(execFileCb5);
   }
 });
 
 // packages/rn-dev-agent-core/dist/cdp/recover-detached.js
-import { execFile as execFileCb8 } from "node:child_process";
-import { promisify as promisify10 } from "node:util";
-var execFile9;
+import { execFile as execFileCb6 } from "node:child_process";
+import { promisify as promisify8 } from "node:util";
+var execFile8;
 var init_recover_detached = __esm({
   "packages/rn-dev-agent-core/dist/cdp/recover-detached.js"() {
     "use strict";
@@ -11353,7 +11036,7 @@ var init_recover_detached = __esm({
     init_recovery();
     init_app_installed_probe();
     init_maestro_validator();
-    execFile9 = promisify10(execFileCb8);
+    execFile8 = promisify8(execFileCb6);
   }
 });
 
@@ -11373,9 +11056,9 @@ var init_device_session_close = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/device-session.js
-import { execFile as execFileCb9 } from "node:child_process";
-import { promisify as promisify11 } from "node:util";
-var execFile10;
+import { execFile as execFileCb7 } from "node:child_process";
+import { promisify as promisify9 } from "node:util";
+var execFile9;
 var init_device_session = __esm({
   "packages/rn-dev-agent-core/dist/tools/device-session.js"() {
     "use strict";
@@ -11397,21 +11080,18 @@ var init_device_session = __esm({
     init_device_lock();
     init_device_arbiter();
     init_device_session_close();
-    execFile10 = promisify11(execFileCb9);
+    execFile9 = promisify9(execFileCb7);
   }
 });
 
-// packages/rn-dev-agent-core/dist/tools/fill-verify.js
-var init_fill_verify = __esm({
-  "packages/rn-dev-agent-core/dist/tools/fill-verify.js"() {
+// packages/rn-dev-agent-core/dist/tools/fill-coordinator.js
+var init_fill_coordinator = __esm({
+  "packages/rn-dev-agent-core/dist/tools/fill-coordinator.js"() {
     "use strict";
   }
 });
 
 // packages/rn-dev-agent-core/dist/tools/device-interact.js
-import { execFile as execFileCb10 } from "node:child_process";
-import { promisify as promisify12 } from "node:util";
-var execFile11;
 var init_device_interact = __esm({
   "packages/rn-dev-agent-core/dist/tools/device-interact.js"() {
     "use strict";
@@ -11422,12 +11102,10 @@ var init_device_interact = __esm({
     init_project_config();
     init_utils();
     init_utils();
-    init_maestro_invoke();
     init_runner_leak_recovery();
     init_device_session();
     init_fast_runner_ref_map();
-    init_fill_verify();
-    execFile11 = promisify12(execFileCb10);
+    init_fill_coordinator();
   }
 });
 
@@ -11460,8 +11138,8 @@ var init_free_port = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/runners/rn-android-runner-client.js
-import { spawn as spawn4, execFile as execFile12 } from "node:child_process";
-import { promisify as promisify13 } from "node:util";
+import { spawn as spawn4, execFile as execFile10 } from "node:child_process";
+import { promisify as promisify10 } from "node:util";
 import { join as join14 } from "node:path";
 var execFileAsync2, RN_ANDROID_RUNNER_DIR, GRADLEW, APK_APP, APK_TEST, ANDROID_REBUILD_ROOT, ANDROID_REBUILD_LOCK_DATABASE, ANDROID_REBUILD_LOCK_STALE_MS, fetchImpl2;
 var init_rn_android_runner_client = __esm({
@@ -11478,7 +11156,7 @@ var init_rn_android_runner_client = __esm({
     init_transport_recovery();
     init_process_birth();
     init_authority_store();
-    execFileAsync2 = promisify13(execFile12);
+    execFileAsync2 = promisify10(execFile10);
     RN_ANDROID_RUNNER_DIR = resolveNativeRunnerDir("rn-android-runner");
     GRADLEW = join14(RN_ANDROID_RUNNER_DIR, "gradlew");
     APK_APP = join14(RN_ANDROID_RUNNER_DIR, "app", "build", "outputs", "apk", "debug", "app-debug.apk");
@@ -11491,17 +11169,17 @@ var init_rn_android_runner_client = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/runners/release-android-slot.js
-import { execFile as execFileCb11 } from "node:child_process";
-import { promisify as promisify14 } from "node:util";
+import { execFile as execFileCb8 } from "node:child_process";
+import { promisify as promisify11 } from "node:util";
 import { homedir as homedir4 } from "node:os";
 import { join as join15 } from "node:path";
-var execFile13, DAEMON_JSON2, DAEMON_LOCK2, OWNED_PACKAGES;
+var execFile11, DAEMON_JSON2, DAEMON_LOCK2, OWNED_PACKAGES;
 var init_release_android_slot = __esm({
   "packages/rn-dev-agent-core/dist/runners/release-android-slot.js"() {
     "use strict";
     init_rn_android_runner_client();
     init_agent_device_wrapper();
-    execFile13 = promisify14(execFileCb11);
+    execFile11 = promisify11(execFileCb8);
     DAEMON_JSON2 = join15(homedir4(), ".agent-device", "daemon.json");
     DAEMON_LOCK2 = join15(homedir4(), ".agent-device", "daemon.lock");
     OWNED_PACKAGES = [
@@ -13798,11 +13476,11 @@ function readManagedMetroLauncherDiagnostic(path) {
     const source = readFileSync4(path, "utf8");
     if (Buffer.byteLength(source) > 4096)
       return null;
-    const diagnostic2 = JSON.parse(source);
-    if (diagnostic2.version !== 1 || typeof diagnostic2.code !== "string" || !/^METRO_LAUNCHER_[A-Z0-9_]+$/.test(diagnostic2.code) || typeof diagnostic2.stage !== "string" || !/^[a-z0-9-]{1,64}$/.test(diagnostic2.stage) || typeof diagnostic2.detail !== "string" || !/^[a-z0-9-]{1,96}$/.test(diagnostic2.detail)) {
+    const diagnostic = JSON.parse(source);
+    if (diagnostic.version !== 1 || typeof diagnostic.code !== "string" || !/^METRO_LAUNCHER_[A-Z0-9_]+$/.test(diagnostic.code) || typeof diagnostic.stage !== "string" || !/^[a-z0-9-]{1,64}$/.test(diagnostic.stage) || typeof diagnostic.detail !== "string" || !/^[a-z0-9-]{1,96}$/.test(diagnostic.detail)) {
       return null;
     }
-    return diagnostic2;
+    return diagnostic;
   } catch {
     return null;
   }
@@ -16495,11 +16173,11 @@ function projectPublicAuthorityStatus(status, options = {}) {
 
 // packages/rn-dev-agent-core/dist/session/process-cleanup.js
 init_release_android_slot();
-import { execFile as execFileCb12, spawn as spawn5 } from "node:child_process";
-import { promisify as promisify15 } from "node:util";
+import { execFile as execFileCb9, spawn as spawn5 } from "node:child_process";
+import { promisify as promisify12 } from "node:util";
 init_process_birth();
 init_registry();
-var execFile14 = promisify15(execFileCb12);
+var execFile12 = promisify12(execFileCb9);
 var RECORDER_POST_KILL_CONFIRM_MS = 2e3;
 function executeRecorderScript(script, args, options) {
   return new Promise((resolve5, reject) => {
@@ -16707,7 +16385,7 @@ async function stopBoundObserve(binding, listenerProbe = probeManagedMetroListen
     return observed.status === "listening" && observed.pid === pid ? "running" : "stopped";
   }, deadlineMs, "OBSERVE_AUTHORITY_MISMATCH", "Observe listener did not stop before the cleanup deadline");
 }
-async function stopBoundRunner(binding, processProbe = probeProcessBirth, signalProcess = process.kill, timeoutMs = 2e3, runAdb = async (args) => execFile14("adb", args, { timeout: 5e3, encoding: "utf8" })) {
+async function stopBoundRunner(binding, processProbe = probeProcessBirth, signalProcess = process.kill, timeoutMs = 2e3, runAdb = async (args) => execFile12("adb", args, { timeout: 5e3, encoding: "utf8" })) {
   const deadlineMs = Date.now() + timeoutMs;
   const pid = Number(binding.pid);
   const expectedBirth = String(binding.processBirth ?? "");
@@ -17292,10 +16970,10 @@ async function main() {
           throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "runner cleanup claim no longer matches the authenticated binding");
         }
       }
-      const observe2 = status.bindings.observe;
-      if (observe2) {
-        const port = String(observe2.port);
-        if (status.bindings.observePort !== observe2.port || !status.claims.some((claim) => claim.type === "observe-port" && claim.key === port && claim.sessionId === status.sessionId && claim.claimEpoch === status.claimEpoch)) {
+      const observe = status.bindings.observe;
+      if (observe) {
+        const port = String(observe.port);
+        if (status.bindings.observePort !== observe.port || !status.claims.some((claim) => claim.type === "observe-port" && claim.key === port && claim.sessionId === status.sessionId && claim.claimEpoch === status.claimEpoch)) {
           throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe cleanup claim no longer matches the authenticated binding");
         }
       }
@@ -17315,8 +16993,8 @@ async function main() {
             await stopBoundRunner(runner);
             status.registry.verifyOperation(operation);
           }
-          if (observe2) {
-            await stopBoundObserve(observe2);
+          if (observe) {
+            await stopBoundObserve(observe);
             status.registry.verifyOperation(operation);
           }
           if (metro?.mode === "managed" && !await stopManagedMetro(metro, {

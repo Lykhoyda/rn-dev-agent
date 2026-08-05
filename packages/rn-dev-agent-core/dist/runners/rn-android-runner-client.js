@@ -1388,6 +1388,10 @@ export async function runAndroid(args) {
         body.y2 = args.y2;
     if (args.text !== undefined)
         body.text = args.text;
+    if (args.exactIdentifier !== undefined)
+        body.exactIdentifier = args.exactIdentifier;
+    if (args.exactType !== undefined)
+        body.exactType = args.exactType;
     if (args.exact !== undefined)
         body.exact = args.exact;
     if (args.durationMs !== undefined)
@@ -1457,16 +1461,23 @@ export async function runAndroid(args) {
         // always succeeds. Treat this specific error shape as success on `.type`
         // and surface a meta marker so callers can audit telemetry.
         if (args.command === 'type' &&
+            args.exactIdentifier === undefined &&
             typeof message === 'string' &&
             (message.includes('Could not detect idle state') ||
                 message.includes('window-content-idle') ||
                 message.includes('Idle timeout exceeded'))) {
-            return okResult({ typed: true, text: args.text }, { meta: { sideEffectSucceeded: true, runnerTimeoutShim: true, ...recoveryMeta } });
+            return okResult({ typed: true }, { meta: { sideEffectSucceeded: true, runnerTimeoutShim: true, ...recoveryMeta } });
         }
-        const failExtras = recovery ? { transportRecovery: recovery } : undefined;
+        const mutation = resp.error?.mutation;
+        const reason = resp.error?.reason;
+        const failExtras = {
+            ...(recovery ? { transportRecovery: recovery } : {}),
+            ...(mutation !== undefined ? { mutation } : {}),
+            ...(reason !== undefined ? { reason } : {}),
+        };
         if (code)
-            return failResult(message, code, failExtras);
-        return failExtras ? failResult(message, failExtras) : failResult(message);
+            return failResult(message, code, Object.keys(failExtras).length ? failExtras : undefined);
+        return Object.keys(failExtras).length ? failResult(message, failExtras) : failResult(message);
     }
     if (args.command === 'snapshot' && resp.data && typeof resp.data === 'object') {
         const data = resp.data;

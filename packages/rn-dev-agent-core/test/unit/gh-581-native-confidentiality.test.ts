@@ -16,6 +16,6 @@ test('Android fill uses direct AccessibilityNodeInfo ACTION_SET_TEXT and never U
 
 test('native fill responses do not echo requested or observed values', async () => {
   const source = await readFile(androidDispatcher, 'utf8');
-  assert.doesNotMatch(source, /\.put\("text",\s*text\)/);
+  assert.doesNotMatch(source, /\.put\("text",\s*requested\)/);
   assert.doesNotMatch(source, /\.put\("observed/);
 });

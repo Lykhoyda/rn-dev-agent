@@ -518,13 +518,29 @@ export function buildRunIOSArgs(
       // `textInputAt(app:, x:, y:)` falls back to `focusedTextInput`). So no
       // separate tap is needed: pass coords + text together.
       const ref = positionals[0];
-      const text = positionals.slice(1).join(' ');
+      const encodedText = optionValue(cliArgs, '--text-base64');
+      const text =
+        encodedText !== undefined
+          ? Buffer.from(encodedText, 'base64').toString('utf8')
+          : positionals.slice(1).join(' ');
+      const exactIdentifier = optionValue(cliArgs, '--exact-id');
+      const exactType = optionValue(cliArgs, '--exact-type');
       const delayRaw = optionValue(cliArgs, '--delay-ms');
       const delayMs =
         delayRaw !== undefined && !Number.isNaN(Number(delayRaw)) ? Number(delayRaw) : undefined;
       const extra: { delayMs?: number; clearFirst?: boolean } = {};
       if (delayMs !== undefined) extra.delayMs = delayMs;
       if (cliArgs.includes('--clear-first')) extra.clearFirst = true;
+      if (exactIdentifier && exactType) {
+        return {
+          command: 'type',
+          text,
+          exactIdentifier,
+          exactType,
+          ...extra,
+          ...(bundleId ? { bundleId } : {}),
+        };
+      }
       // Story 04 (#385) M2 guard: an explicit --at-x/--at-y pin bypasses @ref
       // re-resolution entirely — device_fill resolves coords ONCE before its
       // pre-tap so the settle's ref-map refresh can't retarget the fill.
@@ -707,7 +723,16 @@ export function buildRunAndroidArgs(
     case 'fill':
     case 'type': {
       const ref = positionals[0];
-      const text = positionals.slice(1).join(' ');
+      const encodedText = optionValue(cliArgs, '--text-base64');
+      const text =
+        encodedText !== undefined
+          ? Buffer.from(encodedText, 'base64').toString('utf8')
+          : positionals.slice(1).join(' ');
+      const exactIdentifier = optionValue(cliArgs, '--exact-id');
+      const exactType = optionValue(cliArgs, '--exact-type');
+      if (exactIdentifier && exactType) {
+        return { command: 'type', text, exactIdentifier, exactType, ...withBundle };
+      }
       // Story 04 (#385) M2 guard — mirrors buildRunIOSArgs: a --at-x/--at-y pin
       // bypasses @ref re-resolution so a settle-refreshed map can't retarget.
       const atX = optionValue(cliArgs, '--at-x');

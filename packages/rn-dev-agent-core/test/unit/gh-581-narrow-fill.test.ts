@@ -1,9 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  runFillCoordinator,
-  type FillOwnerResult,
-} from '../../dist/tools/fill-coordinator.js';
+import { runFillCoordinator, type FillOwnerResult } from '../../dist/tools/fill-coordinator.js';
 import { mustStopBatchAfterFillFailure } from '../../dist/tools/device-batch.js';
 
 const request = { descriptor: { testID: 'field', nativeType: 'TextField' }, text: 'canary' };
@@ -48,10 +45,13 @@ test('controlled empty clear is exact without consulting the native oracle', asy
   const controlled = owner({ kind: 'success', focusedBefore: false });
   const native = owner({ kind: 'success', focusedBefore: false });
 
-  const result = await runFillCoordinator({ ...request, text: '' }, {
-    controlledFill: controlled.run,
-    nativeFill: native.run,
-  });
+  const result = await runFillCoordinator(
+    { ...request, text: '' },
+    {
+      controlledFill: controlled.run,
+      nativeFill: native.run,
+    },
+  );
 
   assert.deepEqual(result, { kind: 'success', owner: 'fiber', focusedBefore: false });
   assert.equal(native.calls(), 0);

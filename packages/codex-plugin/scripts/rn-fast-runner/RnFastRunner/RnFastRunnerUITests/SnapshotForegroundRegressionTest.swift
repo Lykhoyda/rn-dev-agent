@@ -79,6 +79,8 @@ final class SnapshotForegroundRegressionTest: RnFastRunnerTests {
       commandId: nil,
       appBundleId: Self.testAppBundleId,
       text: nil,
+      exactIdentifier: nil,
+      exactType: nil,
       delayMs: nil,
       clearFirst: nil,
       action: nil,
