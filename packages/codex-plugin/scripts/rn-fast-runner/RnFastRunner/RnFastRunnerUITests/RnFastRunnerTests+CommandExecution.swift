@@ -190,7 +190,7 @@ extension RnFastRunnerTests {
     // every new type attempt starts with a clean record so a failed attempt
     // can never leave an earlier field's record for verifyInput to prefer.
     switch command.command {
-    case .verifyInput, .status, .uptime, .isScreenStatic, .screenshot:
+    case .verifyInput, .snapshot, .status, .uptime, .isScreenStatic, .screenshot:
       break
     default:
       lastExactTypeTarget = nil
@@ -701,13 +701,13 @@ extension RnFastRunnerTests {
         }
       }
       withTemporaryScrollIdleTimeoutIfSupported(activeApp) {
-        lastExactTypeTarget = liveAttributes(of: target).map {
-          RecordedExactTypeTarget(
-            generation: currentSnapshotGeneration,
-            nodeIndex: command.snapshotNodeIndex,
-            attributes: $0
-          )
-        }
+        lastExactTypeTarget = RecordedExactTypeTarget(
+          operationToken: command.operationToken,
+          element: target,
+          generation: currentSnapshotGeneration,
+          nodeIndex: command.snapshotNodeIndex,
+          attributes: liveAttributes(of: target)
+        )
       }
       return Response(
         ok: true,
@@ -726,50 +726,55 @@ extension RnFastRunnerTests {
       var verifyTarget: XCUIElement?
       var lostVerdict = TextInputTarget.VerifyVerdict.targetLost
       withTemporaryScrollIdleTimeoutIfSupported(activeApp) {
-        // Prefer the live attributes recorded by the type that just ran (same
-        // generation) — the authoritative post-keyboard identity of the exact
-        // element that was mutated — but only when that record agrees with the
-        // identity the caller asked to verify; a conflicting record is never
-        // silently substituted. Fall back to descriptor rebinding.
-        let verifyDescriptor = exactInputDescriptor(from: command)
-        var recordAgreesWithRequest = false
-        if let recorded = lastExactTypeTarget, let descriptor = verifyDescriptor {
-          recordAgreesWithRequest = TextInputTarget.recordedRequestAgrees(
-            recorded: recorded.attributes,
-            recordedGeneration: recorded.generation,
-            recordedNodeIndex: recorded.nodeIndex,
-            descriptorType: descriptor.type,
-            descriptorIdentifier: descriptor.identifier,
-            descriptorGeneration: descriptor.generation,
-            requestedNodeIndex: command.snapshotNodeIndex
-          )
-        }
-        if let recorded = lastExactTypeTarget,
-           recorded.generation == currentSnapshotGeneration,
-           recordAgreesWithRequest {
-          switch resolveRecordedTextInput(app: activeApp, recorded: recorded.attributes) {
-          case .bound(let element):
-            verifyTarget = element
-          case .ambiguous:
-            lostVerdict = .ambiguous
-          case .absent:
-            break
+        if let operationToken = command.operationToken {
+          if let recorded = lastExactTypeTarget,
+             recorded.operationToken == operationToken {
+            verifyTarget = recorded.element
           }
-        }
-        if verifyTarget == nil, lostVerdict == .targetLost, let descriptor = verifyDescriptor {
-          let sameGeneration = descriptor.generation == currentSnapshotGeneration
-          switch resolveExactTextInput(
-            app: activeApp,
-            descriptor: descriptor,
-            sameGeneration: sameGeneration,
-            requireFrameMatch: true
-          ) {
-          case .bound(let element):
-            verifyTarget = element
-          case .ambiguous:
-            lostVerdict = .ambiguous
-          case .absent:
-            lostVerdict = .targetLost
+        } else {
+          let verifyDescriptor = exactInputDescriptor(from: command)
+          var recordAgreesWithRequest = false
+          if let recorded = lastExactTypeTarget,
+             let attributes = recorded.attributes,
+             let descriptor = verifyDescriptor {
+            recordAgreesWithRequest = TextInputTarget.recordedRequestAgrees(
+              recorded: attributes,
+              recordedGeneration: recorded.generation,
+              recordedNodeIndex: recorded.nodeIndex,
+              descriptorType: descriptor.type,
+              descriptorIdentifier: descriptor.identifier,
+              descriptorGeneration: descriptor.generation,
+              requestedNodeIndex: command.snapshotNodeIndex
+            )
+          }
+          if let recorded = lastExactTypeTarget,
+             let attributes = recorded.attributes,
+             recorded.generation == currentSnapshotGeneration,
+             recordAgreesWithRequest {
+            switch resolveRecordedTextInput(app: activeApp, recorded: attributes) {
+            case .bound(let element):
+              verifyTarget = element
+            case .ambiguous:
+              lostVerdict = .ambiguous
+            case .absent:
+              break
+            }
+          }
+          if verifyTarget == nil, lostVerdict == .targetLost, let descriptor = verifyDescriptor {
+            let sameGeneration = descriptor.generation == currentSnapshotGeneration
+            switch resolveExactTextInput(
+              app: activeApp,
+              descriptor: descriptor,
+              sameGeneration: sameGeneration,
+              requireFrameMatch: true
+            ) {
+            case .bound(let element):
+              verifyTarget = element
+            case .ambiguous:
+              lostVerdict = .ambiguous
+            case .absent:
+              lostVerdict = .targetLost
+            }
           }
         }
       }

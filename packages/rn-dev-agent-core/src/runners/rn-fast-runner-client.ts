@@ -1448,6 +1448,7 @@ export interface RunIOSArgs {
   focusX?: number;
   focusY?: number;
   focusWaitMs?: number;
+  operationToken?: string;
   /** Independent CDP/helper readback; never serialized onto the runner wire. */
   _verifyExactReadback?: (
     expected: string,
@@ -1913,6 +1914,7 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
   if (args.focusX !== undefined) body.focusX = args.focusX;
   if (args.focusY !== undefined) body.focusY = args.focusY;
   if (args.focusWaitMs !== undefined) body.focusWaitMs = args.focusWaitMs;
+  if (args.operationToken !== undefined) body.operationToken = args.operationToken;
 
   // Transport-level refusals must surface as typed results from every runner
   // round trip, not just the main dispatch — `withSession` does not catch, so a

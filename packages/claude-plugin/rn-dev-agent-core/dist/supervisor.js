@@ -12398,6 +12398,8 @@ async function runIOS(args) {
     body.focusY = args.focusY;
   if (args.focusWaitMs !== void 0)
     body.focusWaitMs = args.focusWaitMs;
+  if (args.operationToken !== void 0)
+    body.operationToken = args.operationToken;
   const mapRunnerDispatchError = (err) => {
     const m = err instanceof Error ? err.message : String(err);
     if (m.startsWith("RUNNER_PROTOCOL_MISMATCH")) {
@@ -16293,6 +16295,10 @@ function exactTargetRebindFailure(inputRef) {
   return failResult(`Exact input ${inputRef} could not be rebound in the current snapshot generation \u2014 nothing was dispatched. Refresh the snapshot and rebind the input.`, "NO_TEXT_INPUT_TARGET", { mutation: "none" });
 }
 function decorateExactTargetIOS(ios, exact) {
+  if (ios.command === "verifyInput" && exact.operationToken) {
+    ios.operationToken = exact.operationToken;
+    return null;
+  }
   const target = getFreshRefTarget(exact.inputRef, { allowUnknownKeyboardState: true });
   if (!target)
     return exactTargetRebindFailure(exact.inputRef);
@@ -16316,9 +16322,17 @@ function decorateExactTargetIOS(ios, exact) {
     ios.focusY = exact.focusY;
   if (exact.focusWaitMs !== void 0)
     ios.focusWaitMs = exact.focusWaitMs;
+  if (exact.operationToken !== void 0)
+    ios.operationToken = exact.operationToken;
   return null;
 }
 function decorateExactTargetAndroid(android, exact) {
+  if (android.command === "verifyInput" && exact.operationToken) {
+    android.operationToken = exact.operationToken;
+    if (exact.secure !== void 0)
+      android.secureInput = exact.secure;
+    return null;
+  }
   const target = getFreshRefTarget(exact.inputRef, { allowUnknownKeyboardState: true });
   if (!target)
     return exactTargetRebindFailure(exact.inputRef);
@@ -16340,6 +16354,8 @@ function decorateExactTargetAndroid(android, exact) {
     android.focusWaitMs = exact.focusWaitMs;
   if (exact.secure !== void 0)
     android.secureInput = exact.secure;
+  if (exact.operationToken !== void 0)
+    android.operationToken = exact.operationToken;
   return null;
 }
 function optionValue(cliArgs, flag) {
@@ -22854,6 +22870,7 @@ var init_fill_verify = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/device-interact.js
+import { randomUUID as randomUUID4 } from "node:crypto";
 function candidateFromNode(n) {
   return {
     ref: n.ref,
@@ -23372,10 +23389,14 @@ function extractErrorCode(result) {
     return void 0;
   }
 }
-async function runNativeVerifyInput(binding, text) {
+async function runNativeVerifyInput(binding, text, operationToken) {
   const result = await runNative(["verify-input", binding.inputRef, text], {
     settle: { enabled: false },
-    exactTarget: { inputRef: binding.inputRef, secure: binding.secure }
+    exactTarget: {
+      inputRef: binding.inputRef,
+      secure: binding.secure,
+      ...operationToken ? { operationToken } : {}
+    }
   });
   if (result.isError)
     return { verdict: "unavailable", stable: false };
@@ -23396,16 +23417,16 @@ async function rebindExactFillTarget(binding) {
   const rebound = bindExactFillTarget(snap.nodes, binding.inputTestId ?? binding.inputRef, binding.inputSignature);
   return rebound.ok ? rebound.binding : null;
 }
-async function finalVerification(client2, binding, jsTestId, text) {
+async function finalVerification(client2, binding, jsTestId, text, operationToken) {
   const fiberId = binding.inputTestId ?? jsTestId;
   let fiber = "unavailable";
   if (client2 && fiberId) {
     fiber = await finalFiberVerify({ evaluate: (e) => client2.evaluate(e) }, fiberId, text);
   }
-  const rebound = await rebindExactFillTarget(binding);
-  if (!rebound)
+  const nativeBinding = operationToken ? binding : await rebindExactFillTarget(binding);
+  if (!nativeBinding)
     return combineVerificationOracles(fiber, "target-lost", false);
-  const native = await runNativeVerifyInput(rebound, text);
+  const native = await runNativeVerifyInput(nativeBinding, text, operationToken);
   return combineVerificationOracles(fiber, native.verdict, native.stable);
 }
 function verifiedFillResult(method, textLength, meta) {
@@ -23565,11 +23586,14 @@ async function performExactFill(args, client2, tiers) {
   };
   const tNative = Date.now();
   let lastVerification = null;
+  let lastOperationToken;
   for (let attempt = 0; attempt <= MAX_NATIVE_RETYPE; attempt++) {
+    const operationToken = randomUUID4();
+    lastOperationToken = operationToken;
     const clearFirst = attempt > 0 || args.text.length === 0;
     const primary = await runNative(["fill", binding.inputRef, args.text, ...clearFirst ? ["--clear-first"] : []], {
       ...attempt === 0 ? settleOpts(args) : { settle: { enabled: false } },
-      exactTarget,
+      exactTarget: { ...exactTarget, operationToken },
       verifyTypeReadback: exactTypeReadback(client2, fiberId)
     });
     if (primary.isError) {
@@ -23580,7 +23604,7 @@ async function performExactFill(args, client2, tiers) {
         }
         if (mutation === "observed") {
           mutationSeen = "observed";
-          const verification3 = await finalVerification(client2, binding, fiberId, args.text);
+          const verification3 = await finalVerification(client2, binding, fiberId, args.text, operationToken);
           lastVerification = verification3;
           if (verification3.verified) {
             return verifiedFillResult("native", args.text.length, {
@@ -23604,7 +23628,7 @@ async function performExactFill(args, client2, tiers) {
         const code = extractErrorCode(primary);
         return fillFailure(code === "FOCUS_TARGET_OCCLUDED" ? "FOCUS_TARGET_OCCLUDED" : "NO_TEXT_INPUT_TARGET", `device_fill's native attempt was refused before mutation: ${extractErrorText(primary)}`, { mutation: "none", pathsTried });
       }
-      const verification2 = await finalVerification(client2, binding, fiberId, args.text);
+      const verification2 = await finalVerification(client2, binding, fiberId, args.text, operationToken);
       if (verification2.verified) {
         return verifiedFillResult("native", args.text.length, {
           textEntryPath: attempt === 0 ? "native" : "native-retype",
@@ -23623,7 +23647,7 @@ async function performExactFill(args, client2, tiers) {
     mutationSeen = "observed";
     const primarySettle = extractSettleMeta(primary);
     const primaryTyping = extractTypingMeta(primary);
-    const verification = await finalVerification(client2, binding, fiberId, args.text);
+    const verification = await finalVerification(client2, binding, fiberId, args.text, operationToken);
     lastVerification = verification;
     if (verification.verified) {
       return verifiedFillResult("native", args.text.length, {
@@ -23674,7 +23698,7 @@ async function performExactFill(args, client2, tiers) {
       return attachFillFailureDisposition(maestro.refusal, "possible", pathsTried);
     return fillFailure("TEXT_ENTRY_UNVERIFIED", "device_fill fell through all tiers; the Maestro attempt did not run cleanly.", { mutation: "possible", pathsTried, verification: lastVerification ?? void 0 });
   }
-  const maestroVerification = await finalVerification(client2, binding, fiberId, args.text);
+  const maestroVerification = await finalVerification(client2, binding, fiberId, args.text, lastOperationToken);
   if (maestroVerification.verified) {
     return verifiedFillResult("maestro", args.text.length, {
       textEntryPath: "maestro",
@@ -24650,7 +24674,7 @@ import { spawn as spawn4, execFile as execFile11 } from "node:child_process";
 import { promisify as promisify12 } from "node:util";
 import { existsSync as existsSync19, rmSync as rmSync7, writeFileSync as writeFileSync9 } from "node:fs";
 import { tmpdir as tmpdir8 } from "node:os";
-import { randomBytes as randomBytes4, randomUUID as randomUUID4 } from "node:crypto";
+import { randomBytes as randomBytes4, randomUUID as randomUUID5 } from "node:crypto";
 import { join as join21 } from "node:path";
 function getAndroidRunnerState() {
   return runnerState2;
@@ -24791,7 +24815,7 @@ function androidRunnerAuthority(deviceId, appId) {
     throw new Error("SESSION_AUTHORITY_REQUIRED: native runner launch requires a fenced rn-dev-agent session");
   }
   return {
-    instanceId: randomUUID4(),
+    instanceId: randomUUID5(),
     sessionId,
     claimEpoch,
     capability: randomBytes4(32).toString("base64url"),
@@ -25076,7 +25100,7 @@ function initializeAndroidRunnerRebuildState(databasePath) {
     throw cause;
   }
 }
-function acquireAndroidRunnerRebuildLock(pluginVersion, now = Date.now(), ownerNonce = randomUUID4(), databasePath = ANDROID_REBUILD_LOCK_DATABASE) {
+function acquireAndroidRunnerRebuildLock(pluginVersion, now = Date.now(), ownerNonce = randomUUID5(), databasePath = ANDROID_REBUILD_LOCK_DATABASE) {
   try {
     const store = initializeAndroidRunnerRebuildState(databasePath);
     try {
@@ -25763,6 +25787,8 @@ async function runAndroid(args) {
     body.focusWaitMs = args.focusWaitMs;
   if (args.secureInput !== void 0)
     body.secureInput = args.secureInput;
+  if (args.operationToken !== void 0)
+    body.operationToken = args.operationToken;
   let resp;
   let recovery;
   try {
@@ -27738,7 +27764,7 @@ var init_process_cleanup = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/state-root.js
-import { randomBytes as randomBytes5, randomUUID as randomUUID5 } from "node:crypto";
+import { randomBytes as randomBytes5, randomUUID as randomUUID6 } from "node:crypto";
 import { chmodSync as chmodSync2, linkSync, lstatSync as lstatSync6, mkdirSync as mkdirSync12, readFileSync as readFileSync20, renameSync as renameSync4, rmSync as rmSync9, statSync as statSync8, writeFileSync as writeFileSync10 } from "node:fs";
 import { join as join23 } from "node:path";
 function fail(code, detail) {
@@ -27787,7 +27813,7 @@ function createAuthorityStateLayout(stateDir = getStateDir()) {
 }
 function getBoundDirectoryJournalKey(layout = createAuthorityStateLayout()) {
   const path = join23(layout.root, "bound-directory.key");
-  const temporary = join23(layout.root, `.bound-directory.${randomUUID5()}.key`);
+  const temporary = join23(layout.root, `.bound-directory.${randomUUID6()}.key`);
   try {
     try {
       writeFileSync10(temporary, randomBytes5(32), { flag: "wx", mode: 384, flush: true });
@@ -60587,7 +60613,7 @@ var init_action_state_store = __esm({
 
 // packages/rn-dev-agent-core/dist/session/bound-directory.js
 import { spawn as spawn7 } from "node:child_process";
-import { randomUUID as randomUUID7 } from "node:crypto";
+import { randomUUID as randomUUID8 } from "node:crypto";
 import { closeSync as closeSync7, constants as constants4, existsSync as existsSync26, fstatSync as fstatSync4, lstatSync as lstatSync8, mkdtempSync, openSync as openSync7, readFileSync as readFileSync25, realpathSync as realpathSync8, renameSync as renameSync5, rmSync as rmSync10, writeFileSync as writeFileSync13 } from "node:fs";
 import { tmpdir as tmpdir10 } from "node:os";
 import { join as join31 } from "node:path";
@@ -60675,7 +60701,7 @@ function bindWorker(controlPath, child, owner, childId, lifecycleCapability = ""
 }
 function startWorker(path, identity2, realPath) {
   const controlPath = mkdtempSync(join31(tmpdir10(), "rn-bound-directory-"));
-  const lifecycleCapability = randomUUID7();
+  const lifecycleCapability = randomUUID8();
   const binding = Buffer.from(JSON.stringify({
     dev: identity2.dev.toString(),
     ino: identity2.ino.toString(),
@@ -60705,8 +60731,8 @@ function startWorker(path, identity2, realPath) {
 }
 function startSubdirectoryWorker(parent, name, expectedIdentity, expectedRealPath) {
   const controlPath = mkdtempSync(join31(tmpdir10(), "rn-bound-directory-"));
-  const childId = randomUUID7();
-  const lifecycleCapability = randomUUID7();
+  const childId = randomUUID8();
+  const lifecycleCapability = randomUUID8();
   let worker;
   let childStarted = false;
   try {
@@ -61045,8 +61071,8 @@ function assertBoundDirectoryCurrent(directory) {
 }
 function openBoundSubdirectoryInternal(parent, name, options = {}) {
   const controlPath = mkdtempSync(join31(tmpdir10(), "rn-bound-directory-"));
-  const childId = randomUUID7();
-  const lifecycleCapability = randomUUID7();
+  const childId = randomUUID8();
+  const lifecycleCapability = randomUUID8();
   let worker;
   let childStarted = false;
   try {
@@ -61139,7 +61165,7 @@ function casBoundDirectoryFiles(directory, writes, dependencies = {}) {
   for (const transactionId2 of directory.pendingCleanups.keys()) {
     retryBoundDirectoryCleanup(directory, { transactionId: transactionId2 });
   }
-  const transactionId = randomUUID7();
+  const transactionId = randomUUID8();
   const journal = `.rn-bound-${transactionId}.journal`;
   const serializedWrites = writes.map((write, index) => ({
     expected: write.expected?.toString("base64") ?? null,
@@ -76697,7 +76723,7 @@ var init_startup_integrity = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
-import { createHash as createHash17, randomUUID as randomUUID8 } from "node:crypto";
+import { createHash as createHash17, randomUUID as randomUUID9 } from "node:crypto";
 import { execFileSync as execFileSync13 } from "node:child_process";
 import { chmodSync as chmodSync4, closeSync as closeSync10, existsSync as existsSync32, fsyncSync, lstatSync as lstatSync11, mkdirSync as mkdirSync18, openSync as openSync10, readFileSync as readFileSync30, realpathSync as realpathSync10, renameSync as renameSync7, unlinkSync as unlinkSync11, writeFileSync as writeFileSync15 } from "node:fs";
 import { basename as basename7, dirname as dirname19, extname, isAbsolute as isAbsolute8, join as join40, relative as relative5, resolve as resolve10, sep as sep6 } from "node:path";
@@ -77156,7 +77182,7 @@ function readProofContractAt(moduleUrl = import.meta.url) {
 function writeProofReceiptAtomic(path, receipt2) {
   const directory = dirname19(path);
   mkdirSync18(directory, { recursive: true, mode: 448 });
-  const temporary = resolve10(directory, `.${randomUUID8()}.proof-receipt.tmp`);
+  const temporary = resolve10(directory, `.${randomUUID9()}.proof-receipt.tmp`);
   let descriptor = null;
   try {
     descriptor = openSync10(temporary, "wx", 384);
@@ -83840,7 +83866,7 @@ var index_exports = {};
 __export(index_exports, {
   strictProofMonitor: () => strictProofMonitor
 });
-import { createHash as createHash21, createHmac as createHmac5, randomUUID as randomUUID9 } from "node:crypto";
+import { createHash as createHash21, createHmac as createHmac5, randomUUID as randomUUID10 } from "node:crypto";
 import { readFileSync as readFileSync40, rmSync as rmSync11 } from "node:fs";
 import { execFile as execFile25 } from "node:child_process";
 import { promisify as promisify27 } from "node:util";
@@ -84718,7 +84744,7 @@ var init_index = __esm({
           authority: {
             sessionId: status.sessionId,
             claimEpoch: status.claimEpoch,
-            instanceId: randomUUID9(),
+            instanceId: randomUUID10(),
             capability: secret.observeCapability
           }
         };
@@ -85836,7 +85862,7 @@ var init_index = __esm({
 // packages/rn-dev-agent-core/dist/supervisor.js
 init_lockfile();
 init_parent_watch();
-import { randomUUID as randomUUID10 } from "node:crypto";
+import { randomUUID as randomUUID11 } from "node:crypto";
 import { spawn as spawn10 } from "node:child_process";
 import { readFileSync as readFileSync41 } from "node:fs";
 import { dirname as dirname24, join as join56 } from "node:path";
@@ -85870,7 +85896,7 @@ init_process_cleanup();
 init_registry();
 init_managed_metro();
 init_state_root();
-import { createHash as createHash11, randomBytes as randomBytes6, randomUUID as randomUUID6 } from "node:crypto";
+import { createHash as createHash11, randomBytes as randomBytes6, randomUUID as randomUUID7 } from "node:crypto";
 var RELEASABLE_SESSION_STATES = /* @__PURE__ */ new Set([
   "active",
   "source_bound",
@@ -85889,7 +85915,7 @@ function createSupervisorAuthority(input, dependencies = {}) {
     ownerStatus: input.ownerStatus,
     leaseMs: 3e4
   });
-  const sessionId = input.sessionId ?? randomUUID6();
+  const sessionId = input.sessionId ?? randomUUID7();
   const signerCapability = randomBytes6(32).toString("base64url");
   const observeCapability = randomBytes6(32).toString("base64url");
   const recoveryCapability = randomBytes6(32).toString("base64url");
@@ -86156,7 +86182,7 @@ if (process.env.RN_BRIDGE_SUPERVISOR === "0") {
         closeAuthorityAndExit2(action.kind === "shutdown" ? 0 : action.code);
     }
   }, spawnWorker2 = function() {
-    const workerInstance = randomUUID10();
+    const workerInstance = randomUUID11();
     const child = spawn10(process.execPath, workerSpawnArgs(workerPath, sqliteWarningFilterPath, void 0, process.argv.slice(2)), {
       stdio: ["pipe", "pipe", "inherit"],
       env: {

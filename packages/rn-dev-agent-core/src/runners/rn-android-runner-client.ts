@@ -162,6 +162,7 @@ export interface RunAndroidArgs {
   focusY?: number;
   focusWaitMs?: number;
   secureInput?: boolean;
+  operationToken?: string;
   _staleRef?: string;
 }
 
@@ -1927,6 +1928,7 @@ export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
   if (args.focusY !== undefined) body.focusY = args.focusY;
   if (args.focusWaitMs !== undefined) body.focusWaitMs = args.focusWaitMs;
   if (args.secureInput !== undefined) body.secureInput = args.secureInput;
+  if (args.operationToken !== undefined) body.operationToken = args.operationToken;
 
   let resp: RunnerResponse;
   let recovery: TransportRecovery | undefined;

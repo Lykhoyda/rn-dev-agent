@@ -115,7 +115,7 @@ class CommandDispatcher(
 
         // GH #581: the recorded type target is only valid until the screen can
         // change under it — any verb other than the type/verify pair drops it.
-        if (command !in setOf("type", "fill", "verifyInput", "status", "isWindowUpdating", "screenshot")) {
+        if (command !in setOf("type", "fill", "verifyInput", "snapshot", "status", "isWindowUpdating", "screenshot")) {
             recordedTypeTarget = null
         }
 
@@ -409,6 +409,8 @@ class CommandDispatcher(
     private data class ResolvedInput(val obj: UiObject2, val resolution: String)
 
     private data class RecordedTypeTarget(
+        val target: UiObject2,
+        val operationToken: String?,
         val className: String,
         val identifier: String?,
         val bounds: Rect,
@@ -425,17 +427,21 @@ class CommandDispatcher(
         cmd.optString(key).ifBlank { null }
 
     private fun recordTypeTarget(target: UiObject2, cmd: JSONObject) {
-        recordedTypeTarget = try {
-            RecordedTypeTarget(
-                className = target.className ?: "",
-                identifier = objectIdentifier(target),
-                bounds = Rect(target.visibleBounds),
-                snapshotGeneration = optionalInt(cmd, "snapshotGeneration"),
-                snapshotNodeIndex = optionalInt(cmd, "snapshotNodeIndex"),
-            )
-        } catch (e: StaleObjectException) {
-            null
-        }
+        val className = runCatching { target.className ?: "" }
+            .getOrDefault(optionalString(cmd, "snapshotElementType").orEmpty())
+        val identifier = runCatching { objectIdentifier(target) }
+            .getOrDefault(optionalString(cmd, "snapshotIdentifier"))
+        val bounds = runCatching { Rect(target.visibleBounds) }
+            .getOrElse { describedBounds(cmd) ?: Rect() }
+        recordedTypeTarget = RecordedTypeTarget(
+            target = target,
+            operationToken = optionalString(cmd, "operationToken"),
+            className = className,
+            identifier = identifier,
+            bounds = bounds,
+            snapshotGeneration = optionalInt(cmd, "snapshotGeneration"),
+            snapshotNodeIndex = optionalInt(cmd, "snapshotNodeIndex"),
+        )
     }
 
     private fun objectIdentifier(obj: UiObject2): String? {
@@ -569,76 +575,81 @@ class CommandDispatcher(
 
     private fun verifyInput(cmd: JSONObject): JSONObject {
         val expected = cmd.optString("text")
-        val candidates = inputCandidates()
         val recorded = recordedTypeTarget
         var target: UiObject2? = null
         var lostVerdict = "target-lost"
-        val descriptorAgrees = recorded != null && TextInputRecipe.recordedDescriptorAgrees(
-            recorded.snapshotGeneration,
-            recorded.snapshotNodeIndex,
-            recorded.className,
-            recorded.identifier,
-            optionalInt(cmd, "snapshotGeneration"),
-            optionalInt(cmd, "snapshotNodeIndex"),
-            optionalString(cmd, "snapshotElementType"),
-            optionalString(cmd, "snapshotIdentifier"),
-        )
-        if (recorded != null && descriptorAgrees) {
-            if (recorded.identifier != null) {
-                when (
-                    val resolution = TextInputRecipe.resolveIdentifier(
-                        targetIdentities(candidates),
-                        recorded.className,
-                        recorded.identifier,
-                        null,
-                        requireFrame = false,
-                    )
-                ) {
-                    is TextInputRecipe.TargetResolution.Unique -> target = candidates[resolution.index]
-                    TextInputRecipe.TargetResolution.Ambiguous -> lostVerdict = "ambiguous"
-                    TextInputRecipe.TargetResolution.Absent -> Unit
-                }
-            } else {
-                val byRecord = candidates.filter {
-                    (it.className ?: "") == recorded.className &&
-                        objectIdentifier(it) == null &&
-                        boundsMatch(it.visibleBounds, recorded.bounds)
-                }
-                when {
-                    byRecord.size == 1 -> target = byRecord[0]
-                    byRecord.size > 1 -> lostVerdict = "ambiguous"
+        val operationToken = optionalString(cmd, "operationToken")
+        if (operationToken != null) {
+            if (recorded?.operationToken == operationToken) target = recorded.target
+        } else {
+            val candidates = inputCandidates()
+            val descriptorAgrees = recorded != null && TextInputRecipe.recordedDescriptorAgrees(
+                recorded.snapshotGeneration,
+                recorded.snapshotNodeIndex,
+                recorded.className,
+                recorded.identifier,
+                optionalInt(cmd, "snapshotGeneration"),
+                optionalInt(cmd, "snapshotNodeIndex"),
+                optionalString(cmd, "snapshotElementType"),
+                optionalString(cmd, "snapshotIdentifier"),
+            )
+            if (recorded != null && descriptorAgrees) {
+                if (recorded.identifier != null) {
+                    when (
+                        val resolution = TextInputRecipe.resolveIdentifier(
+                            targetIdentities(candidates),
+                            recorded.className,
+                            recorded.identifier,
+                            null,
+                            requireFrame = false,
+                        )
+                    ) {
+                        is TextInputRecipe.TargetResolution.Unique -> target = candidates[resolution.index]
+                        TextInputRecipe.TargetResolution.Ambiguous -> lostVerdict = "ambiguous"
+                        TextInputRecipe.TargetResolution.Absent -> Unit
+                    }
+                } else {
+                    val byRecord = candidates.filter {
+                        (it.className ?: "") == recorded.className &&
+                            objectIdentifier(it) == null &&
+                            boundsMatch(it.visibleBounds, recorded.bounds)
+                    }
+                    when {
+                        byRecord.size == 1 -> target = byRecord[0]
+                        byRecord.size > 1 -> lostVerdict = "ambiguous"
+                    }
                 }
             }
-        }
-        if (target == null && lostVerdict != "ambiguous") {
-            val identifier = cmd.optString("snapshotIdentifier").ifBlank { null }
-            val expectedClass = cmd.optString("snapshotElementType").ifBlank { null }
-            val described = describedBounds(cmd)
-            if (identifier != null) {
-                val frame = described?.let {
-                    TextInputRecipe.TargetFrame(it.left, it.top, it.right, it.bottom)
-                }
-                when (
-                    val resolution = TextInputRecipe.resolveIdentifier(
-                        targetIdentities(candidates),
-                        expectedClass,
-                        identifier,
-                        frame,
-                        requireFrame = true,
-                    )
-                ) {
-                    is TextInputRecipe.TargetResolution.Unique -> target = candidates[resolution.index]
-                    TextInputRecipe.TargetResolution.Ambiguous -> lostVerdict = "ambiguous"
-                    TextInputRecipe.TargetResolution.Absent -> Unit
-                }
-            } else if (described != null) {
-                val byFrame = candidates.filter {
-                    (expectedClass == null || (it.className ?: "") == expectedClass) &&
-                        boundsMatch(it.visibleBounds, described)
-                }
-                when {
-                    byFrame.size == 1 -> target = byFrame[0]
-                    byFrame.size > 1 -> lostVerdict = "ambiguous"
+            if (target == null && lostVerdict != "ambiguous") {
+                val identifier = cmd.optString("snapshotIdentifier").ifBlank { null }
+                val expectedClass = cmd.optString("snapshotElementType").ifBlank { null }
+                val described = describedBounds(cmd)
+                if (identifier != null) {
+                    val frame = described?.let {
+                        TextInputRecipe.TargetFrame(it.left, it.top, it.right, it.bottom)
+                    }
+                    when (
+                        val resolution = TextInputRecipe.resolveIdentifier(
+                            targetIdentities(candidates),
+                            expectedClass,
+                            identifier,
+                            frame,
+                            requireFrame = true,
+                        )
+                    ) {
+                        is TextInputRecipe.TargetResolution.Unique -> target = candidates[resolution.index]
+                        TextInputRecipe.TargetResolution.Ambiguous -> lostVerdict = "ambiguous"
+                        TextInputRecipe.TargetResolution.Absent -> Unit
+                    }
+                } else if (described != null) {
+                    val byFrame = candidates.filter {
+                        (expectedClass == null || (it.className ?: "") == expectedClass) &&
+                            boundsMatch(it.visibleBounds, described)
+                    }
+                    when {
+                        byFrame.size == 1 -> target = byFrame[0]
+                        byFrame.size > 1 -> lostVerdict = "ambiguous"
+                    }
                 }
             }
         }

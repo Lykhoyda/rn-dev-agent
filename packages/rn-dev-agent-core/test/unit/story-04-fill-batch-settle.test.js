@@ -112,12 +112,11 @@ test('device_fill dispatches one exact native operation (no separate pre-tap pre
     assert.ok(!result.isError, result.content?.[0]?.text);
     assert.ok(!calls.some((c) => c.cliArgs[0] === 'press'), 'GH #581: no separate pre-tap press');
     const fill = calls.find((c) => c.cliArgs[0] === 'fill');
-    assert.deepEqual(fill.opts.exactTarget, {
-      inputRef: '@e3',
-      focusX: 200,
-      focusY: 240,
-      focusWaitMs: 0,
-    });
+    assert.equal(fill.opts.exactTarget.inputRef, '@e3');
+    assert.equal(fill.opts.exactTarget.focusX, 200);
+    assert.equal(fill.opts.exactTarget.focusY, 240);
+    assert.equal(fill.opts.exactTarget.focusWaitMs, 0);
+    assert.ok(fill.opts.exactTarget.operationToken.length > 0);
     const envelope = JSON.parse(result.content[0].text);
     assert.equal(envelope.meta.verify, 'exact');
   } finally {

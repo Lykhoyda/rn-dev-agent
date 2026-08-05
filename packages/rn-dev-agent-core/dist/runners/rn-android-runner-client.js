@@ -1419,6 +1419,8 @@ export async function runAndroid(args) {
         body.focusWaitMs = args.focusWaitMs;
     if (args.secureInput !== undefined)
         body.secureInput = args.secureInput;
+    if (args.operationToken !== undefined)
+        body.operationToken = args.operationToken;
     let resp;
     let recovery;
     try {

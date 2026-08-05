@@ -22091,6 +22091,8 @@ async function runIOS(args) {
     body.focusY = args.focusY;
   if (args.focusWaitMs !== void 0)
     body.focusWaitMs = args.focusWaitMs;
+  if (args.operationToken !== void 0)
+    body.operationToken = args.operationToken;
   const mapRunnerDispatchError = (err) => {
     const m = err instanceof Error ? err.message : String(err);
     if (m.startsWith("RUNNER_PROTOCOL_MISMATCH")) {
@@ -26745,6 +26747,8 @@ async function runAndroid(args) {
     body.focusWaitMs = args.focusWaitMs;
   if (args.secureInput !== void 0)
     body.secureInput = args.secureInput;
+  if (args.operationToken !== void 0)
+    body.operationToken = args.operationToken;
   let resp;
   let recovery;
   try {
@@ -27348,6 +27352,10 @@ function exactTargetRebindFailure(inputRef) {
   return failResult(`Exact input ${inputRef} could not be rebound in the current snapshot generation \u2014 nothing was dispatched. Refresh the snapshot and rebind the input.`, "NO_TEXT_INPUT_TARGET", { mutation: "none" });
 }
 function decorateExactTargetIOS(ios, exact) {
+  if (ios.command === "verifyInput" && exact.operationToken) {
+    ios.operationToken = exact.operationToken;
+    return null;
+  }
   const target = getFreshRefTarget(exact.inputRef, { allowUnknownKeyboardState: true });
   if (!target)
     return exactTargetRebindFailure(exact.inputRef);
@@ -27371,9 +27379,17 @@ function decorateExactTargetIOS(ios, exact) {
     ios.focusY = exact.focusY;
   if (exact.focusWaitMs !== void 0)
     ios.focusWaitMs = exact.focusWaitMs;
+  if (exact.operationToken !== void 0)
+    ios.operationToken = exact.operationToken;
   return null;
 }
 function decorateExactTargetAndroid(android, exact) {
+  if (android.command === "verifyInput" && exact.operationToken) {
+    android.operationToken = exact.operationToken;
+    if (exact.secure !== void 0)
+      android.secureInput = exact.secure;
+    return null;
+  }
   const target = getFreshRefTarget(exact.inputRef, { allowUnknownKeyboardState: true });
   if (!target)
     return exactTargetRebindFailure(exact.inputRef);
@@ -27395,6 +27411,8 @@ function decorateExactTargetAndroid(android, exact) {
     android.focusWaitMs = exact.focusWaitMs;
   if (exact.secure !== void 0)
     android.secureInput = exact.secure;
+  if (exact.operationToken !== void 0)
+    android.operationToken = exact.operationToken;
   return null;
 }
 function optionValue(cliArgs, flag) {
@@ -33118,6 +33136,7 @@ var init_fill_verify = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/device-interact.js
+import { randomUUID as randomUUID5 } from "node:crypto";
 function candidateFromNode(n) {
   return {
     ref: n.ref,
@@ -33636,10 +33655,14 @@ function extractErrorCode(result) {
     return void 0;
   }
 }
-async function runNativeVerifyInput(binding, text) {
+async function runNativeVerifyInput(binding, text, operationToken) {
   const result = await runNative(["verify-input", binding.inputRef, text], {
     settle: { enabled: false },
-    exactTarget: { inputRef: binding.inputRef, secure: binding.secure }
+    exactTarget: {
+      inputRef: binding.inputRef,
+      secure: binding.secure,
+      ...operationToken ? { operationToken } : {}
+    }
   });
   if (result.isError)
     return { verdict: "unavailable", stable: false };
@@ -33660,16 +33683,16 @@ async function rebindExactFillTarget(binding) {
   const rebound = bindExactFillTarget(snap.nodes, binding.inputTestId ?? binding.inputRef, binding.inputSignature);
   return rebound.ok ? rebound.binding : null;
 }
-async function finalVerification(client2, binding, jsTestId, text) {
+async function finalVerification(client2, binding, jsTestId, text, operationToken) {
   const fiberId = binding.inputTestId ?? jsTestId;
   let fiber = "unavailable";
   if (client2 && fiberId) {
     fiber = await finalFiberVerify({ evaluate: (e) => client2.evaluate(e) }, fiberId, text);
   }
-  const rebound = await rebindExactFillTarget(binding);
-  if (!rebound)
+  const nativeBinding = operationToken ? binding : await rebindExactFillTarget(binding);
+  if (!nativeBinding)
     return combineVerificationOracles(fiber, "target-lost", false);
-  const native = await runNativeVerifyInput(rebound, text);
+  const native = await runNativeVerifyInput(nativeBinding, text, operationToken);
   return combineVerificationOracles(fiber, native.verdict, native.stable);
 }
 function verifiedFillResult(method, textLength, meta) {
@@ -33829,11 +33852,14 @@ async function performExactFill(args, client2, tiers) {
   };
   const tNative = Date.now();
   let lastVerification = null;
+  let lastOperationToken;
   for (let attempt = 0; attempt <= MAX_NATIVE_RETYPE; attempt++) {
+    const operationToken = randomUUID5();
+    lastOperationToken = operationToken;
     const clearFirst = attempt > 0 || args.text.length === 0;
     const primary = await runNative(["fill", binding.inputRef, args.text, ...clearFirst ? ["--clear-first"] : []], {
       ...attempt === 0 ? settleOpts(args) : { settle: { enabled: false } },
-      exactTarget,
+      exactTarget: { ...exactTarget, operationToken },
       verifyTypeReadback: exactTypeReadback(client2, fiberId)
     });
     if (primary.isError) {
@@ -33844,7 +33870,7 @@ async function performExactFill(args, client2, tiers) {
         }
         if (mutation === "observed") {
           mutationSeen = "observed";
-          const verification3 = await finalVerification(client2, binding, fiberId, args.text);
+          const verification3 = await finalVerification(client2, binding, fiberId, args.text, operationToken);
           lastVerification = verification3;
           if (verification3.verified) {
             return verifiedFillResult("native", args.text.length, {
@@ -33868,7 +33894,7 @@ async function performExactFill(args, client2, tiers) {
         const code = extractErrorCode(primary);
         return fillFailure(code === "FOCUS_TARGET_OCCLUDED" ? "FOCUS_TARGET_OCCLUDED" : "NO_TEXT_INPUT_TARGET", `device_fill's native attempt was refused before mutation: ${extractErrorText(primary)}`, { mutation: "none", pathsTried });
       }
-      const verification2 = await finalVerification(client2, binding, fiberId, args.text);
+      const verification2 = await finalVerification(client2, binding, fiberId, args.text, operationToken);
       if (verification2.verified) {
         return verifiedFillResult("native", args.text.length, {
           textEntryPath: attempt === 0 ? "native" : "native-retype",
@@ -33887,7 +33913,7 @@ async function performExactFill(args, client2, tiers) {
     mutationSeen = "observed";
     const primarySettle = extractSettleMeta(primary);
     const primaryTyping = extractTypingMeta(primary);
-    const verification = await finalVerification(client2, binding, fiberId, args.text);
+    const verification = await finalVerification(client2, binding, fiberId, args.text, operationToken);
     lastVerification = verification;
     if (verification.verified) {
       return verifiedFillResult("native", args.text.length, {
@@ -33938,7 +33964,7 @@ async function performExactFill(args, client2, tiers) {
       return attachFillFailureDisposition(maestro.refusal, "possible", pathsTried);
     return fillFailure("TEXT_ENTRY_UNVERIFIED", "device_fill fell through all tiers; the Maestro attempt did not run cleanly.", { mutation: "possible", pathsTried, verification: lastVerification ?? void 0 });
   }
-  const maestroVerification = await finalVerification(client2, binding, fiberId, args.text);
+  const maestroVerification = await finalVerification(client2, binding, fiberId, args.text, lastOperationToken);
   if (maestroVerification.verified) {
     return verifiedFillResult("maestro", args.text.length, {
       textEntryPath: "maestro",
@@ -34886,7 +34912,7 @@ ensureJavaEnv();
 ensureCwd();
 
 // packages/rn-dev-agent-core/dist/index.js
-import { createHash as createHash20, createHmac as createHmac5, randomUUID as randomUUID8 } from "node:crypto";
+import { createHash as createHash20, createHmac as createHmac5, randomUUID as randomUUID9 } from "node:crypto";
 import { readFileSync as readFileSync40, rmSync as rmSync11 } from "node:fs";
 import { execFile as execFile25 } from "node:child_process";
 import { promisify as promisify27 } from "node:util";
@@ -56055,14 +56081,14 @@ import { join as join29 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/session/bound-directory.js
 import { spawn as spawn5 } from "node:child_process";
-import { randomUUID as randomUUID6 } from "node:crypto";
+import { randomUUID as randomUUID7 } from "node:crypto";
 import { closeSync as closeSync3, constants as constants2, existsSync as existsSync22, fstatSync as fstatSync2, lstatSync as lstatSync7, mkdtempSync, openSync as openSync3, readFileSync as readFileSync21, realpathSync as realpathSync5, renameSync as renameSync5, rmSync as rmSync8, writeFileSync as writeFileSync12 } from "node:fs";
 import { tmpdir as tmpdir9 } from "node:os";
 import { join as join28 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/session/state-root.js
 init_secure_state_file();
-import { randomBytes as randomBytes5, randomUUID as randomUUID5 } from "node:crypto";
+import { randomBytes as randomBytes5, randomUUID as randomUUID6 } from "node:crypto";
 import { chmodSync as chmodSync3, linkSync, lstatSync as lstatSync6, mkdirSync as mkdirSync12, readFileSync as readFileSync20, renameSync as renameSync4, rmSync as rmSync7, statSync as statSync7, writeFileSync as writeFileSync11 } from "node:fs";
 import { join as join27 } from "node:path";
 function fail(code, detail) {
@@ -56103,7 +56129,7 @@ function createAuthorityStateLayout(stateDir = getStateDir()) {
 }
 function getBoundDirectoryJournalKey(layout = createAuthorityStateLayout()) {
   const path = join27(layout.root, "bound-directory.key");
-  const temporary = join27(layout.root, `.bound-directory.${randomUUID5()}.key`);
+  const temporary = join27(layout.root, `.bound-directory.${randomUUID6()}.key`);
   try {
     try {
       writeFileSync11(temporary, randomBytes5(32), { flag: "wx", mode: 384, flush: true });
@@ -57281,7 +57307,7 @@ function bindWorker(controlPath, child, owner, childId, lifecycleCapability = ""
 }
 function startWorker(path, identity2, realPath) {
   const controlPath = mkdtempSync(join28(tmpdir9(), "rn-bound-directory-"));
-  const lifecycleCapability = randomUUID6();
+  const lifecycleCapability = randomUUID7();
   const binding = Buffer.from(JSON.stringify({
     dev: identity2.dev.toString(),
     ino: identity2.ino.toString(),
@@ -57311,8 +57337,8 @@ function startWorker(path, identity2, realPath) {
 }
 function startSubdirectoryWorker(parent, name, expectedIdentity, expectedRealPath) {
   const controlPath = mkdtempSync(join28(tmpdir9(), "rn-bound-directory-"));
-  const childId = randomUUID6();
-  const lifecycleCapability = randomUUID6();
+  const childId = randomUUID7();
+  const lifecycleCapability = randomUUID7();
   let worker;
   let childStarted = false;
   try {
@@ -57651,8 +57677,8 @@ function assertBoundDirectoryCurrent(directory) {
 }
 function openBoundSubdirectoryInternal(parent, name, options = {}) {
   const controlPath = mkdtempSync(join28(tmpdir9(), "rn-bound-directory-"));
-  const childId = randomUUID6();
-  const lifecycleCapability = randomUUID6();
+  const childId = randomUUID7();
+  const lifecycleCapability = randomUUID7();
   let worker;
   let childStarted = false;
   try {
@@ -57745,7 +57771,7 @@ function casBoundDirectoryFiles(directory, writes, dependencies = {}) {
   for (const transactionId2 of directory.pendingCleanups.keys()) {
     retryBoundDirectoryCleanup(directory, { transactionId: transactionId2 });
   }
-  const transactionId = randomUUID6();
+  const transactionId = randomUUID7();
   const journal = `.rn-bound-${transactionId}.journal`;
   const serializedWrites = writes.map((write, index) => ({
     expected: write.expected?.toString("base64") ?? null,
@@ -73556,7 +73582,7 @@ function createDeviceRecordHandler(deps = {}) {
 }
 
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
-import { createHash as createHash14, randomUUID as randomUUID7 } from "node:crypto";
+import { createHash as createHash14, randomUUID as randomUUID8 } from "node:crypto";
 import { execFileSync as execFileSync11 } from "node:child_process";
 import { chmodSync as chmodSync4, closeSync as closeSync8, existsSync as existsSync30, fsyncSync, lstatSync as lstatSync10, mkdirSync as mkdirSync17, openSync as openSync8, readFileSync as readFileSync28, realpathSync as realpathSync9, renameSync as renameSync7, unlinkSync as unlinkSync10, writeFileSync as writeFileSync14 } from "node:fs";
 import { basename as basename7, dirname as dirname17, extname, isAbsolute as isAbsolute7, join as join37, relative as relative4, resolve as resolve8, sep as sep6 } from "node:path";
@@ -74630,7 +74656,7 @@ function readProofContractAt(moduleUrl = import.meta.url) {
 function writeProofReceiptAtomic(path, receipt2) {
   const directory = dirname17(path);
   mkdirSync17(directory, { recursive: true, mode: 448 });
-  const temporary = resolve8(directory, `.${randomUUID7()}.proof-receipt.tmp`);
+  const temporary = resolve8(directory, `.${randomUUID8()}.proof-receipt.tmp`);
   let descriptor = null;
   try {
     descriptor = openSync8(temporary, "wx", 384);
@@ -82334,7 +82360,7 @@ setObserveAuthorityDeps({
       authority: {
         sessionId: status.sessionId,
         claimEpoch: status.claimEpoch,
-        instanceId: randomUUID8(),
+        instanceId: randomUUID9(),
         capability: secret.observeCapability
       }
     };

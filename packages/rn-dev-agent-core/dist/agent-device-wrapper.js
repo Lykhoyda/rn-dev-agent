@@ -531,6 +531,10 @@ function exactTargetRebindFailure(inputRef) {
     return failResult(`Exact input ${inputRef} could not be rebound in the current snapshot generation — nothing was dispatched. Refresh the snapshot and rebind the input.`, 'NO_TEXT_INPUT_TARGET', { mutation: 'none' });
 }
 function decorateExactTargetIOS(ios, exact) {
+    if (ios.command === 'verifyInput' && exact.operationToken) {
+        ios.operationToken = exact.operationToken;
+        return null;
+    }
     const target = getFreshRefTarget(exact.inputRef, { allowUnknownKeyboardState: true });
     if (!target)
         return exactTargetRebindFailure(exact.inputRef);
@@ -554,9 +558,17 @@ function decorateExactTargetIOS(ios, exact) {
         ios.focusY = exact.focusY;
     if (exact.focusWaitMs !== undefined)
         ios.focusWaitMs = exact.focusWaitMs;
+    if (exact.operationToken !== undefined)
+        ios.operationToken = exact.operationToken;
     return null;
 }
 function decorateExactTargetAndroid(android, exact) {
+    if (android.command === 'verifyInput' && exact.operationToken) {
+        android.operationToken = exact.operationToken;
+        if (exact.secure !== undefined)
+            android.secureInput = exact.secure;
+        return null;
+    }
     const target = getFreshRefTarget(exact.inputRef, { allowUnknownKeyboardState: true });
     if (!target)
         return exactTargetRebindFailure(exact.inputRef);
@@ -578,6 +590,8 @@ function decorateExactTargetAndroid(android, exact) {
         android.focusWaitMs = exact.focusWaitMs;
     if (exact.secure !== undefined)
         android.secureInput = exact.secure;
+    if (exact.operationToken !== undefined)
+        android.operationToken = exact.operationToken;
     return null;
 }
 function optionValue(cliArgs, flag) {

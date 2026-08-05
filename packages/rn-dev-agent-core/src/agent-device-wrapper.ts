@@ -679,6 +679,10 @@ function decorateExactTargetIOS(
   ios: import('./runners/rn-fast-runner-client.js').RunIOSArgs,
   exact: ExactTargetOpts,
 ): ToolResult | null {
+  if (ios.command === 'verifyInput' && exact.operationToken) {
+    ios.operationToken = exact.operationToken;
+    return null;
+  }
   const target = getFreshRefTarget(exact.inputRef, { allowUnknownKeyboardState: true });
   if (!target) return exactTargetRebindFailure(exact.inputRef);
   delete ios._staleRef;
@@ -696,6 +700,7 @@ function decorateExactTargetIOS(
   if (exact.focusX !== undefined) ios.focusX = exact.focusX;
   if (exact.focusY !== undefined) ios.focusY = exact.focusY;
   if (exact.focusWaitMs !== undefined) ios.focusWaitMs = exact.focusWaitMs;
+  if (exact.operationToken !== undefined) ios.operationToken = exact.operationToken;
   return null;
 }
 
@@ -703,6 +708,11 @@ function decorateExactTargetAndroid(
   android: import('./runners/rn-android-runner-client.js').RunAndroidArgs,
   exact: ExactTargetOpts,
 ): ToolResult | null {
+  if (android.command === 'verifyInput' && exact.operationToken) {
+    android.operationToken = exact.operationToken;
+    if (exact.secure !== undefined) android.secureInput = exact.secure;
+    return null;
+  }
   const target = getFreshRefTarget(exact.inputRef, { allowUnknownKeyboardState: true });
   if (!target) return exactTargetRebindFailure(exact.inputRef);
   delete android._staleRef;
@@ -719,6 +729,7 @@ function decorateExactTargetAndroid(
   if (exact.focusY !== undefined) android.focusY = exact.focusY;
   if (exact.focusWaitMs !== undefined) android.focusWaitMs = exact.focusWaitMs;
   if (exact.secure !== undefined) android.secureInput = exact.secure;
+  if (exact.operationToken !== undefined) android.operationToken = exact.operationToken;
   return null;
 }
 
@@ -1605,6 +1616,7 @@ export interface ExactTargetOpts {
   focusWaitMs?: number;
   /** Secure input (from the binding snapshot) — Android's verify classifier needs it. */
   secure?: boolean;
+  operationToken?: string;
 }
 
 export async function runNative(

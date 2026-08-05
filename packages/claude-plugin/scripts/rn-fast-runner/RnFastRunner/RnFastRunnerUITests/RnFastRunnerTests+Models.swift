@@ -1,3 +1,5 @@
+import XCTest
+
 // MARK: - Wire Models
 
 enum CommandType: String, Codable, CaseIterable {
@@ -74,6 +76,7 @@ struct Command: Codable {
   var focusX: Double? = nil
   var focusY: Double? = nil
   var focusWaitMs: Int? = nil
+  var operationToken: String? = nil
 }
 
 struct Response: Codable {
@@ -306,13 +309,12 @@ struct RetainedSnapshotTarget {
   let rect: SnapshotRect
 }
 
-// GH #581: live attributes of the input the last `type` mutated, so
-// verifyInput re-establishes that same element (post-keyboard frame) without
-// descriptive cross-generation rebinding.
 struct RecordedExactTypeTarget {
+  let operationToken: String?
+  let element: XCUIElement
   let generation: Int
   let nodeIndex: Int?
-  let attributes: TextInputTarget.CandidateAttributes
+  let attributes: TextInputTarget.CandidateAttributes?
 }
 
 struct SnapshotOptions {

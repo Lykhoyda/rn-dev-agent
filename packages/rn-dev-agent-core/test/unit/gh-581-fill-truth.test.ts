@@ -170,21 +170,34 @@ test('gh-581: direct testID ref binds without a wrapper', async () => {
   assert.equal((fill.opts.exactTarget as { focusX: number }).focusX, 200);
 });
 
-test('gh-581: final verification rebinds after settle recycles the positional ref', async () => {
-  const shifted = NODES.map((node) =>
-    node.identifier === 'last-name' ? { ...node, ref: '@e8' } : node,
+test('gh-581: final verification uses the fill operation token after ref recycling', async () => {
+  const replacement = NODES.map((node) =>
+    node.identifier === 'last-name'
+      ? { ...node, ref: '@e8', identifier: 'replacement-name' }
+      : node,
   );
   const { result, calls } = await withFillSeam(
     {
-      snapshot: (count) => (count === 1 ? NODES : shifted),
+      fill: (call) => {
+        updateRefMapFromFlat(replacement as never, {
+          snapshotGeneration: 8,
+          keyboardVisible: false,
+        });
+        return okResult({ typed: true, operationToken: call.opts.exactTarget });
+      },
       verify: () => okResult({ verifyVerdict: 'exact', verifyStable: true }),
     },
     () => performExactFill({ ref: '@e3', text: 'Ng' }, null, NATIVE_ONLY),
   );
   assert.ok(!(result as { isError?: boolean }).isError, envelope(result as never).error);
+  const fill = calls.find((call) => call.cliArgs[0] === 'fill')!;
   const verify = calls.find((call) => call.cliArgs[0] === 'verify-input')!;
-  assert.equal(verify.cliArgs[1], '@e8');
-  assert.equal((verify.opts.exactTarget as { inputRef: string }).inputRef, '@e8');
+  const fillTarget = fill.opts.exactTarget as { inputRef: string; operationToken: string };
+  const verifyTarget = verify.opts.exactTarget as { inputRef: string; operationToken: string };
+  assert.equal(verify.cliArgs[1], '@e3');
+  assert.equal(verifyTarget.inputRef, '@e3');
+  assert.ok(fillTarget.operationToken.length > 0);
+  assert.equal(verifyTarget.operationToken, fillTarget.operationToken);
 });
 
 test('gh-581: duplicate wrapper mapping rejects without mutation', async () => {

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { runNative, getActiveSession, clearActiveSession, getCachedScreenRect, cacheSnapshot, getCachedSnapshot, isSnapshotCacheValid, markSnapshotDirty, } from '../agent-device-wrapper.js';
 import { isFastRunnerAvailable, fastSwipe, stopFastRunner, adoptPersistedFastRunnerState, } from '../runners/rn-fast-runner-client.js';
 import { stopAndroidRunner } from '../runners/rn-android-runner-client.js';
@@ -672,10 +673,14 @@ const NATIVE_VERIFY_VERDICTS = new Set([
     'target-lost',
     'ambiguous',
 ]);
-async function runNativeVerifyInput(binding, text) {
+async function runNativeVerifyInput(binding, text, operationToken) {
     const result = await runNative(['verify-input', binding.inputRef, text], {
         settle: { enabled: false },
-        exactTarget: { inputRef: binding.inputRef, secure: binding.secure },
+        exactTarget: {
+            inputRef: binding.inputRef,
+            secure: binding.secure,
+            ...(operationToken ? { operationToken } : {}),
+        },
     });
     if (result.isError)
         return { verdict: 'unavailable', stable: false };
@@ -701,16 +706,16 @@ async function rebindExactFillTarget(binding) {
 // The single fill arbiter's evidence gatherer: fiber oracle (controlled
 // inputs) + native verifyInput (uncontrolled inputs), combined per the GH #581
 // contract — disagreement is inconclusive, inconclusive is failure.
-async function finalVerification(client, binding, jsTestId, text) {
+async function finalVerification(client, binding, jsTestId, text, operationToken) {
     const fiberId = binding.inputTestId ?? jsTestId;
     let fiber = 'unavailable';
     if (client && fiberId) {
         fiber = await finalFiberVerify({ evaluate: (e) => client.evaluate(e) }, fiberId, text);
     }
-    const rebound = await rebindExactFillTarget(binding);
-    if (!rebound)
+    const nativeBinding = operationToken ? binding : await rebindExactFillTarget(binding);
+    if (!nativeBinding)
         return combineVerificationOracles(fiber, 'target-lost', false);
-    const native = await runNativeVerifyInput(rebound, text);
+    const native = await runNativeVerifyInput(nativeBinding, text, operationToken);
     return combineVerificationOracles(fiber, native.verdict, native.stable);
 }
 // The ONLY producer of public fill success (single-success-rule invariant).
@@ -896,11 +901,14 @@ export async function performExactFill(args, client, tiers) {
     };
     const tNative = Date.now();
     let lastVerification = null;
+    let lastOperationToken;
     for (let attempt = 0; attempt <= MAX_NATIVE_RETYPE; attempt++) {
+        const operationToken = randomUUID();
+        lastOperationToken = operationToken;
         const clearFirst = attempt > 0 || args.text.length === 0;
         const primary = await runNative(['fill', binding.inputRef, args.text, ...(clearFirst ? ['--clear-first'] : [])], {
             ...(attempt === 0 ? settleOpts(args) : { settle: { enabled: false } }),
-            exactTarget,
+            exactTarget: { ...exactTarget, operationToken },
             verifyTypeReadback: exactTypeReadback(client, fiberId),
         });
         if (primary.isError) {
@@ -911,7 +919,7 @@ export async function performExactFill(args, client, tiers) {
                 }
                 if (mutation === 'observed') {
                     mutationSeen = 'observed';
-                    const verification = await finalVerification(client, binding, fiberId, args.text);
+                    const verification = await finalVerification(client, binding, fiberId, args.text, operationToken);
                     lastVerification = verification;
                     if (verification.verified) {
                         return verifiedFillResult('native', args.text.length, {
@@ -937,7 +945,7 @@ export async function performExactFill(args, client, tiers) {
             }
             // Runner-timeout discipline: never resend; only an exact independent
             // read-back may promote a possibly-mutating failure to success.
-            const verification = await finalVerification(client, binding, fiberId, args.text);
+            const verification = await finalVerification(client, binding, fiberId, args.text, operationToken);
             if (verification.verified) {
                 return verifiedFillResult('native', args.text.length, {
                     textEntryPath: attempt === 0 ? 'native' : 'native-retype',
@@ -956,7 +964,7 @@ export async function performExactFill(args, client, tiers) {
         mutationSeen = 'observed';
         const primarySettle = extractSettleMeta(primary);
         const primaryTyping = extractTypingMeta(primary);
-        const verification = await finalVerification(client, binding, fiberId, args.text);
+        const verification = await finalVerification(client, binding, fiberId, args.text, operationToken);
         lastVerification = verification;
         if (verification.verified) {
             return verifiedFillResult('native', args.text.length, {
@@ -1009,7 +1017,7 @@ export async function performExactFill(args, client, tiers) {
             return attachFillFailureDisposition(maestro.refusal, 'possible', pathsTried);
         return fillFailure('TEXT_ENTRY_UNVERIFIED', 'device_fill fell through all tiers; the Maestro attempt did not run cleanly.', { mutation: 'possible', pathsTried, verification: lastVerification ?? undefined });
     }
-    const maestroVerification = await finalVerification(client, binding, fiberId, args.text);
+    const maestroVerification = await finalVerification(client, binding, fiberId, args.text, lastOperationToken);
     if (maestroVerification.verified) {
         return verifiedFillResult('maestro', args.text.length, {
             textEntryPath: 'maestro',

@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import {
   runNative,
   getActiveSession,
@@ -902,10 +904,15 @@ const NATIVE_VERIFY_VERDICTS = new Set([
 async function runNativeVerifyInput(
   binding: ExactFillBinding,
   text: string,
+  operationToken?: string,
 ): Promise<{ verdict: NativeVerifyVerdict; stable: boolean }> {
   const result = await runNative(['verify-input', binding.inputRef, text], {
     settle: { enabled: false },
-    exactTarget: { inputRef: binding.inputRef, secure: binding.secure },
+    exactTarget: {
+      inputRef: binding.inputRef,
+      secure: binding.secure,
+      ...(operationToken ? { operationToken } : {}),
+    },
   });
   if (result.isError) return { verdict: 'unavailable', stable: false };
   try {
@@ -943,15 +950,16 @@ async function finalVerification(
   binding: ExactFillBinding,
   jsTestId: string | null,
   text: string,
+  operationToken?: string,
 ): Promise<FinalVerification> {
   const fiberId = binding.inputTestId ?? jsTestId;
   let fiber: FiberVerifyOutcome | 'unavailable' = 'unavailable';
   if (client && fiberId) {
     fiber = await finalFiberVerify({ evaluate: (e) => client.evaluate(e) }, fiberId, text);
   }
-  const rebound = await rebindExactFillTarget(binding);
-  if (!rebound) return combineVerificationOracles(fiber, 'target-lost', false);
-  const native = await runNativeVerifyInput(rebound, text);
+  const nativeBinding = operationToken ? binding : await rebindExactFillTarget(binding);
+  if (!nativeBinding) return combineVerificationOracles(fiber, 'target-lost', false);
+  const native = await runNativeVerifyInput(nativeBinding, text, operationToken);
   return combineVerificationOracles(fiber, native.verdict, native.stable);
 }
 
@@ -1226,13 +1234,16 @@ export async function performExactFill(
   };
   const tNative = Date.now();
   let lastVerification: FinalVerification | null = null;
+  let lastOperationToken: string | undefined;
   for (let attempt = 0; attempt <= MAX_NATIVE_RETYPE; attempt++) {
+    const operationToken = randomUUID();
+    lastOperationToken = operationToken;
     const clearFirst = attempt > 0 || args.text.length === 0;
     const primary = await runNative(
       ['fill', binding.inputRef, args.text, ...(clearFirst ? ['--clear-first'] : [])],
       {
         ...(attempt === 0 ? settleOpts(args) : { settle: { enabled: false } }),
-        exactTarget,
+        exactTarget: { ...exactTarget, operationToken },
         verifyTypeReadback: exactTypeReadback(client, fiberId),
       },
     );
@@ -1248,7 +1259,13 @@ export async function performExactFill(
         }
         if (mutation === 'observed') {
           mutationSeen = 'observed';
-          const verification = await finalVerification(client, binding, fiberId, args.text);
+          const verification = await finalVerification(
+            client,
+            binding,
+            fiberId,
+            args.text,
+            operationToken,
+          );
           lastVerification = verification;
           if (verification.verified) {
             return verifiedFillResult('native', args.text.length, {
@@ -1286,7 +1303,13 @@ export async function performExactFill(
       }
       // Runner-timeout discipline: never resend; only an exact independent
       // read-back may promote a possibly-mutating failure to success.
-      const verification = await finalVerification(client, binding, fiberId, args.text);
+      const verification = await finalVerification(
+        client,
+        binding,
+        fiberId,
+        args.text,
+        operationToken,
+      );
       if (verification.verified) {
         return verifiedFillResult('native', args.text.length, {
           textEntryPath: attempt === 0 ? 'native' : 'native-retype',
@@ -1309,7 +1332,13 @@ export async function performExactFill(
     mutationSeen = 'observed';
     const primarySettle = extractSettleMeta(primary);
     const primaryTyping = extractTypingMeta(primary);
-    const verification = await finalVerification(client, binding, fiberId, args.text);
+    const verification = await finalVerification(
+      client,
+      binding,
+      fiberId,
+      args.text,
+      operationToken,
+    );
     lastVerification = verification;
     if (verification.verified) {
       return verifiedFillResult('native', args.text.length, {
@@ -1391,7 +1420,13 @@ export async function performExactFill(
       { mutation: 'possible', pathsTried, verification: lastVerification ?? undefined },
     );
   }
-  const maestroVerification = await finalVerification(client, binding, fiberId, args.text);
+  const maestroVerification = await finalVerification(
+    client,
+    binding,
+    fiberId,
+    args.text,
+    lastOperationToken,
+  );
   if (maestroVerification.verified) {
     return verifiedFillResult('maestro', args.text.length, {
       textEntryPath: 'maestro',
