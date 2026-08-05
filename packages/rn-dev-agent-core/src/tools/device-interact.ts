@@ -1106,6 +1106,10 @@ export interface ExactFillTiers {
   abortSignal?: AbortSignal;
 }
 
+interface ExactFillDeps {
+  maestroFillAttempt?: typeof maestroFillAttempt;
+}
+
 // GH #581 exact fill orchestrator (device_fill and device_batch's fill step):
 // bind exactly one input, mutate through the runner's single exact operation,
 // and emit success only from the final verification arbiter.
@@ -1113,6 +1117,7 @@ export async function performExactFill(
   args: FillArgs,
   client: CDPClient | null,
   tiers: ExactFillTiers,
+  deps: ExactFillDeps = {},
 ): Promise<ToolResult> {
   const platform: 'ios' | 'android' = isAndroidSession() ? 'android' : 'ios';
   const pathsTried: string[] = [];
@@ -1234,10 +1239,8 @@ export async function performExactFill(
   };
   const tNative = Date.now();
   let lastVerification: FinalVerification | null = null;
-  let lastOperationToken: string | undefined;
   for (let attempt = 0; attempt <= MAX_NATIVE_RETYPE; attempt++) {
     const operationToken = randomUUID();
-    lastOperationToken = operationToken;
     const clearFirst = attempt > 0 || args.text.length === 0;
     const primary = await runNative(
       ['fill', binding.inputRef, args.text, ...(clearFirst ? ['--clear-first'] : [])],
@@ -1410,7 +1413,12 @@ export async function performExactFill(
       { mutation: mutationSeen, pathsTried, verification: lastVerification ?? undefined },
     );
   }
-  const maestro = await maestroFillAttempt(maestroId, args.text, platform, args);
+  const maestro = await (deps.maestroFillAttempt ?? maestroFillAttempt)(
+    maestroId,
+    args.text,
+    platform,
+    args,
+  );
   if (!maestro.attempted) {
     if (maestro.refusal)
       return attachFillFailureDisposition(maestro.refusal, 'possible', pathsTried);
@@ -1420,13 +1428,7 @@ export async function performExactFill(
       { mutation: 'possible', pathsTried, verification: lastVerification ?? undefined },
     );
   }
-  const maestroVerification = await finalVerification(
-    client,
-    binding,
-    fiberId,
-    args.text,
-    lastOperationToken,
-  );
+  const maestroVerification = await finalVerification(client, binding, fiberId, args.text);
   if (maestroVerification.verified) {
     return verifiedFillResult('maestro', args.text.length, {
       textEntryPath: 'maestro',

@@ -411,6 +411,30 @@ test('gh-581: SET_TEXT_REJECTED without a Maestro tier fails truthfully', async 
   assert.equal(envelope(result as never).code, 'TEXT_ENTRY_UNVERIFIED');
 });
 
+test('gh-581: Maestro verification rebinds by testID after runner parking', async () => {
+  const { result, calls } = await withFillSeam(
+    {
+      fill: () => failResult('rejected', 'SET_TEXT_REJECTED', { mutation: 'none' }),
+      verify: () => okResult({ verifyVerdict: 'exact', verifyStable: true }),
+    },
+    () =>
+      performExactFill(
+        { ref: '@e3', text: 'value' },
+        null,
+        { js: false, maestro: true },
+        { maestroFillAttempt: async () => ({ attempted: true }) },
+      ),
+  );
+  assert.equal(envelope(result as never).data.method, 'maestro');
+  const fill = calls.find((call) => call.cliArgs[0] === 'fill')!;
+  const verify = calls.find((call) => call.cliArgs[0] === 'verify-input')!;
+  assert.ok((fill.opts.exactTarget as { operationToken?: string }).operationToken);
+  assert.equal(
+    (verify.opts.exactTarget as { operationToken?: string }).operationToken,
+    undefined,
+  );
+});
+
 test('gh-581: possible SET_TEXT_REJECTED hard-fails without verification', async () => {
   const { result, calls } = await withFillSeam(
     {

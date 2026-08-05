@@ -818,7 +818,7 @@ const MAX_NATIVE_RETYPE = 2;
 // GH #581 exact fill orchestrator (device_fill and device_batch's fill step):
 // bind exactly one input, mutate through the runner's single exact operation,
 // and emit success only from the final verification arbiter.
-export async function performExactFill(args, client, tiers) {
+export async function performExactFill(args, client, tiers, deps = {}) {
     const platform = isAndroidSession() ? 'android' : 'ios';
     const pathsTried = [];
     let mutationSeen = 'none';
@@ -901,10 +901,8 @@ export async function performExactFill(args, client, tiers) {
     };
     const tNative = Date.now();
     let lastVerification = null;
-    let lastOperationToken;
     for (let attempt = 0; attempt <= MAX_NATIVE_RETYPE; attempt++) {
         const operationToken = randomUUID();
-        lastOperationToken = operationToken;
         const clearFirst = attempt > 0 || args.text.length === 0;
         const primary = await runNative(['fill', binding.inputRef, args.text, ...(clearFirst ? ['--clear-first'] : [])], {
             ...(attempt === 0 ? settleOpts(args) : { settle: { enabled: false } }),
@@ -1011,13 +1009,13 @@ export async function performExactFill(args, client, tiers) {
     if (!maestroId) {
         return fillFailure('TEXT_ENTRY_UNVERIFIED', 'device_fill could not verify the fill and the input has no testID for the Maestro tier.', { mutation: mutationSeen, pathsTried, verification: lastVerification ?? undefined });
     }
-    const maestro = await maestroFillAttempt(maestroId, args.text, platform, args);
+    const maestro = await (deps.maestroFillAttempt ?? maestroFillAttempt)(maestroId, args.text, platform, args);
     if (!maestro.attempted) {
         if (maestro.refusal)
             return attachFillFailureDisposition(maestro.refusal, 'possible', pathsTried);
         return fillFailure('TEXT_ENTRY_UNVERIFIED', 'device_fill fell through all tiers; the Maestro attempt did not run cleanly.', { mutation: 'possible', pathsTried, verification: lastVerification ?? undefined });
     }
-    const maestroVerification = await finalVerification(client, binding, fiberId, args.text, lastOperationToken);
+    const maestroVerification = await finalVerification(client, binding, fiberId, args.text);
     if (maestroVerification.verified) {
         return verifiedFillResult('maestro', args.text.length, {
             textEntryPath: 'maestro',
