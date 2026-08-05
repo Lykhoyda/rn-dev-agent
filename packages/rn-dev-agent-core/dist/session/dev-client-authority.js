@@ -1,3 +1,4 @@
+import { verifyManagedManifestLaunchAsset } from './expo-manifest.js';
 import { verifyMetroAuthorityMarker } from './metro-authority.js';
 export async function reconcileAuthoritativeBundle(status, dependencies) {
     const prior = status.bindings.bundle;
@@ -75,6 +76,20 @@ export function boundConnectConflict(status, request) {
 export async function pinExactDevClient(input, dependencies) {
     if (input.devClientUrl !== input.expectedDevClientUrl) {
         throw new Error('DEV_CLIENT_ENDPOINT_NOT_FOUND: declared dev-client URL does not match the session endpoint');
+    }
+    const managedManifestHost = '127.0.0.1';
+    if (dependencies.readManagedManifest) {
+        const manifest = await dependencies.readManagedManifest({
+            host: managedManifestHost,
+            metroPort: input.metroPort,
+            platform: input.platform,
+        });
+        if (manifest !== null) {
+            verifyManagedManifestLaunchAsset(manifest, {
+                host: managedManifestHost,
+                port: input.metroPort,
+            });
+        }
     }
     if (input.devClientUrl) {
         await dependencies.openUrl(input.platform, input.deviceId, input.devClientUrl, input.appId);

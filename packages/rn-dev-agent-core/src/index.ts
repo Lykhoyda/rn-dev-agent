@@ -899,6 +899,24 @@ async function pinSessionDevClient(status: SessionStatus, options: { force: bool
           ? { status: 'signed' as const, marker: parsed.marker }
           : null;
       },
+      readManagedManifest: async ({ host, metroPort, platform }) => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 15_000);
+        try {
+          const response = await fetch(`http://${host}:${metroPort}/`, {
+            headers: {
+              accept: 'multipart/mixed,application/expo+json,application/json',
+              'expo-platform': platform,
+            },
+            signal: controller.signal,
+          });
+          return response.ok ? await response.text() : null;
+        } catch {
+          return null;
+        } finally {
+          clearTimeout(timer);
+        }
+      },
     },
   );
   getClient().setAuthoritativeSessionPolicy(createAuthoritativeSessionPolicy(status));

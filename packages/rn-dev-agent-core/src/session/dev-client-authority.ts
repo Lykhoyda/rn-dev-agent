@@ -1,3 +1,4 @@
+import { verifyManagedManifestLaunchAsset } from './expo-manifest.js';
 import type { MetroAuthorityBinding, MetroAuthorityMarker } from './metro-authority.js';
 import { verifyMetroAuthorityMarker } from './metro-authority.js';
 import type { SessionStatus } from './registry.js';
@@ -22,6 +23,11 @@ interface PinDevClientDependencies {
     deviceId: string;
   }): Promise<{ targetId: string; connectionGeneration: number; deviceId: string }>;
   readMarker(): Promise<{ status: 'signed'; marker: MetroAuthorityMarker } | null>;
+  readManagedManifest?(input: {
+    host: string;
+    metroPort: number;
+    platform: 'ios' | 'android';
+  }): Promise<string | null>;
 }
 
 export interface BundleAuthorityBinding extends MetroAuthorityBinding, Record<string, unknown> {
@@ -163,6 +169,20 @@ export async function pinExactDevClient(
     throw new Error(
       'DEV_CLIENT_ENDPOINT_NOT_FOUND: declared dev-client URL does not match the session endpoint',
     );
+  }
+  const managedManifestHost = '127.0.0.1';
+  if (dependencies.readManagedManifest) {
+    const manifest = await dependencies.readManagedManifest({
+      host: managedManifestHost,
+      metroPort: input.metroPort,
+      platform: input.platform,
+    });
+    if (manifest !== null) {
+      verifyManagedManifestLaunchAsset(manifest, {
+        host: managedManifestHost,
+        port: input.metroPort,
+      });
+    }
   }
   if (input.devClientUrl) {
     await dependencies.openUrl(input.platform, input.deviceId, input.devClientUrl, input.appId);

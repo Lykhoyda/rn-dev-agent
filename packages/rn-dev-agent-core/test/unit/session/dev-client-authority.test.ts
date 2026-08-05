@@ -276,3 +276,59 @@ test('bound connect rejects every explicit target dimension that contradicts the
     null,
   );
 });
+
+test('dev-client pin refuses a manifest whose launch asset leaves the managed endpoint', async () => {
+  const marker = buildSignedMetroMarker(expected, 'signer');
+  const launched = [];
+  const input = {
+    ...expected,
+    deviceId: 'IOS-UUID',
+    metroPort: 8341,
+    signerCapability: 'signer',
+  };
+  const dependencies = (manifest) => ({
+    openUrl: async () => launched.push('url'),
+    launchExactApp: async () => launched.push('app'),
+    acceptIosOpenDialog: async () => {},
+    connectExact: async () => ({
+      targetId: 'target-a',
+      connectionGeneration: 1,
+      deviceId: 'IOS-UUID',
+    }),
+    readMarker: async () => ({ status: 'signed', marker }),
+    readManagedManifest: async ({ host, metroPort, platform }) => {
+      assert.equal(host, '127.0.0.1');
+      assert.equal(metroPort, 8341);
+      assert.equal(platform, 'ios');
+      return manifest;
+    },
+  });
+
+  await assert.rejects(
+    pinExactDevClient(
+      input,
+      dependencies(
+        JSON.stringify({
+          launchAsset: { url: 'http://127.0.0.1:8099/index.bundle' },
+        }),
+      ),
+    ),
+    /METRO_MANIFEST_ENDPOINT_MISMATCH/,
+  );
+  assert.deepEqual(launched, [], 'no device may be launched from an off-endpoint manifest');
+
+  const exact = await pinExactDevClient(
+    input,
+    dependencies(
+      JSON.stringify({
+        launchAsset: { url: 'http://127.0.0.1:8341/index.bundle?platform=ios' },
+      }),
+    ),
+  );
+  assert.equal(exact.targetId, 'target-a');
+  assert.deepEqual(launched, ['app']);
+
+  const bareReactNative = await pinExactDevClient(input, dependencies('packager-status:running'));
+  assert.equal(bareReactNative.targetId, 'target-a');
+  assert.deepEqual(launched, ['app', 'app']);
+});

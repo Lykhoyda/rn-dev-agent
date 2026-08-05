@@ -23,6 +23,7 @@ export function renderMetroIntegrationAdapter() {
     return `'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
+const { AsyncLocalStorage } = require('node:async_hooks');
 const { createHash, createHmac, randomBytes } = require('node:crypto');
 const childProcess = require('node:child_process');
 const { execFileSync } = childProcess;
@@ -1188,6 +1189,166 @@ function descendantError() {
   error.code = 'RN_DEV_AGENT_UNSUPPORTED_DESCENDANT_EXECUTION';
   return error;
 }
+const bundleAuthorityScope = new AsyncLocalStorage();
+function withinBundleAuthority() {
+  return bundleAuthorityScope.getStore() === true;
+}
+function runWithinBundleAuthority(callback, receiver, args) {
+  return bundleAuthorityScope.run(true, () =>
+    intrinsicReflectApply(callback, receiver, args),
+  );
+}
+function withBundleAuthorityScope(callback) {
+  if (typeof callback !== 'function') return callback;
+  const scoped = function (...args) {
+    return runWithinBundleAuthority(callback, this, args);
+  };
+  return Object.assign(scoped, callback);
+}
+// Manifest middleware shares the bundler process, so the lane is chosen by dynamic authority scope.
+let managedConfigAdapterApplied = false;
+function manifestUtilityLaneAvailable() {
+  return (
+    managedConfigAdapterApplied &&
+    !descendantNonce &&
+    workerThreads.isMainThread &&
+    !withinBundleAuthority()
+  );
+}
+function isNodeExecutableCommand(command) {
+  if (typeof command !== 'string') return false;
+  try {
+    return fs.realpathSync(command) === nodeExecutable;
+  } catch {
+    return false;
+  }
+}
+const utilityStdioStreams = new IntrinsicSet([
+  'ignore',
+  'inherit',
+  'overlapped',
+  'pipe',
+]);
+function utilityChildStdio(stdio) {
+  if (stdio === undefined || stdio === null) return stdio;
+  if (!intrinsicArrayIsArray(stdio)) {
+    if (!privateSetHas(utilityStdioStreams, stdio)) throw descendantError();
+    return stdio;
+  }
+  const normalized = [...stdio];
+  for (let index = 0; index < normalized.length; index += 1) {
+    const value = normalized[index];
+    if (value === undefined || value === null || value === 'ignore') continue;
+    if (index >= 3) throw descendantError();
+    if (privateSetHas(utilityStdioStreams, value)) continue;
+    if (value === 0 || value === 1 || value === 2) continue;
+    throw descendantError();
+  }
+  return normalized;
+}
+function utilityChildArguments(args, optionsIndex, options) {
+  const nextArgs = [...args];
+  const candidate = nextArgs[optionsIndex];
+  if (typeof candidate === 'function') {
+    nextArgs.splice(optionsIndex, 0, options);
+  } else {
+    nextArgs[optionsIndex] = options;
+  }
+  return nextArgs;
+}
+function recordUtilityInvocation(mode, command, args, cwd) {
+  persistLoaderObservation(
+    'unattested-utility',
+    canonicalAuthorityJson({
+      version: 1,
+      mode,
+      lane: 'manifest-utility',
+      proofBearing: false,
+      command: typeof command === 'string' ? command : null,
+      argumentDigest: createHash('sha256')
+        .update(
+          canonicalAuthorityJson(
+            intrinsicArrayIsArray(args)
+              ? privateArrayMap(args, (value) => (typeof value === 'string' ? value : null))
+              : [],
+          ),
+        )
+        .digest('hex'),
+      cwd,
+      authority: {
+        sessionId: authoritySessionId,
+        metroInstanceId: authorityMetroInstanceId,
+        contentRoot: authorityContentRoot,
+        appRoot: authorityAppRoot,
+        parentIdentity: currentIdentity,
+        parentNonce: currentAuthorityNonce,
+      },
+    }),
+  );
+}
+// Utility children get no RN_DEV_AGENT_* capability, evidence descriptor, or authority NODE_OPTIONS.
+function runManifestUtility(original, receiver, args, optionsIndex, mode) {
+  const candidate = args[optionsIndex];
+  const rawOptions = candidate && typeof candidate === 'object' ? { ...candidate } : {};
+  if (rawOptions.shell || rawOptions.signal !== undefined) throw descendantError();
+  if (rawOptions.execPath !== undefined || rawOptions.execArgv !== undefined) {
+    throw descendantError();
+  }
+  const cwd = invocationCwd(rawOptions.cwd);
+  const environmentEntries = normalizedInvocationEnvironment(rawOptions.env);
+  const stdio = utilityChildStdio(rawOptions.stdio);
+  const utilityOptions = {
+    ...rawOptions,
+    cwd,
+    env: privateObjectFromEntries(environmentEntries),
+    ...(stdio === undefined || stdio === null ? {} : { stdio }),
+  };
+  const utilityArgs = utilityChildArguments(args, optionsIndex, utilityOptions);
+  recordUtilityInvocation(mode, args[0], args[1], cwd);
+  const nonce = randomBytes(16).toString('hex');
+  const spawnAuthorization =
+    mode === 'sync'
+      ? undefined
+      : {
+          environment: utilityOptions.env,
+          lifecycleContext: lifecycleContext('child-lifecycle', nonce),
+          receiver: undefined,
+        };
+  if (spawnAuthorization) {
+    if (activeChildSpawnAuthorization) throw descendantError();
+    activeChildSpawnAuthorization = spawnAuthorization;
+  }
+  let child;
+  try {
+    child = intrinsicReflectApply(original, receiver, utilityArgs);
+  } finally {
+    if (spawnAuthorization) {
+      activeChildSpawnAuthorization = undefined;
+      if (spawnAuthorization.receiver) {
+        privateWeakMapDelete(authorizedChildSpawns, spawnAuthorization.receiver);
+      }
+    }
+  }
+  if (spawnAuthorization && child && typeof child === 'object') {
+    const context = spawnAuthorization.lifecycleContext;
+    const target = {
+      pid: typeof child.pid === 'number' ? child.pid : undefined,
+      context,
+    };
+    privateWeakMapSet(childLifecycleContexts, child, context);
+    privateWeakMapSet(childLifecycleTargets, child, target);
+    if (target.pid !== undefined) {
+      const pid = target.pid;
+      privateMapSet(processLifecycleTargets, pid, target);
+      child.once?.('exit', () => {
+        if (privateMapGet(processLifecycleTargets, pid) === target) {
+          privateMapDelete(processLifecycleTargets, pid);
+        }
+      });
+    }
+  }
+  return child;
+}
 const CHILD_EXCHANGE_STALL_CODE = 'MANAGED_TRANSFORM_CHANNEL_STALLED';
 function childExchangeStallBound() {
   const configured = Number(process.env.RN_DEV_AGENT_METRO_CHILD_STALL_MS);
@@ -1796,6 +1957,13 @@ function fenceChildProcessMethod(name, optionsIndex, mode) {
       const args = [...receivedArgs];
       if (Array.isArray(args[1])) args[1] = [...args[1]];
       const index = typeof optionsIndex === 'function' ? optionsIndex(args) : optionsIndex;
+      if (
+        mode !== 'fork' &&
+        !isNodeExecutableCommand(args[0]) &&
+        manifestUtilityLaneAvailable()
+      ) {
+        return runManifestUtility(original, this, args, index, mode);
+      }
       const nonce = randomBytes(16).toString('hex');
       const candidate = args[index];
       const rawOptions = candidate && typeof candidate === 'object' ? { ...candidate } : {};
@@ -1931,6 +2099,53 @@ function rejectChildProcessMethod(name) {
     enumerable: true,
     value() {
       throw descendantError();
+    },
+    writable: false,
+  });
+}
+const promisifyCustom = Symbol.for('nodejs.util.promisify.custom');
+function fenceUtilityChildProcessMethod(name, optionsIndex, mode) {
+  const original = childProcess[name];
+  const hadCustomPromisify = typeof original?.[promisifyCustom] === 'function';
+  Object.defineProperty(childProcess, name, {
+    configurable: false,
+    enumerable: true,
+    value(...receivedArgs) {
+      const args = [...receivedArgs];
+      if (Array.isArray(args[1])) args[1] = [...args[1]];
+      const index = typeof optionsIndex === 'function' ? optionsIndex(args) : optionsIndex;
+      if (isNodeExecutableCommand(args[0]) || !manifestUtilityLaneAvailable()) {
+        throw descendantError();
+      }
+      return runManifestUtility(original, this, args, index, mode);
+    },
+    writable: false,
+  });
+  if (!hadCustomPromisify) return;
+  const fenced = childProcess[name];
+  Object.defineProperty(fenced, promisifyCustom, {
+    configurable: false,
+    enumerable: false,
+    value(...customArgs) {
+      let settleResolve;
+      let settleReject;
+      const promise = new Promise((resolve, reject) => {
+        settleResolve = resolve;
+        settleReject = reject;
+      });
+      promise.child = intrinsicReflectApply(fenced, this, [
+        ...customArgs,
+        (error, stdout, stderr) => {
+          if (error) {
+            error.stdout = stdout;
+            error.stderr = stderr;
+            settleReject(error);
+            return;
+          }
+          settleResolve({ stdout, stderr });
+        },
+      ]);
+      return promise;
     },
     writable: false,
   });
@@ -2090,9 +2305,9 @@ if (canAuthenticateChildProcesses) {
   fenceChildProcessMethod('spawnSync', optionalArgsIndex, 'sync');
   fenceChildProcessMethod('fork', optionalArgsIndex, 'fork');
   rejectChildProcessMethod('exec');
-  rejectChildProcessMethod('execFile');
-  rejectChildProcessMethod('execFileSync');
   rejectChildProcessMethod('execSync');
+  fenceUtilityChildProcessMethod('execFile', optionalArgsIndex, 'node');
+  fenceUtilityChildProcessMethod('execFileSync', optionalArgsIndex, 'sync');
   fenceWorkers();
 }
 function digestRuntimeFile(file) {
@@ -2744,7 +2959,7 @@ function withPolicyRefresh(callback, getConfig, includeReturnedPaths) {
       throw error;
     };
     try {
-      const result = callback.apply(this, args);
+      const result = runWithinBundleAuthority(callback, this, args);
       return result && typeof result.then === 'function' ? result.then(finish, fail) : finish(result);
     } catch (error) {
       return fail(error);
@@ -2773,7 +2988,8 @@ function withAuthorityPolyfills(callback, marker, bootErrorCapture) {
     bootErrorCapture,
   ];
   return function (...args) {
-    const result = typeof callback === 'function' ? callback.apply(this, args) : [];
+    const result =
+      typeof callback === 'function' ? runWithinBundleAuthority(callback, this, args) : [];
     return result && typeof result.then === 'function' ? result.then(prepend) : prepend(result);
   };
 }
@@ -2781,6 +2997,7 @@ module.exports = function withRnDevAgentAuthority(config) {
   if (config && typeof config.then === 'function') {
     return config.then(withRnDevAgentAuthority);
   }
+  managedConfigAdapterApplied = true;
   const current = config || {};
   const resolver = current.resolver || {};
   const transformer = current.transformer || {};
@@ -2798,6 +3015,9 @@ module.exports = function withRnDevAgentAuthority(config) {
       ...(Array.isArray(resolver.nodeModulesPaths) ? { nodeModulesPaths: [...resolver.nodeModulesPaths] } : {}),
       ...(resolver.extraNodeModules && typeof resolver.extraNodeModules === 'object'
         ? { extraNodeModules: { ...resolver.extraNodeModules } }
+        : {}),
+      ...(typeof resolver.resolveRequest === 'function'
+        ? { resolveRequest: withBundleAuthorityScope(resolver.resolveRequest) }
         : {}),
     },
     transformer: {
@@ -2829,9 +3049,11 @@ module.exports = function withRnDevAgentAuthority(config) {
         true,
       ),
       getModulesRunBeforeMainModule(entryFile) {
-        const result = (typeof original === 'function' ? original(entryFile) : []).filter(
-          (candidate) => candidate !== marker && candidate !== bootErrorCapture,
-        );
+        const result = (
+          typeof original === 'function'
+            ? runWithinBundleAuthority(original, undefined, [entryFile])
+            : []
+        ).filter((candidate) => candidate !== marker && candidate !== bootErrorCapture);
         runtimePolicy(finalConfig, result);
         return result;
       },
