@@ -997,7 +997,7 @@ trackedTool('rn_session', 'Inspect and transition the fenced rn-dev-agent author
     adoptionHandle: z.string().optional(),
     releaseHandle: z
         .string()
-        .describe('Bounded capability minted by bind_device for a proven-dead device owner')
+        .describe("Bounded capability minted by bind_device for the initial proven-dead device transfer; omit only when resuming this session epoch's durable cleanup journal")
         .optional(),
     confirmed: z.boolean().optional(),
     force: z.boolean().optional(),

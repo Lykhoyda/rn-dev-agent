@@ -244,20 +244,28 @@ export function createSessionHandler(runtime, dependencies = {}) {
             if (input.action === 'release_stale_device') {
                 const platform = required(input.platform, 'platform');
                 const deviceId = required(input.deviceId, 'deviceId');
-                const releaseHandle = required(input.releaseHandle, 'releaseHandle');
+                const releaseHandle = input.releaseHandle;
                 const current = registry.getSessionStatus(session.sessionId);
                 const workerInstance = current?.worker.instanceId;
                 if (!workerInstance) {
                     throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', 'release worker identity is unavailable');
                 }
                 const offer = current?.bindings.staleDeviceRelease;
-                if (offer?.platform !== platform || offer.deviceId !== deviceId) {
-                    throw new SessionAuthorityError('DEVICE_AUTHORITY_MISMATCH', 'the release handle was not minted for this exact device', undefined, {
+                const journal = current?.bindings.staleDeviceCleanup;
+                const authority = journal ?? offer;
+                if (authority?.platform !== platform || authority.deviceId !== deviceId) {
+                    throw new SessionAuthorityError('DEVICE_AUTHORITY_MISMATCH', 'the stale release request does not match the exact cleanup journal or offer', undefined, {
                         axis: 'D',
-                        nextAction: 'Re-run rn_session({ action: "bind_device" }) for the exact device to mint its release offer.',
+                        nextAction: 'Run rn_session with action "status" for the exact recovery.',
                     });
                 }
-                const plan = registry.beginStaleResourceRelease(session, releaseHandle, workerInstance);
+                if (!journal && typeof releaseHandle !== 'string') {
+                    throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', 'releaseHandle is required before stale device claims transfer');
+                }
+                const plan = registry.beginStaleResourceRelease(session, releaseHandle, workerInstance, {
+                    platform,
+                    deviceId,
+                });
                 const completed = [];
                 if (plan.recorder && typeof plan.recorder.completedAt !== 'number') {
                     await (dependencies.stopHandoffRecorder ?? stopBoundRecorder)(plan.recorder);

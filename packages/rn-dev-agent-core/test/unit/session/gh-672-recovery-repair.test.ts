@@ -537,7 +537,10 @@ test('GH#672: a crash mid-release resumes the durable journal instead of restart
   f.registry.completeStaleResourceRelease(f.live, 'live-worker', 'recorder');
   f.advance(HANDLE_TTL_MS + 1);
 
-  const resumed = f.registry.beginStaleResourceRelease(f.live, offer.token, 'live-worker');
+  const resumed = f.registry.beginStaleResourceRelease(f.live, undefined, 'live-worker', {
+    platform: 'ios',
+    deviceId: 'sim-1',
+  });
   assert.equal(typeof resumed.recorder?.completedAt, 'number');
   assert.equal(resumed.runner?.completedAt, null);
   assert.equal(resumed.runner?.port, 9200);
@@ -554,20 +557,99 @@ test('GH#672: a crash mid-release resumes the durable journal instead of restart
   assert.equal(f.registry.getClaim('device', 'ios:sim-1'), null);
 });
 
-test('GH#672: device rebinding is refused while its cleanup journal is incomplete', () => {
+test('GH#672: the handler exposes and resumes an expired journal before device rebinding', async () => {
   const f = deadDeviceOwner();
   const offer = f.registry.prepareStaleResourceRelease(f.live, {
     platform: 'ios',
     deviceId: 'sim-1',
   });
   f.registry.beginStaleResourceRelease(f.live, offer.token, 'live-worker');
+  f.advance(HANDLE_TTL_MS + 1);
+  const stopped: string[] = [];
+  const runtime = new WorkerAuthorityRuntime(f.registry, f.live, null);
+  const handler = createSessionHandler(runtime as never, {
+    now: f.now,
+    deviceExists: () => true,
+    stopHandoffRunner: async () => {
+      stopped.push('runner');
+    },
+    stopHandoffRecorder: async () => {
+      stopped.push('recorder');
+    },
+  });
 
-  assert.throws(
-    () => f.registry.claimResources(f.live, [{ type: 'device', key: 'ios:sim-1' }]),
-    (error: { code?: string }) => error.code === 'AUTOMATION_CLEANUP_UNPROVEN',
+  const refusedBind = await handler({
+    action: 'bind_device',
+    platform: 'ios',
+    deviceId: 'sim-1',
+    appId: 'com.example.app',
+  });
+  const refusedBody = envelope(refusedBind);
+  assert.equal(refusedBind.isError, true);
+  assert.equal(refusedBody.code, 'AUTOMATION_CLEANUP_UNPROVEN');
+  assert.match(String(refusedBody.meta?.nextAction), /release_stale_device/);
+  assert.equal(f.registry.getClaim('runner', 'ios:sim-1:9200')?.sessionId, 'live');
+
+  const statusResult = await handler({ action: 'status' });
+  const authority = envelope(statusResult).data.authority as unknown as {
+    staleDeviceCleanup?: {
+      platform?: string;
+      deviceId?: string;
+      obligations?: string[];
+      nextAction?: string;
+    };
+    staleDeviceRelease?: { releaseHandle?: string; expired?: boolean; nextAction?: string };
+  };
+  assert.deepEqual(authority.staleDeviceCleanup?.obligations?.sort(), ['recorder', 'runner']);
+  assert.equal(authority.staleDeviceCleanup?.platform, 'ios');
+  assert.equal(authority.staleDeviceCleanup?.deviceId, 'sim-1');
+  assert.match(String(authority.staleDeviceCleanup?.nextAction), /release_stale_device/);
+  assert.doesNotMatch(String(authority.staleDeviceCleanup?.nextAction), /releaseHandle/);
+  assert.equal(authority.staleDeviceRelease, undefined);
+
+  const wrongDevice = await handler({
+    action: 'release_stale_device',
+    platform: 'ios',
+    deviceId: 'sim-2',
+  });
+  assert.equal(wrongDevice.isError, true);
+  assert.equal(envelope(wrongDevice).code, 'DEVICE_AUTHORITY_MISMATCH');
+  assert.equal(f.registry.getClaim('device', 'ios:sim-1')?.sessionId, 'live');
+
+  const other = f.create('other-session', 'worktree-other');
+  f.registry.bindWorker(other, {
+    instanceId: 'other-worker',
+    pid: 9300,
+    token: 'other-worker-birth',
+  });
+  const otherHandler = createSessionHandler(
+    new WorkerAuthorityRuntime(f.registry, other, null) as never,
+    { deviceExists: () => true },
   );
-  f.registry.claimResources(f.live, [{ type: 'device', key: 'ios:sim-2' }]);
-  assert.equal(f.registry.getClaim('device', 'ios:sim-2')?.sessionId, 'live');
+  const crossSession = await otherHandler({
+    action: 'release_stale_device',
+    platform: 'ios',
+    deviceId: 'sim-1',
+  });
+  assert.equal(crossSession.isError, true);
+  assert.equal(envelope(crossSession).code, 'DEVICE_AUTHORITY_MISMATCH');
+
+  const resumed = await handler({
+    action: 'release_stale_device',
+    platform: 'ios',
+    deviceId: 'sim-1',
+  });
+  assert.equal(resumed.isError, undefined, resumed.content[0]!.text);
+  assert.deepEqual(stopped, ['recorder', 'runner']);
+
+  const bound = await handler({
+    action: 'bind_device',
+    platform: 'ios',
+    deviceId: 'sim-1',
+    appId: 'com.example.app',
+  });
+  assert.equal(bound.isError, undefined, bound.content[0]!.text);
+  assert.equal(f.registry.getClaim('device', 'ios:sim-1')?.sessionId, 'live');
 });
 
 test('GH#672: releasing a device with no foreign claim is refused, not silently granted', () => {
@@ -640,6 +722,15 @@ test('GH#672: stale adoption inherits every transferred device cleanup obligatio
   const handle = adoptionHandle(f.registry, 'adopter')?.token;
   f.registry.adoptStaleWithHandle(adopter, handle!, 'adopter-worker');
 
+  assert.throws(
+    () =>
+      f.registry.beginStaleResourceRelease(f.live, undefined, 'live-worker', {
+        platform: 'ios',
+        deviceId: 'sim-1',
+      }),
+    (error: { code?: string }) => error.code === 'SESSION_OWNER_LOST',
+  );
+
   const transferred = f.registry.getSessionStatus('adopter');
   const cleanup = transferred?.bindings.handoffCleanup as {
     runner?: Record<string, unknown>;
@@ -649,6 +740,8 @@ test('GH#672: stale adoption inherits every transferred device cleanup obligatio
   assert.equal(typeof cleanup.recorder?.completedAt, 'number');
   assert.equal(f.registry.getClaim('device', 'ios:sim-1')?.sessionId, 'adopter');
   assert.equal(f.registry.getClaim('runner', 'ios:sim-1:9200')?.sessionId, 'adopter');
+  const projected = advertisedRecovery(f.registry, 'adopter', f.now());
+  assert.match(String(projected.staleDeviceCleanup?.nextAction), /action: "adopt_stale"/);
 
   const stopped: string[] = [];
   const runtime = new WorkerAuthorityRuntime(f.registry, adopter, null, true, RECOVERY_CAPABILITY);

@@ -256,13 +256,8 @@ export class SessionRegistry {
         return this.#transaction(() => {
             const owner = this.#requireSession(session);
             const bindings = JSON.parse(owner.bindings_json);
-            const staleDeviceCleanup = bindings.staleDeviceCleanup;
-            if (staleDeviceCleanup &&
-                typeof staleDeviceCleanup.platform === 'string' &&
-                typeof staleDeviceCleanup.deviceId === 'string' &&
-                resources.some((resource) => resource.type === 'device' &&
-                    resource.key === `${staleDeviceCleanup.platform}:${staleDeviceCleanup.deviceId}`)) {
-                throw new SessionAuthorityError('AUTOMATION_CLEANUP_UNPROVEN', 'device rebinding is refused while stale cleanup remains incomplete');
+            if (resources.some((resource) => resource.type === 'device')) {
+                this.#assertNoStaleDeviceCleanup(bindings);
             }
             for (const resource of resources) {
                 const claim = this.#findConflictingClaim(resource);
@@ -622,6 +617,8 @@ export class SessionRegistry {
         const now = this.#now();
         this.#transaction(() => {
             const current = this.#requireSession(session);
+            const currentBindings = JSON.parse(current.bindings_json);
+            this.#assertNoStaleDeviceCleanup(currentBindings);
             const claim = this.#findConflictingClaim(resource);
             if (claim &&
                 (claim.session_id !== session.sessionId || claim.claim_epoch !== session.claimEpoch)) {
@@ -642,7 +639,7 @@ export class SessionRegistry {
           ) VALUES (?, ?, ?, ?, ?)`)
                 .run(resource.type, resource.key, session.sessionId, session.claimEpoch, now + this.#leaseMs);
             const bindings = {
-                ...JSON.parse(current.bindings_json),
+                ...currentBindings,
                 device: input.device,
                 install: input.install ?? null,
                 bundle: null,
@@ -719,11 +716,24 @@ export class SessionRegistry {
      * mint: a prior owner that came back to life, changed epoch, or cannot be identified
      * refuses even with a valid handle.
      */
-    beginStaleResourceRelease(session, handle, workerInstance) {
+    beginStaleResourceRelease(session, handle, workerInstance, target) {
         const now = this.#now();
         return this.#transaction(() => {
             const current = this.#requireSession(session);
             const bindings = JSON.parse(current.bindings_json);
+            if (current.worker_instance !== workerInstance) {
+                throw new SessionAuthorityError('HANDOFF_TARGET_MISMATCH', 'stale device release is not owned by this worker');
+            }
+            const resumed = bindings.staleDeviceCleanup;
+            if (resumed) {
+                this.#assertStaleReleaseJournalScope(current, resumed, target);
+                return {
+                    platform: String(resumed.platform),
+                    deviceId: String(resumed.deviceId),
+                    runner: resumed.runner ?? null,
+                    recorder: resumed.recorder ?? null,
+                };
+            }
             const offer = bindings.staleDeviceRelease;
             if (!offer ||
                 typeof offer.token !== 'string' ||
@@ -732,28 +742,16 @@ export class SessionRegistry {
                 typeof offer.deviceId !== 'string' ||
                 typeof offer.priorSessionId !== 'string' ||
                 typeof offer.priorClaimEpoch !== 'number' ||
+                typeof handle !== 'string' ||
                 !this.#capabilityMatches(offer.token, handle)) {
                 throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', 'stale device release capability is invalid or expired');
             }
-            if (current.worker_instance !== workerInstance) {
-                throw new SessionAuthorityError('HANDOFF_TARGET_MISMATCH', 'stale device release is not owned by this worker');
-            }
             const platform = offer.platform;
             const deviceId = offer.deviceId;
-            const deviceKey = `${platform}:${deviceId}`;
-            const resumed = bindings.staleDeviceCleanup;
-            if (resumed &&
-                resumed.platform === platform &&
-                resumed.deviceId === deviceId &&
-                resumed.priorSessionId === offer.priorSessionId &&
-                resumed.priorClaimEpoch === offer.priorClaimEpoch) {
-                return {
-                    platform,
-                    deviceId,
-                    runner: resumed.runner ?? null,
-                    recorder: resumed.recorder ?? null,
-                };
+            if (target && (target.platform !== platform || target.deviceId !== deviceId)) {
+                throw new SessionAuthorityError('DEVICE_AUTHORITY_MISMATCH', 'stale device release offer does not match the requested exact device', undefined, { axis: 'D', nextAction: 'Run rn_session with action "status" for the exact recovery.' });
             }
+            const deviceKey = `${platform}:${deviceId}`;
             if (offer.expiresMs < now) {
                 throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', 'stale device release capability is invalid or expired');
             }
@@ -882,7 +880,52 @@ export class SessionRegistry {
         if (!cleanup || typeof cleanup !== 'object') {
             throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'no stale device release is in progress');
         }
-        return { row, bindings, cleanup: cleanup };
+        const journal = cleanup;
+        this.#assertStaleReleaseJournalScope(row, journal);
+        return { row, bindings, cleanup: journal };
+    }
+    #assertNoStaleDeviceCleanup(bindings) {
+        const cleanup = bindings.staleDeviceCleanup;
+        if (!cleanup || typeof cleanup.platform !== 'string' || typeof cleanup.deviceId !== 'string') {
+            return;
+        }
+        const platform = JSON.stringify(cleanup.platform);
+        const deviceId = JSON.stringify(cleanup.deviceId);
+        throw new SessionAuthorityError('AUTOMATION_CLEANUP_UNPROVEN', `stale device cleanup journal for ${cleanup.platform}:${cleanup.deviceId} is incomplete`, undefined, {
+            axis: 'D',
+            nextAction: `Resume it with rn_session({ action: "release_stale_device", platform: ${platform}, ` +
+                `deviceId: ${deviceId} }) before binding any device.`,
+        });
+    }
+    #assertStaleReleaseJournalScope(row, cleanup, target) {
+        if (typeof cleanup.platform !== 'string' ||
+            typeof cleanup.deviceId !== 'string' ||
+            (target && (cleanup.platform !== target.platform || cleanup.deviceId !== target.deviceId))) {
+            throw new SessionAuthorityError('DEVICE_AUTHORITY_MISMATCH', 'stale device cleanup journal does not match the requested exact device', undefined, { axis: 'D', nextAction: 'Run rn_session with action "status" for the exact recovery.' });
+        }
+        const deviceKey = `${cleanup.platform}:${cleanup.deviceId}`;
+        const deviceClaim = this.#findClaim('device', deviceKey);
+        if (deviceClaim?.session_id !== row.session_id || deviceClaim.claim_epoch !== row.claim_epoch) {
+            throw new SessionAuthorityError('DEVICE_AUTHORITY_MISMATCH', 'stale device cleanup journal no longer owns its exact device claim');
+        }
+        for (const resource of ['runner', 'recorder']) {
+            const entry = cleanup[resource];
+            if (!entry ||
+                typeof entry !== 'object' ||
+                typeof entry.completedAt === 'number') {
+                continue;
+            }
+            const binding = entry;
+            const claimType = resource === 'runner' ? 'runner' : 'recorder';
+            const expectedKey = resource === 'runner' ? `${deviceKey}:${String(binding.port)}` : deviceKey;
+            const claimKey = String(binding.claimKey ?? '');
+            const claim = this.#findClaim(claimType, claimKey);
+            if (claimKey !== expectedKey ||
+                claim?.session_id !== row.session_id ||
+                claim.claim_epoch !== row.claim_epoch) {
+                throw new SessionAuthorityError(resource === 'runner' ? 'RUNNER_OWNERSHIP_MISMATCH' : 'RECORDING_AUTHORITY_MISMATCH', `stale ${resource} cleanup journal no longer owns its exact claim`);
+            }
+        }
     }
     #deviceFamilyClaims(deviceKey) {
         return this.#database

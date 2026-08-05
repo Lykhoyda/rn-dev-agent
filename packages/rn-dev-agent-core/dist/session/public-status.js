@@ -40,7 +40,21 @@ export function projectPublicAuthorityStatus(status, options = {}) {
         }
         : undefined;
     const staleRelease = status.bindings.staleDeviceRelease;
-    const releaseHandle = liveHandle(staleRelease ?? undefined, now);
+    const staleCleanup = status.bindings.staleDeviceCleanup;
+    const cleanupPlatform = typeof staleCleanup?.platform === 'string' ? staleCleanup.platform : undefined;
+    const cleanupDeviceId = typeof staleCleanup?.deviceId === 'string' ? staleCleanup.deviceId : undefined;
+    const cleanupNextAction = cleanupPlatform && cleanupDeviceId
+        ? status.state === 'handoff_cleanup'
+            ? 'rn_session({ action: "adopt_stale", adoptionHandle })'
+            : `rn_session({ action: "release_stale_device", platform: ${JSON.stringify(cleanupPlatform)}, deviceId: ${JSON.stringify(cleanupDeviceId)} })`
+        : undefined;
+    const releaseHandle = cleanupNextAction ? undefined : liveHandle(staleRelease ?? undefined, now);
+    const pendingCleanupObligations = ['runner', 'recorder'].filter((resource) => {
+        const binding = staleCleanup?.[resource];
+        return (binding !== null &&
+            typeof binding === 'object' &&
+            typeof binding.completedAt !== 'number');
+    });
     const metro = status.bindings.metro;
     const metroTerminal = status.bindings.metroTerminal;
     return {
@@ -71,6 +85,16 @@ export function projectPublicAuthorityStatus(status, options = {}) {
         runnerBound: Boolean(status.bindings.runner),
         recorderBound: Boolean(status.bindings.recorder),
         ...(recoveryStatus ? { recovery: recoveryStatus } : {}),
+        ...(cleanupNextAction
+            ? {
+                staleDeviceCleanup: {
+                    platform: cleanupPlatform,
+                    deviceId: cleanupDeviceId,
+                    obligations: pendingCleanupObligations,
+                    nextAction: cleanupNextAction,
+                },
+            }
+            : {}),
         ...(options.recoveryRequirement && options.recoveryRequirement.requirement !== 'none'
             ? {
                 recoveryRequirement: {
@@ -80,7 +104,7 @@ export function projectPublicAuthorityStatus(status, options = {}) {
                 },
             }
             : {}),
-        ...(staleRelease
+        ...(staleRelease && !cleanupNextAction
             ? {
                 staleDeviceRelease: {
                     platform: staleRelease.platform,
@@ -91,7 +115,8 @@ export function projectPublicAuthorityStatus(status, options = {}) {
                         ? {}
                         : {
                             expired: true,
-                            nextAction: 'The stale device release offer expired. Re-run rn_session({ action: "bind_device" }) to mint a fresh one.',
+                            nextAction: cleanupNextAction ??
+                                'The stale device release offer expired. Re-run rn_session({ action: "bind_device" }) to mint a fresh one.',
                         }),
                 },
             }

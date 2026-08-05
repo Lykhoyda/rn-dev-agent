@@ -584,24 +584,8 @@ export class SessionRegistry {
     return this.#transaction(() => {
       const owner = this.#requireSession(session);
       const bindings = JSON.parse(owner.bindings_json) as Record<string, unknown>;
-      const staleDeviceCleanup = bindings.staleDeviceCleanup as
-        | Record<string, unknown>
-        | null
-        | undefined;
-      if (
-        staleDeviceCleanup &&
-        typeof staleDeviceCleanup.platform === 'string' &&
-        typeof staleDeviceCleanup.deviceId === 'string' &&
-        resources.some(
-          (resource) =>
-            resource.type === 'device' &&
-            resource.key === `${staleDeviceCleanup.platform}:${staleDeviceCleanup.deviceId}`,
-        )
-      ) {
-        throw new SessionAuthorityError(
-          'AUTOMATION_CLEANUP_UNPROVEN',
-          'device rebinding is refused while stale cleanup remains incomplete',
-        );
+      if (resources.some((resource) => resource.type === 'device')) {
+        this.#assertNoStaleDeviceCleanup(bindings);
       }
 
       for (const resource of resources) {
@@ -1145,6 +1129,8 @@ export class SessionRegistry {
     const now = this.#now();
     this.#transaction(() => {
       const current = this.#requireSession(session);
+      const currentBindings = JSON.parse(current.bindings_json) as Record<string, unknown>;
+      this.#assertNoStaleDeviceCleanup(currentBindings);
       const claim = this.#findConflictingClaim(resource);
       if (
         claim &&
@@ -1181,7 +1167,7 @@ export class SessionRegistry {
           now + this.#leaseMs,
         );
       const bindings = {
-        ...(JSON.parse(current.bindings_json) as Record<string, unknown>),
+        ...currentBindings,
         device: input.device,
         install: input.install ?? null,
         bundle: null,
@@ -1290,8 +1276,9 @@ export class SessionRegistry {
    */
   beginStaleResourceRelease(
     session: SessionRef,
-    handle: string,
+    handle: string | undefined,
     workerInstance: string,
+    target?: { platform: string; deviceId: string },
   ): {
     platform: string;
     deviceId: string;
@@ -1302,6 +1289,22 @@ export class SessionRegistry {
     return this.#transaction(() => {
       const current = this.#requireSession(session);
       const bindings = JSON.parse(current.bindings_json) as Record<string, unknown>;
+      if (current.worker_instance !== workerInstance) {
+        throw new SessionAuthorityError(
+          'HANDOFF_TARGET_MISMATCH',
+          'stale device release is not owned by this worker',
+        );
+      }
+      const resumed = bindings.staleDeviceCleanup as Record<string, unknown> | null | undefined;
+      if (resumed) {
+        this.#assertStaleReleaseJournalScope(current, resumed, target);
+        return {
+          platform: String(resumed.platform),
+          deviceId: String(resumed.deviceId),
+          runner: (resumed.runner as Record<string, unknown> | null) ?? null,
+          recorder: (resumed.recorder as Record<string, unknown> | null) ?? null,
+        };
+      }
       const offer = bindings.staleDeviceRelease as Record<string, unknown> | null | undefined;
       if (
         !offer ||
@@ -1311,6 +1314,7 @@ export class SessionRegistry {
         typeof offer.deviceId !== 'string' ||
         typeof offer.priorSessionId !== 'string' ||
         typeof offer.priorClaimEpoch !== 'number' ||
+        typeof handle !== 'string' ||
         !this.#capabilityMatches(offer.token, handle)
       ) {
         throw new SessionAuthorityError(
@@ -1318,30 +1322,17 @@ export class SessionRegistry {
           'stale device release capability is invalid or expired',
         );
       }
-      if (current.worker_instance !== workerInstance) {
-        throw new SessionAuthorityError(
-          'HANDOFF_TARGET_MISMATCH',
-          'stale device release is not owned by this worker',
-        );
-      }
       const platform = offer.platform;
       const deviceId = offer.deviceId;
-      const deviceKey = `${platform}:${deviceId}`;
-      const resumed = bindings.staleDeviceCleanup as Record<string, unknown> | null | undefined;
-      if (
-        resumed &&
-        resumed.platform === platform &&
-        resumed.deviceId === deviceId &&
-        resumed.priorSessionId === offer.priorSessionId &&
-        resumed.priorClaimEpoch === offer.priorClaimEpoch
-      ) {
-        return {
-          platform,
-          deviceId,
-          runner: (resumed.runner as Record<string, unknown> | null) ?? null,
-          recorder: (resumed.recorder as Record<string, unknown> | null) ?? null,
-        };
+      if (target && (target.platform !== platform || target.deviceId !== deviceId)) {
+        throw new SessionAuthorityError(
+          'DEVICE_AUTHORITY_MISMATCH',
+          'stale device release offer does not match the requested exact device',
+          undefined,
+          { axis: 'D', nextAction: 'Run rn_session with action "status" for the exact recovery.' },
+        );
       }
+      const deviceKey = `${platform}:${deviceId}`;
       if (offer.expiresMs < now) {
         throw new SessionAuthorityError(
           'HANDOFF_NOT_AUTHORIZED',
@@ -1543,7 +1534,82 @@ export class SessionRegistry {
         'no stale device release is in progress',
       );
     }
-    return { row, bindings, cleanup: cleanup as Record<string, unknown> };
+    const journal = cleanup as Record<string, unknown>;
+    this.#assertStaleReleaseJournalScope(row, journal);
+    return { row, bindings, cleanup: journal };
+  }
+
+  #assertNoStaleDeviceCleanup(bindings: Record<string, unknown>): void {
+    const cleanup = bindings.staleDeviceCleanup as Record<string, unknown> | null | undefined;
+    if (!cleanup || typeof cleanup.platform !== 'string' || typeof cleanup.deviceId !== 'string') {
+      return;
+    }
+    const platform = JSON.stringify(cleanup.platform);
+    const deviceId = JSON.stringify(cleanup.deviceId);
+    throw new SessionAuthorityError(
+      'AUTOMATION_CLEANUP_UNPROVEN',
+      `stale device cleanup journal for ${cleanup.platform}:${cleanup.deviceId} is incomplete`,
+      undefined,
+      {
+        axis: 'D',
+        nextAction:
+          `Resume it with rn_session({ action: "release_stale_device", platform: ${platform}, ` +
+          `deviceId: ${deviceId} }) before binding any device.`,
+      },
+    );
+  }
+
+  #assertStaleReleaseJournalScope(
+    row: SessionRow,
+    cleanup: Record<string, unknown>,
+    target?: { platform: string; deviceId: string },
+  ): void {
+    if (
+      typeof cleanup.platform !== 'string' ||
+      typeof cleanup.deviceId !== 'string' ||
+      (target && (cleanup.platform !== target.platform || cleanup.deviceId !== target.deviceId))
+    ) {
+      throw new SessionAuthorityError(
+        'DEVICE_AUTHORITY_MISMATCH',
+        'stale device cleanup journal does not match the requested exact device',
+        undefined,
+        { axis: 'D', nextAction: 'Run rn_session with action "status" for the exact recovery.' },
+      );
+    }
+    const deviceKey = `${cleanup.platform}:${cleanup.deviceId}`;
+    const deviceClaim = this.#findClaim('device', deviceKey);
+    if (deviceClaim?.session_id !== row.session_id || deviceClaim.claim_epoch !== row.claim_epoch) {
+      throw new SessionAuthorityError(
+        'DEVICE_AUTHORITY_MISMATCH',
+        'stale device cleanup journal no longer owns its exact device claim',
+      );
+    }
+    for (const resource of ['runner', 'recorder'] as const) {
+      const entry = cleanup[resource];
+      if (
+        !entry ||
+        typeof entry !== 'object' ||
+        typeof (entry as Record<string, unknown>).completedAt === 'number'
+      ) {
+        continue;
+      }
+      const binding = entry as Record<string, unknown>;
+      const claimType = resource === 'runner' ? 'runner' : 'recorder';
+      const expectedKey =
+        resource === 'runner' ? `${deviceKey}:${String(binding.port)}` : deviceKey;
+      const claimKey = String(binding.claimKey ?? '');
+      const claim = this.#findClaim(claimType, claimKey);
+      if (
+        claimKey !== expectedKey ||
+        claim?.session_id !== row.session_id ||
+        claim.claim_epoch !== row.claim_epoch
+      ) {
+        throw new SessionAuthorityError(
+          resource === 'runner' ? 'RUNNER_OWNERSHIP_MISMATCH' : 'RECORDING_AUTHORITY_MISMATCH',
+          `stale ${resource} cleanup journal no longer owns its exact claim`,
+        );
+      }
+    }
   }
 
   #deviceFamilyClaims(deviceKey: string): ClaimRow[] {

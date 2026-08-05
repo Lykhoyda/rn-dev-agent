@@ -66,7 +66,36 @@ export function projectPublicAuthorityStatus(
     | (BoundedHandle & { platform?: unknown; obligations?: unknown })
     | null
     | undefined;
-  const releaseHandle = liveHandle(staleRelease ?? undefined, now);
+  const staleCleanup = status.bindings.staleDeviceCleanup as
+    | {
+        platform?: unknown;
+        deviceId?: unknown;
+        runner?: unknown;
+        recorder?: unknown;
+      }
+    | null
+    | undefined;
+  const cleanupPlatform =
+    typeof staleCleanup?.platform === 'string' ? staleCleanup.platform : undefined;
+  const cleanupDeviceId =
+    typeof staleCleanup?.deviceId === 'string' ? staleCleanup.deviceId : undefined;
+  const cleanupNextAction =
+    cleanupPlatform && cleanupDeviceId
+      ? status.state === 'handoff_cleanup'
+        ? 'rn_session({ action: "adopt_stale", adoptionHandle })'
+        : `rn_session({ action: "release_stale_device", platform: ${JSON.stringify(
+            cleanupPlatform,
+          )}, deviceId: ${JSON.stringify(cleanupDeviceId)} })`
+      : undefined;
+  const releaseHandle = cleanupNextAction ? undefined : liveHandle(staleRelease ?? undefined, now);
+  const pendingCleanupObligations = (['runner', 'recorder'] as const).filter((resource) => {
+    const binding = staleCleanup?.[resource];
+    return (
+      binding !== null &&
+      typeof binding === 'object' &&
+      typeof (binding as Record<string, unknown>).completedAt !== 'number'
+    );
+  });
   const metro = status.bindings.metro as Record<string, unknown> | undefined;
   const metroTerminal = status.bindings.metroTerminal as
     | { code?: unknown; reason?: unknown; phase?: unknown; observedAt?: unknown }
@@ -100,6 +129,16 @@ export function projectPublicAuthorityStatus(
     runnerBound: Boolean(status.bindings.runner),
     recorderBound: Boolean(status.bindings.recorder),
     ...(recoveryStatus ? { recovery: recoveryStatus } : {}),
+    ...(cleanupNextAction
+      ? {
+          staleDeviceCleanup: {
+            platform: cleanupPlatform,
+            deviceId: cleanupDeviceId,
+            obligations: pendingCleanupObligations,
+            nextAction: cleanupNextAction,
+          },
+        }
+      : {}),
     ...(options.recoveryRequirement && options.recoveryRequirement.requirement !== 'none'
       ? {
           recoveryRequirement: {
@@ -109,7 +148,7 @@ export function projectPublicAuthorityStatus(
           },
         }
       : {}),
-    ...(staleRelease
+    ...(staleRelease && !cleanupNextAction
       ? {
           staleDeviceRelease: {
             platform: staleRelease.platform,
@@ -122,6 +161,7 @@ export function projectPublicAuthorityStatus(
               : {
                   expired: true,
                   nextAction:
+                    cleanupNextAction ??
                     'The stale device release offer expired. Re-run rn_session({ action: "bind_device" }) to mint a fresh one.',
                 }),
           },
