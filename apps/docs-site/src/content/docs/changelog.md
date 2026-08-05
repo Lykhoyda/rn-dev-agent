@@ -5,6 +5,30 @@ description: "Release history for rn-dev-agent"
 
 ## Claude plugin
 
+### 0.71.8
+
+#### Patch Changes
+
+- 76a6045: Stop a second supervisor for the same app root from misreading the live owner as a reused PID and stealing its single-instance lock, keep blocked contenders from opening operational children, rotate expired adoption handles so `status` never advertises a capability `adopt_stale` refuses, add a bounded capability-authenticated release for a proven-dead device or runner owner discovered after startup that transfers only the exact device cleanup obligations, and report whether recovery needs a transport restart, an attach, or an adoption.
+- Updated dependencies [76a6045]
+  - rn-dev-agent-core@0.66.8
+
+### 0.71.7
+
+#### Patch Changes
+
+- 3ee229d: Keep managed Metro descendants strict by default while allowing only Expo's canonical runtime-version manifest utility without session capability and requiring exact managed launch provenance.
+- Updated dependencies [3ee229d]
+  - rn-dev-agent-core@0.66.7
+
+### 0.71.6
+
+#### Patch Changes
+
+- 5b0a93f: Keep `.rn-agent` real and worktree-local by inheriting only `.rn-agent/actions` through consented setup and repository-local post-checkout integration, keeping SessionStart report-only, and migrating recognized legacy root links without copying mutable integration or session state.
+- Updated dependencies [5b0a93f]
+  - rn-dev-agent-core@0.66.6
+
 ### 0.71.5
 
 #### Patch Changes
@@ -1262,6 +1286,24 @@ identifier, hittable? }`, with a `fullNodeCount`. Far fewer tokens; `@ref`s for
   #188 shipped these to `main` with no version bump, leaving them undeliverable to marketplace installs; this patch publishes them.
 
 ## Core MCP server
+
+### 0.66.8
+
+#### Patch Changes
+
+- 76a6045: Stop a second supervisor for the same app root from misreading the live owner as a reused PID and stealing its single-instance lock, keep blocked contenders from opening operational children, rotate expired adoption handles so `status` never advertises a capability `adopt_stale` refuses, add a bounded capability-authenticated release for a proven-dead device or runner owner discovered after startup that transfers only the exact device cleanup obligations, and report whether recovery needs a transport restart, an attach, or an adoption.
+
+### 0.66.7
+
+#### Patch Changes
+
+- 3ee229d: Keep managed Metro descendants strict by default while allowing only Expo's canonical runtime-version manifest utility without session capability and requiring exact managed launch provenance.
+
+### 0.66.6
+
+#### Patch Changes
+
+- 5b0a93f: Keep `.rn-agent` real and worktree-local by inheriting only `.rn-agent/actions` through consented setup and repository-local post-checkout integration, keeping SessionStart report-only, and migrating recognized legacy root links without copying mutable integration or session state.
 
 ### 0.66.5
 
