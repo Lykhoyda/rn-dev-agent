@@ -151,3 +151,43 @@ test('replacement clients retain exact-port policy across ordinary entry points'
     globalThis.fetch = originalFetch;
   }
 });
+
+test('only the matching persisted exact-session policy is recoverable', async () => {
+  const client = new CDPClient(ambientPort);
+  assert.equal(
+    client.matchesAuthoritativeSessionPolicy(managedPort, {
+      platform: 'ios',
+      bundleId: 'com.example.app',
+    }),
+    false,
+  );
+  client.setAuthoritativeSessionPolicy({
+    port: managedPort,
+    filters: { platform: 'ios', bundleId: 'com.example.app' },
+    resolveTargetId: async () => 'managed-target',
+    verifyAndReconcile: async () => {},
+  });
+
+  assert.equal(
+    client.matchesAuthoritativeSessionPolicy(managedPort, {
+      platform: 'ios',
+      bundleId: 'COM.EXAMPLE.APP',
+    }),
+    true,
+  );
+  assert.equal(
+    client.matchesAuthoritativeSessionPolicy(ambientPort, {
+      platform: 'ios',
+      bundleId: 'com.example.app',
+    }),
+    false,
+  );
+  assert.equal(
+    client.matchesAuthoritativeSessionPolicy(managedPort, {
+      platform: 'android',
+      bundleId: 'com.example.app',
+    }),
+    false,
+  );
+  await client.disconnect();
+});

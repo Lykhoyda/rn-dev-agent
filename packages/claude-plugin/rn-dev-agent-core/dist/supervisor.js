@@ -18698,6 +18698,20 @@ function createAuthorityGate(runtime, dependencies) {
           tool,
           profile: profile.axes.join("")
         });
+        if (profile.axes.includes("B") && dependencies.recoverRuntimeConnection) {
+          const recovered = await registry2.runWithOperation(operation, () => dependencies.recoverRuntimeConnection(status));
+          if (recovered) {
+            if (!dependencies.refreshRuntimeBinding) {
+              throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", "authoritative reconnect cannot commit without a binding refresh");
+            }
+            const priorBundle = status.bindings.bundle;
+            const metro = status.bindings.metro;
+            const bundle = await dependencies.refreshRuntimeBinding(status);
+            const reconciliation = reconcileRuntimeBundleReplacement(runtime, registry2, operation, status, priorBundle, metro, bundle);
+            operation = reconciliation.operation;
+            status = reconciliation.status;
+          }
+        }
         const initialOperationAuthorityVersion = operation.authorityVersion;
         const before = await Promise.all(profile.axes.map((axis) => dependencies.probe({ axis, phase: "preflight", tool, profile, status, args })));
         const optionalBefore = [];
@@ -57910,6 +57924,10 @@ var init_cdp_client = __esm({
         this._exactDiscoveryPort = void 0;
         this._reconnectDiscover = void 0;
       }
+      matchesAuthoritativeSessionPolicy(port, filters) {
+        const policy = this._authoritativeSessionPolicy;
+        return policy?.port === port && policy.filters.platform === filters.platform && policy.filters.bundleId?.toLowerCase() === filters.bundleId?.toLowerCase();
+      }
       createReplacement(port) {
         const replacement = new _CDPClient(port, this._timeNowFn);
         if (this._authoritativeSessionPolicy) {
@@ -83187,6 +83205,24 @@ var init_index = __esm({
     });
     authorityGate = createAuthorityGate(authorityRuntime, {
       probe: async ({ axis, phase, status, tool, args }) => localAuthorityProbe({ axis, phase, status, tool, args }),
+      recoverRuntimeConnection: async (status) => {
+        const current = getClient();
+        if (current.isConnected)
+          return false;
+        const metro = status.bindings.metro;
+        const device = status.bindings.device;
+        const metroPort = metro?.port;
+        const platform = device?.platform;
+        const appId = device?.appId;
+        if (!Number.isSafeInteger(metroPort) || platform !== "ios" && platform !== "android" || typeof appId !== "string" || !current.matchesAuthoritativeSessionPolicy(Number(metroPort), {
+          platform,
+          bundleId: appId
+        })) {
+          return false;
+        }
+        await current.autoConnect();
+        return true;
+      },
       refreshRuntimeBinding: rebindSessionRuntime,
       relaunchBoundRuntime: relaunchSessionRuntime,
       onRuntimeBundleInvalidated: () => getClient().clearAuthoritativeSessionPolicy(),

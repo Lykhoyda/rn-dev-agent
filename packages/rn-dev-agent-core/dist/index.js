@@ -411,6 +411,27 @@ const localAuthorityProbe = createLocalAuthorityProbe({
 });
 const authorityGate = createAuthorityGate(authorityRuntime, {
     probe: async ({ axis, phase, status, tool, args }) => localAuthorityProbe({ axis, phase, status, tool, args }),
+    recoverRuntimeConnection: async (status) => {
+        const current = getClient();
+        if (current.isConnected)
+            return false;
+        const metro = status.bindings.metro;
+        const device = status.bindings.device;
+        const metroPort = metro?.port;
+        const platform = device?.platform;
+        const appId = device?.appId;
+        if (!Number.isSafeInteger(metroPort) ||
+            (platform !== 'ios' && platform !== 'android') ||
+            typeof appId !== 'string' ||
+            !current.matchesAuthoritativeSessionPolicy(Number(metroPort), {
+                platform,
+                bundleId: appId,
+            })) {
+            return false;
+        }
+        await current.autoConnect();
+        return true;
+    },
     refreshRuntimeBinding: rebindSessionRuntime,
     relaunchBoundRuntime: relaunchSessionRuntime,
     onRuntimeBundleInvalidated: () => getClient().clearAuthoritativeSessionPolicy(),

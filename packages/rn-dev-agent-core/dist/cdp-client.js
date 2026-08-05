@@ -452,6 +452,12 @@ export class CDPClient {
         this._exactDiscoveryPort = undefined;
         this._reconnectDiscover = undefined;
     }
+    matchesAuthoritativeSessionPolicy(port, filters) {
+        const policy = this._authoritativeSessionPolicy;
+        return (policy?.port === port &&
+            policy.filters.platform === filters.platform &&
+            policy.filters.bundleId?.toLowerCase() === filters.bundleId?.toLowerCase());
+    }
     createReplacement(port) {
         const replacement = new CDPClient(port, this._timeNowFn);
         if (this._authoritativeSessionPolicy) {

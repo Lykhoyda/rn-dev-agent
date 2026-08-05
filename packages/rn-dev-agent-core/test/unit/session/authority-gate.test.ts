@@ -128,6 +128,72 @@ test('authoritative tools receive preflight/postflight receipts and an immediate
   assert.equal(calls.at(-1), 'end');
 });
 
+test('restored authoritative sessions reconnect and rebind before B preflight', async () => {
+  const { calls, runtime, status } = fixture();
+  status.bindings.metro.port = 8193;
+  status.bindings.bundle.targetId = 'persisted-target';
+  status.bindings.bundle.connectionGeneration = 1;
+  let recovered = false;
+  const gate = createAuthorityGate(runtime, {
+    recoverRuntimeConnection: async () => {
+      calls.push('recover-runtime');
+      recovered = true;
+      return true;
+    },
+    refreshRuntimeBinding: async () => {
+      calls.push('refresh-binding');
+      return {
+        ...status.bindings.bundle,
+        targetId: 'restored-target',
+        connectionGeneration: 2,
+      };
+    },
+    probe: async ({ axis, phase, status: probedStatus }) => {
+      if (axis === 'B') {
+        assert.equal(recovered, true);
+        assert.equal(probedStatus.bindings.bundle.targetId, 'restored-target');
+        assert.equal(probedStatus.bindings.bundle.connectionGeneration, 2);
+      }
+      calls.push(`${phase}:${axis}`);
+      return { axis, identity: `${axis}-identity` };
+    },
+  });
+
+  const result = await gate.wrap('cdp_console_log', async () => okResult({ entries: [] }))({});
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, true);
+  assert.ok(calls.indexOf('recover-runtime') < calls.indexOf('preflight:B'));
+  assert.ok(calls.indexOf('replace-binding') < calls.indexOf('preflight:B'));
+});
+
+test('disconnected sessions without recoverable policy fail before dispatch', async () => {
+  const { runtime } = fixture();
+  let dispatched = false;
+  const gate = createAuthorityGate(runtime, {
+    recoverRuntimeConnection: async () => false,
+    probe: async ({ axis }) => {
+      if (axis === 'B') {
+        throw new SessionAuthorityError(
+          'BUNDLE_HANDSHAKE_UNAVAILABLE',
+          'persisted exact session policy is unavailable',
+        );
+      }
+      return { axis, identity: `${axis}-identity` };
+    },
+  });
+
+  const result = await gate.wrap('cdp_console_log', async () => {
+    dispatched = true;
+    return okResult({ entries: [] });
+  })({});
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, false);
+  assert.equal(envelope.code, 'BUNDLE_HANDSHAKE_UNAVAILABLE');
+  assert.equal(dispatched, false);
+});
+
 test('postflight drift rejects the result instead of returning a false success', async () => {
   const { runtime } = fixture();
   let postflight = false;

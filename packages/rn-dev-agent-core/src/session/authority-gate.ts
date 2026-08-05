@@ -30,6 +30,7 @@ interface AuthorityGateRuntime {
 
 interface AuthorityGateDependencies {
   probe(input: AuthorityProbeInput): Promise<AuthorityObservation>;
+  recoverRuntimeConnection?(status: SessionStatus): Promise<boolean>;
   refreshRuntimeBinding?(status: SessionStatus): Promise<Record<string, unknown>>;
   relaunchBoundRuntime?(status: SessionStatus): Promise<void>;
   onRunnerReleased?(runner: Record<string, unknown>): Promise<void> | void;
@@ -991,6 +992,33 @@ export function createAuthorityGate(
             tool,
             profile: profile.axes.join(''),
           });
+          if (profile.axes.includes('B') && dependencies.recoverRuntimeConnection) {
+            const recovered = await registry.runWithOperation(operation, () =>
+              dependencies.recoverRuntimeConnection!(status),
+            );
+            if (recovered) {
+              if (!dependencies.refreshRuntimeBinding) {
+                throw new SessionAuthorityError(
+                  'BUNDLE_HANDSHAKE_UNAVAILABLE',
+                  'authoritative reconnect cannot commit without a binding refresh',
+                );
+              }
+              const priorBundle = status.bindings.bundle as Record<string, unknown> | undefined;
+              const metro = status.bindings.metro as Record<string, unknown> | undefined;
+              const bundle = await dependencies.refreshRuntimeBinding(status);
+              const reconciliation = reconcileRuntimeBundleReplacement(
+                runtime,
+                registry,
+                operation,
+                status,
+                priorBundle,
+                metro,
+                bundle,
+              );
+              operation = reconciliation.operation;
+              status = reconciliation.status;
+            }
+          }
           const initialOperationAuthorityVersion = operation.authorityVersion;
           const before = await Promise.all(
             profile.axes.map((axis) =>

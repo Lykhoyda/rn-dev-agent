@@ -634,6 +634,18 @@ export class CDPClient {
     this._reconnectDiscover = undefined;
   }
 
+  matchesAuthoritativeSessionPolicy(
+    port: number,
+    filters: Pick<ConnectFilters, 'platform' | 'bundleId'>,
+  ): boolean {
+    const policy = this._authoritativeSessionPolicy;
+    return (
+      policy?.port === port &&
+      policy.filters.platform === filters.platform &&
+      policy.filters.bundleId?.toLowerCase() === filters.bundleId?.toLowerCase()
+    );
+  }
+
   createReplacement(port: number): CDPClient {
     const replacement = new CDPClient(port, this._timeNowFn);
     if (this._authoritativeSessionPolicy) {
