@@ -563,6 +563,7 @@ export class CDPClient {
       typeof filtersOrPlatform === 'string'
         ? { platform: filtersOrPlatform }
         : (filtersOrPlatform ?? {});
+    this._reconnectDiscover = undefined;
     return autoConnectFn(this.buildConnectCtx(), portHint, filters, intent);
   }
 
@@ -575,6 +576,7 @@ export class CDPClient {
     filters: ConnectFilters,
     intent: ConnectIntent = 'default',
   ): Promise<string> {
+    this._reconnectDiscover = discoverExactPort;
     return autoConnectFn(this.buildConnectCtx(), port, filters, intent, discoverExactPort);
   }
 
@@ -583,9 +585,15 @@ export class CDPClient {
   }
 
   private _connectFilters: ConnectFilters = {};
+  private _reconnectDiscover: typeof discoverExactPort | undefined;
 
   private async discoverAndConnect(portHint?: number, filters?: ConnectFilters): Promise<string> {
-    return discoverAndConnectFn(this.buildConnectCtx(), portHint, filters);
+    return discoverAndConnectFn(
+      this.buildConnectCtx(),
+      portHint,
+      filters,
+      this._reconnectDiscover,
+    );
   }
 
   async softReconnect(): Promise<string> {

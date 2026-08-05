@@ -53384,20 +53384,23 @@ var CDPClient = class {
   }
   async autoConnect(portHint, filtersOrPlatform, intent = "default") {
     const filters = typeof filtersOrPlatform === "string" ? { platform: filtersOrPlatform } : filtersOrPlatform ?? {};
+    this._reconnectDiscover = void 0;
     return autoConnect(this.buildConnectCtx(), portHint, filters, intent);
   }
   async listTargets(portHint) {
     return discoverForList(this._port, portHint);
   }
   async connectExact(port, filters, intent = "default") {
+    this._reconnectDiscover = discoverExactPort;
     return autoConnect(this.buildConnectCtx(), port, filters, intent, discoverExactPort);
   }
   async listTargetsExact(port) {
     return listTargetsOnExactPort(port);
   }
   _connectFilters = {};
+  _reconnectDiscover;
   async discoverAndConnect(portHint, filters) {
-    return discoverAndConnect(this.buildConnectCtx(), portHint, filters);
+    return discoverAndConnect(this.buildConnectCtx(), portHint, filters, this._reconnectDiscover);
   }
   async softReconnect() {
     const wasProxyActive = this._proxyUrl !== null;

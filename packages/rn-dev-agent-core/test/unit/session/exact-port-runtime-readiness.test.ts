@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { CDPClient } from '../../../dist/cdp-client.js';
 import { discoverExactPort, listTargetsOnExactPort } from '../../../dist/cdp/discovery.js';
 
 const managedPort = 8341;
@@ -58,6 +59,35 @@ test('exact-port listing rejects a target whose debugger URL escapes the managed
     const result = await listTargetsOnExactPort(managedPort);
     assert.deepEqual(result, { port: managedPort, targets: [] });
   } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('exact-port discovery survives reconnects until an ordinary connect replaces it', async () => {
+  const requested: string[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string | URL | Request) => {
+    const requestUrl = String(url);
+    requested.push(requestUrl);
+    if (requestUrl.endsWith('/status')) {
+      return { text: async () => 'packager-status:running' } as Response;
+    }
+    return { json: async () => [] } as unknown as Response;
+  }) as typeof fetch;
+  const client = new CDPClient(managedPort);
+  try {
+    const filters = { bundleId: 'com.example.app', targetId: 'managed-target' };
+    await assert.rejects(client.connectExact(managedPort, filters));
+
+    requested.length = 0;
+    await assert.rejects(client.softReconnect());
+    assert.deepEqual(requested, [`http://127.0.0.1:${managedPort}/json/list`]);
+
+    requested.length = 0;
+    await assert.rejects(client.autoConnect(ambientPort, filters));
+    assert.equal(requested.some((url) => url.endsWith(`:${ambientPort}/status`)), true);
+  } finally {
+    await client.disconnect();
     globalThis.fetch = originalFetch;
   }
 });
