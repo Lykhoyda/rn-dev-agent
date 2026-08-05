@@ -63,7 +63,7 @@ test('exact-port listing rejects a target whose debugger URL escapes the managed
   }
 });
 
-test('exact-port discovery survives reconnects until an ordinary connect replaces it', async () => {
+test('exact-port discovery survives reconnects and ordinary entry points for the client lifetime', async () => {
   const requested: string[] = [];
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (url: string | URL | Request) => {
@@ -85,10 +85,7 @@ test('exact-port discovery survives reconnects until an ordinary connect replace
 
     requested.length = 0;
     await assert.rejects(client.autoConnect(ambientPort, filters));
-    assert.equal(
-      requested.some((url) => url.endsWith(`:${ambientPort}/status`)),
-      true,
-    );
+    assert.deepEqual(requested, [`http://127.0.0.1:${managedPort}/json/list`]);
   } finally {
     await client.disconnect();
     globalThis.fetch = originalFetch;

@@ -409,14 +409,14 @@ export class CDPClient {
         const filters = typeof filtersOrPlatform === 'string'
             ? { platform: filtersOrPlatform }
             : (filtersOrPlatform ?? {});
-        this._reconnectDiscover = undefined;
-        return autoConnectFn(this.buildConnectCtx(), portHint, filters, intent);
+        return autoConnectFn(this.buildConnectCtx(), this._exactDiscoveryPort ?? portHint, filters, intent, this._reconnectDiscover);
     }
     async listTargets(portHint) {
         return discoverForList(this._port, portHint);
     }
     async connectExact(port, filters, intent = 'default') {
         this._reconnectDiscover = discoverExactPort;
+        this._exactDiscoveryPort = port;
         return autoConnectFn(this.buildConnectCtx(), port, filters, intent, discoverExactPort);
     }
     async listTargetsExact(port) {
@@ -424,8 +424,9 @@ export class CDPClient {
     }
     _connectFilters = {};
     _reconnectDiscover;
+    _exactDiscoveryPort;
     async discoverAndConnect(portHint, filters) {
-        return discoverAndConnectFn(this.buildConnectCtx(), portHint, filters, this._reconnectDiscover);
+        return discoverAndConnectFn(this.buildConnectCtx(), this._exactDiscoveryPort ?? portHint, filters, this._reconnectDiscover);
     }
     async softReconnect() {
         // B132: if the proxy is active, suspend it first so the reconnect goes

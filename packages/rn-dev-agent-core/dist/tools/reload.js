@@ -52,7 +52,9 @@ export async function forceReconnect(oldClient, setClient, createClient, capture
                 ? { targetId: await resolveExactTargetId(newClient, captured, authorityTarget) }
                 : {}),
         };
-        await raceWithTimeout(newClient.autoConnect(captured.port, filters), FORCE_FALLBACK_TIMEOUT_MS, 'force_reconnect');
+        await raceWithTimeout(authorityTarget
+            ? newClient.connectExact(captured.port, filters)
+            : newClient.autoConnect(captured.port, filters), FORCE_FALLBACK_TIMEOUT_MS, 'force_reconnect');
     }
     catch (err) {
         newClient.disconnect().catch(swallow);
@@ -64,7 +66,7 @@ export async function forceReconnect(oldClient, setClient, createClient, capture
     return { ok: true, platformMatched, finalPlatform };
 }
 async function resolveExactReloadTargetId(client, captured, authorityTarget, execute) {
-    const listed = await client.listTargets(captured.port);
+    const listed = await client.listTargetsExact(captured.port);
     if (listed.port !== captured.port) {
         throw new Error('CDP_TARGET_AUTHORITY_MISMATCH: reload target discovery escaped the allocated Metro port');
     }

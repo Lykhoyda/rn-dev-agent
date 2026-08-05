@@ -57854,14 +57854,14 @@ var init_cdp_client = __esm({
       }
       async autoConnect(portHint, filtersOrPlatform, intent = "default") {
         const filters = typeof filtersOrPlatform === "string" ? { platform: filtersOrPlatform } : filtersOrPlatform ?? {};
-        this._reconnectDiscover = void 0;
-        return autoConnect(this.buildConnectCtx(), portHint, filters, intent);
+        return autoConnect(this.buildConnectCtx(), this._exactDiscoveryPort ?? portHint, filters, intent, this._reconnectDiscover);
       }
       async listTargets(portHint) {
         return discoverForList(this._port, portHint);
       }
       async connectExact(port, filters, intent = "default") {
         this._reconnectDiscover = discoverExactPort;
+        this._exactDiscoveryPort = port;
         return autoConnect(this.buildConnectCtx(), port, filters, intent, discoverExactPort);
       }
       async listTargetsExact(port) {
@@ -57869,8 +57869,9 @@ var init_cdp_client = __esm({
       }
       _connectFilters = {};
       _reconnectDiscover;
+      _exactDiscoveryPort;
       async discoverAndConnect(portHint, filters) {
-        return discoverAndConnect(this.buildConnectCtx(), portHint, filters, this._reconnectDiscover);
+        return discoverAndConnect(this.buildConnectCtx(), this._exactDiscoveryPort ?? portHint, filters, this._reconnectDiscover);
       }
       async softReconnect() {
         const wasProxyActive = this._proxyUrl !== null;
@@ -58756,7 +58757,7 @@ async function forceReconnect(oldClient, setClient2, createClient2, captured, au
       bundleId: authorityTarget?.appId ?? captured.bundleId,
       ...authorityTarget && resolveExactTargetId ? { targetId: await resolveExactTargetId(newClient, captured, authorityTarget) } : {}
     };
-    await raceWithTimeout(newClient.autoConnect(captured.port, filters), FORCE_FALLBACK_TIMEOUT_MS, "force_reconnect");
+    await raceWithTimeout(authorityTarget ? newClient.connectExact(captured.port, filters) : newClient.autoConnect(captured.port, filters), FORCE_FALLBACK_TIMEOUT_MS, "force_reconnect");
   } catch (err) {
     newClient.disconnect().catch(swallow);
     setClient2(createClient2(captured.port));
@@ -58767,7 +58768,7 @@ async function forceReconnect(oldClient, setClient2, createClient2, captured, au
   return { ok: true, platformMatched, finalPlatform };
 }
 async function resolveExactReloadTargetId(client2, captured, authorityTarget, execute) {
-  const listed = await client2.listTargets(captured.port);
+  const listed = await client2.listTargetsExact(captured.port);
   if (listed.port !== captured.port) {
     throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: reload target discovery escaped the allocated Metro port");
   }
@@ -78552,6 +78553,30 @@ import { promisify as promisify26 } from "node:util";
 function safeSimctlTarget(deviceId) {
   return deviceId && SIMULATOR_UDID_RE.test(deviceId) ? deviceId : null;
 }
+async function resolveExactRestartTargetId(client2, input, execute) {
+  const listed = await client2.listTargetsExact(input.metroPort);
+  if (listed.port !== input.metroPort) {
+    throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: restart target discovery escaped the allocated Metro port");
+  }
+  const sessionCandidates = listed.targets.filter((candidate) => targetMatchesSession(candidate, {
+    platform: input.platform,
+    bundleId: input.appId
+  }));
+  const exactCandidates = await filterTargetsForExactDevice({
+    platform: input.platform,
+    deviceId: input.deviceId,
+    targets: sessionCandidates
+  }, {
+    execute: async (file, args) => {
+      const result = await execute(file, args, { timeout: 5e3 });
+      return { stdout: result.stdout };
+    }
+  });
+  if (exactCandidates.length !== 1) {
+    throw new Error(`CDP_TARGET_AUTHORITY_MISMATCH: expected one restart target on the exact device, found ${exactCandidates.length}`);
+  }
+  return exactCandidates[0].id;
+}
 function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) {
   const execFile27 = deps.execFile ?? defaultExecFile3;
   const stopFastRunner2 = deps.stopFastRunner ?? stopFastRunner;
@@ -78561,6 +78586,7 @@ function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) 
   const probeAppInstalledFn = deps.probeAppInstalled ?? probeAppInstalled;
   const snapshotHintFn = deps.snapshotHint ?? snapshotHintForBundleId;
   const resetDetachedBudgetFn = deps.resetDetachedBudget ?? resetDetachedRecoveryCounter;
+  const resolveExactTargetId = deps.resolveExactTargetId ?? ((client2, input) => resolveExactRestartTargetId(client2, input, execFile27));
   async function doRestart(args) {
     try {
       logger.info("MCP", `cdp_restart: in-process state reset requested (hardReset=${!!args.hardReset})`);
@@ -78657,9 +78683,21 @@ function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) 
       let connected = false;
       let connectError;
       try {
-        await newClient.autoConnect(args.metroPort, {
-          platform: args.platform,
-          bundleId: args.appId
+        const reconnectPort = args.metroPort ?? preservedPort;
+        const reconnectPlatform = targetPlatform === "ios" || targetPlatform === "android" ? targetPlatform : null;
+        if (!reconnectPlatform || !args.deviceId || !args.appId || !isValidBundleId(args.appId)) {
+          throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: restart requires the exact session port, platform, device, and app");
+        }
+        const targetId = await resolveExactTargetId(newClient, {
+          metroPort: reconnectPort,
+          platform: reconnectPlatform,
+          deviceId: args.deviceId,
+          appId: args.appId
+        });
+        await newClient.connectExact(reconnectPort, {
+          platform: reconnectPlatform,
+          bundleId: args.appId,
+          targetId
         });
         connected = newClient.isConnected;
       } catch (err) {
@@ -78710,6 +78748,8 @@ var init_restart = __esm({
     init_recover_detached();
     init_resolve_ios_app_file();
     init_maestro_validator();
+    init_status();
+    init_target_device_authority();
     defaultExecFile3 = promisify26(execFileCb20);
     SIMULATOR_UDID_RE = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
     inflightRestart = null;

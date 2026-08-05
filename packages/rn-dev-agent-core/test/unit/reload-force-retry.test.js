@@ -1,6 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { captureClientState, forceReconnect } from '../../dist/tools/reload.js';
+import {
+  captureClientState,
+  forceReconnect,
+  recoverAfterFailedReconnect,
+} from '../../dist/tools/reload.js';
 
 // Mock CDPClient with the surface forceReconnect / captureClientState consume.
 // `autoConnectImpl` runs on the NEW client created via createClient() — not the old one.
@@ -11,9 +15,16 @@ function makeMockClient(opts = {}) {
     proxyDesired = false,
     disconnectImpl,
     autoConnectImpl,
+    exactTargets = [],
   } = opts;
 
-  const calls = { disconnect: 0, autoConnect: 0, lastFilters: undefined };
+  const calls = {
+    disconnect: 0,
+    autoConnect: 0,
+    connectExact: 0,
+    listTargetsExact: 0,
+    lastFilters: undefined,
+  };
   let connectedTarget = target;
 
   const client = {
@@ -41,6 +52,22 @@ function makeMockClient(opts = {}) {
         return result?.message ?? 'connected';
       }
       return 'connected';
+    },
+    connectExact: async (portHint, filters) => {
+      calls.connectExact += 1;
+      calls.lastFilters = filters;
+      if (autoConnectImpl) {
+        const result = await autoConnectImpl(portHint, filters);
+        if (result && result.connectedTarget !== undefined) {
+          connectedTarget = result.connectedTarget;
+        }
+        return result?.message ?? 'connected';
+      }
+      return 'connected';
+    },
+    listTargetsExact: async (portHint) => {
+      calls.listTargetsExact += 1;
+      return { port: portHint, targets: exactTargets };
     },
   };
 
@@ -173,7 +200,65 @@ test('forceReconnect: authority-scoped discovery supplies only the exact-device 
   );
 
   assert.equal(resolverClient, newClient);
+  assert.equal(newCalls.autoConnect, 0);
+  assert.equal(newCalls.connectExact, 1);
   assert.deepEqual(newCalls.lastFilters, {
+    platform: 'ios',
+    bundleId: 'com.example',
+    targetId: 'exact-target',
+  });
+});
+
+test('authority reload recovery lists and connects only on the exact managed port', async () => {
+  const deviceId = 'A7D2C7C9-A7DE-474D-95F2-7D2DF0EE44D3';
+  const { client: oldClient } = makeMockClient({
+    port: 8341,
+    target: { id: 'old', platform: 'ios', description: 'com.example' },
+  });
+  const { client: newClient, calls } = makeMockClient({
+    port: 8341,
+    exactTargets: [
+      {
+        id: 'exact-target',
+        platform: 'ios',
+        description: 'com.example',
+        appId: 'com.example',
+        deviceName: 'Owned Simulator',
+      },
+    ],
+    autoConnectImpl: async () => ({
+      connectedTarget: { id: 'exact-target', platform: 'ios', description: 'com.example' },
+    }),
+  });
+  const captured = captureClientState(oldClient);
+
+  const result = await recoverAfterFailedReconnect(
+    () => oldClient,
+    () => {},
+    () => newClient,
+    captured,
+    {
+      execFile: async (file, args) => {
+        assert.equal(file, 'xcrun');
+        assert.deepEqual(args, ['simctl', 'list', 'devices', '--json']);
+        return {
+          stdout: JSON.stringify({
+            devices: {
+              runtime: [{ udid: deviceId, name: 'Owned Simulator', state: 'Booted' }],
+            },
+          }),
+          stderr: '',
+        };
+      },
+    },
+    { platform: 'ios', deviceId, appId: 'com.example' },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(calls.listTargetsExact, 1);
+  assert.equal(calls.autoConnect, 0);
+  assert.equal(calls.connectExact, 1);
+  assert.deepEqual(calls.lastFilters, {
     platform: 'ios',
     bundleId: 'com.example',
     targetId: 'exact-target',

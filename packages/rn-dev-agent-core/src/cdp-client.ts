@@ -563,8 +563,13 @@ export class CDPClient {
       typeof filtersOrPlatform === 'string'
         ? { platform: filtersOrPlatform }
         : (filtersOrPlatform ?? {});
-    this._reconnectDiscover = undefined;
-    return autoConnectFn(this.buildConnectCtx(), portHint, filters, intent);
+    return autoConnectFn(
+      this.buildConnectCtx(),
+      this._exactDiscoveryPort ?? portHint,
+      filters,
+      intent,
+      this._reconnectDiscover,
+    );
   }
 
   async listTargets(portHint?: number): Promise<{ port: number; targets: HermesTarget[] }> {
@@ -577,6 +582,7 @@ export class CDPClient {
     intent: ConnectIntent = 'default',
   ): Promise<string> {
     this._reconnectDiscover = discoverExactPort;
+    this._exactDiscoveryPort = port;
     return autoConnectFn(this.buildConnectCtx(), port, filters, intent, discoverExactPort);
   }
 
@@ -586,9 +592,15 @@ export class CDPClient {
 
   private _connectFilters: ConnectFilters = {};
   private _reconnectDiscover: typeof discoverExactPort | undefined;
+  private _exactDiscoveryPort: number | undefined;
 
   private async discoverAndConnect(portHint?: number, filters?: ConnectFilters): Promise<string> {
-    return discoverAndConnectFn(this.buildConnectCtx(), portHint, filters, this._reconnectDiscover);
+    return discoverAndConnectFn(
+      this.buildConnectCtx(),
+      this._exactDiscoveryPort ?? portHint,
+      filters,
+      this._reconnectDiscover,
+    );
   }
 
   async softReconnect(): Promise<string> {
