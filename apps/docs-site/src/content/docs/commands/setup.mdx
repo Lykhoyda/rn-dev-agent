@@ -28,12 +28,16 @@ passive phase.
 
 | Step | Behavior |
 |---|---|
+| Worktree actions | Keep `.rn-agent/` real and local; preview and request consent before inheriting only `.rn-agent/actions` or installing repository-local post-checkout integration |
 | Instructions | Create/append/refresh only the host's managed block; preserve all user content outside it |
 | Navigation | Prefer fiber discovery; preview minimal dev-bridge registration only on a proven miss |
 | Zustand | Preview one `registerStores` bridge call when stores exist and are not already exposed |
-| Scaffold | Add `.rn-agent` safely; never overwrite user files or write through a symlink-inherited corpus |
+| Scaffold | Add `.rn-agent` safely; never overwrite user files, write through a root symlink, or replace the supported actions link |
 | TypeScript | Preview missing dev-bridge/global include entries |
 | Active verification | Optionally call `cdp_status` after setup; unavailable Metro/device is deferred, not a diagnosis mutation |
+
+SessionStart only reports missing or unsafe inheritance. Doctor inspects the
+same state read-only; setup owns every link, legacy migration, and hook change.
 
 Re-running setup is idempotent. Malformed/duplicate instruction sentinels fail
 closed rather than risking user content.
