@@ -102,43 +102,23 @@ test('device_batch threads per-step settle opts into runNative (2500ms budget, s
   }
 });
 
-test('device_fill pins press and fill to pre-resolved coords', async () => {
-  const { _setActiveSessionForTest, _setRunAgentDeviceForTest } =
-    await import('../../dist/agent-device-wrapper.js');
-  const { updateRefMapFromFlat, clearRefMap } = await import('../../dist/fast-runner-ref-map.js');
-  const { createDeviceFillHandler } = await import('../../dist/tools/device-interact.js');
-  const { okResult } = await import('../../dist/utils.js');
-  _setActiveSessionForTest({ platform: 'ios', deviceId: 'TEST-UDID', appId: 'com.test' });
-  updateRefMapFromFlat([
-    {
-      ref: '@e3',
-      type: 'TextField',
-      identifier: 'email',
-      rect: { x: 100, y: 220, width: 200, height: 40 },
-    },
+test('exact fill carries descriptor identity without geometry or a separate pre-tap', async () => {
+  const { buildRunIOSArgs } = await import('../../dist/agent-device-wrapper.js');
+  const text = 'hi';
+  const args = buildRunIOSArgs([
+    'fill',
+    '@exact-fill',
+    '--text-base64',
+    Buffer.from(text, 'utf8').toString('base64'),
+    '--exact-id',
+    'email',
+    '--exact-type',
+    'TextField',
   ]);
-  const calls = [];
-  _setRunAgentDeviceForTest(async (cliArgs, opts) => {
-    calls.push({ cliArgs, opts });
-    return okResult({});
-  });
-  try {
-    const handler = createDeviceFillHandler(() => ({ isConnected: false }));
-    await handler({ ref: '@e3', text: 'hi', waitForKeyboardMs: 0 });
-    const press = calls.find((c) => c.cliArgs[0] === 'press');
-    assert.deepEqual(press.cliArgs, ['press', '200', '240']); // center of seeded rect
-    const fill = calls.find((c) => c.cliArgs[0] === 'fill');
-    assert.ok(
-      fill.cliArgs.includes('--at-x') && fill.cliArgs.includes('--at-y'),
-      'fill not pinned',
-    );
-    assert.deepEqual(
-      fill.cliArgs.slice(fill.cliArgs.indexOf('--at-x'), fill.cliArgs.indexOf('--at-x') + 4),
-      ['--at-x', '200', '--at-y', '240'],
-    );
-  } finally {
-    _setRunAgentDeviceForTest(null);
-    _setActiveSessionForTest(null);
-    clearRefMap();
-  }
+  assert.equal(args.command, 'type');
+  assert.equal(args.text, text);
+  assert.equal(args.exactIdentifier, 'email');
+  assert.equal(args.exactType, 'TextField');
+  assert.equal(args.x, undefined);
+  assert.equal(args.y, undefined);
 });

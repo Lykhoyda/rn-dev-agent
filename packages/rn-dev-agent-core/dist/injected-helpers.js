@@ -2120,6 +2120,179 @@ export const INJECTED_HELPERS = `
     }, 100000);
   }
 
+  // GH #581: one controlled TextInput owner performs the entire fill. The
+  // requested value arrives as UTF-16 code units so Runtime.evaluate logs never
+  // contain user text. No requested or observed value leaves this helper.
+  function fillControlledInput(testID, textUnits) {
+    function result(kind, extra) {
+      var out = { kind: kind };
+      if (extra) for (var key in extra) out[key] = extra[key];
+      return out;
+    }
+    function decodeUnits(units) {
+      if (!Array.isArray(units)) throw new Error('encoded text is required');
+      var chunks = [];
+      for (var i = 0; i < units.length; i += 4096) {
+        chunks.push(String.fromCharCode.apply(null, units.slice(i, i + 4096)));
+      }
+      return chunks.join('');
+    }
+    function typeName(fiber) {
+      if (!fiber || !fiber.type) return '';
+      if (typeof fiber.type === 'string') return fiber.type;
+      return fiber.type.displayName || fiber.type.name || '';
+    }
+    function isTextInputFiber(fiber) {
+      return /TextInput|TextField|EditText|RCTSinglelineTextInputView|RCTMultilineTextInputView/i.test(typeName(fiber));
+    }
+    function collectByTestID(id) {
+      var matches = [];
+      var scanned = 0;
+      var truncated = false;
+      forEachRootFiber(function(rootFiber) {
+        var stack = [rootFiber];
+        while (stack.length) {
+          if (++scanned > 40000) { truncated = true; return true; }
+          var f = stack.pop();
+          if (!f) continue;
+          var p = f.memoizedProps;
+          if (p && (p.testID === id || p.nativeID === id)) matches.push(f);
+          if (f.sibling) stack.push(f.sibling);
+          if (f.child) stack.push(f.child);
+        }
+        return truncated ? true : null;
+      });
+      return { matches: matches, truncated: truncated };
+    }
+    function dedupeControlled(matches) {
+      var owners = [];
+      for (var i = 0; i < matches.length; i++) {
+        var fiber = matches[i];
+        var props = fiber.memoizedProps || {};
+        if (!isTextInputFiber(fiber) || typeof props.onChangeText !== 'function' || typeof props.value !== 'string') continue;
+        var duplicate = false;
+        for (var j = 0; j < owners.length; j++) {
+          var otherProps = owners[j].memoizedProps || {};
+          if (otherProps.onChangeText === props.onChangeText) { duplicate = true; break; }
+        }
+        if (!duplicate) owners.push(fiber);
+      }
+      return owners;
+    }
+    function publicInstance(fiber) {
+      var stack = [fiber], visited = 0;
+      while (stack.length && ++visited <= 200) {
+        var f = stack.pop();
+        if (!f) continue;
+        var instance = f.stateNode;
+        if (instance && typeof instance.focus !== 'function' && instance.canonical && instance.canonical.publicInstance) {
+          instance = instance.canonical.publicInstance;
+        }
+        if (instance && typeof instance.focus === 'function' && typeof instance.isFocused === 'function') return instance;
+        if (f.sibling && f !== fiber) stack.push(f.sibling);
+        if (f.child) stack.push(f.child);
+      }
+      return null;
+    }
+    function sameOwner(left, right) {
+      return left === right || left === right.alternate || left.alternate === right;
+    }
+    function resolveOwner() {
+      var selected = collectByTestID(testID);
+      if (selected.truncated) return { failure: result('failure', { code: 'TEXT_ENTRY_UNVERIFIED', mutation: 'none', reason: 'unreadable' }) };
+      var ownerMatches = selected.matches;
+      var wrapper = /-pressable$/.test(testID);
+      if (wrapper) {
+        if (selected.matches.length !== 1) {
+          return { failure: result('failure', { code: 'NO_TEXT_INPUT_TARGET', mutation: 'none', reason: selected.matches.length ? 'ambiguous' : 'target-lost' }) };
+        }
+        var base = testID.slice(0, -'-pressable'.length);
+        var inner = collectByTestID(base);
+        if (inner.truncated) return { failure: result('failure', { code: 'TEXT_ENTRY_UNVERIFIED', mutation: 'none', reason: 'unreadable' }) };
+        ownerMatches = inner.matches;
+      }
+      var owners = dedupeControlled(ownerMatches);
+      if (owners.length > 1) return { failure: result('failure', { code: 'NO_TEXT_INPUT_TARGET', mutation: 'none', reason: 'ambiguous' }) };
+      if (owners.length === 0) {
+        if (wrapper) return { failure: result('failure', { code: 'NO_TEXT_INPUT_TARGET', mutation: 'none', reason: 'not-controlled' }) };
+        var textInputs = ownerMatches.filter(isTextInputFiber);
+        if (textInputs.length === 1) return { nativeEligible: true };
+        return { failure: result('failure', { code: 'NO_TEXT_INPUT_TARGET', mutation: 'none', reason: textInputs.length ? 'ambiguous' : 'target-lost' }) };
+      }
+      var owner = owners[0];
+      var props = owner.memoizedProps || {};
+      if (props.secureTextEntry === true) return { failure: result('failure', { code: 'TEXT_ENTRY_UNVERIFIED', mutation: 'none', reason: 'secure' }) };
+      if (props.editable === false || props.disabled === true || props.accessibilityElementsHidden === true || props.importantForAccessibility === 'no-hide-descendants') {
+        return { failure: result('failure', { code: 'TEXT_ENTRY_UNVERIFIED', mutation: 'none', reason: 'occluded' }) };
+      }
+      var instance = publicInstance(owner);
+      if (!instance) return { failure: result('failure', { code: 'TEXT_ENTRY_UNVERIFIED', mutation: 'none', reason: 'unreadable' }) };
+      return { owner: owner, instance: instance };
+    }
+
+    return new Promise(function(resolve) {
+      var requested;
+      try { requested = decodeUnits(textUnits); }
+      catch (_) { resolve(result('failure', { code: 'INVALID_ARGUMENT', mutation: 'none', reason: 'unreadable' })); return; }
+      var initial = resolveOwner();
+      if (initial.failure) { resolve(initial.failure); return; }
+      if (initial.nativeEligible) { resolve(result('native-eligible')); return; }
+      var owner = initial.owner;
+      var instance = initial.instance;
+      var before = owner.memoizedProps.value;
+      var focusedBefore = false;
+      try { focusedBefore = instance.isFocused() === true; } catch (_) {}
+      var focusDeadline = Date.now() + 600;
+
+      function validateOwner() {
+        var current = resolveOwner();
+        if (current.failure || current.nativeEligible || !sameOwner(owner, current.owner)) return null;
+        owner = current.owner;
+        instance = current.instance;
+        return current;
+      }
+      function waitForFocus() {
+        var current = validateOwner();
+        if (!current) { resolve(result('failure', { code: 'TEXT_TARGET_LOST', mutation: 'none', reason: 'target-lost' })); return; }
+        var focused = false;
+        try { focused = instance.isFocused() === true; } catch (_) {}
+        if (focused) { dispatchOnce(); return; }
+        if (Date.now() >= focusDeadline) { resolve(result('failure', { code: 'TEXT_TARGET_FOCUS_FAILED', mutation: 'none', reason: 'focus-unproven' })); return; }
+        setTimeout(waitForFocus, 40);
+      }
+      function dispatchOnce() {
+        var current = validateOwner();
+        if (!current) { resolve(result('failure', { code: 'TEXT_TARGET_LOST', mutation: 'none', reason: 'target-lost' })); return; }
+        try { owner.memoizedProps.onChangeText(requested); }
+        catch (_) { resolve(result('failure', { code: 'TEXT_ENTRY_UNVERIFIED', mutation: 'possible', reason: 'dispatch-uncertain' })); return; }
+        var attempts = 0;
+        var consecutiveExact = 0;
+        var observedChanged = false;
+        function verify() {
+          attempts++;
+          var resolvedOwner = validateOwner();
+          if (!resolvedOwner) { resolve(result('failure', { code: 'TEXT_TARGET_LOST', mutation: 'possible', reason: 'target-lost' })); return; }
+          var value = owner.memoizedProps && owner.memoizedProps.value;
+          if (typeof value !== 'string') { resolve(result('failure', { code: 'TEXT_ENTRY_UNVERIFIED', mutation: 'possible', reason: 'unreadable' })); return; }
+          if (value !== before) observedChanged = true;
+          if (value === requested) consecutiveExact++; else consecutiveExact = 0;
+          if (consecutiveExact >= 2) { resolve(result('success', { focusedBefore: focusedBefore })); return; }
+          if (attempts >= 6) {
+            resolve(result('failure', { code: 'TEXT_ENTRY_UNVERIFIED', mutation: observedChanged ? 'observed' : 'possible', reason: 'mismatch' }));
+            return;
+          }
+          setTimeout(verify, 80);
+        }
+        verify();
+      }
+
+      if (focusedBefore) { dispatchOnce(); return; }
+      try { instance.focus(); }
+      catch (_) { resolve(result('failure', { code: 'TEXT_TARGET_FOCUS_FAILED', mutation: 'none', reason: 'focus-unproven' })); return; }
+      waitForFocus();
+    });
+  }
+
   function readInputValue(testID) {
     if (!testID) return JSON.stringify({ __agent_error: 'testID is required' });
     var target = null;
@@ -2856,6 +3029,7 @@ export const INJECTED_HELPERS = `
     getStoreState: getStoreState,
     getComponentState: getComponentState,
     readInputValue: readInputValue,
+    fillControlledInput: fillControlledInput,
     dispatchAction: dispatchAction,
     getErrors: getErrors,
     clearErrors: clearErrors,

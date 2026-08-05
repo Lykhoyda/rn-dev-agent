@@ -8,9 +8,11 @@ import android.accessibilityservice.AccessibilityServiceInfo
 import android.app.Instrumentation
 import android.content.Intent
 import android.graphics.Rect
+import android.os.Build
+import android.os.Bundle
 import android.os.SystemClock
 import android.util.Base64
-import android.view.KeyEvent
+import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.StaleObjectException
@@ -31,10 +33,12 @@ import kotlin.math.roundToInt
 
 class NoFocusedInputException(message: String) : IllegalStateException(message)
 
-// Story 10 (#391): the focused field ignored ACTION_SET_TEXT (and any
-// applicable keyevent fallback) — distinct from "no focused field" so the
-// bridge descends its fill ladder instead of re-tapping a healthy focus.
-class SetTextRejectedException(message: String) : IllegalStateException(message)
+class ExactFillException(
+    val fillCode: String,
+    val mutation: String,
+    val reason: String,
+    message: String,
+) : IllegalStateException(message)
 
 class SnapshotParseException(message: String) : IllegalStateException(message)
 class AccessibilityUnavailableException(message: String) : IllegalStateException(message)
@@ -252,105 +256,198 @@ class CommandDispatcher(
 
     private fun type(cmd: JSONObject): JSONObject {
         val text = cmd.optString("text")
-        if (cmd.has("x") && cmd.has("y")) {
-            device.click(cmd.getDouble("x").roundToInt(), cmd.getDouble("y").roundToInt())
+        val exactIdentifier = cmd.optString("exactIdentifier").ifBlank { null }
+        val exactType = cmd.optString("exactType").ifBlank { null }
+        if (exactIdentifier != null && exactType != null) {
+            return exactType(exactIdentifier, exactType, text)
+        }
+        throw NoFocusedInputException(
+            "Exact text-input descriptor is required; app-wide focused typing is disabled."
+        )
+    }
+
+    private data class ExactNodeResolution(
+        val node: AccessibilityNodeInfo?,
+        val ambiguous: Boolean,
+    )
+
+    private fun exactType(identifier: String, type: String, requested: String): JSONObject {
+        var initialResolution = resolveExactNode(identifier, type)
+        val initial = initialResolution.node ?: throw ExactFillException(
+            "NO_TEXT_INPUT_TARGET",
+            "none",
+            if (initialResolution.ambiguous) "ambiguous" else "target-lost",
+            "The exact text input descriptor did not resolve uniquely; no text was entered.",
+        )
+        val initialBounds = Rect().also { initial.getBoundsInScreen(it) }
+        if (!initial.isEnabled || !initial.isVisibleToUser || initialBounds.isEmpty) {
+            initial.recycle()
+            throw ExactFillException(
+                "TEXT_ENTRY_UNVERIFIED",
+                "none",
+                "occluded",
+                "The exact text input is not safely actionable; no text was entered.",
+            )
+        }
+        if (initial.isPassword) {
+            initial.recycle()
+            throw ExactFillException(
+                "TEXT_ENTRY_UNVERIFIED",
+                "none",
+                "secure",
+                "Secure text input cannot provide exact readable verification; no text was entered.",
+            )
+        }
+
+        val focusedBefore = initial.isFocused
+        if (!focusedBefore) {
+            initial.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
             SystemClock.sleep(150)
         }
 
-        val focused = device.findObject(By.focused(true))
-            ?: throw NoFocusedInputException(
-                "No focused text input on screen. The TS device_fill handler should re-tap the target ref before calling type."
+        initialResolution = resolveExactNode(identifier, type)
+        val focused = initialResolution.node ?: run {
+            initial.recycle()
+            throw ExactFillException(
+                "TEXT_TARGET_LOST",
+                "none",
+                if (initialResolution.ambiguous) "ambiguous" else "target-lost",
+                "The exact text input was lost during focus; no text was entered.",
             )
-
-        // Story 10 (#391): ACTION_SET_TEXT primary — atomic, full-Unicode
-        // (emoji survive), fires the change events RN's onChangeText listens
-        // to. Read back to classify the outcome; per-char keyevents (Maestro's
-        // 75 ms pacing) only when the set was flat-out ignored and every
-        // character has a keyevent representation.
-        val before = try {
-            focused.text
-        } catch (e: StaleObjectException) {
-            null
         }
-        focused.text = text
-        var outcome = TextInputRecipe.classifySetText(text, before, readTargetText(focused))
-        var method = "setText"
+        val sameAfterFocus = initial == focused
+        initial.recycle()
+        if (!sameAfterFocus) {
+            focused.recycle()
+            throw ExactFillException(
+                "TEXT_TARGET_LOST",
+                "none",
+                "target-lost",
+                "The exact accessibility node changed during focus; no text was entered.",
+            )
+        }
+        if (!focused.isFocused) {
+            focused.recycle()
+            throw ExactFillException(
+                "TEXT_TARGET_FOCUS_FAILED",
+                "none",
+                "focus-unproven",
+                "The exact text input did not prove focused before mutation; no text was entered.",
+            )
+        }
 
-        if (outcome == TextInputRecipe.SetTextOutcome.REJECTED) {
-            // Codex P2 (#564): an empty request is a CLEAR — it has no keyevent
-            // representation, but the stale-length delete pass below is exactly
-            // how to honor it, so it must not throw here. Non-empty text must
-            // map to keyevents AND fit the paced-typing budget (round-3: past
-            // ~200 chars the 75 ms pacing would blow the client's 35 s budget).
-            if (!TextInputRecipe.keyEventFallbackViable(text)) {
-                throw SetTextRejectedException(
-                    "Focused field ignored ACTION_SET_TEXT and the text has no viable keyevent fallback (non-ASCII or exceeds the paced-typing budget)."
+        val before = nodeText(focused)
+        val bundle = Bundle().apply {
+            putCharSequence(
+                AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                requested,
+            )
+        }
+        val dispatched = focused.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, bundle)
+        if (!dispatched) {
+            focused.recycle()
+            throw ExactFillException(
+                "TEXT_ENTRY_UNVERIFIED",
+                "possible",
+                "dispatch-uncertain",
+                "The exact text mutation action was not acknowledged.",
+            )
+        }
+
+        var consecutiveExact = 0
+        var finalVerdict = TextInputRecipe.ExactReadback.UNREADABLE
+        var observedChanged = false
+        repeat(6) { attempt ->
+            if (attempt > 0) SystemClock.sleep(80)
+            val readResolution = resolveExactNode(identifier, type)
+            val current = readResolution.node ?: run {
+                focused.recycle()
+                throw ExactFillException(
+                    "TEXT_TARGET_LOST",
+                    "possible",
+                    if (readResolution.ambiguous) "ambiguous" else "target-lost",
+                    "The exact text input was lost after mutation.",
                 )
             }
-            // Codex P2 round-2 (#564): keyevents land in whatever is focused
-            // NOW — if focus moved (OTP auto-advance), typing would hit the
-            // wrong field. Refuse; the Maestro tier re-taps the target ref.
-            val stillFocused = try {
-                focused.isFocused
-            } catch (e: StaleObjectException) {
-                false
-            }
-            if (!stillFocused) {
-                throw SetTextRejectedException(
-                    "Focus moved away from the target after ACTION_SET_TEXT — refusing the keyevent fallback (it would type into the newly focused field)."
+            if (current != focused) {
+                current.recycle()
+                focused.recycle()
+                throw ExactFillException(
+                    "TEXT_TARGET_LOST",
+                    "possible",
+                    "target-lost",
+                    "The exact accessibility node changed after mutation.",
                 )
             }
-            // The rejected set left the prior value in place — clear it with
-            // move-to-end + deletes so the keyevent pass can't append.
-            val staleLen = before?.length ?: 0
-            if (staleLen > 0) {
-                device.pressKeyCode(KeyEvent.KEYCODE_MOVE_END, 0)
-                repeat(staleLen) { device.pressKeyCode(KeyEvent.KEYCODE_DEL, 0) }
+            val after = nodeText(current)
+            observedChanged = observedChanged || after != before
+            val hintKnown = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+            val showingHint = if (hintKnown) current.isShowingHintText else null
+            val hint = if (hintKnown) current.hintText?.toString() else null
+            finalVerdict = TextInputRecipe.classifyExactReadback(
+                requested = requested,
+                before = before,
+                after = after,
+                hint = hint,
+                showingHint = showingHint,
+                hintKnown = hintKnown,
+            )
+            current.recycle()
+            consecutiveExact = if (finalVerdict == TextInputRecipe.ExactReadback.EXACT) {
+                consecutiveExact + 1
+            } else {
+                0
             }
-            for (ch in text) {
-                val stroke = TextInputRecipe.keyStrokeFor(ch) ?: continue
-                device.pressKeyCode(
-                    stroke.keyCode,
-                    if (stroke.shift) KeyEvent.META_SHIFT_ON else 0,
-                )
-                SystemClock.sleep(TextInputRecipe.KEYEVENT_PACING_MS)
-            }
-            method = "keyevents"
-            outcome = TextInputRecipe.classifySetText(text, before, readTargetText(focused))
-            // Codex P2 round-2 (#564): the keyevent tier is judged strictly —
-            // a TRANSFORMED read-back on a field that started non-empty can be
-            // an under-deleted `old + text` remnant, not a formatter, so only
-            // exact matches (or empty-start transforms) count as landed.
-            if (!TextInputRecipe.keyEventOutcomeUsable(outcome, beforeWasEmpty = before.isNullOrEmpty())) {
-                throw SetTextRejectedException(
-                    "Focused field ignored both ACTION_SET_TEXT and the keyevent fallback."
-                )
+            if (consecutiveExact >= 2) {
+                focused.recycle()
+                return JSONObject()
+                    .put("filled", true)
+                    .put("verify", "exact")
+                    .put("focusedBefore", focusedBefore)
             }
         }
-        // Codex P2 (#564): UNVERIFIED (no read-back — the target node went
-        // stale after a re-render) is NOT retype-fodder: the set may have
-        // landed, so a keyevent pass could double-apply. Report honestly and
-        // let the bridge's own verification layers arbitrate.
-
-        return JSONObject()
-            .put("typed", true)
-            .put("text", text)
-            .put("method", method)
-            .put("setTextOutcome", outcome.name.lowercase())
+        focused.recycle()
+        throw ExactFillException(
+            "TEXT_ENTRY_UNVERIFIED",
+            if (observedChanged) "observed" else "possible",
+            if (finalVerdict == TextInputRecipe.ExactReadback.MISMATCH) "mismatch" else "unreadable",
+            "Text mutation did not produce stable exact read-back.",
+        )
     }
 
-    // Story 10 (#391): read back from the ORIGINAL target node, never from
-    // By.focused — ACTION_SET_TEXT can move focus as a side effect (OTP
-    // auto-advance), and reading "whatever is focused now" would misread a
-    // successful write as a rejection from the next empty field (codex P2
-    // round-2). A node staled by a re-render yields null → UNVERIFIED.
-    private fun readTargetText(target: UiObject2): String? {
-        device.waitForIdle(500)
-        return try {
-            target.text
-        } catch (e: StaleObjectException) {
-            null
+    private fun resolveExactNode(identifier: String, type: String): ExactNodeResolution {
+        val matches = mutableListOf<AccessibilityNodeInfo>()
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        instrumentation.uiAutomation.windows.forEach { window ->
+            window.root?.let { stack.addLast(AccessibilityNodeInfo.obtain(it)) }
         }
+        var visited = 0
+        while (stack.isNotEmpty() && visited++ < 20_000) {
+            val node = stack.removeLast()
+            for (index in 0 until node.childCount) {
+                node.getChild(index)?.let { stack.addLast(it) }
+            }
+            val nodeIdentifier = normalizeIdentifier(node.viewIdResourceName.orEmpty())
+                .ifBlank { node.contentDescription?.toString().orEmpty() }
+            val nodeType = node.className?.toString().orEmpty()
+            if (nodeIdentifier == identifier && nodeType == type && node.isEditable) {
+                matches.add(node)
+            } else {
+                node.recycle()
+            }
+        }
+        while (stack.isNotEmpty()) stack.removeLast().recycle()
+        if (matches.size != 1) {
+            matches.forEach { it.recycle() }
+            return ExactNodeResolution(null, matches.size > 1)
+        }
+        return ExactNodeResolution(matches.single(), false)
+    }
+
+    private fun nodeText(node: AccessibilityNodeInfo): String? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return node.text?.toString()
+        return if (node.isShowingHintText) node.text?.toString() ?: node.hintText?.toString().orEmpty()
+        else node.text?.toString().orEmpty()
     }
 
     private fun drag(cmd: JSONObject): JSONObject {

@@ -144,6 +144,9 @@ export interface RunAndroidArgs {
   x2?: number;
   y2?: number;
   text?: string;
+  /** Exact-fill descriptor resolved afresh by the runner within one command. */
+  exactIdentifier?: string;
+  exactType?: string;
   exact?: boolean;
   durationMs?: number;
   /** Story 04 (#385): window-gate probe timeout for isWindowUpdating (Kotlin clamps to 0..2000ms). */
@@ -157,7 +160,7 @@ export interface RunAndroidArgs {
 interface RunnerResponse {
   ok: boolean;
   data?: unknown;
-  error?: { message: string; code?: string };
+  error?: { message: string; code?: string; mutation?: string; reason?: string };
   v?: number;
 }
 
@@ -1899,6 +1902,8 @@ export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
   if (args.x2 !== undefined) body.x2 = args.x2;
   if (args.y2 !== undefined) body.y2 = args.y2;
   if (args.text !== undefined) body.text = args.text;
+  if (args.exactIdentifier !== undefined) body.exactIdentifier = args.exactIdentifier;
+  if (args.exactType !== undefined) body.exactType = args.exactType;
   if (args.exact !== undefined) body.exact = args.exact;
   if (args.durationMs !== undefined) body.durationMs = args.durationMs;
   if (args.timeoutMs !== undefined) body.timeoutMs = args.timeoutMs;
@@ -1968,19 +1973,31 @@ export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
     // and surface a meta marker so callers can audit telemetry.
     if (
       args.command === 'type' &&
+      args.exactIdentifier === undefined &&
       typeof message === 'string' &&
       (message.includes('Could not detect idle state') ||
         message.includes('window-content-idle') ||
         message.includes('Idle timeout exceeded'))
     ) {
       return okResult(
-        { typed: true, text: args.text },
+        { typed: true },
         { meta: { sideEffectSucceeded: true, runnerTimeoutShim: true, ...recoveryMeta } },
       );
     }
-    const failExtras = recovery ? { transportRecovery: recovery } : undefined;
-    if (code) return failResult(message, code as Parameters<typeof failResult>[1], failExtras);
-    return failExtras ? failResult(message, failExtras) : failResult(message);
+    const mutation = resp.error?.mutation;
+    const reason = resp.error?.reason;
+    const failExtras = {
+      ...(recovery ? { transportRecovery: recovery } : {}),
+      ...(mutation !== undefined ? { mutation } : {}),
+      ...(reason !== undefined ? { reason } : {}),
+    };
+    if (code)
+      return failResult(
+        message,
+        code as Parameters<typeof failResult>[1],
+        Object.keys(failExtras).length ? failExtras : undefined,
+      );
+    return Object.keys(failExtras).length ? failResult(message, failExtras) : failResult(message);
   }
 
   if (args.command === 'snapshot' && resp.data && typeof resp.data === 'object') {
