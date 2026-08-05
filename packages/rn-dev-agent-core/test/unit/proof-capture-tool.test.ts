@@ -926,17 +926,23 @@ async function createGateComposedProofSurface(
     status.authorityVersion += 1;
     return { ...operation, authorityVersion: status.authorityVersion };
   };
+  const operationAxes = new Set<string>();
   const registry = {
     beginOperation: (
       _session: unknown,
       input: { operationId: string; tool: string; profile: string },
-    ) => ({
-      operationId: input.operationId,
-      sessionId: status.sessionId,
-      claimEpoch: status.claimEpoch,
-      authorityVersion: status.authorityVersion,
-    }),
+    ) => {
+      operationAxes.clear();
+      for (const axis of input.profile) operationAxes.add(axis);
+      return {
+        operationId: input.operationId,
+        sessionId: status.sessionId,
+        claimEpoch: status.claimEpoch,
+        authorityVersion: status.authorityVersion,
+      };
+    },
     verifyOperation: () => undefined,
+    operationHasAxis: (_operation: unknown, axis: string) => operationAxes.has(axis),
     runWithOperation: async (
       _operation: unknown,
       callback: () => Promise<unknown>,
