@@ -3153,6 +3153,14 @@ function parseSupportedScript(script, platform) {
             metroPort: 8081,
             sessionId: 'preview-session',
         },
+        ...(platform === 'android'
+            ? {
+                resolveExpoAndroidDevice: (deviceId) => ({
+                    deviceId,
+                    displayName: 'preview-emulator',
+                }),
+            }
+            : {}),
     });
     return command;
 }
@@ -3306,6 +3314,44 @@ function ensureValue(flag, value) {
 function ensureFlag(flag) {
   if (!command.includes(flag)) command.push(flag);
 }
+function translateExpoAndroidDevice(serial, displayName) {
+  let found = false;
+  for (let index = 0; index < command.length; index += 1) {
+    if (command[index] === '--device') {
+      found = true;
+      if (command[index + 1] !== serial) {
+        failBuild(2, 'EXPO_DEVICE_IDENTITY_MISMATCH: a user-supplied --device does not equal the authority-bound adb serial');
+      }
+      command[index + 1] = displayName;
+    } else if (command[index].startsWith('--device=')) {
+      found = true;
+      if (command[index] !== '--device=' + serial) {
+        failBuild(2, 'EXPO_DEVICE_IDENTITY_MISMATCH: a user-supplied --device does not equal the authority-bound adb serial');
+      }
+      command[index] = '--device=' + displayName;
+    }
+  }
+  if (!found) command.push('--device', displayName);
+}
+function resolveExpoAndroidDevice(deviceId) {
+  const resolved = spawnSync(process.execPath, [...sqliteFlag, sessionCli, 'resolve-expo-android-device', deviceId], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      RN_DEV_AGENT_SESSION_ID: session.sessionId,
+    },
+    encoding: 'utf8',
+  });
+  if (resolved.error || resolved.status !== 0) {
+    failBuild(2, String(resolved.stderr).trim() || 'EXPO_DEVICE_IDENTITY_MISMATCH: exact Android device identity resolution failed');
+  }
+  let parsed = null;
+  try { parsed = JSON.parse(String(resolved.stdout)); } catch {}
+  if (!parsed || parsed.deviceId !== deviceId || typeof parsed.displayName !== 'string' || !parsed.displayName) {
+    failBuild(2, 'EXPO_DEVICE_IDENTITY_MISMATCH: resolver output does not match the authority-bound adb serial');
+  }
+  return parsed;
+}
 function removeManagedPortFlag(value) {
   for (let index = 0; index < command.length;) {
     const part = command[index];
@@ -3406,6 +3452,7 @@ function managedMetroProxyUrl(binding) {
   }
   await drainBuildTerminationSignals();
   let expoProxyUrl = null;
+  let expoAndroidDevice = null;
   if (session) {
     if (session.platform !== platform || typeof session.deviceId !== 'string' || typeof session.appId !== 'string' || !Number.isInteger(session.metroPort) || typeof session.sessionId !== 'string' || typeof session.buildToken !== 'string' || (session.simulator !== undefined && typeof session.simulator !== 'boolean')) {
       failBuild(2, 'SESSION_BUILD_IDENTITY_CONFLICT: session binding is incomplete');
@@ -3417,7 +3464,12 @@ function managedMetroProxyUrl(binding) {
       failBuild(2, 'SESSION_AUTHORITY_REQUIRED: session build completion requires the package-local rn-session CLI');
     }
     if (buildKind === 'expo') {
-      ensureValue('--device', session.deviceId);
+      if (platform === 'android') {
+        expoAndroidDevice = resolveExpoAndroidDevice(session.deviceId);
+        translateExpoAndroidDevice(session.deviceId, expoAndroidDevice.displayName);
+      } else {
+        ensureValue('--device', session.deviceId);
+      }
       removeManagedPortFlag(String(session.metroPort));
       ensureFlag('--no-bundler');
       expoProxyUrl = managedMetroProxyUrl(session);
@@ -3432,6 +3484,12 @@ function managedMetroProxyUrl(binding) {
     }
   }
 
+  if (expoAndroidDevice) {
+    const verified = resolveExpoAndroidDevice(session.deviceId);
+    if (verified.deviceId !== expoAndroidDevice.deviceId || verified.displayName !== expoAndroidDevice.displayName) {
+      failBuild(2, 'EXPO_DEVICE_IDENTITY_MISMATCH: the serial-to-display-name mapping changed immediately before Expo; reconnect the exact device and retry');
+    }
+  }
   const child = spawnSync(command[0], command.slice(1), {
     cwd: process.cwd(),
     env: session ? {
@@ -3439,6 +3497,7 @@ function managedMetroProxyUrl(binding) {
       ORG_GRADLE_PROJECT_reactNativeDevServerPort: String(session.metroPort),
       RCT_METRO_PORT: String(session.metroPort),
       RN_DEV_AGENT_SESSION_ID: session.sessionId,
+      ...(buildKind === 'expo' && platform === 'android' ? { ANDROID_SERIAL: session.deviceId } : {}),
       ...(expoProxyUrl ? { EXPO_PACKAGER_PROXY_URL: expoProxyUrl } : {}),
     } : process.env,
     stdio: 'inherit',

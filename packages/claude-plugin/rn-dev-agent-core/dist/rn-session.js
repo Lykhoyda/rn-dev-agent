@@ -7419,7 +7419,7 @@ var init_trusted_system_executable = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/cdp/metro-cwd.js
-import { execFileSync as execFileSync2 } from "node:child_process";
+import { execFileSync as execFileSync3 } from "node:child_process";
 import { readlinkSync as readlinkSync2, realpathSync as realpathSync2 } from "node:fs";
 import { resolve, sep } from "node:path";
 function parseLsofCwd(stdout) {
@@ -7488,7 +7488,7 @@ var init_metro_cwd = __esm({
     init_storage();
     init_trusted_system_executable();
     CWD_LSOF_TIMEOUT_MS = 800;
-    defaultExec = (cmd, args) => execFileSync2(cmd, args, {
+    defaultExec = (cmd, args) => execFileSync3(cmd, args, {
       timeout: CWD_LSOF_TIMEOUT_MS,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"]
@@ -7497,14 +7497,14 @@ var init_metro_cwd = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/process-birth.js
-import { execFileSync as execFileSync3 } from "node:child_process";
+import { execFileSync as execFileSync4 } from "node:child_process";
 import { createHash as createHash2 } from "node:crypto";
 import { closeSync, constants, existsSync as existsSync2, fstatSync, lstatSync as lstatSync2, openSync, readFileSync as readFileSync2, readSync, realpathSync as realpathSync3 } from "node:fs";
 import { dirname, join as join2 } from "node:path";
 import { fileURLToPath } from "node:url";
 function defaultRun(command, args) {
   try {
-    return execFileSync3(command, [...args], {
+    return execFileSync4(command, [...args], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 2e3
@@ -7517,7 +7517,7 @@ function defaultRun(command, args) {
   }
 }
 function defaultRunVerifiedHelper(path, pid, requirement) {
-  return execFileSync3("/bin/zsh", ["-f", "-c", VERIFIED_HELPER_SCRIPT, "rn-process-birth", path, String(pid), requirement], {
+  return execFileSync4("/bin/zsh", ["-f", "-c", VERIFIED_HELPER_SCRIPT, "rn-process-birth", path, String(pid), requirement], {
     encoding: "utf8",
     env: { PATH: "/usr/bin:/bin:/usr/sbin:/sbin" },
     maxBuffer: 1024 * 1024,
@@ -7740,7 +7740,7 @@ print -r -- "$result"
 });
 
 // packages/rn-dev-agent-core/dist/session/metro-binding.js
-import { execFileSync as execFileSync4 } from "node:child_process";
+import { execFileSync as execFileSync5 } from "node:child_process";
 function resolveMetroListenerExecutable(platform, dependencies = {}) {
   const executable = platform === "win32" ? "powershell" : platform === "linux" ? "ss" : platform === "darwin" ? "lsof" : null;
   return executable ? resolveTrustedSystemExecutable(executable, platform, dependencies) : null;
@@ -7757,7 +7757,7 @@ function numericListener(output, emptyStatus) {
   const [pid] = pids;
   return pids.size === 1 && Number.isSafeInteger(pid) && pid > 0 ? { status: "listening", pid } : { status: "unknown" };
 }
-function probeMetroListener(port, platform = process.platform, execute = execFileSync4, executableDependencies = {}) {
+function probeMetroListener(port, platform = process.platform, execute = execFileSync5, executableDependencies = {}) {
   const executable = resolveMetroListenerExecutable(platform, executableDependencies);
   if (!executable)
     return { status: "unknown" };
@@ -7798,7 +7798,7 @@ function probeMetroListener(port, platform = process.platform, execute = execFil
     return platform === "darwin" && failure.status === 1 && !String(failure.stdout ?? "").trim() && !String(failure.stderr ?? "").trim() ? { status: "absent" } : { status: "unknown" };
   }
 }
-function metroListenerPid(port, platform = process.platform, execute = execFileSync4, executableDependencies = {}) {
+function metroListenerPid(port, platform = process.platform, execute = execFileSync5, executableDependencies = {}) {
   const probe = probeMetroListener(port, platform, execute, executableDependencies);
   return probe.status === "listening" ? probe.pid : null;
 }
@@ -11734,6 +11734,100 @@ function captureInstalledArtifact(target, dependencies = {}) {
   };
 }
 
+// packages/rn-dev-agent-core/dist/session/expo-android-device.js
+import { execFileSync as execFileSync2 } from "node:child_process";
+var ANDROID_SERIAL_RE = /^[A-Za-z0-9._:-]{1,128}$/;
+var ERROR_CODE = "EXPO_DEVICE_IDENTITY_MISMATCH";
+function expoAndroidDeviceIdentityError(message) {
+  const error = new Error(`${ERROR_CODE}: ${message}`);
+  error.code = ERROR_CODE;
+  return error;
+}
+function parseAdbDevices(output) {
+  const devices = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const rawLine of output.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line === "List of devices attached" || line.startsWith("* daemon") || /\.cpp:\d+/.test(line)) {
+      continue;
+    }
+    const [serial, state, ...details] = line.split(/\s+/);
+    if (!serial || !state || !ANDROID_SERIAL_RE.test(serial))
+      continue;
+    if (seen.has(serial)) {
+      throw expoAndroidDeviceIdentityError("adb returned duplicate records for one serial; disconnect stale transports and retry");
+    }
+    seen.add(serial);
+    devices.push({
+      serial,
+      state,
+      details,
+      network: line.includes("_adb-tls-connect.")
+    });
+  }
+  return devices;
+}
+function emulatorDisplayName(output) {
+  const name = output.trim().split(/[\r\n]+/, 1)[0]?.trim();
+  if (!name || name === "OK" || name.startsWith("KO:")) {
+    throw expoAndroidDeviceIdentityError("the connected emulator AVD name is unavailable; restart that exact emulator and retry");
+  }
+  return name;
+}
+function isAuthorized(device) {
+  if (device.state !== "device")
+    return false;
+  return !device.network || device.details.some((detail) => detail.startsWith("model:"));
+}
+function physicalDisplayName(device) {
+  const model = device.details.find((detail) => detail.startsWith("model:"))?.slice("model:".length);
+  return model || `Device ${device.serial}`;
+}
+function defaultDependencies() {
+  return {
+    runAdb: (args) => execFileSync2("adb", [...args], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 1e4
+    })
+  };
+}
+function resolveExpoAndroidDevice(exactDeviceId, dependencies = defaultDependencies()) {
+  if (!ANDROID_SERIAL_RE.test(exactDeviceId)) {
+    throw expoAndroidDeviceIdentityError("the authority-bound adb serial is invalid; bind one exact adb serial and retry");
+  }
+  const runAdb = (args, failure) => {
+    try {
+      return dependencies.runAdb(args);
+    } catch {
+      throw expoAndroidDeviceIdentityError(failure);
+    }
+  };
+  const devices = parseAdbDevices(runAdb(["devices", "-l"], "adb device enumeration failed; verify adb is available, then reconnect and authorize the exact device"));
+  const exactRecords = devices.filter((device) => device.serial === exactDeviceId);
+  if (exactRecords.length !== 1 || !isAuthorized(exactRecords[0])) {
+    throw expoAndroidDeviceIdentityError("the authority-bound adb serial is missing, offline, or unauthorized; reconnect and authorize that exact device");
+  }
+  const connected = devices.filter(isAuthorized);
+  const bindings = connected.map((device) => ({
+    deviceId: device.serial,
+    displayName: device.serial.startsWith("emulator-") ? emulatorDisplayName(runAdb(["-s", device.serial, "emu", "avd", "name"], "an Expo emulator identity probe failed; verify every connected emulator has a readable AVD name")) : physicalDisplayName(device)
+  }));
+  const names = /* @__PURE__ */ new Map();
+  for (const binding of bindings) {
+    const previous = names.get(binding.displayName);
+    if (previous !== void 0 && previous !== binding.deviceId) {
+      throw expoAndroidDeviceIdentityError("an Expo display name maps to multiple adb serials; disconnect duplicate models or AVD names and retry");
+    }
+    names.set(binding.displayName, binding.deviceId);
+  }
+  const selected = bindings.find((binding) => binding.deviceId === exactDeviceId);
+  if (!selected || names.get(selected.displayName) !== exactDeviceId) {
+    throw expoAndroidDeviceIdentityError("the Expo display name does not map uniquely to the authority-bound adb serial");
+  }
+  return selected;
+}
+
 // packages/rn-dev-agent-core/dist/session/metro-authority.js
 import { createHmac as createHmac2, createSecretKey, timingSafeEqual as timingSafeEqual2 } from "node:crypto";
 function serializePayload(payload) {
@@ -11768,7 +11862,7 @@ init_metro_binding();
 init_metro_binding();
 init_trusted_system_executable();
 init_process_birth();
-import { execFileSync as execFileSync5, spawn } from "node:child_process";
+import { execFileSync as execFileSync6, spawn } from "node:child_process";
 import { createHash as createHash4, createHmac as createHmac3, timingSafeEqual as timingSafeEqual3 } from "node:crypto";
 import { closeSync as closeSync3, existsSync as existsSync4, fstatSync as fstatSync2, mkdirSync as mkdirSync2, openSync as openSync3, readFileSync as readFileSync4, readSync as readSync2, realpathSync as realpathSync5, rmSync as rmSync2 } from "node:fs";
 import { dirname as dirname3, isAbsolute as isAbsolute2, join as join3, relative as relative2, resolve as resolve3 } from "node:path";
@@ -13420,7 +13514,7 @@ function hasUnsupportedNodeOption(value) {
   }
   return false;
 }
-function managedMetroParentPid(pid, platform = process.platform, execute = execFileSync5, executableDependencies = {}) {
+function managedMetroParentPid(pid, platform = process.platform, execute = execFileSync6, executableDependencies = {}) {
   const executable = resolveTrustedSystemExecutable(platform === "win32" ? "powershell" : "ps", platform, executableDependencies);
   if (!executable)
     return null;
@@ -13452,10 +13546,10 @@ function listenerOwnedByLauncher(listenerPid, launcherPid) {
   }
   return false;
 }
-function managedMetroListenerPid(port, platform = process.platform, execute = execFileSync5, executableDependencies = {}) {
+function managedMetroListenerPid(port, platform = process.platform, execute = execFileSync6, executableDependencies = {}) {
   return metroListenerPid(port, platform, execute, executableDependencies);
 }
-function probeManagedMetroListener(port, platform = process.platform, execute = execFileSync5, executableDependencies = {}) {
+function probeManagedMetroListener(port, platform = process.platform, execute = execFileSync6, executableDependencies = {}) {
   return probeMetroListener(port, platform, execute, executableDependencies);
 }
 function resolveManagedMetroCommand(appRoot, dependencies = {}) {
@@ -14209,7 +14303,7 @@ async function startManagedMetro(input, dependencies = {}) {
     lastError
   });
 }
-function signalManagedMetroProcessTree(input, platform = process.platform, execute = execFileSync5, executableDependencies = {}) {
+function signalManagedMetroProcessTree(input, platform = process.platform, execute = execFileSync6, executableDependencies = {}) {
   if (platform === "win32") {
     const executable = resolveTrustedSystemExecutable("taskkill", platform, executableDependencies);
     if (!executable)
@@ -14394,7 +14488,7 @@ init_registry();
 // packages/rn-dev-agent-core/dist/session/source-identity.js
 init_metro_cwd();
 import { createHash as createHash6, createHmac as createHmac4, randomBytes as randomBytes2, timingSafeEqual as timingSafeEqual5 } from "node:crypto";
-import { execFileSync as execFileSync6 } from "node:child_process";
+import { execFileSync as execFileSync7 } from "node:child_process";
 import { closeSync as closeSync4, constants as constants3, existsSync as existsSync5, fstatSync as fstatSync3, lstatSync as lstatSync4, openSync as openSync4, readdirSync as readdirSync2, readFileSync as readFileSync5, readlinkSync as readlinkSync3, readSync as readSync3, realpathSync as realpathSync6 } from "node:fs";
 import { dirname as dirname5, isAbsolute as isAbsolute3, join as join4, relative as relative3, resolve as resolve4 } from "node:path";
 function digest2(parts) {
@@ -14449,7 +14543,7 @@ socket.once('timeout', () => process.exit(3));
 socket.once('error', () => process.exit(4));
 `;
 function defaultGit(root, args) {
-  return execFileSync6("git", ["-C", root, ...args], {
+  return execFileSync7("git", ["-C", root, ...args], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     timeout: 5e3,
@@ -17133,6 +17227,16 @@ async function main() {
         metroBound: true,
         metroPort: current?.bindings.metroPort
       })}
+`);
+      return;
+    }
+    if (command === "resolve-expo-android-device") {
+      const requestedDeviceId = process.argv[3];
+      const device = status.bindings.device;
+      if (device?.platform !== "android" || typeof device.deviceId !== "string" || requestedDeviceId !== device.deviceId) {
+        throw new SessionAuthorityError("EXPO_DEVICE_IDENTITY_MISMATCH", "the requested Expo device does not equal the authority-bound adb serial");
+      }
+      process.stdout.write(`${JSON.stringify(resolveExpoAndroidDevice(device.deviceId))}
 `);
       return;
     }

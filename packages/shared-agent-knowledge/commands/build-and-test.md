@@ -25,7 +25,11 @@ Phase A — Build pre-flight (run in this session):
    - **No `--eas` flag:** after previewing and confirming the session
      integration, run literal `pnpm ios` or `pnpm android`. The adapter injects
      the exact device and allocated Metro port and records the build/install
-     receipt.
+     receipt. For Expo Android, continue to bind and report the exact adb serial:
+     the adapter uniquely translates it to Expo's model/AVD display name only
+     for `--device`, pins adb with `ANDROID_SERIAL`, and refuses
+     `EXPO_DEVICE_IDENTITY_MISMATCH` before Expo on a missing, unauthorized,
+     duplicate, foreign, or drifted mapping.
    - **With `--eas` flag:** enter one shell scope, create `<artifact-dir>` with
      `artifact_dir=$(mktemp -d)`, and immediately register
      `trap 'rm -rf -- "$artifact_dir"' EXIT` in that same scope. Then run

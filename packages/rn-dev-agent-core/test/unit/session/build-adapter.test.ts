@@ -19,6 +19,11 @@ const androidSession = {
   sessionId: 'session-android',
 };
 
+const resolveAndroid = (deviceId: string) => ({
+  deviceId,
+  displayName: deviceId === 'emulator-5582' ? 'Pixel_API_35' : 'Pixel_8',
+});
+
 test('plugin-absent path passes any original command through unchanged', () => {
   const command = ['custom-rn-build', '--flavor', 'internal'];
   const plan = createBuildLaunchPlan({ platform: 'ios', command, session: null });
@@ -73,19 +78,21 @@ test('Expo Android emulator launches through its exact host Metro proxy', () => 
     platform: 'android',
     command: ['expo', 'run:android'],
     session: androidSession,
+    resolveExpoAndroidDevice: resolveAndroid,
   });
 
   assert.deepEqual(plan.command, [
     'expo',
     'run:android',
     '--device',
-    androidSession.deviceId,
+    'Pixel_API_35',
     '--no-bundler',
   ]);
   assert.deepEqual(plan.env, {
     ORG_GRADLE_PROJECT_reactNativeDevServerPort: '8342',
     RCT_METRO_PORT: '8342',
     RN_DEV_AGENT_SESSION_ID: 'session-android',
+    ANDROID_SERIAL: 'emulator-5582',
     EXPO_PACKAGER_PROXY_URL: 'http://10.0.2.2:8342',
   });
   assert.equal(plan.postInstall, undefined);
@@ -129,6 +136,34 @@ test('Expo never receives --port alongside --no-bundler and refuses a conflictin
   );
 });
 
+test('Expo Android refuses foreign user device input and mapping drift before launch', () => {
+  assert.throws(
+    () =>
+      createBuildLaunchPlan({
+        platform: 'android',
+        command: ['expo', 'run:android', '--device', 'foreign-device'],
+        session: androidSession,
+        resolveExpoAndroidDevice: resolveAndroid,
+      }),
+    /EXPO_DEVICE_IDENTITY_MISMATCH/,
+  );
+
+  let observations = 0;
+  assert.throws(
+    () =>
+      createBuildLaunchPlan({
+        platform: 'android',
+        command: ['expo', 'run:android', `--device=${androidSession.deviceId}`],
+        session: androidSession,
+        resolveExpoAndroidDevice: (deviceId) => ({
+          deviceId,
+          displayName: observations++ === 0 ? 'Pixel_API_35' : 'Renamed_API_35',
+        }),
+      }),
+    /EXPO_DEVICE_IDENTITY_MISMATCH.*changed immediately before Expo/,
+  );
+});
+
 test('Expo Android physical device requires an explicit exact Dev Client endpoint', () => {
   assert.throws(
     () =>
@@ -136,6 +171,7 @@ test('Expo Android physical device requires an explicit exact Dev Client endpoin
         platform: 'android',
         command: ['expo', 'run:android'],
         session: { ...androidSession, deviceId: 'physical-serial' },
+        resolveExpoAndroidDevice: resolveAndroid,
       }),
     /DEV_CLIENT_ENDPOINT_NOT_FOUND/,
   );
@@ -148,8 +184,11 @@ test('Expo Android physical device requires an explicit exact Dev Client endpoin
       deviceId: 'physical-serial',
       devClientUrl: 'example://expo-development-client/?url=http%3A%2F%2F192.0.2.10%3A8342',
     },
+    resolveExpoAndroidDevice: resolveAndroid,
   });
 
+  assert.deepEqual(plan.command.slice(-3), ['--device', 'Pixel_8', '--no-bundler']);
+  assert.equal(plan.env.ANDROID_SERIAL, 'physical-serial');
   assert.equal(plan.env.EXPO_PACKAGER_PROXY_URL, 'http://192.0.2.10:8342');
 });
 
