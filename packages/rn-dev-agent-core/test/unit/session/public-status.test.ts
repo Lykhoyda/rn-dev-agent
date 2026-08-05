@@ -90,31 +90,35 @@ test('session status exposes the bounded managed-sandbox tier', () => {
   assert.equal(projectPublicAuthorityStatus({ ...base, bindings: {} }).sandbox, 'unavailable');
 });
 
-test('blocked public status exposes only bounded opaque recovery handles', () => {
-  const projected = projectPublicAuthorityStatus({
-    available: true,
+function blockedStatus(expiresMs: number) {
+  return {
+    available: true as const,
     sessionId: 'session-secret',
     sourceKey: 'source-secret',
     worktreeKey: 'worktree-secret',
     appRootKey: 'app-secret',
-    state: 'blocked',
+    state: 'blocked' as const,
     claimEpoch: 1,
     authorityVersion: 2,
     leaseUntilMs: 100,
     source: { kind: 'git' },
     bindings: {
       recoveryHandles: {
-        handoffRecipient: { token: 'opaque-target', expiresMs: 5000 },
+        handoffRecipient: { token: 'opaque-target', expiresMs },
         adoptStale: {
           token: 'opaque-adopt',
-          expiresMs: 5000,
+          expiresMs,
           priorSessionId: 'prior-secret',
         },
       },
     },
     claims: [],
     worker: { instanceId: 'worker-secret', pid: 1, birthAvailable: true },
-  });
+  };
+}
+
+test('blocked public status exposes only bounded opaque recovery handles', () => {
+  const projected = projectPublicAuthorityStatus(blockedStatus(5000), { now: () => 1000 });
 
   assert.deepEqual(projected.recovery, {
     handoffRecipientHandle: 'opaque-target',
@@ -124,6 +128,91 @@ test('blocked public status exposes only bounded opaque recovery handles', () =>
     adoptionExpiresMs: 5000,
   });
   assert.equal(JSON.stringify(projected).includes('prior-secret'), false);
+});
+
+// GH #672: the reported deadlock — status kept advertising a five-minute handle long
+// after it expired, and adopt_stale then refused the very token status had just shown.
+test('GH#672: an expired adoption handle is never advertised as usable', () => {
+  const projected = projectPublicAuthorityStatus(blockedStatus(5000), { now: () => 5001 });
+  const recovery = projected.recovery as Record<string, unknown>;
+
+  assert.equal(recovery.adoptionHandle, undefined);
+  assert.equal(recovery.handoffRecipientHandle, undefined);
+  assert.equal(recovery.adoptionRequired, true, 'the requirement itself remains visible');
+  assert.equal(recovery.adoptionHandleExpired, true);
+  assert.match(String(recovery.adoptionRefreshAction), /status/);
+  assert.equal(JSON.stringify(projected).includes('opaque-adopt'), false);
+});
+
+test('GH#672: status distinguishes adoption, attach, and transport-restart recovery', () => {
+  for (const requirement of ['adoption', 'attach', 'transport-restart'] as const) {
+    const projected = projectPublicAuthorityStatus(blockedStatus(50_000), {
+      now: () => 1000,
+      recoveryRequirement: {
+        requirement,
+        priorOwner: requirement === 'adoption' ? 'stale' : 'live',
+        nextAction: `do-${requirement}`,
+      },
+    });
+    assert.deepEqual(projected.recoveryRequirement, {
+      requirement,
+      priorOwner: requirement === 'adoption' ? 'stale' : 'live',
+      nextAction: `do-${requirement}`,
+    });
+  }
+});
+
+test('GH#672: an expired stale-device release offer is reported, not advertised', () => {
+  const base = blockedStatus(50_000);
+  const projected = projectPublicAuthorityStatus(
+    {
+      ...base,
+      state: 'device_claimed',
+      bindings: {
+        staleDeviceRelease: {
+          token: 'opaque-release',
+          expiresMs: 5000,
+          platform: 'ios',
+          deviceId: 'SECRET-UDID',
+          obligations: ['runner'],
+        },
+      },
+    },
+    { now: () => 5001 },
+  );
+  const release = projected.staleDeviceRelease as Record<string, unknown>;
+
+  assert.equal(release.releaseHandle, undefined);
+  assert.equal(release.expired, true);
+  assert.deepEqual(release.obligations, ['runner']);
+  const serialized = JSON.stringify(projected);
+  assert.equal(serialized.includes('opaque-release'), false);
+  assert.equal(serialized.includes('SECRET-UDID'), false);
+});
+
+test('GH#672: an outstanding cleanup journal exposes an identifier-free resume action', () => {
+  const base = blockedStatus(50_000);
+  const projected = projectPublicAuthorityStatus({
+    ...base,
+    state: 'device_claimed',
+    bindings: {
+      staleDeviceCleanup: {
+        platform: 'ios',
+        deviceId: 'SECRET-UDID',
+        runner: { port: 9200, claimKey: 'runner-secret', completedAt: null },
+        recorder: { claimKey: 'recorder-secret', completedAt: null },
+      },
+    },
+  });
+  const cleanup = projected.staleDeviceCleanup as Record<string, unknown>;
+
+  assert.equal(cleanup.platform, 'ios');
+  assert.deepEqual(cleanup.obligations, ['runner', 'recorder']);
+  assert.equal(cleanup.nextAction, 'rn_session({ action: "release_stale_device" })');
+  const serialized = JSON.stringify(projected);
+  for (const secret of ['SECRET-UDID', '9200', 'runner-secret', 'recorder-secret']) {
+    assert.equal(serialized.includes(secret), false);
+  }
 });
 
 test('handoff_cleanup public status never exposes recovery tokens or capabilities', () => {
@@ -153,7 +242,10 @@ test('handoff_cleanup public status never exposes recovery tokens or capabilitie
     worker: { instanceId: 'worker-secret', pid: 1, birthAvailable: true },
   });
 
-  assert.equal(projected.recovery, undefined);
+  const recovery = projected.recovery as Record<string, unknown>;
+  assert.equal(recovery.adoptionHandle, undefined);
+  assert.equal(recovery.handoffRecipientHandle, undefined);
+  assert.equal(recovery.adoptionHandleExpired, true);
   const serialized = JSON.stringify(projected);
   assert.equal(serialized.includes('opaque-adopt'), false);
   assert.equal(serialized.includes('opaque-target'), false);

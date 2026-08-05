@@ -57,11 +57,16 @@ function createRuntime(
   registry: { getSessionStatus: (sessionId: string) => unknown },
   ref: { sessionId: string; claimEpoch: number },
 ): never {
+  const recovery = registry as {
+    inspectRecoveryRequirement?: (sessionId: string) => unknown;
+  };
   return {
     status: () => ({ available: true, ...(registry.getSessionStatus(ref.sessionId) as object) }),
     requireAvailable: () => ({ registry, session: ref }),
     requireOperational: () => ({ registry, session: ref }),
     requireRecovery: () => ({ registry, session: ref }),
+    refreshRecoveryHandles: () => false,
+    inspectRecoveryRequirement: () => recovery.inspectRecoveryRequirement?.(ref.sessionId),
   } as never;
 }
 
@@ -1542,6 +1547,13 @@ test('a replacement recovery worker resumes a stale adoption with the preserved 
       'recovery-capability',
     );
     const statusResult = await handler({ action: 'status' });
+    const reboundHandle = (
+      envelope(statusResult).data.authority as {
+        recovery?: { adoptionHandle?: unknown };
+      }
+    ).recovery?.adoptionHandle;
+    assert.equal(typeof reboundHandle, 'string');
+    assert.notEqual(reboundHandle, handle);
     assert.equal(
       statusResult.content[0]!.text.includes(handle),
       false,

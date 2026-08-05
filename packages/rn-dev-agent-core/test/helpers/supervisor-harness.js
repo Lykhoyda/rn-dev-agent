@@ -18,17 +18,23 @@ export function startSupervisor({
   env = {},
   cwd,
   args = [],
+  // GH #672: the same-root takeover regression needs the REAL single-instance gate.
+  noLock = true,
   lineTimeoutMs = 15_000,
 } = {}) {
-  const child = spawn(process.execPath, [supervisorPath, '--no-lock', ...args], {
-    stdio: ['pipe', 'pipe', 'pipe'],
-    cwd,
-    env: {
-      ...process.env,
-      ...(workerPath ? { RN_BRIDGE_WORKER_PATH: workerPath } : {}),
-      ...env,
+  const child = spawn(
+    process.execPath,
+    [supervisorPath, ...(noLock ? ['--no-lock'] : []), ...args],
+    {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      cwd,
+      env: {
+        ...process.env,
+        ...(workerPath ? { RN_BRIDGE_WORKER_PATH: workerPath } : {}),
+        ...env,
+      },
     },
-  });
+  );
   const stderrChunks = [];
   child.stderr.on('data', (c) => stderrChunks.push(c.toString('utf8')));
   const stderrText = () => stderrChunks.join('');

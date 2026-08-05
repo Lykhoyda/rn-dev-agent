@@ -5,6 +5,7 @@ import {
   openSessionRegistry,
   SessionAuthorityError,
   type OwnerStatus,
+  type RecoveryRequirementInspection,
   type SessionRef,
   type SessionRegistry,
   type SessionStatus,
@@ -30,18 +31,21 @@ export class WorkerAuthorityRuntime {
   readonly #session: SessionRef | null;
   readonly #unavailable: { code: string; reason: string } | null;
   readonly #recoveryOnly: boolean;
+  readonly #recoveryCapability: string | null;
 
   constructor(
     registry: SessionRegistry | null,
     session: SessionRef | null,
     unavailable: { code: string; reason: string } | null,
     recoveryOnly = false,
+    recoveryCapability: string | null = null,
   ) {
     this.#registry = registry;
     this.#session = session;
     this.#unavailable = unavailable;
     this.available = registry !== null && session !== null;
     this.#recoveryOnly = recoveryOnly;
+    this.#recoveryCapability = recoveryCapability;
   }
 
   requireAvailable(): { registry: SessionRegistry; session: SessionRef } {
@@ -80,6 +84,44 @@ export class WorkerAuthorityRuntime {
       );
     }
     return available;
+  }
+
+  /**
+   * GH #672: rotate an expired recovery handle before it is advertised. Best-effort by
+   * design — a refresh failure must degrade `status` to an honest expired handle, never
+   * turn a diagnostic call into an authority error.
+   */
+  refreshRecoveryHandles(): boolean {
+    if (!this.#registry || !this.#session || !this.#recoveryOnly || !this.#recoveryCapability) {
+      return false;
+    }
+    try {
+      const status = this.#registry.getSessionStatus(this.#session.sessionId);
+      const instanceId = status?.worker.instanceId;
+      if (
+        !status ||
+        !instanceId ||
+        (status.state !== 'blocked' && status.state !== 'handoff_cleanup')
+      ) {
+        return false;
+      }
+      return this.#registry.refreshRecoveryHandles(
+        this.#session,
+        { instanceId },
+        this.#recoveryCapability,
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  inspectRecoveryRequirement(): RecoveryRequirementInspection | undefined {
+    if (!this.#registry || !this.#session) return undefined;
+    try {
+      return this.#registry.inspectRecoveryRequirement(this.#session.sessionId);
+    } catch {
+      return undefined;
+    }
   }
 
   status(): WorkerAuthorityStatus {
@@ -152,10 +194,12 @@ export function createWorkerAuthorityRuntime(
     const session = { sessionId, claimEpoch };
     const status = registry.getSessionStatus(sessionId);
     const recoveryOnly = status?.state === 'blocked' || status?.state === 'handoff_cleanup';
+    let recoveryCapability: string | null = null;
     if (recoveryOnly) {
       const secretPath = environment.RN_DEV_AGENT_SESSION_SECRET_PATH;
-      const recoveryCapability = secretPath
-        ? readJsonStateFile<{ recoveryCapability?: string }>(secretPath)?.recoveryCapability
+      recoveryCapability = secretPath
+        ? (readJsonStateFile<{ recoveryCapability?: string }>(secretPath)?.recoveryCapability ??
+          null)
         : null;
       if (!recoveryCapability) {
         throw new SessionAuthorityError(
@@ -175,7 +219,7 @@ export function createWorkerAuthorityRuntime(
         token: birth.token,
       });
     }
-    return new WorkerAuthorityRuntime(registry, session, null, recoveryOnly);
+    return new WorkerAuthorityRuntime(registry, session, null, recoveryOnly, recoveryCapability);
   } catch (error) {
     return unavailable(
       error instanceof Error

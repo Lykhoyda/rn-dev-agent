@@ -32,6 +32,8 @@ test('session status returns the exact opaque session identity', async () => {
       claims: [],
       worker: { instanceId: 'worker', pid: 1, birthAvailable: true },
     }),
+    refreshRecoveryHandles: () => false,
+    inspectRecoveryRequirement: () => undefined,
   } as never);
 
   const result = await handler({ action: 'status' });
@@ -1676,6 +1678,8 @@ test('session status atomically invalidates lost managed Metro before and after 
           },
           session: { sessionId: 'session-a', claimEpoch: 1 },
         }),
+        refreshRecoveryHandles: () => false,
+        inspectRecoveryRequirement: () => undefined,
       };
       const handler = createSessionHandler(runtime as never, {
         getSignerCapability: () => 'signer',
@@ -1738,6 +1742,8 @@ test('session status reports a failed atomic Metro invalidation', async () => {
         },
         session: { sessionId: 'session-a', claimEpoch: 1 },
       }),
+      refreshRecoveryHandles: () => false,
+      inspectRecoveryRequirement: () => undefined,
     } as never,
     {
       getSignerCapability: () => 'signer',

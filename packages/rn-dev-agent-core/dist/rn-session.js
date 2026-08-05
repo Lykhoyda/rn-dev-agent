@@ -294,7 +294,7 @@ async function main() {
             status = reconcileManagedMetroStatus(status);
         }
         if (command === 'status') {
-            process.stdout.write(`${JSON.stringify(projectPublicAuthorityStatus({ available: true, ...status }), null, 2)}\n`);
+            process.stdout.write(`${JSON.stringify(projectPublicAuthorityStatus({ available: true, ...status }, { recoveryRequirement: status.registry.inspectRecoveryRequirement(status.sessionId) }), null, 2)}\n`);
             return;
         }
         if (command === 'feedback-json') {

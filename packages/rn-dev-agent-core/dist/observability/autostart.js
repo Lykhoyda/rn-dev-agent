@@ -1,5 +1,13 @@
 export async function autostartObserve(deps) {
     try {
+        // GH #672: a blocked contender shares the owner's deterministic Observe port.
+        // Autostarting there produces a port conflict and a child the contender has no
+        // authority to own — recovery must be the only thing it can do.
+        const recoveryOnly = deps.recoveryOnlyReason?.() ?? null;
+        if (recoveryOnly) {
+            deps.info(`observe UI autostart skipped (${recoveryOnly})`);
+            return null;
+        }
         if (!deps.findRoot())
             return null;
         const res = deps.resolveEnabled();

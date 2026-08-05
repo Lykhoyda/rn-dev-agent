@@ -1280,6 +1280,7 @@ trackedTool(
       'cancel_handoff',
       'accept_handoff',
       'adopt_stale',
+      'release_stale_device',
       'recover_arbiter',
       'preview_integration',
       'apply_integration',
@@ -1287,8 +1288,14 @@ trackedTool(
       'stop_metro',
       'release',
     ]),
-    platform: z.enum(['ios', 'android']).optional(),
-    deviceId: z.string().optional(),
+    platform: z
+      .enum(['ios', 'android'])
+      .describe('Required with deviceId for foreign transfer; omit both to resume own journal')
+      .optional(),
+    deviceId: z
+      .string()
+      .describe('Required with platform for foreign transfer; omit both to resume own journal')
+      .optional(),
     appId: z.string().optional(),
     devClientUrl: z.string().url().optional(),
     buildReceipt: z.record(z.unknown()).optional(),
@@ -1302,6 +1309,10 @@ trackedTool(
     handoffId: z.string().optional(),
     token: z.string().optional(),
     adoptionHandle: z.string().optional(),
+    releaseHandle: z
+      .string()
+      .describe('Bounded capability minted by bind_device for initial proven-dead device transfer')
+      .optional(),
     confirmed: z.boolean().optional(),
     force: z.boolean().optional(),
   },
@@ -4022,6 +4033,13 @@ async function main() {
     void autostartObserve({
       findRoot: findProjectRoot,
       resolveEnabled: resolveObserveAutostart,
+      recoveryOnlyReason: () => {
+        const status = authorityRuntime.status();
+        if (!status.available) return null;
+        return status.state === 'blocked' || status.state === 'handoff_cleanup'
+          ? `session is a ${status.state} recovery contender`
+          : null;
+      },
       start: startObserveServer,
       warn: (m) => logger.warn('OBSERVE', m),
       info: (m) => logger.info('OBSERVE', m),
