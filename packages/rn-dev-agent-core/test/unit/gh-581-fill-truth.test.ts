@@ -429,10 +429,7 @@ test('gh-581: Maestro verification rebinds by testID after runner parking', asyn
   const fill = calls.find((call) => call.cliArgs[0] === 'fill')!;
   const verify = calls.find((call) => call.cliArgs[0] === 'verify-input')!;
   assert.ok((fill.opts.exactTarget as { operationToken?: string }).operationToken);
-  assert.equal(
-    (verify.opts.exactTarget as { operationToken?: string }).operationToken,
-    undefined,
-  );
+  assert.equal((verify.opts.exactTarget as { operationToken?: string }).operationToken, undefined);
 });
 
 test('gh-581: Maestro refuses an identifierless binding after ref recycling', async () => {

@@ -10,7 +10,7 @@ This file preserves the Story 10 design record. The [device_fill tool reference]
 
 ## Problem
 
-`device_fill` is our most complex path precisely because typing is unreliable underneath it: JS-first dispatch → native tap+fill with read-back verification and up to 2 corrective retypes → Maestro `inputText` fallback with `eraseText` (`tools/device-interact.ts:684-899`). Android additionally has a chunked `adb shell input text` path with a hand-rolled `%s`-splitting workaround (`splitChunkAroundPercentS`, `:520-566`) that cannot represent emoji/IME-composed text. The verification layer is excellent — the *generation* layer under it is weak, so verification does heavy corrective lifting.
+At proposal time, `device_fill` used a JS-first dispatch, native tap-and-fill with corrective retypes, Maestro `inputText`, and an Android chunked-ADB fallback. Those historical details motivated this story; the tool reference linked above owns the shipped pipeline.
 
 ## What Maestro does
 

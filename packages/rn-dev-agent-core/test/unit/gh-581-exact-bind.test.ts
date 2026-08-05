@@ -110,18 +110,14 @@ test('gh-581 bind: blank Android identifiers rebind by type and frame', () => {
       rect: { x: 0, y: 0, width: 10, height: 10 },
     },
   ];
-  const bound = bindExactFillTarget(
-    original as never,
-    '@e1',
-    {
-      type: 'android.widget.EditText',
-      identifier: '',
-      label: 'Search',
-      rect: { x: 0, y: 0, width: 10, height: 10 },
-      flatIndex: 0,
-      nodeCount: 1,
-    },
-  );
+  const bound = bindExactFillTarget(original as never, '@e1', {
+    type: 'android.widget.EditText',
+    identifier: '',
+    label: 'Search',
+    rect: { x: 0, y: 0, width: 10, height: 10 },
+    flatIndex: 0,
+    nodeCount: 1,
+  });
   assert.ok(bound.ok);
   const binding = (
     bound as {
@@ -309,8 +305,15 @@ test('gh-581 bind: positional ref with a shifted identity rebinds by signature o
   const gone = bindExactFillTarget([shifted[0]] as never, '@e11', signature as never);
   assert.ok(!gone.ok, 'absent identity must reject, never serve the recycled position');
 
-  const movedWithoutReplacement = bindExactFillTarget([shifted[1]] as never, '@e11', signature as never);
-  assert.ok(movedWithoutReplacement.ok, 'a unique stable identity may move when its old ref disappears');
+  const movedWithoutReplacement = bindExactFillTarget(
+    [shifted[1]] as never,
+    '@e11',
+    signature as never,
+  );
+  assert.ok(
+    movedWithoutReplacement.ok,
+    'a unique stable identity may move when its old ref disappears',
+  );
   assert.equal(
     (movedWithoutReplacement as { binding: { inputRef: string } }).binding.inputRef,
     '@e13',

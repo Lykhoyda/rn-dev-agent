@@ -929,9 +929,7 @@ async function runNativeVerifyInput(
   return { verdict: 'unavailable', stable: false };
 }
 
-async function rebindExactFillTarget(
-  binding: ExactFillBinding,
-): Promise<ExactFillBinding | null> {
+async function rebindExactFillTarget(binding: ExactFillBinding): Promise<ExactFillBinding | null> {
   const snap = await fetchSnapshotNodes();
   if (!snap.ok) return null;
   const rebound = bindExactFillTarget(
