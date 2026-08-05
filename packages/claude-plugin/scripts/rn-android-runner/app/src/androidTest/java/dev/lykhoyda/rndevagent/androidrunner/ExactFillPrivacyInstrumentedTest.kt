@@ -21,35 +21,57 @@ import org.junit.runner.RunWith
 class ExactFillPrivacyInstrumentedTest {
     @Test
     fun exactAccessibilityFillKeepsCanaryOutOfLogcat() {
-        val instrumentation = InstrumentationRegistry.getInstrumentation()
-        val device = UiDevice.getInstance(instrumentation)
-        val testPackage = instrumentation.context.packageName
-        val intent = Intent()
-            .setClassName(testPackage, ExactFillPrivacyFixtureActivity::class.java.name)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-        instrumentation.context.startActivity(intent)
-        assertTrue(
-            device.wait(
-                Until.hasObject(By.desc(ExactFillPrivacyFixtureActivity.FIELD_IDENTIFIER)),
-                10_000,
-            ),
-        )
+        launchFixture(ExactFillPrivacyFixtureActivity.FIELD_IDENTIFIER)
 
         shell("logcat -b all -c")
         val canary = "RN_FILL_LOGCAT_PRIVACY_CANARY_581"
-        val response = CommandDispatcher(instrumentation).dispatch(
-            JSONObject()
-                .put("command", "fill")
-                .put("appBundleId", testPackage)
-                .put("text", canary)
-                .put("exactIdentifier", ExactFillPrivacyFixtureActivity.FIELD_IDENTIFIER)
-                .put("exactType", EditText::class.java.name),
-        )
+        val response = dispatchFill(ExactFillPrivacyFixtureActivity.FIELD_IDENTIFIER, canary)
         assertTrue(response.optBoolean("ok"))
         assertFalse(response.toString().contains(canary))
 
         SystemClock.sleep(250)
         assertFalse(shell("logcat -b all -d -v raw").contains(canary))
+    }
+
+    @Test
+    fun exactAccessibilityFillProvesPlaceholderAndPlainEmptyClear() {
+        launchFixture(ExactFillPrivacyFixtureActivity.PLACEHOLDER_CLEAR_IDENTIFIER)
+
+        for (identifier in listOf(
+            ExactFillPrivacyFixtureActivity.PLACEHOLDER_CLEAR_IDENTIFIER,
+            ExactFillPrivacyFixtureActivity.PLAIN_CLEAR_IDENTIFIER,
+        )) {
+            val response = dispatchFill(identifier, "")
+            assertTrue(response.optBoolean("ok"))
+            assertTrue(response.optJSONObject("data")?.optString("verify") == "exact")
+        }
+    }
+
+    private fun launchFixture(identifier: String) {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val testPackage = instrumentation.context.packageName
+        val intent = Intent()
+            .setClassName(testPackage, ExactFillPrivacyFixtureActivity::class.java.name)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+        instrumentation.context.startActivity(intent)
+        assertTrue(
+            UiDevice.getInstance(instrumentation).wait(
+                Until.hasObject(By.desc(identifier)),
+                10_000,
+            ),
+        )
+    }
+
+    private fun dispatchFill(identifier: String, text: String): JSONObject {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        return CommandDispatcher(instrumentation).dispatch(
+            JSONObject()
+                .put("command", "fill")
+                .put("appBundleId", instrumentation.context.packageName)
+                .put("text", text)
+                .put("exactIdentifier", identifier)
+                .put("exactType", EditText::class.java.name),
+        )
     }
 
     private fun shell(command: String): String {
