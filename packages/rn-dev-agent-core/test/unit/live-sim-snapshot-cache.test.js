@@ -15,7 +15,9 @@ import {
   cacheSnapshot,
   getCachedSnapshot,
   getCachedSnapshotEvidence,
+  getSnapshotCaptureCheckpoint,
   markSnapshotDirty,
+  promoteSnapshotOriginSince,
   isSnapshotCacheValid,
   setSnapshotAuthorityProvider,
   validateCachedSnapshotAuthority,
@@ -217,7 +219,7 @@ test('snapshot cache rejects unavailable live runner authority', async () => {
   setSnapshotAuthorityProvider(null);
 });
 
-test('snapshot evidence remains available after live runner authority is released', async () => {
+test('strict snapshot evidence requires capture-time origin and cannot be upgraded later', async () => {
   setSnapshotAuthorityProvider({
     current: () => ({
       sessionId: 'session-a',
@@ -247,6 +249,21 @@ test('snapshot evidence remains available after live runner authority is release
   cacheSnapshot('ios', NODES);
 
   assert.equal(await validateCachedSnapshotAuthority('ios'), false);
+  assert.equal(
+    getCachedSnapshotEvidence('ios'),
+    undefined,
+    'a raw capture cannot become strict evidence before its operation proves origin',
+  );
+  promoteSnapshotOriginSince(getSnapshotCaptureCheckpoint());
+  assert.equal(
+    getCachedSnapshotEvidence('ios'),
+    undefined,
+    'proving origin later must not launder an older unproven capture',
+  );
+
+  const provenCaptureCheckpoint = getSnapshotCaptureCheckpoint();
+  cacheSnapshot('ios', NODES);
+  promoteSnapshotOriginSince(provenCaptureCheckpoint);
   assert.deepEqual(getCachedSnapshotEvidence('ios')?.nodes, NODES);
   setSnapshotAuthorityProvider(null);
 });

@@ -36,6 +36,8 @@ interface AuthorityGateDependencies {
   relaunchBoundRuntime?(status: SessionStatus): Promise<void>;
   onRunnerReleased?(runner: Record<string, unknown>): Promise<void> | void;
   onRuntimeBundleInvalidated?(): void;
+  snapshotCaptureCheckpoint?(): number;
+  promoteSnapshotOrigin?(checkpoint: number): void;
 }
 
 const optionalBundleAdmission = Symbol('optionalBundleAdmission');
@@ -268,7 +270,7 @@ function containedRunnerAuthority(
 function requireDeviceTransition(status: SessionStatus, args: Record<string, unknown>): void {
   const action = args.action ?? 'snapshot';
   if (action === 'open') {
-    for (const binding of ['install', 'metro', 'device']) {
+    for (const binding of ['install', 'device']) {
       if (!status.bindings[binding]) {
         throw new SessionAuthorityError(
           binding === 'install' ? 'APP_INSTALL_IDENTITY_CHANGED' : 'SESSION_AUTHORITY_REQUIRED',
@@ -455,6 +457,37 @@ function isOptionalBundleFailure(error: unknown): boolean {
   );
 }
 
+function isOptionalNativeOriginFailure(error: unknown): boolean {
+  const code = authorityErrorCode(error);
+  return (
+    code === 'METRO_INSTANCE_CHANGED' ||
+    code === 'METRO_AUTHORITY_MISMATCH' ||
+    code === 'METRO_ORIGIN_MISMATCH'
+  );
+}
+
+async function probeOptionalNativeOrigin(
+  dependencies: AuthorityGateDependencies,
+  input: Omit<AuthorityProbeInput, 'axis'>,
+): Promise<AuthorityObservation[]> {
+  if (!input.status.bindings.metro || !input.status.bindings.device) return [];
+  try {
+    const metro = await dependencies.probe({ ...input, axis: 'M' });
+    const origin = await dependencies.probe({ ...input, axis: 'A' });
+    return [metro, origin];
+  } catch (error) {
+    if (isOptionalNativeOriginFailure(error)) return [];
+    throw error;
+  }
+}
+
+function nativeOriginMeta(
+  profile: AuthorityProfile,
+  proven: boolean,
+): { originAuthority: 'proven' | 'not-proven' } | Record<string, never> {
+  return profile.nativeOrigin ? { originAuthority: proven ? 'proven' : 'not-proven' } : {};
+}
+
 function addMeta(result: unknown, meta: Record<string, unknown>): unknown {
   if (!result || typeof result !== 'object') return result;
   const toolResult = result as ToolResult;
@@ -540,6 +573,11 @@ function receipt(
     })),
     bundle: profile.axes.includes('B')
       ? { authorityScope: 'initial-bundle', sourceFidelity: 'not-proven' }
+      : undefined,
+    originAuthority: profile.nativeOrigin
+      ? observations.some(({ axis }) => axis === 'A')
+        ? 'proven'
+        : 'not-proven'
       : undefined,
     nativeAppOrigin: profile.axes.includes('A')
       ? {
@@ -722,8 +760,14 @@ export function createAuthorityGate(
                       kind: 'transition' as const,
                       axes:
                         tool === 'proof_capture'
-                          ? (['C', 'S', 'I', 'M', 'B', 'D', 'R'] as const)
+                          ? (['C', 'S', 'I', 'M', 'A', 'B', 'D', 'R'] as const)
                           : (['C', 'S'] as const),
+                      nativeOrigin:
+                        tool === 'device_snapshot'
+                          ? baseProfile.nativeOrigin
+                          : tool === 'proof_capture'
+                            ? ('required' as const)
+                            : undefined,
                       mutation: true,
                       liveBundleProbe: tool === 'proof_capture',
                     }
@@ -802,8 +846,8 @@ export function createAuthorityGate(
               tool === 'device_snapshot'
                 ? args.action === 'open'
                   ? {
-                      before: ['C', 'S', 'I', 'M', 'D'] as AuthorityAxis[],
-                      after: ['C', 'S', 'I', 'M', 'D', 'R'] as AuthorityAxis[],
+                      before: ['C', 'S', 'I', 'D'] as AuthorityAxis[],
+                      after: ['C', 'S', 'I', 'D', 'R'] as AuthorityAxis[],
                     }
                   : {
                       before: ['C', 'S', 'D'] as AuthorityAxis[],
@@ -835,7 +879,18 @@ export function createAuthorityGate(
                 dependencies.probe({ axis, phase: 'preflight', tool, profile, status, args }),
               ),
             );
+            const optionalOriginBefore =
+              profile.nativeOrigin === 'optional'
+                ? await probeOptionalNativeOrigin(dependencies, {
+                    phase: 'preflight',
+                    tool,
+                    profile,
+                    status,
+                    args,
+                  })
+                : [];
             registry.verifyOperation(operation);
+            const snapshotCheckpoint = dependencies.snapshotCaptureCheckpoint?.();
             const result = await registry.runWithOperation(operation, () =>
               handler(...handlerArgs),
             );
@@ -855,7 +910,10 @@ export function createAuthorityGate(
                     'Run rn_session action "pin_dev_client" before another CDP operation.',
                 });
               }
-              return addMeta(result, { authoritative: false });
+              return addMeta(result, {
+                authoritative: false,
+                ...nativeOriginMeta(profile, false),
+              });
             }
             beganProofRehearsal = gateCommitsProof;
             if (tool === 'rn_session' && args.action === 'release') {
@@ -923,6 +981,25 @@ export function createAuthorityGate(
                 dependencies.probe({ axis, phase: 'postflight', tool, profile, status, args }),
               ),
             );
+            const optionalOriginAfter =
+              optionalOriginBefore.length > 0
+                ? await probeOptionalNativeOrigin(dependencies, {
+                    phase: 'postflight',
+                    tool,
+                    profile,
+                    status,
+                    args,
+                  })
+                : [];
+            const optionalOriginProven =
+              optionalOriginBefore.length === 2 &&
+              optionalOriginAfter.length === 2 &&
+              optionalOriginBefore.every(
+                (observation) =>
+                  observation.identity ===
+                  optionalOriginAfter.find((candidate) => candidate.axis === observation.axis)
+                    ?.identity,
+              );
             for (const observation of before) {
               if (runtimeTargetChanged && observation.axis === 'B') continue;
               if (observation.axis === 'C' || !transitionAxes.after.includes(observation.axis)) {
@@ -958,10 +1035,33 @@ export function createAuthorityGate(
               }
               status = proofStatus;
             }
+            if (
+              operation &&
+              optionalOriginProven &&
+              snapshotCheckpoint !== undefined &&
+              dependencies.promoteSnapshotOrigin
+            ) {
+              await registry.runWithOperation(operation, async () => {
+                dependencies.promoteSnapshotOrigin!(snapshotCheckpoint);
+              });
+            }
             if (operation) registry.commitPlatformAuthorityReceipts(operation);
+            const transitionReceiptProfile = optionalOriginProven
+              ? {
+                  ...profile,
+                  axes: [...transitionAxes.after, 'M' as const, 'A' as const],
+                }
+              : { ...profile, axes: transitionAxes.after };
             return addMeta(result, {
               authorityTransition: true,
-              authorityReceipt: receipt(status, { ...profile, axes: transitionAxes.after }, after),
+              ...nativeOriginMeta(
+                profile,
+                profile.nativeOrigin === 'required' || optionalOriginProven,
+              ),
+              authorityReceipt: receipt(status, transitionReceiptProfile, [
+                ...after,
+                ...(optionalOriginProven ? optionalOriginAfter : []),
+              ]),
             });
           } catch (error) {
             if (beganProofRehearsal) {
@@ -988,7 +1088,7 @@ export function createAuthorityGate(
                 );
               }
             }
-            return authorityFailure(error);
+            return addMeta(authorityFailure(error), nativeOriginMeta(profile, false));
           } finally {
             if (registry && operation && !retainProofCleanupFence) {
               try {
@@ -1036,6 +1136,16 @@ export function createAuthorityGate(
               dependencies.probe({ axis, phase: 'preflight', tool, profile, status, args }),
             ),
           );
+          const optionalNativeOriginBefore =
+            profile.nativeOrigin === 'optional'
+              ? await probeOptionalNativeOrigin(dependencies, {
+                  phase: 'preflight',
+                  tool,
+                  profile,
+                  status,
+                  args,
+                })
+              : [];
           const optionalBefore: AuthorityObservation[] = [];
           const managedOriginObservations: AuthorityObservation[] = [];
           const managedBundleObservations: AuthorityObservation[] = [];
@@ -1303,6 +1413,15 @@ export function createAuthorityGate(
                     'managed runner parking lost the bound runner before commit',
                   );
                 }
+                if (
+                  profile.nativeOrigin === 'optional' &&
+                  optionalNativeOriginBefore.length !== 2
+                ) {
+                  throw new SessionAuthorityError(
+                    'METRO_ORIGIN_MISMATCH',
+                    'native fallback requires proven managed app origin',
+                  );
+                }
                 registry!.verifyOperation(operation!);
                 operation = registry!.replaceBindingsDuringOperation(operation!, {
                   state: currentStatus.bindings.bundle ? 'ready' : 'device_bound',
@@ -1325,6 +1444,7 @@ export function createAuthorityGate(
             });
           }
           registry.verifyOperation(operation);
+          const snapshotCheckpoint = dependencies.snapshotCaptureCheckpoint?.();
           const result = await registry.runWithOperation(operation, () => handler(...handlerArgs));
           let runtimeTargetChanged = false;
           const postHandlerRecovery = await reconcileRecoverableRuntime(
@@ -1441,6 +1561,25 @@ export function createAuthorityGate(
               runtimeTargetChanged ||= reconciliation.runtimeTargetChanged;
             }
           }
+          const optionalNativeOriginAfter =
+            optionalNativeOriginBefore.length > 0
+              ? await probeOptionalNativeOrigin(dependencies, {
+                  phase: 'postflight',
+                  tool,
+                  profile,
+                  status,
+                  args,
+                })
+              : [];
+          const optionalNativeOriginProven =
+            optionalNativeOriginBefore.length === 2 &&
+            optionalNativeOriginAfter.length === 2 &&
+            optionalNativeOriginBefore.every(
+              (observation) =>
+                observation.identity ===
+                optionalNativeOriginAfter.find((candidate) => candidate.axis === observation.axis)
+                  ?.identity,
+            );
           const effectiveProfile =
             optionalBefore.length > 0
               ? { ...profile, axes: [...profile.axes, ...optionalBefore.map(({ axis }) => axis)] }
@@ -1475,7 +1614,7 @@ export function createAuthorityGate(
             : undefined;
           const receiptObservations = finalOrigin
             ? [...after, finalOrigin, ...(finalManagedBundle ? [finalManagedBundle] : [])]
-            : after;
+            : [...after, ...(optionalNativeOriginProven ? optionalNativeOriginAfter : [])];
           const receiptBaseProfile = managedTargetAbsent
             ? {
                 ...effectiveProfile,
@@ -1497,7 +1636,12 @@ export function createAuthorityGate(
                   ...(finalManagedBundle ? (['B'] as const) : []),
                 ],
               }
-            : runnerAwareReceiptProfile;
+            : optionalNativeOriginProven
+              ? {
+                  ...runnerAwareReceiptProfile,
+                  axes: [...runnerAwareReceiptProfile.axes, 'M' as const, 'A' as const],
+                }
+              : runnerAwareReceiptProfile;
           // Gate-owned binding transitions (for example lazy runner parking)
           // advance C's authority generation through the active operation CAS.
           // Verify that exact advanced fence first, then tolerate only its C
@@ -1537,9 +1681,12 @@ export function createAuthorityGate(
               operation = null;
             }
           }
+          const nativeOriginProven =
+            profile.axes.includes('A') || Boolean(finalOrigin) || optionalNativeOriginProven;
           if (!resultIsCanonicalSuccess(result)) {
             return addMeta(result, {
               authoritative: false,
+              ...nativeOriginMeta(profile, nativeOriginProven),
               ...(authorityInvalidated
                 ? {
                     authorityInvalidated: true,
@@ -1549,8 +1696,25 @@ export function createAuthorityGate(
                 : {}),
             });
           }
+          if (profile.nativeOrigin === 'required' && !nativeOriginProven) {
+            throw new SessionAuthorityError(
+              'METRO_ORIGIN_MISMATCH',
+              'strict native evidence requires proven managed app origin',
+            );
+          }
+          if (
+            operation &&
+            nativeOriginProven &&
+            snapshotCheckpoint !== undefined &&
+            dependencies.promoteSnapshotOrigin
+          ) {
+            await registry.runWithOperation(operation, async () => {
+              dependencies.promoteSnapshotOrigin!(snapshotCheckpoint);
+            });
+          }
           if (operation) registry.commitPlatformAuthorityReceipts(operation);
           return addMeta(result, {
+            ...nativeOriginMeta(profile, nativeOriginProven),
             authorityReceipt: receipt(status, receiptProfile, receiptObservations),
             ...(authorityInvalidated
               ? {
@@ -1583,7 +1747,7 @@ export function createAuthorityGate(
               );
             }
           }
-          return authorityFailure(error);
+          return addMeta(authorityFailure(error), nativeOriginMeta(profile, false));
         } finally {
           if (registry && operation && !retainProofCleanupFence) {
             try {
