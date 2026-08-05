@@ -184,3 +184,66 @@ test('real duplicate controlled inputs refuse before either handler runs', async
   assert.equal(result.mutation, 'none');
   assert.equal(dispatches, 0);
 });
+
+test('wrapper ownership stays inside its subtree without a naming convention', async () => {
+  const root = fiber({ displayName: 'Root' });
+  const wrapper = fiber({ displayName: 'Pressable' }, { testID: 'profile-field-shell' });
+  const unrelatedFocus = { value: true };
+  const targetFocus = { value: false };
+  let unrelatedDispatches = 0;
+  let targetDispatches = 0;
+  const unrelated = controlledInput('profile-field-shell-input', unrelatedFocus, () => {
+    unrelatedDispatches += 1;
+  });
+  const target = controlledInput('inner-with-independent-id', targetFocus, (text) => {
+    targetDispatches += 1;
+    target.input.memoizedProps = { ...target.input.memoizedProps, value: text };
+  });
+  append(wrapper, target.input);
+  append(root, wrapper, unrelated.input);
+
+  const result = await fill(install(root), 'profile-field-shell', 'canary');
+  assert.deepEqual({ ...result }, { kind: 'success', focusedBefore: false });
+  assert.equal(targetDispatches, 1);
+  assert.equal(unrelatedDispatches, 0);
+});
+
+test('siblings sharing one callback remain ambiguous owners', async () => {
+  const root = fiber({ displayName: 'Root' });
+  const focused = { value: true };
+  let dispatches = 0;
+  const shared = () => {
+    dispatches += 1;
+  };
+  const first = controlledInput('field', focused, shared);
+  const second = controlledInput('field', focused, shared);
+  append(root, first.input, second.input);
+
+  const result = await fill(install(root), 'field', 'canary');
+  assert.equal(result.kind, 'failure');
+  assert.equal(result.reason, 'ambiguous');
+  assert.equal(result.mutation, 'none');
+  assert.equal(dispatches, 0);
+});
+
+test('lineal composite and host representations remain one owner', async () => {
+  const root = fiber({ displayName: 'Root' });
+  const focused = { value: true };
+  let dispatches = 0;
+  const composite = fiber({ displayName: 'TextInput' });
+  const host = fiber('RCTSinglelineTextInputView');
+  const onChangeText = (text: string) => {
+    dispatches += 1;
+    composite.memoizedProps = { ...composite.memoizedProps, value: text };
+    host.memoizedProps = { ...host.memoizedProps, value: text };
+  };
+  composite.memoizedProps = { testID: 'field', value: '', onChangeText };
+  host.memoizedProps = { testID: 'field', value: '', onChangeText };
+  host.stateNode = { isFocused: () => focused.value, focus() {} };
+  append(composite, host);
+  append(root, composite);
+
+  const result = await fill(install(root), 'field', 'canary');
+  assert.deepEqual({ ...result }, { kind: 'success', focusedBefore: true });
+  assert.equal(dispatches, 1);
+});

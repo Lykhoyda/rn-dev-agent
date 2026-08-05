@@ -27808,8 +27808,7 @@ function bindExactFillTarget(nodes, ref, assertedTestID, cachedIdentifier) {
     return { code: "NO_TEXT_INPUT_TARGET", reason: matches.length ? "ambiguous" : "target-lost" };
   }
   const node = matches[0];
-  const isWrapper = testID.endsWith(PRESSABLE_SUFFIX);
-  if (!isWrapper && (!node.type || !TEXT_INPUT_TYPES.has(node.type))) {
+  if (!node.type) {
     return { code: "NO_TEXT_INPUT_TARGET", reason: "not-text-input" };
   }
   if (node.hittable !== true || node.enabled === false) {
@@ -28308,7 +28307,7 @@ function decideScrollDirection(element, screen) {
     return "right";
   return null;
 }
-var TYPE_PRIORITY_FOR_TAP, TEXT_INPUT_TYPES, PRESSABLE_SUFFIX, DEFAULT_SCREEN, SWIPE_FRACTION, DEFAULT_SWIPE_DURATION_MS, NEXT_KEY_LABELS;
+var TYPE_PRIORITY_FOR_TAP, DEFAULT_SCREEN, SWIPE_FRACTION, DEFAULT_SWIPE_DURATION_MS, NEXT_KEY_LABELS;
 var init_device_interact = __esm({
   "packages/rn-dev-agent-core/dist/tools/device-interact.js"() {
     "use strict";
@@ -28333,8 +28332,6 @@ var init_device_interact = __esm({
       Image: 25,
       ScrollView: 10
     };
-    TEXT_INPUT_TYPES = /* @__PURE__ */ new Set(["TextField", "SecureTextField", "TextView", "EditText"]);
-    PRESSABLE_SUFFIX = "-pressable";
     DEFAULT_SCREEN = { width: 402, height: 874 };
     SWIPE_FRACTION = 0.4;
     DEFAULT_SWIPE_DURATION_MS = 300;
@@ -59540,6 +59537,22 @@ var init_injected_helpers = __esm({
       });
       return { matches: matches, truncated: truncated };
     }
+    function isAncestorOf(ancestor, descendant) {
+      var current = descendant && descendant.return;
+      var depth = 0;
+      while (current && depth++ < 200) {
+        if (current === ancestor || current === ancestor.alternate) return true;
+        current = current.return;
+      }
+      return false;
+    }
+    function sameControlledRepresentation(left, right) {
+      if (left === right || left === right.alternate || left.alternate === right) return true;
+      var leftProps = left.memoizedProps || {};
+      var rightProps = right.memoizedProps || {};
+      return leftProps.onChangeText === rightProps.onChangeText &&
+        (isAncestorOf(left, right) || isAncestorOf(right, left));
+    }
     function dedupeControlled(matches) {
       var owners = [];
       for (var i = 0; i < matches.length; i++) {
@@ -59548,15 +59561,33 @@ var init_injected_helpers = __esm({
         if (!isTextInputFiber(fiber) || typeof props.onChangeText !== 'function' || typeof props.value !== 'string') continue;
         var duplicate = false;
         for (var j = 0; j < owners.length; j++) {
-          var otherProps = owners[j].memoizedProps || {};
-          if (otherProps.onChangeText === props.onChangeText) { duplicate = true; break; }
+          if (sameControlledRepresentation(owners[j], fiber)) { duplicate = true; break; }
         }
         if (!duplicate) owners.push(fiber);
       }
       return owners;
     }
+    function collectDescendants(roots) {
+      var matches = [];
+      var scanned = 0;
+      var truncated = false;
+      for (var i = 0; i < roots.length; i++) {
+        var stack = roots[i] && roots[i].child ? [roots[i].child] : [];
+        while (stack.length) {
+          if (++scanned > 40000) { truncated = true; break; }
+          var fiber = stack.pop();
+          if (!fiber) continue;
+          matches.push(fiber);
+          if (fiber.sibling) stack.push(fiber.sibling);
+          if (fiber.child) stack.push(fiber.child);
+        }
+        if (truncated) break;
+      }
+      return { matches: matches, truncated: truncated };
+    }
     function publicInstance(fiber) {
       var stack = [fiber], visited = 0;
+      var instances = [];
       while (stack.length && ++visited <= 200) {
         var f = stack.pop();
         if (!f) continue;
@@ -59564,11 +59595,11 @@ var init_injected_helpers = __esm({
         if (instance && typeof instance.focus !== 'function' && instance.canonical && instance.canonical.publicInstance) {
           instance = instance.canonical.publicInstance;
         }
-        if (instance && typeof instance.focus === 'function' && typeof instance.isFocused === 'function') return instance;
+        if (instance && typeof instance.focus === 'function' && typeof instance.isFocused === 'function' && instances.indexOf(instance) < 0) instances.push(instance);
         if (f.sibling && f !== fiber) stack.push(f.sibling);
         if (f.child) stack.push(f.child);
       }
-      return null;
+      return instances.length === 1 ? instances[0] : null;
     }
     function sameOwner(left, right) {
       return left === right || left === right.alternate || left.alternate === right;
@@ -59576,24 +59607,18 @@ var init_injected_helpers = __esm({
     function resolveOwner() {
       var selected = collectByTestID(testID);
       if (selected.truncated) return { failure: result('failure', { code: 'TEXT_ENTRY_UNVERIFIED', mutation: 'none', reason: 'unreadable' }) };
-      var ownerMatches = selected.matches;
-      var wrapper = /-pressable$/.test(testID);
-      if (wrapper) {
-        if (selected.matches.length !== 1) {
-          return { failure: result('failure', { code: 'NO_TEXT_INPUT_TARGET', mutation: 'none', reason: selected.matches.length ? 'ambiguous' : 'target-lost' }) };
-        }
-        var base = testID.slice(0, -'-pressable'.length);
-        var inner = collectByTestID(base);
-        if (inner.truncated) return { failure: result('failure', { code: 'TEXT_ENTRY_UNVERIFIED', mutation: 'none', reason: 'unreadable' }) };
-        ownerMatches = inner.matches;
-      }
-      var owners = dedupeControlled(ownerMatches);
+      if (selected.matches.length === 0) return { failure: result('failure', { code: 'NO_TEXT_INPUT_TARGET', mutation: 'none', reason: 'target-lost' }) };
+      var owners = dedupeControlled(selected.matches);
       if (owners.length > 1) return { failure: result('failure', { code: 'NO_TEXT_INPUT_TARGET', mutation: 'none', reason: 'ambiguous' }) };
       if (owners.length === 0) {
-        if (wrapper) return { failure: result('failure', { code: 'NO_TEXT_INPUT_TARGET', mutation: 'none', reason: 'not-controlled' }) };
-        var textInputs = ownerMatches.filter(isTextInputFiber);
+        var textInputs = selected.matches.filter(isTextInputFiber);
         if (textInputs.length === 1) return { nativeEligible: true };
-        return { failure: result('failure', { code: 'NO_TEXT_INPUT_TARGET', mutation: 'none', reason: textInputs.length ? 'ambiguous' : 'target-lost' }) };
+        if (textInputs.length > 1) return { failure: result('failure', { code: 'NO_TEXT_INPUT_TARGET', mutation: 'none', reason: 'ambiguous' }) };
+        var descendants = collectDescendants(selected.matches);
+        if (descendants.truncated) return { failure: result('failure', { code: 'TEXT_ENTRY_UNVERIFIED', mutation: 'none', reason: 'unreadable' }) };
+        owners = dedupeControlled(descendants.matches);
+        if (owners.length > 1) return { failure: result('failure', { code: 'NO_TEXT_INPUT_TARGET', mutation: 'none', reason: 'ambiguous' }) };
+        if (owners.length === 0) return { failure: result('failure', { code: 'NO_TEXT_INPUT_TARGET', mutation: 'none', reason: 'not-controlled' }) };
       }
       var owner = owners[0];
       var props = owner.memoizedProps || {};

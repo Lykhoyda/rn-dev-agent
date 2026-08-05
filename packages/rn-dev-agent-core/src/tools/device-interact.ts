@@ -472,6 +472,10 @@ export function isDaemonTimeoutError(text: string): boolean {
 const TEXT_INPUT_TYPES = new Set(['TextField', 'SecureTextField', 'TextView', 'EditText']);
 const PRESSABLE_SUFFIX = '-pressable';
 
+export function isExactTextInputType(type: string): boolean {
+  return TEXT_INPUT_TYPES.has(type) || /(?:EditText|TextField|TextView)$/.test(type);
+}
+
 export function findInputForPressable(
   nodes: SnapshotNode[] | null,
   pressableRef: string,
@@ -483,7 +487,7 @@ export function findInputForPressable(
   const baseId = pressableNode.identifier.slice(0, -PRESSABLE_SUFFIX.length);
   if (!baseId) return null;
   const inputNode = nodes.find(
-    (n) => n.identifier === baseId && n.type !== undefined && TEXT_INPUT_TYPES.has(n.type),
+    (n) => n.identifier === baseId && n.type !== undefined && isExactTextInputType(n.type),
   );
   return inputNode ? `@${inputNode.ref}` : null;
 }
@@ -732,8 +736,7 @@ function bindExactFillTarget(
     return { code: 'NO_TEXT_INPUT_TARGET', reason: matches.length ? 'ambiguous' : 'target-lost' };
   }
   const node = matches[0];
-  const isWrapper = testID.endsWith(PRESSABLE_SUFFIX);
-  if (!isWrapper && (!node.type || !TEXT_INPUT_TYPES.has(node.type))) {
+  if (!node.type) {
     return { code: 'NO_TEXT_INPUT_TARGET', reason: 'not-text-input' };
   }
   if (node.hittable !== true || node.enabled === false) {
