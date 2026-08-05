@@ -12,6 +12,7 @@ export interface BuildReceiptPayload {
   artifactDigest: string;
   installGeneration: string;
   buildGeneration: number;
+  buildKind: 'bare-react-native' | 'expo';
   devClientUrl?: string;
 }
 
@@ -40,6 +41,9 @@ export function verifyBuildReceipt(
 ): BuildReceiptPayload {
   if (receipt.version !== 1 || !receipt.payload || !receipt.signature) {
     throw new Error('BUILD_RECEIPT_INVALID: build receipt shape is invalid');
+  }
+  if (receipt.payload.buildKind !== 'expo' && receipt.payload.buildKind !== 'bare-react-native') {
+    throw new Error('BUILD_RECEIPT_INVALID: build receipt command kind is invalid');
   }
   const expectedSignature = Buffer.from(sign(receipt.payload, capability), 'hex');
   const actualSignature = Buffer.from(receipt.signature, 'hex');

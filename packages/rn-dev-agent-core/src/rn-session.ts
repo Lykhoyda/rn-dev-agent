@@ -470,6 +470,7 @@ async function main(): Promise<void> {
     if (command === 'prepare-build') {
       const platform = process.argv[3];
       const deliveredBuildToken = process.argv[4];
+      const buildKind = process.argv[5];
       const device = status.bindings.device as
         | {
             platform?: unknown;
@@ -498,6 +499,12 @@ async function main(): Promise<void> {
         throw new SessionAuthorityError(
           'SESSION_AUTHORITY_REQUIRED',
           'prepare-build publishes only against a caller-delivered abort capability (canonical UUID)',
+        );
+      }
+      if (buildKind !== 'expo' && buildKind !== 'bare-react-native') {
+        throw new SessionAuthorityError(
+          'SESSION_BUILD_COMMAND_UNSUPPORTED',
+          'prepare-build requires the parsed native build command kind',
         );
       }
       const appId = device.appId;
@@ -601,7 +608,7 @@ async function main(): Promise<void> {
             releaseResources,
             bindings: {
               metro: buildMetro,
-              pendingBuild: { buildToken, platform, buildGeneration },
+              pendingBuild: { buildToken, platform, buildGeneration, buildKind },
               bundle: null,
               runner: null,
               recorder: null,
@@ -621,6 +628,7 @@ async function main(): Promise<void> {
           metroPort: Number(status.bindings.metroPort),
           sessionId: status.sessionId,
           buildToken,
+          buildKind,
           ...(platform === 'ios' ? { simulator: true } : {}),
           ...(typeof device.devClientUrl === 'string' ? { devClientUrl: device.devClientUrl } : {}),
         })}\n`,
@@ -651,12 +659,18 @@ async function main(): Promise<void> {
         );
       }
       const pending = status.bindings.pendingBuild as
-        | { buildToken?: unknown; platform?: unknown; buildGeneration?: unknown }
+        | {
+            buildToken?: unknown;
+            platform?: unknown;
+            buildGeneration?: unknown;
+            buildKind?: unknown;
+          }
         | undefined;
       if (
         pending?.buildToken !== buildToken ||
         pending.platform !== platform ||
-        !Number.isSafeInteger(pending.buildGeneration)
+        !Number.isSafeInteger(pending.buildGeneration) ||
+        (pending.buildKind !== 'expo' && pending.buildKind !== 'bare-react-native')
       ) {
         throw new SessionAuthorityError(
           'SESSION_BUILD_IDENTITY_CONFLICT',
@@ -682,6 +696,7 @@ async function main(): Promise<void> {
           artifactDigest: installed.artifactDigest,
           installGeneration: installed.installGeneration,
           buildGeneration: Number(pending.buildGeneration),
+          buildKind: pending.buildKind,
           ...(typeof device.devClientUrl === 'string' ? { devClientUrl: device.devClientUrl } : {}),
         },
         signerCapability,

@@ -77,8 +77,7 @@ export async function pinExactDevClient(input, dependencies) {
     if (input.devClientUrl !== input.expectedDevClientUrl) {
         throw new Error('DEV_CLIENT_ENDPOINT_NOT_FOUND: declared dev-client URL does not match the session endpoint');
     }
-    if ((input.runtimeKind === 'expo-dev-client' && !input.devClientUrl) ||
-        (input.runtimeKind === 'bare-react-native' && input.devClientUrl)) {
+    if (input.runtimeKind === 'bare-react-native' && input.devClientUrl) {
         throw new Error('DEV_CLIENT_ENDPOINT_NOT_FOUND: launch kind contradicts the signed build provenance');
     }
     const managedManifestHost = '127.0.0.1';

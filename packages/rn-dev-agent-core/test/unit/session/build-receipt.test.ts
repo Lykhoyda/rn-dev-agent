@@ -14,6 +14,7 @@ const input = {
   artifactDigest: 'artifact-a',
   installGeneration: 'generation-a',
   buildGeneration: 2,
+  buildKind: 'expo' as const,
 };
 
 test('build receipts bind artifact, source, session, port, and exact device', () => {
@@ -22,6 +23,7 @@ test('build receipts bind artifact, source, session, port, and exact device', ()
 
   assert.equal(payload.artifactDigest, 'artifact-a');
   assert.equal(payload.deviceId, 'IOS-UUID');
+  assert.equal(payload.buildKind, 'expo');
 });
 
 test('tampered or sibling-session build receipts are rejected', () => {
@@ -33,5 +35,10 @@ test('tampered or sibling-session build receipts are rejected', () => {
   assert.throws(
     () => verifyBuildReceipt(receipt, 'signer', { ...input, sessionId: 'session-b' }),
     /SESSION_BUILD_IDENTITY_CONFLICT/,
+  );
+  const { buildKind: _, ...missingBuildKind } = receipt.payload;
+  assert.throws(
+    () => verifyBuildReceipt({ ...receipt, payload: missingBuildKind }, 'signer'),
+    /BUILD_RECEIPT_INVALID/,
   );
 });

@@ -3299,6 +3299,7 @@ const sqliteFlag = (nodeMajor === 22 && nodeMinor >= 5) || (nodeMajor === 23 && 
 let session = null;
 let sessionCli = null;
 let buildCapability = null;
+let buildKind = null;
 const MANAGED_BUILD_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'];
 const buildRecovery = { abortAttempted: false, abortFailure: null, released: false, completed: false };
 function abortPendingBuild() {
@@ -3413,9 +3414,24 @@ function managedMetroProxyUrl(binding) {
       process.stderr.write('SESSION_AUTHORITY_REQUIRED: integrated rn-session CLI is unavailable; reapply integration\n');
       process.exit(2);
     }
+    const commandOffset = command[0] === 'npx' ? 1 : 0;
+    const commandExecutable = command[commandOffset];
+    const commandSubcommand = command[commandOffset + 1];
+    buildKind =
+      commandExecutable === 'expo' && commandSubcommand === 'run:' + platform
+        ? 'expo'
+        : commandExecutable === 'react-native' &&
+            ((platform === 'ios' && commandSubcommand === 'run-ios') ||
+              (platform === 'android' && commandSubcommand === 'run-android'))
+          ? 'bare-react-native'
+          : null;
+    if (!buildKind) {
+      process.stderr.write('SESSION_BUILD_COMMAND_UNSUPPORTED: command shape is not recognized\n');
+      process.exit(2);
+    }
     sessionCli = manifest.sessionCli;
     buildCapability = { buildToken: randomUUID() };
-    let probe = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'prepare-build', platform, buildCapability.buildToken], {
+    let probe = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'prepare-build', platform, buildCapability.buildToken, buildKind], {
       cwd: process.cwd(),
       env: process.env,
       encoding: 'utf8',
@@ -3430,7 +3446,7 @@ function managedMetroProxyUrl(binding) {
         await drainBuildTerminationSignals();
         failBuild(2, String(metro.stderr).trim() || 'METRO_START_UNAVAILABLE: managed Metro failed');
       }
-      probe = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'prepare-build', platform, buildCapability.buildToken], {
+      probe = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'prepare-build', platform, buildCapability.buildToken, buildKind], {
         cwd: process.cwd(),
         env: process.env,
         encoding: 'utf8',
@@ -3463,24 +3479,19 @@ function managedMetroProxyUrl(binding) {
     if (!sessionCli) {
       failBuild(2, 'SESSION_AUTHORITY_REQUIRED: session build completion requires the package-local rn-session CLI');
     }
-    const offset = command[0] === 'npx' ? 1 : 0;
-    const executable = command[offset];
-    const subcommand = command[offset + 1];
-    if (executable === 'expo' && subcommand === 'run:' + platform) {
+    if (buildKind === 'expo') {
       ensureValue('--device', session.deviceId);
       removeManagedPortFlag(String(session.metroPort));
       ensureFlag('--no-bundler');
       expoProxyUrl = managedMetroProxyUrl(session);
-    } else if (executable === 'react-native' && platform === 'ios' && subcommand === 'run-ios') {
+    } else if (platform === 'ios') {
       ensureValue('--udid', session.deviceId);
       ensureValue('--port', String(session.metroPort));
       ensureFlag('--no-packager');
-    } else if (executable === 'react-native' && platform === 'android' && subcommand === 'run-android') {
+    } else {
       ensureValue('--deviceId', session.deviceId);
       ensureValue('--port', String(session.metroPort));
       ensureFlag('--no-packager');
-    } else {
-      failBuild(2, 'SESSION_BUILD_COMMAND_UNSUPPORTED: command shape is not recognized');
     }
   }
 

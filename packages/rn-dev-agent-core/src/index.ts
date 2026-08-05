@@ -824,6 +824,7 @@ async function pinSessionDevClient(status: SessionStatus, options: { force: bool
     | {
         appId?: unknown;
         buildGeneration?: unknown;
+        buildKind?: unknown;
         devClientUrl?: unknown;
         deviceId?: unknown;
         metroPort?: unknown;
@@ -843,7 +844,10 @@ async function pinSessionDevClient(status: SessionStatus, options: { force: bool
     throw new Error('BUILD_RECEIPT_INVALID: exact launch provenance is unavailable');
   }
   const devClientUrl = typeof install.devClientUrl === 'string' ? install.devClientUrl : undefined;
-  const runtimeKind = devClientUrl ? 'expo-dev-client' : 'bare-react-native';
+  if (install.buildKind !== 'expo' && install.buildKind !== 'bare-react-native') {
+    throw new Error('BUILD_RECEIPT_INVALID: exact build command provenance is unavailable');
+  }
+  const runtimeKind = install.buildKind === 'expo' ? 'expo-dev-client' : 'bare-react-native';
   if (!secret?.signerCapability) {
     throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: session signer is unavailable');
   }

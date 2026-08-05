@@ -57201,6 +57201,9 @@ function verifyBuildReceipt(receipt2, capability, expected) {
   if (receipt2.version !== 1 || !receipt2.payload || !receipt2.signature) {
     throw new Error("BUILD_RECEIPT_INVALID: build receipt shape is invalid");
   }
+  if (receipt2.payload.buildKind !== "expo" && receipt2.payload.buildKind !== "bare-react-native") {
+    throw new Error("BUILD_RECEIPT_INVALID: build receipt command kind is invalid");
+  }
   const expectedSignature = Buffer.from(sign(receipt2.payload, capability), "hex");
   const actualSignature = Buffer.from(receipt2.signature, "hex");
   if (expectedSignature.length !== actualSignature.length || !timingSafeEqual3(expectedSignature, actualSignature)) {
@@ -62719,6 +62722,7 @@ const sqliteFlag = (nodeMajor === 22 && nodeMinor >= 5) || (nodeMajor === 23 && 
 let session = null;
 let sessionCli = null;
 let buildCapability = null;
+let buildKind = null;
 const MANAGED_BUILD_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'];
 const buildRecovery = { abortAttempted: false, abortFailure: null, released: false, completed: false };
 function abortPendingBuild() {
@@ -62833,9 +62837,24 @@ function managedMetroProxyUrl(binding) {
       process.stderr.write('SESSION_AUTHORITY_REQUIRED: integrated rn-session CLI is unavailable; reapply integration\n');
       process.exit(2);
     }
+    const commandOffset = command[0] === 'npx' ? 1 : 0;
+    const commandExecutable = command[commandOffset];
+    const commandSubcommand = command[commandOffset + 1];
+    buildKind =
+      commandExecutable === 'expo' && commandSubcommand === 'run:' + platform
+        ? 'expo'
+        : commandExecutable === 'react-native' &&
+            ((platform === 'ios' && commandSubcommand === 'run-ios') ||
+              (platform === 'android' && commandSubcommand === 'run-android'))
+          ? 'bare-react-native'
+          : null;
+    if (!buildKind) {
+      process.stderr.write('SESSION_BUILD_COMMAND_UNSUPPORTED: command shape is not recognized\n');
+      process.exit(2);
+    }
     sessionCli = manifest.sessionCli;
     buildCapability = { buildToken: randomUUID() };
-    let probe = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'prepare-build', platform, buildCapability.buildToken], {
+    let probe = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'prepare-build', platform, buildCapability.buildToken, buildKind], {
       cwd: process.cwd(),
       env: process.env,
       encoding: 'utf8',
@@ -62850,7 +62869,7 @@ function managedMetroProxyUrl(binding) {
         await drainBuildTerminationSignals();
         failBuild(2, String(metro.stderr).trim() || 'METRO_START_UNAVAILABLE: managed Metro failed');
       }
-      probe = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'prepare-build', platform, buildCapability.buildToken], {
+      probe = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'prepare-build', platform, buildCapability.buildToken, buildKind], {
         cwd: process.cwd(),
         env: process.env,
         encoding: 'utf8',
@@ -62883,24 +62902,19 @@ function managedMetroProxyUrl(binding) {
     if (!sessionCli) {
       failBuild(2, 'SESSION_AUTHORITY_REQUIRED: session build completion requires the package-local rn-session CLI');
     }
-    const offset = command[0] === 'npx' ? 1 : 0;
-    const executable = command[offset];
-    const subcommand = command[offset + 1];
-    if (executable === 'expo' && subcommand === 'run:' + platform) {
+    if (buildKind === 'expo') {
       ensureValue('--device', session.deviceId);
       removeManagedPortFlag(String(session.metroPort));
       ensureFlag('--no-bundler');
       expoProxyUrl = managedMetroProxyUrl(session);
-    } else if (executable === 'react-native' && platform === 'ios' && subcommand === 'run-ios') {
+    } else if (platform === 'ios') {
       ensureValue('--udid', session.deviceId);
       ensureValue('--port', String(session.metroPort));
       ensureFlag('--no-packager');
-    } else if (executable === 'react-native' && platform === 'android' && subcommand === 'run-android') {
+    } else {
       ensureValue('--deviceId', session.deviceId);
       ensureValue('--port', String(session.metroPort));
       ensureFlag('--no-packager');
-    } else {
-      failBuild(2, 'SESSION_BUILD_COMMAND_UNSUPPORTED: command shape is not recognized');
     }
   }
 
@@ -80988,7 +81002,7 @@ async function pinExactDevClient(input, dependencies) {
   if (input.devClientUrl !== input.expectedDevClientUrl) {
     throw new Error("DEV_CLIENT_ENDPOINT_NOT_FOUND: declared dev-client URL does not match the session endpoint");
   }
-  if (input.runtimeKind === "expo-dev-client" && !input.devClientUrl || input.runtimeKind === "bare-react-native" && input.devClientUrl) {
+  if (input.runtimeKind === "bare-react-native" && input.devClientUrl) {
     throw new Error("DEV_CLIENT_ENDPOINT_NOT_FOUND: launch kind contradicts the signed build provenance");
   }
   const managedManifestHost = "127.0.0.1";
@@ -81495,7 +81509,10 @@ async function pinSessionDevClient(status, options) {
     throw new Error("BUILD_RECEIPT_INVALID: exact launch provenance is unavailable");
   }
   const devClientUrl = typeof install.devClientUrl === "string" ? install.devClientUrl : void 0;
-  const runtimeKind = devClientUrl ? "expo-dev-client" : "bare-react-native";
+  if (install.buildKind !== "expo" && install.buildKind !== "bare-react-native") {
+    throw new Error("BUILD_RECEIPT_INVALID: exact build command provenance is unavailable");
+  }
+  const runtimeKind = install.buildKind === "expo" ? "expo-dev-client" : "bare-react-native";
   if (!secret?.signerCapability) {
     throw new Error("BUNDLE_HANDSHAKE_UNAVAILABLE: session signer is unavailable");
   }

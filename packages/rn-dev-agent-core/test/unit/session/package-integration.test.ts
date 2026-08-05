@@ -3863,12 +3863,14 @@ test('copied adapter accepts build identity only from the package-local session 
     );
     const deliveredToken = () => {
       const calls = readFileSync(preparePath, 'utf8').trim().split('\n');
-      const token = (JSON.parse(calls[calls.length - 1] as string) as { args: string[] }).args[2];
+      const args = (JSON.parse(calls[calls.length - 1] as string) as { args: string[] }).args;
+      const token = args[2];
       assert.match(
         token as string,
         /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
         'adapter must deliver a canonical abort capability to prepare-build',
       );
+      assert.equal(args[3], 'expo');
       return token as string;
     };
 

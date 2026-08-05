@@ -137,6 +137,44 @@ test('bare RN pin launches the exact claimed app without inventing a dev-client 
   assert.equal(binding.devClientUrl, undefined);
 });
 
+test('receipted Expo pin verifies the managed manifest without a dev-client URL', async () => {
+  const calls = [];
+  const marker = buildSignedMetroMarker(expected, 'signer');
+  const binding = await pinExactDevClient(
+    {
+      ...expected,
+      deviceId: 'IOS-UUID',
+      metroPort: 8341,
+      runtimeKind: 'expo-dev-client',
+      signerCapability: 'signer',
+    },
+    {
+      openUrl: async () => {
+        throw new Error('missing URL must launch the exact app');
+      },
+      launchExactApp: async (platform, deviceId, appId) =>
+        calls.push(['launch', platform, deviceId, appId]),
+      acceptIosOpenDialog: async () => {},
+      connectExact: async () => ({
+        targetId: 'target-expo',
+        connectionGeneration: 9,
+        deviceId: 'IOS-UUID',
+      }),
+      readMarker: async () => ({ status: 'signed', marker }),
+      readManagedManifest: async (input) => {
+        calls.push(['manifest', input.host, input.metroPort]);
+        return exactManifestResponse;
+      },
+    },
+  );
+
+  assert.deepEqual(calls, [
+    ['manifest', '127.0.0.1', 8341],
+    ['launch', 'ios', 'IOS-UUID', 'com.example.app'],
+  ]);
+  assert.equal(binding.targetId, 'target-expo');
+});
+
 test('loader or error targets remain rejected until the exact runtime exposes its signed marker', async () => {
   const marker = buildSignedMetroMarker(expected, 'private-signer-capability');
   let markerAvailable = false;
