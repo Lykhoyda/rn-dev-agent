@@ -69,10 +69,11 @@ function controlledInput(
   testID: string,
   focused: { value: boolean },
   onChange: (text: string) => void,
+  initialValue = '',
 ) {
   const input = fiber({ displayName: 'TextInput' });
   let focusCalls = 0;
-  input.memoizedProps = { testID, value: '', onChangeText: onChange };
+  input.memoizedProps = { testID, value: initialValue, onChangeText: onChange };
   input.stateNode = {
     isFocused: () => focused.value,
     focus: () => {
@@ -88,6 +89,27 @@ function uncontrolledInput(testID: string) {
   input.stateNode = { isFocused: () => false, focus() {} };
   return input;
 }
+
+test('real controlled owner clears to empty with one dispatch', async () => {
+  const root = fiber({ displayName: 'Root' });
+  const focused = { value: true };
+  let dispatches = 0;
+  const target = controlledInput(
+    'field',
+    focused,
+    (text) => {
+      dispatches += 1;
+      target.input.memoizedProps = { ...target.input.memoizedProps, value: text };
+    },
+    'existing',
+  );
+  append(root, target.input);
+
+  const result = await fill(install(root), 'field', '');
+  assert.deepEqual({ ...result }, { kind: 'success', focusedBefore: true });
+  assert.equal(dispatches, 1);
+  assert.equal(target.input.memoizedProps.value, '');
+});
 
 test('real controlled wrapper focuses the unique inner input and dispatches once', async () => {
   const root = fiber({ displayName: 'Root' });
