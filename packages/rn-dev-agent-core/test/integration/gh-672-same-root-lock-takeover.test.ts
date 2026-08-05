@@ -1,13 +1,4 @@
-// GH #672: two REAL built supervisors for the same app root. Before the identity
-// fix the contender read the live owner's `supervisor.js` command line as a reused
-// PID (the lock matched on a `cdp-bridge` needle no shipped entrypoint contains),
-// unlinked the live lock, allocated the same deterministic Metro/Observe ports, and
-// the owner self-terminated on its next heartbeat — a blocked contender plus a dead
-// transport. This drives the real processes over stdio and asserts one stable owner
-// and one non-destructive refusal across several real ownership checks.
-//
-// Fully disposable: private XDG state root, private TMPDIR (so the lock and any
-// registry live under the temp dir), declared source identity, Observe autostart off.
+// GH #672: drive two built supervisors over stdio and prove a same-root contender cannot steal a live owner's lock.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';

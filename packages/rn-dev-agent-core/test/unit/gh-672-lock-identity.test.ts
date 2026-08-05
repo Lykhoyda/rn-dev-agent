@@ -1,7 +1,4 @@
-// GH #672: a second supervisor for the same app root must never misclassify the
-// live owner. The historical `cdp-bridge` process-name needle matched no shipped
-// entrypoint, so every real `supervisor.js` read as a reused PID: the contender
-// unlinked the live lock, and the owner self-terminated on its next heartbeat.
+// GH #672: a same-root contender must never misclassify and replace a live supervisor owner.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';

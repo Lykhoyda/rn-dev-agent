@@ -84089,8 +84089,8 @@ var init_index = __esm({
         "stop_metro",
         "release"
       ]),
-      platform: external_exports.enum(["ios", "android"]).describe("For release_stale_device, supply with deviceId for initial transfer or omit both to resume the session-owned journal").optional(),
-      deviceId: external_exports.string().describe("For release_stale_device, supply with platform for initial transfer or omit both to resume the session-owned journal").optional(),
+      platform: external_exports.enum(["ios", "android"]).describe("Required with deviceId for foreign transfer; omit both to resume own journal").optional(),
+      deviceId: external_exports.string().describe("Required with platform for foreign transfer; omit both to resume own journal").optional(),
       appId: external_exports.string().optional(),
       devClientUrl: external_exports.string().url().optional(),
       buildReceipt: external_exports.record(external_exports.unknown()).optional(),
@@ -84104,7 +84104,7 @@ var init_index = __esm({
       handoffId: external_exports.string().optional(),
       token: external_exports.string().optional(),
       adoptionHandle: external_exports.string().optional(),
-      releaseHandle: external_exports.string().describe("Bounded capability minted by bind_device for the initial proven-dead device transfer; omit only when resuming this session epoch's durable cleanup journal").optional(),
+      releaseHandle: external_exports.string().describe("Bounded capability minted by bind_device for initial proven-dead device transfer").optional(),
       confirmed: external_exports.boolean().optional(),
       force: external_exports.boolean().optional()
     }, sessionHandler);
