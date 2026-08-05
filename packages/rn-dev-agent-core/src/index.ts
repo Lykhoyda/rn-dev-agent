@@ -1239,15 +1239,13 @@ trackedTool(
       'stop_metro',
       'release',
     ]),
-    platform: z.enum(['ios', 'android'])
-      .describe(
-        'For release_stale_device, supply with deviceId for initial transfer or omit both to resume the session-owned journal',
-      )
+    platform: z
+      .enum(['ios', 'android'])
+      .describe('Required with deviceId for foreign transfer; omit both to resume own journal')
       .optional(),
-    deviceId: z.string()
-      .describe(
-        'For release_stale_device, supply with platform for initial transfer or omit both to resume the session-owned journal',
-      )
+    deviceId: z
+      .string()
+      .describe('Required with platform for foreign transfer; omit both to resume own journal')
       .optional(),
     appId: z.string().optional(),
     devClientUrl: z.string().url().optional(),
@@ -1264,9 +1262,7 @@ trackedTool(
     adoptionHandle: z.string().optional(),
     releaseHandle: z
       .string()
-      .describe(
-        "Bounded capability minted by bind_device for the initial proven-dead device transfer; omit only when resuming this session epoch's durable cleanup journal",
-      )
+      .describe('Bounded capability minted by bind_device for initial proven-dead device transfer')
       .optional(),
     confirmed: z.boolean().optional(),
     force: z.boolean().optional(),
