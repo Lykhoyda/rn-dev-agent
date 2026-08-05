@@ -83,6 +83,12 @@ function controlledInput(
   return { input, focusCalls: () => focusCalls };
 }
 
+function uncontrolledInput(testID: string) {
+  const input = fiber({ displayName: 'TextInput' }, { testID });
+  input.stateNode = { isFocused: () => false, focus() {} };
+  return input;
+}
+
 test('real controlled wrapper focuses the unique inner input and dispatches once', async () => {
   const root = fiber({ displayName: 'Root' });
   const wrapper = fiber({ displayName: 'Pressable' }, { testID: 'field-pressable' });
@@ -206,6 +212,24 @@ test('wrapper ownership stays inside its subtree without a naming convention', a
   assert.deepEqual({ ...result }, { kind: 'success', focusedBefore: false });
   assert.equal(targetDispatches, 1);
   assert.equal(unrelatedDispatches, 0);
+});
+
+test('wrapper with controlled and uncontrolled descendants refuses as ambiguous', async () => {
+  const root = fiber({ displayName: 'Root' });
+  const wrapper = fiber({ displayName: 'Pressable' }, { testID: 'field-shell' });
+  const focused = { value: true };
+  let dispatches = 0;
+  const controlled = controlledInput('controlled-field', focused, () => {
+    dispatches += 1;
+  });
+  append(wrapper, controlled.input, uncontrolledInput('uncontrolled-field'));
+  append(root, wrapper);
+
+  const result = await fill(install(root), 'field-shell', 'canary');
+  assert.equal(result.kind, 'failure');
+  assert.equal(result.reason, 'ambiguous');
+  assert.equal(result.mutation, 'none');
+  assert.equal(dispatches, 0);
 });
 
 test('siblings sharing one callback remain ambiguous owners', async () => {

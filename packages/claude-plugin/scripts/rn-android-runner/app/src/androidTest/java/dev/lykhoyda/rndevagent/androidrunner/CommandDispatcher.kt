@@ -268,15 +268,23 @@ class CommandDispatcher(
 
     private data class ExactNodeResolution(
         val node: AccessibilityNodeInfo?,
-        val ambiguous: Boolean,
+        val verdict: TextInputRecipe.ExactResolution,
     )
 
     private fun exactType(identifier: String, type: String, requested: String): JSONObject {
         var initialResolution = resolveExactNode(identifier, type)
+        if (initialResolution.verdict == TextInputRecipe.ExactResolution.UNREADABLE) {
+            throw ExactFillException(
+                "TEXT_ENTRY_UNVERIFIED",
+                "none",
+                "unreadable",
+                "The exact text input traversal was incomplete; no text was entered.",
+            )
+        }
         val initial = initialResolution.node ?: throw ExactFillException(
             "NO_TEXT_INPUT_TARGET",
             "none",
-            if (initialResolution.ambiguous) "ambiguous" else "target-lost",
+            if (initialResolution.verdict == TextInputRecipe.ExactResolution.AMBIGUOUS) "ambiguous" else "target-lost",
             "The exact text input descriptor did not resolve uniquely; no text was entered.",
         )
         val initialBounds = Rect().also { initial.getBoundsInScreen(it) }
@@ -306,12 +314,21 @@ class CommandDispatcher(
         }
 
         initialResolution = resolveExactNode(identifier, type)
+        if (initialResolution.verdict == TextInputRecipe.ExactResolution.UNREADABLE) {
+            initial.recycle()
+            throw ExactFillException(
+                "TEXT_ENTRY_UNVERIFIED",
+                "none",
+                "unreadable",
+                "The exact text input traversal was incomplete during focus; no text was entered.",
+            )
+        }
         val focused = initialResolution.node ?: run {
             initial.recycle()
             throw ExactFillException(
                 "TEXT_TARGET_LOST",
                 "none",
-                if (initialResolution.ambiguous) "ambiguous" else "target-lost",
+                if (initialResolution.verdict == TextInputRecipe.ExactResolution.AMBIGUOUS) "ambiguous" else "target-lost",
                 "The exact text input was lost during focus; no text was entered.",
             )
         }
@@ -360,12 +377,21 @@ class CommandDispatcher(
         repeat(6) { attempt ->
             if (attempt > 0) SystemClock.sleep(80)
             val readResolution = resolveExactNode(identifier, type)
+            if (readResolution.verdict == TextInputRecipe.ExactResolution.UNREADABLE) {
+                focused.recycle()
+                throw ExactFillException(
+                    "TEXT_ENTRY_UNVERIFIED",
+                    "possible",
+                    "unreadable",
+                    "The exact text input traversal was incomplete after mutation.",
+                )
+            }
             val current = readResolution.node ?: run {
                 focused.recycle()
                 throw ExactFillException(
                     "TEXT_TARGET_LOST",
                     "possible",
-                    if (readResolution.ambiguous) "ambiguous" else "target-lost",
+                    if (readResolution.verdict == TextInputRecipe.ExactResolution.AMBIGUOUS) "ambiguous" else "target-lost",
                     "The exact text input was lost after mutation.",
                 )
             }
@@ -436,12 +462,17 @@ class CommandDispatcher(
                 node.recycle()
             }
         }
+        val traversalComplete = stack.isEmpty()
         while (stack.isNotEmpty()) stack.removeLast().recycle()
-        if (matches.size != 1) {
+        val verdict = TextInputRecipe.classifyResolution(
+            matchCount = matches.size,
+            traversalComplete = traversalComplete,
+        )
+        if (verdict != TextInputRecipe.ExactResolution.UNIQUE) {
             matches.forEach { it.recycle() }
-            return ExactNodeResolution(null, matches.size > 1)
+            return ExactNodeResolution(null, verdict)
         }
-        return ExactNodeResolution(matches.single(), false)
+        return ExactNodeResolution(matches.single(), verdict)
     }
 
     private fun nodeText(node: AccessibilityNodeInfo): String? {
