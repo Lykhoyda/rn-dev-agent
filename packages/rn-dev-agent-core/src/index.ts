@@ -1231,6 +1231,7 @@ trackedTool(
       'cancel_handoff',
       'accept_handoff',
       'adopt_stale',
+      'release_stale_device',
       'recover_arbiter',
       'preview_integration',
       'apply_integration',
@@ -1253,6 +1254,10 @@ trackedTool(
     handoffId: z.string().optional(),
     token: z.string().optional(),
     adoptionHandle: z.string().optional(),
+    releaseHandle: z
+      .string()
+      .describe('Bounded capability minted by bind_device for a proven-dead device owner')
+      .optional(),
     confirmed: z.boolean().optional(),
     force: z.boolean().optional(),
   },

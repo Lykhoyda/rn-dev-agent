@@ -57,11 +57,16 @@ function createRuntime(
   registry: { getSessionStatus: (sessionId: string) => unknown },
   ref: { sessionId: string; claimEpoch: number },
 ): never {
+  const recovery = registry as {
+    inspectRecoveryRequirement?: (sessionId: string) => unknown;
+  };
   return {
     status: () => ({ available: true, ...(registry.getSessionStatus(ref.sessionId) as object) }),
     requireAvailable: () => ({ registry, session: ref }),
     requireOperational: () => ({ registry, session: ref }),
     requireRecovery: () => ({ registry, session: ref }),
+    refreshRecoveryHandles: () => false,
+    inspectRecoveryRequirement: () => recovery.inspectRecoveryRequirement?.(ref.sessionId),
   } as never;
 }
 

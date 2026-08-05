@@ -9,7 +9,7 @@ Inspect and transition the fenced rn-dev-agent authority session. Status reconci
 
 | Name | Type | Required | Default | Constraints | Description |
 |------|------|----------|---------|-------------|-------------|
-| `action` | `enum: status | bind_device | bind_metro | pin_dev_client | prepare_handoff | cancel_handoff | accept_handoff | adopt_stale | recover_arbiter | preview_integration | apply_integration | restore_integration | stop_metro | release` | Yes |  |  |  |
+| `action` | `enum: status | bind_device | bind_metro | pin_dev_client | prepare_handoff | cancel_handoff | accept_handoff | adopt_stale | release_stale_device | recover_arbiter | preview_integration | apply_integration | restore_integration | stop_metro | release` | Yes |  |  |  |
 | `platform` | `enum: ios | android` | No |  |  |  |
 | `deviceId` | `string` | No |  |  |  |
 | `appId` | `string` | No |  |  |  |
@@ -25,11 +25,12 @@ Inspect and transition the fenced rn-dev-agent authority session. Status reconci
 | `handoffId` | `string` | No |  |  |  |
 | `token` | `string` | No |  |  |  |
 | `adoptionHandle` | `string` | No |  |  |  |
+| `releaseHandle` | `unknown` | No |  |  | Bounded capability minted by bind_device for a proven-dead device owner |
 | `confirmed` | `boolean` | No |  |  |  |
 | `force` | `boolean` | No |  |  |  |
 
 ## Usage
 
 ```
-rn_session(action: <enum: status | bind_device | bind_metro | pin_dev_client | prepare_handoff | cancel_handoff | accept_handoff | adopt_stale | recover_arbiter | preview_integration | apply_integration | restore_integration | stop_metro | release>)
+rn_session(action: <enum: status | bind_device | bind_metro | pin_dev_client | prepare_handoff | cancel_handoff | accept_handoff | adopt_stale | release_stale_device | recover_arbiter | preview_integration | apply_integration | restore_integration | stop_metro | release>)
 ```

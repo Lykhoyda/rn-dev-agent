@@ -8,12 +8,14 @@ export class WorkerAuthorityRuntime {
     #session;
     #unavailable;
     #recoveryOnly;
-    constructor(registry, session, unavailable, recoveryOnly = false) {
+    #recoveryCapability;
+    constructor(registry, session, unavailable, recoveryOnly = false, recoveryCapability = null) {
         this.#registry = registry;
         this.#session = session;
         this.#unavailable = unavailable;
         this.available = registry !== null && session !== null;
         this.#recoveryOnly = recoveryOnly;
+        this.#recoveryCapability = recoveryCapability;
     }
     requireAvailable() {
         if (!this.#registry || !this.#session) {
@@ -38,6 +40,39 @@ export class WorkerAuthorityRuntime {
             throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', 'session is not a capability-bound recovery contender');
         }
         return available;
+    }
+    /**
+     * GH #672: rotate an expired recovery handle before it is advertised. Best-effort by
+     * design — a refresh failure must degrade `status` to an honest expired handle, never
+     * turn a diagnostic call into an authority error.
+     */
+    refreshRecoveryHandles() {
+        if (!this.#registry || !this.#session || !this.#recoveryOnly || !this.#recoveryCapability) {
+            return false;
+        }
+        try {
+            const status = this.#registry.getSessionStatus(this.#session.sessionId);
+            const instanceId = status?.worker.instanceId;
+            if (!status ||
+                !instanceId ||
+                (status.state !== 'blocked' && status.state !== 'handoff_cleanup')) {
+                return false;
+            }
+            return this.#registry.refreshRecoveryHandles(this.#session, { instanceId }, this.#recoveryCapability);
+        }
+        catch {
+            return false;
+        }
+    }
+    inspectRecoveryRequirement() {
+        if (!this.#registry || !this.#session)
+            return undefined;
+        try {
+            return this.#registry.inspectRecoveryRequirement(this.#session.sessionId);
+        }
+        catch {
+            return undefined;
+        }
     }
     status() {
         if (!this.#registry || !this.#session) {
@@ -94,10 +129,12 @@ export function createWorkerAuthorityRuntime(environment = process.env, dependen
         const session = { sessionId, claimEpoch };
         const status = registry.getSessionStatus(sessionId);
         const recoveryOnly = status?.state === 'blocked' || status?.state === 'handoff_cleanup';
+        let recoveryCapability = null;
         if (recoveryOnly) {
             const secretPath = environment.RN_DEV_AGENT_SESSION_SECRET_PATH;
-            const recoveryCapability = secretPath
-                ? readJsonStateFile(secretPath)?.recoveryCapability
+            recoveryCapability = secretPath
+                ? (readJsonStateFile(secretPath)?.recoveryCapability ??
+                    null)
                 : null;
             if (!recoveryCapability) {
                 throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', 'blocked recovery capability is unavailable');
@@ -111,7 +148,7 @@ export function createWorkerAuthorityRuntime(environment = process.env, dependen
                 token: birth.token,
             });
         }
-        return new WorkerAuthorityRuntime(registry, session, null, recoveryOnly);
+        return new WorkerAuthorityRuntime(registry, session, null, recoveryOnly, recoveryCapability);
     }
     catch (error) {
         return unavailable(error instanceof Error

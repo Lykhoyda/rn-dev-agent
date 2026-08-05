@@ -1,9 +1,29 @@
 import { inspectAuthorityMigration } from './migration-diagnostic.js';
+import type { RecoveryRequirementInspection } from './registry.js';
 import type { WorkerAuthorityStatus } from './runtime.js';
+
+interface BoundedHandle {
+  token?: unknown;
+  expiresMs?: unknown;
+}
+
+// GH #672: an expired handle must never be advertised — `validateStaleAdoption`
+// refuses it, which is what made a freshly fetched status look self-contradictory.
+// The caller refreshes before projecting; anything still expired here is reported
+// as expired with a typed refresh action instead of being offered as usable.
+function liveHandle(handle: BoundedHandle | undefined, now: number): string | undefined {
+  if (typeof handle?.token !== 'string') return undefined;
+  if (typeof handle.expiresMs === 'number' && handle.expiresMs <= now) return undefined;
+  return handle.token;
+}
 
 export function projectPublicAuthorityStatus(
   status: WorkerAuthorityStatus,
-  options: { includeSessionId?: boolean } = {},
+  options: {
+    includeSessionId?: boolean;
+    now?: () => number;
+    recoveryRequirement?: RecoveryRequirementInspection;
+  } = {},
 ): Record<string, unknown> {
   if (!status.available) {
     return {
@@ -11,32 +31,42 @@ export function projectPublicAuthorityStatus(
       code: status.code,
     };
   }
+  const now = (options.now ?? Date.now)();
   const recovery = status.bindings.recoveryHandles as
     | {
-        handoffRecipient?: { token?: unknown; expiresMs?: unknown };
-        adoptStale?: { token?: unknown; expiresMs?: unknown };
+        handoffRecipient?: BoundedHandle;
+        adoptStale?: BoundedHandle;
       }
     | undefined;
+  const adoptionHandle = liveHandle(recovery?.adoptStale, now);
   const recoveryStatus =
     status.state === 'blocked' && recovery
       ? {
-          handoffRecipientHandle:
-            typeof recovery.handoffRecipient?.token === 'string'
-              ? recovery.handoffRecipient.token
-              : undefined,
+          handoffRecipientHandle: liveHandle(recovery.handoffRecipient, now),
           handoffRecipientExpiresMs:
             typeof recovery.handoffRecipient?.expiresMs === 'number'
               ? recovery.handoffRecipient.expiresMs
               : undefined,
           adoptionRequired: Boolean(recovery.adoptStale),
-          adoptionHandle:
-            typeof recovery.adoptStale?.token === 'string' ? recovery.adoptStale.token : undefined,
+          adoptionHandle,
           adoptionExpiresMs:
             typeof recovery.adoptStale?.expiresMs === 'number'
               ? recovery.adoptStale.expiresMs
               : undefined,
+          ...(recovery.adoptStale && !adoptionHandle
+            ? {
+                adoptionHandleExpired: true,
+                adoptionRefreshAction:
+                  'The advertised adoption handle expired and could not be rotated. Re-run rn_session({ action: "status" }) to mint a fresh one.',
+              }
+            : {}),
         }
       : undefined;
+  const staleRelease = status.bindings.staleDeviceRelease as
+    | (BoundedHandle & { platform?: unknown; obligations?: unknown })
+    | null
+    | undefined;
+  const releaseHandle = liveHandle(staleRelease ?? undefined, now);
   const metro = status.bindings.metro as Record<string, unknown> | undefined;
   const metroTerminal = status.bindings.metroTerminal as
     | { code?: unknown; reason?: unknown; phase?: unknown; observedAt?: unknown }
@@ -70,6 +100,33 @@ export function projectPublicAuthorityStatus(
     runnerBound: Boolean(status.bindings.runner),
     recorderBound: Boolean(status.bindings.recorder),
     ...(recoveryStatus ? { recovery: recoveryStatus } : {}),
+    ...(options.recoveryRequirement && options.recoveryRequirement.requirement !== 'none'
+      ? {
+          recoveryRequirement: {
+            requirement: options.recoveryRequirement.requirement,
+            priorOwner: options.recoveryRequirement.priorOwner,
+            nextAction: options.recoveryRequirement.nextAction,
+          },
+        }
+      : {}),
+    ...(staleRelease
+      ? {
+          staleDeviceRelease: {
+            platform: staleRelease.platform,
+            releaseHandle,
+            expiresMs:
+              typeof staleRelease.expiresMs === 'number' ? staleRelease.expiresMs : undefined,
+            obligations: Array.isArray(staleRelease.obligations) ? staleRelease.obligations : [],
+            ...(releaseHandle
+              ? {}
+              : {
+                  expired: true,
+                  nextAction:
+                    'The stale device release offer expired. Re-run rn_session({ action: "bind_device" }) to mint a fresh one.',
+                }),
+          },
+        }
+      : {}),
     migration: inspectAuthorityMigration(status),
   };
 }
