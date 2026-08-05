@@ -76,12 +76,11 @@ export function projectPublicAuthorityStatus(
     | undefined;
   const cleanupPlatform =
     typeof staleCleanup?.platform === 'string' ? staleCleanup.platform : undefined;
-  const cleanupNextAction =
-    cleanupPlatform
-      ? status.state === 'handoff_cleanup'
-        ? 'rn_session({ action: "adopt_stale", adoptionHandle })'
-        : 'rn_session({ action: "release_stale_device" })'
-      : undefined;
+  const cleanupNextAction = cleanupPlatform
+    ? status.state === 'handoff_cleanup'
+      ? 'rn_session({ action: "adopt_stale", adoptionHandle })'
+      : 'rn_session({ action: "release_stale_device" })'
+    : undefined;
   const releaseHandle = cleanupNextAction ? undefined : liveHandle(staleRelease ?? undefined, now);
   const pendingCleanupObligations = (['runner', 'recorder'] as const).filter((resource) => {
     const binding = staleCleanup?.[resource];
