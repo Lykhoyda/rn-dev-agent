@@ -503,6 +503,10 @@ function cleanNodeRef(node: SnapshotNode): string {
   return node.ref.startsWith('@') ? node.ref.slice(1) : node.ref;
 }
 
+function inputTestId(identifier: string | undefined): string | null {
+  return identifier && identifier.trim().length > 0 ? identifier : null;
+}
+
 function signatureForNode(nodes: SnapshotNode[], node: SnapshotNode): RefSignature {
   return {
     type: node.type ?? '',
@@ -568,7 +572,7 @@ export function bindExactFillTarget(
       ok: true,
       binding: {
         inputRef: `@${cleanNodeRef(node)}`,
-        inputTestId: node.identifier ?? null,
+        inputTestId: inputTestId(node.identifier),
         inputSignature: signatureForNode(nodes, node),
         focusRef: `@${cleanNodeRef(node)}`,
         wrapper: false,

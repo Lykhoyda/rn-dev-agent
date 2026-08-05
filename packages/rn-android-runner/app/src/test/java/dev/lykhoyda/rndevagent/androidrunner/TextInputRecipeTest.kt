@@ -186,27 +186,35 @@ class TextInputRecipeTest {
     // never prove content, empty-expectation reads are hint-ambiguous.
     @Test
     fun classifyVerifyExactAndMismatch() {
-        assertEquals("exact", TextInputRecipe.classifyVerify("hello", "hello", "Name", secure = false))
-        assertEquals("mismatch", TextInputRecipe.classifyVerify("hello", "world", "Name", secure = false))
-        assertEquals("mismatch", TextInputRecipe.classifyVerify("hello", "hel", "Name", secure = false))
-        assertEquals("unreadable", TextInputRecipe.classifyVerify("hello", null, "Name", secure = false))
+        assertEquals("exact", TextInputRecipe.classifyVerify("hello", "hello", "Name", true, secure = false))
+        assertEquals("mismatch", TextInputRecipe.classifyVerify("hello", "world", "Name", true, secure = false))
+        assertEquals("mismatch", TextInputRecipe.classifyVerify("hello", "hel", "Name", true, secure = false))
+        assertEquals("unreadable", TextInputRecipe.classifyVerify("hello", null, "Name", true, secure = false))
     }
 
     @Test
     fun classifyVerifySecureNeverProvesContent() {
-        assertEquals("secure-masked", TextInputRecipe.classifyVerify("value-a", "•••••••", "Password", secure = true))
-        assertEquals("secure-masked", TextInputRecipe.classifyVerify("value-a", "value-a", "Password", secure = true))
-        assertEquals("exact", TextInputRecipe.classifyVerify("", "", "Password", secure = true))
-        assertEquals("ambiguous", TextInputRecipe.classifyVerify("", "Password", "Password", secure = true))
-        assertEquals("mismatch", TextInputRecipe.classifyVerify("", "•••", "Password", secure = true))
+        assertEquals("secure-masked", TextInputRecipe.classifyVerify("value-a", "•••••••", "Password", true, secure = true))
+        assertEquals("secure-masked", TextInputRecipe.classifyVerify("value-a", "value-a", "Password", true, secure = true))
+        assertEquals("exact", TextInputRecipe.classifyVerify("", "", "Password", true, secure = true))
+        assertEquals("ambiguous", TextInputRecipe.classifyVerify("", "Password", "Password", true, secure = true))
+        assertEquals("mismatch", TextInputRecipe.classifyVerify("", "•••", "Password", true, secure = true))
     }
 
     @Test
     fun classifyVerifyEmptyExpectationIsHintAmbiguous() {
-        assertEquals("exact", TextInputRecipe.classifyVerify("", "", "Enter name", secure = false))
-        assertEquals("ambiguous", TextInputRecipe.classifyVerify("", "Enter name", "Enter name", secure = false))
-        assertEquals("mismatch", TextInputRecipe.classifyVerify("", "stale", "Enter name", secure = false))
-        assertEquals("ambiguous", TextInputRecipe.classifyVerify("Search", "Search", "Search", secure = false))
+        assertEquals("exact", TextInputRecipe.classifyVerify("", "", "Enter name", true, secure = false))
+        assertEquals("ambiguous", TextInputRecipe.classifyVerify("", "Enter name", "Enter name", true, secure = false))
+        assertEquals("mismatch", TextInputRecipe.classifyVerify("", "stale", "Enter name", true, secure = false))
+        assertEquals("ambiguous", TextInputRecipe.classifyVerify("Search", "Search", "Search", true, secure = false))
+    }
+
+    @Test
+    fun classifyVerifyUnknownHintProvenanceIsInconclusiveOnlyWhenNeeded() {
+        assertEquals("ambiguous", TextInputRecipe.classifyVerify("Search", "Search", null, false, secure = false))
+        assertEquals("ambiguous", TextInputRecipe.classifyVerify("", "Search", null, false, secure = false))
+        assertEquals("exact", TextInputRecipe.classifyVerify("", "", null, false, secure = false))
+        assertEquals("mismatch", TextInputRecipe.classifyVerify("Search", "Other", null, false, secure = false))
     }
 
     @Test

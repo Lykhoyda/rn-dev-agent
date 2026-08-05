@@ -652,7 +652,7 @@ class CommandDispatcher(
         for (attempt in 0 until 3) {
             val raw = readTargetText(bound)
             val hint = readTargetHint(bound)
-            verdict = TextInputRecipe.classifyVerify(expected, raw, hint, secure)
+            verdict = TextInputRecipe.classifyVerify(expected, raw, hint.value, hint.known, secure)
             if (havePrevious && previous == raw) {
                 stable = true
                 break
@@ -678,12 +678,14 @@ class CommandDispatcher(
         }
     }
 
-    private fun readTargetHint(target: UiObject2): String? {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return null
+    private data class HintRead(val value: String?, val known: Boolean)
+
+    private fun readTargetHint(target: UiObject2): HintRead {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return HintRead(null, false)
         return try {
-            target.hint
+            HintRead(target.hint, true)
         } catch (e: StaleObjectException) {
-            null
+            HintRead(null, false)
         }
     }
 

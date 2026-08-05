@@ -99,6 +99,44 @@ test('gh-581 bind: direct input ref and bare testID both bind', () => {
   assert.equal((byTestId as { binding: { inputRef: string } }).binding.inputRef, '@e30');
 });
 
+test('gh-581 bind: blank Android identifiers rebind by signature, not empty testID', () => {
+  const original = [
+    {
+      ref: '@e1',
+      identifier: '',
+      label: 'Search',
+      type: 'android.widget.EditText',
+      rect: { x: 0, y: 0, width: 10, height: 10 },
+    },
+  ];
+  const bound = bindExactFillTarget(
+    original as never,
+    '@e1',
+    {
+      type: 'android.widget.EditText',
+      identifier: '',
+      label: 'Search',
+      flatIndex: 0,
+      nodeCount: 1,
+    },
+  );
+  assert.ok(bound.ok);
+  const binding = (
+    bound as {
+      binding: { inputRef: string; inputTestId: string | null; inputSignature: unknown };
+    }
+  ).binding;
+  assert.equal(binding.inputTestId, null);
+
+  const replacement = [{ ...original[0], ref: '@e2', label: 'Other input' }];
+  const rebound = bindExactFillTarget(
+    replacement as never,
+    binding.inputTestId ?? binding.inputRef,
+    binding.inputSignature as never,
+  );
+  assert.ok(!rebound.ok);
+});
+
 test('gh-581 bind: Android fully-qualified EditText is recognized; bare EditText is not', () => {
   const out = bindExactFillTarget(NODES as never, 'notes');
   assert.ok(out.ok);

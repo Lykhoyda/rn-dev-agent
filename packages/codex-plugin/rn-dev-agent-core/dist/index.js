@@ -33362,6 +33362,9 @@ function isSecureInputNode(node) {
 function cleanNodeRef(node) {
   return node.ref.startsWith("@") ? node.ref.slice(1) : node.ref;
 }
+function inputTestId(identifier) {
+  return identifier && identifier.trim().length > 0 ? identifier : null;
+}
 function signatureForNode(nodes, node) {
   return {
     type: node.type ?? "",
@@ -33410,7 +33413,7 @@ function bindExactFillTarget(nodes, rawRef, priorSignature) {
       ok: true,
       binding: {
         inputRef: `@${cleanNodeRef(node)}`,
-        inputTestId: node.identifier ?? null,
+        inputTestId: inputTestId(node.identifier),
         inputSignature: signatureForNode(nodes, node),
         focusRef: `@${cleanNodeRef(node)}`,
         wrapper: false,

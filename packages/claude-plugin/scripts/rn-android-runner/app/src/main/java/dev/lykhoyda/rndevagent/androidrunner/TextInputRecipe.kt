@@ -46,21 +46,27 @@ object TextInputRecipe {
             SetTextOutcome.REJECTED -> false
         }
 
-    fun classifyVerify(expected: String, raw: String?, hint: String?, secure: Boolean): String {
+    fun classifyVerify(
+        expected: String,
+        raw: String?,
+        hint: String?,
+        hintKnown: Boolean,
+        secure: Boolean,
+    ): String {
         if (raw == null) return "unreadable"
         val placeholderEqual = !hint.isNullOrEmpty() && raw == hint
         if (secure) {
             if (expected.isEmpty()) {
                 if (raw.isEmpty()) return "exact"
-                return if (placeholderEqual) "ambiguous" else "mismatch"
+                return if (!hintKnown || placeholderEqual) "ambiguous" else "mismatch"
             }
             return "secure-masked"
         }
         if (expected.isEmpty()) {
             if (raw.isEmpty()) return "exact"
-            return if (placeholderEqual) "ambiguous" else "mismatch"
+            return if (!hintKnown || placeholderEqual) "ambiguous" else "mismatch"
         }
-        if (raw == expected) return if (placeholderEqual) "ambiguous" else "exact"
+        if (raw == expected) return if (!hintKnown || placeholderEqual) "ambiguous" else "exact"
         return "mismatch"
     }
 
