@@ -184,8 +184,7 @@ add(cdpMutation, {
   mutation: true,
   liveBundleProbe: true,
 });
-// Read-only Session child: admits with a live session only (autostart parity);
-// its mutating e2e web routes keep the full gates of the tools they invoke.
+// Observe is a read-only Session child; its mutating web routes keep their own gates.
 add(observe, {
   kind: 'authoritative',
   axes: ['C', 'S'],
