@@ -325,18 +325,7 @@ function classifySource(path: string, type: ResourceSpec['type']): SourceState {
     if (code === 'EACCES' || code === 'EPERM') return 'PERMISSION_DENIED';
     return 'MISSING';
   }
-  if (link.isSymbolicLink()) {
-    const target = canonical(path);
-    if (!target) return 'MISSING';
-    try {
-      const resolved = statSync(target);
-      return (type === 'directory' ? resolved.isDirectory() : resolved.isFile())
-        ? 'AVAILABLE'
-        : 'WRONG_TYPE';
-    } catch {
-      return 'MISSING';
-    }
-  }
+  if (link.isSymbolicLink()) return 'WRONG_TYPE';
   if (type === 'directory') return link.isDirectory() ? 'AVAILABLE' : 'WRONG_TYPE';
   return link.isFile() ? 'AVAILABLE' : 'WRONG_TYPE';
 }

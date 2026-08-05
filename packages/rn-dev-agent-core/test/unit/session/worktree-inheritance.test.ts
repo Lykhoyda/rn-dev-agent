@@ -261,6 +261,30 @@ test('foreign root links are refused and never written through, including blocke
   }
 });
 
+test('foreign canonical actions links are refused without creating a write path', () => {
+  const fixture = makeFixture();
+  try {
+    const primaryApp = appPath(fixture.primary, fixture.appRelative);
+    const foreign = join(fixture.root, 'foreign-actions');
+    mkdirSync(foreign);
+    writeFileSync(join(foreign, 'sentinel'), 'UNCHANGED');
+    mkdirSync(join(primaryApp, '.rn-agent'));
+    symlinkSync(foreign, join(primaryApp, '.rn-agent', 'actions'), 'dir');
+    const worktree = addWorktree(fixture);
+
+    const plan = planInheritance({ cwd: worktree, appRoot: worktree, host: 'claude' });
+    assert.equal(plan.resources[0].sourceState, 'WRONG_TYPE');
+    assert.equal(plan.resources[0].state, 'SOURCE_WRONG_TYPE');
+
+    const report = applyInheritance({ cwd: worktree, appRoot: worktree, host: 'claude' });
+    assert.equal(report.applied, 0);
+    assert.equal(existsSync(join(worktree, '.rn-agent', 'actions')), false);
+    assert.equal(readFileSync(join(foreign, 'sentinel'), 'utf8'), 'UNCHANGED');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test('tracked actions remain Git-owned and private unignored actions remain visible/refused', () => {
   const tracked = makeFixture({ ignore: '' });
   try {
