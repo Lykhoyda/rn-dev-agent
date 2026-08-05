@@ -249,7 +249,14 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
     worker.kill('SIGUSR2');
   });
 
+  // GH #672: the same-root lock regression must observe several real ownership
+  // checks without a 10s-per-tick wall clock. Clamped so a bad value can never
+  // busy-spin `ps` or disable orphan detection.
+  const parentWatchMs = Number(process.env.RN_DEV_AGENT_PARENT_WATCH_MS);
   startParentDeathWatch({
+    ...(Number.isFinite(parentWatchMs) && parentWatchMs >= 100 && parentWatchMs <= 60_000
+      ? { intervalMs: parentWatchMs }
+      : {}),
     onOrphaned: () => beginShutdown('parent host gone (PPID changed)'),
     onHeartbeat: () => {
       try {

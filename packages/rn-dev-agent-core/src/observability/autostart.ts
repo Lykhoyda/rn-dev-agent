@@ -7,6 +7,8 @@
 export interface AutostartDeps {
   findRoot: () => string | null;
   resolveEnabled: () => { enabled: boolean; source: 'env' | 'config' | 'default' };
+  /** GH #672: reason this session may not open operational children (blocked contender), or null. */
+  recoveryOnlyReason?: () => string | null;
   start: () => Promise<{ url: string; port: number }>;
   warn: (msg: string) => void;
   info: (msg: string) => void;
@@ -14,6 +16,14 @@ export interface AutostartDeps {
 
 export async function autostartObserve(deps: AutostartDeps): Promise<{ url: string } | null> {
   try {
+    // GH #672: a blocked contender shares the owner's deterministic Observe port.
+    // Autostarting there produces a port conflict and a child the contender has no
+    // authority to own — recovery must be the only thing it can do.
+    const recoveryOnly = deps.recoveryOnlyReason?.() ?? null;
+    if (recoveryOnly) {
+      deps.info(`observe UI autostart skipped (${recoveryOnly})`);
+      return null;
+    }
     if (!deps.findRoot()) return null;
     const res = deps.resolveEnabled();
     if (!res.enabled) {

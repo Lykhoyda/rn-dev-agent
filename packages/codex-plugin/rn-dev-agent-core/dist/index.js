@@ -76327,6 +76327,7 @@ import { tmpdir as tmpdir11, userInfo as userInfo2 } from "node:os";
 import { join as join40, resolve as resolve9 } from "node:path";
 var DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
 var DEFAULT_PROCESS_NAME_NEEDLE = "cdp-bridge";
+var PROCESS_IDENTITY_MARKERS = ["cdp-bridge", "rn-dev-agent", "supervisor.js"];
 var DEFAULT_STALE_MS2 = 9e4;
 function defaultProjectRoot() {
   return process.env.CLAUDE_USER_CWD ?? process.cwd();
@@ -76341,7 +76342,7 @@ function defaultProcessAlive4(pid) {
 }
 function defaultProcessName(pid) {
   try {
-    const out = execFileSync13("ps", ["-p", String(pid), "-o", "args="], {
+    const out = execFileSync13("ps", ["-ww", "-p", String(pid), "-o", "args="], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 1e3
@@ -76350,6 +76351,10 @@ function defaultProcessName(pid) {
   } catch {
     return null;
   }
+}
+function defaultProcessIdentity() {
+  const entry = process.argv[1];
+  return typeof entry === "string" ? entry : "";
 }
 function defaultProcessParent(pid) {
   try {
@@ -76392,6 +76397,7 @@ var Lockfile = class {
       selfPpid: opts.selfPpid ?? defaultSelfPpid,
       maxAgeMs: opts.maxAgeMs ?? DEFAULT_MAX_AGE_MS,
       processNameNeedle: opts.processNameNeedle ?? DEFAULT_PROCESS_NAME_NEEDLE,
+      processIdentity: opts.processIdentity ?? defaultProcessIdentity(),
       staleMs: opts.staleMs ?? DEFAULT_STALE_MS2
     };
     this.lockPath = join40(tmpDir, `rn-dev-agent-cdp-${uid}-${hash}.lock`);
@@ -76504,9 +76510,8 @@ var Lockfile = class {
     if (age !== null && age > this.opts.maxAgeMs)
       return false;
     const name = this.opts.processName(body.pid);
-    if (name !== null && !name.toLowerCase().includes(this.opts.processNameNeedle.toLowerCase())) {
+    if (name !== null && !this.#identityMatches(body, name))
       return false;
-    }
     const livePpid = this.opts.processParent(body.pid);
     if (livePpid !== null) {
       if (typeof body.ppid === "number") {
@@ -76520,6 +76525,25 @@ var Lockfile = class {
       return false;
     }
     return true;
+  }
+  /**
+   * GH #672: does `commandLine` still belong to the process that wrote this lock?
+   * Matches the owner's recorded entrypoint (exact path, then basename for a relocated
+   * install), then the shipped markers, then the configured legacy needle. Anything
+   * else is a reused PID.
+   */
+  #identityMatches(body, commandLine) {
+    const line = commandLine.toLowerCase();
+    const recorded = typeof body.identity === "string" ? body.identity.trim().toLowerCase() : "";
+    if (recorded) {
+      if (line.includes(recorded))
+        return true;
+      const basename8 = recorded.split("/").pop() ?? "";
+      if (basename8 && line.includes(basename8))
+        return true;
+    }
+    const needle = this.opts.processNameNeedle.toLowerCase();
+    return PROCESS_IDENTITY_MARKERS.some((marker) => line.includes(marker)) || needle.length > 0 && line.includes(needle);
   }
   ageOfLockFile() {
     try {
@@ -76536,6 +76560,7 @@ var Lockfile = class {
       startedAt: this.opts.clock(),
       lastHeartbeat: this.opts.clock(),
       ppid: this.opts.selfPpid(),
+      identity: this.opts.processIdentity || void 0,
       version: this.opts.version || void 0
     };
     const dir = this.opts.tmpDir;
@@ -78125,6 +78150,11 @@ function buildStateRead(input) {
 // packages/rn-dev-agent-core/dist/observability/autostart.js
 async function autostartObserve(deps) {
   try {
+    const recoveryOnly = deps.recoveryOnlyReason?.() ?? null;
+    if (recoveryOnly) {
+      deps.info(`observe UI autostart skipped (${recoveryOnly})`);
+      return null;
+    }
     if (!deps.findRoot())
       return null;
     const res = deps.resolveEnabled();
@@ -82501,6 +82531,12 @@ async function main() {
     void autostartObserve({
       findRoot: findProjectRoot,
       resolveEnabled: resolveObserveAutostart,
+      recoveryOnlyReason: () => {
+        const status = authorityRuntime.status();
+        if (!status.available)
+          return null;
+        return status.state === "blocked" || status.state === "handoff_cleanup" ? `session is a ${status.state} recovery contender` : null;
+      },
       start: startObserveServer,
       warn: (m) => logger.warn("OBSERVE", m),
       info: (m) => logger.info("OBSERVE", m)

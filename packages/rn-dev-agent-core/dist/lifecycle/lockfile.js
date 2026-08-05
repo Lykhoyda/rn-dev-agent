@@ -5,6 +5,12 @@ import { tmpdir, userInfo } from 'node:os';
 import { join, resolve } from 'node:path';
 const DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_PROCESS_NAME_NEEDLE = 'cdp-bridge';
+// GH #672: substrings that appear in every real MCP command line. The historical
+// `cdp-bridge` needle matches none of them, so a second same-root supervisor read
+// the live owner as a reused PID and stole its lock. Reclaiming a LIVE owner kills
+// a working session; failing to reclaim a genuinely reused PID only delays it to
+// the 90s heartbeat check — so identity must be positively DISPROVEN to reclaim.
+const PROCESS_IDENTITY_MARKERS = ['cdp-bridge', 'rn-dev-agent', 'supervisor.js'];
 // GH #182: heartbeat-staleness window. A healthy bridge refreshes lastHeartbeat
 // well within this (index.ts touches every ~30s); a wedged bridge stops, so its
 // lock becomes reclaimable. Matches device-lock.ts's 90s.
@@ -28,10 +34,12 @@ function defaultProcessAlive(pid) {
  * `args=` and emit the full command line — e.g. `node /path/to/cdp-bridge/dist/index.js`.
  * `comm=` would return only the executable basename (`"node"`) which never contains our
  * needle `cdp-bridge` — caught by multi-review before ship (D652 implementation notes).
+ * GH #672: `-ww` disables width truncation, or a deep install path is cut off and the
+ * recorded identity can never match.
  */
 export function defaultProcessName(pid) {
     try {
-        const out = execFileSync('ps', ['-p', String(pid), '-o', 'args='], {
+        const out = execFileSync('ps', ['-ww', '-p', String(pid), '-o', 'args='], {
             encoding: 'utf8',
             stdio: ['ignore', 'pipe', 'ignore'],
             timeout: 1000,
@@ -41,6 +49,15 @@ export function defaultProcessName(pid) {
     catch {
         return null;
     }
+}
+/**
+ * GH #672: the entrypoint path this process was launched with (`process.argv[1]`),
+ * recorded in the lock so a contender matches the OWNER's real command line rather
+ * than a hardcoded needle that no shipped entrypoint contains.
+ */
+export function defaultProcessIdentity() {
+    const entry = process.argv[1];
+    return typeof entry === 'string' ? entry : '';
 }
 /**
  * GH #182: resolve a PID's parent PID via `ps -p <pid> -o ppid=`. A cdp-bridge
@@ -90,7 +107,8 @@ function hashProjectRoot(projectRoot) {
  *
  * Stale lock detection has three orthogonal checks (any failure ⇒ reclaim):
  *   1. PID alive via `process.kill(pid, 0)` — catches crashed predecessors
- *   2. Process name matches `cdp-bridge` via `ps -p <pid> -o args=` — catches PID reuse after reboot
+ *   2. Live command line still carries the owner's recorded entrypoint identity (or a
+ *      known rn-dev-agent marker) via `ps -ww -p <pid> -o args=` — catches PID reuse
  *   3. Lock mtime < 24h — catches SIGKILL'd processes that left orphan locks
  *
  * All side effects are injectable (tmpDir, clock, processAlive, processName) so unit tests
@@ -118,6 +136,7 @@ export class Lockfile {
             selfPpid: opts.selfPpid ?? defaultSelfPpid,
             maxAgeMs: opts.maxAgeMs ?? DEFAULT_MAX_AGE_MS,
             processNameNeedle: opts.processNameNeedle ?? DEFAULT_PROCESS_NAME_NEEDLE,
+            processIdentity: opts.processIdentity ?? defaultProcessIdentity(),
             staleMs: opts.staleMs ?? DEFAULT_STALE_MS,
         };
         this.lockPath = join(tmpDir, `rn-dev-agent-cdp-${uid}-${hash}.lock`);
@@ -250,9 +269,8 @@ export class Lockfile {
         if (age !== null && age > this.opts.maxAgeMs)
             return false;
         const name = this.opts.processName(body.pid);
-        if (name !== null && !name.toLowerCase().includes(this.opts.processNameNeedle.toLowerCase())) {
+        if (name !== null && !this.#identityMatches(body, name))
             return false;
-        }
         // GH #182: a LIVE owner whose parent CHANGED since it acquired the lock was
         // orphaned — its Claude Code host died and it was reparented. PID-alive alone
         // can't catch a live orphan. We compare the owner's *recorded* PPID against its
@@ -282,6 +300,26 @@ export class Lockfile {
         }
         return true;
     }
+    /**
+     * GH #672: does `commandLine` still belong to the process that wrote this lock?
+     * Matches the owner's recorded entrypoint (exact path, then basename for a relocated
+     * install), then the shipped markers, then the configured legacy needle. Anything
+     * else is a reused PID.
+     */
+    #identityMatches(body, commandLine) {
+        const line = commandLine.toLowerCase();
+        const recorded = typeof body.identity === 'string' ? body.identity.trim().toLowerCase() : '';
+        if (recorded) {
+            if (line.includes(recorded))
+                return true;
+            const basename = recorded.split('/').pop() ?? '';
+            if (basename && line.includes(basename))
+                return true;
+        }
+        const needle = this.opts.processNameNeedle.toLowerCase();
+        return (PROCESS_IDENTITY_MARKERS.some((marker) => line.includes(marker)) ||
+            (needle.length > 0 && line.includes(needle)));
+    }
     ageOfLockFile() {
         try {
             const st = statSync(this.lockPath);
@@ -298,6 +336,7 @@ export class Lockfile {
             startedAt: this.opts.clock(),
             lastHeartbeat: this.opts.clock(),
             ppid: this.opts.selfPpid(),
+            identity: this.opts.processIdentity || undefined,
             version: this.opts.version || undefined,
         };
         const dir = this.opts.tmpDir;

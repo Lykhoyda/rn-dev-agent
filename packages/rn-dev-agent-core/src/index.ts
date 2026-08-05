@@ -3973,6 +3973,13 @@ async function main() {
     void autostartObserve({
       findRoot: findProjectRoot,
       resolveEnabled: resolveObserveAutostart,
+      recoveryOnlyReason: () => {
+        const status = authorityRuntime.status();
+        if (!status.available) return null;
+        return status.state === 'blocked' || status.state === 'handoff_cleanup'
+          ? `session is a ${status.state} recovery contender`
+          : null;
+      },
       start: startObserveServer,
       warn: (m) => logger.warn('OBSERVE', m),
       info: (m) => logger.info('OBSERVE', m),

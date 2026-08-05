@@ -67,7 +67,7 @@ function defaultProcessAlive(pid) {
 }
 function defaultProcessName(pid) {
   try {
-    const out = execFileSync("ps", ["-p", String(pid), "-o", "args="], {
+    const out = execFileSync("ps", ["-ww", "-p", String(pid), "-o", "args="], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 1e3
@@ -76,6 +76,10 @@ function defaultProcessName(pid) {
   } catch {
     return null;
   }
+}
+function defaultProcessIdentity() {
+  const entry = process.argv[1];
+  return typeof entry === "string" ? entry : "";
 }
 function defaultProcessParent(pid) {
   try {
@@ -124,12 +128,13 @@ function formatLockConflictMessage(conflict2) {
     `Start with --no-lock to bypass this check (advanced; expect flaky behavior).`
   ].join("\n");
 }
-var DEFAULT_MAX_AGE_MS, DEFAULT_PROCESS_NAME_NEEDLE, DEFAULT_STALE_MS, Lockfile;
+var DEFAULT_MAX_AGE_MS, DEFAULT_PROCESS_NAME_NEEDLE, PROCESS_IDENTITY_MARKERS, DEFAULT_STALE_MS, Lockfile;
 var init_lockfile = __esm({
   "packages/rn-dev-agent-core/dist/lifecycle/lockfile.js"() {
     "use strict";
     DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
     DEFAULT_PROCESS_NAME_NEEDLE = "cdp-bridge";
+    PROCESS_IDENTITY_MARKERS = ["cdp-bridge", "rn-dev-agent", "supervisor.js"];
     DEFAULT_STALE_MS = 9e4;
     Lockfile = class {
       opts;
@@ -153,6 +158,7 @@ var init_lockfile = __esm({
           selfPpid: opts.selfPpid ?? defaultSelfPpid,
           maxAgeMs: opts.maxAgeMs ?? DEFAULT_MAX_AGE_MS,
           processNameNeedle: opts.processNameNeedle ?? DEFAULT_PROCESS_NAME_NEEDLE,
+          processIdentity: opts.processIdentity ?? defaultProcessIdentity(),
           staleMs: opts.staleMs ?? DEFAULT_STALE_MS
         };
         this.lockPath = join(tmpDir, `rn-dev-agent-cdp-${uid}-${hash}.lock`);
@@ -265,9 +271,8 @@ var init_lockfile = __esm({
         if (age !== null && age > this.opts.maxAgeMs)
           return false;
         const name = this.opts.processName(body.pid);
-        if (name !== null && !name.toLowerCase().includes(this.opts.processNameNeedle.toLowerCase())) {
+        if (name !== null && !this.#identityMatches(body, name))
           return false;
-        }
         const livePpid = this.opts.processParent(body.pid);
         if (livePpid !== null) {
           if (typeof body.ppid === "number") {
@@ -281,6 +286,25 @@ var init_lockfile = __esm({
           return false;
         }
         return true;
+      }
+      /**
+       * GH #672: does `commandLine` still belong to the process that wrote this lock?
+       * Matches the owner's recorded entrypoint (exact path, then basename for a relocated
+       * install), then the shipped markers, then the configured legacy needle. Anything
+       * else is a reused PID.
+       */
+      #identityMatches(body, commandLine) {
+        const line = commandLine.toLowerCase();
+        const recorded = typeof body.identity === "string" ? body.identity.trim().toLowerCase() : "";
+        if (recorded) {
+          if (line.includes(recorded))
+            return true;
+          const basename8 = recorded.split("/").pop() ?? "";
+          if (basename8 && line.includes(basename8))
+            return true;
+        }
+        const needle = this.opts.processNameNeedle.toLowerCase();
+        return PROCESS_IDENTITY_MARKERS.some((marker) => line.includes(marker)) || needle.length > 0 && line.includes(needle);
       }
       ageOfLockFile() {
         try {
@@ -297,6 +321,7 @@ var init_lockfile = __esm({
           startedAt: this.opts.clock(),
           lastHeartbeat: this.opts.clock(),
           ppid: this.opts.selfPpid(),
+          identity: this.opts.processIdentity || void 0,
           version: this.opts.version || void 0
         };
         const dir = this.opts.tmpDir;
@@ -80555,6 +80580,11 @@ var init_state_read = __esm({
 // packages/rn-dev-agent-core/dist/observability/autostart.js
 async function autostartObserve(deps) {
   try {
+    const recoveryOnly = deps.recoveryOnlyReason?.() ?? null;
+    if (recoveryOnly) {
+      deps.info(`observe UI autostart skipped (${recoveryOnly})`);
+      return null;
+    }
     if (!deps.findRoot())
       return null;
     const res = deps.resolveEnabled();
@@ -82905,6 +82935,12 @@ async function main() {
     void autostartObserve({
       findRoot: findProjectRoot,
       resolveEnabled: resolveObserveAutostart,
+      recoveryOnlyReason: () => {
+        const status = authorityRuntime.status();
+        if (!status.available)
+          return null;
+        return status.state === "blocked" || status.state === "handoff_cleanup" ? `session is a ${status.state} recovery contender` : null;
+      },
       start: startObserveServer,
       warn: (m) => logger.warn("OBSERVE", m),
       info: (m) => logger.info("OBSERVE", m)
@@ -84960,7 +84996,9 @@ if (process.env.RN_BRIDGE_SUPERVISOR === "0") {
     core.onHotReloadRequested();
     worker.kill("SIGUSR2");
   });
+  const parentWatchMs = Number(process.env.RN_DEV_AGENT_PARENT_WATCH_MS);
   startParentDeathWatch({
+    ...Number.isFinite(parentWatchMs) && parentWatchMs >= 100 && parentWatchMs <= 6e4 ? { intervalMs: parentWatchMs } : {},
     onOrphaned: () => beginShutdown2("parent host gone (PPID changed)"),
     onHeartbeat: () => {
       try {
