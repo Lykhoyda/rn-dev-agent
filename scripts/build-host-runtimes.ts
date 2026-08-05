@@ -84,6 +84,7 @@ const RUNTIME_ENTRIES = [
   'startup-integrity-loader.js',
   'startup-integrity-register.js',
   'rn-session.js',
+  'worktree-inheritance.js',
 ];
 
 // Helper scripts the Claude package's hooks and skills invoke at runtime.

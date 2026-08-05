@@ -111,23 +111,20 @@ if [ "$has_rn_config" = true ]; then
   # as a detached background worker with pidfile + 24h-failure backoff.
   bash "$SCRIPT_ROOT/ensure-idb.sh" 2>/dev/null || true
 
-  # Worktree support: .rn-agent is largely untracked local state (learned
-  # actions, e2e config, troubleshooting notes), so a linked git worktree
-  # starts without it and the agent loses its learned actions. If this
-  # checkout is a worktree and the main checkout has .rn-agent, link it.
-  # Never overwrites anything: skipped when .rn-agent already exists here.
-  if [ ! -e .rn-agent ]; then
-    GIT_DIR_P=$(git rev-parse --git-dir 2>/dev/null)
-    GIT_COMMON_P=$(git rev-parse --git-common-dir 2>/dev/null)
-    if [ -n "$GIT_DIR_P" ] && [ -n "$GIT_COMMON_P" ] && [ "$GIT_DIR_P" != "$GIT_COMMON_P" ]; then
-      MAIN_CHECKOUT=$(cd "$GIT_COMMON_P/.." 2>/dev/null && pwd)
-      if [ -n "$MAIN_CHECKOUT" ] && [ -d "$MAIN_CHECKOUT/.rn-agent" ]; then
-        if ln -s "$MAIN_CHECKOUT/.rn-agent" .rn-agent 2>/dev/null; then
-          echo "Linked .rn-agent -> $MAIN_CHECKOUT/.rn-agent (worktree detected) so learned actions and config are available here."
-          echo ""
-        fi
-      fi
+  # REPORT ONLY: SessionStart must not mutate worktree inheritance. The safe
+  # setup/post-checkout path creates a real local .rn-agent root and inherits
+  # only .rn-agent/actions (GH #357/#671).
+  if command -v node >/dev/null 2>&1 && [ -f "$CORE_ROOT/dist/worktree-inheritance.js" ]; then
+    if WORKTREE_REPORT=$(node "$CORE_ROOT/dist/worktree-inheritance.js" report \
+      --host claude --app-root "$PWD" 2>/dev/null); then
+      [ -n "$WORKTREE_REPORT" ] && printf '%s\n\n' "$WORKTREE_REPORT"
+    else
+      echo "NOTICE: rn-dev-agent could not check linked-worktree action inheritance. Run /rn-dev-agent:doctor."
+      echo ""
     fi
+  else
+    echo "NOTICE: rn-dev-agent worktree helper unavailable (Node or packaged runtime missing). Run /rn-dev-agent:doctor."
+    echo ""
   fi
 
   # Scaffold the repo-local troubleshooting memory (silent if already present)

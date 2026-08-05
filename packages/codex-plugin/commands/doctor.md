@@ -13,6 +13,9 @@ Resolve `<package-root>` from this exact workflow skill's `SKILL.md` path and
 run `<package-root>/bin/plugin-health.js --json` with any caller-observed task
 facts. Never scan caches or use a launcher-only environment variable.
 
+When the RN app root is known, also run the read-only packaged helper
+`<package-root>/rn-dev-agent-core/dist/worktree-inheritance.js plan --host codex --app-root <app> --json` and `hook status`. Report the `.rn-agent/actions` state without printing its private source path or reading action bodies. Mutation and hook installation belong to setup.
+
 ## Active-task observations
 
 Pass only facts actually observed in this task:

@@ -4,7 +4,6 @@ import { stopBoundObserve, stopBoundRecorder, stopBoundRunner } from './process-
 import type { OwnerStatus, SessionRef, SessionRegistry } from './registry.js';
 import { openSessionRegistry } from './registry.js';
 import type { SourceIdentity } from './source-identity.js';
-import { ensureSharedKnowledgeRoot } from './shared-knowledge-root.js';
 import { stopManagedMetro, type ManagedMetroBinding } from './managed-metro.js';
 import {
   createAuthorityStateLayout,
@@ -138,9 +137,6 @@ export function createSupervisorAuthority(
       throw error;
     }
   });
-  const sharedKnowledge = adoptionRequired
-    ? { migrated: false }
-    : initialize(() => ensureSharedKnowledgeRoot(input.source.appRoot));
   initialize(() =>
     registry.updateBindings(session, {
       state: adoptionRequired ? 'blocked' : 'source_bound',
@@ -175,7 +171,6 @@ export function createSupervisorAuthority(
       worktreeKey: input.source.worktreeKey.slice(0, 12),
       metroPort,
       observePort,
-      sharedKnowledgeMigrated: sharedKnowledge.migrated,
     }),
   );
 

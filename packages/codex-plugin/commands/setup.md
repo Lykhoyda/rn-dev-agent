@@ -33,6 +33,14 @@ Before every write, show the exact proposed content/diff and ask **"Apply this
 change? [y/n]"**. A decline is recorded and never treated as consent for another
 step.
 
+### 0. Linked-worktree action inheritance
+
+Run this before every scaffold write. Resolve the RN app root, including a nested monorepo app, and invoke `<package-root>/rn-dev-agent-core/dist/worktree-inheritance.js plan --host codex --app-root "$APP_ROOT" --json`.
+
+Only `.rn-agent/actions` is inheritable. Keep tracked corpora Git-owned. Preview and confirm `DEST_MISSING` before `apply`. A recognized `LEGACY_ROOT_LINK` needs a second confirmation and `--allow-repair`; migration creates a real local `.rn-agent` root with only the actions link and copies no integration, state, recordings, generated launchers, or runtime data. Refuse foreign roots, collisions, unavailable sources, and Git-visible private links. Never expose source paths or action bodies.
+
+Separately offer `hook install --host codex --app-root "$APP_ROOT"`. The repository-local post-checkout path prepares ordinary future worktrees before an agent starts, without replacing foreign hooks or managed `core.hooksPath`. Worktrees created with `--no-checkout` still need setup before launch.
+
 ### A. Managed Codex instructions in AGENTS.md
 
 The package template is `<package-root>/AGENTS-MD-TEMPLATE.md`. Its managed body
@@ -89,10 +97,9 @@ The package source is `<package-root>/templates/rn-agent/` and contains the
 version marker, README, `.gitignore`, skeleton, dev bridge, global types,
 Vercel config, and empty action/fixture/proposal markers.
 
-1. **Symlink guard:** if project `.rn-agent` is a symlink, validate the resolved
-   target's scaffold version and `dev-bridge.ts`, then skip scaffold writes.
-   Never partial-add through it. The per-worktree `tsconfig` check below still
-   applies.
+1. **Step 0 guard:** project `.rn-agent` must be a real local directory. Never
+   scaffold through a root symlink. `.rn-agent/actions` may be the supported
+   inherited symlink; exclude only that subtree from scaffold writes.
 2. Existing directory/current version: write nothing.
 3. Existing/stale directory: list only missing template files. Never overwrite
    user files. Ignore a missing `.gitkeep` when its directory already has real
@@ -125,6 +132,6 @@ onboarding is ready.
 - No write without exact preview and confirmation.
 - No mutation during passive diagnosis.
 - No duplicate managed block or scaffold overwrite.
-- No write into a symlink-inherited corpus.
+- Never symlink the whole `.rn-agent` root or copy mutable data from a legacy target; only `.rn-agent/actions` may be inherited.
 - No Claude instruction-file mutation from Codex.
 - No raw `xcrun`/`adb` app interaction when MCP device tools are available.
