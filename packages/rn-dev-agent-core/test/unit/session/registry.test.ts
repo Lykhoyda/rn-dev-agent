@@ -657,7 +657,7 @@ test('active bundle operations are visible outside inherited context', () => {
   assert.equal(registry.hasActiveBundleOperation(owner), false);
 });
 
-test('optional bundle ownership is durably added to an active operation', () => {
+test('optional bundle admission is pending before rejection or promotion', () => {
   const { registry, create } = fixture();
   const owner = create('a');
   const operation = registry.beginOperation(owner, {
@@ -668,7 +668,14 @@ test('optional bundle ownership is durably added to an active operation', () => 
 
   assert.equal(registry.operationHasAxis(operation, 'B'), false);
   assert.equal(registry.hasActiveBundleOperation(owner), false);
-  registry.claimOperationAxis(operation, 'B');
+  registry.beginOperationAxisAdmission(operation, 'B');
+  assert.equal(registry.operationHasAxis(operation, 'B'), false);
+  assert.equal(registry.hasActiveBundleOperation(owner), true);
+  registry.completeOperationAxisAdmission(operation, 'B', false);
+  assert.equal(registry.operationHasAxis(operation, 'B'), false);
+  assert.equal(registry.hasActiveBundleOperation(owner), false);
+  registry.beginOperationAxisAdmission(operation, 'B');
+  registry.completeOperationAxisAdmission(operation, 'B', true);
   assert.equal(registry.operationHasAxis(operation, 'B'), true);
   assert.equal(registry.hasActiveBundleOperation(owner), true);
   registry.endOperation(operation);

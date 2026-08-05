@@ -8151,17 +8151,37 @@ var init_registry = __esm({
       }
       operationHasAxis(operation, axis) {
         this.verifyOperation(operation);
+        const pendingAxis = `~${axis}`;
         return Boolean(this.#database.prepare(`SELECT operation_id FROM operations
            WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
-             AND authority_version = ? AND instr(profile, ?) > 0`).get(operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion, axis));
+             AND authority_version = ?
+             AND instr(replace(profile, ?, ''), ?) > 0`).get(operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion, pendingAxis, axis));
       }
-      claimOperationAxis(operation, axis) {
+      beginOperationAxisAdmission(operation, axis) {
+        const pendingAxis = `~${axis}`;
         this.#transaction(() => {
           this.verifyOperation(operation);
           this.#database.prepare(`UPDATE operations
-           SET profile = CASE WHEN instr(profile, ?) > 0 THEN profile ELSE profile || ? END
+           SET profile = CASE
+             WHEN instr(replace(profile, ?, ''), ?) > 0 OR instr(profile, ?) > 0 THEN profile
+             ELSE profile || ?
+           END
            WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
-             AND authority_version = ?`).run(axis, axis, operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
+             AND authority_version = ?`).run(pendingAxis, axis, pendingAxis, pendingAxis, operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
+        });
+      }
+      completeOperationAxisAdmission(operation, axis, admitted) {
+        const pendingAxis = `~${axis}`;
+        this.#transaction(() => {
+          this.verifyOperation(operation);
+          this.#database.prepare(`UPDATE operations
+           SET profile = CASE
+             WHEN ? = 0 THEN replace(profile, ?, '')
+             WHEN instr(replace(profile, ?, ''), ?) > 0 THEN replace(profile, ?, '')
+             ELSE replace(profile, ?, '') || ?
+           END
+           WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
+             AND authority_version = ?`).run(admitted ? 1 : 0, pendingAxis, pendingAxis, axis, pendingAxis, pendingAxis, axis, operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
         });
       }
       createSession(input) {

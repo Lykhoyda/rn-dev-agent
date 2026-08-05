@@ -22761,17 +22761,37 @@ var init_registry = __esm({
       }
       operationHasAxis(operation, axis) {
         this.verifyOperation(operation);
+        const pendingAxis = `~${axis}`;
         return Boolean(this.#database.prepare(`SELECT operation_id FROM operations
            WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
-             AND authority_version = ? AND instr(profile, ?) > 0`).get(operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion, axis));
+             AND authority_version = ?
+             AND instr(replace(profile, ?, ''), ?) > 0`).get(operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion, pendingAxis, axis));
       }
-      claimOperationAxis(operation, axis) {
+      beginOperationAxisAdmission(operation, axis) {
+        const pendingAxis = `~${axis}`;
         this.#transaction(() => {
           this.verifyOperation(operation);
           this.#database.prepare(`UPDATE operations
-           SET profile = CASE WHEN instr(profile, ?) > 0 THEN profile ELSE profile || ? END
+           SET profile = CASE
+             WHEN instr(replace(profile, ?, ''), ?) > 0 OR instr(profile, ?) > 0 THEN profile
+             ELSE profile || ?
+           END
            WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
-             AND authority_version = ?`).run(axis, axis, operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
+             AND authority_version = ?`).run(pendingAxis, axis, pendingAxis, pendingAxis, operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
+        });
+      }
+      completeOperationAxisAdmission(operation, axis, admitted) {
+        const pendingAxis = `~${axis}`;
+        this.#transaction(() => {
+          this.verifyOperation(operation);
+          this.#database.prepare(`UPDATE operations
+           SET profile = CASE
+             WHEN ? = 0 THEN replace(profile, ?, '')
+             WHEN instr(replace(profile, ?, ''), ?) > 0 THEN replace(profile, ?, '')
+             ELSE replace(profile, ?, '') || ?
+           END
+           WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
+             AND authority_version = ?`).run(admitted ? 1 : 0, pendingAxis, pendingAxis, axis, pendingAxis, pendingAxis, axis, operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
         });
       }
       createSession(input) {
@@ -29190,11 +29210,14 @@ function invalidateRuntimeBundle(registry2, operation, status, onInvalidated) {
   onInvalidated?.();
   return nextOperation;
 }
-async function reconcileRecoverableRuntime(runtime, dependencies, registry2, operation, status, profile) {
-  if (!dependencies.recoverRuntimeConnection || !profile.axes.includes("B") && !registry2.operationHasAxis(operation, "B")) {
+async function reconcileRecoverableRuntime(runtime, dependencies, registry2, operation, status, profile, allowRecovery) {
+  if (!profile.axes.includes("B") && !registry2.operationHasAxis(operation, "B")) {
     return { operation, status, runtimeTargetChanged: false };
   }
-  const recovered = await registry2.runWithOperation(operation, () => dependencies.recoverRuntimeConnection(status));
+  if (allowRecovery && !dependencies.recoverRuntimeConnection) {
+    return { operation, status, runtimeTargetChanged: false };
+  }
+  const recovered = allowRecovery ? await registry2.runWithOperation(operation, () => dependencies.recoverRuntimeConnection(status)) : dependencies.runtimeConnectionChanged?.(status);
   if (!recovered)
     return { operation, status, runtimeTargetChanged: false };
   if (!dependencies.refreshRuntimeBinding) {
@@ -29448,7 +29471,7 @@ function createAuthorityGate(runtime, dependencies) {
           tool,
           profile: profile.axes.join("")
         });
-        const preflightRecovery = await reconcileRecoverableRuntime(runtime, dependencies, registry2, operation, status, profile);
+        const preflightRecovery = await reconcileRecoverableRuntime(runtime, dependencies, registry2, operation, status, profile, true);
         operation = preflightRecovery.operation;
         status = preflightRecovery.status;
         const initialOperationAuthorityVersion = operation.authorityVersion;
@@ -29474,93 +29497,99 @@ function createAuthorityGate(runtime, dependencies) {
               }
               if (!currentStatus.bindings.bundle)
                 return false;
-              registry2.claimOperationAxis(operation, "B");
-              let observation;
+              registry2.beginOperationAxisAdmission(operation, "B");
+              let optionalBundleAdmitted = false;
               try {
-                observation = await dependencies.probe({
-                  axis: "B",
-                  phase: "preflight",
-                  tool,
-                  profile,
-                  status: currentStatus,
-                  args
-                });
-              } catch (error2) {
-                if (authorityErrorCode(error2) !== "CDP_TARGET_AUTHORITY_MISMATCH" || !dependencies.refreshRuntimeBinding) {
-                  if (!isOptionalBundleFailure(error2))
-                    throw error2;
-                  return false;
-                }
-                registry2.verifyOperation(operation);
-                let bundle;
-                try {
-                  bundle = await dependencies.refreshRuntimeBinding(currentStatus);
-                } catch (refreshError) {
-                  if (refreshError instanceof SessionAuthorityError) {
-                    if (!isOptionalBundleFailure(refreshError))
-                      throw refreshError;
-                  }
-                  optionalBundleRecoveryFailed = true;
-                  return false;
-                }
-                const priorBundle = currentStatus.bindings.bundle;
-                const metro = currentStatus.bindings.metro;
-                const oldTargetId = priorBundle?.targetId;
-                const newTargetId = bundle.targetId;
-                const metroPort = metro?.port;
-                if (typeof oldTargetId !== "string" || typeof newTargetId !== "string" || !Number.isSafeInteger(metroPort)) {
-                  optionalBundleRecoveryFailed = true;
-                  return false;
-                }
-                const candidateStatus = {
-                  ...currentStatus,
-                  bindings: {
-                    ...currentStatus.bindings,
-                    bundle
-                  }
-                };
+                let observation;
                 try {
                   observation = await dependencies.probe({
                     axis: "B",
                     phase: "preflight",
                     tool,
                     profile,
-                    status: candidateStatus,
+                    status: currentStatus,
                     args
                   });
-                } catch (refreshedProbeError) {
-                  if (!isOptionalBundleFailure(refreshedProbeError)) {
-                    throw refreshedProbeError;
+                } catch (error2) {
+                  if (authorityErrorCode(error2) !== "CDP_TARGET_AUTHORITY_MISMATCH" || !dependencies.refreshRuntimeBinding) {
+                    if (!isOptionalBundleFailure(error2))
+                      throw error2;
+                    return false;
                   }
-                  optionalBundleRecoveryFailed = true;
-                  return false;
+                  registry2.verifyOperation(operation);
+                  let bundle;
+                  try {
+                    bundle = await dependencies.refreshRuntimeBinding(currentStatus);
+                  } catch (refreshError) {
+                    if (refreshError instanceof SessionAuthorityError) {
+                      if (!isOptionalBundleFailure(refreshError))
+                        throw refreshError;
+                    }
+                    optionalBundleRecoveryFailed = true;
+                    return false;
+                  }
+                  const priorBundle = currentStatus.bindings.bundle;
+                  const metro = currentStatus.bindings.metro;
+                  const oldTargetId = priorBundle?.targetId;
+                  const newTargetId = bundle.targetId;
+                  const metroPort = metro?.port;
+                  if (typeof oldTargetId !== "string" || typeof newTargetId !== "string" || !Number.isSafeInteger(metroPort)) {
+                    optionalBundleRecoveryFailed = true;
+                    return false;
+                  }
+                  const candidateStatus = {
+                    ...currentStatus,
+                    bindings: {
+                      ...currentStatus.bindings,
+                      bundle
+                    }
+                  };
+                  try {
+                    observation = await dependencies.probe({
+                      axis: "B",
+                      phase: "preflight",
+                      tool,
+                      profile,
+                      status: candidateStatus,
+                      args
+                    });
+                  } catch (refreshedProbeError) {
+                    if (!isOptionalBundleFailure(refreshedProbeError)) {
+                      throw refreshedProbeError;
+                    }
+                    optionalBundleRecoveryFailed = true;
+                    return false;
+                  }
+                  registry2.verifyOperation(operation);
+                  try {
+                    operation = registry2.replaceBindingsDuringOperation(operation, {
+                      state: "ready",
+                      bindings: { bundle },
+                      releaseResources: oldTargetId !== newTargetId ? [{ type: "target", key: `${String(metroPort)}:${oldTargetId}` }] : [],
+                      claimResources: oldTargetId !== newTargetId ? [{ type: "target", key: `${String(metroPort)}:${newTargetId}` }] : []
+                    });
+                  } catch (replacementError) {
+                    if (!isOptionalBundleFailure(replacementError))
+                      throw replacementError;
+                    optionalBundleRecoveryFailed = true;
+                    return false;
+                  }
+                  const refreshedStatus = runtime.status();
+                  if (!refreshedStatus.available) {
+                    throw new SessionAuthorityError(refreshedStatus.code, refreshedStatus.reason);
+                  }
+                  currentStatus = refreshedStatus;
                 }
                 registry2.verifyOperation(operation);
-                try {
-                  operation = registry2.replaceBindingsDuringOperation(operation, {
-                    state: "ready",
-                    bindings: { bundle },
-                    releaseResources: oldTargetId !== newTargetId ? [{ type: "target", key: `${String(metroPort)}:${oldTargetId}` }] : [],
-                    claimResources: oldTargetId !== newTargetId ? [{ type: "target", key: `${String(metroPort)}:${newTargetId}` }] : []
-                  });
-                } catch (replacementError) {
-                  if (!isOptionalBundleFailure(replacementError))
-                    throw replacementError;
-                  optionalBundleRecoveryFailed = true;
-                  return false;
-                }
-                const refreshedStatus = runtime.status();
-                if (!refreshedStatus.available) {
-                  throw new SessionAuthorityError(refreshedStatus.code, refreshedStatus.reason);
-                }
-                currentStatus = refreshedStatus;
+                status = currentStatus;
+                optionalBefore.push(observation);
+                optionalBundleRecoveryFailed = false;
+                optionalBundleClaimed = true;
+                optionalBundleAdmitted = true;
+                return true;
+              } finally {
+                registry2.completeOperationAxisAdmission(operation, "B", optionalBundleAdmitted);
               }
-              registry2.verifyOperation(operation);
-              status = currentStatus;
-              optionalBefore.push(observation);
-              optionalBundleRecoveryFailed = false;
-              optionalBundleClaimed = true;
-              return true;
             }
           });
         }
@@ -29697,7 +29726,7 @@ function createAuthorityGate(runtime, dependencies) {
         registry2.verifyOperation(operation);
         const result = await registry2.runWithOperation(operation, () => handler(...handlerArgs));
         let runtimeTargetChanged = false;
-        const postHandlerRecovery = await reconcileRecoverableRuntime(runtime, dependencies, registry2, operation, status, profile);
+        const postHandlerRecovery = await reconcileRecoverableRuntime(runtime, dependencies, registry2, operation, status, profile, resultSucceeded(result));
         operation = postHandlerRecovery.operation;
         status = postHandlerRecovery.status;
         runtimeTargetChanged = postHandlerRecovery.runtimeTargetChanged;
@@ -80922,6 +80951,22 @@ var authorityGate = createAuthorityGate(authorityRuntime, {
       }
     } else if (!current.isConnected) {
       await current.autoConnect();
+    }
+    const bundle = status.bindings.bundle;
+    return current.connectedTarget?.id !== bundle?.targetId || current.connectionGeneration !== bundle?.connectionGeneration;
+  },
+  runtimeConnectionChanged: (status) => {
+    const current = getClient();
+    const metro = status.bindings.metro;
+    const device = status.bindings.device;
+    const metroPort = metro?.port;
+    const platform = device?.platform;
+    const appId = device?.appId;
+    if (!Number.isSafeInteger(metroPort) || platform !== "ios" && platform !== "android" || typeof appId !== "string" || !current.matchesAuthoritativeSessionPolicy(Number(metroPort), {
+      platform,
+      bundleId: appId
+    }) || current.reconnectState.active || !current.isConnected) {
+      return false;
     }
     const bundle = status.bindings.bundle;
     return current.connectedTarget?.id !== bundle?.targetId || current.connectionGeneration !== bundle?.connectionGeneration;

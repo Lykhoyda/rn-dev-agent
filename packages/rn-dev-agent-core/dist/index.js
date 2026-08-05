@@ -443,6 +443,28 @@ const authorityGate = createAuthorityGate(authorityRuntime, {
         return (current.connectedTarget?.id !== bundle?.targetId ||
             current.connectionGeneration !== bundle?.connectionGeneration);
     },
+    runtimeConnectionChanged: (status) => {
+        const current = getClient();
+        const metro = status.bindings.metro;
+        const device = status.bindings.device;
+        const metroPort = metro?.port;
+        const platform = device?.platform;
+        const appId = device?.appId;
+        if (!Number.isSafeInteger(metroPort) ||
+            (platform !== 'ios' && platform !== 'android') ||
+            typeof appId !== 'string' ||
+            !current.matchesAuthoritativeSessionPolicy(Number(metroPort), {
+                platform,
+                bundleId: appId,
+            }) ||
+            current.reconnectState.active ||
+            !current.isConnected) {
+            return false;
+        }
+        const bundle = status.bindings.bundle;
+        return (current.connectedTarget?.id !== bundle?.targetId ||
+            current.connectionGeneration !== bundle?.connectionGeneration);
+    },
     refreshRuntimeBinding: rebindSessionRuntime,
     relaunchBoundRuntime: relaunchSessionRuntime,
     onRuntimeBundleInvalidated: () => getClient().clearAuthoritativeSessionPolicy(),

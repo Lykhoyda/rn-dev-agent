@@ -535,9 +535,7 @@ const authorityGate = createAuthorityGate(authorityRuntime, {
   recoverRuntimeConnection: async (status) => {
     const current = getClient();
     const metro = status.bindings.metro as { port?: unknown } | undefined;
-    const device = status.bindings.device as
-      | { platform?: unknown; appId?: unknown }
-      | undefined;
+    const device = status.bindings.device as { platform?: unknown; appId?: unknown } | undefined;
     const metroPort = metro?.port;
     const platform = device?.platform;
     const appId = device?.appId;
@@ -562,6 +560,34 @@ const authorityGate = createAuthorityGate(authorityRuntime, {
       }
     } else if (!current.isConnected) {
       await current.autoConnect();
+    }
+    const bundle = status.bindings.bundle as
+      | { targetId?: unknown; connectionGeneration?: unknown }
+      | undefined;
+    return (
+      current.connectedTarget?.id !== bundle?.targetId ||
+      current.connectionGeneration !== bundle?.connectionGeneration
+    );
+  },
+  runtimeConnectionChanged: (status) => {
+    const current = getClient();
+    const metro = status.bindings.metro as { port?: unknown } | undefined;
+    const device = status.bindings.device as { platform?: unknown; appId?: unknown } | undefined;
+    const metroPort = metro?.port;
+    const platform = device?.platform;
+    const appId = device?.appId;
+    if (
+      !Number.isSafeInteger(metroPort) ||
+      (platform !== 'ios' && platform !== 'android') ||
+      typeof appId !== 'string' ||
+      !current.matchesAuthoritativeSessionPolicy(Number(metroPort), {
+        platform,
+        bundleId: appId,
+      }) ||
+      current.reconnectState.active ||
+      !current.isConnected
+    ) {
+      return false;
     }
     const bundle = status.bindings.bundle as
       | { targetId?: unknown; connectionGeneration?: unknown }

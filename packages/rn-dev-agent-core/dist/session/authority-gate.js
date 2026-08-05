@@ -420,12 +420,16 @@ function invalidateRuntimeBundle(registry, operation, status, onInvalidated) {
     onInvalidated?.();
     return nextOperation;
 }
-async function reconcileRecoverableRuntime(runtime, dependencies, registry, operation, status, profile) {
-    if (!dependencies.recoverRuntimeConnection ||
-        (!profile.axes.includes('B') && !registry.operationHasAxis(operation, 'B'))) {
+async function reconcileRecoverableRuntime(runtime, dependencies, registry, operation, status, profile, allowRecovery) {
+    if (!profile.axes.includes('B') && !registry.operationHasAxis(operation, 'B')) {
         return { operation, status, runtimeTargetChanged: false };
     }
-    const recovered = await registry.runWithOperation(operation, () => dependencies.recoverRuntimeConnection(status));
+    if (allowRecovery && !dependencies.recoverRuntimeConnection) {
+        return { operation, status, runtimeTargetChanged: false };
+    }
+    const recovered = allowRecovery
+        ? await registry.runWithOperation(operation, () => dependencies.recoverRuntimeConnection(status))
+        : dependencies.runtimeConnectionChanged?.(status);
     if (!recovered)
         return { operation, status, runtimeTargetChanged: false };
     if (!dependencies.refreshRuntimeBinding) {
@@ -729,7 +733,7 @@ export function createAuthorityGate(runtime, dependencies) {
                     tool,
                     profile: profile.axes.join(''),
                 });
-                const preflightRecovery = await reconcileRecoverableRuntime(runtime, dependencies, registry, operation, status, profile);
+                const preflightRecovery = await reconcileRecoverableRuntime(runtime, dependencies, registry, operation, status, profile, true);
                 operation = preflightRecovery.operation;
                 status = preflightRecovery.status;
                 const initialOperationAuthorityVersion = operation.authorityVersion;
@@ -755,104 +759,111 @@ export function createAuthorityGate(runtime, dependencies) {
                             }
                             if (!currentStatus.bindings.bundle)
                                 return false;
-                            registry.claimOperationAxis(operation, 'B');
-                            let observation;
+                            registry.beginOperationAxisAdmission(operation, 'B');
+                            let optionalBundleAdmitted = false;
                             try {
-                                observation = await dependencies.probe({
-                                    axis: 'B',
-                                    phase: 'preflight',
-                                    tool,
-                                    profile,
-                                    status: currentStatus,
-                                    args,
-                                });
-                            }
-                            catch (error) {
-                                if (authorityErrorCode(error) !== 'CDP_TARGET_AUTHORITY_MISMATCH' ||
-                                    !dependencies.refreshRuntimeBinding) {
-                                    if (!isOptionalBundleFailure(error))
-                                        throw error;
-                                    return false;
-                                }
-                                registry.verifyOperation(operation);
-                                let bundle;
-                                try {
-                                    bundle = await dependencies.refreshRuntimeBinding(currentStatus);
-                                }
-                                catch (refreshError) {
-                                    if (refreshError instanceof SessionAuthorityError) {
-                                        if (!isOptionalBundleFailure(refreshError))
-                                            throw refreshError;
-                                    }
-                                    optionalBundleRecoveryFailed = true;
-                                    return false;
-                                }
-                                const priorBundle = currentStatus.bindings.bundle;
-                                const metro = currentStatus.bindings.metro;
-                                const oldTargetId = priorBundle?.targetId;
-                                const newTargetId = bundle.targetId;
-                                const metroPort = metro?.port;
-                                if (typeof oldTargetId !== 'string' ||
-                                    typeof newTargetId !== 'string' ||
-                                    !Number.isSafeInteger(metroPort)) {
-                                    optionalBundleRecoveryFailed = true;
-                                    return false;
-                                }
-                                const candidateStatus = {
-                                    ...currentStatus,
-                                    bindings: {
-                                        ...currentStatus.bindings,
-                                        bundle,
-                                    },
-                                };
+                                let observation;
                                 try {
                                     observation = await dependencies.probe({
                                         axis: 'B',
                                         phase: 'preflight',
                                         tool,
                                         profile,
-                                        status: candidateStatus,
+                                        status: currentStatus,
                                         args,
                                     });
                                 }
-                                catch (refreshedProbeError) {
-                                    if (!isOptionalBundleFailure(refreshedProbeError)) {
-                                        throw refreshedProbeError;
+                                catch (error) {
+                                    if (authorityErrorCode(error) !== 'CDP_TARGET_AUTHORITY_MISMATCH' ||
+                                        !dependencies.refreshRuntimeBinding) {
+                                        if (!isOptionalBundleFailure(error))
+                                            throw error;
+                                        return false;
                                     }
-                                    optionalBundleRecoveryFailed = true;
-                                    return false;
+                                    registry.verifyOperation(operation);
+                                    let bundle;
+                                    try {
+                                        bundle = await dependencies.refreshRuntimeBinding(currentStatus);
+                                    }
+                                    catch (refreshError) {
+                                        if (refreshError instanceof SessionAuthorityError) {
+                                            if (!isOptionalBundleFailure(refreshError))
+                                                throw refreshError;
+                                        }
+                                        optionalBundleRecoveryFailed = true;
+                                        return false;
+                                    }
+                                    const priorBundle = currentStatus.bindings.bundle;
+                                    const metro = currentStatus.bindings.metro;
+                                    const oldTargetId = priorBundle?.targetId;
+                                    const newTargetId = bundle.targetId;
+                                    const metroPort = metro?.port;
+                                    if (typeof oldTargetId !== 'string' ||
+                                        typeof newTargetId !== 'string' ||
+                                        !Number.isSafeInteger(metroPort)) {
+                                        optionalBundleRecoveryFailed = true;
+                                        return false;
+                                    }
+                                    const candidateStatus = {
+                                        ...currentStatus,
+                                        bindings: {
+                                            ...currentStatus.bindings,
+                                            bundle,
+                                        },
+                                    };
+                                    try {
+                                        observation = await dependencies.probe({
+                                            axis: 'B',
+                                            phase: 'preflight',
+                                            tool,
+                                            profile,
+                                            status: candidateStatus,
+                                            args,
+                                        });
+                                    }
+                                    catch (refreshedProbeError) {
+                                        if (!isOptionalBundleFailure(refreshedProbeError)) {
+                                            throw refreshedProbeError;
+                                        }
+                                        optionalBundleRecoveryFailed = true;
+                                        return false;
+                                    }
+                                    registry.verifyOperation(operation);
+                                    try {
+                                        operation = registry.replaceBindingsDuringOperation(operation, {
+                                            state: 'ready',
+                                            bindings: { bundle },
+                                            releaseResources: oldTargetId !== newTargetId
+                                                ? [{ type: 'target', key: `${String(metroPort)}:${oldTargetId}` }]
+                                                : [],
+                                            claimResources: oldTargetId !== newTargetId
+                                                ? [{ type: 'target', key: `${String(metroPort)}:${newTargetId}` }]
+                                                : [],
+                                        });
+                                    }
+                                    catch (replacementError) {
+                                        if (!isOptionalBundleFailure(replacementError))
+                                            throw replacementError;
+                                        optionalBundleRecoveryFailed = true;
+                                        return false;
+                                    }
+                                    const refreshedStatus = runtime.status();
+                                    if (!refreshedStatus.available) {
+                                        throw new SessionAuthorityError(refreshedStatus.code, refreshedStatus.reason);
+                                    }
+                                    currentStatus = refreshedStatus;
                                 }
                                 registry.verifyOperation(operation);
-                                try {
-                                    operation = registry.replaceBindingsDuringOperation(operation, {
-                                        state: 'ready',
-                                        bindings: { bundle },
-                                        releaseResources: oldTargetId !== newTargetId
-                                            ? [{ type: 'target', key: `${String(metroPort)}:${oldTargetId}` }]
-                                            : [],
-                                        claimResources: oldTargetId !== newTargetId
-                                            ? [{ type: 'target', key: `${String(metroPort)}:${newTargetId}` }]
-                                            : [],
-                                    });
-                                }
-                                catch (replacementError) {
-                                    if (!isOptionalBundleFailure(replacementError))
-                                        throw replacementError;
-                                    optionalBundleRecoveryFailed = true;
-                                    return false;
-                                }
-                                const refreshedStatus = runtime.status();
-                                if (!refreshedStatus.available) {
-                                    throw new SessionAuthorityError(refreshedStatus.code, refreshedStatus.reason);
-                                }
-                                currentStatus = refreshedStatus;
+                                status = currentStatus;
+                                optionalBefore.push(observation);
+                                optionalBundleRecoveryFailed = false;
+                                optionalBundleClaimed = true;
+                                optionalBundleAdmitted = true;
+                                return true;
                             }
-                            registry.verifyOperation(operation);
-                            status = currentStatus;
-                            optionalBefore.push(observation);
-                            optionalBundleRecoveryFailed = false;
-                            optionalBundleClaimed = true;
-                            return true;
+                            finally {
+                                registry.completeOperationAxisAdmission(operation, 'B', optionalBundleAdmitted);
+                            }
                         },
                     });
                 }
@@ -990,7 +1001,7 @@ export function createAuthorityGate(runtime, dependencies) {
                 registry.verifyOperation(operation);
                 const result = await registry.runWithOperation(operation, () => handler(...handlerArgs));
                 let runtimeTargetChanged = false;
-                const postHandlerRecovery = await reconcileRecoverableRuntime(runtime, dependencies, registry, operation, status, profile);
+                const postHandlerRecovery = await reconcileRecoverableRuntime(runtime, dependencies, registry, operation, status, profile, resultSucceeded(result));
                 operation = postHandlerRecovery.operation;
                 status = postHandlerRecovery.status;
                 runtimeTargetChanged = postHandlerRecovery.runtimeTargetChanged;

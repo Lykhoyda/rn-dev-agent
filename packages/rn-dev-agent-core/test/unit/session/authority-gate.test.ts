@@ -13,6 +13,7 @@ import { failResult, okResult } from '../../../dist/utils.js';
 function fixture() {
   const calls = [];
   const operationAxes = new Set();
+  const pendingOperationAxes = new Set();
   const status = {
     available: true,
     sessionId: 'session-a',
@@ -50,6 +51,7 @@ function fixture() {
     beginOperation: (_session, input) => {
       calls.push(`begin:${input.tool}`);
       operationAxes.clear();
+      pendingOperationAxes.clear();
       for (const axis of input.profile) operationAxes.add(axis);
       return {
         operationId: input.operationId,
@@ -73,9 +75,14 @@ function fixture() {
     },
     verifyOperation: () => calls.push('cas'),
     operationHasAxis: (_operation, axis) => operationAxes.has(axis),
-    claimOperationAxis: (_operation, axis) => {
-      calls.push(`claim-operation-axis:${axis}`);
-      operationAxes.add(axis);
+    beginOperationAxisAdmission: (_operation, axis) => {
+      calls.push(`begin-operation-axis:${axis}`);
+      pendingOperationAxes.add(axis);
+    },
+    completeOperationAxisAdmission: (_operation, axis, admitted) => {
+      calls.push(`complete-operation-axis:${axis}:${admitted}`);
+      pendingOperationAxes.delete(axis);
+      if (admitted) operationAxes.add(axis);
     },
     runWithOperation: async (_operation, callback) => callback(),
     commitPlatformAuthorityReceipts: () => calls.push('commit-receipts'),
@@ -245,8 +252,9 @@ test('failed handler preserves its error after reconnect reconciliation', async 
   const gate = createAuthorityGate(runtime, {
     recoverRuntimeConnection: async () => {
       recoveryCalls += 1;
-      return recoveryCalls === 2;
+      return false;
     },
+    runtimeConnectionChanged: () => true,
     refreshRuntimeBinding: async () => ({
       ...status.bindings.bundle,
       targetId: 'error-target',
@@ -266,6 +274,36 @@ test('failed handler preserves its error after reconnect reconciliation', async 
   assert.equal(status.bindings.bundle.targetId, 'error-target');
   assert.equal(status.bindings.bundle.connectionGeneration, 2);
   assert.ok(calls.includes('replace-binding'));
+  assert.equal(recoveryCalls, 1);
+});
+
+test('failed reconnect does not start a second recovery cycle', async () => {
+  const { runtime } = fixture();
+  let recoveryCalls = 0;
+  let changedChecks = 0;
+  const gate = createAuthorityGate(runtime, {
+    recoverRuntimeConnection: async () => {
+      recoveryCalls += 1;
+      return false;
+    },
+    runtimeConnectionChanged: () => {
+      changedChecks += 1;
+      return false;
+    },
+    refreshRuntimeBinding: async () => {
+      throw new Error('unexpected binding refresh');
+    },
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+  });
+
+  const result = await gate.wrap('cdp_console_log', async () =>
+    failResult('Reconnection timed out. Call cdp_status to retry.', 'RECONNECT_TIMEOUT'),
+  )({});
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.code, 'RECONNECT_TIMEOUT');
+  assert.equal(recoveryCalls, 1);
+  assert.equal(changedChecks, 1);
 });
 
 test('optional bundle admission records durable operation ownership', async () => {
@@ -288,8 +326,44 @@ test('optional bundle admission records durable operation ownership', async () =
   const envelope = JSON.parse(result.content[0].text);
 
   assert.equal(envelope.ok, true);
-  assert.ok(calls.includes('claim-operation-axis:B'));
+  assert.ok(calls.includes('begin-operation-axis:B'));
+  assert.ok(calls.includes('complete-operation-axis:B:true'));
   assert.equal(recoveryCalls, 1);
+});
+
+test('optional bundle rejection clears pending ownership before native fallback', async () => {
+  const { calls, runtime, status } = fixture();
+  status.bindings.bundle.targetId = 'target-a';
+  let recoveryCalls = 0;
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => {
+      if (axis === 'B') {
+        throw new SessionAuthorityError(
+          'BUNDLE_HANDSHAKE_UNAVAILABLE',
+          'optional runtime marker is unavailable',
+        );
+      }
+      return { axis, identity: `${axis}-identity` };
+    },
+    recoverRuntimeConnection: async () => {
+      recoveryCalls += 1;
+      throw new Error('unexpected optional fallback recovery');
+    },
+    refreshRuntimeBinding: async () => {
+      throw new Error('unexpected optional fallback refresh');
+    },
+  });
+
+  const result = await gate.wrap('cdp_run_action', async (args) => {
+    assert.equal(await claimOptionalBundleAuthority(args), false);
+    return okResult({ transport: 'maestro' });
+  })({});
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, true);
+  assert.ok(calls.includes('begin-operation-axis:B'));
+  assert.ok(calls.includes('complete-operation-axis:B:false'));
+  assert.equal(recoveryCalls, 0);
 });
 
 test('postflight drift rejects the result instead of returning a false success', async () => {
