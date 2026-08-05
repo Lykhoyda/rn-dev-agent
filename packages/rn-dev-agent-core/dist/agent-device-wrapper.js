@@ -130,9 +130,7 @@ function currentSnapshotAuthority(platform) {
         runnerProcessBirth: authority?.runnerProcessBirth ?? null,
         runnerCapabilityHash: authority?.runnerCapabilityHash ?? null,
         runnerPort: authority?.runnerPort ?? null,
-        // Capture starts unproven. The outer authority gate upgrades only snapshots
-        // created by an operation whose optional/required M+A probes also survive
-        // postflight unchanged.
+        // The outer gate upgrades only captures whose M+A authority survives postflight.
         originAuthority: 'not-proven',
     };
 }
@@ -230,15 +228,11 @@ export function cacheSnapshot(platform, nodes) {
     });
     dirtySnapshotPlatforms.delete(platform);
 }
-/** Snapshot-cache boundary used by the outer authority gate. */
+/** Returns the snapshot-cache boundary used by the outer authority gate. */
 export function getSnapshotCaptureCheckpoint() {
     return snapshotCaptureSequence;
 }
-/**
- * Upgrade only snapshots captured by the current fenced operation. An older
- * origin-unproven snapshot can therefore never become strict evidence merely
- * because the app later attaches to managed Metro.
- */
+/** Promotes only snapshots captured after the current operation's checkpoint. */
 export function promoteSnapshotOriginSince(checkpoint) {
     for (const snapshot of snapshotCache.values()) {
         if (snapshot.captureSequence <= checkpoint ||
