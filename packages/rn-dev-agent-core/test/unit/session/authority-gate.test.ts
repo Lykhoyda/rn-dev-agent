@@ -595,6 +595,7 @@ test('failed reload invalidates stale bundle authority under the active fence', 
   status.bindings.bundle.targetId = 'old-target';
   const gate = createAuthorityGate(runtime, {
     probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+    onRuntimeBundleInvalidated: () => calls.push('clear-client-policy'),
   });
 
   const result = await gate.wrap('cdp_reload', async () => ({
@@ -616,6 +617,7 @@ test('failed reload invalidates stale bundle authority under the active fence', 
   assert.equal(envelope.code, 'RECONNECT_TIMEOUT');
   assert.equal(envelope.meta.authorityInvalidated, true);
   assert.equal(calls.filter((call) => call === 'replace-binding').length, 1);
+  assert.equal(calls.filter((call) => call === 'clear-client-policy').length, 1);
   assert.equal(
     calls.some((call) => call === 'postflight:B'),
     false,

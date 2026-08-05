@@ -534,6 +534,7 @@ const authorityGate = createAuthorityGate(authorityRuntime, {
     localAuthorityProbe({ axis, phase, status, tool, args }),
   refreshRuntimeBinding: rebindSessionRuntime,
   relaunchBoundRuntime: relaunchSessionRuntime,
+  onRuntimeBundleInvalidated: () => getClient().clearAuthoritativeSessionPolicy(),
   onRunnerReleased: async (runner) => {
     if (runner.platform !== 'ios') return;
     const deviceId = typeof runner.deviceId === 'string' ? runner.deviceId : undefined;
@@ -763,9 +764,9 @@ async function pinSessionDevClient(status: SessionStatus, options: { force: bool
   if (!secret?.signerCapability) {
     throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: session signer is unavailable');
   }
+  const current = getClient();
+  current.clearAuthoritativeSessionPolicy();
   if (options.force) {
-    const current = getClient();
-    current.clearAuthoritativeSessionPolicy();
     await current.disconnect();
     setClient(createClient(metro.port));
   }
@@ -1125,6 +1126,7 @@ const getSessionSignerCapability = (sessionId?: string): string | null => {
 const sessionHandler = createSessionHandler(authorityRuntime, {
   getSignerCapability: getSessionSignerCapability,
   pinDevClient: pinSessionDevClient,
+  onBundleInvalidated: () => getClient().clearAuthoritativeSessionPolicy(),
 });
 const disconnectClientHandler = createDisconnectHandler(getClient, setClient, createClient);
 
@@ -1207,6 +1209,7 @@ trackedTool(
   },
   createPassiveStatusHandler(getClient, authorityRuntime, {
     getSignerCapability: getSessionSignerCapability,
+    onBundleInvalidated: () => getClient().clearAuthoritativeSessionPolicy(),
   }),
 );
 

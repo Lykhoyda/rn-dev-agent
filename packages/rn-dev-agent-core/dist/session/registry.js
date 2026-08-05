@@ -160,7 +160,25 @@ export class SessionRegistry {
         return this.#operationContext.run(operation, callback);
     }
     currentOperation() {
-        return this.#operationContext.getStore();
+        const operation = this.#operationContext.getStore();
+        if (!operation)
+            return undefined;
+        const session = asSession(this.#database
+            .prepare(`SELECT state, claim_epoch, authority_version
+           FROM sessions WHERE session_id = ?`)
+            .get(operation.sessionId));
+        const active = this.#database
+            .prepare(`SELECT operation_id FROM operations
+         WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
+           AND authority_version = ?`)
+            .get(operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
+        return session &&
+            isFenceableState(session.state) &&
+            session.claim_epoch === operation.claimEpoch &&
+            session.authority_version === operation.authorityVersion &&
+            active
+            ? operation
+            : undefined;
     }
     createSession(input) {
         const now = this.#now();

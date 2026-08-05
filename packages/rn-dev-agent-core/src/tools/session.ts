@@ -86,6 +86,7 @@ export interface ManagedMetroStatusDependencies {
   getSignerCapability?: (sessionId?: string) => string | null;
   inspectManagedMetroLifecycle?: typeof inspectManagedMetroLifecycle;
   now?: () => number;
+  onBundleInvalidated?: () => void;
 }
 
 interface SessionHandlerDependencies extends ManagedMetroStatusDependencies {
@@ -355,6 +356,7 @@ export function reconcileManagedMetroStatus(
         ? [{ type: 'target', key: `${metroPort}:${priorTargetId}` }]
         : [],
   });
+  dependencies.onBundleInvalidated?.();
   return runtime.status();
 }
 
@@ -445,6 +447,7 @@ export function createSessionHandler(
           );
         }
         if (!input.buildReceipt) {
+          const invalidatesBundle = Boolean(status.bindings.bundle);
           registry.replaceDeviceAuthority(session, {
             resource: { type: 'device', key: `${platform}:${deviceId}` },
             device: {
@@ -454,6 +457,7 @@ export function createSessionHandler(
               ...(input.devClientUrl ? { devClientUrl: input.devClientUrl } : {}),
             },
           });
+          if (invalidatesBundle) dependencies.onBundleInvalidated?.();
           return okResult({
             session: projectPublicAuthorityStatus(runtime.status()),
             buildReceiptRequired: true,
@@ -493,6 +497,7 @@ export function createSessionHandler(
           device: { platform, deviceId, appId },
           install: { ...receipt },
         });
+        if (status.bindings.bundle) dependencies.onBundleInvalidated?.();
         return okResult({ session: projectPublicAuthorityStatus(runtime.status()) });
       }
 
@@ -540,6 +545,7 @@ export function createSessionHandler(
               ? [{ type: 'target', key: `${String(status.bindings.metroPort)}:${priorTargetId}` }]
               : [],
         });
+        if (!metroUnchanged && priorBundle) dependencies.onBundleInvalidated?.();
         return okResult({ session: projectPublicAuthorityStatus(runtime.status()) });
       }
 
@@ -569,6 +575,7 @@ export function createSessionHandler(
             state: 'device_bound',
             bindings: { bundle: null },
           });
+          dependencies.onBundleInvalidated?.();
         }
         const bundle = await dependencies.pinDevClient(status, {
           force: input.force === true,
@@ -776,6 +783,7 @@ export function createSessionHandler(
               ? [{ type: 'target', key: `${metroPort}:${priorTargetId}` }]
               : [],
         });
+        if (status.bindings.bundle) dependencies.onBundleInvalidated?.();
         return okResult({
           stopped: cleanup.stopped,
           alreadyStopped: !cleanup.stopped,
@@ -1604,6 +1612,7 @@ export function createSessionHandler(
         }
       }
       registry.releaseSession(session);
+      if (status.bindings.bundle) dependencies.onBundleInvalidated?.();
       return okResult({ released: true, sessionId: session.sessionId });
     } catch (error) {
       return authorityFailure(error);

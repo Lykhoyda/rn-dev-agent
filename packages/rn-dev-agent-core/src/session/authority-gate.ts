@@ -33,6 +33,7 @@ interface AuthorityGateDependencies {
   refreshRuntimeBinding?(status: SessionStatus): Promise<Record<string, unknown>>;
   relaunchBoundRuntime?(status: SessionStatus): Promise<void>;
   onRunnerReleased?(runner: Record<string, unknown>): Promise<void> | void;
+  onRuntimeBundleInvalidated?(): void;
 }
 
 const optionalBundleAdmission = Symbol('optionalBundleAdmission');
@@ -605,12 +606,13 @@ function invalidateRuntimeBundle(
   registry: SessionRegistry,
   operation: OperationRef,
   status: SessionStatus,
+  onInvalidated?: () => void,
 ): OperationRef {
   const priorBundle = status.bindings.bundle as Record<string, unknown> | undefined;
   const metro = status.bindings.metro as Record<string, unknown> | undefined;
   const oldTargetId = priorBundle?.targetId;
   const metroPort = metro?.port;
-  return registry.replaceBindingsDuringOperation(operation, {
+  const nextOperation = registry.replaceBindingsDuringOperation(operation, {
     state: 'device_bound',
     bindings: { bundle: null },
     releaseResources:
@@ -618,6 +620,8 @@ function invalidateRuntimeBundle(
         ? [{ type: 'target', key: `${String(metroPort)}:${oldTargetId}` }]
         : [],
   });
+  onInvalidated?.();
+  return nextOperation;
 }
 
 export function createAuthorityGate(
@@ -810,7 +814,12 @@ export function createAuthorityGate(
             if (!resultSucceeded(result)) {
               if (tool === 'cdp_restart' && args.hardReset === true) {
                 registry.verifyOperation(operation);
-                operation = invalidateRuntimeBundle(registry, operation, status);
+                operation = invalidateRuntimeBundle(
+                  registry,
+                  operation,
+                  status,
+                  dependencies.onRuntimeBundleInvalidated,
+                );
                 return addMeta(result, {
                   authoritative: false,
                   authorityInvalidated: true,
@@ -859,7 +868,12 @@ export function createAuthorityGate(
               try {
                 bundle = await dependencies.refreshRuntimeBinding(status);
               } catch (error) {
-                operation = invalidateRuntimeBundle(registry, operation, status);
+                operation = invalidateRuntimeBundle(
+                  registry,
+                  operation,
+                  status,
+                  dependencies.onRuntimeBundleInvalidated,
+                );
                 throw error;
               }
               const reconciliation = reconcileRuntimeBundleReplacement(
@@ -1157,7 +1171,12 @@ export function createAuthorityGate(
                 if (failedStatus.available && failedStatus.bindings.bundle) {
                   try {
                     registry!.verifyOperation(operation!);
-                    operation = invalidateRuntimeBundle(registry!, operation!, failedStatus);
+                    operation = invalidateRuntimeBundle(
+                      registry!,
+                      operation!,
+                      failedStatus,
+                      dependencies.onRuntimeBundleInvalidated,
+                    );
                     const invalidatedStatus = runtime.status();
                     if (invalidatedStatus.available) status = invalidatedStatus;
                   } catch {}
@@ -1199,7 +1218,12 @@ export function createAuthorityGate(
                   }
                   registry!.verifyOperation(operation!);
                   if (currentStatus.bindings.bundle) {
-                    operation = invalidateRuntimeBundle(registry!, operation!, currentStatus);
+                    operation = invalidateRuntimeBundle(
+                      registry!,
+                      operation!,
+                      currentStatus,
+                      dependencies.onRuntimeBundleInvalidated,
+                    );
                     const invalidatedStatus = runtime.status();
                     if (!invalidatedStatus.available) {
                       throw new SessionAuthorityError(
@@ -1287,7 +1311,12 @@ export function createAuthorityGate(
           const reconcilesRuntimeTarget = directRuntimeReset || nestedRuntimeReset;
           let authorityInvalidated = false;
           if (directRuntimeReset && !resultSucceeded(result)) {
-            operation = invalidateRuntimeBundle(registry, operation, status);
+            operation = invalidateRuntimeBundle(
+              registry,
+              operation,
+              status,
+              dependencies.onRuntimeBundleInvalidated,
+            );
             return addMeta(result, {
               authorityInvalidated: true,
               nextAction: 'Run rn_session action "pin_dev_client" before another CDP operation.',
@@ -1313,7 +1342,12 @@ export function createAuthorityGate(
               }
               bundle = await dependencies.refreshRuntimeBinding(status);
             } catch (error) {
-              operation = invalidateRuntimeBundle(registry, operation, status);
+              operation = invalidateRuntimeBundle(
+                registry,
+                operation,
+                status,
+                dependencies.onRuntimeBundleInvalidated,
+              );
               const refreshedStatus = runtime.status();
               if (!refreshedStatus.available) {
                 throw new SessionAuthorityError(refreshedStatus.code, refreshedStatus.reason);

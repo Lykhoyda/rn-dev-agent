@@ -13026,7 +13026,15 @@ var init_registry = __esm({
         return this.#operationContext.run(operation, callback);
       }
       currentOperation() {
-        return this.#operationContext.getStore();
+        const operation = this.#operationContext.getStore();
+        if (!operation)
+          return void 0;
+        const session = asSession(this.#database.prepare(`SELECT state, claim_epoch, authority_version
+           FROM sessions WHERE session_id = ?`).get(operation.sessionId));
+        const active = this.#database.prepare(`SELECT operation_id FROM operations
+         WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
+           AND authority_version = ?`).get(operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
+        return session && isFenceableState(session.state) && session.claim_epoch === operation.claimEpoch && session.authority_version === operation.authorityVersion && active ? operation : void 0;
       }
       createSession(input) {
         const now = this.#now();
@@ -18432,16 +18440,18 @@ function reconcileRuntimeBundleReplacement(runtime, registry2, operation, status
     runtimeTargetChanged
   };
 }
-function invalidateRuntimeBundle(registry2, operation, status) {
+function invalidateRuntimeBundle(registry2, operation, status, onInvalidated) {
   const priorBundle = status.bindings.bundle;
   const metro = status.bindings.metro;
   const oldTargetId = priorBundle?.targetId;
   const metroPort = metro?.port;
-  return registry2.replaceBindingsDuringOperation(operation, {
+  const nextOperation = registry2.replaceBindingsDuringOperation(operation, {
     state: "device_bound",
     bindings: { bundle: null },
     releaseResources: typeof oldTargetId === "string" && Number.isSafeInteger(metroPort) ? [{ type: "target", key: `${String(metroPort)}:${oldTargetId}` }] : []
   });
+  onInvalidated?.();
+  return nextOperation;
 }
 function createAuthorityGate(runtime, dependencies) {
   return {
@@ -18556,7 +18566,7 @@ function createAuthorityGate(runtime, dependencies) {
           if (!resultSucceeded(result)) {
             if (tool === "cdp_restart" && args.hardReset === true) {
               registry3.verifyOperation(operation2);
-              operation2 = invalidateRuntimeBundle(registry3, operation2, status);
+              operation2 = invalidateRuntimeBundle(registry3, operation2, status, dependencies.onRuntimeBundleInvalidated);
               return addMeta(result, {
                 authoritative: false,
                 authorityInvalidated: true,
@@ -18593,7 +18603,7 @@ function createAuthorityGate(runtime, dependencies) {
             try {
               bundle = await dependencies.refreshRuntimeBinding(status);
             } catch (error2) {
-              operation2 = invalidateRuntimeBundle(registry3, operation2, status);
+              operation2 = invalidateRuntimeBundle(registry3, operation2, status, dependencies.onRuntimeBundleInvalidated);
               throw error2;
             }
             const reconciliation = reconcileRuntimeBundleReplacement(runtime, registry3, operation2, status, priorBundle, metro, bundle);
@@ -18843,7 +18853,7 @@ function createAuthorityGate(runtime, dependencies) {
               if (failedStatus.available && failedStatus.bindings.bundle) {
                 try {
                   registry2.verifyOperation(operation);
-                  operation = invalidateRuntimeBundle(registry2, operation, failedStatus);
+                  operation = invalidateRuntimeBundle(registry2, operation, failedStatus, dependencies.onRuntimeBundleInvalidated);
                   const invalidatedStatus = runtime.status();
                   if (invalidatedStatus.available)
                     status = invalidatedStatus;
@@ -18884,7 +18894,7 @@ function createAuthorityGate(runtime, dependencies) {
                 }
                 registry2.verifyOperation(operation);
                 if (currentStatus.bindings.bundle) {
-                  operation = invalidateRuntimeBundle(registry2, operation, currentStatus);
+                  operation = invalidateRuntimeBundle(registry2, operation, currentStatus, dependencies.onRuntimeBundleInvalidated);
                   const invalidatedStatus = runtime.status();
                   if (!invalidatedStatus.available) {
                     throw new SessionAuthorityError(invalidatedStatus.code, invalidatedStatus.reason);
@@ -18953,7 +18963,7 @@ function createAuthorityGate(runtime, dependencies) {
         const reconcilesRuntimeTarget = directRuntimeReset || nestedRuntimeReset;
         let authorityInvalidated = false;
         if (directRuntimeReset && !resultSucceeded(result)) {
-          operation = invalidateRuntimeBundle(registry2, operation, status);
+          operation = invalidateRuntimeBundle(registry2, operation, status, dependencies.onRuntimeBundleInvalidated);
           return addMeta(result, {
             authorityInvalidated: true,
             nextAction: 'Run rn_session action "pin_dev_client" before another CDP operation.'
@@ -18973,7 +18983,7 @@ function createAuthorityGate(runtime, dependencies) {
             }
             bundle = await dependencies.refreshRuntimeBinding(status);
           } catch (error2) {
-            operation = invalidateRuntimeBundle(registry2, operation, status);
+            operation = invalidateRuntimeBundle(registry2, operation, status, dependencies.onRuntimeBundleInvalidated);
             const refreshedStatus = runtime.status();
             if (!refreshedStatus.available) {
               throw new SessionAuthorityError(refreshedStatus.code, refreshedStatus.reason);
@@ -65818,6 +65828,7 @@ function reconcileManagedMetroStatus(runtime, dependencies = {}) {
     },
     releaseResources: typeof priorTargetId === "string" && Number.isSafeInteger(metroPort) ? [{ type: "target", key: `${metroPort}:${priorTargetId}` }] : []
   });
+  dependencies.onBundleInvalidated?.();
   return runtime.status();
 }
 function createSessionHandler(runtime, dependencies = {}) {
@@ -65872,6 +65883,7 @@ function createSessionHandler(runtime, dependencies = {}) {
           throw new SessionAuthorityError("DEVICE_RECEIPT_INCOMPATIBLE", "cannot replace exact-device authority while an incompatible install receipt is bound");
         }
         if (!input.buildReceipt) {
+          const invalidatesBundle = Boolean(status2.bindings.bundle);
           registry2.replaceDeviceAuthority(session, {
             resource: { type: "device", key: `${platform}:${deviceId}` },
             device: {
@@ -65881,6 +65893,8 @@ function createSessionHandler(runtime, dependencies = {}) {
               ...input.devClientUrl ? { devClientUrl: input.devClientUrl } : {}
             }
           });
+          if (invalidatesBundle)
+            dependencies.onBundleInvalidated?.();
           return okResult({
             session: projectPublicAuthorityStatus(runtime.status()),
             buildReceiptRequired: true
@@ -65912,6 +65926,8 @@ function createSessionHandler(runtime, dependencies = {}) {
           device: { platform, deviceId, appId },
           install: { ...receipt2 }
         });
+        if (status2.bindings.bundle)
+          dependencies.onBundleInvalidated?.();
         return okResult({ session: projectPublicAuthorityStatus(runtime.status()) });
       }
       if (input.action === "bind_metro") {
@@ -65945,6 +65961,8 @@ function createSessionHandler(runtime, dependencies = {}) {
           bindings: metroUnchanged ? { metro: nextMetro } : { metro: nextMetro, bundle: null },
           releaseResources: !metroUnchanged && typeof priorTargetId === "string" ? [{ type: "target", key: `${String(status2.bindings.metroPort)}:${priorTargetId}` }] : []
         });
+        if (!metroUnchanged && priorBundle)
+          dependencies.onBundleInvalidated?.();
         return okResult({ session: projectPublicAuthorityStatus(runtime.status()) });
       }
       if (input.action === "pin_dev_client") {
@@ -65966,6 +65984,7 @@ function createSessionHandler(runtime, dependencies = {}) {
             state: "device_bound",
             bindings: { bundle: null }
           });
+          dependencies.onBundleInvalidated?.();
         }
         const bundle = await dependencies.pinDevClient(status2, {
           force: input.force === true
@@ -66098,6 +66117,8 @@ function createSessionHandler(runtime, dependencies = {}) {
           },
           releaseResources: typeof priorTargetId === "string" && Number.isSafeInteger(metroPort) ? [{ type: "target", key: `${metroPort}:${priorTargetId}` }] : []
         });
+        if (status2.bindings.bundle)
+          dependencies.onBundleInvalidated?.();
         return okResult({
           stopped: cleanup.stopped,
           alreadyStopped: !cleanup.stopped,
@@ -66564,6 +66585,8 @@ function createSessionHandler(runtime, dependencies = {}) {
         }
       }
       registry2.releaseSession(session);
+      if (status.bindings.bundle)
+        dependencies.onBundleInvalidated?.();
       return okResult({ released: true, sessionId: session.sessionId });
     } catch (error2) {
       return authorityFailure2(error2);
@@ -82430,9 +82453,9 @@ async function pinSessionDevClient(status, options) {
   if (!secret?.signerCapability) {
     throw new Error("BUNDLE_HANDSHAKE_UNAVAILABLE: session signer is unavailable");
   }
+  const current = getClient();
+  current.clearAuthoritativeSessionPolicy();
   if (options.force) {
-    const current = getClient();
-    current.clearAuthoritativeSessionPolicy();
     await current.disconnect();
     setClient(createClient(metro.port));
   }
@@ -83166,6 +83189,7 @@ var init_index = __esm({
       probe: async ({ axis, phase, status, tool, args }) => localAuthorityProbe({ axis, phase, status, tool, args }),
       refreshRuntimeBinding: rebindSessionRuntime,
       relaunchBoundRuntime: relaunchSessionRuntime,
+      onRuntimeBundleInvalidated: () => getClient().clearAuthoritativeSessionPolicy(),
       onRunnerReleased: async (runner) => {
         if (runner.platform !== "ios")
           return;
@@ -83296,7 +83320,8 @@ var init_index = __esm({
     };
     sessionHandler = createSessionHandler(authorityRuntime, {
       getSignerCapability: getSessionSignerCapability,
-      pinDevClient: pinSessionDevClient
+      pinDevClient: pinSessionDevClient,
+      onBundleInvalidated: () => getClient().clearAuthoritativeSessionPolicy()
     });
     disconnectClientHandler = createDisconnectHandler(getClient, setClient, createClient);
     connectBoundSession = createRegisteredConnectHandler(authorityRuntime, sessionHandler);
@@ -83339,7 +83364,8 @@ var init_index = __esm({
       metroPort: external_exports.number().optional().describe("Diagnostic comparison only; cdp_status never changes the active Metro port"),
       platform: external_exports.string().optional().describe('Filter target by platform (e.g. "ios", "android") to avoid connecting to the wrong device in multi-simulator setups')
     }, createPassiveStatusHandler(getClient, authorityRuntime, {
-      getSignerCapability: getSessionSignerCapability
+      getSignerCapability: getSessionSignerCapability,
+      onBundleInvalidated: () => getClient().clearAuthoritativeSessionPolicy()
     }));
     trackedTool("observe", "Start/stop the read-only observability web UI (watch the agent's live tool-call timeline, device screenshot, and app state). action: start|stop|status.", observeSchema, observeHandler);
     trackedTool("cdp_diagnostic_renderers", 'Diagnostic helper for "fiber root invisibility" bug reports (issue #126 follow-up). Enumerates every registered React renderer and its root count via __REACT_DEVTOOLS_GLOBAL_HOOK__. Returns hook keys, renderer Map keys, per-renderer-id root summaries (top fiber type + first child + testID), and notes when renderers are registered but unscanned. Use this when cdp_component_tree returns empty for a component you know is mounted (modals, portals, sub-apps), or when bug-reporting fiber-walk failures.', {

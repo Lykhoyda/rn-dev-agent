@@ -619,6 +619,29 @@ test('only the active operation context may advance transition authority', async
   registry.endOperation(operation);
 });
 
+test('ended operations are absent from inherited async context', async () => {
+  const { registry, create } = fixture();
+  const owner = create('a');
+  const operation = registry.beginOperation(owner, {
+    operationId: 'operation-stale-context',
+    tool: 'cdp_reload',
+    profile: 'CSIMBD',
+  });
+  let release;
+  const deferred = registry.runWithOperation(
+    operation,
+    () =>
+      new Promise((resolve) => {
+        release = () => resolve(registry.currentOperation());
+      }),
+  );
+
+  assert.deepEqual(registry.currentOperation(), undefined);
+  registry.endOperation(operation);
+  release();
+  assert.equal(await deferred, undefined);
+});
+
 test('session release requires package integration restoration at every registry boundary', () => {
   const { registry, create } = fixture();
   const owner = create('a');
