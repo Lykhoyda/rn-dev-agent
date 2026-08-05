@@ -63567,7 +63567,7 @@ function applyPackageIntegration(input, dependencies = {}) {
     assertBoundDirectoryCurrent(directories.integration);
     return preview;
   } catch (error2) {
-    const rollbackErrors = rollbackWrites(applied);
+    const rollbackErrors = rollbackWrites(applied, dependencies.boundOperationDependencies);
     primaryError = rollbackErrors.length > 0 ? new AggregateError([error2, ...rollbackErrors]) : error2;
     throw primaryError;
   } finally {
@@ -63669,7 +63669,7 @@ function restorePackageIntegrationFiles(input, dependencies = {}) {
     assertBoundDirectoryCurrent(directories.agent);
     assertBoundDirectoryCurrent(directories.integration);
   } catch (error2) {
-    const rollbackErrors = rollbackWrites(applied);
+    const rollbackErrors = rollbackWrites(applied, dependencies.boundOperationDependencies);
     primaryError = rollbackErrors.length > 0 ? new AggregateError([error2, ...rollbackErrors]) : error2;
     throw primaryError;
   } finally {
