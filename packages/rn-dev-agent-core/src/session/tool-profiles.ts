@@ -14,6 +14,7 @@ const facetOrder: readonly AuthorityFacet[] = ['C', 'S', 'I', 'M', 'A', 'B', 'D'
 
 const session: readonly AuthorityGroup[] = ['session'];
 const osScoped: readonly AuthorityGroup[] = ['session', 'target'];
+const nativeControl: readonly AuthorityGroup[] = ['session', 'target', 'automation'];
 const throughRuntime: readonly AuthorityGroup[] = ['session', 'target', 'runtime'];
 const allGroups: readonly AuthorityGroup[] = ['session', 'target', 'runtime', 'automation'];
 
@@ -33,6 +34,8 @@ export interface AuthorityProfile {
   axes: readonly AuthorityAxis[];
   postflightAxes?: readonly AuthorityAxis[];
   optionalAxes?: readonly AuthorityAxis[];
+  /** Managed app-origin evidence required by or optionally admitted for native control. */
+  nativeOrigin?: 'optional' | 'required';
   managedOrigin?: boolean;
   managedRunnerPark?: boolean;
   managedInstallReissue?: boolean;
@@ -55,16 +58,10 @@ const sourceState = [
   'maestro_generate',
 ] as const;
 
-const nativeRead = [
-  'cross_platform_verify',
-  'device_find',
-  'device_screenshot',
-  'device_snapshot',
-] as const;
+const nativeRead = ['device_find', 'device_screenshot', 'device_snapshot'] as const;
+const nativeVerdict = ['cross_platform_verify'] as const;
 
 const nativeMutation = [
-  'cdp_lock_e2e_test',
-  'cdp_repair_action',
   'device_accept_system_dialog',
   'device_back',
   'device_batch',
@@ -83,6 +80,10 @@ const nativeMutation = [
   'device_scroll',
   'device_scrollintoview',
   'device_swipe',
+] as const;
+const managedNativeMutation = [
+  'cdp_lock_e2e_test',
+  'cdp_repair_action',
   'maestro_run',
   'maestro_test_all',
 ] as const;
@@ -171,18 +172,36 @@ add(sourceState, {
   mutation: true,
   liveBundleProbe: false,
 });
-// Native tools drive the device without a live CDP seat: no B, A stays live.
+// Raw native control does not require Runtime origin evidence.
 add(nativeRead, {
+  kind: 'authoritative',
+  groups: nativeControl,
+  axes: facetsOf(nativeControl),
+  nativeOrigin: 'optional',
+  mutation: false,
+  liveBundleProbe: false,
+});
+add(nativeVerdict, {
   kind: 'authoritative',
   groups: allGroups,
   axes: facetsOf(allGroups, { without: ['B'] }),
+  nativeOrigin: 'required',
   mutation: false,
   liveBundleProbe: false,
 });
 add(nativeMutation, {
   kind: 'authoritative',
+  groups: nativeControl,
+  axes: facetsOf(nativeControl),
+  nativeOrigin: 'optional',
+  mutation: true,
+  liveBundleProbe: false,
+});
+add(managedNativeMutation, {
+  kind: 'authoritative',
   groups: allGroups,
   axes: facetsOf(allGroups, { without: ['B'] }),
+  nativeOrigin: 'required',
   mutation: true,
   liveBundleProbe: false,
 });
@@ -239,7 +258,8 @@ add(observe, {
 add(proof, {
   kind: 'authoritative',
   groups: allGroups,
-  axes: facetsOf(allGroups, { without: ['A'], overlay: ['P'] }),
+  axes: facetsOf(allGroups, { overlay: ['P'] }),
+  nativeOrigin: 'required',
   mutation: true,
   liveBundleProbe: true,
 });
@@ -323,6 +343,7 @@ export function authorityProfileFor(
     return {
       ...profile,
       axes: profile.axes.filter((facet) => facet !== 'A'),
+      nativeOrigin: undefined,
       managedOrigin: true,
       managedRunnerPark: true,
     };

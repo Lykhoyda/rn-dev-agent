@@ -175,9 +175,11 @@ interface CachedSnapshot {
   }[];
   capturedAt: string;
   capturedAtMs: number;
+  captureSequence: number;
 }
 
 const snapshotCache = new Map<string, CachedSnapshot>();
+let snapshotCaptureSequence = 0;
 const dirtySnapshotPlatforms = new Set<string>();
 let snapshotAuthorityProvider: {
   current: () => Record<string, unknown> | null;
@@ -207,6 +209,7 @@ export interface SnapshotAuthorityReceipt {
   runnerProcessBirth: unknown;
   runnerCapabilityHash: unknown;
   runnerPort: unknown;
+  originAuthority: 'proven' | 'not-proven';
 }
 
 export function setSnapshotAuthorityProvider(
@@ -246,6 +249,10 @@ function currentSnapshotAuthority(platform: string): SnapshotAuthorityReceipt {
     runnerProcessBirth: authority?.runnerProcessBirth ?? null,
     runnerCapabilityHash: authority?.runnerCapabilityHash ?? null,
     runnerPort: authority?.runnerPort ?? null,
+    // Capture starts unproven. The outer authority gate upgrades only snapshots
+    // created by an operation whose optional/required M+A probes also survive
+    // postflight unchanged.
+    originAuthority: 'not-proven',
   };
 }
 
@@ -286,6 +293,7 @@ function snapshotEvidenceAuthorityIsValid(
 ): boolean {
   if (receipt.sessionId === null) return snapshotAuthorityIsValid(receipt, platform);
   return Boolean(
+    receipt.originAuthority === 'proven' &&
     receipt.platform === platform &&
     receipt.sessionId !== null &&
     receipt.claimEpoch !== null &&
@@ -349,8 +357,34 @@ export function cacheSnapshot(platform: string, nodes: CachedSnapshot['nodes']):
     nodes,
     capturedAt: new Date().toISOString(),
     capturedAtMs: Date.now(),
+    captureSequence: ++snapshotCaptureSequence,
   });
   dirtySnapshotPlatforms.delete(platform);
+}
+
+/** Snapshot-cache boundary used by the outer authority gate. */
+export function getSnapshotCaptureCheckpoint(): number {
+  return snapshotCaptureSequence;
+}
+
+/**
+ * Upgrade only snapshots captured by the current fenced operation. An older
+ * origin-unproven snapshot can therefore never become strict evidence merely
+ * because the app later attaches to managed Metro.
+ */
+export function promoteSnapshotOriginSince(checkpoint: number): void {
+  for (const snapshot of snapshotCache.values()) {
+    if (
+      snapshot.captureSequence <= checkpoint ||
+      snapshot.authorityReceipt.originAuthority === 'proven'
+    ) {
+      continue;
+    }
+    snapshot.authorityReceipt.originAuthority = 'proven';
+    if (snapshot.authorityReceipt.sessionId !== null) {
+      snapshotAuthorityProvider?.record(snapshot.authorityReceipt);
+    }
+  }
 }
 
 export function getCachedSnapshot(platform: string): CachedSnapshot | undefined {

@@ -1064,10 +1064,15 @@ test('native profiles never request a live bundle probe', async () => {
   );
 });
 
-test('native reads fail closed before dispatch when app origin is not proven', async () => {
+test('raw native reads run on exact control authority and label unavailable origin', async () => {
   const { runtime } = fixture();
   let dispatched = false;
+  let promoted = false;
   const gate = createAuthorityGate(runtime, {
+    snapshotCaptureCheckpoint: () => 17,
+    promoteSnapshotOrigin: () => {
+      promoted = true;
+    },
     probe: async ({ axis }) => {
       if (axis === 'A') {
         throw new SessionAuthorityError(
@@ -1085,10 +1090,71 @@ test('native reads fail closed before dispatch when app origin is not proven', a
   })({});
   const envelope = JSON.parse(result.content[0].text);
 
-  assert.equal(dispatched, false);
-  assert.equal(envelope.ok, false);
-  assert.equal(envelope.code, 'METRO_ORIGIN_MISMATCH');
-  assert.equal(envelope.data, undefined);
+  assert.equal(dispatched, true);
+  assert.equal(envelope.ok, true);
+  assert.equal(envelope.data.path, '/tmp/foreign-device.png');
+  assert.equal(envelope.meta.originAuthority, 'not-proven');
+  assert.equal(envelope.meta.authorityReceipt.originAuthority, 'not-proven');
+  assert.equal(promoted, false);
+  assert.equal(
+    envelope.meta.authorityReceipt.axes.some(({ axis }) => axis === 'M' || axis === 'A'),
+    false,
+  );
+});
+
+test('raw native control upgrades only a fully stable optional origin', async () => {
+  const { runtime } = fixture();
+  const promotedCheckpoints: number[] = [];
+  const gate = createAuthorityGate(runtime, {
+    snapshotCaptureCheckpoint: () => 23,
+    promoteSnapshotOrigin: (checkpoint) => promotedCheckpoints.push(checkpoint),
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+  });
+
+  for (const tool of ['device_screenshot', 'device_batch']) {
+    const result = await gate.wrap(tool, async () => okResult({ controlled: true }))({});
+    const envelope = JSON.parse(result.content[0].text);
+    assert.equal(envelope.ok, true);
+    assert.equal(envelope.meta.originAuthority, 'proven');
+    assert.equal(envelope.meta.authorityReceipt.originAuthority, 'proven');
+    assert.deepEqual(
+      envelope.meta.authorityReceipt.axes
+        .map(({ axis }) => axis)
+        .filter((axis) => axis === 'M' || axis === 'A'),
+      ['M', 'A'],
+    );
+  }
+  assert.deepEqual(promotedCheckpoints, [23, 23]);
+});
+
+test('strict verdict, learned-action, and proof consumers refuse missing managed origin', async () => {
+  for (const [tool, args] of [
+    ['cross_platform_verify', {}],
+    ['cdp_repair_action', {}],
+    ['proof_capture', { action: 'finalize' }],
+  ] as const) {
+    const { runtime } = fixture();
+    let dispatched = false;
+    const gate = createAuthorityGate(runtime, {
+      probe: async ({ axis }) => {
+        if (axis === 'A') {
+          throw new SessionAuthorityError('METRO_ORIGIN_MISMATCH', 'no exact product target');
+        }
+        return { axis, identity: `${axis}-identity` };
+      },
+    });
+
+    const result = await gate.wrap(tool, async () => {
+      dispatched = true;
+      return okResult({ verdict: 'PASS' });
+    })(args);
+    const envelope = JSON.parse(result.content[0].text);
+
+    assert.equal(dispatched, false, tool);
+    assert.equal(envelope.ok, false, tool);
+    assert.equal(envelope.code, 'METRO_ORIGIN_MISMATCH', tool);
+    assert.equal(envelope.meta.originAuthority, 'not-proven', tool);
+  }
 });
 
 test('run-action claims bundle authority only when its CDP path is used', async () => {
@@ -1500,13 +1566,13 @@ test('bind_device can replace iOS authority with an exact Android device', async
   assert.equal(dispatched?.deviceId, 'emulator-5554');
 });
 
-test('explicit target conflicts fail before the handler runs', async () => {
+test('raw native control isolates the exact session and refuses a foreign device before mutation', async () => {
   const { runtime } = fixture();
   const gate = createAuthorityGate(runtime, {
     probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
   });
   let dispatched = false;
-  const result = await gate.wrap('cdp_interact', async () => {
+  const result = await gate.wrap('device_press', async () => {
     dispatched = true;
     return okResult({ pressed: true });
   })({ deviceId: 'foreign-device' });
@@ -1514,6 +1580,7 @@ test('explicit target conflicts fail before the handler runs', async () => {
 
   assert.equal(dispatched, false);
   assert.equal(envelope.code, 'DEVICE_AUTHORITY_MISMATCH');
+  assert.equal(envelope.meta.originAuthority, 'not-proven');
   assert.equal(envelope.meta.axis, 'D');
   assert.match(envelope.meta.expected, /^[a-f0-9]{16}$/);
   assert.match(envelope.meta.observed, /^[a-f0-9]{16}$/);
@@ -2095,7 +2162,7 @@ test('runner transitions and idempotent Observe starts probe their exact axes', 
   });
   assert.deepEqual(
     calls.filter((call) => call.startsWith('preflight:')),
-    ['preflight:C', 'preflight:S', 'preflight:I', 'preflight:M', 'preflight:D'],
+    ['preflight:C', 'preflight:S', 'preflight:I', 'preflight:D', 'preflight:M', 'preflight:A'],
   );
   assert.deepEqual(
     calls.filter((call) => call.startsWith('postflight:')),
@@ -2103,9 +2170,10 @@ test('runner transitions and idempotent Observe starts probe their exact axes', 
       'postflight:C',
       'postflight:S',
       'postflight:I',
-      'postflight:M',
       'postflight:D',
       'postflight:R',
+      'postflight:M',
+      'postflight:A',
     ],
   );
 
@@ -2225,11 +2293,11 @@ test('runner close is idempotent after timeout containment released its binding'
   assert.equal(status.authorityVersion, 9);
   assert.deepEqual(
     calls.filter((call) => call.startsWith('preflight:')),
-    ['preflight:C', 'preflight:S', 'preflight:D'],
+    ['preflight:C', 'preflight:S', 'preflight:D', 'preflight:M', 'preflight:A'],
   );
   assert.deepEqual(
     calls.filter((call) => call.startsWith('postflight:')),
-    ['postflight:C', 'postflight:S', 'postflight:D'],
+    ['postflight:C', 'postflight:S', 'postflight:D', 'postflight:M', 'postflight:A'],
   );
 });
 

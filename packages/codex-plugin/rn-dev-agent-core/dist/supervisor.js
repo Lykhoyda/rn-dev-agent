@@ -24440,7 +24440,9 @@ function currentSnapshotAuthority(platform) {
     runnerPid: authority?.runnerPid ?? null,
     runnerProcessBirth: authority?.runnerProcessBirth ?? null,
     runnerCapabilityHash: authority?.runnerCapabilityHash ?? null,
-    runnerPort: authority?.runnerPort ?? null
+    runnerPort: authority?.runnerPort ?? null,
+    // The outer gate upgrades only captures whose M+A authority survives postflight.
+    originAuthority: "not-proven"
   };
 }
 function snapshotAuthorityIsValid(receipt2, platform) {
@@ -24453,7 +24455,7 @@ function snapshotAuthorityIsValid(receipt2, platform) {
 function snapshotEvidenceAuthorityIsValid(receipt2, platform) {
   if (receipt2.sessionId === null)
     return snapshotAuthorityIsValid(receipt2, platform);
-  return Boolean(receipt2.platform === platform && receipt2.sessionId !== null && receipt2.claimEpoch !== null && receipt2.sourceKey !== null && receipt2.worktreeKey !== null && receipt2.appRootKey !== null && receipt2.deviceId !== null && receipt2.installGeneration !== null && receipt2.appId !== null && receipt2.artifactDigest !== null && snapshotAuthorityProvider?.validateEvidence?.(receipt2));
+  return Boolean(receipt2.originAuthority === "proven" && receipt2.platform === platform && receipt2.sessionId !== null && receipt2.claimEpoch !== null && receipt2.sourceKey !== null && receipt2.worktreeKey !== null && receipt2.appRootKey !== null && receipt2.deviceId !== null && receipt2.installGeneration !== null && receipt2.appId !== null && receipt2.artifactDigest !== null && snapshotAuthorityProvider?.validateEvidence?.(receipt2));
 }
 async function validateCachedSnapshotEvidenceAuthority(platform) {
   const snapshot = snapshotCache.get(platform);
@@ -24481,9 +24483,24 @@ function cacheSnapshot(platform, nodes) {
     authorityReceipt,
     nodes,
     capturedAt: (/* @__PURE__ */ new Date()).toISOString(),
-    capturedAtMs: Date.now()
+    capturedAtMs: Date.now(),
+    captureSequence: ++snapshotCaptureSequence
   });
   dirtySnapshotPlatforms.delete(platform);
+}
+function getSnapshotCaptureCheckpoint() {
+  return snapshotCaptureSequence;
+}
+function promoteSnapshotOriginSince(checkpoint) {
+  for (const snapshot of snapshotCache.values()) {
+    if (snapshot.captureSequence <= checkpoint || snapshot.authorityReceipt.originAuthority === "proven") {
+      continue;
+    }
+    snapshot.authorityReceipt.originAuthority = "proven";
+    if (snapshot.authorityReceipt.sessionId !== null) {
+      snapshotAuthorityProvider?.record(snapshot.authorityReceipt);
+    }
+  }
 }
 function getCachedSnapshot(platform) {
   const snapshot = snapshotCache.get(platform);
@@ -25508,7 +25525,7 @@ async function runNative(cliArgs, opts = {}) {
   }
   return failResult(`No native route for "${cliArgs[0]}". Open a device session (device_snapshot action=open) first, or use the dedicated tool for this verb.`, "NO_NATIVE_ROUTE");
 }
-var SESSION_FILE, LEGACY_SESSION_FILE, activeSession, snapshotCache, dirtySnapshotPlatforms, snapshotAuthorityProvider, RN_FAST_RUNNER_COMMANDS, SNAPSHOT_MUTATING_VERBS, APP_SCOPED_ANDROID_REF_VERBS, PROTOCOL_STALE_REASONS, _runAgentDeviceOverrideForTest, _testSeamFused, _testSeamFuseBlownBy, RETRYABLE_TAP_COMMANDS, IME_KEY_FLAG, MAX_STALE_CANDIDATES;
+var SESSION_FILE, LEGACY_SESSION_FILE, activeSession, snapshotCache, snapshotCaptureSequence, dirtySnapshotPlatforms, snapshotAuthorityProvider, RN_FAST_RUNNER_COMMANDS, SNAPSHOT_MUTATING_VERBS, APP_SCOPED_ANDROID_REF_VERBS, PROTOCOL_STALE_REASONS, _runAgentDeviceOverrideForTest, _testSeamFused, _testSeamFuseBlownBy, RETRYABLE_TAP_COMMANDS, IME_KEY_FLAG, MAX_STALE_CANDIDATES;
 var init_agent_device_wrapper = __esm({
   "packages/rn-dev-agent-core/dist/agent-device-wrapper.js"() {
     "use strict";
@@ -25535,6 +25552,7 @@ var init_agent_device_wrapper = __esm({
       }
     }
     snapshotCache = /* @__PURE__ */ new Map();
+    snapshotCaptureSequence = 0;
     dirtySnapshotPlatforms = /* @__PURE__ */ new Set();
     snapshotAuthorityProvider = null;
     RN_FAST_RUNNER_COMMANDS = /* @__PURE__ */ new Set([
@@ -27276,6 +27294,7 @@ function authorityProfileFor(tool, args = {}) {
     return {
       ...profile2,
       axes: profile2.axes.filter((facet) => facet !== "A"),
+      nativeOrigin: void 0,
       managedOrigin: true,
       managedRunnerPark: true
     };
@@ -27318,7 +27337,7 @@ function assertAuthorityProfilesExhaustive(toolNames) {
     throw new Error(`UNPROFILED_AUTHORITY_TOOL: missing=${missing.join(",") || "none"} stale=${stale.join(",") || "none"}`);
   }
 }
-var groupFacets, facetOrder, session, osScoped, throughRuntime, allGroups, diagnostic, transition, sourceState, nativeRead, nativeMutation, hybridMutation, optionalHybridMutation, nativeDiagnostic, inlineMaestroMutation, cdpRead, cdpMutation, observe, proof, profiles;
+var groupFacets, facetOrder, session, osScoped, nativeControl, throughRuntime, allGroups, diagnostic, transition, sourceState, nativeRead, nativeVerdict, nativeMutation, managedNativeMutation, hybridMutation, optionalHybridMutation, nativeDiagnostic, inlineMaestroMutation, cdpRead, cdpMutation, observe, proof, profiles;
 var init_tool_profiles = __esm({
   "packages/rn-dev-agent-core/dist/session/tool-profiles.js"() {
     "use strict";
@@ -27331,6 +27350,7 @@ var init_tool_profiles = __esm({
     facetOrder = ["C", "S", "I", "M", "A", "B", "D", "R", "P"];
     session = ["session"];
     osScoped = ["session", "target"];
+    nativeControl = ["session", "target", "automation"];
     throughRuntime = ["session", "target", "runtime"];
     allGroups = ["session", "target", "runtime", "automation"];
     diagnostic = ["cdp_status", "cdp_targets", "device_list"];
@@ -27344,15 +27364,9 @@ var init_tool_profiles = __esm({
       "cdp_record_test_save_as_action",
       "maestro_generate"
     ];
-    nativeRead = [
-      "cross_platform_verify",
-      "device_find",
-      "device_screenshot",
-      "device_snapshot"
-    ];
+    nativeRead = ["device_find", "device_screenshot", "device_snapshot"];
+    nativeVerdict = ["cross_platform_verify"];
     nativeMutation = [
-      "cdp_lock_e2e_test",
-      "cdp_repair_action",
       "device_accept_system_dialog",
       "device_back",
       "device_batch",
@@ -27370,7 +27384,11 @@ var init_tool_profiles = __esm({
       "device_reset_state",
       "device_scroll",
       "device_scrollintoview",
-      "device_swipe",
+      "device_swipe"
+    ];
+    managedNativeMutation = [
+      "cdp_lock_e2e_test",
+      "cdp_repair_action",
       "maestro_run",
       "maestro_test_all"
     ];
@@ -27448,15 +27466,33 @@ var init_tool_profiles = __esm({
     });
     add(nativeRead, {
       kind: "authoritative",
+      groups: nativeControl,
+      axes: facetsOf(nativeControl),
+      nativeOrigin: "optional",
+      mutation: false,
+      liveBundleProbe: false
+    });
+    add(nativeVerdict, {
+      kind: "authoritative",
       groups: allGroups,
       axes: facetsOf(allGroups, { without: ["B"] }),
+      nativeOrigin: "required",
       mutation: false,
       liveBundleProbe: false
     });
     add(nativeMutation, {
       kind: "authoritative",
+      groups: nativeControl,
+      axes: facetsOf(nativeControl),
+      nativeOrigin: "optional",
+      mutation: true,
+      liveBundleProbe: false
+    });
+    add(managedNativeMutation, {
+      kind: "authoritative",
       groups: allGroups,
       axes: facetsOf(allGroups, { without: ["B"] }),
+      nativeOrigin: "required",
       mutation: true,
       liveBundleProbe: false
     });
@@ -27509,7 +27545,8 @@ var init_tool_profiles = __esm({
     add(proof, {
       kind: "authoritative",
       groups: allGroups,
-      axes: facetsOf(allGroups, { without: ["A"], overlay: ["P"] }),
+      axes: facetsOf(allGroups, { overlay: ["P"] }),
+      nativeOrigin: "required",
       mutation: true,
       liveBundleProbe: true
     });
@@ -27708,7 +27745,7 @@ async function preflightWithInstallReissue(registry2, runtime, dependencies, con
 function requireDeviceTransition(status, args) {
   const action = args.action ?? "snapshot";
   if (action === "open") {
-    for (const binding of ["install", "metro", "device"]) {
+    for (const binding of ["install", "device"]) {
       if (!status.bindings[binding]) {
         throw new SessionAuthorityError(binding === "install" ? "APP_INSTALL_IDENTITY_CHANGED" : "SESSION_AUTHORITY_REQUIRED", `${binding} authority must be bound before opening the native runner`);
       }
@@ -27817,6 +27854,26 @@ function isOptionalBundleFailure(error2) {
   const code = authorityErrorCode(error2);
   return code === "BUNDLE_HANDSHAKE_UNAVAILABLE" || code === "BUNDLE_IDENTITY_MISMATCH" || code === "CDP_TARGET_AUTHORITY_MISMATCH" || code === "TARGET_CLAIM_CONFLICT";
 }
+function isOptionalNativeOriginFailure(error2) {
+  const code = authorityErrorCode(error2);
+  return code === "METRO_INSTANCE_CHANGED" || code === "METRO_AUTHORITY_MISMATCH" || code === "METRO_ORIGIN_MISMATCH";
+}
+async function probeOptionalNativeOrigin(dependencies, input) {
+  if (!input.status.bindings.metro || !input.status.bindings.device)
+    return [];
+  try {
+    const metro = await dependencies.probe({ ...input, axis: "M" });
+    const origin = await dependencies.probe({ ...input, axis: "A" });
+    return [metro, origin];
+  } catch (error2) {
+    if (isOptionalNativeOriginFailure(error2))
+      return [];
+    throw error2;
+  }
+}
+function nativeOriginMeta(profile, proven) {
+  return profile.nativeOrigin ? { originAuthority: proven ? "proven" : "not-proven" } : {};
+}
 function addMeta(result, meta) {
   if (!result || typeof result !== "object")
     return result;
@@ -27859,6 +27916,18 @@ function resultIsCanonicalSuccess(result) {
     return false;
   }
 }
+function resultAllowsOriginProof(result) {
+  const first = result?.content?.[0];
+  if (!first?.text)
+    return true;
+  try {
+    const envelope = JSON.parse(first.text);
+    const provenance = envelope.meta?.snapshotProvenance;
+    return provenance?.source !== "cache" || provenance.originAuthority === "proven";
+  } catch {
+    return true;
+  }
+}
 function proofDiscardConfirmed(result) {
   if (!result || typeof result !== "object")
     return false;
@@ -27884,6 +27953,7 @@ function receipt(status, profile, observations) {
       ...detail ? { detail } : {}
     })),
     bundle: profile.axes.includes("B") ? { authorityScope: "initial-bundle", sourceFidelity: "not-proven" } : void 0,
+    originAuthority: profile.nativeOrigin ? observations.some(({ axis }) => axis === "A") ? "proven" : "not-proven" : void 0,
     nativeAppOrigin: profile.axes.includes("A") ? {
       authorityScope: observations.some(({ axis }) => axis === "A") ? "live-metro-target-device" : "preflight-live-metro-target-device"
     } : void 0
@@ -27986,7 +28056,8 @@ function createAuthorityGate(runtime, dependencies) {
         liveBundleProbe: false
       } : tool === "device_snapshot" && (args.action === "open" || args.action === "close") || tool === "observe" && (args.action === "start" || args.action === "restart" || args.action === "stop") || tool === "proof_capture" && args.action === "begin_rehearsal" ? {
         kind: "transition",
-        axes: tool === "proof_capture" ? ["C", "S", "I", "M", "B", "D", "R"] : ["C", "S"],
+        axes: tool === "proof_capture" ? ["C", "S", "I", "M", "A", "B", "D", "R"] : ["C", "S"],
+        nativeOrigin: tool === "device_snapshot" ? baseProfile.nativeOrigin : tool === "proof_capture" ? "required" : void 0,
         mutation: true,
         liveBundleProbe: tool === "proof_capture"
       } : baseProfile;
@@ -28042,8 +28113,8 @@ function createAuthorityGate(runtime, dependencies) {
             throw new SessionAuthorityError("PROOF_AUTHORITY_MISMATCH", "an active proof run must be finalized or discarded before beginning another");
           }
           const transitionAxes = tool === "device_snapshot" ? args.action === "open" ? {
-            before: ["C", "S", "I", "M", "D"],
-            after: ["C", "S", "I", "M", "D", "R"]
+            before: ["C", "S", "I", "D"],
+            after: ["C", "S", "I", "D", "R"]
           } : {
             before: ["C", "S", "D"],
             after: ["C", "S", "D"]
@@ -28066,7 +28137,15 @@ function createAuthorityGate(runtime, dependencies) {
           operation2 = preflight2.operation;
           status = preflight2.status;
           initialAuthorityVersion = status.authorityVersion;
+          const optionalOriginBefore = profile.nativeOrigin === "optional" ? await probeOptionalNativeOrigin(dependencies, {
+            phase: "preflight",
+            tool,
+            profile,
+            status,
+            args
+          }) : [];
           registry3.verifyOperation(operation2);
+          const snapshotCheckpoint = dependencies.snapshotCaptureCheckpoint?.();
           const result = await registry3.runWithOperation(operation2, () => handler(...handlerArgs));
           if (!resultSucceeded(result)) {
             if (tool === "cdp_restart" && args.hardReset === true) {
@@ -28078,7 +28157,10 @@ function createAuthorityGate(runtime, dependencies) {
                 nextAction: 'Run rn_session action "pin_dev_client" before another CDP operation.'
               });
             }
-            return addMeta(result, { authoritative: false });
+            return addMeta(result, {
+              authoritative: false,
+              ...nativeOriginMeta(profile, false)
+            });
           }
           beganProofRehearsal = gateCommitsProof;
           const staleReleaseScope = staleDeviceReleaseScope(tool, args, initialStatus);
@@ -28126,6 +28208,14 @@ function createAuthorityGate(runtime, dependencies) {
           }
           requireCompleteAxes(status, { ...profile, axes: transitionAxes.after });
           const after = await Promise.all(transitionAxes.after.map((axis) => dependencies.probe({ axis, phase: "postflight", tool, profile, status, args })));
+          const optionalOriginAfter = optionalOriginBefore.length > 0 ? await probeOptionalNativeOrigin(dependencies, {
+            phase: "postflight",
+            tool,
+            profile,
+            status,
+            args
+          }) : [];
+          const optionalOriginProven = optionalOriginBefore.length === 2 && optionalOriginAfter.length === 2 && optionalOriginBefore.every((observation) => observation.identity === optionalOriginAfter.find((candidate) => candidate.axis === observation.axis)?.identity);
           for (const observation of before) {
             if (runtimeTargetChanged && observation.axis === "B")
               continue;
@@ -28155,11 +28245,24 @@ function createAuthorityGate(runtime, dependencies) {
             }
             status = proofStatus;
           }
+          if (operation2 && optionalOriginProven && snapshotCheckpoint !== void 0 && dependencies.promoteSnapshotOrigin) {
+            await registry3.runWithOperation(operation2, async () => {
+              dependencies.promoteSnapshotOrigin(snapshotCheckpoint);
+            });
+          }
           if (operation2)
             registry3.commitPlatformAuthorityReceipts(operation2);
+          const transitionReceiptProfile = optionalOriginProven ? {
+            ...profile,
+            axes: [...transitionAxes.after, "M", "A"]
+          } : { ...profile, axes: transitionAxes.after };
           return addMeta(result, {
             authorityTransition: true,
-            authorityReceipt: receipt(status, { ...profile, axes: transitionAxes.after }, after)
+            ...nativeOriginMeta(profile, profile.nativeOrigin === "required" || optionalOriginProven),
+            authorityReceipt: receipt(status, transitionReceiptProfile, [
+              ...after,
+              ...optionalOriginProven ? optionalOriginAfter : []
+            ])
           });
         } catch (error2) {
           if (beganProofRehearsal) {
@@ -28188,7 +28291,7 @@ function createAuthorityGate(runtime, dependencies) {
               ...postCommitFailureMeta(error2, committedStaleDeviceRelease.scope)
             });
           }
-          return authorityFailure(error2);
+          return addMeta(authorityFailure(error2), nativeOriginMeta(profile, false));
         } finally {
           if (registry3 && operation2 && !retainProofCleanupFence2) {
             try {
@@ -28227,6 +28330,13 @@ function createAuthorityGate(runtime, dependencies) {
         operation = preflight2.operation;
         status = preflight2.status;
         const initialOperationAuthorityVersion = operation.authorityVersion;
+        const optionalNativeOriginBefore = profile.nativeOrigin === "optional" ? await probeOptionalNativeOrigin(dependencies, {
+          phase: "preflight",
+          tool,
+          profile,
+          status,
+          args
+        }) : [];
         const optionalBefore = [];
         const managedOriginObservations = [];
         const managedBundleObservations = [];
@@ -28534,6 +28644,9 @@ function createAuthorityGate(runtime, dependencies) {
               if (!runner) {
                 throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "managed runner parking lost the bound runner before commit");
               }
+              if (profile.nativeOrigin === "optional" && optionalNativeOriginBefore.length !== 2) {
+                throw new SessionAuthorityError("METRO_ORIGIN_MISMATCH", "native fallback requires proven managed app origin");
+              }
               registry2.verifyOperation(operation);
               operation = registry2.replaceBindingsDuringOperation(operation, {
                 state: currentStatus.bindings.bundle ? "ready" : "device_bound",
@@ -28556,6 +28669,7 @@ function createAuthorityGate(runtime, dependencies) {
           });
         }
         registry2.verifyOperation(operation);
+        const snapshotCheckpoint = dependencies.snapshotCaptureCheckpoint?.();
         const result = await registry2.runWithOperation(operation, () => handler(...handlerArgs));
         let runtimeTargetChanged = false;
         const postHandlerRecovery = await reconcileRecoverableRuntime(runtime, dependencies, registry2, operation, status, profile, resultSucceeded(result));
@@ -28627,6 +28741,14 @@ function createAuthorityGate(runtime, dependencies) {
             runtimeTargetChanged ||= reconciliation.runtimeTargetChanged;
           }
         }
+        const optionalNativeOriginAfter = optionalNativeOriginBefore.length > 0 ? await probeOptionalNativeOrigin(dependencies, {
+          phase: "postflight",
+          tool,
+          profile,
+          status,
+          args
+        }) : [];
+        const optionalNativeOriginProven = optionalNativeOriginBefore.length === 2 && optionalNativeOriginAfter.length === 2 && optionalNativeOriginBefore.every((observation) => observation.identity === optionalNativeOriginAfter.find((candidate) => candidate.axis === observation.axis)?.identity);
         const effectiveProfile = optionalBefore.length > 0 ? { ...profile, axes: [...profile.axes, ...optionalBefore.map(({ axis }) => axis)] } : profile;
         const allBefore = [...before, ...optionalBefore];
         const managedTargetAbsent = managedOriginCompleted && !managedOriginCompletedWithTarget;
@@ -28646,7 +28768,10 @@ function createAuthorityGate(runtime, dependencies) {
         })));
         const finalOrigin = managedOriginCompletedWithTarget ? managedOriginObservations.at(-1) : void 0;
         const finalManagedBundle = managedOriginCompletedWithTarget ? managedBundleObservations.at(-1) : void 0;
-        const receiptObservations = finalOrigin ? [...after, finalOrigin, ...finalManagedBundle ? [finalManagedBundle] : []] : after;
+        const resultOriginProvenanceAllowsProof = resultAllowsOriginProof(result);
+        const effectiveFinalOrigin = resultOriginProvenanceAllowsProof ? finalOrigin : void 0;
+        const effectiveOptionalNativeOriginProven = resultOriginProvenanceAllowsProof && optionalNativeOriginProven;
+        const receiptObservations = effectiveFinalOrigin ? [...after, effectiveFinalOrigin, ...finalManagedBundle ? [finalManagedBundle] : []] : [...after, ...effectiveOptionalNativeOriginProven ? optionalNativeOriginAfter : []];
         const receiptBaseProfile = managedTargetAbsent ? {
           ...effectiveProfile,
           axes: effectiveProfile.axes.filter((axis) => axis !== "B")
@@ -28655,13 +28780,16 @@ function createAuthorityGate(runtime, dependencies) {
           ...receiptBaseProfile,
           axes: receiptBaseProfile.axes.filter((axis) => axis !== "R")
         } : receiptBaseProfile;
-        const receiptProfile = finalOrigin ? {
+        const receiptProfile = effectiveFinalOrigin ? {
           ...runnerAwareReceiptProfile,
           axes: [
             ...runnerAwareReceiptProfile.axes,
             "A",
             ...finalManagedBundle ? ["B"] : []
           ]
+        } : effectiveOptionalNativeOriginProven ? {
+          ...runnerAwareReceiptProfile,
+          axes: [...runnerAwareReceiptProfile.axes, "M", "A"]
         } : runnerAwareReceiptProfile;
         const controllerGenerationAdvanced = operation.authorityVersion !== initialOperationAuthorityVersion;
         registry2.verifyOperation(operation);
@@ -28690,18 +28818,29 @@ function createAuthorityGate(runtime, dependencies) {
             operation = null;
           }
         }
+        const nativeOriginProven = resultOriginProvenanceAllowsProof && (profile.axes.includes("A") || Boolean(effectiveFinalOrigin) || effectiveOptionalNativeOriginProven);
         if (!resultIsCanonicalSuccess(result)) {
           return addMeta(result, {
             authoritative: false,
+            ...nativeOriginMeta(profile, nativeOriginProven),
             ...authorityInvalidated ? {
               authorityInvalidated: true,
               nextAction: 'Run rn_session action "pin_dev_client" before another CDP operation.'
             } : {}
           });
         }
+        if (profile.nativeOrigin === "required" && !nativeOriginProven) {
+          throw new SessionAuthorityError("METRO_ORIGIN_MISMATCH", "strict native evidence requires proven managed app origin");
+        }
+        if (operation && nativeOriginProven && snapshotCheckpoint !== void 0 && dependencies.promoteSnapshotOrigin) {
+          await registry2.runWithOperation(operation, async () => {
+            dependencies.promoteSnapshotOrigin(snapshotCheckpoint);
+          });
+        }
         if (operation)
           registry2.commitPlatformAuthorityReceipts(operation);
         return addMeta(result, {
+          ...nativeOriginMeta(profile, nativeOriginProven),
           authorityReceipt: receipt(status, receiptProfile, receiptObservations),
           ...authorityInvalidated ? {
             authorityInvalidated: true,
@@ -28726,7 +28865,7 @@ function createAuthorityGate(runtime, dependencies) {
             return authorityFailure(new AggregateError([error2, rollbackError], "PROOF_AUTHORITY_MISMATCH: finalized proof cleanup is unconfirmed"));
           }
         }
-        return authorityFailure(error2);
+        return addMeta(authorityFailure(error2), nativeOriginMeta(profile, false));
       } finally {
         stagedRuntimeRelaunch?.cancel();
         if (registry2 && operation && !retainProofCleanupFence) {
@@ -32073,8 +32212,16 @@ async function fetchSnapshotNodes(allowCache = false) {
     const platform2 = getActiveSession()?.platform;
     if (platform2 && isSnapshotCacheValid(platform2)) {
       const cached2 = getCachedSnapshot(platform2);
-      if (cached2)
-        return { ok: true, nodes: cached2.nodes };
+      if (cached2) {
+        return {
+          ok: true,
+          nodes: cached2.nodes,
+          provenance: {
+            source: "cache",
+            originAuthority: cached2.authorityReceipt.originAuthority
+          }
+        };
+      }
     }
   }
   const first = await runNative(["snapshot", "-i"]);
@@ -32087,7 +32234,11 @@ async function fetchSnapshotNodes(allowCache = false) {
     const platform2 = getActiveSession()?.platform;
     if (platform2)
       cacheSnapshot(platform2, initialNodes);
-    return { ok: true, nodes: initialNodes };
+    return {
+      ok: true,
+      nodes: initialNodes,
+      provenance: { source: "fresh", originAuthority: "not-proven" }
+    };
   }
   const session2 = getActiveSession();
   markSnapshotDirty(session2?.platform);
@@ -32118,7 +32269,12 @@ async function fetchSnapshotNodes(allowCache = false) {
   const platform = getActiveSession()?.platform;
   if (platform)
     cacheSnapshot(platform, recoveredNodes);
-  return { ok: true, nodes: recoveredNodes, recoveredTier: recovery.tier };
+  return {
+    ok: true,
+    nodes: recoveredNodes,
+    provenance: { source: "fresh", originAuthority: "not-proven" },
+    recoveredTier: recovery.tier
+  };
 }
 function emptyCaptureFailResult(query) {
   return failResult(`Snapshot returned zero nodes \u2014 cannot distinguish an empty screen from a degraded capture` + (query !== void 0 ? `; not asserting "${query}" is absent` : "") + `. Confirm the screen with device_screenshot or cdp_component_tree, then retry.`, { code: "SNAPSHOT_DEGRADED", ...query !== void 0 ? { query } : {} });
@@ -32146,7 +32302,12 @@ async function fetchFindCandidates(query, exact = false, allowCache = false, inc
   });
   const ranked = rankSnapshotNodes(matched);
   const candidates = ranked.slice(0, 10).map(candidateFromNode);
-  return { ok: true, candidates, recoveredTier: snap.recoveredTier };
+  return {
+    ok: true,
+    candidates,
+    provenance: snap.provenance,
+    recoveredTier: snap.recoveredTier
+  };
 }
 function runnerLeakFailResult(query, recoveryReason) {
   const queryHint = query ? ` (while resolving "${query}")` : "";
@@ -32171,13 +32332,21 @@ async function pressCandidate(candidate, action, getClient2, includeSystemUi = f
     ...includeSystemUi ? { scope: "system-ui-explicit" } : {}
   });
 }
-function tagPressIfRecovered(result, tier) {
-  if (!tier || result.isError)
-    return result;
+function tagFindSnapshot(result, provenance, tier) {
   try {
     const envelope = JSON.parse(result.content[0].text);
-    envelope.meta = { ...envelope.meta, recovered: "agent-device-runner-leak", recoveryTier: tier };
-    return { content: [{ type: "text", text: JSON.stringify(envelope) }] };
+    envelope.meta = {
+      ...envelope.meta,
+      snapshotProvenance: provenance,
+      ...tier ? { recovered: "agent-device-runner-leak", recoveryTier: tier } : {}
+    };
+    return {
+      ...result,
+      content: [
+        { type: "text", text: JSON.stringify(envelope) },
+        ...result.content.slice(1)
+      ]
+    };
   } catch {
     return result;
   }
@@ -32195,28 +32364,33 @@ function createDeviceFindHandler(getClient2) {
         }
         return failResult(`Snapshot unavailable \u2014 cannot resolve ${args.exact ? "exact" : "index-based"} match for "${args.text}". Retry after device_snapshot action=open/snapshot.`, { code: "SNAPSHOT_UNAVAILABLE", query: args.text });
       }
-      const { candidates, recoveredTier } = find;
+      const { candidates, provenance, recoveredTier } = find;
+      const tagResult = (result) => tagFindSnapshot(result, provenance, recoveredTier);
       if (candidates.length === 0) {
-        return failResult(`No element matches "${args.text}" (exact=${args.exact === true})`, {
+        return tagResult(failResult(`No element matches "${args.text}" (exact=${args.exact === true})`, {
           code: "NOT_FOUND",
           query: args.text
-        });
+        }));
       }
       if (args.index !== void 0) {
         if (args.index < 0 || args.index >= candidates.length) {
-          return failResult(`index ${args.index} out of range (got ${candidates.length} candidates)`, { code: "INDEX_OUT_OF_RANGE", count: candidates.length, candidates });
+          return tagResult(failResult(`index ${args.index} out of range (got ${candidates.length} candidates)`, {
+            code: "INDEX_OUT_OF_RANGE",
+            count: candidates.length,
+            candidates
+          }));
         }
-        return tagPressIfRecovered(await pressCandidate(candidates[args.index], args.action, getClient2, args.includeSystemUi === true), recoveredTier);
+        return tagResult(await pressCandidate(candidates[args.index], args.action, getClient2, args.includeSystemUi === true));
       }
       if (candidates.length === 1) {
-        return tagPressIfRecovered(await pressCandidate(candidates[0], args.action, getClient2, args.includeSystemUi === true), recoveredTier);
+        return tagResult(await pressCandidate(candidates[0], args.action, getClient2, args.includeSystemUi === true));
       }
-      return failResult(`AMBIGUOUS_MATCH: exact "${args.text}" matched ${candidates.length} elements`, {
+      return tagResult(failResult(`AMBIGUOUS_MATCH: exact "${args.text}" matched ${candidates.length} elements`, {
         code: "AMBIGUOUS_MATCH",
         query: args.text,
         candidates,
         hint: "Add index: N to pick one."
-      });
+      }));
     }
     const activeSession2 = getActiveSession();
     const usesInTreeRunner = activeSession2?.platform === "ios" || activeSession2?.platform === "android" && process.env.RN_ANDROID_RUNNER !== "0";
@@ -32234,25 +32408,26 @@ function createDeviceFindHandler(getClient2) {
           query: args.text
         });
       }
-      const { candidates, recoveredTier } = find;
+      const { candidates, provenance, recoveredTier } = find;
+      const tagResult = (result) => tagFindSnapshot(result, provenance, recoveredTier);
       const recoveredMeta = recoveredTier ? { recoveredTier } : {};
       if (candidates.length === 0) {
-        return failResult(`No element matches "${args.text}"`, {
+        return tagResult(failResult(`No element matches "${args.text}"`, {
           code: "NOT_FOUND",
           query: args.text,
           ...recoveredMeta
-        });
+        }));
       }
       if (candidates.length === 1) {
-        return tagPressIfRecovered(await pressCandidate(candidates[0], args.action, getClient2, args.includeSystemUi === true), recoveredTier);
+        return tagResult(await pressCandidate(candidates[0], args.action, getClient2, args.includeSystemUi === true));
       }
-      return failResult(`AMBIGUOUS_MATCH: "${args.text}" matched ${candidates.length} elements. Use device_press with one of these refs, or retry with index: N.`, {
+      return tagResult(failResult(`AMBIGUOUS_MATCH: "${args.text}" matched ${candidates.length} elements. Use device_press with one of these refs, or retry with index: N.`, {
         code: "AMBIGUOUS_MATCH",
         query: args.text,
         candidates,
         ...recoveredMeta,
         hint: 'Pick the correct ref (prefer one with hittable=true) and call device_press(ref="...") directly, or call device_find again with index: N.'
-      });
+      }));
     }
     return failResult(`device_find requires an in-tree runner \u2014 iOS (rn-fast-runner) or Android with RN_ANDROID_RUNNER unset/non-zero (rn-android-runner). Active session: ${activeSession2?.platform ?? "none"}.`, {
       code: "IN_TREE_RUNNER_REQUIRED",
@@ -86174,7 +86349,12 @@ function createLocalAuthorityProbe(dependencies) {
       if (!Number.isSafeInteger(port) || !Number.isSafeInteger(pid) || !birth || metroListenerPid(port) !== pid || inspectSessionOwner({ sessionId: status.sessionId, pid, token: birth }) !== "match") {
         throw new SessionAuthorityError("METRO_INSTANCE_CHANGED", "Metro process identity no longer matches the bound instance");
       }
-      const statusText = await fetchText(`http://127.0.0.1:${port}/status`);
+      let statusText;
+      try {
+        statusText = await fetchText(`http://127.0.0.1:${port}/status`);
+      } catch {
+        throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "claimed Metro endpoint could not be inspected");
+      }
       if (!statusText.includes("packager-status:running")) {
         throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "claimed Metro endpoint is not running");
       }
@@ -87796,6 +87976,8 @@ var init_index = __esm({
       refreshRuntimeBinding: rebindSessionRuntime,
       relaunchBoundRuntime: relaunchSessionRuntime,
       reconnectBoundRuntime: reconnectSessionRuntime,
+      snapshotCaptureCheckpoint: getSnapshotCaptureCheckpoint,
+      promoteSnapshotOrigin: promoteSnapshotOriginSince,
       onRuntimeBundleInvalidated: () => getClient().clearAuthoritativeSessionPolicy(),
       onRunnerReleased: async (runner) => {
         if (runner.platform !== "ios")
@@ -88249,7 +88431,7 @@ var init_index = __esm({
       logLevel: external_exports.enum(["all", "log", "warn", "error", "info", "debug"]).default("all").describe("Filter by log level (default: all)")
     }, createCollectLogsHandler(getClient));
     trackedTool("device_list", "List all available iOS simulators and Android emulators. Returns device name, UDID, platform, and status. Use before device_snapshot action=open to confirm the target device.", {}, createDeviceListHandler());
-    trackedTool("device_screenshot", "Capture the exact authority-bound device screen with no cross-device retry. Returns the file path; iOS failures preserve sanitized backend argv, exit/signal/timeout, stderr, output format/path, and a shortened receipt-bound device identity.", {
+    trackedTool("device_screenshot", "Capture the exact authority-bound device screen with no cross-device retry. Raw control requires exact install/device/runner authority but not a managed Metro target; meta.originAuthority explicitly reports proven or not-proven, and not-proven screenshots are never strict source evidence. Returns the file path; iOS failures preserve sanitized backend argv, exit/signal/timeout, stderr, output format/path, and a shortened receipt-bound device identity.", {
       path: external_exports.string().optional().describe("Output file path (default: auto-generated in /tmp). Use .jpg extension for JPEG."),
       format: external_exports.enum(["jpeg", "png"]).optional().describe("Image format (default: auto-detect from path extension, or jpeg)"),
       platform: external_exports.enum(["ios", "android"]).optional().describe("Authority-bound platform; conflicting values are refused"),
@@ -88257,7 +88439,7 @@ var init_index = __esm({
       maxWidth: external_exports.number().int().min(0).optional().describe("Downscale image so width does not exceed this many pixels. 0 disables resize. Default 800 (saves ~46% on iPhone 15/17 Pro screenshots without losing label readability)."),
       quality: external_exports.number().int().min(1).max(100).optional().describe("JPEG compression quality (1-100). Only applied to .jpg/.jpeg files. Default 85.")
     }, createDeviceScreenshotHandler(getClient));
-    trackedTool("device_snapshot", "Manage device sessions and capture UI snapshots. action=open starts a session (required before other device_ tools), waits for Android app accessibility, and reports readiness.reactNativeUi=ready only when a matching live CDP helper confirms the RN fiber boundary; otherwise it warns that RN readiness is unverified. Pass deviceId to select an exact iOS simulator UDID or Android adb serial when devices run in parallel. action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session. Use attachOnly=true on action=open to skip launching the app when it is already running (avoids relaunch-induced bundle races); liveness is checked only on the resolved exact device and refuses when that identity is unavailable.", {
+    trackedTool("device_snapshot", "Manage exact device sessions and capture UI snapshots even when a Dev Client remains at its native picker. Raw control requires exact install/device/runner authority but not a managed Metro target; meta.originAuthority explicitly reports proven or not-proven, and not-proven snapshots are never strict source evidence. action=open starts a session (required before other device_ tools), waits for Android app accessibility, and reports readiness.reactNativeUi=ready only when a matching live CDP helper confirms the RN fiber boundary; otherwise it warns that RN readiness is unverified. Pass deviceId to select an exact iOS simulator UDID or Android adb serial when devices run in parallel. action=snapshot returns the accessibility tree with @ref identifiers for device_press/device_fill. action=close ends the session. Use attachOnly=true on action=open to skip launching the app when it is already running (avoids relaunch-induced bundle races); liveness is checked only on the resolved exact device and refuses when that identity is unavailable.", {
       action: external_exports.enum(["open", "close", "snapshot"]).default("snapshot").describe("open: start session for an app. snapshot: capture UI tree with element refs. close: end session."),
       appId: external_exports.string().optional().describe('App bundle ID \u2014 required for action=open (e.g. "com.example.app")'),
       platform: external_exports.enum(["ios", "android"]).optional().describe("Target platform \u2014 used with action=open to select device"),
@@ -88297,7 +88479,7 @@ var init_index = __esm({
       index: external_exports.number().int().min(0).optional().describe("Pick the Nth candidate (0-based) when multiple elements match. Short-circuits AMBIGUOUS_MATCH."),
       includeSystemUi: external_exports.boolean().optional().describe("Include Android system UI in matching (default false; may leave the app).")
     }, createDeviceFindHandler(getClient));
-    trackedTool("device_press", 'Tap a UI element by its @ref from device_snapshot, or at explicit raw x/y coordinates. Pass exactly one target form. On iOS, a latest-snapshot Key/Keyboard ref is runner-validated against the current live keyboard and activated exactly once (meta.keyboardGuard="keyboard_target"); stale, forged, missing-keyboard, or raw-coordinate targets never receive that exemption. Ordinary app-content taps dismiss only through a safe native hide/dismiss control or optional JS tier, then refresh and uniquely re-resolve before one tap. Supports double-tap, repeated taps, long hold, and post-tap focus settle. Requires an open session. Stale ordinary app @refs self-heal by identity re-resolution (meta.reResolved); stale iOS Key/Keyboard refs refuse with KEYBOARD_TARGET_STALE and mutation:none. A command is never replayed after a possible dispatch; uncertain Android effects fail with one-attempt typed uncertainty. On Android the tap is scoped to the owned app window: a @ref belonging to another package (system navigation, IME, dialogs) is refused with OUTSIDE_APP_WINDOW \u2014 use device_find with includeSystemUi=true and action="click" for system UI.', {
+    trackedTool("device_press", 'Tap a UI element by its @ref from device_snapshot, or at explicit raw x/y coordinates. Exact raw control can operate without a managed Metro target and always labels meta.originAuthority as proven or not-proven; not-proven results are never strict source evidence. Pass exactly one target form. On iOS, a latest-snapshot Key/Keyboard ref is runner-validated against the current live keyboard and activated exactly once (meta.keyboardGuard="keyboard_target"); stale, forged, missing-keyboard, or raw-coordinate targets never receive that exemption. Ordinary app-content taps dismiss only through a safe native hide/dismiss control or optional JS tier, then refresh and uniquely re-resolve before one tap. Supports double-tap, repeated taps, long hold, and post-tap focus settle. Requires an open session. Stale ordinary app @refs self-heal by identity re-resolution (meta.reResolved); stale iOS Key/Keyboard refs refuse with KEYBOARD_TARGET_STALE and mutation:none. A command is never replayed after a possible dispatch; uncertain Android effects fail with one-attempt typed uncertainty. On Android the tap is scoped to the owned app window: a @ref belonging to another package (system navigation, IME, dialogs) is refused with OUTSIDE_APP_WINDOW \u2014 use device_find with includeSystemUi=true and action="click" for system UI.', {
       ref: external_exports.string().optional().describe('Element ref from device_snapshot (e.g. "e3" or "@e3"). Omit when using x/y.'),
       x: external_exports.number().optional().describe("Raw tap X coordinate; requires y and no ref"),
       y: external_exports.number().optional().describe("Raw tap Y coordinate; requires x and no ref"),
@@ -88308,7 +88490,7 @@ var init_index = __esm({
       settleTimeoutMs: external_exports.number().int().min(500).max(3e4).optional().describe("Override the post-action settle budget in ms (default 6000). Settle waits for the UI to stabilize after the action; see meta.settle in the result. Budget knob only \u2014 RN_SETTLE=0 disables settle."),
       retryIfNoChange: external_exports.boolean().optional().describe("Deprecated compatibility option. Interactions are never automatically replayed after a possible dispatch; uncertainty is reported from the first attempt.")
     }, createDevicePressHandler(getClient));
-    trackedTool("device_fill", 'Type text into an input field by its @ref or testID from device_snapshot, binding exactly one direct TextInput or one `${name}-pressable` wrapper uniquely mapped to its inner `${name}` input before mutation. The tool skips the focus tap only when that exact input is already focused and returns filled:true ONLY after a stable exact post-settle read-back (fiber value for controlled inputs, native read for uncontrolled; meta.verify is always "exact" on success). Tiers: controlled inputs fill via onChangeText, others via the native runner, with a clear-first retype and a clear-first Maestro attempt for observed wrong values. Unverifiable outcomes hard-fail: NO_TEXT_INPUT_TARGET means nothing was typed (rebind after a fresh snapshot); TEXT_ENTRY_UNVERIFIED means an attempt ran but the exact value could not be proven \u2014 check meta.mutation: "none" = safe to retry after a fresh snapshot; "observed" = the field holds a wrong value, take a fresh snapshot and re-read before a corrective fill; "possible" = do NOT retry the same ref \u2014 take a fresh device_snapshot, rebind the input by identity, and read its state first (a blind retry can double-type). Secure fields verify only when controlled (masked native values are never proof); empty text is a verified clear. Requires an open session.', {
+    trackedTool("device_fill", 'Type text into an input field by its @ref or testID from device_snapshot, binding exactly one direct TextInput or one `${name}-pressable` wrapper uniquely mapped to its inner `${name}` input before mutation. Exact raw control can operate without a managed Metro target and always labels meta.originAuthority as proven or not-proven; a native-to-Maestro fallback still requires proven managed origin. The tool skips the focus tap only when that exact input is already focused and returns filled:true ONLY after a stable exact post-settle read-back (fiber value for controlled inputs, native read for uncontrolled; meta.verify is always "exact" on success). Tiers: controlled inputs fill via onChangeText, others via the native runner, with a clear-first retype and a clear-first Maestro attempt for observed wrong values. Unverifiable outcomes hard-fail: NO_TEXT_INPUT_TARGET means nothing was typed (rebind after a fresh snapshot); TEXT_ENTRY_UNVERIFIED means an attempt ran but the exact value could not be proven \u2014 check meta.mutation: "none" = safe to retry after a fresh snapshot; "observed" = the field holds a wrong value, take a fresh snapshot and re-read before a corrective fill; "possible" = do NOT retry the same ref \u2014 take a fresh device_snapshot, rebind the input by identity, and read its state first (a blind retry can double-type). Secure fields verify only when controlled (masked native values are never proof); empty text is a verified clear. Requires an open session.', {
       ref: external_exports.string().describe('Input ref from device_snapshot (for example "@e5"), or a testID'),
       text: external_exports.string().describe("Text to type into the field (empty string = verified clear)"),
       waitForKeyboardMs: external_exports.number().int().min(0).max(5e3).optional().describe("Bounded wait for the exact input to gain focus after the in-operation focus tap (default 1500). Bump to 3000-5000ms for slow keyboard animations on Pressable-wrapped TextInputs."),
@@ -88520,7 +88702,7 @@ var init_index = __esm({
       timeoutMs: external_exports.number().int().min(1e3).max(12e4).optional().describe("Whole Maestro flow timeout (default 120000ms; never divided by component count).")
     }, createDevicePickDateHandler());
     trackedTool("device_focus_next", "Move keyboard focus to the next input field by tapping the soft keyboard's Next/Return/Done/Go button. Use in multi-field form flows where sequential device_press + device_fill calls leave focus stuck on the first field. Requires an open session and a visible keyboard.", {}, createDeviceFocusNextHandler());
-    trackedTool("device_batch", "Execute a sequence of UI interactions in ONE tool call. Eliminates LLM round-trip overhead. Steps: find/press/fill (testID OR text/ref), scroll/swipe (direction), back, wait (ms), hideKeyboard, snapshot, screenshot. Pass `testID` on find/press/fill for fresh fiber-tree resolution per step (eliminates stale-ref-across-step-transitions failures from cached refs). Fails fast on error unless step has optional=true OR continueOnError is true at the batch level; a step TIMEOUT or failed fill with observed/possible mutation always aborts the batch because a later mutation would be unsafe.", {
+    trackedTool("device_batch", "Execute a sequence of exact-device UI interactions in ONE tool call with the same meta.originAuthority proven/not-proven contract as individual raw native calls; not-proven batch output is never strict source evidence. Eliminates LLM round-trip overhead. Steps: find/press/fill (testID OR text/ref), scroll/swipe (direction), back, wait (ms), hideKeyboard, snapshot, screenshot. Pass `testID` on find/press/fill for fresh fiber-tree resolution per step (eliminates stale-ref-across-step-transitions failures from cached refs). Fails fast on error unless step has optional=true OR continueOnError is true at the batch level; a step TIMEOUT or failed fill with observed/possible mutation always aborts the batch because a later mutation would be unsafe.", {
       steps: external_exports.array(external_exports.object({
         action: external_exports.enum([
           "find",
