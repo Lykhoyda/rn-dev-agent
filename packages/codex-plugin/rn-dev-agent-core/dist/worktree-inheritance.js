@@ -762,6 +762,9 @@ function probeLinkTarget(parentIdentity, destination, source, sourceBoundary, so
   }
 }
 var probeCounter = 0;
+function isSettledLinkSafe(settled, sourceEvidence) {
+  return settled.state === "LINK_VALID_SAFE" && sameSourceEvidence(settled.sourceEvidence, sourceEvidence);
+}
 function createLink(source, destination, layout, spec, action, sourceEvidence) {
   const anchor = anchorFor(layout, spec).local;
   const parentIdentity = bindLinkParent(destination, anchor);
@@ -782,7 +785,7 @@ function createLink(source, destination, layout, spec, action, sourceEvidence) {
     const code = error.code;
     if (code === "EEXIST") {
       const settled2 = planResource(layout, spec);
-      if (settled2.state === "LINK_VALID_SAFE") {
+      if (isSettledLinkSafe(settled2, sourceEvidence)) {
         return { applied: false, state: settled2.state, result: "converged" };
       }
       return {
@@ -810,7 +813,7 @@ function createLink(source, destination, layout, spec, action, sourceEvidence) {
   const createdIdentity = linkIdentity(destination);
   const parentDirectory = destination.slice(0, destination.lastIndexOf(sep));
   const settled = planResource(layout, spec);
-  if (!sameDirectoryIdentity(parentDirectory, parentIdentity) || settled.state !== "LINK_VALID_SAFE" || !sameSourceEvidence(settled.sourceEvidence, sourceEvidence)) {
+  if (!sameDirectoryIdentity(parentDirectory, parentIdentity) || !isSettledLinkSafe(settled, sourceEvidence)) {
     const removed = rollbackLink(destination, source, createdIdentity);
     return {
       applied: false,

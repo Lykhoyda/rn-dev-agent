@@ -1059,6 +1059,13 @@ function probeLinkTarget(
 
 let probeCounter = 0;
 
+function isSettledLinkSafe(settled: ResourcePlan, sourceEvidence: PathIdentity[]): boolean {
+  return (
+    settled.state === 'LINK_VALID_SAFE' &&
+    sameSourceEvidence(settled.sourceEvidence, sourceEvidence)
+  );
+}
+
 function createLink(
   source: string,
   destination: string,
@@ -1096,7 +1103,7 @@ function createLink(
     const code = (error as NodeJS.ErrnoException).code;
     if (code === 'EEXIST') {
       const settled = planResource(layout, spec);
-      if (settled.state === 'LINK_VALID_SAFE') {
+      if (isSettledLinkSafe(settled, sourceEvidence)) {
         return { applied: false, state: settled.state, result: 'converged' };
       }
       return {
@@ -1127,8 +1134,7 @@ function createLink(
   const settled = planResource(layout, spec);
   if (
     !sameDirectoryIdentity(parentDirectory, parentIdentity) ||
-    settled.state !== 'LINK_VALID_SAFE' ||
-    !sameSourceEvidence(settled.sourceEvidence, sourceEvidence)
+    !isSettledLinkSafe(settled, sourceEvidence)
   ) {
     const removed = rollbackLink(destination, source, createdIdentity);
     return {
