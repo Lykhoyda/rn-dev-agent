@@ -63,7 +63,7 @@ NO-IMPACT**. Changelogs are SECONDARY — open the file and verify the claim bef
 | Upstream change touches… | Verify against |
 |---|---|
 | Inspector handshake / origin / CSRF gates | `packages/rn-dev-agent-core/src/ws-origin.ts` → `metroOrigin()` (must clear BOTH the loopback gate and Expo's `isMatchingOrigin` host-match gate; today `http://127.0.0.1:{port}`) |
-| Inspector target discovery (`/json` endpoint, target fields) | `packages/rn-dev-agent-core/src/cdp/discovery.ts` → `GET /json/list`; depends on `webSocketDebuggerUrl`, `title`, `vm === 'Hermes'`, `description`, `deviceName` (Metro 0.76+), and the `title.includes('Experimental')` exclusion |
+| Inspector target discovery (`/json` endpoint, target fields) | `packages/rn-dev-agent-core/src/cdp/discovery.ts` → `GET /json/list`; depends on `webSocketDebuggerUrl`, `title`, optional legacy `vm`, `description`, `appId`, `deviceName` (Metro 0.76+), and the `title.includes('Experimental')` exclusion. Modern Bridgeless Hermes targets may omit `vm`; session authority therefore requires the signed runtime marker rather than inferring readiness from target metadata. |
 | Hermes CDP domain support | `packages/rn-dev-agent-core/src/cdp/setup.ts` → `Runtime.enable`, `Debugger.enable`, `Network.enable` (+ hook-fallback probe, D626), `Log.enable`, `Profiler.enable`, `HeapProfiler.enable` |
 | Fiber-tree / React internals walk | `packages/rn-dev-agent-core/src/injected-helpers.ts`, `bridge-detector.ts` |
 | Profiling (heap / CPU) | `packages/rn-dev-agent-core/src/tools/profiling.ts` |

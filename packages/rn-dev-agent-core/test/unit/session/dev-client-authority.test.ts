@@ -126,6 +126,45 @@ test('bare RN pin launches the exact claimed app without inventing a dev-client 
   assert.equal(binding.devClientUrl, undefined);
 });
 
+test('loader or error targets remain rejected until the exact runtime exposes its signed marker', async () => {
+  const marker = buildSignedMetroMarker(expected, 'private-signer-capability');
+  let markerAvailable = false;
+  let launches = 0;
+  const dependencies = {
+    openUrl: async () => {},
+    launchExactApp: async () => {
+      launches += 1;
+    },
+    acceptIosOpenDialog: async () => {},
+    connectExact: async () => ({
+      targetId: 'bridgeless-target-without-vm',
+      connectionGeneration: launches,
+      deviceId: 'IOS-UUID',
+    }),
+    readMarker: async () =>
+      markerAvailable ? ({ status: 'signed' as const, marker } as const) : null,
+  };
+  const input = {
+    ...expected,
+    deviceId: 'IOS-UUID',
+    metroPort: 8341,
+    signerCapability: 'private-signer-capability',
+  };
+
+  await assert.rejects(pinExactDevClient(input, dependencies), (error: unknown) => {
+    assert.ok(error instanceof Error);
+    assert.match(error.message, /^BUNDLE_HANDSHAKE_UNAVAILABLE:/);
+    assert.doesNotMatch(error.message, /private-signer-capability|IOS-UUID|com\.example\.app/);
+    return true;
+  });
+
+  markerAvailable = true;
+  const recovered = await pinExactDevClient(input, dependencies);
+  assert.equal(recovered.targetId, 'bridgeless-target-without-vm');
+  assert.equal(recovered.connectionGeneration, 2);
+  assert.equal(launches, 2);
+});
+
 test('dev-client pinning rejects a target not proven on the claimed device', async () => {
   const marker = buildSignedMetroMarker(expected, 'signer');
   await assert.rejects(

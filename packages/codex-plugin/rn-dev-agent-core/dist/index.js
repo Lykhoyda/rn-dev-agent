@@ -19356,6 +19356,30 @@ function selectMetroPort(attached, runningPorts, ctx) {
     warning: `Multiple live Metros with an attached app: ${list}. Picked :${chosen}. Pass metroPort explicitly to choose a different worktree.`
   };
 }
+async function discoverExactPort(currentPort, platformFilterOrFilters) {
+  const filters = typeof platformFilterOrFilters === "string" ? { platform: platformFilterOrFilters } : platformFilterOrFilters ?? {};
+  const raw = await fetchTargets(currentPort, DISCOVERY_TIMEOUT_MS * 2);
+  const validTargets = filterValidTargets(raw).filter((target) => {
+    try {
+      const { hostname: hostname2, port } = new URL(target.webSocketDebuggerUrl);
+      return (hostname2 === "127.0.0.1" || hostname2 === "localhost") && Number(port) === currentPort;
+    } catch {
+      return false;
+    }
+  });
+  inferPlatforms(validTargets);
+  const { targets, warning, errorCode } = selectTarget(validTargets, filters);
+  return {
+    port: currentPort,
+    targets,
+    ...warning ? { warning } : {},
+    ...errorCode ? { errorCode, candidates: validTargets } : {}
+  };
+}
+async function listTargetsOnExactPort(port) {
+  const result = await discoverExactPort(port);
+  return { port, targets: result.targets };
+}
 async function discover(currentPort, platformFilterOrFilters) {
   const filters = typeof platformFilterOrFilters === "string" ? { platform: platformFilterOrFilters } : platformFilterOrFilters ?? {};
   const ports = [.../* @__PURE__ */ new Set([currentPort, ...resolveDefaultPorts()])];
@@ -52735,7 +52759,7 @@ var ConnectionSetupSupersededError = class extends Error {
 function shouldRunPickerProbe(intent, target) {
   return intent === "status" && target.vm !== "Hermes";
 }
-async function autoConnect(ctx, portHint, filters, intent = "default") {
+async function autoConnect(ctx, portHint, filters, intent = "default", discoverFn = discover) {
   if (ctx.getState() === "connecting" || ctx.isReconnecting()) {
     throw new Error("Already connecting to Metro...");
   }
@@ -52753,7 +52777,7 @@ async function autoConnect(ctx, portHint, filters, intent = "default") {
     if (resolved)
       effective.preferredBundleId = resolved;
   }
-  return discoverAndConnect(ctx, portHint, effective, discover, intent);
+  return discoverAndConnect(ctx, portHint, effective, discoverFn, intent);
 }
 async function discoverAndConnect(ctx, portHint, filters, discoverFn = discover, intent = "default") {
   if (ctx.isDisposed()) {
@@ -53364,6 +53388,12 @@ var CDPClient = class {
   }
   async listTargets(portHint) {
     return discoverForList(this._port, portHint);
+  }
+  async connectExact(port, filters, intent = "default") {
+    return autoConnect(this.buildConnectCtx(), port, filters, intent, discoverExactPort);
+  }
+  async listTargetsExact(port) {
+    return listTargetsOnExactPort(port);
   }
   _connectFilters = {};
   async discoverAndConnect(portHint, filters) {
@@ -80878,7 +80908,7 @@ async function connectExactSessionTarget(input, timeoutMs) {
   let lastError;
   do {
     try {
-      const listed = await exactClient.listTargets(input.metroPort);
+      const listed = await exactClient.listTargetsExact(input.metroPort);
       if (listed.port !== input.metroPort) {
         throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: target discovery escaped the allocated Metro port");
       }
@@ -80894,7 +80924,7 @@ async function connectExactSessionTarget(input, timeoutMs) {
       if (exactCandidates.length !== 1) {
         throw new Error(`CDP_TARGET_AUTHORITY_MISMATCH: expected one target on the exact device, found ${exactCandidates.length}`);
       }
-      await exactClient.autoConnect(input.metroPort, {
+      await exactClient.connectExact(input.metroPort, {
         platform: input.platform,
         bundleId: input.appId,
         targetId: exactCandidates[0].id

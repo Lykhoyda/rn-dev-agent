@@ -676,7 +676,7 @@ async function connectExactSessionTarget(input, timeoutMs) {
     let lastError;
     do {
         try {
-            const listed = await exactClient.listTargets(input.metroPort);
+            const listed = await exactClient.listTargetsExact(input.metroPort);
             if (listed.port !== input.metroPort) {
                 throw new Error('CDP_TARGET_AUTHORITY_MISMATCH: target discovery escaped the allocated Metro port');
             }
@@ -692,7 +692,7 @@ async function connectExactSessionTarget(input, timeoutMs) {
             if (exactCandidates.length !== 1) {
                 throw new Error(`CDP_TARGET_AUTHORITY_MISMATCH: expected one target on the exact device, found ${exactCandidates.length}`);
             }
-            await exactClient.autoConnect(input.metroPort, {
+            await exactClient.connectExact(input.metroPort, {
                 platform: input.platform,
                 bundleId: input.appId,
                 targetId: exactCandidates[0].id,

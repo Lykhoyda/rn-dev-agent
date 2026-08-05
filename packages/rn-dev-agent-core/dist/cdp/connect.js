@@ -45,7 +45,7 @@ export class ConnectionSetupSupersededError extends Error {
 export function shouldRunPickerProbe(intent, target) {
     return intent === 'status' && target.vm !== 'Hermes';
 }
-export async function autoConnect(ctx, portHint, filters, intent = 'default') {
+export async function autoConnect(ctx, portHint, filters, intent = 'default', discoverFn = discover) {
     if (ctx.getState() === 'connecting' || ctx.isReconnecting()) {
         throw new Error('Already connecting to Metro...');
     }
@@ -66,7 +66,7 @@ export async function autoConnect(ctx, portHint, filters, intent = 'default') {
         if (resolved)
             effective.preferredBundleId = resolved;
     }
-    return discoverAndConnect(ctx, portHint, effective, discover, intent);
+    return discoverAndConnect(ctx, portHint, effective, discoverFn, intent);
 }
 export async function discoverAndConnect(ctx, portHint, filters, 
 // B111 (D643): injectable for unit tests — defaults to real discover. Production

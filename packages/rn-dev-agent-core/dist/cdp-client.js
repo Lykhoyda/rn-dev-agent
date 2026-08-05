@@ -11,7 +11,7 @@ import { resetState, setActiveFlag, clearActiveFlag, sleep } from './cdp/state.j
 import { defaultTimeout, timeoutForMethod } from './cdp/timeout-config.js';
 import { sendWithTimeout as sendMsg, rejectAllPending as rejectPending, handleMessage as handleMsg, } from './cdp/transport.js';
 import { wireEventHandlers, parseNetworkHookMessage as parseNetHook, } from './cdp/event-handlers.js';
-import { discoverForList } from './cdp/discovery.js';
+import { discoverExactPort, discoverForList, listTargetsOnExactPort } from './cdp/discovery.js';
 import { helperExpr as helperExprFn, bridgeWithFallback as bridgeWithFallbackFn, } from './cdp/helper-expr.js';
 import { autoConnect as autoConnectFn, ConnectionSetupSupersededError, discoverAndConnect as discoverAndConnectFn, } from './cdp/connect.js';
 import { resolveAutoConnect } from './project-config.js';
@@ -413,6 +413,12 @@ export class CDPClient {
     }
     async listTargets(portHint) {
         return discoverForList(this._port, portHint);
+    }
+    async connectExact(port, filters, intent = 'default') {
+        return autoConnectFn(this.buildConnectCtx(), port, filters, intent, discoverExactPort);
+    }
+    async listTargetsExact(port) {
+        return listTargetsOnExactPort(port);
     }
     _connectFilters = {};
     async discoverAndConnect(portHint, filters) {

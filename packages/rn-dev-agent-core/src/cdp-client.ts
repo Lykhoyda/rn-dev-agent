@@ -21,7 +21,7 @@ import {
   wireEventHandlers,
   parseNetworkHookMessage as parseNetHook,
 } from './cdp/event-handlers.js';
-import { discoverForList } from './cdp/discovery.js';
+import { discoverExactPort, discoverForList, listTargetsOnExactPort } from './cdp/discovery.js';
 import {
   helperExpr as helperExprFn,
   bridgeWithFallback as bridgeWithFallbackFn,
@@ -568,6 +568,18 @@ export class CDPClient {
 
   async listTargets(portHint?: number): Promise<{ port: number; targets: HermesTarget[] }> {
     return discoverForList(this._port, portHint);
+  }
+
+  async connectExact(
+    port: number,
+    filters: ConnectFilters,
+    intent: ConnectIntent = 'default',
+  ): Promise<string> {
+    return autoConnectFn(this.buildConnectCtx(), port, filters, intent, discoverExactPort);
+  }
+
+  async listTargetsExact(port: number): Promise<{ port: number; targets: HermesTarget[] }> {
+    return listTargetsOnExactPort(port);
   }
 
   private _connectFilters: ConnectFilters = {};

@@ -643,6 +643,40 @@ export interface DiscoveryResult {
   candidates?: HermesTarget[];
 }
 
+export async function discoverExactPort(
+  currentPort: number,
+  platformFilterOrFilters?: string | SelectTargetFilters,
+): Promise<DiscoveryResult> {
+  const filters: SelectTargetFilters =
+    typeof platformFilterOrFilters === 'string'
+      ? { platform: platformFilterOrFilters }
+      : (platformFilterOrFilters ?? {});
+  const raw = await fetchTargets(currentPort, DISCOVERY_TIMEOUT_MS * 2);
+  const validTargets = filterValidTargets(raw).filter((target) => {
+    try {
+      const { hostname, port } = new URL(target.webSocketDebuggerUrl);
+      return (hostname === '127.0.0.1' || hostname === 'localhost') && Number(port) === currentPort;
+    } catch {
+      return false;
+    }
+  });
+  inferPlatforms(validTargets);
+  const { targets, warning, errorCode } = selectTarget(validTargets, filters);
+  return {
+    port: currentPort,
+    targets,
+    ...(warning ? { warning } : {}),
+    ...(errorCode ? { errorCode, candidates: validTargets } : {}),
+  };
+}
+
+export async function listTargetsOnExactPort(
+  port: number,
+): Promise<{ port: number; targets: HermesTarget[] }> {
+  const result = await discoverExactPort(port);
+  return { port, targets: result.targets };
+}
+
 export async function discover(
   currentPort: number,
   platformFilterOrFilters?: string | SelectTargetFilters,
