@@ -124,12 +124,12 @@ test('generated adapter argv passes the shipped Expo CLI resolution end to end',
     chmodSync(join(binRoot, 'npx'), 0o755);
     writeFileSync(
       join(binRoot, 'xcrun'),
-      "#!/usr/bin/env node\nconst fs=require('node:fs');const args=process.argv.slice(2);if(args[0]==='simctl'&&args[1]==='get_app_container'){process.stdout.write('/tmp/exact.app\\n');process.exit(0);}if(args[0]==='simctl'&&args[1]==='launch'){fs.writeFileSync(process.env.ADAPTER_STARTUP,JSON.stringify(args));process.exit(0);}process.exit(12);\n",
+      "#!/usr/bin/env node\nconst args=process.argv.slice(2);if(args[0]==='simctl'&&args[1]==='get_app_container'){process.stdout.write('/tmp/exact.app\\n');process.exit(0);}if(args[0]==='simctl'&&args[1]==='launch'){process.exit(0);}process.exit(12);\n",
     );
     chmodSync(join(binRoot, 'xcrun'), 0o755);
     writeFileSync(
       sessionCliPath,
-      "const args=process.argv.slice(2);if(args[0]==='prepare-build'){process.stdout.write(JSON.stringify({platform:'ios',deviceId:'F66756F3-A867-47EB-97E1-2B85D1902D4E',appId:'com.rndevagent.testapp',metroPort:8248,sessionId:'session-fixture',buildToken:args[2],simulator:true}));}else{process.stdout.write('{}\\n');}",
+      "const fs=require('node:fs');const args=process.argv.slice(2);if(args[0]==='prepare-build'){process.stdout.write(JSON.stringify({platform:'ios',deviceId:'F66756F3-A867-47EB-97E1-2B85D1902D4E',appId:'com.rndevagent.testapp',metroPort:8248,sessionId:'session-fixture',buildToken:args[2],simulator:true}));}else{fs.appendFileSync(process.env.ADAPTER_STARTUP,JSON.stringify(args)+'\\n');process.stdout.write('{}\\n');}",
     );
 
     const result = spawnSync(process.execPath, [adapterPath, 'ios'], {
@@ -148,15 +148,13 @@ test('generated adapter argv passes the shipped Expo CLI resolution end to end',
     assert.deepEqual(recorded.args.slice(0, 2), ['expo', 'run:ios']);
     const props = await resolveShippedBundlerProps(recorded.args.slice(2));
     assert.equal(props.shouldStartBundler, false);
-    assert.deepEqual(JSON.parse(readFileSync(startupPath, 'utf8')), [
-      'simctl',
-      'launch',
-      '--terminate-running-process',
-      'F66756F3-A867-47EB-97E1-2B85D1902D4E',
-      'com.rndevagent.testapp',
-      '--initialUrl',
-      'http://127.0.0.1:8248',
-    ]);
+    const lifecycleCalls = readFileSync(startupPath, 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    assert.equal(lifecycleCalls.length, 1);
+    assert.equal(lifecycleCalls[0][0], 'complete-build');
+    assert.equal(lifecycleCalls[0][1], 'ios');
   } finally {
     rmSync(root, { force: true, recursive: true });
   }

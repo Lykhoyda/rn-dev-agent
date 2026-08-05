@@ -1827,6 +1827,61 @@ test('runner close authenticates dead retained ownership after runtime loss', as
   );
 });
 
+test('runner close is receipted with both live and unavailable app origin', async () => {
+  for (const origin of ['live', 'unavailable'] as const) {
+    const { runtime, status } = fixture();
+    if (origin === 'unavailable') {
+      status.bindings.metro = null;
+      status.bindings.bundle = null;
+    }
+    status.bindings.runner = {
+      platform: 'ios',
+      deviceId: 'device',
+      appId: 'dev.example',
+      port: 9100,
+      sessionId: 'session-a',
+      claimEpoch: 4,
+      instanceId: 'runner',
+      capability: 'capability',
+      pid: 42,
+      processBirth: 'process-birth',
+    };
+    status.claims = [
+      {
+        type: 'runner',
+        key: 'ios:device:9100',
+        sessionId: 'session-a',
+        claimEpoch: 4,
+        leaseUntilMs: 1000,
+      },
+    ];
+    const probed: string[] = [];
+    const gate = createAuthorityGate(runtime, {
+      probe: async ({ axis }) => {
+        probed.push(axis);
+        if (axis === 'M' || axis === 'A') throw new Error('close must not require app origin');
+        return { axis, identity: `${axis}-identity` };
+      },
+    });
+
+    const result = await gate.wrap('device_snapshot', async () => {
+      status.bindings.runner = null;
+      status.authorityVersion += 1;
+      return okResult({ closed: true });
+    })({ action: 'close' });
+    const envelope = JSON.parse(result.content[0].text);
+
+    assert.equal(envelope.ok, true, origin);
+    assert.equal(envelope.data.closed, true, origin);
+    assert.equal(probed.includes('M') || probed.includes('A'), false, origin);
+    assert.deepEqual(
+      envelope.meta.authorityReceipt.axes.map((observation) => observation.axis),
+      ['C', 'S', 'D'],
+      origin,
+    );
+  }
+});
+
 test('runner close rejects a retained binding without its cleanup claim', async () => {
   const { runtime, status } = fixture();
   let dispatched = false;

@@ -7419,7 +7419,7 @@ var init_trusted_system_executable = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/cdp/metro-cwd.js
-import { execFileSync as execFileSync2 } from "node:child_process";
+import { execFileSync as execFileSync3 } from "node:child_process";
 import { readlinkSync as readlinkSync2, realpathSync as realpathSync2 } from "node:fs";
 import { resolve, sep } from "node:path";
 function parseLsofCwd(stdout) {
@@ -7488,7 +7488,7 @@ var init_metro_cwd = __esm({
     init_storage();
     init_trusted_system_executable();
     CWD_LSOF_TIMEOUT_MS = 800;
-    defaultExec = (cmd, args) => execFileSync2(cmd, args, {
+    defaultExec = (cmd, args) => execFileSync3(cmd, args, {
       timeout: CWD_LSOF_TIMEOUT_MS,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"]
@@ -7497,14 +7497,14 @@ var init_metro_cwd = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/process-birth.js
-import { execFileSync as execFileSync3 } from "node:child_process";
+import { execFileSync as execFileSync4 } from "node:child_process";
 import { createHash as createHash2 } from "node:crypto";
 import { closeSync, constants, existsSync as existsSync2, fstatSync, lstatSync as lstatSync2, openSync, readFileSync as readFileSync2, readSync, realpathSync as realpathSync3 } from "node:fs";
 import { dirname, join as join2 } from "node:path";
 import { fileURLToPath } from "node:url";
 function defaultRun(command, args) {
   try {
-    return execFileSync3(command, [...args], {
+    return execFileSync4(command, [...args], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 2e3
@@ -7517,7 +7517,7 @@ function defaultRun(command, args) {
   }
 }
 function defaultRunVerifiedHelper(path, pid, requirement) {
-  return execFileSync3("/bin/zsh", ["-f", "-c", VERIFIED_HELPER_SCRIPT, "rn-process-birth", path, String(pid), requirement], {
+  return execFileSync4("/bin/zsh", ["-f", "-c", VERIFIED_HELPER_SCRIPT, "rn-process-birth", path, String(pid), requirement], {
     encoding: "utf8",
     env: { PATH: "/usr/bin:/bin:/usr/sbin:/sbin" },
     maxBuffer: 1024 * 1024,
@@ -7740,7 +7740,7 @@ print -r -- "$result"
 });
 
 // packages/rn-dev-agent-core/dist/session/metro-binding.js
-import { execFileSync as execFileSync4 } from "node:child_process";
+import { execFileSync as execFileSync5 } from "node:child_process";
 function resolveMetroListenerExecutable(platform, dependencies = {}) {
   const executable = platform === "win32" ? "powershell" : platform === "linux" ? "ss" : platform === "darwin" ? "lsof" : null;
   return executable ? resolveTrustedSystemExecutable(executable, platform, dependencies) : null;
@@ -7757,7 +7757,7 @@ function numericListener(output, emptyStatus) {
   const [pid] = pids;
   return pids.size === 1 && Number.isSafeInteger(pid) && pid > 0 ? { status: "listening", pid } : { status: "unknown" };
 }
-function probeMetroListener(port, platform = process.platform, execute = execFileSync4, executableDependencies = {}) {
+function probeMetroListener(port, platform = process.platform, execute = execFileSync5, executableDependencies = {}) {
   const executable = resolveMetroListenerExecutable(platform, executableDependencies);
   if (!executable)
     return { status: "unknown" };
@@ -7798,7 +7798,7 @@ function probeMetroListener(port, platform = process.platform, execute = execFil
     return platform === "darwin" && failure.status === 1 && !String(failure.stdout ?? "").trim() && !String(failure.stderr ?? "").trim() ? { status: "absent" } : { status: "unknown" };
   }
 }
-function metroListenerPid(port, platform = process.platform, execute = execFileSync4, executableDependencies = {}) {
+function metroListenerPid(port, platform = process.platform, execute = execFileSync5, executableDependencies = {}) {
   const probe = probeMetroListener(port, platform, execute, executableDependencies);
   return probe.status === "listening" ? probe.pid : null;
 }
@@ -10834,11 +10834,87 @@ var init_runner_leak_recovery = __esm({
 // packages/rn-dev-agent-core/dist/tools/app-lifecycle.js
 import { execFile as execFileCb4 } from "node:child_process";
 import { promisify as promisify6 } from "node:util";
-var execFile5;
+function resolveIosLifecycleTarget(deviceId) {
+  if (deviceId === void 0)
+    return "booted";
+  if (!IOS_UDID_RE.test(deviceId)) {
+    throw new Error("iOS lifecycle deviceId must be an exact simulator UDID");
+  }
+  return deviceId;
+}
+function buildIosLaunchArgv(bundleId, deviceId) {
+  if (typeof bundleId !== "string" || bundleId.length === 0) {
+    throw new Error("buildIosLaunchArgv: bundleId is required");
+  }
+  return ["simctl", "launch", resolveIosLifecycleTarget(deviceId), bundleId];
+}
+function buildIosTerminateArgv(bundleId, deviceId) {
+  if (typeof bundleId !== "string" || bundleId.length === 0) {
+    throw new Error("buildIosTerminateArgv: bundleId is required");
+  }
+  return ["simctl", "terminate", resolveIosLifecycleTarget(deviceId), bundleId];
+}
+function resolveAndroidLifecycleTarget(deviceId) {
+  if (deviceId === void 0)
+    return [];
+  if (!ANDROID_SERIAL_RE2.test(deviceId)) {
+    throw new Error("Android lifecycle deviceId must be an exact adb serial");
+  }
+  return ["-s", deviceId];
+}
+async function terminateApp(bundleId, platform, deviceId) {
+  if (platform === "ios") {
+    await execFile5("xcrun", buildIosTerminateArgv(bundleId, deviceId), {
+      timeout: TERMINATE_TIMEOUT_MS,
+      encoding: "utf8"
+    });
+  } else {
+    await execFile5("adb", [...resolveAndroidLifecycleTarget(deviceId), "shell", "am", "force-stop", bundleId], {
+      timeout: TERMINATE_TIMEOUT_MS,
+      encoding: "utf8"
+    });
+  }
+}
+function buildAndroidLaunchArgv(bundleId, deviceId) {
+  if (typeof bundleId !== "string" || bundleId.length === 0) {
+    throw new Error("buildAndroidLaunchArgv: bundleId is required");
+  }
+  return [
+    ...resolveAndroidLifecycleTarget(deviceId),
+    "shell",
+    "am",
+    "start",
+    "-W",
+    "-a",
+    "android.intent.action.MAIN",
+    "-c",
+    "android.intent.category.LAUNCHER",
+    "-p",
+    bundleId
+  ];
+}
+async function launchApp(bundleId, platform, deviceId) {
+  if (platform === "ios") {
+    await execFile5("xcrun", buildIosLaunchArgv(bundleId, deviceId), {
+      timeout: LAUNCH_TIMEOUT_MS,
+      encoding: "utf8"
+    });
+  } else {
+    await execFile5("adb", buildAndroidLaunchArgv(bundleId, deviceId), {
+      timeout: LAUNCH_TIMEOUT_MS,
+      encoding: "utf8"
+    });
+  }
+}
+var execFile5, TERMINATE_TIMEOUT_MS, LAUNCH_TIMEOUT_MS, IOS_UDID_RE, ANDROID_SERIAL_RE2;
 var init_app_lifecycle = __esm({
   "packages/rn-dev-agent-core/dist/tools/app-lifecycle.js"() {
     "use strict";
     execFile5 = promisify6(execFileCb4);
+    TERMINATE_TIMEOUT_MS = 1e4;
+    LAUNCH_TIMEOUT_MS = 15e3;
+    IOS_UDID_RE = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
+    ANDROID_SERIAL_RE2 = /^[A-Za-z0-9._:-]{1,128}$/;
   }
 });
 
@@ -11265,6 +11341,130 @@ function captureInstalledArtifact(target, dependencies = {}) {
   };
 }
 
+// packages/rn-dev-agent-core/dist/session/dev-client-picker-lifecycle.js
+async function parkExactDevClientAtPicker(identity, dependencies) {
+  const before = dependencies.captureInstalled(identity);
+  await dependencies.terminate(identity);
+  dependencies.checkpoint();
+  if (!await dependencies.stopManagedMetro()) {
+    throw new Error("METRO_AUTHORITY_MISMATCH: managed Metro could not be stopped before Dev Client picker reset");
+  }
+  dependencies.checkpoint();
+  dependencies.publishMetroStopped();
+  await dependencies.launchWithoutUrl(identity);
+  dependencies.checkpoint();
+  const after = dependencies.captureInstalled(identity);
+  if (after.artifactDigest !== before.artifactDigest || after.installGeneration !== before.installGeneration) {
+    throw new Error("APP_INSTALL_IDENTITY_CHANGED: installed app changed during picker reset");
+  }
+}
+
+// packages/rn-dev-agent-core/dist/session/expo-android-device.js
+import { execFileSync as execFileSync2 } from "node:child_process";
+var ANDROID_SERIAL_RE = /^[A-Za-z0-9._:-]{1,128}$/;
+function identityError(message) {
+  const error = new Error(`EXPO_DEVICE_IDENTITY_MISMATCH: ${message}`);
+  error.code = "EXPO_DEVICE_IDENTITY_MISMATCH";
+  return error;
+}
+function parseAdbDevices(output) {
+  const devices = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const rawLine of output.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line === "List of devices attached" || line.startsWith("* daemon"))
+      continue;
+    const parts = line.split(/\s+/);
+    if (parts.length < 2)
+      continue;
+    const [serial, state, ...details] = parts;
+    if (!ANDROID_SERIAL_RE.test(serial))
+      continue;
+    if (seen.has(serial))
+      throw identityError("adb enumerated a duplicate serial");
+    seen.add(serial);
+    devices.push({ serial, state, details });
+  }
+  return devices;
+}
+function emulatorDisplayName(output) {
+  const name = output.trim().split(/[\r\n]+/, 1)[0]?.trim();
+  if (!name || name === "OK" || name.startsWith("KO:")) {
+    throw identityError("Expo emulator display name is unavailable");
+  }
+  return name;
+}
+function physicalDisplayName(device) {
+  const model = device.details.find((detail) => detail.startsWith("model:"))?.slice("model:".length);
+  return model || `Device ${device.serial}`;
+}
+function defaultDependencies() {
+  return {
+    runAdb: (args) => execFileSync2("adb", [...args], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 1e4
+    })
+  };
+}
+function resolveExpoAndroidDevice(exactDeviceId, dependencies = defaultDependencies()) {
+  if (!ANDROID_SERIAL_RE.test(exactDeviceId)) {
+    throw identityError("authority-bound adb serial is invalid");
+  }
+  const runAdb = (args, failure) => {
+    try {
+      return dependencies.runAdb(args);
+    } catch {
+      throw identityError(failure);
+    }
+  };
+  const devices = parseAdbDevices(runAdb(["devices", "-l"], "adb device enumeration failed"));
+  const exact = devices.filter((device) => device.serial === exactDeviceId && device.state === "device");
+  if (exact.length !== 1) {
+    throw identityError("authority-bound adb serial is not uniquely connected");
+  }
+  const connected = devices.filter((device) => device.state === "device");
+  const bindings = connected.map((device) => ({
+    deviceId: device.serial,
+    displayName: device.serial.startsWith("emulator-") ? emulatorDisplayName(runAdb(["-s", device.serial, "emu", "avd", "name"], "Expo emulator identity probe failed")) : physicalDisplayName(device)
+  }));
+  const selectedName = bindings.find((binding) => binding.deviceId === exactDeviceId)?.displayName;
+  const selected = bindings.filter((binding) => binding.displayName === selectedName);
+  if (!selectedName || selected.length !== 1 || selected[0]?.deviceId !== exactDeviceId) {
+    throw identityError("Expo display name does not resolve uniquely to the authority-bound serial");
+  }
+  return { deviceId: exactDeviceId, displayName: selectedName };
+}
+
+// packages/rn-dev-agent-core/dist/session/managed-metro-restart.js
+function receiptError(message) {
+  const error = new Error(`BUILD_RECEIPT_INVALID: ${message}`);
+  error.code = "BUILD_RECEIPT_INVALID";
+  return error;
+}
+function resolveManagedMetroRestartGeneration(input) {
+  if (!input.install) {
+    if (input.pendingBuild) {
+      const generation2 = input.pendingBuild.buildGeneration;
+      if (input.pendingBuild.platform !== input.device.platform || input.pendingBuild.buildKind !== "expo" && input.pendingBuild.buildKind !== "bare-react-native" || !Number.isSafeInteger(generation2) || Number(generation2) < 1) {
+        throw receiptError("pending build provenance is unavailable for managed Metro restart");
+      }
+      return Number(generation2);
+    }
+    return Math.max(0, ...input.priorGenerations.map((generation2) => Number.isSafeInteger(generation2) ? Number(generation2) : 0)) + 1;
+  }
+  const install = input.install;
+  const buildGeneration = install.buildGeneration;
+  if (install.sessionId !== input.session.sessionId || install.sourceKey !== input.session.sourceKey || install.worktreeKey !== input.session.worktreeKey || install.appRootKey !== input.session.appRootKey || install.platform !== input.device.platform || install.deviceId !== input.device.deviceId || install.appId !== input.device.appId || install.metroPort !== input.session.metroPort || !Number.isSafeInteger(buildGeneration) || Number(buildGeneration) < 1 || install.buildKind !== "expo" && install.buildKind !== "bare-react-native" || typeof install.artifactDigest !== "string" || typeof install.installGeneration !== "string") {
+    throw receiptError("exact install provenance is unavailable for managed Metro restart");
+  }
+  const observed = input.captureInstalled();
+  if (observed.artifactDigest !== install.artifactDigest || observed.installGeneration !== install.installGeneration) {
+    throw receiptError("installed artifact changed before managed Metro restart");
+  }
+  return Number(buildGeneration);
+}
+
 // packages/rn-dev-agent-core/dist/session/metro-authority.js
 import { createHmac as createHmac2, createSecretKey, timingSafeEqual as timingSafeEqual2 } from "node:crypto";
 function serializePayload(payload) {
@@ -11299,7 +11499,7 @@ init_metro_binding();
 init_metro_binding();
 init_trusted_system_executable();
 init_process_birth();
-import { execFileSync as execFileSync5, spawn } from "node:child_process";
+import { execFileSync as execFileSync6, spawn } from "node:child_process";
 import { createHash as createHash4, createHmac as createHmac3, timingSafeEqual as timingSafeEqual3 } from "node:crypto";
 import { closeSync as closeSync3, existsSync as existsSync4, fstatSync as fstatSync2, mkdirSync as mkdirSync2, openSync as openSync3, readFileSync as readFileSync4, readSync as readSync2, realpathSync as realpathSync5, rmSync as rmSync2 } from "node:fs";
 import { dirname as dirname3, isAbsolute as isAbsolute2, join as join3, relative as relative2, resolve as resolve3 } from "node:path";
@@ -12951,7 +13151,7 @@ function hasUnsupportedNodeOption(value) {
   }
   return false;
 }
-function managedMetroParentPid(pid, platform = process.platform, execute = execFileSync5, executableDependencies = {}) {
+function managedMetroParentPid(pid, platform = process.platform, execute = execFileSync6, executableDependencies = {}) {
   const executable = resolveTrustedSystemExecutable(platform === "win32" ? "powershell" : "ps", platform, executableDependencies);
   if (!executable)
     return null;
@@ -12983,10 +13183,10 @@ function listenerOwnedByLauncher(listenerPid, launcherPid) {
   }
   return false;
 }
-function managedMetroListenerPid(port, platform = process.platform, execute = execFileSync5, executableDependencies = {}) {
+function managedMetroListenerPid(port, platform = process.platform, execute = execFileSync6, executableDependencies = {}) {
   return metroListenerPid(port, platform, execute, executableDependencies);
 }
-function probeManagedMetroListener(port, platform = process.platform, execute = execFileSync5, executableDependencies = {}) {
+function probeManagedMetroListener(port, platform = process.platform, execute = execFileSync6, executableDependencies = {}) {
   return probeMetroListener(port, platform, execute, executableDependencies);
 }
 function resolveManagedMetroCommand(appRoot, dependencies = {}) {
@@ -13740,7 +13940,7 @@ async function startManagedMetro(input, dependencies = {}) {
     lastError
   });
 }
-function signalManagedMetroProcessTree(input, platform = process.platform, execute = execFileSync5, executableDependencies = {}) {
+function signalManagedMetroProcessTree(input, platform = process.platform, execute = execFileSync6, executableDependencies = {}) {
   if (platform === "win32") {
     const executable = resolveTrustedSystemExecutable("taskkill", platform, executableDependencies);
     if (!executable)
@@ -13925,7 +14125,7 @@ init_registry();
 // packages/rn-dev-agent-core/dist/session/source-identity.js
 init_metro_cwd();
 import { createHash as createHash6, createHmac as createHmac4, randomBytes as randomBytes2, timingSafeEqual as timingSafeEqual5 } from "node:crypto";
-import { execFileSync as execFileSync6 } from "node:child_process";
+import { execFileSync as execFileSync7 } from "node:child_process";
 import { closeSync as closeSync4, constants as constants3, existsSync as existsSync5, fstatSync as fstatSync3, lstatSync as lstatSync4, openSync as openSync4, readdirSync as readdirSync2, readFileSync as readFileSync5, readlinkSync as readlinkSync3, readSync as readSync3, realpathSync as realpathSync6 } from "node:fs";
 import { dirname as dirname5, isAbsolute as isAbsolute3, join as join4, relative as relative3, resolve as resolve4 } from "node:path";
 function digest2(parts) {
@@ -13980,7 +14180,7 @@ socket.once('timeout', () => process.exit(3));
 socket.once('error', () => process.exit(4));
 `;
 function defaultGit(root, args) {
-  return execFileSync6("git", ["-C", root, ...args], {
+  return execFileSync7("git", ["-C", root, ...args], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     timeout: 5e3,
@@ -16285,6 +16485,7 @@ async function stopBoundRecorder(binding, _processProbe = probeProcessBirth, run
 }
 
 // packages/rn-dev-agent-core/dist/rn-session.js
+init_app_lifecycle();
 function resolveStatus() {
   const layout = createAuthorityStateLayout(process.env.RN_DEV_AGENT_STATE_DIR);
   const registry = openSessionRegistry(layout.registry, { ownerStatus: inspectSessionOwner });
@@ -16460,7 +16661,28 @@ async function ensureManagedMetro(status) {
         });
       }
       const instanceId = randomUUID3();
-      const buildGeneration = Math.max(Number(existing?.buildGeneration ?? 0), Number(retainedCleanup?.buildGeneration ?? 0), Number(status.bindings.install?.buildGeneration ?? 0)) + 1;
+      const buildGeneration = resolveManagedMetroRestartGeneration({
+        session: {
+          sessionId: status.sessionId,
+          sourceKey: status.sourceKey,
+          worktreeKey: status.worktreeKey,
+          appRootKey: status.appRootKey,
+          metroPort: Number(status.bindings.metroPort)
+        },
+        device: {
+          platform,
+          deviceId: String(device.deviceId),
+          appId
+        },
+        install: status.bindings.install,
+        pendingBuild: status.bindings.pendingBuild,
+        priorGenerations: [existing?.buildGeneration, retainedCleanup?.buildGeneration],
+        captureInstalled: () => captureInstalledArtifact({
+          platform,
+          deviceId: String(device.deviceId),
+          appId
+        })
+      });
       writeMarker(status, {
         platform,
         appId,
@@ -16532,6 +16754,51 @@ async function ensureManagedMetro(status) {
     throw failure;
   }
 }
+async function parkExpoDevClient(status, platform, buildToken) {
+  const device = status.bindings.device;
+  const pending = status.bindings.pendingBuild;
+  const metro = status.bindings.metro;
+  if (device?.platform !== platform || typeof device.deviceId !== "string" || typeof device.appId !== "string" || pending?.platform !== platform || pending.buildToken !== buildToken || pending.buildKind !== "expo") {
+    throw new SessionAuthorityError("SESSION_BUILD_IDENTITY_CONFLICT", "Dev Client picker reset requires the exact pending Expo build capability");
+  }
+  const signerCapability = readSigner(status);
+  const inspection = metro ? inspectManagedMetroLifecycle(metro, {
+    sessionId: status.sessionId,
+    signerCapability
+  }) : null;
+  if (!metro || metro.mode !== "managed" || inspection?.status !== "live") {
+    throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "Dev Client picker reset requires live authenticated managed Metro authority");
+  }
+  const identity = {
+    platform,
+    deviceId: device.deviceId,
+    appId: device.appId
+  };
+  const operation = beginCliOperation(status, "rn-session park-dev-client", "transition:park-dev-client");
+  let currentOperation = operation;
+  try {
+    await status.registry.runWithOperation(operation, () => parkExactDevClientAtPicker(identity, {
+      captureInstalled: captureInstalledArtifact,
+      terminate: (target) => terminateApp(target.appId, target.platform, target.deviceId),
+      stopManagedMetro: () => stopManagedMetro(metro, {
+        sessionId: status.sessionId,
+        signerCapability
+      }),
+      publishMetroStopped: () => {
+        currentOperation = status.registry.replaceBindingsDuringOperation(currentOperation, {
+          state: "device_claimed",
+          bindings: { metro: null, metroCleanup: null, bundle: null }
+        });
+      },
+      launchWithoutUrl: (target) => launchApp(target.appId, target.platform, target.deviceId),
+      checkpoint: () => status.registry.verifyOperation(currentOperation)
+    }));
+    status.registry.endOperation(currentOperation);
+  } catch (error) {
+    status.registry.cancelOperation(currentOperation);
+    throw error;
+  }
+}
 async function main() {
   const command = process.argv[2] ?? "status";
   let status = resolveStatus();
@@ -16568,6 +16835,16 @@ async function main() {
         metroPort,
         sessionId: status.sessionId
       })}
+`);
+      return;
+    }
+    if (command === "resolve-expo-android-device") {
+      const requestedDeviceId = process.argv[3];
+      const device = status.bindings.device;
+      if (device?.platform !== "android" || typeof device.deviceId !== "string" || requestedDeviceId !== device.deviceId) {
+        throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "Expo device resolution requires the exact authority-bound adb serial");
+      }
+      process.stdout.write(`${JSON.stringify(resolveExpoAndroidDevice(device.deviceId))}
 `);
       return;
     }
@@ -16678,6 +16955,17 @@ async function main() {
         ...platform === "ios" ? { simulator: true } : {},
         ...typeof device.devClientUrl === "string" ? { devClientUrl: device.devClientUrl } : {}
       })}
+`);
+      return;
+    }
+    if (command === "park-dev-client") {
+      const platform = process.argv[3];
+      const buildToken = process.argv[4];
+      if (platform !== "ios" && platform !== "android" || typeof buildToken !== "string") {
+        throw new SessionAuthorityError("SESSION_BUILD_IDENTITY_CONFLICT", "Dev Client picker reset requires the exact platform and build capability");
+      }
+      await parkExpoDevClient(status, platform, buildToken);
+      process.stdout.write(`${JSON.stringify({ parked: true, platform })}
 `);
       return;
     }

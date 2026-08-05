@@ -17,6 +17,7 @@ const androidSession = {
   appId: 'dev.example.android',
   metroPort: 8342,
   sessionId: 'session-android',
+  expoDeviceName: 'rn_exact_android',
 };
 
 test('plugin-absent path passes any original command through unchanged', () => {
@@ -66,6 +67,14 @@ test('Expo iOS launches through its exact managed Metro proxy without starting a
     ],
     timeoutMs: 30_000,
   });
+
+  const pickerPlan = createBuildLaunchPlan({
+    platform: 'ios',
+    command: ['expo', 'run:ios'],
+    session: iosSession,
+    freshPicker: true,
+  });
+  assert.equal(pickerPlan.postInstall, undefined);
 });
 
 test('Expo Android emulator launches through its exact host Metro proxy', () => {
@@ -79,16 +88,29 @@ test('Expo Android emulator launches through its exact host Metro proxy', () => 
     'expo',
     'run:android',
     '--device',
-    androidSession.deviceId,
+    androidSession.expoDeviceName,
     '--no-bundler',
   ]);
   assert.deepEqual(plan.env, {
     ORG_GRADLE_PROJECT_reactNativeDevServerPort: '8342',
     RCT_METRO_PORT: '8342',
     RN_DEV_AGENT_SESSION_ID: 'session-android',
+    ANDROID_SERIAL: 'emulator-5582',
     EXPO_PACKAGER_PROXY_URL: 'http://10.0.2.2:8342',
   });
   assert.equal(plan.postInstall, undefined);
+});
+
+test('Expo Android refuses to bind the CLI boundary without a proven display name', () => {
+  assert.throws(
+    () =>
+      createBuildLaunchPlan({
+        platform: 'android',
+        command: ['expo', 'run:android'],
+        session: { ...androidSession, expoDeviceName: undefined },
+      }),
+    /SESSION_BUILD_IDENTITY_CONFLICT/,
+  );
 });
 
 test('Expo never receives --port alongside --no-bundler and refuses a conflicting port', () => {

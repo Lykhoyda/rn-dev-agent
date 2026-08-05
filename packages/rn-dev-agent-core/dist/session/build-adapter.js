@@ -3,10 +3,18 @@ function conflict(flag) {
 }
 function ensureValue(command, flag, value) {
     let found = false;
-    for (let index = command.indexOf(flag); index >= 0; index = command.indexOf(flag, index + 1)) {
-        found = true;
-        if (command[index + 1] !== value)
-            conflict(flag);
+    for (let index = 0; index < command.length; index += 1) {
+        if (command[index] === flag) {
+            found = true;
+            if (command[index + 1] !== value)
+                conflict(flag);
+            continue;
+        }
+        if (command[index]?.startsWith(`${flag}=`)) {
+            found = true;
+            if (command[index] !== `${flag}=${value}`)
+                conflict(flag);
+        }
     }
     if (!found)
         command.push(flag, value);
@@ -82,7 +90,11 @@ export function createBuildLaunchPlan(input) {
         throw new Error('SESSION_BUILD_COMMAND_UNSUPPORTED: command shape is not recognized');
     }
     if (kind === 'expo') {
-        ensureValue(command, '--device', input.session.deviceId);
+        const expoDevice = input.platform === 'android'
+            ? (input.session.expoDeviceName ??
+                conflict('Expo Android device name must be resolved from the exact adb serial'))
+            : input.session.deviceId;
+        ensureValue(command, '--device', expoDevice);
         removeManagedPortFlag(command, String(input.session.metroPort));
         ensureFlag(command, '--no-bundler');
     }
@@ -100,9 +112,13 @@ export function createBuildLaunchPlan(input) {
         ORG_GRADLE_PROJECT_reactNativeDevServerPort: String(input.session.metroPort),
         RCT_METRO_PORT: String(input.session.metroPort),
         RN_DEV_AGENT_SESSION_ID: input.session.sessionId,
+        ...(input.platform === 'android' ? { ANDROID_SERIAL: input.session.deviceId } : {}),
         ...(kind === 'expo' ? { EXPO_PACKAGER_PROXY_URL: managedMetroProxyUrl(input.session) } : {}),
     };
-    const postInstall = kind === 'expo' && input.platform === 'ios' && input.session.simulator === true
+    const postInstall = !input.freshPicker &&
+        kind === 'expo' &&
+        input.platform === 'ios' &&
+        input.session.simulator === true
         ? {
             command: [
                 'xcrun',

@@ -4,6 +4,9 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createBuildReceipt } from './session/build-receipt.js';
 import { captureInstalledArtifact } from './session/install-authority.js';
+import { parkExactDevClientAtPicker } from './session/dev-client-picker-lifecycle.js';
+import { resolveExpoAndroidDevice } from './session/expo-android-device.js';
+import { resolveManagedMetroRestartGeneration } from './session/managed-metro-restart.js';
 import { buildSignedMetroMarker, createMetroAuthorityModule } from './session/metro-authority.js';
 import { captureMetroBinding } from './session/metro-binding.js';
 import { inspectManagedMetroLifecycle, refreshManagedMetroBuildGeneration, startManagedMetro, stopManagedMetro, verifyManagedMetroManagementProof, } from './session/managed-metro.js';
@@ -14,6 +17,7 @@ import { createAuthorityStateLayout, sessionRuntimeDirectory } from './session/s
 import { inspectAuthorityMigration } from './session/migration-diagnostic.js';
 import { projectPublicAuthorityStatus } from './session/public-status.js';
 import { stopBoundObserve, stopBoundRecorder, stopBoundRunner } from './session/process-cleanup.js';
+import { launchApp, terminateApp } from './tools/app-lifecycle.js';
 import { closeBoundDirectories, openBoundDirectory, openBoundSubdirectory, writeBoundDirectoryFile, } from './session/bound-directory.js';
 function resolveStatus() {
     const layout = createAuthorityStateLayout(process.env.RN_DEV_AGENT_STATE_DIR);
@@ -211,7 +215,28 @@ async function ensureManagedMetro(status) {
                 });
             }
             const instanceId = randomUUID();
-            const buildGeneration = Math.max(Number(existing?.buildGeneration ?? 0), Number(retainedCleanup?.buildGeneration ?? 0), Number(status.bindings.install?.buildGeneration ?? 0)) + 1;
+            const buildGeneration = resolveManagedMetroRestartGeneration({
+                session: {
+                    sessionId: status.sessionId,
+                    sourceKey: status.sourceKey,
+                    worktreeKey: status.worktreeKey,
+                    appRootKey: status.appRootKey,
+                    metroPort: Number(status.bindings.metroPort),
+                },
+                device: {
+                    platform,
+                    deviceId: String(device.deviceId),
+                    appId,
+                },
+                install: status.bindings.install,
+                pendingBuild: status.bindings.pendingBuild,
+                priorGenerations: [existing?.buildGeneration, retainedCleanup?.buildGeneration],
+                captureInstalled: () => captureInstalledArtifact({
+                    platform,
+                    deviceId: String(device.deviceId),
+                    appId,
+                }),
+            });
             writeMarker(status, {
                 platform,
                 appId,
@@ -286,6 +311,59 @@ async function ensureManagedMetro(status) {
         throw failure;
     }
 }
+async function parkExpoDevClient(status, platform, buildToken) {
+    const device = status.bindings.device;
+    const pending = status.bindings.pendingBuild;
+    const metro = status.bindings.metro;
+    if (device?.platform !== platform ||
+        typeof device.deviceId !== 'string' ||
+        typeof device.appId !== 'string' ||
+        pending?.platform !== platform ||
+        pending.buildToken !== buildToken ||
+        pending.buildKind !== 'expo') {
+        throw new SessionAuthorityError('SESSION_BUILD_IDENTITY_CONFLICT', 'Dev Client picker reset requires the exact pending Expo build capability');
+    }
+    const signerCapability = readSigner(status);
+    const inspection = metro
+        ? inspectManagedMetroLifecycle(metro, {
+            sessionId: status.sessionId,
+            signerCapability,
+        })
+        : null;
+    if (!metro || metro.mode !== 'managed' || inspection?.status !== 'live') {
+        throw new SessionAuthorityError('METRO_AUTHORITY_MISMATCH', 'Dev Client picker reset requires live authenticated managed Metro authority');
+    }
+    const identity = {
+        platform,
+        deviceId: device.deviceId,
+        appId: device.appId,
+    };
+    const operation = beginCliOperation(status, 'rn-session park-dev-client', 'transition:park-dev-client');
+    let currentOperation = operation;
+    try {
+        await status.registry.runWithOperation(operation, () => parkExactDevClientAtPicker(identity, {
+            captureInstalled: captureInstalledArtifact,
+            terminate: (target) => terminateApp(target.appId, target.platform, target.deviceId),
+            stopManagedMetro: () => stopManagedMetro(metro, {
+                sessionId: status.sessionId,
+                signerCapability,
+            }),
+            publishMetroStopped: () => {
+                currentOperation = status.registry.replaceBindingsDuringOperation(currentOperation, {
+                    state: 'device_claimed',
+                    bindings: { metro: null, metroCleanup: null, bundle: null },
+                });
+            },
+            launchWithoutUrl: (target) => launchApp(target.appId, target.platform, target.deviceId),
+            checkpoint: () => status.registry.verifyOperation(currentOperation),
+        }));
+        status.registry.endOperation(currentOperation);
+    }
+    catch (error) {
+        status.registry.cancelOperation(currentOperation);
+        throw error;
+    }
+}
 async function main() {
     const command = process.argv[2] ?? 'status';
     let status = resolveStatus();
@@ -323,6 +401,17 @@ async function main() {
                 metroPort,
                 sessionId: status.sessionId,
             })}\n`);
+            return;
+        }
+        if (command === 'resolve-expo-android-device') {
+            const requestedDeviceId = process.argv[3];
+            const device = status.bindings.device;
+            if (device?.platform !== 'android' ||
+                typeof device.deviceId !== 'string' ||
+                requestedDeviceId !== device.deviceId) {
+                throw new SessionAuthorityError('DEVICE_AUTHORITY_MISMATCH', 'Expo device resolution requires the exact authority-bound adb serial');
+            }
+            process.stdout.write(`${JSON.stringify(resolveExpoAndroidDevice(device.deviceId))}\n`);
             return;
         }
         if (command === 'ensure-metro') {
@@ -447,6 +536,16 @@ async function main() {
                 ...(platform === 'ios' ? { simulator: true } : {}),
                 ...(typeof device.devClientUrl === 'string' ? { devClientUrl: device.devClientUrl } : {}),
             })}\n`);
+            return;
+        }
+        if (command === 'park-dev-client') {
+            const platform = process.argv[3];
+            const buildToken = process.argv[4];
+            if ((platform !== 'ios' && platform !== 'android') || typeof buildToken !== 'string') {
+                throw new SessionAuthorityError('SESSION_BUILD_IDENTITY_CONFLICT', 'Dev Client picker reset requires the exact platform and build capability');
+            }
+            await parkExpoDevClient(status, platform, buildToken);
+            process.stdout.write(`${JSON.stringify({ parked: true, platform })}\n`);
             return;
         }
         if (command === 'complete-build') {

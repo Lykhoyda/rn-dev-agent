@@ -3859,7 +3859,7 @@ test('copied adapter accepts build identity only from the package-local session 
     chmodSync(fakeXcrun, 0o755);
     writeFileSync(
       sessionCliPath,
-      "const fs=require('node:fs');const args=process.argv.slice(2);if(args[0]==='prepare-build'){fs.appendFileSync(process.env.ADAPTER_PREPARE,JSON.stringify({args})+'\\n');process.stdout.write(JSON.stringify({platform:'ios',deviceId:'session-ios-device',appId:'dev.example',metroPort:8341,sessionId:'session-ios',buildToken:args[2],simulator:true}));}else if(args[0]==='abort-build'){fs.appendFileSync(process.env.ADAPTER_ABORT,JSON.stringify({args,session:process.env.RN_DEV_AGENT_SESSION_ID})+'\\n');process.stdout.write('{\"aborted\":true}\\n');}else{if(!fs.existsSync(process.env.ADAPTER_STARTUP))process.exit(9);fs.writeFileSync(process.env.ADAPTER_COMPLETION,JSON.stringify({args,session:process.env.RN_DEV_AGENT_SESSION_ID}));process.stdout.write('{\"receipt\":true}\\n');}",
+      "const fs=require('node:fs');const args=process.argv.slice(2);if(args[0]==='prepare-build'){fs.appendFileSync(process.env.ADAPTER_PREPARE,JSON.stringify({args})+'\\n');process.stdout.write(JSON.stringify({platform:'ios',deviceId:'session-ios-device',appId:'dev.example',metroPort:8341,sessionId:'session-ios',buildToken:args[2],simulator:true}));}else if(args[0]==='abort-build'){fs.appendFileSync(process.env.ADAPTER_ABORT,JSON.stringify({args,session:process.env.RN_DEV_AGENT_SESSION_ID})+'\\n');process.stdout.write('{\"aborted\":true}\\n');}else if(args[0]==='park-dev-client'){if(process.env.ADAPTER_STARTUP_FAIL==='1'){process.stderr.write('launch refused\\n');process.exit(4);}fs.writeFileSync(process.env.ADAPTER_STARTUP,JSON.stringify(args));process.stdout.write('{\"parked\":true}\\n');}else{if(!fs.existsSync(process.env.ADAPTER_STARTUP))process.exit(9);fs.writeFileSync(process.env.ADAPTER_COMPLETION,JSON.stringify({args,session:process.env.RN_DEV_AGENT_SESSION_ID}));process.stdout.write('{\"receipt\":true}\\n');}",
     );
     const deliveredToken = () => {
       const calls = readFileSync(preparePath, 'utf8').trim().split('\n');
@@ -4025,7 +4025,7 @@ test('copied adapter aborts pending build authority on every pre-completion fail
     chmodSync(join(binRoot, 'xcrun'), 0o755);
     writeFileSync(
       sessionCliPath,
-      "const fs=require('node:fs');const args=process.argv.slice(2);if(args[0]==='prepare-build'){const platform=args[1];fs.appendFileSync(process.env.ADAPTER_PREPARE,JSON.stringify({args})+'\\n');process.stdout.write(JSON.stringify(platform==='ios'?{platform:'ios',deviceId:'session-ios-device',appId:'dev.example',metroPort:8341,sessionId:'session-ios',buildToken:args[2],simulator:true}:{platform:'android',deviceId:'emulator-5582',appId:'dev.example.android',metroPort:8342,sessionId:'session-android',buildToken:args[2]}));}else if(args[0]==='abort-build'){if(process.env.ADAPTER_ABORT_FAIL==='1'){process.stderr.write('SESSION_BUILD_IDENTITY_CONFLICT: build abort capability is stale or foreign\\n');process.exit(2);}fs.appendFileSync(process.env.ADAPTER_ABORT,JSON.stringify({args,session:process.env.RN_DEV_AGENT_SESSION_ID})+'\\n');process.stdout.write('{\"aborted\":true}\\n');}else{fs.writeFileSync(process.env.ADAPTER_COMPLETION,JSON.stringify({args,session:process.env.RN_DEV_AGENT_SESSION_ID}));process.stdout.write('{\"receipt\":true}\\n');}",
+      "const fs=require('node:fs');const args=process.argv.slice(2);if(args[0]==='prepare-build'){const platform=args[1];fs.appendFileSync(process.env.ADAPTER_PREPARE,JSON.stringify({args})+'\\n');process.stdout.write(JSON.stringify(platform==='ios'?{platform:'ios',deviceId:'session-ios-device',appId:'dev.example',metroPort:8341,sessionId:'session-ios',buildToken:args[2],simulator:true}:{platform:'android',deviceId:'emulator-5582',appId:'dev.example.android',metroPort:8342,sessionId:'session-android',buildToken:args[2]}));}else if(args[0]==='resolve-expo-android-device'){process.stdout.write(JSON.stringify({deviceId:args[1],displayName:'exact_android_avd'}));}else if(args[0]==='abort-build'){if(process.env.ADAPTER_ABORT_FAIL==='1'){process.stderr.write('SESSION_BUILD_IDENTITY_CONFLICT: build abort capability is stale or foreign\\n');process.exit(2);}fs.appendFileSync(process.env.ADAPTER_ABORT,JSON.stringify({args,session:process.env.RN_DEV_AGENT_SESSION_ID})+'\\n');process.stdout.write('{\"aborted\":true}\\n');}else if(args[0]==='park-dev-client'){fs.writeFileSync(process.env.ADAPTER_STARTUP,JSON.stringify(args));process.stdout.write('{\"parked\":true}\\n');}else{fs.writeFileSync(process.env.ADAPTER_COMPLETION,JSON.stringify({args,session:process.env.RN_DEV_AGENT_SESSION_ID}));process.stdout.write('{\"receipt\":true}\\n');}",
     );
     const preparePath = join(root, 'prepare.jsonl');
     const environment = {
@@ -4112,7 +4112,7 @@ test('copied adapter aborts pending build authority on every pre-completion fail
       'expo',
       'run:android',
       '--device',
-      'emulator-5582',
+      'exact_android_avd',
       '--no-bundler',
     ]);
     assert.deepEqual(JSON.parse(readFileSync(completionPath, 'utf8')), {

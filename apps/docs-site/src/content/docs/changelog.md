@@ -5,6 +5,38 @@ description: "Release history for rn-dev-agent"
 
 ## Claude plugin
 
+### 0.71.7
+
+#### Patch Changes
+
+- 3ee229d: Keep managed Metro descendants strict by default while allowing only Expo's canonical runtime-version manifest utility without session capability and requiring exact managed launch provenance.
+- Updated dependencies [3ee229d]
+  - rn-dev-agent-core@0.66.7
+
+### 0.71.6
+
+#### Patch Changes
+
+- 5b0a93f: Keep `.rn-agent` real and worktree-local by inheriting only `.rn-agent/actions` through consented setup and repository-local post-checkout integration, keeping SessionStart report-only, and migrating recognized legacy root links without copying mutable integration or session state.
+- Updated dependencies [5b0a93f]
+  - rn-dev-agent-core@0.66.6
+
+### 0.71.5
+
+#### Patch Changes
+
+- e7c04dc: Keep session-bound Dev Client discovery and reconnect, reload, and restart recovery on the exact managed Metro port, and recognize modern Bridgeless Hermes targets whose inspector metadata omits the legacy `vm` field, while continuing to require the signed runtime marker before authority becomes ready.
+- Updated dependencies [e7c04dc]
+  - rn-dev-agent-core@0.66.5
+
+### 0.71.4
+
+#### Patch Changes
+
+- 89bdf7a: Classify maestro-runner 1.1.x ID-wait misses as SELECTOR_NOT_FOUND, surface bounded head+tail failure evidence with the exact selector on every terminal path, resume reactive CDP/JS replay at the failed selector instead of redispatching executed mutations, and refuse launchApp keys the CDP transport cannot honor.
+- Updated dependencies [89bdf7a]
+  - rn-dev-agent-core@0.66.4
+
 ### 0.71.3
 
 #### Patch Changes
@@ -1246,6 +1278,30 @@ identifier, hittable? }`, with a `fullNodeCount`. Far fewer tokens; `@ref`s for
   #188 shipped these to `main` with no version bump, leaving them undeliverable to marketplace installs; this patch publishes them.
 
 ## Core MCP server
+
+### 0.66.7
+
+#### Patch Changes
+
+- 3ee229d: Keep managed Metro descendants strict by default while allowing only Expo's canonical runtime-version manifest utility without session capability and requiring exact managed launch provenance.
+
+### 0.66.6
+
+#### Patch Changes
+
+- 5b0a93f: Keep `.rn-agent` real and worktree-local by inheriting only `.rn-agent/actions` through consented setup and repository-local post-checkout integration, keeping SessionStart report-only, and migrating recognized legacy root links without copying mutable integration or session state.
+
+### 0.66.5
+
+#### Patch Changes
+
+- e7c04dc: Keep session-bound Dev Client discovery and reconnect, reload, and restart recovery on the exact managed Metro port, and recognize modern Bridgeless Hermes targets whose inspector metadata omits the legacy `vm` field, while continuing to require the signed runtime marker before authority becomes ready.
+
+### 0.66.4
+
+#### Patch Changes
+
+- 89bdf7a: Classify maestro-runner 1.1.x ID-wait misses as SELECTOR_NOT_FOUND, surface bounded head+tail failure evidence with the exact selector on every terminal path, resume reactive CDP/JS replay at the failed selector instead of redispatching executed mutations, and refuse launchApp keys the CDP transport cannot honor.
 
 ### 0.66.3
 
