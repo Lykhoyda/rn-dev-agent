@@ -190,6 +190,31 @@ test('GH#672: an expired stale-device release offer is reported, not advertised'
   assert.equal(serialized.includes('SECRET-UDID'), false);
 });
 
+test('GH#672: an outstanding cleanup journal exposes an identifier-free resume action', () => {
+  const base = blockedStatus(50_000);
+  const projected = projectPublicAuthorityStatus({
+    ...base,
+    state: 'device_claimed',
+    bindings: {
+      staleDeviceCleanup: {
+        platform: 'ios',
+        deviceId: 'SECRET-UDID',
+        runner: { port: 9200, claimKey: 'runner-secret', completedAt: null },
+        recorder: { claimKey: 'recorder-secret', completedAt: null },
+      },
+    },
+  });
+  const cleanup = projected.staleDeviceCleanup as Record<string, unknown>;
+
+  assert.equal(cleanup.platform, 'ios');
+  assert.deepEqual(cleanup.obligations, ['runner', 'recorder']);
+  assert.equal(cleanup.nextAction, 'rn_session({ action: "release_stale_device" })');
+  const serialized = JSON.stringify(projected);
+  for (const secret of ['SECRET-UDID', '9200', 'runner-secret', 'recorder-secret']) {
+    assert.equal(serialized.includes(secret), false);
+  }
+});
+
 test('handoff_cleanup public status never exposes recovery tokens or capabilities', () => {
   const projected = projectPublicAuthorityStatus({
     available: true,
@@ -217,7 +242,10 @@ test('handoff_cleanup public status never exposes recovery tokens or capabilitie
     worker: { instanceId: 'worker-secret', pid: 1, birthAvailable: true },
   });
 
-  assert.equal(projected.recovery, undefined);
+  const recovery = projected.recovery as Record<string, unknown>;
+  assert.equal(recovery.adoptionHandle, undefined);
+  assert.equal(recovery.handoffRecipientHandle, undefined);
+  assert.equal(recovery.adoptionHandleExpired, true);
   const serialized = JSON.stringify(projected);
   assert.equal(serialized.includes('opaque-adopt'), false);
   assert.equal(serialized.includes('opaque-target'), false);

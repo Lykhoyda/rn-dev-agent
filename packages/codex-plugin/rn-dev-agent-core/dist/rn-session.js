@@ -8735,11 +8735,9 @@ var init_registry = __esm({
         if (!cleanup || typeof cleanup.platform !== "string" || typeof cleanup.deviceId !== "string") {
           return;
         }
-        const platform = JSON.stringify(cleanup.platform);
-        const deviceId = JSON.stringify(cleanup.deviceId);
-        throw new SessionAuthorityError("AUTOMATION_CLEANUP_UNPROVEN", `stale device cleanup journal for ${cleanup.platform}:${cleanup.deviceId} is incomplete`, void 0, {
+        throw new SessionAuthorityError("AUTOMATION_CLEANUP_UNPROVEN", "stale device cleanup journal is incomplete", void 0, {
           axis: "D",
-          nextAction: `Resume it with rn_session({ action: "release_stale_device", platform: ${platform}, deviceId: ${deviceId} }) before binding any device.`
+          nextAction: 'Resume it with rn_session({ action: "release_stale_device" }) before binding any device.'
         });
       }
       #assertStaleReleaseJournalScope(row, cleanup, target) {
@@ -16387,8 +16385,7 @@ function projectPublicAuthorityStatus(status, options = {}) {
   const staleRelease = status.bindings.staleDeviceRelease;
   const staleCleanup = status.bindings.staleDeviceCleanup;
   const cleanupPlatform = typeof staleCleanup?.platform === "string" ? staleCleanup.platform : void 0;
-  const cleanupDeviceId = typeof staleCleanup?.deviceId === "string" ? staleCleanup.deviceId : void 0;
-  const cleanupNextAction = cleanupPlatform && cleanupDeviceId ? status.state === "handoff_cleanup" ? 'rn_session({ action: "adopt_stale", adoptionHandle })' : `rn_session({ action: "release_stale_device", platform: ${JSON.stringify(cleanupPlatform)}, deviceId: ${JSON.stringify(cleanupDeviceId)} })` : void 0;
+  const cleanupNextAction = cleanupPlatform ? status.state === "handoff_cleanup" ? 'rn_session({ action: "adopt_stale", adoptionHandle })' : 'rn_session({ action: "release_stale_device" })' : void 0;
   const releaseHandle = cleanupNextAction ? void 0 : liveHandle(staleRelease ?? void 0, now);
   const pendingCleanupObligations = ["runner", "recorder"].filter((resource) => {
     const binding = staleCleanup?.[resource];
@@ -16423,7 +16420,6 @@ function projectPublicAuthorityStatus(status, options = {}) {
     ...cleanupNextAction ? {
       staleDeviceCleanup: {
         platform: cleanupPlatform,
-        deviceId: cleanupDeviceId,
         obligations: pendingCleanupObligations,
         nextAction: cleanupNextAction
       }

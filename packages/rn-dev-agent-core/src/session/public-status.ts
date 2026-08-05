@@ -69,7 +69,6 @@ export function projectPublicAuthorityStatus(
   const staleCleanup = status.bindings.staleDeviceCleanup as
     | {
         platform?: unknown;
-        deviceId?: unknown;
         runner?: unknown;
         recorder?: unknown;
       }
@@ -77,15 +76,11 @@ export function projectPublicAuthorityStatus(
     | undefined;
   const cleanupPlatform =
     typeof staleCleanup?.platform === 'string' ? staleCleanup.platform : undefined;
-  const cleanupDeviceId =
-    typeof staleCleanup?.deviceId === 'string' ? staleCleanup.deviceId : undefined;
   const cleanupNextAction =
-    cleanupPlatform && cleanupDeviceId
+    cleanupPlatform
       ? status.state === 'handoff_cleanup'
         ? 'rn_session({ action: "adopt_stale", adoptionHandle })'
-        : `rn_session({ action: "release_stale_device", platform: ${JSON.stringify(
-            cleanupPlatform,
-          )}, deviceId: ${JSON.stringify(cleanupDeviceId)} })`
+        : 'rn_session({ action: "release_stale_device" })'
       : undefined;
   const releaseHandle = cleanupNextAction ? undefined : liveHandle(staleRelease ?? undefined, now);
   const pendingCleanupObligations = (['runner', 'recorder'] as const).filter((resource) => {
@@ -133,7 +128,6 @@ export function projectPublicAuthorityStatus(
       ? {
           staleDeviceCleanup: {
             platform: cleanupPlatform,
-            deviceId: cleanupDeviceId,
             obligations: pendingCleanupObligations,
             nextAction: cleanupNextAction,
           },

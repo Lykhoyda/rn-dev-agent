@@ -1239,8 +1239,16 @@ trackedTool(
       'stop_metro',
       'release',
     ]),
-    platform: z.enum(['ios', 'android']).optional(),
-    deviceId: z.string().optional(),
+    platform: z.enum(['ios', 'android'])
+      .describe(
+        'For release_stale_device, supply with deviceId for initial transfer or omit both to resume the session-owned journal',
+      )
+      .optional(),
+    deviceId: z.string()
+      .describe(
+        'For release_stale_device, supply with platform for initial transfer or omit both to resume the session-owned journal',
+      )
+      .optional(),
     appId: z.string().optional(),
     devClientUrl: z.string().url().optional(),
     buildReceipt: z.record(z.unknown()).optional(),

@@ -594,7 +594,6 @@ test('GH#672: the handler exposes and resumes an expired journal before device r
   const authority = envelope(statusResult).data.authority as unknown as {
     staleDeviceCleanup?: {
       platform?: string;
-      deviceId?: string;
       obligations?: string[];
       nextAction?: string;
     };
@@ -602,9 +601,9 @@ test('GH#672: the handler exposes and resumes an expired journal before device r
   };
   assert.deepEqual(authority.staleDeviceCleanup?.obligations?.sort(), ['recorder', 'runner']);
   assert.equal(authority.staleDeviceCleanup?.platform, 'ios');
-  assert.equal(authority.staleDeviceCleanup?.deviceId, 'sim-1');
   assert.match(String(authority.staleDeviceCleanup?.nextAction), /release_stale_device/);
   assert.doesNotMatch(String(authority.staleDeviceCleanup?.nextAction), /releaseHandle/);
+  assert.equal(JSON.stringify(authority).includes('sim-1'), false);
   assert.equal(authority.staleDeviceRelease, undefined);
 
   const wrongDevice = await handler({
@@ -628,16 +627,25 @@ test('GH#672: the handler exposes and resumes an expired journal before device r
   );
   const crossSession = await otherHandler({
     action: 'release_stale_device',
-    platform: 'ios',
-    deviceId: 'sim-1',
   });
   assert.equal(crossSession.isError, true);
   assert.equal(envelope(crossSession).code, 'DEVICE_AUTHORITY_MISMATCH');
 
+  const staleEpochHandler = createSessionHandler(
+    new WorkerAuthorityRuntime(
+      f.registry,
+      { sessionId: f.live.sessionId, claimEpoch: f.live.claimEpoch + 1 },
+      null,
+    ) as never,
+    { deviceExists: () => true },
+  );
+  const crossEpoch = await staleEpochHandler({ action: 'release_stale_device' });
+  assert.equal(crossEpoch.isError, true);
+  assert.equal(envelope(crossEpoch).code, 'SESSION_OWNER_LOST');
+  assert.equal(f.registry.getClaim('device', 'ios:sim-1')?.sessionId, 'live');
+
   const resumed = await handler({
     action: 'release_stale_device',
-    platform: 'ios',
-    deviceId: 'sim-1',
   });
   assert.equal(resumed.isError, undefined, resumed.content[0]!.text);
   assert.deepEqual(stopped, ['recorder', 'runner']);

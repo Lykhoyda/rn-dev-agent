@@ -1544,17 +1544,14 @@ export class SessionRegistry {
     if (!cleanup || typeof cleanup.platform !== 'string' || typeof cleanup.deviceId !== 'string') {
       return;
     }
-    const platform = JSON.stringify(cleanup.platform);
-    const deviceId = JSON.stringify(cleanup.deviceId);
     throw new SessionAuthorityError(
       'AUTOMATION_CLEANUP_UNPROVEN',
-      `stale device cleanup journal for ${cleanup.platform}:${cleanup.deviceId} is incomplete`,
+      'stale device cleanup journal is incomplete',
       undefined,
       {
         axis: 'D',
         nextAction:
-          `Resume it with rn_session({ action: "release_stale_device", platform: ${platform}, ` +
-          `deviceId: ${deviceId} }) before binding any device.`,
+          'Resume it with rn_session({ action: "release_stale_device" }) before binding any device.',
       },
     );
   }

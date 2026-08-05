@@ -13652,11 +13652,9 @@ var init_registry = __esm({
         if (!cleanup || typeof cleanup.platform !== "string" || typeof cleanup.deviceId !== "string") {
           return;
         }
-        const platform = JSON.stringify(cleanup.platform);
-        const deviceId = JSON.stringify(cleanup.deviceId);
-        throw new SessionAuthorityError("AUTOMATION_CLEANUP_UNPROVEN", `stale device cleanup journal for ${cleanup.platform}:${cleanup.deviceId} is incomplete`, void 0, {
+        throw new SessionAuthorityError("AUTOMATION_CLEANUP_UNPROVEN", "stale device cleanup journal is incomplete", void 0, {
           axis: "D",
-          nextAction: `Resume it with rn_session({ action: "release_stale_device", platform: ${platform}, deviceId: ${deviceId} }) before binding any device.`
+          nextAction: 'Resume it with rn_session({ action: "release_stale_device" }) before binding any device.'
         });
       }
       #assertStaleReleaseJournalScope(row, cleanup, target) {
@@ -62075,8 +62073,7 @@ function projectPublicAuthorityStatus(status, options = {}) {
   const staleRelease = status.bindings.staleDeviceRelease;
   const staleCleanup = status.bindings.staleDeviceCleanup;
   const cleanupPlatform = typeof staleCleanup?.platform === "string" ? staleCleanup.platform : void 0;
-  const cleanupDeviceId = typeof staleCleanup?.deviceId === "string" ? staleCleanup.deviceId : void 0;
-  const cleanupNextAction = cleanupPlatform && cleanupDeviceId ? status.state === "handoff_cleanup" ? 'rn_session({ action: "adopt_stale", adoptionHandle })' : `rn_session({ action: "release_stale_device", platform: ${JSON.stringify(cleanupPlatform)}, deviceId: ${JSON.stringify(cleanupDeviceId)} })` : void 0;
+  const cleanupNextAction = cleanupPlatform ? status.state === "handoff_cleanup" ? 'rn_session({ action: "adopt_stale", adoptionHandle })' : 'rn_session({ action: "release_stale_device" })' : void 0;
   const releaseHandle = cleanupNextAction ? void 0 : liveHandle(staleRelease ?? void 0, now);
   const pendingCleanupObligations = ["runner", "recorder"].filter((resource) => {
     const binding = staleCleanup?.[resource];
@@ -62111,7 +62108,6 @@ function projectPublicAuthorityStatus(status, options = {}) {
     ...cleanupNextAction ? {
       staleDeviceCleanup: {
         platform: cleanupPlatform,
-        deviceId: cleanupDeviceId,
         obligations: pendingCleanupObligations,
         nextAction: cleanupNextAction
       }
@@ -66471,8 +66467,12 @@ function createSessionHandler(runtime, dependencies = {}) {
         });
       }
       if (input.action === "release_stale_device") {
-        const platform = required2(input.platform, "platform");
-        const deviceId = required2(input.deviceId, "deviceId");
+        const hasPlatform = input.platform !== void 0;
+        const hasDeviceId = input.deviceId !== void 0;
+        if (hasPlatform !== hasDeviceId) {
+          throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "platform and deviceId must both be supplied or both omitted for journal resumption");
+        }
+        const target = hasPlatform && hasDeviceId ? { platform: input.platform, deviceId: input.deviceId } : void 0;
         const releaseHandle = input.releaseHandle;
         const current = registry2.getSessionStatus(session.sessionId);
         const workerInstance = current?.worker.instanceId;
@@ -66482,19 +66482,19 @@ function createSessionHandler(runtime, dependencies = {}) {
         const offer = current?.bindings.staleDeviceRelease;
         const journal = current?.bindings.staleDeviceCleanup;
         const authority = journal ?? offer;
-        if (authority?.platform !== platform || authority.deviceId !== deviceId) {
+        if (target && (authority?.platform !== target.platform || authority.deviceId !== target.deviceId)) {
           throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "the stale release request does not match the exact cleanup journal or offer", void 0, {
             axis: "D",
             nextAction: 'Run rn_session with action "status" for the exact recovery.'
           });
         }
+        if (!journal && !target) {
+          throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "platform and deviceId are required for the initial stale device transfer");
+        }
         if (!journal && typeof releaseHandle !== "string") {
           throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "releaseHandle is required before stale device claims transfer");
         }
-        const plan = registry2.beginStaleResourceRelease(session, releaseHandle, workerInstance, {
-          platform,
-          deviceId
-        });
+        const plan = registry2.beginStaleResourceRelease(session, releaseHandle, workerInstance, target);
         const completed = [];
         if (plan.recorder && typeof plan.recorder.completedAt !== "number") {
           await (dependencies.stopHandoffRecorder ?? stopBoundRecorder)(plan.recorder);
@@ -66512,7 +66512,7 @@ function createSessionHandler(runtime, dependencies = {}) {
         }
         registry2.finishStaleResourceRelease(session, workerInstance);
         return okResult({
-          released: { platform, cleanupCompleted: completed },
+          released: { platform: plan.platform, cleanupCompleted: completed },
           session: projectPublicAuthorityStatus(runtime.status(), { now: dependencies.now }),
           nextAction: "The exact device, runner, and recorder claims are released. Re-run bind_device to claim the device."
         });
@@ -84089,8 +84089,8 @@ var init_index = __esm({
         "stop_metro",
         "release"
       ]),
-      platform: external_exports.enum(["ios", "android"]).optional(),
-      deviceId: external_exports.string().optional(),
+      platform: external_exports.enum(["ios", "android"]).describe("For release_stale_device, supply with deviceId for initial transfer or omit both to resume the session-owned journal").optional(),
+      deviceId: external_exports.string().describe("For release_stale_device, supply with platform for initial transfer or omit both to resume the session-owned journal").optional(),
       appId: external_exports.string().optional(),
       devClientUrl: external_exports.string().url().optional(),
       buildReceipt: external_exports.record(external_exports.unknown()).optional(),
