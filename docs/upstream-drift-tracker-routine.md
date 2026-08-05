@@ -73,8 +73,10 @@ NO-IMPACT**. Changelogs are SECONDARY — open the file and verify the claim bef
 
 ## Step 3 — BREAKING is any of:
 
-- A Metro `/json/list` **endpoint path change**, target **field rename/removal**, or `vm`
-  value change (e.g. `Hermes` → something else) — breaks target discovery.
+- A Metro `/json/list` **endpoint path change**, a required target **field rename/removal**, or
+  metadata changes that leave neither the legacy `vm` signal nor recognized React Native
+  metadata — breaks target discovery. Omitting optional legacy `vm` alone is not breaking;
+  verify readiness against the [session-authority contract](../apps/docs-site/src/content/docs/session-authority.mdx).
 - A **new or changed origin gate** (a third gate beyond loopback + Expo host-match, or a
   change to what host the inspector accepts) — re-breaks the B177/B178 handshake.
 - A **CDP domain we `.enable()` now rejected/removed** by the bundled Hermes

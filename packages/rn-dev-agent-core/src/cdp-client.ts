@@ -588,12 +588,7 @@ export class CDPClient {
   private _reconnectDiscover: typeof discoverExactPort | undefined;
 
   private async discoverAndConnect(portHint?: number, filters?: ConnectFilters): Promise<string> {
-    return discoverAndConnectFn(
-      this.buildConnectCtx(),
-      portHint,
-      filters,
-      this._reconnectDiscover,
-    );
+    return discoverAndConnectFn(this.buildConnectCtx(), portHint, filters, this._reconnectDiscover);
   }
 
   async softReconnect(): Promise<string> {

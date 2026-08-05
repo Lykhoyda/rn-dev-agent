@@ -85,7 +85,10 @@ test('exact-port discovery survives reconnects until an ordinary connect replace
 
     requested.length = 0;
     await assert.rejects(client.autoConnect(ambientPort, filters));
-    assert.equal(requested.some((url) => url.endsWith(`:${ambientPort}/status`)), true);
+    assert.equal(
+      requested.some((url) => url.endsWith(`:${ambientPort}/status`)),
+      true,
+    );
   } finally {
     await client.disconnect();
     globalThis.fetch = originalFetch;
