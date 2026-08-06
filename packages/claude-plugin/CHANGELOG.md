@@ -1,5 +1,20 @@
 # rn-dev-agent-plugin
 
+## 0.74.0
+
+### Minor Changes
+
+- 5e37f16: Project strict proof as an explicit opt-in `proofOverlay` (`active` only while a run is in flight between `begin_rehearsal` and `finalize`/`discard`) outside the grouped `session`/`target`/`runtime`/`automation` sub-objects, keeping the existing `proof` child flag and all redaction rules unchanged.
+
+### Patch Changes
+
+- c8b03c1: Reset an exact Android CDP connection after an advertised inspector handshakes but fails the mandatory runtime probe, serially re-list only the session's allocated Metro for the same app and serial/model association, and retain the actionable probe-timeout leaf when bounded re-registration expires.
+- 9cccec7: Regroup authority-profile bookkeeping around the four ownership groups (Session, Target, Runtime, Automation) with every tool's resolved facet set, live probes, and error codes unchanged, and verify profile exhaustiveness at worker startup so an unprofiled registered tool fails at boot instead of at first call.
+- Updated dependencies [c8b03c1]
+- Updated dependencies [9cccec7]
+- Updated dependencies [5e37f16]
+  - rn-dev-agent-core@0.69.0
+
 ## 0.73.0
 
 ### Minor Changes
