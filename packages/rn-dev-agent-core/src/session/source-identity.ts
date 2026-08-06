@@ -16,6 +16,11 @@ import {
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { pathIsWithinRoot } from '../cdp/metro-cwd.js';
 import { canonicalAuthorityJson } from './authority-json.js';
+import {
+  missingDeclaredManifestListMessage,
+  missingDeclaredManifestMessage,
+  missingDeclaredRootMessage,
+} from './declared-source-contract.js';
 import type { MetroRuntimeEvidenceAuthority } from './managed-metro.js';
 import { verifyManagedMetroEnforcementReceipt } from './managed-metro-enforcement.js';
 
@@ -979,16 +984,18 @@ function resolveDeclaredIdentity(
   dependencies: SourceIdentityDependencies,
   canonicalize: (path: string) => string,
 ): DeclaredSourceIdentity {
-  if (!dependencies.declaredRoot || !dependencies.declaredManifests?.length) {
-    throw new Error(
-      'NON_GIT_MANIFEST_REQUIRED: non-Git authority needs an explicit root and manifest list',
-    );
+  if (!dependencies.declaredRoot) throw new Error(missingDeclaredRootMessage());
+  if (!dependencies.declaredManifests?.length) {
+    throw new Error(missingDeclaredManifestListMessage());
   }
+  const pathExists = dependencies.exists ?? existsSync;
   const contentRoot = canonicalize(resolve(dependencies.declaredRoot));
   assertContained(contentRoot, appRoot, 'NON_GIT_ROOT_MISMATCH');
   const manifestParts: (string | Buffer)[] = [];
   for (const entry of [...dependencies.declaredManifests].sort()) {
-    const manifest = canonicalize(resolve(contentRoot, entry));
+    const declared = resolve(contentRoot, entry);
+    if (!pathExists(declared)) throw new Error(missingDeclaredManifestMessage(entry));
+    const manifest = canonicalize(declared);
     assertContained(contentRoot, manifest, 'NON_GIT_MANIFEST_OUTSIDE_ROOT');
     manifestParts.push(relative(contentRoot, manifest), readFileSync(manifest));
   }

@@ -22,6 +22,12 @@ passive `rn-setup` checks. Do not install/update/reinstall, build a runner, call
 in this phase. Present independent host/install/materialization/MCP/schema/task
 axes and ordered user-confirmed recovery commands.
 
+Abort project onboarding for a non-Git app root that has no source declaration:
+without `RN_DEV_AGENT_DECLARED_ROOT` and `RN_DEV_AGENT_DECLARED_MANIFESTS` the
+session refuses with `NON_GIT_MANIFEST_REQUIRED` before any injection or build.
+Report which half is missing, print the exact exports plus a supervisor restart,
+and never declare on the user's behalf.
+
 Abort project onboarding for missing Node/runtime/package files. Device, Metro,
 CDP, ffmpeg/idb, and runner build readiness may be deferred with exact
 instructions. If recovery changes plugin state externally, require Codex

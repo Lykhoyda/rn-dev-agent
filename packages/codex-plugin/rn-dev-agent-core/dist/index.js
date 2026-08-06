@@ -22466,6 +22466,26 @@ var init_authority_store = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/session/declared-source-contract.js
+function missingDeclaredRootMessage() {
+  return `NON_GIT_MANIFEST_REQUIRED: ${DECLARED_ROOT_ENV} is not set. ${NON_GIT_DECLARATION_NEXT_ACTION}`;
+}
+function missingDeclaredManifestListMessage() {
+  return `NON_GIT_MANIFEST_REQUIRED: ${DECLARED_MANIFESTS_ENV} is not set. ${NON_GIT_DECLARATION_NEXT_ACTION}`;
+}
+function missingDeclaredManifestMessage(entry) {
+  return `NON_GIT_MANIFEST_REQUIRED: declared manifest "${entry}" does not exist. ${NON_GIT_DECLARATION_NEXT_ACTION}`;
+}
+var DECLARED_ROOT_ENV, DECLARED_MANIFESTS_ENV, NON_GIT_DECLARATION_NEXT_ACTION;
+var init_declared_source_contract = __esm({
+  "packages/rn-dev-agent-core/dist/session/declared-source-contract.js"() {
+    "use strict";
+    DECLARED_ROOT_ENV = "RN_DEV_AGENT_DECLARED_ROOT";
+    DECLARED_MANIFESTS_ENV = "RN_DEV_AGENT_DECLARED_MANIFESTS";
+    NON_GIT_DECLARATION_NEXT_ACTION = `Declare the non-Git source explicitly: set ${DECLARED_ROOT_ENV} to the exact existing application root, and set ${DECLARED_MANIFESTS_ENV} to a comma-separated list of required existing manifest files inside that root, then restart the supervisor. Neither value is inferred from the working directory or generated.`;
+  }
+});
+
 // packages/rn-dev-agent-core/dist/session/metro-binding.js
 import { execFileSync as execFileSync5 } from "node:child_process";
 function resolveMetroListenerExecutable(platform, dependencies = {}) {
@@ -22596,6 +22616,9 @@ function referencesMetroEvidenceSocket(value, path) {
     return true;
   return Object.values(record2).some((entry) => referencesMetroEvidenceSocket(entry, path));
 }
+function authorityRemedyNextAction(code) {
+  return errorNextActions[code];
+}
 function shortAuthorityIdentity(value) {
   return createHash4("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
 }
@@ -22608,7 +22631,7 @@ function authorityErrorMeta(error2) {
       sessionId: error2.holder.sessionId.slice(0, 12),
       claimEpoch: error2.holder.claimEpoch
     } : void 0,
-    nextAction: error2.details?.nextAction ?? 'Run rn_session with action "status" and repair the named authority axis.'
+    nextAction: error2.details?.nextAction ?? errorNextActions[error2.code] ?? 'Run rn_session with action "status" and repair the named authority axis.'
   };
 }
 function asSession(row) {
@@ -22660,11 +22683,12 @@ function openSessionRegistry(path, dependencies) {
     throw error2;
   }
 }
-var INITIALIZATION_WAIT2, AUTHORITY_REGISTRY_SCHEMA_VERSION, SessionAuthorityError, RECOVERY_HANDLE_TTL_MS, RECOVERY_HANDLE_RENEW_MS, errorAxes, conflictCodes, SessionRegistry;
+var INITIALIZATION_WAIT2, AUTHORITY_REGISTRY_SCHEMA_VERSION, SessionAuthorityError, RECOVERY_HANDLE_TTL_MS, RECOVERY_HANDLE_RENEW_MS, errorAxes, errorNextActions, conflictCodes, SessionRegistry;
 var init_registry = __esm({
   "packages/rn-dev-agent-core/dist/session/registry.js"() {
     "use strict";
     init_authority_store();
+    init_declared_source_contract();
     init_metro_binding();
     INITIALIZATION_WAIT2 = new Int32Array(new SharedArrayBuffer(4));
     AUTHORITY_REGISTRY_SCHEMA_VERSION = 4;
@@ -22688,6 +22712,7 @@ var init_registry = __esm({
       OPERATION_ALREADY_IN_PROGRESS: "C",
       SOURCE_WORKTREE_MISMATCH: "S",
       SOURCE_REVISION_NOT_BUNDLED: "S",
+      NON_GIT_MANIFEST_REQUIRED: "S",
       APP_INSTALL_IDENTITY_CHANGED: "I",
       METRO_PORT_CLAIM_CONFLICT: "M",
       PORT_OCCUPIED_UNOWNED: "M",
@@ -22709,6 +22734,9 @@ var init_registry = __esm({
       AUTOMATION_CLEANUP_UNPROVEN: "R",
       OBSERVE_AUTHORITY_MISMATCH: "O",
       PROOF_AUTHORITY_MISMATCH: "P"
+    };
+    errorNextActions = {
+      NON_GIT_MANIFEST_REQUIRED: NON_GIT_DECLARATION_NEXT_ACTION
     };
     conflictCodes = {
       device: "DEVICE_CLAIM_CONFLICT",
@@ -57877,6 +57905,7 @@ function inspectAuthorityMigration(status, dependencies = {}) {
 }
 
 // packages/rn-dev-agent-core/dist/session/public-status.js
+init_registry();
 var SELECTED_STATES = /* @__PURE__ */ new Set(["active", "source_bound", "device_claimed", "metro_bound"]);
 var RUNNING_STATES = /* @__PURE__ */ new Set(["device_bound", "runtime_bound", "ready"]);
 function derivePublicPhase(state, buildPending) {
@@ -57897,9 +57926,11 @@ function liveHandle(handle, now) {
 }
 function projectPublicAuthorityStatus(status, options = {}) {
   if (!status.available) {
+    const nextAction = authorityRemedyNextAction(status.code);
     return {
       available: false,
-      code: status.code
+      code: status.code,
+      ...nextAction ? { nextAction } : {}
     };
   }
   const now = (options.now ?? Date.now)();
@@ -80982,6 +81013,7 @@ import { createHash as createHash18, createHmac as createHmac4, randomBytes as r
 import { execFileSync as execFileSync16 } from "node:child_process";
 import { closeSync as closeSync10, constants as constants6, existsSync as existsSync38, fstatSync as fstatSync6, lstatSync as lstatSync12, openSync as openSync10, readdirSync as readdirSync15, readFileSync as readFileSync39, readlinkSync as readlinkSync3, readSync as readSync4, realpathSync as realpathSync10 } from "node:fs";
 import { dirname as dirname21, isAbsolute as isAbsolute8, join as join53, relative as relative5, resolve as resolve10 } from "node:path";
+init_declared_source_contract();
 function digest2(parts) {
   const hash = createHash18("sha256");
   for (const part of parts) {
@@ -81543,14 +81575,20 @@ function assertContained(root, candidate, code) {
   }
 }
 function resolveDeclaredIdentity(appRoot, dependencies, canonicalize) {
-  if (!dependencies.declaredRoot || !dependencies.declaredManifests?.length) {
-    throw new Error("NON_GIT_MANIFEST_REQUIRED: non-Git authority needs an explicit root and manifest list");
+  if (!dependencies.declaredRoot)
+    throw new Error(missingDeclaredRootMessage());
+  if (!dependencies.declaredManifests?.length) {
+    throw new Error(missingDeclaredManifestListMessage());
   }
+  const pathExists = dependencies.exists ?? existsSync38;
   const contentRoot = canonicalize(resolve10(dependencies.declaredRoot));
   assertContained(contentRoot, appRoot, "NON_GIT_ROOT_MISMATCH");
   const manifestParts = [];
   for (const entry of [...dependencies.declaredManifests].sort()) {
-    const manifest = canonicalize(resolve10(contentRoot, entry));
+    const declared = resolve10(contentRoot, entry);
+    if (!pathExists(declared))
+      throw new Error(missingDeclaredManifestMessage(entry));
+    const manifest = canonicalize(declared);
     assertContained(contentRoot, manifest, "NON_GIT_MANIFEST_OUTSIDE_ROOT");
     manifestParts.push(relative5(contentRoot, manifest), readFileSync39(manifest));
   }

@@ -1,4 +1,5 @@
 import { inspectAuthorityMigration } from './migration-diagnostic.js';
+import { authorityRemedyNextAction } from './registry.js';
 const SELECTED_STATES = new Set(['active', 'source_bound', 'device_claimed', 'metro_bound']);
 const RUNNING_STATES = new Set(['device_bound', 'runtime_bound', 'ready']);
 // ADR §2.3 (L0): non-operational states keep only their internal name in `detail`.
@@ -24,9 +25,11 @@ function liveHandle(handle, now) {
 }
 export function projectPublicAuthorityStatus(status, options = {}) {
     if (!status.available) {
+        const nextAction = authorityRemedyNextAction(status.code);
         return {
             available: false,
             code: status.code,
+            ...(nextAction ? { nextAction } : {}),
         };
     }
     const now = (options.now ?? Date.now)();

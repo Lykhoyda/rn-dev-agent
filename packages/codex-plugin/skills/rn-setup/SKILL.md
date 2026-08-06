@@ -50,6 +50,7 @@ Read/report without mutation:
 
 | Check | Passive evidence | Guidance only |
 |---|---|---|
+| Source declaration | `git -C <app-root> rev-parse --show-toplevel`; for a non-Git app root, `RN_DEV_AGENT_DECLARED_ROOT` and `RN_DEV_AGENT_DECLARED_MANIFESTS` in the supervisor environment | Report which half is missing and print the exact exports plus a supervisor restart; never pick a root, invent a manifest list, create a missing manifest, or treat the working directory as an implicit root |
 | Node | `node --version` | Node 22.18+ LTS command if missing/old |
 | Core package | selected package runtime files | marketplace refresh/materialization |
 | iOS runner | packaged Xcode project/artifact presence | one-time build command |
@@ -62,6 +63,11 @@ Read/report without mutation:
 | physical device | prerequisite file/tool reads | signing/pairing guidance |
 | Vercel rules | packaged rules index/checker presence | refresh package if missing |
 | auto-connect | environment/project config read | informational only |
+
+Read the source-declaration row first: it is the only row that can fail before a
+session exists at all. A non-Git app root without both declarations refuses every
+authoritative tool with `NON_GIT_MANIFEST_REQUIRED`, so report it before setup or
+build rather than after.
 
 Doctor never runs a runner build, installer, update, MCP app call, Observe
 control, or cleanup. It prints commands for later user confirmation.

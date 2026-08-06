@@ -1,6 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { openAuthorityStore, } from './authority-store.js';
+import { NON_GIT_DECLARATION_NEXT_ACTION } from './declared-source-contract.js';
 import { probeMetroListener } from './metro-binding.js';
 const INITIALIZATION_WAIT = new Int32Array(new SharedArrayBuffer(4));
 export const AUTHORITY_REGISTRY_SCHEMA_VERSION = 4;
@@ -38,6 +39,7 @@ const errorAxes = {
     OPERATION_ALREADY_IN_PROGRESS: 'C',
     SOURCE_WORKTREE_MISMATCH: 'S',
     SOURCE_REVISION_NOT_BUNDLED: 'S',
+    NON_GIT_MANIFEST_REQUIRED: 'S',
     APP_INSTALL_IDENTITY_CHANGED: 'I',
     METRO_PORT_CLAIM_CONFLICT: 'M',
     PORT_OCCUPIED_UNOWNED: 'M',
@@ -60,6 +62,13 @@ const errorAxes = {
     OBSERVE_AUTHORITY_MISMATCH: 'O',
     PROOF_AUTHORITY_MISMATCH: 'P',
 };
+// Codes whose repair is a named declaration/configuration path, not another status read.
+const errorNextActions = {
+    NON_GIT_MANIFEST_REQUIRED: NON_GIT_DECLARATION_NEXT_ACTION,
+};
+export function authorityRemedyNextAction(code) {
+    return errorNextActions[code];
+}
 export function shortAuthorityIdentity(value) {
     return createHash('sha256').update(JSON.stringify(value)).digest('hex').slice(0, 16);
 }
@@ -75,6 +84,7 @@ export function authorityErrorMeta(error) {
             }
             : undefined,
         nextAction: error.details?.nextAction ??
+            errorNextActions[error.code] ??
             'Run rn_session with action "status" and repair the named authority axis.',
     };
 }

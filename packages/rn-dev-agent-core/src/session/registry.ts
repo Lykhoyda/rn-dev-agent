@@ -5,6 +5,7 @@ import {
   type AuthorityDatabase,
   type AuthorityDatabaseCtor,
 } from './authority-store.js';
+import { NON_GIT_DECLARATION_NEXT_ACTION } from './declared-source-contract.js';
 import { probeMetroListener } from './metro-binding.js';
 import type { AuthorityAxis } from './tool-profiles.js';
 
@@ -249,6 +250,7 @@ const errorAxes: Record<string, string> = {
   OPERATION_ALREADY_IN_PROGRESS: 'C',
   SOURCE_WORKTREE_MISMATCH: 'S',
   SOURCE_REVISION_NOT_BUNDLED: 'S',
+  NON_GIT_MANIFEST_REQUIRED: 'S',
   APP_INSTALL_IDENTITY_CHANGED: 'I',
   METRO_PORT_CLAIM_CONFLICT: 'M',
   PORT_OCCUPIED_UNOWNED: 'M',
@@ -272,6 +274,15 @@ const errorAxes: Record<string, string> = {
   PROOF_AUTHORITY_MISMATCH: 'P',
 };
 
+// Codes whose repair is a named declaration/configuration path, not another status read.
+const errorNextActions: Record<string, string> = {
+  NON_GIT_MANIFEST_REQUIRED: NON_GIT_DECLARATION_NEXT_ACTION,
+};
+
+export function authorityRemedyNextAction(code: string): string | undefined {
+  return errorNextActions[code];
+}
+
 export function shortAuthorityIdentity(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex').slice(0, 16);
 }
@@ -289,6 +300,7 @@ export function authorityErrorMeta(error: SessionAuthorityError): Record<string,
       : undefined,
     nextAction:
       error.details?.nextAction ??
+      errorNextActions[error.code] ??
       'Run rn_session with action "status" and repair the named authority axis.',
   };
 }
