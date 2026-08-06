@@ -4579,3 +4579,118 @@ test('a first authenticated child exchange that never completes fails typed inst
     rmSync(root, { force: true, recursive: true });
   }
 });
+
+test('orphaned package integration refuses instead of starting an unmanaged bundler', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-adapter-orphaned-'));
+  try {
+    const integrationRoot = join(root, '.rn-agent', 'integration');
+    const binRoot = join(root, 'bin');
+    const adapterPath = join(integrationRoot, 'rn-session-adapter.cjs');
+    const sessionCliPath = join(root, 'rn-session.cjs');
+    const bundlerStartedPath = join(root, 'bundler-started.json');
+    const abortPath = join(root, 'abort.jsonl');
+    mkdirSync(integrationRoot, { recursive: true });
+    mkdirSync(binRoot, { recursive: true });
+    writeFileSync(adapterPath, renderProjectAdapter(), { mode: 0o755 });
+    writeFileSync(
+      join(integrationRoot, 'rn-session-integration.json'),
+      JSON.stringify({
+        version: 1,
+        adapter: '.rn-agent/integration/rn-session-adapter.cjs',
+        sessionCli: sessionCliPath,
+        originalScripts: {
+          ios: ['npx', 'expo', 'run:ios'],
+          android: ['npx', 'expo', 'run:android'],
+        },
+      }),
+    );
+    writeFileSync(
+      sessionCliPath,
+      "const fs=require('node:fs');const args=process.argv.slice(2);if(args[0]==='prepare-build'){process.stderr.write('SESSION_AUTHORITY_REQUIRED: no live session matches this canonical worktree and app root\\n');process.exit(2);}fs.appendFileSync(process.env.ADAPTER_ABORT,JSON.stringify({args})+'\\n');process.stdout.write('{}\\n');",
+    );
+    writeFileSync(
+      join(binRoot, 'npx'),
+      "#!/usr/bin/env node\nconst fs=require('node:fs');const net=require('node:net');const server=net.createServer();server.listen(0,'127.0.0.1',()=>{fs.writeFileSync(process.env.BUNDLER_STARTED,JSON.stringify({pid:process.pid,port:server.address().port,args:process.argv.slice(2)}));});setInterval(()=>{},1000);\n",
+    );
+    chmodSync(join(binRoot, 'npx'), 0o755);
+
+    // A regression re-spawns the original script and blocks the adapter in spawnSync, where
+    // its own SIGTERM handler can never run. File-backed stdio plus SIGKILL keep that a
+    // failed assertion rather than a hung test run.
+    const logPath = join(root, 'adapter.log');
+    const logFd = openSync(logPath, 'a');
+    let result;
+    try {
+      result = spawnSync(process.execPath, [adapterPath, 'ios'], {
+        cwd: root,
+        encoding: 'utf8',
+        timeout: 30_000,
+        killSignal: 'SIGKILL',
+        stdio: ['ignore', logFd, logFd],
+        env: {
+          ...process.env,
+          PATH: `${binRoot}:${process.env.PATH}`,
+          ADAPTER_ABORT: abortPath,
+          BUNDLER_STARTED: bundlerStartedPath,
+        },
+      });
+    } finally {
+      closeSync(logFd);
+    }
+    const output = readFileSync(logPath, 'utf8');
+
+    assert.equal(
+      result.error,
+      undefined,
+      `the adapter must return without hitting the deadline: ${output}`,
+    );
+    assert.equal(result.status, 2, output);
+    assert.match(output, /SESSION_AUTHORITY_REQUIRED/);
+    assert.match(output, /no live session owns this worktree/);
+    assert.match(output, /rn_session\(action="restore_integration", confirmed=true\)/);
+    assert.equal(
+      existsSync(bundlerStartedPath),
+      false,
+      'a refused build must never start an unmanaged bundler',
+    );
+    assert.equal(
+      existsSync(abortPath),
+      false,
+      'no build capability was ever published, so nothing may be aborted',
+    );
+  } finally {
+    if (existsSync(join(root, 'bundler-started.json'))) {
+      const leaked = JSON.parse(readFileSync(join(root, 'bundler-started.json'), 'utf8')) as {
+        pid: number;
+      };
+      try {
+        process.kill(leaked.pid, 'SIGKILL');
+      } catch {}
+    }
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test('every stdio-capturing session-CLI wait in the adapter is bounded', () => {
+  const adapter = renderProjectAdapter();
+  const spawnBlocks = adapter
+    .split('spawnSync(')
+    .slice(1)
+    .map((block) => block.slice(0, block.indexOf('});')));
+
+  for (const block of spawnBlocks) {
+    if (block.includes("stdio: 'inherit'")) continue;
+    assert.match(
+      block,
+      /timeout:/,
+      `a stdio-capturing spawnSync must declare a timeout: ${block.slice(0, 120)}`,
+    );
+  }
+
+  assert.match(
+    adapter,
+    /failOnSessionCliError\(complete, 'complete-build'\)/,
+    'a timed-out complete-build must fail instead of reading as a truncated success',
+  );
+  assert.match(adapter, /SESSION_CLI_TIMEOUT/);
+});
