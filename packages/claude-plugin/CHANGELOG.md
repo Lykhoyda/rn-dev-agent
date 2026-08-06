@@ -1,5 +1,13 @@
 # rn-dev-agent-plugin
 
+## 0.74.2
+
+### Patch Changes
+
+- e4bf0c2: Make runner unbind release its exclusive claim and clear the runner binding in one atomic registry transaction, so an interrupted device close or reacquire can no longer leave a divergent store whose dead session permanently vetoes `adopt_stale` with `RUNNER_OWNERSHIP_MISMATCH` (GH #692).
+- Updated dependencies [e4bf0c2]
+  - rn-dev-agent-core@0.69.2
+
 ## 0.74.1
 
 ### Patch Changes
