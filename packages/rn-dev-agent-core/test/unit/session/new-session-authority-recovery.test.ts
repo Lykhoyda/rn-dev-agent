@@ -24,18 +24,44 @@ const AUTOMATIC_RELEASE_PROMISE =
 const ONLY_AVAILABLE_ACTION =
   'this session does not own this worktree; rn_session({ action: "status" }) is the only available action';
 
-const SESSION_ACTIONS = [
-  'status',
-  'preview_integration',
-  'accept_handoff',
-  'adopt_stale',
-  'release_stale_device',
-  'restore_integration',
-  'bind_device',
-  'bind_metro',
-  'recover_arbiter',
-  'stop_metro',
-] as const;
+/**
+ * Every `rn_session` action, with arguments valid enough that argument validation
+ * can never stand in for the ownership refusal. `recovery` marks the two actions
+ * routed through `requireRecovery` rather than `requireOperational`.
+ */
+const SESSION_ACTIONS: readonly {
+  action: string;
+  args?: Record<string, unknown>;
+  recovery?: true;
+}[] = [
+  { action: 'status' },
+  { action: 'preview_integration' },
+  { action: 'apply_integration' },
+  { action: 'restore_integration' },
+  { action: 'accept_handoff', args: { handoffId: 'handoff-1', token: 'handoff-token' }, recovery: true },
+  { action: 'adopt_stale', args: { adoptionHandle: 'adoption-handle' }, recovery: true },
+  {
+    action: 'release_stale_device',
+    args: { platform: 'ios', deviceId: 'sim-1', releaseHandle: 'release-handle' },
+  },
+  { action: 'bind_device', args: { platform: 'ios', deviceId: 'sim-1', appId: 'com.example.app' } },
+  {
+    action: 'bind_metro',
+    args: {
+      mode: 'external',
+      metroPort: 8300,
+      metroPid: 8301,
+      metroInstanceId: 'metro-instance',
+      buildGeneration: 1,
+    },
+  },
+  { action: 'pin_dev_client', args: { force: false } },
+  { action: 'prepare_handoff', args: { targetHandle: 'target-handle', ttlMs: 60_000 } },
+  { action: 'cancel_handoff', args: { handoffId: 'handoff-1' } },
+  { action: 'recover_arbiter', args: { confirmed: true } },
+  { action: 'stop_metro' },
+  { action: 'release' },
+];
 
 const roots: string[] = [];
 
@@ -284,16 +310,34 @@ test('R2: the refusal never names an action the blocked contender cannot reach',
   const runtime = runtimeFor(f, f.contender);
   const handler = createSessionHandler(runtime as never, { now: f.now });
 
+  const before = ownerSnapshot(f);
   const reachable = new Set<string>();
-  for (const action of SESSION_ACTIONS) {
-    const result = envelope(await handler({ action } as never));
-    if (result.ok) reachable.add(action);
+  for (const { action, args, recovery } of SESSION_ACTIONS) {
+    const result = envelope(await handler({ action, ...args } as never));
+    if (result.ok) {
+      reachable.add(action);
+      continue;
+    }
+    // Operational actions must be stopped by ownership itself, never by argument
+    // validation — that is what makes this table an invariant lock.
+    if (action !== 'status' && !recovery) {
+      assert.equal(
+        result.code,
+        'SESSION_AUTHORITY_REQUIRED',
+        `${action} must refuse on ownership, not on arguments`,
+      );
+    }
   }
   assert.deepEqual([...reachable], ['status'], 'exactly one rn_session action is reachable');
+  assert.equal(
+    ownerSnapshot(f),
+    before,
+    'no attempted action mutates owner state, claims, or the authority version',
+  );
 
   const refusal = envelope(await gatedRefusal(runtime, 'maestro_run')({ platform: 'ios' }));
   const message = String(refusal.error);
-  for (const action of SESSION_ACTIONS) {
+  for (const { action } of SESSION_ACTIONS) {
     if (reachable.has(action)) continue;
     assert.doesNotMatch(message, new RegExp(action), `refusal must not name ${action}`);
   }
@@ -359,13 +403,22 @@ test('R4: a refused startup cleanup is legible, and identifier-free, in the cont
 // with its serials, PIDs, and paths. None of that may survive the outcome boundary.
 test('R4b: a producer diagnostic never reaches the log, the journal, or public status', async () => {
   const leaks = [
-    { code: 'RESOURCE_CLAIM_CONFLICT', message: 'device:00008130-001A2B3C4D5E is held' },
+    {
+      code: 'RESOURCE_CLAIM_CONFLICT',
+      message: 'device:00008130-001A2B3C4D5E is held',
+      nextAction: 'Free device:00008130-001A2B3C4D5E, then retry.',
+    },
     {
       code: 'AUTOMATION_CLEANUP_UNPROVEN',
       message:
         'adb -s emulator-5554 shell am force-stop failed: pid 44219 (/Users/dev/Library/Logs/x)',
+      nextAction: 'Kill pid 44219 on emulator-5554 and clear /Users/dev/Library/Logs/x.',
     },
-    { code: 'STARTUP_CLEANUP_FAILED', message: 'ENOENT: /Users/dev/.rn-agent/state/secret.json' },
+    {
+      code: 'STARTUP_CLEANUP_FAILED',
+      message: 'ENOENT: /Users/dev/.rn-agent/state/secret.json',
+      nextAction: 'Recreate /Users/dev/.rn-agent/state/secret.json.',
+    },
   ];
 
   for (const leak of leaks) {
@@ -373,7 +426,10 @@ test('R4b: a producer diagnostic never reaches the log, the journal, or public s
     const outcome = await runStartupOwnerCleanup(cleanupInput(f), {
       ...executorDeps(),
       stopBoundRunner: async () => {
-        throw Object.assign(new SessionAuthorityError(leak.code, leak.message), {});
+        // A producer-authored remedy is exactly as untrusted as the reason.
+        throw new SessionAuthorityError(leak.code, leak.message, undefined, {
+          nextAction: leak.nextAction,
+        });
       },
     });
     assert.equal(outcome.status, 'refused');

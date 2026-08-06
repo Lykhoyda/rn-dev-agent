@@ -67,6 +67,13 @@ $rn-dev-agent:run-action mark-all-done --no-auto-repair    # surface the raw fai
    - **1 match**: continue to step 3.
 
 3. **Pre-flight safety checks** before replay:
+   - **Ownership first.** Call `rn_session({action: "status"})` and evaluate
+     ownership before any other check. **If `state` is `blocked`, stop before
+     replaying.** Report `recoveryRequirement.nextAction` verbatim (plus
+     `startupCleanupBlocked` when status carries it) and do nothing else —
+     never retry the replay, never bind another device, never rebind to reach
+     a ready session, never run setup to work around it. Full contract: the
+     `using-rn-dev-agent` skill section "Session ownership recovery".
    - **Read the flow file** and look for a `mutates: true` or
      `destructive: true` line in the metadata header (per the schema in
      `skills/rn-testing/SKILL.md` § "Reusable Action Metadata Schema (M7)"). If present,
@@ -74,16 +81,10 @@ $rn-dev-agent:run-action mark-all-done --no-auto-repair    # surface the raw fai
      Mention that destructive flows can create duplicate backend rows when
      replayed multiple times — suggest using a timestamp-suffixed TITLE
      parameter or running with `--dry-run` first.
-   - Call `rn_session({action: "status"})`. Require one ready session, and
+   - Only once the session is not `blocked`: require one ready session, and
      check the flow's `appId:` and optional platform against its exact app and
      platform bindings. A mismatch is not repairable by choosing another
      booted device; stop and rebind the intended session.
-   - **If `state` is `blocked`, stop before replaying.** Report
-     `recoveryRequirement.nextAction` verbatim (plus `startupCleanupBlocked`
-     when status carries it) and do nothing else — never retry the replay,
-     never bind another device, never run setup to work around it. Full
-     contract: the `using-rn-dev-agent` skill section "Session ownership
-     recovery".
    - **Validate `-e` parameters cover the flow's `${VAR}` placeholders**:
      parse `${...}` from the flow body; report any unset placeholders and
      refuse to run unless the user confirms (Maestro will fail at runtime

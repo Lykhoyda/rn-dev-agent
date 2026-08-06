@@ -188,18 +188,20 @@ const GENERIC_REFUSAL_REMEDY = 'Startup cleanup refused and preserved the prior 
  * The outcome is the single boundary where a refusal becomes durable — journaled on
  * the dead owner's row, projected into the contender's public status, and written to
  * the supervisor's startup diagnostics. Raw producer diagnostics are never persisted
- * past it: the typed code always survives, an authored reason survives only when it
- * is provably identifier-free, and every refusal keeps an actionable remedy.
+ * past it: the typed code always survives, an authored reason and its remedy survive
+ * only together and only when the reason is provably identifier-free, and every
+ * refusal keeps an actionable remedy.
  */
 function publicRefusal(refusal) {
     // `SessionAuthorityError` renders as `CODE: sentence`; the code travels separately.
     const sentence = refusal.message.replace(/^[A-Z][A-Z0-9_]+: /, '');
+    const authored = PUBLIC_REFUSAL_REASONS.has(sentence);
     return {
         code: refusal.code,
-        message: PUBLIC_REFUSAL_REASONS.has(sentence)
+        message: authored
             ? sentence
             : `startup cleanup refused with ${refusal.code} and preserved the prior owner binding`,
-        nextAction: refusal.nextAction ?? GENERIC_REFUSAL_REMEDY,
+        nextAction: authored ? (refusal.nextAction ?? GENERIC_REFUSAL_REMEDY) : GENERIC_REFUSAL_REMEDY,
     };
 }
 function refusalOf(error) {

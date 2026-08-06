@@ -27,7 +27,7 @@ node "${CLAUDE_PLUGIN_ROOT}/rn-dev-agent-core/dist/learned-actions.js" --json --
   --workspace-root "$PWD" --memory-cwd "$PWD" --filter <keyword>
 ```
 
-(or `/rn-dev-agent:list-learned-actions <keyword>`). If a match covers the goal, replay it. If a near-match exists (same flow, hardcoded values), parameterise THAT action with `${VAR}` placeholders rather than creating a sibling — duplicate actions rot independently and split the repair history.
+(or `/rn-dev-agent:list-learned-actions <keyword>`). Listing is read-only and grants no replay authority: if a match covers the goal, run the Step 6 ownership pre-flight first — call `rn_session({action: "status"})`, and if `state` is `blocked`, stop and follow `recoveryRequirement.nextAction` verbatim instead of replaying. Only then replay the match. If a near-match exists (same flow, hardcoded values), parameterise THAT action with `${VAR}` placeholders rather than creating a sibling — duplicate actions rot independently and split the repair history.
 
 ## Step 1 — Pick the Creation Path
 
@@ -148,8 +148,15 @@ After any later auto-repair or manual selector edit, **update the embedded diagr
 
 ## Step 7 — When a Replay Fails (repair & troubleshoot)
 
-A saved action that stops passing is usually **UI drift**, not a broken
-feature. Diagnose in this order:
+**Rule out an ownership refusal before diagnosing drift.** Call
+`rn_session({action: "status"})`: if `state` is `blocked`, the failure is
+`SESSION_AUTHORITY_REQUIRED`, not UI drift, and no selector edit or repair can
+fix it — stop, follow `recoveryRequirement.nextAction` verbatim (same
+pre-flight as Step 6), then re-read status before any further replay. Full
+contract: `using-rn-dev-agent` skill § "Session ownership recovery".
+
+Otherwise a saved action that stops passing is usually **UI drift**, not a
+broken feature. Diagnose in this order:
 
 1. **Read the `RunRecord.autoRepair` outcome** from the `cdp_run_action`
    result: `passed` (repaired + green — review the patched selector, update

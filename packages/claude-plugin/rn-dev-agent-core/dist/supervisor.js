@@ -86454,10 +86454,11 @@ var PUBLIC_REFUSAL_REASONS = /* @__PURE__ */ new Set([
 var GENERIC_REFUSAL_REMEDY = "Startup cleanup refused and preserved the prior owner binding. Resolve the refusal named by this code, then restart the MCP transport; another restart alone does not release the owner.";
 function publicRefusal(refusal) {
   const sentence = refusal.message.replace(/^[A-Z][A-Z0-9_]+: /, "");
+  const authored = PUBLIC_REFUSAL_REASONS.has(sentence);
   return {
     code: refusal.code,
-    message: PUBLIC_REFUSAL_REASONS.has(sentence) ? sentence : `startup cleanup refused with ${refusal.code} and preserved the prior owner binding`,
-    nextAction: refusal.nextAction ?? GENERIC_REFUSAL_REMEDY
+    message: authored ? sentence : `startup cleanup refused with ${refusal.code} and preserved the prior owner binding`,
+    nextAction: authored ? refusal.nextAction ?? GENERIC_REFUSAL_REMEDY : GENERIC_REFUSAL_REMEDY
   };
 }
 function refusalOf(error2) {
