@@ -16,9 +16,14 @@ const ONBOARDED_CLAUDE_MD = [
   '<!-- rn-dev-agent:template-end -->',
   '',
 ].join('\n');
+const INTEGRATED_PACKAGE_JSON = {
+  name: 'app',
+  scripts: { ios: 'node .rn-agent/integration/rn-session-adapter.cjs ios' },
+};
 
 interface ProjectSpec {
   packageJson?: Record<string, unknown> | null;
+  packageJsonRaw?: string;
   lockfile?: string;
   lockfiles?: string[];
   nodeModules?: boolean;
@@ -31,7 +36,10 @@ interface ProjectSpec {
 function makeProject(spec: ProjectSpec): string {
   const root = mkdtempSync(join(tmpdir(), 'workflow-check-'));
   if (spec.packageJson !== null) {
-    writeFileSync(join(root, 'package.json'), JSON.stringify(spec.packageJson ?? { name: 'app' }));
+    writeFileSync(
+      join(root, 'package.json'),
+      spec.packageJsonRaw ?? JSON.stringify(spec.packageJson ?? { name: 'app' }),
+    );
   }
   if (spec.lockfile) writeFileSync(join(root, spec.lockfile), '');
   for (const lockfile of spec.lockfiles ?? []) writeFileSync(join(root, lockfile), '');
@@ -152,6 +160,29 @@ test('preflight accepts multiple lockfiles for the same package manager', () => 
   rmSync(root, { recursive: true, force: true });
 });
 
+test('preflight rejects malformed package.json before lockfile inference', () => {
+  const root = makeProject({ packageJsonRaw: '{', lockfile: 'yarn.lock' });
+  const { result, body } = run(['preflight', '--project', root]);
+  assert.equal(result.status, 3);
+  assert.equal(stopCode(body), 'PROJECT_MANIFEST_INVALID');
+  assert.equal(facts(body).packageManager, null);
+  assert.equal(facts(body).packageManagerSource, null);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test('preflight rejects an unsupported packageManager before lockfile inference', () => {
+  const root = makeProject({
+    packageJson: { name: 'app', packageManager: 'volta@2.0.2' },
+    lockfile: 'yarn.lock',
+  });
+  const { result, body } = run(['preflight', '--project', root]);
+  assert.equal(result.status, 3);
+  assert.equal(stopCode(body), 'PACKAGE_MANAGER_UNSUPPORTED');
+  assert.equal(facts(body).packageManager, null);
+  assert.equal(facts(body).packageManagerSource, null);
+  rmSync(root, { recursive: true, force: true });
+});
+
 test('preflight stops when neither packageManager field nor lockfile exists', () => {
   const root = makeProject({});
   const { result, body } = run(['preflight', '--project', root]);
@@ -218,12 +249,7 @@ test('output never leaks absolute project or home paths', () => {
 });
 
 test('postflight stops while package.json still carries the session integration', () => {
-  const root = makeProject({
-    packageJson: {
-      name: 'app',
-      scripts: { ios: 'node .rn-agent/integration/rn-session-adapter.cjs ios' },
-    },
-  });
+  const root = makeProject({ packageJson: INTEGRATED_PACKAGE_JSON });
   const { result, body } = run(['postflight', '--project', root]);
   assert.equal(result.status, 3);
   assert.equal(stopCode(body), 'INTEGRATION_NOT_RESTORED');
@@ -259,7 +285,7 @@ test('postflight passes a clean project and reports recording residue as a fact'
 });
 
 test('postflight surfaces outstanding authority from a provided status projection in reverse-cleanup order', () => {
-  const root = makeProject({});
+  const root = makeProject({ packageJson: INTEGRATED_PACKAGE_JSON });
   const statusFile = join(root, 'status.json');
   writeFileSync(statusFile, JSON.stringify(statusEnvelope('running', true, true, true)));
   const runnerFirst = run(['postflight', '--project', root, '--status-file', statusFile]);
@@ -274,13 +300,13 @@ test('postflight surfaces outstanding authority from a provided status projectio
   assert.equal(stopCode(recorderLast.body), 'RECORDER_CLAIM_OUTSTANDING');
 
   writeFileSync(statusFile, JSON.stringify(statusEnvelope('closing', false, false, false)));
-  const clean = run(['postflight', '--project', root, '--status-file', statusFile]);
-  assert.equal(clean.result.status, 0);
+  const integrationLast = run(['postflight', '--project', root, '--status-file', statusFile]);
+  assert.equal(stopCode(integrationLast.body), 'INTEGRATION_NOT_RESTORED');
   rmSync(root, { recursive: true, force: true });
 });
 
 test('postflight stops when the provided status is not the canonical public envelope', () => {
-  const root = makeProject({});
+  const root = makeProject({ packageJson: INTEGRATED_PACKAGE_JSON });
   const statusFile = join(root, 'status.json');
   writeFileSync(statusFile, JSON.stringify({ state: 'closing', runtime: {}, automation: {} }));
   const { result, body } = run(['postflight', '--project', root, '--status-file', statusFile]);

@@ -6,6 +6,11 @@ import { inspectPackageIntegrationFileState } from './session/package-integratio
 import { getStateDir } from './util/secure-state-file.js';
 
 type PackageManagerName = 'pnpm' | 'yarn' | 'npm' | 'bun';
+type PackageManagerDeclaration =
+  | { kind: 'absent' }
+  | { kind: 'declared'; manager: PackageManagerName }
+  | { kind: 'invalid-manifest' }
+  | { kind: 'unsupported' };
 
 interface Stop {
   code: string;
@@ -77,20 +82,31 @@ function stateRootFacts(): { resolved: boolean; kind: 'xdg' | 'darwin' | 'home' 
   return { resolved: getStateDir().length > 0, kind };
 }
 
-function detectPackageManagerField(projectRoot: string): PackageManagerName | null {
-  const raw = readTextIfFile(path.join(projectRoot, 'package.json'));
-  if (raw === null) return null;
+function isPackageManagerName(value: string): value is PackageManagerName {
+  return value === 'pnpm' || value === 'yarn' || value === 'npm' || value === 'bun';
+}
+
+function detectPackageManagerField(raw: string): PackageManagerDeclaration {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    return null;
+    return { kind: 'invalid-manifest' };
   }
-  const field = (parsed as { packageManager?: unknown }).packageManager;
-  if (typeof field !== 'string') return null;
-  const name = field.split('@')[0];
-  if (name === 'pnpm' || name === 'yarn' || name === 'npm' || name === 'bun') return name;
-  return null;
+  if (!isRecord(parsed)) return { kind: 'invalid-manifest' };
+  if (!Object.hasOwn(parsed, 'packageManager')) return { kind: 'absent' };
+  const field = parsed.packageManager;
+  if (typeof field !== 'string') return { kind: 'unsupported' };
+  const separator = field.indexOf('@');
+  const name = separator === -1 ? field : field.slice(0, separator);
+  const version = separator === -1 ? null : field.slice(separator + 1);
+  if (
+    !isPackageManagerName(name) ||
+    (version !== null && (version.length === 0 || /[@\s]/.test(version)))
+  ) {
+    return { kind: 'unsupported' };
+  }
+  return { kind: 'declared', manager: name };
 }
 
 function detectLockfiles(
@@ -109,7 +125,8 @@ function nodeModulesPresent(projectRoot: string): boolean {
 }
 
 function preflight(projectRoot: string): { facts: PreflightFacts; stop: Stop | null } {
-  if (readTextIfFile(path.join(projectRoot, 'package.json')) === null) {
+  const packageJson = readTextIfFile(path.join(projectRoot, 'package.json'));
+  if (packageJson === null) {
     return {
       facts: emptyPreflight(),
       stop: {
@@ -119,10 +136,11 @@ function preflight(projectRoot: string): { facts: PreflightFacts; stop: Stop | n
     };
   }
 
-  const field = detectPackageManagerField(projectRoot);
+  const declaration = detectPackageManagerField(packageJson);
+  const field = declaration.kind === 'declared' ? declaration.manager : null;
   const locks = detectLockfiles(projectRoot);
   const lockManagers = new Set(locks.map((lock) => lock.manager));
-  const inferredLock = lockManagers.size === 1 ? locks[0] : null;
+  const inferredLock = declaration.kind === 'absent' && lockManagers.size === 1 ? locks[0] : null;
   const claudeMd = readTextIfFile(path.join(projectRoot, 'CLAUDE.md'));
   const claudeMdBlock =
     claudeMd !== null && claudeMd.includes(TEMPLATE_HEADING) ? 'present' : 'absent';
@@ -138,6 +156,25 @@ function preflight(projectRoot: string): { facts: PreflightFacts; stop: Stop | n
     stateRoot: stateRootFacts(),
   };
 
+  if (declaration.kind === 'invalid-manifest') {
+    return {
+      facts,
+      stop: {
+        code: 'PROJECT_MANIFEST_INVALID',
+        action: 'package.json is not valid JSON; repair it before package-manager inference.',
+      },
+    };
+  }
+  if (declaration.kind === 'unsupported') {
+    return {
+      facts,
+      stop: {
+        code: 'PACKAGE_MANAGER_UNSUPPORTED',
+        action:
+          'package.json has an unsupported or unparseable "packageManager" value; use pnpm, yarn, npm, or bun before installing.',
+      },
+    };
+  }
   const conflictingLocks = field === null ? [] : locks.filter((lock) => lock.manager !== field);
   if (conflictingLocks.length > 0) {
     return {
@@ -287,16 +324,6 @@ function postflight(
     session: status.session,
   };
 
-  if (facts.integrationMarkersPresent) {
-    return {
-      facts,
-      stop: {
-        code: 'INTEGRATION_NOT_RESTORED',
-        action:
-          'package.json still carries the session integration; run rn_session restore_integration (confirmed: true) after stop_metro, then release.',
-      },
-    };
-  }
   if (status.stop) return { facts, stop: status.stop };
   if (facts.session.provided && facts.session.runnerBound) {
     return {
@@ -325,6 +352,16 @@ function postflight(
         code: 'RECORDER_CLAIM_OUTSTANDING',
         action:
           'A recorder claim is still held; stop the recording through device_record so the claim is released.',
+      },
+    };
+  }
+  if (facts.integrationMarkersPresent) {
+    return {
+      facts,
+      stop: {
+        code: 'INTEGRATION_NOT_RESTORED',
+        action:
+          'Package integration residue remains; run rn_session restore_integration (confirmed: true) after stop_metro, then release.',
       },
     };
   }

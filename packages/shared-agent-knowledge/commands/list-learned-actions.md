@@ -74,9 +74,9 @@ JSON shape (abridged):
       ]
     },
     "skeletons": { "count": 1, "items": [...] },
-    "commands": { "count": 15, "items": [...] }
+    "commands": { "count": 16, "items": [...] }
   },
-  "total": 17
+  "total": 18
 }
 ```
 

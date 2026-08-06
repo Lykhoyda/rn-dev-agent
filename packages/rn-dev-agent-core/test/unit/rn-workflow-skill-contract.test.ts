@@ -83,6 +83,12 @@ test('every host copy carries the reconciled Step 2a recovery contract', () => {
     assert.ok(/at most ONE transport restart per\s+identical blocked projection/.test(skill));
     assert.ok(skill.includes('SESSION_AUTHORITY_REQUIRED'));
     assert.ok(skill.includes('re-read `rn_session status`'));
+    assert.match(skill, /fresh\s+non-blocked operational projection/);
+    assert.ok(skill.includes('for example `source_bound`'));
+    assert.ok(skill.includes('PROJECT_MANIFEST_INVALID'));
+    assert.ok(skill.includes('PACKAGE_MANAGER_UNSUPPORTED'));
+    assert.doesNotMatch(skill, /or any not-ready projection/);
+    assert.doesNotMatch(skill, /require the\s+ready projection/);
   }
 });
 

@@ -77,6 +77,8 @@ actionable `stop`.
   you prefer; never install for a project that declares neither field nor
   lockfile (`PACKAGE_MANAGER_UNDECLARED` is the user's to resolve).
 - `PACKAGE_MANAGER_CONFLICT` → surface both facts and stop; do not guess.
+- `PROJECT_MANIFEST_INVALID` / `PACKAGE_MANAGER_UNSUPPORTED` → surface the
+  manifest defect and stop; lockfiles never override an invalid declaration.
 - If the checker binary is absent (older installed plugin), perform the same
   reads manually with the same stop rules — the contract does not change.
 
@@ -96,12 +98,13 @@ beyond what `status` itself projects.
 
 ### Step 2a — Classify prior ownership; follow only the typed recovery
 
-If `status` reports `state: blocked` (or any not-ready projection), classify
-using ONLY its `recoveryRequirement` — **status is the sole reachable
-classifier**. From a blocked contender every other `rn_session` action
-refuses, and gated-tool refusal text may lag the current session model, so
-never take a remedy list from a refusal message and never probe
-`device_*`/`maestro_run`/`cdp_run_action` "to see what happens".
+If `status` reports `state: blocked`, classify using ONLY its
+`recoveryRequirement` — **status is the sole reachable classifier**. A fresh
+non-blocked operational projection proceeds directly to Step 3. From a blocked
+contender every other `rn_session` action refuses, and gated-tool refusal text
+may lag the current session model, so never take a remedy list from a refusal
+message and never probe `device_*`/`maestro_run`/`cdp_run_action` "to see what
+happens".
 
 | `recoveryRequirement` | Prior owner | The ONLY next action |
 |---|---|---|
@@ -115,9 +118,10 @@ Rules, non-negotiable:
 
 1. Follow `recoveryRequirement.nextAction` **verbatim** — one typed action per
    status read.
-2. After ANY recovery action, **re-read `rn_session status` and require the
-   ready projection** before anything authority-consuming. Never chain two
-   recovery mutations without a fresh status read between them.
+2. After ANY recovery action, **re-read `rn_session status` and require a fresh
+   non-blocked operational projection** (for example `source_bound`) before
+   Step 3. Never chain two recovery mutations without a fresh status read
+   between them.
 3. **Bounded non-convergence stop:** at most ONE transport restart per
    identical blocked projection. If the same projection recurs after following
    the prescribed remedy, stop and report the observed non-convergence with
@@ -206,6 +210,7 @@ silence.
 | Stop | Meaning | You may |
 |---|---|---|
 | `PROJECT_NOT_ONBOARDED` | No injected instruction block | Route to `$rn-dev-agent:setup` |
+| `PROJECT_MANIFEST_INVALID` / `PACKAGE_MANAGER_UNSUPPORTED` | Manifest cannot grant package-manager authority | Repair `package.json`; never infer from lockfiles |
 | `PACKAGE_MANAGER_CONFLICT` / `_UNDECLARED` | Ambiguous install authority | Report both facts; user resolves |
 | `attach` (live/unknown owner) | Another session owns the worktree | Close it or use another worktree |
 | Non-convergent `transport-restart` | Startup cleanup is refusing | Report the manual remedy facts |
