@@ -1,5 +1,4 @@
-// L2: the worker wires assertAuthorityProfilesExhaustive into startup, so an
-// unprofiled registered tool must kill the boot before any request is served.
+// An unprofiled registered tool must stop worker boot before any request is served.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { appendFile, cp, mkdir, mkdtemp, rm } from 'node:fs/promises';
@@ -11,8 +10,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const BRIDGE = resolve(__dirname, '../..');
 
 async function stageWorker() {
-  // Staged under the gitignored test-results/ so the copied dist resolves its
-  // dependencies through the same node_modules chain as the real dist.
+  // This location lets copied dist resolve dependencies through the real dist's chain.
   await mkdir(join(BRIDGE, 'test-results'), { recursive: true });
   const tmp = await mkdtemp(join(BRIDGE, 'test-results', 'profile-guard-'));
   await cp(resolve(BRIDGE, 'dist'), join(tmp, 'dist'), { recursive: true });
@@ -63,8 +61,7 @@ test(
   { timeout: 120_000 },
   async () => {
     const tmp = await stageWorker();
-    // The registration surface is untouched; deleting one profile entry from the
-    // staged copy makes `observe` a registered-but-unprofiled tool at boot.
+    // Deleting one staged profile makes `observe` registered but unprofiled at boot.
     await appendFile(join(tmp, 'dist/session/tool-profiles.js'), "\nprofiles.delete('observe');\n");
     let s: ReturnType<typeof startSupervisor> | null = null;
     try {

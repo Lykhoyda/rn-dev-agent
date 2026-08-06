@@ -72,7 +72,7 @@ If marker signing is unavailable, Metro may emit an unsigned `unavailable` marke
 
 ## Tool authority
 
-All published tools have an exhaustive profile. Session-bound arguments omitted by legacy callers are filled only from the current session; a conflicting platform, device, app, port, or target returns a named authority error.
+All published tools have an exhaustive authority profile, and worker startup validates the complete registered tool surface before accepting requests. Profile bookkeeping follows the same four ownership groups exposed by session status: Session resolves controller and source authority, Target adds device and install authority, Runtime adds Metro and bundle authority plus the independently verified app-to-device association, and Automation adds runner authority. Individual tools retain narrower resolved profiles where their operation does not need every facet. Session-bound arguments omitted by legacy callers are filled only from the current session; a conflicting platform, device, app, port, or target returns a named authority error.
 
 Native runner reads and mutations use the exact install, Metro, device, and capability-authenticated runner identities, then prove that the bound app and device still appear on the authority-bound Metro's live target list. Cached native evidence can be consumed later only while its platform-specific runner and app-to-Metro origin remain live and authoritative. This origin check does not require a live CDP debugger seat. CDP reads and mutations additionally require the exact signed bundle target.
 

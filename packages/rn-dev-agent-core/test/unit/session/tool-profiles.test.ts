@@ -23,10 +23,7 @@ interface GoldenProfile {
   liveBundleProbe: boolean;
 }
 
-// Golden before/after resolved-facet table. Values were captured from the
-// pre-regroup ten-axis bookkeeping at main 5e37f164; the grouped bookkeeping
-// must resolve every registered tool (and each special-cased argument shape)
-// to exactly this facet set — no tool may silently gain or lose a facet.
+// Captured before regrouping; every tool and argument-shaped special case must remain exact.
 const GOLDEN: Record<string, GoldenProfile> = {
   cdp_auto_login: { kind: 'authoritative', axes: 'CSIMBDR', mutation: true, liveBundleProbe: true },
   cdp_component_state: {
