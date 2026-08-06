@@ -83005,14 +83005,14 @@ function unbindNativeRunner(runtime, beforeRelease) {
   if (runner.platform === "ios" || runner.platform === "android") {
     beforeRelease?.(runner.platform);
   }
-  registry2.releaseResources(session2, [
-    {
-      type: "runner",
-      key: `${String(runner.platform)}:${String(runner.deviceId)}:${String(runner.port)}`
-    }
-  ]);
   registry2.updateBindings(session2, {
     state: status.bindings.bundle ? "ready" : "device_bound",
+    releaseResources: [
+      {
+        type: "runner",
+        key: `${String(runner.platform)}:${String(runner.deviceId)}:${String(runner.port)}`
+      }
+    ],
     bindings: { runner: null }
   });
 }

@@ -57,14 +57,17 @@ export function unbindNativeRunner(runtime, beforeRelease) {
     if (runner.platform === 'ios' || runner.platform === 'android') {
         beforeRelease?.(runner.platform);
     }
-    registry.releaseResources(session, [
-        {
-            type: 'runner',
-            key: `${String(runner.platform)}:${String(runner.deviceId)}:${String(runner.port)}`,
-        },
-    ]);
+    // GH #692: release the claim and clear the binding in one registry transaction;
+    // a death between two separate commits left a claim/binding split that no later
+    // adoption could pass.
     registry.updateBindings(session, {
         state: status.bindings.bundle ? 'ready' : 'device_bound',
+        releaseResources: [
+            {
+                type: 'runner',
+                key: `${String(runner.platform)}:${String(runner.deviceId)}:${String(runner.port)}`,
+            },
+        ],
         bindings: { runner: null },
     });
 }
