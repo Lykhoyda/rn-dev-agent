@@ -1,5 +1,16 @@
 # rn-dev-agent-plugin
 
+## 0.73.0
+
+### Minor Changes
+
+- 5365f82: Make Observe a read-only child of the session: `observe start` and `restart` now require only the live session (matching autostart's degraded mode) instead of the full device/Metro/bundle/runner authority chain, while the observe-port claim, capability and instance request authentication, fenced stop/cleanup chain, and the full authority gates on the E2E run and action panels all stay exactly as before.
+
+### Patch Changes
+
+- Updated dependencies [5365f82]
+  - rn-dev-agent-core@0.68.0
+
 ## 0.72.0
 
 ### Minor Changes
