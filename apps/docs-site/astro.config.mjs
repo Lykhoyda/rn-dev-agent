@@ -102,6 +102,7 @@ export default defineConfig({
               collapsed: false,
               items: [
                 { label: 'Overview', slug: 'commands' },
+                { label: 'run-workflow', slug: 'commands/run-workflow' },
                 { label: 'rn-feature-dev', slug: 'commands/rn-feature-dev' },
                 { label: 'test-feature', slug: 'commands/test-feature' },
                 { label: 'build-and-test', slug: 'commands/build-and-test' },
