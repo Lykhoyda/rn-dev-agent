@@ -232,11 +232,7 @@ function verifiedDeadOwnerManifestSource(
   );
 }
 
-/**
- * F2 part 1: keep the refusal on the dead owner's journal so the blocked contender's
- * `status` can name it. Best-effort by design — a refusal that predates the journal
- * (live or unproven owner) has nowhere to land and must not become a second failure.
- */
+/** Best-effort because an early refusal may predate the cleanup journal. */
 function retainRefusal(
   registry: SessionRegistry,
   prior: SessionRef,
@@ -249,7 +245,7 @@ function retainRefusal(
       ...(refusal.nextAction ? { nextAction: refusal.nextAction } : {}),
     });
   } catch {
-    // The refusal itself is still returned to the caller.
+    // The original refusal remains authoritative.
   }
 }
 

@@ -102,8 +102,7 @@ test('blocked worker runtime exposes only capability-bound recovery', () => {
 
   try {
     assert.equal(runtime.status().state, 'blocked');
-    // F1: the refusal names only the action this session can actually reach, and
-    // carries its own measured recovery requirement rather than a fixed remedy list.
+    // The refusal names the reachable diagnostic and carries the measured remedy.
     assert.throws(
       () => runtime.requireOperational(),
       /rn_session\(\{ action: "status" \}\) is the only available action/,

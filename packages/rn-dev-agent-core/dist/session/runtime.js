@@ -32,12 +32,7 @@ export class WorkerAuthorityRuntime {
         }
         return available;
     }
-    /**
-     * F1: the refusal every gated tool shares. It names only `status` — the one action
-     * reachable from every contender model — and carries this session's own measured
-     * `recoveryRequirement.nextAction`, so it can never advertise a remedy the current
-     * schema does not expose.
-     */
+    /** Gated refusals carry the current session's measured recovery next action. */
     blockedContenderError() {
         const nextAction = this.inspectRecoveryRequirement()?.nextAction;
         return new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', BLOCKED_CONTENDER_REFUSAL, undefined, nextAction ? { nextAction } : undefined);

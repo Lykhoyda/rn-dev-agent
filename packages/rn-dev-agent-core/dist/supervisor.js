@@ -87,8 +87,7 @@ else {
                 process.stderr.write(`rn-dev-agent startup cleanup: released ${cleanup.released.length} proven-dead session(s) for this worktree\n`);
             }
             if (cleanup.status === 'refused' && cleanup.refusal) {
-                // F2 part 1: the message and nextAction are already redacted for this purpose,
-                // and they are the only statement of what a bare restart will not fix.
+                // These already-redacted details explain why a restart will not converge.
                 process.stderr.write(`rn-dev-agent startup cleanup deferred: ${cleanup.refusal.code}: ${cleanup.refusal.message}\n`);
                 if (cleanup.refusal.nextAction) {
                     process.stderr.write(`rn-dev-agent startup cleanup next action: ${cleanup.refusal.nextAction}\n`);

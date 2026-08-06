@@ -21393,13 +21393,7 @@ var init_registry = __esm({
           return { resumed: false, obligations, integration };
         });
       }
-      /**
-       * F2 part 1: retain the already-redacted refusal that stopped an in-progress startup
-       * cleanup on the dead owner's own journal. It grants nothing — the refusal is the
-       * same one the caller just received — but it is what makes the dead end legible to
-       * the contender's `status`. Re-recording an identical refusal is a no-op, so a
-       * deterministic refusal stays byte-stable across repeated restarts.
-       */
+      /** Re-recording an identical cleanup refusal is a no-op across repeated restarts. */
       recordStartupCleanupRefusal(prior, refusal) {
         const now = this.#now();
         this.#transaction(() => {
@@ -66984,8 +66978,7 @@ function projectPublicAuthorityStatus(status, options = {}) {
         nextAction: cleanupNextAction
       }
     } : {},
-    // F2 part 2: a retained startup-cleanup refusal is the real blocker behind a
-    // dead-owner contender. Identifier-free, matching the staleDeviceCleanup discipline.
+    // Retained cleanup refusals follow the identifier-free staleDeviceCleanup discipline.
     ...options.recoveryRequirement?.startupCleanupBlocked ? {
       startupCleanupBlocked: {
         code: options.recoveryRequirement.startupCleanupBlocked.code,
@@ -76040,12 +76033,7 @@ var init_runtime = __esm({
         }
         return available;
       }
-      /**
-       * F1: the refusal every gated tool shares. It names only `status` — the one action
-       * reachable from every contender model — and carries this session's own measured
-       * `recoveryRequirement.nextAction`, so it can never advertise a remedy the current
-       * schema does not expose.
-       */
+      /** Gated refusals carry the current session's measured recovery next action. */
       blockedContenderError() {
         const nextAction = this.inspectRecoveryRequirement()?.nextAction;
         return new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", BLOCKED_CONTENDER_REFUSAL, void 0, nextAction ? { nextAction } : void 0);

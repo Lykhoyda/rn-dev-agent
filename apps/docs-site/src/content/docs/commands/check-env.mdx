@@ -31,7 +31,8 @@ from an ambient port or the first available device.
 | Status | Suggested fix |
 |--------|--------------|
 | `NON_GIT_MANIFEST_REQUIRED` | Export `RN_DEV_AGENT_DECLARED_ROOT` and `RN_DEV_AGENT_DECLARED_MANIFESTS` for the non-Git app root, then restart the supervisor. See [parallel session authority](/rn-dev-agent/session-authority/) |
-| Session missing or not ready | Run setup, review/apply the integration preview, and bind the intended device and app |
+| Session `state: blocked` | Stop and follow `recoveryRequirement.nextAction`; do not run setup or bind another device. See [parallel session authority](../../session-authority/). |
+| Session missing or genuinely unbound | Run setup, review/apply the integration preview, and bind the intended device and app |
 | Metro not found | Use literal `pnpm ios` or `pnpm android` through the confirmed integration |
 | No Hermes target | Open the bound app, then call `cdp_connect` for the exact signed target |
 | CDP code 1006 | Close React Native DevTools, Flipper, or Chrome DevTools |

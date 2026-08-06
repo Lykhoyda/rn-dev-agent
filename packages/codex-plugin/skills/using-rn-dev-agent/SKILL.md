@@ -267,9 +267,11 @@ filesystem scan and grants no replay authority — but every authoritative tool
 (`cdp_run_action`, `maestro_run`, `device_*`, gated `cdp_*`) refuses with
 `SESSION_AUTHORITY_REQUIRED` until ownership is resolved.
 
-`rn_session({action: "status"})` is the only action a blocked session can reach,
-and the only surface that names the remedy. Read `recoveryRequirement` and follow
-its `nextAction` verbatim:
+`rn_session({action: "status"})` is the one action every blocked session can
+reach and the canonical recovery surface. Its `recoveryRequirement` owns the
+remedy; gated refusals carry the same measured `nextAction`. Follow it verbatim.
+Legacy sessions may expose the capability-bound adoption action named there;
+grouped sessions do not.
 
 | `recoveryRequirement.requirement` | What it means | What to do |
 |---|---|---|

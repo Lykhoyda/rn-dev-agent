@@ -9071,13 +9071,7 @@ var init_registry = __esm({
           return { resumed: false, obligations, integration };
         });
       }
-      /**
-       * F2 part 1: retain the already-redacted refusal that stopped an in-progress startup
-       * cleanup on the dead owner's own journal. It grants nothing — the refusal is the
-       * same one the caller just received — but it is what makes the dead end legible to
-       * the contender's `status`. Re-recording an identical refusal is a no-op, so a
-       * deterministic refusal stays byte-stable across repeated restarts.
-       */
+      /** Re-recording an identical cleanup refusal is a no-op across repeated restarts. */
       recordStartupCleanupRefusal(prior, refusal) {
         const now = this.#now();
         this.#transaction(() => {
@@ -16994,8 +16988,7 @@ function projectPublicAuthorityStatus(status, options = {}) {
         nextAction: cleanupNextAction
       }
     } : {},
-    // F2 part 2: a retained startup-cleanup refusal is the real blocker behind a
-    // dead-owner contender. Identifier-free, matching the staleDeviceCleanup discipline.
+    // Retained cleanup refusals follow the identifier-free staleDeviceCleanup discipline.
     ...options.recoveryRequirement?.startupCleanupBlocked ? {
       startupCleanupBlocked: {
         code: options.recoveryRequirement.startupCleanupBlocked.code,

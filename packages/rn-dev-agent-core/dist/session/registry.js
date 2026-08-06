@@ -124,10 +124,6 @@ function isOperationalState(state) {
 function isFenceableState(state) {
     return isOperationalState(state) || state === 'handoff';
 }
-/**
- * F2: read the refusal retained on a dead owner's unfinished startup-cleanup journal.
- * A finished journal, or one that never refused, reports nothing.
- */
 function readStartupCleanupBlocker(bindingsJson) {
     let journal;
     try {
@@ -668,9 +664,7 @@ export class SessionRegistry {
                         nextAction: 'The proven-dead owner has a different source identity for this app root, so startup cleanup cannot release it under the current declared manifests. Restore the declared manifests that produced the prior identity, start and close rn-dev-agent to release its authority, then reapply the manifest changes; otherwise use a separate worktree.',
                     };
                 }
-                // F2 part 3: an unfinished journal carrying a retained refusal proves the
-                // automatic release does not converge, so the measured remedy replaces the
-                // promise. Only an unblocked cleanup still advertises automatic release.
+                // Only cleanup without a retained refusal may promise automatic convergence.
                 const blocked = readStartupCleanupBlocker(prior.bindings_json);
                 if (blocked) {
                     return {
@@ -1058,13 +1052,7 @@ export class SessionRegistry {
             return { resumed: false, obligations, integration };
         });
     }
-    /**
-     * F2 part 1: retain the already-redacted refusal that stopped an in-progress startup
-     * cleanup on the dead owner's own journal. It grants nothing — the refusal is the
-     * same one the caller just received — but it is what makes the dead end legible to
-     * the contender's `status`. Re-recording an identical refusal is a no-op, so a
-     * deterministic refusal stays byte-stable across repeated restarts.
-     */
+    /** Re-recording an identical cleanup refusal is a no-op across repeated restarts. */
     recordStartupCleanupRefusal(prior, refusal) {
         const now = this.#now();
         this.#transaction(() => {

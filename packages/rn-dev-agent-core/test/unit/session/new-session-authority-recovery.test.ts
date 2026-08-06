@@ -1,18 +1,3 @@
-// New-session ownership-authority recovery: the refusal must describe the session it
-// is refusing, and a startup cleanup that provably will not converge must say so.
-//
-// F1 — every gated tool shared one hard-coded refusal naming `accept_handoff` and
-//      `adopt_stale`. A `grouped-v1` contender exposes neither; `status` is its one
-//      reachable action. The refusal now carries this session's own measured
-//      `recoveryRequirement.nextAction`.
-// F2 — when startup cleanup refuses (dead owner, unverifiable integration manifest),
-//      the refusal reason was discarded and `status` kept promising that the next
-//      restart releases the owner automatically. The refusal is now retained on the
-//      dead owner's journal and projected, and the promise is replaced by the measured
-//      remedy. An ordinary verifiable-manifest owner still gets the promise verbatim.
-//
-// Everything runs on a fake clock over a disposable SQLite registry with a stubbed
-// liveness oracle: no device, no Metro, no runner, no ambient session.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -39,7 +24,6 @@ const AUTOMATIC_RELEASE_PROMISE =
 const ONLY_AVAILABLE_ACTION =
   'this session does not own this worktree; rn_session({ action: "status" }) is the only available action';
 
-// The rn_session surface as measured from a blocked contender. `status` is the exit.
 const SESSION_ACTIONS = [
   'status',
   'preview_integration',
@@ -267,7 +251,6 @@ function ownerSnapshot(f: Fixture) {
   });
 }
 
-// ── R1 ──────────────────────────────────────────────────────────────────────
 test('R1: a gated-tool refusal carries the session’s own recovery requirement', async () => {
   for (const liveness of ['mismatch', 'match', 'unknown'] as const) {
     const f = contenderFacing(liveness);
@@ -296,7 +279,6 @@ test('R1: a gated-tool refusal carries the session’s own recovery requirement'
   }
 });
 
-// ── R2 ──────────────────────────────────────────────────────────────────────
 test('R2: the refusal never names an action the blocked contender cannot reach', async () => {
   const f = contenderFacing('mismatch');
   const runtime = runtimeFor(f, f.contender);
@@ -318,7 +300,6 @@ test('R2: the refusal never names an action the blocked contender cannot reach',
   assert.match(message, /status/, 'the refusal names the one reachable action');
 });
 
-// ── R3 ──────────────────────────────────────────────────────────────────────
 test('R3: a blocked contender always retains exactly one exit', async () => {
   for (const model of ['grouped-v1', '']) {
     for (const liveness of ['mismatch', 'match', 'unknown'] as const) {
@@ -337,7 +318,6 @@ test('R3: a blocked contender always retains exactly one exit', async () => {
   }
 });
 
-// ── R4 ──────────────────────────────────────────────────────────────────────
 test('R4: a refused startup cleanup is legible, and identifier-free, in the contender status', async () => {
   const f = contenderFacing('mismatch', {
     integration: {
@@ -373,7 +353,6 @@ test('R4: a refused startup cleanup is legible, and identifier-free, in the cont
   }
 });
 
-// ── R5 ──────────────────────────────────────────────────────────────────────
 test('R5: transport-restart is promised only where it converges', async () => {
   const refused = contenderFacing('mismatch', {
     integration: {
@@ -398,14 +377,12 @@ test('R5: transport-restart is promised only where it converges', async () => {
   assert.equal(ordinaryRequirement.startupCleanupBlocked, undefined);
   assert.equal(statusOf(ordinary, 'contender').startupCleanupBlocked, undefined);
 
-  // And the ordinary path still actually releases the owner.
   const outcome = await runStartupOwnerCleanup(cleanupInput(ordinary), executorDeps());
   assert.equal(outcome.status, 'clean');
   assert.deepEqual(outcome.released, ['prior-owner']);
   assert.equal(ordinary.registry.getClaim('source', 'worktree-1'), null);
 });
 
-// ── R6 ──────────────────────────────────────────────────────────────────────
 test('R6: repeated restarts surface the same refusal and release nothing', async () => {
   const f = contenderFacing('mismatch', {
     integration: {
@@ -444,7 +421,6 @@ test('R6: repeated restarts surface the same refusal and release nothing', async
   );
 });
 
-// ── R7 ──────────────────────────────────────────────────────────────────────
 test('R7: learned-action discovery is authority-independent', () => {
   const workspace = mkdtempSync(join(tmpdir(), 'rn-learned-actions-'));
   roots.push(workspace);
@@ -478,7 +454,6 @@ test('R7: learned-action discovery is authority-independent', () => {
   assert.equal(outputs.size, 1, 'the listing is identical under every ownership state');
   assert.match([...outputs][0], /add-task/);
 
-  // Structural: discovery must stay a filesystem read with no session coupling.
   const source = execFileSync('cat', [join(CORE_ROOT, 'src', 'learned-actions.ts')], {
     encoding: 'utf8',
   });
@@ -486,7 +461,6 @@ test('R7: learned-action discovery is authority-independent', () => {
   assert.deepEqual(imports.sort(), ['node:fs', 'node:os', 'node:path']);
 });
 
-// ── R8 ──────────────────────────────────────────────────────────────────────
 test('R8: a live or unknown owner is never adopted through any path', async () => {
   for (const liveness of ['match', 'unknown'] as const) {
     for (const model of ['grouped-v1', '']) {
