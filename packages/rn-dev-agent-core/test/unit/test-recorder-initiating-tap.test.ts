@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { runInThisContext } from 'node:vm';
 import { START_RECORDING_JS, STOP_RECORDING_JS } from '../../dist/cdp/test-recorder-helpers.js';
-import { generateMaestro } from '../../dist/tools/test-recorder-generators.js';
+import { generateDetox, generateMaestro } from '../../dist/tools/test-recorder-generators.js';
 import { deduplicateEvents } from '../../dist/tools/test-recorder.js';
 
 type Props = Record<string, unknown>;
@@ -189,6 +189,7 @@ test('B145: the saved flow replays open -> visible assertion -> close, with no d
     },
   ]);
   const host = makeHost(screen, 'HomeMain');
+  let events: ReturnType<typeof deduplicateEvents>;
   let yaml: string;
   try {
     const started = host.start();
@@ -196,7 +197,8 @@ test('B145: the saved flow replays open -> visible assertion -> close, with no d
     host.commit('CommandPalette');
     host.press(host.mountLater('command-palette-close'));
     host.commit('HomeMain');
-    yaml = generateMaestro(deduplicateEvents(host.stop() as never), {
+    events = deduplicateEvents(host.stop() as never);
+    yaml = generateMaestro(events, {
       bundleId: 'com.rndevagent.testapp',
       startRoute: started.activeRoute,
       id: 'command-palette-open-close',
@@ -222,6 +224,14 @@ test('B145: the saved flow replays open -> visible assertion -> close, with no d
     yaml.indexOf('command-palette-btn') < yaml.indexOf('- assertVisible:'),
     'the opening tap must precede the visibility assertion',
   );
+
+  const detox = generateDetox(events, { startRoute: 'HomeMain' });
+  const detoxOpen = 'await element(by.id("command-palette-btn")).tap();';
+  const detoxVisible = 'await expect(element(by.id("command-palette-close"))).toBeVisible();';
+  const detoxClose = 'await element(by.id("command-palette-close")).tap();';
+  assert.ok(detox.indexOf(detoxOpen) < detox.indexOf(detoxVisible));
+  assert.ok(detox.indexOf(detoxVisible) < detox.indexOf(detoxClose));
+  assert.equal((detox.match(/\.tap\(\);/g) ?? []).length, 2);
 });
 
 test('B145 disconfirming: a navigation with no initiating tap synthesizes no tap', () => {
