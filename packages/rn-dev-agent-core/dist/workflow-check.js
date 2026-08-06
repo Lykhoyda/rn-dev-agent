@@ -139,6 +139,11 @@ function redactedWorkspaceRoot(projectRoot, workspaceRoot) {
     const relative = path.relative(projectRoot, workspaceRoot);
     return relative === '' ? '.' : relative.split(path.sep).join('/');
 }
+function locationPhrase(relativeWorkspaceRoot) {
+    return relativeWorkspaceRoot === '.'
+        ? 'this app root (.)'
+        : `the workspace root (${relativeWorkspaceRoot})`;
+}
 function preflight(projectRoot) {
     const packageJson = readTextIfFile(path.join(projectRoot, 'package.json'));
     if (packageJson === null) {
@@ -182,12 +187,13 @@ function preflight(projectRoot) {
         claudeMdSentinel: claudeMd !== null && claudeMd.includes(TEMPLATE_SENTINEL),
         stateRoot: stateRootFacts(),
     };
+    const where = locationPhrase(relativeWorkspaceRoot);
     if (declaration.kind === 'invalid-manifest') {
         return {
             facts,
             stop: {
                 code: 'PROJECT_MANIFEST_INVALID',
-                action: 'package.json is not valid JSON; repair it before package-manager inference.',
+                action: `The package.json at ${where} is not valid JSON; repair it there before package-manager inference.`,
             },
         };
     }
@@ -196,7 +202,7 @@ function preflight(projectRoot) {
             facts,
             stop: {
                 code: 'PACKAGE_MANAGER_UNSUPPORTED',
-                action: 'package.json has an unsupported or unparseable "packageManager" value; use pnpm, yarn, npm, or bun before installing.',
+                action: `The package.json at ${where} has an unsupported or unparseable "packageManager" value; use pnpm, yarn, npm, or bun there before installing.`,
             },
         };
     }
@@ -206,7 +212,7 @@ function preflight(projectRoot) {
             facts,
             stop: {
                 code: 'PACKAGE_MANAGER_CONFLICT',
-                action: `package.json declares ${field} but ${conflictingLocks.map((lock) => lock.file).join(', ')} ${conflictingLocks.length === 1 ? 'is' : 'are'} present; align the project before installing — do not guess.`,
+                action: `The package.json at ${where} declares ${field} but ${conflictingLocks.map((lock) => lock.file).join(', ')} ${conflictingLocks.length === 1 ? 'is' : 'are'} present there; align that directory before installing — do not guess.`,
             },
         };
     }
@@ -215,7 +221,7 @@ function preflight(projectRoot) {
             facts,
             stop: {
                 code: 'PACKAGE_MANAGER_CONFLICT',
-                action: `Multiple package managers are inferred from ${locks.map((lock) => lock.file).join(', ')}; declare packageManager or remove stale lockfiles before installing — do not guess.`,
+                action: `Multiple package managers are inferred from ${locks.map((lock) => lock.file).join(', ')} at ${where}; declare packageManager or remove the stale lockfiles there before installing — do not guess.`,
             },
         };
     }
@@ -224,7 +230,7 @@ function preflight(projectRoot) {
             facts,
             stop: {
                 code: 'PACKAGE_MANAGER_UNDECLARED',
-                action: 'Neither this app root nor its workspace root declares "packageManager" or holds a lockfile; declare it (or commit the lockfile) so the install command is unambiguous.',
+                action: `Neither ${where} nor any ancestor workspace root declares "packageManager" or holds a lockfile; declare it in the package.json at ${where} (or commit the lockfile beside it) so the install command is unambiguous.`,
             },
         };
     }
@@ -235,7 +241,7 @@ function preflight(projectRoot) {
             facts,
             stop: {
                 code: 'LOCKFILE_MISSING',
-                action: `The declared manager's lockfile (${required}) is absent, so a frozen install cannot succeed; commit the lockfile before installing.`,
+                action: `The declared manager's lockfile (${required}) is absent from ${where}, so a frozen install cannot succeed; commit it there before installing.`,
             },
         };
     }
@@ -244,7 +250,7 @@ function preflight(projectRoot) {
             facts,
             stop: {
                 code: 'DEPENDENCIES_MISSING',
-                action: `Install dependencies with the declared manager: ${facts.installCommand}`,
+                action: `Install dependencies with the declared manager at ${where}: ${facts.installCommand}`,
             },
         };
     }

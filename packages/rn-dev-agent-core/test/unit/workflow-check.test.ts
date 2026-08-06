@@ -151,6 +151,7 @@ test('preflight stops when lockfiles infer multiple package managers', () => {
   const stop = body?.stop as { action: string };
   assert.match(stop.action, /pnpm-lock\.yaml/);
   assert.match(stop.action, /yarn\.lock/);
+  assert.match(stop.action, /this app root \(\.\)/);
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -169,6 +170,7 @@ test('preflight rejects malformed package.json before lockfile inference', () =>
   assert.equal(stopCode(body), 'PROJECT_MANIFEST_INVALID');
   assert.equal(facts(body).packageManager, null);
   assert.equal(facts(body).packageManagerSource, null);
+  assert.match((body?.stop as { action: string }).action, /this app root \(\.\)/);
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -182,6 +184,7 @@ test('preflight rejects an unsupported packageManager before lockfile inference'
   assert.equal(stopCode(body), 'PACKAGE_MANAGER_UNSUPPORTED');
   assert.equal(facts(body).packageManager, null);
   assert.equal(facts(body).packageManagerSource, null);
+  assert.match((body?.stop as { action: string }).action, /this app root \(\.\)/);
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -190,6 +193,7 @@ test('preflight stops when neither packageManager field nor lockfile exists', ()
   const { result, body } = run(['preflight', '--project', root]);
   assert.equal(result.status, 3);
   assert.equal(stopCode(body), 'PACKAGE_MANAGER_UNDECLARED');
+  assert.match((body?.stop as { action: string }).action, /this app root \(\.\)/);
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -204,6 +208,7 @@ test('preflight stops with the declared install command when node_modules is mis
   assert.equal(stopCode(body), 'DEPENDENCIES_MISSING');
   const stop = body?.stop as { action: string };
   assert.ok(stop.action.includes('corepack pnpm install --frozen-lockfile'));
+  assert.match(stop.action, /this app root \(\.\)/);
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -384,6 +389,7 @@ test('a declared manager without its lockfile stops before recommending a frozen
   assert.equal(stopCode(body), 'LOCKFILE_MISSING');
   const stop = body?.stop as { action: string };
   assert.match(stop.action, /pnpm-lock\.yaml/);
+  assert.match(stop.action, /this app root \(\.\)/);
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -436,6 +442,20 @@ test('preflight reports the hoisted workspace install command when the root has 
   assert.equal(stopCode(body), 'DEPENDENCIES_MISSING');
   const stop = body?.stop as { action: string };
   assert.ok(stop.action.includes('corepack pnpm install --frozen-lockfile'));
+  assert.match(stop.action, /the workspace root \(\.\.\/\.\.\)/);
+  assert.ok(!stop.action.includes(repoRoot));
+  rmSync(repoRoot, { recursive: true, force: true });
+});
+
+test('a workspace-root manifest defect names the workspace root, not the app root', () => {
+  const { repoRoot, appRoot } = makeMonorepo({});
+  writeFileSync(join(repoRoot, 'yarn.lock'), '');
+  const { result, body } = run(['preflight', '--project', appRoot]);
+  assert.equal(result.status, 3);
+  assert.equal(stopCode(body), 'PACKAGE_MANAGER_CONFLICT');
+  const stop = body?.stop as { action: string };
+  assert.match(stop.action, /the workspace root \(\.\.\/\.\.\)/);
+  assert.match(stop.action, /yarn\.lock/);
   rmSync(repoRoot, { recursive: true, force: true });
 });
 
