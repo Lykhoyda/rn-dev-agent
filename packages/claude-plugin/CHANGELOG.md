@@ -1,5 +1,13 @@
 # rn-dev-agent-plugin
 
+## 0.74.1
+
+### Patch Changes
+
+- 9cccec7: Regroup authority-profile bookkeeping around the four ownership groups (Session, Target, Runtime, Automation) with every tool's resolved facet set, live probes, and error codes unchanged, and verify profile exhaustiveness at worker startup so an unprofiled registered tool fails at boot instead of at first call.
+- Updated dependencies [9cccec7]
+  - rn-dev-agent-core@0.69.1
+
 ## 0.74.0
 
 ### Minor Changes
