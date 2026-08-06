@@ -130,6 +130,12 @@ Copy-adapt the complete worked example: `examples/add-product-to-cart.yaml`.
 
 ## Step 6 — Replay to Promote
 
+Before replaying, call `rn_session({action: "status"})`.
+`SESSION_AUTHORITY_REQUIRED` is not UI drift. If `state` is `blocked`, stop,
+follow `recoveryRequirement.nextAction` verbatim, then re-read status before any
+replay. Full contract: the `using-rn-dev-agent` skill section "Session ownership
+recovery".
+
 Replay through the orchestrator — not raw `maestro_run` — so the run is recorded and auto-repair-aware:
 
 ```
@@ -149,13 +155,6 @@ After any later auto-repair or manual selector edit, **update the embedded diagr
 A saved action that stops passing is usually **UI drift**, not a broken
 feature. Diagnose in this order:
 
-0. **Rule out an ownership refusal first.** A replay that fails with
-   `SESSION_AUTHORITY_REQUIRED` is not UI drift: this session does not own the
-   worktree, so nothing about the flow is wrong and auto-repair, a selector
-   edit, or another booted device cannot fix it. Call
-   `rn_session({action: "status"})`, follow `recoveryRequirement.nextAction`
-   verbatim, and re-read status before replaying again. Full contract: the
-   `using-rn-dev-agent` skill section "Session ownership recovery".
 1. **Read the `RunRecord.autoRepair` outcome** from the `cdp_run_action`
    result: `passed` (repaired + green — review the patched selector, update
    the diagram), `failed` (repair tried, still red — likely a real logic

@@ -33,7 +33,7 @@ function prose(tree: string, file: string): string {
   return read(tree, file).replace(/\s+/g, ' ');
 }
 
-test('F3: every host tree names the recovery surface an agent must read before replay', () => {
+test('R9 / F3: every host tree reads the recovery surface before replay', () => {
   for (const tree of TREES) {
     for (const anchor of ANCHORS) {
       const body = read(tree, anchor);
@@ -44,6 +44,24 @@ test('F3: every host tree names the recovery surface an agent must read before r
         `${tree}/${anchor} must route to the one reachable action`,
       );
     }
+
+    const creatingActions = read(tree, 'skills/creating-actions/SKILL.md');
+    const step6 = creatingActions.slice(
+      creatingActions.indexOf('## Step 6'),
+      creatingActions.indexOf('## Step 7'),
+    );
+    const replay = step6.indexOf('cdp_run_action');
+    const status = step6.indexOf('rn_session({action: "status"})');
+    const recoveryRequirement = step6.indexOf('recoveryRequirement.nextAction');
+    assert.ok(replay >= 0, `${tree}/creating-actions must replay through cdp_run_action`);
+    assert.ok(
+      status >= 0 && status < replay,
+      `${tree}/creating-actions must read blocked state before replay`,
+    );
+    assert.ok(
+      recoveryRequirement >= 0 && recoveryRequirement < replay,
+      `${tree}/creating-actions must read recoveryRequirement before replay`,
+    );
   }
 });
 
