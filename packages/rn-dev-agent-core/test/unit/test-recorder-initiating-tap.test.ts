@@ -95,16 +95,25 @@ interface Host {
   dispose(): void;
 }
 
-function makeHost(screen: { fiber: Fiber }, initialRoute: string): Host {
+interface HostOptions {
+  hook: Fiber;
+  rootContainer: Fiber;
+}
+
+function makeHost(screen: { fiber: Fiber }, initialRoute: string, options?: HostOptions): Host {
   let navState: unknown = { routeName: initialRoute, nested: null };
-  const rootContainer = { current: { type: null, child: screen.fiber, sibling: null } };
-  screen.fiber.return = rootContainer.current;
-  const roots = new Set([rootContainer]);
-  const hook: Fiber = {
-    renderers: new Map([[1, { overrideProps: null }]]),
-    onCommitFiberRoot: null,
-    getFiberRoots: (id: number) => (id === 1 ? roots : new Set()),
+  const rootContainer = options?.rootContainer ?? {
+    current: { type: null, child: screen.fiber, sibling: null },
   };
+  if (!options) screen.fiber.return = rootContainer.current;
+  const roots = new Set([rootContainer]);
+  const hook: Fiber =
+    options?.hook ??
+    ({
+      renderers: new Map([[1, { overrideProps: null }]]),
+      onCommitFiberRoot: null,
+      getFiberRoots: (id: number) => (id === 1 ? roots : new Set()),
+    } as Fiber);
   const g = globalThis as Fiber;
   const prevHook = g.__REACT_DEVTOOLS_GLOBAL_HOOK__;
   const prevAgent = g.__RN_AGENT;
@@ -308,26 +317,82 @@ test('B145: a screen full of controls is re-rendered once, not once per control'
   }
 });
 
-test('B145: already-wrapped controls do not trigger another forced re-render', () => {
+test('B145: every registered renderer uses its own adapter', () => {
+  let appPresses = 0;
   const screen = makeScreen('HomeMain', [
-    { testID: 'already', make: () => ({ testID: 'already', onPress: () => {} }) },
+    {
+      testID: 'command-palette-btn',
+      make: () => ({ testID: 'command-palette-btn', onPress: () => appPresses++ }),
+    },
+  ]);
+  const rerender = screen.fiber.stateNode.forceUpdate as () => void;
+  screen.fiber.stateNode = null;
+  const logBox: Fiber = {
+    type: { name: 'LogBox' },
+    memoizedProps: {},
+    stateNode: null,
+    child: null,
+    sibling: null,
+    return: null,
+  };
+  const logBoxRoot = { current: { type: null, child: logBox, sibling: null } };
+  const appRoot = { current: { type: null, child: screen.fiber, sibling: null } };
+  logBox.return = logBoxRoot.current;
+  screen.fiber.return = appRoot.current;
+  let logBoxOverrides = 0;
+  let appOverrides = 0;
+  const hook: Fiber = {
+    renderers: new Map([
+      [1, { overrideProps: () => logBoxOverrides++ }],
+      [
+        7,
+        {
+          overrideProps: (fiber: Fiber) => {
+            assert.equal(fiber, screen.fiber);
+            appOverrides++;
+            rerender();
+          },
+        },
+      ],
+    ]),
+    onCommitFiberRoot: null,
+    getFiberRoots: (id: number) => {
+      if (id === 1) return new Set([logBoxRoot]);
+      if (id === 7) return new Set([appRoot]);
+      return new Set();
+    },
+  };
+  const host = makeHost(screen, 'HomeMain', { hook, rootContainer: appRoot });
+  try {
+    host.start();
+    assert.equal(logBoxOverrides, 0);
+    assert.equal(appOverrides, 1);
+    host.press(screen.live['command-palette-btn']);
+    assert.deepEqual(names(host.stop()), ['tap:command-palette-btn']);
+    assert.equal(appPresses, 1);
+  } finally {
+    host.dispose();
+  }
+});
+
+test('B145: stale wrappers are refreshed for every recording session', () => {
+  let appPresses = 0;
+  const screen = makeScreen('HomeMain', [
+    { testID: 'already', make: () => ({ testID: 'already', onPress: () => appPresses++ }) },
   ]);
   const host = makeHost(screen, 'HomeMain');
   try {
     host.start();
     assert.equal(screen.forcedRenders(), 1);
-    host.stop();
+    host.press(screen.live['already']);
+    assert.deepEqual(names(host.stop()), ['tap:already']);
+
+    host.start();
+    assert.equal(screen.forcedRenders(), 2);
+    host.press(screen.live['already']);
+    assert.deepEqual(names(host.stop()), ['tap:already']);
+    assert.equal(appPresses, 2);
   } finally {
     host.dispose();
-  }
-  // Second session: props now carry __mcpRec, so no ancestor needs forcing.
-  const host2 = makeHost(screen, 'HomeMain');
-  try {
-    const before = screen.forcedRenders();
-    host2.start();
-    assert.equal(screen.forcedRenders(), before, 'wrapped props must not be re-forced');
-    host2.stop();
-  } finally {
-    host2.dispose();
   }
 });
