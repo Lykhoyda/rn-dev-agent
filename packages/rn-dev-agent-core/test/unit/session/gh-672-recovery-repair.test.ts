@@ -1234,6 +1234,21 @@ test('GH#672/L5: coerced cleanup numbers refuse before transfer', () => {
   );
 });
 
+test('GH#672/L5: out-of-range cleanup ports refuse before transfer', () => {
+  const runner = deadDeviceOwner({
+    runner: { port: 65_536 },
+    runnerClaimKey: 'ios:sim-1:65536',
+  });
+  assertIncompleteCleanupIdentityRefusesWithoutMutation(
+    runner,
+    'RUNNER_ADOPTION_REQUIRED',
+    'ios:sim-1:65536',
+  );
+
+  const recorder = deadDeviceOwner({ recorder: { port: 65_536 } });
+  assertIncompleteCleanupIdentityRefusesWithoutMutation(recorder, 'RECORDING_AUTHORITY_MISMATCH');
+});
+
 test('GH#672/L5: cleanup identities require positive numeric process endpoints', () => {
   const runner = {
     platform: 'ios',
@@ -1254,9 +1269,16 @@ test('GH#672/L5: cleanup identities require positive numeric process endpoints',
 
   for (const invalid of [null, undefined, 0, -1, Number.NaN, '9201']) {
     assert.equal(hasCompleteRunnerCleanupIdentity({ ...runner, pid: invalid }), false);
-    assert.equal(hasCompleteRunnerCleanupIdentity({ ...runner, port: invalid }), false);
     assert.equal(hasCompleteRecorderCleanupIdentity({ ...recorder, pid: invalid }), false);
   }
+  for (const invalid of [null, undefined, 0, -1, Number.NaN, '9201', 65_536]) {
+    assert.equal(hasCompleteRunnerCleanupIdentity({ ...runner, port: invalid }), false);
+  }
+  for (const invalid of [null, 0, -1, Number.NaN, '9201', 65_536]) {
+    assert.equal(hasCompleteRecorderCleanupIdentity({ ...recorder, port: invalid }), false);
+  }
+  assert.equal(hasCompleteRunnerCleanupIdentity({ ...runner, port: 65_535 }), true);
+  assert.equal(hasCompleteRecorderCleanupIdentity({ ...recorder, port: 65_535 }), true);
 });
 
 test('GH#672/L5: neighboring bindings refuse without releasing their claims', () => {

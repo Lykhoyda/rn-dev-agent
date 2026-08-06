@@ -1,12 +1,15 @@
 function isPositiveSafeInteger(value) {
     return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 }
+function isTcpPort(value) {
+    return isPositiveSafeInteger(value) && value <= 65_535;
+}
 export function hasCompleteRunnerCleanupIdentity(binding) {
     const processBirth = String(binding.processBirth ?? '');
     const instanceId = String(binding.instanceId ?? '');
     const capability = String(binding.capability ?? '');
     if (!isPositiveSafeInteger(binding.pid) ||
-        !isPositiveSafeInteger(binding.port) ||
+        !isTcpPort(binding.port) ||
         !processBirth ||
         !instanceId ||
         !capability) {
@@ -19,8 +22,11 @@ export function hasCompleteRunnerCleanupIdentity(binding) {
 export function hasCompleteRecorderCleanupIdentity(binding) {
     const script = String(binding.script ?? '');
     const scope = String(binding.scope ?? '');
-    if (!script || !/^[a-f0-9]{64}$/.test(scope))
+    if (!script ||
+        !/^[a-f0-9]{64}$/.test(scope) ||
+        (binding.port !== undefined && !isTcpPort(binding.port))) {
         return false;
+    }
     if (binding.phase === 'starting')
         return true;
     return isPositiveSafeInteger(binding.pid) && Boolean(String(binding.processBirth ?? ''));
