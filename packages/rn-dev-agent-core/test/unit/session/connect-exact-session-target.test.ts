@@ -269,12 +269,7 @@ test('iOS retains the existing retry budget without replacing the exact client',
     connectedTarget: null as typeof target | null,
     connectionGeneration: 0,
     listTargetsExact: async () => ({ port: 8081, targets: [target] }),
-    connectExact: async (
-      _port: number,
-      _filters: unknown,
-      _intent: string,
-      retries: number,
-    ) => {
+    connectExact: async (_port: number, _filters: unknown, _intent: string, retries: number) => {
       retryBudgets.push(retries);
       connectCalls += 1;
       if (connectCalls === 1) throw new Error('first retry window exhausted');

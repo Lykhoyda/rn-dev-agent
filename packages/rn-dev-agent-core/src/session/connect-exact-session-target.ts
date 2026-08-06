@@ -126,8 +126,7 @@ export async function connectExactSessionTarget(
   } while (now() < deadline);
 
   const leafError = firstProbeError ?? lastError;
-  const leaf =
-    leafError === undefined ? 'no exact target was advertised' : errorMessage(leafError);
+  const leaf = leafError === undefined ? 'no exact target was advertised' : errorMessage(leafError);
   throw new Error(
     `CDP_TARGET_AUTHORITY_MISMATCH: exact managed-Metro target did not re-register after launch. Last exact-connect failure: ${leaf}`,
     { cause: leafError },
