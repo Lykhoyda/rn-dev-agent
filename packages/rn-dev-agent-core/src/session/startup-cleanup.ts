@@ -44,6 +44,17 @@ export interface StartupCleanupDependencies {
   readSessionSecret?: (sessionId: string) => Record<string, unknown> | null;
 }
 
+interface StartupCleanupSource {
+  sourceKey: string;
+  worktreeKey: string;
+  appRootKey: string;
+  appRoot: string;
+}
+
+export function startupCleanupFailureMessage(): string {
+  return 'rn-dev-agent startup cleanup failed: STARTUP_CLEANUP_FAILED\n';
+}
+
 const EXECUTION_ORDER: readonly StartupCleanupResource[] = [
   'recorder',
   'runner',
@@ -57,12 +68,12 @@ const EXECUTION_ORDER: readonly StartupCleanupResource[] = [
  * or any unproven obligation — yields a typed refusal and leaves everything in place.
  */
 export async function runStartupOwnerCleanup(
-  input: { registry: SessionRegistry; worktreeKey: string; appRoot: string },
+  input: { registry: SessionRegistry } & StartupCleanupSource,
   dependencies: StartupCleanupDependencies = {},
 ): Promise<StartupCleanupOutcome> {
   const released: string[] = [];
   for (let round = 0; round < 8; round += 1) {
-    const candidate = input.registry.findStartupCleanupCandidate(input.worktreeKey);
+    const candidate = input.registry.findStartupCleanupCandidate(input);
     if (!candidate) return { status: 'clean', released };
     try {
       const plan = input.registry.beginStartupOwnerCleanup(candidate);
@@ -97,7 +108,13 @@ export async function runStartupCleanupForSource(input: {
   });
   try {
     return await runStartupOwnerCleanup(
-      { registry, worktreeKey: input.source.worktreeKey, appRoot: input.source.appRoot },
+      {
+        registry,
+        sourceKey: input.source.sourceKey,
+        worktreeKey: input.source.worktreeKey,
+        appRootKey: input.source.appRootKey,
+        appRoot: input.source.appRoot,
+      },
       {
         readSessionSecret: (sessionId) =>
           readJsonStateFile<Record<string, unknown>>(
@@ -147,7 +164,7 @@ async function completeObligations(
 }
 
 function restoreDeadOwnerIntegration(
-  input: { registry: SessionRegistry; appRoot: string },
+  input: { registry: SessionRegistry } & StartupCleanupSource,
   prior: SessionRef,
   plan: StartupOwnerCleanupPlan,
   dependencies: StartupCleanupDependencies,
@@ -171,6 +188,12 @@ function restoreDeadOwnerIntegration(
       },
     );
   }
+  input.registry.verifyStartupOwnerIntegrationRestore(prior, {
+    sourceKey: input.sourceKey,
+    worktreeKey: input.worktreeKey,
+    appRootKey: input.appRootKey,
+    manifestSha256,
+  });
   (dependencies.restoreIntegrationFiles ?? restorePackageIntegrationFiles)({
     appRoot: input.appRoot,
     manifestSource,

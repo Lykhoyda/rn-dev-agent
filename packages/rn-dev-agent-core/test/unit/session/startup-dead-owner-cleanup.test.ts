@@ -16,7 +16,10 @@ import { join } from 'node:path';
 import { afterEach, test } from 'node:test';
 import { openSessionRegistry } from '../../../dist/session/registry.js';
 import { projectPublicAuthorityStatus } from '../../../dist/session/public-status.js';
-import { runStartupOwnerCleanup } from '../../../dist/session/startup-cleanup.js';
+import {
+  runStartupOwnerCleanup,
+  startupCleanupFailureMessage,
+} from '../../../dist/session/startup-cleanup.js';
 import { createSupervisorAuthority } from '../../../dist/session/supervisor-authority.js';
 import { WorkerAuthorityRuntime } from '../../../dist/session/runtime.js';
 import { createSessionHandler } from '../../../dist/tools/session.js';
@@ -47,13 +50,14 @@ function fixture() {
     worktreeKey: string,
     bindings: Record<string, unknown> = {},
     source: Record<string, unknown> = {},
+    identity: { sourceKey?: string; appRootKey?: string } = {},
   ) => {
     ownerStates.set(sessionId, 'match');
     return registry.createSession({
       sessionId,
-      sourceKey: 'repo',
+      sourceKey: identity.sourceKey ?? 'repo',
       worktreeKey,
-      appRootKey: '.',
+      appRootKey: identity.appRootKey ?? '.',
       supervisor: { pid: 4000 + roots.length, token: `birth-${sessionId}` },
       source: { kind: 'git', contentRoot: `/src/${worktreeKey}`, ...source },
       bindings,
@@ -68,6 +72,25 @@ function fixture() {
     advance: (ms: number) => {
       now += ms;
     },
+  };
+}
+
+function cleanupInput(
+  f: ReturnType<typeof fixture>,
+  overrides: Partial<{
+    sourceKey: string;
+    worktreeKey: string;
+    appRootKey: string;
+    appRoot: string;
+  }> = {},
+) {
+  return {
+    registry: f.registry,
+    sourceKey: 'repo',
+    worktreeKey: 'worktree-1',
+    appRootKey: '.',
+    appRoot: join(f.root, 'app'),
+    ...overrides,
   };
 }
 
@@ -430,10 +453,7 @@ test('L4: the executor cleans a dead same-root owner end to end with exact ident
     },
   };
 
-  const outcome = await runStartupOwnerCleanup(
-    { registry: f.registry, worktreeKey: 'worktree-1', appRoot: join(f.root, 'app') },
-    deps,
-  );
+  const outcome = await runStartupOwnerCleanup(cleanupInput(f), deps);
 
   assert.equal(outcome.status, 'clean');
   assert.deepEqual(outcome.released, ['dead-owner']);
@@ -451,11 +471,29 @@ test('L4: the executor cleans a dead same-root owner end to end with exact ident
 
 test('L4: the executor is a no-op when nothing conflicts', async () => {
   const f = fixture();
-  const outcome = await runStartupOwnerCleanup(
-    { registry: f.registry, worktreeKey: 'worktree-1', appRoot: join(f.root, 'app') },
-    executorDeps(f, []),
-  );
+  const outcome = await runStartupOwnerCleanup(cleanupInput(f), executorDeps(f, []));
   assert.deepEqual(outcome, { status: 'clean', released: [] });
+});
+
+test('L4: startup cleanup never selects another app root in the same worktree', async () => {
+  const f = fixture();
+  const otherAppOwner = f.create(
+    'other-app-owner',
+    'worktree-1',
+    {},
+    {},
+    { appRootKey: 'apps/other' },
+  );
+  f.registry.claimResources(otherAppOwner, [{ type: 'source', key: 'worktree-1' }]);
+  f.ownerStates.set('other-app-owner', 'mismatch');
+  const calls: string[] = [];
+
+  const outcome = await runStartupOwnerCleanup(cleanupInput(f), executorDeps(f, calls));
+
+  assert.deepEqual(outcome, { status: 'clean', released: [] });
+  assert.deepEqual(calls, []);
+  assert.equal(f.registry.getClaim('source', 'worktree-1')?.sessionId, 'other-app-owner');
+  assert.equal(journalOf(f.registry, 'other-app-owner'), undefined);
 });
 
 test('L4: the executor refuses a live owner without touching it', async () => {
@@ -463,10 +501,7 @@ test('L4: the executor refuses a live owner without touching it', async () => {
   f.ownerStates.set('dead-owner', 'match');
   const calls: string[] = [];
 
-  const outcome = await runStartupOwnerCleanup(
-    { registry: f.registry, worktreeKey: 'worktree-1', appRoot: join(f.root, 'app') },
-    executorDeps(f, calls),
-  );
+  const outcome = await runStartupOwnerCleanup(cleanupInput(f), executorDeps(f, calls));
 
   assert.equal(outcome.status, 'refused');
   assert.equal(outcome.refusal?.code, 'RESOURCE_CLAIM_CONFLICT');
@@ -490,10 +525,7 @@ test('L4: a failed obligation leaves a resumable journal and a typed refusal', a
     },
   };
 
-  const first = await runStartupOwnerCleanup(
-    { registry: f.registry, worktreeKey: 'worktree-1', appRoot: join(f.root, 'app') },
-    failing,
-  );
+  const first = await runStartupOwnerCleanup(cleanupInput(f), failing);
   assert.equal(first.status, 'refused');
   assert.equal(first.refusal?.code, 'RUNNER_ADOPTION_REQUIRED');
   assert.equal(
@@ -504,10 +536,7 @@ test('L4: a failed obligation leaves a resumable journal and a typed refusal', a
   assert.equal(f.registry.getClaim('source', 'worktree-1')?.sessionId, 'dead-owner');
 
   const resumeCalls: string[] = [];
-  const second = await runStartupOwnerCleanup(
-    { registry: f.registry, worktreeKey: 'worktree-1', appRoot: join(f.root, 'app') },
-    executorDeps(f, resumeCalls),
-  );
+  const second = await runStartupOwnerCleanup(cleanupInput(f), executorDeps(f, resumeCalls));
   assert.equal(second.status, 'clean');
   assert.equal(
     resumeCalls.some((call) => call.startsWith('recorder:')),
@@ -525,10 +554,7 @@ test('L4: an unproven managed-Metro stop refuses with the pending cleanup code',
     stopManagedMetro: async () => false,
   };
 
-  const outcome = await runStartupOwnerCleanup(
-    { registry: f.registry, worktreeKey: 'worktree-1', appRoot: join(f.root, 'app') },
-    deps,
-  );
+  const outcome = await runStartupOwnerCleanup(cleanupInput(f), deps);
 
   assert.equal(outcome.status, 'refused');
   assert.equal(outcome.refusal?.code, 'METRO_CLEANUP_PENDING');
@@ -547,10 +573,7 @@ test('L4: integration restore refuses without a SHA-256-verified manifest', asyn
   });
   const calls: string[] = [];
 
-  const outcome = await runStartupOwnerCleanup(
-    { registry: f.registry, worktreeKey: 'worktree-1', appRoot: join(f.root, 'app') },
-    executorDeps(f, calls),
-  );
+  const outcome = await runStartupOwnerCleanup(cleanupInput(f), executorDeps(f, calls));
 
   assert.equal(outcome.status, 'refused');
   assert.equal(outcome.refusal?.code, 'SESSION_AUTHORITY_REQUIRED');
@@ -568,17 +591,32 @@ test('L4: integration restore refuses without a SHA-256-verified manifest', asyn
   assert.equal(f.registry.getSessionStatus('dead-owner')?.state, 'device_claimed');
 });
 
+test('L4: integration restore re-proves owner death immediately before its effect', async () => {
+  const f = deadSameRootOwner();
+  f.registry.beginStartupOwnerCleanup(f.dead);
+  for (const resource of ['recorder', 'runner', 'observe', 'metro'] as const) {
+    f.registry.completeStartupOwnerObligation(f.dead, resource);
+  }
+  f.ownerStates.set('dead-owner', 'match');
+  const calls: string[] = [];
+
+  const outcome = await runStartupOwnerCleanup(cleanupInput(f), executorDeps(f, calls));
+
+  assert.equal(outcome.status, 'refused');
+  assert.equal(outcome.refusal?.code, 'RESOURCE_CLAIM_CONFLICT');
+  assert.deepEqual(calls, []);
+  assert.ok(f.registry.getSessionStatus('dead-owner')?.bindings.packageIntegration);
+  assert.equal(f.registry.getClaim('source', 'worktree-1')?.sessionId, 'dead-owner');
+});
+
 test('L4: refusals and journals never leak device identities, tokens, or capabilities', async () => {
   const f = deadSameRootOwner();
-  const outcome = await runStartupOwnerCleanup(
-    { registry: f.registry, worktreeKey: 'worktree-1', appRoot: join(f.root, 'app') },
-    {
-      ...executorDeps(f, []),
-      stopBoundRunner: async () => {
-        throw Object.assign(new Error('runner stop failed'), { code: 'RUNNER_ADOPTION_REQUIRED' });
-      },
+  const outcome = await runStartupOwnerCleanup(cleanupInput(f), {
+    ...executorDeps(f, []),
+    stopBoundRunner: async () => {
+      throw Object.assign(new Error('runner stop failed'), { code: 'RUNNER_ADOPTION_REQUIRED' });
     },
-  );
+  });
 
   const surfaced = JSON.stringify(outcome);
   assert.equal(outcome.status, 'refused');
@@ -590,6 +628,12 @@ test('L4: refusals and journals never leak device identities, tokens, or capabil
   ]) {
     assert.equal(surfaced.includes(secret), false, `refusal must not leak ${secret}`);
   }
+});
+
+test('L4: unexpected startup cleanup failures use one fixed redacted line', () => {
+  const line = startupCleanupFailureMessage();
+  assert.equal(line, 'rn-dev-agent startup cleanup failed: STARTUP_CLEANUP_FAILED\n');
+  assert.doesNotMatch(line, /[/\\]|registry|sqlite|session/i);
 });
 
 test('L4: createSupervisorAuthority stamps new sessions as grouped-v1', () => {
@@ -697,7 +741,7 @@ test('L4: grouped recovery guidance names startup cleanup for a dead owner, neve
   assert.doesNotMatch(dead.nextAction, /adopt_stale/);
 });
 
-test('L4: adopt_stale on a grouped-v1 session refuses with startup-cleanup guidance', async () => {
+test('L4: grouped adopt_stale refuses before requiring an unminted handle', async () => {
   const f = groupedContender();
   f.ownerStates.set('owner', 'mismatch');
   const runtime = new WorkerAuthorityRuntime(
@@ -709,7 +753,7 @@ test('L4: adopt_stale on a grouped-v1 session refuses with startup-cleanup guida
   );
   const handler = createSessionHandler(runtime as never, { now: f.now });
 
-  const result = await handler({ action: 'adopt_stale', adoptionHandle: 'any-handle' });
+  const result = await handler({ action: 'adopt_stale' });
 
   assert.equal(result.isError, true);
   const body = JSON.parse(result.content[0]!.text) as {

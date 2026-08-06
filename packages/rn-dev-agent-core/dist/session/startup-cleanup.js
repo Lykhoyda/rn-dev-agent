@@ -6,6 +6,9 @@ import { readPackageIntegrationInputs, restorePackageIntegrationFiles, } from '.
 import { stopBoundObserve, stopBoundRecorder, stopBoundRunner } from './process-cleanup.js';
 import { openSessionRegistry, SessionAuthorityError, } from './registry.js';
 import { createAuthorityStateLayout } from './state-root.js';
+export function startupCleanupFailureMessage() {
+    return 'rn-dev-agent startup cleanup failed: STARTUP_CLEANUP_FAILED\n';
+}
 const EXECUTION_ORDER = [
     'recorder',
     'runner',
@@ -20,7 +23,7 @@ const EXECUTION_ORDER = [
 export async function runStartupOwnerCleanup(input, dependencies = {}) {
     const released = [];
     for (let round = 0; round < 8; round += 1) {
-        const candidate = input.registry.findStartupCleanupCandidate(input.worktreeKey);
+        const candidate = input.registry.findStartupCleanupCandidate(input);
         if (!candidate)
             return { status: 'clean', released };
         try {
@@ -51,7 +54,13 @@ export async function runStartupCleanupForSource(input) {
         leaseMs: 30_000,
     });
     try {
-        return await runStartupOwnerCleanup({ registry, worktreeKey: input.source.worktreeKey, appRoot: input.source.appRoot }, {
+        return await runStartupOwnerCleanup({
+            registry,
+            sourceKey: input.source.sourceKey,
+            worktreeKey: input.source.worktreeKey,
+            appRootKey: input.source.appRootKey,
+            appRoot: input.source.appRoot,
+        }, {
             readSessionSecret: (sessionId) => readJsonStateFile(join(layout.sessions, sessionId, 'secret.json')),
         });
     }
@@ -99,6 +108,12 @@ function restoreDeadOwnerIntegration(input, prior, plan, dependencies) {
             nextAction: 'Restore the exact integration manifest at .rn-agent/integration/rn-session-integration.json from your own version control history or backups so it matches the manifest SHA-256 recorded on the binding, then restart the MCP transport.',
         });
     }
+    input.registry.verifyStartupOwnerIntegrationRestore(prior, {
+        sourceKey: input.sourceKey,
+        worktreeKey: input.worktreeKey,
+        appRootKey: input.appRootKey,
+        manifestSha256,
+    });
     (dependencies.restoreIntegrationFiles ?? restorePackageIntegrationFiles)({
         appRoot: input.appRoot,
         manifestSource,

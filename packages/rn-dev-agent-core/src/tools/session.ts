@@ -1477,7 +1477,6 @@ export function createSessionHandler(
       }
 
       if (input.action === 'adopt_stale') {
-        const adoptionHandle = required(input.adoptionHandle, 'adoptionHandle') as string;
         const current = registry.getSessionStatus(session.sessionId);
         if (current?.source.model === 'grouped-v1') {
           throw new SessionAuthorityError(
@@ -1490,6 +1489,7 @@ export function createSessionHandler(
             },
           );
         }
+        const adoptionHandle = required(input.adoptionHandle, 'adoptionHandle') as string;
         if (!current?.worker.instanceId) {
           throw new SessionAuthorityError(
             'HANDOFF_NOT_AUTHORIZED',

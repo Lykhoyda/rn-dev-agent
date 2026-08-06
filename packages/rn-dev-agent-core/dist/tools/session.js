@@ -949,13 +949,13 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 });
             }
             if (input.action === 'adopt_stale') {
-                const adoptionHandle = required(input.adoptionHandle, 'adoptionHandle');
                 const current = registry.getSessionStatus(session.sessionId);
                 if (current?.source.model === 'grouped-v1') {
                     throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', 'this session never mints adoption handles; a proven-dead same-root owner is released automatically at startup', undefined, {
                         nextAction: 'Restart the MCP transport (/mcp) so startup cleanup releases a dead owner, or close the live owner session.',
                     });
                 }
+                const adoptionHandle = required(input.adoptionHandle, 'adoptionHandle');
                 if (!current?.worker.instanceId) {
                     throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', 'recovery worker identity is unavailable');
                 }

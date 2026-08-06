@@ -12,7 +12,10 @@ import { logger } from './logger.js';
 import { inspectSessionOwner } from './session/process-owner.js';
 import { readProcessBirth } from './session/process-birth.js';
 import { resolveSourceIdentity } from './session/source-identity.js';
-import { runStartupCleanupForSource } from './session/startup-cleanup.js';
+import {
+  runStartupCleanupForSource,
+  startupCleanupFailureMessage,
+} from './session/startup-cleanup.js';
 import {
   createSupervisorAuthority,
   type SupervisorAuthority,
@@ -118,12 +121,8 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
       if (cleanup.status === 'refused' && cleanup.refusal) {
         process.stderr.write(`rn-dev-agent startup cleanup deferred: ${cleanup.refusal.code}\n`);
       }
-    } catch (error) {
-      process.stderr.write(
-        `rn-dev-agent startup cleanup failed: ${
-          error instanceof Error ? error.message : String(error)
-        }\n`,
-      );
+    } catch {
+      process.stderr.write(startupCleanupFailureMessage());
     }
     authority = createSupervisorAuthority({
       source,

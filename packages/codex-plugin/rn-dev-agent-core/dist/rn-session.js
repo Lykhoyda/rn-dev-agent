@@ -8741,9 +8741,16 @@ var init_registry = __esm({
        * row and is written before any side effect; claims release only in finish, after
        * every obligation is durably complete. Death is positively re-proven by every method.
        */
-      findStartupCleanupCandidate(worktreeKey) {
-        const claim = this.#findClaim("source", worktreeKey);
-        return claim ? { sessionId: claim.session_id, claimEpoch: claim.claim_epoch } : null;
+      findStartupCleanupCandidate(input) {
+        const claim = this.#findClaim("source", input.worktreeKey);
+        if (!claim)
+          return null;
+        const row = asSession(this.#database.prepare(`SELECT session_id, source_key, worktree_key, app_root_key, claim_epoch
+           FROM sessions WHERE session_id = ?`).get(claim.session_id));
+        if (!row || row.claim_epoch !== claim.claim_epoch || row.source_key !== input.sourceKey || row.worktree_key !== input.worktreeKey || row.app_root_key !== input.appRootKey) {
+          return null;
+        }
+        return { sessionId: claim.session_id, claimEpoch: claim.claim_epoch };
       }
       beginStartupOwnerCleanup(prior) {
         const now = this.#now();
@@ -8860,6 +8867,16 @@ var init_registry = __esm({
           }), now, row.session_id, row.claim_epoch);
         });
       }
+      verifyStartupOwnerIntegrationRestore(prior, input) {
+        const row = this.#requireProvenDeadStartupOwner(prior);
+        this.#assertStartupSourceScope(row, input);
+        const { bindings, journal } = this.#requireStartupCleanupJournal(row);
+        const integration = journal.integration;
+        const binding = bindings.packageIntegration;
+        if (!integration || typeof integration !== "object" || typeof integration.completedAt === "number" || !binding || typeof binding !== "object" || binding.manifestSha256 !== input.manifestSha256 || integration.manifestSha256 !== input.manifestSha256) {
+          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "integration restoration requires the active startup journal and recorded manifest authority");
+        }
+      }
       finishStartupOwnerCleanup(prior) {
         const now = this.#now();
         this.#transaction(() => {
@@ -8885,7 +8902,8 @@ var init_registry = __esm({
         });
       }
       #requireProvenDeadStartupOwner(prior) {
-        const row = asSession(this.#database.prepare(`SELECT session_id, claim_epoch, state, supervisor_pid, supervisor_birth,
+        const row = asSession(this.#database.prepare(`SELECT session_id, source_key, worktree_key, app_root_key,
+                  claim_epoch, state, supervisor_pid, supervisor_birth,
                   lease_until_ms, bindings_json
            FROM sessions WHERE session_id = ?`).get(prior.sessionId));
         if (!row || row.claim_epoch !== prior.claimEpoch) {
@@ -8919,6 +8937,11 @@ var init_registry = __esm({
           throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "no startup cleanup is in progress");
         }
         return { bindings, journal };
+      }
+      #assertStartupSourceScope(row, input) {
+        if (row.source_key !== input.sourceKey || row.worktree_key !== input.worktreeKey || row.app_root_key !== input.appRootKey) {
+          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "startup cleanup no longer matches the exact source and app root");
+        }
       }
       #assertStartupObligationScope(row, resource, entry) {
         const claimType = resource === "observe" ? "observe-port" : resource === "metro" ? "metro-port" : resource;
