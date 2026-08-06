@@ -200,7 +200,7 @@ async function completeStaleDeviceCleanupPlan(registry, session, workerInstance,
  * uses. Without confirmation, the refusal names the confirmed retry and nothing
  * mutates.
  */
-async function withInlineStaleDeviceCleanup(registry, session, dependencies, input, requireWorkerInstance, operation) {
+async function withInlineStaleDeviceCleanup(registry, session, dependencies, input, requireWorkerInstance, revalidate, operation) {
     const target = { platform: input.platform, deviceId: input.deviceId };
     try {
         return operation();
@@ -233,6 +233,7 @@ async function withInlineStaleDeviceCleanup(registry, session, dependencies, inp
         const plan = registry.beginConfirmedStaleDeviceRelease(session, workerInstance, target);
         await completeStaleDeviceCleanupPlan(registry, session, workerInstance, plan, dependencies);
         registry.finishStaleResourceRelease(session, workerInstance);
+        revalidate();
         return operation();
     }
 }
@@ -359,16 +360,19 @@ export function createSessionHandler(runtime, dependencies = {}) {
                     await completeStaleDeviceCleanupPlan(registry, session, workerInstance, plan, dependencies);
                     registry.finishStaleResourceRelease(session, workerInstance);
                 }
-                let deviceExists;
-                try {
-                    deviceExists = (dependencies.deviceExists ?? deviceExistsOnHost)(platform, deviceId);
-                }
-                catch (error) {
-                    throw new SessionAuthorityError('DEVICE_DISCOVERY_UNAVAILABLE', `could not verify exact ${platform} device ${deviceId}: ${error instanceof Error ? error.message : String(error)}`);
-                }
-                if (!deviceExists) {
-                    throw new SessionAuthorityError('DEVICE_NOT_FOUND', `exact ${platform} device ${deviceId} does not exist or is unavailable`);
-                }
+                const requireExactDevice = () => {
+                    let deviceExists;
+                    try {
+                        deviceExists = (dependencies.deviceExists ?? deviceExistsOnHost)(platform, deviceId);
+                    }
+                    catch (error) {
+                        throw new SessionAuthorityError('DEVICE_DISCOVERY_UNAVAILABLE', `could not verify exact ${platform} device ${deviceId}: ${error instanceof Error ? error.message : String(error)}`);
+                    }
+                    if (!deviceExists) {
+                        throw new SessionAuthorityError('DEVICE_NOT_FOUND', `exact ${platform} device ${deviceId} does not exist or is unavailable`);
+                    }
+                };
+                requireExactDevice();
                 const currentInstall = status.bindings.install;
                 if (!input.buildReceipt &&
                     currentInstall &&
@@ -379,7 +383,7 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 }
                 if (!input.buildReceipt) {
                     const invalidatesBundle = Boolean(status.bindings.bundle);
-                    await withInlineStaleDeviceCleanup(registry, session, dependencies, { platform, deviceId, appId, confirmed: input.confirmed }, requireWorkerInstance, () => registry.replaceDeviceAuthority(session, {
+                    await withInlineStaleDeviceCleanup(registry, session, dependencies, { platform, deviceId, appId, confirmed: input.confirmed }, requireWorkerInstance, requireExactDevice, () => registry.replaceDeviceAuthority(session, {
                         resource: { type: 'device', key: `${platform}:${deviceId}` },
                         device: {
                             platform,
@@ -408,15 +412,21 @@ export function createSessionHandler(runtime, dependencies = {}) {
                     appId,
                     metroPort: Number(status.bindings.metroPort),
                 });
-                const observedGeneration = (dependencies.captureInstallGeneration ?? captureInstallGeneration)({
-                    platform,
-                    deviceId,
-                    appId,
-                });
-                if (observedGeneration !== receipt.installGeneration) {
-                    throw new SessionAuthorityError('APP_INSTALL_IDENTITY_CHANGED', 'installed artifact generation does not match the signed build receipt');
-                }
-                await withInlineStaleDeviceCleanup(registry, session, dependencies, { platform, deviceId, appId, confirmed: input.confirmed }, requireWorkerInstance, () => registry.replaceDeviceAuthority(session, {
+                const requireInstallGeneration = () => {
+                    const observedGeneration = (dependencies.captureInstallGeneration ?? captureInstallGeneration)({
+                        platform,
+                        deviceId,
+                        appId,
+                    });
+                    if (observedGeneration !== receipt.installGeneration) {
+                        throw new SessionAuthorityError('APP_INSTALL_IDENTITY_CHANGED', 'installed artifact generation does not match the signed build receipt');
+                    }
+                };
+                requireInstallGeneration();
+                await withInlineStaleDeviceCleanup(registry, session, dependencies, { platform, deviceId, appId, confirmed: input.confirmed }, requireWorkerInstance, () => {
+                    requireExactDevice();
+                    requireInstallGeneration();
+                }, () => registry.replaceDeviceAuthority(session, {
                     resource: { type: 'device', key: `${platform}:${deviceId}` },
                     device: { platform, deviceId, appId },
                     install: { ...receipt },

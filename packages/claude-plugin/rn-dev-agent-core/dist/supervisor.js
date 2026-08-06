@@ -21061,11 +21061,11 @@ var init_registry = __esm({
         return this.#transaction(() => {
           const current = this.#requireSession(session2);
           const prior = this.#requireSingleProvenDeadDeviceOwner(session2, deviceKey);
-          const priorBindings = JSON.parse(prior.bindings_json);
+          const family = this.#requireExactStaleDeviceFamily(session2, prior, target);
           const obligations = [];
-          if (this.#bindingMatchesDevice(priorBindings.runner, target))
+          if (family.runner)
             obligations.push("runner");
-          if (this.#bindingMatchesDevice(priorBindings.recorder, target))
+          if (family.recorder)
             obligations.push("recorder");
           const offer = {
             token: randomBytes4(32).toString("base64url"),
@@ -21098,11 +21098,11 @@ var init_registry = __esm({
         const deviceKey = `${target.platform}:${target.deviceId}`;
         this.#requireSession(session2);
         const prior = this.#requireSingleProvenDeadDeviceOwner(session2, deviceKey);
-        const priorBindings = JSON.parse(prior.bindings_json);
+        const family = this.#requireExactStaleDeviceFamily(session2, prior, target);
         const obligations = [];
-        if (this.#bindingMatchesDevice(priorBindings.runner, target))
+        if (family.runner)
           obligations.push("runner");
-        if (this.#bindingMatchesDevice(priorBindings.recorder, target))
+        if (family.recorder)
           obligations.push("recorder");
         return {
           priorSessionId: prior.session_id,
@@ -21184,10 +21184,9 @@ var init_registry = __esm({
         const { platform, deviceId } = target;
         const deviceKey = `${platform}:${deviceId}`;
         const priorBindings = JSON.parse(prior.bindings_json);
-        const claims = this.#deviceFamilyClaims(deviceKey).filter((claim) => claim.session_id === prior.session_id && claim.claim_epoch === prior.claim_epoch);
-        const runner = this.#bindingMatchesDevice(priorBindings.runner, { platform, deviceId }) ? priorBindings.runner : null;
-        const recorder2 = this.#bindingMatchesDevice(priorBindings.recorder, { platform, deviceId }) ? priorBindings.recorder : null;
-        for (const claim of claims) {
+        const family = this.#requireExactStaleDeviceFamily(session2, prior, target);
+        const { runner, recorder: recorder2 } = family;
+        for (const claim of family.claims) {
           this.#database.prepare(`UPDATE claims SET session_id = ?, claim_epoch = ?, lease_until_ms = ?
            WHERE resource_type = ? AND resource_key = ?
              AND session_id = ? AND claim_epoch = ?`).run(session2.sessionId, session2.claimEpoch, now + this.#leaseMs, claim.resource_type, claim.resource_key, prior.session_id, prior.claim_epoch);
@@ -21224,7 +21223,7 @@ var init_registry = __esm({
         return { platform, deviceId, runner: cleanup.runner, recorder: cleanup.recorder };
       }
       #requireSingleProvenDeadDeviceOwner(session2, deviceKey) {
-        const claims = this.#deviceFamilyClaims(deviceKey).filter((claim) => claim.session_id !== session2.sessionId);
+        const claims = this.#deviceFamilyClaims(deviceKey);
         if (claims.length === 0) {
           throw new SessionAuthorityError("DEVICE_CLAIM_CONFLICT", `no foreign claim on ${deviceKey} needs release`);
         }
@@ -21232,7 +21231,53 @@ var init_registry = __esm({
         if (owners.size !== 1) {
           throw new SessionAuthorityError("DEVICE_CLAIM_CONFLICT", `${deviceKey} is split across several claim epochs; release each owner explicitly`);
         }
+        if (claims[0].session_id === session2.sessionId && claims[0].claim_epoch === session2.claimEpoch) {
+          throw new SessionAuthorityError("DEVICE_CLAIM_CONFLICT", `no foreign claim on ${deviceKey} needs release`);
+        }
         return this.#requireProvenDeadOwner(claims[0].session_id, claims[0].claim_epoch);
+      }
+      #requireExactStaleDeviceFamily(session2, prior, target) {
+        const deviceKey = `${target.platform}:${target.deviceId}`;
+        const claims = this.#deviceFamilyClaims(deviceKey);
+        if (claims.length === 0 || claims.some((claim) => claim.session_id !== prior.session_id || claim.claim_epoch !== prior.claim_epoch)) {
+          throw new SessionAuthorityError("DEVICE_CLAIM_CONFLICT", `${deviceKey} is split across several claim epochs; release each owner explicitly`);
+        }
+        if (claims.some((claim) => claim.resource_type === "device-receipt" || claim.resource_type === "runner-receipt")) {
+          throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "stale device cleanup cannot transfer platform validation receipt authority");
+        }
+        const bindings = JSON.parse(prior.bindings_json);
+        if (!this.#bindingMatchesDevice(bindings.device, target)) {
+          throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "stale device claim does not match its owner binding");
+        }
+        const deviceClaims = claims.filter((claim) => claim.resource_type === "device");
+        if (deviceClaims.length !== 1 || deviceClaims[0].resource_key !== deviceKey) {
+          throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "stale device binding has no exclusive cleanup claim");
+        }
+        const current = this.#requireSession(session2);
+        const currentBindings = JSON.parse(current.bindings_json);
+        if (this.#bindingMatchesDevice(currentBindings.device, target) || this.#bindingMatchesDevice(currentBindings.runner, target) || this.#bindingMatchesDevice(currentBindings.recorder, target)) {
+          throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "stale device cleanup conflicts with existing target bindings");
+        }
+        const runnerClaims = claims.filter((claim) => claim.resource_type === "runner");
+        const runnerValue = bindings.runner;
+        const runner = this.#bindingMatchesDevice(runnerValue, target) ? runnerValue : null;
+        if (runnerValue !== null && runnerValue !== void 0 && !runner) {
+          throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "stale runner binding targets another device");
+        }
+        const runnerClaimKey = runner ? `${deviceKey}:${String(runner.port)}` : null;
+        if (runnerClaims.length !== (runner ? 1 : 0) || runner && runnerClaims[0].resource_key !== runnerClaimKey) {
+          throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "stale runner binding has no exclusive cleanup claim");
+        }
+        const recorderClaims = claims.filter((claim) => claim.resource_type === "recorder");
+        const recorderValue = bindings.recorder;
+        const recorder2 = this.#bindingMatchesDevice(recorderValue, target) ? recorderValue : null;
+        if (recorderValue !== null && recorderValue !== void 0 && !recorder2) {
+          throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "stale recorder binding targets another device");
+        }
+        if (recorderClaims.length !== (recorder2 ? 1 : 0) || recorder2 && recorderClaims[0].resource_key !== deviceKey) {
+          throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "stale recorder binding has no exclusive cleanup claim");
+        }
+        return { claims, runner, recorder: recorder2 };
       }
       completeStaleResourceRelease(session2, workerInstance, resource) {
         const now = this.#now();
@@ -21269,14 +21314,13 @@ var init_registry = __esm({
             }
           }
           const deviceKey = `${String(cleanup.platform)}:${String(cleanup.deviceId)}`;
-          for (const claim of this.#deviceFamilyClaims(deviceKey)) {
-            if (claim.session_id !== session2.sessionId || claim.claim_epoch !== session2.claimEpoch) {
-              continue;
-            }
-            this.#database.prepare(`DELETE FROM claims
-             WHERE resource_type = ? AND resource_key = ?
-               AND session_id = ? AND claim_epoch = ?`).run(claim.resource_type, claim.resource_key, session2.sessionId, session2.claimEpoch);
+          const unrelatedClaim = this.#deviceFamilyClaims(deviceKey).find((claim) => claim.resource_type !== "device");
+          if (unrelatedClaim) {
+            throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "stale device cleanup found authority outside its completed journal");
           }
+          this.#database.prepare(`DELETE FROM claims
+           WHERE resource_type = 'device' AND resource_key = ?
+             AND session_id = ? AND claim_epoch = ?`).run(deviceKey, session2.sessionId, session2.claimEpoch);
           const nextAuthorityVersion = row.authority_version + 1;
           this.#database.prepare(`UPDATE sessions
            SET bindings_json = ?, authority_version = ?, updated_ms = ?
@@ -67324,7 +67368,7 @@ async function completeStaleDeviceCleanupPlan(registry2, session2, workerInstanc
   }
   return completed;
 }
-async function withInlineStaleDeviceCleanup(registry2, session2, dependencies, input, requireWorkerInstance, operation) {
+async function withInlineStaleDeviceCleanup(registry2, session2, dependencies, input, requireWorkerInstance, revalidate, operation) {
   const target = { platform: input.platform, deviceId: input.deviceId };
   try {
     return operation();
@@ -67348,6 +67392,7 @@ async function withInlineStaleDeviceCleanup(registry2, session2, dependencies, i
     const plan = registry2.beginConfirmedStaleDeviceRelease(session2, workerInstance, target);
     await completeStaleDeviceCleanupPlan(registry2, session2, workerInstance, plan, dependencies);
     registry2.finishStaleResourceRelease(session2, workerInstance);
+    revalidate();
     return operation();
   }
 }
@@ -67456,22 +67501,25 @@ function createSessionHandler(runtime, dependencies = {}) {
           await completeStaleDeviceCleanupPlan(registry2, session2, workerInstance, plan, dependencies);
           registry2.finishStaleResourceRelease(session2, workerInstance);
         }
-        let deviceExists;
-        try {
-          deviceExists = (dependencies.deviceExists ?? deviceExistsOnHost)(platform, deviceId);
-        } catch (error2) {
-          throw new SessionAuthorityError("DEVICE_DISCOVERY_UNAVAILABLE", `could not verify exact ${platform} device ${deviceId}: ${error2 instanceof Error ? error2.message : String(error2)}`);
-        }
-        if (!deviceExists) {
-          throw new SessionAuthorityError("DEVICE_NOT_FOUND", `exact ${platform} device ${deviceId} does not exist or is unavailable`);
-        }
+        const requireExactDevice = () => {
+          let deviceExists;
+          try {
+            deviceExists = (dependencies.deviceExists ?? deviceExistsOnHost)(platform, deviceId);
+          } catch (error2) {
+            throw new SessionAuthorityError("DEVICE_DISCOVERY_UNAVAILABLE", `could not verify exact ${platform} device ${deviceId}: ${error2 instanceof Error ? error2.message : String(error2)}`);
+          }
+          if (!deviceExists) {
+            throw new SessionAuthorityError("DEVICE_NOT_FOUND", `exact ${platform} device ${deviceId} does not exist or is unavailable`);
+          }
+        };
+        requireExactDevice();
         const currentInstall = status2.bindings.install;
         if (!input.buildReceipt && currentInstall && (currentInstall.platform !== platform || currentInstall.deviceId !== deviceId || currentInstall.appId !== appId)) {
           throw new SessionAuthorityError("DEVICE_RECEIPT_INCOMPATIBLE", "cannot replace exact-device authority while an incompatible install receipt is bound");
         }
         if (!input.buildReceipt) {
           const invalidatesBundle = Boolean(status2.bindings.bundle);
-          await withInlineStaleDeviceCleanup(registry2, session2, dependencies, { platform, deviceId, appId, confirmed: input.confirmed }, requireWorkerInstance, () => registry2.replaceDeviceAuthority(session2, {
+          await withInlineStaleDeviceCleanup(registry2, session2, dependencies, { platform, deviceId, appId, confirmed: input.confirmed }, requireWorkerInstance, requireExactDevice, () => registry2.replaceDeviceAuthority(session2, {
             resource: { type: "device", key: `${platform}:${deviceId}` },
             device: {
               platform,
@@ -67500,15 +67548,21 @@ function createSessionHandler(runtime, dependencies = {}) {
           appId,
           metroPort: Number(status2.bindings.metroPort)
         });
-        const observedGeneration = (dependencies.captureInstallGeneration ?? captureInstallGeneration)({
-          platform,
-          deviceId,
-          appId
-        });
-        if (observedGeneration !== receipt2.installGeneration) {
-          throw new SessionAuthorityError("APP_INSTALL_IDENTITY_CHANGED", "installed artifact generation does not match the signed build receipt");
-        }
-        await withInlineStaleDeviceCleanup(registry2, session2, dependencies, { platform, deviceId, appId, confirmed: input.confirmed }, requireWorkerInstance, () => registry2.replaceDeviceAuthority(session2, {
+        const requireInstallGeneration = () => {
+          const observedGeneration = (dependencies.captureInstallGeneration ?? captureInstallGeneration)({
+            platform,
+            deviceId,
+            appId
+          });
+          if (observedGeneration !== receipt2.installGeneration) {
+            throw new SessionAuthorityError("APP_INSTALL_IDENTITY_CHANGED", "installed artifact generation does not match the signed build receipt");
+          }
+        };
+        requireInstallGeneration();
+        await withInlineStaleDeviceCleanup(registry2, session2, dependencies, { platform, deviceId, appId, confirmed: input.confirmed }, requireWorkerInstance, () => {
+          requireExactDevice();
+          requireInstallGeneration();
+        }, () => registry2.replaceDeviceAuthority(session2, {
           resource: { type: "device", key: `${platform}:${deviceId}` },
           device: { platform, deviceId, appId },
           install: { ...receipt2 }

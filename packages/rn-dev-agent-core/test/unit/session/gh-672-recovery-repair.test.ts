@@ -23,6 +23,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, test } from 'node:test';
 import { createAuthorityGate } from '../../../dist/session/authority-gate.js';
+import { createBuildReceipt } from '../../../dist/session/build-receipt.js';
 import { openSessionRegistry } from '../../../dist/session/registry.js';
 import { projectPublicAuthorityStatus } from '../../../dist/session/public-status.js';
 import { WorkerAuthorityRuntime } from '../../../dist/session/runtime.js';
@@ -1090,6 +1091,205 @@ test('GH#672/L5: the confirmed transfer refuses live, unknown, split, and foreig
   assert.equal(f.registry.getClaim('runner', 'ios:sim-1:9200')?.sessionId, 'dead-device-owner');
   assert.equal(f.registry.getSessionStatus('live')?.bindings.staleDeviceCleanup, undefined);
   assert.ok(f.registry.getSessionStatus('dead-device-owner')?.bindings.runner);
+});
+
+test('GH#672/L5: partial device families refuse before either release path mutates', () => {
+  const f = fixture();
+  const dead = f.create('dead', 'worktree-foreign');
+  f.registry.claimResources(dead, [{ type: 'device', key: 'ios:sim-1' }]);
+  f.registry.updateBindings(dead, {
+    state: 'device_claimed',
+    bindings: {
+      device: { platform: 'ios', deviceId: 'sim-1' },
+      runner: { platform: 'ios', deviceId: 'sim-1', port: 9200 },
+    },
+  });
+  const live = f.create('live', 'worktree-mine');
+  f.registry.bindWorker(live, { instanceId: 'live-worker', pid: 9100, token: 'live-birth' });
+  f.ownerStates.set('dead', 'mismatch');
+  const target = { platform: 'ios', deviceId: 'sim-1' };
+  const authorityVersion = f.registry.getSessionStatus('live')?.authorityVersion;
+
+  assert.throws(
+    () => f.registry.inspectStaleDeviceRelease(live, target),
+    (error: { code?: string }) => error.code === 'RUNNER_OWNERSHIP_MISMATCH',
+  );
+  assert.throws(
+    () => f.registry.prepareStaleResourceRelease(live, target),
+    (error: { code?: string }) => error.code === 'RUNNER_OWNERSHIP_MISMATCH',
+  );
+  assert.throws(
+    () => f.registry.beginConfirmedStaleDeviceRelease(live, 'live-worker', target),
+    (error: { code?: string }) => error.code === 'RUNNER_OWNERSHIP_MISMATCH',
+  );
+  assert.equal(f.registry.getClaim('device', 'ios:sim-1')?.sessionId, 'dead');
+  assert.ok(f.registry.getSessionStatus('dead')?.bindings.runner);
+  assert.equal(f.registry.getSessionStatus('live')?.bindings.staleDeviceRelease, undefined);
+  assert.equal(f.registry.getSessionStatus('live')?.bindings.staleDeviceCleanup, undefined);
+  assert.equal(f.registry.getSessionStatus('live')?.authorityVersion, authorityVersion);
+});
+
+test('GH#672/L5: neighboring bindings refuse without releasing their claims', () => {
+  const f = fixture();
+  const dead = f.create('dead', 'worktree-foreign');
+  f.registry.claimResources(dead, [
+    { type: 'device', key: 'ios:sim-1' },
+    { type: 'runner', key: 'ios:sim-2:9300' },
+  ]);
+  f.registry.updateBindings(dead, {
+    state: 'device_claimed',
+    bindings: {
+      device: { platform: 'ios', deviceId: 'sim-1' },
+      runner: { platform: 'ios', deviceId: 'sim-2', port: 9300 },
+    },
+  });
+  const live = f.create('live', 'worktree-mine');
+  f.registry.bindWorker(live, { instanceId: 'live-worker', pid: 9100, token: 'live-birth' });
+  f.ownerStates.set('dead', 'mismatch');
+
+  assert.throws(
+    () =>
+      f.registry.beginConfirmedStaleDeviceRelease(live, 'live-worker', {
+        platform: 'ios',
+        deviceId: 'sim-1',
+      }),
+    (error: { code?: string }) => error.code === 'RUNNER_OWNERSHIP_MISMATCH',
+  );
+  assert.equal(f.registry.getClaim('device', 'ios:sim-1')?.sessionId, 'dead');
+  assert.equal(f.registry.getClaim('runner', 'ios:sim-2:9300')?.sessionId, 'dead');
+  assert.equal(f.registry.getSessionStatus('live')?.bindings.staleDeviceCleanup, undefined);
+});
+
+test('GH#672/L5: contender recorder authority makes the exact family ambiguous', () => {
+  const f = fixture();
+  const dead = f.create('dead', 'worktree-foreign');
+  f.registry.claimResources(dead, [
+    { type: 'device', key: 'ios:sim-1' },
+    { type: 'runner', key: 'ios:sim-1:9200' },
+  ]);
+  f.registry.updateBindings(dead, {
+    state: 'device_claimed',
+    bindings: {
+      device: { platform: 'ios', deviceId: 'sim-1' },
+      runner: { platform: 'ios', deviceId: 'sim-1', port: 9200 },
+    },
+  });
+  const live = f.create('live', 'worktree-mine');
+  f.registry.bindWorker(live, { instanceId: 'live-worker', pid: 9100, token: 'live-birth' });
+  f.registry.claimResources(live, [{ type: 'recorder', key: 'ios:sim-1' }]);
+  f.registry.updateBindings(live, {
+    bindings: { recorder: { platform: 'ios', deviceId: 'sim-1', scope: 'device' } },
+  });
+  f.ownerStates.set('dead', 'mismatch');
+
+  assert.throws(
+    () =>
+      f.registry.beginConfirmedStaleDeviceRelease(live, 'live-worker', {
+        platform: 'ios',
+        deviceId: 'sim-1',
+      }),
+    (error: { code?: string }) => error.code === 'DEVICE_CLAIM_CONFLICT',
+  );
+  assert.equal(f.registry.getClaim('device', 'ios:sim-1')?.sessionId, 'dead');
+  assert.equal(f.registry.getClaim('recorder', 'ios:sim-1')?.sessionId, 'live');
+  assert.ok(f.registry.getSessionStatus('live')?.bindings.recorder);
+  assert.equal(f.registry.getSessionStatus('live')?.bindings.staleDeviceCleanup, undefined);
+});
+
+test('GH#672/L5: finish refuses authority not proven by its cleanup journal', () => {
+  const f = deadDeviceOwner();
+  const target = { platform: 'ios', deviceId: 'sim-1' };
+  f.registry.beginConfirmedStaleDeviceRelease(f.live, 'live-worker', target);
+  f.registry.completeStaleResourceRelease(f.live, 'live-worker', 'recorder');
+  f.registry.completeStaleResourceRelease(f.live, 'live-worker', 'runner');
+  f.registry.claimResources(f.live, [{ type: 'runner-receipt', key: 'ios:sim-1:9200' }]);
+  const authorityVersion = f.registry.getSessionStatus('live')?.authorityVersion;
+
+  assert.throws(
+    () => f.registry.finishStaleResourceRelease(f.live, 'live-worker'),
+    (error: { code?: string }) => error.code === 'DEVICE_AUTHORITY_MISMATCH',
+  );
+  assert.equal(f.registry.getClaim('device', 'ios:sim-1')?.sessionId, 'live');
+  assert.equal(f.registry.getClaim('runner-receipt', 'ios:sim-1:9200')?.sessionId, 'live');
+  assert.ok(f.registry.getSessionStatus('live')?.bindings.staleDeviceCleanup);
+  assert.equal(f.registry.getSessionStatus('live')?.authorityVersion, authorityVersion);
+});
+
+test('GH#672/L5: confirmed bind rechecks exact device existence after cleanup', async () => {
+  const f = deadDeviceOwner();
+  const runtime = new WorkerAuthorityRuntime(f.registry, f.live, null);
+  let deviceChecks = 0;
+  const handler = withAuthorityGate(
+    runtime,
+    createSessionHandler(runtime as never, {
+      deviceExists: () => ++deviceChecks === 1,
+      stopHandoffRunner: async () => {},
+      stopHandoffRecorder: async () => {},
+    }),
+  );
+
+  const result = await handler({
+    action: 'bind_device',
+    platform: 'ios',
+    deviceId: 'sim-1',
+    appId: 'com.example.app',
+    confirmed: true,
+  });
+
+  assert.equal(result.isError, true);
+  assert.equal(envelope(result).code, 'DEVICE_NOT_FOUND');
+  assert.equal(deviceChecks, 2);
+  assert.equal(f.registry.getClaim('device', 'ios:sim-1'), null);
+  assert.equal(f.registry.getSessionStatus('live')?.bindings.device, undefined);
+});
+
+test('GH#672/L5: confirmed bind rechecks install generation after cleanup', async () => {
+  const f = deadDeviceOwner();
+  const runtime = new WorkerAuthorityRuntime(f.registry, f.live, null);
+  const receipt = createBuildReceipt(
+    {
+      sessionId: f.live.sessionId,
+      sourceKey: 'repo',
+      worktreeKey: 'worktree-mine',
+      appRootKey: '.',
+      platform: 'ios',
+      deviceId: 'sim-1',
+      appId: 'com.example.app',
+      metroPort: 8248,
+      artifactDigest: 'artifact-before-cleanup',
+      installGeneration: 'install-before-cleanup',
+      buildGeneration: 1,
+      buildKind: 'expo',
+    },
+    'signer',
+  );
+  let generationChecks = 0;
+  const handler = withAuthorityGate(
+    runtime,
+    createSessionHandler(runtime as never, {
+      deviceExists: () => true,
+      getSignerCapability: () => 'signer',
+      captureInstallGeneration: () =>
+        ++generationChecks === 1 ? 'install-before-cleanup' : 'install-after-cleanup',
+      stopHandoffRunner: async () => {},
+      stopHandoffRecorder: async () => {},
+    }),
+  );
+
+  const result = await handler({
+    action: 'bind_device',
+    platform: 'ios',
+    deviceId: 'sim-1',
+    appId: 'com.example.app',
+    buildReceipt: receipt,
+    confirmed: true,
+  });
+
+  assert.equal(result.isError, true);
+  assert.equal(envelope(result).code, 'APP_INSTALL_IDENTITY_CHANGED');
+  assert.equal(generationChecks, 2);
+  assert.equal(f.registry.getClaim('device', 'ios:sim-1'), null);
+  assert.equal(f.registry.getSessionStatus('live')?.bindings.install, undefined);
 });
 
 test('GH#672/L5: an owner that revives before the confirmed retry keeps its device', async () => {

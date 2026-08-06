@@ -243,6 +243,12 @@ export interface StaleResourceReleaseOffer {
 
 export type StaleReleaseObligation = 'runner' | 'recorder';
 
+interface StaleDeviceFamily {
+  claims: ClaimRow[];
+  runner: Record<string, unknown> | null;
+  recorder: Record<string, unknown> | null;
+}
+
 const errorAxes: Record<string, string> = {
   SESSION_AUTHORITY_REQUIRED: 'C',
   SESSION_OWNER_LOST: 'C',
@@ -1285,10 +1291,10 @@ export class SessionRegistry {
     return this.#transaction(() => {
       const current = this.#requireSession(session);
       const prior = this.#requireSingleProvenDeadDeviceOwner(session, deviceKey);
-      const priorBindings = JSON.parse(prior.bindings_json) as Record<string, unknown>;
+      const family = this.#requireExactStaleDeviceFamily(session, prior, target);
       const obligations: StaleReleaseObligation[] = [];
-      if (this.#bindingMatchesDevice(priorBindings.runner, target)) obligations.push('runner');
-      if (this.#bindingMatchesDevice(priorBindings.recorder, target)) obligations.push('recorder');
+      if (family.runner) obligations.push('runner');
+      if (family.recorder) obligations.push('recorder');
       const offer: StaleResourceReleaseOffer = {
         token: randomBytes(32).toString('base64url'),
         expiresMs: now + RECOVERY_HANDLE_TTL_MS,
@@ -1333,10 +1339,10 @@ export class SessionRegistry {
     const deviceKey = `${target.platform}:${target.deviceId}`;
     this.#requireSession(session);
     const prior = this.#requireSingleProvenDeadDeviceOwner(session, deviceKey);
-    const priorBindings = JSON.parse(prior.bindings_json) as Record<string, unknown>;
+    const family = this.#requireExactStaleDeviceFamily(session, prior, target);
     const obligations: StaleReleaseObligation[] = [];
-    if (this.#bindingMatchesDevice(priorBindings.runner, target)) obligations.push('runner');
-    if (this.#bindingMatchesDevice(priorBindings.recorder, target)) obligations.push('recorder');
+    if (family.runner) obligations.push('runner');
+    if (family.recorder) obligations.push('recorder');
     return {
       priorSessionId: prior.session_id,
       priorClaimEpoch: prior.claim_epoch,
@@ -1483,16 +1489,9 @@ export class SessionRegistry {
     const { platform, deviceId } = target;
     const deviceKey = `${platform}:${deviceId}`;
     const priorBindings = JSON.parse(prior.bindings_json) as Record<string, unknown>;
-    const claims = this.#deviceFamilyClaims(deviceKey).filter(
-      (claim) => claim.session_id === prior.session_id && claim.claim_epoch === prior.claim_epoch,
-    );
-    const runner = this.#bindingMatchesDevice(priorBindings.runner, { platform, deviceId })
-      ? (priorBindings.runner as Record<string, unknown>)
-      : null;
-    const recorder = this.#bindingMatchesDevice(priorBindings.recorder, { platform, deviceId })
-      ? (priorBindings.recorder as Record<string, unknown>)
-      : null;
-    for (const claim of claims) {
+    const family = this.#requireExactStaleDeviceFamily(session, prior, target);
+    const { runner, recorder } = family;
+    for (const claim of family.claims) {
       this.#database
         .prepare(
           `UPDATE claims SET session_id = ?, claim_epoch = ?, lease_until_ms = ?
@@ -1566,9 +1565,7 @@ export class SessionRegistry {
   }
 
   #requireSingleProvenDeadDeviceOwner(session: SessionRef, deviceKey: string): SessionRow {
-    const claims = this.#deviceFamilyClaims(deviceKey).filter(
-      (claim) => claim.session_id !== session.sessionId,
-    );
+    const claims = this.#deviceFamilyClaims(deviceKey);
     if (claims.length === 0) {
       throw new SessionAuthorityError(
         'DEVICE_CLAIM_CONFLICT',
@@ -1582,7 +1579,115 @@ export class SessionRegistry {
         `${deviceKey} is split across several claim epochs; release each owner explicitly`,
       );
     }
+    if (
+      claims[0]!.session_id === session.sessionId &&
+      claims[0]!.claim_epoch === session.claimEpoch
+    ) {
+      throw new SessionAuthorityError(
+        'DEVICE_CLAIM_CONFLICT',
+        `no foreign claim on ${deviceKey} needs release`,
+      );
+    }
     return this.#requireProvenDeadOwner(claims[0]!.session_id, claims[0]!.claim_epoch);
+  }
+
+  #requireExactStaleDeviceFamily(
+    session: SessionRef,
+    prior: SessionRow,
+    target: { platform: string; deviceId: string },
+  ): StaleDeviceFamily {
+    const deviceKey = `${target.platform}:${target.deviceId}`;
+    const claims = this.#deviceFamilyClaims(deviceKey);
+    if (
+      claims.length === 0 ||
+      claims.some(
+        (claim) => claim.session_id !== prior.session_id || claim.claim_epoch !== prior.claim_epoch,
+      )
+    ) {
+      throw new SessionAuthorityError(
+        'DEVICE_CLAIM_CONFLICT',
+        `${deviceKey} is split across several claim epochs; release each owner explicitly`,
+      );
+    }
+    if (
+      claims.some(
+        (claim) =>
+          claim.resource_type === 'device-receipt' || claim.resource_type === 'runner-receipt',
+      )
+    ) {
+      throw new SessionAuthorityError(
+        'DEVICE_AUTHORITY_MISMATCH',
+        'stale device cleanup cannot transfer platform validation receipt authority',
+      );
+    }
+    const bindings = JSON.parse(prior.bindings_json) as Record<string, unknown>;
+    if (!this.#bindingMatchesDevice(bindings.device, target)) {
+      throw new SessionAuthorityError(
+        'DEVICE_AUTHORITY_MISMATCH',
+        'stale device claim does not match its owner binding',
+      );
+    }
+    const deviceClaims = claims.filter((claim) => claim.resource_type === 'device');
+    if (deviceClaims.length !== 1 || deviceClaims[0]!.resource_key !== deviceKey) {
+      throw new SessionAuthorityError(
+        'DEVICE_AUTHORITY_MISMATCH',
+        'stale device binding has no exclusive cleanup claim',
+      );
+    }
+    const current = this.#requireSession(session);
+    const currentBindings = JSON.parse(current.bindings_json) as Record<string, unknown>;
+    if (
+      this.#bindingMatchesDevice(currentBindings.device, target) ||
+      this.#bindingMatchesDevice(currentBindings.runner, target) ||
+      this.#bindingMatchesDevice(currentBindings.recorder, target)
+    ) {
+      throw new SessionAuthorityError(
+        'DEVICE_AUTHORITY_MISMATCH',
+        'stale device cleanup conflicts with existing target bindings',
+      );
+    }
+    const runnerClaims = claims.filter((claim) => claim.resource_type === 'runner');
+    const runnerValue = bindings.runner;
+    const runner = this.#bindingMatchesDevice(runnerValue, target)
+      ? (runnerValue as Record<string, unknown>)
+      : null;
+    if (runnerValue !== null && runnerValue !== undefined && !runner) {
+      throw new SessionAuthorityError(
+        'RUNNER_OWNERSHIP_MISMATCH',
+        'stale runner binding targets another device',
+      );
+    }
+    const runnerClaimKey = runner ? `${deviceKey}:${String(runner.port)}` : null;
+    if (
+      runnerClaims.length !== (runner ? 1 : 0) ||
+      (runner && runnerClaims[0]!.resource_key !== runnerClaimKey)
+    ) {
+      throw new SessionAuthorityError(
+        'RUNNER_OWNERSHIP_MISMATCH',
+        'stale runner binding has no exclusive cleanup claim',
+      );
+    }
+    const recorderClaims = claims.filter((claim) => claim.resource_type === 'recorder');
+    const recorderValue = bindings.recorder;
+    const recorder = this.#bindingMatchesDevice(recorderValue, target)
+      ? (recorderValue as Record<string, unknown>)
+      : null;
+    if (recorderValue !== null && recorderValue !== undefined && !recorder) {
+      throw new SessionAuthorityError(
+        'RECORDING_AUTHORITY_MISMATCH',
+        'stale recorder binding targets another device',
+      );
+    }
+    if (
+      recorderClaims.length !== (recorder ? 1 : 0) ||
+      (recorder && recorderClaims[0]!.resource_key !== deviceKey)
+    ) {
+      throw new SessionAuthorityError(
+        'RECORDING_AUTHORITY_MISMATCH',
+        'stale recorder binding has no exclusive cleanup claim',
+      );
+    }
+    return { claims, runner, recorder };
   }
 
   completeStaleResourceRelease(
@@ -1646,18 +1751,22 @@ export class SessionRegistry {
         }
       }
       const deviceKey = `${String(cleanup.platform)}:${String(cleanup.deviceId)}`;
-      for (const claim of this.#deviceFamilyClaims(deviceKey)) {
-        if (claim.session_id !== session.sessionId || claim.claim_epoch !== session.claimEpoch) {
-          continue;
-        }
-        this.#database
-          .prepare(
-            `DELETE FROM claims
-             WHERE resource_type = ? AND resource_key = ?
-               AND session_id = ? AND claim_epoch = ?`,
-          )
-          .run(claim.resource_type, claim.resource_key, session.sessionId, session.claimEpoch);
+      const unrelatedClaim = this.#deviceFamilyClaims(deviceKey).find(
+        (claim) => claim.resource_type !== 'device',
+      );
+      if (unrelatedClaim) {
+        throw new SessionAuthorityError(
+          'DEVICE_AUTHORITY_MISMATCH',
+          'stale device cleanup found authority outside its completed journal',
+        );
       }
+      this.#database
+        .prepare(
+          `DELETE FROM claims
+           WHERE resource_type = 'device' AND resource_key = ?
+             AND session_id = ? AND claim_epoch = ?`,
+        )
+        .run(deviceKey, session.sessionId, session.claimEpoch);
       const nextAuthorityVersion = row.authority_version + 1;
       this.#database
         .prepare(
