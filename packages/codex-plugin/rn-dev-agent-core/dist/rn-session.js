@@ -10951,9 +10951,9 @@ var init_tool_profiles = __esm({
     });
     add(observe, {
       kind: "authoritative",
-      axes: ["C", "S", "I", "M", "B", "D", "O"],
+      axes: ["C", "S"],
       mutation: false,
-      liveBundleProbe: true
+      liveBundleProbe: false
     });
     add(proof, {
       kind: "authoritative",

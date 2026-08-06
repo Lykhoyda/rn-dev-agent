@@ -160,11 +160,12 @@ add(cdpMutation, {
     mutation: true,
     liveBundleProbe: true,
 });
+// Observe is a read-only Session child; its mutating web routes keep their own gates.
 add(observe, {
     kind: 'authoritative',
-    axes: ['C', 'S', 'I', 'M', 'B', 'D', 'O'],
+    axes: ['C', 'S'],
     mutation: false,
-    liveBundleProbe: true,
+    liveBundleProbe: false,
 });
 add(proof, {
     kind: 'authoritative',
