@@ -390,6 +390,36 @@ test('L0: the grouped projection redacts child capabilities and identities', () 
   }
 });
 
+// ADR §5.2 (L3): strict proof is an explicit opt-in overlay outside the four groups.
+test('L3: an inactive proof overlay is projected explicitly, not merely absent', () => {
+  const projected = projectPublicAuthorityStatus(operationalStatus('ready'));
+
+  assert.deepEqual(projected.proofOverlay, { active: false });
+  assert.equal(projected.proof, false);
+});
+
+test('L3: an active proof run projects the overlay outside the group sub-objects', () => {
+  const projected = projectPublicAuthorityStatus(
+    operationalStatus('ready', { proof: { runId: 'proof-run-secret' } }),
+  );
+
+  assert.deepEqual(projected.proofOverlay, { active: true });
+  assert.equal(projected.proof, true, 'the L0 child flag remains during the window');
+  for (const group of ['session', 'target', 'runtime', 'automation'] as const) {
+    const sub = projected[group] as Record<string, unknown>;
+    assert.equal('proof' in sub, false, group);
+    assert.equal('proofOverlay' in sub, false, group);
+  }
+});
+
+test('L3: the proof overlay never exposes the run identity', () => {
+  const projected = projectPublicAuthorityStatus(
+    operationalStatus('ready', { proof: { runId: 'proof-run-secret' } }),
+  );
+
+  assert.equal(JSON.stringify(projected).includes('proof-run-secret'), false);
+});
+
 test('handoff_cleanup public status never exposes recovery tokens or capabilities', () => {
   const projected = projectPublicAuthorityStatus({
     available: true,
