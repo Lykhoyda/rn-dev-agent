@@ -8,8 +8,7 @@ export function parseDeclaredManifests(value) {
         .map((entry) => entry.trim())
         .filter(Boolean);
 }
-// Path-free on purpose: this text crosses the MCP boundary and public-diagnostic
-// redaction, so it must stay actionable after sanitization.
+// Keep this public remedy path-free so diagnostic redaction preserves actionable guidance.
 export const NON_GIT_DECLARATION_NEXT_ACTION = `Declare the non-Git source explicitly: set ${DECLARED_ROOT_ENV} to the exact existing application root, ` +
     `and set ${DECLARED_MANIFESTS_ENV} to a comma-separated list of required existing manifest files inside that root, ` +
     'then restart the supervisor. Neither value is inferred from the working directory or generated.';

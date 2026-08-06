@@ -530,7 +530,7 @@ the runner's settle engine.
 
 | Symptom | Diagnostic tool | Likely cause | Recovery |
 |---------|----------------|--------------|----------|
-| `NON_GIT_MANIFEST_REQUIRED` | `/rn-dev-agent:check-env` (source-declaration row) | This app root is not in Git and declares no source identity, so no session can be created | Export `RN_DEV_AGENT_DECLARED_ROOT` (the exact existing application root) and `RN_DEV_AGENT_DECLARED_MANIFESTS` (comma-separated required existing manifest files inside it), then restart the supervisor. The refusal names which half is missing; never invent either value or create a missing manifest |
+| `NON_GIT_MANIFEST_REQUIRED` | `/rn-dev-agent:check-env` (source-declaration row) | This non-Git app root has an incomplete source declaration | Repair `RN_DEV_AGENT_DECLARED_ROOT` and `RN_DEV_AGENT_DECLARED_MANIFESTS` under the [session-authority contract](https://lykhoyda.github.io/rn-dev-agent/session-authority/#what-each-source-identity-proves), then restart the supervisor |
 | `cdp_status` fails | `rn_session(action="status")` | Session Metro or target binding is unavailable | Use the integrated package script, then `cdp_connect` |
 | `cdp_component_tree` returns "No fiber roots" | Wait 2s, retry | App still mounting after reload | Retry; if persistent, `cdp_reload` |
 | `cdp_evaluate` returns `__RN_AGENT is not defined` | Automatic (retry) | Helpers lost after reload | Tool auto-re-injects; if stuck, `cdp_reload` |

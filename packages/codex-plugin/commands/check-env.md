@@ -14,7 +14,7 @@ Check each subsystem and report status as a table:
 
 | Subsystem | What to check | Source |
 |-----------|--------------|--------|
-| Source declaration | Git app roots declare nothing. A non-Git app root must export `RN_DEV_AGENT_DECLARED_ROOT` (the exact existing application root) and `RN_DEV_AGENT_DECLARED_MANIFESTS` (comma-separated required existing manifest files inside it) before the supervisor starts | `git rev-parse --show-toplevel`, then the two variables in the supervisor environment |
+| Source declaration | Git app roots declare nothing. Before the supervisor starts for a non-Git app root, check `RN_DEV_AGENT_DECLARED_ROOT` and `RN_DEV_AGENT_DECLARED_MANIFESTS` against the [session-authority contract](https://lykhoyda.github.io/rn-dev-agent/session-authority/#what-each-source-identity-proves) | `git rev-parse --show-toplevel`, then the two variables in the supervisor environment |
 | Session | Ready state, worktree, app, platform, exact device, Metro binding, and migration readiness | `rn_session(action="status")` |
 | Metro | Allocated and bound port for this session | `rn_session`, then `cdp_status` → `metro` |
 | CDP | Exact authority-bound target connected? | `rn_session`, then `cdp_status` → `cdp` |
@@ -24,7 +24,7 @@ If issues are found, suggest the appropriate fix:
 
 | Status | Fix |
 |--------|-----|
-| `NON_GIT_MANIFEST_REQUIRED` | Report this before setup or build, not after. Set `RN_DEV_AGENT_DECLARED_ROOT` to the exact existing application root and `RN_DEV_AGENT_DECLARED_MANIFESTS` to the required existing manifest files inside it, then restart the supervisor. Never invent either value, generate a manifest, or fall back to trusting the working directory — the refusal names which half is missing |
+| `NON_GIT_MANIFEST_REQUIRED` | Report this before setup or build, name the missing `RN_DEV_AGENT_DECLARED_ROOT` or `RN_DEV_AGENT_DECLARED_MANIFESTS` declaration, and point to the [session-authority contract](https://lykhoyda.github.io/rn-dev-agent/session-authority/#what-each-source-identity-proves) |
 | Session missing or not ready | Run setup, review/apply the integration preview, and bind the intended device and app |
 | Metro not found | Use literal `pnpm ios` or `pnpm android` through the confirmed integration |
 | No Hermes target | Open the bound app, then call `cdp_connect` for the exact signed target |
