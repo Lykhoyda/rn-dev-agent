@@ -34,7 +34,9 @@ export async function runStartupOwnerCleanup(input, dependencies = {}) {
             released.push(candidate.sessionId);
         }
         catch (error) {
-            return { status: 'refused', released, refusal: refusalOf(error) };
+            const refusal = refusalOf(error);
+            retainRefusal(input.registry, candidate, refusal);
+            return { status: 'refused', released, refusal };
         }
     }
     return {
@@ -141,6 +143,23 @@ function verifiedDeadOwnerManifestSource(appRoot, binding, manifestSha256) {
         verified(restoration?.phase === 'started' ? restoration.manifestSource : undefined) ??
         verified(installation?.phase === 'started' ? installation.manifestSource : undefined) ??
         verified(binding.manifestSource));
+}
+/**
+ * F2 part 1: keep the refusal on the dead owner's journal so the blocked contender's
+ * `status` can name it. Best-effort by design — a refusal that predates the journal
+ * (live or unproven owner) has nowhere to land and must not become a second failure.
+ */
+function retainRefusal(registry, prior, refusal) {
+    try {
+        registry.recordStartupCleanupRefusal(prior, {
+            code: refusal.code,
+            reason: refusal.message,
+            ...(refusal.nextAction ? { nextAction: refusal.nextAction } : {}),
+        });
+    }
+    catch {
+        // The refusal itself is still returned to the caller.
+    }
 }
 function refusalOf(error) {
     if (error instanceof SessionAuthorityError) {

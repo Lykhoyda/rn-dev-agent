@@ -262,7 +262,8 @@ Things that repeatedly go wrong, cataloged for prevention:
 
 | Failure | Cause | Fix |
 |---------|-------|-----|
-| Manual `device_*` walk for a flow that already exists as a YAML | Skipped `/rn-dev-agent:list-learned-actions` at session start | Run it BEFORE any UI work; replay matching flows via `maestro_run` |
+| Manual `device_*` walk for a flow that already exists as a YAML | Skipped `/rn-dev-agent:list-learned-actions` at session start | Run it BEFORE any UI work; replay matching flows via `cdp_run_action` (recorded, auto-repair-aware) — not raw `maestro_run` |
+| Retrying a replay that keeps refusing with `SESSION_AUTHORITY_REQUIRED` | Treated an ownership refusal as UI drift | Not repairable by retry, repair, or another device — see § Session ownership recovery |
 | Feature ships with broken Android | Skipped `cross_platform_verify` | Always run it in Phase 5.5 unless explicitly scoped |
 | "Works on my machine" bug | Claimed done without Phase 5.5 evidence | Every row in the results table must have a concrete Evidence value |
 | Native crash missed entirely | Only checked `cdp_error_log`, not native logs | Use `collect_logs(sources=["js_console","native_ios"])` together |
@@ -273,10 +274,46 @@ Things that repeatedly go wrong, cataloged for prevention:
 
 ---
 
+## Session ownership recovery — `SESSION_AUTHORITY_REQUIRED`
+
+**Canonical wording for ownership recovery lives here.** Other commands and
+skills point at this section instead of restating it.
+
+A session can be `blocked`: another session's claim on this worktree is still in
+the registry. Discovery keeps working — listing learned actions is a read-only
+filesystem scan and grants no replay authority — but every authoritative tool
+(`cdp_run_action`, `maestro_run`, `device_*`, gated `cdp_*`) refuses with
+`SESSION_AUTHORITY_REQUIRED` until ownership is resolved.
+
+`rn_session({action: "status"})` is the only action a blocked session can reach,
+and the only surface that names the remedy. Read `recoveryRequirement` and follow
+its `nextAction` verbatim:
+
+| `recoveryRequirement.requirement` | What it means | What to do |
+|---|---|---|
+| `transport-restart` | the blocking claim is gone, or its owner is proven dead | restart the MCP transport (`/mcp`) as the `nextAction` says — **unless `startupCleanupBlocked` is also present**, which means startup cleanup refused for a stated reason and another restart will not clear it. Resolve that reason first. |
+| `attach` | the prior owner is live, or its identity cannot be proven | use that session, or work in a separate worktree. A live or unprovable owner is never adopted |
+| `adoption` (legacy sessions only) | the prior owner is proven dead and minted an adoption handle | follow the handle named in the `nextAction` |
+
+Rules, no exceptions:
+
+- **Never bind around a blocker.** Do not run setup, call `bind_device`, or pick
+  another booted device to escape a `blocked` state. Those calls are refused too,
+  and a claim conflict is never force-stolen.
+- **Never retry the replay.** `SESSION_AUTHORITY_REQUIRED` is not UI drift; it is
+  not repairable by `cdp_repair_action`, by editing the flow, or by rerunning.
+- **Never treat discovery as authority.** A listed action proves the file exists,
+  not that this session may replay it.
+- **Re-read `rn_session({action: "status"})` after any recovery step** and require
+  a non-`blocked` state before resuming work.
+
+---
+
 ## Verification — Session Ready When
 
 Before starting any real work, confirm:
 
+- [ ] `rn_session({action: "status"})` does not report `state: blocked` — if it does, stop and follow § Session ownership recovery
 - [ ] `cdp_status` returns `ok:true` with `cdp.connected: true`
 - [ ] The user's intent has been routed to a specific command OR agent (not freestyled)
 - [ ] The matching skill is loaded for the work type (testing, debugging, feature-dev)

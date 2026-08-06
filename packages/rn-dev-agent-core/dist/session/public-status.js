@@ -133,6 +133,17 @@ export function projectPublicAuthorityStatus(status, options = {}) {
                 },
             }
             : {}),
+        // F2 part 2: a retained startup-cleanup refusal is the real blocker behind a
+        // dead-owner contender. Identifier-free, matching the staleDeviceCleanup discipline.
+        ...(options.recoveryRequirement?.startupCleanupBlocked
+            ? {
+                startupCleanupBlocked: {
+                    code: options.recoveryRequirement.startupCleanupBlocked.code,
+                    reason: options.recoveryRequirement.startupCleanupBlocked.reason,
+                    nextAction: options.recoveryRequirement.nextAction,
+                },
+            }
+            : {}),
         ...(options.recoveryRequirement && options.recoveryRequirement.requirement !== 'none'
             ? {
                 recoveryRequirement: {

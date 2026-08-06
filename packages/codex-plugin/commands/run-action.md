@@ -78,6 +78,12 @@ $rn-dev-agent:run-action mark-all-done --no-auto-repair    # surface the raw fai
      check the flow's `appId:` and optional platform against its exact app and
      platform bindings. A mismatch is not repairable by choosing another
      booted device; stop and rebind the intended session.
+   - **If `state` is `blocked`, stop before replaying.** Report
+     `recoveryRequirement.nextAction` verbatim (plus `startupCleanupBlocked`
+     when status carries it) and do nothing else — never retry the replay,
+     never bind another device, never run setup to work around it. Full
+     contract: the `using-rn-dev-agent` skill section "Session ownership
+     recovery".
    - **Validate `-e` parameters cover the flow's `${VAR}` placeholders**:
      parse `${...}` from the flow body; report any unset placeholders and
      refuse to run unless the user confirms (Maestro will fail at runtime

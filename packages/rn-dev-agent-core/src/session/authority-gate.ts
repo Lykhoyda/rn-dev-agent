@@ -27,6 +27,7 @@ interface AuthorityProbeInput {
 interface AuthorityGateRuntime {
   requireAvailable(): { registry: SessionRegistry; session: SessionRef };
   status(): WorkerAuthorityStatus;
+  blockedContenderError(): SessionAuthorityError;
 }
 
 interface AuthorityGateDependencies {
@@ -760,12 +761,7 @@ export function createAuthorityGate(
         }
         const runtimeStatus = runtime.status();
         if (runtimeStatus.available && runtimeStatus.state === 'blocked') {
-          return authorityFailure(
-            new SessionAuthorityError(
-              'SESSION_AUTHORITY_REQUIRED',
-              'blocked contender exposes only accept_handoff and adopt_stale recovery',
-            ),
-          );
+          return authorityFailure(runtime.blockedContenderError());
         }
         if (
           runtimeStatus.available &&
