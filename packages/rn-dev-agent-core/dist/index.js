@@ -115,6 +115,7 @@ import { buildBundleAuthorityBinding, pinExactDevClient, reconcileAuthoritativeB
 import { createRegisteredConnectHandler } from './session/registered-connect.js';
 import { verifyMetroAuthorityMarker, } from './session/metro-authority.js';
 import { filterTargetsForExactDevice, proveTargetDeviceAssociation, } from './session/target-device-authority.js';
+import { connectExactSessionTarget as connectExactSessionTargetWithDependencies } from './session/connect-exact-session-target.js';
 import { strictProofSourceIdentity } from './session/source-identity.js';
 import { verifyManagedMetroManagementProof } from './session/managed-metro.js';
 import { stopBoundRunner } from './session/process-cleanup.js';
@@ -784,65 +785,12 @@ function createAuthoritativeSessionPolicy(status) {
     };
 }
 async function connectExactSessionTarget(input, timeoutMs) {
-    let exactClient = getClient();
-    if (exactClient.metroPort !== input.metroPort) {
-        await exactClient.disconnect();
-        exactClient = createClient(input.metroPort);
-        setClient(exactClient);
-    }
-    const deadline = Date.now() + timeoutMs;
-    let lastError;
-    do {
-        try {
-            const listed = await exactClient.listTargetsExact(input.metroPort);
-            if (listed.port !== input.metroPort) {
-                throw new Error('CDP_TARGET_AUTHORITY_MISMATCH: target discovery escaped the allocated Metro port');
-            }
-            const sessionCandidates = listed.targets.filter((candidate) => targetMatchesSession(candidate, {
-                platform: input.platform,
-                bundleId: input.appId,
-            }));
-            const exactCandidates = await filterTargetsForExactDevice({
-                platform: input.platform,
-                deviceId: input.deviceId,
-                targets: sessionCandidates,
-            }, { execute: execFileP });
-            if (exactCandidates.length !== 1) {
-                throw new Error(`CDP_TARGET_AUTHORITY_MISMATCH: expected one target on the exact device, found ${exactCandidates.length}`);
-            }
-            await exactClient.connectExact(input.metroPort, {
-                platform: input.platform,
-                bundleId: input.appId,
-                targetId: exactCandidates[0].id,
-            });
-            const target = exactClient.connectedTarget;
-            if (!target ||
-                exactClient.metroPort !== input.metroPort ||
-                !targetMatchesSession(target, {
-                    platform: input.platform,
-                    bundleId: input.appId,
-                })) {
-                throw new Error('CDP_TARGET_AUTHORITY_MISMATCH: exact dev-client target was not found on the claimed Metro');
-            }
-            await proveTargetDeviceAssociation({
-                platform: input.platform,
-                deviceId: input.deviceId,
-                targetDeviceName: target.deviceName,
-            }, { execute: execFileP });
-            return {
-                targetId: target.id,
-                connectionGeneration: exactClient.connectionGeneration,
-                deviceId: input.deviceId,
-            };
-        }
-        catch (error) {
-            lastError = error;
-        }
-        if (Date.now() < deadline) {
-            await new Promise((resolveWait) => setTimeout(resolveWait, 250));
-        }
-    } while (Date.now() < deadline);
-    throw new Error('CDP_TARGET_AUTHORITY_MISMATCH: exact managed-Metro target did not re-register after launch', { cause: lastError });
+    return connectExactSessionTargetWithDependencies(input, timeoutMs, {
+        getClient,
+        setClient,
+        createClient,
+        execute: execFileP,
+    });
 }
 async function relaunchSessionRuntime(status) {
     const device = status.bindings.device;

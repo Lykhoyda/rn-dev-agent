@@ -434,10 +434,10 @@ export class CDPClient {
         }
         return discoverForList(this._port, portHint);
     }
-    async connectExact(port, filters, intent = 'default') {
+    async connectExact(port, filters, intent = 'default', targetRetries = 5) {
         this._reconnectDiscover = discoverExactPort;
         this._exactDiscoveryPort = port;
-        return this.connectWithCurrentPolicy(port, filters, intent);
+        return this.connectWithCurrentPolicy(port, filters, intent, targetRetries);
     }
     async listTargetsExact(port) {
         return listTargetsOnExactPort(this._authoritativeSessionPolicy?.port ?? port);
@@ -477,9 +477,9 @@ export class CDPClient {
             : (filtersOrPlatform ?? {});
         return discoverAuthoritativeTarget(policy, filters);
     };
-    async connectWithCurrentPolicy(portHint, filters, intent) {
+    async connectWithCurrentPolicy(portHint, filters, intent, targetRetries = 5) {
         const policy = this._authoritativeSessionPolicy;
-        const result = await autoConnectFn(this.buildConnectCtx(), policy?.port ?? this._exactDiscoveryPort ?? portHint, policy ? { ...filters, ...policy.filters, targetId: undefined } : filters, intent, policy ? this.authoritativeDiscover : this._reconnectDiscover);
+        const result = await autoConnectFn(this.buildConnectCtx(), policy?.port ?? this._exactDiscoveryPort ?? portHint, policy ? { ...filters, ...policy.filters, targetId: undefined } : filters, intent, policy ? this.authoritativeDiscover : this._reconnectDiscover, targetRetries);
         await this.verifyAuthoritativeConnection();
         return result;
     }

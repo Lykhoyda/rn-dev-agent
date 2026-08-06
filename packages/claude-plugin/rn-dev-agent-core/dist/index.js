@@ -35046,15 +35046,15 @@ var makeIssue = (params) => {
       message: issueData.message
     };
   }
-  let errorMessage = "";
+  let errorMessage2 = "";
   const maps = errorMaps.filter((m) => !!m).slice().reverse();
   for (const map of maps) {
-    errorMessage = map(fullIssue, { data, defaultError: errorMessage }).message;
+    errorMessage2 = map(fullIssue, { data, defaultError: errorMessage2 }).message;
   }
   return {
     ...issueData,
     path: fullPath,
-    message: errorMessage
+    message: errorMessage2
   };
 };
 var EMPTY_PATH = [];
@@ -44876,19 +44876,19 @@ var getRefs = (options) => {
 };
 
 // node_modules/zod-to-json-schema/dist/esm/errorMessages.js
-function addErrorMessage(res, key, errorMessage, refs) {
+function addErrorMessage(res, key, errorMessage2, refs) {
   if (!refs?.errorMessages)
     return;
-  if (errorMessage) {
+  if (errorMessage2) {
     res.errorMessage = {
       ...res.errorMessage,
-      [key]: errorMessage
+      [key]: errorMessage2
     };
   }
 }
-function setResponseValueAndErrors(res, key, value, errorMessage, refs) {
+function setResponseValueAndErrors(res, key, value, errorMessage2, refs) {
   res[key] = value;
-  addErrorMessage(res, key, errorMessage, refs);
+  addErrorMessage(res, key, errorMessage2, refs);
 }
 
 // node_modules/zod-to-json-schema/dist/esm/getRelativePath.js
@@ -46199,8 +46199,8 @@ var Protocol = class {
                   if (queuedMessage.type === "response") {
                     resolver(message);
                   } else {
-                    const errorMessage = message;
-                    const error2 = new McpError(errorMessage.error.code, errorMessage.error.message, errorMessage.error.data);
+                    const errorMessage2 = message;
+                    const error2 = new McpError(errorMessage2.error.code, errorMessage2.error.message, errorMessage2.error.data);
                     resolver(error2);
                   }
                 } else {
@@ -47500,23 +47500,23 @@ var Server = class extends Protocol {
       const wrappedHandler = async (request2, extra) => {
         const validatedRequest = safeParse2(CallToolRequestSchema, request2);
         if (!validatedRequest.success) {
-          const errorMessage = validatedRequest.error instanceof Error ? validatedRequest.error.message : String(validatedRequest.error);
-          throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call request: ${errorMessage}`);
+          const errorMessage2 = validatedRequest.error instanceof Error ? validatedRequest.error.message : String(validatedRequest.error);
+          throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call request: ${errorMessage2}`);
         }
         const { params } = validatedRequest.data;
         const result = await Promise.resolve(handler(request2, extra));
         if (params.task) {
           const taskValidationResult = safeParse2(CreateTaskResultSchema, result);
           if (!taskValidationResult.success) {
-            const errorMessage = taskValidationResult.error instanceof Error ? taskValidationResult.error.message : String(taskValidationResult.error);
-            throw new McpError(ErrorCode.InvalidParams, `Invalid task creation result: ${errorMessage}`);
+            const errorMessage2 = taskValidationResult.error instanceof Error ? taskValidationResult.error.message : String(taskValidationResult.error);
+            throw new McpError(ErrorCode.InvalidParams, `Invalid task creation result: ${errorMessage2}`);
           }
           return taskValidationResult.data;
         }
         const validationResult = safeParse2(CallToolResultSchema, result);
         if (!validationResult.success) {
-          const errorMessage = validationResult.error instanceof Error ? validationResult.error.message : String(validationResult.error);
-          throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call result: ${errorMessage}`);
+          const errorMessage2 = validationResult.error instanceof Error ? validationResult.error.message : String(validationResult.error);
+          throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call result: ${errorMessage2}`);
         }
         return validationResult.data;
       };
@@ -48010,12 +48010,12 @@ var McpServer = class {
    * @param errorMessage - The error message.
    * @returns The tool error result.
    */
-  createToolError(errorMessage) {
+  createToolError(errorMessage2) {
     return {
       content: [
         {
           type: "text",
-          text: errorMessage
+          text: errorMessage2
         }
       ],
       isError: true
@@ -48033,8 +48033,8 @@ var McpServer = class {
     const parseResult = await safeParseAsync2(schemaToParse, args);
     if (!parseResult.success) {
       const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
-      const errorMessage = getParseErrorMessage(error2);
-      throw new McpError(ErrorCode.InvalidParams, `Input validation error: Invalid arguments for tool ${toolName}: ${errorMessage}`);
+      const errorMessage2 = getParseErrorMessage(error2);
+      throw new McpError(ErrorCode.InvalidParams, `Input validation error: Invalid arguments for tool ${toolName}: ${errorMessage2}`);
     }
     return parseResult.data;
   }
@@ -48058,8 +48058,8 @@ var McpServer = class {
     const parseResult = await safeParseAsync2(outputObj, result.structuredContent);
     if (!parseResult.success) {
       const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
-      const errorMessage = getParseErrorMessage(error2);
-      throw new McpError(ErrorCode.InvalidParams, `Output validation error: Invalid structured content for tool ${toolName}: ${errorMessage}`);
+      const errorMessage2 = getParseErrorMessage(error2);
+      throw new McpError(ErrorCode.InvalidParams, `Output validation error: Invalid structured content for tool ${toolName}: ${errorMessage2}`);
     }
   }
   /**
@@ -48271,8 +48271,8 @@ var McpServer = class {
         const parseResult = await safeParseAsync2(argsObj, request2.params.arguments);
         if (!parseResult.success) {
           const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
-          const errorMessage = getParseErrorMessage(error2);
-          throw new McpError(ErrorCode.InvalidParams, `Invalid arguments for prompt ${request2.params.name}: ${errorMessage}`);
+          const errorMessage2 = getParseErrorMessage(error2);
+          throw new McpError(ErrorCode.InvalidParams, `Invalid arguments for prompt ${request2.params.name}: ${errorMessage2}`);
         }
         const args = parseResult.data;
         const cb = prompt.callback;
@@ -53273,10 +53273,16 @@ var ConnectionSetupSupersededError = class extends Error {
     this.name = "ConnectionSetupSupersededError";
   }
 };
+var CDPProbeTimeoutError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "CDPProbeTimeoutError";
+  }
+};
 function shouldRunPickerProbe(intent, target) {
   return intent === "status" && target.vm !== "Hermes";
 }
-async function autoConnect(ctx, portHint, filters, intent = "default", discoverFn = discover) {
+async function autoConnect(ctx, portHint, filters, intent = "default", discoverFn = discover, targetRetries = 5) {
   if (ctx.getState() === "connecting" || ctx.isReconnecting()) {
     throw new Error("Already connecting to Metro...");
   }
@@ -53294,9 +53300,9 @@ async function autoConnect(ctx, portHint, filters, intent = "default", discoverF
     if (resolved)
       effective.preferredBundleId = resolved;
   }
-  return discoverAndConnect(ctx, portHint, effective, discoverFn, intent);
+  return discoverAndConnect(ctx, portHint, effective, discoverFn, intent, targetRetries);
 }
-async function discoverAndConnect(ctx, portHint, filters, discoverFn = discover, intent = "default") {
+async function discoverAndConnect(ctx, portHint, filters, discoverFn = discover, intent = "default", targetRetries = 5) {
   if (ctx.isDisposed()) {
     throw new Error("Client is disposed. Create a new CDPClient instance.");
   }
@@ -53335,7 +53341,7 @@ async function discoverAndConnect(ctx, portHint, filters, discoverFn = discover,
     const candidate = sorted[idx];
     const isLast = idx === sorted.length - 1;
     try {
-      await connectToTarget(ctx, candidate, 5, intent);
+      await connectToTarget(ctx, candidate, targetRetries, intent);
       const devCheck = await ctx.evaluate('typeof __DEV__ !== "undefined" && __DEV__ === true');
       if (devCheck.value === true) {
         connectedTarget = candidate;
@@ -53449,7 +53455,11 @@ async function connectToTarget(ctx, target, retries = 5, intent = "default") {
     }
   }
   ctx.setState("disconnected");
-  throw new Error(formatConnectFailureMessage(retries, attempts3, target.description ?? null, lastError?.message ?? null));
+  const failureMessage = formatConnectFailureMessage(retries, attempts3, target.description ?? null, lastError?.message ?? null);
+  if (attempts3.length > 0 && attempts3.every((attempt) => attempt.handshakeOk) && attempts3.some((attempt) => attempt.probeTimedOut)) {
+    throw new CDPProbeTimeoutError(failureMessage);
+  }
+  throw new Error(failureMessage);
 }
 function connectWs(ctx, url) {
   return new Promise((resolve11, reject) => {
@@ -53926,10 +53936,10 @@ var CDPClient = class _CDPClient {
     }
     return discoverForList(this._port, portHint);
   }
-  async connectExact(port, filters, intent = "default") {
+  async connectExact(port, filters, intent = "default", targetRetries = 5) {
     this._reconnectDiscover = discoverExactPort;
     this._exactDiscoveryPort = port;
-    return this.connectWithCurrentPolicy(port, filters, intent);
+    return this.connectWithCurrentPolicy(port, filters, intent, targetRetries);
   }
   async listTargetsExact(port) {
     return listTargetsOnExactPort(this._authoritativeSessionPolicy?.port ?? port);
@@ -53965,9 +53975,9 @@ var CDPClient = class _CDPClient {
     const filters = typeof filtersOrPlatform === "string" ? { platform: filtersOrPlatform } : filtersOrPlatform ?? {};
     return discoverAuthoritativeTarget(policy, filters);
   };
-  async connectWithCurrentPolicy(portHint, filters, intent) {
+  async connectWithCurrentPolicy(portHint, filters, intent, targetRetries = 5) {
     const policy = this._authoritativeSessionPolicy;
-    const result = await autoConnect(this.buildConnectCtx(), policy?.port ?? this._exactDiscoveryPort ?? portHint, policy ? { ...filters, ...policy.filters, targetId: void 0 } : filters, intent, policy ? this.authoritativeDiscover : this._reconnectDiscover);
+    const result = await autoConnect(this.buildConnectCtx(), policy?.port ?? this._exactDiscoveryPort ?? portHint, policy ? { ...filters, ...policy.filters, targetId: void 0 } : filters, intent, policy ? this.authoritativeDiscover : this._reconnectDiscover, targetRetries);
     await this.verifyAuthoritativeConnection();
     return result;
   }
@@ -81706,6 +81716,84 @@ function createRegisteredConnectHandler(runtime, pinBoundSession) {
   };
 }
 
+// packages/rn-dev-agent-core/dist/session/connect-exact-session-target.js
+function errorMessage(error2) {
+  return error2 instanceof Error ? error2.message : String(error2);
+}
+async function connectExactSessionTarget(input, timeoutMs, dependencies) {
+  const now = dependencies.now ?? Date.now;
+  const wait = dependencies.wait ?? ((ms) => new Promise((resolve11) => setTimeout(resolve11, ms)));
+  let exactClient = dependencies.getClient();
+  if (exactClient.metroPort !== input.metroPort) {
+    await exactClient.disconnect();
+    exactClient = dependencies.createClient(input.metroPort);
+    dependencies.setClient(exactClient);
+  }
+  const deadline = now() + timeoutMs;
+  let lastError;
+  let firstProbeError;
+  do {
+    try {
+      const listed = await exactClient.listTargetsExact(input.metroPort);
+      if (listed.port !== input.metroPort) {
+        throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: target discovery escaped the allocated Metro port");
+      }
+      const sessionCandidates = listed.targets.filter((candidate) => targetMatchesSession(candidate, {
+        platform: input.platform,
+        bundleId: input.appId
+      }));
+      const exactCandidates = await filterTargetsForExactDevice({
+        platform: input.platform,
+        deviceId: input.deviceId,
+        targets: sessionCandidates
+      }, dependencies);
+      if (exactCandidates.length !== 1) {
+        throw new Error(`CDP_TARGET_AUTHORITY_MISMATCH: expected one target on the exact device, found ${exactCandidates.length}`);
+      }
+      await exactClient.connectExact(input.metroPort, {
+        platform: input.platform,
+        bundleId: input.appId,
+        targetId: exactCandidates[0].id
+      }, "default", input.platform === "android" ? 1 : 5);
+      const target = exactClient.connectedTarget;
+      if (!target || exactClient.metroPort !== input.metroPort || !targetMatchesSession(target, {
+        platform: input.platform,
+        bundleId: input.appId
+      })) {
+        throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: exact dev-client target was not found on the claimed Metro");
+      }
+      await proveTargetDeviceAssociation({
+        platform: input.platform,
+        deviceId: input.deviceId,
+        targetDeviceName: target.deviceName
+      }, dependencies);
+      return {
+        targetId: target.id,
+        connectionGeneration: exactClient.connectionGeneration,
+        deviceId: input.deviceId
+      };
+    } catch (error2) {
+      lastError = error2;
+      if (input.platform === "android") {
+        if (error2 instanceof CDPProbeTimeoutError)
+          firstProbeError ??= error2;
+        try {
+          await exactClient.disconnect();
+        } catch {
+        }
+        exactClient = dependencies.createClient(input.metroPort);
+        dependencies.setClient(exactClient);
+      }
+    }
+    const remainingMs = deadline - now();
+    if (remainingMs > 0)
+      await wait(Math.min(250, remainingMs));
+  } while (now() < deadline);
+  const leafError = firstProbeError ?? lastError;
+  const leaf = leafError === void 0 ? "no exact target was advertised" : errorMessage(leafError);
+  throw new Error(`CDP_TARGET_AUTHORITY_MISMATCH: exact managed-Metro target did not re-register after launch. Last exact-connect failure: ${leaf}`, { cause: leafError });
+}
+
 // packages/rn-dev-agent-core/dist/index.js
 var pkgPath = join54(dirname22(fileURLToPath6(import.meta.url)), "..", "package.json");
 var pkgVersion = JSON.parse(readFileSync40(pkgPath, "utf8")).version;
@@ -82201,7 +82289,7 @@ async function pinSessionDevClient(status, options) {
       }
     },
     connectExact: async ({ metroPort, platform, appId, deviceId }) => {
-      return connectExactSessionTarget({ metroPort, platform, appId, deviceId }, 15e3);
+      return connectExactSessionTarget2({ metroPort, platform, appId, deviceId }, 15e3);
     },
     readMarker: async () => {
       const result = await getClient().evaluate("JSON.stringify(globalThis.__RN_DEV_AGENT_AUTHORITY__ ?? null)");
@@ -82256,63 +82344,13 @@ function createAuthoritativeSessionPolicy(status) {
     verifyAndReconcile: reconcileAuthoritativeConnection
   };
 }
-async function connectExactSessionTarget(input, timeoutMs) {
-  let exactClient = getClient();
-  if (exactClient.metroPort !== input.metroPort) {
-    await exactClient.disconnect();
-    exactClient = createClient(input.metroPort);
-    setClient(exactClient);
-  }
-  const deadline = Date.now() + timeoutMs;
-  let lastError;
-  do {
-    try {
-      const listed = await exactClient.listTargetsExact(input.metroPort);
-      if (listed.port !== input.metroPort) {
-        throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: target discovery escaped the allocated Metro port");
-      }
-      const sessionCandidates = listed.targets.filter((candidate) => targetMatchesSession(candidate, {
-        platform: input.platform,
-        bundleId: input.appId
-      }));
-      const exactCandidates = await filterTargetsForExactDevice({
-        platform: input.platform,
-        deviceId: input.deviceId,
-        targets: sessionCandidates
-      }, { execute: execFileP });
-      if (exactCandidates.length !== 1) {
-        throw new Error(`CDP_TARGET_AUTHORITY_MISMATCH: expected one target on the exact device, found ${exactCandidates.length}`);
-      }
-      await exactClient.connectExact(input.metroPort, {
-        platform: input.platform,
-        bundleId: input.appId,
-        targetId: exactCandidates[0].id
-      });
-      const target = exactClient.connectedTarget;
-      if (!target || exactClient.metroPort !== input.metroPort || !targetMatchesSession(target, {
-        platform: input.platform,
-        bundleId: input.appId
-      })) {
-        throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: exact dev-client target was not found on the claimed Metro");
-      }
-      await proveTargetDeviceAssociation({
-        platform: input.platform,
-        deviceId: input.deviceId,
-        targetDeviceName: target.deviceName
-      }, { execute: execFileP });
-      return {
-        targetId: target.id,
-        connectionGeneration: exactClient.connectionGeneration,
-        deviceId: input.deviceId
-      };
-    } catch (error2) {
-      lastError = error2;
-    }
-    if (Date.now() < deadline) {
-      await new Promise((resolveWait) => setTimeout(resolveWait, 250));
-    }
-  } while (Date.now() < deadline);
-  throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: exact managed-Metro target did not re-register after launch", { cause: lastError });
+async function connectExactSessionTarget2(input, timeoutMs) {
+  return connectExactSessionTarget(input, timeoutMs, {
+    getClient,
+    setClient,
+    createClient,
+    execute: execFileP
+  });
 }
 async function relaunchSessionRuntime(status) {
   const device = status.bindings.device;
@@ -82349,7 +82387,7 @@ async function relaunchSessionRuntime(status) {
       appId
     ]);
   }
-  await connectExactSessionTarget({ metroPort: Number(metroPort), platform, appId, deviceId }, 15e3);
+  await connectExactSessionTarget2({ metroPort: Number(metroPort), platform, appId, deviceId }, 15e3);
 }
 async function rebindSessionRuntime(status) {
   const device = status.bindings.device;

@@ -612,10 +612,11 @@ export class CDPClient {
     port: number,
     filters: ConnectFilters,
     intent: ConnectIntent = 'default',
+    targetRetries = 5,
   ): Promise<string> {
     this._reconnectDiscover = discoverExactPort;
     this._exactDiscoveryPort = port;
-    return this.connectWithCurrentPolicy(port, filters, intent);
+    return this.connectWithCurrentPolicy(port, filters, intent, targetRetries);
   }
 
   async listTargetsExact(port: number): Promise<{ port: number; targets: HermesTarget[] }> {
@@ -672,6 +673,7 @@ export class CDPClient {
     portHint: number | undefined,
     filters: ConnectFilters,
     intent: ConnectIntent,
+    targetRetries = 5,
   ): Promise<string> {
     const policy = this._authoritativeSessionPolicy;
     const result = await autoConnectFn(
@@ -680,6 +682,7 @@ export class CDPClient {
       policy ? { ...filters, ...policy.filters, targetId: undefined } : filters,
       intent,
       policy ? this.authoritativeDiscover : this._reconnectDiscover,
+      targetRetries,
     );
     await this.verifyAuthoritativeConnection();
     return result;

@@ -37,6 +37,12 @@ export class ConnectionSetupSupersededError extends Error {
         this.name = 'ConnectionSetupSupersededError';
     }
 }
+export class CDPProbeTimeoutError extends Error {
+    constructor(message) {
+        super(message);
+        this.name = 'CDPProbeTimeoutError';
+    }
+}
 /**
  * GH #184: run the bounded picker probe only for a status-intent connect against
  * a non-Hermes target. Hermes targets are skipped so a genuinely slow Hermes
@@ -45,7 +51,7 @@ export class ConnectionSetupSupersededError extends Error {
 export function shouldRunPickerProbe(intent, target) {
     return intent === 'status' && target.vm !== 'Hermes';
 }
-export async function autoConnect(ctx, portHint, filters, intent = 'default', discoverFn = discover) {
+export async function autoConnect(ctx, portHint, filters, intent = 'default', discoverFn = discover, targetRetries = 5) {
     if (ctx.getState() === 'connecting' || ctx.isReconnecting()) {
         throw new Error('Already connecting to Metro...');
     }
@@ -66,15 +72,12 @@ export async function autoConnect(ctx, portHint, filters, intent = 'default', di
         if (resolved)
             effective.preferredBundleId = resolved;
     }
-    return discoverAndConnect(ctx, portHint, effective, discoverFn, intent);
+    return discoverAndConnect(ctx, portHint, effective, discoverFn, intent, targetRetries);
 }
-export async function discoverAndConnect(ctx, portHint, filters, 
-// B111 (D643): injectable for unit tests — defaults to real discover. Production
-// call sites pass nothing, so behavior is unchanged. Tests pass a stub.
-discoverFn = discover, 
-// GH #184: connect intent threaded to connectToTarget. Kept last so existing
-// callers (and tests passing discoverFn as the 4th arg) are unaffected.
-intent = 'default') {
+// B111 (D643): discoverFn is injectable for unit tests. GH #184 keeps intent
+// after it for compatibility. Exact-session re-registration passes targetRetries=1
+// so a stale inspector cannot consume the outer deadline; other paths retain five.
+export async function discoverAndConnect(ctx, portHint, filters, discoverFn = discover, intent = 'default', targetRetries = 5) {
     if (ctx.isDisposed()) {
         throw new Error('Client is disposed. Create a new CDPClient instance.');
     }
@@ -120,7 +123,7 @@ intent = 'default') {
         const candidate = sorted[idx];
         const isLast = idx === sorted.length - 1;
         try {
-            await connectToTarget(ctx, candidate, 5, intent);
+            await connectToTarget(ctx, candidate, targetRetries, intent);
             const devCheck = await ctx.evaluate('typeof __DEV__ !== "undefined" && __DEV__ === true');
             if (devCheck.value === true) {
                 connectedTarget = candidate;
@@ -285,7 +288,13 @@ async function connectToTarget(ctx, target, retries = 5, intent = 'default') {
         }
     }
     ctx.setState('disconnected');
-    throw new Error(formatConnectFailureMessage(retries, attempts, target.description ?? null, lastError?.message ?? null));
+    const failureMessage = formatConnectFailureMessage(retries, attempts, target.description ?? null, lastError?.message ?? null);
+    if (attempts.length > 0 &&
+        attempts.every((attempt) => attempt.handshakeOk) &&
+        attempts.some((attempt) => attempt.probeTimedOut)) {
+        throw new CDPProbeTimeoutError(failureMessage);
+    }
+    throw new Error(failureMessage);
 }
 function connectWs(ctx, url) {
     return new Promise((resolve, reject) => {
