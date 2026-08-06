@@ -25240,15 +25240,27 @@ var init_registry = __esm({
       }
       #transaction(operation, assertBeforeCommit) {
         this.#database.exec("BEGIN IMMEDIATE");
+        const context = this.#operationContext.getStore();
+        const priorContextAuthorityVersion = context?.authorityVersion;
+        let committed = false;
         try {
           const result = operation();
           assertBeforeCommit?.();
           this.#database.exec("COMMIT");
+          committed = true;
           this.#secureFiles();
           return result;
         } catch (error2) {
-          this.#database.exec("ROLLBACK");
-          this.#secureFiles();
+          if (!committed) {
+            try {
+              this.#database.exec("ROLLBACK");
+            } finally {
+              if (context && priorContextAuthorityVersion !== void 0) {
+                context.authorityVersion = priorContextAuthorityVersion;
+              }
+              this.#secureFiles();
+            }
+          }
           throw error2;
         }
       }
@@ -65292,6 +65304,9 @@ function createSessionHandler(runtime, dependencies = {}) {
           }
         }
         const priorTargetId = status2.bindings.bundle?.targetId;
+        const priorBundle = status2.bindings.bundle ?? null;
+        const priorState = status2.state;
+        const priorAuthorityVersion = status2.authorityVersion;
         const devicePlatform = status2.bindings.device?.platform;
         const atomicAndroidReplacement = devicePlatform === "android";
         if (input.force === true && !atomicAndroidReplacement && typeof priorTargetId === "string") {
@@ -65304,21 +65319,42 @@ function createSessionHandler(runtime, dependencies = {}) {
           });
           dependencies.onBundleInvalidated?.();
         }
-        await dependencies.pinDevClient(status2, { force: input.force === true }, (candidate, assertBeforeCommit) => registry2.updateBindings(session2, {
-          state: "ready",
-          bindings: { bundle: candidate },
-          expectedAuthorityVersion: atomicAndroidReplacement ? status2.authorityVersion : void 0,
-          releaseResources: atomicAndroidReplacement && typeof priorTargetId === "string" && priorTargetId !== candidate.targetId ? [
-            {
-              type: "target",
-              key: `${candidate.metroPort}:${priorTargetId}`
+        await dependencies.pinDevClient(status2, { force: input.force === true }, (candidate, promotion) => {
+          const candidateTarget = {
+            type: "target",
+            key: `${candidate.metroPort}:${candidate.targetId}`
+          };
+          const targetChanged = priorTargetId !== candidate.targetId;
+          const priorTarget = typeof priorTargetId === "string" && targetChanged ? {
+            type: "target",
+            key: `${candidate.metroPort}:${priorTargetId}`
+          } : null;
+          let committed = false;
+          try {
+            registry2.updateBindings(session2, {
+              state: "ready",
+              bindings: { bundle: candidate },
+              expectedAuthorityVersion: atomicAndroidReplacement ? priorAuthorityVersion : void 0,
+              releaseResources: atomicAndroidReplacement && priorTarget ? [priorTarget] : [],
+              claimResources: [candidateTarget],
+              assertBeforeCommit: promotion.assertActive
+            });
+            committed = true;
+            promotion.assertActive();
+            promotion.publish();
+          } catch (error2) {
+            if (committed && atomicAndroidReplacement) {
+              registry2.updateBindings(session2, {
+                state: priorState,
+                bindings: { bundle: priorBundle },
+                expectedAuthorityVersion: priorAuthorityVersion + 1,
+                releaseResources: targetChanged ? [candidateTarget] : [],
+                claimResources: priorTarget ? [priorTarget] : []
+              });
             }
-          ] : [],
-          claimResources: [
-            { type: "target", key: `${candidate.metroPort}:${candidate.targetId}` }
-          ],
-          assertBeforeCommit
-        }));
+            throw error2;
+          }
+        });
         return okResult({ session: projectPublicAuthorityStatus(runtime.status()) });
       }
       if (input.action === "prepare_handoff") {
@@ -82298,8 +82334,10 @@ async function pinExactDevClient(input, dependencies) {
       if (!dependencies.commitBundle) {
         throw new Error("BUNDLE_HANDSHAKE_UNAVAILABLE: atomic bundle commit is unavailable");
       }
-      dependencies.commitBundle(bundle, connected.assertActive);
-      connected.publish();
+      dependencies.commitBundle(bundle, {
+        assertActive: connected.assertActive,
+        publish: connected.publish
+      });
     }
     return bundle;
   } catch (error2) {
@@ -83200,6 +83238,7 @@ async function relaunchSessionRuntime(status) {
   }
   const connection = await connectExactSessionTarget2({ metroPort: Number(metroPort), platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
   connection.publish();
+  getClient().setAuthoritativeSessionPolicy(createAuthoritativeSessionPolicy(status));
 }
 async function rebindSessionRuntime(status, awaitWithinBoundary) {
   const device = status.bindings.device;

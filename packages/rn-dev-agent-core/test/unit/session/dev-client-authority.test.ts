@@ -110,11 +110,13 @@ test('Android staged client publishes only after marker proof and atomic precomm
         events.push('marker');
         return { status: 'signed', marker };
       },
-      commitBundle: (_bundle, assertBeforeCommit) => {
+      commitBundle: (_bundle, promotion) => {
         events.push('transaction');
         assert.equal(events.includes('publish'), false);
-        assertBeforeCommit();
+        promotion.assertActive();
         events.push('commit');
+        promotion.assertActive();
+        promotion.publish();
       },
     },
   );
@@ -126,6 +128,7 @@ test('Android staged client publishes only after marker proof and atomic precomm
     'transaction',
     'assert',
     'commit',
+    'assert',
     'publish',
   ]);
 });

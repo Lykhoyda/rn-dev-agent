@@ -3345,16 +3345,29 @@ export class SessionRegistry {
     }
     #transaction(operation, assertBeforeCommit) {
         this.#database.exec('BEGIN IMMEDIATE');
+        const context = this.#operationContext.getStore();
+        const priorContextAuthorityVersion = context?.authorityVersion;
+        let committed = false;
         try {
             const result = operation();
             assertBeforeCommit?.();
             this.#database.exec('COMMIT');
+            committed = true;
             this.#secureFiles();
             return result;
         }
         catch (error) {
-            this.#database.exec('ROLLBACK');
-            this.#secureFiles();
+            if (!committed) {
+                try {
+                    this.#database.exec('ROLLBACK');
+                }
+                finally {
+                    if (context && priorContextAuthorityVersion !== undefined) {
+                        context.authorityVersion = priorContextAuthorityVersion;
+                    }
+                    this.#secureFiles();
+                }
+            }
             throw error;
         }
     }

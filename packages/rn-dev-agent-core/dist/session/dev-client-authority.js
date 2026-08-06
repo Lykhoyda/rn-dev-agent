@@ -141,8 +141,10 @@ export async function pinExactDevClient(input, dependencies) {
             if (!dependencies.commitBundle) {
                 throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: atomic bundle commit is unavailable');
             }
-            dependencies.commitBundle(bundle, connected.assertActive);
-            connected.publish();
+            dependencies.commitBundle(bundle, {
+                assertActive: connected.assertActive,
+                publish: connected.publish,
+            });
         }
         return bundle;
     }

@@ -33,7 +33,7 @@ interface PinDevClientDependencies {
   readMarker(
     connection: ExactSessionTargetConnection | ExactConnectionSummary,
   ): Promise<{ status: 'signed'; marker: MetroAuthorityMarker } | null>;
-  commitBundle?(bundle: BundleAuthorityBinding, assertBeforeCommit: () => void): void;
+  commitBundle?(bundle: BundleAuthorityBinding, promotion: BundleAuthorityPromotion): void;
   readManagedManifest?(input: {
     host: string;
     metroPort: number;
@@ -50,6 +50,11 @@ export interface BundleAuthorityBinding extends MetroAuthorityBinding, Record<st
   connectionGeneration: number;
   authorityScope: 'initial-bundle';
   sourceFidelity: 'not-proven';
+}
+
+export interface BundleAuthorityPromotion {
+  assertActive(): void;
+  publish(): void;
 }
 
 interface AuthoritativeBundleStatus {
@@ -251,8 +256,10 @@ export async function pinExactDevClient(
       if (!dependencies.commitBundle) {
         throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: atomic bundle commit is unavailable');
       }
-      dependencies.commitBundle(bundle, connected.assertActive);
-      connected.publish();
+      dependencies.commitBundle(bundle, {
+        assertActive: connected.assertActive,
+        publish: connected.publish,
+      });
     }
     return bundle;
   } catch (error) {

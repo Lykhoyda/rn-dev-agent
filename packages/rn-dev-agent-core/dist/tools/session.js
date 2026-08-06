@@ -427,6 +427,9 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 }
                 const priorTargetId = status.bindings.bundle
                     ?.targetId;
+                const priorBundle = status.bindings.bundle ?? null;
+                const priorState = status.state;
+                const priorAuthorityVersion = status.authorityVersion;
                 const devicePlatform = status.bindings.device
                     ?.platform;
                 const atomicAndroidReplacement = devicePlatform === 'android';
@@ -442,27 +445,47 @@ export function createSessionHandler(runtime, dependencies = {}) {
                     });
                     dependencies.onBundleInvalidated?.();
                 }
-                await dependencies.pinDevClient(status, { force: input.force === true }, (candidate, assertBeforeCommit) => registry.updateBindings(session, {
-                    state: 'ready',
-                    bindings: { bundle: candidate },
-                    expectedAuthorityVersion: atomicAndroidReplacement
-                        ? status.authorityVersion
-                        : undefined,
-                    releaseResources: atomicAndroidReplacement &&
-                        typeof priorTargetId === 'string' &&
-                        priorTargetId !== candidate.targetId
-                        ? [
-                            {
-                                type: 'target',
-                                key: `${candidate.metroPort}:${priorTargetId}`,
-                            },
-                        ]
-                        : [],
-                    claimResources: [
-                        { type: 'target', key: `${candidate.metroPort}:${candidate.targetId}` },
-                    ],
-                    assertBeforeCommit,
-                }));
+                await dependencies.pinDevClient(status, { force: input.force === true }, (candidate, promotion) => {
+                    const candidateTarget = {
+                        type: 'target',
+                        key: `${candidate.metroPort}:${candidate.targetId}`,
+                    };
+                    const targetChanged = priorTargetId !== candidate.targetId;
+                    const priorTarget = typeof priorTargetId === 'string' && targetChanged
+                        ? {
+                            type: 'target',
+                            key: `${candidate.metroPort}:${priorTargetId}`,
+                        }
+                        : null;
+                    let committed = false;
+                    try {
+                        registry.updateBindings(session, {
+                            state: 'ready',
+                            bindings: { bundle: candidate },
+                            expectedAuthorityVersion: atomicAndroidReplacement
+                                ? priorAuthorityVersion
+                                : undefined,
+                            releaseResources: atomicAndroidReplacement && priorTarget ? [priorTarget] : [],
+                            claimResources: [candidateTarget],
+                            assertBeforeCommit: promotion.assertActive,
+                        });
+                        committed = true;
+                        promotion.assertActive();
+                        promotion.publish();
+                    }
+                    catch (error) {
+                        if (committed && atomicAndroidReplacement) {
+                            registry.updateBindings(session, {
+                                state: priorState,
+                                bindings: { bundle: priorBundle },
+                                expectedAuthorityVersion: priorAuthorityVersion + 1,
+                                releaseResources: targetChanged ? [candidateTarget] : [],
+                                claimResources: priorTarget ? [priorTarget] : [],
+                            });
+                        }
+                        throw error;
+                    }
+                });
                 return okResult({ session: projectPublicAuthorityStatus(runtime.status()) });
             }
             if (input.action === 'prepare_handoff') {

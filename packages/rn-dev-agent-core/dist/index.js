@@ -857,6 +857,7 @@ async function relaunchSessionRuntime(status) {
     }
     const connection = await connectExactSessionTarget({ metroPort: Number(metroPort), platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
     connection.publish();
+    getClient().setAuthoritativeSessionPolicy(createAuthoritativeSessionPolicy(status));
 }
 async function rebindSessionRuntime(status, awaitWithinBoundary) {
     const device = status.bindings.device;

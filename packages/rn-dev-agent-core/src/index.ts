@@ -203,6 +203,8 @@ import {
   buildBundleAuthorityBinding,
   pinExactDevClient,
   reconcileAuthoritativeBundle,
+  type BundleAuthorityBinding,
+  type BundleAuthorityPromotion,
 } from './session/dev-client-authority.js';
 import { createRegisteredConnectHandler } from './session/registered-connect.js';
 import {
@@ -837,10 +839,7 @@ function trackedTool(name: string, desc: string, schema: z.ZodRawShape, handler:
 async function pinSessionDevClient(
   status: SessionStatus,
   options: { force: boolean },
-  commitBundle: (
-    bundle: import('./session/dev-client-authority.js').BundleAuthorityBinding,
-    assertBeforeCommit: () => void,
-  ) => void,
+  commitBundle: (bundle: BundleAuthorityBinding, promotion: BundleAuthorityPromotion) => void,
 ) {
   const device = status.bindings.device as {
     platform: 'ios' | 'android';
@@ -1103,6 +1102,7 @@ async function relaunchSessionRuntime(status: SessionStatus): Promise<void> {
     exactSessionTargetReadinessTimeoutMs(platform),
   );
   connection.publish();
+  getClient().setAuthoritativeSessionPolicy(createAuthoritativeSessionPolicy(status));
 }
 
 async function rebindSessionRuntime(

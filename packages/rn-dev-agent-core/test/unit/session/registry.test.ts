@@ -969,6 +969,35 @@ test('deadline assertion runs at the transaction pre-commit boundary and rolls b
   assert.equal(registry.getSessionStatus(owner.sessionId)?.state, priorState);
 });
 
+test('deadline rollback restores the in-memory operation fence', async () => {
+  const { registry, create } = fixture();
+  const owner = create('deadline-operation-owner');
+  const operation = registry.beginOperation(owner, {
+    operationId: 'deadline-operation',
+    tool: 'rn_session',
+    profile: 'CSIMBD',
+  });
+
+  await registry.runWithOperation(operation, async () => {
+    assert.throws(
+      () =>
+        registry.updateBindings(owner, {
+          state: 'ready',
+          bindings: { bundle: { targetId: 'late-target' } },
+          assertBeforeCommit: () => {
+            throw new Error('Android exact-target deadline expired before commit');
+          },
+        }),
+      /deadline expired before commit/,
+    );
+
+    assert.equal(registry.currentOperation()?.authorityVersion, operation.authorityVersion);
+    registry.endOperation(operation);
+  });
+
+  assert.equal(registry.currentOperation(), undefined);
+});
+
 test('runtime target replacement advances the binding and operation fence atomically', () => {
   const { registry, create } = fixture();
   const owner = create('a');
