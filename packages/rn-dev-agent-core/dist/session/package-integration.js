@@ -3289,8 +3289,9 @@ function failBuild(code, message) {
   reportAbortOutcome(abortFailure);
   process.exit(code);
 }
-function failOnSessionCliError(result, label) {
+async function failOnSessionCliError(result, label) {
   if (!result.error) return;
+  await drainBuildTerminationSignals();
   failBuild(2, result.error.code === 'ETIMEDOUT'
     ? 'SESSION_CLI_TIMEOUT: rn-session ' + label + ' did not return within ' + (SESSION_CLI_TIMEOUT_MS / 1000) + 's'
     : 'SESSION_AUTHORITY_REQUIRED: rn-session ' + label + ' failed: ' + result.error.message);
@@ -3432,7 +3433,7 @@ function managedMetroProxyUrl(binding) {
       timeout: SESSION_CLI_TIMEOUT_MS,
       killSignal: 'SIGKILL',
     });
-    failOnSessionCliError(probe, 'prepare-build');
+    await failOnSessionCliError(probe, 'prepare-build');
     if (probe.status !== 0 && String(probe.stderr).includes('live Metro binding')) {
       const metro = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'ensure-metro'], {
         cwd: process.cwd(),
@@ -3441,7 +3442,7 @@ function managedMetroProxyUrl(binding) {
         timeout: SESSION_CLI_TIMEOUT_MS,
         killSignal: 'SIGKILL',
       });
-      failOnSessionCliError(metro, 'ensure-metro');
+      await failOnSessionCliError(metro, 'ensure-metro');
       if (metro.status !== 0) {
         await drainBuildTerminationSignals();
         failBuild(2, String(metro.stderr).trim() || 'METRO_START_UNAVAILABLE: managed Metro failed');
@@ -3453,7 +3454,7 @@ function managedMetroProxyUrl(binding) {
         timeout: SESSION_CLI_TIMEOUT_MS,
         killSignal: 'SIGKILL',
       });
-      failOnSessionCliError(probe, 'prepare-build');
+      await failOnSessionCliError(probe, 'prepare-build');
     }
     if (probe.status === 0) {
       let parsed = null;
@@ -3582,7 +3583,7 @@ function managedMetroProxyUrl(binding) {
       timeout: SESSION_CLI_TIMEOUT_MS,
       killSignal: 'SIGKILL',
     });
-    failOnSessionCliError(complete, 'complete-build');
+    await failOnSessionCliError(complete, 'complete-build');
     if (complete.status !== 0) {
       failBuild(2, String(complete.stderr).trim() || 'APP_INSTALL_IDENTITY_CHANGED: build receipt could not be recorded');
     }
