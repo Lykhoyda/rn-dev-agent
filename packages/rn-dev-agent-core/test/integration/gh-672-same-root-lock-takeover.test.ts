@@ -238,10 +238,14 @@ test(
       const ownerStatus = await sessionStatus(owner);
       assert.equal(ownerStatus.ok, true, `owner status failed: ${JSON.stringify(ownerStatus)}`);
       assert.equal(ownerStatus.data.authority.state, 'source_bound');
+      const ownerLock = await readLockBody(lockDir);
+      assert.ok(ownerLock, 'the real owner wrote a single-instance lock');
+      const ownerPid = ownerLock.pid;
       const deadSessionId = readRegistry(stateHome).sessions[0].session_id;
 
-      owner.child.kill('SIGKILL');
-      await new Promise((resolve) => owner.child.on('exit', resolve));
+      const ownerExit = new Promise((resolve) => owner.child.on('exit', resolve));
+      process.kill(ownerPid, 'SIGKILL');
+      await ownerExit;
       owner = null;
 
       successor = startSupervisor({ cwd: project, env, noLock: false, lineTimeoutMs: 30_000 });
