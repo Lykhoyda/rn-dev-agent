@@ -65839,14 +65839,16 @@ function createSessionHandler(runtime, dependencies = {}) {
       registry2.releaseSession(session2);
       if (status.bindings.bundle)
         dependencies.onBundleInvalidated?.();
+      let recycleRequested = false;
       try {
-        dependencies.requestWorkerRecycle?.();
+        recycleRequested = dependencies.requestWorkerRecycle?.() === true;
       } catch {
       }
       return okResult({
         released: true,
         sessionId: session2.sessionId,
-        nextAction: "A fresh session is minted automatically; retry rn_session (bind_device, apply_integration) on this worktree."
+        recycleRequested,
+        nextAction: recycleRequested ? "A fresh session is minted automatically; retry rn_session (bind_device, apply_integration) on this worktree." : "No supervisor can mint a successor here; restart the MCP transport before the next rn_session action on this worktree."
       });
     } catch (error2) {
       return authorityFailure2(error2);
@@ -82993,9 +82995,9 @@ var getSessionSignerCapability = (sessionId) => {
 var spawningSupervisorPid = process.ppid;
 var requestWorkerRecycle = () => {
   if (process.env.RN_BRIDGE_SUPERVISED !== "1")
-    return;
+    return false;
   if (!Number.isInteger(spawningSupervisorPid) || spawningSupervisorPid <= 1)
-    return;
+    return false;
   setTimeout(() => {
     if (process.ppid !== spawningSupervisorPid)
       return;
@@ -83004,6 +83006,7 @@ var requestWorkerRecycle = () => {
     } catch {
     }
   }, 250).unref();
+  return true;
 };
 var sessionHandler = createSessionHandler(authorityRuntime, {
   getSignerCapability: getSessionSignerCapability,

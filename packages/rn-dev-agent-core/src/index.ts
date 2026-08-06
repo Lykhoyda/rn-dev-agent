@@ -1183,9 +1183,9 @@ const getSessionSignerCapability = (sessionId?: string): string | null => {
 // worker (replaying the MCP handshake) with the environment of a freshly resolved
 // session, which is the only way a released session becomes usable again in-band.
 const spawningSupervisorPid = process.ppid;
-const requestWorkerRecycle = (): void => {
-  if (process.env.RN_BRIDGE_SUPERVISED !== '1') return;
-  if (!Number.isInteger(spawningSupervisorPid) || spawningSupervisorPid <= 1) return;
+const requestWorkerRecycle = (): boolean => {
+  if (process.env.RN_BRIDGE_SUPERVISED !== '1') return false;
+  if (!Number.isInteger(spawningSupervisorPid) || spawningSupervisorPid <= 1) return false;
   setTimeout(() => {
     // A changed parent means the supervisor died and its PID may now belong to an
     // unrelated process; never signal that stranger.
@@ -1196,6 +1196,7 @@ const requestWorkerRecycle = (): void => {
       /* supervisor already gone — the next transport start resolves a session */
     }
   }, 250).unref();
+  return true;
 };
 
 const sessionHandler = createSessionHandler(authorityRuntime, {

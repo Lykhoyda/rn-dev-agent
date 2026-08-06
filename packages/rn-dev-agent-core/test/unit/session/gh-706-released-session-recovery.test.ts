@@ -62,12 +62,14 @@ test('release mints a fresh session in-band and the next bind_device works', asy
     deviceExists: () => true,
     requestWorkerRecycle: () => {
       recycleRequests += 1;
+      return true;
     },
   });
 
   const release = await releasedHandler({ action: 'release', confirmed: true });
   assert.notEqual(release.isError, true);
   assert.equal(recycleRequests, 1);
+  assert.match(JSON.stringify(release), /A fresh session is minted automatically/);
 
   // The released row is the dead end reported in GH #706.
   const deadEnd = await releasedHandler({
@@ -104,6 +106,28 @@ test('release mints a fresh session in-band and the next bind_device works', asy
   } finally {
     freshRuntime.close();
     await fresh.close();
+  }
+});
+
+test('release without an available recycle tells the caller a transport restart is required', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'rn-gh706-unsupervised-'));
+  roots.push(stateDir);
+  const supervisor = mintSupervisor(stateDir);
+  const runtime = workerRuntime(supervisor.workerEnvironment('worker-a'));
+  try {
+    const handler = createSessionHandler(runtime, {
+      deviceExists: () => true,
+      requestWorkerRecycle: () => false,
+    });
+    const release = await handler({ action: 'release', confirmed: true });
+    assert.notEqual(release.isError, true);
+    const body = JSON.parse(release.content[0].text);
+    assert.equal(body.data.recycleRequested, false);
+    assert.match(body.data.nextAction, /restart the MCP transport/);
+    assert.doesNotMatch(body.data.nextAction, /minted automatically/);
+  } finally {
+    runtime.close();
+    await supervisor.close();
   }
 });
 

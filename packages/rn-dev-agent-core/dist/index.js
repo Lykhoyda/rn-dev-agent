@@ -928,9 +928,9 @@ const getSessionSignerCapability = (sessionId) => {
 const spawningSupervisorPid = process.ppid;
 const requestWorkerRecycle = () => {
     if (process.env.RN_BRIDGE_SUPERVISED !== '1')
-        return;
+        return false;
     if (!Number.isInteger(spawningSupervisorPid) || spawningSupervisorPid <= 1)
-        return;
+        return false;
     setTimeout(() => {
         // A changed parent means the supervisor died and its PID may now belong to an
         // unrelated process; never signal that stranger.
@@ -943,6 +943,7 @@ const requestWorkerRecycle = () => {
             /* supervisor already gone — the next transport start resolves a session */
         }
     }, 250).unref();
+    return true;
 };
 const sessionHandler = createSessionHandler(authorityRuntime, {
     getSignerCapability: getSessionSignerCapability,
