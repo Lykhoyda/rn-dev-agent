@@ -50,6 +50,13 @@ export class ConnectionSetupSupersededError extends Error {
   }
 }
 
+export class CDPProbeTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'CDPProbeTimeoutError';
+  }
+}
+
 /**
  * GH #184: run the bounded picker probe only for a status-intent connect against
  * a non-Hermes target. Hermes targets are skipped so a genuinely slow Hermes
@@ -380,14 +387,20 @@ async function connectToTarget(
     }
   }
   ctx.setState('disconnected');
-  throw new Error(
-    formatConnectFailureMessage(
-      retries,
-      attempts,
-      target.description ?? null,
-      lastError?.message ?? null,
-    ),
+  const failureMessage = formatConnectFailureMessage(
+    retries,
+    attempts,
+    target.description ?? null,
+    lastError?.message ?? null,
   );
+  if (
+    attempts.length > 0 &&
+    attempts.every((attempt) => attempt.handshakeOk) &&
+    attempts.some((attempt) => attempt.probeTimedOut)
+  ) {
+    throw new CDPProbeTimeoutError(failureMessage);
+  }
+  throw new Error(failureMessage);
 }
 
 function connectWs(ctx: ConnectContext, url: string): Promise<WebSocket> {

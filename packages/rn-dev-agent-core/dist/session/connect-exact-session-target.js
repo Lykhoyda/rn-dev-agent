@@ -1,14 +1,9 @@
+import { CDPProbeTimeoutError } from '../cdp/connect.js';
 import { targetMatchesSession } from '../tools/status.js';
 import { filterTargetsForExactDevice, proveTargetDeviceAssociation, } from './target-device-authority.js';
 function errorMessage(error) {
     return error instanceof Error ? error.message : String(error);
 }
-/**
- * Connect the production session pin to exactly one app/device target on its
- * allocated Metro. Each listing gets only one transport attempt: a stale target
- * is fully reset before the next exact-port listing, rather than monopolizing
- * the outer re-registration deadline with CDP's ordinary five-attempt loop.
- */
 export async function connectExactSessionTarget(input, timeoutMs, dependencies) {
     const now = dependencies.now ?? Date.now;
     const wait = dependencies.wait ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
@@ -20,6 +15,7 @@ export async function connectExactSessionTarget(input, timeoutMs, dependencies) 
     }
     const deadline = now() + timeoutMs;
     let lastError;
+    let firstProbeError;
     do {
         try {
             const listed = await exactClient.listTargetsExact(input.metroPort);
@@ -42,7 +38,7 @@ export async function connectExactSessionTarget(input, timeoutMs, dependencies) 
                 platform: input.platform,
                 bundleId: input.appId,
                 targetId: exactCandidates[0].id,
-            }, 'default', 1);
+            }, 'default', input.platform === 'android' ? 1 : 5);
             const target = exactClient.connectedTarget;
             if (!target ||
                 exactClient.metroPort !== input.metroPort ||
@@ -65,22 +61,22 @@ export async function connectExactSessionTarget(input, timeoutMs, dependencies) 
         }
         catch (error) {
             lastError = error;
-            // A successful handshake can still leave transport state and pending CDP
-            // work behind when the mandatory probe times out. Reset the whole client
-            // before re-listing; no stale socket or debugger runs in parallel.
-            try {
-                await exactClient.disconnect();
+            if (input.platform === 'android') {
+                if (error instanceof CDPProbeTimeoutError)
+                    firstProbeError ??= error;
+                try {
+                    await exactClient.disconnect();
+                }
+                catch { }
+                exactClient = dependencies.createClient(input.metroPort);
+                dependencies.setClient(exactClient);
             }
-            catch {
-                // Replacement below is the fail-closed reset even if close itself errs.
-            }
-            exactClient = dependencies.createClient(input.metroPort);
-            dependencies.setClient(exactClient);
         }
         const remainingMs = deadline - now();
         if (remainingMs > 0)
             await wait(Math.min(250, remainingMs));
     } while (now() < deadline);
-    const leaf = lastError === undefined ? 'no exact target was advertised' : errorMessage(lastError);
-    throw new Error(`CDP_TARGET_AUTHORITY_MISMATCH: exact managed-Metro target did not re-register after launch. Last exact-connect failure: ${leaf}`, { cause: lastError });
+    const leafError = firstProbeError ?? lastError;
+    const leaf = leafError === undefined ? 'no exact target was advertised' : errorMessage(leafError);
+    throw new Error(`CDP_TARGET_AUTHORITY_MISMATCH: exact managed-Metro target did not re-register after launch. Last exact-connect failure: ${leaf}`, { cause: leafError });
 }

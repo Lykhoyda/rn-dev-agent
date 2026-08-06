@@ -53273,6 +53273,12 @@ var ConnectionSetupSupersededError = class extends Error {
     this.name = "ConnectionSetupSupersededError";
   }
 };
+var CDPProbeTimeoutError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "CDPProbeTimeoutError";
+  }
+};
 function shouldRunPickerProbe(intent, target) {
   return intent === "status" && target.vm !== "Hermes";
 }
@@ -53449,7 +53455,11 @@ async function connectToTarget(ctx, target, retries = 5, intent = "default") {
     }
   }
   ctx.setState("disconnected");
-  throw new Error(formatConnectFailureMessage(retries, attempts3, target.description ?? null, lastError?.message ?? null));
+  const failureMessage = formatConnectFailureMessage(retries, attempts3, target.description ?? null, lastError?.message ?? null);
+  if (attempts3.length > 0 && attempts3.every((attempt) => attempt.handshakeOk) && attempts3.some((attempt) => attempt.probeTimedOut)) {
+    throw new CDPProbeTimeoutError(failureMessage);
+  }
+  throw new Error(failureMessage);
 }
 function connectWs(ctx, url) {
   return new Promise((resolve11, reject) => {
@@ -81721,6 +81731,7 @@ async function connectExactSessionTarget(input, timeoutMs, dependencies) {
   }
   const deadline = now() + timeoutMs;
   let lastError;
+  let firstProbeError;
   do {
     try {
       const listed = await exactClient.listTargetsExact(input.metroPort);
@@ -81743,7 +81754,7 @@ async function connectExactSessionTarget(input, timeoutMs, dependencies) {
         platform: input.platform,
         bundleId: input.appId,
         targetId: exactCandidates[0].id
-      }, "default", 1);
+      }, "default", input.platform === "android" ? 1 : 5);
       const target = exactClient.connectedTarget;
       if (!target || exactClient.metroPort !== input.metroPort || !targetMatchesSession(target, {
         platform: input.platform,
@@ -81763,19 +81774,24 @@ async function connectExactSessionTarget(input, timeoutMs, dependencies) {
       };
     } catch (error2) {
       lastError = error2;
-      try {
-        await exactClient.disconnect();
-      } catch {
+      if (input.platform === "android") {
+        if (error2 instanceof CDPProbeTimeoutError)
+          firstProbeError ??= error2;
+        try {
+          await exactClient.disconnect();
+        } catch {
+        }
+        exactClient = dependencies.createClient(input.metroPort);
+        dependencies.setClient(exactClient);
       }
-      exactClient = dependencies.createClient(input.metroPort);
-      dependencies.setClient(exactClient);
     }
     const remainingMs = deadline - now();
     if (remainingMs > 0)
       await wait(Math.min(250, remainingMs));
   } while (now() < deadline);
-  const leaf = lastError === void 0 ? "no exact target was advertised" : errorMessage(lastError);
-  throw new Error(`CDP_TARGET_AUTHORITY_MISMATCH: exact managed-Metro target did not re-register after launch. Last exact-connect failure: ${leaf}`, { cause: lastError });
+  const leafError = firstProbeError ?? lastError;
+  const leaf = leafError === void 0 ? "no exact target was advertised" : errorMessage(leafError);
+  throw new Error(`CDP_TARGET_AUTHORITY_MISMATCH: exact managed-Metro target did not re-register after launch. Last exact-connect failure: ${leaf}`, { cause: leafError });
 }
 
 // packages/rn-dev-agent-core/dist/index.js

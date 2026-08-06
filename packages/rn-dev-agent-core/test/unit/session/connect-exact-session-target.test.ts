@@ -54,8 +54,10 @@ async function startSyntheticMetro(mode: FixtureMode): Promise<SyntheticMetro> {
     let targets: Array<Record<string, unknown>>;
     if (mode === 'responsive') {
       targets = [target('responsive-exact-1', '/responsive')];
-    } else if (mode === 'stalled' || !staleProbeSeen) {
+    } else if (!staleProbeSeen) {
       targets = [target('stale-exact-1', '/stale')];
+    } else if (mode === 'stalled') {
+      targets = [];
     } else if (!duplicateAdvertised) {
       duplicateAdvertised = true;
       targets = [
@@ -238,9 +240,89 @@ test('production wrapper preserves the probe-timeout leaf in its public authorit
       },
     );
     assert.ok(Date.now() - startedAt < 5_500, 'stale targets must remain bounded');
-    assert.ok(metro.connections.length >= 2, 'the wrapper must re-list and retry serially');
+    assert.deepEqual(metro.connections, ['/stale']);
+    assert.ok(metro.listCount >= 2, 'the wrapper must re-list after the stale target disappears');
   } finally {
     await fixture.current.disconnect();
     await metro.close();
   }
+});
+
+test('iOS retains the existing retry budget without replacing the exact client', async () => {
+  const target = {
+    id: 'ios-exact-1',
+    title: appId,
+    description: 'React Native',
+    appId,
+    type: 'node',
+    webSocketDebuggerUrl: 'ws://127.0.0.1:8081/ios',
+    deviceName: 'iPhone 16',
+    platform: 'ios',
+    platformInference: 'explicit',
+  };
+  let connectCalls = 0;
+  let disconnectCalls = 0;
+  let createCalls = 0;
+  const retryBudgets: number[] = [];
+  const client = {
+    metroPort: 8081,
+    connectedTarget: null as typeof target | null,
+    connectionGeneration: 0,
+    listTargetsExact: async () => ({ port: 8081, targets: [target] }),
+    connectExact: async (
+      _port: number,
+      _filters: unknown,
+      _intent: string,
+      retries: number,
+    ) => {
+      retryBudgets.push(retries);
+      connectCalls += 1;
+      if (connectCalls === 1) throw new Error('first retry window exhausted');
+      client.connectedTarget = target;
+      client.connectionGeneration = 1;
+      return 'connected';
+    },
+    disconnect: async () => {
+      disconnectCalls += 1;
+    },
+  };
+  let now = 0;
+
+  const connected = await connectExactSessionTarget(
+    {
+      metroPort: 8081,
+      platform: 'ios',
+      appId,
+      deviceId: 'ios-device-id',
+    },
+    1_000,
+    {
+      getClient: () => client as unknown as CDPClient,
+      setClient: () => assert.fail('iOS must retain the existing exact client'),
+      createClient: () => {
+        createCalls += 1;
+        return client as unknown as CDPClient;
+      },
+      execute: async (file, args) => {
+        assert.equal(file, 'xcrun');
+        assert.deepEqual(args, ['simctl', 'list', 'devices', '--json']);
+        return {
+          stdout: JSON.stringify({
+            devices: {
+              runtime: [{ udid: 'ios-device-id', name: 'iPhone 16', state: 'Booted' }],
+            },
+          }),
+        };
+      },
+      now: () => now,
+      wait: async (ms) => {
+        now += ms;
+      },
+    },
+  );
+
+  assert.equal(connected.targetId, target.id);
+  assert.deepEqual(retryBudgets, [5, 5]);
+  assert.equal(disconnectCalls, 0);
+  assert.equal(createCalls, 0);
 });
