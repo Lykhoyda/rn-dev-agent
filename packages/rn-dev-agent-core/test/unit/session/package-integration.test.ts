@@ -3165,7 +3165,7 @@ test('bound CAS preserves known commit after cleanup retry failure', () => {
         cleanupRecoveryDelayMs: 5_000,
         failCleanupAfterCommit: true,
         failCleanupRecovery: true,
-        recoveryTimeoutMs: 100,
+        recoveryTimeoutMs: 1_000,
       },
     );
     assert.equal(result.committed, true);
