@@ -21217,8 +21217,11 @@ var init_registry = __esm({
              WHERE resource_type = ? AND resource_key = ?
                AND session_id = ? AND claim_epoch = ?`).run(claim.resource_type, claim.resource_key, session2.sessionId, session2.claimEpoch);
           }
-          this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`).run(JSON.stringify({ ...bindings, staleDeviceCleanup: null, staleDeviceRelease: null }), now, row.session_id, row.claim_epoch);
+          const nextAuthorityVersion = row.authority_version + 1;
+          this.#database.prepare(`UPDATE sessions
+           SET bindings_json = ?, authority_version = ?, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ? AND authority_version = ?`).run(JSON.stringify({ ...bindings, staleDeviceCleanup: null, staleDeviceRelease: null }), nextAuthorityVersion, now, row.session_id, row.claim_epoch, row.authority_version);
+          this.#advanceActiveOperationFence(session2, row.authority_version, nextAuthorityVersion, true);
         });
       }
       /**
@@ -22971,12 +22974,16 @@ var init_registry = __esm({
           reservation: exactReservation ? reservation : null
         };
       }
-      #advanceActiveOperationFence(session2, priorAuthorityVersion, nextAuthorityVersion) {
+      #advanceActiveOperationFence(session2, priorAuthorityVersion, nextAuthorityVersion, requireActiveFence = false) {
         const active = this.#database.prepare(`SELECT operation_id, authority_version FROM operations
          WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(session2.sessionId, session2.claimEpoch);
-        if (!active)
-          return;
         const context = this.#operationContext.getStore();
+        if (!active) {
+          if (requireActiveFence && context?.sessionId === session2.sessionId && context.claimEpoch === session2.claimEpoch) {
+            throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "active operation fence disappeared before authority commit");
+          }
+          return;
+        }
         if (!context || context.operationId !== active.operation_id || context.sessionId !== session2.sessionId || context.claimEpoch !== session2.claimEpoch || context.authorityVersion !== priorAuthorityVersion || active.authority_version !== priorAuthorityVersion) {
           throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "authority mutation is not owned by the active operation fence");
         }

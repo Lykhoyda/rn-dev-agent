@@ -1379,6 +1379,69 @@ test('transition handlers remain fenced across their expected authority version 
   assert.equal(calls.at(-1), 'end');
 });
 
+test('stale-device release refuses a success envelope when no scoped commit advanced authority', async () => {
+  const { runtime, status } = fixture();
+  status.bindings.staleDeviceRelease = {
+    platform: 'ios',
+    deviceId: 'device',
+    priorSessionId: 'dead-owner',
+    priorClaimEpoch: 3,
+  };
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+  });
+
+  const result = await gate.wrap('rn_session', async () =>
+    okResult({ released: { platform: 'ios', cleanupCompleted: ['runner'] } }),
+  )({
+    action: 'release_stale_device',
+    platform: 'ios',
+    deviceId: 'device',
+    releaseHandle: 'authenticated-handle',
+  });
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, false);
+  assert.equal(envelope.code, 'AUTHORITY_LOST_DURING_OPERATION');
+  assert.ok(status.bindings.staleDeviceRelease, 'the no-commit registry state is unchanged');
+});
+
+test('stale-device release refuses a changed contender generation', async () => {
+  const { runtime, registry, status } = fixture();
+  status.bindings.staleDeviceRelease = {
+    platform: 'ios',
+    deviceId: 'device',
+    priorSessionId: 'dead-owner',
+    priorClaimEpoch: 3,
+  };
+  registry.verifyOperation = (operation) => {
+    if (operation.authorityVersion !== status.authorityVersion) {
+      throw new SessionAuthorityError(
+        'AUTHORITY_LOST_DURING_OPERATION',
+        'contender generation changed during stale-device release',
+      );
+    }
+  };
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+  });
+
+  const result = await gate.wrap('rn_session', async () => {
+    status.authorityVersion += 1;
+    return okResult({ released: { platform: 'ios', cleanupCompleted: ['runner'] } });
+  })({
+    action: 'release_stale_device',
+    platform: 'ios',
+    deviceId: 'device',
+    releaseHandle: 'authenticated-handle',
+  });
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, false);
+  assert.equal(envelope.code, 'AUTHORITY_LOST_DURING_OPERATION');
+  assert.ok(status.bindings.staleDeviceRelease, 'changed authority cannot consume the offer');
+});
+
 test('repeated managed Metro stop remains fenced without requiring a generation advance', async () => {
   const { runtime, status, calls } = fixture();
   status.bindings.metro = null;

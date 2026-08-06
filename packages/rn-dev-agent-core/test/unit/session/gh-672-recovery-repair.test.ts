@@ -22,6 +22,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, test } from 'node:test';
+import { createAuthorityGate } from '../../../dist/session/authority-gate.js';
 import { openSessionRegistry } from '../../../dist/session/registry.js';
 import { projectPublicAuthorityStatus } from '../../../dist/session/public-status.js';
 import { WorkerAuthorityRuntime } from '../../../dist/session/runtime.js';
@@ -55,7 +56,7 @@ function fixture() {
       worktreeKey,
       appRootKey: '.',
       supervisor: { pid: 4000 + roots.length, token: `birth-${sessionId}` },
-      source: { kind: 'git', contentRoot: `/src/${worktreeKey}` },
+      source: { kind: 'git', contentRoot: process.cwd(), appRoot: process.cwd() },
       bindings,
     });
   };
@@ -92,6 +93,15 @@ function blockedContender() {
     RECOVERY_CAPABILITY,
   );
   return { ...f, owner, contender };
+}
+
+function withAuthorityGate(
+  runtime: WorkerAuthorityRuntime,
+  handler: ReturnType<typeof createSessionHandler>,
+): ReturnType<typeof createSessionHandler> {
+  return createAuthorityGate(runtime as never, {
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-stable` }),
+  }).wrap('rn_session', handler as never) as ReturnType<typeof createSessionHandler>;
 }
 
 function adoptionHandle(registry: ReturnType<typeof openSessionRegistry>, sessionId: string) {
@@ -418,6 +428,12 @@ function deadDeviceOwner() {
     state: 'device_claimed',
     bindings: {
       device: { platform: 'ios', deviceId: 'sim-1', appId: 'com.example.app' },
+      install: {
+        platform: 'ios',
+        deviceId: 'sim-1',
+        appId: 'com.example.app',
+        digest: 'dead-install',
+      },
       runner: {
         platform: 'ios',
         deviceId: 'sim-1',
@@ -571,6 +587,7 @@ test('GH#672: the handler exposes and resumes an expired journal before device r
     deviceId: 'sim-1',
   });
   f.registry.beginStaleResourceRelease(f.live, offer.token, 'live-worker');
+  f.registry.completeStaleResourceRelease(f.live, 'live-worker', 'recorder');
   f.advance(HANDLE_TTL_MS + 1);
   const stopped: string[] = [];
   const runtime = new WorkerAuthorityRuntime(f.registry, f.live, null);
@@ -606,7 +623,11 @@ test('GH#672: the handler exposes and resumes an expired journal before device r
     };
     staleDeviceRelease?: { releaseHandle?: string; expired?: boolean; nextAction?: string };
   };
-  assert.deepEqual(authority.staleDeviceCleanup?.obligations?.sort(), ['recorder', 'runner']);
+  assert.deepEqual(
+    authority.staleDeviceCleanup?.obligations,
+    ['runner'],
+    'status omits the already-completed recorder obligation on retry',
+  );
   assert.equal(authority.staleDeviceCleanup?.platform, 'ios');
   assert.match(String(authority.staleDeviceCleanup?.nextAction), /release_stale_device/);
   assert.doesNotMatch(String(authority.staleDeviceCleanup?.nextAction), /releaseHandle/);
@@ -638,24 +659,37 @@ test('GH#672: the handler exposes and resumes an expired journal before device r
   assert.equal(crossSession.isError, true);
   assert.equal(envelope(crossSession).code, 'DEVICE_AUTHORITY_MISMATCH');
 
-  const staleEpochHandler = createSessionHandler(
-    new WorkerAuthorityRuntime(
-      f.registry,
-      { sessionId: f.live.sessionId, claimEpoch: f.live.claimEpoch + 1 },
-      null,
-    ) as never,
-    { deviceExists: () => true },
+  const staleEpochRuntime = new WorkerAuthorityRuntime(
+    f.registry,
+    { sessionId: f.live.sessionId, claimEpoch: f.live.claimEpoch + 1 },
+    null,
+  );
+  const staleEpochHandler = withAuthorityGate(
+    staleEpochRuntime,
+    createSessionHandler(staleEpochRuntime as never, { deviceExists: () => true }),
   );
   const crossEpoch = await staleEpochHandler({ action: 'release_stale_device' });
   assert.equal(crossEpoch.isError, true);
   assert.equal(envelope(crossEpoch).code, 'SESSION_OWNER_LOST');
   assert.equal(f.registry.getClaim('device', 'ios:sim-1')?.sessionId, 'live');
 
-  const resumed = await handler({
+  const authorityVersionBeforeRetry = f.registry.getSessionStatus('live')?.authorityVersion;
+  const resumed = await withAuthorityGate(
+    runtime,
+    handler,
+  )({
     action: 'release_stale_device',
   });
   assert.equal(resumed.isError, undefined, resumed.content[0]!.text);
-  assert.deepEqual(stopped, ['recorder', 'runner']);
+  assert.equal(envelope(resumed).ok, true);
+  assert.deepEqual(stopped, ['runner'], 'the completed recorder obligation is not repeated');
+  assert.equal(
+    f.registry.getSessionStatus('live')?.authorityVersion,
+    authorityVersionBeforeRetry! + 1,
+  );
+  assert.equal(f.registry.getClaim('device', 'ios:sim-1'), null);
+  assert.equal(f.registry.getClaim('runner', 'ios:sim-1:9200'), null);
+  assert.equal(f.registry.getClaim('recorder', 'ios:sim-1'), null);
 
   const bound = await handler({
     action: 'bind_device',
@@ -789,7 +823,7 @@ function envelope(result: { content: Array<{ text: string }> }) {
   };
 }
 
-test('GH#672: bind_device turns an unreachable adopt_stale demand into a named release path', async () => {
+test('GH#672: the gated stale-device release returns success with its exact scoped commit', async () => {
   const f = deadDeviceOwner();
   const runtime = new WorkerAuthorityRuntime(f.registry, f.live, null);
   const handler = createSessionHandler(runtime as never, { deviceExists: () => true });
@@ -812,15 +846,19 @@ test('GH#672: bind_device turns an unreachable adopt_stale demand into a named r
     token: string;
   };
   const stopped: string[] = [];
-  const releaseHandler = createSessionHandler(runtime as never, {
-    deviceExists: () => true,
-    stopHandoffRunner: async () => {
-      stopped.push('runner');
-    },
-    stopHandoffRecorder: async () => {
-      stopped.push('recorder');
-    },
-  });
+  const releaseHandler = withAuthorityGate(
+    runtime,
+    createSessionHandler(runtime as never, {
+      deviceExists: () => true,
+      stopHandoffRunner: async () => {
+        stopped.push('runner');
+      },
+      stopHandoffRecorder: async () => {
+        stopped.push('recorder');
+      },
+    }),
+  );
+  const authorityVersionBeforeRelease = f.registry.getSessionStatus('live')?.authorityVersion;
   const released = await releaseHandler({
     action: 'release_stale_device',
     platform: 'ios',
@@ -828,8 +866,25 @@ test('GH#672: bind_device turns an unreachable adopt_stale demand into a named r
     releaseHandle: offer.token,
   });
   assert.equal(released.isError, undefined, released.content[0]!.text);
+  assert.equal(envelope(released).ok, true);
   assert.deepEqual(stopped, ['recorder', 'runner']);
   assert.equal(f.registry.getClaim('device', 'ios:sim-1'), null);
+  assert.equal(f.registry.getClaim('runner', 'ios:sim-1:9200'), null);
+  assert.equal(f.registry.getClaim('recorder', 'ios:sim-1'), null);
+  assert.equal(
+    f.registry.getSessionStatus('live')?.authorityVersion,
+    authorityVersionBeforeRelease! + 1,
+  );
+  assert.equal(f.registry.getClaim('source', 'worktree-mine')?.sessionId, 'live');
+  assert.equal(f.registry.getClaim('metro-port', '8248')?.sessionId, 'live');
+  assert.equal(f.registry.getClaim('source', 'worktree-foreign')?.sessionId, 'dead-device-owner');
+  assert.equal(f.registry.getClaim('metro-port', '8300')?.sessionId, 'dead-device-owner');
+  const deadAfter = f.registry.getSessionStatus('dead-device-owner');
+  assert.ok(deadAfter?.bindings.install, 'the dead owner keeps install authority');
+  assert.ok(
+    deadAfter?.bindings.packageIntegration,
+    'the dead owner keeps package-integration authority',
+  );
 
   const bound = await handler({
     action: 'bind_device',
@@ -841,25 +896,65 @@ test('GH#672: bind_device turns an unreachable adopt_stale demand into a named r
   assert.equal(f.registry.getClaim('device', 'ios:sim-1')?.sessionId, 'live');
 });
 
-test('GH#672: a release handle minted for one device cannot free another', async () => {
+test('GH#672: foreign target or handle cannot produce a stale-device release commit', async () => {
   const f = deadDeviceOwner();
   const runtime = new WorkerAuthorityRuntime(f.registry, f.live, null);
   const offer = f.registry.prepareStaleResourceRelease(f.live, {
     platform: 'ios',
     deviceId: 'sim-1',
   });
-  const handler = createSessionHandler(runtime as never, { deviceExists: () => true });
+  const handler = withAuthorityGate(
+    runtime,
+    createSessionHandler(runtime as never, { deviceExists: () => true }),
+  );
+  const authorityVersion = f.registry.getSessionStatus('live')?.authorityVersion;
 
-  const refused = await handler({
+  const wrongTarget = await handler({
     action: 'release_stale_device',
     platform: 'android',
     deviceId: 'emulator-5554',
     releaseHandle: offer.token,
   });
+  assert.equal(wrongTarget.isError, true);
+  assert.equal(envelope(wrongTarget).code, 'DEVICE_AUTHORITY_MISMATCH');
+
+  const foreignHandle = await handler({
+    action: 'release_stale_device',
+    platform: 'ios',
+    deviceId: 'sim-1',
+    releaseHandle: 'foreign-release-handle',
+  });
+  assert.equal(foreignHandle.isError, true);
+  assert.equal(envelope(foreignHandle).code, 'HANDOFF_NOT_AUTHORIZED');
+  assert.equal(f.registry.getSessionStatus('live')?.authorityVersion, authorityVersion);
+  assert.equal(f.registry.getSessionStatus('live')?.bindings.staleDeviceCleanup, undefined);
+  assert.equal(f.registry.getClaim('device', 'ios:sim-1')?.sessionId, 'dead-device-owner');
+  assert.equal(f.registry.getClaim('runner', 'ios:sim-1:9200')?.sessionId, 'dead-device-owner');
+});
+
+test('GH#672: a live device owner remains untouched through the public authority gate', async () => {
+  const f = deadDeviceOwner();
+  f.ownerStates.set('dead-device-owner', 'match');
+  const runtime = new WorkerAuthorityRuntime(f.registry, f.live, null);
+  const handler = withAuthorityGate(
+    runtime,
+    createSessionHandler(runtime as never, { deviceExists: () => true }),
+  );
+  const authorityVersion = f.registry.getSessionStatus('live')?.authorityVersion;
+
+  const refused = await handler({
+    action: 'bind_device',
+    platform: 'ios',
+    deviceId: 'sim-1',
+    appId: 'com.example.app',
+  });
 
   assert.equal(refused.isError, true);
-  assert.equal(envelope(refused).code, 'DEVICE_AUTHORITY_MISMATCH');
+  assert.equal(envelope(refused).code, 'DEVICE_CLAIM_CONFLICT');
+  assert.equal(f.registry.getSessionStatus('live')?.authorityVersion, authorityVersion);
+  assert.equal(f.registry.getSessionStatus('live')?.bindings.staleDeviceRelease, undefined);
   assert.equal(f.registry.getClaim('device', 'ios:sim-1')?.sessionId, 'dead-device-owner');
+  assert.equal(f.registry.getClaim('runner', 'ios:sim-1:9200')?.sessionId, 'dead-device-owner');
 });
 
 test('GH#672 legacy axes-v1: the status action itself rotates an expired adoption handle', async () => {
