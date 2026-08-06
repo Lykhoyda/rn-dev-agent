@@ -404,7 +404,14 @@ If `device_list` shows more than one booted device (e.g., both an iOS simulator 
 
 The fenced session owns the platform and exact device. `cdp_status` only reports
 the current client; conflicting authoritative tool arguments fail instead of
-silently re-targeting.
+silently re-targeting. Expo Android's `--device` is the one compatibility
+boundary that requires a display name: the integrated adapter uniquely maps the
+bound adb serial to its model/AVD name immediately before Expo while retaining
+the serial in `ANDROID_SERIAL`, session state, receipts, adb targeting, runner
+ownership, and diagnostics. `EXPO_DEVICE_IDENTITY_MISMATCH` means the serial is
+missing/offline/unauthorized, a name or serial is duplicated, a supplied device
+is foreign, or the mapping drifted; fix that exact condition rather than letting
+Expo select an ambient device.
 
 An explicit `platform:` on `device_screenshot` resolves the booted device
 directly and captures via raw `simctl` / `adb` (GH #60 — fixed), so

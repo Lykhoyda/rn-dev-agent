@@ -116,7 +116,7 @@ import { buildBundleAuthorityBinding, pinExactDevClient, reconcileAuthoritativeB
 import { createRegisteredConnectHandler } from './session/registered-connect.js';
 import { verifyMetroAuthorityMarker, } from './session/metro-authority.js';
 import { filterTargetsForExactDevice, proveTargetDeviceAssociation, } from './session/target-device-authority.js';
-import { connectExactSessionTarget as connectExactSessionTargetWithDependencies } from './session/connect-exact-session-target.js';
+import { connectExactSessionTarget as connectExactSessionTargetWithDependencies, exactSessionTargetReadinessTimeoutMs, } from './session/connect-exact-session-target.js';
 import { strictProofSourceIdentity } from './session/source-identity.js';
 import { verifyManagedMetroManagementProof } from './session/managed-metro.js';
 import { stopBoundRunner } from './session/process-cleanup.js';
@@ -728,7 +728,7 @@ async function pinSessionDevClient(status, options) {
             }
         },
         connectExact: async ({ metroPort, platform, appId, deviceId }) => {
-            return connectExactSessionTarget({ metroPort, platform, appId, deviceId }, 15_000);
+            return connectExactSessionTarget({ metroPort, platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
         },
         readMarker: async () => {
             const result = await getClient().evaluate('JSON.stringify(globalThis.__RN_DEV_AGENT_AUTHORITY__ ?? null)');

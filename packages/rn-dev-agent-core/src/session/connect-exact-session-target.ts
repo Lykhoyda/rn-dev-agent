@@ -22,6 +22,15 @@ export interface ExactSessionTargetDependencies extends TargetDeviceAuthorityDep
   wait?(ms: number): Promise<void>;
 }
 
+const IOS_EXACT_TARGET_READINESS_TIMEOUT_MS = 15_000;
+const ANDROID_EXACT_TARGET_READINESS_TIMEOUT_MS = 120_000;
+
+export function exactSessionTargetReadinessTimeoutMs(platform: 'ios' | 'android'): number {
+  return platform === 'android'
+    ? ANDROID_EXACT_TARGET_READINESS_TIMEOUT_MS
+    : IOS_EXACT_TARGET_READINESS_TIMEOUT_MS;
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }

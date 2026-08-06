@@ -1,15 +1,44 @@
+import { assertStableExpoAndroidDevice, expoAndroidDeviceIdentityError, resolveExpoAndroidDevice, } from './expo-android-device.js';
 function conflict(flag) {
     throw new Error(`SESSION_BUILD_IDENTITY_CONFLICT: ${flag} contradicts the active session`);
 }
 function ensureValue(command, flag, value) {
     let found = false;
-    for (let index = command.indexOf(flag); index >= 0; index = command.indexOf(flag, index + 1)) {
-        found = true;
-        if (command[index + 1] !== value)
-            conflict(flag);
+    for (let index = 0; index < command.length; index += 1) {
+        if (command[index] === flag) {
+            found = true;
+            if (command[index + 1] !== value)
+                conflict(flag);
+        }
+        else if (command[index]?.startsWith(`${flag}=`)) {
+            found = true;
+            if (command[index] !== `${flag}=${value}`)
+                conflict(flag);
+        }
     }
     if (!found)
         command.push(flag, value);
+}
+function translateExpoAndroidDevice(command, serial, displayName) {
+    let found = false;
+    for (let index = 0; index < command.length; index += 1) {
+        if (command[index] === '--device') {
+            found = true;
+            if (command[index + 1] !== serial) {
+                throw expoAndroidDeviceIdentityError('a user-supplied --device does not equal the authority-bound adb serial');
+            }
+            command[index + 1] = displayName;
+        }
+        else if (command[index]?.startsWith('--device=')) {
+            found = true;
+            if (command[index] !== `--device=${serial}`) {
+                throw expoAndroidDeviceIdentityError('a user-supplied --device does not equal the authority-bound adb serial');
+            }
+            command[index] = `--device=${displayName}`;
+        }
+    }
+    if (!found)
+        command.push('--device', displayName);
 }
 function ensureFlag(command, flag) {
     if (!command.includes(flag))
@@ -82,7 +111,18 @@ export function createBuildLaunchPlan(input) {
         throw new Error('SESSION_BUILD_COMMAND_UNSUPPORTED: command shape is not recognized');
     }
     if (kind === 'expo') {
-        ensureValue(command, '--device', input.session.deviceId);
+        if (input.platform === 'android') {
+            const resolveDevice = input.resolveExpoAndroidDevice ?? resolveExpoAndroidDevice;
+            const initial = resolveDevice(input.session.deviceId);
+            const verified = assertStableExpoAndroidDevice(initial, resolveDevice(input.session.deviceId));
+            if (verified.deviceId !== input.session.deviceId) {
+                throw expoAndroidDeviceIdentityError('the resolved Expo device does not equal the authority-bound adb serial');
+            }
+            translateExpoAndroidDevice(command, input.session.deviceId, verified.displayName);
+        }
+        else {
+            ensureValue(command, '--device', input.session.deviceId);
+        }
         removeManagedPortFlag(command, String(input.session.metroPort));
         ensureFlag(command, '--no-bundler');
     }
@@ -100,6 +140,9 @@ export function createBuildLaunchPlan(input) {
         ORG_GRADLE_PROJECT_reactNativeDevServerPort: String(input.session.metroPort),
         RCT_METRO_PORT: String(input.session.metroPort),
         RN_DEV_AGENT_SESSION_ID: input.session.sessionId,
+        ...(kind === 'expo' && input.platform === 'android'
+            ? { ANDROID_SERIAL: input.session.deviceId }
+            : {}),
         ...(kind === 'expo' ? { EXPO_PACKAGER_PROXY_URL: managedMetroProxyUrl(input.session) } : {}),
     };
     const postInstall = kind === 'expo' && input.platform === 'ios' && input.session.simulator === true

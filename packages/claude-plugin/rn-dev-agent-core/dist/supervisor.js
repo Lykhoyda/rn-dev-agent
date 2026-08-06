@@ -62451,19 +62451,151 @@ var init_install_authority = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/session/expo-android-device.js
+import { execFileSync as execFileSync12 } from "node:child_process";
+function expoAndroidDeviceIdentityError(message) {
+  const error2 = new Error(`${ERROR_CODE}: ${message}`);
+  error2.code = ERROR_CODE;
+  return error2;
+}
+function parseAdbDevices(output) {
+  const devices = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const rawLine of output.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line === "List of devices attached" || line.startsWith("* daemon") || /\.cpp:\d+/.test(line)) {
+      continue;
+    }
+    const [serial, state, ...details] = line.split(/\s+/);
+    if (!serial || !state || !ANDROID_SERIAL_RE2.test(serial))
+      continue;
+    if (seen.has(serial)) {
+      throw expoAndroidDeviceIdentityError("adb returned duplicate records for one serial; disconnect stale transports and retry");
+    }
+    seen.add(serial);
+    devices.push({
+      serial,
+      state,
+      details,
+      network: line.includes("_adb-tls-connect.")
+    });
+  }
+  return devices;
+}
+function emulatorDisplayName(output) {
+  const name = output.trim().split(/[\r\n]+/, 1)[0]?.trim();
+  if (!name || name === "OK" || name.startsWith("KO:")) {
+    throw expoAndroidDeviceIdentityError("the connected emulator AVD name is unavailable; restart that exact emulator and retry");
+  }
+  return name;
+}
+function isAuthorized(device) {
+  if (device.state !== "device")
+    return false;
+  return !device.network || device.details.some((detail) => detail.startsWith("model:"));
+}
+function physicalDisplayName(device) {
+  const model = device.details.find((detail) => detail.startsWith("model:"))?.slice("model:".length);
+  return model || `Device ${device.serial}`;
+}
+function defaultDependencies() {
+  return {
+    runAdb: (args) => execFileSync12("adb", [...args], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 1e4
+    })
+  };
+}
+function resolveExpoAndroidDevice(exactDeviceId, dependencies = defaultDependencies()) {
+  if (!ANDROID_SERIAL_RE2.test(exactDeviceId)) {
+    throw expoAndroidDeviceIdentityError("the authority-bound adb serial is invalid; bind one exact adb serial and retry");
+  }
+  const runAdb = (args, failure) => {
+    try {
+      return dependencies.runAdb(args);
+    } catch {
+      throw expoAndroidDeviceIdentityError(failure);
+    }
+  };
+  const devices = parseAdbDevices(runAdb(["devices", "-l"], "adb device enumeration failed; verify adb is available, then reconnect and authorize the exact device"));
+  const exactRecords = devices.filter((device) => device.serial === exactDeviceId);
+  if (exactRecords.length !== 1 || !isAuthorized(exactRecords[0])) {
+    throw expoAndroidDeviceIdentityError("the authority-bound adb serial is missing, offline, or unauthorized; reconnect and authorize that exact device");
+  }
+  const connected = devices.filter(isAuthorized);
+  const bindings = connected.map((device) => ({
+    deviceId: device.serial,
+    displayName: device.serial.startsWith("emulator-") ? emulatorDisplayName(runAdb(["-s", device.serial, "emu", "avd", "name"], "an Expo emulator identity probe failed; verify every connected emulator has a readable AVD name")) : physicalDisplayName(device)
+  }));
+  const names = /* @__PURE__ */ new Map();
+  for (const binding of bindings) {
+    const previous = names.get(binding.displayName);
+    if (previous !== void 0 && previous !== binding.deviceId) {
+      throw expoAndroidDeviceIdentityError("an Expo display name maps to multiple adb serials; disconnect duplicate models or AVD names and retry");
+    }
+    names.set(binding.displayName, binding.deviceId);
+  }
+  const selected = bindings.find((binding) => binding.deviceId === exactDeviceId);
+  if (!selected || names.get(selected.displayName) !== exactDeviceId) {
+    throw expoAndroidDeviceIdentityError("the Expo display name does not map uniquely to the authority-bound adb serial");
+  }
+  return selected;
+}
+function assertStableExpoAndroidDevice(initial, immediatePreSpawn) {
+  if (!initial.deviceId || !initial.displayName || !immediatePreSpawn.deviceId || !immediatePreSpawn.displayName || initial.deviceId !== immediatePreSpawn.deviceId || initial.displayName !== immediatePreSpawn.displayName) {
+    throw expoAndroidDeviceIdentityError("the serial-to-display-name mapping changed immediately before Expo; reconnect the exact device and retry");
+  }
+  return immediatePreSpawn;
+}
+var ANDROID_SERIAL_RE2, ERROR_CODE;
+var init_expo_android_device = __esm({
+  "packages/rn-dev-agent-core/dist/session/expo-android-device.js"() {
+    "use strict";
+    ANDROID_SERIAL_RE2 = /^[A-Za-z0-9._:-]{1,128}$/;
+    ERROR_CODE = "EXPO_DEVICE_IDENTITY_MISMATCH";
+  }
+});
+
 // packages/rn-dev-agent-core/dist/session/build-adapter.js
 function conflict(flag) {
   throw new Error(`SESSION_BUILD_IDENTITY_CONFLICT: ${flag} contradicts the active session`);
 }
 function ensureValue(command, flag, value) {
   let found = false;
-  for (let index = command.indexOf(flag); index >= 0; index = command.indexOf(flag, index + 1)) {
-    found = true;
-    if (command[index + 1] !== value)
-      conflict(flag);
+  for (let index = 0; index < command.length; index += 1) {
+    if (command[index] === flag) {
+      found = true;
+      if (command[index + 1] !== value)
+        conflict(flag);
+    } else if (command[index]?.startsWith(`${flag}=`)) {
+      found = true;
+      if (command[index] !== `${flag}=${value}`)
+        conflict(flag);
+    }
   }
   if (!found)
     command.push(flag, value);
+}
+function translateExpoAndroidDevice(command, serial, displayName) {
+  let found = false;
+  for (let index = 0; index < command.length; index += 1) {
+    if (command[index] === "--device") {
+      found = true;
+      if (command[index + 1] !== serial) {
+        throw expoAndroidDeviceIdentityError("a user-supplied --device does not equal the authority-bound adb serial");
+      }
+      command[index + 1] = displayName;
+    } else if (command[index]?.startsWith("--device=")) {
+      found = true;
+      if (command[index] !== `--device=${serial}`) {
+        throw expoAndroidDeviceIdentityError("a user-supplied --device does not equal the authority-bound adb serial");
+      }
+      command[index] = `--device=${displayName}`;
+    }
+  }
+  if (!found)
+    command.push("--device", displayName);
 }
 function ensureFlag(command, flag) {
   if (!command.includes(flag))
@@ -62533,7 +62665,17 @@ function createBuildLaunchPlan(input) {
     throw new Error("SESSION_BUILD_COMMAND_UNSUPPORTED: command shape is not recognized");
   }
   if (kind === "expo") {
-    ensureValue(command, "--device", input.session.deviceId);
+    if (input.platform === "android") {
+      const resolveDevice = input.resolveExpoAndroidDevice ?? resolveExpoAndroidDevice;
+      const initial = resolveDevice(input.session.deviceId);
+      const verified = assertStableExpoAndroidDevice(initial, resolveDevice(input.session.deviceId));
+      if (verified.deviceId !== input.session.deviceId) {
+        throw expoAndroidDeviceIdentityError("the resolved Expo device does not equal the authority-bound adb serial");
+      }
+      translateExpoAndroidDevice(command, input.session.deviceId, verified.displayName);
+    } else {
+      ensureValue(command, "--device", input.session.deviceId);
+    }
     removeManagedPortFlag(command, String(input.session.metroPort));
     ensureFlag(command, "--no-bundler");
   } else if (kind === "bare-ios") {
@@ -62549,6 +62691,7 @@ function createBuildLaunchPlan(input) {
     ORG_GRADLE_PROJECT_reactNativeDevServerPort: String(input.session.metroPort),
     RCT_METRO_PORT: String(input.session.metroPort),
     RN_DEV_AGENT_SESSION_ID: input.session.sessionId,
+    ...kind === "expo" && input.platform === "android" ? { ANDROID_SERIAL: input.session.deviceId } : {},
     ...kind === "expo" ? { EXPO_PACKAGER_PROXY_URL: managedMetroProxyUrl(input.session) } : {}
   };
   const postInstall = kind === "expo" && input.platform === "ios" && input.session.simulator === true ? {
@@ -62574,6 +62717,7 @@ function createBuildLaunchPlan(input) {
 var init_build_adapter = __esm({
   "packages/rn-dev-agent-core/dist/session/build-adapter.js"() {
     "use strict";
+    init_expo_android_device();
   }
 });
 
@@ -65780,7 +65924,13 @@ function parseSupportedScript(script, platform) {
       deviceId: platform === "android" ? "emulator-5554" : "preview-device",
       metroPort: 8081,
       sessionId: "preview-session"
-    }
+    },
+    ...platform === "android" ? {
+      resolveExpoAndroidDevice: (deviceId) => ({
+        deviceId,
+        displayName: "preview-emulator"
+      })
+    } : {}
   });
   return command;
 }
@@ -65930,6 +66080,44 @@ function ensureValue(flag, value) {
 function ensureFlag(flag) {
   if (!command.includes(flag)) command.push(flag);
 }
+function translateExpoAndroidDevice(serial, displayName) {
+  let found = false;
+  for (let index = 0; index < command.length; index += 1) {
+    if (command[index] === '--device') {
+      found = true;
+      if (command[index + 1] !== serial) {
+        failBuild(2, 'EXPO_DEVICE_IDENTITY_MISMATCH: a user-supplied --device does not equal the authority-bound adb serial');
+      }
+      command[index + 1] = displayName;
+    } else if (command[index].startsWith('--device=')) {
+      found = true;
+      if (command[index] !== '--device=' + serial) {
+        failBuild(2, 'EXPO_DEVICE_IDENTITY_MISMATCH: a user-supplied --device does not equal the authority-bound adb serial');
+      }
+      command[index] = '--device=' + displayName;
+    }
+  }
+  if (!found) command.push('--device', displayName);
+}
+function resolveExpoAndroidDevice(deviceId) {
+  const resolved = spawnSync(process.execPath, [...sqliteFlag, sessionCli, 'resolve-expo-android-device', deviceId], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      RN_DEV_AGENT_SESSION_ID: session.sessionId,
+    },
+    encoding: 'utf8',
+  });
+  if (resolved.error || resolved.status !== 0) {
+    failBuild(2, String(resolved.stderr).trim() || 'EXPO_DEVICE_IDENTITY_MISMATCH: exact Android device identity resolution failed');
+  }
+  let parsed = null;
+  try { parsed = JSON.parse(String(resolved.stdout)); } catch {}
+  if (!parsed || parsed.deviceId !== deviceId || typeof parsed.displayName !== 'string' || !parsed.displayName) {
+    failBuild(2, 'EXPO_DEVICE_IDENTITY_MISMATCH: resolver output does not match the authority-bound adb serial');
+  }
+  return parsed;
+}
 function removeManagedPortFlag(value) {
   for (let index = 0; index < command.length;) {
     const part = command[index];
@@ -66030,6 +66218,7 @@ function managedMetroProxyUrl(binding) {
   }
   await drainBuildTerminationSignals();
   let expoProxyUrl = null;
+  let expoAndroidDevice = null;
   if (session) {
     if (session.platform !== platform || typeof session.deviceId !== 'string' || typeof session.appId !== 'string' || !Number.isInteger(session.metroPort) || typeof session.sessionId !== 'string' || typeof session.buildToken !== 'string' || (session.simulator !== undefined && typeof session.simulator !== 'boolean')) {
       failBuild(2, 'SESSION_BUILD_IDENTITY_CONFLICT: session binding is incomplete');
@@ -66041,7 +66230,12 @@ function managedMetroProxyUrl(binding) {
       failBuild(2, 'SESSION_AUTHORITY_REQUIRED: session build completion requires the package-local rn-session CLI');
     }
     if (buildKind === 'expo') {
-      ensureValue('--device', session.deviceId);
+      if (platform === 'android') {
+        expoAndroidDevice = resolveExpoAndroidDevice(session.deviceId);
+        translateExpoAndroidDevice(session.deviceId, expoAndroidDevice.displayName);
+      } else {
+        ensureValue('--device', session.deviceId);
+      }
       removeManagedPortFlag(String(session.metroPort));
       ensureFlag('--no-bundler');
       expoProxyUrl = managedMetroProxyUrl(session);
@@ -66056,6 +66250,12 @@ function managedMetroProxyUrl(binding) {
     }
   }
 
+  if (expoAndroidDevice) {
+    const verified = resolveExpoAndroidDevice(session.deviceId);
+    if (verified.deviceId !== expoAndroidDevice.deviceId || verified.displayName !== expoAndroidDevice.displayName) {
+      failBuild(2, 'EXPO_DEVICE_IDENTITY_MISMATCH: the serial-to-display-name mapping changed immediately before Expo; reconnect the exact device and retry');
+    }
+  }
   const child = spawnSync(command[0], command.slice(1), {
     cwd: process.cwd(),
     env: session ? {
@@ -66063,6 +66263,7 @@ function managedMetroProxyUrl(binding) {
       ORG_GRADLE_PROJECT_reactNativeDevServerPort: String(session.metroPort),
       RCT_METRO_PORT: String(session.metroPort),
       RN_DEV_AGENT_SESSION_ID: session.sessionId,
+      ...(buildKind === 'expo' && platform === 'android' ? { ANDROID_SERIAL: session.deviceId } : {}),
       ...(expoProxyUrl ? { EXPO_PACKAGER_PROXY_URL: expoProxyUrl } : {}),
     } : process.env,
     stdio: 'inherit',
@@ -66633,10 +66834,10 @@ var init_package_integration = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/device-existence.js
-import { execFileSync as execFileSync12 } from "node:child_process";
+import { execFileSync as execFileSync13 } from "node:child_process";
 function deviceExistsOnHost(platform, deviceId) {
   if (platform === "ios") {
-    const output2 = execFileSync12("xcrun", ["simctl", "list", "devices", "--json"], {
+    const output2 = execFileSync13("xcrun", ["simctl", "list", "devices", "--json"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 5e3
@@ -66644,7 +66845,7 @@ function deviceExistsOnHost(platform, deviceId) {
     const parsed = JSON.parse(output2);
     return Object.values(parsed.devices ?? {}).flat().some((device) => device.udid === deviceId && device.isAvailable !== false);
   }
-  const output = execFileSync12("adb", ["devices"], {
+  const output = execFileSync13("adb", ["devices"], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
     timeout: 5e3
@@ -76451,7 +76652,7 @@ var init_startup_integrity = __esm({
 
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
 import { createHash as createHash17, randomUUID as randomUUID8 } from "node:crypto";
-import { execFileSync as execFileSync13 } from "node:child_process";
+import { execFileSync as execFileSync14 } from "node:child_process";
 import { chmodSync as chmodSync4, closeSync as closeSync10, existsSync as existsSync32, fsyncSync, lstatSync as lstatSync11, mkdirSync as mkdirSync18, openSync as openSync10, readFileSync as readFileSync30, realpathSync as realpathSync10, renameSync as renameSync7, unlinkSync as unlinkSync11, writeFileSync as writeFileSync15 } from "node:fs";
 import { basename as basename7, dirname as dirname19, extname, isAbsolute as isAbsolute8, join as join40, relative as relative5, resolve as resolve10, sep as sep6 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
@@ -76613,7 +76814,7 @@ function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
       "--untracked-files=all",
       "--ignore-submodules=none"
     ];
-    if (execFileSync13("git", statusArgs, { encoding: "utf8" }).trim())
+    if (execFileSync14("git", statusArgs, { encoding: "utf8" }).trim())
       return null;
     const verifiedBytes = [];
     for (const artifactPath of artifactPaths) {
@@ -76622,8 +76823,8 @@ function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
       if (!artifactRelativePath || artifactRelativePath === ".." || artifactRelativePath.startsWith("../")) {
         return null;
       }
-      execFileSync13("git", ["-C", root, "ls-files", "--error-unmatch", artifactRelativePath]);
-      const headBytes = execFileSync13("git", ["-C", root, "show", `HEAD:${artifactRelativePath}`], {
+      execFileSync14("git", ["-C", root, "ls-files", "--error-unmatch", artifactRelativePath]);
+      const headBytes = execFileSync14("git", ["-C", root, "show", `HEAD:${artifactRelativePath}`], {
         maxBuffer: 128 * 1024 * 1024
       });
       const artifactBytes = readFileSync30(resolvedArtifactPath);
@@ -76631,17 +76832,17 @@ function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
         return null;
       verifiedBytes.push(artifactBytes);
     }
-    return execFileSync13("git", statusArgs, { encoding: "utf8" }).trim() ? null : verifiedBytes;
+    return execFileSync14("git", statusArgs, { encoding: "utf8" }).trim() ? null : verifiedBytes;
   } catch {
     return null;
   }
 }
 function readProofCandidateRuntime(candidateRoot, startup = proofWorkerStartup) {
   const root = realpathSync10(resolve10(candidateRoot));
-  const sha = execFileSync13("git", ["-C", root, "rev-parse", "HEAD"], {
+  const sha = execFileSync14("git", ["-C", root, "rev-parse", "HEAD"], {
     encoding: "utf8"
   }).trim();
-  const remote = execFileSync13("git", ["-C", root, "remote", "get-url", "origin"], {
+  const remote = execFileSync14("git", ["-C", root, "remote", "get-url", "origin"], {
     encoding: "utf8"
   }).trim();
   if (!isOfficialProofCandidateRemote(remote)) {
@@ -76662,7 +76863,7 @@ function readProofCandidateRuntime(candidateRoot, startup = proofWorkerStartup) 
   if (!proofCandidateStartupMatches(entrypoint, startup, headCoreBundleSha256)) {
     throw new Error("CANDIDATE_MCP_PROCESS_MISMATCH");
   }
-  const confirmedSha = execFileSync13("git", ["-C", root, "rev-parse", "HEAD"], {
+  const confirmedSha = execFileSync14("git", ["-C", root, "rev-parse", "HEAD"], {
     encoding: "utf8"
   }).trim();
   if (confirmedSha !== sha)
@@ -76772,7 +76973,7 @@ function resolveProofWorktreeRoot(detectedProjectRoot) {
     return null;
   }
   try {
-    const root = execFileSync13("git", ["rev-parse", "--show-toplevel"], {
+    const root = execFileSync14("git", ["rev-parse", "--show-toplevel"], {
       cwd: detectedProjectRoot,
       encoding: "utf8"
     }).trim();
@@ -76804,8 +77005,8 @@ function parseProofGitChanges(porcelain) {
   return changes;
 }
 function readProofGitInfo(root) {
-  const sha = execFileSync13("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
-  const status = execFileSync13("git", ["status", "--porcelain=v1", "--untracked-files=all", "-z"], {
+  const sha = execFileSync14("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  const status = execFileSync14("git", ["status", "--porcelain=v1", "--untracked-files=all", "-z"], {
     cwd: root,
     encoding: "utf8"
   });
@@ -76816,7 +77017,7 @@ function proofRootHasTrackedEntries(root, proofRoot) {
   if (!isNormalizedDescendant(root, proofRoot))
     throw new Error("INVALID_PROOF_ROOT");
   const path = relative5(root, proofRoot).replaceAll(sep6, "/");
-  return execFileSync13("git", ["ls-files", "-z", "--", path], {
+  return execFileSync14("git", ["ls-files", "-z", "--", path], {
     cwd: root,
     encoding: "utf8"
   }).length > 0;
@@ -78565,10 +78766,10 @@ var init_query = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/nav-graph/self-heal.js
-import { execFileSync as execFileSync14 } from "node:child_process";
+import { execFileSync as execFileSync15 } from "node:child_process";
 function gitExec(args, cwd) {
   try {
-    return execFileSync14("git", args, { cwd, timeout: 5e3, encoding: "utf-8" }).trim();
+    return execFileSync15("git", args, { cwd, timeout: 5e3, encoding: "utf-8" }).trim();
   } catch {
     return null;
   }
@@ -82337,7 +82538,7 @@ var init_e2e_config = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/e2e/git-info.js
-import { execFileSync as execFileSync15 } from "node:child_process";
+import { execFileSync as execFileSync16 } from "node:child_process";
 function getGitInfo(projectRoot, exec = (cmd, args) => defaultExec3(cmd, ["-C", projectRoot, ...args])) {
   try {
     const sha = exec("git", ["rev-parse", "--short", "HEAD"]).trim() || null;
@@ -82351,7 +82552,7 @@ var defaultExec3;
 var init_git_info = __esm({
   "packages/rn-dev-agent-core/dist/e2e/git-info.js"() {
     "use strict";
-    defaultExec3 = (cmd, args) => execFileSync15(cmd, args, { timeout: 5e3, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    defaultExec3 = (cmd, args) => execFileSync16(cmd, args, { timeout: 5e3, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
   }
 });
 
@@ -83027,7 +83228,7 @@ var init_runner_binding = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/local-authority-probe.js
-import { execFileSync as execFileSync16 } from "node:child_process";
+import { execFileSync as execFileSync17 } from "node:child_process";
 import { createHash as createHash20 } from "node:crypto";
 function identity(value) {
   return createHash20("sha256").update(JSON.stringify(value)).digest("hex");
@@ -83070,7 +83271,7 @@ function createLocalAuthorityProbe(dependencies) {
   const fetchTargets2 = dependencies.fetchTargets ?? (async (port) => JSON.parse(await fetchText(`http://127.0.0.1:${port}/json/list`)));
   const proveTargetDevices = dependencies.proveTargetDevices ?? ((input) => proveTargetDeviceAssociations(input, {
     execute: async (file, args) => ({
-      stdout: execFileSync16(file, args, {
+      stdout: execFileSync17(file, args, {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "ignore"],
         timeout: 5e3
@@ -83574,6 +83775,9 @@ var init_registered_connect = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/connect-exact-session-target.js
+function exactSessionTargetReadinessTimeoutMs(platform) {
+  return platform === "android" ? ANDROID_EXACT_TARGET_READINESS_TIMEOUT_MS : IOS_EXACT_TARGET_READINESS_TIMEOUT_MS;
+}
 function errorMessage(error2) {
   return error2 instanceof Error ? error2.message : String(error2);
 }
@@ -83650,12 +83854,15 @@ async function connectExactSessionTarget(input, timeoutMs, dependencies) {
   const leaf = leafError === void 0 ? "no exact target was advertised" : errorMessage(leafError);
   throw new Error(`CDP_TARGET_AUTHORITY_MISMATCH: exact managed-Metro target did not re-register after launch. Last exact-connect failure: ${leaf}`, { cause: leafError });
 }
+var IOS_EXACT_TARGET_READINESS_TIMEOUT_MS, ANDROID_EXACT_TARGET_READINESS_TIMEOUT_MS;
 var init_connect_exact_session_target = __esm({
   "packages/rn-dev-agent-core/dist/session/connect-exact-session-target.js"() {
     "use strict";
     init_connect();
     init_status();
     init_target_device_authority();
+    IOS_EXACT_TARGET_READINESS_TIMEOUT_MS = 15e3;
+    ANDROID_EXACT_TARGET_READINESS_TIMEOUT_MS = 12e4;
   }
 });
 
@@ -83764,7 +83971,7 @@ async function pinSessionDevClient(status, options) {
       }
     },
     connectExact: async ({ metroPort, platform, appId, deviceId }) => {
-      return connectExactSessionTarget2({ metroPort, platform, appId, deviceId }, 15e3);
+      return connectExactSessionTarget2({ metroPort, platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
     },
     readMarker: async () => {
       const result = await getClient().evaluate("JSON.stringify(globalThis.__RN_DEV_AGENT_AUTHORITY__ ?? null)");

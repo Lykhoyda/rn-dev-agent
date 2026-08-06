@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createBuildReceipt } from './session/build-receipt.js';
 import { captureInstalledArtifact } from './session/install-authority.js';
+import { resolveExpoAndroidDevice } from './session/expo-android-device.js';
 import { buildSignedMetroMarker, createMetroAuthorityModule } from './session/metro-authority.js';
 import { captureMetroBinding, type MetroBinding } from './session/metro-binding.js';
 import {
@@ -472,6 +473,24 @@ async function main(): Promise<void> {
           metroPort: current?.bindings.metroPort,
         })}\n`,
       );
+      return;
+    }
+    if (command === 'resolve-expo-android-device') {
+      const requestedDeviceId = process.argv[3];
+      const device = status.bindings.device as
+        | { platform?: unknown; deviceId?: unknown }
+        | undefined;
+      if (
+        device?.platform !== 'android' ||
+        typeof device.deviceId !== 'string' ||
+        requestedDeviceId !== device.deviceId
+      ) {
+        throw new SessionAuthorityError(
+          'EXPO_DEVICE_IDENTITY_MISMATCH',
+          'the requested Expo device does not equal the authority-bound adb serial',
+        );
+      }
+      process.stdout.write(`${JSON.stringify(resolveExpoAndroidDevice(device.deviceId))}\n`);
       return;
     }
     if (command === 'prepare-build') {
