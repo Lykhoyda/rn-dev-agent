@@ -83775,6 +83775,9 @@ var init_registered_connect = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/connect-exact-session-target.js
+function exactSessionTargetReadinessTimeoutMs(platform) {
+  return platform === "android" ? ANDROID_EXACT_TARGET_READINESS_TIMEOUT_MS : IOS_EXACT_TARGET_READINESS_TIMEOUT_MS;
+}
 function errorMessage(error2) {
   return error2 instanceof Error ? error2.message : String(error2);
 }
@@ -83851,12 +83854,15 @@ async function connectExactSessionTarget(input, timeoutMs, dependencies) {
   const leaf = leafError === void 0 ? "no exact target was advertised" : errorMessage(leafError);
   throw new Error(`CDP_TARGET_AUTHORITY_MISMATCH: exact managed-Metro target did not re-register after launch. Last exact-connect failure: ${leaf}`, { cause: leafError });
 }
+var IOS_EXACT_TARGET_READINESS_TIMEOUT_MS, ANDROID_EXACT_TARGET_READINESS_TIMEOUT_MS;
 var init_connect_exact_session_target = __esm({
   "packages/rn-dev-agent-core/dist/session/connect-exact-session-target.js"() {
     "use strict";
     init_connect();
     init_status();
     init_target_device_authority();
+    IOS_EXACT_TARGET_READINESS_TIMEOUT_MS = 15e3;
+    ANDROID_EXACT_TARGET_READINESS_TIMEOUT_MS = 12e4;
   }
 });
 
@@ -83965,7 +83971,7 @@ async function pinSessionDevClient(status, options) {
       }
     },
     connectExact: async ({ metroPort, platform, appId, deviceId }) => {
-      return connectExactSessionTarget2({ metroPort, platform, appId, deviceId }, 15e3);
+      return connectExactSessionTarget2({ metroPort, platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
     },
     readMarker: async () => {
       const result = await getClient().evaluate("JSON.stringify(globalThis.__RN_DEV_AGENT_AUTHORITY__ ?? null)");

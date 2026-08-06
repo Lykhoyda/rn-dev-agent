@@ -81958,6 +81958,11 @@ function createRegisteredConnectHandler(runtime, pinBoundSession) {
 }
 
 // packages/rn-dev-agent-core/dist/session/connect-exact-session-target.js
+var IOS_EXACT_TARGET_READINESS_TIMEOUT_MS = 15e3;
+var ANDROID_EXACT_TARGET_READINESS_TIMEOUT_MS = 12e4;
+function exactSessionTargetReadinessTimeoutMs(platform) {
+  return platform === "android" ? ANDROID_EXACT_TARGET_READINESS_TIMEOUT_MS : IOS_EXACT_TARGET_READINESS_TIMEOUT_MS;
+}
 function errorMessage(error2) {
   return error2 instanceof Error ? error2.message : String(error2);
 }
@@ -82532,7 +82537,7 @@ async function pinSessionDevClient(status, options) {
       }
     },
     connectExact: async ({ metroPort, platform, appId, deviceId }) => {
-      return connectExactSessionTarget2({ metroPort, platform, appId, deviceId }, 15e3);
+      return connectExactSessionTarget2({ metroPort, platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
     },
     readMarker: async () => {
       const result = await getClient().evaluate("JSON.stringify(globalThis.__RN_DEV_AGENT_AUTHORITY__ ?? null)");

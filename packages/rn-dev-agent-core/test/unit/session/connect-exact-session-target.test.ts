@@ -4,7 +4,10 @@ import type { AddressInfo } from 'node:net';
 import { test } from 'node:test';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { CDPClient } from '../../../dist/cdp-client.js';
-import { connectExactSessionTarget } from '../../../dist/session/connect-exact-session-target.js';
+import {
+  connectExactSessionTarget,
+  exactSessionTargetReadinessTimeoutMs,
+} from '../../../dist/session/connect-exact-session-target.js';
 
 const serial = '46828c2c';
 const model = 'BE2013';
@@ -248,6 +251,167 @@ test('production wrapper preserves the probe-timeout leaf in its public authorit
   }
 });
 
+test('Android cold setup re-lists only the same exact target within its readiness budget', async () => {
+  const exactTarget = {
+    id: 'cold-exact-1',
+    title: `${appId} (OnePlus ${model})`,
+    description: 'React Native Bridgeless [C++ connection]',
+    appId,
+    type: 'node',
+    webSocketDebuggerUrl: 'ws://127.0.0.1:8191/exact',
+    deviceName: preservedDeviceName,
+    platform: 'android' as const,
+    platformInference: 'probed' as const,
+  };
+  const foreignApp = {
+    ...exactTarget,
+    id: 'foreign-app-1',
+    appId: 'com.foreign.app',
+    title: `com.foreign.app (OnePlus ${model})`,
+    webSocketDebuggerUrl: 'ws://127.0.0.1:8191/foreign-app',
+  };
+  const foreignDevice = {
+    ...exactTarget,
+    id: 'foreign-device-1',
+    deviceName: 'Pixel 9 - 15 - API 35',
+    webSocketDebuggerUrl: 'ws://127.0.0.1:8191/foreign-device',
+  };
+  let now = 0;
+  let attempt = 0;
+  let current: CDPClient;
+  const listedPorts: number[] = [];
+  const connectedTargetIds: string[] = [];
+  const lifecycle: string[] = [];
+  const disconnectedAttempts: number[] = [];
+
+  const createFixtureClient = (): CDPClient => {
+    const clientAttempt = attempt++;
+    const client = {
+      metroPort: 8191,
+      connectedTarget: null as typeof exactTarget | null,
+      connectionGeneration: clientAttempt,
+      listTargetsExact: async (port: number) => {
+        listedPorts.push(port);
+        return { port, targets: [exactTarget, foreignApp, foreignDevice] };
+      },
+      connectExact: async (
+        port: number,
+        filters: { targetId?: string },
+        intent: string,
+        retries: number,
+      ) => {
+        assert.equal(port, 8191);
+        assert.equal(intent, 'default');
+        assert.equal(retries, 1);
+        assert.equal(filters.targetId, exactTarget.id);
+        connectedTargetIds.push(filters.targetId);
+        if (clientAttempt === 0) {
+          lifecycle.push('preflight-responsive', 'context-created', 'setup-stalled');
+          now += 53_000;
+          throw new Error('CDP timeout (10000ms): Runtime.evaluate during cold setup');
+        }
+        lifecycle.push('same-target-responsive');
+        client.connectedTarget = exactTarget;
+      },
+      disconnect: async () => {
+        disconnectedAttempts.push(clientAttempt);
+      },
+    };
+    return client as unknown as CDPClient;
+  };
+  current = createFixtureClient();
+
+  const connected = await connectExactSessionTarget(
+    exactInput(8191),
+    exactSessionTargetReadinessTimeoutMs('android'),
+    {
+      getClient: () => current,
+      setClient: (client) => {
+        current = client;
+      },
+      createClient: () => createFixtureClient(),
+      execute: async (file, args) => {
+        assert.equal(file, 'adb');
+        if (args[0] === 'devices') {
+          return { stdout: `List of devices attached\n${serial}\tdevice\n` };
+        }
+        assert.deepEqual(args, ['-s', serial, 'shell', 'getprop', 'ro.product.model']);
+        return { stdout: `${model}\n` };
+      },
+      now: () => now,
+      wait: async (ms) => {
+        now += ms;
+      },
+    },
+  );
+
+  assert.equal(exactSessionTargetReadinessTimeoutMs('android'), 120_000);
+  assert.equal(connected.targetId, exactTarget.id);
+  assert.equal(connected.deviceId, serial);
+  assert.deepEqual(lifecycle, [
+    'preflight-responsive',
+    'context-created',
+    'setup-stalled',
+    'same-target-responsive',
+  ]);
+  assert.deepEqual(listedPorts, [8191, 8191]);
+  assert.deepEqual(connectedTargetIds, [exactTarget.id, exactTarget.id]);
+  assert.deepEqual(disconnectedAttempts, [0]);
+  assert.ok(now > 15_000, 'the recovery must exercise more than the iOS readiness budget');
+  assert.ok(now < 120_000, 'the Android cold-start recovery must remain bounded');
+});
+
+test('Android cold setup failure retains the final actionable leaf when its budget expires', async () => {
+  let now = 0;
+  const leaf = new Error('CDP timeout (10000ms): Runtime.evaluate during cold setup');
+  const target = {
+    id: 'cold-exact-1',
+    title: `${appId} (OnePlus ${model})`,
+    description: 'React Native Bridgeless [C++ connection]',
+    appId,
+    type: 'node',
+    webSocketDebuggerUrl: 'ws://127.0.0.1:8191/exact',
+    deviceName: preservedDeviceName,
+    platform: 'android' as const,
+    platformInference: 'probed' as const,
+  };
+  const client = {
+    metroPort: 8191,
+    connectedTarget: null,
+    connectionGeneration: 0,
+    listTargetsExact: async () => ({ port: 8191, targets: [target] }),
+    connectExact: async () => {
+      now = exactSessionTargetReadinessTimeoutMs('android') + 1;
+      throw leaf;
+    },
+    disconnect: async () => {},
+  };
+
+  await assert.rejects(
+    connectExactSessionTarget(exactInput(8191), exactSessionTargetReadinessTimeoutMs('android'), {
+      getClient: () => client as unknown as CDPClient,
+      setClient: () => {},
+      createClient: () => client as unknown as CDPClient,
+      execute: async (file, args) => {
+        assert.equal(file, 'adb');
+        if (args[0] === 'devices') {
+          return { stdout: `List of devices attached\n${serial}\tdevice\n` };
+        }
+        return { stdout: `${model}\n` };
+      },
+      now: () => now,
+      wait: async () => {},
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /^CDP_TARGET_AUTHORITY_MISMATCH:/);
+      assert.match(error.message, /Runtime\.evaluate during cold setup/);
+      assert.equal(error.cause, leaf);
+      return true;
+    },
+  );
+});
+
 test('iOS retains the existing retry budget without replacing the exact client', async () => {
   const target = {
     id: 'ios-exact-1',
@@ -317,6 +481,7 @@ test('iOS retains the existing retry budget without replacing the exact client',
   );
 
   assert.equal(connected.targetId, target.id);
+  assert.equal(exactSessionTargetReadinessTimeoutMs('ios'), 15_000);
   assert.deepEqual(retryBudgets, [5, 5]);
   assert.equal(disconnectCalls, 0);
   assert.equal(createCalls, 0);

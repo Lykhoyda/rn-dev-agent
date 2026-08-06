@@ -209,7 +209,10 @@ import {
   filterTargetsForExactDevice,
   proveTargetDeviceAssociation,
 } from './session/target-device-authority.js';
-import { connectExactSessionTarget as connectExactSessionTargetWithDependencies } from './session/connect-exact-session-target.js';
+import {
+  connectExactSessionTarget as connectExactSessionTargetWithDependencies,
+  exactSessionTargetReadinessTimeoutMs,
+} from './session/connect-exact-session-target.js';
 import type { SessionStatus } from './session/registry.js';
 import { strictProofSourceIdentity, type SourceIdentity } from './session/source-identity.js';
 import { verifyManagedMetroManagementProof } from './session/managed-metro.js';
@@ -912,7 +915,10 @@ async function pinSessionDevClient(status: SessionStatus, options: { force: bool
         }
       },
       connectExact: async ({ metroPort, platform, appId, deviceId }) => {
-        return connectExactSessionTarget({ metroPort, platform, appId, deviceId }, 15_000);
+        return connectExactSessionTarget(
+          { metroPort, platform, appId, deviceId },
+          exactSessionTargetReadinessTimeoutMs(platform),
+        );
       },
       readMarker: async () => {
         const result = await getClient().evaluate(
