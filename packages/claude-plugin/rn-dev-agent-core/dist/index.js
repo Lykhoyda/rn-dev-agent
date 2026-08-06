@@ -70117,7 +70117,7 @@ async function probeDev2(client2) {
 }
 var DEV_REQUIRED_MSG = "Recording requires __DEV__=true \u2014 release builds pre-freeze props at bundle time and cannot be intercepted";
 function createRecordTestStartHandler(getClient2) {
-  return withConnection(getClient2, async (_args, client2) => {
+  const start = withConnection(getClient2, async (_args, client2) => {
     if (!await probeDev2(client2)) {
       return failResult(DEV_REQUIRED_MSG, "DEV_MODE_REQUIRED");
     }
@@ -70147,6 +70147,19 @@ function createRecordTestStartHandler(getClient2) {
       activeRoute: parsed.activeRoute ?? null
     });
   });
+  let startInFlight = null;
+  return (args) => {
+    if (startInFlight)
+      return startInFlight;
+    const operation = start(args);
+    startInFlight = operation;
+    const clear = () => {
+      if (startInFlight === operation)
+        startInFlight = null;
+    };
+    void operation.then(clear, clear);
+    return operation;
+  };
 }
 function createRecordTestStopHandler(getClient2) {
   return withConnection(getClient2, async (_args, client2) => {

@@ -79,6 +79,48 @@ test('M6 start: surfaces alreadyRunning when interceptor reports it', async () =
   assert.equal(data.activeRoute, 'Settings');
 });
 
+test('M6 start: concurrent callers cannot clear a completed recording late', async () => {
+  _resetState();
+  let resolveStart;
+  let startEvaluations = 0;
+  const startEvaluation = new Promise((resolve) => {
+    resolveStart = resolve;
+  });
+  const recordedEvents = [{ type: 'tap', testID: 'command-palette-btn', t: 1000 }];
+  const client = makeClient(async (expr) => {
+    if (expr.includes('__DEV__')) return { value: true };
+    if (expr.includes('Object.freeze')) {
+      startEvaluations++;
+      return startEvaluation;
+    }
+    if (expr.includes('__METRO_MCP_REC_CLEANUP__')) {
+      return {
+        value: JSON.stringify({ ok: true, events: recordedEvents, truncated: false }),
+      };
+    }
+    return { value: 16 };
+  });
+  const start = createRecordTestStartHandler(() => client);
+  const stop = createRecordTestStopHandler(() => client);
+  const generate = createRecordTestGenerateHandler();
+
+  const firstStart = start({});
+  const secondStart = start({});
+  assert.equal(firstStart, secondStart);
+  resolveStart({
+    value: JSON.stringify({ ok: true, alreadyRunning: false, activeRoute: 'HomeMain' }),
+  });
+
+  expectOk(await firstStart);
+  const stopped = expectOk(await stop({}));
+  assert.equal(stopped.eventCount, 1);
+  expectOk(await secondStart);
+  const generated = expectOk(await generate({ format: 'maestro' }));
+  assert.equal(generated.eventCount, 1);
+  assert.match(generated.text, /command-palette-btn/);
+  assert.equal(startEvaluations, 1);
+});
+
 test('M6 stop: deduplicates + populates typeCounts + truncated flag', async () => {
   _resetState();
   const fakeEvents = [
