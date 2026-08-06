@@ -1,6 +1,4 @@
-// Seams of device-smoke.ts that can be proven without a device: the fixture
-// cwd's declared (non-Git) source identity and the fixture-launch retry policy.
-// Covered by test/unit/smoke/device-smoke-driver.test.ts.
+// Hermetic seams for the smoke fixture's source identity and launch retry policy.
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -19,9 +17,7 @@ export interface DeclaredFixtureRoot {
   env: DeclaredIdentityEnv;
 }
 
-// The supervisor resolves source identity from its cwd; a bare temp dir is
-// neither a Git worktree nor a declared root, so it must declare both axes
-// (NON_GIT_MANIFEST_REQUIRED otherwise — GH #666).
+// A bare temp cwd must declare both source-identity axes (NON_GIT_MANIFEST_REQUIRED otherwise).
 export function createDeclaredFixtureRoot(): DeclaredFixtureRoot {
   const cwd = mkdtempSync(join(tmpdir(), 'rn-agent-smoke-'));
   writeFileSync(join(cwd, FIXTURE_MANIFEST), '{"name":"rn-agent-smoke-fixture","private":true}\n');
@@ -34,10 +30,7 @@ export function createDeclaredFixtureRoot(): DeclaredFixtureRoot {
   };
 }
 
-// Exactly `xcrun simctl launch` hitting its own timeout — the only launch
-// failure the nightly proved to be runner-side CoreSimulator wedging rather
-// than a real fault. A missing binary, a non-zero simctl status, or any other
-// spawn is a truthful failure and must not be retried.
+// Only xcrun simctl launch ETIMEDOUT is proven runner-side; other failures are authoritative.
 export function isSimctlLaunchTimeout(error: unknown): boolean {
   if (typeof error !== 'object' || error === null) return false;
   const spawned = error as { code?: unknown; path?: unknown; spawnargs?: unknown };

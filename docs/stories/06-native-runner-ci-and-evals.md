@@ -35,7 +35,8 @@ CI (` .github/workflows/ci.yml`) runs 2,522 TS unit cases, 3 integration tests, 
 ### Phase B — nightly device smoke (golden command set)
 
 > **Implemented 2026-07-06** (#387): `.github/workflows/nightly-device-smoke.yml` +
-> `test-fixtures/{ios,android}-fixture/` + `scripts/cdp-bridge/test/smoke/device-smoke.ts`
+> `test-fixtures/{ios,android}-fixture/` +
+> `packages/rn-dev-agent-core/test/smoke/device-smoke.ts`
 > + root `smoke:{ios,android}` scripts.
 >
 > Triage notes:

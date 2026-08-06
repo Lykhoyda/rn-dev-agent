@@ -123,17 +123,7 @@ function launchFixtureOnce() {
 }
 
 async function launchFixture() {
-  // The driver owns the fixture lifecycle: launch it OURSELVES and open the
-  // session with attachOnly (the documented race-free path). Launch-at-open
-  // proved flaky on a loaded emulator — the bridge's `adb shell monkey` has a
-  // 10s timeout that a cold app on a busy host can exceed.
-  //
-  // Two launch attempts, ~30s each: a reused-but-cold CI simulator/emulator can
-  // take longer than a single short window to bring the app to foreground
-  // (device-proven: a lone slow launch tripped the old 20s deadline). The
-  // re-launch is idempotent (foregrounds an already-running app). A wedged
-  // CoreSimulator that times out `simctl launch` consumes an attempt instead of
-  // aborting the run (GH #666); every other launch error still fails at once.
+  // Launch before attachOnly; retry only xcrun simctl launch ETIMEDOUT or a 30s foreground miss.
   await launchFixtureWithRetry({
     appId: APP_ID,
     launchOnce: launchFixtureOnce,

@@ -1,8 +1,4 @@
-// GH #666: the nightly device smoke went red on two independent harness
-// defects — the fixture cwd never declared a non-Git source identity, and the
-// documented two-attempt launch never retried a wedged `simctl launch`. Both
-// seams live in test/smoke/device-smoke-driver.ts and are proven here without
-// a simulator, an emulator, or a device.
+// Hermetic regression coverage for the GH #666 smoke-driver seams.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { readFileSync, rmSync } from 'node:fs';
@@ -28,8 +24,7 @@ const notAGitRepo = () => {
   throw new Error('fatal: not a git repository (or any of the parent directories): .git');
 };
 
-// A genuine spawnSync timeout error, so the retry predicate is pinned to the
-// shape Node actually throws rather than to a hand-written stand-in.
+// Use Node's real timeout shape to pin the retry predicate to runtime behavior.
 let realTimeoutError: Record<string, unknown> | null = null;
 function spawnTimeoutError(): Record<string, unknown> {
   if (!realTimeoutError) {
