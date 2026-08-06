@@ -62135,6 +62135,8 @@ function projectPublicAuthorityStatus(status, options = {}) {
       recorderBound: Boolean(status.bindings.recorder)
     },
     proof: Boolean(status.bindings.proof),
+    // ADR §5.2 (L3): strict proof is an opt-in overlay outside the four groups, never a group.
+    proofOverlay: { active: Boolean(status.bindings.proof) },
     ...recoveryStatus ? { recovery: recoveryStatus } : {},
     ...cleanupNextAction ? {
       staleDeviceCleanup: {

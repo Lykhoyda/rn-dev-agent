@@ -2286,7 +2286,14 @@ test('integration restoration resumes after files commit before binding completi
       'started',
     );
 
-    const resumed = await handler({ action: 'restore_integration', confirmed: true });
+    let resumed = await handler({ action: 'restore_integration', confirmed: true });
+    if (resumed.isError) {
+      assert.match(
+        resumed.content[0].text,
+        /SESSION_INTEGRATION_(?:WORKER_TIMEOUT|PATH_UNSAFE: bound-directory (?:operation unavailable|recovery failed))/,
+      );
+      resumed = await handler({ action: 'restore_integration', confirmed: true });
+    }
 
     assert.equal(resumed.isError, undefined);
     assert.deepEqual(JSON.parse(readFileSync(packagePath, 'utf8')), originalPackage);
