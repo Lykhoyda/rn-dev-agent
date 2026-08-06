@@ -46,9 +46,11 @@ test('M6 start: fails DEV_MODE_REQUIRED when __DEV__ is false', async () => {
 
 test('M6 start: succeeds with activeRoute parsed from JSON envelope', async () => {
   _resetState();
-  const client = makeClient(async (expr) => {
+  let startAwaitPromise = null;
+  const client = makeClient(async (expr, awaitPromise) => {
     if (expr.includes('__DEV__')) return { value: true };
     if (expr.includes('Object.freeze')) {
+      startAwaitPromise = awaitPromise;
       return { value: JSON.stringify({ ok: true, alreadyRunning: false, activeRoute: 'Home' }) };
     }
     // Freshness probe
@@ -59,6 +61,7 @@ test('M6 start: succeeds with activeRoute parsed from JSON envelope', async () =
   assert.equal(data.started, true);
   assert.equal(data.activeRoute, 'Home');
   assert.equal(data.alreadyRunning, false);
+  assert.equal(startAwaitPromise, true);
 });
 
 test('M6 start: surfaces alreadyRunning when interceptor reports it', async () => {

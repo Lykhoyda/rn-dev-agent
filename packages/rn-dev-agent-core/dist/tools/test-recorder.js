@@ -109,7 +109,7 @@ export function createRecordTestStartHandler(getClient) {
         if (!(await probeDev(client))) {
             return failResult(DEV_REQUIRED_MSG, 'DEV_MODE_REQUIRED');
         }
-        const result = (await client.evaluate(START_RECORDING_JS));
+        const result = (await client.evaluate(START_RECORDING_JS, true));
         if (result.error) {
             return failResult(`Failed to start recording: ${result.error}`, 'EVAL_FAILED');
         }

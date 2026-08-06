@@ -87,8 +87,19 @@ test('M6 JS guard: START walks fibers for already-mounted scroll containers', ()
 // Behavioural coverage lives in test-recorder-initiating-tap.test.ts.
 test('M6 JS guard: START walks fibers for already-mounted interactive handlers', () => {
   assert.match(START_RECORDING_JS, /isInteractiveFiber/);
+  assert.match(START_RECORDING_JS, /isRenderOwningComposite/);
+  assert.match(START_RECORDING_JS, /react\.memo/);
+  assert.match(START_RECORDING_JS, /react\.forward_ref/);
+  assert.match(START_RECORDING_JS, /react\.lazy/);
   assert.match(START_RECORDING_JS, /compositeAncestor/);
   assert.match(START_RECORDING_JS, /handlerTargets/);
+});
+
+test('M6 JS guard: START waits a bounded interval for handler readiness', () => {
+  assert.match(START_RECORDING_JS, /HANDLER_READY_TIMEOUT_MS = 1000/);
+  assert.match(START_RECORDING_JS, /return new Promise/);
+  assert.match(START_RECORDING_JS, /handlersReady\(\)/);
+  assert.match(START_RECORDING_JS, /Timed out waiting for recorder handlers/);
 });
 
 test('M6 JS guard: STOP calls cleanup and reads truncated flag', () => {
