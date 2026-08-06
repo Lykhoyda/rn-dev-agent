@@ -909,10 +909,13 @@ export class SessionRegistry {
                AND session_id = ? AND claim_epoch = ?`)
                     .run(claim.resource_type, claim.resource_key, session.sessionId, session.claimEpoch);
             }
+            const nextAuthorityVersion = row.authority_version + 1;
             this.#database
-                .prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`)
-                .run(JSON.stringify({ ...bindings, staleDeviceCleanup: null, staleDeviceRelease: null }), now, row.session_id, row.claim_epoch);
+                .prepare(`UPDATE sessions
+           SET bindings_json = ?, authority_version = ?, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ? AND authority_version = ?`)
+                .run(JSON.stringify({ ...bindings, staleDeviceCleanup: null, staleDeviceRelease: null }), nextAuthorityVersion, now, row.session_id, row.claim_epoch, row.authority_version);
+            this.#advanceActiveOperationFence(session, row.authority_version, nextAuthorityVersion, true);
         });
     }
     /**
@@ -3150,14 +3153,20 @@ export class SessionRegistry {
             reservation: exactReservation ? reservation : null,
         };
     }
-    #advanceActiveOperationFence(session, priorAuthorityVersion, nextAuthorityVersion) {
+    #advanceActiveOperationFence(session, priorAuthorityVersion, nextAuthorityVersion, requireActiveFence = false) {
         const active = this.#database
             .prepare(`SELECT operation_id, authority_version FROM operations
          WHERE session_id = ? AND claim_epoch = ? LIMIT 1`)
             .get(session.sessionId, session.claimEpoch);
-        if (!active)
-            return;
         const context = this.#operationContext.getStore();
+        if (!active) {
+            if (requireActiveFence &&
+                context?.sessionId === session.sessionId &&
+                context.claimEpoch === session.claimEpoch) {
+                throw new SessionAuthorityError('AUTHORITY_LOST_DURING_OPERATION', 'active operation fence disappeared before authority commit');
+            }
+            return;
+        }
         if (!context ||
             context.operationId !== active.operation_id ||
             context.sessionId !== session.sessionId ||
