@@ -42,10 +42,10 @@ export async function runStartupOwnerCleanup(input, dependencies = {}) {
     return {
         status: 'refused',
         released,
-        refusal: {
+        refusal: publicRefusal({
             code: 'RESOURCE_CLAIM_CONFLICT',
             message: 'startup cleanup did not converge for this worktree',
-        },
+        }),
     };
 }
 /** Open the shared authority registry and run the cleanup for one resolved source. */
@@ -157,16 +157,64 @@ function retainRefusal(registry, prior, refusal) {
         // The original refusal remains authoritative.
     }
 }
+/**
+ * The refusal reasons this cleanup path itself authors. Every one is a static,
+ * identifier-free sentence. Being a `SessionAuthorityError` is NOT evidence of that:
+ * a claim conflict renders `device:<udid> is held`, and process cleanup wraps an
+ * underlying `adb`/recorder message that carries serials, PIDs, and paths. So the
+ * allowlist is by exact text, and anything absent from it degrades to a generic
+ * reason — a new authored refusal loses detail rather than leaking identity.
+ */
+const PUBLIC_REFUSAL_REASONS = new Set([
+    'integration restoration requires a SHA-256-verified manifest and none is available; the dead owner binding is preserved',
+    'integration restoration requires the recorded manifest authority',
+    'integration restoration requires the active startup journal and recorded manifest authority',
+    'managed Metro could not be stopped with exact process authority',
+    'managed Metro cleanup has not been durably completed',
+    'startup cleanup did not converge for this worktree',
+    'startup cleanup no longer matches the exact source and app root',
+    'no startup cleanup is in progress',
+    'the same-root owner is live; a live owner is never released',
+    'the same-root owner identity could not be proven, so it is treated as live',
+    'expired lease owner identity could not be proven',
+    'the startup cleanup owner no longer matches the proven claim epoch',
+    ...['recorder', 'runner', 'observe', 'metro'].flatMap((resource) => [
+        `${resource} cleanup has not been durably completed`,
+        `${resource} cleanup was not durably requested`,
+    ]),
+]);
+const GENERIC_REFUSAL_REMEDY = 'Startup cleanup refused and preserved the prior owner binding. Resolve the refusal named by this code, then restart the MCP transport; another restart alone does not release the owner.';
+/**
+ * The outcome is the single boundary where a refusal becomes durable — journaled on
+ * the dead owner's row, projected into the contender's public status, and written to
+ * the supervisor's startup diagnostics. Raw producer diagnostics are never persisted
+ * past it: the typed code always survives, an authored reason survives only when it
+ * is provably identifier-free, and every refusal keeps an actionable remedy.
+ */
+function publicRefusal(refusal) {
+    // `SessionAuthorityError` renders as `CODE: sentence`; the code travels separately.
+    const sentence = refusal.message.replace(/^[A-Z][A-Z0-9_]+: /, '');
+    return {
+        code: refusal.code,
+        message: PUBLIC_REFUSAL_REASONS.has(sentence)
+            ? sentence
+            : `startup cleanup refused with ${refusal.code} and preserved the prior owner binding`,
+        nextAction: refusal.nextAction ?? GENERIC_REFUSAL_REMEDY,
+    };
+}
 function refusalOf(error) {
     if (error instanceof SessionAuthorityError) {
-        return {
+        return publicRefusal({
             code: error.code,
             message: error.message,
             ...(error.details?.nextAction ? { nextAction: error.details.nextAction } : {}),
-        };
+        });
     }
     const code = error && typeof error === 'object' && typeof error.code === 'string'
         ? error.code
         : 'STARTUP_CLEANUP_FAILED';
-    return { code, message: error instanceof Error ? error.message : String(error) };
+    return publicRefusal({
+        code,
+        message: error instanceof Error ? error.message : String(error),
+    });
 }

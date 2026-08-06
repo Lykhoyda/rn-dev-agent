@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, test } from 'node:test';
 import { createAuthorityGate } from '../../../dist/session/authority-gate.js';
-import { openSessionRegistry } from '../../../dist/session/registry.js';
+import { openSessionRegistry, SessionAuthorityError } from '../../../dist/session/registry.js';
 import { projectPublicAuthorityStatus } from '../../../dist/session/public-status.js';
 import { runStartupOwnerCleanup } from '../../../dist/session/startup-cleanup.js';
 import { WorkerAuthorityRuntime } from '../../../dist/session/runtime.js';
@@ -350,6 +350,57 @@ test('R4: a refused startup cleanup is legible, and identifier-free, in the cont
     '9911',
   ]) {
     assert.doesNotMatch(serialized, new RegExp(identifier), `projection must redact ${identifier}`);
+  }
+});
+
+// ── R4b ─────────────────────────────────────────────────────────────────────
+// Being a SessionAuthorityError is not evidence of redaction: a claim conflict renders
+// `device:<udid> is held`, and process cleanup wraps the underlying adb/recorder message
+// with its serials, PIDs, and paths. None of that may survive the outcome boundary.
+test('R4b: a producer diagnostic never reaches the log, the journal, or public status', async () => {
+  const leaks = [
+    { code: 'RESOURCE_CLAIM_CONFLICT', message: 'device:00008130-001A2B3C4D5E is held' },
+    {
+      code: 'AUTOMATION_CLEANUP_UNPROVEN',
+      message:
+        'adb -s emulator-5554 shell am force-stop failed: pid 44219 (/Users/dev/Library/Logs/x)',
+    },
+    { code: 'STARTUP_CLEANUP_FAILED', message: 'ENOENT: /Users/dev/.rn-agent/state/secret.json' },
+  ];
+
+  for (const leak of leaks) {
+    const f = contenderFacing('mismatch');
+    const outcome = await runStartupOwnerCleanup(cleanupInput(f), {
+      ...executorDeps(),
+      stopBoundRunner: async () => {
+        throw Object.assign(new SessionAuthorityError(leak.code, leak.message), {});
+      },
+    });
+    assert.equal(outcome.status, 'refused');
+    assert.equal(outcome.refusal?.code, leak.code, 'the typed code survives verbatim');
+
+    const projected = statusOf(f, 'contender');
+    const surfaces = JSON.stringify([outcome.refusal, projected.startupCleanupBlocked]);
+    for (const identifier of [
+      '00008130-001A2B3C4D5E',
+      'emulator-5554',
+      '44219',
+      '/Users/dev',
+      'secret.json',
+    ]) {
+      assert.doesNotMatch(
+        surfaces,
+        new RegExp(identifier),
+        `${leak.code} must not leak ${identifier}`,
+      );
+    }
+    // A redacted refusal is still actionable, not a bare code.
+    assert.match(String(outcome.refusal?.message), new RegExp(leak.code));
+    assert.match(String(outcome.refusal?.nextAction), /restart the MCP transport/);
+    assert.match(
+      String((projected.startupCleanupBlocked as Record<string, string>).nextAction),
+      /restart the MCP transport/,
+    );
   }
 });
 

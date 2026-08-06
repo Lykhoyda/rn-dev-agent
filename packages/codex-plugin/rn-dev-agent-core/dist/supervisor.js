@@ -86334,10 +86334,10 @@ async function runStartupOwnerCleanup(input, dependencies = {}) {
   return {
     status: "refused",
     released,
-    refusal: {
+    refusal: publicRefusal({
       code: "RESOURCE_CLAIM_CONFLICT",
       message: "startup cleanup did not converge for this worktree"
-    }
+    })
   };
 }
 async function runStartupCleanupForSource(input) {
@@ -86433,16 +86433,46 @@ function retainRefusal(registry2, prior, refusal) {
   } catch {
   }
 }
+var PUBLIC_REFUSAL_REASONS = /* @__PURE__ */ new Set([
+  "integration restoration requires a SHA-256-verified manifest and none is available; the dead owner binding is preserved",
+  "integration restoration requires the recorded manifest authority",
+  "integration restoration requires the active startup journal and recorded manifest authority",
+  "managed Metro could not be stopped with exact process authority",
+  "managed Metro cleanup has not been durably completed",
+  "startup cleanup did not converge for this worktree",
+  "startup cleanup no longer matches the exact source and app root",
+  "no startup cleanup is in progress",
+  "the same-root owner is live; a live owner is never released",
+  "the same-root owner identity could not be proven, so it is treated as live",
+  "expired lease owner identity could not be proven",
+  "the startup cleanup owner no longer matches the proven claim epoch",
+  ...["recorder", "runner", "observe", "metro"].flatMap((resource) => [
+    `${resource} cleanup has not been durably completed`,
+    `${resource} cleanup was not durably requested`
+  ])
+]);
+var GENERIC_REFUSAL_REMEDY = "Startup cleanup refused and preserved the prior owner binding. Resolve the refusal named by this code, then restart the MCP transport; another restart alone does not release the owner.";
+function publicRefusal(refusal) {
+  const sentence = refusal.message.replace(/^[A-Z][A-Z0-9_]+: /, "");
+  return {
+    code: refusal.code,
+    message: PUBLIC_REFUSAL_REASONS.has(sentence) ? sentence : `startup cleanup refused with ${refusal.code} and preserved the prior owner binding`,
+    nextAction: refusal.nextAction ?? GENERIC_REFUSAL_REMEDY
+  };
+}
 function refusalOf(error2) {
   if (error2 instanceof SessionAuthorityError) {
-    return {
+    return publicRefusal({
       code: error2.code,
       message: error2.message,
       ...error2.details?.nextAction ? { nextAction: error2.details.nextAction } : {}
-    };
+    });
   }
   const code = error2 && typeof error2 === "object" && typeof error2.code === "string" ? error2.code : "STARTUP_CLEANUP_FAILED";
-  return { code, message: error2 instanceof Error ? error2.message : String(error2) };
+  return publicRefusal({
+    code,
+    message: error2 instanceof Error ? error2.message : String(error2)
+  });
 }
 
 // packages/rn-dev-agent-core/dist/session/supervisor-authority.js
