@@ -602,16 +602,19 @@ test('GH#672: the handler exposes and resumes an expired journal before device r
     },
   });
 
+  // L5: the journal only blocks acquisition of OTHER devices; the journaled
+  // device itself resumes token-lessly through a bare bind (covered below).
   const refusedBind = await handler({
     action: 'bind_device',
     platform: 'ios',
-    deviceId: 'sim-1',
+    deviceId: 'sim-2',
     appId: 'com.example.app',
   });
   const refusedBody = envelope(refusedBind);
   assert.equal(refusedBind.isError, true);
   assert.equal(refusedBody.code, 'AUTOMATION_CLEANUP_UNPROVEN');
   assert.match(String(refusedBody.meta?.nextAction), /release_stale_device/);
+  assert.match(String(refusedBody.meta?.nextAction), /bind_device/);
   assert.equal(f.registry.getClaim('runner', 'ios:sim-1:9200')?.sessionId, 'live');
 
   const statusResult = await handler({ action: 'status' });
@@ -823,10 +826,11 @@ function envelope(result: { content: Array<{ text: string }> }) {
   };
 }
 
-test('GH#672: the gated stale-device release returns success with its exact scoped commit', async () => {
+test('GH#672/L5: an unconfirmed bind refuses without minting and confirmed cleans inline', async () => {
   const f = deadDeviceOwner();
   const runtime = new WorkerAuthorityRuntime(f.registry, f.live, null);
   const handler = createSessionHandler(runtime as never, { deviceExists: () => true });
+  const authorityVersionBefore = f.registry.getSessionStatus('live')?.authorityVersion;
 
   const refused = await handler({
     action: 'bind_device',
@@ -838,15 +842,26 @@ test('GH#672: the gated stale-device release returns success with its exact scop
   const body = envelope(refused);
   assert.equal(refused.isError, true);
   assert.equal(body.code, 'STALE_DEVICE_RELEASE_REQUIRED');
-  assert.match(String(body.meta?.nextAction), /release_stale_device/);
+  assert.match(String(body.meta?.nextAction), /"bind_device"/);
+  assert.match(String(body.meta?.nextAction), /confirmed: true/);
   assert.match(String(body.meta?.nextAction), /runner/);
+  assert.doesNotMatch(String(body.meta?.nextAction), /releaseHandle/);
+  assert.equal(
+    f.registry.getSessionStatus('live')?.bindings.staleDeviceRelease,
+    undefined,
+    'the unconfirmed refusal mints no capability token',
+  );
+  assert.equal(
+    f.registry.getSessionStatus('live')?.bindings.staleDeviceCleanup,
+    undefined,
+    'the unconfirmed refusal writes no journal',
+  );
+  assert.equal(f.registry.getSessionStatus('live')?.authorityVersion, authorityVersionBefore);
   assert.equal(f.registry.getClaim('device', 'ios:sim-1')?.sessionId, 'dead-device-owner');
+  assert.equal(f.registry.getClaim('runner', 'ios:sim-1:9200')?.sessionId, 'dead-device-owner');
 
-  const offer = f.registry.getSessionStatus('live')?.bindings.staleDeviceRelease as {
-    token: string;
-  };
   const stopped: string[] = [];
-  const releaseHandler = withAuthorityGate(
+  const confirmedHandler = withAuthorityGate(
     runtime,
     createSessionHandler(runtime as never, {
       deviceExists: () => true,
@@ -858,22 +873,23 @@ test('GH#672: the gated stale-device release returns success with its exact scop
       },
     }),
   );
-  const authorityVersionBeforeRelease = f.registry.getSessionStatus('live')?.authorityVersion;
-  const released = await releaseHandler({
-    action: 'release_stale_device',
+  const bound = await confirmedHandler({
+    action: 'bind_device',
     platform: 'ios',
     deviceId: 'sim-1',
-    releaseHandle: offer.token,
+    appId: 'com.example.app',
+    confirmed: true,
   });
-  assert.equal(released.isError, undefined, released.content[0]!.text);
-  assert.equal(envelope(released).ok, true);
+  assert.equal(bound.isError, undefined, bound.content[0]!.text);
+  assert.equal(envelope(bound).ok, true);
   assert.deepEqual(stopped, ['recorder', 'runner']);
-  assert.equal(f.registry.getClaim('device', 'ios:sim-1'), null);
+  assert.equal(f.registry.getClaim('device', 'ios:sim-1')?.sessionId, 'live');
   assert.equal(f.registry.getClaim('runner', 'ios:sim-1:9200'), null);
   assert.equal(f.registry.getClaim('recorder', 'ios:sim-1'), null);
-  assert.equal(
-    f.registry.getSessionStatus('live')?.authorityVersion,
-    authorityVersionBeforeRelease! + 1,
+  assert.equal(f.registry.getSessionStatus('live')?.bindings.staleDeviceCleanup, null);
+  assert.ok(
+    f.registry.getSessionStatus('live')!.authorityVersion > authorityVersionBefore!,
+    'the fenced journal commit advances the authority generation',
   );
   assert.equal(f.registry.getClaim('source', 'worktree-mine')?.sessionId, 'live');
   assert.equal(f.registry.getClaim('metro-port', '8248')?.sessionId, 'live');
@@ -885,15 +901,246 @@ test('GH#672: the gated stale-device release returns success with its exact scop
     deadAfter?.bindings.packageIntegration,
     'the dead owner keeps package-integration authority',
   );
+  assert.equal(
+    (deadAfter?.bindings.deviceReleased as { toSessionId?: string })?.toSessionId,
+    'live',
+    'the dead owner keeps a durable record of what left and to whom',
+  );
+});
 
-  const bound = await handler({
+test('GH#672/L5: release_stale_device transfers with confirmed: true and no capability token', async () => {
+  const f = deadDeviceOwner();
+  const runtime = new WorkerAuthorityRuntime(f.registry, f.live, null);
+  const stopped: string[] = [];
+  const handler = withAuthorityGate(
+    runtime,
+    createSessionHandler(runtime as never, {
+      deviceExists: () => true,
+      stopHandoffRunner: async () => {
+        stopped.push('runner');
+      },
+      stopHandoffRecorder: async () => {
+        stopped.push('recorder');
+      },
+    }),
+  );
+  const authorityVersionBefore = f.registry.getSessionStatus('live')?.authorityVersion;
+
+  const unconfirmed = await handler({
+    action: 'release_stale_device',
+    platform: 'ios',
+    deviceId: 'sim-1',
+  });
+  assert.equal(unconfirmed.isError, true);
+  assert.equal(envelope(unconfirmed).code, 'SESSION_AUTHORITY_REQUIRED');
+  assert.match(String(envelope(unconfirmed).meta?.nextAction), /confirmed: true/);
+  assert.equal(f.registry.getSessionStatus('live')?.bindings.staleDeviceCleanup, undefined);
+  assert.equal(f.registry.getSessionStatus('live')?.authorityVersion, authorityVersionBefore);
+  assert.equal(f.registry.getClaim('device', 'ios:sim-1')?.sessionId, 'dead-device-owner');
+
+  const released = await handler({
+    action: 'release_stale_device',
+    platform: 'ios',
+    deviceId: 'sim-1',
+    confirmed: true,
+  });
+  assert.equal(released.isError, undefined, released.content[0]!.text);
+  assert.equal(envelope(released).ok, true);
+  assert.deepEqual(stopped, ['recorder', 'runner']);
+  assert.equal(f.registry.getClaim('device', 'ios:sim-1'), null);
+  assert.equal(f.registry.getClaim('runner', 'ios:sim-1:9200'), null);
+  assert.equal(f.registry.getClaim('recorder', 'ios:sim-1'), null);
+  assert.equal(f.registry.getSessionStatus('live')?.authorityVersion, authorityVersionBefore! + 1);
+});
+
+test('GH#672/L5: a legacy release offer and handle still complete through the alias', async () => {
+  const f = deadDeviceOwner();
+  const runtime = new WorkerAuthorityRuntime(f.registry, f.live, null);
+  const offer = f.registry.prepareStaleResourceRelease(f.live, {
+    platform: 'ios',
+    deviceId: 'sim-1',
+  });
+  const stopped: string[] = [];
+  const handler = withAuthorityGate(
+    runtime,
+    createSessionHandler(runtime as never, {
+      deviceExists: () => true,
+      stopHandoffRunner: async () => {
+        stopped.push('runner');
+      },
+      stopHandoffRecorder: async () => {
+        stopped.push('recorder');
+      },
+    }),
+  );
+  const released = await handler({
+    action: 'release_stale_device',
+    platform: 'ios',
+    deviceId: 'sim-1',
+    releaseHandle: offer.token,
+  });
+  assert.equal(released.isError, undefined, released.content[0]!.text);
+  assert.deepEqual(stopped, ['recorder', 'runner']);
+  assert.equal(f.registry.getClaim('device', 'ios:sim-1'), null);
+  assert.equal(f.registry.getSessionStatus('live')?.bindings.staleDeviceRelease, null);
+});
+
+test('GH#672/L5: a crash between obligations resumes token-lessly via bare bind_device', async () => {
+  const f = deadDeviceOwner();
+  const runtime = new WorkerAuthorityRuntime(f.registry, f.live, null);
+  const stopped: string[] = [];
+  let failRunnerStop = true;
+  const handler = createSessionHandler(runtime as never, {
+    deviceExists: () => true,
+    stopHandoffRunner: async () => {
+      if (failRunnerStop) throw new Error('runner stop interrupted');
+      stopped.push('runner');
+    },
+    stopHandoffRecorder: async () => {
+      stopped.push('recorder');
+    },
+  });
+
+  const interrupted = await handler({
+    action: 'bind_device',
+    platform: 'ios',
+    deviceId: 'sim-1',
+    appId: 'com.example.app',
+    confirmed: true,
+  });
+  assert.equal(interrupted.isError, true);
+  assert.deepEqual(stopped, ['recorder']);
+  const journal = f.registry.getSessionStatus('live')?.bindings.staleDeviceCleanup as {
+    recorder?: { completedAt?: unknown };
+    runner?: { completedAt?: unknown };
+  };
+  assert.equal(typeof journal?.recorder?.completedAt, 'number');
+  assert.equal(journal?.runner?.completedAt, null);
+  assert.equal(f.registry.getClaim('device', 'ios:sim-1')?.sessionId, 'live');
+
+  failRunnerStop = false;
+  const resumed = await handler({
     action: 'bind_device',
     platform: 'ios',
     deviceId: 'sim-1',
     appId: 'com.example.app',
   });
-  assert.equal(bound.isError, undefined, bound.content[0]!.text);
+  assert.equal(resumed.isError, undefined, resumed.content[0]!.text);
+  assert.deepEqual(stopped, ['recorder', 'runner'], 'the completed recorder is not re-stopped');
+  assert.equal(f.registry.getSessionStatus('live')?.bindings.staleDeviceCleanup, null);
   assert.equal(f.registry.getClaim('device', 'ios:sim-1')?.sessionId, 'live');
+  assert.equal(f.registry.getClaim('runner', 'ios:sim-1:9200'), null);
+  assert.equal(f.registry.getClaim('recorder', 'ios:sim-1'), null);
+});
+
+test('GH#672/L5: the confirmed transfer refuses live, unknown, split, and foreign-worker cases without mutation', () => {
+  const f = deadDeviceOwner();
+  const target = { platform: 'ios', deviceId: 'sim-1' };
+
+  f.ownerStates.set('dead-device-owner', 'match');
+  assert.throws(
+    () => f.registry.beginConfirmedStaleDeviceRelease(f.live, 'live-worker', target),
+    (error: { code?: string }) => error.code === 'DEVICE_CLAIM_CONFLICT',
+    'a live owner is never released',
+  );
+
+  f.ownerStates.set('dead-device-owner', 'unknown');
+  assert.throws(
+    () => f.registry.beginConfirmedStaleDeviceRelease(f.live, 'live-worker', target),
+    (error: { code?: string }) => error.code === 'STALE_LEASE_NOT_RECLAIMABLE',
+    'an unprovable identity is treated as live',
+  );
+
+  f.ownerStates.set('dead-device-owner', 'mismatch');
+  assert.throws(
+    () => f.registry.beginConfirmedStaleDeviceRelease(f.live, 'other-worker', target),
+    (error: { code?: string }) => error.code === 'HANDOFF_TARGET_MISMATCH',
+    'a foreign worker cannot run the confirmed transfer',
+  );
+  assert.throws(
+    () =>
+      f.registry.beginConfirmedStaleDeviceRelease(
+        { sessionId: f.live.sessionId, claimEpoch: f.live.claimEpoch + 1 },
+        'live-worker',
+        target,
+      ),
+    (error: { code?: string }) => error.code === 'SESSION_OWNER_LOST',
+    'a changed claim epoch refuses',
+  );
+  assert.throws(
+    () =>
+      f.registry.beginConfirmedStaleDeviceRelease(f.live, 'live-worker', {
+        platform: 'ios',
+        deviceId: 'sim-9',
+      }),
+    (error: { code?: string }) => error.code === 'DEVICE_CLAIM_CONFLICT',
+    'no foreign claim means nothing to release',
+  );
+
+  const splitter = f.create('splitter', 'worktree-splitter');
+  f.registry.claimResources(splitter, [{ type: 'runner', key: 'ios:sim-1:9999' }]);
+  f.ownerStates.set('splitter', 'mismatch');
+  assert.throws(
+    () => f.registry.beginConfirmedStaleDeviceRelease(f.live, 'live-worker', target),
+    (error: { code?: string }) => error.code === 'DEVICE_CLAIM_CONFLICT',
+    'claims split across owners must be released explicitly',
+  );
+
+  assert.equal(f.registry.getClaim('device', 'ios:sim-1')?.sessionId, 'dead-device-owner');
+  assert.equal(f.registry.getClaim('runner', 'ios:sim-1:9200')?.sessionId, 'dead-device-owner');
+  assert.equal(f.registry.getSessionStatus('live')?.bindings.staleDeviceCleanup, undefined);
+  assert.ok(f.registry.getSessionStatus('dead-device-owner')?.bindings.runner);
+});
+
+test('GH#672/L5: an owner that revives before the confirmed retry keeps its device', async () => {
+  const f = deadDeviceOwner();
+  const runtime = new WorkerAuthorityRuntime(f.registry, f.live, null);
+  const handler = createSessionHandler(runtime as never, { deviceExists: () => true });
+
+  f.ownerStates.set('dead-device-owner', 'match');
+  const refused = await handler({
+    action: 'bind_device',
+    platform: 'ios',
+    deviceId: 'sim-1',
+    appId: 'com.example.app',
+    confirmed: true,
+  });
+  assert.equal(refused.isError, true);
+  assert.equal(envelope(refused).code, 'DEVICE_CLAIM_CONFLICT');
+  assert.equal(f.registry.getClaim('device', 'ios:sim-1')?.sessionId, 'dead-device-owner');
+  assert.ok(f.registry.getSessionStatus('dead-device-owner')?.bindings.runner);
+});
+
+test('GH#672/L5: a wildcard device id never releases a neighbour runner through the confirmed path', () => {
+  const f = fixture();
+  const dead = f.create('dead', 'worktree-foreign');
+  f.registry.claimResources(dead, [
+    { type: 'device', key: 'ios:sim_1' },
+    { type: 'runner', key: 'ios:sim_1:9200' },
+    { type: 'runner', key: 'ios:simX1:9300' },
+  ]);
+  f.registry.updateBindings(dead, {
+    state: 'device_claimed',
+    bindings: {
+      device: { platform: 'ios', deviceId: 'sim_1' },
+      runner: { platform: 'ios', deviceId: 'sim_1', port: 9200 },
+    },
+  });
+  const live = f.create('live', 'worktree-mine');
+  f.registry.bindWorker(live, { instanceId: 'live-worker', pid: 9100, token: 'live-birth' });
+  f.ownerStates.set('dead', 'mismatch');
+
+  f.registry.beginConfirmedStaleDeviceRelease(live, 'live-worker', {
+    platform: 'ios',
+    deviceId: 'sim_1',
+  });
+
+  assert.equal(f.registry.getClaim('runner', 'ios:sim_1:9200')?.sessionId, 'live');
+  assert.equal(
+    f.registry.getClaim('runner', 'ios:simX1:9300')?.sessionId,
+    'dead',
+    'the `_` in a device id must not match another device as a LIKE wildcard',
+  );
 });
 
 test('GH#672: foreign target or handle cannot produce a stale-device release commit', async () => {

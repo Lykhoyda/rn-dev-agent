@@ -25,8 +25,8 @@ Inspect and transition the fenced rn-dev-agent authority session. Status reconci
 | `handoffId` | `string` | No |  |  |  |
 | `token` | `string` | No |  |  |  |
 | `adoptionHandle` | `string` | No |  |  |  |
-| `releaseHandle` | `unknown` | No |  |  | Bounded capability minted by bind_device for initial proven-dead device transfer |
-| `confirmed` | `boolean` | No |  |  |  |
+| `releaseHandle` | `unknown` | No |  |  | Legacy release-offer capability; confirmed: true supersedes it |
+| `confirmed` | `boolean` | No |  |  | Authorizes inline proven-dead device cleanup |
 | `force` | `boolean` | No |  |  |  |
 
 ## Usage

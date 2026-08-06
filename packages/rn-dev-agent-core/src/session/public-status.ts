@@ -196,7 +196,7 @@ export function projectPublicAuthorityStatus(
                   expired: true,
                   nextAction:
                     cleanupNextAction ??
-                    'The stale device release offer expired. Re-run rn_session({ action: "bind_device" }) to mint a fresh one.',
+                    'The stale device release offer expired. Re-run rn_session({ action: "bind_device", confirmed: true }) to release the proven-dead owner inline.',
                 }),
           },
         }
