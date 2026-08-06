@@ -79,6 +79,8 @@ actionable `stop`.
 - `PACKAGE_MANAGER_CONFLICT` → surface both facts and stop; do not guess.
 - `PROJECT_MANIFEST_INVALID` / `PACKAGE_MANAGER_UNSUPPORTED` → surface the
   manifest defect and stop; lockfiles never override an invalid declaration.
+- `LOCKFILE_MISSING` → the declared manager's lockfile is absent; commit it
+  rather than running an unfrozen install.
 - If the checker binary is absent (older installed plugin), perform the same
   reads manually with the same stop rules — the contract does not change.
 

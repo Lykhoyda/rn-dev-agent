@@ -315,6 +315,73 @@ test('postflight stops when the provided status is not the canonical public enve
   rmSync(root, { recursive: true, force: true });
 });
 
+test('preflight rejects a packageManager value without an exact corepack version', () => {
+  for (const value of ['pnpm', 'pnpm@latest', 'yarn@^4.0.0']) {
+    const root = makeProject({
+      packageJson: { name: 'app', packageManager: value },
+      lockfile: 'pnpm-lock.yaml',
+    });
+    const { result, body } = run(['preflight', '--project', root]);
+    assert.equal(result.status, 3, value);
+    assert.equal(stopCode(body), 'PACKAGE_MANAGER_UNSUPPORTED', value);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('yarn install command follows the declared major generation', () => {
+  const classic = makeProject({
+    packageJson: { name: 'app', packageManager: 'yarn@1.22.22' },
+    lockfile: 'yarn.lock',
+  });
+  const classicRun = run(['preflight', '--project', classic]);
+  assert.equal(classicRun.result.status, 0);
+  assert.equal(facts(classicRun.body).installCommand, 'corepack yarn install --frozen-lockfile');
+  assert.equal(facts(classicRun.body).lockfile, 'yarn.lock');
+  rmSync(classic, { recursive: true, force: true });
+
+  const berry = makeProject({
+    packageJson: { name: 'app', packageManager: 'yarn@4.17.0' },
+    lockfile: 'yarn.lock',
+  });
+  const berryRun = run(['preflight', '--project', berry]);
+  assert.equal(berryRun.result.status, 0);
+  assert.equal(facts(berryRun.body).installCommand, 'corepack yarn install --immutable');
+  rmSync(berry, { recursive: true, force: true });
+});
+
+test('inferred yarn classic lockfile content selects the frozen-lockfile command', () => {
+  const root = makeProject({});
+  writeFileSync(join(root, 'yarn.lock'), '# yarn lockfile v1\n');
+  const { result, body } = run(['preflight', '--project', root]);
+  assert.equal(result.status, 0);
+  assert.equal(facts(body).installCommand, 'corepack yarn install --frozen-lockfile');
+  rmSync(root, { recursive: true, force: true });
+});
+
+test('yarn plug-n-play installation counts as dependency readiness', () => {
+  const root = makeProject({
+    packageJson: { name: 'app', packageManager: 'yarn@4.17.0' },
+    lockfile: 'yarn.lock',
+    nodeModules: false,
+  });
+  writeFileSync(join(root, '.pnp.cjs'), 'module.exports = {};\n');
+  const { result, body } = run(['preflight', '--project', root]);
+  assert.equal(result.status, 0);
+  assert.equal(facts(body).yarnPnpPresent, true);
+  assert.equal(facts(body).dependenciesReady, true);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test('a declared manager without its lockfile stops before recommending a frozen install', () => {
+  const root = makeProject({ packageJson: { name: 'app', packageManager: 'pnpm@11.5.2' } });
+  const { result, body } = run(['preflight', '--project', root]);
+  assert.equal(result.status, 3);
+  assert.equal(stopCode(body), 'LOCKFILE_MISSING');
+  const stop = body?.stop as { action: string };
+  assert.match(stop.action, /pnpm-lock\.yaml/);
+  rmSync(root, { recursive: true, force: true });
+});
+
 test('invalid arguments exit 2 without a verdict', () => {
   const { result } = run(['sideways']);
   assert.equal(result.status, 2);

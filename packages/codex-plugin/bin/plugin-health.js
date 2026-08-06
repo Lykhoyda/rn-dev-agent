@@ -159,6 +159,7 @@ function materializationFacts(packageRoot, pluginVersion) {
     "bin/plugin-health.js",
     "rn-dev-agent-core/dist/supervisor.js",
     "rn-dev-agent-core/dist/learned-actions.js",
+    "rn-dev-agent-core/dist/workflow-check.js",
     "AGENTS-MD-TEMPLATE.md",
     "scripts/collect-feedback.sh",
     "scripts/record_proof.sh",

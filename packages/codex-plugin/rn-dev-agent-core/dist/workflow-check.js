@@ -10307,12 +10307,30 @@ var LOCKFILES = [
   { file: "bun.lock", manager: "bun" },
   { file: "bun.lockb", manager: "bun" }
 ];
-var INSTALL_COMMANDS = {
-  pnpm: "corepack pnpm install --frozen-lockfile",
-  yarn: "corepack yarn install --immutable",
-  npm: "npm ci",
-  bun: "bun install --frozen-lockfile"
+var REQUIRED_LOCKFILES = {
+  pnpm: ["pnpm-lock.yaml"],
+  yarn: ["yarn.lock"],
+  npm: ["package-lock.json"],
+  bun: ["bun.lock", "bun.lockb"]
 };
+var COREPACK_VERSION = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$/;
+function installCommandFor(manager, declaredVersion, projectRoot) {
+  if (manager === "pnpm")
+    return "corepack pnpm install --frozen-lockfile";
+  if (manager === "npm")
+    return "npm ci";
+  if (manager === "bun")
+    return "bun install --frozen-lockfile";
+  if (declaredVersion !== null) {
+    const major = Number.parseInt(declaredVersion, 10);
+    return major <= 1 ? "corepack yarn install --frozen-lockfile" : "corepack yarn install --immutable";
+  }
+  const lock = readTextIfFile(path.join(projectRoot, "yarn.lock"));
+  if (lock !== null && lock.includes("yarn lockfile v1")) {
+    return "corepack yarn install --frozen-lockfile";
+  }
+  return "corepack yarn install --immutable";
+}
 var TEMPLATE_HEADING = "## React Native Development (rn-dev-agent)";
 var TEMPLATE_SENTINEL = "<!-- rn-dev-agent:template-end -->";
 function fail2(code, message) {
@@ -10352,12 +10370,14 @@ function detectPackageManagerField(raw) {
   if (typeof field !== "string")
     return { kind: "unsupported" };
   const separator = field.indexOf("@");
-  const name = separator === -1 ? field : field.slice(0, separator);
-  const version = separator === -1 ? null : field.slice(separator + 1);
-  if (!isPackageManagerName(name) || version !== null && (version.length === 0 || /[@\s]/.test(version))) {
+  if (separator === -1)
+    return { kind: "unsupported" };
+  const name = field.slice(0, separator);
+  const version = field.slice(separator + 1);
+  if (!isPackageManagerName(name) || !COREPACK_VERSION.test(version)) {
     return { kind: "unsupported" };
   }
-  return { kind: "declared", manager: name };
+  return { kind: "declared", manager: name, version };
 }
 function detectLockfiles(projectRoot) {
   return LOCKFILES.filter((candidate) => fs.existsSync(path.join(projectRoot, candidate.file)));
@@ -10369,6 +10389,9 @@ function nodeModulesPresent(projectRoot) {
   } catch {
     return false;
   }
+}
+function yarnPnpPresent(projectRoot) {
+  return fs.existsSync(path.join(projectRoot, ".pnp.cjs")) || fs.existsSync(path.join(projectRoot, ".pnp.loader.mjs"));
 }
 function preflight(projectRoot) {
   const packageJson = readTextIfFile(path.join(projectRoot, "package.json"));
@@ -10383,17 +10406,24 @@ function preflight(projectRoot) {
   }
   const declaration = detectPackageManagerField(packageJson);
   const field = declaration.kind === "declared" ? declaration.manager : null;
+  const declaredVersion = declaration.kind === "declared" ? declaration.version : null;
   const locks = detectLockfiles(projectRoot);
   const lockManagers = new Set(locks.map((lock) => lock.manager));
   const inferredLock = declaration.kind === "absent" && lockManagers.size === 1 ? locks[0] : null;
+  const matchingLock = field === null ? inferredLock : locks.find((lock) => lock.manager === field) ?? null;
   const claudeMd = readTextIfFile(path.join(projectRoot, "CLAUDE.md"));
   const claudeMdBlock = claudeMd !== null && claudeMd.includes(TEMPLATE_HEADING) ? "present" : "absent";
+  const resolvedManager = field ?? inferredLock?.manager ?? null;
+  const modulesPresent = nodeModulesPresent(projectRoot);
+  const pnpPresent = yarnPnpPresent(projectRoot);
   const facts = {
-    packageManager: field ?? inferredLock?.manager ?? null,
+    packageManager: resolvedManager,
     packageManagerSource: field ? "packageManager-field" : inferredLock ? "lockfile" : null,
-    lockfile: inferredLock?.file ?? null,
+    lockfile: matchingLock?.file ?? null,
     installCommand: null,
-    nodeModulesPresent: nodeModulesPresent(projectRoot),
+    nodeModulesPresent: modulesPresent,
+    yarnPnpPresent: pnpPresent,
+    dependenciesReady: modulesPresent || resolvedManager === "yarn" && pnpPresent,
     claudeMdBlock,
     claudeMdSentinel: claudeMd !== null && claudeMd.includes(TEMPLATE_SENTINEL),
     stateRoot: stateRootFacts()
@@ -10444,8 +10474,18 @@ function preflight(projectRoot) {
       }
     };
   }
-  facts.installCommand = INSTALL_COMMANDS[facts.packageManager];
-  if (!facts.nodeModulesPresent) {
+  facts.installCommand = installCommandFor(facts.packageManager, declaredVersion, projectRoot);
+  if (matchingLock === null) {
+    const required = REQUIRED_LOCKFILES[facts.packageManager].join(" or ");
+    return {
+      facts,
+      stop: {
+        code: "LOCKFILE_MISSING",
+        action: `The declared manager's lockfile (${required}) is absent, so a frozen install cannot succeed; commit the lockfile before installing.`
+      }
+    };
+  }
+  if (!facts.dependenciesReady) {
     return {
       facts,
       stop: {
@@ -10463,6 +10503,8 @@ function emptyPreflight() {
     lockfile: null,
     installCommand: null,
     nodeModulesPresent: false,
+    yarnPnpPresent: false,
+    dependenciesReady: false,
     claudeMdBlock: "absent",
     claudeMdSentinel: false,
     stateRoot: stateRootFacts()
