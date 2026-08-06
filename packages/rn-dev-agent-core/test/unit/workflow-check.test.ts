@@ -1,6 +1,3 @@
-// Hermetic tests for dist/workflow-check.js — package-manager/dependency
-// detection, private-state-root kind, onboarding gate, postflight residue,
-// and redaction. No device, network, or registry access.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -23,9 +20,12 @@ const ONBOARDED_CLAUDE_MD = [
 interface ProjectSpec {
   packageJson?: Record<string, unknown> | null;
   lockfile?: string;
+  lockfiles?: string[];
   nodeModules?: boolean;
   claudeMd?: string | null;
+  metroConfig?: string | null;
   recordings?: string[];
+  integrationFiles?: string[];
 }
 
 function makeProject(spec: ProjectSpec): string {
@@ -34,11 +34,19 @@ function makeProject(spec: ProjectSpec): string {
     writeFileSync(join(root, 'package.json'), JSON.stringify(spec.packageJson ?? { name: 'app' }));
   }
   if (spec.lockfile) writeFileSync(join(root, spec.lockfile), '');
+  for (const lockfile of spec.lockfiles ?? []) writeFileSync(join(root, lockfile), '');
   if (spec.nodeModules ?? true) {
     mkdirSync(join(root, 'node_modules', 'react'), { recursive: true });
   }
   if (spec.claudeMd !== null) {
     writeFileSync(join(root, 'CLAUDE.md'), spec.claudeMd ?? ONBOARDED_CLAUDE_MD);
+  }
+  if (spec.metroConfig !== null) {
+    writeFileSync(join(root, 'metro.config.js'), spec.metroConfig ?? 'module.exports = {};\n');
+  }
+  for (const integrationFile of spec.integrationFiles ?? []) {
+    mkdirSync(join(root, '.rn-agent', 'integration'), { recursive: true });
+    writeFileSync(join(root, '.rn-agent', 'integration', integrationFile), '{}');
   }
   for (const recording of spec.recordings ?? []) {
     mkdirSync(join(root, '.rn-agent', 'recordings'), { recursive: true });
@@ -68,6 +76,24 @@ function stopCode(body: Record<string, unknown> | null): string | null {
 
 function facts(body: Record<string, unknown> | null): Record<string, unknown> {
   return (body?.facts ?? {}) as Record<string, unknown>;
+}
+
+function statusEnvelope(
+  state: string,
+  metroBound: boolean,
+  runnerBound: boolean,
+  recorderBound: boolean,
+): Record<string, unknown> {
+  return {
+    ok: true,
+    data: {
+      authority: {
+        state,
+        runtime: { metroBound },
+        automation: { runnerBound, recorderBound },
+      },
+    },
+  };
 }
 
 test('preflight passes a declared pnpm project and reports the frozen-lockfile install', () => {
@@ -107,6 +133,25 @@ test('preflight stops on a packageManager field that contradicts the lockfile', 
   rmSync(root, { recursive: true, force: true });
 });
 
+test('preflight stops when lockfiles infer multiple package managers', () => {
+  const root = makeProject({ lockfiles: ['pnpm-lock.yaml', 'yarn.lock'] });
+  const { result, body } = run(['preflight', '--project', root]);
+  assert.equal(result.status, 3);
+  assert.equal(stopCode(body), 'PACKAGE_MANAGER_CONFLICT');
+  const stop = body?.stop as { action: string };
+  assert.match(stop.action, /pnpm-lock\.yaml/);
+  assert.match(stop.action, /yarn\.lock/);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test('preflight accepts multiple lockfiles for the same package manager', () => {
+  const root = makeProject({ lockfiles: ['bun.lock', 'bun.lockb'] });
+  const { result, body } = run(['preflight', '--project', root]);
+  assert.equal(result.status, 0);
+  assert.equal(facts(body).packageManager, 'bun');
+  rmSync(root, { recursive: true, force: true });
+});
+
 test('preflight stops when neither packageManager field nor lockfile exists', () => {
   const root = makeProject({});
   const { result, body } = run(['preflight', '--project', root]);
@@ -129,11 +174,11 @@ test('preflight stops with the declared install command when node_modules is mis
   rmSync(root, { recursive: true, force: true });
 });
 
-test('preflight stops on a project without the injected CLAUDE.md block', () => {
+test('preflight reports an absent CLAUDE.md block without owning onboarding policy', () => {
   const root = makeProject({ lockfile: 'yarn.lock', claudeMd: '# Project\n' });
   const { result, body } = run(['preflight', '--project', root]);
-  assert.equal(result.status, 3);
-  assert.equal(stopCode(body), 'PROJECT_NOT_ONBOARDED');
+  assert.equal(result.status, 0);
+  assert.equal(stopCode(body), null);
   assert.equal(facts(body).claudeMdBlock, 'absent');
   rmSync(root, { recursive: true, force: true });
 });
@@ -185,6 +230,25 @@ test('postflight stops while package.json still carries the session integration'
   rmSync(root, { recursive: true, force: true });
 });
 
+test('postflight stops on Metro sentinels without package-script residue', () => {
+  const root = makeProject({
+    metroConfig:
+      '// rn-dev-agent session integration: begin\nmodule.exports = {};\n// rn-dev-agent session integration: end\n',
+  });
+  const { result, body } = run(['postflight', '--project', root]);
+  assert.equal(result.status, 3);
+  assert.equal(stopCode(body), 'INTEGRATION_NOT_RESTORED');
+  rmSync(root, { recursive: true, force: true });
+});
+
+test('postflight stops on generated integration files without manifest references', () => {
+  const root = makeProject({ integrationFiles: ['rn-session-adapter.cjs'] });
+  const { result, body } = run(['postflight', '--project', root]);
+  assert.equal(result.status, 3);
+  assert.equal(stopCode(body), 'INTEGRATION_NOT_RESTORED');
+  rmSync(root, { recursive: true, force: true });
+});
+
 test('postflight passes a clean project and reports recording residue as a fact', () => {
   const root = makeProject({ recordings: ['walk.json'] });
   const { result, body } = run(['postflight', '--project', root]);
@@ -197,34 +261,31 @@ test('postflight passes a clean project and reports recording residue as a fact'
 test('postflight surfaces outstanding authority from a provided status projection in reverse-cleanup order', () => {
   const root = makeProject({});
   const statusFile = join(root, 'status.json');
-  writeFileSync(
-    statusFile,
-    JSON.stringify({
-      state: 'running',
-      runtime: { metro: { bound: true } },
-      automation: { runner: { bound: true }, recorder: { claimed: true } },
-    }),
-  );
+  writeFileSync(statusFile, JSON.stringify(statusEnvelope('running', true, true, true)));
   const runnerFirst = run(['postflight', '--project', root, '--status-file', statusFile]);
   assert.equal(stopCode(runnerFirst.body), 'RUNNER_STILL_BOUND');
 
-  writeFileSync(
-    statusFile,
-    JSON.stringify({ state: 'running', runtime: { metro: { bound: true } }, automation: {} }),
-  );
+  writeFileSync(statusFile, JSON.stringify(statusEnvelope('running', true, false, false)));
   const metroNext = run(['postflight', '--project', root, '--status-file', statusFile]);
   assert.equal(stopCode(metroNext.body), 'METRO_STILL_BOUND');
 
-  writeFileSync(
-    statusFile,
-    JSON.stringify({ state: 'closing', runtime: {}, automation: { recorder: { claimed: true } } }),
-  );
+  writeFileSync(statusFile, JSON.stringify(statusEnvelope('closing', false, false, true)));
   const recorderLast = run(['postflight', '--project', root, '--status-file', statusFile]);
   assert.equal(stopCode(recorderLast.body), 'RECORDER_CLAIM_OUTSTANDING');
 
-  writeFileSync(statusFile, JSON.stringify({ state: 'closing', runtime: {}, automation: {} }));
+  writeFileSync(statusFile, JSON.stringify(statusEnvelope('closing', false, false, false)));
   const clean = run(['postflight', '--project', root, '--status-file', statusFile]);
   assert.equal(clean.result.status, 0);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test('postflight stops when the provided status is not the canonical public envelope', () => {
+  const root = makeProject({});
+  const statusFile = join(root, 'status.json');
+  writeFileSync(statusFile, JSON.stringify({ state: 'closing', runtime: {}, automation: {} }));
+  const { result, body } = run(['postflight', '--project', root, '--status-file', statusFile]);
+  assert.equal(result.status, 3);
+  assert.equal(stopCode(body), 'SESSION_STATUS_INVALID');
   rmSync(root, { recursive: true, force: true });
 });
 

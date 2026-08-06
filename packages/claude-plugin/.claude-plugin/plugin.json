@@ -54,7 +54,8 @@
     "./commands/run-action.md",
     "./commands/check-vercel-rules.md",
     "./commands/observe.md",
-    "./commands/lock-e2e.md"
+    "./commands/lock-e2e.md",
+    "./commands/run-workflow.md"
   ],
   "mcpServers": {
     "cdp": {

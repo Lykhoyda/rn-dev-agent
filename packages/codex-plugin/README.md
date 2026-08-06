@@ -15,15 +15,15 @@ repository root or Claude package. `No plugin hooks` is expected.
 ## Native surface
 
 - Stable MCP server key `cdp` and the full MCP tool suite.
-- Ten implicit domain skills.
-- Fifteen explicit native workflow skills, invoked as
+- Eleven implicit domain skills.
+- Sixteen explicit native workflow skills, invoked as
   `$rn-dev-agent:<workflow> [request text]`.
-- Exactly 25 Codex skills total.
+- Exactly 27 Codex skills total.
 
-The fifteen workflows are `build-and-test`, `check-env`,
+The sixteen workflows are `build-and-test`, `check-env`,
 `check-vercel-rules`, `debug-screen`, `doctor`, `list-learned-actions`,
 `lock-e2e`, `nav-graph`, `observe`, `proof-capture`, `rn-feature-dev`,
-`run-action`, `send-feedback`, `setup`, and `test-feature`.
+`run-action`, `run-workflow`, `send-feedback`, `setup`, and `test-feature`.
 
 `commands/` contains their full package-local playbooks. The Codex manifest
 sets `"commands": []` to disable host best-effort command migration; no
@@ -49,8 +49,8 @@ bootstrap documented on the troubleshooting page.
 - `.codex-plugin/plugin.json`, `.mcp.json`
 - `bin/cdp-supervisor.js`, generated `bin/plugin-health.js`
 - bundled `rn-dev-agent-core/`
-- ten adapted domain skills + fifteen generated workflow adapters
-- fifteen adapted workflow playbooks under `commands/`
+- eleven adapted domain skills + sixteen generated workflow adapters
+- sixteen adapted workflow playbooks under `commands/`
 - generated `AGENTS-MD-TEMPLATE.md`
 - Expo/EAS, Vercel, feedback, proof, snapshot, and native-runner helpers
 - rn-agent scaffold templates and runner manifest

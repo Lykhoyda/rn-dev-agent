@@ -20,6 +20,7 @@ var WORKFLOW_SKILLS = [
   "proof-capture",
   "rn-feature-dev",
   "run-action",
+  "run-workflow",
   "send-feedback",
   "setup",
   "test-feature"
@@ -33,6 +34,7 @@ var DOMAIN_SKILLS = [
   "rn-feature-development",
   "rn-setup",
   "rn-testing",
+  "rn-workflow",
   "sending-feedback",
   "using-rn-dev-agent"
 ];

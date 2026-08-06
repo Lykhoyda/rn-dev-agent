@@ -19,6 +19,7 @@ export const WORKFLOW_SKILLS = [
   'proof-capture',
   'rn-feature-dev',
   'run-action',
+  'run-workflow',
   'send-feedback',
   'setup',
   'test-feature',
@@ -32,6 +33,7 @@ export const DOMAIN_SKILLS = [
   'rn-feature-development',
   'rn-setup',
   'rn-testing',
+  'rn-workflow',
   'sending-feedback',
   'using-rn-dev-agent',
 ] as const;

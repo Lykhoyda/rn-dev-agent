@@ -54,11 +54,11 @@ function healthyFacts(): HealthFacts {
   };
 }
 
-test('GH-575 inventory contract is exactly 10 domain + 15 workflow = 25', () => {
-  assert.equal(DOMAIN_SKILLS.length, 10);
-  assert.equal(WORKFLOW_SKILLS.length, 15);
-  assert.equal(EXPECTED_SKILLS.length, 25);
-  assert.equal(new Set(EXPECTED_SKILLS).size, 25);
+test('GH-575 inventory contract is exactly 11 domain + 16 workflow = 27', () => {
+  assert.equal(DOMAIN_SKILLS.length, 11);
+  assert.equal(WORKFLOW_SKILLS.length, 16);
+  assert.equal(EXPECTED_SKILLS.length, 27);
+  assert.equal(new Set(EXPECTED_SKILLS).size, 27);
 });
 
 test('GH-575 observation parser preserves explicit complete empty inventories', () => {

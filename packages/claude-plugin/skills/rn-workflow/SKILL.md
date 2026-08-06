@@ -135,7 +135,7 @@ wait for its owner.
 1. `rn_session(action="preview_integration")` → show the reversible edits.
 2. `rn_session(action="apply_integration", confirmed: true)`.
 3. Build/start ONLY through the literal integrated package script with the
-   manager from Step 1 (`<pm> ios` / `<pm> android`). Never raw `expo start`,
+   manager from Step 1 (`<pm> run ios` / `<pm> run android`). Never raw `expo start`,
    `expo run:*`, `xcodebuild`, or `adb install` — only the managed launcher
    produces the signed initial-bundle marker that authoritative tools require.
 4. The checker already reported the private-state-root kind; any subprocess

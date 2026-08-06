@@ -1,16 +1,7 @@
 #!/usr/bin/env node
-// workflow-check.ts — deterministic preflight/postflight facts for the
-// rn-workflow skill: package-manager/dependency state, private-state-root
-// resolution, and postflight residue. Read-only; never opens the authority
-// registry. Output is redacted JSON: no absolute paths, device ids, or tokens.
-//
-// Usage:
-//   node workflow-check.js preflight  [--project <dir>]
-//   node workflow-check.js postflight [--project <dir>] [--status-file <path>]
-//
-// Exit codes: 0 verdict pass / 2 invalid args / 3 verdict stop.
 import fs from 'node:fs';
 import path from 'node:path';
+import { inspectPackageIntegrationFileState } from './session/package-integration.js';
 import { getStateDir } from './util/secure-state-file.js';
 const LOCKFILES = [
     { file: 'pnpm-lock.yaml', manager: 'pnpm' },
@@ -27,7 +18,6 @@ const INSTALL_COMMANDS = {
 };
 const TEMPLATE_HEADING = '## React Native Development (rn-dev-agent)';
 const TEMPLATE_SENTINEL = '<!-- rn-dev-agent:template-end -->';
-const INTEGRATION_MARKER = '.rn-agent/integration/';
 function fail(code, message) {
     process.stderr.write(`${message}\n`);
     process.exit(code);
@@ -70,12 +60,8 @@ function detectPackageManagerField(projectRoot) {
         return name;
     return null;
 }
-function detectLockfile(projectRoot) {
-    for (const candidate of LOCKFILES) {
-        if (fs.existsSync(path.join(projectRoot, candidate.file)))
-            return candidate;
-    }
-    return null;
+function detectLockfiles(projectRoot) {
+    return LOCKFILES.filter((candidate) => fs.existsSync(path.join(projectRoot, candidate.file)));
 }
 function nodeModulesPresent(projectRoot) {
     try {
@@ -97,25 +83,37 @@ function preflight(projectRoot) {
         };
     }
     const field = detectPackageManagerField(projectRoot);
-    const lock = detectLockfile(projectRoot);
+    const locks = detectLockfiles(projectRoot);
+    const lockManagers = new Set(locks.map((lock) => lock.manager));
+    const inferredLock = lockManagers.size === 1 ? locks[0] : null;
     const claudeMd = readTextIfFile(path.join(projectRoot, 'CLAUDE.md'));
     const claudeMdBlock = claudeMd !== null && claudeMd.includes(TEMPLATE_HEADING) ? 'present' : 'absent';
     const facts = {
-        packageManager: field ?? lock?.manager ?? null,
-        packageManagerSource: field ? 'packageManager-field' : lock ? 'lockfile' : null,
-        lockfile: lock?.file ?? null,
+        packageManager: field ?? inferredLock?.manager ?? null,
+        packageManagerSource: field ? 'packageManager-field' : inferredLock ? 'lockfile' : null,
+        lockfile: inferredLock?.file ?? null,
         installCommand: null,
         nodeModulesPresent: nodeModulesPresent(projectRoot),
         claudeMdBlock,
         claudeMdSentinel: claudeMd !== null && claudeMd.includes(TEMPLATE_SENTINEL),
         stateRoot: stateRootFacts(),
     };
-    if (field !== null && lock !== null && field !== lock.manager) {
+    const conflictingLocks = field === null ? [] : locks.filter((lock) => lock.manager !== field);
+    if (conflictingLocks.length > 0) {
         return {
             facts,
             stop: {
                 code: 'PACKAGE_MANAGER_CONFLICT',
-                action: `package.json declares ${field} but ${lock.file} is present; align the project before installing — do not guess.`,
+                action: `package.json declares ${field} but ${conflictingLocks.map((lock) => lock.file).join(', ')} ${conflictingLocks.length === 1 ? 'is' : 'are'} present; align the project before installing — do not guess.`,
+            },
+        };
+    }
+    if (field === null && lockManagers.size > 1) {
+        return {
+            facts,
+            stop: {
+                code: 'PACKAGE_MANAGER_CONFLICT',
+                action: `Multiple package managers are inferred from ${locks.map((lock) => lock.file).join(', ')}; declare packageManager or remove stale lockfiles before installing — do not guess.`,
             },
         };
     }
@@ -129,15 +127,6 @@ function preflight(projectRoot) {
         };
     }
     facts.installCommand = INSTALL_COMMANDS[facts.packageManager];
-    if (claudeMdBlock === 'absent') {
-        return {
-            facts,
-            stop: {
-                code: 'PROJECT_NOT_ONBOARDED',
-                action: 'CLAUDE.md is missing the rn-dev-agent block; run /rn-dev-agent:setup before any device work.',
-            },
-        };
-    }
     if (!facts.nodeModulesPresent) {
         return {
             facts,
@@ -161,6 +150,9 @@ function emptyPreflight() {
         stateRoot: stateRootFacts(),
     };
 }
+function isRecord(value) {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
 function readSessionStatus(statusFile) {
     const absent = {
         provided: false,
@@ -170,7 +162,7 @@ function readSessionStatus(statusFile) {
         recorderClaim: null,
     };
     if (statusFile === null)
-        return absent;
+        return { session: absent, stop: null };
     const raw = readTextIfFile(statusFile);
     if (raw === null)
         fail(2, 'workflow-check: --status-file is missing or unreadable');
@@ -181,19 +173,54 @@ function readSessionStatus(statusFile) {
     catch {
         return fail(2, 'workflow-check: --status-file is not valid JSON');
     }
-    const runtime = parsed.runtime;
-    const automation = parsed.automation;
-    const bindings = parsed.bindings;
+    const data = isRecord(parsed) && isRecord(parsed.data) ? parsed.data : null;
+    const authority = data && isRecord(data.authority) ? data.authority : null;
+    const runtime = authority && isRecord(authority.runtime) ? authority.runtime : null;
+    const automation = authority && isRecord(authority.automation) ? authority.automation : null;
+    const isCanonical = isRecord(parsed) &&
+        parsed.ok === true &&
+        authority !== null &&
+        typeof authority.state === 'string' &&
+        runtime !== null &&
+        typeof runtime.metroBound === 'boolean' &&
+        automation !== null &&
+        typeof automation.runnerBound === 'boolean' &&
+        typeof automation.recorderBound === 'boolean';
+    if (!isCanonical) {
+        return {
+            session: {
+                provided: true,
+                state: authority && typeof authority.state === 'string' ? authority.state : null,
+                metroBound: null,
+                runnerBound: null,
+                recorderClaim: null,
+            },
+            stop: {
+                code: 'SESSION_STATUS_INVALID',
+                action: 'Provide the complete redacted rn_session status envelope with data.authority.runtime and data.authority.automation bindings; cleanup cannot be proven from an unknown shape.',
+            },
+        };
+    }
     return {
-        provided: true,
-        state: typeof parsed.state === 'string' ? parsed.state : null,
-        metroBound: Boolean(runtime?.metro ?? bindings?.metro),
-        runnerBound: Boolean(automation?.runner ?? bindings?.runner),
-        recorderClaim: Boolean(automation?.recorder ?? bindings?.recorder),
+        session: {
+            provided: true,
+            state: authority.state,
+            metroBound: runtime.metroBound,
+            runnerBound: automation.runnerBound,
+            recorderClaim: automation.recorderBound,
+        },
+        stop: null,
     };
 }
 function postflight(projectRoot, statusFile) {
-    const manifest = readTextIfFile(path.join(projectRoot, 'package.json'));
+    let integrationMarkersPresent = true;
+    try {
+        integrationMarkersPresent =
+            inspectPackageIntegrationFileState(projectRoot).verdict !== 'unintegrated';
+    }
+    catch {
+        integrationMarkersPresent = true;
+    }
     const recordingsDir = path.join(projectRoot, '.rn-agent', 'recordings');
     let recordingResidue = false;
     try {
@@ -202,11 +229,12 @@ function postflight(projectRoot, statusFile) {
     catch {
         recordingResidue = false;
     }
+    const status = readSessionStatus(statusFile);
     const facts = {
-        integrationMarkersPresent: manifest !== null && manifest.includes(INTEGRATION_MARKER),
+        integrationMarkersPresent,
         recordingResidue,
         stateRoot: stateRootFacts(),
-        session: readSessionStatus(statusFile),
+        session: status.session,
     };
     if (facts.integrationMarkersPresent) {
         return {
@@ -217,6 +245,8 @@ function postflight(projectRoot, statusFile) {
             },
         };
     }
+    if (status.stop)
+        return { facts, stop: status.stop };
     if (facts.session.provided && facts.session.runnerBound) {
         return {
             facts,

@@ -79,9 +79,6 @@ actionable `stop`.
 - `PACKAGE_MANAGER_CONFLICT` → surface both facts and stop; do not guess.
 - If the checker binary is absent (older installed plugin), perform the same
   reads manually with the same stop rules — the contract does not change.
-- Note: the checker's onboarding fact reads CLAUDE.md; on a Codex-only
-  project verify the `AGENTS.md` block from Step 0 instead and treat a
-  `PROJECT_NOT_ONBOARDED` stop accordingly.
 
 ### Step 2 — Read-only inventory
 
@@ -148,7 +145,7 @@ wait for its owner.
 1. `rn_session(action="preview_integration")` → show the reversible edits.
 2. `rn_session(action="apply_integration", confirmed: true)`.
 3. Build/start ONLY through the literal integrated package script with the
-   manager from Step 1 (`<pm> ios` / `<pm> android`). Never raw `expo start`,
+   manager from Step 1 (`<pm> run ios` / `<pm> run android`). Never raw `expo start`,
    `expo run:*`, `xcodebuild`, or `adb install` — only the managed launcher
    produces the signed initial-bundle marker that authoritative tools require.
 4. The checker already reported the private-state-root kind; any subprocess

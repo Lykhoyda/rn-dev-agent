@@ -1,7 +1,3 @@
-// Contract guard for the rn-workflow skill surface: the three host copies
-// stay synchronized, the reconciled Step 2a recovery vocabulary is present,
-// replay is orchestrated (never raw maestro_run for learned actions), and the
-// Claude plugin manifest lists every shipped skill directory.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
@@ -42,6 +38,10 @@ const SHARED_COMMAND = join(
   'run-workflow.md',
 );
 const CODEX_COMMAND = join(REPO_ROOT, 'packages', 'codex-plugin', 'commands', 'run-workflow.md');
+const CLAUDE_MANIFESTS = [
+  join(REPO_ROOT, 'packages', 'claude-plugin', '.claude-plugin', 'plugin.json'),
+  join(REPO_ROOT, 'packages', 'claude-plugin', 'plugin.json'),
+];
 
 function read(path: string): string {
   return readFileSync(path, 'utf8');
@@ -138,15 +138,20 @@ test('reverse cleanup order is stated exactly', () => {
   }
 });
 
-test('claude plugin manifest lists exactly the shipped skill directories', () => {
-  const manifest = JSON.parse(
-    read(join(REPO_ROOT, 'packages', 'claude-plugin', '.claude-plugin', 'plugin.json')),
-  ) as { skills: string[] };
-  const listed = new Set(manifest.skills.map((entry) => entry.replace('./skills/', '')));
+test('claude manifests list exactly the shipped skills and commands', () => {
   const shipped = readdirSync(join(REPO_ROOT, 'packages', 'claude-plugin', 'skills'), {
     withFileTypes: true,
   })
     .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name);
-  assert.deepEqual(new Set(shipped), listed);
+    .map((entry) => `./skills/${entry.name}`);
+  const commands = readdirSync(join(REPO_ROOT, 'packages', 'claude-plugin', 'commands'), {
+    withFileTypes: true,
+  })
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.md'))
+    .map((entry) => `./commands/${entry.name}`);
+  for (const path of CLAUDE_MANIFESTS) {
+    const manifest = JSON.parse(read(path)) as { skills: string[]; commands: string[] };
+    assert.deepEqual(new Set(manifest.skills), new Set(shipped), `${path}: skill inventory`);
+    assert.deepEqual(new Set(manifest.commands), new Set(commands), `${path}: command inventory`);
+  }
 });

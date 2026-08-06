@@ -20,7 +20,7 @@ This skill is your front door. Before starting any RN work, use the decision tre
 
 Codex loads `.codex-plugin/plugin.json`, package-local `skills/`, and stable MCP
 server key `cdp` from `.mcp.json`. `No plugin hooks` is expected. Packaged
-`commands/*.md` are complete workflow playbooks reached through the fifteen
+`commands/*.md` are complete workflow playbooks reached through the sixteen
 native `$rn-dev-agent:<workflow>` skills; best-effort command migration is
 explicitly disabled, so `source-command-*` is not a supported vocabulary.
 
