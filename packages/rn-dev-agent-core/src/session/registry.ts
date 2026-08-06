@@ -1131,16 +1131,22 @@ export class SessionRegistry {
     }
     if (status === 'mismatch') {
       if (grouped) {
-        const isSameRoot =
-          prior.source_key === row.source_key &&
-          prior.worktree_key === row.worktree_key &&
-          prior.app_root_key === row.app_root_key;
-        if (!isSameRoot) {
+        const isSameAppRoot =
+          prior.worktree_key === row.worktree_key && prior.app_root_key === row.app_root_key;
+        if (!isSameAppRoot) {
           return {
             requirement: 'attach',
             priorOwner: 'stale',
             nextAction:
               "The proven-dead owner belongs to a different app root in this worktree, so startup cleanup cannot release it here. Start and close rn-dev-agent from the prior owner's app root to release its authority, or use a separate worktree.",
+          };
+        }
+        if (prior.source_key !== row.source_key) {
+          return {
+            requirement: 'attach',
+            priorOwner: 'stale',
+            nextAction:
+              'The proven-dead owner has a different source identity for this app root, so startup cleanup cannot release it under the current declared manifests. Restore the declared manifests that produced the prior identity, start and close rn-dev-agent to release its authority, then reapply the manifest changes; otherwise use a separate worktree.',
           };
         }
         return {

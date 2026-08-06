@@ -767,6 +767,22 @@ test('L4: grouped recovery refuses restart cleanup across app roots', () => {
   assert.doesNotMatch(requirement.nextAction, /startup cleanup releases it automatically/i);
 });
 
+test('L4: grouped recovery distinguishes declared-manifest source drift', () => {
+  const f = groupedContender({ owner: { sourceKey: 'prior-declared-source' } });
+  f.ownerStates.set('owner', 'mismatch');
+
+  const requirement = f.registry.inspectRecoveryRequirement('contender');
+
+  assert.equal(requirement.requirement, 'attach');
+  assert.equal(requirement.priorOwner, 'stale');
+  assert.equal(requirement.priorOwnerHeartbeatAgeMs, undefined);
+  assert.match(requirement.nextAction, /different source identity/i);
+  assert.match(requirement.nextAction, /restore the declared manifests/i);
+  assert.match(requirement.nextAction, /separate worktree/i);
+  assert.doesNotMatch(requirement.nextAction, /different app root/i);
+  assert.doesNotMatch(requirement.nextAction, /startup cleanup releases it automatically/i);
+});
+
 test('L4: grouped adopt_stale refuses before requiring an unminted handle', async () => {
   const f = groupedContender();
   f.ownerStates.set('owner', 'mismatch');
