@@ -1,20 +1,5 @@
-// B145: the recorder dropped the tap that INITIATED a navigation whenever the
-// tapped control was already mounted when recording started.
-//
-// React (dev) freezes element props inside createElement, which is the seam the
-// recorder hooks. That seam only sees FUTURE renders, so a control already on
-// the declared start route kept its original unwrapped onPress forever. A
-// command-palette open/close walk therefore recorded {navigate, tap(close),
-// navigate} — the opening tap missing — and save_as_action emitted a flow whose
-// first executable step was an unreachable `assertVisible: command-palette-close`
-// from HomeMain, which timed out on replay.
-//
-// These tests execute the real injected JS against a synthetic React-like host,
-// so they are hermetic: no device, no Hermes, no CDP. The artifact under test IS
-// a JS source string, so running it is the only way to assert capture behaviour
-// rather than string shape (the js-guard suite covers string shape).
-// runInThisContext evaluates against the real global — which is exactly what the
-// injected IIFE reads — without eval's scope capture.
+// B145: execute the real recorder IIFE against a synthetic fiber tree for hermetic coverage.
+// runInThisContext supplies the real global read by the IIFE without using eval.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -46,8 +31,7 @@ interface ChildSpec {
   make: () => Props;
 }
 
-// A composite screen fiber whose render re-creates its children's elements —
-// the behaviour the recorder depends on when it forces a re-render.
+// Re-rendering this composite recreates its child elements and handler props.
 function makeScreen(name: string, specs: ChildSpec[]) {
   const live: Record<string, Props> = {};
   let renders = 0;

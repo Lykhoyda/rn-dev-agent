@@ -69297,10 +69297,7 @@ var START_RECORDING_JS = `(function() {
   globalThis.__METRO_MCP_REC_TRUNCATED__ = false;
   globalThis.__METRO_MCP_NAV_REF_CACHE__ = null;
 
-  // Session token: protects against stale wrappers from a previous start-stop
-  // cycle. Frozen props can't be mutated to clear obj.__mcpRec after
-  // cleanup, so wrappers from session 1 still call when session 2 begins.
-  // Each wrapper checks this token against the current global before pushing.
+  // Session-scoped markers prevent stale wrappers from emitting into later recordings.
   var sessionId = String(Date.now()) + '_' + Math.random().toString(36).slice(2);
   globalThis.__METRO_MCP_REC_SESSION__ = sessionId;
 
@@ -69502,11 +69499,7 @@ var START_RECORDING_JS = `(function() {
     return origFreeze.call(this, obj);
   };
 
-  // --- Re-render walk for already-mounted scroll containers + handlers ---
-  // Object.freeze only fires on FUTURE renders. Anything already mounted when
-  // recording starts missed the interceptor. Force-render so their props go
-  // through Object.freeze again. M8 pattern: 1..5 renderer loop for fiber root
-  // resolution.
+  // Re-render already-mounted scroll containers and handler owners through Object.freeze.
   (function() {
     function forceRerender(fiber, renderer) {
       if (!fiber) return;
@@ -69517,12 +69510,7 @@ var START_RECORDING_JS = `(function() {
       }
     }
 
-    // B145: a handler-bearing fiber holds the props object the interceptor
-    // must wrap, but that object was created by its PARENT's createElement.
-    // Re-rendering the fiber itself would only recreate its children, so the
-    // initiating tap on an already-mounted control stayed invisible and saved
-    // actions began with an unreachable assertVisible. Force the nearest
-    // composite ancestor \u2014 that re-runs the createElement producing these props.
+    // B145: re-render the nearest composite ancestor because it created the handler props.
     function isInteractiveFiber(fiber) {
       var p = fiber.memoizedProps;
       if (!p || typeof p !== 'object' || p.__mcpRec === sessionId) return false;
@@ -69530,8 +69518,7 @@ var START_RECORDING_JS = `(function() {
              typeof p.onLongPress === 'function' ||
              typeof p.onChangeText === 'function' ||
              typeof p.onSubmitEditing === 'function' ||
-             // Mirrors the B141 rule in the interceptor: onFocus only counts
-             // when the same props object has no onPress.
+             // Match B141: onFocus counts only when the same props object has no onPress.
              (typeof p.onFocus === 'function' && typeof p.onPress !== 'function');
     }
 
@@ -69549,8 +69536,7 @@ var START_RECORDING_JS = `(function() {
       var f = fiber.return;
       var hops = 0;
       while (f && hops < 50) {
-        // Host fibers have string types; re-rendering one does not re-run the
-        // createElement that built our target's props.
+        // Host fibers do not recreate the target's props when re-rendered.
         if (isRenderOwningComposite(f)) return f;
         f = f.return;
         hops++;
@@ -69630,8 +69616,7 @@ var START_RECORDING_JS = `(function() {
       if (fiber.sibling) stack.push({ f: fiber.sibling, d: depth, r: item.r });
       if (fiber.child)   stack.push({ f: fiber.child,   d: depth + 1, r: item.r });
     }
-    // Deferred to after the walk: forcing mid-walk mutates the tree being
-    // traversed.
+    // Defer forcing because it mutates the tree being traversed.
     for (var k = 0; k < handlerTargets.length; k++) {
       forceRerender(handlerTargets[k].f, handlerTargets[k].r);
     }
