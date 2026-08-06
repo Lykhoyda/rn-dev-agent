@@ -1,7 +1,36 @@
-export type AuthorityAxis = 'C' | 'S' | 'I' | 'M' | 'A' | 'B' | 'D' | 'R' | 'P';
+export type AuthorityFacet = 'C' | 'S' | 'I' | 'M' | 'A' | 'B' | 'D' | 'R' | 'P';
+export type AuthorityAxis = AuthorityFacet;
+export type AuthorityGroup = 'session' | 'target' | 'runtime' | 'automation';
+
+// Groups are ownership bookkeeping only: the gate, probes, receipts, and error
+// codes all run on the resolved facet letters, so regrouping never changes them.
+const groupFacets: Record<AuthorityGroup, readonly AuthorityFacet[]> = {
+  session: ['C', 'S'],
+  target: ['D', 'I'],
+  runtime: ['M', 'B', 'A'],
+  automation: ['R'],
+};
+
+const facetOrder: readonly AuthorityFacet[] = ['C', 'S', 'I', 'M', 'A', 'B', 'D', 'R', 'P'];
+
+const session: readonly AuthorityGroup[] = ['session'];
+const osScoped: readonly AuthorityGroup[] = ['session', 'target'];
+const throughRuntime: readonly AuthorityGroup[] = ['session', 'target', 'runtime'];
+const allGroups: readonly AuthorityGroup[] = ['session', 'target', 'runtime', 'automation'];
+
+function facetsOf(
+  groups: readonly AuthorityGroup[],
+  narrowing: { without?: readonly AuthorityFacet[]; overlay?: readonly AuthorityFacet[] } = {},
+): readonly AuthorityFacet[] {
+  const facets = new Set<AuthorityFacet>(groups.flatMap((group) => [...groupFacets[group]]));
+  for (const facet of narrowing.overlay ?? []) facets.add(facet);
+  for (const facet of narrowing.without ?? []) facets.delete(facet);
+  return facetOrder.filter((facet) => facets.has(facet));
+}
 
 export interface AuthorityProfile {
   kind: 'diagnostic' | 'transition' | 'authoritative';
+  groups?: readonly AuthorityGroup[];
   axes: readonly AuthorityAxis[];
   postflightAxes?: readonly AuthorityAxis[];
   optionalAxes?: readonly AuthorityAxis[];
@@ -123,43 +152,52 @@ function add(names: readonly string[], profile: AuthorityProfile): void {
 
 add(diagnostic, {
   kind: 'diagnostic',
+  groups: [],
   axes: [],
   mutation: false,
   liveBundleProbe: false,
 });
 add(transition, {
   kind: 'transition',
-  axes: ['C', 'S'],
+  groups: session,
+  axes: facetsOf(session),
   mutation: true,
   liveBundleProbe: false,
 });
 add(sourceState, {
   kind: 'authoritative',
-  axes: ['C', 'S'],
+  groups: session,
+  axes: facetsOf(session),
   mutation: true,
   liveBundleProbe: false,
 });
+// Native tools drive the device without a live CDP seat: no B, A stays live.
 add(nativeRead, {
   kind: 'authoritative',
-  axes: ['C', 'S', 'I', 'M', 'A', 'D', 'R'],
+  groups: allGroups,
+  axes: facetsOf(allGroups, { without: ['B'] }),
   mutation: false,
   liveBundleProbe: false,
 });
 add(nativeMutation, {
   kind: 'authoritative',
-  axes: ['C', 'S', 'I', 'M', 'A', 'D', 'R'],
+  groups: allGroups,
+  axes: facetsOf(allGroups, { without: ['B'] }),
   mutation: true,
   liveBundleProbe: false,
 });
+// Hybrid runs hold the live CDP seat instead of the native A association probe.
 add(hybridMutation, {
   kind: 'authoritative',
-  axes: ['C', 'S', 'I', 'M', 'B', 'D', 'R'],
+  groups: allGroups,
+  axes: facetsOf(allGroups, { without: ['A'] }),
   mutation: true,
   liveBundleProbe: true,
 });
 add(optionalHybridMutation, {
   kind: 'authoritative',
-  axes: ['C', 'S', 'I', 'M', 'D', 'R'],
+  groups: allGroups,
+  axes: facetsOf(allGroups, { without: ['A', 'B'] }),
   optionalAxes: ['B'],
   managedOrigin: true,
   managedRunnerPark: true,
@@ -168,32 +206,39 @@ add(optionalHybridMutation, {
 });
 add(nativeDiagnostic, {
   kind: 'authoritative',
-  axes: ['C', 'S', 'I', 'D'],
+  groups: osScoped,
+  axes: facetsOf(osScoped),
   mutation: false,
   liveBundleProbe: false,
 });
+// CDP tools never touch the runner and prove the bundle seat instead of A.
 add(cdpRead, {
   kind: 'authoritative',
-  axes: ['C', 'S', 'I', 'M', 'B', 'D'],
+  groups: throughRuntime,
+  axes: facetsOf(throughRuntime, { without: ['A'] }),
   mutation: false,
   liveBundleProbe: true,
 });
 add(cdpMutation, {
   kind: 'authoritative',
-  axes: ['C', 'S', 'I', 'M', 'B', 'D'],
+  groups: throughRuntime,
+  axes: facetsOf(throughRuntime, { without: ['A'] }),
   mutation: true,
   liveBundleProbe: true,
 });
 // Observe is a read-only Session child; its mutating web routes keep their own gates.
 add(observe, {
   kind: 'authoritative',
-  axes: ['C', 'S'],
+  groups: session,
+  axes: facetsOf(session),
   mutation: false,
   liveBundleProbe: false,
 });
+// Strict proof requires all four groups live plus the P overlay on every call.
 add(proof, {
   kind: 'authoritative',
-  axes: ['C', 'S', 'I', 'M', 'B', 'D', 'R', 'P'],
+  groups: allGroups,
+  axes: facetsOf(allGroups, { without: ['A'], overlay: ['P'] }),
   mutation: true,
   liveBundleProbe: true,
 });
@@ -206,9 +251,11 @@ export function authorityProfileFor(
     return profiles.get('device_press')!;
   }
   if (tool === 'device_deeplink') {
+    // OS-launch path: Runtime narrows to the managed Metro facet only.
     return {
       kind: 'authoritative',
-      axes: ['C', 'S', 'I', 'M', 'D'],
+      groups: throughRuntime,
+      axes: facetsOf(throughRuntime, { without: ['A', 'B'] }),
       managedOrigin: true,
       mutation: true,
       liveBundleProbe: false,
@@ -217,7 +264,8 @@ export function authorityProfileFor(
   if (tool === 'device_permission') {
     return {
       kind: 'authoritative',
-      axes: ['C', 'S', 'I', 'D'],
+      groups: osScoped,
+      axes: facetsOf(osScoped),
       mutation: args.action !== 'query',
       liveBundleProbe: false,
     };
@@ -226,17 +274,20 @@ export function authorityProfileFor(
     const cleanup = args.action === 'stop' || args.action === 'status';
     return {
       kind: 'authoritative',
-      axes: cleanup ? ['C', 'S', 'D'] : ['C', 'S', 'I', 'D'],
+      groups: osScoped,
+      axes: cleanup ? facetsOf(osScoped, { without: ['I'] }) : facetsOf(osScoped),
       sessionIdentity: true,
       mutation: args.action !== 'status',
       liveBundleProbe: false,
     };
   }
   if (tool === 'proof_capture' && args.action === 'discard') {
+    // Lighter teardown: discard must succeed after Runtime or install loss.
     return {
       kind: 'authoritative',
-      axes: ['C', 'S', 'D', 'P'],
-      postflightAxes: ['C', 'S', 'D'],
+      groups: osScoped,
+      axes: facetsOf(osScoped, { without: ['I'], overlay: ['P'] }),
+      postflightAxes: facetsOf(osScoped, { without: ['I'] }),
       mutation: true,
       liveBundleProbe: false,
     };
@@ -245,8 +296,11 @@ export function authorityProfileFor(
     const storageMutation = Array.isArray(args.storageKeys) && args.storageKeys.length > 0;
     return {
       kind: 'authoritative',
-      axes: storageMutation ? ['C', 'S', 'I', 'M', 'B', 'D', 'R'] : ['C', 'S', 'I', 'M', 'D', 'R'],
-      postflightAxes: ['C', 'S', 'I', 'M', 'D', 'R'],
+      groups: allGroups,
+      axes: storageMutation
+        ? facetsOf(allGroups, { without: ['A'] })
+        : facetsOf(allGroups, { without: ['A', 'B'] }),
+      postflightAxes: facetsOf(allGroups, { without: ['A', 'B'] }),
       managedOrigin: true,
       mutation: true,
       liveBundleProbe: storageMutation,
@@ -256,7 +310,7 @@ export function authorityProfileFor(
     const profile = profiles.get(tool)!;
     return {
       ...profile,
-      axes: profile.axes.filter((axis) => axis !== 'A'),
+      axes: profile.axes.filter((facet) => facet !== 'A'),
       managedOrigin: true,
       managedRunnerPark: true,
     };
@@ -264,8 +318,9 @@ export function authorityProfileFor(
   if (tool === 'maestro_run' || tool === 'maestro_test_all') {
     return {
       kind: 'authoritative',
-      axes: ['C', 'S', 'I', 'M', 'D', 'R'],
-      postflightAxes: ['C', 'S', 'I', 'M', 'D'],
+      groups: allGroups,
+      axes: facetsOf(allGroups, { without: ['A', 'B'] }),
+      postflightAxes: facetsOf(throughRuntime, { without: ['A', 'B'] }),
       managedOrigin: true,
       managedRunnerPark: true,
       mutation: true,
@@ -275,7 +330,8 @@ export function authorityProfileFor(
   if (tool === 'cdp_restart' && args.hardReset === true && args.platform === 'ios') {
     return {
       kind: 'transition',
-      axes: ['C', 'S', 'I', 'M', 'B', 'D', 'R'],
+      groups: allGroups,
+      axes: facetsOf(allGroups, { without: ['A'] }),
       mutation: true,
       liveBundleProbe: true,
     };
