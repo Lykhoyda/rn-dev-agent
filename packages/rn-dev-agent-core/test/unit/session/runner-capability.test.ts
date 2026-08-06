@@ -258,8 +258,7 @@ test('runner unbind finalizes the bound platform before one atomic release+unbin
 
   unbindNativeRunner(runtime, (platform) => calls.push(`finalize:${platform}`));
 
-  // GH #692: the claim release and the binding clear must ride the same registry
-  // transaction, so a death mid-unbind can never split claim and binding state.
+  // Claim release and binding clear must share one registry transaction.
   assert.deepEqual(calls, ['finalize:ios', 'unbind']);
   assert.deepEqual(update.releaseResources, [{ type: 'runner', key: 'ios:device-1:9100' }]);
   assert.equal(update.bindings.runner, null);

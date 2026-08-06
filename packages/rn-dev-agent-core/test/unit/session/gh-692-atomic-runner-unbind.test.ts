@@ -1,12 +1,4 @@
-// GH #692: unbindNativeRunner released the runner claim and cleared the runner
-// binding in two separate registry transactions. A process death between the two
-// commits left a durable split — claim row gone, bindings.runner still set — and
-// every later contender's adopt_stale was then vetoed by RUNNER_OWNERSHIP_MISMATCH
-// with no exit. The unbind must be one atomic registry transaction: any failed
-// unbind leaves claim and binding fully consistent, in both directions.
-//
-// Everything here runs over a disposable SQLite registry with injected owner
-// probes; no ambient session, device, or process state is touched.
+// Regression coverage for atomic runner unbind and refusal of unsupported split stores.
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -168,10 +160,7 @@ test('gh-692: an unbind whose registry write fails leaves claim and binding full
   const f = fixture();
   const owner = runnerBoundOwner(f);
 
-  // Durable-state equivalent of dying mid-unbind: the mutation the function
-  // issues fails after any earlier mutation would already have committed. Before
-  // the atomic fix, releaseResources had committed first, leaving the split that
-  // deadlocked adopt_stale (GH #692). With one transaction, nothing may change.
+  // A rejected atomic write must preserve both the claim and binding for retry.
   const failing = new Proxy(f.registry as object, {
     get(target, prop, receiver) {
       if (prop === 'updateBindings') {
