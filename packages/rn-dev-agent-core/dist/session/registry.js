@@ -951,8 +951,7 @@ export class SessionRegistry {
         if (runnerValue !== null && runnerValue !== undefined && !runner) {
             throw new SessionAuthorityError('RUNNER_OWNERSHIP_MISMATCH', 'stale runner binding targets another device');
         }
-        if (runner &&
-            (!hasCompleteRunnerCleanupIdentity(runner) || !Number.isSafeInteger(Number(runner.port)))) {
+        if (runner && !hasCompleteRunnerCleanupIdentity(runner)) {
             throw new SessionAuthorityError('RUNNER_ADOPTION_REQUIRED', 'stale runner cleanup identity is incomplete');
         }
         const runnerClaimKey = runner ? `${deviceKey}:${String(runner.port)}` : null;

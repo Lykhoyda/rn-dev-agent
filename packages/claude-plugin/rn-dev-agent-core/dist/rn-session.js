@@ -8016,16 +8016,19 @@ var init_authority_store = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/cleanup-identity.js
+function isPositiveSafeInteger(value) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
 function hasCompleteRunnerCleanupIdentity(binding) {
-  const pid = Number(binding.pid);
   const processBirth = String(binding.processBirth ?? "");
   const instanceId = String(binding.instanceId ?? "");
   const capability = String(binding.capability ?? "");
-  if (!Number.isSafeInteger(pid) || !processBirth || !instanceId || !capability)
+  if (!isPositiveSafeInteger(binding.pid) || !isPositiveSafeInteger(binding.port) || !processBirth || !instanceId || !capability) {
     return false;
+  }
   if (String(binding.platform ?? "") !== "android")
     return true;
-  return Boolean(String(binding.deviceId ?? "")) && Number.isSafeInteger(Number(binding.port));
+  return Boolean(String(binding.deviceId ?? ""));
 }
 function hasCompleteRecorderCleanupIdentity(binding) {
   const script = String(binding.script ?? "");
@@ -8034,7 +8037,7 @@ function hasCompleteRecorderCleanupIdentity(binding) {
     return false;
   if (binding.phase === "starting")
     return true;
-  return Number.isSafeInteger(Number(binding.pid)) && Boolean(String(binding.processBirth ?? ""));
+  return isPositiveSafeInteger(binding.pid) && Boolean(String(binding.processBirth ?? ""));
 }
 var init_cleanup_identity = __esm({
   "packages/rn-dev-agent-core/dist/session/cleanup-identity.js"() {
@@ -8824,7 +8827,7 @@ var init_registry = __esm({
         if (runnerValue !== null && runnerValue !== void 0 && !runner) {
           throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "stale runner binding targets another device");
         }
-        if (runner && (!hasCompleteRunnerCleanupIdentity(runner) || !Number.isSafeInteger(Number(runner.port)))) {
+        if (runner && !hasCompleteRunnerCleanupIdentity(runner)) {
           throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "stale runner cleanup identity is incomplete");
         }
         const runnerClaimKey = runner ? `${deviceKey}:${String(runner.port)}` : null;
@@ -17232,14 +17235,14 @@ async function stopBoundObserve(binding, listenerProbe = probeManagedMetroListen
 }
 async function stopBoundRunner(binding, processProbe = probeProcessBirth, signalProcess = process.kill, timeoutMs = 2e3, runAdb = async (args) => execFile14("adb", args, { timeout: 5e3, encoding: "utf8" })) {
   const deadlineMs = Date.now() + timeoutMs;
-  const pid = Number(binding.pid);
-  const expectedBirth = String(binding.processBirth ?? "");
   if (!hasCompleteRunnerCleanupIdentity(binding)) {
     throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "runner cleanup identity is incomplete");
   }
+  const pid = binding.pid;
+  const expectedBirth = String(binding.processBirth ?? "");
   const platform = String(binding.platform ?? "");
   const deviceId = String(binding.deviceId ?? "");
-  const port = Number(binding.port);
+  const port = binding.port;
   const current = processProbe(pid);
   if (current.status === "unknown") {
     throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "runner process identity is unavailable");
@@ -17287,8 +17290,6 @@ ${instrumentation.stderr}`;
 async function stopBoundRecorder(binding, _processProbe = probeProcessBirth, runRecorder = async (script, args) => runRecordProofScript(script, args)) {
   const script = String(binding.script ?? "");
   const scope = String(binding.scope ?? "");
-  const pid = Number(binding.pid);
-  const expectedBirth = String(binding.processBirth ?? "");
   if (!hasCompleteRecorderCleanupIdentity(binding)) {
     throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "recorder cleanup identity is incomplete");
   }
@@ -17312,6 +17313,8 @@ async function stopBoundRecorder(binding, _processProbe = probeProcessBirth, run
       throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", `provisional recorder termination is unproven: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
+  const pid = binding.pid;
+  const expectedBirth = String(binding.processBirth ?? "");
   try {
     const stopped = await runRecorder(script, ["stop", scope, String(pid), expectedBirth]);
     const status = await runRecorder(script, ["status", scope]);

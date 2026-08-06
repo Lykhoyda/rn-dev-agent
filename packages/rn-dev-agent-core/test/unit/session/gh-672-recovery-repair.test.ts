@@ -24,6 +24,10 @@ import { join } from 'node:path';
 import { afterEach, test } from 'node:test';
 import { createAuthorityGate } from '../../../dist/session/authority-gate.js';
 import { createBuildReceipt } from '../../../dist/session/build-receipt.js';
+import {
+  hasCompleteRecorderCleanupIdentity,
+  hasCompleteRunnerCleanupIdentity,
+} from '../../../dist/session/cleanup-identity.js';
 import { openSessionRegistry } from '../../../dist/session/registry.js';
 import { projectPublicAuthorityStatus } from '../../../dist/session/public-status.js';
 import { WorkerAuthorityRuntime } from '../../../dist/session/runtime.js';
@@ -417,6 +421,7 @@ function deadDeviceOwner(
   identityOverrides: {
     runner?: Record<string, unknown>;
     recorder?: Record<string, unknown>;
+    runnerClaimKey?: string;
   } = {},
 ) {
   const f = fixture();
@@ -428,7 +433,7 @@ function deadDeviceOwner(
     { type: 'source', key: 'worktree-foreign' },
     { type: 'metro-port', key: '8300' },
     { type: 'device', key: 'ios:sim-1' },
-    { type: 'runner', key: 'ios:sim-1:9200' },
+    { type: 'runner', key: identityOverrides.runnerClaimKey ?? 'ios:sim-1:9200' },
     { type: 'recorder', key: 'ios:sim-1' },
   ]);
   f.registry.updateBindings(dead, {
@@ -1165,13 +1170,14 @@ test('GH#672/L5: partial device families refuse before either release path mutat
 function assertIncompleteCleanupIdentityRefusesWithoutMutation(
   f: ReturnType<typeof deadDeviceOwner>,
   code: string,
+  runnerClaimKey = 'ios:sim-1:9200',
 ) {
   const target = { platform: 'ios', deviceId: 'sim-1' };
   const deadBefore = f.registry.getSessionStatus('dead-device-owner');
   const liveBefore = f.registry.getSessionStatus('live');
   const claimsBefore = [
     f.registry.getClaim('device', 'ios:sim-1'),
-    f.registry.getClaim('runner', 'ios:sim-1:9200'),
+    f.registry.getClaim('runner', runnerClaimKey),
     f.registry.getClaim('recorder', 'ios:sim-1'),
   ];
 
@@ -1188,7 +1194,7 @@ function assertIncompleteCleanupIdentityRefusesWithoutMutation(
   assert.deepEqual(
     [
       f.registry.getClaim('device', 'ios:sim-1'),
-      f.registry.getClaim('runner', 'ios:sim-1:9200'),
+      f.registry.getClaim('runner', runnerClaimKey),
       f.registry.getClaim('recorder', 'ios:sim-1'),
     ],
     claimsBefore,
@@ -1205,6 +1211,52 @@ test('GH#672/L5: incomplete recorder cleanup identity refuses before transfer', 
   const f = deadDeviceOwner({ recorder: { script: undefined } });
 
   assertIncompleteCleanupIdentityRefusesWithoutMutation(f, 'RECORDING_AUTHORITY_MISMATCH');
+});
+
+test('GH#672/L5: coerced cleanup numbers refuse before transfer', () => {
+  const nullRunnerPid = deadDeviceOwner({ runner: { pid: null } });
+  assertIncompleteCleanupIdentityRefusesWithoutMutation(nullRunnerPid, 'RUNNER_ADOPTION_REQUIRED');
+
+  const nullRunnerPort = deadDeviceOwner({
+    runner: { port: null },
+    runnerClaimKey: 'ios:sim-1:null',
+  });
+  assertIncompleteCleanupIdentityRefusesWithoutMutation(
+    nullRunnerPort,
+    'RUNNER_ADOPTION_REQUIRED',
+    'ios:sim-1:null',
+  );
+
+  const nullRecorderPid = deadDeviceOwner({ recorder: { pid: null } });
+  assertIncompleteCleanupIdentityRefusesWithoutMutation(
+    nullRecorderPid,
+    'RECORDING_AUTHORITY_MISMATCH',
+  );
+});
+
+test('GH#672/L5: cleanup identities require positive numeric process endpoints', () => {
+  const runner = {
+    platform: 'ios',
+    deviceId: 'sim-1',
+    port: 9200,
+    pid: 9201,
+    capability: 'runner-capability',
+    instanceId: 'runner-instance',
+    processBirth: 'runner-birth',
+  };
+  const recorder = {
+    phase: 'recording',
+    scope: RECORDER_SCOPE,
+    script: 'record_proof.sh',
+    pid: 9202,
+    processBirth: 'rec-birth',
+  };
+
+  for (const invalid of [null, undefined, 0, -1, Number.NaN, '9201']) {
+    assert.equal(hasCompleteRunnerCleanupIdentity({ ...runner, pid: invalid }), false);
+    assert.equal(hasCompleteRunnerCleanupIdentity({ ...runner, port: invalid }), false);
+    assert.equal(hasCompleteRecorderCleanupIdentity({ ...recorder, pid: invalid }), false);
+  }
 });
 
 test('GH#672/L5: neighboring bindings refuse without releasing their claims', () => {

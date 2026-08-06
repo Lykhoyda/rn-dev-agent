@@ -1,13 +1,20 @@
+function isPositiveSafeInteger(value) {
+    return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+}
 export function hasCompleteRunnerCleanupIdentity(binding) {
-    const pid = Number(binding.pid);
     const processBirth = String(binding.processBirth ?? '');
     const instanceId = String(binding.instanceId ?? '');
     const capability = String(binding.capability ?? '');
-    if (!Number.isSafeInteger(pid) || !processBirth || !instanceId || !capability)
+    if (!isPositiveSafeInteger(binding.pid) ||
+        !isPositiveSafeInteger(binding.port) ||
+        !processBirth ||
+        !instanceId ||
+        !capability) {
         return false;
+    }
     if (String(binding.platform ?? '') !== 'android')
         return true;
-    return Boolean(String(binding.deviceId ?? '')) && Number.isSafeInteger(Number(binding.port));
+    return Boolean(String(binding.deviceId ?? ''));
 }
 export function hasCompleteRecorderCleanupIdentity(binding) {
     const script = String(binding.script ?? '');
@@ -16,5 +23,5 @@ export function hasCompleteRecorderCleanupIdentity(binding) {
         return false;
     if (binding.phase === 'starting')
         return true;
-    return Number.isSafeInteger(Number(binding.pid)) && Boolean(String(binding.processBirth ?? ''));
+    return isPositiveSafeInteger(binding.pid) && Boolean(String(binding.processBirth ?? ''));
 }
