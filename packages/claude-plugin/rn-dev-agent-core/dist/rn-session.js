@@ -8854,7 +8854,7 @@ var init_registry = __esm({
                updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`).run(input.state ?? current.state, JSON.stringify(bindings), now, session2.sessionId, session2.claimEpoch);
           this.#advanceActiveOperationFence(session2, current.authority_version, current.authority_version + 1);
-        });
+        }, input.assertBeforeCommit);
       }
       replaceBindingsDuringOperation(operation, input) {
         const now = this.#now();
@@ -10372,10 +10372,11 @@ var init_registry = __esm({
              authority_version = authority_version + 1, updated_ms = ?
          WHERE session_id = ?`).run(now, sessionId);
       }
-      #transaction(operation) {
+      #transaction(operation, assertBeforeCommit) {
         this.#database.exec("BEGIN IMMEDIATE");
         try {
           const result = operation();
+          assertBeforeCommit?.();
           this.#database.exec("COMMIT");
           this.#secureFiles();
           return result;

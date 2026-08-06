@@ -231,6 +231,8 @@ export async function discoverAndConnect(
     }
   }
 
+  if (ctx.isDisposed()) throw new ConnectionSetupSupersededError();
+
   const generation = ctx.incrementConnectionGeneration();
   logger.info(
     'CDP',
@@ -328,7 +330,7 @@ async function connectToTarget(
       if (proxyUrl) {
         logger.info('CDP', `Routing via multiplexer proxy: ${proxyUrl}`);
       }
-      attemptWs = await connectWs(ctx, url);
+      attemptWs = await connectWebSocket(ctx, url);
       handshakeOk = true;
       // D594: Early stale-target detection — quick probe before full setup
       try {
@@ -361,8 +363,13 @@ async function connectToTarget(
         if (!reachable) throw new PickerBlockingBundleError(target);
       }
       await ctx.setup();
+      if (ctx.isDisposed()) throw new ConnectionSetupSupersededError();
       return;
     } catch (err) {
+      if (err instanceof ConnectionSetupSupersededError) {
+        closeConnectionAttempt(ctx, attemptWs);
+        throw err;
+      }
       // GH #184: the picker-blocking abort is deterministic, not transient —
       // don't burn the retry budget on it; clean up and surface it immediately.
       if (err instanceof PickerBlockingBundleError) {
@@ -403,13 +410,20 @@ async function connectToTarget(
   throw new Error(failureMessage);
 }
 
-function connectWs(ctx: ConnectContext, url: string): Promise<WebSocket> {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(url, {
+export type ConnectWebSocketFactory = (url: string) => WebSocket;
+
+export function connectWebSocket(
+  ctx: ConnectContext,
+  url: string,
+  createSocket: ConnectWebSocketFactory = (socketUrl) =>
+    new WebSocket(socketUrl, {
       handshakeTimeout: 5000,
       maxPayload: 100 * 1024 * 1024,
-      headers: { Origin: metroOrigin(url) },
-    });
+      headers: { Origin: metroOrigin(socketUrl) },
+    }),
+): Promise<WebSocket> {
+  return new Promise((resolve, reject) => {
+    const ws = createSocket(url);
     let settled = false;
     // Backstop: handshakeTimeout should emit 'error', but if the socket ever
     // wedges without firing open/error/close it would leak with its listeners.
@@ -428,6 +442,13 @@ function connectWs(ctx: ConnectContext, url: string): Promise<WebSocket> {
     ws.on('open', () => {
       settled = true;
       clearTimeout(guard);
+      if (ctx.isDisposed()) {
+        try {
+          ws.terminate();
+        } catch {}
+        reject(new ConnectionSetupSupersededError());
+        return;
+      }
       ctx.setWs(ws);
       ctx.setState('connected');
       resolve(ws);

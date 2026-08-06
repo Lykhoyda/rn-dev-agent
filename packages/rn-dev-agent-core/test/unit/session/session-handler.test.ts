@@ -1169,9 +1169,10 @@ test('forced dev-client pin invalidates the prior target before recreating the c
     },
     {
       onBundleInvalidated: () => calls.push('clear-client-policy'),
-      pinDevClient: async (_status, options) => {
+      pinDevClient: async (_status, options, commitBundle) => {
         assert.equal(options.force, true);
         calls.push('recreate-client');
+        commitBundle(bundle, () => calls.push('deadline-check'));
         return bundle;
       },
     },
@@ -1185,9 +1186,73 @@ test('forced dev-client pin invalidates the prior target before recreating the c
     'clear-bundle',
     'clear-client-policy',
     'recreate-client',
-    'claim:8193:target-b',
     'bind-bundle',
   ]);
+});
+
+test('Android forced pin keeps prior authority until one atomic staged-client commit', async () => {
+  const calls: string[] = [];
+  const status = {
+    sessionId: 'session-android',
+    authorityVersion: 7,
+    state: 'ready',
+    source: { kind: 'git', appRoot: '/project' },
+    bindings: {
+      metroPort: 8193,
+      install: { artifactDigest: 'install' },
+      metro: { instanceId: 'metro-a' },
+      device: { platform: 'android', deviceId: 'emulator-5554', appId: 'dev.example' },
+      bundle: { targetId: 'target-old' },
+    },
+  };
+  const bundle = {
+    sessionId: 'session-android',
+    metroInstanceId: 'metro-a',
+    worktreeKey: 'worktree-a',
+    appId: 'dev.example',
+    platform: 'android',
+    buildGeneration: 1,
+    deviceId: 'emulator-5554',
+    metroPort: 8193,
+    launchMethod: 'app',
+    targetId: 'target-new',
+    connectionGeneration: 2,
+    authorityScope: 'initial-bundle',
+    sourceFidelity: 'not-proven',
+  } as const;
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: {
+          getSessionStatus: () => status,
+          releaseResources: () => calls.push('early-release'),
+          claimResources: () => calls.push('early-claim'),
+          updateBindings: (_session, update) => {
+            assert.equal(update.expectedAuthorityVersion, 7);
+            assert.deepEqual(update.releaseResources, [{ type: 'target', key: '8193:target-old' }]);
+            assert.deepEqual(update.claimResources, [{ type: 'target', key: '8193:target-new' }]);
+            update.assertBeforeCommit();
+            calls.push('atomic-commit');
+          },
+        },
+        session: { sessionId: 'session-android', claimEpoch: 1 },
+      }),
+    },
+    {
+      onBundleInvalidated: () => calls.push('early-invalidation'),
+      pinDevClient: async (_status, _options, commitBundle) => {
+        calls.push('staged');
+        commitBundle(bundle, () => calls.push('deadline-check'));
+        calls.push('published');
+        return bundle;
+      },
+    },
+  );
+
+  const result = await handler({ action: 'pin_dev_client', force: true });
+  assert.equal(result.isError, undefined, result.content[0]!.text);
+  assert.deepEqual(calls, ['staged', 'deadline-check', 'atomic-commit', 'published']);
 });
 
 test('session release stops its managed Metro before releasing claims', async () => {

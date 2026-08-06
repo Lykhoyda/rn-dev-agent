@@ -128,6 +128,7 @@ interface SessionHandlerDependencies extends ManagedMetroStatusDependencies {
   pinDevClient?: (
     status: SessionStatus,
     options: { force: boolean },
+    commitBundle: (bundle: BundleAuthorityBinding, assertBeforeCommit: () => void) => void,
   ) => Promise<BundleAuthorityBinding>;
   stopHandoffObserve?: (binding: Record<string, unknown>) => Promise<void>;
   stopHandoffRunner?: (binding: Record<string, unknown>) => Promise<void>;
@@ -741,7 +742,14 @@ export function createSessionHandler(
         }
         const priorTargetId = (status.bindings.bundle as { targetId?: unknown } | null | undefined)
           ?.targetId;
-        if (input.force === true && typeof priorTargetId === 'string') {
+        const devicePlatform = (status.bindings.device as { platform?: unknown } | undefined)
+          ?.platform;
+        const atomicAndroidReplacement = devicePlatform === 'android';
+        if (
+          input.force === true &&
+          !atomicAndroidReplacement &&
+          typeof priorTargetId === 'string'
+        ) {
           registry.releaseResources(session, [
             { type: 'target', key: `${String(status.bindings.metroPort)}:${priorTargetId}` },
           ]);
@@ -751,16 +759,33 @@ export function createSessionHandler(
           });
           dependencies.onBundleInvalidated?.();
         }
-        const bundle = await dependencies.pinDevClient(status, {
-          force: input.force === true,
-        });
-        registry.claimResources(session, [
-          { type: 'target', key: `${bundle.metroPort}:${bundle.targetId}` },
-        ]);
-        registry.updateBindings(session, {
-          state: 'ready',
-          bindings: { bundle },
-        });
+        await dependencies.pinDevClient(
+          status,
+          { force: input.force === true },
+          (candidate, assertBeforeCommit) =>
+            registry.updateBindings(session, {
+              state: 'ready',
+              bindings: { bundle: candidate },
+              expectedAuthorityVersion: atomicAndroidReplacement
+                ? status.authorityVersion
+                : undefined,
+              releaseResources:
+                atomicAndroidReplacement &&
+                typeof priorTargetId === 'string' &&
+                priorTargetId !== candidate.targetId
+                  ? [
+                      {
+                        type: 'target' as const,
+                        key: `${candidate.metroPort}:${priorTargetId}`,
+                      },
+                    ]
+                  : [],
+              claimResources: [
+                { type: 'target', key: `${candidate.metroPort}:${candidate.targetId}` },
+              ],
+              assertBeforeCommit,
+            }),
+        );
         return okResult({ session: projectPublicAuthorityStatus(runtime.status()) });
       }
 

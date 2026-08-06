@@ -23464,7 +23464,7 @@ var init_registry = __esm({
                updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`).run(input.state ?? current.state, JSON.stringify(bindings), now, session2.sessionId, session2.claimEpoch);
           this.#advanceActiveOperationFence(session2, current.authority_version, current.authority_version + 1);
-        });
+        }, input.assertBeforeCommit);
       }
       replaceBindingsDuringOperation(operation, input) {
         const now = this.#now();
@@ -24982,10 +24982,11 @@ var init_registry = __esm({
              authority_version = authority_version + 1, updated_ms = ?
          WHERE session_id = ?`).run(now, sessionId);
       }
-      #transaction(operation) {
+      #transaction(operation, assertBeforeCommit) {
         this.#database.exec("BEGIN IMMEDIATE");
         try {
           const result = operation();
+          assertBeforeCommit?.();
           this.#database.exec("COMMIT");
           this.#secureFiles();
           return result;
@@ -49121,13 +49122,20 @@ function computeReconnectDelay(attempt, opts = {}) {
 function isPassive(ctx) {
   return ctx.isAutoConnectEnabled !== void 0 && !ctx.isAutoConnectEnabled();
 }
+function clearActiveState(ctx) {
+  if (ctx.clearActiveState) {
+    ctx.clearActiveState();
+    return;
+  }
+  clearActiveFlag();
+}
 function handleClose(ctx, code) {
   resetState(ctx.getResettableState());
   if (ctx.isDisposed() || ctx.isReconnecting())
     return;
   if (isPassive(ctx)) {
     ctx.setState("disconnected");
-    clearActiveFlag();
+    clearActiveState(ctx);
     logger.info("CDP", `WebSocket closed (code ${code}); auto-reconnect disabled \u2014 staying down`);
     console.error("CDP: connection closed (code " + code + "). Auto-reconnect is disabled (RN_CDP_AUTOCONNECT or .rn-agent/config.json cdp.autoConnect) \u2014 the bridge will reconnect on the next CDP tool call. Re-enable with RN_CDP_AUTOCONNECT=1 or by removing the config override.");
     return;
@@ -49188,7 +49196,7 @@ async function reconnect(ctx) {
   }
   ctx.setReconnecting(false);
   ctx.setState("disconnected");
-  clearActiveFlag();
+  clearActiveState(ctx);
   console.error("CDP: reconnect failed after " + RECONNECT_ATTEMPTS + " attempts. Starting background poll...");
   startBackgroundPoll(ctx);
 }
@@ -53415,6 +53423,8 @@ async function discoverAndConnect(ctx, portHint, filters, discoverFn = discover,
       throw err;
     }
   }
+  if (ctx.isDisposed())
+    throw new ConnectionSetupSupersededError();
   const generation2 = ctx.incrementConnectionGeneration();
   logger.info("CDP", `Connected to target ${connectedTarget.id} (${connectedTarget.title}) on port ${metroPort}, generation=${generation2}`);
   const stickyFilters = stickyPlatformFilters(ctx.getConnectFilters(), connectedTarget.platform);
@@ -53456,7 +53466,7 @@ async function connectToTarget(ctx, target, retries = 5, intent = "default") {
       if (proxyUrl) {
         logger.info("CDP", `Routing via multiplexer proxy: ${proxyUrl}`);
       }
-      attemptWs = await connectWs(ctx, url);
+      attemptWs = await connectWebSocket(ctx, url);
       handshakeOk = true;
       try {
         await ctx.sendWithTimeout("Runtime.evaluate", {
@@ -53475,8 +53485,14 @@ async function connectToTarget(ctx, target, retries = 5, intent = "default") {
           throw new PickerBlockingBundleError(target);
       }
       await ctx.setup();
+      if (ctx.isDisposed())
+        throw new ConnectionSetupSupersededError();
       return;
     } catch (err) {
+      if (err instanceof ConnectionSetupSupersededError) {
+        closeConnectionAttempt(ctx, attemptWs);
+        throw err;
+      }
       if (err instanceof PickerBlockingBundleError) {
         if (!closeConnectionAttempt(ctx, attemptWs)) {
           throw new ConnectionSetupSupersededError();
@@ -53507,13 +53523,13 @@ async function connectToTarget(ctx, target, retries = 5, intent = "default") {
   }
   throw new Error(failureMessage);
 }
-function connectWs(ctx, url) {
+function connectWebSocket(ctx, url, createSocket = (socketUrl) => new wrapper_default(socketUrl, {
+  handshakeTimeout: 5e3,
+  maxPayload: 100 * 1024 * 1024,
+  headers: { Origin: metroOrigin(socketUrl) }
+})) {
   return new Promise((resolve11, reject) => {
-    const ws = new wrapper_default(url, {
-      handshakeTimeout: 5e3,
-      maxPayload: 100 * 1024 * 1024,
-      headers: { Origin: metroOrigin(url) }
-    });
+    const ws = createSocket(url);
     let settled = false;
     const guard = setTimeout(() => {
       if (settled)
@@ -53528,6 +53544,14 @@ function connectWs(ctx, url) {
     ws.on("open", () => {
       settled = true;
       clearTimeout(guard);
+      if (ctx.isDisposed()) {
+        try {
+          ws.terminate();
+        } catch {
+        }
+        reject(new ConnectionSetupSupersededError());
+        return;
+      }
       ctx.setWs(ws);
       ctx.setState("connected");
       resolve11(ws);
@@ -53587,7 +53611,7 @@ function closeConnectionAttempt(ctx, attemptWs) {
 
 // packages/rn-dev-agent-core/dist/cdp-client.js
 init_project_config();
-async function discoverAuthoritativeTarget(policy, requestedFilters, discoverFn = discoverExactPort) {
+async function discoverAuthoritativeTarget(policy, requestedFilters, discoverFn = discoverExactPort, awaitWithinBoundary) {
   const result = await discoverFn(policy.port, {
     ...requestedFilters,
     ...policy.filters,
@@ -53596,7 +53620,8 @@ async function discoverAuthoritativeTarget(policy, requestedFilters, discoverFn 
   });
   if (result.errorCode || result.targets.length === 0)
     return result;
-  const targetId = await policy.resolveTargetId(result.targets);
+  const resolveTargetId = () => policy.resolveTargetId(result.targets, awaitWithinBoundary);
+  const targetId = await (awaitWithinBoundary ? awaitWithinBoundary(resolveTargetId) : resolveTargetId());
   const target = result.targets.find((candidate) => candidate.id === targetId);
   if (!target) {
     throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: exact-device resolver returned a target outside the managed Metro result");
@@ -53618,6 +53643,7 @@ var CDPClient = class _CDPClient {
   _port;
   reconnecting = false;
   disposed = false;
+  lifecycleAuthority = () => true;
   _helpersInjected = false;
   _helperWorldGeneration = 0;
   _helperContext = null;
@@ -53732,6 +53758,14 @@ var CDPClient = class _CDPClient {
   }
   get connectionGeneration() {
     return this._connectionGeneration;
+  }
+  setLifecycleAuthority(isCurrent) {
+    this.lifecycleAuthority = isCurrent;
+  }
+  publishLifecycleState() {
+    if (this.lifecycleAuthority() && this.isConnected && this._helpersInjected) {
+      setActiveFlag(this._port, this._connectedTarget);
+    }
   }
   get bridgeDetected() {
     return this._bridgeDetected;
@@ -53850,7 +53884,7 @@ var CDPClient = class _CDPClient {
     this._helpersInjected = false;
     this._bridgeDetected = false;
     this._bridgeVersion = null;
-    clearActiveFlag();
+    this.clearActiveState();
     this._helperToken = {
       generation: this._helperWorldGeneration,
       ws: this.ws,
@@ -53913,7 +53947,7 @@ var CDPClient = class _CDPClient {
     this._helpersInjected = false;
     this._bridgeDetected = false;
     this._bridgeVersion = null;
-    clearActiveFlag();
+    this.clearActiveState();
     logger.warn("CDP", `Helper state unavailable cause=${cause} helperEpoch=${token2.generation} connectionGeneration=${this._connectionGeneration}`);
     return false;
   }
@@ -53938,7 +53972,8 @@ var CDPClient = class _CDPClient {
     if (!this.isHelperTokenCurrent(token2))
       return;
     this._helpersInjected = true;
-    setActiveFlag(this._port, this._connectedTarget);
+    if (this.lifecycleAuthority())
+      setActiveFlag(this._port, this._connectedTarget);
     logger.info("CDP", `Helper state ready cause=${cause} helperEpoch=${token2.generation} connectionGeneration=${this._connectionGeneration}`);
     detectBridge(this, (expression) => this.evaluateForHelperToken(token2, expression, defaultTimeout(this.effectivePlatform))).then((r) => {
       if (!this.isHelperTokenCurrent(token2))
@@ -53982,10 +54017,10 @@ var CDPClient = class _CDPClient {
     }
     return discoverForList(this._port, portHint);
   }
-  async connectExact(port, filters, intent = "default", targetRetries = 5) {
+  async connectExact(port, filters, intent = "default", targetRetries = 5, awaitWithinBoundary) {
     this._reconnectDiscover = discoverExactPort;
     this._exactDiscoveryPort = port;
-    return this.connectWithCurrentPolicy(port, filters, intent, targetRetries);
+    return this.connectWithCurrentPolicy(port, filters, intent, targetRetries, awaitWithinBoundary);
   }
   async listTargetsExact(port) {
     return listTargetsOnExactPort(this._authoritativeSessionPolicy?.port ?? port);
@@ -54014,30 +54049,33 @@ var CDPClient = class _CDPClient {
   _connectFilters = {};
   _reconnectDiscover;
   _exactDiscoveryPort;
-  authoritativeDiscover = async (_port, filtersOrPlatform) => {
+  createAuthoritativeDiscover(awaitWithinBoundary) {
+    return async (_port, filtersOrPlatform) => {
+      const policy = this._authoritativeSessionPolicy;
+      if (!policy)
+        throw new Error("Authoritative session policy is unavailable");
+      const filters = typeof filtersOrPlatform === "string" ? { platform: filtersOrPlatform } : filtersOrPlatform ?? {};
+      return discoverAuthoritativeTarget(policy, filters, discoverExactPort, awaitWithinBoundary);
+    };
+  }
+  async connectWithCurrentPolicy(portHint, filters, intent, targetRetries = 5, awaitWithinBoundary) {
     const policy = this._authoritativeSessionPolicy;
-    if (!policy)
-      throw new Error("Authoritative session policy is unavailable");
-    const filters = typeof filtersOrPlatform === "string" ? { platform: filtersOrPlatform } : filtersOrPlatform ?? {};
-    return discoverAuthoritativeTarget(policy, filters);
-  };
-  async connectWithCurrentPolicy(portHint, filters, intent, targetRetries = 5) {
-    const policy = this._authoritativeSessionPolicy;
-    const result = await autoConnect(this.buildConnectCtx(), policy?.port ?? this._exactDiscoveryPort ?? portHint, policy ? { ...filters, ...policy.filters, targetId: void 0 } : filters, intent, policy ? this.authoritativeDiscover : this._reconnectDiscover, targetRetries);
-    await this.verifyAuthoritativeConnection();
+    const result = await autoConnect(this.buildConnectCtx(), policy?.port ?? this._exactDiscoveryPort ?? portHint, policy ? { ...filters, ...policy.filters, targetId: void 0 } : filters, intent, policy ? this.createAuthoritativeDiscover(awaitWithinBoundary) : this._reconnectDiscover, targetRetries);
+    await this.verifyAuthoritativeConnection(awaitWithinBoundary);
     return result;
   }
   async discoverAndConnect(portHint, filters) {
     const policy = this._authoritativeSessionPolicy;
-    const result = await discoverAndConnect(this.buildConnectCtx(), policy?.port ?? this._exactDiscoveryPort ?? portHint, policy ? { ...filters, ...policy.filters, targetId: void 0 } : filters, policy ? this.authoritativeDiscover : this._reconnectDiscover);
+    const result = await discoverAndConnect(this.buildConnectCtx(), policy?.port ?? this._exactDiscoveryPort ?? portHint, policy ? { ...filters, ...policy.filters, targetId: void 0 } : filters, policy ? this.createAuthoritativeDiscover() : this._reconnectDiscover);
     await this.verifyAuthoritativeConnection();
     return result;
   }
-  async verifyAuthoritativeConnection() {
+  async verifyAuthoritativeConnection(awaitWithinBoundary) {
     if (!this._authoritativeSessionPolicy)
       return;
     try {
-      await this._authoritativeSessionPolicy.verifyAndReconcile(this);
+      const verifyAndReconcile = () => this._authoritativeSessionPolicy.verifyAndReconcile(this, awaitWithinBoundary);
+      await (awaitWithinBoundary ? awaitWithinBoundary(verifyAndReconcile) : verifyAndReconcile());
     } catch (error2) {
       this.rejectAllPending(new Error("Authoritative runtime verification failed"));
       if (this.ws) {
@@ -54048,7 +54086,7 @@ var CDPClient = class _CDPClient {
         this.ws = null;
       }
       resetState(this.buildResettableState());
-      clearActiveFlag();
+      this.clearActiveState();
       throw error2;
     }
   }
@@ -54192,7 +54230,7 @@ var CDPClient = class _CDPClient {
     this.disposed = true;
     this.invalidateHelperWorld("explicit_disconnect");
     resetState(this.buildResettableState());
-    clearActiveFlag();
+    this.clearActiveState();
     this.stopBackgroundPoll();
     if (this._metroEventsClient) {
       try {
@@ -54436,6 +54474,7 @@ var CDPClient = class _CDPClient {
         this._bgPollTimer = timer;
       },
       getBgPollTimer: () => this._bgPollTimer,
+      clearActiveState: () => this.clearActiveState(),
       // B132: after the exponential-backoff reconnect loop succeeds, rehydrate
       // the proxy if one was desired. This is the "auto-resume" half of the
       // suspend→reconnect→resume sequence. softReconnect has its own wrapper
@@ -54451,6 +54490,8 @@ var CDPClient = class _CDPClient {
       isSoftReconnectRequested: () => this._softReconnectRequested,
       getState: () => this._state,
       setState: (s) => {
+        if (this.disposed && s !== "disconnected")
+          return;
         this._state = s;
       },
       getPort: () => this._port,
@@ -54463,6 +54504,13 @@ var CDPClient = class _CDPClient {
       },
       getWs: () => this.ws,
       setWs: (ws) => {
+        if (this.disposed && ws) {
+          try {
+            ws.terminate();
+          } catch {
+          }
+          return;
+        }
         if (this.ws === ws)
           return;
         this.ws = ws;
@@ -54474,12 +54522,16 @@ var CDPClient = class _CDPClient {
           this.invalidateHelperWorld("candidate_rejected");
       },
       setConnectedTarget: (t) => {
+        if (this.disposed && t)
+          return;
         if (this._connectedTarget === t)
           return;
         this._connectedTarget = t;
         this.invalidateHelperWorld(t ? "candidate_selected" : "candidate_rejected");
       },
       setConnectedAt: (ms) => {
+        if (this.disposed && ms !== null)
+          return;
         this._connectedAt = ms;
       },
       now: () => this._timeNowFn(),
@@ -54529,6 +54581,10 @@ var CDPClient = class _CDPClient {
   }
   rejectAllPending(reason) {
     rejectAllPending(this.pending, reason);
+  }
+  clearActiveState() {
+    if (this.lifecycleAuthority())
+      clearActiveFlag();
   }
   sendWithTimeout(method, params, ms) {
     return sendWithTimeout(this.ws, this.pending, () => ++this.msgId, method, params, ms);
@@ -54824,9 +54880,18 @@ async function autoDismissDevMenuMeta(client2) {
 init_maestro_validator();
 
 // packages/rn-dev-agent-core/dist/session/target-device-authority.js
+function executeWithinBoundary(dependencies, file, args) {
+  const operation = () => dependencies.execute(file, args);
+  return dependencies.awaitWithinBoundary ? dependencies.awaitWithinBoundary(operation) : operation();
+}
 async function filterTargetsForExactDevice(input, dependencies) {
   if (input.platform === "ios") {
-    const output = await dependencies.execute("xcrun", ["simctl", "list", "devices", "--json"]);
+    const output = await executeWithinBoundary(dependencies, "xcrun", [
+      "simctl",
+      "list",
+      "devices",
+      "--json"
+    ]);
     const parsed = JSON.parse(output.stdout);
     const booted = Object.values(parsed.devices ?? {}).flat().filter((device) => device.state === "Booted" && typeof device.udid === "string" && typeof device.name === "string");
     const exact2 = booted.find((device) => device.udid === input.deviceId);
@@ -54835,13 +54900,19 @@ async function filterTargetsForExactDevice(input, dependencies) {
     }
     return input.targets.filter((target) => target.deviceName?.trim() === exact2.name);
   }
-  const devices = (await dependencies.execute("adb", ["devices"])).stdout.split("\n").map((line) => line.trim().split(/\s+/)).filter((parts) => parts[0] && parts[1] === "device").map((parts) => parts[0]);
+  const devices = (await executeWithinBoundary(dependencies, "adb", ["devices"])).stdout.split("\n").map((line) => line.trim().split(/\s+/)).filter((parts) => parts[0] && parts[1] === "device").map((parts) => parts[0]);
   if (!devices.includes(input.deviceId)) {
     throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: Android target association is ambiguous or foreign");
   }
   const models = await Promise.all(devices.map(async (serial) => ({
     serial,
-    model: (await dependencies.execute("adb", ["-s", serial, "shell", "getprop", "ro.product.model"])).stdout.trim()
+    model: (await executeWithinBoundary(dependencies, "adb", [
+      "-s",
+      serial,
+      "shell",
+      "getprop",
+      "ro.product.model"
+    ])).stdout.trim()
   })));
   const exact = models.find((entry) => entry.serial === input.deviceId);
   if (!exact?.model || models.filter((entry) => entry.model === exact.model).length !== 1) {
@@ -54865,7 +54936,12 @@ async function proveTargetDeviceAssociations(input, dependencies) {
     throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: target does not expose device association");
   }
   if (input.platform === "ios") {
-    const output = await dependencies.execute("xcrun", ["simctl", "list", "devices", "--json"]);
+    const output = await executeWithinBoundary(dependencies, "xcrun", [
+      "simctl",
+      "list",
+      "devices",
+      "--json"
+    ]);
     const parsed = JSON.parse(output.stdout);
     const matching2 = Object.values(parsed.devices ?? {}).flat().filter((device) => device.state === "Booted" && typeof device.name === "string" && targetDeviceNames.has(device.name));
     if (matching2.length !== 1 || matching2[0]?.udid !== input.deviceId) {
@@ -54873,10 +54949,16 @@ async function proveTargetDeviceAssociations(input, dependencies) {
     }
     return;
   }
-  const devices = (await dependencies.execute("adb", ["devices"])).stdout.split("\n").map((line) => line.trim().split(/\s+/)).filter((parts) => parts[0] && parts[1] === "device").map((parts) => parts[0]);
+  const devices = (await executeWithinBoundary(dependencies, "adb", ["devices"])).stdout.split("\n").map((line) => line.trim().split(/\s+/)).filter((parts) => parts[0] && parts[1] === "device").map((parts) => parts[0]);
   const matching = [];
   for (const serial of devices) {
-    const model = (await dependencies.execute("adb", ["-s", serial, "shell", "getprop", "ro.product.model"])).stdout.trim();
+    const model = (await executeWithinBoundary(dependencies, "adb", [
+      "-s",
+      serial,
+      "shell",
+      "getprop",
+      "ro.product.model"
+    ])).stdout.trim();
     if (model && [...targetDeviceNames].some((targetDeviceName) => targetDeviceName === model || targetDeviceName.startsWith(`${model} -`))) {
       matching.push(serial);
     }
@@ -64953,7 +65035,9 @@ function createSessionHandler(runtime, dependencies = {}) {
           }
         }
         const priorTargetId = status2.bindings.bundle?.targetId;
-        if (input.force === true && typeof priorTargetId === "string") {
+        const devicePlatform = status2.bindings.device?.platform;
+        const atomicAndroidReplacement = devicePlatform === "android";
+        if (input.force === true && !atomicAndroidReplacement && typeof priorTargetId === "string") {
           registry2.releaseResources(session2, [
             { type: "target", key: `${String(status2.bindings.metroPort)}:${priorTargetId}` }
           ]);
@@ -64963,16 +65047,21 @@ function createSessionHandler(runtime, dependencies = {}) {
           });
           dependencies.onBundleInvalidated?.();
         }
-        const bundle = await dependencies.pinDevClient(status2, {
-          force: input.force === true
-        });
-        registry2.claimResources(session2, [
-          { type: "target", key: `${bundle.metroPort}:${bundle.targetId}` }
-        ]);
-        registry2.updateBindings(session2, {
+        await dependencies.pinDevClient(status2, { force: input.force === true }, (candidate, assertBeforeCommit) => registry2.updateBindings(session2, {
           state: "ready",
-          bindings: { bundle }
-        });
+          bindings: { bundle: candidate },
+          expectedAuthorityVersion: atomicAndroidReplacement ? status2.authorityVersion : void 0,
+          releaseResources: atomicAndroidReplacement && typeof priorTargetId === "string" && priorTargetId !== candidate.targetId ? [
+            {
+              type: "target",
+              key: `${candidate.metroPort}:${priorTargetId}`
+            }
+          ] : [],
+          claimResources: [
+            { type: "target", key: `${candidate.metroPort}:${candidate.targetId}` }
+          ],
+          assertBeforeCommit
+        }));
         return okResult({ session: projectPublicAuthorityStatus(runtime.status()) });
       }
       if (input.action === "prepare_handoff") {
@@ -81917,29 +82006,45 @@ async function pinExactDevClient(input, dependencies) {
     appId: input.appId,
     deviceId: input.deviceId
   });
-  if (connected.deviceId !== input.deviceId) {
-    throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: selected target is not proven on the claimed device");
+  try {
+    if (connected.deviceId !== input.deviceId) {
+      throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: selected target is not proven on the claimed device");
+    }
+    const hasStagedLifecycle = "run" in connected;
+    const authority = await (hasStagedLifecycle ? connected.run(() => dependencies.readMarker(connected)) : dependencies.readMarker(connected));
+    if (!authority?.marker || authority.status !== "signed") {
+      throw new Error("BUNDLE_HANDSHAKE_UNAVAILABLE: runtime did not expose a signed authority marker");
+    }
+    verifyMetroAuthorityMarker(authority.marker, input.signerCapability, {
+      sessionId: input.sessionId,
+      metroInstanceId: input.metroInstanceId,
+      worktreeKey: input.worktreeKey,
+      appId: input.appId,
+      platform: input.platform,
+      buildGeneration: input.buildGeneration
+    });
+    const bundle = buildBundleAuthorityBinding({
+      ...input,
+      deviceId: input.deviceId,
+      metroPort: input.metroPort,
+      ...input.devClientUrl ? { devClientUrl: input.devClientUrl } : {},
+      targetId: connected.targetId,
+      connectionGeneration: connected.connectionGeneration
+    });
+    if (hasStagedLifecycle) {
+      connected.assertActive();
+      if (!dependencies.commitBundle) {
+        throw new Error("BUNDLE_HANDSHAKE_UNAVAILABLE: atomic bundle commit is unavailable");
+      }
+      dependencies.commitBundle(bundle, connected.assertActive);
+      connected.publish();
+    }
+    return bundle;
+  } catch (error2) {
+    if ("cancel" in connected)
+      connected.cancel();
+    throw error2;
   }
-  const authority = await dependencies.readMarker();
-  if (!authority?.marker || authority.status !== "signed") {
-    throw new Error("BUNDLE_HANDSHAKE_UNAVAILABLE: runtime did not expose a signed authority marker");
-  }
-  verifyMetroAuthorityMarker(authority.marker, input.signerCapability, {
-    sessionId: input.sessionId,
-    metroInstanceId: input.metroInstanceId,
-    worktreeKey: input.worktreeKey,
-    appId: input.appId,
-    platform: input.platform,
-    buildGeneration: input.buildGeneration
-  });
-  return buildBundleAuthorityBinding({
-    ...input,
-    deviceId: input.deviceId,
-    metroPort: input.metroPort,
-    ...input.devClientUrl ? { devClientUrl: input.devClientUrl } : {},
-    targetId: connected.targetId,
-    connectionGeneration: connected.connectionGeneration
-  });
 }
 
 // packages/rn-dev-agent-core/dist/session/registered-connect.js
@@ -81966,7 +82071,189 @@ function exactSessionTargetReadinessTimeoutMs(platform) {
 function errorMessage(error2) {
   return error2 instanceof Error ? error2.message : String(error2);
 }
+var AndroidExactTargetDeadlineError = class extends Error {
+  constructor(timeoutMs, leafError) {
+    const leaf = leafError === void 0 ? "no exact target was advertised" : errorMessage(leafError);
+    super(`CDP_TARGET_AUTHORITY_MISMATCH: Android exact-target readiness exceeded its absolute ${timeoutMs}ms deadline. Last exact-connect failure: ${leaf}`, { cause: leafError });
+    this.name = "AndroidExactTargetDeadlineError";
+  }
+};
+async function connectExactAndroidSessionTarget(input, timeoutMs, dependencies) {
+  const now = dependencies.now ?? Date.now;
+  const wait = dependencies.wait ?? ((ms) => new Promise((resolve11) => setTimeout(resolve11, ms)));
+  const setDeadlineTimer = dependencies.setDeadlineTimer ?? ((callback, ms) => setTimeout(callback, ms));
+  const clearDeadlineTimer = dependencies.clearDeadlineTimer ?? ((timer) => clearTimeout(timer));
+  const deadline = now() + timeoutMs;
+  const ambientClient = dependencies.getClient();
+  const ownedClients = /* @__PURE__ */ new Set();
+  const closedClients = /* @__PURE__ */ new Set();
+  const createAttemptClient = dependencies.createAttemptClient ?? dependencies.createClient;
+  let exactClient = createAttemptClient(input.metroPort);
+  ownedClients.add(exactClient);
+  let lastError;
+  let firstProbeError;
+  let expired = false;
+  const closeOwned = (client2) => {
+    if (!ownedClients.has(client2) || closedClients.has(client2))
+      return;
+    closedClients.add(client2);
+    void client2.disconnect().catch(() => {
+    });
+  };
+  let published = false;
+  const detachAttempt = () => {
+    expired = true;
+    if (!published)
+      for (const client2 of ownedClients)
+        closeOwned(client2);
+  };
+  const deadlineError = (operationError) => {
+    const leaf = firstProbeError ?? operationError ?? lastError;
+    return new AndroidExactTargetDeadlineError(timeoutMs, leaf);
+  };
+  const awaitWithinDeadline = async (operation) => {
+    const remainingMs = deadline - now();
+    if (remainingMs <= 0 || expired) {
+      detachAttempt();
+      throw deadlineError();
+    }
+    let timer;
+    const pendingOperation = operation();
+    const timeout = new Promise((_resolve, reject) => {
+      timer = setDeadlineTimer(() => {
+        detachAttempt();
+        reject(deadlineError());
+      }, remainingMs);
+    });
+    try {
+      return await Promise.race([
+        pendingOperation.then((value) => {
+          if (expired || now() >= deadline) {
+            detachAttempt();
+            throw deadlineError();
+          }
+          return value;
+        }, (error2) => {
+          if (expired || now() >= deadline) {
+            detachAttempt();
+            throw deadlineError(error2);
+          }
+          throw error2;
+        }),
+        timeout
+      ]);
+    } finally {
+      if (timer !== void 0)
+        clearDeadlineTimer(timer);
+    }
+  };
+  const boundedAuthorityDependencies = {
+    ...dependencies,
+    awaitWithinBoundary: awaitWithinDeadline
+  };
+  while (now() < deadline) {
+    try {
+      const listed = await awaitWithinDeadline(() => exactClient.listTargetsExact(input.metroPort));
+      if (listed.port !== input.metroPort) {
+        throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: target discovery escaped the allocated Metro port");
+      }
+      const sessionCandidates = listed.targets.filter((candidate) => targetMatchesSession(candidate, {
+        platform: input.platform,
+        bundleId: input.appId
+      }));
+      const exactCandidates = await filterTargetsForExactDevice({
+        platform: input.platform,
+        deviceId: input.deviceId,
+        targets: sessionCandidates
+      }, boundedAuthorityDependencies);
+      if (exactCandidates.length !== 1) {
+        throw new Error(`CDP_TARGET_AUTHORITY_MISMATCH: expected one target on the exact device, found ${exactCandidates.length}`);
+      }
+      await awaitWithinDeadline(() => exactClient.connectExact(input.metroPort, {
+        platform: input.platform,
+        bundleId: input.appId,
+        targetId: exactCandidates[0].id
+      }, "default", 1, awaitWithinDeadline));
+      const target = exactClient.connectedTarget;
+      const connectionGeneration = exactClient.connectionGeneration;
+      if (!target || exactClient.metroPort !== input.metroPort || !targetMatchesSession(target, {
+        platform: input.platform,
+        bundleId: input.appId
+      })) {
+        throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: exact dev-client target was not found on the claimed Metro");
+      }
+      await proveTargetDeviceAssociation({
+        platform: input.platform,
+        deviceId: input.deviceId,
+        targetDeviceName: target.deviceName
+      }, boundedAuthorityDependencies);
+      const assertStagedLive = () => {
+        if (dependencies.getClient() !== ambientClient || !exactClient.isConnected || exactClient.metroPort !== input.metroPort || exactClient.connectionGeneration !== connectionGeneration || exactClient.connectedTarget?.id !== target.id || !targetMatchesSession(exactClient.connectedTarget, {
+          platform: input.platform,
+          bundleId: input.appId
+        })) {
+          throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: staged exact client is no longer live");
+        }
+      };
+      const assertActive = () => {
+        if (expired || published || now() >= deadline) {
+          detachAttempt();
+          throw deadlineError();
+        }
+        try {
+          assertStagedLive();
+        } catch (error2) {
+          detachAttempt();
+          throw error2;
+        }
+      };
+      assertStagedLive();
+      return {
+        targetId: target.id,
+        connectionGeneration,
+        deviceId: input.deviceId,
+        client: exactClient,
+        assertActive,
+        run: awaitWithinDeadline,
+        publish: () => {
+          assertActive();
+          const didPublish = dependencies.publishClient ? dependencies.publishClient(ambientClient, exactClient) : dependencies.getClient() === ambientClient ? (dependencies.setClient(exactClient), true) : false;
+          if (!didPublish) {
+            detachAttempt();
+            throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: global client changed before exact publication");
+          }
+          published = true;
+          exactClient.publishLifecycleState();
+          if (ambientClient !== exactClient)
+            void ambientClient.disconnect().catch(() => {
+            });
+        },
+        cancel: detachAttempt
+      };
+    } catch (error2) {
+      if (error2 instanceof AndroidExactTargetDeadlineError)
+        throw error2;
+      lastError = error2;
+      if (error2 instanceof CDPProbeTimeoutError)
+        firstProbeError ??= error2;
+      closeOwned(exactClient);
+    }
+    const remainingMs = deadline - now();
+    if (remainingMs <= 0) {
+      detachAttempt();
+      throw deadlineError();
+    }
+    await awaitWithinDeadline(() => wait(Math.min(250, remainingMs)));
+    exactClient = createAttemptClient(input.metroPort);
+    ownedClients.add(exactClient);
+  }
+  detachAttempt();
+  throw deadlineError();
+}
 async function connectExactSessionTarget(input, timeoutMs, dependencies) {
+  if (input.platform === "android") {
+    return connectExactAndroidSessionTarget(input, timeoutMs, dependencies);
+  }
   const now = dependencies.now ?? Date.now;
   const wait = dependencies.wait ?? ((ms) => new Promise((resolve11) => setTimeout(resolve11, ms)));
   let exactClient = dependencies.getClient();
@@ -81977,7 +82264,6 @@ async function connectExactSessionTarget(input, timeoutMs, dependencies) {
   }
   const deadline = now() + timeoutMs;
   let lastError;
-  let firstProbeError;
   do {
     try {
       const listed = await exactClient.listTargetsExact(input.metroPort);
@@ -82000,7 +82286,7 @@ async function connectExactSessionTarget(input, timeoutMs, dependencies) {
         platform: input.platform,
         bundleId: input.appId,
         targetId: exactCandidates[0].id
-      }, "default", input.platform === "android" ? 1 : 5);
+      }, "default", 5);
       const target = exactClient.connectedTarget;
       if (!target || exactClient.metroPort !== input.metroPort || !targetMatchesSession(target, {
         platform: input.platform,
@@ -82016,26 +82302,24 @@ async function connectExactSessionTarget(input, timeoutMs, dependencies) {
       return {
         targetId: target.id,
         connectionGeneration: exactClient.connectionGeneration,
-        deviceId: input.deviceId
+        deviceId: input.deviceId,
+        client: exactClient,
+        assertActive: () => {
+        },
+        run: (operation) => operation(),
+        publish: () => {
+        },
+        cancel: () => {
+        }
       };
     } catch (error2) {
       lastError = error2;
-      if (input.platform === "android") {
-        if (error2 instanceof CDPProbeTimeoutError)
-          firstProbeError ??= error2;
-        try {
-          await exactClient.disconnect();
-        } catch {
-        }
-        exactClient = dependencies.createClient(input.metroPort);
-        dependencies.setClient(exactClient);
-      }
     }
     const remainingMs = deadline - now();
     if (remainingMs > 0)
       await wait(Math.min(250, remainingMs));
   } while (now() < deadline);
-  const leafError = firstProbeError ?? lastError;
+  const leafError = lastError;
   const leaf = leafError === void 0 ? "no exact target was advertised" : errorMessage(leafError);
   throw new Error(`CDP_TARGET_AUTHORITY_MISMATCH: exact managed-Metro target did not re-register after launch. Last exact-connect failure: ${leaf}`, { cause: leafError });
 }
@@ -82071,14 +82355,25 @@ if (!diagnosticContractProbe && process.env.RN_DEVICE_KILL_LEGACY !== "0") {
   }).catch(() => {
   });
 }
-var client = new CDPClient();
+var client;
 var getClient = () => client;
-var setClient = (c) => {
-  client = c;
+var configureClientLifecycle = (candidate) => {
+  candidate.setLifecycleAuthority(() => getClient() === candidate);
+  return candidate;
 };
+var setClient = (candidate) => {
+  client = candidate;
+};
+var publishClient = (expected, replacement) => {
+  if (client !== expected)
+    return false;
+  client = replacement;
+  return true;
+};
+client = configureClientLifecycle(new CDPClient());
 var createClient = (port) => {
   const status = authorityRuntime.status();
-  return status.available && status.bindings.bundle ? client.createReplacement(port) : new CDPClient(port);
+  return configureClientLifecycle(status.available && status.bindings.bundle ? client.createReplacement(port) : new CDPClient(port));
 };
 var execFileP = promisify28(execFile26);
 var mustOk = (res, what) => {
@@ -82469,7 +82764,7 @@ function trackedTool(name, desc, schema, handler) {
   };
   server2.tool(name, desc, schema, wrapped);
 }
-async function pinSessionDevClient(status, options) {
+async function pinSessionDevClient(status, options, commitBundle) {
   const device = status.bindings.device;
   const metro = status.bindings.metro;
   const install = status.bindings.install;
@@ -82486,10 +82781,12 @@ async function pinSessionDevClient(status, options) {
     throw new Error("BUNDLE_HANDSHAKE_UNAVAILABLE: session signer is unavailable");
   }
   const current = getClient();
-  current.clearAuthoritativeSessionPolicy();
-  if (options.force) {
-    await current.disconnect();
-    setClient(createClient(metro.port));
+  if (device.platform === "ios") {
+    current.clearAuthoritativeSessionPolicy();
+    if (options.force) {
+      await current.disconnect();
+      setClient(createClient(metro.port));
+    }
   }
   const bundle = await pinExactDevClient({
     sessionId: status.sessionId,
@@ -82539,13 +82836,15 @@ async function pinSessionDevClient(status, options) {
     connectExact: async ({ metroPort, platform, appId, deviceId }) => {
       return connectExactSessionTarget2({ metroPort, platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
     },
-    readMarker: async () => {
-      const result = await getClient().evaluate("JSON.stringify(globalThis.__RN_DEV_AGENT_AUTHORITY__ ?? null)");
+    readMarker: async (connection) => {
+      const markerClient = "client" in connection ? connection.client : getClient();
+      const result = await markerClient.evaluate("JSON.stringify(globalThis.__RN_DEV_AGENT_AUTHORITY__ ?? null)");
       if (typeof result.value !== "string")
         return null;
       const parsed = JSON.parse(result.value);
       return parsed?.status === "signed" && parsed.marker ? { status: "signed", marker: parsed.marker } : null;
     },
+    commitBundle,
     readManagedManifest: async ({ host, metroPort, platform }) => {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 15e3);
@@ -82578,25 +82877,27 @@ function createAuthoritativeSessionPolicy(status) {
   return {
     port: metroPort,
     filters: { platform: device.platform, bundleId: device.appId },
-    resolveTargetId: async (targets) => {
+    resolveTargetId: async (targets, awaitWithinBoundary) => {
       const exactCandidates = await filterTargetsForExactDevice({
         platform: device.platform,
         deviceId: device.deviceId,
         targets
-      }, { execute: execFileP });
+      }, { execute: execFileP, awaitWithinBoundary });
       if (exactCandidates.length !== 1) {
         throw new Error(`CDP_TARGET_AUTHORITY_MISMATCH: expected one target on the exact device, found ${exactCandidates.length}`);
       }
       return exactCandidates[0].id;
     },
-    verifyAndReconcile: reconcileAuthoritativeConnection
+    verifyAndReconcile: (connectedClient, awaitWithinBoundary) => reconcileAuthoritativeConnection(connectedClient, awaitWithinBoundary)
   };
 }
 async function connectExactSessionTarget2(input, timeoutMs) {
   return connectExactSessionTarget(input, timeoutMs, {
     getClient,
     setClient,
+    publishClient,
     createClient,
+    createAttemptClient: (port) => configureClientLifecycle(new CDPClient(port)),
     execute: execFileP
   });
 }
@@ -82635,9 +82936,10 @@ async function relaunchSessionRuntime(status) {
       appId
     ]);
   }
-  await connectExactSessionTarget2({ metroPort: Number(metroPort), platform, appId, deviceId }, 15e3);
+  const connection = await connectExactSessionTarget2({ metroPort: Number(metroPort), platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
+  connection.publish();
 }
-async function rebindSessionRuntime(status) {
+async function rebindSessionRuntime(status, awaitWithinBoundary) {
   const device = status.bindings.device;
   const metro = status.bindings.metro;
   const prior = status.bindings.bundle;
@@ -82655,9 +82957,10 @@ async function rebindSessionRuntime(status) {
     platform: device.platform,
     deviceId: device.deviceId,
     targetDeviceName: target.deviceName
-  }, { execute: execFileP });
+  }, { execute: execFileP, awaitWithinBoundary });
   const secret = process.env.RN_DEV_AGENT_SESSION_SECRET_PATH ? readJsonStateFile(process.env.RN_DEV_AGENT_SESSION_SECRET_PATH) : null;
-  const evaluated = await client2.evaluate("JSON.stringify(globalThis.__RN_DEV_AGENT_AUTHORITY__ ?? null)");
+  const evaluateMarker = () => client2.evaluate("JSON.stringify(globalThis.__RN_DEV_AGENT_AUTHORITY__ ?? null)");
+  const evaluated = await (awaitWithinBoundary ? awaitWithinBoundary(evaluateMarker) : evaluateMarker());
   const outer = typeof evaluated.value === "string" ? JSON.parse(evaluated.value) : null;
   if (outer?.status !== "signed" || !outer.marker || !secret?.signerCapability) {
     throw new Error("BUNDLE_HANDSHAKE_UNAVAILABLE: runtime reset did not expose the signed session marker");
@@ -82680,7 +82983,7 @@ async function rebindSessionRuntime(status) {
     connectionGeneration: client2.connectionGeneration
   });
 }
-async function reconcileAuthoritativeConnection(connectedClient) {
+async function reconcileAuthoritativeConnection(connectedClient, awaitWithinBoundary) {
   if (getClient() !== connectedClient) {
     throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: authoritative client was replaced");
   }
@@ -82689,7 +82992,7 @@ async function reconcileAuthoritativeConnection(connectedClient) {
   if (!status)
     throw new Error("BUNDLE_HANDSHAKE_UNAVAILABLE: session authority is unavailable");
   await reconcileAuthoritativeBundle(status, {
-    verifyRuntime: () => rebindSessionRuntime(status),
+    verifyRuntime: () => rebindSessionRuntime(status, awaitWithinBoundary),
     hasActiveOperation: () => available.registry.currentOperation() !== void 0 || available.registry.hasActiveBundleOperation(available.session),
     commit: (input) => available.registry.updateBindings(available.session, input)
   });

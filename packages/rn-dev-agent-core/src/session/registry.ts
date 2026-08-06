@@ -1693,6 +1693,7 @@ export class SessionRegistry {
       expectedAuthorityVersion?: number;
       releaseResources?: readonly ResourceClaim[];
       claimResources?: readonly ResourceClaim[];
+      assertBeforeCommit?: () => void;
     },
   ): void {
     const now = this.#now();
@@ -1772,7 +1773,7 @@ export class SessionRegistry {
         current.authority_version,
         current.authority_version + 1,
       );
-    });
+    }, input.assertBeforeCommit);
   }
 
   replaceBindingsDuringOperation(
@@ -4738,10 +4739,11 @@ export class SessionRegistry {
       .run(now, sessionId);
   }
 
-  #transaction<T>(operation: () => T): T {
+  #transaction<T>(operation: () => T, assertBeforeCommit?: () => void): T {
     this.#database.exec('BEGIN IMMEDIATE');
     try {
       const result = operation();
+      assertBeforeCommit?.();
       this.#database.exec('COMMIT');
       this.#secureFiles();
       return result;

@@ -1034,7 +1034,7 @@ export class SessionRegistry {
            WHERE session_id = ? AND claim_epoch = ?`)
                 .run(input.state ?? current.state, JSON.stringify(bindings), now, session.sessionId, session.claimEpoch);
             this.#advanceActiveOperationFence(session, current.authority_version, current.authority_version + 1);
-        });
+        }, input.assertBeforeCommit);
     }
     replaceBindingsDuringOperation(operation, input) {
         const now = this.#now();
@@ -3037,10 +3037,11 @@ export class SessionRegistry {
          WHERE session_id = ?`)
             .run(now, sessionId);
     }
-    #transaction(operation) {
+    #transaction(operation, assertBeforeCommit) {
         this.#database.exec('BEGIN IMMEDIATE');
         try {
             const result = operation();
+            assertBeforeCommit?.();
             this.#database.exec('COMMIT');
             this.#secureFiles();
             return result;

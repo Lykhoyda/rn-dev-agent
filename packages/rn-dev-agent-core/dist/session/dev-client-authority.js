@@ -109,27 +109,46 @@ export async function pinExactDevClient(input, dependencies) {
         appId: input.appId,
         deviceId: input.deviceId,
     });
-    if (connected.deviceId !== input.deviceId) {
-        throw new Error('CDP_TARGET_AUTHORITY_MISMATCH: selected target is not proven on the claimed device');
+    try {
+        if (connected.deviceId !== input.deviceId) {
+            throw new Error('CDP_TARGET_AUTHORITY_MISMATCH: selected target is not proven on the claimed device');
+        }
+        const hasStagedLifecycle = 'run' in connected;
+        const authority = await (hasStagedLifecycle
+            ? connected.run(() => dependencies.readMarker(connected))
+            : dependencies.readMarker(connected));
+        if (!authority?.marker || authority.status !== 'signed') {
+            throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: runtime did not expose a signed authority marker');
+        }
+        verifyMetroAuthorityMarker(authority.marker, input.signerCapability, {
+            sessionId: input.sessionId,
+            metroInstanceId: input.metroInstanceId,
+            worktreeKey: input.worktreeKey,
+            appId: input.appId,
+            platform: input.platform,
+            buildGeneration: input.buildGeneration,
+        });
+        const bundle = buildBundleAuthorityBinding({
+            ...input,
+            deviceId: input.deviceId,
+            metroPort: input.metroPort,
+            ...(input.devClientUrl ? { devClientUrl: input.devClientUrl } : {}),
+            targetId: connected.targetId,
+            connectionGeneration: connected.connectionGeneration,
+        });
+        if (hasStagedLifecycle) {
+            connected.assertActive();
+            if (!dependencies.commitBundle) {
+                throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: atomic bundle commit is unavailable');
+            }
+            dependencies.commitBundle(bundle, connected.assertActive);
+            connected.publish();
+        }
+        return bundle;
     }
-    const authority = await dependencies.readMarker();
-    if (!authority?.marker || authority.status !== 'signed') {
-        throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: runtime did not expose a signed authority marker');
+    catch (error) {
+        if ('cancel' in connected)
+            connected.cancel();
+        throw error;
     }
-    verifyMetroAuthorityMarker(authority.marker, input.signerCapability, {
-        sessionId: input.sessionId,
-        metroInstanceId: input.metroInstanceId,
-        worktreeKey: input.worktreeKey,
-        appId: input.appId,
-        platform: input.platform,
-        buildGeneration: input.buildGeneration,
-    });
-    return buildBundleAuthorityBinding({
-        ...input,
-        deviceId: input.deviceId,
-        metroPort: input.metroPort,
-        ...(input.devClientUrl ? { devClientUrl: input.devClientUrl } : {}),
-        targetId: connected.targetId,
-        connectionGeneration: connected.connectionGeneration,
-    });
 }

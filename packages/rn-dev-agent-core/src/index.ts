@@ -8,7 +8,11 @@ import { dirname, join } from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { CDPClient } from './cdp-client.js';
+import {
+  CDPClient,
+  type AuthoritativeSessionPolicy,
+  type AwaitWithinBoundary,
+} from './cdp-client.js';
 import { okResult, failResult, warnResult, withConnection } from './utils.js';
 import { annotateMutationAbsence } from './verification/mutation-absence.js';
 import { loadVerificationConfig, getCachedProjectRoot } from './verification/config.js';
@@ -212,6 +216,7 @@ import {
 import {
   connectExactSessionTarget as connectExactSessionTargetWithDependencies,
   exactSessionTargetReadinessTimeoutMs,
+  type ExactSessionTargetConnection,
 } from './session/connect-exact-session-target.js';
 import type { SessionStatus } from './session/registry.js';
 import { strictProofSourceIdentity, type SourceIdentity } from './session/source-identity.js';
@@ -266,17 +271,29 @@ if (!diagnosticContractProbe && process.env.RN_DEVICE_KILL_LEGACY !== '0') {
     });
 }
 
-let client = new CDPClient();
+let client: CDPClient;
 
 const getClient = (): CDPClient => client;
-const setClient = (c: CDPClient): void => {
-  client = c;
+const configureClientLifecycle = (candidate: CDPClient): CDPClient => {
+  candidate.setLifecycleAuthority(() => getClient() === candidate);
+  return candidate;
 };
+const setClient = (candidate: CDPClient): void => {
+  client = candidate;
+};
+const publishClient = (expected: CDPClient, replacement: CDPClient): boolean => {
+  if (client !== expected) return false;
+  client = replacement;
+  return true;
+};
+client = configureClientLifecycle(new CDPClient());
 const createClient = (port: number): CDPClient => {
   const status = authorityRuntime.status();
-  return status.available && status.bindings.bundle
-    ? client.createReplacement(port)
-    : new CDPClient(port);
+  return configureClientLifecycle(
+    status.available && status.bindings.bundle
+      ? client.createReplacement(port)
+      : new CDPClient(port),
+  );
 };
 
 const execFileP = promisify(execFile);
@@ -817,7 +834,14 @@ function trackedTool(name: string, desc: string, schema: z.ZodRawShape, handler:
   server.tool(name, desc, schema, wrapped as typeof handler);
 }
 
-async function pinSessionDevClient(status: SessionStatus, options: { force: boolean }) {
+async function pinSessionDevClient(
+  status: SessionStatus,
+  options: { force: boolean },
+  commitBundle: (
+    bundle: import('./session/dev-client-authority.js').BundleAuthorityBinding,
+    assertBeforeCommit: () => void,
+  ) => void,
+) {
   const device = status.bindings.device as {
     platform: 'ios' | 'android';
     deviceId: string;
@@ -860,10 +884,12 @@ async function pinSessionDevClient(status: SessionStatus, options: { force: bool
     throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: session signer is unavailable');
   }
   const current = getClient();
-  current.clearAuthoritativeSessionPolicy();
-  if (options.force) {
-    await current.disconnect();
-    setClient(createClient(metro.port));
+  if (device.platform === 'ios') {
+    current.clearAuthoritativeSessionPolicy();
+    if (options.force) {
+      await current.disconnect();
+      setClient(createClient(metro.port));
+    }
   }
   const bundle = await pinExactDevClient(
     {
@@ -920,8 +946,9 @@ async function pinSessionDevClient(status: SessionStatus, options: { force: bool
           exactSessionTargetReadinessTimeoutMs(platform),
         );
       },
-      readMarker: async () => {
-        const result = await getClient().evaluate(
+      readMarker: async (connection) => {
+        const markerClient = 'client' in connection ? connection.client : getClient();
+        const result = await markerClient.evaluate(
           'JSON.stringify(globalThis.__RN_DEV_AGENT_AUTHORITY__ ?? null)',
         );
         if (typeof result.value !== 'string') return null;
@@ -933,6 +960,7 @@ async function pinSessionDevClient(status: SessionStatus, options: { force: bool
           ? { status: 'signed' as const, marker: parsed.marker }
           : null;
       },
+      commitBundle,
       readManagedManifest: async ({ host, metroPort, platform }) => {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 15_000);
@@ -965,7 +993,7 @@ async function pinSessionDevClient(status: SessionStatus, options: { force: bool
   return bundle;
 }
 
-function createAuthoritativeSessionPolicy(status: SessionStatus) {
+function createAuthoritativeSessionPolicy(status: SessionStatus): AuthoritativeSessionPolicy {
   const device = status.bindings.device as {
     platform: 'ios' | 'android';
     deviceId: string;
@@ -975,14 +1003,17 @@ function createAuthoritativeSessionPolicy(status: SessionStatus) {
   return {
     port: metroPort,
     filters: { platform: device.platform, bundleId: device.appId },
-    resolveTargetId: async (targets: import('./types.js').HermesTarget[]) => {
+    resolveTargetId: async (
+      targets: import('./types.js').HermesTarget[],
+      awaitWithinBoundary?: AwaitWithinBoundary,
+    ) => {
       const exactCandidates = await filterTargetsForExactDevice(
         {
           platform: device.platform,
           deviceId: device.deviceId,
           targets,
         },
-        { execute: execFileP },
+        { execute: execFileP, awaitWithinBoundary },
       );
       if (exactCandidates.length !== 1) {
         throw new Error(
@@ -991,7 +1022,8 @@ function createAuthoritativeSessionPolicy(status: SessionStatus) {
       }
       return exactCandidates[0]!.id;
     },
-    verifyAndReconcile: reconcileAuthoritativeConnection,
+    verifyAndReconcile: (connectedClient, awaitWithinBoundary) =>
+      reconcileAuthoritativeConnection(connectedClient, awaitWithinBoundary),
   };
 }
 
@@ -1003,11 +1035,13 @@ async function connectExactSessionTarget(
     deviceId: string;
   },
   timeoutMs: number,
-): Promise<{ targetId: string; connectionGeneration: number; deviceId: string }> {
+): Promise<ExactSessionTargetConnection> {
   return connectExactSessionTargetWithDependencies(input, timeoutMs, {
     getClient,
     setClient,
+    publishClient,
     createClient,
+    createAttemptClient: (port) => configureClientLifecycle(new CDPClient(port)),
     execute: execFileP,
   });
 }
@@ -1064,13 +1098,17 @@ async function relaunchSessionRuntime(status: SessionStatus): Promise<void> {
       appId,
     ]);
   }
-  await connectExactSessionTarget(
+  const connection = await connectExactSessionTarget(
     { metroPort: Number(metroPort), platform, appId, deviceId },
-    15_000,
+    exactSessionTargetReadinessTimeoutMs(platform),
   );
+  connection.publish();
 }
 
-async function rebindSessionRuntime(status: SessionStatus): Promise<Record<string, unknown>> {
+async function rebindSessionRuntime(
+  status: SessionStatus,
+  awaitWithinBoundary?: AwaitWithinBoundary,
+): Promise<Record<string, unknown>> {
   const device = status.bindings.device as {
     platform: 'ios' | 'android';
     deviceId: string;
@@ -1105,14 +1143,16 @@ async function rebindSessionRuntime(status: SessionStatus): Promise<Record<strin
       deviceId: device.deviceId,
       targetDeviceName: target.deviceName,
     },
-    { execute: execFileP },
+    { execute: execFileP, awaitWithinBoundary },
   );
   const secret = process.env.RN_DEV_AGENT_SESSION_SECRET_PATH
     ? readJsonStateFile<{ signerCapability?: string }>(process.env.RN_DEV_AGENT_SESSION_SECRET_PATH)
     : null;
-  const evaluated = await client.evaluate(
-    'JSON.stringify(globalThis.__RN_DEV_AGENT_AUTHORITY__ ?? null)',
-  );
+  const evaluateMarker = () =>
+    client.evaluate('JSON.stringify(globalThis.__RN_DEV_AGENT_AUTHORITY__ ?? null)');
+  const evaluated = await (awaitWithinBoundary
+    ? awaitWithinBoundary(evaluateMarker)
+    : evaluateMarker());
   const outer =
     typeof evaluated.value === 'string'
       ? (JSON.parse(evaluated.value) as {
@@ -1147,7 +1187,10 @@ async function rebindSessionRuntime(status: SessionStatus): Promise<Record<strin
   });
 }
 
-async function reconcileAuthoritativeConnection(connectedClient: CDPClient): Promise<void> {
+async function reconcileAuthoritativeConnection(
+  connectedClient: CDPClient,
+  awaitWithinBoundary?: AwaitWithinBoundary,
+): Promise<void> {
   if (getClient() !== connectedClient) {
     throw new Error('CDP_TARGET_AUTHORITY_MISMATCH: authoritative client was replaced');
   }
@@ -1155,7 +1198,7 @@ async function reconcileAuthoritativeConnection(connectedClient: CDPClient): Pro
   const status = available.registry.getSessionStatus(available.session.sessionId);
   if (!status) throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: session authority is unavailable');
   await reconcileAuthoritativeBundle(status, {
-    verifyRuntime: () => rebindSessionRuntime(status),
+    verifyRuntime: () => rebindSessionRuntime(status, awaitWithinBoundary),
     hasActiveOperation: () =>
       available.registry.currentOperation() !== undefined ||
       available.registry.hasActiveBundleOperation(available.session),
