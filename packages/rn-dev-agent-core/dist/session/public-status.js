@@ -1,4 +1,16 @@
 import { inspectAuthorityMigration } from './migration-diagnostic.js';
+const SELECTED_STATES = new Set(['active', 'source_bound', 'device_claimed', 'metro_bound']);
+const RUNNING_STATES = new Set(['device_bound', 'runtime_bound', 'ready']);
+// ADR §2.3 (L0): non-operational states keep only their internal name in `detail`.
+function derivePublicPhase(state, buildPending) {
+    if (state === 'closing')
+        return 'closing';
+    if (!SELECTED_STATES.has(state) && !RUNNING_STATES.has(state))
+        return undefined;
+    if (buildPending)
+        return 'building';
+    return RUNNING_STATES.has(state) ? 'running' : 'selected';
+}
 // GH #672: an expired handle must never be advertised — `validateStaleAdoption`
 // refuses it, which is what made a freshly fetched status look self-contradictory.
 // The caller refreshes before projecting; anything still expired here is reported
@@ -56,10 +68,22 @@ export function projectPublicAuthorityStatus(status, options = {}) {
     });
     const metro = status.bindings.metro;
     const metroTerminal = status.bindings.metroTerminal;
+    const projectedMetroTerminal = metroTerminal
+        ? {
+            code: metroTerminal.code,
+            reason: metroTerminal.reason,
+            phase: metroTerminal.phase,
+            observedAt: metroTerminal.observedAt,
+        }
+        : undefined;
+    const sandbox = metro?.runtimeEvidenceAuthority === 'managed-sandbox-v1' ? 'managed-sandbox-v1' : 'unavailable';
+    const phase = derivePublicPhase(status.state, Boolean(status.bindings.pendingBuild));
     return {
         available: true,
         ...(options.includeSessionId ? { sessionId: status.sessionId } : {}),
         state: status.state,
+        ...(phase ? { phase } : {}),
+        detail: status.state,
         sourceKind: status.source.kind,
         metroPort: status.bindings.metroPort,
         observePort: status.bindings.observePort,
@@ -67,22 +91,33 @@ export function projectPublicAuthorityStatus(status, options = {}) {
         deviceBound: Boolean(status.bindings.device),
         installBound: Boolean(status.bindings.install),
         metroBound: Boolean(status.bindings.metro),
-        ...(metroTerminal
-            ? {
-                metroTerminal: {
-                    code: metroTerminal.code,
-                    reason: metroTerminal.reason,
-                    phase: metroTerminal.phase,
-                    observedAt: metroTerminal.observedAt,
-                },
-            }
-            : {}),
-        sandbox: metro?.runtimeEvidenceAuthority === 'managed-sandbox-v1'
-            ? 'managed-sandbox-v1'
-            : 'unavailable',
+        ...(projectedMetroTerminal ? { metroTerminal: projectedMetroTerminal } : {}),
+        sandbox,
         bundleBound: Boolean(status.bindings.bundle),
         runnerBound: Boolean(status.bindings.runner),
         recorderBound: Boolean(status.bindings.recorder),
+        session: {
+            sourceKind: status.source.kind,
+            metroPort: status.bindings.metroPort,
+            observePort: status.bindings.observePort,
+            observe: Boolean(status.bindings.observe),
+        },
+        target: {
+            platform: status.bindings.device?.platform,
+            deviceBound: Boolean(status.bindings.device),
+            installBound: Boolean(status.bindings.install),
+        },
+        runtime: {
+            metroBound: Boolean(status.bindings.metro),
+            bundleBound: Boolean(status.bindings.bundle),
+            sandbox,
+            ...(projectedMetroTerminal ? { metroTerminal: projectedMetroTerminal } : {}),
+        },
+        automation: {
+            runnerBound: Boolean(status.bindings.runner),
+            recorderBound: Boolean(status.bindings.recorder),
+        },
+        proof: Boolean(status.bindings.proof),
         ...(recoveryStatus ? { recovery: recoveryStatus } : {}),
         ...(cleanupNextAction
             ? {

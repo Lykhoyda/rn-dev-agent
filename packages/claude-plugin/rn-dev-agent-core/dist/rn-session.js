@@ -16364,6 +16364,17 @@ function inspectAuthorityMigration(status, dependencies = {}) {
 }
 
 // packages/rn-dev-agent-core/dist/session/public-status.js
+var SELECTED_STATES = /* @__PURE__ */ new Set(["active", "source_bound", "device_claimed", "metro_bound"]);
+var RUNNING_STATES = /* @__PURE__ */ new Set(["device_bound", "runtime_bound", "ready"]);
+function derivePublicPhase(state, buildPending) {
+  if (state === "closing")
+    return "closing";
+  if (!SELECTED_STATES.has(state) && !RUNNING_STATES.has(state))
+    return void 0;
+  if (buildPending)
+    return "building";
+  return RUNNING_STATES.has(state) ? "running" : "selected";
+}
 function liveHandle(handle, now) {
   if (typeof handle?.token !== "string")
     return void 0;
@@ -16403,10 +16414,20 @@ function projectPublicAuthorityStatus(status, options = {}) {
   });
   const metro = status.bindings.metro;
   const metroTerminal = status.bindings.metroTerminal;
+  const projectedMetroTerminal = metroTerminal ? {
+    code: metroTerminal.code,
+    reason: metroTerminal.reason,
+    phase: metroTerminal.phase,
+    observedAt: metroTerminal.observedAt
+  } : void 0;
+  const sandbox = metro?.runtimeEvidenceAuthority === "managed-sandbox-v1" ? "managed-sandbox-v1" : "unavailable";
+  const phase = derivePublicPhase(status.state, Boolean(status.bindings.pendingBuild));
   return {
     available: true,
     ...options.includeSessionId ? { sessionId: status.sessionId } : {},
     state: status.state,
+    ...phase ? { phase } : {},
+    detail: status.state,
     sourceKind: status.source.kind,
     metroPort: status.bindings.metroPort,
     observePort: status.bindings.observePort,
@@ -16414,18 +16435,33 @@ function projectPublicAuthorityStatus(status, options = {}) {
     deviceBound: Boolean(status.bindings.device),
     installBound: Boolean(status.bindings.install),
     metroBound: Boolean(status.bindings.metro),
-    ...metroTerminal ? {
-      metroTerminal: {
-        code: metroTerminal.code,
-        reason: metroTerminal.reason,
-        phase: metroTerminal.phase,
-        observedAt: metroTerminal.observedAt
-      }
-    } : {},
-    sandbox: metro?.runtimeEvidenceAuthority === "managed-sandbox-v1" ? "managed-sandbox-v1" : "unavailable",
+    ...projectedMetroTerminal ? { metroTerminal: projectedMetroTerminal } : {},
+    sandbox,
     bundleBound: Boolean(status.bindings.bundle),
     runnerBound: Boolean(status.bindings.runner),
     recorderBound: Boolean(status.bindings.recorder),
+    session: {
+      sourceKind: status.source.kind,
+      metroPort: status.bindings.metroPort,
+      observePort: status.bindings.observePort,
+      observe: Boolean(status.bindings.observe)
+    },
+    target: {
+      platform: status.bindings.device?.platform,
+      deviceBound: Boolean(status.bindings.device),
+      installBound: Boolean(status.bindings.install)
+    },
+    runtime: {
+      metroBound: Boolean(status.bindings.metro),
+      bundleBound: Boolean(status.bindings.bundle),
+      sandbox,
+      ...projectedMetroTerminal ? { metroTerminal: projectedMetroTerminal } : {}
+    },
+    automation: {
+      runnerBound: Boolean(status.bindings.runner),
+      recorderBound: Boolean(status.bindings.recorder)
+    },
+    proof: Boolean(status.bindings.proof),
     ...recoveryStatus ? { recovery: recoveryStatus } : {},
     ...cleanupNextAction ? {
       staleDeviceCleanup: {
