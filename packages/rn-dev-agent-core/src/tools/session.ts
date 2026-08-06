@@ -792,8 +792,10 @@ export function createSessionHandler(
                 releaseResources: atomicAndroidReplacement && priorTarget ? [priorTarget] : [],
                 claimResources: [candidateTarget],
                 assertBeforeCommit: promotion.assertActive,
+                onCommitted: () => {
+                  committed = true;
+                },
               });
-              committed = true;
               promotion.assertActive();
               promotion.publish();
             } catch (error) {

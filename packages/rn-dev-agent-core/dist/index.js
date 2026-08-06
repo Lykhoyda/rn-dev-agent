@@ -108,7 +108,7 @@ import { loadE2eConfig, resolveParams } from './domain/e2e-config.js';
 import { getWorkerAuthorityRuntime } from './session/runtime.js';
 import { createSessionHandler } from './tools/session.js';
 import { bindNativeRunner, unbindNativeRunner } from './session/runner-binding.js';
-import { claimOptionalBundleAuthority, createAuthorityGate } from './session/authority-gate.js';
+import { claimOptionalBundleAuthority, createAuthorityGate, } from './session/authority-gate.js';
 import { createLocalAuthorityProbe } from './session/local-authority-probe.js';
 import { assertAuthorityProfilesExhaustive } from './session/tool-profiles.js';
 import { readJsonStateFile } from './util/secure-state-file.js';
@@ -414,14 +414,15 @@ setSnapshotAuthorityProvider({
         }
     },
 });
-const localAuthorityProbe = createLocalAuthorityProbe({
+const createRuntimeAuthorityProbe = (resolveClient) => createLocalAuthorityProbe({
     runtime: authorityRuntime,
-    getClient,
+    getClient: resolveClient,
     getSecret: () => process.env.RN_DEV_AGENT_SESSION_SECRET_PATH
         ? readJsonStateFile(process.env.RN_DEV_AGENT_SESSION_SECRET_PATH)
         : null,
     proofActive: (runId) => strictProofMonitor.ownsRun(runId),
 });
+const localAuthorityProbe = createRuntimeAuthorityProbe(getClient);
 const authorityGate = createAuthorityGate(authorityRuntime, {
     probe: async ({ axis, phase, status, tool, args }) => localAuthorityProbe({ axis, phase, status, tool, args }),
     recoverRuntimeConnection: async (status) => {
@@ -826,10 +827,10 @@ async function relaunchSessionRuntime(status) {
         !Number.isSafeInteger(metroPort)) {
         throw new Error('METRO_ORIGIN_MISMATCH: managed replay launch authority is incomplete');
     }
-    const current = getClient();
-    await current.disconnect();
-    setClient(createClient(Number(metroPort)));
     if (platform === 'ios') {
+        const current = getClient();
+        await current.disconnect();
+        setClient(createClient(Number(metroPort)));
         await execFileP('xcrun', [
             'simctl',
             'launch',
@@ -839,33 +840,44 @@ async function relaunchSessionRuntime(status) {
             '--initialUrl',
             `http://127.0.0.1:${String(metroPort)}`,
         ]);
+        const connection = await connectExactSessionTarget({ metroPort: Number(metroPort), platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
+        connection.publish();
+        getClient().setAuthoritativeSessionPolicy(createAuthoritativeSessionPolicy(status));
+        return;
     }
-    else {
-        const devClientUrl = typeof install.devClientUrl === 'string'
-            ? install.devClientUrl
-            : typeof device.devClientUrl === 'string'
-                ? device.devClientUrl
-                : null;
-        if (!devClientUrl) {
-            throw new Error('DEV_CLIENT_ENDPOINT_NOT_FOUND: managed Android replay requires the exact Dev Client URL');
-        }
-        await execFileP('adb', [
-            ...androidDeeplinkCommandArgs(devClientUrl, undefined, deviceId),
-            '-p',
-            appId,
-        ]);
+    const devClientUrl = typeof install.devClientUrl === 'string'
+        ? install.devClientUrl
+        : typeof device.devClientUrl === 'string'
+            ? device.devClientUrl
+            : null;
+    if (!devClientUrl) {
+        throw new Error('DEV_CLIENT_ENDPOINT_NOT_FOUND: managed Android replay requires the exact Dev Client URL');
     }
+    await execFileP('adb', [
+        ...androidDeeplinkCommandArgs(devClientUrl, undefined, deviceId),
+        '-p',
+        appId,
+    ]);
     const connection = await connectExactSessionTarget({ metroPort: Number(metroPort), platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
-    connection.publish();
-    getClient().setAuthoritativeSessionPolicy(createAuthoritativeSessionPolicy(status));
+    const candidateProbe = createRuntimeAuthorityProbe(() => connection.client);
+    return {
+        probe: (input) => connection.run(() => candidateProbe(input)),
+        refreshRuntimeBinding: (currentStatus) => connection.run(() => rebindSessionRuntime(currentStatus, connection.run, connection.client)),
+        assertActive: connection.assertActive,
+        publish: (currentStatus) => {
+            connection.publish();
+            getClient().setAuthoritativeSessionPolicy(createAuthoritativeSessionPolicy(currentStatus));
+        },
+        cancel: connection.cancel,
+    };
 }
-async function rebindSessionRuntime(status, awaitWithinBoundary) {
+async function rebindSessionRuntime(status, awaitWithinBoundary, connectedClient = getClient()) {
     const device = status.bindings.device;
     const metro = status.bindings.metro;
     const prior = status.bindings.bundle;
     const install = status.bindings.install;
     const declaredDevice = status.bindings.device;
-    const client = getClient();
+    const client = connectedClient;
     const target = client.connectedTarget;
     if (!client.isConnected ||
         !target ||

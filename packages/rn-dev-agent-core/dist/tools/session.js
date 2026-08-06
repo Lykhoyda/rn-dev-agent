@@ -468,8 +468,10 @@ export function createSessionHandler(runtime, dependencies = {}) {
                             releaseResources: atomicAndroidReplacement && priorTarget ? [priorTarget] : [],
                             claimResources: [candidateTarget],
                             assertBeforeCommit: promotion.assertActive,
+                            onCommitted: () => {
+                                committed = true;
+                            },
                         });
-                        committed = true;
                         promotion.assertActive();
                         promotion.publish();
                     }

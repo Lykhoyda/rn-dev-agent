@@ -998,6 +998,54 @@ test('deadline rollback restores the in-memory operation fence', async () => {
   assert.equal(registry.currentOperation(), undefined);
 });
 
+test('post-commit failures expose durable authority to compensation', async () => {
+  const { registry, create } = fixture();
+  const owner = create('postcommit-operation-owner');
+  registry.claimResources(owner, [{ type: 'target', key: '8193:old-target' }]);
+  registry.updateBindings(owner, {
+    state: 'ready',
+    bindings: { bundle: { targetId: 'old-target' } },
+  });
+  const operation = registry.beginOperation(owner, {
+    operationId: 'postcommit-operation',
+    tool: 'rn_session',
+    profile: 'CSIMBD',
+  });
+
+  await registry.runWithOperation(operation, async () => {
+    let committed = false;
+    assert.throws(
+      () =>
+        registry.updateBindings(owner, {
+          bindings: { bundle: { targetId: 'new-target' } },
+          releaseResources: [{ type: 'target', key: '8193:old-target' }],
+          claimResources: [{ type: 'target', key: '8193:new-target' }],
+          onCommitted: () => {
+            committed = true;
+            throw new Error('post-commit hardening failed');
+          },
+        }),
+      /post-commit hardening failed/,
+    );
+
+    assert.equal(committed, true);
+    assert.equal(
+      (registry.getSessionStatus(owner.sessionId)?.bindings.bundle as { targetId: string })
+        .targetId,
+      'new-target',
+    );
+    const compensated = registry.replaceBindingsDuringOperation(operation, {
+      bindings: { bundle: { targetId: 'old-target' } },
+      releaseResources: [{ type: 'target', key: '8193:new-target' }],
+      claimResources: [{ type: 'target', key: '8193:old-target' }],
+    });
+    registry.endOperation(compensated);
+  });
+
+  assert.equal(registry.getClaim('target', '8193:new-target'), null);
+  assert.equal(registry.getClaim('target', '8193:old-target')?.sessionId, owner.sessionId);
+});
+
 test('runtime target replacement advances the binding and operation fence atomically', () => {
   const { registry, create } = fixture();
   const owner = create('a');

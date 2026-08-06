@@ -23716,7 +23716,7 @@ var init_registry = __esm({
                updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`).run(input.state ?? current.state, JSON.stringify(bindings), now, session2.sessionId, session2.claimEpoch);
           this.#advanceActiveOperationFence(session2, current.authority_version, current.authority_version + 1);
-        }, input.assertBeforeCommit);
+        }, input.assertBeforeCommit, input.onCommitted);
       }
       replaceBindingsDuringOperation(operation, input) {
         const now = this.#now();
@@ -23766,7 +23766,7 @@ var init_registry = __esm({
             context.authorityVersion = nextAuthorityVersion;
           }
           return { ...operation, authorityVersion: nextAuthorityVersion };
-        });
+        }, input.assertBeforeCommit, input.onCommitted);
       }
       endOperationWithBindings(operation, bindings) {
         const now = this.#now();
@@ -25238,7 +25238,7 @@ var init_registry = __esm({
              authority_version = authority_version + 1, updated_ms = ?
          WHERE session_id = ?`).run(now, sessionId);
       }
-      #transaction(operation, assertBeforeCommit) {
+      #transaction(operation, assertBeforeCommit, onCommitted) {
         this.#database.exec("BEGIN IMMEDIATE");
         const context = this.#operationContext.getStore();
         const priorContextAuthorityVersion = context?.authorityVersion;
@@ -25248,6 +25248,7 @@ var init_registry = __esm({
           assertBeforeCommit?.();
           this.#database.exec("COMMIT");
           committed = true;
+          onCommitted?.(result);
           this.#secureFiles();
           return result;
         } catch (error2) {
@@ -29923,7 +29924,7 @@ function receipt(status, profile, observations) {
     } : void 0
   };
 }
-function reconcileRuntimeBundleReplacement(runtime, registry2, operation, status, priorBundle, metro, bundle) {
+function reconcileRuntimeBundleReplacement(runtime, registry2, operation, status, priorBundle, metro, bundle, promotion) {
   const oldTargetId = priorBundle?.targetId;
   const newTargetId = bundle.targetId;
   const metroPort = metro?.port;
@@ -29931,14 +29932,16 @@ function reconcileRuntimeBundleReplacement(runtime, registry2, operation, status
     throw new SessionAuthorityError("CDP_TARGET_AUTHORITY_MISMATCH", "runtime reset did not produce an exact target replacement");
   }
   const runtimeTargetChanged = oldTargetId !== newTargetId || priorBundle?.connectionGeneration !== bundle.connectionGeneration;
-  if (!runtimeTargetChanged) {
+  if (!runtimeTargetChanged && !promotion) {
     return { operation, status, runtimeTargetChanged };
   }
   const nextOperation = registry2.replaceBindingsDuringOperation(operation, {
     state: "ready",
     bindings: { bundle },
     releaseResources: typeof oldTargetId === "string" && oldTargetId !== newTargetId ? [{ type: "target", key: `${String(metroPort)}:${oldTargetId}` }] : [],
-    claimResources: oldTargetId !== newTargetId ? [{ type: "target", key: `${String(metroPort)}:${newTargetId}` }] : []
+    claimResources: oldTargetId !== newTargetId ? [{ type: "target", key: `${String(metroPort)}:${newTargetId}` }] : [],
+    assertBeforeCommit: promotion?.assertActive,
+    onCommitted: promotion?.onCommitted
   });
   const refreshedStatus = runtime.status();
   if (!refreshedStatus.available) {
@@ -29949,6 +29952,23 @@ function reconcileRuntimeBundleReplacement(runtime, registry2, operation, status
     status: refreshedStatus,
     runtimeTargetChanged
   };
+}
+function restoreRuntimeBundleReplacement(registry2, operation, priorStatus, candidateBundle) {
+  const priorBundle = priorStatus.bindings.bundle;
+  const metro = priorStatus.bindings.metro;
+  const priorTargetId = priorBundle?.targetId;
+  const candidateTargetId = candidateBundle.targetId;
+  const metroPort = metro?.port;
+  if (typeof candidateTargetId !== "string" || !Number.isSafeInteger(metroPort)) {
+    throw new SessionAuthorityError("CDP_TARGET_AUTHORITY_MISMATCH", "runtime promotion compensation lost its exact target authority");
+  }
+  const targetChanged = priorTargetId !== candidateTargetId;
+  return registry2.replaceBindingsDuringOperation(operation, {
+    state: priorStatus.state,
+    bindings: { bundle: priorBundle ?? null },
+    releaseResources: targetChanged ? [{ type: "target", key: `${String(metroPort)}:${candidateTargetId}` }] : [],
+    claimResources: targetChanged && typeof priorTargetId === "string" ? [{ type: "target", key: `${String(metroPort)}:${priorTargetId}` }] : []
+  });
 }
 function invalidateRuntimeBundle(registry2, operation, status, onInvalidated) {
   const priorBundle = status.bindings.bundle;
@@ -30198,6 +30218,7 @@ function createAuthorityGate(runtime, dependencies) {
       let registry2 = null;
       let retainProofCleanupFence = false;
       let publishedProofFinalize = false;
+      let stagedRuntimeRelaunch;
       try {
         const available = runtime.requireAvailable();
         registry2 = available.registry;
@@ -30342,10 +30363,18 @@ function createAuthorityGate(runtime, dependencies) {
               throw new SessionAuthorityError(currentStatus.code, currentStatus.reason);
             }
             registry2.verifyOperation(operation);
+            const stagedRelaunch = stagedRuntimeRelaunch;
+            const promotionStatus = {
+              ...currentStatus,
+              bindings: { ...currentStatus.bindings }
+            };
+            let promotionCommitted = false;
             let originObservation;
             let bundleObservation;
+            let candidateBundle;
             try {
-              originObservation = await dependencies.probe({
+              const probe = stagedRelaunch?.probe ?? dependencies.probe;
+              originObservation = await probe({
                 axis: "A",
                 phase: "postflight",
                 tool,
@@ -30353,27 +30382,59 @@ function createAuthorityGate(runtime, dependencies) {
                 status: currentStatus,
                 args
               });
-              if (!dependencies.refreshRuntimeBinding) {
+              if (!stagedRelaunch && !dependencies.refreshRuntimeBinding) {
                 throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", "managed lifecycle cannot commit without a binding refresh");
               }
-              const bundle = await dependencies.refreshRuntimeBinding(currentStatus);
-              bundleObservation = await dependencies.probe({
+              candidateBundle = stagedRelaunch ? await stagedRelaunch.refreshRuntimeBinding(currentStatus) : await dependencies.refreshRuntimeBinding(currentStatus);
+              bundleObservation = await probe({
                 axis: "B",
                 phase: "postflight",
                 tool,
                 profile,
                 status: {
                   ...currentStatus,
-                  bindings: { ...currentStatus.bindings, bundle }
+                  bindings: { ...currentStatus.bindings, bundle: candidateBundle }
                 },
                 args
               });
               registry2.verifyOperation(operation);
-              const reconciliation = reconcileRuntimeBundleReplacement(runtime, registry2, operation, currentStatus, currentStatus.bindings.bundle, currentStatus.bindings.metro, bundle);
+              const reconciliation = reconcileRuntimeBundleReplacement(runtime, registry2, operation, currentStatus, currentStatus.bindings.bundle, currentStatus.bindings.metro, candidateBundle, stagedRelaunch ? {
+                assertActive: stagedRelaunch.assertActive,
+                onCommitted: (committedOperation) => {
+                  promotionCommitted = true;
+                  operation = committedOperation;
+                }
+              } : void 0);
               operation = reconciliation.operation;
               status = reconciliation.status;
               managedRuntimeTargetChanged ||= reconciliation.runtimeTargetChanged;
+              if (stagedRelaunch) {
+                stagedRelaunch.assertActive();
+                stagedRelaunch.publish(status);
+                stagedRuntimeRelaunch = void 0;
+              }
             } catch (error2) {
+              if (stagedRelaunch) {
+                let compensationError;
+                if (promotionCommitted) {
+                  try {
+                    operation = restoreRuntimeBundleReplacement(registry2, operation, promotionStatus, candidateBundle);
+                    const restoredStatus = runtime.status();
+                    if (restoredStatus.available)
+                      status = restoredStatus;
+                  } catch (restoreError) {
+                    compensationError = restoreError;
+                  }
+                }
+                stagedRelaunch.cancel();
+                if (stagedRuntimeRelaunch === stagedRelaunch) {
+                  stagedRuntimeRelaunch = void 0;
+                }
+                if (compensationError) {
+                  throw new AggregateError([error2, compensationError], "BUNDLE_HANDSHAKE_UNAVAILABLE: staged runtime promotion compensation failed");
+                }
+                throw error2;
+              }
               const failedStatus = runtime.status();
               if (failedStatus.available && failedStatus.bindings.bundle) {
                 try {
@@ -30403,7 +30464,9 @@ function createAuthorityGate(runtime, dependencies) {
                 if (!dependencies.relaunchBoundRuntime) {
                   throw new SessionAuthorityError("METRO_ORIGIN_MISMATCH", "managed native origin relaunch is unavailable");
                 }
-                await dependencies.relaunchBoundRuntime(currentStatus);
+                stagedRuntimeRelaunch?.cancel();
+                stagedRuntimeRelaunch = void 0;
+                stagedRuntimeRelaunch = await dependencies.relaunchBoundRuntime(currentStatus) ?? void 0;
                 registry2.verifyOperation(operation);
               },
               complete: async (targetExpected) => {
@@ -30636,6 +30699,7 @@ function createAuthorityGate(runtime, dependencies) {
         }
         return authorityFailure(error2);
       } finally {
+        stagedRuntimeRelaunch?.cancel();
         if (registry2 && operation && !retainProofCleanupFence) {
           try {
             registry2.endOperation(operation);
@@ -65337,9 +65401,11 @@ function createSessionHandler(runtime, dependencies = {}) {
               expectedAuthorityVersion: atomicAndroidReplacement ? priorAuthorityVersion : void 0,
               releaseResources: atomicAndroidReplacement && priorTarget ? [priorTarget] : [],
               claimResources: [candidateTarget],
-              assertBeforeCommit: promotion.assertActive
+              assertBeforeCommit: promotion.assertActive,
+              onCommitted: () => {
+                committed = true;
+              }
             });
-            committed = true;
             promotion.assertActive();
             promotion.publish();
           } catch (error2) {
@@ -82868,12 +82934,13 @@ setSnapshotAuthorityProvider({
     }
   }
 });
-var localAuthorityProbe = createLocalAuthorityProbe({
+var createRuntimeAuthorityProbe = (resolveClient) => createLocalAuthorityProbe({
   runtime: authorityRuntime,
-  getClient,
+  getClient: resolveClient,
   getSecret: () => process.env.RN_DEV_AGENT_SESSION_SECRET_PATH ? readJsonStateFile(process.env.RN_DEV_AGENT_SESSION_SECRET_PATH) : null,
   proofActive: (runId) => strictProofMonitor.ownsRun(runId)
 });
+var localAuthorityProbe = createRuntimeAuthorityProbe(getClient);
 var authorityGate = createAuthorityGate(authorityRuntime, {
   probe: async ({ axis, phase, status, tool, args }) => localAuthorityProbe({ axis, phase, status, tool, args }),
   recoverRuntimeConnection: async (status) => {
@@ -83212,10 +83279,10 @@ async function relaunchSessionRuntime(status) {
   if (platform !== "ios" && platform !== "android" || typeof deviceId !== "string" || typeof appId !== "string" || !Number.isSafeInteger(metroPort)) {
     throw new Error("METRO_ORIGIN_MISMATCH: managed replay launch authority is incomplete");
   }
-  const current = getClient();
-  await current.disconnect();
-  setClient(createClient(Number(metroPort)));
   if (platform === "ios") {
+    const current = getClient();
+    await current.disconnect();
+    setClient(createClient(Number(metroPort)));
     await execFileP("xcrun", [
       "simctl",
       "launch",
@@ -83225,28 +83292,40 @@ async function relaunchSessionRuntime(status) {
       "--initialUrl",
       `http://127.0.0.1:${String(metroPort)}`
     ]);
-  } else {
-    const devClientUrl = typeof install.devClientUrl === "string" ? install.devClientUrl : typeof device.devClientUrl === "string" ? device.devClientUrl : null;
-    if (!devClientUrl) {
-      throw new Error("DEV_CLIENT_ENDPOINT_NOT_FOUND: managed Android replay requires the exact Dev Client URL");
-    }
-    await execFileP("adb", [
-      ...androidDeeplinkCommandArgs(devClientUrl, void 0, deviceId),
-      "-p",
-      appId
-    ]);
+    const connection2 = await connectExactSessionTarget2({ metroPort: Number(metroPort), platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
+    connection2.publish();
+    getClient().setAuthoritativeSessionPolicy(createAuthoritativeSessionPolicy(status));
+    return;
   }
+  const devClientUrl = typeof install.devClientUrl === "string" ? install.devClientUrl : typeof device.devClientUrl === "string" ? device.devClientUrl : null;
+  if (!devClientUrl) {
+    throw new Error("DEV_CLIENT_ENDPOINT_NOT_FOUND: managed Android replay requires the exact Dev Client URL");
+  }
+  await execFileP("adb", [
+    ...androidDeeplinkCommandArgs(devClientUrl, void 0, deviceId),
+    "-p",
+    appId
+  ]);
   const connection = await connectExactSessionTarget2({ metroPort: Number(metroPort), platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
-  connection.publish();
-  getClient().setAuthoritativeSessionPolicy(createAuthoritativeSessionPolicy(status));
+  const candidateProbe = createRuntimeAuthorityProbe(() => connection.client);
+  return {
+    probe: (input) => connection.run(() => candidateProbe(input)),
+    refreshRuntimeBinding: (currentStatus) => connection.run(() => rebindSessionRuntime(currentStatus, connection.run, connection.client)),
+    assertActive: connection.assertActive,
+    publish: (currentStatus) => {
+      connection.publish();
+      getClient().setAuthoritativeSessionPolicy(createAuthoritativeSessionPolicy(currentStatus));
+    },
+    cancel: connection.cancel
+  };
 }
-async function rebindSessionRuntime(status, awaitWithinBoundary) {
+async function rebindSessionRuntime(status, awaitWithinBoundary, connectedClient = getClient()) {
   const device = status.bindings.device;
   const metro = status.bindings.metro;
   const prior = status.bindings.bundle;
   const install = status.bindings.install;
   const declaredDevice = status.bindings.device;
-  const client2 = getClient();
+  const client2 = connectedClient;
   const target = client2.connectedTarget;
   if (!client2.isConnected || !target || client2.metroPort !== metro.port || !targetMatchesSession(target, {
     platform: device.platform,

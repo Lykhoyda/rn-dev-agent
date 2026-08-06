@@ -1234,6 +1234,7 @@ test('Android forced pin keeps prior authority until one atomic staged-client co
             assert.deepEqual(update.claimResources, [{ type: 'target', key: '8193:target-new' }]);
             update.assertBeforeCommit();
             calls.push('atomic-commit');
+            update.onCommitted();
           },
         },
         session: { sessionId: 'session-android', claimEpoch: 1 },
@@ -1309,17 +1310,14 @@ test('Android post-commit deadline expiry restores prior bundle authority', asyn
               status.authorityVersion = 8;
               status.bindings.bundle = candidate;
               calls.push('candidate-commit');
+              update.onCommitted();
               return;
             }
             assert.equal(update.expectedAuthorityVersion, 8);
             assert.equal(update.state, 'ready');
             assert.deepEqual(update.bindings, { bundle: priorBundle });
-            assert.deepEqual(update.releaseResources, [
-              { type: 'target', key: '8193:target-new' },
-            ]);
-            assert.deepEqual(update.claimResources, [
-              { type: 'target', key: '8193:target-old' },
-            ]);
+            assert.deepEqual(update.releaseResources, [{ type: 'target', key: '8193:target-new' }]);
+            assert.deepEqual(update.claimResources, [{ type: 'target', key: '8193:target-old' }]);
             status.authorityVersion = 9;
             status.bindings.bundle = priorBundle;
             calls.push('compensating-commit');
@@ -1356,6 +1354,82 @@ test('Android post-commit deadline expiry restores prior bundle authority', asyn
     'deadline-check-2',
     'compensating-commit',
   ]);
+});
+
+test('Android post-commit hardening failure restores prior bundle authority', async () => {
+  const calls: string[] = [];
+  const priorBundle = { targetId: 'target-old', connectionGeneration: 1 };
+  const status = {
+    sessionId: 'session-android',
+    authorityVersion: 7,
+    state: 'ready',
+    source: { kind: 'git', appRoot: '/project' },
+    bindings: {
+      metroPort: 8193,
+      install: { artifactDigest: 'install' },
+      metro: { instanceId: 'metro-a' },
+      device: { platform: 'android', deviceId: 'emulator-5554', appId: 'dev.example' },
+      bundle: priorBundle,
+    },
+  };
+  const candidate = {
+    sessionId: 'session-android',
+    metroInstanceId: 'metro-a',
+    worktreeKey: 'worktree-a',
+    appId: 'dev.example',
+    platform: 'android',
+    buildGeneration: 1,
+    deviceId: 'emulator-5554',
+    metroPort: 8193,
+    launchMethod: 'app',
+    targetId: 'target-new',
+    connectionGeneration: 2,
+    authorityScope: 'initial-bundle',
+    sourceFidelity: 'not-proven',
+  } as const;
+  let updateCount = 0;
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: {
+          getSessionStatus: () => status,
+          updateBindings: (_session, update) => {
+            updateCount += 1;
+            if (updateCount === 1) {
+              update.assertBeforeCommit();
+              status.authorityVersion = 8;
+              status.bindings.bundle = candidate;
+              calls.push('candidate-commit');
+              update.onCommitted();
+              throw new Error('registry permissions hardening failed');
+            }
+            assert.equal(update.expectedAuthorityVersion, 8);
+            assert.deepEqual(update.bindings, { bundle: priorBundle });
+            status.authorityVersion = 9;
+            status.bindings.bundle = priorBundle;
+            calls.push('compensating-commit');
+          },
+        },
+        session: { sessionId: 'session-android', claimEpoch: 1 },
+      }),
+    },
+    {
+      pinDevClient: async (_status, _options, commitBundle) => {
+        commitBundle(candidate, {
+          assertActive: () => calls.push('deadline-check'),
+          publish: () => calls.push('published'),
+        });
+        return candidate;
+      },
+    },
+  );
+
+  const result = await handler({ action: 'pin_dev_client', force: true });
+
+  assert.equal(result.isError, true);
+  assert.deepEqual(status.bindings.bundle, priorBundle);
+  assert.deepEqual(calls, ['deadline-check', 'candidate-commit', 'compensating-commit']);
 });
 
 test('session release stops its managed Metro before releasing claims', async () => {
