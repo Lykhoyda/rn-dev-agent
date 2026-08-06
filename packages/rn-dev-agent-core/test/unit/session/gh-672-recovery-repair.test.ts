@@ -32,6 +32,7 @@ import { createSessionHandler } from '../../../dist/tools/session.js';
 const HANDLE_TTL_MS = 5 * 60_000;
 const RECOVERY_CAPABILITY = 'recovery-capability';
 const RECOVERY_WORKER = 'recovery-worker';
+const RECORDER_SCOPE = 'a'.repeat(64);
 const roots: string[] = [];
 
 afterEach(() => {
@@ -412,7 +413,12 @@ test('GH#672 legacy axes-v1: source recovery completes on the handle status adve
 });
 
 /** A dead owner in ANOTHER worktree holding the exact device, its runner and recorder. */
-function deadDeviceOwner() {
+function deadDeviceOwner(
+  identityOverrides: {
+    runner?: Record<string, unknown>;
+    recorder?: Record<string, unknown>;
+  } = {},
+) {
   const f = fixture();
   const dead = f.create('dead-device-owner', 'worktree-foreign', {
     metroPort: 8300,
@@ -439,11 +445,22 @@ function deadDeviceOwner() {
         platform: 'ios',
         deviceId: 'sim-1',
         port: 9200,
+        pid: 9201,
         capability: 'runner-capability',
         instanceId: 'runner-instance',
         processBirth: 'runner-birth',
+        ...identityOverrides.runner,
       },
-      recorder: { platform: 'ios', deviceId: 'sim-1', scope: 'device', processBirth: 'rec-birth' },
+      recorder: {
+        phase: 'recording',
+        platform: 'ios',
+        deviceId: 'sim-1',
+        scope: RECORDER_SCOPE,
+        script: 'record_proof.sh',
+        pid: 9202,
+        processBirth: 'rec-birth',
+        ...identityOverrides.recorder,
+      },
       packageIntegration: { installedBySessionId: 'dead-device-owner', manifestSha256: 'abc' },
     },
   });
@@ -469,7 +486,7 @@ test('GH#672: a dead device owner is released without adopting its source or pac
 
   const plan = f.registry.beginStaleResourceRelease(f.live, offer.token, 'live-worker');
   assert.equal(plan.runner?.port, 9200);
-  assert.equal(plan.recorder?.scope, 'device');
+  assert.equal(plan.recorder?.scope, RECORDER_SCOPE);
   assert.equal(f.registry.getClaim('device', 'ios:sim-1')?.sessionId, 'live');
   assert.equal(f.registry.getClaim('runner', 'ios:sim-1:9200')?.sessionId, 'live');
 
@@ -725,7 +742,15 @@ test('GH#672: a device id containing a SQL wildcard never releases a neighbour r
     state: 'device_claimed',
     bindings: {
       device: { platform: 'ios', deviceId: 'sim_1' },
-      runner: { platform: 'ios', deviceId: 'sim_1', port: 9200 },
+      runner: {
+        platform: 'ios',
+        deviceId: 'sim_1',
+        port: 9200,
+        pid: 9201,
+        capability: 'runner-capability',
+        instanceId: 'runner-instance',
+        processBirth: 'runner-birth',
+      },
     },
   });
   const live = f.create('live', 'worktree-mine');
@@ -1101,7 +1126,15 @@ test('GH#672/L5: partial device families refuse before either release path mutat
     state: 'device_claimed',
     bindings: {
       device: { platform: 'ios', deviceId: 'sim-1' },
-      runner: { platform: 'ios', deviceId: 'sim-1', port: 9200 },
+      runner: {
+        platform: 'ios',
+        deviceId: 'sim-1',
+        port: 9200,
+        pid: 9201,
+        capability: 'runner-capability',
+        instanceId: 'runner-instance',
+        processBirth: 'runner-birth',
+      },
     },
   });
   const live = f.create('live', 'worktree-mine');
@@ -1127,6 +1160,51 @@ test('GH#672/L5: partial device families refuse before either release path mutat
   assert.equal(f.registry.getSessionStatus('live')?.bindings.staleDeviceRelease, undefined);
   assert.equal(f.registry.getSessionStatus('live')?.bindings.staleDeviceCleanup, undefined);
   assert.equal(f.registry.getSessionStatus('live')?.authorityVersion, authorityVersion);
+});
+
+function assertIncompleteCleanupIdentityRefusesWithoutMutation(
+  f: ReturnType<typeof deadDeviceOwner>,
+  code: string,
+) {
+  const target = { platform: 'ios', deviceId: 'sim-1' };
+  const deadBefore = f.registry.getSessionStatus('dead-device-owner');
+  const liveBefore = f.registry.getSessionStatus('live');
+  const claimsBefore = [
+    f.registry.getClaim('device', 'ios:sim-1'),
+    f.registry.getClaim('runner', 'ios:sim-1:9200'),
+    f.registry.getClaim('recorder', 'ios:sim-1'),
+  ];
+
+  for (const release of [
+    () => f.registry.inspectStaleDeviceRelease(f.live, target),
+    () => f.registry.prepareStaleResourceRelease(f.live, target),
+    () => f.registry.beginConfirmedStaleDeviceRelease(f.live, 'live-worker', target),
+  ]) {
+    assert.throws(release, (error: { code?: string }) => error.code === code);
+  }
+
+  assert.deepEqual(f.registry.getSessionStatus('dead-device-owner'), deadBefore);
+  assert.deepEqual(f.registry.getSessionStatus('live'), liveBefore);
+  assert.deepEqual(
+    [
+      f.registry.getClaim('device', 'ios:sim-1'),
+      f.registry.getClaim('runner', 'ios:sim-1:9200'),
+      f.registry.getClaim('recorder', 'ios:sim-1'),
+    ],
+    claimsBefore,
+  );
+}
+
+test('GH#672/L5: incomplete runner cleanup identity refuses before transfer', () => {
+  const f = deadDeviceOwner({ runner: { pid: undefined } });
+
+  assertIncompleteCleanupIdentityRefusesWithoutMutation(f, 'RUNNER_ADOPTION_REQUIRED');
+});
+
+test('GH#672/L5: incomplete recorder cleanup identity refuses before transfer', () => {
+  const f = deadDeviceOwner({ recorder: { script: undefined } });
+
+  assertIncompleteCleanupIdentityRefusesWithoutMutation(f, 'RECORDING_AUTHORITY_MISMATCH');
 });
 
 test('GH#672/L5: neighboring bindings refuse without releasing their claims', () => {
@@ -1323,7 +1401,15 @@ test('GH#672/L5: a wildcard device id never releases a neighbour runner through 
     state: 'device_claimed',
     bindings: {
       device: { platform: 'ios', deviceId: 'sim_1' },
-      runner: { platform: 'ios', deviceId: 'sim_1', port: 9200 },
+      runner: {
+        platform: 'ios',
+        deviceId: 'sim_1',
+        port: 9200,
+        pid: 9201,
+        capability: 'runner-capability',
+        instanceId: 'runner-instance',
+        processBirth: 'runner-birth',
+      },
     },
   });
   const live = f.create('live', 'worktree-mine');

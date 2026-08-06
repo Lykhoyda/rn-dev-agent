@@ -20440,6 +20440,33 @@ var init_authority_store = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/session/cleanup-identity.js
+function hasCompleteRunnerCleanupIdentity(binding) {
+  const pid = Number(binding.pid);
+  const processBirth = String(binding.processBirth ?? "");
+  const instanceId = String(binding.instanceId ?? "");
+  const capability = String(binding.capability ?? "");
+  if (!Number.isSafeInteger(pid) || !processBirth || !instanceId || !capability)
+    return false;
+  if (String(binding.platform ?? "") !== "android")
+    return true;
+  return Boolean(String(binding.deviceId ?? "")) && Number.isSafeInteger(Number(binding.port));
+}
+function hasCompleteRecorderCleanupIdentity(binding) {
+  const script = String(binding.script ?? "");
+  const scope = String(binding.scope ?? "");
+  if (!script || !/^[a-f0-9]{64}$/.test(scope))
+    return false;
+  if (binding.phase === "starting")
+    return true;
+  return Number.isSafeInteger(Number(binding.pid)) && Boolean(String(binding.processBirth ?? ""));
+}
+var init_cleanup_identity = __esm({
+  "packages/rn-dev-agent-core/dist/session/cleanup-identity.js"() {
+    "use strict";
+  }
+});
+
 // packages/rn-dev-agent-core/dist/session/registry.js
 import { createHash as createHash8, randomBytes as randomBytes4, timingSafeEqual as timingSafeEqual4 } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -20523,6 +20550,7 @@ var init_registry = __esm({
   "packages/rn-dev-agent-core/dist/session/registry.js"() {
     "use strict";
     init_authority_store();
+    init_cleanup_identity();
     init_metro_binding();
     INITIALIZATION_WAIT2 = new Int32Array(new SharedArrayBuffer(4));
     AUTHORITY_REGISTRY_SCHEMA_VERSION = 4;
@@ -21264,6 +21292,9 @@ var init_registry = __esm({
         if (runnerValue !== null && runnerValue !== void 0 && !runner) {
           throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "stale runner binding targets another device");
         }
+        if (runner && (!hasCompleteRunnerCleanupIdentity(runner) || !Number.isSafeInteger(Number(runner.port)))) {
+          throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "stale runner cleanup identity is incomplete");
+        }
         const runnerClaimKey = runner ? `${deviceKey}:${String(runner.port)}` : null;
         if (runnerClaims.length !== (runner ? 1 : 0) || runner && runnerClaims[0].resource_key !== runnerClaimKey) {
           throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "stale runner binding has no exclusive cleanup claim");
@@ -21273,6 +21304,9 @@ var init_registry = __esm({
         const recorder2 = this.#bindingMatchesDevice(recorderValue, target) ? recorderValue : null;
         if (recorderValue !== null && recorderValue !== void 0 && !recorder2) {
           throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "stale recorder binding targets another device");
+        }
+        if (recorder2 && !hasCompleteRecorderCleanupIdentity(recorder2)) {
+          throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "stale recorder cleanup identity is incomplete");
         }
         if (recorderClaims.length !== (recorder2 ? 1 : 0) || recorder2 && recorderClaims[0].resource_key !== deviceKey) {
           throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "stale recorder binding has no exclusive cleanup claim");
@@ -33892,9 +33926,7 @@ async function stopBoundRunner(binding, processProbe = probeProcessBirth, signal
   const deadlineMs = Date.now() + timeoutMs;
   const pid = Number(binding.pid);
   const expectedBirth = String(binding.processBirth ?? "");
-  const instanceId = String(binding.instanceId ?? "");
-  const capability = String(binding.capability ?? "");
-  if (!Number.isSafeInteger(pid) || !expectedBirth || !instanceId || !capability) {
+  if (!hasCompleteRunnerCleanupIdentity(binding)) {
     throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "runner cleanup identity is incomplete");
   }
   const platform = String(binding.platform ?? "");
@@ -33949,7 +33981,7 @@ async function stopBoundRecorder(binding, _processProbe = probeProcessBirth, run
   const scope = String(binding.scope ?? "");
   const pid = Number(binding.pid);
   const expectedBirth = String(binding.processBirth ?? "");
-  if (!script || !/^[a-f0-9]{64}$/.test(scope)) {
+  if (!hasCompleteRecorderCleanupIdentity(binding)) {
     throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "recorder cleanup identity is incomplete");
   }
   if (binding.phase === "starting") {
@@ -33972,9 +34004,6 @@ async function stopBoundRecorder(binding, _processProbe = probeProcessBirth, run
       throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", `provisional recorder termination is unproven: ${error2 instanceof Error ? error2.message : String(error2)}`);
     }
   }
-  if (!Number.isSafeInteger(pid) || !expectedBirth) {
-    throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "recorder cleanup identity is incomplete");
-  }
   try {
     const stopped = await runRecorder(script, ["stop", scope, String(pid), expectedBirth]);
     const status = await runRecorder(script, ["status", scope]);
@@ -33991,6 +34020,7 @@ var init_process_cleanup = __esm({
   "packages/rn-dev-agent-core/dist/session/process-cleanup.js"() {
     "use strict";
     init_release_android_slot();
+    init_cleanup_identity();
     init_managed_metro();
     init_process_birth();
     init_registry();

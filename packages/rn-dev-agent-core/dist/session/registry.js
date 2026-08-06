@@ -1,6 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { openAuthorityStore, } from './authority-store.js';
+import { hasCompleteRecorderCleanupIdentity, hasCompleteRunnerCleanupIdentity, } from './cleanup-identity.js';
 import { probeMetroListener } from './metro-binding.js';
 const INITIALIZATION_WAIT = new Int32Array(new SharedArrayBuffer(4));
 export const AUTHORITY_REGISTRY_SCHEMA_VERSION = 4;
@@ -950,6 +951,10 @@ export class SessionRegistry {
         if (runnerValue !== null && runnerValue !== undefined && !runner) {
             throw new SessionAuthorityError('RUNNER_OWNERSHIP_MISMATCH', 'stale runner binding targets another device');
         }
+        if (runner &&
+            (!hasCompleteRunnerCleanupIdentity(runner) || !Number.isSafeInteger(Number(runner.port)))) {
+            throw new SessionAuthorityError('RUNNER_ADOPTION_REQUIRED', 'stale runner cleanup identity is incomplete');
+        }
         const runnerClaimKey = runner ? `${deviceKey}:${String(runner.port)}` : null;
         if (runnerClaims.length !== (runner ? 1 : 0) ||
             (runner && runnerClaims[0].resource_key !== runnerClaimKey)) {
@@ -962,6 +967,9 @@ export class SessionRegistry {
             : null;
         if (recorderValue !== null && recorderValue !== undefined && !recorder) {
             throw new SessionAuthorityError('RECORDING_AUTHORITY_MISMATCH', 'stale recorder binding targets another device');
+        }
+        if (recorder && !hasCompleteRecorderCleanupIdentity(recorder)) {
+            throw new SessionAuthorityError('RECORDING_AUTHORITY_MISMATCH', 'stale recorder cleanup identity is incomplete');
         }
         if (recorderClaims.length !== (recorder ? 1 : 0) ||
             (recorder && recorderClaims[0].resource_key !== deviceKey)) {

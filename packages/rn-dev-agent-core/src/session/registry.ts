@@ -5,6 +5,10 @@ import {
   type AuthorityDatabase,
   type AuthorityDatabaseCtor,
 } from './authority-store.js';
+import {
+  hasCompleteRecorderCleanupIdentity,
+  hasCompleteRunnerCleanupIdentity,
+} from './cleanup-identity.js';
 import { probeMetroListener } from './metro-binding.js';
 import type { AuthorityAxis } from './tool-profiles.js';
 
@@ -1657,6 +1661,15 @@ export class SessionRegistry {
         'stale runner binding targets another device',
       );
     }
+    if (
+      runner &&
+      (!hasCompleteRunnerCleanupIdentity(runner) || !Number.isSafeInteger(Number(runner.port)))
+    ) {
+      throw new SessionAuthorityError(
+        'RUNNER_ADOPTION_REQUIRED',
+        'stale runner cleanup identity is incomplete',
+      );
+    }
     const runnerClaimKey = runner ? `${deviceKey}:${String(runner.port)}` : null;
     if (
       runnerClaims.length !== (runner ? 1 : 0) ||
@@ -1676,6 +1689,12 @@ export class SessionRegistry {
       throw new SessionAuthorityError(
         'RECORDING_AUTHORITY_MISMATCH',
         'stale recorder binding targets another device',
+      );
+    }
+    if (recorder && !hasCompleteRecorderCleanupIdentity(recorder)) {
+      throw new SessionAuthorityError(
+        'RECORDING_AUTHORITY_MISMATCH',
+        'stale recorder cleanup identity is incomplete',
       );
     }
     if (
