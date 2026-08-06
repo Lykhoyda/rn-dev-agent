@@ -81,6 +81,15 @@ test('M6 JS guard: START walks fibers for already-mounted scroll containers', ()
   assert.match(START_RECORDING_JS, /__mcpInit/);
 });
 
+// B145: the same walk must also reach already-mounted handler-bearing controls,
+// forcing their nearest composite ancestor so the initiating tap is captured.
+// Behavioural coverage lives in test-recorder-initiating-tap.test.ts.
+test('M6 JS guard: START walks fibers for already-mounted interactive handlers', () => {
+  assert.match(START_RECORDING_JS, /isInteractiveFiber/);
+  assert.match(START_RECORDING_JS, /compositeAncestor/);
+  assert.match(START_RECORDING_JS, /handlerTargets/);
+});
+
 test('M6 JS guard: STOP calls cleanup and reads truncated flag', () => {
   assert.match(STOP_RECORDING_JS, /__METRO_MCP_REC_CLEANUP__/);
   assert.match(STOP_RECORDING_JS, /__METRO_MCP_REC_TRUNCATED__/);

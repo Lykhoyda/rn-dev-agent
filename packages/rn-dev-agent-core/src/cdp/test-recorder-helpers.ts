@@ -297,15 +297,56 @@ export const START_RECORDING_JS = `(function() {
     return origFreeze.call(this, obj);
   };
 
-  // --- Re-render walk for already-mounted scroll containers ---
-  // Object.freeze only fires on FUTURE renders. Existing ScrollViews missed
-  // the interceptor. Force-render them so their props go through Object.freeze
-  // again. M8 pattern: 1..5 renderer loop for fiber root resolution.
+  // --- Re-render walk for already-mounted scroll containers + handlers ---
+  // Object.freeze only fires on FUTURE renders. Anything already mounted when
+  // recording starts missed the interceptor. Force-render so their props go
+  // through Object.freeze again. M8 pattern: 1..5 renderer loop for fiber root
+  // resolution.
   (function() {
     var renderer = null;
     try {
       hook.renderers.forEach(function(r) { if (!renderer) renderer = r; });
     } catch (e) {}
+
+    function forceRerender(fiber) {
+      if (!fiber) return;
+      if (fiber.stateNode && typeof fiber.stateNode.forceUpdate === 'function') {
+        try { fiber.stateNode.forceUpdate(); } catch (e) {}
+      } else if (renderer && renderer.overrideProps) {
+        try { renderer.overrideProps(fiber, ['__mcpInit'], 1); } catch (e) {}
+      }
+    }
+
+    // B145: a handler-bearing fiber holds the props object the interceptor
+    // must wrap, but that object was created by its PARENT's createElement.
+    // Re-rendering the fiber itself would only recreate its children, so the
+    // initiating tap on an already-mounted control stayed invisible and saved
+    // actions began with an unreachable assertVisible. Force the nearest
+    // composite ancestor — that re-runs the createElement producing these props.
+    function isInteractiveFiber(fiber) {
+      var p = fiber.memoizedProps;
+      if (!p || typeof p !== 'object' || p.__mcpRec) return false;
+      return typeof p.onPress === 'function' ||
+             typeof p.onLongPress === 'function' ||
+             typeof p.onChangeText === 'function' ||
+             typeof p.onSubmitEditing === 'function' ||
+             // Mirrors the B141 rule in the interceptor: onFocus only counts
+             // when the same props object has no onPress.
+             (typeof p.onFocus === 'function' && typeof p.onPress !== 'function');
+    }
+
+    function compositeAncestor(fiber) {
+      var f = fiber.return;
+      var hops = 0;
+      while (f && hops < 50) {
+        // Host fibers have string types; re-rendering one does not re-run the
+        // createElement that built our target's props.
+        if (typeof f.type === 'function' || (f.type && typeof f.type === 'object')) return f;
+        f = f.return;
+        hops++;
+      }
+      return null;
+    }
 
     function isScrollFiber(fiber) {
       var cn = typeof fiber.type === 'string'
@@ -326,6 +367,7 @@ export const START_RECORDING_JS = `(function() {
     }
 
     var stack = [];
+    var handlerTargets = [];
     for (var ri = 1; ri <= 5; ri++) {
       var roots = hook.getFiberRoots(ri);
       if (roots && roots.size > 0) {
@@ -337,15 +379,19 @@ export const START_RECORDING_JS = `(function() {
       var item = stack.pop(); var fiber = item.f; var depth = item.d;
       if (!fiber || depth > 200) continue;
       if (isScrollFiber(fiber) && fiber.memoizedProps && !fiber.memoizedProps.__mcpRec) {
-        if (fiber.stateNode && typeof fiber.stateNode.forceUpdate === 'function') {
-          try { fiber.stateNode.forceUpdate(); } catch (e) {}
-        } else if (renderer && renderer.overrideProps) {
-          try { renderer.overrideProps(fiber, ['__mcpInit'], 1); } catch (e) {}
-        }
+        forceRerender(fiber);
+      }
+      if (isInteractiveFiber(fiber)) {
+        var anc = compositeAncestor(fiber);
+        // Dedup: one screen with 20 buttons must re-render once, not 20 times.
+        if (anc && handlerTargets.indexOf(anc) === -1) handlerTargets.push(anc);
       }
       if (fiber.sibling) stack.push({ f: fiber.sibling, d: depth });
       if (fiber.child)   stack.push({ f: fiber.child,   d: depth + 1 });
     }
+    // Deferred to after the walk: forcing mid-walk mutates the tree being
+    // traversed.
+    for (var k = 0; k < handlerTargets.length; k++) forceRerender(handlerTargets[k]);
   })();
 
   // --- Commit hook: route cache + navigate events ---
