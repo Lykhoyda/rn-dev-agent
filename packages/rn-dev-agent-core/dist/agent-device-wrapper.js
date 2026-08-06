@@ -100,6 +100,7 @@ export function hasActiveSession() {
     return activeSession !== null;
 }
 const snapshotCache = new Map();
+let snapshotCaptureSequence = 0;
 const dirtySnapshotPlatforms = new Set();
 let snapshotAuthorityProvider = null;
 export function setSnapshotAuthorityProvider(provider) {
@@ -129,6 +130,8 @@ function currentSnapshotAuthority(platform) {
         runnerProcessBirth: authority?.runnerProcessBirth ?? null,
         runnerCapabilityHash: authority?.runnerCapabilityHash ?? null,
         runnerPort: authority?.runnerPort ?? null,
+        // The outer gate upgrades only captures whose M+A authority survives postflight.
+        originAuthority: 'not-proven',
     };
 }
 function snapshotAuthorityIsValid(receipt, platform) {
@@ -160,7 +163,8 @@ function snapshotAuthorityIsValid(receipt, platform) {
 function snapshotEvidenceAuthorityIsValid(receipt, platform) {
     if (receipt.sessionId === null)
         return snapshotAuthorityIsValid(receipt, platform);
-    return Boolean(receipt.platform === platform &&
+    return Boolean(receipt.originAuthority === 'proven' &&
+        receipt.platform === platform &&
         receipt.sessionId !== null &&
         receipt.claimEpoch !== null &&
         receipt.sourceKey !== null &&
@@ -220,8 +224,26 @@ export function cacheSnapshot(platform, nodes) {
         nodes,
         capturedAt: new Date().toISOString(),
         capturedAtMs: Date.now(),
+        captureSequence: ++snapshotCaptureSequence,
     });
     dirtySnapshotPlatforms.delete(platform);
+}
+/** Returns the snapshot-cache boundary used by the outer authority gate. */
+export function getSnapshotCaptureCheckpoint() {
+    return snapshotCaptureSequence;
+}
+/** Promotes only snapshots captured after the current operation's checkpoint. */
+export function promoteSnapshotOriginSince(checkpoint) {
+    for (const snapshot of snapshotCache.values()) {
+        if (snapshot.captureSequence <= checkpoint ||
+            snapshot.authorityReceipt.originAuthority === 'proven') {
+            continue;
+        }
+        snapshot.authorityReceipt.originAuthority = 'proven';
+        if (snapshot.authorityReceipt.sessionId !== null) {
+            snapshotAuthorityProvider?.record(snapshot.authorityReceipt);
+        }
+    }
 }
 export function getCachedSnapshot(platform) {
     const snapshot = snapshotCache.get(platform);

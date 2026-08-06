@@ -10805,7 +10805,7 @@ function add(names, profile) {
     profiles.set(name, profile);
   }
 }
-var groupFacets, facetOrder, session, osScoped, throughRuntime, allGroups, diagnostic, transition, sourceState, nativeRead, nativeMutation, hybridMutation, optionalHybridMutation, nativeDiagnostic, cdpRead, cdpMutation, observe, proof, profiles;
+var groupFacets, facetOrder, session, osScoped, nativeControl, throughRuntime, allGroups, diagnostic, transition, sourceState, nativeRead, nativeVerdict, nativeMutation, managedNativeMutation, hybridMutation, optionalHybridMutation, nativeDiagnostic, cdpRead, cdpMutation, observe, proof, profiles;
 var init_tool_profiles = __esm({
   "packages/rn-dev-agent-core/dist/session/tool-profiles.js"() {
     "use strict";
@@ -10818,6 +10818,7 @@ var init_tool_profiles = __esm({
     facetOrder = ["C", "S", "I", "M", "A", "B", "D", "R", "P"];
     session = ["session"];
     osScoped = ["session", "target"];
+    nativeControl = ["session", "target", "automation"];
     throughRuntime = ["session", "target", "runtime"];
     allGroups = ["session", "target", "runtime", "automation"];
     diagnostic = ["cdp_status", "cdp_targets", "device_list"];
@@ -10831,15 +10832,9 @@ var init_tool_profiles = __esm({
       "cdp_record_test_save_as_action",
       "maestro_generate"
     ];
-    nativeRead = [
-      "cross_platform_verify",
-      "device_find",
-      "device_screenshot",
-      "device_snapshot"
-    ];
+    nativeRead = ["device_find", "device_screenshot", "device_snapshot"];
+    nativeVerdict = ["cross_platform_verify"];
     nativeMutation = [
-      "cdp_lock_e2e_test",
-      "cdp_repair_action",
       "device_accept_system_dialog",
       "device_back",
       "device_batch",
@@ -10857,7 +10852,11 @@ var init_tool_profiles = __esm({
       "device_reset_state",
       "device_scroll",
       "device_scrollintoview",
-      "device_swipe",
+      "device_swipe"
+    ];
+    managedNativeMutation = [
+      "cdp_lock_e2e_test",
+      "cdp_repair_action",
       "maestro_run",
       "maestro_test_all"
     ];
@@ -10928,15 +10927,33 @@ var init_tool_profiles = __esm({
     });
     add(nativeRead, {
       kind: "authoritative",
+      groups: nativeControl,
+      axes: facetsOf(nativeControl),
+      nativeOrigin: "optional",
+      mutation: false,
+      liveBundleProbe: false
+    });
+    add(nativeVerdict, {
+      kind: "authoritative",
       groups: allGroups,
       axes: facetsOf(allGroups, { without: ["B"] }),
+      nativeOrigin: "required",
       mutation: false,
       liveBundleProbe: false
     });
     add(nativeMutation, {
       kind: "authoritative",
+      groups: nativeControl,
+      axes: facetsOf(nativeControl),
+      nativeOrigin: "optional",
+      mutation: true,
+      liveBundleProbe: false
+    });
+    add(managedNativeMutation, {
+      kind: "authoritative",
       groups: allGroups,
       axes: facetsOf(allGroups, { without: ["B"] }),
+      nativeOrigin: "required",
       mutation: true,
       liveBundleProbe: false
     });
@@ -10988,7 +11005,8 @@ var init_tool_profiles = __esm({
     add(proof, {
       kind: "authoritative",
       groups: allGroups,
-      axes: facetsOf(allGroups, { without: ["A"], overlay: ["P"] }),
+      axes: facetsOf(allGroups, { overlay: ["P"] }),
+      nativeOrigin: "required",
       mutation: true,
       liveBundleProbe: true
     });

@@ -8,6 +8,8 @@ import { readFileSync } from 'node:fs';
 import { createCrossPlatformVerifyHandler } from '../../dist/tools/cross-platform-verify.js';
 import {
   cacheSnapshot,
+  getSnapshotCaptureCheckpoint,
+  promoteSnapshotOriginSince,
   setSnapshotAuthorityProvider,
   validateCachedSnapshotEvidenceAuthority,
 } from '../../dist/agent-device-wrapper.js';
@@ -107,9 +109,11 @@ test('cross_platform_verify rejects stale iOS origin after rebinding to Android'
   });
 
   try {
+    const checkpoint = getSnapshotCaptureCheckpoint();
     cacheSnapshot('ios', [{ ref: '@1', identifier: 'shared' }]);
     currentPlatform = 'android';
     cacheSnapshot('android', [{ ref: '@1', identifier: 'shared' }]);
+    promoteSnapshotOriginSince(checkpoint);
     const handler = createCrossPlatformVerifyHandler({
       validateAuthority: validateCachedSnapshotEvidenceAuthority,
     });
