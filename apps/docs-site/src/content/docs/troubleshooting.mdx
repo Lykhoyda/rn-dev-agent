@@ -181,6 +181,7 @@ Codes returned by `cdp_*`/`device_*`/flow tools, what they mean, and the fix.
 | Codes | Meaning and repair |
 |---|---|
 | `SESSION_NOT_INITIALIZED`, `SESSION_AUTHORITY_REQUIRED`, `SESSION_OWNER_LOST` | The supervised worker has no current fenced owner. Inspect `rn_session(action="status")`; create or rebind the intended session instead of selecting ambient state. |
+| `SESSION_CLI_TIMEOUT` | The generated build adapter's bounded `prepare-build`, `ensure-metro`, or `complete-build` session-CLI call did not return within 120 seconds. Inspect `rn_session(action="status")`; retry only after the named authority step is healthy. The build fails instead of treating truncated output as success. |
 | `SESSION_INITIALIZATION_ROLLBACK_FAILED` | Session startup failed and could not prove that every partial claim was released. Do not retry against the same resources until `rn_session(action="status")` shows their ownership clearly. |
 | `SESSION_INTEGRATION_PATH_UNSAFE` | `.rn-agent`, its integration directory, or a retained path ancestor was symlinked, replaced, or changed during a fenced operation. Restore the intended real directory tree, inspect any preserved recovery journal, and retry. |
 | `AUTHORITY_STORE_UNAVAILABLE`, `AUTHORITY_STORE_BUSY`, `PROCESS_BIRTH_UNAVAILABLE` | The SQLite registry or conservative process identity is unavailable. Retry after the named substrate is healthy; there is no JSON, PID-only, or warning-only fallback. |

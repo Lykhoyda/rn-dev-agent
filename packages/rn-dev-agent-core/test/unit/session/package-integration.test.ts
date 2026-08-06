@@ -4614,9 +4614,7 @@ test('orphaned package integration refuses instead of starting an unmanaged bund
     );
     chmodSync(join(binRoot, 'npx'), 0o755);
 
-    // A regression re-spawns the original script and blocks the adapter in spawnSync, where
-    // its own SIGTERM handler can never run. File-backed stdio plus SIGKILL keep that a
-    // failed assertion rather than a hung test run.
+    // File-backed stdio plus SIGKILL turns a leaked spawnSync child into a failed assertion.
     const logPath = join(root, 'adapter.log');
     const logFd = openSync(logPath, 'a');
     let result;
