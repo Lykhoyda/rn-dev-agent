@@ -44,6 +44,31 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
+// packages/rn-dev-agent-core/dist/session/declared-source-contract.js
+function parseDeclaredManifests(value) {
+  if (value === void 0)
+    return void 0;
+  return value.split(",").map((entry) => entry.trim()).filter(Boolean);
+}
+function missingDeclaredRootMessage() {
+  return `NON_GIT_MANIFEST_REQUIRED: ${DECLARED_ROOT_ENV} is not set. ${NON_GIT_DECLARATION_NEXT_ACTION}`;
+}
+function missingDeclaredManifestListMessage() {
+  return `NON_GIT_MANIFEST_REQUIRED: ${DECLARED_MANIFESTS_ENV} is not set. ${NON_GIT_DECLARATION_NEXT_ACTION}`;
+}
+function missingDeclaredManifestMessage(entry) {
+  return `NON_GIT_MANIFEST_REQUIRED: declared manifest "${entry}" does not exist. ${NON_GIT_DECLARATION_NEXT_ACTION}`;
+}
+var DECLARED_ROOT_ENV, DECLARED_MANIFESTS_ENV, NON_GIT_DECLARATION_NEXT_ACTION;
+var init_declared_source_contract = __esm({
+  "packages/rn-dev-agent-core/dist/session/declared-source-contract.js"() {
+    "use strict";
+    DECLARED_ROOT_ENV = "RN_DEV_AGENT_DECLARED_ROOT";
+    DECLARED_MANIFESTS_ENV = "RN_DEV_AGENT_DECLARED_MANIFESTS";
+    NON_GIT_DECLARATION_NEXT_ACTION = `Declare the non-Git source explicitly: set ${DECLARED_ROOT_ENV} to the exact existing application root, and set ${DECLARED_MANIFESTS_ENV} to a comma-separated list of required existing manifest files inside that root, then restart the supervisor. Neither value is inferred from the working directory or generated.`;
+  }
+});
+
 // node_modules/yaml/dist/nodes/identity.js
 var require_identity = __commonJS({
   "node_modules/yaml/dist/nodes/identity.js"(exports) {
@@ -8015,26 +8040,6 @@ var init_authority_store = __esm({
   }
 });
 
-// packages/rn-dev-agent-core/dist/session/declared-source-contract.js
-function missingDeclaredRootMessage() {
-  return `NON_GIT_MANIFEST_REQUIRED: ${DECLARED_ROOT_ENV} is not set. ${NON_GIT_DECLARATION_NEXT_ACTION}`;
-}
-function missingDeclaredManifestListMessage() {
-  return `NON_GIT_MANIFEST_REQUIRED: ${DECLARED_MANIFESTS_ENV} is not set. ${NON_GIT_DECLARATION_NEXT_ACTION}`;
-}
-function missingDeclaredManifestMessage(entry) {
-  return `NON_GIT_MANIFEST_REQUIRED: declared manifest "${entry}" does not exist. ${NON_GIT_DECLARATION_NEXT_ACTION}`;
-}
-var DECLARED_ROOT_ENV, DECLARED_MANIFESTS_ENV, NON_GIT_DECLARATION_NEXT_ACTION;
-var init_declared_source_contract = __esm({
-  "packages/rn-dev-agent-core/dist/session/declared-source-contract.js"() {
-    "use strict";
-    DECLARED_ROOT_ENV = "RN_DEV_AGENT_DECLARED_ROOT";
-    DECLARED_MANIFESTS_ENV = "RN_DEV_AGENT_DECLARED_MANIFESTS";
-    NON_GIT_DECLARATION_NEXT_ACTION = `Declare the non-Git source explicitly: set ${DECLARED_ROOT_ENV} to the exact existing application root, and set ${DECLARED_MANIFESTS_ENV} to a comma-separated list of required existing manifest files inside that root, then restart the supervisor. Neither value is inferred from the working directory or generated.`;
-  }
-});
-
 // packages/rn-dev-agent-core/dist/session/registry.js
 import { createHash as createHash5, randomBytes, timingSafeEqual as timingSafeEqual4 } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -12110,6 +12115,9 @@ function resolveExpoAndroidDevice(exactDeviceId, dependencies = defaultDependenc
   }
   return selected;
 }
+
+// packages/rn-dev-agent-core/dist/rn-session.js
+init_declared_source_contract();
 
 // packages/rn-dev-agent-core/dist/session/metro-authority.js
 import { createHmac as createHmac2, createSecretKey, timingSafeEqual as timingSafeEqual2 } from "node:crypto";
@@ -17234,7 +17242,7 @@ function resolveStatus() {
   const explicit = process.env.RN_DEV_AGENT_SESSION_ID;
   const source = resolveSourceIdentity(process.cwd(), {
     declaredRoot: process.env.RN_DEV_AGENT_DECLARED_ROOT,
-    declaredManifests: process.env.RN_DEV_AGENT_DECLARED_MANIFESTS?.split(",").filter(Boolean)
+    declaredManifests: parseDeclaredManifests(process.env.RN_DEV_AGENT_DECLARED_MANIFESTS)
   });
   const candidates = explicit ? [registry.getSessionStatus(explicit)].filter((status2) => status2 !== null) : registry.findSessionsByWorktree(source.worktreeKey).filter((status2) => status2.appRootKey === source.appRootKey);
   if (candidates.length !== 1) {

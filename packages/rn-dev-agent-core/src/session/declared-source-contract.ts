@@ -1,6 +1,14 @@
 export const DECLARED_ROOT_ENV = 'RN_DEV_AGENT_DECLARED_ROOT';
 export const DECLARED_MANIFESTS_ENV = 'RN_DEV_AGENT_DECLARED_MANIFESTS';
 
+export function parseDeclaredManifests(value: string | undefined): string[] | undefined {
+  if (value === undefined) return undefined;
+  return value
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
 // Path-free on purpose: this text crosses the MCP boundary and public-diagnostic
 // redaction, so it must stay actionable after sanitization.
 export const NON_GIT_DECLARATION_NEXT_ACTION =

@@ -18,6 +18,12 @@ This skill checks every prerequisite and installs missing dependencies.
 
 ## Checklist — run each check in order
 
+Resolve `APP_ROOT` to the exact existing target React Native app directory before
+starting the checklist. Use the app selected by the user or the uniquely matching
+app from the available project evidence; in a monorepo, use the nested app
+directory rather than the repository root. If multiple candidates remain, ask
+which app is authoritative. Never run check 0 with `APP_ROOT` unset or empty.
+
 ### 0. Source declaration (non-Git app roots only)
 
 The session binds one source identity before any setup or build step runs. A Git

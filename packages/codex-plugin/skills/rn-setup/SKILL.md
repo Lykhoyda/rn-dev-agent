@@ -46,11 +46,18 @@ path.
 
 ## Passive environment checklist
 
+Resolve `APP_ROOT` to the exact existing target React Native app directory before
+starting the checklist. Use the app selected by the user or the uniquely matching
+app from the available project evidence; in a monorepo, use the nested app
+directory rather than the repository root. If multiple candidates remain, ask
+which app is authoritative. Never run the source-declaration probe with
+`APP_ROOT` unset or empty.
+
 Read/report without mutation:
 
 | Check | Passive evidence | Guidance only |
 |---|---|---|
-| Source declaration | `git -C <app-root> rev-parse --show-toplevel`; for a non-Git app root, `RN_DEV_AGENT_DECLARED_ROOT` and `RN_DEV_AGENT_DECLARED_MANIFESTS` in the supervisor environment | Report which half is missing and print the exact exports plus a supervisor restart; never pick a root, invent a manifest list, create a missing manifest, or treat the working directory as an implicit root |
+| Source declaration | `git -C "$APP_ROOT" rev-parse --show-toplevel`; for a non-Git app root, `RN_DEV_AGENT_DECLARED_ROOT` and `RN_DEV_AGENT_DECLARED_MANIFESTS` in the supervisor environment | Report which half is missing and print the exact exports plus a supervisor restart; never pick a root, invent a manifest list, create a missing manifest, or treat the working directory as an implicit root |
 | Node | `node --version` | Node 22.18+ LTS command if missing/old |
 | Core package | selected package runtime files | marketplace refresh/materialization |
 | iOS runner | packaged Xcode project/artifact presence | one-time build command |

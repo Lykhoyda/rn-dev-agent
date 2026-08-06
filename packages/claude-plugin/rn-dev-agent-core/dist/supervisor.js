@@ -658,6 +658,31 @@ var init_supervisor_core = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/session/declared-source-contract.js
+function parseDeclaredManifests(value) {
+  if (value === void 0)
+    return void 0;
+  return value.split(",").map((entry) => entry.trim()).filter(Boolean);
+}
+function missingDeclaredRootMessage() {
+  return `NON_GIT_MANIFEST_REQUIRED: ${DECLARED_ROOT_ENV} is not set. ${NON_GIT_DECLARATION_NEXT_ACTION}`;
+}
+function missingDeclaredManifestListMessage() {
+  return `NON_GIT_MANIFEST_REQUIRED: ${DECLARED_MANIFESTS_ENV} is not set. ${NON_GIT_DECLARATION_NEXT_ACTION}`;
+}
+function missingDeclaredManifestMessage(entry) {
+  return `NON_GIT_MANIFEST_REQUIRED: declared manifest "${entry}" does not exist. ${NON_GIT_DECLARATION_NEXT_ACTION}`;
+}
+var DECLARED_ROOT_ENV, DECLARED_MANIFESTS_ENV, NON_GIT_DECLARATION_NEXT_ACTION;
+var init_declared_source_contract = __esm({
+  "packages/rn-dev-agent-core/dist/session/declared-source-contract.js"() {
+    "use strict";
+    DECLARED_ROOT_ENV = "RN_DEV_AGENT_DECLARED_ROOT";
+    DECLARED_MANIFESTS_ENV = "RN_DEV_AGENT_DECLARED_MANIFESTS";
+    NON_GIT_DECLARATION_NEXT_ACTION = `Declare the non-Git source explicitly: set ${DECLARED_ROOT_ENV} to the exact existing application root, and set ${DECLARED_MANIFESTS_ENV} to a comma-separated list of required existing manifest files inside that root, then restart the supervisor. Neither value is inferred from the working directory or generated.`;
+  }
+});
+
 // packages/rn-dev-agent-core/dist/util/trusted-system-executable.js
 import { existsSync as existsSync3 } from "node:fs";
 import { win32 } from "node:path";
@@ -8969,26 +8994,6 @@ var init_authority_json = __esm({
     intrinsicWeakSetAdd = WeakSet.prototype.add;
     intrinsicWeakSetDelete = WeakSet.prototype.delete;
     intrinsicWeakSetHas = WeakSet.prototype.has;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/session/declared-source-contract.js
-function missingDeclaredRootMessage() {
-  return `NON_GIT_MANIFEST_REQUIRED: ${DECLARED_ROOT_ENV} is not set. ${NON_GIT_DECLARATION_NEXT_ACTION}`;
-}
-function missingDeclaredManifestListMessage() {
-  return `NON_GIT_MANIFEST_REQUIRED: ${DECLARED_MANIFESTS_ENV} is not set. ${NON_GIT_DECLARATION_NEXT_ACTION}`;
-}
-function missingDeclaredManifestMessage(entry) {
-  return `NON_GIT_MANIFEST_REQUIRED: declared manifest "${entry}" does not exist. ${NON_GIT_DECLARATION_NEXT_ACTION}`;
-}
-var DECLARED_ROOT_ENV, DECLARED_MANIFESTS_ENV, NON_GIT_DECLARATION_NEXT_ACTION;
-var init_declared_source_contract = __esm({
-  "packages/rn-dev-agent-core/dist/session/declared-source-contract.js"() {
-    "use strict";
-    DECLARED_ROOT_ENV = "RN_DEV_AGENT_DECLARED_ROOT";
-    DECLARED_MANIFESTS_ENV = "RN_DEV_AGENT_DECLARED_MANIFESTS";
-    NON_GIT_DECLARATION_NEXT_ACTION = `Declare the non-Git source explicitly: set ${DECLARED_ROOT_ENV} to the exact existing application root, and set ${DECLARED_MANIFESTS_ENV} to a comma-separated list of required existing manifest files inside that root, then restart the supervisor. Neither value is inferred from the working directory or generated.`;
   }
 });
 
@@ -86147,6 +86152,7 @@ var LineSplitter = class {
 // packages/rn-dev-agent-core/dist/supervisor.js
 init_supervisor_core();
 init_logger();
+init_declared_source_contract();
 init_process_owner();
 init_process_birth();
 init_source_identity();
@@ -86671,10 +86677,9 @@ if (process.env.RN_BRIDGE_SUPERVISOR === "0") {
   try {
     if (diagnosticContractProbe2)
       throw new Error("DIAGNOSTIC_MODE_READ_ONLY");
-    const declaredManifests = process.env.RN_DEV_AGENT_DECLARED_MANIFESTS?.split(",").map((entry) => entry.trim()).filter(Boolean);
     const source = resolveSourceIdentity(process.cwd(), {
       declaredRoot: process.env.RN_DEV_AGENT_DECLARED_ROOT,
-      declaredManifests
+      declaredManifests: parseDeclaredManifests(process.env.RN_DEV_AGENT_DECLARED_MANIFESTS)
     });
     try {
       const cleanup = await runStartupCleanupForSource({

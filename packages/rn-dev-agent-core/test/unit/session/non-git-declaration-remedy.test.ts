@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, test } from 'node:test';
+import { parseDeclaredManifests } from '../../../dist/session/declared-source-contract.js';
 import { resolveSourceIdentity } from '../../../dist/session/source-identity.js';
 import {
   authorityErrorMeta,
@@ -28,6 +29,14 @@ function nonGitRoot() {
 const notGit = () => {
   throw new Error('fatal: not a git repository');
 };
+
+test('declared manifest parsing trims entries consistently for every authority entry point', () => {
+  assert.equal(parseDeclaredManifests(undefined), undefined);
+  assert.deepEqual(parseDeclaredManifests(' package.json, app.json, , '), [
+    'package.json',
+    'app.json',
+  ]);
+});
 
 function refusal(dependencies) {
   const root = nonGitRoot();

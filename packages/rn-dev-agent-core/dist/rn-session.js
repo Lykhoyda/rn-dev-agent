@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { createBuildReceipt } from './session/build-receipt.js';
 import { captureInstalledArtifact } from './session/install-authority.js';
 import { resolveExpoAndroidDevice } from './session/expo-android-device.js';
+import { parseDeclaredManifests } from './session/declared-source-contract.js';
 import { buildSignedMetroMarker, createMetroAuthorityModule } from './session/metro-authority.js';
 import { captureMetroBinding } from './session/metro-binding.js';
 import { inspectManagedMetroLifecycle, refreshManagedMetroBuildGeneration, startManagedMetro, stopManagedMetro, verifyManagedMetroManagementProof, } from './session/managed-metro.js';
@@ -22,7 +23,7 @@ function resolveStatus() {
     const explicit = process.env.RN_DEV_AGENT_SESSION_ID;
     const source = resolveSourceIdentity(process.cwd(), {
         declaredRoot: process.env.RN_DEV_AGENT_DECLARED_ROOT,
-        declaredManifests: process.env.RN_DEV_AGENT_DECLARED_MANIFESTS?.split(',').filter(Boolean),
+        declaredManifests: parseDeclaredManifests(process.env.RN_DEV_AGENT_DECLARED_MANIFESTS),
     });
     const candidates = explicit
         ? [registry.getSessionStatus(explicit)].filter((status) => status !== null)
