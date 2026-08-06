@@ -84,6 +84,11 @@ function stopCode(body: Record<string, unknown> | null): string | null {
   return stop?.code ?? null;
 }
 
+function stopAction(body: Record<string, unknown> | null): string | null {
+  const stop = body?.stop as { action?: string } | null | undefined;
+  return stop?.action ?? null;
+}
+
 function facts(body: Record<string, unknown> | null): Record<string, unknown> {
   return (body?.facts ?? {}) as Record<string, unknown>;
 }
@@ -170,7 +175,7 @@ test('preflight rejects malformed package.json before lockfile inference', () =>
   assert.equal(stopCode(body), 'PROJECT_MANIFEST_INVALID');
   assert.equal(facts(body).packageManager, null);
   assert.equal(facts(body).packageManagerSource, null);
-  assert.match((body?.stop as { action: string }).action, /this app root \(\.\)/);
+  assert.match(stopAction(body) ?? '', /this app root \(\.\)/);
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -184,7 +189,7 @@ test('preflight rejects an unsupported packageManager before lockfile inference'
   assert.equal(stopCode(body), 'PACKAGE_MANAGER_UNSUPPORTED');
   assert.equal(facts(body).packageManager, null);
   assert.equal(facts(body).packageManagerSource, null);
-  assert.match((body?.stop as { action: string }).action, /this app root \(\.\)/);
+  assert.match(stopAction(body) ?? '', /this app root \(\.\)/);
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -193,7 +198,7 @@ test('preflight stops when neither packageManager field nor lockfile exists', ()
   const { result, body } = run(['preflight', '--project', root]);
   assert.equal(result.status, 3);
   assert.equal(stopCode(body), 'PACKAGE_MANAGER_UNDECLARED');
-  assert.match((body?.stop as { action: string }).action, /this app root \(\.\)/);
+  assert.match(stopAction(body) ?? '', /this app root \(\.\)/);
   rmSync(root, { recursive: true, force: true });
 });
 
