@@ -134,6 +134,7 @@ interface SessionRow {
   worker_instance: string | null;
   worker_pid: number | null;
   worker_birth: string | null;
+  heartbeat_ms: number;
   lease_until_ms: number;
   source_json: string;
   bindings_json: string;
@@ -219,7 +220,17 @@ export type RecoveryRequirement = 'none' | 'adoption' | 'attach' | 'transport-re
 export interface RecoveryRequirementInspection {
   requirement: RecoveryRequirement;
   priorOwner: 'stale' | 'live' | 'unknown' | 'absent';
+  /** L4 (issue 654): bounded holder heartbeat age, surfaced only for grouped-v1 contenders. */
+  priorOwnerHeartbeatAgeMs?: number;
   nextAction: string;
+}
+
+export type StartupCleanupResource = 'recorder' | 'runner' | 'observe' | 'metro';
+
+export interface StartupOwnerCleanupPlan {
+  resumed: boolean;
+  obligations: Partial<Record<StartupCleanupResource, Record<string, unknown>>>;
+  integration: Record<string, unknown> | null;
 }
 
 export interface StaleResourceReleaseOffer {
@@ -902,6 +913,10 @@ export class SessionRegistry {
           );
         }
       }
+      // L4: grouped-v1 sessions never mint adoption or handoff-recipient handles —
+      // a proven-dead same-root owner is released by startup cleanup instead.
+      const grouped =
+        (JSON.parse(row.source_json) as Record<string, unknown>).model === 'grouped-v1';
       const expiresMs = now + RECOVERY_HANDLE_TTL_MS;
       const priorHandles = bindings.recoveryHandles as
         | { adoptStale?: Record<string, unknown> }
@@ -963,7 +978,7 @@ export class SessionRegistry {
           worker.instanceId,
           worker.pid,
           worker.token,
-          JSON.stringify({ ...bindings, recoveryHandles }),
+          grouped ? JSON.stringify(bindings) : JSON.stringify({ ...bindings, recoveryHandles }),
           now,
           session.sessionId,
           session.claimEpoch,
@@ -1060,7 +1075,10 @@ export class SessionRegistry {
   inspectRecoveryRequirement(sessionId: string): RecoveryRequirementInspection {
     const row = asSession(
       this.#database
-        .prepare(`SELECT state, bindings_json FROM sessions WHERE session_id = ?`)
+        .prepare(
+          `SELECT source_key, worktree_key, app_root_key, state, source_json, bindings_json
+           FROM sessions WHERE session_id = ?`,
+        )
         .get(sessionId),
     );
     if (!row || (row.state !== 'blocked' && row.state !== 'handoff_cleanup')) {
@@ -1074,6 +1092,7 @@ export class SessionRegistry {
           'Resume the transferred cleanup with rn_session({ action: "adopt_stale", adoptionHandle }).',
       };
     }
+    const grouped = (JSON.parse(row.source_json) as Record<string, unknown>).model === 'grouped-v1';
     const bindings = JSON.parse(row.bindings_json) as Record<string, unknown>;
     const adoptionRequired = bindings.adoptionRequired as
       | { sessionId?: unknown; claimEpoch?: unknown }
@@ -1085,7 +1104,8 @@ export class SessionRegistry {
       ? asSession(
           this.#database
             .prepare(
-              `SELECT session_id, claim_epoch, supervisor_pid, supervisor_birth
+              `SELECT session_id, source_key, worktree_key, app_root_key, claim_epoch,
+                      supervisor_pid, supervisor_birth, heartbeat_ms
                FROM sessions WHERE session_id = ?`,
             )
             .get(priorSessionId),
@@ -1110,6 +1130,32 @@ export class SessionRegistry {
       status = 'unknown';
     }
     if (status === 'mismatch') {
+      if (grouped) {
+        const isSameAppRoot =
+          prior.worktree_key === row.worktree_key && prior.app_root_key === row.app_root_key;
+        if (!isSameAppRoot) {
+          return {
+            requirement: 'attach',
+            priorOwner: 'stale',
+            nextAction:
+              "The proven-dead owner belongs to a different app root in this worktree, so startup cleanup cannot release it here. Start and close rn-dev-agent from the prior owner's app root to release its authority, or use a separate worktree.",
+          };
+        }
+        if (prior.source_key !== row.source_key) {
+          return {
+            requirement: 'attach',
+            priorOwner: 'stale',
+            nextAction:
+              'The proven-dead owner has a different source identity for this app root, so startup cleanup cannot release it under the current declared manifests. Restore the declared manifests that produced the prior identity, start and close rn-dev-agent to release its authority, then reapply the manifest changes; otherwise use a separate worktree.',
+          };
+        }
+        return {
+          requirement: 'transport-restart',
+          priorOwner: 'stale',
+          nextAction:
+            'The prior owner is proven dead. Restart the MCP transport (/mcp); startup cleanup releases it automatically.',
+        };
+      }
       return {
         requirement: 'adoption',
         priorOwner: 'stale',
@@ -1117,9 +1163,14 @@ export class SessionRegistry {
           'The prior owner is proven dead. Adopt it with rn_session({ action: "adopt_stale", adoptionHandle }).',
       };
     }
+    const heartbeatAgeMs = Math.min(
+      Math.max(0, this.#now() - (typeof prior.heartbeat_ms === 'number' ? prior.heartbeat_ms : 0)),
+      24 * 3_600_000,
+    );
     return {
       requirement: 'attach',
       priorOwner: status === 'match' ? 'live' : 'unknown',
+      ...(grouped ? { priorOwnerHeartbeatAgeMs: heartbeatAgeMs } : {}),
       nextAction:
         status === 'match'
           ? 'Another live rn-dev-agent supervisor owns this worktree. Close it or work in a separate worktree; a live owner is never adopted.'
@@ -1525,6 +1576,410 @@ export class SessionRegistry {
           row.claim_epoch,
         );
     });
+  }
+
+  /**
+   * L4: verified-dead startup cleanup. The durable journal lives on the DEAD session's
+   * row and is written before any side effect; claims release only in finish, after
+   * every obligation is durably complete. Death is positively re-proven by every method.
+   */
+  findStartupCleanupCandidate(input: {
+    sourceKey: string;
+    worktreeKey: string;
+    appRootKey: string;
+  }): SessionRef | null {
+    const claim = this.#findClaim('source', input.worktreeKey);
+    if (!claim) return null;
+    const row = asSession(
+      this.#database
+        .prepare(
+          `SELECT session_id, source_key, worktree_key, app_root_key, claim_epoch
+           FROM sessions WHERE session_id = ?`,
+        )
+        .get(claim.session_id),
+    );
+    if (
+      !row ||
+      row.claim_epoch !== claim.claim_epoch ||
+      row.source_key !== input.sourceKey ||
+      row.worktree_key !== input.worktreeKey ||
+      row.app_root_key !== input.appRootKey
+    ) {
+      return null;
+    }
+    return { sessionId: claim.session_id, claimEpoch: claim.claim_epoch };
+  }
+
+  beginStartupOwnerCleanup(prior: SessionRef): StartupOwnerCleanupPlan {
+    const now = this.#now();
+    return this.#transaction(() => {
+      const row = this.#requireProvenDeadStartupOwner(prior);
+      const bindings = JSON.parse(row.bindings_json) as Record<string, unknown>;
+      const existing = bindings.startupCleanup as Record<string, unknown> | null | undefined;
+      if (existing && typeof existing === 'object' && typeof existing.finishedAt !== 'number') {
+        return {
+          resumed: true,
+          obligations: (existing.obligations ?? {}) as StartupOwnerCleanupPlan['obligations'],
+          integration: (existing.integration ?? null) as StartupOwnerCleanupPlan['integration'],
+        };
+      }
+      const record = (value: unknown): Record<string, unknown> | null =>
+        value && typeof value === 'object' ? { ...(value as Record<string, unknown>) } : null;
+      const obligation = (
+        source: Record<string, unknown> | null,
+        claimKey: string | null,
+      ): Record<string, unknown> | undefined =>
+        source
+          ? {
+              ...source,
+              claimKey: String(source.claimKey ?? claimKey ?? ''),
+              stopRequestedAt:
+                typeof source.stopRequestedAt === 'number' ? source.stopRequestedAt : now,
+              completedAt: typeof source.completedAt === 'number' ? source.completedAt : null,
+            }
+          : undefined;
+      const handoffCleanup = record(bindings.handoffCleanup);
+      const staleDevice = record(bindings.staleDeviceCleanup);
+      const recorderSource =
+        record(bindings.recorder) ??
+        record(staleDevice?.recorder) ??
+        record(handoffCleanup?.recorder);
+      const runnerSource =
+        record(bindings.runner) ?? record(staleDevice?.runner) ?? record(handoffCleanup?.runner);
+      const observeSource = record(bindings.observe) ?? record(handoffCleanup?.observe);
+      const liveMetro = record(bindings.metroCleanup) ?? record(bindings.metro);
+      const metroSource =
+        liveMetro && liveMetro.mode === 'managed' ? liveMetro : record(handoffCleanup?.metro);
+      const obligations: StartupOwnerCleanupPlan['obligations'] = {};
+      const recorderEntry = obligation(
+        recorderSource,
+        recorderSource
+          ? `${String(recorderSource.platform)}:${String(recorderSource.deviceId)}`
+          : null,
+      );
+      if (recorderEntry) obligations.recorder = recorderEntry;
+      const runnerEntry = obligation(
+        runnerSource,
+        runnerSource
+          ? `${String(runnerSource.platform)}:${String(runnerSource.deviceId)}:${String(
+              runnerSource.port,
+            )}`
+          : null,
+      );
+      if (runnerEntry) obligations.runner = runnerEntry;
+      const observeEntry = obligation(
+        observeSource,
+        observeSource ? String(observeSource.port) : null,
+      );
+      if (observeEntry) obligations.observe = observeEntry;
+      const metroEntry = obligation(metroSource, metroSource ? String(metroSource.port) : null);
+      if (metroEntry) obligations.metro = metroEntry;
+      const integrationBinding = record(bindings.packageIntegration);
+      const integration = integrationBinding
+        ? {
+            installedBySessionId: integrationBinding.installedBySessionId ?? null,
+            manifestSha256: integrationBinding.manifestSha256 ?? null,
+            requestedAt: now,
+            completedAt: null,
+          }
+        : null;
+      this.#database
+        .prepare(
+          `UPDATE sessions SET bindings_json = ?, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`,
+        )
+        .run(
+          JSON.stringify({
+            ...bindings,
+            startupCleanup: { journaledAt: now, obligations, integration },
+          }),
+          now,
+          row.session_id,
+          row.claim_epoch,
+        );
+      return { resumed: false, obligations, integration };
+    });
+  }
+
+  verifyStartupOwnerObligation(
+    prior: SessionRef,
+    resource: StartupCleanupResource,
+  ): Record<string, unknown> | null {
+    const row = this.#requireProvenDeadStartupOwner(prior);
+    const { journal } = this.#requireStartupCleanupJournal(row);
+    const entry = (journal.obligations as Record<string, unknown> | undefined)?.[resource];
+    if (!entry || typeof entry !== 'object') return null;
+    const binding = entry as Record<string, unknown>;
+    if (typeof binding.completedAt === 'number') return binding;
+    this.#assertStartupObligationScope(row, resource, binding);
+    return binding;
+  }
+
+  completeStartupOwnerObligation(prior: SessionRef, resource: StartupCleanupResource): void {
+    const now = this.#now();
+    this.#transaction(() => {
+      const row = this.#requireProvenDeadStartupOwner(prior);
+      const { bindings, journal } = this.#requireStartupCleanupJournal(row);
+      const obligations = (journal.obligations ?? {}) as Record<string, unknown>;
+      const entry = obligations[resource];
+      if (!entry || typeof entry !== 'object') return;
+      const binding = entry as Record<string, unknown>;
+      if (typeof binding.completedAt === 'number') return;
+      if (typeof binding.stopRequestedAt !== 'number') {
+        throw new SessionAuthorityError(
+          'SESSION_AUTHORITY_REQUIRED',
+          `${resource} cleanup was not durably requested`,
+        );
+      }
+      this.#assertStartupObligationScope(row, resource, binding);
+      this.#database
+        .prepare(
+          `UPDATE sessions SET bindings_json = ?, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`,
+        )
+        .run(
+          JSON.stringify({
+            ...bindings,
+            startupCleanup: {
+              ...journal,
+              obligations: { ...obligations, [resource]: { ...binding, completedAt: now } },
+            },
+          }),
+          now,
+          row.session_id,
+          row.claim_epoch,
+        );
+    });
+  }
+
+  completeStartupOwnerIntegrationRestore(
+    prior: SessionRef,
+    input: { manifestSha256: string },
+  ): void {
+    const now = this.#now();
+    this.#transaction(() => {
+      const row = this.#requireProvenDeadStartupOwner(prior);
+      const { bindings, journal } = this.#requireStartupCleanupJournal(row);
+      const integration = journal.integration as Record<string, unknown> | null | undefined;
+      if (!integration || typeof integration !== 'object') return;
+      if (typeof integration.completedAt === 'number') return;
+      const binding = bindings.packageIntegration as Record<string, unknown> | null | undefined;
+      if (
+        !binding ||
+        typeof binding !== 'object' ||
+        binding.manifestSha256 !== input.manifestSha256 ||
+        integration.manifestSha256 !== input.manifestSha256
+      ) {
+        throw new SessionAuthorityError(
+          'SESSION_AUTHORITY_REQUIRED',
+          'integration restoration requires the recorded manifest authority',
+        );
+      }
+      this.#database
+        .prepare(
+          `UPDATE sessions SET bindings_json = ?, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`,
+        )
+        .run(
+          JSON.stringify({
+            ...bindings,
+            packageIntegration: null,
+            startupCleanup: { ...journal, integration: { ...integration, completedAt: now } },
+          }),
+          now,
+          row.session_id,
+          row.claim_epoch,
+        );
+    });
+  }
+
+  verifyStartupOwnerIntegrationRestore(
+    prior: SessionRef,
+    input: {
+      sourceKey: string;
+      worktreeKey: string;
+      appRootKey: string;
+      manifestSha256: string;
+    },
+  ): void {
+    const row = this.#requireProvenDeadStartupOwner(prior);
+    this.#assertStartupSourceScope(row, input);
+    const { bindings, journal } = this.#requireStartupCleanupJournal(row);
+    const integration = journal.integration as Record<string, unknown> | null | undefined;
+    const binding = bindings.packageIntegration as Record<string, unknown> | null | undefined;
+    if (
+      !integration ||
+      typeof integration !== 'object' ||
+      typeof integration.completedAt === 'number' ||
+      !binding ||
+      typeof binding !== 'object' ||
+      binding.manifestSha256 !== input.manifestSha256 ||
+      integration.manifestSha256 !== input.manifestSha256
+    ) {
+      throw new SessionAuthorityError(
+        'SESSION_AUTHORITY_REQUIRED',
+        'integration restoration requires the active startup journal and recorded manifest authority',
+      );
+    }
+  }
+
+  finishStartupOwnerCleanup(prior: SessionRef): void {
+    const now = this.#now();
+    this.#transaction(() => {
+      const row = this.#requireProvenDeadStartupOwner(prior);
+      const { bindings, journal } = this.#requireStartupCleanupJournal(row);
+      const obligations = (journal.obligations ?? {}) as Record<string, unknown>;
+      for (const resource of ['recorder', 'runner', 'observe'] as const) {
+        const entry = obligations[resource];
+        if (
+          entry &&
+          typeof entry === 'object' &&
+          typeof (entry as Record<string, unknown>).completedAt !== 'number'
+        ) {
+          throw new SessionAuthorityError(
+            'AUTOMATION_CLEANUP_UNPROVEN',
+            `${resource} cleanup has not been durably completed`,
+          );
+        }
+      }
+      const metro = obligations.metro;
+      if (
+        metro &&
+        typeof metro === 'object' &&
+        typeof (metro as Record<string, unknown>).completedAt !== 'number'
+      ) {
+        throw new SessionAuthorityError(
+          'METRO_CLEANUP_PENDING',
+          'managed Metro cleanup has not been durably completed',
+        );
+      }
+      this.#requireIntegrationRestored(bindings);
+      this.#database
+        .prepare('DELETE FROM claims WHERE session_id = ? AND claim_epoch = ?')
+        .run(row.session_id, row.claim_epoch);
+      this.#database
+        .prepare(
+          `UPDATE sessions
+           SET state = 'released', claim_epoch = claim_epoch + 1,
+               authority_version = authority_version + 1, bindings_json = ?, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`,
+        )
+        .run(
+          JSON.stringify({ ...bindings, startupCleanup: { ...journal, finishedAt: now } }),
+          now,
+          row.session_id,
+          row.claim_epoch,
+        );
+    });
+  }
+
+  #requireProvenDeadStartupOwner(prior: SessionRef): SessionRow {
+    const row = asSession(
+      this.#database
+        .prepare(
+          `SELECT session_id, source_key, worktree_key, app_root_key,
+                  claim_epoch, state, supervisor_pid, supervisor_birth,
+                  lease_until_ms, bindings_json
+           FROM sessions WHERE session_id = ?`,
+        )
+        .get(prior.sessionId),
+    );
+    if (!row || row.claim_epoch !== prior.claimEpoch) {
+      throw new SessionAuthorityError(
+        'SESSION_OWNER_LOST',
+        'the startup cleanup owner no longer matches the proven claim epoch',
+      );
+    }
+    let status: OwnerStatus = 'unknown';
+    try {
+      status = this.#ownerStatus({
+        sessionId: row.session_id,
+        pid: row.supervisor_pid,
+        token: row.supervisor_birth,
+      });
+    } catch {
+      status = 'unknown';
+    }
+    if (status === 'match') {
+      throw new SessionAuthorityError(
+        'RESOURCE_CLAIM_CONFLICT',
+        'the same-root owner is live; a live owner is never released',
+        { sessionId: row.session_id, claimEpoch: row.claim_epoch },
+      );
+    }
+    if (status !== 'mismatch') {
+      if (row.lease_until_ms < this.#now()) {
+        throw new SessionAuthorityError(
+          'STALE_LEASE_NOT_RECLAIMABLE',
+          'expired lease owner identity could not be proven',
+          { sessionId: row.session_id, claimEpoch: row.claim_epoch },
+        );
+      }
+      throw new SessionAuthorityError(
+        'RESOURCE_CLAIM_CONFLICT',
+        'the same-root owner identity could not be proven, so it is treated as live',
+        { sessionId: row.session_id, claimEpoch: row.claim_epoch },
+      );
+    }
+    return row;
+  }
+
+  #requireStartupCleanupJournal(row: SessionRow): {
+    bindings: Record<string, unknown>;
+    journal: Record<string, unknown>;
+  } {
+    const bindings = JSON.parse(row.bindings_json) as Record<string, unknown>;
+    const journal = bindings.startupCleanup;
+    if (!journal || typeof journal !== 'object') {
+      throw new SessionAuthorityError(
+        'SESSION_AUTHORITY_REQUIRED',
+        'no startup cleanup is in progress',
+      );
+    }
+    return { bindings, journal: journal as Record<string, unknown> };
+  }
+
+  #assertStartupSourceScope(
+    row: SessionRow,
+    input: { sourceKey: string; worktreeKey: string; appRootKey: string },
+  ): void {
+    if (
+      row.source_key !== input.sourceKey ||
+      row.worktree_key !== input.worktreeKey ||
+      row.app_root_key !== input.appRootKey
+    ) {
+      throw new SessionAuthorityError(
+        'SESSION_AUTHORITY_REQUIRED',
+        'startup cleanup no longer matches the exact source and app root',
+      );
+    }
+  }
+
+  #assertStartupObligationScope(
+    row: SessionRow,
+    resource: StartupCleanupResource,
+    entry: Record<string, unknown>,
+  ): void {
+    const claimType =
+      resource === 'observe' ? 'observe-port' : resource === 'metro' ? 'metro-port' : resource;
+    const claimKey = String(entry.claimKey ?? '');
+    const claim = this.#findClaim(claimType, claimKey);
+    if (
+      !claimKey ||
+      claim?.session_id !== row.session_id ||
+      claim.claim_epoch !== row.claim_epoch
+    ) {
+      const codes = {
+        recorder: 'RECORDING_AUTHORITY_MISMATCH',
+        runner: 'RUNNER_OWNERSHIP_MISMATCH',
+        observe: 'OBSERVE_AUTHORITY_MISMATCH',
+        metro: 'METRO_AUTHORITY_MISMATCH',
+      } as const;
+      throw new SessionAuthorityError(
+        codes[resource],
+        `startup ${resource} cleanup journal no longer owns its exact claim`,
+      );
+    }
   }
 
   #requireStaleReleaseOwner(

@@ -3714,6 +3714,10 @@ test(
 
 test('restoration resumes after package scripts were already restored', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-restore-resume-'));
+  const boundOperationDependencies = {
+    recoveryTimeoutMs: 15_000,
+    timeoutMs: 15_000,
+  };
   try {
     const packagePath = join(root, 'package.json');
     const metroPath = join(root, 'metro.config.js');
@@ -3721,16 +3725,19 @@ test('restoration resumes after package scripts were already restored', () => {
     writeFileSync(packagePath, `${JSON.stringify(packageJson)}\n`);
     writeFileSync(metroPath, metroBefore);
 
-    const preview = applyPackageIntegration({
-      appRoot: root,
-      sessionCli: join(root, 'rn-session.js'),
-    });
+    const preview = applyPackageIntegration(
+      {
+        appRoot: root,
+        sessionCli: join(root, 'rn-session.js'),
+      },
+      { boundOperationDependencies },
+    );
     writeFileSync(
       packagePath,
       `${JSON.stringify(restorePackageIntegration(preview.packageJson, preview.manifest), null, 2)}\n`,
     );
 
-    restorePackageIntegrationFiles({ appRoot: root });
+    restorePackageIntegrationFiles({ appRoot: root }, { boundOperationDependencies });
 
     assert.deepEqual(JSON.parse(readFileSync(packagePath, 'utf8')), packageJson);
     assert.equal(readFileSync(metroPath, 'utf8'), metroBefore);

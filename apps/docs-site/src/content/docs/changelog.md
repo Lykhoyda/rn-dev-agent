@@ -5,6 +5,24 @@ description: "Release history for rn-dev-agent"
 
 ## Claude plugin
 
+### 0.74.3
+
+#### Patch Changes
+
+- c070bf0: Give Android exact Dev Client pinning a bounded cold-start readiness window so a target that passes its initial CDP probe but stalls during setup can be disconnected and re-listed once it becomes responsive, while preserving exact Metro, app, and device filtering and the existing iOS timeout.
+- c070bf0: Keep the adb serial as Android authority while translating it to Expo's uniquely verified model or AVD display name only at the Expo CLI boundary, refusing missing, unauthorized, duplicate, foreign, or drifted mappings before Expo starts, pinning Expo's adb work with `ANDROID_SERIAL`, and preserving serial-bound build completion and abort behavior.
+- Updated dependencies [c070bf0]
+- Updated dependencies [c070bf0]
+  - rn-dev-agent-core@0.69.3
+
+### 0.74.2
+
+#### Patch Changes
+
+- e4bf0c2: Make runner unbind release its exclusive claim and clear the runner binding in one atomic registry transaction, so an interrupted device close or reacquire can no longer leave a divergent store whose dead session permanently vetoes `adopt_stale` with `RUNNER_OWNERSHIP_MISMATCH` (GH #692).
+- Updated dependencies [e4bf0c2]
+  - rn-dev-agent-core@0.69.2
+
 ### 0.74.1
 
 #### Patch Changes
@@ -1329,6 +1347,19 @@ identifier, hittable? }`, with a `fullNodeCount`. Far fewer tokens; `@ref`s for
   #188 shipped these to `main` with no version bump, leaving them undeliverable to marketplace installs; this patch publishes them.
 
 ## Core MCP server
+
+### 0.69.3
+
+#### Patch Changes
+
+- c070bf0: Give Android exact Dev Client pinning a bounded cold-start readiness window so a target that passes its initial CDP probe but stalls during setup can be disconnected and re-listed once it becomes responsive, while preserving exact Metro, app, and device filtering and the existing iOS timeout.
+- c070bf0: Keep the adb serial as Android authority while translating it to Expo's uniquely verified model or AVD display name only at the Expo CLI boundary, refusing missing, unauthorized, duplicate, foreign, or drifted mappings before Expo starts, pinning Expo's adb work with `ANDROID_SERIAL`, and preserving serial-bound build completion and abort behavior.
+
+### 0.69.2
+
+#### Patch Changes
+
+- e4bf0c2: Make runner unbind release its exclusive claim and clear the runner binding in one atomic registry transaction, so an interrupted device close or reacquire can no longer leave a divergent store whose dead session permanently vetoes `adopt_stale` with `RUNNER_OWNERSHIP_MISMATCH` (GH #692).
 
 ### 0.69.1
 

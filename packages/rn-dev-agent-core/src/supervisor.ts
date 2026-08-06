@@ -13,6 +13,10 @@ import { inspectSessionOwner } from './session/process-owner.js';
 import { readProcessBirth } from './session/process-birth.js';
 import { resolveSourceIdentity } from './session/source-identity.js';
 import {
+  runStartupCleanupForSource,
+  startupCleanupFailureMessage,
+} from './session/startup-cleanup.js';
+import {
   createSupervisorAuthority,
   type SupervisorAuthority,
 } from './session/supervisor-authority.js';
@@ -102,6 +106,24 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
       declaredRoot: process.env.RN_DEV_AGENT_DECLARED_ROOT,
       declaredManifests,
     });
+    // L4: release a proven-dead same-root predecessor before claiming. Any refusal
+    // (live/unproven owner, unproven obligation) falls through to the blocked path.
+    try {
+      const cleanup = await runStartupCleanupForSource({
+        source,
+        ownerStatus: inspectSessionOwner,
+      });
+      if (cleanup.released.length > 0) {
+        process.stderr.write(
+          `rn-dev-agent startup cleanup: released ${cleanup.released.length} proven-dead session(s) for this worktree\n`,
+        );
+      }
+      if (cleanup.status === 'refused' && cleanup.refusal) {
+        process.stderr.write(`rn-dev-agent startup cleanup deferred: ${cleanup.refusal.code}\n`);
+      }
+    } catch {
+      process.stderr.write(startupCleanupFailureMessage());
+    }
     authority = createSupervisorAuthority({
       source,
       supervisorBirth: readProcessBirth(process.pid),
