@@ -18,6 +18,7 @@ import {
 } from './session/startup-cleanup.js';
 import {
   createSupervisorAuthority,
+  resolveSupervisorAuthorityForSpawn,
   type SupervisorAuthority,
 } from './session/supervisor-authority.js';
 import {
@@ -97,6 +98,7 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
 
   let authority: SupervisorAuthority | null = null;
   let authorityError: string | null = null;
+  let mintAuthority: (() => SupervisorAuthority) | null = null;
   try {
     if (diagnosticContractProbe) throw new Error('DIAGNOSTIC_MODE_READ_ONLY');
     const declaredManifests = process.env.RN_DEV_AGENT_DECLARED_MANIFESTS?.split(',')
@@ -124,15 +126,17 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
     } catch {
       process.stderr.write(startupCleanupFailureMessage());
     }
-    authority = createSupervisorAuthority({
-      source,
-      supervisorBirth: readProcessBirth(process.pid),
-      uid:
-        typeof process.getuid === 'function'
-          ? String(process.getuid())
-          : (process.env.USER ?? 'unknown'),
-      ownerStatus: inspectSessionOwner,
-    });
+    mintAuthority = () =>
+      createSupervisorAuthority({
+        source,
+        supervisorBirth: readProcessBirth(process.pid),
+        uid:
+          typeof process.getuid === 'function'
+            ? String(process.getuid())
+            : (process.env.USER ?? 'unknown'),
+        ownerStatus: inspectSessionOwner,
+      });
+    authority = mintAuthority();
   } catch (error) {
     authorityError =
       error instanceof Error
@@ -162,7 +166,21 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
     }
   }
 
+  function resolveAuthorityForSpawn(): void {
+    if (!authority || !mintAuthority) return;
+    const resolution = resolveSupervisorAuthorityForSpawn(authority, mintAuthority);
+    if (!resolution.minted && resolution.error === null) return;
+    authority = resolution.authority;
+    authorityError = resolution.error;
+    process.stderr.write(
+      resolution.error === null
+        ? 'rn-bridge-supervisor: minted a fresh session for the released worktree\n'
+        : `rn-dev-agent authority diagnostic: ${resolution.error}\n`,
+    );
+  }
+
   function spawnWorker(): void {
+    resolveAuthorityForSpawn();
     const workerInstance = randomUUID();
     const child = spawn(
       process.execPath,

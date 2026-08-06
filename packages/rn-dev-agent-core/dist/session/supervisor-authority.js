@@ -12,6 +12,46 @@ const RELEASABLE_SESSION_STATES = new Set([
     'runtime_bound',
     'ready',
 ]);
+/**
+ * GH #706: a released (or fenced) session owns nothing and can never be transitioned
+ * again, so the supervisor must mint a successor instead of handing the terminal row
+ * to the next worker.
+ */
+export function supervisorSessionIsTerminal(authority) {
+    let state;
+    try {
+        state = authority.registry.getSessionStatus(authority.session.sessionId)?.state;
+    }
+    catch {
+        return false;
+    }
+    return state === undefined || state === 'released' || state === 'stale';
+}
+/**
+ * GH #706: resolve the session the next worker inherits. A terminal row is replaced by
+ * a freshly minted session — exactly what a cold supervisor start would have produced —
+ * so `release` stops being a one-way door.
+ */
+export function resolveSupervisorAuthorityForSpawn(current, mint) {
+    if (!current || !supervisorSessionIsTerminal(current)) {
+        return { authority: current, error: null, minted: false };
+    }
+    void current.close().catch(() => {
+        /* a terminal session owns nothing; cleanup refusals must not block the successor */
+    });
+    try {
+        return { authority: mint(), error: null, minted: true };
+    }
+    catch (error) {
+        return {
+            authority: null,
+            error: error instanceof Error
+                ? error.message
+                : 'AUTHORITY_STORE_UNAVAILABLE: authority session could not be initialized',
+            minted: false,
+        };
+    }
+}
 export function createSupervisorAuthority(input, dependencies = {}) {
     if (!input.supervisorBirth) {
         throw new Error('PROCESS_BIRTH_UNAVAILABLE: supervisor process birth could not be proven conservatively');

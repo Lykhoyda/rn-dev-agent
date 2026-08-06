@@ -9237,11 +9237,24 @@ var init_registry = __esm({
           }
         });
       }
+      // GH #706: released and proven-stale rows are not live sessions, so they never
+      // count towards the "multiple live sessions match this worktree" refusal.
       findSessionsByWorktree(worktreeKey) {
-        const rows = this.#database.prepare(`SELECT session_id FROM sessions
+        const rows = this.#database.prepare(`SELECT session_id, supervisor_pid, supervisor_birth FROM sessions
          WHERE worktree_key = ? AND state NOT IN ('released', 'stale')
          ORDER BY updated_ms DESC`).all(worktreeKey);
-        return rows.map((row) => this.getSessionStatus(String(row.session_id))).filter((status) => status !== null);
+        return rows.filter((row) => !this.#supervisorProvenDead(row)).map((row) => this.getSessionStatus(row.session_id)).filter((status) => status !== null);
+      }
+      #supervisorProvenDead(row) {
+        try {
+          return this.#ownerStatus({
+            sessionId: row.session_id,
+            pid: row.supervisor_pid,
+            token: row.supervisor_birth
+          }) === "mismatch";
+        } catch {
+          return false;
+        }
       }
       getControllerBinding(session2) {
         const row = this.#requireSession(session2);

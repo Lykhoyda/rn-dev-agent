@@ -21705,11 +21705,24 @@ var init_registry = __esm({
           }
         });
       }
+      // GH #706: released and proven-stale rows are not live sessions, so they never
+      // count towards the "multiple live sessions match this worktree" refusal.
       findSessionsByWorktree(worktreeKey) {
-        const rows = this.#database.prepare(`SELECT session_id FROM sessions
+        const rows = this.#database.prepare(`SELECT session_id, supervisor_pid, supervisor_birth FROM sessions
          WHERE worktree_key = ? AND state NOT IN ('released', 'stale')
          ORDER BY updated_ms DESC`).all(worktreeKey);
-        return rows.map((row) => this.getSessionStatus(String(row.session_id))).filter((status) => status !== null);
+        return rows.filter((row) => !this.#supervisorProvenDead(row)).map((row) => this.getSessionStatus(row.session_id)).filter((status) => status !== null);
+      }
+      #supervisorProvenDead(row) {
+        try {
+          return this.#ownerStatus({
+            sessionId: row.session_id,
+            pid: row.supervisor_pid,
+            token: row.supervisor_birth
+          }) === "mismatch";
+        } catch {
+          return false;
+        }
       }
       getControllerBinding(session2) {
         const row = this.#requireSession(session2);
@@ -68082,7 +68095,15 @@ function createSessionHandler(runtime, dependencies = {}) {
       registry2.releaseSession(session2);
       if (status.bindings.bundle)
         dependencies.onBundleInvalidated?.();
-      return okResult({ released: true, sessionId: session2.sessionId });
+      try {
+        dependencies.requestWorkerRecycle?.();
+      } catch {
+      }
+      return okResult({
+        released: true,
+        sessionId: session2.sessionId,
+        nextAction: "A fresh session is minted automatically; retry rn_session (bind_device, apply_integration) on this worktree."
+      });
     } catch (error2) {
       return authorityFailure2(error2);
     }
@@ -84537,7 +84558,7 @@ async function main() {
     });
   }
 }
-var pkgPath, pkgVersion, lockfile, diagnosticContractProbe, noLock, client, getClient, setClient, createClient, execFileP, mustOk, makeReplayDeps, server2, strictProofMonitor, authorityRuntime, localAuthorityProbe, authorityGate, blindProbeContext, mirrorCfg, mirrorManager2, liveEnabled, liveDeps, registeredToolNames, persistedAuthorityStatus, getSessionSignerCapability, sessionHandler, disconnectClientHandler, connectBoundSession, resolveNativeProofDevice, proofReadiness, proofCaptureHandler, e2ePreflight, e2eReload, e2eSuiteHandler, e2eCsrfToken, projectRootFor, triggerE2eRun, runActionHandler, observeRunActionHandler, observeTriggerRun, gatedObserveState, shutdown, stopParentWatch;
+var pkgPath, pkgVersion, lockfile, diagnosticContractProbe, noLock, client, getClient, setClient, createClient, execFileP, mustOk, makeReplayDeps, server2, strictProofMonitor, authorityRuntime, localAuthorityProbe, authorityGate, blindProbeContext, mirrorCfg, mirrorManager2, liveEnabled, liveDeps, registeredToolNames, persistedAuthorityStatus, getSessionSignerCapability, spawningSupervisorPid, requestWorkerRecycle, sessionHandler, disconnectClientHandler, connectBoundSession, resolveNativeProofDevice, proofReadiness, proofCaptureHandler, e2ePreflight, e2eReload, e2eSuiteHandler, e2eCsrfToken, projectRootFor, triggerE2eRun, runActionHandler, observeRunActionHandler, observeTriggerRun, gatedObserveState, shutdown, stopParentWatch;
 var init_index = __esm({
   "packages/rn-dev-agent-core/dist/index.js"() {
     "use strict";
@@ -85072,10 +85093,26 @@ var init_index = __esm({
       const secretPath = sessionId ? join56(dirname23(dirname23(currentSecretPath)), sessionId, "secret.json") : currentSecretPath;
       return readJsonStateFile(secretPath)?.signerCapability ?? null;
     };
+    spawningSupervisorPid = process.ppid;
+    requestWorkerRecycle = () => {
+      if (process.env.RN_BRIDGE_SUPERVISED !== "1")
+        return;
+      if (!Number.isInteger(spawningSupervisorPid) || spawningSupervisorPid <= 1)
+        return;
+      setTimeout(() => {
+        if (process.ppid !== spawningSupervisorPid)
+          return;
+        try {
+          process.kill(spawningSupervisorPid, "SIGUSR2");
+        } catch {
+        }
+      }, 250).unref();
+    };
     sessionHandler = createSessionHandler(authorityRuntime, {
       getSignerCapability: getSessionSignerCapability,
       pinDevClient: pinSessionDevClient,
-      onBundleInvalidated: () => getClient().clearAuthoritativeSessionPolicy()
+      onBundleInvalidated: () => getClient().clearAuthoritativeSessionPolicy(),
+      requestWorkerRecycle
     });
     disconnectClientHandler = createDisconnectHandler(getClient, setClient, createClient);
     connectBoundSession = createRegisteredConnectHandler(authorityRuntime, sessionHandler);
@@ -86266,6 +86303,31 @@ var RELEASABLE_SESSION_STATES = /* @__PURE__ */ new Set([
   "runtime_bound",
   "ready"
 ]);
+function supervisorSessionIsTerminal(authority) {
+  let state;
+  try {
+    state = authority.registry.getSessionStatus(authority.session.sessionId)?.state;
+  } catch {
+    return false;
+  }
+  return state === void 0 || state === "released" || state === "stale";
+}
+function resolveSupervisorAuthorityForSpawn(current, mint) {
+  if (!current || !supervisorSessionIsTerminal(current)) {
+    return { authority: current, error: null, minted: false };
+  }
+  void current.close().catch(() => {
+  });
+  try {
+    return { authority: mint(), error: null, minted: true };
+  } catch (error2) {
+    return {
+      authority: null,
+      error: error2 instanceof Error ? error2.message : "AUTHORITY_STORE_UNAVAILABLE: authority session could not be initialized",
+      minted: false
+    };
+  }
+}
 function createSupervisorAuthority(input, dependencies = {}) {
   if (!input.supervisorBirth) {
     throw new Error("PROCESS_BIRTH_UNAVAILABLE: supervisor process birth could not be proven conservatively");
@@ -86543,7 +86605,18 @@ if (process.env.RN_BRIDGE_SUPERVISOR === "0") {
       } else
         closeAuthorityAndExit2(action.kind === "shutdown" ? 0 : action.code);
     }
+  }, resolveAuthorityForSpawn2 = function() {
+    if (!authority || !mintAuthority)
+      return;
+    const resolution = resolveSupervisorAuthorityForSpawn(authority, mintAuthority);
+    if (!resolution.minted && resolution.error === null)
+      return;
+    authority = resolution.authority;
+    authorityError = resolution.error;
+    process.stderr.write(resolution.error === null ? "rn-bridge-supervisor: minted a fresh session for the released worktree\n" : `rn-dev-agent authority diagnostic: ${resolution.error}
+`);
   }, spawnWorker2 = function() {
+    resolveAuthorityForSpawn2();
     const workerInstance = randomUUID10();
     const child = spawn10(process.execPath, workerSpawnArgs(workerPath, sqliteWarningFilterPath, void 0, process.argv.slice(2)), {
       stdio: ["pipe", "pipe", "inherit"],
@@ -86613,7 +86686,7 @@ if (process.env.RN_BRIDGE_SUPERVISOR === "0") {
     }, 3e3);
     force.unref();
   };
-  apply = apply2, spawnWorker = spawnWorker2, closeAuthorityAndExit = closeAuthorityAndExit2, beginShutdown = beginShutdown2;
+  apply = apply2, resolveAuthorityForSpawn = resolveAuthorityForSpawn2, spawnWorker = spawnWorker2, closeAuthorityAndExit = closeAuthorityAndExit2, beginShutdown = beginShutdown2;
   const workerPath = process.env.RN_BRIDGE_WORKER_PATH ?? join57(here, "index.js");
   const noLock2 = process.argv.includes("--no-lock");
   const diagnosticContractProbe2 = process.argv.includes("--diagnostic-contract-probe");
@@ -86630,6 +86703,7 @@ if (process.env.RN_BRIDGE_SUPERVISOR === "0") {
   }
   let authority = null;
   let authorityError = null;
+  let mintAuthority = null;
   try {
     if (diagnosticContractProbe2)
       throw new Error("DIAGNOSTIC_MODE_READ_ONLY");
@@ -86654,12 +86728,13 @@ if (process.env.RN_BRIDGE_SUPERVISOR === "0") {
     } catch {
       process.stderr.write(startupCleanupFailureMessage());
     }
-    authority = createSupervisorAuthority({
+    mintAuthority = () => createSupervisorAuthority({
       source,
       supervisorBirth: readProcessBirth(process.pid),
       uid: typeof process.getuid === "function" ? String(process.getuid()) : process.env.USER ?? "unknown",
       ownerStatus: inspectSessionOwner
     });
+    authority = mintAuthority();
   } catch (error2) {
     authorityError = error2 instanceof Error ? error2.message : "AUTHORITY_STORE_UNAVAILABLE: authority session could not be initialized";
     if (!diagnosticContractProbe2) {
@@ -86704,6 +86779,7 @@ if (process.env.RN_BRIDGE_SUPERVISOR === "0") {
   spawnWorker2();
 }
 var apply;
+var resolveAuthorityForSpawn;
 var spawnWorker;
 var closeAuthorityAndExit;
 var beginShutdown;

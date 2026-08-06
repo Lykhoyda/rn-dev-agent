@@ -922,10 +922,33 @@ const getSessionSignerCapability = (sessionId) => {
         : currentSecretPath;
     return readJsonStateFile(secretPath)?.signerCapability ?? null;
 };
+// GH #706: SIGUSR2 is the supervisor's existing hot-reload intent — it respawns this
+// worker (replaying the MCP handshake) with the environment of a freshly resolved
+// session, which is the only way a released session becomes usable again in-band.
+const spawningSupervisorPid = process.ppid;
+const requestWorkerRecycle = () => {
+    if (process.env.RN_BRIDGE_SUPERVISED !== '1')
+        return;
+    if (!Number.isInteger(spawningSupervisorPid) || spawningSupervisorPid <= 1)
+        return;
+    setTimeout(() => {
+        // A changed parent means the supervisor died and its PID may now belong to an
+        // unrelated process; never signal that stranger.
+        if (process.ppid !== spawningSupervisorPid)
+            return;
+        try {
+            process.kill(spawningSupervisorPid, 'SIGUSR2');
+        }
+        catch {
+            /* supervisor already gone — the next transport start resolves a session */
+        }
+    }, 250).unref();
+};
 const sessionHandler = createSessionHandler(authorityRuntime, {
     getSignerCapability: getSessionSignerCapability,
     pinDevClient: pinSessionDevClient,
     onBundleInvalidated: () => getClient().clearAuthoritativeSessionPolicy(),
+    requestWorkerRecycle,
 });
 const disconnectClientHandler = createDisconnectHandler(getClient, setClient, createClient);
 const connectBoundSession = createRegisteredConnectHandler(authorityRuntime, sessionHandler);

@@ -1137,7 +1137,19 @@ export function createSessionHandler(runtime, dependencies = {}) {
             registry.releaseSession(session);
             if (status.bindings.bundle)
                 dependencies.onBundleInvalidated?.();
-            return okResult({ released: true, sessionId: session.sessionId });
+            // GH #706: the released row can never be transitioned again. Ask the supervisor
+            // to resolve a fresh session so the next call is not a dead end.
+            try {
+                dependencies.requestWorkerRecycle?.();
+            }
+            catch {
+                /* release already succeeded; recovery falls back to a transport restart */
+            }
+            return okResult({
+                released: true,
+                sessionId: session.sessionId,
+                nextAction: 'A fresh session is minted automatically; retry rn_session (bind_device, apply_integration) on this worktree.',
+            });
         }
         catch (error) {
             return authorityFailure(error);
