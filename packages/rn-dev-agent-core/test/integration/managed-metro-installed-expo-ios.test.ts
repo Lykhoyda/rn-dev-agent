@@ -723,6 +723,7 @@ async function writeMarker(buildGeneration) {
       assert.equal(new URL(target.webSocketDebuggerUrl!).port, String(port));
 
       client = new CDPClient(port);
+      let directConnectBypassCalls = 0;
       const bundle = await pinExactDevClient(
         {
           sessionId,
@@ -741,7 +742,11 @@ async function writeMarker(buildGeneration) {
           },
           launchExactApp: async () => {},
           acceptIosOpenDialog: async () => {},
+          // This installed-iOS proof intentionally exercises CDPClient directly;
+          // Android production-wrapper re-registration is covered separately by
+          // connect-exact-session-target.test.ts.
           connectExact: async () => {
+            directConnectBypassCalls += 1;
             await client!.connectExact(port, {
               platform: 'ios',
               bundleId: appId,
@@ -770,6 +775,11 @@ async function writeMarker(buildGeneration) {
         },
       );
       assert.equal(bundle.targetId, target.id);
+      assert.equal(
+        directConnectBypassCalls,
+        1,
+        'installed-iOS integration intentionally bypasses the production session wrapper',
+      );
       const evaluated = await client.evaluate(
         'JSON.stringify({authority:globalThis.__RN_DEV_AGENT_AUTHORITY__,development:__DEV__,runtime:globalThis.HermesInternal ? "Hermes" : "unknown"})',
       );
