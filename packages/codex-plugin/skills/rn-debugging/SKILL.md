@@ -114,7 +114,7 @@ The final error includes `meta.helperHealth`: `jsWorld` is one of `responsive`, 
 
 | Step | Action | Why |
 |------|--------|-----|
-| 1 | Switch the immediate task to `device_*` tools (`device_press`, `device_fill`, `device_snapshot`, `device_screenshot`) | These run through XCTest / adb and don't depend on injected JS at all. The task usually doesn't need React fiber introspection — it just needs to interact with the visible UI. |
+| 1 | Switch the immediate task to `device_*` tools (`device_press`, `device_snapshot`, `device_screenshot`) | These native tools don't depend on injected JS. Exact `device_fill` does require helpers to choose controlled fiber ownership safely; do not use it while helpers are unavailable. |
 | 2 | If React state is specifically needed (`cdp_component_tree`, `cdp_store_state`, `cdp_navigation_state`), call `cdp_reload` once | Forces a clean bundle reload + reconnect, which re-runs the full injection handshake. Note: open modals, in-progress forms, or unsaved screen state are wiped — confirm with the user before reloading if their work is at risk. |
 
 **Anti-pattern**: retrying `cdp_status` in a loop. The connection is up; status calls don't re-trigger injection in this state — they return immediately and let you spin. The error code is the signal to change strategy, not to wait longer.

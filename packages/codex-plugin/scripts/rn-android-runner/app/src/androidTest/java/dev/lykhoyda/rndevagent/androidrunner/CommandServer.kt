@@ -76,8 +76,15 @@ class CommandServer(
             json(Response.Status.OK, body)
         } catch (e: NoFocusedInputException) {
             errorResponse(command, "NO_FOCUSED_INPUT", e.message ?: "no focused input", Response.Status.OK)
-        } catch (e: SetTextRejectedException) {
-            errorResponse(command, "SET_TEXT_REJECTED", e.message ?: "set text rejected", Response.Status.OK)
+        } catch (e: ExactFillException) {
+            errorResponse(
+                command,
+                e.fillCode,
+                e.message ?: "exact fill failed",
+                Response.Status.OK,
+                mutation = e.mutation,
+                reason = e.reason,
+            )
         } catch (e: SnapshotParseException) {
             errorResponse(command, "SNAPSHOT_PARSE_FAILED", e.message ?: "snapshot parse failed", Response.Status.OK)
         } catch (e: AccessibilityUnavailableException) {
@@ -94,10 +101,15 @@ class CommandServer(
         code: String,
         message: String,
         status: Response.Status,
+        mutation: String? = null,
+        reason: String? = null,
     ): Response {
+        val error = JSONObject().put("code", code).put("message", message)
+        if (mutation != null) error.put("mutation", mutation)
+        if (reason != null) error.put("reason", reason)
         val body = JSONObject()
             .put("ok", false)
-            .put("error", JSONObject().put("code", code).put("message", message))
+            .put("error", error)
         record(command, body)
         return json(status, body)
     }

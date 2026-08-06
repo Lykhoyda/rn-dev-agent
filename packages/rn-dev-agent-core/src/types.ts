@@ -307,9 +307,7 @@ export type ToolErrorCode =
   | 'STORE_TRUNCATED' // expect_redux when store payload exceeded safeStringify cap
   // Phase 134.2: appId / packageName validation at adb shell boundary.
   | 'INVALID_APPID' // device_permission
-  // Story 10 (#391): the focused Android field ignored ACTION_SET_TEXT (and
-  // any applicable keyevent fallback) — device_fill descends to its adb /
-  // maestro tiers instead of re-tapping a healthy focus.
+  // The exact Android owner rejected its single accessibility mutation.
   | 'SET_TEXT_REJECTED'
   // GH #418: command-surface gate.
   | 'UNSUPPORTED_COMMAND' // runner rejected a verb its artifact predates (typed by the runner)
@@ -361,8 +359,11 @@ export type ToolErrorCode =
   // GH#186 Phase 6: a FOREIGN Maestro/XCUITest session holds the flow plane
   // (UDID-scoped detection). L2/L3 refuse fast; L1 reads stay free.
   | 'BUSY_FOREIGN_FLOW'
-  // GH #191: native fill + retype + maestro all failed to produce the expected value.
+  // GH #581: exact fill refused before or after its single mutation.
   | 'TEXT_ENTRY_UNVERIFIED'
+  | 'NO_TEXT_INPUT_TARGET'
+  | 'TEXT_TARGET_LOST'
+  | 'TEXT_TARGET_FOCUS_FAILED'
   // eradicate-agent-device Phase 2: runNative has no legacy daemon/CLI tier to fall to.
   | 'NO_NATIVE_ROUTE'
   // eradicate-agent-device Phase 2 Task 9: RN_ANDROID_RUNNER=0 set explicitly — disabled by operator.
