@@ -1,5 +1,4 @@
-// Groups are ownership bookkeeping only: the gate, probes, receipts, and error
-// codes all run on the resolved facet letters, so regrouping never changes them.
+// Groups are bookkeeping only; gates, probes, receipts, and errors use resolved facets.
 const groupFacets = {
     session: ['C', 'S'],
     target: ['D', 'I'],
