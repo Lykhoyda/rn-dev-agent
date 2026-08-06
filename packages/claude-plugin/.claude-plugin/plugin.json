@@ -21,6 +21,7 @@
   ],
   "skills": [
     "./skills/using-rn-dev-agent",
+    "./skills/rn-workflow",
     "./skills/rn-feature-development",
     "./skills/rn-device-control",
     "./skills/rn-testing",
@@ -28,7 +29,8 @@
     "./skills/rn-best-practices",
     "./skills/rn-setup",
     "./skills/creating-actions",
-    "./skills/capturing-proof"
+    "./skills/capturing-proof",
+    "./skills/sending-feedback"
   ],
   "agents": [
     "./agents/rn-tester.md",

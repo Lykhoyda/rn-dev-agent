@@ -5,6 +5,22 @@ description: "Release history for rn-dev-agent"
 
 ## Claude plugin
 
+### 0.74.5
+
+#### Patch Changes
+
+- d7a814f: Return a successful `release_stale_device` envelope only after its authenticated, device-scoped cleanup commit atomically advances the contender's fenced authority generation while preserving stale-owner death proof, exact claim epochs and handles, resumable runner/recorder cleanup, and neighboring source, Metro, install, package-integration, and port authority.
+- Updated dependencies [d7a814f]
+  - rn-dev-agent-core@0.69.5
+
+### 0.74.4
+
+#### Patch Changes
+
+- 03603da: Replace default stale-owner adoption for new `grouped-v1` sessions with automatic verified-dead startup cleanup: a restarting supervisor journals obligations on the proven-dead same-root session's row before any side effect, stops its recorded children by exact identity, restores package integration only from the SHA-256-verified manifest, releases claims only after every obligation is durably complete, and mints no adoption or handoff-recipient handles, while a live or unproven owner keeps refusing and legacy sessions retain the adoption surface for drain.
+- Updated dependencies [03603da]
+  - rn-dev-agent-core@0.69.4
+
 ### 0.74.3
 
 #### Patch Changes
@@ -1347,6 +1363,18 @@ identifier, hittable? }`, with a `fullNodeCount`. Far fewer tokens; `@ref`s for
   #188 shipped these to `main` with no version bump, leaving them undeliverable to marketplace installs; this patch publishes them.
 
 ## Core MCP server
+
+### 0.69.5
+
+#### Patch Changes
+
+- d7a814f: Return a successful `release_stale_device` envelope only after its authenticated, device-scoped cleanup commit atomically advances the contender's fenced authority generation while preserving stale-owner death proof, exact claim epochs and handles, resumable runner/recorder cleanup, and neighboring source, Metro, install, package-integration, and port authority.
+
+### 0.69.4
+
+#### Patch Changes
+
+- 03603da: Replace default stale-owner adoption for new `grouped-v1` sessions with automatic verified-dead startup cleanup: a restarting supervisor journals obligations on the proven-dead same-root session's row before any side effect, stops its recorded children by exact identity, restores package integration only from the SHA-256-verified manifest, releases claims only after every obligation is durably complete, and mints no adoption or handoff-recipient handles, while a live or unproven owner keeps refusing and legacy sessions retain the adoption surface for drain.
 
 ### 0.69.3
 

@@ -10,7 +10,7 @@ description: >
 
 # Using rn-dev-agent
 
-The Codex rn-dev-agent surface provides an MCP tool suite, **15 explicit workflow skills**, and **10 implicit domain skills**—exactly **25 native Codex skills**. The five packaged agent files are inline playbooks, not a native Codex subagent contract.
+The Codex rn-dev-agent surface provides an MCP tool suite, **16 explicit workflow skills**, and **11 implicit domain skills**—exactly **27 native Codex skills**. The five packaged agent files are inline playbooks, not a native Codex subagent contract.
 
 This skill is your front door. Before starting any RN work, use the decision tree below to route the user's intent to the right tool.
 
@@ -113,6 +113,12 @@ What is the user asking for?
 │   └─► Spawn rn-code-reviewer via Task tool (read-only, safe to spawn)
 │       (Confidence-filtered review, RN conventions + best practices)
 │
+├── About to start a real device journey (build / test / proof, end to end)
+│   └─► $rn-dev-agent:run-workflow [journey-description]
+│       (Loads the rn-workflow domain skill: declared package manager + deps,
+│        read-only inventory, typed session recovery, one exclusive device,
+│        managed integration/Metro, only the requested proof, reverse cleanup)
+│
 ├── Just check if environment is ready
 │   └─► $rn-dev-agent:check-env
 │       (Quick cdp_status check, no setup attempt)
@@ -159,6 +165,7 @@ These apply to every RN task:
 | Skill | Type | When loaded |
 |-------|------|-------------|
 | `using-rn-dev-agent` (this) | Meta / entry point | Start of any RN conversation |
+| `rn-workflow` | Process | Inside `$rn-dev-agent:run-workflow` — the proven operating sequence (preflight → authority → proof → reverse cleanup) before any device journey |
 | `rn-setup` | Process | User runs `$rn-dev-agent:setup` or tools fail |
 | `rn-feature-development` | Process | Inside `$rn-dev-agent:rn-feature-dev` — 8-phase pipeline |
 | `rn-testing` | Reference + process | Test writing, Maestro flows, E2E verification |
