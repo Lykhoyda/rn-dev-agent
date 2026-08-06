@@ -95,19 +95,6 @@ test('M6 JS guard: START walks fibers for already-mounted interactive handlers',
   assert.match(START_RECORDING_JS, /handlerTargets/);
 });
 
-test('M6 JS guard: START waits a bounded interval for handler readiness', () => {
-  assert.match(START_RECORDING_JS, /HANDLER_READY_TIMEOUT_MS = 1000/);
-  assert.match(START_RECORDING_JS, /startPromise = new Promise/);
-  assert.match(START_RECORDING_JS, /handlersReady\(\)/);
-  assert.match(START_RECORDING_JS, /Timed out waiting for recorder handlers/);
-});
-
-test('M6 JS guard: concurrent START calls share handler readiness', () => {
-  assert.match(START_RECORDING_JS, /__METRO_MCP_REC_STARTING__/);
-  assert.match(START_RECORDING_JS, /pendingStart\.then/);
-  assert.match(START_RECORDING_JS, /delete globalThis\.__METRO_MCP_REC_STARTING__/);
-});
-
 test('M6 JS guard: STOP calls cleanup and reads truncated flag', () => {
   assert.match(STOP_RECORDING_JS, /__METRO_MCP_REC_CLEANUP__/);
   assert.match(STOP_RECORDING_JS, /__METRO_MCP_REC_TRUNCATED__/);

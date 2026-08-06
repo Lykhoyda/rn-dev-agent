@@ -179,11 +179,11 @@ const DEV_REQUIRED_MSG =
 export function createRecordTestStartHandler(
   getClient: () => CDPClient,
 ): (args: Record<string, never>) => Promise<ToolResult> {
-  const start = withConnection(getClient, async (_args: Record<string, never>, client) => {
+  return withConnection(getClient, async (_args: Record<string, never>, client) => {
     if (!(await probeDev(client))) {
       return failResult(DEV_REQUIRED_MSG, 'DEV_MODE_REQUIRED');
     }
-    const result = (await client.evaluate(START_RECORDING_JS, true)) as EvalResult;
+    const result = (await client.evaluate(START_RECORDING_JS)) as EvalResult;
     if (result.error) {
       return failResult(`Failed to start recording: ${result.error}`, 'EVAL_FAILED');
     }
@@ -223,17 +223,6 @@ export function createRecordTestStartHandler(
       activeRoute: parsed.activeRoute ?? null,
     });
   });
-  let startInFlight: Promise<ToolResult> | null = null;
-  return (args) => {
-    if (startInFlight) return startInFlight;
-    const operation = start(args);
-    startInFlight = operation;
-    const clear = () => {
-      if (startInFlight === operation) startInFlight = null;
-    };
-    void operation.then(clear, clear);
-    return operation;
-  };
 }
 
 export function createRecordTestStopHandler(

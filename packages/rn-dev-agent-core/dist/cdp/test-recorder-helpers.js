@@ -82,14 +82,6 @@ export const START_RECORDING_JS = `(function() {
   }
 
   if (globalThis.__METRO_MCP_REC_ACTIVE__) {
-    var pendingStart = globalThis.__METRO_MCP_REC_STARTING__;
-    if (pendingStart && typeof pendingStart.then === 'function') {
-      return pendingStart.then(function(result) {
-        var parsed = JSON.parse(result);
-        if (parsed.ok) parsed.alreadyRunning = true;
-        return JSON.stringify(parsed);
-      });
-    }
     return JSON.stringify({ ok: true, alreadyRunning: true, activeRoute: globalThis.__METRO_MCP_NAV_REF_CACHE__ || null });
   }
 
@@ -106,7 +98,6 @@ export const START_RECORDING_JS = `(function() {
   globalThis.__METRO_MCP_REC_SESSION__ = sessionId;
 
   var MAX_EVENTS = 500;
-  var HANDLER_READY_TIMEOUT_MS = 1000;
   var __currentRoute = null;
 
   // Cap-with-eviction: drop oldest scroll/type pair before pushing #501.
@@ -304,47 +295,12 @@ export const START_RECORDING_JS = `(function() {
     return origFreeze.call(this, obj);
   };
 
-  // --- Commit hook: route cache + navigate events ---
-  // Read the current route on every React commit (cheap relative to freeze
-  // frequency), cache it for the freeze hot-path, and emit a navigate event
-  // when it changes.
-  var origCommit = hook.onCommitFiberRoot;
-  var prevRoute = null;
-  hook.onCommitFiberRoot = function(id, root) {
-    if (globalThis.__METRO_MCP_REC_ACTIVE__ && globalThis.__METRO_MCP_REC_SESSION__ === sessionId) {
-      var route = readCurrentRoute();
-      if (route) {
-        __currentRoute = route;
-        globalThis.__METRO_MCP_NAV_REF_CACHE__ = route;
-        if (prevRoute && prevRoute !== route) {
-          pushEvent({ type: 'navigate', from: prevRoute, to: route, route: route, t: Date.now() });
-        }
-        prevRoute = route;
-      }
-    }
-    if (origCommit) return origCommit.apply(this, arguments);
-  };
-
-  // Seed the route cache with one immediate read so events captured before
-  // the first commit have a chance of getting a route attached.
-  __currentRoute = readCurrentRoute();
-  globalThis.__METRO_MCP_NAV_REF_CACHE__ = __currentRoute;
-  prevRoute = __currentRoute;
-
-  globalThis.__METRO_MCP_REC_CLEANUP__ = function() {
-    globalThis.__METRO_MCP_REC_ACTIVE__ = false;
-    hook.onCommitFiberRoot = origCommit;
-    Object.freeze = origFreeze;
-    delete globalThis.__METRO_MCP_REC_STARTING__;
-    delete globalThis.__METRO_MCP_REC_CLEANUP__;
-  };
-
   // --- Re-render walk for already-mounted scroll containers + handlers ---
   // Object.freeze only fires on FUTURE renders. Anything already mounted when
   // recording starts missed the interceptor. Force-render so their props go
   // through Object.freeze again. M8 pattern: 1..5 renderer loop for fiber root
   // resolution.
-  var handlersReady = (function() {
+  (function() {
     function forceRerender(fiber, renderer) {
       if (!fiber) return;
       if (fiber.stateNode && typeof fiber.stateNode.forceUpdate === 'function') {
@@ -443,7 +399,7 @@ export const START_RECORDING_JS = `(function() {
       try { roots = hook.getFiberRoots(entry.id); } catch (e) { continue; }
       if (!roots || roots.size === 0) continue;
       Array.from(roots).forEach(function(r) {
-        if (r && r.current) stack.push({ f: r.current, d: 0, r: entry.renderer, q: r });
+        if (r && r.current) stack.push({ f: r.current, d: 0, r: entry.renderer });
       });
     }
     while (stack.length) {
@@ -457,92 +413,58 @@ export const START_RECORDING_JS = `(function() {
         // Dedup: one screen with 20 buttons must re-render once, not 20 times.
         var targeted = false;
         for (var ti = 0; ti < handlerTargets.length; ti++) {
-          if (handlerTargets[ti].f === anc &&
-              handlerTargets[ti].r === item.r &&
-              handlerTargets[ti].q === item.q) {
+          if (handlerTargets[ti].f === anc && handlerTargets[ti].r === item.r) {
             targeted = true;
             break;
           }
         }
-        if (anc && !targeted) handlerTargets.push({ f: anc, r: item.r, q: item.q });
+        if (anc && !targeted) handlerTargets.push({ f: anc, r: item.r });
       }
-      if (fiber.sibling) stack.push({ f: fiber.sibling, d: depth, r: item.r, q: item.q });
-      if (fiber.child)   stack.push({ f: fiber.child,   d: depth + 1, r: item.r, q: item.q });
+      if (fiber.sibling) stack.push({ f: fiber.sibling, d: depth, r: item.r });
+      if (fiber.child)   stack.push({ f: fiber.child,   d: depth + 1, r: item.r });
     }
     // Deferred to after the walk: forcing mid-walk mutates the tree being
     // traversed.
     for (var k = 0; k < handlerTargets.length; k++) {
       forceRerender(handlerTargets[k].f, handlerTargets[k].r);
     }
-
-    if (handlerTargets.length === 0) return null;
-    return function() {
-      var roots = [];
-      var pending = [];
-      for (var hti = 0; hti < handlerTargets.length; hti++) {
-        var targetRoot = handlerTargets[hti].q;
-        if (!targetRoot || !targetRoot.current) return false;
-        if (roots.indexOf(targetRoot) === -1) {
-          roots.push(targetRoot);
-          pending.push({ f: targetRoot.current, d: 0, q: targetRoot });
-        }
-      }
-      while (pending.length) {
-        var pendingItem = pending.pop();
-        var pendingFiber = pendingItem.f;
-        var pendingDepth = pendingItem.d;
-        if (!pendingFiber || pendingDepth > 200) continue;
-        if (isInteractiveFiber(pendingFiber)) {
-          var pendingAncestor = compositeAncestor(pendingFiber);
-          if (pendingAncestor) {
-            for (var tai = 0; tai < handlerTargets.length; tai++) {
-              var targetAncestor = handlerTargets[tai].f;
-              if (handlerTargets[tai].q === pendingItem.q &&
-                  (targetAncestor === pendingAncestor ||
-                   targetAncestor.alternate === pendingAncestor ||
-                   pendingAncestor.alternate === targetAncestor)) return false;
-            }
-          }
-        }
-        if (pendingFiber.sibling) {
-          pending.push({ f: pendingFiber.sibling, d: pendingDepth, q: pendingItem.q });
-        }
-        if (pendingFiber.child) {
-          pending.push({ f: pendingFiber.child, d: pendingDepth + 1, q: pendingItem.q });
-        }
-      }
-      return true;
-    };
   })();
 
-  function successResult() {
-    delete globalThis.__METRO_MCP_REC_STARTING__;
-    return JSON.stringify({ ok: true, alreadyRunning: false, activeRoute: __currentRoute });
-  }
-  if (!handlersReady || handlersReady()) return successResult();
-  var startPromise = new Promise(function(resolve) {
-    var deadline = Date.now() + HANDLER_READY_TIMEOUT_MS;
-    function checkReady() {
-      if (!globalThis.__METRO_MCP_REC_ACTIVE__ ||
-          globalThis.__METRO_MCP_REC_SESSION__ !== sessionId) {
-        resolve(JSON.stringify({ ok: false, error: 'Recorder start was interrupted' }));
-        return;
+  // --- Commit hook: route cache + navigate events ---
+  // Read the current route on every React commit (cheap relative to freeze
+  // frequency), cache it for the freeze hot-path, and emit a navigate event
+  // when it changes.
+  var origCommit = hook.onCommitFiberRoot;
+  var prevRoute = null;
+  hook.onCommitFiberRoot = function(id, root) {
+    if (globalThis.__METRO_MCP_REC_ACTIVE__ && globalThis.__METRO_MCP_REC_SESSION__ === sessionId) {
+      var route = readCurrentRoute();
+      if (route) {
+        __currentRoute = route;
+        globalThis.__METRO_MCP_NAV_REF_CACHE__ = route;
+        if (prevRoute && prevRoute !== route) {
+          pushEvent({ type: 'navigate', from: prevRoute, to: route, route: route, t: Date.now() });
+        }
+        prevRoute = route;
       }
-      if (handlersReady()) {
-        resolve(successResult());
-        return;
-      }
-      if (Date.now() >= deadline) {
-        globalThis.__METRO_MCP_REC_CLEANUP__();
-        resolve(JSON.stringify({ ok: false, error: 'Timed out waiting for recorder handlers' }));
-        return;
-      }
-      setTimeout(checkReady, 16);
     }
-    setTimeout(checkReady, 0);
-  });
-  globalThis.__METRO_MCP_REC_STARTING__ = startPromise;
-  return startPromise;
+    if (origCommit) return origCommit.apply(this, arguments);
+  };
+
+  // Seed the route cache with one immediate read so events captured before
+  // the first commit have a chance of getting a route attached.
+  __currentRoute = readCurrentRoute();
+  globalThis.__METRO_MCP_NAV_REF_CACHE__ = __currentRoute;
+  prevRoute = __currentRoute;
+
+  globalThis.__METRO_MCP_REC_CLEANUP__ = function() {
+    globalThis.__METRO_MCP_REC_ACTIVE__ = false;
+    hook.onCommitFiberRoot = origCommit;
+    Object.freeze = origFreeze;
+    delete globalThis.__METRO_MCP_REC_CLEANUP__;
+  };
+
+  return JSON.stringify({ ok: true, alreadyRunning: false, activeRoute: __currentRoute });
 })()`;
 export const STOP_RECORDING_JS = `(function() {
   try {

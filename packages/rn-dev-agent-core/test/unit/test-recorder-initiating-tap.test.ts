@@ -89,12 +89,7 @@ function makeScreen(name: string, specs: ChildSpec[]) {
 }
 
 interface Host {
-  start(): Promise<{
-    ok: boolean;
-    error?: string;
-    alreadyRunning?: boolean;
-    activeRoute: string | null;
-  }>;
+  start(): { ok: boolean; activeRoute: string | null };
   stop(): RecordedEventLike[];
   commit(route: string): void;
   press(props: Props): void;
@@ -129,9 +124,8 @@ function makeHost(screen: { fiber: Fiber }, initialRoute: string, options?: Host
   g.__RN_AGENT = { getNavState: () => JSON.stringify(navState) };
 
   return {
-    async start() {
-      const result = runInThisContext(START_RECORDING_JS) as string | Promise<string>;
-      return JSON.parse(await result);
+    start() {
+      return JSON.parse(runInThisContext(START_RECORDING_JS) as string);
     },
     stop() {
       return JSON.parse(runInThisContext(STOP_RECORDING_JS) as string)
@@ -169,7 +163,7 @@ function stepLines(yaml: string): string[] {
     .map((l) => l.trim());
 }
 
-test('B145: the tap that initiates a navigation is captured from the declared start route', async () => {
+test('B145: the tap that initiates a navigation is captured from the declared start route', () => {
   let appPresses = 0;
   const screen = makeScreen('HomeMain', [
     {
@@ -179,7 +173,7 @@ test('B145: the tap that initiates a navigation is captured from the declared st
   ]);
   const host = makeHost(screen, 'HomeMain');
   try {
-    const started = await host.start();
+    const started = host.start();
     assert.equal(started.activeRoute, 'HomeMain');
 
     host.press(screen.live['command-palette-btn']);
@@ -203,7 +197,7 @@ test('B145: the tap that initiates a navigation is captured from the declared st
   }
 });
 
-test('B145: the saved flow replays open -> visible assertion -> close, with no duplicated tap', async () => {
+test('B145: the saved flow replays open -> visible assertion -> close, with no duplicated tap', () => {
   const screen = makeScreen('HomeMain', [
     {
       testID: 'command-palette-btn',
@@ -213,7 +207,7 @@ test('B145: the saved flow replays open -> visible assertion -> close, with no d
   const host = makeHost(screen, 'HomeMain');
   let yaml: string;
   try {
-    const started = await host.start();
+    const started = host.start();
     host.press(screen.live['command-palette-btn']);
     host.commit('CommandPalette');
     host.press(host.mountLater('command-palette-close'));
@@ -246,12 +240,12 @@ test('B145: the saved flow replays open -> visible assertion -> close, with no d
   );
 });
 
-test('B145 disconfirming: a navigation with no initiating tap synthesizes no tap', async () => {
+test('B145 disconfirming: a navigation with no initiating tap synthesizes no tap', () => {
   const screen = makeScreen('Splash', []);
   const host = makeHost(screen, 'Splash');
   let events: RecordedEventLike[];
   try {
-    await host.start();
+    host.start();
     // The app navigates on its own — nothing was tapped.
     host.commit('Login');
     const field = host.mountLater('username');
@@ -283,7 +277,7 @@ test('B145 disconfirming: a delayed, unrelated navigation is not correlated to t
   assert.equal((yaml.match(/- tapOn:/g) ?? []).length, 2);
 });
 
-test('B145 disconfirming: an ordinary non-navigation tap is unchanged', async () => {
+test('B145 disconfirming: an ordinary non-navigation tap is unchanged', () => {
   let toggles = 0;
   const screen = makeScreen('SettingsScreen', [
     { testID: 'theme-toggle', make: () => ({ testID: 'theme-toggle', onPress: () => toggles++ }) },
@@ -291,7 +285,7 @@ test('B145 disconfirming: an ordinary non-navigation tap is unchanged', async ()
   const host = makeHost(screen, 'SettingsScreen');
   let events: RecordedEventLike[];
   try {
-    await host.start();
+    host.start();
     host.press(screen.live['theme-toggle']);
     events = host.stop();
   } finally {
@@ -308,7 +302,7 @@ test('B145 disconfirming: an ordinary non-navigation tap is unchanged', async ()
   assert.doesNotMatch(yaml, /# navigated:/);
 });
 
-test('B145: a screen full of controls is re-rendered once, not once per control', async () => {
+test('B145: a screen full of controls is re-rendered once, not once per control', () => {
   const specs = Array.from({ length: 12 }, (_, i) => ({
     testID: `row-${i}`,
     make: () => ({ testID: `row-${i}`, onPress: () => {} }),
@@ -316,7 +310,7 @@ test('B145: a screen full of controls is re-rendered once, not once per control'
   const screen = makeScreen('TaskBoard', specs);
   const host = makeHost(screen, 'TaskBoard');
   try {
-    await host.start();
+    host.start();
     assert.equal(screen.forcedRenders(), 1, 'the shared ancestor must be forced exactly once');
     host.press(screen.live['row-7']);
     assert.deepEqual(names(host.stop()), ['tap:row-7']);
@@ -325,7 +319,7 @@ test('B145: a screen full of controls is re-rendered once, not once per control'
   }
 });
 
-test('B145: pass-through providers are skipped without skipping render-owning wrappers', async () => {
+test('B145: pass-through providers are skipped without skipping render-owning wrappers', () => {
   for (const wrapperMarker of ['react.memo', 'react.forward_ref', 'react.lazy']) {
     let appPresses = 0;
     let live = createElement('Pressable', {
@@ -383,7 +377,7 @@ test('B145: pass-through providers are skipped without skipping render-owning wr
     };
     const host = makeHost({ fiber: wrapper }, 'HomeMain', { hook, rootContainer });
     try {
-      const started = await host.start();
+      const started = host.start();
       assert.equal(started.ok, true);
       assert.equal(forcedFiber, wrapper);
       host.press(live);
@@ -395,7 +389,7 @@ test('B145: pass-through providers are skipped without skipping render-owning wr
   }
 });
 
-test('B145: every registered renderer uses its own adapter', async () => {
+test('B145: every registered renderer uses its own adapter', () => {
   let appPresses = 0;
   const screen = makeScreen('HomeMain', [
     {
@@ -442,7 +436,7 @@ test('B145: every registered renderer uses its own adapter', async () => {
   };
   const host = makeHost(screen, 'HomeMain', { hook, rootContainer: appRoot });
   try {
-    await host.start();
+    host.start();
     assert.equal(logBoxOverrides, 0);
     assert.equal(appOverrides, 1);
     host.press(screen.live['command-palette-btn']);
@@ -453,168 +447,19 @@ test('B145: every registered renderer uses its own adapter', async () => {
   }
 });
 
-test('B145: start waits for a concurrent handler refresh', async () => {
-  let appPresses = 0;
-  const screen = makeScreen('HomeMain', [
-    {
-      testID: 'command-palette-btn',
-      make: () => ({ testID: 'command-palette-btn', onPress: () => appPresses++ }),
-    },
-  ]);
-  const rerender = screen.fiber.stateNode.forceUpdate as () => void;
-  screen.fiber.stateNode = null;
-  const rootContainer = { current: { type: null, child: screen.fiber, sibling: null } };
-  screen.fiber.return = rootContainer.current;
-  const roots = new Set([rootContainer]);
-  const hook: Fiber = {
-    renderers: new Map([
-      [
-        1,
-        {
-          overrideProps: () => setTimeout(rerender, 0),
-        },
-      ],
-    ]),
-    onCommitFiberRoot: null,
-    getFiberRoots: (id: number) => (id === 1 ? roots : new Set()),
-  };
-  const host = makeHost(screen, 'HomeMain', { hook, rootContainer });
-  try {
-    const starting = host.start();
-    let settled = false;
-    void starting.then(() => {
-      settled = true;
-    });
-    assert.equal(screen.live['command-palette-btn'].__mcpRec, undefined);
-    assert.equal(settled, false);
-
-    const started = await starting;
-    assert.equal(started.ok, true);
-    assert.equal(settled, true);
-    assert.equal(typeof screen.live['command-palette-btn'].__mcpRec, 'string');
-    host.press(screen.live['command-palette-btn']);
-    assert.deepEqual(names(host.stop()), ['tap:command-palette-btn']);
-    assert.equal(appPresses, 1);
-  } finally {
-    host.dispose();
-  }
-});
-
-test('B145: concurrent starts share handler readiness', async () => {
-  let appPresses = 0;
-  const screen = makeScreen('HomeMain', [
-    {
-      testID: 'command-palette-btn',
-      make: () => ({ testID: 'command-palette-btn', onPress: () => appPresses++ }),
-    },
-  ]);
-  const rerender = screen.fiber.stateNode.forceUpdate as () => void;
-  screen.fiber.stateNode = null;
-  const rootContainer = { current: { type: null, child: screen.fiber, sibling: null } };
-  screen.fiber.return = rootContainer.current;
-  const roots = new Set([rootContainer]);
-  let refreshHandlers: (() => void) | null = null;
-  const hook: Fiber = {
-    renderers: new Map([
-      [
-        1,
-        {
-          overrideProps: () => {
-            refreshHandlers = rerender;
-          },
-        },
-      ],
-    ]),
-    onCommitFiberRoot: null,
-    getFiberRoots: (id: number) => (id === 1 ? roots : new Set()),
-  };
-  const host = makeHost(screen, 'HomeMain', { hook, rootContainer });
-  try {
-    const firstStart = host.start();
-    const secondStart = host.start();
-    const secondState = await Promise.race([
-      secondStart.then(() => 'settled'),
-      new Promise<string>((resolve) => setTimeout(() => resolve('pending'), 0)),
-    ]);
-    assert.equal(secondState, 'pending');
-    assert.equal(screen.live['command-palette-btn'].__mcpRec, undefined);
-
-    const refresh = refreshHandlers;
-    assert.ok(refresh);
-    refresh();
-    const [firstStarted, secondStarted] = await Promise.all([firstStart, secondStart]);
-    assert.equal(firstStarted.ok, true);
-    assert.equal(firstStarted.alreadyRunning, false);
-    assert.equal(secondStarted.ok, true);
-    assert.equal(secondStarted.alreadyRunning, true);
-
-    const thirdStarted = await host.start();
-    assert.equal(thirdStarted.ok, true);
-    assert.equal(thirdStarted.alreadyRunning, true);
-    host.press(screen.live['command-palette-btn']);
-    assert.deepEqual(names(host.stop()), ['tap:command-palette-btn']);
-    assert.equal(appPresses, 1);
-    assert.equal((globalThis as Fiber).__METRO_MCP_REC_STARTING__, undefined);
-  } finally {
-    host.dispose();
-  }
-});
-
-test('B145: start fails closed when handlers never refresh', async () => {
-  const screen = makeScreen('HomeMain', [
-    {
-      testID: 'command-palette-btn',
-      make: () => ({ testID: 'command-palette-btn', onPress: () => {} }),
-    },
-  ]);
-  screen.fiber.stateNode = null;
-  const rootContainer = { current: { type: null, child: screen.fiber, sibling: null } };
-  screen.fiber.return = rootContainer.current;
-  const roots = new Set([rootContainer]);
-  const hook: Fiber = {
-    renderers: new Map([[1, { overrideProps: () => {} }]]),
-    onCommitFiberRoot: null,
-    getFiberRoots: (id: number) => (id === 1 ? roots : new Set()),
-  };
-  const host = makeHost(screen, 'HomeMain', { hook, rootContainer });
-  const originalFreeze = Object.freeze;
-  const originalNow = Date.now;
-  const originalSetTimeout = globalThis.setTimeout;
-  let now = 0;
-  Date.now = () => now;
-  globalThis.setTimeout = ((callback: () => void) => {
-    now += 1001;
-    queueMicrotask(callback);
-    return 0 as unknown as ReturnType<typeof setTimeout>;
-  }) as unknown as typeof setTimeout;
-  try {
-    const started = await host.start();
-    assert.equal(started.ok, false);
-    assert.match(started.error ?? '', /Timed out waiting for recorder handlers/);
-    assert.equal((globalThis as Fiber).__METRO_MCP_REC_ACTIVE__, false);
-    assert.equal((globalThis as Fiber).__METRO_MCP_REC_STARTING__, undefined);
-    assert.equal(Object.freeze, originalFreeze);
-    assert.equal(hook.onCommitFiberRoot, null);
-  } finally {
-    Date.now = originalNow;
-    globalThis.setTimeout = originalSetTimeout;
-    host.dispose();
-  }
-});
-
-test('B145: stale wrappers are refreshed for every recording session', async () => {
+test('B145: stale wrappers are refreshed for every recording session', () => {
   let appPresses = 0;
   const screen = makeScreen('HomeMain', [
     { testID: 'already', make: () => ({ testID: 'already', onPress: () => appPresses++ }) },
   ]);
   const host = makeHost(screen, 'HomeMain');
   try {
-    await host.start();
+    host.start();
     assert.equal(screen.forcedRenders(), 1);
     host.press(screen.live['already']);
     assert.deepEqual(names(host.stop()), ['tap:already']);
 
-    await host.start();
+    host.start();
     assert.equal(screen.forcedRenders(), 2);
     host.press(screen.live['already']);
     assert.deepEqual(names(host.stop()), ['tap:already']);
