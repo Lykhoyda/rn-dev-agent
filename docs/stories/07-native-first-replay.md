@@ -46,7 +46,7 @@ Phase-2's shape is right and stays: a **pure interpreter** over typed steps with
 |---|---|
 | `tapOn: id` | snapshot query → `refreshRef`-style unique match (Story 05) → native press. **Text selectors work here** — the runner sees rendered text even where WDA is blind, which the CDP fallback could never support (fiber tree resolves testIDs, not text). |
 | `tapOn: text` | snapshot text match (exact-first, then Maestro's anchored-regex semantics) → press |
-| `inputText` | the existing `device_fill` pipeline with read-back verification (`device-interact.ts:684-899`) — already stronger than Maestro's blind `inputText` |
+| `inputText` | the `device_fill` pipeline with read-back verification — already stronger than Maestro's blind `inputText`; the [tool reference](../../apps/docs-site/src/content/docs/tools/device/device_fill.mdx) owns its current contract |
 | `assertVisible` | polling snapshot query with the 17 s adjusted budget; hit-test visibility (topmost-at-center, Maestro `ViewHierarchy.kt:40-95`) not mere presence |
 | `assertNotVisible` | inverted short-poll ("keep checking it stays gone", `Orchestra.kt:1027-1046`) |
 | `scrollUntilVisible` | `device_scrollintoview` (exists, max 12 iterations) |

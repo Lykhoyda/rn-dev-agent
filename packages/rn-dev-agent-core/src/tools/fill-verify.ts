@@ -1,44 +1,85 @@
-export type FillVerifyOutcome =
-  | 'verified-exact'
-  | 'verified-transformed'
-  | 'corrupted'
-  | 'unverifiable';
+// GH #581: strict fill-truth model. A fill is `filled:true` only when the
+// final arbiter proves a stable exact value through an authoritative oracle —
+// fiber read-back for controlled inputs, native verifyInput for uncontrolled
+// ones. Changed/half-length/same-length values, masked lengths, unreadable
+// states, and oracle disagreement are inconclusive and hard-fail.
 
-export interface FillVerifyInput {
+export type FiberVerifyOutcome = 'exact' | 'mismatch' | 'unreadable';
+
+export interface FiberVerifyInput {
   text: string;
   valueAfter: string | null;
-  controlled: boolean;
-  priorValueAfter?: string | null;
 }
 
-const HALF = 0.5;
+export function classifyFiberVerification(input: FiberVerifyInput): FiberVerifyOutcome {
+  if (input.valueAfter === null) return 'unreadable';
+  return input.valueAfter === input.text ? 'exact' : 'mismatch';
+}
 
-/**
- * Pure classification of a fill read-back. Escalation (`corrupted`) fires only
- * on a STRONG corruption signature — empty, or < half length and not yet proven
- * stable — exactly the #191 char-drop. Masks/formatters/maxLength → transformed.
- * Unreadable → unverifiable (soft-accept; never error merely for lack of proof).
- * NOTE (known gap, spec §9): length-only classification cannot distinguish a
- * length-preserving transform (autoCapitalize) from a length-preserving native
- * autocorrect swap; the JS path is deterministic so this bites only the native
- * path, where prong-3 suppression is the mitigation.
- */
-export function classifyFillVerification(input: FillVerifyInput): FillVerifyOutcome {
-  const { text, valueAfter, priorValueAfter } = input;
-  if (valueAfter === null) return 'unverifiable';
-  if (valueAfter === text) return 'verified-exact';
-  if (text.length === 0) return 'corrupted';
-  if (valueAfter.length > 0 && valueAfter.length >= HALF * text.length)
-    return 'verified-transformed';
-  if (
-    priorValueAfter !== undefined &&
-    priorValueAfter !== null &&
-    valueAfter !== '' &&
-    valueAfter === priorValueAfter
-  ) {
-    return 'verified-transformed';
+export type NativeVerifyVerdict =
+  | 'exact'
+  | 'mismatch'
+  | 'unreadable'
+  | 'secure-masked'
+  | 'target-lost'
+  | 'ambiguous'
+  | 'unavailable';
+
+export interface FinalVerification {
+  verified: boolean;
+  oracle: 'fiber' | 'native' | 'fiber+native' | 'none';
+  fiber: FiberVerifyOutcome | 'unavailable';
+  native: NativeVerifyVerdict;
+  nativeStable: boolean;
+  /** True when a readable oracle proved a stable wrong value (clear-first correction may descend). */
+  observedMismatch: boolean;
+}
+
+// Arbitration: fiber-exact (controlled) verifies unless the native oracle
+// READ a conflicting value; native stable-exact verifies when fiber cannot
+// read. Native `ambiguous`/`target-lost` poison BOTH oracles — the same
+// identifier ambiguity or screen change undermines the fiber's testID
+// resolution too — so they hard-fail and veto corrective descent.
+export function combineVerificationOracles(
+  fiber: FiberVerifyOutcome | 'unavailable',
+  native: NativeVerifyVerdict,
+  nativeStable: boolean,
+): FinalVerification {
+  const targetCompromised = native === 'ambiguous' || native === 'target-lost';
+  const fiberReadable = fiber === 'exact' || fiber === 'mismatch';
+  let verified = false;
+  let oracle: FinalVerification['oracle'] = 'none';
+  if (!targetCompromised) {
+    if (fiber === 'exact' && native === 'exact' && nativeStable) {
+      verified = true;
+      oracle = 'fiber+native';
+    } else if (fiber === 'exact' && native !== 'mismatch') {
+      // Controlled fiber truth stands unless the native oracle READ a
+      // conflicting value; an exact-but-still-settling native read agrees.
+      verified = true;
+      oracle = 'fiber';
+    } else if (!fiberReadable && native === 'exact' && nativeStable) {
+      verified = true;
+      oracle = 'native';
+    }
   }
-  return 'corrupted';
+  // Corrective descent needs an UNANIMOUS readable mismatch: any exact claim
+  // from either oracle (stable or not) makes the state disagreement/settling —
+  // inconclusive and never retryable.
+  const anyExact = fiber === 'exact' || native === 'exact';
+  const observedMismatch =
+    !verified &&
+    !targetCompromised &&
+    !anyExact &&
+    (fiber === 'mismatch' || (native === 'mismatch' && nativeStable));
+  return {
+    verified,
+    oracle,
+    fiber,
+    native,
+    nativeStable,
+    observedMismatch,
+  };
 }
 
 export interface ResolveTestIdOpts {
@@ -63,21 +104,20 @@ export function resolveJsTestId(ref: string, opts: ResolveTestIdOpts = {}): stri
   return stripped;
 }
 
-export type NativeRetypeDecision =
-  | { action: 'accept' }
-  | { action: 'retype'; delayMs: number }
-  | { action: 'escalate' };
+export type NativeRetypeDecision = { action: 'retype'; delayMs: number } | { action: 'escalate' };
 
 const RETYPE_DELAY_MS = 40;
 
-/** Pure decision for the native read-back loop. */
+// Only an OBSERVED stable mismatch may descend (same-target clear-first
+// correction); inconclusive outcomes never retype.
 export function decideNativeRetype(
-  outcome: FillVerifyOutcome,
+  verification: FinalVerification,
   attemptsSoFar: number,
   maxAttempts: number,
 ): NativeRetypeDecision {
-  if (outcome !== 'corrupted') return { action: 'accept' };
-  if (attemptsSoFar >= maxAttempts) return { action: 'escalate' };
+  if (!verification.observedMismatch || attemptsSoFar >= maxAttempts) {
+    return { action: 'escalate' };
+  }
   return { action: 'retype', delayMs: RETYPE_DELAY_MS };
 }
 
@@ -88,8 +128,9 @@ export interface EvaluateSeam {
 
 export interface JsFillResult {
   handled: boolean;
-  outcome?: FillVerifyOutcome;
-  valueAfter?: string | null;
+  /** The mutating evaluate may have reached the app but its outcome is unknown — treat as possible mutation. */
+  dispatchUncertain?: boolean;
+  outcome?: FiberVerifyOutcome;
   controlled?: boolean;
   handler?: string;
 }
@@ -121,11 +162,21 @@ async function readInputValueOnce(
   return null;
 }
 
+/** Mutation-free controlled-ness/value probe used to pick the fill tier. */
+export async function probeInputState(
+  deps: EvaluateSeam,
+  testID: string,
+): Promise<{ readable: boolean; controlled: boolean; value: string | null }> {
+  const read = await readInputValueOnce(deps, testID);
+  if (!read) return { readable: false, controlled: false, value: null };
+  return { readable: true, controlled: read.controlled, value: read.value };
+}
+
 /**
  * Poll readInputValue until the controlled re-render flushes. Stops on exact, or
  * when the value diverges from the pre-type `valueBefore` (flushed → classify).
  * Defeats the debounced-onChangeText read race. valueBefore null (uncontrolled)
- * → polls then returns null → unverifiable upstream.
+ * → polls then returns null → unreadable upstream.
  */
 export async function settleRead(
   deps: EvaluateSeam,
@@ -148,9 +199,62 @@ export async function settleRead(
     if (value !== valueBefore) break;
     if (i < READ_SETTLE_TRIES - 1) await sleep(READ_SETTLE_DELAY_MS);
   }
-  // If we never got a successful read, the field value is unknown → null → unverifiable upstream.
+  // If we never got a successful read, the field value is unknown → null → unreadable upstream.
   if (!everRead) return { value: null, controlled: false };
   return { value, controlled };
+}
+
+const FIBER_CONFIRM_DELAY_MS = 150;
+const FINAL_VERIFY_TRIES = 6;
+const FINAL_VERIFY_DELAY_MS = 100;
+
+/**
+ * Final fiber oracle: poll through the declared settle window until the exact
+ * value appears, then require it to hold on a delayed confirmation read (an
+ * early exact that reverts is a mismatch). A non-exact value counts as
+ * `mismatch` only when stable across consecutive reads; an unstable or
+ * uncontrolled read is inconclusive (`unreadable`). Fiber-exact is only ever
+ * reported for controlled inputs — the value prop is the authoritative state.
+ */
+export async function finalFiberVerify(
+  deps: EvaluateSeam,
+  testID: string,
+  text: string,
+): Promise<FiberVerifyOutcome> {
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  let previous: { value: string | null; controlled: boolean } | null = null;
+  let last: { value: string | null; controlled: boolean } | null = null;
+  for (let i = 0; i < FINAL_VERIFY_TRIES; i++) {
+    const read = await readInputValueOnce(deps, testID);
+    if (read) {
+      if (read.value === text && read.controlled) {
+        await sleep(FIBER_CONFIRM_DELAY_MS);
+        const confirm = await readInputValueOnce(deps, testID);
+        if (confirm && confirm.value === text && confirm.controlled) return 'exact';
+        return 'unreadable';
+      }
+      previous = last;
+      last = read;
+    } else {
+      // A failed read breaks consecutiveness — stability evidence resets.
+      previous = null;
+      last = null;
+    }
+    if (i < FINAL_VERIFY_TRIES - 1) await sleep(FINAL_VERIFY_DELAY_MS);
+  }
+  // Mismatch requires the FINAL two consecutive reads to agree on the same
+  // controlled non-null value; anything else is inconclusive.
+  if (
+    last !== null &&
+    previous !== null &&
+    last.value !== null &&
+    last.controlled &&
+    previous.controlled &&
+    last.value === previous.value
+  ) {
+    return 'mismatch';
+  }
+  return 'unreadable';
 }
 
 /**
@@ -163,31 +267,55 @@ export async function attemptJsFill(
   text: string,
 ): Promise<JsFillResult> {
   let probe: Record<string, unknown>;
+  // A failure AFTER the mutating evaluate was sent is ambiguous (the handler
+  // may have fired) — flagged dispatchUncertain so callers hard-fail instead
+  // of typing again. A helper-reported error is a clean pre-mutation no-op.
   try {
     const expr =
       '__RN_AGENT.interact(' +
       JSON.stringify({ action: 'typeText', testID, text, verify: true }) +
       ')';
     const r = await deps.evaluate(expr);
-    if (r.error || typeof r.value !== 'string') return { handled: false };
+    if (r.error || typeof r.value !== 'string') {
+      return { handled: false, dispatchUncertain: true };
+    }
     probe = JSON.parse(r.value) as Record<string, unknown>;
   } catch {
-    return { handled: false };
+    return { handled: false, dispatchUncertain: true };
   }
+  // A helper-reported error is a provable pre-mutation no-op; a response shape
+  // without `controlled` is an unknown helper contract — the handler may have
+  // fired, so it is dispatch-uncertain.
   if (probe.error) return { handled: false };
-  if (probe.controlled === undefined) return { handled: false };
+  if (probe.controlled === undefined) return { handled: false, dispatchUncertain: true };
   if (probe.handlerCalled === false || probe.handlerCalled === undefined) return { handled: false };
 
   const valueBefore = typeof probe.valueBefore === 'string' ? probe.valueBefore : null;
   const settled = await settleRead(deps, testID, text, valueBefore);
+  // A read that lost controlled-ness mid-flight is not authoritative.
+  let outcome = settled.controlled
+    ? classifyFiberVerification({ text, valueAfter: settled.value })
+    : ('unreadable' as FiberVerifyOutcome);
+  if (outcome === 'mismatch') {
+    // A transient divergence is not proof of a wrong value — require the
+    // non-exact value to hold on a confirmation read before reporting it.
+    const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+    await sleep(FIBER_CONFIRM_DELAY_MS);
+    const confirm = await readInputValueOnce(deps, testID);
+    if (confirm && confirm.value === text && confirm.controlled) {
+      outcome = 'exact';
+    } else if (
+      !confirm ||
+      !confirm.controlled ||
+      confirm.value === null ||
+      confirm.value !== settled.value
+    ) {
+      outcome = 'unreadable';
+    }
+  }
   return {
     handled: true,
-    outcome: classifyFillVerification({
-      text,
-      valueAfter: settled.value,
-      controlled: settled.controlled,
-    }),
-    valueAfter: settled.value,
+    outcome,
     controlled: settled.controlled,
     handler: typeof probe.handlerCalled === 'string' ? probe.handlerCalled : undefined,
   };

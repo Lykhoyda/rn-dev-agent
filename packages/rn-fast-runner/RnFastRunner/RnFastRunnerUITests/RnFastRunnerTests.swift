@@ -69,6 +69,7 @@ class RnFastRunnerTests: XCTestCase {
   var needsPostSnapshotInteractionDelay = false
   var currentSnapshotGeneration = 0
   var retainedSnapshotTargets: [Int: RetainedSnapshotTarget] = [:]
+  var lastExactTypeTarget: RecordedExactTypeTarget?
   var needsFirstInteractionDelay = false
   let interactiveTypes: Set<XCUIElement.ElementType> = [
     .button,

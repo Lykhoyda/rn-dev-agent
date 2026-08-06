@@ -8,6 +8,7 @@ import android.accessibilityservice.AccessibilityServiceInfo
 import android.app.Instrumentation
 import android.content.Intent
 import android.graphics.Rect
+import android.os.Build
 import android.os.SystemClock
 import android.util.Base64
 import android.view.KeyEvent
@@ -29,12 +30,33 @@ import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.roundToInt
 
-class NoFocusedInputException(message: String) : IllegalStateException(message)
+// GH #581: "none" requires read-back proof the field is unchanged; any
+// clear/keyevent pass promotes to "observed"; unprovable states are "possible".
+enum class MutationDisposition(val wire: String) {
+    NONE("none"),
+    OBSERVED("observed"),
+    POSSIBLE("possible"),
+}
 
-// Story 10 (#391): the focused field ignored ACTION_SET_TEXT (and any
-// applicable keyevent fallback) — distinct from "no focused field" so the
-// bridge descends its fill ladder instead of re-tapping a healthy focus.
-class SetTextRejectedException(message: String) : IllegalStateException(message)
+open class TypedRunnerException(
+    val code: String,
+    message: String,
+    val mutation: MutationDisposition,
+) : IllegalStateException(message)
+
+class NoTextInputTargetException(message: String) :
+    TypedRunnerException("NO_TEXT_INPUT_TARGET", message, MutationDisposition.NONE)
+
+class TextTargetFocusFailedException(message: String) :
+    TypedRunnerException("TEXT_TARGET_FOCUS_FAILED", message, MutationDisposition.NONE)
+
+class FocusTargetOccludedException(message: String) :
+    TypedRunnerException("FOCUS_TARGET_OCCLUDED", message, MutationDisposition.NONE)
+
+// Story 10 (#391): distinct from "no target" so the bridge descends to its
+// clear-first Maestro tier instead of re-tapping a healthy focus.
+class SetTextRejectedException(message: String, mutation: MutationDisposition) :
+    TypedRunnerException("SET_TEXT_REJECTED", message, mutation)
 
 class SnapshotParseException(message: String) : IllegalStateException(message)
 class AccessibilityUnavailableException(message: String) : IllegalStateException(message)
@@ -50,8 +72,8 @@ class CommandDispatcher(
         // (cdp-bridge test/unit/gh-418-command-surface-sync.test.js) enforces
         // that this list exactly matches the dispatch when-branches below.
         val SUPPORTED_COMMANDS = listOf(
-            "snapshot", "tap", "press", "type", "fill", "drag", "swipe", "scroll",
-            "screenshot", "back", "dismissKeyboard", "keyboard", "longPress",
+            "snapshot", "tap", "press", "type", "fill", "verifyInput", "drag", "swipe",
+            "scroll", "screenshot", "back", "dismissKeyboard", "keyboard", "longPress",
             "pinch", "findText", "isWindowUpdating", "status",
         )
 
@@ -63,6 +85,11 @@ class CommandDispatcher(
         // (snapshot/type) get 35s client-side — a tighter cap would regress
         // cold-launch success without helping the stall the windows check already ends.
         const val FOREGROUND_READY_TIMEOUT_MS = 10_000L
+
+        // GH #581: actual Android input class spellings — fully qualified only
+        // (RN TextInput reports android.widget.EditText; bare names never match).
+        val INPUT_CLASS_PATTERN: Pattern =
+            Pattern.compile(".+\\.(\\w*EditText|\\w*AutoCompleteTextView)$")
     }
 
     init {
@@ -86,10 +113,17 @@ class CommandDispatcher(
             foreground(appPackage)
         }
 
+        // GH #581: the recorded type target is only valid until the screen can
+        // change under it — any verb other than the type/verify pair drops it.
+        if (command !in setOf("type", "fill", "verifyInput", "snapshot", "status", "isWindowUpdating", "screenshot")) {
+            recordedTypeTarget = null
+        }
+
         val data = when (command) {
             "snapshot" -> snapshot(appPackage)
             "tap", "press" -> tap(cmd)
             "type", "fill" -> type(cmd)
+            "verifyInput" -> verifyInput(cmd)
             "drag", "swipe", "scroll" -> drag(cmd)
             "screenshot" -> screenshot()
             "back" -> JSONObject().put("pressed", device.pressBack())
@@ -193,18 +227,19 @@ class CommandDispatcher(
                         val className = parser.getAttributeValue(null, "class").orEmpty()
                         val visible = parser.getAttributeValue(null, "visible-to-user") != "false"
                         val enabled = parser.getAttributeValue(null, "enabled") != "false"
+                        val secure = parser.getAttributeValue(null, "password") == "true"
                         val identifier = normalizeIdentifier(resourceId).ifBlank { desc }
 
-                        nodes.put(
-                            JSONObject()
-                                .put("index", index)
-                                .put("type", className)
-                                .put("label", text.ifBlank { desc })
-                                .put("identifier", identifier)
-                                .put("rect", JSONObject().put("x", bounds.left).put("y", bounds.top).put("width", bounds.width()).put("height", bounds.height()))
-                                .put("hittable", HittableSemantics.fromSnapshotNode(enabled, visible))
-                                .put("enabled", enabled)
-                        )
+                        val node = JSONObject()
+                            .put("index", index)
+                            .put("type", className)
+                            .put("label", text.ifBlank { desc })
+                            .put("identifier", identifier)
+                            .put("rect", JSONObject().put("x", bounds.left).put("y", bounds.top).put("width", bounds.width()).put("height", bounds.height()))
+                            .put("hittable", HittableSemantics.fromSnapshotNode(enabled, visible))
+                            .put("enabled", enabled)
+                        if (secure) node.put("secure", true)
+                        nodes.put(node)
                         index += 1
                     }
                 }
@@ -251,16 +286,46 @@ class CommandDispatcher(
     }
 
     private fun type(cmd: JSONObject): JSONObject {
+        recordedTypeTarget = null
         val text = cmd.optString("text")
-        if (cmd.has("x") && cmd.has("y")) {
-            device.click(cmd.getDouble("x").roundToInt(), cmd.getDouble("y").roundToInt())
-            SystemClock.sleep(150)
+        // GH #581: bind the declared input exactly — never "click then use
+        // whatever is focused". One operation resolves the target, skips the
+        // focus tap only when THAT input is focused, otherwise taps the
+        // declared focus point and proves the same input gained focus.
+        val resolved = resolveExactTypeTarget(cmd)
+        val target = resolved.obj
+        var focusTap = "skipped-exact-focused"
+        if (!isFocusedSafely(target)) {
+            val bounds = target.visibleBounds
+            val fx = cmd.optDouble("focusX", cmd.optDouble("x", bounds.exactCenterX().toDouble()))
+                .roundToInt()
+            val fy = cmd.optDouble("focusY", cmd.optDouble("y", bounds.exactCenterY().toDouble()))
+                .roundToInt()
+            imeBoundsInScreen()?.let { ime ->
+                if (ime.contains(fx, fy)) {
+                    throw FocusTargetOccludedException(
+                        "FOCUS_TARGET_OCCLUDED: the focus tap point sits inside the visible keyboard; no tap or typing was performed. Dismiss the keyboard or scroll the input into view, then retry."
+                    )
+                }
+            }
+            device.click(fx, fy)
+            val deadline = SystemClock.uptimeMillis() + cmd.optLong("focusWaitMs", 1500L)
+            var focused = false
+            while (true) {
+                if (isFocusedSafely(target)) {
+                    focused = true
+                    break
+                }
+                if (SystemClock.uptimeMillis() >= deadline) break
+                SystemClock.sleep(100)
+            }
+            if (!focused) {
+                throw TextTargetFocusFailedException(
+                    "TEXT_TARGET_FOCUS_FAILED: the bound input did not gain focus after tapping the declared focus target; no typing was performed. Increase waitForKeyboardMs or refresh the snapshot and retry."
+                )
+            }
+            focusTap = "performed"
         }
-
-        val focused = device.findObject(By.focused(true))
-            ?: throw NoFocusedInputException(
-                "No focused text input on screen. The TS device_fill handler should re-tap the target ref before calling type."
-            )
 
         // Story 10 (#391): ACTION_SET_TEXT primary — atomic, full-Unicode
         // (emoji survive), fires the change events RN's onChangeText listens
@@ -268,12 +333,12 @@ class CommandDispatcher(
         // 75 ms pacing) only when the set was flat-out ignored and every
         // character has a keyevent representation.
         val before = try {
-            focused.text
+            target.text
         } catch (e: StaleObjectException) {
             null
         }
-        focused.text = text
-        var outcome = TextInputRecipe.classifySetText(text, before, readTargetText(focused))
+        target.text = text
+        var outcome = TextInputRecipe.classifySetText(text, before, readTargetText(target))
         var method = "setText"
 
         if (outcome == TextInputRecipe.SetTextOutcome.REJECTED) {
@@ -284,20 +349,18 @@ class CommandDispatcher(
             // ~200 chars the 75 ms pacing would blow the client's 35 s budget).
             if (!TextInputRecipe.keyEventFallbackViable(text)) {
                 throw SetTextRejectedException(
-                    "Focused field ignored ACTION_SET_TEXT and the text has no viable keyevent fallback (non-ASCII or exceeds the paced-typing budget)."
+                    "Bound field ignored ACTION_SET_TEXT and the text has no viable keyevent fallback (non-ASCII or exceeds the paced-typing budget).",
+                    mutation = MutationDisposition.NONE,
                 )
             }
             // Codex P2 round-2 (#564): keyevents land in whatever is focused
             // NOW — if focus moved (OTP auto-advance), typing would hit the
             // wrong field. Refuse; the Maestro tier re-taps the target ref.
-            val stillFocused = try {
-                focused.isFocused
-            } catch (e: StaleObjectException) {
-                false
-            }
+            val stillFocused = isFocusedSafely(target)
             if (!stillFocused) {
                 throw SetTextRejectedException(
-                    "Focus moved away from the target after ACTION_SET_TEXT — refusing the keyevent fallback (it would type into the newly focused field)."
+                    "Focus moved away from the target after ACTION_SET_TEXT — refusing the keyevent fallback (it would type into the newly focused field).",
+                    mutation = MutationDisposition.NONE,
                 )
             }
             // The rejected set left the prior value in place — clear it with
@@ -316,14 +379,15 @@ class CommandDispatcher(
                 SystemClock.sleep(TextInputRecipe.KEYEVENT_PACING_MS)
             }
             method = "keyevents"
-            outcome = TextInputRecipe.classifySetText(text, before, readTargetText(focused))
+            outcome = TextInputRecipe.classifySetText(text, before, readTargetText(target))
             // Codex P2 round-2 (#564): the keyevent tier is judged strictly —
             // a TRANSFORMED read-back on a field that started non-empty can be
             // an under-deleted `old + text` remnant, not a formatter, so only
             // exact matches (or empty-start transforms) count as landed.
             if (!TextInputRecipe.keyEventOutcomeUsable(outcome, beforeWasEmpty = before.isNullOrEmpty())) {
                 throw SetTextRejectedException(
-                    "Focused field ignored both ACTION_SET_TEXT and the keyevent fallback."
+                    "Bound field ignored both ACTION_SET_TEXT and the keyevent fallback.",
+                    mutation = MutationDisposition.OBSERVED,
                 )
             }
         }
@@ -332,11 +396,288 @@ class CommandDispatcher(
         // landed, so a keyevent pass could double-apply. Report honestly and
         // let the bridge's own verification layers arbitrate.
 
+        recordTypeTarget(target, cmd)
+        // GH #581: requested text is never echoed back (secret safety).
         return JSONObject()
             .put("typed", true)
-            .put("text", text)
             .put("method", method)
             .put("setTextOutcome", outcome.name.lowercase())
+            .put("focusTap", focusTap)
+            .put("inputResolution", resolved.resolution)
+    }
+
+    private data class ResolvedInput(val obj: UiObject2, val resolution: String)
+
+    private data class RecordedTypeTarget(
+        val target: UiObject2,
+        val operationToken: String?,
+        val className: String,
+        val identifier: String?,
+        val bounds: Rect,
+        val snapshotGeneration: Int?,
+        val snapshotNodeIndex: Int?,
+    )
+
+    private var recordedTypeTarget: RecordedTypeTarget? = null
+
+    private fun optionalInt(cmd: JSONObject, key: String): Int? =
+        if (cmd.has(key) && !cmd.isNull(key)) cmd.getInt(key) else null
+
+    private fun optionalString(cmd: JSONObject, key: String): String? =
+        cmd.optString(key).ifBlank { null }
+
+    private fun recordTypeTarget(target: UiObject2, cmd: JSONObject) {
+        val className = runCatching { target.className ?: "" }
+            .getOrDefault(optionalString(cmd, "snapshotElementType").orEmpty())
+        val identifier = runCatching { objectIdentifier(target) }
+            .getOrDefault(optionalString(cmd, "snapshotIdentifier"))
+        val bounds = runCatching { Rect(target.visibleBounds) }
+            .getOrElse { describedBounds(cmd) ?: Rect() }
+        recordedTypeTarget = RecordedTypeTarget(
+            target = target,
+            operationToken = optionalString(cmd, "operationToken"),
+            className = className,
+            identifier = identifier,
+            bounds = bounds,
+            snapshotGeneration = optionalInt(cmd, "snapshotGeneration"),
+            snapshotNodeIndex = optionalInt(cmd, "snapshotNodeIndex"),
+        )
+    }
+
+    private fun objectIdentifier(obj: UiObject2): String? {
+        val res = obj.resourceName?.let { normalizeIdentifier(it) }
+        if (!res.isNullOrBlank()) return res
+        val desc = obj.contentDescription
+        return if (desc.isNullOrBlank()) null else desc.toString()
+    }
+
+    private fun isFocusedSafely(obj: UiObject2): Boolean = try {
+        obj.isFocused
+    } catch (e: StaleObjectException) {
+        false
+    }
+
+    private fun inputCandidates(): List<UiObject2> =
+        device.findObjects(By.clazz(INPUT_CLASS_PATTERN)).orEmpty()
+
+    private fun boundsMatch(a: Rect, b: Rect, tolerance: Int = 8): Boolean =
+        abs(a.centerX() - b.centerX()) <= tolerance &&
+            abs(a.centerY() - b.centerY()) <= tolerance &&
+            abs(a.width() - b.width()) <= tolerance &&
+            abs(a.height() - b.height()) <= tolerance
+
+    private fun strictlyContains(outer: Rect, inner: Rect): Boolean =
+        outer != inner && outer.contains(inner)
+
+    private fun describedBounds(cmd: JSONObject): Rect? {
+        val bounds = cmd.optJSONObject("targetBounds") ?: return null
+        return Rect(
+            bounds.getDouble("x").roundToInt(),
+            bounds.getDouble("y").roundToInt(),
+            (bounds.getDouble("x") + bounds.getDouble("width")).roundToInt(),
+            (bounds.getDouble("y") + bounds.getDouble("height")).roundToInt(),
+        )
+    }
+
+    private fun targetIdentities(candidates: List<UiObject2>): List<TextInputRecipe.TargetIdentity> =
+        candidates.map { candidate ->
+            val bounds = candidate.visibleBounds
+            TextInputRecipe.TargetIdentity(
+                type = candidate.className ?: "",
+                identifier = objectIdentifier(candidate),
+                frame = TextInputRecipe.TargetFrame(
+                    bounds.left,
+                    bounds.top,
+                    bounds.right,
+                    bounds.bottom,
+                ),
+            )
+        }
+
+    // Exact binding tiers mirroring the iOS runner: unique identifier across
+    // ALL recognized inputs, then unique bounds-equality, then a unique (or
+    // strictly nested) point hit. Never "first match", never ambient focus for
+    // a supplied target.
+    private fun resolveExactTypeTarget(cmd: JSONObject): ResolvedInput {
+        val identifier = cmd.optString("snapshotIdentifier").ifBlank { null }
+        val expectedClass = cmd.optString("snapshotElementType").ifBlank { null }
+        val allCandidates = inputCandidates()
+        val described = describedBounds(cmd)
+        if (identifier != null) {
+            return when (
+                val resolution = TextInputRecipe.resolveIdentifier(
+                    targetIdentities(allCandidates),
+                    expectedClass,
+                    identifier,
+                    described?.let {
+                        TextInputRecipe.TargetFrame(it.left, it.top, it.right, it.bottom)
+                    },
+                    requireFrame = true,
+                )
+            ) {
+                is TextInputRecipe.TargetResolution.Unique -> ResolvedInput(
+                    allCandidates[resolution.index],
+                    "identifier",
+                )
+                TextInputRecipe.TargetResolution.Ambiguous -> throw NoTextInputTargetException(
+                    "NO_TEXT_INPUT_TARGET: identifier \"$identifier\" matches multiple text inputs; no typing was performed"
+                )
+                TextInputRecipe.TargetResolution.Absent -> throw NoTextInputTargetException(
+                    "NO_TEXT_INPUT_TARGET: no text input matches identifier \"$identifier\"; no typing was performed"
+                )
+            }
+        }
+        val candidates = allCandidates.filter {
+            expectedClass == null || (it.className ?: "") == expectedClass
+        }
+        if (described != null) {
+            val byBounds = candidates.filter { boundsMatch(it.visibleBounds, described) }
+            if (byBounds.size > 1) {
+                throw NoTextInputTargetException(
+                    "NO_TEXT_INPUT_TARGET: the described bounds match ${byBounds.size} text inputs; no typing was performed"
+                )
+            }
+            return ResolvedInput(
+                byBounds.firstOrNull() ?: throw NoTextInputTargetException(
+                    "NO_TEXT_INPUT_TARGET: no text input matches the described bounds; refresh the snapshot and rebind, no typing was performed"
+                ),
+                "bounds",
+            )
+        }
+        if (cmd.has("x") && cmd.has("y")) {
+            val px = cmd.getDouble("x").roundToInt()
+            val py = cmd.getDouble("y").roundToInt()
+            val containing = candidates.filter { it.visibleBounds.contains(px, py) }
+                .sortedBy { it.visibleBounds.width().toLong() * it.visibleBounds.height() }
+            when {
+                containing.isEmpty() -> throw NoTextInputTargetException(
+                    "NO_TEXT_INPUT_TARGET: no text input exists at ($px, $py); typing into a previously focused field was removed — bind the input's ref/testID and retry"
+                )
+                containing.size == 1 -> return ResolvedInput(containing[0], "point")
+                else -> {
+                    for (i in 0 until containing.size - 1) {
+                        if (!strictlyContains(containing[i + 1].visibleBounds, containing[i].visibleBounds)) {
+                            throw NoTextInputTargetException(
+                                "NO_TEXT_INPUT_TARGET: multiple non-nested text inputs overlap ($px, $py); bind the input's ref/testID and retry"
+                            )
+                        }
+                    }
+                    return ResolvedInput(containing[0], "point")
+                }
+            }
+        }
+        val focused = device.findObject(By.focused(true).clazz(INPUT_CLASS_PATTERN))
+            ?: throw NoTextInputTargetException(
+                "NO_TEXT_INPUT_TARGET: no text input is focused and no target was provided; app-wide blind typing was removed"
+            )
+        return ResolvedInput(focused, "focused")
+    }
+
+    private fun verifyInput(cmd: JSONObject): JSONObject {
+        val expected = cmd.optString("text")
+        val recorded = recordedTypeTarget
+        var target: UiObject2? = null
+        var lostVerdict = "target-lost"
+        val operationToken = optionalString(cmd, "operationToken")
+        if (operationToken != null) {
+            if (recorded?.operationToken == operationToken) target = recorded.target
+        } else {
+            val candidates = inputCandidates()
+            val descriptorAgrees = recorded != null && TextInputRecipe.recordedDescriptorAgrees(
+                recorded.snapshotGeneration,
+                recorded.snapshotNodeIndex,
+                recorded.className,
+                recorded.identifier,
+                optionalInt(cmd, "snapshotGeneration"),
+                optionalInt(cmd, "snapshotNodeIndex"),
+                optionalString(cmd, "snapshotElementType"),
+                optionalString(cmd, "snapshotIdentifier"),
+            )
+            if (recorded != null && descriptorAgrees) {
+                if (recorded.identifier != null) {
+                    when (
+                        val resolution = TextInputRecipe.resolveIdentifier(
+                            targetIdentities(candidates),
+                            recorded.className,
+                            recorded.identifier,
+                            null,
+                            requireFrame = false,
+                        )
+                    ) {
+                        is TextInputRecipe.TargetResolution.Unique -> target = candidates[resolution.index]
+                        TextInputRecipe.TargetResolution.Ambiguous -> lostVerdict = "ambiguous"
+                        TextInputRecipe.TargetResolution.Absent -> Unit
+                    }
+                } else {
+                    val byRecord = candidates.filter {
+                        (it.className ?: "") == recorded.className &&
+                            objectIdentifier(it) == null &&
+                            boundsMatch(it.visibleBounds, recorded.bounds)
+                    }
+                    when {
+                        byRecord.size == 1 -> target = byRecord[0]
+                        byRecord.size > 1 -> lostVerdict = "ambiguous"
+                    }
+                }
+            }
+            if (target == null && lostVerdict != "ambiguous") {
+                val identifier = cmd.optString("snapshotIdentifier").ifBlank { null }
+                val expectedClass = cmd.optString("snapshotElementType").ifBlank { null }
+                val described = describedBounds(cmd)
+                if (identifier != null) {
+                    val frame = described?.let {
+                        TextInputRecipe.TargetFrame(it.left, it.top, it.right, it.bottom)
+                    }
+                    when (
+                        val resolution = TextInputRecipe.resolveIdentifier(
+                            targetIdentities(candidates),
+                            expectedClass,
+                            identifier,
+                            frame,
+                            requireFrame = true,
+                        )
+                    ) {
+                        is TextInputRecipe.TargetResolution.Unique -> target = candidates[resolution.index]
+                        TextInputRecipe.TargetResolution.Ambiguous -> lostVerdict = "ambiguous"
+                        TextInputRecipe.TargetResolution.Absent -> Unit
+                    }
+                } else if (described != null) {
+                    val byFrame = candidates.filter {
+                        (expectedClass == null || (it.className ?: "") == expectedClass) &&
+                            boundsMatch(it.visibleBounds, described)
+                    }
+                    when {
+                        byFrame.size == 1 -> target = byFrame[0]
+                        byFrame.size > 1 -> lostVerdict = "ambiguous"
+                    }
+                }
+            }
+        }
+        val bound = target
+            ?: return JSONObject().put("verifyVerdict", lostVerdict).put("verifyStable", false)
+        val secure = cmd.optBoolean("secureInput", false)
+        var previous: TextInputRecipe.VerifyObservation? = null
+        var verdict = "unreadable"
+        var stable = false
+        for (attempt in 0 until 3) {
+            val raw = readTargetText(bound)
+            val hint = readTargetHint(bound)
+            val observation = TextInputRecipe.verifyObservation(
+                expected,
+                raw,
+                hint.value,
+                hint.known,
+                secure,
+            )
+            verdict = observation.verdict
+            if (previous == observation) {
+                stable = true
+                break
+            }
+            previous = observation
+            if (attempt < 2) SystemClock.sleep(150)
+        }
+        return JSONObject().put("verifyVerdict", verdict).put("verifyStable", stable)
     }
 
     // Story 10 (#391): read back from the ORIGINAL target node, never from
@@ -350,6 +691,17 @@ class CommandDispatcher(
             target.text
         } catch (e: StaleObjectException) {
             null
+        }
+    }
+
+    private data class HintRead(val value: String?, val known: Boolean)
+
+    private fun readTargetHint(target: UiObject2): HintRead {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return HintRead(null, false)
+        return try {
+            HintRead(target.hint, true)
+        } catch (e: StaleObjectException) {
+            HintRead(null, false)
         }
     }
 

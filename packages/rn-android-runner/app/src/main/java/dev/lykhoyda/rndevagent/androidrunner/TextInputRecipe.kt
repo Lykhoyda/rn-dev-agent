@@ -10,7 +10,16 @@ package dev.lykhoyda.rndevagent.androidrunner
 object TextInputRecipe {
     const val KEYEVENT_PACING_MS = 75L
 
+    private val INPUT_TYPE_PATTERN = Regex(".+\\.(\\w*EditText|\\w*AutoCompleteTextView)$")
+
     enum class SetTextOutcome { ACCEPTED, TRANSFORMED, REJECTED, UNVERIFIED }
+
+    data class VerifyObservation(
+        val raw: String?,
+        val hint: String?,
+        val hintKnown: Boolean,
+        val verdict: String,
+    )
 
     // Read-back classification after a set attempt:
     //   ACCEPTED    — field now holds exactly the requested text.
@@ -43,6 +52,100 @@ object TextInputRecipe {
             SetTextOutcome.TRANSFORMED -> beforeWasEmpty
             SetTextOutcome.REJECTED -> false
         }
+
+    fun classifyVerify(
+        expected: String,
+        raw: String?,
+        hint: String?,
+        hintKnown: Boolean,
+        secure: Boolean,
+    ): String {
+        if (raw == null) return "unreadable"
+        val placeholderEqual = !hint.isNullOrEmpty() && raw == hint
+        if (secure) {
+            if (expected.isEmpty()) {
+                if (raw.isEmpty()) return "exact"
+                return if (!hintKnown || placeholderEqual) "ambiguous" else "mismatch"
+            }
+            return "secure-masked"
+        }
+        if (expected.isEmpty()) {
+            if (raw.isEmpty()) return "exact"
+            return if (!hintKnown || placeholderEqual) "ambiguous" else "mismatch"
+        }
+        if (raw == expected) return if (!hintKnown || placeholderEqual) "ambiguous" else "exact"
+        return "mismatch"
+    }
+
+    fun verifyObservation(
+        expected: String,
+        raw: String?,
+        hint: String?,
+        hintKnown: Boolean,
+        secure: Boolean,
+    ): VerifyObservation = VerifyObservation(
+        raw,
+        hint,
+        hintKnown,
+        classifyVerify(expected, raw, hint, hintKnown, secure),
+    )
+
+    fun recordedDescriptorAgrees(
+        recordedGeneration: Int?,
+        recordedNodeIndex: Int?,
+        recordedLiveType: String?,
+        recordedLiveIdentifier: String?,
+        requestedGeneration: Int?,
+        requestedNodeIndex: Int?,
+        requestedElementType: String?,
+        requestedIdentifier: String?,
+    ): Boolean {
+        if (recordedGeneration == null || recordedNodeIndex == null || recordedLiveType == null) {
+            return false
+        }
+        if (!INPUT_TYPE_PATTERN.matches(recordedLiveType)) return false
+        return recordedGeneration == requestedGeneration &&
+            recordedNodeIndex == requestedNodeIndex &&
+            recordedLiveType == requestedElementType &&
+            recordedLiveIdentifier == requestedIdentifier
+    }
+
+    data class TargetFrame(val left: Int, val top: Int, val right: Int, val bottom: Int)
+
+    data class TargetIdentity(
+        val type: String,
+        val identifier: String?,
+        val frame: TargetFrame,
+    )
+
+    sealed interface TargetResolution {
+        data class Unique(val index: Int) : TargetResolution
+        data object Ambiguous : TargetResolution
+        data object Absent : TargetResolution
+    }
+
+    private fun framesMatch(a: TargetFrame, b: TargetFrame, tolerance: Int = 8): Boolean =
+        kotlin.math.abs((a.left + a.right) - (b.left + b.right)) <= tolerance * 2 &&
+            kotlin.math.abs((a.top + a.bottom) - (b.top + b.bottom)) <= tolerance * 2 &&
+            kotlin.math.abs((a.right - a.left) - (b.right - b.left)) <= tolerance &&
+            kotlin.math.abs((a.bottom - a.top) - (b.bottom - b.top)) <= tolerance
+
+    fun resolveIdentifier(
+        candidates: List<TargetIdentity>,
+        expectedType: String?,
+        identifier: String,
+        expectedFrame: TargetFrame?,
+        requireFrame: Boolean,
+    ): TargetResolution {
+        val matches = candidates.withIndex().filter { it.value.identifier == identifier }
+        if (matches.size > 1) return TargetResolution.Ambiguous
+        val match = matches.firstOrNull() ?: return TargetResolution.Absent
+        if (expectedType != null && match.value.type != expectedType) return TargetResolution.Absent
+        if (requireFrame && (expectedFrame == null || !framesMatch(match.value.frame, expectedFrame))) {
+            return TargetResolution.Absent
+        }
+        return TargetResolution.Unique(match.index)
+    }
 
     data class KeyStroke(val keyCode: Int, val shift: Boolean)
 

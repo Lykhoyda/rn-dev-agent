@@ -174,6 +174,62 @@ test('GH-588 Slice C: a typed snapshot timeout poisons and reaps the exact runne
   );
 });
 
+test('GH-581: a thrown verifyInput timeout poisons and reaps the runner', async () => {
+  state();
+  _setFetchForTest(async () => {
+    throw new Error('RUNNER_TIMEOUT: verifyInput transport deadline exceeded');
+  });
+
+  const result = body(await runIOS({ command: 'verifyInput', text: 'redacted' }));
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'RUNNER_TIMEOUT');
+  assert.equal(getFastRunnerState(), null);
+  assert.equal(
+    (result.meta?.runnerTimeoutRecovery as { runner?: { stateCleared?: boolean } } | undefined)
+      ?.runner?.stateCleared,
+    true,
+  );
+});
+
+test('GH-581: verifyInput timeout preserves a concurrent replacement runner', async (t) => {
+  t.after(() => {
+    _setFetchForTest(globalThis.fetch);
+    _setFastRunnerStateForTest(null);
+  });
+  state();
+  _setFetchForTest(async () => {
+    _setFastRunnerStateForTest({
+      schemaVersion: 1,
+      pid: 222_222_222,
+      port: 22089,
+      deviceId: 'fixture-ios',
+      bundleId: 'dev.fixture',
+      startedAt: new Date(1).toISOString(),
+      protocolVersion: 2,
+      provenance: 'build-local',
+    } as never);
+    return new Response(
+      JSON.stringify({
+        ok: false,
+        v: 2,
+        error: { code: 'RUNNER_TIMEOUT', message: 'verifyInput timed out' },
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    );
+  });
+
+  const result = body(await runIOS({ command: 'verifyInput', text: 'redacted' }));
+
+  assert.equal(result.code, 'RUNNER_TIMEOUT');
+  assert.equal(
+    (result.meta?.runnerTimeoutRecovery as { reapDisposition?: string } | undefined)
+      ?.reapDisposition,
+    'replacement-preserved',
+  );
+  assert.equal(getFastRunnerState()?.pid, 222_222_222);
+});
+
 test('GH-588 Slice C: adopted runner postmortem is honestly unavailable', () => {
   state();
   assert.deepEqual(getRunnerPostMortem(), { available: false, provenance: 'adopted' });

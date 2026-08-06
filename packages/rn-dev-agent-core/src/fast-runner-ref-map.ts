@@ -1,6 +1,6 @@
 import { hashSnapshotNodes } from './lifecycle/settle-hash.js';
 
-interface ElementRect {
+export interface ElementRect {
   x: number;
   y: number;
   width: number;
@@ -25,6 +25,8 @@ export interface FlatNode {
   rect: ElementRect;
   enabled?: boolean;
   hittable?: boolean;
+  /** GH #581: Android password fields; never cached beyond the snapshot nodes. */
+  secure?: boolean;
 }
 
 interface XCUITreeNode {
@@ -47,6 +49,7 @@ export interface RefSignature {
   type: string;
   label?: string;
   identifier?: string;
+  rect?: ElementRect;
   flatIndex: number;
   nodeCount: number;
 }

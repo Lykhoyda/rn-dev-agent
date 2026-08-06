@@ -181,4 +181,167 @@ class TextInputRecipeTest {
     fun emptyTextIsNotKeyEventTypable() {
         assertFalse(TextInputRecipe.isKeyEventTypable(""))
     }
+
+    // GH #581: verifyInput classification — exact-only truth, secure fields
+    // never prove content, empty-expectation reads are hint-ambiguous.
+    @Test
+    fun classifyVerifyExactAndMismatch() {
+        assertEquals("exact", TextInputRecipe.classifyVerify("hello", "hello", "Name", true, secure = false))
+        assertEquals("mismatch", TextInputRecipe.classifyVerify("hello", "world", "Name", true, secure = false))
+        assertEquals("mismatch", TextInputRecipe.classifyVerify("hello", "hel", "Name", true, secure = false))
+        assertEquals("unreadable", TextInputRecipe.classifyVerify("hello", null, "Name", true, secure = false))
+    }
+
+    @Test
+    fun classifyVerifySecureNeverProvesContent() {
+        assertEquals("secure-masked", TextInputRecipe.classifyVerify("value-a", "•••••••", "Password", true, secure = true))
+        assertEquals("secure-masked", TextInputRecipe.classifyVerify("value-a", "value-a", "Password", true, secure = true))
+        assertEquals("exact", TextInputRecipe.classifyVerify("", "", "Password", true, secure = true))
+        assertEquals("ambiguous", TextInputRecipe.classifyVerify("", "Password", "Password", true, secure = true))
+        assertEquals("mismatch", TextInputRecipe.classifyVerify("", "•••", "Password", true, secure = true))
+    }
+
+    @Test
+    fun classifyVerifyEmptyExpectationIsHintAmbiguous() {
+        assertEquals("exact", TextInputRecipe.classifyVerify("", "", "Enter name", true, secure = false))
+        assertEquals("ambiguous", TextInputRecipe.classifyVerify("", "Enter name", "Enter name", true, secure = false))
+        assertEquals("mismatch", TextInputRecipe.classifyVerify("", "stale", "Enter name", true, secure = false))
+        assertEquals("ambiguous", TextInputRecipe.classifyVerify("Search", "Search", "Search", true, secure = false))
+    }
+
+    @Test
+    fun classifyVerifyUnknownHintProvenanceIsInconclusiveOnlyWhenNeeded() {
+        assertEquals("ambiguous", TextInputRecipe.classifyVerify("Search", "Search", null, false, secure = false))
+        assertEquals("ambiguous", TextInputRecipe.classifyVerify("", "Search", null, false, secure = false))
+        assertEquals("exact", TextInputRecipe.classifyVerify("", "", null, false, secure = false))
+        assertEquals("mismatch", TextInputRecipe.classifyVerify("Search", "Other", null, false, secure = false))
+    }
+
+    @Test
+    fun verifyObservationRequiresVerdictAndHintProvenanceAgreement() {
+        val ambiguous = TextInputRecipe.verifyObservation("Search", "Search", "Search", true, secure = false)
+        val exact = TextInputRecipe.verifyObservation("Search", "Search", null, true, secure = false)
+        assertFalse(ambiguous == exact)
+        assertEquals(exact, TextInputRecipe.verifyObservation("Search", "Search", null, true, secure = false))
+    }
+
+    @Test
+    fun recordedDescriptorRequiresPresentRecognizedIdentity() {
+        assertTrue(
+            TextInputRecipe.recordedDescriptorAgrees(
+                7,
+                12,
+                "android.widget.EditText",
+                "email",
+                7,
+                12,
+                "android.widget.EditText",
+                "email",
+            ),
+        )
+        assertFalse(
+            TextInputRecipe.recordedDescriptorAgrees(
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+            ),
+        )
+        assertFalse(
+            TextInputRecipe.recordedDescriptorAgrees(
+                7,
+                null,
+                "android.widget.EditText",
+                null,
+                7,
+                null,
+                "android.widget.EditText",
+                null,
+            ),
+        )
+        assertFalse(
+            TextInputRecipe.recordedDescriptorAgrees(
+                7,
+                12,
+                "EditText",
+                null,
+                7,
+                12,
+                "EditText",
+                null,
+            ),
+        )
+        assertFalse(
+            TextInputRecipe.recordedDescriptorAgrees(
+                7,
+                12,
+                "android.widget.EditText",
+                "runtime-email",
+                7,
+                12,
+                "android.widget.EditText",
+                null,
+            ),
+        )
+        assertFalse(
+            TextInputRecipe.recordedDescriptorAgrees(
+                7,
+                12,
+                "android.widget.AutoCompleteTextView",
+                "email",
+                7,
+                12,
+                "android.widget.EditText",
+                "email",
+            ),
+        )
+    }
+
+    @Test
+    fun targetResolutionRejectsCrossClassDuplicatesAndMovedReplacement() {
+        val frame = TextInputRecipe.TargetFrame(0, 100, 300, 144)
+        val duplicate = TextInputRecipe.resolveIdentifier(
+            listOf(
+                TextInputRecipe.TargetIdentity("android.widget.EditText", "email", frame),
+                TextInputRecipe.TargetIdentity("android.widget.AutoCompleteTextView", "email", frame),
+            ),
+            "android.widget.EditText",
+            "email",
+            frame,
+            requireFrame = true,
+        )
+        val moved = TextInputRecipe.resolveIdentifier(
+            listOf(
+                TextInputRecipe.TargetIdentity(
+                    "android.widget.EditText",
+                    "email",
+                    TextInputRecipe.TargetFrame(0, 400, 300, 444),
+                ),
+            ),
+            "android.widget.EditText",
+            "email",
+            frame,
+            requireFrame = true,
+        )
+        val shiftedRecordedTarget = TextInputRecipe.resolveIdentifier(
+            listOf(
+                TextInputRecipe.TargetIdentity(
+                    "android.widget.EditText",
+                    "email",
+                    TextInputRecipe.TargetFrame(0, 400, 300, 444),
+                ),
+            ),
+            "android.widget.EditText",
+            "email",
+            null,
+            requireFrame = false,
+        )
+        assertEquals(TextInputRecipe.TargetResolution.Ambiguous, duplicate)
+        assertEquals(TextInputRecipe.TargetResolution.Absent, moved)
+        assertEquals(TextInputRecipe.TargetResolution.Unique(0), shiftedRecordedTarget)
+    }
 }

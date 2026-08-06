@@ -10,6 +10,7 @@ struct FixtureApp: App {
 struct ContentView: View {
   @State private var count = 0
   @State private var text = ""
+  @State private var plainText = ""
   @State private var bottomText = ""
   @State private var bottomTaps = 0
 
@@ -22,6 +23,12 @@ struct ContentView: View {
       TextField("type here", text: $text)
         .textFieldStyle(.roundedBorder)
         .accessibilityIdentifier("fixture_input")
+        .padding(.horizontal)
+      // GH #581: placeholder-free input — an empty XCUI value proves a clear
+      // exactly (placeholder-bearing fields read their placeholder when empty).
+      TextField("", text: $plainText)
+        .textFieldStyle(.roundedBorder)
+        .accessibilityIdentifier("fixture_plain_input")
         .padding(.horizontal)
       List(1...100, id: \.self) { n in
         Text("row \(n)")

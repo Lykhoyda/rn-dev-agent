@@ -74,10 +74,8 @@ class CommandServer(
             val body = RunnerRuntime.dispatcher.dispatch(parsed)
             record(parsed, body)
             json(Response.Status.OK, body)
-        } catch (e: NoFocusedInputException) {
-            errorResponse(command, "NO_FOCUSED_INPUT", e.message ?: "no focused input", Response.Status.OK)
-        } catch (e: SetTextRejectedException) {
-            errorResponse(command, "SET_TEXT_REJECTED", e.message ?: "set text rejected", Response.Status.OK)
+        } catch (e: TypedRunnerException) {
+            errorResponse(command, e.code, e.message ?: e.code, Response.Status.OK, e.mutation.wire)
         } catch (e: SnapshotParseException) {
             errorResponse(command, "SNAPSHOT_PARSE_FAILED", e.message ?: "snapshot parse failed", Response.Status.OK)
         } catch (e: AccessibilityUnavailableException) {
@@ -94,10 +92,13 @@ class CommandServer(
         code: String,
         message: String,
         status: Response.Status,
+        mutation: String? = null,
     ): Response {
+        val error = JSONObject().put("code", code).put("message", message)
+        if (mutation != null) error.put("mutation", mutation)
         val body = JSONObject()
             .put("ok", false)
-            .put("error", JSONObject().put("code", code).put("message", message))
+            .put("error", error)
         record(command, body)
         return json(status, body)
     }

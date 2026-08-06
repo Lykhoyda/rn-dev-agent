@@ -300,6 +300,7 @@ const RN_FAST_RUNNER_COMMANDS = new Set([
     'press',
     'fill',
     'type',
+    'verify-input',
     'back',
     'screenshot',
     'keyboard',
@@ -373,26 +374,33 @@ export function buildRunIOSArgs(cliArgs, bundleId) {
             }
             return { command: 'tap', x, y, ...(bundleId ? { bundleId } : {}) };
         }
+        case 'verify-input': {
+            // GH #581: secret-safe exact read-back; the input descriptor is attached
+            // by runNative's exact-target decoration. Text is a RAW fixed slot —
+            // never flag-parsed, so values like "-1" survive verbatim.
+            const text = cliArgs[2] ?? '';
+            return { command: 'verifyInput', text, ...(bundleId ? { bundleId } : {}) };
+        }
         case 'fill':
         case 'type': {
-            // The Swift runner's `.type` command focuses an input at x/y AND types
-            // in one call (see RnFastRunnerTests+CommandExecution.swift:429-468 —
-            // `textInputAt(app:, x:, y:)` falls back to `focusedTextInput`). So no
-            // separate tap is needed: pass coords + text together.
-            const ref = positionals[0];
-            const text = positionals.slice(1).join(' ');
-            const delayRaw = optionValue(cliArgs, '--delay-ms');
+            // GH #581: the Swift runner's `.type` binds the exact input (descriptor
+            // attached by runNative's exact-target decoration), proves focus, and
+            // types in one native operation. Shape: [verb, ref, rawText, ...flags] —
+            // text is a raw slot so leading '-' values are never eaten as flags.
+            const ref = cliArgs[1];
+            const text = cliArgs[2] ?? '';
+            const flagArgs = cliArgs.slice(3);
+            const delayRaw = optionValue(flagArgs, '--delay-ms');
             const delayMs = delayRaw !== undefined && !Number.isNaN(Number(delayRaw)) ? Number(delayRaw) : undefined;
             const extra = {};
             if (delayMs !== undefined)
                 extra.delayMs = delayMs;
-            if (cliArgs.includes('--clear-first'))
+            if (flagArgs.includes('--clear-first'))
                 extra.clearFirst = true;
             // Story 04 (#385) M2 guard: an explicit --at-x/--at-y pin bypasses @ref
-            // re-resolution entirely — device_fill resolves coords ONCE before its
-            // pre-tap so the settle's ref-map refresh can't retarget the fill.
-            const atX = optionValue(cliArgs, '--at-x');
-            const atY = optionValue(cliArgs, '--at-y');
+            // re-resolution entirely so a settle's ref-map refresh can't retarget.
+            const atX = optionValue(flagArgs, '--at-x');
+            const atY = optionValue(flagArgs, '--at-y');
             if (atX !== undefined && atY !== undefined) {
                 const px = Number(atX), py = Number(atY);
                 if (Number.isFinite(px) && Number.isFinite(py)) {
@@ -425,6 +433,10 @@ export function buildRunIOSArgs(cliArgs, bundleId) {
                     ...extra,
                     ...(bundleId ? { bundleId } : {}),
                 };
+            }
+            // Legacy no-ref shape: ['type', text] — a single argument is the text.
+            if (cliArgs.length === 2) {
+                return { command: 'type', text: ref ?? '', ...(bundleId ? { bundleId } : {}) };
             }
             return { command: 'type', text, ...extra, ...(bundleId ? { bundleId } : {}) };
         }
@@ -512,6 +524,76 @@ export function buildRunIOSArgs(cliArgs, bundleId) {
             throw new Error(`buildRunIOSArgs: unsupported command "${cmd ?? '<empty>'}"`);
     }
 }
+// GH #581: attach the bound input's current-generation identity (and the
+// declared focus point) to a type/verifyInput dispatch. Fail-closed: if the
+// ref cannot be rebound in the current generation, nothing is dispatched.
+function exactTargetRebindFailure(inputRef) {
+    return failResult(`Exact input ${inputRef} could not be rebound in the current snapshot generation — nothing was dispatched. Refresh the snapshot and rebind the input.`, 'NO_TEXT_INPUT_TARGET', { mutation: 'none' });
+}
+function decorateExactTargetIOS(ios, exact) {
+    if (ios.command === 'verifyInput' && exact.operationToken) {
+        ios.operationToken = exact.operationToken;
+        return null;
+    }
+    const target = getFreshRefTarget(exact.inputRef, { allowUnknownKeyboardState: true });
+    if (!target)
+        return exactTargetRebindFailure(exact.inputRef);
+    delete ios._staleRef;
+    ios.x = Math.round(target.rect.x + target.rect.width / 2);
+    ios.y = Math.round(target.rect.y + target.rect.height / 2);
+    ios.targetBounds = target.rect;
+    ios.snapshotGeneration = target.snapshotGeneration;
+    ios.snapshotNodeIndex = target.snapshotNodeIndex;
+    ios.snapshotElementType = target.snapshotElementType;
+    if (target.snapshotLabel !== undefined)
+        ios.snapshotLabel = target.snapshotLabel;
+    if (target.snapshotIdentifier !== undefined)
+        ios.snapshotIdentifier = target.snapshotIdentifier;
+    if (target.keyboardStateAtSnapshot !== null) {
+        ios.keyboardStateAtSnapshot = target.keyboardStateAtSnapshot;
+    }
+    if (exact.focusX !== undefined)
+        ios.focusX = exact.focusX;
+    if (exact.focusY !== undefined)
+        ios.focusY = exact.focusY;
+    if (exact.focusWaitMs !== undefined)
+        ios.focusWaitMs = exact.focusWaitMs;
+    if (exact.operationToken !== undefined)
+        ios.operationToken = exact.operationToken;
+    return null;
+}
+function decorateExactTargetAndroid(android, exact) {
+    if (android.command === 'verifyInput' && exact.operationToken) {
+        android.operationToken = exact.operationToken;
+        if (exact.secure !== undefined)
+            android.secureInput = exact.secure;
+        return null;
+    }
+    const target = getFreshRefTarget(exact.inputRef, { allowUnknownKeyboardState: true });
+    if (!target)
+        return exactTargetRebindFailure(exact.inputRef);
+    delete android._staleRef;
+    android.x = Math.round(target.rect.x + target.rect.width / 2);
+    android.y = Math.round(target.rect.y + target.rect.height / 2);
+    android.targetBounds = target.rect;
+    android.snapshotGeneration = target.snapshotGeneration;
+    android.snapshotNodeIndex = target.snapshotNodeIndex;
+    android.snapshotElementType = target.snapshotElementType;
+    if (target.snapshotIdentifier !== undefined) {
+        android.snapshotIdentifier = target.snapshotIdentifier;
+    }
+    if (exact.focusX !== undefined)
+        android.focusX = exact.focusX;
+    if (exact.focusY !== undefined)
+        android.focusY = exact.focusY;
+    if (exact.focusWaitMs !== undefined)
+        android.focusWaitMs = exact.focusWaitMs;
+    if (exact.secure !== undefined)
+        android.secureInput = exact.secure;
+    if (exact.operationToken !== undefined)
+        android.operationToken = exact.operationToken;
+    return null;
+}
 function optionValue(cliArgs, flag) {
     const i = cliArgs.indexOf(flag);
     if (i === -1)
@@ -558,10 +640,14 @@ export function buildRunAndroidArgs(cliArgs, bundleId) {
             }
             return { command: 'tap', x, y, ...withBundle };
         }
+        case 'verify-input': {
+            const text = cliArgs[2] ?? '';
+            return { command: 'verifyInput', text, ...withBundle };
+        }
         case 'fill':
         case 'type': {
-            const ref = positionals[0];
-            const text = positionals.slice(1).join(' ');
+            const ref = cliArgs[1];
+            const text = cliArgs[2] ?? '';
             // Story 04 (#385) M2 guard — mirrors buildRunIOSArgs: a --at-x/--at-y pin
             // bypasses @ref re-resolution so a settle-refreshed map can't retarget.
             const atX = optionValue(cliArgs, '--at-x');
@@ -1242,6 +1328,14 @@ export async function runNative(cliArgs, opts = {}) {
         if (ios.command === 'type' && opts.verifyTypeReadback) {
             ios._verifyExactReadback = opts.verifyTypeReadback;
         }
+        if ((ios.command === 'type' || ios.command === 'verifyInput') && opts.exactTarget) {
+            const decorated = decorateExactTargetIOS(ios, opts.exactTarget);
+            if (decorated)
+                return decorated;
+        }
+        if (ios.command === 'verifyInput' && !opts.exactTarget) {
+            return failResult('verify-input requires an exact bound input (internal dispatch without exactTarget)', 'NO_TEXT_INPUT_TARGET', { mutation: 'none' });
+        }
         let healMeta = null;
         if (ios._staleRef) {
             const cachedTarget = getCachedMetadata(ios._staleRef);
@@ -1296,6 +1390,7 @@ export async function runNative(cliArgs, opts = {}) {
         'press',
         'fill',
         'type',
+        'verify-input',
         'back',
         'screenshot',
         'keyboard',
@@ -1355,6 +1450,14 @@ export async function runNative(cliArgs, opts = {}) {
         }
         const { runAndroid, consumePendingAndroidUpgradeNote } = await import('./runners/rn-android-runner-client.js');
         const android = buildRunAndroidArgs(cliArgs, appId);
+        if ((android.command === 'type' || android.command === 'verifyInput') && opts.exactTarget) {
+            const decorated = decorateExactTargetAndroid(android, opts.exactTarget);
+            if (decorated)
+                return decorated;
+        }
+        if (android.command === 'verifyInput' && !opts.exactTarget) {
+            return failResult('verify-input requires an exact bound input (internal dispatch without exactTarget)', 'NO_TEXT_INPUT_TARGET', { mutation: 'none' });
+        }
         let healMeta = null;
         if (android._staleRef && selfHealEnabled(process.env)) {
             const healed = await healStaleRef(android._staleRef, () => runAndroid({

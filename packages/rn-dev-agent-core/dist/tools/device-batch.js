@@ -1,6 +1,6 @@
 import { runNative } from '../agent-device-wrapper.js';
 import { settleEnabled } from '../lifecycle/settle.js';
-import { buildDirectionalScrollCliArgs, buildDirectionalSwipeCliArgs, fetchFindCandidates, pressCandidate, } from './device-interact.js';
+import { buildDirectionalScrollCliArgs, buildDirectionalSwipeCliArgs, cdpClientOrNull, fetchFindCandidates, performExactFill, pressCandidate, } from './device-interact.js';
 import { withSession, okResult, failResult } from '../utils.js';
 import { dismissKeyboardWithParity, healKeyboardOccludedTap, surfaceKeyboardGuard, } from '../runners/keyboard-guard.js';
 import { captureAndResizeScreenshot } from './device-list.js';
@@ -205,7 +205,7 @@ async function guardedBatchPress(cliArgs, opts, getClient) {
         retryTap: tap,
     });
 }
-async function executeStep(step, getClient) {
+async function executeStep(step, getClient, abortSignal) {
     switch (step.action) {
         case 'find': {
             // Phase 125: testID-keyed find re-resolves via snapshot per call.
@@ -292,27 +292,26 @@ async function executeStep(step, getClient) {
             return failResult('press requires ref, testID, or both x and y coordinates');
         }
         case 'fill': {
-            if (!step.text)
-                return failResult('fill requires text');
-            if (step.testID) {
-                const { refs, envelope, snapshotFailed } = await resolveTestIDViaSnapshot(step.testID);
-                if (snapshotFailed) {
-                    return failResult(`Snapshot failed while resolving testID "${step.testID}" for fill — agent-device unreachable`, 'SNAPSHOT_FAILED', { testID: step.testID, envelope: envelope?.slice(0, 500) });
-                }
-                if (refs.length > 1)
-                    return ambiguousTestIDFail(step.testID, refs);
-                const ref = refs[0];
-                if (!ref) {
-                    return failResult(`testID "${step.testID}" not found in current UI snapshot`, 'TESTID_NOT_FOUND', {
-                        testID: step.testID,
-                    });
-                }
-                return runNative(['fill', `@${ref}`, step.text], stepSettleOpts(step));
+            // GH #581: batch fills route through the same exact-target orchestrator
+            // and final-verification arbiter as device_fill (no JS/Maestro tiers —
+            // batch stays a scripted native surface, but truth rules are identical).
+            if (step.text === undefined) {
+                return failResult('fill requires text', { mutation: 'none' });
             }
-            if (!step.ref)
-                return failResult('fill requires ref or testID. Use a find+tap step first to focus the field, or pass testID for fresh resolution.');
-            const ref = step.ref.startsWith('@') ? step.ref : `@${step.ref}`;
-            return runNative(['fill', ref, step.text], stepSettleOpts(step));
+            const targetRef = step.testID ?? step.ref;
+            if (!targetRef) {
+                return failResult('fill requires ref or testID. Use a find+tap step first to focus the field, or pass testID for fresh resolution.', { mutation: 'none' });
+            }
+            const client = getClient ? cdpClientOrNull(getClient) : null;
+            return performExactFill({
+                ref: targetRef,
+                text: step.text,
+                settleTimeoutMs: step.settle === false ? 0 : BATCH_STEP_SETTLE_BUDGET_MS,
+            }, client, {
+                js: false,
+                maestro: false,
+                ...(abortSignal ? { abortSignal } : {}),
+            });
         }
         case 'swipe': {
             if (!step.direction)
@@ -409,12 +408,19 @@ export function createDeviceBatchHandler(getClient) {
             const stepTimeout = step.timeoutMs ?? 15_000;
             let stepTimer;
             let stepTimedOut = false;
+            const abortController = new AbortController();
             const result = await Promise.race([
-                executeStep(step, getClient),
+                executeStep(step, getClient, abortController.signal),
                 new Promise((resolve) => {
                     stepTimer = setTimeout(() => {
                         stepTimedOut = true;
-                        resolve(failResult(`Step ${i + 1} timed out after ${stepTimeout}ms; remaining steps were not started because the native operation may still be completing`));
+                        abortController.abort();
+                        resolve(step.action === 'fill'
+                            ? failResult(`Step ${i + 1} timed out after ${stepTimeout}ms; the fill may have mutated the field and no correction or later step will be started`, 'TEXT_ENTRY_UNVERIFIED', {
+                                mutation: 'possible',
+                                hint: 'Read the field state before any manual retry — do not blindly re-run the fill.',
+                            })
+                            : failResult(`Step ${i + 1} timed out after ${stepTimeout}ms; remaining steps were not started because the native operation may still be completing`));
                     }, stepTimeout);
                 }),
             ]);
@@ -432,6 +438,8 @@ export function createDeviceBatchHandler(getClient) {
                 try {
                     const parsed = JSON.parse(result.content[0].text);
                     stepResult.error = parsed.error;
+                    stepResult.code = parsed.code;
+                    stepResult.meta = parsed.meta;
                 }
                 catch {
                     /* ignore */
@@ -451,7 +459,8 @@ export function createDeviceBatchHandler(getClient) {
             // start a later OTP/form fill behind a timed-out mutation: that is the
             // interleaving boundary. Timeout therefore overrides optional and
             // continueOnError, while ordinary failures retain their legacy policy.
-            if (!success && (!step.optional || stepTimedOut)) {
+            const possibleFillFailure = !success && step.action === 'fill' && stepResult.meta?.mutation === 'possible';
+            if (!success && (!step.optional || stepTimedOut || possibleFillFailure)) {
                 // Capture failure screenshot regardless of continueOnError so the
                 // diagnostic trail isn't lost.
                 if (screenshotOn === 'failure' || screenshotOn === 'each') {
@@ -466,7 +475,7 @@ export function createDeviceBatchHandler(getClient) {
                         /* best effort */
                     }
                 }
-                if (continueOnError && !stepTimedOut) {
+                if (continueOnError && !stepTimedOut && !possibleFillFailure) {
                     // Phase 125: record the failure and proceed. failedStep stays null
                     // so the batch returns success-shape with failure_count populated.
                     failureRecords.push(stepResult);

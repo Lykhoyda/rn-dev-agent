@@ -87,7 +87,7 @@ test('buildDirectionalSwipeCliArgs emits a swipe gesture with duration', () => {
 
 // --- iOS dispatch no longer hangs forever when the runner wedges ---
 
-test('runIOS rejects with RUNNER_TIMEOUT when the runner does not respond', async () => {
+test('runIOS returns RUNNER_TIMEOUT when the runner does not respond', async () => {
   _setRunnerStateForTest({
     port: 22088,
     pid: 999999,
@@ -105,8 +105,14 @@ test('runIOS rejects with RUNNER_TIMEOUT when the runner does not respond', asyn
       }),
   );
   try {
-    await assert.rejects(() => runIOS({ command: 'tap', x: 1, y: 1 }), /RUNNER_TIMEOUT/);
+    const result = await runIOS({ command: 'tap', x: 1, y: 1 });
+    const payload = JSON.parse(result.content[0].text);
+    assert.equal(payload.ok, false);
+    assert.equal(payload.code, 'RUNNER_TIMEOUT');
+    assert.equal(payload.meta.runnerTimeoutRecovery.poisoned, true);
+    assert.equal(payload.meta.runnerTimeoutRecovery.runner.stateCleared, true);
   } finally {
+    _setFetchForTest(globalThis.fetch);
     _setHttpTimeoutForTest(null);
     _setRunnerStateForTest(null);
   }

@@ -211,6 +211,7 @@ test('end-to-end: runNative ios tap → runner /command + settle probe → meta.
   const REQUIRED = [
     'tap',
     'type',
+    'verifyInput',
     'drag',
     'longPress',
     'pinch',

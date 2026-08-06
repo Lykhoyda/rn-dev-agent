@@ -32,7 +32,16 @@ import { startSupervisor } from '../helpers/supervisor-harness.js';
 import { runnerStatePath, readJsonStateFile } from '../../dist/util/secure-state-file.js';
 
 const PLATFORM = process.env.GOLDEN_PLATFORM;
-const APP_ID = process.env.GOLDEN_APP_ID ?? 'dev.lykhoyda.rndevagent.fixture';
+const DEFAULT_APP_ID = 'dev.lykhoyda.rndevagent.fixture';
+const APP_ID = process.env.GOLDEN_APP_ID ?? DEFAULT_APP_ID;
+// GH #581: goldens must come from the known pristine fixture — a populated
+// real app would commit actual input text into the repository.
+if (APP_ID !== DEFAULT_APP_ID && process.env.GOLDEN_ALLOW_CUSTOM_APP !== '1') {
+  console.error(
+    `refusing to capture goldens from non-fixture app ${APP_ID} (set GOLDEN_ALLOW_CUSTOM_APP=1 only if you have verified its inputs are empty)`,
+  );
+  process.exit(1);
+}
 const DEVICE_ID = process.env.GOLDEN_DEVICE_ID;
 const OUT_DIR = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -93,9 +102,21 @@ function assertFixtureInstalled(): void {
 }
 
 function launchFixture(): void {
+  // Deterministic pristine state: kill any running instance first so a prior
+  // session's typed text can never leak into the captured snapshots (GH #581).
   if (PLATFORM === 'ios') {
+    try {
+      sh('xcrun', ['simctl', 'terminate', DEVICE_ID ?? 'booted', APP_ID], 15_000);
+    } catch {
+      /* not running */
+    }
     sh('xcrun', ['simctl', 'launch', DEVICE_ID ?? 'booted', APP_ID], 30_000);
   } else {
+    try {
+      sh('adb', [...ADB_TARGET, 'shell', 'am', 'force-stop', APP_ID], 15_000);
+    } catch {
+      /* not running */
+    }
     sh(
       'adb',
       [...ADB_TARGET, 'shell', 'am', 'start', '-W', '-n', androidLauncherComponent()],
@@ -254,9 +275,99 @@ async function callTool(s: any, name: string, args: Record<string, unknown> = {}
   return { isError: Boolean(line.result?.isError), envelope, text };
 }
 
+// GH #581: raw-layer captures shared by the bridge-session path and the
+// direct-runner path (strict session authority cannot open the fixture app
+// from a non-project cwd, so recaptures may drive an already-running runner
+// via GOLDEN_RUNNER_PORT + GOLDEN_RUNNER_CAPABILITY; the bridge-envelope
+// golden is only refreshed by the session path).
+async function captureRawGoldens(port: number, capability: string): Promise<void> {
+  const health = await rawGet(port, '/health', capability);
+  const healthBody = health.body as {
+    ok?: boolean;
+    runnerVersion?: string;
+    protocolVersion?: number;
+  };
+  if (health.httpStatus !== 200 || healthBody?.ok !== true) {
+    throw new Error(
+      `/health not healthy: HTTP ${health.httpStatus} ${JSON.stringify(health.body).slice(0, 300)}`,
+    );
+  }
+  const stamp = {
+    runnerVersion: healthBody.runnerVersion,
+    protocolVersion: healthBody.protocolVersion,
+    runnerPort: port,
+  };
+
+  const rawSnap = await rawCommand(port, { command: 'snapshot', appBundleId: APP_ID }, capability);
+  const rawSnapBody = rawSnap.body as {
+    ok?: boolean;
+    data?: { nodes?: Array<{ type?: string; identifier?: string; value?: unknown }> };
+  };
+  if (
+    rawSnap.httpStatus !== 200 ||
+    rawSnapBody?.ok !== true ||
+    !Array.isArray(rawSnapBody?.data?.nodes) ||
+    rawSnapBody.data.nodes.length === 0
+  ) {
+    throw new Error(
+      `raw snapshot unhealthy: HTTP ${rawSnap.httpStatus} ${JSON.stringify(rawSnap.body).slice(0, 300)}`,
+    );
+  }
+  // GH #581: refuse to commit any populated input. iOS reports a pristine
+  // field as a null value, so any non-empty input value means typed state
+  // leaked into the capture. (Android emits the HINT as an empty field's
+  // label, so the force-stop relaunch above is its pristine-state mechanism.)
+  const IOS_INPUT_TYPES = new Set(['TextField', 'SecureTextField', 'SearchField', 'TextView']);
+  const populated = (rawSnapBody.data?.nodes ?? []).filter(
+    (node) =>
+      IOS_INPUT_TYPES.has(node.type ?? '') &&
+      typeof node.value === 'string' &&
+      node.value.length > 0,
+  );
+  if (populated.length > 0) {
+    throw new Error(
+      `refusing to write goldens: ${populated.length} input(s) hold text (relaunch the fixture first; identifiers: ${populated
+        .map((node) => node.identifier ?? '?')
+        .join(', ')})`,
+    );
+  }
+
+  writeGolden('health.json', health, stamp);
+  writeGolden('command-snapshot.json', rawSnap, stamp);
+  const unknownVerb = await rawCommand(
+    port,
+    { command: 'gh437-unknown-command-probe' },
+    capability,
+  );
+  const unknownBody = unknownVerb.body as { ok?: boolean; error?: unknown };
+  if (unknownBody?.ok !== false || !unknownBody?.error) {
+    throw new Error(
+      `unknown-verb probe did not produce an error envelope: HTTP ${unknownVerb.httpStatus} ${JSON.stringify(unknownVerb.body).slice(0, 200)}`,
+    );
+  }
+  writeGolden('command-error.json', unknownVerb, {
+    ...stamp,
+    note: 'deliberately unknown verb — pins the error-envelope shape',
+  });
+}
+
 async function main(): Promise<void> {
   assertFixtureInstalled();
   launchFixture();
+
+  const directPort = process.env.GOLDEN_RUNNER_PORT ? Number(process.env.GOLDEN_RUNNER_PORT) : null;
+  const directCapability = process.env.GOLDEN_RUNNER_CAPABILITY ?? null;
+  if (directPort !== null || directCapability !== null) {
+    if (!directPort || !directCapability) {
+      throw new Error('direct mode needs BOTH GOLDEN_RUNNER_PORT and GOLDEN_RUNNER_CAPABILITY');
+    }
+    await captureRawGoldens(directPort, directCapability);
+    console.log(
+      'direct mode: tool-envelope-snapshot.json NOT refreshed (bridge session unavailable) — ' +
+        'its committed capture remains authoritative for the post-mapping layer',
+    );
+    return;
+  }
 
   const cwd = mkdtempSync(join(tmpdir(), 'rn-agent-goldens-'));
   const s = startSupervisor({ cwd, lineTimeoutMs: 600_000, env: { RN_RUNNER_BUILD: 'local' } });
@@ -295,51 +406,18 @@ async function main(): Promise<void> {
     // payloads are asserted healthy before anything is written (the unknown-
     // verb golden is the one deliberate error capture).
     const { port, capability } = discoverRunnerConnection();
+    await captureRawGoldens(port, capability);
     const health = await rawGet(port, '/health', capability);
-    const healthBody = health.body as {
-      ok?: boolean;
-      runnerVersion?: string;
-      protocolVersion?: number;
-    };
-    if (health.httpStatus !== 200 || healthBody?.ok !== true) {
-      throw new Error(
-        `/health not healthy: HTTP ${health.httpStatus} ${JSON.stringify(health.body).slice(0, 300)}`,
-      );
-    }
-    const stamp = {
-      runnerVersion: healthBody.runnerVersion,
-      protocolVersion: healthBody.protocolVersion,
-      runnerPort: port,
-    };
-
-    const rawSnap = await rawCommand(
-      port,
-      { command: 'snapshot', appBundleId: APP_ID },
-      capability,
-    );
-    const rawSnapBody = rawSnap.body as { ok?: boolean; data?: { nodes?: unknown[] } };
-    if (
-      rawSnap.httpStatus !== 200 ||
-      rawSnapBody?.ok !== true ||
-      !Array.isArray(rawSnapBody?.data?.nodes) ||
-      rawSnapBody.data.nodes.length === 0
-    ) {
-      throw new Error(
-        `raw snapshot unhealthy: HTTP ${rawSnap.httpStatus} ${JSON.stringify(rawSnap.body).slice(0, 300)}`,
-      );
-    }
-
-    writeGolden('health.json', health, stamp);
-    writeGolden('command-snapshot.json', rawSnap, stamp);
-    writeGolden(
-      'command-error.json',
-      await rawCommand(port, { command: 'gh437-unknown-command-probe' }, capability),
-      { ...stamp, note: 'deliberately unknown verb — pins the error-envelope shape' },
-    );
+    const healthBody = health.body as { runnerVersion?: string; protocolVersion?: number };
     writeGolden(
       'tool-envelope-snapshot.json',
       { httpStatus: 200, body: toolSnap.envelope },
-      { ...stamp, note: 'bridge device_snapshot envelope (post-mapping FlatNode layer)' },
+      {
+        runnerVersion: healthBody.runnerVersion,
+        protocolVersion: healthBody.protocolVersion,
+        runnerPort: port,
+        note: 'bridge device_snapshot envelope (post-mapping FlatNode layer)',
+      },
     );
   } finally {
     if (opened) {

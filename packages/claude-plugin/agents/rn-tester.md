@@ -361,9 +361,9 @@ For EACH step in the flow:
    maestro-runner --platform <ios|android> test /tmp/step.yaml
    ```
 
-   **Android text input**: For long strings or strings with special characters
-   (`+`, `@`, `#`), use `device_fill` which auto-chunks input on Android to
-   prevent ANR crashes (GH #7).
+   **Android text input**: Use `device_fill` for long strings, Unicode, and
+   special characters. It binds one exact input and verifies the final value;
+   raw ADB typing is not a fallback.
 
 2. **Wait for settle**: mutating `device_*` verbs already wait for the UI to
    stabilize (settle engine, see `meta.settle`) — never add manual `sleep`s.
