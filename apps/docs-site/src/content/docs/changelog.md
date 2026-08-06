@@ -5,6 +5,49 @@ description: "Release history for rn-dev-agent"
 
 ## Claude plugin
 
+### 0.74.1
+
+#### Patch Changes
+
+- 9cccec7: Regroup authority-profile bookkeeping around the four ownership groups (Session, Target, Runtime, Automation) with every tool's resolved facet set, live probes, and error codes unchanged, and verify profile exhaustiveness at worker startup so an unprofiled registered tool fails at boot instead of at first call.
+- Updated dependencies [9cccec7]
+  - rn-dev-agent-core@0.69.1
+
+### 0.74.0
+
+#### Minor Changes
+
+- 5e37f16: Project strict proof as an explicit opt-in `proofOverlay` (`active` only while a run is in flight between `begin_rehearsal` and `finalize`/`discard`) outside the grouped `session`/`target`/`runtime`/`automation` sub-objects, keeping the existing `proof` child flag and all redaction rules unchanged.
+
+#### Patch Changes
+
+- c8b03c1: Reset an exact Android CDP connection after an advertised inspector handshakes but fails the mandatory runtime probe, serially re-list only the session's allocated Metro for the same app and serial/model association, and retain the actionable probe-timeout leaf when bounded re-registration expires.
+- Updated dependencies [c8b03c1]
+- Updated dependencies [5e37f16]
+  - rn-dev-agent-core@0.69.0
+
+### 0.73.0
+
+#### Minor Changes
+
+- 5365f82: Make Observe a read-only child of the session: `observe start` and `restart` now require only the live session (matching autostart's degraded mode) instead of the full device/Metro/bundle/runner authority chain, while the observe-port claim, capability and instance request authentication, fenced stop/cleanup chain, and the full authority gates on the E2E run and action panels all stay exactly as before.
+
+#### Patch Changes
+
+- Updated dependencies [5365f82]
+  - rn-dev-agent-core@0.68.0
+
+### 0.72.0
+
+#### Minor Changes
+
+- e953f49: Add an additive grouped projection to session status — a happy-path `phase` (`selected`/`building`/`running`/`closing`), the internal state in `detail`, `session`/`target`/`runtime`/`automation` sub-objects, and `observe`/`proof` child flags — alongside every existing field, with unchanged redaction.
+
+#### Patch Changes
+
+- Updated dependencies [e953f49]
+  - rn-dev-agent-core@0.67.0
+
 ### 0.71.8
 
 #### Patch Changes
@@ -1286,6 +1329,34 @@ identifier, hittable? }`, with a `fullNodeCount`. Far fewer tokens; `@ref`s for
   #188 shipped these to `main` with no version bump, leaving them undeliverable to marketplace installs; this patch publishes them.
 
 ## Core MCP server
+
+### 0.69.1
+
+#### Patch Changes
+
+- 9cccec7: Regroup authority-profile bookkeeping around the four ownership groups (Session, Target, Runtime, Automation) with every tool's resolved facet set, live probes, and error codes unchanged, and verify profile exhaustiveness at worker startup so an unprofiled registered tool fails at boot instead of at first call.
+
+### 0.69.0
+
+#### Minor Changes
+
+- 5e37f16: Project strict proof as an explicit opt-in `proofOverlay` (`active` only while a run is in flight between `begin_rehearsal` and `finalize`/`discard`) outside the grouped `session`/`target`/`runtime`/`automation` sub-objects, keeping the existing `proof` child flag and all redaction rules unchanged.
+
+#### Patch Changes
+
+- c8b03c1: Reset an exact Android CDP connection after an advertised inspector handshakes but fails the mandatory runtime probe, serially re-list only the session's allocated Metro for the same app and serial/model association, and retain the actionable probe-timeout leaf when bounded re-registration expires.
+
+### 0.68.0
+
+#### Minor Changes
+
+- 5365f82: Make Observe a read-only child of the session: `observe start` and `restart` now require only the live session (matching autostart's degraded mode) instead of the full device/Metro/bundle/runner authority chain, while the observe-port claim, capability and instance request authentication, fenced stop/cleanup chain, and the full authority gates on the E2E run and action panels all stay exactly as before.
+
+### 0.67.0
+
+#### Minor Changes
+
+- e953f49: Add an additive grouped projection to session status — a happy-path `phase` (`selected`/`building`/`running`/`closing`), the internal state in `detail`, `session`/`target`/`runtime`/`automation` sub-objects, and `observe`/`proof` child flags — alongside every existing field, with unchanged redaction.
 
 ### 0.66.8
 
