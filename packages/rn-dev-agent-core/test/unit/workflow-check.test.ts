@@ -31,10 +31,12 @@ interface ProjectSpec {
   metroConfig?: string | null;
   recordings?: string[];
   integrationFiles?: string[];
+  gitRoot?: boolean;
 }
 
 function makeProject(spec: ProjectSpec): string {
   const root = mkdtempSync(join(tmpdir(), 'workflow-check-'));
+  if (spec.gitRoot ?? true) mkdirSync(join(root, '.git'));
   if (spec.packageJson !== null) {
     writeFileSync(
       join(root, 'package.json'),
@@ -226,9 +228,12 @@ test('state root kind follows XDG_STATE_HOME and platform defaults', () => {
   const root = makeProject({ lockfile: 'yarn.lock' });
   const xdg = mkdtempSync(join(tmpdir(), 'workflow-xdg-'));
   const withXdg = run(['preflight', '--project', root], { XDG_STATE_HOME: xdg });
-  const stateRoot = facts(withXdg.body).stateRoot as { resolved: boolean; kind: string };
-  assert.equal(stateRoot.resolved, true);
+  const stateRoot = facts(withXdg.body).stateRoot as { exists: boolean; kind: string };
+  assert.equal(stateRoot.exists, false);
   assert.equal(stateRoot.kind, 'xdg');
+  mkdirSync(join(xdg, 'rn-dev-agent'), { recursive: true });
+  const populated = run(['preflight', '--project', root], { XDG_STATE_HOME: xdg });
+  assert.equal((facts(populated.body).stateRoot as { exists: boolean }).exists, true);
   const withoutXdg = run(['preflight', '--project', root], { XDG_STATE_HOME: undefined });
   const defaultRoot = facts(withoutXdg.body).stateRoot as { kind: string };
   assert.equal(defaultRoot.kind, process.platform === 'darwin' ? 'darwin' : 'home');
@@ -279,7 +284,7 @@ test('postflight passes a clean project and reports recording residue as a fact'
   const root = makeProject({ recordings: ['walk.json'] });
   const { result, body } = run(['postflight', '--project', root]);
   assert.equal(result.status, 0);
-  assert.equal(body?.verdict, 'pass');
+  assert.equal(body?.verdict, 'pass-unproven');
   assert.equal(facts(body).recordingResidue, true);
   rmSync(root, { recursive: true, force: true });
 });
@@ -379,6 +384,109 @@ test('a declared manager without its lockfile stops before recommending a frozen
   assert.equal(stopCode(body), 'LOCKFILE_MISSING');
   const stop = body?.stop as { action: string };
   assert.match(stop.action, /pnpm-lock\.yaml/);
+  rmSync(root, { recursive: true, force: true });
+});
+
+function makeMonorepo(options: { nestedLockfile?: boolean; rootNodeModules?: boolean }): {
+  repoRoot: string;
+  appRoot: string;
+} {
+  const repoRoot = mkdtempSync(join(tmpdir(), 'workflow-check-monorepo-'));
+  mkdirSync(join(repoRoot, '.git'));
+  writeFileSync(
+    join(repoRoot, 'package.json'),
+    JSON.stringify({ name: 'root', private: true, packageManager: 'pnpm@11.5.2' }),
+  );
+  writeFileSync(join(repoRoot, 'pnpm-lock.yaml'), '');
+  if (options.rootNodeModules ?? true) {
+    mkdirSync(join(repoRoot, 'node_modules', 'react'), { recursive: true });
+  }
+  const appRoot = join(repoRoot, 'apps', 'mobile');
+  mkdirSync(appRoot, { recursive: true });
+  writeFileSync(join(appRoot, 'package.json'), JSON.stringify({ name: 'mobile' }));
+  writeFileSync(join(appRoot, 'CLAUDE.md'), ONBOARDED_CLAUDE_MD);
+  if (options.nestedLockfile) {
+    writeFileSync(join(appRoot, 'yarn.lock'), '# yarn lockfile v1\n');
+    mkdirSync(join(appRoot, 'node_modules', 'react'), { recursive: true });
+  }
+  return { repoRoot, appRoot };
+}
+
+test('preflight resolves the hoisted monorepo workspace root from the app directory', () => {
+  const { repoRoot, appRoot } = makeMonorepo({});
+  const { result, body } = run(['preflight', '--project', appRoot]);
+  assert.equal(result.status, 0);
+  assert.equal(body?.verdict, 'pass');
+  assert.equal(facts(body).packageManager, 'pnpm');
+  assert.equal(facts(body).packageManagerSource, 'packageManager-field');
+  assert.equal(facts(body).lockfile, 'pnpm-lock.yaml');
+  assert.equal(facts(body).installCommand, 'corepack pnpm install --frozen-lockfile');
+  assert.equal(facts(body).dependenciesReady, true);
+  assert.equal(facts(body).workspaceRoot, '../..');
+  assert.equal(facts(body).workspaceRootDepth, 2);
+  assert.equal(facts(body).claudeMdBlock, 'present');
+  assert.ok(!result.stdout.includes(repoRoot));
+  rmSync(repoRoot, { recursive: true, force: true });
+});
+
+test('preflight reports the hoisted workspace install command when the root has no node_modules', () => {
+  const { repoRoot, appRoot } = makeMonorepo({ rootNodeModules: false });
+  const { result, body } = run(['preflight', '--project', appRoot]);
+  assert.equal(result.status, 3);
+  assert.equal(stopCode(body), 'DEPENDENCIES_MISSING');
+  const stop = body?.stop as { action: string };
+  assert.ok(stop.action.includes('corepack pnpm install --frozen-lockfile'));
+  rmSync(repoRoot, { recursive: true, force: true });
+});
+
+test('a lockfile beside the app wins over the monorepo workspace root', () => {
+  const { repoRoot, appRoot } = makeMonorepo({ nestedLockfile: true });
+  const { result, body } = run(['preflight', '--project', appRoot]);
+  assert.equal(result.status, 0);
+  assert.equal(facts(body).packageManager, 'yarn');
+  assert.equal(facts(body).packageManagerSource, 'lockfile');
+  assert.equal(facts(body).installCommand, 'corepack yarn install --frozen-lockfile');
+  assert.equal(facts(body).workspaceRoot, '.');
+  assert.equal(facts(body).workspaceRootDepth, 0);
+  rmSync(repoRoot, { recursive: true, force: true });
+});
+
+test('the workspace walk never escapes the git repository root', () => {
+  const outer = mkdtempSync(join(tmpdir(), 'workflow-check-outer-'));
+  writeFileSync(
+    join(outer, 'package.json'),
+    JSON.stringify({ name: 'outer', packageManager: 'npm@10.9.2' }),
+  );
+  writeFileSync(join(outer, 'package-lock.json'), '');
+  const repoRoot = join(outer, 'repo');
+  mkdirSync(join(repoRoot, '.git'), { recursive: true });
+  writeFileSync(join(repoRoot, 'package.json'), JSON.stringify({ name: 'app' }));
+  const { result, body } = run(['preflight', '--project', repoRoot]);
+  assert.equal(result.status, 3);
+  assert.equal(stopCode(body), 'PACKAGE_MANAGER_UNDECLARED');
+  assert.equal(facts(body).workspaceRoot, '.');
+  rmSync(outer, { recursive: true, force: true });
+});
+
+test('postflight without a status file passes as unproven cleanup', () => {
+  const root = makeProject({});
+  const { result, body } = run(['postflight', '--project', root]);
+  assert.equal(result.status, 0);
+  assert.equal(body?.verdict, 'pass-unproven');
+  assert.equal(facts(body).cleanupProven, false);
+  const session = facts(body).session as { provided: boolean };
+  assert.equal(session.provided, false);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test('postflight proves cleanup only from a status envelope with every binding clear', () => {
+  const root = makeProject({});
+  const statusFile = join(root, 'status.json');
+  writeFileSync(statusFile, JSON.stringify(statusEnvelope('released', false, false, false)));
+  const { result, body } = run(['postflight', '--project', root, '--status-file', statusFile]);
+  assert.equal(result.status, 0);
+  assert.equal(body?.verdict, 'pass');
+  assert.equal(facts(body).cleanupProven, true);
   rmSync(root, { recursive: true, force: true });
 });
 

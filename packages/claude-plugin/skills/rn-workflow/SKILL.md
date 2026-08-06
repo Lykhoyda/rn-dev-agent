@@ -59,8 +59,14 @@ node <plugin-root>/rn-dev-agent-core/dist/workflow-check.js preflight --project 
 (`<plugin-root>` = `${CLAUDE_PLUGIN_ROOT}` on Claude, the Codex package root on
 Codex.) It reports `packageManager` (the `packageManager` field wins, lockfile
 inference is the fallback), the exact `installCommand`, `nodeModulesPresent`,
-the CLAUDE.md block, and the private-state-root kind, with at most ONE
-actionable `stop`.
+the CLAUDE.md block, and the private-state-root kind and existence, with at
+most ONE actionable `stop`.
+
+In a monorepo the checker resolves the package-manager facts from the nearest
+ancestor that declares `packageManager` or holds a lockfile (bounded by the git
+repository root); a declaration or lockfile beside the app always wins. The
+`workspaceRoot` fact reports that directory relative to the app root (`.` when
+they are the same), and the install command must be run there.
 
 - `DEPENDENCIES_MISSING` → run exactly the reported `installCommand`
   (e.g. `corepack pnpm install --frozen-lockfile` for a pnpm project,
@@ -193,9 +199,16 @@ Then verify residue:
 node <plugin-root>/rn-dev-agent-core/dist/workflow-check.js postflight --project "$PWD"
 ```
 
-Pass the redacted `status` JSON via `--status-file` when a session is still
-live. An unprovable cleanup is reported as such — never claim "clean" from
-silence.
+Pass the redacted `status` JSON via `--status-file` — without it the runner,
+Metro, and recorder bindings cannot be read at all. The verdict says which you
+got:
+
+- `pass` with `cleanupProven: true` — the status envelope proved every binding
+  released and no integration residue remains.
+- `pass-unproven` (also exit 0) — residue-only evidence: integration and
+  recordings were inspected, session cleanup was NOT proven. Report it that
+  way; never claim "clean" from silence.
+- `stop` — the named binding or residue is still outstanding.
 
 ## Bounded stops (never work around these)
 
@@ -224,4 +237,6 @@ silence.
 - [ ] Every step's readback (not its command exit) confirmed the step
 - [ ] The proof that ran is exactly what the journey requested
 - [ ] Evidence is labeled device-free vs native, shortcuts stated
-- [ ] Postflight checker reports `pass` (or its stop was surfaced, not hidden)
+- [ ] Postflight checker reports `pass` with `cleanupProven: true` (a
+      `pass-unproven` verdict is residue-only evidence, and a stop was
+      surfaced, not hidden)

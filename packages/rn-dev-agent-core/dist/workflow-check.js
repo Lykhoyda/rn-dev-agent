@@ -18,7 +18,7 @@ const REQUIRED_LOCKFILES = {
 };
 // Corepack accepts only <name>@<exact-semver>, optionally with +hash metadata.
 const COREPACK_VERSION = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$/;
-function installCommandFor(manager, declaredVersion, projectRoot) {
+function installCommandFor(manager, declaredVersion, workspaceRoot) {
     if (manager === 'pnpm')
         return 'corepack pnpm install --frozen-lockfile';
     if (manager === 'npm')
@@ -31,7 +31,7 @@ function installCommandFor(manager, declaredVersion, projectRoot) {
             ? 'corepack yarn install --frozen-lockfile'
             : 'corepack yarn install --immutable';
     }
-    const lock = readTextIfFile(path.join(projectRoot, 'yarn.lock'));
+    const lock = readTextIfFile(path.join(workspaceRoot, 'yarn.lock'));
     if (lock !== null && lock.includes('yarn lockfile v1')) {
         return 'corepack yarn install --frozen-lockfile';
     }
@@ -60,7 +60,7 @@ function stateRootFacts() {
         : process.platform === 'darwin'
             ? 'darwin'
             : 'home';
-    return { resolved: getStateDir().length > 0, kind };
+    return { exists: fs.existsSync(getStateDir()), kind };
 }
 function isPackageManagerName(value) {
     return value === 'pnpm' || value === 'yarn' || value === 'npm' || value === 'bun';
@@ -106,6 +106,39 @@ function yarnPnpPresent(projectRoot) {
     return (fs.existsSync(path.join(projectRoot, '.pnp.cjs')) ||
         fs.existsSync(path.join(projectRoot, '.pnp.loader.mjs')));
 }
+function gitRootFor(startDir) {
+    let dir = startDir;
+    for (;;) {
+        if (fs.existsSync(path.join(dir, '.git')))
+            return dir;
+        const parent = path.dirname(dir);
+        if (parent === dir)
+            return null;
+        dir = parent;
+    }
+}
+// The app root wins whenever it carries its own declaration or lockfile; only a
+// bare app dir defers to the workspace root that actually owns the install.
+function resolveWorkspaceRoot(projectRoot) {
+    const gitRoot = gitRootFor(projectRoot);
+    let dir = projectRoot;
+    for (;;) {
+        const manifest = readTextIfFile(path.join(dir, 'package.json'));
+        const declares = manifest !== null && detectPackageManagerField(manifest).kind === 'declared';
+        if (declares || detectLockfiles(dir).length > 0)
+            return dir;
+        if (gitRoot !== null && dir === gitRoot)
+            return projectRoot;
+        const parent = path.dirname(dir);
+        if (parent === dir)
+            return projectRoot;
+        dir = parent;
+    }
+}
+function redactedWorkspaceRoot(projectRoot, workspaceRoot) {
+    const relative = path.relative(projectRoot, workspaceRoot);
+    return relative === '' ? '.' : relative.split(path.sep).join('/');
+}
 function preflight(projectRoot) {
     const packageJson = readTextIfFile(path.join(projectRoot, 'package.json'));
     if (packageJson === null) {
@@ -117,23 +150,31 @@ function preflight(projectRoot) {
             },
         };
     }
-    const declaration = detectPackageManagerField(packageJson);
+    const projectDeclaration = detectPackageManagerField(packageJson);
+    const workspaceRoot = projectDeclaration.kind === 'absent' ? resolveWorkspaceRoot(projectRoot) : projectRoot;
+    const workspaceManifest = workspaceRoot === projectRoot
+        ? packageJson
+        : (readTextIfFile(path.join(workspaceRoot, 'package.json')) ?? packageJson);
+    const declaration = detectPackageManagerField(workspaceManifest);
     const field = declaration.kind === 'declared' ? declaration.manager : null;
     const declaredVersion = declaration.kind === 'declared' ? declaration.version : null;
-    const locks = detectLockfiles(projectRoot);
+    const locks = detectLockfiles(workspaceRoot);
     const lockManagers = new Set(locks.map((lock) => lock.manager));
     const inferredLock = declaration.kind === 'absent' && lockManagers.size === 1 ? locks[0] : null;
     const matchingLock = field === null ? inferredLock : (locks.find((lock) => lock.manager === field) ?? null);
     const claudeMd = readTextIfFile(path.join(projectRoot, 'CLAUDE.md'));
     const claudeMdBlock = claudeMd !== null && claudeMd.includes(TEMPLATE_HEADING) ? 'present' : 'absent';
     const resolvedManager = field ?? inferredLock?.manager ?? null;
-    const modulesPresent = nodeModulesPresent(projectRoot);
-    const pnpPresent = yarnPnpPresent(projectRoot);
+    const relativeWorkspaceRoot = redactedWorkspaceRoot(projectRoot, workspaceRoot);
+    const modulesPresent = nodeModulesPresent(workspaceRoot);
+    const pnpPresent = yarnPnpPresent(workspaceRoot);
     const facts = {
         packageManager: resolvedManager,
         packageManagerSource: field ? 'packageManager-field' : inferredLock ? 'lockfile' : null,
         lockfile: matchingLock?.file ?? null,
         installCommand: null,
+        workspaceRoot: relativeWorkspaceRoot,
+        workspaceRootDepth: workspaceRoot === projectRoot ? 0 : relativeWorkspaceRoot.split('/').length,
         nodeModulesPresent: modulesPresent,
         yarnPnpPresent: pnpPresent,
         dependenciesReady: modulesPresent || (resolvedManager === 'yarn' && pnpPresent),
@@ -183,11 +224,11 @@ function preflight(projectRoot) {
             facts,
             stop: {
                 code: 'PACKAGE_MANAGER_UNDECLARED',
-                action: 'Declare "packageManager" in package.json (or commit a lockfile) so the install command is unambiguous.',
+                action: 'Neither this app root nor its workspace root declares "packageManager" or holds a lockfile; declare it (or commit the lockfile) so the install command is unambiguous.',
             },
         };
     }
-    facts.installCommand = installCommandFor(facts.packageManager, declaredVersion, projectRoot);
+    facts.installCommand = installCommandFor(facts.packageManager, declaredVersion, workspaceRoot);
     if (matchingLock === null) {
         const required = REQUIRED_LOCKFILES[facts.packageManager].join(' or ');
         return {
@@ -215,6 +256,8 @@ function emptyPreflight() {
         packageManagerSource: null,
         lockfile: null,
         installCommand: null,
+        workspaceRoot: '.',
+        workspaceRootDepth: 0,
         nodeModulesPresent: false,
         yarnPnpPresent: false,
         dependenciesReady: false,
@@ -306,6 +349,11 @@ function postflight(projectRoot, statusFile) {
     const facts = {
         integrationMarkersPresent,
         recordingResidue,
+        cleanupProven: status.stop === null &&
+            status.session.provided &&
+            status.session.metroBound === false &&
+            status.session.runnerBound === false &&
+            status.session.recorderClaim === false,
         stateRoot: stateRootFacts(),
         session: status.session,
     };
@@ -375,8 +423,9 @@ function parseArgs(argv) {
 function main() {
     const { mode, projectRoot, statusFile } = parseArgs(process.argv.slice(2));
     const result = mode === 'preflight' ? preflight(projectRoot) : postflight(projectRoot, statusFile);
-    const verdict = result.stop === null ? 'pass' : 'stop';
+    const unproven = 'cleanupProven' in result.facts && !result.facts.cleanupProven;
+    const verdict = result.stop !== null ? 'stop' : unproven ? 'pass-unproven' : 'pass';
     process.stdout.write(`${JSON.stringify({ mode, verdict, stop: result.stop, facts: result.facts }, null, 2)}\n`);
-    process.exit(verdict === 'pass' ? 0 : 3);
+    process.exit(verdict === 'stop' ? 3 : 0);
 }
 main();
