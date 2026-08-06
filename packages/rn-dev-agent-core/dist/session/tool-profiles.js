@@ -168,6 +168,7 @@ add(optionalHybridMutation, {
     optionalAxes: ['B'],
     managedOrigin: true,
     managedRunnerPark: true,
+    managedInstallReissue: true,
     mutation: true,
     liveBundleProbe: true,
 });
@@ -286,6 +287,7 @@ export function authorityProfileFor(tool, args = {}) {
             postflightAxes: facetsOf(throughRuntime, { without: ['A', 'B'] }),
             managedOrigin: true,
             managedRunnerPark: true,
+            managedInstallReissue: true,
             mutation: true,
             liveBundleProbe: false,
         };

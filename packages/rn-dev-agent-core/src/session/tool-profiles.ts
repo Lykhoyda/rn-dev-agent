@@ -35,6 +35,7 @@ export interface AuthorityProfile {
   optionalAxes?: readonly AuthorityAxis[];
   managedOrigin?: boolean;
   managedRunnerPark?: boolean;
+  managedInstallReissue?: boolean;
   sessionIdentity?: boolean;
   mutation: boolean;
   liveBundleProbe: boolean;
@@ -200,6 +201,7 @@ add(optionalHybridMutation, {
   optionalAxes: ['B'],
   managedOrigin: true,
   managedRunnerPark: true,
+  managedInstallReissue: true,
   mutation: true,
   liveBundleProbe: true,
 });
@@ -322,6 +324,7 @@ export function authorityProfileFor(
       postflightAxes: facetsOf(throughRuntime, { without: ['A', 'B'] }),
       managedOrigin: true,
       managedRunnerPark: true,
+      managedInstallReissue: true,
       mutation: true,
       liveBundleProbe: false,
     };

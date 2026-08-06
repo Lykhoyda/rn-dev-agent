@@ -2668,6 +2668,10 @@ trackedTool('cdp_run_action', "Replay a learned action by id with end-to-end aut
         .enum(['ios', 'android'])
         .optional()
         .describe('Force a specific platform; otherwise auto-detected from the active device session.'),
+    appFile: z
+        .string()
+        .optional()
+        .describe("GH #705: path to the .app Maestro reinstalls from after a clearState uninstall. Normally omit it — an iOS clearState flow resolves the bundle from the session's attested install receipt, and the receipt is re-issued after the reinstall so later device_*/maestro_run calls keep working."),
     autoRepair: z
         .boolean()
         .optional()

@@ -14,7 +14,7 @@ import {
   flowContainsHideKeyboard,
   type MaestroDispatchInputs,
 } from './maestro-dispatch.js';
-import { resolveAppFileForClearState } from './resolve-ios-app-file.js';
+import { flowUsesClearState, resolveAppFileForClearState } from './resolve-ios-app-file.js';
 import {
   buildMaestroFlow,
   parseAndValidateFlow,
@@ -52,6 +52,8 @@ import {
   completeManagedRunnerParkAuthority,
   claimManagedNativeOriginAuthority,
   completeManagedNativeOriginAuthority,
+  hasManagedInstallReissueAuthority,
+  reissueManagedInstallAuthority,
   relaunchManagedNativeOriginApp,
 } from '../session/authority-gate.js';
 import { SessionAuthorityError } from '../session/registry.js';
@@ -125,6 +127,8 @@ export interface MaestroRunArgs {
   completeNativeOrigin?: (targetExpected: boolean) => Promise<void>;
   relaunchManagedApp?: () => Promise<void>;
   completeRunnerPark?: () => Promise<void>;
+  /** GH #705: commit a new install receipt after a clearState reinstall. */
+  reissueInstallReceipt?: (() => Promise<void>) | null;
 }
 
 export interface MaestroAuthorityCallbacks {
@@ -132,6 +136,7 @@ export interface MaestroAuthorityCallbacks {
   completeNativeOrigin: (targetExpected: boolean) => Promise<void>;
   relaunchManagedApp: () => Promise<void>;
   completeRunnerPark: () => Promise<void>;
+  reissueInstallReceipt: (() => Promise<void>) | null;
 }
 
 export function nestedMaestroAuthorityCallbacks(args: object): MaestroAuthorityCallbacks {
@@ -141,6 +146,9 @@ export function nestedMaestroAuthorityCallbacks(args: object): MaestroAuthorityC
       completeManagedNativeOriginAuthority(args, targetExpected),
     relaunchManagedApp: () => relaunchManagedNativeOriginApp(args),
     completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
+    reissueInstallReceipt: hasManagedInstallReissueAuthority(args)
+      ? () => reissueManagedInstallAuthority(args)
+      : null,
   };
 }
 
@@ -284,6 +292,7 @@ export interface MaestroRunDeps {
   claimNativeOrigin?: () => Promise<void>;
   completeNativeOrigin?: (targetExpected: boolean) => Promise<void>;
   relaunchManagedApp?: () => Promise<void>;
+  reissueInstallReceipt?: () => Promise<void>;
   now?: () => number;
   execFile?: (
     file: string,
@@ -459,10 +468,25 @@ export function createMaestroRunHandler(
       validatedContent,
       headerAppId,
       args.appFile,
+      { deviceId: requestedDeviceId },
     );
     if (!appFileResolution.ok) {
       return failResult(appFileResolution.error);
     }
+    // GH #705: only a clearState flow uninstalls and reinstalls; an --app-file
+    // carried by any other flow is inert and must not re-issue the receipt.
+    const reinstallsApp =
+      Boolean(appFileResolution.appFile) && flowUsesClearState(validatedContent);
+    const reissueInstallReceipt =
+      args.reissueInstallReceipt ??
+      deps.reissueInstallReceipt ??
+      nestedMaestroAuthorityCallbacks(args).reissueInstallReceipt;
+    let installReceiptCommitted = false;
+    const commitReinstalledInstall = async (): Promise<void> => {
+      if (!reinstallsApp || installReceiptCommitted || !reissueInstallReceipt) return;
+      installReceiptCommitted = true;
+      await reissueInstallReceipt();
+    };
     const baseArgs = dispatch.buildArgs(
       platform,
       flowFile,
@@ -542,6 +566,7 @@ export function createMaestroRunHandler(
           completeRunnerPark: args.completeRunnerPark ?? managedAuthority.completeRunnerPark,
         },
       );
+      await commitReinstalledInstall();
       const stdout = stageResults.map((result) => result.stdout).join('\n');
       const stderr = stageResults.map((result) => result.stderr).join('\n');
 
@@ -628,6 +653,9 @@ export function createMaestroRunHandler(
       );
       return warnResult(warnAug.meta, warnAug.message);
     } catch (err) {
+      // A flow that died mid-way may still have reinstalled: re-issue before
+      // reporting, so the failure is the flow's and not a broken axis I.
+      await commitReinstalledInstall();
       if (err instanceof SessionAuthorityError) throw err;
       const stageError = err instanceof MaestroStageExecutionError ? err.stageError : err;
       const msg = stageError instanceof Error ? stageError.message : String(stageError);

@@ -81,6 +81,8 @@ The HMAC-signed runtime marker proves that the **initial bundle** came from the 
 
 If marker signing is unavailable, Metro may emit an unsigned `unavailable` marker so development builds continue, but authoritative tools return `BUNDLE_HANDSHAKE_UNAVAILABLE`. The installed-app digest is captured once for each build generation and reused as that generation's install identity.
 
+A Maestro flow that opens with `launchApp: clearState: true` uninstalls and reinstalls the app, which rotates that install identity. `maestro_run` (including through `cdp_run_action`) re-issues the install receipt after such a reinstall, but only after re-hashing the freshly installed bytes and proving they still match the bound receipt's artifact digest. Any other artifact, or an install that cannot be attested at all, still fails as `APP_INSTALL_IDENTITY_CHANGED`. `cdp_run_action` accepts an `appFile` for the reinstall source and otherwise resolves it from the attested receipt's exact device and app.
+
 ## Tool authority
 
 All published tools have an exhaustive authority profile, and worker startup validates the complete registered tool surface before accepting requests. Profile bookkeeping follows the same four ownership groups exposed by session status: Session resolves controller and source authority, Target adds device and install authority, Runtime adds Metro and bundle authority plus the independently verified app-to-device association, and Automation adds runner authority. Individual tools retain narrower resolved profiles where their operation does not need every facet. Session-bound arguments omitted by legacy callers are filled only from the current session; a conflicting platform, device, app, port, or target returns a named authority error.
