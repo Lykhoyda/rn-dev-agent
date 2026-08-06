@@ -89,7 +89,12 @@ function makeScreen(name: string, specs: ChildSpec[]) {
 }
 
 interface Host {
-  start(): Promise<{ ok: boolean; error?: string; activeRoute: string | null }>;
+  start(): Promise<{
+    ok: boolean;
+    error?: string;
+    alreadyRunning?: boolean;
+    activeRoute: string | null;
+  }>;
   stop(): RecordedEventLike[];
   commit(route: string): void;
   press(props: Props): void;
@@ -495,6 +500,66 @@ test('B145: start waits for a concurrent handler refresh', async () => {
   }
 });
 
+test('B145: concurrent starts share handler readiness', async () => {
+  let appPresses = 0;
+  const screen = makeScreen('HomeMain', [
+    {
+      testID: 'command-palette-btn',
+      make: () => ({ testID: 'command-palette-btn', onPress: () => appPresses++ }),
+    },
+  ]);
+  const rerender = screen.fiber.stateNode.forceUpdate as () => void;
+  screen.fiber.stateNode = null;
+  const rootContainer = { current: { type: null, child: screen.fiber, sibling: null } };
+  screen.fiber.return = rootContainer.current;
+  const roots = new Set([rootContainer]);
+  let refreshHandlers: (() => void) | null = null;
+  const hook: Fiber = {
+    renderers: new Map([
+      [
+        1,
+        {
+          overrideProps: () => {
+            refreshHandlers = rerender;
+          },
+        },
+      ],
+    ]),
+    onCommitFiberRoot: null,
+    getFiberRoots: (id: number) => (id === 1 ? roots : new Set()),
+  };
+  const host = makeHost(screen, 'HomeMain', { hook, rootContainer });
+  try {
+    const firstStart = host.start();
+    const secondStart = host.start();
+    const secondState = await Promise.race([
+      secondStart.then(() => 'settled'),
+      new Promise<string>((resolve) => setTimeout(() => resolve('pending'), 0)),
+    ]);
+    assert.equal(secondState, 'pending');
+    assert.equal(screen.live['command-palette-btn'].__mcpRec, undefined);
+
+    const refresh = refreshHandlers;
+    assert.ok(refresh);
+    refresh();
+    const [firstStarted, secondStarted] = await Promise.all([firstStart, secondStart]);
+    assert.equal(firstStarted.ok, true);
+    assert.equal(firstStarted.alreadyRunning, false);
+    assert.equal(secondStarted.ok, true);
+    assert.equal(secondStarted.alreadyRunning, true);
+
+    const thirdStarted = await host.start();
+    assert.equal(thirdStarted.ok, true);
+    assert.equal(thirdStarted.alreadyRunning, true);
+    host.press(screen.live['command-palette-btn']);
+    assert.deepEqual(names(host.stop()), ['tap:command-palette-btn']);
+    assert.equal(appPresses, 1);
+    assert.equal((globalThis as Fiber).__METRO_MCP_REC_STARTING__, undefined);
+  } finally {
+    host.dispose();
+  }
+});
+
 test('B145: start fails closed when handlers never refresh', async () => {
   const screen = makeScreen('HomeMain', [
     {
@@ -527,6 +592,7 @@ test('B145: start fails closed when handlers never refresh', async () => {
     assert.equal(started.ok, false);
     assert.match(started.error ?? '', /Timed out waiting for recorder handlers/);
     assert.equal((globalThis as Fiber).__METRO_MCP_REC_ACTIVE__, false);
+    assert.equal((globalThis as Fiber).__METRO_MCP_REC_STARTING__, undefined);
     assert.equal(Object.freeze, originalFreeze);
     assert.equal(hook.onCommitFiberRoot, null);
   } finally {

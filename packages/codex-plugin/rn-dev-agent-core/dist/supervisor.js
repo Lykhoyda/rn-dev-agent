@@ -71774,6 +71774,14 @@ var init_test_recorder_helpers = __esm({
   }
 
   if (globalThis.__METRO_MCP_REC_ACTIVE__) {
+    var pendingStart = globalThis.__METRO_MCP_REC_STARTING__;
+    if (pendingStart && typeof pendingStart.then === 'function') {
+      return pendingStart.then(function(result) {
+        var parsed = JSON.parse(result);
+        if (parsed.ok) parsed.alreadyRunning = true;
+        return JSON.stringify(parsed);
+      });
+    }
     return JSON.stringify({ ok: true, alreadyRunning: true, activeRoute: globalThis.__METRO_MCP_NAV_REF_CACHE__ || null });
   }
 
@@ -72019,6 +72027,7 @@ var init_test_recorder_helpers = __esm({
     globalThis.__METRO_MCP_REC_ACTIVE__ = false;
     hook.onCommitFiberRoot = origCommit;
     Object.freeze = origFreeze;
+    delete globalThis.__METRO_MCP_REC_STARTING__;
     delete globalThis.__METRO_MCP_REC_CLEANUP__;
   };
 
@@ -72199,10 +72208,11 @@ var init_test_recorder_helpers = __esm({
   })();
 
   function successResult() {
+    delete globalThis.__METRO_MCP_REC_STARTING__;
     return JSON.stringify({ ok: true, alreadyRunning: false, activeRoute: __currentRoute });
   }
   if (!handlersReady || handlersReady()) return successResult();
-  return new Promise(function(resolve) {
+  var startPromise = new Promise(function(resolve) {
     var deadline = Date.now() + HANDLER_READY_TIMEOUT_MS;
     function checkReady() {
       if (!globalThis.__METRO_MCP_REC_ACTIVE__ ||
@@ -72223,6 +72233,8 @@ var init_test_recorder_helpers = __esm({
     }
     setTimeout(checkReady, 0);
   });
+  globalThis.__METRO_MCP_REC_STARTING__ = startPromise;
+  return startPromise;
 })()`;
     STOP_RECORDING_JS = `(function() {
   try {
