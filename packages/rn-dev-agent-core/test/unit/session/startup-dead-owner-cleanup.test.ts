@@ -663,9 +663,20 @@ test('L4: createSupervisorAuthority stamps new sessions as grouped-v1', () => {
 });
 
 /** A grouped-v1 contender blocked on a same-root owner, with a bound recovery worker. */
-function groupedContender() {
+function groupedContender(
+  identities: {
+    owner?: { sourceKey?: string; appRootKey?: string };
+    contender?: { sourceKey?: string; appRootKey?: string };
+  } = {},
+) {
   const f = fixture();
-  const owner = f.create('owner', 'worktree-1', { metroPort: 8248, observePort: 7396 });
+  const owner = f.create(
+    'owner',
+    'worktree-1',
+    { metroPort: 8248, observePort: 7396 },
+    {},
+    identities.owner,
+  );
   f.registry.claimResources(owner, [
     { type: 'source', key: 'worktree-1' },
     { type: 'metro-port', key: '8248' },
@@ -675,6 +686,7 @@ function groupedContender() {
     'worktree-1',
     { metroPort: 8248, observePort: 7396 },
     { model: 'grouped-v1' },
+    identities.contender,
   );
   f.registry.updateBindings(contender, {
     state: 'blocked',
@@ -739,6 +751,20 @@ test('L4: grouped recovery guidance names startup cleanup for a dead owner, neve
   assert.equal(dead.priorOwner, 'stale');
   assert.match(dead.nextAction, /restart/i);
   assert.doesNotMatch(dead.nextAction, /adopt_stale/);
+});
+
+test('L4: grouped recovery refuses restart cleanup across app roots', () => {
+  const f = groupedContender({ owner: { appRootKey: 'apps/other' } });
+  f.ownerStates.set('owner', 'mismatch');
+
+  const requirement = f.registry.inspectRecoveryRequirement('contender');
+
+  assert.equal(requirement.requirement, 'attach');
+  assert.equal(requirement.priorOwner, 'stale');
+  assert.equal(requirement.priorOwnerHeartbeatAgeMs, undefined);
+  assert.match(requirement.nextAction, /different app root/i);
+  assert.match(requirement.nextAction, /prior owner's app root|separate worktree/i);
+  assert.doesNotMatch(requirement.nextAction, /startup cleanup releases it automatically/i);
 });
 
 test('L4: grouped adopt_stale refuses before requiring an unminted handle', async () => {

@@ -1075,7 +1075,10 @@ export class SessionRegistry {
   inspectRecoveryRequirement(sessionId: string): RecoveryRequirementInspection {
     const row = asSession(
       this.#database
-        .prepare(`SELECT state, source_json, bindings_json FROM sessions WHERE session_id = ?`)
+        .prepare(
+          `SELECT source_key, worktree_key, app_root_key, state, source_json, bindings_json
+           FROM sessions WHERE session_id = ?`,
+        )
         .get(sessionId),
     );
     if (!row || (row.state !== 'blocked' && row.state !== 'handoff_cleanup')) {
@@ -1101,7 +1104,8 @@ export class SessionRegistry {
       ? asSession(
           this.#database
             .prepare(
-              `SELECT session_id, claim_epoch, supervisor_pid, supervisor_birth, heartbeat_ms
+              `SELECT session_id, source_key, worktree_key, app_root_key, claim_epoch,
+                      supervisor_pid, supervisor_birth, heartbeat_ms
                FROM sessions WHERE session_id = ?`,
             )
             .get(priorSessionId),
@@ -1127,6 +1131,18 @@ export class SessionRegistry {
     }
     if (status === 'mismatch') {
       if (grouped) {
+        const isSameRoot =
+          prior.source_key === row.source_key &&
+          prior.worktree_key === row.worktree_key &&
+          prior.app_root_key === row.app_root_key;
+        if (!isSameRoot) {
+          return {
+            requirement: 'attach',
+            priorOwner: 'stale',
+            nextAction:
+              "The proven-dead owner belongs to a different app root in this worktree, so startup cleanup cannot release it here. Start and close rn-dev-agent from the prior owner's app root to release its authority, or use a separate worktree.",
+          };
+        }
         return {
           requirement: 'transport-restart',
           priorOwner: 'stale',
