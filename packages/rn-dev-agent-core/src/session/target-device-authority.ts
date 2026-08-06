@@ -12,6 +12,18 @@ export interface TargetDeviceAssociations {
 
 export interface TargetDeviceAuthorityDependencies {
   execute(file: string, args: string[]): Promise<{ stdout: string }>;
+  awaitWithinBoundary?<T>(operation: () => Promise<T>): Promise<T>;
+}
+
+function executeWithinBoundary(
+  dependencies: TargetDeviceAuthorityDependencies,
+  file: string,
+  args: string[],
+): Promise<{ stdout: string }> {
+  const operation = () => dependencies.execute(file, args);
+  return dependencies.awaitWithinBoundary
+    ? dependencies.awaitWithinBoundary(operation)
+    : operation();
 }
 
 export interface ExactDeviceTargetInput<T extends { deviceName?: string | null }> {
@@ -25,7 +37,12 @@ export async function filterTargetsForExactDevice<T extends { deviceName?: strin
   dependencies: TargetDeviceAuthorityDependencies,
 ): Promise<T[]> {
   if (input.platform === 'ios') {
-    const output = await dependencies.execute('xcrun', ['simctl', 'list', 'devices', '--json']);
+    const output = await executeWithinBoundary(dependencies, 'xcrun', [
+      'simctl',
+      'list',
+      'devices',
+      '--json',
+    ]);
     const parsed = JSON.parse(output.stdout) as {
       devices?: Record<string, Array<{ udid?: string; name?: string; state?: string }>>;
     };
@@ -46,7 +63,7 @@ export async function filterTargetsForExactDevice<T extends { deviceName?: strin
     return input.targets.filter((target) => target.deviceName?.trim() === exact.name);
   }
 
-  const devices = (await dependencies.execute('adb', ['devices'])).stdout
+  const devices = (await executeWithinBoundary(dependencies, 'adb', ['devices'])).stdout
     .split('\n')
     .map((line) => line.trim().split(/\s+/))
     .filter((parts) => parts[0] && parts[1] === 'device')
@@ -60,7 +77,13 @@ export async function filterTargetsForExactDevice<T extends { deviceName?: strin
     devices.map(async (serial) => ({
       serial,
       model: (
-        await dependencies.execute('adb', ['-s', serial, 'shell', 'getprop', 'ro.product.model'])
+        await executeWithinBoundary(dependencies, 'adb', [
+          '-s',
+          serial,
+          'shell',
+          'getprop',
+          'ro.product.model',
+        ])
       ).stdout.trim(),
     })),
   );
@@ -103,7 +126,12 @@ export async function proveTargetDeviceAssociations(
     throw new Error('CDP_TARGET_AUTHORITY_MISMATCH: target does not expose device association');
   }
   if (input.platform === 'ios') {
-    const output = await dependencies.execute('xcrun', ['simctl', 'list', 'devices', '--json']);
+    const output = await executeWithinBoundary(dependencies, 'xcrun', [
+      'simctl',
+      'list',
+      'devices',
+      '--json',
+    ]);
     const parsed = JSON.parse(output.stdout) as {
       devices?: Record<string, Array<{ udid?: string; name?: string; state?: string }>>;
     };
@@ -123,7 +151,7 @@ export async function proveTargetDeviceAssociations(
     return;
   }
 
-  const devices = (await dependencies.execute('adb', ['devices'])).stdout
+  const devices = (await executeWithinBoundary(dependencies, 'adb', ['devices'])).stdout
     .split('\n')
     .map((line) => line.trim().split(/\s+/))
     .filter((parts) => parts[0] && parts[1] === 'device')
@@ -131,7 +159,13 @@ export async function proveTargetDeviceAssociations(
   const matching: string[] = [];
   for (const serial of devices) {
     const model = (
-      await dependencies.execute('adb', ['-s', serial, 'shell', 'getprop', 'ro.product.model'])
+      await executeWithinBoundary(dependencies, 'adb', [
+        '-s',
+        serial,
+        'shell',
+        'getprop',
+        'ro.product.model',
+      ])
     ).stdout.trim();
     if (
       model &&

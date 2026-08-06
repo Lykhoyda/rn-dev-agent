@@ -154,6 +154,8 @@ export async function discoverAndConnect(ctx, portHint, filters, discoverFn = di
             throw err;
         }
     }
+    if (ctx.isDisposed())
+        throw new ConnectionSetupSupersededError();
     const generation = ctx.incrementConnectionGeneration();
     logger.info('CDP', `Connected to target ${connectedTarget.id} (${connectedTarget.title}) on port ${metroPort}, generation=${generation}`);
     // GH #59 #5: persist the resolved platform into _connectFilters when the
@@ -231,7 +233,7 @@ async function connectToTarget(ctx, target, retries = 5, intent = 'default') {
             if (proxyUrl) {
                 logger.info('CDP', `Routing via multiplexer proxy: ${proxyUrl}`);
             }
-            attemptWs = await connectWs(ctx, url);
+            attemptWs = await connectWebSocket(ctx, url);
             handshakeOk = true;
             // D594: Early stale-target detection — quick probe before full setup
             try {
@@ -259,9 +261,15 @@ async function connectToTarget(ctx, target, retries = 5, intent = 'default') {
                     throw new PickerBlockingBundleError(target);
             }
             await ctx.setup();
+            if (ctx.isDisposed())
+                throw new ConnectionSetupSupersededError();
             return;
         }
         catch (err) {
+            if (err instanceof ConnectionSetupSupersededError) {
+                closeConnectionAttempt(ctx, attemptWs);
+                throw err;
+            }
             // GH #184: the picker-blocking abort is deterministic, not transient —
             // don't burn the retry budget on it; clean up and surface it immediately.
             if (err instanceof PickerBlockingBundleError) {
@@ -296,13 +304,13 @@ async function connectToTarget(ctx, target, retries = 5, intent = 'default') {
     }
     throw new Error(failureMessage);
 }
-function connectWs(ctx, url) {
+export function connectWebSocket(ctx, url, createSocket = (socketUrl) => new WebSocket(socketUrl, {
+    handshakeTimeout: 5000,
+    maxPayload: 100 * 1024 * 1024,
+    headers: { Origin: metroOrigin(socketUrl) },
+})) {
     return new Promise((resolve, reject) => {
-        const ws = new WebSocket(url, {
-            handshakeTimeout: 5000,
-            maxPayload: 100 * 1024 * 1024,
-            headers: { Origin: metroOrigin(url) },
-        });
+        const ws = createSocket(url);
         let settled = false;
         // Backstop: handshakeTimeout should emit 'error', but if the socket ever
         // wedges without firing open/error/close it would leak with its listeners.
@@ -322,6 +330,14 @@ function connectWs(ctx, url) {
         ws.on('open', () => {
             settled = true;
             clearTimeout(guard);
+            if (ctx.isDisposed()) {
+                try {
+                    ws.terminate();
+                }
+                catch { }
+                reject(new ConnectionSetupSupersededError());
+                return;
+            }
             ctx.setWs(ws);
             ctx.setState('connected');
             resolve(ws);

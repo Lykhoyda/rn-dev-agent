@@ -427,7 +427,12 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 }
                 const priorTargetId = status.bindings.bundle
                     ?.targetId;
-                if (input.force === true && typeof priorTargetId === 'string') {
+                const devicePlatform = status.bindings.device
+                    ?.platform;
+                const atomicAndroidReplacement = devicePlatform === 'android';
+                if (input.force === true &&
+                    !atomicAndroidReplacement &&
+                    typeof priorTargetId === 'string') {
                     registry.releaseResources(session, [
                         { type: 'target', key: `${String(status.bindings.metroPort)}:${priorTargetId}` },
                     ]);
@@ -437,16 +442,27 @@ export function createSessionHandler(runtime, dependencies = {}) {
                     });
                     dependencies.onBundleInvalidated?.();
                 }
-                const bundle = await dependencies.pinDevClient(status, {
-                    force: input.force === true,
-                });
-                registry.claimResources(session, [
-                    { type: 'target', key: `${bundle.metroPort}:${bundle.targetId}` },
-                ]);
-                registry.updateBindings(session, {
+                await dependencies.pinDevClient(status, { force: input.force === true }, (candidate, assertBeforeCommit) => registry.updateBindings(session, {
                     state: 'ready',
-                    bindings: { bundle },
-                });
+                    bindings: { bundle: candidate },
+                    expectedAuthorityVersion: atomicAndroidReplacement
+                        ? status.authorityVersion
+                        : undefined,
+                    releaseResources: atomicAndroidReplacement &&
+                        typeof priorTargetId === 'string' &&
+                        priorTargetId !== candidate.targetId
+                        ? [
+                            {
+                                type: 'target',
+                                key: `${candidate.metroPort}:${priorTargetId}`,
+                            },
+                        ]
+                        : [],
+                    claimResources: [
+                        { type: 'target', key: `${candidate.metroPort}:${candidate.targetId}` },
+                    ],
+                    assertBeforeCommit,
+                }));
                 return okResult({ session: projectPublicAuthorityStatus(runtime.status()) });
             }
             if (input.action === 'prepare_handoff') {

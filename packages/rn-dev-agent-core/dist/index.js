@@ -8,7 +8,7 @@ import { dirname, join } from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { CDPClient } from './cdp-client.js';
+import { CDPClient, } from './cdp-client.js';
 import { okResult, failResult, warnResult, withConnection } from './utils.js';
 import { annotateMutationAbsence } from './verification/mutation-absence.js';
 import { loadVerificationConfig, getCachedProjectRoot } from './verification/config.js';
@@ -166,16 +166,27 @@ if (!diagnosticContractProbe && process.env.RN_DEVICE_KILL_LEGACY !== '0') {
         /* non-fatal */
     });
 }
-let client = new CDPClient();
+let client;
 const getClient = () => client;
-const setClient = (c) => {
-    client = c;
+const configureClientLifecycle = (candidate) => {
+    candidate.setLifecycleAuthority(() => getClient() === candidate);
+    return candidate;
 };
+const setClient = (candidate) => {
+    client = candidate;
+};
+const publishClient = (expected, replacement) => {
+    if (client !== expected)
+        return false;
+    client = replacement;
+    return true;
+};
+client = configureClientLifecycle(new CDPClient());
 const createClient = (port) => {
     const status = authorityRuntime.status();
-    return status.available && status.bindings.bundle
+    return configureClientLifecycle(status.available && status.bindings.bundle
         ? client.createReplacement(port)
-        : new CDPClient(port);
+        : new CDPClient(port));
 };
 const execFileP = promisify(execFile);
 // Parse an MCP envelope; throw when the handler reported failure.
@@ -652,7 +663,7 @@ function trackedTool(name, desc, schema, handler) {
     };
     server.tool(name, desc, schema, wrapped);
 }
-async function pinSessionDevClient(status, options) {
+async function pinSessionDevClient(status, options, commitBundle) {
     const device = status.bindings.device;
     const metro = status.bindings.metro;
     const install = status.bindings.install;
@@ -675,10 +686,12 @@ async function pinSessionDevClient(status, options) {
         throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: session signer is unavailable');
     }
     const current = getClient();
-    current.clearAuthoritativeSessionPolicy();
-    if (options.force) {
-        await current.disconnect();
-        setClient(createClient(metro.port));
+    if (device.platform === 'ios') {
+        current.clearAuthoritativeSessionPolicy();
+        if (options.force) {
+            await current.disconnect();
+            setClient(createClient(metro.port));
+        }
     }
     const bundle = await pinExactDevClient({
         sessionId: status.sessionId,
@@ -730,8 +743,9 @@ async function pinSessionDevClient(status, options) {
         connectExact: async ({ metroPort, platform, appId, deviceId }) => {
             return connectExactSessionTarget({ metroPort, platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
         },
-        readMarker: async () => {
-            const result = await getClient().evaluate('JSON.stringify(globalThis.__RN_DEV_AGENT_AUTHORITY__ ?? null)');
+        readMarker: async (connection) => {
+            const markerClient = 'client' in connection ? connection.client : getClient();
+            const result = await markerClient.evaluate('JSON.stringify(globalThis.__RN_DEV_AGENT_AUTHORITY__ ?? null)');
             if (typeof result.value !== 'string')
                 return null;
             const parsed = JSON.parse(result.value);
@@ -739,6 +753,7 @@ async function pinSessionDevClient(status, options) {
                 ? { status: 'signed', marker: parsed.marker }
                 : null;
         },
+        commitBundle,
         readManagedManifest: async ({ host, metroPort, platform }) => {
             const controller = new AbortController();
             const timer = setTimeout(() => controller.abort(), 15_000);
@@ -773,25 +788,27 @@ function createAuthoritativeSessionPolicy(status) {
     return {
         port: metroPort,
         filters: { platform: device.platform, bundleId: device.appId },
-        resolveTargetId: async (targets) => {
+        resolveTargetId: async (targets, awaitWithinBoundary) => {
             const exactCandidates = await filterTargetsForExactDevice({
                 platform: device.platform,
                 deviceId: device.deviceId,
                 targets,
-            }, { execute: execFileP });
+            }, { execute: execFileP, awaitWithinBoundary });
             if (exactCandidates.length !== 1) {
                 throw new Error(`CDP_TARGET_AUTHORITY_MISMATCH: expected one target on the exact device, found ${exactCandidates.length}`);
             }
             return exactCandidates[0].id;
         },
-        verifyAndReconcile: reconcileAuthoritativeConnection,
+        verifyAndReconcile: (connectedClient, awaitWithinBoundary) => reconcileAuthoritativeConnection(connectedClient, awaitWithinBoundary),
     };
 }
 async function connectExactSessionTarget(input, timeoutMs) {
     return connectExactSessionTargetWithDependencies(input, timeoutMs, {
         getClient,
         setClient,
+        publishClient,
         createClient,
+        createAttemptClient: (port) => configureClientLifecycle(new CDPClient(port)),
         execute: execFileP,
     });
 }
@@ -838,9 +855,10 @@ async function relaunchSessionRuntime(status) {
             appId,
         ]);
     }
-    await connectExactSessionTarget({ metroPort: Number(metroPort), platform, appId, deviceId }, 15_000);
+    const connection = await connectExactSessionTarget({ metroPort: Number(metroPort), platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
+    connection.publish();
 }
-async function rebindSessionRuntime(status) {
+async function rebindSessionRuntime(status, awaitWithinBoundary) {
     const device = status.bindings.device;
     const metro = status.bindings.metro;
     const prior = status.bindings.bundle;
@@ -861,11 +879,14 @@ async function rebindSessionRuntime(status) {
         platform: device.platform,
         deviceId: device.deviceId,
         targetDeviceName: target.deviceName,
-    }, { execute: execFileP });
+    }, { execute: execFileP, awaitWithinBoundary });
     const secret = process.env.RN_DEV_AGENT_SESSION_SECRET_PATH
         ? readJsonStateFile(process.env.RN_DEV_AGENT_SESSION_SECRET_PATH)
         : null;
-    const evaluated = await client.evaluate('JSON.stringify(globalThis.__RN_DEV_AGENT_AUTHORITY__ ?? null)');
+    const evaluateMarker = () => client.evaluate('JSON.stringify(globalThis.__RN_DEV_AGENT_AUTHORITY__ ?? null)');
+    const evaluated = await (awaitWithinBoundary
+        ? awaitWithinBoundary(evaluateMarker)
+        : evaluateMarker());
     const outer = typeof evaluated.value === 'string'
         ? JSON.parse(evaluated.value)
         : null;
@@ -892,7 +913,7 @@ async function rebindSessionRuntime(status) {
         connectionGeneration: client.connectionGeneration,
     });
 }
-async function reconcileAuthoritativeConnection(connectedClient) {
+async function reconcileAuthoritativeConnection(connectedClient, awaitWithinBoundary) {
     if (getClient() !== connectedClient) {
         throw new Error('CDP_TARGET_AUTHORITY_MISMATCH: authoritative client was replaced');
     }
@@ -901,7 +922,7 @@ async function reconcileAuthoritativeConnection(connectedClient) {
     if (!status)
         throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: session authority is unavailable');
     await reconcileAuthoritativeBundle(status, {
-        verifyRuntime: () => rebindSessionRuntime(status),
+        verifyRuntime: () => rebindSessionRuntime(status, awaitWithinBoundary),
         hasActiveOperation: () => available.registry.currentOperation() !== undefined ||
             available.registry.hasActiveBundleOperation(available.session),
         commit: (input) => available.registry.updateBindings(available.session, input),

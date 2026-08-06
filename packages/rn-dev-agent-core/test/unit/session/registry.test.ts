@@ -936,6 +936,39 @@ test('database retries survive contention from another supervisor', async () => 
   }
 });
 
+test('deadline assertion runs at the transaction pre-commit boundary and rolls back all authority', () => {
+  const { registry, create } = fixture();
+  const owner = create('deadline-owner');
+  const priorState = registry.getSessionStatus(owner.sessionId)?.state;
+  let precommitObserved = false;
+
+  assert.throws(
+    () =>
+      registry.updateBindings(owner, {
+        state: 'ready',
+        bindings: { bundle: { targetId: 'late-target' } },
+        claimResources: [{ type: 'target', key: '8193:late-target' }],
+        assertBeforeCommit: () => {
+          precommitObserved = true;
+          assert.equal(registry.getClaim('target', '8193:late-target')?.sessionId, owner.sessionId);
+          const pendingStatus = registry.getSessionStatus(owner.sessionId);
+          assert.ok(pendingStatus);
+          assert.equal(
+            (pendingStatus.bindings.bundle as { targetId?: string }).targetId,
+            'late-target',
+          );
+          throw new Error('Android exact-target deadline expired before commit');
+        },
+      }),
+    /deadline expired before commit/,
+  );
+
+  assert.equal(precommitObserved, true);
+  assert.equal(registry.getClaim('target', '8193:late-target'), null);
+  assert.equal(registry.getSessionStatus(owner.sessionId)?.bindings.bundle, undefined);
+  assert.equal(registry.getSessionStatus(owner.sessionId)?.state, priorState);
+});
+
 test('runtime target replacement advances the binding and operation fence atomically', () => {
   const { registry, create } = fixture();
   const owner = create('a');
