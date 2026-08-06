@@ -287,7 +287,7 @@ export function authorityProfileFor(tool, args = {}) {
             postflightAxes: facetsOf(throughRuntime, { without: ['A', 'B'] }),
             managedOrigin: true,
             managedRunnerPark: true,
-            managedInstallReissue: true,
+            managedInstallReissue: tool === 'maestro_run',
             mutation: true,
             liveBundleProbe: false,
         };
