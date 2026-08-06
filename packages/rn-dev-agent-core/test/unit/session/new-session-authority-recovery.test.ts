@@ -38,7 +38,11 @@ const SESSION_ACTIONS: readonly {
   { action: 'preview_integration' },
   { action: 'apply_integration' },
   { action: 'restore_integration' },
-  { action: 'accept_handoff', args: { handoffId: 'handoff-1', token: 'handoff-token' }, recovery: true },
+  {
+    action: 'accept_handoff',
+    args: { handoffId: 'handoff-1', token: 'handoff-token' },
+    recovery: true,
+  },
   { action: 'adopt_stale', args: { adoptionHandle: 'adoption-handle' }, recovery: true },
   {
     action: 'release_stale_device',
