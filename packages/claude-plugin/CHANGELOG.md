@@ -1,5 +1,16 @@
 # rn-dev-agent-plugin
 
+## 0.72.0
+
+### Minor Changes
+
+- e953f49: Add an additive grouped projection to session status — a happy-path `phase` (`selected`/`building`/`running`/`closing`), the internal state in `detail`, `session`/`target`/`runtime`/`automation` sub-objects, and `observe`/`proof` child flags — alongside every existing field, with unchanged redaction.
+
+### Patch Changes
+
+- Updated dependencies [e953f49]
+  - rn-dev-agent-core@0.67.0
+
 ## 0.71.8
 
 ### Patch Changes
