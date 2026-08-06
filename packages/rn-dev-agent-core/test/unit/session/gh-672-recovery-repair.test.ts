@@ -8,6 +8,13 @@
 //    advertised policy was unreachable. A device owner in a foreign worktree also must
 //    never be whole-session adopted.
 //
+// L4 update: NEW sessions are `grouped-v1` and mint no adoption or handoff-recipient
+// handles at all — a proven-dead same-root owner is released by automatic startup
+// cleanup instead (see startup-dead-owner-cleanup.test.ts). The handle-minting tests
+// below pin the LEGACY axes-v1 drain surface: rows without the model marker (created
+// by pre-L4 supervisors) keep the full adoption surface until it retires. The
+// non-steal, death-re-proof, journal, and redaction tests are version-independent.
+//
 // Everything here runs on a fake clock over a disposable SQLite registry.
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -114,7 +121,7 @@ function advertisedRecovery(
   return projected as Record<string, Record<string, unknown> | undefined>;
 }
 
-test('GH#672: status never advertises an adoption handle that adopt_stale would refuse', () => {
+test('GH#672 legacy axes-v1: status never advertises an adoption handle that adopt_stale would refuse', () => {
   const f = blockedContender();
   const minted = adoptionHandle(f.registry, 'b');
   assert.ok(minted?.token, 'a blocked contender is offered an adoption handle');
@@ -146,7 +153,7 @@ test('GH#672: status never advertises an adoption handle that adopt_stale would 
   assert.equal(freshView.recovery?.adoptionHandle, rotated?.token);
 });
 
-test('GH#672: a still-fresh adoption handle survives a refresh unchanged', () => {
+test('GH#672 legacy axes-v1: a still-fresh adoption handle survives a refresh unchanged', () => {
   const f = blockedContender();
   const minted = adoptionHandle(f.registry, 'b');
   f.advance(10_000);
@@ -163,7 +170,7 @@ test('GH#672: a still-fresh adoption handle survives a refresh unchanged', () =>
   assert.equal(adoptionHandle(f.registry, 'b')?.token, minted?.token);
 });
 
-test('GH#672: grace rotation keeps both tokens valid only through the prior expiry', () => {
+test('GH#672 legacy axes-v1: grace rotation keeps both tokens valid only through the prior expiry', () => {
   const f = blockedContender();
   const original = adoptionHandle(f.registry, 'b')!;
   f.advance(HANDLE_TTL_MS - 60_000);
@@ -199,7 +206,7 @@ test('GH#672: grace rotation keeps both tokens valid only through the prior expi
   assert.equal(adoptionHandle(f.registry, 'b')?.previous, undefined);
 });
 
-test('GH#672: status calls straddling renewal preserve the earlier returned handle', () => {
+test('GH#672 legacy axes-v1: status calls straddling renewal preserve the earlier returned handle', () => {
   const f = blockedContender();
   f.advance(HANDLE_TTL_MS - 60_001);
   const earlier = adoptionHandle(f.registry, 'b')!;
@@ -224,7 +231,7 @@ test('GH#672: status calls straddling renewal preserve the earlier returned hand
   f.registry.validateStaleAdoption(f.contender, earlier.token!, RECOVERY_WORKER);
 });
 
-test('GH#672: handoff recipient overlap accepts the prior token', () => {
+test('GH#672 legacy axes-v1: handoff recipient overlap accepts the prior token', () => {
   const f = blockedContender();
   const handles = f.registry.getSessionStatus('b')?.bindings.recoveryHandles as {
     handoffRecipient?: { token?: string };
@@ -270,7 +277,7 @@ test('GH#672: a rotated token cannot authorize another session', () => {
   );
 });
 
-test('GH#672: handoff cleanup status exposes a rotatable authenticated resume handle', () => {
+test('GH#672 legacy axes-v1: handoff cleanup status exposes a rotatable authenticated resume handle', () => {
   const f = blockedContender();
   f.registry.claimResources(f.owner, [{ type: 'runner', key: 'ios:sim-1:9200' }]);
   f.registry.updateBindings(f.owner, {
@@ -371,7 +378,7 @@ test('GH#672: recovery requirement separates adoption, attach, and transport res
   assert.match(gone.nextAction, /Restart the MCP transport/);
 });
 
-test('GH#672: source recovery completes on the handle status advertises after expiry', () => {
+test('GH#672 legacy axes-v1: source recovery completes on the handle status advertises after expiry', () => {
   const f = blockedContender();
   f.advance(HANDLE_TTL_MS + 1);
   f.ownerStates.set('a', 'mismatch');
@@ -855,7 +862,7 @@ test('GH#672: a release handle minted for one device cannot free another', async
   assert.equal(f.registry.getClaim('device', 'ios:sim-1')?.sessionId, 'dead-device-owner');
 });
 
-test('GH#672: the status action itself rotates an expired adoption handle', async () => {
+test('GH#672 legacy axes-v1: the status action itself rotates an expired adoption handle', async () => {
   const f = blockedContender();
   const stale = adoptionHandle(f.registry, 'b')?.token;
   f.advance(HANDLE_TTL_MS + 1);
@@ -886,4 +893,59 @@ test('GH#672: the status action itself rotates an expired adoption handle', asyn
     authority.recovery.adoptionHandle!,
     RECOVERY_WORKER,
   );
+});
+
+test('GH#672/L4 default: a grouped-v1 contender mints nothing and status names startup cleanup', async () => {
+  const f = fixture();
+  const owner = f.create('a', 'worktree-1', { metroPort: 8248, observePort: 7396 });
+  f.registry.claimResources(owner, [
+    { type: 'source', key: 'worktree-1' },
+    { type: 'metro-port', key: '8248' },
+  ]);
+  f.ownerStates.set('grouped', 'match');
+  const contender = f.registry.createSession({
+    sessionId: 'grouped',
+    sourceKey: 'repo',
+    worktreeKey: 'worktree-1',
+    appRootKey: '.',
+    supervisor: { pid: 4900, token: 'birth-grouped' },
+    source: { kind: 'git', contentRoot: '/src/worktree-1', model: 'grouped-v1' },
+    bindings: { metroPort: 8248, observePort: 7396 },
+  });
+  f.registry.updateBindings(contender, {
+    state: 'blocked',
+    bindings: {
+      recoveryCapabilityHash: createHash('sha256').update(RECOVERY_CAPABILITY).digest('hex'),
+      adoptionRequired: { sessionId: owner.sessionId, claimEpoch: owner.claimEpoch },
+    },
+  });
+  f.registry.bindRecoveryWorker(
+    contender,
+    { instanceId: RECOVERY_WORKER, pid: 9001, token: 'recovery-birth' },
+    RECOVERY_CAPABILITY,
+  );
+  f.ownerStates.set('a', 'mismatch');
+
+  const runtime = new WorkerAuthorityRuntime(
+    f.registry,
+    contender,
+    null,
+    true,
+    RECOVERY_CAPABILITY,
+  );
+  const handler = createSessionHandler(runtime as never, { now: f.now });
+  const result = await handler({ action: 'status' });
+  const authority = envelope(result).data.authority as unknown as {
+    recovery?: Record<string, unknown>;
+    recoveryRequirement?: { requirement?: string; nextAction?: string };
+  };
+
+  assert.equal(authority.recovery, undefined, 'no handle surface exists to advertise');
+  assert.equal(authority.recoveryRequirement?.requirement, 'transport-restart');
+  assert.doesNotMatch(String(authority.recoveryRequirement?.nextAction), /adopt_stale/);
+
+  const adopt = await handler({ action: 'adopt_stale', adoptionHandle: 'anything' });
+  assert.equal(adopt.isError, true);
+  assert.equal(envelope(adopt).code, 'HANDOFF_NOT_AUTHORIZED');
+  assert.equal(f.registry.getClaim('source', 'worktree-1')?.sessionId, 'a');
 });

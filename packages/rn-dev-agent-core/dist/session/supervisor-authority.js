@@ -34,7 +34,9 @@ export function createSupervisorAuthority(input, dependencies = {}) {
             pid: input.supervisorBirth.pid,
             token: input.supervisorBirth.token,
         },
-        source: { ...input.source },
+        // L4: the session-model discriminator lives in write-once source_json until the
+        // schema-v5 column lands; grouped-v1 sessions never mint recovery handles.
+        source: { ...input.source, model: 'grouped-v1' },
     });
     const rollbackInitialization = (error) => {
         let failure = error;

@@ -50,7 +50,8 @@ function readRegistry(stateHome) {
   const database = new DatabaseSync(path, { readOnly: true });
   try {
     return {
-      sessions: database.prepare('SELECT session_id, state FROM sessions').all(),
+      sessions: database.prepare('SELECT session_id, state, bindings_json FROM sessions').all(),
+      claims: database.prepare('SELECT resource_type, resource_key, session_id FROM claims').all(),
       allocations: database.prepare('SELECT service, port FROM allocations').all(),
     };
   } finally {
@@ -195,6 +196,104 @@ test(
       owner = null;
     } finally {
       if (contender) contender.child.kill('SIGKILL');
+      if (owner) owner.child.kill('SIGKILL');
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+// L4: a kill -9'd owner is a PROVEN-dead same-root session. A restarting supervisor
+// must release it via the automatic journaled startup cleanup — no adoption handle,
+// no blocked contender — and then run the normal happy path.
+test(
+  'GH#672/L4: a kill -9 owner is released by automatic startup cleanup on restart',
+  { timeout: 120_000 },
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rn-agent-gh672-l4-'));
+    const project = join(root, 'project');
+    const stateHome = join(root, 'state');
+    const lockDir = join(root, 'lock');
+    let owner = null;
+    let successor = null;
+    try {
+      for (const dir of [project, stateHome, lockDir]) {
+        await mkdir(dir, { recursive: true });
+      }
+      await writeFile(
+        join(project, 'package.json'),
+        JSON.stringify({ name: 'gh672-l4-fixture', version: '0.0.0', dependencies: {} }),
+        'utf8',
+      );
+      const env = {
+        XDG_STATE_HOME: stateHome,
+        TMPDIR: lockDir,
+        RN_DEV_AGENT_DECLARED_ROOT: project,
+        RN_DEV_AGENT_DECLARED_MANIFESTS: 'package.json',
+        RN_AGENT_OBSERVE_AUTOSTART: '0',
+        RN_DEV_AGENT_PARENT_WATCH_MS: String(PARENT_WATCH_MS),
+      };
+
+      owner = startSupervisor({ cwd: project, env, noLock: false, lineTimeoutMs: 30_000 });
+      await handshake(owner, 'gh672-l4-owner');
+      const ownerStatus = await sessionStatus(owner);
+      assert.equal(ownerStatus.ok, true, `owner status failed: ${JSON.stringify(ownerStatus)}`);
+      assert.equal(ownerStatus.data.authority.state, 'source_bound');
+      const deadSessionId = readRegistry(stateHome).sessions[0].session_id;
+
+      owner.child.kill('SIGKILL');
+      await new Promise((resolve) => owner.child.on('exit', resolve));
+      owner = null;
+
+      successor = startSupervisor({ cwd: project, env, noLock: false, lineTimeoutMs: 30_000 });
+      await handshake(successor, 'gh672-l4-successor');
+      const successorStatus = await sessionStatus(successor);
+      assert.equal(
+        successorStatus.ok,
+        true,
+        `successor status failed: ${JSON.stringify(successorStatus)}`,
+      );
+      assert.equal(
+        successorStatus.data.authority.state,
+        'source_bound',
+        `the successor must own the source claim after automatic cleanup; stderr:\n${successor
+          .stderrText()
+          .slice(-1500)}`,
+      );
+      assert.match(
+        successor.stderrText(),
+        /startup cleanup: released 1 proven-dead session/,
+        'the successor reports the automatic journaled cleanup it performed',
+      );
+      assert.equal(
+        /Another rn-dev-agent MCP is running in this project/.test(successor.stderrText()),
+        false,
+        'a dead owner must never be reported as a live lock conflict',
+      );
+
+      const registry = readRegistry(stateHome);
+      const dead = registry.sessions.find((row) => row.session_id === deadSessionId);
+      assert.equal(dead?.state, 'released', 'the dead owner row is terminally released');
+      const journal = JSON.parse(dead.bindings_json).startupCleanup;
+      assert.equal(typeof journal?.finishedAt, 'number', 'the cleanup journal is durably finished');
+      const successorRow = registry.sessions.find(
+        (row) => row.session_id !== deadSessionId && row.state === 'source_bound',
+      );
+      assert.ok(
+        successorRow,
+        `expected a source_bound successor: ${JSON.stringify(registry.sessions)}`,
+      );
+      const sourceClaims = registry.claims.filter((claim) => claim.resource_type === 'source');
+      assert.equal(sourceClaims.length, 1, 'exactly one source claim after cleanup');
+      assert.equal(sourceClaims[0].session_id, successorRow.session_id);
+      const metroPorts = registry.allocations.filter((row) => row.service === 'metro');
+      assert.equal(metroPorts.length, 1, 'the worktree Metro allocation is reused, not duplicated');
+
+      successor.child.kill('SIGTERM');
+      const successorExit = await new Promise((resolve) => successor.child.on('exit', resolve));
+      assert.equal(successorExit, 0, 'the successor exits cleanly on SIGTERM');
+      successor = null;
+    } finally {
+      if (successor) successor.child.kill('SIGKILL');
       if (owner) owner.child.kill('SIGKILL');
       await rm(root, { recursive: true, force: true });
     }

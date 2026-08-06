@@ -175,6 +175,9 @@ export function projectPublicAuthorityStatus(
           recoveryRequirement: {
             requirement: options.recoveryRequirement.requirement,
             priorOwner: options.recoveryRequirement.priorOwner,
+            ...(typeof options.recoveryRequirement.priorOwnerHeartbeatAgeMs === 'number'
+              ? { priorOwnerHeartbeatAgeMs: options.recoveryRequirement.priorOwnerHeartbeatAgeMs }
+              : {}),
             nextAction: options.recoveryRequirement.nextAction,
           },
         }
