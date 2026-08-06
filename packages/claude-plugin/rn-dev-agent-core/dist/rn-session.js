@@ -8139,17 +8139,17 @@ var init_registry = __esm({
         const operation = this.#operationContext.getStore();
         if (!operation)
           return void 0;
-        const session = asSession(this.#database.prepare(`SELECT state, claim_epoch, authority_version
+        const session2 = asSession(this.#database.prepare(`SELECT state, claim_epoch, authority_version
            FROM sessions WHERE session_id = ?`).get(operation.sessionId));
         const active = this.#database.prepare(`SELECT operation_id FROM operations
          WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
            AND authority_version = ?`).get(operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
-        return session && isFenceableState(session.state) && session.claim_epoch === operation.claimEpoch && session.authority_version === operation.authorityVersion && active ? operation : void 0;
+        return session2 && isFenceableState(session2.state) && session2.claim_epoch === operation.claimEpoch && session2.authority_version === operation.authorityVersion && active ? operation : void 0;
       }
-      hasActiveBundleOperation(session) {
+      hasActiveBundleOperation(session2) {
         return Boolean(this.#database.prepare(`SELECT operation_id FROM operations
            WHERE session_id = ? AND claim_epoch = ? AND instr(profile, 'B') > 0
-           LIMIT 1`).get(session.sessionId, session.claimEpoch));
+           LIMIT 1`).get(session2.sessionId, session2.claimEpoch));
       }
       operationHasAxis(operation, axis) {
         this.verifyOperation(operation);
@@ -8197,22 +8197,22 @@ var init_registry = __esm({
         this.#secureFiles();
         return { sessionId: input.sessionId, claimEpoch: 1 };
       }
-      claimResources(session, resources) {
+      claimResources(session2, resources) {
         const unique = new Map(resources.map((resource) => [`${resource.type}\0${resource.key}`, resource]));
         if (unique.size !== resources.length) {
           throw new SessionAuthorityError("DUPLICATE_RESOURCE_CLAIM", "claim set contains duplicates");
         }
-        const probes = this.#probeClaimOwners(session, resources);
+        const probes = this.#probeClaimOwners(session2, resources);
         const now = this.#now();
         return this.#transaction(() => {
-          const owner = this.#requireSession(session);
+          const owner = this.#requireSession(session2);
           const bindings = JSON.parse(owner.bindings_json);
           if (resources.some((resource) => resource.type === "device")) {
             this.#assertNoStaleDeviceCleanup(bindings);
           }
           for (const resource of resources) {
             const claim = this.#findConflictingClaim(resource);
-            if (!claim || claim.session_id === session.sessionId && claim.claim_epoch === session.claimEpoch) {
+            if (!claim || claim.session_id === session2.sessionId && claim.claim_epoch === session2.claimEpoch) {
               continue;
             }
             const probe = probes.get(claim.session_id);
@@ -8237,73 +8237,73 @@ var init_registry = __esm({
             ON CONFLICT(resource_type, resource_key) DO UPDATE SET
               session_id = excluded.session_id,
               claim_epoch = excluded.claim_epoch,
-              lease_until_ms = excluded.lease_until_ms`).run(resource.type, resource.key, session.sessionId, session.claimEpoch, leaseUntil);
+              lease_until_ms = excluded.lease_until_ms`).run(resource.type, resource.key, session2.sessionId, session2.claimEpoch, leaseUntil);
           }
           this.#database.prepare(`UPDATE sessions
            SET authority_version = authority_version + 1, updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`).run(now, owner.session_id, owner.claim_epoch);
-          this.#advanceActiveOperationFence(session, owner.authority_version, owner.authority_version + 1);
-          return session;
+          this.#advanceActiveOperationFence(session2, owner.authority_version, owner.authority_version + 1);
+          return session2;
         });
       }
-      releaseResources(session, resources) {
+      releaseResources(session2, resources) {
         const now = this.#now();
         this.#transaction(() => {
-          const current = this.#requireSession(session);
+          const current = this.#requireSession(session2);
           for (const resource of resources) {
             if (resource.type === "runner" || resource.type === "device") {
               const rows = this.#database.prepare(`SELECT platform, receipt_json FROM platform_authority_receipts
-               WHERE session_id = ? AND claim_epoch = ?`).all(session.sessionId, session.claimEpoch);
+               WHERE session_id = ? AND claim_epoch = ?`).all(session2.sessionId, session2.claimEpoch);
               for (const row of rows) {
                 const persisted = JSON.parse(row.receipt_json);
                 const receipt = persisted.receipt && typeof persisted.receipt === "object" ? persisted.receipt : persisted;
                 if (resource.type === "runner" && receipt.runnerClaim === resource.key || resource.type === "device" && receipt.deviceClaim === resource.key) {
-                  this.#invalidatePlatformReceipt(session, row.platform);
+                  this.#invalidatePlatformReceipt(session2, row.platform);
                 }
               }
             }
             this.#database.prepare(`DELETE FROM claims
              WHERE resource_type = ? AND resource_key = ?
-               AND session_id = ? AND claim_epoch = ?`).run(resource.type, resource.key, session.sessionId, session.claimEpoch);
+               AND session_id = ? AND claim_epoch = ?`).run(resource.type, resource.key, session2.sessionId, session2.claimEpoch);
           }
           this.#database.prepare(`UPDATE sessions SET authority_version = authority_version + 1, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`).run(now, session.sessionId, session.claimEpoch);
-          this.#advanceActiveOperationFence(session, current.authority_version, current.authority_version + 1);
+           WHERE session_id = ? AND claim_epoch = ?`).run(now, session2.sessionId, session2.claimEpoch);
+          this.#advanceActiveOperationFence(session2, current.authority_version, current.authority_version + 1);
         });
       }
-      async claimResourcesWithRetry(session, resources, options = {}) {
-        return this.#retry(() => this.claimResources(session, resources), options.timeoutMs ?? 1e3, options.retryDelayMs ?? 5);
+      async claimResourcesWithRetry(session2, resources, options = {}) {
+        return this.#retry(() => this.claimResources(session2, resources), options.timeoutMs ?? 1e3, options.retryDelayMs ?? 5);
       }
-      renewSession(session) {
+      renewSession(session2) {
         const now = this.#now();
         this.#transaction(() => {
-          this.#requireSession(session);
+          this.#requireSession(session2);
           const leaseUntil = now + this.#leaseMs;
           this.#database.prepare(`UPDATE sessions
            SET heartbeat_ms = ?, lease_until_ms = ?, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`).run(now, leaseUntil, now, session.sessionId, session.claimEpoch);
+           WHERE session_id = ? AND claim_epoch = ?`).run(now, leaseUntil, now, session2.sessionId, session2.claimEpoch);
           this.#database.prepare(`UPDATE claims SET lease_until_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`).run(leaseUntil, session.sessionId, session.claimEpoch);
+           WHERE session_id = ? AND claim_epoch = ?`).run(leaseUntil, session2.sessionId, session2.claimEpoch);
         });
       }
-      async renewSessionWithRetry(session, options = {}) {
-        return this.#retry(() => this.renewSession(session), options.timeoutMs ?? 1e3, options.retryDelayMs ?? 5);
+      async renewSessionWithRetry(session2, options = {}) {
+        return this.#retry(() => this.renewSession(session2), options.timeoutMs ?? 1e3, options.retryDelayMs ?? 5);
       }
-      bindWorker(session, worker) {
+      bindWorker(session2, worker) {
         const now = this.#now();
         this.#transaction(() => {
-          this.#requireSession(session);
-          this.#database.prepare("DELETE FROM operations WHERE session_id = ? AND claim_epoch = ?").run(session.sessionId, session.claimEpoch);
+          this.#requireSession(session2);
+          this.#database.prepare("DELETE FROM operations WHERE session_id = ? AND claim_epoch = ?").run(session2.sessionId, session2.claimEpoch);
           this.#database.prepare(`UPDATE sessions
            SET worker_instance = ?, worker_pid = ?, worker_birth = ?,
                authority_version = authority_version + 1, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`).run(worker.instanceId, worker.pid, worker.token, now, session.sessionId, session.claimEpoch);
+           WHERE session_id = ? AND claim_epoch = ?`).run(worker.instanceId, worker.pid, worker.token, now, session2.sessionId, session2.claimEpoch);
         });
       }
-      bindRecoveryWorker(session, worker, capability) {
+      bindRecoveryWorker(session2, worker, capability) {
         const now = this.#now();
         this.#transaction(() => {
-          const row = this.#requireRecoverableSession(session);
+          const row = this.#requireRecoverableSession(session2);
           const bindings = JSON.parse(row.bindings_json);
           const expected = Buffer.from(String(bindings.recoveryCapabilityHash ?? ""), "hex");
           const actual = createHash5("sha256").update(capability).digest();
@@ -8329,7 +8329,7 @@ var init_registry = __esm({
             if (reservation.handoffId !== handoff.handoff_id || reservation.sourceClaimEpoch !== handoff.claim_epoch || reservation.sourceClaimEpoch !== handoff.donor_claim_epoch || reservation.metro.sourceSessionId !== handoff.session_id) {
               throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "managed Metro handoff reservation no longer matches the recovery worker fence");
             }
-            if (reservation.targetSessionId !== session.sessionId || reservation.targetClaimEpoch !== session.claimEpoch) {
+            if (reservation.targetSessionId !== session2.sessionId || reservation.targetClaimEpoch !== session2.claimEpoch) {
               return [];
             }
             if (reservation.targetInstance !== row.worker_instance || handoff.target_instance !== row.worker_instance) {
@@ -8344,8 +8344,8 @@ var init_registry = __esm({
           if (rotation) {
             const rotatedReservation = {
               ...rotation.reservation,
-              targetSessionId: session.sessionId,
-              targetClaimEpoch: session.claimEpoch,
+              targetSessionId: session2.sessionId,
+              targetClaimEpoch: session2.claimEpoch,
               targetInstance: worker.instanceId
             };
             const handoffChanged = this.#database.prepare(`UPDATE handoffs SET target_instance = ?
@@ -8390,12 +8390,12 @@ var init_registry = __esm({
               }
             } : reboundAdoptStale ? { adoptStale: reboundAdoptStale } : {}
           };
-          this.#database.prepare("DELETE FROM operations WHERE session_id = ? AND claim_epoch = ?").run(session.sessionId, session.claimEpoch);
+          this.#database.prepare("DELETE FROM operations WHERE session_id = ? AND claim_epoch = ?").run(session2.sessionId, session2.claimEpoch);
           this.#database.prepare(`UPDATE sessions
            SET worker_instance = ?, worker_pid = ?, worker_birth = ?,
                bindings_json = ?, authority_version = authority_version + 1, updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ?
-             AND state IN ('blocked', 'handoff_cleanup')`).run(worker.instanceId, worker.pid, worker.token, JSON.stringify({ ...bindings, recoveryHandles }), now, session.sessionId, session.claimEpoch);
+             AND state IN ('blocked', 'handoff_cleanup')`).run(worker.instanceId, worker.pid, worker.token, JSON.stringify({ ...bindings, recoveryHandles }), now, session2.sessionId, session2.claimEpoch);
         });
       }
       /**
@@ -8404,10 +8404,10 @@ var init_registry = __esm({
        * worker-bound, re-reads durable state, and leaves a still-fresh handle untouched.
        * Returns whether anything rotated.
        */
-      refreshRecoveryHandles(session, worker, capability) {
+      refreshRecoveryHandles(session2, worker, capability) {
         const now = this.#now();
         return this.#transaction(() => {
-          const row = this.#requireRecoverableSession(session);
+          const row = this.#requireRecoverableSession(session2);
           const bindings = JSON.parse(row.bindings_json);
           const expected = Buffer.from(String(bindings.recoveryCapabilityHash ?? ""), "hex");
           const actual = createHash5("sha256").update(capability).digest();
@@ -8449,7 +8449,7 @@ var init_registry = __esm({
             return false;
           this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ?
-             AND state IN ('blocked', 'handoff_cleanup')`).run(JSON.stringify({ ...bindings, recoveryHandles: next }), now, session.sessionId, session.claimEpoch);
+             AND state IN ('blocked', 'handoff_cleanup')`).run(JSON.stringify({ ...bindings, recoveryHandles: next }), now, session2.sessionId, session2.claimEpoch);
           return true;
         });
       }
@@ -8506,19 +8506,19 @@ var init_registry = __esm({
           nextAction: status === "match" ? "Another live rn-dev-agent supervisor owns this worktree. Close it or work in a separate worktree; a live owner is never adopted." : "The prior owner identity could not be proven, so it is treated as live. Close the other session or re-run once its process state is observable."
         };
       }
-      replaceDeviceAuthority(session, input) {
+      replaceDeviceAuthority(session2, input) {
         const resource = input.resource ?? {
           type: "device",
           key: `${String(input.device.platform)}:${String(input.device.deviceId)}`
         };
-        const probes = this.#probeClaimOwners(session, [resource]);
+        const probes = this.#probeClaimOwners(session2, [resource]);
         const now = this.#now();
         this.#transaction(() => {
-          const current = this.#requireSession(session);
+          const current = this.#requireSession(session2);
           const currentBindings = JSON.parse(current.bindings_json);
           this.#assertNoStaleDeviceCleanup(currentBindings);
           const claim = this.#findConflictingClaim(resource);
-          if (claim && (claim.session_id !== session.sessionId || claim.claim_epoch !== session.claimEpoch)) {
+          if (claim && (claim.session_id !== session2.sessionId || claim.claim_epoch !== session2.claimEpoch)) {
             const probe = probes.get(claim.session_id);
             if (!probe || probe.claimEpoch !== claim.claim_epoch || probe.status !== "mismatch") {
               throw claimConflict(claim);
@@ -8527,10 +8527,10 @@ var init_registry = __esm({
           }
           this.#database.prepare(`DELETE FROM claims
            WHERE session_id = ? AND claim_epoch = ?
-             AND resource_type IN ('device', 'target', 'runner')`).run(session.sessionId, session.claimEpoch);
+             AND resource_type IN ('device', 'target', 'runner')`).run(session2.sessionId, session2.claimEpoch);
           this.#database.prepare(`INSERT INTO claims(
             resource_type, resource_key, session_id, claim_epoch, lease_until_ms
-          ) VALUES (?, ?, ?, ?, ?)`).run(resource.type, resource.key, session.sessionId, session.claimEpoch, now + this.#leaseMs);
+          ) VALUES (?, ?, ?, ?, ?)`).run(resource.type, resource.key, session2.sessionId, session2.claimEpoch, now + this.#leaseMs);
           const bindings = {
             ...currentBindings,
             device: input.device,
@@ -8541,12 +8541,12 @@ var init_registry = __esm({
             proof: null,
             pendingBuild: null
           };
-          this.#invalidatePlatformReceipt(session, String(input.device.platform));
+          this.#invalidatePlatformReceipt(session2, String(input.device.platform));
           this.#database.prepare(`UPDATE sessions
            SET state = ?, bindings_json = ?, authority_version = authority_version + 1,
                updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`).run(input.install ? "device_bound" : "device_claimed", JSON.stringify(bindings), now, session.sessionId, session.claimEpoch);
-          this.#advanceActiveOperationFence(session, current.authority_version, current.authority_version + 1);
+           WHERE session_id = ? AND claim_epoch = ?`).run(input.install ? "device_bound" : "device_claimed", JSON.stringify(bindings), now, session2.sessionId, session2.claimEpoch);
+          this.#advanceActiveOperationFence(session2, current.authority_version, current.authority_version + 1);
         });
       }
       /**
@@ -8557,12 +8557,12 @@ var init_registry = __esm({
        * never transfers source, package-integration, Metro, or port authority, so a dead
        * owner from a foreign worktree can be cleaned up without adopting its session.
        */
-      prepareStaleResourceRelease(session, target) {
+      prepareStaleResourceRelease(session2, target) {
         const deviceKey = `${target.platform}:${target.deviceId}`;
         const now = this.#now();
         return this.#transaction(() => {
-          const current = this.#requireSession(session);
-          const claims = this.#deviceFamilyClaims(deviceKey).filter((claim) => claim.session_id !== session.sessionId);
+          const current = this.#requireSession(session2);
+          const claims = this.#deviceFamilyClaims(deviceKey).filter((claim) => claim.session_id !== session2.sessionId);
           if (claims.length === 0) {
             throw new SessionAuthorityError("DEVICE_CLAIM_CONFLICT", `no foreign claim on ${deviceKey} needs release`);
           }
@@ -8595,7 +8595,7 @@ var init_registry = __esm({
               priorSupervisorPid: prior.supervisor_pid,
               deathProvenAt: now
             }
-          }), now, session.sessionId, session.claimEpoch);
+          }), now, session2.sessionId, session2.claimEpoch);
           return offer;
         });
       }
@@ -8605,10 +8605,10 @@ var init_registry = __esm({
        * mint: a prior owner that came back to life, changed epoch, or cannot be identified
        * refuses even with a valid handle.
        */
-      beginStaleResourceRelease(session, handle, workerInstance, target) {
+      beginStaleResourceRelease(session2, handle, workerInstance, target) {
         const now = this.#now();
         return this.#transaction(() => {
-          const current = this.#requireSession(session);
+          const current = this.#requireSession(session2);
           const bindings = JSON.parse(current.bindings_json);
           if (current.worker_instance !== workerInstance) {
             throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "stale device release is not owned by this worker");
@@ -8644,7 +8644,7 @@ var init_registry = __esm({
           for (const claim of claims) {
             this.#database.prepare(`UPDATE claims SET session_id = ?, claim_epoch = ?, lease_until_ms = ?
              WHERE resource_type = ? AND resource_key = ?
-               AND session_id = ? AND claim_epoch = ?`).run(session.sessionId, session.claimEpoch, now + this.#leaseMs, claim.resource_type, claim.resource_key, prior.session_id, prior.claim_epoch);
+               AND session_id = ? AND claim_epoch = ?`).run(session2.sessionId, session2.claimEpoch, now + this.#leaseMs, claim.resource_type, claim.resource_key, prior.session_id, prior.claim_epoch);
           }
           const runnerClaimKey = runner ? `${platform}:${deviceId}:${String(runner.port)}` : null;
           const cleanup = {
@@ -8657,7 +8657,7 @@ var init_registry = __esm({
             recorder: recorder ? { ...recorder, claimKey: deviceKey, stopRequestedAt: now, completedAt: null } : null
           };
           this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`).run(JSON.stringify({ ...bindings, staleDeviceCleanup: cleanup }), now, session.sessionId, session.claimEpoch);
+           WHERE session_id = ? AND claim_epoch = ?`).run(JSON.stringify({ ...bindings, staleDeviceCleanup: cleanup }), now, session2.sessionId, session2.claimEpoch);
           this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`).run(JSON.stringify({
             ...priorBindings,
@@ -8665,8 +8665,8 @@ var init_registry = __esm({
             runner: null,
             recorder: null,
             deviceReleased: {
-              toSessionId: session.sessionId,
-              toClaimEpoch: session.claimEpoch,
+              toSessionId: session2.sessionId,
+              toClaimEpoch: session2.claimEpoch,
               at: now,
               platform,
               deviceId,
@@ -8678,10 +8678,10 @@ var init_registry = __esm({
           return { platform, deviceId, runner: cleanup.runner, recorder: cleanup.recorder };
         });
       }
-      completeStaleResourceRelease(session, workerInstance, resource) {
+      completeStaleResourceRelease(session2, workerInstance, resource) {
         const now = this.#now();
         this.#transaction(() => {
-          const { row, bindings, cleanup } = this.#requireStaleReleaseOwner(session, workerInstance);
+          const { row, bindings, cleanup } = this.#requireStaleReleaseOwner(session2, workerInstance);
           const binding = cleanup[resource];
           if (!binding || typeof binding !== "object")
             return;
@@ -8694,7 +8694,7 @@ var init_registry = __esm({
           const claimType = resource === "runner" ? "runner" : "recorder";
           this.#database.prepare(`DELETE FROM claims
            WHERE resource_type = ? AND resource_key = ?
-             AND session_id = ? AND claim_epoch = ?`).run(claimType, String(entry.claimKey), session.sessionId, session.claimEpoch);
+             AND session_id = ? AND claim_epoch = ?`).run(claimType, String(entry.claimKey), session2.sessionId, session2.claimEpoch);
           this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`).run(JSON.stringify({
             ...bindings,
@@ -8702,10 +8702,10 @@ var init_registry = __esm({
           }), now, row.session_id, row.claim_epoch);
         });
       }
-      finishStaleResourceRelease(session, workerInstance) {
+      finishStaleResourceRelease(session2, workerInstance) {
         const now = this.#now();
         this.#transaction(() => {
-          const { row, bindings, cleanup } = this.#requireStaleReleaseOwner(session, workerInstance);
+          const { row, bindings, cleanup } = this.#requireStaleReleaseOwner(session2, workerInstance);
           for (const resource of ["runner", "recorder"]) {
             const binding = cleanup[resource];
             if (binding && typeof binding === "object" && typeof binding.completedAt !== "number") {
@@ -8714,19 +8714,19 @@ var init_registry = __esm({
           }
           const deviceKey = `${String(cleanup.platform)}:${String(cleanup.deviceId)}`;
           for (const claim of this.#deviceFamilyClaims(deviceKey)) {
-            if (claim.session_id !== session.sessionId || claim.claim_epoch !== session.claimEpoch) {
+            if (claim.session_id !== session2.sessionId || claim.claim_epoch !== session2.claimEpoch) {
               continue;
             }
             this.#database.prepare(`DELETE FROM claims
              WHERE resource_type = ? AND resource_key = ?
-               AND session_id = ? AND claim_epoch = ?`).run(claim.resource_type, claim.resource_key, session.sessionId, session.claimEpoch);
+               AND session_id = ? AND claim_epoch = ?`).run(claim.resource_type, claim.resource_key, session2.sessionId, session2.claimEpoch);
           }
           this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`).run(JSON.stringify({ ...bindings, staleDeviceCleanup: null, staleDeviceRelease: null }), now, row.session_id, row.claim_epoch);
         });
       }
-      #requireStaleReleaseOwner(session, workerInstance) {
-        const row = this.#requireSession(session);
+      #requireStaleReleaseOwner(session2, workerInstance) {
+        const row = this.#requireSession(session2);
         if (row.worker_instance !== workerInstance) {
           throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "stale device release is not owned by this worker");
         }
@@ -8810,10 +8810,10 @@ var init_registry = __esm({
         }
         return prior;
       }
-      updateBindings(session, input) {
+      updateBindings(session2, input) {
         const now = this.#now();
         this.#transaction(() => {
-          const current = this.#requireSession(session);
+          const current = this.#requireSession(session2);
           if (input.expectedAuthorityVersion !== void 0 && current.authority_version !== input.expectedAuthorityVersion) {
             throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "session authority version changed before binding commit");
           }
@@ -8823,7 +8823,7 @@ var init_registry = __esm({
           };
           for (const resource of input.claimResources ?? []) {
             const claim = this.#findConflictingClaim(resource);
-            if (claim && (claim.session_id !== session.sessionId || claim.claim_epoch !== session.claimEpoch)) {
+            if (claim && (claim.session_id !== session2.sessionId || claim.claim_epoch !== session2.claimEpoch)) {
               throw claimConflict(claim);
             }
           }
@@ -8831,13 +8831,13 @@ var init_registry = __esm({
             const currentBindings = JSON.parse(current.bindings_json);
             const platform = String((input.bindings.device ?? currentBindings.device)?.platform ?? "");
             if (platform) {
-              this.#invalidatePlatformReceipt(session, platform);
+              this.#invalidatePlatformReceipt(session2, platform);
             }
           }
           for (const resource of input.releaseResources ?? []) {
             this.#database.prepare(`DELETE FROM claims
              WHERE resource_type = ? AND resource_key = ?
-               AND session_id = ? AND claim_epoch = ?`).run(resource.type, resource.key, session.sessionId, session.claimEpoch);
+               AND session_id = ? AND claim_epoch = ?`).run(resource.type, resource.key, session2.sessionId, session2.claimEpoch);
           }
           const leaseUntil = now + this.#leaseMs;
           for (const resource of input.claimResources ?? []) {
@@ -8847,13 +8847,13 @@ var init_registry = __esm({
             ON CONFLICT(resource_type, resource_key) DO UPDATE SET
               session_id = excluded.session_id,
               claim_epoch = excluded.claim_epoch,
-              lease_until_ms = excluded.lease_until_ms`).run(resource.type, resource.key, session.sessionId, session.claimEpoch, leaseUntil);
+              lease_until_ms = excluded.lease_until_ms`).run(resource.type, resource.key, session2.sessionId, session2.claimEpoch, leaseUntil);
           }
           this.#database.prepare(`UPDATE sessions
            SET state = ?, bindings_json = ?, authority_version = authority_version + 1,
                updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`).run(input.state ?? current.state, JSON.stringify(bindings), now, session.sessionId, session.claimEpoch);
-          this.#advanceActiveOperationFence(session, current.authority_version, current.authority_version + 1);
+           WHERE session_id = ? AND claim_epoch = ?`).run(input.state ?? current.state, JSON.stringify(bindings), now, session2.sessionId, session2.claimEpoch);
+          this.#advanceActiveOperationFence(session2, current.authority_version, current.authority_version + 1);
         });
       }
       replaceBindingsDuringOperation(operation, input) {
@@ -8991,12 +8991,12 @@ var init_registry = __esm({
          ORDER BY updated_ms DESC`).all(worktreeKey);
         return rows.map((row) => this.getSessionStatus(String(row.session_id))).filter((status) => status !== null);
       }
-      getControllerBinding(session) {
-        const row = this.#requireSession(session);
+      getControllerBinding(session2) {
+        const row = this.#requireSession(session2);
         return this.#controllerBinding(row);
       }
-      getHandoffCancellationControllerBinding(session) {
-        const row = this.#requireHandoffSession(session);
+      getHandoffCancellationControllerBinding(session2) {
+        const row = this.#requireHandoffSession(session2);
         return this.#controllerBinding(row);
       }
       #controllerBinding(row) {
@@ -9012,12 +9012,12 @@ var init_registry = __esm({
           }
         };
       }
-      beginSessionClose(session) {
+      beginSessionClose(session2) {
         const now = this.#now();
         const operationIds = this.#transaction(() => {
-          const current = this.#requireSession(session);
+          const current = this.#requireSession(session2);
           const active = this.#database.prepare(`SELECT operation_id, profile FROM operations
-           WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(session.sessionId, session.claimEpoch);
+           WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(session2.sessionId, session2.claimEpoch);
           const bindings = JSON.parse(current.bindings_json);
           this.#requireIntegrationRestored(bindings);
           const metro = bindings.metroCleanup ?? bindings.metro;
@@ -9025,85 +9025,85 @@ var init_registry = __esm({
             throw new SessionAuthorityError("SESSION_OPERATION_ACTIVE", "managed Metro transition has not published exact cleanup authority");
           }
           const rows = this.#database.prepare(`SELECT operation_id FROM operations
-           WHERE session_id = ? AND claim_epoch = ?`).all(session.sessionId, session.claimEpoch);
-          this.#database.prepare("DELETE FROM operations WHERE session_id = ? AND claim_epoch = ?").run(session.sessionId, session.claimEpoch);
+           WHERE session_id = ? AND claim_epoch = ?`).all(session2.sessionId, session2.claimEpoch);
+          this.#database.prepare("DELETE FROM operations WHERE session_id = ? AND claim_epoch = ?").run(session2.sessionId, session2.claimEpoch);
           this.#database.prepare(`UPDATE sessions
            SET state = 'closing', authority_version = authority_version + 1, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`).run(now, session.sessionId, session.claimEpoch);
+           WHERE session_id = ? AND claim_epoch = ?`).run(now, session2.sessionId, session2.claimEpoch);
           return rows.map((row) => String(row.operation_id));
         });
         for (const operationId of operationIds) {
           this.#pendingPlatformReceipts.delete(operationId);
         }
-        const status = this.getSessionStatus(session.sessionId);
+        const status = this.getSessionStatus(session2.sessionId);
         if (!status || status.state !== "closing") {
           throw new SessionAuthorityError("SESSION_OWNER_LOST", "session close reservation did not persist");
         }
         return status;
       }
-      completeSessionClose(session) {
+      completeSessionClose(session2) {
         const now = this.#now();
         this.#transaction(() => {
-          const row = asSession(this.#database.prepare("SELECT state, claim_epoch, bindings_json FROM sessions WHERE session_id = ?").get(session.sessionId));
-          if (!row || row.state !== "closing" || row.claim_epoch !== session.claimEpoch) {
+          const row = asSession(this.#database.prepare("SELECT state, claim_epoch, bindings_json FROM sessions WHERE session_id = ?").get(session2.sessionId));
+          if (!row || row.state !== "closing" || row.claim_epoch !== session2.claimEpoch) {
             throw new SessionAuthorityError("SESSION_OWNER_LOST", "only the unchanged closing session may be released");
           }
           this.#requireIntegrationRestored(JSON.parse(String(row.bindings_json)));
-          this.#database.prepare("DELETE FROM claims WHERE session_id = ? AND claim_epoch = ?").run(session.sessionId, session.claimEpoch);
+          this.#database.prepare("DELETE FROM claims WHERE session_id = ? AND claim_epoch = ?").run(session2.sessionId, session2.claimEpoch);
           this.#database.prepare(`UPDATE sessions
            SET state = 'released', claim_epoch = claim_epoch + 1,
                authority_version = authority_version + 1, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ? AND state = 'closing'`).run(now, session.sessionId, session.claimEpoch);
+           WHERE session_id = ? AND claim_epoch = ? AND state = 'closing'`).run(now, session2.sessionId, session2.claimEpoch);
         });
       }
-      releaseSession(session) {
+      releaseSession(session2) {
         const now = this.#now();
         this.#transaction(() => {
-          const current = this.#requireSession(session);
+          const current = this.#requireSession(session2);
           this.#requireIntegrationRestored(JSON.parse(current.bindings_json));
           const active = this.#database.prepare(`SELECT operation_id, profile FROM operations
-           WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(session.sessionId, session.claimEpoch);
+           WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(session2.sessionId, session2.claimEpoch);
           if (active && !String(active.profile).startsWith("transition:")) {
             throw new SessionAuthorityError("SESSION_OPERATION_ACTIVE", "session cannot be released while an operation is active");
           }
           if (active) {
             const context = this.#operationContext.getStore();
-            if (!context || context.operationId !== active.operation_id || context.sessionId !== session.sessionId || context.claimEpoch !== session.claimEpoch) {
+            if (!context || context.operationId !== active.operation_id || context.sessionId !== session2.sessionId || context.claimEpoch !== session2.claimEpoch) {
               throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "session release is not owned by the active operation fence");
             }
-            this.#database.prepare("DELETE FROM operations WHERE session_id = ? AND claim_epoch = ?").run(session.sessionId, session.claimEpoch);
+            this.#database.prepare("DELETE FROM operations WHERE session_id = ? AND claim_epoch = ?").run(session2.sessionId, session2.claimEpoch);
           }
-          this.#database.prepare("DELETE FROM claims WHERE session_id = ? AND claim_epoch = ?").run(session.sessionId, session.claimEpoch);
+          this.#database.prepare("DELETE FROM claims WHERE session_id = ? AND claim_epoch = ?").run(session2.sessionId, session2.claimEpoch);
           this.#database.prepare(`UPDATE sessions
            SET state = 'released', claim_epoch = claim_epoch + 1,
                authority_version = authority_version + 1, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`).run(now, session.sessionId, session.claimEpoch);
+           WHERE session_id = ? AND claim_epoch = ?`).run(now, session2.sessionId, session2.claimEpoch);
         });
       }
-      discardBlockedSession(session) {
+      discardBlockedSession(session2) {
         const now = this.#now();
         this.#transaction(() => {
-          const row = asSession(this.#database.prepare("SELECT state, claim_epoch FROM sessions WHERE session_id = ?").get(session.sessionId));
-          if (!row || row.state !== "blocked" || row.claim_epoch !== session.claimEpoch) {
+          const row = asSession(this.#database.prepare("SELECT state, claim_epoch FROM sessions WHERE session_id = ?").get(session2.sessionId));
+          if (!row || row.state !== "blocked" || row.claim_epoch !== session2.claimEpoch) {
             throw new SessionAuthorityError("SESSION_OWNER_LOST", "only the unchanged blocked session may be discarded");
           }
-          const claim = this.#database.prepare("SELECT resource_key FROM claims WHERE session_id = ? LIMIT 1").get(session.sessionId);
+          const claim = this.#database.prepare("SELECT resource_key FROM claims WHERE session_id = ? LIMIT 1").get(session2.sessionId);
           if (claim) {
             throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "blocked session unexpectedly owns resource claims");
           }
           this.#database.prepare(`UPDATE sessions
            SET state = 'released', claim_epoch = claim_epoch + 1,
                authority_version = authority_version + 1, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`).run(now, session.sessionId, session.claimEpoch);
+           WHERE session_id = ? AND claim_epoch = ?`).run(now, session2.sessionId, session2.claimEpoch);
         });
       }
-      prepareHandoff(session, input) {
+      prepareHandoff(session2, input) {
         const now = this.#now();
         const handoffId = randomBytes(16).toString("hex");
         const token2 = randomBytes(32).toString("base64url");
         const tokenHash = createHash5("sha256").update(token2).digest("hex");
         this.#transaction(() => {
-          const current = this.#requireSession(session);
+          const current = this.#requireSession(session2);
           let targetInstance = input.targetInstance;
           if (input.targetHandle) {
             const targets = this.#database.prepare(`SELECT session_id, bindings_json FROM sessions
@@ -9126,38 +9126,38 @@ var init_registry = __esm({
             throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "handoff recipient capability is invalid or expired");
           }
           const active = this.#database.prepare(`SELECT operation_id, profile FROM operations
-           WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(session.sessionId, session.claimEpoch);
+           WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(session2.sessionId, session2.claimEpoch);
           if (active && !String(active.profile).startsWith("transition:")) {
             throw new SessionAuthorityError("SESSION_OPERATION_ACTIVE", "session cannot enter handoff while an operation is active");
           }
           this.#database.prepare(`INSERT INTO handoffs(
             handoff_id, session_id, claim_epoch, target_instance,
             token_hash, source_state, expires_ms, consumed_ms
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`).run(handoffId, session.sessionId, session.claimEpoch, targetInstance, tokenHash, this.#requireSession(session).state, now + (input.ttlMs ?? 15e3));
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`).run(handoffId, session2.sessionId, session2.claimEpoch, targetInstance, tokenHash, this.#requireSession(session2).state, now + (input.ttlMs ?? 15e3));
           this.#database.prepare(`UPDATE sessions
            SET state = 'handoff', authority_version = authority_version + 1, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`).run(now, session.sessionId, session.claimEpoch);
-          this.#advanceActiveOperationFence(session, current.authority_version, current.authority_version + 1);
+           WHERE session_id = ? AND claim_epoch = ?`).run(now, session2.sessionId, session2.claimEpoch);
+          this.#advanceActiveOperationFence(session2, current.authority_version, current.authority_version + 1);
         });
         return { handoffId, token: token2 };
       }
-      prepareHandoffForHandle(session, input) {
-        return this.prepareHandoff(session, input);
+      prepareHandoffForHandle(session2, input) {
+        return this.prepareHandoff(session2, input);
       }
-      cancelHandoff(session, handoffId) {
+      cancelHandoff(session2, handoffId) {
         const now = this.#now();
         this.#transaction(() => {
           const handoff = this.#database.prepare(`SELECT session_id, claim_epoch, source_state, consumed_ms
            FROM handoffs WHERE handoff_id = ?`).get(handoffId);
-          if (!handoff || handoff.session_id !== session.sessionId || handoff.claim_epoch !== session.claimEpoch) {
+          if (!handoff || handoff.session_id !== session2.sessionId || handoff.claim_epoch !== session2.claimEpoch) {
             throw new SessionAuthorityError("HANDOFF_NOT_FOUND", "handoff does not belong to session");
           }
           if (handoff.consumed_ms !== null) {
             throw new SessionAuthorityError("HANDOFF_ALREADY_CONSUMED", "handoff is already terminal");
           }
           const row = asSession(this.#database.prepare(`SELECT state, claim_epoch, authority_version, bindings_json
-             FROM sessions WHERE session_id = ?`).get(session.sessionId));
-          if (!row || row.state !== "handoff" || row.claim_epoch !== session.claimEpoch) {
+             FROM sessions WHERE session_id = ?`).get(session2.sessionId));
+          if (!row || row.state !== "handoff" || row.claim_epoch !== session2.claimEpoch) {
             throw new SessionAuthorityError("SESSION_OWNER_LOST", "handoff source owner changed");
           }
           const bindings = JSON.parse(row.bindings_json);
@@ -9166,9 +9166,9 @@ var init_registry = __esm({
           }
           this.#database.prepare(`UPDATE sessions
            SET state = ?, authority_version = authority_version + 1, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`).run(handoff.source_state, now, session.sessionId, session.claimEpoch);
+           WHERE session_id = ? AND claim_epoch = ?`).run(handoff.source_state, now, session2.sessionId, session2.claimEpoch);
           this.#database.prepare("UPDATE handoffs SET consumed_ms = ? WHERE handoff_id = ?").run(now, handoffId);
-          this.#advanceActiveOperationFence(session, row.authority_version, row.authority_version + 1);
+          this.#advanceActiveOperationFence(session2, row.authority_version, row.authority_version + 1);
         });
       }
       getHandoffOwner(handoffId) {
@@ -9315,23 +9315,23 @@ var init_registry = __esm({
           if (expected.length !== actual.length || !timingSafeEqual4(expected, actual)) {
             throw new SessionAuthorityError("HANDOFF_TOKEN_INVALID", "handoff capability is invalid");
           }
-          const session = asSession(this.#database.prepare(`SELECT session_id, state, claim_epoch, authority_version,
+          const session2 = asSession(this.#database.prepare(`SELECT session_id, state, claim_epoch, authority_version,
                     supervisor_pid, supervisor_birth, lease_until_ms, bindings_json
              FROM sessions WHERE session_id = ?`).get(handoff.session_id));
-          if (!session || session.state !== "handoff" || session.claim_epoch !== handoff.claim_epoch) {
+          if (!session2 || session2.state !== "handoff" || session2.claim_epoch !== handoff.claim_epoch) {
             throw new SessionAuthorityError("SESSION_OWNER_LOST", "handoff no longer matches the session claim epoch");
           }
-          const sessionBindings = JSON.parse(session.bindings_json);
+          const sessionBindings = JSON.parse(session2.bindings_json);
           if (sessionBindings.metro && typeof sessionBindings.metro === "object" && sessionBindings.metro.mode === "managed") {
             throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "managed Metro handoff requires durable cleanup through a blocked recipient");
           }
-          const nextEpoch = session.claim_epoch + 1;
+          const nextEpoch = session2.claim_epoch + 1;
           const leaseUntil = now + this.#leaseMs;
           this.#database.prepare(`DELETE FROM claims
            WHERE session_id = ? AND claim_epoch = ?
-             AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device', 'recorder')`).run(session.session_id, session.claim_epoch);
+             AND resource_type NOT IN ('source', 'metro-port', 'observe-port', 'device', 'recorder')`).run(session2.session_id, session2.claim_epoch);
           this.#database.prepare(`UPDATE claims SET claim_epoch = ?, lease_until_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`).run(nextEpoch, leaseUntil, session.session_id, session.claim_epoch);
+           WHERE session_id = ? AND claim_epoch = ?`).run(nextEpoch, leaseUntil, session2.session_id, session2.claim_epoch);
           this.#database.prepare(`UPDATE sessions
            SET state = 'source_bound', claim_epoch = ?, authority_version = authority_version + 1,
                supervisor_pid = ?, supervisor_birth = ?, heartbeat_ms = ?,
@@ -9343,9 +9343,9 @@ var init_registry = __esm({
             observe: null,
             proof: null,
             pendingBuild: null
-          }), now, session.session_id, session.claim_epoch);
+          }), now, session2.session_id, session2.claim_epoch);
           this.#database.prepare("UPDATE handoffs SET consumed_ms = ? WHERE handoff_id = ?").run(now, handoff.handoff_id);
-          return { sessionId: session.session_id, claimEpoch: nextEpoch };
+          return { sessionId: session2.session_id, claimEpoch: nextEpoch };
         });
       }
       acceptHandoffInto(target, input) {
@@ -9560,13 +9560,13 @@ var init_registry = __esm({
           }), now, target.sessionId, target.claimEpoch);
         });
       }
-      recordPlatformAuthorityReceipt(session, platform, receipt) {
+      recordPlatformAuthorityReceipt(session2, platform, receipt) {
         const operation = this.#operationContext.getStore();
-        if (!operation || operation.sessionId !== session.sessionId || operation.claimEpoch !== session.claimEpoch) {
+        if (!operation || operation.sessionId !== session2.sessionId || operation.claimEpoch !== session2.claimEpoch) {
           throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "platform receipt recording requires the active operation fence");
         }
         this.verifyOperation(operation);
-        const staged = this.#platformReceiptFromCurrentAuthority(session, platform, receipt);
+        const staged = this.#platformReceiptFromCurrentAuthority(session2, platform, receipt);
         const pending = this.#pendingPlatformReceipts.get(operation.operationId) ?? [];
         pending.push(staged);
         this.#pendingPlatformReceipts.set(operation.operationId, pending);
@@ -9592,18 +9592,18 @@ var init_registry = __esm({
         });
         this.#pendingPlatformReceipts.delete(operation.operationId);
       }
-      validatePlatformAuthorityReceipt(session, platform, receipt) {
+      validatePlatformAuthorityReceipt(session2, platform, receipt) {
         const row = this.#database.prepare(`SELECT claim_epoch, receipt_json FROM platform_authority_receipts
-         WHERE session_id = ? AND platform = ?`).get(session.sessionId, platform);
+         WHERE session_id = ? AND platform = ?`).get(session2.sessionId, platform);
         const persisted = typeof row?.receipt_json === "string" ? JSON.parse(row.receipt_json) : null;
         const persistedReceipt = persisted?.receipt && typeof persisted.receipt === "object" ? persisted.receipt : persisted;
-        return row?.claim_epoch === session.claimEpoch && JSON.stringify(persistedReceipt) === JSON.stringify(receipt);
+        return row?.claim_epoch === session2.claimEpoch && JSON.stringify(persistedReceipt) === JSON.stringify(receipt);
       }
-      getPlatformAuthorityProbe(session, platform, receipt) {
-        if (!this.validatePlatformAuthorityReceipt(session, platform, receipt))
+      getPlatformAuthorityProbe(session2, platform, receipt) {
+        if (!this.validatePlatformAuthorityReceipt(session2, platform, receipt))
           return null;
         const row = this.#database.prepare(`SELECT receipt_json FROM platform_authority_receipts
-         WHERE session_id = ? AND claim_epoch = ? AND platform = ?`).get(session.sessionId, session.claimEpoch, platform);
+         WHERE session_id = ? AND claim_epoch = ? AND platform = ?`).get(session2.sessionId, session2.claimEpoch, platform);
         if (typeof row?.receipt_json !== "string")
           return null;
         const persisted = JSON.parse(row.receipt_json);
@@ -9807,32 +9807,32 @@ var init_registry = __esm({
           throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "stale adoption resumption requires the original adoption capability");
         }
       }
-      beginOperation(session, operation) {
-        return this.#beginOperation(session, operation, false);
+      beginOperation(session2, operation) {
+        return this.#beginOperation(session2, operation, false);
       }
-      beginHandoffCancellationOperation(session, operation) {
-        return this.#beginOperation(session, operation, true);
+      beginHandoffCancellationOperation(session2, operation) {
+        return this.#beginOperation(session2, operation, true);
       }
-      #beginOperation(session, operation, handoffCancellation) {
+      #beginOperation(session2, operation, handoffCancellation) {
         const now = this.#now();
         return this.#transaction(() => {
-          const owner = handoffCancellation ? this.#requireHandoffSession(session) : this.#requireSession(session);
+          const owner = handoffCancellation ? this.#requireHandoffSession(session2) : this.#requireSession(session2);
           if (handoffCancellation && JSON.parse(owner.bindings_json).managedMetroHandoffReservation) {
             throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "handoff cancellation is fenced while managed Metro shutdown is reserved");
           }
           const active = this.#database.prepare(`SELECT operation_id FROM operations
-           WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(session.sessionId, session.claimEpoch);
+           WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(session2.sessionId, session2.claimEpoch);
           if (active) {
             throw new SessionAuthorityError("OPERATION_ALREADY_IN_PROGRESS", "session already has an active fenced operation");
           }
           this.#database.prepare(`INSERT INTO operations(
             operation_id, session_id, claim_epoch, authority_version,
             tool, profile, started_ms, lease_until_ms
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(operation.operationId, session.sessionId, session.claimEpoch, owner.authority_version, operation.tool, operation.profile, now, now + this.#leaseMs);
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(operation.operationId, session2.sessionId, session2.claimEpoch, owner.authority_version, operation.tool, operation.profile, now, now + this.#leaseMs);
           return {
             operationId: operation.operationId,
-            sessionId: session.sessionId,
-            claimEpoch: session.claimEpoch,
+            sessionId: session2.sessionId,
+            claimEpoch: session2.claimEpoch,
             authorityVersion: owner.authority_version
           };
         });
@@ -9843,12 +9843,12 @@ var init_registry = __esm({
       }
       endOperation(operation) {
         this.#transaction(() => {
-          const session = asSession(this.#database.prepare(`SELECT state, claim_epoch, authority_version
+          const session2 = asSession(this.#database.prepare(`SELECT state, claim_epoch, authority_version
              FROM sessions WHERE session_id = ?`).get(operation.sessionId));
           const active = this.#database.prepare(`SELECT operation_id FROM operations
            WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
              AND authority_version = ?`).get(operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
-          if (!session || !isFenceableState(session.state) || session.claim_epoch !== operation.claimEpoch || session.authority_version !== operation.authorityVersion || !active) {
+          if (!session2 || !isFenceableState(session2.state) || session2.claim_epoch !== operation.claimEpoch || session2.authority_version !== operation.authorityVersion || !active) {
             throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "operation fence no longer matches current authority");
           }
           this.#database.prepare("DELETE FROM operations WHERE operation_id = ?").run(operation.operationId);
@@ -9863,12 +9863,12 @@ var init_registry = __esm({
         });
         this.#pendingPlatformReceipts.delete(operation.operationId);
       }
-      cancelActiveOperationForSession(session) {
+      cancelActiveOperationForSession(session2) {
         const operationIds = this.#transaction(() => {
-          this.#requireSession(session);
+          this.#requireSession(session2);
           const rows = this.#database.prepare(`SELECT operation_id FROM operations
-           WHERE session_id = ? AND claim_epoch = ?`).all(session.sessionId, session.claimEpoch);
-          this.#database.prepare("DELETE FROM operations WHERE session_id = ? AND claim_epoch = ?").run(session.sessionId, session.claimEpoch);
+           WHERE session_id = ? AND claim_epoch = ?`).all(session2.sessionId, session2.claimEpoch);
+          this.#database.prepare("DELETE FROM operations WHERE session_id = ? AND claim_epoch = ?").run(session2.sessionId, session2.claimEpoch);
           return rows.map((row) => String(row.operation_id));
         });
         for (const operationId of operationIds) {
@@ -9876,12 +9876,12 @@ var init_registry = __esm({
         }
       }
       verifyOperation(operation) {
-        const session = asSession(this.#database.prepare(`SELECT state, claim_epoch, authority_version
+        const session2 = asSession(this.#database.prepare(`SELECT state, claim_epoch, authority_version
            FROM sessions WHERE session_id = ?`).get(operation.sessionId));
         const active = this.#database.prepare(`SELECT operation_id FROM operations
          WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
            AND authority_version = ?`).get(operation.operationId, operation.sessionId, operation.claimEpoch, operation.authorityVersion);
-        if (!session || !isFenceableState(session.state) || session.claim_epoch !== operation.claimEpoch || session.authority_version !== operation.authorityVersion || !active) {
+        if (!session2 || !isFenceableState(session2.state) || session2.claim_epoch !== operation.claimEpoch || session2.authority_version !== operation.authorityVersion || !active) {
           throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "operation fence no longer matches current authority");
         }
       }
@@ -10076,11 +10076,11 @@ var init_registry = __esm({
           }
         }
       }
-      #probeClaimOwners(session, resources) {
+      #probeClaimOwners(session2, resources) {
         const owners = /* @__PURE__ */ new Map();
         for (const resource of resources) {
           const claim = this.#findConflictingClaim(resource);
-          if (!claim || claim.session_id === session.sessionId || owners.has(claim.session_id)) {
+          if (!claim || claim.session_id === session2.sessionId || owners.has(claim.session_id)) {
             continue;
           }
           const owner = asSession(this.#database.prepare(`SELECT session_id, claim_epoch, supervisor_pid, supervisor_birth
@@ -10101,13 +10101,13 @@ var init_registry = __esm({
         }
         return owners;
       }
-      #requireSession(session) {
+      #requireSession(session2) {
         const row = asSession(this.#database.prepare(`SELECT session_id, state, claim_epoch, authority_version,
                   source_key, worktree_key, app_root_key,
                   supervisor_pid, supervisor_birth, worker_instance, worker_pid,
                   worker_birth, lease_until_ms, source_json, bindings_json
-           FROM sessions WHERE session_id = ?`).get(session.sessionId));
-        if (!row || !isOperationalState(row.state) || row.claim_epoch !== session.claimEpoch) {
+           FROM sessions WHERE session_id = ?`).get(session2.sessionId));
+        if (!row || !isOperationalState(row.state) || row.claim_epoch !== session2.claimEpoch) {
           throw new SessionAuthorityError("SESSION_OWNER_LOST", "session owner no longer matches the active claim epoch");
         }
         return row;
@@ -10117,37 +10117,37 @@ var init_registry = __esm({
           throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "package integration must be restored before session release");
         }
       }
-      #requireFenceableSession(session) {
+      #requireFenceableSession(session2) {
         const row = asSession(this.#database.prepare(`SELECT session_id, state, claim_epoch, authority_version,
                   source_key, worktree_key, app_root_key,
                   supervisor_pid, supervisor_birth, worker_instance, worker_pid,
                   worker_birth, lease_until_ms, source_json, bindings_json
-           FROM sessions WHERE session_id = ?`).get(session.sessionId));
-        if (!row || !isFenceableState(row.state) || row.claim_epoch !== session.claimEpoch) {
+           FROM sessions WHERE session_id = ?`).get(session2.sessionId));
+        if (!row || !isFenceableState(row.state) || row.claim_epoch !== session2.claimEpoch) {
           throw new SessionAuthorityError("SESSION_OWNER_LOST", "session owner no longer matches the fenceable claim epoch");
         }
         return row;
       }
-      #requireHandoffSession(session) {
-        const row = this.#requireFenceableSession(session);
+      #requireHandoffSession(session2) {
+        const row = this.#requireFenceableSession(session2);
         if (row.state !== "handoff") {
           throw new SessionAuthorityError("SESSION_OWNER_LOST", "session owner no longer matches the handoff claim epoch");
         }
         return row;
       }
-      #requireRecoverableSession(session) {
+      #requireRecoverableSession(session2) {
         const row = asSession(this.#database.prepare(`SELECT session_id, state, claim_epoch, authority_version,
                   source_key, worktree_key, app_root_key,
                   supervisor_pid, supervisor_birth, worker_instance, worker_pid,
                   worker_birth, lease_until_ms, source_json, bindings_json
-           FROM sessions WHERE session_id = ?`).get(session.sessionId));
-        if (!row || row.state !== "blocked" && row.state !== "handoff_cleanup" || row.claim_epoch !== session.claimEpoch) {
+           FROM sessions WHERE session_id = ?`).get(session2.sessionId));
+        if (!row || row.state !== "blocked" && row.state !== "handoff_cleanup" || row.claim_epoch !== session2.claimEpoch) {
           throw new SessionAuthorityError("SESSION_OWNER_LOST", "session is not an unchanged recovery contender");
         }
         return row;
       }
-      #requireHandoffCleanupOwner(session, targetInstance) {
-        const row = this.#requireRecoverableSession(session);
+      #requireHandoffCleanupOwner(session2, targetInstance) {
+        const row = this.#requireRecoverableSession(session2);
         if (row.state !== "handoff_cleanup" || row.worker_instance !== targetInstance) {
           throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "handoff cleanup is not owned by this recovery worker");
         }
@@ -10254,18 +10254,18 @@ var init_registry = __esm({
           reservation: exactReservation ? reservation : null
         };
       }
-      #advanceActiveOperationFence(session, priorAuthorityVersion, nextAuthorityVersion) {
+      #advanceActiveOperationFence(session2, priorAuthorityVersion, nextAuthorityVersion) {
         const active = this.#database.prepare(`SELECT operation_id, authority_version FROM operations
-         WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(session.sessionId, session.claimEpoch);
+         WHERE session_id = ? AND claim_epoch = ? LIMIT 1`).get(session2.sessionId, session2.claimEpoch);
         if (!active)
           return;
         const context = this.#operationContext.getStore();
-        if (!context || context.operationId !== active.operation_id || context.sessionId !== session.sessionId || context.claimEpoch !== session.claimEpoch || context.authorityVersion !== priorAuthorityVersion || active.authority_version !== priorAuthorityVersion) {
+        if (!context || context.operationId !== active.operation_id || context.sessionId !== session2.sessionId || context.claimEpoch !== session2.claimEpoch || context.authorityVersion !== priorAuthorityVersion || active.authority_version !== priorAuthorityVersion) {
           throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "authority mutation is not owned by the active operation fence");
         }
         const changed = this.#database.prepare(`UPDATE operations SET authority_version = ?, lease_until_ms = ?
          WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
-           AND authority_version = ?`).run(nextAuthorityVersion, this.#now() + this.#leaseMs, context.operationId, session.sessionId, session.claimEpoch, priorAuthorityVersion);
+           AND authority_version = ?`).run(nextAuthorityVersion, this.#now() + this.#leaseMs, context.operationId, session2.sessionId, session2.claimEpoch, priorAuthorityVersion);
         if (changed.changes === 0) {
           throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "operation fence did not advance atomically");
         }
@@ -10278,22 +10278,22 @@ var init_registry = __esm({
       #findConflictingClaim(resource) {
         return this.#findClaim(resource.type, resource.key) ?? (resource.type === "runner" ? this.#findClaim("runner-receipt", resource.key) : resource.type === "device" ? this.#findClaim("device-receipt", resource.key) : null);
       }
-      #platformReceiptFromCurrentAuthority(session, platform, receipt) {
-        const row = this.#requireSession(session);
+      #platformReceiptFromCurrentAuthority(session2, platform, receipt) {
+        const row = this.#requireSession(session2);
         const bindings = JSON.parse(row.bindings_json);
         const device = bindings.device;
         const install = bindings.install;
         const runner = bindings.runner;
         const runnerClaim = this.#database.prepare(`SELECT resource_key FROM claims
-         WHERE session_id = ? AND claim_epoch = ? AND resource_type = 'runner'`).get(session.sessionId, session.claimEpoch);
+         WHERE session_id = ? AND claim_epoch = ? AND resource_type = 'runner'`).get(session2.sessionId, session2.claimEpoch);
         const deviceClaim = this.#database.prepare(`SELECT resource_key FROM claims
-         WHERE session_id = ? AND claim_epoch = ? AND resource_type = 'device'`).get(session.sessionId, session.claimEpoch);
+         WHERE session_id = ? AND claim_epoch = ? AND resource_type = 'device'`).get(session2.sessionId, session2.claimEpoch);
         const runnerCapabilityHash = typeof runner?.capability === "string" ? createHash5("sha256").update(runner.capability).digest("hex") : null;
-        if (device?.platform !== platform || receipt.sessionId !== session.sessionId || receipt.claimEpoch !== session.claimEpoch || receipt.sourceKey !== row.source_key || receipt.worktreeKey !== row.worktree_key || receipt.appRootKey !== row.app_root_key || receipt.deviceId !== device.deviceId || receipt.appId !== device.appId || receipt.installGeneration !== install?.installGeneration || receipt.artifactDigest !== install?.artifactDigest || receipt.runnerInstanceId !== runner?.instanceId || receipt.runnerPid !== runner?.pid || receipt.runnerProcessBirth !== runner?.processBirth || receipt.runnerPort !== runner?.port || receipt.runnerClaim !== runnerClaim?.resource_key || receipt.deviceClaim !== deviceClaim?.resource_key || receipt.runnerCapabilityHash !== runnerCapabilityHash || typeof runner?.port !== "number" || typeof runner.capability !== "string" || typeof runner.instanceId !== "string" || typeof runner.pid !== "number" || typeof runner.processBirth !== "string" || typeof device?.deviceId !== "string" || typeof device.appId !== "string" || typeof install?.installGeneration !== "string") {
+        if (device?.platform !== platform || receipt.sessionId !== session2.sessionId || receipt.claimEpoch !== session2.claimEpoch || receipt.sourceKey !== row.source_key || receipt.worktreeKey !== row.worktree_key || receipt.appRootKey !== row.app_root_key || receipt.deviceId !== device.deviceId || receipt.appId !== device.appId || receipt.installGeneration !== install?.installGeneration || receipt.artifactDigest !== install?.artifactDigest || receipt.runnerInstanceId !== runner?.instanceId || receipt.runnerPid !== runner?.pid || receipt.runnerProcessBirth !== runner?.processBirth || receipt.runnerPort !== runner?.port || receipt.runnerClaim !== runnerClaim?.resource_key || receipt.deviceClaim !== deviceClaim?.resource_key || receipt.runnerCapabilityHash !== runnerCapabilityHash || typeof runner?.port !== "number" || typeof runner.capability !== "string" || typeof runner.instanceId !== "string" || typeof runner.pid !== "number" || typeof runner.processBirth !== "string" || typeof device?.deviceId !== "string" || typeof device.appId !== "string" || typeof install?.installGeneration !== "string") {
           throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "snapshot receipt does not match exact persistent platform authority");
         }
         return {
-          session,
+          session: session2,
           platform,
           receipt,
           probe: {
@@ -10301,8 +10301,8 @@ var init_registry = __esm({
             port: runner.port,
             capability: runner.capability,
             instanceId: runner.instanceId,
-            sessionId: session.sessionId,
-            claimEpoch: session.claimEpoch,
+            sessionId: session2.sessionId,
+            claimEpoch: session2.claimEpoch,
             deviceId: device.deviceId,
             appId: device.appId,
             pid: runner.pid,
@@ -10311,25 +10311,25 @@ var init_registry = __esm({
           }
         };
       }
-      #invalidatePlatformReceipt(session, platform) {
+      #invalidatePlatformReceipt(session2, platform) {
         const row = this.#database.prepare(`SELECT receipt_json FROM platform_authority_receipts
-         WHERE session_id = ? AND claim_epoch = ? AND platform = ?`).get(session.sessionId, session.claimEpoch, platform);
+         WHERE session_id = ? AND claim_epoch = ? AND platform = ?`).get(session2.sessionId, session2.claimEpoch, platform);
         if (typeof row?.receipt_json === "string") {
           const persisted = JSON.parse(row.receipt_json);
           const receipt = persisted.receipt && typeof persisted.receipt === "object" ? persisted.receipt : persisted;
           if (typeof receipt.runnerClaim === "string") {
             this.#database.prepare(`DELETE FROM claims
              WHERE resource_type = 'runner-receipt' AND resource_key = ?
-               AND session_id = ? AND claim_epoch = ?`).run(receipt.runnerClaim, session.sessionId, session.claimEpoch);
+               AND session_id = ? AND claim_epoch = ?`).run(receipt.runnerClaim, session2.sessionId, session2.claimEpoch);
           }
           if (typeof receipt.deviceClaim === "string") {
             this.#database.prepare(`DELETE FROM claims
              WHERE resource_type = 'device-receipt' AND resource_key = ?
-               AND session_id = ? AND claim_epoch = ?`).run(receipt.deviceClaim, session.sessionId, session.claimEpoch);
+               AND session_id = ? AND claim_epoch = ?`).run(receipt.deviceClaim, session2.sessionId, session2.claimEpoch);
           }
         }
         this.#database.prepare(`DELETE FROM platform_authority_receipts
-         WHERE session_id = ? AND claim_epoch = ? AND platform = ?`).run(session.sessionId, session.claimEpoch, platform);
+         WHERE session_id = ? AND claim_epoch = ? AND platform = ?`).run(session2.sessionId, session2.claimEpoch, platform);
       }
       #capabilityMatches(expected, actual) {
         const expectedDigest = createHash5("sha256").update(expected).digest();
@@ -10790,6 +10790,14 @@ var init_maestro_runner_report = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/tool-profiles.js
+function facetsOf(groups, narrowing = {}) {
+  const facets = new Set(groups.flatMap((group) => [...groupFacets[group]]));
+  for (const facet of narrowing.overlay ?? [])
+    facets.add(facet);
+  for (const facet of narrowing.without ?? [])
+    facets.delete(facet);
+  return facetOrder.filter((facet) => facets.has(facet));
+}
 function add(names, profile) {
   for (const name of names) {
     if (profiles.has(name))
@@ -10797,10 +10805,21 @@ function add(names, profile) {
     profiles.set(name, profile);
   }
 }
-var diagnostic, transition, sourceState, nativeRead, nativeMutation, hybridMutation, optionalHybridMutation, nativeDiagnostic, cdpRead, cdpMutation, observe, proof, profiles;
+var groupFacets, facetOrder, session, osScoped, throughRuntime, allGroups, diagnostic, transition, sourceState, nativeRead, nativeMutation, hybridMutation, optionalHybridMutation, nativeDiagnostic, cdpRead, cdpMutation, observe, proof, profiles;
 var init_tool_profiles = __esm({
   "packages/rn-dev-agent-core/dist/session/tool-profiles.js"() {
     "use strict";
+    groupFacets = {
+      session: ["C", "S"],
+      target: ["D", "I"],
+      runtime: ["M", "B", "A"],
+      automation: ["R"]
+    };
+    facetOrder = ["C", "S", "I", "M", "A", "B", "D", "R", "P"];
+    session = ["session"];
+    osScoped = ["session", "target"];
+    throughRuntime = ["session", "target", "runtime"];
+    allGroups = ["session", "target", "runtime", "automation"];
     diagnostic = ["cdp_status", "cdp_targets", "device_list"];
     transition = ["rn_session", "cdp_connect", "cdp_disconnect"];
     sourceState = [
@@ -10888,43 +10907,50 @@ var init_tool_profiles = __esm({
     profiles = /* @__PURE__ */ new Map();
     add(diagnostic, {
       kind: "diagnostic",
+      groups: [],
       axes: [],
       mutation: false,
       liveBundleProbe: false
     });
     add(transition, {
       kind: "transition",
-      axes: ["C", "S"],
+      groups: session,
+      axes: facetsOf(session),
       mutation: true,
       liveBundleProbe: false
     });
     add(sourceState, {
       kind: "authoritative",
-      axes: ["C", "S"],
+      groups: session,
+      axes: facetsOf(session),
       mutation: true,
       liveBundleProbe: false
     });
     add(nativeRead, {
       kind: "authoritative",
-      axes: ["C", "S", "I", "M", "A", "D", "R"],
+      groups: allGroups,
+      axes: facetsOf(allGroups, { without: ["B"] }),
       mutation: false,
       liveBundleProbe: false
     });
     add(nativeMutation, {
       kind: "authoritative",
-      axes: ["C", "S", "I", "M", "A", "D", "R"],
+      groups: allGroups,
+      axes: facetsOf(allGroups, { without: ["B"] }),
       mutation: true,
       liveBundleProbe: false
     });
     add(hybridMutation, {
       kind: "authoritative",
-      axes: ["C", "S", "I", "M", "B", "D", "R"],
+      groups: allGroups,
+      axes: facetsOf(allGroups, { without: ["A"] }),
       mutation: true,
       liveBundleProbe: true
     });
     add(optionalHybridMutation, {
       kind: "authoritative",
-      axes: ["C", "S", "I", "M", "D", "R"],
+      groups: allGroups,
+      axes: facetsOf(allGroups, { without: ["A", "B"] }),
       optionalAxes: ["B"],
       managedOrigin: true,
       managedRunnerPark: true,
@@ -10933,31 +10959,36 @@ var init_tool_profiles = __esm({
     });
     add(nativeDiagnostic, {
       kind: "authoritative",
-      axes: ["C", "S", "I", "D"],
+      groups: osScoped,
+      axes: facetsOf(osScoped),
       mutation: false,
       liveBundleProbe: false
     });
     add(cdpRead, {
       kind: "authoritative",
-      axes: ["C", "S", "I", "M", "B", "D"],
+      groups: throughRuntime,
+      axes: facetsOf(throughRuntime, { without: ["A"] }),
       mutation: false,
       liveBundleProbe: true
     });
     add(cdpMutation, {
       kind: "authoritative",
-      axes: ["C", "S", "I", "M", "B", "D"],
+      groups: throughRuntime,
+      axes: facetsOf(throughRuntime, { without: ["A"] }),
       mutation: true,
       liveBundleProbe: true
     });
     add(observe, {
       kind: "authoritative",
-      axes: ["C", "S"],
+      groups: session,
+      axes: facetsOf(session),
       mutation: false,
       liveBundleProbe: false
     });
     add(proof, {
       kind: "authoritative",
-      axes: ["C", "S", "I", "M", "B", "D", "R", "P"],
+      groups: allGroups,
+      axes: facetsOf(allGroups, { without: ["A"], overlay: ["P"] }),
       mutation: true,
       liveBundleProbe: true
     });
@@ -16852,8 +16883,8 @@ function reconcileManagedMetroStatus(status) {
     return status;
   const priorTargetId = status.bindings.bundle?.targetId;
   const metroPort = Number(status.bindings.metroPort);
-  const session = { sessionId: status.sessionId, claimEpoch: status.claimEpoch };
-  status.registry.updateBindings(session, {
+  const session2 = { sessionId: status.sessionId, claimEpoch: status.claimEpoch };
+  status.registry.updateBindings(session2, {
     expectedAuthorityVersion: status.authorityVersion,
     state: status.bindings.install ? "device_bound" : status.bindings.device ? "device_claimed" : "source_bound",
     bindings: {

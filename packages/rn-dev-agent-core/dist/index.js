@@ -110,6 +110,7 @@ import { createSessionHandler } from './tools/session.js';
 import { bindNativeRunner, unbindNativeRunner } from './session/runner-binding.js';
 import { claimOptionalBundleAuthority, createAuthorityGate } from './session/authority-gate.js';
 import { createLocalAuthorityProbe } from './session/local-authority-probe.js';
+import { assertAuthorityProfilesExhaustive } from './session/tool-profiles.js';
 import { readJsonStateFile } from './util/secure-state-file.js';
 import { buildBundleAuthorityBinding, pinExactDevClient, reconcileAuthoritativeBundle, } from './session/dev-client-authority.js';
 import { createRegisteredConnectHandler } from './session/registered-connect.js';
@@ -609,8 +610,10 @@ const liveDeps = buildLiveDeps({
     },
     isMirrorActive: () => mirrorManager?.isStreaming() ?? false,
 });
+const registeredToolNames = [];
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function trackedTool(name, desc, schema, handler) {
+    registeredToolNames.push(name);
     const base = instrumentTool(name, authorityGate.wrap(name, arbiterWrap(name, handler)));
     // GH #321: the device_find snapshot-cache must be invalidated after ANY tool
     // that could change the screen — including JS-level mutations that bypass the
@@ -2930,6 +2933,8 @@ async function main() {
     }
     logger.debug('MCP', `CWD: ${process.cwd()}, CLAUDE_USER_CWD: ${process.env.CLAUDE_USER_CWD ?? 'not set'}`);
     logger.debug('MCP', `Node: ${process.version}, ANDROID_HOME: ${process.env.ANDROID_HOME ?? 'not set'}`);
+    // Fail closed at boot: an unprofiled registered tool must never serve requests.
+    assertAuthorityProfilesExhaustive(registeredToolNames);
     const transport = new StdioServerTransport();
     logger.info('MCP', 'StdioServerTransport created, connecting...');
     await server.connect(transport);

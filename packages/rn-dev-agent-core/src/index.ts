@@ -193,6 +193,7 @@ import { createSessionHandler } from './tools/session.js';
 import { bindNativeRunner, unbindNativeRunner } from './session/runner-binding.js';
 import { claimOptionalBundleAuthority, createAuthorityGate } from './session/authority-gate.js';
 import { createLocalAuthorityProbe } from './session/local-authority-probe.js';
+import { assertAuthorityProfilesExhaustive } from './session/tool-profiles.js';
 import { readJsonStateFile } from './util/secure-state-file.js';
 import {
   buildBundleAuthorityBinding,
@@ -756,8 +757,11 @@ const liveDeps = buildLiveDeps({
   isMirrorActive: () => mirrorManager?.isStreaming() ?? false,
 });
 
+const registeredToolNames: string[] = [];
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function trackedTool(name: string, desc: string, schema: z.ZodRawShape, handler: any): void {
+  registeredToolNames.push(name);
   const base = instrumentTool(
     name,
     authorityGate.wrap(
@@ -3931,6 +3935,9 @@ async function main() {
     'MCP',
     `Node: ${process.version}, ANDROID_HOME: ${process.env.ANDROID_HOME ?? 'not set'}`,
   );
+
+  // Fail closed at boot: an unprofiled registered tool must never serve requests.
+  assertAuthorityProfilesExhaustive(registeredToolNames);
 
   const transport = new StdioServerTransport();
   logger.info('MCP', 'StdioServerTransport created, connecting...');
