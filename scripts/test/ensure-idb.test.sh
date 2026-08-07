@@ -46,8 +46,18 @@ run_script() { # $1 = stubs dir, rest = extra env
   env PATH="$stubs:/usr/bin:/bin" \
     RN_AGENT_IDB_STATE_DIR="$STATE" \
     RN_AGENT_IDB_UNAME="${FAKE_UNAME:-Darwin}" \
+    RN_AGENT_IDB_PYTHONS="${FAKE_PYTHONS:-python3.13}" \
     RN_AGENT_IDB_DRY_SPAWN=1 \
     "$@" bash "$SCRIPT" 2>&1
+}
+
+# GH#578: `pipx install fb-idb` without a pinned interpreter resolves the
+# newest Python, which is exactly the combination that crashes. No user-facing
+# message may ever print it.
+assert_no_unpinned_install() { # $1 = label, $2 = output
+  if echo "$2" | grep -q "pipx install fb-idb"; then
+    bad "$1: printed the known-broken unpinned install command"
+  else ok "$1: no unpinned install command"; fi
 }
 
 # 1. Both binaries present -> reports available, no spawn.
@@ -64,13 +74,23 @@ OUT="$(run_script "$STUBS")"
 if echo "$OUT" | grep -qi "idb available"; then ok "hyphen: idb-companion accepted"; else bad "hyphen: expected available, got: $OUT"; fi
 [ ! -f "$STATE/spawn.log" ] && ok "hyphen: no spawn" || bad "hyphen: unexpected spawn"
 
-# 1c. B269: client on PATH but BROKEN (crashes on invocation) -> not treated
-#     as present; prints the broken notice and spawns the repair worker.
+# 1c. B269/GH#578: client on PATH but BROKEN (crashes on invocation) -> not
+#     treated as present, and NOT reported as absent either: the message names
+#     the interpreter incompatibility and a repair worker is spawned.
 STATE="$TMP/state1c"
 STUBS="$(mkstubs "idb_companion brew")"
 printf '#!/bin/sh\nexit 1\n' > "$STUBS/idb"; chmod +x "$STUBS/idb"
 OUT="$(run_script "$STUBS")"
-if echo "$OUT" | grep -qi "broken"; then ok "broken-client: prints broken notice"; else bad "broken-client: expected broken notice, got: $OUT"; fi
+if echo "$OUT" | grep -qi "installed but unusable"; then
+  ok "broken-client: reports present-but-unusable"
+else bad "broken-client: expected present-but-unusable notice, got: $OUT"; fi
+if echo "$OUT" | grep -q "asyncio.get_event_loop" && echo "$OUT" | grep -q "Python 3.14"; then
+  ok "broken-client: names the actual incompatibility"
+else bad "broken-client: expected the Python 3.14 explanation, got: $OUT"; fi
+if echo "$OUT" | grep -qiE "idb (not installed|missing)"; then
+  bad "broken-client: still described as missing (states 1 and 3 collapsed)"
+else ok "broken-client: not described as missing"; fi
+assert_no_unpinned_install "broken-client" "$OUT"
 if [ -f "$STATE/spawn.log" ] && [ "$(wc -l < "$STATE/spawn.log")" -eq 1 ]; then
   ok "broken-client: spawns repair worker"
 else bad "broken-client: expected one spawn record"; fi
@@ -86,7 +106,7 @@ OUT="$(FAKE_UNAME=Linux run_script "$STUBS")"
 STATE="$TMP/state3"
 STUBS="$(mkstubs "")"
 OUT="$(run_script "$STUBS")"
-if echo "$OUT" | grep -q "brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install fb-idb"; then
+if echo "$OUT" | grep -q "brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install --python python3\.13 --force fb-idb"; then
   ok "no-brew: prints manual command"
 else bad "no-brew: missing manual command, got: $OUT"; fi
 [ ! -f "$STATE/spawn.log" ] && ok "no-brew: no spawn" || bad "no-brew: unexpected spawn"
@@ -128,24 +148,93 @@ STUBS="$(mkstubs "brew")"
 OUT="$(run_script "$STUBS")"
 [ -f "$STATE/spawn.log" ] && ok "backoff: stale marker allows retry" || bad "backoff: stale marker still blocked retry"
 
-# 7b. B269 worker invariant: a client that is still broken after reinstall is
-#     UNINSTALLED (never left on PATH) and the attempt is marked failed.
+run_worker() { # $1 = stubs dir, $2 = output file
+  env PATH="$1:/usr/bin:/bin" RN_AGENT_IDB_STATE_DIR="$STATE" RN_AGENT_IDB_UNAME=Darwin \
+    RN_AGENT_IDB_PYTHONS="${FAKE_PYTHONS:-python3.13}" \
+    bash "$SCRIPT" --install-worker > "$2" 2>&1
+}
+
+# 7b. GH#578 worker: the install is pinned to a supported interpreter, never
+#     resolved by pipx (which would pick the breaking 3.14). A client that is
+#     still broken afterwards yields the terminal `incompatible` verdict.
 STATE="$TMP/state7b"
 mkdir -p "$STATE"
-STUBS="$(mkstubs "idb_companion brew")"
+STUBS="$(mkstubs "idb_companion brew python3.13")"
 printf '#!/bin/sh\nexit 1\n' > "$STUBS/idb"; chmod +x "$STUBS/idb"
 printf '#!/bin/sh\necho "$@" >> "%s/pipx.log"\nexit 0\n' "$STATE" > "$STUBS/pipx"; chmod +x "$STUBS/pipx"
-env PATH="$STUBS:/usr/bin:/bin" RN_AGENT_IDB_STATE_DIR="$STATE" RN_AGENT_IDB_UNAME=Darwin \
-  bash "$SCRIPT" --install-worker > "$TMP/worker7b.out" 2>&1
-if grep -q "uninstall fb-idb" "$STATE/pipx.log" 2>/dev/null; then
-  ok "worker: broken client uninstalled (never left on PATH)"
-else bad "worker: expected pipx uninstall fb-idb, got: $(cat "$STATE/pipx.log" 2>/dev/null)"; fi
-if grep -q "^failed " "$STATE/last-attempt" 2>/dev/null; then
-  ok "worker: broken client marks attempt failed (backoff engages)"
-else bad "worker: expected failed marker, got: $(cat "$STATE/last-attempt" 2>/dev/null)"; fi
-if grep -qi "crashes on invocation" "$TMP/worker7b.out"; then
-  ok "worker: explains the uninstall in the log"
+run_worker "$STUBS" "$TMP/worker7b.out"
+if grep -q -- "--python python3.13 --force fb-idb" "$STATE/pipx.log" 2>/dev/null; then
+  ok "worker: installs fb-idb under a pinned supported interpreter"
+else bad "worker: expected pinned install, got: $(cat "$STATE/pipx.log" 2>/dev/null)"; fi
+if grep -qE "^install fb-idb$" "$STATE/pipx.log" 2>/dev/null; then
+  bad "worker: ran the unpinned install that reproduces the break"
+else ok "worker: never runs the unpinned install"; fi
+if grep -q "^incompatible " "$STATE/last-attempt" 2>/dev/null; then
+  ok "worker: records the terminal incompatible verdict"
+else bad "worker: expected incompatible marker, got: $(cat "$STATE/last-attempt" 2>/dev/null)"; fi
+if grep -q "python3.13," "$STATE/last-attempt" 2>/dev/null; then
+  ok "worker: verdict carries the interpreter fingerprint"
+else bad "worker: expected fingerprint in marker, got: $(cat "$STATE/last-attempt" 2>/dev/null)"; fi
+if grep -qi "asyncio.get_event_loop" "$TMP/worker7b.out"; then
+  ok "worker: explains the incompatibility in the log"
 else bad "worker: expected crash explanation, got: $(cat "$TMP/worker7b.out")"; fi
+
+# 7c. Worker success path: when the pinned interpreter yields a healthy client
+#     the verdict is plain `ok` — the repair path still converges.
+STATE="$TMP/state7c"
+mkdir -p "$STATE"
+STUBS="$(mkstubs "idb_companion brew python3.13")"
+printf '#!/bin/sh\nexit 1\n' > "$STUBS/idb"; chmod +x "$STUBS/idb"
+printf '#!/bin/sh\nprintf "#!/bin/sh\\nexit 0\\n" > "%s/idb"\nchmod +x "%s/idb"\nexit 0\n' "$STUBS" "$STUBS" > "$STUBS/pipx"
+chmod +x "$STUBS/pipx"
+run_worker "$STUBS" "$TMP/worker7c.out"
+if grep -q "^ok " "$STATE/last-attempt" 2>/dev/null; then
+  ok "worker: pinned reinstall that works records ok"
+else bad "worker: expected ok marker, got: $(cat "$STATE/last-attempt" 2>/dev/null)"; fi
+
+# 7d. GH#578 core regression: with the incompatible verdict recorded and the
+#     interpreter set unchanged, session start explains the incompatibility,
+#     does NOT re-show an install hint, and does NOT respawn. This is the loop.
+STATE="$TMP/state7d"
+mkdir -p "$STATE"
+STUBS="$(mkstubs "idb_companion brew python3.13")"
+printf '#!/bin/sh\nexit 1\n' > "$STUBS/idb"; chmod +x "$STUBS/idb"
+echo "incompatible $(date +%s) python3.13," > "$STATE/last-attempt"
+OUT="$(run_script "$STUBS")"
+if echo "$OUT" | grep -qi "installed but unusable"; then
+  ok "verdict: explains the incompatibility"
+else bad "verdict: expected incompatibility explanation, got: $OUT"; fi
+if echo "$OUT" | grep -qi "Not retrying until the installed Python interpreters change"; then
+  ok "verdict: states the loop has stopped and what would restart it"
+else bad "verdict: expected non-retry statement, got: $OUT"; fi
+[ ! -f "$STATE/spawn.log" ] && ok "verdict: no respawn (loop terminated)" || bad "verdict: respawned despite terminal verdict"
+assert_no_unpinned_install "verdict" "$OUT"
+if echo "$OUT" | grep -qiE "idb (not installed|missing)"; then
+  bad "verdict: reported as missing despite being installed"
+else ok "verdict: never claims idb is missing"; fi
+
+# 7e. The verdict is not permanent: installing a supported interpreter changes
+#     the fingerprint, which re-arms the repair worker.
+STATE="$TMP/state7e"
+mkdir -p "$STATE"
+STUBS="$(mkstubs "idb_companion brew python3.13")"
+printf '#!/bin/sh\nexit 1\n' > "$STUBS/idb"; chmod +x "$STUBS/idb"
+echo "incompatible $(date +%s) none" > "$STATE/last-attempt"
+OUT="$(run_script "$STUBS")"
+[ -f "$STATE/spawn.log" ] && ok "verdict: changed interpreter set re-arms repair" || bad "verdict: env change did not re-arm, got: $OUT"
+
+# 7f. A genuinely absent client stays state 1 — it is still reported missing
+#     and still gets an install hint (the fix must not blur the states).
+STATE="$TMP/state7f"
+STUBS="$(mkstubs "idb_companion brew python3.13")"
+OUT="$(run_script "$STUBS")"
+if echo "$OUT" | grep -qi "idb missing"; then
+  ok "absent: still reported as missing"
+else bad "absent: expected missing notice, got: $OUT"; fi
+if echo "$OUT" | grep -qi "installed but unusable"; then
+  bad "absent: wrongly reported as installed-but-broken"
+else ok "absent: not confused with the broken state"; fi
+assert_no_unpinned_install "absent" "$OUT"
 
 # 8. SessionStart safety: foreground path must not invoke brew/pipx inline.
 #    The dry-spawn seam proves the install goes through the detached worker;

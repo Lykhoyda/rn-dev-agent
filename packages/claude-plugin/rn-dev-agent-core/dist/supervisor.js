@@ -82519,9 +82519,13 @@ import { spawn as spawn9, execFile as execFile25 } from "node:child_process";
 import { readFile as readFile2, unlink } from "node:fs/promises";
 import { tmpdir as tmpdir14 } from "node:os";
 import { join as join50 } from "node:path";
-async function detectIdb(execFileFn = execFile25) {
+async function probeIdbClient(execFileFn = execFile25) {
   return new Promise((resolve11) => {
-    execFileFn("idb", ["--help"], { timeout: 3e3 }, (err) => resolve11(!err));
+    execFileFn("idb", ["--help"], { timeout: 3e3 }, (err) => {
+      if (!err)
+        return resolve11("ready");
+      resolve11(isEnoent(err) ? "absent" : "broken");
+    });
   });
 }
 function isEnoent(err) {
@@ -82551,10 +82555,14 @@ async function createMirrorSource(target, fps) {
   if (target.platform === "android") {
     return new AndroidScreenrecordSource(target.deviceId);
   }
-  const hasIdb = await detectIdb();
-  return hasIdb ? new IosIdbSource(target.deviceId, fps) : new IosSimctlLoopSource(target.deviceId);
+  const state = await probeIdbClient();
+  if (state === "ready")
+    return new IosIdbSource(target.deviceId, fps);
+  return new IosSimctlLoopSource(target.deviceId, {
+    degradedHint: state === "broken" ? SIMCTL_BROKEN_IDB_HINT : SIMCTL_HINT
+  });
 }
-var RestartGate, SIMCTL_HINT, IDB_HINT, FFMPEG_HINT, sleep6, scheduleAfter, defaultSpawn, IosIdbSource, IosSimctlLoopSource, AndroidScreenrecordSource;
+var RestartGate, IDB_INSTALL_COMMAND, SIMCTL_HINT, SIMCTL_BROKEN_IDB_HINT, IDB_HINT, FFMPEG_HINT, sleep6, scheduleAfter, defaultSpawn, IosIdbSource, IosSimctlLoopSource, AndroidScreenrecordSource;
 var init_sources = __esm({
   "packages/rn-dev-agent-core/dist/observability/mirror/sources.js"() {
     "use strict";
@@ -82576,8 +82584,10 @@ var init_sources = __esm({
         return this.exits.length < this.limit;
       }
     };
-    SIMCTL_HINT = "install idb for smoother mirroring (brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install fb-idb)";
-    IDB_HINT = "idb not found \u2014 brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install fb-idb";
+    IDB_INSTALL_COMMAND = "brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install --python python3.13 fb-idb";
+    SIMCTL_HINT = `install idb for smoother mirroring (${IDB_INSTALL_COMMAND})`;
+    SIMCTL_BROKEN_IDB_HINT = "idb is installed but its client crashes on every invocation \u2014 fb-idb 1.1.7 needs asyncio.get_event_loop(), removed in Python 3.14. Reinstall it under a supported interpreter: pipx install --python python3.13 --force fb-idb";
+    IDB_HINT = `idb not found \u2014 ${IDB_INSTALL_COMMAND}`;
     FFMPEG_HINT = "ffmpeg not found \u2014 run scripts/ensure-ffmpeg.sh or brew install ffmpeg";
     sleep6 = (ms) => new Promise((resolve11) => setTimeout(resolve11, ms));
     scheduleAfter = (fn, delayMs) => {
@@ -82661,6 +82671,7 @@ var init_sources = __esm({
       udid;
       pipeline = "simctl";
       nominalFps = 6;
+      degradedHint;
       active = false;
       inFlight = null;
       execJpeg;
@@ -82675,6 +82686,7 @@ var init_sources = __esm({
         this.idleDelayMs = opts.idleDelayMs ?? 25;
         this.failurePauseMs = opts.failurePauseMs ?? 500;
         this.tmpPath = opts.tmpPath ?? (() => join50(tmpdir14(), "rn-mirror-simctl-" + process.pid + ".jpg"));
+        this.degradedHint = opts.degradedHint ?? SIMCTL_HINT;
       }
       start(sink) {
         this.active = true;
@@ -82695,7 +82707,7 @@ var init_sources = __esm({
               break;
             if (!this.gate.record()) {
               if (this.active)
-                sink.onExit({ reason: "simctl screenshot failing", hint: SIMCTL_HINT });
+                sink.onExit({ reason: "simctl screenshot failing", hint: this.degradedHint });
               this.active = false;
               break;
             }
@@ -83030,7 +83042,7 @@ var init_manager = __esm({
             deviceId: target.deviceId,
             pipeline: source.pipeline,
             fps: source.nominalFps,
-            hint: source.pipeline === "simctl" ? SIMCTL_HINT : void 0
+            hint: source.pipeline === "simctl" ? source.degradedHint ?? SIMCTL_HINT : void 0
           });
         }
         this.broadcast(frame);

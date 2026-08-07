@@ -14,6 +14,8 @@ export interface MirrorFrameSink {
 export interface MirrorSource {
   readonly pipeline: 'idb' | 'simctl' | 'screenrecord';
   readonly nominalFps: number;
+  /** Why this source is a degraded fallback, when the reason is not the default one. */
+  readonly degradedHint?: string;
   start(sink: MirrorFrameSink): void;
   /**
    * IosSimctlLoopSource aborts its in-flight capture on stop() via
@@ -51,6 +53,7 @@ export interface LoopOpts {
   idleDelayMs?: number;
   failurePauseMs?: number;
   tmpPath?: () => string;
+  degradedHint?: string;
 }
 
 export type SpawnFn = (cmd: string, args: string[]) => SpawnedLike;
@@ -63,11 +66,20 @@ export interface SpawnedLike {
   kill(): void;
 }
 
-export const SIMCTL_HINT =
-  'install idb for smoother mirroring (brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install fb-idb)';
+// GH#578: a bare `pipx install fb-idb` resolves the newest interpreter. On
+// Python 3.14 that reinstalls the exact combination that crashes (fb-idb 1.1.7
+// calls asyncio.get_event_loop(), removed in 3.14), so the hint the user
+// follows recreates the break. Every printed command pins the interpreter.
+export const IDB_INSTALL_COMMAND =
+  'brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install --python python3.13 fb-idb';
 
-const IDB_HINT =
-  'idb not found — brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install fb-idb';
+export const SIMCTL_HINT = `install idb for smoother mirroring (${IDB_INSTALL_COMMAND})`;
+
+export const SIMCTL_BROKEN_IDB_HINT =
+  'idb is installed but its client crashes on every invocation — fb-idb 1.1.7 needs asyncio.get_event_loop(), removed in Python 3.14. ' +
+  'Reinstall it under a supported interpreter: pipx install --python python3.13 --force fb-idb';
+
+const IDB_HINT = `idb not found — ${IDB_INSTALL_COMMAND}`;
 const FFMPEG_HINT = 'ffmpeg not found — run scripts/ensure-ffmpeg.sh or brew install ffmpeg';
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -84,15 +96,27 @@ const scheduleAfter = (fn: () => void, delayMs: number): void => {
 const defaultSpawn: SpawnFn = (cmd, args) =>
   spawn(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'] }) as unknown as SpawnedLike;
 
-export async function detectIdb(execFileFn: typeof execFile = execFile): Promise<boolean> {
+/** absent = not on PATH, ready = usable, broken = present but crashes (GH#578). */
+export type IdbClientState = 'absent' | 'ready' | 'broken';
+
+export async function probeIdbClient(
+  execFileFn: typeof execFile = execFile,
+): Promise<IdbClientState> {
   return new Promise((resolve) => {
     // B269/B263: PATH presence is not health. fb-idb on an incompatible
     // Python (e.g. 3.14) crashes on EVERY invocation; selecting the idb tier
     // for such a client kills the mirror ("idb video-stream keeps exiting")
-    // instead of using the working simctl fallback. Probe a real invocation:
-    // ENOENT, a crash, or a hang all resolve false -> simctl tier.
-    execFileFn('idb', ['--help'], { timeout: 3000 }, (err) => resolve(!err));
+    // instead of using the working simctl fallback. `idb --help` initializes
+    // the CLI without contacting a companion, so it separates the states.
+    execFileFn('idb', ['--help'], { timeout: 3000 }, (err) => {
+      if (!err) return resolve('ready');
+      resolve(isEnoent(err) ? 'absent' : 'broken');
+    });
   });
+}
+
+export async function detectIdb(execFileFn: typeof execFile = execFile): Promise<boolean> {
+  return (await probeIdbClient(execFileFn)) === 'ready';
 }
 
 function isEnoent(err: unknown): boolean {
@@ -179,6 +203,7 @@ export class IosIdbSource implements MirrorSource {
 export class IosSimctlLoopSource implements MirrorSource {
   readonly pipeline = 'simctl' as const;
   readonly nominalFps = 6;
+  readonly degradedHint: string;
   private active = false;
   private inFlight: AbortController | null = null;
   private readonly execJpeg: (cmd: string, args: string[], signal?: AbortSignal) => Promise<Buffer>;
@@ -197,6 +222,7 @@ export class IosSimctlLoopSource implements MirrorSource {
     this.failurePauseMs = opts.failurePauseMs ?? 500;
     this.tmpPath =
       opts.tmpPath ?? (() => join(tmpdir(), 'rn-mirror-simctl-' + process.pid + '.jpg'));
+    this.degradedHint = opts.degradedHint ?? SIMCTL_HINT;
   }
 
   start(sink: MirrorFrameSink): void {
@@ -223,7 +249,8 @@ export class IosSimctlLoopSource implements MirrorSource {
         // RestartGate or trigger a failure pause.
         if (!this.active) break;
         if (!this.gate.record()) {
-          if (this.active) sink.onExit({ reason: 'simctl screenshot failing', hint: SIMCTL_HINT });
+          if (this.active)
+            sink.onExit({ reason: 'simctl screenshot failing', hint: this.degradedHint });
           this.active = false;
           break;
         }
@@ -397,6 +424,11 @@ export async function createMirrorSource(
   if (target.platform === 'android') {
     return new AndroidScreenrecordSource(target.deviceId);
   }
-  const hasIdb = await detectIdb();
-  return hasIdb ? new IosIdbSource(target.deviceId, fps) : new IosSimctlLoopSource(target.deviceId);
+  const state = await probeIdbClient();
+  if (state === 'ready') return new IosIdbSource(target.deviceId, fps);
+  // GH#578: a crashing client is NOT "idb missing" — telling the developer to
+  // install what they already installed is the loop this fix removes.
+  return new IosSimctlLoopSource(target.deviceId, {
+    degradedHint: state === 'broken' ? SIMCTL_BROKEN_IDB_HINT : SIMCTL_HINT,
+  });
 }
