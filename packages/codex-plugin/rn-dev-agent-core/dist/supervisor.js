@@ -836,11 +836,14 @@ function probeProcessBirth(pid, dependencies = {}) {
   const runVerifiedHelper = dependencies.runVerifiedHelper ?? defaultRunVerifiedHelper;
   try {
     if (platform === "darwin") {
-      const observedPid = run("/bin/ps", ["-p", String(pid), "-o", "pid="]).trim();
-      if (observedPid.length === 0)
+      const observed = run("/bin/ps", ["-p", String(pid), "-o", "pid=,state="]).trim();
+      if (observed.length === 0)
         return { status: "absent" };
-      if (Number(observedPid) !== pid)
+      const observedFields = /^(\d+)(?:\s+(\S+))?$/.exec(observed);
+      if (!observedFields || Number(observedFields[1]) !== pid)
         return { status: "unknown" };
+      if (observedFields[2]?.startsWith("Z"))
+        return { status: "absent" };
       const helper = verifyDarwinProcessBirthHelper(dependencies);
       const processInfo = runVerifiedHelper(helper.path, pid, helper.requirement).trim();
       const processMatch = /^(\d+):(\d+):(\d+)$/.exec(processInfo);
@@ -869,6 +872,8 @@ function probeProcessBirth(pid, dependencies = {}) {
       }
       const commandEnd = stat2.lastIndexOf(")");
       const fields = commandEnd >= 0 ? stat2.slice(commandEnd + 1).trim().split(/\s+/) : [];
+      if (fields[0] === "Z")
+        return { status: "absent" };
       const started = fields[19];
       if (!boot || !started || !/^\d+$/.test(started))
         return { status: "unknown" };
@@ -34166,18 +34171,22 @@ async function runRecordProofScript(script, args, timeout = 6e4, dependencies = 
     }
   }));
 }
-async function waitForExactStopped(probe, deadlineMs, code, message) {
+async function awaitExactStopped(probe, deadlineMs, code, message) {
   while (true) {
     const status = probe();
     if (status === "stopped")
-      return;
+      return true;
     if (status === "unknown") {
       throw new SessionAuthorityError(code, `${message}; shutdown identity is unknown`);
     }
-    if (Date.now() >= deadlineMs) {
-      throw new SessionAuthorityError(code, message);
-    }
+    if (Date.now() >= deadlineMs)
+      return false;
     await new Promise((resolve11) => setTimeout(resolve11, 25));
+  }
+}
+async function waitForExactStopped(probe, deadlineMs, code, message) {
+  if (!await awaitExactStopped(probe, deadlineMs, code, message)) {
+    throw new SessionAuthorityError(code, message);
   }
 }
 async function stopBoundObserve(binding, listenerProbe = probeManagedMetroListener, processProbe = probeProcessBirth, timeoutMs = 2e3, request2 = fetch) {
@@ -34237,7 +34246,7 @@ async function stopBoundObserve(binding, listenerProbe = probeManagedMetroListen
     return observed.status === "listening" && observed.pid === pid ? "running" : "stopped";
   }, deadlineMs, "OBSERVE_AUTHORITY_MISMATCH", "Observe listener did not stop before the cleanup deadline");
 }
-async function stopBoundRunner(binding, processProbe = probeProcessBirth, signalProcess = process.kill, timeoutMs = 2e3, runAdb = async (args) => execFile14("adb", args, { timeout: 5e3, encoding: "utf8" })) {
+async function stopBoundRunner(binding, processProbe = probeProcessBirth, signalProcess = process.kill, timeoutMs = 2e3, runAdb = async (args) => execFile14("adb", args, { timeout: 5e3, encoding: "utf8" }), termGraceMs = 500) {
   const deadlineMs = Date.now() + timeoutMs;
   const pid = Number(binding.pid);
   const expectedBirth = String(binding.processBirth ?? "");
@@ -34254,13 +34263,31 @@ async function stopBoundRunner(binding, processProbe = probeProcessBirth, signal
     throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "runner process identity is unavailable");
   }
   if (current.status === "present" && current.birth.token === expectedBirth) {
-    signalProcess(pid, "SIGTERM");
-    await waitForExactStopped(() => {
+    const observeStop = () => {
       const observed = processProbe(pid);
       if (observed.status === "unknown")
         return "unknown";
       return observed.status === "present" && observed.birth.token === expectedBirth ? "running" : "stopped";
-    }, deadlineMs, "RUNNER_ADOPTION_REQUIRED", "runner process did not stop before the cleanup deadline");
+    };
+    const message = "runner process did not stop before the cleanup deadline";
+    const signalTolerated = (value) => {
+      try {
+        signalProcess(pid, value);
+      } catch {
+      }
+    };
+    signalTolerated("SIGTERM");
+    const graceDeadlineMs = Math.min(deadlineMs, Date.now() + termGraceMs);
+    if (!await awaitExactStopped(observeStop, graceDeadlineMs, "RUNNER_ADOPTION_REQUIRED", message)) {
+      const escalation = processProbe(pid);
+      if (escalation.status === "unknown") {
+        throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", `${message}; shutdown identity is unknown`);
+      }
+      if (escalation.status === "present" && escalation.birth.token === expectedBirth) {
+        signalTolerated("SIGKILL");
+      }
+      await waitForExactStopped(observeStop, deadlineMs, "RUNNER_ADOPTION_REQUIRED", message);
+    }
   }
   if (platform !== "android")
     return;
