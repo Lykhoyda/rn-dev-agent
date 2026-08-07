@@ -3,10 +3,12 @@ import { realpathSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { failResult } from '../utils.js';
 import { authorityErrorMeta, SessionAuthorityError, shortAuthorityIdentity } from './registry.js';
+import { reissueInstallBinding } from './install-reissue.js';
 import { authorityProfileFor } from './tool-profiles.js';
 const optionalBundleAdmission = Symbol('optionalBundleAdmission');
 const managedNativeOrigin = Symbol('managedNativeOrigin');
 const managedRunnerPark = Symbol('managedRunnerPark');
+const managedInstallReissue = Symbol('managedInstallReissue');
 export async function claimOptionalBundleAuthority(args) {
     return (await args[optionalBundleAdmission]?.()) ?? false;
 }
@@ -30,6 +32,21 @@ export async function relaunchManagedNativeOriginApp(args) {
         throw new SessionAuthorityError('METRO_ORIGIN_MISMATCH', 'managed native origin relaunch authority is unavailable');
     }
     await authority.relaunch();
+}
+/**
+ * GH #705: commit a new install receipt after Maestro reinstalled the session's
+ * own attested `.app` for a `clearState` flow. Refuses unless the freshly
+ * installed bytes still hash to the bound receipt's artifactDigest.
+ */
+export async function reissueManagedInstallAuthority(args) {
+    const reissue = args[managedInstallReissue];
+    if (!reissue) {
+        throw new SessionAuthorityError('APP_INSTALL_IDENTITY_CHANGED', 'managed install re-issue authority is unavailable');
+    }
+    await reissue();
+}
+export function hasManagedInstallReissueAuthority(args) {
+    return typeof args[managedInstallReissue] === 'function';
 }
 export function hasManagedRunnerParkAuthority(args) {
     return typeof args[managedRunnerPark] === 'function';
@@ -730,6 +747,7 @@ export function createAuthorityGate(runtime, dependencies) {
                 let optionalBundleClaimed = false;
                 let optionalBundleRecoveryFailed = false;
                 let managedRunnerParked = false;
+                let installReceiptReissued = false;
                 if (profile.optionalAxes?.includes('B')) {
                     Object.defineProperty(args, optionalBundleAdmission, {
                         configurable: true,
@@ -946,6 +964,30 @@ export function createAuthorityGate(runtime, dependencies) {
                         },
                     });
                 }
+                if (profile.managedInstallReissue) {
+                    Object.defineProperty(args, managedInstallReissue, {
+                        configurable: true,
+                        value: async () => {
+                            const currentStatus = runtime.status();
+                            if (!currentStatus.available) {
+                                throw new SessionAuthorityError(currentStatus.code, currentStatus.reason);
+                            }
+                            registry.verifyOperation(operation);
+                            const install = (dependencies.reissueInstallBinding ?? reissueInstallBinding)(currentStatus.bindings.install);
+                            if (!install)
+                                return;
+                            operation = registry.replaceBindingsDuringOperation(operation, {
+                                bindings: { install },
+                            });
+                            const reissuedStatus = runtime.status();
+                            if (!reissuedStatus.available) {
+                                throw new SessionAuthorityError(reissuedStatus.code, reissuedStatus.reason);
+                            }
+                            status = reissuedStatus;
+                            installReceiptReissued = true;
+                        },
+                    });
+                }
                 if (profile.managedRunnerPark) {
                     Object.defineProperty(args, managedRunnerPark, {
                         configurable: true,
@@ -1125,6 +1167,11 @@ export function createAuthorityGate(runtime, dependencies) {
                     if ((runtimeTargetChanged || managedRuntimeTargetChanged) && observation.axis === 'B') {
                         continue;
                     }
+                    // GH #705: a digest-proven reinstall of the session's own artifact
+                    // re-issues the install receipt mid-operation; only that exact
+                    // gate-owned transition may move I.
+                    if (installReceiptReissued && observation.axis === 'I')
+                        continue;
                     if (!postflightAxes.includes(observation.axis))
                         continue;
                     const postflight = after.find((candidate) => candidate.axis === observation.axis);

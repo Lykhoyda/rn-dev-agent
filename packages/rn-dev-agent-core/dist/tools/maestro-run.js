@@ -8,7 +8,7 @@ import { getEngineStatus, enginePinCaveat, strictPinRefusal } from '../domain/en
 import { getActiveSession } from '../agent-device-wrapper.js';
 import { resolveBundleId, readExpoSlug } from '../project-config.js';
 import { chooseMaestroDispatch, shouldWarnFallback, flowContainsHideKeyboard, } from './maestro-dispatch.js';
-import { resolveAppFileForClearState } from './resolve-ios-app-file.js';
+import { flowUsesClearState, resolveAppFileForClearState } from './resolve-ios-app-file.js';
 import { buildMaestroFlow, parseAndValidateFlow, isValidBundleId, MaestroValidationError, } from '../domain/maestro-validator.js';
 import { outputIndicatesFlowFailure } from '../domain/maestro-error-parser.js';
 import { augmentFailureWithDegradation, resolveFloorMs } from '../domain/tap-latency.js';
@@ -18,7 +18,7 @@ import { releaseAndroidInteractionSlot as defaultReleaseAndroidSlot } from '../r
 import { markCdpStale as defaultMarkCdpStale } from '../cdp/recovery.js';
 import { maestroAuthorityRefusal, sameDevice, verifyMaestroDeviceAuthority, } from '../domain/maestro-device-authority.js';
 import { collectDirectRunnerEvidence, createRunnerReportDir, disposeRunnerReportDir, runnerReportArgs, } from '../domain/maestro-runner-report.js';
-import { completeManagedRunnerParkAuthority, claimManagedNativeOriginAuthority, completeManagedNativeOriginAuthority, relaunchManagedNativeOriginApp, } from '../session/authority-gate.js';
+import { completeManagedRunnerParkAuthority, claimManagedNativeOriginAuthority, completeManagedNativeOriginAuthority, hasManagedInstallReissueAuthority, reissueManagedInstallAuthority, relaunchManagedNativeOriginApp, } from '../session/authority-gate.js';
 import { SessionAuthorityError } from '../session/registry.js';
 const defaultExecFile = promisify(execFileCb);
 /**
@@ -63,6 +63,9 @@ export function nestedMaestroAuthorityCallbacks(args) {
         completeNativeOrigin: (targetExpected) => completeManagedNativeOriginAuthority(args, targetExpected),
         relaunchManagedApp: () => relaunchManagedNativeOriginApp(args),
         completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
+        reissueInstallReceipt: hasManagedInstallReissueAuthority(args)
+            ? () => reissueManagedInstallAuthority(args)
+            : null,
     };
 }
 export class MaestroStageExecutionError extends Error {
@@ -296,10 +299,23 @@ export function createMaestroRunHandler(deps = {}) {
         // params. Validation already ran at the top of the handler so by
         // this point every key matches PARAM_KEY_RE and every value is a
         // string — no need to re-check.
-        const appFileResolution = resolveAppFileForClearState(platform, validatedContent, headerAppId, args.appFile);
+        const appFileResolution = resolveAppFileForClearState(platform, validatedContent, headerAppId, args.appFile, { deviceId: requestedDeviceId });
         if (!appFileResolution.ok) {
             return failResult(appFileResolution.error);
         }
+        // GH #705: only a clearState flow uninstalls and reinstalls; an --app-file
+        // carried by any other flow is inert and must not re-issue the receipt.
+        const reinstallsApp = Boolean(appFileResolution.appFile) && flowUsesClearState(validatedContent);
+        const reissueInstallReceipt = args.reissueInstallReceipt ??
+            deps.reissueInstallReceipt ??
+            nestedMaestroAuthorityCallbacks(args).reissueInstallReceipt;
+        let installReceiptCommitted = false;
+        const commitReinstalledInstall = async () => {
+            if (!reinstallsApp || installReceiptCommitted || !reissueInstallReceipt)
+                return;
+            installReceiptCommitted = true;
+            await reissueInstallReceipt();
+        };
         const baseArgs = dispatch.buildArgs(platform, flowFile, appFileResolution.appFile, requestedDeviceId);
         const paramArgs = [];
         if (args.params) {
@@ -353,6 +369,7 @@ export function createMaestroRunHandler(deps = {}) {
                 deviceId: requestedDeviceId,
                 completeRunnerPark: args.completeRunnerPark ?? managedAuthority.completeRunnerPark,
             });
+            await commitReinstalledInstall();
             const stdout = stageResults.map((result) => result.stdout).join('\n');
             const stderr = stageResults.map((result) => result.stderr).join('\n');
             // combineRunnerOutput (not .trim()) so the step parser's leading-indent
@@ -432,6 +449,9 @@ export function createMaestroRunHandler(deps = {}) {
             return warnResult(warnAug.meta, warnAug.message);
         }
         catch (err) {
+            // A flow that died mid-way may still have reinstalled: re-issue before
+            // reporting, so the failure is the flow's and not a broken axis I.
+            await commitReinstalledInstall();
             if (err instanceof SessionAuthorityError)
                 throw err;
             const stageError = err instanceof MaestroStageExecutionError ? err.stageError : err;
