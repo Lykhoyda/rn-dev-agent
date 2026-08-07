@@ -98,9 +98,12 @@ function blockedContender() {
 function withAuthorityGate(
   runtime: WorkerAuthorityRuntime,
   handler: ReturnType<typeof createSessionHandler>,
+  probe: (input: { axis: string; phase: string }) => Promise<{ axis: string; identity: string }> = ({
+    axis,
+  }) => Promise.resolve({ axis, identity: `${axis}-stable` }),
 ): ReturnType<typeof createSessionHandler> {
   return createAuthorityGate(runtime as never, {
-    probe: async ({ axis }) => ({ axis, identity: `${axis}-stable` }),
+    probe: probe as never,
   }).wrap('rn_session', handler as never) as ReturnType<typeof createSessionHandler>;
 }
 
@@ -964,6 +967,53 @@ test('a stale-device release that committed never reports failure when its fence
   assert.equal(f.registry.getClaim('source', 'worktree-foreign')?.sessionId, 'dead-device-owner');
   assert.equal(f.registry.getClaim('metro-port', '8300')?.sessionId, 'dead-device-owner');
   assert.ok(f.registry.getSessionStatus('dead-device-owner')?.bindings.packageIntegration);
+});
+
+test('a non-authority failure after a committed release is not reported as a lost fence', async () => {
+  const f = deadDeviceOwner();
+  const runtime = new WorkerAuthorityRuntime(f.registry, f.live, null);
+  const inner = createSessionHandler(runtime as never, {
+    deviceExists: () => true,
+    stopHandoffRunner: async () => {},
+    stopHandoffRecorder: async () => {},
+  });
+  let failPostflight = false;
+  const gated = withAuthorityGate(runtime, inner, async ({ axis, phase }) => {
+    if (failPostflight && phase === 'postflight') throw new Error('session state read failed');
+    return { axis, identity: `${axis}-stable` };
+  });
+
+  const refused = await gated({
+    action: 'bind_device',
+    platform: 'ios',
+    deviceId: 'sim-1',
+    appId: 'com.example.app',
+  });
+  assert.equal(envelope(refused).code, 'STALE_DEVICE_RELEASE_REQUIRED');
+  const offer = f.registry.getSessionStatus('live')?.bindings.staleDeviceRelease as {
+    token: string;
+  };
+
+  failPostflight = true;
+  const released = await gated({
+    action: 'release_stale_device',
+    platform: 'ios',
+    deviceId: 'sim-1',
+    releaseHandle: offer.token,
+  });
+
+  const body = envelope(released);
+  assert.equal(body.ok, true, 'a committed release never reports failure');
+  assert.equal(f.registry.getClaim('device', 'ios:sim-1'), null);
+  assert.equal(body.meta?.authorityLostAfterCommit, undefined);
+  const failed = body.meta?.failedAfterCommit as unknown as {
+    code?: string;
+    reason?: string;
+    released?: { platform?: string; deviceId?: string };
+  };
+  assert.equal(failed?.code, 'POST_COMMIT_FAILURE');
+  assert.equal(failed?.reason, 'session state read failed');
+  assert.deepEqual(failed?.released, { platform: 'ios', deviceId: 'sim-1' });
 });
 
 test('GH#672: foreign target or handle cannot produce a stale-device release commit', async () => {

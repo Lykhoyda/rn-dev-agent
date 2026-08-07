@@ -30046,6 +30046,19 @@ function staleDeviceReleaseCommitted(runtime, initialAuthorityVersion) {
   const current = runtime.status();
   return current.available && current.authorityVersion > initialAuthorityVersion && !current.bindings.staleDeviceCleanup && !current.bindings.staleDeviceRelease;
 }
+function postCommitFailureMeta(error2, released) {
+  const fenceLost = error2 instanceof SessionAuthorityError;
+  const detail = {
+    code: fenceLost ? error2.code : authorityErrorCode(error2) ?? "POST_COMMIT_FAILURE",
+    reason: error2 instanceof Error ? error2.message : String(error2),
+    released
+  };
+  return {
+    authorityLostAfterCommit: fenceLost ? detail : void 0,
+    failedAfterCommit: fenceLost ? void 0 : detail,
+    nextAction: fenceLost ? 'The exact device release is committed. Re-read rn_session action "status" before the next fenced operation; this session no longer holds the fence it started with.' : 'The exact device release is committed. Re-read rn_session action "status" before the next fenced operation; the reported failure happened after the commit.'
+  };
+}
 function containedRunnerAuthority(result, runner) {
   if (!runner)
     return null;
@@ -30528,12 +30541,7 @@ function createAuthorityGate(runtime, dependencies) {
             return addMeta2(committedStaleDeviceRelease.result, {
               authoritative: false,
               authorityTransition: true,
-              authorityLostAfterCommit: {
-                code: authorityErrorCode(error2) ?? "AUTHORITY_LOST_DURING_OPERATION",
-                reason: error2 instanceof Error ? error2.message : String(error2),
-                released: committedStaleDeviceRelease.scope
-              },
-              nextAction: 'The exact device release is committed. Re-read rn_session action "status" before the next fenced operation; this session no longer holds the fence it started with.'
+              ...postCommitFailureMeta(error2, committedStaleDeviceRelease.scope)
             });
           }
           return authorityFailure(error2);

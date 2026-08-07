@@ -260,6 +260,29 @@ function staleDeviceReleaseCommitted(
   );
 }
 
+// The commit stands either way, but only a genuine authority failure may be reported as a
+// lost fence: any other post-commit error carries a neutral code and its own reason.
+function postCommitFailureMeta(
+  error: unknown,
+  released: { platform: string; deviceId: string },
+): Record<string, unknown> {
+  const fenceLost = error instanceof SessionAuthorityError;
+  const detail = {
+    code: fenceLost ? error.code : (authorityErrorCode(error) ?? 'POST_COMMIT_FAILURE'),
+    reason: error instanceof Error ? error.message : String(error),
+    released,
+  };
+  return {
+    authorityLostAfterCommit: fenceLost ? detail : undefined,
+    failedAfterCommit: fenceLost ? undefined : detail,
+    nextAction: fenceLost
+      ? 'The exact device release is committed. Re-read rn_session action "status" ' +
+        'before the next fenced operation; this session no longer holds the fence it started with.'
+      : 'The exact device release is committed. Re-read rn_session action "status" ' +
+        'before the next fenced operation; the reported failure happened after the commit.',
+  };
+}
+
 function containedRunnerAuthority(
   result: unknown,
   runner: Record<string, unknown> | null | undefined,
@@ -1069,14 +1092,7 @@ export function createAuthorityGate(
               return addMeta(committedStaleDeviceRelease.result, {
                 authoritative: false,
                 authorityTransition: true,
-                authorityLostAfterCommit: {
-                  code: authorityErrorCode(error) ?? 'AUTHORITY_LOST_DURING_OPERATION',
-                  reason: error instanceof Error ? error.message : String(error),
-                  released: committedStaleDeviceRelease.scope,
-                },
-                nextAction:
-                  'The exact device release is committed. Re-read rn_session action "status" ' +
-                  'before the next fenced operation; this session no longer holds the fence it started with.',
+                ...postCommitFailureMeta(error, committedStaleDeviceRelease.scope),
               });
             }
             return authorityFailure(error);
