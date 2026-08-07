@@ -9,11 +9,15 @@
 #   - missing binaries + brew      -> spawns ONE detached worker, prints notice
 #   - worker already running       -> no second spawn (pidfile guard)
 #   - recent failed attempt (<24h) -> no respawn (backoff marker)
+#   - present-but-broken client    -> incompatibility named, never "missing"
+#   - incompatible verdict         -> no respawn until interpreters change
+#   - no message ever prints the unpinned `pipx install fb-idb` (GH#578)
 #   - SessionStart safety: the foreground path never runs brew/pipx inline
 #
 # Test seams (env):
 #   RN_AGENT_IDB_STATE_DIR   state dir (pidfile, marker, log)
 #   RN_AGENT_IDB_UNAME       fake uname -s output
+#   RN_AGENT_IDB_PYTHONS     supported-interpreter candidate list
 #   RN_AGENT_IDB_PATH_STUBS  dir prepended to PATH (fake idb/idb_companion/brew)
 #   RN_AGENT_IDB_DRY_SPAWN=1 record the would-be spawn instead of nohup'ing it
 #
@@ -235,6 +239,19 @@ if echo "$OUT" | grep -qi "installed but unusable"; then
   bad "absent: wrongly reported as installed-but-broken"
 else ok "absent: not confused with the broken state"; fi
 assert_no_unpinned_install "absent" "$OUT"
+
+# 7g. A brew failure must stay `failed` (retryable) rather than being masked by
+#     the terminal incompatible verdict — only the client verdict is terminal.
+STATE="$TMP/state7g"
+mkdir -p "$STATE"
+STUBS="$(mkstubs "python3.13")"
+printf '#!/bin/sh\nexit 1\n' > "$STUBS/idb"; chmod +x "$STUBS/idb"
+printf '#!/bin/sh\nexit 1\n' > "$STUBS/brew"; chmod +x "$STUBS/brew"
+printf '#!/bin/sh\nexit 0\n' > "$STUBS/pipx"; chmod +x "$STUBS/pipx"
+run_worker "$STUBS" "$TMP/worker7g.out"
+if grep -q "^failed " "$STATE/last-attempt" 2>/dev/null; then
+  ok "worker: brew failure keeps the retryable failed verdict"
+else bad "worker: expected failed marker, got: $(cat "$STATE/last-attempt" 2>/dev/null)"; fi
 
 # 8. SessionStart safety: foreground path must not invoke brew/pipx inline.
 #    The dry-spawn seam proves the install goes through the detached worker;

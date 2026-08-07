@@ -121,9 +121,11 @@ if [ "${1:-}" = "--install-worker" ]; then
       # GH#578: never let pipx resolve the interpreter itself — it picks the
       # newest, which is exactly the one that produces a crashing client.
       # Walk the supported interpreters until one yields a healthy client.
+      tried=""
       for py in $SUPPORTED_PYTHONS; do
         command -v "$py" >/dev/null 2>&1 || continue
         echo "installing fb-idb under $py"
+        tried="$tried $py"
         pipx install --python "$py" --force fb-idb || continue
         [ "$(idb_client_state)" = ready ] && break
       done
@@ -132,10 +134,12 @@ if [ "${1:-}" = "--install-worker" ]; then
         # change that, so record a distinct verdict with the interpreter
         # fingerprint and stop — the foreground path reports the truth instead
         # of re-showing an install hint the developer has already followed.
-        status=incompatible
+        # A brew failure earlier in this run stays `failed`: that one IS worth
+        # retrying, and its backoff must not be replaced by a terminal verdict.
+        [ "$status" = failed ] || status=incompatible
         incompatible_explanation
-        if first_supported_python >/dev/null; then
-          echo "tried: $SUPPORTED_PYTHONS — none produced a working client; the mirror stays on the simctl tier"
+        if [ -n "$tried" ]; then
+          echo "tried:$tried — none produced a working client; the mirror stays on the simctl tier"
         else
           echo "no supported Python found (need one of: $SUPPORTED_PYTHONS). Install one, then re-run: $(install_command)"
         fi
