@@ -56,7 +56,9 @@ GitHub Issues, PRs, or the sibling workspace only when explicitly requested.
   byte-for-byte but Codex commands and adapted domain skills by file set only,
   so a stale Codex adaptation passes silently — diff it yourself and re-apply
   the edit in Codex's own wording (`$rn-dev-agent:` invocation form, no
-  `allowed-tools`).
+  `allowed-tools`). Recurring cross-file doctrine gets one canonical section
+  plus pointers, never copies — session-ownership recovery is owned by
+  `skills/using-rn-dev-agent/SKILL.md` § "Session ownership recovery".
 - Native runner behavior: edit `packages/rn-fast-runner/` or
   `packages/rn-android-runner/`, then run `corepack yarn build:host-runtimes`
   so both host packages carry fresh runner sources.
@@ -120,9 +122,10 @@ corepack yarn build:docs
   and execute the protocol with available tools.
 - Claude subagents do not map 1:1 to Codex. Treat Codex agent markdown files as
   playbooks to execute in the current session.
-- Before app/device interaction, check `cdp_status`, inspect reusable actions
-  with the learned-actions flow, and prefer `cdp_run_action` or `maestro_run`
-  when a saved action already covers the setup path.
+- Before app/device interaction, check `rn_session(action="status")` and
+  `cdp_status`, inspect reusable actions with the learned-actions flow, and
+  replay a covering saved action through `cdp_run_action` — not raw
+  `maestro_run`.
 - If working on installed-plugin behavior, remember that marketplace installs
   copy only the host package directory. Runtime dependencies, scripts, native
   runner sources, and templates must exist inside the relevant host package.

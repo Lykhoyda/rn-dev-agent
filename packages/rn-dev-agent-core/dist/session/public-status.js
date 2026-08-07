@@ -133,6 +133,16 @@ export function projectPublicAuthorityStatus(status, options = {}) {
                 },
             }
             : {}),
+        // Retained cleanup refusals follow the identifier-free staleDeviceCleanup discipline.
+        ...(options.recoveryRequirement?.startupCleanupBlocked
+            ? {
+                startupCleanupBlocked: {
+                    code: options.recoveryRequirement.startupCleanupBlocked.code,
+                    reason: options.recoveryRequirement.startupCleanupBlocked.reason,
+                    nextAction: options.recoveryRequirement.nextAction,
+                },
+            }
+            : {}),
         ...(options.recoveryRequirement && options.recoveryRequirement.requirement !== 'none'
             ? {
                 recoveryRequirement: {

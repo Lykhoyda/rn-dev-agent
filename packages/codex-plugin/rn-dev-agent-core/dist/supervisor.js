@@ -20557,6 +20557,29 @@ function isOperationalState(state) {
 function isFenceableState(state) {
   return isOperationalState(state) || state === "handoff";
 }
+function readStartupCleanupBlocker(bindingsJson) {
+  let journal;
+  try {
+    const bindings = JSON.parse(bindingsJson);
+    const value = bindings.startupCleanup;
+    journal = value && typeof value === "object" ? value : void 0;
+  } catch {
+    return void 0;
+  }
+  if (!journal || typeof journal.finishedAt === "number")
+    return void 0;
+  const refusal = journal.refusal;
+  if (!refusal || typeof refusal !== "object")
+    return void 0;
+  const record2 = refusal;
+  if (typeof record2.code !== "string" || typeof record2.reason !== "string")
+    return void 0;
+  return {
+    code: record2.code,
+    reason: record2.reason,
+    ...typeof record2.nextAction === "string" ? { nextAction: record2.nextAction } : {}
+  };
+}
 function bindingsRunnerPresent(bindingsJson) {
   const bindings = JSON.parse(bindingsJson);
   return Boolean(bindings.runner && typeof bindings.runner === "object");
@@ -21012,7 +21035,7 @@ var init_registry = __esm({
         const adoptionRequired = bindings.adoptionRequired;
         const priorSessionId = typeof adoptionRequired?.sessionId === "string" ? adoptionRequired.sessionId : null;
         const prior = priorSessionId ? asSession(this.#database.prepare(`SELECT session_id, source_key, worktree_key, app_root_key, claim_epoch,
-                      supervisor_pid, supervisor_birth, heartbeat_ms
+                      supervisor_pid, supervisor_birth, heartbeat_ms, bindings_json
                FROM sessions WHERE session_id = ?`).get(priorSessionId)) : null;
         if (!prior || prior.claim_epoch !== adoptionRequired?.claimEpoch) {
           return {
@@ -21046,6 +21069,15 @@ var init_registry = __esm({
                 requirement: "attach",
                 priorOwner: "stale",
                 nextAction: "The proven-dead owner has a different source identity for this app root, so startup cleanup cannot release it under the current declared manifests. Restore the declared manifests that produced the prior identity, start and close rn-dev-agent to release its authority, then reapply the manifest changes; otherwise use a separate worktree."
+              };
+            }
+            const blocked = readStartupCleanupBlocker(prior.bindings_json);
+            if (blocked) {
+              return {
+                requirement: "transport-restart",
+                priorOwner: "stale",
+                startupCleanupBlocked: blocked,
+                nextAction: blocked.nextAction ?? `Startup cleanup refused with ${blocked.code} and will refuse again on the next restart: ${blocked.reason}. Resolve that refusal before restarting the MCP transport.`
               };
             }
             return {
@@ -21359,6 +21391,32 @@ var init_registry = __esm({
             startupCleanup: { journaledAt: now, obligations, integration }
           }), now, row.session_id, row.claim_epoch);
           return { resumed: false, obligations, integration };
+        });
+      }
+      /** Re-recording an identical cleanup refusal is a no-op across repeated restarts. */
+      recordStartupCleanupRefusal(prior, refusal) {
+        const now = this.#now();
+        this.#transaction(() => {
+          const row = this.#requireProvenDeadStartupOwner(prior);
+          const { bindings, journal } = this.#requireStartupCleanupJournal(row);
+          if (typeof journal.finishedAt === "number")
+            return;
+          const existing = journal.refusal;
+          if (existing && existing.code === refusal.code && existing.reason === refusal.reason && existing.nextAction === refusal.nextAction) {
+            return;
+          }
+          this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(JSON.stringify({
+            ...bindings,
+            startupCleanup: {
+              ...journal,
+              refusal: {
+                code: refusal.code,
+                reason: refusal.reason,
+                ...refusal.nextAction ? { nextAction: refusal.nextAction } : {}
+              }
+            }
+          }), now, row.session_id, row.claim_epoch);
         });
       }
       verifyStartupOwnerObligation(prior, resource) {
@@ -27168,7 +27226,7 @@ function createAuthorityGate(runtime, dependencies) {
       }
       const runtimeStatus = runtime.status();
       if (runtimeStatus.available && runtimeStatus.state === "blocked") {
-        return authorityFailure(new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "blocked contender exposes only accept_handoff and adopt_stale recovery"));
+        return authorityFailure(runtime.blockedContenderError());
       }
       if (runtimeStatus.available && tool === "observe" && (args.action === "start" && runtimeStatus.bindings.observe || args.action === "stop" && !runtimeStatus.bindings.observe)) {
         profile = baseProfile;
@@ -67194,6 +67252,14 @@ function projectPublicAuthorityStatus(status, options = {}) {
         nextAction: cleanupNextAction
       }
     } : {},
+    // Retained cleanup refusals follow the identifier-free staleDeviceCleanup discipline.
+    ...options.recoveryRequirement?.startupCleanupBlocked ? {
+      startupCleanupBlocked: {
+        code: options.recoveryRequirement.startupCleanupBlocked.code,
+        reason: options.recoveryRequirement.startupCleanupBlocked.reason,
+        nextAction: options.recoveryRequirement.nextAction
+      }
+    } : {},
     ...options.recoveryRequirement && options.recoveryRequirement.requirement !== "none" ? {
       recoveryRequirement: {
         requirement: options.recoveryRequirement.requirement,
@@ -73358,7 +73424,7 @@ function getWorkerAuthorityRuntime() {
   sharedRuntime ??= createWorkerAuthorityRuntime();
   return sharedRuntime;
 }
-var WorkerAuthorityRuntime, sharedRuntime;
+var BLOCKED_CONTENDER_REFUSAL, WorkerAuthorityRuntime, sharedRuntime;
 var init_runtime = __esm({
   "packages/rn-dev-agent-core/dist/session/runtime.js"() {
     "use strict";
@@ -73366,6 +73432,7 @@ var init_runtime = __esm({
     init_process_owner();
     init_registry();
     init_secure_state_file();
+    BLOCKED_CONTENDER_REFUSAL = 'this session does not own this worktree; rn_session({ action: "status" }) is the only available action';
     WorkerAuthorityRuntime = class {
       available;
       #registry;
@@ -73391,9 +73458,14 @@ var init_runtime = __esm({
         const available = this.requireAvailable();
         const status = this.status();
         if (status.available && (status.state === "blocked" || status.state === "handoff_cleanup")) {
-          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "blocked contender exposes only accept_handoff and adopt_stale recovery");
+          throw this.blockedContenderError();
         }
         return available;
+      }
+      /** Gated refusals carry the current session's measured recovery next action. */
+      blockedContenderError() {
+        const nextAction = this.inspectRecoveryRequirement()?.nextAction;
+        return new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", BLOCKED_CONTENDER_REFUSAL, void 0, nextAction ? { nextAction } : void 0);
       }
       requireRecovery() {
         const available = this.requireAvailable();
@@ -86366,16 +86438,18 @@ async function runStartupOwnerCleanup(input, dependencies = {}) {
       input.registry.finishStartupOwnerCleanup(candidate);
       released.push(candidate.sessionId);
     } catch (error2) {
-      return { status: "refused", released, refusal: refusalOf(error2) };
+      const refusal = refusalOf(error2);
+      retainRefusal(input.registry, candidate, refusal);
+      return { status: "refused", released, refusal };
     }
   }
   return {
     status: "refused",
     released,
-    refusal: {
+    refusal: publicRefusal({
       code: "RESOURCE_CLAIM_CONFLICT",
       message: "startup cleanup did not converge for this worktree"
-    }
+    })
   };
 }
 async function runStartupCleanupForSource(input) {
@@ -86461,16 +86535,57 @@ function verifiedDeadOwnerManifestSource(appRoot, binding, manifestSha256) {
   const installation = phase(binding.installation);
   return verified(liveManifest) ?? verified(restoration?.phase === "started" ? restoration.manifestSource : void 0) ?? verified(installation?.phase === "started" ? installation.manifestSource : void 0) ?? verified(binding.manifestSource);
 }
+function retainRefusal(registry2, prior, refusal) {
+  try {
+    registry2.recordStartupCleanupRefusal(prior, {
+      code: refusal.code,
+      reason: refusal.message,
+      ...refusal.nextAction ? { nextAction: refusal.nextAction } : {}
+    });
+  } catch {
+  }
+}
+var PUBLIC_REFUSAL_REASONS = /* @__PURE__ */ new Set([
+  "integration restoration requires a SHA-256-verified manifest and none is available; the dead owner binding is preserved",
+  "integration restoration requires the recorded manifest authority",
+  "integration restoration requires the active startup journal and recorded manifest authority",
+  "managed Metro could not be stopped with exact process authority",
+  "managed Metro cleanup has not been durably completed",
+  "startup cleanup did not converge for this worktree",
+  "startup cleanup no longer matches the exact source and app root",
+  "no startup cleanup is in progress",
+  "the same-root owner is live; a live owner is never released",
+  "the same-root owner identity could not be proven, so it is treated as live",
+  "expired lease owner identity could not be proven",
+  "the startup cleanup owner no longer matches the proven claim epoch",
+  ...["recorder", "runner", "observe", "metro"].flatMap((resource) => [
+    `${resource} cleanup has not been durably completed`,
+    `${resource} cleanup was not durably requested`
+  ])
+]);
+var GENERIC_REFUSAL_REMEDY = "Startup cleanup refused and preserved the prior owner binding. Resolve the refusal named by this code, then restart the MCP transport; another restart alone does not release the owner.";
+function publicRefusal(refusal) {
+  const sentence = refusal.message.replace(/^[A-Z][A-Z0-9_]+: /, "");
+  const authored = PUBLIC_REFUSAL_REASONS.has(sentence);
+  return {
+    code: refusal.code,
+    message: authored ? sentence : `startup cleanup refused with ${refusal.code} and preserved the prior owner binding`,
+    nextAction: authored ? refusal.nextAction ?? GENERIC_REFUSAL_REMEDY : GENERIC_REFUSAL_REMEDY
+  };
+}
 function refusalOf(error2) {
   if (error2 instanceof SessionAuthorityError) {
-    return {
+    return publicRefusal({
       code: error2.code,
       message: error2.message,
       ...error2.details?.nextAction ? { nextAction: error2.details.nextAction } : {}
-    };
+    });
   }
   const code = error2 && typeof error2 === "object" && typeof error2.code === "string" ? error2.code : "STARTUP_CLEANUP_FAILED";
-  return { code, message: error2 instanceof Error ? error2.message : String(error2) };
+  return publicRefusal({
+    code,
+    message: error2 instanceof Error ? error2.message : String(error2)
+  });
 }
 
 // packages/rn-dev-agent-core/dist/session/supervisor-authority.js
@@ -86906,8 +87021,12 @@ if (process.env.RN_BRIDGE_SUPERVISOR === "0") {
 `);
       }
       if (cleanup.status === "refused" && cleanup.refusal) {
-        process.stderr.write(`rn-dev-agent startup cleanup deferred: ${cleanup.refusal.code}
+        process.stderr.write(`rn-dev-agent startup cleanup deferred: ${cleanup.refusal.code}: ${cleanup.refusal.message}
 `);
+        if (cleanup.refusal.nextAction) {
+          process.stderr.write(`rn-dev-agent startup cleanup next action: ${cleanup.refusal.nextAction}
+`);
+        }
       }
     } catch {
       process.stderr.write(startupCleanupFailureMessage());

@@ -87,7 +87,11 @@ else {
                 process.stderr.write(`rn-dev-agent startup cleanup: released ${cleanup.released.length} proven-dead session(s) for this worktree\n`);
             }
             if (cleanup.status === 'refused' && cleanup.refusal) {
-                process.stderr.write(`rn-dev-agent startup cleanup deferred: ${cleanup.refusal.code}\n`);
+                // These already-redacted details explain why a restart will not converge.
+                process.stderr.write(`rn-dev-agent startup cleanup deferred: ${cleanup.refusal.code}: ${cleanup.refusal.message}\n`);
+                if (cleanup.refusal.nextAction) {
+                    process.stderr.write(`rn-dev-agent startup cleanup next action: ${cleanup.refusal.nextAction}\n`);
+                }
             }
         }
         catch {

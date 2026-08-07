@@ -124,6 +124,30 @@ function isOperationalState(state) {
 function isFenceableState(state) {
     return isOperationalState(state) || state === 'handoff';
 }
+function readStartupCleanupBlocker(bindingsJson) {
+    let journal;
+    try {
+        const bindings = JSON.parse(bindingsJson);
+        const value = bindings.startupCleanup;
+        journal = value && typeof value === 'object' ? value : undefined;
+    }
+    catch {
+        return undefined;
+    }
+    if (!journal || typeof journal.finishedAt === 'number')
+        return undefined;
+    const refusal = journal.refusal;
+    if (!refusal || typeof refusal !== 'object')
+        return undefined;
+    const record = refusal;
+    if (typeof record.code !== 'string' || typeof record.reason !== 'string')
+        return undefined;
+    return {
+        code: record.code,
+        reason: record.reason,
+        ...(typeof record.nextAction === 'string' ? { nextAction: record.nextAction } : {}),
+    };
+}
 function bindingsRunnerPresent(bindingsJson) {
     const bindings = JSON.parse(bindingsJson);
     return Boolean(bindings.runner && typeof bindings.runner === 'object');
@@ -601,7 +625,7 @@ export class SessionRegistry {
         const prior = priorSessionId
             ? asSession(this.#database
                 .prepare(`SELECT session_id, source_key, worktree_key, app_root_key, claim_epoch,
-                      supervisor_pid, supervisor_birth, heartbeat_ms
+                      supervisor_pid, supervisor_birth, heartbeat_ms, bindings_json
                FROM sessions WHERE session_id = ?`)
                 .get(priorSessionId))
             : null;
@@ -638,6 +662,17 @@ export class SessionRegistry {
                         requirement: 'attach',
                         priorOwner: 'stale',
                         nextAction: 'The proven-dead owner has a different source identity for this app root, so startup cleanup cannot release it under the current declared manifests. Restore the declared manifests that produced the prior identity, start and close rn-dev-agent to release its authority, then reapply the manifest changes; otherwise use a separate worktree.',
+                    };
+                }
+                // Only cleanup without a retained refusal may promise automatic convergence.
+                const blocked = readStartupCleanupBlocker(prior.bindings_json);
+                if (blocked) {
+                    return {
+                        requirement: 'transport-restart',
+                        priorOwner: 'stale',
+                        startupCleanupBlocked: blocked,
+                        nextAction: blocked.nextAction ??
+                            `Startup cleanup refused with ${blocked.code} and will refuse again on the next restart: ${blocked.reason}. Resolve that refusal before restarting the MCP transport.`,
                     };
                 }
                 return {
@@ -1015,6 +1050,37 @@ export class SessionRegistry {
                 startupCleanup: { journaledAt: now, obligations, integration },
             }), now, row.session_id, row.claim_epoch);
             return { resumed: false, obligations, integration };
+        });
+    }
+    /** Re-recording an identical cleanup refusal is a no-op across repeated restarts. */
+    recordStartupCleanupRefusal(prior, refusal) {
+        const now = this.#now();
+        this.#transaction(() => {
+            const row = this.#requireProvenDeadStartupOwner(prior);
+            const { bindings, journal } = this.#requireStartupCleanupJournal(row);
+            if (typeof journal.finishedAt === 'number')
+                return;
+            const existing = journal.refusal;
+            if (existing &&
+                existing.code === refusal.code &&
+                existing.reason === refusal.reason &&
+                existing.nextAction === refusal.nextAction) {
+                return;
+            }
+            this.#database
+                .prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`)
+                .run(JSON.stringify({
+                ...bindings,
+                startupCleanup: {
+                    ...journal,
+                    refusal: {
+                        code: refusal.code,
+                        reason: refusal.reason,
+                        ...(refusal.nextAction ? { nextAction: refusal.nextAction } : {}),
+                    },
+                },
+            }), now, row.session_id, row.claim_epoch);
         });
     }
     verifyStartupOwnerObligation(prior, resource) {
