@@ -1,5 +1,18 @@
 # rn-dev-agent-plugin
 
+## 0.75.0
+
+### Minor Changes
+
+- cafb36d: Add the `rn-workflow` skill and `/rn-dev-agent:run-workflow` command that sequence the proven operating chain before a real device journey — declared package-manager install, read-only inventory, typed `rn_session` recovery with status as the sole classifier, one exclusive device, managed integration and Metro, replay only via `cdp_run_action` after readiness proof, and reverse-order cleanup verified by the new deterministic `workflow-check` CLI.
+
+### Patch Changes
+
+- 7cb0d40: Re-issue the install receipt after a Maestro `clearState` reinstall of the session's own artifact — proven by re-hashing the installed bytes against the bound artifact digest, with any other or unattestable artifact still refused as `APP_INSTALL_IDENTITY_CHANGED` — and accept an `appFile` on `cdp_run_action` that otherwise resolves from that same receipt.
+- Updated dependencies [7cb0d40]
+- Updated dependencies [cafb36d]
+  - rn-dev-agent-core@0.70.0
+
 ## 0.74.6
 
 ### Patch Changes
