@@ -8,11 +8,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 // @ts-expect-error -- untyped JS test helper
 import { startSupervisor } from '../helpers/supervisor-harness.js';
+import {
+  createDeclaredFixtureRoot,
+  isSimctlLaunchTimeout,
+  launchFixtureWithRetry,
+} from './device-smoke-driver.ts';
 
 const PLATFORM = process.env.SMOKE_PLATFORM;
 const APP_ID = process.env.SMOKE_APP_ID ?? 'dev.lykhoyda.rndevagent.fixture';
@@ -118,24 +123,13 @@ function launchFixtureOnce() {
 }
 
 async function launchFixture() {
-  // The driver owns the fixture lifecycle: launch it OURSELVES and open the
-  // session with attachOnly (the documented race-free path). Launch-at-open
-  // proved flaky on a loaded emulator — the bridge's `adb shell monkey` has a
-  // 10s timeout that a cold app on a busy host can exceed.
-  //
-  // Two launch attempts, ~30s each: a reused-but-cold CI simulator/emulator can
-  // take longer than a single short window to bring the app to foreground
-  // (device-proven: a lone slow launch tripped the old 20s deadline). The
-  // re-launch is idempotent (foregrounds an already-running app).
-  for (let attempt = 0; attempt < 2; attempt++) {
-    launchFixtureOnce();
-    const deadline = Date.now() + 30_000;
-    while (Date.now() < deadline) {
-      if (fixtureRunning()) return;
-      await new Promise((r) => setTimeout(r, 500));
-    }
-  }
-  throw new Error(`fixture ${APP_ID} did not start within 2x30s of launch`);
+  // Launch before attachOnly; retry only xcrun simctl launch ETIMEDOUT or a 30s foreground miss.
+  await launchFixtureWithRetry({
+    appId: APP_ID,
+    launchOnce: launchFixtureOnce,
+    isRunning: fixtureRunning,
+    isRetryableLaunchTimeout: isSimctlLaunchTimeout,
+  });
 }
 
 async function rpc(s: any, method: string, params?: unknown) {
@@ -169,8 +163,12 @@ test(`Phase B golden set (${PLATFORM})`, { timeout: 900_000 }, async () => {
   stopFixture();
   await launchFixture();
   mkdirSync(DEBUG_DIR, { recursive: true });
-  const cwd = mkdtempSync(join(tmpdir(), 'rn-agent-smoke-'));
-  const s = startSupervisor({ cwd, lineTimeoutMs: 600_000, env: { RN_RUNNER_BUILD: 'local' } });
+  const fixtureRoot = createDeclaredFixtureRoot();
+  const s = startSupervisor({
+    cwd: fixtureRoot.cwd,
+    lineTimeoutMs: 600_000,
+    env: { RN_RUNNER_BUILD: 'local', ...fixtureRoot.env },
+  });
   const steps: Array<{ name: string; isError: boolean; envelope: unknown }> = [];
   const record = (name: string, r: ToolReply) => {
     steps.push({ name, isError: r.isError, envelope: r.envelope });
