@@ -72,6 +72,7 @@ import {
   completeManagedNativeOriginAuthority,
   reissueManagedInstallAuthority,
   relaunchManagedNativeOriginApp,
+  reproveManagedNativeOrigin,
 } from '../session/authority-gate.js';
 import { getWorkerAuthorityRuntime } from '../session/runtime.js';
 import { flowUsesClearState, resolveIosAppFile } from './resolve-ios-app-file.js';
@@ -413,6 +414,7 @@ export interface RunActionDeps {
   claimNativeOrigin?: (args: RunActionArgs) => Promise<void>;
   completeNativeOrigin?: (args: RunActionArgs, targetExpected: boolean) => Promise<void>;
   relaunchManagedApp?: (args: RunActionArgs) => Promise<void>;
+  reproveManagedOrigin?: (args: RunActionArgs) => Promise<void>;
   reissueInstallReceipt?: (args: RunActionArgs) => Promise<void>;
   /** GH #705: the session's attested install receipt, for appFile auto-resolution. */
   installReceipt?: () => { platform?: unknown; deviceId?: unknown; appId?: unknown } | null;
@@ -465,6 +467,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
   const claimNativeOrigin = deps.claimNativeOrigin ?? claimManagedNativeOriginAuthority;
   const completeNativeOrigin = deps.completeNativeOrigin ?? completeManagedNativeOriginAuthority;
   const relaunchManagedApp = deps.relaunchManagedApp ?? relaunchManagedNativeOriginApp;
+  const reproveManagedOrigin = deps.reproveManagedOrigin ?? reproveManagedNativeOrigin;
   const reissueInstallReceipt = deps.reissueInstallReceipt ?? reissueManagedInstallAuthority;
   const installReceipt = deps.installReceipt ?? boundInstallReceipt;
   const resolveAppFile =
@@ -706,6 +709,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         claimNativeOrigin: () => claimNativeOrigin(args),
         completeNativeOrigin: (targetExpected) => completeNativeOrigin(args, targetExpected),
         relaunchManagedApp: () => relaunchManagedApp(args),
+        reproveManagedOrigin: () => reproveManagedOrigin(args),
         completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
         reissueInstallReceipt: () => reissueInstallReceipt(args),
       });
@@ -1091,6 +1095,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         claimNativeOrigin: () => claimNativeOrigin(args),
         completeNativeOrigin: (targetExpected) => completeNativeOrigin(args, targetExpected),
         relaunchManagedApp: () => relaunchManagedApp(args),
+        reproveManagedOrigin: () => reproveManagedOrigin(args),
         completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
         reissueInstallReceipt: () => reissueInstallReceipt(args),
       });
