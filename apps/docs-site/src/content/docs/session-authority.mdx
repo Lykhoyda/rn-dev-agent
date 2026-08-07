@@ -48,6 +48,8 @@ Recovery from a dead owner is bounded and explicit, never lease garbage collecti
 
 Closing a bound runner releases its exclusive claim and clears the runner binding in one atomic registry transaction, so an interrupted close or reacquire cannot leave a store whose runner binding survives without its claim row. A store already carrying that divergence — written by an interrupted unbind under an older plugin — is unsupported legacy state: `adopt_stale` refuses it with `RUNNER_OWNERSHIP_MISMATCH`, ownership is never relaxed to accommodate it, and no migration exists. The supported recovery is the latest plugin plus fresh authority state: with no supervisor running for any session in the store, remove the user-local `v2` state root and let the next start recreate it.
 
+Proving a bound runner stopped sends SIGTERM, then escalates to SIGKILL after its grace period only once the pid is re-proven to carry that binding's exact process-birth token, so a reused pid or another session's runner is never signaled. A process that has terminated but whose parent has not yet reaped it counts as stopped, not as an unreadable identity — that is what lets `cdp_restart hardReset=true` and the `device_snapshot action=close` → `release` sequence complete instead of refusing with `RUNNER_ADOPTION_REQUIRED`.
+
 Supervisor shutdown follows the same fail-closed resource cleanup. It first reserves the session for closing and cancels active operations, then releases claims only after runner, Observe, and managed Metro teardown succeeds.
 
 Session initialization is transactional: if port allocation, resource claiming, shared-knowledge preparation, or receipt creation fails, partial claims are released before startup reports the failure.
