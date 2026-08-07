@@ -122,26 +122,37 @@ if [ "${1:-}" = "--install-worker" ]; then
       # newest, which is exactly the one that produces a crashing client.
       # Walk the supported interpreters until one yields a healthy client.
       tried=""
+      installed=""
       for py in $SUPPORTED_PYTHONS; do
         command -v "$py" >/dev/null 2>&1 || continue
         echo "installing fb-idb under $py"
         tried="$tried $py"
         pipx install --python "$py" --force fb-idb || continue
+        installed=yes
         [ "$(idb_client_state)" = ready ] && break
       done
       if [ "$(idb_client_state)" != ready ]; then
-        # No available interpreter produces a working client. Retrying cannot
-        # change that, so record a distinct verdict with the interpreter
-        # fingerprint and stop — the foreground path reports the truth instead
-        # of re-showing an install hint the developer has already followed.
-        # A brew failure earlier in this run stays `failed`: that one IS worth
-        # retrying, and its backoff must not be replaced by a terminal verdict.
-        [ "$status" = failed ] || status=incompatible
-        incompatible_explanation
-        if [ -n "$tried" ]; then
-          echo "tried:$tried — none produced a working client; the mirror stays on the simctl tier"
+        if [ -n "$tried" ] && [ -z "$installed" ]; then
+          # Every pinned install command itself failed (network, PyPI, pipx).
+          # That is transient, so it must stay retryable: the terminal verdict
+          # requires evidence of incompatibility, not merely absence of success.
+          status=failed
+          echo "tried:$tried — every pinned install failed; retrying after backoff"
         else
-          echo "no supported Python found (need one of: $SUPPORTED_PYTHONS). Install one, then re-run: $(install_command)"
+          # Either a pinned install succeeded and the client still crashes, or
+          # no supported interpreter exists at all. Retrying cannot change that,
+          # so record a distinct verdict with the interpreter fingerprint and
+          # stop — the foreground path reports the truth instead of re-showing
+          # an install hint the developer has already followed.
+          # A brew failure earlier in this run stays `failed`: that one IS worth
+          # retrying, and its backoff must not be replaced by a terminal verdict.
+          [ "$status" = failed ] || status=incompatible
+          if [ -n "$tried" ]; then
+            incompatible_explanation
+            echo "tried:$tried — none produced a working client; the mirror stays on the simctl tier"
+          else
+            echo "no supported Python found (need one of: $SUPPORTED_PYTHONS). Install one, then re-run: $(install_command)"
+          fi
         fi
       fi
     else
@@ -169,10 +180,13 @@ if [ -f "$MARKER" ]; then
   read -r LAST_STATUS LAST_TS LAST_FP < "$MARKER" 2>/dev/null || LAST_STATUS=""
 fi
 
-# The incompatible verdict outranks every other branch: it is the one state
-# where an install hint is actively wrong (GH#578). It holds until the set of
-# installed interpreters changes; delete "$MARKER" to force a retry.
-if [ "${LAST_STATUS:-}" = "incompatible" ] && [ "${LAST_FP:-}" = "$(python_fingerprint)" ]; then
+# The incompatible verdict outranks every other branch while the client is
+# actually broken: that is the one state where an install hint is actively
+# wrong (GH#578). It holds until the set of installed interpreters changes;
+# delete "$MARKER" to force a retry. A verdict may never contradict the live
+# probe — a client that now reads ready or absent falls through to the normal
+# path so the missing piece (companion, or the client itself) still gets fixed.
+if [ "$CLIENT_STATE" = broken ] && [ "${LAST_STATUS:-}" = "incompatible" ] && [ "${LAST_FP:-}" = "$(python_fingerprint)" ]; then
   incompatible_explanation
   if first_supported_python >/dev/null; then
     echo "Recover with: $(install_command)"
@@ -189,7 +203,6 @@ if [ "$CLIENT_STATE" = broken ]; then
     echo "Recover with: $(install_command)"
     exit 0
   fi
-  echo "Repairing in the background under a supported interpreter ($SUPPORTED_PYTHONS). Manual: $(install_command)"
 elif ! command -v brew >/dev/null 2>&1; then
   echo "idb not installed (optional — enables 20-30fps screen mirroring instead of ~6fps)."
   echo "Install manually: $(install_command)"
@@ -218,10 +231,13 @@ if [ "${LAST_STATUS:-}" = "failed" ] && [ -n "${LAST_TS:-}" ]; then
   fi
 fi
 
+# Only this path actually spawns, so the "repairing" claim belongs here — the
+# pidfile and backoff guards above must not be preceded by a promise of work
+# they then prevent.
 if [ "$CLIENT_STATE" = absent ]; then
   NOTICE="idb missing — installing in background ($(install_command)). Log: $LOG"
 else
-  NOTICE="idb repair running in background. Log: $LOG"
+  NOTICE="Repairing in the background under a supported interpreter ($SUPPORTED_PYTHONS). Manual: $(install_command). Log: $LOG"
 fi
 
 if [ "${RN_AGENT_IDB_DRY_SPAWN:-}" = "1" ]; then

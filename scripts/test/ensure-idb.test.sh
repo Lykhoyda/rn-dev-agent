@@ -11,6 +11,9 @@
 #   - recent failed attempt (<24h) -> no respawn (backoff marker)
 #   - present-but-broken client    -> incompatibility named, never "missing"
 #   - incompatible verdict         -> no respawn until interpreters change
+#   - transient install failure    -> retryable `failed`, never the verdict
+#   - stale verdict vs live probe  -> the probe wins, repair still spawns
+#   - "repairing" notice           -> printed only when a worker really spawns
 #   - no message ever prints the unpinned `pipx install fb-idb` (GH#578)
 #   - SessionStart safety: the foreground path never runs brew/pipx inline
 #
@@ -252,6 +255,50 @@ run_worker "$STUBS" "$TMP/worker7g.out"
 if grep -q "^failed " "$STATE/last-attempt" 2>/dev/null; then
   ok "worker: brew failure keeps the retryable failed verdict"
 else bad "worker: expected failed marker, got: $(cat "$STATE/last-attempt" 2>/dev/null)"; fi
+
+# 7h. A transient install failure (network/PyPI/pipx) is NOT evidence of the
+#     interpreter incompatibility: every pinned install failing must keep the
+#     retryable `failed` verdict, or a blip pins a permanent false diagnosis.
+STATE="$TMP/state7h"
+mkdir -p "$STATE"
+STUBS="$(mkstubs "idb_companion brew python3.13")"
+printf '#!/bin/sh\nexit 1\n' > "$STUBS/pipx"; chmod +x "$STUBS/pipx"
+run_worker "$STUBS" "$TMP/worker7h.out"
+if grep -q "^failed " "$STATE/last-attempt" 2>/dev/null; then
+  ok "worker: failing pipx stays retryable (no terminal verdict)"
+else bad "worker: expected failed marker, got: $(cat "$STATE/last-attempt" 2>/dev/null)"; fi
+if grep -qi "installed but unusable" "$TMP/worker7h.out"; then
+  bad "worker: absent client described as installed-but-broken"
+else ok "worker: never calls a never-installed client unusable"; fi
+
+# 7i. A stale verdict must never outrank the live probe: a client that now
+#     works (with the companion still missing) falls through to the repair
+#     spawn instead of being reported as crashing.
+STATE="$TMP/state7i"
+mkdir -p "$STATE"
+STUBS="$(mkstubs "idb brew python3.13")"
+echo "incompatible $(date +%s) python3.13," > "$STATE/last-attempt"
+OUT="$(run_script "$STUBS")"
+if echo "$OUT" | grep -qi "installed but unusable"; then
+  bad "stale-verdict: claimed a working client crashes, got: $OUT"
+else ok "stale-verdict: live probe outranks the marker"; fi
+[ -f "$STATE/spawn.log" ] && ok "stale-verdict: still spawns the companion install" || bad "stale-verdict: blocked the companion repair, got: $OUT"
+
+# 7j. The "repairing in the background" claim may only be printed when a worker
+#     is actually spawned — the backoff guard must not be preceded by a promise.
+STATE="$TMP/state7j"
+mkdir -p "$STATE"
+echo "failed $(date +%s)" > "$STATE/last-attempt"
+STUBS="$(mkstubs "idb_companion brew python3.13")"
+printf '#!/bin/sh\nexit 1\n' > "$STUBS/idb"; chmod +x "$STUBS/idb"
+OUT="$(run_script "$STUBS")"
+[ ! -f "$STATE/spawn.log" ] && ok "repair-notice: backoff still blocks the spawn" || bad "repair-notice: spawned inside backoff window"
+if echo "$OUT" | grep -qi "Repairing in the background"; then
+  bad "repair-notice: announced a repair that never started, got: $OUT"
+else ok "repair-notice: silent when no worker is spawned"; fi
+if echo "$OUT" | grep -qi "installed but unusable"; then
+  ok "repair-notice: still explains the incompatibility truthfully"
+else bad "repair-notice: dropped the broken-client explanation, got: $OUT"; fi
 
 # 8. SessionStart safety: foreground path must not invoke brew/pipx inline.
 #    The dry-spawn seam proves the install goes through the detached worker;
