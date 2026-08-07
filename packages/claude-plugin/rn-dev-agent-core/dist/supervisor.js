@@ -26930,6 +26930,32 @@ function isAuthenticatedIdempotentRunnerClose(tool, args, result, initialStatus)
     return false;
   }
 }
+function staleDeviceReleaseScope(tool, args, status) {
+  if (tool !== "rn_session" || args.action !== "release_stale_device")
+    return null;
+  const scope = status.bindings.staleDeviceCleanup ?? status.bindings.staleDeviceRelease;
+  if (!scope || typeof scope.platform !== "string" || typeof scope.deviceId !== "string") {
+    return null;
+  }
+  return { platform: scope.platform, deviceId: scope.deviceId };
+}
+function staleDeviceReleaseCommitted(runtime, initialAuthorityVersion) {
+  const current = runtime.status();
+  return current.available && current.authorityVersion > initialAuthorityVersion && !current.bindings.staleDeviceCleanup && !current.bindings.staleDeviceRelease;
+}
+function postCommitFailureMeta(error2, released) {
+  const fenceLost = error2 instanceof SessionAuthorityError;
+  const detail = {
+    code: fenceLost ? error2.code : authorityErrorCode(error2) ?? "POST_COMMIT_FAILURE",
+    reason: error2 instanceof Error ? error2.message : String(error2),
+    released
+  };
+  return {
+    authorityLostAfterCommit: fenceLost ? detail : void 0,
+    failedAfterCommit: fenceLost ? void 0 : detail,
+    nextAction: fenceLost ? 'The exact device release is committed. Re-read rn_session action "status" before the next fenced operation; this session no longer holds the fence it started with.' : 'The exact device release is committed. Re-read rn_session action "status" before the next fenced operation; the reported failure happened after the commit.'
+  };
+}
 function containedRunnerAuthority(result, runner) {
   if (!runner)
     return null;
@@ -27253,6 +27279,7 @@ function createAuthorityGate(runtime, dependencies) {
         let retainProofCleanupFence2 = false;
         let beganProofRehearsal = false;
         let publishedProofBinding = false;
+        let committedStaleDeviceRelease = null;
         try {
           const available = runtime.requireAvailable();
           registry3 = available.registry;
@@ -27307,6 +27334,14 @@ function createAuthorityGate(runtime, dependencies) {
             return addMeta(result, { authoritative: false });
           }
           beganProofRehearsal = gateCommitsProof;
+          const staleReleaseScope = staleDeviceReleaseScope(tool, args, initialStatus);
+          if (staleReleaseScope) {
+            committedStaleDeviceRelease = {
+              result,
+              scope: staleReleaseScope,
+              initialAuthorityVersion
+            };
+          }
           if (tool === "rn_session" && args.action === "release") {
             operation2 = null;
             return addMeta(result, {
@@ -27398,6 +27433,13 @@ function createAuthorityGate(runtime, dependencies) {
               retainProofCleanupFence2 = operation2 !== null;
               return authorityFailure(new AggregateError([error2, rollbackError], "PROOF_AUTHORITY_MISMATCH: rehearsal rollback failed"));
             }
+          }
+          if (committedStaleDeviceRelease && staleDeviceReleaseCommitted(runtime, committedStaleDeviceRelease.initialAuthorityVersion)) {
+            return addMeta(committedStaleDeviceRelease.result, {
+              authoritative: false,
+              authorityTransition: true,
+              ...postCommitFailureMeta(error2, committedStaleDeviceRelease.scope)
+            });
           }
           return authorityFailure(error2);
         } finally {
