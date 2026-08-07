@@ -14,7 +14,7 @@ import { inspectSessionOwner } from './session/process-owner.js';
 import { readProcessBirth } from './session/process-birth.js';
 import { resolveSourceIdentity } from './session/source-identity.js';
 import { runStartupCleanupForSource, startupCleanupFailureMessage, } from './session/startup-cleanup.js';
-import { createSupervisorAuthority, } from './session/supervisor-authority.js';
+import { createSupervisorAuthority, resolveSupervisorAuthorityForSpawn, } from './session/supervisor-authority.js';
 import { sqliteFlagForNode, supervisorRelaunchArgs, unsupportedNodeVersionMessage, workerSpawnArgs, } from './supervisor-args.js';
 // GH#264 Phase 5: the component that owns stdio with Claude Code must hold
 // ZERO network sockets — `lsof -ti tcp:8081 | xargs kill -9` (a documented
@@ -68,6 +68,7 @@ else {
     }
     let authority = null;
     let authorityError = null;
+    let mintAuthority = null;
     try {
         if (diagnosticContractProbe)
             throw new Error('DIAGNOSTIC_MODE_READ_ONLY');
@@ -92,7 +93,7 @@ else {
         catch {
             process.stderr.write(startupCleanupFailureMessage());
         }
-        authority = createSupervisorAuthority({
+        mintAuthority = () => createSupervisorAuthority({
             source,
             supervisorBirth: readProcessBirth(process.pid),
             uid: typeof process.getuid === 'function'
@@ -100,6 +101,7 @@ else {
                 : (process.env.USER ?? 'unknown'),
             ownerStatus: inspectSessionOwner,
         });
+        authority = mintAuthority();
     }
     catch (error) {
         authorityError =
@@ -131,7 +133,20 @@ else {
                 closeAuthorityAndExit(action.kind === 'shutdown' ? 0 : action.code);
         }
     }
+    function resolveAuthorityForSpawn() {
+        if (!authority || !mintAuthority)
+            return;
+        const resolution = resolveSupervisorAuthorityForSpawn(authority, mintAuthority);
+        if (!resolution.minted && resolution.error === null)
+            return;
+        authority = resolution.authority;
+        authorityError = resolution.error;
+        process.stderr.write(resolution.error === null
+            ? 'rn-bridge-supervisor: minted a fresh session for the released worktree\n'
+            : `rn-dev-agent authority diagnostic: ${resolution.error}\n`);
+    }
     function spawnWorker() {
+        resolveAuthorityForSpawn();
         const workerInstance = randomUUID();
         const child = spawn(process.execPath, workerSpawnArgs(workerPath, sqliteWarningFilterPath, undefined, process.argv.slice(2)), {
             stdio: ['pipe', 'pipe', 'inherit'],

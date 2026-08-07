@@ -146,6 +146,7 @@ interface SessionHandlerDependencies extends ManagedMetroStatusDependencies {
   };
   cleanupTimeoutMs?: number;
   deviceExists?: (platform: 'ios' | 'android', deviceId: string) => boolean;
+  requestWorkerRecycle?: () => boolean;
 }
 
 type SessionMetroBinding =
@@ -1798,7 +1799,22 @@ export function createSessionHandler(
       }
       registry.releaseSession(session);
       if (status.bindings.bundle) dependencies.onBundleInvalidated?.();
-      return okResult({ released: true, sessionId: session.sessionId });
+      // GH #706: the released row can never be transitioned again. Ask the supervisor
+      // to resolve a fresh session so the next call is not a dead end.
+      let recycleRequested = false;
+      try {
+        recycleRequested = dependencies.requestWorkerRecycle?.() === true;
+      } catch {
+        /* release already succeeded; recovery falls back to a transport restart */
+      }
+      return okResult({
+        released: true,
+        sessionId: session.sessionId,
+        recycleRequested,
+        nextAction: recycleRequested
+          ? 'A fresh session is minted automatically; retry rn_session (bind_device, apply_integration) on this worktree.'
+          : 'No supervisor can mint a successor here; restart the MCP transport before the next rn_session action on this worktree.',
+      });
     } catch (error) {
       return authorityFailure(error);
     }
