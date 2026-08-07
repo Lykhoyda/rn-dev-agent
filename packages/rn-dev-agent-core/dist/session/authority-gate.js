@@ -128,6 +128,27 @@ function isAuthenticatedIdempotentRunnerClose(tool, args, result, initialStatus)
         return false;
     }
 }
+// Read from the durable offer/journal, not the arguments: a journal resume supplies
+// neither platform nor deviceId.
+function staleDeviceReleaseScope(tool, args, status) {
+    if (tool !== 'rn_session' || args.action !== 'release_stale_device')
+        return null;
+    const scope = (status.bindings.staleDeviceCleanup ?? status.bindings.staleDeviceRelease);
+    if (!scope || typeof scope.platform !== 'string' || typeof scope.deviceId !== 'string') {
+        return null;
+    }
+    return { platform: scope.platform, deviceId: scope.deviceId };
+}
+// `finishStaleResourceRelease` clears journal + offer and advances the generation in the
+// same transaction as the claim deletions, so observing all three proves the scoped
+// release committed — independently of whether this call still owns its fence.
+function staleDeviceReleaseCommitted(runtime, initialAuthorityVersion) {
+    const current = runtime.status();
+    return (current.available &&
+        current.authorityVersion > initialAuthorityVersion &&
+        !current.bindings.staleDeviceCleanup &&
+        !current.bindings.staleDeviceRelease);
+}
 function containedRunnerAuthority(result, runner) {
     if (!runner)
         return null;
@@ -539,6 +560,7 @@ export function createAuthorityGate(runtime, dependencies) {
                 let retainProofCleanupFence = false;
                 let beganProofRehearsal = false;
                 let publishedProofBinding = false;
+                let committedStaleDeviceRelease = null;
                 try {
                     const available = runtime.requireAvailable();
                     registry = available.registry;
@@ -606,6 +628,14 @@ export function createAuthorityGate(runtime, dependencies) {
                         return addMeta(result, { authoritative: false });
                     }
                     beganProofRehearsal = gateCommitsProof;
+                    const staleReleaseScope = staleDeviceReleaseScope(tool, args, initialStatus);
+                    if (staleReleaseScope) {
+                        committedStaleDeviceRelease = {
+                            result,
+                            scope: staleReleaseScope,
+                            initialAuthorityVersion,
+                        };
+                    }
                     if (tool === 'rn_session' && args.action === 'release') {
                         operation = null;
                         return addMeta(result, {
@@ -700,6 +730,22 @@ export function createAuthorityGate(runtime, dependencies) {
                             retainProofCleanupFence = operation !== null;
                             return authorityFailure(new AggregateError([error, rollbackError], 'PROOF_AUTHORITY_MISMATCH: rehearsal rollback failed'));
                         }
+                    }
+                    // Losing the fence AFTER the release committed is a real authority loss, but
+                    // failing the call would deny a side effect the registry still proves.
+                    if (committedStaleDeviceRelease &&
+                        staleDeviceReleaseCommitted(runtime, committedStaleDeviceRelease.initialAuthorityVersion)) {
+                        return addMeta(committedStaleDeviceRelease.result, {
+                            authoritative: false,
+                            authorityTransition: true,
+                            authorityLostAfterCommit: {
+                                code: authorityErrorCode(error) ?? 'AUTHORITY_LOST_DURING_OPERATION',
+                                reason: error instanceof Error ? error.message : String(error),
+                                released: committedStaleDeviceRelease.scope,
+                            },
+                            nextAction: 'The exact device release is committed. Re-read rn_session action "status" ' +
+                                'before the next fenced operation; this session no longer holds the fence it started with.',
+                        });
                     }
                     return authorityFailure(error);
                 }
