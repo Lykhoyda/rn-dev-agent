@@ -32,6 +32,10 @@ auth/deeplink, build quirks) and **Troubleshooting** (failure→resolution gotch
 
 ### 🚨 MANDATORY PRE-FLIGHT (before ANY device_* call)
 
+For a full journey (build, test, or proof end to end), `/rn-dev-agent:run-workflow`
+sequences the entire proven operating chain — preflight, typed session recovery,
+exclusive device, managed Metro, proof, reverse cleanup — in one contract.
+
 Run this 3-step checklist at the start of every UI-touching task. This is the
 single highest-leverage rule in the plugin — it prevents the most common
 failure mode (multi-minute manual `device_*` walks for flows that already
@@ -590,6 +594,7 @@ After implementing any feature, in this order:
 
 | Command | When to use |
 |---------|-------------|
+| `/rn-dev-agent:run-workflow [journey]` | Before any real device journey — validates and establishes the proven operating sequence (declared package manager + deps, typed session recovery, one exclusive device, managed Metro, reverse cleanup) |
 | `/rn-dev-agent:rn-feature-dev <desc>` | Building a new feature end-to-end (8-phase pipeline: explore, design, implement, verify) |
 | `/rn-dev-agent:test-feature` | Feature is implemented, need to verify it works on simulator |
 | `/rn-dev-agent:build-and-test` | Need to build from scratch (EAS/local), install, and test |

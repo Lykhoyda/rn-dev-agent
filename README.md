@@ -6,7 +6,7 @@
 
 A coding-agent plugin for **Claude Code** and **Codex** that turns an AI agent into a React Native development partner. It explores your codebase, designs architecture, implements features — then **proves everything works live on the simulator** by reading the component tree, store state, and navigation stack through the Chrome DevTools Protocol, driving the app like a user, and recording the evidence.
 
-**MCP tools for live React Native development** · **Claude: 15 slash commands + 10 skills** · **Codex: 15 explicit workflow skills + 10 domain skills (25 total)** · **118 best-practice rules** · [Full documentation](https://lykhoyda.github.io/rn-dev-agent/)
+**MCP tools for live React Native development** · **Claude: 16 slash commands + 11 skills** · **Codex: 16 explicit workflow skills + 11 domain skills (27 total)** · **118 best-practice rules** · [Full documentation](https://lykhoyda.github.io/rn-dev-agent/)
 
 ---
 
@@ -116,13 +116,14 @@ Codex:  $rn-dev-agent:rn-feature-dev add a shopping cart with badge, item list, 
 
 The tables use Claude spelling. Codex provides native explicit parity for every
 row: replace `/rn-dev-agent:<name>` with `$rn-dev-agent:<name>`. Codex exposes
-exactly these 15 workflow skills plus 10 domain skills; install-time
+exactly these 16 workflow skills plus 11 domain skills; install-time
 `source-command-*` migration is deliberately disabled.
 
 **Develop & test:**
 
 | Command | Purpose |
 |---------|---------|
+| `/rn-dev-agent:run-workflow <journey>` | Establish the proven operating sequence before a real device journey |
 | `/rn-dev-agent:rn-feature-dev <desc>` | Full 8-phase feature pipeline (above) |
 | `/rn-dev-agent:test-feature <desc>` | Test an already-implemented feature; auto-replays a matching saved action |
 | `/rn-dev-agent:debug-screen` | Diagnose and fix a broken screen — parallel evidence from CDP + native logs + component tree |
