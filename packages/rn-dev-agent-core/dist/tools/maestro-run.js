@@ -148,7 +148,7 @@ export async function executeMaestroAuthorityStages(commands, executeStage, clai
                     pendingOriginError = undefined;
                 }
                 catch (error) {
-                    if (!reproveManagedOrigin)
+                    if (!reproveManagedOrigin || error instanceof SessionAuthorityError)
                         throw error;
                     pendingOriginError = error;
                 }

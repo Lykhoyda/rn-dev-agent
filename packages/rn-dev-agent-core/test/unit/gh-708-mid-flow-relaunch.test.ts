@@ -14,6 +14,7 @@ import {
   MaestroStageExecutionError,
 } from '../../dist/tools/maestro-run.js';
 import { chooseMaestroDispatch } from '../../dist/tools/maestro-dispatch.js';
+import { SessionAuthorityError } from '../../dist/session/registry.js';
 
 const EXACT = '5C10B45B-2065-458B-B885-0F83F49747C8';
 const APP_ID = 'com.rndevagent.testapp';
@@ -143,6 +144,31 @@ test('GH#708: a relaunch failure with no re-prove authority still aborts', async
     /did not re-register after launch/,
   );
   assert.equal(stages.length, 1);
+});
+
+test('GH#708: a revoked session claim aborts immediately instead of deferring', async () => {
+  const trace = newTrace();
+  const revoked = new SessionAuthorityError(
+    'AUTHORITY_LOST_DURING_OPERATION',
+    'the session claim was revoked',
+  );
+  await assert.rejects(
+    runStages(
+      trace,
+      async () => {
+        throw revoked;
+      },
+      async () => {},
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof MaestroStageExecutionError);
+      assert.equal(error.stageError, revoked);
+      return true;
+    },
+  );
+  assert.equal(trace.stages.length, 2, 'no further stage may drive the device');
+  assert.equal(trace.reproves, 0);
+  assert.deepEqual(trace.completed, [false]);
 });
 
 function runnerLog(): string {

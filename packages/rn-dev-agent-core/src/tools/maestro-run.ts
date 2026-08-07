@@ -254,7 +254,7 @@ export async function executeMaestroAuthorityStages<T>(
           await relaunchManagedApp();
           pendingOriginError = undefined;
         } catch (error) {
-          if (!reproveManagedOrigin) throw error;
+          if (!reproveManagedOrigin || error instanceof SessionAuthorityError) throw error;
           pendingOriginError = error;
         }
       }
