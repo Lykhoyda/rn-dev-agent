@@ -13,7 +13,7 @@ import { outputIndicatesFlowFailure } from '../domain/maestro-error-parser.js';
 import { resolveAppFileForClearState } from './resolve-ios-app-file.js';
 import { maestroAuthorityRefusal, sameDevice, verifyMaestroDeviceAuthority, } from '../domain/maestro-device-authority.js';
 import { collectDirectRunnerEvidence, createRunnerReportDir, disposeRunnerReportDir, runnerReportArgs, } from '../domain/maestro-runner-report.js';
-import { completeManagedRunnerParkAuthority, claimManagedNativeOriginAuthority, completeManagedNativeOriginAuthority, relaunchManagedNativeOriginApp, } from '../session/authority-gate.js';
+import { completeManagedRunnerParkAuthority, claimManagedNativeOriginAuthority, completeManagedNativeOriginAuthority, relaunchManagedNativeOriginApp, reproveManagedNativeOrigin, } from '../session/authority-gate.js';
 import { SessionAuthorityError } from '../session/registry.js';
 const execFile = promisify(execFileCb);
 function discoverFlows(dir, pattern) {
@@ -169,7 +169,7 @@ export function createMaestroTestAllHandler() {
                         encoding: 'utf8',
                         maxBuffer: 10 * 1024 * 1024,
                     });
-                }, () => claimManagedNativeOriginAuthority(args), (targetExpected) => completeManagedNativeOriginAuthority(args, targetExpected), () => relaunchManagedNativeOriginApp(args)), {
+                }, () => claimManagedNativeOriginAuthority(args), (targetExpected) => completeManagedNativeOriginAuthority(args, targetExpected), () => relaunchManagedNativeOriginApp(args), () => reproveManagedNativeOrigin(args)), {
                     platform,
                     deviceId: requestedDeviceId,
                     completeRunnerPark: () => completeManagedRunnerParkAuthority(args),

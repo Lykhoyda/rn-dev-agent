@@ -55,6 +55,7 @@ import {
   hasManagedInstallReissueAuthority,
   reissueManagedInstallAuthority,
   relaunchManagedNativeOriginApp,
+  reproveManagedNativeOrigin,
 } from '../session/authority-gate.js';
 import { SessionAuthorityError } from '../session/registry.js';
 
@@ -126,6 +127,8 @@ export interface MaestroRunArgs {
   claimNativeOrigin?: () => Promise<void>;
   completeNativeOrigin?: (targetExpected: boolean) => Promise<void>;
   relaunchManagedApp?: () => Promise<void>;
+  /** GH #708: re-prove the managed origin at flow end without relaunching. */
+  reproveManagedOrigin?: () => Promise<void>;
   completeRunnerPark?: () => Promise<void>;
   /** GH #705: commit a new install receipt after a clearState reinstall. */
   reissueInstallReceipt?: (() => Promise<void>) | null;
@@ -135,6 +138,7 @@ export interface MaestroAuthorityCallbacks {
   claimNativeOrigin: () => Promise<void>;
   completeNativeOrigin: (targetExpected: boolean) => Promise<void>;
   relaunchManagedApp: () => Promise<void>;
+  reproveManagedOrigin: () => Promise<void>;
   completeRunnerPark: () => Promise<void>;
   reissueInstallReceipt: (() => Promise<void>) | null;
 }
@@ -145,6 +149,7 @@ export function nestedMaestroAuthorityCallbacks(args: object): MaestroAuthorityC
     completeNativeOrigin: (targetExpected) =>
       completeManagedNativeOriginAuthority(args, targetExpected),
     relaunchManagedApp: () => relaunchManagedNativeOriginApp(args),
+    reproveManagedOrigin: () => reproveManagedNativeOrigin(args),
     completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
     reissueInstallReceipt: hasManagedInstallReissueAuthority(args)
       ? () => reissueManagedInstallAuthority(args)
@@ -231,19 +236,39 @@ export async function executeMaestroAuthorityStages<T>(
   claimOrigin: () => Promise<void>,
   completeOrigin: (targetExpected: boolean) => Promise<void>,
   relaunchManagedApp: () => Promise<void>,
+  reproveManagedOrigin?: () => Promise<void>,
 ): Promise<T[]> {
   const plan = planMaestroAuthorityStages(commands);
   const results: T[] = [];
+  // GH #708: a relaunched dev-client can need the flow's own post-launch steps
+  // (dev-server picker) before it re-registers. Carry the failure to flow end
+  // instead of aborting between stages; the origin is still proven before this
+  // run can report success.
+  let pendingOriginError: unknown;
   for (const stage of plan.stages) {
-    if (stage.requiresOrigin) await claimOrigin();
+    if (stage.requiresOrigin && pendingOriginError === undefined) await claimOrigin();
     try {
       results.push(await executeStage(stage.commands));
       if (stage.commands.length === 1 && commandName(stage.commands[0]) === 'launchApp') {
-        await relaunchManagedApp();
+        try {
+          await relaunchManagedApp();
+          pendingOriginError = undefined;
+        } catch (error) {
+          if (!reproveManagedOrigin || error instanceof SessionAuthorityError) throw error;
+          pendingOriginError = error;
+        }
       }
     } catch (error) {
       await completeOrigin(false);
       throw new MaestroStageExecutionError(results, error);
+    }
+  }
+  if (pendingOriginError !== undefined) {
+    try {
+      await reproveManagedOrigin!();
+    } catch {
+      await completeOrigin(false);
+      throw new MaestroStageExecutionError(results, pendingOriginError);
     }
   }
   await completeOrigin(plan.targetExpected);
@@ -292,6 +317,7 @@ export interface MaestroRunDeps {
   claimNativeOrigin?: () => Promise<void>;
   completeNativeOrigin?: (targetExpected: boolean) => Promise<void>;
   relaunchManagedApp?: () => Promise<void>;
+  reproveManagedOrigin?: () => Promise<void>;
   reissueInstallReceipt?: () => Promise<void>;
   now?: () => number;
   execFile?: (
@@ -534,6 +560,10 @@ export function createMaestroRunHandler(
         managedAuthority.completeNativeOrigin;
       const relaunchManagedApp =
         args.relaunchManagedApp ?? deps.relaunchManagedApp ?? managedAuthority.relaunchManagedApp;
+      const reproveManagedOrigin =
+        args.reproveManagedOrigin ??
+        deps.reproveManagedOrigin ??
+        managedAuthority.reproveManagedOrigin;
       const stageResults = await parkFlow(
         () =>
           executeMaestroAuthorityStages(
@@ -559,6 +589,7 @@ export function createMaestroRunHandler(
             claimOrigin,
             completeOrigin,
             relaunchManagedApp,
+            reproveManagedOrigin,
           ),
         {
           platform,

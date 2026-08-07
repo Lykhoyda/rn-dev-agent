@@ -34,6 +34,18 @@ export async function relaunchManagedNativeOriginApp(args) {
     await authority.relaunch();
 }
 /**
+ * GH #708: re-prove the managed native origin after a mid-flow relaunch whose
+ * dev-client only re-registered once the flow's own post-launch steps ran.
+ * Reconnect-only — it never relaunches, so the flow's end state survives.
+ */
+export async function reproveManagedNativeOrigin(args) {
+    const authority = args[managedNativeOrigin];
+    if (!authority) {
+        throw new SessionAuthorityError('METRO_ORIGIN_MISMATCH', 'managed native origin re-prove authority is unavailable');
+    }
+    await authority.reprove();
+}
+/**
  * GH #705: commit a new install receipt after Maestro reinstalled the session's
  * own attested `.app` for a `clearState` flow. Refuses unless the freshly
  * installed bytes still hash to the bound receipt's artifactDigest.
@@ -997,6 +1009,18 @@ export function createAuthorityGate(runtime, dependencies) {
                                     throw new SessionAuthorityError('METRO_ORIGIN_MISMATCH', 'managed native origin relaunch is unavailable');
                                 }
                                 await dependencies.relaunchBoundRuntime(currentStatus);
+                                registry.verifyOperation(operation);
+                            },
+                            reprove: async () => {
+                                const currentStatus = runtime.status();
+                                if (!currentStatus.available) {
+                                    throw new SessionAuthorityError(currentStatus.code, currentStatus.reason);
+                                }
+                                registry.verifyOperation(operation);
+                                if (!dependencies.reconnectBoundRuntime) {
+                                    throw new SessionAuthorityError('METRO_ORIGIN_MISMATCH', 'managed native origin reconnect is unavailable');
+                                }
+                                await dependencies.reconnectBoundRuntime(currentStatus);
                                 registry.verifyOperation(operation);
                             },
                             complete: async (targetExpected) => {

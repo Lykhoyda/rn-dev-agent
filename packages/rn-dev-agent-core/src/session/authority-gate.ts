@@ -36,6 +36,7 @@ interface AuthorityGateDependencies {
   runtimeConnectionChanged?(status: SessionStatus): boolean;
   refreshRuntimeBinding?(status: SessionStatus): Promise<Record<string, unknown>>;
   relaunchBoundRuntime?(status: SessionStatus): Promise<void>;
+  reconnectBoundRuntime?(status: SessionStatus): Promise<void>;
   onRunnerReleased?(runner: Record<string, unknown>): Promise<void> | void;
   onRuntimeBundleInvalidated?(): void;
   reissueInstallBinding?(
@@ -54,6 +55,7 @@ type AuthorityAwareArgs = Record<string, unknown> & {
     claim(): Promise<void>;
     complete(targetExpected: boolean): Promise<void>;
     relaunch(): Promise<void>;
+    reprove(): Promise<void>;
   };
   [managedRunnerPark]?: () => Promise<void>;
   [managedInstallReissue]?: () => Promise<void>;
@@ -97,6 +99,22 @@ export async function relaunchManagedNativeOriginApp(args: object): Promise<void
     );
   }
   await authority.relaunch();
+}
+
+/**
+ * GH #708: re-prove the managed native origin after a mid-flow relaunch whose
+ * dev-client only re-registered once the flow's own post-launch steps ran.
+ * Reconnect-only — it never relaunches, so the flow's end state survives.
+ */
+export async function reproveManagedNativeOrigin(args: object): Promise<void> {
+  const authority = (args as AuthorityAwareArgs)[managedNativeOrigin];
+  if (!authority) {
+    throw new SessionAuthorityError(
+      'METRO_ORIGIN_MISMATCH',
+      'managed native origin re-prove authority is unavailable',
+    );
+  }
+  await authority.reprove();
 }
 
 /**
@@ -1359,6 +1377,21 @@ export function createAuthorityGate(
                     );
                   }
                   await dependencies.relaunchBoundRuntime(currentStatus);
+                  registry!.verifyOperation(operation!);
+                },
+                reprove: async () => {
+                  const currentStatus = runtime.status();
+                  if (!currentStatus.available) {
+                    throw new SessionAuthorityError(currentStatus.code, currentStatus.reason);
+                  }
+                  registry!.verifyOperation(operation!);
+                  if (!dependencies.reconnectBoundRuntime) {
+                    throw new SessionAuthorityError(
+                      'METRO_ORIGIN_MISMATCH',
+                      'managed native origin reconnect is unavailable',
+                    );
+                  }
+                  await dependencies.reconnectBoundRuntime(currentStatus);
                   registry!.verifyOperation(operation!);
                 },
                 complete: async (targetExpected: boolean) => {

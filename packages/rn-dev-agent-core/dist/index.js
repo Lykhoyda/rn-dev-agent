@@ -469,6 +469,7 @@ const authorityGate = createAuthorityGate(authorityRuntime, {
     },
     refreshRuntimeBinding: rebindSessionRuntime,
     relaunchBoundRuntime: relaunchSessionRuntime,
+    reconnectBoundRuntime: reconnectSessionRuntime,
     onRuntimeBundleInvalidated: () => getClient().clearAuthoritativeSessionPolicy(),
     onRunnerReleased: async (runner) => {
         if (runner.platform !== 'ios')
@@ -795,7 +796,7 @@ async function connectExactSessionTarget(input, timeoutMs) {
         execute: execFileP,
     });
 }
-async function relaunchSessionRuntime(status) {
+function resolveManagedRuntimeLaunchBinding(status) {
     const device = status.bindings.device;
     const metro = status.bindings.metro;
     const install = status.bindings.install;
@@ -809,9 +810,35 @@ async function relaunchSessionRuntime(status) {
         !Number.isSafeInteger(metroPort)) {
         throw new Error('METRO_ORIGIN_MISMATCH: managed replay launch authority is incomplete');
     }
+    return {
+        platform,
+        deviceId,
+        appId,
+        metroPort: Number(metroPort),
+        devClientUrl: typeof install.devClientUrl === 'string'
+            ? install.devClientUrl
+            : typeof device.devClientUrl === 'string'
+                ? device.devClientUrl
+                : null,
+    };
+}
+/**
+ * GH #708: re-establish the exact managed target without touching the app.
+ * A mid-flow relaunch whose dev-client only re-registers after the flow's own
+ * post-launch steps needs the connection back, not another cold start.
+ */
+async function reconnectSessionRuntime(status) {
+    const { platform, deviceId, appId, metroPort } = resolveManagedRuntimeLaunchBinding(status);
     const current = getClient();
     await current.disconnect();
-    setClient(createClient(Number(metroPort)));
+    setClient(createClient(metroPort));
+    await connectExactSessionTarget({ metroPort, platform, appId, deviceId }, 15_000);
+}
+async function relaunchSessionRuntime(status) {
+    const { platform, deviceId, appId, metroPort, devClientUrl: boundDevClientUrl, } = resolveManagedRuntimeLaunchBinding(status);
+    const current = getClient();
+    await current.disconnect();
+    setClient(createClient(metroPort));
     if (platform === 'ios') {
         await execFileP('xcrun', [
             'simctl',
@@ -824,21 +851,16 @@ async function relaunchSessionRuntime(status) {
         ]);
     }
     else {
-        const devClientUrl = typeof install.devClientUrl === 'string'
-            ? install.devClientUrl
-            : typeof device.devClientUrl === 'string'
-                ? device.devClientUrl
-                : null;
-        if (!devClientUrl) {
+        if (!boundDevClientUrl) {
             throw new Error('DEV_CLIENT_ENDPOINT_NOT_FOUND: managed Android replay requires the exact Dev Client URL');
         }
         await execFileP('adb', [
-            ...androidDeeplinkCommandArgs(devClientUrl, undefined, deviceId),
+            ...androidDeeplinkCommandArgs(boundDevClientUrl, undefined, deviceId),
             '-p',
             appId,
         ]);
     }
-    await connectExactSessionTarget({ metroPort: Number(metroPort), platform, appId, deviceId }, 15_000);
+    await connectExactSessionTarget({ metroPort, platform, appId, deviceId }, 15_000);
 }
 async function rebindSessionRuntime(status) {
     const device = status.bindings.device;

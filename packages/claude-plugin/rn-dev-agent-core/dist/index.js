@@ -29971,6 +29971,13 @@ async function relaunchManagedNativeOriginApp(args) {
   }
   await authority.relaunch();
 }
+async function reproveManagedNativeOrigin(args) {
+  const authority = args[managedNativeOrigin];
+  if (!authority) {
+    throw new SessionAuthorityError("METRO_ORIGIN_MISMATCH", "managed native origin re-prove authority is unavailable");
+  }
+  await authority.reprove();
+}
 async function reissueManagedInstallAuthority(args) {
   const reissue = args[managedInstallReissue];
   if (!reissue) {
@@ -30773,6 +30780,18 @@ function createAuthorityGate(runtime, dependencies) {
                 await dependencies.relaunchBoundRuntime(currentStatus);
                 registry2.verifyOperation(operation);
               },
+              reprove: async () => {
+                const currentStatus = runtime.status();
+                if (!currentStatus.available) {
+                  throw new SessionAuthorityError(currentStatus.code, currentStatus.reason);
+                }
+                registry2.verifyOperation(operation);
+                if (!dependencies.reconnectBoundRuntime) {
+                  throw new SessionAuthorityError("METRO_ORIGIN_MISMATCH", "managed native origin reconnect is unavailable");
+                }
+                await dependencies.reconnectBoundRuntime(currentStatus);
+                registry2.verifyOperation(operation);
+              },
               complete: async (targetExpected) => {
                 managedOriginCompleted = true;
                 managedOriginCompletedWithTarget = targetExpected;
@@ -31105,6 +31124,7 @@ function nestedMaestroAuthorityCallbacks(args) {
     claimNativeOrigin: () => claimManagedNativeOriginAuthority(args),
     completeNativeOrigin: (targetExpected) => completeManagedNativeOriginAuthority(args, targetExpected),
     relaunchManagedApp: () => relaunchManagedNativeOriginApp(args),
+    reproveManagedOrigin: () => reproveManagedNativeOrigin(args),
     completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
     reissueInstallReceipt: hasManagedInstallReissueAuthority(args) ? () => reissueManagedInstallAuthority(args) : null
   };
@@ -31156,20 +31176,36 @@ function planMaestroAuthorityStages(commands) {
   flushPending();
   return { stages, targetExpected };
 }
-async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin, completeOrigin, relaunchManagedApp) {
+async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin) {
   const plan = planMaestroAuthorityStages(commands);
   const results = [];
+  let pendingOriginError;
   for (const stage of plan.stages) {
-    if (stage.requiresOrigin)
+    if (stage.requiresOrigin && pendingOriginError === void 0)
       await claimOrigin();
     try {
       results.push(await executeStage(stage.commands));
       if (stage.commands.length === 1 && commandName(stage.commands[0]) === "launchApp") {
-        await relaunchManagedApp();
+        try {
+          await relaunchManagedApp();
+          pendingOriginError = void 0;
+        } catch (error2) {
+          if (!reproveManagedOrigin || error2 instanceof SessionAuthorityError)
+            throw error2;
+          pendingOriginError = error2;
+        }
       }
     } catch (error2) {
       await completeOrigin(false);
       throw new MaestroStageExecutionError(results, error2);
+    }
+  }
+  if (pendingOriginError !== void 0) {
+    try {
+      await reproveManagedOrigin();
+    } catch {
+      await completeOrigin(false);
+      throw new MaestroStageExecutionError(results, pendingOriginError);
     }
   }
   await completeOrigin(plan.targetExpected);
@@ -31313,6 +31349,7 @@ function createMaestroRunHandler(deps = {}) {
       const claimOrigin = args.claimNativeOrigin ?? deps.claimNativeOrigin ?? managedAuthority.claimNativeOrigin;
       const completeOrigin = args.completeNativeOrigin ?? deps.completeNativeOrigin ?? managedAuthority.completeNativeOrigin;
       const relaunchManagedApp = args.relaunchManagedApp ?? deps.relaunchManagedApp ?? managedAuthority.relaunchManagedApp;
+      const reproveManagedOrigin = args.reproveManagedOrigin ?? deps.reproveManagedOrigin ?? managedAuthority.reproveManagedOrigin;
       const stageResults = await parkFlow(() => executeMaestroAuthorityStages(validatedCommands, async (commands) => {
         const remainingTimeout = flowDeadline - now();
         if (remainingTimeout <= 0) {
@@ -31326,7 +31363,7 @@ function createMaestroRunHandler(deps = {}) {
           encoding: "utf8",
           maxBuffer: 10 * 1024 * 1024
         });
-      }, claimOrigin, completeOrigin, relaunchManagedApp), {
+      }, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin), {
         platform,
         deviceId: requestedDeviceId,
         completeRunnerPark: args.completeRunnerPark ?? managedAuthority.completeRunnerPark
@@ -71290,6 +71327,7 @@ function createRunActionHandler(deps = {}) {
   const claimNativeOrigin = deps.claimNativeOrigin ?? claimManagedNativeOriginAuthority;
   const completeNativeOrigin = deps.completeNativeOrigin ?? completeManagedNativeOriginAuthority;
   const relaunchManagedApp = deps.relaunchManagedApp ?? relaunchManagedNativeOriginApp;
+  const reproveManagedOrigin = deps.reproveManagedOrigin ?? reproveManagedNativeOrigin;
   const reissueInstallReceipt = deps.reissueInstallReceipt ?? reissueManagedInstallAuthority;
   const installReceipt = deps.installReceipt ?? boundInstallReceipt;
   const resolveAppFile = deps.resolveAppFile ?? ((appId, deviceId) => resolveIosAppFile(appId, { deviceId }));
@@ -71428,6 +71466,7 @@ function createRunActionHandler(deps = {}) {
         claimNativeOrigin: () => claimNativeOrigin(args),
         completeNativeOrigin: (targetExpected) => completeNativeOrigin(args, targetExpected),
         relaunchManagedApp: () => relaunchManagedApp(args),
+        reproveManagedOrigin: () => reproveManagedOrigin(args),
         completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
         reissueInstallReceipt: () => reissueInstallReceipt(args)
       });
@@ -71710,6 +71749,7 @@ function createRunActionHandler(deps = {}) {
         claimNativeOrigin: () => claimNativeOrigin(args),
         completeNativeOrigin: (targetExpected) => completeNativeOrigin(args, targetExpected),
         relaunchManagedApp: () => relaunchManagedApp(args),
+        reproveManagedOrigin: () => reproveManagedOrigin(args),
         completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
         reissueInstallReceipt: () => reissueInstallReceipt(args)
       });
@@ -78694,7 +78734,7 @@ function createMaestroTestAllHandler() {
             encoding: "utf8",
             maxBuffer: 10 * 1024 * 1024
           });
-        }, () => claimManagedNativeOriginAuthority(args), (targetExpected) => completeManagedNativeOriginAuthority(args, targetExpected), () => relaunchManagedNativeOriginApp(args)), {
+        }, () => claimManagedNativeOriginAuthority(args), (targetExpected) => completeManagedNativeOriginAuthority(args, targetExpected), () => relaunchManagedNativeOriginApp(args), () => reproveManagedNativeOrigin(args)), {
           platform,
           deviceId: requestedDeviceId,
           completeRunnerPark: () => completeManagedRunnerParkAuthority(args)
@@ -83003,6 +83043,7 @@ var authorityGate = createAuthorityGate(authorityRuntime, {
   },
   refreshRuntimeBinding: rebindSessionRuntime,
   relaunchBoundRuntime: relaunchSessionRuntime,
+  reconnectBoundRuntime: reconnectSessionRuntime,
   onRuntimeBundleInvalidated: () => getClient().clearAuthoritativeSessionPolicy(),
   onRunnerReleased: async (runner) => {
     if (runner.platform !== "ios")
@@ -83277,7 +83318,7 @@ async function connectExactSessionTarget2(input, timeoutMs) {
     execute: execFileP
   });
 }
-async function relaunchSessionRuntime(status) {
+function resolveManagedRuntimeLaunchBinding(status) {
   const device = status.bindings.device;
   const metro = status.bindings.metro;
   const install = status.bindings.install;
@@ -83288,9 +83329,26 @@ async function relaunchSessionRuntime(status) {
   if (platform !== "ios" && platform !== "android" || typeof deviceId !== "string" || typeof appId !== "string" || !Number.isSafeInteger(metroPort)) {
     throw new Error("METRO_ORIGIN_MISMATCH: managed replay launch authority is incomplete");
   }
+  return {
+    platform,
+    deviceId,
+    appId,
+    metroPort: Number(metroPort),
+    devClientUrl: typeof install.devClientUrl === "string" ? install.devClientUrl : typeof device.devClientUrl === "string" ? device.devClientUrl : null
+  };
+}
+async function reconnectSessionRuntime(status) {
+  const { platform, deviceId, appId, metroPort } = resolveManagedRuntimeLaunchBinding(status);
   const current = getClient();
   await current.disconnect();
-  setClient(createClient(Number(metroPort)));
+  setClient(createClient(metroPort));
+  await connectExactSessionTarget2({ metroPort, platform, appId, deviceId }, 15e3);
+}
+async function relaunchSessionRuntime(status) {
+  const { platform, deviceId, appId, metroPort, devClientUrl: boundDevClientUrl } = resolveManagedRuntimeLaunchBinding(status);
+  const current = getClient();
+  await current.disconnect();
+  setClient(createClient(metroPort));
   if (platform === "ios") {
     await execFileP("xcrun", [
       "simctl",
@@ -83302,17 +83360,16 @@ async function relaunchSessionRuntime(status) {
       `http://127.0.0.1:${String(metroPort)}`
     ]);
   } else {
-    const devClientUrl = typeof install.devClientUrl === "string" ? install.devClientUrl : typeof device.devClientUrl === "string" ? device.devClientUrl : null;
-    if (!devClientUrl) {
+    if (!boundDevClientUrl) {
       throw new Error("DEV_CLIENT_ENDPOINT_NOT_FOUND: managed Android replay requires the exact Dev Client URL");
     }
     await execFileP("adb", [
-      ...androidDeeplinkCommandArgs(devClientUrl, void 0, deviceId),
+      ...androidDeeplinkCommandArgs(boundDevClientUrl, void 0, deviceId),
       "-p",
       appId
     ]);
   }
-  await connectExactSessionTarget2({ metroPort: Number(metroPort), platform, appId, deviceId }, 15e3);
+  await connectExactSessionTarget2({ metroPort, platform, appId, deviceId }, 15e3);
 }
 async function rebindSessionRuntime(status) {
   const device = status.bindings.device;

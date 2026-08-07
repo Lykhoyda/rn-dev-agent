@@ -78,6 +78,8 @@ corepack yarn build:host-runtimes
 ## Validation Commands
 
 Use the smallest relevant set first, then broaden before pushing risky changes.
+Unit tests import the committed `dist/`, not `src/`, so run `corepack yarn
+build:core` after any source edit or the suite silently tests the old build.
 
 ```bash
 corepack yarn format:check
