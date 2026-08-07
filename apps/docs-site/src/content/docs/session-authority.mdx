@@ -52,7 +52,7 @@ Supervisor shutdown follows the same fail-closed resource cleanup. It first rese
 
 Session initialization is transactional: if port allocation, resource claiming, shared-knowledge preparation, or receipt creation fails, partial claims are released before startup reports the failure.
 
-When no matching live session or installed integration is available, the copied package adapter runs the original package script and user arguments unchanged. An explicit session ID is accepted only for the current canonical worktree and app root. When a session exists, unsupported command shapes or conflicting explicit flags fail rather than falling through.
+When the integration manifest has no session CLI, the copied package adapter runs the original package script and user arguments unchanged. When a session-capable integration is installed but no matching live session owns the worktree, the adapter exits with code 2 before starting the original script and names the supported repair: `rn_session(action="restore_integration", confirmed=true)`. An explicit session ID is accepted only for the current canonical worktree and app root. When a session exists, unsupported command shapes or conflicting explicit flags fail rather than falling through.
 
 ## What each source identity proves
 
