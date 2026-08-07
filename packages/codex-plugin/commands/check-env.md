@@ -14,6 +14,7 @@ Check each subsystem and report status as a table:
 
 | Subsystem | What to check | Source |
 |-----------|--------------|--------|
+| Source declaration | Git app roots declare nothing. Before the supervisor starts for a non-Git app root, check `RN_DEV_AGENT_DECLARED_ROOT` and `RN_DEV_AGENT_DECLARED_MANIFESTS` against the [session-authority contract](https://lykhoyda.github.io/rn-dev-agent/session-authority/#what-each-source-identity-proves) | `git rev-parse --show-toplevel`, then the two variables in the supervisor environment |
 | Session | Ready state, worktree, app, platform, exact device, Metro binding, and migration readiness | `rn_session(action="status")` |
 | Metro | Allocated and bound port for this session | `rn_session`, then `cdp_status` → `metro` |
 | CDP | Exact authority-bound target connected? | `rn_session`, then `cdp_status` → `cdp` |
@@ -23,6 +24,7 @@ If issues are found, suggest the appropriate fix:
 
 | Status | Fix |
 |--------|-----|
+| `NON_GIT_MANIFEST_REQUIRED` | Report this before setup or build, name the missing `RN_DEV_AGENT_DECLARED_ROOT` or `RN_DEV_AGENT_DECLARED_MANIFESTS` declaration, and point to the [session-authority contract](https://lykhoyda.github.io/rn-dev-agent/session-authority/#what-each-source-identity-proves) |
 | Session missing or not ready | Run setup, review/apply the integration preview, and bind the intended device and app |
 | Metro not found | Use literal `pnpm ios` or `pnpm android` through the confirmed integration |
 | No Hermes target | Open the bound app, then call `cdp_connect` for the exact signed target |
@@ -35,3 +37,10 @@ If issues are found, suggest the appropriate fix:
 Present results clearly with a pass/fail indicator for each subsystem.
 If the session is ready and passive diagnostics match its bindings, confirm
 the environment is ready for authoritative testing.
+
+Run the source-declaration row first: it is the only row that can fail before a
+session exists at all, so a non-Git project missing its declaration reports
+`NON_GIT_MANIFEST_REQUIRED` here rather than surfacing as an unexplained
+setup or build failure later. The full contract lives in the session-authority
+documentation ("What each source identity proves"); repeat only the two
+variable names here.

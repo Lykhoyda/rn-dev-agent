@@ -58,6 +58,15 @@ When the integration manifest has no session CLI, the copied package adapter run
 
 Normal development uses a coarse Git worktree identity, or a declared root plus declared-manifest hash for non-Git apps. That identity remains stable while source files are edited. Strict proof additionally freezes the Git HEAD and dirty-content digest.
 
+A Git worktree is detected from the app root itself and declares nothing. A non-Git application must instead declare its source identity explicitly, through two environment variables the supervisor reads before its worker starts:
+
+| Variable | Required value |
+|----------|----------------|
+| `RN_DEV_AGENT_DECLARED_ROOT` | The exact existing application root that contains the app root. |
+| `RN_DEV_AGENT_DECLARED_MANIFESTS` | A comma-separated list identifying the required existing manifest files, each resolved relative to that root. |
+
+Both are mandatory and neither is ever inferred, defaulted, or generated: the plugin never trusts the working directory as an implicit root and never writes a declaration on the caller's behalf. Refusals name this exact declaration path rather than sending you back to `status` — a missing root, a missing manifest list, or a declared manifest that does not exist all fail closed with `NON_GIT_MANIFEST_REQUIRED` and the two variable names, so the guidance stays actionable after diagnostic redaction. An app root outside the declared root fails with `NON_GIT_ROOT_MISMATCH`, and a manifest whose canonical path resolves outside it fails with `NON_GIT_MANIFEST_OUTSIDE_ROOT`; symlinks are resolved before containment is checked and are never broadly accepted. Declared identity is coarse by construction and remains ineligible for strict proof, which requires Git (`STRICT_PROOF_GIT_REQUIRED`).
+
 The strict dirty digest covers tracked changes, every untracked file, and every ignored file except native build/cache roots such as CocoaPods, Gradle, Expo, and platform build outputs. Local `node_modules`, Yarn cache, unplugged dependency stores, and signed Metro runtime-policy inputs are streamed into the digest with limits of 50,000 entries, 128 MB per file, 512 MB total, and 128 path levels. This includes symlink targets and external resolver roots. Strict proof additionally requires Metro started by the managed launcher, a serving root contained by the bound worktree, Node.js 22.15 or newer, one exact terminal integration block, a signed initial-bundle marker, exact device and install bindings, and the source and dirty digest.
 
 Managed Metro permits native `.node` addons only when their canonical paths remain inside the attested project, app, or dependency roots. Before loading an addon, the launcher records its stable bytes in the signed runtime-evidence chain and publishes a protected acknowledgement that the Metro child can read but cannot modify; after loading, it records completion and verifies that the bytes did not change. An addon outside those roots fails with `RN_DEV_AGENT_UNSUPPORTED_NATIVE_ADDON`, while missing, unstable, oversized, or unacknowledged evidence fails with `METRO_NATIVE_ADDON_EVIDENCE_UNAVAILABLE`.

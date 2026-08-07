@@ -9,6 +9,7 @@ import { startParentDeathWatch } from './lifecycle/parent-watch.js';
 import { LineSplitter } from './lifecycle/stdio-frames.js';
 import { SupervisorCore } from './lifecycle/supervisor-core.js';
 import { logger } from './logger.js';
+import { parseDeclaredManifests } from './session/declared-source-contract.js';
 import { inspectSessionOwner } from './session/process-owner.js';
 import { readProcessBirth } from './session/process-birth.js';
 import { resolveSourceIdentity } from './session/source-identity.js';
@@ -70,12 +71,9 @@ else {
     try {
         if (diagnosticContractProbe)
             throw new Error('DIAGNOSTIC_MODE_READ_ONLY');
-        const declaredManifests = process.env.RN_DEV_AGENT_DECLARED_MANIFESTS?.split(',')
-            .map((entry) => entry.trim())
-            .filter(Boolean);
         const source = resolveSourceIdentity(process.cwd(), {
             declaredRoot: process.env.RN_DEV_AGENT_DECLARED_ROOT,
-            declaredManifests,
+            declaredManifests: parseDeclaredManifests(process.env.RN_DEV_AGENT_DECLARED_MANIFESTS),
         });
         // L4: release a proven-dead same-root predecessor before claiming. Any refusal
         // (live/unproven owner, unproven obligation) falls through to the blocked path.

@@ -52,7 +52,11 @@ GitHub Issues, PRs, or the sibling workspace only when explicitly requested.
 - Codex-only host behavior: edit `packages/codex-plugin/`.
 - Host-neutral workflow knowledge: edit `packages/shared-agent-knowledge/`,
   mirror/adapt the affected files into both host packages, and run
-  `bash scripts/check-agent-package-sync.sh`.
+  `bash scripts/check-agent-package-sync.sh`. That gate compares Claude copies
+  byte-for-byte but Codex commands and adapted domain skills by file set only,
+  so a stale Codex adaptation passes silently — diff it yourself and re-apply
+  the edit in Codex's own wording (`$rn-dev-agent:` invocation form, no
+  `allowed-tools`).
 - Native runner behavior: edit `packages/rn-fast-runner/` or
   `packages/rn-android-runner/`, then run `corepack yarn build:host-runtimes`
   so both host packages carry fresh runner sources.

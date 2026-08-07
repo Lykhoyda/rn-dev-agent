@@ -18,6 +18,30 @@ This skill checks every prerequisite and installs missing dependencies.
 
 ## Checklist — run each check in order
 
+Resolve `APP_ROOT` to the exact existing target React Native app directory before
+starting the checklist. Use the app selected by the user or the uniquely matching
+app from the available project evidence; in a monorepo, use the nested app
+directory rather than the repository root. If multiple candidates remain, ask
+which app is authoritative. Never run check 0 with `APP_ROOT` unset or empty.
+
+### 0. Source declaration (non-Git app roots only)
+
+The session binds one source identity before any setup or build step runs. A Git
+app root is detected automatically and declares nothing. A non-Git app root has
+no such identity and must declare one explicitly, or every authoritative tool
+refuses with `NON_GIT_MANIFEST_REQUIRED`.
+
+```bash
+git -C "$APP_ROOT" rev-parse --show-toplevel 2>/dev/null && echo GIT || echo NON_GIT
+```
+
+`GIT` → report `N/A (Git worktree)` and move on. `NON_GIT` → check the
+supervisor environment for `RN_DEV_AGENT_DECLARED_ROOT` and
+`RN_DEV_AGENT_DECLARED_MANIFESTS`. Report `MISSING_ROOT`,
+`MISSING_MANIFEST_LIST`, or `MISSING_MANIFEST`, then point to the
+[session-authority contract](https://lykhoyda.github.io/rn-dev-agent/session-authority/#what-each-source-identity-proves).
+Setup diagnoses this preflight; it never supplies a declaration.
+
 ### 1. Node.js version
 ```bash
 node --version
@@ -256,6 +280,7 @@ Present results as a table:
 
 | Check | Status | Action Needed |
 |-------|--------|--------------|
+| Source declaration | N/A (Git worktree) / OK (declared) / MISSING_ROOT / MISSING_MANIFEST_LIST / MISSING_MANIFEST | Name the missing `RN_DEV_AGENT_DECLARED_ROOT` or `RN_DEV_AGENT_DECLARED_MANIFESTS` declaration and point to the [session-authority contract](https://lykhoyda.github.io/rn-dev-agent/session-authority/#what-each-source-identity-proves) |
 | Node.js | OK (v22.18.0) | — |
 | CDP bridge | OK | — |
 | rn-fast-runner (iOS) | OK (built) / NEEDS_BUILD / N/A (non-macOS) | NEEDS_BUILD self-builds on first use (slow); offer the one-time `xcodebuild build-for-testing` to skip the wait (see check 3 above) |
@@ -293,6 +318,7 @@ Setup is boring — agents skip it and pay for it later.
 | "rn-fast-runner build is fine, it'll lazy-build on demand" | True now, but with a caveat. `startFastRunner()` runs `xcodebuild build-for-testing` + `test-without-building` when no `.xctestrun` exists (#424 — the build artifact persists, so only the FIRST call ever is slow), so the first `device_snapshot action=open` self-builds and succeeds on a fresh machine — it does NOT fail with "no such file or directory" anymore. The cost is latency: that first call blocks for several minutes while Xcode compiles. Offer check 3's one-time `build-for-testing` to move that cost out of the first interaction; don't claim the runner is "broken" when it's just cold-building. |
 | "I'll skip the Metro check — I'll start it later when I need it" | Without Metro, `cdp_status` fails, Phase 5.5 fails, and the whole pipeline stops. Start Metro FIRST. |
 | "The user can pre-build the device runner themselves" | They ran `/rn-dev-agent:setup` expecting guidance. Give them the exact pre-build command for their target (iOS: the `xcodebuild build-for-testing` form in check 3; Android: `./gradlew assembleDebug assembleDebugAndroidTest` in check 3b) — don't punt. |
+| "The project isn't in Git, but setup can continue without source declarations" | It cannot. Check `RN_DEV_AGENT_DECLARED_ROOT` and `RN_DEV_AGENT_DECLARED_MANIFESTS` first, then follow the [session-authority contract](https://lykhoyda.github.io/rn-dev-agent/session-authority/#what-each-source-identity-proves); surface `NON_GIT_MANIFEST_REQUIRED` before setup or build. |
 | "I'll proceed with the feature — setup can be done in parallel" | No. Feature development depends on critical checks passing (steps 10 + 11 are optional — N/A when no physical device, OFFLINE acceptable for the version check). Get the environment green first, then proceed. |
 
 ## Red Flags — Stop and Reconsider
@@ -305,6 +331,7 @@ Setup is boring — agents skip it and pay for it later.
 
 ## Verification — Setup Complete When
 
+- [ ] Source-declaration row is `N/A (Git worktree)` or `OK (declared)` under the canonical session-authority contract
 - [ ] Node.js is an even-numbered version >= 22.18 (v22.18+, v24, NOT v23, v25)
 - [ ] `corepack yarn workspace rn-dev-agent-core exec npm ls --depth=0` shows no WARN/ERR
 - [ ] **Android targets**: `packages/rn-android-runner/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk` exists (build once via `./gradlew assembleDebug assembleDebugAndroidTest`) — only required if targeting Android; iOS uses the in-tree `rn-fast-runner` (D1219)
