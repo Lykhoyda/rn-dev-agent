@@ -1,5 +1,15 @@
 # rn-dev-agent-plugin
 
+## 0.75.4
+
+### Patch Changes
+
+- 2d4b44f: Let a Maestro flow containing a mid-flow `launchApp` relaunch run to completion by re-proving the managed native origin once at flow end — reconnect-only, with no second cold start — instead of aborting between stages when the relaunched dev-client has not re-registered yet, so the flow's own post-launch steps can drive it back to the managed origin while a genuine authority mismatch still fails the run.
+- 722349e: Let `cdp_restart hardReset=true` complete the cold start it promises from a runner-bound session by classifying a terminated-but-unreaped process as absent rather than as an unreadable identity, and by escalating the bound runner's stop to SIGKILL after its SIGTERM grace once the pid is re-proven to carry that binding's exact birth token.
+- Updated dependencies [2d4b44f]
+- Updated dependencies [722349e]
+  - rn-dev-agent-core@0.70.4
+
 ## 0.75.3
 
 ### Patch Changes
