@@ -1,5 +1,11 @@
 # rn-dev-agent-core
 
+## 0.70.2
+
+### Patch Changes
+
+- 661979e: Capture navigation-initiating taps on controls mounted before recording starts without duplicating app handler calls, so saved open/close actions begin with the initiating tap instead of an unreachable visibility assertion.
+
 ## 0.70.1
 
 ### Patch Changes
