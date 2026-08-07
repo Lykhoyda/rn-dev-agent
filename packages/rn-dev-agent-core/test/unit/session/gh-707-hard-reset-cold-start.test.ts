@@ -84,6 +84,50 @@ test(
   },
 );
 
+test('GH #707: escalation never SIGKILLs a pid that no longer carries this binding’s birth', async () => {
+  const binding = {
+    platform: 'ios',
+    deviceId: 'A1B2C3D4-1111-2222-3333-444455556666',
+    pid: 4242,
+    processBirth: 'birth-mine',
+    instanceId: 'runner-707',
+    capability: 'runner-capability-707',
+  };
+  const escalate = async (birthAfterGrace: string): Promise<string[]> => {
+    const signals: string[] = [];
+    let probes = 0;
+    // A zero grace makes the poll schedule exact: probe 1 admits the binding,
+    // probe 2 closes the grace window, probe 3 IS the escalation re-probe.
+    const probe = (): { status: 'present'; birth: { token: string } } => {
+      probes += 1;
+      return {
+        status: 'present',
+        birth: { token: probes <= 2 ? 'birth-mine' : birthAfterGrace },
+      };
+    };
+    await stopBoundRunner(
+      binding,
+      probe as never,
+      (_pid: number, signal: NodeJS.Signals) => signals.push(signal),
+      300,
+      async () => ({ stdout: '', stderr: '' }),
+      0,
+    ).catch(() => {});
+    return signals;
+  };
+
+  assert.deepEqual(
+    await escalate('birth-mine'),
+    ['SIGTERM', 'SIGKILL'],
+    'a runner still proven to be mine may be escalated',
+  );
+  assert.deepEqual(
+    await escalate('birth-someone-else'),
+    ['SIGTERM'],
+    'a pid recycled inside the grace window must never be killed',
+  );
+});
+
 test(
   'GH #707: hardReset has a reachable cold start — the runner-bound state must not refuse it',
   { skip: supported ? false : 'process-birth probes are POSIX-only here' },
