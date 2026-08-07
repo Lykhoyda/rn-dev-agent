@@ -1,5 +1,13 @@
 # rn-dev-agent-plugin
 
+## 0.75.3
+
+### Patch Changes
+
+- 3563b3c: Report a stale-device release that already committed as a success naming the lost fence, instead of failing the whole call with `AUTHORITY_LOST_DURING_OPERATION` when the authority generation moves on after the commit.
+- Updated dependencies [3563b3c]
+  - rn-dev-agent-core@0.70.3
+
 ## 0.75.2
 
 ### Patch Changes
