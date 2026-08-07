@@ -98,9 +98,11 @@ function blockedContender() {
 function withAuthorityGate(
   runtime: WorkerAuthorityRuntime,
   handler: ReturnType<typeof createSessionHandler>,
-  probe: (input: { axis: string; phase: string }) => Promise<{ axis: string; identity: string }> = ({
-    axis,
-  }) => Promise.resolve({ axis, identity: `${axis}-stable` }),
+  probe: (input: {
+    axis: string;
+    phase: string;
+  }) => Promise<{ axis: string; identity: string }> = ({ axis }) =>
+    Promise.resolve({ axis, identity: `${axis}-stable` }),
 ): ReturnType<typeof createSessionHandler> {
   return createAuthorityGate(runtime as never, {
     probe: probe as never,
