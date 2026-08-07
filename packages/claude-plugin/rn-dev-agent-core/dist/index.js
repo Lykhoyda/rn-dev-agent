@@ -69545,10 +69545,7 @@ var START_RECORDING_JS = `(function() {
   globalThis.__METRO_MCP_REC_TRUNCATED__ = false;
   globalThis.__METRO_MCP_NAV_REF_CACHE__ = null;
 
-  // Session token: protects against stale wrappers from a previous start-stop
-  // cycle. Frozen props can't be mutated to clear obj.__mcpRecSession after
-  // cleanup, so wrappers from session 1 still call when session 2 begins.
-  // Each wrapper checks this token against the current global before pushing.
+  // Session-scoped markers prevent stale wrappers from emitting into later recordings.
   var sessionId = String(Date.now()) + '_' + Math.random().toString(36).slice(2);
   globalThis.__METRO_MCP_REC_SESSION__ = sessionId;
 
@@ -69630,7 +69627,7 @@ var START_RECORDING_JS = `(function() {
   // versions become the frozen ones. Idempotent via obj.__mcpRec.
   var origFreeze = Object.freeze;
   Object.freeze = function(obj) {
-    if (globalThis.__METRO_MCP_REC_ACTIVE__ && obj && typeof obj === 'object' && !Array.isArray(obj) && !obj.__mcpRec) {
+    if (globalThis.__METRO_MCP_REC_ACTIVE__ && obj && typeof obj === 'object' && !Array.isArray(obj) && obj.__mcpRec !== sessionId) {
       var tid = obj.testID || null;
       var lbl = obj.accessibilityLabel || obj['aria-label'] || null;
       var wrapped = false;
@@ -69745,20 +69742,55 @@ var START_RECORDING_JS = `(function() {
         };
         wrapped = true;
       }
-      if (wrapped) obj.__mcpRec = true;
+      if (wrapped) obj.__mcpRec = sessionId;
     }
     return origFreeze.call(this, obj);
   };
 
-  // --- Re-render walk for already-mounted scroll containers ---
-  // Object.freeze only fires on FUTURE renders. Existing ScrollViews missed
-  // the interceptor. Force-render them so their props go through Object.freeze
-  // again. M8 pattern: 1..5 renderer loop for fiber root resolution.
+  // Re-render already-mounted scroll containers and handler owners through Object.freeze.
   (function() {
-    var renderer = null;
-    try {
-      hook.renderers.forEach(function(r) { if (!renderer) renderer = r; });
-    } catch (e) {}
+    function forceRerender(fiber, renderer) {
+      if (!fiber) return;
+      if (fiber.stateNode && typeof fiber.stateNode.forceUpdate === 'function') {
+        try { fiber.stateNode.forceUpdate(); } catch (e) {}
+      } else if (renderer && renderer.overrideProps) {
+        try { renderer.overrideProps(fiber, ['__mcpInit'], 1); } catch (e) {}
+      }
+    }
+
+    // B145: re-render the nearest composite ancestor because it created the handler props.
+    function isInteractiveFiber(fiber) {
+      var p = fiber.memoizedProps;
+      if (!p || typeof p !== 'object' || p.__mcpRec === sessionId) return false;
+      return typeof p.onPress === 'function' ||
+             typeof p.onLongPress === 'function' ||
+             typeof p.onChangeText === 'function' ||
+             typeof p.onSubmitEditing === 'function' ||
+             // Match B141: onFocus counts only when the same props object has no onPress.
+             (typeof p.onFocus === 'function' && typeof p.onPress !== 'function');
+    }
+
+    function isRenderOwningComposite(fiber) {
+      var type = fiber.type;
+      if (typeof type === 'function') return true;
+      if (!type || typeof type !== 'object') return false;
+      var marker = type.$$typeof;
+      return marker === Symbol.for('react.memo') ||
+             marker === Symbol.for('react.forward_ref') ||
+             marker === Symbol.for('react.lazy');
+    }
+
+    function compositeAncestor(fiber) {
+      var f = fiber.return;
+      var hops = 0;
+      while (f && hops < 50) {
+        // Host fibers do not recreate the target's props when re-rendered.
+        if (isRenderOwningComposite(f)) return f;
+        f = f.return;
+        hops++;
+      }
+      return null;
+    }
 
     function isScrollFiber(fiber) {
       var cn = typeof fiber.type === 'string'
@@ -69778,26 +69810,63 @@ var START_RECORDING_JS = `(function() {
       ));
     }
 
-    var stack = [];
-    for (var ri = 1; ri <= 5; ri++) {
-      var roots = hook.getFiberRoots(ri);
-      if (roots && roots.size > 0) {
-        Array.from(roots).forEach(function(r) { stack.push({ f: r.current, d: 0 }); });
-        break;
+    var rendererEntries = [];
+    function addRendererEntry(id, renderer) {
+      for (var rei = 0; rei < rendererEntries.length; rei++) {
+        if (rendererEntries[rei].id === id) return;
       }
+      rendererEntries.push({ id: id, renderer: renderer });
+    }
+    for (var ri = 1; ri <= 5; ri++) {
+      var fallbackRenderer = null;
+      try {
+        if (hook.renderers && typeof hook.renderers.get === 'function') {
+          fallbackRenderer = hook.renderers.get(ri) || null;
+        }
+      } catch (e) {}
+      addRendererEntry(ri, fallbackRenderer);
+    }
+    try {
+      if (hook.renderers && typeof hook.renderers.forEach === 'function') {
+        hook.renderers.forEach(function(renderer, id) { addRendererEntry(id, renderer); });
+      }
+    } catch (e) {}
+
+    var stack = [];
+    var handlerTargets = [];
+    for (var re = 0; re < rendererEntries.length; re++) {
+      var entry = rendererEntries[re];
+      var roots = null;
+      try { roots = hook.getFiberRoots(entry.id); } catch (e) { continue; }
+      if (!roots || roots.size === 0) continue;
+      Array.from(roots).forEach(function(r) {
+        if (r && r.current) stack.push({ f: r.current, d: 0, r: entry.renderer });
+      });
     }
     while (stack.length) {
       var item = stack.pop(); var fiber = item.f; var depth = item.d;
       if (!fiber || depth > 200) continue;
-      if (isScrollFiber(fiber) && fiber.memoizedProps && !fiber.memoizedProps.__mcpRec) {
-        if (fiber.stateNode && typeof fiber.stateNode.forceUpdate === 'function') {
-          try { fiber.stateNode.forceUpdate(); } catch (e) {}
-        } else if (renderer && renderer.overrideProps) {
-          try { renderer.overrideProps(fiber, ['__mcpInit'], 1); } catch (e) {}
-        }
+      if (isScrollFiber(fiber) && fiber.memoizedProps && fiber.memoizedProps.__mcpRec !== sessionId) {
+        forceRerender(fiber, item.r);
       }
-      if (fiber.sibling) stack.push({ f: fiber.sibling, d: depth });
-      if (fiber.child)   stack.push({ f: fiber.child,   d: depth + 1 });
+      if (isInteractiveFiber(fiber)) {
+        var anc = compositeAncestor(fiber);
+        // Dedup: one screen with 20 buttons must re-render once, not 20 times.
+        var targeted = false;
+        for (var ti = 0; ti < handlerTargets.length; ti++) {
+          if (handlerTargets[ti].f === anc && handlerTargets[ti].r === item.r) {
+            targeted = true;
+            break;
+          }
+        }
+        if (anc && !targeted) handlerTargets.push({ f: anc, r: item.r });
+      }
+      if (fiber.sibling) stack.push({ f: fiber.sibling, d: depth, r: item.r });
+      if (fiber.child)   stack.push({ f: fiber.child,   d: depth + 1, r: item.r });
+    }
+    // Defer forcing because it mutates the tree being traversed.
+    for (var k = 0; k < handlerTargets.length; k++) {
+      forceRerender(handlerTargets[k].f, handlerTargets[k].r);
     }
   })();
 
