@@ -1,5 +1,17 @@
 # rn-dev-agent-plugin
 
+## 0.74.6
+
+### Patch Changes
+
+- f20c90f: Resolve a fresh session for the next worker when the current one is released or proven stale, so `rn_session action=release` is no longer a `SESSION_OWNER_LOST` dead end and released or proven-stale rows never trigger a spurious `SESSION_AUTHORITY_REQUIRED: multiple live sessions`.
+- b219094: Name the exact non-Git declaration remedy — `RN_DEV_AGENT_DECLARED_ROOT` for the exact existing application root and `RN_DEV_AGENT_DECLARED_MANIFESTS` for the required existing manifest files — in `NON_GIT_MANIFEST_REQUIRED` refusals, unavailable session status, and the canonical session-authority, setup, and readiness-workflow documentation, while keeping refusal and mutation behavior, Git-worktree identity, implicit-directory distrust, symlink containment, and the never-generated declaration unchanged.
+- 6716c15: Refuse orphaned integrated builds with exit code 2 and the supported `restore_integration` repair instead of starting an unmanaged bundler, and bound every stdio-capturing session-CLI wait so wedged CLIs fail typed; projects integrated by an earlier version must re-apply integration to refresh their on-disk adapter.
+- Updated dependencies [f20c90f]
+- Updated dependencies [b219094]
+- Updated dependencies [6716c15]
+  - rn-dev-agent-core@0.69.6
+
 ## 0.74.5
 
 ### Patch Changes
