@@ -249,19 +249,23 @@ export async function stopBoundRunner(binding, processProbe = probeProcessBirth,
                 : 'stopped';
         };
         const message = 'runner process did not stop before the cleanup deadline';
-        signalProcess(pid, 'SIGTERM');
+        const signalTolerated = (value) => {
+            try {
+                signalProcess(pid, value);
+            }
+            catch { }
+        };
+        signalTolerated('SIGTERM');
         const graceDeadlineMs = Math.min(deadlineMs, Date.now() + termGraceMs);
         if (!(await awaitExactStopped(observeStop, graceDeadlineMs, 'RUNNER_ADOPTION_REQUIRED', message))) {
-            // The iOS runner is an xcodebuild test host that does not unwind on a
-            // single SIGTERM. Escalate — but only after re-proving the pid still
-            // carries this binding's exact birth token, so a reused pid or another
-            // session's runner is never killed (GH #707).
+            // Escalate only while the pid still carries this binding's exact birth
+            // token, so a reused pid or another session's runner is never killed.
             const escalation = processProbe(pid);
             if (escalation.status === 'unknown') {
                 throw new SessionAuthorityError('RUNNER_ADOPTION_REQUIRED', `${message}; shutdown identity is unknown`);
             }
             if (escalation.status === 'present' && escalation.birth.token === expectedBirth) {
-                signalProcess(pid, 'SIGKILL');
+                signalTolerated('SIGKILL');
             }
             await waitForExactStopped(observeStop, deadlineMs, 'RUNNER_ADOPTION_REQUIRED', message);
         }

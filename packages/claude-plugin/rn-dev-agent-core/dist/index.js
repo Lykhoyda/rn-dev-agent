@@ -65046,7 +65046,13 @@ async function stopBoundRunner(binding, processProbe = probeProcessBirth, signal
       return observed.status === "present" && observed.birth.token === expectedBirth ? "running" : "stopped";
     };
     const message = "runner process did not stop before the cleanup deadline";
-    signalProcess(pid, "SIGTERM");
+    const signalTolerated = (value) => {
+      try {
+        signalProcess(pid, value);
+      } catch {
+      }
+    };
+    signalTolerated("SIGTERM");
     const graceDeadlineMs = Math.min(deadlineMs, Date.now() + termGraceMs);
     if (!await awaitExactStopped(observeStop, graceDeadlineMs, "RUNNER_ADOPTION_REQUIRED", message)) {
       const escalation = processProbe(pid);
@@ -65054,7 +65060,7 @@ async function stopBoundRunner(binding, processProbe = probeProcessBirth, signal
         throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", `${message}; shutdown identity is unknown`);
       }
       if (escalation.status === "present" && escalation.birth.token === expectedBirth) {
-        signalProcess(pid, "SIGKILL");
+        signalTolerated("SIGKILL");
       }
       await waitForExactStopped(observeStop, deadlineMs, "RUNNER_ADOPTION_REQUIRED", message);
     }

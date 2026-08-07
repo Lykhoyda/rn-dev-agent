@@ -114,7 +114,9 @@ test(
       () => {},
       () => client as never,
       {
-        // Mirrors how index.ts wires cdp_restart to the session-bound runner.
+        // Covers the stopBoundRunner half of index.ts's stopFastRunner wiring;
+        // clearFastRunnerAfterVerifiedStop is omitted to keep this test off
+        // persisted runner state.
         stopFastRunner: async () => {
           await stopBoundRunner(binding);
         },
