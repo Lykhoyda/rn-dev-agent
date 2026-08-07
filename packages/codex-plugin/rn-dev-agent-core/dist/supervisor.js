@@ -28087,7 +28087,7 @@ async function executeMaestroAuthorityStages(commands, executeStage, claimOrigin
           await relaunchManagedApp();
           pendingOriginError = void 0;
         } catch (error2) {
-          if (!reproveManagedOrigin)
+          if (!reproveManagedOrigin || error2 instanceof SessionAuthorityError)
             throw error2;
           pendingOriginError = error2;
         }
