@@ -193,6 +193,9 @@ interpreter pin is required; a bare `pipx install fb-idb` resolves the newest Py
 and recreates the break): `brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install --python python3.13 --force fb-idb`.
 On a machine with no supported interpreter, prepend the interpreter install:
 `brew install python@3.13 && ...` (same form `install_command()` produces).
+When the client is OK and only the companion is missing, give the companion half
+alone — `brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion`
+(same form `companion_command()` produces) — never the fb-idb reinstall.
 
 ### 11. Physical device prerequisites (optional — M9 / Phase 111)
 
@@ -301,7 +304,7 @@ Present results as a table:
 | CDP connection | CONNECTED | — |
 | Injected helpers | OK / MISSING | If MISSING: fall back to `device_*` tools or call `cdp_reload`. Do not retry `cdp_status` in a loop. |
 | ffmpeg | OK (v7.1) | — |
-| idb (screen mirror fast path) | OK / INSTALLING (background) / BROKEN (installed, did not respond) / MISSING | If MISSING or BROKEN: `brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install --python python3.13 --force fb-idb`, prefixed with `brew install python@3.13 &&` when no supported interpreter is installed. The `--python` pin is required (GH#578). Report the incompatibility as the probable cause, not a certainty. Optional — mirror falls back to ~6fps simctl |
+| idb (screen mirror fast path) | OK / INSTALLING (background) / BROKEN (installed, did not respond) / MISSING | If MISSING or BROKEN: `brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install --python python3.13 --force fb-idb`, prefixed with `brew install python@3.13 &&` when no supported interpreter is installed. If only the companion is missing, drop the `pipx` half. The `--python` pin is required (GH#578). Report the incompatibility as the probable cause, not a certainty. Optional — mirror falls back to ~6fps simctl |
 | Physical devices | N/A (none connected) OR "Android USB reverse: OK" / "iOS: idb-companion missing — install with brew" | Run installed command if iOS-companion missing |
 | Plugin version | OK (latest) / BEHIND (installed X, latest Y) / OFFLINE / AHEAD (dev install) | Run: `/plugin update rn-dev-agent` if BEHIND |
 | Vercel rules sync | OK (N rules, fetched X days ago) / STALE (> 30 days) / MISSING / DRIFT / N/A (installed plugin) | Repo checkout only: node scripts/sync-vercel-skills.mjs --fix --ref \<sha\> |

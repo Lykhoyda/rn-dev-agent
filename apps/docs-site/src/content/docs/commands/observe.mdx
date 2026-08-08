@@ -42,7 +42,7 @@ The page is a three-pane layout:
 | Pane | Contents |
 |------|----------|
 | **Timeline** (left) | Every tool call as it happens — colour-coded by family (interaction, introspection, navigation, lifecycle, testing), with duration, success/failure, and self-healing "ghost" markers. Filter by family, free-text search, or errors-only. Click an event to inspect its arguments and (redacted) payload; events that produced a screenshot show it inline. |
-| **Device mirror** (middle) | A live mirror of the simulator/emulator screen. iOS uses `idb video-stream` when `idb` + `idb-companion` are installed, falling back to a `simctl` screenshot loop otherwise; Android streams `adb screenrecord` through `ffmpeg`. The current route is overlaid as it changes. |
+| **Device mirror** (middle) | A live mirror of the simulator/emulator screen. iOS uses `idb video-stream` when `idb` + `idb-companion` are installed and the client actually runs, falling back to a `simctl` screenshot loop otherwise — an installed-but-crashing client is reported as an interpreter incompatibility, not as a missing install; Android streams `adb screenrecord` through `ffmpeg`. The current route is overlaid as it changes. |
 | **State** (right) | Five tabs: **Route** (latest navigation state), **Store** (latest Zustand/Redux snapshot), **Tree** (latest component tree), **Actions**, and **E2E**. The first three update whenever the agent reads that state — you're seeing exactly what the agent saw. |
 
 ## Using observe with actions
