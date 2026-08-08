@@ -15109,6 +15109,7 @@ import { tmpdir } from "node:os";
 import { join as join7 } from "node:path";
 var WAIT_BUFFER = new Int32Array(new SharedArrayBuffer(4));
 var WORKER_READY_TIMEOUT_MS = 3e4;
+var WORKER_OPERATION_TIMEOUT_MS = 3e4;
 var BOUND_DIRECTORY_LIFECYCLE_MONITOR = String.raw`
 const fs = require('node:fs');
 const path = require('node:path');
@@ -16404,7 +16405,7 @@ function runBoundOperation(directory, request, dependencies = {}) {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound directory path changed");
   }
   try {
-    const result = sendOperation(directory, request, dependencies.timeoutMs ?? 5e3);
+    const result = sendOperation(directory, request, dependencies.timeoutMs ?? WORKER_OPERATION_TIMEOUT_MS);
     if (!result.ok)
       throwOperationFailure(result);
     if (request.operation === "cas" && result.cleanupPending) {
@@ -16418,7 +16419,7 @@ function runBoundOperation(directory, request, dependencies = {}) {
           cleanupRecoveryDelayMs: dependencies.cleanupRecoveryDelayMs ?? 0,
           journal: request.journal,
           writes: request.writes
-        }, dependencies.recoveryTimeoutMs ?? 5e3);
+        }, dependencies.recoveryTimeoutMs ?? WORKER_OPERATION_TIMEOUT_MS);
         if (!cleanup.ok)
           throwOperationFailure(cleanup);
         if (!cleanup.committed) {
@@ -16435,7 +16436,7 @@ function runBoundOperation(directory, request, dependencies = {}) {
               failCleanupRecovery: dependencies.failCleanupRecovery ?? false,
               journal: request.journal,
               writes: request.writes
-            }, dependencies.recoveryTimeoutMs ?? 5e3);
+            }, dependencies.recoveryTimeoutMs ?? WORKER_OPERATION_TIMEOUT_MS);
             if (!cleanup.ok)
               throwOperationFailure(cleanup);
             if (!cleanup.committed) {
@@ -16467,7 +16468,7 @@ function runBoundOperation(directory, request, dependencies = {}) {
           journal: request.journal,
           writes: request.writes,
           recoveryDelayAfterUnlinkMs: dependencies.recoveryDelayAfterUnlinkMs ?? 0
-        }, dependencies.recoveryTimeoutMs ?? 5e3);
+        }, dependencies.recoveryTimeoutMs ?? WORKER_OPERATION_TIMEOUT_MS);
         if (!recovery.ok)
           throwOperationFailure(recovery);
         break;

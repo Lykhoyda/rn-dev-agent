@@ -12375,7 +12375,7 @@ function runBoundOperation(directory, request2, dependencies = {}) {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound directory path changed");
   }
   try {
-    const result = sendOperation(directory, request2, dependencies.timeoutMs ?? 5e3);
+    const result = sendOperation(directory, request2, dependencies.timeoutMs ?? WORKER_OPERATION_TIMEOUT_MS);
     if (!result.ok)
       throwOperationFailure(result);
     if (request2.operation === "cas" && result.cleanupPending) {
@@ -12389,7 +12389,7 @@ function runBoundOperation(directory, request2, dependencies = {}) {
           cleanupRecoveryDelayMs: dependencies.cleanupRecoveryDelayMs ?? 0,
           journal: request2.journal,
           writes: request2.writes
-        }, dependencies.recoveryTimeoutMs ?? 5e3);
+        }, dependencies.recoveryTimeoutMs ?? WORKER_OPERATION_TIMEOUT_MS);
         if (!cleanup.ok)
           throwOperationFailure(cleanup);
         if (!cleanup.committed) {
@@ -12406,7 +12406,7 @@ function runBoundOperation(directory, request2, dependencies = {}) {
               failCleanupRecovery: dependencies.failCleanupRecovery ?? false,
               journal: request2.journal,
               writes: request2.writes
-            }, dependencies.recoveryTimeoutMs ?? 5e3);
+            }, dependencies.recoveryTimeoutMs ?? WORKER_OPERATION_TIMEOUT_MS);
             if (!cleanup.ok)
               throwOperationFailure(cleanup);
             if (!cleanup.committed) {
@@ -12438,7 +12438,7 @@ function runBoundOperation(directory, request2, dependencies = {}) {
           journal: request2.journal,
           writes: request2.writes,
           recoveryDelayAfterUnlinkMs: dependencies.recoveryDelayAfterUnlinkMs ?? 0
-        }, dependencies.recoveryTimeoutMs ?? 5e3);
+        }, dependencies.recoveryTimeoutMs ?? WORKER_OPERATION_TIMEOUT_MS);
         if (!recovery.ok)
           throwOperationFailure(recovery);
         break;
@@ -12761,13 +12761,14 @@ function retryBoundDirectoryCleanup(directory, obligation, dependencies = {}) {
   }
   directory.pendingCleanups.delete(obligation.transactionId);
 }
-var WAIT_BUFFER, WORKER_READY_TIMEOUT_MS, BOUND_DIRECTORY_LIFECYCLE_MONITOR, BOUND_DIRECTORY_TERMINATION_WATCHDOG, BOUND_DIRECTORY_ANCESTRY_MONITOR, BOUND_DIRECTORY_WORKER;
+var WAIT_BUFFER, WORKER_READY_TIMEOUT_MS, WORKER_OPERATION_TIMEOUT_MS, BOUND_DIRECTORY_LIFECYCLE_MONITOR, BOUND_DIRECTORY_TERMINATION_WATCHDOG, BOUND_DIRECTORY_ANCESTRY_MONITOR, BOUND_DIRECTORY_WORKER;
 var init_bound_directory = __esm({
   "packages/rn-dev-agent-core/dist/session/bound-directory.js"() {
     "use strict";
     init_state_root();
     WAIT_BUFFER = new Int32Array(new SharedArrayBuffer(4));
     WORKER_READY_TIMEOUT_MS = 3e4;
+    WORKER_OPERATION_TIMEOUT_MS = 3e4;
     BOUND_DIRECTORY_LIFECYCLE_MONITOR = String.raw`
 const fs = require('node:fs');
 const path = require('node:path');

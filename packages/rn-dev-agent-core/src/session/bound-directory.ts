@@ -105,6 +105,9 @@ export interface BoundOperationDependencies {
 
 const WAIT_BUFFER = new Int32Array(new SharedArrayBuffer(4));
 const WORKER_READY_TIMEOUT_MS = 30_000;
+// NOTE: bound writes fsync, so a loaded host can stall one round trip for
+// seconds — this budget must only catch a wedged worker, not a slow one.
+const WORKER_OPERATION_TIMEOUT_MS = 30_000;
 
 const BOUND_DIRECTORY_LIFECYCLE_MONITOR = String.raw`
 const fs = require('node:fs');
@@ -1500,7 +1503,11 @@ function runBoundOperation(
     throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: bound directory path changed');
   }
   try {
-    const result = sendOperation(directory, request, dependencies.timeoutMs ?? 5_000);
+    const result = sendOperation(
+      directory,
+      request,
+      dependencies.timeoutMs ?? WORKER_OPERATION_TIMEOUT_MS,
+    );
     if (!result.ok) throwOperationFailure(result);
     if (request.operation === 'cas' && result.cleanupPending) {
       if (result.cleanupError) return result;
@@ -1515,7 +1522,7 @@ function runBoundOperation(
             journal: request.journal,
             writes: request.writes,
           },
-          dependencies.recoveryTimeoutMs ?? 5_000,
+          dependencies.recoveryTimeoutMs ?? WORKER_OPERATION_TIMEOUT_MS,
         );
         if (!cleanup.ok) throwOperationFailure(cleanup);
         if (!cleanup.committed) {
@@ -1540,7 +1547,7 @@ function runBoundOperation(
                 journal: request.journal,
                 writes: request.writes,
               },
-              dependencies.recoveryTimeoutMs ?? 5_000,
+              dependencies.recoveryTimeoutMs ?? WORKER_OPERATION_TIMEOUT_MS,
             );
             if (!cleanup.ok) throwOperationFailure(cleanup);
             if (!cleanup.committed) {
@@ -1584,7 +1591,7 @@ function runBoundOperation(
             writes: request.writes,
             recoveryDelayAfterUnlinkMs: dependencies.recoveryDelayAfterUnlinkMs ?? 0,
           },
-          dependencies.recoveryTimeoutMs ?? 5_000,
+          dependencies.recoveryTimeoutMs ?? WORKER_OPERATION_TIMEOUT_MS,
         );
         if (!recovery.ok) throwOperationFailure(recovery);
         break;
