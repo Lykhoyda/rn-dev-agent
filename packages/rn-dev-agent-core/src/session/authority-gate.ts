@@ -15,13 +15,21 @@ export interface AuthorityObservation {
   detail?: Record<string, unknown>;
 }
 
-interface AuthorityProbeInput {
+export interface AuthorityProbeInput {
   axis: AuthorityAxis;
   phase: 'preflight' | 'postflight';
   tool: string;
   profile: AuthorityProfile;
   status: SessionStatus;
   args: Record<string, unknown>;
+}
+
+export interface StagedRuntimeRelaunch {
+  probe(input: AuthorityProbeInput): Promise<AuthorityObservation>;
+  refreshRuntimeBinding(status: SessionStatus): Promise<Record<string, unknown>>;
+  assertActive(): void;
+  publish(status: SessionStatus): void;
+  cancel(): void;
 }
 
 interface AuthorityGateRuntime {
@@ -35,8 +43,8 @@ interface AuthorityGateDependencies {
   recoverRuntimeConnection?(status: SessionStatus): Promise<boolean>;
   runtimeConnectionChanged?(status: SessionStatus): boolean;
   refreshRuntimeBinding?(status: SessionStatus): Promise<Record<string, unknown>>;
-  relaunchBoundRuntime?(status: SessionStatus): Promise<void>;
-  reconnectBoundRuntime?(status: SessionStatus): Promise<void>;
+  relaunchBoundRuntime?(status: SessionStatus): Promise<StagedRuntimeRelaunch | void>;
+  reconnectBoundRuntime?(status: SessionStatus): Promise<StagedRuntimeRelaunch | void>;
   onRunnerReleased?(runner: Record<string, unknown>): Promise<void> | void;
   onRuntimeBundleInvalidated?(): void;
   reissueInstallBinding?(
@@ -661,6 +669,9 @@ function reconcileRuntimeBundleReplacement(
   priorBundle: Record<string, unknown> | undefined,
   metro: Record<string, unknown> | undefined,
   bundle: Record<string, unknown>,
+  promotion?: Pick<StagedRuntimeRelaunch, 'assertActive'> & {
+    onCommitted(operation: OperationRef): void;
+  },
 ): {
   operation: OperationRef;
   status: SessionStatus;
@@ -678,7 +689,7 @@ function reconcileRuntimeBundleReplacement(
   const runtimeTargetChanged =
     oldTargetId !== newTargetId ||
     priorBundle?.connectionGeneration !== bundle.connectionGeneration;
-  if (!runtimeTargetChanged) {
+  if (!runtimeTargetChanged && !promotion) {
     return { operation, status, runtimeTargetChanged };
   }
   const nextOperation = registry.replaceBindingsDuringOperation(operation, {
@@ -692,6 +703,8 @@ function reconcileRuntimeBundleReplacement(
       oldTargetId !== newTargetId
         ? [{ type: 'target', key: `${String(metroPort)}:${newTargetId}` }]
         : [],
+    assertBeforeCommit: promotion?.assertActive,
+    onCommitted: promotion?.onCommitted,
   });
   const refreshedStatus = runtime.status();
   if (!refreshedStatus.available) {
@@ -702,6 +715,37 @@ function reconcileRuntimeBundleReplacement(
     status: refreshedStatus,
     runtimeTargetChanged,
   };
+}
+
+function restoreRuntimeBundleReplacement(
+  registry: SessionRegistry,
+  operation: OperationRef,
+  priorStatus: SessionStatus,
+  candidateBundle: Record<string, unknown>,
+): OperationRef {
+  const priorBundle = priorStatus.bindings.bundle as Record<string, unknown> | undefined;
+  const metro = priorStatus.bindings.metro as Record<string, unknown> | undefined;
+  const priorTargetId = priorBundle?.targetId;
+  const candidateTargetId = candidateBundle.targetId;
+  const metroPort = metro?.port;
+  if (typeof candidateTargetId !== 'string' || !Number.isSafeInteger(metroPort)) {
+    throw new SessionAuthorityError(
+      'CDP_TARGET_AUTHORITY_MISMATCH',
+      'runtime promotion compensation lost its exact target authority',
+    );
+  }
+  const targetChanged = priorTargetId !== candidateTargetId;
+  return registry.replaceBindingsDuringOperation(operation, {
+    state: priorStatus.state,
+    bindings: { bundle: priorBundle ?? null },
+    releaseResources: targetChanged
+      ? [{ type: 'target', key: `${String(metroPort)}:${candidateTargetId}` }]
+      : [],
+    claimResources:
+      targetChanged && typeof priorTargetId === 'string'
+        ? [{ type: 'target', key: `${String(metroPort)}:${priorTargetId}` }]
+        : [],
+  });
 }
 
 function invalidateRuntimeBundle(
@@ -1129,6 +1173,7 @@ export function createAuthorityGate(
         let registry: SessionRegistry | null = null;
         let retainProofCleanupFence = false;
         let publishedProofFinalize = false;
+        let stagedRuntimeRelaunch: StagedRuntimeRelaunch | undefined;
         try {
           const available = runtime.requireAvailable();
           registry = available.registry;
@@ -1298,10 +1343,18 @@ export function createAuthorityGate(
                 throw new SessionAuthorityError(currentStatus.code, currentStatus.reason);
               }
               registry!.verifyOperation(operation!);
+              const stagedRelaunch = stagedRuntimeRelaunch;
+              const promotionStatus = {
+                ...currentStatus,
+                bindings: { ...currentStatus.bindings },
+              };
+              let promotionCommitted = false;
               let originObservation: AuthorityObservation;
               let bundleObservation: AuthorityObservation;
+              let candidateBundle: Record<string, unknown> | undefined;
               try {
-                originObservation = await dependencies.probe({
+                const probe = stagedRelaunch?.probe ?? dependencies.probe;
+                originObservation = await probe({
                   axis: 'A',
                   phase: 'postflight',
                   tool,
@@ -1309,21 +1362,23 @@ export function createAuthorityGate(
                   status: currentStatus,
                   args,
                 });
-                if (!dependencies.refreshRuntimeBinding) {
+                if (!stagedRelaunch && !dependencies.refreshRuntimeBinding) {
                   throw new SessionAuthorityError(
                     'BUNDLE_HANDSHAKE_UNAVAILABLE',
                     'managed lifecycle cannot commit without a binding refresh',
                   );
                 }
-                const bundle = await dependencies.refreshRuntimeBinding(currentStatus);
-                bundleObservation = await dependencies.probe({
+                candidateBundle = stagedRelaunch
+                  ? await stagedRelaunch.refreshRuntimeBinding(currentStatus)
+                  : await dependencies.refreshRuntimeBinding!(currentStatus);
+                bundleObservation = await probe({
                   axis: 'B',
                   phase: 'postflight',
                   tool,
                   profile,
                   status: {
                     ...currentStatus,
-                    bindings: { ...currentStatus.bindings, bundle },
+                    bindings: { ...currentStatus.bindings, bundle: candidateBundle },
                   },
                   args,
                 });
@@ -1335,12 +1390,54 @@ export function createAuthorityGate(
                   currentStatus,
                   currentStatus.bindings.bundle as Record<string, unknown> | undefined,
                   currentStatus.bindings.metro as Record<string, unknown> | undefined,
-                  bundle,
+                  candidateBundle,
+                  stagedRelaunch
+                    ? {
+                        assertActive: stagedRelaunch.assertActive,
+                        onCommitted: (committedOperation) => {
+                          promotionCommitted = true;
+                          operation = committedOperation;
+                        },
+                      }
+                    : undefined,
                 );
                 operation = reconciliation.operation;
                 status = reconciliation.status;
                 managedRuntimeTargetChanged ||= reconciliation.runtimeTargetChanged;
+                if (stagedRelaunch) {
+                  stagedRelaunch.assertActive();
+                  stagedRelaunch.publish(status);
+                  stagedRuntimeRelaunch = undefined;
+                }
               } catch (error) {
+                if (stagedRelaunch) {
+                  let compensationError: unknown;
+                  if (promotionCommitted) {
+                    try {
+                      operation = restoreRuntimeBundleReplacement(
+                        registry!,
+                        operation!,
+                        promotionStatus,
+                        candidateBundle!,
+                      );
+                      const restoredStatus = runtime.status();
+                      if (restoredStatus.available) status = restoredStatus;
+                    } catch (restoreError) {
+                      compensationError = restoreError;
+                    }
+                  }
+                  stagedRelaunch.cancel();
+                  if (stagedRuntimeRelaunch === stagedRelaunch) {
+                    stagedRuntimeRelaunch = undefined;
+                  }
+                  if (compensationError) {
+                    throw new AggregateError(
+                      [error, compensationError],
+                      'BUNDLE_HANDSHAKE_UNAVAILABLE: staged runtime promotion compensation failed',
+                    );
+                  }
+                  throw error;
+                }
                 const failedStatus = runtime.status();
                 if (failedStatus.available && failedStatus.bindings.bundle) {
                   try {
@@ -1376,7 +1473,10 @@ export function createAuthorityGate(
                       'managed native origin relaunch is unavailable',
                     );
                   }
-                  await dependencies.relaunchBoundRuntime(currentStatus);
+                  stagedRuntimeRelaunch?.cancel();
+                  stagedRuntimeRelaunch = undefined;
+                  stagedRuntimeRelaunch =
+                    (await dependencies.relaunchBoundRuntime(currentStatus)) ?? undefined;
                   registry!.verifyOperation(operation!);
                 },
                 reprove: async () => {
@@ -1391,7 +1491,10 @@ export function createAuthorityGate(
                       'managed native origin reconnect is unavailable',
                     );
                   }
-                  await dependencies.reconnectBoundRuntime(currentStatus);
+                  stagedRuntimeRelaunch?.cancel();
+                  stagedRuntimeRelaunch = undefined;
+                  stagedRuntimeRelaunch =
+                    (await dependencies.reconnectBoundRuntime(currentStatus)) ?? undefined;
                   registry!.verifyOperation(operation!);
                 },
                 complete: async (targetExpected: boolean) => {
@@ -1755,6 +1858,7 @@ export function createAuthorityGate(
           }
           return authorityFailure(error);
         } finally {
+          stagedRuntimeRelaunch?.cancel();
           if (registry && operation && !retainProofCleanupFence) {
             try {
               registry.endOperation(operation);

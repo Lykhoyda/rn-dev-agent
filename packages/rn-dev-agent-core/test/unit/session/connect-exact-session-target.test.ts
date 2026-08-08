@@ -4,7 +4,9 @@ import type { AddressInfo } from 'node:net';
 import { test } from 'node:test';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { CDPClient } from '../../../dist/cdp-client.js';
+import { CDPProbeTimeoutError } from '../../../dist/cdp/connect.js';
 import {
+  AndroidExactTargetDeadlineError,
   connectExactSessionTarget,
   exactSessionTargetReadinessTimeoutMs,
 } from '../../../dist/session/connect-exact-session-target.js';
@@ -184,6 +186,125 @@ const exactInput = (port: number) => ({
   deviceId: serial,
 });
 
+class FakeDeadlineClock {
+  nowMs = 0;
+  private nextId = 0;
+  private timers = new Map<number, { at: number; callback: () => void }>();
+
+  now = () => this.nowMs;
+  setTimer = (callback: () => void, ms: number): number => {
+    const id = ++this.nextId;
+    this.timers.set(id, { at: this.nowMs + ms, callback });
+    return id;
+  };
+  clearTimer = (id: unknown): void => {
+    this.timers.delete(id as number);
+  };
+  advance(ms: number): void {
+    this.nowMs += ms;
+    const due = [...this.timers.entries()]
+      .filter(([, timer]) => timer.at <= this.nowMs)
+      .sort((left, right) => left[1].at - right[1].at);
+    for (const [id, timer] of due) {
+      if (!this.timers.delete(id)) continue;
+      timer.callback();
+    }
+  }
+}
+
+async function flushPromises(): Promise<void> {
+  for (let index = 0; index < 24; index += 1) await Promise.resolve();
+}
+
+function deadlineFixture(overrides: {
+  listTargetsExact?: () => Promise<unknown>;
+  connectExact?: () => Promise<void>;
+  execute?: (file: string, args: string[]) => Promise<{ stdout: string }>;
+}) {
+  const clock = new FakeDeadlineClock();
+  const target = {
+    id: 'deadline-exact-1',
+    title: `${appId} (OnePlus ${model})`,
+    description: 'React Native Bridgeless [C++ connection]',
+    appId,
+    type: 'node',
+    webSocketDebuggerUrl: 'ws://127.0.0.1:8191/exact',
+    deviceName: preservedDeviceName,
+    platform: 'android' as const,
+    platformInference: 'probed' as const,
+  };
+  const ambient = {
+    metroPort: 8191,
+    disconnectCalls: 0,
+    disconnect: async () => {
+      ambient.disconnectCalls += 1;
+    },
+  };
+  const clients: Array<{
+    metroPort: number;
+    connectedTarget: typeof target | null;
+    connectionGeneration: number;
+    readonly isConnected: boolean;
+    disconnectCalls: number;
+    listTargetsExact(port: number): Promise<unknown>;
+    connectExact(): Promise<void>;
+    disconnect(): Promise<void>;
+  }> = [];
+  let current = ambient as unknown as CDPClient;
+  const createClient = () => {
+    const client = {
+      metroPort: 8191,
+      connectedTarget: null as typeof target | null,
+      connectionGeneration: 1,
+      get isConnected() {
+        return client.connectedTarget !== null;
+      },
+      disconnectCalls: 0,
+      listTargetsExact: async (port: number) =>
+        overrides.listTargetsExact?.() ?? { port, targets: [target] },
+      connectExact: async () => {
+        if (overrides.connectExact) return overrides.connectExact();
+        client.connectedTarget = target;
+      },
+      disconnect: async () => {
+        client.disconnectCalls += 1;
+        client.connectedTarget = null;
+      },
+      publishLifecycleState: () => {},
+    };
+    clients.push(client);
+    return client as unknown as CDPClient;
+  };
+  return {
+    clock,
+    target,
+    ambient,
+    clients,
+    get current() {
+      return current;
+    },
+    dependencies: {
+      getClient: () => current,
+      setClient: (client: CDPClient) => {
+        current = client;
+      },
+      createClient,
+      execute:
+        overrides.execute ??
+        (async (_file: string, args: string[]) => ({
+          stdout:
+            args[0] === 'devices' ? `List of devices attached\n${serial}\tdevice\n` : `${model}\n`,
+        })),
+      now: clock.now,
+      setDeadlineTimer: clock.setTimer,
+      clearDeadlineTimer: clock.clearTimer,
+      wait: async (ms: number) => {
+        clock.advance(ms);
+      },
+    },
+  };
+}
+
 test('production exact-session wrapper connects preserved Android metadata immediately', async () => {
   const metro = await startSyntheticMetro('responsive');
   const fixture = fixtureDependencies(new CDPClient(metro.port));
@@ -195,6 +316,7 @@ test('production exact-session wrapper connects preserved Android metadata immed
     );
     assert.equal(connected.targetId, 'responsive-exact-1');
     assert.equal(connected.deviceId, serial);
+    connected.publish();
     assert.deepEqual(metro.connections, ['/responsive']);
   } finally {
     await fixture.current.disconnect();
@@ -212,6 +334,7 @@ test('production wrapper resets a stalled probe and accepts only exact responsiv
       fixture.dependencies,
     );
     assert.equal(connected.targetId, 'responsive-exact-2');
+    connected.publish();
     assert.ok(metro.staleClosed, 'the failed debugger must disconnect before recovery');
     assert.ok(metro.listCount >= 5, 'the allocated Metro must be re-listed after reset');
     assert.deepEqual(
@@ -290,6 +413,10 @@ test('Android cold setup re-lists only the same exact target within its readines
       metroPort: 8191,
       connectedTarget: null as typeof exactTarget | null,
       connectionGeneration: clientAttempt,
+      get isConnected() {
+        return client.connectedTarget !== null;
+      },
+      publishLifecycleState: () => {},
       listTargetsExact: async (port: number) => {
         listedPorts.push(port);
         return { port, targets: [exactTarget, foreignApp, foreignDevice] };
@@ -319,7 +446,10 @@ test('Android cold setup re-lists only the same exact target within its readines
     };
     return client as unknown as CDPClient;
   };
-  current = createFixtureClient();
+  current = {
+    metroPort: 8191,
+    disconnect: async () => assert.fail('ambient client must not be closed'),
+  } as unknown as CDPClient;
 
   const connected = await connectExactSessionTarget(
     exactInput(8191),
@@ -348,6 +478,8 @@ test('Android cold setup re-lists only the same exact target within its readines
   assert.equal(exactSessionTargetReadinessTimeoutMs('android'), 120_000);
   assert.equal(connected.targetId, exactTarget.id);
   assert.equal(connected.deviceId, serial);
+  assert.equal(current.metroPort, 8191, 'the ambient client remains published before commit');
+  connected.cancel();
   assert.deepEqual(lifecycle, [
     'preflight-responsive',
     'context-created',
@@ -356,7 +488,7 @@ test('Android cold setup re-lists only the same exact target within its readines
   ]);
   assert.deepEqual(listedPorts, [8191, 8191]);
   assert.deepEqual(connectedTargetIds, [exactTarget.id, exactTarget.id]);
-  assert.deepEqual(disconnectedAttempts, [0]);
+  assert.deepEqual(disconnectedAttempts, [0, 1]);
   assert.ok(now > 15_000, 'the recovery must exercise more than the iOS readiness budget');
   assert.ok(now < 120_000, 'the Android cold-start recovery must remain bounded');
 });
@@ -410,6 +542,166 @@ test('Android cold setup failure retains the final actionable leaf when its budg
       return true;
     },
   );
+});
+
+test('Android non-returning connect is detached at the absolute deadline and only its owned client closes', async () => {
+  const fixture = deadlineFixture({ connectExact: () => new Promise<void>(() => {}) });
+  const pending = connectExactSessionTarget(
+    exactInput(8191),
+    exactSessionTargetReadinessTimeoutMs('android'),
+    fixture.dependencies,
+  );
+  await flushPromises();
+  fixture.clock.advance(119_999);
+  await flushPromises();
+  assert.equal(fixture.clients[0]?.disconnectCalls, 0);
+  fixture.clock.advance(1);
+  await assert.rejects(pending, AndroidExactTargetDeadlineError);
+  assert.equal(fixture.clock.nowMs, 120_000, 'fake scheduler has zero deadline tolerance');
+  assert.equal(fixture.clients[0]?.disconnectCalls, 1);
+  assert.equal(fixture.ambient.disconnectCalls, 0, 'foreign ambient resources remain untouched');
+  assert.equal(fixture.current, fixture.ambient, 'late attempt state must not remain accepted');
+});
+
+test('Android rejects list success delivered after expiry and cleans only the exact owned client', async () => {
+  let releaseList!: (value: unknown) => void;
+  const fixture = deadlineFixture({
+    listTargetsExact: () => new Promise((resolve) => (releaseList = resolve)),
+  });
+  const pending = connectExactSessionTarget(exactInput(8191), 120_000, fixture.dependencies);
+  await flushPromises();
+  fixture.clock.advance(120_000);
+  releaseList({ port: 8191, targets: [fixture.target] });
+  await assert.rejects(pending, AndroidExactTargetDeadlineError);
+  await flushPromises();
+  assert.equal(fixture.clients[0]?.disconnectCalls, 1);
+  assert.equal(fixture.clients[0]?.connectedTarget, null);
+  assert.equal(fixture.ambient.disconnectCalls, 0);
+  assert.equal(fixture.current, fixture.ambient);
+});
+
+test('Android filter cancellation does not start a follow-on device query after expiry', async () => {
+  let releaseDevices!: (value: { stdout: string }) => void;
+  const calls: string[][] = [];
+  const fixture = deadlineFixture({
+    execute: async (_file, args) => {
+      calls.push(args);
+      return new Promise((resolve) => (releaseDevices = resolve));
+    },
+  });
+  const pending = connectExactSessionTarget(exactInput(8191), 120_000, fixture.dependencies);
+  await flushPromises();
+  fixture.clock.advance(120_000);
+  releaseDevices({ stdout: `List of devices attached\n${serial}\tdevice\n` });
+  await assert.rejects(pending, AndroidExactTargetDeadlineError);
+  await flushPromises();
+  assert.deepEqual(calls, [['devices']], 'no getprop operation may start after cancellation');
+  assert.equal(fixture.current, fixture.ambient);
+});
+
+test('Android rejects connect/setup success delivered after expiry and rolls back late client state', async () => {
+  let releaseSetup!: () => void;
+  const fixture = deadlineFixture({
+    connectExact: () =>
+      new Promise<void>((resolve) => {
+        releaseSetup = () => {
+          fixture.clients[0]!.connectedTarget = fixture.target;
+          resolve();
+        };
+      }),
+  });
+  const pending = connectExactSessionTarget(exactInput(8191), 120_000, fixture.dependencies);
+  await flushPromises();
+  assert.equal(typeof releaseSetup, 'function');
+  fixture.clock.advance(120_000);
+  releaseSetup();
+  await assert.rejects(pending, AndroidExactTargetDeadlineError);
+  await flushPromises();
+  assert.equal(fixture.clients[0]?.disconnectCalls, 1);
+  assert.equal(fixture.current, fixture.ambient, 'late setup may mutate only its detached client');
+});
+
+test('Android rejects device-proof success after expiry and cannot accept a late target mutation', async () => {
+  let modelCalls = 0;
+  let releaseProof!: (value: { stdout: string }) => void;
+  const fixture = deadlineFixture({
+    execute: async (_file, args) => {
+      if (args[0] === 'devices') return { stdout: `List of devices attached\n${serial}\tdevice\n` };
+      modelCalls += 1;
+      if (modelCalls === 1) return { stdout: `${model}\n` };
+      return new Promise((resolve) => (releaseProof = resolve));
+    },
+  });
+  const pending = connectExactSessionTarget(exactInput(8191), 120_000, fixture.dependencies);
+  await flushPromises();
+  assert.equal(typeof releaseProof, 'function', 'the final device-proof await must be in flight');
+  fixture.clock.advance(120_000);
+  releaseProof({ stdout: `${model}\n` });
+  await assert.rejects(pending, AndroidExactTargetDeadlineError);
+  await flushPromises();
+  assert.equal(fixture.clients[0]?.connectedTarget, null);
+  assert.equal(fixture.current, fixture.ambient);
+});
+
+test('Android refuses a staged client whose socket closes during final device proof', async () => {
+  let modelCalls = 0;
+  const fixture = deadlineFixture({
+    execute: async (_file, args) => {
+      if (args[0] === 'devices') return { stdout: `List of devices attached\n${serial}\tdevice\n` };
+      modelCalls += 1;
+      if (modelCalls === 2) fixture.clients[0]!.connectedTarget = null;
+      return { stdout: `${model}\n` };
+    },
+  });
+
+  const connected = await connectExactSessionTarget(
+    exactInput(8191),
+    120_000,
+    fixture.dependencies,
+  );
+  assert.equal(fixture.clients.length, 2, 'the disconnected staged client must not be accepted');
+  assert.equal(fixture.clients[0]?.disconnectCalls, 1);
+  assert.equal(connected.client, fixture.clients[1] as unknown as CDPClient);
+  assert.equal(fixture.current, fixture.ambient);
+  connected.cancel();
+});
+
+test('Android deadline preserves an earlier probe-timeout authority leaf over a late failure', async () => {
+  const strongLeaf = new CDPProbeTimeoutError('CDP probe timeout: exact target JS thread paused');
+  let connectCalls = 0;
+  const fixture = deadlineFixture({
+    connectExact: async () => {
+      connectCalls += 1;
+      if (connectCalls === 1) throw strongLeaf;
+      return new Promise<void>((_resolve, reject) => {
+        fixture.clock.setTimer(() => reject(new Error('late generic setup failure')), 120_000);
+      });
+    },
+  });
+  const pending = connectExactSessionTarget(exactInput(8191), 120_000, fixture.dependencies);
+  await flushPromises();
+  fixture.clock.advance(120_000);
+  await assert.rejects(pending, (error: unknown) => {
+    assert.ok(error instanceof AndroidExactTargetDeadlineError);
+    assert.match(error.message, /CDP probe timeout: exact target JS thread paused/);
+    assert.equal(error.cause, strongLeaf);
+    return true;
+  });
+});
+
+test('Android success strictly before expiry remains accepted', async () => {
+  const fixture = deadlineFixture({});
+  const connected = await connectExactSessionTarget(
+    exactInput(8191),
+    120_000,
+    fixture.dependencies,
+  );
+  assert.equal(connected.targetId, fixture.target.id);
+  assert.equal(fixture.clients[0]?.disconnectCalls, 0);
+  assert.equal(fixture.current, fixture.ambient, 'success remains staged before publication');
+  connected.publish();
+  assert.equal(fixture.current, fixture.clients[0] as unknown as CDPClient);
+  assert.equal(fixture.ambient.disconnectCalls, 1);
 });
 
 test('iOS retains the existing retry budget without replacing the exact client', async () => {

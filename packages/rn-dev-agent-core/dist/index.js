@@ -8,7 +8,7 @@ import { dirname, join } from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { CDPClient } from './cdp-client.js';
+import { CDPClient, } from './cdp-client.js';
 import { okResult, failResult, warnResult, withConnection } from './utils.js';
 import { annotateMutationAbsence } from './verification/mutation-absence.js';
 import { loadVerificationConfig, getCachedProjectRoot } from './verification/config.js';
@@ -108,7 +108,7 @@ import { loadE2eConfig, resolveParams } from './domain/e2e-config.js';
 import { getWorkerAuthorityRuntime } from './session/runtime.js';
 import { createSessionHandler } from './tools/session.js';
 import { bindNativeRunner, unbindNativeRunner } from './session/runner-binding.js';
-import { claimOptionalBundleAuthority, createAuthorityGate } from './session/authority-gate.js';
+import { claimOptionalBundleAuthority, createAuthorityGate, } from './session/authority-gate.js';
 import { createLocalAuthorityProbe } from './session/local-authority-probe.js';
 import { assertAuthorityProfilesExhaustive } from './session/tool-profiles.js';
 import { readJsonStateFile } from './util/secure-state-file.js';
@@ -166,16 +166,27 @@ if (!diagnosticContractProbe && process.env.RN_DEVICE_KILL_LEGACY !== '0') {
         /* non-fatal */
     });
 }
-let client = new CDPClient();
+let client;
 const getClient = () => client;
-const setClient = (c) => {
-    client = c;
+const configureClientLifecycle = (candidate) => {
+    candidate.setLifecycleAuthority(() => getClient() === candidate);
+    return candidate;
 };
+const setClient = (candidate) => {
+    client = candidate;
+};
+const publishClient = (expected, replacement) => {
+    if (client !== expected)
+        return false;
+    client = replacement;
+    return true;
+};
+client = configureClientLifecycle(new CDPClient());
 const createClient = (port) => {
     const status = authorityRuntime.status();
-    return status.available && status.bindings.bundle
+    return configureClientLifecycle(status.available && status.bindings.bundle
         ? client.createReplacement(port)
-        : new CDPClient(port);
+        : new CDPClient(port));
 };
 const execFileP = promisify(execFile);
 // Parse an MCP envelope; throw when the handler reported failure.
@@ -403,14 +414,15 @@ setSnapshotAuthorityProvider({
         }
     },
 });
-const localAuthorityProbe = createLocalAuthorityProbe({
+const createRuntimeAuthorityProbe = (resolveClient) => createLocalAuthorityProbe({
     runtime: authorityRuntime,
-    getClient,
+    getClient: resolveClient,
     getSecret: () => process.env.RN_DEV_AGENT_SESSION_SECRET_PATH
         ? readJsonStateFile(process.env.RN_DEV_AGENT_SESSION_SECRET_PATH)
         : null,
     proofActive: (runId) => strictProofMonitor.ownsRun(runId),
 });
+const localAuthorityProbe = createRuntimeAuthorityProbe(getClient);
 const authorityGate = createAuthorityGate(authorityRuntime, {
     probe: async ({ axis, phase, status, tool, args }) => localAuthorityProbe({ axis, phase, status, tool, args }),
     recoverRuntimeConnection: async (status) => {
@@ -653,7 +665,7 @@ function trackedTool(name, desc, schema, handler) {
     };
     server.tool(name, desc, schema, wrapped);
 }
-async function pinSessionDevClient(status, options) {
+async function pinSessionDevClient(status, options, commitBundle) {
     const device = status.bindings.device;
     const metro = status.bindings.metro;
     const install = status.bindings.install;
@@ -676,97 +688,113 @@ async function pinSessionDevClient(status, options) {
         throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: session signer is unavailable');
     }
     const current = getClient();
-    current.clearAuthoritativeSessionPolicy();
-    if (options.force) {
-        await current.disconnect();
-        setClient(createClient(metro.port));
+    const suspendedPolicy = device.platform === 'android' ? current.authoritativeSessionPolicy : undefined;
+    if (device.platform === 'ios') {
+        current.clearAuthoritativeSessionPolicy();
+        if (options.force) {
+            await current.disconnect();
+            setClient(createClient(metro.port));
+        }
     }
-    const bundle = await pinExactDevClient({
-        sessionId: status.sessionId,
-        metroInstanceId: metro.instanceId,
-        worktreeKey: status.worktreeKey,
-        appId: device.appId,
-        platform: device.platform,
-        buildGeneration: metro.buildGeneration,
-        deviceId: device.deviceId,
-        metroPort: metro.port,
-        runtimeKind,
-        ...(devClientUrl ? { devClientUrl, expectedDevClientUrl: devClientUrl } : {}),
-        signerCapability: secret.signerCapability,
-    }, {
-        openUrl: async (platform, deviceId, url) => {
-            if (platform === 'ios') {
-                await execFileP('xcrun', ['simctl', 'openurl', deviceId, url]);
-            }
-            else {
-                await execFileP('adb', androidDeeplinkCommandArgs(url, undefined, deviceId));
-            }
-        },
-        launchExactApp: async (platform, deviceId, appId) => {
-            if (platform === 'ios') {
-                await execFileP('xcrun', ['simctl', 'launch', deviceId, appId]);
-            }
-            else {
-                await execFileP('adb', [
-                    '-s',
-                    deviceId,
-                    'shell',
-                    'monkey',
-                    '--pct-syskeys',
-                    '0',
-                    '-p',
-                    appId,
-                    '-c',
-                    'android.intent.category.LAUNCHER',
-                    '1',
-                ]);
-            }
-        },
-        acceptIosOpenDialog: async () => {
-            const result = await acceptDeeplinkOpenConfirmation();
-            if (result && !result.tapped) {
-                throw new Error('DEV_CLIENT_ENDPOINT_NOT_FOUND: iOS open confirmation did not expose the exact Open action');
-            }
-        },
-        connectExact: async ({ metroPort, platform, appId, deviceId }) => {
-            return connectExactSessionTarget({ metroPort, platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
-        },
-        readMarker: async () => {
-            const result = await getClient().evaluate('JSON.stringify(globalThis.__RN_DEV_AGENT_AUTHORITY__ ?? null)');
-            if (typeof result.value !== 'string')
-                return null;
-            const parsed = JSON.parse(result.value);
-            return parsed?.status === 'signed' && parsed.marker
-                ? { status: 'signed', marker: parsed.marker }
-                : null;
-        },
-        readManagedManifest: async ({ host, metroPort, platform }) => {
-            const controller = new AbortController();
-            const timer = setTimeout(() => controller.abort(), 15_000);
-            try {
-                const response = await fetch(`http://${host}:${metroPort}/`, {
-                    headers: {
-                        accept: 'multipart/mixed,application/expo+json,application/json',
-                        'expo-platform': platform,
-                    },
-                    signal: controller.signal,
-                });
-                return {
-                    body: await response.text(),
-                    contentType: response.headers.get('content-type') ?? '',
-                    status: response.status,
-                };
-            }
-            catch (error) {
-                throw new Error(`METRO_MANIFEST_ENDPOINT_MISMATCH: managed manifest request failed: ${error instanceof Error ? error.message : String(error)}`);
-            }
-            finally {
-                clearTimeout(timer);
-            }
-        },
-    });
-    getClient().setAuthoritativeSessionPolicy(createAuthoritativeSessionPolicy(status));
-    return bundle;
+    else if (suspendedPolicy) {
+        current.clearAuthoritativeSessionPolicy();
+    }
+    try {
+        const bundle = await pinExactDevClient({
+            sessionId: status.sessionId,
+            metroInstanceId: metro.instanceId,
+            worktreeKey: status.worktreeKey,
+            appId: device.appId,
+            platform: device.platform,
+            buildGeneration: metro.buildGeneration,
+            deviceId: device.deviceId,
+            metroPort: metro.port,
+            runtimeKind,
+            ...(devClientUrl ? { devClientUrl, expectedDevClientUrl: devClientUrl } : {}),
+            signerCapability: secret.signerCapability,
+        }, {
+            openUrl: async (platform, deviceId, url) => {
+                if (platform === 'ios') {
+                    await execFileP('xcrun', ['simctl', 'openurl', deviceId, url]);
+                }
+                else {
+                    await execFileP('adb', androidDeeplinkCommandArgs(url, undefined, deviceId));
+                }
+            },
+            launchExactApp: async (platform, deviceId, appId) => {
+                if (platform === 'ios') {
+                    await execFileP('xcrun', ['simctl', 'launch', deviceId, appId]);
+                }
+                else {
+                    await execFileP('adb', [
+                        '-s',
+                        deviceId,
+                        'shell',
+                        'monkey',
+                        '--pct-syskeys',
+                        '0',
+                        '-p',
+                        appId,
+                        '-c',
+                        'android.intent.category.LAUNCHER',
+                        '1',
+                    ]);
+                }
+            },
+            acceptIosOpenDialog: async () => {
+                const result = await acceptDeeplinkOpenConfirmation();
+                if (result && !result.tapped) {
+                    throw new Error('DEV_CLIENT_ENDPOINT_NOT_FOUND: iOS open confirmation did not expose the exact Open action');
+                }
+            },
+            connectExact: async ({ metroPort, platform, appId, deviceId }) => {
+                return connectExactSessionTarget({ metroPort, platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
+            },
+            readMarker: async (connection) => {
+                const markerClient = 'client' in connection ? connection.client : getClient();
+                const result = await markerClient.evaluate('JSON.stringify(globalThis.__RN_DEV_AGENT_AUTHORITY__ ?? null)');
+                if (typeof result.value !== 'string')
+                    return null;
+                const parsed = JSON.parse(result.value);
+                return parsed?.status === 'signed' && parsed.marker
+                    ? { status: 'signed', marker: parsed.marker }
+                    : null;
+            },
+            commitBundle,
+            readManagedManifest: async ({ host, metroPort, platform }) => {
+                const controller = new AbortController();
+                const timer = setTimeout(() => controller.abort(), 15_000);
+                try {
+                    const response = await fetch(`http://${host}:${metroPort}/`, {
+                        headers: {
+                            accept: 'multipart/mixed,application/expo+json,application/json',
+                            'expo-platform': platform,
+                        },
+                        signal: controller.signal,
+                    });
+                    return {
+                        body: await response.text(),
+                        contentType: response.headers.get('content-type') ?? '',
+                        status: response.status,
+                    };
+                }
+                catch (error) {
+                    throw new Error(`METRO_MANIFEST_ENDPOINT_MISMATCH: managed manifest request failed: ${error instanceof Error ? error.message : String(error)}`);
+                }
+                finally {
+                    clearTimeout(timer);
+                }
+            },
+        });
+        getClient().setAuthoritativeSessionPolicy(createAuthoritativeSessionPolicy(status));
+        return bundle;
+    }
+    catch (error) {
+        if (suspendedPolicy && getClient() === current) {
+            current.setAuthoritativeSessionPolicy(suspendedPolicy);
+        }
+        throw error;
+    }
 }
 function createAuthoritativeSessionPolicy(status) {
     const device = status.bindings.device;
@@ -774,25 +802,27 @@ function createAuthoritativeSessionPolicy(status) {
     return {
         port: metroPort,
         filters: { platform: device.platform, bundleId: device.appId },
-        resolveTargetId: async (targets) => {
+        resolveTargetId: async (targets, awaitWithinBoundary) => {
             const exactCandidates = await filterTargetsForExactDevice({
                 platform: device.platform,
                 deviceId: device.deviceId,
                 targets,
-            }, { execute: execFileP });
+            }, { execute: execFileP, awaitWithinBoundary });
             if (exactCandidates.length !== 1) {
                 throw new Error(`CDP_TARGET_AUTHORITY_MISMATCH: expected one target on the exact device, found ${exactCandidates.length}`);
             }
             return exactCandidates[0].id;
         },
-        verifyAndReconcile: reconcileAuthoritativeConnection,
+        verifyAndReconcile: (connectedClient, awaitWithinBoundary) => reconcileAuthoritativeConnection(connectedClient, awaitWithinBoundary),
     };
 }
 async function connectExactSessionTarget(input, timeoutMs) {
     return connectExactSessionTargetWithDependencies(input, timeoutMs, {
         getClient,
         setClient,
+        publishClient,
         createClient,
+        createAttemptClient: (port) => configureClientLifecycle(new CDPClient(port)),
         execute: execFileP,
     });
 }
@@ -822,6 +852,19 @@ function resolveManagedRuntimeLaunchBinding(status) {
                 : null,
     };
 }
+function stageAndroidRuntimeConnection(connection) {
+    const candidateProbe = createRuntimeAuthorityProbe(() => connection.client);
+    return {
+        probe: (input) => connection.run(() => candidateProbe(input)),
+        refreshRuntimeBinding: (currentStatus) => connection.run(() => rebindSessionRuntime(currentStatus, connection.run, connection.client)),
+        assertActive: connection.assertActive,
+        publish: (currentStatus) => {
+            connection.publish();
+            getClient().setAuthoritativeSessionPolicy(createAuthoritativeSessionPolicy(currentStatus));
+        },
+        cancel: connection.cancel,
+    };
+}
 /**
  * GH #708: re-establish the exact managed target without touching the app.
  * A mid-flow relaunch whose dev-client only re-registers after the flow's own
@@ -829,17 +872,22 @@ function resolveManagedRuntimeLaunchBinding(status) {
  */
 async function reconnectSessionRuntime(status) {
     const { platform, deviceId, appId, metroPort } = resolveManagedRuntimeLaunchBinding(status);
-    const current = getClient();
-    await current.disconnect();
-    setClient(createClient(metroPort));
-    await connectExactSessionTarget({ metroPort, platform, appId, deviceId }, 15_000);
+    if (platform === 'ios') {
+        const current = getClient();
+        await current.disconnect();
+        setClient(createClient(metroPort));
+        await connectExactSessionTarget({ metroPort, platform, appId, deviceId }, 15_000);
+        return;
+    }
+    const connection = await connectExactSessionTarget({ metroPort, platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
+    return stageAndroidRuntimeConnection(connection);
 }
 async function relaunchSessionRuntime(status) {
     const { platform, deviceId, appId, metroPort, devClientUrl: boundDevClientUrl, } = resolveManagedRuntimeLaunchBinding(status);
-    const current = getClient();
-    await current.disconnect();
-    setClient(createClient(metroPort));
     if (platform === 'ios') {
+        const current = getClient();
+        await current.disconnect();
+        setClient(createClient(metroPort));
         await execFileP('xcrun', [
             'simctl',
             'launch',
@@ -849,26 +897,27 @@ async function relaunchSessionRuntime(status) {
             '--initialUrl',
             `http://127.0.0.1:${String(metroPort)}`,
         ]);
+        await connectExactSessionTarget({ metroPort, platform, appId, deviceId }, 15_000);
+        return;
     }
-    else {
-        if (!boundDevClientUrl) {
-            throw new Error('DEV_CLIENT_ENDPOINT_NOT_FOUND: managed Android replay requires the exact Dev Client URL');
-        }
-        await execFileP('adb', [
-            ...androidDeeplinkCommandArgs(boundDevClientUrl, undefined, deviceId),
-            '-p',
-            appId,
-        ]);
+    if (!boundDevClientUrl) {
+        throw new Error('DEV_CLIENT_ENDPOINT_NOT_FOUND: managed Android replay requires the exact Dev Client URL');
     }
-    await connectExactSessionTarget({ metroPort, platform, appId, deviceId }, 15_000);
+    await execFileP('adb', [
+        ...androidDeeplinkCommandArgs(boundDevClientUrl, undefined, deviceId),
+        '-p',
+        appId,
+    ]);
+    const connection = await connectExactSessionTarget({ metroPort, platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
+    return stageAndroidRuntimeConnection(connection);
 }
-async function rebindSessionRuntime(status) {
+async function rebindSessionRuntime(status, awaitWithinBoundary, connectedClient = getClient()) {
     const device = status.bindings.device;
     const metro = status.bindings.metro;
     const prior = status.bindings.bundle;
     const install = status.bindings.install;
     const declaredDevice = status.bindings.device;
-    const client = getClient();
+    const client = connectedClient;
     const target = client.connectedTarget;
     if (!client.isConnected ||
         !target ||
@@ -883,11 +932,14 @@ async function rebindSessionRuntime(status) {
         platform: device.platform,
         deviceId: device.deviceId,
         targetDeviceName: target.deviceName,
-    }, { execute: execFileP });
+    }, { execute: execFileP, awaitWithinBoundary });
     const secret = process.env.RN_DEV_AGENT_SESSION_SECRET_PATH
         ? readJsonStateFile(process.env.RN_DEV_AGENT_SESSION_SECRET_PATH)
         : null;
-    const evaluated = await client.evaluate('JSON.stringify(globalThis.__RN_DEV_AGENT_AUTHORITY__ ?? null)');
+    const evaluateMarker = () => client.evaluate('JSON.stringify(globalThis.__RN_DEV_AGENT_AUTHORITY__ ?? null)');
+    const evaluated = await (awaitWithinBoundary
+        ? awaitWithinBoundary(evaluateMarker)
+        : evaluateMarker());
     const outer = typeof evaluated.value === 'string'
         ? JSON.parse(evaluated.value)
         : null;
@@ -914,7 +966,7 @@ async function rebindSessionRuntime(status) {
         connectionGeneration: client.connectionGeneration,
     });
 }
-async function reconcileAuthoritativeConnection(connectedClient) {
+async function reconcileAuthoritativeConnection(connectedClient, awaitWithinBoundary) {
     if (getClient() !== connectedClient) {
         throw new Error('CDP_TARGET_AUTHORITY_MISMATCH: authoritative client was replaced');
     }
@@ -923,7 +975,7 @@ async function reconcileAuthoritativeConnection(connectedClient) {
     if (!status)
         throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: session authority is unavailable');
     await reconcileAuthoritativeBundle(status, {
-        verifyRuntime: () => rebindSessionRuntime(status),
+        verifyRuntime: () => rebindSessionRuntime(status, awaitWithinBoundary),
         hasActiveOperation: () => available.registry.currentOperation() !== undefined ||
             available.registry.hasActiveBundleOperation(available.session),
         commit: (input) => available.registry.updateBindings(available.session, input),

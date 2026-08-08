@@ -16,7 +16,7 @@ import { helperExpr as helperExprFn, bridgeWithFallback as bridgeWithFallbackFn,
 import { autoConnect as autoConnectFn, ConnectionSetupSupersededError, discoverAndConnect as discoverAndConnectFn, } from './cdp/connect.js';
 import { resolveAutoConnect } from './project-config.js';
 import { handleClose as handleCloseFn, reconnect as reconnectFn, softReconnect as softReconnectFn, startBackgroundPoll as startBgPoll, stopBackgroundPoll as stopBgPoll, } from './cdp/reconnection.js';
-export async function discoverAuthoritativeTarget(policy, requestedFilters, discoverFn = discoverExactPort) {
+export async function discoverAuthoritativeTarget(policy, requestedFilters, discoverFn = discoverExactPort, awaitWithinBoundary) {
     const result = await discoverFn(policy.port, {
         ...requestedFilters,
         ...policy.filters,
@@ -25,7 +25,10 @@ export async function discoverAuthoritativeTarget(policy, requestedFilters, disc
     });
     if (result.errorCode || result.targets.length === 0)
         return result;
-    const targetId = await policy.resolveTargetId(result.targets);
+    const resolveTargetId = () => policy.resolveTargetId(result.targets, awaitWithinBoundary);
+    const targetId = await (awaitWithinBoundary
+        ? awaitWithinBoundary(resolveTargetId)
+        : resolveTargetId());
     const target = result.targets.find((candidate) => candidate.id === targetId);
     if (!target) {
         throw new Error('CDP_TARGET_AUTHORITY_MISMATCH: exact-device resolver returned a target outside the managed Metro result');
@@ -47,6 +50,7 @@ export class CDPClient {
     _port;
     reconnecting = false;
     disposed = false;
+    lifecycleAuthority = () => true;
     _helpersInjected = false;
     _helperWorldGeneration = 0;
     _helperContext = null;
@@ -163,6 +167,14 @@ export class CDPClient {
     }
     get connectionGeneration() {
         return this._connectionGeneration;
+    }
+    setLifecycleAuthority(isCurrent) {
+        this.lifecycleAuthority = isCurrent;
+    }
+    publishLifecycleState() {
+        if (this.lifecycleAuthority() && this.isConnected && this._helpersInjected) {
+            setActiveFlag(this._port, this._connectedTarget);
+        }
     }
     get bridgeDetected() {
         return this._bridgeDetected;
@@ -289,7 +301,7 @@ export class CDPClient {
         this._helpersInjected = false;
         this._bridgeDetected = false;
         this._bridgeVersion = null;
-        clearActiveFlag();
+        this.clearActiveState();
         this._helperToken = {
             generation: this._helperWorldGeneration,
             ws: this.ws,
@@ -356,7 +368,7 @@ export class CDPClient {
         this._helpersInjected = false;
         this._bridgeDetected = false;
         this._bridgeVersion = null;
-        clearActiveFlag();
+        this.clearActiveState();
         logger.warn('CDP', `Helper state unavailable cause=${cause} helperEpoch=${token.generation} connectionGeneration=${this._connectionGeneration}`);
         return false;
     }
@@ -384,7 +396,8 @@ export class CDPClient {
         if (!this.isHelperTokenCurrent(token))
             return;
         this._helpersInjected = true;
-        setActiveFlag(this._port, this._connectedTarget);
+        if (this.lifecycleAuthority())
+            setActiveFlag(this._port, this._connectedTarget);
         logger.info('CDP', `Helper state ready cause=${cause} helperEpoch=${token.generation} connectionGeneration=${this._connectionGeneration}`);
         detectBridge(this, (expression) => this.evaluateForHelperToken(token, expression, defaultTimeout(this.effectivePlatform)))
             .then((r) => {
@@ -434,13 +447,16 @@ export class CDPClient {
         }
         return discoverForList(this._port, portHint);
     }
-    async connectExact(port, filters, intent = 'default', targetRetries = 5) {
+    async connectExact(port, filters, intent = 'default', targetRetries = 5, awaitWithinBoundary) {
         this._reconnectDiscover = discoverExactPort;
         this._exactDiscoveryPort = port;
-        return this.connectWithCurrentPolicy(port, filters, intent, targetRetries);
+        return this.connectWithCurrentPolicy(port, filters, intent, targetRetries, awaitWithinBoundary);
     }
     async listTargetsExact(port) {
         return listTargetsOnExactPort(this._authoritativeSessionPolicy?.port ?? port);
+    }
+    get authoritativeSessionPolicy() {
+        return this._authoritativeSessionPolicy;
     }
     setAuthoritativeSessionPolicy(policy) {
         this._authoritativeSessionPolicy = policy;
@@ -468,32 +484,35 @@ export class CDPClient {
     _connectFilters = {};
     _reconnectDiscover;
     _exactDiscoveryPort;
-    authoritativeDiscover = async (_port, filtersOrPlatform) => {
+    createAuthoritativeDiscover(awaitWithinBoundary) {
+        return async (_port, filtersOrPlatform) => {
+            const policy = this._authoritativeSessionPolicy;
+            if (!policy)
+                throw new Error('Authoritative session policy is unavailable');
+            const filters = typeof filtersOrPlatform === 'string'
+                ? { platform: filtersOrPlatform }
+                : (filtersOrPlatform ?? {});
+            return discoverAuthoritativeTarget(policy, filters, discoverExactPort, awaitWithinBoundary);
+        };
+    }
+    async connectWithCurrentPolicy(portHint, filters, intent, targetRetries = 5, awaitWithinBoundary) {
         const policy = this._authoritativeSessionPolicy;
-        if (!policy)
-            throw new Error('Authoritative session policy is unavailable');
-        const filters = typeof filtersOrPlatform === 'string'
-            ? { platform: filtersOrPlatform }
-            : (filtersOrPlatform ?? {});
-        return discoverAuthoritativeTarget(policy, filters);
-    };
-    async connectWithCurrentPolicy(portHint, filters, intent, targetRetries = 5) {
-        const policy = this._authoritativeSessionPolicy;
-        const result = await autoConnectFn(this.buildConnectCtx(), policy?.port ?? this._exactDiscoveryPort ?? portHint, policy ? { ...filters, ...policy.filters, targetId: undefined } : filters, intent, policy ? this.authoritativeDiscover : this._reconnectDiscover, targetRetries);
-        await this.verifyAuthoritativeConnection();
+        const result = await autoConnectFn(this.buildConnectCtx(), policy?.port ?? this._exactDiscoveryPort ?? portHint, policy ? { ...filters, ...policy.filters, targetId: undefined } : filters, intent, policy ? this.createAuthoritativeDiscover(awaitWithinBoundary) : this._reconnectDiscover, targetRetries);
+        await this.verifyAuthoritativeConnection(awaitWithinBoundary);
         return result;
     }
     async discoverAndConnect(portHint, filters) {
         const policy = this._authoritativeSessionPolicy;
-        const result = await discoverAndConnectFn(this.buildConnectCtx(), policy?.port ?? this._exactDiscoveryPort ?? portHint, policy ? { ...filters, ...policy.filters, targetId: undefined } : filters, policy ? this.authoritativeDiscover : this._reconnectDiscover);
+        const result = await discoverAndConnectFn(this.buildConnectCtx(), policy?.port ?? this._exactDiscoveryPort ?? portHint, policy ? { ...filters, ...policy.filters, targetId: undefined } : filters, policy ? this.createAuthoritativeDiscover() : this._reconnectDiscover);
         await this.verifyAuthoritativeConnection();
         return result;
     }
-    async verifyAuthoritativeConnection() {
+    async verifyAuthoritativeConnection(awaitWithinBoundary) {
         if (!this._authoritativeSessionPolicy)
             return;
         try {
-            await this._authoritativeSessionPolicy.verifyAndReconcile(this);
+            const verifyAndReconcile = () => this._authoritativeSessionPolicy.verifyAndReconcile(this, awaitWithinBoundary);
+            await (awaitWithinBoundary ? awaitWithinBoundary(verifyAndReconcile) : verifyAndReconcile());
         }
         catch (error) {
             this.rejectAllPending(new Error('Authoritative runtime verification failed'));
@@ -505,7 +524,7 @@ export class CDPClient {
                 this.ws = null;
             }
             resetState(this.buildResettableState());
-            clearActiveFlag();
+            this.clearActiveState();
             throw error;
         }
     }
@@ -688,7 +707,7 @@ export class CDPClient {
         this.disposed = true;
         this.invalidateHelperWorld('explicit_disconnect');
         resetState(this.buildResettableState());
-        clearActiveFlag();
+        this.clearActiveState();
         this.stopBackgroundPoll();
         // M5 (D656): tear down Metro /events subscriber alongside CDP shutdown.
         if (this._metroEventsClient) {
@@ -967,6 +986,7 @@ export class CDPClient {
                 this._bgPollTimer = timer;
             },
             getBgPollTimer: () => this._bgPollTimer,
+            clearActiveState: () => this.clearActiveState(),
             // B132: after the exponential-backoff reconnect loop succeeds, rehydrate
             // the proxy if one was desired. This is the "auto-resume" half of the
             // suspend→reconnect→resume sequence. softReconnect has its own wrapper
@@ -982,6 +1002,8 @@ export class CDPClient {
             isSoftReconnectRequested: () => this._softReconnectRequested,
             getState: () => this._state,
             setState: (s) => {
+                if (this.disposed && s !== 'disconnected')
+                    return;
                 this._state = s;
             },
             getPort: () => this._port,
@@ -994,6 +1016,13 @@ export class CDPClient {
             },
             getWs: () => this.ws,
             setWs: (ws) => {
+                if (this.disposed && ws) {
+                    try {
+                        ws.terminate();
+                    }
+                    catch { }
+                    return;
+                }
                 if (this.ws === ws)
                     return;
                 this.ws = ws;
@@ -1005,12 +1034,16 @@ export class CDPClient {
                     this.invalidateHelperWorld('candidate_rejected');
             },
             setConnectedTarget: (t) => {
+                if (this.disposed && t)
+                    return;
                 if (this._connectedTarget === t)
                     return;
                 this._connectedTarget = t;
                 this.invalidateHelperWorld(t ? 'candidate_selected' : 'candidate_rejected');
             },
             setConnectedAt: (ms) => {
+                if (this.disposed && ms !== null)
+                    return;
                 this._connectedAt = ms;
             },
             now: () => this._timeNowFn(),
@@ -1060,6 +1093,10 @@ export class CDPClient {
     }
     rejectAllPending(reason) {
         rejectPending(this.pending, reason);
+    }
+    clearActiveState() {
+        if (this.lifecycleAuthority())
+            clearActiveFlag();
     }
     sendWithTimeout(method, params, ms) {
         return sendMsg(this.ws, this.pending, () => ++this.msgId, method, params, ms);

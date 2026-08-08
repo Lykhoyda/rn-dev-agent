@@ -639,36 +639,7 @@ export class SessionRegistry {
         this.#assertNoStaleDeviceCleanup(bindings);
       }
 
-      for (const resource of resources) {
-        const claim = this.#findConflictingClaim(resource);
-        if (
-          !claim ||
-          (claim.session_id === session.sessionId && claim.claim_epoch === session.claimEpoch)
-        ) {
-          continue;
-        }
-
-        const probe = probes.get(claim.session_id);
-        if (!probe || probe.claimEpoch !== claim.claim_epoch) {
-          throw claimConflict(claim);
-        }
-        if (probe.status === 'match') throw claimConflict(claim);
-        if (probe.status === 'unknown') {
-          if (claim.lease_until_ms < now) {
-            throw new SessionAuthorityError(
-              'STALE_LEASE_NOT_RECLAIMABLE',
-              'expired lease owner identity could not be proven',
-              { sessionId: claim.session_id, claimEpoch: claim.claim_epoch },
-            );
-          }
-          throw claimConflict(claim);
-        }
-        throw new SessionAuthorityError(
-          'SESSION_AUTHORITY_REQUIRED',
-          'a proven-stale owner requires explicit adopt_stale before claims transfer',
-          { sessionId: claim.session_id, claimEpoch: claim.claim_epoch },
-        );
-      }
+      this.#assertClaimsAvailable(session, resources, probes, now);
 
       const leaseUntil = now + this.#leaseMs;
       for (const resource of resources) {
@@ -2245,86 +2216,93 @@ export class SessionRegistry {
       expectedAuthorityVersion?: number;
       releaseResources?: readonly ResourceClaim[];
       claimResources?: readonly ResourceClaim[];
+      probeClaimOwners?: boolean;
+      assertBeforeCommit?: () => void;
+      onCommitted?: () => void;
     },
   ): void {
+    const claimed = input.claimResources ?? [];
+    const probes =
+      input.probeClaimOwners && claimed.length > 0
+        ? this.#probeClaimOwners(session, claimed)
+        : null;
     const now = this.#now();
-    this.#transaction(() => {
-      const current = this.#requireSession(session);
-      if (
-        input.expectedAuthorityVersion !== undefined &&
-        current.authority_version !== input.expectedAuthorityVersion
-      ) {
-        throw new SessionAuthorityError(
-          'AUTHORITY_LOST_DURING_OPERATION',
-          'session authority version changed before binding commit',
-        );
-      }
-      const bindings = {
-        ...(JSON.parse(current.bindings_json) as Record<string, unknown>),
-        ...input.bindings,
-      };
-      for (const resource of input.claimResources ?? []) {
-        const claim = this.#findConflictingClaim(resource);
+    this.#transaction(
+      () => {
+        const current = this.#requireSession(session);
         if (
-          claim &&
-          (claim.session_id !== session.sessionId || claim.claim_epoch !== session.claimEpoch)
+          input.expectedAuthorityVersion !== undefined &&
+          current.authority_version !== input.expectedAuthorityVersion
         ) {
-          throw claimConflict(claim);
+          throw new SessionAuthorityError(
+            'AUTHORITY_LOST_DURING_OPERATION',
+            'session authority version changed before binding commit',
+          );
         }
-      }
-      if (Object.hasOwn(input.bindings, 'device') || Object.hasOwn(input.bindings, 'install')) {
-        const currentBindings = JSON.parse(current.bindings_json) as Record<string, unknown>;
-        const platform = String(
-          ((input.bindings.device ?? currentBindings.device) as Record<string, unknown> | undefined)
-            ?.platform ?? '',
-        );
-        if (platform) {
-          this.#invalidatePlatformReceipt(session, platform);
+        const bindings = {
+          ...(JSON.parse(current.bindings_json) as Record<string, unknown>),
+          ...input.bindings,
+        };
+        this.#assertClaimsAvailable(session, claimed, probes, now);
+        if (Object.hasOwn(input.bindings, 'device') || Object.hasOwn(input.bindings, 'install')) {
+          const currentBindings = JSON.parse(current.bindings_json) as Record<string, unknown>;
+          const platform = String(
+            (
+              (input.bindings.device ?? currentBindings.device) as
+                | Record<string, unknown>
+                | undefined
+            )?.platform ?? '',
+          );
+          if (platform) {
+            this.#invalidatePlatformReceipt(session, platform);
+          }
         }
-      }
-      for (const resource of input.releaseResources ?? []) {
-        this.#database
-          .prepare(
-            `DELETE FROM claims
+        for (const resource of input.releaseResources ?? []) {
+          this.#database
+            .prepare(
+              `DELETE FROM claims
              WHERE resource_type = ? AND resource_key = ?
                AND session_id = ? AND claim_epoch = ?`,
-          )
-          .run(resource.type, resource.key, session.sessionId, session.claimEpoch);
-      }
-      const leaseUntil = now + this.#leaseMs;
-      for (const resource of input.claimResources ?? []) {
-        this.#database
-          .prepare(
-            `INSERT INTO claims(
+            )
+            .run(resource.type, resource.key, session.sessionId, session.claimEpoch);
+        }
+        const leaseUntil = now + this.#leaseMs;
+        for (const resource of input.claimResources ?? []) {
+          this.#database
+            .prepare(
+              `INSERT INTO claims(
               resource_type, resource_key, session_id, claim_epoch, lease_until_ms
             ) VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(resource_type, resource_key) DO UPDATE SET
               session_id = excluded.session_id,
               claim_epoch = excluded.claim_epoch,
               lease_until_ms = excluded.lease_until_ms`,
-          )
-          .run(resource.type, resource.key, session.sessionId, session.claimEpoch, leaseUntil);
-      }
-      this.#database
-        .prepare(
-          `UPDATE sessions
+            )
+            .run(resource.type, resource.key, session.sessionId, session.claimEpoch, leaseUntil);
+        }
+        this.#database
+          .prepare(
+            `UPDATE sessions
            SET state = ?, bindings_json = ?, authority_version = authority_version + 1,
                updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`,
-        )
-        .run(
-          input.state ?? current.state,
-          JSON.stringify(bindings),
-          now,
-          session.sessionId,
-          session.claimEpoch,
+          )
+          .run(
+            input.state ?? current.state,
+            JSON.stringify(bindings),
+            now,
+            session.sessionId,
+            session.claimEpoch,
+          );
+        this.#advanceActiveOperationFence(
+          session,
+          current.authority_version,
+          current.authority_version + 1,
         );
-      this.#advanceActiveOperationFence(
-        session,
-        current.authority_version,
-        current.authority_version + 1,
-      );
-    });
+      },
+      input.assertBeforeCommit,
+      input.onCommitted,
+    );
   }
 
   replaceBindingsDuringOperation(
@@ -2334,116 +2312,128 @@ export class SessionRegistry {
       bindings: Record<string, unknown>;
       releaseResources?: readonly ResourceClaim[];
       claimResources?: readonly ResourceClaim[];
+      assertBeforeCommit?: () => void;
+      onCommitted?: (operation: OperationRef) => void;
     },
   ): OperationRef {
     const now = this.#now();
-    return this.#transaction(() => {
-      const current = asSession(
-        this.#database
-          .prepare(
-            `SELECT state, claim_epoch, authority_version, bindings_json
+    return this.#transaction(
+      () => {
+        const current = asSession(
+          this.#database
+            .prepare(
+              `SELECT state, claim_epoch, authority_version, bindings_json
              FROM sessions WHERE session_id = ?`,
-          )
-          .get(operation.sessionId),
-      );
-      const active = this.#database
-        .prepare(
-          `SELECT operation_id FROM operations
+            )
+            .get(operation.sessionId),
+        );
+        const active = this.#database
+          .prepare(
+            `SELECT operation_id FROM operations
            WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
              AND authority_version = ?`,
-        )
-        .get(
-          operation.operationId,
-          operation.sessionId,
-          operation.claimEpoch,
-          operation.authorityVersion,
-        );
-      if (
-        !current ||
-        !isOperationalState(current.state) ||
-        current.claim_epoch !== operation.claimEpoch ||
-        current.authority_version !== operation.authorityVersion ||
-        !active
-      ) {
-        throw new SessionAuthorityError(
-          'AUTHORITY_LOST_DURING_OPERATION',
-          'operation fence no longer matches current authority',
-        );
-      }
-
-      for (const resource of input.claimResources ?? []) {
-        const claim = this.#findConflictingClaim(resource);
+          )
+          .get(
+            operation.operationId,
+            operation.sessionId,
+            operation.claimEpoch,
+            operation.authorityVersion,
+          );
         if (
-          claim &&
-          (claim.session_id !== operation.sessionId || claim.claim_epoch !== operation.claimEpoch)
+          !current ||
+          !isOperationalState(current.state) ||
+          current.claim_epoch !== operation.claimEpoch ||
+          current.authority_version !== operation.authorityVersion ||
+          !active
         ) {
-          throw claimConflict(claim);
+          throw new SessionAuthorityError(
+            'AUTHORITY_LOST_DURING_OPERATION',
+            'operation fence no longer matches current authority',
+          );
         }
-      }
-      for (const resource of input.releaseResources ?? []) {
-        this.#database
-          .prepare(
-            `DELETE FROM claims
+
+        for (const resource of input.claimResources ?? []) {
+          const claim = this.#findConflictingClaim(resource);
+          if (
+            claim &&
+            (claim.session_id !== operation.sessionId || claim.claim_epoch !== operation.claimEpoch)
+          ) {
+            throw claimConflict(claim);
+          }
+        }
+        for (const resource of input.releaseResources ?? []) {
+          this.#database
+            .prepare(
+              `DELETE FROM claims
              WHERE resource_type = ? AND resource_key = ?
                AND session_id = ? AND claim_epoch = ?`,
-          )
-          .run(resource.type, resource.key, operation.sessionId, operation.claimEpoch);
-      }
-      const leaseUntil = now + this.#leaseMs;
-      for (const resource of input.claimResources ?? []) {
-        this.#database
-          .prepare(
-            `INSERT INTO claims(
+            )
+            .run(resource.type, resource.key, operation.sessionId, operation.claimEpoch);
+        }
+        const leaseUntil = now + this.#leaseMs;
+        for (const resource of input.claimResources ?? []) {
+          this.#database
+            .prepare(
+              `INSERT INTO claims(
               resource_type, resource_key, session_id, claim_epoch, lease_until_ms
             ) VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(resource_type, resource_key) DO UPDATE SET
               session_id = excluded.session_id,
               claim_epoch = excluded.claim_epoch,
               lease_until_ms = excluded.lease_until_ms`,
-          )
-          .run(resource.type, resource.key, operation.sessionId, operation.claimEpoch, leaseUntil);
-      }
+            )
+            .run(
+              resource.type,
+              resource.key,
+              operation.sessionId,
+              operation.claimEpoch,
+              leaseUntil,
+            );
+        }
 
-      const nextAuthorityVersion = operation.authorityVersion + 1;
-      const bindings = {
-        ...(JSON.parse(current.bindings_json) as Record<string, unknown>),
-        ...input.bindings,
-      };
-      this.#database
-        .prepare(
-          `UPDATE sessions
+        const nextAuthorityVersion = operation.authorityVersion + 1;
+        const bindings = {
+          ...(JSON.parse(current.bindings_json) as Record<string, unknown>),
+          ...input.bindings,
+        };
+        this.#database
+          .prepare(
+            `UPDATE sessions
            SET state = ?, bindings_json = ?, authority_version = ?, updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ? AND authority_version = ?`,
-        )
-        .run(
-          input.state ?? current.state,
-          JSON.stringify(bindings),
-          nextAuthorityVersion,
-          now,
-          operation.sessionId,
-          operation.claimEpoch,
-          operation.authorityVersion,
-        );
-      this.#database
-        .prepare(
-          `UPDATE operations SET authority_version = ?, lease_until_ms = ?
+          )
+          .run(
+            input.state ?? current.state,
+            JSON.stringify(bindings),
+            nextAuthorityVersion,
+            now,
+            operation.sessionId,
+            operation.claimEpoch,
+            operation.authorityVersion,
+          );
+        this.#database
+          .prepare(
+            `UPDATE operations SET authority_version = ?, lease_until_ms = ?
            WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
              AND authority_version = ?`,
-        )
-        .run(
-          nextAuthorityVersion,
-          leaseUntil,
-          operation.operationId,
-          operation.sessionId,
-          operation.claimEpoch,
-          operation.authorityVersion,
-        );
-      const context = this.#operationContext.getStore();
-      if (context?.operationId === operation.operationId) {
-        context.authorityVersion = nextAuthorityVersion;
-      }
-      return { ...operation, authorityVersion: nextAuthorityVersion };
-    });
+          )
+          .run(
+            nextAuthorityVersion,
+            leaseUntil,
+            operation.operationId,
+            operation.sessionId,
+            operation.claimEpoch,
+            operation.authorityVersion,
+          );
+        const context = this.#operationContext.getStore();
+        if (context?.operationId === operation.operationId) {
+          context.authorityVersion = nextAuthorityVersion;
+        }
+        return { ...operation, authorityVersion: nextAuthorityVersion };
+      },
+      input.assertBeforeCommit,
+      input.onCommitted,
+    );
   }
 
   endOperationWithBindings(operation: OperationRef, bindings: Record<string, unknown>): void {
@@ -4763,6 +4753,45 @@ export class SessionRegistry {
     return owners;
   }
 
+  #assertClaimsAvailable(
+    session: SessionRef,
+    resources: readonly ResourceClaim[],
+    probes: Map<string, { claimEpoch: number; status: OwnerStatus }> | null,
+    now: number,
+  ): void {
+    for (const resource of resources) {
+      const claim = this.#findConflictingClaim(resource);
+      if (
+        !claim ||
+        (claim.session_id === session.sessionId && claim.claim_epoch === session.claimEpoch)
+      ) {
+        continue;
+      }
+      if (!probes) throw claimConflict(claim);
+
+      const probe = probes.get(claim.session_id);
+      if (!probe || probe.claimEpoch !== claim.claim_epoch) {
+        throw claimConflict(claim);
+      }
+      if (probe.status === 'match') throw claimConflict(claim);
+      if (probe.status === 'unknown') {
+        if (claim.lease_until_ms < now) {
+          throw new SessionAuthorityError(
+            'STALE_LEASE_NOT_RECLAIMABLE',
+            'expired lease owner identity could not be proven',
+            { sessionId: claim.session_id, claimEpoch: claim.claim_epoch },
+          );
+        }
+        throw claimConflict(claim);
+      }
+      throw new SessionAuthorityError(
+        'SESSION_AUTHORITY_REQUIRED',
+        'a proven-stale owner requires explicit adopt_stale before claims transfer',
+        { sessionId: claim.session_id, claimEpoch: claim.claim_epoch },
+      );
+    }
+  }
+
   #requireSession(session: SessionRef): SessionRow {
     const row = asSession(
       this.#database
@@ -5328,16 +5357,37 @@ export class SessionRegistry {
       .run(now, sessionId);
   }
 
-  #transaction<T>(operation: () => T): T {
+  #transaction<T>(
+    operation: () => T,
+    assertBeforeCommit?: () => void,
+    onCommitted?: (result: T) => void,
+  ): T {
     this.#database.exec('BEGIN IMMEDIATE');
+    const context = this.#operationContext.getStore();
+    const priorContextAuthorityVersion = context?.authorityVersion;
+    let committed = false;
     try {
       const result = operation();
+      assertBeforeCommit?.();
       this.#database.exec('COMMIT');
-      this.#secureFiles();
+      committed = true;
+      try {
+        onCommitted?.(result);
+      } finally {
+        this.#secureFiles();
+      }
       return result;
     } catch (error) {
-      this.#database.exec('ROLLBACK');
-      this.#secureFiles();
+      if (!committed) {
+        try {
+          this.#database.exec('ROLLBACK');
+        } finally {
+          if (context && priorContextAuthorityVersion !== undefined) {
+            context.authorityVersion = priorContextAuthorityVersion;
+          }
+          this.#secureFiles();
+        }
+      }
       throw error;
     }
   }

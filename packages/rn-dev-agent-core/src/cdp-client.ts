@@ -60,14 +60,20 @@ import type {
 export interface AuthoritativeSessionPolicy {
   port: number;
   filters: Pick<ConnectFilters, 'platform' | 'bundleId'>;
-  resolveTargetId(targets: HermesTarget[]): Promise<string>;
-  verifyAndReconcile(client: CDPClient): Promise<void>;
+  resolveTargetId(
+    targets: HermesTarget[],
+    awaitWithinBoundary?: AwaitWithinBoundary,
+  ): Promise<string>;
+  verifyAndReconcile(client: CDPClient, awaitWithinBoundary?: AwaitWithinBoundary): Promise<void>;
 }
+
+export type AwaitWithinBoundary = <T>(operation: () => Promise<T>) => Promise<T>;
 
 export async function discoverAuthoritativeTarget(
   policy: AuthoritativeSessionPolicy,
   requestedFilters: ConnectFilters,
   discoverFn: typeof discoverExactPort = discoverExactPort,
+  awaitWithinBoundary?: AwaitWithinBoundary,
 ): Promise<DiscoveryResult> {
   const result = await discoverFn(policy.port, {
     ...requestedFilters,
@@ -76,7 +82,10 @@ export async function discoverAuthoritativeTarget(
     preferredBundleId: undefined,
   });
   if (result.errorCode || result.targets.length === 0) return result;
-  const targetId = await policy.resolveTargetId(result.targets);
+  const resolveTargetId = () => policy.resolveTargetId(result.targets, awaitWithinBoundary);
+  const targetId = await (awaitWithinBoundary
+    ? awaitWithinBoundary(resolveTargetId)
+    : resolveTargetId());
   const target = result.targets.find((candidate) => candidate.id === targetId);
   if (!target) {
     throw new Error(
@@ -101,6 +110,7 @@ export class CDPClient {
   private _port: number;
   private reconnecting = false;
   private disposed = false;
+  private lifecycleAuthority: () => boolean = () => true;
   private _helpersInjected = false;
   private _helperWorldGeneration = 0;
   private _helperContext: { id: number; uniqueId?: string } | null = null;
@@ -235,6 +245,16 @@ export class CDPClient {
   }
   get connectionGeneration(): number {
     return this._connectionGeneration;
+  }
+
+  setLifecycleAuthority(isCurrent: () => boolean): void {
+    this.lifecycleAuthority = isCurrent;
+  }
+
+  publishLifecycleState(): void {
+    if (this.lifecycleAuthority() && this.isConnected && this._helpersInjected) {
+      setActiveFlag(this._port, this._connectedTarget);
+    }
   }
   get bridgeDetected(): boolean {
     return this._bridgeDetected;
@@ -390,7 +410,7 @@ export class CDPClient {
     this._helpersInjected = false;
     this._bridgeDetected = false;
     this._bridgeVersion = null;
-    clearActiveFlag();
+    this.clearActiveState();
     this._helperToken = {
       generation: this._helperWorldGeneration,
       ws: this.ws,
@@ -480,7 +500,7 @@ export class CDPClient {
     this._helpersInjected = false;
     this._bridgeDetected = false;
     this._bridgeVersion = null;
-    clearActiveFlag();
+    this.clearActiveState();
     logger.warn(
       'CDP',
       `Helper state unavailable cause=${cause} helperEpoch=${token.generation} connectionGeneration=${this._connectionGeneration}`,
@@ -540,7 +560,7 @@ export class CDPClient {
   ): void {
     if (!this.isHelperTokenCurrent(token)) return;
     this._helpersInjected = true;
-    setActiveFlag(this._port, this._connectedTarget);
+    if (this.lifecycleAuthority()) setActiveFlag(this._port, this._connectedTarget);
     logger.info(
       'CDP',
       `Helper state ready cause=${cause} helperEpoch=${token.generation} connectionGeneration=${this._connectionGeneration}`,
@@ -613,14 +633,19 @@ export class CDPClient {
     filters: ConnectFilters,
     intent: ConnectIntent = 'default',
     targetRetries = 5,
+    awaitWithinBoundary?: AwaitWithinBoundary,
   ): Promise<string> {
     this._reconnectDiscover = discoverExactPort;
     this._exactDiscoveryPort = port;
-    return this.connectWithCurrentPolicy(port, filters, intent, targetRetries);
+    return this.connectWithCurrentPolicy(port, filters, intent, targetRetries, awaitWithinBoundary);
   }
 
   async listTargetsExact(port: number): Promise<{ port: number; targets: HermesTarget[] }> {
     return listTargetsOnExactPort(this._authoritativeSessionPolicy?.port ?? port);
+  }
+
+  get authoritativeSessionPolicy(): AuthoritativeSessionPolicy | undefined {
+    return this._authoritativeSessionPolicy;
   }
 
   setAuthoritativeSessionPolicy(policy: AuthoritativeSessionPolicy): void {
@@ -659,21 +684,26 @@ export class CDPClient {
   private _reconnectDiscover: typeof discoverExactPort | undefined;
   private _exactDiscoveryPort: number | undefined;
 
-  private authoritativeDiscover: typeof discoverExactPort = async (_port, filtersOrPlatform) => {
-    const policy = this._authoritativeSessionPolicy;
-    if (!policy) throw new Error('Authoritative session policy is unavailable');
-    const filters =
-      typeof filtersOrPlatform === 'string'
-        ? { platform: filtersOrPlatform }
-        : (filtersOrPlatform ?? {});
-    return discoverAuthoritativeTarget(policy, filters);
-  };
+  private createAuthoritativeDiscover(
+    awaitWithinBoundary?: AwaitWithinBoundary,
+  ): typeof discoverExactPort {
+    return async (_port, filtersOrPlatform) => {
+      const policy = this._authoritativeSessionPolicy;
+      if (!policy) throw new Error('Authoritative session policy is unavailable');
+      const filters =
+        typeof filtersOrPlatform === 'string'
+          ? { platform: filtersOrPlatform }
+          : (filtersOrPlatform ?? {});
+      return discoverAuthoritativeTarget(policy, filters, discoverExactPort, awaitWithinBoundary);
+    };
+  }
 
   private async connectWithCurrentPolicy(
     portHint: number | undefined,
     filters: ConnectFilters,
     intent: ConnectIntent,
     targetRetries = 5,
+    awaitWithinBoundary?: AwaitWithinBoundary,
   ): Promise<string> {
     const policy = this._authoritativeSessionPolicy;
     const result = await autoConnectFn(
@@ -681,10 +711,10 @@ export class CDPClient {
       policy?.port ?? this._exactDiscoveryPort ?? portHint,
       policy ? { ...filters, ...policy.filters, targetId: undefined } : filters,
       intent,
-      policy ? this.authoritativeDiscover : this._reconnectDiscover,
+      policy ? this.createAuthoritativeDiscover(awaitWithinBoundary) : this._reconnectDiscover,
       targetRetries,
     );
-    await this.verifyAuthoritativeConnection();
+    await this.verifyAuthoritativeConnection(awaitWithinBoundary);
     return result;
   }
 
@@ -694,16 +724,20 @@ export class CDPClient {
       this.buildConnectCtx(),
       policy?.port ?? this._exactDiscoveryPort ?? portHint,
       policy ? { ...filters, ...policy.filters, targetId: undefined } : filters,
-      policy ? this.authoritativeDiscover : this._reconnectDiscover,
+      policy ? this.createAuthoritativeDiscover() : this._reconnectDiscover,
     );
     await this.verifyAuthoritativeConnection();
     return result;
   }
 
-  private async verifyAuthoritativeConnection(): Promise<void> {
+  private async verifyAuthoritativeConnection(
+    awaitWithinBoundary?: AwaitWithinBoundary,
+  ): Promise<void> {
     if (!this._authoritativeSessionPolicy) return;
     try {
-      await this._authoritativeSessionPolicy.verifyAndReconcile(this);
+      const verifyAndReconcile = () =>
+        this._authoritativeSessionPolicy!.verifyAndReconcile(this, awaitWithinBoundary);
+      await (awaitWithinBoundary ? awaitWithinBoundary(verifyAndReconcile) : verifyAndReconcile());
     } catch (error) {
       this.rejectAllPending(new Error('Authoritative runtime verification failed'));
       if (this.ws) {
@@ -714,7 +748,7 @@ export class CDPClient {
         this.ws = null;
       }
       resetState(this.buildResettableState());
-      clearActiveFlag();
+      this.clearActiveState();
       throw error;
     }
   }
@@ -898,7 +932,7 @@ export class CDPClient {
     this.disposed = true;
     this.invalidateHelperWorld('explicit_disconnect');
     resetState(this.buildResettableState());
-    clearActiveFlag();
+    this.clearActiveState();
     this.stopBackgroundPoll();
 
     // M5 (D656): tear down Metro /events subscriber alongside CDP shutdown.
@@ -1253,6 +1287,7 @@ export class CDPClient {
         this._bgPollTimer = timer;
       },
       getBgPollTimer: () => this._bgPollTimer,
+      clearActiveState: () => this.clearActiveState(),
       // B132: after the exponential-backoff reconnect loop succeeds, rehydrate
       // the proxy if one was desired. This is the "auto-resume" half of the
       // suspend→reconnect→resume sequence. softReconnect has its own wrapper
@@ -1269,6 +1304,7 @@ export class CDPClient {
       isSoftReconnectRequested: () => this._softReconnectRequested,
       getState: () => this._state,
       setState: (s) => {
+        if (this.disposed && s !== 'disconnected') return;
         this._state = s;
       },
       getPort: () => this._port,
@@ -1281,6 +1317,12 @@ export class CDPClient {
       },
       getWs: () => this.ws,
       setWs: (ws) => {
+        if (this.disposed && ws) {
+          try {
+            ws.terminate();
+          } catch {}
+          return;
+        }
         if (this.ws === ws) return;
         this.ws = ws;
         this._helperContext = null;
@@ -1290,11 +1332,13 @@ export class CDPClient {
         if (!v) this.invalidateHelperWorld('candidate_rejected');
       },
       setConnectedTarget: (t) => {
+        if (this.disposed && t) return;
         if (this._connectedTarget === t) return;
         this._connectedTarget = t;
         this.invalidateHelperWorld(t ? 'candidate_selected' : 'candidate_rejected');
       },
       setConnectedAt: (ms) => {
+        if (this.disposed && ms !== null) return;
         this._connectedAt = ms;
       },
       now: () => this._timeNowFn(),
@@ -1346,6 +1390,10 @@ export class CDPClient {
 
   private rejectAllPending(reason: Error): void {
     rejectPending(this.pending, reason);
+  }
+
+  private clearActiveState(): void {
+    if (this.lifecycleAuthority()) clearActiveFlag();
   }
 
   private sendWithTimeout(method: string, params: unknown, ms: number): Promise<unknown> {
