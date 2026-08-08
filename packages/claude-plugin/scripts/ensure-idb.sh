@@ -102,6 +102,12 @@ install_command() {
   fi
 }
 
+# The companion half alone: a client that already works must never be told to
+# reinstall fb-idb.
+companion_command() {
+  echo "brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion"
+}
+
 # The probe only observes a non-zero exit (a timeout or EACCES lands here too),
 # so the cause is stated as probable rather than asserted as fact.
 incompatible_explanation() {
@@ -219,7 +225,7 @@ if [ "$CLIENT_STATE" != ready ] && [ "${LAST_STATUS:-}" = "incompatible" ] && [ 
     echo "idb is not installed, and no supported Python is available to install it (need one of: $SUPPORTED_PYTHONS)."
     echo "Recover with: $(install_command)"
   fi
-  echo "Not retrying until the installed Python interpreters change (log: $LOG). Mirroring stays on the ~6fps simctl tier."
+  echo "Not retrying until the installed Python interpreters change — delete $MARKER to force a retry (e.g. after a newer fb-idb ships). Log: $LOG. Mirroring stays on the ~6fps simctl tier."
   exit 0
 fi
 
@@ -230,8 +236,13 @@ if [ "$CLIENT_STATE" = broken ]; then
     exit 0
   fi
 elif ! command -v brew >/dev/null 2>&1; then
-  echo "idb not installed (optional — enables 20-30fps screen mirroring instead of ~6fps)."
-  echo "Install manually: $(install_command)"
+  if [ "$CLIENT_STATE" = ready ]; then
+    echo "idb-companion not installed (the idb client works; the companion is the missing half)."
+    echo "Install manually: $(companion_command)"
+  else
+    echo "idb not installed (optional — enables 20-30fps screen mirroring instead of ~6fps)."
+    echo "Install manually: $(install_command)"
+  fi
   exit 0
 fi
 
@@ -258,6 +269,8 @@ if [ "${LAST_STATUS:-}" = "failed" ] && [ -n "${LAST_TS:-}" ]; then
     if [ "${LAST_CAUSE:-}" = "path-shim" ]; then
       path_shim_explanation
       echo "Retrying the install after backoff anyway (log: $LOG)."
+    elif [ "$CLIENT_STATE" = ready ]; then
+      echo "idb-companion install failed recently — retrying after backoff (manual: $(companion_command), log: $LOG)"
     else
       echo "idb install failed recently — retrying after backoff (manual: $(install_command), log: $LOG)"
     fi
@@ -270,6 +283,10 @@ fi
 # they then prevent.
 if [ "$CLIENT_STATE" = absent ]; then
   NOTICE="idb missing — installing in background ($(install_command)). Log: $LOG"
+elif [ "$CLIENT_STATE" = ready ]; then
+  # The client already works; the worker's own guard skips pipx entirely here,
+  # so promising an interpreter repair would describe work that never runs.
+  NOTICE="idb-companion missing — installing it in background ($(companion_command)). Log: $LOG"
 else
   NOTICE="Repairing in the background under a supported interpreter ($SUPPORTED_PYTHONS). Manual: $(install_command). Log: $LOG"
 fi

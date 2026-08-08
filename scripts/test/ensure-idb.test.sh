@@ -14,6 +14,7 @@
 #   - transient install failure    -> retryable `failed`, never the verdict
 #   - stale verdict vs live probe  -> the probe wins, repair still spawns
 #   - "repairing" notice           -> printed only when a worker really spawns
+#   - ready client, no companion   -> companion notice only, never an fb-idb one
 #   - no message ever prints the unpinned `pipx install fb-idb` (GH#578)
 #   - SessionStart safety: the foreground path never runs brew/pipx inline
 #
@@ -300,27 +301,34 @@ if echo "$OUT" | grep -qi "is installed but"; then
   ok "repair-notice: still explains the incompatibility truthfully"
 else bad "repair-notice: dropped the broken-client explanation, got: $OUT"; fi
 
-# 7h. GH#578 round 4: a pinned install that SUCCEEDS but leaves no client on
+# 7l. GH#578 round 4: a pinned install that SUCCEEDS but leaves no client on
 #     PATH is a shim-visibility problem, not an incompatibility. It must stay
 #     retryable (`failed`), must record the cause, and must never tell the
 #     developer to re-run the install command that already succeeded.
-STATE="$TMP/state7h"
+STATE="$TMP/state7l"
 mkdir -p "$STATE"
 STUBS="$(mkstubs "idb_companion brew python3.13")"
 printf '#!/bin/sh\nexit 0\n' > "$STUBS/pipx"; chmod +x "$STUBS/pipx"
-run_worker "$STUBS" "$TMP/worker7h.out"
+run_worker "$STUBS" "$TMP/worker7l.out"
 if grep -q "^failed " "$STATE/last-attempt" 2>/dev/null; then
   ok "path-shim: retryable failed verdict, not terminal"
 else bad "path-shim: expected failed marker, got: $(cat "$STATE/last-attempt" 2>/dev/null)"; fi
 if grep -q "path-shim" "$STATE/last-attempt" 2>/dev/null; then
   ok "path-shim: cause persisted to the marker"
 else bad "path-shim: expected cause in marker, got: $(cat "$STATE/last-attempt" 2>/dev/null)"; fi
-if grep -qi "asyncio.get_event_loop" "$TMP/worker7h.out"; then
+if grep -qi "asyncio.get_event_loop" "$TMP/worker7l.out"; then
   bad "path-shim: falsely blamed the interpreter incompatibility"
 else ok "path-shim: does not blame the interpreter"; fi
 
-# 7i. The foreground line the developer reads for the next 24h must carry that
+# 7m. The foreground line the developer reads for the next 24h must carry that
 #     cause instead of defaulting to the already-successful install command.
+#     Self-contained: its own state dir and stubs, with the path-shim marker
+#     produced by a worker run of its own rather than inherited from 7l.
+STATE="$TMP/state7m"
+mkdir -p "$STATE"
+STUBS="$(mkstubs "idb_companion brew python3.13")"
+printf '#!/bin/sh\nexit 0\n' > "$STUBS/pipx"; chmod +x "$STUBS/pipx"
+run_worker "$STUBS" "$TMP/worker7m.out"
 OUT="$(run_script "$STUBS")"
 if echo "$OUT" | grep -qi "not exported\|ensurepath"; then
   ok "path-shim: backoff line names the PATH cause"
@@ -330,9 +338,9 @@ if echo "$OUT" | grep -q "idb install failed recently"; then
 else ok "path-shim: no generic install-failed fallback"; fi
 assert_no_unpinned_install "path-shim" "$OUT"
 
-# 7j. The no-interpreter terminal verdict must not narrate the crashing-client
+# 7n. The no-interpreter terminal verdict must not narrate the crashing-client
 #     story: in that state the client is absent, so that explanation is false.
-STATE="$TMP/state7j"
+STATE="$TMP/state7n"
 mkdir -p "$STATE"
 STUBS="$(mkstubs "idb_companion brew")"
 echo "incompatible $(date +%s) none no-interpreter" > "$STATE/last-attempt"
@@ -343,6 +351,9 @@ else bad "no-interpreter: expected interpreter message, got: $OUT"; fi
 if echo "$OUT" | grep -qi "did not respond successfully"; then
   bad "no-interpreter: narrated the crashing-client story for an absent client"
 else ok "no-interpreter: does not claim a crashing client"; fi
+if echo "$OUT" | grep -q "$STATE/last-attempt"; then
+  ok "no-interpreter: names the marker path as the escape hatch"
+else bad "no-interpreter: expected the marker path in the terminal line, got: $OUT"; fi
 
 # 7k. The cause claim is hedged, never asserted as fact — the probe cannot
 #     separate a crash from a timeout or EACCES.
@@ -353,6 +364,31 @@ OUT="$(run_script "$STUBS")"
 if echo "$OUT" | grep -qi "most likely"; then
   ok "hedging: cause stated as probable"
 else bad "hedging: expected hedged cause, got: $OUT"; fi
+
+# 7o. A healthy client whose only missing piece is the companion must not be
+#     told an interpreter repair is underway: the worker's own guard skips pipx
+#     entirely in that state, so the fb-idb command describes work never run.
+STATE="$TMP/state7o"
+STUBS="$(mkstubs "idb brew python3.13")"
+OUT="$(run_script "$STUBS")"
+if echo "$OUT" | grep -qi "idb-companion missing"; then
+  ok "ready-no-companion: names the companion as the missing piece"
+else bad "ready-no-companion: expected a companion notice, got: $OUT"; fi
+if echo "$OUT" | grep -qiE "Repairing in the background|pipx|fb-idb"; then
+  bad "ready-no-companion: offered an fb-idb repair for a working client, got: $OUT"
+else ok "ready-no-companion: no fb-idb reinstall suggested"; fi
+[ -f "$STATE/spawn.log" ] && ok "ready-no-companion: still spawns the companion install" || bad "ready-no-companion: no spawn recorded"
+
+# 7p. Same state without brew: the manual hint is the companion half only.
+STATE="$TMP/state7p"
+STUBS="$(mkstubs "idb")"
+OUT="$(run_script "$STUBS")"
+if echo "$OUT" | grep -qiE "pipx|fb-idb"; then
+  bad "ready-no-brew: printed an fb-idb command for a working client, got: $OUT"
+else ok "ready-no-brew: companion-only manual hint"; fi
+if echo "$OUT" | grep -q "brew install idb-companion"; then
+  ok "ready-no-brew: names the companion install"
+else bad "ready-no-brew: expected the companion command, got: $OUT"; fi
 
 # 8. SessionStart safety: foreground path must not invoke brew/pipx inline.
 #    The dry-spawn seam proves the install goes through the detached worker;
