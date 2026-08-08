@@ -2890,6 +2890,31 @@ test('bounded CAS recovery restores a file captured during worker timeout', () =
   }
 });
 
+test('a bound operation slower than five seconds commits instead of timing out', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-bound-slow-'));
+  const markerPath = join(root, 'authority-marker.js');
+  writeFileSync(markerPath, 'before\n');
+  const directory = openBoundDirectory(root);
+  try {
+    casBoundDirectoryFiles(
+      directory,
+      [
+        {
+          expected: Buffer.from('before\n'),
+          mode: 0o600,
+          name: 'authority-marker.js',
+          replacement: Buffer.from('after\n'),
+        },
+      ],
+      { afterCaptureDelayMs: 6_000 },
+    );
+    assert.equal(readFileSync(markerPath, 'utf8'), 'after\n');
+  } finally {
+    closeBoundDirectory(directory);
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
 test('bounded CAS recovery refuses a journal-less timeout outcome', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-bound-unknown-'));
   const markerPath = join(root, 'authority-marker.js');

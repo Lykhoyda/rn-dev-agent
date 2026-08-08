@@ -17,8 +17,14 @@ auto-reconnect configuration from passive `cdp_status`.
 For **linked-worktree action inheritance**, resolve the RN app root and run the packaged `worktree-inheritance.js plan --host claude --app-root <app> --json`. Report `.rn-agent/actions` as tracked, inherited, missing, legacy-migration-needed, unsafe, or refused. Also report `hook status`. Never apply, repair, install a hook, print a private source path, or inspect an action body from doctor.
 
 For **idb**, require both a healthy `idb --help` and `idb_companion`; an active
-install PID is INSTALLING, otherwise report MISSING and the documented install
-command. This row is YELLOW because mirroring has a screenshot fallback.
+install PID is INSTALLING. A client on PATH whose `idb --help` fails is BROKEN,
+not MISSING — report it as installed but not responding, naming the Python 3.14
+interpreter incompatibility as the *probable* cause rather than a certainty (the
+probe cannot separate a crash from a timeout or EACCES), and give the pinned
+repair command, never a bare `pipx install fb-idb`. On a machine with no
+supported interpreter, prefix that command with `brew install python@3.13 &&`.
+Otherwise report MISSING and the documented install command. This row is YELLOW
+because mirroring has a screenshot fallback.
 
 For runner provenance, inspect the runner artifact/state metadata documented by
 `rn-setup`. For helpers, use a narrow gated CDP read. For CDP auto-reconnect,
