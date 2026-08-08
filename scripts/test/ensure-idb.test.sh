@@ -390,6 +390,21 @@ if echo "$OUT" | grep -q "brew install idb-companion"; then
   ok "ready-no-brew: names the companion install"
 else bad "ready-no-brew: expected the companion command, got: $OUT"; fi
 
+# 7q. A stale path-shim cause must never outrank the live probe: once the shim
+#     is exported the client reads ready, so the "no idb client is visible on
+#     PATH" story is false and the companion is the only missing half.
+STATE="$TMP/state7q"
+mkdir -p "$STATE"
+echo "failed $(date +%s) python3.13, path-shim" > "$STATE/last-attempt"
+STUBS="$(mkstubs "idb brew python3.13")"
+OUT="$(run_script "$STUBS")"
+if echo "$OUT" | grep -qi "not exported\|ensurepath"; then
+  bad "stale-path-shim: claimed an invisible shim for a working client, got: $OUT"
+else ok "stale-path-shim: live probe outranks the persisted cause"; fi
+if echo "$OUT" | grep -qiE "pipx install|fb-idb"; then
+  bad "stale-path-shim: offered an fb-idb command for a working client, got: $OUT"
+else ok "stale-path-shim: companion-only remedy"; fi
+
 # 8. SessionStart safety: foreground path must not invoke brew/pipx inline.
 #    The dry-spawn seam proves the install goes through the detached worker;
 #    additionally the script source must route the real spawn through nohup.

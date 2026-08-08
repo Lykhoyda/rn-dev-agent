@@ -266,11 +266,11 @@ if [ "${LAST_STATUS:-}" = "failed" ] && [ -n "${LAST_TS:-}" ]; then
     # This line is what the developer reads for the next 24h, so it must carry
     # the cause the worker determined rather than defaulting to an install
     # command that, for the shim case, already succeeded.
-    if [ "${LAST_CAUSE:-}" = "path-shim" ]; then
+    if [ "$CLIENT_STATE" = ready ]; then
+      echo "idb-companion install failed recently — retrying after backoff (manual: $(companion_command), log: $LOG)"
+    elif [ "$CLIENT_STATE" = absent ] && [ "${LAST_CAUSE:-}" = "path-shim" ]; then
       path_shim_explanation
       echo "Retrying the install after backoff anyway (log: $LOG)."
-    elif [ "$CLIENT_STATE" = ready ]; then
-      echo "idb-companion install failed recently — retrying after backoff (manual: $(companion_command), log: $LOG)"
     else
       echo "idb install failed recently — retrying after backoff (manual: $(install_command), log: $LOG)"
     fi
