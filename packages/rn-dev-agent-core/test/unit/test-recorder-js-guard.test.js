@@ -32,14 +32,15 @@ test('M6 JS guard: START installs __METRO_MCP_REC_CLEANUP__ and restores both ho
   assert.match(START_RECORDING_JS, /hook\.onCommitFiberRoot = origCommit/);
 });
 
-test('M6 JS guard: START uses obj.__mcpRec idempotency flag', () => {
-  assert.match(START_RECORDING_JS, /!obj\.__mcpRec/);
-  assert.match(START_RECORDING_JS, /obj\.__mcpRec = true/);
+test('M6 JS guard: START uses a session-aware obj.__mcpRec idempotency flag', () => {
+  assert.match(START_RECORDING_JS, /obj\.__mcpRec !== sessionId/);
+  assert.match(START_RECORDING_JS, /obj\.__mcpRec = sessionId/);
 });
 
-test('M6 JS guard: START contains the M8 1..5 renderer loop', () => {
+test('M6 JS guard: START retains fallback and registered renderer discovery', () => {
   assert.match(START_RECORDING_JS, /for \(var ri = 1; ri <= 5; ri\+\+\)/);
-  assert.match(START_RECORDING_JS, /hook\.getFiberRoots\(ri\)/);
+  assert.match(START_RECORDING_JS, /hook\.renderers\.forEach/);
+  assert.match(START_RECORDING_JS, /hook\.getFiberRoots\(entry\.id\)/);
 });
 
 test('M6 JS guard: START documents the finger-direction deviation vs metro-mcp', () => {
@@ -79,6 +80,17 @@ test('M6 JS guard: START walks fibers for already-mounted scroll containers', ()
   assert.match(START_RECORDING_JS, /forceUpdate/);
   assert.match(START_RECORDING_JS, /overrideProps/);
   assert.match(START_RECORDING_JS, /__mcpInit/);
+});
+
+// B145 behavior is covered by test-recorder-initiating-tap.test.ts; this pins its shape.
+test('M6 JS guard: START walks fibers for already-mounted interactive handlers', () => {
+  assert.match(START_RECORDING_JS, /isInteractiveFiber/);
+  assert.match(START_RECORDING_JS, /isRenderOwningComposite/);
+  assert.match(START_RECORDING_JS, /react\.memo/);
+  assert.match(START_RECORDING_JS, /react\.forward_ref/);
+  assert.match(START_RECORDING_JS, /react\.lazy/);
+  assert.match(START_RECORDING_JS, /compositeAncestor/);
+  assert.match(START_RECORDING_JS, /handlerTargets/);
 });
 
 test('M6 JS guard: STOP calls cleanup and reads truncated flag', () => {

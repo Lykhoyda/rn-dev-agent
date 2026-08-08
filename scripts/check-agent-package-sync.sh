@@ -127,13 +127,13 @@ expect_codex_skill_inventory() {
   command="$(jq -r '.hostAdaptations.codex.commandSkills[]?' "$source_map" | sort)"
   expected="$(printf '%s\n%s\n' "$domain" "$command" | grep -v '^$' | sort -u)"
   actual="$(find "$ROOT/packages/codex-plugin/skills" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort)"
-  if [ "$(printf '%s\n' "$domain" | grep -c .)" -ne 10 ] || \
-     [ "$(printf '%s\n' "$command" | grep -c .)" -ne 15 ] || \
-     [ "$(printf '%s\n' "$expected" | grep -c .)" -ne 25 ]; then
-    fail "Codex source-map inventory must contain 10 domain + 15 non-colliding workflow skills"
+  if [ "$(printf '%s\n' "$domain" | grep -c .)" -ne 11 ] || \
+     [ "$(printf '%s\n' "$command" | grep -c .)" -ne 16 ] || \
+     [ "$(printf '%s\n' "$expected" | grep -c .)" -ne 27 ]; then
+    fail "Codex source-map inventory must contain 11 domain + 16 non-colliding workflow skills"
   fi
   if [ "$actual" != "$expected" ]; then
-    fail "Codex skills must equal exactly 10 adapted domain + 15 generated workflow skills"
+    fail "Codex skills must equal exactly 11 adapted domain + 16 generated workflow skills"
   fi
   while IFS= read -r name; do
     [ -n "$name" ] || continue
@@ -233,6 +233,7 @@ for path in \
   packages/claude-plugin/rn-dev-agent-core/package.json \
   packages/claude-plugin/rn-dev-agent-core/dist/index.js \
   packages/claude-plugin/rn-dev-agent-core/dist/learned-actions.js \
+  packages/claude-plugin/rn-dev-agent-core/dist/workflow-check.js \
   packages/claude-plugin/rn-dev-agent-core/dist/observability/web-dist/index.html \
   packages/claude-plugin/rn-dev-agent-core/dist/supervisor.js \
   packages/claude-plugin/rn-dev-agent-core/dist/web-dist/index.html \
@@ -260,6 +261,7 @@ for path in \
   packages/codex-plugin/rn-dev-agent-core/package.json \
   packages/codex-plugin/rn-dev-agent-core/dist/index.js \
   packages/codex-plugin/rn-dev-agent-core/dist/learned-actions.js \
+  packages/codex-plugin/rn-dev-agent-core/dist/workflow-check.js \
   packages/codex-plugin/rn-dev-agent-core/dist/observability/web-dist/index.html \
   packages/codex-plugin/rn-dev-agent-core/dist/supervisor.js \
   packages/codex-plugin/rn-dev-agent-core/dist/web-dist/index.html \
@@ -334,7 +336,7 @@ if [ -f "$ROOT/runner-manifest.json" ] && [ -f "$ROOT/packages/claude-plugin/run
 fi
 # The two host runtimes are one esbuild output copied twice
 # (scripts/build-host-runtimes.ts) — byte-identical by construction.
-for runtime_entry in supervisor.js index.js learned-actions.js; do
+for runtime_entry in supervisor.js index.js learned-actions.js workflow-check.js; do
   if ! cmp -s "$ROOT/packages/codex-plugin/rn-dev-agent-core/dist/$runtime_entry" "$ROOT/packages/claude-plugin/rn-dev-agent-core/dist/$runtime_entry"; then
     fail "Claude and Codex bundled runtimes must be byte-identical: dist/$runtime_entry"
   fi
@@ -465,7 +467,7 @@ if grep -Eq 'marketplaceSourceFromConfig|sourcePluginRootFromMarketplace|rn-dev-
   fail "Codex supervisor wrapper must not depend on marketplace source or global core caches"
 fi
 expect_jq "packages/shared-agent-knowledge/source-map.json" \
-  '.canonicalSources.skills == "./skills" and .canonicalSources.commands == "./commands" and .canonicalSources.agents == "./agents" and .nativeRunners.ios == "../rn-fast-runner" and .nativeRunners.android == "../rn-android-runner" and (.hostAdaptations.codex.adaptedCommands | length) == 15 and (.hostAdaptations.codex.adaptedDomainSkills | length) == 10 and (.hostAdaptations.codex.commandSkills | length) == 15 and .hostAdaptations.codex.liveRefreshFloor == "0.145.0" and .hostAdaptations.codex.healthSource == "../codex-plugin/src/plugin-health.ts" and .hostAdaptations.codex.agentsTemplateSource == "../codex-plugin/src/AGENTS-MD-TEMPLATE.md" and .hostOutputs.claude.manifest == "../claude-plugin/.claude-plugin/plugin.json" and .hostOutputs.claude.legacyManifest == "../claude-plugin/plugin.json" and .hostOutputs.claude.rootMarketplace == "../../.claude-plugin/marketplace.json" and .hostOutputs.claude.packageMarketplace == "../claude-plugin/.claude-plugin/marketplace.json" and .hostOutputs.claude.runtime == "../claude-plugin/rn-dev-agent-core/dist/supervisor.js" and .hostOutputs.claude.runnerManifest == "../claude-plugin/runner-manifest.json" and .hostOutputs.claude.nativeRunnerScripts == "../claude-plugin/scripts" and .hostOutputs.claude.skills == "../claude-plugin/skills" and .hostOutputs.codex.manifest == "../codex-plugin/.codex-plugin/plugin.json" and .hostOutputs.codex.launcher == "../codex-plugin/bin/cdp-supervisor.js" and .hostOutputs.codex.health == "../codex-plugin/bin/plugin-health.js" and .hostOutputs.codex.agentsTemplate == "../codex-plugin/AGENTS-MD-TEMPLATE.md" and .hostOutputs.codex.runtime == "../codex-plugin/rn-dev-agent-core/dist/supervisor.js" and .hostOutputs.codex.runnerManifest == "../codex-plugin/runner-manifest.json" and .hostOutputs.codex.nativeRunnerScripts == "../codex-plugin/scripts" and .hostOutputs.codex.skills == "../codex-plugin/skills" and (.compatibilityOutputs? | not) and .apps.docsSite.path == "../../apps/docs-site" and (.apps.docsSite.compatibilityPath? | not)' \
+  '.canonicalSources.skills == "./skills" and .canonicalSources.commands == "./commands" and .canonicalSources.agents == "./agents" and .nativeRunners.ios == "../rn-fast-runner" and .nativeRunners.android == "../rn-android-runner" and (.hostAdaptations.codex.adaptedCommands | length) == 16 and (.hostAdaptations.codex.adaptedDomainSkills | length) == 11 and (.hostAdaptations.codex.commandSkills | length) == 16 and .hostAdaptations.codex.liveRefreshFloor == "0.145.0" and .hostAdaptations.codex.healthSource == "../codex-plugin/src/plugin-health.ts" and .hostAdaptations.codex.agentsTemplateSource == "../codex-plugin/src/AGENTS-MD-TEMPLATE.md" and .hostOutputs.claude.manifest == "../claude-plugin/.claude-plugin/plugin.json" and .hostOutputs.claude.legacyManifest == "../claude-plugin/plugin.json" and .hostOutputs.claude.rootMarketplace == "../../.claude-plugin/marketplace.json" and .hostOutputs.claude.packageMarketplace == "../claude-plugin/.claude-plugin/marketplace.json" and .hostOutputs.claude.runtime == "../claude-plugin/rn-dev-agent-core/dist/supervisor.js" and .hostOutputs.claude.runnerManifest == "../claude-plugin/runner-manifest.json" and .hostOutputs.claude.nativeRunnerScripts == "../claude-plugin/scripts" and .hostOutputs.claude.skills == "../claude-plugin/skills" and .hostOutputs.codex.manifest == "../codex-plugin/.codex-plugin/plugin.json" and .hostOutputs.codex.launcher == "../codex-plugin/bin/cdp-supervisor.js" and .hostOutputs.codex.health == "../codex-plugin/bin/plugin-health.js" and .hostOutputs.codex.agentsTemplate == "../codex-plugin/AGENTS-MD-TEMPLATE.md" and .hostOutputs.codex.runtime == "../codex-plugin/rn-dev-agent-core/dist/supervisor.js" and .hostOutputs.codex.runnerManifest == "../codex-plugin/runner-manifest.json" and .hostOutputs.codex.nativeRunnerScripts == "../codex-plugin/scripts" and .hostOutputs.codex.skills == "../codex-plugin/skills" and (.compatibilityOutputs? | not) and .apps.docsSite.path == "../../apps/docs-site" and (.apps.docsSite.compatibilityPath? | not)' \
   "shared-agent-knowledge source map must point at package-owned sources, host adaptations, outputs, and docs app"
 
 expect_eq "$(json '.version' "$ROOT/packages/claude-plugin/plugin.json")" "$synth_version" "Claude plugin manifest version"

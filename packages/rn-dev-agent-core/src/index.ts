@@ -629,6 +629,7 @@ const authorityGate = createAuthorityGate(authorityRuntime, {
   },
   refreshRuntimeBinding: rebindSessionRuntime,
   relaunchBoundRuntime: relaunchSessionRuntime,
+  reconnectBoundRuntime: reconnectSessionRuntime,
   onRuntimeBundleInvalidated: () => getClient().clearAuthoritativeSessionPolicy(),
   onRunnerReleased: async (runner) => {
     if (runner.platform !== 'ios') return;
@@ -1051,9 +1052,15 @@ async function connectExactSessionTarget(
   });
 }
 
-async function relaunchSessionRuntime(
-  status: SessionStatus,
-): Promise<StagedRuntimeRelaunch | void> {
+interface ManagedRuntimeLaunchBinding {
+  platform: 'ios' | 'android';
+  deviceId: string;
+  appId: string;
+  metroPort: number;
+  devClientUrl: string | null;
+}
+
+function resolveManagedRuntimeLaunchBinding(status: SessionStatus): ManagedRuntimeLaunchBinding {
   const device = status.bindings.device as {
     platform?: unknown;
     deviceId?: unknown;
@@ -1074,48 +1081,23 @@ async function relaunchSessionRuntime(
   ) {
     throw new Error('METRO_ORIGIN_MISMATCH: managed replay launch authority is incomplete');
   }
-  if (platform === 'ios') {
-    const current = getClient();
-    await current.disconnect();
-    setClient(createClient(Number(metroPort)));
-    await execFileP('xcrun', [
-      'simctl',
-      'launch',
-      '--terminate-running-process',
-      deviceId,
-      appId,
-      '--initialUrl',
-      `http://127.0.0.1:${String(metroPort)}`,
-    ]);
-    const connection = await connectExactSessionTarget(
-      { metroPort: Number(metroPort), platform, appId, deviceId },
-      exactSessionTargetReadinessTimeoutMs(platform),
-    );
-    connection.publish();
-    getClient().setAuthoritativeSessionPolicy(createAuthoritativeSessionPolicy(status));
-    return;
-  }
-
-  const devClientUrl =
-    typeof install.devClientUrl === 'string'
-      ? install.devClientUrl
-      : typeof device.devClientUrl === 'string'
-        ? device.devClientUrl
-        : null;
-  if (!devClientUrl) {
-    throw new Error(
-      'DEV_CLIENT_ENDPOINT_NOT_FOUND: managed Android replay requires the exact Dev Client URL',
-    );
-  }
-  await execFileP('adb', [
-    ...androidDeeplinkCommandArgs(devClientUrl, undefined, deviceId),
-    '-p',
+  return {
+    platform,
+    deviceId,
     appId,
-  ]);
-  const connection = await connectExactSessionTarget(
-    { metroPort: Number(metroPort), platform, appId, deviceId },
-    exactSessionTargetReadinessTimeoutMs(platform),
-  );
+    metroPort: Number(metroPort),
+    devClientUrl:
+      typeof install.devClientUrl === 'string'
+        ? install.devClientUrl
+        : typeof device.devClientUrl === 'string'
+          ? device.devClientUrl
+          : null,
+  };
+}
+
+function stageAndroidRuntimeConnection(
+  connection: ExactSessionTargetConnection,
+): StagedRuntimeRelaunch {
   const candidateProbe = createRuntimeAuthorityProbe(() => connection.client);
   return {
     probe: (input) => connection.run(() => candidateProbe(input)),
@@ -1128,6 +1110,73 @@ async function relaunchSessionRuntime(
     },
     cancel: connection.cancel,
   };
+}
+
+/**
+ * GH #708: re-establish the exact managed target without touching the app.
+ * A mid-flow relaunch whose dev-client only re-registers after the flow's own
+ * post-launch steps needs the connection back, not another cold start.
+ */
+async function reconnectSessionRuntime(
+  status: SessionStatus,
+): Promise<StagedRuntimeRelaunch | void> {
+  const { platform, deviceId, appId, metroPort } = resolveManagedRuntimeLaunchBinding(status);
+  if (platform === 'ios') {
+    const current = getClient();
+    await current.disconnect();
+    setClient(createClient(metroPort));
+    await connectExactSessionTarget({ metroPort, platform, appId, deviceId }, 15_000);
+    return;
+  }
+  const connection = await connectExactSessionTarget(
+    { metroPort, platform, appId, deviceId },
+    exactSessionTargetReadinessTimeoutMs(platform),
+  );
+  return stageAndroidRuntimeConnection(connection);
+}
+
+async function relaunchSessionRuntime(
+  status: SessionStatus,
+): Promise<StagedRuntimeRelaunch | void> {
+  const {
+    platform,
+    deviceId,
+    appId,
+    metroPort,
+    devClientUrl: boundDevClientUrl,
+  } = resolveManagedRuntimeLaunchBinding(status);
+  if (platform === 'ios') {
+    const current = getClient();
+    await current.disconnect();
+    setClient(createClient(metroPort));
+    await execFileP('xcrun', [
+      'simctl',
+      'launch',
+      '--terminate-running-process',
+      deviceId,
+      appId,
+      '--initialUrl',
+      `http://127.0.0.1:${String(metroPort)}`,
+    ]);
+    await connectExactSessionTarget({ metroPort, platform, appId, deviceId }, 15_000);
+    return;
+  }
+
+  if (!boundDevClientUrl) {
+    throw new Error(
+      'DEV_CLIENT_ENDPOINT_NOT_FOUND: managed Android replay requires the exact Dev Client URL',
+    );
+  }
+  await execFileP('adb', [
+    ...androidDeeplinkCommandArgs(boundDevClientUrl, undefined, deviceId),
+    '-p',
+    appId,
+  ]);
+  const connection = await connectExactSessionTarget(
+    { metroPort, platform, appId, deviceId },
+    exactSessionTargetReadinessTimeoutMs(platform),
+  );
+  return stageAndroidRuntimeConnection(connection);
 }
 
 async function rebindSessionRuntime(
@@ -1248,10 +1297,31 @@ const getSessionSignerCapability = (sessionId?: string): string | null => {
     : currentSecretPath;
   return readJsonStateFile<{ signerCapability?: string }>(secretPath)?.signerCapability ?? null;
 };
+// GH #706: SIGUSR2 is the supervisor's existing hot-reload intent — it respawns this
+// worker (replaying the MCP handshake) with the environment of a freshly resolved
+// session, which is the only way a released session becomes usable again in-band.
+const spawningSupervisorPid = process.ppid;
+const requestWorkerRecycle = (): boolean => {
+  if (process.env.RN_BRIDGE_SUPERVISED !== '1') return false;
+  if (!Number.isInteger(spawningSupervisorPid) || spawningSupervisorPid <= 1) return false;
+  setTimeout(() => {
+    // A changed parent means the supervisor died and its PID may now belong to an
+    // unrelated process; never signal that stranger.
+    if (process.ppid !== spawningSupervisorPid) return;
+    try {
+      process.kill(spawningSupervisorPid, 'SIGUSR2');
+    } catch {
+      /* supervisor already gone — the next transport start resolves a session */
+    }
+  }, 250).unref();
+  return true;
+};
+
 const sessionHandler = createSessionHandler(authorityRuntime, {
   getSignerCapability: getSessionSignerCapability,
   pinDevClient: pinSessionDevClient,
   onBundleInvalidated: () => getClient().clearAuthoritativeSessionPolicy(),
+  requestWorkerRecycle,
 });
 const disconnectClientHandler = createDisconnectHandler(getClient, setClient, createClient);
 
@@ -3652,6 +3722,12 @@ trackedTool(
       .optional()
       .describe(
         'Force a specific platform; otherwise auto-detected from the active device session.',
+      ),
+    appFile: z
+      .string()
+      .optional()
+      .describe(
+        "GH #705: path to the .app Maestro reinstalls from after a clearState uninstall. Normally omit it — an iOS clearState flow resolves the bundle from the session's attested install receipt, and the receipt is re-issued after the reinstall so later device_*/maestro_run calls keep working.",
       ),
     autoRepair: z
       .boolean()

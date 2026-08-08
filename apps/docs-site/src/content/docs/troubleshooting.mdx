@@ -129,7 +129,7 @@ Update Claude Code to v1.0.33+: `npm update -g @anthropic-ai/claude-code`
 
 Claude: run `/reload-plugins` or clear its plugin cache. Codex: a supported
 same-app mutation should appear on a later turn; otherwise relaunch. A supported
-Codex install exposes exactly 25 rn-dev-agent skills and no
+Codex install exposes exactly 27 rn-dev-agent skills and no
 `source-command-*` skills.
 
 ### Plugin update fails with ENOTEMPTY
@@ -180,11 +180,15 @@ Codes returned by `cdp_*`/`device_*`/flow tools, what they mean, and the fix.
 
 | Codes | Meaning and repair |
 |---|---|
-| `SESSION_NOT_INITIALIZED`, `SESSION_AUTHORITY_REQUIRED`, `SESSION_OWNER_LOST` | The supervised worker has no current fenced owner. Inspect `rn_session(action="status")`; create or rebind the intended session instead of selecting ambient state. |
+| `SESSION_NOT_INITIALIZED` | No fenced session is available. Run setup for the intended worktree instead of selecting ambient state. |
+| `SESSION_AUTHORITY_REQUIRED` | The requested operation lacks authority. Inspect `rn_session(action="status")`; when `state` is `blocked`, follow `recoveryRequirement.nextAction` and resolve any `startupCleanupBlocked` refusal before restarting. Never rebind around a blocked session. For other states, follow the operation's exact refusal and next action. See [parallel session authority](/rn-dev-agent/session-authority/). |
+| `SESSION_OWNER_LOST` | The supervised session is terminal. Start a new supervisor to create a successor session. |
+| `SESSION_CLI_TIMEOUT` | The generated build adapter's bounded `prepare-build`, `ensure-metro`, or `complete-build` session-CLI call did not return within 120 seconds. Inspect `rn_session(action="status")`; retry only after the named authority step is healthy. The build fails instead of treating truncated output as success. |
 | `SESSION_INITIALIZATION_ROLLBACK_FAILED` | Session startup failed and could not prove that every partial claim was released. Do not retry against the same resources until `rn_session(action="status")` shows their ownership clearly. |
 | `SESSION_INTEGRATION_PATH_UNSAFE` | `.rn-agent`, its integration directory, or a retained path ancestor was symlinked, replaced, or changed during a fenced operation. Restore the intended real directory tree, inspect any preserved recovery journal, and retry. |
 | `AUTHORITY_STORE_UNAVAILABLE`, `AUTHORITY_STORE_BUSY`, `PROCESS_BIRTH_UNAVAILABLE` | The SQLite registry or conservative process identity is unavailable. Retry after the named substrate is healthy; there is no JSON, PID-only, or warning-only fallback. |
 | `SOURCE_WORKTREE_MISMATCH`, `SOURCE_REVISION_NOT_BUNDLED` | The session or strict-proof source does not match the running bundle. Return to the intended worktree and load a fresh initial bundle before retrying. |
+| `NON_GIT_MANIFEST_REQUIRED`, `NON_GIT_ROOT_MISMATCH`, `NON_GIT_MANIFEST_OUTSIDE_ROOT` | Repair `RN_DEV_AGENT_DECLARED_ROOT` and `RN_DEV_AGENT_DECLARED_MANIFESTS`, then restart the supervisor. See [parallel session authority](/rn-dev-agent/session-authority/) for the required values, containment rules, and refusal contract. |
 | `METRO_PORT_CLAIM_CONFLICT`, `PORT_OCCUPIED_UNOWNED`, `METRO_AUTHORITY_MISMATCH`, `METRO_INSTANCE_CHANGED`, `METRO_START_CLEANUP_UNPROVEN` | The allocated port or Metro process cannot be proven, or failed startup cleanup could not prove both managed processes and the port stopped. Use the session's literal `pnpm ios`/`pnpm android` integration; never adopt or signal the first listening process. |
 | `METRO_LAUNCHER_ENVIRONMENT_INVALID`, `METRO_LAUNCHER_EVIDENCE_UNAVAILABLE`, `METRO_LAUNCHER_ENFORCEMENT_REFUSED`, `METRO_LAUNCHER_CHILD_SPAWN_FAILED`, `METRO_LAUNCHER_PRE_EVIDENCE_FAILED`, `METRO_LAUNCHER_POLICY_UNAVAILABLE` | Managed Metro failed before authoritative runtime evidence was available. The bounded diagnostic names the failed stage without exposing credentials or local paths. For a policy failure, restore a real, private `.rn-agent/integration` directory without symlinks or hard-linked policy files; otherwise repair the named stage, then retry the literal package script. |
 | `MANAGED_TRANSFORM_CHANNEL_STALLED` | An authenticated transform child exited or did not complete its first exchange before the watchdog expired. Inspect the Metro log for the failing transformer, stop the managed Metro generation, repair the transformer or dependency, and retry the literal package script; strict proof remains unavailable for the violated generation. |

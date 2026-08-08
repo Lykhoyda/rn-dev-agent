@@ -5,6 +5,7 @@ import type { ToolErrorCode } from '../types.js';
 import { failResult, type ToolResult } from '../utils.js';
 import type { OperationRef, SessionRef, SessionRegistry, SessionStatus } from './registry.js';
 import { authorityErrorMeta, SessionAuthorityError, shortAuthorityIdentity } from './registry.js';
+import { reissueInstallBinding } from './install-reissue.js';
 import type { WorkerAuthorityStatus } from './runtime.js';
 import { authorityProfileFor, type AuthorityAxis, type AuthorityProfile } from './tool-profiles.js';
 
@@ -34,6 +35,7 @@ export interface StagedRuntimeRelaunch {
 interface AuthorityGateRuntime {
   requireAvailable(): { registry: SessionRegistry; session: SessionRef };
   status(): WorkerAuthorityStatus;
+  blockedContenderError(): SessionAuthorityError;
 }
 
 interface AuthorityGateDependencies {
@@ -42,13 +44,18 @@ interface AuthorityGateDependencies {
   runtimeConnectionChanged?(status: SessionStatus): boolean;
   refreshRuntimeBinding?(status: SessionStatus): Promise<Record<string, unknown>>;
   relaunchBoundRuntime?(status: SessionStatus): Promise<StagedRuntimeRelaunch | void>;
+  reconnectBoundRuntime?(status: SessionStatus): Promise<StagedRuntimeRelaunch | void>;
   onRunnerReleased?(runner: Record<string, unknown>): Promise<void> | void;
   onRuntimeBundleInvalidated?(): void;
+  reissueInstallBinding?(
+    install: Record<string, unknown> | undefined,
+  ): Record<string, unknown> | null;
 }
 
 const optionalBundleAdmission = Symbol('optionalBundleAdmission');
 const managedNativeOrigin = Symbol('managedNativeOrigin');
 const managedRunnerPark = Symbol('managedRunnerPark');
+const managedInstallReissue = Symbol('managedInstallReissue');
 
 type AuthorityAwareArgs = Record<string, unknown> & {
   [optionalBundleAdmission]?: () => Promise<boolean>;
@@ -56,8 +63,10 @@ type AuthorityAwareArgs = Record<string, unknown> & {
     claim(): Promise<void>;
     complete(targetExpected: boolean): Promise<void>;
     relaunch(): Promise<void>;
+    reprove(): Promise<void>;
   };
   [managedRunnerPark]?: () => Promise<void>;
+  [managedInstallReissue]?: () => Promise<void>;
 };
 
 export async function claimOptionalBundleAuthority(args: object): Promise<boolean> {
@@ -98,6 +107,42 @@ export async function relaunchManagedNativeOriginApp(args: object): Promise<void
     );
   }
   await authority.relaunch();
+}
+
+/**
+ * GH #708: re-prove the managed native origin after a mid-flow relaunch whose
+ * dev-client only re-registered once the flow's own post-launch steps ran.
+ * Reconnect-only — it never relaunches, so the flow's end state survives.
+ */
+export async function reproveManagedNativeOrigin(args: object): Promise<void> {
+  const authority = (args as AuthorityAwareArgs)[managedNativeOrigin];
+  if (!authority) {
+    throw new SessionAuthorityError(
+      'METRO_ORIGIN_MISMATCH',
+      'managed native origin re-prove authority is unavailable',
+    );
+  }
+  await authority.reprove();
+}
+
+/**
+ * GH #705: commit a new install receipt after Maestro reinstalled the session's
+ * own attested `.app` for a `clearState` flow. Refuses unless the freshly
+ * installed bytes still hash to the bound receipt's artifactDigest.
+ */
+export async function reissueManagedInstallAuthority(args: object): Promise<void> {
+  const reissue = (args as AuthorityAwareArgs)[managedInstallReissue];
+  if (!reissue) {
+    throw new SessionAuthorityError(
+      'APP_INSTALL_IDENTITY_CHANGED',
+      'managed install re-issue authority is unavailable',
+    );
+  }
+  await reissue();
+}
+
+export function hasManagedInstallReissueAuthority(args: object): boolean {
+  return typeof (args as AuthorityAwareArgs)[managedInstallReissue] === 'function';
 }
 
 export function hasManagedRunnerParkAuthority(args: object): boolean {
@@ -205,6 +250,63 @@ function isAuthenticatedIdempotentRunnerClose(
   } catch {
     return false;
   }
+}
+
+// Read from the durable offer/journal, not the arguments: a journal resume supplies
+// neither platform nor deviceId.
+function staleDeviceReleaseScope(
+  tool: string,
+  args: Record<string, unknown>,
+  status: SessionStatus,
+): { platform: string; deviceId: string } | null {
+  if (tool !== 'rn_session' || args.action !== 'release_stale_device') return null;
+  const scope = (status.bindings.staleDeviceCleanup ?? status.bindings.staleDeviceRelease) as
+    | { platform?: unknown; deviceId?: unknown }
+    | null
+    | undefined;
+  if (!scope || typeof scope.platform !== 'string' || typeof scope.deviceId !== 'string') {
+    return null;
+  }
+  return { platform: scope.platform, deviceId: scope.deviceId };
+}
+
+// `finishStaleResourceRelease` clears journal + offer and advances the generation in the
+// same transaction as the claim deletions, so observing all three proves the scoped
+// release committed — independently of whether this call still owns its fence.
+function staleDeviceReleaseCommitted(
+  runtime: AuthorityGateRuntime,
+  initialAuthorityVersion: number,
+): boolean {
+  const current = runtime.status();
+  return (
+    current.available &&
+    current.authorityVersion > initialAuthorityVersion &&
+    !current.bindings.staleDeviceCleanup &&
+    !current.bindings.staleDeviceRelease
+  );
+}
+
+// The commit stands either way, but only a genuine authority failure may be reported as a
+// lost fence: any other post-commit error carries a neutral code and its own reason.
+function postCommitFailureMeta(
+  error: unknown,
+  released: { platform: string; deviceId: string },
+): Record<string, unknown> {
+  const fenceLost = error instanceof SessionAuthorityError;
+  const detail = {
+    code: fenceLost ? error.code : (authorityErrorCode(error) ?? 'POST_COMMIT_FAILURE'),
+    reason: error instanceof Error ? error.message : String(error),
+    released,
+  };
+  return {
+    authorityLostAfterCommit: fenceLost ? detail : undefined,
+    failedAfterCommit: fenceLost ? undefined : detail,
+    nextAction: fenceLost
+      ? 'The exact device release is committed. Re-read rn_session action "status" ' +
+        'before the next fenced operation; this session no longer holds the fence it started with.'
+      : 'The exact device release is committed. Re-read rn_session action "status" ' +
+        'before the next fenced operation; the reported failure happened after the commit.',
+  };
 }
 
 function containedRunnerAuthority(
@@ -778,12 +880,7 @@ export function createAuthorityGate(
         }
         const runtimeStatus = runtime.status();
         if (runtimeStatus.available && runtimeStatus.state === 'blocked') {
-          return authorityFailure(
-            new SessionAuthorityError(
-              'SESSION_AUTHORITY_REQUIRED',
-              'blocked contender exposes only accept_handoff and adopt_stale recovery',
-            ),
-          );
+          return authorityFailure(runtime.blockedContenderError());
         }
         if (
           runtimeStatus.available &&
@@ -819,6 +916,11 @@ export function createAuthorityGate(
           let retainProofCleanupFence = false;
           let beganProofRehearsal = false;
           let publishedProofBinding = false;
+          let committedStaleDeviceRelease: {
+            result: unknown;
+            scope: { platform: string; deviceId: string };
+            initialAuthorityVersion: number;
+          } | null = null;
           try {
             const available = runtime.requireAvailable();
             registry = available.registry;
@@ -902,6 +1004,14 @@ export function createAuthorityGate(
               return addMeta(result, { authoritative: false });
             }
             beganProofRehearsal = gateCommitsProof;
+            const staleReleaseScope = staleDeviceReleaseScope(tool, args, initialStatus);
+            if (staleReleaseScope) {
+              committedStaleDeviceRelease = {
+                result,
+                scope: staleReleaseScope,
+                initialAuthorityVersion,
+              };
+            }
             if (tool === 'rn_session' && args.action === 'release') {
               operation = null;
               return addMeta(result, {
@@ -1032,6 +1142,21 @@ export function createAuthorityGate(
                 );
               }
             }
+            // Losing the fence AFTER the release committed is a real authority loss, but
+            // failing the call would deny a side effect the registry still proves.
+            if (
+              committedStaleDeviceRelease &&
+              staleDeviceReleaseCommitted(
+                runtime,
+                committedStaleDeviceRelease.initialAuthorityVersion,
+              )
+            ) {
+              return addMeta(committedStaleDeviceRelease.result, {
+                authoritative: false,
+                authorityTransition: true,
+                ...postCommitFailureMeta(error, committedStaleDeviceRelease.scope),
+              });
+            }
             return authorityFailure(error);
           } finally {
             if (registry && operation && !retainProofCleanupFence) {
@@ -1090,6 +1215,7 @@ export function createAuthorityGate(
           let optionalBundleClaimed = false;
           let optionalBundleRecoveryFailed = false;
           let managedRunnerParked = false;
+          let installReceiptReissued = false;
           if (profile.optionalAxes?.includes('B')) {
             Object.defineProperty(args, optionalBundleAdmission, {
               configurable: true,
@@ -1353,6 +1479,24 @@ export function createAuthorityGate(
                     (await dependencies.relaunchBoundRuntime(currentStatus)) ?? undefined;
                   registry!.verifyOperation(operation!);
                 },
+                reprove: async () => {
+                  const currentStatus = runtime.status();
+                  if (!currentStatus.available) {
+                    throw new SessionAuthorityError(currentStatus.code, currentStatus.reason);
+                  }
+                  registry!.verifyOperation(operation!);
+                  if (!dependencies.reconnectBoundRuntime) {
+                    throw new SessionAuthorityError(
+                      'METRO_ORIGIN_MISMATCH',
+                      'managed native origin reconnect is unavailable',
+                    );
+                  }
+                  stagedRuntimeRelaunch?.cancel();
+                  stagedRuntimeRelaunch = undefined;
+                  stagedRuntimeRelaunch =
+                    (await dependencies.reconnectBoundRuntime(currentStatus)) ?? undefined;
+                  registry!.verifyOperation(operation!);
+                },
                 complete: async (targetExpected: boolean) => {
                   managedOriginCompleted = true;
                   managedOriginCompletedWithTarget = targetExpected;
@@ -1382,6 +1526,31 @@ export function createAuthorityGate(
                     status = invalidatedStatus;
                   }
                 },
+              },
+            });
+          }
+          if (profile.managedInstallReissue) {
+            Object.defineProperty(args, managedInstallReissue, {
+              configurable: true,
+              value: async () => {
+                const currentStatus = runtime.status();
+                if (!currentStatus.available) {
+                  throw new SessionAuthorityError(currentStatus.code, currentStatus.reason);
+                }
+                registry!.verifyOperation(operation!);
+                const install = (dependencies.reissueInstallBinding ?? reissueInstallBinding)(
+                  currentStatus.bindings.install as Record<string, unknown> | undefined,
+                );
+                if (!install) return;
+                operation = registry!.replaceBindingsDuringOperation(operation!, {
+                  bindings: { install },
+                });
+                const reissuedStatus = runtime.status();
+                if (!reissuedStatus.available) {
+                  throw new SessionAuthorityError(reissuedStatus.code, reissuedStatus.reason);
+                }
+                status = reissuedStatus;
+                installReceiptReissued = true;
               },
             });
           }
@@ -1610,6 +1779,10 @@ export function createAuthorityGate(
             if ((runtimeTargetChanged || managedRuntimeTargetChanged) && observation.axis === 'B') {
               continue;
             }
+            // GH #705: a digest-proven reinstall of the session's own artifact
+            // re-issues the install receipt mid-operation; only that exact
+            // gate-owned transition may move I.
+            if (installReceiptReissued && observation.axis === 'I') continue;
             if (!postflightAxes.includes(observation.axis)) continue;
             const postflight = after.find((candidate) => candidate.axis === observation.axis);
             if (observation.identity !== postflight?.identity) {

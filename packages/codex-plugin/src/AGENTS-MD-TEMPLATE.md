@@ -10,10 +10,13 @@ never be replaced.
 
 This project uses **rn-dev-agent** for React Native development, device control,
 live CDP introspection, reusable-action replay, and evidence capture. Codex uses
-the `cdp` MCP server, ten domain skills, and fifteen explicit workflow skills.
+the `cdp` MCP server, eleven domain skills, and sixteen explicit workflow skills.
 Invoke a workflow as `$rn-dev-agent:<workflow> [request text]`.
 
 ### Mandatory preflight before app/device interaction
+
+For a full build, test, or proof journey, run
+`$rn-dev-agent:run-workflow <journey>` to sequence this complete contract.
 
 1. Inspect the active MCP inventory, call `rn_session(action="status")`, then
    passive `cdp_status` before app work.
@@ -30,6 +33,7 @@ Invoke a workflow as `$rn-dev-agent:<workflow> [request text]`.
 
 | Intent | Explicit Codex workflow |
 |---|---|
+| Establish the operating sequence | `$rn-dev-agent:run-workflow <journey>` |
 | Onboard this project | `$rn-dev-agent:setup` |
 | Passive installation/recovery diagnosis | `$rn-dev-agent:doctor` |
 | Check the active app environment | `$rn-dev-agent:check-env` |
@@ -47,7 +51,7 @@ Invoke a workflow as `$rn-dev-agent:<workflow> [request text]`.
 
 Domain skills (`rn-setup`, `rn-testing`, `rn-debugging`,
 `rn-feature-development`, `rn-device-control`, `capturing-proof`,
-`creating-actions`, `sending-feedback`, `rn-best-practices`, and
+`creating-actions`, `sending-feedback`, `rn-best-practices`, `rn-workflow`, and
 `using-rn-dev-agent`) own implicit knowledge. Workflow skills are explicit entry
 points and execute their package-local playbooks in the current parent task.
 

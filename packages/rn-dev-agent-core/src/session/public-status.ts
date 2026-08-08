@@ -1,5 +1,5 @@
 import { inspectAuthorityMigration } from './migration-diagnostic.js';
-import type { RecoveryRequirementInspection } from './registry.js';
+import { authorityRemedyNextAction, type RecoveryRequirementInspection } from './registry.js';
 import type { WorkerAuthorityStatus } from './runtime.js';
 
 interface BoundedHandle {
@@ -39,9 +39,11 @@ export function projectPublicAuthorityStatus(
   } = {},
 ): Record<string, unknown> {
   if (!status.available) {
+    const nextAction = authorityRemedyNextAction(status.code);
     return {
       available: false,
       code: status.code,
+      ...(nextAction ? { nextAction } : {}),
     };
   }
   const now = (options.now ?? Date.now)();
@@ -167,6 +169,16 @@ export function projectPublicAuthorityStatus(
             platform: cleanupPlatform,
             obligations: pendingCleanupObligations,
             nextAction: cleanupNextAction,
+          },
+        }
+      : {}),
+    // Retained cleanup refusals follow the identifier-free staleDeviceCleanup discipline.
+    ...(options.recoveryRequirement?.startupCleanupBlocked
+      ? {
+          startupCleanupBlocked: {
+            code: options.recoveryRequirement.startupCleanupBlocked.code,
+            reason: options.recoveryRequirement.startupCleanupBlocked.reason,
+            nextAction: options.recoveryRequirement.nextAction,
           },
         }
       : {}),

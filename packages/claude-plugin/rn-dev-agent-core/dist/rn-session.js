@@ -44,6 +44,211 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
+// packages/rn-dev-agent-core/dist/session/install-authority.js
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { lstatSync, readFileSync, readdirSync, readlinkSync, realpathSync, statSync } from "node:fs";
+import { isAbsolute, join, relative } from "node:path";
+function runText(command, args) {
+  return execFileSync(command, [...args], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 1e4,
+    maxBuffer: 8 * 1024 * 1024
+  });
+}
+function runBuffer(command, args) {
+  return execFileSync(command, [...args], {
+    encoding: "buffer",
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 3e4,
+    maxBuffer: 512 * 1024 * 1024
+  });
+}
+function digest(parts) {
+  const hash = createHash("sha256");
+  for (const part of parts) {
+    hash.update(`${part.byteLength}:`);
+    hash.update(part);
+  }
+  return hash.digest("hex");
+}
+function generation(parts) {
+  return digest(parts.map((part) => Buffer.from(part)));
+}
+function listAppFiles(appPath) {
+  const files = [];
+  const visit = (directory) => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        visit(path);
+      } else if (entry.isFile() || entry.isSymbolicLink()) {
+        files.push(relative(appPath, path));
+      } else {
+        throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS app contains an unsupported filesystem entry");
+      }
+    }
+  };
+  visit(appPath);
+  return files.sort();
+}
+function iosAppFiles(appPath, dependencies) {
+  return [...(dependencies.listAppFiles ?? listAppFiles)(appPath)].sort();
+}
+function assertIosSymlinkContained(appPath, path, realpath) {
+  const target = realpath(path);
+  const child = relative(realpath(appPath), target);
+  if (child === ".." || child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute(child)) {
+    throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS app symlink escapes the installed bundle");
+  }
+}
+function androidApkPaths(target, text) {
+  return text("adb", ["-s", target.deviceId, "shell", "pm", "path", target.appId]).split("\n").map((line) => line.trim()).filter((line) => line.startsWith("package:")).map((line) => line.slice("package:".length)).sort();
+}
+function captureInstallGeneration(target, dependencies = {}) {
+  const text = dependencies.runText ?? runText;
+  if (target.platform === "ios") {
+    const appPath = text("xcrun", [
+      "simctl",
+      "get_app_container",
+      target.deviceId,
+      target.appId,
+      "app"
+    ]).trim();
+    if (!appPath) {
+      throw new Error("APP_INSTALL_IDENTITY_CHANGED: exact iOS app container was not found");
+    }
+    const infoPath = join(appPath, "Info.plist");
+    const executable = text("plutil", [
+      "-extract",
+      "CFBundleExecutable",
+      "raw",
+      "-o",
+      "-",
+      infoPath
+    ]).trim();
+    if (!executable) {
+      throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS executable identity is unavailable");
+    }
+    const stat = dependencies.stat ?? statSync;
+    const metadata2 = iosAppFiles(appPath, dependencies).map((entry) => {
+      const path = join(appPath, entry);
+      const value = stat(path);
+      return `${entry}:${String(value.ino)}:${value.size}:${value.mtimeMs}`;
+    });
+    return generation(metadata2);
+  }
+  const apkPaths = androidApkPaths(target, text);
+  if (!apkPaths.length) {
+    throw new Error("APP_INSTALL_IDENTITY_CHANGED: exact Android package was not found");
+  }
+  const metadata = text("adb", [
+    "-s",
+    target.deviceId,
+    "shell",
+    "stat",
+    "-c",
+    "%n:%i:%s:%Y",
+    ...apkPaths
+  ]).split("\n").map((line) => line.trim()).filter(Boolean).sort();
+  if (metadata.length !== apkPaths.length) {
+    throw new Error("APP_INSTALL_IDENTITY_CHANGED: Android install generation is unavailable");
+  }
+  return generation(metadata);
+}
+function captureInstalledArtifact(target, dependencies = {}) {
+  const text = dependencies.runText ?? runText;
+  const buffer = dependencies.runBuffer ?? runBuffer;
+  const read = dependencies.read ?? readFileSync;
+  if (target.platform === "ios") {
+    const appPath = text("xcrun", [
+      "simctl",
+      "get_app_container",
+      target.deviceId,
+      target.appId,
+      "app"
+    ]).trim();
+    if (!appPath) {
+      throw new Error("APP_INSTALL_IDENTITY_CHANGED: exact iOS app container was not found");
+    }
+    const infoPath = join(appPath, "Info.plist");
+    const executable = text("plutil", [
+      "-extract",
+      "CFBundleExecutable",
+      "raw",
+      "-o",
+      "-",
+      infoPath
+    ]).trim();
+    if (!executable) {
+      throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS executable identity is unavailable");
+    }
+    const files = iosAppFiles(appPath, dependencies);
+    const lstat = dependencies.lstat ?? lstatSync;
+    const readLink = dependencies.readLink ?? readlinkSync;
+    const realpath = dependencies.realpath ?? realpathSync;
+    const artifactParts = [];
+    for (const entry of files) {
+      const path = join(appPath, entry);
+      const stat = lstat(path);
+      artifactParts.push(Buffer.from(entry));
+      if (stat.isFile()) {
+        artifactParts.push(Buffer.from("file"), read(path));
+      } else if (stat.isSymbolicLink()) {
+        assertIosSymlinkContained(appPath, path, realpath);
+        artifactParts.push(Buffer.from("symlink"), Buffer.from(readLink(path)));
+      } else {
+        throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS app contains an unsupported filesystem entry");
+      }
+    }
+    return {
+      ...target,
+      artifactDigest: digest(artifactParts),
+      installGeneration: captureInstallGeneration(target, dependencies)
+    };
+  }
+  const apkPaths = androidApkPaths(target, text);
+  if (!apkPaths.length) {
+    throw new Error("APP_INSTALL_IDENTITY_CHANGED: exact Android package was not found");
+  }
+  return {
+    ...target,
+    artifactDigest: digest(apkPaths.map((path) => buffer("adb", ["-s", target.deviceId, "exec-out", "cat", path]))),
+    installGeneration: captureInstallGeneration(target, dependencies)
+  };
+}
+var init_install_authority = __esm({
+  "packages/rn-dev-agent-core/dist/session/install-authority.js"() {
+    "use strict";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/declared-source-contract.js
+function parseDeclaredManifests(value) {
+  if (value === void 0)
+    return void 0;
+  return value.split(",").map((entry) => entry.trim()).filter(Boolean);
+}
+function missingDeclaredRootMessage() {
+  return `NON_GIT_MANIFEST_REQUIRED: ${DECLARED_ROOT_ENV} is not set. ${NON_GIT_DECLARATION_NEXT_ACTION}`;
+}
+function missingDeclaredManifestListMessage() {
+  return `NON_GIT_MANIFEST_REQUIRED: ${DECLARED_MANIFESTS_ENV} is not set. ${NON_GIT_DECLARATION_NEXT_ACTION}`;
+}
+function missingDeclaredManifestMessage(entry) {
+  return `NON_GIT_MANIFEST_REQUIRED: declared manifest "${entry}" does not exist. ${NON_GIT_DECLARATION_NEXT_ACTION}`;
+}
+var DECLARED_ROOT_ENV, DECLARED_MANIFESTS_ENV, NON_GIT_DECLARATION_NEXT_ACTION;
+var init_declared_source_contract = __esm({
+  "packages/rn-dev-agent-core/dist/session/declared-source-contract.js"() {
+    "use strict";
+    DECLARED_ROOT_ENV = "RN_DEV_AGENT_DECLARED_ROOT";
+    DECLARED_MANIFESTS_ENV = "RN_DEV_AGENT_DECLARED_MANIFESTS";
+    NON_GIT_DECLARATION_NEXT_ACTION = `Declare the non-Git source explicitly: set ${DECLARED_ROOT_ENV} to the exact existing application root, and set ${DECLARED_MANIFESTS_ENV} to a comma-separated list of required existing manifest files inside that root, then restart the supervisor. Neither value is inferred from the working directory or generated.`;
+  }
+});
+
 // node_modules/yaml/dist/nodes/identity.js
 var require_identity = __commonJS({
   "node_modules/yaml/dist/nodes/identity.js"(exports) {
@@ -7612,11 +7817,14 @@ function probeProcessBirth(pid, dependencies = {}) {
   const runVerifiedHelper = dependencies.runVerifiedHelper ?? defaultRunVerifiedHelper;
   try {
     if (platform === "darwin") {
-      const observedPid = run("/bin/ps", ["-p", String(pid), "-o", "pid="]).trim();
-      if (observedPid.length === 0)
+      const observed = run("/bin/ps", ["-p", String(pid), "-o", "pid=,state="]).trim();
+      if (observed.length === 0)
         return { status: "absent" };
-      if (Number(observedPid) !== pid)
+      const observedFields = /^(\d+)(?:\s+(\S+))?$/.exec(observed);
+      if (!observedFields || Number(observedFields[1]) !== pid)
         return { status: "unknown" };
+      if (observedFields[2]?.startsWith("Z"))
+        return { status: "absent" };
       const helper = verifyDarwinProcessBirthHelper(dependencies);
       const processInfo = runVerifiedHelper(helper.path, pid, helper.requirement).trim();
       const processMatch = /^(\d+):(\d+):(\d+)$/.exec(processInfo);
@@ -7645,6 +7853,8 @@ function probeProcessBirth(pid, dependencies = {}) {
       }
       const commandEnd = stat.lastIndexOf(")");
       const fields = commandEnd >= 0 ? stat.slice(commandEnd + 1).trim().split(/\s+/) : [];
+      if (fields[0] === "Z")
+        return { status: "absent" };
       const started = fields[19];
       if (!boot || !started || !/^\d+$/.test(started))
         return { status: "unknown" };
@@ -8029,6 +8239,9 @@ function referencesMetroEvidenceSocket(value, path) {
     return true;
   return Object.values(record).some((entry) => referencesMetroEvidenceSocket(entry, path));
 }
+function authorityRemedyNextAction(code) {
+  return errorNextActions[code];
+}
 function asSession(row) {
   return row ? row : null;
 }
@@ -8056,6 +8269,29 @@ function isOperationalState(state) {
 function isFenceableState(state) {
   return isOperationalState(state) || state === "handoff";
 }
+function readStartupCleanupBlocker(bindingsJson) {
+  let journal;
+  try {
+    const bindings = JSON.parse(bindingsJson);
+    const value = bindings.startupCleanup;
+    journal = value && typeof value === "object" ? value : void 0;
+  } catch {
+    return void 0;
+  }
+  if (!journal || typeof journal.finishedAt === "number")
+    return void 0;
+  const refusal = journal.refusal;
+  if (!refusal || typeof refusal !== "object")
+    return void 0;
+  const record = refusal;
+  if (typeof record.code !== "string" || typeof record.reason !== "string")
+    return void 0;
+  return {
+    code: record.code,
+    reason: record.reason,
+    ...typeof record.nextAction === "string" ? { nextAction: record.nextAction } : {}
+  };
+}
 function bindingsRunnerPresent(bindingsJson) {
   const bindings = JSON.parse(bindingsJson);
   return Boolean(bindings.runner && typeof bindings.runner === "object");
@@ -8078,11 +8314,12 @@ function openSessionRegistry(path, dependencies) {
     throw error;
   }
 }
-var INITIALIZATION_WAIT2, AUTHORITY_REGISTRY_SCHEMA_VERSION, SessionAuthorityError, RECOVERY_HANDLE_TTL_MS, RECOVERY_HANDLE_RENEW_MS, conflictCodes, SessionRegistry;
+var INITIALIZATION_WAIT2, AUTHORITY_REGISTRY_SCHEMA_VERSION, SessionAuthorityError, RECOVERY_HANDLE_TTL_MS, RECOVERY_HANDLE_RENEW_MS, errorNextActions, conflictCodes, SessionRegistry;
 var init_registry = __esm({
   "packages/rn-dev-agent-core/dist/session/registry.js"() {
     "use strict";
     init_authority_store();
+    init_declared_source_contract();
     init_metro_binding();
     INITIALIZATION_WAIT2 = new Int32Array(new SharedArrayBuffer(4));
     AUTHORITY_REGISTRY_SCHEMA_VERSION = 4;
@@ -8100,6 +8337,9 @@ var init_registry = __esm({
     };
     RECOVERY_HANDLE_TTL_MS = 5 * 6e4;
     RECOVERY_HANDLE_RENEW_MS = 6e4;
+    errorNextActions = {
+      NON_GIT_MANIFEST_REQUIRED: NON_GIT_DECLARATION_NEXT_ACTION
+    };
     conflictCodes = {
       device: "DEVICE_CLAIM_CONFLICT",
       "device-receipt": "DEVICE_CLAIM_CONFLICT",
@@ -8478,7 +8718,7 @@ var init_registry = __esm({
         const adoptionRequired = bindings.adoptionRequired;
         const priorSessionId = typeof adoptionRequired?.sessionId === "string" ? adoptionRequired.sessionId : null;
         const prior = priorSessionId ? asSession(this.#database.prepare(`SELECT session_id, source_key, worktree_key, app_root_key, claim_epoch,
-                      supervisor_pid, supervisor_birth, heartbeat_ms
+                      supervisor_pid, supervisor_birth, heartbeat_ms, bindings_json
                FROM sessions WHERE session_id = ?`).get(priorSessionId)) : null;
         if (!prior || prior.claim_epoch !== adoptionRequired?.claimEpoch) {
           return {
@@ -8512,6 +8752,15 @@ var init_registry = __esm({
                 requirement: "attach",
                 priorOwner: "stale",
                 nextAction: "The proven-dead owner has a different source identity for this app root, so startup cleanup cannot release it under the current declared manifests. Restore the declared manifests that produced the prior identity, start and close rn-dev-agent to release its authority, then reapply the manifest changes; otherwise use a separate worktree."
+              };
+            }
+            const blocked = readStartupCleanupBlocker(prior.bindings_json);
+            if (blocked) {
+              return {
+                requirement: "transport-restart",
+                priorOwner: "stale",
+                startupCleanupBlocked: blocked,
+                nextAction: blocked.nextAction ?? `Startup cleanup refused with ${blocked.code} and will refuse again on the next restart: ${blocked.reason}. Resolve that refusal before restarting the MCP transport.`
               };
             }
             return {
@@ -8825,6 +9074,32 @@ var init_registry = __esm({
             startupCleanup: { journaledAt: now, obligations, integration }
           }), now, row.session_id, row.claim_epoch);
           return { resumed: false, obligations, integration };
+        });
+      }
+      /** Re-recording an identical cleanup refusal is a no-op across repeated restarts. */
+      recordStartupCleanupRefusal(prior, refusal) {
+        const now = this.#now();
+        this.#transaction(() => {
+          const row = this.#requireProvenDeadStartupOwner(prior);
+          const { bindings, journal } = this.#requireStartupCleanupJournal(row);
+          if (typeof journal.finishedAt === "number")
+            return;
+          const existing = journal.refusal;
+          if (existing && existing.code === refusal.code && existing.reason === refusal.reason && existing.nextAction === refusal.nextAction) {
+            return;
+          }
+          this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`).run(JSON.stringify({
+            ...bindings,
+            startupCleanup: {
+              ...journal,
+              refusal: {
+                code: refusal.code,
+                reason: refusal.reason,
+                ...refusal.nextAction ? { nextAction: refusal.nextAction } : {}
+              }
+            }
+          }), now, row.session_id, row.claim_epoch);
         });
       }
       verifyStartupOwnerObligation(prior, resource) {
@@ -9237,11 +9512,24 @@ var init_registry = __esm({
           }
         });
       }
+      // GH #706: released and proven-stale rows are not live sessions, so they never
+      // count towards the "multiple live sessions match this worktree" refusal.
       findSessionsByWorktree(worktreeKey) {
-        const rows = this.#database.prepare(`SELECT session_id FROM sessions
+        const rows = this.#database.prepare(`SELECT session_id, supervisor_pid, supervisor_birth FROM sessions
          WHERE worktree_key = ? AND state NOT IN ('released', 'stale')
          ORDER BY updated_ms DESC`).all(worktreeKey);
-        return rows.map((row) => this.getSessionStatus(String(row.session_id))).filter((status) => status !== null);
+        return rows.filter((row) => !this.#supervisorProvenDead(row)).map((row) => this.getSessionStatus(row.session_id)).filter((status) => status !== null);
+      }
+      #supervisorProvenDead(row) {
+        try {
+          return this.#ownerStatus({
+            sessionId: row.session_id,
+            pid: row.supervisor_pid,
+            token: row.supervisor_birth
+          }) === "mismatch";
+        } catch {
+          return false;
+        }
       }
       getControllerBinding(session2) {
         const row = this.#requireSession(session2);
@@ -11059,6 +11347,15 @@ var init_maestro_runner_report = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/session/install-reissue.js
+var init_install_reissue = __esm({
+  "packages/rn-dev-agent-core/dist/session/install-reissue.js"() {
+    "use strict";
+    init_install_authority();
+    init_registry();
+  }
+});
+
 // packages/rn-dev-agent-core/dist/session/tool-profiles.js
 function facetsOf(groups, narrowing = {}) {
   const facets = new Set(groups.flatMap((group) => [...groupFacets[group]]));
@@ -11224,6 +11521,7 @@ var init_tool_profiles = __esm({
       optionalAxes: ["B"],
       managedOrigin: true,
       managedRunnerPark: true,
+      managedInstallReissue: true,
       mutation: true,
       liveBundleProbe: true
     });
@@ -11271,6 +11569,7 @@ var init_authority_gate = __esm({
     "use strict";
     init_utils();
     init_registry();
+    init_install_reissue();
     init_tool_profiles();
   }
 });
@@ -11829,180 +12128,8 @@ function createBuildReceipt(payload, capability) {
   return { version: 1, payload, signature: sign(payload, capability) };
 }
 
-// packages/rn-dev-agent-core/dist/session/install-authority.js
-import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { lstatSync, readFileSync, readdirSync, readlinkSync, realpathSync, statSync } from "node:fs";
-import { isAbsolute, join, relative } from "node:path";
-function runText(command, args) {
-  return execFileSync(command, [...args], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-    timeout: 1e4,
-    maxBuffer: 8 * 1024 * 1024
-  });
-}
-function runBuffer(command, args) {
-  return execFileSync(command, [...args], {
-    encoding: "buffer",
-    stdio: ["ignore", "pipe", "ignore"],
-    timeout: 3e4,
-    maxBuffer: 512 * 1024 * 1024
-  });
-}
-function digest(parts) {
-  const hash = createHash("sha256");
-  for (const part of parts) {
-    hash.update(`${part.byteLength}:`);
-    hash.update(part);
-  }
-  return hash.digest("hex");
-}
-function generation(parts) {
-  return digest(parts.map((part) => Buffer.from(part)));
-}
-function listAppFiles(appPath) {
-  const files = [];
-  const visit = (directory) => {
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      const path = join(directory, entry.name);
-      if (entry.isDirectory()) {
-        visit(path);
-      } else if (entry.isFile() || entry.isSymbolicLink()) {
-        files.push(relative(appPath, path));
-      } else {
-        throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS app contains an unsupported filesystem entry");
-      }
-    }
-  };
-  visit(appPath);
-  return files.sort();
-}
-function iosAppFiles(appPath, dependencies) {
-  return [...(dependencies.listAppFiles ?? listAppFiles)(appPath)].sort();
-}
-function assertIosSymlinkContained(appPath, path, realpath) {
-  const target = realpath(path);
-  const child = relative(realpath(appPath), target);
-  if (child === ".." || child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute(child)) {
-    throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS app symlink escapes the installed bundle");
-  }
-}
-function androidApkPaths(target, text) {
-  return text("adb", ["-s", target.deviceId, "shell", "pm", "path", target.appId]).split("\n").map((line) => line.trim()).filter((line) => line.startsWith("package:")).map((line) => line.slice("package:".length)).sort();
-}
-function captureInstallGeneration(target, dependencies = {}) {
-  const text = dependencies.runText ?? runText;
-  if (target.platform === "ios") {
-    const appPath = text("xcrun", [
-      "simctl",
-      "get_app_container",
-      target.deviceId,
-      target.appId,
-      "app"
-    ]).trim();
-    if (!appPath) {
-      throw new Error("APP_INSTALL_IDENTITY_CHANGED: exact iOS app container was not found");
-    }
-    const infoPath = join(appPath, "Info.plist");
-    const executable = text("plutil", [
-      "-extract",
-      "CFBundleExecutable",
-      "raw",
-      "-o",
-      "-",
-      infoPath
-    ]).trim();
-    if (!executable) {
-      throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS executable identity is unavailable");
-    }
-    const stat = dependencies.stat ?? statSync;
-    const metadata2 = iosAppFiles(appPath, dependencies).map((entry) => {
-      const path = join(appPath, entry);
-      const value = stat(path);
-      return `${entry}:${String(value.ino)}:${value.size}:${value.mtimeMs}`;
-    });
-    return generation(metadata2);
-  }
-  const apkPaths = androidApkPaths(target, text);
-  if (!apkPaths.length) {
-    throw new Error("APP_INSTALL_IDENTITY_CHANGED: exact Android package was not found");
-  }
-  const metadata = text("adb", [
-    "-s",
-    target.deviceId,
-    "shell",
-    "stat",
-    "-c",
-    "%n:%i:%s:%Y",
-    ...apkPaths
-  ]).split("\n").map((line) => line.trim()).filter(Boolean).sort();
-  if (metadata.length !== apkPaths.length) {
-    throw new Error("APP_INSTALL_IDENTITY_CHANGED: Android install generation is unavailable");
-  }
-  return generation(metadata);
-}
-function captureInstalledArtifact(target, dependencies = {}) {
-  const text = dependencies.runText ?? runText;
-  const buffer = dependencies.runBuffer ?? runBuffer;
-  const read = dependencies.read ?? readFileSync;
-  if (target.platform === "ios") {
-    const appPath = text("xcrun", [
-      "simctl",
-      "get_app_container",
-      target.deviceId,
-      target.appId,
-      "app"
-    ]).trim();
-    if (!appPath) {
-      throw new Error("APP_INSTALL_IDENTITY_CHANGED: exact iOS app container was not found");
-    }
-    const infoPath = join(appPath, "Info.plist");
-    const executable = text("plutil", [
-      "-extract",
-      "CFBundleExecutable",
-      "raw",
-      "-o",
-      "-",
-      infoPath
-    ]).trim();
-    if (!executable) {
-      throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS executable identity is unavailable");
-    }
-    const files = iosAppFiles(appPath, dependencies);
-    const lstat = dependencies.lstat ?? lstatSync;
-    const readLink = dependencies.readLink ?? readlinkSync;
-    const realpath = dependencies.realpath ?? realpathSync;
-    const artifactParts = [];
-    for (const entry of files) {
-      const path = join(appPath, entry);
-      const stat = lstat(path);
-      artifactParts.push(Buffer.from(entry));
-      if (stat.isFile()) {
-        artifactParts.push(Buffer.from("file"), read(path));
-      } else if (stat.isSymbolicLink()) {
-        assertIosSymlinkContained(appPath, path, realpath);
-        artifactParts.push(Buffer.from("symlink"), Buffer.from(readLink(path)));
-      } else {
-        throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS app contains an unsupported filesystem entry");
-      }
-    }
-    return {
-      ...target,
-      artifactDigest: digest(artifactParts),
-      installGeneration: captureInstallGeneration(target, dependencies)
-    };
-  }
-  const apkPaths = androidApkPaths(target, text);
-  if (!apkPaths.length) {
-    throw new Error("APP_INSTALL_IDENTITY_CHANGED: exact Android package was not found");
-  }
-  return {
-    ...target,
-    artifactDigest: digest(apkPaths.map((path) => buffer("adb", ["-s", target.deviceId, "exec-out", "cat", path]))),
-    installGeneration: captureInstallGeneration(target, dependencies)
-  };
-}
+// packages/rn-dev-agent-core/dist/rn-session.js
+init_install_authority();
 
 // packages/rn-dev-agent-core/dist/session/expo-android-device.js
 import { execFileSync as execFileSync2 } from "node:child_process";
@@ -12097,6 +12224,9 @@ function resolveExpoAndroidDevice(exactDeviceId, dependencies = defaultDependenc
   }
   return selected;
 }
+
+// packages/rn-dev-agent-core/dist/rn-session.js
+init_declared_source_contract();
 
 // packages/rn-dev-agent-core/dist/session/metro-authority.js
 import { createHmac as createHmac2, createSecretKey, timingSafeEqual as timingSafeEqual2 } from "node:crypto";
@@ -14761,6 +14891,7 @@ import { createHash as createHash6, createHmac as createHmac4, randomBytes as ra
 import { execFileSync as execFileSync7 } from "node:child_process";
 import { closeSync as closeSync4, constants as constants3, existsSync as existsSync5, fstatSync as fstatSync3, lstatSync as lstatSync4, openSync as openSync4, readdirSync as readdirSync2, readFileSync as readFileSync5, readlinkSync as readlinkSync3, readSync as readSync3, realpathSync as realpathSync6 } from "node:fs";
 import { dirname as dirname5, isAbsolute as isAbsolute3, join as join4, relative as relative3, resolve as resolve4 } from "node:path";
+init_declared_source_contract();
 function digest2(parts) {
   const hash = createHash6("sha256");
   for (const part of parts) {
@@ -14834,14 +14965,20 @@ function assertContained(root, candidate, code) {
   }
 }
 function resolveDeclaredIdentity(appRoot, dependencies, canonicalize) {
-  if (!dependencies.declaredRoot || !dependencies.declaredManifests?.length) {
-    throw new Error("NON_GIT_MANIFEST_REQUIRED: non-Git authority needs an explicit root and manifest list");
+  if (!dependencies.declaredRoot)
+    throw new Error(missingDeclaredRootMessage());
+  if (!dependencies.declaredManifests?.length) {
+    throw new Error(missingDeclaredManifestListMessage());
   }
+  const pathExists = dependencies.exists ?? existsSync5;
   const contentRoot = canonicalize(resolve4(dependencies.declaredRoot));
   assertContained(contentRoot, appRoot, "NON_GIT_ROOT_MISMATCH");
   const manifestParts = [];
   for (const entry of [...dependencies.declaredManifests].sort()) {
-    const manifest = canonicalize(resolve4(contentRoot, entry));
+    const declared = resolve4(contentRoot, entry);
+    if (!pathExists(declared))
+      throw new Error(missingDeclaredManifestMessage(entry));
+    const manifest = canonicalize(declared);
     assertContained(contentRoot, manifest, "NON_GIT_MANIFEST_OUTSIDE_ROOT");
     manifestParts.push(relative3(contentRoot, manifest), readFileSync5(manifest));
   }
@@ -16759,6 +16896,7 @@ function inspectAuthorityMigration(status, dependencies = {}) {
 }
 
 // packages/rn-dev-agent-core/dist/session/public-status.js
+init_registry();
 var SELECTED_STATES = /* @__PURE__ */ new Set(["active", "source_bound", "device_claimed", "metro_bound"]);
 var RUNNING_STATES = /* @__PURE__ */ new Set(["device_bound", "runtime_bound", "ready"]);
 function derivePublicPhase(state, buildPending) {
@@ -16779,9 +16917,11 @@ function liveHandle(handle, now) {
 }
 function projectPublicAuthorityStatus(status, options = {}) {
   if (!status.available) {
+    const nextAction = authorityRemedyNextAction(status.code);
     return {
       available: false,
-      code: status.code
+      code: status.code,
+      ...nextAction ? { nextAction } : {}
     };
   }
   const now = (options.now ?? Date.now)();
@@ -16865,6 +17005,14 @@ function projectPublicAuthorityStatus(status, options = {}) {
         platform: cleanupPlatform,
         obligations: pendingCleanupObligations,
         nextAction: cleanupNextAction
+      }
+    } : {},
+    // Retained cleanup refusals follow the identifier-free staleDeviceCleanup discipline.
+    ...options.recoveryRequirement?.startupCleanupBlocked ? {
+      startupCleanupBlocked: {
+        code: options.recoveryRequirement.startupCleanupBlocked.code,
+        reason: options.recoveryRequirement.startupCleanupBlocked.reason,
+        nextAction: options.recoveryRequirement.nextAction
       }
     } : {},
     ...options.recoveryRequirement && options.recoveryRequirement.requirement !== "none" ? {
@@ -17034,18 +17182,22 @@ async function runRecordProofScript(script, args, timeout = 6e4, dependencies = 
     }
   }));
 }
-async function waitForExactStopped(probe, deadlineMs, code, message) {
+async function awaitExactStopped(probe, deadlineMs, code, message) {
   while (true) {
     const status = probe();
     if (status === "stopped")
-      return;
+      return true;
     if (status === "unknown") {
       throw new SessionAuthorityError(code, `${message}; shutdown identity is unknown`);
     }
-    if (Date.now() >= deadlineMs) {
-      throw new SessionAuthorityError(code, message);
-    }
+    if (Date.now() >= deadlineMs)
+      return false;
     await new Promise((resolve5) => setTimeout(resolve5, 25));
+  }
+}
+async function waitForExactStopped(probe, deadlineMs, code, message) {
+  if (!await awaitExactStopped(probe, deadlineMs, code, message)) {
+    throw new SessionAuthorityError(code, message);
   }
 }
 async function stopBoundObserve(binding, listenerProbe = probeManagedMetroListener, processProbe = probeProcessBirth, timeoutMs = 2e3, request = fetch) {
@@ -17105,7 +17257,7 @@ async function stopBoundObserve(binding, listenerProbe = probeManagedMetroListen
     return observed.status === "listening" && observed.pid === pid ? "running" : "stopped";
   }, deadlineMs, "OBSERVE_AUTHORITY_MISMATCH", "Observe listener did not stop before the cleanup deadline");
 }
-async function stopBoundRunner(binding, processProbe = probeProcessBirth, signalProcess = process.kill, timeoutMs = 2e3, runAdb = async (args) => execFile14("adb", args, { timeout: 5e3, encoding: "utf8" })) {
+async function stopBoundRunner(binding, processProbe = probeProcessBirth, signalProcess = process.kill, timeoutMs = 2e3, runAdb = async (args) => execFile14("adb", args, { timeout: 5e3, encoding: "utf8" }), termGraceMs = 500) {
   const deadlineMs = Date.now() + timeoutMs;
   const pid = Number(binding.pid);
   const expectedBirth = String(binding.processBirth ?? "");
@@ -17122,13 +17274,31 @@ async function stopBoundRunner(binding, processProbe = probeProcessBirth, signal
     throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "runner process identity is unavailable");
   }
   if (current.status === "present" && current.birth.token === expectedBirth) {
-    signalProcess(pid, "SIGTERM");
-    await waitForExactStopped(() => {
+    const observeStop = () => {
       const observed = processProbe(pid);
       if (observed.status === "unknown")
         return "unknown";
       return observed.status === "present" && observed.birth.token === expectedBirth ? "running" : "stopped";
-    }, deadlineMs, "RUNNER_ADOPTION_REQUIRED", "runner process did not stop before the cleanup deadline");
+    };
+    const message = "runner process did not stop before the cleanup deadline";
+    const signalTolerated = (value) => {
+      try {
+        signalProcess(pid, value);
+      } catch {
+      }
+    };
+    signalTolerated("SIGTERM");
+    const graceDeadlineMs = Math.min(deadlineMs, Date.now() + termGraceMs);
+    if (!await awaitExactStopped(observeStop, graceDeadlineMs, "RUNNER_ADOPTION_REQUIRED", message)) {
+      const escalation = processProbe(pid);
+      if (escalation.status === "unknown") {
+        throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", `${message}; shutdown identity is unknown`);
+      }
+      if (escalation.status === "present" && escalation.birth.token === expectedBirth) {
+        signalTolerated("SIGKILL");
+      }
+      await waitForExactStopped(observeStop, deadlineMs, "RUNNER_ADOPTION_REQUIRED", message);
+    }
   }
   if (platform !== "android")
     return;
@@ -17211,7 +17381,7 @@ function resolveStatus() {
   const explicit = process.env.RN_DEV_AGENT_SESSION_ID;
   const source = resolveSourceIdentity(process.cwd(), {
     declaredRoot: process.env.RN_DEV_AGENT_DECLARED_ROOT,
-    declaredManifests: process.env.RN_DEV_AGENT_DECLARED_MANIFESTS?.split(",").filter(Boolean)
+    declaredManifests: parseDeclaredManifests(process.env.RN_DEV_AGENT_DECLARED_MANIFESTS)
   });
   const candidates = explicit ? [registry.getSessionStatus(explicit)].filter((status2) => status2 !== null) : registry.findSessionsByWorktree(source.worktreeKey).filter((status2) => status2.appRootKey === source.appRootKey);
   if (candidates.length !== 1) {

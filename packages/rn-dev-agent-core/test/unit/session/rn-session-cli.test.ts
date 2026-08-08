@@ -14,6 +14,9 @@ import { writeSessionSecret } from '../../../dist/session/state-root.js';
 import { readProcessBirth } from '../../../dist/session/process-birth.js';
 
 const cliPath = new URL('../../../dist/rn-session.js', import.meta.url).pathname;
+// GH #706: the CLI resolves live worktree sessions with the real owner probe, so a
+// fixture supervisor must carry this process's real birth token, not a placeholder.
+const supervisorBirthToken = readProcessBirth(process.pid)?.token ?? 'fixture';
 
 test('package-local CLI resolves one exact worktree session for literal build scripts', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-cli-'));
@@ -36,7 +39,7 @@ test('package-local CLI resolves one exact worktree session for literal build sc
     sourceKey: source.sourceKey,
     worktreeKey: source.worktreeKey,
     appRootKey: source.appRootKey,
-    supervisor: { pid: process.pid, token: 'fixture' },
+    supervisor: { pid: process.pid, token: supervisorBirthToken },
     source: { ...source },
     bindings: { metroPort: 8193 },
   });
@@ -90,7 +93,7 @@ test('package-local CLI status persists lost managed Metro reconciliation', () =
       sourceKey: source.sourceKey,
       worktreeKey: source.worktreeKey,
       appRootKey: source.appRootKey,
-      supervisor: { pid: process.pid, token: 'fixture' },
+      supervisor: { pid: process.pid, token: supervisorBirthToken },
       source: { ...source },
       bindings: {
         metroPort: 8193,
@@ -197,7 +200,7 @@ test('package-local CLI clears authenticated retained cleanup before replacement
       sourceKey: source.sourceKey,
       worktreeKey: source.worktreeKey,
       appRootKey: source.appRootKey,
-      supervisor: { pid: process.pid, token: 'fixture' },
+      supervisor: { pid: process.pid, token: supervisorBirthToken },
       source: { ...source },
       bindings: {
         metroPort: address.port,
@@ -265,7 +268,7 @@ test('package-local CLI does not discover a sibling app session in the same work
     sourceKey: sourceA.sourceKey,
     worktreeKey: sourceA.worktreeKey,
     appRootKey: sourceA.appRootKey,
-    supervisor: { pid: process.pid, token: 'fixture' },
+    supervisor: { pid: process.pid, token: supervisorBirthToken },
     source: { ...sourceA },
   });
   registry.close();
@@ -305,7 +308,7 @@ test('package-local CLI rejects an explicit session from another worktree', () =
     sourceKey: source.sourceKey,
     worktreeKey: 'foreign-worktree',
     appRootKey: source.appRootKey,
-    supervisor: { pid: process.pid, token: 'fixture' },
+    supervisor: { pid: process.pid, token: supervisorBirthToken },
     source: { ...source, worktreeKey: 'foreign-worktree' },
   });
   registry.close();
@@ -352,7 +355,7 @@ test('package-local CLI refuses marker writes through a replaced .rn-agent symli
     sourceKey: source.sourceKey,
     worktreeKey: source.worktreeKey,
     appRootKey: source.appRootKey,
-    supervisor: { pid: process.pid, token: 'fixture' },
+    supervisor: { pid: process.pid, token: supervisorBirthToken },
     source: { ...source },
     bindings: {
       metroPort: 8193,
@@ -432,7 +435,7 @@ test('package-local CLI refuses external Metro for managed startup and builds', 
       sourceKey: source.sourceKey,
       worktreeKey: source.worktreeKey,
       appRootKey: source.appRootKey,
-      supervisor: { pid: process.pid, token: 'fixture' },
+      supervisor: { pid: process.pid, token: supervisorBirthToken },
       source: { ...source },
       bindings: {
         metroPort: port,
@@ -505,7 +508,7 @@ test('package-local CLI retains claims when managed Metro cleanup is unproven', 
     sourceKey: source.sourceKey,
     worktreeKey: source.worktreeKey,
     appRootKey: source.appRootKey,
-    supervisor: { pid: process.pid, token: 'fixture' },
+    supervisor: { pid: process.pid, token: supervisorBirthToken },
     source: { ...source },
     bindings: {
       metroPort: 8193,
@@ -581,7 +584,7 @@ test('package-local CLI reserves Metro, build, and release operations before cle
       sourceKey: source.sourceKey,
       worktreeKey: source.worktreeKey,
       appRootKey: source.appRootKey,
-      supervisor: { pid: process.pid, token: 'fixture' },
+      supervisor: { pid: process.pid, token: supervisorBirthToken },
       source: { ...source },
       bindings: {
         metroPort: 8193,

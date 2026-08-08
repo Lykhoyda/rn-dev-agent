@@ -65,6 +65,13 @@ Example calls:
    - **1 match**: continue to step 3.
 
 3. **Pre-flight safety checks** before replay:
+   - **Ownership first.** Call `rn_session({action: "status"})` and evaluate
+     ownership before any other check. **If `state` is `blocked`, stop before
+     replaying.** Report `recoveryRequirement.nextAction` verbatim (plus
+     `startupCleanupBlocked` when status carries it) and do nothing else —
+     never retry the replay, never bind another device, never rebind to reach
+     a ready session, never run setup to work around it. Full contract:
+     `using-rn-dev-agent` skill § "Session ownership recovery".
    - **Read the flow file** and look for a `mutates: true` or
      `destructive: true` line in the metadata header (per the schema in
      `skills/rn-testing/SKILL.md` § "Reusable Action Metadata Schema (M7)"). If present,
@@ -72,7 +79,7 @@ Example calls:
      Mention that destructive flows can create duplicate backend rows when
      replayed multiple times — suggest using a timestamp-suffixed TITLE
      parameter or running with `--dry-run` first.
-   - Call `rn_session({action: "status"})`. Require one ready session, and
+   - Only once the session is not `blocked`: require one ready session, and
      check the flow's `appId:` and optional platform against its exact app and
      platform bindings. A mismatch is not repairable by choosing another
      booted device; stop and rebind the intended session.

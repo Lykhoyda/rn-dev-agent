@@ -33,8 +33,15 @@ The inventory includes:
 4. Plugin workflow names when running in the plugin repository.
 
 After listing, summarize matching flows and their `produces`, `mutates`,
-`appId`, platform, and required params. Replay a full/partial match before a
-manual `device_*` walk.
+`appId`, platform, and required params. Replay a full/partial match via
+`cdp_run_action` before a manual `device_*` walk.
+
+This listing is read-only discovery and grants no replay authority. A flow is
+listed whenever it exists on disk, including while the session is `blocked` and
+every authoritative tool is refusing. Before replaying, call
+`rn_session({action: "status"})`; if it reports `state: blocked`, follow
+`recoveryRequirement.nextAction` verbatim instead of replaying — see the
+`using-rn-dev-agent` skill section "Session ownership recovery".
 
 ## Programmatic example
 

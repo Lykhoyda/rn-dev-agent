@@ -74,9 +74,9 @@ JSON shape (abridged):
       ]
     },
     "skeletons": { "count": 1, "items": [...] },
-    "commands": { "count": 15, "items": [...] }
+    "commands": { "count": 16, "items": [...] }
   },
-  "total": 17
+  "total": 18
 }
 ```
 
@@ -91,9 +91,16 @@ JSON shape (abridged):
 
 After reading the output, surface a 1-paragraph summary to the user that
 explicitly names any **flows** that match their current intent — those should
-be replayed before any manual `device_*` walk. Per
-`feedback_execute_artifacts_before_manual.md`: manual primitives are a
-fallback, not a default.
+be replayed via `cdp_run_action` (or `/rn-dev-agent:run-action`) before any
+manual `device_*` walk. Per `feedback_execute_artifacts_before_manual.md`:
+manual primitives are a fallback, not a default.
+
+**This listing is read-only discovery and grants no replay authority.** A flow
+is listed whenever it exists on disk, including while the session is `blocked`
+and every authoritative tool is refusing. Before replaying, call
+`rn_session({action: "status"})`; if it reports `state: blocked`, follow
+`recoveryRequirement.nextAction` verbatim instead of replaying — see the
+`using-rn-dev-agent` skill § "Session ownership recovery".
 
 ## Implementation notes
 

@@ -5,6 +5,7 @@ import {
   type AuthorityDatabase,
   type AuthorityDatabaseCtor,
 } from './authority-store.js';
+import { NON_GIT_DECLARATION_NEXT_ACTION } from './declared-source-contract.js';
 import { probeMetroListener } from './metro-binding.js';
 import type { AuthorityAxis } from './tool-profiles.js';
 
@@ -217,11 +218,18 @@ const RECOVERY_HANDLE_RENEW_MS = 60_000;
 
 export type RecoveryRequirement = 'none' | 'adoption' | 'attach' | 'transport-restart';
 
+export interface StartupCleanupBlocker {
+  code: string;
+  reason: string;
+  nextAction?: string;
+}
+
 export interface RecoveryRequirementInspection {
   requirement: RecoveryRequirement;
   priorOwner: 'stale' | 'live' | 'unknown' | 'absent';
   /** L4 (issue 654): bounded holder heartbeat age, surfaced only for grouped-v1 contenders. */
   priorOwnerHeartbeatAgeMs?: number;
+  startupCleanupBlocked?: StartupCleanupBlocker;
   nextAction: string;
 }
 
@@ -249,6 +257,7 @@ const errorAxes: Record<string, string> = {
   OPERATION_ALREADY_IN_PROGRESS: 'C',
   SOURCE_WORKTREE_MISMATCH: 'S',
   SOURCE_REVISION_NOT_BUNDLED: 'S',
+  NON_GIT_MANIFEST_REQUIRED: 'S',
   APP_INSTALL_IDENTITY_CHANGED: 'I',
   METRO_PORT_CLAIM_CONFLICT: 'M',
   PORT_OCCUPIED_UNOWNED: 'M',
@@ -272,6 +281,15 @@ const errorAxes: Record<string, string> = {
   PROOF_AUTHORITY_MISMATCH: 'P',
 };
 
+// Codes whose repair is a named declaration/configuration path, not another status read.
+const errorNextActions: Record<string, string> = {
+  NON_GIT_MANIFEST_REQUIRED: NON_GIT_DECLARATION_NEXT_ACTION,
+};
+
+export function authorityRemedyNextAction(code: string): string | undefined {
+  return errorNextActions[code];
+}
+
 export function shortAuthorityIdentity(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex').slice(0, 16);
 }
@@ -289,6 +307,7 @@ export function authorityErrorMeta(error: SessionAuthorityError): Record<string,
       : undefined,
     nextAction:
       error.details?.nextAction ??
+      errorNextActions[error.code] ??
       'Run rn_session with action "status" and repair the named authority axis.',
   };
 }
@@ -333,6 +352,27 @@ function isOperationalState(state: string): boolean {
 
 function isFenceableState(state: string): boolean {
   return isOperationalState(state) || state === 'handoff';
+}
+
+function readStartupCleanupBlocker(bindingsJson: string): StartupCleanupBlocker | undefined {
+  let journal: Record<string, unknown> | undefined;
+  try {
+    const bindings = JSON.parse(bindingsJson) as Record<string, unknown>;
+    const value = bindings.startupCleanup;
+    journal = value && typeof value === 'object' ? (value as Record<string, unknown>) : undefined;
+  } catch {
+    return undefined;
+  }
+  if (!journal || typeof journal.finishedAt === 'number') return undefined;
+  const refusal = journal.refusal;
+  if (!refusal || typeof refusal !== 'object') return undefined;
+  const record = refusal as Record<string, unknown>;
+  if (typeof record.code !== 'string' || typeof record.reason !== 'string') return undefined;
+  return {
+    code: record.code,
+    reason: record.reason,
+    ...(typeof record.nextAction === 'string' ? { nextAction: record.nextAction } : {}),
+  };
 }
 
 function bindingsRunnerPresent(bindingsJson: string): boolean {
@@ -1105,7 +1145,7 @@ export class SessionRegistry {
           this.#database
             .prepare(
               `SELECT session_id, source_key, worktree_key, app_root_key, claim_epoch,
-                      supervisor_pid, supervisor_birth, heartbeat_ms
+                      supervisor_pid, supervisor_birth, heartbeat_ms, bindings_json
                FROM sessions WHERE session_id = ?`,
             )
             .get(priorSessionId),
@@ -1147,6 +1187,18 @@ export class SessionRegistry {
             priorOwner: 'stale',
             nextAction:
               'The proven-dead owner has a different source identity for this app root, so startup cleanup cannot release it under the current declared manifests. Restore the declared manifests that produced the prior identity, start and close rn-dev-agent to release its authority, then reapply the manifest changes; otherwise use a separate worktree.',
+          };
+        }
+        // Only cleanup without a retained refusal may promise automatic convergence.
+        const blocked = readStartupCleanupBlocker(prior.bindings_json);
+        if (blocked) {
+          return {
+            requirement: 'transport-restart',
+            priorOwner: 'stale',
+            startupCleanupBlocked: blocked,
+            nextAction:
+              blocked.nextAction ??
+              `Startup cleanup refused with ${blocked.code} and will refuse again on the next restart: ${blocked.reason}. Resolve that refusal before restarting the MCP transport.`,
           };
         }
         return {
@@ -1703,6 +1755,46 @@ export class SessionRegistry {
           row.claim_epoch,
         );
       return { resumed: false, obligations, integration };
+    });
+  }
+
+  /** Re-recording an identical cleanup refusal is a no-op across repeated restarts. */
+  recordStartupCleanupRefusal(prior: SessionRef, refusal: StartupCleanupBlocker): void {
+    const now = this.#now();
+    this.#transaction(() => {
+      const row = this.#requireProvenDeadStartupOwner(prior);
+      const { bindings, journal } = this.#requireStartupCleanupJournal(row);
+      if (typeof journal.finishedAt === 'number') return;
+      const existing = journal.refusal as Record<string, unknown> | undefined;
+      if (
+        existing &&
+        existing.code === refusal.code &&
+        existing.reason === refusal.reason &&
+        existing.nextAction === refusal.nextAction
+      ) {
+        return;
+      }
+      this.#database
+        .prepare(
+          `UPDATE sessions SET bindings_json = ?, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`,
+        )
+        .run(
+          JSON.stringify({
+            ...bindings,
+            startupCleanup: {
+              ...journal,
+              refusal: {
+                code: refusal.code,
+                reason: refusal.reason,
+                ...(refusal.nextAction ? { nextAction: refusal.nextAction } : {}),
+              },
+            },
+          }),
+          now,
+          row.session_id,
+          row.claim_epoch,
+        );
     });
   }
 
@@ -2520,17 +2612,42 @@ export class SessionRegistry {
     });
   }
 
+  // GH #706: released and proven-stale rows are not live sessions, so they never
+  // count towards the "multiple live sessions match this worktree" refusal.
   findSessionsByWorktree(worktreeKey: string): SessionStatus[] {
     const rows = this.#database
       .prepare(
-        `SELECT session_id FROM sessions
+        `SELECT session_id, supervisor_pid, supervisor_birth FROM sessions
          WHERE worktree_key = ? AND state NOT IN ('released', 'stale')
          ORDER BY updated_ms DESC`,
       )
-      .all(worktreeKey);
+      .all(worktreeKey) as Array<{
+      session_id: string;
+      supervisor_pid: number;
+      supervisor_birth: string;
+    }>;
     return rows
-      .map((row) => this.getSessionStatus(String((row as Record<string, unknown>).session_id)))
+      .filter((row) => !this.#supervisorProvenDead(row))
+      .map((row) => this.getSessionStatus(row.session_id))
       .filter((status): status is SessionStatus => status !== null);
+  }
+
+  #supervisorProvenDead(row: {
+    session_id: string;
+    supervisor_pid: number;
+    supervisor_birth: string;
+  }): boolean {
+    try {
+      return (
+        this.#ownerStatus({
+          sessionId: row.session_id,
+          pid: row.supervisor_pid,
+          token: row.supervisor_birth,
+        }) === 'mismatch'
+      );
+    } catch {
+      return false;
+    }
   }
 
   getControllerBinding(session: SessionRef): ControllerBinding {

@@ -2,6 +2,7 @@ import { readProcessBirth } from './process-birth.js';
 import { inspectSessionOwner } from './process-owner.js';
 import { openSessionRegistry, SessionAuthorityError, } from './registry.js';
 import { readJsonStateFile } from '../util/secure-state-file.js';
+export const BLOCKED_CONTENDER_REFUSAL = 'this session does not own this worktree; rn_session({ action: "status" }) is the only available action';
 export class WorkerAuthorityRuntime {
     available;
     #registry;
@@ -27,9 +28,14 @@ export class WorkerAuthorityRuntime {
         const available = this.requireAvailable();
         const status = this.status();
         if (status.available && (status.state === 'blocked' || status.state === 'handoff_cleanup')) {
-            throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'blocked contender exposes only accept_handoff and adopt_stale recovery');
+            throw this.blockedContenderError();
         }
         return available;
+    }
+    /** Gated refusals carry the current session's measured recovery next action. */
+    blockedContenderError() {
+        const nextAction = this.inspectRecoveryRequirement()?.nextAction;
+        return new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', BLOCKED_CONTENDER_REFUSAL, undefined, nextAction ? { nextAction } : undefined);
     }
     requireRecovery() {
         const available = this.requireAvailable();
