@@ -1029,11 +1029,9 @@ test('post-commit failures expose durable authority to compensation', async () =
     );
 
     assert.equal(committed, true);
-    assert.equal(
-      (registry.getSessionStatus(owner.sessionId)?.bindings.bundle as { targetId: string })
-        .targetId,
-      'new-target',
-    );
+    const committedStatus = registry.getSessionStatus(owner.sessionId);
+    assert.ok(committedStatus);
+    assert.equal((committedStatus.bindings.bundle as { targetId: string }).targetId, 'new-target');
     const compensated = registry.replaceBindingsDuringOperation(operation, {
       bindings: { bundle: { targetId: 'old-target' } },
       releaseResources: [{ type: 'target', key: '8193:new-target' }],
