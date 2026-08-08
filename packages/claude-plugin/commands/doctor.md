@@ -18,10 +18,13 @@ For **linked-worktree action inheritance**, resolve the RN app root and run the 
 
 For **idb**, require both a healthy `idb --help` and `idb_companion`; an active
 install PID is INSTALLING. A client on PATH whose `idb --help` fails is BROKEN,
-not MISSING — report the interpreter incompatibility (GH#578) and the pinned
-repair command, never a bare `pipx install fb-idb`. Otherwise report MISSING and
-the documented install command. This row is YELLOW because mirroring has a
-screenshot fallback.
+not MISSING — report it as installed but not responding, naming the Python 3.14
+interpreter incompatibility as the *probable* cause rather than a certainty (the
+probe cannot separate a crash from a timeout or EACCES), and give the pinned
+repair command, never a bare `pipx install fb-idb`. On a machine with no
+supported interpreter, prefix that command with `brew install python@3.13 &&`.
+Otherwise report MISSING and the documented install command. This row is YELLOW
+because mirroring has a screenshot fallback.
 
 For runner provenance, inspect the runner artifact/state metadata documented by
 `rn-setup`. For helpers, use a narrow gated CDP read. For CDP auto-reconnect,

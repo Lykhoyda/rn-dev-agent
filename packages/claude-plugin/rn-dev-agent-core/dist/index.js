@@ -80086,9 +80086,9 @@ var RestartGate = class {
     return this.exits.length < this.limit;
   }
 };
-var IDB_INSTALL_COMMAND = "brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install --python python3.13 fb-idb";
+var IDB_INSTALL_COMMAND = "brew install python@3.13 && brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install --python python3.13 --force fb-idb";
 var SIMCTL_HINT = `install idb for smoother mirroring (${IDB_INSTALL_COMMAND})`;
-var SIMCTL_BROKEN_IDB_HINT = "idb is installed but its client crashes on every invocation \u2014 fb-idb 1.1.7 needs asyncio.get_event_loop(), removed in Python 3.14. Reinstall it under a supported interpreter: pipx install --python python3.13 --force fb-idb";
+var SIMCTL_BROKEN_IDB_HINT = "idb is installed but did not respond successfully \u2014 most likely fb-idb 1.1.7 under Python 3.14, which removed the asyncio.get_event_loop() it needs. Reinstall it under a supported interpreter: pipx install --python python3.13 --force fb-idb";
 var IDB_HINT = `idb not found \u2014 ${IDB_INSTALL_COMMAND}`;
 var FFMPEG_HINT = "ffmpeg not found \u2014 run scripts/ensure-ffmpeg.sh or brew install ffmpeg";
 var sleep6 = (ms) => new Promise((resolve11) => setTimeout(resolve11, ms));

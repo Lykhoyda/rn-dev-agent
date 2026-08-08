@@ -2,6 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { readFileSync } from 'node:fs';
 import { PassThrough } from 'node:stream';
 import {
   RestartGate,
@@ -377,7 +378,9 @@ test('probeIdbClient: crash on invocation -> broken, distinct from absent', asyn
 });
 
 test('idb install command pins the interpreter (never bare `pipx install fb-idb`)', () => {
-  assert.match(IDB_INSTALL_COMMAND, /pipx install --python python3\.13 fb-idb/);
+  assert.match(IDB_INSTALL_COMMAND, /pipx install --python python3\.13 --force fb-idb/);
+  // GH#578: a python3.14-only machine must not be handed `pipx: No such python`.
+  assert.match(IDB_INSTALL_COMMAND, /^brew install python@3\.13 &&/);
   for (const hint of [SIMCTL_HINT, SIMCTL_BROKEN_IDB_HINT, IDB_INSTALL_COMMAND]) {
     assert.doesNotMatch(hint, /pipx install fb-idb/);
   }
@@ -394,4 +397,15 @@ test('simctl fallback carries the broken-client hint when idb crashes', () => {
   const broken = new IosSimctlLoopSource('UDID', { degradedHint: SIMCTL_BROKEN_IDB_HINT });
   assert.equal(broken.degradedHint, SIMCTL_BROKEN_IDB_HINT);
   assert.equal(new IosSimctlLoopSource('UDID').degradedHint, SIMCTL_HINT);
+});
+
+// The TS constant duplicates the shell's no-interpreter install command by
+// design (no runtime probing in the core package), so guard the duplication
+// rather than building machinery to keep the two in sync.
+test('IDB_INSTALL_COMMAND matches the command ensure-idb.sh produces', () => {
+  const shell = readFileSync(new URL('../../../../scripts/ensure-idb.sh', import.meta.url), 'utf8');
+  assert.ok(
+    shell.includes(IDB_INSTALL_COMMAND),
+    'ensure-idb.sh no longer emits the exact IDB_INSTALL_COMMAND string — they have drifted',
+  );
 });

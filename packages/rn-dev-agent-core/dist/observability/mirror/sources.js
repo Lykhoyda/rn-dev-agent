@@ -25,9 +25,16 @@ export class RestartGate {
 // Python 3.14 that reinstalls the exact combination that crashes (fb-idb 1.1.7
 // calls asyncio.get_event_loop(), removed in 3.14), so the hint the user
 // follows recreates the break. Every printed command pins the interpreter.
-export const IDB_INSTALL_COMMAND = 'brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install --python python3.13 fb-idb';
+// Mirrors the no-interpreter variant of install_command() in
+// scripts/ensure-idb.sh: the interpreter install is prepended because a
+// python3.14-only machine would otherwise get `pipx: No such python` — a hint
+// the developer cannot follow, which is the defect this change removes.
+export const IDB_INSTALL_COMMAND = 'brew install python@3.13 && brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install --python python3.13 --force fb-idb';
 export const SIMCTL_HINT = `install idb for smoother mirroring (${IDB_INSTALL_COMMAND})`;
-export const SIMCTL_BROKEN_IDB_HINT = 'idb is installed but its client crashes on every invocation — fb-idb 1.1.7 needs asyncio.get_event_loop(), removed in Python 3.14. ' +
+// The probe only sees a non-zero exit, so the cause is stated as probable:
+// a timeout or EACCES lands here too, and a confidently wrong diagnosis is the
+// same defect as a hint that cannot be followed.
+export const SIMCTL_BROKEN_IDB_HINT = 'idb is installed but did not respond successfully — most likely fb-idb 1.1.7 under Python 3.14, which removed the asyncio.get_event_loop() it needs. ' +
     'Reinstall it under a supported interpreter: pipx install --python python3.13 --force fb-idb';
 const IDB_HINT = `idb not found — ${IDB_INSTALL_COMMAND}`;
 const FFMPEG_HINT = 'ffmpeg not found — run scripts/ensure-ffmpeg.sh or brew install ffmpeg';

@@ -102,14 +102,27 @@ install_command() {
   fi
 }
 
+# The probe only observes a non-zero exit (a timeout or EACCES lands here too),
+# so the cause is stated as probable rather than asserted as fact.
 incompatible_explanation() {
-  echo "idb is installed but unusable: the fb-idb client crashes on every invocation — it calls asyncio.get_event_loop(), which Python 3.14 removed. Installing it again under the same interpreter reproduces this."
+  echo "idb is installed but did not respond successfully: the most likely cause is fb-idb calling asyncio.get_event_loop(), which Python 3.14 removed. Installing it again under the same interpreter would reproduce this."
+}
+
+# GH#578: a pinned install that SUCCEEDS but leaves no client on PATH is a shim
+# visibility problem, not an interpreter incompatibility — retryable, and the
+# remedy is the PATH, never the install command that already succeeded.
+path_shim_explanation() {
+  echo "fb-idb installed successfully, but no idb client is visible on PATH — the pipx shim directory (usually ~/.local/bin) is not exported. Run 'pipx ensurepath' and start a new shell, or add that directory to PATH."
 }
 
 # --install-worker: the detached background job (never reached at SessionStart).
 if [ "${1:-}" = "--install-worker" ]; then
   mkdir -p "$STATE_DIR"
   status=ok
+  # The cause is persisted alongside the status: messages rendered FROM the
+  # marker (notably the 24h backoff line) would otherwise fall back to the
+  # generic install command and lose what the worker actually determined.
+  cause=none
   if ! has_companion; then
     brew tap facebook/fb && { brew trust facebook/fb >/dev/null 2>&1 || true; } && brew install idb-companion || status=failed
   fi
@@ -131,35 +144,45 @@ if [ "${1:-}" = "--install-worker" ]; then
         installed=yes
         [ "$(idb_client_state)" = ready ] && break
       done
-      if [ "$(idb_client_state)" != ready ]; then
+      # Four outcomes, derived from what the worker already knows: whether any
+      # install ran (`installed`) and what the probe now reads. Only a client
+      # that ran an install and still fails is genuinely terminal.
+      final_state="$(idb_client_state)"
+      if [ "$final_state" != ready ]; then
         if [ -n "$tried" ] && [ -z "$installed" ]; then
           # Every pinned install command itself failed (network, PyPI, pipx).
-          # That is transient, so it must stay retryable: the terminal verdict
-          # requires evidence of incompatibility, not merely absence of success.
+          # Transient, so it stays retryable.
           status=failed
+          cause=install-failed
           echo "tried:$tried — every pinned install failed; retrying after backoff"
-        else
-          # Either a pinned install succeeded and the client still crashes, or
-          # no supported interpreter exists at all. Retrying cannot change that,
-          # so record a distinct verdict with the interpreter fingerprint and
-          # stop — the foreground path reports the truth instead of re-showing
-          # an install hint the developer has already followed.
-          # A brew failure earlier in this run stays `failed`: that one IS worth
-          # retrying, and its backoff must not be replaced by a terminal verdict.
+        elif [ -n "$installed" ] && [ "$final_state" = absent ]; then
+          # The install worked; the shim just is not visible. Orthogonal to the
+          # interpreter fingerprint, so it must never be terminal.
+          status=failed
+          cause=path-shim
+          path_shim_explanation
+        elif [ -n "$installed" ]; then
+          # A pinned install succeeded and the client still fails to run.
+          # Retrying cannot change that. A brew failure earlier in this run
+          # stays `failed`: that one IS worth retrying.
           [ "$status" = failed ] || status=incompatible
-          if [ -n "$tried" ]; then
-            incompatible_explanation
-            echo "tried:$tried — none produced a working client; the mirror stays on the simctl tier"
-          else
-            echo "no supported Python found (need one of: $SUPPORTED_PYTHONS). Install one, then re-run: $(install_command)"
-          fi
+          [ "$status" = failed ] || cause=client-unusable
+          incompatible_explanation
+          echo "tried:$tried — none produced a working client; the mirror stays on the simctl tier"
+        else
+          # No supported interpreter exists at all. The fingerprint re-arms this
+          # as soon as one is installed.
+          [ "$status" = failed ] || status=incompatible
+          [ "$status" = failed ] || cause=no-interpreter
+          echo "no supported Python found (need one of: $SUPPORTED_PYTHONS). Install one, then re-run: $(install_command)"
         fi
       fi
     else
       status=failed
     fi
   fi
-  echo "$status $(date +%s) $(python_fingerprint)" > "$MARKER"
+  [ "$status" = failed ] && [ "$cause" = none ] && cause=install-error
+  echo "$status $(date +%s) $(python_fingerprint) $cause" > "$MARKER"
   rm -f "$PIDFILE"
   echo "ensure-idb worker finished: $status"
   exit 0
@@ -177,7 +200,7 @@ if [ "$CLIENT_STATE" = ready ] && has_companion; then
 fi
 
 if [ -f "$MARKER" ]; then
-  read -r LAST_STATUS LAST_TS LAST_FP < "$MARKER" 2>/dev/null || LAST_STATUS=""
+  read -r LAST_STATUS LAST_TS LAST_FP LAST_CAUSE < "$MARKER" 2>/dev/null || LAST_STATUS=""
 fi
 
 # The incompatible verdict outranks every other branch while the client is
@@ -186,12 +209,15 @@ fi
 # delete "$MARKER" to force a retry. A verdict may never contradict the live
 # probe — a client that now reads ready or absent falls through to the normal
 # path so the missing piece (companion, or the client itself) still gets fixed.
-if [ "$CLIENT_STATE" = broken ] && [ "${LAST_STATUS:-}" = "incompatible" ] && [ "${LAST_FP:-}" = "$(python_fingerprint)" ]; then
-  incompatible_explanation
-  if first_supported_python >/dev/null; then
+if [ "$CLIENT_STATE" != ready ] && [ "${LAST_STATUS:-}" = "incompatible" ] && [ "${LAST_FP:-}" = "$(python_fingerprint)" ]; then
+  # Terminal only for the two causes that retrying cannot change. The message
+  # follows the live state, never the other state's story.
+  if [ "$CLIENT_STATE" = broken ]; then
+    incompatible_explanation
     echo "Recover with: $(install_command)"
   else
-    echo "No supported Python is installed (need one of: $SUPPORTED_PYTHONS). Recover with: $(install_command)"
+    echo "idb is not installed, and no supported Python is available to install it (need one of: $SUPPORTED_PYTHONS)."
+    echo "Recover with: $(install_command)"
   fi
   echo "Not retrying until the installed Python interpreters change (log: $LOG). Mirroring stays on the ~6fps simctl tier."
   exit 0
@@ -226,7 +252,15 @@ fi
 if [ "${LAST_STATUS:-}" = "failed" ] && [ -n "${LAST_TS:-}" ]; then
   NOW="$(date +%s)"
   if [ $((NOW - LAST_TS)) -lt "$BACKOFF_SECS" ]; then
-    echo "idb install failed recently — retrying after backoff (manual: $(install_command), log: $LOG)"
+    # This line is what the developer reads for the next 24h, so it must carry
+    # the cause the worker determined rather than defaulting to an install
+    # command that, for the shim case, already succeeded.
+    if [ "${LAST_CAUSE:-}" = "path-shim" ]; then
+      path_shim_explanation
+      echo "Retrying the install after backoff anyway (log: $LOG)."
+    else
+      echo "idb install failed recently — retrying after backoff (manual: $(install_command), log: $LOG)"
+    fi
     exit 0
   fi
 fi

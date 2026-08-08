@@ -183,12 +183,15 @@ Both binaries present → the observe UI's live mirror uses `idb video-stream`
 loop. SessionStart auto-installs in the background (`scripts/ensure-idb.sh`);
 if `~/.rn-dev-agent/idb/install.pid` exists and its PID is alive, report
 "installing in background (log: ~/.rn-dev-agent/idb/install.log)" instead of
-MISSING. A client that is on PATH but exits non-zero is BROKEN, not MISSING: fb-idb
-1.1.7 needs `asyncio.get_event_loop()`, removed in Python 3.14, so it crashes on
-every invocation (GH#578). Report the incompatibility — never tell the developer to
-install what they already installed. Manual install/repair (the interpreter pin is
-required; a bare `pipx install fb-idb` resolves the newest Python and recreates the
-break): `brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install --python python3.13 --force fb-idb`.
+MISSING. A client that is on PATH but exits non-zero is BROKEN, not MISSING. State
+the cause as probable, not certain: the probe only sees a non-zero exit, and a
+timeout or EACCES lands there too. The most likely cause is fb-idb needing
+`asyncio.get_event_loop()`, which Python 3.14 removed (GH#578). Never tell the
+developer to install what they already installed. Manual install/repair (the
+interpreter pin is required; a bare `pipx install fb-idb` resolves the newest Python
+and recreates the break): `brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install --python python3.13 --force fb-idb`.
+On a machine with no supported interpreter, prepend the interpreter install:
+`brew install python@3.13 && ...` (same form `install_command()` produces).
 
 ### 11. Physical device prerequisites (optional — M9 / Phase 111)
 
@@ -297,7 +300,7 @@ Present results as a table:
 | CDP connection | CONNECTED | — |
 | Injected helpers | OK / MISSING | If MISSING: fall back to `device_*` tools or call `cdp_reload`. Do not retry `cdp_status` in a loop. |
 | ffmpeg | OK (v7.1) | — |
-| idb (screen mirror fast path) | OK / INSTALLING (background) / BROKEN (installed, crashes) / MISSING | If MISSING or BROKEN: `brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install --python python3.13 --force fb-idb` — the `--python` pin is required (GH#578); optional, mirror falls back to ~6fps simctl |
+| idb (screen mirror fast path) | OK / INSTALLING (background) / BROKEN (installed, did not respond) / MISSING | If MISSING or BROKEN: `brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install --python python3.13 --force fb-idb`, prefixed with `brew install python@3.13 &&` when no supported interpreter is installed. The `--python` pin is required (GH#578). Report the incompatibility as the probable cause, not a certainty. Optional — mirror falls back to ~6fps simctl |
 | Physical devices | N/A (none connected) OR "Android USB reverse: OK" / "iOS: idb-companion missing — install with brew" | Run installed command if iOS-companion missing |
 | Plugin version | OK (latest) / BEHIND (installed X, latest Y) / OFFLINE / AHEAD (dev install) | Run: `/plugin update rn-dev-agent` if BEHIND |
 | Vercel rules sync | OK (N rules, fetched X days ago) / STALE (> 30 days) / MISSING / DRIFT / N/A (installed plugin) | Repo checkout only: node scripts/sync-vercel-skills.mjs --fix --ref \<sha\> |
