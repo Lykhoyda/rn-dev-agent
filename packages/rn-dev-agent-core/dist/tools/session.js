@@ -467,6 +467,7 @@ export function createSessionHandler(runtime, dependencies = {}) {
                                 : undefined,
                             releaseResources: atomicAndroidReplacement && priorTarget ? [priorTarget] : [],
                             claimResources: [candidateTarget],
+                            probeClaimOwners: true,
                             assertBeforeCommit: promotion.assertActive,
                             onCommitted: () => {
                                 committed = true;

@@ -455,6 +455,9 @@ export class CDPClient {
     async listTargetsExact(port) {
         return listTargetsOnExactPort(this._authoritativeSessionPolicy?.port ?? port);
     }
+    get authoritativeSessionPolicy() {
+        return this._authoritativeSessionPolicy;
+    }
     setAuthoritativeSessionPolicy(policy) {
         this._authoritativeSessionPolicy = policy;
         this._exactDiscoveryPort = policy.port;

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { chmodSync, mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, test } from 'node:test';
@@ -1042,6 +1042,58 @@ test('post-commit failures expose durable authority to compensation', async () =
 
   assert.equal(registry.getClaim('target', '8193:new-target'), null);
   assert.equal(registry.getClaim('target', '8193:old-target')?.sessionId, owner.sessionId);
+});
+
+test('binding promotion probes target-claim owners when asked', () => {
+  const { registry, create, ownerStates } = fixture();
+  const owner = create('probe-owner');
+  const crashed = create('crashed-owner', 'crashed-worktree');
+  registry.claimResources(crashed, [{ type: 'target', key: '8193:reused-target' }]);
+  ownerStates.set('crashed-owner', 'mismatch');
+
+  const promotion = {
+    state: 'ready',
+    bindings: { bundle: { targetId: 'reused-target' } },
+    claimResources: [{ type: 'target', key: '8193:reused-target' }],
+  };
+
+  assert.throws(
+    () => registry.updateBindings(owner, promotion),
+    (error) => error.code === 'TARGET_CLAIM_CONFLICT',
+  );
+  assert.throws(
+    () => registry.updateBindings(owner, { ...promotion, probeClaimOwners: true }),
+    (error) =>
+      error.code === 'SESSION_AUTHORITY_REQUIRED' && error.holder.sessionId === 'crashed-owner',
+  );
+  assert.equal(registry.getClaim('target', '8193:reused-target')?.sessionId, 'crashed-owner');
+  assert.equal(registry.getSessionStatus(owner.sessionId)?.bindings.bundle, undefined);
+});
+
+test('post-commit callback failures still harden authority file permissions', () => {
+  const { registry, create, path } = fixture();
+  const owner = create('secure-files-owner');
+  chmodSync(path, 0o644);
+
+  assert.throws(
+    () =>
+      registry.updateBindings(owner, {
+        state: 'ready',
+        bindings: { bundle: { targetId: 'committed-target' } },
+        onCommitted: () => {
+          throw new Error('post-commit hardening failed');
+        },
+      }),
+    /post-commit hardening failed/,
+  );
+
+  assert.equal(statSync(path).mode & 0o777, 0o600);
+  const committedStatus = registry.getSessionStatus(owner.sessionId);
+  assert.ok(committedStatus);
+  assert.equal(
+    (committedStatus.bindings.bundle as { targetId: string }).targetId,
+    'committed-target',
+  );
 });
 
 test('runtime target replacement advances the binding and operation fence atomically', () => {

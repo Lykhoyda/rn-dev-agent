@@ -890,113 +890,124 @@ async function pinSessionDevClient(
     throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: session signer is unavailable');
   }
   const current = getClient();
+  const suspendedPolicy =
+    device.platform === 'android' ? current.authoritativeSessionPolicy : undefined;
   if (device.platform === 'ios') {
     current.clearAuthoritativeSessionPolicy();
     if (options.force) {
       await current.disconnect();
       setClient(createClient(metro.port));
     }
+  } else if (suspendedPolicy) {
+    current.clearAuthoritativeSessionPolicy();
   }
-  const bundle = await pinExactDevClient(
-    {
-      sessionId: status.sessionId,
-      metroInstanceId: metro.instanceId,
-      worktreeKey: status.worktreeKey,
-      appId: device.appId,
-      platform: device.platform,
-      buildGeneration: metro.buildGeneration,
-      deviceId: device.deviceId,
-      metroPort: metro.port,
-      runtimeKind,
-      ...(devClientUrl ? { devClientUrl, expectedDevClientUrl: devClientUrl } : {}),
-      signerCapability: secret.signerCapability,
-    },
-    {
-      openUrl: async (platform, deviceId, url) => {
-        if (platform === 'ios') {
-          await execFileP('xcrun', ['simctl', 'openurl', deviceId, url]);
-        } else {
-          await execFileP('adb', androidDeeplinkCommandArgs(url, undefined, deviceId));
-        }
+  try {
+    const bundle = await pinExactDevClient(
+      {
+        sessionId: status.sessionId,
+        metroInstanceId: metro.instanceId,
+        worktreeKey: status.worktreeKey,
+        appId: device.appId,
+        platform: device.platform,
+        buildGeneration: metro.buildGeneration,
+        deviceId: device.deviceId,
+        metroPort: metro.port,
+        runtimeKind,
+        ...(devClientUrl ? { devClientUrl, expectedDevClientUrl: devClientUrl } : {}),
+        signerCapability: secret.signerCapability,
       },
-      launchExactApp: async (platform, deviceId, appId) => {
-        if (platform === 'ios') {
-          await execFileP('xcrun', ['simctl', 'launch', deviceId, appId]);
-        } else {
-          await execFileP('adb', [
-            '-s',
-            deviceId,
-            'shell',
-            'monkey',
-            '--pct-syskeys',
-            '0',
-            '-p',
-            appId,
-            '-c',
-            'android.intent.category.LAUNCHER',
-            '1',
-          ]);
-        }
-      },
-      acceptIosOpenDialog: async () => {
-        const result = await acceptDeeplinkOpenConfirmation();
-        if (result && !result.tapped) {
-          throw new Error(
-            'DEV_CLIENT_ENDPOINT_NOT_FOUND: iOS open confirmation did not expose the exact Open action',
+      {
+        openUrl: async (platform, deviceId, url) => {
+          if (platform === 'ios') {
+            await execFileP('xcrun', ['simctl', 'openurl', deviceId, url]);
+          } else {
+            await execFileP('adb', androidDeeplinkCommandArgs(url, undefined, deviceId));
+          }
+        },
+        launchExactApp: async (platform, deviceId, appId) => {
+          if (platform === 'ios') {
+            await execFileP('xcrun', ['simctl', 'launch', deviceId, appId]);
+          } else {
+            await execFileP('adb', [
+              '-s',
+              deviceId,
+              'shell',
+              'monkey',
+              '--pct-syskeys',
+              '0',
+              '-p',
+              appId,
+              '-c',
+              'android.intent.category.LAUNCHER',
+              '1',
+            ]);
+          }
+        },
+        acceptIosOpenDialog: async () => {
+          const result = await acceptDeeplinkOpenConfirmation();
+          if (result && !result.tapped) {
+            throw new Error(
+              'DEV_CLIENT_ENDPOINT_NOT_FOUND: iOS open confirmation did not expose the exact Open action',
+            );
+          }
+        },
+        connectExact: async ({ metroPort, platform, appId, deviceId }) => {
+          return connectExactSessionTarget(
+            { metroPort, platform, appId, deviceId },
+            exactSessionTargetReadinessTimeoutMs(platform),
           );
-        }
-      },
-      connectExact: async ({ metroPort, platform, appId, deviceId }) => {
-        return connectExactSessionTarget(
-          { metroPort, platform, appId, deviceId },
-          exactSessionTargetReadinessTimeoutMs(platform),
-        );
-      },
-      readMarker: async (connection) => {
-        const markerClient = 'client' in connection ? connection.client : getClient();
-        const result = await markerClient.evaluate(
-          'JSON.stringify(globalThis.__RN_DEV_AGENT_AUTHORITY__ ?? null)',
-        );
-        if (typeof result.value !== 'string') return null;
-        const parsed = JSON.parse(result.value) as {
-          status?: string;
-          marker?: MetroAuthorityMarker;
-        } | null;
-        return parsed?.status === 'signed' && parsed.marker
-          ? { status: 'signed' as const, marker: parsed.marker }
-          : null;
-      },
-      commitBundle,
-      readManagedManifest: async ({ host, metroPort, platform }) => {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 15_000);
-        try {
-          const response = await fetch(`http://${host}:${metroPort}/`, {
-            headers: {
-              accept: 'multipart/mixed,application/expo+json,application/json',
-              'expo-platform': platform,
-            },
-            signal: controller.signal,
-          });
-          return {
-            body: await response.text(),
-            contentType: response.headers.get('content-type') ?? '',
-            status: response.status,
-          };
-        } catch (error) {
-          throw new Error(
-            `METRO_MANIFEST_ENDPOINT_MISMATCH: managed manifest request failed: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
+        },
+        readMarker: async (connection) => {
+          const markerClient = 'client' in connection ? connection.client : getClient();
+          const result = await markerClient.evaluate(
+            'JSON.stringify(globalThis.__RN_DEV_AGENT_AUTHORITY__ ?? null)',
           );
-        } finally {
-          clearTimeout(timer);
-        }
+          if (typeof result.value !== 'string') return null;
+          const parsed = JSON.parse(result.value) as {
+            status?: string;
+            marker?: MetroAuthorityMarker;
+          } | null;
+          return parsed?.status === 'signed' && parsed.marker
+            ? { status: 'signed' as const, marker: parsed.marker }
+            : null;
+        },
+        commitBundle,
+        readManagedManifest: async ({ host, metroPort, platform }) => {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 15_000);
+          try {
+            const response = await fetch(`http://${host}:${metroPort}/`, {
+              headers: {
+                accept: 'multipart/mixed,application/expo+json,application/json',
+                'expo-platform': platform,
+              },
+              signal: controller.signal,
+            });
+            return {
+              body: await response.text(),
+              contentType: response.headers.get('content-type') ?? '',
+              status: response.status,
+            };
+          } catch (error) {
+            throw new Error(
+              `METRO_MANIFEST_ENDPOINT_MISMATCH: managed manifest request failed: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            );
+          } finally {
+            clearTimeout(timer);
+          }
+        },
       },
-    },
-  );
-  getClient().setAuthoritativeSessionPolicy(createAuthoritativeSessionPolicy(status));
-  return bundle;
+    );
+    getClient().setAuthoritativeSessionPolicy(createAuthoritativeSessionPolicy(status));
+    return bundle;
+  } catch (error) {
+    if (suspendedPolicy && getClient() === current) {
+      current.setAuthoritativeSessionPolicy(suspendedPolicy);
+    }
+    throw error;
+  }
 }
 
 function createAuthoritativeSessionPolicy(status: SessionStatus): AuthoritativeSessionPolicy {

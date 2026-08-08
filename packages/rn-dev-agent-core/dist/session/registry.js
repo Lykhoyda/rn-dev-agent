@@ -293,26 +293,7 @@ export class SessionRegistry {
             if (resources.some((resource) => resource.type === 'device')) {
                 this.#assertNoStaleDeviceCleanup(bindings);
             }
-            for (const resource of resources) {
-                const claim = this.#findConflictingClaim(resource);
-                if (!claim ||
-                    (claim.session_id === session.sessionId && claim.claim_epoch === session.claimEpoch)) {
-                    continue;
-                }
-                const probe = probes.get(claim.session_id);
-                if (!probe || probe.claimEpoch !== claim.claim_epoch) {
-                    throw claimConflict(claim);
-                }
-                if (probe.status === 'match')
-                    throw claimConflict(claim);
-                if (probe.status === 'unknown') {
-                    if (claim.lease_until_ms < now) {
-                        throw new SessionAuthorityError('STALE_LEASE_NOT_RECLAIMABLE', 'expired lease owner identity could not be proven', { sessionId: claim.session_id, claimEpoch: claim.claim_epoch });
-                    }
-                    throw claimConflict(claim);
-                }
-                throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'a proven-stale owner requires explicit adopt_stale before claims transfer', { sessionId: claim.session_id, claimEpoch: claim.claim_epoch });
-            }
+            this.#assertClaimsAvailable(session, resources, probes, now);
             const leaseUntil = now + this.#leaseMs;
             for (const resource of resources) {
                 this.#database
@@ -1358,6 +1339,10 @@ export class SessionRegistry {
         return prior;
     }
     updateBindings(session, input) {
+        const claimed = input.claimResources ?? [];
+        const probes = input.probeClaimOwners && claimed.length > 0
+            ? this.#probeClaimOwners(session, claimed)
+            : null;
         const now = this.#now();
         this.#transaction(() => {
             const current = this.#requireSession(session);
@@ -1369,13 +1354,7 @@ export class SessionRegistry {
                 ...JSON.parse(current.bindings_json),
                 ...input.bindings,
             };
-            for (const resource of input.claimResources ?? []) {
-                const claim = this.#findConflictingClaim(resource);
-                if (claim &&
-                    (claim.session_id !== session.sessionId || claim.claim_epoch !== session.claimEpoch)) {
-                    throw claimConflict(claim);
-                }
-            }
+            this.#assertClaimsAvailable(session, claimed, probes, now);
             if (Object.hasOwn(input.bindings, 'device') || Object.hasOwn(input.bindings, 'install')) {
                 const currentBindings = JSON.parse(current.bindings_json);
                 const platform = String((input.bindings.device ?? currentBindings.device)?.platform ?? '');
@@ -3046,6 +3025,30 @@ export class SessionRegistry {
         }
         return owners;
     }
+    #assertClaimsAvailable(session, resources, probes, now) {
+        for (const resource of resources) {
+            const claim = this.#findConflictingClaim(resource);
+            if (!claim ||
+                (claim.session_id === session.sessionId && claim.claim_epoch === session.claimEpoch)) {
+                continue;
+            }
+            if (!probes)
+                throw claimConflict(claim);
+            const probe = probes.get(claim.session_id);
+            if (!probe || probe.claimEpoch !== claim.claim_epoch) {
+                throw claimConflict(claim);
+            }
+            if (probe.status === 'match')
+                throw claimConflict(claim);
+            if (probe.status === 'unknown') {
+                if (claim.lease_until_ms < now) {
+                    throw new SessionAuthorityError('STALE_LEASE_NOT_RECLAIMABLE', 'expired lease owner identity could not be proven', { sessionId: claim.session_id, claimEpoch: claim.claim_epoch });
+                }
+                throw claimConflict(claim);
+            }
+            throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'a proven-stale owner requires explicit adopt_stale before claims transfer', { sessionId: claim.session_id, claimEpoch: claim.claim_epoch });
+        }
+    }
     #requireSession(session) {
         const row = asSession(this.#database
             .prepare(`SELECT session_id, state, claim_epoch, authority_version,
@@ -3443,8 +3446,12 @@ export class SessionRegistry {
             assertBeforeCommit?.();
             this.#database.exec('COMMIT');
             committed = true;
-            onCommitted?.(result);
-            this.#secureFiles();
+            try {
+                onCommitted?.(result);
+            }
+            finally {
+                this.#secureFiles();
+            }
             return result;
         }
         catch (error) {

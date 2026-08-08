@@ -1160,8 +1160,10 @@ test('forced dev-client pin invalidates the prior target before recreating the c
         registry: {
           getSessionStatus: () => status,
           releaseResources: (_session, resources) => calls.push(`release:${resources[0].key}`),
-          updateBindings: (_session, update) =>
-            calls.push(update.bindings.bundle === null ? 'clear-bundle' : 'bind-bundle'),
+          updateBindings: (_session, update) => {
+            if (update.bindings.bundle !== null) assert.equal(update.probeClaimOwners, true);
+            calls.push(update.bindings.bundle === null ? 'clear-bundle' : 'bind-bundle');
+          },
           claimResources: (_session, resources) => calls.push(`claim:${resources[0].key}`),
         },
         session: { sessionId: 'session-a', claimEpoch: 1 },
@@ -1232,6 +1234,7 @@ test('Android forced pin keeps prior authority until one atomic staged-client co
             assert.equal(update.expectedAuthorityVersion, 7);
             assert.deepEqual(update.releaseResources, [{ type: 'target', key: '8193:target-old' }]);
             assert.deepEqual(update.claimResources, [{ type: 'target', key: '8193:target-new' }]);
+            assert.equal(update.probeClaimOwners, true);
             update.assertBeforeCommit();
             calls.push('atomic-commit');
             update.onCommitted();

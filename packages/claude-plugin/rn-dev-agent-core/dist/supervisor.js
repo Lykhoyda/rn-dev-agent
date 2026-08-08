@@ -20772,25 +20772,7 @@ var init_registry = __esm({
           if (resources.some((resource) => resource.type === "device")) {
             this.#assertNoStaleDeviceCleanup(bindings);
           }
-          for (const resource of resources) {
-            const claim = this.#findConflictingClaim(resource);
-            if (!claim || claim.session_id === session2.sessionId && claim.claim_epoch === session2.claimEpoch) {
-              continue;
-            }
-            const probe = probes.get(claim.session_id);
-            if (!probe || probe.claimEpoch !== claim.claim_epoch) {
-              throw claimConflict(claim);
-            }
-            if (probe.status === "match")
-              throw claimConflict(claim);
-            if (probe.status === "unknown") {
-              if (claim.lease_until_ms < now) {
-                throw new SessionAuthorityError("STALE_LEASE_NOT_RECLAIMABLE", "expired lease owner identity could not be proven", { sessionId: claim.session_id, claimEpoch: claim.claim_epoch });
-              }
-              throw claimConflict(claim);
-            }
-            throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "a proven-stale owner requires explicit adopt_stale before claims transfer", { sessionId: claim.session_id, claimEpoch: claim.claim_epoch });
-          }
+          this.#assertClaimsAvailable(session2, resources, probes, now);
           const leaseUntil = now + this.#leaseMs;
           for (const resource of resources) {
             this.#database.prepare(`INSERT INTO claims(
@@ -21660,6 +21642,8 @@ var init_registry = __esm({
         return prior;
       }
       updateBindings(session2, input) {
+        const claimed = input.claimResources ?? [];
+        const probes = input.probeClaimOwners && claimed.length > 0 ? this.#probeClaimOwners(session2, claimed) : null;
         const now = this.#now();
         this.#transaction(() => {
           const current = this.#requireSession(session2);
@@ -21670,12 +21654,7 @@ var init_registry = __esm({
             ...JSON.parse(current.bindings_json),
             ...input.bindings
           };
-          for (const resource of input.claimResources ?? []) {
-            const claim = this.#findConflictingClaim(resource);
-            if (claim && (claim.session_id !== session2.sessionId || claim.claim_epoch !== session2.claimEpoch)) {
-              throw claimConflict(claim);
-            }
-          }
+          this.#assertClaimsAvailable(session2, claimed, probes, now);
           if (Object.hasOwn(input.bindings, "device") || Object.hasOwn(input.bindings, "install")) {
             const currentBindings = JSON.parse(current.bindings_json);
             const platform = String((input.bindings.device ?? currentBindings.device)?.platform ?? "");
@@ -22963,6 +22942,29 @@ var init_registry = __esm({
         }
         return owners;
       }
+      #assertClaimsAvailable(session2, resources, probes, now) {
+        for (const resource of resources) {
+          const claim = this.#findConflictingClaim(resource);
+          if (!claim || claim.session_id === session2.sessionId && claim.claim_epoch === session2.claimEpoch) {
+            continue;
+          }
+          if (!probes)
+            throw claimConflict(claim);
+          const probe = probes.get(claim.session_id);
+          if (!probe || probe.claimEpoch !== claim.claim_epoch) {
+            throw claimConflict(claim);
+          }
+          if (probe.status === "match")
+            throw claimConflict(claim);
+          if (probe.status === "unknown") {
+            if (claim.lease_until_ms < now) {
+              throw new SessionAuthorityError("STALE_LEASE_NOT_RECLAIMABLE", "expired lease owner identity could not be proven", { sessionId: claim.session_id, claimEpoch: claim.claim_epoch });
+            }
+            throw claimConflict(claim);
+          }
+          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "a proven-stale owner requires explicit adopt_stale before claims transfer", { sessionId: claim.session_id, claimEpoch: claim.claim_epoch });
+        }
+      }
       #requireSession(session2) {
         const row = asSession(this.#database.prepare(`SELECT session_id, state, claim_epoch, authority_version,
                   source_key, worktree_key, app_root_key,
@@ -23248,8 +23250,11 @@ var init_registry = __esm({
           assertBeforeCommit?.();
           this.#database.exec("COMMIT");
           committed = true;
-          onCommitted?.(result);
-          this.#secureFiles();
+          try {
+            onCommitted?.(result);
+          } finally {
+            this.#secureFiles();
+          }
           return result;
         } catch (error2) {
           if (!committed) {
@@ -65451,6 +65456,9 @@ var init_cdp_client = __esm({
       async listTargetsExact(port) {
         return listTargetsOnExactPort(this._authoritativeSessionPolicy?.port ?? port);
       }
+      get authoritativeSessionPolicy() {
+        return this._authoritativeSessionPolicy;
+      }
       setAuthoritativeSessionPolicy(policy) {
         this._authoritativeSessionPolicy = policy;
         this._exactDiscoveryPort = policy.port;
@@ -68002,6 +68010,7 @@ function createSessionHandler(runtime, dependencies = {}) {
               expectedAuthorityVersion: atomicAndroidReplacement ? priorAuthorityVersion : void 0,
               releaseResources: atomicAndroidReplacement && priorTarget ? [priorTarget] : [],
               claimResources: [candidateTarget],
+              probeClaimOwners: true,
               assertBeforeCommit: promotion.assertActive,
               onCommitted: () => {
                 committed = true;
@@ -85025,95 +85034,105 @@ async function pinSessionDevClient(status, options, commitBundle) {
     throw new Error("BUNDLE_HANDSHAKE_UNAVAILABLE: session signer is unavailable");
   }
   const current = getClient();
+  const suspendedPolicy = device.platform === "android" ? current.authoritativeSessionPolicy : void 0;
   if (device.platform === "ios") {
     current.clearAuthoritativeSessionPolicy();
     if (options.force) {
       await current.disconnect();
       setClient(createClient(metro.port));
     }
+  } else if (suspendedPolicy) {
+    current.clearAuthoritativeSessionPolicy();
   }
-  const bundle = await pinExactDevClient({
-    sessionId: status.sessionId,
-    metroInstanceId: metro.instanceId,
-    worktreeKey: status.worktreeKey,
-    appId: device.appId,
-    platform: device.platform,
-    buildGeneration: metro.buildGeneration,
-    deviceId: device.deviceId,
-    metroPort: metro.port,
-    runtimeKind,
-    ...devClientUrl ? { devClientUrl, expectedDevClientUrl: devClientUrl } : {},
-    signerCapability: secret.signerCapability
-  }, {
-    openUrl: async (platform, deviceId, url) => {
-      if (platform === "ios") {
-        await execFileP("xcrun", ["simctl", "openurl", deviceId, url]);
-      } else {
-        await execFileP("adb", androidDeeplinkCommandArgs(url, void 0, deviceId));
+  try {
+    const bundle = await pinExactDevClient({
+      sessionId: status.sessionId,
+      metroInstanceId: metro.instanceId,
+      worktreeKey: status.worktreeKey,
+      appId: device.appId,
+      platform: device.platform,
+      buildGeneration: metro.buildGeneration,
+      deviceId: device.deviceId,
+      metroPort: metro.port,
+      runtimeKind,
+      ...devClientUrl ? { devClientUrl, expectedDevClientUrl: devClientUrl } : {},
+      signerCapability: secret.signerCapability
+    }, {
+      openUrl: async (platform, deviceId, url) => {
+        if (platform === "ios") {
+          await execFileP("xcrun", ["simctl", "openurl", deviceId, url]);
+        } else {
+          await execFileP("adb", androidDeeplinkCommandArgs(url, void 0, deviceId));
+        }
+      },
+      launchExactApp: async (platform, deviceId, appId) => {
+        if (platform === "ios") {
+          await execFileP("xcrun", ["simctl", "launch", deviceId, appId]);
+        } else {
+          await execFileP("adb", [
+            "-s",
+            deviceId,
+            "shell",
+            "monkey",
+            "--pct-syskeys",
+            "0",
+            "-p",
+            appId,
+            "-c",
+            "android.intent.category.LAUNCHER",
+            "1"
+          ]);
+        }
+      },
+      acceptIosOpenDialog: async () => {
+        const result = await acceptDeeplinkOpenConfirmation();
+        if (result && !result.tapped) {
+          throw new Error("DEV_CLIENT_ENDPOINT_NOT_FOUND: iOS open confirmation did not expose the exact Open action");
+        }
+      },
+      connectExact: async ({ metroPort, platform, appId, deviceId }) => {
+        return connectExactSessionTarget2({ metroPort, platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
+      },
+      readMarker: async (connection) => {
+        const markerClient = "client" in connection ? connection.client : getClient();
+        const result = await markerClient.evaluate("JSON.stringify(globalThis.__RN_DEV_AGENT_AUTHORITY__ ?? null)");
+        if (typeof result.value !== "string")
+          return null;
+        const parsed = JSON.parse(result.value);
+        return parsed?.status === "signed" && parsed.marker ? { status: "signed", marker: parsed.marker } : null;
+      },
+      commitBundle,
+      readManagedManifest: async ({ host, metroPort, platform }) => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 15e3);
+        try {
+          const response = await fetch(`http://${host}:${metroPort}/`, {
+            headers: {
+              accept: "multipart/mixed,application/expo+json,application/json",
+              "expo-platform": platform
+            },
+            signal: controller.signal
+          });
+          return {
+            body: await response.text(),
+            contentType: response.headers.get("content-type") ?? "",
+            status: response.status
+          };
+        } catch (error2) {
+          throw new Error(`METRO_MANIFEST_ENDPOINT_MISMATCH: managed manifest request failed: ${error2 instanceof Error ? error2.message : String(error2)}`);
+        } finally {
+          clearTimeout(timer);
+        }
       }
-    },
-    launchExactApp: async (platform, deviceId, appId) => {
-      if (platform === "ios") {
-        await execFileP("xcrun", ["simctl", "launch", deviceId, appId]);
-      } else {
-        await execFileP("adb", [
-          "-s",
-          deviceId,
-          "shell",
-          "monkey",
-          "--pct-syskeys",
-          "0",
-          "-p",
-          appId,
-          "-c",
-          "android.intent.category.LAUNCHER",
-          "1"
-        ]);
-      }
-    },
-    acceptIosOpenDialog: async () => {
-      const result = await acceptDeeplinkOpenConfirmation();
-      if (result && !result.tapped) {
-        throw new Error("DEV_CLIENT_ENDPOINT_NOT_FOUND: iOS open confirmation did not expose the exact Open action");
-      }
-    },
-    connectExact: async ({ metroPort, platform, appId, deviceId }) => {
-      return connectExactSessionTarget2({ metroPort, platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
-    },
-    readMarker: async (connection) => {
-      const markerClient = "client" in connection ? connection.client : getClient();
-      const result = await markerClient.evaluate("JSON.stringify(globalThis.__RN_DEV_AGENT_AUTHORITY__ ?? null)");
-      if (typeof result.value !== "string")
-        return null;
-      const parsed = JSON.parse(result.value);
-      return parsed?.status === "signed" && parsed.marker ? { status: "signed", marker: parsed.marker } : null;
-    },
-    commitBundle,
-    readManagedManifest: async ({ host, metroPort, platform }) => {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 15e3);
-      try {
-        const response = await fetch(`http://${host}:${metroPort}/`, {
-          headers: {
-            accept: "multipart/mixed,application/expo+json,application/json",
-            "expo-platform": platform
-          },
-          signal: controller.signal
-        });
-        return {
-          body: await response.text(),
-          contentType: response.headers.get("content-type") ?? "",
-          status: response.status
-        };
-      } catch (error2) {
-        throw new Error(`METRO_MANIFEST_ENDPOINT_MISMATCH: managed manifest request failed: ${error2 instanceof Error ? error2.message : String(error2)}`);
-      } finally {
-        clearTimeout(timer);
-      }
+    });
+    getClient().setAuthoritativeSessionPolicy(createAuthoritativeSessionPolicy(status));
+    return bundle;
+  } catch (error2) {
+    if (suspendedPolicy && getClient() === current) {
+      current.setAuthoritativeSessionPolicy(suspendedPolicy);
     }
-  });
-  getClient().setAuthoritativeSessionPolicy(createAuthoritativeSessionPolicy(status));
-  return bundle;
+    throw error2;
+  }
 }
 function createAuthoritativeSessionPolicy(status) {
   const device = status.bindings.device;
