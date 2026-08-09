@@ -3,7 +3,10 @@
   "version": "0.70.3",
   "type": "module",
   "main": "dist/index.js",
-  "bin": "./dist/supervisor.js",
+  "bin": {
+    "rn-dev-agent-core": "./dist/supervisor.js",
+    "rn-experience-trends": "./dist/experience-trends.js"
+  },
   "scripts": {
     "build": "tsc",
     "build:web": "cd src/observability/web && npm install && npm run build",

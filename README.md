@@ -300,6 +300,8 @@ The plugin makes no attempt to sandbox `cdp_evaluate`. If you need that, gate to
 
 The **observability UI** ([`/rn-dev-agent:observe`](https://lykhoyda.github.io/rn-dev-agent/commands/observe/)) binds to `127.0.0.1` only and rejects cross-origin requests via Host-header + `Sec-Fetch-Site` checks. It is read-only except for two deliberate, CSRF-token-gated endpoints that trigger action and locked-E2E replays. Tool arguments are deep-redacted fail-closed before reaching the stream (tokens, passwords, and PII render as `[REDACTED_*]`), and the recorder keeps only a small bounded in-memory ring buffer — the event stream itself never touches disk (replays triggered from the UI still persist their normal run records under `.rn-agent/`, same as CLI-triggered replays).
 
+Meaningful tool failures and immediate successful retries also feed a separate, local-only evidence store at `~/.claude/rn-agent/experience/patterns.jsonl`. Records are sanitized before writing, deduplicated, capped at 500 patterns, and retained for 14 days; ordinary successful calls are never stored. From an installed plugin package, inspect the read-only trend report with `node <plugin-package>/rn-dev-agent-core/dist/experience-trends.js --since <previous-report-ISO-timestamp>` (omit `--since` for the last 24 hours). The command never updates the evidence store or uploads data.
+
 ## Keeping up to date
 
 Enable auto-update in the host plugin manager, or update manually:

@@ -149,6 +149,7 @@ import {
 import { readProcessBirth } from './session/process-birth.js';
 import { ensureSingleRunner } from './runners/ensure-single-runner.js';
 import { addToolObserver, instrumentTool } from './observability/instrumentation.js';
+import { discoverPluginVersion, ExperienceRecorder } from './experience/evidence.js';
 import { recorder } from './observability/recorder.js';
 import { hashProofValue, StrictProofMonitor } from './domain/proof-capture.js';
 import type { ProofAuthority } from './domain/proof-receipt.js';
@@ -378,8 +379,13 @@ const server = new McpServer({
 });
 
 export const strictProofMonitor = new StrictProofMonitor();
+const experienceRecorder = new ExperienceRecorder({
+  coreVersion: pkgVersion,
+  pluginVersion: discoverPluginVersion(),
+});
 addToolObserver((o) => recorder.record(o));
 addToolObserver((o) => strictProofMonitor.record(o));
+addToolObserver((o) => experienceRecorder.observe(o));
 
 const authorityRuntime = getWorkerAuthorityRuntime();
 setSnapshotAuthorityProvider({
