@@ -223,6 +223,7 @@ function containedRunnerAuthority(result, runner) {
 // unattestable artifact still throws APP_INSTALL_IDENTITY_CHANGED unchanged.
 function reissueInstallAfterPreflightRefusal(registry, runtime, operation, status, dependencies, error, axes, tool, args) {
     if (!axes.includes('I') ||
+        Boolean(status.bindings.proof) ||
         requiresExactInstalledArtifact(tool, args) ||
         authorityErrorCode(error) !== 'APP_INSTALL_IDENTITY_CHANGED') {
         return null;

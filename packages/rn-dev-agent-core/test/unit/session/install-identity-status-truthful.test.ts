@@ -203,3 +203,21 @@ test('status surfaces skip the live probe when no install is bound', async () =>
   assert.equal(envelope.data.authority.state, 'ready');
   assert.equal(probed, false);
 });
+
+test('an unattestable capture is not repeated on every status poll', () => {
+  resetInstallIdentityInspectionCache();
+  let attempts = 0;
+  const poll = () =>
+    inspectInstallIdentity(BOUND_INSTALL, {
+      captureGeneration: () => 'generation-2',
+      captureInstalled: () => {
+        attempts += 1;
+        throw new Error('unsupported filesystem entry');
+      },
+    });
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    assert.equal(poll()?.verdict, 'changed');
+  }
+  assert.equal(attempts, 1);
+});

@@ -398,6 +398,7 @@ function reissueInstallAfterPreflightRefusal(
 ): { operation: OperationRef; status: SessionStatus } | null {
   if (
     !axes.includes('I') ||
+    Boolean(status.bindings.proof) ||
     requiresExactInstalledArtifact(tool, args) ||
     authorityErrorCode(error) !== 'APP_INSTALL_IDENTITY_CHANGED'
   ) {

@@ -94,6 +94,9 @@ export function inspectInstallIdentity(
           },
     );
   } catch {
-    return { verdict: 'changed', reason: 'the installed artifact could not be attested' };
+    return rememberDigestVerdict(key, {
+      verdict: 'changed',
+      reason: 'the installed artifact could not be attested',
+    });
   }
 }

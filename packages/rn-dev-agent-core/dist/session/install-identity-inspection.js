@@ -65,6 +65,9 @@ export function inspectInstallIdentity(install, dependencies = {}) {
             });
     }
     catch {
-        return { verdict: 'changed', reason: 'the installed artifact could not be attested' };
+        return rememberDigestVerdict(key, {
+            verdict: 'changed',
+            reason: 'the installed artifact could not be attested',
+        });
     }
 }

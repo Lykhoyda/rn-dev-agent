@@ -297,3 +297,36 @@ test('a proof boundary never heals — a mid-proof reinstall stays a hard stop',
     );
   }
 });
+
+test('an active proof run blocks the heal for every gated tool it drives', async () => {
+  for (const driver of [
+    { tool: 'proof_step', args: { action: 'capture' } },
+    { tool: 'device_press', args: {} },
+  ]) {
+    const { runtime, status, probe } = fixture('generation-2');
+    status.bindings.bundle = { bundleDigest: 'bundle-digest' };
+    status.bindings.proof = { runId: 'proof-a' };
+    let reissued = false;
+    const gate = createAuthorityGate(runtime, {
+      probe,
+      reissueInstallBinding: (install: Record<string, unknown> | undefined) => {
+        reissued = true;
+        return reissueInstallBinding(install, {
+          captureInstalled: captureReturning('attested-digest', 'generation-2'),
+        });
+      },
+    });
+
+    const wrapped = gate.wrap(driver.tool, async () => okResult({ done: true }));
+    const envelope = JSON.parse((await wrapped(driver.args)).content[0].text);
+
+    assert.equal(envelope.ok, false, driver.tool);
+    assert.equal(envelope.code, 'APP_INSTALL_IDENTITY_CHANGED', driver.tool);
+    assert.equal(reissued, false, driver.tool);
+    assert.equal(
+      (status.bindings.install as { installGeneration: string }).installGeneration,
+      'generation-1',
+      driver.tool,
+    );
+  }
+});

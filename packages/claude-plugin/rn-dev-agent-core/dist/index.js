@@ -29661,6 +29661,9 @@ function add(names, profile) {
     profiles.set(name, profile);
   }
 }
+function requiresExactInstalledArtifact(tool, args = {}) {
+  return tool === "proof_capture" && (args.action === "begin_rehearsal" || args.action === "finalize");
+}
 function authorityProfileFor(tool, args = {}) {
   if (tool === "device_find" && args.action === "click") {
     return profiles.get("device_press");
@@ -30115,8 +30118,8 @@ function containedRunnerAuthority(result, runner) {
     return null;
   }
 }
-function reissueInstallAfterPreflightRefusal(registry2, runtime, operation, status, dependencies, error2, axes) {
-  if (!axes.includes("I") || authorityErrorCode(error2) !== "APP_INSTALL_IDENTITY_CHANGED") {
+function reissueInstallAfterPreflightRefusal(registry2, runtime, operation, status, dependencies, error2, axes, tool, args) {
+  if (!axes.includes("I") || Boolean(status.bindings.proof) || requiresExactInstalledArtifact(tool, args) || authorityErrorCode(error2) !== "APP_INSTALL_IDENTITY_CHANGED") {
     return null;
   }
   const install = (dependencies.reissueInstallBinding ?? reissueInstallBinding)(status.bindings.install);
@@ -30131,6 +30134,22 @@ function reissueInstallAfterPreflightRefusal(registry2, runtime, operation, stat
     throw new SessionAuthorityError(reissuedStatus.code, reissuedStatus.reason);
   }
   return { operation: reissuedOperation, status: reissuedStatus };
+}
+async function preflightWithInstallReissue(registry2, runtime, dependencies, context, operation, status) {
+  const { tool, profile, args, axes } = context;
+  const probeAll = (probed) => Promise.all(axes.map((axis) => dependencies.probe({ axis, phase: "preflight", tool, profile, status: probed, args })));
+  try {
+    return { before: await probeAll(status), operation, status };
+  } catch (preflightError) {
+    const reissued = reissueInstallAfterPreflightRefusal(registry2, runtime, operation, status, dependencies, preflightError, axes, tool, args);
+    if (!reissued)
+      throw preflightError;
+    return {
+      before: await probeAll(reissued.status),
+      operation: reissued.operation,
+      status: reissued.status
+    };
+  }
 }
 function requireDeviceTransition(status, args) {
   const action = args.action ?? "snapshot";
@@ -30488,18 +30507,11 @@ function createAuthorityGate(runtime, dependencies) {
           if (retainsRunnerCleanupAuthority) {
             requireRetainedRunnerOwnership(registry3, status);
           }
-          let before;
-          try {
-            before = await Promise.all(transitionAxes.before.map((axis) => dependencies.probe({ axis, phase: "preflight", tool, profile, status, args })));
-          } catch (preflightError) {
-            const reissued = reissueInstallAfterPreflightRefusal(registry3, runtime, operation2, status, dependencies, preflightError, transitionAxes.before);
-            if (!reissued)
-              throw preflightError;
-            operation2 = reissued.operation;
-            status = reissued.status;
-            initialAuthorityVersion = status.authorityVersion;
-            before = await Promise.all(transitionAxes.before.map((axis) => dependencies.probe({ axis, phase: "preflight", tool, profile, status, args })));
-          }
+          const preflight2 = await preflightWithInstallReissue(registry3, runtime, dependencies, { tool, profile, args, axes: transitionAxes.before }, operation2, status);
+          const before = preflight2.before;
+          operation2 = preflight2.operation;
+          status = preflight2.status;
+          initialAuthorityVersion = status.authorityVersion;
           registry3.verifyOperation(operation2);
           const result = await registry3.runWithOperation(operation2, () => handler(...handlerArgs));
           if (!resultSucceeded(result)) {
@@ -30656,17 +30668,10 @@ function createAuthorityGate(runtime, dependencies) {
         const preflightRecovery = await reconcileRecoverableRuntime(runtime, dependencies, registry2, operation, status, profile, true);
         operation = preflightRecovery.operation;
         status = preflightRecovery.status;
-        let before;
-        try {
-          before = await Promise.all(profile.axes.map((axis) => dependencies.probe({ axis, phase: "preflight", tool, profile, status, args })));
-        } catch (preflightError) {
-          const reissued = reissueInstallAfterPreflightRefusal(registry2, runtime, operation, status, dependencies, preflightError, profile.axes);
-          if (!reissued)
-            throw preflightError;
-          operation = reissued.operation;
-          status = reissued.status;
-          before = await Promise.all(profile.axes.map((axis) => dependencies.probe({ axis, phase: "preflight", tool, profile, status, args })));
-        }
+        const preflight2 = await preflightWithInstallReissue(registry2, runtime, dependencies, { tool, profile, args, axes: profile.axes }, operation, status);
+        const before = preflight2.before;
+        operation = preflight2.operation;
+        status = preflight2.status;
         const initialOperationAuthorityVersion = operation.authorityVersion;
         const optionalBefore = [];
         const managedOriginObservations = [];
@@ -56690,6 +56695,20 @@ init_install_authority();
 function isInstallPlatform(value) {
   return value === "ios" || value === "android";
 }
+var DIGEST_VERDICT_CACHE_LIMIT = 32;
+var digestVerdicts = /* @__PURE__ */ new Map();
+function digestVerdictKey(target, artifactDigest, observedGeneration) {
+  return [target.platform, target.deviceId, target.appId, artifactDigest, observedGeneration].join(" ");
+}
+function rememberDigestVerdict(key, verdict) {
+  if (digestVerdicts.size >= DIGEST_VERDICT_CACHE_LIMIT) {
+    const oldest = digestVerdicts.keys().next();
+    if (!oldest.done)
+      digestVerdicts.delete(oldest.value);
+  }
+  digestVerdicts.set(key, verdict);
+  return verdict;
+}
 function inspectInstallIdentity(install, dependencies = {}) {
   if (!install)
     return null;
@@ -56703,23 +56722,29 @@ function inspectInstallIdentity(install, dependencies = {}) {
     return { verdict: "changed", reason: "the bound install receipt is not attestable" };
   }
   const target = { platform, deviceId, appId };
+  let observedGeneration;
   try {
-    if ((dependencies.captureGeneration ?? captureInstallGeneration)(target) === installGeneration) {
-      return { verdict: "verified" };
-    }
+    observedGeneration = (dependencies.captureGeneration ?? captureInstallGeneration)(target);
   } catch {
     return { verdict: "changed", reason: "the installed artifact could not be attested" };
   }
+  if (observedGeneration === installGeneration)
+    return { verdict: "verified" };
+  const key = digestVerdictKey(target, artifactDigest, observedGeneration);
+  const remembered = digestVerdicts.get(key);
+  if (remembered)
+    return remembered;
   try {
     const observed = (dependencies.captureInstalled ?? captureInstalledArtifact)(target);
-    if (observed.artifactDigest === artifactDigest)
-      return { verdict: "reissue-pending" };
-    return {
+    return rememberDigestVerdict(key, observed.artifactDigest === artifactDigest ? { verdict: "reissue-pending" } : {
       verdict: "changed",
       reason: "the installed artifact is not the attested session build"
-    };
+    });
   } catch {
-    return { verdict: "changed", reason: "the installed artifact could not be attested" };
+    return rememberDigestVerdict(key, {
+      verdict: "changed",
+      reason: "the installed artifact could not be attested"
+    });
   }
 }
 
@@ -82463,6 +82488,7 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
 }
 
 // packages/rn-dev-agent-core/dist/session/local-authority-probe.js
+init_tool_profiles();
 function identity(value) {
   return createHash19("sha256").update(JSON.stringify(value)).digest("hex");
 }
@@ -82550,7 +82576,7 @@ function createLocalAuthorityProbe(dependencies) {
     }
     if (axis === "I") {
       const expected = objectBinding(status, "install");
-      const exactArtifactBoundary = tool === "proof_capture" && (args?.action === "begin_rehearsal" || args?.action === "finalize");
+      const exactArtifactBoundary = requiresExactInstalledArtifact(tool ?? "", args ?? {});
       try {
         if (exactArtifactBoundary) {
           verifyInstalledArtifact(expected, captureInstalled(expected));
