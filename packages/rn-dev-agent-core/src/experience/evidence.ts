@@ -19,9 +19,11 @@ export const DEFAULT_RETENTION_DAYS = 14;
 export const MAX_EVIDENCE_POINTERS = 3;
 export const EXPERIENCE_DIRECTORY = join(homedir(), '.claude', 'rn-agent', 'experience');
 export const EXPERIENCE_STORE_NAME = 'patterns.jsonl';
+export const MAX_SYMPTOM_LENGTH = 2048;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const REDACTION_FAILED = '[REDACTION_FAILED]';
+const SYMPTOM_TRUNCATED = '[TRUNCATED]';
 
 // Keep this list aligned with scripts/collect-feedback.sh. That collector is the
 // public sanitization contract; this in-process form exists so private tool
@@ -58,6 +60,10 @@ const KEYED_SECRET = /((?:token|secret|password|auth|api[_-]?key)\s*[:=]\s*)[^\s
 
 export type RedactString = (value: string) => string;
 
+// Records are sanitized on construction and again before they reach disk, so a
+// record read back from the store never needs a second full-tree pass.
+const SANITIZED_RECORDS = new WeakSet<ExperienceRecord>();
+
 export function sanitizeString(value: string, redact: RedactString = applyRedactionRules): string {
   try {
     return redact(value);
@@ -93,7 +99,37 @@ function applyRedactionRules(value: string): string {
     pattern.lastIndex = 0;
     result = result.replace(pattern, replacement);
   }
+  const identity = readAppIdentity();
+  if (identity.name) result = result.replaceAll(identity.name, '[APP_NAME_REDACTED]');
+  if (identity.slug) result = result.replaceAll(identity.slug, '[APP_SLUG_REDACTED]');
   return result;
+}
+
+interface AppIdentity {
+  name: string | null;
+  slug: string | null;
+}
+
+let appIdentityCache: { root: string; identity: AppIdentity } | null = null;
+
+// Mirrors the app.json stage of scripts/collect-feedback.sh. A malformed
+// manifest throws, so sanitizeString fails closed instead of shipping the name.
+function readAppIdentity(): AppIdentity {
+  const root = process.env.RN_PROJECT_ROOT ?? process.env.CLAUDE_USER_CWD ?? process.cwd();
+  if (appIdentityCache?.root === root) return appIdentityCache.identity;
+  const manifest = join(root, 'app.json');
+  let identity: AppIdentity = { name: null, slug: null };
+  if (existsSync(manifest)) {
+    const parsed = JSON.parse(readFileSync(manifest, 'utf8')) as Record<string, unknown>;
+    const expo = (parsed.expo as Record<string, unknown> | undefined) ?? parsed;
+    identity = { name: usableIdentity(expo?.name), slug: usableIdentity(expo?.slug) };
+  }
+  appIdentityCache = { root, identity };
+  return identity;
+}
+
+function usableIdentity(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 2 ? value : null;
 }
 
 interface Candidate {
@@ -217,7 +253,7 @@ export class ExperienceRecorder {
   private buildFailureRecord(event: ToolObserverInput): ExperienceRecord {
     const now = this.now().toISOString();
     const tool = sanitizeString(event.tool);
-    const symptom = sanitizeString(extractSymptom(event));
+    const symptom = sanitizeString(boundSymptom(extractSymptom(event)));
     const platform = sanitizeNullable(extractScalar(event, ['platform']));
     const deviceName = extractScalar(event, ['deviceName', 'deviceModel', 'model']);
     const hasDeviceId = extractScalar(event, ['deviceId', 'udid']) !== null;
@@ -269,19 +305,27 @@ export class ExperienceRecorder {
       lastRecoveredAt: null,
       unknownReasons,
     };
-    return sanitizeForEvidence(raw) as ExperienceRecord;
+    const sanitized = sanitizeForEvidence(raw) as ExperienceRecord;
+    SANITIZED_RECORDS.add(sanitized);
+    return sanitized;
   }
 
   private persistFailure(incoming: ExperienceRecord): void {
-    const records = readExperienceStore(this.path, true);
+    const records = readExperienceStore(this.path);
     const existing = records.find((record) => record.signature === incoming.signature);
     if (existing) {
       existing.count += 1;
       existing.lastSeen = incoming.lastSeen;
-      existing.status = incoming.status;
+      if (incoming.status === 'ERROR' && existing.status !== 'ERROR') {
+        existing.status = 'ERROR';
+        existing.trigger = incoming.trigger;
+      }
       existing.symptom = incoming.symptom;
       existing.candidate = incoming.candidate;
       existing.environment = incoming.environment;
+      adoptLateFact(existing, incoming, 'platform');
+      adoptLateFact(existing, incoming, 'device');
+      adoptLateFact(existing, incoming, 'runtime');
       existing.evidencePointers = boundedPointers(
         existing.evidencePointers,
         incoming.evidencePointers,
@@ -293,7 +337,7 @@ export class ExperienceRecorder {
   }
 
   private persistRecovery(signature: string, tool: string): void {
-    const records = readExperienceStore(this.path, true);
+    const records = readExperienceStore(this.path);
     const existing = records.find((record) => record.signature === signature);
     if (!existing) return;
     const now = this.now().toISOString();
@@ -311,7 +355,9 @@ export class ExperienceRecorder {
     mkdirSync(this.directory, { recursive: true, mode: 0o700 });
     const temp = join(this.directory, `.${EXPERIENCE_STORE_NAME}.${process.pid}.${randomUUID()}`);
     try {
-      const sanitized = records.map((record) => sanitizeForEvidence(record) as ExperienceRecord);
+      const sanitized = records.map((record) =>
+        SANITIZED_RECORDS.has(record) ? record : (sanitizeForEvidence(record) as ExperienceRecord),
+      );
       const contents = sanitized.map((record) => JSON.stringify(record)).join('\n');
       writeFileSync(temp, contents.length > 0 ? `${contents}\n` : '', {
         encoding: 'utf8',
@@ -351,17 +397,23 @@ export function discoverPluginVersion(fromUrl: string = import.meta.url): string
   return null;
 }
 
-export function readExperienceStore(path: string, allowMissing = false): ExperienceRecord[] {
-  if (!existsSync(path)) {
-    if (allowMissing) return [];
-    return [];
-  }
+export function readExperienceStore(path: string): ExperienceRecord[] {
+  if (!existsSync(path)) return [];
   const contents = readFileSync(path, 'utf8');
   if (!contents.trim()) return [];
-  return contents
-    .split('\n')
-    .filter((line) => line.trim().length > 0)
-    .map((line) => JSON.parse(line) as ExperienceRecord);
+  const records: ExperienceRecord[] = [];
+  for (const line of contents.split('\n')) {
+    if (line.trim().length === 0) continue;
+    let parsed: ExperienceRecord;
+    try {
+      parsed = JSON.parse(line) as ExperienceRecord;
+    } catch {
+      continue;
+    }
+    SANITIZED_RECORDS.add(parsed);
+    records.push(parsed);
+  }
+  return records;
 }
 
 export function pruneExperienceRecords(
@@ -413,54 +465,54 @@ export function normalizeSymptomShape(symptom: string): string {
     .trim();
 }
 
+const CLASSIFICATION_RULES: ReadonlyArray<[string, RegExp]> = [
+  ['FF_REDBOX', /redbox|logbox|error overlay|hasredbox/],
+  ['FF_DEBUGGER_PAUSED', /debugger paused|ispaused\s*[=:]\s*true|execution (?:is )?halted/],
+  [
+    'FF_STALE_CDP',
+    /websocket (?:close )?1006|target not found|cdp_status.*time(?:d)?out|not connected/,
+  ],
+  ['FF_FAST_REFRESH_STALE', /fast refresh|ui unchanged|old exports|old module path/],
+  ['FF_METRO_CACHE', /metro.*(?:stale|cache)|config change not reflected/],
+  [
+    'FF_BINARY_MISMATCH',
+    /turbomoduleregistry|getenforcing|native module (?:cannot be null|mismatch|not found)/,
+  ],
+  ['FF_EXPO_DIALOG', /open-in-app|system confirmation dialog/],
+  ['FF_DEV_CLIENT_PICKER', /no hermes target|development servers|devclientlauncher|server picker/],
+  ['FF_KEYBOARD_OVERLAY', /keyboard.*(?:obscur|behind|cover)|element behind keyboard/],
+  ['FF_MAESTRO_GRPC_ANDROID', /unavailable:\s*io exception|androiddriver.*grpc|maestro.*grpc/],
+  [
+    'FF_ANDROID_TEXT_INPUT_CRASH',
+    /(?:text input|mobile_type_keys|adb.*input text).*(?:crash|anr|home screen|disappear)/,
+  ],
+  ['FF_AUTH_GATE', /(?:stuck|blocked|remains?).*(?:login|welcome|register|auth) (?:screen|route)/],
+  [
+    'FF_PERMISSION_ALREADY_GRANTED',
+    /permission already granted|prompt (?:was )?not shown|flow completes instantly/,
+  ],
+  ['EG_EXPO_GO_SDK_MISMATCH', /incompatible with this version of expo go|expo go sdk.*mismatch/],
+  ['EG_NATIVEWIND_JSX_SOURCE', /nativewind.*jsximportsource|styles.*(?:unstyled|don.t apply)/],
+  ['EG_EXPO_GO_NATIVE_MODULES', /expo go.*custom native module/],
+  ['EG_DEV_CLIENT_CLEARSTATE', /clearstate.*(?:dev client|metro connection|launcher)/],
+  ['EG_MSW_HERMES', /msw.*(?:hermes|react native|initialize)/],
+  ['EG_EXPO_ROUTER_DEEP_LINK', /expo router.*deep link|deep link.*confirmation dialog/],
+  ['EG_DEV_MENU_INTERFERENCE', /dev menu.*(?:overlay|recording|blocking)/],
+  ['EG_NEW_ARCH_CDP_TARGET', /bridgeless.*(?:target|app\.dev)|new architecture.*cdp target/],
+  ['PQ_IOS_RECORDVIDEO_CODEC', /simctl recordvideo.*codec.*fail|recordvideo.*h264/],
+  ['PQ_ANDROID_SCREENRECORD_LIMIT', /screenrecord.*180|screenrecord.*3 minute/],
+  ['PQ_ANDROID_BOOT_DELAY', /sys\.boot_completed|emulator.*grpc.*ready/],
+  ['PQ_ANDROID_PLAY_PROTECT', /play protect.*(?:block|apk|install)/],
+];
+
+export const EXPERIENCE_FAMILY_IDS: readonly string[] = CLASSIFICATION_RULES.map(([id]) => id);
+
 export function classifyExperience(symptom: string, tool: string, platform: string | null): string {
   const haystack = `${tool} ${platform ?? ''} ${symptom}`.toLowerCase();
-  const rules: ReadonlyArray<[string, RegExp]> = [
-    ['FF_REDBOX', /redbox|logbox|error overlay|hasredbox/],
-    ['FF_DEBUGGER_PAUSED', /debugger paused|ispaused\s*[=:]\s*true|execution (?:is )?halted/],
-    [
-      'FF_STALE_CDP',
-      /websocket (?:close )?1006|target not found|cdp_status.*time(?:d)?out|not connected/,
-    ],
-    ['FF_FAST_REFRESH_STALE', /fast refresh|ui unchanged|old exports|old module path/],
-    ['FF_METRO_CACHE', /metro.*(?:stale|cache)|config change not reflected/],
-    [
-      'FF_BINARY_MISMATCH',
-      /turbomoduleregistry|getenforcing|native module (?:cannot be null|mismatch|not found)/,
-    ],
-    ['FF_EXPO_DIALOG', /open-in-app|system confirmation dialog/],
-    [
-      'FF_DEV_CLIENT_PICKER',
-      /no hermes target|development servers|devclientlauncher|server picker/,
-    ],
-    ['FF_KEYBOARD_OVERLAY', /keyboard.*(?:obscur|behind|cover)|element behind keyboard/],
-    ['FF_MAESTRO_GRPC_ANDROID', /unavailable:\s*io exception|androiddriver.*grpc|maestro.*grpc/],
-    [
-      'FF_ANDROID_TEXT_INPUT_CRASH',
-      /(?:text input|mobile_type_keys|adb.*input text).*(?:crash|anr|home screen|disappear)/,
-    ],
-    [
-      'FF_AUTH_GATE',
-      /(?:stuck|blocked|remains?).*(?:login|welcome|register|auth) (?:screen|route)/,
-    ],
-    [
-      'FF_PERMISSION_ALREADY_GRANTED',
-      /permission already granted|prompt (?:was )?not shown|flow completes instantly/,
-    ],
-    ['EG_EXPO_GO_SDK_MISMATCH', /incompatible with this version of expo go|expo go sdk.*mismatch/],
-    ['EG_NATIVEWIND_JSX_SOURCE', /nativewind.*jsximportsource|styles.*(?:unstyled|don.t apply)/],
-    ['EG_EXPO_GO_NATIVE_MODULES', /expo go.*custom native module/],
-    ['EG_DEV_CLIENT_CLEARSTATE', /clearstate.*(?:dev client|metro connection|launcher)/],
-    ['EG_MSW_HERMES', /msw.*(?:hermes|react native|initialize)/],
-    ['EG_EXPO_ROUTER_DEEP_LINK', /expo router.*deep link|deep link.*confirmation dialog/],
-    ['EG_DEV_MENU_INTERFERENCE', /dev menu.*(?:overlay|recording|blocking)/],
-    ['EG_NEW_ARCH_CDP_TARGET', /bridgeless.*(?:target|app\.dev)|new architecture.*cdp target/],
-    ['PQ_IOS_RECORDVIDEO_CODEC', /simctl recordvideo.*codec.*fail|recordvideo.*h264/],
-    ['PQ_ANDROID_SCREENRECORD_LIMIT', /screenrecord.*180|screenrecord.*3 minute/],
-    ['PQ_ANDROID_BOOT_DELAY', /sys\.boot_completed|emulator.*grpc.*ready/],
-    ['PQ_ANDROID_PLAY_PROTECT', /play protect.*(?:block|apk|install)/],
-  ];
-  return rules.find(([, pattern]) => pattern.test(haystack))?.[0] ?? UNKNOWN_CLASSIFICATION;
+  return (
+    CLASSIFICATION_RULES.find(([, pattern]) => pattern.test(haystack))?.[0] ??
+    UNKNOWN_CLASSIFICATION
+  );
 }
 
 function extractSymptom(event: ToolObserverInput): string {
@@ -475,6 +527,15 @@ function extractSymptom(event: ToolObserverInput): string {
     }
   }
   return `${event.tool} reported ${event.status} without an error message`;
+}
+
+// Bounding happens before redaction so the regex pass stays linear on huge
+// payloads; the trailing partial token goes too, so nothing can survive the cut
+// as a half-redacted secret.
+function boundSymptom(symptom: string): string {
+  if (symptom.length <= MAX_SYMPTOM_LENGTH) return symptom;
+  const head = symptom.slice(0, MAX_SYMPTOM_LENGTH).replace(/\S+$/, '');
+  return `${head}${SYMPTOM_TRUNCATED}`;
 }
 
 function extractScalar(event: ToolObserverInput, keys: string[]): string | null {
@@ -504,6 +565,16 @@ function findScalar(value: unknown, keys: string[], depth: number): string | nul
 
 function sanitizeNullable(value: string | null): string | null {
   return value === null ? null : sanitizeString(value);
+}
+
+function adoptLateFact(
+  existing: ExperienceRecord,
+  incoming: ExperienceRecord,
+  field: 'platform' | 'device' | 'runtime',
+): void {
+  if (existing[field] !== null || incoming[field] === null) return;
+  existing[field] = incoming[field];
+  delete existing.unknownReasons[field];
 }
 
 function boundedPointers(existing: string[], incoming: string[]): string[] {

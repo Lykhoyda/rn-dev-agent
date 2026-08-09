@@ -11,17 +11,68 @@ import { dirname, join } from "node:path";
 var EXPERIENCE_DIRECTORY = join(homedir(), ".claude", "rn-agent", "experience");
 var EXPERIENCE_STORE_NAME = "patterns.jsonl";
 var DAY_MS = 24 * 60 * 60 * 1e3;
-function readExperienceStore(path, allowMissing = false) {
-  if (!existsSync(path)) {
-    if (allowMissing)
-      return [];
+var SANITIZED_RECORDS = /* @__PURE__ */ new WeakSet();
+function readExperienceStore(path) {
+  if (!existsSync(path))
     return [];
-  }
   const contents = readFileSync(path, "utf8");
   if (!contents.trim())
     return [];
-  return contents.split("\n").filter((line) => line.trim().length > 0).map((line) => JSON.parse(line));
+  const records = [];
+  for (const line of contents.split("\n")) {
+    if (line.trim().length === 0)
+      continue;
+    let parsed;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    SANITIZED_RECORDS.add(parsed);
+    records.push(parsed);
+  }
+  return records;
 }
+var CLASSIFICATION_RULES = [
+  ["FF_REDBOX", /redbox|logbox|error overlay|hasredbox/],
+  ["FF_DEBUGGER_PAUSED", /debugger paused|ispaused\s*[=:]\s*true|execution (?:is )?halted/],
+  [
+    "FF_STALE_CDP",
+    /websocket (?:close )?1006|target not found|cdp_status.*time(?:d)?out|not connected/
+  ],
+  ["FF_FAST_REFRESH_STALE", /fast refresh|ui unchanged|old exports|old module path/],
+  ["FF_METRO_CACHE", /metro.*(?:stale|cache)|config change not reflected/],
+  [
+    "FF_BINARY_MISMATCH",
+    /turbomoduleregistry|getenforcing|native module (?:cannot be null|mismatch|not found)/
+  ],
+  ["FF_EXPO_DIALOG", /open-in-app|system confirmation dialog/],
+  ["FF_DEV_CLIENT_PICKER", /no hermes target|development servers|devclientlauncher|server picker/],
+  ["FF_KEYBOARD_OVERLAY", /keyboard.*(?:obscur|behind|cover)|element behind keyboard/],
+  ["FF_MAESTRO_GRPC_ANDROID", /unavailable:\s*io exception|androiddriver.*grpc|maestro.*grpc/],
+  [
+    "FF_ANDROID_TEXT_INPUT_CRASH",
+    /(?:text input|mobile_type_keys|adb.*input text).*(?:crash|anr|home screen|disappear)/
+  ],
+  ["FF_AUTH_GATE", /(?:stuck|blocked|remains?).*(?:login|welcome|register|auth) (?:screen|route)/],
+  [
+    "FF_PERMISSION_ALREADY_GRANTED",
+    /permission already granted|prompt (?:was )?not shown|flow completes instantly/
+  ],
+  ["EG_EXPO_GO_SDK_MISMATCH", /incompatible with this version of expo go|expo go sdk.*mismatch/],
+  ["EG_NATIVEWIND_JSX_SOURCE", /nativewind.*jsximportsource|styles.*(?:unstyled|don.t apply)/],
+  ["EG_EXPO_GO_NATIVE_MODULES", /expo go.*custom native module/],
+  ["EG_DEV_CLIENT_CLEARSTATE", /clearstate.*(?:dev client|metro connection|launcher)/],
+  ["EG_MSW_HERMES", /msw.*(?:hermes|react native|initialize)/],
+  ["EG_EXPO_ROUTER_DEEP_LINK", /expo router.*deep link|deep link.*confirmation dialog/],
+  ["EG_DEV_MENU_INTERFERENCE", /dev menu.*(?:overlay|recording|blocking)/],
+  ["EG_NEW_ARCH_CDP_TARGET", /bridgeless.*(?:target|app\.dev)|new architecture.*cdp target/],
+  ["PQ_IOS_RECORDVIDEO_CODEC", /simctl recordvideo.*codec.*fail|recordvideo.*h264/],
+  ["PQ_ANDROID_SCREENRECORD_LIMIT", /screenrecord.*180|screenrecord.*3 minute/],
+  ["PQ_ANDROID_BOOT_DELAY", /sys\.boot_completed|emulator.*grpc.*ready/],
+  ["PQ_ANDROID_PLAY_PROTECT", /play protect.*(?:block|apk|install)/]
+];
+var EXPERIENCE_FAMILY_IDS = CLASSIFICATION_RULES.map(([id]) => id);
 
 // packages/rn-dev-agent-core/dist/experience/trends.js
 function buildExperienceTrendReport(records, since2, now = /* @__PURE__ */ new Date()) {

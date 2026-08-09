@@ -7,7 +7,9 @@ import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
 import {
   ExperienceRecorder,
+  EXPERIENCE_FAMILY_IDS,
   EXPERIENCE_STORE_NAME,
+  MAX_SYMPTOM_LENGTH,
   classifyExperience,
   experienceSignature,
   normalizeSymptomShape,
@@ -119,6 +121,112 @@ test('a meaningful failure writes exactly one fully sanitized structured record'
   assert.match(serialized, /REDACTED/);
 });
 
+test('a bare app display name and slug from app.json are redacted', (t) => {
+  const projectRoot = tempDirectory();
+  writeFileSync(
+    join(projectRoot, 'app.json'),
+    JSON.stringify({ expo: { name: 'AcmeBanking', slug: 'acme-banking-private' } }),
+  );
+  const previousRoot = process.env.RN_PROJECT_ROOT;
+  process.env.RN_PROJECT_ROOT = projectRoot;
+  t.after(() => {
+    if (previousRoot === undefined) delete process.env.RN_PROJECT_ROOT;
+    else process.env.RN_PROJECT_ROOT = previousRoot;
+  });
+
+  const directory = tempDirectory();
+  const recorder = synchronousRecorder(directory);
+  recorder.observe(fail('launchApp', 'Failed to launch AcmeBanking (acme-banking-private)'));
+
+  const serialized = readFileSync(join(directory, EXPERIENCE_STORE_NAME), 'utf8');
+  assert.doesNotMatch(serialized, /AcmeBanking|acme-banking-private/);
+  assert.match(serialized, /\[APP_NAME_REDACTED\]/);
+  assert.match(serialized, /\[APP_SLUG_REDACTED\]/);
+});
+
+test('a malformed app.json fails closed instead of shipping raw symptoms', (t) => {
+  const projectRoot = tempDirectory();
+  writeFileSync(join(projectRoot, 'app.json'), '{ not valid json');
+  const previousRoot = process.env.RN_PROJECT_ROOT;
+  process.env.RN_PROJECT_ROOT = projectRoot;
+  t.after(() => {
+    if (previousRoot === undefined) delete process.env.RN_PROJECT_ROOT;
+    else process.env.RN_PROJECT_ROOT = previousRoot;
+  });
+
+  const directory = tempDirectory();
+  const recorder = synchronousRecorder(directory);
+  recorder.observe(fail('launchApp', 'Failed to launch AcmeBanking'));
+
+  const serialized = readFileSync(join(directory, EXPERIENCE_STORE_NAME), 'utf8');
+  assert.doesNotMatch(serialized, /AcmeBanking/);
+  assert.deepEqual(recorder.read(), []);
+});
+
+test('a payload-heavy symptom is bounded before it reaches the store', { timeout: 10_000 }, () => {
+  const directory = tempDirectory();
+  const recorder = synchronousRecorder(directory);
+  recorder.observe(fail('device_snapshot', `hierarchy ${'x'.repeat(200_000)}`));
+
+  const record = recorder.read()[0];
+  assert.ok(record.symptom.length <= MAX_SYMPTOM_LENGTH + '[TRUNCATED]'.length);
+  assert.match(record.symptom, /\[TRUNCATED\]$/);
+  assert.ok(readFileSync(join(directory, EXPERIENCE_STORE_NAME), 'utf8').length < 10_000);
+});
+
+test('a corrupt store line is dropped instead of disabling recording forever', () => {
+  const directory = tempDirectory();
+  const path = join(directory, EXPERIENCE_STORE_NAME);
+  const recorder = synchronousRecorder(directory);
+  recorder.observe(fail('cdp_status', 'WebSocket close 1006', { platform: 'ios' }));
+  writeFileSync(path, `${readFileSync(path, 'utf8')}{"signature":"truncated`);
+
+  recorder.observe(fail('device_find', 'unrecognized failure', { platform: 'android' }));
+
+  const records = recorder.read();
+  assert.equal(records.length, 2);
+  assert.doesNotMatch(readFileSync(path, 'utf8'), /truncated/);
+});
+
+test('a later event fills a previously unknown device without losing the record', () => {
+  const directory = tempDirectory();
+  const recorder = synchronousRecorder(directory);
+  recorder.observe(fail('cdp_status', 'WebSocket close 1006', { platform: 'ios' }));
+  recorder.observe(
+    fail('cdp_status', 'WebSocket close 1006', {
+      platform: 'ios',
+      deviceName: 'iPhone 17',
+      runtime: 'Hermes',
+    }),
+  );
+
+  const records = recorder.read();
+  assert.equal(records.length, 1);
+  assert.equal(records[0].count, 2);
+  assert.equal(records[0].device, 'iPhone 17');
+  assert.equal(records[0].runtime, 'Hermes');
+  assert.equal(records[0].unknownReasons.device, undefined);
+  assert.equal(records[0].unknownReasons.runtime, undefined);
+});
+
+test('an ERROR occurrence is not downgraded by a later FAIL with the same shape', () => {
+  const directory = tempDirectory();
+  const recorder = synchronousRecorder(directory);
+  recorder.observe({
+    tool: 'cdp_status',
+    params: { platform: 'ios' },
+    status: 'ERROR',
+    latencyMs: 3,
+    error: 'WebSocket close 1006',
+  });
+  recorder.observe(fail('cdp_status', 'WebSocket close 1006', { platform: 'ios' }));
+
+  const records = recorder.read();
+  assert.equal(records.length, 1);
+  assert.equal(records[0].status, 'ERROR');
+  assert.match(records[0].trigger, /^ERROR reported by/);
+});
+
 test('a thrown-tool ERROR writes one meaningful record', () => {
   const directory = tempDirectory();
   const recorder = synchronousRecorder(directory);
@@ -179,7 +287,10 @@ test('classification only emits ids that exist in real seed-experience YAML', ()
     'android',
   );
   assert.equal(classification, 'FF_MAESTRO_GRPC_ANDROID');
-  assert.ok(ids.has(classification));
+  assert.deepEqual(
+    EXPERIENCE_FAMILY_IDS.filter((id) => !ids.has(id)),
+    [],
+  );
   assert.equal(classifyExperience('unrecognized private failure', 'custom_tool', null), 'UNKNOWN');
 });
 

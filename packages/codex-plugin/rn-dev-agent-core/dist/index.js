@@ -79404,8 +79404,10 @@ var DEFAULT_RETENTION_DAYS = 14;
 var MAX_EVIDENCE_POINTERS = 3;
 var EXPERIENCE_DIRECTORY = join44(homedir11(), ".claude", "rn-agent", "experience");
 var EXPERIENCE_STORE_NAME = "patterns.jsonl";
+var MAX_SYMPTOM_LENGTH = 2048;
 var DAY_MS = 24 * 60 * 60 * 1e3;
 var REDACTION_FAILED = "[REDACTION_FAILED]";
+var SYMPTOM_TRUNCATED = "[TRUNCATED]";
 var REDACTION_RULES = [
   [/(sk|pk|api|key|token|secret|password|auth)[-_]?[A-Za-z0-9_-]{20,}/gi, "[REDACTED_SECRET]"],
   [/Bearer [A-Za-z0-9_./+=-]{20,}/g, "Bearer [REDACTED]"],
@@ -79431,6 +79433,7 @@ var REDACTION_RULES = [
   [/(com|org|io|dev|net)\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_.-]+/g, "[BUNDLE_REDACTED]"]
 ];
 var KEYED_SECRET = /((?:token|secret|password|auth|api[_-]?key)\s*[:=]\s*)[^\s,;}]{6,}/gi;
+var SANITIZED_RECORDS = /* @__PURE__ */ new WeakSet();
 function sanitizeString(value, redact2 = applyRedactionRules) {
   try {
     return redact2(value);
@@ -79461,7 +79464,30 @@ function applyRedactionRules(value) {
     pattern.lastIndex = 0;
     result = result.replace(pattern, replacement);
   }
+  const identity2 = readAppIdentity();
+  if (identity2.name)
+    result = result.replaceAll(identity2.name, "[APP_NAME_REDACTED]");
+  if (identity2.slug)
+    result = result.replaceAll(identity2.slug, "[APP_SLUG_REDACTED]");
   return result;
+}
+var appIdentityCache = null;
+function readAppIdentity() {
+  const root = process.env.RN_PROJECT_ROOT ?? process.env.CLAUDE_USER_CWD ?? process.cwd();
+  if (appIdentityCache?.root === root)
+    return appIdentityCache.identity;
+  const manifest = join44(root, "app.json");
+  let identity2 = { name: null, slug: null };
+  if (existsSync35(manifest)) {
+    const parsed = JSON.parse(readFileSync33(manifest, "utf8"));
+    const expo = parsed.expo ?? parsed;
+    identity2 = { name: usableIdentity(expo?.name), slug: usableIdentity(expo?.slug) };
+  }
+  appIdentityCache = { root, identity: identity2 };
+  return identity2;
+}
+function usableIdentity(value) {
+  return typeof value === "string" && value.trim().length > 2 ? value : null;
 }
 var ExperienceRecorder = class {
   directory;
@@ -79526,7 +79552,7 @@ var ExperienceRecorder = class {
   buildFailureRecord(event) {
     const now = this.now().toISOString();
     const tool = sanitizeString(event.tool);
-    const symptom = sanitizeString(extractSymptom(event));
+    const symptom = sanitizeString(boundSymptom(extractSymptom(event)));
     const platform = sanitizeNullable(extractScalar(event, ["platform"]));
     const deviceName = extractScalar(event, ["deviceName", "deviceModel", "model"]);
     const hasDeviceId = extractScalar(event, ["deviceId", "udid"]) !== null;
@@ -79578,18 +79604,26 @@ var ExperienceRecorder = class {
       lastRecoveredAt: null,
       unknownReasons
     };
-    return sanitizeForEvidence(raw);
+    const sanitized = sanitizeForEvidence(raw);
+    SANITIZED_RECORDS.add(sanitized);
+    return sanitized;
   }
   persistFailure(incoming) {
-    const records = readExperienceStore(this.path, true);
+    const records = readExperienceStore(this.path);
     const existing = records.find((record2) => record2.signature === incoming.signature);
     if (existing) {
       existing.count += 1;
       existing.lastSeen = incoming.lastSeen;
-      existing.status = incoming.status;
+      if (incoming.status === "ERROR" && existing.status !== "ERROR") {
+        existing.status = "ERROR";
+        existing.trigger = incoming.trigger;
+      }
       existing.symptom = incoming.symptom;
       existing.candidate = incoming.candidate;
       existing.environment = incoming.environment;
+      adoptLateFact(existing, incoming, "platform");
+      adoptLateFact(existing, incoming, "device");
+      adoptLateFact(existing, incoming, "runtime");
       existing.evidencePointers = boundedPointers(existing.evidencePointers, incoming.evidencePointers);
     } else {
       records.push(incoming);
@@ -79597,7 +79631,7 @@ var ExperienceRecorder = class {
     this.write(pruneExperienceRecords(records, this.now(), this.maxRecords, this.retentionMs));
   }
   persistRecovery(signature, tool) {
-    const records = readExperienceStore(this.path, true);
+    const records = readExperienceStore(this.path);
     const existing = records.find((record2) => record2.signature === signature);
     if (!existing)
       return;
@@ -79615,7 +79649,7 @@ var ExperienceRecorder = class {
     mkdirSync20(this.directory, { recursive: true, mode: 448 });
     const temp = join44(this.directory, `.${EXPERIENCE_STORE_NAME}.${process.pid}.${randomUUID8()}`);
     try {
-      const sanitized = records.map((record2) => sanitizeForEvidence(record2));
+      const sanitized = records.map((record2) => SANITIZED_RECORDS.has(record2) ? record2 : sanitizeForEvidence(record2));
       const contents = sanitized.map((record2) => JSON.stringify(record2)).join("\n");
       writeFileSync19(temp, contents.length > 0 ? `${contents}
 ` : "", {
@@ -79654,16 +79688,26 @@ function discoverPluginVersion(fromUrl = import.meta.url) {
   }
   return null;
 }
-function readExperienceStore(path, allowMissing = false) {
-  if (!existsSync35(path)) {
-    if (allowMissing)
-      return [];
+function readExperienceStore(path) {
+  if (!existsSync35(path))
     return [];
-  }
   const contents = readFileSync33(path, "utf8");
   if (!contents.trim())
     return [];
-  return contents.split("\n").filter((line) => line.trim().length > 0).map((line) => JSON.parse(line));
+  const records = [];
+  for (const line of contents.split("\n")) {
+    if (line.trim().length === 0)
+      continue;
+    let parsed;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    SANITIZED_RECORDS.add(parsed);
+    records.push(parsed);
+  }
+  return records;
 }
 function pruneExperienceRecords(records, now, maxRecords = DEFAULT_MAX_RECORDS, retentionMs = DEFAULT_RETENTION_DAYS * DAY_MS) {
   const cutoff = now.getTime() - retentionMs;
@@ -79683,54 +79727,49 @@ function experienceSignature(input) {
 function normalizeSymptomShape(symptom) {
   return symptom.toLowerCase().replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, "<id>").replace(/\b0x[0-9a-f]+\b/gi, "<hex>").replace(/\b(?=[a-z0-9_-]{12,}\b)(?=[a-z0-9_-]*\d)[a-z0-9_-]+\b/gi, "<id>").replace(/\b\d+\b/g, "#").replace(/\s+/g, " ").trim();
 }
+var CLASSIFICATION_RULES = [
+  ["FF_REDBOX", /redbox|logbox|error overlay|hasredbox/],
+  ["FF_DEBUGGER_PAUSED", /debugger paused|ispaused\s*[=:]\s*true|execution (?:is )?halted/],
+  [
+    "FF_STALE_CDP",
+    /websocket (?:close )?1006|target not found|cdp_status.*time(?:d)?out|not connected/
+  ],
+  ["FF_FAST_REFRESH_STALE", /fast refresh|ui unchanged|old exports|old module path/],
+  ["FF_METRO_CACHE", /metro.*(?:stale|cache)|config change not reflected/],
+  [
+    "FF_BINARY_MISMATCH",
+    /turbomoduleregistry|getenforcing|native module (?:cannot be null|mismatch|not found)/
+  ],
+  ["FF_EXPO_DIALOG", /open-in-app|system confirmation dialog/],
+  ["FF_DEV_CLIENT_PICKER", /no hermes target|development servers|devclientlauncher|server picker/],
+  ["FF_KEYBOARD_OVERLAY", /keyboard.*(?:obscur|behind|cover)|element behind keyboard/],
+  ["FF_MAESTRO_GRPC_ANDROID", /unavailable:\s*io exception|androiddriver.*grpc|maestro.*grpc/],
+  [
+    "FF_ANDROID_TEXT_INPUT_CRASH",
+    /(?:text input|mobile_type_keys|adb.*input text).*(?:crash|anr|home screen|disappear)/
+  ],
+  ["FF_AUTH_GATE", /(?:stuck|blocked|remains?).*(?:login|welcome|register|auth) (?:screen|route)/],
+  [
+    "FF_PERMISSION_ALREADY_GRANTED",
+    /permission already granted|prompt (?:was )?not shown|flow completes instantly/
+  ],
+  ["EG_EXPO_GO_SDK_MISMATCH", /incompatible with this version of expo go|expo go sdk.*mismatch/],
+  ["EG_NATIVEWIND_JSX_SOURCE", /nativewind.*jsximportsource|styles.*(?:unstyled|don.t apply)/],
+  ["EG_EXPO_GO_NATIVE_MODULES", /expo go.*custom native module/],
+  ["EG_DEV_CLIENT_CLEARSTATE", /clearstate.*(?:dev client|metro connection|launcher)/],
+  ["EG_MSW_HERMES", /msw.*(?:hermes|react native|initialize)/],
+  ["EG_EXPO_ROUTER_DEEP_LINK", /expo router.*deep link|deep link.*confirmation dialog/],
+  ["EG_DEV_MENU_INTERFERENCE", /dev menu.*(?:overlay|recording|blocking)/],
+  ["EG_NEW_ARCH_CDP_TARGET", /bridgeless.*(?:target|app\.dev)|new architecture.*cdp target/],
+  ["PQ_IOS_RECORDVIDEO_CODEC", /simctl recordvideo.*codec.*fail|recordvideo.*h264/],
+  ["PQ_ANDROID_SCREENRECORD_LIMIT", /screenrecord.*180|screenrecord.*3 minute/],
+  ["PQ_ANDROID_BOOT_DELAY", /sys\.boot_completed|emulator.*grpc.*ready/],
+  ["PQ_ANDROID_PLAY_PROTECT", /play protect.*(?:block|apk|install)/]
+];
+var EXPERIENCE_FAMILY_IDS = CLASSIFICATION_RULES.map(([id]) => id);
 function classifyExperience(symptom, tool, platform) {
   const haystack = `${tool} ${platform ?? ""} ${symptom}`.toLowerCase();
-  const rules = [
-    ["FF_REDBOX", /redbox|logbox|error overlay|hasredbox/],
-    ["FF_DEBUGGER_PAUSED", /debugger paused|ispaused\s*[=:]\s*true|execution (?:is )?halted/],
-    [
-      "FF_STALE_CDP",
-      /websocket (?:close )?1006|target not found|cdp_status.*time(?:d)?out|not connected/
-    ],
-    ["FF_FAST_REFRESH_STALE", /fast refresh|ui unchanged|old exports|old module path/],
-    ["FF_METRO_CACHE", /metro.*(?:stale|cache)|config change not reflected/],
-    [
-      "FF_BINARY_MISMATCH",
-      /turbomoduleregistry|getenforcing|native module (?:cannot be null|mismatch|not found)/
-    ],
-    ["FF_EXPO_DIALOG", /open-in-app|system confirmation dialog/],
-    [
-      "FF_DEV_CLIENT_PICKER",
-      /no hermes target|development servers|devclientlauncher|server picker/
-    ],
-    ["FF_KEYBOARD_OVERLAY", /keyboard.*(?:obscur|behind|cover)|element behind keyboard/],
-    ["FF_MAESTRO_GRPC_ANDROID", /unavailable:\s*io exception|androiddriver.*grpc|maestro.*grpc/],
-    [
-      "FF_ANDROID_TEXT_INPUT_CRASH",
-      /(?:text input|mobile_type_keys|adb.*input text).*(?:crash|anr|home screen|disappear)/
-    ],
-    [
-      "FF_AUTH_GATE",
-      /(?:stuck|blocked|remains?).*(?:login|welcome|register|auth) (?:screen|route)/
-    ],
-    [
-      "FF_PERMISSION_ALREADY_GRANTED",
-      /permission already granted|prompt (?:was )?not shown|flow completes instantly/
-    ],
-    ["EG_EXPO_GO_SDK_MISMATCH", /incompatible with this version of expo go|expo go sdk.*mismatch/],
-    ["EG_NATIVEWIND_JSX_SOURCE", /nativewind.*jsximportsource|styles.*(?:unstyled|don.t apply)/],
-    ["EG_EXPO_GO_NATIVE_MODULES", /expo go.*custom native module/],
-    ["EG_DEV_CLIENT_CLEARSTATE", /clearstate.*(?:dev client|metro connection|launcher)/],
-    ["EG_MSW_HERMES", /msw.*(?:hermes|react native|initialize)/],
-    ["EG_EXPO_ROUTER_DEEP_LINK", /expo router.*deep link|deep link.*confirmation dialog/],
-    ["EG_DEV_MENU_INTERFERENCE", /dev menu.*(?:overlay|recording|blocking)/],
-    ["EG_NEW_ARCH_CDP_TARGET", /bridgeless.*(?:target|app\.dev)|new architecture.*cdp target/],
-    ["PQ_IOS_RECORDVIDEO_CODEC", /simctl recordvideo.*codec.*fail|recordvideo.*h264/],
-    ["PQ_ANDROID_SCREENRECORD_LIMIT", /screenrecord.*180|screenrecord.*3 minute/],
-    ["PQ_ANDROID_BOOT_DELAY", /sys\.boot_completed|emulator.*grpc.*ready/],
-    ["PQ_ANDROID_PLAY_PROTECT", /play protect.*(?:block|apk|install)/]
-  ];
-  return rules.find(([, pattern]) => pattern.test(haystack))?.[0] ?? UNKNOWN_CLASSIFICATION;
+  return CLASSIFICATION_RULES.find(([, pattern]) => pattern.test(haystack))?.[0] ?? UNKNOWN_CLASSIFICATION;
 }
 function extractSymptom(event) {
   if (typeof event.error === "string" && event.error.length > 0)
@@ -79747,6 +79786,12 @@ function extractSymptom(event) {
     }
   }
   return `${event.tool} reported ${event.status} without an error message`;
+}
+function boundSymptom(symptom) {
+  if (symptom.length <= MAX_SYMPTOM_LENGTH)
+    return symptom;
+  const head = symptom.slice(0, MAX_SYMPTOM_LENGTH).replace(/\S+$/, "");
+  return `${head}${SYMPTOM_TRUNCATED}`;
 }
 function extractScalar(event, keys) {
   const sources = [event.params, event.result];
@@ -79777,6 +79822,12 @@ function findScalar(value, keys, depth) {
 }
 function sanitizeNullable(value) {
   return value === null ? null : sanitizeString(value);
+}
+function adoptLateFact(existing, incoming, field2) {
+  if (existing[field2] !== null || incoming[field2] === null)
+    return;
+  existing[field2] = incoming[field2];
+  delete existing.unknownReasons[field2];
 }
 function boundedPointers(existing, incoming) {
   return [.../* @__PURE__ */ new Set([...existing, ...incoming])].slice(-MAX_EVIDENCE_POINTERS);
