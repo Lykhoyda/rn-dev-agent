@@ -4,7 +4,7 @@ import { isAbsolute, relative, resolve } from 'node:path';
 import { failResult } from '../utils.js';
 import { authorityErrorMeta, SessionAuthorityError, shortAuthorityIdentity } from './registry.js';
 import { reissueInstallBinding } from './install-reissue.js';
-import { authorityProfileFor } from './tool-profiles.js';
+import { authorityProfileFor, requiresExactInstalledArtifact, } from './tool-profiles.js';
 const optionalBundleAdmission = Symbol('optionalBundleAdmission');
 const managedNativeOrigin = Symbol('managedNativeOrigin');
 const managedRunnerPark = Symbol('managedRunnerPark');
@@ -221,8 +221,10 @@ function containedRunnerAuthority(result, runner) {
 // used to hard-stop every gated tool while status still said ready. A preflight
 // axis-I refusal retries once behind the GH #705 digest proof; a foreign or
 // unattestable artifact still throws APP_INSTALL_IDENTITY_CHANGED unchanged.
-function reissueInstallAfterPreflightRefusal(registry, runtime, operation, status, dependencies, error, axes) {
-    if (!axes.includes('I') || authorityErrorCode(error) !== 'APP_INSTALL_IDENTITY_CHANGED') {
+function reissueInstallAfterPreflightRefusal(registry, runtime, operation, status, dependencies, error, axes, tool, args) {
+    if (!axes.includes('I') ||
+        requiresExactInstalledArtifact(tool, args) ||
+        authorityErrorCode(error) !== 'APP_INSTALL_IDENTITY_CHANGED') {
         return null;
     }
     const install = (dependencies.reissueInstallBinding ?? reissueInstallBinding)(status.bindings.install);
@@ -237,6 +239,23 @@ function reissueInstallAfterPreflightRefusal(registry, runtime, operation, statu
         throw new SessionAuthorityError(reissuedStatus.code, reissuedStatus.reason);
     }
     return { operation: reissuedOperation, status: reissuedStatus };
+}
+async function preflightWithInstallReissue(registry, runtime, dependencies, context, operation, status) {
+    const { tool, profile, args, axes } = context;
+    const probeAll = (probed) => Promise.all(axes.map((axis) => dependencies.probe({ axis, phase: 'preflight', tool, profile, status: probed, args })));
+    try {
+        return { before: await probeAll(status), operation, status };
+    }
+    catch (preflightError) {
+        const reissued = reissueInstallAfterPreflightRefusal(registry, runtime, operation, status, dependencies, preflightError, axes, tool, args);
+        if (!reissued)
+            throw preflightError;
+        return {
+            before: await probeAll(reissued.status),
+            operation: reissued.operation,
+            status: reissued.status,
+        };
+    }
 }
 function requireDeviceTransition(status, args) {
     const action = args.action ?? 'snapshot';
@@ -688,19 +707,11 @@ export function createAuthorityGate(runtime, dependencies) {
                     if (retainsRunnerCleanupAuthority) {
                         requireRetainedRunnerOwnership(registry, status);
                     }
-                    let before;
-                    try {
-                        before = await Promise.all(transitionAxes.before.map((axis) => dependencies.probe({ axis, phase: 'preflight', tool, profile, status, args })));
-                    }
-                    catch (preflightError) {
-                        const reissued = reissueInstallAfterPreflightRefusal(registry, runtime, operation, status, dependencies, preflightError, transitionAxes.before);
-                        if (!reissued)
-                            throw preflightError;
-                        operation = reissued.operation;
-                        status = reissued.status;
-                        initialAuthorityVersion = status.authorityVersion;
-                        before = await Promise.all(transitionAxes.before.map((axis) => dependencies.probe({ axis, phase: 'preflight', tool, profile, status, args })));
-                    }
+                    const preflight = await preflightWithInstallReissue(registry, runtime, dependencies, { tool, profile, args, axes: transitionAxes.before }, operation, status);
+                    const before = preflight.before;
+                    operation = preflight.operation;
+                    status = preflight.status;
+                    initialAuthorityVersion = status.authorityVersion;
                     registry.verifyOperation(operation);
                     const result = await registry.runWithOperation(operation, () => handler(...handlerArgs));
                     if (!resultSucceeded(result)) {
@@ -865,18 +876,10 @@ export function createAuthorityGate(runtime, dependencies) {
                 const preflightRecovery = await reconcileRecoverableRuntime(runtime, dependencies, registry, operation, status, profile, true);
                 operation = preflightRecovery.operation;
                 status = preflightRecovery.status;
-                let before;
-                try {
-                    before = await Promise.all(profile.axes.map((axis) => dependencies.probe({ axis, phase: 'preflight', tool, profile, status, args })));
-                }
-                catch (preflightError) {
-                    const reissued = reissueInstallAfterPreflightRefusal(registry, runtime, operation, status, dependencies, preflightError, profile.axes);
-                    if (!reissued)
-                        throw preflightError;
-                    operation = reissued.operation;
-                    status = reissued.status;
-                    before = await Promise.all(profile.axes.map((axis) => dependencies.probe({ axis, phase: 'preflight', tool, profile, status, args })));
-                }
+                const preflight = await preflightWithInstallReissue(registry, runtime, dependencies, { tool, profile, args, axes: profile.axes }, operation, status);
+                const before = preflight.before;
+                operation = preflight.operation;
+                status = preflight.status;
                 const initialOperationAuthorityVersion = operation.authorityVersion;
                 const optionalBefore = [];
                 const managedOriginObservations = [];

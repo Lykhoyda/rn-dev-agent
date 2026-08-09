@@ -5,7 +5,10 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { inspectInstallIdentity } from '../../../dist/session/install-identity-inspection.js';
+import {
+  inspectInstallIdentity,
+  resetInstallIdentityInspectionCache,
+} from '../../../dist/session/install-identity-inspection.js';
 import { projectPublicAuthorityStatus } from '../../../dist/session/public-status.js';
 import { createSessionHandler } from '../../../dist/tools/session.js';
 import { createPassiveStatusHandler } from '../../../dist/tools/status.js';
@@ -37,6 +40,7 @@ function authorityStatus() {
 }
 
 test('inspectInstallIdentity classifies the four live states', () => {
+  resetInstallIdentityInspectionCache();
   assert.equal(inspectInstallIdentity(null), null);
   assert.equal(inspectInstallIdentity(undefined), null);
 
@@ -55,11 +59,11 @@ test('inspectInstallIdentity classifies the four live states', () => {
 
   assert.equal(
     inspectInstallIdentity(BOUND_INSTALL, {
-      captureGeneration: () => 'generation-2',
+      captureGeneration: () => 'generation-3',
       captureInstalled: () => ({
         ...BOUND_INSTALL,
         artifactDigest: 'foreign-digest',
-        installGeneration: 'generation-2',
+        installGeneration: 'generation-3',
       }),
     })?.verdict,
     'changed',
@@ -75,6 +79,27 @@ test('inspectInstallIdentity classifies the four live states', () => {
   );
 
   assert.equal(inspectInstallIdentity({ platform: 'ios' })?.verdict, 'changed');
+});
+
+test('repeated status polls hash the installed bundle once per observed generation', () => {
+  resetInstallIdentityInspectionCache();
+  let hashes = 0;
+  const poll = (observedGeneration: string) =>
+    inspectInstallIdentity(BOUND_INSTALL, {
+      captureGeneration: () => observedGeneration,
+      captureInstalled: () => {
+        hashes += 1;
+        return { ...BOUND_INSTALL, installGeneration: observedGeneration };
+      },
+    });
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    assert.deepEqual(poll('generation-2'), { verdict: 'reissue-pending' });
+  }
+  assert.equal(hashes, 1);
+
+  assert.deepEqual(poll('generation-3'), { verdict: 'reissue-pending' });
+  assert.equal(hashes, 2);
 });
 
 test('a changed install identity stops the projection from claiming ready', () => {

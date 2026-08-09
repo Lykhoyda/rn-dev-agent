@@ -267,3 +267,33 @@ test('a probe refusal with an unchanged install propagates the original error', 
   assert.equal(envelope.ok, false);
   assert.equal(envelope.code, 'APP_INSTALL_IDENTITY_CHANGED');
 });
+
+test('a proof boundary never heals — a mid-proof reinstall stays a hard stop', async () => {
+  for (const action of ['begin_rehearsal', 'finalize']) {
+    const { runtime, status, probe } = fixture('generation-2');
+    status.bindings.bundle = { bundleDigest: 'bundle-digest' };
+    if (action === 'finalize') status.bindings.proof = { proofId: 'proof-a' };
+    let reissued = false;
+    const gate = createAuthorityGate(runtime, {
+      probe,
+      reissueInstallBinding: (install: Record<string, unknown> | undefined) => {
+        reissued = true;
+        return reissueInstallBinding(install, {
+          captureInstalled: captureReturning('attested-digest', 'generation-2'),
+        });
+      },
+    });
+
+    const wrapped = gate.wrap('proof_capture', async () => okResult({ done: true }));
+    const envelope = JSON.parse((await wrapped({ action })).content[0].text);
+
+    assert.equal(envelope.ok, false, action);
+    assert.equal(envelope.code, 'APP_INSTALL_IDENTITY_CHANGED', action);
+    assert.equal(reissued, false, action);
+    assert.equal(
+      (status.bindings.install as { installGeneration: string }).installGeneration,
+      'generation-1',
+      action,
+    );
+  }
+});

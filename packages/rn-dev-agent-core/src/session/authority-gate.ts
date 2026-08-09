@@ -7,7 +7,12 @@ import type { OperationRef, SessionRef, SessionRegistry, SessionStatus } from '.
 import { authorityErrorMeta, SessionAuthorityError, shortAuthorityIdentity } from './registry.js';
 import { reissueInstallBinding } from './install-reissue.js';
 import type { WorkerAuthorityStatus } from './runtime.js';
-import { authorityProfileFor, type AuthorityAxis, type AuthorityProfile } from './tool-profiles.js';
+import {
+  authorityProfileFor,
+  requiresExactInstalledArtifact,
+  type AuthorityAxis,
+  type AuthorityProfile,
+} from './tool-profiles.js';
 
 export interface AuthorityObservation {
   axis: AuthorityAxis;
@@ -388,8 +393,14 @@ function reissueInstallAfterPreflightRefusal(
   dependencies: AuthorityGateDependencies,
   error: unknown,
   axes: readonly AuthorityAxis[],
+  tool: string,
+  args: Record<string, unknown>,
 ): { operation: OperationRef; status: SessionStatus } | null {
-  if (!axes.includes('I') || authorityErrorCode(error) !== 'APP_INSTALL_IDENTITY_CHANGED') {
+  if (
+    !axes.includes('I') ||
+    requiresExactInstalledArtifact(tool, args) ||
+    authorityErrorCode(error) !== 'APP_INSTALL_IDENTITY_CHANGED'
+  ) {
     return null;
   }
   const install = (dependencies.reissueInstallBinding ?? reissueInstallBinding)(
@@ -405,6 +416,49 @@ function reissueInstallAfterPreflightRefusal(
     throw new SessionAuthorityError(reissuedStatus.code, reissuedStatus.reason);
   }
   return { operation: reissuedOperation, status: reissuedStatus };
+}
+
+async function preflightWithInstallReissue(
+  registry: SessionRegistry,
+  runtime: AuthorityGateRuntime,
+  dependencies: AuthorityGateDependencies,
+  context: {
+    tool: string;
+    profile: AuthorityProfile;
+    args: Record<string, unknown>;
+    axes: readonly AuthorityAxis[];
+  },
+  operation: OperationRef,
+  status: SessionStatus,
+): Promise<{ before: AuthorityObservation[]; operation: OperationRef; status: SessionStatus }> {
+  const { tool, profile, args, axes } = context;
+  const probeAll = (probed: SessionStatus): Promise<AuthorityObservation[]> =>
+    Promise.all(
+      axes.map((axis) =>
+        dependencies.probe({ axis, phase: 'preflight', tool, profile, status: probed, args }),
+      ),
+    );
+  try {
+    return { before: await probeAll(status), operation, status };
+  } catch (preflightError) {
+    const reissued = reissueInstallAfterPreflightRefusal(
+      registry,
+      runtime,
+      operation,
+      status,
+      dependencies,
+      preflightError,
+      axes,
+      tool,
+      args,
+    );
+    if (!reissued) throw preflightError;
+    return {
+      before: await probeAll(reissued.status),
+      operation: reissued.operation,
+      status: reissued.status,
+    };
+  }
 }
 
 function requireDeviceTransition(status: SessionStatus, args: Record<string, unknown>): void {
@@ -1008,33 +1062,18 @@ export function createAuthorityGate(
             if (retainsRunnerCleanupAuthority) {
               requireRetainedRunnerOwnership(registry, status);
             }
-            let before: AuthorityObservation[];
-            try {
-              before = await Promise.all(
-                transitionAxes.before.map((axis) =>
-                  dependencies.probe({ axis, phase: 'preflight', tool, profile, status, args }),
-                ),
-              );
-            } catch (preflightError) {
-              const reissued = reissueInstallAfterPreflightRefusal(
-                registry,
-                runtime,
-                operation,
-                status,
-                dependencies,
-                preflightError,
-                transitionAxes.before,
-              );
-              if (!reissued) throw preflightError;
-              operation = reissued.operation;
-              status = reissued.status;
-              initialAuthorityVersion = status.authorityVersion;
-              before = await Promise.all(
-                transitionAxes.before.map((axis) =>
-                  dependencies.probe({ axis, phase: 'preflight', tool, profile, status, args }),
-                ),
-              );
-            }
+            const preflight = await preflightWithInstallReissue(
+              registry,
+              runtime,
+              dependencies,
+              { tool, profile, args, axes: transitionAxes.before },
+              operation,
+              status,
+            );
+            const before = preflight.before;
+            operation = preflight.operation;
+            status = preflight.status;
+            initialAuthorityVersion = status.authorityVersion;
             registry.verifyOperation(operation);
             const result = await registry.runWithOperation(operation, () =>
               handler(...handlerArgs),
@@ -1254,32 +1293,17 @@ export function createAuthorityGate(
           );
           operation = preflightRecovery.operation;
           status = preflightRecovery.status;
-          let before: AuthorityObservation[];
-          try {
-            before = await Promise.all(
-              profile.axes.map((axis) =>
-                dependencies.probe({ axis, phase: 'preflight', tool, profile, status, args }),
-              ),
-            );
-          } catch (preflightError) {
-            const reissued = reissueInstallAfterPreflightRefusal(
-              registry,
-              runtime,
-              operation,
-              status,
-              dependencies,
-              preflightError,
-              profile.axes,
-            );
-            if (!reissued) throw preflightError;
-            operation = reissued.operation;
-            status = reissued.status;
-            before = await Promise.all(
-              profile.axes.map((axis) =>
-                dependencies.probe({ axis, phase: 'preflight', tool, profile, status, args }),
-              ),
-            );
-          }
+          const preflight = await preflightWithInstallReissue(
+            registry,
+            runtime,
+            dependencies,
+            { tool, profile, args, axes: profile.axes },
+            operation,
+            status,
+          );
+          const before = preflight.before;
+          operation = preflight.operation;
+          status = preflight.status;
           const initialOperationAuthorityVersion = operation.authorityVersion;
           const optionalBefore: AuthorityObservation[] = [];
           const managedOriginObservations: AuthorityObservation[] = [];

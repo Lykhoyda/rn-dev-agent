@@ -244,6 +244,17 @@ add(proof, {
   liveBundleProbe: true,
 });
 
+// Proof boundaries attest the exact installed bytes and the exact install
+// generation: a reinstall between proof steps is a hard stop, never healed.
+export function requiresExactInstalledArtifact(
+  tool: string,
+  args: Record<string, unknown> = {},
+): boolean {
+  return (
+    tool === 'proof_capture' && (args.action === 'begin_rehearsal' || args.action === 'finalize')
+  );
+}
+
 export function authorityProfileFor(
   tool: string,
   args: Record<string, unknown> = {},
