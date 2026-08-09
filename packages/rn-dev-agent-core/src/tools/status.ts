@@ -28,6 +28,7 @@ import { getActiveSession } from '../agent-device-wrapper.js';
 import type { ConnectFilters } from '../cdp/connect.js';
 import type { HermesTarget } from '../types.js';
 import type { WorkerAuthorityRuntime } from '../session/runtime.js';
+import { inspectInstallIdentity } from '../session/install-identity-inspection.js';
 import { projectPublicAuthorityStatus } from '../session/public-status.js';
 import { reconcileManagedMetroStatus, type ManagedMetroStatusDependencies } from './session.js';
 
@@ -75,9 +76,14 @@ export function createPassiveStatusHandler(
     const client = getClient();
     const target = client.connectedTarget;
     const authority = reconcileManagedMetroStatus(authorityRuntime, statusDependencies);
+    const installIdentity = authority.available
+      ? (statusDependencies.inspectInstallIdentity ?? inspectInstallIdentity)(
+          authority.bindings.install as Record<string, unknown> | null | undefined,
+        )
+      : null;
     return okResult({
       authoritative: false,
-      authority: projectPublicAuthorityStatus(authority),
+      authority: projectPublicAuthorityStatus(authority, { installIdentity }),
       metro: {
         port: client.metroPort,
         requestedPort: args.metroPort ?? null,

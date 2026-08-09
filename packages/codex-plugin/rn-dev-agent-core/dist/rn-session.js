@@ -17005,6 +17005,14 @@ function projectPublicAuthorityStatus(status, options = {}) {
     proof: Boolean(status.bindings.proof),
     // ADR §5.2 (L3): strict proof is an opt-in overlay outside the four groups, never a group.
     proofOverlay: { active: Boolean(status.bindings.proof) },
+    ...options.installIdentity ? { installIdentity: options.installIdentity.verdict } : {},
+    // A live axis-I refusal means every gated tool refuses too — status must
+    // not read `ready` while that is true.
+    ...options.installIdentity?.verdict === "changed" ? {
+      state: "install_identity_changed",
+      detail: options.installIdentity.reason ?? "installed artifact identity no longer matches the session build",
+      nextAction: "The installed app is no longer the attested session build. Rebuild and re-attest it (rn_session build, or bind_device with a fresh signed build receipt), then re-open the device session."
+    } : {},
     ...recoveryStatus ? { recovery: recoveryStatus } : {},
     ...cleanupNextAction ? {
       staleDeviceCleanup: {

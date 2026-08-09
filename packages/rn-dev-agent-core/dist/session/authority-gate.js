@@ -216,6 +216,28 @@ function containedRunnerAuthority(result, runner) {
         return null;
     }
 }
+// A byte-identical reinstall (runner-respawn recovery, clearState replay, an
+// identical dev rebuild) rotates installGeneration but not artifactDigest, and
+// used to hard-stop every gated tool while status still said ready. A preflight
+// axis-I refusal retries once behind the GH #705 digest proof; a foreign or
+// unattestable artifact still throws APP_INSTALL_IDENTITY_CHANGED unchanged.
+function reissueInstallAfterPreflightRefusal(registry, runtime, operation, status, dependencies, error, axes) {
+    if (!axes.includes('I') || authorityErrorCode(error) !== 'APP_INSTALL_IDENTITY_CHANGED') {
+        return null;
+    }
+    const install = (dependencies.reissueInstallBinding ?? reissueInstallBinding)(status.bindings.install);
+    if (!install)
+        return null;
+    registry.verifyOperation(operation);
+    const reissuedOperation = registry.replaceBindingsDuringOperation(operation, {
+        bindings: { install },
+    });
+    const reissuedStatus = runtime.status();
+    if (!reissuedStatus.available) {
+        throw new SessionAuthorityError(reissuedStatus.code, reissuedStatus.reason);
+    }
+    return { operation: reissuedOperation, status: reissuedStatus };
+}
 function requireDeviceTransition(status, args) {
     const action = args.action ?? 'snapshot';
     if (action === 'open') {
@@ -624,7 +646,7 @@ export function createAuthorityGate(runtime, dependencies) {
                     }
                     let status = initialStatus;
                     let runtimeTargetChanged = false;
-                    const initialAuthorityVersion = status.authorityVersion;
+                    let initialAuthorityVersion = status.authorityVersion;
                     const gateCommitsProof = tool === 'proof_capture' && args.action === 'begin_rehearsal';
                     const retainsRunnerCleanupAuthority = tool === 'device_snapshot' &&
                         args.action === 'close' &&
@@ -666,7 +688,19 @@ export function createAuthorityGate(runtime, dependencies) {
                     if (retainsRunnerCleanupAuthority) {
                         requireRetainedRunnerOwnership(registry, status);
                     }
-                    const before = await Promise.all(transitionAxes.before.map((axis) => dependencies.probe({ axis, phase: 'preflight', tool, profile, status, args })));
+                    let before;
+                    try {
+                        before = await Promise.all(transitionAxes.before.map((axis) => dependencies.probe({ axis, phase: 'preflight', tool, profile, status, args })));
+                    }
+                    catch (preflightError) {
+                        const reissued = reissueInstallAfterPreflightRefusal(registry, runtime, operation, status, dependencies, preflightError, transitionAxes.before);
+                        if (!reissued)
+                            throw preflightError;
+                        operation = reissued.operation;
+                        status = reissued.status;
+                        initialAuthorityVersion = status.authorityVersion;
+                        before = await Promise.all(transitionAxes.before.map((axis) => dependencies.probe({ axis, phase: 'preflight', tool, profile, status, args })));
+                    }
                     registry.verifyOperation(operation);
                     const result = await registry.runWithOperation(operation, () => handler(...handlerArgs));
                     if (!resultSucceeded(result)) {
@@ -831,8 +865,19 @@ export function createAuthorityGate(runtime, dependencies) {
                 const preflightRecovery = await reconcileRecoverableRuntime(runtime, dependencies, registry, operation, status, profile, true);
                 operation = preflightRecovery.operation;
                 status = preflightRecovery.status;
+                let before;
+                try {
+                    before = await Promise.all(profile.axes.map((axis) => dependencies.probe({ axis, phase: 'preflight', tool, profile, status, args })));
+                }
+                catch (preflightError) {
+                    const reissued = reissueInstallAfterPreflightRefusal(registry, runtime, operation, status, dependencies, preflightError, profile.axes);
+                    if (!reissued)
+                        throw preflightError;
+                    operation = reissued.operation;
+                    status = reissued.status;
+                    before = await Promise.all(profile.axes.map((axis) => dependencies.probe({ axis, phase: 'preflight', tool, profile, status, args })));
+                }
                 const initialOperationAuthorityVersion = operation.authorityVersion;
-                const before = await Promise.all(profile.axes.map((axis) => dependencies.probe({ axis, phase: 'preflight', tool, profile, status, args })));
                 const optionalBefore = [];
                 const managedOriginObservations = [];
                 const managedBundleObservations = [];

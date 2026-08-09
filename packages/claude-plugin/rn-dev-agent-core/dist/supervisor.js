@@ -27013,6 +27013,23 @@ function containedRunnerAuthority(result, runner) {
     return null;
   }
 }
+function reissueInstallAfterPreflightRefusal(registry2, runtime, operation, status, dependencies, error2, axes) {
+  if (!axes.includes("I") || authorityErrorCode(error2) !== "APP_INSTALL_IDENTITY_CHANGED") {
+    return null;
+  }
+  const install = (dependencies.reissueInstallBinding ?? reissueInstallBinding)(status.bindings.install);
+  if (!install)
+    return null;
+  registry2.verifyOperation(operation);
+  const reissuedOperation = registry2.replaceBindingsDuringOperation(operation, {
+    bindings: { install }
+  });
+  const reissuedStatus = runtime.status();
+  if (!reissuedStatus.available) {
+    throw new SessionAuthorityError(reissuedStatus.code, reissuedStatus.reason);
+  }
+  return { operation: reissuedOperation, status: reissuedStatus };
+}
 function requireDeviceTransition(status, args) {
   const action = args.action ?? "snapshot";
   if (action === "open") {
@@ -27340,7 +27357,7 @@ function createAuthorityGate(runtime, dependencies) {
           }
           let status = initialStatus;
           let runtimeTargetChanged = false;
-          const initialAuthorityVersion = status.authorityVersion;
+          let initialAuthorityVersion = status.authorityVersion;
           const gateCommitsProof = tool === "proof_capture" && args.action === "begin_rehearsal";
           const retainsRunnerCleanupAuthority = tool === "device_snapshot" && args.action === "close" && Boolean(status.bindings.runner);
           bindSessionArguments(status, profile, args);
@@ -27369,7 +27386,18 @@ function createAuthorityGate(runtime, dependencies) {
           if (retainsRunnerCleanupAuthority) {
             requireRetainedRunnerOwnership(registry3, status);
           }
-          const before = await Promise.all(transitionAxes.before.map((axis) => dependencies.probe({ axis, phase: "preflight", tool, profile, status, args })));
+          let before;
+          try {
+            before = await Promise.all(transitionAxes.before.map((axis) => dependencies.probe({ axis, phase: "preflight", tool, profile, status, args })));
+          } catch (preflightError) {
+            const reissued = reissueInstallAfterPreflightRefusal(registry3, runtime, operation2, status, dependencies, preflightError, transitionAxes.before);
+            if (!reissued)
+              throw preflightError;
+            operation2 = reissued.operation;
+            status = reissued.status;
+            initialAuthorityVersion = status.authorityVersion;
+            before = await Promise.all(transitionAxes.before.map((axis) => dependencies.probe({ axis, phase: "preflight", tool, profile, status, args })));
+          }
           registry3.verifyOperation(operation2);
           const result = await registry3.runWithOperation(operation2, () => handler(...handlerArgs));
           if (!resultSucceeded(result)) {
@@ -27526,8 +27554,18 @@ function createAuthorityGate(runtime, dependencies) {
         const preflightRecovery = await reconcileRecoverableRuntime(runtime, dependencies, registry2, operation, status, profile, true);
         operation = preflightRecovery.operation;
         status = preflightRecovery.status;
+        let before;
+        try {
+          before = await Promise.all(profile.axes.map((axis) => dependencies.probe({ axis, phase: "preflight", tool, profile, status, args })));
+        } catch (preflightError) {
+          const reissued = reissueInstallAfterPreflightRefusal(registry2, runtime, operation, status, dependencies, preflightError, profile.axes);
+          if (!reissued)
+            throw preflightError;
+          operation = reissued.operation;
+          status = reissued.status;
+          before = await Promise.all(profile.axes.map((axis) => dependencies.probe({ axis, phase: "preflight", tool, profile, status, args })));
+        }
         const initialOperationAuthorityVersion = operation.authorityVersion;
-        const before = await Promise.all(profile.axes.map((axis) => dependencies.probe({ axis, phase: "preflight", tool, profile, status, args })));
         const optionalBefore = [];
         const managedOriginObservations = [];
         const managedBundleObservations = [];
@@ -67324,6 +67362,49 @@ var init_action_state_store = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/session/install-identity-inspection.js
+function isInstallPlatform(value) {
+  return value === "ios" || value === "android";
+}
+function inspectInstallIdentity(install, dependencies = {}) {
+  if (!install)
+    return null;
+  const rawPlatform = install.platform;
+  const platform = isInstallPlatform(rawPlatform) ? rawPlatform : null;
+  const deviceId = install.deviceId;
+  const appId = install.appId;
+  const artifactDigest = install.artifactDigest;
+  const installGeneration = install.installGeneration;
+  if (!platform || typeof deviceId !== "string" || typeof appId !== "string" || typeof artifactDigest !== "string" || typeof installGeneration !== "string") {
+    return { verdict: "changed", reason: "the bound install receipt is not attestable" };
+  }
+  const target = { platform, deviceId, appId };
+  try {
+    if ((dependencies.captureGeneration ?? captureInstallGeneration)(target) === installGeneration) {
+      return { verdict: "verified" };
+    }
+  } catch {
+    return { verdict: "changed", reason: "the installed artifact could not be attested" };
+  }
+  try {
+    const observed = (dependencies.captureInstalled ?? captureInstalledArtifact)(target);
+    if (observed.artifactDigest === artifactDigest)
+      return { verdict: "reissue-pending" };
+    return {
+      verdict: "changed",
+      reason: "the installed artifact is not the attested session build"
+    };
+  } catch {
+    return { verdict: "changed", reason: "the installed artifact could not be attested" };
+  }
+}
+var init_install_identity_inspection = __esm({
+  "packages/rn-dev-agent-core/dist/session/install-identity-inspection.js"() {
+    "use strict";
+    init_install_authority();
+  }
+});
+
 // packages/rn-dev-agent-core/dist/session/migration-diagnostic.js
 import { createHash as createHash14 } from "node:crypto";
 import { existsSync as existsSync27, readFileSync as readFileSync28 } from "node:fs";
@@ -67519,6 +67600,14 @@ function projectPublicAuthorityStatus(status, options = {}) {
     proof: Boolean(status.bindings.proof),
     // ADR §5.2 (L3): strict proof is an opt-in overlay outside the four groups, never a group.
     proofOverlay: { active: Boolean(status.bindings.proof) },
+    ...options.installIdentity ? { installIdentity: options.installIdentity.verdict } : {},
+    // A live axis-I refusal means every gated tool refuses too — status must
+    // not read `ready` while that is true.
+    ...options.installIdentity?.verdict === "changed" ? {
+      state: "install_identity_changed",
+      detail: options.installIdentity.reason ?? "installed artifact identity no longer matches the session build",
+      nextAction: "The installed app is no longer the attested session build. Rebuild and re-attest it (rn_session build, or bind_device with a fresh signed build receipt), then re-open the device session."
+    } : {},
     ...recoveryStatus ? { recovery: recoveryStatus } : {},
     ...cleanupNextAction ? {
       staleDeviceCleanup: {
@@ -67783,12 +67872,14 @@ function createSessionHandler(runtime, dependencies = {}) {
       try {
         runtime.refreshRecoveryHandles();
         const projectedAuthority = reconcileManagedMetroStatus(runtime, dependencies);
+        const installIdentity = projectedAuthority.available ? (dependencies.inspectInstallIdentity ?? inspectInstallIdentity)(projectedAuthority.bindings.install) : null;
         return okResult({
           authoritative: false,
           authority: projectPublicAuthorityStatus(projectedAuthority, {
             includeSessionId: true,
             now: dependencies.now,
-            recoveryRequirement: runtime.inspectRecoveryRequirement()
+            recoveryRequirement: runtime.inspectRecoveryRequirement(),
+            installIdentity
           })
         });
       } catch (error2) {
@@ -68655,6 +68746,7 @@ var init_session = __esm({
     init_metro_binding();
     init_package_integration();
     init_process_owner();
+    init_install_identity_inspection();
     init_public_status();
     init_process_birth();
     init_managed_metro();
@@ -68685,9 +68777,10 @@ function createPassiveStatusHandler(getClient2, authorityRuntime2, statusDepende
     const client2 = getClient2();
     const target = client2.connectedTarget;
     const authority = reconcileManagedMetroStatus(authorityRuntime2, statusDependencies);
+    const installIdentity = authority.available ? (statusDependencies.inspectInstallIdentity ?? inspectInstallIdentity)(authority.bindings.install) : null;
     return okResult({
       authoritative: false,
-      authority: projectPublicAuthorityStatus(authority),
+      authority: projectPublicAuthorityStatus(authority, { installIdentity }),
       metro: {
         port: client2.metroPort,
         requestedPort: args.metroPort ?? null,
@@ -68725,6 +68818,7 @@ var init_status = __esm({
     init_action_state_store();
     init_engine_pin();
     init_agent_device_wrapper();
+    init_install_identity_inspection();
     init_public_status();
     init_session();
   }
