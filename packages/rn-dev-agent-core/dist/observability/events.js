@@ -72,6 +72,16 @@ export function classifyFamily(tool) {
         return 'testing';
     return 'other';
 }
+function redactDeviceFillText(args) {
+    if (!Object.hasOwn(args, 'text'))
+        return args;
+    const text = args.text;
+    return {
+        ...args,
+        text: `[REDACTED:${typeof text}]`,
+        ...(typeof text === 'string' ? { textLength: text.length } : {}),
+    };
+}
 export function clipThenRedact(args, payload) {
     let redactedArgs;
     try {
@@ -130,7 +140,8 @@ export function mapObservation(seq, o) {
     const ok = o.status === 'PASS';
     const unwrapped = unwrapResult(o.result);
     const payloadSource = ok ? (unwrapped ? unwrapped.data : o.result) : undefined;
-    const { args, payload, truncated } = clipThenRedact(o.params ?? {}, payloadSource);
+    const observationArgs = o.tool === 'device_fill' ? redactDeviceFillText(o.params ?? {}) : (o.params ?? {});
+    const { args, payload, truncated } = clipThenRedact(observationArgs, payloadSource);
     const summary = summarize(o.tool, family, args, ok);
     const event = {
         seq,

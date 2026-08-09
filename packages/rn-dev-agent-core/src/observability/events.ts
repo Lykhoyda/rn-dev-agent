@@ -86,6 +86,16 @@ export interface ClippedPayload {
   truncated?: boolean;
 }
 
+function redactDeviceFillText(args: Record<string, unknown>): Record<string, unknown> {
+  if (!Object.hasOwn(args, 'text')) return args;
+  const text = args.text;
+  return {
+    ...args,
+    text: `[REDACTED:${typeof text}]`,
+    ...(typeof text === 'string' ? { textLength: text.length } : {}),
+  };
+}
+
 export function clipThenRedact(
   args: Record<string, unknown> | undefined,
   payload: unknown,
@@ -165,7 +175,9 @@ export function mapObservation(seq: number, o: ToolObservation): AgentEvent {
   const ok = o.status === 'PASS';
   const unwrapped = unwrapResult(o.result);
   const payloadSource = ok ? (unwrapped ? unwrapped.data : o.result) : undefined;
-  const { args, payload, truncated } = clipThenRedact(o.params ?? {}, payloadSource);
+  const observationArgs =
+    o.tool === 'device_fill' ? redactDeviceFillText(o.params ?? {}) : (o.params ?? {});
+  const { args, payload, truncated } = clipThenRedact(observationArgs, payloadSource);
   const summary = summarize(o.tool, family, args, ok);
 
   const event: AgentEvent = {
