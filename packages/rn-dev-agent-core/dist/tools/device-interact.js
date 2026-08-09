@@ -539,6 +539,12 @@ function bindExactFillTarget(nodes, ref, assertedTestID, cachedIdentifier) {
 function textUnits(text) {
     return Array.from({ length: text.length }, (_, index) => text.charCodeAt(index));
 }
+const HELPER_MISSING_VERDICT = {
+    kind: 'failure',
+    code: 'TEXT_ENTRY_UNVERIFIED',
+    mutation: 'none',
+    reason: 'fiber-unavailable',
+};
 function parseControlledOwnerResult(value) {
     let parsed = value;
     if (typeof parsed === 'string')
@@ -659,7 +665,8 @@ export async function performExactFill(args, getClient) {
     const started = Date.now();
     const outcome = await runFillCoordinator(request, {
         controlledFill: async () => {
-            const expression = `__RN_AGENT.fillControlledInput(${JSON.stringify(binding.descriptor.testID)},${JSON.stringify(textUnits(args.text))})`;
+            const call = `__RN_AGENT.fillControlledInput(${JSON.stringify(binding.descriptor.testID)},${JSON.stringify(textUnits(args.text))})`;
+            const expression = `(typeof __RN_AGENT !== 'undefined' && typeof __RN_AGENT.fillControlledInput === 'function' ? ${call} : ${JSON.stringify(HELPER_MISSING_VERDICT)})`;
             const evaluated = await client.evaluate(expression, true);
             if (evaluated.error)
                 throw new Error(String(evaluated.error));

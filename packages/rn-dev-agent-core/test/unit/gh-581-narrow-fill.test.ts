@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import vm from 'node:vm';
 import { runFillCoordinator, type FillOwnerResult } from '../../dist/tools/fill-coordinator.js';
 import { createDeviceBatchHandler } from '../../dist/tools/device-batch.js';
 import {
@@ -7,7 +8,7 @@ import {
   _setRunAgentDeviceForTest,
 } from '../../dist/agent-device-wrapper.js';
 import { okResult } from '../../dist/utils.js';
-import { isExactTextInputType } from '../../dist/tools/device-interact.js';
+import { isExactTextInputType, performExactFill } from '../../dist/tools/device-interact.js';
 
 const request = { descriptor: { testID: 'field', nativeType: 'TextField' }, text: 'canary' };
 
@@ -222,6 +223,62 @@ test('batch executes the coordinator and stops before its sentinel after possibl
     assert.equal(envelope.meta?.results?.length, 1);
     assert.equal(
       nativeCalls.some((args) => args[0] === 'press'),
+      false,
+    );
+  } finally {
+    _setRunAgentDeviceForTest(null);
+    _setActiveSessionForTest(null);
+  }
+});
+
+test('stale injected helper build reports no mutation instead of an uncertain dispatch', async () => {
+  _setActiveSessionForTest({ platform: 'android', deviceId: 'emulator-test', appId: 'dev.test' });
+  const nativeCalls: string[][] = [];
+  _setRunAgentDeviceForTest(async (args) => {
+    nativeCalls.push(args);
+    if (args[0] === 'snapshot') {
+      return okResult({
+        nodes: [
+          {
+            ref: 'e1',
+            type: 'android.widget.EditText',
+            identifier: 'field',
+            enabled: true,
+            hittable: true,
+          },
+        ],
+      });
+    }
+    return okResult({ filled: true, verify: 'exact', focusedBefore: false });
+  });
+  const client = {
+    isConnected: true,
+    helpersInjected: true,
+    evaluate: async (expression: string) => {
+      try {
+        return { value: vm.runInNewContext(expression, { __RN_AGENT: {} }) };
+      } catch (error) {
+        return { error: String(error) };
+      }
+    },
+  };
+
+  try {
+    const result = await performExactFill(
+      { ref: '@e1', testID: 'field', text: 'canary' },
+      () => client as never,
+    );
+    const envelope = JSON.parse(result.content[0]!.text) as {
+      code?: string;
+      meta?: { mutation?: string; reason?: string; owner?: string };
+    };
+    assert.equal(result.isError, true);
+    assert.equal(envelope.code, 'TEXT_ENTRY_UNVERIFIED');
+    assert.equal(envelope.meta?.mutation, 'none');
+    assert.equal(envelope.meta?.reason, 'fiber-unavailable');
+    assert.equal(envelope.meta?.owner, 'fiber');
+    assert.equal(
+      nativeCalls.some((args) => args[0] === 'fill'),
       false,
     );
   } finally {

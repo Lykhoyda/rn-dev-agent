@@ -20,12 +20,30 @@ object TextInputRecipe {
         showingHint: Boolean?,
         hintKnown: Boolean,
     ): ExactReadback {
-        if (!hintKnown || showingHint == null || after == null) return ExactReadback.UNREADABLE
+        if (after == null) return ExactReadback.UNREADABLE
+        if (!hintKnown || showingHint == null) {
+            return classifyWithoutHintProvenance(requested, before, after)
+        }
         if (requested.isEmpty()) {
             if (showingHint || after.isEmpty()) return ExactReadback.EXACT
             return ExactReadback.MISMATCH
         }
         if (showingHint) return ExactReadback.MISMATCH
+        return if (after == requested) ExactReadback.EXACT else ExactReadback.MISMATCH
+    }
+
+    // API 23-25 exposes no hint provenance, so a non-empty read-back can be
+    // either the entered value or the hint. Only unambiguous states resolve.
+    private fun classifyWithoutHintProvenance(
+        requested: String,
+        before: String?,
+        after: String,
+    ): ExactReadback {
+        if (requested.isEmpty()) {
+            if (after.isEmpty()) return ExactReadback.EXACT
+            if (after == before) return ExactReadback.MISMATCH
+            return ExactReadback.UNREADABLE
+        }
         return if (after == requested) ExactReadback.EXACT else ExactReadback.MISMATCH
     }
 }

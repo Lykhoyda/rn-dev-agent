@@ -740,6 +740,13 @@ function textUnits(text: string): number[] {
   return Array.from({ length: text.length }, (_, index) => text.charCodeAt(index));
 }
 
+const HELPER_MISSING_VERDICT: FillOwnerResult = {
+  kind: 'failure',
+  code: 'TEXT_ENTRY_UNVERIFIED',
+  mutation: 'none',
+  reason: 'fiber-unavailable',
+};
+
 function parseControlledOwnerResult(value: unknown): FillOwnerResult {
   let parsed = value;
   if (typeof parsed === 'string') parsed = JSON.parse(parsed);
@@ -893,7 +900,8 @@ export async function performExactFill(
   const started = Date.now();
   const outcome = await runFillCoordinator(request, {
     controlledFill: async () => {
-      const expression = `__RN_AGENT.fillControlledInput(${JSON.stringify(binding.descriptor.testID)},${JSON.stringify(textUnits(args.text))})`;
+      const call = `__RN_AGENT.fillControlledInput(${JSON.stringify(binding.descriptor.testID)},${JSON.stringify(textUnits(args.text))})`;
+      const expression = `(typeof __RN_AGENT !== 'undefined' && typeof __RN_AGENT.fillControlledInput === 'function' ? ${call} : ${JSON.stringify(HELPER_MISSING_VERDICT)})`;
       const evaluated = await client.evaluate(expression, true);
       if (evaluated.error) throw new Error(String(evaluated.error));
       return parseControlledOwnerResult(evaluated.value);

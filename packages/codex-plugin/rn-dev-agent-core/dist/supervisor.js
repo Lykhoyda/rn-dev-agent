@@ -27463,7 +27463,7 @@ async function runFillCoordinator(request2, deps) {
   }
   try {
     const native = await deps.nativeFill(request2);
-    return native.kind === "success" ? { ...native, owner: "native" } : { ...native, owner: "native" };
+    return { ...native, owner: "native" };
   } catch {
     return {
       kind: "failure",
@@ -27929,7 +27929,8 @@ async function performExactFill(args, getClient2) {
   const started = Date.now();
   const outcome = await runFillCoordinator(request2, {
     controlledFill: async () => {
-      const expression = `__RN_AGENT.fillControlledInput(${JSON.stringify(binding.descriptor.testID)},${JSON.stringify(textUnits(args.text))})`;
+      const call = `__RN_AGENT.fillControlledInput(${JSON.stringify(binding.descriptor.testID)},${JSON.stringify(textUnits(args.text))})`;
+      const expression = `(typeof __RN_AGENT !== 'undefined' && typeof __RN_AGENT.fillControlledInput === 'function' ? ${call} : ${JSON.stringify(HELPER_MISSING_VERDICT)})`;
       const evaluated = await client2.evaluate(expression, true);
       if (evaluated.error)
         throw new Error(String(evaluated.error));
@@ -28307,7 +28308,7 @@ function decideScrollDirection(element, screen) {
     return "right";
   return null;
 }
-var TYPE_PRIORITY_FOR_TAP, DEFAULT_SCREEN, SWIPE_FRACTION, DEFAULT_SWIPE_DURATION_MS, NEXT_KEY_LABELS;
+var TYPE_PRIORITY_FOR_TAP, HELPER_MISSING_VERDICT, DEFAULT_SCREEN, SWIPE_FRACTION, DEFAULT_SWIPE_DURATION_MS, NEXT_KEY_LABELS;
 var init_device_interact = __esm({
   "packages/rn-dev-agent-core/dist/tools/device-interact.js"() {
     "use strict";
@@ -28331,6 +28332,12 @@ var init_device_interact = __esm({
       StaticText: 30,
       Image: 25,
       ScrollView: 10
+    };
+    HELPER_MISSING_VERDICT = {
+      kind: "failure",
+      code: "TEXT_ENTRY_UNVERIFIED",
+      mutation: "none",
+      reason: "fiber-unavailable"
     };
     DEFAULT_SCREEN = { width: 402, height: 874 };
     SWIPE_FRACTION = 0.4;

@@ -74,13 +74,69 @@ class TextInputRecipeTest {
     }
 
     @Test
-    fun unknownHintProvenanceIsUnreadableOnPreO() {
+    fun preOReadbackProvesExactNonEmptyEntry() {
         assertEquals(
-            TextInputRecipe.ExactReadback.UNREADABLE,
+            TextInputRecipe.ExactReadback.EXACT,
             TextInputRecipe.classifyExactReadback(
                 requested = "requested",
                 before = "",
                 after = "requested",
+                hint = null,
+                showingHint = null,
+                hintKnown = false,
+            ),
+        )
+    }
+
+    @Test
+    fun preOReadbackMismatchesWhenNonEmptyEntryDidNotLand() {
+        assertEquals(
+            TextInputRecipe.ExactReadback.MISMATCH,
+            TextInputRecipe.classifyExactReadback(
+                requested = "requested",
+                before = "old",
+                after = "old",
+                hint = null,
+                showingHint = null,
+                hintKnown = false,
+            ),
+        )
+    }
+
+    @Test
+    fun preOClearIsExactOnlyWhenReadbackIsEmpty() {
+        assertEquals(
+            TextInputRecipe.ExactReadback.EXACT,
+            TextInputRecipe.classifyExactReadback(
+                requested = "",
+                before = "old",
+                after = "",
+                hint = null,
+                showingHint = null,
+                hintKnown = false,
+            ),
+        )
+    }
+
+    @Test
+    fun preOClearRefusesUnchangedTextAndHintAmbiguity() {
+        assertEquals(
+            TextInputRecipe.ExactReadback.MISMATCH,
+            TextInputRecipe.classifyExactReadback(
+                requested = "",
+                before = "old",
+                after = "old",
+                hint = null,
+                showingHint = null,
+                hintKnown = false,
+            ),
+        )
+        assertEquals(
+            TextInputRecipe.ExactReadback.UNREADABLE,
+            TextInputRecipe.classifyExactReadback(
+                requested = "",
+                before = "old",
+                after = "Hint",
                 hint = null,
                 showingHint = null,
                 hintKnown = false,

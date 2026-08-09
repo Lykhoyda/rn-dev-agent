@@ -26,9 +26,7 @@ export async function runFillCoordinator(request, deps) {
     }
     try {
         const native = await deps.nativeFill(request);
-        return native.kind === 'success'
-            ? { ...native, owner: 'native' }
-            : { ...native, owner: 'native' };
+        return { ...native, owner: 'native' };
     }
     catch {
         return {
