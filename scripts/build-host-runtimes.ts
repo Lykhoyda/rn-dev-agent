@@ -84,6 +84,7 @@ const RUNTIME_ENTRIES = [
   'startup-integrity-loader.js',
   'startup-integrity-register.js',
   'rn-session.js',
+  'experience-trends.js',
   'worktree-inheritance.js',
   'workflow-check.js',
 ];
@@ -119,6 +120,7 @@ for (const file of RUNTIME_ENTRIES) {
   }
 }
 chmodSync(join(coreRoot, 'dist', 'supervisor.js'), 0o755);
+chmodSync(join(coreRoot, 'dist', 'experience-trends.js'), 0o755);
 
 if (!existsSync(observeWebDistSource)) {
   console.error(`build-host-runtimes: missing observe web bundle at ${observeWebDistSource}`);
