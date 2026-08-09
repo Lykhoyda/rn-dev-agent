@@ -44,9 +44,9 @@ const REDACTION_RULES = [
 // commonly use `token=...`, so retain the same secret vocabulary while also
 // handling the separator explicitly.
 const KEYED_SECRET = /((?:token|secret|password|auth|api[_-]?key)\s*[:=]\s*)[^\s,;}]{6,}/gi;
-// Records are sanitized on construction and again before they reach disk, so a
-// record read back from the store never needs a second full-tree pass.
-const SANITIZED_RECORDS = new WeakSet();
+// Bump whenever a redaction rule changes: stored records stamped with an older
+// version are re-sanitized under the current rules before the next rewrite.
+export const REDACTION_RULES_VERSION = 1;
 export function sanitizeString(value, redact = applyRedactionRules) {
     try {
         return redact(value);
@@ -89,21 +89,30 @@ function applyRedactionRules(value) {
     return result;
 }
 let appIdentityCache = null;
-// Mirrors the app.json stage of scripts/collect-feedback.sh. A malformed
+// Mirrors the app.json stage of scripts/collect-feedback.sh. An unreadable
 // manifest throws, so sanitizeString fails closed instead of shipping the name.
 function readAppIdentity() {
     const root = process.env.RN_PROJECT_ROOT ?? process.env.CLAUDE_USER_CWD ?? process.cwd();
-    if (appIdentityCache?.root === root)
-        return appIdentityCache.identity;
+    if (appIdentityCache?.root !== root) {
+        appIdentityCache = { root, identity: loadAppIdentity(root) };
+    }
+    if (appIdentityCache.identity === null) {
+        throw new Error('app identity could not be read for redaction');
+    }
+    return appIdentityCache.identity;
+}
+function loadAppIdentity(root) {
     const manifest = join(root, 'app.json');
-    let identity = { name: null, slug: null };
-    if (existsSync(manifest)) {
+    try {
+        if (!existsSync(manifest))
+            return { name: null, slug: null };
         const parsed = JSON.parse(readFileSync(manifest, 'utf8'));
         const expo = parsed.expo ?? parsed;
-        identity = { name: usableIdentity(expo?.name), slug: usableIdentity(expo?.slug) };
+        return { name: usableIdentity(expo?.name), slug: usableIdentity(expo?.slug) };
     }
-    appIdentityCache = { root, identity };
-    return identity;
+    catch {
+        return null;
+    }
 }
 function usableIdentity(value) {
     return typeof value === 'string' && value.trim().length > 2 ? value : null;
@@ -229,10 +238,9 @@ export class ExperienceRecorder {
             lastSeen: now,
             lastRecoveredAt: null,
             unknownReasons,
+            redactionVersion: REDACTION_RULES_VERSION,
         };
-        const sanitized = sanitizeForEvidence(raw);
-        SANITIZED_RECORDS.add(sanitized);
-        return sanitized;
+        return sanitizeForEvidence(raw);
     }
     persistFailure(incoming) {
         const records = readExperienceStore(this.path);
@@ -247,7 +255,6 @@ export class ExperienceRecorder {
             existing.symptom = incoming.symptom;
             existing.candidate = incoming.candidate;
             existing.environment = incoming.environment;
-            adoptLateFact(existing, incoming, 'platform');
             adoptLateFact(existing, incoming, 'device');
             adoptLateFact(existing, incoming, 'runtime');
             existing.evidencePointers = boundedPointers(existing.evidencePointers, incoming.evidencePointers);
@@ -276,7 +283,12 @@ export class ExperienceRecorder {
         mkdirSync(this.directory, { recursive: true, mode: 0o700 });
         const temp = join(this.directory, `.${EXPERIENCE_STORE_NAME}.${process.pid}.${randomUUID()}`);
         try {
-            const sanitized = records.map((record) => SANITIZED_RECORDS.has(record) ? record : sanitizeForEvidence(record));
+            const sanitized = records.map((record) => record.redactionVersion === REDACTION_RULES_VERSION
+                ? record
+                : {
+                    ...sanitizeForEvidence(record),
+                    redactionVersion: REDACTION_RULES_VERSION,
+                });
             const contents = sanitized.map((record) => JSON.stringify(record)).join('\n');
             writeFileSync(temp, contents.length > 0 ? `${contents}\n` : '', {
                 encoding: 'utf8',
@@ -336,7 +348,6 @@ export function readExperienceStore(path) {
         catch {
             continue;
         }
-        SANITIZED_RECORDS.add(parsed);
         records.push(parsed);
     }
     return records;

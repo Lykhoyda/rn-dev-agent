@@ -11,7 +11,6 @@ import { dirname, join } from "node:path";
 var EXPERIENCE_DIRECTORY = join(homedir(), ".claude", "rn-agent", "experience");
 var EXPERIENCE_STORE_NAME = "patterns.jsonl";
 var DAY_MS = 24 * 60 * 60 * 1e3;
-var SANITIZED_RECORDS = /* @__PURE__ */ new WeakSet();
 function readExperienceStore(path) {
   if (!existsSync(path))
     return [];
@@ -28,7 +27,6 @@ function readExperienceStore(path) {
     } catch {
       continue;
     }
-    SANITIZED_RECORDS.add(parsed);
     records.push(parsed);
   }
   return records;

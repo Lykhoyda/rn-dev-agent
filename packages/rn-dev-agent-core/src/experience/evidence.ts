@@ -60,9 +60,9 @@ const KEYED_SECRET = /((?:token|secret|password|auth|api[_-]?key)\s*[:=]\s*)[^\s
 
 export type RedactString = (value: string) => string;
 
-// Records are sanitized on construction and again before they reach disk, so a
-// record read back from the store never needs a second full-tree pass.
-const SANITIZED_RECORDS = new WeakSet<ExperienceRecord>();
+// Bump whenever a redaction rule changes: stored records stamped with an older
+// version are re-sanitized under the current rules before the next rewrite.
+export const REDACTION_RULES_VERSION = 1;
 
 export function sanitizeString(value: string, redact: RedactString = applyRedactionRules): string {
   try {
@@ -110,22 +110,31 @@ interface AppIdentity {
   slug: string | null;
 }
 
-let appIdentityCache: { root: string; identity: AppIdentity } | null = null;
+let appIdentityCache: { root: string; identity: AppIdentity | null } | null = null;
 
-// Mirrors the app.json stage of scripts/collect-feedback.sh. A malformed
+// Mirrors the app.json stage of scripts/collect-feedback.sh. An unreadable
 // manifest throws, so sanitizeString fails closed instead of shipping the name.
 function readAppIdentity(): AppIdentity {
   const root = process.env.RN_PROJECT_ROOT ?? process.env.CLAUDE_USER_CWD ?? process.cwd();
-  if (appIdentityCache?.root === root) return appIdentityCache.identity;
+  if (appIdentityCache?.root !== root) {
+    appIdentityCache = { root, identity: loadAppIdentity(root) };
+  }
+  if (appIdentityCache.identity === null) {
+    throw new Error('app identity could not be read for redaction');
+  }
+  return appIdentityCache.identity;
+}
+
+function loadAppIdentity(root: string): AppIdentity | null {
   const manifest = join(root, 'app.json');
-  let identity: AppIdentity = { name: null, slug: null };
-  if (existsSync(manifest)) {
+  try {
+    if (!existsSync(manifest)) return { name: null, slug: null };
     const parsed = JSON.parse(readFileSync(manifest, 'utf8')) as Record<string, unknown>;
     const expo = (parsed.expo as Record<string, unknown> | undefined) ?? parsed;
-    identity = { name: usableIdentity(expo?.name), slug: usableIdentity(expo?.slug) };
+    return { name: usableIdentity(expo?.name), slug: usableIdentity(expo?.slug) };
+  } catch {
+    return null;
   }
-  appIdentityCache = { root, identity };
-  return identity;
 }
 
 function usableIdentity(value: unknown): string | null {
@@ -166,6 +175,7 @@ export interface ExperienceRecord {
   lastSeen: string;
   lastRecoveredAt: string | null;
   unknownReasons: Record<string, string>;
+  redactionVersion: number;
 }
 
 export interface ExperienceStoreOptions {
@@ -304,10 +314,9 @@ export class ExperienceRecorder {
       lastSeen: now,
       lastRecoveredAt: null,
       unknownReasons,
+      redactionVersion: REDACTION_RULES_VERSION,
     };
-    const sanitized = sanitizeForEvidence(raw) as ExperienceRecord;
-    SANITIZED_RECORDS.add(sanitized);
-    return sanitized;
+    return sanitizeForEvidence(raw) as ExperienceRecord;
   }
 
   private persistFailure(incoming: ExperienceRecord): void {
@@ -323,7 +332,6 @@ export class ExperienceRecorder {
       existing.symptom = incoming.symptom;
       existing.candidate = incoming.candidate;
       existing.environment = incoming.environment;
-      adoptLateFact(existing, incoming, 'platform');
       adoptLateFact(existing, incoming, 'device');
       adoptLateFact(existing, incoming, 'runtime');
       existing.evidencePointers = boundedPointers(
@@ -356,7 +364,12 @@ export class ExperienceRecorder {
     const temp = join(this.directory, `.${EXPERIENCE_STORE_NAME}.${process.pid}.${randomUUID()}`);
     try {
       const sanitized = records.map((record) =>
-        SANITIZED_RECORDS.has(record) ? record : (sanitizeForEvidence(record) as ExperienceRecord),
+        record.redactionVersion === REDACTION_RULES_VERSION
+          ? record
+          : {
+              ...(sanitizeForEvidence(record) as ExperienceRecord),
+              redactionVersion: REDACTION_RULES_VERSION,
+            },
       );
       const contents = sanitized.map((record) => JSON.stringify(record)).join('\n');
       writeFileSync(temp, contents.length > 0 ? `${contents}\n` : '', {
@@ -410,7 +423,6 @@ export function readExperienceStore(path: string): ExperienceRecord[] {
     } catch {
       continue;
     }
-    SANITIZED_RECORDS.add(parsed);
     records.push(parsed);
   }
   return records;
@@ -570,7 +582,7 @@ function sanitizeNullable(value: string | null): string | null {
 function adoptLateFact(
   existing: ExperienceRecord,
   incoming: ExperienceRecord,
-  field: 'platform' | 'device' | 'runtime',
+  field: 'device' | 'runtime',
 ): void {
   if (existing[field] !== null || incoming[field] === null) return;
   existing[field] = incoming[field];

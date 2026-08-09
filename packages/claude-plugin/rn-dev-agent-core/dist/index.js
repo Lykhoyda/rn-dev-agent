@@ -79433,7 +79433,7 @@ var REDACTION_RULES = [
   [/(com|org|io|dev|net)\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_.-]+/g, "[BUNDLE_REDACTED]"]
 ];
 var KEYED_SECRET = /((?:token|secret|password|auth|api[_-]?key)\s*[:=]\s*)[^\s,;}]{6,}/gi;
-var SANITIZED_RECORDS = /* @__PURE__ */ new WeakSet();
+var REDACTION_RULES_VERSION = 1;
 function sanitizeString(value, redact2 = applyRedactionRules) {
   try {
     return redact2(value);
@@ -79474,17 +79474,25 @@ function applyRedactionRules(value) {
 var appIdentityCache = null;
 function readAppIdentity() {
   const root = process.env.RN_PROJECT_ROOT ?? process.env.CLAUDE_USER_CWD ?? process.cwd();
-  if (appIdentityCache?.root === root)
-    return appIdentityCache.identity;
+  if (appIdentityCache?.root !== root) {
+    appIdentityCache = { root, identity: loadAppIdentity(root) };
+  }
+  if (appIdentityCache.identity === null) {
+    throw new Error("app identity could not be read for redaction");
+  }
+  return appIdentityCache.identity;
+}
+function loadAppIdentity(root) {
   const manifest = join44(root, "app.json");
-  let identity2 = { name: null, slug: null };
-  if (existsSync35(manifest)) {
+  try {
+    if (!existsSync35(manifest))
+      return { name: null, slug: null };
     const parsed = JSON.parse(readFileSync33(manifest, "utf8"));
     const expo = parsed.expo ?? parsed;
-    identity2 = { name: usableIdentity(expo?.name), slug: usableIdentity(expo?.slug) };
+    return { name: usableIdentity(expo?.name), slug: usableIdentity(expo?.slug) };
+  } catch {
+    return null;
   }
-  appIdentityCache = { root, identity: identity2 };
-  return identity2;
 }
 function usableIdentity(value) {
   return typeof value === "string" && value.trim().length > 2 ? value : null;
@@ -79602,11 +79610,10 @@ var ExperienceRecorder = class {
       firstSeen: now,
       lastSeen: now,
       lastRecoveredAt: null,
-      unknownReasons
+      unknownReasons,
+      redactionVersion: REDACTION_RULES_VERSION
     };
-    const sanitized = sanitizeForEvidence(raw);
-    SANITIZED_RECORDS.add(sanitized);
-    return sanitized;
+    return sanitizeForEvidence(raw);
   }
   persistFailure(incoming) {
     const records = readExperienceStore(this.path);
@@ -79621,7 +79628,6 @@ var ExperienceRecorder = class {
       existing.symptom = incoming.symptom;
       existing.candidate = incoming.candidate;
       existing.environment = incoming.environment;
-      adoptLateFact(existing, incoming, "platform");
       adoptLateFact(existing, incoming, "device");
       adoptLateFact(existing, incoming, "runtime");
       existing.evidencePointers = boundedPointers(existing.evidencePointers, incoming.evidencePointers);
@@ -79649,7 +79655,10 @@ var ExperienceRecorder = class {
     mkdirSync20(this.directory, { recursive: true, mode: 448 });
     const temp = join44(this.directory, `.${EXPERIENCE_STORE_NAME}.${process.pid}.${randomUUID8()}`);
     try {
-      const sanitized = records.map((record2) => SANITIZED_RECORDS.has(record2) ? record2 : sanitizeForEvidence(record2));
+      const sanitized = records.map((record2) => record2.redactionVersion === REDACTION_RULES_VERSION ? record2 : {
+        ...sanitizeForEvidence(record2),
+        redactionVersion: REDACTION_RULES_VERSION
+      });
       const contents = sanitized.map((record2) => JSON.stringify(record2)).join("\n");
       writeFileSync19(temp, contents.length > 0 ? `${contents}
 ` : "", {
@@ -79704,7 +79713,6 @@ function readExperienceStore(path) {
     } catch {
       continue;
     }
-    SANITIZED_RECORDS.add(parsed);
     records.push(parsed);
   }
   return records;

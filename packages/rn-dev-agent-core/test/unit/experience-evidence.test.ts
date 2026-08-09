@@ -10,6 +10,7 @@ import {
   EXPERIENCE_FAMILY_IDS,
   EXPERIENCE_STORE_NAME,
   MAX_SYMPTOM_LENGTH,
+  REDACTION_RULES_VERSION,
   classifyExperience,
   experienceSignature,
   normalizeSymptomShape,
@@ -72,6 +73,7 @@ function recordFixture(overrides: Partial<ExperienceRecord>): ExperienceRecord {
     lastSeen: '2026-06-01T00:00:00.000Z',
     lastRecoveredAt: null,
     unknownReasons: {},
+    redactionVersion: REDACTION_RULES_VERSION,
     ...overrides,
   };
 }
@@ -186,6 +188,39 @@ test('a corrupt store line is dropped instead of disabling recording forever', (
   const records = recorder.read();
   assert.equal(records.length, 2);
   assert.doesNotMatch(readFileSync(path, 'utf8'), /truncated/);
+});
+
+test('a record stored under older redaction rules is re-sanitized before rewrite', (t) => {
+  const projectRoot = tempDirectory();
+  writeFileSync(
+    join(projectRoot, 'app.json'),
+    JSON.stringify({ expo: { name: 'AcmeBanking', slug: 'acme-banking-private' } }),
+  );
+  const previousRoot = process.env.RN_PROJECT_ROOT;
+  process.env.RN_PROJECT_ROOT = projectRoot;
+  t.after(() => {
+    if (previousRoot === undefined) delete process.env.RN_PROJECT_ROOT;
+    else process.env.RN_PROJECT_ROOT = previousRoot;
+  });
+
+  const directory = tempDirectory();
+  const path = join(directory, EXPERIENCE_STORE_NAME);
+  const legacy = recordFixture({
+    signature: 'legacy',
+    symptom: 'Failed to launch AcmeBanking for owner@example.com',
+    lastSeen: '2026-06-09T00:00:00.000Z',
+    redactionVersion: REDACTION_RULES_VERSION - 1,
+  });
+  writeFileSync(path, `${JSON.stringify(legacy)}\n`);
+
+  const recorder = synchronousRecorder(directory);
+  recorder.observe(fail('device_find', 'unrecognized failure', { platform: 'android' }));
+
+  const stored = recorder.read().find((record) => record.signature === 'legacy');
+  assert.ok(stored);
+  assert.doesNotMatch(readFileSync(path, 'utf8'), /AcmeBanking|owner@example\.com/);
+  assert.match(stored.symptom, /\[APP_NAME_REDACTED\]/);
+  assert.equal(stored.redactionVersion, REDACTION_RULES_VERSION);
 });
 
 test('a later event fills a previously unknown device without losing the record', () => {
