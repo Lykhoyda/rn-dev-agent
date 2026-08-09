@@ -322,12 +322,12 @@ simctl/adb for interactive testing. There is no external `agent-device` CLI invo
 | Tap by element ref | `device_press ref=@e3` | After getting refs from snapshot |
 | Tap an iOS software-keyboard key | Fresh snapshot `Key`/`Keyboard` ref, then `device_press` | Runner proves the same live keyboard target and performs one gesture |
 | Fill a text input | `device_fill ref=@e5 text="hello"` | One exact owner mutates once and requires stable exact read-back |
-
-`device_fill` hard-fails ambiguous, transformed, unreadable, lost, or uncertain fills. It never automatically retypes or falls back to ambient typing, adb input, or Maestro. If failure metadata says `mutation: observed|possible`, inspect current state before deciding on any new fill.
 | Scroll/swipe | `device_swipe direction=up` | Native gesture |
 | Navigate back | `device_back` | System back (Android) or gesture (iOS) |
 | Persistent E2E test file | maestro-runner (YAML) | CI-ready test artifacts |
 | Deep React state inspection | `cdp_store_state` | Redux/Zustand internals |
+
+`device_fill` hard-fails ambiguous, transformed, unreadable, lost, or uncertain fills. It never automatically retypes or falls back to ambient typing, adb input, or Maestro. If failure metadata says `mutation: observed|possible`, inspect current state before deciding on any new fill.
 
 ### Session Lifecycle
 
