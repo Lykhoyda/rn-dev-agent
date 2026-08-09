@@ -70329,6 +70329,13 @@ function redactFillText(tool, args) {
   }
   return args;
 }
+function redactFillResultText(tool, payload) {
+  if (tool !== "device_fill")
+    return payload;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload))
+    return payload;
+  return redactTypedValue(payload, "text");
+}
 function clipThenRedact(args, payload) {
   let redactedArgs;
   try {
@@ -70382,7 +70389,7 @@ function mapObservation(seq, o) {
   const unwrapped = unwrapResult(o.result);
   const payloadSource = ok ? unwrapped ? unwrapped.data : o.result : void 0;
   const observationArgs = redactFillText(o.tool, o.params ?? {});
-  const { args, payload, truncated } = clipThenRedact(observationArgs, payloadSource);
+  const { args, payload, truncated } = clipThenRedact(observationArgs, redactFillResultText(o.tool, payloadSource));
   const summary = summarize(o.tool, family, args, ok);
   const event = {
     seq,

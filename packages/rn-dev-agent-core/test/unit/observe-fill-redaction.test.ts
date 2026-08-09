@@ -48,6 +48,43 @@ test('stored Observe timeline redacts device_fill text while retaining diagnosti
   assert.equal(fill.durationMs, 42);
 });
 
+test('stored Observe timeline redacts fill text echoed back in the device_fill result payload', () => {
+  const recorder = new Recorder();
+  recorder.record({
+    tool: 'device_fill',
+    params: { testID: 'wizard-title-input', text: FILL_CANARY, exact: true },
+    status: 'PASS',
+    latencyMs: 9,
+    result: {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            ok: true,
+            data: { typed: true, text: FILL_CANARY, recovered: true, verification: 'exact-readback' },
+          }),
+        },
+      ],
+    },
+  });
+
+  const timeline = recorder.snapshot();
+  assert.doesNotMatch(
+    JSON.stringify(timeline),
+    new RegExp(FILL_CANARY),
+    'fill text must never be stored, not even echoed back through the result payload',
+  );
+
+  const payload = timeline[0]?.payload as Record<string, unknown>;
+  assert.equal(payload.text, '[REDACTED:string]');
+  assert.equal(payload.textLength, FILL_CANARY.length);
+  assert.equal(payload.typed, true);
+  assert.equal(payload.recovered, true);
+  assert.equal(payload.verification, 'exact-readback');
+  assert.equal(timeline[0]?.args.text, '[REDACTED:string]');
+  assert.equal(timeline[0]?.ok, true);
+});
+
 test('stored Observe timeline redacts fill text routed through device_batch and cdp_interact', () => {
   const recorder = new Recorder();
   recorder.record({

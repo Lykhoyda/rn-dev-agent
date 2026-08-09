@@ -121,6 +121,12 @@ function redactFillText(tool: string, args: Record<string, unknown>): Record<str
   return args;
 }
 
+function redactFillResultText(tool: string, payload: unknown): unknown {
+  if (tool !== 'device_fill') return payload;
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return payload;
+  return redactTypedValue(payload as Record<string, unknown>, 'text');
+}
+
 export function clipThenRedact(
   args: Record<string, unknown> | undefined,
   payload: unknown,
@@ -201,7 +207,10 @@ export function mapObservation(seq: number, o: ToolObservation): AgentEvent {
   const unwrapped = unwrapResult(o.result);
   const payloadSource = ok ? (unwrapped ? unwrapped.data : o.result) : undefined;
   const observationArgs = redactFillText(o.tool, o.params ?? {});
-  const { args, payload, truncated } = clipThenRedact(observationArgs, payloadSource);
+  const { args, payload, truncated } = clipThenRedact(
+    observationArgs,
+    redactFillResultText(o.tool, payloadSource),
+  );
   const summary = summarize(o.tool, family, args, ok);
 
   const event: AgentEvent = {
