@@ -108,6 +108,10 @@ const WORKER_READY_TIMEOUT_MS = 30_000;
 // NOTE: bound writes fsync, so a loaded host can stall one round trip for
 // seconds — this budget must only catch a wedged worker, not a slow one.
 const WORKER_OPERATION_TIMEOUT_MS = 30_000;
+// NOTE: same rule for the ancestry monitor thread — it is a liveness fence for a
+// wedged monitor, so it must outlast scheduler starvation on an oversubscribed
+// host while still resolving inside the operation budget above.
+const ANCESTRY_MONITOR_TIMEOUT_MS = 20_000;
 
 const BOUND_DIRECTORY_LIFECYCLE_MONITOR = String.raw`
 const fs = require('node:fs');
@@ -301,7 +305,7 @@ if (monitoredAncestors.length > 0) {
   });
   ancestryMonitor.unref();
   if (
-    Atomics.wait(ancestryState, 0, 0, 5_000) === 'timed-out' ||
+    Atomics.wait(ancestryState, 0, 0, ${ANCESTRY_MONITOR_TIMEOUT_MS}) === 'timed-out' ||
     Atomics.load(ancestryState, 0) !== 1
   ) {
     process.exit(1);
@@ -317,7 +321,7 @@ function synchronizeAncestryMonitor(captureBaseline = false) {
   Atomics.store(ancestryState, 5, captureBaseline ? 1 : 0);
   const requested = Atomics.add(ancestryState, 3, 1) + 1;
   Atomics.notify(ancestryState, 3);
-  const deadline = Date.now() + 5_000;
+  const deadline = Date.now() + ${ANCESTRY_MONITOR_TIMEOUT_MS};
   while (Atomics.load(ancestryState, 4) !== requested) {
     const remaining = deadline - Date.now();
     if (

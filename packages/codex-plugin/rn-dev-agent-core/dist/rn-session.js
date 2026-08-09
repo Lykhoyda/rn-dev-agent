@@ -14757,6 +14757,7 @@ import { join as join7 } from "node:path";
 var WAIT_BUFFER = new Int32Array(new SharedArrayBuffer(4));
 var WORKER_READY_TIMEOUT_MS = 3e4;
 var WORKER_OPERATION_TIMEOUT_MS = 3e4;
+var ANCESTRY_MONITOR_TIMEOUT_MS = 2e4;
 var BOUND_DIRECTORY_LIFECYCLE_MONITOR = String.raw`
 const fs = require('node:fs');
 const path = require('node:path');
@@ -14946,7 +14947,7 @@ if (monitoredAncestors.length > 0) {
   });
   ancestryMonitor.unref();
   if (
-    Atomics.wait(ancestryState, 0, 0, 5_000) === 'timed-out' ||
+    Atomics.wait(ancestryState, 0, 0, ${ANCESTRY_MONITOR_TIMEOUT_MS}) === 'timed-out' ||
     Atomics.load(ancestryState, 0) !== 1
   ) {
     process.exit(1);
@@ -14962,7 +14963,7 @@ function synchronizeAncestryMonitor(captureBaseline = false) {
   Atomics.store(ancestryState, 5, captureBaseline ? 1 : 0);
   const requested = Atomics.add(ancestryState, 3, 1) + 1;
   Atomics.notify(ancestryState, 3);
-  const deadline = Date.now() + 5_000;
+  const deadline = Date.now() + ${ANCESTRY_MONITOR_TIMEOUT_MS};
   while (Atomics.load(ancestryState, 4) !== requested) {
     const remaining = deadline - Date.now();
     if (
