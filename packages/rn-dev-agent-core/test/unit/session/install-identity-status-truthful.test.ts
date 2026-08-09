@@ -221,3 +221,20 @@ test('an unattestable capture is not repeated on every status poll', () => {
   }
   assert.equal(attempts, 1);
 });
+
+test('a pending re-issue stops claiming ready while a proof run is bound', () => {
+  const status = authorityStatus();
+  status.bindings.proof = { runId: 'proof-a' };
+  const projected = projectPublicAuthorityStatus(status, {
+    installIdentity: { verdict: 'reissue-pending' },
+  });
+
+  assert.equal(projected.state, 'install_identity_reissue_blocked');
+  assert.equal(projected.installIdentity, 'reissue-pending');
+  assert.match(String(projected.nextAction), /discard/);
+
+  const verified = projectPublicAuthorityStatus(status, {
+    installIdentity: { verdict: 'verified' },
+  });
+  assert.equal(verified.state, 'ready');
+});
