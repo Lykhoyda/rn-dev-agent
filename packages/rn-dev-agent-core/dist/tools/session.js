@@ -8,6 +8,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { inspectSessionOwner } from '../session/process-owner.js';
+import { inspectInstallIdentity } from '../session/install-identity-inspection.js';
 import { projectPublicAuthorityStatus } from '../session/public-status.js';
 import { probeProcessBirth } from '../session/process-birth.js';
 import { inspectManagedMetroCleanupEvidence, inspectManagedMetroLifecycle, probeManagedMetroListener, stopManagedMetro, stopManagedMetroWithEvidence, } from '../session/managed-metro.js';
@@ -213,12 +214,16 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 // handle that adopt_stale would then refuse as expired.
                 runtime.refreshRecoveryHandles();
                 const projectedAuthority = reconcileManagedMetroStatus(runtime, dependencies);
+                const installIdentity = projectedAuthority.available
+                    ? (dependencies.inspectInstallIdentity ?? inspectInstallIdentity)(projectedAuthority.bindings.install)
+                    : null;
                 return okResult({
                     authoritative: false,
                     authority: projectPublicAuthorityStatus(projectedAuthority, {
                         includeSessionId: true,
                         now: dependencies.now,
                         recoveryRequirement: runtime.inspectRecoveryRequirement(),
+                        installIdentity,
                     }),
                 });
             }

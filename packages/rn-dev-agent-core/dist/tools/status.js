@@ -15,6 +15,7 @@ import { bridgeEnvState } from '../lifecycle/supervisor-core.js';
 import { storeMode } from '../domain/action-state-store.js';
 import { getEngineStatus } from '../domain/engine-pin.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
+import { inspectInstallIdentity } from '../session/install-identity-inspection.js';
 import { projectPublicAuthorityStatus } from '../session/public-status.js';
 import { reconcileManagedMetroStatus } from './session.js';
 export function sessionConnectFilters(session) {
@@ -49,9 +50,12 @@ export function createPassiveStatusHandler(getClient, authorityRuntime, statusDe
         const client = getClient();
         const target = client.connectedTarget;
         const authority = reconcileManagedMetroStatus(authorityRuntime, statusDependencies);
+        const installIdentity = authority.available
+            ? (statusDependencies.inspectInstallIdentity ?? inspectInstallIdentity)(authority.bindings.install)
+            : null;
         return okResult({
             authoritative: false,
-            authority: projectPublicAuthorityStatus(authority),
+            authority: projectPublicAuthorityStatus(authority, { installIdentity }),
             metro: {
                 port: client.metroPort,
                 requestedPort: args.metroPort ?? null,

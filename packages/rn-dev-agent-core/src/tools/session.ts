@@ -28,6 +28,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { inspectSessionOwner } from '../session/process-owner.js';
+import { inspectInstallIdentity } from '../session/install-identity-inspection.js';
 import { projectPublicAuthorityStatus } from '../session/public-status.js';
 import { probeProcessBirth, type ProcessBirthProbe } from '../session/process-birth.js';
 import {
@@ -113,6 +114,7 @@ export type SessionToolInput = StaleDeviceReleaseInput | OtherSessionToolInput;
 export interface ManagedMetroStatusDependencies {
   getSignerCapability?: (sessionId?: string) => string | null;
   inspectManagedMetroLifecycle?: typeof inspectManagedMetroLifecycle;
+  inspectInstallIdentity?: typeof inspectInstallIdentity;
   now?: () => number;
   onBundleInvalidated?: () => void;
 }
@@ -447,12 +449,18 @@ export function createSessionHandler(
         // handle that adopt_stale would then refuse as expired.
         runtime.refreshRecoveryHandles();
         const projectedAuthority = reconcileManagedMetroStatus(runtime, dependencies);
+        const installIdentity = projectedAuthority.available
+          ? (dependencies.inspectInstallIdentity ?? inspectInstallIdentity)(
+              projectedAuthority.bindings.install as Record<string, unknown> | null | undefined,
+            )
+          : null;
         return okResult({
           authoritative: false,
           authority: projectPublicAuthorityStatus(projectedAuthority, {
             includeSessionId: true,
             now: dependencies.now,
             recoveryRequirement: runtime.inspectRecoveryRequirement(),
+            installIdentity,
           }),
         });
       } catch (error) {

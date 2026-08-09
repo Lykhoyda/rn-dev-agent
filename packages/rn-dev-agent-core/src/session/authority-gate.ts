@@ -7,7 +7,12 @@ import type { OperationRef, SessionRef, SessionRegistry, SessionStatus } from '.
 import { authorityErrorMeta, SessionAuthorityError, shortAuthorityIdentity } from './registry.js';
 import { reissueInstallBinding } from './install-reissue.js';
 import type { WorkerAuthorityStatus } from './runtime.js';
-import { authorityProfileFor, type AuthorityAxis, type AuthorityProfile } from './tool-profiles.js';
+import {
+  authorityProfileFor,
+  requiresExactInstalledArtifact,
+  type AuthorityAxis,
+  type AuthorityProfile,
+} from './tool-profiles.js';
 
 export interface AuthorityObservation {
   axis: AuthorityAxis;
@@ -372,6 +377,88 @@ function containedRunnerAuthority(
     };
   } catch {
     return null;
+  }
+}
+
+// A byte-identical reinstall (runner-respawn recovery, clearState replay, an
+// identical dev rebuild) rotates installGeneration but not artifactDigest, and
+// used to hard-stop every gated tool while status still said ready. A preflight
+// axis-I refusal retries once behind the GH #705 digest proof; a foreign or
+// unattestable artifact still throws APP_INSTALL_IDENTITY_CHANGED unchanged.
+function reissueInstallAfterPreflightRefusal(
+  registry: SessionRegistry,
+  runtime: AuthorityGateRuntime,
+  operation: OperationRef,
+  status: SessionStatus,
+  dependencies: AuthorityGateDependencies,
+  error: unknown,
+  axes: readonly AuthorityAxis[],
+  tool: string,
+  args: Record<string, unknown>,
+): { operation: OperationRef; status: SessionStatus } | null {
+  if (
+    !axes.includes('I') ||
+    Boolean(status.bindings.proof) ||
+    requiresExactInstalledArtifact(tool, args) ||
+    authorityErrorCode(error) !== 'APP_INSTALL_IDENTITY_CHANGED'
+  ) {
+    return null;
+  }
+  const install = (dependencies.reissueInstallBinding ?? reissueInstallBinding)(
+    status.bindings.install as Record<string, unknown> | undefined,
+  );
+  if (!install) return null;
+  registry.verifyOperation(operation);
+  const reissuedOperation = registry.replaceBindingsDuringOperation(operation, {
+    bindings: { install },
+  });
+  const reissuedStatus = runtime.status();
+  if (!reissuedStatus.available) {
+    throw new SessionAuthorityError(reissuedStatus.code, reissuedStatus.reason);
+  }
+  return { operation: reissuedOperation, status: reissuedStatus };
+}
+
+async function preflightWithInstallReissue(
+  registry: SessionRegistry,
+  runtime: AuthorityGateRuntime,
+  dependencies: AuthorityGateDependencies,
+  context: {
+    tool: string;
+    profile: AuthorityProfile;
+    args: Record<string, unknown>;
+    axes: readonly AuthorityAxis[];
+  },
+  operation: OperationRef,
+  status: SessionStatus,
+): Promise<{ before: AuthorityObservation[]; operation: OperationRef; status: SessionStatus }> {
+  const { tool, profile, args, axes } = context;
+  const probeAll = (probed: SessionStatus): Promise<AuthorityObservation[]> =>
+    Promise.all(
+      axes.map((axis) =>
+        dependencies.probe({ axis, phase: 'preflight', tool, profile, status: probed, args }),
+      ),
+    );
+  try {
+    return { before: await probeAll(status), operation, status };
+  } catch (preflightError) {
+    const reissued = reissueInstallAfterPreflightRefusal(
+      registry,
+      runtime,
+      operation,
+      status,
+      dependencies,
+      preflightError,
+      axes,
+      tool,
+      args,
+    );
+    if (!reissued) throw preflightError;
+    return {
+      before: await probeAll(reissued.status),
+      operation: reissued.operation,
+      status: reissued.status,
+    };
   }
 }
 
@@ -930,7 +1017,7 @@ export function createAuthorityGate(
             }
             let status: SessionStatus = initialStatus;
             let runtimeTargetChanged = false;
-            const initialAuthorityVersion = status.authorityVersion;
+            let initialAuthorityVersion = status.authorityVersion;
             const gateCommitsProof = tool === 'proof_capture' && args.action === 'begin_rehearsal';
             const retainsRunnerCleanupAuthority =
               tool === 'device_snapshot' &&
@@ -976,11 +1063,18 @@ export function createAuthorityGate(
             if (retainsRunnerCleanupAuthority) {
               requireRetainedRunnerOwnership(registry, status);
             }
-            const before = await Promise.all(
-              transitionAxes.before.map((axis) =>
-                dependencies.probe({ axis, phase: 'preflight', tool, profile, status, args }),
-              ),
+            const preflight = await preflightWithInstallReissue(
+              registry,
+              runtime,
+              dependencies,
+              { tool, profile, args, axes: transitionAxes.before },
+              operation,
+              status,
             );
+            const before = preflight.before;
+            operation = preflight.operation;
+            status = preflight.status;
+            initialAuthorityVersion = status.authorityVersion;
             registry.verifyOperation(operation);
             const result = await registry.runWithOperation(operation, () =>
               handler(...handlerArgs),
@@ -1200,12 +1294,18 @@ export function createAuthorityGate(
           );
           operation = preflightRecovery.operation;
           status = preflightRecovery.status;
-          const initialOperationAuthorityVersion = operation.authorityVersion;
-          const before = await Promise.all(
-            profile.axes.map((axis) =>
-              dependencies.probe({ axis, phase: 'preflight', tool, profile, status, args }),
-            ),
+          const preflight = await preflightWithInstallReissue(
+            registry,
+            runtime,
+            dependencies,
+            { tool, profile, args, axes: profile.axes },
+            operation,
+            status,
           );
+          const before = preflight.before;
+          operation = preflight.operation;
+          status = preflight.status;
+          const initialOperationAuthorityVersion = operation.authorityVersion;
           const optionalBefore: AuthorityObservation[] = [];
           const managedOriginObservations: AuthorityObservation[] = [];
           const managedBundleObservations: AuthorityObservation[] = [];

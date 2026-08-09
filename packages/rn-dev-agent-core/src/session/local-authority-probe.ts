@@ -21,7 +21,7 @@ import {
   proveTargetDeviceAssociations,
   type TargetDeviceAssociations,
 } from './target-device-authority.js';
-import type { AuthorityAxis } from './tool-profiles.js';
+import { requiresExactInstalledArtifact, type AuthorityAxis } from './tool-profiles.js';
 import { deviceExistsOnHost } from './device-existence.js';
 
 interface LocalAuthorityProbeDependencies {
@@ -187,9 +187,7 @@ export function createLocalAuthorityProbe(
         artifactDigest: string;
         installGeneration: string;
       };
-      const exactArtifactBoundary =
-        tool === 'proof_capture' &&
-        (args?.action === 'begin_rehearsal' || args?.action === 'finalize');
+      const exactArtifactBoundary = requiresExactInstalledArtifact(tool ?? '', args ?? {});
       try {
         if (exactArtifactBoundary) {
           verifyInstalledArtifact(expected, captureInstalled(expected));

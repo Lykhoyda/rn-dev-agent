@@ -210,6 +210,11 @@ add(proof, {
     mutation: true,
     liveBundleProbe: true,
 });
+// Proof boundaries attest the exact installed bytes and the exact install
+// generation: a reinstall between proof steps is a hard stop, never healed.
+export function requiresExactInstalledArtifact(tool, args = {}) {
+    return (tool === 'proof_capture' && (args.action === 'begin_rehearsal' || args.action === 'finalize'));
+}
 export function authorityProfileFor(tool, args = {}) {
     if (tool === 'device_find' && args.action === 'click') {
         return profiles.get('device_press');
