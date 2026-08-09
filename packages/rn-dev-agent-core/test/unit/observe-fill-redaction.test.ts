@@ -61,7 +61,12 @@ test('stored Observe timeline redacts fill text echoed back in the device_fill r
           type: 'text',
           text: JSON.stringify({
             ok: true,
-            data: { typed: true, text: FILL_CANARY, recovered: true, verification: 'exact-readback' },
+            data: {
+              typed: true,
+              text: FILL_CANARY,
+              recovered: true,
+              verification: 'exact-readback',
+            },
           }),
         },
       ],
