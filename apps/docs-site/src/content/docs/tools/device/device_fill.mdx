@@ -1,11 +1,11 @@
 ---
 title: "device_fill"
-description: "Type text into an input field by its @ref from device_snapshot"
+description: "Fill one exact TextInput and report success only after stable exact read-back by the mutation owner"
 sidebar:
   order: 24
 ---
 
-Type text into an input field by its @ref from device_snapshot. Always re-taps the element first so keyboard focus is on the correct field even in sequential fills. On "no focused text input" errors, automatically falls back: Pressable→TextInput resolution (common RN design-system pattern where outer Pressable wraps inner TextInput) → coordinate re-tap + retry → Android adb input / iOS Maestro inputText. Check meta.fallbackUsed in the result to see which strategy succeeded. Requires an open session.
+Fill one exact TextInput and report success only after stable exact read-back by the mutation owner. A unique controlled React TextInput uses one onChangeText dispatch and fiber read-back; an uncontrolled input uses one native runner transaction. Focus is skipped only when that exact owner is positively focused. Ambiguity, transformation, unreadability, staleness, target loss, secure or occluded targets, and timeout uncertainty hard-fail without automatic retyping, adb input, or Maestro fallback. Public results and diagnostics expose status and length metadata, never the requested or observed text. Requires an open session and connected helpers.
 
 ## Parameters
 

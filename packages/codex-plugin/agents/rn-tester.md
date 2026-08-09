@@ -371,8 +371,8 @@ For EACH step in the flow:
    ```
 
    **Android text input**: For long strings or strings with special characters
-   (`+`, `@`, `#`), use `device_fill` which auto-chunks input on Android to
-   prevent ANR crashes (GH #7).
+   (`+`, `@`, `#`), use `device_fill`. It performs one exact accessibility
+   mutation and requires stable exact read-back; never use raw adb text input.
 
 2. **Wait for settle**: mutating `device_*` verbs already wait for the UI to
    stabilize (settle engine, see `meta.settle`) — never add manual `sleep`s.

@@ -1744,7 +1744,7 @@ trackedTool('device_press', 'Tap a UI element by its @ref from device_snapshot, 
         .optional()
         .describe('Story 05: when an ordinary tap produces no UI change, one automatic re-tap fires by default. Validated iOS Key/Keyboard targets and transport/keyboard recovery are never replayed. Set false to disable for other taps (e.g. intentional no-op taps). RN_SELF_HEAL=0 disables globally.'),
 }, createDevicePressHandler(getClient));
-trackedTool('device_fill', 'Type text into an input field by its @ref from device_snapshot. Always re-taps the element first so keyboard focus is on the correct field even in sequential fills. On "no focused text input" errors, automatically falls back: Pressable→TextInput resolution (common RN design-system pattern where outer Pressable wraps inner TextInput) → coordinate re-tap + retry → Android adb input / iOS Maestro inputText. Check meta.fallbackUsed in the result to see which strategy succeeded. Requires an open session.', {
+trackedTool('device_fill', 'Fill one exact TextInput and report success only after stable exact read-back by the mutation owner. A unique controlled React TextInput uses one onChangeText dispatch and fiber read-back; an uncontrolled input uses one native runner transaction. Focus is skipped only when that exact owner is positively focused. Ambiguity, transformation, unreadability, staleness, target loss, secure or occluded targets, and timeout uncertainty hard-fail without automatic retyping, adb input, or Maestro fallback. Public results and diagnostics expose status and length metadata, never the requested or observed text. Requires an open session and connected helpers.', {
     ref: z.string().describe('Input field ref from device_snapshot (e.g. "e5" or "@e5")'),
     text: z.string().describe('Text to type into the field'),
     waitForKeyboardMs: z
@@ -1753,18 +1753,18 @@ trackedTool('device_fill', 'Type text into an input field by its @ref from devic
         .min(0)
         .max(5000)
         .optional()
-        .describe('Wait between pre-tap and fill probe in ms (default 150). Bump to 500-1000ms when filling Pressable-wrapped TextInputs on slow keyboard animations to give RN native focus dispatch time to land.'),
+        .describe('Deprecated compatibility option. Exact fill now owns and proves focus inside its selected mutation path.'),
     testID: z
         .string()
         .optional()
-        .describe("Explicit testID for the JS-first fill path; resolved from the ref's cached snapshot identifier when omitted. Pass this when the ref is not a snapshot token."),
+        .describe("Explicit exact target identity. Otherwise device_fill uses the fresh snapshot ref's nonblank testID."),
     settleTimeoutMs: z
         .number()
         .int()
         .min(500)
         .max(30000)
         .optional()
-        .describe('Override the post-action settle budget in ms (default 6000). Settle waits for the UI to stabilize after the action; see meta.settle in the result. Budget knob only — RN_SETTLE=0 disables settle.'),
+        .describe('Deprecated compatibility option. Exact owner-local read-back supplies the bounded stability check.'),
 }, createDeviceFillHandler(getClient));
 trackedTool('device_swipe', 'Swipe on the device screen. Use direction for simple scrolling, or x1/y1/x2/y2 for precise coordinate-based swipes (drag-to-reorder, bottom sheets). Pass exact: true for a precise unclamped gesture duration via the in-tree runner — needed for momentum-sensitive UIs like UIDatePicker wheels where a normalized/clamped duration causes overshoot. Requires an open session.', {
     direction: z
@@ -2254,7 +2254,7 @@ trackedTool('device_pick_date', 'Select a visible date in a UIDatePicker (wheels
         .describe('Whole Maestro flow timeout (default 120000ms; never divided by component count).'),
 }, createDevicePickDateHandler());
 trackedTool('device_focus_next', "Move keyboard focus to the next input field by tapping the soft keyboard's Next/Return/Done/Go button. Use in multi-field form flows where sequential device_press + device_fill calls leave focus stuck on the first field. Requires an open session and a visible keyboard.", {}, createDeviceFocusNextHandler());
-trackedTool('device_batch', 'Execute a sequence of UI interactions in ONE tool call. Eliminates LLM round-trip overhead. Steps: find/press/fill (testID OR text/ref), scroll/swipe (direction), back, wait (ms), hideKeyboard, snapshot, screenshot. Pass `testID` on find/press/fill for fresh fiber-tree resolution per step (eliminates stale-ref-across-step-transitions failures from cached refs). Fails fast on error unless step has optional=true OR continueOnError is true at the batch level; a step TIMEOUT always aborts the batch (the native operation may still be completing, so later steps are never started) regardless of optional/continueOnError.', {
+trackedTool('device_batch', 'Execute a sequence of UI interactions in ONE tool call. Eliminates LLM round-trip overhead. Steps: find/press/fill (testID OR text/ref), scroll/swipe (direction), back, wait (ms), hideKeyboard, snapshot, screenshot. Pass `testID` on find/press/fill for fresh fiber-tree resolution per step (eliminates stale-ref-across-step-transitions failures from cached refs). Fails fast on error unless step has optional=true OR continueOnError is true at the batch level; a step TIMEOUT or failed fill with observed/possible mutation always aborts the batch because a later mutation would be unsafe.', {
     steps: z
         .array(z.object({
         action: z
@@ -2290,7 +2290,7 @@ trackedTool('device_batch', 'Execute a sequence of UI interactions in ONE tool c
         testID: z
             .string()
             .optional()
-            .describe('(find/press/fill) PREFERRED for known testIDs — re-resolves via snapshot at execution time, immune to layout-change drift. Slower per-step than ref (each call snapshots) but eliminates stale-ref failures across step transitions. When set, ignores text/ref.'),
+            .describe('(find/press/fill) PREFERRED exact identity. Fill still requires text and calls the same exact-fill coordinator as device_fill.'),
         tap: z.boolean().optional().describe('(find) Tap the found element'),
         direction: z
             .enum(['up', 'down', 'left', 'right'])
@@ -2322,7 +2322,7 @@ trackedTool('device_batch', 'Execute a sequence of UI interactions in ONE tool c
     continueOnError: z
         .boolean()
         .default(false)
-        .describe('When true, a failed non-optional step is recorded but the batch continues. Result includes failure_count + failures array. Default false (fail-fast). Use for diagnostic batches where partial results > first-failure abort.'),
+        .describe('When true, ordinary failed steps are recorded and the batch continues. A failed fill with observed or possible mutation always stops later steps.'),
     finalSnapshot: z
         .enum(['salient', 'full', 'none'])
         .default('salient')

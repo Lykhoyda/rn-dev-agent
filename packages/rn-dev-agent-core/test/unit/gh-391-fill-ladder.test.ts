@@ -8,77 +8,44 @@ import assert from 'node:assert/strict';
 // runner classifies as ladder descent, and iOS typing telemetry
 // (typingBurst / keyboardWaitMs) threads into device_fill's meta.
 
-const { _setActiveSessionForTest, _setRunAgentDeviceForTest } =
-  await import('../../dist/agent-device-wrapper.js');
-const { createDeviceFillHandler, classifyFillPrimaryError, extractTypingMeta, isAdbInputTextSafe } =
+const { buildRunAndroidArgs } = await import('../../dist/agent-device-wrapper.js');
+const { classifyFillPrimaryError, extractTypingMeta, isAdbInputTextSafe } =
   await import('../../dist/tools/device-interact.js');
 const { okResult, failResult } = await import('../../dist/utils.js');
 
-const noCdp = () => {
-  throw new Error('no cdp client in this test');
-};
-
-async function withAndroidFillSeam(onCall, run) {
-  _setActiveSessionForTest({ platform: 'android', deviceId: 'test-serial', appId: 'com.test' });
-  _setRunAgentDeviceForTest(onCall);
-  try {
-    return await run();
-  } finally {
-    _setRunAgentDeviceForTest(null);
-    _setActiveSessionForTest(null);
-  }
-}
-
-test('#391: Android emoji fill reaches the runner setText primary, not chunked adb', async () => {
-  const calls = [];
-  const result = await withAndroidFillSeam(
-    async (cliArgs) => {
-      calls.push(cliArgs);
-      if (cliArgs[0] === 'press') return okResult({ tapped: true });
-      if (cliArgs[0] === 'fill') {
-        return okResult({
-          typed: true,
-          text: cliArgs[2],
-          method: 'setText',
-          setTextOutcome: 'accepted',
-        });
-      }
-      return okResult({});
-    },
-    async () => {
-      const handler = createDeviceFillHandler(noCdp);
-      return handler({ ref: '@e1', text: 'héllo 👋🏽 世界' });
-    },
-  );
-  assert.ok(!result.isError, `expected ok, got: ${result.content?.[0]?.text}`);
-  const fill = calls.find((c) => c[0] === 'fill');
-  assert.ok(fill, 'runner fill command was dispatched');
-  assert.equal(fill[2], 'héllo 👋🏽 世界');
-  assert.ok(
-    !result.content[0].text.includes('adb-chunked-input'),
-    'must not route through the chunked-adb workaround',
-  );
+test('#391: Android exact fill decodes full Unicode for direct ACTION_SET_TEXT', () => {
+  const text = 'héllo 👋🏽 世界';
+  const encoded = Buffer.from(text, 'utf8').toString('base64');
+  const args = buildRunAndroidArgs([
+    'fill',
+    '@exact-fill',
+    '--text-base64',
+    encoded,
+    '--exact-id',
+    'email',
+    '--exact-type',
+    'android.widget.EditText',
+  ]);
+  assert.equal(args.text, text);
+  assert.equal(args.exactIdentifier, 'email');
+  assert.equal(args.exactType, 'android.widget.EditText');
 });
 
-test('#391: long text with adb-unsafe characters also stays on the runner primary', async () => {
+test('#391: long adb-unsafe text remains one exact native command', () => {
   const text = 'user+tag@example.com — & 40 chars of $unsafe% text!';
-  const calls = [];
-  const result = await withAndroidFillSeam(
-    async (cliArgs) => {
-      calls.push(cliArgs);
-      if (cliArgs[0] === 'press') return okResult({ tapped: true });
-      if (cliArgs[0] === 'fill') return okResult({ typed: true, text: cliArgs[2] });
-      return okResult({});
-    },
-    async () => {
-      const handler = createDeviceFillHandler(noCdp);
-      return handler({ ref: '@e2', text });
-    },
-  );
-  assert.ok(!result.isError);
-  const fill = calls.find((c) => c[0] === 'fill');
-  assert.ok(fill, 'runner fill command was dispatched');
-  assert.equal(fill[2], text);
+  const encoded = Buffer.from(text, 'utf8').toString('base64');
+  const args = buildRunAndroidArgs([
+    'fill',
+    '@exact-fill',
+    '--text-base64',
+    encoded,
+    '--exact-id',
+    'email',
+    '--exact-type',
+    'android.widget.EditText',
+  ]);
+  assert.equal(args.command, 'type');
+  assert.equal(args.text, text);
 });
 
 test('#391: classifyFillPrimaryError — ok result returns primary', () => {

@@ -565,6 +565,30 @@ extension RnFastRunnerTests {
       guard let text = command.text else {
         return Response(ok: false, error: ErrorPayload(message: "type requires text"))
       }
+      if let exactIdentifier = command.exactIdentifier,
+         let exactType = command.exactType,
+         !exactIdentifier.isEmpty,
+         !exactType.isEmpty
+      {
+        var exactResponse: Response?
+        withTemporaryScrollIdleTimeoutIfSupported(activeApp) {
+          exactResponse = executeExactTextMutation(
+            app: activeApp,
+            identifier: exactIdentifier,
+            typeName: exactType,
+            text: text
+          )
+        }
+        return exactResponse ?? Response(
+          ok: false,
+          error: ErrorPayload(
+            code: "TEXT_ENTRY_UNVERIFIED",
+            message: "Exact text mutation returned no verdict.",
+            mutation: "possible",
+            reason: "dispatch-uncertain"
+          )
+        )
+      }
       let delaySeconds = Double(max(command.delayMs ?? 0, 0)) / 1000.0
       // GH #105 iOS-MVP follow-up: every step that touches XCTest's element
       // resolver (textInputAt / focusedTextInput walk `descendants(...).allElementsBoundByIndex`)
@@ -580,13 +604,19 @@ extension RnFastRunnerTests {
           target = focusedTextInput(app: activeApp)
         }
       }
-      let resolvedTarget = target
+      guard let resolvedTarget = target else {
+        return Response(
+          ok: false,
+          error: ErrorPayload(
+            code: "NO_TEXT_INPUT_TARGET",
+            message: "No exact text input resolved; app-wide focused typing is disabled.",
+            mutation: "none",
+            reason: "target-lost"
+          )
+        )
+      }
       func typeIntoTarget(_ value: String) {
-        if let focused = resolvedTarget {
-          focused.typeText(value)
-        } else {
-          activeApp.typeText(value)
-        }
+        resolvedTarget.typeText(value)
       }
       // Story 10 (#391): never type into a keyboard that isn't up — iOS drops
       // keystrokes sent during keyboard appearance. Best-effort: a simulator
@@ -603,15 +633,8 @@ extension RnFastRunnerTests {
         )
       }
       if command.clearFirst == true {
-        guard let focused = resolvedTarget else {
-          let message =
-            (command.x != nil && command.y != nil)
-            ? "no text input found at the provided coordinates to clear"
-            : "no focused text input to clear"
-          return Response(ok: false, error: ErrorPayload(message: message))
-        }
         withTemporaryScrollIdleTimeoutIfSupported(activeApp) {
-          clearTextInput(focused)
+          clearTextInput(resolvedTarget)
         }
       }
       var usedBurst = false

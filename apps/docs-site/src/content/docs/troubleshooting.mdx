@@ -302,12 +302,27 @@ reports missing commands, update the plugin checkout.
 
 The iOS runner didn't answer within the command budget. On a
 non-cancellable `type`/`fill` main-thread timeout the runner is poisoned
-and reaped, and the call succeeds only when an independent exact CDP
-readback proves the requested value landed
-(`meta.runnerTimeoutRecovery.verification: "exact-readback"`); otherwise it
-fails closed. Further commands are refused before dispatch while the
-poisoned runner is being reaped. Reconnect CDP, re-open the device session,
-and retry from a fresh snapshot — don't re-type blindly.
+and reaped, and `device_fill` fails closed with a possible mutation outcome.
+Further commands are refused before dispatch while the poisoned runner is
+being reaped. Inspect the current field state before deciding whether a new
+fill is safe, then re-open the device session and use a fresh snapshot — do
+not re-type blindly.
+
+### NO_TEXT_INPUT_TARGET / TEXT_TARGET_LOST / TEXT_TARGET_FOCUS_FAILED / TEXT_ENTRY_UNVERIFIED
+
+`device_fill` refuses anything it cannot prove. `NO_TEXT_INPUT_TARGET` means no
+single exact editable target could be bound from the fresh snapshot (missing
+identity, ambiguous testID, target lost, or a non-text-input node).
+`TEXT_TARGET_LOST` means the bound owner disappeared during the fill.
+`TEXT_TARGET_FOCUS_FAILED` means focus on that exact owner could not be proven.
+`TEXT_ENTRY_UNVERIFIED` covers everything else that ends without stable exact
+read-back: helpers unavailable, secure or occluded fields, unreadable values,
+transformed input, and uncertain dispatch.
+
+Every failure carries `meta.mutation`. `none` means nothing was typed — refresh
+the snapshot, resolve one exact input, and retry. `observed` or `possible` means
+the field may already have changed; inspect current state before issuing any new
+fill. There is no automatic retype, adb input, or Maestro fallback.
 
 ### KEYBOARD_DISMISS_FAILED
 
