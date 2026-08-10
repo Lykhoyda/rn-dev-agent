@@ -72,6 +72,54 @@ export function classifyFamily(tool) {
         return 'testing';
     return 'other';
 }
+function redactTypedValue(args, key) {
+    if (!Object.hasOwn(args, key))
+        return args;
+    const value = args[key];
+    return {
+        ...args,
+        [key]: `[REDACTED:${typeof value}]`,
+        ...(typeof value === 'string' ? { [`${key}Length`]: value.length } : {}),
+    };
+}
+function redactBatchFillSteps(args) {
+    const steps = args.steps;
+    if (!Array.isArray(steps))
+        return args;
+    let changed = false;
+    const redactedSteps = steps.map((step) => {
+        if (!step || typeof step !== 'object' || Array.isArray(step))
+            return step;
+        const record = step;
+        if (record.action !== 'fill')
+            return step;
+        const redacted = redactTypedValue(record, 'text');
+        if (redacted !== record)
+            changed = true;
+        return redacted;
+    });
+    return changed ? { ...args, steps: redactedSteps } : args;
+}
+function redactFillText(tool, args) {
+    if (tool === 'device_fill')
+        return redactTypedValue(args, 'text');
+    if (tool === 'device_batch')
+        return redactBatchFillSteps(args);
+    if (tool === 'cdp_interact') {
+        if (args.action === 'typeText')
+            return redactTypedValue(args, 'text');
+        if (args.action === 'setFieldValue')
+            return redactTypedValue(args, 'value');
+    }
+    return args;
+}
+function redactFillResultText(tool, payload) {
+    if (tool !== 'device_fill')
+        return payload;
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload))
+        return payload;
+    return redactTypedValue(payload, 'text');
+}
 export function clipThenRedact(args, payload) {
     let redactedArgs;
     try {
@@ -130,7 +178,8 @@ export function mapObservation(seq, o) {
     const ok = o.status === 'PASS';
     const unwrapped = unwrapResult(o.result);
     const payloadSource = ok ? (unwrapped ? unwrapped.data : o.result) : undefined;
-    const { args, payload, truncated } = clipThenRedact(o.params ?? {}, payloadSource);
+    const observationArgs = redactFillText(o.tool, o.params ?? {});
+    const { args, payload, truncated } = clipThenRedact(observationArgs, redactFillResultText(o.tool, payloadSource));
     const summary = summarize(o.tool, family, args, ok);
     const event = {
         seq,
