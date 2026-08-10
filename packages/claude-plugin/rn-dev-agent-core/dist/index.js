@@ -26020,6 +26020,13 @@ function defaultDeps() {
     now: () => Date.now()
   };
 }
+function resolveExactSerialArgs(deps, deviceId) {
+  try {
+    return deps.resolveSerial(deviceId);
+  } catch (err) {
+    throw new ExactAndroidDeviceRequiredError(err);
+  }
+}
 function exactSerial(deviceId, serialArgs) {
   const serial = serialArgs.length === 2 && serialArgs[0] === "-s" ? serialArgs[1] : void 0;
   if (!serial || deviceId !== void 0 && serial !== deviceId || serial.length > 256 || /\s/.test(serial)) {
@@ -26029,7 +26036,7 @@ function exactSerial(deviceId, serialArgs) {
 }
 async function releaseAndroidInteractionSlot(opts = {}, deps = defaultDeps()) {
   opts.signal?.throwIfAborted();
-  const serialArgs = deps.resolveSerial(opts.deviceId);
+  const serialArgs = resolveExactSerialArgs(deps, opts.deviceId);
   const deviceId = exactSerial(opts.deviceId, serialArgs);
   const timings = {};
   const warnings = [];
@@ -26131,8 +26138,8 @@ var init_release_android_slot = __esm({
     ];
     ExactAndroidDeviceRequiredError = class extends Error {
       code = "EXACT_ANDROID_DEVICE_REQUIRED";
-      constructor() {
-        super("Refusing to release the Android interaction slot without an exact serial. When multiple adb targets are attached, open or bind a session to the intended device, pass deviceId, or set ANDROID_SERIAL, then retry. No device was mutated.");
+      constructor(cause) {
+        super("Refusing to release the Android interaction slot without an exact serial. When multiple adb targets are attached, open or bind a session to the intended device, pass deviceId, or set ANDROID_SERIAL, then retry. No device was mutated.", cause === void 0 ? void 0 : { cause });
         this.name = "ExactAndroidDeviceRequiredError";
       }
     };
