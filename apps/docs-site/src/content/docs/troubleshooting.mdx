@@ -172,6 +172,23 @@ the first available device or `ANDROID_SERIAL` into session authority.
 
 Use maestro-runner instead of classic Maestro — it uses HTTP to UIAutomator2 instead of gRPC. The plugin enforces this by default.
 
+### `UiAutomation not connected` when a flow starts on Android
+
+An MCP reconnect can leave plugin-owned Android instrumentation behind, so
+maestro-runner fails session creation with `failed to create driver: create
+session: session not created: java.lang.IllegalStateException: UiAutomation not
+connected`. On exactly that session-creation failure, `maestro_run` force-stops
+only the two rn-dev-agent runner packages on the exact bound serial and retries
+the flow once; `data.androidUiAutomationRecovery` reports `retried` and
+`retryCount` (never more than 1). Maestro's own orphaned session self-heals, so
+no Maestro, Appium, or foreign package is ever killed. Any other Maestro failure
+— including the same exception outside session creation — is never retried.
+
+Pre-flow and recovery release problems are not swallowed: they appear as
+`data.androidSlotReleaseWarnings` and in the response warning text. If the same
+wedge survives the single retry, re-open the device session
+(`device_snapshot action=open`) on that serial and retry.
+
 ## Error codes
 
 Codes returned by `cdp_*`/`device_*`/flow tools, what they mean, and the fix.
@@ -194,6 +211,7 @@ Codes returned by `cdp_*`/`device_*`/flow tools, what they mean, and the fix.
 | `MANAGED_TRANSFORM_CHANNEL_STALLED` | An authenticated transform child exited or did not complete its first exchange before the watchdog expired. Inspect the Metro log for the failing transformer, stop the managed Metro generation, repair the transformer or dependency, and retry the literal package script; strict proof remains unavailable for the violated generation. |
 | `DEVICE_CLAIM_CONFLICT`, `DEVICE_AUTHORITY_MISMATCH`, `PLATFORM_AUTHORITY_MISMATCH`, `APP_INSTALL_IDENTITY_CHANGED` | The exact UUID/serial, platform, or app differs, or the installed artifact is no longer the attested session build. Bind the intended device and rebuild or reinstall that generation. A byte-identical reinstall is re-issued automatically on the next gated call, except while a strict proof run is bound; see [parallel session authority](/rn-dev-agent/session-authority/). |
 | `EXPO_DEVICE_IDENTITY_MISMATCH` | Expo Android could not uniquely map the bound adb serial to its required model/AVD display name, or that mapping changed immediately before launch. Keep the same exact serial bound, disconnect duplicate model/AVD names, authorize or reconnect that device, and retry literal `pnpm android`; never pass a display name as session authority or let Expo choose an ambient device. |
+| `EXACT_ANDROID_DEVICE_REQUIRED` | Releasing the plugin-owned Android interaction slot needs one exact serial, and none was available (typically several adb targets attached with no bound session). Nothing on any device was mutated. Bind the intended device with `rn_session(action="bind_device", ...)`, pass `deviceId` to `maestro_run`, or set `ANDROID_SERIAL`, then retry. An ambient or default adb target is never selected. |
 | `BUNDLE_HANDSHAKE_UNAVAILABLE`, `BUNDLE_IDENTITY_MISMATCH`, `CDP_TARGET_AUTHORITY_MISMATCH`, `TARGET_CLAIM_CONFLICT` | The signed initial-bundle marker or exact CDP target is absent, changed, unresponsive, or owned elsewhere. Exact pinning serially resets an inspector that handshakes but fails its mandatory `Runtime.evaluate('1+1')` probe, then re-lists only the allocated Metro and retries the same app/device authority. If the deadline expires, the error retains that probe-timeout leaf. Load the intended app from the bound Metro and call `cdp_connect`; never choose another target. |
 | `RUNNER_OWNERSHIP_MISMATCH`, `RUNNER_ADOPTION_REQUIRED`, `RUNNER_CLAIM_CONFLICT` | Native-runner capability or ownership differs. Rebind the exact runner, or complete the explicit handoff/adoption flow. A live runner is never force-stolen; see [parallel session authority](/rn-dev-agent/session-authority/) for the unsupported legacy split-store case. |
 | `OBSERVE_AUTHORITY_MISMATCH`, `OBSERVE_PORT_CLAIM_CONFLICT`, `PROOF_AUTHORITY_MISMATCH` | Observe or proof belongs to another fenced generation. Start a session-scoped instance or proof run. |
