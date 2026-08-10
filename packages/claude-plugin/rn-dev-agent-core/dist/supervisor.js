@@ -30611,7 +30611,7 @@ function defaultDeps3() {
 }
 function exactSerial(deviceId, serialArgs) {
   const serial = serialArgs.length === 2 && serialArgs[0] === "-s" ? serialArgs[1] : void 0;
-  if (!serial || serial !== (deviceId ?? serial) || serial.length > 256 || /\s/.test(serial)) {
+  if (!serial || deviceId !== void 0 && serial !== deviceId || serial.length > 256 || /\s/.test(serial)) {
     throw new ExactAndroidDeviceRequiredError();
   }
   return serial;
@@ -67058,9 +67058,16 @@ function createMaestroRunHandler(deps = {}) {
             androidSlotReleaseWarnings.push(`UiAutomation recovery release failed: ${releaseError instanceof Error ? releaseError.message : String(releaseError)}`);
             throw attachCause(error2, releaseError);
           }
-          return executeOnce(() => {
-            uiAutomationRecoveryRetried = true;
-          });
+          try {
+            return await executeOnce(() => {
+              uiAutomationRecoveryRetried = true;
+            });
+          } catch (retryError) {
+            if (uiAutomationRecoveryRetried)
+              throw retryError;
+            androidSlotReleaseWarnings.push(`UiAutomation recovery retry skipped: ${retryError instanceof Error ? retryError.message : String(retryError)}`);
+            throw attachCause(error2, retryError);
+          }
         }
       }, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin), {
         platform,
@@ -67121,11 +67128,12 @@ function createMaestroRunHandler(deps = {}) {
       const caveat = dispatch.fallbackReason ?? dispatch.degradedReason ?? pinCaveat ?? void 0;
       const releaseCaveat = androidReleaseCaveat();
       if (passed) {
+        const warnCaveat = caveat && shouldWarnFallback(caveat) ? caveat : void 0;
         if (releaseCaveat) {
-          return warnResult(meta, caveat ? `${caveat}; ${releaseCaveat}` : releaseCaveat);
+          return warnResult(meta, warnCaveat ? `${warnCaveat}; ${releaseCaveat}` : releaseCaveat);
         }
-        if (caveat && shouldWarnFallback(caveat)) {
-          return warnResult(meta, caveat);
+        if (warnCaveat) {
+          return warnResult(meta, warnCaveat);
         }
         return okResult(meta);
       }

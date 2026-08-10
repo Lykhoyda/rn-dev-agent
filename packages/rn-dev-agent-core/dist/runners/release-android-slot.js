@@ -78,7 +78,10 @@ export class ExactAndroidDeviceRequiredError extends Error {
 }
 function exactSerial(deviceId, serialArgs) {
     const serial = serialArgs.length === 2 && serialArgs[0] === '-s' ? serialArgs[1] : undefined;
-    if (!serial || serial !== (deviceId ?? serial) || serial.length > 256 || /\s/.test(serial)) {
+    if (!serial ||
+        (deviceId !== undefined && serial !== deviceId) ||
+        serial.length > 256 ||
+        /\s/.test(serial)) {
         throw new ExactAndroidDeviceRequiredError();
     }
     return serial;
