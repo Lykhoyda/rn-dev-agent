@@ -260,9 +260,13 @@ test('Android cleanup fence blocks stale takeover until terminal persistence', (
 
 test('Android artifact rebuild heartbeats while the protected operation runs', async () => {
   let heartbeats = 0;
+  let secondHeartbeat;
+  const beatenTwice = new Promise((resolve) => {
+    secondHeartbeat = resolve;
+  });
   const result = await runBoundedAndroidRunnerRebuild(
     new AndroidAuthorityStaleError('serial-a'),
-    () => new Promise((resolve) => setTimeout(() => resolve('ready'), 35)),
+    () => beatenTwice.then(() => 'ready'),
     noAndroidRebuildCleanup,
     {
       acquire: (pluginVersion) => ({
@@ -271,6 +275,7 @@ test('Android artifact rebuild heartbeats while the protected operation runs', a
       }),
       heartbeat: () => {
         heartbeats += 1;
+        if (heartbeats >= 2) secondHeartbeat();
         return true;
       },
       complete: () => true,

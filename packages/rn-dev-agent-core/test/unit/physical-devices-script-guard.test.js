@@ -26,10 +26,20 @@ test('M9: script has bash shebang', () => {
   assert.match(content.split('\n')[0], /^#!\/usr\/bin\/env bash/);
 });
 
-test('M9: script probes adb devices + runs adb reverse on port 8081', () => {
+test('M9: script probes adb devices and inspects reverse forwards without mutating them', () => {
   const content = readFileSync(SCRIPT_PATH, 'utf-8');
   assert.match(content, /adb devices/, 'must probe adb devices');
-  assert.match(content, /adb .* reverse tcp:8081 tcp:8081/, 'must run adb reverse for port 8081');
+  assert.match(content, /reverse --list/, 'must inspect existing reverse forwards read-only');
+  assert.doesNotMatch(
+    content,
+    /reverse tcp:/,
+    'must not create a reverse forward — session authority is the sole writer',
+  );
+  assert.doesNotMatch(
+    content,
+    /reverse --remove/,
+    'must not remove a reverse forward — the probe is advisory only',
+  );
 });
 
 test('M9: script filters out emulators (only physical Android)', () => {
