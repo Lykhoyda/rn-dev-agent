@@ -347,14 +347,22 @@ rebuilt by reopening the exact-device session before dispatch.
 
 ### DEVICE_BUSY / DEVICE_CLAIM_CONFLICT
 
-`DEVICE_BUSY` means an in-flight compatibility operation holds this exact
-simulator; wait for that operation or close its owner. `DEVICE_CLAIM_CONFLICT`
-means another live worktree session owns the resource and requires explicit
-handoff or conservatively proven stale adoption; heartbeat or sleep expiry
-alone does not reclaim it. As a capacity workaround, boot a different free
-simulator, bind it through `rn_session bind_device`, and run the normal managed
-build/install receipt flow. Do not force-steal or manually install an unrelated
-snapshot to bypass authority.
+A `DEVICE_BUSY` refusal reports whether the holder is alive and its heartbeat
+age bounded to 0–90s. It does not expose the holder PID, project path, or app ID,
+and it does not mutate the holder.
+
+From the holder worktree, run `device_snapshot action=close` to release it safely.
+
+Alternatively, boot a dedicated simulator (or emulator), bind its exact ID with `rn_session action=bind_device`, run the normal managed build/install there, then select that exact ID with `device_snapshot action=open ... attachOnly=true` when the app is already running.
+
+Dead holders self-heal on the next open attempt; live holders self-heal once their heartbeat is stale beyond the existing 90s recovery window.
+
+A healthy live holder is never stolen or changed by this refusal.
+
+`DEVICE_CLAIM_CONFLICT` is separate: another live worktree session owns the
+resource and requires explicit handoff or conservatively proven stale adoption;
+heartbeat or sleep expiry alone does not reclaim it. Do not force-steal or
+manually install an unrelated snapshot to bypass authority.
 
 ### Native iOS deep-link dialog remains visible
 
