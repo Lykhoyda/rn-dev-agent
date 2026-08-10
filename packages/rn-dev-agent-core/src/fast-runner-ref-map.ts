@@ -56,6 +56,7 @@ export interface RefSignature {
 }
 
 interface StoredRefRecord extends RefMetadata {
+  packageName?: string;
   flatIndex: number;
   snapshotNodeIndex: number;
   nodeCount: number;
@@ -376,6 +377,7 @@ export function updateRefMapFromFlat(
     };
     if (node.label !== undefined) meta.label = node.label;
     if (node.identifier !== undefined) meta.identifier = node.identifier;
+    if (node.packageName !== undefined) meta.packageName = node.packageName;
     metadataMap.set(key, meta);
     hashed.push(node);
 
@@ -453,6 +455,11 @@ export function getCachedMetadata(ref: string): RefMetadata | null {
   if (rec.label !== undefined) meta.label = rec.label;
   if (rec.identifier !== undefined) meta.identifier = rec.identifier;
   return meta;
+}
+
+export function getCachedPackageName(ref: string): string | null {
+  const key = ref.startsWith('@') ? ref.slice(1) : ref;
+  return metadataMap.get(key)?.packageName ?? null;
 }
 
 export function authorizeSystemUiRef(ref: string): void {

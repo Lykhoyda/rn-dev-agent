@@ -3,8 +3,10 @@ import { join } from 'node:path';
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
 import {
+  androidOutsideAppWindowRefusal,
   buildRunAndroidArgs,
   establishInteractionBaseline,
+  outsideAppWindowFailResult,
   rebuildHealedAndroidArgs,
   settleWithRetryIfNoChange,
 } from '../../dist/agent-device-wrapper.js';
@@ -256,6 +258,83 @@ test('device_find exposes a typed explicit system-UI opt-in', () => {
   const source = readFileSync(join(process.cwd(), 'src', 'index.ts'), 'utf8');
   assert.match(source, /includeSystemUi:\s*z\s*\.boolean\(\)/);
   assert.match(source, /Android matching is app-window-only by default/);
+});
+
+test('device_press documents the Android app-window scope and its system-UI escape hatch', () => {
+  const source = readFileSync(join(process.cwd(), 'src', 'index.ts'), 'utf8');
+  assert.match(source, /refused with OUTSIDE_APP_WINDOW/);
+  assert.match(source, /device_find with includeSystemUi=true and action="click"/);
+});
+
+test('a snapshot-minted system-UI ref is refused by name instead of guessed at', () => {
+  updateRefMapFromFlat([appHome, systemHome]);
+  const refusal = androidOutsideAppWindowRefusal(['press', systemHome.ref], appId);
+  assert.deepEqual(refusal, {
+    ref: systemHome.ref,
+    packageName: 'com.android.systemui',
+    appId,
+  });
+
+  const failure = outsideAppWindowFailResult({
+    ref: systemHome.ref,
+    packageName: 'com.android.systemui',
+    appId,
+  });
+  const envelope = JSON.parse(failure.content[0].text) as {
+    ok: boolean;
+    code: string;
+    error: string;
+    meta: { mutation: string; packageName: string; hint: string };
+  };
+  assert.equal(envelope.ok, false);
+  assert.equal(envelope.code, 'OUTSIDE_APP_WINDOW');
+  assert.equal(envelope.meta.mutation, 'none');
+  assert.equal(envelope.meta.packageName, 'com.android.systemui');
+  assert.match(envelope.error, /outside the owned app window/);
+  assert.match(envelope.meta.hint, /device_find with includeSystemUi=true and action="click"/);
+});
+
+test('the app-window refusal covers every ref-scoped Android mutating verb', () => {
+  updateRefMapFromFlat([appHome, systemHome]);
+  for (const verb of ['press', 'tap', 'longpress']) {
+    assert.equal(
+      androidOutsideAppWindowRefusal([verb, systemHome.ref], appId)?.packageName,
+      'com.android.systemui',
+      `${verb} must refuse an outside-app ref`,
+    );
+  }
+  assert.equal(
+    androidOutsideAppWindowRefusal(['fill', systemHome.ref, 'hello'], appId)?.packageName,
+    'com.android.systemui',
+  );
+});
+
+test('owned-app refs, explicit system scope, and coordinate taps stay unrefused', async () => {
+  updateRefMapFromFlat([appHome, systemHome]);
+  assert.equal(androidOutsideAppWindowRefusal(['press', appHome.ref], appId), null);
+  assert.equal(androidOutsideAppWindowRefusal(['press', '960', '430'], appId), null);
+  assert.equal(
+    androidOutsideAppWindowRefusal(['press', systemHome.ref, '--include-system-ui'], appId),
+    null,
+  );
+
+  await pressCandidate(
+    { ref: systemHome.ref, testID: systemHome.identifier, type: systemHome.type },
+    undefined,
+    undefined,
+    true,
+  );
+  assert.equal(androidOutsideAppWindowRefusal(['press', systemHome.ref], appId), null);
+});
+
+test('healing a stale ref onto system chrome is refused, not silently retargeted', () => {
+  updateRefMapFromFlat([appHome]);
+  updateRefMapFromFlat([systemHome]);
+  assert.equal(
+    androidOutsideAppWindowRefusal(['press', '@e1'], appId, systemHome.ref)?.packageName,
+    'com.android.systemui',
+  );
+  assert.equal(androidOutsideAppWindowRefusal(['press', '@e1'], appId, 'e2')?.ref, '@e2');
 });
 
 test('Android runner scopes exact presses and refuses rejected accessibility actions', () => {

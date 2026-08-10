@@ -76,6 +76,10 @@ class CommandDispatcher(
         const val FOREGROUND_READY_TIMEOUT_MS = 10_000L
 
         const val CLICKABLE_ANCESTOR_MAX_DEPTH = 16
+
+        const val SYSTEM_UI_OPT_IN_HINT =
+            "For system UI outside the app, call device_find with includeSystemUi=true " +
+                "and action=\"click\"."
     }
 
     init {
@@ -296,7 +300,7 @@ class CommandDispatcher(
                 "INTERACTION_NOT_ACTUATED",
                 "none",
                 "app-window-unavailable",
-                "Exact Android interaction requires the owned app package.",
+                "Exact Android interaction requires the owned app package. $SYSTEM_UI_OPT_IN_HINT",
             )
         }
         val matches = mutableListOf<AccessibilityNodeInfo>()
@@ -348,7 +352,10 @@ class CommandDispatcher(
                 "none",
                 if (found == 0) "exact-target-missing" else "exact-target-ambiguous",
                 if (found == 0) {
-                    "Exact Android interaction resolved no matching target; refusing to guess."
+                    "Exact Android interaction resolved no matching target " +
+                        (if (includeSystemUi) "on screen" else "inside the owned app window") +
+                        "; refusing to guess." +
+                        (if (includeSystemUi) "" else " $SYSTEM_UI_OPT_IN_HINT")
                 } else {
                     "Exact Android interaction resolved $found matching targets and none " +
                         "uniquely contains the requested point; refusing to guess."

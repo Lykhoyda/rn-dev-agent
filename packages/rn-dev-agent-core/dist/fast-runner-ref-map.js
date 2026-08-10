@@ -251,6 +251,8 @@ export function updateRefMapFromFlat(nodes, freshness = {}) {
             meta.label = node.label;
         if (node.identifier !== undefined)
             meta.identifier = node.identifier;
+        if (node.packageName !== undefined)
+            meta.packageName = node.packageName;
         metadataMap.set(key, meta);
         hashed.push(node);
         entries.push({ rect: node.rect, hittable: node.hittable, type: node.type });
@@ -315,6 +317,10 @@ export function getCachedMetadata(ref) {
     if (rec.identifier !== undefined)
         meta.identifier = rec.identifier;
     return meta;
+}
+export function getCachedPackageName(ref) {
+    const key = ref.startsWith('@') ? ref.slice(1) : ref;
+    return metadataMap.get(key)?.packageName ?? null;
 }
 export function authorizeSystemUiRef(ref) {
     const key = ref.startsWith('@') ? ref.slice(1) : ref;

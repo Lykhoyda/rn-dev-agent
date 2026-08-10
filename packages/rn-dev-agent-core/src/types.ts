@@ -340,6 +340,9 @@ export type ToolErrorCode =
   | 'KEYBOARD_OCCLUDED'
   | 'KEYBOARD_DISMISS_FAILED'
   | 'INTERACTION_NOT_ACTUATED'
+  // GH #736: an Android @ref owned by a package other than the session app was
+  // handed to an app-scoped mutating verb (device_press / device_fill / longpress).
+  | 'OUTSIDE_APP_WINDOW'
   | 'INTERACTION_EFFECT_UNVERIFIED'
   | 'RUNNER_TIMEOUT'
   | 'WDA_BOOTSTRAP_FAILED'

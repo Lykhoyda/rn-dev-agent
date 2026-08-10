@@ -19818,6 +19818,8 @@ function updateRefMapFromFlat(nodes, freshness = {}) {
       meta.label = node.label;
     if (node.identifier !== void 0)
       meta.identifier = node.identifier;
+    if (node.packageName !== void 0)
+      meta.packageName = node.packageName;
     metadataMap.set(key, meta);
     hashed.push(node);
     entries.push({ rect: node.rect, hittable: node.hittable, type: node.type });
@@ -19873,6 +19875,10 @@ function getCachedMetadata(ref) {
   if (rec.identifier !== void 0)
     meta.identifier = rec.identifier;
   return meta;
+}
+function getCachedPackageName(ref) {
+  const key = ref.startsWith("@") ? ref.slice(1) : ref;
+  return metadataMap.get(key)?.packageName ?? null;
 }
 function authorizeSystemUiRef(ref) {
   const key = ref.startsWith("@") ? ref.slice(1) : ref;
@@ -28092,6 +28098,31 @@ function buildRunAndroidArgs(cliArgs, bundleId) {
       throw new Error(`buildRunAndroidArgs: unsupported command "${cmd ?? "<empty>"}"`);
   }
 }
+function androidOutsideAppWindowRefusal(cliArgs, appId, ref) {
+  const cmd = cliArgs[0];
+  if (!cmd || !APP_SCOPED_ANDROID_REF_VERBS.has(cmd))
+    return null;
+  if (!appId)
+    return null;
+  const target = ref !== void 0 ? ref.startsWith("@") ? ref : `@${ref}` : positionalArgs(cliArgs)[0];
+  if (!target || !target.startsWith("@"))
+    return null;
+  if (cliArgs.includes("--include-system-ui") || isSystemUiRefAuthorized(target))
+    return null;
+  const packageName = getCachedPackageName(target);
+  if (!packageName || packageName === appId)
+    return null;
+  return { ref: target, packageName, appId };
+}
+function outsideAppWindowFailResult(refusal) {
+  return failResult(`Ref ${refusal.ref} belongs to "${refusal.packageName}", outside the owned app window (${refusal.appId}) \u2014 Android interactions are app-scoped and will not actuate system UI.`, "OUTSIDE_APP_WINDOW", {
+    mutation: "none",
+    ref: refusal.ref,
+    packageName: refusal.packageName,
+    appId: refusal.appId,
+    hint: 'To act on system UI explicitly, call device_find with includeSystemUi=true and action="click".'
+  });
+}
 function rebuildHealedAndroidArgs(cliArgs, healedRef, bundleId, includeSystemUi) {
   const reboundArgs = [...cliArgs];
   reboundArgs[1] = healedRef.startsWith("@") ? healedRef : `@${healedRef}`;
@@ -28611,6 +28642,9 @@ async function runNative(cliArgs, opts = {}) {
       }
     }
     const { runAndroid: runAndroid2, consumePendingAndroidUpgradeNote: consumePendingAndroidUpgradeNote2 } = await Promise.resolve().then(() => (init_rn_android_runner_client(), rn_android_runner_client_exports));
+    const outsideApp = androidOutsideAppWindowRefusal(cliArgs, appId);
+    if (outsideApp)
+      return outsideAppWindowFailResult(outsideApp);
     let android = buildRunAndroidArgs(cliArgs, appId);
     let healMeta = null;
     if (android._staleRef && selfHealEnabled(process.env)) {
@@ -28622,6 +28656,9 @@ async function runNative(cliArgs, opts = {}) {
       }));
       if (healed.kind === "failed")
         return healed.result;
+      const healedOutsideApp = android.includeSystemUi === true ? null : androidOutsideAppWindowRefusal(cliArgs, appId, healed.newRef);
+      if (healedOutsideApp)
+        return outsideAppWindowFailResult(healedOutsideApp);
       android = rebuildHealedAndroidArgs(cliArgs, healed.newRef, appId, android.includeSystemUi === true);
       if (android._staleRef) {
         return staleRefFail(android._staleRef, "absent", getCachedMetadata(android._staleRef));
@@ -28653,7 +28690,7 @@ async function runNative(cliArgs, opts = {}) {
   }
   return failResult(`No native route for "${cliArgs[0]}". Open a device session (device_snapshot action=open) first, or use the dedicated tool for this verb.`, "NO_NATIVE_ROUTE");
 }
-var SESSION_FILE, LEGACY_SESSION_FILE, activeSession, snapshotCache, dirtySnapshotPlatforms, snapshotAuthorityProvider, RN_FAST_RUNNER_COMMANDS, SNAPSHOT_MUTATING_VERBS, PROTOCOL_STALE_REASONS, _runAgentDeviceOverrideForTest, _testSeamFused, _testSeamFuseBlownBy, RETRYABLE_TAP_COMMANDS, MAX_STALE_CANDIDATES;
+var SESSION_FILE, LEGACY_SESSION_FILE, activeSession, snapshotCache, dirtySnapshotPlatforms, snapshotAuthorityProvider, RN_FAST_RUNNER_COMMANDS, SNAPSHOT_MUTATING_VERBS, APP_SCOPED_ANDROID_REF_VERBS, PROTOCOL_STALE_REASONS, _runAgentDeviceOverrideForTest, _testSeamFused, _testSeamFuseBlownBy, RETRYABLE_TAP_COMMANDS, MAX_STALE_CANDIDATES;
 var init_agent_device_wrapper = __esm({
   "packages/rn-dev-agent-core/dist/agent-device-wrapper.js"() {
     "use strict";
@@ -28709,6 +28746,7 @@ var init_agent_device_wrapper = __esm({
       "longpress",
       "pinch"
     ]);
+    APP_SCOPED_ANDROID_REF_VERBS = /* @__PURE__ */ new Set(["press", "tap", "fill", "type", "longpress"]);
     PROTOCOL_STALE_REASONS = /* @__PURE__ */ new Set([
       "legacy",
       "protocol-older",
@@ -85470,7 +85508,7 @@ trackedTool("device_find", 'Find a UI element by visible text and optionally int
   index: external_exports.number().int().min(0).optional().describe("Pick the Nth candidate (0-based) when multiple elements match. Short-circuits AMBIGUOUS_MATCH."),
   includeSystemUi: external_exports.boolean().optional().describe("Include Android system UI in matching (default false; may leave the app).")
 }, createDeviceFindHandler(getClient));
-trackedTool("device_press", 'Tap a UI element by its @ref from device_snapshot, or at explicit raw x/y coordinates. Pass exactly one target form. On iOS, a latest-snapshot Key/Keyboard ref is runner-validated against the current live keyboard and activated exactly once (meta.keyboardGuard="keyboard_target"); stale, forged, missing-keyboard, or raw-coordinate targets never receive that exemption. Ordinary app-content taps dismiss only through a safe native hide/dismiss control or optional JS tier, then refresh and uniquely re-resolve before one tap. Supports double-tap, repeated taps, long hold, and post-tap focus settle. Requires an open session. Stale ordinary app @refs self-heal by identity re-resolution (meta.reResolved); stale iOS Key/Keyboard refs refuse with KEYBOARD_TARGET_STALE and mutation:none. Swallowed ordinary taps auto-retry once, but validated keyboard targets and keyboard/transport recovery never replay.', {
+trackedTool("device_press", 'Tap a UI element by its @ref from device_snapshot, or at explicit raw x/y coordinates. Pass exactly one target form. On iOS, a latest-snapshot Key/Keyboard ref is runner-validated against the current live keyboard and activated exactly once (meta.keyboardGuard="keyboard_target"); stale, forged, missing-keyboard, or raw-coordinate targets never receive that exemption. Ordinary app-content taps dismiss only through a safe native hide/dismiss control or optional JS tier, then refresh and uniquely re-resolve before one tap. Supports double-tap, repeated taps, long hold, and post-tap focus settle. Requires an open session. Stale ordinary app @refs self-heal by identity re-resolution (meta.reResolved); stale iOS Key/Keyboard refs refuse with KEYBOARD_TARGET_STALE and mutation:none. Swallowed ordinary taps auto-retry once, but validated keyboard targets and keyboard/transport recovery never replay. On Android the tap is scoped to the owned app window: a @ref belonging to another package (system navigation, IME, dialogs) is refused with OUTSIDE_APP_WINDOW \u2014 use device_find with includeSystemUi=true and action="click" for system UI.', {
   ref: external_exports.string().optional().describe('Element ref from device_snapshot (e.g. "e3" or "@e3"). Omit when using x/y.'),
   x: external_exports.number().optional().describe("Raw tap X coordinate; requires y and no ref"),
   y: external_exports.number().optional().describe("Raw tap Y coordinate; requires x and no ref"),

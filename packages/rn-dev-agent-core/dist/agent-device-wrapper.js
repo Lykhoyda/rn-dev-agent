@@ -5,7 +5,7 @@ import { failResult } from './utils.js';
 import { startFastRunner, probeFastRunnerLiveness, probeFastRunnerLivenessDetailed, adoptPersistedFastRunnerState, reapStaleFastRunner, hasBuiltTestProduct, derivedDataPathForRunner, acquireRunnerRebuildLock, releaseRunnerRebuildLock, runnerRebuildBudget, consumePendingFastRunnerArtifactNote, getRunnerPostMortem, } from './runners/rn-fast-runner-client.js';
 import { getPluginVersion } from './runners/protocol.js';
 import { resolveBootedIosUdid } from './tools/device-screenshot-raw.js';
-import { refCenter, getScreenRect, clearRefMap, isRefMapFresh, MAX_REF_MAP_AGE_MS, getCachedSignature, getCachedMetadata, getFreshRefTarget, isSystemUiRefAuthorized, refreshRef, getLastSnapshotHash, getLastSnapshotHashForPackage, invalidateLastSnapshotHash, } from './fast-runner-ref-map.js';
+import { refCenter, getScreenRect, clearRefMap, isRefMapFresh, MAX_REF_MAP_AGE_MS, getCachedSignature, getCachedMetadata, getCachedPackageName, getFreshRefTarget, isSystemUiRefAuthorized, refreshRef, getLastSnapshotHash, getLastSnapshotHashForPackage, invalidateLastSnapshotHash, } from './fast-runner-ref-map.js';
 import { recordNoUiChange, recordUiChange, WEDGED_DISTINCT_TARGETS, WEDGED_RUNTIME_HINT, } from './lifecycle/no-change-tracker.js';
 import { resolveBundleId } from './project-config.js';
 import { getStateDir, readJsonStateFile, writeJsonStateFileAtomic, } from './util/secure-state-file.js';
@@ -704,6 +704,37 @@ export function buildRunAndroidArgs(cliArgs, bundleId) {
         default:
             throw new Error(`buildRunAndroidArgs: unsupported command "${cmd ?? '<empty>'}"`);
     }
+}
+// GH #736: Android mutating verbs are scoped to the owned app window, but
+// device_snapshot still returns system-chrome nodes. A @ref minted from one of
+// those nodes would otherwise reach the runner and come back as a generic
+// "resolved no matching target" refusal that names neither the cause nor the
+// one supported way to touch system UI.
+const APP_SCOPED_ANDROID_REF_VERBS = new Set(['press', 'tap', 'fill', 'type', 'longpress']);
+export function androidOutsideAppWindowRefusal(cliArgs, appId, ref) {
+    const cmd = cliArgs[0];
+    if (!cmd || !APP_SCOPED_ANDROID_REF_VERBS.has(cmd))
+        return null;
+    if (!appId)
+        return null;
+    const target = ref !== undefined ? (ref.startsWith('@') ? ref : `@${ref}`) : positionalArgs(cliArgs)[0];
+    if (!target || !target.startsWith('@'))
+        return null;
+    if (cliArgs.includes('--include-system-ui') || isSystemUiRefAuthorized(target))
+        return null;
+    const packageName = getCachedPackageName(target);
+    if (!packageName || packageName === appId)
+        return null;
+    return { ref: target, packageName, appId };
+}
+export function outsideAppWindowFailResult(refusal) {
+    return failResult(`Ref ${refusal.ref} belongs to "${refusal.packageName}", outside the owned app window (${refusal.appId}) — Android interactions are app-scoped and will not actuate system UI.`, 'OUTSIDE_APP_WINDOW', {
+        mutation: 'none',
+        ref: refusal.ref,
+        packageName: refusal.packageName,
+        appId: refusal.appId,
+        hint: 'To act on system UI explicitly, call device_find with includeSystemUi=true and action="click".',
+    });
 }
 export function rebuildHealedAndroidArgs(cliArgs, healedRef, bundleId, includeSystemUi) {
     const reboundArgs = [...cliArgs];
@@ -1489,6 +1520,9 @@ export async function runNative(cliArgs, opts = {}) {
             }
         }
         const { runAndroid, consumePendingAndroidUpgradeNote } = await import('./runners/rn-android-runner-client.js');
+        const outsideApp = androidOutsideAppWindowRefusal(cliArgs, appId);
+        if (outsideApp)
+            return outsideAppWindowFailResult(outsideApp);
         let android = buildRunAndroidArgs(cliArgs, appId);
         let healMeta = null;
         if (android._staleRef && selfHealEnabled(process.env)) {
@@ -1500,6 +1534,11 @@ export async function runNative(cliArgs, opts = {}) {
             }));
             if (healed.kind === 'failed')
                 return healed.result;
+            const healedOutsideApp = android.includeSystemUi === true
+                ? null
+                : androidOutsideAppWindowRefusal(cliArgs, appId, healed.newRef);
+            if (healedOutsideApp)
+                return outsideAppWindowFailResult(healedOutsideApp);
             android = rebuildHealedAndroidArgs(cliArgs, healed.newRef, appId, android.includeSystemUi === true);
             if (android._staleRef) {
                 return staleRefFail(android._staleRef, 'absent', getCachedMetadata(android._staleRef));

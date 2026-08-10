@@ -34,6 +34,7 @@ import {
   MAX_REF_MAP_AGE_MS,
   getCachedSignature,
   getCachedMetadata,
+  getCachedPackageName,
   getFreshRefTarget,
   isSystemUiRefAuthorized,
   refreshRef,
@@ -868,6 +869,50 @@ export function buildRunAndroidArgs(
     default:
       throw new Error(`buildRunAndroidArgs: unsupported command "${cmd ?? '<empty>'}"`);
   }
+}
+
+// GH #736: Android mutating verbs are scoped to the owned app window, but
+// device_snapshot still returns system-chrome nodes. A @ref minted from one of
+// those nodes would otherwise reach the runner and come back as a generic
+// "resolved no matching target" refusal that names neither the cause nor the
+// one supported way to touch system UI.
+const APP_SCOPED_ANDROID_REF_VERBS = new Set(['press', 'tap', 'fill', 'type', 'longpress']);
+
+export interface OutsideAppWindowRefusal {
+  ref: string;
+  packageName: string;
+  appId: string;
+}
+
+export function androidOutsideAppWindowRefusal(
+  cliArgs: string[],
+  appId: string | undefined,
+  ref?: string,
+): OutsideAppWindowRefusal | null {
+  const cmd = cliArgs[0];
+  if (!cmd || !APP_SCOPED_ANDROID_REF_VERBS.has(cmd)) return null;
+  if (!appId) return null;
+  const target =
+    ref !== undefined ? (ref.startsWith('@') ? ref : `@${ref}`) : positionalArgs(cliArgs)[0];
+  if (!target || !target.startsWith('@')) return null;
+  if (cliArgs.includes('--include-system-ui') || isSystemUiRefAuthorized(target)) return null;
+  const packageName = getCachedPackageName(target);
+  if (!packageName || packageName === appId) return null;
+  return { ref: target, packageName, appId };
+}
+
+export function outsideAppWindowFailResult(refusal: OutsideAppWindowRefusal): ToolResult {
+  return failResult(
+    `Ref ${refusal.ref} belongs to "${refusal.packageName}", outside the owned app window (${refusal.appId}) — Android interactions are app-scoped and will not actuate system UI.`,
+    'OUTSIDE_APP_WINDOW',
+    {
+      mutation: 'none',
+      ref: refusal.ref,
+      packageName: refusal.packageName,
+      appId: refusal.appId,
+      hint: 'To act on system UI explicitly, call device_find with includeSystemUi=true and action="click".',
+    },
+  );
 }
 
 export function rebuildHealedAndroidArgs(
@@ -1897,6 +1942,8 @@ export async function runNative(
     }
     const { runAndroid, consumePendingAndroidUpgradeNote } =
       await import('./runners/rn-android-runner-client.js');
+    const outsideApp = androidOutsideAppWindowRefusal(cliArgs, appId);
+    if (outsideApp) return outsideAppWindowFailResult(outsideApp);
     let android = buildRunAndroidArgs(cliArgs, appId);
     let healMeta: Record<string, unknown> | null = null;
     if (android._staleRef && selfHealEnabled(process.env)) {
@@ -1909,6 +1956,11 @@ export async function runNative(
         }),
       );
       if (healed.kind === 'failed') return healed.result;
+      const healedOutsideApp =
+        android.includeSystemUi === true
+          ? null
+          : androidOutsideAppWindowRefusal(cliArgs, appId, healed.newRef);
+      if (healedOutsideApp) return outsideAppWindowFailResult(healedOutsideApp);
       android = rebuildHealedAndroidArgs(
         cliArgs,
         healed.newRef,
