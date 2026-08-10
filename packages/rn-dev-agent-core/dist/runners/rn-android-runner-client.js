@@ -13,7 +13,7 @@ import { findFreePort } from './free-port.js';
 import { join } from 'node:path';
 import { withKeyboardGuard } from './keyboard-guard.js';
 import { runnerStatePath, readJsonStateFile, writeJsonStateFileAtomic, deleteStateFile, readLegacyTmpState, cleanupLegacyTmpState, } from '../util/secure-state-file.js';
-import { RUNNER_PROTOCOL_VERSION, MIN_SUPPORTED_RUNNER_PROTOCOL, REQUIRED_ANDROID_COMMANDS, getPluginVersion, classifyRunnerCompatibility, } from './protocol.js';
+import { RUNNER_PROTOCOL_VERSION, MIN_SUPPORTED_RUNNER_PROTOCOL, REQUIRED_ANDROID_COMMANDS, REQUIRED_ANDROID_FEATURES, getPluginVersion, classifyRunnerCompatibility, } from './protocol.js';
 import { artifactProvenanceToState, resolveAndroidRunnerArtifacts } from './runner-artifacts.js';
 import { resolveNativeRunnerDir } from './runtime-paths.js';
 import { decideRecovery, generateCommandId, isAmbiguousTransportFailure, parseStatusProbeReply, } from './transport-recovery.js';
@@ -565,12 +565,13 @@ export async function reapActiveAndroidRunner(deviceId) {
     adoptPersistedAndroidState(deviceId);
     await reapMismatchedAndroidRunner(runnerState ?? (deviceId ? { deviceId } : null));
 }
-function classifyAndroidHealth(info) {
+export function classifyAndroidHealth(info) {
     return classifyRunnerCompatibility({
         ...(info.protocolVersion !== undefined ? { protocolVersion: info.protocolVersion } : {}),
         ...(info.runnerVersion !== undefined ? { runnerVersion: info.runnerVersion } : {}),
         ...(info.commands !== undefined ? { commands: info.commands } : {}),
-    }, getPluginVersion(), REQUIRED_ANDROID_COMMANDS);
+        ...(info.capabilities !== undefined ? { capabilities: info.capabilities } : {}),
+    }, getPluginVersion(), REQUIRED_ANDROID_COMMANDS, REQUIRED_ANDROID_FEATURES);
 }
 // GH #418: mid-flow refusal + retry-once signal. The message prefix is the
 // wire contract — device-session.ts and agent-device-wrapper.ts map it to the

@@ -40,7 +40,7 @@ class CommandServer(
             val body = JSONObject()
                 .put("ok", true)
                 .put("protocolVersion", RunnerProtocol.VERSION)
-                .put("capabilities", JSONArray(listOf("WINDOW_UPDATE", "HONEST_HITTABLE")))
+                .put("capabilities", JSONArray(listOf("WINDOW_UPDATE", "HONEST_HITTABLE", "APP_SCOPED_EXACT_INTERACTION")))
                 .put("commands", JSONArray(CommandDispatcher.SUPPORTED_COMMANDS))
                 .put("instanceId", authority.instanceId)
                 .put("sessionId", authority.sessionId)

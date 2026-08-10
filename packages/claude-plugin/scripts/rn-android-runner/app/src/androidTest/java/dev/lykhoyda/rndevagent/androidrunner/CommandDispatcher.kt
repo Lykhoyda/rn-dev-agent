@@ -319,8 +319,27 @@ class CommandDispatcher(
             val nodeType = node.className?.toString().orEmpty()
             if (nodeIdentifier == identifier && nodeType == type) matches.add(node) else node.recycle()
         }
+        val traversalComplete = ExactPressSafety.traversalComplete(stack.size)
         while (stack.isNotEmpty()) stack.removeLast().recycle()
-        val chosen = if (matches.size == 1) matches.single() else nodeContaining(matches, requested)
+        if (!traversalComplete) {
+            matches.forEach { it.recycle() }
+            throw ExactPressException(
+                "INTERACTION_NOT_ACTUATED",
+                "none",
+                "exact-target-unresolved",
+                "Exact Android interaction exhausted its traversal budget; refusing partial evidence.",
+            )
+        }
+        if (requested == null) {
+            matches.forEach { it.recycle() }
+            throw ExactPressException(
+                "INTERACTION_NOT_ACTUATED",
+                "none",
+                "exact-target-point-unavailable",
+                "Exact Android interaction has no owned snapshot point; refusing to guess.",
+            )
+        }
+        val chosen = nodeContaining(matches, requested)
         if (chosen == null) {
             val found = matches.size
             matches.forEach { it.recycle() }
@@ -337,7 +356,7 @@ class CommandDispatcher(
             )
         }
         matches.forEach { if (it !== chosen) it.recycle() }
-        return clickableAncestorOrSelf(chosen)
+        return clickableAncestorOrSelf(chosen, requested)
     }
 
     private fun nodeContaining(
@@ -357,12 +376,24 @@ class CommandDispatcher(
     // A labelled RN node (accessibilityLabel on a Text/Image inside a Pressable)
     // is not itself clickable, so ACTION_CLICK would be rejected on a target a
     // coordinate tap used to hit through its ancestor.
-    private fun clickableAncestorOrSelf(node: AccessibilityNodeInfo): AccessibilityNodeInfo {
+    private fun clickableAncestorOrSelf(
+        node: AccessibilityNodeInfo,
+        requested: Point,
+    ): AccessibilityNodeInfo {
+        if (!liveTargetContains(node, requested)) {
+            node.recycle()
+            throw exactTargetNotHittable()
+        }
         if (node.isClickable) return node
         var current: AccessibilityNodeInfo? = node.parent
         var depth = 0
         while (current != null && depth++ < CLICKABLE_ANCESTOR_MAX_DEPTH) {
             if (current.isClickable) {
+                if (!liveTargetContains(current, requested)) {
+                    current.recycle()
+                    node.recycle()
+                    throw exactTargetNotHittable()
+                }
                 node.recycle()
                 return current
             }
@@ -370,8 +401,32 @@ class CommandDispatcher(
             current.recycle()
             current = next
         }
-        return node
+        current?.recycle()
+        node.recycle()
+        throw ExactPressException(
+            "INTERACTION_NOT_ACTUATED",
+            "none",
+            "exact-target-not-clickable",
+            "Exact Android target has no live clickable owner; no coordinate fallback was attempted.",
+        )
     }
+
+    private fun liveTargetContains(node: AccessibilityNodeInfo, requested: Point): Boolean {
+        val bounds = Rect()
+        node.getBoundsInScreen(bounds)
+        return ExactPressSafety.liveTargetIsHittable(
+            node.isEnabled,
+            node.isVisibleToUser,
+            !bounds.isEmpty && bounds.contains(requested.x, requested.y),
+        )
+    }
+
+    private fun exactTargetNotHittable(): ExactPressException = ExactPressException(
+        "INTERACTION_NOT_ACTUATED",
+        "none",
+        "exact-target-not-hittable",
+        "Exact Android target is disabled, invisible, obscured, or no longer owns the requested point.",
+    )
 
     private fun imeBoundsInScreen(): Rect? {
         val ime = instrumentation.uiAutomation.windows

@@ -6,7 +6,10 @@ import {
   _setFetchForTest,
   _setAndroidRunnerStateForTest,
 } from '../../dist/runners/rn-android-runner-client.js';
-import { REQUIRED_ANDROID_COMMANDS } from '../../dist/runners/protocol.js';
+import {
+  REQUIRED_ANDROID_COMMANDS,
+  REQUIRED_ANDROID_FEATURES,
+} from '../../dist/runners/protocol.js';
 
 // The real AndroidRunnerState requires schemaVersion/devicePort/protocolVersion.
 // pid MUST be a live process (process.pid) so runAndroid's mandatory
@@ -35,7 +38,12 @@ function jsonReply(obj) {
 // startAndroidRunner's reuse gate probes GET /health and requires a compatible
 // protocol + full command surface before it will adopt the injected runner.
 function healthReply() {
-  return jsonReply({ ok: true, protocolVersion: 1, commands: [...REQUIRED_ANDROID_COMMANDS] });
+  return jsonReply({
+    ok: true,
+    protocolVersion: 1,
+    commands: [...REQUIRED_ANDROID_COMMANDS],
+    capabilities: [...REQUIRED_ANDROID_FEATURES],
+  });
 }
 
 beforeEach(() => {

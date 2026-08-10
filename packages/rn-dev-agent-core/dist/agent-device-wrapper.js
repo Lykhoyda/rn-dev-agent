@@ -5,7 +5,7 @@ import { failResult } from './utils.js';
 import { startFastRunner, probeFastRunnerLiveness, probeFastRunnerLivenessDetailed, adoptPersistedFastRunnerState, reapStaleFastRunner, hasBuiltTestProduct, derivedDataPathForRunner, acquireRunnerRebuildLock, releaseRunnerRebuildLock, runnerRebuildBudget, consumePendingFastRunnerArtifactNote, getRunnerPostMortem, } from './runners/rn-fast-runner-client.js';
 import { getPluginVersion } from './runners/protocol.js';
 import { resolveBootedIosUdid } from './tools/device-screenshot-raw.js';
-import { refCenter, getScreenRect, clearRefMap, isRefMapFresh, MAX_REF_MAP_AGE_MS, getCachedSignature, getCachedMetadata, getFreshRefTarget, refreshRef, getLastSnapshotHash, invalidateLastSnapshotHash, } from './fast-runner-ref-map.js';
+import { refCenter, getScreenRect, clearRefMap, isRefMapFresh, MAX_REF_MAP_AGE_MS, getCachedSignature, getCachedMetadata, getFreshRefTarget, isSystemUiRefAuthorized, refreshRef, getLastSnapshotHash, getLastSnapshotHashForPackage, invalidateLastSnapshotHash, } from './fast-runner-ref-map.js';
 import { recordNoUiChange, recordUiChange, WEDGED_DISTINCT_TARGETS, WEDGED_RUNTIME_HINT, } from './lifecycle/no-change-tracker.js';
 import { resolveBundleId } from './project-config.js';
 import { getStateDir, readJsonStateFile, writeJsonStateFileAtomic, } from './util/secure-state-file.js';
@@ -561,11 +561,17 @@ export function buildRunAndroidArgs(cliArgs, bundleId) {
         case 'tap': {
             const ref = positionals[0];
             if (ref && ref.startsWith('@')) {
+                const includeSystemUi = cliArgs.includes('--include-system-ui') || isSystemUiRefAuthorized(ref);
                 const center = isRefMapFresh() ? refCenter(ref) : null;
-                if (!center)
-                    return { command: 'tap', _staleRef: ref, ...withBundle };
+                if (!center) {
+                    return {
+                        command: 'tap',
+                        _staleRef: ref,
+                        ...(includeSystemUi ? { includeSystemUi: true } : {}),
+                        ...withBundle,
+                    };
+                }
                 const metadata = getCachedMetadata(ref);
-                const includeSystemUi = cliArgs.includes('--include-system-ui');
                 return {
                     command: 'tap',
                     x: center.x,
@@ -698,6 +704,14 @@ export function buildRunAndroidArgs(cliArgs, bundleId) {
         default:
             throw new Error(`buildRunAndroidArgs: unsupported command "${cmd ?? '<empty>'}"`);
     }
+}
+export function rebuildHealedAndroidArgs(cliArgs, healedRef, bundleId, includeSystemUi) {
+    const reboundArgs = [...cliArgs];
+    reboundArgs[1] = healedRef.startsWith('@') ? healedRef : `@${healedRef}`;
+    if (includeSystemUi && !reboundArgs.includes('--include-system-ui')) {
+        reboundArgs.push('--include-system-ui');
+    }
+    return buildRunAndroidArgs(reboundArgs, bundleId);
 }
 // #210: pure decision for the iOS device_* auto-spawn. Cold-build-safe — only auto-starts
 // when a prebuilt .xctestrun exists; a missing rig or no device returns an actionable error
@@ -1152,7 +1166,9 @@ export async function establishInteractionBaseline(ctx, policy, deps = {}) {
         return undefined;
     if (!(await effectVerificationEnabled(ctx.settle, deps)))
         return undefined;
-    const cached = getLastSnapshotHash();
+    const cached = ctx.platform === 'android' && ctx.appId
+        ? getLastSnapshotHashForPackage(ctx.appId)
+        : getLastSnapshotHash();
     if (cached !== null)
         return cached;
     try {
@@ -1200,9 +1216,10 @@ export async function settleWithRetryIfNoChange(firstResult, dispatch, ctx, poli
         ctx.platform === 'android' &&
         (await effectVerificationEnabled(ctx.settle, deps));
     const verify = failClosed || policy.eligible;
-    const preHash = verify
-        ? (ctx.initialSnapshotHash ?? getLastSnapshotHash() ?? undefined)
-        : undefined;
+    const cachedHash = ctx.platform === 'android' && ctx.appId
+        ? getLastSnapshotHashForPackage(ctx.appId)
+        : getLastSnapshotHash();
+    const preHash = verify ? (ctx.initialSnapshotHash ?? cachedHash ?? undefined) : undefined;
     const first = await settleAfterMutationWithOutcome(firstResult, { ...ctx, ...(preHash !== undefined ? { initialSnapshotHash: preHash } : {}) }, deps);
     if (first.result.isError || !verify)
         return first.result;
@@ -1472,7 +1489,7 @@ export async function runNative(cliArgs, opts = {}) {
             }
         }
         const { runAndroid, consumePendingAndroidUpgradeNote } = await import('./runners/rn-android-runner-client.js');
-        const android = buildRunAndroidArgs(cliArgs, appId);
+        let android = buildRunAndroidArgs(cliArgs, appId);
         let healMeta = null;
         if (android._staleRef && selfHealEnabled(process.env)) {
             const healed = await healStaleRef(android._staleRef, () => runAndroid({
@@ -1483,9 +1500,10 @@ export async function runNative(cliArgs, opts = {}) {
             }));
             if (healed.kind === 'failed')
                 return healed.result;
-            android.x = healed.x;
-            android.y = healed.y;
-            delete android._staleRef;
+            android = rebuildHealedAndroidArgs(cliArgs, healed.newRef, appId, android.includeSystemUi === true);
+            if (android._staleRef) {
+                return staleRefFail(android._staleRef, 'absent', getCachedMetadata(android._staleRef));
+            }
             healMeta = {
                 reResolved: true,
                 reResolvedRef: healed.newRef,

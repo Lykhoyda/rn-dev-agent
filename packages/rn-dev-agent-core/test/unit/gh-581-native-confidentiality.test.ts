@@ -6,7 +6,10 @@ import {
   runAndroid,
   startAndroidRunner,
 } from '../../dist/runners/rn-android-runner-client.js';
-import { REQUIRED_ANDROID_COMMANDS } from '../../dist/runners/protocol.js';
+import {
+  REQUIRED_ANDROID_COMMANDS,
+  REQUIRED_ANDROID_FEATURES,
+} from '../../dist/runners/protocol.js';
 
 test('Android runner fill keeps its privacy canary out of diagnostics and public output', async () => {
   const canary = 'RN_FILL_LOGCAT_PRIVACY_CANARY_581';
@@ -32,6 +35,7 @@ test('Android runner fill keeps its privacy canary out of diagnostics and public
           ok: true,
           protocolVersion: 1,
           commands: [...REQUIRED_ANDROID_COMMANDS],
+          capabilities: [...REQUIRED_ANDROID_FEATURES],
         }),
       );
     }
@@ -80,6 +84,7 @@ test('Android exact fill timeout is not replayed and runner health remains probe
           ok: true,
           protocolVersion: 1,
           commands: [...REQUIRED_ANDROID_COMMANDS],
+          capabilities: [...REQUIRED_ANDROID_FEATURES],
         }),
       );
     }

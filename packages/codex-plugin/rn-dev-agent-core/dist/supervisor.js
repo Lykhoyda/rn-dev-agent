@@ -18298,9 +18298,11 @@ function isRefMapFresh(maxAgeMs = MAX_REF_MAP_AGE_MS) {
 function clearRefMap() {
   refMap.clear();
   metadataMap.clear();
+  systemUiAuthorizedRefs.clear();
   screenRect = null;
   lastUpdated = 0;
   lastSnapshotHash = null;
+  lastPackageSnapshotHashes.clear();
   snapshotGeneration = 0;
   keyboardStateAtSnapshot = null;
 }
@@ -18325,6 +18327,7 @@ function updateRefMapFromFlat(nodes, freshness = {}) {
   if (validCount === 0 && refMap.size > 0) {
     return { applied: false, reason: "empty-capture" };
   }
+  systemUiAuthorizedRefs.clear();
   refMap.clear();
   screenRect = null;
   snapshotGeneration = freshness.snapshotGeneration ?? snapshotGeneration + 1;
@@ -18357,8 +18360,21 @@ function updateRefMapFromFlat(nodes, freshness = {}) {
   screenRect = resolveScreenRect(entries);
   try {
     lastSnapshotHash = hashSnapshotNodes(hashed);
+    lastPackageSnapshotHashes.clear();
+    const byPackage = /* @__PURE__ */ new Map();
+    for (const node of hashed) {
+      if (!node.packageName)
+        continue;
+      const packageNodes = byPackage.get(node.packageName) ?? [];
+      packageNodes.push(node);
+      byPackage.set(node.packageName, packageNodes);
+    }
+    for (const [packageName, packageNodes] of byPackage) {
+      lastPackageSnapshotHashes.set(packageName, hashSnapshotNodes(packageNodes));
+    }
   } catch {
     lastSnapshotHash = null;
+    lastPackageSnapshotHashes.clear();
   }
   lastUpdated = Date.now();
   return { applied: true };
@@ -18393,6 +18409,15 @@ function getCachedMetadata(ref) {
     meta.identifier = rec.identifier;
   return meta;
 }
+function authorizeSystemUiRef(ref) {
+  const key = ref.startsWith("@") ? ref.slice(1) : ref;
+  if (metadataMap.has(key))
+    systemUiAuthorizedRefs.add(key);
+}
+function isSystemUiRefAuthorized(ref) {
+  const key = ref.startsWith("@") ? ref.slice(1) : ref;
+  return metadataMap.has(key) && systemUiAuthorizedRefs.has(key);
+}
 function getCachedSignature(ref) {
   const key = ref.startsWith("@") ? ref.slice(1) : ref;
   const rec = metadataMap.get(key);
@@ -18412,8 +18437,12 @@ function getCachedSignature(ref) {
 function getLastSnapshotHash() {
   return lastSnapshotHash;
 }
+function getLastSnapshotHashForPackage(packageName) {
+  return lastPackageSnapshotHashes.get(packageName) ?? null;
+}
 function invalidateLastSnapshotHash() {
   lastSnapshotHash = null;
+  lastPackageSnapshotHashes.clear();
 }
 function identityMatches(sig, node) {
   return node.type === sig.type && node.label === sig.label && node.identifier === sig.identifier;
@@ -18435,7 +18464,7 @@ function refreshRef(sig, nodes) {
   }
   return { kind: "ambiguous", candidates: matches.map((m) => m.node) };
 }
-var refMap, metadataMap, screenRect, lastUpdated, lastSnapshotHash, snapshotGeneration, keyboardStateAtSnapshot, WINDOW_TYPES, MAX_REF_MAP_AGE_MS;
+var refMap, metadataMap, screenRect, lastUpdated, lastSnapshotHash, lastPackageSnapshotHashes, snapshotGeneration, keyboardStateAtSnapshot, systemUiAuthorizedRefs, WINDOW_TYPES, MAX_REF_MAP_AGE_MS;
 var init_fast_runner_ref_map = __esm({
   "packages/rn-dev-agent-core/dist/fast-runner-ref-map.js"() {
     "use strict";
@@ -18445,8 +18474,10 @@ var init_fast_runner_ref_map = __esm({
     screenRect = null;
     lastUpdated = 0;
     lastSnapshotHash = null;
+    lastPackageSnapshotHashes = /* @__PURE__ */ new Map();
     snapshotGeneration = 0;
     keyboardStateAtSnapshot = null;
+    systemUiAuthorizedRefs = /* @__PURE__ */ new Set();
     WINDOW_TYPES = /* @__PURE__ */ new Set(["Application", "Window"]);
     MAX_REF_MAP_AGE_MS = 6e4;
   }
@@ -18796,7 +18827,7 @@ function getPluginVersion() {
   }
   return cachedPluginVersion;
 }
-var RUNNER_PROTOCOL_VERSION, MIN_SUPPORTED_RUNNER_PROTOCOL, REQUIRED_IOS_COMMANDS, REQUIRED_IOS_FEATURES, REQUIRED_ANDROID_COMMANDS, cachedPluginVersion;
+var RUNNER_PROTOCOL_VERSION, MIN_SUPPORTED_RUNNER_PROTOCOL, REQUIRED_IOS_COMMANDS, REQUIRED_IOS_FEATURES, REQUIRED_ANDROID_FEATURES, REQUIRED_ANDROID_COMMANDS, cachedPluginVersion;
 var init_protocol = __esm({
   "packages/rn-dev-agent-core/dist/runners/protocol.js"() {
     "use strict";
@@ -18816,6 +18847,7 @@ var init_protocol = __esm({
       "status"
     ];
     REQUIRED_IOS_FEATURES = ["EXACT_KEYBOARD_TARGET_GUARD"];
+    REQUIRED_ANDROID_FEATURES = ["APP_SCOPED_EXACT_INTERACTION"];
     REQUIRED_ANDROID_COMMANDS = [
       "tap",
       "type",
@@ -24168,6 +24200,7 @@ __export(settle_exports, {
   SETTLE_MAX_BUDGET_MS: () => SETTLE_MAX_BUDGET_MS,
   buildAndroidProbes: () => buildAndroidProbes,
   buildIosProbes: () => buildIosProbes,
+  hashAndroidAppSnapshotNodes: () => hashAndroidAppSnapshotNodes,
   settleEnabled: () => settleEnabled,
   waitForSettle: () => waitForSettle
 });
@@ -24287,13 +24320,18 @@ function buildIosProbes(bundleId) {
     now: () => Date.now()
   };
 }
+function hashAndroidAppSnapshotNodes(nodes, bundleId) {
+  if (!bundleId)
+    return null;
+  return hashSnapshotNodes(nodes.filter((node) => node.packageName === bundleId));
+}
 function buildAndroidProbes(bundleId) {
   const pinnedHostPort = getAndroidRunnerHostPort() ?? void 0;
   return {
     isWindowUpdating: (timeoutMs) => androidIsWindowUpdatingProbe(timeoutMs, bundleId, pinnedHostPort),
     snapshotHash: async () => {
       const nodes = await androidSnapshotNodesViaProbe(bundleId, pinnedHostPort);
-      return nodes ? hashSnapshotNodes(nodes) : null;
+      return nodes ? hashAndroidAppSnapshotNodes(nodes, bundleId) : null;
     },
     sleep: realSleep,
     now: () => Date.now()
@@ -24657,11 +24695,17 @@ function buildRunAndroidArgs(cliArgs, bundleId) {
     case "tap": {
       const ref = positionals[0];
       if (ref && ref.startsWith("@")) {
+        const includeSystemUi = cliArgs.includes("--include-system-ui") || isSystemUiRefAuthorized(ref);
         const center = isRefMapFresh() ? refCenter(ref) : null;
-        if (!center)
-          return { command: "tap", _staleRef: ref, ...withBundle };
+        if (!center) {
+          return {
+            command: "tap",
+            _staleRef: ref,
+            ...includeSystemUi ? { includeSystemUi: true } : {},
+            ...withBundle
+          };
+        }
         const metadata = getCachedMetadata(ref);
-        const includeSystemUi = cliArgs.includes("--include-system-ui");
         return {
           command: "tap",
           x: center.x,
@@ -24783,6 +24827,14 @@ function buildRunAndroidArgs(cliArgs, bundleId) {
     default:
       throw new Error(`buildRunAndroidArgs: unsupported command "${cmd ?? "<empty>"}"`);
   }
+}
+function rebuildHealedAndroidArgs(cliArgs, healedRef, bundleId, includeSystemUi) {
+  const reboundArgs = [...cliArgs];
+  reboundArgs[1] = healedRef.startsWith("@") ? healedRef : `@${healedRef}`;
+  if (includeSystemUi && !reboundArgs.includes("--include-system-ui")) {
+    reboundArgs.push("--include-system-ui");
+  }
+  return buildRunAndroidArgs(reboundArgs, bundleId);
 }
 function decideRunnerSpawn(input) {
   if (input.liveness === "alive")
@@ -25058,7 +25110,7 @@ async function establishInteractionBaseline(ctx, policy, deps = {}) {
     return void 0;
   if (!await effectVerificationEnabled(ctx.settle, deps))
     return void 0;
-  const cached2 = getLastSnapshotHash();
+  const cached2 = ctx.platform === "android" && ctx.appId ? getLastSnapshotHashForPackage(ctx.appId) : getLastSnapshotHash();
   if (cached2 !== null)
     return cached2;
   try {
@@ -25088,7 +25140,8 @@ function unverifiedInteractionResult(observedResult, targetKey, attempts3, reaso
 async function settleWithRetryIfNoChange(firstResult, dispatch, ctx, policy, deps = {}) {
   const failClosed = policy.verificationRequired && ctx.platform === "android" && await effectVerificationEnabled(ctx.settle, deps);
   const verify = failClosed || policy.eligible;
-  const preHash = verify ? ctx.initialSnapshotHash ?? getLastSnapshotHash() ?? void 0 : void 0;
+  const cachedHash = ctx.platform === "android" && ctx.appId ? getLastSnapshotHashForPackage(ctx.appId) : getLastSnapshotHash();
+  const preHash = verify ? ctx.initialSnapshotHash ?? cachedHash ?? void 0 : void 0;
   const first = await settleAfterMutationWithOutcome(firstResult, { ...ctx, ...preHash !== void 0 ? { initialSnapshotHash: preHash } : {} }, deps);
   if (first.result.isError || !verify)
     return first.result;
@@ -25294,7 +25347,7 @@ async function runNative(cliArgs, opts = {}) {
       }
     }
     const { runAndroid: runAndroid2, consumePendingAndroidUpgradeNote: consumePendingAndroidUpgradeNote2 } = await Promise.resolve().then(() => (init_rn_android_runner_client(), rn_android_runner_client_exports));
-    const android = buildRunAndroidArgs(cliArgs, appId);
+    let android = buildRunAndroidArgs(cliArgs, appId);
     let healMeta = null;
     if (android._staleRef && selfHealEnabled(process.env)) {
       const healed = await healStaleRef(android._staleRef, () => runAndroid2({
@@ -25305,9 +25358,10 @@ async function runNative(cliArgs, opts = {}) {
       }));
       if (healed.kind === "failed")
         return healed.result;
-      android.x = healed.x;
-      android.y = healed.y;
-      delete android._staleRef;
+      android = rebuildHealedAndroidArgs(cliArgs, healed.newRef, appId, android.includeSystemUi === true);
+      if (android._staleRef) {
+        return staleRefFail(android._staleRef, "absent", getCachedMetadata(android._staleRef));
+      }
       healMeta = {
         reResolved: true,
         reResolvedRef: healed.newRef,
@@ -28102,13 +28156,20 @@ function runnerLeakFailResult(query, recoveryReason) {
 }
 async function pressCandidate(candidate, action, getClient2, includeSystemUi = false) {
   const ref = candidate.ref.startsWith("@") ? candidate.ref : `@${candidate.ref}`;
+  if (includeSystemUi)
+    authorizeSystemUiRef(ref);
   if (action === "click") {
     const tapArgs = ["press", ref, ...includeSystemUi ? ["--include-system-ui"] : []];
     const tap = async () => surfaceKeyboardGuard(await runNative(tapArgs));
     const first = await tap();
     return first.isError && getClient2 ? healKeyboardOccludedTap(first, keyboardHealDeps(getClient2, tap)) : first;
   }
-  return okResult({ ref: candidate.ref, label: candidate.label, testID: candidate.testID });
+  return okResult({
+    ref: candidate.ref,
+    label: candidate.label,
+    testID: candidate.testID,
+    ...includeSystemUi ? { scope: "system-ui-explicit" } : {}
+  });
 }
 function tagPressIfRecovered(result, tier) {
   if (!tier || result.isError)
@@ -28807,6 +28868,7 @@ var init_device_interact = __esm({
     init_runner_leak_recovery();
     init_device_session();
     init_fast_runner_ref_map();
+    init_fast_runner_ref_map();
     init_fill_coordinator();
     TYPE_PRIORITY_FOR_TAP = {
       Button: 100,
@@ -29372,6 +29434,7 @@ __export(rn_android_runner_client_exports, {
   buildInstrumentAuthorityArgs: () => buildInstrumentAuthorityArgs,
   buildInstrumentPortArgs: () => buildInstrumentPortArgs,
   buildInstrumentVersionArgs: () => buildInstrumentVersionArgs,
+  classifyAndroidHealth: () => classifyAndroidHealth,
   completeAndroidRunnerRebuildLock: () => completeAndroidRunnerRebuildLock,
   consumePendingAndroidUpgradeNote: () => consumePendingAndroidUpgradeNote,
   getAndroidRunnerCapabilities: () => getAndroidRunnerCapabilities,
@@ -29801,8 +29864,9 @@ function classifyAndroidHealth(info) {
   return classifyRunnerCompatibility({
     ...info.protocolVersion !== void 0 ? { protocolVersion: info.protocolVersion } : {},
     ...info.runnerVersion !== void 0 ? { runnerVersion: info.runnerVersion } : {},
-    ...info.commands !== void 0 ? { commands: info.commands } : {}
-  }, getPluginVersion(), REQUIRED_ANDROID_COMMANDS);
+    ...info.commands !== void 0 ? { commands: info.commands } : {},
+    ...info.capabilities !== void 0 ? { capabilities: info.capabilities } : {}
+  }, getPluginVersion(), REQUIRED_ANDROID_COMMANDS, REQUIRED_ANDROID_FEATURES);
 }
 function initializeAndroidRunnerRebuildState(databasePath) {
   const store = openAuthorityStore(databasePath);

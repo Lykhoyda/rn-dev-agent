@@ -35,8 +35,10 @@ import {
   getCachedSignature,
   getCachedMetadata,
   getFreshRefTarget,
+  isSystemUiRefAuthorized,
   refreshRef,
   getLastSnapshotHash,
+  getLastSnapshotHashForPackage,
   invalidateLastSnapshotHash,
   type FlatNode,
   type RefreshOutcome,
@@ -709,10 +711,18 @@ export function buildRunAndroidArgs(
     case 'tap': {
       const ref = positionals[0];
       if (ref && ref.startsWith('@')) {
+        const includeSystemUi =
+          cliArgs.includes('--include-system-ui') || isSystemUiRefAuthorized(ref);
         const center = isRefMapFresh() ? refCenter(ref) : null;
-        if (!center) return { command: 'tap', _staleRef: ref, ...withBundle };
+        if (!center) {
+          return {
+            command: 'tap',
+            _staleRef: ref,
+            ...(includeSystemUi ? { includeSystemUi: true } : {}),
+            ...withBundle,
+          };
+        }
         const metadata = getCachedMetadata(ref);
-        const includeSystemUi = cliArgs.includes('--include-system-ui');
         return {
           command: 'tap',
           x: center.x,
@@ -858,6 +868,20 @@ export function buildRunAndroidArgs(
     default:
       throw new Error(`buildRunAndroidArgs: unsupported command "${cmd ?? '<empty>'}"`);
   }
+}
+
+export function rebuildHealedAndroidArgs(
+  cliArgs: string[],
+  healedRef: string,
+  bundleId: string | undefined,
+  includeSystemUi: boolean,
+): import('./runners/rn-android-runner-client.js').RunAndroidArgs {
+  const reboundArgs = [...cliArgs];
+  reboundArgs[1] = healedRef.startsWith('@') ? healedRef : `@${healedRef}`;
+  if (includeSystemUi && !reboundArgs.includes('--include-system-ui')) {
+    reboundArgs.push('--include-system-ui');
+  }
+  return buildRunAndroidArgs(reboundArgs, bundleId);
 }
 
 export type RunnerSpawnDecision =
@@ -1456,7 +1480,10 @@ export async function establishInteractionBaseline(
 ): Promise<string | undefined> {
   if (!policy.verificationRequired) return undefined;
   if (!(await effectVerificationEnabled(ctx.settle, deps))) return undefined;
-  const cached = getLastSnapshotHash();
+  const cached =
+    ctx.platform === 'android' && ctx.appId
+      ? getLastSnapshotHashForPackage(ctx.appId)
+      : getLastSnapshotHash();
   if (cached !== null) return cached;
   try {
     const settle = await import('./lifecycle/settle.js');
@@ -1521,9 +1548,11 @@ export async function settleWithRetryIfNoChange(
     ctx.platform === 'android' &&
     (await effectVerificationEnabled(ctx.settle, deps));
   const verify = failClosed || policy.eligible;
-  const preHash = verify
-    ? (ctx.initialSnapshotHash ?? getLastSnapshotHash() ?? undefined)
-    : undefined;
+  const cachedHash =
+    ctx.platform === 'android' && ctx.appId
+      ? getLastSnapshotHashForPackage(ctx.appId)
+      : getLastSnapshotHash();
+  const preHash = verify ? (ctx.initialSnapshotHash ?? cachedHash ?? undefined) : undefined;
   const first = await settleAfterMutationWithOutcome(
     firstResult,
     { ...ctx, ...(preHash !== undefined ? { initialSnapshotHash: preHash } : {}) },
@@ -1868,7 +1897,7 @@ export async function runNative(
     }
     const { runAndroid, consumePendingAndroidUpgradeNote } =
       await import('./runners/rn-android-runner-client.js');
-    const android = buildRunAndroidArgs(cliArgs, appId);
+    let android = buildRunAndroidArgs(cliArgs, appId);
     let healMeta: Record<string, unknown> | null = null;
     if (android._staleRef && selfHealEnabled(process.env)) {
       const healed = await healStaleRef(android._staleRef, () =>
@@ -1880,9 +1909,15 @@ export async function runNative(
         }),
       );
       if (healed.kind === 'failed') return healed.result;
-      android.x = healed.x;
-      android.y = healed.y;
-      delete android._staleRef;
+      android = rebuildHealedAndroidArgs(
+        cliArgs,
+        healed.newRef,
+        appId,
+        android.includeSystemUi === true,
+      );
+      if (android._staleRef) {
+        return staleRefFail(android._staleRef, 'absent', getCachedMetadata(android._staleRef));
+      }
       healMeta = {
         reResolved: true,
         reResolvedRef: healed.newRef,

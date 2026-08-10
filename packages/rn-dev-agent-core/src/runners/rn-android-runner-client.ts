@@ -31,6 +31,7 @@ import {
   RUNNER_PROTOCOL_VERSION,
   MIN_SUPPORTED_RUNNER_PROTOCOL,
   REQUIRED_ANDROID_COMMANDS,
+  REQUIRED_ANDROID_FEATURES,
   getPluginVersion,
   classifyRunnerCompatibility,
 } from './protocol.js';
@@ -847,15 +848,17 @@ export async function reapActiveAndroidRunner(deviceId?: string): Promise<void> 
   await reapMismatchedAndroidRunner(runnerState ?? (deviceId ? { deviceId } : null));
 }
 
-function classifyAndroidHealth(info: AndroidHealthInfo) {
+export function classifyAndroidHealth(info: AndroidHealthInfo) {
   return classifyRunnerCompatibility(
     {
       ...(info.protocolVersion !== undefined ? { protocolVersion: info.protocolVersion } : {}),
       ...(info.runnerVersion !== undefined ? { runnerVersion: info.runnerVersion } : {}),
       ...(info.commands !== undefined ? { commands: info.commands } : {}),
+      ...(info.capabilities !== undefined ? { capabilities: info.capabilities } : {}),
     },
     getPluginVersion(),
     REQUIRED_ANDROID_COMMANDS,
+    REQUIRED_ANDROID_FEATURES,
   );
 }
 

@@ -11672,6 +11672,7 @@ var init_device_interact = __esm({
     init_runner_leak_recovery();
     init_device_session();
     init_fast_runner_ref_map();
+    init_fast_runner_ref_map();
     init_fill_coordinator();
   }
 });

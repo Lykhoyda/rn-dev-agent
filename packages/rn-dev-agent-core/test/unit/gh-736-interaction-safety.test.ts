@@ -5,23 +5,31 @@ import { afterEach, test } from 'node:test';
 import {
   buildRunAndroidArgs,
   establishInteractionBaseline,
+  rebuildHealedAndroidArgs,
   settleWithRetryIfNoChange,
 } from '../../dist/agent-device-wrapper.js';
 import {
   clearRefMap,
   getLastSnapshotHash,
   invalidateLastSnapshotHash,
+  isSystemUiRefAuthorized,
   updateRefMapFromFlat,
 } from '../../dist/fast-runner-ref-map.js';
 import { okResult } from '../../dist/utils.js';
 import { hashSnapshotNodes } from '../../dist/lifecycle/settle-hash.js';
+import { hashAndroidAppSnapshotNodes } from '../../dist/lifecycle/settle.js';
 import {
   _setAndroidRunnerStateForTest,
   _setFetchForTest,
+  classifyAndroidHealth,
   runAndroid,
 } from '../../dist/runners/rn-android-runner-client.js';
-import { REQUIRED_ANDROID_COMMANDS } from '../../dist/runners/protocol.js';
-import { scopeSnapshotNodesForFind } from '../../dist/tools/device-interact.js';
+import {
+  classifyRunnerCompatibility,
+  REQUIRED_ANDROID_COMMANDS,
+  REQUIRED_ANDROID_FEATURES,
+} from '../../dist/runners/protocol.js';
+import { pressCandidate, scopeSnapshotNodesForFind } from '../../dist/tools/device-interact.js';
 
 const appId = 'com.example.app';
 const appHome = {
@@ -58,6 +66,39 @@ test('Android find scope fails closed when app ownership is unavailable', () => 
   assert.deepEqual(scopeSnapshotNodesForFind([systemHome], 'android', undefined, false), []);
 });
 
+test('explicit system-UI find scope is preserved on the returned ref', async () => {
+  updateRefMapFromFlat([appHome, systemHome]);
+  const result = await pressCandidate(
+    {
+      ref: systemHome.ref,
+      label: systemHome.label,
+      testID: systemHome.identifier,
+      type: systemHome.type,
+    },
+    undefined,
+    undefined,
+    true,
+  );
+  const envelope = JSON.parse(result.content[0].text) as {
+    data: { ref: string; scope: string };
+  };
+  assert.equal(envelope.data.scope, 'system-ui-explicit');
+  assert.equal(isSystemUiRefAuthorized(systemHome.ref), true);
+  assert.equal(buildRunAndroidArgs(['press', systemHome.ref], appId).includeSystemUi, true);
+});
+
+test('system-UI ref authorization never crosses snapshot generations', async () => {
+  updateRefMapFromFlat([systemHome]);
+  await pressCandidate(
+    { ref: systemHome.ref, testID: systemHome.identifier, type: systemHome.type },
+    undefined,
+    undefined,
+    true,
+  );
+  updateRefMapFromFlat([appHome]);
+  assert.equal(isSystemUiRefAuthorized(systemHome.ref), false);
+});
+
 test('fresh testID refs use exact accessibility ownership instead of snapshot coordinates', () => {
   updateRefMapFromFlat([
     {
@@ -85,6 +126,57 @@ test('fresh testID refs use exact accessibility ownership instead of snapshot co
   );
 });
 
+test('stale-ref healing rebuilds exact ownership and explicit system scope', () => {
+  updateRefMapFromFlat([
+    {
+      ref: '@e9',
+      type: 'android.widget.Switch',
+      identifier: 'settings-theme-toggle',
+      rect: { x: 700, y: 300, width: 100, height: 50 },
+      enabled: true,
+      hittable: true,
+    },
+  ]);
+  assert.deepEqual(rebuildHealedAndroidArgs(['press', '@e7'], '@e9', appId, true), {
+    command: 'tap',
+    x: 750,
+    y: 325,
+    exactIdentifier: 'settings-theme-toggle',
+    exactType: 'android.widget.Switch',
+    includeSystemUi: true,
+    bundleId: appId,
+  });
+});
+
+test('stale Android runners without scoped exact-interaction semantics are rejected', () => {
+  const common = {
+    protocolVersion: 1,
+    commands: [...REQUIRED_ANDROID_COMMANDS],
+  };
+  assert.deepEqual(classifyAndroidHealth(common), {
+    compatible: false,
+    reason: 'missing-features',
+    missing: ['APP_SCOPED_EXACT_INTERACTION'],
+  });
+  assert.deepEqual(
+    classifyRunnerCompatibility(common, null, REQUIRED_ANDROID_COMMANDS, REQUIRED_ANDROID_FEATURES),
+    {
+      compatible: false,
+      reason: 'missing-features',
+      missing: ['APP_SCOPED_EXACT_INTERACTION'],
+    },
+  );
+  assert.deepEqual(
+    classifyRunnerCompatibility(
+      { ...common, capabilities: [...REQUIRED_ANDROID_FEATURES] },
+      null,
+      REQUIRED_ANDROID_COMMANDS,
+      REQUIRED_ANDROID_FEATURES,
+    ),
+    { compatible: true },
+  );
+});
+
 test('Android runner reports a rejected tap as failure instead of success', async () => {
   _setAndroidRunnerStateForTest({
     schemaVersion: 1,
@@ -103,6 +195,7 @@ test('Android runner reports a rejected tap as failure instead of success', asyn
           ok: true,
           protocolVersion: 1,
           commands: [...REQUIRED_ANDROID_COMMANDS],
+          capabilities: [...REQUIRED_ANDROID_FEATURES],
         }),
       );
     }
@@ -126,6 +219,22 @@ test('Android runner reports a rejected tap as failure instead of success', asyn
   assert.equal(envelope.ok, false);
   assert.equal(envelope.code, 'INTERACTION_NOT_ACTUATED');
   assert.equal(envelope.meta.mutation, 'none');
+});
+
+test('effect hashes ignore system-window changes and observe owned-app changes', () => {
+  const baseApp = { ...appHome, checked: false };
+  const changedApp = { ...appHome, checked: true };
+  const baseSystem = { ...systemHome, checked: false };
+  const changedSystem = { ...systemHome, checked: true };
+  assert.equal(
+    hashAndroidAppSnapshotNodes([baseApp, baseSystem], appId),
+    hashAndroidAppSnapshotNodes([baseApp, changedSystem], appId),
+  );
+  assert.notEqual(
+    hashAndroidAppSnapshotNodes([baseApp, baseSystem], appId),
+    hashAndroidAppSnapshotNodes([changedApp, baseSystem], appId),
+  );
+  assert.equal(hashAndroidAppSnapshotNodes([baseApp], undefined), null);
 });
 
 test('Switch checked-state changes are observable to interaction settlement', () => {
@@ -196,9 +305,13 @@ test('exact press disambiguates duplicates by the requested point and clicks the
   assert.match(source, /nodeContaining\(matches, requested\)/);
   // A labelled non-clickable node routes to its nearest clickable ancestor.
   assert.match(source, /private fun clickableAncestorOrSelf\(/);
-  assert.match(source, /return clickableAncestorOrSelf\(chosen\)/);
+  assert.match(source, /return clickableAncestorOrSelf\(chosen, requested\)/);
   // The typed refusal survives when no unique safe target exists.
   assert.match(source, /"exact-target-ambiguous"/);
+  assert.match(source, /"exact-target-unresolved"/);
+  assert.match(source, /ExactPressSafety\.traversalComplete\(stack\.size\)/);
+  assert.match(source, /ExactPressSafety\.liveTargetIsHittable/);
+  assert.match(source, /"exact-target-not-hittable"/);
 });
 
 const baselinePolicy = { eligible: true, verificationRequired: true, targetKey: 'tap@960,430' };

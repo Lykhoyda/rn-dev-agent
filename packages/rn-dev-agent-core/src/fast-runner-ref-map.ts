@@ -68,8 +68,10 @@ let metadataMap = new Map<string, StoredRefRecord>();
 let screenRect: ElementRect | null = null;
 let lastUpdated = 0;
 let lastSnapshotHash: string | null = null;
+const lastPackageSnapshotHashes = new Map<string, string>();
 let snapshotGeneration = 0;
 let keyboardStateAtSnapshot: boolean | null = null;
+const systemUiAuthorizedRefs = new Set<string>();
 
 // Screen-rect derivation: hittable-seeded union GROWN BY OVERLAP.
 //
@@ -234,9 +236,11 @@ export function isRefMapFresh(maxAgeMs: number = MAX_REF_MAP_AGE_MS): boolean {
 export function clearRefMap(): void {
   refMap.clear();
   metadataMap.clear();
+  systemUiAuthorizedRefs.clear();
   screenRect = null;
   lastUpdated = 0;
   lastSnapshotHash = null;
+  lastPackageSnapshotHashes.clear();
   snapshotGeneration = 0;
   keyboardStateAtSnapshot = null;
 }
@@ -334,6 +338,10 @@ export function updateRefMapFromFlat(
     return { applied: false, reason: 'empty-capture' };
   }
 
+  // System-UI scope is explicit per trustworthy snapshot. Never carry an
+  // authorization onto refs minted by a later hierarchy generation.
+  systemUiAuthorizedRefs.clear();
+
   // refMap IS cleared (coordinates must never be served across generations —
   // only the CURRENT snapshot is tappable), but metadataMap is NOT: ref ids are
   // positional, so ids absent from this snapshot cannot collide with current
@@ -382,8 +390,20 @@ export function updateRefMapFromFlat(
   // probes is preserved. Fail-open on hash error (matches settle.ts).
   try {
     lastSnapshotHash = hashSnapshotNodes(hashed);
+    lastPackageSnapshotHashes.clear();
+    const byPackage = new Map<string, FlatNode[]>();
+    for (const node of hashed) {
+      if (!node.packageName) continue;
+      const packageNodes = byPackage.get(node.packageName) ?? [];
+      packageNodes.push(node);
+      byPackage.set(node.packageName, packageNodes);
+    }
+    for (const [packageName, packageNodes] of byPackage) {
+      lastPackageSnapshotHashes.set(packageName, hashSnapshotNodes(packageNodes));
+    }
   } catch {
     lastSnapshotHash = null;
+    lastPackageSnapshotHashes.clear();
   }
   lastUpdated = Date.now();
   return { applied: true };
@@ -435,6 +455,16 @@ export function getCachedMetadata(ref: string): RefMetadata | null {
   return meta;
 }
 
+export function authorizeSystemUiRef(ref: string): void {
+  const key = ref.startsWith('@') ? ref.slice(1) : ref;
+  if (metadataMap.has(key)) systemUiAuthorizedRefs.add(key);
+}
+
+export function isSystemUiRefAuthorized(ref: string): boolean {
+  const key = ref.startsWith('@') ? ref.slice(1) : ref;
+  return metadataMap.has(key) && systemUiAuthorizedRefs.has(key);
+}
+
 export function getCachedSignature(ref: string): RefSignature | null {
   const key = ref.startsWith('@') ? ref.slice(1) : ref;
   const rec = metadataMap.get(key);
@@ -453,11 +483,16 @@ export function getLastSnapshotHash(): string | null {
   return lastSnapshotHash;
 }
 
+export function getLastSnapshotHashForPackage(packageName: string): string | null {
+  return lastPackageSnapshotHashes.get(packageName) ?? null;
+}
+
 // Story 05 (#386): called when a mutating verb settles without any hash
 // observation — the screen may have changed unobserved, so the baseline must
 // not be compared against. Fail-open beats fail-wrong.
 export function invalidateLastSnapshotHash(): void {
   lastSnapshotHash = null;
+  lastPackageSnapshotHashes.clear();
 }
 
 function metadataMatches(a: RefMetadata, b: RefMetadata): boolean {

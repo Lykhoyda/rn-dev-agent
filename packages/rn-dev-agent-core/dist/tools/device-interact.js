@@ -7,6 +7,7 @@ import { withSession } from '../utils.js';
 import { okResult, failResult, createStepTimer } from '../utils.js';
 import { isAgentDeviceRunnerSentinel, recoverFromRunnerLeak } from './runner-leak-recovery.js';
 import { reopenSessionForRecovery } from './device-session.js';
+import { authorizeSystemUiRef } from '../fast-runner-ref-map.js';
 import { getCachedMetadata, isRefMapFresh, lookupRef } from '../fast-runner-ref-map.js';
 import { runFillCoordinator, } from './fill-coordinator.js';
 function candidateFromNode(n) {
@@ -202,6 +203,8 @@ function runnerLeakFailResult(query, recoveryReason) {
 }
 export async function pressCandidate(candidate, action, getClient, includeSystemUi = false) {
     const ref = candidate.ref.startsWith('@') ? candidate.ref : `@${candidate.ref}`;
+    if (includeSystemUi)
+        authorizeSystemUiRef(ref);
     if (action === 'click') {
         const tapArgs = ['press', ref, ...(includeSystemUi ? ['--include-system-ui'] : [])];
         const tap = async () => surfaceKeyboardGuard(await runNative(tapArgs));
@@ -210,7 +213,12 @@ export async function pressCandidate(candidate, action, getClient, includeSystem
             ? healKeyboardOccludedTap(first, keyboardHealDeps(getClient, tap))
             : first;
     }
-    return okResult({ ref: candidate.ref, label: candidate.label, testID: candidate.testID });
+    return okResult({
+        ref: candidate.ref,
+        label: candidate.label,
+        testID: candidate.testID,
+        ...(includeSystemUi ? { scope: 'system-ui-explicit' } : {}),
+    });
 }
 // B119: when an underlying snapshot triggered runner-leak recovery, surface
 // that side-effect on the wrapping result so callers (LLM agents) know the
