@@ -342,8 +342,7 @@ export interface MaestroRunDeps {
 }
 
 const UIAUTOMATION_SESSION_CREATION_FAILURE =
-  'failed to create driver: create session: session not created: ' +
-  'java.lang.IllegalStateException: UiAutomation not connected';
+  /^Error: failed to create driver: create session: session not created: java\.lang\.IllegalStateException: UiAutomation not connected(?:, UiAutomation@[^\r\n]+)?$/;
 
 function attachCause(error: unknown, cause: unknown): unknown {
   if (error instanceof Error && error.cause === undefined) {
@@ -357,12 +356,19 @@ function attachCause(error: unknown, cause: unknown): unknown {
 }
 
 export function isUiAutomationNotConnectedSessionCreationFailure(error: unknown): boolean {
-  const candidate = error as { message?: unknown; stdout?: unknown; stderr?: unknown } | null;
-  const text = [candidate?.message, candidate?.stdout, candidate?.stderr]
-    .filter((value): value is string => typeof value === 'string')
-    .join('\n')
-    .replace(/\s+/g, ' ');
-  return text.includes(UIAUTOMATION_SESSION_CREATION_FAILURE);
+  const candidate = error as { code?: unknown; stderr?: unknown } | null;
+  if (
+    typeof candidate?.code !== 'number' ||
+    candidate.code === 0 ||
+    typeof candidate.stderr !== 'string'
+  ) {
+    return false;
+  }
+  const records = candidate.stderr
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return records.length === 1 && UIAUTOMATION_SESSION_CREATION_FAILURE.test(records[0] as string);
 }
 
 export interface RunnerResumeEvidence {
@@ -729,6 +735,7 @@ export function createMaestroRunHandler(
           passed: false,
           deviceAuthority,
           output: output.slice(0, 4000),
+          ...androidReleaseMeta(),
         });
       }
       const summary = buildStepSummary(output, { failed: !passed });

@@ -44,8 +44,8 @@ function directSuccess(serial = SERIAL): { stdout: string; stderr: string } {
   };
 }
 
-function execFailure(stderr: string): Error {
-  return Object.assign(new Error('runner exited 1'), { stdout: '', stderr, code: 1 });
+function execFailure(stderr: string, stdout = ''): Error {
+  return Object.assign(new Error('runner exited 1'), { stdout, stderr, code: 1 });
 }
 
 function baseHandler(overrides: Parameters<typeof createMaestroRunHandler>[0] = {}) {
@@ -74,10 +74,36 @@ const runArgs = {
   appId: APP_ID,
 };
 
-test('GH#653 classifies only the exact UiAutomation session-creation failure', () => {
+test('GH#653 classifies only the structured UiAutomation session-creation error record', () => {
   assert.equal(
     isUiAutomationNotConnectedSessionCreationFailure(execFailure(UIAUTOMATION_FAILURE)),
     true,
+  );
+  assert.equal(
+    isUiAutomationNotConnectedSessionCreationFailure(
+      Object.assign(new Error(UIAUTOMATION_FAILURE), { code: 1, stdout: '', stderr: '' }),
+    ),
+    false,
+    'the exec error message is not the structured runner error channel',
+  );
+  assert.equal(
+    isUiAutomationNotConnectedSessionCreationFailure(execFailure('', UIAUTOMATION_FAILURE)),
+    false,
+    'captured app/runner stdout must not trigger recovery',
+  );
+  assert.equal(
+    isUiAutomationNotConnectedSessionCreationFailure(
+      execFailure(`${UIAUTOMATION_FAILURE}\nError: Element with id 'missing' not found`),
+    ),
+    false,
+    'a signature embedded before the actual terminal failure is not the session error record',
+  );
+  assert.equal(
+    isUiAutomationNotConnectedSessionCreationFailure(
+      execFailure(`APP_LOG ${UIAUTOMATION_FAILURE}`),
+    ),
+    false,
+    'an app-log record containing the signature must not trigger recovery',
   );
   assert.equal(
     isUiAutomationNotConnectedSessionCreationFailure(
@@ -88,14 +114,8 @@ test('GH#653 classifies only the exact UiAutomation session-creation failure', (
   assert.equal(
     isUiAutomationNotConnectedSessionCreationFailure(
       execFailure(
-        'failed to create driver: create session: session not created: java.lang.IllegalStateException: another failure',
+        'Error: failed to create driver: create session: session not created: java.lang.IllegalStateException: another failure',
       ),
-    ),
-    false,
-  );
-  assert.equal(
-    isUiAutomationNotConnectedSessionCreationFailure(
-      execFailure('failed to create driver: UiAutomation not connected while running a command'),
     ),
     false,
   );
@@ -162,6 +182,34 @@ test('GH#653 reproduced wedge releases only the exact owned slot and retries onc
   assert.deepEqual(body.data.androidUiAutomationRecovery, { retried: true, retryCount: 1 });
 });
 
+test('GH#653 release diagnostics survive an early device-authority refusal', async () => {
+  let executions = 0;
+  const handler = baseHandler({
+    parkFlow: async (run, opts) => {
+      opts.onAndroidRelease?.({ warnings: ['pre-flow owned-package release was partial'] });
+      return run();
+    },
+    execFile: async () => {
+      executions += 1;
+      if (executions === 1) throw execFailure(UIAUTOMATION_FAILURE);
+      return directSuccess('emulator-foreign');
+    },
+    releaseAndroidSlot: async () => ({
+      warnings: ['retry owned-package release was partial'],
+    }),
+  });
+
+  const body = envelope(await handler(runArgs));
+  assert.equal(body.ok, false);
+  assert.equal(body.code, 'DEVICE_AUTHORITY_MISMATCH');
+  assert.equal(executions, 2);
+  assert.deepEqual(body.meta.androidSlotReleaseWarnings, [
+    'pre-flow owned-package release was partial',
+    'retry owned-package release was partial',
+  ]);
+  assert.deepEqual(body.meta.androidUiAutomationRecovery, { retried: true, retryCount: 1 });
+});
+
 test('GH#653 retry release failures stay visible after recovery', async () => {
   let executions = 0;
   const handler = baseHandler({
@@ -204,7 +252,7 @@ test('GH#653 recovery release failure keeps the original UiAutomation failure', 
   const handler = baseHandler({
     execFile: async () => {
       executions += 1;
-      throw execFailure(`Connecting to Android device: ${SERIAL}\n${UIAUTOMATION_FAILURE}`);
+      throw execFailure(UIAUTOMATION_FAILURE, `Connecting to Android device: ${SERIAL}`);
     },
     releaseAndroidSlot: async () => {
       throw new ExactAndroidDeviceRequiredError();
@@ -244,6 +292,34 @@ test('GH#653 a repeated wedge is bounded to one retry', async () => {
   assert.equal(executions, 2);
   assert.equal(releases, 1);
   assert.deepEqual(body.meta.androidUiAutomationRecovery, { retried: true, retryCount: 1 });
+});
+
+test('GH#653 an app-log copy of the wedge signature never releases or retries', async () => {
+  let executions = 0;
+  let releases = 0;
+  const handler = baseHandler({
+    execFile: async () => {
+      executions += 1;
+      throw execFailure(
+        `Error: Element with id 'missing' not found`,
+        [
+          `Connecting to Android device: ${SERIAL}`,
+          `APP_LOG ${UIAUTOMATION_FAILURE}`,
+          UIAUTOMATION_FAILURE,
+        ].join('\n'),
+      );
+    },
+    releaseAndroidSlot: async () => {
+      releases += 1;
+      return { warnings: [] };
+    },
+  });
+
+  const body = envelope(await handler(runArgs));
+  assert.equal(body.ok, false);
+  assert.equal(executions, 1);
+  assert.equal(releases, 0);
+  assert.equal(body.meta.androidUiAutomationRecovery, undefined);
 });
 
 test('GH#653 unrelated Maestro failures never release or retry', async () => {
