@@ -575,6 +575,7 @@ export function createMaestroRunHandler(
     const releaseAndroidSlot = deps.releaseAndroidSlot ?? defaultReleaseAndroidSlot;
     const androidSlotReleaseWarnings: string[] = [];
     let releasedAndroidDeviceId: string | undefined;
+    let uiAutomationRecoveryAttempted = false;
     let uiAutomationRecoveryRetried = false;
     const recordAndroidRelease = (outcome: AndroidSlotReleaseOutcome | void): void => {
       if (outcome?.deviceId) releasedAndroidDeviceId = outcome.deviceId;
@@ -584,8 +585,13 @@ export function createMaestroRunHandler(
       ...(androidSlotReleaseWarnings.length > 0
         ? { androidSlotReleaseWarnings: [...androidSlotReleaseWarnings] }
         : {}),
-      ...(uiAutomationRecoveryRetried
-        ? { androidUiAutomationRecovery: { retried: true, retryCount: 1 } }
+      ...(uiAutomationRecoveryAttempted
+        ? {
+            androidUiAutomationRecovery: {
+              retried: uiAutomationRecoveryRetried,
+              retryCount: uiAutomationRecoveryRetried ? 1 : 0,
+            },
+          }
         : {}),
     });
     const androidReleaseCaveat = (): string | undefined =>
@@ -651,13 +657,13 @@ export function createMaestroRunHandler(
                 const recoveryDeviceId = requestedDeviceId ?? releasedAndroidDeviceId;
                 if (
                   platform !== 'android' ||
-                  uiAutomationRecoveryRetried ||
+                  uiAutomationRecoveryAttempted ||
                   !recoveryDeviceId ||
                   !isUiAutomationNotConnectedSessionCreationFailure(error)
                 ) {
                   throw error;
                 }
-                uiAutomationRecoveryRetried = true;
+                uiAutomationRecoveryAttempted = true;
                 try {
                   recordAndroidRelease(
                     await releaseAndroidSlot({
@@ -673,6 +679,7 @@ export function createMaestroRunHandler(
                   );
                   throw attachCause(error, releaseError);
                 }
+                uiAutomationRecoveryRetried = true;
                 return executeOnce();
               }
             },

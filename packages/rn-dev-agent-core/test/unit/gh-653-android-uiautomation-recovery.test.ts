@@ -222,6 +222,7 @@ test('GH#653 recovery release failure keeps the original UiAutomation failure', 
     body.meta.androidSlotReleaseWarnings[0],
     /UiAutomation recovery release failed:.*without an exact serial/s,
   );
+  assert.deepEqual(body.meta.androidUiAutomationRecovery, { retried: false, retryCount: 0 });
 });
 
 test('GH#653 a repeated wedge is bounded to one retry', async () => {
