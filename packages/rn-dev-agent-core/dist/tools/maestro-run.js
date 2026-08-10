@@ -474,9 +474,17 @@ export function createMaestroRunHandler(deps = {}) {
                         androidSlotReleaseWarnings.push(`UiAutomation recovery release failed: ${releaseError instanceof Error ? releaseError.message : String(releaseError)}`);
                         throw attachCause(error, releaseError);
                     }
-                    return executeOnce(() => {
-                        uiAutomationRecoveryRetried = true;
-                    });
+                    try {
+                        return await executeOnce(() => {
+                            uiAutomationRecoveryRetried = true;
+                        });
+                    }
+                    catch (retryError) {
+                        if (uiAutomationRecoveryRetried)
+                            throw retryError;
+                        androidSlotReleaseWarnings.push(`UiAutomation recovery retry skipped: ${retryError instanceof Error ? retryError.message : String(retryError)}`);
+                        throw attachCause(error, retryError);
+                    }
                 }
             }, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin), {
                 platform,
@@ -555,11 +563,12 @@ export function createMaestroRunHandler(deps = {}) {
                 // a loud warning the FIRST time per process so a 100-flow loop
                 // doesn't generate 100 identical warnings. Subsequent successes
                 // carry the reason silently in meta.
+                const warnCaveat = caveat && shouldWarnFallback(caveat) ? caveat : undefined;
                 if (releaseCaveat) {
-                    return warnResult(meta, caveat ? `${caveat}; ${releaseCaveat}` : releaseCaveat);
+                    return warnResult(meta, warnCaveat ? `${warnCaveat}; ${releaseCaveat}` : releaseCaveat);
                 }
-                if (caveat && shouldWarnFallback(caveat)) {
-                    return warnResult(meta, caveat);
+                if (warnCaveat) {
+                    return warnResult(meta, warnCaveat);
                 }
                 return okResult(meta);
             }

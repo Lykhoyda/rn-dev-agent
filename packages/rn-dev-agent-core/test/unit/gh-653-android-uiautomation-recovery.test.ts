@@ -332,6 +332,58 @@ test('GH#653 recovery cleanup is aborted by the remaining flow deadline', async 
   assert.match(body.meta.output, /UiAutomation not connected/);
 });
 
+test('GH#653 a deadline lapsing after successful cleanup keeps the wedge and never retries', async () => {
+  let executions = 0;
+  let releases = 0;
+  const times = [0, 0, 1_000, 5_001];
+  const handler = baseHandler({
+    now: () => times.shift() ?? 5_001,
+    execFile: async () => {
+      executions += 1;
+      throw execFailure(UIAUTOMATION_FAILURE, `Connecting to Android device: ${SERIAL}`);
+    },
+    releaseAndroidSlot: async () => {
+      releases += 1;
+      return { warnings: [] };
+    },
+  });
+
+  const body = envelope(await handler({ ...runArgs, timeoutMs: 5_000 }));
+  assert.equal(body.ok, false);
+  assert.equal(executions, 1);
+  assert.equal(releases, 1);
+  assert.deepEqual(body.meta.androidUiAutomationRecovery, { retried: false, retryCount: 0 });
+  assert.match(body.meta.output, /UiAutomation not connected/);
+  assert.match(
+    body.meta.androidSlotReleaseWarnings[0],
+    /UiAutomation recovery retry skipped:.*timeout exhausted/,
+  );
+});
+
+test('GH#653 release warnings stay visible while a fallback caveat keeps its warn-once budget', async () => {
+  const fallbackReason = 'maestro-cli fallback for gh-653 warn-once regression';
+  const handler = () =>
+    baseHandler({
+      chooseDispatch: () => ({ ...dispatch(), fallbackReason }),
+      parkFlow: async (run, opts) => {
+        opts.onAndroidRelease?.({ warnings: ['owned package stop was partial'] });
+        return run();
+      },
+      execFile: async () => directSuccess(),
+    });
+
+  const first = envelope(await handler()(runArgs));
+  assert.equal(first.ok, true);
+  assert.match(first.meta.warning, /maestro-cli fallback for gh-653 warn-once regression/);
+  assert.match(first.meta.warning, /owned package stop was partial/);
+
+  const second = envelope(await handler()(runArgs));
+  assert.equal(second.ok, true);
+  assert.match(second.meta.warning, /owned package stop was partial/);
+  assert.doesNotMatch(second.meta.warning, /maestro-cli fallback for gh-653 warn-once regression/);
+  assert.equal(second.data.fallbackReason, fallbackReason);
+});
+
 test('GH#653 a repeated wedge is bounded to one retry', async () => {
   let executions = 0;
   let releases = 0;
