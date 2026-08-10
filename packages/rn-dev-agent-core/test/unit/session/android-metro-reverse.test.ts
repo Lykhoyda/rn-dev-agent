@@ -98,6 +98,10 @@ test('foreign forwards are never adopted, replaced, or removed', () => {
       () => ensureAndroidMetroReverse({ deviceId: 'physical-serial', metroPort: 8397 }, adb),
       /PHYSICAL_ANDROID_METRO_UNREACHABLE.*foreign adb reverse/,
     );
+    assert.throws(
+      () => ensureAndroidMetroReverse({ deviceId: 'physical-serial', metroPort: 8397 }, adb),
+      /adb -s physical-serial reverse --remove tcp:8397/,
+    );
     assert.equal(adb.forwards.get('tcp:8397'), remote);
     assert.equal(
       adb.calls.some((args) => args.includes('--remove')),
@@ -185,6 +189,10 @@ test('cleanup refuses a run-owned local endpoint that changed to a foreign desti
   assert.throws(
     () => removeAndroidMetroReverse(binding(), adb),
     /PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN.*foreign forward/,
+  );
+  assert.throws(
+    () => removeAndroidMetroReverse(binding(), adb),
+    /adb -s physical-serial reverse --remove tcp:8397/,
   );
   assert.equal(adb.forwards.get('tcp:8397'), 'tcp:9000');
   assert.equal(

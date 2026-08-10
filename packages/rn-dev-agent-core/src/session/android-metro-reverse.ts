@@ -170,7 +170,7 @@ export function ensureAndroidMetroReverse(
       return { binding: input.binding, created: false, physical: true };
     }
     throw new Error(
-      `PHYSICAL_ANDROID_METRO_UNREACHABLE: exact device ${input.deviceId} already has a foreign adb reverse for ${exact}; refusing to replace or adopt it`,
+      `PHYSICAL_ANDROID_METRO_UNREACHABLE: exact device ${input.deviceId} already has a foreign adb reverse for ${exact}; refusing to replace or adopt it. After confirming nothing else owns it, clear it manually with: adb -s ${input.deviceId} reverse --remove ${exact}`,
     );
   }
 
@@ -223,7 +223,7 @@ export function removeAndroidMetroReverse(
     if (matchingLocal.length === 0) return;
     if (matchingLocal.length !== 1 || matchingLocal[0]!.remote !== binding.remote) {
       throw new Error(
-        `PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN: ${binding.local} on exact device ${binding.deviceId} changed to a foreign forward; refusing to remove it`,
+        `PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN: ${binding.local} on exact device ${binding.deviceId} changed to a foreign forward; refusing to remove it. After confirming nothing else owns it, clear it manually with: adb -s ${binding.deviceId} reverse --remove ${binding.local}`,
       );
     }
     adb(binding.deviceId, ['reverse', '--remove', binding.local], dependencies);
