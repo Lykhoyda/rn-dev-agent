@@ -25041,8 +25041,22 @@ function flagNoUiChange(result, targetKey) {
     ...distinct >= WEDGED_DISTINCT_TARGETS ? { hint: WEDGED_RUNTIME_HINT } : {}
   });
 }
+async function effectVerificationEnabled(settleOpts2, deps) {
+  if (settleOpts2?.enabled === false)
+    return false;
+  if (deps.enabled)
+    return deps.enabled(process.env);
+  try {
+    const settle = await Promise.resolve().then(() => (init_settle(), settle_exports));
+    return settle.settleEnabled(process.env);
+  } catch {
+    return true;
+  }
+}
 async function establishInteractionBaseline(ctx, policy, deps = {}) {
   if (!policy.verificationRequired)
+    return void 0;
+  if (!await effectVerificationEnabled(ctx.settle, deps))
     return void 0;
   const cached2 = getLastSnapshotHash();
   if (cached2 !== null)
@@ -25072,7 +25086,7 @@ function unverifiedInteractionResult(observedResult, targetKey, attempts3, reaso
   });
 }
 async function settleWithRetryIfNoChange(firstResult, dispatch, ctx, policy, deps = {}) {
-  const failClosed = policy.verificationRequired && ctx.platform === "android";
+  const failClosed = policy.verificationRequired && ctx.platform === "android" && await effectVerificationEnabled(ctx.settle, deps);
   const verify = failClosed || policy.eligible;
   const preHash = verify ? ctx.initialSnapshotHash ?? getLastSnapshotHash() ?? void 0 : void 0;
   const first = await settleAfterMutationWithOutcome(firstResult, { ...ctx, ...preHash !== void 0 ? { initialSnapshotHash: preHash } : {} }, deps);
@@ -25301,7 +25315,11 @@ async function runNative(cliArgs, opts = {}) {
       };
     }
     const androidPolicy = tapRetryPolicy(cliArgs, android.command, android.x, android.y, opts.retryIfNoChange !== void 0 ? { retryIfNoChange: opts.retryIfNoChange } : {});
-    const androidBaseline = await establishInteractionBaseline({ platform: "android", ...appId ? { appId } : {} }, androidPolicy);
+    const androidBaseline = await establishInteractionBaseline({
+      platform: "android",
+      ...appId ? { appId } : {},
+      ...opts.settle ? { settle: opts.settle } : {}
+    }, androidPolicy);
     let result = await runAndroid2({ ...android, deviceId: activeSession?.deviceId });
     result = await settleWithRetryIfNoChange(result, () => runAndroid2({ ...android, deviceId: activeSession?.deviceId }), {
       platform: "android",

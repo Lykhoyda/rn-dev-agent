@@ -1127,12 +1127,30 @@ function flagNoUiChange(result, targetKey) {
         ...(distinct >= WEDGED_DISTINCT_TARGETS ? { hint: WEDGED_RUNTIME_HINT } : {}),
     });
 }
+// Disabling settle (RN_SETTLE=0, or a per-call settle:{enabled:false} such as
+// device_batch's settle:false step) opts out of every post-mutation probe, so
+// effect verification cannot run and must not claim the effect is unprovable.
+async function effectVerificationEnabled(settleOpts, deps) {
+    if (settleOpts?.enabled === false)
+        return false;
+    if (deps.enabled)
+        return deps.enabled(process.env);
+    try {
+        const settle = await import('./lifecycle/settle.js');
+        return settle.settleEnabled(process.env);
+    }
+    catch {
+        return true;
+    }
+}
 // The effect probe compares a pre-interaction hierarchy hash against the
 // post-settle one, so a missing baseline is not evidence of a swallowed tap.
 // Any preceding mutating verb invalidates the baseline, so re-establish it
 // before dispatch instead of failing the next tap as unverifiable.
 export async function establishInteractionBaseline(ctx, policy, deps = {}) {
     if (!policy.verificationRequired)
+        return undefined;
+    if (!(await effectVerificationEnabled(ctx.settle, deps)))
         return undefined;
     const cached = getLastSnapshotHash();
     if (cached !== null)
@@ -1178,7 +1196,9 @@ function unverifiedInteractionResult(observedResult, targetKey, attempts, reason
 // (this wave's scope) unchanged or unobservable outcomes fail with typed
 // uncertainty. iOS keeps the advisory meta.noUiChange contract.
 export async function settleWithRetryIfNoChange(firstResult, dispatch, ctx, policy, deps = {}) {
-    const failClosed = policy.verificationRequired && ctx.platform === 'android';
+    const failClosed = policy.verificationRequired &&
+        ctx.platform === 'android' &&
+        (await effectVerificationEnabled(ctx.settle, deps));
     const verify = failClosed || policy.eligible;
     const preHash = verify
         ? (ctx.initialSnapshotHash ?? getLastSnapshotHash() ?? undefined)
@@ -1473,7 +1493,11 @@ export async function runNative(cliArgs, opts = {}) {
             };
         }
         const androidPolicy = tapRetryPolicy(cliArgs, android.command, android.x, android.y, opts.retryIfNoChange !== undefined ? { retryIfNoChange: opts.retryIfNoChange } : {});
-        const androidBaseline = await establishInteractionBaseline({ platform: 'android', ...(appId ? { appId } : {}) }, androidPolicy);
+        const androidBaseline = await establishInteractionBaseline({
+            platform: 'android',
+            ...(appId ? { appId } : {}),
+            ...(opts.settle ? { settle: opts.settle } : {}),
+        }, androidPolicy);
         let result = await runAndroid({ ...android, deviceId: activeSession?.deviceId });
         result = await settleWithRetryIfNoChange(result, () => runAndroid({ ...android, deviceId: activeSession?.deviceId }), {
             platform: 'android',

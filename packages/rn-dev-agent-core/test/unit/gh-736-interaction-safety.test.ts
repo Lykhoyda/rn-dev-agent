@@ -233,6 +233,78 @@ test('a mutating verb that invalidated the baseline does not fail the next tap',
   assert.equal(envelope.ok, true);
 });
 
+test('a device_batch step with settle:false neither probes a baseline nor fails the tap', async () => {
+  updateRefMapFromFlat([appHome]);
+  invalidateLastSnapshotHash();
+  let probes = 0;
+  const deps = {
+    enabled: () => true,
+    capabilities: () => [],
+    probes: () => ({
+      snapshotHash: async () => {
+        probes++;
+        return 'BASELINE';
+      },
+      sleep: async () => {},
+      now: () => 0,
+    }),
+    wait: async () => {
+      throw new Error('settle must not run when it is disabled');
+    },
+  };
+  const settle = { enabled: false };
+
+  assert.equal(
+    await establishInteractionBaseline(
+      { platform: 'android', appId, settle },
+      baselinePolicy,
+      deps,
+    ),
+    undefined,
+  );
+  const result = await settleWithRetryIfNoChange(
+    okResult({ tapped: true }),
+    async () => okResult({ tapped: true }),
+    { platform: 'android', verb: 'tap', appId, settle },
+    baselinePolicy,
+    deps,
+  );
+  const envelope = JSON.parse(result.content[0].text) as { ok: boolean };
+  assert.equal(probes, 0);
+  assert.equal(result.isError, undefined);
+  assert.equal(envelope.ok, true);
+});
+
+test('RN_SETTLE=0 opts out of effect verification instead of failing every Android tap', async () => {
+  updateRefMapFromFlat([appHome]);
+  invalidateLastSnapshotHash();
+  process.env.RN_SETTLE = '0';
+  try {
+    assert.equal(
+      await establishInteractionBaseline({ platform: 'android', appId }, baselinePolicy, {
+        probes: () => ({
+          snapshotHash: async () => 'BASELINE',
+          sleep: async () => {},
+          now: () => 0,
+        }),
+      }),
+      undefined,
+    );
+    const result = await settleWithRetryIfNoChange(
+      okResult({ tapped: true }),
+      async () => okResult({ tapped: true }),
+      { platform: 'android', verb: 'tap', appId },
+      baselinePolicy,
+      {},
+    );
+    const envelope = JSON.parse(result.content[0].text) as { ok: boolean };
+    assert.equal(result.isError, undefined);
+    assert.equal(envelope.ok, true);
+  } finally {
+    delete process.env.RN_SETTLE;
+  }
+});
+
 test('an established baseline is reused, and no baseline is taken when verification is off', async () => {
   updateRefMapFromFlat([appHome]);
   const cached = getLastSnapshotHash();
