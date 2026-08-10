@@ -207,7 +207,7 @@ bash ${CLAUDE_PLUGIN_ROOT}/scripts/check-physical-devices.sh
 ```
 
 Expected outputs:
-- **Physical Android present**: `[OK] adb reverse tcp:8081 tcp:8081` — device can reach Metro over USB. Auto-applied; no user action needed.
+- **Physical Android present**: `[OK] adb reverse tcp:8081 tcp:8081` — device can reach Metro over USB. Auto-applied; no user action needed. This forward is not session-owned: a session allocated port 8081 sees it as a foreign forward and refuses with `PHYSICAL_ANDROID_METRO_UNREACHABLE` rather than adopting or replacing it — remove it with `adb -s <serial> reverse --remove tcp:8081` and re-run the session.
 - **Physical iOS present + idb-companion installed**: `[OK] idb-companion installed`.
 - **Physical iOS present but idb-companion missing**: `[MISSING] idb-companion — install with: brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion`. Not auto-run (brew installs are slow and can fail mid-flight); user runs the command.
 - **No physical devices**: two "skipping" lines. Add "Physical devices" row to the table as "N/A (no devices connected)".
