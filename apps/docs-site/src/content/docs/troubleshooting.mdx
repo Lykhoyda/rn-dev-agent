@@ -189,12 +189,22 @@ anywhere else — app logcat, console or network output, a partially executed fl
 step output, or stderr mixed with other records — is not the wedge and never
 retries or releases packages.
 
+Recovery never extends the flow: both the cleanup and the retry run inside the
+original `maestro_run` deadline. With no budget left the cleanup is skipped
+without touching the device; if the cleanup fails or the budget lapses while it
+runs, the retry is never dispatched and the timeout or release failure is
+attached to the returned error as its cause. Every one of these paths preserves
+the original wedge failure, exposes a release warning, and truthfully reports
+`retried: false` / `retryCount: 0`. The diagnostic is present whenever recovery
+was attempted, including these skipped cases; `retried` becomes true only when a
+second Maestro subprocess actually runs.
+
 Pre-flow and recovery release problems are not swallowed. Successful and warning
 responses expose them as `data.androidSlotReleaseWarnings` and in the response
 warning text; failed and refused responses expose them as
 `meta.androidSlotReleaseWarnings`. If the same wedge survives the single retry,
-re-open the device session
-(`device_snapshot action=open`) on that serial and retry.
+re-open the device session (`device_snapshot action=open`) on that serial and
+retry.
 
 ## Error codes
 
