@@ -200,22 +200,22 @@ alone — `brew tap facebook/fb && brew trust facebook/fb && brew install idb-co
 ### 11. Physical device prerequisites (optional — M9 / Phase 111)
 
 Only runs if a physical device is USB-connected. Simulators/emulators skip
-this section. Runs two checks + applies one (safe, reversible) side-effect:
+this section. Both checks are read-only; session authority is the sole writer
+of an exact physical Android Metro reverse:
 
 ```bash
 bash ${CLAUDE_PLUGIN_ROOT}/scripts/check-physical-devices.sh
 ```
 
 Expected outputs:
-- **Physical Android present**: `[OK] adb reverse tcp:8081 tcp:8081` — device can reach Metro over USB. Auto-applied; no user action needed. This forward is not session-owned: a session allocated port 8081 sees it as a foreign forward and refuses with `PHYSICAL_ANDROID_METRO_UNREACHABLE` rather than adopting or replacing it — remove it with `adb -s <serial> reverse --remove tcp:8081` and re-run the session.
+- **Physical Android present**: `[READY] authorized adb serial <serial>` confirms read-only device readiness. `[OK] no pre-existing adb reverse forwards` is clean; `[WARN] pre-existing adb reverse forwards` lists foreign state truthfully without adopting, replacing, or removing it. The exact session serial/port lifecycle establishes and cleans its own Metro reverse later.
 - **Physical iOS present + idb-companion installed**: `[OK] idb-companion installed`.
 - **Physical iOS present but idb-companion missing**: `[MISSING] idb-companion — install with: brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion`. Not auto-run (brew installs are slow and can fail mid-flight); user runs the command.
 - **No physical devices**: two "skipping" lines. Add "Physical devices" row to the table as "N/A (no devices connected)".
 
 **WiFi debugging is not supported** automatically. Connect by USB. If users
-need WiFi they can `adb connect <ip>` manually — the script then treats the
-device as physical and runs `adb reverse` over the TCP transport (works
-the same as USB).
+need WiFi they can `adb connect <ip>` manually — the script reports that device
+as physical but remains read-only; only session authority may create a reverse.
 
 ### 12. Plugin version freshness
 
@@ -352,7 +352,7 @@ Setup is boring — agents skip it and pay for it later.
 - [ ] At least ONE of: iOS simulator booted OR Android emulator running
 - [ ] `rn_session(action="status")` and `cdp_status` report the bound Metro
 - [ ] Passive `cdp_status` reports `cdp.connected: true` and a narrow `cdp_component_tree` query succeeds
-- [ ] Physical-device row is `N/A (no devices)` OR reports `adb reverse: OK` / `idb-companion: OK or install hint` (M9 / D668)
+- [ ] Physical-device row is `N/A (no devices)` OR reports an authorized Android serial plus truthful pre-existing-forward state / `idb-companion: OK or install hint` (M9 / D668)
 - [ ] idb row is `OK`, `INSTALLING (background)`, or `MISSING` with the manual command — never blocks setup (mirror falls back to simctl)
 - [ ] Plugin-version row is `OK` (installed = latest) / `OFFLINE` (acceptable) / `AHEAD (dev install)` — if `BEHIND`, surface the `/plugin update rn-dev-agent` instruction; user decides whether to update before continuing
 - [ ] Present the full results table to the user — no hidden failures
