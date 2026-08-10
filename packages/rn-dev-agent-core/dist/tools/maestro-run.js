@@ -198,8 +198,7 @@ function resolveAppId(override, platform) {
         return resolveBundleId(platform) ?? readExpoSlug() ?? '';
     return readExpoSlug() ?? '';
 }
-const UIAUTOMATION_SESSION_CREATION_FAILURE = 'failed to create driver: create session: session not created: ' +
-    'java.lang.IllegalStateException: UiAutomation not connected';
+const UIAUTOMATION_SESSION_CREATION_FAILURE = /^Error: failed to create driver: create session: session not created: java\.lang\.IllegalStateException: UiAutomation not connected(?:, UiAutomation@[^\r\n]+)?$/;
 function attachCause(error, cause) {
     if (error instanceof Error && error.cause === undefined) {
         try {
@@ -213,11 +212,16 @@ function attachCause(error, cause) {
 }
 export function isUiAutomationNotConnectedSessionCreationFailure(error) {
     const candidate = error;
-    const text = [candidate?.message, candidate?.stdout, candidate?.stderr]
-        .filter((value) => typeof value === 'string')
-        .join('\n')
-        .replace(/\s+/g, ' ');
-    return text.includes(UIAUTOMATION_SESSION_CREATION_FAILURE);
+    if (typeof candidate?.code !== 'number' ||
+        candidate.code === 0 ||
+        typeof candidate.stderr !== 'string') {
+        return false;
+    }
+    const records = candidate.stderr
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+    return records.length === 1 && UIAUTOMATION_SESSION_CREATION_FAILURE.test(records[0]);
 }
 /**
  * Read-only verification of the already-parked runner. The probe is the iOS
@@ -505,6 +509,7 @@ export function createMaestroRunHandler(deps = {}) {
                     passed: false,
                     deviceAuthority,
                     output: output.slice(0, 4000),
+                    ...androidReleaseMeta(),
                 });
             }
             const summary = buildStepSummary(output, { failed: !passed });
