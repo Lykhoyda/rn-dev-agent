@@ -1,0 +1,227 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  createMaestroRunHandler,
+  isUiAutomationNotConnectedSessionCreationFailure,
+  type FlowParkOpts,
+} from '../../dist/tools/maestro-run.js';
+import type { MaestroDispatch } from '../../dist/tools/maestro-dispatch.js';
+import { ExactAndroidDeviceRequiredError } from '../../dist/runners/release-android-slot.js';
+
+const SERIAL = 'emulator-5580';
+const APP_ID = 'dev.example.issue653';
+const UIAUTOMATION_FAILURE =
+  'Error: failed to create driver: create session: session not created: ' +
+  'java.lang.IllegalStateException: UiAutomation not connected, ' +
+  'UiAutomation@6baa57c[id=-1, displayId=0, flags=0]';
+
+function envelope(result: { content: Array<{ text: string }> }) {
+  return JSON.parse(result.content[0]!.text);
+}
+
+function dispatch(): MaestroDispatch {
+  return {
+    runner: 'maestro-runner',
+    binPath: '/test/maestro-runner',
+    buildArgs: (platform, flowFile, _appFile, deviceId) => [
+      '--platform',
+      platform,
+      ...(deviceId ? ['--device', deviceId] : []),
+      'test',
+      flowFile,
+    ],
+  };
+}
+
+function directSuccess(serial = SERIAL): { stdout: string; stderr: string } {
+  return {
+    stdout: [
+      `Connecting to Android device: ${serial}`,
+      'Flow execution completed: 1 passed, 0 failed, 0 skipped',
+    ].join('\n'),
+    stderr: '',
+  };
+}
+
+function execFailure(stderr: string): Error {
+  return Object.assign(new Error('runner exited 1'), { stdout: '', stderr, code: 1 });
+}
+
+function baseHandler(overrides: Parameters<typeof createMaestroRunHandler>[0] = {}) {
+  return createMaestroRunHandler({
+    getActiveSession: () => ({
+      name: 'issue-653',
+      platform: 'android',
+      deviceId: SERIAL,
+      appId: APP_ID,
+      openedAt: new Date(0).toISOString(),
+    }),
+    chooseDispatch: () => dispatch(),
+    parkFlow: async (run) => run(),
+    claimNativeOrigin: async () => {},
+    completeNativeOrigin: async () => {},
+    relaunchManagedApp: async () => {},
+    reproveManagedOrigin: async () => {},
+    fastHealthCheck: async () => false,
+    ...overrides,
+  });
+}
+
+const runArgs = {
+  inlineYaml: '- launchApp',
+  platform: 'android' as const,
+  appId: APP_ID,
+};
+
+test('GH#653 classifies only the exact UiAutomation session-creation failure', () => {
+  assert.equal(
+    isUiAutomationNotConnectedSessionCreationFailure(execFailure(UIAUTOMATION_FAILURE)),
+    true,
+  );
+  assert.equal(
+    isUiAutomationNotConnectedSessionCreationFailure(
+      execFailure('java.lang.IllegalStateException: UiAutomation not connected'),
+    ),
+    false,
+  );
+  assert.equal(
+    isUiAutomationNotConnectedSessionCreationFailure(
+      execFailure(
+        'failed to create driver: create session: session not created: java.lang.IllegalStateException: another failure',
+      ),
+    ),
+    false,
+  );
+  assert.equal(
+    isUiAutomationNotConnectedSessionCreationFailure(
+      execFailure('failed to create driver: UiAutomation not connected while running a command'),
+    ),
+    false,
+  );
+});
+
+test('GH#653 maestro_run surfaces the no-exact-device refusal without dispatch', async () => {
+  let executions = 0;
+  const handler = baseHandler({
+    getActiveSession: () => null,
+    parkFlow: async () => {
+      throw new ExactAndroidDeviceRequiredError();
+    },
+    execFile: async () => {
+      executions += 1;
+      return directSuccess();
+    },
+  });
+
+  const body = envelope(await handler(runArgs));
+  assert.equal(body.ok, false);
+  assert.equal(body.code, 'EXACT_ANDROID_DEVICE_REQUIRED');
+  assert.match(body.error, /No device was mutated/);
+  assert.equal(executions, 0);
+});
+
+test('GH#653 pre-flow release warnings remain visible in maestro_run', async () => {
+  const parkFlow = async <T>(run: () => Promise<T>, opts: FlowParkOpts): Promise<T> => {
+    opts.onAndroidRelease?.({ warnings: ['owned test package could not be stopped'] });
+    return run();
+  };
+  const handler = baseHandler({
+    parkFlow,
+    execFile: async () => directSuccess(),
+  });
+
+  const body = envelope(await handler(runArgs));
+  assert.equal(body.ok, true);
+  assert.deepEqual(body.data.androidSlotReleaseWarnings, [
+    'owned test package could not be stopped',
+  ]);
+  assert.match(body.meta.warning, /Android interaction-slot release warnings/);
+});
+
+test('GH#653 reproduced wedge releases only the exact owned slot and retries once', async () => {
+  let executions = 0;
+  const releases: Array<{ deviceId?: string; includeLegacy?: boolean }> = [];
+  const handler = baseHandler({
+    execFile: async () => {
+      executions += 1;
+      if (executions === 1) throw execFailure(UIAUTOMATION_FAILURE);
+      return directSuccess();
+    },
+    releaseAndroidSlot: async (opts) => {
+      releases.push(opts);
+      return { warnings: [] };
+    },
+  });
+
+  const body = envelope(await handler(runArgs));
+  assert.equal(body.ok, true);
+  assert.equal(body.data.passed, true);
+  assert.equal(executions, 2);
+  assert.deepEqual(releases, [{ deviceId: SERIAL, includeLegacy: false }]);
+  assert.deepEqual(body.data.androidUiAutomationRecovery, { retried: true, retryCount: 1 });
+});
+
+test('GH#653 retry release failures stay visible after recovery', async () => {
+  let executions = 0;
+  const handler = baseHandler({
+    execFile: async () => {
+      executions += 1;
+      if (executions === 1) throw execFailure(UIAUTOMATION_FAILURE);
+      return directSuccess();
+    },
+    releaseAndroidSlot: async () => ({
+      warnings: ['am force-stop dev.lykhoyda.rndevagent.androidrunner failed: denied'],
+    }),
+  });
+
+  const body = envelope(await handler(runArgs));
+  assert.equal(body.ok, true);
+  assert.deepEqual(body.data.androidSlotReleaseWarnings, [
+    'am force-stop dev.lykhoyda.rndevagent.androidrunner failed: denied',
+  ]);
+  assert.match(body.meta.warning, /force-stop.*failed: denied/);
+});
+
+test('GH#653 a repeated wedge is bounded to one retry', async () => {
+  let executions = 0;
+  let releases = 0;
+  const handler = baseHandler({
+    execFile: async () => {
+      executions += 1;
+      throw execFailure(UIAUTOMATION_FAILURE);
+    },
+    releaseAndroidSlot: async () => {
+      releases += 1;
+      return { warnings: [] };
+    },
+  });
+
+  const body = envelope(await handler(runArgs));
+  assert.equal(body.ok, false);
+  assert.equal(executions, 2);
+  assert.equal(releases, 1);
+  assert.deepEqual(body.meta.androidUiAutomationRecovery, { retried: true, retryCount: 1 });
+});
+
+test('GH#653 unrelated Maestro failures never release or retry', async () => {
+  let executions = 0;
+  let releases = 0;
+  const handler = baseHandler({
+    execFile: async () => {
+      executions += 1;
+      throw execFailure(
+        `Connecting to Android device: ${SERIAL}\nError: Element with id 'missing' not found`,
+      );
+    },
+    releaseAndroidSlot: async () => {
+      releases += 1;
+      return { warnings: [] };
+    },
+  });
+
+  const body = envelope(await handler(runArgs));
+  assert.equal(body.ok, false);
+  assert.equal(executions, 1);
+  assert.equal(releases, 0);
+  assert.equal(body.meta.androidUiAutomationRecovery, undefined);
+});

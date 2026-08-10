@@ -34,7 +34,10 @@ import {
   fastHealthCheck as defaultFastHealthCheck,
   stopFastRunner as defaultStopFastRunner,
 } from '../runners/rn-fast-runner-client.js';
-import { releaseAndroidInteractionSlot as defaultReleaseAndroidSlot } from '../runners/release-android-slot.js';
+import {
+  ExactAndroidDeviceRequiredError,
+  releaseAndroidInteractionSlot as defaultReleaseAndroidSlot,
+} from '../runners/release-android-slot.js';
 import { markCdpStale as defaultMarkCdpStale } from '../cdp/recovery.js';
 import {
   maestroAuthorityRefusal,
@@ -61,12 +64,21 @@ import { SessionAuthorityError } from '../session/registry.js';
 
 const defaultExecFile = promisify(execFileCb);
 
+export interface AndroidSlotReleaseOutcome {
+  deviceId?: string;
+  warnings?: string[];
+}
+
 export interface FlowParkOpts {
   platform?: 'ios' | 'android';
   deviceId?: string;
   stopFastRunner?: (deviceId?: string) => void | Promise<void>;
   markCdpStale?: () => void;
-  releaseAndroidSlot?: (opts: { deviceId?: string }) => Promise<void>;
+  releaseAndroidSlot?: (opts: {
+    deviceId?: string;
+    includeLegacy?: boolean;
+  }) => Promise<AndroidSlotReleaseOutcome | void>;
+  onAndroidRelease?: (outcome: AndroidSlotReleaseOutcome | void) => void;
   completeRunnerPark?: () => Promise<void>;
 }
 
@@ -83,7 +95,8 @@ export async function runFlowParked<T>(run: () => Promise<T>, opts: FlowParkOpts
   try {
     if (opts.platform === 'android') {
       const release = opts.releaseAndroidSlot ?? defaultReleaseAndroidSlot;
-      await release({ deviceId: opts.deviceId });
+      const outcome = await release({ deviceId: opts.deviceId, includeLegacy: false });
+      opts.onAndroidRelease?.(outcome);
     } else {
       await (opts.stopFastRunner ?? defaultStopFastRunner)(opts.deviceId);
     }
@@ -314,6 +327,7 @@ export interface MaestroRunDeps {
   getActiveSession?: () => SessionState | null;
   chooseDispatch?: typeof chooseMaestroDispatch;
   parkFlow?: typeof runFlowParked;
+  releaseAndroidSlot?: FlowParkOpts['releaseAndroidSlot'];
   claimNativeOrigin?: () => Promise<void>;
   completeNativeOrigin?: (targetExpected: boolean) => Promise<void>;
   relaunchManagedApp?: () => Promise<void>;
@@ -325,6 +339,19 @@ export interface MaestroRunDeps {
     args: string[],
     options: { timeout: number; encoding: 'utf8'; maxBuffer: number },
   ) => Promise<{ stdout: string; stderr: string }>;
+}
+
+const UIAUTOMATION_SESSION_CREATION_FAILURE =
+  'failed to create driver: create session: session not created: ' +
+  'java.lang.IllegalStateException: UiAutomation not connected';
+
+export function isUiAutomationNotConnectedSessionCreationFailure(error: unknown): boolean {
+  const candidate = error as { message?: unknown; stdout?: unknown; stderr?: unknown } | null;
+  const text = [candidate?.message, candidate?.stdout, candidate?.stderr]
+    .filter((value): value is string => typeof value === 'string')
+    .join('\n')
+    .replace(/\s+/g, ' ');
+  return text.includes(UIAUTOMATION_SESSION_CREATION_FAILURE);
 }
 
 export interface RunnerResumeEvidence {
@@ -534,6 +561,26 @@ export function createMaestroRunHandler(
     ]);
     const directRunnerEvidence = (output: string) =>
       collectDirectRunnerEvidence(runnerReportDir, output);
+    const releaseAndroidSlot = deps.releaseAndroidSlot ?? defaultReleaseAndroidSlot;
+    const androidSlotReleaseWarnings: string[] = [];
+    let releasedAndroidDeviceId: string | undefined;
+    let uiAutomationRecoveryRetried = false;
+    const recordAndroidRelease = (outcome: AndroidSlotReleaseOutcome | void): void => {
+      if (outcome?.deviceId) releasedAndroidDeviceId = outcome.deviceId;
+      if (outcome?.warnings?.length) androidSlotReleaseWarnings.push(...outcome.warnings);
+    };
+    const androidReleaseMeta = (): Record<string, unknown> => ({
+      ...(androidSlotReleaseWarnings.length > 0
+        ? { androidSlotReleaseWarnings: [...androidSlotReleaseWarnings] }
+        : {}),
+      ...(uiAutomationRecoveryRetried
+        ? { androidUiAutomationRecovery: { retried: true, retryCount: 1 } }
+        : {}),
+    });
+    const androidReleaseCaveat = (): string | undefined =>
+      androidSlotReleaseWarnings.length > 0
+        ? `Android interaction-slot release warnings: ${androidSlotReleaseWarnings.join('; ')}`
+        : undefined;
 
     // GH #397: engine-pin visibility. Detection is process-cached and fail-open
     // (null on error). The caveat rides the existing warn-once mechanism below;
@@ -569,22 +616,44 @@ export function createMaestroRunHandler(
           executeMaestroAuthorityStages(
             validatedCommands,
             async (commands) => {
-              const remainingTimeout = flowDeadline - now();
-              if (remainingTimeout <= 0) {
-                const error = new Error('Maestro flow timeout exhausted before the next stage');
-                Object.assign(error, { code: 'ETIMEDOUT' });
-                throw error;
-              }
               writeFileSync(
                 flowFile,
                 buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, [...commands]),
                 'utf-8',
               );
-              return execute(dispatch.binPath, finalArgs, {
-                timeout: remainingTimeout,
-                encoding: 'utf8',
-                maxBuffer: 10 * 1024 * 1024,
-              });
+              const executeOnce = async (): Promise<{ stdout: string; stderr: string }> => {
+                const remainingTimeout = flowDeadline - now();
+                if (remainingTimeout <= 0) {
+                  const error = new Error('Maestro flow timeout exhausted before the next stage');
+                  Object.assign(error, { code: 'ETIMEDOUT' });
+                  throw error;
+                }
+                return execute(dispatch.binPath, finalArgs, {
+                  timeout: remainingTimeout,
+                  encoding: 'utf8',
+                  maxBuffer: 10 * 1024 * 1024,
+                });
+              };
+              try {
+                return await executeOnce();
+              } catch (error) {
+                const recoveryDeviceId = requestedDeviceId ?? releasedAndroidDeviceId;
+                if (
+                  platform !== 'android' ||
+                  uiAutomationRecoveryRetried ||
+                  !recoveryDeviceId ||
+                  !isUiAutomationNotConnectedSessionCreationFailure(error)
+                ) {
+                  throw error;
+                }
+                uiAutomationRecoveryRetried = true;
+                const releaseOutcome = await releaseAndroidSlot({
+                  deviceId: recoveryDeviceId,
+                  includeLegacy: false,
+                });
+                recordAndroidRelease(releaseOutcome);
+                return executeOnce();
+              }
             },
             claimOrigin,
             completeOrigin,
@@ -594,6 +663,8 @@ export function createMaestroRunHandler(
         {
           platform,
           deviceId: requestedDeviceId,
+          releaseAndroidSlot,
+          onAndroidRelease: recordAndroidRelease,
           completeRunnerPark: args.completeRunnerPark ?? managedAuthority.completeRunnerPark,
         },
       );
@@ -655,26 +726,31 @@ export function createMaestroRunHandler(
         ...(engineStatus && engineStatus.pin.status !== 'pinned-ok'
           ? { enginePin: engineStatus.pin }
           : {}),
+        ...androidReleaseMeta(),
       };
 
       // GH #356/B223: a degradedReason (Android hideKeyboard with no Maestro CLI)
       // is a caveat surfaced the same way as a fallbackReason. GH #397: so is
       // an engine-pin drift (warn-once via the same mechanism).
       const caveat = dispatch.fallbackReason ?? dispatch.degradedReason ?? pinCaveat ?? undefined;
+      const releaseCaveat = androidReleaseCaveat();
 
       if (passed) {
         // B59 (Gemini review, conf 82): on success-with-fallback, only emit
         // a loud warning the FIRST time per process so a 100-flow loop
         // doesn't generate 100 identical warnings. Subsequent successes
         // carry the reason silently in meta.
+        if (releaseCaveat) {
+          return warnResult(meta, caveat ? `${caveat}; ${releaseCaveat}` : releaseCaveat);
+        }
         if (caveat && shouldWarnFallback(caveat)) {
           return warnResult(meta, caveat);
         }
         return okResult(meta);
       }
-      const baseWarnMsg = caveat
-        ? `${caveat}; flow completed with warnings or failures`
-        : 'Flow completed with warnings or failures';
+      const baseWarnMsg = [caveat, releaseCaveat, 'Flow completed with warnings or failures']
+        .filter((part): part is string => Boolean(part))
+        .join('; ');
       // GH #263: classify on the FULL output (not the sliced meta.output).
       const warnAug = augmentFailureWithDegradation(
         output,
@@ -690,6 +766,15 @@ export function createMaestroRunHandler(
       if (err instanceof SessionAuthorityError) throw err;
       const stageError = err instanceof MaestroStageExecutionError ? err.stageError : err;
       const msg = stageError instanceof Error ? stageError.message : String(stageError);
+      if (stageError instanceof ExactAndroidDeviceRequiredError) {
+        return failResult(stageError.message, stageError.code, {
+          platform,
+          runner: dispatch.runner,
+          transport: dispatch.runner,
+          passed: false,
+          ...androidReleaseMeta(),
+        });
+      }
       // Multi-LLM review of PR #115 (Codex conf 95): when execFile
       // throws on timeout (or kill), Node attaches the partial stdout
       // and stderr to the error object. Preserve them in `data.output`
@@ -749,11 +834,14 @@ export function createMaestroRunHandler(
           ...(runnerResume ? { runnerResume } : {}),
           timedOut,
           outputTruncated,
+          ...androidReleaseMeta(),
         });
       }
       // Headline from structured data (raw-free); the raw err.message is the
       // fallback only for system errors with no step output (e.g. spawn ENOENT).
-      const headline = formatFailureHeadline(summary, { timedOut, outputTruncated }, msg);
+      const rawHeadline = formatFailureHeadline(summary, { timedOut, outputTruncated }, msg);
+      const releaseCaveat = androidReleaseCaveat();
+      const headline = releaseCaveat ? `${rawHeadline}; ${releaseCaveat}` : rawHeadline;
       // GH #263: a timeout/non-zero exit is also a failure surface — flag a
       // wedged runtime here too if the successful taps were degraded.
       const failAug = augmentFailureWithDegradation(
@@ -782,6 +870,7 @@ export function createMaestroRunHandler(
           ...(engineStatus && engineStatus.pin.status !== 'pinned-ok'
             ? { enginePin: engineStatus.pin }
             : {}),
+          ...androidReleaseMeta(),
         },
       );
       return failResult(failAug.message, failAug.meta);
