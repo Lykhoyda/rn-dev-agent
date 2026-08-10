@@ -85440,7 +85440,11 @@ function boundConnectConflict(status, request2) {
   return null;
 }
 async function pinExactDevClient(input, dependencies) {
-  if (input.devClientUrl !== input.expectedDevClientUrl) {
+  if (!Number.isSafeInteger(input.metroPort) || input.metroPort < 1 || input.metroPort > 65535) {
+    throw new Error("DEV_CLIENT_ENDPOINT_NOT_FOUND: authority-bound Metro port is unavailable");
+  }
+  const derivedIosExpoLaunchTarget = input.platform === "ios" && input.runtimeKind === "expo-dev-client" ? managedMetroProxyUrl(input) : void 0;
+  if ((input.devClientUrl ?? derivedIosExpoLaunchTarget) !== (input.expectedDevClientUrl ?? derivedIosExpoLaunchTarget)) {
     throw new Error("DEV_CLIENT_ENDPOINT_NOT_FOUND: declared dev-client URL does not match the session endpoint");
   }
   if (input.runtimeKind === "bare-react-native" && input.devClientUrl) {
@@ -85465,6 +85469,8 @@ async function pinExactDevClient(input, dependencies) {
     await dependencies.openUrl(input.platform, input.deviceId, input.devClientUrl, input.appId);
     if (input.platform === "ios")
       await dependencies.acceptIosOpenDialog(input.deviceId);
+  } else if (derivedIosExpoLaunchTarget) {
+    await dependencies.launchExactAppWithInitialUrl(input.deviceId, input.appId, derivedIosExpoLaunchTarget);
   } else {
     await dependencies.launchExactApp(input.platform, input.deviceId, input.appId);
   }
@@ -85519,6 +85525,7 @@ async function pinExactDevClient(input, dependencies) {
 var init_dev_client_authority = __esm({
   "packages/rn-dev-agent-core/dist/session/dev-client-authority.js"() {
     "use strict";
+    init_build_adapter();
     init_expo_manifest();
     init_metro_authority();
   }
@@ -85919,6 +85926,17 @@ async function pinSessionDevClient(status, options, commitBundle) {
             "1"
           ]);
         }
+      },
+      launchExactAppWithInitialUrl: async (deviceId, appId, initialUrl) => {
+        await execFileP("xcrun", [
+          "simctl",
+          "launch",
+          "--terminate-running-process",
+          deviceId,
+          appId,
+          "--initialUrl",
+          initialUrl
+        ]);
       },
       acceptIosOpenDialog: async () => {
         const result = await acceptDeeplinkOpenConfirmation();

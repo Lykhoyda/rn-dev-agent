@@ -1,3 +1,4 @@
+import { managedMetroProxyUrl } from './build-adapter.js';
 import type { ManagedManifestResponse } from './expo-manifest.js';
 import { verifyManagedManifestLaunchAsset } from './expo-manifest.js';
 import type { MetroAuthorityBinding, MetroAuthorityMarker } from './metro-authority.js';
@@ -23,6 +24,7 @@ type ExactConnectionSummary = Pick<
 interface PinDevClientDependencies {
   openUrl(platform: 'ios' | 'android', deviceId: string, url: string, appId: string): Promise<void>;
   launchExactApp(platform: 'ios' | 'android', deviceId: string, appId: string): Promise<void>;
+  launchExactAppWithInitialUrl(deviceId: string, appId: string, initialUrl: string): Promise<void>;
   acceptIosOpenDialog(deviceId: string): Promise<void>;
   connectExact(input: {
     metroPort: number;
@@ -181,7 +183,17 @@ export async function pinExactDevClient(
   input: PinDevClientInput,
   dependencies: PinDevClientDependencies,
 ): Promise<BundleAuthorityBinding> {
-  if (input.devClientUrl !== input.expectedDevClientUrl) {
+  if (!Number.isSafeInteger(input.metroPort) || input.metroPort < 1 || input.metroPort > 65_535) {
+    throw new Error('DEV_CLIENT_ENDPOINT_NOT_FOUND: authority-bound Metro port is unavailable');
+  }
+  const derivedIosExpoLaunchTarget =
+    input.platform === 'ios' && input.runtimeKind === 'expo-dev-client'
+      ? managedMetroProxyUrl(input)
+      : undefined;
+  if (
+    (input.devClientUrl ?? derivedIosExpoLaunchTarget) !==
+    (input.expectedDevClientUrl ?? derivedIosExpoLaunchTarget)
+  ) {
     throw new Error(
       'DEV_CLIENT_ENDPOINT_NOT_FOUND: declared dev-client URL does not match the session endpoint',
     );
@@ -211,6 +223,12 @@ export async function pinExactDevClient(
   if (input.devClientUrl) {
     await dependencies.openUrl(input.platform, input.deviceId, input.devClientUrl, input.appId);
     if (input.platform === 'ios') await dependencies.acceptIosOpenDialog(input.deviceId);
+  } else if (derivedIosExpoLaunchTarget) {
+    await dependencies.launchExactAppWithInitialUrl(
+      input.deviceId,
+      input.appId,
+      derivedIosExpoLaunchTarget,
+    );
   } else {
     await dependencies.launchExactApp(input.platform, input.deviceId, input.appId);
   }

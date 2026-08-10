@@ -949,6 +949,17 @@ async function pinSessionDevClient(
             ]);
           }
         },
+        launchExactAppWithInitialUrl: async (deviceId, appId, initialUrl) => {
+          await execFileP('xcrun', [
+            'simctl',
+            'launch',
+            '--terminate-running-process',
+            deviceId,
+            appId,
+            '--initialUrl',
+            initialUrl,
+          ]);
+        },
         acceptIosOpenDialog: async () => {
           const result = await acceptDeeplinkOpenConfirmation();
           if (result && !result.tapped) {
