@@ -1430,6 +1430,8 @@ export function selfHealEnabled(env: NodeJS.ProcessEnv): boolean {
 
 const RETRYABLE_TAP_COMMANDS = new Set<string>(['tap', 'longPress']);
 
+export const IME_KEY_FLAG = '--ime-key';
+
 export interface TapRetryPolicy {
   eligible: boolean;
   verificationRequired: boolean;
@@ -1453,8 +1455,14 @@ export function tapRetryPolicy(
 ): TapRetryPolicy {
   const ref = cliArgs[1];
   const exactTarget = ref?.startsWith('@') ? getFreshRefTarget(ref) : null;
+  // 'Key'/'Keyboard' are iOS XCUIElement type names; an Android IME key carries
+  // a Java class name instead, so device_focus_next marks its verified
+  // IME-owned press explicitly. Either way the effect lands in a window the
+  // app-scoped probe cannot see, so re-dispatching would actuate the key twice.
   const keyboardTarget =
-    exactTarget?.snapshotElementType === 'Key' || exactTarget?.snapshotElementType === 'Keyboard';
+    exactTarget?.snapshotElementType === 'Key' ||
+    exactTarget?.snapshotElementType === 'Keyboard' ||
+    cliArgs.includes(IME_KEY_FLAG);
   const verificationRequired =
     !keyboardTarget &&
     RETRYABLE_TAP_COMMANDS.has(builtCommand) &&

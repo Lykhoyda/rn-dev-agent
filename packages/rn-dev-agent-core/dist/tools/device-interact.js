@@ -1,8 +1,11 @@
-import { runNative, getActiveSession, clearActiveSession, getCachedScreenRect, cacheSnapshot, getCachedSnapshot, isSnapshotCacheValid, markSnapshotDirty, } from '../agent-device-wrapper.js';
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
+import { runNative, getActiveSession, clearActiveSession, getCachedScreenRect, cacheSnapshot, getCachedSnapshot, isSnapshotCacheValid, markSnapshotDirty, IME_KEY_FLAG, } from '../agent-device-wrapper.js';
 import { isFastRunnerAvailable, fastSwipe, stopFastRunner, adoptPersistedFastRunnerState, } from '../runners/rn-fast-runner-client.js';
 import { stopAndroidRunner } from '../runners/rn-android-runner-client.js';
 import { surfaceKeyboardGuard, healKeyboardOccludedTap, } from '../runners/keyboard-guard.js';
 import { resolveBundleId } from '../project-config.js';
+import { isValidBundleId } from '../domain/maestro-validator.js';
 import { withSession } from '../utils.js';
 import { okResult, failResult, createStepTimer } from '../utils.js';
 import { isAgentDeviceRunnerSentinel, recoverFromRunnerLeak } from './runner-leak-recovery.js';
@@ -10,6 +13,8 @@ import { reopenSessionForRecovery } from './device-session.js';
 import { authorizeSystemUiRef } from '../fast-runner-ref-map.js';
 import { getCachedMetadata, isRefMapFresh, lookupRef } from '../fast-runner-ref-map.js';
 import { runFillCoordinator, } from './fill-coordinator.js';
+const execFile = promisify(execFileCb);
+const IME_PROBE_TIMEOUT_MS = 5_000;
 function candidateFromNode(n) {
     return {
         ref: n.ref,
@@ -1071,16 +1076,45 @@ export function createDeviceBackHandler() {
 // should use device_press on the next input @ref directly instead of this tool.
 const NEXT_KEY_LABELS = ['Go', 'Done', 'Return', 'Next'];
 // GH #736: an Android IME key lives in the input-method package, never the
-// session app, so the app-window ownership gate would refuse it. This grant is
+// session app, so the app-window ownership gate would refuse it. The grant is
 // per-call and per-ref (no authorizeSystemUiRef, so nothing persists for a
-// later device_press) and only ever covers the keyboard key this tool matched.
-export function focusNextPressArgs(ref, nodePackageName, platform, appId) {
+// later device_press) and requires the node to belong to the device's actual
+// default IME — a label match on any other outside-app window earns nothing.
+export function parseDefaultInputMethodPackage(raw) {
+    const value = raw.trim().split(/\r?\n/)[0]?.trim() ?? '';
+    if (!value || value === 'null')
+        return null;
+    const pkg = value.split('/')[0]?.trim() ?? '';
+    return isValidBundleId(pkg) ? pkg : null;
+}
+export async function resolveAndroidImePackage(deviceId) {
+    try {
+        const { stdout } = await execFile('adb', [
+            ...(deviceId ? ['-s', deviceId] : []),
+            'shell',
+            'settings',
+            'get',
+            'secure',
+            'default_input_method',
+        ], { timeout: IME_PROBE_TIMEOUT_MS });
+        return parseDefaultInputMethodPackage(stdout);
+    }
+    catch {
+        return null;
+    }
+}
+let _imePackageResolverForTest = null;
+export function _setImePackageResolverForTest(fn) {
+    _imePackageResolverForTest = fn;
+}
+export function focusNextPressArgs(ref, nodePackageName, platform, appId, imePackage) {
     const target = ref.startsWith('@') ? ref : `@${ref}`;
-    const outsideAppKeyboard = platform === 'android' &&
-        nodePackageName !== undefined &&
+    const imeOwnedKey = platform === 'android' &&
         appId !== undefined &&
-        nodePackageName !== appId;
-    return outsideAppKeyboard ? ['press', target, '--include-system-ui'] : ['press', target];
+        imePackage !== null &&
+        imePackage !== appId &&
+        nodePackageName === imePackage;
+    return imeOwnedKey ? ['press', target, '--include-system-ui', IME_KEY_FLAG] : ['press', target];
 }
 export function createDeviceFocusNextHandler() {
     return withSession(async () => {
@@ -1100,12 +1134,15 @@ export function createDeviceFocusNextHandler() {
         }
         const { nodes, recoveredTier } = snap;
         const session = getActiveSession();
+        const imePackage = session?.platform === 'android'
+            ? await (_imePackageResolverForTest ?? resolveAndroidImePackage)(session.deviceId)
+            : null;
         let lastPressFailure = null;
         for (const label of NEXT_KEY_LABELS) {
             const match = nodes.find((n) => n.label === label);
             if (!match)
                 continue;
-            const pressResult = await runNative(focusNextPressArgs(match.ref, match.packageName, session?.platform, session?.appId));
+            const pressResult = await runNative(focusNextPressArgs(match.ref, match.packageName, session?.platform, session?.appId, imePackage));
             if (pressResult.isError) {
                 lastPressFailure = pressResult;
                 continue; // Match found but tap failed — try next label

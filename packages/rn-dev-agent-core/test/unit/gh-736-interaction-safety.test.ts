@@ -8,9 +8,11 @@ import {
   androidOutsideAppWindowRefusal,
   buildRunAndroidArgs,
   establishInteractionBaseline,
+  IME_KEY_FLAG,
   outsideAppWindowFailResult,
   rebuildHealedAndroidArgs,
   settleWithRetryIfNoChange,
+  tapRetryPolicy,
 } from '../../dist/agent-device-wrapper.js';
 import {
   clearRefMap,
@@ -34,8 +36,10 @@ import {
   REQUIRED_ANDROID_FEATURES,
 } from '../../dist/runners/protocol.js';
 import {
+  _setImePackageResolverForTest,
   createDeviceFocusNextHandler,
   focusNextPressArgs,
+  parseDefaultInputMethodPackage,
   pressCandidate,
   scopeSnapshotNodesForFind,
 } from '../../dist/tools/device-interact.js';
@@ -49,6 +53,7 @@ const appHome = {
   packageName: appId,
   rect: { x: 0, y: 700, width: 180, height: 80 },
 };
+const imePackage = 'com.google.android.inputmethod.latin';
 const imeKey = {
   ref: '@e3',
   type: 'android.inputmethodservice.Keyboard$Key',
@@ -72,6 +77,7 @@ afterEach(() => {
   _setFetchForTest(globalThis.fetch);
   _setRunAgentDeviceForTest(null);
   _setActiveSessionForTest(null);
+  _setImePackageResolverForTest(null);
 });
 
 test('Android find scope excludes system chrome unless explicitly opted in', () => {
@@ -346,15 +352,95 @@ test('owned-app refs, explicit system scope, and coordinate taps stay unrefused'
 
 test('device_focus_next keeps actuating the Android IME key it already matched', () => {
   updateRefMapFromFlat([appHome, imeKey]);
-  const args = focusNextPressArgs(imeKey.ref, imeKey.packageName, 'android', appId);
-  assert.deepEqual(args, ['press', imeKey.ref, '--include-system-ui']);
+  const args = focusNextPressArgs(imeKey.ref, imeKey.packageName, 'android', appId, imePackage);
+  assert.deepEqual(args, ['press', imeKey.ref, '--include-system-ui', IME_KEY_FLAG]);
   assert.equal(androidOutsideAppWindowRefusal(args, appId), null);
   assert.equal(buildRunAndroidArgs(args, appId).includeSystemUi, true);
 });
 
+test('a verified IME key press is neither effect-probed nor re-dispatched', async () => {
+  updateRefMapFromFlat([appHome, imeKey]);
+  const args = focusNextPressArgs(imeKey.ref, imeKey.packageName, 'android', appId, imePackage);
+  const policy = tapRetryPolicy(args, 'tap', 850, 1250, {});
+  assert.equal(policy.verificationRequired, false);
+  assert.equal(policy.eligible, false);
+  assert.equal(
+    await establishInteractionBaseline({ platform: 'android', appId }, policy),
+    undefined,
+  );
+
+  let dispatches = 0;
+  const actuated = okResult({ tapped: true, method: 'accessibility-action' });
+  const settled = await settleWithRetryIfNoChange(
+    actuated,
+    async () => {
+      dispatches++;
+      return actuated;
+    },
+    { platform: 'android', verb: 'press', appId },
+    policy,
+    {
+      enabled: () => true,
+      capabilities: () => [],
+      probes: () => ({
+        snapshotHash: async () => 'UNCHANGED',
+        sleep: async () => {},
+        now: () => 0,
+      }),
+      wait: async () => ({ settled: true, method: 'hierarchy', hierarchyChanged: false }),
+    },
+  );
+  assert.equal(dispatches, 0, 'a keyboard key must never be actuated twice');
+  assert.equal(settled.isError, undefined);
+  const envelope = JSON.parse(settled.content[0].text) as { ok: boolean; code?: string };
+  assert.equal(envelope.ok, true);
+  assert.equal(envelope.code, undefined);
+});
+
+test('ordinary app taps keep their fail-closed effect verification', () => {
+  updateRefMapFromFlat([appHome, imeKey]);
+  const policy = tapRetryPolicy(['press', appHome.ref], 'tap', 90, 740, {});
+  assert.equal(policy.verificationRequired, true);
+  const systemUiPolicy = tapRetryPolicy(
+    ['press', systemHome.ref, '--include-system-ui'],
+    'tap',
+    220,
+    820,
+    {},
+  );
+  assert.equal(
+    systemUiPolicy.verificationRequired,
+    true,
+    'explicit system-UI scope alone must not buy a verification exemption',
+  );
+});
+
+test('the IME grant requires the real default IME, not any outside-app window', () => {
+  assert.deepEqual(
+    focusNextPressArgs(systemHome.ref, systemHome.packageName, 'android', appId, imePackage),
+    ['press', systemHome.ref],
+  );
+  assert.deepEqual(focusNextPressArgs(imeKey.ref, imeKey.packageName, 'android', appId, null), [
+    'press',
+    imeKey.ref,
+  ]);
+  assert.deepEqual(
+    focusNextPressArgs(imeKey.ref, imeKey.packageName, 'android', appId, 'com.other.ime'),
+    ['press', imeKey.ref],
+  );
+});
+
+test('the default-IME probe accepts only a well-formed package', () => {
+  assert.equal(parseDefaultInputMethodPackage(`${imePackage}/.LatinIME\n`), imePackage);
+  assert.equal(parseDefaultInputMethodPackage(`  ${imePackage}  \n`), imePackage);
+  assert.equal(parseDefaultInputMethodPackage('null\n'), null);
+  assert.equal(parseDefaultInputMethodPackage(''), null);
+  assert.equal(parseDefaultInputMethodPackage('rm -rf /\n'), null);
+});
+
 test('the focus-next keyboard grant never leaks into device_press', () => {
   updateRefMapFromFlat([appHome, imeKey, systemHome]);
-  focusNextPressArgs(imeKey.ref, imeKey.packageName, 'android', appId);
+  focusNextPressArgs(imeKey.ref, imeKey.packageName, 'android', appId, imePackage);
   assert.equal(isSystemUiRefAuthorized(imeKey.ref), false);
   assert.equal(
     androidOutsideAppWindowRefusal(['press', imeKey.ref], appId)?.packageName,
@@ -368,19 +454,22 @@ test('the focus-next keyboard grant never leaks into device_press', () => {
 });
 
 test('focus-next claims no system scope for owned-app keys or non-Android sessions', () => {
-  assert.deepEqual(focusNextPressArgs(appHome.ref, appHome.packageName, 'android', appId), [
+  assert.deepEqual(
+    focusNextPressArgs(appHome.ref, appHome.packageName, 'android', appId, imePackage),
+    ['press', appHome.ref],
+  );
+  assert.deepEqual(focusNextPressArgs('e3', imeKey.packageName, 'ios', appId, imePackage), [
     'press',
-    appHome.ref,
+    '@e3',
   ]);
-  assert.deepEqual(focusNextPressArgs('e3', imeKey.packageName, 'ios', appId), ['press', '@e3']);
-  assert.deepEqual(focusNextPressArgs(imeKey.ref, undefined, 'android', appId), [
+  assert.deepEqual(focusNextPressArgs(imeKey.ref, undefined, 'android', appId, imePackage), [
     'press',
     imeKey.ref,
   ]);
-  assert.deepEqual(focusNextPressArgs(imeKey.ref, imeKey.packageName, 'android', undefined), [
-    'press',
-    imeKey.ref,
-  ]);
+  assert.deepEqual(
+    focusNextPressArgs(imeKey.ref, imeKey.packageName, 'android', undefined, imePackage),
+    ['press', imeKey.ref],
+  );
 });
 
 test('device_focus_next presses the IME key on Android instead of reporting it missing', async () => {
@@ -390,6 +479,7 @@ test('device_focus_next presses the IME key on Android instead of reporting it m
     appId,
     openedAt: '2026-08-10T00:00:00.000Z',
   });
+  _setImePackageResolverForTest(async () => imePackage);
   const dispatched: string[][] = [];
   _setRunAgentDeviceForTest(async (cliArgs: string[]) => {
     dispatched.push(cliArgs);
@@ -413,7 +503,7 @@ test('device_focus_next presses the IME key on Android instead of reporting it m
   assert.equal(result.isError, undefined);
   assert.equal(envelope.ok, true);
   assert.equal(envelope.meta.keyUsed, 'Done');
-  assert.deepEqual(dispatched[1], ['press', imeKey.ref, '--include-system-ui']);
+  assert.deepEqual(dispatched[1], ['press', imeKey.ref, '--include-system-ui', IME_KEY_FLAG]);
 });
 
 test('device_focus_next reports a refused key press truthfully, not as a missing key', async () => {
@@ -423,6 +513,7 @@ test('device_focus_next reports a refused key press truthfully, not as a missing
     appId,
     openedAt: '2026-08-10T00:00:00.000Z',
   });
+  _setImePackageResolverForTest(async () => null);
   _setRunAgentDeviceForTest(async (cliArgs: string[]) =>
     cliArgs[0] === 'snapshot'
       ? okResult({ nodes: [appHome, imeKey] })

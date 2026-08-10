@@ -28368,7 +28368,7 @@ function selfHealEnabled(env) {
 function tapRetryPolicy(cliArgs, builtCommand, x, y, opts) {
   const ref = cliArgs[1];
   const exactTarget = ref?.startsWith("@") ? getFreshRefTarget(ref) : null;
-  const keyboardTarget = exactTarget?.snapshotElementType === "Key" || exactTarget?.snapshotElementType === "Keyboard";
+  const keyboardTarget = exactTarget?.snapshotElementType === "Key" || exactTarget?.snapshotElementType === "Keyboard" || cliArgs.includes(IME_KEY_FLAG);
   const verificationRequired = !keyboardTarget && RETRYABLE_TAP_COMMANDS.has(builtCommand) && !cliArgs.includes("--double-tap") && !cliArgs.includes("--count") && !cliArgs.includes("--hold-ms") && x !== void 0 && y !== void 0;
   const eligible = verificationRequired && opts.retryIfNoChange !== false && selfHealEnabled(process.env);
   return { eligible, verificationRequired, targetKey: `${builtCommand}@${x},${y}` };
@@ -28690,7 +28690,7 @@ async function runNative(cliArgs, opts = {}) {
   }
   return failResult(`No native route for "${cliArgs[0]}". Open a device session (device_snapshot action=open) first, or use the dedicated tool for this verb.`, "NO_NATIVE_ROUTE");
 }
-var SESSION_FILE, LEGACY_SESSION_FILE, activeSession, snapshotCache, dirtySnapshotPlatforms, snapshotAuthorityProvider, RN_FAST_RUNNER_COMMANDS, SNAPSHOT_MUTATING_VERBS, APP_SCOPED_ANDROID_REF_VERBS, PROTOCOL_STALE_REASONS, _runAgentDeviceOverrideForTest, _testSeamFused, _testSeamFuseBlownBy, RETRYABLE_TAP_COMMANDS, MAX_STALE_CANDIDATES;
+var SESSION_FILE, LEGACY_SESSION_FILE, activeSession, snapshotCache, dirtySnapshotPlatforms, snapshotAuthorityProvider, RN_FAST_RUNNER_COMMANDS, SNAPSHOT_MUTATING_VERBS, APP_SCOPED_ANDROID_REF_VERBS, PROTOCOL_STALE_REASONS, _runAgentDeviceOverrideForTest, _testSeamFused, _testSeamFuseBlownBy, RETRYABLE_TAP_COMMANDS, IME_KEY_FLAG, MAX_STALE_CANDIDATES;
 var init_agent_device_wrapper = __esm({
   "packages/rn-dev-agent-core/dist/agent-device-wrapper.js"() {
     "use strict";
@@ -28761,6 +28761,7 @@ var init_agent_device_wrapper = __esm({
     _testSeamFused = false;
     _testSeamFuseBlownBy = null;
     RETRYABLE_TAP_COMMANDS = /* @__PURE__ */ new Set(["tap", "longPress"]);
+    IME_KEY_FLAG = "--ime-key";
     MAX_STALE_CANDIDATES = 5;
   }
 });
@@ -30521,6 +30522,8 @@ var init_fill_coordinator = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/device-interact.js
+import { execFile as execFileCb9 } from "node:child_process";
+import { promisify as promisify12 } from "node:util";
 function candidateFromNode(n) {
   return {
     ref: n.ref,
@@ -31293,10 +31296,32 @@ function createDevicePinchHandler() {
 function createDeviceBackHandler() {
   return withSession(() => runNative(["back"]));
 }
-function focusNextPressArgs(ref, nodePackageName, platform, appId) {
+function parseDefaultInputMethodPackage(raw) {
+  const value = raw.trim().split(/\r?\n/)[0]?.trim() ?? "";
+  if (!value || value === "null")
+    return null;
+  const pkg = value.split("/")[0]?.trim() ?? "";
+  return isValidBundleId(pkg) ? pkg : null;
+}
+async function resolveAndroidImePackage(deviceId) {
+  try {
+    const { stdout } = await execFile12("adb", [
+      ...deviceId ? ["-s", deviceId] : [],
+      "shell",
+      "settings",
+      "get",
+      "secure",
+      "default_input_method"
+    ], { timeout: IME_PROBE_TIMEOUT_MS });
+    return parseDefaultInputMethodPackage(stdout);
+  } catch {
+    return null;
+  }
+}
+function focusNextPressArgs(ref, nodePackageName, platform, appId, imePackage) {
   const target = ref.startsWith("@") ? ref : `@${ref}`;
-  const outsideAppKeyboard = platform === "android" && nodePackageName !== void 0 && appId !== void 0 && nodePackageName !== appId;
-  return outsideAppKeyboard ? ["press", target, "--include-system-ui"] : ["press", target];
+  const imeOwnedKey = platform === "android" && appId !== void 0 && imePackage !== null && imePackage !== appId && nodePackageName === imePackage;
+  return imeOwnedKey ? ["press", target, "--include-system-ui", IME_KEY_FLAG] : ["press", target];
 }
 function createDeviceFocusNextHandler() {
   return withSession(async () => {
@@ -31312,12 +31337,13 @@ function createDeviceFocusNextHandler() {
     }
     const { nodes, recoveredTier } = snap;
     const session2 = getActiveSession();
+    const imePackage = session2?.platform === "android" ? await (_imePackageResolverForTest ?? resolveAndroidImePackage)(session2.deviceId) : null;
     let lastPressFailure = null;
     for (const label of NEXT_KEY_LABELS) {
       const match = nodes.find((n) => n.label === label);
       if (!match)
         continue;
-      const pressResult = await runNative(focusNextPressArgs(match.ref, match.packageName, session2?.platform, session2?.appId));
+      const pressResult = await runNative(focusNextPressArgs(match.ref, match.packageName, session2?.platform, session2?.appId, imePackage));
       if (pressResult.isError) {
         lastPressFailure = pressResult;
         continue;
@@ -31376,7 +31402,7 @@ function decideScrollDirection(element, screen) {
     return "right";
   return null;
 }
-var TYPE_PRIORITY_FOR_TAP, HELPER_MISSING_VERDICT, DEFAULT_SCREEN, SWIPE_FRACTION, DEFAULT_SWIPE_DURATION_MS, NEXT_KEY_LABELS;
+var execFile12, IME_PROBE_TIMEOUT_MS, TYPE_PRIORITY_FOR_TAP, HELPER_MISSING_VERDICT, DEFAULT_SCREEN, SWIPE_FRACTION, DEFAULT_SWIPE_DURATION_MS, NEXT_KEY_LABELS, _imePackageResolverForTest;
 var init_device_interact = __esm({
   "packages/rn-dev-agent-core/dist/tools/device-interact.js"() {
     "use strict";
@@ -31385,6 +31411,7 @@ var init_device_interact = __esm({
     init_rn_android_runner_client();
     init_keyboard_guard();
     init_project_config();
+    init_maestro_validator();
     init_utils();
     init_utils();
     init_runner_leak_recovery();
@@ -31392,6 +31419,8 @@ var init_device_interact = __esm({
     init_fast_runner_ref_map();
     init_fast_runner_ref_map();
     init_fill_coordinator();
+    execFile12 = promisify12(execFileCb9);
+    IME_PROBE_TIMEOUT_MS = 5e3;
     TYPE_PRIORITY_FOR_TAP = {
       Button: 100,
       Cell: 95,
@@ -31412,6 +31441,7 @@ var init_device_interact = __esm({
     SWIPE_FRACTION = 0.4;
     DEFAULT_SWIPE_DURATION_MS = 300;
     NEXT_KEY_LABELS = ["Go", "Done", "Return", "Next"];
+    _imePackageResolverForTest = null;
   }
 });
 
@@ -31963,8 +31993,8 @@ ensureCwd();
 // packages/rn-dev-agent-core/dist/index.js
 import { createHash as createHash21, createHmac as createHmac5, randomUUID as randomUUID9 } from "node:crypto";
 import { readFileSync as readFileSync41, rmSync as rmSync11 } from "node:fs";
-import { execFile as execFile25 } from "node:child_process";
-import { promisify as promisify27 } from "node:util";
+import { execFile as execFile26 } from "node:child_process";
+import { promisify as promisify28 } from "node:util";
 import { fileURLToPath as fileURLToPath7 } from "node:url";
 import { dirname as dirname23, join as join55 } from "node:path";
 
@@ -52384,8 +52414,8 @@ init_dev_client_picker();
 
 // packages/rn-dev-agent-core/dist/tools/reload.js
 init_utils();
-import { execFile as execFileCb9 } from "node:child_process";
-import { promisify as promisify12 } from "node:util";
+import { execFile as execFileCb10 } from "node:child_process";
+import { promisify as promisify13 } from "node:util";
 
 // packages/rn-dev-agent-core/dist/tools/expo-dev-menu.js
 var RESOLVE_EXPO_DEV_MENU = `(function () {
@@ -52561,7 +52591,7 @@ async function proveTargetDeviceAssociations(input, dependencies) {
 }
 
 // packages/rn-dev-agent-core/dist/tools/reload.js
-var defaultExecFile = promisify12(execFileCb9);
+var defaultExecFile = promisify13(execFileCb10);
 var sessionReloadCount = 0;
 var SOFT_RECONNECT_DEADLINE_MS = 3e4;
 var SOFT_RECONNECT_ATTEMPTS = 5;
@@ -52637,9 +52667,9 @@ async function resolveExactReloadTargetId(client2, captured, authorityTarget, ex
   return exactCandidates[0].id;
 }
 async function recoverAfterFailedReconnect(getClient2, setClient2, createClient2, captured, deps = {}, authorityTarget) {
-  const execFile26 = deps.execFile ?? defaultExecFile;
+  const execFile27 = deps.execFile ?? defaultExecFile;
   const sleep6 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
-  const resolveExactTargetId = deps.resolveExactTargetId ?? ((client2, state, target) => resolveExactReloadTargetId(client2, state, target, execFile26));
+  const resolveExactTargetId = deps.resolveExactTargetId ?? ((client2, state, target) => resolveExactReloadTargetId(client2, state, target, execFile27));
   const first = await forceReconnect(getClient2(), setClient2, createClient2, captured, authorityTarget, authorityTarget ? resolveExactTargetId : void 0);
   if (first.ok) {
     return {
@@ -52660,12 +52690,12 @@ async function recoverAfterFailedReconnect(getClient2, setClient2, createClient2
   const platform = authorityTarget.platform;
   try {
     if (platform === "ios") {
-      await execFile26("xcrun", ["simctl", "terminate", deviceId, bundleId], {
+      await execFile27("xcrun", ["simctl", "terminate", deviceId, bundleId], {
         timeout: 5e3
       });
       steps.push(`simctl terminate ${bundleId}:ok`);
     } else {
-      await execFile26("adb", ["-s", deviceId, "shell", "am", "force-stop", bundleId], {
+      await execFile27("adb", ["-s", deviceId, "shell", "am", "force-stop", bundleId], {
         timeout: 5e3
       });
       steps.push(`adb force-stop ${bundleId}:ok`);
@@ -52675,12 +52705,12 @@ async function recoverAfterFailedReconnect(getClient2, setClient2, createClient2
   }
   try {
     if (platform === "ios") {
-      await execFile26("xcrun", ["simctl", "launch", deviceId, bundleId], {
+      await execFile27("xcrun", ["simctl", "launch", deviceId, bundleId], {
         timeout: 8e3
       });
       steps.push(`simctl launch ${bundleId}:ok`);
     } else {
-      await execFile26("adb", [
+      await execFile27("adb", [
         "-s",
         deviceId,
         "shell",
@@ -53571,8 +53601,8 @@ function projectRootFromYaml(yamlFilePath) {
 }
 
 // packages/rn-dev-agent-core/dist/domain/engine-pin.js
-import { execFile as execFileCb11, spawnSync as spawnSync2 } from "node:child_process";
-import { promisify as promisify14 } from "node:util";
+import { execFile as execFileCb12, spawnSync as spawnSync2 } from "node:child_process";
+import { promisify as promisify15 } from "node:util";
 import { createHash as createHash7 } from "node:crypto";
 import { readFileSync as readFileSync20 } from "node:fs";
 
@@ -53860,8 +53890,8 @@ function outputIndicatesFlowFailure(output) {
 
 // packages/rn-dev-agent-core/dist/tools/maestro-run.js
 init_utils();
-import { execFile as execFileCb10 } from "node:child_process";
-import { promisify as promisify13 } from "node:util";
+import { execFile as execFileCb11 } from "node:child_process";
+import { promisify as promisify14 } from "node:util";
 import { existsSync as existsSync20, readFileSync as readFileSync18, writeFileSync as writeFileSync9 } from "node:fs";
 import { tmpdir as tmpdir7 } from "node:os";
 import { join as join26, dirname as dirname11 } from "node:path";
@@ -56000,7 +56030,7 @@ function createAuthorityGate(runtime, dependencies) {
 
 // packages/rn-dev-agent-core/dist/tools/maestro-run.js
 init_registry();
-var defaultExecFile2 = promisify13(execFileCb10);
+var defaultExecFile2 = promisify14(execFileCb11);
 async function runFlowParked(run, opts = {}) {
   const stale = opts.markCdpStale ?? markCdpStale;
   try {
@@ -56838,7 +56868,7 @@ async function runMaestroInline(yaml2, opts, dependencies = {}) {
 }
 
 // packages/rn-dev-agent-core/dist/domain/engine-pin.js
-var execFile12 = promisify14(execFileCb11);
+var execFile13 = promisify15(execFileCb12);
 var MAESTRO_RUNNER_PIN = {
   version: "1.0.9",
   sha256: {
@@ -56921,7 +56951,7 @@ function defaultCliPresent() {
   return r.status === 0 && r.stdout.trim().length > 0;
 }
 async function defaultExecVersion(bin) {
-  const { stdout, stderr } = await execFile12(bin, ["--version"], {
+  const { stdout, stderr } = await execFile13(bin, ["--version"], {
     timeout: 5e3,
     encoding: "utf8"
   });
@@ -65472,11 +65502,11 @@ init_device_arbiter();
 // packages/rn-dev-agent-core/dist/session/process-cleanup.js
 init_release_android_slot();
 init_cleanup_identity();
-import { execFile as execFileCb12, spawn as spawn7 } from "node:child_process";
-import { promisify as promisify15 } from "node:util";
+import { execFile as execFileCb13, spawn as spawn7 } from "node:child_process";
+import { promisify as promisify16 } from "node:util";
 init_process_birth();
 init_registry();
-var execFile13 = promisify15(execFileCb12);
+var execFile14 = promisify16(execFileCb13);
 var RECORDER_POST_KILL_CONFIRM_MS = 2e3;
 function executeRecorderScript(script, args, options) {
   return new Promise((resolve12, reject) => {
@@ -65688,7 +65718,7 @@ async function stopBoundObserve(binding, listenerProbe = probeManagedMetroListen
     return observed.status === "listening" && observed.pid === pid ? "running" : "stopped";
   }, deadlineMs, "OBSERVE_AUTHORITY_MISMATCH", "Observe listener did not stop before the cleanup deadline");
 }
-async function stopBoundRunner(binding, processProbe = probeProcessBirth, signalProcess = process.kill, timeoutMs = 2e3, runAdb = async (args) => execFile13("adb", args, { timeout: 5e3, encoding: "utf8" }), termGraceMs = 500) {
+async function stopBoundRunner(binding, processProbe = probeProcessBirth, signalProcess = process.kill, timeoutMs = 2e3, runAdb = async (args) => execFile14("adb", args, { timeout: 5e3, encoding: "utf8" }), termGraceMs = 500) {
   const deadlineMs = Date.now() + timeoutMs;
   if (!hasCompleteRunnerCleanupIdentity(binding)) {
     throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "runner cleanup identity is incomplete");
@@ -67374,9 +67404,9 @@ function createErrorLogHandler(getClient2) {
 
 // packages/rn-dev-agent-core/dist/tools/native-errors.js
 init_utils();
-import { execFile as execFileCb13 } from "node:child_process";
-import { promisify as promisify16 } from "node:util";
-var execFile14 = promisify16(execFileCb13);
+import { execFile as execFileCb14 } from "node:child_process";
+import { promisify as promisify17 } from "node:util";
+var execFile15 = promisify17(execFileCb14);
 var IOS_NOISE_PATTERNS = [
   /Cannot find native module/i,
   /Module \w+ is not a registered callable module/i,
@@ -67443,7 +67473,7 @@ function dedupeByMessage(entries) {
   return out;
 }
 async function defaultRunIOS(sinceSeconds, deviceId) {
-  const { stdout } = await execFile14("xcrun", [
+  const { stdout } = await execFile15("xcrun", [
     "simctl",
     "spawn",
     deviceId,
@@ -67457,7 +67487,7 @@ async function defaultRunIOS(sinceSeconds, deviceId) {
   return stdout;
 }
 async function defaultRunAndroid(sinceSeconds, deviceId) {
-  const { stdout } = await execFile14("adb", ["-s", deviceId, "logcat", "-d", "-v", "time", "-t", `${sinceSeconds * 100}`, "*:E"], { timeout: 1e4, encoding: "utf8", maxBuffer: 10 * 1024 * 1024 });
+  const { stdout } = await execFile15("adb", ["-s", deviceId, "logcat", "-d", "-v", "time", "-t", `${sinceSeconds * 100}`, "*:E"], { timeout: 1e4, encoding: "utf8", maxBuffer: 10 * 1024 * 1024 });
   return stdout;
 }
 async function readNativeErrors(opts = {}) {
@@ -68267,16 +68297,16 @@ init_keyboard_guard();
 init_agent_device_wrapper();
 init_utils();
 import { mkdirSync as mkdirSync15 } from "node:fs";
-import { execFile as execFile16 } from "node:child_process";
-import { promisify as promisify18 } from "node:util";
+import { execFile as execFile17 } from "node:child_process";
+import { promisify as promisify19 } from "node:util";
 import { dirname as dirname14, join as join33, resolve as resolve8 } from "node:path";
 import { homedir as homedir9 } from "node:os";
 
 // packages/rn-dev-agent-core/dist/tools/device-screenshot-resize.js
-import { execFile as execFileCb14 } from "node:child_process";
-import { promisify as promisify17 } from "node:util";
+import { execFile as execFileCb15 } from "node:child_process";
+import { promisify as promisify18 } from "node:util";
 import { statSync as statSync10 } from "node:fs";
-var execFile15 = promisify17(execFileCb14);
+var execFile16 = promisify18(execFileCb15);
 var DEFAULT_MAX_WIDTH = 800;
 var DEFAULT_QUALITY = 85;
 var sipsAvailable = null;
@@ -68290,7 +68320,7 @@ var defaultFileSize = (path) => {
 async function checkSipsAvailable(deps) {
   if (sipsAvailable !== null)
     return sipsAvailable;
-  const runner = deps.exec ?? execFile15;
+  const runner = deps.exec ?? execFile16;
   try {
     await runner("sips", ["--version"], { timeout: 1500 });
     sipsAvailable = true;
@@ -68307,7 +68337,7 @@ function parseSipsDimensions(stdout) {
   return { width: parseInt(wMatch[1], 10), height: parseInt(hMatch[1], 10) };
 }
 async function getDimensions(path, deps) {
-  const runner = deps.exec ?? execFile15;
+  const runner = deps.exec ?? execFile16;
   try {
     const { stdout } = await runner("sips", ["-g", "pixelWidth", "-g", "pixelHeight", path], {
       timeout: 5e3,
@@ -68346,7 +68376,7 @@ async function resizeWithSips(path, opts = {}, deps = {}) {
   }
   const fileSize = deps.fileSize ?? defaultFileSize;
   const originalBytes = fileSize(path);
-  const runner = deps.exec ?? execFile15;
+  const runner = deps.exec ?? execFile16;
   const quality = opts.quality ?? DEFAULT_QUALITY;
   try {
     await runner("sips", buildSipsResizeArgs(path, maxWidth, quality), { timeout: 1e4 });
@@ -68873,7 +68903,7 @@ var recorder = new Recorder();
 // packages/rn-dev-agent-core/dist/tools/device-list.js
 init_public_diagnostics();
 var runAgentDeviceFn2 = runNative;
-var execFileAsync3 = promisify18(execFile16);
+var execFileAsync3 = promisify19(execFile17);
 var defaultExec2 = (cmd, args) => execFileAsync3(cmd, args);
 var execFn = defaultExec2;
 function parseSimctlDevicesAll(jsonText) {
@@ -71953,9 +71983,9 @@ function buildCdpDispatch(deps) {
 }
 
 // packages/rn-dev-agent-core/dist/domain/blind-probe-gate.js
-import { execFile as execFileCb15 } from "node:child_process";
-import { promisify as promisify19 } from "node:util";
-var execFile17 = promisify19(execFileCb15);
+import { execFile as execFileCb16 } from "node:child_process";
+import { promisify as promisify20 } from "node:util";
+var execFile18 = promisify20(execFileCb16);
 var WDA_BLIND_MIN_IOS_MAJOR = 26;
 var RECENT_WINDOW = 5;
 function evaluateBlindProbeGate(input) {
@@ -71994,7 +72024,7 @@ function parseIosRuntimeMajorForUdid(simctlJson, udid) {
   return null;
 }
 var runtimeCache = /* @__PURE__ */ new Map();
-async function getIosRuntimeMajorForUdid(udid, execFn2 = (cmd, args) => execFile17(cmd, args, { timeout: 5e3, encoding: "utf8" })) {
+async function getIosRuntimeMajorForUdid(udid, execFn2 = (cmd, args) => execFile18(cmd, args, { timeout: 5e3, encoding: "utf8" })) {
   if (runtimeCache.has(udid))
     return runtimeCache.get(udid) ?? null;
   try {
@@ -73172,9 +73202,9 @@ function createInteractHandler(getClient2) {
 // packages/rn-dev-agent-core/dist/tools/collect-logs.js
 init_agent_device_wrapper();
 init_utils();
-import { execFile as execFileCb16, spawn as spawn8 } from "node:child_process";
-import { promisify as promisify20 } from "node:util";
-var execFile18 = promisify20(execFileCb16);
+import { execFile as execFileCb17, spawn as spawn8 } from "node:child_process";
+import { promisify as promisify21 } from "node:util";
+var execFile19 = promisify21(execFileCb17);
 function normalizeTimestamp(ts) {
   if (!ts)
     return (/* @__PURE__ */ new Date()).toISOString();
@@ -73248,7 +73278,7 @@ var PID_PROBE_TIMEOUT_MS = 5e3;
 async function resolveIosAppPid(deviceId, bundleId, signal) {
   let stdout;
   try {
-    ({ stdout } = await execFile18("xcrun", ["simctl", "spawn", deviceId, "launchctl", "list"], {
+    ({ stdout } = await execFile19("xcrun", ["simctl", "spawn", deviceId, "launchctl", "list"], {
       timeout: PID_PROBE_TIMEOUT_MS,
       signal
     }));
@@ -73631,9 +73661,9 @@ init_device_interact();
 // packages/rn-dev-agent-core/dist/tools/device-permission.js
 init_utils();
 init_maestro_validator();
-import { execFile as execFile19 } from "node:child_process";
-import { promisify as promisify21 } from "node:util";
-var execFileAsync4 = promisify21(execFile19);
+import { execFile as execFile20 } from "node:child_process";
+import { promisify as promisify22 } from "node:util";
+var execFileAsync4 = promisify22(execFile20);
 var EXEC_TIMEOUT = 1e4;
 function escapeRegex2(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -74399,8 +74429,8 @@ function createDeviceResetStateHandler(getClient2, deps = {}) {
 
 // packages/rn-dev-agent-core/dist/tools/device-deeplink.js
 init_utils();
-import { execFile as execFileCb17 } from "node:child_process";
-import { promisify as promisify22 } from "node:util";
+import { execFile as execFileCb18 } from "node:child_process";
+import { promisify as promisify23 } from "node:util";
 
 // packages/rn-dev-agent-core/dist/verification/deep-link-depth.js
 var SUCCESS_SUFFIX_REGEX = /(success|done|added|complete|completed|confirmation)$/i;
@@ -74622,7 +74652,7 @@ function createDeviceDismissSystemDialogHandler() {
 }
 
 // packages/rn-dev-agent-core/dist/tools/device-deeplink.js
-var execFile20 = promisify22(execFileCb17);
+var execFile21 = promisify23(execFileCb18);
 var EXEC_TIMEOUT_MS = 1e4;
 function iosDeeplinkCommandArgs(url, deviceId) {
   if (!deviceId)
@@ -74631,7 +74661,7 @@ function iosDeeplinkCommandArgs(url, deviceId) {
 }
 async function openIosDeeplink(url, deviceId) {
   try {
-    const { stdout, stderr } = await execFile20("xcrun", iosDeeplinkCommandArgs(url, deviceId), {
+    const { stdout, stderr } = await execFile21("xcrun", iosDeeplinkCommandArgs(url, deviceId), {
       timeout: EXEC_TIMEOUT_MS
     });
     return okResult({
@@ -74675,7 +74705,7 @@ function androidDeeplinkCommandArgs(url, packageName, deviceId) {
 async function openAndroidDeeplink(url, packageName, deviceId) {
   const args = androidDeeplinkCommandArgs(url, packageName, deviceId);
   try {
-    const { stdout, stderr } = await execFile20("adb", args, { timeout: EXEC_TIMEOUT_MS });
+    const { stdout, stderr } = await execFile21("adb", args, { timeout: EXEC_TIMEOUT_MS });
     const output = (stdout || stderr).trim();
     if (/Error:|Error type \d|Warning: Activity not started|No Activity found|Status: error/i.test(output)) {
       return failResult(`adb am start reported error: ${output.slice(0, 300)}`, {
@@ -74766,14 +74796,14 @@ init_dev_client_picker();
 
 // packages/rn-dev-agent-core/dist/tools/device-record.js
 init_utils();
-import { execFile as execFile21 } from "node:child_process";
+import { execFile as execFile22 } from "node:child_process";
 import { createHash as createHash12 } from "node:crypto";
 import { existsSync as existsSync29 } from "node:fs";
-import { promisify as promisify23 } from "node:util";
+import { promisify as promisify24 } from "node:util";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 import { dirname as dirname16, join as join36 } from "node:path";
 init_process_birth();
-var execFileAsync5 = promisify23(execFile21);
+var execFileAsync5 = promisify24(execFile22);
 var START_TIMEOUT_MS = 1e4;
 var STATUS_TIMEOUT_MS = 5e3;
 var GIF_TIMEOUT_MS = 6e4;
@@ -78540,12 +78570,12 @@ init_storage();
 init_agent_device_wrapper();
 init_project_config();
 init_maestro_validator();
-import { execFile as execFileCb18 } from "node:child_process";
-import { promisify as promisify24 } from "node:util";
+import { execFile as execFileCb19 } from "node:child_process";
+import { promisify as promisify25 } from "node:util";
 import { existsSync as existsSync31, readFileSync as readFileSync29, writeFileSync as writeFileSync15, readdirSync as readdirSync9 } from "node:fs";
 import { join as join39 } from "node:path";
 import { homedir as homedir10 } from "node:os";
-var execFile22 = promisify24(execFileCb18);
+var execFile23 = promisify25(execFileCb19);
 var AUTH_ROUTE_PATTERNS = [
   "login",
   "signin",
@@ -78703,7 +78733,7 @@ async function handleAutoLogin(client2, opts = {}) {
     };
   }
   try {
-    await runFlowParked(() => execFile22(runnerPath, ["--platform", platform, "test", wrapperPath], {
+    await runFlowParked(() => execFile23(runnerPath, ["--platform", platform, "test", wrapperPath], {
       timeout: 12e4,
       encoding: "utf8"
     }), {
@@ -78916,10 +78946,10 @@ init_utils();
 init_rn_fast_runner_client();
 init_app_installed_probe();
 init_recover_detached();
-import { execFile as execFileCb19 } from "node:child_process";
-import { promisify as promisify25 } from "node:util";
+import { execFile as execFileCb20 } from "node:child_process";
+import { promisify as promisify26 } from "node:util";
 init_maestro_validator();
-var defaultExecFile3 = promisify25(execFileCb19);
+var defaultExecFile3 = promisify26(execFileCb20);
 var SIMULATOR_UDID_RE = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
 function safeSimctlTarget(deviceId) {
   return deviceId && SIMULATOR_UDID_RE.test(deviceId) ? deviceId : null;
@@ -78950,7 +78980,7 @@ async function resolveExactRestartTargetId(client2, input, execute2) {
 }
 var inflightRestart = null;
 function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) {
-  const execFile26 = deps.execFile ?? defaultExecFile3;
+  const execFile27 = deps.execFile ?? defaultExecFile3;
   const stopFastRunner2 = deps.stopFastRunner ?? stopFastRunner;
   const unbindRunner = deps.unbindRunner ?? (() => {
   });
@@ -78958,7 +78988,7 @@ function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) 
   const probeAppInstalledFn = deps.probeAppInstalled ?? probeAppInstalled;
   const snapshotHintFn = deps.snapshotHint ?? snapshotHintForBundleId;
   const resetDetachedBudgetFn = deps.resetDetachedBudget ?? resetDetachedRecoveryCounter;
-  const resolveExactTargetId = deps.resolveExactTargetId ?? ((client2, input) => resolveExactRestartTargetId(client2, input, execFile26));
+  const resolveExactTargetId = deps.resolveExactTargetId ?? ((client2, input) => resolveExactRestartTargetId(client2, input, execFile27));
   async function doRestart(args) {
     try {
       logger.info("MCP", `cdp_restart: in-process state reset requested (hardReset=${!!args.hardReset})`);
@@ -78991,7 +79021,7 @@ function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) 
             return failResult("cdp_restart refused a non-exact iOS simulator identifier", "DEVICE_AUTHORITY_MISMATCH");
           }
           try {
-            await execFile26("xcrun", ["simctl", "terminate", targetUdid, bundleId], {
+            await execFile27("xcrun", ["simctl", "terminate", targetUdid, bundleId], {
               timeout: 5e3
             });
             hardResetSteps.push(`simctl terminate ${bundleId}:ok`);
@@ -78999,7 +79029,7 @@ function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) 
             hardResetSteps.push(`simctl terminate:warn(${err instanceof Error ? err.message : err})`);
           }
           try {
-            await execFile26("xcrun", ["simctl", "launch", targetUdid, bundleId], { timeout: 8e3 });
+            await execFile27("xcrun", ["simctl", "launch", targetUdid, bundleId], { timeout: 8e3 });
             hardResetSteps.push(`simctl launch ${bundleId}:ok`);
           } catch (err) {
             const msg3 = err instanceof Error ? err.message : String(err);
@@ -79019,11 +79049,11 @@ function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) 
           await sleep6(3e3);
         } else if (bundleId && targetPlatform === "android") {
           try {
-            await execFile26("adb", ["-s", args.deviceId, "shell", "am", "force-stop", bundleId], {
+            await execFile27("adb", ["-s", args.deviceId, "shell", "am", "force-stop", bundleId], {
               timeout: 5e3
             });
             hardResetSteps.push(`adb force-stop ${bundleId}:ok`);
-            await execFile26("adb", [
+            await execFile27("adb", [
               "-s",
               args.deviceId,
               "shell",
@@ -79571,14 +79601,14 @@ function createMaestroGenerateHandler() {
 init_utils();
 init_agent_device_wrapper();
 init_storage();
-import { execFile as execFileCb20 } from "node:child_process";
-import { promisify as promisify26 } from "node:util";
+import { execFile as execFileCb21 } from "node:child_process";
+import { promisify as promisify27 } from "node:util";
 import { existsSync as existsSync34, readdirSync as readdirSync10, readFileSync as readFileSync31, writeFileSync as writeFileSync18 } from "node:fs";
 import { join as join42 } from "node:path";
 import { tmpdir as tmpdir12 } from "node:os";
 init_maestro_validator();
 init_registry();
-var execFile23 = promisify26(execFileCb20);
+var execFile24 = promisify27(execFileCb21);
 function discoverFlows(dir, pattern) {
   if (!existsSync34(dir))
     return [];
@@ -79697,7 +79727,7 @@ function createMaestroTestAllHandler() {
           writeFileSync18(safeFlowFile, buildMaestroFlow(parsedAppId !== void 0 ? { appId: parsedAppId } : {}, [
             ...commands
           ]), "utf-8");
-          return execFile23(flowDispatch.binPath, finalArgs, {
+          return execFile24(flowDispatch.binPath, finalArgs, {
             timeout: remainingTimeout,
             encoding: "utf8",
             maxBuffer: 10 * 1024 * 1024
@@ -81449,7 +81479,7 @@ async function autostartObserve(deps) {
 init_project_config();
 
 // packages/rn-dev-agent-core/dist/observability/mirror/sources.js
-import { spawn as spawn9, execFile as execFile24 } from "node:child_process";
+import { spawn as spawn9, execFile as execFile25 } from "node:child_process";
 import { readFile as readFile2, unlink } from "node:fs/promises";
 import { tmpdir as tmpdir14 } from "node:os";
 import { join as join48 } from "node:path";
@@ -81515,7 +81545,7 @@ var scheduleAfter = (fn, delayMs) => {
     setTimeout(fn, delayMs);
 };
 var defaultSpawn = (cmd, args) => spawn9(cmd, args, { stdio: ["pipe", "pipe", "pipe"] });
-async function probeIdbClient(execFileFn = execFile24) {
+async function probeIdbClient(execFileFn = execFile25) {
   return new Promise((resolve12) => {
     execFileFn("idb", ["--help"], { timeout: 3e3 }, (err) => {
       if (!err)
@@ -81655,7 +81685,7 @@ var IosSimctlLoopSource = class {
 function defaultExecJpeg(cmd, args, signal) {
   const outPath = args[args.length - 1];
   return new Promise((resolve12, reject) => {
-    execFile24(cmd, args, { maxBuffer: 16 * 1024 * 1024, timeout: 1e4, signal }, (err) => {
+    execFile25(cmd, args, { maxBuffer: 16 * 1024 * 1024, timeout: 1e4, signal }, (err) => {
       if (err) {
         reject(err);
         return;
@@ -84431,7 +84461,7 @@ var createClient = (port) => {
   const status = authorityRuntime.status();
   return configureClientLifecycle(status.available && status.bindings.bundle ? client.createReplacement(port) : new CDPClient(port));
 };
-var execFileP = promisify27(execFile25);
+var execFileP = promisify28(execFile26);
 var mustOk = (res, what) => {
   const env = JSON.parse(res.content[0].text);
   if (env.ok === false)

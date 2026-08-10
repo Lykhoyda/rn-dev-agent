@@ -1,3 +1,5 @@
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
 import {
   runNative,
   getActiveSession,
@@ -7,6 +9,7 @@ import {
   getCachedSnapshot,
   isSnapshotCacheValid,
   markSnapshotDirty,
+  IME_KEY_FLAG,
 } from '../agent-device-wrapper.js';
 import {
   isFastRunnerAvailable,
@@ -21,6 +24,7 @@ import {
   type KeyboardAutoHealDeps,
 } from '../runners/keyboard-guard.js';
 import { resolveBundleId } from '../project-config.js';
+import { isValidBundleId } from '../domain/maestro-validator.js';
 import { withSession } from '../utils.js';
 import type { ToolResult } from '../utils.js';
 import { okResult, failResult, createStepTimer } from '../utils.js';
@@ -36,6 +40,9 @@ import {
   type FillOwnerResult,
   type FillRequest,
 } from './fill-coordinator.js';
+
+const execFile = promisify(execFileCb);
+const IME_PROBE_TIMEOUT_MS = 5_000;
 
 export interface SnapshotNode {
   ref: string;
@@ -1477,22 +1484,63 @@ export function createDeviceBackHandler(): (args: Record<string, never>) => Prom
 const NEXT_KEY_LABELS = ['Go', 'Done', 'Return', 'Next'];
 
 // GH #736: an Android IME key lives in the input-method package, never the
-// session app, so the app-window ownership gate would refuse it. This grant is
+// session app, so the app-window ownership gate would refuse it. The grant is
 // per-call and per-ref (no authorizeSystemUiRef, so nothing persists for a
-// later device_press) and only ever covers the keyboard key this tool matched.
+// later device_press) and requires the node to belong to the device's actual
+// default IME — a label match on any other outside-app window earns nothing.
+export function parseDefaultInputMethodPackage(raw: string): string | null {
+  const value = raw.trim().split(/\r?\n/)[0]?.trim() ?? '';
+  if (!value || value === 'null') return null;
+  const pkg = value.split('/')[0]?.trim() ?? '';
+  return isValidBundleId(pkg) ? pkg : null;
+}
+
+export async function resolveAndroidImePackage(
+  deviceId: string | undefined,
+): Promise<string | null> {
+  try {
+    const { stdout } = await execFile(
+      'adb',
+      [
+        ...(deviceId ? ['-s', deviceId] : []),
+        'shell',
+        'settings',
+        'get',
+        'secure',
+        'default_input_method',
+      ],
+      { timeout: IME_PROBE_TIMEOUT_MS },
+    );
+    return parseDefaultInputMethodPackage(stdout);
+  } catch {
+    return null;
+  }
+}
+
+let _imePackageResolverForTest: ((deviceId: string | undefined) => Promise<string | null>) | null =
+  null;
+
+export function _setImePackageResolverForTest(
+  fn: ((deviceId: string | undefined) => Promise<string | null>) | null,
+): void {
+  _imePackageResolverForTest = fn;
+}
+
 export function focusNextPressArgs(
   ref: string,
   nodePackageName: string | undefined,
   platform: string | undefined,
   appId: string | undefined,
+  imePackage: string | null,
 ): string[] {
   const target = ref.startsWith('@') ? ref : `@${ref}`;
-  const outsideAppKeyboard =
+  const imeOwnedKey =
     platform === 'android' &&
-    nodePackageName !== undefined &&
     appId !== undefined &&
-    nodePackageName !== appId;
-  return outsideAppKeyboard ? ['press', target, '--include-system-ui'] : ['press', target];
+    imePackage !== null &&
+    imePackage !== appId &&
+    nodePackageName === imePackage;
+  return imeOwnedKey ? ['press', target, '--include-system-ui', IME_KEY_FLAG] : ['press', target];
 }
 
 export function createDeviceFocusNextHandler(): (
@@ -1519,12 +1567,22 @@ export function createDeviceFocusNextHandler(): (
 
     const { nodes, recoveredTier } = snap;
     const session = getActiveSession();
+    const imePackage =
+      session?.platform === 'android'
+        ? await (_imePackageResolverForTest ?? resolveAndroidImePackage)(session.deviceId)
+        : null;
     let lastPressFailure: ToolResult | null = null;
     for (const label of NEXT_KEY_LABELS) {
       const match = nodes.find((n) => n.label === label);
       if (!match) continue;
       const pressResult = await runNative(
-        focusNextPressArgs(match.ref, match.packageName, session?.platform, session?.appId),
+        focusNextPressArgs(
+          match.ref,
+          match.packageName,
+          session?.platform,
+          session?.appId,
+          imePackage,
+        ),
       );
       if (pressResult.isError) {
         lastPressFailure = pressResult;

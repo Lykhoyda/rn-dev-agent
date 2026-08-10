@@ -1127,6 +1127,7 @@ export function selfHealEnabled(env) {
     return v !== '0' && v !== 'false';
 }
 const RETRYABLE_TAP_COMMANDS = new Set(['tap', 'longPress']);
+export const IME_KEY_FLAG = '--ime-key';
 // Story 05 (#386): only plain taps/long-presses are retry-eligible. Multi-tap
 // gestures (--count/--double-tap) would change semantics on a re-tap; fills
 // have their own read-back verification and a retype would duplicate text;
@@ -1138,7 +1139,13 @@ const RETRYABLE_TAP_COMMANDS = new Set(['tap', 'longPress']);
 export function tapRetryPolicy(cliArgs, builtCommand, x, y, opts) {
     const ref = cliArgs[1];
     const exactTarget = ref?.startsWith('@') ? getFreshRefTarget(ref) : null;
-    const keyboardTarget = exactTarget?.snapshotElementType === 'Key' || exactTarget?.snapshotElementType === 'Keyboard';
+    // 'Key'/'Keyboard' are iOS XCUIElement type names; an Android IME key carries
+    // a Java class name instead, so device_focus_next marks its verified
+    // IME-owned press explicitly. Either way the effect lands in a window the
+    // app-scoped probe cannot see, so re-dispatching would actuate the key twice.
+    const keyboardTarget = exactTarget?.snapshotElementType === 'Key' ||
+        exactTarget?.snapshotElementType === 'Keyboard' ||
+        cliArgs.includes(IME_KEY_FLAG);
     const verificationRequired = !keyboardTarget &&
         RETRYABLE_TAP_COMMANDS.has(builtCommand) &&
         !cliArgs.includes('--double-tap') &&
