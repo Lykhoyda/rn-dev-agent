@@ -200,6 +200,47 @@ test('dev-client pin refuses any URL drift and never falls back to a picker row'
   );
 });
 
+test('dev-client pin refuses a one-sided dev-client URL instead of deriving the missing side', async () => {
+  const refusingDependencies = {
+    openUrl: async () => {
+      throw new Error('must not open');
+    },
+    launchExactApp: async () => {
+      throw new Error('must not launch');
+    },
+    launchExactAppWithInitialUrl: async () => {
+      throw new Error('must not launch');
+    },
+    acceptIosOpenDialog: async () => {},
+    connectExact: async () => ({
+      targetId: 'target-a',
+      connectionGeneration: 7,
+      deviceId: 'IOS-UUID',
+    }),
+    readMarker: async () => null,
+    readManagedManifest: async () => exactManifestResponse,
+  };
+  const base = {
+    ...expected,
+    deviceId: 'IOS-UUID',
+    metroPort: 8341,
+    runtimeKind: 'expo-dev-client' as const,
+    signerCapability: 'signer',
+  };
+
+  await assert.rejects(
+    pinExactDevClient({ ...base, devClientUrl: 'http://127.0.0.1:8341' }, refusingDependencies),
+    /DEV_CLIENT_ENDPOINT_NOT_FOUND/,
+  );
+  await assert.rejects(
+    pinExactDevClient(
+      { ...base, expectedDevClientUrl: 'http://127.0.0.1:8341' },
+      refusingDependencies,
+    ),
+    /DEV_CLIENT_ENDPOINT_NOT_FOUND/,
+  );
+});
+
 test('bare RN pin launches the exact claimed app without inventing a dev-client URL', async () => {
   const calls = [];
   const marker = buildSignedMetroMarker(expected, 'signer');

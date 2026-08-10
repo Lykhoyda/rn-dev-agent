@@ -85444,7 +85444,7 @@ async function pinExactDevClient(input, dependencies) {
     throw new Error("DEV_CLIENT_ENDPOINT_NOT_FOUND: authority-bound Metro port is unavailable");
   }
   const derivedIosExpoLaunchTarget = input.platform === "ios" && input.runtimeKind === "expo-dev-client" ? managedMetroProxyUrl(input) : void 0;
-  if ((input.devClientUrl ?? derivedIosExpoLaunchTarget) !== (input.expectedDevClientUrl ?? derivedIosExpoLaunchTarget)) {
+  if (input.devClientUrl !== input.expectedDevClientUrl) {
     throw new Error("DEV_CLIENT_ENDPOINT_NOT_FOUND: declared dev-client URL does not match the session endpoint");
   }
   if (input.runtimeKind === "bare-react-native" && input.devClientUrl) {

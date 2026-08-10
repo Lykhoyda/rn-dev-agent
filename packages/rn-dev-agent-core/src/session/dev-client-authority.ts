@@ -190,10 +190,7 @@ export async function pinExactDevClient(
     input.platform === 'ios' && input.runtimeKind === 'expo-dev-client'
       ? managedMetroProxyUrl(input)
       : undefined;
-  if (
-    (input.devClientUrl ?? derivedIosExpoLaunchTarget) !==
-    (input.expectedDevClientUrl ?? derivedIosExpoLaunchTarget)
-  ) {
+  if (input.devClientUrl !== input.expectedDevClientUrl) {
     throw new Error(
       'DEV_CLIENT_ENDPOINT_NOT_FOUND: declared dev-client URL does not match the session endpoint',
     );
