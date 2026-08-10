@@ -8472,7 +8472,7 @@ setInterval(() => {}, 1 << 30);
 `;
 
 // packages/rn-dev-agent-core/dist/session/package-integration.js
-import { basename, isAbsolute, join as join4, relative, resolve, sep } from "node:path";
+import { basename, isAbsolute, join as join4, relative, resolve as resolve2, sep } from "node:path";
 
 // packages/rn-dev-agent-core/dist/session/bound-directory.js
 import { spawn } from "node:child_process";
@@ -8484,7 +8484,7 @@ import { join as join3 } from "node:path";
 // packages/rn-dev-agent-core/dist/session/state-root.js
 import { randomBytes, randomUUID } from "node:crypto";
 import { chmodSync, linkSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { join as join2 } from "node:path";
+import { join as join2, resolve } from "node:path";
 
 // packages/rn-dev-agent-core/dist/util/secure-state-file.js
 import { join, dirname } from "node:path";
@@ -8519,11 +8519,10 @@ function ensurePrivateDirectory(path2) {
     fail("AUTHORITY_STATE_ROOT_UNSAFE", error instanceof Error ? error.message : "state directory could not be secured");
   }
 }
-function createAuthorityStateLayout(stateDir = getStateDir()) {
-  ensurePrivateDirectory(stateDir);
-  const root = join2(stateDir, "v2");
-  ensurePrivateDirectory(root);
-  const layout = {
+function authorityStateLayout(stateDir) {
+  const resolvedStateDir = resolve(stateDir);
+  const root = join2(resolvedStateDir, "v2");
+  return {
     root,
     registry: join2(root, "registry.sqlite3"),
     sessions: join2(root, "sessions"),
@@ -8531,6 +8530,12 @@ function createAuthorityStateLayout(stateDir = getStateDir()) {
     observe: join2(root, "observe"),
     migrations: join2(root, "migrations")
   };
+}
+function createAuthorityStateLayout(stateDir = getStateDir()) {
+  const layout = authorityStateLayout(stateDir);
+  ensurePrivateDirectory(resolve(stateDir));
+  const root = layout.root;
+  ensurePrivateDirectory(root);
   for (const path2 of [layout.sessions, layout.runners, layout.observe, layout.migrations]) {
     ensurePrivateDirectory(path2);
   }
@@ -10280,7 +10285,7 @@ function evaluatePackageIntegrationFileState(canonical, generated) {
   return { verdict, markers };
 }
 function inspectPackageIntegrationFileState(appRootInput) {
-  const appRoot = resolve(appRootInput);
+  const appRoot = resolve2(appRootInput);
   const app = openBoundDirectory(appRoot);
   let agent = null;
   let integration = null;

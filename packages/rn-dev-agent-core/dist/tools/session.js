@@ -15,6 +15,17 @@ import { inspectManagedMetroCleanupEvidence, inspectManagedMetroLifecycle, probe
 import { arbiter } from '../lifecycle/device-arbiter.js';
 import { stopBoundObserve, stopBoundRecorder, stopBoundRunner, } from '../session/process-cleanup.js';
 import { deviceExistsOnHost } from '../session/device-existence.js';
+import { removeAndroidMetroReverse, } from '../session/android-metro-reverse.js';
+function sameAndroidMetroReverse(current, next) {
+    if (!current || !next)
+        return current === next;
+    const binding = current;
+    return (binding.platform === next.platform &&
+        binding.deviceId === next.deviceId &&
+        binding.metroPort === next.metroPort &&
+        binding.local === next.local &&
+        binding.remote === next.remote);
+}
 function sameMetroAuthority(current, next) {
     return (current?.port === next.port &&
         current.pid === next.pid &&
@@ -176,6 +187,14 @@ export function reconcileManagedMetroStatus(runtime, dependencies = {}) {
 }
 async function completeStaleDeviceCleanupPlan(registry, session, workerInstance, plan, dependencies) {
     const completed = [];
+    if (plan.androidMetroReverse && typeof plan.androidMetroReverse.completedAt !== 'number') {
+        if (!dependencies.removeAndroidMetroReverse) {
+            throw new SessionAuthorityError('PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN', 'physical Android Metro cleanup integration is unavailable');
+        }
+        dependencies.removeAndroidMetroReverse(plan.androidMetroReverse);
+        registry.completeStaleResourceRelease(session, workerInstance, 'androidMetroReverse');
+        completed.push('androidMetroReverse');
+    }
     if (plan.recorder && typeof plan.recorder.completedAt !== 'number') {
         await (dependencies.stopHandoffRecorder ?? stopBoundRecorder)(plan.recorder);
         registry.completeStaleResourceRelease(session, workerInstance, 'recorder');
@@ -237,6 +256,62 @@ async function withInlineStaleDeviceCleanup(registry, session, dependencies, inp
         revalidate();
         return operation();
     }
+}
+function ensurePhysicalAndroidMetroReachability(registry, session, status, dependencies) {
+    const device = status.bindings.device;
+    if (device?.platform !== 'android' || typeof device.deviceId !== 'string')
+        return status;
+    const metroPort = Number(status.bindings.metroPort);
+    const existing = status.bindings.androidMetroReverse;
+    if (!dependencies.ensureAndroidMetroReverse)
+        return status;
+    const result = dependencies.ensureAndroidMetroReverse({
+        deviceId: device.deviceId,
+        metroPort,
+        binding: existing,
+    });
+    if (sameAndroidMetroReverse(existing ?? null, result.binding))
+        return status;
+    try {
+        registry.updateBindings(session, {
+            expectedAuthorityVersion: status.authorityVersion,
+            bindings: { androidMetroReverse: result.binding },
+        });
+    }
+    catch (error) {
+        if (result.created && result.binding) {
+            try {
+                (dependencies.removeAndroidMetroReverse ?? removeAndroidMetroReverse)(result.binding);
+            }
+            catch (cleanupError) {
+                throw new AggregateError([error, cleanupError], 'PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN: adb reverse was created but its authority binding could not be persisted or safely cleaned');
+            }
+        }
+        throw error;
+    }
+    const current = registry.getSessionStatus(session.sessionId);
+    if (!current) {
+        throw new SessionAuthorityError('SESSION_OWNER_LOST', 'session disappeared after physical Android Metro reachability was established');
+    }
+    return current;
+}
+function removeSessionAndroidMetroReverse(registry, session, status, dependencies) {
+    const binding = status.bindings.androidMetroReverse;
+    if (!binding)
+        return status;
+    if (!dependencies.removeAndroidMetroReverse) {
+        throw new SessionAuthorityError('PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN', 'physical Android Metro cleanup integration is unavailable');
+    }
+    dependencies.removeAndroidMetroReverse(binding);
+    registry.updateBindings(session, {
+        expectedAuthorityVersion: status.authorityVersion,
+        bindings: { androidMetroReverse: null },
+    });
+    const current = registry.getSessionStatus(session.sessionId);
+    if (!current) {
+        throw new SessionAuthorityError('SESSION_OWNER_LOST', 'session disappeared after physical Android Metro reachability cleanup');
+    }
+    return current;
 }
 export function createSessionHandler(runtime, dependencies = {}) {
     return async (input) => {
@@ -336,7 +411,7 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 const platform = required(input.platform, 'platform');
                 const deviceId = required(input.deviceId, 'deviceId');
                 const appId = required(input.appId, 'appId');
-                const status = registry.getSessionStatus(session.sessionId);
+                let status = registry.getSessionStatus(session.sessionId);
                 const signer = dependencies.getSignerCapability?.();
                 if (!status) {
                     throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'session disappeared before device binding');
@@ -378,6 +453,10 @@ export function createSessionHandler(runtime, dependencies = {}) {
                     }
                 };
                 requireExactDevice();
+                const retainedReverse = status.bindings.androidMetroReverse;
+                if (retainedReverse && (platform !== 'android' || retainedReverse.deviceId !== deviceId)) {
+                    status = removeSessionAndroidMetroReverse(registry, session, status, dependencies);
+                }
                 const currentInstall = status.bindings.install;
                 if (!input.buildReceipt &&
                     currentInstall &&
@@ -482,7 +561,7 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 return okResult({ session: projectPublicAuthorityStatus(runtime.status()) });
             }
             if (input.action === 'pin_dev_client') {
-                const status = registry.getSessionStatus(session.sessionId);
+                let status = registry.getSessionStatus(session.sessionId);
                 if (!status || !dependencies.pinDevClient) {
                     throw new SessionAuthorityError('BUNDLE_HANDSHAKE_UNAVAILABLE', 'pinning integration is unavailable');
                 }
@@ -491,6 +570,7 @@ export function createSessionHandler(runtime, dependencies = {}) {
                         throw new SessionAuthorityError('BUNDLE_HANDSHAKE_UNAVAILABLE', `${requiredBinding} must be bound before pinning`);
                     }
                 }
+                status = ensurePhysicalAndroidMetroReachability(registry, session, status, dependencies);
                 const priorTargetId = status.bindings.bundle
                     ?.targetId;
                 const priorBundle = status.bindings.bundle ?? null;
@@ -573,7 +653,7 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 });
             }
             if (input.action === 'stop_metro') {
-                const status = registry.getSessionStatus(session.sessionId);
+                let status = registry.getSessionStatus(session.sessionId);
                 if (!status) {
                     throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'session disappeared before managed Metro cleanup');
                 }
@@ -596,6 +676,7 @@ export function createSessionHandler(runtime, dependencies = {}) {
                             throw new SessionAuthorityError('METRO_CLEANUP_PENDING', `allocated Metro port ${metroPort} is still ${listener.status}${listenerIdentity} after cleanup authority was invalidated; do not signal an unbound process, wait for managed launcher cleanup, then retry rn_session stop_metro`);
                         }
                     }
+                    status = removeSessionAndroidMetroReverse(registry, session, status, dependencies);
                     return okResult({
                         stopped: false,
                         alreadyStopped: true,
@@ -682,6 +763,7 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 if (!cleanup.authenticated && input.confirmed !== true) {
                     throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'non-signaling Metro authority release requires confirmed=true after exact process, listener, and socket absence is verified');
                 }
+                status = removeSessionAndroidMetroReverse(registry, session, status, dependencies);
                 const priorTargetId = status.bindings.bundle
                     ?.targetId;
                 registry.updateBindings(session, {
@@ -755,6 +837,7 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 }
                 const sessionCli = process.env.RN_DEV_AGENT_SESSION_CLI ??
                     join(dirname(fileURLToPath(import.meta.url)), '..', 'rn-session.js');
+                const stateDir = process.env.RN_DEV_AGENT_STATE_DIR;
                 if (input.action === 'restore_integration') {
                     if (input.confirmed !== true) {
                         throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'restore_integration requires confirmed=true');
@@ -794,7 +877,7 @@ export function createSessionHandler(runtime, dependencies = {}) {
                     });
                     return okResult({ restored: true, packagePath, manifestPath });
                 }
-                const preview = previewPackageIntegration(packageJson, existing, sessionCli);
+                const preview = previewPackageIntegration(packageJson, existing, sessionCli, stateDir);
                 const metroConfigPath = integrationInputs.metroConfig.path;
                 const metroBefore = integrationInputs.metroConfig.contents;
                 const metroAfter = previewMetroIntegration(metroBefore);
@@ -843,7 +926,7 @@ export function createSessionHandler(runtime, dependencies = {}) {
                     });
                 }
                 try {
-                    applyPackageIntegration({ appRoot, sessionCli });
+                    applyPackageIntegration({ appRoot, sessionCli, stateDir });
                     const installedManifest = readPackageIntegrationInputs(appRoot).manifest;
                     if (!installedManifest) {
                         throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: applied manifest is unavailable');
@@ -1175,13 +1258,14 @@ export function createSessionHandler(runtime, dependencies = {}) {
                     },
                 });
             }
-            const status = registry.getSessionStatus(session.sessionId);
+            let status = registry.getSessionStatus(session.sessionId);
             if (!status) {
                 throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'session disappeared before release cleanup');
             }
             if (status.bindings.packageIntegration) {
                 throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'package integration must be restored before session release');
             }
+            status = removeSessionAndroidMetroReverse(registry, session, status, dependencies);
             const metro = status.bindings.metro;
             const runner = status.bindings.runner;
             const recorder = status.bindings.recorder;

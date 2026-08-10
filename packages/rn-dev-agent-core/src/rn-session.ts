@@ -23,10 +23,19 @@ import {
   type OperationRef,
 } from './session/registry.js';
 import { resolveSourceIdentity } from './session/source-identity.js';
-import { createAuthorityStateLayout, sessionRuntimeDirectory } from './session/state-root.js';
+import {
+  createAuthorityStateLayout,
+  openAuthorityStateLayout,
+  sessionRuntimeDirectory,
+} from './session/state-root.js';
 import { inspectAuthorityMigration } from './session/migration-diagnostic.js';
 import { projectPublicAuthorityStatus } from './session/public-status.js';
 import { stopBoundObserve, stopBoundRecorder, stopBoundRunner } from './session/process-cleanup.js';
+import {
+  ensureAndroidMetroReverse,
+  removeAndroidMetroReverse,
+  type AndroidMetroReverseBinding,
+} from './session/android-metro-reverse.js';
 import {
   closeBoundDirectories,
   type BoundDirectory,
@@ -40,7 +49,10 @@ type SessionMetroBinding =
   | (Partial<MetroBinding> & { mode: 'external' });
 
 function resolveStatus() {
-  const layout = createAuthorityStateLayout(process.env.RN_DEV_AGENT_STATE_DIR);
+  const requestedStateHome = process.env.RN_DEV_AGENT_STATE_DIR;
+  const layout = requestedStateHome
+    ? openAuthorityStateLayout(requestedStateHome)
+    : createAuthorityStateLayout();
   const registry = openSessionRegistry(layout.registry, { ownerStatus: inspectSessionOwner });
   const explicit = process.env.RN_DEV_AGENT_SESSION_ID;
   const source = resolveSourceIdentity(process.cwd(), {
@@ -59,8 +71,8 @@ function resolveStatus() {
     throw new SessionAuthorityError(
       'SESSION_AUTHORITY_REQUIRED',
       candidates.length === 0
-        ? 'no live session matches this canonical worktree and app root'
-        : 'multiple live sessions match this worktree and app root; set RN_DEV_AGENT_SESSION_ID',
+        ? `no live session in authority registry ${layout.registry} matches this canonical worktree and app root`
+        : `multiple live sessions in authority registry ${layout.registry} match this worktree and app root; set RN_DEV_AGENT_SESSION_ID`,
     );
   }
   const status = candidates[0]!;
@@ -144,6 +156,82 @@ function reconcileManagedMetroStatus(
     registry: status.registry,
     layout: status.layout,
   });
+}
+
+function sameAndroidMetroReverse(
+  current: unknown,
+  next: AndroidMetroReverseBinding | null,
+): boolean {
+  if (!current || !next) return current === next;
+  const binding = current as Partial<AndroidMetroReverseBinding>;
+  return (
+    binding.platform === next.platform &&
+    binding.deviceId === next.deviceId &&
+    binding.metroPort === next.metroPort &&
+    binding.local === next.local &&
+    binding.remote === next.remote
+  );
+}
+
+function ensurePhysicalAndroidMetroReachability(
+  status: ReturnType<typeof resolveStatus>,
+): ReturnType<typeof resolveStatus> {
+  const device = status.bindings.device as
+    | { platform?: unknown; deviceId?: unknown }
+    | null
+    | undefined;
+  if (device?.platform !== 'android' || typeof device.deviceId !== 'string') return status;
+  const existing = status.bindings.androidMetroReverse as
+    | AndroidMetroReverseBinding
+    | null
+    | undefined;
+  const result = ensureAndroidMetroReverse({
+    deviceId: device.deviceId,
+    metroPort: Number(status.bindings.metroPort),
+    binding: existing,
+  });
+  if (sameAndroidMetroReverse(existing ?? null, result.binding)) return status;
+  try {
+    status.registry.updateBindings(
+      { sessionId: status.sessionId, claimEpoch: status.claimEpoch },
+      {
+        expectedAuthorityVersion: status.authorityVersion,
+        bindings: { androidMetroReverse: result.binding },
+      },
+    );
+  } catch (error) {
+    if (result.created && result.binding) {
+      try {
+        removeAndroidMetroReverse(result.binding);
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          'PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN: adb reverse was created but its authority binding could not be persisted or safely cleaned',
+        );
+      }
+    }
+    throw error;
+  }
+  const current = status.registry.getSessionStatus(status.sessionId);
+  if (!current) {
+    throw new SessionAuthorityError(
+      'SESSION_OWNER_LOST',
+      'session disappeared after physical Android Metro reachability was established',
+    );
+  }
+  return Object.assign(current, {
+    closeRegistry: status.closeRegistry,
+    registry: status.registry,
+    layout: status.layout,
+  });
+}
+
+function removeSessionAndroidMetroReverse(status: ReturnType<typeof resolveStatus>): void {
+  const binding = status.bindings.androidMetroReverse as
+    | AndroidMetroReverseBinding
+    | null
+    | undefined;
+  if (binding) removeAndroidMetroReverse(binding);
 }
 
 function beginCliOperation(
@@ -553,6 +641,7 @@ async function main(): Promise<void> {
             : 'build requires authenticated managed Metro authority',
         );
       }
+      status = ensurePhysicalAndroidMetroReachability(status);
       const buildGeneration =
         Math.max(
           Number(metro.buildGeneration ?? 0),
@@ -859,6 +948,8 @@ async function main(): Promise<void> {
       let released = false;
       try {
         await status.registry.runWithOperation(operation, async () => {
+          removeSessionAndroidMetroReverse(status);
+          status.registry.verifyOperation(operation);
           if (recorder) {
             await stopBoundRecorder(recorder);
             status.registry.verifyOperation(operation);

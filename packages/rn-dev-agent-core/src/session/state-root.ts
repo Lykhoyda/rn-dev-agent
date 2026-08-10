@@ -10,7 +10,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { getStateDir } from '../util/secure-state-file.js';
 
 export interface AuthorityStateLayout {
@@ -59,11 +59,10 @@ function sessionDirectory(layout: AuthorityStateLayout, sessionId: string): stri
   return path;
 }
 
-export function createAuthorityStateLayout(stateDir: string = getStateDir()): AuthorityStateLayout {
-  ensurePrivateDirectory(stateDir);
-  const root = join(stateDir, 'v2');
-  ensurePrivateDirectory(root);
-  const layout = {
+function authorityStateLayout(stateDir: string): AuthorityStateLayout {
+  const resolvedStateDir = resolve(stateDir);
+  const root = join(resolvedStateDir, 'v2');
+  return {
     root,
     registry: join(root, 'registry.sqlite3'),
     sessions: join(root, 'sessions'),
@@ -71,6 +70,46 @@ export function createAuthorityStateLayout(stateDir: string = getStateDir()): Au
     observe: join(root, 'observe'),
     migrations: join(root, 'migrations'),
   };
+}
+
+export function createAuthorityStateLayout(stateDir: string = getStateDir()): AuthorityStateLayout {
+  const layout = authorityStateLayout(stateDir);
+  ensurePrivateDirectory(resolve(stateDir));
+  const root = layout.root;
+  ensurePrivateDirectory(root);
+  for (const path of [layout.sessions, layout.runners, layout.observe, layout.migrations]) {
+    ensurePrivateDirectory(path);
+  }
+  return layout;
+}
+
+export function openAuthorityStateLayout(stateDir: string): AuthorityStateLayout {
+  const layout = authorityStateLayout(stateDir);
+  try {
+    const registry = lstatSync(layout.registry);
+    if (registry.isSymbolicLink() || !registry.isFile()) {
+      fail(
+        'AUTHORITY_STATE_HOME_UNKNOWN',
+        'requested state home has no regular authority registry',
+      );
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('AUTHORITY_STATE_HOME_UNKNOWN')) {
+      throw error;
+    }
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      fail(
+        'AUTHORITY_STATE_HOME_UNKNOWN',
+        'requested state home has no authority registry; refusing to initialize an empty registry',
+      );
+    }
+    fail(
+      'AUTHORITY_STATE_HOME_UNKNOWN',
+      error instanceof Error ? error.message : 'requested authority registry is unavailable',
+    );
+  }
+  ensurePrivateDirectory(resolve(stateDir));
+  ensurePrivateDirectory(layout.root);
   for (const path of [layout.sessions, layout.runners, layout.observe, layout.migrations]) {
     ensurePrivateDirectory(path);
   }

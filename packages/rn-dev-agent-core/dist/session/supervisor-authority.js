@@ -1,7 +1,9 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { dirname } from 'node:path';
 import { stopBoundObserve, stopBoundRecorder, stopBoundRunner } from './process-cleanup.js';
 import { openSessionRegistry } from './registry.js';
 import { stopManagedMetro } from './managed-metro.js';
+import { removeAndroidMetroReverse, } from './android-metro-reverse.js';
 import { createAuthorityStateLayout, sessionRuntimeDirectory, writeSessionPublicReceipt, writeSessionSecret, } from './state-root.js';
 const RELEASABLE_SESSION_STATES = new Set([
     'active',
@@ -188,6 +190,7 @@ export function createSupervisorAuthority(input, dependencies = {}) {
             RN_DEV_AGENT_SESSION_ID: session.sessionId,
             RN_DEV_AGENT_CLAIM_EPOCH: String(session.claimEpoch),
             RN_DEV_AGENT_REGISTRY_PATH: layout.registry,
+            RN_DEV_AGENT_STATE_DIR: dirname(layout.root),
             RN_DEV_AGENT_SESSION_SECRET_PATH: secretPath,
             RN_DEV_AGENT_SESSION_RUNTIME_ROOT: sessionRuntimeDirectory(layout, sessionId),
             RN_DEV_AGENT_WORKER_INSTANCE: workerInstance,
@@ -210,6 +213,10 @@ export function createSupervisorAuthority(input, dependencies = {}) {
                     status = registry.beginSessionClose(session);
                 }
                 if (status) {
+                    const androidMetroReverse = status.bindings.androidMetroReverse;
+                    if (androidMetroReverse) {
+                        (dependencies.removeAndroidMetroReverse ?? removeAndroidMetroReverse)(androidMetroReverse);
+                    }
                     const recorder = status.bindings.recorder;
                     if (recorder) {
                         const claimKey = `${String(recorder.platform)}:${String(recorder.deviceId)}`;

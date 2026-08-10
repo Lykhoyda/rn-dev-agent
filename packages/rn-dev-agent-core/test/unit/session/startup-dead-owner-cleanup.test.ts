@@ -204,6 +204,47 @@ function executorDeps(f: ReturnType<typeof fixture>, calls: string[]) {
   };
 }
 
+test('L4: startup cleanup journals and removes a dead session physical Android reverse', async () => {
+  const f = fixture();
+  const dead = f.create('dead-android-owner', 'worktree-1', { metroPort: 8397 });
+  f.registry.claimResources(dead, [
+    { type: 'source', key: 'worktree-1' },
+    { type: 'metro-port', key: '8397' },
+    { type: 'device', key: 'android:USB-EXACT' },
+  ]);
+  const reverse = {
+    platform: 'android' as const,
+    deviceId: 'USB-EXACT',
+    metroPort: 8397,
+    local: 'tcp:8397',
+    remote: 'tcp:8397',
+  };
+  f.registry.updateBindings(dead, {
+    state: 'device_claimed',
+    bindings: {
+      device: { platform: 'android', deviceId: 'USB-EXACT', appId: 'dev.example' },
+      androidMetroReverse: reverse,
+    },
+  });
+  f.ownerStates.set('dead-android-owner', 'mismatch');
+  const calls: unknown[] = [];
+
+  const outcome = await runStartupOwnerCleanup(cleanupInput(f), {
+    removeAndroidMetroReverse: (binding) => calls.push(binding),
+  });
+
+  assert.equal(outcome.status, 'clean');
+  assert.deepEqual(calls, [
+    { ...reverse, claimKey: 'android:USB-EXACT', stopRequestedAt: f.now(), completedAt: null },
+  ]);
+  const terminal = f.registry.getSessionStatus('dead-android-owner');
+  assert.equal(terminal?.state, 'released');
+  const journal = terminal?.bindings.startupCleanup as
+    | { obligations?: { androidMetroReverse?: { completedAt?: unknown } } }
+    | undefined;
+  assert.equal(journal?.obligations?.androidMetroReverse?.completedAt, f.now());
+});
+
 test('L4: the cleanup journal is written on the dead row before any side effect', () => {
   const f = deadSameRootOwner();
 

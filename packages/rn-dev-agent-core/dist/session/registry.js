@@ -748,6 +748,8 @@ export class SessionRegistry {
             const prior = this.#requireSingleProvenDeadDeviceOwner(session, deviceKey);
             const family = this.#requireExactStaleDeviceFamily(session, prior, target);
             const obligations = [];
+            if (family.androidMetroReverse)
+                obligations.push('androidMetroReverse');
             if (family.runner)
                 obligations.push('runner');
             if (family.recorder)
@@ -787,6 +789,8 @@ export class SessionRegistry {
         const prior = this.#requireSingleProvenDeadDeviceOwner(session, deviceKey);
         const family = this.#requireExactStaleDeviceFamily(session, prior, target);
         const obligations = [];
+        if (family.androidMetroReverse)
+            obligations.push('androidMetroReverse');
         if (family.runner)
             obligations.push('runner');
         if (family.recorder)
@@ -818,6 +822,9 @@ export class SessionRegistry {
                 return {
                     platform: String(resumed.platform),
                     deviceId: String(resumed.deviceId),
+                    ...(resumed.androidMetroReverse
+                        ? { androidMetroReverse: resumed.androidMetroReverse }
+                        : {}),
                     runner: resumed.runner ?? null,
                     recorder: resumed.recorder ?? null,
                 };
@@ -847,6 +854,9 @@ export class SessionRegistry {
                 return {
                     platform: String(resumed.platform),
                     deviceId: String(resumed.deviceId),
+                    ...(resumed.androidMetroReverse
+                        ? { androidMetroReverse: resumed.androidMetroReverse }
+                        : {}),
                     runner: resumed.runner ?? null,
                     recorder: resumed.recorder ?? null,
                 };
@@ -880,7 +890,7 @@ export class SessionRegistry {
         const deviceKey = `${platform}:${deviceId}`;
         const priorBindings = JSON.parse(prior.bindings_json);
         const family = this.#requireExactStaleDeviceFamily(session, prior, target);
-        const { runner, recorder } = family;
+        const { androidMetroReverse, runner, recorder } = family;
         for (const claim of family.claims) {
             this.#database
                 .prepare(`UPDATE claims SET session_id = ?, claim_epoch = ?, lease_until_ms = ?
@@ -895,6 +905,16 @@ export class SessionRegistry {
             priorSessionId: prior.session_id,
             priorClaimEpoch: prior.claim_epoch,
             transferredAt: now,
+            ...(androidMetroReverse
+                ? {
+                    androidMetroReverse: {
+                        ...androidMetroReverse,
+                        claimKey: deviceKey,
+                        stopRequestedAt: now,
+                        completedAt: null,
+                    },
+                }
+                : {}),
             runner: runner
                 ? { ...runner, claimKey: runnerClaimKey, stopRequestedAt: now, completedAt: null }
                 : null,
@@ -914,6 +934,7 @@ export class SessionRegistry {
             .run(JSON.stringify({
             ...priorBindings,
             device: null,
+            androidMetroReverse: null,
             runner: null,
             recorder: null,
             deviceReleased: {
@@ -923,11 +944,18 @@ export class SessionRegistry {
                 platform,
                 deviceId,
                 device: priorBindings.device ?? null,
+                androidMetroReverse,
                 runner,
                 recorder,
             },
         }), now, prior.session_id, prior.claim_epoch);
-        return { platform, deviceId, runner: cleanup.runner, recorder: cleanup.recorder };
+        return {
+            platform,
+            deviceId,
+            ...(cleanup.androidMetroReverse ? { androidMetroReverse: cleanup.androidMetroReverse } : {}),
+            runner: cleanup.runner,
+            recorder: cleanup.recorder,
+        };
     }
     #requireSingleProvenDeadDeviceOwner(session, deviceKey) {
         const claims = this.#deviceFamilyClaims(deviceKey);
@@ -969,6 +997,22 @@ export class SessionRegistry {
             this.#bindingMatchesDevice(currentBindings.recorder, target)) {
             throw new SessionAuthorityError('DEVICE_AUTHORITY_MISMATCH', 'stale device cleanup conflicts with existing target bindings');
         }
+        const reverseValue = bindings.androidMetroReverse;
+        const androidMetroReverse = reverseValue &&
+            typeof reverseValue === 'object' &&
+            target.platform === 'android' &&
+            reverseValue.platform === 'android' &&
+            reverseValue.deviceId === target.deviceId &&
+            Number.isSafeInteger(reverseValue.metroPort) &&
+            reverseValue.local ===
+                `tcp:${String(reverseValue.metroPort)}` &&
+            reverseValue.remote ===
+                `tcp:${String(reverseValue.metroPort)}`
+            ? reverseValue
+            : null;
+        if (reverseValue !== null && reverseValue !== undefined && !androidMetroReverse) {
+            throw new SessionAuthorityError('PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN', 'stale physical Android Metro reverse binding does not match the exact device and port');
+        }
         const runnerClaims = claims.filter((claim) => claim.resource_type === 'runner');
         const runnerValue = bindings.runner;
         const runner = this.#bindingMatchesDevice(runnerValue, target)
@@ -1000,7 +1044,7 @@ export class SessionRegistry {
             (recorder && recorderClaims[0].resource_key !== deviceKey)) {
             throw new SessionAuthorityError('RECORDING_AUTHORITY_MISMATCH', 'stale recorder binding has no exclusive cleanup claim');
         }
-        return { claims, runner, recorder };
+        return { claims, androidMetroReverse, runner, recorder };
     }
     completeStaleResourceRelease(session, workerInstance, resource) {
         const now = this.#now();
@@ -1015,12 +1059,14 @@ export class SessionRegistry {
             }
             if (typeof entry.completedAt === 'number')
                 return;
-            const claimType = resource === 'runner' ? 'runner' : 'recorder';
-            this.#database
-                .prepare(`DELETE FROM claims
-           WHERE resource_type = ? AND resource_key = ?
-             AND session_id = ? AND claim_epoch = ?`)
-                .run(claimType, String(entry.claimKey), session.sessionId, session.claimEpoch);
+            if (resource !== 'androidMetroReverse') {
+                const claimType = resource === 'runner' ? 'runner' : 'recorder';
+                this.#database
+                    .prepare(`DELETE FROM claims
+             WHERE resource_type = ? AND resource_key = ?
+               AND session_id = ? AND claim_epoch = ?`)
+                    .run(claimType, String(entry.claimKey), session.sessionId, session.claimEpoch);
+            }
             this.#database
                 .prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`)
@@ -1034,7 +1080,7 @@ export class SessionRegistry {
         const now = this.#now();
         this.#transaction(() => {
             const { row, bindings, cleanup } = this.#requireStaleReleaseOwner(session, workerInstance);
-            for (const resource of ['runner', 'recorder']) {
+            for (const resource of ['androidMetroReverse', 'runner', 'recorder']) {
                 const binding = cleanup[resource];
                 if (binding &&
                     typeof binding === 'object' &&
@@ -1107,6 +1153,7 @@ export class SessionRegistry {
                 : undefined;
             const handoffCleanup = record(bindings.handoffCleanup);
             const staleDevice = record(bindings.staleDeviceCleanup);
+            const androidMetroReverseSource = record(bindings.androidMetroReverse) ?? record(staleDevice?.androidMetroReverse);
             const recorderSource = record(bindings.recorder) ??
                 record(staleDevice?.recorder) ??
                 record(handoffCleanup?.recorder);
@@ -1115,6 +1162,10 @@ export class SessionRegistry {
             const liveMetro = record(bindings.metroCleanup) ?? record(bindings.metro);
             const metroSource = liveMetro && liveMetro.mode === 'managed' ? liveMetro : record(handoffCleanup?.metro);
             const obligations = {};
+            const androidMetroReverseEntry = obligation(androidMetroReverseSource, androidMetroReverseSource ? `android:${String(androidMetroReverseSource.deviceId)}` : null);
+            if (androidMetroReverseEntry) {
+                obligations.androidMetroReverse = androidMetroReverseEntry;
+            }
             const recorderEntry = obligation(recorderSource, recorderSource
                 ? `${String(recorderSource.platform)}:${String(recorderSource.deviceId)}`
                 : null);
@@ -1270,7 +1321,7 @@ export class SessionRegistry {
             const row = this.#requireProvenDeadStartupOwner(prior);
             const { bindings, journal } = this.#requireStartupCleanupJournal(row);
             const obligations = (journal.obligations ?? {});
-            for (const resource of ['recorder', 'runner', 'observe']) {
+            for (const resource of ['androidMetroReverse', 'recorder', 'runner', 'observe']) {
                 const entry = obligations[resource];
                 if (entry &&
                     typeof entry === 'object' &&
@@ -1344,13 +1395,20 @@ export class SessionRegistry {
         }
     }
     #assertStartupObligationScope(row, resource, entry) {
-        const claimType = resource === 'observe' ? 'observe-port' : resource === 'metro' ? 'metro-port' : resource;
+        const claimType = resource === 'observe'
+            ? 'observe-port'
+            : resource === 'metro'
+                ? 'metro-port'
+                : resource === 'androidMetroReverse'
+                    ? 'device'
+                    : resource;
         const claimKey = String(entry.claimKey ?? '');
         const claim = this.#findClaim(claimType, claimKey);
         if (!claimKey ||
             claim?.session_id !== row.session_id ||
             claim.claim_epoch !== row.claim_epoch) {
             const codes = {
+                androidMetroReverse: 'PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN',
                 recorder: 'RECORDING_AUTHORITY_MISMATCH',
                 runner: 'RUNNER_OWNERSHIP_MISMATCH',
                 observe: 'OBSERVE_AUTHORITY_MISMATCH',
@@ -1394,6 +1452,13 @@ export class SessionRegistry {
         const deviceClaim = this.#findClaim('device', deviceKey);
         if (deviceClaim?.session_id !== row.session_id || deviceClaim.claim_epoch !== row.claim_epoch) {
             throw new SessionAuthorityError('DEVICE_AUTHORITY_MISMATCH', 'stale device cleanup journal no longer owns its exact device claim');
+        }
+        const reverse = cleanup.androidMetroReverse;
+        if (reverse &&
+            typeof reverse === 'object' &&
+            typeof reverse.completedAt !== 'number' &&
+            String(reverse.claimKey ?? '') !== deviceKey) {
+            throw new SessionAuthorityError('PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN', 'stale physical Android Metro cleanup journal no longer matches its exact device claim');
         }
         for (const resource of ['runner', 'recorder']) {
             const entry = cleanup[resource];

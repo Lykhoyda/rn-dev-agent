@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { readJsonStateFile } from '../util/secure-state-file.js';
 import { stopManagedMetro } from './managed-metro.js';
+import { removeAndroidMetroReverse, } from './android-metro-reverse.js';
 import { readPackageIntegrationInputs, restorePackageIntegrationFiles, } from './package-integration.js';
 import { stopBoundObserve, stopBoundRecorder, stopBoundRunner } from './process-cleanup.js';
 import { openSessionRegistry, SessionAuthorityError, } from './registry.js';
@@ -10,6 +11,7 @@ export function startupCleanupFailureMessage() {
     return 'rn-dev-agent startup cleanup failed: STARTUP_CLEANUP_FAILED\n';
 }
 const EXECUTION_ORDER = [
+    'androidMetroReverse',
     'recorder',
     'runner',
     'observe',
@@ -75,7 +77,10 @@ async function completeObligations(registry, prior, dependencies) {
         const entry = registry.verifyStartupOwnerObligation(prior, resource);
         if (!entry || typeof entry.completedAt === 'number')
             continue;
-        if (resource === 'recorder') {
+        if (resource === 'androidMetroReverse') {
+            (dependencies.removeAndroidMetroReverse ?? removeAndroidMetroReverse)(entry);
+        }
+        else if (resource === 'recorder') {
             await (dependencies.stopBoundRecorder ?? stopBoundRecorder)(entry);
         }
         else if (resource === 'runner') {
@@ -178,7 +183,7 @@ const PUBLIC_REFUSAL_REASONS = new Set([
     'the same-root owner identity could not be proven, so it is treated as live',
     'expired lease owner identity could not be proven',
     'the startup cleanup owner no longer matches the proven claim epoch',
-    ...['recorder', 'runner', 'observe', 'metro'].flatMap((resource) => [
+    ...['androidMetroReverse', 'recorder', 'runner', 'observe', 'metro'].flatMap((resource) => [
         `${resource} cleanup has not been durably completed`,
         `${resource} cleanup was not durably requested`,
     ]),

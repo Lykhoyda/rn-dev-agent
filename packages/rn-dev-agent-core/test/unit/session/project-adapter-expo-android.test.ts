@@ -26,6 +26,8 @@ function createFixture() {
   const calls = join(root, 'session-calls.jsonl');
   const expoRecord = join(root, 'expo.json');
   const adbCount = join(root, 'adb-count');
+  const stateDir = join(root, 'non-default-authority-state');
+  const stateHomeCalls = join(root, 'state-home-calls.jsonl');
   mkdirSync(integration, { recursive: true });
   mkdirSync(bin, { recursive: true });
   writeFileSync(adapter, renderProjectAdapter(), { mode: 0o755 });
@@ -35,6 +37,7 @@ function createFixture() {
       version: 1,
       adapter: '.rn-agent/integration/rn-session-adapter.cjs',
       sessionCli,
+      stateDir,
       originalScripts: { ios: ['expo', 'run:ios'], android: ['expo', 'run:android'] },
     }),
   );
@@ -86,6 +89,7 @@ if(process.env.ADAPTER_MODE==='sigint'){process.kill(process.ppid,'SIGINT');setT
 const {pathToFileURL}=require('node:url');
 const args=process.argv.slice(2);
 fs.appendFileSync(process.env.SESSION_CALLS,JSON.stringify(args)+'\\n');
+fs.appendFileSync(process.env.STATE_HOME_CALLS,JSON.stringify({command:args[0],stateDir:process.env.RN_DEV_AGENT_STATE_DIR})+'\\n');
 if(args[0]==='prepare-build'){
   process.stdout.write(JSON.stringify({platform:'android',deviceId:'${SERIAL}',appId:'com.rndevagent.testapp',metroPort:8397,sessionId:'session-android-exact',buildToken:args[2],devClientUrl:'rndatest://expo-development-client/?url=http%3A%2F%2F192.0.2.10%3A8397'}));
 }else if(args[0]==='resolve-expo-android-device'){
@@ -110,8 +114,9 @@ if(args[0]==='prepare-build'){
     ABORTS: join(root, 'aborts.jsonl'),
     RESOLVER_MODULE: new URL('../../../dist/session/expo-android-device.js', import.meta.url)
       .pathname,
+    STATE_HOME_CALLS: stateHomeCalls,
   };
-  return { root, calls, expoRecord, environment };
+  return { root, calls, expoRecord, stateDir, stateHomeCalls, environment };
 }
 
 function readJsonLines(path: string): unknown[] {
@@ -166,6 +171,17 @@ test('literal pnpm android executes the generated adapter with ephemeral Expo na
       ],
     );
     assert.equal(calls.filter(([command]) => command === 'abort-build').length, 0);
+    assert.deepEqual(
+      (readJsonLines(fixture.stateHomeCalls) as Array<{ command: string; stateDir: string }>).map(
+        ({ command, stateDir }) => ({ command, stateDir }),
+      ),
+      [
+        { command: 'prepare-build', stateDir: fixture.stateDir },
+        { command: 'resolve-expo-android-device', stateDir: fixture.stateDir },
+        { command: 'resolve-expo-android-device', stateDir: fixture.stateDir },
+        { command: 'complete-build', stateDir: fixture.stateDir },
+      ],
+    );
   } finally {
     rmSync(fixture.root, { force: true, recursive: true });
   }
