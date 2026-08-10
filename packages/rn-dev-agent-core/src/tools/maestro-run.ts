@@ -77,6 +77,7 @@ export interface FlowParkOpts {
   releaseAndroidSlot?: (opts: {
     deviceId?: string;
     includeLegacy?: boolean;
+    signal?: AbortSignal;
   }) => Promise<AndroidSlotReleaseOutcome | void>;
   onAndroidRelease?: (outcome: AndroidSlotReleaseOutcome | void) => void;
   completeRunnerPark?: () => Promise<void>;
@@ -644,13 +645,16 @@ export function createMaestroRunHandler(
                 buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, [...commands]),
                 'utf-8',
               );
-              const executeOnce = async (): Promise<{ stdout: string; stderr: string }> => {
+              const executeOnce = async (
+                beforeDispatch?: () => void,
+              ): Promise<{ stdout: string; stderr: string }> => {
                 const remainingTimeout = flowDeadline - now();
                 if (remainingTimeout <= 0) {
                   const error = new Error('Maestro flow timeout exhausted before the next stage');
                   Object.assign(error, { code: 'ETIMEDOUT' });
                   throw error;
                 }
+                beforeDispatch?.();
                 return execute(dispatch.binPath, finalArgs, {
                   timeout: remainingTimeout,
                   encoding: 'utf8',
@@ -670,11 +674,19 @@ export function createMaestroRunHandler(
                   throw error;
                 }
                 uiAutomationRecoveryAttempted = true;
+                const recoveryTimeout = flowDeadline - now();
+                if (recoveryTimeout <= 0) {
+                  androidSlotReleaseWarnings.push(
+                    'UiAutomation recovery skipped: Maestro flow timeout was exhausted',
+                  );
+                  throw error;
+                }
                 try {
                   recordAndroidRelease(
                     await releaseAndroidSlot({
                       deviceId: recoveryDeviceId,
                       includeLegacy: false,
+                      signal: AbortSignal.timeout(recoveryTimeout),
                     }),
                   );
                 } catch (releaseError) {
@@ -685,8 +697,9 @@ export function createMaestroRunHandler(
                   );
                   throw attachCause(error, releaseError);
                 }
-                uiAutomationRecoveryRetried = true;
-                return executeOnce();
+                return executeOnce(() => {
+                  uiAutomationRecoveryRetried = true;
+                });
               }
             },
             claimOrigin,

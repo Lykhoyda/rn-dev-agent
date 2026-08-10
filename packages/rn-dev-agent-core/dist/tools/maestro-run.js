@@ -432,13 +432,14 @@ export function createMaestroRunHandler(deps = {}) {
                 managedAuthority.reproveManagedOrigin;
             const stageResults = await parkFlow(() => executeMaestroAuthorityStages(validatedCommands, async (commands) => {
                 writeFileSync(flowFile, buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, [...commands]), 'utf-8');
-                const executeOnce = async () => {
+                const executeOnce = async (beforeDispatch) => {
                     const remainingTimeout = flowDeadline - now();
                     if (remainingTimeout <= 0) {
                         const error = new Error('Maestro flow timeout exhausted before the next stage');
                         Object.assign(error, { code: 'ETIMEDOUT' });
                         throw error;
                     }
+                    beforeDispatch?.();
                     return execute(dispatch.binPath, finalArgs, {
                         timeout: remainingTimeout,
                         encoding: 'utf8',
@@ -457,18 +458,25 @@ export function createMaestroRunHandler(deps = {}) {
                         throw error;
                     }
                     uiAutomationRecoveryAttempted = true;
+                    const recoveryTimeout = flowDeadline - now();
+                    if (recoveryTimeout <= 0) {
+                        androidSlotReleaseWarnings.push('UiAutomation recovery skipped: Maestro flow timeout was exhausted');
+                        throw error;
+                    }
                     try {
                         recordAndroidRelease(await releaseAndroidSlot({
                             deviceId: recoveryDeviceId,
                             includeLegacy: false,
+                            signal: AbortSignal.timeout(recoveryTimeout),
                         }));
                     }
                     catch (releaseError) {
                         androidSlotReleaseWarnings.push(`UiAutomation recovery release failed: ${releaseError instanceof Error ? releaseError.message : String(releaseError)}`);
                         throw attachCause(error, releaseError);
                     }
-                    uiAutomationRecoveryRetried = true;
-                    return executeOnce();
+                    return executeOnce(() => {
+                        uiAutomationRecoveryRetried = true;
+                    });
                 }
             }, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin), {
                 platform,
