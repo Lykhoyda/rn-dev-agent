@@ -1,6 +1,10 @@
 import { execFile as execFileCb, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { OWNED_PACKAGES } from '../runners/release-android-slot.js';
+import {
+  hasCompleteRecorderCleanupIdentity,
+  hasCompleteRunnerCleanupIdentity,
+} from './cleanup-identity.js';
 import { probeManagedMetroListener, type ManagedMetroListenerProbe } from './managed-metro.js';
 import {
   probeProcessBirth,
@@ -307,19 +311,17 @@ export async function stopBoundRunner(
   termGraceMs = 500,
 ): Promise<void> {
   const deadlineMs = Date.now() + timeoutMs;
-  const pid = Number(binding.pid);
-  const expectedBirth = String(binding.processBirth ?? '');
-  const instanceId = String(binding.instanceId ?? '');
-  const capability = String(binding.capability ?? '');
-  if (!Number.isSafeInteger(pid) || !expectedBirth || !instanceId || !capability) {
+  if (!hasCompleteRunnerCleanupIdentity(binding)) {
     throw new SessionAuthorityError(
       'RUNNER_ADOPTION_REQUIRED',
       'runner cleanup identity is incomplete',
     );
   }
+  const pid = binding.pid as number;
+  const expectedBirth = String(binding.processBirth ?? '');
   const platform = String(binding.platform ?? '');
   const deviceId = String(binding.deviceId ?? '');
-  const port = Number(binding.port);
+  const port = binding.port as number;
   const current = processProbe(pid);
   if (current.status === 'unknown') {
     throw new SessionAuthorityError(
@@ -410,9 +412,7 @@ export async function stopBoundRecorder(
 ): Promise<string> {
   const script = String(binding.script ?? '');
   const scope = String(binding.scope ?? '');
-  const pid = Number(binding.pid);
-  const expectedBirth = String(binding.processBirth ?? '');
-  if (!script || !/^[a-f0-9]{64}$/.test(scope)) {
+  if (!hasCompleteRecorderCleanupIdentity(binding)) {
     throw new SessionAuthorityError(
       'RECORDING_AUTHORITY_MISMATCH',
       'recorder cleanup identity is incomplete',
@@ -445,12 +445,8 @@ export async function stopBoundRecorder(
       );
     }
   }
-  if (!Number.isSafeInteger(pid) || !expectedBirth) {
-    throw new SessionAuthorityError(
-      'RECORDING_AUTHORITY_MISMATCH',
-      'recorder cleanup identity is incomplete',
-    );
-  }
+  const pid = binding.pid as number;
+  const expectedBirth = String(binding.processBirth ?? '');
   try {
     const stopped = await runRecorder(script, ['stop', scope, String(pid), expectedBirth]);
     const status = await runRecorder(script, ['status', scope]);

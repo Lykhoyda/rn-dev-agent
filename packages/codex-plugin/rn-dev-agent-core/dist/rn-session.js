@@ -8045,6 +8045,40 @@ var init_authority_store = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/session/cleanup-identity.js
+function isPositiveSafeInteger(value) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+function isTcpPort(value) {
+  return isPositiveSafeInteger(value) && value <= 65535;
+}
+function hasCompleteRunnerCleanupIdentity(binding) {
+  const processBirth = String(binding.processBirth ?? "");
+  const instanceId = String(binding.instanceId ?? "");
+  const capability = String(binding.capability ?? "");
+  if (!isPositiveSafeInteger(binding.pid) || !isTcpPort(binding.port) || !processBirth || !instanceId || !capability) {
+    return false;
+  }
+  if (String(binding.platform ?? "") !== "android")
+    return true;
+  return Boolean(String(binding.deviceId ?? ""));
+}
+function hasCompleteRecorderCleanupIdentity(binding) {
+  const script = String(binding.script ?? "");
+  const scope = String(binding.scope ?? "");
+  if (!script || !/^[a-f0-9]{64}$/.test(scope) || binding.port !== void 0 && !isTcpPort(binding.port)) {
+    return false;
+  }
+  if (binding.phase === "starting")
+    return true;
+  return isPositiveSafeInteger(binding.pid) && Boolean(String(binding.processBirth ?? ""));
+}
+var init_cleanup_identity = __esm({
+  "packages/rn-dev-agent-core/dist/session/cleanup-identity.js"() {
+    "use strict";
+  }
+});
+
 // packages/rn-dev-agent-core/dist/session/registry.js
 import { createHash as createHash5, randomBytes, timingSafeEqual as timingSafeEqual4 } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -8139,6 +8173,7 @@ var init_registry = __esm({
   "packages/rn-dev-agent-core/dist/session/registry.js"() {
     "use strict";
     init_authority_store();
+    init_cleanup_identity();
     init_declared_source_contract();
     init_metro_binding();
     INITIALIZATION_WAIT2 = new Int32Array(new SharedArrayBuffer(4));
@@ -8635,26 +8670,20 @@ var init_registry = __esm({
        * offers a bounded, capability-authenticated release for the exact device only — it
        * never transfers source, package-integration, Metro, or port authority, so a dead
        * owner from a foreign worktree can be cleaned up without adopting its session.
+       * ADR L5: new code no longer mints these offers; `beginConfirmedStaleDeviceRelease`
+       * is the default path. This mint stays only as the trivially revertible legacy path.
        */
       prepareStaleResourceRelease(session, target) {
         const deviceKey = `${target.platform}:${target.deviceId}`;
         const now = this.#now();
         return this.#transaction(() => {
           const current = this.#requireSession(session);
-          const claims = this.#deviceFamilyClaims(deviceKey).filter((claim) => claim.session_id !== session.sessionId);
-          if (claims.length === 0) {
-            throw new SessionAuthorityError("DEVICE_CLAIM_CONFLICT", `no foreign claim on ${deviceKey} needs release`);
-          }
-          const owners = new Set(claims.map((claim) => `${claim.session_id}\0${claim.claim_epoch}`));
-          if (owners.size !== 1) {
-            throw new SessionAuthorityError("DEVICE_CLAIM_CONFLICT", `${deviceKey} is split across several claim epochs; release each owner explicitly`);
-          }
-          const prior = this.#requireProvenDeadOwner(claims[0].session_id, claims[0].claim_epoch);
-          const priorBindings = JSON.parse(prior.bindings_json);
+          const prior = this.#requireSingleProvenDeadDeviceOwner(session, deviceKey);
+          const family = this.#requireExactStaleDeviceFamily(session, prior, target);
           const obligations = [];
-          if (this.#bindingMatchesDevice(priorBindings.runner, target))
+          if (family.runner)
             obligations.push("runner");
-          if (this.#bindingMatchesDevice(priorBindings.recorder, target))
+          if (family.recorder)
             obligations.push("recorder");
           const offer = {
             token: randomBytes(32).toString("base64url"),
@@ -8676,6 +8705,57 @@ var init_registry = __esm({
             }
           }), now, session.sessionId, session.claimEpoch);
           return offer;
+        });
+      }
+      /**
+       * ADR L5: read-only view of what a confirmed inline release would transfer. Proves
+       * the owner's death and computes the exact obligations without minting a capability
+       * or writing any state.
+       */
+      inspectStaleDeviceRelease(session, target) {
+        const deviceKey = `${target.platform}:${target.deviceId}`;
+        this.#requireSession(session);
+        const prior = this.#requireSingleProvenDeadDeviceOwner(session, deviceKey);
+        const family = this.#requireExactStaleDeviceFamily(session, prior, target);
+        const obligations = [];
+        if (family.runner)
+          obligations.push("runner");
+        if (family.recorder)
+          obligations.push("recorder");
+        return {
+          priorSessionId: prior.session_id,
+          priorClaimEpoch: prior.claim_epoch,
+          obligations
+        };
+      }
+      /**
+       * ADR L5 (captain-approved D3): confirmed inline replacement for the capability-token
+       * transfer. Authorization is the caller's explicit confirmation plus positive death
+       * proof re-read from durable state inside this transaction, scoped to the exact
+       * requested device. An existing journal resumes token-lessly; nothing is minted and
+       * nothing expires.
+       */
+      beginConfirmedStaleDeviceRelease(session, workerInstance, target) {
+        const now = this.#now();
+        return this.#transaction(() => {
+          const current = this.#requireSession(session);
+          const bindings = JSON.parse(current.bindings_json);
+          if (current.worker_instance !== workerInstance) {
+            throw new SessionAuthorityError("HANDOFF_TARGET_MISMATCH", "stale device release is not owned by this worker");
+          }
+          const resumed = bindings.staleDeviceCleanup;
+          if (resumed) {
+            this.#assertStaleReleaseJournalScope(current, resumed, target);
+            return {
+              platform: String(resumed.platform),
+              deviceId: String(resumed.deviceId),
+              runner: resumed.runner ?? null,
+              recorder: resumed.recorder ?? null
+            };
+          }
+          const deviceKey = `${target.platform}:${target.deviceId}`;
+          const prior = this.#requireSingleProvenDeadDeviceOwner(session, deviceKey);
+          return this.#transferStaleDeviceAuthority(session, bindings, prior, target, now);
         });
       }
       /**
@@ -8711,51 +8791,117 @@ var init_registry = __esm({
           if (target && (target.platform !== platform || target.deviceId !== deviceId)) {
             throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "stale device release offer does not match the requested exact device", void 0, { axis: "D", nextAction: 'Run rn_session with action "status" for the exact recovery.' });
           }
-          const deviceKey = `${platform}:${deviceId}`;
           if (offer.expiresMs < now) {
             throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "stale device release capability is invalid or expired");
           }
           const prior = this.#requireProvenDeadOwner(offer.priorSessionId, offer.priorClaimEpoch);
-          const priorBindings = JSON.parse(prior.bindings_json);
-          const claims = this.#deviceFamilyClaims(deviceKey).filter((claim) => claim.session_id === prior.session_id && claim.claim_epoch === prior.claim_epoch);
-          const runner = this.#bindingMatchesDevice(priorBindings.runner, { platform, deviceId }) ? priorBindings.runner : null;
-          const recorder = this.#bindingMatchesDevice(priorBindings.recorder, { platform, deviceId }) ? priorBindings.recorder : null;
-          for (const claim of claims) {
-            this.#database.prepare(`UPDATE claims SET session_id = ?, claim_epoch = ?, lease_until_ms = ?
-             WHERE resource_type = ? AND resource_key = ?
-               AND session_id = ? AND claim_epoch = ?`).run(session.sessionId, session.claimEpoch, now + this.#leaseMs, claim.resource_type, claim.resource_key, prior.session_id, prior.claim_epoch);
-          }
-          const runnerClaimKey = runner ? `${platform}:${deviceId}:${String(runner.port)}` : null;
-          const cleanup = {
+          return this.#transferStaleDeviceAuthority(session, bindings, prior, { platform, deviceId }, now);
+        });
+      }
+      #transferStaleDeviceAuthority(session, bindings, prior, target, now) {
+        const { platform, deviceId } = target;
+        const deviceKey = `${platform}:${deviceId}`;
+        const priorBindings = JSON.parse(prior.bindings_json);
+        const family = this.#requireExactStaleDeviceFamily(session, prior, target);
+        const { runner, recorder } = family;
+        for (const claim of family.claims) {
+          this.#database.prepare(`UPDATE claims SET session_id = ?, claim_epoch = ?, lease_until_ms = ?
+           WHERE resource_type = ? AND resource_key = ?
+             AND session_id = ? AND claim_epoch = ?`).run(session.sessionId, session.claimEpoch, now + this.#leaseMs, claim.resource_type, claim.resource_key, prior.session_id, prior.claim_epoch);
+        }
+        const runnerClaimKey = runner ? `${platform}:${deviceId}:${String(runner.port)}` : null;
+        const cleanup = {
+          platform,
+          deviceId,
+          priorSessionId: prior.session_id,
+          priorClaimEpoch: prior.claim_epoch,
+          transferredAt: now,
+          runner: runner ? { ...runner, claimKey: runnerClaimKey, stopRequestedAt: now, completedAt: null } : null,
+          recorder: recorder ? { ...recorder, claimKey: deviceKey, stopRequestedAt: now, completedAt: null } : null
+        };
+        this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
+         WHERE session_id = ? AND claim_epoch = ?`).run(JSON.stringify({ ...bindings, staleDeviceCleanup: cleanup }), now, session.sessionId, session.claimEpoch);
+        this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
+         WHERE session_id = ? AND claim_epoch = ?`).run(JSON.stringify({
+          ...priorBindings,
+          device: null,
+          runner: null,
+          recorder: null,
+          deviceReleased: {
+            toSessionId: session.sessionId,
+            toClaimEpoch: session.claimEpoch,
+            at: now,
             platform,
             deviceId,
-            priorSessionId: prior.session_id,
-            priorClaimEpoch: prior.claim_epoch,
-            transferredAt: now,
-            runner: runner ? { ...runner, claimKey: runnerClaimKey, stopRequestedAt: now, completedAt: null } : null,
-            recorder: recorder ? { ...recorder, claimKey: deviceKey, stopRequestedAt: now, completedAt: null } : null
-          };
-          this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`).run(JSON.stringify({ ...bindings, staleDeviceCleanup: cleanup }), now, session.sessionId, session.claimEpoch);
-          this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`).run(JSON.stringify({
-            ...priorBindings,
-            device: null,
-            runner: null,
-            recorder: null,
-            deviceReleased: {
-              toSessionId: session.sessionId,
-              toClaimEpoch: session.claimEpoch,
-              at: now,
-              platform,
-              deviceId,
-              device: priorBindings.device ?? null,
-              runner,
-              recorder
-            }
-          }), now, prior.session_id, prior.claim_epoch);
-          return { platform, deviceId, runner: cleanup.runner, recorder: cleanup.recorder };
-        });
+            device: priorBindings.device ?? null,
+            runner,
+            recorder
+          }
+        }), now, prior.session_id, prior.claim_epoch);
+        return { platform, deviceId, runner: cleanup.runner, recorder: cleanup.recorder };
+      }
+      #requireSingleProvenDeadDeviceOwner(session, deviceKey) {
+        const claims = this.#deviceFamilyClaims(deviceKey);
+        if (claims.length === 0) {
+          throw new SessionAuthorityError("DEVICE_CLAIM_CONFLICT", `no foreign claim on ${deviceKey} needs release`);
+        }
+        const owners = new Set(claims.map((claim) => `${claim.session_id}\0${claim.claim_epoch}`));
+        if (owners.size !== 1) {
+          throw new SessionAuthorityError("DEVICE_CLAIM_CONFLICT", `${deviceKey} is split across several claim epochs; release each owner explicitly`);
+        }
+        if (claims[0].session_id === session.sessionId && claims[0].claim_epoch === session.claimEpoch) {
+          throw new SessionAuthorityError("DEVICE_CLAIM_CONFLICT", `no foreign claim on ${deviceKey} needs release`);
+        }
+        return this.#requireProvenDeadOwner(claims[0].session_id, claims[0].claim_epoch);
+      }
+      #requireExactStaleDeviceFamily(session, prior, target) {
+        const deviceKey = `${target.platform}:${target.deviceId}`;
+        const claims = this.#deviceFamilyClaims(deviceKey);
+        if (claims.length === 0 || claims.some((claim) => claim.session_id !== prior.session_id || claim.claim_epoch !== prior.claim_epoch)) {
+          throw new SessionAuthorityError("DEVICE_CLAIM_CONFLICT", `${deviceKey} is split across several claim epochs; release each owner explicitly`);
+        }
+        if (claims.some((claim) => claim.resource_type === "device-receipt" || claim.resource_type === "runner-receipt")) {
+          throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "stale device cleanup cannot transfer platform validation receipt authority");
+        }
+        const bindings = JSON.parse(prior.bindings_json);
+        if (!this.#bindingMatchesDevice(bindings.device, target)) {
+          throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "stale device claim does not match its owner binding");
+        }
+        const deviceClaims = claims.filter((claim) => claim.resource_type === "device");
+        if (deviceClaims.length !== 1 || deviceClaims[0].resource_key !== deviceKey) {
+          throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "stale device binding has no exclusive cleanup claim");
+        }
+        const current = this.#requireSession(session);
+        const currentBindings = JSON.parse(current.bindings_json);
+        if (this.#bindingMatchesDevice(currentBindings.device, target) || this.#bindingMatchesDevice(currentBindings.runner, target) || this.#bindingMatchesDevice(currentBindings.recorder, target)) {
+          throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "stale device cleanup conflicts with existing target bindings");
+        }
+        const runnerClaims = claims.filter((claim) => claim.resource_type === "runner");
+        const runnerValue = bindings.runner;
+        const runner = this.#bindingMatchesDevice(runnerValue, target) ? runnerValue : null;
+        if (runnerValue !== null && runnerValue !== void 0 && !runner) {
+          throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "stale runner binding targets another device");
+        }
+        if (runner && !hasCompleteRunnerCleanupIdentity(runner)) {
+          throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "stale runner cleanup identity is incomplete");
+        }
+        const runnerClaimKey = runner ? `${deviceKey}:${String(runner.port)}` : null;
+        if (runnerClaims.length !== (runner ? 1 : 0) || runner && runnerClaims[0].resource_key !== runnerClaimKey) {
+          throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "stale runner binding has no exclusive cleanup claim");
+        }
+        const recorderClaims = claims.filter((claim) => claim.resource_type === "recorder");
+        const recorderValue = bindings.recorder;
+        const recorder = this.#bindingMatchesDevice(recorderValue, target) ? recorderValue : null;
+        if (recorderValue !== null && recorderValue !== void 0 && !recorder) {
+          throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "stale recorder binding targets another device");
+        }
+        if (recorder && !hasCompleteRecorderCleanupIdentity(recorder)) {
+          throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "stale recorder cleanup identity is incomplete");
+        }
+        if (recorderClaims.length !== (recorder ? 1 : 0) || recorder && recorderClaims[0].resource_key !== deviceKey) {
+          throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "stale recorder binding has no exclusive cleanup claim");
+        }
+        return { claims, runner, recorder };
       }
       completeStaleResourceRelease(session, workerInstance, resource) {
         const now = this.#now();
@@ -8792,14 +8938,13 @@ var init_registry = __esm({
             }
           }
           const deviceKey = `${String(cleanup.platform)}:${String(cleanup.deviceId)}`;
-          for (const claim of this.#deviceFamilyClaims(deviceKey)) {
-            if (claim.session_id !== session.sessionId || claim.claim_epoch !== session.claimEpoch) {
-              continue;
-            }
-            this.#database.prepare(`DELETE FROM claims
-             WHERE resource_type = ? AND resource_key = ?
-               AND session_id = ? AND claim_epoch = ?`).run(claim.resource_type, claim.resource_key, session.sessionId, session.claimEpoch);
+          const unrelatedClaim = this.#deviceFamilyClaims(deviceKey).find((claim) => claim.resource_type !== "device");
+          if (unrelatedClaim) {
+            throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "stale device cleanup found authority outside its completed journal");
           }
+          this.#database.prepare(`DELETE FROM claims
+           WHERE resource_type = 'device' AND resource_key = ?
+             AND session_id = ? AND claim_epoch = ?`).run(deviceKey, session.sessionId, session.claimEpoch);
           const nextAuthorityVersion = row.authority_version + 1;
           this.#database.prepare(`UPDATE sessions
            SET bindings_json = ?, authority_version = ?, updated_ms = ?
@@ -9075,7 +9220,7 @@ var init_registry = __esm({
         }
         throw new SessionAuthorityError("AUTOMATION_CLEANUP_UNPROVEN", "stale device cleanup journal is incomplete", void 0, {
           axis: "D",
-          nextAction: 'Resume it with rn_session({ action: "release_stale_device" }) before binding any device.'
+          nextAction: 'Resume it with rn_session({ action: "bind_device" }) for the exact journaled device or rn_session({ action: "release_stale_device" }) before binding any other device.'
         });
       }
       #assertStaleReleaseJournalScope(row, cleanup, target) {
@@ -16688,7 +16833,7 @@ function projectPublicAuthorityStatus(status, options = {}) {
         obligations: Array.isArray(staleRelease.obligations) ? staleRelease.obligations : [],
         ...releaseHandle ? {} : {
           expired: true,
-          nextAction: cleanupNextAction ?? 'The stale device release offer expired. Re-run rn_session({ action: "bind_device" }) to mint a fresh one.'
+          nextAction: cleanupNextAction ?? 'The stale device release offer expired. Re-run rn_session({ action: "bind_device", confirmed: true }) to release the proven-dead owner inline.'
         }
       }
     } : {},
@@ -16698,6 +16843,7 @@ function projectPublicAuthorityStatus(status, options = {}) {
 
 // packages/rn-dev-agent-core/dist/session/process-cleanup.js
 init_release_android_slot();
+init_cleanup_identity();
 import { execFile as execFileCb9, spawn as spawn5 } from "node:child_process";
 import { promisify as promisify12 } from "node:util";
 init_process_birth();
@@ -16916,16 +17062,14 @@ async function stopBoundObserve(binding, listenerProbe = probeManagedMetroListen
 }
 async function stopBoundRunner(binding, processProbe = probeProcessBirth, signalProcess = process.kill, timeoutMs = 2e3, runAdb = async (args) => execFile12("adb", args, { timeout: 5e3, encoding: "utf8" }), termGraceMs = 500) {
   const deadlineMs = Date.now() + timeoutMs;
-  const pid = Number(binding.pid);
-  const expectedBirth = String(binding.processBirth ?? "");
-  const instanceId = String(binding.instanceId ?? "");
-  const capability = String(binding.capability ?? "");
-  if (!Number.isSafeInteger(pid) || !expectedBirth || !instanceId || !capability) {
+  if (!hasCompleteRunnerCleanupIdentity(binding)) {
     throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "runner cleanup identity is incomplete");
   }
+  const pid = binding.pid;
+  const expectedBirth = String(binding.processBirth ?? "");
   const platform = String(binding.platform ?? "");
   const deviceId = String(binding.deviceId ?? "");
-  const port = Number(binding.port);
+  const port = binding.port;
   const current = processProbe(pid);
   if (current.status === "unknown") {
     throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "runner process identity is unavailable");
@@ -16991,9 +17135,7 @@ ${instrumentation.stderr}`;
 async function stopBoundRecorder(binding, _processProbe = probeProcessBirth, runRecorder = async (script, args) => runRecordProofScript(script, args)) {
   const script = String(binding.script ?? "");
   const scope = String(binding.scope ?? "");
-  const pid = Number(binding.pid);
-  const expectedBirth = String(binding.processBirth ?? "");
-  if (!script || !/^[a-f0-9]{64}$/.test(scope)) {
+  if (!hasCompleteRecorderCleanupIdentity(binding)) {
     throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "recorder cleanup identity is incomplete");
   }
   if (binding.phase === "starting") {
@@ -17016,9 +17158,8 @@ async function stopBoundRecorder(binding, _processProbe = probeProcessBirth, run
       throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", `provisional recorder termination is unproven: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
-  if (!Number.isSafeInteger(pid) || !expectedBirth) {
-    throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "recorder cleanup identity is incomplete");
-  }
+  const pid = binding.pid;
+  const expectedBirth = String(binding.processBirth ?? "");
   try {
     const stopped = await runRecorder(script, ["stop", scope, String(pid), expectedBirth]);
     const status = await runRecorder(script, ["status", scope]);

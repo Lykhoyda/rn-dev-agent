@@ -257,8 +257,10 @@ function isAuthenticatedIdempotentRunnerClose(
   }
 }
 
-// Read from the durable offer/journal, not the arguments: a journal resume supplies
-// neither platform nor deviceId.
+// Prefer the durable offer/journal over the arguments: a journal resume supplies
+// neither platform nor deviceId. ADR L5's confirmed initial transfer has no durable
+// offer or journal at preflight, so its exact scope arrives in the arguments; the
+// commit itself is still proven independently by staleDeviceReleaseCommitted.
 function staleDeviceReleaseScope(
   tool: string,
   args: Record<string, unknown>,
@@ -270,6 +272,9 @@ function staleDeviceReleaseScope(
     | null
     | undefined;
   if (!scope || typeof scope.platform !== 'string' || typeof scope.deviceId !== 'string') {
+    if (typeof args.platform === 'string' && typeof args.deviceId === 'string') {
+      return { platform: args.platform, deviceId: args.deviceId };
+    }
     return null;
   }
   return { platform: scope.platform, deviceId: scope.deviceId };

@@ -392,18 +392,54 @@ export function reconcileManagedMetroStatus(
   return runtime.status();
 }
 
-/**
- * GH #672: `replaceDeviceAuthority` demanded `adopt_stale` for a proven-dead device
- * owner, but adoption handles are only minted at startup for source/port conflicts —
- * so the advertised recovery had no reachable path. Mint a bounded, device-scoped
- * release offer instead and name it in the refusal.
- */
-function withStaleDeviceReleaseOffer<T>(
+async function completeStaleDeviceCleanupPlan(
   registry: SessionRegistry,
   session: SessionRef,
-  target: { platform: 'ios' | 'android'; deviceId: string },
+  workerInstance: string,
+  plan: { runner: Record<string, unknown> | null; recorder: Record<string, unknown> | null },
+  dependencies: SessionHandlerDependencies,
+): Promise<string[]> {
+  const completed: string[] = [];
+  if (plan.recorder && typeof plan.recorder.completedAt !== 'number') {
+    await (dependencies.stopHandoffRecorder ?? stopBoundRecorder)(plan.recorder);
+    registry.completeStaleResourceRelease(session, workerInstance, 'recorder');
+    completed.push('recorder');
+  }
+  if (plan.runner && typeof plan.runner.completedAt !== 'number') {
+    if (dependencies.stopHandoffRunner) {
+      await dependencies.stopHandoffRunner(plan.runner);
+    } else {
+      await stopHandoffRunner(
+        plan.runner,
+        dependencies.probeProcessBirth,
+        dependencies.signalProcess,
+        dependencies.cleanupTimeoutMs,
+      );
+    }
+    registry.completeStaleResourceRelease(session, workerInstance, 'runner');
+    completed.push('runner');
+  }
+  return completed;
+}
+
+/**
+ * GH #672 / ADR L5 (captain-approved D3): a proven-dead device owner is released
+ * inline by `bind_device` under `confirmed: true` — no capability token is minted,
+ * death is re-proven from durable state at execution, and only the exact device
+ * family transfers through the same journaled cleanup engine `release_stale_device`
+ * uses. Without confirmation, the refusal names the confirmed retry and nothing
+ * mutates.
+ */
+async function withInlineStaleDeviceCleanup<T>(
+  registry: SessionRegistry,
+  session: SessionRef,
+  dependencies: SessionHandlerDependencies,
+  input: { platform: 'ios' | 'android'; deviceId: string; appId: string; confirmed?: boolean },
+  requireWorkerInstance: () => string,
+  revalidate: () => void,
   operation: () => T,
-): T {
+): Promise<T> {
+  const target = { platform: input.platform, deviceId: input.deviceId };
   try {
     return operation();
   } catch (error) {
@@ -414,27 +450,37 @@ function withStaleDeviceReleaseOffer<T>(
     ) {
       throw error;
     }
-    let offer;
-    try {
-      offer = registry.prepareStaleResourceRelease(session, target);
-    } catch (offerError) {
-      throw offerError instanceof SessionAuthorityError ? offerError : error;
+    if (input.confirmed !== true) {
+      let inspection;
+      try {
+        inspection = registry.inspectStaleDeviceRelease(session, target);
+      } catch (inspectError) {
+        throw inspectError instanceof SessionAuthorityError ? inspectError : error;
+      }
+      throw new SessionAuthorityError(
+        'STALE_DEVICE_RELEASE_REQUIRED',
+        `exact ${target.platform} device ${target.deviceId} is claimed by a proven-dead owner; ` +
+          'confirm the exact device, runner, and recorder cleanup before rebinding',
+        error.holder,
+        {
+          axis: 'D',
+          nextAction:
+            `rn_session({ action: "bind_device", platform: "${target.platform}", ` +
+            `deviceId: "${target.deviceId}", appId: "${input.appId}", confirmed: true }). ` +
+            `This releases only the exact device cleanup obligations (${
+              inspection.obligations.length ? inspection.obligations.join(', ') : 'none'
+            }) after re-proving the owner's death, and never the dead owner source, ` +
+            'package-integration, or Metro authority. release_stale_device with ' +
+            'confirmed: true remains a compatible alias.',
+        },
+      );
     }
-    throw new SessionAuthorityError(
-      'STALE_DEVICE_RELEASE_REQUIRED',
-      `exact ${target.platform} device ${target.deviceId} is claimed by a proven-dead owner; ` +
-        `release its exact device, runner, and recorder obligations before rebinding`,
-      error.holder,
-      {
-        axis: 'D',
-        nextAction:
-          `rn_session({ action: "release_stale_device", platform: "${target.platform}", ` +
-          `deviceId: "${target.deviceId}", releaseHandle: "${offer.token}" }), then retry bind_device. ` +
-          `This transfers only the exact device cleanup obligations (${
-            offer.obligations.length ? offer.obligations.join(', ') : 'none'
-          }) and never the dead owner source, package-integration, or Metro authority.`,
-      },
-    );
+    const workerInstance = requireWorkerInstance();
+    const plan = registry.beginConfirmedStaleDeviceRelease(session, workerInstance, target);
+    await completeStaleDeviceCleanupPlan(registry, session, workerInstance, plan, dependencies);
+    registry.finishStaleResourceRelease(session, workerInstance);
+    revalidate();
+    return operation();
   }
 }
 
@@ -522,7 +568,8 @@ export function createSessionHandler(
         const authority = journal ?? offer;
         if (
           target &&
-          (authority?.platform !== target.platform || authority.deviceId !== target.deviceId)
+          authority &&
+          (authority.platform !== target.platform || authority.deviceId !== target.deviceId)
         ) {
           throw new SessionAuthorityError(
             'DEVICE_AUTHORITY_MISMATCH',
@@ -540,38 +587,35 @@ export function createSessionHandler(
             'platform and deviceId are required for the initial stale device transfer',
           );
         }
+        let plan;
         if (!journal && typeof releaseHandle !== 'string') {
-          throw new SessionAuthorityError(
-            'HANDOFF_NOT_AUTHORIZED',
-            'releaseHandle is required before stale device claims transfer',
-          );
-        }
-        const plan = registry.beginStaleResourceRelease(
-          session,
-          releaseHandle,
-          workerInstance,
-          target,
-        );
-        const completed: string[] = [];
-        if (plan.recorder && typeof plan.recorder.completedAt !== 'number') {
-          await (dependencies.stopHandoffRecorder ?? stopBoundRecorder)(plan.recorder);
-          registry.completeStaleResourceRelease(session, workerInstance, 'recorder');
-          completed.push('recorder');
-        }
-        if (plan.runner && typeof plan.runner.completedAt !== 'number') {
-          if (dependencies.stopHandoffRunner) {
-            await dependencies.stopHandoffRunner(plan.runner);
-          } else {
-            await stopHandoffRunner(
-              plan.runner,
-              dependencies.probeProcessBirth,
-              dependencies.signalProcess,
-              dependencies.cleanupTimeoutMs,
+          // ADR L5 (captain-approved D3): confirmed: true replaces the release-offer
+          // capability token; death is re-proven from durable state in the transfer.
+          if (input.confirmed !== true) {
+            throw new SessionAuthorityError(
+              'SESSION_AUTHORITY_REQUIRED',
+              'the initial stale device transfer requires confirmed: true',
+              undefined,
+              {
+                axis: 'D',
+                nextAction:
+                  `rn_session({ action: "release_stale_device", platform: "${target!.platform}", ` +
+                  `deviceId: "${target!.deviceId}", confirmed: true }), or re-run bind_device ` +
+                  'with confirmed: true to release and rebind in one step.',
+              },
             );
           }
-          registry.completeStaleResourceRelease(session, workerInstance, 'runner');
-          completed.push('runner');
+          plan = registry.beginConfirmedStaleDeviceRelease(session, workerInstance, target!);
+        } else {
+          plan = registry.beginStaleResourceRelease(session, releaseHandle, workerInstance, target);
         }
+        const completed = await completeStaleDeviceCleanupPlan(
+          registry,
+          session,
+          workerInstance,
+          plan,
+          dependencies,
+        );
         registry.finishStaleResourceRelease(session, workerInstance);
         return okResult({
           released: { platform: plan.platform, cleanupCompleted: completed },
@@ -599,23 +643,61 @@ export function createSessionHandler(
             'device rebinding requires runner, Observe, or proof authority to be released first',
           );
         }
-        let deviceExists: boolean;
-        try {
-          deviceExists = (dependencies.deviceExists ?? deviceExistsOnHost)(platform, deviceId);
-        } catch (error) {
-          throw new SessionAuthorityError(
-            'DEVICE_DISCOVERY_UNAVAILABLE',
-            `could not verify exact ${platform} device ${deviceId}: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
+        const requireWorkerInstance = () => {
+          const workerInstance = status.worker.instanceId;
+          if (!workerInstance) {
+            throw new SessionAuthorityError(
+              'HANDOFF_NOT_AUTHORIZED',
+              'release worker identity is unavailable',
+            );
+          }
+          return workerInstance;
+        };
+        // ADR L5: an interrupted exact-device cleanup journal resumes token-lessly on a
+        // bare bind of the same target; a different target keeps refusing below.
+        const cleanupJournal = status.bindings.staleDeviceCleanup as
+          | { platform?: unknown; deviceId?: unknown }
+          | null
+          | undefined;
+        if (
+          cleanupJournal &&
+          cleanupJournal.platform === platform &&
+          cleanupJournal.deviceId === deviceId
+        ) {
+          const workerInstance = requireWorkerInstance();
+          const plan = registry.beginConfirmedStaleDeviceRelease(session, workerInstance, {
+            platform,
+            deviceId,
+          });
+          await completeStaleDeviceCleanupPlan(
+            registry,
+            session,
+            workerInstance,
+            plan,
+            dependencies,
           );
+          registry.finishStaleResourceRelease(session, workerInstance);
         }
-        if (!deviceExists) {
-          throw new SessionAuthorityError(
-            'DEVICE_NOT_FOUND',
-            `exact ${platform} device ${deviceId} does not exist or is unavailable`,
-          );
-        }
+        const requireExactDevice = () => {
+          let deviceExists: boolean;
+          try {
+            deviceExists = (dependencies.deviceExists ?? deviceExistsOnHost)(platform, deviceId);
+          } catch (error) {
+            throw new SessionAuthorityError(
+              'DEVICE_DISCOVERY_UNAVAILABLE',
+              `could not verify exact ${platform} device ${deviceId}: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            );
+          }
+          if (!deviceExists) {
+            throw new SessionAuthorityError(
+              'DEVICE_NOT_FOUND',
+              `exact ${platform} device ${deviceId} does not exist or is unavailable`,
+            );
+          }
+        };
+        requireExactDevice();
         const currentInstall = status.bindings.install as Record<string, unknown> | undefined;
         if (
           !input.buildReceipt &&
@@ -631,16 +713,23 @@ export function createSessionHandler(
         }
         if (!input.buildReceipt) {
           const invalidatesBundle = Boolean(status.bindings.bundle);
-          withStaleDeviceReleaseOffer(registry, session, { platform, deviceId }, () =>
-            registry.replaceDeviceAuthority(session, {
-              resource: { type: 'device', key: `${platform}:${deviceId}` },
-              device: {
-                platform,
-                deviceId,
-                appId,
-                ...(input.devClientUrl ? { devClientUrl: input.devClientUrl } : {}),
-              },
-            }),
+          await withInlineStaleDeviceCleanup(
+            registry,
+            session,
+            dependencies,
+            { platform, deviceId, appId, confirmed: input.confirmed },
+            requireWorkerInstance,
+            requireExactDevice,
+            () =>
+              registry.replaceDeviceAuthority(session, {
+                resource: { type: 'device', key: `${platform}:${deviceId}` },
+                device: {
+                  platform,
+                  deviceId,
+                  appId,
+                  ...(input.devClientUrl ? { devClientUrl: input.devClientUrl } : {}),
+                },
+              }),
           );
           if (invalidatesBundle) dependencies.onBundleInvalidated?.();
           return okResult({
@@ -664,25 +753,38 @@ export function createSessionHandler(
           appId,
           metroPort: Number(status.bindings.metroPort),
         });
-        const observedGeneration = (
-          dependencies.captureInstallGeneration ?? captureInstallGeneration
-        )({
-          platform,
-          deviceId,
-          appId,
-        });
-        if (observedGeneration !== receipt.installGeneration) {
-          throw new SessionAuthorityError(
-            'APP_INSTALL_IDENTITY_CHANGED',
-            'installed artifact generation does not match the signed build receipt',
-          );
-        }
-        withStaleDeviceReleaseOffer(registry, session, { platform, deviceId }, () =>
-          registry.replaceDeviceAuthority(session, {
-            resource: { type: 'device', key: `${platform}:${deviceId}` },
-            device: { platform, deviceId, appId },
-            install: { ...receipt },
-          }),
+        const requireInstallGeneration = () => {
+          const observedGeneration = (
+            dependencies.captureInstallGeneration ?? captureInstallGeneration
+          )({
+            platform,
+            deviceId,
+            appId,
+          });
+          if (observedGeneration !== receipt.installGeneration) {
+            throw new SessionAuthorityError(
+              'APP_INSTALL_IDENTITY_CHANGED',
+              'installed artifact generation does not match the signed build receipt',
+            );
+          }
+        };
+        requireInstallGeneration();
+        await withInlineStaleDeviceCleanup(
+          registry,
+          session,
+          dependencies,
+          { platform, deviceId, appId, confirmed: input.confirmed },
+          requireWorkerInstance,
+          () => {
+            requireExactDevice();
+            requireInstallGeneration();
+          },
+          () =>
+            registry.replaceDeviceAuthority(session, {
+              resource: { type: 'device', key: `${platform}:${deviceId}` },
+              device: { platform, deviceId, appId },
+              install: { ...receipt },
+            }),
         );
         if (status.bindings.bundle) dependencies.onBundleInvalidated?.();
         return okResult({ session: projectPublicAuthorityStatus(runtime.status()) });

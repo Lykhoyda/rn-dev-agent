@@ -43,6 +43,10 @@ GitHub Issues, PRs, or the sibling workspace only when explicitly requested.
   outputs must be real directories/files, not symlinks.
 - Do not hand-edit generated host runtime or packaged native-runner copies.
   Regenerate them from sources.
+- Keep zod `.describe()` strings in tool schemas short enough to stay on one
+  line after formatting: `apps/docs-site/scripts/generate-tool-docs.mjs` only
+  parses a quote immediately after `describe(`, so a prettier-wrapped string
+  silently drops the description from the generated tool docs.
 
 ## Where To Make Changes
 

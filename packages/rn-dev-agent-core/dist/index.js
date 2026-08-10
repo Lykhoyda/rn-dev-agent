@@ -1093,9 +1093,9 @@ trackedTool('rn_session', 'Inspect and transition the fenced rn-dev-agent author
     adoptionHandle: z.string().optional(),
     releaseHandle: z
         .string()
-        .describe('Bounded capability minted by bind_device for initial proven-dead device transfer')
+        .describe('Legacy release-offer capability; confirmed: true supersedes it')
         .optional(),
-    confirmed: z.boolean().optional(),
+    confirmed: z.boolean().describe('Authorizes inline proven-dead device cleanup').optional(),
     force: z.boolean().optional(),
 }, sessionHandler);
 trackedTool('cdp_status', 'Passively report the current authority session, Metro client, and CDP target without connecting, relaunching, dismissing UI, or choosing an ambient target.', {

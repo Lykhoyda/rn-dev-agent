@@ -1407,9 +1407,9 @@ trackedTool(
     adoptionHandle: z.string().optional(),
     releaseHandle: z
       .string()
-      .describe('Bounded capability minted by bind_device for initial proven-dead device transfer')
+      .describe('Legacy release-offer capability; confirmed: true supersedes it')
       .optional(),
-    confirmed: z.boolean().optional(),
+    confirmed: z.boolean().describe('Authorizes inline proven-dead device cleanup').optional(),
     force: z.boolean().optional(),
   },
   sessionHandler,
