@@ -3,6 +3,8 @@ import { join } from 'node:path';
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
 import {
+  _setActiveSessionForTest,
+  _setRunAgentDeviceForTest,
   androidOutsideAppWindowRefusal,
   buildRunAndroidArgs,
   establishInteractionBaseline,
@@ -31,7 +33,12 @@ import {
   REQUIRED_ANDROID_COMMANDS,
   REQUIRED_ANDROID_FEATURES,
 } from '../../dist/runners/protocol.js';
-import { pressCandidate, scopeSnapshotNodesForFind } from '../../dist/tools/device-interact.js';
+import {
+  createDeviceFocusNextHandler,
+  focusNextPressArgs,
+  pressCandidate,
+  scopeSnapshotNodesForFind,
+} from '../../dist/tools/device-interact.js';
 
 const appId = 'com.example.app';
 const appHome = {
@@ -41,6 +48,14 @@ const appHome = {
   identifier: 'tab-home',
   packageName: appId,
   rect: { x: 0, y: 700, width: 180, height: 80 },
+};
+const imeKey = {
+  ref: '@e3',
+  type: 'android.inputmethodservice.Keyboard$Key',
+  label: 'Done',
+  identifier: 'key_pos_ime_action',
+  packageName: 'com.google.android.inputmethod.latin',
+  rect: { x: 800, y: 1200, width: 200, height: 100 },
 };
 const systemHome = {
   ref: '@e2',
@@ -55,6 +70,8 @@ afterEach(() => {
   clearRefMap();
   _setAndroidRunnerStateForTest(null);
   _setFetchForTest(globalThis.fetch);
+  _setRunAgentDeviceForTest(null);
+  _setActiveSessionForTest(null);
 });
 
 test('Android find scope excludes system chrome unless explicitly opted in', () => {
@@ -325,6 +342,102 @@ test('owned-app refs, explicit system scope, and coordinate taps stay unrefused'
     true,
   );
   assert.equal(androidOutsideAppWindowRefusal(['press', systemHome.ref], appId), null);
+});
+
+test('device_focus_next keeps actuating the Android IME key it already matched', () => {
+  updateRefMapFromFlat([appHome, imeKey]);
+  const args = focusNextPressArgs(imeKey.ref, imeKey.packageName, 'android', appId);
+  assert.deepEqual(args, ['press', imeKey.ref, '--include-system-ui']);
+  assert.equal(androidOutsideAppWindowRefusal(args, appId), null);
+  assert.equal(buildRunAndroidArgs(args, appId).includeSystemUi, true);
+});
+
+test('the focus-next keyboard grant never leaks into device_press', () => {
+  updateRefMapFromFlat([appHome, imeKey, systemHome]);
+  focusNextPressArgs(imeKey.ref, imeKey.packageName, 'android', appId);
+  assert.equal(isSystemUiRefAuthorized(imeKey.ref), false);
+  assert.equal(
+    androidOutsideAppWindowRefusal(['press', imeKey.ref], appId)?.packageName,
+    'com.google.android.inputmethod.latin',
+  );
+  assert.equal(buildRunAndroidArgs(['press', imeKey.ref], appId).includeSystemUi, undefined);
+  assert.equal(
+    androidOutsideAppWindowRefusal(['press', systemHome.ref], appId)?.packageName,
+    'com.android.systemui',
+  );
+});
+
+test('focus-next claims no system scope for owned-app keys or non-Android sessions', () => {
+  assert.deepEqual(focusNextPressArgs(appHome.ref, appHome.packageName, 'android', appId), [
+    'press',
+    appHome.ref,
+  ]);
+  assert.deepEqual(focusNextPressArgs('e3', imeKey.packageName, 'ios', appId), ['press', '@e3']);
+  assert.deepEqual(focusNextPressArgs(imeKey.ref, undefined, 'android', appId), [
+    'press',
+    imeKey.ref,
+  ]);
+  assert.deepEqual(focusNextPressArgs(imeKey.ref, imeKey.packageName, 'android', undefined), [
+    'press',
+    imeKey.ref,
+  ]);
+});
+
+test('device_focus_next presses the IME key on Android instead of reporting it missing', async () => {
+  _setActiveSessionForTest({
+    name: 'gh-736',
+    platform: 'android',
+    appId,
+    openedAt: '2026-08-10T00:00:00.000Z',
+  });
+  const dispatched: string[][] = [];
+  _setRunAgentDeviceForTest(async (cliArgs: string[]) => {
+    dispatched.push(cliArgs);
+    if (cliArgs[0] === 'snapshot') {
+      return okResult({ nodes: [appHome, imeKey] });
+    }
+    return cliArgs.includes('--include-system-ui')
+      ? okResult({ tapped: true, method: 'accessibility-action' })
+      : outsideAppWindowFailResult({
+          ref: imeKey.ref,
+          packageName: imeKey.packageName,
+          appId,
+        });
+  });
+
+  const result = await createDeviceFocusNextHandler()({});
+  const envelope = JSON.parse(result.content[0].text) as {
+    ok: boolean;
+    meta: { keyUsed: string };
+  };
+  assert.equal(result.isError, undefined);
+  assert.equal(envelope.ok, true);
+  assert.equal(envelope.meta.keyUsed, 'Done');
+  assert.deepEqual(dispatched[1], ['press', imeKey.ref, '--include-system-ui']);
+});
+
+test('device_focus_next reports a refused key press truthfully, not as a missing key', async () => {
+  _setActiveSessionForTest({
+    name: 'gh-736',
+    platform: 'android',
+    appId,
+    openedAt: '2026-08-10T00:00:00.000Z',
+  });
+  _setRunAgentDeviceForTest(async (cliArgs: string[]) =>
+    cliArgs[0] === 'snapshot'
+      ? okResult({ nodes: [appHome, imeKey] })
+      : outsideAppWindowFailResult({
+          ref: imeKey.ref,
+          packageName: imeKey.packageName,
+          appId,
+        }),
+  );
+
+  const result = await createDeviceFocusNextHandler()({});
+  const envelope = JSON.parse(result.content[0].text) as { ok: boolean; code: string };
+  assert.equal(result.isError, true);
+  assert.equal(envelope.code, 'OUTSIDE_APP_WINDOW');
+  assert.notEqual(envelope.code, 'KEYBOARD_NEXT_NOT_FOUND');
 });
 
 test('healing a stale ref onto system chrome is refused, not silently retargeted', () => {

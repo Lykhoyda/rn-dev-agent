@@ -28820,6 +28820,11 @@ function createDevicePinchHandler() {
 function createDeviceBackHandler() {
   return withSession(() => runNative(["back"]));
 }
+function focusNextPressArgs(ref, nodePackageName, platform, appId) {
+  const target = ref.startsWith("@") ? ref : `@${ref}`;
+  const outsideAppKeyboard = platform === "android" && nodePackageName !== void 0 && appId !== void 0 && nodePackageName !== appId;
+  return outsideAppKeyboard ? ["press", target, "--include-system-ui"] : ["press", target];
+}
 function createDeviceFocusNextHandler() {
   return withSession(async () => {
     const snap = await fetchSnapshotNodes();
@@ -28833,13 +28838,17 @@ function createDeviceFocusNextHandler() {
       return failResult("Snapshot unavailable \u2014 cannot look for keyboard key. Retry after device_snapshot action=open/snapshot.", { code: "SNAPSHOT_UNAVAILABLE" });
     }
     const { nodes, recoveredTier } = snap;
+    const session2 = getActiveSession();
+    let lastPressFailure = null;
     for (const label of NEXT_KEY_LABELS) {
       const match = nodes.find((n) => n.label === label);
       if (!match)
         continue;
-      const pressResult = await runNative(["press", `@${match.ref}`]);
-      if (pressResult.isError)
+      const pressResult = await runNative(focusNextPressArgs(match.ref, match.packageName, session2?.platform, session2?.appId));
+      if (pressResult.isError) {
+        lastPressFailure = pressResult;
         continue;
+      }
       try {
         const envelope = JSON.parse(pressResult.content[0].text);
         const meta = { keyUsed: label, ref: match.ref };
@@ -28852,6 +28861,8 @@ function createDeviceFocusNextHandler() {
         return pressResult;
       }
     }
+    if (lastPressFailure)
+      return lastPressFailure;
     return failResult(`No keyboard ${NEXT_KEY_LABELS.join("/")} key visible in the accessibility tree. Tried: ${NEXT_KEY_LABELS.join(", ")}`, {
       code: "KEYBOARD_NEXT_NOT_FOUND",
       hint: 'Keyboard may be dismissed, or the field may be the last in the form. If an in-app "Next" button is visible, prefer device_press on the next input @ref directly.'

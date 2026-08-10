@@ -1476,6 +1476,25 @@ export function createDeviceBackHandler(): (args: Record<string, never>) => Prom
 // should use device_press on the next input @ref directly instead of this tool.
 const NEXT_KEY_LABELS = ['Go', 'Done', 'Return', 'Next'];
 
+// GH #736: an Android IME key lives in the input-method package, never the
+// session app, so the app-window ownership gate would refuse it. This grant is
+// per-call and per-ref (no authorizeSystemUiRef, so nothing persists for a
+// later device_press) and only ever covers the keyboard key this tool matched.
+export function focusNextPressArgs(
+  ref: string,
+  nodePackageName: string | undefined,
+  platform: string | undefined,
+  appId: string | undefined,
+): string[] {
+  const target = ref.startsWith('@') ? ref : `@${ref}`;
+  const outsideAppKeyboard =
+    platform === 'android' &&
+    nodePackageName !== undefined &&
+    appId !== undefined &&
+    nodePackageName !== appId;
+  return outsideAppKeyboard ? ['press', target, '--include-system-ui'] : ['press', target];
+}
+
 export function createDeviceFocusNextHandler(): (
   args: Record<string, never>,
 ) => Promise<ToolResult> {
@@ -1499,11 +1518,18 @@ export function createDeviceFocusNextHandler(): (
     }
 
     const { nodes, recoveredTier } = snap;
+    const session = getActiveSession();
+    let lastPressFailure: ToolResult | null = null;
     for (const label of NEXT_KEY_LABELS) {
       const match = nodes.find((n) => n.label === label);
       if (!match) continue;
-      const pressResult = await runNative(['press', `@${match.ref}`]);
-      if (pressResult.isError) continue; // Match found but tap failed — try next label
+      const pressResult = await runNative(
+        focusNextPressArgs(match.ref, match.packageName, session?.platform, session?.appId),
+      );
+      if (pressResult.isError) {
+        lastPressFailure = pressResult;
+        continue; // Match found but tap failed — try next label
+      }
       try {
         const envelope = JSON.parse(pressResult.content[0].text) as { ok: true; data: unknown };
         const meta: Record<string, unknown> = { keyUsed: label, ref: match.ref };
@@ -1516,6 +1542,8 @@ export function createDeviceFocusNextHandler(): (
         return pressResult;
       }
     }
+
+    if (lastPressFailure) return lastPressFailure;
 
     return failResult(
       `No keyboard ${NEXT_KEY_LABELS.join('/')} key visible in the accessibility tree. Tried: ${NEXT_KEY_LABELS.join(', ')}`,
