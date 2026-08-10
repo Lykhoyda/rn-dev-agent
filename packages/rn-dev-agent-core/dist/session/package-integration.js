@@ -3394,11 +3394,22 @@ function removeManagedPortFlag(value) {
     command.splice(index, separator >= 0 ? 1 : 2);
   }
 }
+function authorityBoundReverseTunnel(binding) {
+  const reverse = binding.androidMetroReverse;
+  if (!reverse || typeof reverse !== 'object') return false;
+  const exact = 'tcp:' + binding.metroPort;
+  return reverse.platform === 'android'
+    && reverse.deviceId === binding.deviceId
+    && reverse.metroPort === binding.metroPort
+    && reverse.local === exact
+    && reverse.remote === exact;
+}
 function managedMetroProxyUrl(binding) {
   if (binding.platform === 'ios') return 'http://127.0.0.1:' + binding.metroPort;
   if (/^emulator-\d+$/.test(binding.deviceId)) return 'http://10.0.2.2:' + binding.metroPort;
   if (typeof binding.devClientUrl !== 'string') {
-    failBuild(2, 'DEV_CLIENT_ENDPOINT_NOT_FOUND: physical Android session requires an exact Dev Client URL');
+    if (authorityBoundReverseTunnel(binding)) return 'http://127.0.0.1:' + binding.metroPort;
+    failBuild(2, 'DEV_CLIENT_ENDPOINT_NOT_FOUND: physical Android session requires an exact Dev Client URL or a proven adb reverse tunnel to the authority-bound Metro port');
   }
   let metroUrl = null;
   try {

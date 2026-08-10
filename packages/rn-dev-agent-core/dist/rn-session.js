@@ -508,16 +508,23 @@ async function main() {
                 status.registry.cancelOperation(currentOperation);
                 throw error;
             }
+            const metroPort = Number(status.bindings.metroPort);
+            const metroReverse = status.bindings.androidMetroReverse;
             process.stdout.write(`${JSON.stringify({
                 platform,
                 deviceId: device.deviceId,
                 appId: device.appId,
-                metroPort: Number(status.bindings.metroPort),
+                metroPort,
                 sessionId: status.sessionId,
                 buildToken,
                 buildKind,
                 ...(platform === 'ios' ? { simulator: true } : {}),
                 ...(typeof device.devClientUrl === 'string' ? { devClientUrl: device.devClientUrl } : {}),
+                ...(metroReverse &&
+                    metroReverse.deviceId === device.deviceId &&
+                    metroReverse.metroPort === metroPort
+                    ? { androidMetroReverse: metroReverse }
+                    : {}),
             })}\n`);
             return;
         }

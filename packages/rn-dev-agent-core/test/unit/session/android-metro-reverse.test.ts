@@ -125,6 +125,61 @@ test('a persisted run-owned forward is verified and exact cleanup preserves unre
   assert.equal(adb.forwards.get('tcp:9000'), 'tcp:9001');
 });
 
+test('cleanup treats a disconnected physical device as already clean', () => {
+  for (const failure of [
+    "adb: error: device 'physical-serial' not found",
+    'error: device offline',
+    'error: no devices/emulators found',
+  ]) {
+    const calls: string[][] = [];
+    removeAndroidMetroReverse(binding(), {
+      execute(_file, args) {
+        calls.push(args);
+        throw new Error(failure);
+      },
+    });
+    assert.deepEqual(calls, [['-s', 'physical-serial', 'reverse', '--list']]);
+  }
+});
+
+test('cleanup keeps refusing when adb itself fails on a reachable device', () => {
+  assert.throws(
+    () =>
+      removeAndroidMetroReverse(binding(), {
+        execute() {
+          throw new Error("adb: error: protocol fault (couldn't read status): connection reset");
+        },
+      }),
+    /PHYSICAL_ANDROID_METRO_UNREACHABLE.*protocol fault/,
+  );
+  const adb = fixture({ forwards: [['tcp:8397', 'tcp:8397']] });
+  assert.throws(
+    () =>
+      removeAndroidMetroReverse(binding(), {
+        execute(file, args) {
+          if (args.includes('--remove')) throw new Error('adb: error: cannot remove listener');
+          return adb.execute(file, args);
+        },
+      }),
+    /PHYSICAL_ANDROID_METRO_UNREACHABLE.*cannot remove listener/,
+  );
+});
+
+test('establishing reachability still fails closed when the exact device is disconnected', () => {
+  assert.throws(
+    () =>
+      ensureAndroidMetroReverse(
+        { deviceId: 'physical-serial', metroPort: 8397 },
+        {
+          execute() {
+            throw new Error("adb: error: device 'physical-serial' not found");
+          },
+        },
+      ),
+    /PHYSICAL_ANDROID_METRO_UNREACHABLE/,
+  );
+});
+
 test('cleanup refuses a run-owned local endpoint that changed to a foreign destination', () => {
   const adb = fixture({ forwards: [['tcp:8397', 'tcp:9000']] });
   assert.throws(

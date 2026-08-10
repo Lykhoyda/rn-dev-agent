@@ -28,6 +28,7 @@ function createFixture() {
   const adbCount = join(root, 'adb-count');
   const stateDir = join(root, 'non-default-authority-state');
   const stateHomeCalls = join(root, 'state-home-calls.jsonl');
+  const proxyRecord = join(root, 'expo-proxy-url');
   mkdirSync(integration, { recursive: true });
   mkdirSync(bin, { recursive: true });
   writeFileSync(adapter, renderProjectAdapter(), { mode: 0o755 });
@@ -78,6 +79,7 @@ process.stdout.write('List of devices attached\\n${SERIAL} device usb:1-1 produc
     `#!/usr/bin/env node
 const fs=require('node:fs');
 fs.writeFileSync(process.env.EXPO_RECORD,JSON.stringify({args:process.argv.slice(2),androidSerial:process.env.ANDROID_SERIAL,metroPort:process.env.RCT_METRO_PORT,gradlePort:process.env.ORG_GRADLE_PROJECT_reactNativeDevServerPort,sessionId:process.env.RN_DEV_AGENT_SESSION_ID}));
+fs.writeFileSync(process.env.PROXY_RECORD,String(process.env.EXPO_PACKAGER_PROXY_URL||''));
 if(process.env.ADAPTER_MODE==='failure')process.exit(23);
 if(process.env.ADAPTER_MODE==='sigint'){process.kill(process.ppid,'SIGINT');setTimeout(()=>process.exit(0),100);}
 `,
@@ -91,7 +93,11 @@ const args=process.argv.slice(2);
 fs.appendFileSync(process.env.SESSION_CALLS,JSON.stringify(args)+'\\n');
 fs.appendFileSync(process.env.STATE_HOME_CALLS,JSON.stringify({command:args[0],stateDir:process.env.RN_DEV_AGENT_STATE_DIR})+'\\n');
 if(args[0]==='prepare-build'){
-  process.stdout.write(JSON.stringify({platform:'android',deviceId:'${SERIAL}',appId:'com.rndevagent.testapp',metroPort:8397,sessionId:'session-android-exact',buildToken:args[2],devClientUrl:'rndatest://expo-development-client/?url=http%3A%2F%2F192.0.2.10%3A8397'}));
+  const base={platform:'android',deviceId:'${SERIAL}',appId:'com.rndevagent.testapp',metroPort:8397,sessionId:'session-android-exact',buildToken:args[2]};
+  const reverse={platform:'android',deviceId:'${SERIAL}',metroPort:8397,local:'tcp:8397',remote:'tcp:8397'};
+  if(process.env.PREPARE_MODE==='reverse-tunnel')process.stdout.write(JSON.stringify({...base,androidMetroReverse:reverse}));
+  else if(process.env.PREPARE_MODE==='no-endpoint')process.stdout.write(JSON.stringify(base));
+  else process.stdout.write(JSON.stringify({...base,devClientUrl:'rndatest://expo-development-client/?url=http%3A%2F%2F192.0.2.10%3A8397'}));
 }else if(args[0]==='resolve-expo-android-device'){
   import(pathToFileURL(process.env.RESOLVER_MODULE).href).then(({resolveExpoAndroidDevice})=>process.stdout.write(JSON.stringify(resolveExpoAndroidDevice(args[1])))).catch((error)=>{process.stderr.write(String(error.message)+'\\n');process.exit(2);});
 }else if(args[0]==='complete-build'){
@@ -115,8 +121,9 @@ if(args[0]==='prepare-build'){
     RESOLVER_MODULE: new URL('../../../dist/session/expo-android-device.js', import.meta.url)
       .pathname,
     STATE_HOME_CALLS: stateHomeCalls,
+    PROXY_RECORD: proxyRecord,
   };
-  return { root, calls, expoRecord, stateDir, stateHomeCalls, environment };
+  return { root, calls, expoRecord, proxyRecord, stateDir, stateHomeCalls, environment };
 }
 
 function readJsonLines(path: string): unknown[] {
@@ -184,6 +191,53 @@ test('literal pnpm android executes the generated adapter with ephemeral Expo na
     );
   } finally {
     rmSync(fixture.root, { force: true, recursive: true });
+  }
+});
+
+test('physical Android Expo builds route through the proven reverse tunnel and still refuse an unproven endpoint', () => {
+  const tunnelled = createFixture();
+  try {
+    const result = spawnSync('pnpm', ['android'], {
+      cwd: tunnelled.root,
+      encoding: 'utf8',
+      env: { ...tunnelled.environment, PREPARE_MODE: 'reverse-tunnel' },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(readFileSync(tunnelled.proxyRecord, 'utf8'), 'http://127.0.0.1:8397');
+  } finally {
+    rmSync(tunnelled.root, { force: true, recursive: true });
+  }
+
+  const devClient = createFixture();
+  try {
+    const result = spawnSync('pnpm', ['android'], {
+      cwd: devClient.root,
+      encoding: 'utf8',
+      env: devClient.environment,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(readFileSync(devClient.proxyRecord, 'utf8'), 'http://192.0.2.10:8397');
+  } finally {
+    rmSync(devClient.root, { force: true, recursive: true });
+  }
+
+  const unproven = createFixture();
+  try {
+    const result = spawnSync('pnpm', ['android'], {
+      cwd: unproven.root,
+      encoding: 'utf8',
+      env: { ...unproven.environment, PREPARE_MODE: 'no-endpoint' },
+    });
+    assert.notEqual(result.status, 0);
+    assert.equal(existsSync(unproven.proxyRecord), false);
+    assert.match(
+      readJsonLines(unproven.calls)
+        .map((call) => (call as string[]).join(' '))
+        .join('\n'),
+      /abort-build/,
+    );
+  } finally {
+    rmSync(unproven.root, { force: true, recursive: true });
   }
 });
 

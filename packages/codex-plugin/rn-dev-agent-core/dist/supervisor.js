@@ -11768,11 +11768,21 @@ function endpoint(port) {
   }
   return `tcp:${port}`;
 }
+function describeExecutionFailure(error2) {
+  const parts = error2 && typeof error2 === "object" ? [
+    error2.message,
+    error2.stderr,
+    error2.stdout
+  ] : [String(error2)];
+  return parts.map((part) => typeof part === "string" ? part : Buffer.isBuffer(part) ? part.toString("utf8") : "").filter((part) => part.length > 0).join("\n");
+}
 function adb(deviceId, args, dependencies) {
   try {
     return execute(dependencies, "adb", ["-s", deviceId, ...args]);
   } catch (error2) {
-    throw new Error(`PHYSICAL_ANDROID_METRO_UNREACHABLE: adb could not configure Metro reachability on exact device ${deviceId}: ${error2 instanceof Error ? error2.message : String(error2)}`);
+    const details = describeExecutionFailure(error2);
+    const message = `PHYSICAL_ANDROID_METRO_UNREACHABLE: adb could not configure Metro reachability on exact device ${deviceId}: ${details || String(error2)}`;
+    throw DEVICE_DISCONNECTED.test(details) ? new AndroidDeviceDisconnectedError(message) : new Error(message);
   }
 }
 function isPhysicalAndroid(deviceId, dependencies) {
@@ -11793,9 +11803,15 @@ function assertBindingMatches(binding, deviceId, metroPort) {
   }
 }
 function removeExactForwardAfterFailedSetup(deviceId, exact, dependencies) {
-  const current = listReverseForwards(deviceId, dependencies).filter((forward) => forward.local === exact);
-  if (current.length === 1 && current[0].remote === exact) {
-    adb(deviceId, ["reverse", "--remove", exact], dependencies);
+  try {
+    const current = listReverseForwards(deviceId, dependencies).filter((forward) => forward.local === exact);
+    if (current.length === 1 && current[0].remote === exact) {
+      adb(deviceId, ["reverse", "--remove", exact], dependencies);
+    }
+  } catch (error2) {
+    if (error2 instanceof AndroidDeviceDisconnectedError)
+      return;
+    throw error2;
   }
 }
 function ensureAndroidMetroReverse(input, dependencies = {}) {
@@ -11847,20 +11863,30 @@ function ensureAndroidMetroReverse(input, dependencies = {}) {
 }
 function removeAndroidMetroReverse(binding, dependencies = {}) {
   assertBindingMatches(binding, binding.deviceId, binding.metroPort);
-  const matchingLocal = listReverseForwards(binding.deviceId, dependencies).filter((forward) => forward.local === binding.local);
-  if (matchingLocal.length === 0)
-    return;
-  if (matchingLocal.length !== 1 || matchingLocal[0].remote !== binding.remote) {
-    throw new Error(`PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN: ${binding.local} on exact device ${binding.deviceId} changed to a foreign forward; refusing to remove it`);
-  }
-  adb(binding.deviceId, ["reverse", "--remove", binding.local], dependencies);
-  if (listReverseForwards(binding.deviceId, dependencies).some((forward) => forward.local === binding.local)) {
-    throw new Error(`PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN: session-owned ${binding.local} remains on exact device ${binding.deviceId}`);
+  try {
+    const matchingLocal = listReverseForwards(binding.deviceId, dependencies).filter((forward) => forward.local === binding.local);
+    if (matchingLocal.length === 0)
+      return;
+    if (matchingLocal.length !== 1 || matchingLocal[0].remote !== binding.remote) {
+      throw new Error(`PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN: ${binding.local} on exact device ${binding.deviceId} changed to a foreign forward; refusing to remove it`);
+    }
+    adb(binding.deviceId, ["reverse", "--remove", binding.local], dependencies);
+    if (listReverseForwards(binding.deviceId, dependencies).some((forward) => forward.local === binding.local)) {
+      throw new Error(`PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN: session-owned ${binding.local} remains on exact device ${binding.deviceId}`);
+    }
+  } catch (error2) {
+    if (error2 instanceof AndroidDeviceDisconnectedError)
+      return;
+    throw error2;
   }
 }
+var AndroidDeviceDisconnectedError, DEVICE_DISCONNECTED;
 var init_android_metro_reverse = __esm({
   "packages/rn-dev-agent-core/dist/session/android-metro-reverse.js"() {
     "use strict";
+    AndroidDeviceDisconnectedError = class extends Error {
+    };
+    DEVICE_DISCONNECTED = /device\s+('[^']*'\s+)?not found|no devices\/emulators found|device offline/i;
   }
 });
 
@@ -17390,11 +17416,22 @@ function removeManagedPortFlag(value) {
     command.splice(index, separator >= 0 ? 1 : 2);
   }
 }
+function authorityBoundReverseTunnel(binding) {
+  const reverse = binding.androidMetroReverse;
+  if (!reverse || typeof reverse !== 'object') return false;
+  const exact = 'tcp:' + binding.metroPort;
+  return reverse.platform === 'android'
+    && reverse.deviceId === binding.deviceId
+    && reverse.metroPort === binding.metroPort
+    && reverse.local === exact
+    && reverse.remote === exact;
+}
 function managedMetroProxyUrl(binding) {
   if (binding.platform === 'ios') return 'http://127.0.0.1:' + binding.metroPort;
   if (/^emulator-\d+$/.test(binding.deviceId)) return 'http://10.0.2.2:' + binding.metroPort;
   if (typeof binding.devClientUrl !== 'string') {
-    failBuild(2, 'DEV_CLIENT_ENDPOINT_NOT_FOUND: physical Android session requires an exact Dev Client URL');
+    if (authorityBoundReverseTunnel(binding)) return 'http://127.0.0.1:' + binding.metroPort;
+    failBuild(2, 'DEV_CLIENT_ENDPOINT_NOT_FOUND: physical Android session requires an exact Dev Client URL or a proven adb reverse tunnel to the authority-bound Metro port');
   }
   let metroUrl = null;
   try {

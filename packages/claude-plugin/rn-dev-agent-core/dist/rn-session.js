@@ -17256,11 +17256,24 @@ function endpoint(port) {
   }
   return `tcp:${port}`;
 }
+var AndroidDeviceDisconnectedError = class extends Error {
+};
+var DEVICE_DISCONNECTED = /device\s+('[^']*'\s+)?not found|no devices\/emulators found|device offline/i;
+function describeExecutionFailure(error) {
+  const parts = error && typeof error === "object" ? [
+    error.message,
+    error.stderr,
+    error.stdout
+  ] : [String(error)];
+  return parts.map((part) => typeof part === "string" ? part : Buffer.isBuffer(part) ? part.toString("utf8") : "").filter((part) => part.length > 0).join("\n");
+}
 function adb(deviceId, args, dependencies) {
   try {
     return execute(dependencies, "adb", ["-s", deviceId, ...args]);
   } catch (error) {
-    throw new Error(`PHYSICAL_ANDROID_METRO_UNREACHABLE: adb could not configure Metro reachability on exact device ${deviceId}: ${error instanceof Error ? error.message : String(error)}`);
+    const details = describeExecutionFailure(error);
+    const message = `PHYSICAL_ANDROID_METRO_UNREACHABLE: adb could not configure Metro reachability on exact device ${deviceId}: ${details || String(error)}`;
+    throw DEVICE_DISCONNECTED.test(details) ? new AndroidDeviceDisconnectedError(message) : new Error(message);
   }
 }
 function isPhysicalAndroid(deviceId, dependencies) {
@@ -17281,9 +17294,15 @@ function assertBindingMatches(binding, deviceId, metroPort) {
   }
 }
 function removeExactForwardAfterFailedSetup(deviceId, exact, dependencies) {
-  const current = listReverseForwards(deviceId, dependencies).filter((forward) => forward.local === exact);
-  if (current.length === 1 && current[0].remote === exact) {
-    adb(deviceId, ["reverse", "--remove", exact], dependencies);
+  try {
+    const current = listReverseForwards(deviceId, dependencies).filter((forward) => forward.local === exact);
+    if (current.length === 1 && current[0].remote === exact) {
+      adb(deviceId, ["reverse", "--remove", exact], dependencies);
+    }
+  } catch (error) {
+    if (error instanceof AndroidDeviceDisconnectedError)
+      return;
+    throw error;
   }
 }
 function ensureAndroidMetroReverse(input, dependencies = {}) {
@@ -17335,15 +17354,21 @@ function ensureAndroidMetroReverse(input, dependencies = {}) {
 }
 function removeAndroidMetroReverse(binding, dependencies = {}) {
   assertBindingMatches(binding, binding.deviceId, binding.metroPort);
-  const matchingLocal = listReverseForwards(binding.deviceId, dependencies).filter((forward) => forward.local === binding.local);
-  if (matchingLocal.length === 0)
-    return;
-  if (matchingLocal.length !== 1 || matchingLocal[0].remote !== binding.remote) {
-    throw new Error(`PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN: ${binding.local} on exact device ${binding.deviceId} changed to a foreign forward; refusing to remove it`);
-  }
-  adb(binding.deviceId, ["reverse", "--remove", binding.local], dependencies);
-  if (listReverseForwards(binding.deviceId, dependencies).some((forward) => forward.local === binding.local)) {
-    throw new Error(`PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN: session-owned ${binding.local} remains on exact device ${binding.deviceId}`);
+  try {
+    const matchingLocal = listReverseForwards(binding.deviceId, dependencies).filter((forward) => forward.local === binding.local);
+    if (matchingLocal.length === 0)
+      return;
+    if (matchingLocal.length !== 1 || matchingLocal[0].remote !== binding.remote) {
+      throw new Error(`PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN: ${binding.local} on exact device ${binding.deviceId} changed to a foreign forward; refusing to remove it`);
+    }
+    adb(binding.deviceId, ["reverse", "--remove", binding.local], dependencies);
+    if (listReverseForwards(binding.deviceId, dependencies).some((forward) => forward.local === binding.local)) {
+      throw new Error(`PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN: session-owned ${binding.local} remains on exact device ${binding.deviceId}`);
+    }
+  } catch (error) {
+    if (error instanceof AndroidDeviceDisconnectedError)
+      return;
+    throw error;
   }
 }
 
@@ -17790,16 +17815,19 @@ async function main() {
         status.registry.cancelOperation(currentOperation);
         throw error;
       }
+      const metroPort = Number(status.bindings.metroPort);
+      const metroReverse = status.bindings.androidMetroReverse;
       process.stdout.write(`${JSON.stringify({
         platform,
         deviceId: device.deviceId,
         appId: device.appId,
-        metroPort: Number(status.bindings.metroPort),
+        metroPort,
         sessionId: status.sessionId,
         buildToken,
         buildKind,
         ...platform === "ios" ? { simulator: true } : {},
-        ...typeof device.devClientUrl === "string" ? { devClientUrl: device.devClientUrl } : {}
+        ...typeof device.devClientUrl === "string" ? { devClientUrl: device.devClientUrl } : {},
+        ...metroReverse && metroReverse.deviceId === device.deviceId && metroReverse.metroPort === metroPort ? { androidMetroReverse: metroReverse } : {}
       })}
 `);
       return;

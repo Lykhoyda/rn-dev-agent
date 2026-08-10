@@ -38,6 +38,28 @@ function endpoint(port: number): string {
   return `tcp:${port}`;
 }
 
+class AndroidDeviceDisconnectedError extends Error {}
+
+const DEVICE_DISCONNECTED =
+  /device\s+('[^']*'\s+)?not found|no devices\/emulators found|device offline/i;
+
+function describeExecutionFailure(error: unknown): string {
+  const parts: unknown[] =
+    error && typeof error === 'object'
+      ? [
+          (error as { message?: unknown }).message,
+          (error as { stderr?: unknown }).stderr,
+          (error as { stdout?: unknown }).stdout,
+        ]
+      : [String(error)];
+  return parts
+    .map((part) =>
+      typeof part === 'string' ? part : Buffer.isBuffer(part) ? part.toString('utf8') : '',
+    )
+    .filter((part) => part.length > 0)
+    .join('\n');
+}
+
 function adb(
   deviceId: string,
   args: string[],
@@ -46,11 +68,13 @@ function adb(
   try {
     return execute(dependencies, 'adb', ['-s', deviceId, ...args]);
   } catch (error) {
-    throw new Error(
-      `PHYSICAL_ANDROID_METRO_UNREACHABLE: adb could not configure Metro reachability on exact device ${deviceId}: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
+    const details = describeExecutionFailure(error);
+    const message = `PHYSICAL_ANDROID_METRO_UNREACHABLE: adb could not configure Metro reachability on exact device ${deviceId}: ${
+      details || String(error)
+    }`;
+    throw DEVICE_DISCONNECTED.test(details)
+      ? new AndroidDeviceDisconnectedError(message)
+      : new Error(message);
   }
 }
 
@@ -106,11 +130,16 @@ function removeExactForwardAfterFailedSetup(
   exact: string,
   dependencies: AndroidMetroReverseDependencies,
 ): void {
-  const current = listReverseForwards(deviceId, dependencies).filter(
-    (forward) => forward.local === exact,
-  );
-  if (current.length === 1 && current[0]!.remote === exact) {
-    adb(deviceId, ['reverse', '--remove', exact], dependencies);
+  try {
+    const current = listReverseForwards(deviceId, dependencies).filter(
+      (forward) => forward.local === exact,
+    );
+    if (current.length === 1 && current[0]!.remote === exact) {
+      adb(deviceId, ['reverse', '--remove', exact], dependencies);
+    }
+  } catch (error) {
+    if (error instanceof AndroidDeviceDisconnectedError) return;
+    throw error;
   }
 }
 
@@ -187,23 +216,28 @@ export function removeAndroidMetroReverse(
   dependencies: AndroidMetroReverseDependencies = {},
 ): void {
   assertBindingMatches(binding, binding.deviceId, binding.metroPort);
-  const matchingLocal = listReverseForwards(binding.deviceId, dependencies).filter(
-    (forward) => forward.local === binding.local,
-  );
-  if (matchingLocal.length === 0) return;
-  if (matchingLocal.length !== 1 || matchingLocal[0]!.remote !== binding.remote) {
-    throw new Error(
-      `PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN: ${binding.local} on exact device ${binding.deviceId} changed to a foreign forward; refusing to remove it`,
-    );
-  }
-  adb(binding.deviceId, ['reverse', '--remove', binding.local], dependencies);
-  if (
-    listReverseForwards(binding.deviceId, dependencies).some(
+  try {
+    const matchingLocal = listReverseForwards(binding.deviceId, dependencies).filter(
       (forward) => forward.local === binding.local,
-    )
-  ) {
-    throw new Error(
-      `PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN: session-owned ${binding.local} remains on exact device ${binding.deviceId}`,
     );
+    if (matchingLocal.length === 0) return;
+    if (matchingLocal.length !== 1 || matchingLocal[0]!.remote !== binding.remote) {
+      throw new Error(
+        `PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN: ${binding.local} on exact device ${binding.deviceId} changed to a foreign forward; refusing to remove it`,
+      );
+    }
+    adb(binding.deviceId, ['reverse', '--remove', binding.local], dependencies);
+    if (
+      listReverseForwards(binding.deviceId, dependencies).some(
+        (forward) => forward.local === binding.local,
+      )
+    ) {
+      throw new Error(
+        `PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN: session-owned ${binding.local} remains on exact device ${binding.deviceId}`,
+      );
+    }
+  } catch (error) {
+    if (error instanceof AndroidDeviceDisconnectedError) return;
+    throw error;
   }
 }
