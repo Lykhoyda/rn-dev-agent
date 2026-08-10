@@ -7,7 +7,10 @@ import {
   type FlowParkOpts,
 } from '../../dist/tools/maestro-run.js';
 import type { MaestroDispatch } from '../../dist/tools/maestro-dispatch.js';
-import { ExactAndroidDeviceRequiredError } from '../../dist/runners/release-android-slot.js';
+import {
+  ExactAndroidDeviceRequiredError,
+  releaseAndroidInteractionSlot,
+} from '../../dist/runners/release-android-slot.js';
 import { authorityErrorMeta, SessionAuthorityError } from '../../dist/session/registry.js';
 
 const SERIAL = 'emulator-5580';
@@ -105,6 +108,17 @@ test('GH#653 classifies only the structured UiAutomation session-creation error 
     ),
     false,
     'an app-log record containing the signature must not trigger recovery',
+  );
+  assert.equal(
+    isUiAutomationNotConnectedSessionCreationFailure(
+      Object.assign(new Error('runner exited 0'), {
+        code: 0,
+        stdout: '',
+        stderr: UIAUTOMATION_FAILURE,
+      }),
+    ),
+    false,
+    'a zero exit code means the flow already passed — never recover',
   );
   assert.equal(
     isUiAutomationNotConnectedSessionCreationFailure(
@@ -477,6 +491,70 @@ test('GH#653 an app-log copy of the wedge signature never releases or retries', 
   assert.equal(executions, 1);
   assert.equal(releases, 0);
   assert.equal(body.meta.androidUiAutomationRecovery, undefined);
+});
+
+test('GH#653 a zero-exit structured wedge record never releases or retries', async () => {
+  let executions = 0;
+  let releases = 0;
+  const handler = baseHandler({
+    execFile: async () => {
+      executions += 1;
+      throw Object.assign(new Error('runner exited 0'), {
+        code: 0,
+        stdout: '',
+        stderr: UIAUTOMATION_FAILURE,
+      });
+    },
+    releaseAndroidSlot: async () => {
+      releases += 1;
+      return { warnings: [] };
+    },
+  });
+
+  const body = envelope(await handler(runArgs));
+  assert.equal(body.ok, false);
+  assert.equal(executions, 1);
+  assert.equal(releases, 0);
+  assert.equal(body.meta.androidUiAutomationRecovery, undefined);
+});
+
+test('GH#653 an exact-serial resolver throw refuses without mutating the device', async () => {
+  const mutations: string[] = [];
+  const failing = () => {
+    throw new Error('adb resolution should not be reached');
+  };
+  const err = await releaseAndroidInteractionSlot(
+    { deviceId: SERIAL },
+    {
+      resolveSerial: () => {
+        throw new Error('adb devices failed: no adb in PATH');
+      },
+      stopOwnRunner: async () => {
+        mutations.push('stopOwnRunner');
+      },
+      adbForceStop: async (pkg) => {
+        mutations.push(`forceStop:${pkg}`);
+      },
+      readDaemonPid: () => null,
+      isAlive: () => false,
+      protectedPids: () => ({ selfPid: 1, parentPid: 2 }),
+      kill: () => mutations.push('kill'),
+      fileExists: () => false,
+      removeFile: () => mutations.push('removeFile'),
+      delay: async () => {},
+      killLegacy: () => true,
+      now: failing,
+    },
+  ).then(
+    () => null,
+    (e: unknown) => e,
+  );
+
+  assert.ok(err instanceof ExactAndroidDeviceRequiredError);
+  assert.equal(err.code, 'EXACT_ANDROID_DEVICE_REQUIRED');
+  assert.match(err.message, /No device was mutated/);
+  assert.match(String((err.cause as Error).message), /no adb in PATH/);
+  assert.deepEqual(mutations, []);
 });
 
 test('GH#653 unrelated Maestro failures never release or retry', async () => {

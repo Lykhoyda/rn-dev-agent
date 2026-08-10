@@ -99,13 +99,25 @@ function defaultDeps(): ReleaseAndroidSlotDeps {
 export class ExactAndroidDeviceRequiredError extends Error {
   readonly code = 'EXACT_ANDROID_DEVICE_REQUIRED' as const;
 
-  constructor() {
+  constructor(cause?: unknown) {
     super(
       'Refusing to release the Android interaction slot without an exact serial. ' +
         'When multiple adb targets are attached, open or bind a session to the intended device, ' +
         'pass deviceId, or set ANDROID_SERIAL, then retry. No device was mutated.',
+      cause === undefined ? undefined : { cause },
     );
     this.name = 'ExactAndroidDeviceRequiredError';
+  }
+}
+
+function resolveExactSerialArgs(
+  deps: ReleaseAndroidSlotDeps,
+  deviceId: string | undefined,
+): string[] {
+  try {
+    return deps.resolveSerial(deviceId);
+  } catch (err) {
+    throw new ExactAndroidDeviceRequiredError(err);
   }
 }
 
@@ -136,7 +148,7 @@ export async function releaseAndroidInteractionSlot(
   deps: ReleaseAndroidSlotDeps = defaultDeps(),
 ): Promise<ReleaseAndroidSlotResult> {
   opts.signal?.throwIfAborted();
-  const serialArgs = deps.resolveSerial(opts.deviceId);
+  const serialArgs = resolveExactSerialArgs(deps, opts.deviceId);
   const deviceId = exactSerial(opts.deviceId, serialArgs);
   const timings: Record<string, number> = {};
   const warnings: string[] = [];
