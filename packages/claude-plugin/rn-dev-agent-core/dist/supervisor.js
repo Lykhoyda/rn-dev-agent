@@ -30537,6 +30537,7 @@ var init_rn_android_runner_client = __esm({
 // packages/rn-dev-agent-core/dist/runners/release-android-slot.js
 var release_android_slot_exports = {};
 __export(release_android_slot_exports, {
+  ExactAndroidDeviceRequiredError: () => ExactAndroidDeviceRequiredError,
   OWNED_PACKAGES: () => OWNED_PACKAGES,
   isProtectedPid: () => isProtectedPid,
   releaseAndroidInteractionSlot: () => releaseAndroidInteractionSlot
@@ -30585,8 +30586,17 @@ function defaultDeps3() {
     now: () => Date.now()
   };
 }
+function exactSerial(deviceId, serialArgs) {
+  const serial = serialArgs.length === 2 && serialArgs[0] === "-s" ? serialArgs[1] : void 0;
+  if (!serial || serial !== (deviceId ?? serial) || serial.length > 256 || /\s/.test(serial)) {
+    throw new ExactAndroidDeviceRequiredError();
+  }
+  return serial;
+}
 async function releaseAndroidInteractionSlot(opts = {}, deps = defaultDeps3()) {
   opts.signal?.throwIfAborted();
+  const serialArgs = deps.resolveSerial(opts.deviceId);
+  const deviceId = exactSerial(opts.deviceId, serialArgs);
   const timings = {};
   const warnings = [];
   const forceStoppedPackages = [];
@@ -30595,7 +30605,7 @@ async function releaseAndroidInteractionSlot(opts = {}, deps = defaultDeps3()) {
   let stoppedOwnRunner = false;
   const tStop = deps.now();
   try {
-    await deps.stopOwnRunner(opts.deviceId, opts.signal);
+    await deps.stopOwnRunner(deviceId, opts.signal);
     opts.signal?.throwIfAborted();
     stoppedOwnRunner = true;
   } catch (err) {
@@ -30604,22 +30614,16 @@ async function releaseAndroidInteractionSlot(opts = {}, deps = defaultDeps3()) {
   }
   timings.stopOwnRunner = deps.now() - tStop;
   const tForceStop = deps.now();
-  try {
-    const serial = deps.resolveSerial(opts.deviceId);
-    for (const pkg of OWNED_PACKAGES) {
-      opts.signal?.throwIfAborted();
-      try {
-        await deps.adbForceStop(pkg, serial, opts.signal);
-        opts.signal?.throwIfAborted();
-        forceStoppedPackages.push(pkg);
-      } catch (err) {
-        opts.signal?.throwIfAborted();
-        warnings.push(`am force-stop ${pkg} failed: ${msg2(err)}`);
-      }
-    }
-  } catch (err) {
+  for (const pkg of OWNED_PACKAGES) {
     opts.signal?.throwIfAborted();
-    warnings.push(`resolveSerial failed: ${msg2(err)}`);
+    try {
+      await deps.adbForceStop(pkg, serialArgs, opts.signal);
+      opts.signal?.throwIfAborted();
+      forceStoppedPackages.push(pkg);
+    } catch (err) {
+      opts.signal?.throwIfAborted();
+      warnings.push(`am force-stop ${pkg} failed: ${msg2(err)}`);
+    }
   }
   timings.forceStop = deps.now() - tForceStop;
   const tLegacy = deps.now();
@@ -30663,6 +30667,7 @@ async function releaseAndroidInteractionSlot(opts = {}, deps = defaultDeps3()) {
   }
   timings.legacyDaemon = deps.now() - tLegacy;
   return {
+    deviceId,
     stoppedOwnRunner,
     forceStoppedPackages,
     killedDaemonPids,
@@ -30674,7 +30679,7 @@ async function releaseAndroidInteractionSlot(opts = {}, deps = defaultDeps3()) {
 function msg2(err) {
   return err instanceof Error ? err.message : String(err);
 }
-var execFile11, DAEMON_JSON2, DAEMON_LOCK2, DAEMON_FILES2, SIGKILL_GRACE_MS2, ADB_TIMEOUT_MS, OWNED_PACKAGES;
+var execFile11, DAEMON_JSON2, DAEMON_LOCK2, DAEMON_FILES2, SIGKILL_GRACE_MS2, ADB_TIMEOUT_MS, OWNED_PACKAGES, ExactAndroidDeviceRequiredError;
 var init_release_android_slot = __esm({
   "packages/rn-dev-agent-core/dist/runners/release-android-slot.js"() {
     "use strict";
@@ -30690,6 +30695,13 @@ var init_release_android_slot = __esm({
       "dev.lykhoyda.rndevagent.androidrunner.test",
       "dev.lykhoyda.rndevagent.androidrunner"
     ];
+    ExactAndroidDeviceRequiredError = class extends Error {
+      code = "EXACT_ANDROID_DEVICE_REQUIRED";
+      constructor() {
+        super("Refusing to release the Android interaction slot without an exact serial. When multiple adb targets are attached, open or bind a session to the intended device, pass deviceId, or set ANDROID_SERIAL, then retry. No device was mutated.");
+        this.name = "ExactAndroidDeviceRequiredError";
+      }
+    };
   }
 });
 
@@ -66699,7 +66711,8 @@ async function runFlowParked(run, opts = {}) {
   try {
     if (opts.platform === "android") {
       const release2 = opts.releaseAndroidSlot ?? releaseAndroidInteractionSlot;
-      await release2({ deviceId: opts.deviceId });
+      const outcome = await release2({ deviceId: opts.deviceId, includeLegacy: false });
+      opts.onAndroidRelease?.(outcome);
     } else {
       await (opts.stopFastRunner ?? stopFastRunner)(opts.deviceId);
     }
@@ -66828,6 +66841,11 @@ function resolveAppId(override, platform) {
     return resolveBundleId(platform) ?? readExpoSlug() ?? "";
   return readExpoSlug() ?? "";
 }
+function isUiAutomationNotConnectedSessionCreationFailure(error2) {
+  const candidate = error2;
+  const text = [candidate?.message, candidate?.stdout, candidate?.stderr].filter((value) => typeof value === "string").join("\n").replace(/\s+/g, " ");
+  return text.includes(UIAUTOMATION_SESSION_CREATION_FAILURE);
+}
 async function buildRunnerResume(platform, probe) {
   if (platform !== "ios")
     return void 0;
@@ -66933,6 +66951,21 @@ function createMaestroRunHandler(deps = {}) {
       ...paramArgs
     ]);
     const directRunnerEvidence = (output) => collectDirectRunnerEvidence(runnerReportDir, output);
+    const releaseAndroidSlot = deps.releaseAndroidSlot ?? releaseAndroidInteractionSlot;
+    const androidSlotReleaseWarnings = [];
+    let releasedAndroidDeviceId;
+    let uiAutomationRecoveryRetried = false;
+    const recordAndroidRelease = (outcome) => {
+      if (outcome?.deviceId)
+        releasedAndroidDeviceId = outcome.deviceId;
+      if (outcome?.warnings?.length)
+        androidSlotReleaseWarnings.push(...outcome.warnings);
+    };
+    const androidReleaseMeta = () => ({
+      ...androidSlotReleaseWarnings.length > 0 ? { androidSlotReleaseWarnings: [...androidSlotReleaseWarnings] } : {},
+      ...uiAutomationRecoveryRetried ? { androidUiAutomationRecovery: { retried: true, retryCount: 1 } } : {}
+    });
+    const androidReleaseCaveat = () => androidSlotReleaseWarnings.length > 0 ? `Android interaction-slot release warnings: ${androidSlotReleaseWarnings.join("; ")}` : void 0;
     const engineStatus = dispatch.runner === "maestro-runner" ? await getEngineStatus().catch(() => null) : null;
     const pinCaveat = engineStatus ? enginePinCaveat(engineStatus) : null;
     const strictRefusal = strictPinRefusal(engineStatus, process.env.RN_ENGINE_PIN_STRICT);
@@ -66946,21 +66979,40 @@ function createMaestroRunHandler(deps = {}) {
       const relaunchManagedApp = args.relaunchManagedApp ?? deps.relaunchManagedApp ?? managedAuthority.relaunchManagedApp;
       const reproveManagedOrigin = args.reproveManagedOrigin ?? deps.reproveManagedOrigin ?? managedAuthority.reproveManagedOrigin;
       const stageResults = await parkFlow(() => executeMaestroAuthorityStages(validatedCommands, async (commands) => {
-        const remainingTimeout = flowDeadline - now();
-        if (remainingTimeout <= 0) {
-          const error2 = new Error("Maestro flow timeout exhausted before the next stage");
-          Object.assign(error2, { code: "ETIMEDOUT" });
-          throw error2;
-        }
         writeFileSync12(flowFile, buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, [...commands]), "utf-8");
-        return execute2(dispatch.binPath, finalArgs, {
-          timeout: remainingTimeout,
-          encoding: "utf8",
-          maxBuffer: 10 * 1024 * 1024
-        });
+        const executeOnce = async () => {
+          const remainingTimeout = flowDeadline - now();
+          if (remainingTimeout <= 0) {
+            const error2 = new Error("Maestro flow timeout exhausted before the next stage");
+            Object.assign(error2, { code: "ETIMEDOUT" });
+            throw error2;
+          }
+          return execute2(dispatch.binPath, finalArgs, {
+            timeout: remainingTimeout,
+            encoding: "utf8",
+            maxBuffer: 10 * 1024 * 1024
+          });
+        };
+        try {
+          return await executeOnce();
+        } catch (error2) {
+          const recoveryDeviceId = requestedDeviceId ?? releasedAndroidDeviceId;
+          if (platform !== "android" || uiAutomationRecoveryRetried || !recoveryDeviceId || !isUiAutomationNotConnectedSessionCreationFailure(error2)) {
+            throw error2;
+          }
+          uiAutomationRecoveryRetried = true;
+          const releaseOutcome = await releaseAndroidSlot({
+            deviceId: recoveryDeviceId,
+            includeLegacy: false
+          });
+          recordAndroidRelease(releaseOutcome);
+          return executeOnce();
+        }
       }, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin), {
         platform,
         deviceId: requestedDeviceId,
+        releaseAndroidSlot,
+        onAndroidRelease: recordAndroidRelease,
         completeRunnerPark: args.completeRunnerPark ?? managedAuthority.completeRunnerPark
       });
       await commitReinstalledInstall();
@@ -67008,16 +67060,21 @@ function createMaestroRunHandler(deps = {}) {
         outputTruncated: false,
         ...dispatch.fallbackReason ? { fallbackReason: dispatch.fallbackReason } : {},
         ...dispatch.degradedReason ? { degradedReason: dispatch.degradedReason } : {},
-        ...engineStatus && engineStatus.pin.status !== "pinned-ok" ? { enginePin: engineStatus.pin } : {}
+        ...engineStatus && engineStatus.pin.status !== "pinned-ok" ? { enginePin: engineStatus.pin } : {},
+        ...androidReleaseMeta()
       };
       const caveat = dispatch.fallbackReason ?? dispatch.degradedReason ?? pinCaveat ?? void 0;
+      const releaseCaveat = androidReleaseCaveat();
       if (passed) {
+        if (releaseCaveat) {
+          return warnResult(meta, caveat ? `${caveat}; ${releaseCaveat}` : releaseCaveat);
+        }
         if (caveat && shouldWarnFallback(caveat)) {
           return warnResult(meta, caveat);
         }
         return okResult(meta);
       }
-      const baseWarnMsg = caveat ? `${caveat}; flow completed with warnings or failures` : "Flow completed with warnings or failures";
+      const baseWarnMsg = [caveat, releaseCaveat, "Flow completed with warnings or failures"].filter((part) => Boolean(part)).join("; ");
       const warnAug = augmentFailureWithDegradation(output, resolveFloorMs(process.env.RN_RUNTIME_DEGRADED_FLOOR_MS), baseWarnMsg, meta);
       return warnResult(warnAug.meta, warnAug.message);
     } catch (err) {
@@ -67026,6 +67083,15 @@ function createMaestroRunHandler(deps = {}) {
         throw err;
       const stageError = err instanceof MaestroStageExecutionError ? err.stageError : err;
       const msg3 = stageError instanceof Error ? stageError.message : String(stageError);
+      if (stageError instanceof ExactAndroidDeviceRequiredError) {
+        return failResult(stageError.message, stageError.code, {
+          platform,
+          runner: dispatch.runner,
+          transport: dispatch.runner,
+          passed: false,
+          ...androidReleaseMeta()
+        });
+      }
       const errAny = stageError;
       const completed = err instanceof MaestroStageExecutionError ? err.completedResults : [];
       const stdout = [
@@ -67065,10 +67131,13 @@ function createMaestroRunHandler(deps = {}) {
           terminal,
           ...runnerResume ? { runnerResume } : {},
           timedOut,
-          outputTruncated
+          outputTruncated,
+          ...androidReleaseMeta()
         });
       }
-      const headline = formatFailureHeadline(summary, { timedOut, outputTruncated }, msg3);
+      const rawHeadline = formatFailureHeadline(summary, { timedOut, outputTruncated }, msg3);
+      const releaseCaveat = androidReleaseCaveat();
+      const headline = releaseCaveat ? `${rawHeadline}; ${releaseCaveat}` : rawHeadline;
       const failAug = augmentFailureWithDegradation(combined, resolveFloorMs(process.env.RN_RUNTIME_DEGRADED_FLOOR_MS), headline, {
         flowFile,
         platform,
@@ -67088,7 +67157,8 @@ function createMaestroRunHandler(deps = {}) {
         outputTruncated,
         // GH #397: a drifted/mismatched engine causing a real failure is
         // exactly when the pin state matters — carry it on this path too.
-        ...engineStatus && engineStatus.pin.status !== "pinned-ok" ? { enginePin: engineStatus.pin } : {}
+        ...engineStatus && engineStatus.pin.status !== "pinned-ok" ? { enginePin: engineStatus.pin } : {},
+        ...androidReleaseMeta()
       });
       return failResult(failAug.message, failAug.meta);
     } finally {
@@ -67100,7 +67170,7 @@ function createMaestroRunHandler(deps = {}) {
     }
   };
 }
-var defaultExecFile2, MaestroStageExecutionError, lifecycleCommands, PARAM_KEY_RE;
+var defaultExecFile2, MaestroStageExecutionError, lifecycleCommands, PARAM_KEY_RE, UIAUTOMATION_SESSION_CREATION_FAILURE;
 var init_maestro_run = __esm({
   "packages/rn-dev-agent-core/dist/tools/maestro-run.js"() {
     "use strict";
@@ -67136,6 +67206,7 @@ var init_maestro_run = __esm({
     };
     lifecycleCommands = /* @__PURE__ */ new Set(["launchApp", "clearState", "killApp", "stopApp"]);
     PARAM_KEY_RE = /^[A-Z_][A-Z0-9_]*$/;
+    UIAUTOMATION_SESSION_CREATION_FAILURE = "failed to create driver: create session: session not created: java.lang.IllegalStateException: UiAutomation not connected";
   }
 });
 

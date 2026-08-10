@@ -35,6 +35,7 @@ export function isProtectedPid(pid: number, selfPid: number, parentPid: number):
 }
 
 export interface ReleaseAndroidSlotResult {
+  deviceId: string;
   stoppedOwnRunner: boolean;
   forceStoppedPackages: string[];
   killedDaemonPids: number[];
@@ -95,18 +96,43 @@ function defaultDeps(): ReleaseAndroidSlotDeps {
   };
 }
 
+export class ExactAndroidDeviceRequiredError extends Error {
+  readonly code = 'EXACT_ANDROID_DEVICE_REQUIRED' as const;
+
+  constructor() {
+    super(
+      'Refusing to release the Android interaction slot without an exact serial. ' +
+        'When multiple adb targets are attached, open or bind a session to the intended device, ' +
+        'pass deviceId, or set ANDROID_SERIAL, then retry. No device was mutated.',
+    );
+    this.name = 'ExactAndroidDeviceRequiredError';
+  }
+}
+
+function exactSerial(deviceId: string | undefined, serialArgs: string[]): string {
+  const serial = serialArgs.length === 2 && serialArgs[0] === '-s' ? serialArgs[1] : undefined;
+  if (!serial || serial !== (deviceId ?? serial) || serial.length > 256 || /\s/.test(serial)) {
+    throw new ExactAndroidDeviceRequiredError();
+  }
+  return serial;
+}
+
 /**
- * GH#237: release the single Android UiAutomation slot before an L3 Maestro flow.
- * Best-effort and idempotent — every step records a warning on failure and never
- * throws, so a flow is never blocked by a cleanup hiccup (and the auto-repair
- * re-entrancy path can call it again safely). MUST run inside the held arbiter
- * `flow` lease (no concurrent device_* can re-grab the slot between release and bind).
+ * GH#237 + GH#653: release the single Android UiAutomation slot before an L3
+ * Maestro flow. Serial resolution is intentionally the first operation: without
+ * one exact target this refuses before stopping a runner, force-stopping a
+ * package, or touching legacy state. Once scoped, cleanup remains best-effort
+ * and idempotent; each failure is returned as a warning for the caller to expose.
+ * MUST run inside the held arbiter `flow` lease (no concurrent device_* can
+ * re-grab the slot between release and bind).
  */
 export async function releaseAndroidInteractionSlot(
   opts: { deviceId?: string; includeLegacy?: boolean; signal?: AbortSignal } = {},
   deps: ReleaseAndroidSlotDeps = defaultDeps(),
 ): Promise<ReleaseAndroidSlotResult> {
   opts.signal?.throwIfAborted();
+  const serialArgs = deps.resolveSerial(opts.deviceId);
+  const deviceId = exactSerial(opts.deviceId, serialArgs);
   const timings: Record<string, number> = {};
   const warnings: string[] = [];
   const forceStoppedPackages: string[] = [];
@@ -119,7 +145,7 @@ export async function releaseAndroidInteractionSlot(
   // reliably free the device-side slot on its own (system_server keeps it).
   const tStop = deps.now();
   try {
-    await deps.stopOwnRunner(opts.deviceId, opts.signal);
+    await deps.stopOwnRunner(deviceId, opts.signal);
     opts.signal?.throwIfAborted();
     stoppedOwnRunner = true;
   } catch (err) {
@@ -131,22 +157,16 @@ export async function releaseAndroidInteractionSlot(
   // Step 2 — force-stop OUR instrumentation packages. THE decisive slot-release:
   // tears down the device-side instrumentation the SIGTERM left alive.
   const tForceStop = deps.now();
-  try {
-    const serial = deps.resolveSerial(opts.deviceId);
-    for (const pkg of OWNED_PACKAGES) {
-      opts.signal?.throwIfAborted();
-      try {
-        await deps.adbForceStop(pkg, serial, opts.signal);
-        opts.signal?.throwIfAborted();
-        forceStoppedPackages.push(pkg);
-      } catch (err) {
-        opts.signal?.throwIfAborted();
-        warnings.push(`am force-stop ${pkg} failed: ${msg(err)}`);
-      }
-    }
-  } catch (err) {
+  for (const pkg of OWNED_PACKAGES) {
     opts.signal?.throwIfAborted();
-    warnings.push(`resolveSerial failed: ${msg(err)}`);
+    try {
+      await deps.adbForceStop(pkg, serialArgs, opts.signal);
+      opts.signal?.throwIfAborted();
+      forceStoppedPackages.push(pkg);
+    } catch (err) {
+      opts.signal?.throwIfAborted();
+      warnings.push(`am force-stop ${pkg} failed: ${msg(err)}`);
+    }
   }
   timings.forceStop = deps.now() - tForceStop;
 
@@ -195,6 +215,7 @@ export async function releaseAndroidInteractionSlot(
   timings.legacyDaemon = deps.now() - tLegacy;
 
   return {
+    deviceId,
     stoppedOwnRunner,
     forceStoppedPackages,
     killedDaemonPids,
