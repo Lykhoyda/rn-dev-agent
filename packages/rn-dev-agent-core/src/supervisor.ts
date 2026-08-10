@@ -9,6 +9,7 @@ import { startParentDeathWatch } from './lifecycle/parent-watch.js';
 import { LineSplitter } from './lifecycle/stdio-frames.js';
 import { SupervisorCore, type SupervisorAction } from './lifecycle/supervisor-core.js';
 import { logger } from './logger.js';
+import { parseDeclaredManifests } from './session/declared-source-contract.js';
 import { inspectSessionOwner } from './session/process-owner.js';
 import { readProcessBirth } from './session/process-birth.js';
 import { resolveSourceIdentity } from './session/source-identity.js';
@@ -18,6 +19,7 @@ import {
 } from './session/startup-cleanup.js';
 import {
   createSupervisorAuthority,
+  resolveSupervisorAuthorityForSpawn,
   type SupervisorAuthority,
 } from './session/supervisor-authority.js';
 import {
@@ -97,14 +99,12 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
 
   let authority: SupervisorAuthority | null = null;
   let authorityError: string | null = null;
+  let mintAuthority: (() => SupervisorAuthority) | null = null;
   try {
     if (diagnosticContractProbe) throw new Error('DIAGNOSTIC_MODE_READ_ONLY');
-    const declaredManifests = process.env.RN_DEV_AGENT_DECLARED_MANIFESTS?.split(',')
-      .map((entry) => entry.trim())
-      .filter(Boolean);
     const source = resolveSourceIdentity(process.cwd(), {
       declaredRoot: process.env.RN_DEV_AGENT_DECLARED_ROOT,
-      declaredManifests,
+      declaredManifests: parseDeclaredManifests(process.env.RN_DEV_AGENT_DECLARED_MANIFESTS),
     });
     // L4: release a proven-dead same-root predecessor before claiming. Any refusal
     // (live/unproven owner, unproven obligation) falls through to the blocked path.
@@ -119,20 +119,30 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
         );
       }
       if (cleanup.status === 'refused' && cleanup.refusal) {
-        process.stderr.write(`rn-dev-agent startup cleanup deferred: ${cleanup.refusal.code}\n`);
+        // These already-redacted details explain why a restart will not converge.
+        process.stderr.write(
+          `rn-dev-agent startup cleanup deferred: ${cleanup.refusal.code}: ${cleanup.refusal.message}\n`,
+        );
+        if (cleanup.refusal.nextAction) {
+          process.stderr.write(
+            `rn-dev-agent startup cleanup next action: ${cleanup.refusal.nextAction}\n`,
+          );
+        }
       }
     } catch {
       process.stderr.write(startupCleanupFailureMessage());
     }
-    authority = createSupervisorAuthority({
-      source,
-      supervisorBirth: readProcessBirth(process.pid),
-      uid:
-        typeof process.getuid === 'function'
-          ? String(process.getuid())
-          : (process.env.USER ?? 'unknown'),
-      ownerStatus: inspectSessionOwner,
-    });
+    mintAuthority = () =>
+      createSupervisorAuthority({
+        source,
+        supervisorBirth: readProcessBirth(process.pid),
+        uid:
+          typeof process.getuid === 'function'
+            ? String(process.getuid())
+            : (process.env.USER ?? 'unknown'),
+        ownerStatus: inspectSessionOwner,
+      });
+    authority = mintAuthority();
   } catch (error) {
     authorityError =
       error instanceof Error
@@ -162,7 +172,21 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
     }
   }
 
+  function resolveAuthorityForSpawn(): void {
+    if (!authority || !mintAuthority) return;
+    const resolution = resolveSupervisorAuthorityForSpawn(authority, mintAuthority);
+    if (!resolution.minted && resolution.error === null) return;
+    authority = resolution.authority;
+    authorityError = resolution.error;
+    process.stderr.write(
+      resolution.error === null
+        ? 'rn-bridge-supervisor: minted a fresh session for the released worktree\n'
+        : `rn-dev-agent authority diagnostic: ${resolution.error}\n`,
+    );
+  }
+
   function spawnWorker(): void {
+    resolveAuthorityForSpawn();
     const workerInstance = randomUUID();
     const child = spawn(
       process.execPath,

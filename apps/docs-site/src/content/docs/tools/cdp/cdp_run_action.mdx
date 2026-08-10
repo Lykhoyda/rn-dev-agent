@@ -12,6 +12,7 @@ Replay a learned action by id with end-to-end auto-repair. Loads the action from
 | `actionId` | `unknown` | Yes |  |  | Action id matching &lt;projectRoot&gt;/.rn-agent/actions/&lt;actionId&gt;.yaml. |
 | `projectRoot` | `string` | No |  |  | Override project root (default: process.cwd()). |
 | `platform` | `unknown` | No |  |  |  |
+| `appFile` | `unknown` | No |  |  |  |
 | `autoRepair` | `unknown` | No |  |  |  |
 | `timeoutMs` | `unknown` | No |  |  | Maestro execution timeout per attempt (ms). Default 120_000. |
 | `trigger` | `unknown` | No |  |  | RunRecord trigger annotation. Default "agent". CI calls should pass "ci". |

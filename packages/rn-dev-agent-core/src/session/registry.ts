@@ -9,6 +9,7 @@ import {
   hasCompleteRecorderCleanupIdentity,
   hasCompleteRunnerCleanupIdentity,
 } from './cleanup-identity.js';
+import { NON_GIT_DECLARATION_NEXT_ACTION } from './declared-source-contract.js';
 import { probeMetroListener } from './metro-binding.js';
 import type { AuthorityAxis } from './tool-profiles.js';
 
@@ -221,11 +222,18 @@ const RECOVERY_HANDLE_RENEW_MS = 60_000;
 
 export type RecoveryRequirement = 'none' | 'adoption' | 'attach' | 'transport-restart';
 
+export interface StartupCleanupBlocker {
+  code: string;
+  reason: string;
+  nextAction?: string;
+}
+
 export interface RecoveryRequirementInspection {
   requirement: RecoveryRequirement;
   priorOwner: 'stale' | 'live' | 'unknown' | 'absent';
   /** L4 (issue 654): bounded holder heartbeat age, surfaced only for grouped-v1 contenders. */
   priorOwnerHeartbeatAgeMs?: number;
+  startupCleanupBlocked?: StartupCleanupBlocker;
   nextAction: string;
 }
 
@@ -259,6 +267,7 @@ const errorAxes: Record<string, string> = {
   OPERATION_ALREADY_IN_PROGRESS: 'C',
   SOURCE_WORKTREE_MISMATCH: 'S',
   SOURCE_REVISION_NOT_BUNDLED: 'S',
+  NON_GIT_MANIFEST_REQUIRED: 'S',
   APP_INSTALL_IDENTITY_CHANGED: 'I',
   METRO_PORT_CLAIM_CONFLICT: 'M',
   PORT_OCCUPIED_UNOWNED: 'M',
@@ -282,6 +291,15 @@ const errorAxes: Record<string, string> = {
   PROOF_AUTHORITY_MISMATCH: 'P',
 };
 
+// Codes whose repair is a named declaration/configuration path, not another status read.
+const errorNextActions: Record<string, string> = {
+  NON_GIT_MANIFEST_REQUIRED: NON_GIT_DECLARATION_NEXT_ACTION,
+};
+
+export function authorityRemedyNextAction(code: string): string | undefined {
+  return errorNextActions[code];
+}
+
 export function shortAuthorityIdentity(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex').slice(0, 16);
 }
@@ -299,6 +317,7 @@ export function authorityErrorMeta(error: SessionAuthorityError): Record<string,
       : undefined,
     nextAction:
       error.details?.nextAction ??
+      errorNextActions[error.code] ??
       'Run rn_session with action "status" and repair the named authority axis.',
   };
 }
@@ -343,6 +362,27 @@ function isOperationalState(state: string): boolean {
 
 function isFenceableState(state: string): boolean {
   return isOperationalState(state) || state === 'handoff';
+}
+
+function readStartupCleanupBlocker(bindingsJson: string): StartupCleanupBlocker | undefined {
+  let journal: Record<string, unknown> | undefined;
+  try {
+    const bindings = JSON.parse(bindingsJson) as Record<string, unknown>;
+    const value = bindings.startupCleanup;
+    journal = value && typeof value === 'object' ? (value as Record<string, unknown>) : undefined;
+  } catch {
+    return undefined;
+  }
+  if (!journal || typeof journal.finishedAt === 'number') return undefined;
+  const refusal = journal.refusal;
+  if (!refusal || typeof refusal !== 'object') return undefined;
+  const record = refusal as Record<string, unknown>;
+  if (typeof record.code !== 'string' || typeof record.reason !== 'string') return undefined;
+  return {
+    code: record.code,
+    reason: record.reason,
+    ...(typeof record.nextAction === 'string' ? { nextAction: record.nextAction } : {}),
+  };
 }
 
 function bindingsRunnerPresent(bindingsJson: string): boolean {
@@ -609,36 +649,7 @@ export class SessionRegistry {
         this.#assertNoStaleDeviceCleanup(bindings);
       }
 
-      for (const resource of resources) {
-        const claim = this.#findConflictingClaim(resource);
-        if (
-          !claim ||
-          (claim.session_id === session.sessionId && claim.claim_epoch === session.claimEpoch)
-        ) {
-          continue;
-        }
-
-        const probe = probes.get(claim.session_id);
-        if (!probe || probe.claimEpoch !== claim.claim_epoch) {
-          throw claimConflict(claim);
-        }
-        if (probe.status === 'match') throw claimConflict(claim);
-        if (probe.status === 'unknown') {
-          if (claim.lease_until_ms < now) {
-            throw new SessionAuthorityError(
-              'STALE_LEASE_NOT_RECLAIMABLE',
-              'expired lease owner identity could not be proven',
-              { sessionId: claim.session_id, claimEpoch: claim.claim_epoch },
-            );
-          }
-          throw claimConflict(claim);
-        }
-        throw new SessionAuthorityError(
-          'SESSION_AUTHORITY_REQUIRED',
-          'a proven-stale owner requires explicit adopt_stale before claims transfer',
-          { sessionId: claim.session_id, claimEpoch: claim.claim_epoch },
-        );
-      }
+      this.#assertClaimsAvailable(session, resources, probes, now);
 
       const leaseUntil = now + this.#leaseMs;
       for (const resource of resources) {
@@ -1115,7 +1126,7 @@ export class SessionRegistry {
           this.#database
             .prepare(
               `SELECT session_id, source_key, worktree_key, app_root_key, claim_epoch,
-                      supervisor_pid, supervisor_birth, heartbeat_ms
+                      supervisor_pid, supervisor_birth, heartbeat_ms, bindings_json
                FROM sessions WHERE session_id = ?`,
             )
             .get(priorSessionId),
@@ -1157,6 +1168,18 @@ export class SessionRegistry {
             priorOwner: 'stale',
             nextAction:
               'The proven-dead owner has a different source identity for this app root, so startup cleanup cannot release it under the current declared manifests. Restore the declared manifests that produced the prior identity, start and close rn-dev-agent to release its authority, then reapply the manifest changes; otherwise use a separate worktree.',
+          };
+        }
+        // Only cleanup without a retained refusal may promise automatic convergence.
+        const blocked = readStartupCleanupBlocker(prior.bindings_json);
+        if (blocked) {
+          return {
+            requirement: 'transport-restart',
+            priorOwner: 'stale',
+            startupCleanupBlocked: blocked,
+            nextAction:
+              blocked.nextAction ??
+              `Startup cleanup refused with ${blocked.code} and will refuse again on the next restart: ${blocked.reason}. Resolve that refusal before restarting the MCP transport.`,
           };
         }
         return {
@@ -1925,6 +1948,46 @@ export class SessionRegistry {
     });
   }
 
+  /** Re-recording an identical cleanup refusal is a no-op across repeated restarts. */
+  recordStartupCleanupRefusal(prior: SessionRef, refusal: StartupCleanupBlocker): void {
+    const now = this.#now();
+    this.#transaction(() => {
+      const row = this.#requireProvenDeadStartupOwner(prior);
+      const { bindings, journal } = this.#requireStartupCleanupJournal(row);
+      if (typeof journal.finishedAt === 'number') return;
+      const existing = journal.refusal as Record<string, unknown> | undefined;
+      if (
+        existing &&
+        existing.code === refusal.code &&
+        existing.reason === refusal.reason &&
+        existing.nextAction === refusal.nextAction
+      ) {
+        return;
+      }
+      this.#database
+        .prepare(
+          `UPDATE sessions SET bindings_json = ?, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`,
+        )
+        .run(
+          JSON.stringify({
+            ...bindings,
+            startupCleanup: {
+              ...journal,
+              refusal: {
+                code: refusal.code,
+                reason: refusal.reason,
+                ...(refusal.nextAction ? { nextAction: refusal.nextAction } : {}),
+              },
+            },
+          }),
+          now,
+          row.session_id,
+          row.claim_epoch,
+        );
+    });
+  }
+
   verifyStartupOwnerObligation(
     prior: SessionRef,
     resource: StartupCleanupResource,
@@ -2373,86 +2436,93 @@ export class SessionRegistry {
       expectedAuthorityVersion?: number;
       releaseResources?: readonly ResourceClaim[];
       claimResources?: readonly ResourceClaim[];
+      probeClaimOwners?: boolean;
+      assertBeforeCommit?: () => void;
+      onCommitted?: () => void;
     },
   ): void {
+    const claimed = input.claimResources ?? [];
+    const probes =
+      input.probeClaimOwners && claimed.length > 0
+        ? this.#probeClaimOwners(session, claimed)
+        : null;
     const now = this.#now();
-    this.#transaction(() => {
-      const current = this.#requireSession(session);
-      if (
-        input.expectedAuthorityVersion !== undefined &&
-        current.authority_version !== input.expectedAuthorityVersion
-      ) {
-        throw new SessionAuthorityError(
-          'AUTHORITY_LOST_DURING_OPERATION',
-          'session authority version changed before binding commit',
-        );
-      }
-      const bindings = {
-        ...(JSON.parse(current.bindings_json) as Record<string, unknown>),
-        ...input.bindings,
-      };
-      for (const resource of input.claimResources ?? []) {
-        const claim = this.#findConflictingClaim(resource);
+    this.#transaction(
+      () => {
+        const current = this.#requireSession(session);
         if (
-          claim &&
-          (claim.session_id !== session.sessionId || claim.claim_epoch !== session.claimEpoch)
+          input.expectedAuthorityVersion !== undefined &&
+          current.authority_version !== input.expectedAuthorityVersion
         ) {
-          throw claimConflict(claim);
+          throw new SessionAuthorityError(
+            'AUTHORITY_LOST_DURING_OPERATION',
+            'session authority version changed before binding commit',
+          );
         }
-      }
-      if (Object.hasOwn(input.bindings, 'device') || Object.hasOwn(input.bindings, 'install')) {
-        const currentBindings = JSON.parse(current.bindings_json) as Record<string, unknown>;
-        const platform = String(
-          ((input.bindings.device ?? currentBindings.device) as Record<string, unknown> | undefined)
-            ?.platform ?? '',
-        );
-        if (platform) {
-          this.#invalidatePlatformReceipt(session, platform);
+        const bindings = {
+          ...(JSON.parse(current.bindings_json) as Record<string, unknown>),
+          ...input.bindings,
+        };
+        this.#assertClaimsAvailable(session, claimed, probes, now);
+        if (Object.hasOwn(input.bindings, 'device') || Object.hasOwn(input.bindings, 'install')) {
+          const currentBindings = JSON.parse(current.bindings_json) as Record<string, unknown>;
+          const platform = String(
+            (
+              (input.bindings.device ?? currentBindings.device) as
+                | Record<string, unknown>
+                | undefined
+            )?.platform ?? '',
+          );
+          if (platform) {
+            this.#invalidatePlatformReceipt(session, platform);
+          }
         }
-      }
-      for (const resource of input.releaseResources ?? []) {
-        this.#database
-          .prepare(
-            `DELETE FROM claims
+        for (const resource of input.releaseResources ?? []) {
+          this.#database
+            .prepare(
+              `DELETE FROM claims
              WHERE resource_type = ? AND resource_key = ?
                AND session_id = ? AND claim_epoch = ?`,
-          )
-          .run(resource.type, resource.key, session.sessionId, session.claimEpoch);
-      }
-      const leaseUntil = now + this.#leaseMs;
-      for (const resource of input.claimResources ?? []) {
-        this.#database
-          .prepare(
-            `INSERT INTO claims(
+            )
+            .run(resource.type, resource.key, session.sessionId, session.claimEpoch);
+        }
+        const leaseUntil = now + this.#leaseMs;
+        for (const resource of input.claimResources ?? []) {
+          this.#database
+            .prepare(
+              `INSERT INTO claims(
               resource_type, resource_key, session_id, claim_epoch, lease_until_ms
             ) VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(resource_type, resource_key) DO UPDATE SET
               session_id = excluded.session_id,
               claim_epoch = excluded.claim_epoch,
               lease_until_ms = excluded.lease_until_ms`,
-          )
-          .run(resource.type, resource.key, session.sessionId, session.claimEpoch, leaseUntil);
-      }
-      this.#database
-        .prepare(
-          `UPDATE sessions
+            )
+            .run(resource.type, resource.key, session.sessionId, session.claimEpoch, leaseUntil);
+        }
+        this.#database
+          .prepare(
+            `UPDATE sessions
            SET state = ?, bindings_json = ?, authority_version = authority_version + 1,
                updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`,
-        )
-        .run(
-          input.state ?? current.state,
-          JSON.stringify(bindings),
-          now,
-          session.sessionId,
-          session.claimEpoch,
+          )
+          .run(
+            input.state ?? current.state,
+            JSON.stringify(bindings),
+            now,
+            session.sessionId,
+            session.claimEpoch,
+          );
+        this.#advanceActiveOperationFence(
+          session,
+          current.authority_version,
+          current.authority_version + 1,
         );
-      this.#advanceActiveOperationFence(
-        session,
-        current.authority_version,
-        current.authority_version + 1,
-      );
-    });
+      },
+      input.assertBeforeCommit,
+      input.onCommitted,
+    );
   }
 
   replaceBindingsDuringOperation(
@@ -2462,116 +2532,128 @@ export class SessionRegistry {
       bindings: Record<string, unknown>;
       releaseResources?: readonly ResourceClaim[];
       claimResources?: readonly ResourceClaim[];
+      assertBeforeCommit?: () => void;
+      onCommitted?: (operation: OperationRef) => void;
     },
   ): OperationRef {
     const now = this.#now();
-    return this.#transaction(() => {
-      const current = asSession(
-        this.#database
-          .prepare(
-            `SELECT state, claim_epoch, authority_version, bindings_json
+    return this.#transaction(
+      () => {
+        const current = asSession(
+          this.#database
+            .prepare(
+              `SELECT state, claim_epoch, authority_version, bindings_json
              FROM sessions WHERE session_id = ?`,
-          )
-          .get(operation.sessionId),
-      );
-      const active = this.#database
-        .prepare(
-          `SELECT operation_id FROM operations
+            )
+            .get(operation.sessionId),
+        );
+        const active = this.#database
+          .prepare(
+            `SELECT operation_id FROM operations
            WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
              AND authority_version = ?`,
-        )
-        .get(
-          operation.operationId,
-          operation.sessionId,
-          operation.claimEpoch,
-          operation.authorityVersion,
-        );
-      if (
-        !current ||
-        !isOperationalState(current.state) ||
-        current.claim_epoch !== operation.claimEpoch ||
-        current.authority_version !== operation.authorityVersion ||
-        !active
-      ) {
-        throw new SessionAuthorityError(
-          'AUTHORITY_LOST_DURING_OPERATION',
-          'operation fence no longer matches current authority',
-        );
-      }
-
-      for (const resource of input.claimResources ?? []) {
-        const claim = this.#findConflictingClaim(resource);
+          )
+          .get(
+            operation.operationId,
+            operation.sessionId,
+            operation.claimEpoch,
+            operation.authorityVersion,
+          );
         if (
-          claim &&
-          (claim.session_id !== operation.sessionId || claim.claim_epoch !== operation.claimEpoch)
+          !current ||
+          !isOperationalState(current.state) ||
+          current.claim_epoch !== operation.claimEpoch ||
+          current.authority_version !== operation.authorityVersion ||
+          !active
         ) {
-          throw claimConflict(claim);
+          throw new SessionAuthorityError(
+            'AUTHORITY_LOST_DURING_OPERATION',
+            'operation fence no longer matches current authority',
+          );
         }
-      }
-      for (const resource of input.releaseResources ?? []) {
-        this.#database
-          .prepare(
-            `DELETE FROM claims
+
+        for (const resource of input.claimResources ?? []) {
+          const claim = this.#findConflictingClaim(resource);
+          if (
+            claim &&
+            (claim.session_id !== operation.sessionId || claim.claim_epoch !== operation.claimEpoch)
+          ) {
+            throw claimConflict(claim);
+          }
+        }
+        for (const resource of input.releaseResources ?? []) {
+          this.#database
+            .prepare(
+              `DELETE FROM claims
              WHERE resource_type = ? AND resource_key = ?
                AND session_id = ? AND claim_epoch = ?`,
-          )
-          .run(resource.type, resource.key, operation.sessionId, operation.claimEpoch);
-      }
-      const leaseUntil = now + this.#leaseMs;
-      for (const resource of input.claimResources ?? []) {
-        this.#database
-          .prepare(
-            `INSERT INTO claims(
+            )
+            .run(resource.type, resource.key, operation.sessionId, operation.claimEpoch);
+        }
+        const leaseUntil = now + this.#leaseMs;
+        for (const resource of input.claimResources ?? []) {
+          this.#database
+            .prepare(
+              `INSERT INTO claims(
               resource_type, resource_key, session_id, claim_epoch, lease_until_ms
             ) VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(resource_type, resource_key) DO UPDATE SET
               session_id = excluded.session_id,
               claim_epoch = excluded.claim_epoch,
               lease_until_ms = excluded.lease_until_ms`,
-          )
-          .run(resource.type, resource.key, operation.sessionId, operation.claimEpoch, leaseUntil);
-      }
+            )
+            .run(
+              resource.type,
+              resource.key,
+              operation.sessionId,
+              operation.claimEpoch,
+              leaseUntil,
+            );
+        }
 
-      const nextAuthorityVersion = operation.authorityVersion + 1;
-      const bindings = {
-        ...(JSON.parse(current.bindings_json) as Record<string, unknown>),
-        ...input.bindings,
-      };
-      this.#database
-        .prepare(
-          `UPDATE sessions
+        const nextAuthorityVersion = operation.authorityVersion + 1;
+        const bindings = {
+          ...(JSON.parse(current.bindings_json) as Record<string, unknown>),
+          ...input.bindings,
+        };
+        this.#database
+          .prepare(
+            `UPDATE sessions
            SET state = ?, bindings_json = ?, authority_version = ?, updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ? AND authority_version = ?`,
-        )
-        .run(
-          input.state ?? current.state,
-          JSON.stringify(bindings),
-          nextAuthorityVersion,
-          now,
-          operation.sessionId,
-          operation.claimEpoch,
-          operation.authorityVersion,
-        );
-      this.#database
-        .prepare(
-          `UPDATE operations SET authority_version = ?, lease_until_ms = ?
+          )
+          .run(
+            input.state ?? current.state,
+            JSON.stringify(bindings),
+            nextAuthorityVersion,
+            now,
+            operation.sessionId,
+            operation.claimEpoch,
+            operation.authorityVersion,
+          );
+        this.#database
+          .prepare(
+            `UPDATE operations SET authority_version = ?, lease_until_ms = ?
            WHERE operation_id = ? AND session_id = ? AND claim_epoch = ?
              AND authority_version = ?`,
-        )
-        .run(
-          nextAuthorityVersion,
-          leaseUntil,
-          operation.operationId,
-          operation.sessionId,
-          operation.claimEpoch,
-          operation.authorityVersion,
-        );
-      const context = this.#operationContext.getStore();
-      if (context?.operationId === operation.operationId) {
-        context.authorityVersion = nextAuthorityVersion;
-      }
-      return { ...operation, authorityVersion: nextAuthorityVersion };
-    });
+          )
+          .run(
+            nextAuthorityVersion,
+            leaseUntil,
+            operation.operationId,
+            operation.sessionId,
+            operation.claimEpoch,
+            operation.authorityVersion,
+          );
+        const context = this.#operationContext.getStore();
+        if (context?.operationId === operation.operationId) {
+          context.authorityVersion = nextAuthorityVersion;
+        }
+        return { ...operation, authorityVersion: nextAuthorityVersion };
+      },
+      input.assertBeforeCommit,
+      input.onCommitted,
+    );
   }
 
   endOperationWithBindings(operation: OperationRef, bindings: Record<string, unknown>): void {
@@ -2719,17 +2801,42 @@ export class SessionRegistry {
     });
   }
 
+  // GH #706: released and proven-stale rows are not live sessions, so they never
+  // count towards the "multiple live sessions match this worktree" refusal.
   findSessionsByWorktree(worktreeKey: string): SessionStatus[] {
     const rows = this.#database
       .prepare(
-        `SELECT session_id FROM sessions
+        `SELECT session_id, supervisor_pid, supervisor_birth FROM sessions
          WHERE worktree_key = ? AND state NOT IN ('released', 'stale')
          ORDER BY updated_ms DESC`,
       )
-      .all(worktreeKey);
+      .all(worktreeKey) as Array<{
+      session_id: string;
+      supervisor_pid: number;
+      supervisor_birth: string;
+    }>;
     return rows
-      .map((row) => this.getSessionStatus(String((row as Record<string, unknown>).session_id)))
+      .filter((row) => !this.#supervisorProvenDead(row))
+      .map((row) => this.getSessionStatus(row.session_id))
       .filter((status): status is SessionStatus => status !== null);
+  }
+
+  #supervisorProvenDead(row: {
+    session_id: string;
+    supervisor_pid: number;
+    supervisor_birth: string;
+  }): boolean {
+    try {
+      return (
+        this.#ownerStatus({
+          sessionId: row.session_id,
+          pid: row.supervisor_pid,
+          token: row.supervisor_birth,
+        }) === 'mismatch'
+      );
+    } catch {
+      return false;
+    }
   }
 
   getControllerBinding(session: SessionRef): ControllerBinding {
@@ -4866,6 +4973,45 @@ export class SessionRegistry {
     return owners;
   }
 
+  #assertClaimsAvailable(
+    session: SessionRef,
+    resources: readonly ResourceClaim[],
+    probes: Map<string, { claimEpoch: number; status: OwnerStatus }> | null,
+    now: number,
+  ): void {
+    for (const resource of resources) {
+      const claim = this.#findConflictingClaim(resource);
+      if (
+        !claim ||
+        (claim.session_id === session.sessionId && claim.claim_epoch === session.claimEpoch)
+      ) {
+        continue;
+      }
+      if (!probes) throw claimConflict(claim);
+
+      const probe = probes.get(claim.session_id);
+      if (!probe || probe.claimEpoch !== claim.claim_epoch) {
+        throw claimConflict(claim);
+      }
+      if (probe.status === 'match') throw claimConflict(claim);
+      if (probe.status === 'unknown') {
+        if (claim.lease_until_ms < now) {
+          throw new SessionAuthorityError(
+            'STALE_LEASE_NOT_RECLAIMABLE',
+            'expired lease owner identity could not be proven',
+            { sessionId: claim.session_id, claimEpoch: claim.claim_epoch },
+          );
+        }
+        throw claimConflict(claim);
+      }
+      throw new SessionAuthorityError(
+        'SESSION_AUTHORITY_REQUIRED',
+        'a proven-stale owner requires explicit adopt_stale before claims transfer',
+        { sessionId: claim.session_id, claimEpoch: claim.claim_epoch },
+      );
+    }
+  }
+
   #requireSession(session: SessionRef): SessionRow {
     const row = asSession(
       this.#database
@@ -5431,16 +5577,37 @@ export class SessionRegistry {
       .run(now, sessionId);
   }
 
-  #transaction<T>(operation: () => T): T {
+  #transaction<T>(
+    operation: () => T,
+    assertBeforeCommit?: () => void,
+    onCommitted?: (result: T) => void,
+  ): T {
     this.#database.exec('BEGIN IMMEDIATE');
+    const context = this.#operationContext.getStore();
+    const priorContextAuthorityVersion = context?.authorityVersion;
+    let committed = false;
     try {
       const result = operation();
+      assertBeforeCommit?.();
       this.#database.exec('COMMIT');
-      this.#secureFiles();
+      committed = true;
+      try {
+        onCommitted?.(result);
+      } finally {
+        this.#secureFiles();
+      }
       return result;
     } catch (error) {
-      this.#database.exec('ROLLBACK');
-      this.#secureFiles();
+      if (!committed) {
+        try {
+          this.#database.exec('ROLLBACK');
+        } finally {
+          if (context && priorContextAuthorityVersion !== undefined) {
+            context.authorityVersion = priorContextAuthorityVersion;
+          }
+          this.#secureFiles();
+        }
+      }
       throw error;
     }
   }

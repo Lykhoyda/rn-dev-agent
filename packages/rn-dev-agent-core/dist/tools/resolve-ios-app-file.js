@@ -47,7 +47,7 @@ export function resolveIosAppFile(bundleId, deps = {}) {
     const exists = deps.exists ?? existsSync;
     const getAppContainer = deps.getAppContainer ?? defaultGetAppContainer;
     const snapshotApp = deps.snapshotApp ?? defaultSnapshotApp;
-    const fromContainer = getAppContainer(bundleId);
+    const fromContainer = getAppContainer(bundleId, deps.deviceId);
     if (fromContainer && exists(fromContainer)) {
         const snapshot = snapshotApp(fromContainer);
         if (snapshot)
@@ -88,9 +88,10 @@ export function resolveAppFileForClearState(platform, flowText, headerAppId, exp
     }
     return { ok: true, appFile };
 }
-function defaultGetAppContainer(bundleId) {
+function defaultGetAppContainer(bundleId, deviceId) {
     try {
-        const out = execFileSync('xcrun', ['simctl', 'get_app_container', 'booted', bundleId, 'app'], {
+        const target = deviceId && !/\s/.test(deviceId) ? deviceId : 'booted';
+        const out = execFileSync('xcrun', ['simctl', 'get_app_container', target, bundleId, 'app'], {
             encoding: 'utf8',
             timeout: 5_000,
         }).trim();

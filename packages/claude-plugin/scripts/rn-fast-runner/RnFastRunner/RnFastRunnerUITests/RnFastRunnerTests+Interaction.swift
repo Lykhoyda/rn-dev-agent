@@ -302,6 +302,170 @@ extension RnFastRunnerTests {
     return matched
   }
 
+  func exactTextInput(
+    app: XCUIApplication,
+    identifier: String,
+    typeName: String
+  ) -> (element: XCUIElement?, ambiguous: Bool) {
+    let inputTypes: [XCUIElement.ElementType] = [.textField, .secureTextField, .searchField, .textView]
+    let predicate = NSPredicate(
+      format: "identifier == %@ AND elementType IN %@",
+      identifier,
+      inputTypes.map { $0.rawValue }
+    )
+    let candidates = app.descendants(matching: .any).matching(predicate).allElementsBoundByIndex
+      .filter { $0.exists && elementTypeName($0.elementType) == typeName }
+    if candidates.count != 1 {
+      return (nil, candidates.count > 1)
+    }
+    return (candidates[0], false)
+  }
+
+  func exactTextInputIsFocused(_ element: XCUIElement, app: XCUIApplication) -> Bool {
+    guard let focused = focusedTextInput(app: app) else { return false }
+    return focused.identifier == element.identifier && focused.elementType == element.elementType
+  }
+
+  func executeExactTextMutation(
+    app: XCUIApplication,
+    identifier: String,
+    typeName: String,
+    text: String
+  ) -> Response {
+    var resolved = exactTextInput(app: app, identifier: identifier, typeName: typeName)
+    guard let initial = resolved.element else {
+      return Response(
+        ok: false,
+        error: ErrorPayload(
+          code: "NO_TEXT_INPUT_TARGET",
+          message: "The exact text input descriptor did not resolve uniquely; no text was entered.",
+          mutation: "none",
+          reason: resolved.ambiguous ? "ambiguous" : "target-lost"
+        )
+      )
+    }
+    guard initial.isEnabled && initial.isHittable else {
+      return Response(
+        ok: false,
+        error: ErrorPayload(
+          code: "TEXT_ENTRY_UNVERIFIED",
+          message: "The exact text input is not safely actionable; no text was entered.",
+          mutation: "none",
+          reason: "occluded"
+        )
+      )
+    }
+    if initial.elementType == .secureTextField {
+      return Response(
+        ok: false,
+        error: ErrorPayload(
+          code: "TEXT_ENTRY_UNVERIFIED",
+          message: "Secure text input cannot provide exact readable verification; no text was entered.",
+          mutation: "none",
+          reason: "secure"
+        )
+      )
+    }
+
+    let focusedBefore = exactTextInputIsFocused(initial, app: app)
+    if !focusedBefore {
+      initial.tap()
+      let deadline = ProcessInfo.processInfo.systemUptime + 0.8
+      while ProcessInfo.processInfo.systemUptime < deadline {
+        resolved = exactTextInput(app: app, identifier: identifier, typeName: typeName)
+        guard let candidate = resolved.element else {
+          return Response(
+            ok: false,
+            error: ErrorPayload(
+              code: "TEXT_TARGET_LOST",
+              message: "The exact text input disappeared or became ambiguous during focus; no text was entered.",
+              mutation: "none",
+              reason: resolved.ambiguous ? "ambiguous" : "target-lost"
+            )
+          )
+        }
+        if exactTextInputIsFocused(candidate, app: app) { break }
+        Thread.sleep(forTimeInterval: 0.04)
+      }
+    }
+
+    // Re-resolve the original descriptor immediately before mutation. This is
+    // the focus-time replacement boundary; no retained XCUI handle is trusted.
+    resolved = exactTextInput(app: app, identifier: identifier, typeName: typeName)
+    guard let target = resolved.element else {
+      return Response(
+        ok: false,
+        error: ErrorPayload(
+          code: "TEXT_TARGET_LOST",
+          message: "The exact text input was lost before mutation; no text was entered.",
+          mutation: "none",
+          reason: resolved.ambiguous ? "ambiguous" : "target-lost"
+        )
+      )
+    }
+    guard exactTextInputIsFocused(target, app: app) else {
+      return Response(
+        ok: false,
+        error: ErrorPayload(
+          code: "TEXT_TARGET_FOCUS_FAILED",
+          message: "The exact text input did not prove focused before mutation; no text was entered.",
+          mutation: "none",
+          reason: "focus-unproven"
+        )
+      )
+    }
+
+    let before = target.value as? String
+    let placeholder = target.placeholderValue
+    clearTextInput(target)
+    if !text.isEmpty { target.typeText(text) }
+
+    var consecutiveExact = 0
+    var finalVerdict = TextInputMutation.Verdict.unreadable
+    var observedChanged = false
+    for attempt in 0..<6 {
+      resolved = exactTextInput(app: app, identifier: identifier, typeName: typeName)
+      guard let current = resolved.element else {
+        return Response(
+          ok: false,
+          error: ErrorPayload(
+            code: "TEXT_TARGET_LOST",
+            message: "The exact text input was lost after mutation.",
+            mutation: "possible",
+            reason: resolved.ambiguous ? "ambiguous" : "target-lost"
+          )
+        )
+      }
+      let after = current.value as? String
+      observedChanged = observedChanged || after != before
+      finalVerdict = TextInputMutation.classify(
+        expected: text,
+        before: before,
+        after: after,
+        placeholder: placeholder,
+        secure: false
+      )
+      consecutiveExact = finalVerdict == .exact ? consecutiveExact + 1 : 0
+      if consecutiveExact >= 2 {
+        return Response(
+          ok: true,
+          data: DataPayload(filled: true, verify: "exact", focusedBefore: focusedBefore)
+        )
+      }
+      if attempt < 5 { Thread.sleep(forTimeInterval: 0.08) }
+    }
+
+    return Response(
+      ok: false,
+      error: ErrorPayload(
+        code: "TEXT_ENTRY_UNVERIFIED",
+        message: "Text mutation did not produce stable exact read-back.",
+        mutation: observedChanged ? "observed" : "possible",
+        reason: finalVerdict == .mismatch ? "mismatch" : "unreadable"
+      )
+    )
+  }
+
   func focusedTextInput(app: XCUIApplication) -> XCUIElement? {
     var focused: XCUIElement?
     let exceptionMessage = RunnerObjCExceptionCatcher.catchException({

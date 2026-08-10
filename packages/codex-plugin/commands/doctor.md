@@ -31,7 +31,7 @@ Pass only facts actually observed in this task:
 ```
 
 Do not infer absence from a partial list. Running this skill proves only this
-skill is present, not all 25. A task with zero rn-dev-agent skills cannot invoke
+skill is present, not all 27. A task with zero rn-dev-agent skills cannot invoke
 this workflow; use the documented external exact-cache bootstrap.
 
 ## Report independent axes

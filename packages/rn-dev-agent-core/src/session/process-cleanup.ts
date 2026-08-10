@@ -176,22 +176,31 @@ export async function runRecordProofScript(
   );
 }
 
+async function awaitExactStopped(
+  probe: () => 'running' | 'stopped' | 'unknown',
+  deadlineMs: number,
+  code: string,
+  message: string,
+): Promise<boolean> {
+  while (true) {
+    const status = probe();
+    if (status === 'stopped') return true;
+    if (status === 'unknown') {
+      throw new SessionAuthorityError(code, `${message}; shutdown identity is unknown`);
+    }
+    if (Date.now() >= deadlineMs) return false;
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+  }
+}
+
 async function waitForExactStopped(
   probe: () => 'running' | 'stopped' | 'unknown',
   deadlineMs: number,
   code: string,
   message: string,
 ): Promise<void> {
-  while (true) {
-    const status = probe();
-    if (status === 'stopped') return;
-    if (status === 'unknown') {
-      throw new SessionAuthorityError(code, `${message}; shutdown identity is unknown`);
-    }
-    if (Date.now() >= deadlineMs) {
-      throw new SessionAuthorityError(code, message);
-    }
-    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+  if (!(await awaitExactStopped(probe, deadlineMs, code, message))) {
+    throw new SessionAuthorityError(code, message);
   }
 }
 
@@ -299,6 +308,7 @@ export async function stopBoundRunner(
   timeoutMs = 2_000,
   runAdb: (args: string[]) => Promise<{ stdout: string; stderr: string }> = async (args) =>
     execFile('adb', args, { timeout: 5_000, encoding: 'utf8' }),
+  termGraceMs = 500,
 ): Promise<void> {
   const deadlineMs = Date.now() + timeoutMs;
   if (!hasCompleteRunnerCleanupIdentity(binding)) {
@@ -320,19 +330,38 @@ export async function stopBoundRunner(
     );
   }
   if (current.status === 'present' && current.birth.token === expectedBirth) {
-    signalProcess(pid, 'SIGTERM');
-    await waitForExactStopped(
-      () => {
-        const observed = processProbe(pid);
-        if (observed.status === 'unknown') return 'unknown';
-        return observed.status === 'present' && observed.birth.token === expectedBirth
-          ? 'running'
-          : 'stopped';
-      },
-      deadlineMs,
-      'RUNNER_ADOPTION_REQUIRED',
-      'runner process did not stop before the cleanup deadline',
-    );
+    const observeStop = (): 'running' | 'stopped' | 'unknown' => {
+      const observed = processProbe(pid);
+      if (observed.status === 'unknown') return 'unknown';
+      return observed.status === 'present' && observed.birth.token === expectedBirth
+        ? 'running'
+        : 'stopped';
+    };
+    const message = 'runner process did not stop before the cleanup deadline';
+    const signalTolerated = (value: NodeJS.Signals): void => {
+      try {
+        signalProcess(pid, value);
+      } catch {}
+    };
+    signalTolerated('SIGTERM');
+    const graceDeadlineMs = Math.min(deadlineMs, Date.now() + termGraceMs);
+    if (
+      !(await awaitExactStopped(observeStop, graceDeadlineMs, 'RUNNER_ADOPTION_REQUIRED', message))
+    ) {
+      // Escalate only while the pid still carries this binding's exact birth
+      // token, so a reused pid or another session's runner is never killed.
+      const escalation = processProbe(pid);
+      if (escalation.status === 'unknown') {
+        throw new SessionAuthorityError(
+          'RUNNER_ADOPTION_REQUIRED',
+          `${message}; shutdown identity is unknown`,
+        );
+      }
+      if (escalation.status === 'present' && escalation.birth.token === expectedBirth) {
+        signalTolerated('SIGKILL');
+      }
+      await waitForExactStopped(observeStop, deadlineMs, 'RUNNER_ADOPTION_REQUIRED', message);
+    }
   }
   if (platform !== 'android') return;
   if (!deviceId || !Number.isSafeInteger(port)) {

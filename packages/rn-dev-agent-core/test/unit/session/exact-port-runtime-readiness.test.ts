@@ -188,3 +188,38 @@ test('only the matching persisted exact-session policy is recoverable', async ()
   );
   await client.disconnect();
 });
+
+test('an ambient policy can be suspended for a staged attempt and restored on failure', async () => {
+  const client = new CDPClient(ambientPort);
+  const policy = {
+    port: managedPort,
+    filters: { platform: 'android' as const, bundleId: 'com.example.app' },
+    resolveTargetId: async () => 'managed-target',
+    verifyAndReconcile: async () => {
+      throw new Error('ambient reconciliation must stay suspended');
+    },
+  };
+  client.setAuthoritativeSessionPolicy(policy);
+  assert.equal(client.authoritativeSessionPolicy, policy);
+
+  client.clearAuthoritativeSessionPolicy();
+  assert.equal(client.authoritativeSessionPolicy, undefined);
+  assert.equal(
+    client.matchesAuthoritativeSessionPolicy(managedPort, {
+      platform: 'android',
+      bundleId: 'com.example.app',
+    }),
+    false,
+  );
+
+  client.setAuthoritativeSessionPolicy(policy);
+  assert.equal(client.authoritativeSessionPolicy, policy);
+  assert.equal(
+    client.matchesAuthoritativeSessionPolicy(managedPort, {
+      platform: 'android',
+      bundleId: 'com.example.app',
+    }),
+    true,
+  );
+  await client.disconnect();
+});

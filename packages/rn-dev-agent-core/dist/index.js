@@ -8,7 +8,7 @@ import { dirname, join } from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { CDPClient } from './cdp-client.js';
+import { CDPClient, } from './cdp-client.js';
 import { okResult, failResult, warnResult, withConnection } from './utils.js';
 import { annotateMutationAbsence } from './verification/mutation-absence.js';
 import { loadVerificationConfig, getCachedProjectRoot } from './verification/config.js';
@@ -79,6 +79,7 @@ import { captureInstalledArtifact, captureInstallGeneration, verifyInstalledArti
 import { readProcessBirth } from './session/process-birth.js';
 import { ensureSingleRunner } from './runners/ensure-single-runner.js';
 import { addToolObserver, instrumentTool } from './observability/instrumentation.js';
+import { discoverPluginVersion, ExperienceRecorder } from './experience/evidence.js';
 import { recorder } from './observability/recorder.js';
 import { hashProofValue, StrictProofMonitor } from './domain/proof-capture.js';
 import { maybeCaptureLiveFrame, isStateMutating, mayTriggerLiveCapture, resolveSnapshotInvalidationPlatform, toolInvalidatesSnapshotCache, toolInvalidatesRetryBaseline, buildLiveDeps, } from './observability/live-device.js';
@@ -108,7 +109,7 @@ import { loadE2eConfig, resolveParams } from './domain/e2e-config.js';
 import { getWorkerAuthorityRuntime } from './session/runtime.js';
 import { createSessionHandler } from './tools/session.js';
 import { bindNativeRunner, unbindNativeRunner } from './session/runner-binding.js';
-import { claimOptionalBundleAuthority, createAuthorityGate } from './session/authority-gate.js';
+import { claimOptionalBundleAuthority, createAuthorityGate, } from './session/authority-gate.js';
 import { createLocalAuthorityProbe } from './session/local-authority-probe.js';
 import { assertAuthorityProfilesExhaustive } from './session/tool-profiles.js';
 import { readJsonStateFile } from './util/secure-state-file.js';
@@ -166,16 +167,27 @@ if (!diagnosticContractProbe && process.env.RN_DEVICE_KILL_LEGACY !== '0') {
         /* non-fatal */
     });
 }
-let client = new CDPClient();
+let client;
 const getClient = () => client;
-const setClient = (c) => {
-    client = c;
+const configureClientLifecycle = (candidate) => {
+    candidate.setLifecycleAuthority(() => getClient() === candidate);
+    return candidate;
 };
+const setClient = (candidate) => {
+    client = candidate;
+};
+const publishClient = (expected, replacement) => {
+    if (client !== expected)
+        return false;
+    client = replacement;
+    return true;
+};
+client = configureClientLifecycle(new CDPClient());
 const createClient = (port) => {
     const status = authorityRuntime.status();
-    return status.available && status.bindings.bundle
+    return configureClientLifecycle(status.available && status.bindings.bundle
         ? client.createReplacement(port)
-        : new CDPClient(port);
+        : new CDPClient(port));
 };
 const execFileP = promisify(execFile);
 // Parse an MCP envelope; throw when the handler reported failure.
@@ -245,8 +257,13 @@ const server = new McpServer({
     version: pkgVersion,
 });
 export const strictProofMonitor = new StrictProofMonitor();
+const experienceRecorder = new ExperienceRecorder({
+    coreVersion: pkgVersion,
+    pluginVersion: discoverPluginVersion(),
+});
 addToolObserver((o) => recorder.record(o));
 addToolObserver((o) => strictProofMonitor.record(o));
+addToolObserver((o) => experienceRecorder.observe(o));
 const authorityRuntime = getWorkerAuthorityRuntime();
 setSnapshotAuthorityProvider({
     current: () => {
@@ -403,14 +420,15 @@ setSnapshotAuthorityProvider({
         }
     },
 });
-const localAuthorityProbe = createLocalAuthorityProbe({
+const createRuntimeAuthorityProbe = (resolveClient) => createLocalAuthorityProbe({
     runtime: authorityRuntime,
-    getClient,
+    getClient: resolveClient,
     getSecret: () => process.env.RN_DEV_AGENT_SESSION_SECRET_PATH
         ? readJsonStateFile(process.env.RN_DEV_AGENT_SESSION_SECRET_PATH)
         : null,
     proofActive: (runId) => strictProofMonitor.ownsRun(runId),
 });
+const localAuthorityProbe = createRuntimeAuthorityProbe(getClient);
 const authorityGate = createAuthorityGate(authorityRuntime, {
     probe: async ({ axis, phase, status, tool, args }) => localAuthorityProbe({ axis, phase, status, tool, args }),
     recoverRuntimeConnection: async (status) => {
@@ -469,6 +487,7 @@ const authorityGate = createAuthorityGate(authorityRuntime, {
     },
     refreshRuntimeBinding: rebindSessionRuntime,
     relaunchBoundRuntime: relaunchSessionRuntime,
+    reconnectBoundRuntime: reconnectSessionRuntime,
     onRuntimeBundleInvalidated: () => getClient().clearAuthoritativeSessionPolicy(),
     onRunnerReleased: async (runner) => {
         if (runner.platform !== 'ios')
@@ -652,7 +671,7 @@ function trackedTool(name, desc, schema, handler) {
     };
     server.tool(name, desc, schema, wrapped);
 }
-async function pinSessionDevClient(status, options) {
+async function pinSessionDevClient(status, options, commitBundle) {
     const device = status.bindings.device;
     const metro = status.bindings.metro;
     const install = status.bindings.install;
@@ -675,97 +694,113 @@ async function pinSessionDevClient(status, options) {
         throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: session signer is unavailable');
     }
     const current = getClient();
-    current.clearAuthoritativeSessionPolicy();
-    if (options.force) {
-        await current.disconnect();
-        setClient(createClient(metro.port));
+    const suspendedPolicy = device.platform === 'android' ? current.authoritativeSessionPolicy : undefined;
+    if (device.platform === 'ios') {
+        current.clearAuthoritativeSessionPolicy();
+        if (options.force) {
+            await current.disconnect();
+            setClient(createClient(metro.port));
+        }
     }
-    const bundle = await pinExactDevClient({
-        sessionId: status.sessionId,
-        metroInstanceId: metro.instanceId,
-        worktreeKey: status.worktreeKey,
-        appId: device.appId,
-        platform: device.platform,
-        buildGeneration: metro.buildGeneration,
-        deviceId: device.deviceId,
-        metroPort: metro.port,
-        runtimeKind,
-        ...(devClientUrl ? { devClientUrl, expectedDevClientUrl: devClientUrl } : {}),
-        signerCapability: secret.signerCapability,
-    }, {
-        openUrl: async (platform, deviceId, url) => {
-            if (platform === 'ios') {
-                await execFileP('xcrun', ['simctl', 'openurl', deviceId, url]);
-            }
-            else {
-                await execFileP('adb', androidDeeplinkCommandArgs(url, undefined, deviceId));
-            }
-        },
-        launchExactApp: async (platform, deviceId, appId) => {
-            if (platform === 'ios') {
-                await execFileP('xcrun', ['simctl', 'launch', deviceId, appId]);
-            }
-            else {
-                await execFileP('adb', [
-                    '-s',
-                    deviceId,
-                    'shell',
-                    'monkey',
-                    '--pct-syskeys',
-                    '0',
-                    '-p',
-                    appId,
-                    '-c',
-                    'android.intent.category.LAUNCHER',
-                    '1',
-                ]);
-            }
-        },
-        acceptIosOpenDialog: async () => {
-            const result = await acceptDeeplinkOpenConfirmation();
-            if (result && !result.tapped) {
-                throw new Error('DEV_CLIENT_ENDPOINT_NOT_FOUND: iOS open confirmation did not expose the exact Open action');
-            }
-        },
-        connectExact: async ({ metroPort, platform, appId, deviceId }) => {
-            return connectExactSessionTarget({ metroPort, platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
-        },
-        readMarker: async () => {
-            const result = await getClient().evaluate('JSON.stringify(globalThis.__RN_DEV_AGENT_AUTHORITY__ ?? null)');
-            if (typeof result.value !== 'string')
-                return null;
-            const parsed = JSON.parse(result.value);
-            return parsed?.status === 'signed' && parsed.marker
-                ? { status: 'signed', marker: parsed.marker }
-                : null;
-        },
-        readManagedManifest: async ({ host, metroPort, platform }) => {
-            const controller = new AbortController();
-            const timer = setTimeout(() => controller.abort(), 15_000);
-            try {
-                const response = await fetch(`http://${host}:${metroPort}/`, {
-                    headers: {
-                        accept: 'multipart/mixed,application/expo+json,application/json',
-                        'expo-platform': platform,
-                    },
-                    signal: controller.signal,
-                });
-                return {
-                    body: await response.text(),
-                    contentType: response.headers.get('content-type') ?? '',
-                    status: response.status,
-                };
-            }
-            catch (error) {
-                throw new Error(`METRO_MANIFEST_ENDPOINT_MISMATCH: managed manifest request failed: ${error instanceof Error ? error.message : String(error)}`);
-            }
-            finally {
-                clearTimeout(timer);
-            }
-        },
-    });
-    getClient().setAuthoritativeSessionPolicy(createAuthoritativeSessionPolicy(status));
-    return bundle;
+    else if (suspendedPolicy) {
+        current.clearAuthoritativeSessionPolicy();
+    }
+    try {
+        const bundle = await pinExactDevClient({
+            sessionId: status.sessionId,
+            metroInstanceId: metro.instanceId,
+            worktreeKey: status.worktreeKey,
+            appId: device.appId,
+            platform: device.platform,
+            buildGeneration: metro.buildGeneration,
+            deviceId: device.deviceId,
+            metroPort: metro.port,
+            runtimeKind,
+            ...(devClientUrl ? { devClientUrl, expectedDevClientUrl: devClientUrl } : {}),
+            signerCapability: secret.signerCapability,
+        }, {
+            openUrl: async (platform, deviceId, url) => {
+                if (platform === 'ios') {
+                    await execFileP('xcrun', ['simctl', 'openurl', deviceId, url]);
+                }
+                else {
+                    await execFileP('adb', androidDeeplinkCommandArgs(url, undefined, deviceId));
+                }
+            },
+            launchExactApp: async (platform, deviceId, appId) => {
+                if (platform === 'ios') {
+                    await execFileP('xcrun', ['simctl', 'launch', deviceId, appId]);
+                }
+                else {
+                    await execFileP('adb', [
+                        '-s',
+                        deviceId,
+                        'shell',
+                        'monkey',
+                        '--pct-syskeys',
+                        '0',
+                        '-p',
+                        appId,
+                        '-c',
+                        'android.intent.category.LAUNCHER',
+                        '1',
+                    ]);
+                }
+            },
+            acceptIosOpenDialog: async () => {
+                const result = await acceptDeeplinkOpenConfirmation();
+                if (result && !result.tapped) {
+                    throw new Error('DEV_CLIENT_ENDPOINT_NOT_FOUND: iOS open confirmation did not expose the exact Open action');
+                }
+            },
+            connectExact: async ({ metroPort, platform, appId, deviceId }) => {
+                return connectExactSessionTarget({ metroPort, platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
+            },
+            readMarker: async (connection) => {
+                const markerClient = 'client' in connection ? connection.client : getClient();
+                const result = await markerClient.evaluate('JSON.stringify(globalThis.__RN_DEV_AGENT_AUTHORITY__ ?? null)');
+                if (typeof result.value !== 'string')
+                    return null;
+                const parsed = JSON.parse(result.value);
+                return parsed?.status === 'signed' && parsed.marker
+                    ? { status: 'signed', marker: parsed.marker }
+                    : null;
+            },
+            commitBundle,
+            readManagedManifest: async ({ host, metroPort, platform }) => {
+                const controller = new AbortController();
+                const timer = setTimeout(() => controller.abort(), 15_000);
+                try {
+                    const response = await fetch(`http://${host}:${metroPort}/`, {
+                        headers: {
+                            accept: 'multipart/mixed,application/expo+json,application/json',
+                            'expo-platform': platform,
+                        },
+                        signal: controller.signal,
+                    });
+                    return {
+                        body: await response.text(),
+                        contentType: response.headers.get('content-type') ?? '',
+                        status: response.status,
+                    };
+                }
+                catch (error) {
+                    throw new Error(`METRO_MANIFEST_ENDPOINT_MISMATCH: managed manifest request failed: ${error instanceof Error ? error.message : String(error)}`);
+                }
+                finally {
+                    clearTimeout(timer);
+                }
+            },
+        });
+        getClient().setAuthoritativeSessionPolicy(createAuthoritativeSessionPolicy(status));
+        return bundle;
+    }
+    catch (error) {
+        if (suspendedPolicy && getClient() === current) {
+            current.setAuthoritativeSessionPolicy(suspendedPolicy);
+        }
+        throw error;
+    }
 }
 function createAuthoritativeSessionPolicy(status) {
     const device = status.bindings.device;
@@ -773,29 +808,31 @@ function createAuthoritativeSessionPolicy(status) {
     return {
         port: metroPort,
         filters: { platform: device.platform, bundleId: device.appId },
-        resolveTargetId: async (targets) => {
+        resolveTargetId: async (targets, awaitWithinBoundary) => {
             const exactCandidates = await filterTargetsForExactDevice({
                 platform: device.platform,
                 deviceId: device.deviceId,
                 targets,
-            }, { execute: execFileP });
+            }, { execute: execFileP, awaitWithinBoundary });
             if (exactCandidates.length !== 1) {
                 throw new Error(`CDP_TARGET_AUTHORITY_MISMATCH: expected one target on the exact device, found ${exactCandidates.length}`);
             }
             return exactCandidates[0].id;
         },
-        verifyAndReconcile: reconcileAuthoritativeConnection,
+        verifyAndReconcile: (connectedClient, awaitWithinBoundary) => reconcileAuthoritativeConnection(connectedClient, awaitWithinBoundary),
     };
 }
 async function connectExactSessionTarget(input, timeoutMs) {
     return connectExactSessionTargetWithDependencies(input, timeoutMs, {
         getClient,
         setClient,
+        publishClient,
         createClient,
+        createAttemptClient: (port) => configureClientLifecycle(new CDPClient(port)),
         execute: execFileP,
     });
 }
-async function relaunchSessionRuntime(status) {
+function resolveManagedRuntimeLaunchBinding(status) {
     const device = status.bindings.device;
     const metro = status.bindings.metro;
     const install = status.bindings.install;
@@ -809,10 +846,54 @@ async function relaunchSessionRuntime(status) {
         !Number.isSafeInteger(metroPort)) {
         throw new Error('METRO_ORIGIN_MISMATCH: managed replay launch authority is incomplete');
     }
-    const current = getClient();
-    await current.disconnect();
-    setClient(createClient(Number(metroPort)));
+    return {
+        platform,
+        deviceId,
+        appId,
+        metroPort: Number(metroPort),
+        devClientUrl: typeof install.devClientUrl === 'string'
+            ? install.devClientUrl
+            : typeof device.devClientUrl === 'string'
+                ? device.devClientUrl
+                : null,
+    };
+}
+function stageAndroidRuntimeConnection(connection) {
+    const candidateProbe = createRuntimeAuthorityProbe(() => connection.client);
+    return {
+        probe: (input) => connection.run(() => candidateProbe(input)),
+        refreshRuntimeBinding: (currentStatus) => connection.run(() => rebindSessionRuntime(currentStatus, connection.run, connection.client)),
+        assertActive: connection.assertActive,
+        publish: (currentStatus) => {
+            connection.publish();
+            getClient().setAuthoritativeSessionPolicy(createAuthoritativeSessionPolicy(currentStatus));
+        },
+        cancel: connection.cancel,
+    };
+}
+/**
+ * GH #708: re-establish the exact managed target without touching the app.
+ * A mid-flow relaunch whose dev-client only re-registers after the flow's own
+ * post-launch steps needs the connection back, not another cold start.
+ */
+async function reconnectSessionRuntime(status) {
+    const { platform, deviceId, appId, metroPort } = resolveManagedRuntimeLaunchBinding(status);
     if (platform === 'ios') {
+        const current = getClient();
+        await current.disconnect();
+        setClient(createClient(metroPort));
+        await connectExactSessionTarget({ metroPort, platform, appId, deviceId }, 15_000);
+        return;
+    }
+    const connection = await connectExactSessionTarget({ metroPort, platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
+    return stageAndroidRuntimeConnection(connection);
+}
+async function relaunchSessionRuntime(status) {
+    const { platform, deviceId, appId, metroPort, devClientUrl: boundDevClientUrl, } = resolveManagedRuntimeLaunchBinding(status);
+    if (platform === 'ios') {
+        const current = getClient();
+        await current.disconnect();
+        setClient(createClient(metroPort));
         await execFileP('xcrun', [
             'simctl',
             'launch',
@@ -822,31 +903,27 @@ async function relaunchSessionRuntime(status) {
             '--initialUrl',
             `http://127.0.0.1:${String(metroPort)}`,
         ]);
+        await connectExactSessionTarget({ metroPort, platform, appId, deviceId }, 15_000);
+        return;
     }
-    else {
-        const devClientUrl = typeof install.devClientUrl === 'string'
-            ? install.devClientUrl
-            : typeof device.devClientUrl === 'string'
-                ? device.devClientUrl
-                : null;
-        if (!devClientUrl) {
-            throw new Error('DEV_CLIENT_ENDPOINT_NOT_FOUND: managed Android replay requires the exact Dev Client URL');
-        }
-        await execFileP('adb', [
-            ...androidDeeplinkCommandArgs(devClientUrl, undefined, deviceId),
-            '-p',
-            appId,
-        ]);
+    if (!boundDevClientUrl) {
+        throw new Error('DEV_CLIENT_ENDPOINT_NOT_FOUND: managed Android replay requires the exact Dev Client URL');
     }
-    await connectExactSessionTarget({ metroPort: Number(metroPort), platform, appId, deviceId }, 15_000);
+    await execFileP('adb', [
+        ...androidDeeplinkCommandArgs(boundDevClientUrl, undefined, deviceId),
+        '-p',
+        appId,
+    ]);
+    const connection = await connectExactSessionTarget({ metroPort, platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
+    return stageAndroidRuntimeConnection(connection);
 }
-async function rebindSessionRuntime(status) {
+async function rebindSessionRuntime(status, awaitWithinBoundary, connectedClient = getClient()) {
     const device = status.bindings.device;
     const metro = status.bindings.metro;
     const prior = status.bindings.bundle;
     const install = status.bindings.install;
     const declaredDevice = status.bindings.device;
-    const client = getClient();
+    const client = connectedClient;
     const target = client.connectedTarget;
     if (!client.isConnected ||
         !target ||
@@ -861,11 +938,14 @@ async function rebindSessionRuntime(status) {
         platform: device.platform,
         deviceId: device.deviceId,
         targetDeviceName: target.deviceName,
-    }, { execute: execFileP });
+    }, { execute: execFileP, awaitWithinBoundary });
     const secret = process.env.RN_DEV_AGENT_SESSION_SECRET_PATH
         ? readJsonStateFile(process.env.RN_DEV_AGENT_SESSION_SECRET_PATH)
         : null;
-    const evaluated = await client.evaluate('JSON.stringify(globalThis.__RN_DEV_AGENT_AUTHORITY__ ?? null)');
+    const evaluateMarker = () => client.evaluate('JSON.stringify(globalThis.__RN_DEV_AGENT_AUTHORITY__ ?? null)');
+    const evaluated = await (awaitWithinBoundary
+        ? awaitWithinBoundary(evaluateMarker)
+        : evaluateMarker());
     const outer = typeof evaluated.value === 'string'
         ? JSON.parse(evaluated.value)
         : null;
@@ -892,7 +972,7 @@ async function rebindSessionRuntime(status) {
         connectionGeneration: client.connectionGeneration,
     });
 }
-async function reconcileAuthoritativeConnection(connectedClient) {
+async function reconcileAuthoritativeConnection(connectedClient, awaitWithinBoundary) {
     if (getClient() !== connectedClient) {
         throw new Error('CDP_TARGET_AUTHORITY_MISMATCH: authoritative client was replaced');
     }
@@ -901,7 +981,7 @@ async function reconcileAuthoritativeConnection(connectedClient) {
     if (!status)
         throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: session authority is unavailable');
     await reconcileAuthoritativeBundle(status, {
-        verifyRuntime: () => rebindSessionRuntime(status),
+        verifyRuntime: () => rebindSessionRuntime(status, awaitWithinBoundary),
         hasActiveOperation: () => available.registry.currentOperation() !== undefined ||
             available.registry.hasActiveBundleOperation(available.session),
         commit: (input) => available.registry.updateBindings(available.session, input),
@@ -922,10 +1002,34 @@ const getSessionSignerCapability = (sessionId) => {
         : currentSecretPath;
     return readJsonStateFile(secretPath)?.signerCapability ?? null;
 };
+// GH #706: SIGUSR2 is the supervisor's existing hot-reload intent — it respawns this
+// worker (replaying the MCP handshake) with the environment of a freshly resolved
+// session, which is the only way a released session becomes usable again in-band.
+const spawningSupervisorPid = process.ppid;
+const requestWorkerRecycle = () => {
+    if (process.env.RN_BRIDGE_SUPERVISED !== '1')
+        return false;
+    if (!Number.isInteger(spawningSupervisorPid) || spawningSupervisorPid <= 1)
+        return false;
+    setTimeout(() => {
+        // A changed parent means the supervisor died and its PID may now belong to an
+        // unrelated process; never signal that stranger.
+        if (process.ppid !== spawningSupervisorPid)
+            return;
+        try {
+            process.kill(spawningSupervisorPid, 'SIGUSR2');
+        }
+        catch {
+            /* supervisor already gone — the next transport start resolves a session */
+        }
+    }, 250).unref();
+    return true;
+};
 const sessionHandler = createSessionHandler(authorityRuntime, {
     getSignerCapability: getSessionSignerCapability,
     pinDevClient: pinSessionDevClient,
     onBundleInvalidated: () => getClient().clearAuthoritativeSessionPolicy(),
+    requestWorkerRecycle,
 });
 const disconnectClientHandler = createDisconnectHandler(getClient, setClient, createClient);
 const connectBoundSession = createRegisteredConnectHandler(authorityRuntime, sessionHandler);
@@ -1640,7 +1744,7 @@ trackedTool('device_press', 'Tap a UI element by its @ref from device_snapshot, 
         .optional()
         .describe('Story 05: when an ordinary tap produces no UI change, one automatic re-tap fires by default. Validated iOS Key/Keyboard targets and transport/keyboard recovery are never replayed. Set false to disable for other taps (e.g. intentional no-op taps). RN_SELF_HEAL=0 disables globally.'),
 }, createDevicePressHandler(getClient));
-trackedTool('device_fill', 'Type text into an input field by its @ref from device_snapshot. Always re-taps the element first so keyboard focus is on the correct field even in sequential fills. On "no focused text input" errors, automatically falls back: Pressable→TextInput resolution (common RN design-system pattern where outer Pressable wraps inner TextInput) → coordinate re-tap + retry → Android adb input / iOS Maestro inputText. Check meta.fallbackUsed in the result to see which strategy succeeded. Requires an open session.', {
+trackedTool('device_fill', 'Fill one exact TextInput and report success only after stable exact read-back by the mutation owner. A unique controlled React TextInput uses one onChangeText dispatch and fiber read-back; an uncontrolled input uses one native runner transaction. Focus is skipped only when that exact owner is positively focused. Ambiguity, transformation, unreadability, staleness, target loss, secure or occluded targets, and timeout uncertainty hard-fail without automatic retyping, adb input, or Maestro fallback. Public results and diagnostics expose status and length metadata, never the requested or observed text. Requires an open session and connected helpers.', {
     ref: z.string().describe('Input field ref from device_snapshot (e.g. "e5" or "@e5")'),
     text: z.string().describe('Text to type into the field'),
     waitForKeyboardMs: z
@@ -1649,18 +1753,18 @@ trackedTool('device_fill', 'Type text into an input field by its @ref from devic
         .min(0)
         .max(5000)
         .optional()
-        .describe('Wait between pre-tap and fill probe in ms (default 150). Bump to 500-1000ms when filling Pressable-wrapped TextInputs on slow keyboard animations to give RN native focus dispatch time to land.'),
+        .describe('Deprecated compatibility option. Exact fill now owns and proves focus inside its selected mutation path.'),
     testID: z
         .string()
         .optional()
-        .describe("Explicit testID for the JS-first fill path; resolved from the ref's cached snapshot identifier when omitted. Pass this when the ref is not a snapshot token."),
+        .describe("Explicit exact target identity. Otherwise device_fill uses the fresh snapshot ref's nonblank testID."),
     settleTimeoutMs: z
         .number()
         .int()
         .min(500)
         .max(30000)
         .optional()
-        .describe('Override the post-action settle budget in ms (default 6000). Settle waits for the UI to stabilize after the action; see meta.settle in the result. Budget knob only — RN_SETTLE=0 disables settle.'),
+        .describe('Deprecated compatibility option. Exact owner-local read-back supplies the bounded stability check.'),
 }, createDeviceFillHandler(getClient));
 trackedTool('device_swipe', 'Swipe on the device screen. Use direction for simple scrolling, or x1/y1/x2/y2 for precise coordinate-based swipes (drag-to-reorder, bottom sheets). Pass exact: true for a precise unclamped gesture duration via the in-tree runner — needed for momentum-sensitive UIs like UIDatePicker wheels where a normalized/clamped duration causes overshoot. Requires an open session.', {
     direction: z
@@ -2150,7 +2254,7 @@ trackedTool('device_pick_date', 'Select a visible date in a UIDatePicker (wheels
         .describe('Whole Maestro flow timeout (default 120000ms; never divided by component count).'),
 }, createDevicePickDateHandler());
 trackedTool('device_focus_next', "Move keyboard focus to the next input field by tapping the soft keyboard's Next/Return/Done/Go button. Use in multi-field form flows where sequential device_press + device_fill calls leave focus stuck on the first field. Requires an open session and a visible keyboard.", {}, createDeviceFocusNextHandler());
-trackedTool('device_batch', 'Execute a sequence of UI interactions in ONE tool call. Eliminates LLM round-trip overhead. Steps: find/press/fill (testID OR text/ref), scroll/swipe (direction), back, wait (ms), hideKeyboard, snapshot, screenshot. Pass `testID` on find/press/fill for fresh fiber-tree resolution per step (eliminates stale-ref-across-step-transitions failures from cached refs). Fails fast on error unless step has optional=true OR continueOnError is true at the batch level; a step TIMEOUT always aborts the batch (the native operation may still be completing, so later steps are never started) regardless of optional/continueOnError.', {
+trackedTool('device_batch', 'Execute a sequence of UI interactions in ONE tool call. Eliminates LLM round-trip overhead. Steps: find/press/fill (testID OR text/ref), scroll/swipe (direction), back, wait (ms), hideKeyboard, snapshot, screenshot. Pass `testID` on find/press/fill for fresh fiber-tree resolution per step (eliminates stale-ref-across-step-transitions failures from cached refs). Fails fast on error unless step has optional=true OR continueOnError is true at the batch level; a step TIMEOUT or failed fill with observed/possible mutation always aborts the batch because a later mutation would be unsafe.', {
     steps: z
         .array(z.object({
         action: z
@@ -2186,7 +2290,7 @@ trackedTool('device_batch', 'Execute a sequence of UI interactions in ONE tool c
         testID: z
             .string()
             .optional()
-            .describe('(find/press/fill) PREFERRED for known testIDs — re-resolves via snapshot at execution time, immune to layout-change drift. Slower per-step than ref (each call snapshots) but eliminates stale-ref failures across step transitions. When set, ignores text/ref.'),
+            .describe('(find/press/fill) PREFERRED exact identity. Fill still requires text and calls the same exact-fill coordinator as device_fill.'),
         tap: z.boolean().optional().describe('(find) Tap the found element'),
         direction: z
             .enum(['up', 'down', 'left', 'right'])
@@ -2218,7 +2322,7 @@ trackedTool('device_batch', 'Execute a sequence of UI interactions in ONE tool c
     continueOnError: z
         .boolean()
         .default(false)
-        .describe('When true, a failed non-optional step is recorded but the batch continues. Result includes failure_count + failures array. Default false (fail-fast). Use for diagnostic batches where partial results > first-failure abort.'),
+        .describe('When true, ordinary failed steps are recorded and the batch continues. A failed fill with observed or possible mutation always stops later steps.'),
     finalSnapshot: z
         .enum(['salient', 'full', 'none'])
         .default('salient')
@@ -2644,6 +2748,10 @@ trackedTool('cdp_run_action', "Replay a learned action by id with end-to-end aut
         .enum(['ios', 'android'])
         .optional()
         .describe('Force a specific platform; otherwise auto-detected from the active device session.'),
+    appFile: z
+        .string()
+        .optional()
+        .describe("GH #705: path to the .app Maestro reinstalls from after a clearState uninstall. Normally omit it — an iOS clearState flow resolves the bundle from the session's attested install receipt, and the receipt is re-issued after the reinstall so later device_*/maestro_run calls keep working."),
     autoRepair: z
         .boolean()
         .optional()

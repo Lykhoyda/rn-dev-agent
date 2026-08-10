@@ -6,6 +6,8 @@ import {
   completeManagedNativeOriginAuthority,
   claimOptionalBundleAuthority,
   createAuthorityGate,
+  relaunchManagedNativeOriginApp,
+  reproveManagedNativeOrigin,
 } from '../../../dist/session/authority-gate.js';
 import { SessionAuthorityError } from '../../../dist/session/registry.js';
 import { failResult, okResult } from '../../../dist/utils.js';
@@ -506,6 +508,190 @@ test('origin-disrupting lifecycle tools replace bundle authority at successful c
     envelope.meta.authorityReceipt.nativeAppOrigin.authorityScope,
     'live-metro-target-device',
   );
+});
+
+test('managed Android relaunch publishes only after staged proof and atomic promotion', async () => {
+  const { runtime, registry, status } = fixture();
+  status.bindings.device.platform = 'android';
+  status.bindings.install.platform = 'android';
+  const events: string[] = [];
+  const candidate = {
+    ...status.bindings.bundle,
+    targetId: 'new-target',
+    connectionGeneration: 2,
+  };
+  let publishedTarget = 'old-target';
+  registry.replaceBindingsDuringOperation = (operation, input) => {
+    input.assertBeforeCommit?.();
+    status.bindings = { ...status.bindings, ...input.bindings };
+    status.authorityVersion += 1;
+    events.push('atomic-commit');
+    const committedOperation = { ...operation, authorityVersion: status.authorityVersion };
+    input.onCommitted?.(committedOperation);
+    return committedOperation;
+  };
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-ambient` }),
+    relaunchBoundRuntime: async () => {
+      events.push('relaunch');
+      return {
+        probe: async ({ axis }) => {
+          events.push(`staged-probe:${axis}`);
+          return { axis, identity: `${axis}-staged` };
+        },
+        refreshRuntimeBinding: async () => {
+          events.push('signed-marker');
+          return candidate;
+        },
+        assertActive: () => events.push('deadline-check'),
+        publish: (publishedStatus) => {
+          assert.deepEqual(publishedStatus.bindings.bundle, candidate);
+          publishedTarget = candidate.targetId;
+          events.push('publish');
+        },
+        cancel: () => events.push('cancel'),
+      };
+    },
+  });
+
+  const result = await gate.wrap('device_reset_state', async (args) => {
+    await relaunchManagedNativeOriginApp(args);
+    assert.equal(publishedTarget, 'old-target');
+    await completeManagedNativeOriginAuthority(args, true);
+    return okResult({ reset: true });
+  })({ relaunch: true });
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, true);
+  assert.equal(publishedTarget, 'new-target');
+  assert.deepEqual(events, [
+    'relaunch',
+    'staged-probe:A',
+    'signed-marker',
+    'staged-probe:B',
+    'deadline-check',
+    'atomic-commit',
+    'deadline-check',
+    'publish',
+  ]);
+});
+
+test('managed Android deferred re-prove stages the late target until atomic promotion', async () => {
+  const { runtime, registry, status } = fixture();
+  status.bindings.device.platform = 'android';
+  status.bindings.install.platform = 'android';
+  const events: string[] = [];
+  const candidate = {
+    ...status.bindings.bundle,
+    targetId: 'late-target',
+    connectionGeneration: 3,
+  };
+  let publishedTarget = 'old-target';
+  registry.replaceBindingsDuringOperation = (operation, input) => {
+    input.assertBeforeCommit?.();
+    status.bindings = { ...status.bindings, ...input.bindings };
+    status.authorityVersion += 1;
+    events.push('atomic-commit');
+    const committedOperation = { ...operation, authorityVersion: status.authorityVersion };
+    input.onCommitted?.(committedOperation);
+    return committedOperation;
+  };
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-ambient` }),
+    relaunchBoundRuntime: async () => {
+      events.push('relaunch');
+      throw new Error('CDP_TARGET_AUTHORITY_MISMATCH: target registered after the flow resumed');
+    },
+    reconnectBoundRuntime: async () => {
+      events.push('reprove');
+      return {
+        probe: async ({ axis }) => {
+          events.push(`staged-probe:${axis}`);
+          return { axis, identity: `${axis}-staged` };
+        },
+        refreshRuntimeBinding: async () => {
+          events.push('signed-marker');
+          return candidate;
+        },
+        assertActive: () => events.push('deadline-check'),
+        publish: () => {
+          publishedTarget = candidate.targetId;
+          events.push('publish');
+        },
+        cancel: () => events.push('cancel'),
+      };
+    },
+  });
+
+  const result = await gate.wrap('device_reset_state', async (args) => {
+    await assert.rejects(
+      relaunchManagedNativeOriginApp(args),
+      /target registered after the flow resumed/,
+    );
+    await reproveManagedNativeOrigin(args);
+    assert.equal(publishedTarget, 'old-target');
+    await completeManagedNativeOriginAuthority(args, true);
+    return okResult({ reset: true });
+  })({ relaunch: true });
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, true);
+  assert.equal(publishedTarget, 'late-target');
+  assert.deepEqual(events, [
+    'relaunch',
+    'reprove',
+    'staged-probe:A',
+    'signed-marker',
+    'staged-probe:B',
+    'deadline-check',
+    'atomic-commit',
+    'deadline-check',
+    'publish',
+  ]);
+});
+
+test('managed Android relaunch compensates a post-commit hardening failure', async () => {
+  const { runtime, registry, status } = fixture();
+  status.bindings.device.platform = 'android';
+  status.bindings.install.platform = 'android';
+  const priorBundle = status.bindings.bundle;
+  const candidate = { ...priorBundle, targetId: 'new-target', connectionGeneration: 2 };
+  const events: string[] = [];
+  let replacementCount = 0;
+  registry.replaceBindingsDuringOperation = (operation, input) => {
+    replacementCount += 1;
+    status.bindings = { ...status.bindings, ...input.bindings };
+    status.authorityVersion += 1;
+    if (replacementCount === 1) {
+      input.assertBeforeCommit?.();
+      events.push('candidate-commit');
+      input.onCommitted?.({ ...operation, authorityVersion: status.authorityVersion });
+      throw new Error('registry permissions hardening failed');
+    }
+    events.push('compensating-commit');
+    return { ...operation, authorityVersion: status.authorityVersion };
+  };
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-ambient` }),
+    relaunchBoundRuntime: async () => ({
+      probe: async ({ axis }) => ({ axis, identity: `${axis}-staged` }),
+      refreshRuntimeBinding: async () => candidate,
+      assertActive: () => events.push('deadline-check'),
+      publish: () => events.push('publish'),
+      cancel: () => events.push('cancel'),
+    }),
+  });
+
+  const result = await gate.wrap('device_reset_state', async (args) => {
+    await relaunchManagedNativeOriginApp(args);
+    await completeManagedNativeOriginAuthority(args, true);
+    return okResult({ reset: true });
+  })({ relaunch: true });
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, false);
+  assert.deepEqual(status.bindings.bundle, priorBundle);
+  assert.deepEqual(events, ['deadline-check', 'candidate-commit', 'compensating-commit', 'cancel']);
 });
 
 test('origin-disrupting lifecycle tools invalidate bundle authority when no target remains', async () => {

@@ -2,6 +2,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { openAuthorityStore, } from './authority-store.js';
 import { hasCompleteRecorderCleanupIdentity, hasCompleteRunnerCleanupIdentity, } from './cleanup-identity.js';
+import { NON_GIT_DECLARATION_NEXT_ACTION } from './declared-source-contract.js';
 import { probeMetroListener } from './metro-binding.js';
 const INITIALIZATION_WAIT = new Int32Array(new SharedArrayBuffer(4));
 export const AUTHORITY_REGISTRY_SCHEMA_VERSION = 4;
@@ -39,6 +40,7 @@ const errorAxes = {
     OPERATION_ALREADY_IN_PROGRESS: 'C',
     SOURCE_WORKTREE_MISMATCH: 'S',
     SOURCE_REVISION_NOT_BUNDLED: 'S',
+    NON_GIT_MANIFEST_REQUIRED: 'S',
     APP_INSTALL_IDENTITY_CHANGED: 'I',
     METRO_PORT_CLAIM_CONFLICT: 'M',
     PORT_OCCUPIED_UNOWNED: 'M',
@@ -61,6 +63,13 @@ const errorAxes = {
     OBSERVE_AUTHORITY_MISMATCH: 'O',
     PROOF_AUTHORITY_MISMATCH: 'P',
 };
+// Codes whose repair is a named declaration/configuration path, not another status read.
+const errorNextActions = {
+    NON_GIT_MANIFEST_REQUIRED: NON_GIT_DECLARATION_NEXT_ACTION,
+};
+export function authorityRemedyNextAction(code) {
+    return errorNextActions[code];
+}
 export function shortAuthorityIdentity(value) {
     return createHash('sha256').update(JSON.stringify(value)).digest('hex').slice(0, 16);
 }
@@ -76,6 +85,7 @@ export function authorityErrorMeta(error) {
             }
             : undefined,
         nextAction: error.details?.nextAction ??
+            errorNextActions[error.code] ??
             'Run rn_session with action "status" and repair the named authority axis.',
     };
 }
@@ -114,6 +124,30 @@ function isOperationalState(state) {
 }
 function isFenceableState(state) {
     return isOperationalState(state) || state === 'handoff';
+}
+function readStartupCleanupBlocker(bindingsJson) {
+    let journal;
+    try {
+        const bindings = JSON.parse(bindingsJson);
+        const value = bindings.startupCleanup;
+        journal = value && typeof value === 'object' ? value : undefined;
+    }
+    catch {
+        return undefined;
+    }
+    if (!journal || typeof journal.finishedAt === 'number')
+        return undefined;
+    const refusal = journal.refusal;
+    if (!refusal || typeof refusal !== 'object')
+        return undefined;
+    const record = refusal;
+    if (typeof record.code !== 'string' || typeof record.reason !== 'string')
+        return undefined;
+    return {
+        code: record.code,
+        reason: record.reason,
+        ...(typeof record.nextAction === 'string' ? { nextAction: record.nextAction } : {}),
+    };
 }
 function bindingsRunnerPresent(bindingsJson) {
     const bindings = JSON.parse(bindingsJson);
@@ -260,26 +294,7 @@ export class SessionRegistry {
             if (resources.some((resource) => resource.type === 'device')) {
                 this.#assertNoStaleDeviceCleanup(bindings);
             }
-            for (const resource of resources) {
-                const claim = this.#findConflictingClaim(resource);
-                if (!claim ||
-                    (claim.session_id === session.sessionId && claim.claim_epoch === session.claimEpoch)) {
-                    continue;
-                }
-                const probe = probes.get(claim.session_id);
-                if (!probe || probe.claimEpoch !== claim.claim_epoch) {
-                    throw claimConflict(claim);
-                }
-                if (probe.status === 'match')
-                    throw claimConflict(claim);
-                if (probe.status === 'unknown') {
-                    if (claim.lease_until_ms < now) {
-                        throw new SessionAuthorityError('STALE_LEASE_NOT_RECLAIMABLE', 'expired lease owner identity could not be proven', { sessionId: claim.session_id, claimEpoch: claim.claim_epoch });
-                    }
-                    throw claimConflict(claim);
-                }
-                throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'a proven-stale owner requires explicit adopt_stale before claims transfer', { sessionId: claim.session_id, claimEpoch: claim.claim_epoch });
-            }
+            this.#assertClaimsAvailable(session, resources, probes, now);
             const leaseUntil = now + this.#leaseMs;
             for (const resource of resources) {
                 this.#database
@@ -592,7 +607,7 @@ export class SessionRegistry {
         const prior = priorSessionId
             ? asSession(this.#database
                 .prepare(`SELECT session_id, source_key, worktree_key, app_root_key, claim_epoch,
-                      supervisor_pid, supervisor_birth, heartbeat_ms
+                      supervisor_pid, supervisor_birth, heartbeat_ms, bindings_json
                FROM sessions WHERE session_id = ?`)
                 .get(priorSessionId))
             : null;
@@ -629,6 +644,17 @@ export class SessionRegistry {
                         requirement: 'attach',
                         priorOwner: 'stale',
                         nextAction: 'The proven-dead owner has a different source identity for this app root, so startup cleanup cannot release it under the current declared manifests. Restore the declared manifests that produced the prior identity, start and close rn-dev-agent to release its authority, then reapply the manifest changes; otherwise use a separate worktree.',
+                    };
+                }
+                // Only cleanup without a retained refusal may promise automatic convergence.
+                const blocked = readStartupCleanupBlocker(prior.bindings_json);
+                if (blocked) {
+                    return {
+                        requirement: 'transport-restart',
+                        priorOwner: 'stale',
+                        startupCleanupBlocked: blocked,
+                        nextAction: blocked.nextAction ??
+                            `Startup cleanup refused with ${blocked.code} and will refuse again on the next restart: ${blocked.reason}. Resolve that refusal before restarting the MCP transport.`,
                     };
                 }
                 return {
@@ -1124,6 +1150,37 @@ export class SessionRegistry {
             return { resumed: false, obligations, integration };
         });
     }
+    /** Re-recording an identical cleanup refusal is a no-op across repeated restarts. */
+    recordStartupCleanupRefusal(prior, refusal) {
+        const now = this.#now();
+        this.#transaction(() => {
+            const row = this.#requireProvenDeadStartupOwner(prior);
+            const { bindings, journal } = this.#requireStartupCleanupJournal(row);
+            if (typeof journal.finishedAt === 'number')
+                return;
+            const existing = journal.refusal;
+            if (existing &&
+                existing.code === refusal.code &&
+                existing.reason === refusal.reason &&
+                existing.nextAction === refusal.nextAction) {
+                return;
+            }
+            this.#database
+                .prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`)
+                .run(JSON.stringify({
+                ...bindings,
+                startupCleanup: {
+                    ...journal,
+                    refusal: {
+                        code: refusal.code,
+                        reason: refusal.reason,
+                        ...(refusal.nextAction ? { nextAction: refusal.nextAction } : {}),
+                    },
+                },
+            }), now, row.session_id, row.claim_epoch);
+        });
+    }
     verifyStartupOwnerObligation(prior, resource) {
         const row = this.#requireProvenDeadStartupOwner(prior);
         const { journal } = this.#requireStartupCleanupJournal(row);
@@ -1400,6 +1457,10 @@ export class SessionRegistry {
         return prior;
     }
     updateBindings(session, input) {
+        const claimed = input.claimResources ?? [];
+        const probes = input.probeClaimOwners && claimed.length > 0
+            ? this.#probeClaimOwners(session, claimed)
+            : null;
         const now = this.#now();
         this.#transaction(() => {
             const current = this.#requireSession(session);
@@ -1411,17 +1472,10 @@ export class SessionRegistry {
                 ...JSON.parse(current.bindings_json),
                 ...input.bindings,
             };
-            for (const resource of input.claimResources ?? []) {
-                const claim = this.#findConflictingClaim(resource);
-                if (claim &&
-                    (claim.session_id !== session.sessionId || claim.claim_epoch !== session.claimEpoch)) {
-                    throw claimConflict(claim);
-                }
-            }
+            this.#assertClaimsAvailable(session, claimed, probes, now);
             if (Object.hasOwn(input.bindings, 'device') || Object.hasOwn(input.bindings, 'install')) {
                 const currentBindings = JSON.parse(current.bindings_json);
-                const platform = String((input.bindings.device ?? currentBindings.device)
-                    ?.platform ?? '');
+                const platform = String((input.bindings.device ?? currentBindings.device)?.platform ?? '');
                 if (platform) {
                     this.#invalidatePlatformReceipt(session, platform);
                 }
@@ -1452,7 +1506,7 @@ export class SessionRegistry {
            WHERE session_id = ? AND claim_epoch = ?`)
                 .run(input.state ?? current.state, JSON.stringify(bindings), now, session.sessionId, session.claimEpoch);
             this.#advanceActiveOperationFence(session, current.authority_version, current.authority_version + 1);
-        });
+        }, input.assertBeforeCommit, input.onCommitted);
     }
     replaceBindingsDuringOperation(operation, input) {
         const now = this.#now();
@@ -1519,7 +1573,7 @@ export class SessionRegistry {
                 context.authorityVersion = nextAuthorityVersion;
             }
             return { ...operation, authorityVersion: nextAuthorityVersion };
-        });
+        }, input.assertBeforeCommit, input.onCommitted);
     }
     endOperationWithBindings(operation, bindings) {
         const now = this.#now();
@@ -1623,15 +1677,30 @@ export class SessionRegistry {
             }
         });
     }
+    // GH #706: released and proven-stale rows are not live sessions, so they never
+    // count towards the "multiple live sessions match this worktree" refusal.
     findSessionsByWorktree(worktreeKey) {
         const rows = this.#database
-            .prepare(`SELECT session_id FROM sessions
+            .prepare(`SELECT session_id, supervisor_pid, supervisor_birth FROM sessions
          WHERE worktree_key = ? AND state NOT IN ('released', 'stale')
          ORDER BY updated_ms DESC`)
             .all(worktreeKey);
         return rows
-            .map((row) => this.getSessionStatus(String(row.session_id)))
+            .filter((row) => !this.#supervisorProvenDead(row))
+            .map((row) => this.getSessionStatus(row.session_id))
             .filter((status) => status !== null);
+    }
+    #supervisorProvenDead(row) {
+        try {
+            return (this.#ownerStatus({
+                sessionId: row.session_id,
+                pid: row.supervisor_pid,
+                token: row.supervisor_birth,
+            }) === 'mismatch');
+        }
+        catch {
+            return false;
+        }
     }
     getControllerBinding(session) {
         const row = this.#requireSession(session);
@@ -3074,6 +3143,30 @@ export class SessionRegistry {
         }
         return owners;
     }
+    #assertClaimsAvailable(session, resources, probes, now) {
+        for (const resource of resources) {
+            const claim = this.#findConflictingClaim(resource);
+            if (!claim ||
+                (claim.session_id === session.sessionId && claim.claim_epoch === session.claimEpoch)) {
+                continue;
+            }
+            if (!probes)
+                throw claimConflict(claim);
+            const probe = probes.get(claim.session_id);
+            if (!probe || probe.claimEpoch !== claim.claim_epoch) {
+                throw claimConflict(claim);
+            }
+            if (probe.status === 'match')
+                throw claimConflict(claim);
+            if (probe.status === 'unknown') {
+                if (claim.lease_until_ms < now) {
+                    throw new SessionAuthorityError('STALE_LEASE_NOT_RECLAIMABLE', 'expired lease owner identity could not be proven', { sessionId: claim.session_id, claimEpoch: claim.claim_epoch });
+                }
+                throw claimConflict(claim);
+            }
+            throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'a proven-stale owner requires explicit adopt_stale before claims transfer', { sessionId: claim.session_id, claimEpoch: claim.claim_epoch });
+        }
+    }
     #requireSession(session) {
         const row = asSession(this.#database
             .prepare(`SELECT session_id, state, claim_epoch, authority_version,
@@ -3461,17 +3554,36 @@ export class SessionRegistry {
          WHERE session_id = ?`)
             .run(now, sessionId);
     }
-    #transaction(operation) {
+    #transaction(operation, assertBeforeCommit, onCommitted) {
         this.#database.exec('BEGIN IMMEDIATE');
+        const context = this.#operationContext.getStore();
+        const priorContextAuthorityVersion = context?.authorityVersion;
+        let committed = false;
         try {
             const result = operation();
+            assertBeforeCommit?.();
             this.#database.exec('COMMIT');
-            this.#secureFiles();
+            committed = true;
+            try {
+                onCommitted?.(result);
+            }
+            finally {
+                this.#secureFiles();
+            }
             return result;
         }
         catch (error) {
-            this.#database.exec('ROLLBACK');
-            this.#secureFiles();
+            if (!committed) {
+                try {
+                    this.#database.exec('ROLLBACK');
+                }
+                finally {
+                    if (context && priorContextAuthorityVersion !== undefined) {
+                        context.authorityVersion = priorContextAuthorityVersion;
+                    }
+                    this.#secureFiles();
+                }
+            }
             throw error;
         }
     }

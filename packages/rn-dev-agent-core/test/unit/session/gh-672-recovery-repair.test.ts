@@ -104,9 +104,14 @@ function blockedContender() {
 function withAuthorityGate(
   runtime: WorkerAuthorityRuntime,
   handler: ReturnType<typeof createSessionHandler>,
+  probe: (input: {
+    axis: string;
+    phase: string;
+  }) => Promise<{ axis: string; identity: string }> = ({ axis }) =>
+    Promise.resolve({ axis, identity: `${axis}-stable` }),
 ): ReturnType<typeof createSessionHandler> {
   return createAuthorityGate(runtime as never, {
-    probe: async ({ axis }) => ({ axis, identity: `${axis}-stable` }),
+    probe: probe as never,
   }).wrap('rn_session', handler as never) as ReturnType<typeof createSessionHandler>;
 }
 
@@ -1501,6 +1506,120 @@ test('GH#672/L5: a wildcard device id never releases a neighbour runner through 
     'dead',
     'the `_` in a device id must not match another device as a LIKE wildcard',
   );
+});
+
+// Real-device QA: the release committed its exact scoped transfer, then the fenced
+// authority generation moved on (a worker rebind drops the operation row and bumps the
+// version), and the gate reported the whole call as AUTHORITY_LOST_DURING_OPERATION —
+// denying a side effect an immediate bind_device could still prove.
+test('a stale-device release that committed never reports failure when its fence is lost afterwards', async () => {
+  const f = deadDeviceOwner();
+  const runtime = new WorkerAuthorityRuntime(f.registry, f.live, null);
+  const inner = createSessionHandler(runtime as never, {
+    deviceExists: () => true,
+    stopHandoffRunner: async () => {},
+    stopHandoffRecorder: async () => {},
+  });
+  let rebindAfterCommit = false;
+  const withPostCommitRebind = async (input: { action?: string }) => {
+    const result = await (inner as (i: unknown) => Promise<{ content: Array<{ text: string }> }>)(
+      input,
+    );
+    if (rebindAfterCommit && input.action === 'release_stale_device') {
+      f.registry.bindWorker(f.live, { instanceId: 'live-worker-2', pid: 9101, token: 'birth-2' });
+    }
+    return result;
+  };
+  const gated = withAuthorityGate(runtime, withPostCommitRebind as never);
+
+  const refused = await gated({
+    action: 'bind_device',
+    platform: 'ios',
+    deviceId: 'sim-1',
+    appId: 'com.example.app',
+  });
+  assert.equal(envelope(refused).code, 'STALE_DEVICE_RELEASE_REQUIRED');
+  assert.equal(
+    f.registry.getSessionStatus('live')?.bindings.staleDeviceRelease,
+    undefined,
+    'L5: the unconfirmed refusal mints no offer, so the commit scope must come from the arguments',
+  );
+
+  rebindAfterCommit = true;
+  const released = await gated({
+    action: 'release_stale_device',
+    platform: 'ios',
+    deviceId: 'sim-1',
+    confirmed: true,
+  });
+
+  const body = envelope(released);
+  assert.equal(released.isError, undefined, released.content[0]!.text);
+  assert.equal(body.ok, true, 'a committed release never reports failure');
+
+  // The envelope and the committed registry state must agree, in both directions.
+  const live = f.registry.getSessionStatus('live');
+  assert.equal(f.registry.getClaim('device', 'ios:sim-1'), null);
+  assert.equal(f.registry.getClaim('runner', 'ios:sim-1:9200'), null);
+  assert.equal(f.registry.getClaim('recorder', 'ios:sim-1'), null);
+  assert.equal(live?.bindings.staleDeviceCleanup, null);
+  assert.equal(live?.bindings.staleDeviceRelease, null);
+
+  // Honest in the other direction: the lost fence is named, not hidden.
+  const lost = body.meta?.authorityLostAfterCommit as unknown as {
+    code?: string;
+    released?: { platform?: string; deviceId?: string };
+  };
+  assert.equal(lost?.code, 'AUTHORITY_LOST_DURING_OPERATION');
+  assert.deepEqual(lost?.released, { platform: 'ios', deviceId: 'sim-1' });
+  assert.match(String(body.meta?.nextAction), /status/);
+
+  // Ownership isolation is unchanged: nothing beyond the exact device moved.
+  assert.equal(f.registry.getClaim('source', 'worktree-foreign')?.sessionId, 'dead-device-owner');
+  assert.equal(f.registry.getClaim('metro-port', '8300')?.sessionId, 'dead-device-owner');
+  assert.ok(f.registry.getSessionStatus('dead-device-owner')?.bindings.packageIntegration);
+});
+
+test('a non-authority failure after a committed release is not reported as a lost fence', async () => {
+  const f = deadDeviceOwner();
+  const runtime = new WorkerAuthorityRuntime(f.registry, f.live, null);
+  const inner = createSessionHandler(runtime as never, {
+    deviceExists: () => true,
+    stopHandoffRunner: async () => {},
+    stopHandoffRecorder: async () => {},
+  });
+  let failPostflight = false;
+  const gated = withAuthorityGate(runtime, inner, async ({ axis, phase }) => {
+    if (failPostflight && phase === 'postflight') throw new Error('session state read failed');
+    return { axis, identity: `${axis}-stable` };
+  });
+
+  // Legacy token path: keep the pre-L5 offer flow covered through the same envelope.
+  const offer = f.registry.prepareStaleResourceRelease(f.live, {
+    platform: 'ios',
+    deviceId: 'sim-1',
+  });
+
+  failPostflight = true;
+  const released = await gated({
+    action: 'release_stale_device',
+    platform: 'ios',
+    deviceId: 'sim-1',
+    releaseHandle: offer.token,
+  });
+
+  const body = envelope(released);
+  assert.equal(body.ok, true, 'a committed release never reports failure');
+  assert.equal(f.registry.getClaim('device', 'ios:sim-1'), null);
+  assert.equal(body.meta?.authorityLostAfterCommit, undefined);
+  const failed = body.meta?.failedAfterCommit as unknown as {
+    code?: string;
+    reason?: string;
+    released?: { platform?: string; deviceId?: string };
+  };
+  assert.equal(failed?.code, 'POST_COMMIT_FAILURE');
+  assert.equal(failed?.reason, 'session state read failed');
+  assert.deepEqual(failed?.released, { platform: 'ios', deviceId: 'sim-1' });
 });
 
 test('GH#672: foreign target or handle cannot produce a stale-device release commit', async () => {

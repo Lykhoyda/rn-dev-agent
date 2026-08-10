@@ -285,9 +285,15 @@ export function probeProcessBirth(
 
   try {
     if (platform === 'darwin') {
-      const observedPid = run('/bin/ps', ['-p', String(pid), '-o', 'pid=']).trim();
-      if (observedPid.length === 0) return { status: 'absent' };
-      if (Number(observedPid) !== pid) return { status: 'unknown' };
+      const observed = run('/bin/ps', ['-p', String(pid), '-o', 'pid=,state=']).trim();
+      if (observed.length === 0) return { status: 'absent' };
+      const observedFields = /^(\d+)(?:\s+(\S+))?$/.exec(observed);
+      if (!observedFields || Number(observedFields[1]) !== pid) return { status: 'unknown' };
+      // A zombie has already terminated; it runs no code and its pid cannot be
+      // reused until the parent reaps it. Reporting it as absent — rather than
+      // as an unreadable identity — is what lets a caller prove a stop it just
+      // performed (GH #707).
+      if (observedFields[2]?.startsWith('Z')) return { status: 'absent' };
       const helper = verifyDarwinProcessBirthHelper(dependencies);
       const processInfo = runVerifiedHelper(helper.path, pid, helper.requirement).trim();
       const processMatch = /^(\d+):(\d+):(\d+)$/.exec(processInfo);
@@ -324,6 +330,7 @@ export function probeProcessBirth(
               .trim()
               .split(/\s+/)
           : [];
+      if (fields[0] === 'Z') return { status: 'absent' };
       const started = fields[19];
       if (!boot || !started || !/^\d+$/.test(started)) return { status: 'unknown' };
       return {

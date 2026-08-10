@@ -8,7 +8,10 @@ import {
   type InstalledArtifactIdentity,
 } from '../session/install-authority.js';
 import { captureMetroBinding, type MetroBinding } from '../session/metro-binding.js';
-import type { BundleAuthorityBinding } from '../session/dev-client-authority.js';
+import type {
+  BundleAuthorityBinding,
+  BundleAuthorityPromotion,
+} from '../session/dev-client-authority.js';
 import type { SessionRef, SessionRegistry, SessionStatus } from '../session/registry.js';
 import {
   applyPackageIntegration,
@@ -25,6 +28,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { inspectSessionOwner } from '../session/process-owner.js';
+import { inspectInstallIdentity } from '../session/install-identity-inspection.js';
 import { projectPublicAuthorityStatus } from '../session/public-status.js';
 import { probeProcessBirth, type ProcessBirthProbe } from '../session/process-birth.js';
 import {
@@ -110,6 +114,7 @@ export type SessionToolInput = StaleDeviceReleaseInput | OtherSessionToolInput;
 export interface ManagedMetroStatusDependencies {
   getSignerCapability?: (sessionId?: string) => string | null;
   inspectManagedMetroLifecycle?: typeof inspectManagedMetroLifecycle;
+  inspectInstallIdentity?: typeof inspectInstallIdentity;
   now?: () => number;
   onBundleInvalidated?: () => void;
 }
@@ -128,6 +133,7 @@ interface SessionHandlerDependencies extends ManagedMetroStatusDependencies {
   pinDevClient?: (
     status: SessionStatus,
     options: { force: boolean },
+    commitBundle: (bundle: BundleAuthorityBinding, promotion: BundleAuthorityPromotion) => void,
   ) => Promise<BundleAuthorityBinding>;
   stopHandoffObserve?: (binding: Record<string, unknown>) => Promise<void>;
   stopHandoffRunner?: (binding: Record<string, unknown>) => Promise<void>;
@@ -146,6 +152,7 @@ interface SessionHandlerDependencies extends ManagedMetroStatusDependencies {
   };
   cleanupTimeoutMs?: number;
   deviceExists?: (platform: 'ios' | 'android', deviceId: string) => boolean;
+  requestWorkerRecycle?: () => boolean;
 }
 
 type SessionMetroBinding =
@@ -488,12 +495,18 @@ export function createSessionHandler(
         // handle that adopt_stale would then refuse as expired.
         runtime.refreshRecoveryHandles();
         const projectedAuthority = reconcileManagedMetroStatus(runtime, dependencies);
+        const installIdentity = projectedAuthority.available
+          ? (dependencies.inspectInstallIdentity ?? inspectInstallIdentity)(
+              projectedAuthority.bindings.install as Record<string, unknown> | null | undefined,
+            )
+          : null;
         return okResult({
           authoritative: false,
           authority: projectPublicAuthorityStatus(projectedAuthority, {
             includeSessionId: true,
             now: dependencies.now,
             recoveryRequirement: runtime.inspectRecoveryRequirement(),
+            installIdentity,
           }),
         });
       } catch (error) {
@@ -843,7 +856,17 @@ export function createSessionHandler(
         }
         const priorTargetId = (status.bindings.bundle as { targetId?: unknown } | null | undefined)
           ?.targetId;
-        if (input.force === true && typeof priorTargetId === 'string') {
+        const priorBundle = status.bindings.bundle ?? null;
+        const priorState = status.state;
+        const priorAuthorityVersion = status.authorityVersion;
+        const devicePlatform = (status.bindings.device as { platform?: unknown } | undefined)
+          ?.platform;
+        const atomicAndroidReplacement = devicePlatform === 'android';
+        if (
+          input.force === true &&
+          !atomicAndroidReplacement &&
+          typeof priorTargetId === 'string'
+        ) {
           registry.releaseResources(session, [
             { type: 'target', key: `${String(status.bindings.metroPort)}:${priorTargetId}` },
           ]);
@@ -853,16 +876,54 @@ export function createSessionHandler(
           });
           dependencies.onBundleInvalidated?.();
         }
-        const bundle = await dependencies.pinDevClient(status, {
-          force: input.force === true,
-        });
-        registry.claimResources(session, [
-          { type: 'target', key: `${bundle.metroPort}:${bundle.targetId}` },
-        ]);
-        registry.updateBindings(session, {
-          state: 'ready',
-          bindings: { bundle },
-        });
+        await dependencies.pinDevClient(
+          status,
+          { force: input.force === true },
+          (candidate, promotion) => {
+            const candidateTarget = {
+              type: 'target' as const,
+              key: `${candidate.metroPort}:${candidate.targetId}`,
+            };
+            const targetChanged = priorTargetId !== candidate.targetId;
+            const priorTarget =
+              typeof priorTargetId === 'string' && targetChanged
+                ? {
+                    type: 'target' as const,
+                    key: `${candidate.metroPort}:${priorTargetId}`,
+                  }
+                : null;
+            let committed = false;
+            try {
+              registry.updateBindings(session, {
+                state: 'ready',
+                bindings: { bundle: candidate },
+                expectedAuthorityVersion: atomicAndroidReplacement
+                  ? priorAuthorityVersion
+                  : undefined,
+                releaseResources: atomicAndroidReplacement && priorTarget ? [priorTarget] : [],
+                claimResources: [candidateTarget],
+                probeClaimOwners: true,
+                assertBeforeCommit: promotion.assertActive,
+                onCommitted: () => {
+                  committed = true;
+                },
+              });
+              promotion.assertActive();
+              promotion.publish();
+            } catch (error) {
+              if (committed && atomicAndroidReplacement) {
+                registry.updateBindings(session, {
+                  state: priorState,
+                  bindings: { bundle: priorBundle },
+                  expectedAuthorityVersion: priorAuthorityVersion + 1,
+                  releaseResources: targetChanged ? [candidateTarget] : [],
+                  claimResources: priorTarget ? [priorTarget] : [],
+                });
+              }
+              throw error;
+            }
+          },
+        );
         return okResult({ session: projectPublicAuthorityStatus(runtime.status()) });
       }
 
@@ -1900,7 +1961,22 @@ export function createSessionHandler(
       }
       registry.releaseSession(session);
       if (status.bindings.bundle) dependencies.onBundleInvalidated?.();
-      return okResult({ released: true, sessionId: session.sessionId });
+      // GH #706: the released row can never be transitioned again. Ask the supervisor
+      // to resolve a fresh session so the next call is not a dead end.
+      let recycleRequested = false;
+      try {
+        recycleRequested = dependencies.requestWorkerRecycle?.() === true;
+      } catch {
+        /* release already succeeded; recovery falls back to a transport restart */
+      }
+      return okResult({
+        released: true,
+        sessionId: session.sessionId,
+        recycleRequested,
+        nextAction: recycleRequested
+          ? 'A fresh session is minted automatically; retry rn_session (bind_device, apply_integration) on this worktree.'
+          : 'No supervisor can mint a successor here; restart the MCP transport before the next rn_session action on this worktree.',
+      });
     } catch (error) {
       return authorityFailure(error);
     }

@@ -1,5 +1,6 @@
+import type { InstallIdentityInspection } from './install-identity-inspection.js';
 import { inspectAuthorityMigration } from './migration-diagnostic.js';
-import type { RecoveryRequirementInspection } from './registry.js';
+import { authorityRemedyNextAction, type RecoveryRequirementInspection } from './registry.js';
 import type { WorkerAuthorityStatus } from './runtime.js';
 
 interface BoundedHandle {
@@ -30,18 +31,48 @@ function liveHandle(handle: BoundedHandle | undefined, now: number): string | un
   return handle.token;
 }
 
+function installIdentityRefusal(
+  inspection: InstallIdentityInspection | null | undefined,
+  proofBound: boolean,
+): Record<string, unknown> {
+  if (inspection?.verdict === 'changed') {
+    return {
+      state: 'install_identity_changed',
+      detail:
+        inspection.reason ?? 'installed artifact identity no longer matches the session build',
+      nextAction:
+        'The installed app is no longer the attested session build. Rebuild and re-attest it ' +
+        '(rn_session build, or bind_device with a fresh signed build receipt), then re-open the device session.',
+    };
+  }
+  if (inspection?.verdict === 'reissue-pending' && proofBound) {
+    return {
+      state: 'install_identity_reissue_blocked',
+      detail: 'the app was reinstalled while a strict proof run is bound',
+      nextAction:
+        'The app was reinstalled during a strict proof run, so gated tools refuse ' +
+        'APP_INSTALL_IDENTITY_CHANGED and the gate does not re-issue the receipt under the attestation. ' +
+        'Discard the run (proof_capture action "discard"), then capture the proof again.',
+    };
+  }
+  return {};
+}
+
 export function projectPublicAuthorityStatus(
   status: WorkerAuthorityStatus,
   options: {
     includeSessionId?: boolean;
     now?: () => number;
     recoveryRequirement?: RecoveryRequirementInspection;
+    installIdentity?: InstallIdentityInspection | null;
   } = {},
 ): Record<string, unknown> {
   if (!status.available) {
+    const nextAction = authorityRemedyNextAction(status.code);
     return {
       available: false,
       code: status.code,
+      ...(nextAction ? { nextAction } : {}),
     };
   }
   const now = (options.now ?? Date.now)();
@@ -160,6 +191,11 @@ export function projectPublicAuthorityStatus(
     proof: Boolean(status.bindings.proof),
     // ADR §5.2 (L3): strict proof is an opt-in overlay outside the four groups, never a group.
     proofOverlay: { active: Boolean(status.bindings.proof) },
+    ...(options.installIdentity ? { installIdentity: options.installIdentity.verdict } : {}),
+    // A live axis-I refusal means every gated tool refuses too — status must
+    // not read `ready` while that is true. A pending re-issue reads ready only
+    // because the gate heals it, which it does not do under a bound proof run.
+    ...installIdentityRefusal(options.installIdentity, Boolean(status.bindings.proof)),
     ...(recoveryStatus ? { recovery: recoveryStatus } : {}),
     ...(cleanupNextAction
       ? {
@@ -167,6 +203,16 @@ export function projectPublicAuthorityStatus(
             platform: cleanupPlatform,
             obligations: pendingCleanupObligations,
             nextAction: cleanupNextAction,
+          },
+        }
+      : {}),
+    // Retained cleanup refusals follow the identifier-free staleDeviceCleanup discipline.
+    ...(options.recoveryRequirement?.startupCleanupBlocked
+      ? {
+          startupCleanupBlocked: {
+            code: options.recoveryRequirement.startupCleanupBlocked.code,
+            reason: options.recoveryRequirement.startupCleanupBlocked.reason,
+            nextAction: options.recoveryRequirement.nextAction,
           },
         }
       : {}),

@@ -3,10 +3,12 @@ import { realpathSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { failResult } from '../utils.js';
 import { authorityErrorMeta, SessionAuthorityError, shortAuthorityIdentity } from './registry.js';
-import { authorityProfileFor } from './tool-profiles.js';
+import { reissueInstallBinding } from './install-reissue.js';
+import { authorityProfileFor, requiresExactInstalledArtifact, } from './tool-profiles.js';
 const optionalBundleAdmission = Symbol('optionalBundleAdmission');
 const managedNativeOrigin = Symbol('managedNativeOrigin');
 const managedRunnerPark = Symbol('managedRunnerPark');
+const managedInstallReissue = Symbol('managedInstallReissue');
 export async function claimOptionalBundleAuthority(args) {
     return (await args[optionalBundleAdmission]?.()) ?? false;
 }
@@ -30,6 +32,33 @@ export async function relaunchManagedNativeOriginApp(args) {
         throw new SessionAuthorityError('METRO_ORIGIN_MISMATCH', 'managed native origin relaunch authority is unavailable');
     }
     await authority.relaunch();
+}
+/**
+ * GH #708: re-prove the managed native origin after a mid-flow relaunch whose
+ * dev-client only re-registered once the flow's own post-launch steps ran.
+ * Reconnect-only — it never relaunches, so the flow's end state survives.
+ */
+export async function reproveManagedNativeOrigin(args) {
+    const authority = args[managedNativeOrigin];
+    if (!authority) {
+        throw new SessionAuthorityError('METRO_ORIGIN_MISMATCH', 'managed native origin re-prove authority is unavailable');
+    }
+    await authority.reprove();
+}
+/**
+ * GH #705: commit a new install receipt after Maestro reinstalled the session's
+ * own attested `.app` for a `clearState` flow. Refuses unless the freshly
+ * installed bytes still hash to the bound receipt's artifactDigest.
+ */
+export async function reissueManagedInstallAuthority(args) {
+    const reissue = args[managedInstallReissue];
+    if (!reissue) {
+        throw new SessionAuthorityError('APP_INSTALL_IDENTITY_CHANGED', 'managed install re-issue authority is unavailable');
+    }
+    await reissue();
+}
+export function hasManagedInstallReissueAuthority(args) {
+    return typeof args[managedInstallReissue] === 'function';
 }
 export function hasManagedRunnerParkAuthority(args) {
     return typeof args[managedRunnerPark] === 'function';
@@ -111,6 +140,51 @@ function isAuthenticatedIdempotentRunnerClose(tool, args, result, initialStatus)
         return false;
     }
 }
+// Prefer the durable offer/journal over the arguments: a journal resume supplies
+// neither platform nor deviceId. ADR L5's confirmed initial transfer has no durable
+// offer or journal at preflight, so its exact scope arrives in the arguments; the
+// commit itself is still proven independently by staleDeviceReleaseCommitted.
+function staleDeviceReleaseScope(tool, args, status) {
+    if (tool !== 'rn_session' || args.action !== 'release_stale_device')
+        return null;
+    const scope = (status.bindings.staleDeviceCleanup ?? status.bindings.staleDeviceRelease);
+    if (!scope || typeof scope.platform !== 'string' || typeof scope.deviceId !== 'string') {
+        if (typeof args.platform === 'string' && typeof args.deviceId === 'string') {
+            return { platform: args.platform, deviceId: args.deviceId };
+        }
+        return null;
+    }
+    return { platform: scope.platform, deviceId: scope.deviceId };
+}
+// `finishStaleResourceRelease` clears journal + offer and advances the generation in the
+// same transaction as the claim deletions, so observing all three proves the scoped
+// release committed — independently of whether this call still owns its fence.
+function staleDeviceReleaseCommitted(runtime, initialAuthorityVersion) {
+    const current = runtime.status();
+    return (current.available &&
+        current.authorityVersion > initialAuthorityVersion &&
+        !current.bindings.staleDeviceCleanup &&
+        !current.bindings.staleDeviceRelease);
+}
+// The commit stands either way, but only a genuine authority failure may be reported as a
+// lost fence: any other post-commit error carries a neutral code and its own reason.
+function postCommitFailureMeta(error, released) {
+    const fenceLost = error instanceof SessionAuthorityError;
+    const detail = {
+        code: fenceLost ? error.code : (authorityErrorCode(error) ?? 'POST_COMMIT_FAILURE'),
+        reason: error instanceof Error ? error.message : String(error),
+        released,
+    };
+    return {
+        authorityLostAfterCommit: fenceLost ? detail : undefined,
+        failedAfterCommit: fenceLost ? undefined : detail,
+        nextAction: fenceLost
+            ? 'The exact device release is committed. Re-read rn_session action "status" ' +
+                'before the next fenced operation; this session no longer holds the fence it started with.'
+            : 'The exact device release is committed. Re-read rn_session action "status" ' +
+                'before the next fenced operation; the reported failure happened after the commit.',
+    };
+}
 function containedRunnerAuthority(result, runner) {
     if (!runner)
         return null;
@@ -145,6 +219,48 @@ function containedRunnerAuthority(result, runner) {
     }
     catch {
         return null;
+    }
+}
+// A byte-identical reinstall (runner-respawn recovery, clearState replay, an
+// identical dev rebuild) rotates installGeneration but not artifactDigest, and
+// used to hard-stop every gated tool while status still said ready. A preflight
+// axis-I refusal retries once behind the GH #705 digest proof; a foreign or
+// unattestable artifact still throws APP_INSTALL_IDENTITY_CHANGED unchanged.
+function reissueInstallAfterPreflightRefusal(registry, runtime, operation, status, dependencies, error, axes, tool, args) {
+    if (!axes.includes('I') ||
+        Boolean(status.bindings.proof) ||
+        requiresExactInstalledArtifact(tool, args) ||
+        authorityErrorCode(error) !== 'APP_INSTALL_IDENTITY_CHANGED') {
+        return null;
+    }
+    const install = (dependencies.reissueInstallBinding ?? reissueInstallBinding)(status.bindings.install);
+    if (!install)
+        return null;
+    registry.verifyOperation(operation);
+    const reissuedOperation = registry.replaceBindingsDuringOperation(operation, {
+        bindings: { install },
+    });
+    const reissuedStatus = runtime.status();
+    if (!reissuedStatus.available) {
+        throw new SessionAuthorityError(reissuedStatus.code, reissuedStatus.reason);
+    }
+    return { operation: reissuedOperation, status: reissuedStatus };
+}
+async function preflightWithInstallReissue(registry, runtime, dependencies, context, operation, status) {
+    const { tool, profile, args, axes } = context;
+    const probeAll = (probed) => Promise.all(axes.map((axis) => dependencies.probe({ axis, phase: 'preflight', tool, profile, status: probed, args })));
+    try {
+        return { before: await probeAll(status), operation, status };
+    }
+    catch (preflightError) {
+        const reissued = reissueInstallAfterPreflightRefusal(registry, runtime, operation, status, dependencies, preflightError, axes, tool, args);
+        if (!reissued)
+            throw preflightError;
+        return {
+            before: await probeAll(reissued.status),
+            operation: reissued.operation,
+            status: reissued.status,
+        };
     }
 }
 function requireDeviceTransition(status, args) {
@@ -371,7 +487,7 @@ function receipt(status, profile, observations) {
             : undefined,
     };
 }
-function reconcileRuntimeBundleReplacement(runtime, registry, operation, status, priorBundle, metro, bundle) {
+function reconcileRuntimeBundleReplacement(runtime, registry, operation, status, priorBundle, metro, bundle, promotion) {
     const oldTargetId = priorBundle?.targetId;
     const newTargetId = bundle.targetId;
     const metroPort = metro?.port;
@@ -380,7 +496,7 @@ function reconcileRuntimeBundleReplacement(runtime, registry, operation, status,
     }
     const runtimeTargetChanged = oldTargetId !== newTargetId ||
         priorBundle?.connectionGeneration !== bundle.connectionGeneration;
-    if (!runtimeTargetChanged) {
+    if (!runtimeTargetChanged && !promotion) {
         return { operation, status, runtimeTargetChanged };
     }
     const nextOperation = registry.replaceBindingsDuringOperation(operation, {
@@ -392,6 +508,8 @@ function reconcileRuntimeBundleReplacement(runtime, registry, operation, status,
         claimResources: oldTargetId !== newTargetId
             ? [{ type: 'target', key: `${String(metroPort)}:${newTargetId}` }]
             : [],
+        assertBeforeCommit: promotion?.assertActive,
+        onCommitted: promotion?.onCommitted,
     });
     const refreshedStatus = runtime.status();
     if (!refreshedStatus.available) {
@@ -402,6 +520,27 @@ function reconcileRuntimeBundleReplacement(runtime, registry, operation, status,
         status: refreshedStatus,
         runtimeTargetChanged,
     };
+}
+function restoreRuntimeBundleReplacement(registry, operation, priorStatus, candidateBundle) {
+    const priorBundle = priorStatus.bindings.bundle;
+    const metro = priorStatus.bindings.metro;
+    const priorTargetId = priorBundle?.targetId;
+    const candidateTargetId = candidateBundle.targetId;
+    const metroPort = metro?.port;
+    if (typeof candidateTargetId !== 'string' || !Number.isSafeInteger(metroPort)) {
+        throw new SessionAuthorityError('CDP_TARGET_AUTHORITY_MISMATCH', 'runtime promotion compensation lost its exact target authority');
+    }
+    const targetChanged = priorTargetId !== candidateTargetId;
+    return registry.replaceBindingsDuringOperation(operation, {
+        state: priorStatus.state,
+        bindings: { bundle: priorBundle ?? null },
+        releaseResources: targetChanged
+            ? [{ type: 'target', key: `${String(metroPort)}:${candidateTargetId}` }]
+            : [],
+        claimResources: targetChanged && typeof priorTargetId === 'string'
+            ? [{ type: 'target', key: `${String(metroPort)}:${priorTargetId}` }]
+            : [],
+    });
 }
 function invalidateRuntimeBundle(registry, operation, status, onInvalidated) {
     const priorBundle = status.bindings.bundle;
@@ -489,7 +628,7 @@ export function createAuthorityGate(runtime, dependencies) {
             }
             const runtimeStatus = runtime.status();
             if (runtimeStatus.available && runtimeStatus.state === 'blocked') {
-                return authorityFailure(new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'blocked contender exposes only accept_handoff and adopt_stale recovery'));
+                return authorityFailure(runtime.blockedContenderError());
             }
             if (runtimeStatus.available &&
                 tool === 'observe' &&
@@ -522,6 +661,7 @@ export function createAuthorityGate(runtime, dependencies) {
                 let retainProofCleanupFence = false;
                 let beganProofRehearsal = false;
                 let publishedProofBinding = false;
+                let committedStaleDeviceRelease = null;
                 try {
                     const available = runtime.requireAvailable();
                     registry = available.registry;
@@ -531,7 +671,7 @@ export function createAuthorityGate(runtime, dependencies) {
                     }
                     let status = initialStatus;
                     let runtimeTargetChanged = false;
-                    const initialAuthorityVersion = status.authorityVersion;
+                    let initialAuthorityVersion = status.authorityVersion;
                     const gateCommitsProof = tool === 'proof_capture' && args.action === 'begin_rehearsal';
                     const retainsRunnerCleanupAuthority = tool === 'device_snapshot' &&
                         args.action === 'close' &&
@@ -573,7 +713,11 @@ export function createAuthorityGate(runtime, dependencies) {
                     if (retainsRunnerCleanupAuthority) {
                         requireRetainedRunnerOwnership(registry, status);
                     }
-                    const before = await Promise.all(transitionAxes.before.map((axis) => dependencies.probe({ axis, phase: 'preflight', tool, profile, status, args })));
+                    const preflight = await preflightWithInstallReissue(registry, runtime, dependencies, { tool, profile, args, axes: transitionAxes.before }, operation, status);
+                    const before = preflight.before;
+                    operation = preflight.operation;
+                    status = preflight.status;
+                    initialAuthorityVersion = status.authorityVersion;
                     registry.verifyOperation(operation);
                     const result = await registry.runWithOperation(operation, () => handler(...handlerArgs));
                     if (!resultSucceeded(result)) {
@@ -589,6 +733,14 @@ export function createAuthorityGate(runtime, dependencies) {
                         return addMeta(result, { authoritative: false });
                     }
                     beganProofRehearsal = gateCommitsProof;
+                    const staleReleaseScope = staleDeviceReleaseScope(tool, args, initialStatus);
+                    if (staleReleaseScope) {
+                        committedStaleDeviceRelease = {
+                            result,
+                            scope: staleReleaseScope,
+                            initialAuthorityVersion,
+                        };
+                    }
                     if (tool === 'rn_session' && args.action === 'release') {
                         operation = null;
                         return addMeta(result, {
@@ -684,6 +836,16 @@ export function createAuthorityGate(runtime, dependencies) {
                             return authorityFailure(new AggregateError([error, rollbackError], 'PROOF_AUTHORITY_MISMATCH: rehearsal rollback failed'));
                         }
                     }
+                    // Losing the fence AFTER the release committed is a real authority loss, but
+                    // failing the call would deny a side effect the registry still proves.
+                    if (committedStaleDeviceRelease &&
+                        staleDeviceReleaseCommitted(runtime, committedStaleDeviceRelease.initialAuthorityVersion)) {
+                        return addMeta(committedStaleDeviceRelease.result, {
+                            authoritative: false,
+                            authorityTransition: true,
+                            ...postCommitFailureMeta(error, committedStaleDeviceRelease.scope),
+                        });
+                    }
                     return authorityFailure(error);
                 }
                 finally {
@@ -701,6 +863,7 @@ export function createAuthorityGate(runtime, dependencies) {
             let registry = null;
             let retainProofCleanupFence = false;
             let publishedProofFinalize = false;
+            let stagedRuntimeRelaunch;
             try {
                 const available = runtime.requireAvailable();
                 registry = available.registry;
@@ -719,8 +882,11 @@ export function createAuthorityGate(runtime, dependencies) {
                 const preflightRecovery = await reconcileRecoverableRuntime(runtime, dependencies, registry, operation, status, profile, true);
                 operation = preflightRecovery.operation;
                 status = preflightRecovery.status;
+                const preflight = await preflightWithInstallReissue(registry, runtime, dependencies, { tool, profile, args, axes: profile.axes }, operation, status);
+                const before = preflight.before;
+                operation = preflight.operation;
+                status = preflight.status;
                 const initialOperationAuthorityVersion = operation.authorityVersion;
-                const before = await Promise.all(profile.axes.map((axis) => dependencies.probe({ axis, phase: 'preflight', tool, profile, status, args })));
                 const optionalBefore = [];
                 const managedOriginObservations = [];
                 const managedBundleObservations = [];
@@ -730,6 +896,7 @@ export function createAuthorityGate(runtime, dependencies) {
                 let optionalBundleClaimed = false;
                 let optionalBundleRecoveryFailed = false;
                 let managedRunnerParked = false;
+                let installReceiptReissued = false;
                 if (profile.optionalAxes?.includes('B')) {
                     Object.defineProperty(args, optionalBundleAdmission, {
                         configurable: true,
@@ -857,10 +1024,18 @@ export function createAuthorityGate(runtime, dependencies) {
                             throw new SessionAuthorityError(currentStatus.code, currentStatus.reason);
                         }
                         registry.verifyOperation(operation);
+                        const stagedRelaunch = stagedRuntimeRelaunch;
+                        const promotionStatus = {
+                            ...currentStatus,
+                            bindings: { ...currentStatus.bindings },
+                        };
+                        let promotionCommitted = false;
                         let originObservation;
                         let bundleObservation;
+                        let candidateBundle;
                         try {
-                            originObservation = await dependencies.probe({
+                            const probe = stagedRelaunch?.probe ?? dependencies.probe;
+                            originObservation = await probe({
                                 axis: 'A',
                                 phase: 'postflight',
                                 tool,
@@ -868,28 +1043,65 @@ export function createAuthorityGate(runtime, dependencies) {
                                 status: currentStatus,
                                 args,
                             });
-                            if (!dependencies.refreshRuntimeBinding) {
+                            if (!stagedRelaunch && !dependencies.refreshRuntimeBinding) {
                                 throw new SessionAuthorityError('BUNDLE_HANDSHAKE_UNAVAILABLE', 'managed lifecycle cannot commit without a binding refresh');
                             }
-                            const bundle = await dependencies.refreshRuntimeBinding(currentStatus);
-                            bundleObservation = await dependencies.probe({
+                            candidateBundle = stagedRelaunch
+                                ? await stagedRelaunch.refreshRuntimeBinding(currentStatus)
+                                : await dependencies.refreshRuntimeBinding(currentStatus);
+                            bundleObservation = await probe({
                                 axis: 'B',
                                 phase: 'postflight',
                                 tool,
                                 profile,
                                 status: {
                                     ...currentStatus,
-                                    bindings: { ...currentStatus.bindings, bundle },
+                                    bindings: { ...currentStatus.bindings, bundle: candidateBundle },
                                 },
                                 args,
                             });
                             registry.verifyOperation(operation);
-                            const reconciliation = reconcileRuntimeBundleReplacement(runtime, registry, operation, currentStatus, currentStatus.bindings.bundle, currentStatus.bindings.metro, bundle);
+                            const reconciliation = reconcileRuntimeBundleReplacement(runtime, registry, operation, currentStatus, currentStatus.bindings.bundle, currentStatus.bindings.metro, candidateBundle, stagedRelaunch
+                                ? {
+                                    assertActive: stagedRelaunch.assertActive,
+                                    onCommitted: (committedOperation) => {
+                                        promotionCommitted = true;
+                                        operation = committedOperation;
+                                    },
+                                }
+                                : undefined);
                             operation = reconciliation.operation;
                             status = reconciliation.status;
                             managedRuntimeTargetChanged ||= reconciliation.runtimeTargetChanged;
+                            if (stagedRelaunch) {
+                                stagedRelaunch.assertActive();
+                                stagedRelaunch.publish(status);
+                                stagedRuntimeRelaunch = undefined;
+                            }
                         }
                         catch (error) {
+                            if (stagedRelaunch) {
+                                let compensationError;
+                                if (promotionCommitted) {
+                                    try {
+                                        operation = restoreRuntimeBundleReplacement(registry, operation, promotionStatus, candidateBundle);
+                                        const restoredStatus = runtime.status();
+                                        if (restoredStatus.available)
+                                            status = restoredStatus;
+                                    }
+                                    catch (restoreError) {
+                                        compensationError = restoreError;
+                                    }
+                                }
+                                stagedRelaunch.cancel();
+                                if (stagedRuntimeRelaunch === stagedRelaunch) {
+                                    stagedRuntimeRelaunch = undefined;
+                                }
+                                if (compensationError) {
+                                    throw new AggregateError([error, compensationError], 'BUNDLE_HANDSHAKE_UNAVAILABLE: staged runtime promotion compensation failed');
+                                }
+                                throw error;
+                            }
                             const failedStatus = runtime.status();
                             if (failedStatus.available && failedStatus.bindings.bundle) {
                                 try {
@@ -919,7 +1131,25 @@ export function createAuthorityGate(runtime, dependencies) {
                                 if (!dependencies.relaunchBoundRuntime) {
                                     throw new SessionAuthorityError('METRO_ORIGIN_MISMATCH', 'managed native origin relaunch is unavailable');
                                 }
-                                await dependencies.relaunchBoundRuntime(currentStatus);
+                                stagedRuntimeRelaunch?.cancel();
+                                stagedRuntimeRelaunch = undefined;
+                                stagedRuntimeRelaunch =
+                                    (await dependencies.relaunchBoundRuntime(currentStatus)) ?? undefined;
+                                registry.verifyOperation(operation);
+                            },
+                            reprove: async () => {
+                                const currentStatus = runtime.status();
+                                if (!currentStatus.available) {
+                                    throw new SessionAuthorityError(currentStatus.code, currentStatus.reason);
+                                }
+                                registry.verifyOperation(operation);
+                                if (!dependencies.reconnectBoundRuntime) {
+                                    throw new SessionAuthorityError('METRO_ORIGIN_MISMATCH', 'managed native origin reconnect is unavailable');
+                                }
+                                stagedRuntimeRelaunch?.cancel();
+                                stagedRuntimeRelaunch = undefined;
+                                stagedRuntimeRelaunch =
+                                    (await dependencies.reconnectBoundRuntime(currentStatus)) ?? undefined;
                                 registry.verifyOperation(operation);
                             },
                             complete: async (targetExpected) => {
@@ -943,6 +1173,30 @@ export function createAuthorityGate(runtime, dependencies) {
                                     status = invalidatedStatus;
                                 }
                             },
+                        },
+                    });
+                }
+                if (profile.managedInstallReissue) {
+                    Object.defineProperty(args, managedInstallReissue, {
+                        configurable: true,
+                        value: async () => {
+                            const currentStatus = runtime.status();
+                            if (!currentStatus.available) {
+                                throw new SessionAuthorityError(currentStatus.code, currentStatus.reason);
+                            }
+                            registry.verifyOperation(operation);
+                            const install = (dependencies.reissueInstallBinding ?? reissueInstallBinding)(currentStatus.bindings.install);
+                            if (!install)
+                                return;
+                            operation = registry.replaceBindingsDuringOperation(operation, {
+                                bindings: { install },
+                            });
+                            const reissuedStatus = runtime.status();
+                            if (!reissuedStatus.available) {
+                                throw new SessionAuthorityError(reissuedStatus.code, reissuedStatus.reason);
+                            }
+                            status = reissuedStatus;
+                            installReceiptReissued = true;
                         },
                     });
                 }
@@ -1125,6 +1379,11 @@ export function createAuthorityGate(runtime, dependencies) {
                     if ((runtimeTargetChanged || managedRuntimeTargetChanged) && observation.axis === 'B') {
                         continue;
                     }
+                    // GH #705: a digest-proven reinstall of the session's own artifact
+                    // re-issues the install receipt mid-operation; only that exact
+                    // gate-owned transition may move I.
+                    if (installReceiptReissued && observation.axis === 'I')
+                        continue;
                     if (!postflightAxes.includes(observation.axis))
                         continue;
                     const postflight = after.find((candidate) => candidate.axis === observation.axis);
@@ -1188,6 +1447,7 @@ export function createAuthorityGate(runtime, dependencies) {
                 return authorityFailure(error);
             }
             finally {
+                stagedRuntimeRelaunch?.cancel();
                 if (registry && operation && !retainProofCleanupFence) {
                     try {
                         registry.endOperation(operation);

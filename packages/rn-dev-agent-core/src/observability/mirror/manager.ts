@@ -259,7 +259,7 @@ export class MirrorManager {
         deviceId: target.deviceId,
         pipeline: source.pipeline,
         fps: source.nominalFps,
-        hint: source.pipeline === 'simctl' ? SIMCTL_HINT : undefined,
+        hint: source.pipeline === 'simctl' ? (source.degradedHint ?? SIMCTL_HINT) : undefined,
       });
     }
     this.broadcast(frame);

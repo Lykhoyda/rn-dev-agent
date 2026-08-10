@@ -35,6 +35,7 @@ export interface AuthorityProfile {
   optionalAxes?: readonly AuthorityAxis[];
   managedOrigin?: boolean;
   managedRunnerPark?: boolean;
+  managedInstallReissue?: boolean;
   sessionIdentity?: boolean;
   mutation: boolean;
   liveBundleProbe: boolean;
@@ -200,6 +201,7 @@ add(optionalHybridMutation, {
   optionalAxes: ['B'],
   managedOrigin: true,
   managedRunnerPark: true,
+  managedInstallReissue: true,
   mutation: true,
   liveBundleProbe: true,
 });
@@ -241,6 +243,17 @@ add(proof, {
   mutation: true,
   liveBundleProbe: true,
 });
+
+// Proof boundaries attest the exact installed bytes and the exact install
+// generation: a reinstall between proof steps is a hard stop, never healed.
+export function requiresExactInstalledArtifact(
+  tool: string,
+  args: Record<string, unknown> = {},
+): boolean {
+  return (
+    tool === 'proof_capture' && (args.action === 'begin_rehearsal' || args.action === 'finalize')
+  );
+}
 
 export function authorityProfileFor(
   tool: string,
@@ -322,6 +335,7 @@ export function authorityProfileFor(
       postflightAxes: facetsOf(throughRuntime, { without: ['A', 'B'] }),
       managedOrigin: true,
       managedRunnerPark: true,
+      managedInstallReissue: tool === 'maestro_run',
       mutation: true,
       liveBundleProbe: false,
     };

@@ -4,6 +4,7 @@ import {
   buildDirectionalScrollCliArgs,
   buildDirectionalSwipeCliArgs,
   fetchFindCandidates,
+  performExactFill,
   pressCandidate,
 } from './device-interact.js';
 import { withSession, okResult, failResult } from '../utils.js';
@@ -259,6 +260,8 @@ interface StepResult {
   success: boolean;
   durationMs: number;
   error?: string;
+  code?: string;
+  meta?: Record<string, unknown>;
   data?: unknown;
 }
 
@@ -414,7 +417,7 @@ async function executeStep(step: BatchStep, getClient?: () => CDPClient): Promis
       return failResult('press requires ref, testID, or both x and y coordinates');
     }
     case 'fill': {
-      if (!step.text) return failResult('fill requires text');
+      if (typeof step.text !== 'string') return failResult('fill requires text');
       if (step.testID) {
         const { refs, envelope, snapshotFailed } = await resolveTestIDViaSnapshot(step.testID);
         if (snapshotFailed) {
@@ -435,14 +438,31 @@ async function executeStep(step: BatchStep, getClient?: () => CDPClient): Promis
             },
           );
         }
-        return runNative(['fill', `@${ref}`, step.text], stepSettleOpts(step));
+        if (!getClient) {
+          return failResult(
+            'fill requires a connected React ownership helper',
+            'TEXT_ENTRY_UNVERIFIED',
+            { mutation: 'none', reason: 'fiber-unavailable' },
+          );
+        }
+        return performExactFill(
+          { ref: `@${ref}`, testID: step.testID, text: step.text },
+          getClient,
+        );
       }
       if (!step.ref)
         return failResult(
           'fill requires ref or testID. Use a find+tap step first to focus the field, or pass testID for fresh resolution.',
         );
+      if (!getClient) {
+        return failResult(
+          'fill requires a connected React ownership helper',
+          'TEXT_ENTRY_UNVERIFIED',
+          { mutation: 'none', reason: 'fiber-unavailable' },
+        );
+      }
       const ref = step.ref.startsWith('@') ? step.ref : `@${step.ref}`;
-      return runNative(['fill', ref, step.text], stepSettleOpts(step));
+      return performExactFill({ ref, text: step.text }, getClient);
     }
     case 'swipe': {
       if (!step.direction) return failResult('swipe requires direction');
@@ -505,6 +525,21 @@ function isOk(result: ToolResult): boolean {
   }
 }
 
+export function mustStopBatchAfterFillFailure(
+  mutation: unknown,
+): mutation is 'observed' | 'possible' {
+  return mutation === 'observed' || mutation === 'possible';
+}
+
+function extractMutation(result: ToolResult): unknown {
+  try {
+    const parsed = JSON.parse(result.content[0].text) as { meta?: { mutation?: unknown } };
+    return parsed.meta?.mutation;
+  } catch {
+    return undefined;
+  }
+}
+
 function extractData(result: ToolResult): unknown {
   try {
     const parsed = JSON.parse(result.content[0].text) as { data?: unknown };
@@ -554,7 +589,10 @@ export function createDeviceBatchHandler(
             stepTimedOut = true;
             resolve(
               failResult(
-                `Step ${i + 1} timed out after ${stepTimeout}ms; remaining steps were not started because the native operation may still be completing`,
+                `Step ${i + 1} timed out after ${stepTimeout}ms; remaining steps were not started because the operation may still be completing`,
+                step.action === 'fill'
+                  ? { mutation: 'possible', reason: 'dispatch-uncertain' }
+                  : undefined,
               ),
             );
           }, stepTimeout);
@@ -573,8 +611,14 @@ export function createDeviceBatchHandler(
 
       if (!success) {
         try {
-          const parsed = JSON.parse(result.content[0].text) as { error?: string };
+          const parsed = JSON.parse(result.content[0].text) as {
+            error?: string;
+            code?: string;
+            meta?: Record<string, unknown>;
+          };
           stepResult.error = parsed.error;
+          if (parsed.code) stepResult.code = parsed.code;
+          if (parsed.meta) stepResult.meta = parsed.meta;
         } catch {
           /* ignore */
         }
@@ -597,7 +641,11 @@ export function createDeviceBatchHandler(
       // start a later OTP/form fill behind a timed-out mutation: that is the
       // interleaving boundary. Timeout therefore overrides optional and
       // continueOnError, while ordinary failures retain their legacy policy.
-      if (!success && (!step.optional || stepTimedOut)) {
+      const uncertainFillMutation =
+        !success &&
+        step.action === 'fill' &&
+        mustStopBatchAfterFillFailure(extractMutation(result));
+      if (!success && (!step.optional || stepTimedOut || uncertainFillMutation)) {
         // Capture failure screenshot regardless of continueOnError so the
         // diagnostic trail isn't lost.
         if (screenshotOn === 'failure' || screenshotOn === 'each') {
@@ -612,7 +660,7 @@ export function createDeviceBatchHandler(
           }
         }
 
-        if (continueOnError && !stepTimedOut) {
+        if (continueOnError && !stepTimedOut && !uncertainFillMutation) {
           // Phase 125: record the failure and proceed. failedStep stays null
           // so the batch returns success-shape with failure_count populated.
           failureRecords.push(stepResult);

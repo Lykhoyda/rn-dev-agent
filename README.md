@@ -6,7 +6,7 @@
 
 A coding-agent plugin for **Claude Code** and **Codex** that turns an AI agent into a React Native development partner. It explores your codebase, designs architecture, implements features — then **proves everything works live on the simulator** by reading the component tree, store state, and navigation stack through the Chrome DevTools Protocol, driving the app like a user, and recording the evidence.
 
-**MCP tools for live React Native development** · **Claude: 15 slash commands + 10 skills** · **Codex: 15 explicit workflow skills + 10 domain skills (25 total)** · **118 best-practice rules** · [Full documentation](https://lykhoyda.github.io/rn-dev-agent/)
+**MCP tools for live React Native development** · **Claude: 16 slash commands + 11 skills** · **Codex: 16 explicit workflow skills + 11 domain skills (27 total)** · **118 best-practice rules** · [Full documentation](https://lykhoyda.github.io/rn-dev-agent/)
 
 ---
 
@@ -116,13 +116,14 @@ Codex:  $rn-dev-agent:rn-feature-dev add a shopping cart with badge, item list, 
 
 The tables use Claude spelling. Codex provides native explicit parity for every
 row: replace `/rn-dev-agent:<name>` with `$rn-dev-agent:<name>`. Codex exposes
-exactly these 15 workflow skills plus 10 domain skills; install-time
+exactly these 16 workflow skills plus 11 domain skills; install-time
 `source-command-*` migration is deliberately disabled.
 
 **Develop & test:**
 
 | Command | Purpose |
 |---------|---------|
+| `/rn-dev-agent:run-workflow <journey>` | Establish the proven operating sequence before a real device journey |
 | `/rn-dev-agent:rn-feature-dev <desc>` | Full 8-phase feature pipeline (above) |
 | `/rn-dev-agent:test-feature <desc>` | Test an already-implemented feature; auto-replays a matching saved action |
 | `/rn-dev-agent:debug-screen` | Diagnose and fix a broken screen — parallel evidence from CDP + native logs + component tree |
@@ -277,7 +278,7 @@ Claude Code / Codex
 | `device_scroll` times out on Reanimated screens | A `waitForIdle` round-trip can deadlock against Reanimated worklets; scroll routes through the in-tree runner's HID synthesis instead. Ensure the runner is healthy via the device session |
 | Legacy `AgentDeviceRunner` re-appears on iOS | Stale `~/.agent-device/daemon.json` respawns the upstream runner. The plugin terminates stale processes at session-open (opt out: `RN_DEVICE_KILL_LEGACY=0`); manual cleanup: `pkill -f AgentDeviceRunner && rm -f ~/.agent-device/daemon.{json,lock}` |
 | iOS "rn-fast-runner did not become ready" | The runner self-build timed out or failed. In a source checkout, pre-build once: `cd packages/rn-fast-runner/RnFastRunner && xcodebuild build-for-testing -project RnFastRunner.xcodeproj -scheme RnFastRunner -destination "platform=iOS Simulator,id=<UDID>" -derivedDataPath ../build/DerivedData` |
-| `device_fill` reports `RUNNER_TIMEOUT` | XCTest timed out on a non-cancellable type operation. The runner is poisoned/reaped; success is returned only when exact independent CDP readback proves the requested value (`meta.runnerTimeoutRecovery`, including runner PID/state/postmortem containment evidence). Otherwise reconnect CDP and retry from a fresh snapshot. |
+| `device_fill` reports `RUNNER_TIMEOUT` | The native mutation outcome is uncertain, so the fill hard-fails and the runner is contained without automatic retyping. Inspect current field state first; only issue a new fill from a fresh snapshot when the result's mutation metadata and the observed UI make that safe. |
 | Need an intentional coordinate tap | Use `device_press({x, y})` (or a batch press step with `x`/`y`). With a visible iOS keyboard, raw coordinates are geometry-unknown: the keyboard is proven hidden before the one tap. Prefer fresh refs for normal UI controls. |
 | Native logs include another device/app | Reopen the exact device session. `collect_logs` pins Android to that session's adb serial and iOS to that simulator plus the current target-app PID; it fails closed when exact scope cannot be resolved. When the probe runs and proves the app is not running, the stream stays pinned to that simulator and reports `scopes.native_ios.process = app-not-running-device-scoped` so a crash trail is still captured. |
 | Want XCTest's stock idle-waits back | Kill the running runner (`pkill -f RnFastRunnerUITests`), set `RN_QUIESCENCE_BYPASS=0`, reopen the device session, and inspect the next device result's `meta.quiescenceBypass` |
@@ -297,7 +298,9 @@ The `cdp_evaluate` tool runs arbitrary JavaScript in your app's Hermes runtime w
 
 The plugin makes no attempt to sandbox `cdp_evaluate`. If you need that, gate tool access through your agent's permission prompts rather than trusting the tool layer.
 
-The **observability UI** ([`/rn-dev-agent:observe`](https://lykhoyda.github.io/rn-dev-agent/commands/observe/)) binds to `127.0.0.1` only and rejects cross-origin requests via Host-header + `Sec-Fetch-Site` checks. It is read-only except for two deliberate, CSRF-token-gated endpoints that trigger action and locked-E2E replays. Tool arguments are deep-redacted fail-closed before reaching the stream (tokens, passwords, and PII render as `[REDACTED_*]`), and the recorder keeps only a small bounded in-memory ring buffer — the event stream itself never touches disk (replays triggered from the UI still persist their normal run records under `.rn-agent/`, same as CLI-triggered replays).
+The **observability UI** ([`/rn-dev-agent:observe`](https://lykhoyda.github.io/rn-dev-agent/commands/observe/)) binds to `127.0.0.1` only and rejects cross-origin requests via Host-header + `Sec-Fetch-Site` checks. It is read-only except for two deliberate, CSRF-token-gated endpoints that trigger action and locked-E2E replays. Tool arguments are deep-redacted fail-closed before reaching the stream and typed fill text is never streamed verbatim (see the [security posture](https://lykhoyda.github.io/rn-dev-agent/commands/observe/#security-posture) for what is redacted and what stays visible), and the recorder keeps only a small bounded in-memory ring buffer — the event stream itself never touches disk (replays triggered from the UI still persist their normal run records under `.rn-agent/`, same as CLI-triggered replays).
+
+Meaningful tool failures and immediate successful retries also feed a separate, local-only evidence store at `~/.claude/rn-agent/experience/patterns.jsonl`. Records are sanitized before writing, deduplicated, capped at 500 patterns, and retained for 14 days; ordinary successful calls are never stored. From an installed plugin package, inspect the read-only trend report with `node <plugin-package>/rn-dev-agent-core/dist/experience-trends.js --since <previous-report-ISO-timestamp>` (omit `--since` for the last 24 hours). The command never updates the evidence store or uploads data.
 
 ## Keeping up to date
 

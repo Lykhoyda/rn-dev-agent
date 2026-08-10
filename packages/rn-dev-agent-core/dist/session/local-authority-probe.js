@@ -10,6 +10,7 @@ import { readProcessBirth } from './process-birth.js';
 import { SessionAuthorityError } from './registry.js';
 import { resolveSourceIdentity } from './source-identity.js';
 import { proveTargetDeviceAssociations, } from './target-device-authority.js';
+import { requiresExactInstalledArtifact } from './tool-profiles.js';
 import { deviceExistsOnHost } from './device-existence.js';
 function identity(value) {
     return createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -115,8 +116,7 @@ export function createLocalAuthorityProbe(dependencies) {
         }
         if (axis === 'I') {
             const expected = objectBinding(status, 'install');
-            const exactArtifactBoundary = tool === 'proof_capture' &&
-                (args?.action === 'begin_rehearsal' || args?.action === 'finalize');
+            const exactArtifactBoundary = requiresExactInstalledArtifact(tool ?? '', args ?? {});
             try {
                 if (exactArtifactBoundary) {
                     verifyInstalledArtifact(expected, captureInstalled(expected));

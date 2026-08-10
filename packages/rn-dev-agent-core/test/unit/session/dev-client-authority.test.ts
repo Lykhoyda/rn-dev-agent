@@ -75,6 +75,102 @@ test('dev-client pin opens only the declared URL on the exact device and binds i
   assert.equal(binding.sourceFidelity, 'not-proven');
 });
 
+test('Android staged client publishes only after marker proof and atomic precommit assertion', async () => {
+  const androidExpected = { ...expected, platform: 'android' };
+  const marker = buildSignedMetroMarker(androidExpected, 'signer');
+  const events: string[] = [];
+  const connection = {
+    targetId: 'android-target',
+    connectionGeneration: 4,
+    deviceId: 'emulator-5554',
+    client: {} as never,
+    assertActive: () => events.push('assert'),
+    run: async (operation) => {
+      events.push('marker-boundary');
+      return operation();
+    },
+    publish: () => events.push('publish'),
+    cancel: () => events.push('cancel'),
+  };
+
+  await pinExactDevClient(
+    {
+      ...androidExpected,
+      deviceId: 'emulator-5554',
+      metroPort: 8341,
+      runtimeKind: 'bare-react-native',
+      signerCapability: 'signer',
+    },
+    {
+      openUrl: async () => assert.fail('bare runtime must not open a URL'),
+      launchExactApp: async () => {},
+      acceptIosOpenDialog: async () => {},
+      connectExact: async () => connection,
+      readMarker: async () => {
+        events.push('marker');
+        return { status: 'signed', marker };
+      },
+      commitBundle: (_bundle, promotion) => {
+        events.push('transaction');
+        assert.equal(events.includes('publish'), false);
+        promotion.assertActive();
+        events.push('commit');
+        promotion.assertActive();
+        promotion.publish();
+      },
+    },
+  );
+
+  assert.deepEqual(events, [
+    'marker-boundary',
+    'marker',
+    'assert',
+    'transaction',
+    'assert',
+    'commit',
+    'assert',
+    'publish',
+  ]);
+});
+
+test('Android staged client cancellation leaves publication untouched when atomic commit fails', async () => {
+  const androidExpected = { ...expected, platform: 'android' };
+  const marker = buildSignedMetroMarker(androidExpected, 'signer');
+  const events: string[] = [];
+  await assert.rejects(
+    pinExactDevClient(
+      {
+        ...androidExpected,
+        deviceId: 'emulator-5554',
+        metroPort: 8341,
+        runtimeKind: 'bare-react-native',
+        signerCapability: 'signer',
+      },
+      {
+        openUrl: async () => {},
+        launchExactApp: async () => {},
+        acceptIosOpenDialog: async () => {},
+        connectExact: async () => ({
+          targetId: 'android-target',
+          connectionGeneration: 4,
+          deviceId: 'emulator-5554',
+          client: {} as never,
+          assertActive: () => {},
+          run: (operation) => operation(),
+          publish: () => events.push('publish'),
+          cancel: () => events.push('cancel'),
+        }),
+        readMarker: async () => ({ status: 'signed', marker }),
+        commitBundle: () => {
+          throw new Error('deadline expired at COMMIT');
+        },
+      },
+    ),
+    /deadline expired at COMMIT/,
+  );
+  assert.deepEqual(events, ['cancel']);
+});
+
 test('dev-client pin refuses any URL drift and never falls back to a picker row', async () => {
   await assert.rejects(
     pinExactDevClient(
