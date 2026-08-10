@@ -55983,7 +55983,7 @@ function attachCause(error2, cause) {
 }
 function isPreSpawnMaestroError(error2) {
   const candidate = error2;
-  return (candidate?.code === "ENOENT" || candidate?.code === "EACCES") && !candidate.stdout && !candidate.stderr;
+  return typeof candidate?.code === "string" && !candidate.stdout && !candidate.stderr;
 }
 function isUiAutomationNotConnectedSessionCreationFailure(error2) {
   const candidate = error2;
@@ -56025,7 +56025,7 @@ function createMaestroRunHandler(deps = {}) {
     if (args.deviceId && matchingSessionDeviceId && !sameDevice(args.deviceId, matchingSessionDeviceId)) {
       return failResult(`Refusing Maestro target ${args.deviceId}: active ${platform} session is bound to ${matchingSessionDeviceId}.`, "TARGET_SESSION_MISMATCH", { requestedDeviceId: args.deviceId, activeSessionDeviceId: matchingSessionDeviceId });
     }
-    const requestedDeviceId = args.deviceId ?? matchingSessionDeviceId;
+    const requestedDeviceId = args.deviceId ?? matchingSessionDeviceId ?? (platform === "android" ? process.env.ANDROID_SERIAL : void 0);
     if (requestedDeviceId !== void 0 && (requestedDeviceId.length === 0 || requestedDeviceId.length > 256 || /\s/.test(requestedDeviceId))) {
       return failResult("Refusing Maestro: deviceId must be 1-256 non-whitespace characters.", "INVALID_ARGUMENT");
     }
@@ -85812,13 +85812,13 @@ trackedTool("proof_step", "Atomic proof capture step: navigate to a screen (opti
   screenshotPath: external_exports.string().optional().describe("Output path for screenshot (default: auto-generated)"),
   label: external_exports.string().optional().describe('Label for this proof step (e.g. "After adding item to cart")')
 }, createProofStepHandler(getClient));
-trackedTool("maestro_run", "Execute a Maestro flow via maestro-runner. Pass flowPath for an existing .yaml file, or inlineYaml for ephemeral flows. Uses UIAutomator2 on Android and XCTest on iOS. A matching active device session is forwarded as an exact --device/--udid target; maestro-runner success is rejected unless its direct device/WDA evidence matches. Does NOT require CDP \u2014 works even when app is crashed or on native screens.", {
+trackedTool("maestro_run", "Execute a Maestro flow via maestro-runner. Pass flowPath for an existing .yaml file, or inlineYaml for ephemeral flows. Uses UIAutomator2 on Android and XCTest on iOS. A matching active device session, explicit deviceId, or Android ANDROID_SERIAL is forwarded as an exact --device/--udid target; maestro-runner success is rejected unless its direct device/WDA evidence matches. Does NOT require CDP \u2014 works even when app is crashed or on native screens.", {
   flowPath: external_exports.string().optional().describe("Path to a .yaml flow file to execute"),
   inlineYaml: external_exports.string().optional().describe("Inline YAML flow content (written to /tmp and executed)"),
   platform: external_exports.enum(["ios", "android"]).optional().describe("Target platform (auto-detected from session)"),
   appId: external_exports.string().optional().describe("App bundle ID (auto-detected from app.json)"),
   appFile: external_exports.string().optional().describe("iOS only \u2014 path to a built .app/.ipa for maestro-runner to reinstall on clearState. Auto-resolved from the flow appId when omitted (GH#201)."),
-  deviceId: external_exports.string().min(1).max(256).optional().describe("Exact iOS UDID or Android serial. Defaults only from a matching active device session and is forwarded to the replay engine."),
+  deviceId: external_exports.string().min(1).max(256).optional().describe("Exact iOS UDID or Android serial. Defaults from a matching active session, or ANDROID_SERIAL on Android, and is forwarded to the replay engine."),
   timeoutMs: external_exports.number().int().min(5e3).max(3e5).default(12e4).describe("Execution timeout in ms"),
   params: external_exports.record(external_exports.string(), external_exports.string()).optional().describe("GH #116: parameter bindings forwarded as -e KEY=VALUE for ${KEY} placeholders in the flow. Keys must match /^[A-Z_][A-Z0-9_]*$/ (validated in the handler).")
 }, createMaestroRunHandler());

@@ -156,6 +156,31 @@ test('GH#653 maestro_run surfaces the no-exact-device refusal without dispatch',
   assert.equal(executions, 0);
 });
 
+test('GH#653 ANDROID_SERIAL pins runner argv and direct device authority', async () => {
+  const previous = process.env.ANDROID_SERIAL;
+  process.env.ANDROID_SERIAL = SERIAL;
+  let argv: string[] = [];
+  try {
+    const handler = baseHandler({
+      getActiveSession: () => null,
+      execFile: async (_file, args) => {
+        argv = args;
+        return directSuccess();
+      },
+    });
+
+    const body = envelope(await handler(runArgs));
+    assert.equal(body.ok, true);
+    assert.deepEqual(argv.slice(0, 5), ['--platform', 'android', '--device', SERIAL, 'test']);
+    assert.equal(body.data.deviceAuthority.requestedDeviceId, SERIAL);
+    assert.equal(body.data.deviceAuthority.reportedDeviceId, SERIAL);
+    assert.equal(body.data.deviceAuthority.verified, true);
+  } finally {
+    if (previous === undefined) delete process.env.ANDROID_SERIAL;
+    else process.env.ANDROID_SERIAL = previous;
+  }
+});
+
 test('GH#653 pre-flow release warnings remain visible in maestro_run', async () => {
   const parkFlow = async <T>(run: () => Promise<T>, opts: FlowParkOpts): Promise<T> => {
     opts.onAndroidRelease?.({ warnings: ['owned test package could not be stopped'] });
@@ -375,29 +400,31 @@ test('GH#653 a deadline lapsing after successful cleanup keeps the wedge and nev
   );
 });
 
-test('GH#653 a retry spawn failure preserves the wedge and reports no subprocess retry', async () => {
-  let executions = 0;
-  const handler = baseHandler({
-    execFile: async () => {
-      executions += 1;
-      if (executions === 1) {
-        throw execFailure(UIAUTOMATION_FAILURE, `Connecting to Android device: ${SERIAL}`);
-      }
-      throw Object.assign(new Error('spawn maestro-runner ENOENT'), {
-        code: 'ENOENT',
-        stdout: '',
-        stderr: '',
-      });
-    },
-    releaseAndroidSlot: async () => ({ warnings: [] }),
-  });
+test('GH#653 all output-free OS spawn errors preserve the wedge and no subprocess retry', async () => {
+  for (const code of ['ENOENT', 'EACCES', 'ENOTDIR', 'EMFILE']) {
+    let executions = 0;
+    const handler = baseHandler({
+      execFile: async () => {
+        executions += 1;
+        if (executions === 1) {
+          throw execFailure(UIAUTOMATION_FAILURE, `Connecting to Android device: ${SERIAL}`);
+        }
+        throw Object.assign(new Error(`spawn maestro-runner ${code}`), {
+          code,
+          stdout: '',
+          stderr: '',
+        });
+      },
+      releaseAndroidSlot: async () => ({ warnings: [] }),
+    });
 
-  const body = envelope(await handler(runArgs));
-  assert.equal(body.ok, false);
-  assert.equal(executions, 2, 'the second invocation failed before spawning a child');
-  assert.deepEqual(body.meta.androidUiAutomationRecovery, { retried: false, retryCount: 0 });
-  assert.match(body.meta.output, /UiAutomation not connected/);
-  assert.match(body.error, /UiAutomation recovery retry did not start:.*ENOENT/);
+    const body = envelope(await handler(runArgs));
+    assert.equal(body.ok, false);
+    assert.equal(executions, 2, `${code}: second invocation failed before spawning a child`);
+    assert.deepEqual(body.meta.androidUiAutomationRecovery, { retried: false, retryCount: 0 });
+    assert.match(body.meta.output, /UiAutomation not connected/);
+    assert.match(body.error, new RegExp(`UiAutomation recovery retry did not start:.*${code}`));
+  }
 });
 
 test('GH#653 release diagnostics survive a session-authority refusal after parking', async () => {

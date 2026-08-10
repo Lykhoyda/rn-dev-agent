@@ -125,7 +125,7 @@ export interface MaestroRunArgs {
   platform?: 'ios' | 'android';
   appId?: string;
   appFile?: string;
-  /** Exact UDID/serial. Defaults only from a matching active device session. */
+  /** Exact UDID/serial. Android may fall back to an explicit ANDROID_SERIAL. */
   deviceId?: string;
   timeoutMs?: number;
   /**
@@ -358,11 +358,7 @@ function attachCause(error: unknown, cause: unknown): unknown {
 
 function isPreSpawnMaestroError(error: unknown): boolean {
   const candidate = error as { code?: unknown; stdout?: unknown; stderr?: unknown } | null;
-  return (
-    (candidate?.code === 'ENOENT' || candidate?.code === 'EACCES') &&
-    !candidate.stdout &&
-    !candidate.stderr
-  );
+  return typeof candidate?.code === 'string' && !candidate.stdout && !candidate.stderr;
 }
 
 export function isUiAutomationNotConnectedSessionCreationFailure(error: unknown): boolean {
@@ -448,7 +444,10 @@ export function createMaestroRunHandler(
         { requestedDeviceId: args.deviceId, activeSessionDeviceId: matchingSessionDeviceId },
       );
     }
-    const requestedDeviceId = args.deviceId ?? matchingSessionDeviceId;
+    const requestedDeviceId =
+      args.deviceId ??
+      matchingSessionDeviceId ??
+      (platform === 'android' ? process.env.ANDROID_SERIAL : undefined);
     if (
       requestedDeviceId !== undefined &&
       (requestedDeviceId.length === 0 ||

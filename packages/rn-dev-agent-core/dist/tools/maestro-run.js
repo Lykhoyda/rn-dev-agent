@@ -212,9 +212,7 @@ function attachCause(error, cause) {
 }
 function isPreSpawnMaestroError(error) {
     const candidate = error;
-    return ((candidate?.code === 'ENOENT' || candidate?.code === 'EACCES') &&
-        !candidate.stdout &&
-        !candidate.stderr);
+    return typeof candidate?.code === 'string' && !candidate.stdout && !candidate.stderr;
 }
 export function isUiAutomationNotConnectedSessionCreationFailure(error) {
     const candidate = error;
@@ -273,7 +271,9 @@ export function createMaestroRunHandler(deps = {}) {
             !sameDevice(args.deviceId, matchingSessionDeviceId)) {
             return failResult(`Refusing Maestro target ${args.deviceId}: active ${platform} session is bound to ${matchingSessionDeviceId}.`, 'TARGET_SESSION_MISMATCH', { requestedDeviceId: args.deviceId, activeSessionDeviceId: matchingSessionDeviceId });
         }
-        const requestedDeviceId = args.deviceId ?? matchingSessionDeviceId;
+        const requestedDeviceId = args.deviceId ??
+            matchingSessionDeviceId ??
+            (platform === 'android' ? process.env.ANDROID_SERIAL : undefined);
         if (requestedDeviceId !== undefined &&
             (requestedDeviceId.length === 0 ||
                 requestedDeviceId.length > 256 ||
