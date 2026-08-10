@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   createMaestroRunHandler,
   isUiAutomationNotConnectedSessionCreationFailure,
+  runFlowParked,
   type FlowParkOpts,
 } from '../../dist/tools/maestro-run.js';
 import type { MaestroDispatch } from '../../dist/tools/maestro-dispatch.js';
@@ -180,6 +181,47 @@ test('GH#653 retry release failures stay visible after recovery', async () => {
     'am force-stop dev.lykhoyda.rndevagent.androidrunner failed: denied',
   ]);
   assert.match(body.meta.warning, /force-stop.*failed: denied/);
+});
+
+test('GH#237 shared pre-flow parking keeps legacy daemon cleanup enabled', async () => {
+  const releases: Array<{ deviceId?: string; includeLegacy?: boolean }> = [];
+  const parked = await runFlowParked(async () => 'ran', {
+    platform: 'android',
+    deviceId: SERIAL,
+    markCdpStale: () => {},
+    releaseAndroidSlot: async (opts) => {
+      releases.push(opts);
+    },
+  });
+
+  assert.equal(parked, 'ran');
+  assert.deepEqual(releases, [{ deviceId: SERIAL }]);
+  assert.equal(releases[0]!.includeLegacy, undefined);
+});
+
+test('GH#653 recovery release failure keeps the original UiAutomation failure', async () => {
+  let executions = 0;
+  const handler = baseHandler({
+    execFile: async () => {
+      executions += 1;
+      throw execFailure(`Connecting to Android device: ${SERIAL}\n${UIAUTOMATION_FAILURE}`);
+    },
+    releaseAndroidSlot: async () => {
+      throw new ExactAndroidDeviceRequiredError();
+    },
+  });
+
+  const body = envelope(await handler(runArgs));
+  assert.equal(body.ok, false);
+  assert.equal(executions, 1);
+  assert.notEqual(body.code, 'EXACT_ANDROID_DEVICE_REQUIRED');
+  assert.match(body.meta.output, /UiAutomation not connected/);
+  assert.match(body.error, /UiAutomation recovery release failed/);
+  assert.equal(body.meta.androidSlotReleaseWarnings.length, 1);
+  assert.match(
+    body.meta.androidSlotReleaseWarnings[0],
+    /UiAutomation recovery release failed:.*without an exact serial/s,
+  );
 });
 
 test('GH#653 a repeated wedge is bounded to one retry', async () => {

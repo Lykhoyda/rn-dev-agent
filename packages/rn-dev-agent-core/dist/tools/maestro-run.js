@@ -34,7 +34,7 @@ export async function runFlowParked(run, opts = {}) {
     try {
         if (opts.platform === 'android') {
             const release = opts.releaseAndroidSlot ?? defaultReleaseAndroidSlot;
-            const outcome = await release({ deviceId: opts.deviceId, includeLegacy: false });
+            const outcome = await release({ deviceId: opts.deviceId });
             opts.onAndroidRelease?.(outcome);
         }
         else {
@@ -200,6 +200,17 @@ function resolveAppId(override, platform) {
 }
 const UIAUTOMATION_SESSION_CREATION_FAILURE = 'failed to create driver: create session: session not created: ' +
     'java.lang.IllegalStateException: UiAutomation not connected';
+function attachCause(error, cause) {
+    if (error instanceof Error && error.cause === undefined) {
+        try {
+            Object.defineProperty(error, 'cause', { value: cause, configurable: true, writable: true });
+        }
+        catch {
+            // a frozen/sealed error keeps its own message; the warning already carries the cause
+        }
+    }
+    return error;
+}
 export function isUiAutomationNotConnectedSessionCreationFailure(error) {
     const candidate = error;
     const text = [candidate?.message, candidate?.stdout, candidate?.stderr]
@@ -436,11 +447,16 @@ export function createMaestroRunHandler(deps = {}) {
                         throw error;
                     }
                     uiAutomationRecoveryRetried = true;
-                    const releaseOutcome = await releaseAndroidSlot({
-                        deviceId: recoveryDeviceId,
-                        includeLegacy: false,
-                    });
-                    recordAndroidRelease(releaseOutcome);
+                    try {
+                        recordAndroidRelease(await releaseAndroidSlot({
+                            deviceId: recoveryDeviceId,
+                            includeLegacy: false,
+                        }));
+                    }
+                    catch (releaseError) {
+                        androidSlotReleaseWarnings.push(`UiAutomation recovery release failed: ${releaseError instanceof Error ? releaseError.message : String(releaseError)}`);
+                        throw attachCause(error, releaseError);
+                    }
                     return executeOnce();
                 }
             }, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin), {
