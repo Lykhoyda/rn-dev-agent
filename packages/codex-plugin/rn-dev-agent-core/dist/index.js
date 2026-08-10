@@ -55981,6 +55981,9 @@ function attachCause(error2, cause) {
   }
   return error2;
 }
+function isExactDeviceIdShape(value) {
+  return value.length > 0 && value.length <= 256 && !/\s/.test(value);
+}
 function isPreSpawnMaestroError(error2) {
   const candidate = error2;
   return typeof candidate?.code === "string" && !candidate.stdout && !candidate.stderr;
@@ -56025,8 +56028,12 @@ function createMaestroRunHandler(deps = {}) {
     if (args.deviceId && matchingSessionDeviceId && !sameDevice(args.deviceId, matchingSessionDeviceId)) {
       return failResult(`Refusing Maestro target ${args.deviceId}: active ${platform} session is bound to ${matchingSessionDeviceId}.`, "TARGET_SESSION_MISMATCH", { requestedDeviceId: args.deviceId, activeSessionDeviceId: matchingSessionDeviceId });
     }
-    const requestedDeviceId = args.deviceId ?? matchingSessionDeviceId ?? (platform === "android" ? process.env.ANDROID_SERIAL : void 0);
-    if (requestedDeviceId !== void 0 && (requestedDeviceId.length === 0 || requestedDeviceId.length > 256 || /\s/.test(requestedDeviceId))) {
+    const envAndroidSerial = platform === "android" && process.env.ANDROID_SERIAL ? process.env.ANDROID_SERIAL : void 0;
+    if (envAndroidSerial !== void 0 && !isExactDeviceIdShape(envAndroidSerial)) {
+      return failResult("Refusing Maestro: ANDROID_SERIAL must be 1-256 non-whitespace characters. Unset it or set an exact serial, then retry. No device was mutated.", "INVALID_ARGUMENT");
+    }
+    const requestedDeviceId = args.deviceId ?? matchingSessionDeviceId ?? envAndroidSerial;
+    if (requestedDeviceId !== void 0 && !isExactDeviceIdShape(requestedDeviceId)) {
       return failResult("Refusing Maestro: deviceId must be 1-256 non-whitespace characters.", "INVALID_ARGUMENT");
     }
     let flowHasHideKeyboard = false;
@@ -56299,7 +56306,7 @@ function createMaestroRunHandler(deps = {}) {
         directReportIdentityStrength: directEvidence.reportDeviceIdStrength
       });
       const summary = buildStepSummary(combined, { failed: true });
-      const spawnError = combined.length === 0 && ["ENOENT", "EACCES"].includes(String(stageError?.code ?? ""));
+      const spawnError = combined.length === 0 && isPreSpawnMaestroError(stageError);
       const terminal = buildTerminalEvidence(combined, { timedOut, spawnError });
       const runnerResume = await buildRunnerResume(platform, fastHealthCheck2);
       const catchRefusal = combined.length > 0 ? maestroAuthorityRefusal(deviceAuthority, msg3) : null;
