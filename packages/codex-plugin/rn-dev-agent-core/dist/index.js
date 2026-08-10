@@ -29595,11 +29595,11 @@ function isValidBody(o) {
   const b = o;
   return typeof b.pid === "number" && Number.isFinite(b.pid) && (b.platform === "ios" || b.platform === "android") && typeof b.deviceId === "string" && b.deviceId.length > 0 && typeof b.projectRoot === "string" && typeof b.startedAt === "number" && Number.isFinite(b.startedAt) && typeof b.lastHeartbeat === "number" && Number.isFinite(b.lastHeartbeat);
 }
-var DEFAULT_STALE_MS, DeviceLock;
+var DEVICE_LOCK_STALE_MS, DeviceLock;
 var init_device_lock = __esm({
   "packages/rn-dev-agent-core/dist/lifecycle/device-lock.js"() {
     "use strict";
-    DEFAULT_STALE_MS = 9e4;
+    DEVICE_LOCK_STALE_MS = 9e4;
     DeviceLock = class {
       lockPath;
       acquired = false;
@@ -29624,7 +29624,7 @@ var init_device_lock = __esm({
         this.version = opts.version;
         this.clock = opts.clock ?? Date.now;
         this.processAlive = opts.processAlive ?? defaultProcessAlive3;
-        this.staleMs = opts.staleMs ?? DEFAULT_STALE_MS;
+        this.staleMs = opts.staleMs ?? DEVICE_LOCK_STALE_MS;
         this.lockPath = join17(this.tmpDir, `rn-dev-agent-device-${uid}-${this.platform}-${this.deviceId}.lock`);
       }
       acquire() {
@@ -29794,9 +29794,27 @@ function releaseDeviceLockForSession() {
     activeDeviceLock = null;
   }
 }
-function deviceBusyMessage(deviceId, holder) {
+function defaultHolderProcessAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error2) {
+    return error2.code === "EPERM";
+  }
+}
+function deviceBusyHolderSummary(holder, options = {}) {
+  const rawHeartbeatAgeMs = Math.max(0, (options.now ?? Date.now()) - holder.lastHeartbeat);
+  return {
+    alive: (options.processAlive ?? defaultHolderProcessAlive)(holder.pid),
+    heartbeatAgeMs: Math.min(rawHeartbeatAgeMs, DEVICE_LOCK_STALE_MS),
+    heartbeatAgeCapped: rawHeartbeatAgeMs > DEVICE_LOCK_STALE_MS
+  };
+}
+function deviceBusyMessage(deviceId, holder, summary = deviceBusyHolderSummary(holder)) {
   const label = holder.platform === "android" ? "Emulator/device" : "Simulator";
-  return `${label} ${deviceId} is already owned by another rn-dev-agent bridge (PID ${holder.pid}, project ${holder.projectRoot}${holder.appId ? `, app ${holder.appId}` : ""}). Close that session or target a different simulator.`;
+  const heartbeatAgeSeconds = Math.ceil(summary.heartbeatAgeMs / 1e3);
+  const heartbeatAge = `${heartbeatAgeSeconds}s${summary.heartbeatAgeCapped ? "+" : ""}`;
+  return `${label} ${deviceId} is already owned by another rn-dev-agent bridge. Holder is ${summary.alive ? "alive" : "not alive"}; heartbeat age is ${heartbeatAge} (bounded to 0\u201390s). ${DEVICE_BUSY_CLOSE_GUIDANCE} ${DEVICE_BUSY_ALTERNATE_GUIDANCE} ${DEVICE_BUSY_STALE_GUIDANCE} ${DEVICE_BUSY_OWNERSHIP_GUIDANCE}`;
 }
 async function isAppRunning(platform, bundleId, probes, deviceId) {
   const p = (platform ?? "ios").toLowerCase();
@@ -29896,9 +29914,10 @@ function createDeviceSnapshotHandler(deps = {}) {
       }
       const lockResult = acquireDeviceLockForSession(lockPlatform, deviceId, appId);
       if (lockResult.status === "conflict") {
-        return failResult(deviceBusyMessage(deviceId, lockResult.holder), {
+        const holder = deviceBusyHolderSummary(lockResult.holder);
+        return failResult(deviceBusyMessage(deviceId, lockResult.holder, holder), {
           code: "DEVICE_BUSY",
-          holder: lockResult.holder
+          holder
         });
       }
       if (lockResult.degraded) {
@@ -30246,7 +30265,7 @@ async function reopenSessionForRecovery(appId, platform, attachOnly, deviceId, d
     sessionName: recoveryName
   });
 }
-var execFile11, HEARTBEAT_MS, activeDeviceLock, heartbeatTimer, AndroidAppLaunchError;
+var execFile11, HEARTBEAT_MS, activeDeviceLock, heartbeatTimer, DEVICE_BUSY_CLOSE_GUIDANCE, DEVICE_BUSY_ALTERNATE_GUIDANCE, DEVICE_BUSY_STALE_GUIDANCE, DEVICE_BUSY_OWNERSHIP_GUIDANCE, AndroidAppLaunchError;
 var init_device_session = __esm({
   "packages/rn-dev-agent-core/dist/tools/device-session.js"() {
     "use strict";
@@ -30272,6 +30291,10 @@ var init_device_session = __esm({
     HEARTBEAT_MS = 3e4;
     activeDeviceLock = null;
     heartbeatTimer = null;
+    DEVICE_BUSY_CLOSE_GUIDANCE = "From the holder worktree, run `device_snapshot action=close` to release it safely.";
+    DEVICE_BUSY_ALTERNATE_GUIDANCE = "Alternatively, boot a dedicated simulator (or emulator), bind its exact ID with `rn_session action=bind_device`, run the normal managed build/install there, then select that exact ID with `device_snapshot action=open ... attachOnly=true` when the app is already running.";
+    DEVICE_BUSY_STALE_GUIDANCE = "Dead holders self-heal on the next open attempt; live holders self-heal once their heartbeat is stale beyond the existing 90s recovery window.";
+    DEVICE_BUSY_OWNERSHIP_GUIDANCE = "A healthy live holder is never stolen or changed by this refusal.";
     AndroidAppLaunchError = class extends Error {
       constructor(message) {
         super(message);
@@ -78932,7 +78955,7 @@ import { join as join40, resolve as resolve10 } from "node:path";
 var DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
 var DEFAULT_PROCESS_NAME_NEEDLE = "cdp-bridge";
 var PROCESS_IDENTITY_MARKERS = ["cdp-bridge", "rn-dev-agent", "supervisor.js"];
-var DEFAULT_STALE_MS2 = 9e4;
+var DEFAULT_STALE_MS = 9e4;
 function defaultProjectRoot() {
   return process.env.CLAUDE_USER_CWD ?? process.cwd();
 }
@@ -79002,7 +79025,7 @@ var Lockfile = class {
       maxAgeMs: opts.maxAgeMs ?? DEFAULT_MAX_AGE_MS,
       processNameNeedle: opts.processNameNeedle ?? DEFAULT_PROCESS_NAME_NEEDLE,
       processIdentity: opts.processIdentity ?? defaultProcessIdentity(),
-      staleMs: opts.staleMs ?? DEFAULT_STALE_MS2
+      staleMs: opts.staleMs ?? DEFAULT_STALE_MS
     };
     this.lockPath = join40(tmpDir, `rn-dev-agent-cdp-${uid}-${hash}.lock`);
   }

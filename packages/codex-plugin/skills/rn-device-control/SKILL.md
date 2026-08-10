@@ -381,6 +381,18 @@ If the runner itself is down, the bridge returns an actionable `RN_FAST_RUNNER_D
 
 ## Troubleshooting
 
+### Safe `DEVICE_BUSY` recovery
+
+A `DEVICE_BUSY` refusal reports whether the holder is alive and its heartbeat age bounded to 0–90s. It does not expose the holder PID, project path, or app ID, and it does not mutate the holder.
+
+From the holder worktree, run `device_snapshot action=close` to release it safely.
+
+Alternatively, boot a dedicated simulator (or emulator), bind its exact ID with `rn_session action=bind_device`, run the normal managed build/install there, then select that exact ID with `device_snapshot action=open ... attachOnly=true` when the app is already running.
+
+Dead holders self-heal on the next open attempt; live holders self-heal once their heartbeat is stale beyond the existing 90s recovery window.
+
+A healthy live holder is never stolen or changed by this refusal.
+
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | Simulator not booting | Stale state or Xcode mismatch | `xcrun simctl shutdown all && xcrun simctl erase all` then re-boot |
@@ -390,7 +402,7 @@ If the runner itself is down, the bridge returns an actionable `RN_FAST_RUNNER_D
 | `pidof` not found | Older Android version (< API 24) | Use `ps | grep` fallback shown in Native Logs section |
 | `AUTOMATION_CLEANUP_UNPROVEN` | Plugin-owned inline Maestro cleanup could not be proven | Run the returned manual `kill -TERM -<pgid>` command, then retry in the same bridge process |
 | `BUSY_FOREIGN_FLOW` | Genuinely foreign Maestro/XCTest owns the exact device | Wait for that owner; do not force-kill it |
-| `DEVICE_BUSY` / `DEVICE_CLAIM_CONFLICT` | In-flight compatibility operation / another live worktree claim | Wait or close the operation for `DEVICE_BUSY`; use explicit handoff or bind a different free simulator for claim conflict—never force-steal |
+| `DEVICE_BUSY` / `DEVICE_CLAIM_CONFLICT` | A device-lock holder / another live worktree claim | Follow the safe `DEVICE_BUSY` recovery above; use explicit handoff for a claim conflict—never force-steal |
 
 ---
 

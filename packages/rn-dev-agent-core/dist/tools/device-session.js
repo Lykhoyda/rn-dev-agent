@@ -15,7 +15,7 @@ import { resolveBundleId } from '../project-config.js';
 import { isValidBundleId } from '../domain/maestro-validator.js';
 import { logger } from '../logger.js';
 import { isAgentDeviceRunnerSentinel, recoverFromRunnerLeak, } from './runner-leak-recovery.js';
-import { DeviceLock } from '../lifecycle/device-lock.js';
+import { DeviceLock, DEVICE_LOCK_STALE_MS } from '../lifecycle/device-lock.js';
 import { arbiter } from '../lifecycle/device-arbiter.js';
 import { closeDeviceSession } from './device-session-close.js';
 const execFile = promisify(execFileCb);
@@ -48,12 +48,35 @@ export function releaseDeviceLockForSession() {
         activeDeviceLock = null;
     }
 }
-export function deviceBusyMessage(deviceId, holder) {
+export const DEVICE_BUSY_CLOSE_GUIDANCE = 'From the holder worktree, run `device_snapshot action=close` to release it safely.';
+export const DEVICE_BUSY_ALTERNATE_GUIDANCE = 'Alternatively, boot a dedicated simulator (or emulator), bind its exact ID with `rn_session action=bind_device`, run the normal managed build/install there, then select that exact ID with `device_snapshot action=open ... attachOnly=true` when the app is already running.';
+export const DEVICE_BUSY_STALE_GUIDANCE = 'Dead holders self-heal on the next open attempt; live holders self-heal once their heartbeat is stale beyond the existing 90s recovery window.';
+export const DEVICE_BUSY_OWNERSHIP_GUIDANCE = 'A healthy live holder is never stolen or changed by this refusal.';
+function defaultHolderProcessAlive(pid) {
+    try {
+        process.kill(pid, 0);
+        return true;
+    }
+    catch (error) {
+        return error.code === 'EPERM';
+    }
+}
+export function deviceBusyHolderSummary(holder, options = {}) {
+    const rawHeartbeatAgeMs = Math.max(0, (options.now ?? Date.now()) - holder.lastHeartbeat);
+    return {
+        alive: (options.processAlive ?? defaultHolderProcessAlive)(holder.pid),
+        heartbeatAgeMs: Math.min(rawHeartbeatAgeMs, DEVICE_LOCK_STALE_MS),
+        heartbeatAgeCapped: rawHeartbeatAgeMs > DEVICE_LOCK_STALE_MS,
+    };
+}
+export function deviceBusyMessage(deviceId, holder, summary = deviceBusyHolderSummary(holder)) {
     const label = holder.platform === 'android' ? 'Emulator/device' : 'Simulator';
-    return (`${label} ${deviceId} is already owned by another rn-dev-agent bridge ` +
-        `(PID ${holder.pid}, project ${holder.projectRoot}` +
-        `${holder.appId ? `, app ${holder.appId}` : ''}). ` +
-        `Close that session or target a different simulator.`);
+    const heartbeatAgeSeconds = Math.ceil(summary.heartbeatAgeMs / 1_000);
+    const heartbeatAge = `${heartbeatAgeSeconds}s${summary.heartbeatAgeCapped ? '+' : ''}`;
+    return (`${label} ${deviceId} is already owned by another rn-dev-agent bridge. ` +
+        `Holder is ${summary.alive ? 'alive' : 'not alive'}; heartbeat age is ${heartbeatAge} (bounded to 0–90s). ` +
+        `${DEVICE_BUSY_CLOSE_GUIDANCE} ${DEVICE_BUSY_ALTERNATE_GUIDANCE} ` +
+        `${DEVICE_BUSY_STALE_GUIDANCE} ${DEVICE_BUSY_OWNERSHIP_GUIDANCE}`);
 }
 /**
  * Check app liveness on the exact selected device; never use an ambiguous
@@ -189,9 +212,10 @@ export function createDeviceSnapshotHandler(deps = {}) {
             // On conflict, nothing has been launched yet — no teardown needed.
             const lockResult = acquireDeviceLockForSession(lockPlatform, deviceId, appId);
             if (lockResult.status === 'conflict') {
-                return failResult(deviceBusyMessage(deviceId, lockResult.holder), {
+                const holder = deviceBusyHolderSummary(lockResult.holder);
+                return failResult(deviceBusyMessage(deviceId, lockResult.holder, holder), {
                     code: 'DEVICE_BUSY',
-                    holder: lockResult.holder,
+                    holder,
                 });
             }
             if (lockResult.degraded) {
