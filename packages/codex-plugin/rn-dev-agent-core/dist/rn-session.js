@@ -7787,13 +7787,13 @@ function numericListener(output, emptyStatus) {
   const [pid] = pids;
   return pids.size === 1 && Number.isSafeInteger(pid) && pid > 0 ? { status: "listening", pid } : { status: "unknown" };
 }
-function probeMetroListener(port, platform = process.platform, execute = execFileSync5, executableDependencies = {}) {
+function probeMetroListener(port, platform = process.platform, execute2 = execFileSync5, executableDependencies = {}) {
   const executable = resolveMetroListenerExecutable(platform, executableDependencies);
   if (!executable)
     return { status: "unknown" };
   try {
     if (platform === "win32") {
-      const output = execute(executable, [
+      const output = execute2(executable, [
         "-NoProfile",
         "-NonInteractive",
         "-Command",
@@ -7802,7 +7802,7 @@ function probeMetroListener(port, platform = process.platform, execute = execFil
       return String(output).trim() === "ABSENT" ? { status: "absent" } : numericListener(output, "unknown");
     }
     if (platform === "linux") {
-      const output = execute(executable, ["-H", "-ltnp", `sport = :${port}`], {
+      const output = execute2(executable, ["-H", "-ltnp", `sport = :${port}`], {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "ignore"],
         timeout: 2e3
@@ -7815,7 +7815,7 @@ function probeMetroListener(port, platform = process.platform, execute = execFil
       return pids.size === 1 && Number.isSafeInteger(pid) && pid > 0 ? { status: "listening", pid } : { status: "unknown" };
     }
     if (platform === "darwin") {
-      const output = execute(executable, ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], {
+      const output = execute2(executable, ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
         timeout: 2e3
@@ -7828,8 +7828,8 @@ function probeMetroListener(port, platform = process.platform, execute = execFil
     return platform === "darwin" && failure.status === 1 && !String(failure.stdout ?? "").trim() && !String(failure.stderr ?? "").trim() ? { status: "absent" } : { status: "unknown" };
   }
 }
-function metroListenerPid(port, platform = process.platform, execute = execFileSync5, executableDependencies = {}) {
-  const probe = probeMetroListener(port, platform, execute, executableDependencies);
+function metroListenerPid(port, platform = process.platform, execute2 = execFileSync5, executableDependencies = {}) {
+  const probe = probeMetroListener(port, platform, execute2, executableDependencies);
   return probe.status === "listening" ? probe.pid : null;
 }
 async function fetchMetroStatus(port) {
@@ -8681,6 +8681,8 @@ var init_registry = __esm({
           const prior = this.#requireSingleProvenDeadDeviceOwner(session, deviceKey);
           const family = this.#requireExactStaleDeviceFamily(session, prior, target);
           const obligations = [];
+          if (family.androidMetroReverse)
+            obligations.push("androidMetroReverse");
           if (family.runner)
             obligations.push("runner");
           if (family.recorder)
@@ -8718,6 +8720,8 @@ var init_registry = __esm({
         const prior = this.#requireSingleProvenDeadDeviceOwner(session, deviceKey);
         const family = this.#requireExactStaleDeviceFamily(session, prior, target);
         const obligations = [];
+        if (family.androidMetroReverse)
+          obligations.push("androidMetroReverse");
         if (family.runner)
           obligations.push("runner");
         if (family.recorder)
@@ -8749,6 +8753,7 @@ var init_registry = __esm({
             return {
               platform: String(resumed.platform),
               deviceId: String(resumed.deviceId),
+              ...resumed.androidMetroReverse ? { androidMetroReverse: resumed.androidMetroReverse } : {},
               runner: resumed.runner ?? null,
               recorder: resumed.recorder ?? null
             };
@@ -8778,6 +8783,7 @@ var init_registry = __esm({
             return {
               platform: String(resumed.platform),
               deviceId: String(resumed.deviceId),
+              ...resumed.androidMetroReverse ? { androidMetroReverse: resumed.androidMetroReverse } : {},
               runner: resumed.runner ?? null,
               recorder: resumed.recorder ?? null
             };
@@ -8803,7 +8809,7 @@ var init_registry = __esm({
         const deviceKey = `${platform}:${deviceId}`;
         const priorBindings = JSON.parse(prior.bindings_json);
         const family = this.#requireExactStaleDeviceFamily(session, prior, target);
-        const { runner, recorder } = family;
+        const { androidMetroReverse, runner, recorder } = family;
         for (const claim of family.claims) {
           this.#database.prepare(`UPDATE claims SET session_id = ?, claim_epoch = ?, lease_until_ms = ?
            WHERE resource_type = ? AND resource_key = ?
@@ -8816,6 +8822,14 @@ var init_registry = __esm({
           priorSessionId: prior.session_id,
           priorClaimEpoch: prior.claim_epoch,
           transferredAt: now,
+          ...androidMetroReverse ? {
+            androidMetroReverse: {
+              ...androidMetroReverse,
+              claimKey: deviceKey,
+              stopRequestedAt: now,
+              completedAt: null
+            }
+          } : {},
           runner: runner ? { ...runner, claimKey: runnerClaimKey, stopRequestedAt: now, completedAt: null } : null,
           recorder: recorder ? { ...recorder, claimKey: deviceKey, stopRequestedAt: now, completedAt: null } : null
         };
@@ -8825,6 +8839,7 @@ var init_registry = __esm({
          WHERE session_id = ? AND claim_epoch = ?`).run(JSON.stringify({
           ...priorBindings,
           device: null,
+          androidMetroReverse: null,
           runner: null,
           recorder: null,
           deviceReleased: {
@@ -8834,11 +8849,18 @@ var init_registry = __esm({
             platform,
             deviceId,
             device: priorBindings.device ?? null,
+            androidMetroReverse,
             runner,
             recorder
           }
         }), now, prior.session_id, prior.claim_epoch);
-        return { platform, deviceId, runner: cleanup.runner, recorder: cleanup.recorder };
+        return {
+          platform,
+          deviceId,
+          ...cleanup.androidMetroReverse ? { androidMetroReverse: cleanup.androidMetroReverse } : {},
+          runner: cleanup.runner,
+          recorder: cleanup.recorder
+        };
       }
       #requireSingleProvenDeadDeviceOwner(session, deviceKey) {
         const claims = this.#deviceFamilyClaims(deviceKey);
@@ -8876,6 +8898,11 @@ var init_registry = __esm({
         if (this.#bindingMatchesDevice(currentBindings.device, target) || this.#bindingMatchesDevice(currentBindings.runner, target) || this.#bindingMatchesDevice(currentBindings.recorder, target)) {
           throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "stale device cleanup conflicts with existing target bindings");
         }
+        const reverseValue = bindings.androidMetroReverse;
+        const androidMetroReverse = reverseValue && typeof reverseValue === "object" && target.platform === "android" && reverseValue.platform === "android" && reverseValue.deviceId === target.deviceId && Number.isSafeInteger(reverseValue.metroPort) && reverseValue.local === `tcp:${String(reverseValue.metroPort)}` && reverseValue.remote === `tcp:${String(reverseValue.metroPort)}` ? reverseValue : null;
+        if (reverseValue !== null && reverseValue !== void 0 && !androidMetroReverse) {
+          throw new SessionAuthorityError("PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN", "stale physical Android Metro reverse binding does not match the exact device and port");
+        }
         const runnerClaims = claims.filter((claim) => claim.resource_type === "runner");
         const runnerValue = bindings.runner;
         const runner = this.#bindingMatchesDevice(runnerValue, target) ? runnerValue : null;
@@ -8901,7 +8928,7 @@ var init_registry = __esm({
         if (recorderClaims.length !== (recorder ? 1 : 0) || recorder && recorderClaims[0].resource_key !== deviceKey) {
           throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "stale recorder binding has no exclusive cleanup claim");
         }
-        return { claims, runner, recorder };
+        return { claims, androidMetroReverse, runner, recorder };
       }
       completeStaleResourceRelease(session, workerInstance, resource) {
         const now = this.#now();
@@ -8916,10 +8943,12 @@ var init_registry = __esm({
           }
           if (typeof entry.completedAt === "number")
             return;
-          const claimType = resource === "runner" ? "runner" : "recorder";
-          this.#database.prepare(`DELETE FROM claims
-           WHERE resource_type = ? AND resource_key = ?
-             AND session_id = ? AND claim_epoch = ?`).run(claimType, String(entry.claimKey), session.sessionId, session.claimEpoch);
+          if (resource !== "androidMetroReverse") {
+            const claimType = resource === "runner" ? "runner" : "recorder";
+            this.#database.prepare(`DELETE FROM claims
+             WHERE resource_type = ? AND resource_key = ?
+               AND session_id = ? AND claim_epoch = ?`).run(claimType, String(entry.claimKey), session.sessionId, session.claimEpoch);
+          }
           this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`).run(JSON.stringify({
             ...bindings,
@@ -8931,7 +8960,7 @@ var init_registry = __esm({
         const now = this.#now();
         this.#transaction(() => {
           const { row, bindings, cleanup } = this.#requireStaleReleaseOwner(session, workerInstance);
-          for (const resource of ["runner", "recorder"]) {
+          for (const resource of ["androidMetroReverse", "runner", "recorder"]) {
             const binding = cleanup[resource];
             if (binding && typeof binding === "object" && typeof binding.completedAt !== "number") {
               throw new SessionAuthorityError("AUTOMATION_CLEANUP_UNPROVEN", `${resource} release has not been durably completed`);
@@ -8990,12 +9019,17 @@ var init_registry = __esm({
           } : void 0;
           const handoffCleanup = record(bindings.handoffCleanup);
           const staleDevice = record(bindings.staleDeviceCleanup);
+          const androidMetroReverseSource = record(bindings.androidMetroReverse) ?? record(staleDevice?.androidMetroReverse);
           const recorderSource = record(bindings.recorder) ?? record(staleDevice?.recorder) ?? record(handoffCleanup?.recorder);
           const runnerSource = record(bindings.runner) ?? record(staleDevice?.runner) ?? record(handoffCleanup?.runner);
           const observeSource = record(bindings.observe) ?? record(handoffCleanup?.observe);
           const liveMetro = record(bindings.metroCleanup) ?? record(bindings.metro);
           const metroSource = liveMetro && liveMetro.mode === "managed" ? liveMetro : record(handoffCleanup?.metro);
           const obligations = {};
+          const androidMetroReverseEntry = obligation(androidMetroReverseSource, androidMetroReverseSource ? `android:${String(androidMetroReverseSource.deviceId)}` : null);
+          if (androidMetroReverseEntry) {
+            obligations.androidMetroReverse = androidMetroReverseEntry;
+          }
           const recorderEntry = obligation(recorderSource, recorderSource ? `${String(recorderSource.platform)}:${String(recorderSource.deviceId)}` : null);
           if (recorderEntry)
             obligations.recorder = recorderEntry;
@@ -9125,7 +9159,7 @@ var init_registry = __esm({
           const row = this.#requireProvenDeadStartupOwner(prior);
           const { bindings, journal } = this.#requireStartupCleanupJournal(row);
           const obligations = journal.obligations ?? {};
-          for (const resource of ["recorder", "runner", "observe"]) {
+          for (const resource of ["androidMetroReverse", "recorder", "runner", "observe"]) {
             const entry = obligations[resource];
             if (entry && typeof entry === "object" && typeof entry.completedAt !== "number") {
               throw new SessionAuthorityError("AUTOMATION_CLEANUP_UNPROVEN", `${resource} cleanup has not been durably completed`);
@@ -9186,11 +9220,12 @@ var init_registry = __esm({
         }
       }
       #assertStartupObligationScope(row, resource, entry) {
-        const claimType = resource === "observe" ? "observe-port" : resource === "metro" ? "metro-port" : resource;
+        const claimType = resource === "observe" ? "observe-port" : resource === "metro" ? "metro-port" : resource === "androidMetroReverse" ? "device" : resource;
         const claimKey = String(entry.claimKey ?? "");
         const claim = this.#findClaim(claimType, claimKey);
         if (!claimKey || claim?.session_id !== row.session_id || claim.claim_epoch !== row.claim_epoch) {
           const codes = {
+            androidMetroReverse: "PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN",
             recorder: "RECORDING_AUTHORITY_MISMATCH",
             runner: "RUNNER_OWNERSHIP_MISMATCH",
             observe: "OBSERVE_AUTHORITY_MISMATCH",
@@ -9231,6 +9266,10 @@ var init_registry = __esm({
         const deviceClaim = this.#findClaim("device", deviceKey);
         if (deviceClaim?.session_id !== row.session_id || deviceClaim.claim_epoch !== row.claim_epoch) {
           throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "stale device cleanup journal no longer owns its exact device claim");
+        }
+        const reverse = cleanup.androidMetroReverse;
+        if (reverse && typeof reverse === "object" && typeof reverse.completedAt !== "number" && String(reverse.claimKey ?? "") !== deviceKey) {
+          throw new SessionAuthorityError("PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN", "stale physical Android Metro cleanup journal no longer matches its exact device claim");
         }
         for (const resource of ["runner", "recorder"]) {
           const entry = cleanup[resource];
@@ -10926,7 +10965,7 @@ var init_registry = __esm({
             if (Date.now() >= deadline) {
               throw new SessionAuthorityError("AUTHORITY_STORE_BUSY", "authority registry remained contended past the retry deadline");
             }
-            await new Promise((resolve5) => setTimeout(resolve5, retryDelayMs));
+            await new Promise((resolve6) => setTimeout(resolve6, retryDelayMs));
           }
         }
       }
@@ -13692,17 +13731,17 @@ function hasUnsupportedNodeOption(value) {
   }
   return false;
 }
-function managedMetroParentPid(pid, platform = process.platform, execute = execFileSync6, executableDependencies = {}) {
+function managedMetroParentPid(pid, platform = process.platform, execute2 = execFileSync6, executableDependencies = {}) {
   const executable = resolveTrustedSystemExecutable(platform === "win32" ? "powershell" : "ps", platform, executableDependencies);
   if (!executable)
     return null;
   try {
-    const output = platform === "win32" ? execute(executable, [
+    const output = platform === "win32" ? execute2(executable, [
       "-NoProfile",
       "-NonInteractive",
       "-Command",
       `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").ParentProcessId`
-    ], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 2e3 }) : execute(executable, ["-p", String(pid), "-o", "ppid="], {
+    ], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 2e3 }) : execute2(executable, ["-p", String(pid), "-o", "ppid="], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 2e3
@@ -13724,11 +13763,11 @@ function listenerOwnedByLauncher(listenerPid, launcherPid) {
   }
   return false;
 }
-function managedMetroListenerPid(port, platform = process.platform, execute = execFileSync6, executableDependencies = {}) {
-  return metroListenerPid(port, platform, execute, executableDependencies);
+function managedMetroListenerPid(port, platform = process.platform, execute2 = execFileSync6, executableDependencies = {}) {
+  return metroListenerPid(port, platform, execute2, executableDependencies);
 }
-function probeManagedMetroListener(port, platform = process.platform, execute = execFileSync6, executableDependencies = {}) {
-  return probeMetroListener(port, platform, execute, executableDependencies);
+function probeManagedMetroListener(port, platform = process.platform, execute2 = execFileSync6, executableDependencies = {}) {
+  return probeMetroListener(port, platform, execute2, executableDependencies);
 }
 function resolveManagedMetroCommand(appRoot, dependencies = {}) {
   const exists = dependencies.exists ?? existsSync4;
@@ -14179,7 +14218,7 @@ async function stopSpawnedProcessGroup(input, dependencies) {
   const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
   const probeListener = dependencies.probeListener ?? probeManagedMetroListener;
   const signalTree = dependencies.signalTree ?? signalProcessTree;
-  const wait = dependencies.wait ?? ((ms) => new Promise((resolve5) => setTimeout(resolve5, ms)));
+  const wait = dependencies.wait ?? ((ms) => new Promise((resolve6) => setTimeout(resolve6, ms)));
   let signalFailed = false;
   try {
     signalTree({
@@ -14402,7 +14441,7 @@ async function startManagedMetro(input, dependencies = {}) {
   const ownsListener = dependencies.listenerOwnedByLauncher ?? listenerOwnedByLauncher;
   const capture = dependencies.capture ?? captureMetroBinding;
   const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
-  const wait = dependencies.wait ?? ((ms) => new Promise((resolve5) => setTimeout(resolve5, ms)));
+  const wait = dependencies.wait ?? ((ms) => new Promise((resolve6) => setTimeout(resolve6, ms)));
   const deadline = Date.now() + 2e4;
   let lastError = null;
   let listenerIdentity = null;
@@ -14481,13 +14520,13 @@ async function startManagedMetro(input, dependencies = {}) {
     lastError
   });
 }
-function signalManagedMetroProcessTree(input, platform = process.platform, execute = execFileSync6, executableDependencies = {}) {
+function signalManagedMetroProcessTree(input, platform = process.platform, execute2 = execFileSync6, executableDependencies = {}) {
   if (platform === "win32") {
     const executable = resolveTrustedSystemExecutable("taskkill", platform, executableDependencies);
     if (!executable)
       throw new Error("METRO_CLEANUP_EXECUTABLE_UNAVAILABLE");
     const pid = input.launcherPresent ? input.launcherPid : input.listenerPid;
-    execute(executable, ["/PID", String(pid), "/T"], {
+    execute2(executable, ["/PID", String(pid), "/T"], {
       stdio: "ignore",
       timeout: 2e3
     });
@@ -14527,7 +14566,7 @@ async function stopManagedMetroProcesses(input, dependencies) {
   const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
   const probeListener = dependencies.probeListener ?? probeManagedMetroListener;
   const signalTree = dependencies.signalTree ?? signalProcessTree;
-  const wait = dependencies.wait ?? ((ms) => new Promise((resolve5) => setTimeout(resolve5, ms)));
+  const wait = dependencies.wait ?? ((ms) => new Promise((resolve6) => setTimeout(resolve6, ms)));
   const inspect = () => {
     const launcher = exactProcessState(input.launcher, probeBirth(input.launcher.pid));
     const listener = input.listener ? exactProcessState(input.listener, probeBirth(input.listener.pid)) : "stopped";
@@ -14807,7 +14846,7 @@ function resolveSourceIdentity(inputRoot, dependencies = {}) {
 init_secure_state_file();
 import { randomBytes as randomBytes3, randomUUID } from "node:crypto";
 import { chmodSync as chmodSync2, linkSync, lstatSync as lstatSync6, mkdirSync as mkdirSync5, readFileSync as readFileSync7, renameSync as renameSync2, rmSync as rmSync3, statSync as statSync4, writeFileSync as writeFileSync2 } from "node:fs";
-import { join as join6 } from "node:path";
+import { join as join6, resolve as resolve5 } from "node:path";
 function fail(code, detail) {
   throw new Error(`${code}: ${detail}`);
 }
@@ -14835,11 +14874,10 @@ function sessionDirectory(layout, sessionId) {
   ensurePrivateDirectory(path);
   return path;
 }
-function createAuthorityStateLayout(stateDir = getStateDir()) {
-  ensurePrivateDirectory(stateDir);
-  const root = join6(stateDir, "v2");
-  ensurePrivateDirectory(root);
-  const layout = {
+function authorityStateLayout(stateDir) {
+  const resolvedStateDir = resolve5(stateDir);
+  const root = join6(resolvedStateDir, "v2");
+  return {
     root,
     registry: join6(root, "registry.sqlite3"),
     sessions: join6(root, "sessions"),
@@ -14847,6 +14885,35 @@ function createAuthorityStateLayout(stateDir = getStateDir()) {
     observe: join6(root, "observe"),
     migrations: join6(root, "migrations")
   };
+}
+function createAuthorityStateLayout(stateDir = getStateDir()) {
+  const layout = authorityStateLayout(stateDir);
+  ensurePrivateDirectory(resolve5(stateDir));
+  const root = layout.root;
+  ensurePrivateDirectory(root);
+  for (const path of [layout.sessions, layout.runners, layout.observe, layout.migrations]) {
+    ensurePrivateDirectory(path);
+  }
+  return layout;
+}
+function openAuthorityStateLayout(stateDir) {
+  const layout = authorityStateLayout(stateDir);
+  try {
+    const registry = lstatSync6(layout.registry);
+    if (registry.isSymbolicLink() || !registry.isFile()) {
+      fail("AUTHORITY_STATE_HOME_UNKNOWN", "requested state home has no regular authority registry");
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("AUTHORITY_STATE_HOME_UNKNOWN")) {
+      throw error;
+    }
+    if (error.code === "ENOENT") {
+      fail("AUTHORITY_STATE_HOME_UNKNOWN", "requested state home has no authority registry; refusing to initialize an empty registry");
+    }
+    fail("AUTHORITY_STATE_HOME_UNKNOWN", error instanceof Error ? error.message : "requested authority registry is unavailable");
+  }
+  ensurePrivateDirectory(resolve5(stateDir));
+  ensurePrivateDirectory(layout.root);
   for (const path of [layout.sessions, layout.runners, layout.observe, layout.migrations]) {
     ensurePrivateDirectory(path);
   }
@@ -14903,6 +14970,7 @@ var WAIT_BUFFER = new Int32Array(new SharedArrayBuffer(4));
 var WORKER_READY_TIMEOUT_MS = 3e4;
 var WORKER_OPERATION_TIMEOUT_MS = 3e4;
 var ANCESTRY_MONITOR_TIMEOUT_MS = 2e4;
+var ANCESTRY_MONITOR_POLL_MS = 50;
 var BOUND_DIRECTORY_LIFECYCLE_MONITOR = String.raw`
 const fs = require('node:fs');
 const path = require('node:path');
@@ -14968,9 +15036,15 @@ function invalidate() {
   Atomics.notify(state, 1);
 }
 
+function progress() {
+  Atomics.add(state, 6, 1);
+}
+
 function fail() {
   Atomics.store(state, 2, 1);
   invalidate();
+  Atomics.store(state, 4, Atomics.load(state, 3));
+  Atomics.notify(state, 4);
 }
 
 try {
@@ -15006,14 +15080,20 @@ try {
   }
   let barrierPending = false;
   const barrier = setInterval(() => {
+    progress();
     const requested = Atomics.load(state, 3);
     if (barrierPending || requested === Atomics.load(state, 4)) return;
     barrierPending = true;
     setImmediate(() => {
+      progress();
       setImmediate(() => {
+        progress();
         setImmediate(() => {
           const captureBaseline = Atomics.load(state, 5) === 1;
-          for (const record of records) record.inspectFence(captureBaseline);
+          for (const record of records) {
+            progress();
+            record.inspectFence(captureBaseline);
+          }
           Atomics.store(state, 4, requested);
           barrierPending = false;
           Atomics.notify(state, 4);
@@ -15028,6 +15108,31 @@ try {
   fail();
   Atomics.store(state, 0, -1);
   Atomics.notify(state, 0);
+}
+`;
+var BOUND_DIRECTORY_ANCESTRY_SYNC = String.raw`
+function createAncestrySynchronizer(state, timeoutMs, pollMs, AncestryError, clock) {
+  const now = clock || Date.now;
+  return function synchronize(captureBaseline) {
+    Atomics.store(state, 5, captureBaseline ? 1 : 0);
+    const requested = Atomics.add(state, 3, 1) + 1;
+    Atomics.notify(state, 3);
+    let progress = Atomics.load(state, 6);
+    let deadline = now() + timeoutMs;
+    while (Atomics.load(state, 4) !== requested) {
+      if (Atomics.load(state, 2) !== 0) {
+        throw new AncestryError('bound-directory ancestry monitor failed');
+      }
+      Atomics.wait(state, 4, Atomics.load(state, 4), pollMs);
+      const observed = Atomics.load(state, 6);
+      if (observed !== progress) {
+        progress = observed;
+        deadline = now() + timeoutMs;
+      } else if (now() >= deadline) {
+        throw new AncestryError('bound-directory ancestry monitor synchronization failed');
+      }
+    }
+  };
 }
 `;
 var BOUND_DIRECTORY_WORKER = String.raw`
@@ -15077,7 +15182,7 @@ const monitoredAncestors =
   agentAncestorIndex === -1
     ? []
     : binding.ancestors.slice(agentAncestorIndex);
-const ancestryState = new Int32Array(new SharedArrayBuffer(6 * 4));
+const ancestryState = new Int32Array(new SharedArrayBuffer(7 * 4));
 if (monitoredAncestors.length > 0) {
   const ancestryMonitor = new Worker(${JSON.stringify(BOUND_DIRECTORY_ANCESTRY_MONITOR)}, {
     eval: true,
@@ -15103,26 +15208,17 @@ function wait(milliseconds) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
 }
 
+${BOUND_DIRECTORY_ANCESTRY_SYNC}
+const ancestrySynchronizer = createAncestrySynchronizer(
+  ancestryState,
+  ${ANCESTRY_MONITOR_TIMEOUT_MS},
+  ${ANCESTRY_MONITOR_POLL_MS},
+  AncestryError,
+);
+
 function synchronizeAncestryMonitor(captureBaseline = false) {
   if (monitoredAncestors.length === 0) return;
-  Atomics.store(ancestryState, 5, captureBaseline ? 1 : 0);
-  const requested = Atomics.add(ancestryState, 3, 1) + 1;
-  Atomics.notify(ancestryState, 3);
-  const deadline = Date.now() + ${ANCESTRY_MONITOR_TIMEOUT_MS};
-  while (Atomics.load(ancestryState, 4) !== requested) {
-    const remaining = deadline - Date.now();
-    if (
-      remaining <= 0 ||
-      Atomics.wait(
-        ancestryState,
-        4,
-        Atomics.load(ancestryState, 4),
-        remaining,
-      ) === 'timed-out'
-    ) {
-      throw new AncestryError('bound-directory ancestry monitor synchronization failed');
-    }
-  }
+  ancestrySynchronizer(captureBaseline);
 }
 
 function mutateBoundDirectory(mutation) {
@@ -16851,7 +16947,7 @@ init_registry();
 var execFile12 = promisify12(execFileCb9);
 var RECORDER_POST_KILL_CONFIRM_MS = 2e3;
 function executeRecorderScript(script, args, options) {
-  return new Promise((resolve5, reject) => {
+  return new Promise((resolve6, reject) => {
     const child = spawn5(script, args, {
       detached: process.platform !== "win32",
       env: options.env,
@@ -16879,7 +16975,7 @@ function executeRecorderScript(script, args, options) {
       if (error)
         reject(error);
       else
-        resolve5(result);
+        resolve6(result);
     };
     const signal = (value) => {
       if (child.pid === void 0)
@@ -16971,12 +17067,12 @@ function executeRecorderScript(script, args, options) {
   });
 }
 async function runRecordProofScript(script, args, timeout = 6e4, dependencies = {}) {
-  const execute = dependencies.execute ?? executeRecorderScript;
+  const execute2 = dependencies.execute ?? executeRecorderScript;
   if ((dependencies.platform ?? process.platform) !== "darwin") {
-    return execute(script, args, { timeout, env: { ...process.env } });
+    return execute2(script, args, { timeout, env: { ...process.env } });
   }
   const withHelper = dependencies.withHelper ?? withVerifiedDarwinProcessBirthHelper;
-  return withHelper((helper) => execute(script, args, {
+  return withHelper((helper) => execute2(script, args, {
     timeout,
     env: {
       ...process.env,
@@ -16995,7 +17091,7 @@ async function awaitExactStopped(probe, deadlineMs, code, message) {
     }
     if (Date.now() >= deadlineMs)
       return false;
-    await new Promise((resolve5) => setTimeout(resolve5, 25));
+    await new Promise((resolve6) => setTimeout(resolve6, 25));
   }
 }
 async function waitForExactStopped(probe, deadlineMs, code, message) {
@@ -17172,9 +17268,143 @@ async function stopBoundRecorder(binding, _processProbe = probeProcessBirth, run
   }
 }
 
+// packages/rn-dev-agent-core/dist/session/android-metro-reverse.js
+import { execFileSync as execFileSync8 } from "node:child_process";
+function execute(dependencies, file, args) {
+  if (dependencies.execute)
+    return dependencies.execute(file, args);
+  return execFileSync8(file, args, {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 1e4
+  });
+}
+function endpoint(port) {
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65535) {
+    throw new Error("PHYSICAL_ANDROID_METRO_UNREACHABLE: authority-bound Metro port is invalid");
+  }
+  return `tcp:${port}`;
+}
+var AndroidDeviceDisconnectedError = class extends Error {
+};
+var DEVICE_DISCONNECTED = /device\s+('[^']*'\s+)?not found|no devices\/emulators found|device offline/i;
+function describeExecutionFailure(error) {
+  const parts = error && typeof error === "object" ? [
+    error.message,
+    error.stderr,
+    error.stdout
+  ] : [String(error)];
+  return parts.map((part) => typeof part === "string" ? part : Buffer.isBuffer(part) ? part.toString("utf8") : "").filter((part) => part.length > 0).join("\n");
+}
+function adb(deviceId, args, dependencies) {
+  try {
+    return execute(dependencies, "adb", ["-s", deviceId, ...args]);
+  } catch (error) {
+    const details = describeExecutionFailure(error);
+    const message = `PHYSICAL_ANDROID_METRO_UNREACHABLE: adb could not configure Metro reachability on exact device ${deviceId}: ${details || String(error)}`;
+    throw DEVICE_DISCONNECTED.test(details) ? new AndroidDeviceDisconnectedError(message) : new Error(message);
+  }
+}
+function isPhysicalAndroid(deviceId, dependencies) {
+  if (/^emulator-\d+$/.test(deviceId))
+    return false;
+  return adb(deviceId, ["shell", "getprop", "ro.kernel.qemu"], dependencies).trim() !== "1";
+}
+function listReverseForwards(deviceId, dependencies) {
+  return adb(deviceId, ["reverse", "--list"], dependencies).split("\n").map((line) => line.trim().split(/\s+/)).filter((parts) => parts.length >= 2).map((parts) => ({
+    local: parts[parts.length - 2],
+    remote: parts[parts.length - 1]
+  })).filter((forward) => forward.local.startsWith("tcp:") && forward.remote.startsWith("tcp:"));
+}
+function assertBindingMatches(binding, deviceId, metroPort) {
+  const exact = endpoint(metroPort);
+  if (binding.platform !== "android" || binding.deviceId !== deviceId || binding.metroPort !== metroPort || binding.local !== exact || binding.remote !== exact) {
+    throw new Error("PHYSICAL_ANDROID_METRO_UNREACHABLE: retained adb reverse authority does not match the exact device and Metro port");
+  }
+}
+function removeExactForwardAfterFailedSetup(deviceId, exact, dependencies) {
+  try {
+    const current = listReverseForwards(deviceId, dependencies).filter((forward) => forward.local === exact);
+    if (current.length === 1 && current[0].remote === exact) {
+      adb(deviceId, ["reverse", "--remove", exact], dependencies);
+    }
+  } catch (error) {
+    if (error instanceof AndroidDeviceDisconnectedError)
+      return;
+    throw error;
+  }
+}
+function ensureAndroidMetroReverse(input, dependencies = {}) {
+  const exact = endpoint(input.metroPort);
+  if (!isPhysicalAndroid(input.deviceId, dependencies)) {
+    if (input.binding) {
+      throw new Error("PHYSICAL_ANDROID_METRO_UNREACHABLE: emulator authority cannot retain a physical-device adb reverse binding");
+    }
+    return { binding: null, created: false, physical: false };
+  }
+  if (input.binding)
+    assertBindingMatches(input.binding, input.deviceId, input.metroPort);
+  const matchingLocal = listReverseForwards(input.deviceId, dependencies).filter((forward) => forward.local === exact);
+  if (matchingLocal.length > 0) {
+    if (input.binding && matchingLocal.length === 1 && matchingLocal[0].remote === exact) {
+      return { binding: input.binding, created: false, physical: true };
+    }
+    throw new Error(`PHYSICAL_ANDROID_METRO_UNREACHABLE: exact device ${input.deviceId} already has a foreign adb reverse for ${exact}; refusing to replace or adopt it. After confirming nothing else owns it, clear it manually with: adb -s ${input.deviceId} reverse --remove ${exact}`);
+  }
+  let created = false;
+  try {
+    adb(input.deviceId, ["reverse", exact, exact], dependencies);
+    created = true;
+    const verified = listReverseForwards(input.deviceId, dependencies).filter((forward) => forward.local === exact);
+    if (verified.length !== 1 || verified[0].remote !== exact) {
+      throw new Error(`PHYSICAL_ANDROID_METRO_UNREACHABLE: adb did not verify ${exact} -> ${exact} on exact device ${input.deviceId}`);
+    }
+    return {
+      binding: {
+        platform: "android",
+        deviceId: input.deviceId,
+        metroPort: input.metroPort,
+        local: exact,
+        remote: exact
+      },
+      created: true,
+      physical: true
+    };
+  } catch (error) {
+    if (!created)
+      throw error;
+    try {
+      removeExactForwardAfterFailedSetup(input.deviceId, exact, dependencies);
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], "PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN: failed setup left exact adb reverse cleanup unresolved");
+    }
+    throw error;
+  }
+}
+function removeAndroidMetroReverse(binding, dependencies = {}) {
+  assertBindingMatches(binding, binding.deviceId, binding.metroPort);
+  try {
+    const matchingLocal = listReverseForwards(binding.deviceId, dependencies).filter((forward) => forward.local === binding.local);
+    if (matchingLocal.length === 0)
+      return;
+    if (matchingLocal.length !== 1 || matchingLocal[0].remote !== binding.remote) {
+      throw new Error(`PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN: ${binding.local} on exact device ${binding.deviceId} changed to a foreign forward; refusing to remove it. After confirming nothing else owns it, clear it manually with: adb -s ${binding.deviceId} reverse --remove ${binding.local}`);
+    }
+    adb(binding.deviceId, ["reverse", "--remove", binding.local], dependencies);
+    if (listReverseForwards(binding.deviceId, dependencies).some((forward) => forward.local === binding.local)) {
+      throw new Error(`PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN: session-owned ${binding.local} remains on exact device ${binding.deviceId}`);
+    }
+  } catch (error) {
+    if (error instanceof AndroidDeviceDisconnectedError)
+      return;
+    throw error;
+  }
+}
+
 // packages/rn-dev-agent-core/dist/rn-session.js
 function resolveStatus() {
-  const layout = createAuthorityStateLayout(process.env.RN_DEV_AGENT_STATE_DIR);
+  const requestedStateHome = process.env.RN_DEV_AGENT_STATE_DIR;
+  const layout = requestedStateHome ? openAuthorityStateLayout(requestedStateHome) : createAuthorityStateLayout();
   const registry = openSessionRegistry(layout.registry, { ownerStatus: inspectSessionOwner });
   const explicit = process.env.RN_DEV_AGENT_SESSION_ID;
   const source = resolveSourceIdentity(process.cwd(), {
@@ -17184,7 +17414,7 @@ function resolveStatus() {
   const candidates = explicit ? [registry.getSessionStatus(explicit)].filter((status2) => status2 !== null) : registry.findSessionsByWorktree(source.worktreeKey).filter((status2) => status2.appRootKey === source.appRootKey);
   if (candidates.length !== 1) {
     registry.close();
-    throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", candidates.length === 0 ? "no live session matches this canonical worktree and app root" : "multiple live sessions match this worktree and app root; set RN_DEV_AGENT_SESSION_ID");
+    throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", candidates.length === 0 ? `no live session in authority registry ${layout.registry} matches this canonical worktree and app root` : `multiple live sessions in authority registry ${layout.registry} match this worktree and app root; set RN_DEV_AGENT_SESSION_ID`);
   }
   const status = candidates[0];
   if (explicit && (status.worktreeKey !== source.worktreeKey || status.appRootKey !== source.appRootKey)) {
@@ -17243,6 +17473,54 @@ function reconcileManagedMetroStatus(status) {
     registry: status.registry,
     layout: status.layout
   });
+}
+function sameAndroidMetroReverse(current, next) {
+  if (!current || !next)
+    return current === next;
+  const binding = current;
+  return binding.platform === next.platform && binding.deviceId === next.deviceId && binding.metroPort === next.metroPort && binding.local === next.local && binding.remote === next.remote;
+}
+function ensurePhysicalAndroidMetroReachability(status) {
+  const device = status.bindings.device;
+  if (device?.platform !== "android" || typeof device.deviceId !== "string")
+    return status;
+  const existing = status.bindings.androidMetroReverse;
+  const result = ensureAndroidMetroReverse({
+    deviceId: device.deviceId,
+    metroPort: Number(status.bindings.metroPort),
+    binding: existing
+  });
+  if (sameAndroidMetroReverse(existing ?? null, result.binding))
+    return status;
+  try {
+    status.registry.updateBindings({ sessionId: status.sessionId, claimEpoch: status.claimEpoch }, {
+      expectedAuthorityVersion: status.authorityVersion,
+      bindings: { androidMetroReverse: result.binding }
+    });
+  } catch (error) {
+    if (result.created && result.binding) {
+      try {
+        removeAndroidMetroReverse(result.binding);
+      } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], "PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN: adb reverse was created but its authority binding could not be persisted or safely cleaned");
+      }
+    }
+    throw error;
+  }
+  const current = status.registry.getSessionStatus(status.sessionId);
+  if (!current) {
+    throw new SessionAuthorityError("SESSION_OWNER_LOST", "session disappeared after physical Android Metro reachability was established");
+  }
+  return Object.assign(current, {
+    closeRegistry: status.closeRegistry,
+    registry: status.registry,
+    layout: status.layout
+  });
+}
+function removeSessionAndroidMetroReverse(status) {
+  const binding = status.bindings.androidMetroReverse;
+  if (binding)
+    removeAndroidMetroReverse(binding);
 }
 function beginCliOperation(status, tool, profile) {
   const operation = status.registry.beginOperation({ sessionId: status.sessionId, claimEpoch: status.claimEpoch }, { operationId: randomUUID3(), tool, profile });
@@ -17505,6 +17783,7 @@ async function main() {
         const recovery = metro.mode === "external" ? "stop external Metro through its owning process, then run rn_session stop_metro with confirmed=true" : "run rn_session stop_metro with confirmed=true for safe release or exact owner recovery";
         throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", metroInspection.status === "lost" ? `${metroInspection.reason}; ${recovery} before retrying` : "build requires authenticated managed Metro authority");
       }
+      status = ensurePhysicalAndroidMetroReachability(status);
       const buildGeneration = Math.max(Number(metro.buildGeneration ?? 0), Number(status.bindings.install?.buildGeneration ?? 0)) + 1;
       const buildToken = deliveredBuildToken;
       const buildMetro = refreshManagedMetroBuildGeneration(metro, {
@@ -17565,16 +17844,19 @@ async function main() {
         status.registry.cancelOperation(currentOperation);
         throw error;
       }
+      const metroPort = Number(status.bindings.metroPort);
+      const metroReverse = status.bindings.androidMetroReverse;
       process.stdout.write(`${JSON.stringify({
         platform,
         deviceId: device.deviceId,
         appId: device.appId,
-        metroPort: Number(status.bindings.metroPort),
+        metroPort,
         sessionId: status.sessionId,
         buildToken,
         buildKind,
         ...platform === "ios" ? { simulator: true } : {},
-        ...typeof device.devClientUrl === "string" ? { devClientUrl: device.devClientUrl } : {}
+        ...typeof device.devClientUrl === "string" ? { devClientUrl: device.devClientUrl } : {},
+        ...metroReverse && metroReverse.deviceId === device.deviceId && metroReverse.metroPort === metroPort ? { androidMetroReverse: metroReverse } : {}
       })}
 `);
       return;
@@ -17683,6 +17965,8 @@ async function main() {
       let released = false;
       try {
         await status.registry.runWithOperation(operation, async () => {
+          removeSessionAndroidMetroReverse(status);
+          status.registry.verifyOperation(operation);
           if (recorder) {
             await stopBoundRecorder(recorder);
             status.registry.verifyOperation(operation);

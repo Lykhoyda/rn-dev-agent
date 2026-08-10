@@ -10296,13 +10296,13 @@ function numericListener(output, emptyStatus) {
   const [pid] = pids;
   return pids.size === 1 && Number.isSafeInteger(pid) && pid > 0 ? { status: "listening", pid } : { status: "unknown" };
 }
-function probeMetroListener(port, platform = process.platform, execute = execFileSync5, executableDependencies = {}) {
+function probeMetroListener(port, platform = process.platform, execute2 = execFileSync5, executableDependencies = {}) {
   const executable = resolveMetroListenerExecutable(platform, executableDependencies);
   if (!executable)
     return { status: "unknown" };
   try {
     if (platform === "win32") {
-      const output = execute(executable, [
+      const output = execute2(executable, [
         "-NoProfile",
         "-NonInteractive",
         "-Command",
@@ -10311,7 +10311,7 @@ function probeMetroListener(port, platform = process.platform, execute = execFil
       return String(output).trim() === "ABSENT" ? { status: "absent" } : numericListener(output, "unknown");
     }
     if (platform === "linux") {
-      const output = execute(executable, ["-H", "-ltnp", `sport = :${port}`], {
+      const output = execute2(executable, ["-H", "-ltnp", `sport = :${port}`], {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "ignore"],
         timeout: 2e3
@@ -10324,7 +10324,7 @@ function probeMetroListener(port, platform = process.platform, execute = execFil
       return pids.size === 1 && Number.isSafeInteger(pid) && pid > 0 ? { status: "listening", pid } : { status: "unknown" };
     }
     if (platform === "darwin") {
-      const output = execute(executable, ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], {
+      const output = execute2(executable, ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
         timeout: 2e3
@@ -10337,8 +10337,8 @@ function probeMetroListener(port, platform = process.platform, execute = execFil
     return platform === "darwin" && failure.status === 1 && !String(failure.stdout ?? "").trim() && !String(failure.stderr ?? "").trim() ? { status: "absent" } : { status: "unknown" };
   }
 }
-function metroListenerPid(port, platform = process.platform, execute = execFileSync5, executableDependencies = {}) {
-  const probe = probeMetroListener(port, platform, execute, executableDependencies);
+function metroListenerPid(port, platform = process.platform, execute2 = execFileSync5, executableDependencies = {}) {
+  const probe = probeMetroListener(port, platform, execute2, executableDependencies);
   return probe.status === "listening" ? probe.pid : null;
 }
 async function fetchMetroStatus(port) {
@@ -10476,8 +10476,8 @@ function hasUnsupportedNodeOption(value) {
   }
   return false;
 }
-function probeManagedMetroListener(port, platform = process.platform, execute = execFileSync6, executableDependencies = {}) {
-  return probeMetroListener(port, platform, execute, executableDependencies);
+function probeManagedMetroListener(port, platform = process.platform, execute2 = execFileSync6, executableDependencies = {}) {
+  return probeMetroListener(port, platform, execute2, executableDependencies);
 }
 function managementProof(sessionId, authority, signerCapability) {
   return createHmac2("sha256", signerCapability).update(canonicalAuthorityJson({
@@ -10608,13 +10608,13 @@ function managedSandboxManagementProofV1(sessionId, authority, signerCapability)
     ...authority
   })).digest("hex");
 }
-function signalManagedMetroProcessTree(input, platform = process.platform, execute = execFileSync6, executableDependencies = {}) {
+function signalManagedMetroProcessTree(input, platform = process.platform, execute2 = execFileSync6, executableDependencies = {}) {
   if (platform === "win32") {
     const executable = resolveTrustedSystemExecutable("taskkill", platform, executableDependencies);
     if (!executable)
       throw new Error("METRO_CLEANUP_EXECUTABLE_UNAVAILABLE");
     const pid = input.launcherPresent ? input.launcherPid : input.listenerPid;
-    execute(executable, ["/PID", String(pid), "/T"], {
+    execute2(executable, ["/PID", String(pid), "/T"], {
       stdio: "ignore",
       timeout: 2e3
     });
@@ -10684,7 +10684,7 @@ async function stopManagedMetroProcesses(input, dependencies) {
   const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
   const probeListener = dependencies.probeListener ?? probeManagedMetroListener;
   const signalTree = dependencies.signalTree ?? signalProcessTree;
-  const wait = dependencies.wait ?? ((ms) => new Promise((resolve11) => setTimeout(resolve11, ms)));
+  const wait = dependencies.wait ?? ((ms) => new Promise((resolve12) => setTimeout(resolve12, ms)));
   const inspect = () => {
     const launcher = exactProcessState(input.launcher, probeBirth(input.launcher.pid));
     const listener = input.listener ? exactProcessState(input.listener, probeBirth(input.listener.pid)) : "stopped";
@@ -11751,8 +11751,147 @@ setInterval(() => {}, 1 << 30);
   }
 });
 
-// packages/rn-dev-agent-core/dist/session/expo-android-device.js
+// packages/rn-dev-agent-core/dist/session/android-metro-reverse.js
 import { execFileSync as execFileSync7 } from "node:child_process";
+function execute(dependencies, file, args) {
+  if (dependencies.execute)
+    return dependencies.execute(file, args);
+  return execFileSync7(file, args, {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 1e4
+  });
+}
+function endpoint(port) {
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65535) {
+    throw new Error("PHYSICAL_ANDROID_METRO_UNREACHABLE: authority-bound Metro port is invalid");
+  }
+  return `tcp:${port}`;
+}
+function describeExecutionFailure(error2) {
+  const parts = error2 && typeof error2 === "object" ? [
+    error2.message,
+    error2.stderr,
+    error2.stdout
+  ] : [String(error2)];
+  return parts.map((part) => typeof part === "string" ? part : Buffer.isBuffer(part) ? part.toString("utf8") : "").filter((part) => part.length > 0).join("\n");
+}
+function adb(deviceId, args, dependencies) {
+  try {
+    return execute(dependencies, "adb", ["-s", deviceId, ...args]);
+  } catch (error2) {
+    const details = describeExecutionFailure(error2);
+    const message = `PHYSICAL_ANDROID_METRO_UNREACHABLE: adb could not configure Metro reachability on exact device ${deviceId}: ${details || String(error2)}`;
+    throw DEVICE_DISCONNECTED.test(details) ? new AndroidDeviceDisconnectedError(message) : new Error(message);
+  }
+}
+function isPhysicalAndroid(deviceId, dependencies) {
+  if (/^emulator-\d+$/.test(deviceId))
+    return false;
+  return adb(deviceId, ["shell", "getprop", "ro.kernel.qemu"], dependencies).trim() !== "1";
+}
+function listReverseForwards(deviceId, dependencies) {
+  return adb(deviceId, ["reverse", "--list"], dependencies).split("\n").map((line) => line.trim().split(/\s+/)).filter((parts) => parts.length >= 2).map((parts) => ({
+    local: parts[parts.length - 2],
+    remote: parts[parts.length - 1]
+  })).filter((forward) => forward.local.startsWith("tcp:") && forward.remote.startsWith("tcp:"));
+}
+function assertBindingMatches(binding, deviceId, metroPort) {
+  const exact = endpoint(metroPort);
+  if (binding.platform !== "android" || binding.deviceId !== deviceId || binding.metroPort !== metroPort || binding.local !== exact || binding.remote !== exact) {
+    throw new Error("PHYSICAL_ANDROID_METRO_UNREACHABLE: retained adb reverse authority does not match the exact device and Metro port");
+  }
+}
+function removeExactForwardAfterFailedSetup(deviceId, exact, dependencies) {
+  try {
+    const current = listReverseForwards(deviceId, dependencies).filter((forward) => forward.local === exact);
+    if (current.length === 1 && current[0].remote === exact) {
+      adb(deviceId, ["reverse", "--remove", exact], dependencies);
+    }
+  } catch (error2) {
+    if (error2 instanceof AndroidDeviceDisconnectedError)
+      return;
+    throw error2;
+  }
+}
+function ensureAndroidMetroReverse(input, dependencies = {}) {
+  const exact = endpoint(input.metroPort);
+  if (!isPhysicalAndroid(input.deviceId, dependencies)) {
+    if (input.binding) {
+      throw new Error("PHYSICAL_ANDROID_METRO_UNREACHABLE: emulator authority cannot retain a physical-device adb reverse binding");
+    }
+    return { binding: null, created: false, physical: false };
+  }
+  if (input.binding)
+    assertBindingMatches(input.binding, input.deviceId, input.metroPort);
+  const matchingLocal = listReverseForwards(input.deviceId, dependencies).filter((forward) => forward.local === exact);
+  if (matchingLocal.length > 0) {
+    if (input.binding && matchingLocal.length === 1 && matchingLocal[0].remote === exact) {
+      return { binding: input.binding, created: false, physical: true };
+    }
+    throw new Error(`PHYSICAL_ANDROID_METRO_UNREACHABLE: exact device ${input.deviceId} already has a foreign adb reverse for ${exact}; refusing to replace or adopt it. After confirming nothing else owns it, clear it manually with: adb -s ${input.deviceId} reverse --remove ${exact}`);
+  }
+  let created = false;
+  try {
+    adb(input.deviceId, ["reverse", exact, exact], dependencies);
+    created = true;
+    const verified = listReverseForwards(input.deviceId, dependencies).filter((forward) => forward.local === exact);
+    if (verified.length !== 1 || verified[0].remote !== exact) {
+      throw new Error(`PHYSICAL_ANDROID_METRO_UNREACHABLE: adb did not verify ${exact} -> ${exact} on exact device ${input.deviceId}`);
+    }
+    return {
+      binding: {
+        platform: "android",
+        deviceId: input.deviceId,
+        metroPort: input.metroPort,
+        local: exact,
+        remote: exact
+      },
+      created: true,
+      physical: true
+    };
+  } catch (error2) {
+    if (!created)
+      throw error2;
+    try {
+      removeExactForwardAfterFailedSetup(input.deviceId, exact, dependencies);
+    } catch (cleanupError) {
+      throw new AggregateError([error2, cleanupError], "PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN: failed setup left exact adb reverse cleanup unresolved");
+    }
+    throw error2;
+  }
+}
+function removeAndroidMetroReverse(binding, dependencies = {}) {
+  assertBindingMatches(binding, binding.deviceId, binding.metroPort);
+  try {
+    const matchingLocal = listReverseForwards(binding.deviceId, dependencies).filter((forward) => forward.local === binding.local);
+    if (matchingLocal.length === 0)
+      return;
+    if (matchingLocal.length !== 1 || matchingLocal[0].remote !== binding.remote) {
+      throw new Error(`PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN: ${binding.local} on exact device ${binding.deviceId} changed to a foreign forward; refusing to remove it. After confirming nothing else owns it, clear it manually with: adb -s ${binding.deviceId} reverse --remove ${binding.local}`);
+    }
+    adb(binding.deviceId, ["reverse", "--remove", binding.local], dependencies);
+    if (listReverseForwards(binding.deviceId, dependencies).some((forward) => forward.local === binding.local)) {
+      throw new Error(`PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN: session-owned ${binding.local} remains on exact device ${binding.deviceId}`);
+    }
+  } catch (error2) {
+    if (error2 instanceof AndroidDeviceDisconnectedError)
+      return;
+    throw error2;
+  }
+}
+var AndroidDeviceDisconnectedError, DEVICE_DISCONNECTED;
+var init_android_metro_reverse = __esm({
+  "packages/rn-dev-agent-core/dist/session/android-metro-reverse.js"() {
+    "use strict";
+    AndroidDeviceDisconnectedError = class extends Error {
+    };
+    DEVICE_DISCONNECTED = /device\s+('[^']*'\s+)?not found|no devices\/emulators found|device offline/i;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/expo-android-device.js
+import { execFileSync as execFileSync8 } from "node:child_process";
 function expoAndroidDeviceIdentityError(message) {
   const error2 = new Error(`${ERROR_CODE}: ${message}`);
   error2.code = ERROR_CODE;
@@ -11800,7 +11939,7 @@ function physicalDisplayName(device) {
 }
 function defaultDependencies() {
   return {
-    runAdb: (args) => execFileSync7("adb", [...args], {
+    runAdb: (args) => execFileSync8("adb", [...args], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 1e4
@@ -12024,7 +12163,7 @@ var init_build_adapter = __esm({
 // packages/rn-dev-agent-core/dist/session/state-root.js
 import { randomBytes as randomBytes2, randomUUID } from "node:crypto";
 import { chmodSync, linkSync, lstatSync as lstatSync5, mkdirSync as mkdirSync7, readFileSync as readFileSync8, renameSync as renameSync3, rmSync as rmSync3, statSync as statSync3, writeFileSync as writeFileSync4 } from "node:fs";
-import { join as join7 } from "node:path";
+import { join as join7, resolve as resolve5 } from "node:path";
 function fail(code, detail) {
   throw new Error(`${code}: ${detail}`);
 }
@@ -12052,11 +12191,10 @@ function sessionDirectory(layout, sessionId) {
   ensurePrivateDirectory(path);
   return path;
 }
-function createAuthorityStateLayout(stateDir = getStateDir()) {
-  ensurePrivateDirectory(stateDir);
-  const root = join7(stateDir, "v2");
-  ensurePrivateDirectory(root);
-  const layout = {
+function authorityStateLayout(stateDir) {
+  const resolvedStateDir = resolve5(stateDir);
+  const root = join7(resolvedStateDir, "v2");
+  return {
     root,
     registry: join7(root, "registry.sqlite3"),
     sessions: join7(root, "sessions"),
@@ -12064,6 +12202,12 @@ function createAuthorityStateLayout(stateDir = getStateDir()) {
     observe: join7(root, "observe"),
     migrations: join7(root, "migrations")
   };
+}
+function createAuthorityStateLayout(stateDir = getStateDir()) {
+  const layout = authorityStateLayout(stateDir);
+  ensurePrivateDirectory(resolve5(stateDir));
+  const root = layout.root;
+  ensurePrivateDirectory(root);
   for (const path of [layout.sessions, layout.runners, layout.observe, layout.migrations]) {
     ensurePrivateDirectory(path);
   }
@@ -12761,7 +12905,7 @@ function retryBoundDirectoryCleanup(directory, obligation, dependencies = {}) {
   }
   directory.pendingCleanups.delete(obligation.transactionId);
 }
-var WAIT_BUFFER, WORKER_READY_TIMEOUT_MS, WORKER_OPERATION_TIMEOUT_MS, ANCESTRY_MONITOR_TIMEOUT_MS, BOUND_DIRECTORY_LIFECYCLE_MONITOR, BOUND_DIRECTORY_TERMINATION_WATCHDOG, BOUND_DIRECTORY_ANCESTRY_MONITOR, BOUND_DIRECTORY_WORKER;
+var WAIT_BUFFER, WORKER_READY_TIMEOUT_MS, WORKER_OPERATION_TIMEOUT_MS, ANCESTRY_MONITOR_TIMEOUT_MS, ANCESTRY_MONITOR_POLL_MS, BOUND_DIRECTORY_LIFECYCLE_MONITOR, BOUND_DIRECTORY_TERMINATION_WATCHDOG, BOUND_DIRECTORY_ANCESTRY_MONITOR, BOUND_DIRECTORY_ANCESTRY_SYNC, BOUND_DIRECTORY_WORKER;
 var init_bound_directory = __esm({
   "packages/rn-dev-agent-core/dist/session/bound-directory.js"() {
     "use strict";
@@ -12770,6 +12914,7 @@ var init_bound_directory = __esm({
     WORKER_READY_TIMEOUT_MS = 3e4;
     WORKER_OPERATION_TIMEOUT_MS = 3e4;
     ANCESTRY_MONITOR_TIMEOUT_MS = 2e4;
+    ANCESTRY_MONITOR_POLL_MS = 50;
     BOUND_DIRECTORY_LIFECYCLE_MONITOR = String.raw`
 const fs = require('node:fs');
 const path = require('node:path');
@@ -12835,9 +12980,15 @@ function invalidate() {
   Atomics.notify(state, 1);
 }
 
+function progress() {
+  Atomics.add(state, 6, 1);
+}
+
 function fail() {
   Atomics.store(state, 2, 1);
   invalidate();
+  Atomics.store(state, 4, Atomics.load(state, 3));
+  Atomics.notify(state, 4);
 }
 
 try {
@@ -12873,14 +13024,20 @@ try {
   }
   let barrierPending = false;
   const barrier = setInterval(() => {
+    progress();
     const requested = Atomics.load(state, 3);
     if (barrierPending || requested === Atomics.load(state, 4)) return;
     barrierPending = true;
     setImmediate(() => {
+      progress();
       setImmediate(() => {
+        progress();
         setImmediate(() => {
           const captureBaseline = Atomics.load(state, 5) === 1;
-          for (const record of records) record.inspectFence(captureBaseline);
+          for (const record of records) {
+            progress();
+            record.inspectFence(captureBaseline);
+          }
           Atomics.store(state, 4, requested);
           barrierPending = false;
           Atomics.notify(state, 4);
@@ -12895,6 +13052,31 @@ try {
   fail();
   Atomics.store(state, 0, -1);
   Atomics.notify(state, 0);
+}
+`;
+    BOUND_DIRECTORY_ANCESTRY_SYNC = String.raw`
+function createAncestrySynchronizer(state, timeoutMs, pollMs, AncestryError, clock) {
+  const now = clock || Date.now;
+  return function synchronize(captureBaseline) {
+    Atomics.store(state, 5, captureBaseline ? 1 : 0);
+    const requested = Atomics.add(state, 3, 1) + 1;
+    Atomics.notify(state, 3);
+    let progress = Atomics.load(state, 6);
+    let deadline = now() + timeoutMs;
+    while (Atomics.load(state, 4) !== requested) {
+      if (Atomics.load(state, 2) !== 0) {
+        throw new AncestryError('bound-directory ancestry monitor failed');
+      }
+      Atomics.wait(state, 4, Atomics.load(state, 4), pollMs);
+      const observed = Atomics.load(state, 6);
+      if (observed !== progress) {
+        progress = observed;
+        deadline = now() + timeoutMs;
+      } else if (now() >= deadline) {
+        throw new AncestryError('bound-directory ancestry monitor synchronization failed');
+      }
+    }
+  };
 }
 `;
     BOUND_DIRECTORY_WORKER = String.raw`
@@ -12944,7 +13126,7 @@ const monitoredAncestors =
   agentAncestorIndex === -1
     ? []
     : binding.ancestors.slice(agentAncestorIndex);
-const ancestryState = new Int32Array(new SharedArrayBuffer(6 * 4));
+const ancestryState = new Int32Array(new SharedArrayBuffer(7 * 4));
 if (monitoredAncestors.length > 0) {
   const ancestryMonitor = new Worker(${JSON.stringify(BOUND_DIRECTORY_ANCESTRY_MONITOR)}, {
     eval: true,
@@ -12970,26 +13152,17 @@ function wait(milliseconds) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
 }
 
+${BOUND_DIRECTORY_ANCESTRY_SYNC}
+const ancestrySynchronizer = createAncestrySynchronizer(
+  ancestryState,
+  ${ANCESTRY_MONITOR_TIMEOUT_MS},
+  ${ANCESTRY_MONITOR_POLL_MS},
+  AncestryError,
+);
+
 function synchronizeAncestryMonitor(captureBaseline = false) {
   if (monitoredAncestors.length === 0) return;
-  Atomics.store(ancestryState, 5, captureBaseline ? 1 : 0);
-  const requested = Atomics.add(ancestryState, 3, 1) + 1;
-  Atomics.notify(ancestryState, 3);
-  const deadline = Date.now() + ${ANCESTRY_MONITOR_TIMEOUT_MS};
-  while (Atomics.load(ancestryState, 4) !== requested) {
-    const remaining = deadline - Date.now();
-    if (
-      remaining <= 0 ||
-      Atomics.wait(
-        ancestryState,
-        4,
-        Atomics.load(ancestryState, 4),
-        remaining,
-      ) === 'timed-out'
-    ) {
-      throw new AncestryError('bound-directory ancestry monitor synchronization failed');
-    }
-  }
+  ancestrySynchronizer(captureBaseline);
 }
 
 function mutateBoundDirectory(mutation) {
@@ -13901,7 +14074,7 @@ var init_metro_authority = __esm({
 
 // packages/rn-dev-agent-core/dist/session/package-integration.js
 import { closeSync as closeSync7, constants as constants5, fstatSync as fstatSync5, lstatSync as lstatSync7, openSync as openSync7, readFileSync as readFileSync10 } from "node:fs";
-import { basename, isAbsolute as isAbsolute2, join as join9, relative as relative2, resolve as resolve5, sep as sep2 } from "node:path";
+import { basename, isAbsolute as isAbsolute2, join as join9, relative as relative2, resolve as resolve6, sep as sep2 } from "node:path";
 function serializePackageIntegrationManifest(manifest) {
   return `${JSON.stringify(manifest, null, 2)}
 `;
@@ -17048,11 +17221,15 @@ function parseSupportedScript(script, platform) {
   });
   return command;
 }
-function previewPackageIntegration(packageJson, existing, sessionCli) {
+function previewPackageIntegration(packageJson, existing, sessionCli, stateDir) {
   if (existing && packageJson.scripts?.ios === SENTINELS.ios && packageJson.scripts?.android === SENTINELS.android) {
     return {
       packageJson,
-      manifest: sessionCli ? { ...existing, sessionCli: resolve5(sessionCli) } : existing
+      manifest: sessionCli || stateDir ? {
+        ...existing,
+        ...sessionCli ? { sessionCli: resolve6(sessionCli) } : {},
+        ...stateDir ? { stateDir: resolve6(stateDir) } : {}
+      } : existing
     };
   }
   const ios = packageJson.scripts?.ios;
@@ -17063,7 +17240,8 @@ function previewPackageIntegration(packageJson, existing, sessionCli) {
   const manifest = {
     version: 1,
     adapter: ADAPTER,
-    ...sessionCli ? { sessionCli: resolve5(sessionCli) } : {},
+    ...sessionCli ? { sessionCli: resolve6(sessionCli) } : {},
+    ...stateDir ? { stateDir: resolve6(stateDir) } : {},
     originalScripts: {
       ios: parseSupportedScript(ios, "ios"),
       android: parseSupportedScript(android, "android")
@@ -17111,6 +17289,13 @@ if (platform !== 'ios' && platform !== 'android') {
 }
 const manifestPath = path.join(process.cwd(), '.rn-agent', 'integration', 'rn-session-integration.json');
 const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+if (manifest.stateDir !== undefined && (typeof manifest.stateDir !== 'string' || !path.isAbsolute(manifest.stateDir))) {
+  process.stderr.write('AUTHORITY_STATE_HOME_UNKNOWN: integration manifest state home is invalid\n');
+  process.exit(2);
+}
+const authorityEnvironment = manifest.stateDir === undefined
+  ? process.env
+  : { ...process.env, RN_DEV_AGENT_STATE_DIR: manifest.stateDir };
 const original = manifest.originalScripts && manifest.originalScripts[platform];
 if (!Array.isArray(original) || original.length === 0 || original.some((part) => typeof part !== 'string')) {
   process.stderr.write('SESSION_BUILD_COMMAND_UNSUPPORTED: integration manifest is invalid\n');
@@ -17133,9 +17318,9 @@ function abortPendingBuild() {
   const abort = spawnSync(process.execPath, [...sqliteFlag, sessionCli, 'abort-build', platform, buildCapability.buildToken], {
     cwd: process.cwd(),
     env: session && typeof session.sessionId === 'string' ? {
-      ...process.env,
+      ...authorityEnvironment,
       RN_DEV_AGENT_SESSION_ID: session.sessionId,
-    } : process.env,
+    } : authorityEnvironment,
     encoding: 'utf8',
     timeout: SESSION_CLI_TIMEOUT_MS,
     killSignal: 'SIGKILL',
@@ -17227,7 +17412,7 @@ function resolveExpoAndroidDevice(deviceId) {
   const resolved = spawnSync(process.execPath, [...sqliteFlag, sessionCli, 'resolve-expo-android-device', deviceId], {
     cwd: process.cwd(),
     env: {
-      ...process.env,
+      ...authorityEnvironment,
       RN_DEV_AGENT_SESSION_ID: session.sessionId,
     },
     encoding: 'utf8',
@@ -17260,11 +17445,22 @@ function removeManagedPortFlag(value) {
     command.splice(index, separator >= 0 ? 1 : 2);
   }
 }
+function authorityBoundReverseTunnel(binding) {
+  const reverse = binding.androidMetroReverse;
+  if (!reverse || typeof reverse !== 'object') return false;
+  const exact = 'tcp:' + binding.metroPort;
+  return reverse.platform === 'android'
+    && reverse.deviceId === binding.deviceId
+    && reverse.metroPort === binding.metroPort
+    && reverse.local === exact
+    && reverse.remote === exact;
+}
 function managedMetroProxyUrl(binding) {
   if (binding.platform === 'ios') return 'http://127.0.0.1:' + binding.metroPort;
   if (/^emulator-\d+$/.test(binding.deviceId)) return 'http://10.0.2.2:' + binding.metroPort;
   if (typeof binding.devClientUrl !== 'string') {
-    failBuild(2, 'DEV_CLIENT_ENDPOINT_NOT_FOUND: physical Android session requires an exact Dev Client URL');
+    if (authorityBoundReverseTunnel(binding)) return 'http://127.0.0.1:' + binding.metroPort;
+    failBuild(2, 'DEV_CLIENT_ENDPOINT_NOT_FOUND: physical Android session requires an exact Dev Client URL or a proven adb reverse tunnel to the authority-bound Metro port');
   }
   let metroUrl = null;
   try {
@@ -17308,7 +17504,7 @@ function managedMetroProxyUrl(binding) {
     buildCapability = { buildToken: randomUUID() };
     let probe = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'prepare-build', platform, buildCapability.buildToken, buildKind], {
       cwd: process.cwd(),
-      env: process.env,
+      env: authorityEnvironment,
       encoding: 'utf8',
       timeout: SESSION_CLI_TIMEOUT_MS,
       killSignal: 'SIGKILL',
@@ -17317,7 +17513,7 @@ function managedMetroProxyUrl(binding) {
     if (probe.status !== 0 && String(probe.stderr).includes('live Metro binding')) {
       const metro = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'ensure-metro'], {
         cwd: process.cwd(),
-        env: process.env,
+        env: authorityEnvironment,
         encoding: 'utf8',
         timeout: SESSION_CLI_TIMEOUT_MS,
         killSignal: 'SIGKILL',
@@ -17329,7 +17525,7 @@ function managedMetroProxyUrl(binding) {
       }
       probe = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'prepare-build', platform, buildCapability.buildToken, buildKind], {
         cwd: process.cwd(),
-        env: process.env,
+        env: authorityEnvironment,
         encoding: 'utf8',
         timeout: SESSION_CLI_TIMEOUT_MS,
         killSignal: 'SIGKILL',
@@ -17344,10 +17540,10 @@ function managedMetroProxyUrl(binding) {
         failBuild(2, 'SESSION_BUILD_IDENTITY_CONFLICT: rn-session returned invalid JSON');
       }
       session = parsed;
-    } else if (String(probe.stderr).includes('no live session matches this canonical worktree')) {
+    } else if (String(probe.stderr).includes('no live session matches this canonical worktree') || String(probe.stderr).includes('no live session in authority registry')) {
       buildCapability = null;
       await drainBuildTerminationSignals();
-      failBuild(2, 'SESSION_AUTHORITY_REQUIRED: package integration is installed but no live session owns this worktree; start a session before building, or restore the original scripts with rn_session(action="restore_integration", confirmed=true)');
+      failBuild(2, 'SESSION_AUTHORITY_REQUIRED: package integration is installed but no live session exists in the configured authority registry for this worktree; start a session in that registry before building, or restore the original scripts with rn_session(action="restore_integration", confirmed=true)');
     } else {
       await drainBuildTerminationSignals();
       failBuild(2, String(probe.stderr).trim() || 'SESSION_AUTHORITY_REQUIRED: rn-session lookup failed');
@@ -17396,13 +17592,13 @@ function managedMetroProxyUrl(binding) {
   const child = spawnSync(command[0], command.slice(1), {
     cwd: process.cwd(),
     env: session ? {
-      ...process.env,
+      ...authorityEnvironment,
       ORG_GRADLE_PROJECT_reactNativeDevServerPort: String(session.metroPort),
       RCT_METRO_PORT: String(session.metroPort),
       RN_DEV_AGENT_SESSION_ID: session.sessionId,
       ...(buildKind === 'expo' && platform === 'android' ? { ANDROID_SERIAL: session.deviceId } : {}),
       ...(expoProxyUrl ? { EXPO_PACKAGER_PROXY_URL: expoProxyUrl } : {}),
-    } : process.env,
+    } : authorityEnvironment,
     stdio: 'inherit',
   });
   await drainBuildTerminationSignals();
@@ -17421,7 +17617,7 @@ function managedMetroProxyUrl(binding) {
   if (session && platform === 'ios' && expoProxyUrl && session.simulator === true) {
     const installed = spawnSync('xcrun', ['simctl', 'get_app_container', session.deviceId, session.appId, 'app'], {
       cwd: process.cwd(),
-      env: process.env,
+      env: authorityEnvironment,
       encoding: 'utf8',
       timeout: 30_000,
     });
@@ -17442,7 +17638,7 @@ function managedMetroProxyUrl(binding) {
       expoProxyUrl,
     ], {
       cwd: process.cwd(),
-      env: process.env,
+      env: authorityEnvironment,
       encoding: 'utf8',
       timeout: 30_000,
     });
@@ -17456,7 +17652,7 @@ function managedMetroProxyUrl(binding) {
     const complete = spawnSync(process.execPath, [...sqliteFlag, sessionCli, 'complete-build', platform, session.buildToken], {
       cwd: process.cwd(),
       env: {
-        ...process.env,
+        ...authorityEnvironment,
         RN_DEV_AGENT_SESSION_ID: session.sessionId,
       },
       encoding: 'utf8',
@@ -17552,7 +17748,7 @@ function readOptionalRegularFileNoFollow(root, candidate) {
   return readOptionalRegularFile(root, candidate);
 }
 function readPackageIntegrationInputs(appRootInput, dependencies = {}) {
-  const appRoot = resolve5(appRootInput);
+  const appRoot = resolve6(appRootInput);
   const app = openBoundDirectory(appRoot);
   let agent = null;
   let integration = null;
@@ -17643,7 +17839,7 @@ function evaluatePackageIntegrationFileState(canonical, generated) {
   return { verdict, markers };
 }
 function inspectPackageIntegrationFileState(appRootInput) {
-  const appRoot = resolve5(appRootInput);
+  const appRoot = resolve6(appRootInput);
   const app = openBoundDirectory(appRoot);
   let agent = null;
   let integration = null;
@@ -17700,7 +17896,7 @@ function rollbackWrites(writes, dependencies) {
   return errors;
 }
 function applyPackageIntegration(input, dependencies = {}) {
-  const appRoot = resolve5(input.appRoot);
+  const appRoot = resolve6(input.appRoot);
   const packagePath = join9(appRoot, "package.json");
   let metroConfigPath;
   for (const path of ["metro.config.js", "metro.config.cjs"].map((name) => join9(appRoot, name))) {
@@ -17743,7 +17939,7 @@ function applyPackageIntegration(input, dependencies = {}) {
           throw error2;
       }
     }
-    const preview = previewPackageIntegration(packageJson, existing, input.sessionCli);
+    const preview = previewPackageIntegration(packageJson, existing, input.sessionCli, input.stateDir);
     const nextMetroSource = previewMetroIntegration(metroSnapshot.contents.toString("utf8"));
     preview.manifest.metroConfig = metroConfigPath.slice(appRoot.length + 1);
     dependencies.beforeCommit?.();
@@ -17835,7 +18031,7 @@ function applyPackageIntegration(input, dependencies = {}) {
   }
 }
 function restorePackageIntegrationFiles(input, dependencies = {}) {
-  const appRoot = resolve5(input.appRoot);
+  const appRoot = resolve6(input.appRoot);
   const packagePath = join9(appRoot, "package.json");
   const directories = openIntegrationDirectories(appRoot);
   const generatedNames = [
@@ -18331,7 +18527,7 @@ function keyboardVisibility(result) {
     return null;
   }
 }
-async function waitForKeyboardHidden(refreshSnapshot, sleep6 = (ms) => new Promise((resolve11) => setTimeout(resolve11, ms))) {
+async function waitForKeyboardHidden(refreshSnapshot, sleep6 = (ms) => new Promise((resolve12) => setTimeout(resolve12, ms))) {
   let last = "unknown";
   for (let attempt = 0; attempt < KEYBOARD_POSTCHECK_ATTEMPTS; attempt += 1) {
     const visible = keyboardVisibility(await refreshSnapshot());
@@ -18653,7 +18849,7 @@ var init_quiescence = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/runners/runner-artifacts.js
-import { execFileSync as execFileSync8 } from "node:child_process";
+import { execFileSync as execFileSync9 } from "node:child_process";
 import { createHash as createHash7 } from "node:crypto";
 import { existsSync as existsSync11, mkdirSync as mkdirSync8, readdirSync as readdirSync3, readFileSync as readFileSync12, rmSync as rmSync5, writeFileSync as writeFileSync6 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
@@ -18842,11 +19038,11 @@ async function fetchToFile(url, dest, opts) {
   }
 }
 function unzipWithGuard(zipPath, destDir) {
-  const listing = execFileSync8("unzip", ["-Z1", zipPath], { encoding: "utf-8" });
+  const listing = execFileSync9("unzip", ["-Z1", zipPath], { encoding: "utf-8" });
   const entries = listing.split("\n").map((s) => s.trim()).filter(Boolean);
   assertNoTraversal(entries);
   mkdirSync8(destDir, { recursive: true });
-  execFileSync8("unzip", ["-o", "-qq", zipPath, "-d", destDir], { stdio: "ignore" });
+  execFileSync9("unzip", ["-o", "-qq", zipPath, "-d", destDir], { stdio: "ignore" });
 }
 function defaultArtifactDeps() {
   return {
@@ -19354,7 +19550,7 @@ function buildRunnerTestFaultEnv(env) {
   };
 }
 function runXcodebuildToExit(args, timeoutMs) {
-  return new Promise((resolve11, reject) => {
+  return new Promise((resolve12, reject) => {
     const child = spawn3("xcodebuild", args, { stdio: ["ignore", "ignore", "pipe"] });
     let stderrTail = "";
     const timer = setTimeout(() => {
@@ -19372,7 +19568,7 @@ function runXcodebuildToExit(args, timeoutMs) {
     child.on("exit", (code) => {
       clearTimeout(timer);
       if (code === 0)
-        resolve11();
+        resolve12();
       else
         reject(new Error(`xcodebuild ${args[0]} failed (code ${code})${stderrTail ? `: ${stderrTail.trim()}` : ""}`));
     });
@@ -19413,7 +19609,7 @@ async function startFastRunner(deviceId, bundleId, port, opts = {}) {
   }
   const launch = plan[plan.length - 1];
   const runnerTestFaultEnv = runnerTestFaultForwarded ? {} : buildRunnerTestFaultEnv(process.env);
-  return new Promise((resolve11, reject) => {
+  return new Promise((resolve12, reject) => {
     const child = spawn3("xcodebuild", launch.args, {
       env: {
         ...process.env,
@@ -19479,7 +19675,7 @@ async function startFastRunner(deviceId, bundleId, port, opts = {}) {
       } catch {
       }
       cleanupLegacyTmpState();
-      resolve11(state);
+      resolve12(state);
     };
     child.stdout.setEncoding("utf-8");
     child.stdout.on("data", (chunk) => handleChunk(chunk, "stdout"));
@@ -19771,7 +19967,7 @@ async function reapStaleFastRunner(deps = {}) {
     return;
   }
   const spawnedChild = runnerProcess?.pid === state.pid ? runnerProcess : null;
-  const spawnedExit = spawnedChild ? new Promise((resolve11) => spawnedChild.once("exit", () => resolve11())) : null;
+  const spawnedExit = spawnedChild ? new Promise((resolve12) => spawnedChild.once("exit", () => resolve12())) : null;
   try {
     sendSignal(state.pid, "SIGTERM");
   } catch {
@@ -20001,7 +20197,7 @@ async function verifyTypeResultAfterSettle(args, result, authorityBefore) {
       if (health.liveness === "alive")
         return result;
       if (attempt < POST_SETTLE_HEALTH_ATTEMPTS - 1) {
-        await new Promise((resolve11) => setTimeout(resolve11, POST_SETTLE_HEALTH_RETRY_MS));
+        await new Promise((resolve12) => setTimeout(resolve12, POST_SETTLE_HEALTH_RETRY_MS));
       }
     }
   }
@@ -21191,6 +21387,8 @@ var init_registry = __esm({
           const prior = this.#requireSingleProvenDeadDeviceOwner(session2, deviceKey);
           const family = this.#requireExactStaleDeviceFamily(session2, prior, target);
           const obligations = [];
+          if (family.androidMetroReverse)
+            obligations.push("androidMetroReverse");
           if (family.runner)
             obligations.push("runner");
           if (family.recorder)
@@ -21228,6 +21426,8 @@ var init_registry = __esm({
         const prior = this.#requireSingleProvenDeadDeviceOwner(session2, deviceKey);
         const family = this.#requireExactStaleDeviceFamily(session2, prior, target);
         const obligations = [];
+        if (family.androidMetroReverse)
+          obligations.push("androidMetroReverse");
         if (family.runner)
           obligations.push("runner");
         if (family.recorder)
@@ -21259,6 +21459,7 @@ var init_registry = __esm({
             return {
               platform: String(resumed.platform),
               deviceId: String(resumed.deviceId),
+              ...resumed.androidMetroReverse ? { androidMetroReverse: resumed.androidMetroReverse } : {},
               runner: resumed.runner ?? null,
               recorder: resumed.recorder ?? null
             };
@@ -21288,6 +21489,7 @@ var init_registry = __esm({
             return {
               platform: String(resumed.platform),
               deviceId: String(resumed.deviceId),
+              ...resumed.androidMetroReverse ? { androidMetroReverse: resumed.androidMetroReverse } : {},
               runner: resumed.runner ?? null,
               recorder: resumed.recorder ?? null
             };
@@ -21313,7 +21515,7 @@ var init_registry = __esm({
         const deviceKey = `${platform}:${deviceId}`;
         const priorBindings = JSON.parse(prior.bindings_json);
         const family = this.#requireExactStaleDeviceFamily(session2, prior, target);
-        const { runner, recorder: recorder2 } = family;
+        const { androidMetroReverse, runner, recorder: recorder2 } = family;
         for (const claim of family.claims) {
           this.#database.prepare(`UPDATE claims SET session_id = ?, claim_epoch = ?, lease_until_ms = ?
            WHERE resource_type = ? AND resource_key = ?
@@ -21326,6 +21528,14 @@ var init_registry = __esm({
           priorSessionId: prior.session_id,
           priorClaimEpoch: prior.claim_epoch,
           transferredAt: now,
+          ...androidMetroReverse ? {
+            androidMetroReverse: {
+              ...androidMetroReverse,
+              claimKey: deviceKey,
+              stopRequestedAt: now,
+              completedAt: null
+            }
+          } : {},
           runner: runner ? { ...runner, claimKey: runnerClaimKey, stopRequestedAt: now, completedAt: null } : null,
           recorder: recorder2 ? { ...recorder2, claimKey: deviceKey, stopRequestedAt: now, completedAt: null } : null
         };
@@ -21335,6 +21545,7 @@ var init_registry = __esm({
          WHERE session_id = ? AND claim_epoch = ?`).run(JSON.stringify({
           ...priorBindings,
           device: null,
+          androidMetroReverse: null,
           runner: null,
           recorder: null,
           deviceReleased: {
@@ -21344,11 +21555,18 @@ var init_registry = __esm({
             platform,
             deviceId,
             device: priorBindings.device ?? null,
+            androidMetroReverse,
             runner,
             recorder: recorder2
           }
         }), now, prior.session_id, prior.claim_epoch);
-        return { platform, deviceId, runner: cleanup.runner, recorder: cleanup.recorder };
+        return {
+          platform,
+          deviceId,
+          ...cleanup.androidMetroReverse ? { androidMetroReverse: cleanup.androidMetroReverse } : {},
+          runner: cleanup.runner,
+          recorder: cleanup.recorder
+        };
       }
       #requireSingleProvenDeadDeviceOwner(session2, deviceKey) {
         const claims = this.#deviceFamilyClaims(deviceKey);
@@ -21386,6 +21604,11 @@ var init_registry = __esm({
         if (this.#bindingMatchesDevice(currentBindings.device, target) || this.#bindingMatchesDevice(currentBindings.runner, target) || this.#bindingMatchesDevice(currentBindings.recorder, target)) {
           throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "stale device cleanup conflicts with existing target bindings");
         }
+        const reverseValue = bindings.androidMetroReverse;
+        const androidMetroReverse = reverseValue && typeof reverseValue === "object" && target.platform === "android" && reverseValue.platform === "android" && reverseValue.deviceId === target.deviceId && Number.isSafeInteger(reverseValue.metroPort) && reverseValue.local === `tcp:${String(reverseValue.metroPort)}` && reverseValue.remote === `tcp:${String(reverseValue.metroPort)}` ? reverseValue : null;
+        if (reverseValue !== null && reverseValue !== void 0 && !androidMetroReverse) {
+          throw new SessionAuthorityError("PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN", "stale physical Android Metro reverse binding does not match the exact device and port");
+        }
         const runnerClaims = claims.filter((claim) => claim.resource_type === "runner");
         const runnerValue = bindings.runner;
         const runner = this.#bindingMatchesDevice(runnerValue, target) ? runnerValue : null;
@@ -21411,7 +21634,7 @@ var init_registry = __esm({
         if (recorderClaims.length !== (recorder2 ? 1 : 0) || recorder2 && recorderClaims[0].resource_key !== deviceKey) {
           throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "stale recorder binding has no exclusive cleanup claim");
         }
-        return { claims, runner, recorder: recorder2 };
+        return { claims, androidMetroReverse, runner, recorder: recorder2 };
       }
       completeStaleResourceRelease(session2, workerInstance, resource) {
         const now = this.#now();
@@ -21426,10 +21649,12 @@ var init_registry = __esm({
           }
           if (typeof entry.completedAt === "number")
             return;
-          const claimType = resource === "runner" ? "runner" : "recorder";
-          this.#database.prepare(`DELETE FROM claims
-           WHERE resource_type = ? AND resource_key = ?
-             AND session_id = ? AND claim_epoch = ?`).run(claimType, String(entry.claimKey), session2.sessionId, session2.claimEpoch);
+          if (resource !== "androidMetroReverse") {
+            const claimType = resource === "runner" ? "runner" : "recorder";
+            this.#database.prepare(`DELETE FROM claims
+             WHERE resource_type = ? AND resource_key = ?
+               AND session_id = ? AND claim_epoch = ?`).run(claimType, String(entry.claimKey), session2.sessionId, session2.claimEpoch);
+          }
           this.#database.prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`).run(JSON.stringify({
             ...bindings,
@@ -21441,7 +21666,7 @@ var init_registry = __esm({
         const now = this.#now();
         this.#transaction(() => {
           const { row, bindings, cleanup } = this.#requireStaleReleaseOwner(session2, workerInstance);
-          for (const resource of ["runner", "recorder"]) {
+          for (const resource of ["androidMetroReverse", "runner", "recorder"]) {
             const binding = cleanup[resource];
             if (binding && typeof binding === "object" && typeof binding.completedAt !== "number") {
               throw new SessionAuthorityError("AUTOMATION_CLEANUP_UNPROVEN", `${resource} release has not been durably completed`);
@@ -21500,12 +21725,17 @@ var init_registry = __esm({
           } : void 0;
           const handoffCleanup = record2(bindings.handoffCleanup);
           const staleDevice = record2(bindings.staleDeviceCleanup);
+          const androidMetroReverseSource = record2(bindings.androidMetroReverse) ?? record2(staleDevice?.androidMetroReverse);
           const recorderSource = record2(bindings.recorder) ?? record2(staleDevice?.recorder) ?? record2(handoffCleanup?.recorder);
           const runnerSource = record2(bindings.runner) ?? record2(staleDevice?.runner) ?? record2(handoffCleanup?.runner);
           const observeSource = record2(bindings.observe) ?? record2(handoffCleanup?.observe);
           const liveMetro = record2(bindings.metroCleanup) ?? record2(bindings.metro);
           const metroSource = liveMetro && liveMetro.mode === "managed" ? liveMetro : record2(handoffCleanup?.metro);
           const obligations = {};
+          const androidMetroReverseEntry = obligation(androidMetroReverseSource, androidMetroReverseSource ? `android:${String(androidMetroReverseSource.deviceId)}` : null);
+          if (androidMetroReverseEntry) {
+            obligations.androidMetroReverse = androidMetroReverseEntry;
+          }
           const recorderEntry = obligation(recorderSource, recorderSource ? `${String(recorderSource.platform)}:${String(recorderSource.deviceId)}` : null);
           if (recorderEntry)
             obligations.recorder = recorderEntry;
@@ -21635,7 +21865,7 @@ var init_registry = __esm({
           const row = this.#requireProvenDeadStartupOwner(prior);
           const { bindings, journal } = this.#requireStartupCleanupJournal(row);
           const obligations = journal.obligations ?? {};
-          for (const resource of ["recorder", "runner", "observe"]) {
+          for (const resource of ["androidMetroReverse", "recorder", "runner", "observe"]) {
             const entry = obligations[resource];
             if (entry && typeof entry === "object" && typeof entry.completedAt !== "number") {
               throw new SessionAuthorityError("AUTOMATION_CLEANUP_UNPROVEN", `${resource} cleanup has not been durably completed`);
@@ -21696,11 +21926,12 @@ var init_registry = __esm({
         }
       }
       #assertStartupObligationScope(row, resource, entry) {
-        const claimType = resource === "observe" ? "observe-port" : resource === "metro" ? "metro-port" : resource;
+        const claimType = resource === "observe" ? "observe-port" : resource === "metro" ? "metro-port" : resource === "androidMetroReverse" ? "device" : resource;
         const claimKey = String(entry.claimKey ?? "");
         const claim = this.#findClaim(claimType, claimKey);
         if (!claimKey || claim?.session_id !== row.session_id || claim.claim_epoch !== row.claim_epoch) {
           const codes = {
+            androidMetroReverse: "PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN",
             recorder: "RECORDING_AUTHORITY_MISMATCH",
             runner: "RUNNER_OWNERSHIP_MISMATCH",
             observe: "OBSERVE_AUTHORITY_MISMATCH",
@@ -21741,6 +21972,10 @@ var init_registry = __esm({
         const deviceClaim = this.#findClaim("device", deviceKey);
         if (deviceClaim?.session_id !== row.session_id || deviceClaim.claim_epoch !== row.claim_epoch) {
           throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "stale device cleanup journal no longer owns its exact device claim");
+        }
+        const reverse = cleanup.androidMetroReverse;
+        if (reverse && typeof reverse === "object" && typeof reverse.completedAt !== "number" && String(reverse.claimKey ?? "") !== deviceKey) {
+          throw new SessionAuthorityError("PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN", "stale physical Android Metro cleanup journal no longer matches its exact device claim");
         }
         for (const resource of ["runner", "recorder"]) {
           const entry = cleanup[resource];
@@ -23436,7 +23671,7 @@ var init_registry = __esm({
             if (Date.now() >= deadline) {
               throw new SessionAuthorityError("AUTHORITY_STORE_BUSY", "authority registry remained contended past the retry deadline");
             }
-            await new Promise((resolve11) => setTimeout(resolve11, retryDelayMs));
+            await new Promise((resolve12) => setTimeout(resolve12, retryDelayMs));
           }
         }
       }
@@ -23564,7 +23799,7 @@ async function resolveBootedIosUdid() {
 function simctlScreenshotType(path) {
   return /\.png$/i.test(path) ? "png" : "jpeg";
 }
-async function captureIosScreenshot(udid, path, execute = execFileAsync) {
+async function captureIosScreenshot(udid, path, execute2 = execFileAsync) {
   const format = simctlScreenshotType(path);
   const exactArgv = ["simctl", "io", udid, "screenshot", `--type=${format}`, path];
   const publicArgv = [
@@ -23588,7 +23823,7 @@ async function captureIosScreenshot(udid, path, execute = execFileAsync) {
     }
   };
   try {
-    const result = await execute("xcrun", exactArgv, {
+    const result = await execute2("xcrun", exactArgv, {
       timeout: 15e3,
       maxBuffer: 1024 * 1024,
       encoding: "utf8"
@@ -23696,7 +23931,7 @@ var init_device_screenshot_raw = __esm({
       stdio: ["ignore", "pipe", "pipe"]
     });
     androidSpawn = defaultAndroidSpawn;
-    defaultAndroidCapturer = async (emuId, path) => new Promise((resolve11) => {
+    defaultAndroidCapturer = async (emuId, path) => new Promise((resolve12) => {
       let settled = false;
       let streamFinished = false;
       let procCode = null;
@@ -23722,7 +23957,7 @@ var init_device_screenshot_raw = __esm({
           return;
         settled = true;
         clearTimeout(timer);
-        resolve11(ok);
+        resolve12(ok);
       };
       const maybeSettle = () => {
         const outcome = resolveCaptureOutcome(streamFinished, procCode);
@@ -25362,8 +25597,8 @@ async function probeDev(client2, timeoutMs) {
     });
     const result = await Promise.race([
       evalPromise,
-      new Promise((resolve11) => {
-        timer = setTimeout(() => resolve11({ error: "probe timeout" }), timeoutMs);
+      new Promise((resolve12) => {
+        timer = setTimeout(() => resolve12({ error: "probe timeout" }), timeoutMs);
       })
     ]);
     if (timer)
@@ -25824,7 +26059,7 @@ var init_maestro_validator = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/cdp/discovery.js
-import { execFileSync as execFileSync9 } from "node:child_process";
+import { execFileSync as execFileSync10 } from "node:child_process";
 function resolveDefaultPorts() {
   const override = process.env.RN_CDP_DISCOVERY_PORTS;
   if (override !== void 0) {
@@ -25924,7 +26159,7 @@ function cachedPackageProbe(key, probe, clock = Date.now) {
 }
 function probeAndroidPackages() {
   try {
-    const out = execFileSync9("adb", ["shell", "pm", "list", "packages"], {
+    const out = execFileSync10("adb", ["shell", "pm", "list", "packages"], {
       timeout: 3e3,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"]
@@ -25936,7 +26171,7 @@ function probeAndroidPackages() {
 }
 function bootedSimulatorUdids() {
   try {
-    const out = execFileSync9("xcrun", ["simctl", "list", "devices", "booted", "-j"], {
+    const out = execFileSync10("xcrun", ["simctl", "list", "devices", "booted", "-j"], {
       timeout: 5e3,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"]
@@ -25955,7 +26190,7 @@ function probeIOSPackages() {
   let probed = false;
   for (const udid of udids) {
     try {
-      const out = execFileSync9("xcrun", ["simctl", "listapps", udid], {
+      const out = execFileSync10("xcrun", ["simctl", "listapps", udid], {
         timeout: 5e3,
         encoding: "utf8",
         stdio: ["ignore", "pipe", "ignore"]
@@ -26280,7 +26515,7 @@ var init_discovery = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/runners/ensure-single-runner.js
-import { execFileSync as execFileSync10 } from "node:child_process";
+import { execFileSync as execFileSync11 } from "node:child_process";
 import { existsSync as existsSync14, readFileSync as readFileSync16, unlinkSync as unlinkSync5 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
 import { join as join17 } from "node:path";
@@ -26338,7 +26573,7 @@ function defaultDeps() {
     // caller's try/catch, which records a warning. Swallowing it here and
     // returning '' made single-runner enforcement degrade to a silent no-op
     // with no operator signal — exactly when the machine is busy.
-    listProcesses: () => execFileSync10("ps", ["-A", "-o", "pid=,args="], { encoding: "utf8", timeout: 3e3 }),
+    listProcesses: () => execFileSync11("ps", ["-A", "-o", "pid=,args="], { encoding: "utf8", timeout: 3e3 }),
     kill: (pid, signal) => process.kill(pid, signal),
     isAlive: (pid) => {
       try {
@@ -26358,14 +26593,14 @@ function defaultDeps() {
     },
     fileExists: (path) => existsSync14(path),
     removeFile: (path) => unlinkSync5(path),
-    delay: (ms) => new Promise((resolve11) => setTimeout(resolve11, ms)),
-    listApps: (udid) => execFileSync10("xcrun", ["simctl", "listapps", udid], {
+    delay: (ms) => new Promise((resolve12) => setTimeout(resolve12, ms)),
+    listApps: (udid) => execFileSync11("xcrun", ["simctl", "listapps", udid], {
       encoding: "utf8",
       timeout: 5e3,
       stdio: ["ignore", "pipe", "ignore"]
     }),
     uninstallApp: (udid, bundleId) => {
-      execFileSync10("xcrun", ["simctl", "uninstall", udid, bundleId], {
+      execFileSync11("xcrun", ["simctl", "uninstall", udid, bundleId], {
         encoding: "utf8",
         timeout: 1e4,
         stdio: ["ignore", "pipe", "ignore"]
@@ -28980,7 +29215,7 @@ var init_utils = __esm({
 // packages/rn-dev-agent-core/dist/runners/free-port.js
 import { createServer } from "node:net";
 function findFreePort(preferred) {
-  return new Promise((resolve11, reject) => {
+  return new Promise((resolve12, reject) => {
     const tryListen = (port, fallbackToAny) => {
       const srv = createServer();
       srv.once("error", (err) => {
@@ -28996,7 +29231,7 @@ function findFreePort(preferred) {
           srv.close(() => reject(new Error("findFreePort: OS returned port 0")));
           return;
         }
-        srv.close(() => resolve11(chosen));
+        srv.close(() => resolve12(chosen));
       });
     };
     tryListen(preferred, true);
@@ -29660,8 +29895,8 @@ async function runBoundedAndroidRunnerRebuild(error2, rebuild, cleanup, dependen
       if (!refreshAuthority())
         return false;
       if (attempt + 1 < transitionAttempts) {
-        await new Promise((resolve11) => {
-          setTimeout(resolve11, dependencies.completionRetryIntervalMs ?? ANDROID_REBUILD_COMPLETION_RETRY_MS);
+        await new Promise((resolve12) => {
+          setTimeout(resolve12, dependencies.completionRetryIntervalMs ?? ANDROID_REBUILD_COMPLETION_RETRY_MS);
         });
       }
     }
@@ -29681,8 +29916,8 @@ async function runBoundedAndroidRunnerRebuild(error2, rebuild, cleanup, dependen
       } catch {
       }
       if (attempt + 1 < transitionAttempts) {
-        await new Promise((resolve11) => {
-          setTimeout(resolve11, dependencies.completionRetryIntervalMs ?? ANDROID_REBUILD_COMPLETION_RETRY_MS);
+        await new Promise((resolve12) => {
+          setTimeout(resolve12, dependencies.completionRetryIntervalMs ?? ANDROID_REBUILD_COMPLETION_RETRY_MS);
         });
       }
     }
@@ -29839,7 +30074,7 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
       signal: opts._rebuildSignal
     });
   }
-  return new Promise((resolve11, reject) => {
+  return new Promise((resolve12, reject) => {
     let resolved = false;
     let forwardRemoved = false;
     const removeForward = () => {
@@ -29912,7 +30147,7 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
         }
       }
       cleanupLegacyTmpState();
-      resolve11(state);
+      resolve12(state);
     };
     child.on("error", (err) => {
       removeForward();
@@ -30345,7 +30580,7 @@ function defaultDeps3() {
     kill: (pid, sig) => process.kill(pid, sig),
     fileExists: (p) => existsSync17(p),
     removeFile: (p) => unlinkSync7(p),
-    delay: (ms) => new Promise((resolve11) => setTimeout(resolve11, ms)),
+    delay: (ms) => new Promise((resolve12) => setTimeout(resolve12, ms)),
     killLegacy: () => process.env.RN_DEVICE_KILL_LEGACY !== "0",
     now: () => Date.now()
   };
@@ -30462,7 +30697,7 @@ var init_release_android_slot = __esm({
 import { execFile as execFileCb9, spawn as spawn6 } from "node:child_process";
 import { promisify as promisify12 } from "node:util";
 function executeRecorderScript(script, args, options) {
-  return new Promise((resolve11, reject) => {
+  return new Promise((resolve12, reject) => {
     const child = spawn6(script, args, {
       detached: process.platform !== "win32",
       env: options.env,
@@ -30490,7 +30725,7 @@ function executeRecorderScript(script, args, options) {
       if (error2)
         reject(error2);
       else
-        resolve11(result);
+        resolve12(result);
     };
     const signal = (value) => {
       if (child.pid === void 0)
@@ -30582,12 +30817,12 @@ function executeRecorderScript(script, args, options) {
   });
 }
 async function runRecordProofScript(script, args, timeout = 6e4, dependencies = {}) {
-  const execute = dependencies.execute ?? executeRecorderScript;
+  const execute2 = dependencies.execute ?? executeRecorderScript;
   if ((dependencies.platform ?? process.platform) !== "darwin") {
-    return execute(script, args, { timeout, env: { ...process.env } });
+    return execute2(script, args, { timeout, env: { ...process.env } });
   }
   const withHelper = dependencies.withHelper ?? withVerifiedDarwinProcessBirthHelper;
-  return withHelper((helper) => execute(script, args, {
+  return withHelper((helper) => execute2(script, args, {
     timeout,
     env: {
       ...process.env,
@@ -30606,7 +30841,7 @@ async function awaitExactStopped(probe, deadlineMs, code, message) {
     }
     if (Date.now() >= deadlineMs)
       return false;
-    await new Promise((resolve11) => setTimeout(resolve11, 25));
+    await new Promise((resolve12) => setTimeout(resolve12, 25));
   }
 }
 async function waitForExactStopped(probe, deadlineMs, code, message) {
@@ -43617,7 +43852,7 @@ var init_protocol2 = __esm({
               return;
             }
             const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-            await new Promise((resolve11) => setTimeout(resolve11, pollInterval));
+            await new Promise((resolve12) => setTimeout(resolve12, pollInterval));
             options?.signal?.throwIfAborted();
           }
         } catch (error2) {
@@ -43634,7 +43869,7 @@ var init_protocol2 = __esm({
        */
       request(request2, resultSchema, options) {
         const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-        return new Promise((resolve11, reject) => {
+        return new Promise((resolve12, reject) => {
           const earlyReject = (error2) => {
             reject(error2);
           };
@@ -43712,7 +43947,7 @@ var init_protocol2 = __esm({
               if (!parseResult.success) {
                 reject(parseResult.error);
               } else {
-                resolve11(parseResult.data);
+                resolve12(parseResult.data);
               }
             } catch (error2) {
               reject(error2);
@@ -43973,12 +44208,12 @@ var init_protocol2 = __esm({
           }
         } catch {
         }
-        return new Promise((resolve11, reject) => {
+        return new Promise((resolve12, reject) => {
           if (signal.aborted) {
             reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
             return;
           }
-          const timeoutId = setTimeout(resolve11, interval);
+          const timeoutId = setTimeout(resolve12, interval);
           signal.addEventListener("abort", () => {
             clearTimeout(timeoutId);
             reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -47005,7 +47240,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve11.call(this, root, ref);
+      let _sch = resolve12.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a = root.localRefs) === null || _a === void 0 ? void 0 : _a[ref];
         const { schemaId } = this.opts;
@@ -47032,7 +47267,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve11(root, ref) {
+    function resolve12(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -47757,7 +47992,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve11(baseURI, relativeURI, options) {
+    function resolve12(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const resolved = resolveComponent(parse3(baseURI, schemelessOptions), parse3(relativeURI, schemelessOptions), schemelessOptions, true);
       schemelessOptions.skipEscape = true;
@@ -48014,7 +48249,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve: resolve11,
+      resolve: resolve12,
       resolveComponent,
       equal,
       serialize: serialize2,
@@ -52141,7 +52376,7 @@ var init_mcp = __esm({
         let task = createTaskResult.task;
         const pollInterval = task.pollInterval ?? 5e3;
         while (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
-          await new Promise((resolve11) => setTimeout(resolve11, pollInterval));
+          await new Promise((resolve12) => setTimeout(resolve12, pollInterval));
           const updatedTask = await extra.taskStore.getTask(taskId);
           if (!updatedTask) {
             throw new McpError(ErrorCode.InternalError, `Task ${taskId} not found during polling`);
@@ -52735,12 +52970,12 @@ var init_stdio2 = __esm({
         this.onclose?.();
       }
       send(message) {
-        return new Promise((resolve11) => {
+        return new Promise((resolve12) => {
           const json = serializeMessage(message);
           if (this._stdout.write(json)) {
-            resolve11();
+            resolve12();
           } else {
-            this._stdout.once("drain", resolve11);
+            this._stdout.once("drain", resolve12);
           }
         });
       }
@@ -53164,9 +53399,9 @@ var require_permessage_deflate = __commonJS({
        * @private
        */
       _decompress(data, fin, callback) {
-        const endpoint = this._isServer ? "client" : "server";
+        const endpoint2 = this._isServer ? "client" : "server";
         if (!this._inflate) {
-          const key = `${endpoint}_max_window_bits`;
+          const key = `${endpoint2}_max_window_bits`;
           const windowBits = typeof this.params[key] !== "number" ? zlib.Z_DEFAULT_WINDOWBITS : this.params[key];
           this._inflate = zlib.createInflateRaw({
             ...this._options.zlibInflateOptions,
@@ -53199,7 +53434,7 @@ var require_permessage_deflate = __commonJS({
           } else {
             this._inflate[kTotalLength] = 0;
             this._inflate[kBuffers] = [];
-            if (fin && this.params[`${endpoint}_no_context_takeover`]) {
+            if (fin && this.params[`${endpoint2}_no_context_takeover`]) {
               this._inflate.reset();
             }
           }
@@ -53215,9 +53450,9 @@ var require_permessage_deflate = __commonJS({
        * @private
        */
       _compress(data, fin, callback) {
-        const endpoint = this._isServer ? "server" : "client";
+        const endpoint2 = this._isServer ? "server" : "client";
         if (!this._deflate) {
-          const key = `${endpoint}_max_window_bits`;
+          const key = `${endpoint2}_max_window_bits`;
           const windowBits = typeof this.params[key] !== "number" ? zlib.Z_DEFAULT_WINDOWBITS : this.params[key];
           this._deflate = zlib.createDeflateRaw({
             ...this._options.zlibDeflateOptions,
@@ -53243,7 +53478,7 @@ var require_permessage_deflate = __commonJS({
           this._deflate[kCallback] = null;
           this._deflate[kTotalLength] = 0;
           this._deflate[kBuffers] = [];
-          if (fin && this.params[`${endpoint}_no_context_takeover`]) {
+          if (fin && this.params[`${endpoint2}_no_context_takeover`]) {
             this._deflate.reset();
           }
           callback(null, data2);
@@ -57020,7 +57255,7 @@ var init_events_client = __esm({
       async connectOnce() {
         this.state = "connecting";
         const url = `ws://${this.opts.host}:${this.opts.port}/events`;
-        return new Promise((resolve11) => {
+        return new Promise((resolve12) => {
           const ws = new wrapper_default(url, {
             headers: { Origin: metroOrigin(url) }
           });
@@ -57034,7 +57269,7 @@ var init_events_client = __esm({
             this._connectionEpoch += 1;
             this.reconnectAttempt = 0;
             logger.info(this.opts.logTag, `connected to ${url}`);
-            resolve11();
+            resolve12();
           };
           const onFail = (reason) => {
             if (outcome !== null)
@@ -57042,7 +57277,7 @@ var init_events_client = __esm({
             outcome = "failed";
             logger.debug(this.opts.logTag, `connect failed: ${reason}`);
             this.scheduleReconnect();
-            resolve11();
+            resolve12();
           };
           ws.once("open", onOpen);
           ws.once("error", (err) => onFail(err instanceof Error ? err.message : String(err)));
@@ -57253,7 +57488,7 @@ var init_multiplexer = __esm({
         logger.info(this.opts.logTag, "multiplexer stopped");
       }
       startConsumerServer() {
-        return new Promise((resolve11, reject) => {
+        return new Promise((resolve12, reject) => {
           this.httpServer = createServer2();
           this.wss = new import_websocket_server.default({
             server: this.httpServer,
@@ -57285,12 +57520,12 @@ var init_multiplexer = __esm({
               return;
             }
             this.boundPort = addr.port;
-            resolve11(addr.port);
+            resolve12(addr.port);
           });
         });
       }
       connectHermes() {
-        return new Promise((resolve11, reject) => {
+        return new Promise((resolve12, reject) => {
           const ws = new wrapper_default(this.opts.hermesUrl, {
             headers: { Origin: metroOrigin(this.opts.hermesUrl) }
           });
@@ -57301,7 +57536,7 @@ var init_multiplexer = __esm({
               ws.send(msg3);
             this.hermesBuffer = [];
             logger.info(this.opts.logTag, `connected to upstream Hermes at ${this.opts.hermesUrl}`);
-            resolve11();
+            resolve12();
           };
           const onError = (err) => {
             ws.off("open", onOpen);
@@ -57479,8 +57714,8 @@ var init_multiplexer = __esm({
           this.wss = null;
         }
         if (this.httpServer) {
-          await new Promise((resolve11) => {
-            this.httpServer?.close(() => resolve11());
+          await new Promise((resolve12) => {
+            this.httpServer?.close(() => resolve12());
           });
           this.httpServer = null;
         }
@@ -61005,13 +61240,13 @@ function sendWithTimeout(ws, pending2, nextId, method, params, ms) {
   if (!ws || ws.readyState !== wrapper_default.OPEN) {
     return Promise.reject(new Error("WebSocket not connected"));
   }
-  return new Promise((resolve11, reject) => {
+  return new Promise((resolve12, reject) => {
     const id = nextId();
     const timer = setTimeout(() => {
       pending2.delete(id);
       reject(new Error(`CDP timeout (${ms}ms): ${method}. JS thread may be blocked, paused on a breakpoint, or waiting on an unresolved promise.`));
     }, ms);
-    pending2.set(id, { resolve: resolve11, reject, timer });
+    pending2.set(id, { resolve: resolve12, reject, timer });
     try {
       if (!ws || ws.readyState !== wrapper_default.OPEN) {
         throw new Error("WebSocket closed between check and send");
@@ -61423,7 +61658,7 @@ function connectWebSocket(ctx, url, createSocket = (socketUrl) => new wrapper_de
   maxPayload: 100 * 1024 * 1024,
   headers: { Origin: metroOrigin(socketUrl) }
 })) {
-  return new Promise((resolve11, reject) => {
+  return new Promise((resolve12, reject) => {
     const ws = createSocket(url);
     let settled = false;
     const guard = setTimeout(() => {
@@ -61449,7 +61684,7 @@ function connectWebSocket(ctx, url, createSocket = (socketUrl) => new wrapper_de
       }
       ctx.setWs(ws);
       ctx.setState("connected");
-      resolve11(ws);
+      resolve12(ws);
     });
     ws.on("error", (err) => {
       if (!settled) {
@@ -62985,7 +63220,7 @@ async function forceReconnect(oldClient, setClient2, createClient2, captured, au
   const platformMatched = !captured.platform || captured.platform === finalPlatform;
   return { ok: true, platformMatched, finalPlatform };
 }
-async function resolveExactReloadTargetId(client2, captured, authorityTarget, execute) {
+async function resolveExactReloadTargetId(client2, captured, authorityTarget, execute2) {
   const listed = await client2.listTargetsExact(captured.port);
   if (listed.port !== captured.port) {
     throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: reload target discovery escaped the allocated Metro port");
@@ -63000,7 +63235,7 @@ async function resolveExactReloadTargetId(client2, captured, authorityTarget, ex
     targets: sessionCandidates
   }, {
     execute: async (file, args) => {
-      const result = await execute(file, args, { timeout: 5e3 });
+      const result = await execute2(file, args, { timeout: 5e3 });
       return { stdout: result.stdout };
     }
   });
@@ -63221,7 +63456,7 @@ var init_reload = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/resolve-ios-app-file.js
-import { execFileSync as execFileSync11 } from "node:child_process";
+import { execFileSync as execFileSync12 } from "node:child_process";
 import { existsSync as existsSync20, cpSync, rmSync as rmSync9, mkdirSync as mkdirSync12, readdirSync as readdirSync5, statSync as statSync8 } from "node:fs";
 import { tmpdir as tmpdir7 } from "node:os";
 import { join as join26, basename as basename4 } from "node:path";
@@ -63235,7 +63470,7 @@ function defaultSnapshotApp(appPath) {
     rmSync9(dest, { recursive: true, force: true });
     mkdirSync12(destDir, { recursive: true });
     try {
-      execFileSync11("cp", ["-Rc", appPath, dest], { timeout: 3e4, stdio: "ignore" });
+      execFileSync12("cp", ["-Rc", appPath, dest], { timeout: 3e4, stdio: "ignore" });
     } catch {
       cpSync(appPath, dest, { recursive: true });
     }
@@ -63282,7 +63517,7 @@ function resolveAppFileForClearState(platform, flowText, headerAppId, explicitAp
 function defaultGetAppContainer(bundleId, deviceId) {
   try {
     const target = deviceId && !/\s/.test(deviceId) ? deviceId : "booted";
-    const out = execFileSync11("xcrun", ["simctl", "get_app_container", target, bundleId, "app"], {
+    const out = execFileSync12("xcrun", ["simctl", "get_app_container", target, bundleId, "app"], {
       encoding: "utf8",
       timeout: 5e3
     }).trim();
@@ -63301,7 +63536,7 @@ function defaultListSnapshots() {
 }
 function defaultReadBundleId(appPath, timeoutMs) {
   try {
-    const out = execFileSync11("plutil", ["-extract", "CFBundleIdentifier", "raw", join26(appPath, "Info.plist")], { timeout: timeoutMs, encoding: "utf8" });
+    const out = execFileSync12("plutil", ["-extract", "CFBundleIdentifier", "raw", join26(appPath, "Info.plist")], { timeout: timeoutMs, encoding: "utf8" });
     return out.trim() || null;
   } catch {
     return null;
@@ -63371,7 +63606,7 @@ var init_device_session_health = __esm({
 
 // packages/rn-dev-agent-core/dist/session/runtime-paths.js
 import { chmodSync as chmodSync3, lstatSync as lstatSync9, mkdirSync as mkdirSync13 } from "node:fs";
-import { join as join27, resolve as resolve6 } from "node:path";
+import { join as join27, resolve as resolve7 } from "node:path";
 function privateDirectory(path) {
   mkdirSync13(path, { recursive: true, mode: 448 });
   const stat2 = lstatSync9(path);
@@ -63383,7 +63618,7 @@ function privateDirectory(path) {
 }
 function sessionRuntimeRoot(projectRoot) {
   const configured = process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT;
-  return configured ? privateDirectory(resolve6(configured)) : join27(resolve6(projectRoot), ".rn-agent");
+  return configured ? privateDirectory(resolve7(configured)) : join27(resolve7(projectRoot), ".rn-agent");
 }
 function sessionStateDirectory(projectRoot) {
   const path = join27(sessionRuntimeRoot(projectRoot), "state");
@@ -63402,7 +63637,7 @@ var init_runtime_paths2 = __esm({
 // packages/rn-dev-agent-core/dist/domain/action-db.js
 import { createRequire as createRequire2 } from "node:module";
 import { existsSync as existsSync21, mkdirSync as mkdirSync14, readdirSync as readdirSync6, readFileSync as readFileSync21 } from "node:fs";
-import { dirname as dirname11, join as join28 } from "node:path";
+import { dirname as dirname12, join as join28 } from "node:path";
 function loadSqlite() {
   try {
     const mod = _require("node:sqlite");
@@ -63417,7 +63652,7 @@ function openActionDb(projectRoot, opts = {}) {
     return null;
   try {
     const dbPath = join28(sessionStateDirectory(projectRoot), "actions.db");
-    mkdirSync14(dirname11(dbPath), { recursive: true });
+    mkdirSync14(dirname12(dbPath), { recursive: true });
     const db = new Ctor(dbPath);
     db.exec(SCHEMA);
     for (const alter of [
@@ -63855,13 +64090,13 @@ var init_reusable_action = __esm({
 
 // packages/rn-dev-agent-core/dist/domain/sidecar-io.js
 import { existsSync as existsSync22, readFileSync as readFileSync22, writeFileSync as writeFileSync11, mkdirSync as mkdirSync15, statSync as statSync9 } from "node:fs";
-import { join as join29, dirname as dirname12 } from "node:path";
+import { join as join29, dirname as dirname13 } from "node:path";
 function sidecarPathFor(yamlFilePath) {
-  const dir = dirname12(yamlFilePath);
-  const parent = dirname12(dir);
+  const dir = dirname13(yamlFilePath);
+  const parent = dirname13(dir);
   const filename = yamlFilePath.replace(/\.ya?ml$/i, ".state.json");
   const base = filename.split(/[\\/]/).pop();
-  const stateDirectory = process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT ? sessionStateDirectory(dirname12(parent)) : join29(parent, "state");
+  const stateDirectory = process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT ? sessionStateDirectory(dirname13(parent)) : join29(parent, "state");
   return join29(stateDirectory, base);
 }
 function loadOrInitSidecar(yamlFilePath, now = () => /* @__PURE__ */ new Date()) {
@@ -63892,7 +64127,7 @@ function loadOrInitSidecar(yamlFilePath, now = () => /* @__PURE__ */ new Date())
 }
 function saveSidecar(yamlFilePath, state) {
   const path = sidecarPathFor(yamlFilePath);
-  const parentDir = dirname12(path);
+  const parentDir = dirname13(path);
   if (!existsSync22(parentDir))
     mkdirSync15(parentDir, { recursive: true });
   writeFileSync11(path, JSON.stringify(state, null, 2) + "\n", "utf8");
@@ -63918,7 +64153,7 @@ var init_sidecar_io = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/action-state-store.js
-import { basename as basename5, dirname as dirname13, sep as sep4 } from "node:path";
+import { basename as basename5, dirname as dirname14, sep as sep4 } from "node:path";
 function dbFor(projectRoot) {
   if (dbCache.has(projectRoot))
     return dbCache.get(projectRoot) ?? null;
@@ -63962,9 +64197,9 @@ function mirrorToDb(opts) {
   }
 }
 function projectRootFromYaml(yamlFilePath) {
-  const actionsDir = dirname13(yamlFilePath);
-  const rnAgentDir = dirname13(actionsDir);
-  const root = dirname13(rnAgentDir);
+  const actionsDir = dirname14(yamlFilePath);
+  const rnAgentDir = dirname14(actionsDir);
+  const root = dirname14(rnAgentDir);
   if (basename5(actionsDir) !== "actions" || basename5(rnAgentDir) !== ".rn-agent") {
     return null;
   }
@@ -64656,12 +64891,12 @@ var init_maestro_runner_report = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/install-authority.js
-import { execFileSync as execFileSync12 } from "node:child_process";
+import { execFileSync as execFileSync13 } from "node:child_process";
 import { createHash as createHash12 } from "node:crypto";
 import { lstatSync as lstatSync10, readFileSync as readFileSync24, readdirSync as readdirSync7, readlinkSync as readlinkSync3, realpathSync as realpathSync8, statSync as statSync10 } from "node:fs";
 import { isAbsolute as isAbsolute5, join as join32, relative as relative3 } from "node:path";
 function runText(command, args) {
-  return execFileSync12(command, [...args], {
+  return execFileSync13(command, [...args], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
     timeout: 1e4,
@@ -64669,7 +64904,7 @@ function runText(command, args) {
   });
 }
 function runBuffer(command, args) {
-  return execFileSync12(command, [...args], {
+  return execFileSync13(command, [...args], {
     encoding: "buffer",
     stdio: ["ignore", "pipe", "ignore"],
     timeout: 3e4,
@@ -65198,7 +65433,7 @@ var init_tool_profiles = __esm({
 // packages/rn-dev-agent-core/dist/session/authority-gate.js
 import { randomUUID as randomUUID7 } from "node:crypto";
 import { realpathSync as realpathSync9 } from "node:fs";
-import { isAbsolute as isAbsolute6, relative as relative4, resolve as resolve7 } from "node:path";
+import { isAbsolute as isAbsolute6, relative as relative4, resolve as resolve8 } from "node:path";
 async function claimOptionalBundleAuthority(args) {
   return await args[optionalBundleAdmission]?.() ?? false;
 }
@@ -65444,7 +65679,7 @@ function bindSourcePaths(status, args) {
     }
     let candidate;
     try {
-      candidate = realpathSync9(isAbsolute6(supplied) ? supplied : resolve7(appRoot, supplied));
+      candidate = realpathSync9(isAbsolute6(supplied) ? supplied : resolve8(appRoot, supplied));
     } catch {
       throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", `${field2} cannot be resolved within the active app root`);
     }
@@ -66458,7 +66693,7 @@ import { execFile as execFileCb11 } from "node:child_process";
 import { promisify as promisify14 } from "node:util";
 import { existsSync as existsSync25, readFileSync as readFileSync25, writeFileSync as writeFileSync12 } from "node:fs";
 import { tmpdir as tmpdir9 } from "node:os";
-import { join as join33, dirname as dirname14 } from "node:path";
+import { join as join33, dirname as dirname15 } from "node:path";
 async function runFlowParked(run, opts = {}) {
   const stale = opts.markCdpStale ?? markCdpStale;
   try {
@@ -66603,7 +66838,7 @@ function createMaestroRunHandler(deps = {}) {
   const activeSession2 = deps.getActiveSession ?? getActiveSession;
   const selectDispatch = deps.chooseDispatch ?? chooseMaestroDispatch;
   const parkFlow = deps.parkFlow ?? runFlowParked;
-  const execute = deps.execFile ?? defaultExecFile2;
+  const execute2 = deps.execFile ?? defaultExecFile2;
   const now = deps.now ?? Date.now;
   return async (args) => {
     if (args.params) {
@@ -66650,7 +66885,7 @@ function createMaestroRunHandler(deps = {}) {
       return failResult("Provide either flowPath or inlineYaml.");
     }
     try {
-      const runFlowOpts = args.flowPath ? { flowDir: dirname14(args.flowPath), flowRoot: dirname14(args.flowPath) } : {};
+      const runFlowOpts = args.flowPath ? { flowDir: dirname15(args.flowPath), flowRoot: dirname15(args.flowPath) } : {};
       const parsed = parseAndValidateFlow(rawYaml, runFlowOpts);
       planMaestroAuthorityStages(parsed.commands);
       validatedCommands = parsed.commands;
@@ -66718,7 +66953,7 @@ function createMaestroRunHandler(deps = {}) {
           throw error2;
         }
         writeFileSync12(flowFile, buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, [...commands]), "utf-8");
-        return execute(dispatch.binPath, finalArgs, {
+        return execute2(dispatch.binPath, finalArgs, {
           timeout: remainingTimeout,
           encoding: "utf8",
           maxBuffer: 10 * 1024 * 1024
@@ -66908,7 +67143,7 @@ var init_maestro_run = __esm({
 import { spawn as spawn7 } from "node:child_process";
 import { readdirSync as readdirSync8, readFileSync as readFileSync26, unlinkSync as unlinkSync9 } from "node:fs";
 function sleep3(ms) {
-  return new Promise((resolve11) => setTimeout(resolve11, ms));
+  return new Promise((resolve12) => setTimeout(resolve12, ms));
 }
 function cleanupKey(platform, deviceId) {
   return `${platform}:${deviceId}`;
@@ -66967,7 +67202,7 @@ async function waitForGroupAbsence(pgid, signalGroup, groupLiveness, delay, time
 }
 function observeChildTerminal(child, timeoutMs) {
   let closeResult = null;
-  const result = new Promise((resolve11) => {
+  const result = new Promise((resolve12) => {
     let settled = false;
     let timer;
     const done = (value) => {
@@ -66976,7 +67211,7 @@ function observeChildTerminal(child, timeoutMs) {
       settled = true;
       if (timer)
         clearTimeout(timer);
-      resolve11(value);
+      resolve12(value);
     };
     child.once("error", (error2) => done({ code: null, signal: null, timedOut: false, error: error2.message }));
     child.once("close", (code, signal) => {
@@ -67231,7 +67466,7 @@ async function runMaestroInline(yaml2, opts, dependencies = {}) {
     runnerReportDir = createRunnerReportDir(dispatch.runner, "rn-maestro-inline-report");
     const baseArgs = dispatch.buildArgs(opts.platform, flowFile, appFileResolution.appFile, requestedDeviceId);
     const finalArgs = assembleMaestroArgs(baseArgs, runnerReportArgs(runnerReportDir));
-    const execute = () => (dependencies.spawnManaged ?? spawnManagedProcessGroup)(dispatch.binPath, finalArgs, {
+    const execute2 = () => (dependencies.spawnManaged ?? spawnManagedProcessGroup)(dispatch.binPath, finalArgs, {
       timeoutMs: timeout,
       platform: opts.platform,
       deviceId: requestedDeviceId,
@@ -67249,13 +67484,13 @@ async function runMaestroInline(yaml2, opts, dependencies = {}) {
           errorCode: "BUSY_FLOW_ACTIVE"
         };
       }
-      execution = await runFlowParked(execute, {
+      execution = await runFlowParked(execute2, {
         platform: opts.platform,
         deviceId: requestedDeviceId,
         completeRunnerPark: () => completeManagedRunnerParkAuthority(opts.authorityArgs)
       });
     } else {
-      execution = await execute();
+      execution = await execute2();
     }
     const output = (execution.stdout + "\n" + execution.stderr).trim();
     if (!execution.cleanupProven) {
@@ -67847,10 +68082,10 @@ var init_build_receipt = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/device-existence.js
-import { execFileSync as execFileSync13 } from "node:child_process";
+import { execFileSync as execFileSync14 } from "node:child_process";
 function deviceExistsOnHost(platform, deviceId) {
   if (platform === "ios") {
-    const output2 = execFileSync13("xcrun", ["simctl", "list", "devices", "--json"], {
+    const output2 = execFileSync14("xcrun", ["simctl", "list", "devices", "--json"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 5e3
@@ -67858,7 +68093,7 @@ function deviceExistsOnHost(platform, deviceId) {
     const parsed = JSON.parse(output2);
     return Object.values(parsed.devices ?? {}).flat().some((device) => device.udid === deviceId && device.isAvailable !== false);
   }
-  const output = execFileSync13("adb", ["devices"], {
+  const output = execFileSync14("adb", ["devices"], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
     timeout: 5e3
@@ -67872,9 +68107,15 @@ var init_device_existence = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/session.js
-import { dirname as dirname15, join as join36 } from "node:path";
+import { dirname as dirname16, join as join36 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 import { createHash as createHash15 } from "node:crypto";
+function sameAndroidMetroReverse(current, next) {
+  if (!current || !next)
+    return current === next;
+  const binding = current;
+  return binding.platform === next.platform && binding.deviceId === next.deviceId && binding.metroPort === next.metroPort && binding.local === next.local && binding.remote === next.remote;
+}
 function sameMetroAuthority(current, next) {
   return current?.port === next.port && current.pid === next.pid && current.birth === next.birth && current.instanceId === next.instanceId && current.servingRoot === next.servingRoot && current.buildGeneration === next.buildGeneration && current.mode === next.mode;
 }
@@ -68004,6 +68245,14 @@ function reconcileManagedMetroStatus(runtime, dependencies = {}) {
 }
 async function completeStaleDeviceCleanupPlan(registry2, session2, workerInstance, plan, dependencies) {
   const completed = [];
+  if (plan.androidMetroReverse && typeof plan.androidMetroReverse.completedAt !== "number") {
+    if (!dependencies.removeAndroidMetroReverse) {
+      throw new SessionAuthorityError("PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN", "physical Android Metro cleanup integration is unavailable");
+    }
+    dependencies.removeAndroidMetroReverse(plan.androidMetroReverse);
+    registry2.completeStaleResourceRelease(session2, workerInstance, "androidMetroReverse");
+    completed.push("androidMetroReverse");
+  }
   if (plan.recorder && typeof plan.recorder.completedAt !== "number") {
     await (dependencies.stopHandoffRecorder ?? stopBoundRecorder)(plan.recorder);
     registry2.completeStaleResourceRelease(session2, workerInstance, "recorder");
@@ -68047,6 +68296,60 @@ async function withInlineStaleDeviceCleanup(registry2, session2, dependencies, i
     revalidate();
     return operation();
   }
+}
+function ensurePhysicalAndroidMetroReachability(registry2, session2, status, dependencies) {
+  const device = status.bindings.device;
+  if (device?.platform !== "android" || typeof device.deviceId !== "string")
+    return status;
+  const metroPort = Number(status.bindings.metroPort);
+  const existing = status.bindings.androidMetroReverse;
+  if (!dependencies.ensureAndroidMetroReverse)
+    return status;
+  const result = dependencies.ensureAndroidMetroReverse({
+    deviceId: device.deviceId,
+    metroPort,
+    binding: existing
+  });
+  if (sameAndroidMetroReverse(existing ?? null, result.binding))
+    return status;
+  try {
+    registry2.updateBindings(session2, {
+      expectedAuthorityVersion: status.authorityVersion,
+      bindings: { androidMetroReverse: result.binding }
+    });
+  } catch (error2) {
+    if (result.created && result.binding) {
+      try {
+        (dependencies.removeAndroidMetroReverse ?? removeAndroidMetroReverse)(result.binding);
+      } catch (cleanupError) {
+        throw new AggregateError([error2, cleanupError], "PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN: adb reverse was created but its authority binding could not be persisted or safely cleaned");
+      }
+    }
+    throw error2;
+  }
+  const current = registry2.getSessionStatus(session2.sessionId);
+  if (!current) {
+    throw new SessionAuthorityError("SESSION_OWNER_LOST", "session disappeared after physical Android Metro reachability was established");
+  }
+  return current;
+}
+function removeSessionAndroidMetroReverse(registry2, session2, status, dependencies) {
+  const binding = status.bindings.androidMetroReverse;
+  if (!binding)
+    return status;
+  if (!dependencies.removeAndroidMetroReverse) {
+    throw new SessionAuthorityError("PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN", "physical Android Metro cleanup integration is unavailable");
+  }
+  dependencies.removeAndroidMetroReverse(binding);
+  registry2.updateBindings(session2, {
+    expectedAuthorityVersion: status.authorityVersion,
+    bindings: { androidMetroReverse: null }
+  });
+  const current = registry2.getSessionStatus(session2.sessionId);
+  if (!current) {
+    throw new SessionAuthorityError("SESSION_OWNER_LOST", "session disappeared after physical Android Metro reachability cleanup");
+  }
+  return current;
 }
 function createSessionHandler(runtime, dependencies = {}) {
   return async (input) => {
@@ -68130,7 +68433,7 @@ function createSessionHandler(runtime, dependencies = {}) {
         const platform = required2(input.platform, "platform");
         const deviceId = required2(input.deviceId, "deviceId");
         const appId = required2(input.appId, "appId");
-        const status2 = registry2.getSessionStatus(session2.sessionId);
+        let status2 = registry2.getSessionStatus(session2.sessionId);
         const signer = dependencies.getSignerCapability?.();
         if (!status2) {
           throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "session disappeared before device binding");
@@ -68167,6 +68470,10 @@ function createSessionHandler(runtime, dependencies = {}) {
           }
         };
         requireExactDevice();
+        const retainedReverse = status2.bindings.androidMetroReverse;
+        if (retainedReverse && (platform !== "android" || retainedReverse.deviceId !== deviceId)) {
+          status2 = removeSessionAndroidMetroReverse(registry2, session2, status2, dependencies);
+        }
         const currentInstall = status2.bindings.install;
         if (!input.buildReceipt && currentInstall && (currentInstall.platform !== platform || currentInstall.deviceId !== deviceId || currentInstall.appId !== appId)) {
           throw new SessionAuthorityError("DEVICE_RECEIPT_INCOMPATIBLE", "cannot replace exact-device authority while an incompatible install receipt is bound");
@@ -68261,7 +68568,7 @@ function createSessionHandler(runtime, dependencies = {}) {
         return okResult({ session: projectPublicAuthorityStatus(runtime.status()) });
       }
       if (input.action === "pin_dev_client") {
-        const status2 = registry2.getSessionStatus(session2.sessionId);
+        let status2 = registry2.getSessionStatus(session2.sessionId);
         if (!status2 || !dependencies.pinDevClient) {
           throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", "pinning integration is unavailable");
         }
@@ -68270,6 +68577,7 @@ function createSessionHandler(runtime, dependencies = {}) {
             throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", `${requiredBinding} must be bound before pinning`);
           }
         }
+        status2 = ensurePhysicalAndroidMetroReachability(registry2, session2, status2, dependencies);
         const priorTargetId = status2.bindings.bundle?.targetId;
         const priorBundle = status2.bindings.bundle ?? null;
         const priorState = status2.state;
@@ -68343,7 +68651,7 @@ function createSessionHandler(runtime, dependencies = {}) {
         });
       }
       if (input.action === "stop_metro") {
-        const status2 = registry2.getSessionStatus(session2.sessionId);
+        let status2 = registry2.getSessionStatus(session2.sessionId);
         if (!status2) {
           throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "session disappeared before managed Metro cleanup");
         }
@@ -68364,6 +68672,7 @@ function createSessionHandler(runtime, dependencies = {}) {
               throw new SessionAuthorityError("METRO_CLEANUP_PENDING", `allocated Metro port ${metroPort2} is still ${listener.status}${listenerIdentity} after cleanup authority was invalidated; do not signal an unbound process, wait for managed launcher cleanup, then retry rn_session stop_metro`);
             }
           }
+          status2 = removeSessionAndroidMetroReverse(registry2, session2, status2, dependencies);
           return okResult({
             stopped: false,
             alreadyStopped: true,
@@ -68434,6 +68743,7 @@ function createSessionHandler(runtime, dependencies = {}) {
         if (!cleanup.authenticated && input.confirmed !== true) {
           throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "non-signaling Metro authority release requires confirmed=true after exact process, listener, and socket absence is verified");
         }
+        status2 = removeSessionAndroidMetroReverse(registry2, session2, status2, dependencies);
         const priorTargetId = status2.bindings.bundle?.targetId;
         registry2.updateBindings(session2, {
           expectedAuthorityVersion: status2.authorityVersion,
@@ -68478,7 +68788,8 @@ function createSessionHandler(runtime, dependencies = {}) {
           if (!(error2 instanceof SyntaxError))
             throw error2;
         }
-        const sessionCli = process.env.RN_DEV_AGENT_SESSION_CLI ?? join36(dirname15(fileURLToPath2(import.meta.url)), "..", "rn-session.js");
+        const sessionCli = process.env.RN_DEV_AGENT_SESSION_CLI ?? join36(dirname16(fileURLToPath2(import.meta.url)), "..", "rn-session.js");
+        const stateDir = process.env.RN_DEV_AGENT_STATE_DIR;
         if (input.action === "restore_integration") {
           if (input.confirmed !== true) {
             throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "restore_integration requires confirmed=true");
@@ -68514,7 +68825,7 @@ function createSessionHandler(runtime, dependencies = {}) {
           });
           return okResult({ restored: true, packagePath, manifestPath });
         }
-        const preview = previewPackageIntegration(packageJson, existing, sessionCli);
+        const preview = previewPackageIntegration(packageJson, existing, sessionCli, stateDir);
         const metroConfigPath = integrationInputs.metroConfig.path;
         const metroBefore = integrationInputs.metroConfig.contents;
         const metroAfter = previewMetroIntegration(metroBefore);
@@ -68558,7 +68869,7 @@ function createSessionHandler(runtime, dependencies = {}) {
           });
         }
         try {
-          applyPackageIntegration({ appRoot, sessionCli });
+          applyPackageIntegration({ appRoot, sessionCli, stateDir });
           const installedManifest = readPackageIntegrationInputs(appRoot).manifest;
           if (!installedManifest) {
             throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: applied manifest is unavailable");
@@ -68863,13 +69174,14 @@ function createSessionHandler(runtime, dependencies = {}) {
           }
         });
       }
-      const status = registry2.getSessionStatus(session2.sessionId);
+      let status = registry2.getSessionStatus(session2.sessionId);
       if (!status) {
         throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "session disappeared before release cleanup");
       }
       if (status.bindings.packageIntegration) {
         throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "package integration must be restored before session release");
       }
+      status = removeSessionAndroidMetroReverse(registry2, session2, status, dependencies);
       const metro = status.bindings.metro;
       const runner = status.bindings.runner;
       const recorder2 = status.bindings.recorder;
@@ -68955,6 +69267,7 @@ var init_session = __esm({
     init_device_arbiter();
     init_process_cleanup();
     init_device_existence();
+    init_android_metro_reverse();
     MANIFEST_RECOVERY_GUIDANCE = "Restore the exact integration manifest at .rn-agent/integration/rn-session-integration.json from your own version control history or backups so it matches the manifest SHA-256 recorded on the binding";
     TRANSFER_RECOVERY_GUIDANCE = "Ownership transfer requires SHA-256-verified restoration material already durable inside the registry binding, and on-disk manifest bytes never authorize a transfer; if the owning session is still alive, restore the exact integration manifest at .rn-agent/integration/rn-session-integration.json from your own version control history or backups and let that owner run restore_integration with confirmed=true, otherwise recover from a trusted session-state-plus-manifest backup while the refusal fence remains.";
     MISSING_DIGEST_GUIDANCE = "No trusted manifest SHA-256 digest is recorded on this binding, so no manifest bytes can be verified against it; operator recovery from a trusted session-state-plus-manifest backup is required while the refusal fence remains.";
@@ -70340,7 +70653,7 @@ var init_device_screenshot_resize = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/path-safety.js
-import { resolve as resolve8, sep as sep5 } from "node:path";
+import { resolve as resolve9, sep as sep5 } from "node:path";
 function isValidActionId(s) {
   if (typeof s !== "string")
     return false;
@@ -70357,8 +70670,8 @@ function assertValidActionId(s, context) {
   }
 }
 function assertWithinDir(child, baseDir) {
-  const resolvedBase = resolve8(baseDir);
-  const resolvedChild = resolve8(baseDir, child);
+  const resolvedBase = resolve9(baseDir);
+  const resolvedChild = resolve9(baseDir, child);
   if (resolvedChild === resolvedBase)
     return;
   const baseWithSep = resolvedBase.endsWith(sep5) ? resolvedBase : resolvedBase + sep5;
@@ -70865,7 +71178,7 @@ var init_recorder = __esm({
 import { mkdirSync as mkdirSync16 } from "node:fs";
 import { execFile as execFile16 } from "node:child_process";
 import { promisify as promisify18 } from "node:util";
-import { dirname as dirname16, join as join37, resolve as resolve9 } from "node:path";
+import { dirname as dirname17, join as join37, resolve as resolve10 } from "node:path";
 import { homedir as homedir9 } from "node:os";
 function parseSimctlDevicesAll(jsonText) {
   try {
@@ -70913,14 +71226,14 @@ function deriveScreenshotPath(args, now = Date.now, rand = Math.random) {
     throw new TildeScreenshotPathError(`Screenshot path "${args.path}" starts with '~' which the bridge cannot expand (only a leading '~/' is expanded to the home directory). Pass an absolute path instead.`);
   }
   if (args.path)
-    return resolve9(args.path);
+    return resolve10(args.path);
   const ext = args.format === "jpeg" ? "jpg" : args.format === "png" ? "png" : "jpg";
   const suffix = rand().toString(36).slice(2, 8);
   return `/tmp/rn-screenshot-${now()}-${suffix}.${ext}`;
 }
 function ensureScreenshotDir(path) {
   try {
-    mkdirSync16(dirname16(path), { recursive: true });
+    mkdirSync16(dirname17(path), { recursive: true });
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
@@ -71450,10 +71763,10 @@ function createDeviceBatchHandler(getClient2) {
       let stepTimedOut = false;
       const result = await Promise.race([
         executeStep(step, getClient2),
-        new Promise((resolve11) => {
+        new Promise((resolve12) => {
           stepTimer = setTimeout(() => {
             stepTimedOut = true;
-            resolve11(failResult(`Step ${i + 1} timed out after ${stepTimeout}ms; remaining steps were not started because the operation may still be completing`, step.action === "fill" ? { mutation: "possible", reason: "dispatch-uncertain" } : void 0));
+            resolve12(failResult(`Step ${i + 1} timed out after ${stepTimeout}ms; remaining steps were not started because the operation may still be completing`, step.action === "fill" ? { mutation: "possible", reason: "dispatch-uncertain" } : void 0));
           }, stepTimeout);
         })
       ]);
@@ -71992,7 +72305,7 @@ var init_macro_asserts = __esm({
 
 // packages/rn-dev-agent-core/dist/domain/atomic-writer.js
 import { writeFileSync as writeFileSync14, renameSync as renameSync6, statSync as statSync12, mkdirSync as mkdirSync17, existsSync as existsSync28, unlinkSync as unlinkSync10, readdirSync as readdirSync9 } from "node:fs";
-import { dirname as dirname17, basename as basename6 } from "node:path";
+import { dirname as dirname18, basename as basename6 } from "node:path";
 function generateTmpStamp() {
   const rand = Math.random().toString(36).slice(2, 10);
   return `${process.pid}.${Date.now().toString(36)}.${rand}`;
@@ -72023,14 +72336,14 @@ function pairWriteImpl(yamlPath, yamlContent, sidecarPath, state) {
   return { yamlPath, sidecarPath, finalMtimeMs, refreshedSidecar: true };
 }
 function ensureDir(filePath) {
-  const dir = dirname17(filePath);
+  const dir = dirname18(filePath);
   if (!atomicWriter._exists(dir))
     atomicWriter._mkdir(dir);
 }
 function cleanupOrphans(yamlPath, sidecarPath) {
   const now = Date.now();
   for (const targetPath of [yamlPath, sidecarPath]) {
-    const dir = dirname17(targetPath);
+    const dir = dirname18(targetPath);
     const prefix = `${basename6(targetPath)}.tmp.`;
     let entries;
     try {
@@ -75416,7 +75729,7 @@ async function collectNativeIos(durationMs, signal, deviceId, bundleId, onResolv
     return [];
   const pid = await resolveIosAppPid(deviceId, bundleId, signal);
   onResolvedPid?.(pid);
-  return new Promise((resolve11, reject) => {
+  return new Promise((resolve12, reject) => {
     const entries = [];
     let killed = false;
     let killedByUs = false;
@@ -75485,7 +75798,7 @@ async function collectNativeIos(durationMs, signal, deviceId, bundleId, onResolv
       if (!killedByUs && code !== 0 && entries.length === 0) {
         reject(new Error(`xcrun simctl log stream exited ${code}: ${stderrBuf.slice(0, 200)}`));
       } else {
-        resolve11(entries);
+        resolve12(entries);
       }
     });
     proc.on("error", (err) => {
@@ -75550,7 +75863,7 @@ function buildAndroidLogcatArgs(serial) {
 function collectNativeAndroid(durationMs, signal, serial) {
   if (signal.aborted)
     return Promise.resolve([]);
-  return new Promise((resolve11, reject) => {
+  return new Promise((resolve12, reject) => {
     const entries = [];
     const year = (/* @__PURE__ */ new Date()).getFullYear();
     const killMs = durationMs > 0 ? durationMs : 100;
@@ -75618,7 +75931,7 @@ function collectNativeAndroid(durationMs, signal, serial) {
       if (!killedByUs && code !== 0 && entries.length === 0) {
         reject(new Error(`adb logcat exited ${code}: ${stderrBuf.slice(0, 200)}`));
       } else {
-        resolve11(entries);
+        resolve12(entries);
       }
     });
     proc.on("error", (err) => {
@@ -76966,7 +77279,7 @@ import { createHash as createHash16 } from "node:crypto";
 import { existsSync as existsSync31 } from "node:fs";
 import { promisify as promisify23 } from "node:util";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
-import { dirname as dirname18, join as join40 } from "node:path";
+import { dirname as dirname19, join as join40 } from "node:path";
 function parseAllBootedIosDevices(jsonText) {
   let data;
   try {
@@ -77045,7 +77358,7 @@ function compactUnique2(paths) {
   }
   return out;
 }
-function candidateRecordScripts(baseDir = dirname18(fileURLToPath3(import.meta.url))) {
+function candidateRecordScripts(baseDir = dirname19(fileURLToPath3(import.meta.url))) {
   const codexPluginRoot = process.env.RN_DEV_AGENT_CODEX_PLUGIN_ROOT;
   const claudePluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
   return compactUnique2([
@@ -77061,7 +77374,7 @@ function candidateRecordScripts(baseDir = dirname18(fileURLToPath3(import.meta.u
     join40(baseDir, "..", "..", "..", "..", "scripts", "record_proof.sh")
   ]);
 }
-function resolveRecordScript(baseDir = dirname18(fileURLToPath3(import.meta.url))) {
+function resolveRecordScript(baseDir = dirname19(fileURLToPath3(import.meta.url))) {
   if (process.env.RN_DEV_AGENT_RECORD_PROOF_SCRIPT) {
     return process.env.RN_DEV_AGENT_RECORD_PROOF_SCRIPT;
   }
@@ -77937,9 +78250,9 @@ var init_startup_integrity = __esm({
 
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
 import { createHash as createHash18, randomUUID as randomUUID8 } from "node:crypto";
-import { execFileSync as execFileSync14 } from "node:child_process";
+import { execFileSync as execFileSync15 } from "node:child_process";
 import { chmodSync as chmodSync4, closeSync as closeSync10, existsSync as existsSync32, fsyncSync, lstatSync as lstatSync11, mkdirSync as mkdirSync18, openSync as openSync10, readFileSync as readFileSync30, realpathSync as realpathSync10, renameSync as renameSync7, unlinkSync as unlinkSync11, writeFileSync as writeFileSync15 } from "node:fs";
-import { basename as basename7, dirname as dirname19, extname, isAbsolute as isAbsolute8, join as join41, relative as relative5, resolve as resolve10, sep as sep6 } from "node:path";
+import { basename as basename7, dirname as dirname20, extname, isAbsolute as isAbsolute8, join as join41, relative as relative5, resolve as resolve11, sep as sep6 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 function proofActionPayload(unparsedArgs) {
   if (!unparsedArgs || typeof unparsedArgs !== "object" || Array.isArray(unparsedArgs)) {
@@ -78099,7 +78412,7 @@ function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
       "--untracked-files=all",
       "--ignore-submodules=none"
     ];
-    if (execFileSync14("git", statusArgs, { encoding: "utf8" }).trim())
+    if (execFileSync15("git", statusArgs, { encoding: "utf8" }).trim())
       return null;
     const verifiedBytes = [];
     for (const artifactPath of artifactPaths) {
@@ -78108,8 +78421,8 @@ function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
       if (!artifactRelativePath || artifactRelativePath === ".." || artifactRelativePath.startsWith("../")) {
         return null;
       }
-      execFileSync14("git", ["-C", root, "ls-files", "--error-unmatch", artifactRelativePath]);
-      const headBytes = execFileSync14("git", ["-C", root, "show", `HEAD:${artifactRelativePath}`], {
+      execFileSync15("git", ["-C", root, "ls-files", "--error-unmatch", artifactRelativePath]);
+      const headBytes = execFileSync15("git", ["-C", root, "show", `HEAD:${artifactRelativePath}`], {
         maxBuffer: 128 * 1024 * 1024
       });
       const artifactBytes = readFileSync30(resolvedArtifactPath);
@@ -78117,17 +78430,17 @@ function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
         return null;
       verifiedBytes.push(artifactBytes);
     }
-    return execFileSync14("git", statusArgs, { encoding: "utf8" }).trim() ? null : verifiedBytes;
+    return execFileSync15("git", statusArgs, { encoding: "utf8" }).trim() ? null : verifiedBytes;
   } catch {
     return null;
   }
 }
 function readProofCandidateRuntime(candidateRoot, startup = proofWorkerStartup) {
-  const root = realpathSync10(resolve10(candidateRoot));
-  const sha = execFileSync14("git", ["-C", root, "rev-parse", "HEAD"], {
+  const root = realpathSync10(resolve11(candidateRoot));
+  const sha = execFileSync15("git", ["-C", root, "rev-parse", "HEAD"], {
     encoding: "utf8"
   }).trim();
-  const remote = execFileSync14("git", ["-C", root, "remote", "get-url", "origin"], {
+  const remote = execFileSync15("git", ["-C", root, "remote", "get-url", "origin"], {
     encoding: "utf8"
   }).trim();
   if (!isOfficialProofCandidateRemote(remote)) {
@@ -78148,7 +78461,7 @@ function readProofCandidateRuntime(candidateRoot, startup = proofWorkerStartup) 
   if (!proofCandidateStartupMatches(entrypoint, startup, headCoreBundleSha256)) {
     throw new Error("CANDIDATE_MCP_PROCESS_MISMATCH");
   }
-  const confirmedSha = execFileSync14("git", ["-C", root, "rev-parse", "HEAD"], {
+  const confirmedSha = execFileSync15("git", ["-C", root, "rev-parse", "HEAD"], {
     encoding: "utf8"
   }).trim();
   if (confirmedSha !== sha)
@@ -78207,7 +78520,7 @@ function readProofActionIdentity(appProjectRoot, actionId) {
   }
 }
 function isNormalizedDescendant(root, path) {
-  if (!isAbsolute8(root) || !isAbsolute8(path) || resolve10(root) !== root || resolve10(path) !== path) {
+  if (!isAbsolute8(root) || !isAbsolute8(path) || resolve11(root) !== root || resolve11(path) !== path) {
     return false;
   }
   const fromRoot = relative5(root, path);
@@ -78216,7 +78529,7 @@ function isNormalizedDescendant(root, path) {
 function hasExistingSymlink(root, path) {
   const parts = relative5(root, path).split(sep6);
   for (let length = 0; length <= parts.length; length += 1) {
-    const candidate = resolve10(root, ...parts.slice(0, length));
+    const candidate = resolve11(root, ...parts.slice(0, length));
     try {
       if (lstatSync11(candidate).isSymbolicLink())
         return true;
@@ -78226,7 +78539,7 @@ function hasExistingSymlink(root, path) {
   return false;
 }
 function validCaptureContext(args, expectedRoot) {
-  if (!expectedRoot || args.projectRoot !== expectedRoot || resolve10(expectedRoot) !== expectedRoot) {
+  if (!expectedRoot || args.projectRoot !== expectedRoot || resolve11(expectedRoot) !== expectedRoot) {
     return false;
   }
   if (!/^[a-z0-9][a-z0-9-]*$/.test(args.runId))
@@ -78254,15 +78567,15 @@ function proofRootExists(args) {
   }
 }
 function resolveProofWorktreeRoot(detectedProjectRoot) {
-  if (!detectedProjectRoot || !isAbsolute8(detectedProjectRoot) || resolve10(detectedProjectRoot) !== detectedProjectRoot) {
+  if (!detectedProjectRoot || !isAbsolute8(detectedProjectRoot) || resolve11(detectedProjectRoot) !== detectedProjectRoot) {
     return null;
   }
   try {
-    const root = execFileSync14("git", ["rev-parse", "--show-toplevel"], {
+    const root = execFileSync15("git", ["rev-parse", "--show-toplevel"], {
       cwd: detectedProjectRoot,
       encoding: "utf8"
     }).trim();
-    return root && isAbsolute8(root) && resolve10(root) === root ? root : null;
+    return root && isAbsolute8(root) && resolve11(root) === root ? root : null;
   } catch {
     return null;
   }
@@ -78290,8 +78603,8 @@ function parseProofGitChanges(porcelain) {
   return changes;
 }
 function readProofGitInfo(root) {
-  const sha = execFileSync14("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
-  const status = execFileSync14("git", ["status", "--porcelain=v1", "--untracked-files=all", "-z"], {
+  const sha = execFileSync15("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  const status = execFileSync15("git", ["status", "--porcelain=v1", "--untracked-files=all", "-z"], {
     cwd: root,
     encoding: "utf8"
   });
@@ -78302,7 +78615,7 @@ function proofRootHasTrackedEntries(root, proofRoot) {
   if (!isNormalizedDescendant(root, proofRoot))
     throw new Error("INVALID_PROOF_ROOT");
   const path = relative5(root, proofRoot).replaceAll(sep6, "/");
-  return execFileSync14("git", ["ls-files", "-z", "--", path], {
+  return execFileSync15("git", ["ls-files", "-z", "--", path], {
     cwd: root,
     encoding: "utf8"
   }).length > 0;
@@ -78378,10 +78691,10 @@ function traceFor(storyboard, events) {
   return validateTrace([...required3, ...allowedExtras], events);
 }
 function readProofContractAt(moduleUrl = import.meta.url) {
-  const moduleDir = dirname19(fileURLToPath4(moduleUrl));
+  const moduleDir = dirname20(fileURLToPath4(moduleUrl));
   const candidates = [
-    resolve10(moduleDir, "../../schemas/proof-receipt.schema.json"),
-    resolve10(moduleDir, "../schemas/proof-receipt.schema.json")
+    resolve11(moduleDir, "../../schemas/proof-receipt.schema.json"),
+    resolve11(moduleDir, "../schemas/proof-receipt.schema.json")
   ];
   for (const path of candidates) {
     try {
@@ -78393,9 +78706,9 @@ function readProofContractAt(moduleUrl = import.meta.url) {
   throw new Error("PROOF_CONTRACT_MISSING");
 }
 function writeProofReceiptAtomic(path, receipt2) {
-  const directory = dirname19(path);
+  const directory = dirname20(path);
   mkdirSync18(directory, { recursive: true, mode: 448 });
-  const temporary = resolve10(directory, `.${randomUUID8()}.proof-receipt.tmp`);
+  const temporary = resolve11(directory, `.${randomUUID8()}.proof-receipt.tmp`);
   let descriptor = null;
   try {
     descriptor = openSync10(temporary, "wx", 384);
@@ -79300,7 +79613,7 @@ import { createHash as createHash19 } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { mkdir as mkdir2, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir as tmpdir11 } from "node:os";
-import { dirname as dirname20, join as join42 } from "node:path";
+import { dirname as dirname21, join as join42 } from "node:path";
 function fail2(reason) {
   throw new MediaFailure(reason);
 }
@@ -79526,7 +79839,7 @@ async function buildContactSheet(process3, selectedFramePaths, contactSheetPath)
     await requireNonEmptyFile(path, "FRAME_PROCESS_FAILED", "FRAME_PROCESS_FAILED");
   }
   try {
-    await mkdir2(dirname20(contactSheetPath), { recursive: true });
+    await mkdir2(dirname21(contactSheetPath), { recursive: true });
     await rm(contactSheetPath, { force: true });
   } catch {
     fail2("MEDIA_IO_FAILED");
@@ -80051,10 +80364,10 @@ var init_query = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/nav-graph/self-heal.js
-import { execFileSync as execFileSync15 } from "node:child_process";
+import { execFileSync as execFileSync16 } from "node:child_process";
 function gitExec(args, cwd) {
   try {
-    return execFileSync15("git", args, { cwd, timeout: 5e3, encoding: "utf-8" }).trim();
+    return execFileSync16("git", args, { cwd, timeout: 5e3, encoding: "utf-8" }).trim();
   } catch {
     return null;
   }
@@ -81201,7 +81514,7 @@ import { promisify as promisify25 } from "node:util";
 function safeSimctlTarget(deviceId) {
   return deviceId && SIMULATOR_UDID_RE.test(deviceId) ? deviceId : null;
 }
-async function resolveExactRestartTargetId(client2, input, execute) {
+async function resolveExactRestartTargetId(client2, input, execute2) {
   const listed = await client2.listTargetsExact(input.metroPort);
   if (listed.port !== input.metroPort) {
     throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: restart target discovery escaped the allocated Metro port");
@@ -81216,7 +81529,7 @@ async function resolveExactRestartTargetId(client2, input, execute) {
     targets: sessionCandidates
   }, {
     execute: async (file, args) => {
-      const result = await execute(file, args, { timeout: 5e3 });
+      const result = await execute2(file, args, { timeout: 5e3 });
       return { stdout: result.stdout };
     }
   });
@@ -81431,10 +81744,10 @@ function buildGracefulShutdown(deps) {
       }
     })();
     let timeoutHandle = null;
-    const timeout = new Promise((resolve11) => {
+    const timeout = new Promise((resolve12) => {
       timeoutHandle = setTimeout(() => {
         logger.warn("MCP", `shutdown: cleanup timeout after ${timeoutMs}ms, forcing exit`);
-        resolve11();
+        resolve12();
       }, timeoutMs);
     });
     await Promise.race([cleanup, timeout]);
@@ -82181,7 +82494,7 @@ var init_instrumentation = __esm({
 import { createHash as createHash20, randomUUID as randomUUID9 } from "node:crypto";
 import { chmodSync as chmodSync5, existsSync as existsSync36, mkdirSync as mkdirSync20, readFileSync as readFileSync34, renameSync as renameSync8, unlinkSync as unlinkSync12, writeFileSync as writeFileSync19 } from "node:fs";
 import { homedir as homedir11, platform as hostPlatform, release } from "node:os";
-import { dirname as dirname21, join as join47 } from "node:path";
+import { dirname as dirname22, join as join47 } from "node:path";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
 function sanitizeString(value, redact2 = applyRedactionRules) {
   try {
@@ -82248,7 +82561,7 @@ function usableIdentity(value) {
 function discoverPluginVersion(fromUrl = import.meta.url) {
   if (process.env.RN_DEV_AGENT_PLUGIN_VERSION)
     return process.env.RN_DEV_AGENT_PLUGIN_VERSION;
-  const start = dirname21(fileURLToPath5(fromUrl));
+  const start = dirname22(fileURLToPath5(fromUrl));
   const candidates = [
     join47(start, "..", "..", ".claude-plugin", "plugin.json"),
     join47(start, "..", "..", ".codex-plugin", "plugin.json"),
@@ -82834,9 +83147,9 @@ var init_e2e_csrf = __esm({
 import { createServer as createServer3 } from "node:http";
 import { readFileSync as readFileSync35 } from "node:fs";
 import { fileURLToPath as fileURLToPath6 } from "node:url";
-import { dirname as dirname22, join as join49 } from "node:path";
+import { dirname as dirname23, join as join49 } from "node:path";
 function listen(server3, port) {
-  return new Promise((resolve11, reject) => {
+  return new Promise((resolve12, reject) => {
     const onErr = (e) => {
       server3.removeListener("error", onErr);
       reject(e);
@@ -82845,7 +83158,7 @@ function listen(server3, port) {
     server3.listen(port, HOST, () => {
       server3.removeListener("error", onErr);
       const addr = server3.address();
-      resolve11(typeof addr === "object" && addr ? addr.port : port);
+      resolve12(typeof addr === "object" && addr ? addr.port : port);
     });
   });
 }
@@ -82856,7 +83169,7 @@ var init_server3 = __esm({
     init_e2e_csrf();
     init_logger();
     HOST = "127.0.0.1";
-    __dir = dirname22(fileURLToPath6(import.meta.url));
+    __dir = dirname23(fileURLToPath6(import.meta.url));
     ObservabilityServer = class {
       recorder;
       e2e;
@@ -83108,20 +83421,20 @@ var init_server3 = __esm({
       // handle() fire-and-forgets the async routes, so a rejecting await here
       // would crash the process on an oversized/aborted request (GH #438 review).
       readBody(req) {
-        return new Promise((resolve11) => {
+        return new Promise((resolve12) => {
           let body = "";
           let bytes = 0;
           req.on("data", (chunk) => {
             bytes += chunk.length;
             if (bytes > 65536) {
               req.destroy();
-              resolve11(null);
+              resolve12(null);
               return;
             }
             body += chunk.toString();
           });
-          req.on("end", () => resolve11(body));
-          req.on("error", () => resolve11(null));
+          req.on("end", () => resolve12(body));
+          req.on("error", () => resolve12(null));
         });
       }
       json(res, status, obj) {
@@ -83545,11 +83858,11 @@ import { readFile as readFile2, unlink } from "node:fs/promises";
 import { tmpdir as tmpdir14 } from "node:os";
 import { join as join51 } from "node:path";
 async function probeIdbClient(execFileFn = execFile24) {
-  return new Promise((resolve11) => {
+  return new Promise((resolve12) => {
     execFileFn("idb", ["--help"], { timeout: 3e3 }, (err) => {
       if (!err)
-        return resolve11("ready");
-      resolve11(isEnoent(err) ? "absent" : "broken");
+        return resolve12("ready");
+      resolve12(isEnoent(err) ? "absent" : "broken");
     });
   });
 }
@@ -83558,7 +83871,7 @@ function isEnoent(err) {
 }
 function defaultExecJpeg(cmd, args, signal) {
   const outPath = args[args.length - 1];
-  return new Promise((resolve11, reject) => {
+  return new Promise((resolve12, reject) => {
     execFile24(cmd, args, { maxBuffer: 16 * 1024 * 1024, timeout: 1e4, signal }, (err) => {
       if (err) {
         reject(err);
@@ -83567,7 +83880,7 @@ function defaultExecJpeg(cmd, args, signal) {
       readFile2(outPath).then((buf) => {
         void unlink(outPath).catch(() => {
         });
-        resolve11(buf);
+        resolve12(buf);
       }).catch((readErr) => {
         void unlink(outPath).catch(() => {
         });
@@ -83614,7 +83927,7 @@ var init_sources = __esm({
     SIMCTL_BROKEN_IDB_HINT = "idb is installed but did not respond successfully \u2014 most likely fb-idb 1.1.7 under Python 3.14, which removed the asyncio.get_event_loop() it needs. Reinstall it under a supported interpreter: pipx install --python python3.13 --force fb-idb";
     IDB_HINT = `idb not found \u2014 ${IDB_INSTALL_COMMAND}`;
     FFMPEG_HINT = "ffmpeg not found \u2014 run scripts/ensure-ffmpeg.sh or brew install ffmpeg";
-    sleep5 = (ms) => new Promise((resolve11) => setTimeout(resolve11, ms));
+    sleep5 = (ms) => new Promise((resolve12) => setTimeout(resolve12, ms));
     scheduleAfter = (fn, delayMs) => {
       if (delayMs <= 0)
         setImmediate(fn);
@@ -83770,7 +84083,7 @@ var init_sources = __esm({
       spawnCycle(sink) {
         let cycleDone = false;
         const extractor = new JpegFrameExtractor();
-        const adb = this.spawnFn("adb", [
+        const adb2 = this.spawnFn("adb", [
           "-s",
           this.serial,
           "exec-out",
@@ -83794,14 +84107,14 @@ var init_sources = __esm({
           "mjpeg",
           "pipe:1"
         ]);
-        this.adb = adb;
+        this.adb = adb2;
         this.ffmpeg = ffmpeg;
-        adb.stderr?.resume();
+        adb2.stderr?.resume();
         ffmpeg.stderr?.resume();
         if (ffmpeg.stdin) {
           ffmpeg.stdin.on("error", () => {
           });
-          adb.stdout.pipe(ffmpeg.stdin);
+          adb2.stdout.pipe(ffmpeg.stdin);
         }
         ffmpeg.stdout.on("data", (chunk) => {
           if (!this.active)
@@ -83815,9 +84128,9 @@ var init_sources = __esm({
           if (self === "adb")
             ffmpeg.kill();
           else
-            adb.kill();
+            adb2.kill();
         };
-        adb.on("error", (err) => {
+        adb2.on("error", (err) => {
           if (!this.active || cycleDone)
             return;
           if (isEnoent(err)) {
@@ -83852,7 +84165,7 @@ var init_sources = __esm({
             sink.onExit({ reason: "screen capture pipeline keeps exiting" });
           }
         };
-        adb.on("close", () => onClose("adb"));
+        adb2.on("close", () => onClose("adb"));
         ffmpeg.on("close", () => onClose("ffmpeg"));
       }
       stop() {
@@ -84133,7 +84446,7 @@ var init_target = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/e2e-test.js
-import { dirname as dirname23, join as join52 } from "node:path";
+import { dirname as dirname24, join as join52 } from "node:path";
 import { mkdirSync as mkdirSync21, writeFileSync as writeFileSync20, renameSync as renameSync9, readFileSync as readFileSync36, readdirSync as readdirSync13, existsSync as existsSync37 } from "node:fs";
 import { createHash as createHash21 } from "node:crypto";
 function e2eDirFor(projectRoot) {
@@ -84170,7 +84483,7 @@ function hashBody(s) {
 }
 function freezeLockedTest(projectRoot, source, ctx) {
   const filePath = e2ePathFor(projectRoot, source.id);
-  mkdirSync21(dirname23(filePath), { recursive: true });
+  mkdirSync21(dirname24(filePath), { recursive: true });
   const meta = {
     id: source.id,
     intent: source.intent,
@@ -84290,7 +84603,7 @@ var init_e2e_config = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/e2e/git-info.js
-import { execFileSync as execFileSync16 } from "node:child_process";
+import { execFileSync as execFileSync17 } from "node:child_process";
 function getGitInfo(projectRoot, exec = (cmd, args) => defaultExec3(cmd, ["-C", projectRoot, ...args])) {
   try {
     const sha = exec("git", ["rev-parse", "--short", "HEAD"]).trim() || null;
@@ -84304,7 +84617,7 @@ var defaultExec3;
 var init_git_info = __esm({
   "packages/rn-dev-agent-core/dist/e2e/git-info.js"() {
     "use strict";
-    defaultExec3 = (cmd, args) => execFileSync16(cmd, args, { timeout: 5e3, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    defaultExec3 = (cmd, args) => execFileSync17(cmd, args, { timeout: 5e3, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
   }
 });
 
@@ -84847,15 +85160,15 @@ function preflight(input) {
   return { ok: true };
 }
 function probeMetro(port, timeoutMs = 1500) {
-  return new Promise((resolve11) => {
+  return new Promise((resolve12) => {
     const req = request({ host: "127.0.0.1", port, path: "/status", method: "GET", timeout: timeoutMs }, (res) => {
       res.resume();
-      resolve11((res.statusCode ?? 500) < 500);
+      resolve12((res.statusCode ?? 500) < 500);
     });
-    req.on("error", () => resolve11(false));
+    req.on("error", () => resolve12(false));
     req.on("timeout", () => {
       req.destroy();
-      resolve11(false);
+      resolve12(false);
     });
     req.end();
   });
@@ -84980,7 +85293,7 @@ var init_runner_binding = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/local-authority-probe.js
-import { execFileSync as execFileSync17 } from "node:child_process";
+import { execFileSync as execFileSync18 } from "node:child_process";
 import { createHash as createHash22 } from "node:crypto";
 function identity(value) {
   return createHash22("sha256").update(JSON.stringify(value)).digest("hex");
@@ -85023,7 +85336,7 @@ function createLocalAuthorityProbe(dependencies) {
   const fetchTargets2 = dependencies.fetchTargets ?? (async (port) => JSON.parse(await fetchText(`http://127.0.0.1:${port}/json/list`)));
   const proveTargetDevices = dependencies.proveTargetDevices ?? ((input) => proveTargetDeviceAssociations(input, {
     execute: async (file, args) => ({
-      stdout: execFileSync17(file, args, {
+      stdout: execFileSync18(file, args, {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "ignore"],
         timeout: 5e3
@@ -85323,7 +85636,7 @@ function parseExpoManifestBody(body) {
     return null;
   return manifest;
 }
-function verifyManagedManifestLaunchAsset(response, endpoint) {
+function verifyManagedManifestLaunchAsset(response, endpoint2) {
   if (response.status < 200 || response.status >= 300) {
     throw manifestError(`manifest request returned HTTP ${response.status}`);
   }
@@ -85351,11 +85664,11 @@ function verifyManagedManifestLaunchAsset(response, endpoint) {
   if (parsed.username || parsed.password) {
     throw manifestError("manifest launch asset carries embedded credentials");
   }
-  if (parsed.hostname !== endpoint.host) {
+  if (parsed.hostname !== endpoint2.host) {
     throw manifestError("manifest launch asset does not resolve to the managed host");
   }
   const port = parsed.port === "" ? parsed.protocol === "https:" ? 443 : 80 : Number(parsed.port);
-  if (port !== endpoint.port) {
+  if (port !== endpoint2.port) {
     throw manifestError("manifest launch asset does not resolve to the managed Metro port");
   }
   const runtimeVersion = manifest.runtimeVersion;
@@ -85561,7 +85874,7 @@ function errorMessage(error2) {
 }
 async function connectExactAndroidSessionTarget(input, timeoutMs, dependencies) {
   const now = dependencies.now ?? Date.now;
-  const wait = dependencies.wait ?? ((ms) => new Promise((resolve11) => setTimeout(resolve11, ms)));
+  const wait = dependencies.wait ?? ((ms) => new Promise((resolve12) => setTimeout(resolve12, ms)));
   const setDeadlineTimer = dependencies.setDeadlineTimer ?? ((callback, ms) => setTimeout(callback, ms));
   const clearDeadlineTimer = dependencies.clearDeadlineTimer ?? ((timer) => clearTimeout(timer));
   const deadline = now() + timeoutMs;
@@ -85736,7 +86049,7 @@ async function connectExactSessionTarget(input, timeoutMs, dependencies) {
     return connectExactAndroidSessionTarget(input, timeoutMs, dependencies);
   }
   const now = dependencies.now ?? Date.now;
-  const wait = dependencies.wait ?? ((ms) => new Promise((resolve11) => setTimeout(resolve11, ms)));
+  const wait = dependencies.wait ?? ((ms) => new Promise((resolve12) => setTimeout(resolve12, ms)));
   let exactClient = dependencies.getClient();
   if (exactClient.metroPort !== input.metroPort) {
     await exactClient.disconnect();
@@ -85833,7 +86146,7 @@ import { readFileSync as readFileSync41, rmSync as rmSync11 } from "node:fs";
 import { execFile as execFile25 } from "node:child_process";
 import { promisify as promisify27 } from "node:util";
 import { fileURLToPath as fileURLToPath7 } from "node:url";
-import { dirname as dirname24, join as join57 } from "node:path";
+import { dirname as dirname25, join as join57 } from "node:path";
 function trackedTool(name, desc, schema, handler) {
   registeredToolNames.push(name);
   const base = instrumentTool(name, authorityGate.wrap(name, arbiterWrap(name, handler)));
@@ -86404,6 +86717,7 @@ var init_index = __esm({
     init_e2e_config();
     init_runtime();
     init_session();
+    init_android_metro_reverse();
     init_runner_binding();
     init_authority_gate();
     init_local_authority_probe();
@@ -86417,7 +86731,7 @@ var init_index = __esm({
     init_source_identity();
     init_managed_metro();
     init_process_cleanup();
-    pkgPath = join57(dirname24(fileURLToPath7(import.meta.url)), "..", "package.json");
+    pkgPath = join57(dirname25(fileURLToPath7(import.meta.url)), "..", "package.json");
     pkgVersion = JSON.parse(readFileSync41(pkgPath, "utf8")).version;
     lockfile = null;
     diagnosticContractProbe = process.argv.includes("--diagnostic-contract-probe");
@@ -86846,7 +87160,7 @@ var init_index = __esm({
         return null;
       if (sessionId && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(sessionId))
         return null;
-      const secretPath = sessionId ? join57(dirname24(dirname24(currentSecretPath)), sessionId, "secret.json") : currentSecretPath;
+      const secretPath = sessionId ? join57(dirname25(dirname25(currentSecretPath)), sessionId, "secret.json") : currentSecretPath;
       return readJsonStateFile(secretPath)?.signerCapability ?? null;
     };
     spawningSupervisorPid = process.ppid;
@@ -86869,7 +87183,9 @@ var init_index = __esm({
       getSignerCapability: getSessionSignerCapability,
       pinDevClient: pinSessionDevClient,
       onBundleInvalidated: () => getClient().clearAuthoritativeSessionPolicy(),
-      requestWorkerRecycle
+      requestWorkerRecycle,
+      ensureAndroidMetroReverse,
+      removeAndroidMetroReverse
     });
     disconnectClientHandler = createDisconnectHandler(getClient, setClient, createClient);
     connectBoundSession = createRegisteredConnectHandler(authorityRuntime, sessionHandler);
@@ -87206,7 +87522,7 @@ var init_index = __esm({
           const probe = await client2.evaluate('typeof globalThis.__RN_AGENT !== "undefined" && globalThis.__RN_AGENT.isReady() === true').catch(() => ({ value: false }));
           if (probe.value === true)
             return true;
-          await new Promise((resolve11) => setTimeout(resolve11, 250));
+          await new Promise((resolve12) => setTimeout(resolve12, 250));
         }
         return false;
       }
@@ -87882,7 +88198,7 @@ init_parent_watch();
 import { randomUUID as randomUUID11 } from "node:crypto";
 import { spawn as spawn10 } from "node:child_process";
 import { readFileSync as readFileSync42 } from "node:fs";
-import { dirname as dirname25, join as join58 } from "node:path";
+import { dirname as dirname26, join as join58 } from "node:path";
 import { fileURLToPath as fileURLToPath8 } from "node:url";
 
 // packages/rn-dev-agent-core/dist/lifecycle/stdio-frames.js
@@ -87912,6 +88228,7 @@ init_source_identity();
 // packages/rn-dev-agent-core/dist/session/startup-cleanup.js
 init_secure_state_file();
 init_managed_metro();
+init_android_metro_reverse();
 init_package_integration();
 init_process_cleanup();
 init_registry();
@@ -87922,6 +88239,7 @@ function startupCleanupFailureMessage() {
   return "rn-dev-agent startup cleanup failed: STARTUP_CLEANUP_FAILED\n";
 }
 var EXECUTION_ORDER = [
+  "androidMetroReverse",
   "recorder",
   "runner",
   "observe",
@@ -87979,7 +88297,9 @@ async function completeObligations(registry2, prior, dependencies) {
     const entry = registry2.verifyStartupOwnerObligation(prior, resource);
     if (!entry || typeof entry.completedAt === "number")
       continue;
-    if (resource === "recorder") {
+    if (resource === "androidMetroReverse") {
+      (dependencies.removeAndroidMetroReverse ?? removeAndroidMetroReverse)(entry);
+    } else if (resource === "recorder") {
       await (dependencies.stopBoundRecorder ?? stopBoundRecorder)(entry);
     } else if (resource === "runner") {
       await (dependencies.stopBoundRunner ?? stopBoundRunner)(entry);
@@ -88060,7 +88380,7 @@ var PUBLIC_REFUSAL_REASONS = /* @__PURE__ */ new Set([
   "the same-root owner identity could not be proven, so it is treated as live",
   "expired lease owner identity could not be proven",
   "the startup cleanup owner no longer matches the proven claim epoch",
-  ...["recorder", "runner", "observe", "metro"].flatMap((resource) => [
+  ...["androidMetroReverse", "recorder", "runner", "observe", "metro"].flatMap((resource) => [
     `${resource} cleanup has not been durably completed`,
     `${resource} cleanup was not durably requested`
   ])
@@ -88094,8 +88414,10 @@ function refusalOf(error2) {
 init_process_cleanup();
 init_registry();
 init_managed_metro();
+init_android_metro_reverse();
 init_state_root();
 import { createHash as createHash11, randomBytes as randomBytes6, randomUUID as randomUUID6 } from "node:crypto";
+import { dirname as dirname10 } from "node:path";
 var RELEASABLE_SESSION_STATES = /* @__PURE__ */ new Set([
   "active",
   "source_bound",
@@ -88259,6 +88581,7 @@ function createSupervisorAuthority(input, dependencies = {}) {
       RN_DEV_AGENT_SESSION_ID: session2.sessionId,
       RN_DEV_AGENT_CLAIM_EPOCH: String(session2.claimEpoch),
       RN_DEV_AGENT_REGISTRY_PATH: layout.registry,
+      RN_DEV_AGENT_STATE_DIR: dirname10(layout.root),
       RN_DEV_AGENT_SESSION_SECRET_PATH: secretPath,
       RN_DEV_AGENT_SESSION_RUNTIME_ROOT: sessionRuntimeDirectory(layout, sessionId),
       RN_DEV_AGENT_WORKER_INSTANCE: workerInstance,
@@ -88280,6 +88603,10 @@ function createSupervisorAuthority(input, dependencies = {}) {
           status = registry2.beginSessionClose(session2);
         }
         if (status) {
+          const androidMetroReverse = status.bindings.androidMetroReverse;
+          if (androidMetroReverse) {
+            (dependencies.removeAndroidMetroReverse ?? removeAndroidMetroReverse)(androidMetroReverse);
+          }
           const recorder2 = status.bindings.recorder;
           if (recorder2) {
             const claimKey = `${String(recorder2.platform)}:${String(recorder2.deviceId)}`;
@@ -88325,7 +88652,7 @@ function createSupervisorAuthority(input, dependencies = {}) {
 }
 
 // packages/rn-dev-agent-core/dist/supervisor-args.js
-import { dirname as dirname10, join as join22 } from "node:path";
+import { dirname as dirname11, join as join22 } from "node:path";
 function sqliteFlagForNode(version2) {
   const v = version2 ?? process.versions.node;
   const [majorStr, minorStr] = v.split(".");
@@ -88351,7 +88678,7 @@ function workerSpawnArgs(workerPath, sqliteWarningFilterPath2, version2, forward
     "--import",
     sqliteWarningFilterPath2,
     "--import",
-    join22(dirname10(sqliteWarningFilterPath2), "startup-integrity-register.js"),
+    join22(dirname11(sqliteWarningFilterPath2), "startup-integrity-register.js"),
     workerPath,
     "--no-lock",
     ...diagnosticArgs
@@ -88368,7 +88695,7 @@ function supervisorRelaunchArgs(supervisorPath, sqliteWarningFilterPath2, versio
 }
 
 // packages/rn-dev-agent-core/dist/supervisor.js
-var here = dirname25(fileURLToPath8(import.meta.url));
+var here = dirname26(fileURLToPath8(import.meta.url));
 var sqliteWarningFilterPath = join58(here, "sqlite-warning-filter.js");
 var unsupportedNode = unsupportedNodeVersionMessage();
 if (unsupportedNode) {
@@ -88385,7 +88712,7 @@ if (supervisorFlag.length > 0 && !process.execArgv.includes("--experimental-sqli
   for (const signal of ["SIGTERM", "SIGINT", "SIGHUP", "SIGUSR2"]) {
     process.on(signal, () => child.kill(signal));
   }
-  const outcome = await new Promise((resolve11) => child.on("exit", (code, signal) => resolve11({ code, signal })));
+  const outcome = await new Promise((resolve12) => child.on("exit", (code, signal) => resolve12({ code, signal })));
   if (outcome.signal) {
     process.removeAllListeners(outcome.signal);
     process.kill(process.pid, outcome.signal);

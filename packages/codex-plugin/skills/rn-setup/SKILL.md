@@ -67,7 +67,7 @@ Read/report without mutation:
 | Metro | `rn_session` and passive `cdp_status` reads | integrated package script |
 | CDP/app | prior supplied observation only | active `check-env` later |
 | ffmpeg/idb | version/help and install-state reads | exact install commands |
-| physical device | prerequisite file/tool reads | signing/pairing guidance |
+| physical device | list-only readiness plus pre-existing Android reverse-forward reads | signing/pairing guidance; session authority is the sole reverse-forward writer |
 | Vercel rules | packaged rules index/checker presence | refresh package if missing |
 | auto-connect | environment/project config read | informational only |
 
@@ -77,7 +77,8 @@ then defer declaration requirements to the
 [session-authority contract](https://lykhoyda.github.io/rn-dev-agent/session-authority/#what-each-source-identity-proves).
 
 Doctor never runs a runner build, installer, update, MCP app call, Observe
-control, or cleanup. It prints commands for later user confirmation.
+control, cleanup, or `adb reverse` mutation. It reports pre-existing foreign
+forwards truthfully and prints commands for later user confirmation.
 
 ## Setup routing
 

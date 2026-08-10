@@ -1267,6 +1267,129 @@ test('Android forced pin keeps prior authority until one atomic staged-client co
   ]);
 });
 
+test('physical Android pin persists exact Metro reverse authority before app launch', async () => {
+  const calls: string[] = [];
+  const reverse = {
+    platform: 'android' as const,
+    deviceId: 'USB-EXACT',
+    metroPort: 8397,
+    local: 'tcp:8397',
+    remote: 'tcp:8397',
+  };
+  const status = {
+    sessionId: 'session-physical',
+    claimEpoch: 1,
+    authorityVersion: 7,
+    state: 'device_bound',
+    source: { kind: 'git', appRoot: '/project' },
+    bindings: {
+      metroPort: 8397,
+      install: { artifactDigest: 'install' },
+      metro: { instanceId: 'metro-physical' },
+      device: { platform: 'android', deviceId: 'USB-EXACT', appId: 'dev.example' },
+      androidMetroReverse: null as typeof reverse | null,
+      bundle: null as Record<string, unknown> | null,
+    },
+  };
+  const bundle = {
+    sessionId: 'session-physical',
+    metroInstanceId: 'metro-physical',
+    worktreeKey: 'worktree-a',
+    appId: 'dev.example',
+    platform: 'android' as const,
+    buildGeneration: 1,
+    deviceId: 'USB-EXACT',
+    metroPort: 8397,
+    launchMethod: 'url' as const,
+    targetId: 'target-physical',
+    connectionGeneration: 1,
+    authorityScope: 'initial-bundle' as const,
+    sourceFidelity: 'not-proven' as const,
+  };
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: {
+          getSessionStatus: () => status,
+          updateBindings: (_session, update) => {
+            if ('androidMetroReverse' in update.bindings) {
+              assert.equal(update.expectedAuthorityVersion, 7);
+              status.bindings.androidMetroReverse = update.bindings.androidMetroReverse;
+              status.authorityVersion = 8;
+              calls.push('persist-reverse');
+              return;
+            }
+            assert.equal(update.expectedAuthorityVersion, 8);
+            assert.equal(status.bindings.androidMetroReverse, reverse);
+            status.bindings.bundle = bundle;
+            calls.push('commit-bundle');
+            update.onCommitted();
+          },
+        },
+        session: { sessionId: 'session-physical', claimEpoch: 1 },
+      }),
+    },
+    {
+      ensureAndroidMetroReverse: (input) => {
+        assert.deepEqual(input, { deviceId: 'USB-EXACT', metroPort: 8397, binding: null });
+        calls.push('establish-reverse');
+        return { binding: reverse, created: true, physical: true };
+      },
+      removeAndroidMetroReverse: () => calls.push('cleanup-reverse'),
+      pinDevClient: async (_status, _options, commitBundle) => {
+        assert.equal(status.bindings.androidMetroReverse, reverse);
+        calls.push('launch-app');
+        commitBundle(bundle, { assertActive: () => {}, publish: () => {} });
+        return bundle;
+      },
+    },
+  );
+
+  const result = await handler({ action: 'pin_dev_client' });
+  assert.equal(result.isError, undefined, result.content[0]!.text);
+  assert.deepEqual(calls, ['establish-reverse', 'persist-reverse', 'launch-app', 'commit-bundle']);
+});
+
+test('physical Android Metro setup failure is truthful and prevents app launch', async () => {
+  const status = {
+    sessionId: 'session-physical',
+    authorityVersion: 1,
+    state: 'device_bound',
+    source: { kind: 'git', appRoot: '/project' },
+    bindings: {
+      metroPort: 8397,
+      install: {},
+      metro: { instanceId: 'metro' },
+      device: { platform: 'android', deviceId: 'USB-EXACT', appId: 'dev.example' },
+    },
+  };
+  let launched = false;
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: { getSessionStatus: () => status },
+        session: { sessionId: 'session-physical', claimEpoch: 1 },
+      }),
+    },
+    {
+      ensureAndroidMetroReverse: () => {
+        throw new Error('PHYSICAL_ANDROID_METRO_UNREACHABLE: adb could not configure exact device');
+      },
+      pinDevClient: async () => {
+        launched = true;
+        throw new Error('must not launch');
+      },
+    },
+  );
+  const result = await handler({ action: 'pin_dev_client' });
+  assert.equal(result.isError, true);
+  assert.match(result.content[0]!.text, /PHYSICAL_ANDROID_METRO_UNREACHABLE/);
+  assert.doesNotMatch(result.content[0]!.text, /CDP_TARGET_AUTHORITY_MISMATCH/);
+  assert.equal(launched, false);
+});
+
 test('Android post-commit deadline expiry restores prior bundle authority', async () => {
   const calls: string[] = [];
   const priorBundle = { targetId: 'target-old', connectionGeneration: 1 };
@@ -1433,6 +1556,50 @@ test('Android post-commit hardening failure restores prior bundle authority', as
   assert.equal(result.isError, true);
   assert.deepEqual(status.bindings.bundle, priorBundle);
   assert.deepEqual(calls, ['deadline-check', 'candidate-commit', 'compensating-commit']);
+});
+
+test('session release removes only its persisted physical Android Metro reverse before claims', async () => {
+  const calls: string[] = [];
+  const reverse = {
+    platform: 'android' as const,
+    deviceId: 'USB-EXACT',
+    metroPort: 8397,
+    local: 'tcp:8397',
+    remote: 'tcp:8397',
+  };
+  const status = {
+    sessionId: 'session-physical',
+    authorityVersion: 3,
+    bindings: { androidMetroReverse: reverse as typeof reverse | null },
+  };
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: {
+          getSessionStatus: () => status,
+          updateBindings: (_session, update) => {
+            assert.equal(update.expectedAuthorityVersion, 3);
+            assert.deepEqual(update.bindings, { androidMetroReverse: null });
+            status.bindings.androidMetroReverse = null;
+            status.authorityVersion = 4;
+            calls.push('clear-reverse-binding');
+          },
+          releaseSession: () => calls.push('release'),
+        },
+        session: { sessionId: 'session-physical', claimEpoch: 1 },
+      }),
+    },
+    {
+      removeAndroidMetroReverse: (binding) => {
+        assert.equal(binding, reverse);
+        calls.push('remove-exact-reverse');
+      },
+    },
+  );
+  const result = await handler({ action: 'release' });
+  assert.equal(result.isError, undefined, result.content[0]!.text);
+  assert.deepEqual(calls, ['remove-exact-reverse', 'clear-reverse-binding', 'release']);
 });
 
 test('session release stops its managed Metro before releasing claims', async () => {

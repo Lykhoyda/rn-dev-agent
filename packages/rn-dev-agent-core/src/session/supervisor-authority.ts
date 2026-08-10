@@ -1,10 +1,15 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { dirname } from 'node:path';
 import type { ProcessBirth } from './process-birth.js';
 import { stopBoundObserve, stopBoundRecorder, stopBoundRunner } from './process-cleanup.js';
 import type { OwnerStatus, SessionRef, SessionRegistry } from './registry.js';
 import { openSessionRegistry } from './registry.js';
 import type { SourceIdentity } from './source-identity.js';
 import { stopManagedMetro, type ManagedMetroBinding } from './managed-metro.js';
+import {
+  removeAndroidMetroReverse,
+  type AndroidMetroReverseBinding,
+} from './android-metro-reverse.js';
 import {
   createAuthorityStateLayout,
   sessionRuntimeDirectory,
@@ -94,6 +99,7 @@ export function createSupervisorAuthority(
     stopBoundRunner?: typeof stopBoundRunner;
     stopBoundRecorder?: typeof stopBoundRecorder;
     stopBoundObserve?: typeof stopBoundObserve;
+    removeAndroidMetroReverse?: typeof removeAndroidMetroReverse;
   } = {},
 ): SupervisorAuthority {
   if (!input.supervisorBirth) {
@@ -244,6 +250,7 @@ export function createSupervisorAuthority(
       RN_DEV_AGENT_SESSION_ID: session.sessionId,
       RN_DEV_AGENT_CLAIM_EPOCH: String(session.claimEpoch),
       RN_DEV_AGENT_REGISTRY_PATH: layout.registry,
+      RN_DEV_AGENT_STATE_DIR: dirname(layout.root),
       RN_DEV_AGENT_SESSION_SECRET_PATH: secretPath,
       RN_DEV_AGENT_SESSION_RUNTIME_ROOT: sessionRuntimeDirectory(layout, sessionId),
       RN_DEV_AGENT_WORKER_INSTANCE: workerInstance,
@@ -267,6 +274,15 @@ export function createSupervisorAuthority(
           status = registry.beginSessionClose(session);
         }
         if (status) {
+          const androidMetroReverse = status.bindings.androidMetroReverse as
+            | AndroidMetroReverseBinding
+            | null
+            | undefined;
+          if (androidMetroReverse) {
+            (dependencies.removeAndroidMetroReverse ?? removeAndroidMetroReverse)(
+              androidMetroReverse,
+            );
+          }
           const recorder = status.bindings.recorder as Record<string, unknown> | null | undefined;
           if (recorder) {
             const claimKey = `${String(recorder.platform)}:${String(recorder.deviceId)}`;

@@ -71,6 +71,100 @@ test('package-local CLI resolves one exact worktree session for literal build sc
   });
 });
 
+test('package-local CLI resolves the exact non-default RN_DEV_AGENT_STATE_DIR registry', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-cli-non-default-state-'));
+  const appRoot = join(root, 'app');
+  const stateHome = join(root, 'authority-home');
+  try {
+    execFileSync('git', ['init', '-q', appRoot]);
+    execFileSync('git', ['-C', appRoot, 'config', 'user.email', 'test@example.invalid']);
+    execFileSync('git', ['-C', appRoot, 'config', 'user.name', 'Test']);
+    writeFileSync(join(appRoot, 'package.json'), '{}\n');
+    execFileSync('git', ['-C', appRoot, 'add', 'package.json']);
+    execFileSync('git', ['-C', appRoot, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'fixture']);
+    const source = resolveSourceIdentity(appRoot);
+    const layout = createAuthorityStateLayout(stateHome);
+    const registry = openSessionRegistry(layout.registry, { ownerStatus: () => 'match' });
+    registry.createSession({
+      sessionId: 'session-explicit-state',
+      sourceKey: source.sourceKey,
+      worktreeKey: source.worktreeKey,
+      appRootKey: source.appRootKey,
+      supervisor: { pid: process.pid, token: supervisorBirthToken },
+      source: { ...source },
+      bindings: { metroPort: 8397 },
+    });
+    registry.close();
+
+    const result = spawnSync(process.execPath, [cliPath, 'status'], {
+      cwd: appRoot,
+      env: {
+        ...process.env,
+        RN_DEV_AGENT_STATE_DIR: stateHome,
+        XDG_STATE_HOME: join(root, 'wrong-default-home'),
+      },
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).metroPort, 8397);
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test('package-local CLI refuses a mistyped explicit state home without creating a registry', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-cli-unknown-state-'));
+  const appRoot = join(root, 'app');
+  const mistyped = join(root, 'authority-home-typo');
+  try {
+    execFileSync('git', ['init', '-q', appRoot]);
+    writeFileSync(join(appRoot, 'package.json'), '{}\n');
+    const result = spawnSync(process.execPath, [cliPath, 'status'], {
+      cwd: appRoot,
+      env: { ...process.env, RN_DEV_AGENT_STATE_DIR: mistyped },
+      encoding: 'utf8',
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(
+      result.stderr,
+      /AUTHORITY_STATE_HOME_UNKNOWN.*refusing to initialize an empty registry/,
+    );
+    assert.equal(existsSync(mistyped), false);
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test('package-local CLI names an existing registry that has no matching session', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-cli-empty-registry-'));
+  const appRoot = join(root, 'app');
+  const stateHome = join(root, 'authority-home');
+  try {
+    execFileSync('git', ['init', '-q', appRoot]);
+    execFileSync('git', ['-C', appRoot, 'config', 'user.email', 'test@example.invalid']);
+    execFileSync('git', ['-C', appRoot, 'config', 'user.name', 'Test']);
+    writeFileSync(join(appRoot, 'package.json'), '{}\n');
+    execFileSync('git', ['-C', appRoot, 'add', 'package.json']);
+    execFileSync('git', ['-C', appRoot, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'fixture']);
+    const layout = createAuthorityStateLayout(stateHome);
+    const registry = openSessionRegistry(layout.registry, { ownerStatus: () => 'match' });
+    registry.close();
+    const result = spawnSync(process.execPath, [cliPath, 'status'], {
+      cwd: appRoot,
+      env: { ...process.env, RN_DEV_AGENT_STATE_DIR: stateHome },
+      encoding: 'utf8',
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(
+      result.stderr,
+      /no live session in authority registry .*registry\.sqlite3 matches/,
+    );
+    assert.doesNotMatch(result.stderr, /no live session exists$/);
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
 test('package-local CLI status persists lost managed Metro reconciliation', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-cli-metro-status-'));
   const appRoot = join(root, 'app');
@@ -284,7 +378,10 @@ test('package-local CLI does not discover a sibling app session in the same work
   rmSync(root, { force: true, recursive: true });
 
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /no live session matches this canonical worktree and app root/);
+  assert.match(
+    result.stderr,
+    /no live session in authority registry .* matches this canonical worktree and app root/,
+  );
 });
 
 test('package-local CLI rejects an explicit session from another worktree', () => {

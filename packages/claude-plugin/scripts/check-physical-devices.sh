@@ -1,19 +1,18 @@
 #!/usr/bin/env bash
 # M9 / Phase 111 (D668): physical-device prerequisite probe.
 #
-# Detects USB-connected physical devices and applies (or suggests) the
-# configuration metro-mcp flags as top-3 troubleshooting issues:
-#   - Physical Android: `adb reverse tcp:8081 tcp:8081` so the device can
-#     reach Metro running on the Mac.
+# Detects USB-connected physical devices and reports configuration readiness:
+#   - Physical Android: exact authorized serial plus any pre-existing reverse
+#     forwards. Session authority is the sole writer of its exact Metro forward.
 #   - Physical iOS: `idb-companion` installed (required for idb-based tools).
 #
-# No-op when only simulators/emulators are running. Exits 0 in all cases —
-# this is an advisory probe, not a gate. Output goes to stdout for the
-# /setup skill to parse/summarize.
+# This script is read-only. It is a no-op when only simulators/emulators are
+# running and exits 0 in all cases — an advisory probe, not a gate. Output goes
+# to stdout for the /setup skill to parse/summarize.
 #
 # WiFi debugging is not supported automatically — users must connect by
-# USB. We do treat `adb connect`'d devices as physical for adb reverse
-# purposes since the command works the same across transports.
+# USB. We still report `adb connect`'d devices as physical, but never mutate
+# their transport or reverse-forward state.
 
 set -uo pipefail
 
@@ -27,7 +26,7 @@ echo "Host OS: $HOST_OS"
 # --- Physical Android ---
 # `adb devices` lists every transport-available device. Emulator entries
 # start with "emulator-"; physical USB + `adb connect`'d devices do not.
-# Filter out emulators so we only operate on real hardware.
+# Filter out emulators so we only inspect real hardware.
 PHYSICAL_ANDROID=""
 if command -v adb >/dev/null 2>&1; then
   PHYSICAL_ANDROID=$(adb devices 2>/dev/null \
@@ -37,14 +36,20 @@ fi
 if [ -n "${PHYSICAL_ANDROID:-}" ]; then
   echo "Physical Android detected: $(echo "$PHYSICAL_ANDROID" | tr '\n' ' ')"
   for dev in $PHYSICAL_ANDROID; do
-    if adb -s "$dev" reverse tcp:8081 tcp:8081 >/dev/null 2>&1; then
-      echo "  [OK] adb reverse tcp:8081 tcp:8081 on $dev"
+    echo "  [READY] authorized adb serial $dev — session authority manages the exact Metro reverse"
+    if EXISTING_REVERSE=$(adb -s "$dev" reverse --list 2>/dev/null); then
+      if [ -n "$EXISTING_REVERSE" ]; then
+        echo "  [WARN] pre-existing adb reverse forwards on $dev (a matching session port is foreign and will be refused):"
+        echo "$EXISTING_REVERSE" | sed 's/^/    /'
+      else
+        echo "  [OK] no pre-existing adb reverse forwards on $dev"
+      fi
     else
-      echo "  [FAIL] adb reverse on $dev — device may not be authorized (check for USB-debug dialog on phone)"
+      echo "  [WARN] could not inspect existing adb reverse forwards on $dev — the session will verify or refuse exact reachability"
     fi
   done
 else
-  echo "No physical Android devices detected (skipping adb reverse)"
+  echo "No physical Android devices detected (skipping physical readiness check)"
 fi
 
 # --- Physical iOS ---

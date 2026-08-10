@@ -3,6 +3,10 @@ import { join } from 'node:path';
 import { readJsonStateFile } from '../util/secure-state-file.js';
 import { stopManagedMetro, type ManagedMetroBinding } from './managed-metro.js';
 import {
+  removeAndroidMetroReverse,
+  type AndroidMetroReverseBinding,
+} from './android-metro-reverse.js';
+import {
   readPackageIntegrationInputs,
   restorePackageIntegrationFiles,
 } from './package-integration.js';
@@ -33,6 +37,7 @@ export interface StartupCleanupOutcome {
 }
 
 export interface StartupCleanupDependencies {
+  removeAndroidMetroReverse?: (binding: AndroidMetroReverseBinding) => void;
   stopBoundRecorder?: (binding: Record<string, unknown>) => Promise<unknown>;
   stopBoundRunner?: (binding: Record<string, unknown>) => Promise<unknown>;
   stopBoundObserve?: (binding: Record<string, unknown>) => Promise<unknown>;
@@ -56,6 +61,7 @@ export function startupCleanupFailureMessage(): string {
 }
 
 const EXECUTION_ORDER: readonly StartupCleanupResource[] = [
+  'androidMetroReverse',
   'recorder',
   'runner',
   'observe',
@@ -137,7 +143,11 @@ async function completeObligations(
   for (const resource of EXECUTION_ORDER) {
     const entry = registry.verifyStartupOwnerObligation(prior, resource);
     if (!entry || typeof entry.completedAt === 'number') continue;
-    if (resource === 'recorder') {
+    if (resource === 'androidMetroReverse') {
+      (dependencies.removeAndroidMetroReverse ?? removeAndroidMetroReverse)(
+        entry as unknown as AndroidMetroReverseBinding,
+      );
+    } else if (resource === 'recorder') {
       await (dependencies.stopBoundRecorder ?? stopBoundRecorder)(entry);
     } else if (resource === 'runner') {
       await (dependencies.stopBoundRunner ?? stopBoundRunner)(entry);
@@ -270,10 +280,12 @@ const PUBLIC_REFUSAL_REASONS: ReadonlySet<string> = new Set([
   'the same-root owner identity could not be proven, so it is treated as live',
   'expired lease owner identity could not be proven',
   'the startup cleanup owner no longer matches the proven claim epoch',
-  ...(['recorder', 'runner', 'observe', 'metro'] as const).flatMap((resource) => [
-    `${resource} cleanup has not been durably completed`,
-    `${resource} cleanup was not durably requested`,
-  ]),
+  ...(['androidMetroReverse', 'recorder', 'runner', 'observe', 'metro'] as const).flatMap(
+    (resource) => [
+      `${resource} cleanup has not been durably completed`,
+      `${resource} cleanup was not durably requested`,
+    ],
+  ),
 ]);
 
 const GENERIC_REFUSAL_REMEDY =

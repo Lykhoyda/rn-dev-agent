@@ -3164,13 +3164,19 @@ function parseSupportedScript(script, platform) {
     });
     return command;
 }
-export function previewPackageIntegration(packageJson, existing, sessionCli) {
+export function previewPackageIntegration(packageJson, existing, sessionCli, stateDir) {
     if (existing &&
         packageJson.scripts?.ios === SENTINELS.ios &&
         packageJson.scripts?.android === SENTINELS.android) {
         return {
             packageJson,
-            manifest: sessionCli ? { ...existing, sessionCli: resolve(sessionCli) } : existing,
+            manifest: sessionCli || stateDir
+                ? {
+                    ...existing,
+                    ...(sessionCli ? { sessionCli: resolve(sessionCli) } : {}),
+                    ...(stateDir ? { stateDir: resolve(stateDir) } : {}),
+                }
+                : existing,
         };
     }
     const ios = packageJson.scripts?.ios;
@@ -3182,6 +3188,7 @@ export function previewPackageIntegration(packageJson, existing, sessionCli) {
         version: 1,
         adapter: ADAPTER,
         ...(sessionCli ? { sessionCli: resolve(sessionCli) } : {}),
+        ...(stateDir ? { stateDir: resolve(stateDir) } : {}),
         originalScripts: {
             ios: parseSupportedScript(ios, 'ios'),
             android: parseSupportedScript(android, 'android'),
@@ -3231,6 +3238,13 @@ if (platform !== 'ios' && platform !== 'android') {
 }
 const manifestPath = path.join(process.cwd(), '.rn-agent', 'integration', 'rn-session-integration.json');
 const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+if (manifest.stateDir !== undefined && (typeof manifest.stateDir !== 'string' || !path.isAbsolute(manifest.stateDir))) {
+  process.stderr.write('AUTHORITY_STATE_HOME_UNKNOWN: integration manifest state home is invalid\n');
+  process.exit(2);
+}
+const authorityEnvironment = manifest.stateDir === undefined
+  ? process.env
+  : { ...process.env, RN_DEV_AGENT_STATE_DIR: manifest.stateDir };
 const original = manifest.originalScripts && manifest.originalScripts[platform];
 if (!Array.isArray(original) || original.length === 0 || original.some((part) => typeof part !== 'string')) {
   process.stderr.write('SESSION_BUILD_COMMAND_UNSUPPORTED: integration manifest is invalid\n');
@@ -3253,9 +3267,9 @@ function abortPendingBuild() {
   const abort = spawnSync(process.execPath, [...sqliteFlag, sessionCli, 'abort-build', platform, buildCapability.buildToken], {
     cwd: process.cwd(),
     env: session && typeof session.sessionId === 'string' ? {
-      ...process.env,
+      ...authorityEnvironment,
       RN_DEV_AGENT_SESSION_ID: session.sessionId,
-    } : process.env,
+    } : authorityEnvironment,
     encoding: 'utf8',
     timeout: SESSION_CLI_TIMEOUT_MS,
     killSignal: 'SIGKILL',
@@ -3347,7 +3361,7 @@ function resolveExpoAndroidDevice(deviceId) {
   const resolved = spawnSync(process.execPath, [...sqliteFlag, sessionCli, 'resolve-expo-android-device', deviceId], {
     cwd: process.cwd(),
     env: {
-      ...process.env,
+      ...authorityEnvironment,
       RN_DEV_AGENT_SESSION_ID: session.sessionId,
     },
     encoding: 'utf8',
@@ -3380,11 +3394,22 @@ function removeManagedPortFlag(value) {
     command.splice(index, separator >= 0 ? 1 : 2);
   }
 }
+function authorityBoundReverseTunnel(binding) {
+  const reverse = binding.androidMetroReverse;
+  if (!reverse || typeof reverse !== 'object') return false;
+  const exact = 'tcp:' + binding.metroPort;
+  return reverse.platform === 'android'
+    && reverse.deviceId === binding.deviceId
+    && reverse.metroPort === binding.metroPort
+    && reverse.local === exact
+    && reverse.remote === exact;
+}
 function managedMetroProxyUrl(binding) {
   if (binding.platform === 'ios') return 'http://127.0.0.1:' + binding.metroPort;
   if (/^emulator-\d+$/.test(binding.deviceId)) return 'http://10.0.2.2:' + binding.metroPort;
   if (typeof binding.devClientUrl !== 'string') {
-    failBuild(2, 'DEV_CLIENT_ENDPOINT_NOT_FOUND: physical Android session requires an exact Dev Client URL');
+    if (authorityBoundReverseTunnel(binding)) return 'http://127.0.0.1:' + binding.metroPort;
+    failBuild(2, 'DEV_CLIENT_ENDPOINT_NOT_FOUND: physical Android session requires an exact Dev Client URL or a proven adb reverse tunnel to the authority-bound Metro port');
   }
   let metroUrl = null;
   try {
@@ -3428,7 +3453,7 @@ function managedMetroProxyUrl(binding) {
     buildCapability = { buildToken: randomUUID() };
     let probe = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'prepare-build', platform, buildCapability.buildToken, buildKind], {
       cwd: process.cwd(),
-      env: process.env,
+      env: authorityEnvironment,
       encoding: 'utf8',
       timeout: SESSION_CLI_TIMEOUT_MS,
       killSignal: 'SIGKILL',
@@ -3437,7 +3462,7 @@ function managedMetroProxyUrl(binding) {
     if (probe.status !== 0 && String(probe.stderr).includes('live Metro binding')) {
       const metro = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'ensure-metro'], {
         cwd: process.cwd(),
-        env: process.env,
+        env: authorityEnvironment,
         encoding: 'utf8',
         timeout: SESSION_CLI_TIMEOUT_MS,
         killSignal: 'SIGKILL',
@@ -3449,7 +3474,7 @@ function managedMetroProxyUrl(binding) {
       }
       probe = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'prepare-build', platform, buildCapability.buildToken, buildKind], {
         cwd: process.cwd(),
-        env: process.env,
+        env: authorityEnvironment,
         encoding: 'utf8',
         timeout: SESSION_CLI_TIMEOUT_MS,
         killSignal: 'SIGKILL',
@@ -3464,10 +3489,10 @@ function managedMetroProxyUrl(binding) {
         failBuild(2, 'SESSION_BUILD_IDENTITY_CONFLICT: rn-session returned invalid JSON');
       }
       session = parsed;
-    } else if (String(probe.stderr).includes('no live session matches this canonical worktree')) {
+    } else if (String(probe.stderr).includes('no live session matches this canonical worktree') || String(probe.stderr).includes('no live session in authority registry')) {
       buildCapability = null;
       await drainBuildTerminationSignals();
-      failBuild(2, 'SESSION_AUTHORITY_REQUIRED: package integration is installed but no live session owns this worktree; start a session before building, or restore the original scripts with rn_session(action="restore_integration", confirmed=true)');
+      failBuild(2, 'SESSION_AUTHORITY_REQUIRED: package integration is installed but no live session exists in the configured authority registry for this worktree; start a session in that registry before building, or restore the original scripts with rn_session(action="restore_integration", confirmed=true)');
     } else {
       await drainBuildTerminationSignals();
       failBuild(2, String(probe.stderr).trim() || 'SESSION_AUTHORITY_REQUIRED: rn-session lookup failed');
@@ -3516,13 +3541,13 @@ function managedMetroProxyUrl(binding) {
   const child = spawnSync(command[0], command.slice(1), {
     cwd: process.cwd(),
     env: session ? {
-      ...process.env,
+      ...authorityEnvironment,
       ORG_GRADLE_PROJECT_reactNativeDevServerPort: String(session.metroPort),
       RCT_METRO_PORT: String(session.metroPort),
       RN_DEV_AGENT_SESSION_ID: session.sessionId,
       ...(buildKind === 'expo' && platform === 'android' ? { ANDROID_SERIAL: session.deviceId } : {}),
       ...(expoProxyUrl ? { EXPO_PACKAGER_PROXY_URL: expoProxyUrl } : {}),
-    } : process.env,
+    } : authorityEnvironment,
     stdio: 'inherit',
   });
   await drainBuildTerminationSignals();
@@ -3541,7 +3566,7 @@ function managedMetroProxyUrl(binding) {
   if (session && platform === 'ios' && expoProxyUrl && session.simulator === true) {
     const installed = spawnSync('xcrun', ['simctl', 'get_app_container', session.deviceId, session.appId, 'app'], {
       cwd: process.cwd(),
-      env: process.env,
+      env: authorityEnvironment,
       encoding: 'utf8',
       timeout: 30_000,
     });
@@ -3562,7 +3587,7 @@ function managedMetroProxyUrl(binding) {
       expoProxyUrl,
     ], {
       cwd: process.cwd(),
-      env: process.env,
+      env: authorityEnvironment,
       encoding: 'utf8',
       timeout: 30_000,
     });
@@ -3576,7 +3601,7 @@ function managedMetroProxyUrl(binding) {
     const complete = spawnSync(process.execPath, [...sqliteFlag, sessionCli, 'complete-build', platform, session.buildToken], {
       cwd: process.cwd(),
       env: {
-        ...process.env,
+        ...authorityEnvironment,
         RN_DEV_AGENT_SESSION_ID: session.sessionId,
       },
       encoding: 'utf8',
@@ -3911,7 +3936,7 @@ export function applyPackageIntegration(input, dependencies = {}) {
                     throw error;
             }
         }
-        const preview = previewPackageIntegration(packageJson, existing, input.sessionCli);
+        const preview = previewPackageIntegration(packageJson, existing, input.sessionCli, input.stateDir);
         const nextMetroSource = previewMetroIntegration(metroSnapshot.contents.toString('utf8'));
         preview.manifest.metroConfig = metroConfigPath.slice(appRoot.length + 1);
         dependencies.beforeCommit?.();

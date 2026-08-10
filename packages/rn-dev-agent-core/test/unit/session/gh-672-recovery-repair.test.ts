@@ -525,6 +525,68 @@ test('GH#672: a dead device owner is released without adopting its source or pac
   assert.equal(f.registry.getClaim('device', 'ios:sim-1')?.sessionId, 'live');
 });
 
+test('GH#672: a dead physical Android owner transfers exact reverse cleanup before device release', () => {
+  const f = fixture();
+  const dead = f.create('dead-android-owner', 'worktree-foreign', {
+    metroPort: 8397,
+    observePort: 7400,
+  });
+  f.registry.claimResources(dead, [
+    { type: 'source', key: 'worktree-foreign' },
+    { type: 'metro-port', key: '8397' },
+    { type: 'device', key: 'android:USB-EXACT' },
+  ]);
+  const reverse = {
+    platform: 'android',
+    deviceId: 'USB-EXACT',
+    metroPort: 8397,
+    local: 'tcp:8397',
+    remote: 'tcp:8397',
+  };
+  f.registry.updateBindings(dead, {
+    state: 'device_claimed',
+    bindings: {
+      device: { platform: 'android', deviceId: 'USB-EXACT', appId: 'dev.example' },
+      androidMetroReverse: reverse,
+    },
+  });
+  const live = f.create('live-android', 'worktree-mine', {
+    metroPort: 8248,
+    observePort: 7396,
+  });
+  f.registry.claimResources(live, [
+    { type: 'source', key: 'worktree-mine' },
+    { type: 'metro-port', key: '8248' },
+  ]);
+  f.registry.bindWorker(live, {
+    instanceId: 'live-android-worker',
+    pid: 9100,
+    token: 'live-android-birth',
+  });
+  f.ownerStates.set('dead-android-owner', 'mismatch');
+
+  const offer = f.registry.prepareStaleResourceRelease(live, {
+    platform: 'android',
+    deviceId: 'USB-EXACT',
+  });
+  assert.deepEqual(offer.obligations, ['androidMetroReverse']);
+  const plan = f.registry.beginStaleResourceRelease(live, offer.token, 'live-android-worker');
+  assert.deepEqual(plan.androidMetroReverse, {
+    ...reverse,
+    claimKey: 'android:USB-EXACT',
+    stopRequestedAt: f.now(),
+    completedAt: null,
+  });
+  assert.equal(
+    f.registry.getSessionStatus('dead-android-owner')?.bindings.androidMetroReverse,
+    null,
+  );
+
+  f.registry.completeStaleResourceRelease(live, 'live-android-worker', 'androidMetroReverse');
+  f.registry.finishStaleResourceRelease(live, 'live-android-worker');
+  assert.equal(f.registry.getClaim('device', 'android:USB-EXACT'), null);
+});
+
 test('GH#672: device release refuses a live owner and an unprovable identity', () => {
   const f = deadDeviceOwner();
 

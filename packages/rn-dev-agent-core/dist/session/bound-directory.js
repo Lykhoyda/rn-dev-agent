@@ -9,10 +9,11 @@ const WORKER_READY_TIMEOUT_MS = 30_000;
 // NOTE: bound writes fsync, so a loaded host can stall one round trip for
 // seconds — this budget must only catch a wedged worker, not a slow one.
 const WORKER_OPERATION_TIMEOUT_MS = 30_000;
-// NOTE: same rule for the ancestry monitor thread — it is a liveness fence for a
-// wedged monitor, so it must outlast scheduler starvation on an oversubscribed
-// host while still resolving inside the operation budget above.
+// NOTE: the ancestry fence measures monitor liveness, never barrier duration —
+// a monitor that keeps making progress on an oversubscribed host is slow, not
+// wedged, and the operation budget above already bounds a monitor that stops.
 const ANCESTRY_MONITOR_TIMEOUT_MS = 20_000;
+const ANCESTRY_MONITOR_POLL_MS = 50;
 const BOUND_DIRECTORY_LIFECYCLE_MONITOR = String.raw `
 const fs = require('node:fs');
 const path = require('node:path');
@@ -78,9 +79,15 @@ function invalidate() {
   Atomics.notify(state, 1);
 }
 
+function progress() {
+  Atomics.add(state, 6, 1);
+}
+
 function fail() {
   Atomics.store(state, 2, 1);
   invalidate();
+  Atomics.store(state, 4, Atomics.load(state, 3));
+  Atomics.notify(state, 4);
 }
 
 try {
@@ -116,14 +123,20 @@ try {
   }
   let barrierPending = false;
   const barrier = setInterval(() => {
+    progress();
     const requested = Atomics.load(state, 3);
     if (barrierPending || requested === Atomics.load(state, 4)) return;
     barrierPending = true;
     setImmediate(() => {
+      progress();
       setImmediate(() => {
+        progress();
         setImmediate(() => {
           const captureBaseline = Atomics.load(state, 5) === 1;
-          for (const record of records) record.inspectFence(captureBaseline);
+          for (const record of records) {
+            progress();
+            record.inspectFence(captureBaseline);
+          }
           Atomics.store(state, 4, requested);
           barrierPending = false;
           Atomics.notify(state, 4);
@@ -138,6 +151,31 @@ try {
   fail();
   Atomics.store(state, 0, -1);
   Atomics.notify(state, 0);
+}
+`;
+export const BOUND_DIRECTORY_ANCESTRY_SYNC = String.raw `
+function createAncestrySynchronizer(state, timeoutMs, pollMs, AncestryError, clock) {
+  const now = clock || Date.now;
+  return function synchronize(captureBaseline) {
+    Atomics.store(state, 5, captureBaseline ? 1 : 0);
+    const requested = Atomics.add(state, 3, 1) + 1;
+    Atomics.notify(state, 3);
+    let progress = Atomics.load(state, 6);
+    let deadline = now() + timeoutMs;
+    while (Atomics.load(state, 4) !== requested) {
+      if (Atomics.load(state, 2) !== 0) {
+        throw new AncestryError('bound-directory ancestry monitor failed');
+      }
+      Atomics.wait(state, 4, Atomics.load(state, 4), pollMs);
+      const observed = Atomics.load(state, 6);
+      if (observed !== progress) {
+        progress = observed;
+        deadline = now() + timeoutMs;
+      } else if (now() >= deadline) {
+        throw new AncestryError('bound-directory ancestry monitor synchronization failed');
+      }
+    }
+  };
 }
 `;
 const BOUND_DIRECTORY_WORKER = String.raw `
@@ -187,7 +225,7 @@ const monitoredAncestors =
   agentAncestorIndex === -1
     ? []
     : binding.ancestors.slice(agentAncestorIndex);
-const ancestryState = new Int32Array(new SharedArrayBuffer(6 * 4));
+const ancestryState = new Int32Array(new SharedArrayBuffer(7 * 4));
 if (monitoredAncestors.length > 0) {
   const ancestryMonitor = new Worker(${JSON.stringify(BOUND_DIRECTORY_ANCESTRY_MONITOR)}, {
     eval: true,
@@ -213,26 +251,17 @@ function wait(milliseconds) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
 }
 
+${BOUND_DIRECTORY_ANCESTRY_SYNC}
+const ancestrySynchronizer = createAncestrySynchronizer(
+  ancestryState,
+  ${ANCESTRY_MONITOR_TIMEOUT_MS},
+  ${ANCESTRY_MONITOR_POLL_MS},
+  AncestryError,
+);
+
 function synchronizeAncestryMonitor(captureBaseline = false) {
   if (monitoredAncestors.length === 0) return;
-  Atomics.store(ancestryState, 5, captureBaseline ? 1 : 0);
-  const requested = Atomics.add(ancestryState, 3, 1) + 1;
-  Atomics.notify(ancestryState, 3);
-  const deadline = Date.now() + ${ANCESTRY_MONITOR_TIMEOUT_MS};
-  while (Atomics.load(ancestryState, 4) !== requested) {
-    const remaining = deadline - Date.now();
-    if (
-      remaining <= 0 ||
-      Atomics.wait(
-        ancestryState,
-        4,
-        Atomics.load(ancestryState, 4),
-        remaining,
-      ) === 'timed-out'
-    ) {
-      throw new AncestryError('bound-directory ancestry monitor synchronization failed');
-    }
-  }
+  ancestrySynchronizer(captureBaseline);
 }
 
 function mutateBoundDirectory(mutation) {

@@ -346,7 +346,10 @@ test('supported cleanup chain is reachable and idempotent after a pre-install bu
     // Zero residue: canonical worktree resolution must find no live session after cleanup.
     const feedback = runSessionCli(['feedback-json'], { appRoot, stateHome });
     assert.notEqual(feedback.status, 0);
-    assert.match(feedback.stderr, /no live session matches this canonical worktree and app root/);
+    assert.match(
+      feedback.stderr,
+      /no live session in authority registry .* matches this canonical worktree and app root/,
+    );
   } finally {
     if (previousStateHome === undefined) delete process.env.XDG_STATE_HOME;
     else process.env.XDG_STATE_HOME = previousStateHome;

@@ -4673,7 +4673,7 @@ test('orphaned package integration refuses instead of starting an unmanaged bund
     );
     assert.equal(result.status, 2, output);
     assert.match(output, /SESSION_AUTHORITY_REQUIRED/);
-    assert.match(output, /no live session owns this worktree/);
+    assert.match(output, /no live session exists in the configured authority registry/);
     assert.match(output, /rn_session\(action="restore_integration", confirmed=true\)/);
     assert.equal(
       existsSync(bundlerStartedPath),
