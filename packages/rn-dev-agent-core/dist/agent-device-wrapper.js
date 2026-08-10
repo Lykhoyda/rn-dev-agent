@@ -564,7 +564,18 @@ export function buildRunAndroidArgs(cliArgs, bundleId) {
                 const center = isRefMapFresh() ? refCenter(ref) : null;
                 if (!center)
                     return { command: 'tap', _staleRef: ref, ...withBundle };
-                return { command: 'tap', x: center.x, y: center.y, ...withBundle };
+                const metadata = getCachedMetadata(ref);
+                const includeSystemUi = cliArgs.includes('--include-system-ui');
+                return {
+                    command: 'tap',
+                    x: center.x,
+                    y: center.y,
+                    ...(metadata?.identifier
+                        ? { exactIdentifier: metadata.identifier, exactType: metadata.type }
+                        : {}),
+                    ...(includeSystemUi ? { includeSystemUi: true } : {}),
+                    ...withBundle,
+                };
             }
             const [xS, yS] = positionals;
             const x = Number(xS), y = Number(yS);
@@ -1083,16 +1094,15 @@ export function tapRetryPolicy(cliArgs, builtCommand, x, y, opts) {
     const ref = cliArgs[1];
     const exactTarget = ref?.startsWith('@') ? getFreshRefTarget(ref) : null;
     const keyboardTarget = exactTarget?.snapshotElementType === 'Key' || exactTarget?.snapshotElementType === 'Keyboard';
-    const eligible = !keyboardTarget &&
+    const verificationRequired = !keyboardTarget &&
         RETRYABLE_TAP_COMMANDS.has(builtCommand) &&
-        opts.retryIfNoChange !== false &&
-        selfHealEnabled(process.env) &&
         !cliArgs.includes('--double-tap') &&
         !cliArgs.includes('--count') &&
         !cliArgs.includes('--hold-ms') &&
         x !== undefined &&
         y !== undefined;
-    return { eligible, targetKey: `${builtCommand}@${x},${y}` };
+    const eligible = verificationRequired && opts.retryIfNoChange !== false && selfHealEnabled(process.env);
+    return { eligible, verificationRequired, targetKey: `${builtCommand}@${x},${y}` };
 }
 // Story 14 (#407): detect whether a raw runner ToolResult carries the
 // transport-recovery marker (runIOS/runAndroid attach it on the firstResult
@@ -1110,45 +1120,63 @@ function hasConsumedTapRetryBudget(result) {
         return false;
     }
 }
-function flagNoUiChange(result, targetKey) {
+function unverifiedInteractionResult(observedResult, targetKey, attempts, reason) {
     const distinct = recordNoUiChange(targetKey);
-    return attachMeta(result, {
-        noUiChange: true,
+    let observedMeta = {};
+    try {
+        const envelope = JSON.parse(observedResult.content[0].text);
+        observedMeta = envelope.meta ?? {};
+    }
+    catch {
+        // The typed uncertainty below remains authoritative without optional detail.
+    }
+    return failResult(reason === 'no-ui-change'
+        ? 'The tap was dispatched but produced no observable UI change.'
+        : reason === 'retry-failed'
+            ? 'The tap produced no observable UI change and the bounded retry failed.'
+            : 'The tap was dispatched, but its UI effect could not be observed.', 'INTERACTION_EFFECT_UNVERIFIED', {
+        ...observedMeta,
+        mutation: 'possible',
+        reason,
+        attempts,
         ...(distinct >= WEDGED_DISTINCT_TARGETS ? { hint: WEDGED_RUNTIME_HINT } : {}),
     });
 }
-// Story 05 (#386): settle the first dispatch with change detection; if the
-// hierarchy did not change, presume the tap was swallowed and retry EXACTLY
-// once (2 attempts total, Maestro's rule). Still unchanged → success with
-// meta.noUiChange (a no-op tap is legitimate — the verifier decides). The
-// advisory contract holds: nothing here turns a succeeded action into an error.
+// Settle the first dispatch with change detection; if the hierarchy did not
+// change, presume the tap was swallowed and retry exactly once. A runner's
+// gesture acknowledgement proves dispatch, not app effect: unchanged or
+// unobservable outcomes therefore fail with typed uncertainty, never success.
 export async function settleWithRetryIfNoChange(firstResult, dispatch, ctx, policy, deps = {}) {
-    const preHash = policy.eligible ? (getLastSnapshotHash() ?? undefined) : undefined;
+    const preHash = policy.verificationRequired ? (getLastSnapshotHash() ?? undefined) : undefined;
     const first = await settleAfterMutationWithOutcome(firstResult, { ...ctx, ...(preHash !== undefined ? { initialSnapshotHash: preHash } : {}) }, deps);
-    if (!policy.eligible || preHash === undefined || first.result.isError)
+    if (first.result.isError || !policy.verificationRequired)
         return first.result;
-    if (first.outcome?.hierarchyChanged !== false) {
-        if (first.outcome?.hierarchyChanged === true)
-            recordUiChange();
+    if (preHash === undefined || first.outcome?.hierarchyChanged === undefined) {
+        return unverifiedInteractionResult(first.result, policy.targetKey, 1, 'effect-probe-unavailable');
+    }
+    if (first.outcome.hierarchyChanged === true) {
+        recordUiChange();
         return first.result;
+    }
+    if (!policy.eligible) {
+        return unverifiedInteractionResult(first.result, policy.targetKey, 1, 'no-ui-change');
     }
     // Story 14 (#407): a transport-recovered send already consumed the ambiguity
     // budget — the runner journal confirmed the mutating gesture executed. The
     // heal layer must not re-fire it, or it would double-dispatch the very tap
     // that transport recovery just resolved. Report noUiChange honestly, no retry.
     if (hasConsumedTapRetryBudget(firstResult)) {
-        return flagNoUiChange(first.result, policy.targetKey);
+        return unverifiedInteractionResult(first.result, policy.targetKey, 1, 'no-ui-change');
     }
     const second = await dispatch();
     if (second.isError) {
-        return flagNoUiChange(attachMeta(first.result, { tapRetried: true }), policy.targetKey);
+        return unverifiedInteractionResult(attachMeta(first.result, { tapRetried: true }), policy.targetKey, 2, 'retry-failed');
     }
     const settled = await settleAfterMutationWithOutcome(second, { ...ctx, initialSnapshotHash: preHash }, deps);
-    if (settled.outcome?.hierarchyChanged === false) {
-        return flagNoUiChange(attachMeta(settled.result, { tapRetried: true }), policy.targetKey);
+    if (settled.outcome?.hierarchyChanged !== true) {
+        return unverifiedInteractionResult(attachMeta(settled.result, { tapRetried: true }), policy.targetKey, 2, settled.outcome?.hierarchyChanged === false ? 'no-ui-change' : 'effect-probe-unavailable');
     }
-    if (settled.outcome?.hierarchyChanged === true)
-        recordUiChange();
+    recordUiChange();
     return attachMeta(settled.result, { tapRetried: true });
 }
 const MAX_STALE_CANDIDATES = 5;

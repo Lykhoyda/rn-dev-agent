@@ -339,6 +339,8 @@ export type ToolErrorCode =
   // retry after injected Keyboard.dismiss() proves the keyboard hidden (#379).
   | 'KEYBOARD_OCCLUDED'
   | 'KEYBOARD_DISMISS_FAILED'
+  | 'INTERACTION_NOT_ACTUATED'
+  | 'INTERACTION_EFFECT_UNVERIFIED'
   | 'RUNNER_TIMEOUT'
   | 'WDA_BOOTSTRAP_FAILED'
   // Direct maestro-runner/WDA device evidence did not match the exact target.

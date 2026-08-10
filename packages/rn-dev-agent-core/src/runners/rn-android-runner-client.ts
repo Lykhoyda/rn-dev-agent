@@ -148,6 +148,7 @@ export interface RunAndroidArgs {
   exactIdentifier?: string;
   exactType?: string;
   exact?: boolean;
+  includeSystemUi?: boolean;
   durationMs?: number;
   /** Story 04 (#385): window-gate probe timeout for isWindowUpdating (Kotlin clamps to 0..2000ms). */
   timeoutMs?: number;
@@ -169,6 +170,8 @@ interface RunnerSnapshotNode {
   type?: string;
   label?: string;
   identifier?: string;
+  packageName?: string;
+  checked?: boolean;
   rect?: { x: number; y: number; width: number; height: number };
   enabled?: boolean;
   hittable?: boolean;
@@ -1863,6 +1866,8 @@ function mapRunnerNodesToFlat(nodes: RunnerSnapshotNode[]): FlatNode[] {
     const flat: FlatNode = { ref, type: n.type ?? '', rect: n.rect };
     if (n.label !== undefined) flat.label = n.label;
     if (n.identifier !== undefined) flat.identifier = n.identifier;
+    if (n.packageName !== undefined) flat.packageName = n.packageName;
+    if (n.checked !== undefined) flat.checked = n.checked;
     if (n.enabled !== undefined) flat.enabled = n.enabled;
     if (n.hittable !== undefined) flat.hittable = n.hittable;
     out.push(flat);
@@ -1905,6 +1910,7 @@ export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
   if (args.exactIdentifier !== undefined) body.exactIdentifier = args.exactIdentifier;
   if (args.exactType !== undefined) body.exactType = args.exactType;
   if (args.exact !== undefined) body.exact = args.exact;
+  if (args.includeSystemUi !== undefined) body.includeSystemUi = args.includeSystemUi;
   if (args.durationMs !== undefined) body.durationMs = args.durationMs;
   if (args.timeoutMs !== undefined) body.timeoutMs = args.timeoutMs;
   if (args.scale !== undefined) body.scale = args.scale;
@@ -1998,6 +2004,17 @@ export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
         Object.keys(failExtras).length ? failExtras : undefined,
       );
     return Object.keys(failExtras).length ? failResult(message, failExtras) : failResult(message);
+  }
+
+  if (args.command === 'tap') {
+    const data = resp.data as { tapped?: unknown } | undefined;
+    if (data?.tapped !== true) {
+      return failResult(
+        'Android runner could not prove that the requested interaction was actuated.',
+        'INTERACTION_NOT_ACTUATED',
+        { mutation: 'none', reason: 'runner-rejected-tap', ...recoveryMeta },
+      );
+    }
   }
 
   if (args.command === 'snapshot' && resp.data && typeof resp.data === 'object') {

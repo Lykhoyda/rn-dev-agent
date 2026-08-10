@@ -13,6 +13,8 @@ interface SnapshotNode {
   label?: string;
   identifier?: string;
   type?: string;
+  packageName?: string;
+  checked?: boolean;
   enabled?: boolean;
   hittable?: boolean;
 }
@@ -22,6 +24,8 @@ export interface FlatNode {
   type: string;
   label?: string;
   identifier?: string;
+  packageName?: string;
+  checked?: boolean;
   rect: ElementRect;
   enabled?: boolean;
   hittable?: boolean;

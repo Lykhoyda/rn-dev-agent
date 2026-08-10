@@ -2290,7 +2290,7 @@ trackedTool(
 
 trackedTool(
   'device_find',
-  'Find a UI element by visible text and optionally interact with it. Use action="click" to tap, omit for find-only. Returns element ref for use with device_press/device_fill. Requires an open session. For overlapping labels (e.g. "Property damaged" vs "Property lost"), pass exact=true for strict match or index=N to pick the Nth candidate directly — both short-circuit AMBIGUOUS_MATCH. If AMBIGUOUS_MATCH still occurs, the result includes a candidates[] array with refs you can pass to device_press.',
+  'Find a UI element by visible text and optionally interact with it. Android matching is app-window-only by default; includeSystemUi=true explicitly allows system chrome and may leave the app. Use action="click" to tap, omit for find-only. Returns element ref for use with device_press/device_fill. Requires an open session. For overlapping labels (e.g. "Property damaged" vs "Property lost"), pass exact=true for strict match or index=N to pick the Nth candidate directly — both short-circuit AMBIGUOUS_MATCH. If AMBIGUOUS_MATCH still occurs, the result includes a candidates[] array with refs you can pass to device_press.',
   {
     text: z.string().describe('Visible text, accessibility label, or identifier to find'),
     action: z
@@ -2309,6 +2309,10 @@ trackedTool(
       .describe(
         'Pick the Nth candidate (0-based) when multiple elements match. Short-circuits AMBIGUOUS_MATCH.',
       ),
+    includeSystemUi: z
+      .boolean()
+      .optional()
+      .describe('Include Android system UI in matching (default false; may leave the app).'),
   },
   createDeviceFindHandler(getClient),
 );

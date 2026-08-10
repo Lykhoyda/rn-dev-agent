@@ -19646,7 +19646,8 @@ function normalizeNodeForHash(node) {
     q(node.rect.y),
     q(node.rect.width),
     q(node.rect.height),
-    node.enabled ?? null
+    node.enabled ?? null,
+    node.checked ?? null
   ]);
 }
 function hashSnapshotNodes(nodes) {
@@ -27222,6 +27223,10 @@ function mapRunnerNodesToFlat2(nodes) {
       flat.label = n.label;
     if (n.identifier !== void 0)
       flat.identifier = n.identifier;
+    if (n.packageName !== void 0)
+      flat.packageName = n.packageName;
+    if (n.checked !== void 0)
+      flat.checked = n.checked;
     if (n.enabled !== void 0)
       flat.enabled = n.enabled;
     if (n.hittable !== void 0)
@@ -27265,6 +27270,8 @@ async function runAndroid(args) {
     body.exactType = args.exactType;
   if (args.exact !== void 0)
     body.exact = args.exact;
+  if (args.includeSystemUi !== void 0)
+    body.includeSystemUi = args.includeSystemUi;
   if (args.durationMs !== void 0)
     body.durationMs = args.durationMs;
   if (args.timeoutMs !== void 0)
@@ -27320,6 +27327,12 @@ async function runAndroid(args) {
     if (code)
       return failResult(message, code, Object.keys(failExtras).length ? failExtras : void 0);
     return Object.keys(failExtras).length ? failResult(message, failExtras) : failResult(message);
+  }
+  if (args.command === "tap") {
+    const data = resp.data;
+    if (data?.tapped !== true) {
+      return failResult("Android runner could not prove that the requested interaction was actuated.", "INTERACTION_NOT_ACTUATED", { mutation: "none", reason: "runner-rejected-tap", ...recoveryMeta });
+    }
   }
   if (args.command === "snapshot" && resp.data && typeof resp.data === "object") {
     const data = resp.data;
@@ -27909,7 +27922,16 @@ function buildRunAndroidArgs(cliArgs, bundleId) {
         const center = isRefMapFresh() ? refCenter(ref) : null;
         if (!center)
           return { command: "tap", _staleRef: ref, ...withBundle };
-        return { command: "tap", x: center.x, y: center.y, ...withBundle };
+        const metadata = getCachedMetadata(ref);
+        const includeSystemUi = cliArgs.includes("--include-system-ui");
+        return {
+          command: "tap",
+          x: center.x,
+          y: center.y,
+          ...metadata?.identifier ? { exactIdentifier: metadata.identifier, exactType: metadata.type } : {},
+          ...includeSystemUi ? { includeSystemUi: true } : {},
+          ...withBundle
+        };
       }
       const [xS, yS] = positionals;
       const x = Number(xS), y = Number(yS);
@@ -28262,8 +28284,9 @@ function tapRetryPolicy(cliArgs, builtCommand, x, y, opts) {
   const ref = cliArgs[1];
   const exactTarget = ref?.startsWith("@") ? getFreshRefTarget(ref) : null;
   const keyboardTarget = exactTarget?.snapshotElementType === "Key" || exactTarget?.snapshotElementType === "Keyboard";
-  const eligible = !keyboardTarget && RETRYABLE_TAP_COMMANDS.has(builtCommand) && opts.retryIfNoChange !== false && selfHealEnabled(process.env) && !cliArgs.includes("--double-tap") && !cliArgs.includes("--count") && !cliArgs.includes("--hold-ms") && x !== void 0 && y !== void 0;
-  return { eligible, targetKey: `${builtCommand}@${x},${y}` };
+  const verificationRequired = !keyboardTarget && RETRYABLE_TAP_COMMANDS.has(builtCommand) && !cliArgs.includes("--double-tap") && !cliArgs.includes("--count") && !cliArgs.includes("--hold-ms") && x !== void 0 && y !== void 0;
+  const eligible = verificationRequired && opts.retryIfNoChange !== false && selfHealEnabled(process.env);
+  return { eligible, verificationRequired, targetKey: `${builtCommand}@${x},${y}` };
 }
 function hasConsumedTapRetryBudget(result) {
   try {
@@ -28273,36 +28296,49 @@ function hasConsumedTapRetryBudget(result) {
     return false;
   }
 }
-function flagNoUiChange(result, targetKey) {
+function unverifiedInteractionResult(observedResult, targetKey, attempts3, reason) {
   const distinct = recordNoUiChange(targetKey);
-  return attachMeta(result, {
-    noUiChange: true,
+  let observedMeta = {};
+  try {
+    const envelope = JSON.parse(observedResult.content[0].text);
+    observedMeta = envelope.meta ?? {};
+  } catch {
+  }
+  return failResult(reason === "no-ui-change" ? "The tap was dispatched but produced no observable UI change." : reason === "retry-failed" ? "The tap produced no observable UI change and the bounded retry failed." : "The tap was dispatched, but its UI effect could not be observed.", "INTERACTION_EFFECT_UNVERIFIED", {
+    ...observedMeta,
+    mutation: "possible",
+    reason,
+    attempts: attempts3,
     ...distinct >= WEDGED_DISTINCT_TARGETS ? { hint: WEDGED_RUNTIME_HINT } : {}
   });
 }
 async function settleWithRetryIfNoChange(firstResult, dispatch, ctx, policy, deps = {}) {
-  const preHash = policy.eligible ? getLastSnapshotHash() ?? void 0 : void 0;
+  const preHash = policy.verificationRequired ? getLastSnapshotHash() ?? void 0 : void 0;
   const first = await settleAfterMutationWithOutcome(firstResult, { ...ctx, ...preHash !== void 0 ? { initialSnapshotHash: preHash } : {} }, deps);
-  if (!policy.eligible || preHash === void 0 || first.result.isError)
+  if (first.result.isError || !policy.verificationRequired)
     return first.result;
-  if (first.outcome?.hierarchyChanged !== false) {
-    if (first.outcome?.hierarchyChanged === true)
-      recordUiChange();
+  if (preHash === void 0 || first.outcome?.hierarchyChanged === void 0) {
+    return unverifiedInteractionResult(first.result, policy.targetKey, 1, "effect-probe-unavailable");
+  }
+  if (first.outcome.hierarchyChanged === true) {
+    recordUiChange();
     return first.result;
   }
+  if (!policy.eligible) {
+    return unverifiedInteractionResult(first.result, policy.targetKey, 1, "no-ui-change");
+  }
   if (hasConsumedTapRetryBudget(firstResult)) {
-    return flagNoUiChange(first.result, policy.targetKey);
+    return unverifiedInteractionResult(first.result, policy.targetKey, 1, "no-ui-change");
   }
   const second = await dispatch();
   if (second.isError) {
-    return flagNoUiChange(attachMeta(first.result, { tapRetried: true }), policy.targetKey);
+    return unverifiedInteractionResult(attachMeta(first.result, { tapRetried: true }), policy.targetKey, 2, "retry-failed");
   }
   const settled = await settleAfterMutationWithOutcome(second, { ...ctx, initialSnapshotHash: preHash }, deps);
-  if (settled.outcome?.hierarchyChanged === false) {
-    return flagNoUiChange(attachMeta(settled.result, { tapRetried: true }), policy.targetKey);
+  if (settled.outcome?.hierarchyChanged !== true) {
+    return unverifiedInteractionResult(attachMeta(settled.result, { tapRetried: true }), policy.targetKey, 2, settled.outcome?.hierarchyChanged === false ? "no-ui-change" : "effect-probe-unavailable");
   }
-  if (settled.outcome?.hierarchyChanged === true)
-    recordUiChange();
+  recordUiChange();
   return attachMeta(settled.result, { tapRetried: true });
 }
 function staleRefFail(ref, reason, cachedMetadata, candidates = []) {
@@ -30455,12 +30491,21 @@ async function fetchSnapshotNodes(allowCache = false) {
 function emptyCaptureFailResult(query) {
   return failResult(`Snapshot returned zero nodes \u2014 cannot distinguish an empty screen from a degraded capture` + (query !== void 0 ? `; not asserting "${query}" is absent` : "") + `. Confirm the screen with device_screenshot or cdp_component_tree, then retry.`, { code: "SNAPSHOT_DEGRADED", ...query !== void 0 ? { query } : {} });
 }
-async function fetchFindCandidates(query, exact = false, allowCache = false) {
+function scopeSnapshotNodesForFind(nodes, platform, appId, includeSystemUi) {
+  if (platform !== "android" || includeSystemUi)
+    return nodes;
+  if (!appId)
+    return [];
+  return nodes.filter((node) => node.packageName === appId);
+}
+async function fetchFindCandidates(query, exact = false, allowCache = false, includeSystemUi = false) {
   const snap = await fetchSnapshotNodes(allowCache);
   if (!snap.ok)
     return snap;
+  const session2 = getActiveSession();
+  const scopedNodes = scopeSnapshotNodesForFind(snap.nodes, session2?.platform, session2?.appId, includeSystemUi);
   const needle = query.toLowerCase();
-  const matched = snap.nodes.filter((n) => {
+  const matched = scopedNodes.filter((n) => {
     const label = n.label ?? "";
     const id = n.identifier ?? "";
     if (exact)
@@ -30479,10 +30524,11 @@ function runnerLeakFailResult(query, recoveryReason) {
     hint: "Manually close + reopen the session with device_snapshot action=open appId=<your.bundle.id> platform=ios (full launch, not attachOnly). The recovery may have killed the JS context \u2014 re-establish CDP via cdp_connect before reading state. Upstream: Callstack/agent-device, see B119/GH#35."
   });
 }
-async function pressCandidate(candidate, action, getClient2) {
+async function pressCandidate(candidate, action, getClient2, includeSystemUi = false) {
   const ref = candidate.ref.startsWith("@") ? candidate.ref : `@${candidate.ref}`;
   if (action === "click") {
-    const tap = async () => surfaceKeyboardGuard(await runNative(["press", ref]));
+    const tapArgs = ["press", ref, ...includeSystemUi ? ["--include-system-ui"] : []];
+    const tap = async () => surfaceKeyboardGuard(await runNative(tapArgs));
     const first = await tap();
     return first.isError && getClient2 ? healKeyboardOccludedTap(first, keyboardHealDeps(getClient2, tap)) : first;
   }
@@ -30502,7 +30548,7 @@ function tagPressIfRecovered(result, tier) {
 function createDeviceFindHandler(getClient2) {
   return withSession(async (args) => {
     if (args.exact === true || args.index !== void 0) {
-      const find = await fetchFindCandidates(args.text, args.exact === true, true);
+      const find = await fetchFindCandidates(args.text, args.exact === true, true, args.includeSystemUi === true);
       if (!find.ok) {
         if (find.reason === "runner-leak-unrecovered") {
           return runnerLeakFailResult(args.text, find.recoveryReason);
@@ -30523,10 +30569,10 @@ function createDeviceFindHandler(getClient2) {
         if (args.index < 0 || args.index >= candidates.length) {
           return failResult(`index ${args.index} out of range (got ${candidates.length} candidates)`, { code: "INDEX_OUT_OF_RANGE", count: candidates.length, candidates });
         }
-        return tagPressIfRecovered(await pressCandidate(candidates[args.index], args.action, getClient2), recoveredTier);
+        return tagPressIfRecovered(await pressCandidate(candidates[args.index], args.action, getClient2, args.includeSystemUi === true), recoveredTier);
       }
       if (candidates.length === 1) {
-        return tagPressIfRecovered(await pressCandidate(candidates[0], args.action, getClient2), recoveredTier);
+        return tagPressIfRecovered(await pressCandidate(candidates[0], args.action, getClient2, args.includeSystemUi === true), recoveredTier);
       }
       return failResult(`AMBIGUOUS_MATCH: exact "${args.text}" matched ${candidates.length} elements`, {
         code: "AMBIGUOUS_MATCH",
@@ -30538,7 +30584,7 @@ function createDeviceFindHandler(getClient2) {
     const activeSession2 = getActiveSession();
     const usesInTreeRunner = activeSession2?.platform === "ios" || activeSession2?.platform === "android" && process.env.RN_ANDROID_RUNNER !== "0";
     if (usesInTreeRunner) {
-      const find = await fetchFindCandidates(args.text, false, true);
+      const find = await fetchFindCandidates(args.text, false, true, args.includeSystemUi === true);
       if (!find.ok) {
         if (find.reason === "runner-leak-unrecovered") {
           return runnerLeakFailResult(args.text, find.recoveryReason);
@@ -30561,7 +30607,7 @@ function createDeviceFindHandler(getClient2) {
         });
       }
       if (candidates.length === 1) {
-        return tagPressIfRecovered(await pressCandidate(candidates[0], args.action, getClient2), recoveredTier);
+        return tagPressIfRecovered(await pressCandidate(candidates[0], args.action, getClient2, args.includeSystemUi === true), recoveredTier);
       }
       return failResult(`AMBIGUOUS_MATCH: "${args.text}" matched ${candidates.length} elements. Use device_press with one of these refs, or retry with index: N.`, {
         code: "AMBIGUOUS_MATCH",
@@ -85306,11 +85352,12 @@ trackedTool("device_snapshot", "Manage device sessions and capture UI snapshots.
     return false;
   }
 }));
-trackedTool("device_find", 'Find a UI element by visible text and optionally interact with it. Use action="click" to tap, omit for find-only. Returns element ref for use with device_press/device_fill. Requires an open session. For overlapping labels (e.g. "Property damaged" vs "Property lost"), pass exact=true for strict match or index=N to pick the Nth candidate directly \u2014 both short-circuit AMBIGUOUS_MATCH. If AMBIGUOUS_MATCH still occurs, the result includes a candidates[] array with refs you can pass to device_press.', {
+trackedTool("device_find", 'Find a UI element by visible text and optionally interact with it. Android matching is app-window-only by default; includeSystemUi=true explicitly allows system chrome and may leave the app. Use action="click" to tap, omit for find-only. Returns element ref for use with device_press/device_fill. Requires an open session. For overlapping labels (e.g. "Property damaged" vs "Property lost"), pass exact=true for strict match or index=N to pick the Nth candidate directly \u2014 both short-circuit AMBIGUOUS_MATCH. If AMBIGUOUS_MATCH still occurs, the result includes a candidates[] array with refs you can pass to device_press.', {
   text: external_exports.string().describe("Visible text, accessibility label, or identifier to find"),
   action: external_exports.string().optional().describe('Action to perform: "click" to tap, omit for search-only'),
   exact: external_exports.boolean().optional().describe("Require exact label match (case-sensitive). Skips fuzzy matching entirely."),
-  index: external_exports.number().int().min(0).optional().describe("Pick the Nth candidate (0-based) when multiple elements match. Short-circuits AMBIGUOUS_MATCH.")
+  index: external_exports.number().int().min(0).optional().describe("Pick the Nth candidate (0-based) when multiple elements match. Short-circuits AMBIGUOUS_MATCH."),
+  includeSystemUi: external_exports.boolean().optional().describe("Include Android system UI in matching (default false; may leave the app).")
 }, createDeviceFindHandler(getClient));
 trackedTool("device_press", 'Tap a UI element by its @ref from device_snapshot, or at explicit raw x/y coordinates. Pass exactly one target form. On iOS, a latest-snapshot Key/Keyboard ref is runner-validated against the current live keyboard and activated exactly once (meta.keyboardGuard="keyboard_target"); stale, forged, missing-keyboard, or raw-coordinate targets never receive that exemption. Ordinary app-content taps dismiss only through a safe native hide/dismiss control or optional JS tier, then refresh and uniquely re-resolve before one tap. Supports double-tap, repeated taps, long hold, and post-tap focus settle. Requires an open session. Stale ordinary app @refs self-heal by identity re-resolution (meta.reResolved); stale iOS Key/Keyboard refs refuse with KEYBOARD_TARGET_STALE and mutation:none. Swallowed ordinary taps auto-retry once, but validated keyboard targets and keyboard/transport recovery never replay.', {
   ref: external_exports.string().optional().describe('Element ref from device_snapshot (e.g. "e3" or "@e3"). Omit when using x/y.'),

@@ -87,6 +87,15 @@ class CommandServer(
             )
         } catch (e: SnapshotParseException) {
             errorResponse(command, "SNAPSHOT_PARSE_FAILED", e.message ?: "snapshot parse failed", Response.Status.OK)
+        } catch (e: ExactPressException) {
+            errorResponse(
+                command,
+                e.pressCode,
+                e.message ?: "exact interaction failed",
+                Response.Status.OK,
+                mutation = e.mutation,
+                reason = e.reason,
+            )
         } catch (e: AccessibilityUnavailableException) {
             errorResponse(command, "ACCESSIBILITY_UNAVAILABLE", e.message ?: "accessibility unavailable", Response.Status.OK)
         } catch (t: Throwable) {

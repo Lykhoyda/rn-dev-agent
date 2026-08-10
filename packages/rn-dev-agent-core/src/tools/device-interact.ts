@@ -42,6 +42,8 @@ export interface SnapshotNode {
   label?: string;
   identifier?: string;
   type?: string;
+  packageName?: string;
+  checked?: boolean;
   hittable?: boolean;
   enabled?: boolean;
   rect?: { x: number; y: number; width: number; height: number };
@@ -234,16 +236,35 @@ export type FindCandidatesResult =
   | { ok: false; reason: 'empty-capture' }
   | { ok: false; reason: 'runner-leak-unrecovered'; recoveryReason?: string };
 
+export function scopeSnapshotNodesForFind(
+  nodes: SnapshotNode[],
+  platform: string | undefined,
+  appId: string | undefined,
+  includeSystemUi: boolean,
+): SnapshotNode[] {
+  if (platform !== 'android' || includeSystemUi) return nodes;
+  if (!appId) return [];
+  return nodes.filter((node) => node.packageName === appId);
+}
+
 export async function fetchFindCandidates(
   query: string,
   exact = false,
   allowCache = false,
+  includeSystemUi = false,
 ): Promise<FindCandidatesResult> {
   const snap = await fetchSnapshotNodes(allowCache);
   if (!snap.ok) return snap;
 
+  const session = getActiveSession();
+  const scopedNodes = scopeSnapshotNodesForFind(
+    snap.nodes,
+    session?.platform,
+    session?.appId,
+    includeSystemUi,
+  );
   const needle = query.toLowerCase();
-  const matched = snap.nodes.filter((n) => {
+  const matched = scopedNodes.filter((n) => {
     const label = n.label ?? '';
     const id = n.identifier ?? '';
     if (exact) return label === query || id === query;
@@ -274,11 +295,12 @@ export async function pressCandidate(
   candidate: FindCandidate,
   action?: string,
   getClient?: () => CDPClient,
+  includeSystemUi = false,
 ): Promise<ToolResult> {
   const ref = candidate.ref.startsWith('@') ? candidate.ref : `@${candidate.ref}`;
   if (action === 'click') {
-    const tap = async (): Promise<ToolResult> =>
-      surfaceKeyboardGuard(await runNative(['press', ref]));
+    const tapArgs = ['press', ref, ...(includeSystemUi ? ['--include-system-ui'] : [])];
+    const tap = async (): Promise<ToolResult> => surfaceKeyboardGuard(await runNative(tapArgs));
     const first = await tap();
     return first.isError && getClient
       ? healKeyboardOccludedTap(first, keyboardHealDeps(getClient, tap))
@@ -312,6 +334,7 @@ interface FindArgs {
   action?: string;
   exact?: boolean;
   index?: number;
+  includeSystemUi?: boolean;
 }
 
 export function createDeviceFindHandler(
@@ -322,7 +345,12 @@ export function createDeviceFindHandler(
     // go straight to a snapshot-based client-side match so we never roll the dice
     // on agent-device's fuzzy matcher returning AMBIGUOUS_MATCH.
     if (args.exact === true || args.index !== undefined) {
-      const find = await fetchFindCandidates(args.text, args.exact === true, true);
+      const find = await fetchFindCandidates(
+        args.text,
+        args.exact === true,
+        true,
+        args.includeSystemUi === true,
+      );
       if (!find.ok) {
         if (find.reason === 'runner-leak-unrecovered') {
           return runnerLeakFailResult(args.text, find.recoveryReason);
@@ -353,14 +381,24 @@ export function createDeviceFindHandler(
           );
         }
         return tagPressIfRecovered(
-          await pressCandidate(candidates[args.index], args.action, getClient),
+          await pressCandidate(
+            candidates[args.index],
+            args.action,
+            getClient,
+            args.includeSystemUi === true,
+          ),
           recoveredTier,
         );
       }
       // exact=true, no index: require single match
       if (candidates.length === 1) {
         return tagPressIfRecovered(
-          await pressCandidate(candidates[0], args.action, getClient),
+          await pressCandidate(
+            candidates[0],
+            args.action,
+            getClient,
+            args.includeSystemUi === true,
+          ),
           recoveredTier,
         );
       }
@@ -387,7 +425,7 @@ export function createDeviceFindHandler(
       activeSession?.platform === 'ios' ||
       (activeSession?.platform === 'android' && process.env.RN_ANDROID_RUNNER !== '0');
     if (usesInTreeRunner) {
-      const find = await fetchFindCandidates(args.text, false, true);
+      const find = await fetchFindCandidates(args.text, false, true, args.includeSystemUi === true);
       if (!find.ok) {
         if (find.reason === 'runner-leak-unrecovered') {
           return runnerLeakFailResult(args.text, find.recoveryReason);
@@ -414,7 +452,12 @@ export function createDeviceFindHandler(
       }
       if (candidates.length === 1) {
         return tagPressIfRecovered(
-          await pressCandidate(candidates[0], args.action, getClient),
+          await pressCandidate(
+            candidates[0],
+            args.action,
+            getClient,
+            args.includeSystemUi === true,
+          ),
           recoveredTier,
         );
       }

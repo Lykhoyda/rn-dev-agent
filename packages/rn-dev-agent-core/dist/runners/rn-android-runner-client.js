@@ -1351,6 +1351,10 @@ function mapRunnerNodesToFlat(nodes) {
             flat.label = n.label;
         if (n.identifier !== undefined)
             flat.identifier = n.identifier;
+        if (n.packageName !== undefined)
+            flat.packageName = n.packageName;
+        if (n.checked !== undefined)
+            flat.checked = n.checked;
         if (n.enabled !== undefined)
             flat.enabled = n.enabled;
         if (n.hittable !== undefined)
@@ -1394,6 +1398,8 @@ export async function runAndroid(args) {
         body.exactType = args.exactType;
     if (args.exact !== undefined)
         body.exact = args.exact;
+    if (args.includeSystemUi !== undefined)
+        body.includeSystemUi = args.includeSystemUi;
     if (args.durationMs !== undefined)
         body.durationMs = args.durationMs;
     if (args.timeoutMs !== undefined)
@@ -1478,6 +1484,12 @@ export async function runAndroid(args) {
         if (code)
             return failResult(message, code, Object.keys(failExtras).length ? failExtras : undefined);
         return Object.keys(failExtras).length ? failResult(message, failExtras) : failResult(message);
+    }
+    if (args.command === 'tap') {
+        const data = resp.data;
+        if (data?.tapped !== true) {
+            return failResult('Android runner could not prove that the requested interaction was actuated.', 'INTERACTION_NOT_ACTUATED', { mutation: 'none', reason: 'runner-rejected-tap', ...recoveryMeta });
+        }
     }
     if (args.command === 'snapshot' && resp.data && typeof resp.data === 'object') {
         const data = resp.data;

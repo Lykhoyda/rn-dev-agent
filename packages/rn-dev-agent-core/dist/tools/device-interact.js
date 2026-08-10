@@ -163,12 +163,21 @@ function emptyCaptureFailResult(query) {
         (query !== undefined ? `; not asserting "${query}" is absent` : '') +
         `. Confirm the screen with device_screenshot or cdp_component_tree, then retry.`, { code: 'SNAPSHOT_DEGRADED', ...(query !== undefined ? { query } : {}) });
 }
-export async function fetchFindCandidates(query, exact = false, allowCache = false) {
+export function scopeSnapshotNodesForFind(nodes, platform, appId, includeSystemUi) {
+    if (platform !== 'android' || includeSystemUi)
+        return nodes;
+    if (!appId)
+        return [];
+    return nodes.filter((node) => node.packageName === appId);
+}
+export async function fetchFindCandidates(query, exact = false, allowCache = false, includeSystemUi = false) {
     const snap = await fetchSnapshotNodes(allowCache);
     if (!snap.ok)
         return snap;
+    const session = getActiveSession();
+    const scopedNodes = scopeSnapshotNodesForFind(snap.nodes, session?.platform, session?.appId, includeSystemUi);
     const needle = query.toLowerCase();
-    const matched = snap.nodes.filter((n) => {
+    const matched = scopedNodes.filter((n) => {
         const label = n.label ?? '';
         const id = n.identifier ?? '';
         if (exact)
@@ -191,10 +200,11 @@ function runnerLeakFailResult(query, recoveryReason) {
         hint: 'Manually close + reopen the session with device_snapshot action=open appId=<your.bundle.id> platform=ios (full launch, not attachOnly). The recovery may have killed the JS context — re-establish CDP via cdp_connect before reading state. Upstream: Callstack/agent-device, see B119/GH#35.',
     });
 }
-export async function pressCandidate(candidate, action, getClient) {
+export async function pressCandidate(candidate, action, getClient, includeSystemUi = false) {
     const ref = candidate.ref.startsWith('@') ? candidate.ref : `@${candidate.ref}`;
     if (action === 'click') {
-        const tap = async () => surfaceKeyboardGuard(await runNative(['press', ref]));
+        const tapArgs = ['press', ref, ...(includeSystemUi ? ['--include-system-ui'] : [])];
+        const tap = async () => surfaceKeyboardGuard(await runNative(tapArgs));
         const first = await tap();
         return first.isError && getClient
             ? healKeyboardOccludedTap(first, keyboardHealDeps(getClient, tap))
@@ -223,7 +233,7 @@ export function createDeviceFindHandler(getClient) {
         // go straight to a snapshot-based client-side match so we never roll the dice
         // on agent-device's fuzzy matcher returning AMBIGUOUS_MATCH.
         if (args.exact === true || args.index !== undefined) {
-            const find = await fetchFindCandidates(args.text, args.exact === true, true);
+            const find = await fetchFindCandidates(args.text, args.exact === true, true, args.includeSystemUi === true);
             if (!find.ok) {
                 if (find.reason === 'runner-leak-unrecovered') {
                     return runnerLeakFailResult(args.text, find.recoveryReason);
@@ -247,11 +257,11 @@ export function createDeviceFindHandler(getClient) {
                 if (args.index < 0 || args.index >= candidates.length) {
                     return failResult(`index ${args.index} out of range (got ${candidates.length} candidates)`, { code: 'INDEX_OUT_OF_RANGE', count: candidates.length, candidates });
                 }
-                return tagPressIfRecovered(await pressCandidate(candidates[args.index], args.action, getClient), recoveredTier);
+                return tagPressIfRecovered(await pressCandidate(candidates[args.index], args.action, getClient, args.includeSystemUi === true), recoveredTier);
             }
             // exact=true, no index: require single match
             if (candidates.length === 1) {
-                return tagPressIfRecovered(await pressCandidate(candidates[0], args.action, getClient), recoveredTier);
+                return tagPressIfRecovered(await pressCandidate(candidates[0], args.action, getClient, args.includeSystemUi === true), recoveredTier);
             }
             return failResult(`AMBIGUOUS_MATCH: exact "${args.text}" matched ${candidates.length} elements`, {
                 code: 'AMBIGUOUS_MATCH',
@@ -271,7 +281,7 @@ export function createDeviceFindHandler(getClient) {
         const usesInTreeRunner = activeSession?.platform === 'ios' ||
             (activeSession?.platform === 'android' && process.env.RN_ANDROID_RUNNER !== '0');
         if (usesInTreeRunner) {
-            const find = await fetchFindCandidates(args.text, false, true);
+            const find = await fetchFindCandidates(args.text, false, true, args.includeSystemUi === true);
             if (!find.ok) {
                 if (find.reason === 'runner-leak-unrecovered') {
                     return runnerLeakFailResult(args.text, find.recoveryReason);
@@ -297,7 +307,7 @@ export function createDeviceFindHandler(getClient) {
                 });
             }
             if (candidates.length === 1) {
-                return tagPressIfRecovered(await pressCandidate(candidates[0], args.action, getClient), recoveredTier);
+                return tagPressIfRecovered(await pressCandidate(candidates[0], args.action, getClient, args.includeSystemUi === true), recoveredTier);
             }
             return failResult(`AMBIGUOUS_MATCH: "${args.text}" matched ${candidates.length} elements. Use device_press with one of these refs, or retry with index: N.`, {
                 code: 'AMBIGUOUS_MATCH',

@@ -42,6 +42,12 @@ class ExactFillException(
 
 class SnapshotParseException(message: String) : IllegalStateException(message)
 class AccessibilityUnavailableException(message: String) : IllegalStateException(message)
+class ExactPressException(
+    val pressCode: String,
+    val mutation: String,
+    val reason: String,
+    message: String,
+) : IllegalStateException(message)
 
 class CommandDispatcher(
     private val instrumentation: Instrumentation,
@@ -195,6 +201,8 @@ class CommandDispatcher(
                         val text = parser.getAttributeValue(null, "text").orEmpty()
                         val desc = parser.getAttributeValue(null, "content-desc").orEmpty()
                         val className = parser.getAttributeValue(null, "class").orEmpty()
+                        val packageName = parser.getAttributeValue(null, "package").orEmpty()
+                        val checked = parser.getAttributeValue(null, "checked") == "true"
                         val visible = parser.getAttributeValue(null, "visible-to-user") != "false"
                         val enabled = parser.getAttributeValue(null, "enabled") != "false"
                         val identifier = normalizeIdentifier(resourceId).ifBlank { desc }
@@ -205,6 +213,8 @@ class CommandDispatcher(
                                 .put("type", className)
                                 .put("label", text.ifBlank { desc })
                                 .put("identifier", identifier)
+                                .put("packageName", packageName)
+                                .put("checked", checked)
                                 .put("rect", JSONObject().put("x", bounds.left).put("y", bounds.top).put("width", bounds.width()).put("height", bounds.height()))
                                 .put("hittable", HittableSemantics.fromSnapshotNode(enabled, visible))
                                 .put("enabled", enabled)
@@ -225,6 +235,31 @@ class CommandDispatcher(
     }
 
     private fun tap(cmd: JSONObject): JSONObject {
+        val exactIdentifier = cmd.optString("exactIdentifier").ifBlank { null }
+        val exactType = cmd.optString("exactType").ifBlank { null }
+        if (exactIdentifier != null && exactType != null) {
+            val appPackage = cmd.optString("appBundleId").ifBlank { null }
+            val includeSystemUi = cmd.optBoolean("includeSystemUi", false)
+            val target = resolveExactPressNode(exactIdentifier, exactType, appPackage, includeSystemUi)
+            val dispatched = try {
+                target.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            } finally {
+                target.recycle()
+            }
+            if (!dispatched) {
+                throw ExactPressException(
+                    "INTERACTION_NOT_ACTUATED",
+                    "none",
+                    "accessibility-action-rejected",
+                    "The exact accessibility target rejected ACTION_CLICK; no coordinate fallback was attempted.",
+                )
+            }
+            return JSONObject()
+                .put("tapped", true)
+                .put("method", "accessibility-action")
+                .put("identifier", exactIdentifier)
+        }
+
         val x = cmd.getDouble("x").roundToInt()
         val y = cmd.getDouble("y").roundToInt()
         val kbStart = SystemClock.uptimeMillis()
@@ -232,6 +267,53 @@ class CommandDispatcher(
         val kbMs = SystemClock.uptimeMillis() - kbStart
         return JSONObject().put("x", x).put("y", y).put("tapped", device.click(x, y))
             .put("keyboardGuard", kb).put("keyboardGuardMs", kbMs)
+    }
+
+    private fun resolveExactPressNode(
+        identifier: String,
+        type: String,
+        appPackage: String?,
+        includeSystemUi: Boolean,
+    ): AccessibilityNodeInfo {
+        if (!includeSystemUi && appPackage == null) {
+            throw ExactPressException(
+                "INTERACTION_NOT_ACTUATED",
+                "none",
+                "app-window-unavailable",
+                "Exact Android interaction requires the owned app package.",
+            )
+        }
+        val matches = mutableListOf<AccessibilityNodeInfo>()
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        instrumentation.uiAutomation.windows.forEach { window ->
+            val root = window.root ?: return@forEach
+            val packageName = root.packageName?.toString()
+            if (includeSystemUi || packageName == appPackage) {
+                stack.addLast(AccessibilityNodeInfo.obtain(root))
+            }
+        }
+        var visited = 0
+        while (stack.isNotEmpty() && visited++ < 20_000) {
+            val node = stack.removeLast()
+            for (index in 0 until node.childCount) {
+                node.getChild(index)?.let { stack.addLast(it) }
+            }
+            val nodeIdentifier = normalizeIdentifier(node.viewIdResourceName.orEmpty())
+                .ifBlank { node.contentDescription?.toString().orEmpty() }
+            val nodeType = node.className?.toString().orEmpty()
+            if (nodeIdentifier == identifier && nodeType == type) matches.add(node) else node.recycle()
+        }
+        while (stack.isNotEmpty()) stack.removeLast().recycle()
+        if (matches.size != 1) {
+            matches.forEach { it.recycle() }
+            throw ExactPressException(
+                "INTERACTION_NOT_ACTUATED",
+                "none",
+                if (matches.isEmpty()) "exact-target-missing" else "exact-target-ambiguous",
+                "Exact Android interaction resolved ${matches.size} matching targets; refusing to guess.",
+            )
+        }
+        return matches.single()
     }
 
     private fun imeBoundsInScreen(): Rect? {

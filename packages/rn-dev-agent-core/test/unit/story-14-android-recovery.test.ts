@@ -63,7 +63,7 @@ test('lost tap response + probe completed → recovered result, exactly one tap 
       data: {
         commandId: body.commandId,
         state: 'completed',
-        result: { ok: true, v: 1, data: { x: 10, y: 20 } },
+        result: { ok: true, v: 1, data: { x: 10, y: 20, tapped: true } },
       },
     });
   });
