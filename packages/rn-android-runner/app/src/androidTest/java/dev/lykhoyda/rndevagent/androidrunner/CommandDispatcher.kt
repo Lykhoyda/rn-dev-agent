@@ -7,6 +7,7 @@ package dev.lykhoyda.rndevagent.androidrunner
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.app.Instrumentation
 import android.content.Intent
+import android.graphics.Point
 import android.graphics.Rect
 import android.os.Build
 import android.os.Bundle
@@ -73,6 +74,8 @@ class CommandDispatcher(
         // (snapshot/type) get 35s client-side — a tighter cap would regress
         // cold-launch success without helping the stall the windows check already ends.
         const val FOREGROUND_READY_TIMEOUT_MS = 10_000L
+
+        const val CLICKABLE_ANCESTOR_MAX_DEPTH = 16
     }
 
     init {
@@ -240,7 +243,13 @@ class CommandDispatcher(
         if (exactIdentifier != null && exactType != null) {
             val appPackage = cmd.optString("appBundleId").ifBlank { null }
             val includeSystemUi = cmd.optBoolean("includeSystemUi", false)
-            val target = resolveExactPressNode(exactIdentifier, exactType, appPackage, includeSystemUi)
+            val target = resolveExactPressNode(
+                exactIdentifier,
+                exactType,
+                appPackage,
+                includeSystemUi,
+                requestedPoint(cmd),
+            )
             val dispatched = try {
                 target.performAction(AccessibilityNodeInfo.ACTION_CLICK)
             } finally {
@@ -269,11 +278,18 @@ class CommandDispatcher(
             .put("keyboardGuard", kb).put("keyboardGuardMs", kbMs)
     }
 
+    private fun requestedPoint(cmd: JSONObject): Point? {
+        val x = cmd.optDouble("x", Double.NaN)
+        val y = cmd.optDouble("y", Double.NaN)
+        return if (x.isNaN() || y.isNaN()) null else Point(x.roundToInt(), y.roundToInt())
+    }
+
     private fun resolveExactPressNode(
         identifier: String,
         type: String,
         appPackage: String?,
         includeSystemUi: Boolean,
+        requested: Point?,
     ): AccessibilityNodeInfo {
         if (!includeSystemUi && appPackage == null) {
             throw ExactPressException(
@@ -304,16 +320,57 @@ class CommandDispatcher(
             if (nodeIdentifier == identifier && nodeType == type) matches.add(node) else node.recycle()
         }
         while (stack.isNotEmpty()) stack.removeLast().recycle()
-        if (matches.size != 1) {
+        val chosen = if (matches.size == 1) matches.single() else nodeContaining(matches, requested)
+        if (chosen == null) {
+            val found = matches.size
             matches.forEach { it.recycle() }
             throw ExactPressException(
                 "INTERACTION_NOT_ACTUATED",
                 "none",
-                if (matches.isEmpty()) "exact-target-missing" else "exact-target-ambiguous",
-                "Exact Android interaction resolved ${matches.size} matching targets; refusing to guess.",
+                if (found == 0) "exact-target-missing" else "exact-target-ambiguous",
+                if (found == 0) {
+                    "Exact Android interaction resolved no matching target; refusing to guess."
+                } else {
+                    "Exact Android interaction resolved $found matching targets and none " +
+                        "uniquely contains the requested point; refusing to guess."
+                },
             )
         }
-        return matches.single()
+        matches.forEach { if (it !== chosen) it.recycle() }
+        return clickableAncestorOrSelf(chosen)
+    }
+
+    private fun nodeContaining(
+        matches: List<AccessibilityNodeInfo>,
+        requested: Point?,
+    ): AccessibilityNodeInfo? {
+        if (requested == null) return null
+        val bounds = Rect()
+        return matches
+            .filter { node ->
+                node.getBoundsInScreen(bounds)
+                bounds.contains(requested.x, requested.y)
+            }
+            .singleOrNull()
+    }
+
+    // A labelled RN node (accessibilityLabel on a Text/Image inside a Pressable)
+    // is not itself clickable, so ACTION_CLICK would be rejected on a target a
+    // coordinate tap used to hit through its ancestor.
+    private fun clickableAncestorOrSelf(node: AccessibilityNodeInfo): AccessibilityNodeInfo {
+        if (node.isClickable) return node
+        var current: AccessibilityNodeInfo? = node.parent
+        var depth = 0
+        while (current != null && depth++ < CLICKABLE_ANCESTOR_MAX_DEPTH) {
+            if (current.isClickable) {
+                node.recycle()
+                return current
+            }
+            val next = current.parent
+            current.recycle()
+            current = next
+        }
+        return node
     }
 
     private fun imeBoundsInScreen(): Rect? {

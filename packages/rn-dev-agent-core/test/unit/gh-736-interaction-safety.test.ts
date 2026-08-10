@@ -2,8 +2,18 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
-import { buildRunAndroidArgs } from '../../dist/agent-device-wrapper.js';
-import { clearRefMap, updateRefMapFromFlat } from '../../dist/fast-runner-ref-map.js';
+import {
+  buildRunAndroidArgs,
+  establishInteractionBaseline,
+  settleWithRetryIfNoChange,
+} from '../../dist/agent-device-wrapper.js';
+import {
+  clearRefMap,
+  getLastSnapshotHash,
+  invalidateLastSnapshotHash,
+  updateRefMapFromFlat,
+} from '../../dist/fast-runner-ref-map.js';
+import { okResult } from '../../dist/utils.js';
 import { hashSnapshotNodes } from '../../dist/lifecycle/settle-hash.js';
 import {
   _setAndroidRunnerStateForTest,
@@ -160,4 +170,88 @@ test('Android runner scopes exact presses and refuses rejected accessibility act
   assert.match(source, /packageName == appPackage/);
   assert.match(source, /performAction\(AccessibilityNodeInfo\.ACTION_CLICK\)/);
   assert.match(source, /if \(!dispatched\) \{\s*throw ExactPressException/);
+});
+
+test('exact press disambiguates duplicates by the requested point and clicks the clickable ancestor', () => {
+  const source = readFileSync(
+    join(
+      process.cwd(),
+      '..',
+      'rn-android-runner',
+      'app',
+      'src',
+      'androidTest',
+      'java',
+      'dev',
+      'lykhoyda',
+      'rndevagent',
+      'androidrunner',
+      'CommandDispatcher.kt',
+    ),
+    'utf8',
+  );
+  // Duplicate testIDs/labels in a list stay actuable: the @ref centre picks one.
+  assert.match(source, /private fun nodeContaining\(/);
+  assert.match(source, /bounds\.contains\(requested\.x, requested\.y\)/);
+  assert.match(source, /nodeContaining\(matches, requested\)/);
+  // A labelled non-clickable node routes to its nearest clickable ancestor.
+  assert.match(source, /private fun clickableAncestorOrSelf\(/);
+  assert.match(source, /return clickableAncestorOrSelf\(chosen\)/);
+  // The typed refusal survives when no unique safe target exists.
+  assert.match(source, /"exact-target-ambiguous"/);
+});
+
+const baselinePolicy = { eligible: true, verificationRequired: true, targetKey: 'tap@960,430' };
+const probeDeps = (outcome: unknown, hash = 'BASELINE') => ({
+  enabled: () => true,
+  capabilities: () => [],
+  probes: () => ({ snapshotHash: async () => hash, sleep: async () => {}, now: () => 0 }),
+  wait: async () => outcome,
+});
+
+test('a mutating verb that invalidated the baseline does not fail the next tap', async () => {
+  updateRefMapFromFlat([appHome]);
+  invalidateLastSnapshotHash(); // what device_scroll/back/fill leave behind
+  assert.equal(getLastSnapshotHash(), null);
+
+  const baseline = await establishInteractionBaseline(
+    { platform: 'android', appId },
+    baselinePolicy,
+    probeDeps(null),
+  );
+  assert.equal(baseline, 'BASELINE');
+
+  const result = await settleWithRetryIfNoChange(
+    okResult({ tapped: true }),
+    async () => okResult({ tapped: true }),
+    { platform: 'android', verb: 'tap', appId, initialSnapshotHash: baseline },
+    baselinePolicy,
+    probeDeps({ settled: true, method: 'window-gate', ms: 5, hierarchyChanged: true }),
+  );
+  const envelope = JSON.parse(result.content[0].text) as { ok: boolean };
+  assert.equal(result.isError, undefined);
+  assert.equal(envelope.ok, true);
+});
+
+test('an established baseline is reused, and no baseline is taken when verification is off', async () => {
+  updateRefMapFromFlat([appHome]);
+  const cached = getLastSnapshotHash();
+  assert.notEqual(cached, null);
+  assert.equal(
+    await establishInteractionBaseline(
+      { platform: 'android', appId },
+      baselinePolicy,
+      probeDeps(null),
+    ),
+    cached,
+  );
+  invalidateLastSnapshotHash();
+  assert.equal(
+    await establishInteractionBaseline(
+      { platform: 'android', appId },
+      { eligible: false, verificationRequired: false, targetKey: '' },
+      probeDeps(null),
+    ),
+    undefined,
+  );
 });

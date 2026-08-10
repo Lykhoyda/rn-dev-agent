@@ -13,7 +13,10 @@ const seedRefMap = () =>
     { ref: '@e0', type: 'Button', label: 'Go', rect: { x: 0, y: 0, width: 100, height: 40 } },
   ]);
 const parse = (r) => JSON.parse(r.content[0].text);
-const ctx = { platform: 'ios', verb: 'tap' };
+// The fail-closed effect contract is Android-scoped for this wave; iOS keeps
+// the advisory meta.noUiChange contract (covered by its own tests below).
+const ctx = { platform: 'android', verb: 'tap' };
+const iosCtx = { platform: 'ios', verb: 'tap' };
 const policy = { eligible: true, verificationRequired: true, targetKey: 'tap@50,20' };
 const depsWith = (outcomes) => {
   let i = 0;
@@ -317,6 +320,35 @@ test('ineligible policy → single settle, no initial hash requirement, no retry
   );
   assert.equal(dispatches, 0);
   assert.equal(parse(result).meta.noUiChange, undefined);
+});
+
+test('iOS unchanged tap stays advisory: success with meta.noUiChange, never an error', async () => {
+  const result = await settleWithRetryIfNoChange(
+    okResult({ tapped: true }),
+    async () => okResult({ tapped: true }),
+    iosCtx,
+    policy,
+    depsWith([unchanged, unchanged]),
+  );
+  const env = parse(result);
+  assert.equal(result.isError, undefined);
+  assert.equal(env.ok, true);
+  assert.equal(env.meta.noUiChange, true);
+  assert.equal(env.meta.tapRetried, true);
+});
+
+test('iOS probe failure stays advisory: success without typed uncertainty', async () => {
+  const result = await settleWithRetryIfNoChange(
+    okResult({ tapped: true }),
+    async () => okResult({ tapped: true }),
+    iosCtx,
+    policy,
+    depsWith([probeFailed]),
+  );
+  const env = parse(result);
+  assert.equal(result.isError, undefined);
+  assert.equal(env.ok, true);
+  assert.equal(env.code, undefined);
 });
 
 test('tapRetryPolicy gates on command, flags, coords, env, and opt-out', () => {

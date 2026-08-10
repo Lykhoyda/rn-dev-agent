@@ -28296,6 +28296,27 @@ function hasConsumedTapRetryBudget(result) {
     return false;
   }
 }
+function flagNoUiChange(result, targetKey) {
+  const distinct = recordNoUiChange(targetKey);
+  return attachMeta(result, {
+    noUiChange: true,
+    ...distinct >= WEDGED_DISTINCT_TARGETS ? { hint: WEDGED_RUNTIME_HINT } : {}
+  });
+}
+async function establishInteractionBaseline(ctx, policy, deps = {}) {
+  if (!policy.verificationRequired)
+    return void 0;
+  const cached2 = getLastSnapshotHash();
+  if (cached2 !== null)
+    return cached2;
+  try {
+    const settle = await Promise.resolve().then(() => (init_settle(), settle_exports));
+    const probes = deps.probes ? deps.probes(ctx.platform, ctx.appId) : ctx.platform === "ios" ? settle.buildIosProbes(ctx.appId) : settle.buildAndroidProbes(ctx.appId);
+    return await probes.snapshotHash() ?? void 0;
+  } catch {
+    return void 0;
+  }
+}
 function unverifiedInteractionResult(observedResult, targetKey, attempts3, reason) {
   const distinct = recordNoUiChange(targetKey);
   let observedMeta = {};
@@ -28313,12 +28334,14 @@ function unverifiedInteractionResult(observedResult, targetKey, attempts3, reaso
   });
 }
 async function settleWithRetryIfNoChange(firstResult, dispatch, ctx, policy, deps = {}) {
-  const preHash = policy.verificationRequired ? getLastSnapshotHash() ?? void 0 : void 0;
+  const failClosed = policy.verificationRequired && ctx.platform === "android";
+  const verify = failClosed || policy.eligible;
+  const preHash = verify ? ctx.initialSnapshotHash ?? getLastSnapshotHash() ?? void 0 : void 0;
   const first = await settleAfterMutationWithOutcome(firstResult, { ...ctx, ...preHash !== void 0 ? { initialSnapshotHash: preHash } : {} }, deps);
-  if (first.result.isError || !policy.verificationRequired)
+  if (first.result.isError || !verify)
     return first.result;
   if (preHash === void 0 || first.outcome?.hierarchyChanged === void 0) {
-    return unverifiedInteractionResult(first.result, policy.targetKey, 1, "effect-probe-unavailable");
+    return failClosed ? unverifiedInteractionResult(first.result, policy.targetKey, 1, "effect-probe-unavailable") : first.result;
   }
   if (first.outcome.hierarchyChanged === true) {
     recordUiChange();
@@ -28328,14 +28351,18 @@ async function settleWithRetryIfNoChange(firstResult, dispatch, ctx, policy, dep
     return unverifiedInteractionResult(first.result, policy.targetKey, 1, "no-ui-change");
   }
   if (hasConsumedTapRetryBudget(firstResult)) {
-    return unverifiedInteractionResult(first.result, policy.targetKey, 1, "no-ui-change");
+    return failClosed ? unverifiedInteractionResult(first.result, policy.targetKey, 1, "no-ui-change") : flagNoUiChange(first.result, policy.targetKey);
   }
   const second = await dispatch();
   if (second.isError) {
-    return unverifiedInteractionResult(attachMeta(first.result, { tapRetried: true }), policy.targetKey, 2, "retry-failed");
+    const retried = attachMeta(first.result, { tapRetried: true });
+    return failClosed ? unverifiedInteractionResult(retried, policy.targetKey, 2, "retry-failed") : flagNoUiChange(retried, policy.targetKey);
   }
   const settled = await settleAfterMutationWithOutcome(second, { ...ctx, initialSnapshotHash: preHash }, deps);
   if (settled.outcome?.hierarchyChanged !== true) {
+    if (!failClosed) {
+      return settled.outcome?.hierarchyChanged === false ? flagNoUiChange(attachMeta(settled.result, { tapRetried: true }), policy.targetKey) : attachMeta(settled.result, { tapRetried: true });
+    }
     return unverifiedInteractionResult(attachMeta(settled.result, { tapRetried: true }), policy.targetKey, 2, settled.outcome?.hierarchyChanged === false ? "no-ui-change" : "effect-probe-unavailable");
   }
   recordUiChange();
@@ -28535,13 +28562,15 @@ async function runNative(cliArgs, opts = {}) {
         timings_ms: { reResolve: healed.ms }
       };
     }
-    let result = await runAndroid2({ ...android, deviceId: activeSession?.deviceId });
     const androidPolicy = tapRetryPolicy(cliArgs, android.command, android.x, android.y, opts.retryIfNoChange !== void 0 ? { retryIfNoChange: opts.retryIfNoChange } : {});
+    const androidBaseline = await establishInteractionBaseline({ platform: "android", ...appId ? { appId } : {} }, androidPolicy);
+    let result = await runAndroid2({ ...android, deviceId: activeSession?.deviceId });
     result = await settleWithRetryIfNoChange(result, () => runAndroid2({ ...android, deviceId: activeSession?.deviceId }), {
       platform: "android",
       verb: cliArgs[0],
       ...appId ? { appId } : {},
-      ...opts.settle ? { settle: opts.settle } : {}
+      ...opts.settle ? { settle: opts.settle } : {},
+      ...androidBaseline !== void 0 ? { initialSnapshotHash: androidBaseline } : {}
     }, androidPolicy);
     if (healMeta)
       result = attachMeta(result, healMeta);

@@ -1120,6 +1120,36 @@ function hasConsumedTapRetryBudget(result) {
         return false;
     }
 }
+function flagNoUiChange(result, targetKey) {
+    const distinct = recordNoUiChange(targetKey);
+    return attachMeta(result, {
+        noUiChange: true,
+        ...(distinct >= WEDGED_DISTINCT_TARGETS ? { hint: WEDGED_RUNTIME_HINT } : {}),
+    });
+}
+// The effect probe compares a pre-interaction hierarchy hash against the
+// post-settle one, so a missing baseline is not evidence of a swallowed tap.
+// Any preceding mutating verb invalidates the baseline, so re-establish it
+// before dispatch instead of failing the next tap as unverifiable.
+export async function establishInteractionBaseline(ctx, policy, deps = {}) {
+    if (!policy.verificationRequired)
+        return undefined;
+    const cached = getLastSnapshotHash();
+    if (cached !== null)
+        return cached;
+    try {
+        const settle = await import('./lifecycle/settle.js');
+        const probes = deps.probes
+            ? deps.probes(ctx.platform, ctx.appId)
+            : ctx.platform === 'ios'
+                ? settle.buildIosProbes(ctx.appId)
+                : settle.buildAndroidProbes(ctx.appId);
+        return (await probes.snapshotHash()) ?? undefined;
+    }
+    catch {
+        return undefined;
+    }
+}
 function unverifiedInteractionResult(observedResult, targetKey, attempts, reason) {
     const distinct = recordNoUiChange(targetKey);
     let observedMeta = {};
@@ -1144,15 +1174,22 @@ function unverifiedInteractionResult(observedResult, targetKey, attempts, reason
 }
 // Settle the first dispatch with change detection; if the hierarchy did not
 // change, presume the tap was swallowed and retry exactly once. A runner's
-// gesture acknowledgement proves dispatch, not app effect: unchanged or
-// unobservable outcomes therefore fail with typed uncertainty, never success.
+// gesture acknowledgement proves dispatch, not app effect, so on Android
+// (this wave's scope) unchanged or unobservable outcomes fail with typed
+// uncertainty. iOS keeps the advisory meta.noUiChange contract.
 export async function settleWithRetryIfNoChange(firstResult, dispatch, ctx, policy, deps = {}) {
-    const preHash = policy.verificationRequired ? (getLastSnapshotHash() ?? undefined) : undefined;
+    const failClosed = policy.verificationRequired && ctx.platform === 'android';
+    const verify = failClosed || policy.eligible;
+    const preHash = verify
+        ? (ctx.initialSnapshotHash ?? getLastSnapshotHash() ?? undefined)
+        : undefined;
     const first = await settleAfterMutationWithOutcome(firstResult, { ...ctx, ...(preHash !== undefined ? { initialSnapshotHash: preHash } : {}) }, deps);
-    if (first.result.isError || !policy.verificationRequired)
+    if (first.result.isError || !verify)
         return first.result;
     if (preHash === undefined || first.outcome?.hierarchyChanged === undefined) {
-        return unverifiedInteractionResult(first.result, policy.targetKey, 1, 'effect-probe-unavailable');
+        return failClosed
+            ? unverifiedInteractionResult(first.result, policy.targetKey, 1, 'effect-probe-unavailable')
+            : first.result;
     }
     if (first.outcome.hierarchyChanged === true) {
         recordUiChange();
@@ -1166,14 +1203,24 @@ export async function settleWithRetryIfNoChange(firstResult, dispatch, ctx, poli
     // heal layer must not re-fire it, or it would double-dispatch the very tap
     // that transport recovery just resolved. Report noUiChange honestly, no retry.
     if (hasConsumedTapRetryBudget(firstResult)) {
-        return unverifiedInteractionResult(first.result, policy.targetKey, 1, 'no-ui-change');
+        return failClosed
+            ? unverifiedInteractionResult(first.result, policy.targetKey, 1, 'no-ui-change')
+            : flagNoUiChange(first.result, policy.targetKey);
     }
     const second = await dispatch();
     if (second.isError) {
-        return unverifiedInteractionResult(attachMeta(first.result, { tapRetried: true }), policy.targetKey, 2, 'retry-failed');
+        const retried = attachMeta(first.result, { tapRetried: true });
+        return failClosed
+            ? unverifiedInteractionResult(retried, policy.targetKey, 2, 'retry-failed')
+            : flagNoUiChange(retried, policy.targetKey);
     }
     const settled = await settleAfterMutationWithOutcome(second, { ...ctx, initialSnapshotHash: preHash }, deps);
     if (settled.outcome?.hierarchyChanged !== true) {
+        if (!failClosed) {
+            return settled.outcome?.hierarchyChanged === false
+                ? flagNoUiChange(attachMeta(settled.result, { tapRetried: true }), policy.targetKey)
+                : attachMeta(settled.result, { tapRetried: true });
+        }
         return unverifiedInteractionResult(attachMeta(settled.result, { tapRetried: true }), policy.targetKey, 2, settled.outcome?.hierarchyChanged === false ? 'no-ui-change' : 'effect-probe-unavailable');
     }
     recordUiChange();
@@ -1425,13 +1472,15 @@ export async function runNative(cliArgs, opts = {}) {
                 timings_ms: { reResolve: healed.ms },
             };
         }
-        let result = await runAndroid({ ...android, deviceId: activeSession?.deviceId });
         const androidPolicy = tapRetryPolicy(cliArgs, android.command, android.x, android.y, opts.retryIfNoChange !== undefined ? { retryIfNoChange: opts.retryIfNoChange } : {});
+        const androidBaseline = await establishInteractionBaseline({ platform: 'android', ...(appId ? { appId } : {}) }, androidPolicy);
+        let result = await runAndroid({ ...android, deviceId: activeSession?.deviceId });
         result = await settleWithRetryIfNoChange(result, () => runAndroid({ ...android, deviceId: activeSession?.deviceId }), {
             platform: 'android',
             verb: cliArgs[0],
             ...(appId ? { appId } : {}),
             ...(opts.settle ? { settle: opts.settle } : {}),
+            ...(androidBaseline !== undefined ? { initialSnapshotHash: androidBaseline } : {}),
         }, androidPolicy);
         if (healMeta)
             result = attachMeta(result, healMeta);
