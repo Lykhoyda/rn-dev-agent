@@ -151,6 +151,10 @@ test('GH#654: authoritative device-control docs preserve runtime guidance verbat
     'packages/claude-plugin/skills/rn-device-control/SKILL.md',
     'packages/codex-plugin/skills/rn-device-control/SKILL.md',
     'apps/docs-site/src/content/docs/troubleshooting.mdx',
+    'packages/shared-agent-knowledge/skills/rn-workflow/SKILL.md',
+    'packages/claude-plugin/skills/rn-workflow/SKILL.md',
+    'packages/codex-plugin/skills/rn-workflow/SKILL.md',
+    'apps/docs-site/src/content/docs/session-authority.mdx',
   ];
   const guidance = [
     DEVICE_BUSY_CLOSE_GUIDANCE,
@@ -165,5 +169,15 @@ test('GH#654: authoritative device-control docs preserve runtime guidance verbat
       assert.ok(doc.includes(sentence), `${relativePath}: ${sentence}`);
     assert.match(doc, /heartbeat\s+age bounded to 0–90s/);
     assert.match(doc, /does not expose the holder PID, project path, or app ID/);
+    assert.doesNotMatch(
+      doc,
+      /`DEVICE_BUSY`[^.]*wait for the named in-flight operation/,
+      `${relativePath}: obsolete DEVICE_BUSY wait guidance`,
+    );
+    assert.doesNotMatch(
+      doc,
+      /`DEVICE_BUSY` instead describes an in-flight/,
+      `${relativePath}: obsolete DEVICE_BUSY in-flight characterization`,
+    );
   }
 });

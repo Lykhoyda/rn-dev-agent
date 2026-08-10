@@ -149,8 +149,20 @@ name one, stop and ask — never pick the first available device, never shut
 down ambient or foreign devices. Refusals pass through verbatim with their
 typed alternatives: `DEVICE_CLAIM_CONFLICT` → hand off explicitly, adopt a
 proven-stale owner, or bind a different free simulator — never force-steal;
-`DEVICE_BUSY` → wait for the named in-flight operation; `BUSY_FOREIGN_FLOW` →
-wait for its owner.
+`BUSY_FOREIGN_FLOW` → wait for its owner.
+
+A `DEVICE_BUSY` refusal is a live device-lock holder on the exact device, not
+an in-flight operation to wait out. It reports whether the holder is alive and
+its heartbeat age bounded to 0–90s. It does not expose the holder PID, project path, or app ID,
+and it does not mutate the holder.
+
+From the holder worktree, run `device_snapshot action=close` to release it safely.
+
+Alternatively, boot a dedicated simulator (or emulator), bind its exact ID with `rn_session action=bind_device`, run the normal managed build/install there, then select that exact ID with `device_snapshot action=open ... attachOnly=true` when the app is already running.
+
+Dead holders self-heal on the next open attempt; live holders self-heal once their heartbeat is stale beyond the existing 90s recovery window.
+
+A healthy live holder is never stolen or changed by this refusal.
 
 ### Step 4 — Integration, private state root, managed Metro
 
