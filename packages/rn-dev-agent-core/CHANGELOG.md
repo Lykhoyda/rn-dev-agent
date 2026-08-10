@@ -1,5 +1,12 @@
 # rn-dev-agent-core
 
+## 0.71.1
+
+### Patch Changes
+
+- f538146: Fold the initial stale-device transfer into `bind_device` with `confirmed: true`: a proven-dead device owner is released inline through the same journaled cleanup engine with death re-proven from durable state and no capability token minted, an interrupted journal resumes token-lessly via a bare `bind_device` of the same target, and `release_stale_device` stays as a token-less compatibility alias that accepts `confirmed: true` (or a previously minted legacy handle) while live, unproven, split, foreign-worker, and mismatched-journal cases keep refusing without mutation.
+- 95efdf1: Launch iOS Expo dev clients through the session's authority-bound Metro when no explicit dev-client deep link was bound.
+
 ## 0.71.0
 
 ### Minor Changes
