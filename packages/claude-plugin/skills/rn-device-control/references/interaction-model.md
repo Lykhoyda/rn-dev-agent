@@ -21,7 +21,7 @@ Three levels of UI interaction, each with distinct trade-offs. Choose based on w
 
 ## Tier 2: `device_press` / `device_find` — XCTest (iOS) / UIAutomator (Android)
 
-**How it works:** Synthesizes native touch events via `_XCT_synthesizeEvent` (iOS fast-runner) or `adb input` (Android). Uses accessibility tree `@ref` identifiers.
+**How it works:** Synthesizes native touch events via `_XCT_synthesizeEvent` (iOS fast-runner). On Android a `@ref` that carries an accessibility identifier is actuated with `ACTION_CLICK` on the node re-resolved inside the owned app window; refs without one fall back to a coordinate tap. Uses accessibility tree `@ref` identifiers.
 
 **When to use:**
 - Standard button taps, long-press, swipe
@@ -32,7 +32,7 @@ Three levels of UI interaction, each with distinct trade-offs. Choose based on w
 - `@ref` points to accessibility element, which may be a container (not inner Pressable)
 - Coordinate-based: if the ref's frame covers a gesture handler, the touch hits the handler
 - iOS: ~210ms floor per tap (XPC overhead)
-- Android: limited to raw coordinates via `adb input tap x y`
+- Android: refs without an accessibility identifier still tap raw coordinates; an exact target that is missing, ambiguous, or refuses `ACTION_CLICK` fails with `INTERACTION_NOT_ACTUATED` instead of guessing, and a tap whose UI effect cannot be observed fails with `INTERACTION_EFFECT_UNVERIFIED`
 
 ---
 
