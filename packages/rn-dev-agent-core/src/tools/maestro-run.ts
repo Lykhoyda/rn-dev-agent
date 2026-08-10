@@ -95,7 +95,7 @@ export async function runFlowParked<T>(run: () => Promise<T>, opts: FlowParkOpts
   try {
     if (opts.platform === 'android') {
       const release = opts.releaseAndroidSlot ?? defaultReleaseAndroidSlot;
-      const outcome = await release({ deviceId: opts.deviceId, includeLegacy: false });
+      const outcome = await release({ deviceId: opts.deviceId });
       opts.onAndroidRelease?.(outcome);
     } else {
       await (opts.stopFastRunner ?? defaultStopFastRunner)(opts.deviceId);
@@ -344,6 +344,17 @@ export interface MaestroRunDeps {
 const UIAUTOMATION_SESSION_CREATION_FAILURE =
   'failed to create driver: create session: session not created: ' +
   'java.lang.IllegalStateException: UiAutomation not connected';
+
+function attachCause(error: unknown, cause: unknown): unknown {
+  if (error instanceof Error && error.cause === undefined) {
+    try {
+      Object.defineProperty(error, 'cause', { value: cause, configurable: true, writable: true });
+    } catch {
+      // a frozen/sealed error keeps its own message; the warning already carries the cause
+    }
+  }
+  return error;
+}
 
 export function isUiAutomationNotConnectedSessionCreationFailure(error: unknown): boolean {
   const candidate = error as { message?: unknown; stdout?: unknown; stderr?: unknown } | null;
@@ -647,11 +658,21 @@ export function createMaestroRunHandler(
                   throw error;
                 }
                 uiAutomationRecoveryRetried = true;
-                const releaseOutcome = await releaseAndroidSlot({
-                  deviceId: recoveryDeviceId,
-                  includeLegacy: false,
-                });
-                recordAndroidRelease(releaseOutcome);
+                try {
+                  recordAndroidRelease(
+                    await releaseAndroidSlot({
+                      deviceId: recoveryDeviceId,
+                      includeLegacy: false,
+                    }),
+                  );
+                } catch (releaseError) {
+                  androidSlotReleaseWarnings.push(
+                    `UiAutomation recovery release failed: ${
+                      releaseError instanceof Error ? releaseError.message : String(releaseError)
+                    }`,
+                  );
+                  throw attachCause(error, releaseError);
+                }
                 return executeOnce();
               }
             },
