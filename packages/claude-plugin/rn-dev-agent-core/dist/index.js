@@ -55789,7 +55789,7 @@ async function runFlowParked(run, opts = {}) {
   try {
     if (opts.platform === "android") {
       const release2 = opts.releaseAndroidSlot ?? releaseAndroidInteractionSlot;
-      const outcome = await release2({ deviceId: opts.deviceId, includeLegacy: false });
+      const outcome = await release2({ deviceId: opts.deviceId });
       opts.onAndroidRelease?.(outcome);
     } else {
       await (opts.stopFastRunner ?? stopFastRunner)(opts.deviceId);
@@ -55934,6 +55934,15 @@ function resolveAppId(override, platform) {
   return readExpoSlug() ?? "";
 }
 var UIAUTOMATION_SESSION_CREATION_FAILURE = "failed to create driver: create session: session not created: java.lang.IllegalStateException: UiAutomation not connected";
+function attachCause(error2, cause) {
+  if (error2 instanceof Error && error2.cause === void 0) {
+    try {
+      Object.defineProperty(error2, "cause", { value: cause, configurable: true, writable: true });
+    } catch {
+    }
+  }
+  return error2;
+}
 function isUiAutomationNotConnectedSessionCreationFailure(error2) {
   const candidate = error2;
   const text = [candidate?.message, candidate?.stdout, candidate?.stderr].filter((value) => typeof value === "string").join("\n").replace(/\s+/g, " ");
@@ -56047,6 +56056,7 @@ function createMaestroRunHandler(deps = {}) {
     const releaseAndroidSlot = deps.releaseAndroidSlot ?? releaseAndroidInteractionSlot;
     const androidSlotReleaseWarnings = [];
     let releasedAndroidDeviceId;
+    let uiAutomationRecoveryAttempted = false;
     let uiAutomationRecoveryRetried = false;
     const recordAndroidRelease = (outcome) => {
       if (outcome?.deviceId)
@@ -56056,7 +56066,12 @@ function createMaestroRunHandler(deps = {}) {
     };
     const androidReleaseMeta = () => ({
       ...androidSlotReleaseWarnings.length > 0 ? { androidSlotReleaseWarnings: [...androidSlotReleaseWarnings] } : {},
-      ...uiAutomationRecoveryRetried ? { androidUiAutomationRecovery: { retried: true, retryCount: 1 } } : {}
+      ...uiAutomationRecoveryAttempted ? {
+        androidUiAutomationRecovery: {
+          retried: uiAutomationRecoveryRetried,
+          retryCount: uiAutomationRecoveryRetried ? 1 : 0
+        }
+      } : {}
     });
     const androidReleaseCaveat = () => androidSlotReleaseWarnings.length > 0 ? `Android interaction-slot release warnings: ${androidSlotReleaseWarnings.join("; ")}` : void 0;
     const engineStatus = dispatch.runner === "maestro-runner" ? await getEngineStatus().catch(() => null) : null;
@@ -56090,15 +56105,20 @@ function createMaestroRunHandler(deps = {}) {
           return await executeOnce();
         } catch (error2) {
           const recoveryDeviceId = requestedDeviceId ?? releasedAndroidDeviceId;
-          if (platform !== "android" || uiAutomationRecoveryRetried || !recoveryDeviceId || !isUiAutomationNotConnectedSessionCreationFailure(error2)) {
+          if (platform !== "android" || uiAutomationRecoveryAttempted || !recoveryDeviceId || !isUiAutomationNotConnectedSessionCreationFailure(error2)) {
             throw error2;
           }
+          uiAutomationRecoveryAttempted = true;
+          try {
+            recordAndroidRelease(await releaseAndroidSlot({
+              deviceId: recoveryDeviceId,
+              includeLegacy: false
+            }));
+          } catch (releaseError) {
+            androidSlotReleaseWarnings.push(`UiAutomation recovery release failed: ${releaseError instanceof Error ? releaseError.message : String(releaseError)}`);
+            throw attachCause(error2, releaseError);
+          }
           uiAutomationRecoveryRetried = true;
-          const releaseOutcome = await releaseAndroidSlot({
-            deviceId: recoveryDeviceId,
-            includeLegacy: false
-          });
-          recordAndroidRelease(releaseOutcome);
           return executeOnce();
         }
       }, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin), {

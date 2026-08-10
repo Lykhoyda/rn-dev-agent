@@ -379,6 +379,7 @@ export function createMaestroRunHandler(deps = {}) {
         const releaseAndroidSlot = deps.releaseAndroidSlot ?? defaultReleaseAndroidSlot;
         const androidSlotReleaseWarnings = [];
         let releasedAndroidDeviceId;
+        let uiAutomationRecoveryAttempted = false;
         let uiAutomationRecoveryRetried = false;
         const recordAndroidRelease = (outcome) => {
             if (outcome?.deviceId)
@@ -390,8 +391,13 @@ export function createMaestroRunHandler(deps = {}) {
             ...(androidSlotReleaseWarnings.length > 0
                 ? { androidSlotReleaseWarnings: [...androidSlotReleaseWarnings] }
                 : {}),
-            ...(uiAutomationRecoveryRetried
-                ? { androidUiAutomationRecovery: { retried: true, retryCount: 1 } }
+            ...(uiAutomationRecoveryAttempted
+                ? {
+                    androidUiAutomationRecovery: {
+                        retried: uiAutomationRecoveryRetried,
+                        retryCount: uiAutomationRecoveryRetried ? 1 : 0,
+                    },
+                }
                 : {}),
         });
         const androidReleaseCaveat = () => androidSlotReleaseWarnings.length > 0
@@ -441,12 +447,12 @@ export function createMaestroRunHandler(deps = {}) {
                 catch (error) {
                     const recoveryDeviceId = requestedDeviceId ?? releasedAndroidDeviceId;
                     if (platform !== 'android' ||
-                        uiAutomationRecoveryRetried ||
+                        uiAutomationRecoveryAttempted ||
                         !recoveryDeviceId ||
                         !isUiAutomationNotConnectedSessionCreationFailure(error)) {
                         throw error;
                     }
-                    uiAutomationRecoveryRetried = true;
+                    uiAutomationRecoveryAttempted = true;
                     try {
                         recordAndroidRelease(await releaseAndroidSlot({
                             deviceId: recoveryDeviceId,
@@ -457,6 +463,7 @@ export function createMaestroRunHandler(deps = {}) {
                         androidSlotReleaseWarnings.push(`UiAutomation recovery release failed: ${releaseError instanceof Error ? releaseError.message : String(releaseError)}`);
                         throw attachCause(error, releaseError);
                     }
+                    uiAutomationRecoveryRetried = true;
                     return executeOnce();
                 }
             }, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin), {
