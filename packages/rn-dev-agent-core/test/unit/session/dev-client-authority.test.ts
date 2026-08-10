@@ -200,6 +200,47 @@ test('dev-client pin refuses any URL drift and never falls back to a picker row'
   );
 });
 
+test('dev-client pin refuses a one-sided dev-client URL instead of deriving the missing side', async () => {
+  const refusingDependencies = {
+    openUrl: async () => {
+      throw new Error('must not open');
+    },
+    launchExactApp: async () => {
+      throw new Error('must not launch');
+    },
+    launchExactAppWithInitialUrl: async () => {
+      throw new Error('must not launch');
+    },
+    acceptIosOpenDialog: async () => {},
+    connectExact: async () => ({
+      targetId: 'target-a',
+      connectionGeneration: 7,
+      deviceId: 'IOS-UUID',
+    }),
+    readMarker: async () => null,
+    readManagedManifest: async () => exactManifestResponse,
+  };
+  const base = {
+    ...expected,
+    deviceId: 'IOS-UUID',
+    metroPort: 8341,
+    runtimeKind: 'expo-dev-client' as const,
+    signerCapability: 'signer',
+  };
+
+  await assert.rejects(
+    pinExactDevClient({ ...base, devClientUrl: 'http://127.0.0.1:8341' }, refusingDependencies),
+    /DEV_CLIENT_ENDPOINT_NOT_FOUND/,
+  );
+  await assert.rejects(
+    pinExactDevClient(
+      { ...base, expectedDevClientUrl: 'http://127.0.0.1:8341' },
+      refusingDependencies,
+    ),
+    /DEV_CLIENT_ENDPOINT_NOT_FOUND/,
+  );
+});
+
 test('bare RN pin launches the exact claimed app without inventing a dev-client URL', async () => {
   const calls = [];
   const marker = buildSignedMetroMarker(expected, 'signer');
@@ -233,7 +274,7 @@ test('bare RN pin launches the exact claimed app without inventing a dev-client 
   assert.equal(binding.devClientUrl, undefined);
 });
 
-test('receipted Expo pin verifies the managed manifest without a dev-client URL', async () => {
+test('receipted iOS Expo pin launches through the authority-bound Metro without a dev-client URL', async () => {
   const calls = [];
   const marker = buildSignedMetroMarker(expected, 'signer');
   const binding = await pinExactDevClient(
@@ -246,10 +287,13 @@ test('receipted Expo pin verifies the managed manifest without a dev-client URL'
     },
     {
       openUrl: async () => {
-        throw new Error('missing URL must launch the exact app');
+        throw new Error('missing URL must not use openurl');
       },
-      launchExactApp: async (platform, deviceId, appId) =>
-        calls.push(['launch', platform, deviceId, appId]),
+      launchExactApp: async () => {
+        throw new Error('Expo Dev Client must not be stranded by a bare app launch');
+      },
+      launchExactAppWithInitialUrl: async (deviceId, appId, initialUrl) =>
+        calls.push(['launch-with-initial-url', deviceId, appId, initialUrl]),
       acceptIosOpenDialog: async () => {},
       connectExact: async () => ({
         targetId: 'target-expo',
@@ -266,9 +310,35 @@ test('receipted Expo pin verifies the managed manifest without a dev-client URL'
 
   assert.deepEqual(calls, [
     ['manifest', '127.0.0.1', 8341],
-    ['launch', 'ios', 'IOS-UUID', 'com.example.app'],
+    ['launch-with-initial-url', 'IOS-UUID', 'com.example.app', 'http://127.0.0.1:8341'],
   ]);
   assert.equal(binding.targetId, 'target-expo');
+  assert.equal(binding.devClientUrl, undefined, 'a bare Metro URL is not a dev-client deep link');
+  assert.equal(binding.launchMethod, 'app');
+});
+
+test('iOS Expo pin refuses when no authority-bound Metro port exists', async () => {
+  await assert.rejects(
+    pinExactDevClient(
+      {
+        ...expected,
+        deviceId: 'IOS-UUID',
+        metroPort: undefined as unknown as number,
+        runtimeKind: 'expo-dev-client',
+        signerCapability: 'signer',
+      },
+      {
+        openUrl: async () => assert.fail('must not open a URL'),
+        launchExactApp: async () => assert.fail('must not bare-launch the app'),
+        launchExactAppWithInitialUrl: async () => assert.fail('must not derive without authority'),
+        acceptIosOpenDialog: async () => {},
+        connectExact: async () => assert.fail('must not connect without Metro authority'),
+        readMarker: async () => null,
+        readManagedManifest: async () => assert.fail('must not guess a manifest endpoint'),
+      },
+    ),
+    /DEV_CLIENT_ENDPOINT_NOT_FOUND: authority-bound Metro port is unavailable/,
+  );
 });
 
 test('loader or error targets remain rejected until the exact runtime exposes its signed marker', async () => {

@@ -60,7 +60,7 @@ function removeManagedPortFlag(command, value) {
         command.splice(index, separator >= 0 ? 1 : 2);
     }
 }
-function managedMetroProxyUrl(session) {
+export function managedMetroProxyUrl(session) {
     if (session.platform === 'ios') {
         return `http://127.0.0.1:${session.metroPort}`;
     }

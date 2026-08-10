@@ -87,7 +87,7 @@ function removeManagedPortFlag(command: string[], value: string): void {
   }
 }
 
-function managedMetroProxyUrl(session: SessionBuildBinding): string {
+export function managedMetroProxyUrl(session: SessionBuildBinding): string {
   if (session.platform === 'ios') {
     return `http://127.0.0.1:${session.metroPort}`;
   }

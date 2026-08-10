@@ -1,3 +1,4 @@
+import { managedMetroProxyUrl } from './build-adapter.js';
 import { verifyManagedManifestLaunchAsset } from './expo-manifest.js';
 import { verifyMetroAuthorityMarker } from './metro-authority.js';
 export async function reconcileAuthoritativeBundle(status, dependencies) {
@@ -74,6 +75,12 @@ export function boundConnectConflict(status, request) {
     return null;
 }
 export async function pinExactDevClient(input, dependencies) {
+    if (!Number.isSafeInteger(input.metroPort) || input.metroPort < 1 || input.metroPort > 65_535) {
+        throw new Error('DEV_CLIENT_ENDPOINT_NOT_FOUND: authority-bound Metro port is unavailable');
+    }
+    const derivedIosExpoLaunchTarget = input.platform === 'ios' && input.runtimeKind === 'expo-dev-client'
+        ? managedMetroProxyUrl(input)
+        : undefined;
     if (input.devClientUrl !== input.expectedDevClientUrl) {
         throw new Error('DEV_CLIENT_ENDPOINT_NOT_FOUND: declared dev-client URL does not match the session endpoint');
     }
@@ -99,6 +106,9 @@ export async function pinExactDevClient(input, dependencies) {
         await dependencies.openUrl(input.platform, input.deviceId, input.devClientUrl, input.appId);
         if (input.platform === 'ios')
             await dependencies.acceptIosOpenDialog(input.deviceId);
+    }
+    else if (derivedIosExpoLaunchTarget) {
+        await dependencies.launchExactAppWithInitialUrl(input.deviceId, input.appId, derivedIosExpoLaunchTarget);
     }
     else {
         await dependencies.launchExactApp(input.platform, input.deviceId, input.appId);
