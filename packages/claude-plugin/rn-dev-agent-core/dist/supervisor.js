@@ -67021,13 +67021,14 @@ function createMaestroRunHandler(deps = {}) {
       const reproveManagedOrigin = args.reproveManagedOrigin ?? deps.reproveManagedOrigin ?? managedAuthority.reproveManagedOrigin;
       const stageResults = await parkFlow(() => executeMaestroAuthorityStages(validatedCommands, async (commands) => {
         writeFileSync12(flowFile, buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, [...commands]), "utf-8");
-        const executeOnce = async () => {
+        const executeOnce = async (beforeDispatch) => {
           const remainingTimeout = flowDeadline - now();
           if (remainingTimeout <= 0) {
             const error2 = new Error("Maestro flow timeout exhausted before the next stage");
             Object.assign(error2, { code: "ETIMEDOUT" });
             throw error2;
           }
+          beforeDispatch?.();
           return execute2(dispatch.binPath, finalArgs, {
             timeout: remainingTimeout,
             encoding: "utf8",
@@ -67042,17 +67043,24 @@ function createMaestroRunHandler(deps = {}) {
             throw error2;
           }
           uiAutomationRecoveryAttempted = true;
+          const recoveryTimeout = flowDeadline - now();
+          if (recoveryTimeout <= 0) {
+            androidSlotReleaseWarnings.push("UiAutomation recovery skipped: Maestro flow timeout was exhausted");
+            throw error2;
+          }
           try {
             recordAndroidRelease(await releaseAndroidSlot({
               deviceId: recoveryDeviceId,
-              includeLegacy: false
+              includeLegacy: false,
+              signal: AbortSignal.timeout(recoveryTimeout)
             }));
           } catch (releaseError) {
             androidSlotReleaseWarnings.push(`UiAutomation recovery release failed: ${releaseError instanceof Error ? releaseError.message : String(releaseError)}`);
             throw attachCause(error2, releaseError);
           }
-          uiAutomationRecoveryRetried = true;
-          return executeOnce();
+          return executeOnce(() => {
+            uiAutomationRecoveryRetried = true;
+          });
         }
       }, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin), {
         platform,

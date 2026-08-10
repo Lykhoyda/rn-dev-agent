@@ -161,7 +161,11 @@ test('GH#653 pre-flow release warnings remain visible in maestro_run', async () 
 
 test('GH#653 reproduced wedge releases only the exact owned slot and retries once', async () => {
   let executions = 0;
-  const releases: Array<{ deviceId?: string; includeLegacy?: boolean }> = [];
+  const releases: Array<{
+    deviceId?: string;
+    includeLegacy?: boolean;
+    signal?: AbortSignal;
+  }> = [];
   const handler = baseHandler({
     execFile: async () => {
       executions += 1;
@@ -178,7 +182,10 @@ test('GH#653 reproduced wedge releases only the exact owned slot and retries onc
   assert.equal(body.ok, true);
   assert.equal(body.data.passed, true);
   assert.equal(executions, 2);
-  assert.deepEqual(releases, [{ deviceId: SERIAL, includeLegacy: false }]);
+  assert.equal(releases.length, 1);
+  assert.equal(releases[0]!.deviceId, SERIAL);
+  assert.equal(releases[0]!.includeLegacy, false);
+  assert.ok(releases[0]!.signal instanceof AbortSignal);
   assert.deepEqual(body.data.androidUiAutomationRecovery, { retried: true, retryCount: 1 });
 });
 
@@ -271,6 +278,58 @@ test('GH#653 recovery release failure keeps the original UiAutomation failure', 
     /UiAutomation recovery release failed:.*without an exact serial/s,
   );
   assert.deepEqual(body.meta.androidUiAutomationRecovery, { retried: false, retryCount: 0 });
+});
+
+test('GH#653 exhausted flow deadline skips recovery cleanup and retry', async () => {
+  let executions = 0;
+  let releases = 0;
+  const times = [0, 0, 5_001];
+  const handler = baseHandler({
+    now: () => times.shift() ?? 5_001,
+    execFile: async () => {
+      executions += 1;
+      throw execFailure(UIAUTOMATION_FAILURE);
+    },
+    releaseAndroidSlot: async () => {
+      releases += 1;
+      return { warnings: [] };
+    },
+  });
+
+  const body = envelope(await handler({ ...runArgs, timeoutMs: 5_000 }));
+  assert.equal(body.ok, false);
+  assert.equal(executions, 1);
+  assert.equal(releases, 0);
+  assert.deepEqual(body.meta.androidUiAutomationRecovery, { retried: false, retryCount: 0 });
+  assert.deepEqual(body.meta.androidSlotReleaseWarnings, [
+    'UiAutomation recovery skipped: Maestro flow timeout was exhausted',
+  ]);
+});
+
+test('GH#653 recovery cleanup is aborted by the remaining flow deadline', async () => {
+  let executions = 0;
+  let releaseSignal: AbortSignal | undefined;
+  const handler = baseHandler({
+    now: () => 0,
+    execFile: async () => {
+      executions += 1;
+      throw execFailure(UIAUTOMATION_FAILURE, `Connecting to Android device: ${SERIAL}`);
+    },
+    releaseAndroidSlot: async (opts) => {
+      releaseSignal = opts.signal;
+      await new Promise<void>((_resolve, reject) => {
+        opts.signal?.addEventListener('abort', () => reject(opts.signal?.reason), { once: true });
+      });
+    },
+  });
+
+  const body = envelope(await handler({ ...runArgs, timeoutMs: 20 }));
+  assert.equal(body.ok, false);
+  assert.equal(executions, 1);
+  assert.equal(releaseSignal?.aborted, true);
+  assert.deepEqual(body.meta.androidUiAutomationRecovery, { retried: false, retryCount: 0 });
+  assert.match(body.error, /UiAutomation recovery release failed/);
+  assert.match(body.meta.output, /UiAutomation not connected/);
 });
 
 test('GH#653 a repeated wedge is bounded to one retry', async () => {

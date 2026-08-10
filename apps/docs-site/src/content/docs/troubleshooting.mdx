@@ -180,16 +180,20 @@ session: session not created: java.lang.IllegalStateException: UiAutomation not
 connected`. Recovery triggers only when the Maestro subprocess exits nonzero and
 that structured session-creation record is its entire stderr. `maestro_run` then
 force-stops only the two rn-dev-agent runner packages on the exact bound serial
-and retries the flow once; `data.androidUiAutomationRecovery` reports `retried`
-and `retryCount` (never more than 1). Maestro's own orphaned session self-heals,
+and retries the flow once. On a successful or warning response,
+`data.androidUiAutomationRecovery` reports `retried` and `retryCount` (never more
+than 1); on a failed or refused response, the same diagnostic is under
+`meta.androidUiAutomationRecovery`. Maestro's own orphaned session self-heals,
 so no Maestro, Appium, or foreign package is ever killed. A copy of the same text
 anywhere else — app logcat, console or network output, a partially executed flow's
 step output, or stderr mixed with other records — is not the wedge and never
 retries or releases packages.
 
-Pre-flow and recovery release problems are not swallowed: they appear as
-`data.androidSlotReleaseWarnings` and in the response warning text. If the same
-wedge survives the single retry, re-open the device session
+Pre-flow and recovery release problems are not swallowed. Successful and warning
+responses expose them as `data.androidSlotReleaseWarnings` and in the response
+warning text; failed and refused responses expose them as
+`meta.androidSlotReleaseWarnings`. If the same wedge survives the single retry,
+re-open the device session
 (`device_snapshot action=open`) on that serial and retry.
 
 ## Error codes
