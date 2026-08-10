@@ -681,12 +681,22 @@ export function createMaestroRunHandler(
                   );
                   throw error;
                 }
+                // NOTE: AbortSignal.timeout()'s timer is unref'd, so a cleanup
+                // awaiting only that signal never aborts once the loop drains.
+                const recoveryAbort = new AbortController();
+                const recoveryDeadlineTimer = setTimeout(() => {
+                  recoveryAbort.abort(
+                    new Error(
+                      'UiAutomation recovery cleanup exceeded the remaining Maestro flow timeout',
+                    ),
+                  );
+                }, recoveryTimeout);
                 try {
                   recordAndroidRelease(
                     await releaseAndroidSlot({
                       deviceId: recoveryDeviceId,
                       includeLegacy: false,
-                      signal: AbortSignal.timeout(recoveryTimeout),
+                      signal: recoveryAbort.signal,
                     }),
                   );
                 } catch (releaseError) {
@@ -696,6 +706,8 @@ export function createMaestroRunHandler(
                     }`,
                   );
                   throw attachCause(error, releaseError);
+                } finally {
+                  clearTimeout(recoveryDeadlineTimer);
                 }
                 try {
                   return await executeOnce(() => {
