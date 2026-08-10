@@ -8,6 +8,7 @@ import {
 } from '../../dist/tools/maestro-run.js';
 import type { MaestroDispatch } from '../../dist/tools/maestro-dispatch.js';
 import { ExactAndroidDeviceRequiredError } from '../../dist/runners/release-android-slot.js';
+import { authorityErrorMeta, SessionAuthorityError } from '../../dist/session/registry.js';
 
 const SERIAL = 'emulator-5580';
 const APP_ID = 'dev.example.issue653';
@@ -356,8 +357,53 @@ test('GH#653 a deadline lapsing after successful cleanup keeps the wedge and nev
   assert.match(body.meta.output, /UiAutomation not connected/);
   assert.match(
     body.meta.androidSlotReleaseWarnings[0],
-    /UiAutomation recovery retry skipped:.*timeout exhausted/,
+    /UiAutomation recovery retry did not start:.*timeout exhausted/,
   );
+});
+
+test('GH#653 a retry spawn failure preserves the wedge and reports no subprocess retry', async () => {
+  let executions = 0;
+  const handler = baseHandler({
+    execFile: async () => {
+      executions += 1;
+      if (executions === 1) {
+        throw execFailure(UIAUTOMATION_FAILURE, `Connecting to Android device: ${SERIAL}`);
+      }
+      throw Object.assign(new Error('spawn maestro-runner ENOENT'), {
+        code: 'ENOENT',
+        stdout: '',
+        stderr: '',
+      });
+    },
+    releaseAndroidSlot: async () => ({ warnings: [] }),
+  });
+
+  const body = envelope(await handler(runArgs));
+  assert.equal(body.ok, false);
+  assert.equal(executions, 2, 'the second invocation failed before spawning a child');
+  assert.deepEqual(body.meta.androidUiAutomationRecovery, { retried: false, retryCount: 0 });
+  assert.match(body.meta.output, /UiAutomation not connected/);
+  assert.match(body.error, /UiAutomation recovery retry did not start:.*ENOENT/);
+});
+
+test('GH#653 release diagnostics survive a session-authority refusal after parking', async () => {
+  const handler = baseHandler({
+    parkFlow: async (_run, opts) => {
+      opts.onAndroidRelease?.({ warnings: ['pre-flow owned-package release was partial'] });
+      throw new SessionAuthorityError(
+        'AUTHORITY_LOST_DURING_OPERATION',
+        'runner ownership changed during park completion',
+      );
+    },
+  });
+
+  await assert.rejects(handler(runArgs), (error: unknown) => {
+    assert.ok(error instanceof SessionAuthorityError);
+    assert.deepEqual(authorityErrorMeta(error).androidSlotReleaseWarnings, [
+      'pre-flow owned-package release was partial',
+    ]);
+    return true;
+  });
 });
 
 test('GH#653 release warnings stay visible while a fallback caveat keeps its warn-once budget', async () => {

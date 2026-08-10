@@ -356,6 +356,15 @@ function attachCause(error: unknown, cause: unknown): unknown {
   return error;
 }
 
+function isPreSpawnMaestroError(error: unknown): boolean {
+  const candidate = error as { code?: unknown; stdout?: unknown; stderr?: unknown } | null;
+  return (
+    (candidate?.code === 'ENOENT' || candidate?.code === 'EACCES') &&
+    !candidate.stdout &&
+    !candidate.stderr
+  );
+}
+
 export function isUiAutomationNotConnectedSessionCreationFailure(error: unknown): boolean {
   const candidate = error as { code?: unknown; stderr?: unknown } | null;
   if (
@@ -714,9 +723,12 @@ export function createMaestroRunHandler(
                     uiAutomationRecoveryRetried = true;
                   });
                 } catch (retryError) {
-                  if (uiAutomationRecoveryRetried) throw retryError;
+                  if (uiAutomationRecoveryRetried && !isPreSpawnMaestroError(retryError)) {
+                    throw retryError;
+                  }
+                  uiAutomationRecoveryRetried = false;
                   androidSlotReleaseWarnings.push(
-                    `UiAutomation recovery retry skipped: ${
+                    `UiAutomation recovery retry did not start: ${
                       retryError instanceof Error ? retryError.message : String(retryError)
                     }`,
                   );
@@ -834,7 +846,10 @@ export function createMaestroRunHandler(
       // A flow that died mid-way may still have reinstalled: re-issue before
       // reporting, so the failure is the flow's and not a broken axis I.
       await commitReinstalledInstall();
-      if (err instanceof SessionAuthorityError) throw err;
+      if (err instanceof SessionAuthorityError) {
+        err.attachMeta(androidReleaseMeta());
+        throw err;
+      }
       const stageError = err instanceof MaestroStageExecutionError ? err.stageError : err;
       const msg = stageError instanceof Error ? stageError.message : String(stageError);
       if (stageError instanceof ExactAndroidDeviceRequiredError) {

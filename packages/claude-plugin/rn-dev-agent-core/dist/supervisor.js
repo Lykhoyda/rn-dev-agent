@@ -20763,6 +20763,7 @@ function shortAuthorityIdentity(value) {
 }
 function authorityErrorMeta(error2) {
   return {
+    ...error2.getSupplementalMeta(),
     axis: error2.details?.axis ?? errorAxes[error2.code],
     expected: error2.details?.expected,
     observed: error2.details?.observed,
@@ -20858,6 +20859,7 @@ var init_registry = __esm({
     SessionAuthorityError = class extends Error {
       code;
       holder;
+      supplementalMeta;
       details;
       constructor(code, message, holder, details) {
         super(`${code}: ${message}`);
@@ -20865,6 +20867,12 @@ var init_registry = __esm({
         this.code = code;
         this.holder = holder;
         this.details = details;
+      }
+      attachMeta(meta) {
+        this.supplementalMeta = { ...this.supplementalMeta, ...meta };
+      }
+      getSupplementalMeta() {
+        return { ...this.supplementalMeta };
       }
     };
     RECOVERY_HANDLE_TTL_MS = 5 * 6e4;
@@ -66850,6 +66858,10 @@ function attachCause(error2, cause) {
   }
   return error2;
 }
+function isPreSpawnMaestroError(error2) {
+  const candidate = error2;
+  return (candidate?.code === "ENOENT" || candidate?.code === "EACCES") && !candidate.stdout && !candidate.stderr;
+}
 function isUiAutomationNotConnectedSessionCreationFailure(error2) {
   const candidate = error2;
   if (typeof candidate?.code !== "number" || candidate.code === 0 || typeof candidate.stderr !== "string") {
@@ -67046,9 +67058,11 @@ function createMaestroRunHandler(deps = {}) {
               uiAutomationRecoveryRetried = true;
             });
           } catch (retryError) {
-            if (uiAutomationRecoveryRetried)
+            if (uiAutomationRecoveryRetried && !isPreSpawnMaestroError(retryError)) {
               throw retryError;
-            androidSlotReleaseWarnings.push(`UiAutomation recovery retry skipped: ${retryError instanceof Error ? retryError.message : String(retryError)}`);
+            }
+            uiAutomationRecoveryRetried = false;
+            androidSlotReleaseWarnings.push(`UiAutomation recovery retry did not start: ${retryError instanceof Error ? retryError.message : String(retryError)}`);
             throw attachCause(error2, retryError);
           }
         }
@@ -67125,8 +67139,10 @@ function createMaestroRunHandler(deps = {}) {
       return warnResult(warnAug.meta, warnAug.message);
     } catch (err) {
       await commitReinstalledInstall();
-      if (err instanceof SessionAuthorityError)
+      if (err instanceof SessionAuthorityError) {
+        err.attachMeta(androidReleaseMeta());
         throw err;
+      }
       const stageError = err instanceof MaestroStageExecutionError ? err.stageError : err;
       const msg3 = stageError instanceof Error ? stageError.message : String(stageError);
       if (stageError instanceof ExactAndroidDeviceRequiredError) {

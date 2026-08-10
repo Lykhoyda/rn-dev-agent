@@ -210,6 +210,12 @@ function attachCause(error, cause) {
     }
     return error;
 }
+function isPreSpawnMaestroError(error) {
+    const candidate = error;
+    return ((candidate?.code === 'ENOENT' || candidate?.code === 'EACCES') &&
+        !candidate.stdout &&
+        !candidate.stderr);
+}
 export function isUiAutomationNotConnectedSessionCreationFailure(error) {
     const candidate = error;
     if (typeof candidate?.code !== 'number' ||
@@ -489,9 +495,11 @@ export function createMaestroRunHandler(deps = {}) {
                         });
                     }
                     catch (retryError) {
-                        if (uiAutomationRecoveryRetried)
+                        if (uiAutomationRecoveryRetried && !isPreSpawnMaestroError(retryError)) {
                             throw retryError;
-                        androidSlotReleaseWarnings.push(`UiAutomation recovery retry skipped: ${retryError instanceof Error ? retryError.message : String(retryError)}`);
+                        }
+                        uiAutomationRecoveryRetried = false;
+                        androidSlotReleaseWarnings.push(`UiAutomation recovery retry did not start: ${retryError instanceof Error ? retryError.message : String(retryError)}`);
                         throw attachCause(error, retryError);
                     }
                 }
@@ -592,8 +600,10 @@ export function createMaestroRunHandler(deps = {}) {
             // A flow that died mid-way may still have reinstalled: re-issue before
             // reporting, so the failure is the flow's and not a broken axis I.
             await commitReinstalledInstall();
-            if (err instanceof SessionAuthorityError)
+            if (err instanceof SessionAuthorityError) {
+                err.attachMeta(androidReleaseMeta());
                 throw err;
+            }
             const stageError = err instanceof MaestroStageExecutionError ? err.stageError : err;
             const msg = stageError instanceof Error ? stageError.message : String(stageError);
             if (stageError instanceof ExactAndroidDeviceRequiredError) {
