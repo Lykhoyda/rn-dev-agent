@@ -8181,6 +8181,7 @@ var init_registry = __esm({
     SessionAuthorityError = class extends Error {
       code;
       holder;
+      supplementalMeta;
       details;
       constructor(code, message, holder, details) {
         super(`${code}: ${message}`);
@@ -8188,6 +8189,12 @@ var init_registry = __esm({
         this.code = code;
         this.holder = holder;
         this.details = details;
+      }
+      attachMeta(meta) {
+        this.supplementalMeta = { ...this.supplementalMeta, ...meta };
+      }
+      getSupplementalMeta() {
+        return { ...this.supplementalMeta };
       }
     };
     RECOVERY_HANDLE_TTL_MS = 5 * 6e4;

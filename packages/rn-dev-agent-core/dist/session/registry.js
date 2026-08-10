@@ -20,6 +20,7 @@ function referencesMetroEvidenceSocket(value, path) {
 export class SessionAuthorityError extends Error {
     code;
     holder;
+    supplementalMeta;
     details;
     constructor(code, message, holder, details) {
         super(`${code}: ${message}`);
@@ -27,6 +28,12 @@ export class SessionAuthorityError extends Error {
         this.code = code;
         this.holder = holder;
         this.details = details;
+    }
+    attachMeta(meta) {
+        this.supplementalMeta = { ...this.supplementalMeta, ...meta };
+    }
+    getSupplementalMeta() {
+        return { ...this.supplementalMeta };
     }
 }
 // GH #672: recovery handles are bounded. `status` rotates one that is expired or
@@ -75,6 +82,7 @@ export function shortAuthorityIdentity(value) {
 }
 export function authorityErrorMeta(error) {
     return {
+        ...error.getSupplementalMeta(),
         axis: error.details?.axis ?? errorAxes[error.code],
         expected: error.details?.expected,
         observed: error.details?.observed,

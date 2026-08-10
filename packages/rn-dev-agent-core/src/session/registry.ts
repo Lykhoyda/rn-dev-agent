@@ -188,6 +188,7 @@ export interface ControllerBinding {
 export class SessionAuthorityError extends Error {
   readonly code: string;
   readonly holder?: { sessionId: string; claimEpoch: number };
+  private supplementalMeta?: Record<string, unknown>;
   readonly details?: {
     axis?: string;
     expected?: string;
@@ -211,6 +212,14 @@ export class SessionAuthorityError extends Error {
     this.code = code;
     this.holder = holder;
     this.details = details;
+  }
+
+  attachMeta(meta: Record<string, unknown>): void {
+    this.supplementalMeta = { ...this.supplementalMeta, ...meta };
+  }
+
+  getSupplementalMeta(): Record<string, unknown> {
+    return { ...this.supplementalMeta };
   }
 }
 
@@ -312,6 +321,7 @@ export function shortAuthorityIdentity(value: unknown): string {
 
 export function authorityErrorMeta(error: SessionAuthorityError): Record<string, unknown> {
   return {
+    ...error.getSupplementalMeta(),
     axis: error.details?.axis ?? errorAxes[error.code],
     expected: error.details?.expected,
     observed: error.details?.observed,
