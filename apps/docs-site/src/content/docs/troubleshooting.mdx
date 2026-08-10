@@ -177,12 +177,15 @@ Use maestro-runner instead of classic Maestro — it uses HTTP to UIAutomator2 i
 An MCP reconnect can leave plugin-owned Android instrumentation behind, so
 maestro-runner fails session creation with `failed to create driver: create
 session: session not created: java.lang.IllegalStateException: UiAutomation not
-connected`. On exactly that session-creation failure, `maestro_run` force-stops
-only the two rn-dev-agent runner packages on the exact bound serial and retries
-the flow once; `data.androidUiAutomationRecovery` reports `retried` and
-`retryCount` (never more than 1). Maestro's own orphaned session self-heals, so
-no Maestro, Appium, or foreign package is ever killed. Any other Maestro failure
-— including the same exception outside session creation — is never retried.
+connected`. Recovery triggers only when the Maestro subprocess exits nonzero and
+that structured session-creation record is its entire stderr. `maestro_run` then
+force-stops only the two rn-dev-agent runner packages on the exact bound serial
+and retries the flow once; `data.androidUiAutomationRecovery` reports `retried`
+and `retryCount` (never more than 1). Maestro's own orphaned session self-heals,
+so no Maestro, Appium, or foreign package is ever killed. A copy of the same text
+anywhere else — app logcat, console or network output, a partially executed flow's
+step output, or stderr mixed with other records — is not the wedge and never
+retries or releases packages.
 
 Pre-flow and recovery release problems are not swallowed: they appear as
 `data.androidSlotReleaseWarnings` and in the response warning text. If the same
