@@ -323,7 +323,7 @@ error health.
 - **NEVER** use `xcrun simctl` or `adb input` for UI interaction
 - **For KNOWN testIDs**: prefer `cdp_interact(testID=…)` (fiber-tree-resolved, no coordinate caching) OR `device_batch` with the `testID` field on find/press/fill (snapshot-resolved per call). Both eliminate the stale-ref-across-step-transitions failure mode. `cdp_interact` also resolves RNTL-style selectors — `role`/`name`/`text`/`placeholder` — and fails closed on ambiguity rather than picking the wrong element.
 - **For UNKNOWN elements** (need to discover what's on screen): `device_snapshot` first, then `device_press(ref="@eN")`.
-- Stale-`@ref` taps self-heal: the runner re-resolves by identity signature when the match is unique and retries a no-effect tap once (`meta.reResolved` / `meta.tapRetried`). Treat that as a safety net, not a license to reuse old refs — ambiguous re-resolution still fails with `STALE_REF`.
+- Stale-`@ref` taps self-heal: the runner re-resolves by identity signature when the match is unique (`meta.reResolved`), but a dispatched tap is never replayed when its effect is uncertain. Treat that as a safety net, not a license to reuse old refs — ambiguous re-resolution still fails with `STALE_REF`.
 
 #### "I need to navigate to a specific screen"
 - **Best option:** `cdp_nav_graph(action="go", screen="ProfileScreen")` — scans navigation graph, plans route, navigates in one call

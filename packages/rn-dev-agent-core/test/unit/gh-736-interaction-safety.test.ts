@@ -626,7 +626,10 @@ test('exact press disambiguates duplicates by the requested point and clicks the
   assert.match(source, /requireNoSameWindowOccluder\(clickable, requested\)\s*return clickable/);
   assert.match(source, /"exact-target-not-hittable"/);
   // A coordinate outside the display is refused before any injection.
-  assert.match(source, /CoordinateBounds\.contains\(device\.displayWidth, device\.displayHeight, x, y\)/);
+  assert.match(
+    source,
+    /CoordinateBounds\.contains\(device\.displayWidth, device\.displayHeight, x, y\)/,
+  );
   assert.match(source, /"coordinate-out-of-bounds"/);
 });
 
