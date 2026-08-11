@@ -27144,11 +27144,11 @@ function isValidBody(o) {
   const b = o;
   return typeof b.pid === "number" && Number.isFinite(b.pid) && (b.platform === "ios" || b.platform === "android") && typeof b.deviceId === "string" && b.deviceId.length > 0 && typeof b.projectRoot === "string" && typeof b.startedAt === "number" && Number.isFinite(b.startedAt) && typeof b.lastHeartbeat === "number" && Number.isFinite(b.lastHeartbeat);
 }
-var DEFAULT_STALE_MS2, DeviceLock;
+var DEVICE_LOCK_STALE_MS, DeviceLock;
 var init_device_lock = __esm({
   "packages/rn-dev-agent-core/dist/lifecycle/device-lock.js"() {
     "use strict";
-    DEFAULT_STALE_MS2 = 9e4;
+    DEVICE_LOCK_STALE_MS = 9e4;
     DeviceLock = class {
       lockPath;
       acquired = false;
@@ -27173,7 +27173,7 @@ var init_device_lock = __esm({
         this.version = opts.version;
         this.clock = opts.clock ?? Date.now;
         this.processAlive = opts.processAlive ?? defaultProcessAlive3;
-        this.staleMs = opts.staleMs ?? DEFAULT_STALE_MS2;
+        this.staleMs = opts.staleMs ?? DEVICE_LOCK_STALE_MS;
         this.lockPath = join18(this.tmpDir, `rn-dev-agent-device-${uid}-${this.platform}-${this.deviceId}.lock`);
       }
       acquire() {
@@ -27343,9 +27343,27 @@ function releaseDeviceLockForSession() {
     activeDeviceLock = null;
   }
 }
-function deviceBusyMessage(deviceId, holder) {
+function defaultHolderProcessAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error2) {
+    return error2.code === "EPERM";
+  }
+}
+function deviceBusyHolderSummary(holder, options = {}) {
+  const rawHeartbeatAgeMs = Math.max(0, (options.now ?? Date.now()) - holder.lastHeartbeat);
+  return {
+    alive: (options.processAlive ?? defaultHolderProcessAlive)(holder.pid),
+    heartbeatAgeMs: Math.min(rawHeartbeatAgeMs, DEVICE_LOCK_STALE_MS),
+    heartbeatAgeCapped: rawHeartbeatAgeMs > DEVICE_LOCK_STALE_MS
+  };
+}
+function deviceBusyMessage(deviceId, holder, summary = deviceBusyHolderSummary(holder)) {
   const label = holder.platform === "android" ? "Emulator/device" : "Simulator";
-  return `${label} ${deviceId} is already owned by another rn-dev-agent bridge (PID ${holder.pid}, project ${holder.projectRoot}${holder.appId ? `, app ${holder.appId}` : ""}). Close that session or target a different simulator.`;
+  const heartbeatAgeSeconds = Math.ceil(summary.heartbeatAgeMs / 1e3);
+  const heartbeatAge = `${heartbeatAgeSeconds}s${summary.heartbeatAgeCapped ? "+" : ""}`;
+  return `${label} ${deviceId} is already owned by another rn-dev-agent bridge. Holder is ${summary.alive ? "alive" : "not alive"}; heartbeat age is ${heartbeatAge} (bounded to 0\u201390s). ${DEVICE_BUSY_CLOSE_GUIDANCE} ${DEVICE_BUSY_ALTERNATE_GUIDANCE} ${DEVICE_BUSY_STALE_GUIDANCE} ${DEVICE_BUSY_OWNERSHIP_GUIDANCE}`;
 }
 async function isAppRunning(platform, bundleId, probes, deviceId) {
   const p = (platform ?? "ios").toLowerCase();
@@ -27445,9 +27463,10 @@ function createDeviceSnapshotHandler(deps = {}) {
       }
       const lockResult = acquireDeviceLockForSession(lockPlatform, deviceId, appId);
       if (lockResult.status === "conflict") {
-        return failResult(deviceBusyMessage(deviceId, lockResult.holder), {
+        const holder = deviceBusyHolderSummary(lockResult.holder);
+        return failResult(deviceBusyMessage(deviceId, lockResult.holder, holder), {
           code: "DEVICE_BUSY",
-          holder: lockResult.holder
+          holder
         });
       }
       if (lockResult.degraded) {
@@ -27795,7 +27814,7 @@ async function reopenSessionForRecovery(appId, platform, attachOnly, deviceId, d
     sessionName: recoveryName
   });
 }
-var execFile9, HEARTBEAT_MS, activeDeviceLock, heartbeatTimer, AndroidAppLaunchError;
+var execFile9, HEARTBEAT_MS, activeDeviceLock, heartbeatTimer, DEVICE_BUSY_CLOSE_GUIDANCE, DEVICE_BUSY_ALTERNATE_GUIDANCE, DEVICE_BUSY_STALE_GUIDANCE, DEVICE_BUSY_OWNERSHIP_GUIDANCE, AndroidAppLaunchError;
 var init_device_session = __esm({
   "packages/rn-dev-agent-core/dist/tools/device-session.js"() {
     "use strict";
@@ -27821,6 +27840,10 @@ var init_device_session = __esm({
     HEARTBEAT_MS = 3e4;
     activeDeviceLock = null;
     heartbeatTimer = null;
+    DEVICE_BUSY_CLOSE_GUIDANCE = "From the holder worktree, run `device_snapshot action=close` to release it safely.";
+    DEVICE_BUSY_ALTERNATE_GUIDANCE = "Alternatively, boot a dedicated simulator (or emulator), bind its exact ID with `rn_session action=bind_device`, run the normal managed build/install there, then select that exact ID with `device_snapshot action=open ... attachOnly=true` when the app is already running.";
+    DEVICE_BUSY_STALE_GUIDANCE = "Dead holders self-heal on the next open attempt; live holders self-heal once their heartbeat is stale beyond the existing 90s recovery window.";
+    DEVICE_BUSY_OWNERSHIP_GUIDANCE = "A healthy live holder is never stolen or changed by this refusal.";
     AndroidAppLaunchError = class extends Error {
       constructor(message) {
         super(message);
@@ -87962,7 +87985,7 @@ var init_index = __esm({
       platform: external_exports.enum(["ios", "android"]).optional().describe("Target platform (auto-detected from session)"),
       appId: external_exports.string().optional().describe("App bundle ID (auto-detected from app.json)"),
       appFile: external_exports.string().optional().describe("iOS only \u2014 path to a built .app/.ipa for maestro-runner to reinstall on clearState. Auto-resolved from the flow appId when omitted (GH#201)."),
-      deviceId: external_exports.string().min(1).max(256).optional().describe("Exact UDID or serial; defaults from session or Android ANDROID_SERIAL."),
+      deviceId: external_exports.string().min(1).max(256).optional().describe("Exact iOS UDID or Android serial. Defaults from a matching active session, or ANDROID_SERIAL on Android, and is forwarded to the replay engine."),
       timeoutMs: external_exports.number().int().min(5e3).max(3e5).default(12e4).describe("Execution timeout in ms"),
       params: external_exports.record(external_exports.string(), external_exports.string()).optional().describe("GH #116: parameter bindings forwarded as -e KEY=VALUE for ${KEY} placeholders in the flow. Keys must match /^[A-Z_][A-Z0-9_]*$/ (validated in the handler).")
     }, createMaestroRunHandler());
