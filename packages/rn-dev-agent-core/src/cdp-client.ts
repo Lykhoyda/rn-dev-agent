@@ -684,6 +684,11 @@ export class CDPClient {
   private _reconnectDiscover: typeof discoverExactPort | undefined;
   private _exactDiscoveryPort: number | undefined;
 
+  /** GH #625: pinned device affinity, if an explicit targetId pin captured one. */
+  get pinnedDeviceName(): string | undefined {
+    return this._connectFilters.deviceName;
+  }
+
   private createAuthoritativeDiscover(
     awaitWithinBoundary?: AwaitWithinBoundary,
   ): typeof discoverExactPort {

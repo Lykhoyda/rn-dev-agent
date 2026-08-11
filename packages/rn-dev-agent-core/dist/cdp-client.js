@@ -484,6 +484,10 @@ export class CDPClient {
     _connectFilters = {};
     _reconnectDiscover;
     _exactDiscoveryPort;
+    /** GH #625: pinned device affinity, if an explicit targetId pin captured one. */
+    get pinnedDeviceName() {
+        return this._connectFilters.deviceName;
+    }
     createAuthoritativeDiscover(awaitWithinBoundary) {
         return async (_port, filtersOrPlatform) => {
             const policy = this._authoritativeSessionPolicy;

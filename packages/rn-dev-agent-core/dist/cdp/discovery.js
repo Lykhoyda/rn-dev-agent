@@ -343,6 +343,13 @@ function describeTarget(target) {
     const confidence = target.platformInference ?? 'probed';
     return `${target.id} title="${target.title || '?'}" appId="${target.appId ?? '?'}" device="${target.deviceName ?? '?'}" description="${target.description ?? '?'}" platform=${target.platform ?? '?'} confidence=${confidence}`;
 }
+/** Metro target ids are `<device>-<page>`; the device part may contain hyphens. */
+function metroDeviceConnectionId(id) {
+    if (!id)
+        return '';
+    const cut = id.lastIndexOf('-');
+    return cut > 0 ? id.slice(0, cut) : id;
+}
 export class TargetSelectionError extends Error {
     code;
     candidates;
@@ -374,17 +381,54 @@ export function selectTarget(validTargets, filtersOrPlatform) {
     let filteredTargets = validTargets;
     const warnings = [];
     let warnNoPlatformFilter = false;
-    // Selection precedence starts with an exact target id. It is exact identity,
-    // but it never overrides an explicit/session platform constraint.
+    // GH #625: device affinity outranks the page-scoped targetId. Metro page ids
+    // churn on reload and can be reused across devices after a Metro restart, so
+    // the pinned deviceName is the only durable identity. Fail closed when it
+    // cannot be re-proven — never silently bind a sibling simulator.
+    if (filters.deviceName) {
+        const pinnedDevice = filters.deviceName.trim();
+        const deviceMatched = filteredTargets.filter((target) => target.deviceName?.trim() === pinnedDevice);
+        if (deviceMatched.length === 0) {
+            return {
+                targets: [],
+                warning: `Pinned device "${pinnedDevice}" has no live CDP target on this Metro; refusing to silently bind a different device. ` +
+                    `Candidates: ${validTargets.map(describeTarget).join('; ')}. ` +
+                    `Relaunch the app on the pinned device, or re-pin deliberately via cdp_targets + cdp_connect targetId.`,
+            };
+        }
+        // The affinity must land on exactly ONE Metro device connection. Metro ids
+        // are `<device>-<page>` (device may itself contain hyphens), so multiple
+        // device prefixes under one deviceName mean two live devices share that
+        // name — indistinguishable from Metro metadata, and after a Metro restart
+        // even an exact page-id match cannot prove which clone owns it. Fail closed.
+        const devicePrefixes = new Set(deviceMatched.map((t) => metroDeviceConnectionId(t.id)));
+        if (devicePrefixes.size > 1) {
+            return {
+                targets: [],
+                warning: `Pinned device name "${pinnedDevice}" matches ${devicePrefixes.size} live Metro device connections; refusing an ambiguous bind. ` +
+                    `Candidates: ${deviceMatched.map(describeTarget).join('; ')}. ` +
+                    `Re-pin deliberately via cdp_targets + cdp_connect targetId.`,
+            };
+        }
+        filteredTargets = deviceMatched;
+    }
+    // Selection precedence continues with an exact target id. It is exact
+    // identity, but it never overrides an explicit/session platform constraint —
+    // and with a device affinity pinned it cannot escape that device.
     if (filters.targetId) {
-        const idMatched = validTargets.filter((t) => t.id === filters.targetId);
-        if (idMatched.length === 0) {
+        const idMatched = filteredTargets.filter((t) => t.id === filters.targetId);
+        if (idMatched.length > 0) {
+            filteredTargets = idMatched;
+        }
+        else if (!filters.deviceName) {
             return {
                 targets: [],
                 warning: `targetId "${filters.targetId}" not found. Available ids: ${validTargets.map((t) => t.id).join(', ')}`,
             };
         }
-        filteredTargets = idMatched;
+        else {
+            warnings.push(`Pinned targetId "${filters.targetId}" is stale (Metro page ids change on reload); re-resolving on pinned device "${filters.deviceName.trim()}".`);
+        }
     }
     if (filters.platform) {
         const platform = filters.platform.toLowerCase();
@@ -406,7 +450,8 @@ export function selectTarget(validTargets, filtersOrPlatform) {
         !filters.targetId &&
         !filters.bundleId &&
         !filters.deviceKind &&
-        !filters.preferredBundleId) {
+        !filters.preferredBundleId &&
+        !filters.deviceName) {
         warnNoPlatformFilter = true;
     }
     if (filters.deviceKind) {
@@ -560,6 +605,8 @@ export async function discover(currentPort, platformFilterOrFilters) {
         hints.push(`bundleId=${filters.bundleId}`);
     if (filters.preferredBundleId)
         hints.push(`preferredBundleId=${filters.preferredBundleId}`);
+    if (filters.deviceName)
+        hints.push(`deviceName=${filters.deviceName}`);
     logger.debug('CDP', `Discovering Metro on ports: ${ports.join(', ')}${hints.length ? ` (${hints.join(', ')})` : ''}`);
     // GH #303: probe ALL candidate ports, then prefer one with an attached Hermes
     // target so a detached sibling-worktree Metro can't shadow a healthy one.

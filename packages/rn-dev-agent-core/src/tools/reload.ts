@@ -23,6 +23,8 @@ interface CapturedClientState {
   port: number;
   platform: 'ios' | 'android' | undefined;
   bundleId: string | undefined;
+  /** GH #625: pinned device affinity that must survive the recovery reconnect. */
+  deviceName: string | undefined;
   proxyWasActive: boolean;
 }
 
@@ -44,6 +46,7 @@ export function captureClientState(client: CDPClient): CapturedClientState {
     port: client.metroPort,
     platform: target?.platform,
     bundleId: target?.description ?? undefined,
+    deviceName: client.pinnedDeviceName,
     proxyWasActive: client.proxyDesired,
   };
 }
@@ -96,6 +99,9 @@ export async function forceReconnect(
     const filters = {
       platform: authorityTarget?.platform ?? captured.platform,
       bundleId: authorityTarget?.appId ?? captured.bundleId,
+      // GH #625: without an exact authority target, the pinned device affinity
+      // is the only thing keeping recovery off a sibling simulator.
+      ...(authorityTarget ? {} : { deviceName: captured.deviceName }),
       ...(authorityTarget && resolveExactTargetId
         ? { targetId: await resolveExactTargetId(newClient, captured, authorityTarget) }
         : {}),
