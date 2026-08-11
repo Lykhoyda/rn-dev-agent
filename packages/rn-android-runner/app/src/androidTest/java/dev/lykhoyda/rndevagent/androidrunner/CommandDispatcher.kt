@@ -391,31 +391,118 @@ class CommandDispatcher(
             node.recycle()
             throw exactTargetNotHittable()
         }
-        if (node.isClickable) return node
-        var current: AccessibilityNodeInfo? = node.parent
-        var depth = 0
-        while (current != null && depth++ < CLICKABLE_ANCESTOR_MAX_DEPTH) {
-            if (current.isClickable) {
-                if (!liveTargetContains(current, requested)) {
-                    current.recycle()
-                    node.recycle()
-                    throw exactTargetNotHittable()
+        val clickable = if (node.isClickable) {
+            node
+        } else {
+            var current: AccessibilityNodeInfo? = node.parent
+            var depth = 0
+            var owner: AccessibilityNodeInfo? = null
+            while (current != null && depth++ < CLICKABLE_ANCESTOR_MAX_DEPTH) {
+                if (current.isClickable) {
+                    owner = current
+                    break
                 }
-                node.recycle()
-                return current
+                val next = current.parent
+                current.recycle()
+                current = next
             }
-            val next = current.parent
-            current.recycle()
-            current = next
+            if (owner == null) {
+                current?.recycle()
+                node.recycle()
+                throw ExactPressException(
+                    "INTERACTION_NOT_ACTUATED",
+                    "none",
+                    "exact-target-not-clickable",
+                    "Exact Android target has no live clickable owner; no coordinate fallback was attempted.",
+                )
+            }
+            if (!liveTargetContains(owner, requested)) {
+                owner.recycle()
+                node.recycle()
+                throw exactTargetNotHittable()
+            }
+            node.recycle()
+            owner
         }
-        current?.recycle()
-        node.recycle()
-        throw ExactPressException(
-            "INTERACTION_NOT_ACTUATED",
-            "none",
-            "exact-target-not-clickable",
-            "Exact Android target has no live clickable owner; no coordinate fallback was attempted.",
-        )
+        try {
+            requireNoSameWindowOccluder(clickable, requested)
+            return clickable
+        } catch (error: Throwable) {
+            clickable.recycle()
+            throw error
+        }
+    }
+
+    private fun requireNoSameWindowOccluder(
+        target: AccessibilityNodeInfo,
+        requested: Point,
+    ) {
+        val targetPath = zOrderPath(target) ?: throw exactTargetNotHittable()
+        val window = instrumentation.uiAutomation.windows.firstOrNull { it.id == target.windowId }
+            ?: throw exactTargetNotHittable()
+        val root = window.root ?: throw exactTargetNotHittable()
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        stack.addLast(AccessibilityNodeInfo.obtain(root))
+        var visited = 0
+        var occluded = false
+        val bounds = Rect()
+        while (stack.isNotEmpty() && visited++ < 20_000) {
+            val candidate = stack.removeLast()
+            for (index in 0 until candidate.childCount) {
+                candidate.getChild(index)?.let { stack.addLast(it) }
+            }
+            candidate.getBoundsInScreen(bounds)
+            val actionableAtPoint = candidate.isEnabled && candidate.isVisibleToUser &&
+                candidate.isClickable && !bounds.isEmpty &&
+                bounds.contains(requested.x, requested.y)
+            if (actionableAtPoint) {
+                val candidatePath = zOrderPath(candidate)
+                if (candidatePath == null ||
+                    ExactPressSafety.sameWindowNodeMayOcclude(targetPath, candidatePath)
+                ) {
+                    occluded = true
+                }
+            }
+            candidate.recycle()
+            if (occluded) break
+        }
+        val traversalComplete = ExactPressSafety.traversalComplete(stack.size)
+        while (stack.isNotEmpty()) stack.removeLast().recycle()
+        if (occluded) throw exactTargetNotHittable()
+        if (!traversalComplete) {
+            throw ExactPressException(
+                "INTERACTION_NOT_ACTUATED",
+                "none",
+                "exact-target-unresolved",
+                "Exact Android occlusion traversal exhausted its budget; refusing partial evidence.",
+            )
+        }
+    }
+
+    private fun zOrderPath(node: AccessibilityNodeInfo): List<ExactPressSafety.ZOrderStep>? {
+        val path = mutableListOf<ExactPressSafety.ZOrderStep>()
+        var current: AccessibilityNodeInfo? = AccessibilityNodeInfo.obtain(node)
+        var depth = 0
+        while (current != null && depth++ < 64) {
+            path.add(
+                ExactPressSafety.ZOrderStep(
+                    nodeIdentity = current.hashCode(),
+                    drawingOrder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                        current.drawingOrder
+                    } else {
+                        0
+                    },
+                ),
+            )
+            val parent = current.parent
+            current.recycle()
+            current = parent
+        }
+        if (current != null) {
+            current.recycle()
+            return null
+        }
+        return path.asReversed()
     }
 
     private fun liveTargetContains(node: AccessibilityNodeInfo, requested: Point): Boolean {

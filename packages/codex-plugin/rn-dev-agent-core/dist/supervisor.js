@@ -25101,21 +25101,12 @@ function selfHealEnabled(env) {
   const v = env.RN_SELF_HEAL?.trim().toLowerCase();
   return v !== "0" && v !== "false";
 }
-function tapRetryPolicy(cliArgs, builtCommand, x, y, opts) {
+function tapRetryPolicy(cliArgs, builtCommand, x, y, _opts) {
   const ref = cliArgs[1];
   const exactTarget = ref?.startsWith("@") ? getFreshRefTarget(ref) : null;
   const keyboardTarget = exactTarget?.snapshotElementType === "Key" || exactTarget?.snapshotElementType === "Keyboard" || cliArgs.includes(IME_KEY_FLAG);
   const verificationRequired = !keyboardTarget && RETRYABLE_TAP_COMMANDS.has(builtCommand) && !cliArgs.includes("--double-tap") && !cliArgs.includes("--count") && !cliArgs.includes("--hold-ms") && x !== void 0 && y !== void 0;
-  const eligible = verificationRequired && opts.retryIfNoChange !== false && selfHealEnabled(process.env);
-  return { eligible, verificationRequired, targetKey: `${builtCommand}@${x},${y}` };
-}
-function hasConsumedTapRetryBudget(result) {
-  try {
-    const env = JSON.parse(result.content[0].text);
-    return env.meta?.transportRecovery !== void 0 || env.meta?.keyboardGuard === "auto_dismissed" || env.data?.keyboardGuard === "auto_dismissed" || env.meta?.keyboardGuard === "keyboard_target" || env.data?.keyboardGuard === "keyboard_target";
-  } catch {
-    return false;
-  }
+  return { eligible: false, verificationRequired, targetKey: `${builtCommand}@${x},${y}` };
 }
 function flagNoUiChange(result, targetKey) {
   const distinct = recordNoUiChange(targetKey);
@@ -25152,7 +25143,7 @@ async function establishInteractionBaseline(ctx, policy, deps = {}) {
     return void 0;
   }
 }
-function unverifiedInteractionResult(observedResult, targetKey, attempts3, reason) {
+function unverifiedInteractionResult(observedResult, targetKey, reason) {
   const distinct = recordNoUiChange(targetKey);
   let observedMeta = {};
   try {
@@ -25160,49 +25151,30 @@ function unverifiedInteractionResult(observedResult, targetKey, attempts3, reaso
     observedMeta = envelope.meta ?? {};
   } catch {
   }
-  return failResult(reason === "no-ui-change" ? "The tap was dispatched but produced no observable UI change." : reason === "retry-failed" ? "The tap produced no observable UI change and the bounded retry failed." : "The tap was dispatched, but its UI effect could not be observed.", "INTERACTION_EFFECT_UNVERIFIED", {
+  return failResult(reason === "no-ui-change" ? "The tap was dispatched but produced no observable UI change." : "The tap was dispatched, but its UI effect could not be observed.", "INTERACTION_EFFECT_UNVERIFIED", {
     ...observedMeta,
     mutation: "possible",
     reason,
-    attempts: attempts3,
+    attempts: 1,
     ...distinct >= WEDGED_DISTINCT_TARGETS ? { hint: WEDGED_RUNTIME_HINT } : {}
   });
 }
-async function settleWithRetryIfNoChange(firstResult, dispatch, ctx, policy, deps = {}) {
-  const failClosed = policy.verificationRequired && ctx.platform === "android" && await effectVerificationEnabled(ctx.settle, deps);
-  const verify = failClosed || policy.eligible;
+async function settleWithRetryIfNoChange(firstResult, _dispatch, ctx, policy, deps = {}) {
+  const verify = policy.verificationRequired && await effectVerificationEnabled(ctx.settle, deps);
+  const failClosed = verify && ctx.platform === "android";
   const cachedHash = ctx.platform === "android" && ctx.appId ? getLastSnapshotHashForPackage(ctx.appId) : getLastSnapshotHash();
   const preHash = verify ? ctx.initialSnapshotHash ?? cachedHash ?? void 0 : void 0;
   const first = await settleAfterMutationWithOutcome(firstResult, { ...ctx, ...preHash !== void 0 ? { initialSnapshotHash: preHash } : {} }, deps);
   if (first.result.isError || !verify)
     return first.result;
   if (preHash === void 0 || first.outcome?.hierarchyChanged === void 0) {
-    return failClosed ? unverifiedInteractionResult(first.result, policy.targetKey, 1, "effect-probe-unavailable") : first.result;
+    return failClosed ? unverifiedInteractionResult(first.result, policy.targetKey, "effect-probe-unavailable") : first.result;
   }
   if (first.outcome.hierarchyChanged === true) {
     recordUiChange();
     return first.result;
   }
-  if (!policy.eligible) {
-    return unverifiedInteractionResult(first.result, policy.targetKey, 1, "no-ui-change");
-  }
-  if (hasConsumedTapRetryBudget(firstResult)) {
-    return failClosed ? unverifiedInteractionResult(first.result, policy.targetKey, 1, "no-ui-change") : flagNoUiChange(first.result, policy.targetKey);
-  }
-  const second = await dispatch();
-  if (second.isError) {
-    const retried = attachMeta(first.result, { tapRetried: true });
-    return failClosed ? unverifiedInteractionResult(retried, policy.targetKey, 2, "retry-failed") : flagNoUiChange(retried, policy.targetKey);
-  }
-  const settled = await settleAfterMutationWithOutcome(second, { ...ctx, initialSnapshotHash: preHash }, deps);
-  if (settled.outcome?.hierarchyChanged !== true) {
-    if (!failClosed) {
-      return settled.outcome?.hierarchyChanged === false ? flagNoUiChange(attachMeta(settled.result, { tapRetried: true }), policy.targetKey) : attachMeta(settled.result, { tapRetried: true });
-    }
-    return unverifiedInteractionResult(attachMeta(settled.result, { tapRetried: true }), policy.targetKey, 2, settled.outcome?.hierarchyChanged === false ? "no-ui-change" : "effect-probe-unavailable");
-  }
-  recordUiChange();
-  return attachMeta(settled.result, { tapRetried: true });
+  return failClosed ? unverifiedInteractionResult(first.result, policy.targetKey, "no-ui-change") : flagNoUiChange(first.result, policy.targetKey);
 }
 function staleRefFail(ref, reason, cachedMetadata, candidates = []) {
   const message = reason === "ambiguous" ? `Element at ref ${ref} is stale and re-resolution matched ${candidates.length} elements \u2014 refusing to guess-tap` : `Element at ref ${ref} no longer hittable \u2014 UI re-rendered since snapshot`;
@@ -87793,7 +87765,7 @@ var init_index = __esm({
       index: external_exports.number().int().min(0).optional().describe("Pick the Nth candidate (0-based) when multiple elements match. Short-circuits AMBIGUOUS_MATCH."),
       includeSystemUi: external_exports.boolean().optional().describe("Include Android system UI in matching (default false; may leave the app).")
     }, createDeviceFindHandler(getClient));
-    trackedTool("device_press", 'Tap a UI element by its @ref from device_snapshot, or at explicit raw x/y coordinates. Pass exactly one target form. On iOS, a latest-snapshot Key/Keyboard ref is runner-validated against the current live keyboard and activated exactly once (meta.keyboardGuard="keyboard_target"); stale, forged, missing-keyboard, or raw-coordinate targets never receive that exemption. Ordinary app-content taps dismiss only through a safe native hide/dismiss control or optional JS tier, then refresh and uniquely re-resolve before one tap. Supports double-tap, repeated taps, long hold, and post-tap focus settle. Requires an open session. Stale ordinary app @refs self-heal by identity re-resolution (meta.reResolved); stale iOS Key/Keyboard refs refuse with KEYBOARD_TARGET_STALE and mutation:none. Swallowed ordinary taps auto-retry once, but validated keyboard targets and keyboard/transport recovery never replay. On Android the tap is scoped to the owned app window: a @ref belonging to another package (system navigation, IME, dialogs) is refused with OUTSIDE_APP_WINDOW \u2014 use device_find with includeSystemUi=true and action="click" for system UI.', {
+    trackedTool("device_press", 'Tap a UI element by its @ref from device_snapshot, or at explicit raw x/y coordinates. Pass exactly one target form. On iOS, a latest-snapshot Key/Keyboard ref is runner-validated against the current live keyboard and activated exactly once (meta.keyboardGuard="keyboard_target"); stale, forged, missing-keyboard, or raw-coordinate targets never receive that exemption. Ordinary app-content taps dismiss only through a safe native hide/dismiss control or optional JS tier, then refresh and uniquely re-resolve before one tap. Supports double-tap, repeated taps, long hold, and post-tap focus settle. Requires an open session. Stale ordinary app @refs self-heal by identity re-resolution (meta.reResolved); stale iOS Key/Keyboard refs refuse with KEYBOARD_TARGET_STALE and mutation:none. A command is never replayed after a possible dispatch; uncertain Android effects fail with one-attempt typed uncertainty. On Android the tap is scoped to the owned app window: a @ref belonging to another package (system navigation, IME, dialogs) is refused with OUTSIDE_APP_WINDOW \u2014 use device_find with includeSystemUi=true and action="click" for system UI.', {
       ref: external_exports.string().optional().describe('Element ref from device_snapshot (e.g. "e3" or "@e3"). Omit when using x/y.'),
       x: external_exports.number().optional().describe("Raw tap X coordinate; requires y and no ref"),
       y: external_exports.number().optional().describe("Raw tap Y coordinate; requires x and no ref"),
@@ -87802,7 +87774,7 @@ var init_index = __esm({
       holdMs: external_exports.number().int().min(0).max(1e4).optional().describe("Hold duration in ms (for long-press via ref)"),
       waitForFocusMs: external_exports.number().int().min(0).max(5e3).optional().describe("Sleep this many ms after tap to let keyboard focus settle \u2014 useful in sequential press+fill flows where focus would otherwise not propagate."),
       settleTimeoutMs: external_exports.number().int().min(500).max(3e4).optional().describe("Override the post-action settle budget in ms (default 6000). Settle waits for the UI to stabilize after the action; see meta.settle in the result. Budget knob only \u2014 RN_SETTLE=0 disables settle."),
-      retryIfNoChange: external_exports.boolean().optional().describe("Story 05: when an ordinary tap produces no UI change, one automatic re-tap fires by default. Validated iOS Key/Keyboard targets and transport/keyboard recovery are never replayed. Set false to disable for other taps (e.g. intentional no-op taps). RN_SELF_HEAL=0 disables globally.")
+      retryIfNoChange: external_exports.boolean().optional().describe("Deprecated compatibility option. Interactions are never automatically replayed after a possible dispatch; uncertainty is reported from the first attempt.")
     }, createDevicePressHandler(getClient));
     trackedTool("device_fill", "Fill one exact TextInput and report success only after stable exact read-back by the mutation owner. A unique controlled React TextInput uses one onChangeText dispatch and fiber read-back; an uncontrolled input uses one native runner transaction. Focus is skipped only when that exact owner is positively focused. Ambiguity, transformation, unreadability, staleness, target loss, secure or occluded targets, and timeout uncertainty hard-fail without automatic retyping, adb input, or Maestro fallback. Public results and diagnostics expose status and length metadata, never the requested or observed text. Requires an open session and connected helpers.", {
       ref: external_exports.string().describe('Input field ref from device_snapshot (e.g. "e5" or "@e5")'),
@@ -87828,7 +87800,7 @@ var init_index = __esm({
       x: external_exports.number().optional().describe("X coordinate (use with y for coordinate-based long press)"),
       y: external_exports.number().optional().describe("Y coordinate"),
       durationMs: external_exports.number().int().min(100).max(1e4).optional().describe("Hold duration in ms (default 1000)"),
-      retryIfNoChange: external_exports.boolean().optional().describe("Story 05: when the tap produces no UI change, one automatic re-tap fires by default. Set false to disable (e.g. intentional no-op taps). RN_SELF_HEAL=0 disables globally.")
+      retryIfNoChange: external_exports.boolean().optional().describe("Deprecated compatibility option. Interactions are never automatically replayed after a possible dispatch; uncertainty is reported from the first attempt.")
     }, createDeviceLongPressHandler(getClient));
     trackedTool("device_scroll", "Scroll the screen in a direction. Smoother than device_swipe for list scrolling. Requires an open session.", {
       direction: external_exports.enum(["up", "down", "left", "right"]).describe("Scroll direction"),

@@ -397,10 +397,11 @@ test('a verified IME key press is neither effect-probed nor re-dispatched', asyn
   assert.equal(envelope.code, undefined);
 });
 
-test('ordinary app taps keep their fail-closed effect verification', () => {
+test('ordinary app taps keep fail-closed effect verification without replay eligibility', () => {
   updateRefMapFromFlat([appHome, imeKey]);
   const policy = tapRetryPolicy(['press', appHome.ref], 'tap', 90, 740, {});
   assert.equal(policy.verificationRequired, true);
+  assert.equal(policy.eligible, false);
   const systemUiPolicy = tapRetryPolicy(
     ['press', systemHome.ref, '--include-system-ui'],
     'tap',
@@ -594,15 +595,43 @@ test('exact press disambiguates duplicates by the requested point and clicks the
   assert.match(source, /"exact-target-unresolved"/);
   assert.match(source, /ExactPressSafety\.traversalComplete\(stack\.size\)/);
   assert.match(source, /ExactPressSafety\.liveTargetIsHittable/);
+  assert.match(source, /requireNoSameWindowOccluder\(clickable, requested\)/);
+  assert.match(source, /ExactPressSafety\.sameWindowNodeMayOcclude/);
+  assert.match(source, /candidate\.isClickable/);
+  assert.match(source, /requireNoSameWindowOccluder\(clickable, requested\)\s*return clickable/);
   assert.match(source, /"exact-target-not-hittable"/);
 });
 
-const baselinePolicy = { eligible: true, verificationRequired: true, targetKey: 'tap@960,430' };
+const baselinePolicy = { eligible: false, verificationRequired: true, targetKey: 'tap@960,430' };
 const probeDeps = (outcome: unknown, hash = 'BASELINE') => ({
   enabled: () => true,
   capabilities: () => [],
   probes: () => ({ snapshotHash: async () => hash, sleep: async () => {}, now: () => 0 }),
   wait: async () => outcome,
+});
+
+test('a navigation effect false-negative is uncertain but never re-actuates', async () => {
+  updateRefMapFromFlat([appHome]);
+  let redispatches = 0;
+  const result = await settleWithRetryIfNoChange(
+    okResult({ tapped: true, method: 'accessibility-action' }),
+    async () => {
+      redispatches++;
+      return okResult({ tapped: true, method: 'accessibility-action' });
+    },
+    { platform: 'android', verb: 'tap', appId, initialSnapshotHash: 'BASELINE' },
+    { ...baselinePolicy, eligible: true },
+    probeDeps({ settled: true, method: 'window-gate', ms: 5, hierarchyChanged: false }),
+  );
+  const envelope = JSON.parse(result.content[0].text) as {
+    code: string;
+    meta: { attempts: number; mutation: string; tapRetried?: boolean };
+  };
+  assert.equal(redispatches, 0);
+  assert.equal(envelope.code, 'INTERACTION_EFFECT_UNVERIFIED');
+  assert.equal(envelope.meta.attempts, 1);
+  assert.equal(envelope.meta.mutation, 'possible');
+  assert.equal(envelope.meta.tapRetried, undefined);
 });
 
 test('a mutating verb that invalidated the baseline does not fail the next tap', async () => {

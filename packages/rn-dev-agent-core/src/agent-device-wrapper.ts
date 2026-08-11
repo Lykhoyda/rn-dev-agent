@@ -1438,20 +1438,16 @@ export interface TapRetryPolicy {
   targetKey: string;
 }
 
-// Story 05 (#386): only plain taps/long-presses are retry-eligible. Multi-tap
-// gestures (--count/--double-tap) would change semantics on a re-tap; fills
-// have their own read-back verification and a retype would duplicate text;
-// hold gestures (--hold-ms, from device_press holdMs / device_longpress by ref,
-// routed as ['press', ref, '--hold-ms'] → command 'tap') are a deliberate timed
-// interaction, so re-dispatching would change the requested action. Genuine
-// coordinate long-presses carry duration positionally (command 'longPress', no
-// --hold-ms flag) and stay eligible.
+// A runner acknowledgement proves dispatch, not effect. Effect observation may
+// still classify the result, but it must never re-dispatch a command whose first
+// actuation may already have happened. `eligible` remains in the internal shape
+// for compatibility with callers while permanently disabling the old retry.
 export function tapRetryPolicy(
   cliArgs: string[],
   builtCommand: string,
   x: number | undefined,
   y: number | undefined,
-  opts: { retryIfNoChange?: boolean },
+  _opts: { retryIfNoChange?: boolean },
 ): TapRetryPolicy {
   const ref = cliArgs[1];
   const exactTarget = ref?.startsWith('@') ? getFreshRefTarget(ref) : null;
@@ -1471,30 +1467,7 @@ export function tapRetryPolicy(
     !cliArgs.includes('--hold-ms') &&
     x !== undefined &&
     y !== undefined;
-  const eligible =
-    verificationRequired && opts.retryIfNoChange !== false && selfHealEnabled(process.env);
-  return { eligible, verificationRequired, targetKey: `${builtCommand}@${x},${y}` };
-}
-
-// Story 14 (#407): detect whether a raw runner ToolResult carries the
-// transport-recovery marker (runIOS/runAndroid attach it on the firstResult
-// when an ambiguous send was confirmed via the runner's outcome journal).
-function hasConsumedTapRetryBudget(result: ToolResult): boolean {
-  try {
-    const env = JSON.parse(result.content[0].text) as {
-      data?: { keyboardGuard?: unknown };
-      meta?: { transportRecovery?: unknown; keyboardGuard?: unknown };
-    };
-    return (
-      env.meta?.transportRecovery !== undefined ||
-      env.meta?.keyboardGuard === 'auto_dismissed' ||
-      env.data?.keyboardGuard === 'auto_dismissed' ||
-      env.meta?.keyboardGuard === 'keyboard_target' ||
-      env.data?.keyboardGuard === 'keyboard_target'
-    );
-  } catch {
-    return false;
-  }
+  return { eligible: false, verificationRequired, targetKey: `${builtCommand}@${x},${y}` };
 }
 
 function flagNoUiChange(result: ToolResult, targetKey: string): ToolResult {
@@ -1554,8 +1527,7 @@ export async function establishInteractionBaseline(
 function unverifiedInteractionResult(
   observedResult: ToolResult,
   targetKey: string,
-  attempts: number,
-  reason: 'no-ui-change' | 'effect-probe-unavailable' | 'retry-failed',
+  reason: 'no-ui-change' | 'effect-probe-unavailable',
 ): ToolResult {
   const distinct = recordNoUiChange(targetKey);
   let observedMeta: Record<string, unknown> = {};
@@ -1570,37 +1542,31 @@ function unverifiedInteractionResult(
   return failResult(
     reason === 'no-ui-change'
       ? 'The tap was dispatched but produced no observable UI change.'
-      : reason === 'retry-failed'
-        ? 'The tap produced no observable UI change and the bounded retry failed.'
-        : 'The tap was dispatched, but its UI effect could not be observed.',
+      : 'The tap was dispatched, but its UI effect could not be observed.',
     'INTERACTION_EFFECT_UNVERIFIED',
     {
       ...observedMeta,
       mutation: 'possible',
       reason,
-      attempts,
+      attempts: 1,
       ...(distinct >= WEDGED_DISTINCT_TARGETS ? { hint: WEDGED_RUNTIME_HINT } : {}),
     },
   );
 }
 
-// Settle the first dispatch with change detection; if the hierarchy did not
-// change, presume the tap was swallowed and retry exactly once. A runner's
-// gesture acknowledgement proves dispatch, not app effect, so on Android
-// (this wave's scope) unchanged or unobservable outcomes fail with typed
-// uncertainty. iOS keeps the advisory meta.noUiChange contract.
+// Observe the first dispatch exactly once. A runner acknowledgement proves
+// dispatch, not app effect, so Android unchanged or unobservable outcomes fail
+// with typed uncertainty while iOS keeps advisory meta.noUiChange. Observation
+// uncertainty never authorizes replaying a possibly completed interaction.
 export async function settleWithRetryIfNoChange(
   firstResult: ToolResult,
-  dispatch: () => Promise<ToolResult>,
+  _dispatch: () => Promise<ToolResult>,
   ctx: SettleContext,
   policy: TapRetryPolicy,
   deps: SettleAfterMutationDeps = {},
 ): Promise<ToolResult> {
-  const failClosed =
-    policy.verificationRequired &&
-    ctx.platform === 'android' &&
-    (await effectVerificationEnabled(ctx.settle, deps));
-  const verify = failClosed || policy.eligible;
+  const verify = policy.verificationRequired && (await effectVerificationEnabled(ctx.settle, deps));
+  const failClosed = verify && ctx.platform === 'android';
   const cachedHash =
     ctx.platform === 'android' && ctx.appId
       ? getLastSnapshotHashForPackage(ctx.appId)
@@ -1614,52 +1580,16 @@ export async function settleWithRetryIfNoChange(
   if (first.result.isError || !verify) return first.result;
   if (preHash === undefined || first.outcome?.hierarchyChanged === undefined) {
     return failClosed
-      ? unverifiedInteractionResult(first.result, policy.targetKey, 1, 'effect-probe-unavailable')
+      ? unverifiedInteractionResult(first.result, policy.targetKey, 'effect-probe-unavailable')
       : first.result;
   }
   if (first.outcome.hierarchyChanged === true) {
     recordUiChange();
     return first.result;
   }
-  if (!policy.eligible) {
-    return unverifiedInteractionResult(first.result, policy.targetKey, 1, 'no-ui-change');
-  }
-  // Story 14 (#407): a transport-recovered send already consumed the ambiguity
-  // budget — the runner journal confirmed the mutating gesture executed. The
-  // heal layer must not re-fire it, or it would double-dispatch the very tap
-  // that transport recovery just resolved. Report noUiChange honestly, no retry.
-  if (hasConsumedTapRetryBudget(firstResult)) {
-    return failClosed
-      ? unverifiedInteractionResult(first.result, policy.targetKey, 1, 'no-ui-change')
-      : flagNoUiChange(first.result, policy.targetKey);
-  }
-  const second = await dispatch();
-  if (second.isError) {
-    const retried = attachMeta(first.result, { tapRetried: true });
-    return failClosed
-      ? unverifiedInteractionResult(retried, policy.targetKey, 2, 'retry-failed')
-      : flagNoUiChange(retried, policy.targetKey);
-  }
-  const settled = await settleAfterMutationWithOutcome(
-    second,
-    { ...ctx, initialSnapshotHash: preHash },
-    deps,
-  );
-  if (settled.outcome?.hierarchyChanged !== true) {
-    if (!failClosed) {
-      return settled.outcome?.hierarchyChanged === false
-        ? flagNoUiChange(attachMeta(settled.result, { tapRetried: true }), policy.targetKey)
-        : attachMeta(settled.result, { tapRetried: true });
-    }
-    return unverifiedInteractionResult(
-      attachMeta(settled.result, { tapRetried: true }),
-      policy.targetKey,
-      2,
-      settled.outcome?.hierarchyChanged === false ? 'no-ui-change' : 'effect-probe-unavailable',
-    );
-  }
-  recordUiChange();
-  return attachMeta(settled.result, { tapRetried: true });
+  return failClosed
+    ? unverifiedInteractionResult(first.result, policy.targetKey, 'no-ui-change')
+    : flagNoUiChange(first.result, policy.targetKey);
 }
 
 const MAX_STALE_CANDIDATES = 5;

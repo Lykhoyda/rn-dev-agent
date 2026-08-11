@@ -3,4 +3,4 @@
 "rn-dev-agent-plugin": patch
 ---
 
-Scope Android element matching to the owned app by default, actuate exact accessibility targets without trusting snapshot coordinates, and fail Android taps whose effect cannot be proven (including when `retryIfNoChange: false` or `RN_SELF_HEAL=0` skips the retry).
+Scope Android element matching to the owned app by default, refuse covered exact accessibility targets before actuation, and report uncertain Android effects without automatically dispatching the interaction a second time.
