@@ -4,7 +4,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { okResult, failResult, warnResult } from '../utils.js';
-import { getEngineStatus, enginePinCaveat, strictPinRefusal, preOAndroidApiRefusal, isOlderSdkInstallFailure, olderSdkInstallDiagnosis, } from '../domain/engine-pin.js';
+import { getEngineStatus, enginePinCaveat, strictPinRefusal, preOAndroidApiRefusal, isOlderSdkInstallFailure, olderSdkInstallDiagnosis, MAESTRO_RUNNER_MIN_ANDROID_API, } from '../domain/engine-pin.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
 import { resolveBundleId, readExpoSlug } from '../project-config.js';
 import { chooseMaestroDispatch, shouldWarnFallback, flowContainsHideKeyboard, } from './maestro-dispatch.js';
@@ -438,8 +438,10 @@ export function createMaestroRunHandler(deps = {}) {
         }
         // GH #741: the pinned engine cannot drive pre-O Android — refuse with the
         // true capability gap up front instead of an opaque install error later.
+        let probedAndroidApiLevel = null;
         if (platform === 'android' && dispatch.runner === 'maestro-runner' && requestedDeviceId) {
             const apiLevel = await probeApiLevel(requestedDeviceId).catch(() => null);
+            probedAndroidApiLevel = apiLevel;
             const apiRefusal = apiLevel === null ? null : preOAndroidApiRefusal(apiLevel);
             if (apiRefusal) {
                 return failResult(apiRefusal, 'ANDROID_API_UNSUPPORTED', {
@@ -667,8 +669,11 @@ export function createMaestroRunHandler(deps = {}) {
             const combined = combineRunnerOutput(stdout, stderr);
             // GH #741: an INSTALL_FAILED_OLDER_SDK reject is a capability gap, not a
             // flow failure — surface it before device-authority checks can mask it.
-            if (platform === 'android' && isOlderSdkInstallFailure(combined)) {
-                return failResult(olderSdkInstallDiagnosis(), 'ANDROID_API_UNSUPPORTED', {
+            // A probe that already proved this device is at/above the minimum vetoes
+            // the mapping, so an echoed token can never mask a real flow failure.
+            const apiLevelAllowsPreO = probedAndroidApiLevel === null || probedAndroidApiLevel < MAESTRO_RUNNER_MIN_ANDROID_API;
+            if (platform === 'android' && apiLevelAllowsPreO && isOlderSdkInstallFailure(combined)) {
+                return failResult(olderSdkInstallDiagnosis(dispatch.runner), 'ANDROID_API_UNSUPPORTED', {
                     platform,
                     runner: dispatch.runner,
                     transport: dispatch.runner,

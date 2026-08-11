@@ -26,6 +26,7 @@ import {
   runFlowParked,
 } from './maestro-run.js';
 import { outputIndicatesFlowFailure } from '../domain/maestro-error-parser.js';
+import { isOlderSdkInstallFailure, olderSdkInstallDiagnosis } from '../domain/engine-pin.js';
 import { resolveAppFileForClearState } from './resolve-ios-app-file.js';
 import {
   maestroAuthorityRefusal,
@@ -343,12 +344,18 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
         const authorityRefusal = deviceAuthority
           ? maestroAuthorityRefusal(deviceAuthority, msg.slice(0, 300))
           : null;
+        // GH #741: a pre-O install reject is a capability gap; reporting it as
+        // a flow failure (or worse, an authority mismatch) dead-ends operators.
+        const preOFailure =
+          platform === 'android' && isOlderSdkInstallFailure(capturedOutput)
+            ? olderSdkInstallDiagnosis(flowDispatch.runner)
+            : null;
         results.push({
           name,
           passed: false,
           durationMs: Date.now() - start,
-          error: authorityRefusal ?? msg.slice(0, 300),
-          ...(deviceAuthority ? { deviceAuthority } : {}),
+          error: preOFailure ?? authorityRefusal ?? msg.slice(0, 300),
+          ...(deviceAuthority && !preOFailure ? { deviceAuthority } : {}),
         });
         failed++;
         if (args.stopOnFailure) break;

@@ -10,6 +10,7 @@ import { chooseMaestroDispatch, shouldWarnFallback, flowContainsHideKeyboard, } 
 import { buildMaestroFlow, parseAndValidateFlow, MaestroValidationError, } from '../domain/maestro-validator.js';
 import { assembleMaestroArgs, executeMaestroAuthorityStages, MaestroStageExecutionError, planMaestroAuthorityStages, resolveMaestroFlowAppId, runFlowParked, } from './maestro-run.js';
 import { outputIndicatesFlowFailure } from '../domain/maestro-error-parser.js';
+import { isOlderSdkInstallFailure, olderSdkInstallDiagnosis } from '../domain/engine-pin.js';
 import { resolveAppFileForClearState } from './resolve-ios-app-file.js';
 import { maestroAuthorityRefusal, sameDevice, verifyMaestroDeviceAuthority, } from '../domain/maestro-device-authority.js';
 import { collectDirectRunnerEvidence, createRunnerReportDir, disposeRunnerReportDir, runnerReportArgs, } from '../domain/maestro-runner-report.js';
@@ -245,12 +246,17 @@ export function createMaestroTestAllHandler() {
                 const authorityRefusal = deviceAuthority
                     ? maestroAuthorityRefusal(deviceAuthority, msg.slice(0, 300))
                     : null;
+                // GH #741: a pre-O install reject is a capability gap; reporting it as
+                // a flow failure (or worse, an authority mismatch) dead-ends operators.
+                const preOFailure = platform === 'android' && isOlderSdkInstallFailure(capturedOutput)
+                    ? olderSdkInstallDiagnosis(flowDispatch.runner)
+                    : null;
                 results.push({
                     name,
                     passed: false,
                     durationMs: Date.now() - start,
-                    error: authorityRefusal ?? msg.slice(0, 300),
-                    ...(deviceAuthority ? { deviceAuthority } : {}),
+                    error: preOFailure ?? authorityRefusal ?? msg.slice(0, 300),
+                    ...(deviceAuthority && !preOFailure ? { deviceAuthority } : {}),
                 });
                 failed++;
                 if (args.stopOnFailure)

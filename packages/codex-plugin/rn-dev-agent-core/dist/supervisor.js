@@ -26272,6 +26272,170 @@ var init_maestro_error_parser = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/domain/engine-pin.js
+import { execFile as execFileCb2, spawnSync as spawnSync3 } from "node:child_process";
+import { promisify as promisify3 } from "node:util";
+import { createHash as createHash10 } from "node:crypto";
+import { readFileSync as readFileSync16 } from "node:fs";
+function engineLabel(runner) {
+  return runner === "maestro-runner" ? `the pinned maestro-runner ${MAESTRO_RUNNER_PIN.version}` : "the Maestro CLI";
+}
+function preOAndroidApiRefusal(apiLevel) {
+  if (apiLevel >= MAESTRO_RUNNER_MIN_ANDROID_API)
+    return null;
+  return `maestro_run refused: Android API ${apiLevel} is below API ${MAESTRO_RUNNER_MIN_ANDROID_API}, the minimum the pinned maestro-runner ${MAESTRO_RUNNER_PIN.version} can drive \u2014 its bundled UiAutomator2 server APK declares minSdk ${MAESTRO_RUNNER_MIN_ANDROID_API}, so the install fails with INSTALL_FAILED_OLDER_SDK. ${PRE_O_REMEDY}`;
+}
+function isOlderSdkInstallFailure(output) {
+  return output.split(/\r?\n/).some((line) => line.includes("INSTALL_FAILED_OLDER_SDK") && INSTALL_REJECT_CONTEXT.test(line.replace(OLDER_SDK_TOKEN, " ")));
+}
+function olderSdkInstallDiagnosis(runner = "maestro-runner") {
+  return `The device rejected the bundled UiAutomator2 server APK with INSTALL_FAILED_OLDER_SDK: ${engineLabel(runner)} requires Android API ${MAESTRO_RUNNER_MIN_ANDROID_API}+ and this device is below it. ${PRE_O_REMEDY}`;
+}
+function compareVersions(a, b) {
+  const pa = a.split(".").map(Number);
+  const pb = b.split(".").map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] ?? 0;
+    const y = pb[i] ?? 0;
+    if (x > y)
+      return 1;
+    if (x < y)
+      return -1;
+  }
+  return 0;
+}
+function classifyEnginePin(detected, platformKey) {
+  if (!detected.installed)
+    return "not-installed";
+  if (!detected.version || !/^\d+(\.\d+)*$/.test(detected.version))
+    return "unknown-version";
+  const cmp = compareVersions(detected.version, MAESTRO_RUNNER_PIN.version);
+  if (cmp > 0)
+    return "drift-newer";
+  if (cmp < 0)
+    return "drift-older";
+  const expected = MAESTRO_RUNNER_PIN.sha256[platformKey];
+  if (!expected || !detected.sha256)
+    return "unverified";
+  if (detected.sha256 !== expected)
+    return "checksum-mismatch";
+  return "pinned-ok";
+}
+function buildReplayEngineStatus(cls, version2, cliPresent) {
+  const engine = cls === "not-installed" ? cliPresent ? "maestro-cli" : "none" : "maestro-runner";
+  return {
+    engine,
+    version: version2,
+    pin: { pinned: MAESTRO_RUNNER_PIN.version, status: cls },
+    quirks: MAESTRO_RUNNER_PIN.knownQuirks.map((q) => q.id)
+  };
+}
+function enginePinCaveat(status) {
+  const cls = status.pin.status;
+  if (cls === "drift-newer" || cls === "drift-older") {
+    return `maestro-runner ${status.version} differs from the tested pin ${status.pin.pinned} (untested drift \u2014 B223-class behavior changes arrive silently; see the upgrade ritual in engine-pin.ts)`;
+  }
+  if (cls === "checksum-mismatch") {
+    return `maestro-runner reports the pinned version ${status.pin.pinned} but its binary checksum does not match the manifest \u2014 possible corruption or tampering; reinstall via ensure-maestro-runner.sh`;
+  }
+  return null;
+}
+function strictPinRefusal(status, envValue) {
+  const strict = envValue === "1" || envValue === "true";
+  if (!strict || !status)
+    return null;
+  const cls = status.pin.status;
+  if (cls !== "drift-newer" && cls !== "drift-older" && cls !== "checksum-mismatch")
+    return null;
+  return `maestro_run refused: RN_ENGINE_PIN_STRICT is set and the engine pin status is ${cls} (installed ${status.version ?? "unknown"}, pinned ${status.pin.pinned}). Reinstall the pin via ensure-maestro-runner.sh, or unset RN_ENGINE_PIN_STRICT.`;
+}
+function defaultCliPresent() {
+  const r = spawnSync3("which", ["maestro"], { encoding: "utf8", timeout: 2e3 });
+  return r.status === 0 && r.stdout.trim().length > 0;
+}
+async function defaultExecVersion(bin) {
+  const { stdout, stderr } = await execFile3(bin, ["--version"], {
+    timeout: 5e3,
+    encoding: "utf8"
+  });
+  return stdout + "\n" + stderr;
+}
+function defaultHashFile(bin) {
+  return createHash10("sha256").update(readFileSync16(bin)).digest("hex");
+}
+function safeBool(fn) {
+  try {
+    return fn();
+  } catch {
+    return false;
+  }
+}
+async function detect(resolvers) {
+  const binPath = (resolvers.binPath ?? getMaestroRunnerPath)();
+  const cliPresent = safeBool(resolvers.cliPresent ?? defaultCliPresent);
+  const platformKey = resolvers.platformKey ?? `${process.platform}-${process.arch}`;
+  if (!binPath) {
+    return buildReplayEngineStatus("not-installed", null, cliPresent);
+  }
+  let version2 = null;
+  try {
+    const out = await (resolvers.execVersion ?? defaultExecVersion)(binPath);
+    version2 = out.match(/(\d+\.\d+\.\d+)/)?.[1] ?? null;
+  } catch {
+    version2 = null;
+  }
+  let sha2562 = null;
+  try {
+    sha2562 = (resolvers.hashFile ?? defaultHashFile)(binPath);
+  } catch {
+    sha2562 = null;
+  }
+  const cls = classifyEnginePin({ installed: true, version: version2, sha256: sha2562 }, platformKey);
+  return buildReplayEngineStatus(cls, version2, cliPresent);
+}
+function getEngineStatus(resolvers) {
+  if (!cachedStatus) {
+    cachedStatus = detect(resolvers ?? {}).catch(() => buildReplayEngineStatus("unknown-version", null, false));
+  }
+  return cachedStatus;
+}
+var execFile3, MAESTRO_RUNNER_PIN, MAESTRO_RUNNER_MIN_ANDROID_API, PRE_O_REMEDY, OLDER_SDK_TOKEN, INSTALL_REJECT_CONTEXT, cachedStatus;
+var init_engine_pin = __esm({
+  "packages/rn-dev-agent-core/dist/domain/engine-pin.js"() {
+    "use strict";
+    init_maestro_invoke();
+    execFile3 = promisify3(execFileCb2);
+    MAESTRO_RUNNER_PIN = {
+      version: "1.0.9",
+      sha256: {
+        "darwin-arm64": "7d3777a67f8cc3d5e3927f498ddda8a56c424a10158f7cd4fa494ecc3ed97923"
+      },
+      knownQuirks: [
+        {
+          id: "android-hidekeyboard-noop",
+          ref: "B223 / #369",
+          note: "hideKeyboard reports pass in ~5ms on Android; keyboard stays up"
+        },
+        {
+          id: "requires-adb-on-ios",
+          ref: "B59",
+          note: "requires adb in PATH even with --platform ios"
+        },
+        {
+          id: "android-pre-o-unsupported",
+          ref: "GH #741",
+          note: "bundled UiAutomator2 server APK declares minSdk 26; API 23-25 installs fail with INSTALL_FAILED_OLDER_SDK"
+        }
+      ]
+    };
+    MAESTRO_RUNNER_MIN_ANDROID_API = 26;
+    PRE_O_REMEDY = "Action replay / E2E via the maestro engine is unsupported on this device; the direct device_* interaction tier still works (rn-android-runner supports API 23+), except for the few device_* paths that fall back to maestro (dev-client picker, system dialogs, device_fill correction), which hit this same limit.";
+    OLDER_SDK_TOKEN = /INSTALL_FAILED_OLDER_SDK/g;
+    INSTALL_REJECT_CONTEXT = /\b(?:adb|install|installing|failure|uiautomator2)\b|\.apk\b/i;
+    cachedStatus = null;
+  }
+});
+
 // packages/rn-dev-agent-core/dist/tools/resolve-ios-app-file.js
 import { execFileSync as execFileSync10 } from "node:child_process";
 import { existsSync as existsSync15, cpSync, rmSync as rmSync8, mkdirSync as mkdirSync11, readdirSync as readdirSync5, statSync as statSync8 } from "node:fs";
@@ -26408,165 +26572,6 @@ var init_resolve_ios_app_file = __esm({
     SNAPSHOT_SCAN_CAP = 10;
     SNAPSHOT_SCAN_BUDGET_MS = 3e3;
     PLUTIL_TIMEOUT_MS = 2e3;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/engine-pin.js
-import { execFile as execFileCb2, spawnSync as spawnSync3 } from "node:child_process";
-import { promisify as promisify3 } from "node:util";
-import { createHash as createHash10 } from "node:crypto";
-import { readFileSync as readFileSync16 } from "node:fs";
-function preOAndroidApiRefusal(apiLevel) {
-  if (apiLevel >= MAESTRO_RUNNER_MIN_ANDROID_API)
-    return null;
-  return `maestro_run refused: Android API ${apiLevel} is below API ${MAESTRO_RUNNER_MIN_ANDROID_API}, the minimum the pinned maestro-runner ${MAESTRO_RUNNER_PIN.version} can drive \u2014 its bundled UiAutomator2 server APK declares minSdk ${MAESTRO_RUNNER_MIN_ANDROID_API}, so the install fails with INSTALL_FAILED_OLDER_SDK. ${PRE_O_REMEDY}`;
-}
-function isOlderSdkInstallFailure(output) {
-  return output.includes("INSTALL_FAILED_OLDER_SDK");
-}
-function olderSdkInstallDiagnosis() {
-  return `The device rejected the bundled UiAutomator2 server APK with INSTALL_FAILED_OLDER_SDK: the pinned maestro-runner ${MAESTRO_RUNNER_PIN.version} requires Android API ${MAESTRO_RUNNER_MIN_ANDROID_API}+ and this device is below it. ${PRE_O_REMEDY}`;
-}
-function compareVersions(a, b) {
-  const pa = a.split(".").map(Number);
-  const pb = b.split(".").map(Number);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const x = pa[i] ?? 0;
-    const y = pb[i] ?? 0;
-    if (x > y)
-      return 1;
-    if (x < y)
-      return -1;
-  }
-  return 0;
-}
-function classifyEnginePin(detected, platformKey) {
-  if (!detected.installed)
-    return "not-installed";
-  if (!detected.version || !/^\d+(\.\d+)*$/.test(detected.version))
-    return "unknown-version";
-  const cmp = compareVersions(detected.version, MAESTRO_RUNNER_PIN.version);
-  if (cmp > 0)
-    return "drift-newer";
-  if (cmp < 0)
-    return "drift-older";
-  const expected = MAESTRO_RUNNER_PIN.sha256[platformKey];
-  if (!expected || !detected.sha256)
-    return "unverified";
-  if (detected.sha256 !== expected)
-    return "checksum-mismatch";
-  return "pinned-ok";
-}
-function buildReplayEngineStatus(cls, version2, cliPresent) {
-  const engine = cls === "not-installed" ? cliPresent ? "maestro-cli" : "none" : "maestro-runner";
-  return {
-    engine,
-    version: version2,
-    pin: { pinned: MAESTRO_RUNNER_PIN.version, status: cls },
-    quirks: MAESTRO_RUNNER_PIN.knownQuirks.map((q) => q.id)
-  };
-}
-function enginePinCaveat(status) {
-  const cls = status.pin.status;
-  if (cls === "drift-newer" || cls === "drift-older") {
-    return `maestro-runner ${status.version} differs from the tested pin ${status.pin.pinned} (untested drift \u2014 B223-class behavior changes arrive silently; see the upgrade ritual in engine-pin.ts)`;
-  }
-  if (cls === "checksum-mismatch") {
-    return `maestro-runner reports the pinned version ${status.pin.pinned} but its binary checksum does not match the manifest \u2014 possible corruption or tampering; reinstall via ensure-maestro-runner.sh`;
-  }
-  return null;
-}
-function strictPinRefusal(status, envValue) {
-  const strict = envValue === "1" || envValue === "true";
-  if (!strict || !status)
-    return null;
-  const cls = status.pin.status;
-  if (cls !== "drift-newer" && cls !== "drift-older" && cls !== "checksum-mismatch")
-    return null;
-  return `maestro_run refused: RN_ENGINE_PIN_STRICT is set and the engine pin status is ${cls} (installed ${status.version ?? "unknown"}, pinned ${status.pin.pinned}). Reinstall the pin via ensure-maestro-runner.sh, or unset RN_ENGINE_PIN_STRICT.`;
-}
-function defaultCliPresent() {
-  const r = spawnSync3("which", ["maestro"], { encoding: "utf8", timeout: 2e3 });
-  return r.status === 0 && r.stdout.trim().length > 0;
-}
-async function defaultExecVersion(bin) {
-  const { stdout, stderr } = await execFile3(bin, ["--version"], {
-    timeout: 5e3,
-    encoding: "utf8"
-  });
-  return stdout + "\n" + stderr;
-}
-function defaultHashFile(bin) {
-  return createHash10("sha256").update(readFileSync16(bin)).digest("hex");
-}
-function safeBool(fn) {
-  try {
-    return fn();
-  } catch {
-    return false;
-  }
-}
-async function detect(resolvers) {
-  const binPath = (resolvers.binPath ?? getMaestroRunnerPath)();
-  const cliPresent = safeBool(resolvers.cliPresent ?? defaultCliPresent);
-  const platformKey = resolvers.platformKey ?? `${process.platform}-${process.arch}`;
-  if (!binPath) {
-    return buildReplayEngineStatus("not-installed", null, cliPresent);
-  }
-  let version2 = null;
-  try {
-    const out = await (resolvers.execVersion ?? defaultExecVersion)(binPath);
-    version2 = out.match(/(\d+\.\d+\.\d+)/)?.[1] ?? null;
-  } catch {
-    version2 = null;
-  }
-  let sha2562 = null;
-  try {
-    sha2562 = (resolvers.hashFile ?? defaultHashFile)(binPath);
-  } catch {
-    sha2562 = null;
-  }
-  const cls = classifyEnginePin({ installed: true, version: version2, sha256: sha2562 }, platformKey);
-  return buildReplayEngineStatus(cls, version2, cliPresent);
-}
-function getEngineStatus(resolvers) {
-  if (!cachedStatus) {
-    cachedStatus = detect(resolvers ?? {}).catch(() => buildReplayEngineStatus("unknown-version", null, false));
-  }
-  return cachedStatus;
-}
-var execFile3, MAESTRO_RUNNER_PIN, MAESTRO_RUNNER_MIN_ANDROID_API, PRE_O_REMEDY, cachedStatus;
-var init_engine_pin = __esm({
-  "packages/rn-dev-agent-core/dist/domain/engine-pin.js"() {
-    "use strict";
-    init_maestro_invoke();
-    execFile3 = promisify3(execFileCb2);
-    MAESTRO_RUNNER_PIN = {
-      version: "1.0.9",
-      sha256: {
-        "darwin-arm64": "7d3777a67f8cc3d5e3927f498ddda8a56c424a10158f7cd4fa494ecc3ed97923"
-      },
-      knownQuirks: [
-        {
-          id: "android-hidekeyboard-noop",
-          ref: "B223 / #369",
-          note: "hideKeyboard reports pass in ~5ms on Android; keyboard stays up"
-        },
-        {
-          id: "requires-adb-on-ios",
-          ref: "B59",
-          note: "requires adb in PATH even with --platform ios"
-        },
-        {
-          id: "android-pre-o-unsupported",
-          ref: "GH #741",
-          note: "bundled UiAutomator2 server APK declares minSdk 26; API 23-25 installs fail with INSTALL_FAILED_OLDER_SDK"
-        }
-      ]
-    };
-    MAESTRO_RUNNER_MIN_ANDROID_API = 26;
-    PRE_O_REMEDY = "Action replay / E2E via maestro-runner is unsupported on this device; direct device_* interaction tools still work (rn-android-runner supports API 23+).";
-    cachedStatus = null;
   }
 });
 
@@ -29260,8 +29265,10 @@ function createMaestroRunHandler(deps = {}) {
     if (strictRefusal) {
       return failResult(strictRefusal, "ENGINE_PIN_MISMATCH");
     }
+    let probedAndroidApiLevel = null;
     if (platform === "android" && dispatch.runner === "maestro-runner" && requestedDeviceId) {
       const apiLevel = await probeApiLevel(requestedDeviceId).catch(() => null);
+      probedAndroidApiLevel = apiLevel;
       const apiRefusal = apiLevel === null ? null : preOAndroidApiRefusal(apiLevel);
       if (apiRefusal) {
         return failResult(apiRefusal, "ANDROID_API_UNSUPPORTED", {
@@ -29436,8 +29443,9 @@ function createMaestroRunHandler(deps = {}) {
         typeof errAny?.stderr === "string" ? errAny.stderr : ""
       ].join("\n");
       const combined = combineRunnerOutput(stdout, stderr);
-      if (platform === "android" && isOlderSdkInstallFailure(combined)) {
-        return failResult(olderSdkInstallDiagnosis(), "ANDROID_API_UNSUPPORTED", {
+      const apiLevelAllowsPreO = probedAndroidApiLevel === null || probedAndroidApiLevel < MAESTRO_RUNNER_MIN_ANDROID_API;
+      if (platform === "android" && apiLevelAllowsPreO && isOlderSdkInstallFailure(combined)) {
+        return failResult(olderSdkInstallDiagnosis(dispatch.runner), "ANDROID_API_UNSUPPORTED", {
           platform,
           runner: dispatch.runner,
           transport: dispatch.runner,
@@ -30327,6 +30335,16 @@ async function runMaestroInline(yaml2, opts, dependencies = {}) {
         ...execution.cleanupRefusal ? { cleanupRefusal: execution.cleanupRefusal } : {}
       };
     }
+    if (opts.platform === "android" && isOlderSdkInstallFailure(output)) {
+      return {
+        passed: false,
+        output,
+        flowFile,
+        error: olderSdkInstallDiagnosis(dispatch.runner),
+        exitCode: execution.code,
+        signal: execution.signal
+      };
+    }
     if (execution.timedOut) {
       return {
         passed: false,
@@ -30383,6 +30401,7 @@ var init_maestro_invoke = __esm({
     init_maestro_validator();
     init_maestro_dispatch();
     init_maestro_error_parser();
+    init_engine_pin();
     init_resolve_ios_app_file();
     init_maestro_run();
     init_agent_device_wrapper();
@@ -83061,12 +83080,13 @@ function createMaestroTestAllHandler() {
           directReportIdentityStrength: directEvidence.reportDeviceIdStrength
         }) : null;
         const authorityRefusal = deviceAuthority ? maestroAuthorityRefusal(deviceAuthority, msg3.slice(0, 300)) : null;
+        const preOFailure = platform === "android" && isOlderSdkInstallFailure(capturedOutput) ? olderSdkInstallDiagnosis(flowDispatch.runner) : null;
         results.push({
           name,
           passed: false,
           durationMs: Date.now() - start,
-          error: authorityRefusal ?? msg3.slice(0, 300),
-          ...deviceAuthority ? { deviceAuthority } : {}
+          error: preOFailure ?? authorityRefusal ?? msg3.slice(0, 300),
+          ...deviceAuthority && !preOFailure ? { deviceAuthority } : {}
         });
         failed++;
         if (args.stopOnFailure)
@@ -83109,6 +83129,7 @@ var init_maestro_test_all = __esm({
     init_maestro_validator();
     init_maestro_run();
     init_maestro_error_parser();
+    init_engine_pin();
     init_resolve_ios_app_file();
     init_maestro_device_authority();
     init_maestro_runner_report();

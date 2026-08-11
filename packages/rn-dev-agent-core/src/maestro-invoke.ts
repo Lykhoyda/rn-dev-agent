@@ -10,6 +10,7 @@ import {
 } from './domain/maestro-validator.js';
 import { chooseMaestroDispatch } from './tools/maestro-dispatch.js';
 import { outputIndicatesFlowFailure } from './domain/maestro-error-parser.js';
+import { isOlderSdkInstallFailure, olderSdkInstallDiagnosis } from './domain/engine-pin.js';
 import { resolveAppFileForClearState } from './tools/resolve-ios-app-file.js';
 import { assembleMaestroArgs, runFlowParked } from './tools/maestro-run.js';
 import { getActiveSession } from './agent-device-wrapper.js';
@@ -250,6 +251,18 @@ export async function runMaestroInline(
         signal: execution.signal,
         cleanupEscalated: execution.cleanupEscalated,
         ...(execution.cleanupRefusal ? { cleanupRefusal: execution.cleanupRefusal } : {}),
+      };
+    }
+    // GH #741: a pre-O install reject is a capability gap, not a flow failure —
+    // report it truthfully instead of the opaque runner error.
+    if (opts.platform === 'android' && isOlderSdkInstallFailure(output)) {
+      return {
+        passed: false,
+        output,
+        flowFile,
+        error: olderSdkInstallDiagnosis(dispatch.runner),
+        exitCode: execution.code,
+        signal: execution.signal,
       };
     }
     if (execution.timedOut) {

@@ -9,6 +9,7 @@ import {
   MAESTRO_RUNNER_MIN_ANDROID_API,
   preOAndroidApiRefusal,
   olderSdkInstallDiagnosis,
+  isOlderSdkInstallFailure,
 } from '../../dist/domain/engine-pin.js';
 
 const SERIAL = 'emulator-5560';
@@ -160,4 +161,48 @@ test('GH#741 pure helpers: refusal below the minimum only, diagnosis names the p
   assert.equal(preOAndroidApiRefusal(34), null);
   assert.match(String(preOAndroidApiRefusal(23)), /API 23/);
   assert.match(olderSdkInstallDiagnosis(), /1\.0\.9|maestro-runner/);
+});
+
+test('GH#741 the diagnosis names the tier that actually rejected the install', () => {
+  assert.match(olderSdkInstallDiagnosis('maestro-runner'), /pinned maestro-runner/);
+  assert.match(olderSdkInstallDiagnosis('maestro-cli'), /Maestro CLI/);
+  assert.doesNotMatch(
+    olderSdkInstallDiagnosis('maestro-cli'),
+    /maestro-runner/,
+    'a CLI-tier reject must not be blamed on the maestro-runner pin',
+  );
+});
+
+test('GH#741 an app-logged token is not an install reject (GH#249 class)', () => {
+  assert.equal(
+    isOlderSdkInstallFailure(
+      'LOG: analytics event {"reason":"INSTALL_FAILED_OLDER_SDK"}\nFlow execution completed',
+    ),
+    false,
+  );
+  assert.equal(
+    isOlderSdkInstallFailure(
+      'adb: failed to install /tmp/appium-uiautomator2-server.apk: Failure [INSTALL_FAILED_OLDER_SDK]',
+    ),
+    true,
+  );
+});
+
+test('GH#741 a probed supported API vetoes the runtime install mapping', async () => {
+  const handler = baseHandler({
+    probeAndroidApiLevel: async () => 34,
+    execFile: async () => {
+      throw Object.assign(new Error('runner exited 1'), {
+        stdout: `Connecting to Android device: ${SERIAL}\nadb: failed to install helper.apk: Failure [INSTALL_FAILED_OLDER_SDK]`,
+        stderr: '',
+        code: 1,
+      });
+    },
+  });
+  const body = envelope(await handler(runArgs));
+  assert.notEqual(
+    body.code,
+    'ANDROID_API_UNSUPPORTED',
+    'a supported device must keep its real flow-failure evidence',
+  );
 });

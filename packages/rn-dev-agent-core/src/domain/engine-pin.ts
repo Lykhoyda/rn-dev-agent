@@ -45,8 +45,18 @@ export const MAESTRO_RUNNER_PIN = {
 export const MAESTRO_RUNNER_MIN_ANDROID_API = 26;
 
 const PRE_O_REMEDY =
-  'Action replay / E2E via maestro-runner is unsupported on this device; direct device_* ' +
-  'interaction tools still work (rn-android-runner supports API 23+).';
+  'Action replay / E2E via the maestro engine is unsupported on this device; the direct device_* ' +
+  'interaction tier still works (rn-android-runner supports API 23+), except for the few device_* ' +
+  'paths that fall back to maestro (dev-client picker, system dialogs, device_fill correction), ' +
+  'which hit this same limit.';
+
+export type ReplayEngineTier = 'maestro-runner' | 'maestro' | 'maestro-cli';
+
+function engineLabel(runner: ReplayEngineTier): string {
+  return runner === 'maestro-runner'
+    ? `the pinned maestro-runner ${MAESTRO_RUNNER_PIN.version}`
+    : 'the Maestro CLI';
+}
 
 export function preOAndroidApiRefusal(apiLevel: number): string | null {
   if (apiLevel >= MAESTRO_RUNNER_MIN_ANDROID_API) return null;
@@ -58,14 +68,27 @@ export function preOAndroidApiRefusal(apiLevel: number): string | null {
   );
 }
 
+const OLDER_SDK_TOKEN = /INSTALL_FAILED_OLDER_SDK/g;
+// The token alone is not proof: `combined` also carries the app's own console
+// and logcat output, and GH #249 already burned us with a bare `FAILED` scan.
+// Require the SAME LINE to read like a package-install reject once the token
+// itself (which contains INSTALL/FAILED) is stripped out.
+const INSTALL_REJECT_CONTEXT = /\b(?:adb|install|installing|failure|uiautomator2)\b|\.apk\b/i;
+
 export function isOlderSdkInstallFailure(output: string): boolean {
-  return output.includes('INSTALL_FAILED_OLDER_SDK');
+  return output
+    .split(/\r?\n/)
+    .some(
+      (line) =>
+        line.includes('INSTALL_FAILED_OLDER_SDK') &&
+        INSTALL_REJECT_CONTEXT.test(line.replace(OLDER_SDK_TOKEN, ' ')),
+    );
 }
 
-export function olderSdkInstallDiagnosis(): string {
+export function olderSdkInstallDiagnosis(runner: ReplayEngineTier = 'maestro-runner'): string {
   return (
-    `The device rejected the bundled UiAutomator2 server APK with INSTALL_FAILED_OLDER_SDK: the ` +
-    `pinned maestro-runner ${MAESTRO_RUNNER_PIN.version} requires Android API ` +
+    `The device rejected the bundled UiAutomator2 server APK with INSTALL_FAILED_OLDER_SDK: ` +
+    `${engineLabel(runner)} requires Android API ` +
     `${MAESTRO_RUNNER_MIN_ANDROID_API}+ and this device is below it. ${PRE_O_REMEDY}`
   );
 }

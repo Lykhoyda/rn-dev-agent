@@ -11488,13 +11488,6 @@ var init_maestro_error_parser = __esm({
   }
 });
 
-// packages/rn-dev-agent-core/dist/tools/resolve-ios-app-file.js
-var init_resolve_ios_app_file = __esm({
-  "packages/rn-dev-agent-core/dist/tools/resolve-ios-app-file.js"() {
-    "use strict";
-  }
-});
-
 // packages/rn-dev-agent-core/dist/domain/engine-pin.js
 import { execFile as execFileCb2, spawnSync as spawnSync2 } from "node:child_process";
 import { promisify as promisify3 } from "node:util";
@@ -11504,6 +11497,13 @@ var init_engine_pin = __esm({
     "use strict";
     init_maestro_invoke();
     execFile3 = promisify3(execFileCb2);
+  }
+});
+
+// packages/rn-dev-agent-core/dist/tools/resolve-ios-app-file.js
+var init_resolve_ios_app_file = __esm({
+  "packages/rn-dev-agent-core/dist/tools/resolve-ios-app-file.js"() {
+    "use strict";
   }
 });
 
@@ -12067,6 +12067,7 @@ var init_maestro_invoke = __esm({
     init_maestro_validator();
     init_maestro_dispatch();
     init_maestro_error_parser();
+    init_engine_pin();
     init_resolve_ios_app_file();
     init_maestro_run();
     init_agent_device_wrapper();
