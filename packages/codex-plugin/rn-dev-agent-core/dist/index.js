@@ -55958,6 +55958,9 @@ function attachCause(error2, cause) {
   }
   return error2;
 }
+function isExactDeviceIdShape(value) {
+  return value.length > 0 && value.length <= 256 && !/\s/.test(value);
+}
 function isPreSpawnMaestroError(error2) {
   const candidate = error2;
   return typeof candidate?.code === "string" && !candidate.stdout && !candidate.stderr;
@@ -56002,8 +56005,12 @@ function createMaestroRunHandler(deps = {}) {
     if (args.deviceId && matchingSessionDeviceId && !sameDevice(args.deviceId, matchingSessionDeviceId)) {
       return failResult(`Refusing Maestro target ${args.deviceId}: active ${platform} session is bound to ${matchingSessionDeviceId}.`, "TARGET_SESSION_MISMATCH", { requestedDeviceId: args.deviceId, activeSessionDeviceId: matchingSessionDeviceId });
     }
-    const requestedDeviceId = args.deviceId ?? matchingSessionDeviceId ?? (platform === "android" ? process.env.ANDROID_SERIAL : void 0);
-    if (requestedDeviceId !== void 0 && (requestedDeviceId.length === 0 || requestedDeviceId.length > 256 || /\s/.test(requestedDeviceId))) {
+    const envAndroidSerial = platform === "android" && process.env.ANDROID_SERIAL ? process.env.ANDROID_SERIAL : void 0;
+    if (envAndroidSerial !== void 0 && !isExactDeviceIdShape(envAndroidSerial)) {
+      return failResult("Refusing Maestro: ANDROID_SERIAL must be 1-256 non-whitespace characters. Unset it or set an exact serial, then retry. No device was mutated.", "INVALID_ARGUMENT");
+    }
+    const requestedDeviceId = args.deviceId ?? matchingSessionDeviceId ?? envAndroidSerial;
+    if (requestedDeviceId !== void 0 && !isExactDeviceIdShape(requestedDeviceId)) {
       return failResult("Refusing Maestro: deviceId must be 1-256 non-whitespace characters.", "INVALID_ARGUMENT");
     }
     let flowHasHideKeyboard = false;
@@ -56276,7 +56283,7 @@ function createMaestroRunHandler(deps = {}) {
         directReportIdentityStrength: directEvidence.reportDeviceIdStrength
       });
       const summary = buildStepSummary(combined, { failed: true });
-      const spawnError = combined.length === 0 && ["ENOENT", "EACCES"].includes(String(stageError?.code ?? ""));
+      const spawnError = combined.length === 0 && isPreSpawnMaestroError(stageError);
       const terminal = buildTerminalEvidence(combined, { timedOut, spawnError });
       const runnerResume = await buildRunnerResume(platform, fastHealthCheck2);
       const catchRefusal = combined.length > 0 ? maestroAuthorityRefusal(deviceAuthority, msg3) : null;
@@ -85795,7 +85802,7 @@ trackedTool("maestro_run", "Execute a Maestro flow via maestro-runner. Pass flow
   platform: external_exports.enum(["ios", "android"]).optional().describe("Target platform (auto-detected from session)"),
   appId: external_exports.string().optional().describe("App bundle ID (auto-detected from app.json)"),
   appFile: external_exports.string().optional().describe("iOS only \u2014 path to a built .app/.ipa for maestro-runner to reinstall on clearState. Auto-resolved from the flow appId when omitted (GH#201)."),
-  deviceId: external_exports.string().min(1).max(256).optional().describe("Exact iOS UDID or Android serial. Defaults from a matching active session, or ANDROID_SERIAL on Android, and is forwarded to the replay engine."),
+  deviceId: external_exports.string().min(1).max(256).optional().describe("Exact UDID or serial; defaults from session or Android ANDROID_SERIAL."),
   timeoutMs: external_exports.number().int().min(5e3).max(3e5).default(12e4).describe("Execution timeout in ms"),
   params: external_exports.record(external_exports.string(), external_exports.string()).optional().describe("GH #116: parameter bindings forwarded as -e KEY=VALUE for ${KEY} placeholders in the flow. Keys must match /^[A-Z_][A-Z0-9_]*$/ (validated in the handler).")
 }, createMaestroRunHandler());

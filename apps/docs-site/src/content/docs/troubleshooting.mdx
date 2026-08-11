@@ -166,7 +166,10 @@ The crash is native, not JavaScript. Use `adb logcat -b crash` (Android) or chec
 
 Use `device_list` to diagnose connected emulators, then bind the intended serial
 and app ID with `rn_session(action="bind_device", ...)`. The plugin never turns
-the first available device or `ANDROID_SERIAL` into session authority.
+the first available device or `ANDROID_SERIAL` into session authority. Without a
+bound session, `maestro_run` still needs one exact serial and accepts an explicit
+`deviceId` or `ANDROID_SERIAL` as its runner target only; an ambient or default
+adb target is never selected.
 
 ### Maestro gRPC error on Android
 

@@ -3227,9 +3227,7 @@ trackedTool(
       .min(1)
       .max(256)
       .optional()
-      .describe(
-        'Exact iOS UDID or Android serial. Defaults from a matching active session, or ANDROID_SERIAL on Android, and is forwarded to the replay engine.',
-      ),
+      .describe('Exact UDID or serial; defaults from session or Android ANDROID_SERIAL.'),
     timeoutMs: z
       .number()
       .int()

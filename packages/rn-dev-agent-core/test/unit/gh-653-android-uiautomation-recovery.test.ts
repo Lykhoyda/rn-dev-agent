@@ -606,3 +606,108 @@ test('GH#653 unrelated Maestro failures never release or retry', async () => {
   assert.equal(releases, 0);
   assert.equal(body.meta.androidUiAutomationRecovery, undefined);
 });
+
+test('GH#653 an empty ANDROID_SERIAL is unset, not a caller deviceId', async () => {
+  const previous = process.env.ANDROID_SERIAL;
+  process.env.ANDROID_SERIAL = '';
+  let executions = 0;
+  try {
+    const handler = baseHandler({
+      getActiveSession: () => null,
+      parkFlow: async () => {
+        throw new ExactAndroidDeviceRequiredError();
+      },
+      execFile: async () => {
+        executions += 1;
+        return directSuccess();
+      },
+    });
+
+    const body = envelope(await handler(runArgs));
+    assert.equal(body.ok, false);
+    assert.equal(body.code, 'EXACT_ANDROID_DEVICE_REQUIRED');
+    assert.match(body.error, /No device was mutated/);
+    assert.equal(executions, 0);
+  } finally {
+    if (previous === undefined) delete process.env.ANDROID_SERIAL;
+    else process.env.ANDROID_SERIAL = previous;
+  }
+});
+
+test('GH#653 a malformed ANDROID_SERIAL refuses as explicit config, not as deviceId', async () => {
+  const previous = process.env.ANDROID_SERIAL;
+  let executions = 0;
+  try {
+    for (const value of ['  ', 'emulator 5580', `${'x'.repeat(257)}`]) {
+      process.env.ANDROID_SERIAL = value;
+      const handler = baseHandler({
+        getActiveSession: () => null,
+        execFile: async () => {
+          executions += 1;
+          return directSuccess();
+        },
+      });
+
+      const body = envelope(await handler(runArgs));
+      assert.equal(body.ok, false);
+      assert.equal(body.code, 'INVALID_ARGUMENT');
+      assert.match(body.error, /ANDROID_SERIAL must be 1-256 non-whitespace characters/);
+      assert.doesNotMatch(body.error, /deviceId/);
+      assert.match(body.error, /No device was mutated/);
+
+      const withDeviceId = envelope(await handler({ ...runArgs, deviceId: SERIAL }));
+      assert.equal(withDeviceId.ok, false);
+      assert.equal(withDeviceId.code, 'INVALID_ARGUMENT');
+    }
+    assert.equal(executions, 0);
+  } finally {
+    if (previous === undefined) delete process.env.ANDROID_SERIAL;
+    else process.env.ANDROID_SERIAL = previous;
+  }
+});
+
+test('GH#653 ANDROID_SERIAL never overrides an explicit deviceId', async () => {
+  const previous = process.env.ANDROID_SERIAL;
+  process.env.ANDROID_SERIAL = SERIAL;
+  let argv: string[] = [];
+  try {
+    const handler = baseHandler({
+      getActiveSession: () => null,
+      execFile: async (_file, args) => {
+        argv = args;
+        return directSuccess('emulator-5590');
+      },
+    });
+
+    const body = envelope(await handler({ ...runArgs, deviceId: 'emulator-5590' }));
+    assert.equal(body.ok, true);
+    assert.deepEqual(argv.slice(0, 5), [
+      '--platform',
+      'android',
+      '--device',
+      'emulator-5590',
+      'test',
+    ]);
+  } finally {
+    if (previous === undefined) delete process.env.ANDROID_SERIAL;
+    else process.env.ANDROID_SERIAL = previous;
+  }
+});
+
+test('GH#653 every output-free OS spawn failure reports spawn-error terminal evidence', async () => {
+  for (const code of ['ENOENT', 'EACCES', 'ENOTDIR', 'EMFILE']) {
+    const handler = baseHandler({
+      execFile: async () => {
+        throw Object.assign(new Error(`spawn maestro-runner ${code}`), {
+          code,
+          stdout: '',
+          stderr: '',
+        });
+      },
+    });
+
+    const body = envelope(await handler(runArgs));
+    assert.equal(body.ok, false);
+    assert.equal(body.meta.terminal.exitClass, 'spawn-error', `${code} is a pre-spawn failure`);
+  }
+});

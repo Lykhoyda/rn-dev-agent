@@ -210,6 +210,9 @@ function attachCause(error, cause) {
     }
     return error;
 }
+function isExactDeviceIdShape(value) {
+    return value.length > 0 && value.length <= 256 && !/\s/.test(value);
+}
 function isPreSpawnMaestroError(error) {
     const candidate = error;
     return typeof candidate?.code === 'string' && !candidate.stdout && !candidate.stderr;
@@ -271,13 +274,13 @@ export function createMaestroRunHandler(deps = {}) {
             !sameDevice(args.deviceId, matchingSessionDeviceId)) {
             return failResult(`Refusing Maestro target ${args.deviceId}: active ${platform} session is bound to ${matchingSessionDeviceId}.`, 'TARGET_SESSION_MISMATCH', { requestedDeviceId: args.deviceId, activeSessionDeviceId: matchingSessionDeviceId });
         }
-        const requestedDeviceId = args.deviceId ??
-            matchingSessionDeviceId ??
-            (platform === 'android' ? process.env.ANDROID_SERIAL : undefined);
-        if (requestedDeviceId !== undefined &&
-            (requestedDeviceId.length === 0 ||
-                requestedDeviceId.length > 256 ||
-                /\s/.test(requestedDeviceId))) {
+        const envAndroidSerial = platform === 'android' && process.env.ANDROID_SERIAL ? process.env.ANDROID_SERIAL : undefined;
+        if (envAndroidSerial !== undefined && !isExactDeviceIdShape(envAndroidSerial)) {
+            return failResult('Refusing Maestro: ANDROID_SERIAL must be 1-256 non-whitespace characters. ' +
+                'Unset it or set an exact serial, then retry. No device was mutated.', 'INVALID_ARGUMENT');
+        }
+        const requestedDeviceId = args.deviceId ?? matchingSessionDeviceId ?? envAndroidSerial;
+        if (requestedDeviceId !== undefined && !isExactDeviceIdShape(requestedDeviceId)) {
             return failResult('Refusing Maestro: deviceId must be 1-256 non-whitespace characters.', 'INVALID_ARGUMENT');
         }
         // GH #356/B223: the dispatch tier depends on whether the validated flow
@@ -647,8 +650,7 @@ export function createMaestroRunHandler(deps = {}) {
                 directReportIdentityStrength: directEvidence.reportDeviceIdStrength,
             });
             const summary = buildStepSummary(combined, { failed: true });
-            const spawnError = combined.length === 0 &&
-                ['ENOENT', 'EACCES'].includes(String(stageError?.code ?? ''));
+            const spawnError = combined.length === 0 && isPreSpawnMaestroError(stageError);
             const terminal = buildTerminalEvidence(combined, { timedOut, spawnError });
             const runnerResume = await buildRunnerResume(platform, fastHealthCheck);
             // A run that produced no output never reached the device, so there is no
