@@ -166,11 +166,48 @@ The crash is native, not JavaScript. Use `adb logcat -b crash` (Android) or chec
 
 Use `device_list` to diagnose connected emulators, then bind the intended serial
 and app ID with `rn_session(action="bind_device", ...)`. The plugin never turns
-the first available device or `ANDROID_SERIAL` into session authority.
+the first available device or `ANDROID_SERIAL` into session authority. Without a
+bound session, `maestro_run` still needs one exact serial and accepts an explicit
+`deviceId` or `ANDROID_SERIAL` as its runner target only; an ambient or default
+adb target is never selected.
 
 ### Maestro gRPC error on Android
 
 Use maestro-runner instead of classic Maestro — it uses HTTP to UIAutomator2 instead of gRPC. The plugin enforces this by default.
+
+### `UiAutomation not connected` when a flow starts on Android
+
+An MCP reconnect can leave plugin-owned Android instrumentation behind, so
+maestro-runner fails session creation with `failed to create driver: create
+session: session not created: java.lang.IllegalStateException: UiAutomation not
+connected`. Recovery triggers only when the Maestro subprocess exits nonzero and
+that structured session-creation record is its entire stderr. `maestro_run` then
+force-stops only the two rn-dev-agent runner packages on the exact bound serial
+and retries the flow once. On a successful or warning response,
+`data.androidUiAutomationRecovery` reports `retried` and `retryCount` (never more
+than 1); on a failed or refused response, the same diagnostic is under
+`meta.androidUiAutomationRecovery`. Maestro's own orphaned session self-heals,
+so no Maestro, Appium, or foreign package is ever killed. A copy of the same text
+anywhere else — app logcat, console or network output, a partially executed flow's
+step output, or stderr mixed with other records — is not the wedge and never
+retries or releases packages.
+
+Recovery never extends the flow: both the cleanup and the retry run inside the
+original `maestro_run` deadline. With no budget left the cleanup is skipped
+without touching the device; if the cleanup fails or the budget lapses while it
+runs, the retry is never dispatched and the timeout or release failure is
+attached to the returned error as its cause. Every one of these paths preserves
+the original wedge failure, exposes a release warning, and truthfully reports
+`retried: false` / `retryCount: 0`. The diagnostic is present whenever recovery
+was attempted, including these skipped cases; `retried` becomes true only when a
+second Maestro subprocess actually runs.
+
+Pre-flow and recovery release problems are not swallowed. Successful and warning
+responses expose them as `data.androidSlotReleaseWarnings` and in the response
+warning text; failed and refused responses expose them as
+`meta.androidSlotReleaseWarnings`. If the same wedge survives the single retry,
+re-open the device session (`device_snapshot action=open`) on that serial and
+retry.
 
 ## Error codes
 
@@ -194,6 +231,7 @@ Codes returned by `cdp_*`/`device_*`/flow tools, what they mean, and the fix.
 | `MANAGED_TRANSFORM_CHANNEL_STALLED` | An authenticated transform child exited or did not complete its first exchange before the watchdog expired. Inspect the Metro log for the failing transformer, stop the managed Metro generation, repair the transformer or dependency, and retry the literal package script; strict proof remains unavailable for the violated generation. |
 | `DEVICE_CLAIM_CONFLICT`, `DEVICE_AUTHORITY_MISMATCH`, `PLATFORM_AUTHORITY_MISMATCH`, `APP_INSTALL_IDENTITY_CHANGED` | The exact UUID/serial, platform, or app differs, or the installed artifact is no longer the attested session build. Bind the intended device and rebuild or reinstall that generation. A byte-identical reinstall is re-issued automatically on the next gated call, except while a strict proof run is bound; see [parallel session authority](/rn-dev-agent/session-authority/). |
 | `EXPO_DEVICE_IDENTITY_MISMATCH` | Expo Android could not uniquely map the bound adb serial to its required model/AVD display name, or that mapping changed immediately before launch. Keep the same exact serial bound, disconnect duplicate model/AVD names, authorize or reconnect that device, and retry literal `pnpm android`; never pass a display name as session authority or let Expo choose an ambient device. |
+| `EXACT_ANDROID_DEVICE_REQUIRED` | Releasing the plugin-owned Android interaction slot needs one exact serial, and none was available (typically several adb targets attached with no bound session). Nothing on any device was mutated. Bind the intended device with `rn_session(action="bind_device", ...)`, pass `deviceId` to `maestro_run`, or set `ANDROID_SERIAL`, then retry. An ambient or default adb target is never selected. |
 | `BUNDLE_HANDSHAKE_UNAVAILABLE`, `BUNDLE_IDENTITY_MISMATCH`, `CDP_TARGET_AUTHORITY_MISMATCH`, `TARGET_CLAIM_CONFLICT` | The signed initial-bundle marker or exact CDP target is absent, changed, unresponsive, or owned elsewhere. Exact pinning serially resets an inspector that handshakes but fails its mandatory `Runtime.evaluate('1+1')` probe, then re-lists only the allocated Metro and retries the same app/device authority. If the deadline expires, the error retains that probe-timeout leaf. Load the intended app from the bound Metro and call `cdp_connect`; never choose another target. |
 | `RUNNER_OWNERSHIP_MISMATCH`, `RUNNER_ADOPTION_REQUIRED`, `RUNNER_CLAIM_CONFLICT` | Native-runner capability or ownership differs. Rebind the exact runner, or complete the explicit handoff/adoption flow. A live runner is never force-stolen; see [parallel session authority](/rn-dev-agent/session-authority/) for the unsupported legacy split-store case. |
 | `OBSERVE_AUTHORITY_MISMATCH`, `OBSERVE_PORT_CLAIM_CONFLICT`, `PROOF_AUTHORITY_MISMATCH` | Observe or proof belongs to another fenced generation. Start a session-scoped instance or proof run. |

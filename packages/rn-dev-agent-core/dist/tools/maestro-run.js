@@ -14,7 +14,7 @@ import { outputIndicatesFlowFailure } from '../domain/maestro-error-parser.js';
 import { augmentFailureWithDegradation, resolveFloorMs } from '../domain/tap-latency.js';
 import { buildStepSummary, buildTerminalEvidence, classifyExecError, combineRunnerOutput, formatFailureHeadline, } from '../domain/maestro-step-parser.js';
 import { fastHealthCheck as defaultFastHealthCheck, stopFastRunner as defaultStopFastRunner, } from '../runners/rn-fast-runner-client.js';
-import { releaseAndroidInteractionSlot as defaultReleaseAndroidSlot } from '../runners/release-android-slot.js';
+import { ExactAndroidDeviceRequiredError, releaseAndroidInteractionSlot as defaultReleaseAndroidSlot, } from '../runners/release-android-slot.js';
 import { markCdpStale as defaultMarkCdpStale } from '../cdp/recovery.js';
 import { maestroAuthorityRefusal, sameDevice, verifyMaestroDeviceAuthority, } from '../domain/maestro-device-authority.js';
 import { collectDirectRunnerEvidence, createRunnerReportDir, disposeRunnerReportDir, runnerReportArgs, } from '../domain/maestro-runner-report.js';
@@ -34,7 +34,8 @@ export async function runFlowParked(run, opts = {}) {
     try {
         if (opts.platform === 'android') {
             const release = opts.releaseAndroidSlot ?? defaultReleaseAndroidSlot;
-            await release({ deviceId: opts.deviceId });
+            const outcome = await release({ deviceId: opts.deviceId });
+            opts.onAndroidRelease?.(outcome);
         }
         else {
             await (opts.stopFastRunner ?? defaultStopFastRunner)(opts.deviceId);
@@ -197,6 +198,38 @@ function resolveAppId(override, platform) {
         return resolveBundleId(platform) ?? readExpoSlug() ?? '';
     return readExpoSlug() ?? '';
 }
+const UIAUTOMATION_SESSION_CREATION_FAILURE = /^Error: failed to create driver: create session: session not created: java\.lang\.IllegalStateException: UiAutomation not connected(?:, UiAutomation@[^\r\n]+)?$/;
+function attachCause(error, cause) {
+    if (error instanceof Error && error.cause === undefined) {
+        try {
+            Object.defineProperty(error, 'cause', { value: cause, configurable: true, writable: true });
+        }
+        catch {
+            // a frozen/sealed error keeps its own message; the warning already carries the cause
+        }
+    }
+    return error;
+}
+function isExactDeviceIdShape(value) {
+    return value.length > 0 && value.length <= 256 && !/\s/.test(value);
+}
+function isPreSpawnMaestroError(error) {
+    const candidate = error;
+    return typeof candidate?.code === 'string' && !candidate.stdout && !candidate.stderr;
+}
+export function isUiAutomationNotConnectedSessionCreationFailure(error) {
+    const candidate = error;
+    if (typeof candidate?.code !== 'number' ||
+        candidate.code === 0 ||
+        typeof candidate.stderr !== 'string') {
+        return false;
+    }
+    const records = candidate.stderr
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+    return records.length === 1 && UIAUTOMATION_SESSION_CREATION_FAILURE.test(records[0]);
+}
 /**
  * Read-only verification of the already-parked runner. The probe is the iOS
  * rn-fast-runner's, so on Android it would report an unhealthy runner that was
@@ -241,11 +274,13 @@ export function createMaestroRunHandler(deps = {}) {
             !sameDevice(args.deviceId, matchingSessionDeviceId)) {
             return failResult(`Refusing Maestro target ${args.deviceId}: active ${platform} session is bound to ${matchingSessionDeviceId}.`, 'TARGET_SESSION_MISMATCH', { requestedDeviceId: args.deviceId, activeSessionDeviceId: matchingSessionDeviceId });
         }
-        const requestedDeviceId = args.deviceId ?? matchingSessionDeviceId;
-        if (requestedDeviceId !== undefined &&
-            (requestedDeviceId.length === 0 ||
-                requestedDeviceId.length > 256 ||
-                /\s/.test(requestedDeviceId))) {
+        const envAndroidSerial = platform === 'android' && process.env.ANDROID_SERIAL ? process.env.ANDROID_SERIAL : undefined;
+        if (envAndroidSerial !== undefined && !isExactDeviceIdShape(envAndroidSerial)) {
+            return failResult('Refusing Maestro: ANDROID_SERIAL must be 1-256 non-whitespace characters. ' +
+                'Unset it or set an exact serial, then retry. No device was mutated.', 'INVALID_ARGUMENT');
+        }
+        const requestedDeviceId = args.deviceId ?? matchingSessionDeviceId ?? envAndroidSerial;
+        if (requestedDeviceId !== undefined && !isExactDeviceIdShape(requestedDeviceId)) {
             return failResult('Refusing Maestro: deviceId must be 1-256 non-whitespace characters.', 'INVALID_ARGUMENT');
         }
         // GH #356/B223: the dispatch tier depends on whether the validated flow
@@ -354,6 +389,33 @@ export function createMaestroRunHandler(deps = {}) {
             ...paramArgs,
         ]);
         const directRunnerEvidence = (output) => collectDirectRunnerEvidence(runnerReportDir, output);
+        const releaseAndroidSlot = deps.releaseAndroidSlot ?? defaultReleaseAndroidSlot;
+        const androidSlotReleaseWarnings = [];
+        let releasedAndroidDeviceId;
+        let uiAutomationRecoveryAttempted = false;
+        let uiAutomationRecoveryRetried = false;
+        const recordAndroidRelease = (outcome) => {
+            if (outcome?.deviceId)
+                releasedAndroidDeviceId = outcome.deviceId;
+            if (outcome?.warnings?.length)
+                androidSlotReleaseWarnings.push(...outcome.warnings);
+        };
+        const androidReleaseMeta = () => ({
+            ...(androidSlotReleaseWarnings.length > 0
+                ? { androidSlotReleaseWarnings: [...androidSlotReleaseWarnings] }
+                : {}),
+            ...(uiAutomationRecoveryAttempted
+                ? {
+                    androidUiAutomationRecovery: {
+                        retried: uiAutomationRecoveryRetried,
+                        retryCount: uiAutomationRecoveryRetried ? 1 : 0,
+                    },
+                }
+                : {}),
+        });
+        const androidReleaseCaveat = () => androidSlotReleaseWarnings.length > 0
+            ? `Android interaction-slot release warnings: ${androidSlotReleaseWarnings.join('; ')}`
+            : undefined;
         // GH #397: engine-pin visibility. Detection is process-cached and fail-open
         // (null on error). The caveat rides the existing warn-once mechanism below;
         // RN_ENGINE_PIN_STRICT=1 opts into refusing PROVEN divergence only.
@@ -378,21 +440,77 @@ export function createMaestroRunHandler(deps = {}) {
                 deps.reproveManagedOrigin ??
                 managedAuthority.reproveManagedOrigin;
             const stageResults = await parkFlow(() => executeMaestroAuthorityStages(validatedCommands, async (commands) => {
-                const remainingTimeout = flowDeadline - now();
-                if (remainingTimeout <= 0) {
-                    const error = new Error('Maestro flow timeout exhausted before the next stage');
-                    Object.assign(error, { code: 'ETIMEDOUT' });
-                    throw error;
-                }
                 writeFileSync(flowFile, buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, [...commands]), 'utf-8');
-                return execute(dispatch.binPath, finalArgs, {
-                    timeout: remainingTimeout,
-                    encoding: 'utf8',
-                    maxBuffer: 10 * 1024 * 1024,
-                });
+                const executeOnce = async (beforeDispatch) => {
+                    const remainingTimeout = flowDeadline - now();
+                    if (remainingTimeout <= 0) {
+                        const error = new Error('Maestro flow timeout exhausted before the next stage');
+                        Object.assign(error, { code: 'ETIMEDOUT' });
+                        throw error;
+                    }
+                    beforeDispatch?.();
+                    return execute(dispatch.binPath, finalArgs, {
+                        timeout: remainingTimeout,
+                        encoding: 'utf8',
+                        maxBuffer: 10 * 1024 * 1024,
+                    });
+                };
+                try {
+                    return await executeOnce();
+                }
+                catch (error) {
+                    const recoveryDeviceId = requestedDeviceId ?? releasedAndroidDeviceId;
+                    if (platform !== 'android' ||
+                        uiAutomationRecoveryAttempted ||
+                        !recoveryDeviceId ||
+                        !isUiAutomationNotConnectedSessionCreationFailure(error)) {
+                        throw error;
+                    }
+                    uiAutomationRecoveryAttempted = true;
+                    const recoveryTimeout = flowDeadline - now();
+                    if (recoveryTimeout <= 0) {
+                        androidSlotReleaseWarnings.push('UiAutomation recovery skipped: Maestro flow timeout was exhausted');
+                        throw error;
+                    }
+                    // NOTE: AbortSignal.timeout()'s timer is unref'd, so a cleanup
+                    // awaiting only that signal never aborts once the loop drains.
+                    const recoveryAbort = new AbortController();
+                    const recoveryDeadlineTimer = setTimeout(() => {
+                        recoveryAbort.abort(new Error('UiAutomation recovery cleanup exceeded the remaining Maestro flow timeout'));
+                    }, recoveryTimeout);
+                    try {
+                        recordAndroidRelease(await releaseAndroidSlot({
+                            deviceId: recoveryDeviceId,
+                            includeLegacy: false,
+                            signal: recoveryAbort.signal,
+                        }));
+                    }
+                    catch (releaseError) {
+                        androidSlotReleaseWarnings.push(`UiAutomation recovery release failed: ${releaseError instanceof Error ? releaseError.message : String(releaseError)}`);
+                        throw attachCause(error, releaseError);
+                    }
+                    finally {
+                        clearTimeout(recoveryDeadlineTimer);
+                    }
+                    try {
+                        return await executeOnce(() => {
+                            uiAutomationRecoveryRetried = true;
+                        });
+                    }
+                    catch (retryError) {
+                        if (uiAutomationRecoveryRetried && !isPreSpawnMaestroError(retryError)) {
+                            throw retryError;
+                        }
+                        uiAutomationRecoveryRetried = false;
+                        androidSlotReleaseWarnings.push(`UiAutomation recovery retry did not start: ${retryError instanceof Error ? retryError.message : String(retryError)}`);
+                        throw attachCause(error, retryError);
+                    }
+                }
             }, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin), {
                 platform,
                 deviceId: requestedDeviceId,
+                releaseAndroidSlot,
+                onAndroidRelease: recordAndroidRelease,
                 completeRunnerPark: args.completeRunnerPark ?? managedAuthority.completeRunnerPark,
             });
             await commitReinstalledInstall();
@@ -427,6 +545,7 @@ export function createMaestroRunHandler(deps = {}) {
                     passed: false,
                     deviceAuthority,
                     output: output.slice(0, 4000),
+                    ...androidReleaseMeta(),
                 });
             }
             const summary = buildStepSummary(output, { failed: !passed });
@@ -452,24 +571,30 @@ export function createMaestroRunHandler(deps = {}) {
                 ...(engineStatus && engineStatus.pin.status !== 'pinned-ok'
                     ? { enginePin: engineStatus.pin }
                     : {}),
+                ...androidReleaseMeta(),
             };
             // GH #356/B223: a degradedReason (Android hideKeyboard with no Maestro CLI)
             // is a caveat surfaced the same way as a fallbackReason. GH #397: so is
             // an engine-pin drift (warn-once via the same mechanism).
             const caveat = dispatch.fallbackReason ?? dispatch.degradedReason ?? pinCaveat ?? undefined;
+            const releaseCaveat = androidReleaseCaveat();
             if (passed) {
                 // B59 (Gemini review, conf 82): on success-with-fallback, only emit
                 // a loud warning the FIRST time per process so a 100-flow loop
                 // doesn't generate 100 identical warnings. Subsequent successes
                 // carry the reason silently in meta.
-                if (caveat && shouldWarnFallback(caveat)) {
-                    return warnResult(meta, caveat);
+                const warnCaveat = caveat && shouldWarnFallback(caveat) ? caveat : undefined;
+                if (releaseCaveat) {
+                    return warnResult(meta, warnCaveat ? `${warnCaveat}; ${releaseCaveat}` : releaseCaveat);
+                }
+                if (warnCaveat) {
+                    return warnResult(meta, warnCaveat);
                 }
                 return okResult(meta);
             }
-            const baseWarnMsg = caveat
-                ? `${caveat}; flow completed with warnings or failures`
-                : 'Flow completed with warnings or failures';
+            const baseWarnMsg = [caveat, releaseCaveat, 'Flow completed with warnings or failures']
+                .filter((part) => Boolean(part))
+                .join('; ');
             // GH #263: classify on the FULL output (not the sliced meta.output).
             const warnAug = augmentFailureWithDegradation(output, resolveFloorMs(process.env.RN_RUNTIME_DEGRADED_FLOOR_MS), baseWarnMsg, meta);
             return warnResult(warnAug.meta, warnAug.message);
@@ -478,10 +603,21 @@ export function createMaestroRunHandler(deps = {}) {
             // A flow that died mid-way may still have reinstalled: re-issue before
             // reporting, so the failure is the flow's and not a broken axis I.
             await commitReinstalledInstall();
-            if (err instanceof SessionAuthorityError)
+            if (err instanceof SessionAuthorityError) {
+                err.attachMeta(androidReleaseMeta());
                 throw err;
+            }
             const stageError = err instanceof MaestroStageExecutionError ? err.stageError : err;
             const msg = stageError instanceof Error ? stageError.message : String(stageError);
+            if (stageError instanceof ExactAndroidDeviceRequiredError) {
+                return failResult(stageError.message, stageError.code, {
+                    platform,
+                    runner: dispatch.runner,
+                    transport: dispatch.runner,
+                    passed: false,
+                    ...androidReleaseMeta(),
+                });
+            }
             // Multi-LLM review of PR #115 (Codex conf 95): when execFile
             // throws on timeout (or kill), Node attaches the partial stdout
             // and stderr to the error object. Preserve them in `data.output`
@@ -514,8 +650,7 @@ export function createMaestroRunHandler(deps = {}) {
                 directReportIdentityStrength: directEvidence.reportDeviceIdStrength,
             });
             const summary = buildStepSummary(combined, { failed: true });
-            const spawnError = combined.length === 0 &&
-                ['ENOENT', 'EACCES'].includes(String(stageError?.code ?? ''));
+            const spawnError = combined.length === 0 && isPreSpawnMaestroError(stageError);
             const terminal = buildTerminalEvidence(combined, { timedOut, spawnError });
             const runnerResume = await buildRunnerResume(platform, fastHealthCheck);
             // A run that produced no output never reached the device, so there is no
@@ -536,11 +671,14 @@ export function createMaestroRunHandler(deps = {}) {
                     ...(runnerResume ? { runnerResume } : {}),
                     timedOut,
                     outputTruncated,
+                    ...androidReleaseMeta(),
                 });
             }
             // Headline from structured data (raw-free); the raw err.message is the
             // fallback only for system errors with no step output (e.g. spawn ENOENT).
-            const headline = formatFailureHeadline(summary, { timedOut, outputTruncated }, msg);
+            const rawHeadline = formatFailureHeadline(summary, { timedOut, outputTruncated }, msg);
+            const releaseCaveat = androidReleaseCaveat();
+            const headline = releaseCaveat ? `${rawHeadline}; ${releaseCaveat}` : rawHeadline;
             // GH #263: a timeout/non-zero exit is also a failure surface — flag a
             // wedged runtime here too if the successful taps were degraded.
             const failAug = augmentFailureWithDegradation(combined, resolveFloorMs(process.env.RN_RUNTIME_DEGRADED_FLOOR_MS), headline, {
@@ -565,6 +703,7 @@ export function createMaestroRunHandler(deps = {}) {
                 ...(engineStatus && engineStatus.pin.status !== 'pinned-ok'
                     ? { enginePin: engineStatus.pin }
                     : {}),
+                ...androidReleaseMeta(),
             });
             return failResult(failAug.message, failAug.meta);
         }

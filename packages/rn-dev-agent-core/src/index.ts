@@ -3208,7 +3208,7 @@ trackedTool(
 
 trackedTool(
   'maestro_run',
-  'Execute a Maestro flow via maestro-runner. Pass flowPath for an existing .yaml file, or inlineYaml for ephemeral flows. Uses UIAutomator2 on Android and XCTest on iOS. A matching active device session is forwarded as an exact --device/--udid target; maestro-runner success is rejected unless its direct device/WDA evidence matches. Does NOT require CDP — works even when app is crashed or on native screens.',
+  'Execute a Maestro flow via maestro-runner. Pass flowPath for an existing .yaml file, or inlineYaml for ephemeral flows. Uses UIAutomator2 on Android and XCTest on iOS. A matching active device session, explicit deviceId, or Android ANDROID_SERIAL is forwarded as an exact --device/--udid target; maestro-runner success is rejected unless its direct device/WDA evidence matches. Does NOT require CDP — works even when app is crashed or on native screens.',
   {
     flowPath: z.string().optional().describe('Path to a .yaml flow file to execute'),
     inlineYaml: z
@@ -3231,9 +3231,7 @@ trackedTool(
       .min(1)
       .max(256)
       .optional()
-      .describe(
-        'Exact iOS UDID or Android serial. Defaults only from a matching active device session and is forwarded to the replay engine.',
-      ),
+      .describe('Exact UDID or serial; defaults from session or Android ANDROID_SERIAL.'),
     timeoutMs: z
       .number()
       .int()

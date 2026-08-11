@@ -21,7 +21,7 @@ function baseDeps(over = {}) {
   return {
     stopOwnRunner: async () => {},
     adbForceStop: async () => {},
-    resolveSerial: () => [],
+    resolveSerial: (deviceId) => ['-s', deviceId ?? 'emulator-5554'],
     readDaemonPid: () => null,
     isAlive: () => false,
     protectedPids: () => ({ selfPid: 4242, parentPid: 9 }),
@@ -63,7 +63,7 @@ test('GH#237 release: order is stopOwnRunner → force-stop both pkgs → daemon
 
 test('GH#237 release: deviceId resolves to an -s serial passed to force-stop', async () => {
   const serials = [];
-  await releaseAndroidInteractionSlot(
+  const result = await releaseAndroidInteractionSlot(
     { deviceId: 'emulator-5554' },
     baseDeps({
       resolveSerial: (id) => (id ? ['-s', id] : []),
@@ -72,6 +72,7 @@ test('GH#237 release: deviceId resolves to an -s serial passed to force-stop', a
       },
     }),
   );
+  assert.equal(result.deviceId, 'emulator-5554');
   assert.deepEqual(serials, ['-s emulator-5554', '-s emulator-5554']);
 });
 
@@ -187,19 +188,43 @@ test('GH#237 release: keeps daemon files when the kill itself fails (daemon may 
   assert.ok(r.warnings.some((w) => /kill daemon 777 failed/.test(w)));
 });
 
-test('GH#237 release: resolveSerial throwing does not abort (best-effort, never throws)', async () => {
-  const r = await releaseAndroidInteractionSlot(
-    {},
+test('GH#653 release: multi-target/no-exact refusal is actionable and non-mutating', async () => {
+  const mutations = [];
+  await assert.rejects(
+    releaseAndroidInteractionSlot(
+      {},
+      baseDeps({
+        resolveSerial: () => [],
+        stopOwnRunner: async () => mutations.push('stop-runner'),
+        adbForceStop: async () => mutations.push('force-stop'),
+        readDaemonPid: () => {
+          mutations.push('read-daemon');
+          return 777;
+        },
+        kill: () => mutations.push('kill-daemon'),
+        removeFile: () => mutations.push('remove-file'),
+      }),
+    ),
+    /without an exact serial.*No device was mutated/s,
+  );
+  assert.deepEqual(mutations, []);
+});
+
+test('GH#653 release: exact cleanup is serial- and owned-package-scoped', async () => {
+  const calls = [];
+  await releaseAndroidInteractionSlot(
+    { deviceId: 'emulator-5580', includeLegacy: false },
     baseDeps({
-      resolveSerial: () => {
-        throw new Error('adb down');
-      },
-      adbForceStop: async () =>
-        assert.fail('force-stop must be skipped when serial resolution fails'),
+      stopOwnRunner: async (deviceId) => calls.push(['stop', deviceId]),
+      adbForceStop: async (pkg, serial) => calls.push(['force-stop', serial, pkg]),
+      readDaemonPid: () => assert.fail('legacy or foreign process cleanup is forbidden'),
     }),
   );
-  assert.deepEqual(r.forceStoppedPackages, []);
-  assert.ok(r.warnings.some((w) => /resolveSerial failed/.test(w)));
+  assert.deepEqual(calls, [
+    ['stop', 'emulator-5580'],
+    ['force-stop', ['-s', 'emulator-5580'], 'dev.lykhoyda.rndevagent.androidrunner.test'],
+    ['force-stop', ['-s', 'emulator-5580'], 'dev.lykhoyda.rndevagent.androidrunner'],
+  ]);
 });
 
 test('GH#237 release: abort fences later destructive cleanup steps', async () => {
