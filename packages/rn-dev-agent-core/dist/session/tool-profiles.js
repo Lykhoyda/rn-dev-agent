@@ -8,6 +8,7 @@ const groupFacets = {
 const facetOrder = ['C', 'S', 'I', 'M', 'A', 'B', 'D', 'R', 'P'];
 const session = ['session'];
 const osScoped = ['session', 'target'];
+const nativeControl = ['session', 'target', 'automation'];
 const throughRuntime = ['session', 'target', 'runtime'];
 const allGroups = ['session', 'target', 'runtime', 'automation'];
 function facetsOf(groups, narrowing = {}) {
@@ -29,15 +30,9 @@ const sourceState = [
     'cdp_record_test_save_as_action',
     'maestro_generate',
 ];
-const nativeRead = [
-    'cross_platform_verify',
-    'device_find',
-    'device_screenshot',
-    'device_snapshot',
-];
+const nativeRead = ['device_find', 'device_screenshot', 'device_snapshot'];
+const nativeVerdict = ['cross_platform_verify'];
 const nativeMutation = [
-    'cdp_lock_e2e_test',
-    'cdp_repair_action',
     'device_accept_system_dialog',
     'device_back',
     'device_batch',
@@ -56,6 +51,10 @@ const nativeMutation = [
     'device_scroll',
     'device_scrollintoview',
     'device_swipe',
+];
+const managedNativeMutation = [
+    'cdp_lock_e2e_test',
+    'cdp_repair_action',
     'maestro_run',
     'maestro_test_all',
 ];
@@ -138,18 +137,36 @@ add(sourceState, {
     mutation: true,
     liveBundleProbe: false,
 });
-// Native tools drive the device without a live CDP seat: no B, A stays live.
+// Raw native control does not require Runtime origin evidence.
 add(nativeRead, {
+    kind: 'authoritative',
+    groups: nativeControl,
+    axes: facetsOf(nativeControl),
+    nativeOrigin: 'optional',
+    mutation: false,
+    liveBundleProbe: false,
+});
+add(nativeVerdict, {
     kind: 'authoritative',
     groups: allGroups,
     axes: facetsOf(allGroups, { without: ['B'] }),
+    nativeOrigin: 'required',
     mutation: false,
     liveBundleProbe: false,
 });
 add(nativeMutation, {
     kind: 'authoritative',
+    groups: nativeControl,
+    axes: facetsOf(nativeControl),
+    nativeOrigin: 'optional',
+    mutation: true,
+    liveBundleProbe: false,
+});
+add(managedNativeMutation, {
+    kind: 'authoritative',
     groups: allGroups,
     axes: facetsOf(allGroups, { without: ['B'] }),
+    nativeOrigin: 'required',
     mutation: true,
     liveBundleProbe: false,
 });
@@ -206,7 +223,8 @@ add(observe, {
 add(proof, {
     kind: 'authoritative',
     groups: allGroups,
-    axes: facetsOf(allGroups, { without: ['A'], overlay: ['P'] }),
+    axes: facetsOf(allGroups, { overlay: ['P'] }),
+    nativeOrigin: 'required',
     mutation: true,
     liveBundleProbe: true,
 });
@@ -280,6 +298,7 @@ export function authorityProfileFor(tool, args = {}) {
         return {
             ...profile,
             axes: profile.axes.filter((facet) => facet !== 'A'),
+            nativeOrigin: undefined,
             managedOrigin: true,
             managedRunnerPark: true,
         };

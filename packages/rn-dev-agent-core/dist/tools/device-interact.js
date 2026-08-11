@@ -113,8 +113,16 @@ export async function fetchSnapshotNodes(allowCache = false) {
         const platform = getActiveSession()?.platform;
         if (platform && isSnapshotCacheValid(platform)) {
             const cached = getCachedSnapshot(platform);
-            if (cached)
-                return { ok: true, nodes: cached.nodes };
+            if (cached) {
+                return {
+                    ok: true,
+                    nodes: cached.nodes,
+                    provenance: {
+                        source: 'cache',
+                        originAuthority: cached.authorityReceipt.originAuthority,
+                    },
+                };
+            }
         }
     }
     const first = await runNative(['snapshot', '-i']);
@@ -130,7 +138,11 @@ export async function fetchSnapshotNodes(allowCache = false) {
         const platform = getActiveSession()?.platform;
         if (platform)
             cacheSnapshot(platform, initialNodes);
-        return { ok: true, nodes: initialNodes };
+        return {
+            ok: true,
+            nodes: initialNodes,
+            provenance: { source: 'fresh', originAuthority: 'not-proven' },
+        };
     }
     const session = getActiveSession();
     markSnapshotDirty(session?.platform);
@@ -161,7 +173,12 @@ export async function fetchSnapshotNodes(allowCache = false) {
     const platform = getActiveSession()?.platform;
     if (platform)
         cacheSnapshot(platform, recoveredNodes);
-    return { ok: true, nodes: recoveredNodes, recoveredTier: recovery.tier };
+    return {
+        ok: true,
+        nodes: recoveredNodes,
+        provenance: { source: 'fresh', originAuthority: 'not-proven' },
+        recoveredTier: recovery.tier,
+    };
 }
 // GH #409: refusal for a zero-node capture — asserting NOT_FOUND on it would
 // present a degraded capture as a legitimately empty screen.
@@ -197,7 +214,12 @@ export async function fetchFindCandidates(query, exact = false, allowCache = fal
     // 10-element cap.
     const ranked = rankSnapshotNodes(matched);
     const candidates = ranked.slice(0, 10).map(candidateFromNode);
-    return { ok: true, candidates, recoveredTier: snap.recoveredTier };
+    return {
+        ok: true,
+        candidates,
+        provenance: snap.provenance,
+        recoveredTier: snap.recoveredTier,
+    };
 }
 function runnerLeakFailResult(query, recoveryReason) {
     const queryHint = query ? ` (while resolving "${query}")` : '';
@@ -227,13 +249,21 @@ export async function pressCandidate(candidate, action, getClient, includeSystem
 // B119: when an underlying snapshot triggered runner-leak recovery, surface
 // that side-effect on the wrapping result so callers (LLM agents) know the
 // app may have been relaunched and CDP/state may have been invalidated.
-function tagPressIfRecovered(result, tier) {
-    if (!tier || result.isError)
-        return result;
+function tagFindSnapshot(result, provenance, tier) {
     try {
         const envelope = JSON.parse(result.content[0].text);
-        envelope.meta = { ...envelope.meta, recovered: 'agent-device-runner-leak', recoveryTier: tier };
-        return { content: [{ type: 'text', text: JSON.stringify(envelope) }] };
+        envelope.meta = {
+            ...envelope.meta,
+            snapshotProvenance: provenance,
+            ...(tier ? { recovered: 'agent-device-runner-leak', recoveryTier: tier } : {}),
+        };
+        return {
+            ...result,
+            content: [
+                { type: 'text', text: JSON.stringify(envelope) },
+                ...result.content.slice(1),
+            ],
+        };
     }
     catch {
         return result;
@@ -258,29 +288,34 @@ export function createDeviceFindHandler(getClient) {
                 // cleanly so the caller knows exact/index semantics aren't reachable.
                 return failResult(`Snapshot unavailable — cannot resolve ${args.exact ? 'exact' : 'index-based'} match for "${args.text}". Retry after device_snapshot action=open/snapshot.`, { code: 'SNAPSHOT_UNAVAILABLE', query: args.text });
             }
-            const { candidates, recoveredTier } = find;
+            const { candidates, provenance, recoveredTier } = find;
+            const tagResult = (result) => tagFindSnapshot(result, provenance, recoveredTier);
             if (candidates.length === 0) {
-                return failResult(`No element matches "${args.text}" (exact=${args.exact === true})`, {
+                return tagResult(failResult(`No element matches "${args.text}" (exact=${args.exact === true})`, {
                     code: 'NOT_FOUND',
                     query: args.text,
-                });
+                }));
             }
             if (args.index !== undefined) {
                 if (args.index < 0 || args.index >= candidates.length) {
-                    return failResult(`index ${args.index} out of range (got ${candidates.length} candidates)`, { code: 'INDEX_OUT_OF_RANGE', count: candidates.length, candidates });
+                    return tagResult(failResult(`index ${args.index} out of range (got ${candidates.length} candidates)`, {
+                        code: 'INDEX_OUT_OF_RANGE',
+                        count: candidates.length,
+                        candidates,
+                    }));
                 }
-                return tagPressIfRecovered(await pressCandidate(candidates[args.index], args.action, getClient, args.includeSystemUi === true), recoveredTier);
+                return tagResult(await pressCandidate(candidates[args.index], args.action, getClient, args.includeSystemUi === true));
             }
             // exact=true, no index: require single match
             if (candidates.length === 1) {
-                return tagPressIfRecovered(await pressCandidate(candidates[0], args.action, getClient, args.includeSystemUi === true), recoveredTier);
+                return tagResult(await pressCandidate(candidates[0], args.action, getClient, args.includeSystemUi === true));
             }
-            return failResult(`AMBIGUOUS_MATCH: exact "${args.text}" matched ${candidates.length} elements`, {
+            return tagResult(failResult(`AMBIGUOUS_MATCH: exact "${args.text}" matched ${candidates.length} elements`, {
                 code: 'AMBIGUOUS_MATCH',
                 query: args.text,
                 candidates,
                 hint: 'Add index: N to pick one.',
-            });
+            }));
         }
         // GH #105 iOS-MVP follow-up + Task 8 of the Android MVP plan: route
         // non-exact text finds through the snapshot-based orchestrator on iOS
@@ -306,28 +341,29 @@ export function createDeviceFindHandler(getClient) {
                     query: args.text,
                 });
             }
-            const { candidates, recoveredTier } = find;
+            const { candidates, provenance, recoveredTier } = find;
+            const tagResult = (result) => tagFindSnapshot(result, provenance, recoveredTier);
             // Surface recoveredTier on every outcome (not just the single-match press)
             // so callers can tell the app was relaunched mid-find even on NOT_FOUND /
             // AMBIGUOUS.
             const recoveredMeta = recoveredTier ? { recoveredTier } : {};
             if (candidates.length === 0) {
-                return failResult(`No element matches "${args.text}"`, {
+                return tagResult(failResult(`No element matches "${args.text}"`, {
                     code: 'NOT_FOUND',
                     query: args.text,
                     ...recoveredMeta,
-                });
+                }));
             }
             if (candidates.length === 1) {
-                return tagPressIfRecovered(await pressCandidate(candidates[0], args.action, getClient, args.includeSystemUi === true), recoveredTier);
+                return tagResult(await pressCandidate(candidates[0], args.action, getClient, args.includeSystemUi === true));
             }
-            return failResult(`AMBIGUOUS_MATCH: "${args.text}" matched ${candidates.length} elements. Use device_press with one of these refs, or retry with index: N.`, {
+            return tagResult(failResult(`AMBIGUOUS_MATCH: "${args.text}" matched ${candidates.length} elements. Use device_press with one of these refs, or retry with index: N.`, {
                 code: 'AMBIGUOUS_MATCH',
                 query: args.text,
                 candidates,
                 ...recoveredMeta,
                 hint: 'Pick the correct ref (prefer one with hittable=true) and call device_press(ref="...") directly, or call device_find again with index: N.',
-            });
+            }));
         }
         return failResult(`device_find requires an in-tree runner — iOS (rn-fast-runner) or Android with RN_ANDROID_RUNNER unset/non-zero (rn-android-runner). Active session: ${activeSession?.platform ?? 'none'}.`, {
             code: 'IN_TREE_RUNNER_REQUIRED',

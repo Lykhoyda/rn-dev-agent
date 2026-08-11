@@ -1077,6 +1077,7 @@ test('gate-composed proof handler rejects undeclared caller fields beyond bound 
     reasons: ['INVALID_PROOF_INPUT'],
     stage: 'idle',
     authoritative: false,
+    originAuthority: 'not-proven',
   });
 });
 

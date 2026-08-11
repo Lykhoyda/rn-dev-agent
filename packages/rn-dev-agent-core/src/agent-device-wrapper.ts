@@ -175,9 +175,11 @@ interface CachedSnapshot {
   }[];
   capturedAt: string;
   capturedAtMs: number;
+  captureSequence: number;
 }
 
 const snapshotCache = new Map<string, CachedSnapshot>();
+let snapshotCaptureSequence = 0;
 const dirtySnapshotPlatforms = new Set<string>();
 let snapshotAuthorityProvider: {
   current: () => Record<string, unknown> | null;
@@ -207,6 +209,7 @@ export interface SnapshotAuthorityReceipt {
   runnerProcessBirth: unknown;
   runnerCapabilityHash: unknown;
   runnerPort: unknown;
+  originAuthority: 'proven' | 'not-proven';
 }
 
 export function setSnapshotAuthorityProvider(
@@ -246,6 +249,8 @@ function currentSnapshotAuthority(platform: string): SnapshotAuthorityReceipt {
     runnerProcessBirth: authority?.runnerProcessBirth ?? null,
     runnerCapabilityHash: authority?.runnerCapabilityHash ?? null,
     runnerPort: authority?.runnerPort ?? null,
+    // The outer gate upgrades only captures whose M+A authority survives postflight.
+    originAuthority: 'not-proven',
   };
 }
 
@@ -286,6 +291,7 @@ function snapshotEvidenceAuthorityIsValid(
 ): boolean {
   if (receipt.sessionId === null) return snapshotAuthorityIsValid(receipt, platform);
   return Boolean(
+    receipt.originAuthority === 'proven' &&
     receipt.platform === platform &&
     receipt.sessionId !== null &&
     receipt.claimEpoch !== null &&
@@ -349,8 +355,32 @@ export function cacheSnapshot(platform: string, nodes: CachedSnapshot['nodes']):
     nodes,
     capturedAt: new Date().toISOString(),
     capturedAtMs: Date.now(),
+    captureSequence: ++snapshotCaptureSequence,
   });
   dirtySnapshotPlatforms.delete(platform);
+}
+
+/** Returns the snapshot-cache boundary used by the outer authority gate. */
+export function getSnapshotCaptureCheckpoint(): number {
+  return snapshotCaptureSequence;
+}
+
+/** Promotes only snapshots captured after the current operation's checkpoint. */
+export function promoteSnapshotOriginSince(checkpoint: number): void {
+  for (const snapshot of snapshotCache.values()) {
+    if (
+      snapshot.captureSequence <= checkpoint ||
+      snapshot.authorityReceipt.originAuthority === 'proven'
+    ) {
+      continue;
+    }
+    const promoted: SnapshotAuthorityReceipt = {
+      ...snapshot.authorityReceipt,
+      originAuthority: 'proven',
+    };
+    if (promoted.sessionId !== null) snapshotAuthorityProvider?.record(promoted);
+    snapshot.authorityReceipt = promoted;
+  }
 }
 
 export function getCachedSnapshot(platform: string): CachedSnapshot | undefined {

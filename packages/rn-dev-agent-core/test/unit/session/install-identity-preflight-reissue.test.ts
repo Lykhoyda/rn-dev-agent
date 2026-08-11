@@ -228,10 +228,10 @@ test('a non-I preflight refusal never attempts a re-issue', async () => {
   let reissued = false;
   const gate = createAuthorityGate(runtime, {
     probe: async (input: { axis: string; status: Record<string, unknown> }) => {
-      if (input.axis === 'M') {
+      if (input.axis === 'R') {
         throw new SessionAuthorityError(
-          'METRO_INSTANCE_CHANGED',
-          'Metro process identity no longer matches the bound instance',
+          'RUNNER_OWNERSHIP_MISMATCH',
+          'runner process identity no longer matches the bound instance',
         );
       }
       return probe(input as never);
@@ -246,7 +246,7 @@ test('a non-I preflight refusal never attempts a re-issue', async () => {
   const envelope = JSON.parse((await wrapped({})).content[0].text);
 
   assert.equal(envelope.ok, false);
-  assert.equal(envelope.code, 'METRO_INSTANCE_CHANGED');
+  assert.equal(envelope.code, 'RUNNER_OWNERSHIP_MISMATCH');
   assert.equal(reissued, false);
 });
 

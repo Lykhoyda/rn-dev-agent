@@ -151,7 +151,13 @@ export function createLocalAuthorityProbe(dependencies) {
                 inspectSessionOwner({ sessionId: status.sessionId, pid, token: birth }) !== 'match') {
                 throw new SessionAuthorityError('METRO_INSTANCE_CHANGED', 'Metro process identity no longer matches the bound instance');
             }
-            const statusText = await fetchText(`http://127.0.0.1:${port}/status`);
+            let statusText;
+            try {
+                statusText = await fetchText(`http://127.0.0.1:${port}/status`);
+            }
+            catch {
+                throw new SessionAuthorityError('METRO_AUTHORITY_MISMATCH', 'claimed Metro endpoint could not be inspected');
+            }
             if (!statusText.includes('packager-status:running')) {
                 throw new SessionAuthorityError('METRO_AUTHORITY_MISMATCH', 'claimed Metro endpoint is not running');
             }

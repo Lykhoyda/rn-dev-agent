@@ -16,6 +16,7 @@ interface GoldenProfile {
   axes: string;
   postflightAxes?: string;
   optionalAxes?: string;
+  nativeOrigin?: 'optional' | 'required';
   managedOrigin?: boolean;
   managedRunnerPark?: boolean;
   sessionIdentity?: boolean;
@@ -204,6 +205,7 @@ const GOLDEN: Record<string, GoldenProfile> = {
   cdp_repair_action: {
     kind: 'authoritative',
     axes: 'CSIMADR',
+    nativeOrigin: 'required',
     mutation: true,
     liveBundleProbe: false,
   },
@@ -261,18 +263,32 @@ const GOLDEN: Record<string, GoldenProfile> = {
   cross_platform_verify: {
     kind: 'authoritative',
     axes: 'CSIMADR',
+    nativeOrigin: 'required',
     mutation: false,
     liveBundleProbe: false,
   },
   device_accept_system_dialog: {
     kind: 'authoritative',
-    axes: 'CSIMADR',
+    axes: 'CSIDR',
+    nativeOrigin: 'optional',
     managedRunnerPark: true,
     mutation: true,
     liveBundleProbe: false,
   },
-  device_back: { kind: 'authoritative', axes: 'CSIMADR', mutation: true, liveBundleProbe: false },
-  device_batch: { kind: 'authoritative', axes: 'CSIMADR', mutation: true, liveBundleProbe: false },
+  device_back: {
+    kind: 'authoritative',
+    axes: 'CSIDR',
+    nativeOrigin: 'optional',
+    mutation: true,
+    liveBundleProbe: false,
+  },
+  device_batch: {
+    kind: 'authoritative',
+    axes: 'CSIDR',
+    nativeOrigin: 'optional',
+    mutation: true,
+    liveBundleProbe: false,
+  },
   device_deeplink: {
     kind: 'authoritative',
     axes: 'CSIMD',
@@ -282,41 +298,53 @@ const GOLDEN: Record<string, GoldenProfile> = {
   },
   device_dismiss_system_dialog: {
     kind: 'authoritative',
-    axes: 'CSIMADR',
+    axes: 'CSIDR',
+    nativeOrigin: 'optional',
     managedRunnerPark: true,
     mutation: true,
     liveBundleProbe: false,
   },
   device_fill: {
     kind: 'authoritative',
-    axes: 'CSIMADR',
+    axes: 'CSIDR',
+    nativeOrigin: 'optional',
     managedRunnerPark: true,
     mutation: true,
     liveBundleProbe: false,
   },
-  device_find: { kind: 'authoritative', axes: 'CSIMADR', mutation: false, liveBundleProbe: false },
+  device_find: {
+    kind: 'authoritative',
+    axes: 'CSIDR',
+    nativeOrigin: 'optional',
+    mutation: false,
+    liveBundleProbe: false,
+  },
   'device_find {"action":"click"}': {
     kind: 'authoritative',
-    axes: 'CSIMADR',
+    axes: 'CSIDR',
+    nativeOrigin: 'optional',
     mutation: true,
     liveBundleProbe: false,
   },
   'device_find {"action":"get"}': {
     kind: 'authoritative',
-    axes: 'CSIMADR',
+    axes: 'CSIDR',
+    nativeOrigin: 'optional',
     mutation: false,
     liveBundleProbe: false,
   },
   device_focus_next: {
     kind: 'authoritative',
-    axes: 'CSIMADR',
+    axes: 'CSIDR',
+    nativeOrigin: 'optional',
     mutation: true,
     liveBundleProbe: false,
   },
   device_list: { kind: 'diagnostic', axes: '', mutation: false, liveBundleProbe: false },
   device_longpress: {
     kind: 'authoritative',
-    axes: 'CSIMADR',
+    axes: 'CSIDR',
+    nativeOrigin: 'optional',
     mutation: true,
     liveBundleProbe: false,
   },
@@ -334,20 +362,34 @@ const GOLDEN: Record<string, GoldenProfile> = {
   },
   device_pick_date: {
     kind: 'authoritative',
-    axes: 'CSIMADR',
+    axes: 'CSIDR',
+    nativeOrigin: 'optional',
     managedRunnerPark: true,
     mutation: true,
     liveBundleProbe: false,
   },
   device_pick_value: {
     kind: 'authoritative',
-    axes: 'CSIMADR',
+    axes: 'CSIDR',
+    nativeOrigin: 'optional',
     managedRunnerPark: true,
     mutation: true,
     liveBundleProbe: false,
   },
-  device_pinch: { kind: 'authoritative', axes: 'CSIMADR', mutation: true, liveBundleProbe: false },
-  device_press: { kind: 'authoritative', axes: 'CSIMADR', mutation: true, liveBundleProbe: false },
+  device_pinch: {
+    kind: 'authoritative',
+    axes: 'CSIDR',
+    nativeOrigin: 'optional',
+    mutation: true,
+    liveBundleProbe: false,
+  },
+  device_press: {
+    kind: 'authoritative',
+    axes: 'CSIDR',
+    nativeOrigin: 'optional',
+    mutation: true,
+    liveBundleProbe: false,
+  },
   device_record: {
     kind: 'authoritative',
     axes: 'CSID',
@@ -394,24 +436,39 @@ const GOLDEN: Record<string, GoldenProfile> = {
   },
   device_screenshot: {
     kind: 'authoritative',
-    axes: 'CSIMADR',
+    axes: 'CSIDR',
+    nativeOrigin: 'optional',
     mutation: false,
     liveBundleProbe: false,
   },
-  device_scroll: { kind: 'authoritative', axes: 'CSIMADR', mutation: true, liveBundleProbe: false },
+  device_scroll: {
+    kind: 'authoritative',
+    axes: 'CSIDR',
+    nativeOrigin: 'optional',
+    mutation: true,
+    liveBundleProbe: false,
+  },
   device_scrollintoview: {
     kind: 'authoritative',
-    axes: 'CSIMADR',
+    axes: 'CSIDR',
+    nativeOrigin: 'optional',
     mutation: true,
     liveBundleProbe: false,
   },
   device_snapshot: {
     kind: 'authoritative',
-    axes: 'CSIMADR',
+    axes: 'CSIDR',
+    nativeOrigin: 'optional',
     mutation: false,
     liveBundleProbe: false,
   },
-  device_swipe: { kind: 'authoritative', axes: 'CSIMADR', mutation: true, liveBundleProbe: false },
+  device_swipe: {
+    kind: 'authoritative',
+    axes: 'CSIDR',
+    nativeOrigin: 'optional',
+    mutation: true,
+    liveBundleProbe: false,
+  },
   expect_redux: { kind: 'authoritative', axes: 'CSIMBD', mutation: false, liveBundleProbe: true },
   expect_route: { kind: 'authoritative', axes: 'CSIMBD', mutation: false, liveBundleProbe: true },
   expect_text: { kind: 'authoritative', axes: 'CSIMBD', mutation: false, liveBundleProbe: true },
@@ -441,7 +498,13 @@ const GOLDEN: Record<string, GoldenProfile> = {
     liveBundleProbe: false,
   },
   observe: { kind: 'authoritative', axes: 'CS', mutation: false, liveBundleProbe: false },
-  proof_capture: { kind: 'authoritative', axes: 'CSIMBDRP', mutation: true, liveBundleProbe: true },
+  proof_capture: {
+    kind: 'authoritative',
+    axes: 'CSIMABDRP',
+    nativeOrigin: 'required',
+    mutation: true,
+    liveBundleProbe: true,
+  },
   'proof_capture {"action":"discard"}': {
     kind: 'authoritative',
     axes: 'CSDP',
@@ -451,11 +514,18 @@ const GOLDEN: Record<string, GoldenProfile> = {
   },
   'proof_capture {"action":"finalize"}': {
     kind: 'authoritative',
-    axes: 'CSIMBDRP',
+    axes: 'CSIMABDRP',
+    nativeOrigin: 'required',
     mutation: true,
     liveBundleProbe: true,
   },
-  proof_step: { kind: 'authoritative', axes: 'CSIMBDRP', mutation: true, liveBundleProbe: true },
+  proof_step: {
+    kind: 'authoritative',
+    axes: 'CSIMABDRP',
+    nativeOrigin: 'required',
+    mutation: true,
+    liveBundleProbe: true,
+  },
   rn_session: { kind: 'transition', axes: 'CS', mutation: true, liveBundleProbe: false },
 };
 
@@ -473,7 +543,7 @@ test('every registered MCP tool has one explicit authority profile', () => {
   );
 });
 
-test('golden: grouped bookkeeping resolves every tool to its pre-regroup facet set', () => {
+test('golden: grouped bookkeeping resolves every tool to its exact facet set', () => {
   for (const [key, expected] of Object.entries(GOLDEN)) {
     const { tool, args } = goldenCall(key);
     const profile = authorityProfileFor(tool, args);
@@ -482,6 +552,7 @@ test('golden: grouped bookkeeping resolves every tool to its pre-regroup facet s
     assert.equal(profile.axes.join(''), expected.axes, label);
     assert.equal(profile.postflightAxes?.join(''), expected.postflightAxes, label);
     assert.equal(profile.optionalAxes?.join(''), expected.optionalAxes, label);
+    assert.equal(profile.nativeOrigin, expected.nativeOrigin, label);
     assert.equal(profile.managedOrigin, expected.managedOrigin, label);
     assert.equal(profile.managedRunnerPark, expected.managedRunnerPark, label);
     assert.equal(profile.sessionIdentity, expected.sessionIdentity, label);
@@ -506,7 +577,7 @@ test('Session resolves C+S; Target adds D+I; Runtime adds M+B with the live A pr
   assert.deepEqual(target.groups, ['session', 'target']);
   assert.deepEqual(target.axes, ['C', 'S', 'I', 'D']);
 
-  const nativeRuntime = authorityProfileFor('device_press');
+  const nativeRuntime = authorityProfileFor('cross_platform_verify');
   assert.deepEqual(nativeRuntime.groups, ['session', 'target', 'runtime', 'automation']);
   assert.deepEqual(nativeRuntime.axes, ['C', 'S', 'I', 'M', 'A', 'D', 'R']);
 
@@ -516,7 +587,7 @@ test('Session resolves C+S; Target adds D+I; Runtime adds M+B with the live A pr
 
   const proof = authorityProfileFor('proof_step');
   assert.deepEqual(proof.groups, ['session', 'target', 'runtime', 'automation']);
-  assert.deepEqual(proof.axes, ['C', 'S', 'I', 'M', 'B', 'D', 'R', 'P']);
+  assert.deepEqual(proof.axes, ['C', 'S', 'I', 'M', 'A', 'B', 'D', 'R', 'P']);
 });
 
 test('every registered non-diagnostic profile declares its ownership groups', () => {
@@ -529,35 +600,34 @@ test('every registered non-diagnostic profile declares its ownership groups', ()
   }
 });
 
-test('native tools carry all four groups without the live CDP bundle seat', () => {
-  assert.deepEqual(authorityProfileFor('device_press').axes, ['C', 'S', 'I', 'M', 'A', 'D', 'R']);
-  assert.equal(authorityProfileFor('device_press').liveBundleProbe, false);
-  assert.equal(authorityProfileFor('device_press').axes.includes('B'), false);
+test('raw native runner mutations require exact control authority and admit origin optionally', () => {
+  const press = authorityProfileFor('device_press');
+  assert.deepEqual(press.groups, ['session', 'target', 'automation']);
+  assert.deepEqual(press.axes, ['C', 'S', 'I', 'D', 'R']);
+  assert.equal(press.nativeOrigin, 'optional');
+  assert.equal(press.liveBundleProbe, false);
+  assert.equal(press.axes.includes('M'), false);
+  assert.equal(press.axes.includes('A'), false);
+  assert.equal(press.axes.includes('B'), false);
   assert.equal(authorityProfileFor('cdp_interact').liveBundleProbe, true);
   assert.ok(authorityProfileFor('cdp_interact').axes.includes('B'));
 });
 
-test('native reads prove the app origin on the claimed device', () => {
-  for (const tool of [
-    'cross_platform_verify',
-    'device_find',
-    'device_screenshot',
-    'device_snapshot',
-  ]) {
-    assert.deepEqual(authorityProfileFor(tool).axes, ['C', 'S', 'I', 'M', 'A', 'D', 'R']);
+test('native reads separate raw control from strict cross-platform evidence', () => {
+  for (const tool of ['device_find', 'device_screenshot', 'device_snapshot']) {
+    const profile = authorityProfileFor(tool);
+    assert.deepEqual(profile.axes, ['C', 'S', 'I', 'D', 'R']);
+    assert.equal(profile.nativeOrigin, 'optional');
   }
+  const verdict = authorityProfileFor('cross_platform_verify');
+  assert.deepEqual(verdict.axes, ['C', 'S', 'I', 'M', 'A', 'D', 'R']);
+  assert.equal(verdict.nativeOrigin, 'required');
 });
 
 test('device_find click and lifecycle tools use mutation-aware origin authority', () => {
-  assert.deepEqual(authorityProfileFor('device_find', { action: 'click' }).axes, [
-    'C',
-    'S',
-    'I',
-    'M',
-    'A',
-    'D',
-    'R',
-  ]);
+  const click = authorityProfileFor('device_find', { action: 'click' });
+  assert.deepEqual(click.axes, ['C', 'S', 'I', 'D', 'R']);
+  assert.equal(click.nativeOrigin, 'optional');
   assert.equal(authorityProfileFor('device_find', { action: 'get' }).mutation, false);
   for (const tool of ['device_reset_state', 'maestro_run', 'maestro_test_all']) {
     const profile = authorityProfileFor(tool);
@@ -612,6 +682,7 @@ test('proof requires all four groups live while discard keeps its lighter teardo
     'S',
     'I',
     'M',
+    'A',
     'B',
     'D',
     'R',

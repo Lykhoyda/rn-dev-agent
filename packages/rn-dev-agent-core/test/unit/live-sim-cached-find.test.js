@@ -52,6 +52,10 @@ test('device_find serves from a valid cache without a runner snapshot; re-snapsh
     const a = await fetchFindCandidates('Continue', false, true);
     assert.equal(a.ok, true);
     assert.equal(a.candidates[0].label, 'Continue');
+    assert.deepEqual(a.provenance, {
+      source: 'cache',
+      originAuthority: 'not-proven',
+    });
     assert.equal(snapshotDispatches, 0, 'a valid cache must not trigger a runner snapshot');
 
     // 2nd find: still clean -> still NO dispatch.
@@ -64,6 +68,10 @@ test('device_find serves from a valid cache without a runner snapshot; re-snapsh
     // 3rd find: cache invalid -> exactly one fresh runner snapshot.
     const c = await fetchFindCandidates('Continue', false, true);
     assert.equal(c.ok, true);
+    assert.deepEqual(c.provenance, {
+      source: 'fresh',
+      originAuthority: 'not-proven',
+    });
     assert.equal(snapshotDispatches, 1, 'a mutation must force a fresh snapshot');
   } finally {
     _setRunAgentDeviceForTest(null);
