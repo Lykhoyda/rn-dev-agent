@@ -4,7 +4,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { okResult, failResult, warnResult } from '../utils.js';
-import { getEngineStatus, enginePinCaveat, strictPinRefusal } from '../domain/engine-pin.js';
+import { getEngineStatus, enginePinCaveat, strictPinRefusal, preOAndroidApiRefusal, isOlderSdkInstallFailure, olderSdkInstallDiagnosis, } from '../domain/engine-pin.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
 import { resolveBundleId, readExpoSlug } from '../project-config.js';
 import { chooseMaestroDispatch, shouldWarnFallback, flowContainsHideKeyboard, } from './maestro-dispatch.js';
@@ -198,6 +198,16 @@ function resolveAppId(override, platform) {
         return resolveBundleId(platform) ?? readExpoSlug() ?? '';
     return readExpoSlug() ?? '';
 }
+async function defaultProbeAndroidApiLevel(deviceId) {
+    try {
+        const { stdout } = await defaultExecFile('adb', ['-s', deviceId, 'shell', 'getprop', 'ro.build.version.sdk'], { timeout: 5000, encoding: 'utf8', maxBuffer: 1024 * 1024 });
+        const parsed = Number.parseInt(String(stdout).trim(), 10);
+        return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+    }
+    catch {
+        return null;
+    }
+}
 const UIAUTOMATION_SESSION_CREATION_FAILURE = /^Error: failed to create driver: create session: session not created: java\.lang\.IllegalStateException: UiAutomation not connected(?:, UiAutomation@[^\r\n]+)?$/;
 function attachCause(error, cause) {
     if (error instanceof Error && error.cause === undefined) {
@@ -246,6 +256,7 @@ export function createMaestroRunHandler(deps = {}) {
     const selectDispatch = deps.chooseDispatch ?? chooseMaestroDispatch;
     const parkFlow = deps.parkFlow ?? runFlowParked;
     const execute = deps.execFile ?? defaultExecFile;
+    const probeApiLevel = deps.probeAndroidApiLevel ?? defaultProbeAndroidApiLevel;
     const now = deps.now ?? Date.now;
     return async (args) => {
         // GH #116: validate params shape FIRST so a malformed payload is rejected
@@ -424,6 +435,21 @@ export function createMaestroRunHandler(deps = {}) {
         const strictRefusal = strictPinRefusal(engineStatus, process.env.RN_ENGINE_PIN_STRICT);
         if (strictRefusal) {
             return failResult(strictRefusal, 'ENGINE_PIN_MISMATCH');
+        }
+        // GH #741: the pinned engine cannot drive pre-O Android — refuse with the
+        // true capability gap up front instead of an opaque install error later.
+        if (platform === 'android' && dispatch.runner === 'maestro-runner' && requestedDeviceId) {
+            const apiLevel = await probeApiLevel(requestedDeviceId).catch(() => null);
+            const apiRefusal = apiLevel === null ? null : preOAndroidApiRefusal(apiLevel);
+            if (apiRefusal) {
+                return failResult(apiRefusal, 'ANDROID_API_UNSUPPORTED', {
+                    platform,
+                    runner: dispatch.runner,
+                    transport: dispatch.runner,
+                    passed: false,
+                    androidApiLevel: apiLevel,
+                });
+            }
         }
         try {
             // 10MB buffer: a multi-step flow with screenshots + app console/network
@@ -639,6 +665,18 @@ export function createMaestroRunHandler(deps = {}) {
                 typeof errAny?.stderr === 'string' ? errAny.stderr : '',
             ].join('\n');
             const combined = combineRunnerOutput(stdout, stderr);
+            // GH #741: an INSTALL_FAILED_OLDER_SDK reject is a capability gap, not a
+            // flow failure — surface it before device-authority checks can mask it.
+            if (platform === 'android' && isOlderSdkInstallFailure(combined)) {
+                return failResult(olderSdkInstallDiagnosis(), 'ANDROID_API_UNSUPPORTED', {
+                    platform,
+                    runner: dispatch.runner,
+                    transport: dispatch.runner,
+                    passed: false,
+                    output: combined.slice(0, 4000),
+                    ...androidReleaseMeta(),
+                });
+            }
             const { timedOut, outputTruncated } = classifyExecError(stageError);
             const directEvidence = directRunnerEvidence(combined);
             const deviceAuthority = verifyMaestroDeviceAuthority({

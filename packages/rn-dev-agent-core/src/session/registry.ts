@@ -309,6 +309,12 @@ const errorAxes: Record<string, string> = {
 // Codes whose repair is a named declaration/configuration path, not another status read.
 const errorNextActions: Record<string, string> = {
   NON_GIT_MANIFEST_REQUIRED: NON_GIT_DECLARATION_NEXT_ACTION,
+  // GH #741: a released/stale runner axis is invisible to a status read — only
+  // re-opening the device snapshot restarts and rebinds the interaction runner.
+  RUNNER_OWNERSHIP_MISMATCH:
+    'Re-open the device with device_snapshot action "open" (same platform, deviceId, and appId) ' +
+    'to restart and rebind the interaction runner; rn_session "status" only reports state and ' +
+    'cannot rebind it.',
 };
 
 export function authorityRemedyNextAction(code: string): string | undefined {

@@ -8380,7 +8380,10 @@ var init_registry = __esm({
     RECOVERY_HANDLE_TTL_MS = 5 * 6e4;
     RECOVERY_HANDLE_RENEW_MS = 6e4;
     errorNextActions = {
-      NON_GIT_MANIFEST_REQUIRED: NON_GIT_DECLARATION_NEXT_ACTION
+      NON_GIT_MANIFEST_REQUIRED: NON_GIT_DECLARATION_NEXT_ACTION,
+      // GH #741: a released/stale runner axis is invisible to a status read — only
+      // re-opening the device snapshot restarts and rebinds the interaction runner.
+      RUNNER_OWNERSHIP_MISMATCH: 'Re-open the device with device_snapshot action "open" (same platform, deviceId, and appId) to restart and rebind the interaction runner; rn_session "status" only reports state and cannot rebind it.'
     };
     conflictCodes = {
       device: "DEVICE_CLAIM_CONFLICT",

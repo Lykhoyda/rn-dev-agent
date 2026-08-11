@@ -22866,7 +22866,10 @@ var init_registry = __esm({
       PROOF_AUTHORITY_MISMATCH: "P"
     };
     errorNextActions = {
-      NON_GIT_MANIFEST_REQUIRED: NON_GIT_DECLARATION_NEXT_ACTION
+      NON_GIT_MANIFEST_REQUIRED: NON_GIT_DECLARATION_NEXT_ACTION,
+      // GH #741: a released/stale runner axis is invisible to a status read — only
+      // re-opening the device snapshot restarts and rebinds the interaction runner.
+      RUNNER_OWNERSHIP_MISMATCH: 'Re-open the device with device_snapshot action "open" (same platform, deviceId, and appId) to restart and rebind the interaction runner; rn_session "status" only reports state and cannot rebind it.'
     };
     conflictCodes = {
       device: "DEVICE_CLAIM_CONFLICT",
@@ -29396,6 +29399,17 @@ import { execFile as execFileCb3, spawnSync as spawnSync2 } from "node:child_pro
 import { promisify as promisify5 } from "node:util";
 import { createHash as createHash6 } from "node:crypto";
 import { readFileSync as readFileSync11 } from "node:fs";
+function preOAndroidApiRefusal(apiLevel) {
+  if (apiLevel >= MAESTRO_RUNNER_MIN_ANDROID_API)
+    return null;
+  return `maestro_run refused: Android API ${apiLevel} is below API ${MAESTRO_RUNNER_MIN_ANDROID_API}, the minimum the pinned maestro-runner ${MAESTRO_RUNNER_PIN.version} can drive \u2014 its bundled UiAutomator2 server APK declares minSdk ${MAESTRO_RUNNER_MIN_ANDROID_API}, so the install fails with INSTALL_FAILED_OLDER_SDK. ${PRE_O_REMEDY}`;
+}
+function isOlderSdkInstallFailure(output) {
+  return output.includes("INSTALL_FAILED_OLDER_SDK");
+}
+function olderSdkInstallDiagnosis() {
+  return `The device rejected the bundled UiAutomator2 server APK with INSTALL_FAILED_OLDER_SDK: the pinned maestro-runner ${MAESTRO_RUNNER_PIN.version} requires Android API ${MAESTRO_RUNNER_MIN_ANDROID_API}+ and this device is below it. ${PRE_O_REMEDY}`;
+}
 function compareVersions(a, b) {
   const pa = a.split(".").map(Number);
   const pb = b.split(".").map(Number);
@@ -29504,7 +29518,7 @@ function getEngineStatus(resolvers) {
   }
   return cachedStatus;
 }
-var execFile5, MAESTRO_RUNNER_PIN, cachedStatus;
+var execFile5, MAESTRO_RUNNER_PIN, MAESTRO_RUNNER_MIN_ANDROID_API, PRE_O_REMEDY, cachedStatus;
 var init_engine_pin = __esm({
   "packages/rn-dev-agent-core/dist/domain/engine-pin.js"() {
     "use strict";
@@ -29525,9 +29539,16 @@ var init_engine_pin = __esm({
           id: "requires-adb-on-ios",
           ref: "B59",
           note: "requires adb in PATH even with --platform ios"
+        },
+        {
+          id: "android-pre-o-unsupported",
+          ref: "GH #741",
+          note: "bundled UiAutomator2 server APK declares minSdk 26; API 23-25 installs fail with INSTALL_FAILED_OLDER_SDK"
         }
       ]
     };
+    MAESTRO_RUNNER_MIN_ANDROID_API = 26;
+    PRE_O_REMEDY = "Action replay / E2E via maestro-runner is unsupported on this device; direct device_* interaction tools still work (rn-android-runner supports API 23+).";
     cachedStatus = null;
   }
 });
@@ -32052,6 +32073,15 @@ function resolveAppId(override, platform) {
     return resolveBundleId(platform) ?? readExpoSlug() ?? "";
   return readExpoSlug() ?? "";
 }
+async function defaultProbeAndroidApiLevel(deviceId) {
+  try {
+    const { stdout } = await defaultExecFile("adb", ["-s", deviceId, "shell", "getprop", "ro.build.version.sdk"], { timeout: 5e3, encoding: "utf8", maxBuffer: 1024 * 1024 });
+    const parsed = Number.parseInt(String(stdout).trim(), 10);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+  } catch {
+    return null;
+  }
+}
 function attachCause(error2, cause) {
   if (error2 instanceof Error && error2.cause === void 0) {
     try {
@@ -32087,6 +32117,7 @@ function createMaestroRunHandler(deps = {}) {
   const selectDispatch = deps.chooseDispatch ?? chooseMaestroDispatch;
   const parkFlow = deps.parkFlow ?? runFlowParked;
   const execute2 = deps.execFile ?? defaultExecFile;
+  const probeApiLevel = deps.probeAndroidApiLevel ?? defaultProbeAndroidApiLevel;
   const now = deps.now ?? Date.now;
   return async (args) => {
     if (args.params) {
@@ -32211,6 +32242,19 @@ function createMaestroRunHandler(deps = {}) {
     const strictRefusal = strictPinRefusal(engineStatus, process.env.RN_ENGINE_PIN_STRICT);
     if (strictRefusal) {
       return failResult(strictRefusal, "ENGINE_PIN_MISMATCH");
+    }
+    if (platform === "android" && dispatch.runner === "maestro-runner" && requestedDeviceId) {
+      const apiLevel = await probeApiLevel(requestedDeviceId).catch(() => null);
+      const apiRefusal = apiLevel === null ? null : preOAndroidApiRefusal(apiLevel);
+      if (apiRefusal) {
+        return failResult(apiRefusal, "ANDROID_API_UNSUPPORTED", {
+          platform,
+          runner: dispatch.runner,
+          transport: dispatch.runner,
+          passed: false,
+          androidApiLevel: apiLevel
+        });
+      }
     }
     try {
       const managedAuthority = nestedMaestroAuthorityCallbacks(args);
@@ -32375,6 +32419,16 @@ function createMaestroRunHandler(deps = {}) {
         typeof errAny?.stderr === "string" ? errAny.stderr : ""
       ].join("\n");
       const combined = combineRunnerOutput(stdout, stderr);
+      if (platform === "android" && isOlderSdkInstallFailure(combined)) {
+        return failResult(olderSdkInstallDiagnosis(), "ANDROID_API_UNSUPPORTED", {
+          platform,
+          runner: dispatch.runner,
+          transport: dispatch.runner,
+          passed: false,
+          output: combined.slice(0, 4e3),
+          ...androidReleaseMeta()
+        });
+      }
       const { timedOut, outputTruncated } = classifyExecError(stageError);
       const directEvidence = directRunnerEvidence(combined);
       const deviceAuthority = verifyMaestroDeviceAuthority({

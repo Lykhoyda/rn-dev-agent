@@ -32,8 +32,43 @@ export const MAESTRO_RUNNER_PIN = {
       ref: 'B59',
       note: 'requires adb in PATH even with --platform ios',
     },
+    {
+      id: 'android-pre-o-unsupported',
+      ref: 'GH #741',
+      note: 'bundled UiAutomator2 server APK declares minSdk 26; API 23-25 installs fail with INSTALL_FAILED_OLDER_SDK',
+    },
   ],
 } as const;
+
+// GH #741: the pinned engine's bundled appium-uiautomator2-server APK declares
+// minSdk 26, so pre-O devices reject it with INSTALL_FAILED_OLDER_SDK.
+export const MAESTRO_RUNNER_MIN_ANDROID_API = 26;
+
+const PRE_O_REMEDY =
+  'Action replay / E2E via maestro-runner is unsupported on this device; direct device_* ' +
+  'interaction tools still work (rn-android-runner supports API 23+).';
+
+export function preOAndroidApiRefusal(apiLevel: number): string | null {
+  if (apiLevel >= MAESTRO_RUNNER_MIN_ANDROID_API) return null;
+  return (
+    `maestro_run refused: Android API ${apiLevel} is below API ${MAESTRO_RUNNER_MIN_ANDROID_API}, ` +
+    `the minimum the pinned maestro-runner ${MAESTRO_RUNNER_PIN.version} can drive — its bundled ` +
+    `UiAutomator2 server APK declares minSdk ${MAESTRO_RUNNER_MIN_ANDROID_API}, so the install ` +
+    `fails with INSTALL_FAILED_OLDER_SDK. ${PRE_O_REMEDY}`
+  );
+}
+
+export function isOlderSdkInstallFailure(output: string): boolean {
+  return output.includes('INSTALL_FAILED_OLDER_SDK');
+}
+
+export function olderSdkInstallDiagnosis(): string {
+  return (
+    `The device rejected the bundled UiAutomator2 server APK with INSTALL_FAILED_OLDER_SDK: the ` +
+    `pinned maestro-runner ${MAESTRO_RUNNER_PIN.version} requires Android API ` +
+    `${MAESTRO_RUNNER_MIN_ANDROID_API}+ and this device is below it. ${PRE_O_REMEDY}`
+  );
+}
 
 export type EnginePinClassification =
   | 'pinned-ok'
