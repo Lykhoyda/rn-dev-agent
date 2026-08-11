@@ -85825,7 +85825,7 @@ trackedTool("maestro_run", "Execute a Maestro flow via maestro-runner. Pass flow
   platform: external_exports.enum(["ios", "android"]).optional().describe("Target platform (auto-detected from session)"),
   appId: external_exports.string().optional().describe("App bundle ID (auto-detected from app.json)"),
   appFile: external_exports.string().optional().describe("iOS only \u2014 path to a built .app/.ipa for maestro-runner to reinstall on clearState. Auto-resolved from the flow appId when omitted (GH#201)."),
-  deviceId: external_exports.string().min(1).max(256).optional().describe("Exact iOS UDID or Android serial. Defaults from a matching active session, or ANDROID_SERIAL on Android, and is forwarded to the replay engine."),
+  deviceId: external_exports.string().min(1).max(256).optional().describe("Exact UDID or serial; defaults from session or Android ANDROID_SERIAL."),
   timeoutMs: external_exports.number().int().min(5e3).max(3e5).default(12e4).describe("Execution timeout in ms"),
   params: external_exports.record(external_exports.string(), external_exports.string()).optional().describe("GH #116: parameter bindings forwarded as -e KEY=VALUE for ${KEY} placeholders in the flow. Keys must match /^[A-Z_][A-Z0-9_]*$/ (validated in the handler).")
 }, createMaestroRunHandler());
