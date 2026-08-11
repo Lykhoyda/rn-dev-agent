@@ -1,5 +1,21 @@
 # rn-dev-agent-plugin
 
+## 0.76.2
+
+### Patch Changes
+
+- 390567b: Recover plugin-owned Android UiAutomation wedges on the exact bound device, while refusing unscoped cleanup and surfacing release warnings.
+- 6142e32: Make `device_fill` truthful: bind exactly one input (direct ref/testID or unique `${name}-pressable` wrapper mapping) before any mutation, resolve/focus/type in one exact native operation that never substitutes an ambient-focused field or blind-types app-wide, verify every attempt (JS, native, retype, Maestro, timeout recovery, `device_batch`) through a new required secret-free `verifyInput` read-back so `filled:true` always means a stable exact value, and hard-fail unverifiable outcomes as `NO_TEXT_INPUT_TARGET`/`TEXT_ENTRY_UNVERIFIED` with mutation dispositions instead of soft-accepting them.
+- 639dd05: Scope Android element matching to the owned app by default, refuse covered exact accessibility targets before actuation, and report uncertain Android effects without automatically dispatching the interaction a second time.
+- 115fdf9: Establish and safely clean exact physical Android Metro reverse forwards, and keep integrated builds on the session's resolved authority state home.
+- d0c08e0: Make `DEVICE_BUSY` refusals report sanitized live-holder and bounded heartbeat diagnostics with ownership-safe close, dedicated-device, and stale-recovery guidance.
+- Updated dependencies [390567b]
+- Updated dependencies [6142e32]
+- Updated dependencies [639dd05]
+- Updated dependencies [115fdf9]
+- Updated dependencies [d0c08e0]
+  - rn-dev-agent-core@0.71.2
+
 ## 0.76.1
 
 ### Patch Changes
