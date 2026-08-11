@@ -34,9 +34,11 @@ import {
   MAX_REF_MAP_AGE_MS,
   getCachedSignature,
   getCachedMetadata,
+  getCachedPackageName,
   getFreshRefTarget,
   refreshRef,
   getLastSnapshotHash,
+  getLastSnapshotHashForPackage,
   invalidateLastSnapshotHash,
   type FlatNode,
   type RefreshOutcome,
@@ -165,6 +167,8 @@ interface CachedSnapshot {
     label?: string;
     identifier?: string;
     type?: string;
+    packageName?: string;
+    checked?: boolean;
     hittable?: boolean;
     enabled?: boolean;
     rect?: { x: number; y: number; width: number; height: number };
@@ -707,9 +711,27 @@ export function buildRunAndroidArgs(
     case 'tap': {
       const ref = positionals[0];
       if (ref && ref.startsWith('@')) {
+        const includeSystemUi = cliArgs.includes('--include-system-ui');
         const center = isRefMapFresh() ? refCenter(ref) : null;
-        if (!center) return { command: 'tap', _staleRef: ref, ...withBundle };
-        return { command: 'tap', x: center.x, y: center.y, ...withBundle };
+        if (!center) {
+          return {
+            command: 'tap',
+            _staleRef: ref,
+            ...(includeSystemUi ? { includeSystemUi: true } : {}),
+            ...withBundle,
+          };
+        }
+        const metadata = getCachedMetadata(ref);
+        return {
+          command: 'tap',
+          x: center.x,
+          y: center.y,
+          ...(metadata?.identifier
+            ? { exactIdentifier: metadata.identifier, exactType: metadata.type }
+            : {}),
+          ...(includeSystemUi ? { includeSystemUi: true } : {}),
+          ...withBundle,
+        };
       }
       const [xS, yS] = positionals;
       const x = Number(xS),
@@ -845,6 +867,64 @@ export function buildRunAndroidArgs(
     default:
       throw new Error(`buildRunAndroidArgs: unsupported command "${cmd ?? '<empty>'}"`);
   }
+}
+
+// GH #736: Android mutating verbs are scoped to the owned app window, but
+// device_snapshot still returns system-chrome nodes. A @ref minted from one of
+// those nodes would otherwise reach the runner and come back as a generic
+// "resolved no matching target" refusal that names neither the cause nor the
+// one supported way to touch system UI.
+const APP_SCOPED_ANDROID_REF_VERBS = new Set(['press', 'tap', 'fill', 'type', 'longpress']);
+
+export interface OutsideAppWindowRefusal {
+  ref: string;
+  packageName: string;
+  appId: string;
+}
+
+export function androidOutsideAppWindowRefusal(
+  cliArgs: string[],
+  appId: string | undefined,
+  ref?: string,
+): OutsideAppWindowRefusal | null {
+  const cmd = cliArgs[0];
+  if (!cmd || !APP_SCOPED_ANDROID_REF_VERBS.has(cmd)) return null;
+  if (!appId) return null;
+  const target =
+    ref !== undefined ? (ref.startsWith('@') ? ref : `@${ref}`) : positionalArgs(cliArgs)[0];
+  if (!target || !target.startsWith('@')) return null;
+  if (cliArgs.includes('--include-system-ui')) return null;
+  const packageName = getCachedPackageName(target);
+  if (!packageName || packageName === appId) return null;
+  return { ref: target, packageName, appId };
+}
+
+export function outsideAppWindowFailResult(refusal: OutsideAppWindowRefusal): ToolResult {
+  return failResult(
+    `Ref ${refusal.ref} belongs to "${refusal.packageName}", outside the owned app window (${refusal.appId}) — Android interactions are app-scoped and will not actuate system UI.`,
+    'OUTSIDE_APP_WINDOW',
+    {
+      mutation: 'none',
+      ref: refusal.ref,
+      packageName: refusal.packageName,
+      appId: refusal.appId,
+      hint: 'To act on system UI explicitly, call device_find with includeSystemUi=true and action="click".',
+    },
+  );
+}
+
+export function rebuildHealedAndroidArgs(
+  cliArgs: string[],
+  healedRef: string,
+  bundleId: string | undefined,
+  includeSystemUi: boolean,
+): import('./runners/rn-android-runner-client.js').RunAndroidArgs {
+  const reboundArgs = [...cliArgs];
+  reboundArgs[1] = healedRef.startsWith('@') ? healedRef : `@${healedRef}`;
+  if (includeSystemUi && !reboundArgs.includes('--include-system-ui')) {
+    reboundArgs.push('--include-system-ui');
+  }
+  return buildRunAndroidArgs(reboundArgs, bundleId);
 }
 
 export type RunnerSpawnDecision =
@@ -1275,12 +1355,27 @@ export interface SettleAfterMutationDeps {
 // without a hash observation invalidates the ref-map's last snapshot hash —
 // the screen may have changed unobserved, and a later tap comparing against
 // the stale baseline would get a WRONG change verdict.
+function resultMutation(result: ToolResult): unknown {
+  try {
+    const envelope = JSON.parse(result.content[0]?.text ?? '{}') as {
+      meta?: { mutation?: unknown };
+    };
+    return envelope.meta?.mutation;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function settleAfterMutationWithOutcome(
   result: ToolResult,
   ctx: SettleContext,
   deps: SettleAfterMutationDeps = {},
 ): Promise<{ result: ToolResult; outcome: SettleOutcome | null }> {
-  if (result.isError) return { result, outcome: null }; // dispatch never landed — baseline keeps
+  if (result.isError) {
+    // mutation:'possible' means the gesture may have landed unobserved.
+    if (resultMutation(result) === 'possible') invalidateLastSnapshotHash();
+    return { result, outcome: null };
+  }
   if (!SNAPSHOT_MUTATING_VERBS.has(ctx.verb)) return { result, outcome: null };
   if (ctx.settle?.enabled === false) {
     invalidateLastSnapshotHash(); // mutated + settled blind
@@ -1348,62 +1443,44 @@ export function selfHealEnabled(env: NodeJS.ProcessEnv): boolean {
 
 const RETRYABLE_TAP_COMMANDS = new Set<string>(['tap', 'longPress']);
 
+export const IME_KEY_FLAG = '--ime-key';
+
 export interface TapRetryPolicy {
   eligible: boolean;
+  verificationRequired: boolean;
   targetKey: string;
 }
 
-// Story 05 (#386): only plain taps/long-presses are retry-eligible. Multi-tap
-// gestures (--count/--double-tap) would change semantics on a re-tap; fills
-// have their own read-back verification and a retype would duplicate text;
-// hold gestures (--hold-ms, from device_press holdMs / device_longpress by ref,
-// routed as ['press', ref, '--hold-ms'] → command 'tap') are a deliberate timed
-// interaction, so re-dispatching would change the requested action. Genuine
-// coordinate long-presses carry duration positionally (command 'longPress', no
-// --hold-ms flag) and stay eligible.
+// A runner acknowledgement proves dispatch, not effect. Effect observation may
+// still classify the result, but it must never re-dispatch a command whose first
+// actuation may already have happened. `eligible` remains in the internal shape
+// for compatibility with callers while permanently disabling the old retry.
 export function tapRetryPolicy(
   cliArgs: string[],
   builtCommand: string,
   x: number | undefined,
   y: number | undefined,
-  opts: { retryIfNoChange?: boolean },
+  _opts: { retryIfNoChange?: boolean },
 ): TapRetryPolicy {
   const ref = cliArgs[1];
   const exactTarget = ref?.startsWith('@') ? getFreshRefTarget(ref) : null;
+  // 'Key'/'Keyboard' are iOS XCUIElement type names; an Android IME key carries
+  // a Java class name instead, so device_focus_next marks its verified
+  // IME-owned press explicitly. Either way the effect lands in a window the
+  // app-scoped probe cannot see, so re-dispatching would actuate the key twice.
   const keyboardTarget =
-    exactTarget?.snapshotElementType === 'Key' || exactTarget?.snapshotElementType === 'Keyboard';
-  const eligible =
+    exactTarget?.snapshotElementType === 'Key' ||
+    exactTarget?.snapshotElementType === 'Keyboard' ||
+    cliArgs.includes(IME_KEY_FLAG);
+  const verificationRequired =
     !keyboardTarget &&
     RETRYABLE_TAP_COMMANDS.has(builtCommand) &&
-    opts.retryIfNoChange !== false &&
-    selfHealEnabled(process.env) &&
     !cliArgs.includes('--double-tap') &&
     !cliArgs.includes('--count') &&
     !cliArgs.includes('--hold-ms') &&
     x !== undefined &&
     y !== undefined;
-  return { eligible, targetKey: `${builtCommand}@${x},${y}` };
-}
-
-// Story 14 (#407): detect whether a raw runner ToolResult carries the
-// transport-recovery marker (runIOS/runAndroid attach it on the firstResult
-// when an ambiguous send was confirmed via the runner's outcome journal).
-function hasConsumedTapRetryBudget(result: ToolResult): boolean {
-  try {
-    const env = JSON.parse(result.content[0].text) as {
-      data?: { keyboardGuard?: unknown };
-      meta?: { transportRecovery?: unknown; keyboardGuard?: unknown };
-    };
-    return (
-      env.meta?.transportRecovery !== undefined ||
-      env.meta?.keyboardGuard === 'auto_dismissed' ||
-      env.data?.keyboardGuard === 'auto_dismissed' ||
-      env.meta?.keyboardGuard === 'keyboard_target' ||
-      env.data?.keyboardGuard === 'keyboard_target'
-    );
-  } catch {
-    return false;
-  }
+  return { eligible: false, verificationRequired, targetKey: `${builtCommand}@${x},${y}` };
 }
 
 function flagNoUiChange(result: ToolResult, targetKey: string): ToolResult {
@@ -1414,50 +1491,118 @@ function flagNoUiChange(result: ToolResult, targetKey: string): ToolResult {
   });
 }
 
-// Story 05 (#386): settle the first dispatch with change detection; if the
-// hierarchy did not change, presume the tap was swallowed and retry EXACTLY
-// once (2 attempts total, Maestro's rule). Still unchanged → success with
-// meta.noUiChange (a no-op tap is legitimate — the verifier decides). The
-// advisory contract holds: nothing here turns a succeeded action into an error.
+// Disabling settle (RN_SETTLE=0, or a per-call settle:{enabled:false} such as
+// device_batch's settle:false step) opts out of every post-mutation probe, so
+// effect verification cannot run and must not claim the effect is unprovable.
+async function effectVerificationEnabled(
+  settleOpts: SettlePerCallOpts | undefined,
+  deps: SettleAfterMutationDeps,
+): Promise<boolean> {
+  if (settleOpts?.enabled === false) return false;
+  if (deps.enabled) return deps.enabled(process.env);
+  try {
+    const settle = await import('./lifecycle/settle.js');
+    return settle.settleEnabled(process.env);
+  } catch {
+    return true;
+  }
+}
+
+// The effect probe compares a pre-interaction hierarchy hash against the
+// post-settle one, so a missing baseline is not evidence of a swallowed tap.
+// Any preceding mutating verb invalidates the baseline, so re-establish it
+// before dispatch instead of failing the next tap as unverifiable.
+export async function establishInteractionBaseline(
+  ctx: { platform: 'ios' | 'android'; appId?: string; settle?: SettlePerCallOpts },
+  policy: TapRetryPolicy,
+  deps: SettleAfterMutationDeps = {},
+): Promise<string | undefined> {
+  if (!policy.verificationRequired) return undefined;
+  if (!(await effectVerificationEnabled(ctx.settle, deps))) return undefined;
+  const cached =
+    ctx.platform === 'android' && ctx.appId
+      ? getLastSnapshotHashForPackage(ctx.appId)
+      : getLastSnapshotHash();
+  if (cached !== null) return cached;
+  try {
+    const settle = await import('./lifecycle/settle.js');
+    const probes = deps.probes
+      ? deps.probes(ctx.platform, ctx.appId)
+      : ctx.platform === 'ios'
+        ? settle.buildIosProbes(ctx.appId)
+        : settle.buildAndroidProbes(ctx.appId);
+    return (await probes.snapshotHash()) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function unverifiedInteractionResult(
+  observedResult: ToolResult,
+  targetKey: string,
+  reason: 'no-ui-change' | 'effect-probe-unavailable',
+): ToolResult {
+  const distinct = recordNoUiChange(targetKey);
+  let observedMeta: Record<string, unknown> = {};
+  try {
+    const envelope = JSON.parse(observedResult.content[0].text) as {
+      meta?: Record<string, unknown>;
+    };
+    observedMeta = envelope.meta ?? {};
+  } catch {
+    // The typed uncertainty below remains authoritative without optional detail.
+  }
+  return failResult(
+    reason === 'no-ui-change'
+      ? 'The tap was dispatched but produced no observable UI change.'
+      : 'The tap was dispatched, but its UI effect could not be observed.',
+    'INTERACTION_EFFECT_UNVERIFIED',
+    {
+      ...observedMeta,
+      mutation: 'possible',
+      reason,
+      attempts: 1,
+      ...(distinct >= WEDGED_DISTINCT_TARGETS ? { hint: WEDGED_RUNTIME_HINT } : {}),
+    },
+  );
+}
+
+// Observe the first dispatch exactly once. A runner acknowledgement proves
+// dispatch, not app effect, so Android unchanged or unobservable outcomes fail
+// with typed uncertainty while iOS keeps advisory meta.noUiChange. Observation
+// uncertainty never authorizes replaying a possibly completed interaction.
 export async function settleWithRetryIfNoChange(
   firstResult: ToolResult,
-  dispatch: () => Promise<ToolResult>,
+  _dispatch: () => Promise<ToolResult>,
   ctx: SettleContext,
   policy: TapRetryPolicy,
   deps: SettleAfterMutationDeps = {},
 ): Promise<ToolResult> {
-  const preHash = policy.eligible ? (getLastSnapshotHash() ?? undefined) : undefined;
+  const verify = policy.verificationRequired && (await effectVerificationEnabled(ctx.settle, deps));
+  const failClosed = verify && ctx.platform === 'android';
+  const cachedHash =
+    ctx.platform === 'android' && ctx.appId
+      ? getLastSnapshotHashForPackage(ctx.appId)
+      : getLastSnapshotHash();
+  const preHash = verify ? (ctx.initialSnapshotHash ?? cachedHash ?? undefined) : undefined;
   const first = await settleAfterMutationWithOutcome(
     firstResult,
     { ...ctx, ...(preHash !== undefined ? { initialSnapshotHash: preHash } : {}) },
     deps,
   );
-  if (!policy.eligible || preHash === undefined || first.result.isError) return first.result;
-  if (first.outcome?.hierarchyChanged !== false) {
-    if (first.outcome?.hierarchyChanged === true) recordUiChange();
+  if (first.result.isError || !verify) return first.result;
+  if (preHash === undefined || first.outcome?.hierarchyChanged === undefined) {
+    return failClosed
+      ? unverifiedInteractionResult(first.result, policy.targetKey, 'effect-probe-unavailable')
+      : first.result;
+  }
+  if (first.outcome.hierarchyChanged === true) {
+    recordUiChange();
     return first.result;
   }
-  // Story 14 (#407): a transport-recovered send already consumed the ambiguity
-  // budget — the runner journal confirmed the mutating gesture executed. The
-  // heal layer must not re-fire it, or it would double-dispatch the very tap
-  // that transport recovery just resolved. Report noUiChange honestly, no retry.
-  if (hasConsumedTapRetryBudget(firstResult)) {
-    return flagNoUiChange(first.result, policy.targetKey);
-  }
-  const second = await dispatch();
-  if (second.isError) {
-    return flagNoUiChange(attachMeta(first.result, { tapRetried: true }), policy.targetKey);
-  }
-  const settled = await settleAfterMutationWithOutcome(
-    second,
-    { ...ctx, initialSnapshotHash: preHash },
-    deps,
-  );
-  if (settled.outcome?.hierarchyChanged === false) {
-    return flagNoUiChange(attachMeta(settled.result, { tapRetried: true }), policy.targetKey);
-  }
-  if (settled.outcome?.hierarchyChanged === true) recordUiChange();
-  return attachMeta(settled.result, { tapRetried: true });
+  return failClosed
+    ? unverifiedInteractionResult(first.result, policy.targetKey, 'no-ui-change')
+    : flagNoUiChange(first.result, policy.targetKey);
 }
 
 const MAX_STALE_CANDIDATES = 5;
@@ -1748,7 +1893,9 @@ export async function runNative(
     }
     const { runAndroid, consumePendingAndroidUpgradeNote } =
       await import('./runners/rn-android-runner-client.js');
-    const android = buildRunAndroidArgs(cliArgs, appId);
+    const outsideApp = androidOutsideAppWindowRefusal(cliArgs, appId);
+    if (outsideApp) return outsideAppWindowFailResult(outsideApp);
+    let android = buildRunAndroidArgs(cliArgs, appId);
     let healMeta: Record<string, unknown> | null = null;
     if (android._staleRef && selfHealEnabled(process.env)) {
       const healed = await healStaleRef(android._staleRef, () =>
@@ -1760,16 +1907,26 @@ export async function runNative(
         }),
       );
       if (healed.kind === 'failed') return healed.result;
-      android.x = healed.x;
-      android.y = healed.y;
-      delete android._staleRef;
+      const healedOutsideApp =
+        android.includeSystemUi === true
+          ? null
+          : androidOutsideAppWindowRefusal(cliArgs, appId, healed.newRef);
+      if (healedOutsideApp) return outsideAppWindowFailResult(healedOutsideApp);
+      android = rebuildHealedAndroidArgs(
+        cliArgs,
+        healed.newRef,
+        appId,
+        android.includeSystemUi === true,
+      );
+      if (android._staleRef) {
+        return staleRefFail(android._staleRef, 'absent', getCachedMetadata(android._staleRef));
+      }
       healMeta = {
         reResolved: true,
         reResolvedRef: healed.newRef,
         timings_ms: { reResolve: healed.ms },
       };
     }
-    let result = await runAndroid({ ...android, deviceId: activeSession?.deviceId });
     const androidPolicy = tapRetryPolicy(
       cliArgs,
       android.command,
@@ -1777,6 +1934,15 @@ export async function runNative(
       android.y,
       opts.retryIfNoChange !== undefined ? { retryIfNoChange: opts.retryIfNoChange } : {},
     );
+    const androidBaseline = await establishInteractionBaseline(
+      {
+        platform: 'android',
+        ...(appId ? { appId } : {}),
+        ...(opts.settle ? { settle: opts.settle } : {}),
+      },
+      androidPolicy,
+    );
+    let result = await runAndroid({ ...android, deviceId: activeSession?.deviceId });
     result = await settleWithRetryIfNoChange(
       result,
       () => runAndroid({ ...android, deviceId: activeSession?.deviceId }),
@@ -1785,6 +1951,7 @@ export async function runNative(
         verb: cliArgs[0],
         ...(appId ? { appId } : {}),
         ...(opts.settle ? { settle: opts.settle } : {}),
+        ...(androidBaseline !== undefined ? { initialSnapshotHash: androidBaseline } : {}),
       },
       androidPolicy,
     );

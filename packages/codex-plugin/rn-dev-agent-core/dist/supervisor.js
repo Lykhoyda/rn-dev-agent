@@ -18181,7 +18181,8 @@ function normalizeNodeForHash(node) {
     q(node.rect.y),
     q(node.rect.width),
     q(node.rect.height),
-    node.enabled ?? null
+    node.enabled ?? null,
+    node.checked ?? null
   ]);
 }
 function hashSnapshotNodes(nodes) {
@@ -18300,6 +18301,7 @@ function clearRefMap() {
   screenRect = null;
   lastUpdated = 0;
   lastSnapshotHash = null;
+  lastPackageSnapshotHashes.clear();
   snapshotGeneration = 0;
   keyboardStateAtSnapshot = null;
 }
@@ -18349,6 +18351,8 @@ function updateRefMapFromFlat(nodes, freshness = {}) {
       meta.label = node.label;
     if (node.identifier !== void 0)
       meta.identifier = node.identifier;
+    if (node.packageName !== void 0)
+      meta.packageName = node.packageName;
     metadataMap.set(key, meta);
     hashed.push(node);
     entries.push({ rect: node.rect, hittable: node.hittable, type: node.type });
@@ -18356,8 +18360,21 @@ function updateRefMapFromFlat(nodes, freshness = {}) {
   screenRect = resolveScreenRect(entries);
   try {
     lastSnapshotHash = hashSnapshotNodes(hashed);
+    lastPackageSnapshotHashes.clear();
+    const byPackage = /* @__PURE__ */ new Map();
+    for (const node of hashed) {
+      if (!node.packageName)
+        continue;
+      const packageNodes = byPackage.get(node.packageName) ?? [];
+      packageNodes.push(node);
+      byPackage.set(node.packageName, packageNodes);
+    }
+    for (const [packageName, packageNodes] of byPackage) {
+      lastPackageSnapshotHashes.set(packageName, hashSnapshotNodes(packageNodes));
+    }
   } catch {
     lastSnapshotHash = null;
+    lastPackageSnapshotHashes.clear();
   }
   lastUpdated = Date.now();
   return { applied: true };
@@ -18392,6 +18409,10 @@ function getCachedMetadata(ref) {
     meta.identifier = rec.identifier;
   return meta;
 }
+function getCachedPackageName(ref) {
+  const key = ref.startsWith("@") ? ref.slice(1) : ref;
+  return metadataMap.get(key)?.packageName ?? null;
+}
 function getCachedSignature(ref) {
   const key = ref.startsWith("@") ? ref.slice(1) : ref;
   const rec = metadataMap.get(key);
@@ -18411,8 +18432,12 @@ function getCachedSignature(ref) {
 function getLastSnapshotHash() {
   return lastSnapshotHash;
 }
+function getLastSnapshotHashForPackage(packageName) {
+  return lastPackageSnapshotHashes.get(packageName) ?? null;
+}
 function invalidateLastSnapshotHash() {
   lastSnapshotHash = null;
+  lastPackageSnapshotHashes.clear();
 }
 function identityMatches(sig, node) {
   return node.type === sig.type && node.label === sig.label && node.identifier === sig.identifier;
@@ -18434,7 +18459,7 @@ function refreshRef(sig, nodes) {
   }
   return { kind: "ambiguous", candidates: matches.map((m) => m.node) };
 }
-var refMap, metadataMap, screenRect, lastUpdated, lastSnapshotHash, snapshotGeneration, keyboardStateAtSnapshot, WINDOW_TYPES, MAX_REF_MAP_AGE_MS;
+var refMap, metadataMap, screenRect, lastUpdated, lastSnapshotHash, lastPackageSnapshotHashes, snapshotGeneration, keyboardStateAtSnapshot, WINDOW_TYPES, MAX_REF_MAP_AGE_MS;
 var init_fast_runner_ref_map = __esm({
   "packages/rn-dev-agent-core/dist/fast-runner-ref-map.js"() {
     "use strict";
@@ -18444,6 +18469,7 @@ var init_fast_runner_ref_map = __esm({
     screenRect = null;
     lastUpdated = 0;
     lastSnapshotHash = null;
+    lastPackageSnapshotHashes = /* @__PURE__ */ new Map();
     snapshotGeneration = 0;
     keyboardStateAtSnapshot = null;
     WINDOW_TYPES = /* @__PURE__ */ new Set(["Application", "Window"]);
@@ -18795,7 +18821,7 @@ function getPluginVersion() {
   }
   return cachedPluginVersion;
 }
-var RUNNER_PROTOCOL_VERSION, MIN_SUPPORTED_RUNNER_PROTOCOL, REQUIRED_IOS_COMMANDS, REQUIRED_IOS_FEATURES, REQUIRED_ANDROID_COMMANDS, cachedPluginVersion;
+var RUNNER_PROTOCOL_VERSION, MIN_SUPPORTED_RUNNER_PROTOCOL, REQUIRED_IOS_COMMANDS, REQUIRED_IOS_FEATURES, REQUIRED_ANDROID_FEATURES, REQUIRED_ANDROID_COMMANDS, cachedPluginVersion;
 var init_protocol = __esm({
   "packages/rn-dev-agent-core/dist/runners/protocol.js"() {
     "use strict";
@@ -18815,6 +18841,7 @@ var init_protocol = __esm({
       "status"
     ];
     REQUIRED_IOS_FEATURES = ["EXACT_KEYBOARD_TARGET_GUARD"];
+    REQUIRED_ANDROID_FEATURES = ["APP_SCOPED_EXACT_INTERACTION"];
     REQUIRED_ANDROID_COMMANDS = [
       "tap",
       "type",
@@ -24167,6 +24194,7 @@ __export(settle_exports, {
   SETTLE_MAX_BUDGET_MS: () => SETTLE_MAX_BUDGET_MS,
   buildAndroidProbes: () => buildAndroidProbes,
   buildIosProbes: () => buildIosProbes,
+  hashAndroidAppSnapshotNodes: () => hashAndroidAppSnapshotNodes,
   settleEnabled: () => settleEnabled,
   waitForSettle: () => waitForSettle
 });
@@ -24286,13 +24314,18 @@ function buildIosProbes(bundleId) {
     now: () => Date.now()
   };
 }
+function hashAndroidAppSnapshotNodes(nodes, bundleId) {
+  if (!bundleId)
+    return null;
+  return hashSnapshotNodes(nodes.filter((node) => node.packageName === bundleId));
+}
 function buildAndroidProbes(bundleId) {
   const pinnedHostPort = getAndroidRunnerHostPort() ?? void 0;
   return {
     isWindowUpdating: (timeoutMs) => androidIsWindowUpdatingProbe(timeoutMs, bundleId, pinnedHostPort),
     snapshotHash: async () => {
       const nodes = await androidSnapshotNodesViaProbe(bundleId, pinnedHostPort);
-      return nodes ? hashSnapshotNodes(nodes) : null;
+      return nodes ? hashAndroidAppSnapshotNodes(nodes, bundleId) : null;
     },
     sleep: realSleep,
     now: () => Date.now()
@@ -24656,10 +24689,25 @@ function buildRunAndroidArgs(cliArgs, bundleId) {
     case "tap": {
       const ref = positionals[0];
       if (ref && ref.startsWith("@")) {
+        const includeSystemUi = cliArgs.includes("--include-system-ui");
         const center = isRefMapFresh() ? refCenter(ref) : null;
-        if (!center)
-          return { command: "tap", _staleRef: ref, ...withBundle };
-        return { command: "tap", x: center.x, y: center.y, ...withBundle };
+        if (!center) {
+          return {
+            command: "tap",
+            _staleRef: ref,
+            ...includeSystemUi ? { includeSystemUi: true } : {},
+            ...withBundle
+          };
+        }
+        const metadata = getCachedMetadata(ref);
+        return {
+          command: "tap",
+          x: center.x,
+          y: center.y,
+          ...metadata?.identifier ? { exactIdentifier: metadata.identifier, exactType: metadata.type } : {},
+          ...includeSystemUi ? { includeSystemUi: true } : {},
+          ...withBundle
+        };
       }
       const [xS, yS] = positionals;
       const x = Number(xS), y = Number(yS);
@@ -24773,6 +24821,39 @@ function buildRunAndroidArgs(cliArgs, bundleId) {
     default:
       throw new Error(`buildRunAndroidArgs: unsupported command "${cmd ?? "<empty>"}"`);
   }
+}
+function androidOutsideAppWindowRefusal(cliArgs, appId, ref) {
+  const cmd = cliArgs[0];
+  if (!cmd || !APP_SCOPED_ANDROID_REF_VERBS.has(cmd))
+    return null;
+  if (!appId)
+    return null;
+  const target = ref !== void 0 ? ref.startsWith("@") ? ref : `@${ref}` : positionalArgs(cliArgs)[0];
+  if (!target || !target.startsWith("@"))
+    return null;
+  if (cliArgs.includes("--include-system-ui"))
+    return null;
+  const packageName = getCachedPackageName(target);
+  if (!packageName || packageName === appId)
+    return null;
+  return { ref: target, packageName, appId };
+}
+function outsideAppWindowFailResult(refusal) {
+  return failResult(`Ref ${refusal.ref} belongs to "${refusal.packageName}", outside the owned app window (${refusal.appId}) \u2014 Android interactions are app-scoped and will not actuate system UI.`, "OUTSIDE_APP_WINDOW", {
+    mutation: "none",
+    ref: refusal.ref,
+    packageName: refusal.packageName,
+    appId: refusal.appId,
+    hint: 'To act on system UI explicitly, call device_find with includeSystemUi=true and action="click".'
+  });
+}
+function rebuildHealedAndroidArgs(cliArgs, healedRef, bundleId, includeSystemUi) {
+  const reboundArgs = [...cliArgs];
+  reboundArgs[1] = healedRef.startsWith("@") ? healedRef : `@${healedRef}`;
+  if (includeSystemUi && !reboundArgs.includes("--include-system-ui")) {
+    reboundArgs.push("--include-system-ui");
+  }
+  return buildRunAndroidArgs(reboundArgs, bundleId);
 }
 function decideRunnerSpawn(input) {
   if (input.liveness === "alive")
@@ -24960,9 +25041,20 @@ function attachMeta(result, patch) {
 function attachMetaNote(result, note) {
   return attachMeta(result, { note });
 }
+function resultMutation(result) {
+  try {
+    const envelope = JSON.parse(result.content[0]?.text ?? "{}");
+    return envelope.meta?.mutation;
+  } catch {
+    return void 0;
+  }
+}
 async function settleAfterMutationWithOutcome(result, ctx, deps = {}) {
-  if (result.isError)
+  if (result.isError) {
+    if (resultMutation(result) === "possible")
+      invalidateLastSnapshotHash();
     return { result, outcome: null };
+  }
   if (!SNAPSHOT_MUTATING_VERBS.has(ctx.verb))
     return { result, outcome: null };
   if (ctx.settle?.enabled === false) {
@@ -25008,20 +25100,12 @@ function selfHealEnabled(env) {
   const v = env.RN_SELF_HEAL?.trim().toLowerCase();
   return v !== "0" && v !== "false";
 }
-function tapRetryPolicy(cliArgs, builtCommand, x, y, opts) {
+function tapRetryPolicy(cliArgs, builtCommand, x, y, _opts) {
   const ref = cliArgs[1];
   const exactTarget = ref?.startsWith("@") ? getFreshRefTarget(ref) : null;
-  const keyboardTarget = exactTarget?.snapshotElementType === "Key" || exactTarget?.snapshotElementType === "Keyboard";
-  const eligible = !keyboardTarget && RETRYABLE_TAP_COMMANDS.has(builtCommand) && opts.retryIfNoChange !== false && selfHealEnabled(process.env) && !cliArgs.includes("--double-tap") && !cliArgs.includes("--count") && !cliArgs.includes("--hold-ms") && x !== void 0 && y !== void 0;
-  return { eligible, targetKey: `${builtCommand}@${x},${y}` };
-}
-function hasConsumedTapRetryBudget(result) {
-  try {
-    const env = JSON.parse(result.content[0].text);
-    return env.meta?.transportRecovery !== void 0 || env.meta?.keyboardGuard === "auto_dismissed" || env.data?.keyboardGuard === "auto_dismissed" || env.meta?.keyboardGuard === "keyboard_target" || env.data?.keyboardGuard === "keyboard_target";
-  } catch {
-    return false;
-  }
+  const keyboardTarget = exactTarget?.snapshotElementType === "Key" || exactTarget?.snapshotElementType === "Keyboard" || cliArgs.includes(IME_KEY_FLAG);
+  const verificationRequired = !keyboardTarget && RETRYABLE_TAP_COMMANDS.has(builtCommand) && !cliArgs.includes("--double-tap") && !cliArgs.includes("--count") && !cliArgs.includes("--hold-ms") && x !== void 0 && y !== void 0;
+  return { eligible: false, verificationRequired, targetKey: `${builtCommand}@${x},${y}` };
 }
 function flagNoUiChange(result, targetKey) {
   const distinct = recordNoUiChange(targetKey);
@@ -25030,30 +25114,66 @@ function flagNoUiChange(result, targetKey) {
     ...distinct >= WEDGED_DISTINCT_TARGETS ? { hint: WEDGED_RUNTIME_HINT } : {}
   });
 }
-async function settleWithRetryIfNoChange(firstResult, dispatch, ctx, policy, deps = {}) {
-  const preHash = policy.eligible ? getLastSnapshotHash() ?? void 0 : void 0;
+async function effectVerificationEnabled(settleOpts2, deps) {
+  if (settleOpts2?.enabled === false)
+    return false;
+  if (deps.enabled)
+    return deps.enabled(process.env);
+  try {
+    const settle = await Promise.resolve().then(() => (init_settle(), settle_exports));
+    return settle.settleEnabled(process.env);
+  } catch {
+    return true;
+  }
+}
+async function establishInteractionBaseline(ctx, policy, deps = {}) {
+  if (!policy.verificationRequired)
+    return void 0;
+  if (!await effectVerificationEnabled(ctx.settle, deps))
+    return void 0;
+  const cached2 = ctx.platform === "android" && ctx.appId ? getLastSnapshotHashForPackage(ctx.appId) : getLastSnapshotHash();
+  if (cached2 !== null)
+    return cached2;
+  try {
+    const settle = await Promise.resolve().then(() => (init_settle(), settle_exports));
+    const probes = deps.probes ? deps.probes(ctx.platform, ctx.appId) : ctx.platform === "ios" ? settle.buildIosProbes(ctx.appId) : settle.buildAndroidProbes(ctx.appId);
+    return await probes.snapshotHash() ?? void 0;
+  } catch {
+    return void 0;
+  }
+}
+function unverifiedInteractionResult(observedResult, targetKey, reason) {
+  const distinct = recordNoUiChange(targetKey);
+  let observedMeta = {};
+  try {
+    const envelope = JSON.parse(observedResult.content[0].text);
+    observedMeta = envelope.meta ?? {};
+  } catch {
+  }
+  return failResult(reason === "no-ui-change" ? "The tap was dispatched but produced no observable UI change." : "The tap was dispatched, but its UI effect could not be observed.", "INTERACTION_EFFECT_UNVERIFIED", {
+    ...observedMeta,
+    mutation: "possible",
+    reason,
+    attempts: 1,
+    ...distinct >= WEDGED_DISTINCT_TARGETS ? { hint: WEDGED_RUNTIME_HINT } : {}
+  });
+}
+async function settleWithRetryIfNoChange(firstResult, _dispatch, ctx, policy, deps = {}) {
+  const verify = policy.verificationRequired && await effectVerificationEnabled(ctx.settle, deps);
+  const failClosed = verify && ctx.platform === "android";
+  const cachedHash = ctx.platform === "android" && ctx.appId ? getLastSnapshotHashForPackage(ctx.appId) : getLastSnapshotHash();
+  const preHash = verify ? ctx.initialSnapshotHash ?? cachedHash ?? void 0 : void 0;
   const first = await settleAfterMutationWithOutcome(firstResult, { ...ctx, ...preHash !== void 0 ? { initialSnapshotHash: preHash } : {} }, deps);
-  if (!policy.eligible || preHash === void 0 || first.result.isError)
+  if (first.result.isError || !verify)
     return first.result;
-  if (first.outcome?.hierarchyChanged !== false) {
-    if (first.outcome?.hierarchyChanged === true)
-      recordUiChange();
-    return first.result;
+  if (preHash === void 0 || first.outcome?.hierarchyChanged === void 0) {
+    return failClosed ? unverifiedInteractionResult(first.result, policy.targetKey, "effect-probe-unavailable") : first.result;
   }
-  if (hasConsumedTapRetryBudget(firstResult)) {
-    return flagNoUiChange(first.result, policy.targetKey);
-  }
-  const second = await dispatch();
-  if (second.isError) {
-    return flagNoUiChange(attachMeta(first.result, { tapRetried: true }), policy.targetKey);
-  }
-  const settled = await settleAfterMutationWithOutcome(second, { ...ctx, initialSnapshotHash: preHash }, deps);
-  if (settled.outcome?.hierarchyChanged === false) {
-    return flagNoUiChange(attachMeta(settled.result, { tapRetried: true }), policy.targetKey);
-  }
-  if (settled.outcome?.hierarchyChanged === true)
+  if (first.outcome.hierarchyChanged === true) {
     recordUiChange();
-  return attachMeta(settled.result, { tapRetried: true });
+    return first.result;
+  }
+  return failClosed ? unverifiedInteractionResult(first.result, policy.targetKey, "no-ui-change") : flagNoUiChange(first.result, policy.targetKey);
 }
 function staleRefFail(ref, reason, cachedMetadata, candidates = []) {
   const message = reason === "ambiguous" ? `Element at ref ${ref} is stale and re-resolution matched ${candidates.length} elements \u2014 refusing to guess-tap` : `Element at ref ${ref} no longer hittable \u2014 UI re-rendered since snapshot`;
@@ -25229,7 +25349,10 @@ async function runNative(cliArgs, opts = {}) {
       }
     }
     const { runAndroid: runAndroid2, consumePendingAndroidUpgradeNote: consumePendingAndroidUpgradeNote2 } = await Promise.resolve().then(() => (init_rn_android_runner_client(), rn_android_runner_client_exports));
-    const android = buildRunAndroidArgs(cliArgs, appId);
+    const outsideApp = androidOutsideAppWindowRefusal(cliArgs, appId);
+    if (outsideApp)
+      return outsideAppWindowFailResult(outsideApp);
+    let android = buildRunAndroidArgs(cliArgs, appId);
     let healMeta = null;
     if (android._staleRef && selfHealEnabled(process.env)) {
       const healed = await healStaleRef(android._staleRef, () => runAndroid2({
@@ -25240,22 +25363,32 @@ async function runNative(cliArgs, opts = {}) {
       }));
       if (healed.kind === "failed")
         return healed.result;
-      android.x = healed.x;
-      android.y = healed.y;
-      delete android._staleRef;
+      const healedOutsideApp = android.includeSystemUi === true ? null : androidOutsideAppWindowRefusal(cliArgs, appId, healed.newRef);
+      if (healedOutsideApp)
+        return outsideAppWindowFailResult(healedOutsideApp);
+      android = rebuildHealedAndroidArgs(cliArgs, healed.newRef, appId, android.includeSystemUi === true);
+      if (android._staleRef) {
+        return staleRefFail(android._staleRef, "absent", getCachedMetadata(android._staleRef));
+      }
       healMeta = {
         reResolved: true,
         reResolvedRef: healed.newRef,
         timings_ms: { reResolve: healed.ms }
       };
     }
-    let result = await runAndroid2({ ...android, deviceId: activeSession?.deviceId });
     const androidPolicy = tapRetryPolicy(cliArgs, android.command, android.x, android.y, opts.retryIfNoChange !== void 0 ? { retryIfNoChange: opts.retryIfNoChange } : {});
+    const androidBaseline = await establishInteractionBaseline({
+      platform: "android",
+      ...appId ? { appId } : {},
+      ...opts.settle ? { settle: opts.settle } : {}
+    }, androidPolicy);
+    let result = await runAndroid2({ ...android, deviceId: activeSession?.deviceId });
     result = await settleWithRetryIfNoChange(result, () => runAndroid2({ ...android, deviceId: activeSession?.deviceId }), {
       platform: "android",
       verb: cliArgs[0],
       ...appId ? { appId } : {},
-      ...opts.settle ? { settle: opts.settle } : {}
+      ...opts.settle ? { settle: opts.settle } : {},
+      ...androidBaseline !== void 0 ? { initialSnapshotHash: androidBaseline } : {}
     }, androidPolicy);
     if (healMeta)
       result = attachMeta(result, healMeta);
@@ -25264,7 +25397,7 @@ async function runNative(cliArgs, opts = {}) {
   }
   return failResult(`No native route for "${cliArgs[0]}". Open a device session (device_snapshot action=open) first, or use the dedicated tool for this verb.`, "NO_NATIVE_ROUTE");
 }
-var SESSION_FILE, LEGACY_SESSION_FILE, activeSession, snapshotCache, dirtySnapshotPlatforms, snapshotAuthorityProvider, RN_FAST_RUNNER_COMMANDS, SNAPSHOT_MUTATING_VERBS, PROTOCOL_STALE_REASONS, _runAgentDeviceOverrideForTest, _testSeamFused, _testSeamFuseBlownBy, RETRYABLE_TAP_COMMANDS, MAX_STALE_CANDIDATES;
+var SESSION_FILE, LEGACY_SESSION_FILE, activeSession, snapshotCache, dirtySnapshotPlatforms, snapshotAuthorityProvider, RN_FAST_RUNNER_COMMANDS, SNAPSHOT_MUTATING_VERBS, APP_SCOPED_ANDROID_REF_VERBS, PROTOCOL_STALE_REASONS, _runAgentDeviceOverrideForTest, _testSeamFused, _testSeamFuseBlownBy, RETRYABLE_TAP_COMMANDS, IME_KEY_FLAG, MAX_STALE_CANDIDATES;
 var init_agent_device_wrapper = __esm({
   "packages/rn-dev-agent-core/dist/agent-device-wrapper.js"() {
     "use strict";
@@ -25320,6 +25453,7 @@ var init_agent_device_wrapper = __esm({
       "longpress",
       "pinch"
     ]);
+    APP_SCOPED_ANDROID_REF_VERBS = /* @__PURE__ */ new Set(["press", "tap", "fill", "type", "longpress"]);
     PROTOCOL_STALE_REASONS = /* @__PURE__ */ new Set([
       "legacy",
       "protocol-older",
@@ -25334,6 +25468,7 @@ var init_agent_device_wrapper = __esm({
     _testSeamFused = false;
     _testSeamFuseBlownBy = null;
     RETRYABLE_TAP_COMMANDS = /* @__PURE__ */ new Set(["tap", "longPress"]);
+    IME_KEY_FLAG = "--ime-key";
     MAX_STALE_CANDIDATES = 5;
   }
 });
@@ -25369,6 +25504,341 @@ var init_platform_utils = __esm({
     init_agent_device_wrapper();
     execFile2 = promisify2(execFileCb);
     PROBE_TIMEOUT_MS = 1e4;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/maestro-validator.js
+import { join as join16, dirname as dirname9, isAbsolute as isAbsolute4, sep as sep3 } from "node:path";
+import { readFileSync as readFileSync15, realpathSync as realpathSync7 } from "node:fs";
+function isValidBundleId(s) {
+  if (typeof s !== "string")
+    return false;
+  if (s.length === 0 || s.length >= BUNDLE_ID_MAX_LEN)
+    return false;
+  return BUNDLE_ID_RE.test(s);
+}
+function assertValidBundleId(s, context) {
+  if (!isValidBundleId(s)) {
+    const preview = JSON.stringify(s).slice(0, 80);
+    throw new MaestroValidationError(`Invalid bundle ID for ${context}: ${preview}`);
+  }
+}
+function isSafeMaestroScalar(s) {
+  if (typeof s !== "string")
+    return false;
+  if (s.length > SCALAR_MAX_LEN)
+    return false;
+  if (UNSAFE_SCALAR_RE.test(s))
+    return false;
+  return true;
+}
+function buildMaestroFlow(opts, commands) {
+  if (opts.appId !== void 0) {
+    assertValidBundleId(opts.appId, "appId header");
+  }
+  for (const cmd of commands) {
+    validateCommand(cmd);
+  }
+  const headerYaml = opts.appId ? import_yaml2.default.stringify({ appId: opts.appId }) : "";
+  const bodyYaml = import_yaml2.default.stringify(commands);
+  return `${headerYaml}---
+${bodyYaml}`;
+}
+function validateCommand(cmd) {
+  if (cmd === null || cmd === void 0) {
+    throw new MaestroValidationError("Command is null/undefined");
+  }
+  if (typeof cmd === "string") {
+    if (!isSafeMaestroScalar(cmd)) {
+      throw new MaestroValidationError(`Unsafe shorthand command: ${JSON.stringify(cmd).slice(0, 80)}`);
+    }
+    if (DENIED_COMMANDS.has(cmd)) {
+      throw new MaestroValidationError(`Command not allowed (denied by default): ${cmd}`);
+    }
+    if (!ALLOWED_COMMANDS.has(cmd)) {
+      throw new MaestroValidationError(`Command not in allowlist: ${cmd}`);
+    }
+    return;
+  }
+  if (typeof cmd !== "object") {
+    throw new MaestroValidationError(`Command is not an object or string: ${typeof cmd}`);
+  }
+  const keys = Object.keys(cmd);
+  if (keys.length !== 1) {
+    throw new MaestroValidationError(`Command must have exactly one root key, got ${keys.length}: ${keys.join(", ")}`);
+  }
+  const key = keys[0];
+  if (DENIED_COMMANDS.has(key)) {
+    throw new MaestroValidationError(`Command not allowed (denied by default): ${key}`);
+  }
+  if (!ALLOWED_COMMANDS.has(key)) {
+    throw new MaestroValidationError(`Command not in allowlist: ${key}`);
+  }
+  if (key === "runFlow") {
+    validateRunFlowValue(cmd[key]);
+    return;
+  }
+  validateValue(cmd[key]);
+}
+function validateRunFlowValue(v) {
+  if (typeof v === "string") {
+    if (!isSafeMaestroScalar(v)) {
+      throw new MaestroValidationError(`Unsafe runFlow file ref: ${JSON.stringify(v).slice(0, 80)}`);
+    }
+    return;
+  }
+  if (v === null || typeof v !== "object" || Array.isArray(v)) {
+    throw new MaestroValidationError(`runFlow value must be a file string or an object, got ${Array.isArray(v) ? "array" : typeof v}`);
+  }
+  const obj = v;
+  if ("file" in obj && (typeof obj.file !== "string" || !isSafeMaestroScalar(obj.file))) {
+    throw new MaestroValidationError(`runFlow.file must be a safe scalar string`);
+  }
+  if ("when" in obj)
+    validateValue(obj.when);
+  if ("commands" in obj) {
+    if (!Array.isArray(obj.commands)) {
+      throw new MaestroValidationError(`runFlow.commands must be an array`);
+    }
+    for (const c of obj.commands)
+      validateCommand(c);
+  }
+  for (const [k, val] of Object.entries(obj)) {
+    if (k === "file" || k === "when" || k === "commands")
+      continue;
+    if (!isSafeMaestroScalar(k)) {
+      throw new MaestroValidationError(`Unsafe runFlow key: ${JSON.stringify(k).slice(0, 80)}`);
+    }
+    validateValue(val);
+  }
+}
+function validateValue(v) {
+  if (v === null || v === void 0)
+    return;
+  if (typeof v === "boolean" || typeof v === "number")
+    return;
+  if (typeof v === "string") {
+    if (!isSafeMaestroScalar(v)) {
+      throw new MaestroValidationError(`Unsafe scalar value: ${JSON.stringify(v).slice(0, 80)}`);
+    }
+    return;
+  }
+  if (Array.isArray(v)) {
+    for (const item of v)
+      validateValue(item);
+    return;
+  }
+  if (typeof v === "object") {
+    for (const [key, value] of Object.entries(v)) {
+      if (!isSafeMaestroScalar(key)) {
+        throw new MaestroValidationError(`Unsafe scalar key: ${JSON.stringify(key).slice(0, 80)}`);
+      }
+      validateValue(value);
+    }
+    return;
+  }
+  throw new MaestroValidationError(`Unsupported value type: ${typeof v}`);
+}
+function asRunFlow(cmd) {
+  if (!cmd || typeof cmd !== "object" || Array.isArray(cmd))
+    return null;
+  const keys = Object.keys(cmd);
+  if (keys.length !== 1 || keys[0] !== "runFlow")
+    return null;
+  const v = cmd.runFlow;
+  if (typeof v === "string")
+    return { file: v };
+  if (v && typeof v === "object" && !Array.isArray(v)) {
+    const o = v;
+    return {
+      file: typeof o.file === "string" ? o.file : void 0,
+      when: o.when,
+      commands: Array.isArray(o.commands) ? o.commands : void 0
+    };
+  }
+  return null;
+}
+function resolveRunFlowTarget(file, opts) {
+  if (!opts.flowDir || !opts.flowRoot) {
+    throw new MaestroValidationError(`runFlow file ref "${file}" requires a flow root context (flowDir + flowRoot)`);
+  }
+  if (isAbsolute4(file)) {
+    throw new MaestroValidationError(`runFlow file ref must be relative, got absolute: ${file}`);
+  }
+  if (file.split(/[\\/]/).includes("..")) {
+    throw new MaestroValidationError(`runFlow file ref must not contain '..': ${file}`);
+  }
+  if (!/\.ya?ml$/i.test(file)) {
+    throw new MaestroValidationError(`runFlow file ref must be a .yaml/.yml file: ${file}`);
+  }
+  const realpath = opts.realpathFn ?? realpathSync7;
+  let resolved;
+  let rootReal;
+  try {
+    resolved = realpath(join16(opts.flowDir, file));
+    rootReal = realpath(opts.flowRoot);
+  } catch (err) {
+    throw new MaestroValidationError(`runFlow file ref "${file}" could not be resolved: ${err.message}`);
+  }
+  if (resolved !== rootReal && !resolved.startsWith(rootReal + sep3)) {
+    throw new MaestroValidationError(`runFlow file ref "${file}" escapes the flow root`);
+  }
+  return resolved;
+}
+function expandRunFlows(commands, opts) {
+  const out = [];
+  for (const cmd of commands) {
+    const rf = asRunFlow(cmd);
+    if (!rf) {
+      out.push(cmd);
+      continue;
+    }
+    if (rf.file !== void 0) {
+      const depth = opts._depth ?? 0;
+      const max = opts.maxRunFlowDepth ?? 5;
+      if (depth >= max) {
+        throw new MaestroValidationError(`runFlow nesting exceeded max depth ${max}`);
+      }
+      const resolved = resolveRunFlowTarget(rf.file, opts);
+      const visited = opts._visited ?? /* @__PURE__ */ new Set();
+      if (visited.has(resolved)) {
+        throw new MaestroValidationError(`runFlow cycle detected at "${rf.file}"`);
+      }
+      const readFile3 = opts.readFileFn ?? ((p) => readFileSync15(p, "utf8"));
+      let subText;
+      try {
+        subText = readFile3(resolved);
+      } catch (err) {
+        throw new MaestroValidationError(`runFlow file "${rf.file}" could not be read: ${err.message}`);
+      }
+      const sub = parseAndValidateFlow(subText, {
+        ...opts,
+        rejectHeader: true,
+        flowDir: dirname9(resolved),
+        _depth: depth + 1,
+        _visited: /* @__PURE__ */ new Set([...visited, resolved])
+      });
+      if (rf.when !== void 0) {
+        out.push({ runFlow: { when: rf.when, commands: sub.commands } });
+      } else {
+        out.push(...sub.commands);
+      }
+    } else {
+      const inner = rf.commands ? expandRunFlows(rf.commands, { ...opts, _depth: (opts._depth ?? 0) + 1 }) : [];
+      const wrapped = { commands: inner };
+      if (rf.when !== void 0)
+        wrapped.when = rf.when;
+      out.push({ runFlow: wrapped });
+    }
+  }
+  return out;
+}
+function parseAndValidateFlow(yamlText, opts = {}) {
+  let docs;
+  try {
+    docs = import_yaml2.default.parseAllDocuments(yamlText, { strict: true });
+  } catch (err) {
+    throw new MaestroValidationError(`YAML parse error: ${err.message}`);
+  }
+  if (docs.length === 0) {
+    throw new MaestroValidationError("Empty Maestro flow");
+  }
+  let appId;
+  let body;
+  if (docs.length === 1) {
+    body = docs[0].toJS();
+  } else {
+    const header = docs[0].toJS() ?? {};
+    if (header && typeof header === "object" && "appId" in header) {
+      if (opts.rejectHeader) {
+        throw new MaestroValidationError("Header (appId) not allowed in this context");
+      }
+      const rawAppId = header.appId;
+      assertValidBundleId(rawAppId, "parsed flow header");
+      appId = rawAppId;
+    }
+    body = docs[docs.length - 1].toJS();
+  }
+  if (body === null || body === void 0) {
+    body = [];
+  }
+  if (!Array.isArray(body)) {
+    throw new MaestroValidationError(`Flow body must be an array, got ${typeof body}`);
+  }
+  const expanded = expandRunFlows(body, opts);
+  for (const cmd of expanded) {
+    validateCommand(cmd);
+  }
+  const raw = buildMaestroFlow(appId !== void 0 ? { appId } : {}, expanded);
+  return { appId, commands: expanded, raw };
+}
+var import_yaml2, MaestroValidationError, BUNDLE_ID_RE, BUNDLE_ID_MAX_LEN, UNSAFE_SCALAR_RE, SCALAR_MAX_LEN, ALLOWED_COMMANDS, DENIED_COMMANDS;
+var init_maestro_validator = __esm({
+  "packages/rn-dev-agent-core/dist/domain/maestro-validator.js"() {
+    "use strict";
+    import_yaml2 = __toESM(require_dist(), 1);
+    MaestroValidationError = class extends Error {
+      constructor(message) {
+        super(message);
+        this.name = "MaestroValidationError";
+      }
+    };
+    BUNDLE_ID_RE = /^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z][A-Za-z0-9_-]*)+$/;
+    BUNDLE_ID_MAX_LEN = 256;
+    UNSAFE_SCALAR_RE = /[\u0000-\u0008\u000A-\u001F\u0085\u2028\u2029]/;
+    SCALAR_MAX_LEN = 4096;
+    ALLOWED_COMMANDS = /* @__PURE__ */ new Set([
+      "launchApp",
+      "tapOn",
+      "doubleTapOn",
+      "longPressOn",
+      "assertVisible",
+      "assertNotVisible",
+      "inputText",
+      "eraseText",
+      "scroll",
+      "scrollUntilVisible",
+      "swipe",
+      // Multi-LLM review caught these: test-recorder-generators emits the
+      // shorthand `- swipeUp` / `- swipeDown` / `- swipeLeft` / `- swipeRight`
+      // top-level commands. Without these in the allowlist, every recorded
+      // action containing a swipe would be refused at replay time. The
+      // deepsec attack vector (newline-injected direction) is already
+      // mitigated by isSafeMaestroScalar catching the embedded newline.
+      "swipeUp",
+      "swipeDown",
+      "swipeLeft",
+      "swipeRight",
+      "back",
+      "pressKey",
+      "openLink",
+      "waitForAnimationToEnd",
+      "extendedWaitUntil",
+      "hideKeyboard",
+      "takeScreenshot",
+      "clearState",
+      "addMedia",
+      "copyTextFrom",
+      "pasteText",
+      "travel",
+      "setLocation",
+      "setAirplaneMode",
+      "killApp",
+      "stopApp",
+      "tap",
+      // GH #186: runFlow (conditional dialog handling — deep-link "Open in", Expo
+      // dev-client picker). Validated specially (validateRunFlowValue) so nested
+      // `commands` get full command-level allowlist checks, and {file} refs are
+      // securely resolved + expanded inline (expandRunFlows) — they are NOT passed
+      // through generic validateValue, which would miss nested denied commands.
+      "runFlow"
+    ]);
+    DENIED_COMMANDS = /* @__PURE__ */ new Set([
+      "runScript",
+      "evalScript",
+      "startRecording",
+      "stopRecording"
+    ]);
   }
 });
 
@@ -25720,341 +26190,6 @@ var init_external_runner_detect = __esm({
     "use strict";
     SHELL_WRAPPERS = /^(?:sh|bash|zsh|dash|ksh|env)$/i;
     RN_FAST_RUNNER_RE = /RnFastRunner/i;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/maestro-validator.js
-import { join as join16, dirname as dirname9, isAbsolute as isAbsolute4, sep as sep3 } from "node:path";
-import { readFileSync as readFileSync15, realpathSync as realpathSync7 } from "node:fs";
-function isValidBundleId(s) {
-  if (typeof s !== "string")
-    return false;
-  if (s.length === 0 || s.length >= BUNDLE_ID_MAX_LEN)
-    return false;
-  return BUNDLE_ID_RE.test(s);
-}
-function assertValidBundleId(s, context) {
-  if (!isValidBundleId(s)) {
-    const preview = JSON.stringify(s).slice(0, 80);
-    throw new MaestroValidationError(`Invalid bundle ID for ${context}: ${preview}`);
-  }
-}
-function isSafeMaestroScalar(s) {
-  if (typeof s !== "string")
-    return false;
-  if (s.length > SCALAR_MAX_LEN)
-    return false;
-  if (UNSAFE_SCALAR_RE.test(s))
-    return false;
-  return true;
-}
-function buildMaestroFlow(opts, commands) {
-  if (opts.appId !== void 0) {
-    assertValidBundleId(opts.appId, "appId header");
-  }
-  for (const cmd of commands) {
-    validateCommand(cmd);
-  }
-  const headerYaml = opts.appId ? import_yaml2.default.stringify({ appId: opts.appId }) : "";
-  const bodyYaml = import_yaml2.default.stringify(commands);
-  return `${headerYaml}---
-${bodyYaml}`;
-}
-function validateCommand(cmd) {
-  if (cmd === null || cmd === void 0) {
-    throw new MaestroValidationError("Command is null/undefined");
-  }
-  if (typeof cmd === "string") {
-    if (!isSafeMaestroScalar(cmd)) {
-      throw new MaestroValidationError(`Unsafe shorthand command: ${JSON.stringify(cmd).slice(0, 80)}`);
-    }
-    if (DENIED_COMMANDS.has(cmd)) {
-      throw new MaestroValidationError(`Command not allowed (denied by default): ${cmd}`);
-    }
-    if (!ALLOWED_COMMANDS.has(cmd)) {
-      throw new MaestroValidationError(`Command not in allowlist: ${cmd}`);
-    }
-    return;
-  }
-  if (typeof cmd !== "object") {
-    throw new MaestroValidationError(`Command is not an object or string: ${typeof cmd}`);
-  }
-  const keys = Object.keys(cmd);
-  if (keys.length !== 1) {
-    throw new MaestroValidationError(`Command must have exactly one root key, got ${keys.length}: ${keys.join(", ")}`);
-  }
-  const key = keys[0];
-  if (DENIED_COMMANDS.has(key)) {
-    throw new MaestroValidationError(`Command not allowed (denied by default): ${key}`);
-  }
-  if (!ALLOWED_COMMANDS.has(key)) {
-    throw new MaestroValidationError(`Command not in allowlist: ${key}`);
-  }
-  if (key === "runFlow") {
-    validateRunFlowValue(cmd[key]);
-    return;
-  }
-  validateValue(cmd[key]);
-}
-function validateRunFlowValue(v) {
-  if (typeof v === "string") {
-    if (!isSafeMaestroScalar(v)) {
-      throw new MaestroValidationError(`Unsafe runFlow file ref: ${JSON.stringify(v).slice(0, 80)}`);
-    }
-    return;
-  }
-  if (v === null || typeof v !== "object" || Array.isArray(v)) {
-    throw new MaestroValidationError(`runFlow value must be a file string or an object, got ${Array.isArray(v) ? "array" : typeof v}`);
-  }
-  const obj = v;
-  if ("file" in obj && (typeof obj.file !== "string" || !isSafeMaestroScalar(obj.file))) {
-    throw new MaestroValidationError(`runFlow.file must be a safe scalar string`);
-  }
-  if ("when" in obj)
-    validateValue(obj.when);
-  if ("commands" in obj) {
-    if (!Array.isArray(obj.commands)) {
-      throw new MaestroValidationError(`runFlow.commands must be an array`);
-    }
-    for (const c of obj.commands)
-      validateCommand(c);
-  }
-  for (const [k, val] of Object.entries(obj)) {
-    if (k === "file" || k === "when" || k === "commands")
-      continue;
-    if (!isSafeMaestroScalar(k)) {
-      throw new MaestroValidationError(`Unsafe runFlow key: ${JSON.stringify(k).slice(0, 80)}`);
-    }
-    validateValue(val);
-  }
-}
-function validateValue(v) {
-  if (v === null || v === void 0)
-    return;
-  if (typeof v === "boolean" || typeof v === "number")
-    return;
-  if (typeof v === "string") {
-    if (!isSafeMaestroScalar(v)) {
-      throw new MaestroValidationError(`Unsafe scalar value: ${JSON.stringify(v).slice(0, 80)}`);
-    }
-    return;
-  }
-  if (Array.isArray(v)) {
-    for (const item of v)
-      validateValue(item);
-    return;
-  }
-  if (typeof v === "object") {
-    for (const [key, value] of Object.entries(v)) {
-      if (!isSafeMaestroScalar(key)) {
-        throw new MaestroValidationError(`Unsafe scalar key: ${JSON.stringify(key).slice(0, 80)}`);
-      }
-      validateValue(value);
-    }
-    return;
-  }
-  throw new MaestroValidationError(`Unsupported value type: ${typeof v}`);
-}
-function asRunFlow(cmd) {
-  if (!cmd || typeof cmd !== "object" || Array.isArray(cmd))
-    return null;
-  const keys = Object.keys(cmd);
-  if (keys.length !== 1 || keys[0] !== "runFlow")
-    return null;
-  const v = cmd.runFlow;
-  if (typeof v === "string")
-    return { file: v };
-  if (v && typeof v === "object" && !Array.isArray(v)) {
-    const o = v;
-    return {
-      file: typeof o.file === "string" ? o.file : void 0,
-      when: o.when,
-      commands: Array.isArray(o.commands) ? o.commands : void 0
-    };
-  }
-  return null;
-}
-function resolveRunFlowTarget(file, opts) {
-  if (!opts.flowDir || !opts.flowRoot) {
-    throw new MaestroValidationError(`runFlow file ref "${file}" requires a flow root context (flowDir + flowRoot)`);
-  }
-  if (isAbsolute4(file)) {
-    throw new MaestroValidationError(`runFlow file ref must be relative, got absolute: ${file}`);
-  }
-  if (file.split(/[\\/]/).includes("..")) {
-    throw new MaestroValidationError(`runFlow file ref must not contain '..': ${file}`);
-  }
-  if (!/\.ya?ml$/i.test(file)) {
-    throw new MaestroValidationError(`runFlow file ref must be a .yaml/.yml file: ${file}`);
-  }
-  const realpath = opts.realpathFn ?? realpathSync7;
-  let resolved;
-  let rootReal;
-  try {
-    resolved = realpath(join16(opts.flowDir, file));
-    rootReal = realpath(opts.flowRoot);
-  } catch (err) {
-    throw new MaestroValidationError(`runFlow file ref "${file}" could not be resolved: ${err.message}`);
-  }
-  if (resolved !== rootReal && !resolved.startsWith(rootReal + sep3)) {
-    throw new MaestroValidationError(`runFlow file ref "${file}" escapes the flow root`);
-  }
-  return resolved;
-}
-function expandRunFlows(commands, opts) {
-  const out = [];
-  for (const cmd of commands) {
-    const rf = asRunFlow(cmd);
-    if (!rf) {
-      out.push(cmd);
-      continue;
-    }
-    if (rf.file !== void 0) {
-      const depth = opts._depth ?? 0;
-      const max = opts.maxRunFlowDepth ?? 5;
-      if (depth >= max) {
-        throw new MaestroValidationError(`runFlow nesting exceeded max depth ${max}`);
-      }
-      const resolved = resolveRunFlowTarget(rf.file, opts);
-      const visited = opts._visited ?? /* @__PURE__ */ new Set();
-      if (visited.has(resolved)) {
-        throw new MaestroValidationError(`runFlow cycle detected at "${rf.file}"`);
-      }
-      const readFile3 = opts.readFileFn ?? ((p) => readFileSync15(p, "utf8"));
-      let subText;
-      try {
-        subText = readFile3(resolved);
-      } catch (err) {
-        throw new MaestroValidationError(`runFlow file "${rf.file}" could not be read: ${err.message}`);
-      }
-      const sub = parseAndValidateFlow(subText, {
-        ...opts,
-        rejectHeader: true,
-        flowDir: dirname9(resolved),
-        _depth: depth + 1,
-        _visited: /* @__PURE__ */ new Set([...visited, resolved])
-      });
-      if (rf.when !== void 0) {
-        out.push({ runFlow: { when: rf.when, commands: sub.commands } });
-      } else {
-        out.push(...sub.commands);
-      }
-    } else {
-      const inner = rf.commands ? expandRunFlows(rf.commands, { ...opts, _depth: (opts._depth ?? 0) + 1 }) : [];
-      const wrapped = { commands: inner };
-      if (rf.when !== void 0)
-        wrapped.when = rf.when;
-      out.push({ runFlow: wrapped });
-    }
-  }
-  return out;
-}
-function parseAndValidateFlow(yamlText, opts = {}) {
-  let docs;
-  try {
-    docs = import_yaml2.default.parseAllDocuments(yamlText, { strict: true });
-  } catch (err) {
-    throw new MaestroValidationError(`YAML parse error: ${err.message}`);
-  }
-  if (docs.length === 0) {
-    throw new MaestroValidationError("Empty Maestro flow");
-  }
-  let appId;
-  let body;
-  if (docs.length === 1) {
-    body = docs[0].toJS();
-  } else {
-    const header = docs[0].toJS() ?? {};
-    if (header && typeof header === "object" && "appId" in header) {
-      if (opts.rejectHeader) {
-        throw new MaestroValidationError("Header (appId) not allowed in this context");
-      }
-      const rawAppId = header.appId;
-      assertValidBundleId(rawAppId, "parsed flow header");
-      appId = rawAppId;
-    }
-    body = docs[docs.length - 1].toJS();
-  }
-  if (body === null || body === void 0) {
-    body = [];
-  }
-  if (!Array.isArray(body)) {
-    throw new MaestroValidationError(`Flow body must be an array, got ${typeof body}`);
-  }
-  const expanded = expandRunFlows(body, opts);
-  for (const cmd of expanded) {
-    validateCommand(cmd);
-  }
-  const raw = buildMaestroFlow(appId !== void 0 ? { appId } : {}, expanded);
-  return { appId, commands: expanded, raw };
-}
-var import_yaml2, MaestroValidationError, BUNDLE_ID_RE, BUNDLE_ID_MAX_LEN, UNSAFE_SCALAR_RE, SCALAR_MAX_LEN, ALLOWED_COMMANDS, DENIED_COMMANDS;
-var init_maestro_validator = __esm({
-  "packages/rn-dev-agent-core/dist/domain/maestro-validator.js"() {
-    "use strict";
-    import_yaml2 = __toESM(require_dist(), 1);
-    MaestroValidationError = class extends Error {
-      constructor(message) {
-        super(message);
-        this.name = "MaestroValidationError";
-      }
-    };
-    BUNDLE_ID_RE = /^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z][A-Za-z0-9_-]*)+$/;
-    BUNDLE_ID_MAX_LEN = 256;
-    UNSAFE_SCALAR_RE = /[\u0000-\u0008\u000A-\u001F\u0085\u2028\u2029]/;
-    SCALAR_MAX_LEN = 4096;
-    ALLOWED_COMMANDS = /* @__PURE__ */ new Set([
-      "launchApp",
-      "tapOn",
-      "doubleTapOn",
-      "longPressOn",
-      "assertVisible",
-      "assertNotVisible",
-      "inputText",
-      "eraseText",
-      "scroll",
-      "scrollUntilVisible",
-      "swipe",
-      // Multi-LLM review caught these: test-recorder-generators emits the
-      // shorthand `- swipeUp` / `- swipeDown` / `- swipeLeft` / `- swipeRight`
-      // top-level commands. Without these in the allowlist, every recorded
-      // action containing a swipe would be refused at replay time. The
-      // deepsec attack vector (newline-injected direction) is already
-      // mitigated by isSafeMaestroScalar catching the embedded newline.
-      "swipeUp",
-      "swipeDown",
-      "swipeLeft",
-      "swipeRight",
-      "back",
-      "pressKey",
-      "openLink",
-      "waitForAnimationToEnd",
-      "extendedWaitUntil",
-      "hideKeyboard",
-      "takeScreenshot",
-      "clearState",
-      "addMedia",
-      "copyTextFrom",
-      "pasteText",
-      "travel",
-      "setLocation",
-      "setAirplaneMode",
-      "killApp",
-      "stopApp",
-      "tap",
-      // GH #186: runFlow (conditional dialog handling — deep-link "Open in", Expo
-      // dev-client picker). Validated specially (validateRunFlowValue) so nested
-      // `commands` get full command-level allowlist checks, and {file} refs are
-      // securely resolved + expanded inline (expandRunFlows) — they are NOT passed
-      // through generic validateValue, which would miss nested denied commands.
-      "runFlow"
-    ]);
-    DENIED_COMMANDS = /* @__PURE__ */ new Set([
-      "runScript",
-      "evalScript",
-      "startRecording",
-      "stopRecording"
-    ]);
   }
 });
 
@@ -27885,6 +28020,8 @@ var init_fill_coordinator = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/device-interact.js
+import { execFile as execFileCb8 } from "node:child_process";
+import { promisify as promisify10 } from "node:util";
 function candidateFromNode(n) {
   return {
     ref: n.ref,
@@ -27996,12 +28133,21 @@ async function fetchSnapshotNodes(allowCache = false) {
 function emptyCaptureFailResult(query) {
   return failResult(`Snapshot returned zero nodes \u2014 cannot distinguish an empty screen from a degraded capture` + (query !== void 0 ? `; not asserting "${query}" is absent` : "") + `. Confirm the screen with device_screenshot or cdp_component_tree, then retry.`, { code: "SNAPSHOT_DEGRADED", ...query !== void 0 ? { query } : {} });
 }
-async function fetchFindCandidates(query, exact = false, allowCache = false) {
+function scopeSnapshotNodesForFind(nodes, platform, appId, includeSystemUi) {
+  if (platform !== "android" || includeSystemUi)
+    return nodes;
+  if (!appId)
+    return [];
+  return nodes.filter((node) => node.packageName === appId);
+}
+async function fetchFindCandidates(query, exact = false, allowCache = false, includeSystemUi = false) {
   const snap = await fetchSnapshotNodes(allowCache);
   if (!snap.ok)
     return snap;
+  const session2 = getActiveSession();
+  const scopedNodes = scopeSnapshotNodesForFind(snap.nodes, session2?.platform, session2?.appId, includeSystemUi);
   const needle = query.toLowerCase();
-  const matched = snap.nodes.filter((n) => {
+  const matched = scopedNodes.filter((n) => {
     const label = n.label ?? "";
     const id = n.identifier ?? "";
     if (exact)
@@ -28020,14 +28166,20 @@ function runnerLeakFailResult(query, recoveryReason) {
     hint: "Manually close + reopen the session with device_snapshot action=open appId=<your.bundle.id> platform=ios (full launch, not attachOnly). The recovery may have killed the JS context \u2014 re-establish CDP via cdp_connect before reading state. Upstream: Callstack/agent-device, see B119/GH#35."
   });
 }
-async function pressCandidate(candidate, action, getClient2) {
+async function pressCandidate(candidate, action, getClient2, includeSystemUi = false) {
   const ref = candidate.ref.startsWith("@") ? candidate.ref : `@${candidate.ref}`;
   if (action === "click") {
-    const tap = async () => surfaceKeyboardGuard(await runNative(["press", ref]));
+    const tapArgs = ["press", ref, ...includeSystemUi ? ["--include-system-ui"] : []];
+    const tap = async () => surfaceKeyboardGuard(await runNative(tapArgs));
     const first = await tap();
     return first.isError && getClient2 ? healKeyboardOccludedTap(first, keyboardHealDeps(getClient2, tap)) : first;
   }
-  return okResult({ ref: candidate.ref, label: candidate.label, testID: candidate.testID });
+  return okResult({
+    ref: candidate.ref,
+    label: candidate.label,
+    testID: candidate.testID,
+    ...includeSystemUi ? { scope: "system-ui-explicit" } : {}
+  });
 }
 function tagPressIfRecovered(result, tier) {
   if (!tier || result.isError)
@@ -28043,7 +28195,7 @@ function tagPressIfRecovered(result, tier) {
 function createDeviceFindHandler(getClient2) {
   return withSession(async (args) => {
     if (args.exact === true || args.index !== void 0) {
-      const find = await fetchFindCandidates(args.text, args.exact === true, true);
+      const find = await fetchFindCandidates(args.text, args.exact === true, true, args.includeSystemUi === true);
       if (!find.ok) {
         if (find.reason === "runner-leak-unrecovered") {
           return runnerLeakFailResult(args.text, find.recoveryReason);
@@ -28064,10 +28216,10 @@ function createDeviceFindHandler(getClient2) {
         if (args.index < 0 || args.index >= candidates.length) {
           return failResult(`index ${args.index} out of range (got ${candidates.length} candidates)`, { code: "INDEX_OUT_OF_RANGE", count: candidates.length, candidates });
         }
-        return tagPressIfRecovered(await pressCandidate(candidates[args.index], args.action, getClient2), recoveredTier);
+        return tagPressIfRecovered(await pressCandidate(candidates[args.index], args.action, getClient2, args.includeSystemUi === true), recoveredTier);
       }
       if (candidates.length === 1) {
-        return tagPressIfRecovered(await pressCandidate(candidates[0], args.action, getClient2), recoveredTier);
+        return tagPressIfRecovered(await pressCandidate(candidates[0], args.action, getClient2, args.includeSystemUi === true), recoveredTier);
       }
       return failResult(`AMBIGUOUS_MATCH: exact "${args.text}" matched ${candidates.length} elements`, {
         code: "AMBIGUOUS_MATCH",
@@ -28079,7 +28231,7 @@ function createDeviceFindHandler(getClient2) {
     const activeSession2 = getActiveSession();
     const usesInTreeRunner = activeSession2?.platform === "ios" || activeSession2?.platform === "android" && process.env.RN_ANDROID_RUNNER !== "0";
     if (usesInTreeRunner) {
-      const find = await fetchFindCandidates(args.text, false, true);
+      const find = await fetchFindCandidates(args.text, false, true, args.includeSystemUi === true);
       if (!find.ok) {
         if (find.reason === "runner-leak-unrecovered") {
           return runnerLeakFailResult(args.text, find.recoveryReason);
@@ -28102,7 +28254,7 @@ function createDeviceFindHandler(getClient2) {
         });
       }
       if (candidates.length === 1) {
-        return tagPressIfRecovered(await pressCandidate(candidates[0], args.action, getClient2), recoveredTier);
+        return tagPressIfRecovered(await pressCandidate(candidates[0], args.action, getClient2, args.includeSystemUi === true), recoveredTier);
       }
       return failResult(`AMBIGUOUS_MATCH: "${args.text}" matched ${candidates.length} elements. Use device_press with one of these refs, or retry with index: N.`, {
         code: "AMBIGUOUS_MATCH",
@@ -28640,6 +28792,33 @@ function createDevicePinchHandler() {
 function createDeviceBackHandler() {
   return withSession(() => runNative(["back"]));
 }
+function parseDefaultInputMethodPackage(raw) {
+  const value = raw.trim().split(/\r?\n/)[0]?.trim() ?? "";
+  if (!value || value === "null")
+    return null;
+  const pkg = value.split("/")[0]?.trim() ?? "";
+  return isValidBundleId(pkg) ? pkg : null;
+}
+async function resolveAndroidImePackage(deviceId) {
+  try {
+    const { stdout } = await execFile10("adb", [
+      ...deviceId ? ["-s", deviceId] : [],
+      "shell",
+      "settings",
+      "get",
+      "secure",
+      "default_input_method"
+    ], { timeout: IME_PROBE_TIMEOUT_MS });
+    return parseDefaultInputMethodPackage(stdout);
+  } catch {
+    return null;
+  }
+}
+function focusNextPressArgs(ref, nodePackageName, platform, appId, imePackage) {
+  const target = ref.startsWith("@") ? ref : `@${ref}`;
+  const imeOwnedKey = platform === "android" && appId !== void 0 && imePackage !== null && imePackage !== appId && nodePackageName === imePackage;
+  return imeOwnedKey ? ["press", target, "--include-system-ui", IME_KEY_FLAG] : ["press", target];
+}
 function createDeviceFocusNextHandler() {
   return withSession(async () => {
     const snap = await fetchSnapshotNodes();
@@ -28653,13 +28832,18 @@ function createDeviceFocusNextHandler() {
       return failResult("Snapshot unavailable \u2014 cannot look for keyboard key. Retry after device_snapshot action=open/snapshot.", { code: "SNAPSHOT_UNAVAILABLE" });
     }
     const { nodes, recoveredTier } = snap;
+    const session2 = getActiveSession();
+    const imePackage = session2?.platform === "android" ? await (_imePackageResolverForTest ?? resolveAndroidImePackage)(session2.deviceId) : null;
+    let lastPressFailure = null;
     for (const label of NEXT_KEY_LABELS) {
       const match = nodes.find((n) => n.label === label);
       if (!match)
         continue;
-      const pressResult = await runNative(["press", `@${match.ref}`]);
-      if (pressResult.isError)
+      const pressResult = await runNative(focusNextPressArgs(match.ref, match.packageName, session2?.platform, session2?.appId, imePackage));
+      if (pressResult.isError) {
+        lastPressFailure = pressResult;
         continue;
+      }
       try {
         const envelope = JSON.parse(pressResult.content[0].text);
         const meta = { keyUsed: label, ref: match.ref };
@@ -28672,6 +28856,8 @@ function createDeviceFocusNextHandler() {
         return pressResult;
       }
     }
+    if (lastPressFailure)
+      return lastPressFailure;
     return failResult(`No keyboard ${NEXT_KEY_LABELS.join("/")} key visible in the accessibility tree. Tried: ${NEXT_KEY_LABELS.join(", ")}`, {
       code: "KEYBOARD_NEXT_NOT_FOUND",
       hint: 'Keyboard may be dismissed, or the field may be the last in the form. If an in-app "Next" button is visible, prefer device_press on the next input @ref directly.'
@@ -28712,7 +28898,7 @@ function decideScrollDirection(element, screen) {
     return "right";
   return null;
 }
-var TYPE_PRIORITY_FOR_TAP, HELPER_MISSING_VERDICT, DEFAULT_SCREEN, SWIPE_FRACTION, DEFAULT_SWIPE_DURATION_MS, NEXT_KEY_LABELS;
+var execFile10, IME_PROBE_TIMEOUT_MS, TYPE_PRIORITY_FOR_TAP, HELPER_MISSING_VERDICT, DEFAULT_SCREEN, SWIPE_FRACTION, DEFAULT_SWIPE_DURATION_MS, NEXT_KEY_LABELS, _imePackageResolverForTest;
 var init_device_interact = __esm({
   "packages/rn-dev-agent-core/dist/tools/device-interact.js"() {
     "use strict";
@@ -28721,12 +28907,15 @@ var init_device_interact = __esm({
     init_rn_android_runner_client();
     init_keyboard_guard();
     init_project_config();
+    init_maestro_validator();
     init_utils();
     init_utils();
     init_runner_leak_recovery();
     init_device_session();
     init_fast_runner_ref_map();
     init_fill_coordinator();
+    execFile10 = promisify10(execFileCb8);
+    IME_PROBE_TIMEOUT_MS = 5e3;
     TYPE_PRIORITY_FOR_TAP = {
       Button: 100,
       Cell: 95,
@@ -28747,6 +28936,7 @@ var init_device_interact = __esm({
     SWIPE_FRACTION = 0.4;
     DEFAULT_SWIPE_DURATION_MS = 300;
     NEXT_KEY_LABELS = ["Go", "Done", "Return", "Next"];
+    _imePackageResolverForTest = null;
   }
 });
 
@@ -29291,6 +29481,7 @@ __export(rn_android_runner_client_exports, {
   buildInstrumentAuthorityArgs: () => buildInstrumentAuthorityArgs,
   buildInstrumentPortArgs: () => buildInstrumentPortArgs,
   buildInstrumentVersionArgs: () => buildInstrumentVersionArgs,
+  classifyAndroidHealth: () => classifyAndroidHealth,
   completeAndroidRunnerRebuildLock: () => completeAndroidRunnerRebuildLock,
   consumePendingAndroidUpgradeNote: () => consumePendingAndroidUpgradeNote,
   getAndroidRunnerCapabilities: () => getAndroidRunnerCapabilities,
@@ -29320,8 +29511,8 @@ __export(rn_android_runner_client_exports, {
   stopAndroidRunner: () => stopAndroidRunner,
   waitForAndroidRunnerHealth: () => waitForAndroidRunnerHealth
 });
-import { spawn as spawn5, execFile as execFile10 } from "node:child_process";
-import { promisify as promisify10 } from "node:util";
+import { spawn as spawn5, execFile as execFile11 } from "node:child_process";
+import { promisify as promisify11 } from "node:util";
 import { existsSync as existsSync16, rmSync as rmSync8, writeFileSync as writeFileSync9 } from "node:fs";
 import { tmpdir as tmpdir5 } from "node:os";
 import { randomBytes as randomBytes5, randomUUID as randomUUID5 } from "node:crypto";
@@ -29720,8 +29911,9 @@ function classifyAndroidHealth(info) {
   return classifyRunnerCompatibility({
     ...info.protocolVersion !== void 0 ? { protocolVersion: info.protocolVersion } : {},
     ...info.runnerVersion !== void 0 ? { runnerVersion: info.runnerVersion } : {},
-    ...info.commands !== void 0 ? { commands: info.commands } : {}
-  }, getPluginVersion(), REQUIRED_ANDROID_COMMANDS);
+    ...info.commands !== void 0 ? { commands: info.commands } : {},
+    ...info.capabilities !== void 0 ? { capabilities: info.capabilities } : {}
+  }, getPluginVersion(), REQUIRED_ANDROID_COMMANDS, REQUIRED_ANDROID_FEATURES);
 }
 function initializeAndroidRunnerRebuildState(databasePath) {
   const store = openAuthorityStore(databasePath);
@@ -30369,6 +30561,10 @@ function mapRunnerNodesToFlat2(nodes) {
       flat.label = n.label;
     if (n.identifier !== void 0)
       flat.identifier = n.identifier;
+    if (n.packageName !== void 0)
+      flat.packageName = n.packageName;
+    if (n.checked !== void 0)
+      flat.checked = n.checked;
     if (n.enabled !== void 0)
       flat.enabled = n.enabled;
     if (n.hittable !== void 0)
@@ -30412,6 +30608,8 @@ async function runAndroid(args) {
     body.exactType = args.exactType;
   if (args.exact !== void 0)
     body.exact = args.exact;
+  if (args.includeSystemUi !== void 0)
+    body.includeSystemUi = args.includeSystemUi;
   if (args.durationMs !== void 0)
     body.durationMs = args.durationMs;
   if (args.timeoutMs !== void 0)
@@ -30468,6 +30666,21 @@ async function runAndroid(args) {
       return failResult(message, code, Object.keys(failExtras).length ? failExtras : void 0);
     return Object.keys(failExtras).length ? failResult(message, failExtras) : failResult(message);
   }
+  if (args.command === "tap") {
+    const data = resp.data;
+    if (data?.tapped !== true) {
+      const exactTarget = args.exactIdentifier !== void 0 && args.exactType !== void 0;
+      if (exactTarget) {
+        return failResult("Android runner could not prove that the requested interaction was actuated.", "INTERACTION_NOT_ACTUATED", { mutation: "none", reason: "runner-rejected-tap", ...recoveryMeta });
+      }
+      return failResult("The Android coordinate tap did not complete, and part of the gesture may have reached the app.", "INTERACTION_EFFECT_UNVERIFIED", {
+        mutation: "possible",
+        reason: "coordinate-tap-incomplete",
+        attempts: 1,
+        ...recoveryMeta
+      });
+    }
+  }
   if (args.command === "snapshot" && resp.data && typeof resp.data === "object") {
     const data = resp.data;
     if (Array.isArray(data.nodes)) {
@@ -30508,7 +30721,7 @@ var init_rn_android_runner_client = __esm({
     init_transport_recovery();
     init_process_birth();
     init_authority_store();
-    execFileAsync2 = promisify10(execFile10);
+    execFileAsync2 = promisify11(execFile11);
     DEFAULT_PORT = 22089;
     READY_TIMEOUT_MS2 = 3e4;
     INSTRUMENTATION = "dev.lykhoyda.rndevagent.androidrunner.test/androidx.test.runner.AndroidJUnitRunner";
@@ -30564,8 +30777,8 @@ __export(release_android_slot_exports, {
   isProtectedPid: () => isProtectedPid,
   releaseAndroidInteractionSlot: () => releaseAndroidInteractionSlot
 });
-import { execFile as execFileCb8 } from "node:child_process";
-import { promisify as promisify11 } from "node:util";
+import { execFile as execFileCb9 } from "node:child_process";
+import { promisify as promisify12 } from "node:util";
 import { existsSync as existsSync17, readFileSync as readFileSync18, unlinkSync as unlinkSync7 } from "node:fs";
 import { homedir as homedir5 } from "node:os";
 import { join as join20 } from "node:path";
@@ -30576,7 +30789,7 @@ function defaultDeps3() {
   return {
     stopOwnRunner: (deviceId, signal) => stopAndroidRunner(deviceId, signal),
     adbForceStop: async (pkg, serial, signal) => {
-      await execFile11("adb", [...serial, "shell", "am", "force-stop", pkg], {
+      await execFile12("adb", [...serial, "shell", "am", "force-stop", pkg], {
         timeout: ADB_TIMEOUT_MS,
         encoding: "utf8",
         signal
@@ -30697,13 +30910,13 @@ async function releaseAndroidInteractionSlot(opts = {}, deps = defaultDeps3()) {
 function msg2(err) {
   return err instanceof Error ? err.message : String(err);
 }
-var execFile11, DAEMON_JSON2, DAEMON_LOCK2, DAEMON_FILES2, SIGKILL_GRACE_MS2, ADB_TIMEOUT_MS, OWNED_PACKAGES;
+var execFile12, DAEMON_JSON2, DAEMON_LOCK2, DAEMON_FILES2, SIGKILL_GRACE_MS2, ADB_TIMEOUT_MS, OWNED_PACKAGES;
 var init_release_android_slot = __esm({
   "packages/rn-dev-agent-core/dist/runners/release-android-slot.js"() {
     "use strict";
     init_rn_android_runner_client();
     init_agent_device_wrapper();
-    execFile11 = promisify11(execFileCb8);
+    execFile12 = promisify12(execFileCb9);
     DAEMON_JSON2 = join20(homedir5(), ".agent-device", "daemon.json");
     DAEMON_LOCK2 = join20(homedir5(), ".agent-device", "daemon.lock");
     DAEMON_FILES2 = [DAEMON_JSON2, DAEMON_LOCK2];
@@ -30717,8 +30930,8 @@ var init_release_android_slot = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/process-cleanup.js
-import { execFile as execFileCb9, spawn as spawn6 } from "node:child_process";
-import { promisify as promisify12 } from "node:util";
+import { execFile as execFileCb10, spawn as spawn6 } from "node:child_process";
+import { promisify as promisify13 } from "node:util";
 function executeRecorderScript(script, args, options) {
   return new Promise((resolve12, reject) => {
     const child = spawn6(script, args, {
@@ -30929,7 +31142,7 @@ async function stopBoundObserve(binding, listenerProbe = probeManagedMetroListen
     return observed.status === "listening" && observed.pid === pid ? "running" : "stopped";
   }, deadlineMs, "OBSERVE_AUTHORITY_MISMATCH", "Observe listener did not stop before the cleanup deadline");
 }
-async function stopBoundRunner(binding, processProbe = probeProcessBirth, signalProcess = process.kill, timeoutMs = 2e3, runAdb = async (args) => execFile12("adb", args, { timeout: 5e3, encoding: "utf8" }), termGraceMs = 500) {
+async function stopBoundRunner(binding, processProbe = probeProcessBirth, signalProcess = process.kill, timeoutMs = 2e3, runAdb = async (args) => execFile13("adb", args, { timeout: 5e3, encoding: "utf8" }), termGraceMs = 500) {
   const deadlineMs = Date.now() + timeoutMs;
   if (!hasCompleteRunnerCleanupIdentity(binding)) {
     throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "runner cleanup identity is incomplete");
@@ -31040,7 +31253,7 @@ async function stopBoundRecorder(binding, _processProbe = probeProcessBirth, run
     throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", `recorder termination is unproven: ${error2 instanceof Error ? error2.message : String(error2)}`);
   }
 }
-var execFile12, RECORDER_POST_KILL_CONFIRM_MS;
+var execFile13, RECORDER_POST_KILL_CONFIRM_MS;
 var init_process_cleanup = __esm({
   "packages/rn-dev-agent-core/dist/session/process-cleanup.js"() {
     "use strict";
@@ -31049,7 +31262,7 @@ var init_process_cleanup = __esm({
     init_managed_metro();
     init_process_birth();
     init_registry();
-    execFile12 = promisify12(execFileCb9);
+    execFile13 = promisify13(execFileCb10);
     RECORDER_POST_KILL_CONFIRM_MS = 2e3;
   }
 });
@@ -63196,8 +63409,8 @@ var init_target_device_authority = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/reload.js
-import { execFile as execFileCb10 } from "node:child_process";
-import { promisify as promisify13 } from "node:util";
+import { execFile as execFileCb11 } from "node:child_process";
+import { promisify as promisify14 } from "node:util";
 function captureClientState(client2) {
   const target = client2.connectedTarget;
   return {
@@ -63268,9 +63481,9 @@ async function resolveExactReloadTargetId(client2, captured, authorityTarget, ex
   return exactCandidates[0].id;
 }
 async function recoverAfterFailedReconnect(getClient2, setClient2, createClient2, captured, deps = {}, authorityTarget) {
-  const execFile26 = deps.execFile ?? defaultExecFile;
+  const execFile27 = deps.execFile ?? defaultExecFile;
   const sleep6 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
-  const resolveExactTargetId = deps.resolveExactTargetId ?? ((client2, state, target) => resolveExactReloadTargetId(client2, state, target, execFile26));
+  const resolveExactTargetId = deps.resolveExactTargetId ?? ((client2, state, target) => resolveExactReloadTargetId(client2, state, target, execFile27));
   const first = await forceReconnect(getClient2(), setClient2, createClient2, captured, authorityTarget, authorityTarget ? resolveExactTargetId : void 0);
   if (first.ok) {
     return {
@@ -63291,12 +63504,12 @@ async function recoverAfterFailedReconnect(getClient2, setClient2, createClient2
   const platform = authorityTarget.platform;
   try {
     if (platform === "ios") {
-      await execFile26("xcrun", ["simctl", "terminate", deviceId, bundleId], {
+      await execFile27("xcrun", ["simctl", "terminate", deviceId, bundleId], {
         timeout: 5e3
       });
       steps.push(`simctl terminate ${bundleId}:ok`);
     } else {
-      await execFile26("adb", ["-s", deviceId, "shell", "am", "force-stop", bundleId], {
+      await execFile27("adb", ["-s", deviceId, "shell", "am", "force-stop", bundleId], {
         timeout: 5e3
       });
       steps.push(`adb force-stop ${bundleId}:ok`);
@@ -63306,12 +63519,12 @@ async function recoverAfterFailedReconnect(getClient2, setClient2, createClient2
   }
   try {
     if (platform === "ios") {
-      await execFile26("xcrun", ["simctl", "launch", deviceId, bundleId], {
+      await execFile27("xcrun", ["simctl", "launch", deviceId, bundleId], {
         timeout: 8e3
       });
       steps.push(`simctl launch ${bundleId}:ok`);
     } else {
-      await execFile26("adb", [
+      await execFile27("adb", [
         "-s",
         deviceId,
         "shell",
@@ -63469,7 +63682,7 @@ var init_reload = __esm({
     init_maestro_validator();
     init_status();
     init_target_device_authority();
-    defaultExecFile = promisify13(execFileCb10);
+    defaultExecFile = promisify14(execFileCb11);
     sessionReloadCount = 0;
     SOFT_RECONNECT_DEADLINE_MS = 3e4;
     SOFT_RECONNECT_ATTEMPTS = 5;
@@ -66712,8 +66925,8 @@ var init_authority_gate = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/maestro-run.js
-import { execFile as execFileCb11 } from "node:child_process";
-import { promisify as promisify14 } from "node:util";
+import { execFile as execFileCb12 } from "node:child_process";
+import { promisify as promisify15 } from "node:util";
 import { existsSync as existsSync25, readFileSync as readFileSync25, writeFileSync as writeFileSync12 } from "node:fs";
 import { tmpdir as tmpdir9 } from "node:os";
 import { join as join33, dirname as dirname15 } from "node:path";
@@ -67144,7 +67357,7 @@ var init_maestro_run = __esm({
     init_maestro_runner_report();
     init_authority_gate();
     init_registry();
-    defaultExecFile2 = promisify14(execFileCb11);
+    defaultExecFile2 = promisify15(execFileCb12);
     MaestroStageExecutionError = class extends Error {
       completedResults;
       stageError;
@@ -67600,8 +67813,8 @@ var init_maestro_invoke = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/engine-pin.js
-import { execFile as execFileCb12, spawnSync as spawnSync3 } from "node:child_process";
-import { promisify as promisify15 } from "node:util";
+import { execFile as execFileCb13, spawnSync as spawnSync3 } from "node:child_process";
+import { promisify as promisify16 } from "node:util";
 import { createHash as createHash13 } from "node:crypto";
 import { readFileSync as readFileSync27 } from "node:fs";
 function compareVersions(a, b) {
@@ -67667,7 +67880,7 @@ function defaultCliPresent() {
   return r.status === 0 && r.stdout.trim().length > 0;
 }
 async function defaultExecVersion(bin) {
-  const { stdout, stderr } = await execFile13(bin, ["--version"], {
+  const { stdout, stderr } = await execFile14(bin, ["--version"], {
     timeout: 5e3,
     encoding: "utf8"
   });
@@ -67712,12 +67925,12 @@ function getEngineStatus(resolvers) {
   }
   return cachedStatus;
 }
-var execFile13, MAESTRO_RUNNER_PIN, cachedStatus;
+var execFile14, MAESTRO_RUNNER_PIN, cachedStatus;
 var init_engine_pin = __esm({
   "packages/rn-dev-agent-core/dist/domain/engine-pin.js"() {
     "use strict";
     init_maestro_invoke();
-    execFile13 = promisify15(execFileCb12);
+    execFile14 = promisify16(execFileCb13);
     MAESTRO_RUNNER_PIN = {
       version: "1.0.9",
       sha256: {
@@ -69626,8 +69839,8 @@ var init_error_log = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/native-errors.js
-import { execFile as execFileCb13 } from "node:child_process";
-import { promisify as promisify16 } from "node:util";
+import { execFile as execFileCb14 } from "node:child_process";
+import { promisify as promisify17 } from "node:util";
 function parseIOSLog(stdout) {
   const entries = [];
   for (const line of stdout.split("\n")) {
@@ -69675,7 +69888,7 @@ function dedupeByMessage(entries) {
   return out;
 }
 async function defaultRunIOS(sinceSeconds, deviceId) {
-  const { stdout } = await execFile14("xcrun", [
+  const { stdout } = await execFile15("xcrun", [
     "simctl",
     "spawn",
     deviceId,
@@ -69689,7 +69902,7 @@ async function defaultRunIOS(sinceSeconds, deviceId) {
   return stdout;
 }
 async function defaultRunAndroid(sinceSeconds, deviceId) {
-  const { stdout } = await execFile14("adb", ["-s", deviceId, "logcat", "-d", "-v", "time", "-t", `${sinceSeconds * 100}`, "*:E"], { timeout: 1e4, encoding: "utf8", maxBuffer: 10 * 1024 * 1024 });
+  const { stdout } = await execFile15("adb", ["-s", deviceId, "logcat", "-d", "-v", "time", "-t", `${sinceSeconds * 100}`, "*:E"], { timeout: 1e4, encoding: "utf8", maxBuffer: 10 * 1024 * 1024 });
   return stdout;
 }
 async function readNativeErrors(opts = {}) {
@@ -69759,12 +69972,12 @@ function createNativeErrorsHandler(getClient2) {
     }
   };
 }
-var execFile14, IOS_NOISE_PATTERNS, ANDROID_NOISE_PATTERNS;
+var execFile15, IOS_NOISE_PATTERNS, ANDROID_NOISE_PATTERNS;
 var init_native_errors = __esm({
   "packages/rn-dev-agent-core/dist/tools/native-errors.js"() {
     "use strict";
     init_utils();
-    execFile14 = promisify16(execFileCb13);
+    execFile15 = promisify17(execFileCb14);
     IOS_NOISE_PATTERNS = [
       /Cannot find native module/i,
       /Module \w+ is not a registered callable module/i,
@@ -70577,13 +70790,13 @@ var init_diagnostic_renderers = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/device-screenshot-resize.js
-import { execFile as execFileCb14 } from "node:child_process";
-import { promisify as promisify17 } from "node:util";
+import { execFile as execFileCb15 } from "node:child_process";
+import { promisify as promisify18 } from "node:util";
 import { statSync as statSync11 } from "node:fs";
 async function checkSipsAvailable(deps) {
   if (sipsAvailable !== null)
     return sipsAvailable;
-  const runner = deps.exec ?? execFile15;
+  const runner = deps.exec ?? execFile16;
   try {
     await runner("sips", ["--version"], { timeout: 1500 });
     sipsAvailable = true;
@@ -70600,7 +70813,7 @@ function parseSipsDimensions(stdout) {
   return { width: parseInt(wMatch[1], 10), height: parseInt(hMatch[1], 10) };
 }
 async function getDimensions(path, deps) {
-  const runner = deps.exec ?? execFile15;
+  const runner = deps.exec ?? execFile16;
   try {
     const { stdout } = await runner("sips", ["-g", "pixelWidth", "-g", "pixelHeight", path], {
       timeout: 5e3,
@@ -70639,7 +70852,7 @@ async function resizeWithSips(path, opts = {}, deps = {}) {
   }
   const fileSize = deps.fileSize ?? defaultFileSize;
   const originalBytes = fileSize(path);
-  const runner = deps.exec ?? execFile15;
+  const runner = deps.exec ?? execFile16;
   const quality = opts.quality ?? DEFAULT_QUALITY;
   try {
     await runner("sips", buildSipsResizeArgs(path, maxWidth, quality), { timeout: 1e4 });
@@ -70657,11 +70870,11 @@ async function resizeWithSips(path, opts = {}, deps = {}) {
     newBytes
   };
 }
-var execFile15, DEFAULT_MAX_WIDTH, DEFAULT_QUALITY, sipsAvailable, defaultFileSize;
+var execFile16, DEFAULT_MAX_WIDTH, DEFAULT_QUALITY, sipsAvailable, defaultFileSize;
 var init_device_screenshot_resize = __esm({
   "packages/rn-dev-agent-core/dist/tools/device-screenshot-resize.js"() {
     "use strict";
-    execFile15 = promisify17(execFileCb14);
+    execFile16 = promisify18(execFileCb15);
     DEFAULT_MAX_WIDTH = 800;
     DEFAULT_QUALITY = 85;
     sipsAvailable = null;
@@ -71199,8 +71412,8 @@ var init_recorder = __esm({
 
 // packages/rn-dev-agent-core/dist/tools/device-list.js
 import { mkdirSync as mkdirSync16 } from "node:fs";
-import { execFile as execFile16 } from "node:child_process";
-import { promisify as promisify18 } from "node:util";
+import { execFile as execFile17 } from "node:child_process";
+import { promisify as promisify19 } from "node:util";
 import { dirname as dirname17, join as join37, resolve as resolve10 } from "node:path";
 import { homedir as homedir9 } from "node:os";
 function parseSimctlDevicesAll(jsonText) {
@@ -71443,7 +71656,7 @@ var init_device_list = __esm({
     init_recorder();
     init_public_diagnostics();
     runAgentDeviceFn2 = runNative;
-    execFileAsync3 = promisify18(execFile16);
+    execFileAsync3 = promisify19(execFile17);
     defaultExec2 = (cmd, args) => execFileAsync3(cmd, args);
     execFn = defaultExec2;
     PathTraversalScreenshotError = class extends Error {
@@ -74391,8 +74604,8 @@ var init_cdp_replay_dispatch = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/blind-probe-gate.js
-import { execFile as execFileCb15 } from "node:child_process";
-import { promisify as promisify19 } from "node:util";
+import { execFile as execFileCb16 } from "node:child_process";
+import { promisify as promisify20 } from "node:util";
 function evaluateBlindProbeGate(input) {
   if (input.platform === "android")
     return { atRisk: null };
@@ -74428,7 +74641,7 @@ function parseIosRuntimeMajorForUdid(simctlJson, udid) {
   }
   return null;
 }
-async function getIosRuntimeMajorForUdid(udid, execFn2 = (cmd, args) => execFile17(cmd, args, { timeout: 5e3, encoding: "utf8" })) {
+async function getIosRuntimeMajorForUdid(udid, execFn2 = (cmd, args) => execFile18(cmd, args, { timeout: 5e3, encoding: "utf8" })) {
   if (runtimeCache.has(udid))
     return runtimeCache.get(udid) ?? null;
   try {
@@ -74440,11 +74653,11 @@ async function getIosRuntimeMajorForUdid(udid, execFn2 = (cmd, args) => execFile
     return null;
   }
 }
-var execFile17, WDA_BLIND_MIN_IOS_MAJOR, RECENT_WINDOW, runtimeCache;
+var execFile18, WDA_BLIND_MIN_IOS_MAJOR, RECENT_WINDOW, runtimeCache;
 var init_blind_probe_gate = __esm({
   "packages/rn-dev-agent-core/dist/domain/blind-probe-gate.js"() {
     "use strict";
-    execFile17 = promisify19(execFileCb15);
+    execFile18 = promisify20(execFileCb16);
     WDA_BLIND_MIN_IOS_MAJOR = 26;
     RECENT_WINDOW = 5;
     runtimeCache = /* @__PURE__ */ new Map();
@@ -75665,8 +75878,8 @@ var init_interact = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/collect-logs.js
-import { execFile as execFileCb16, spawn as spawn8 } from "node:child_process";
-import { promisify as promisify20 } from "node:util";
+import { execFile as execFileCb17, spawn as spawn8 } from "node:child_process";
+import { promisify as promisify21 } from "node:util";
 function normalizeTimestamp(ts) {
   if (!ts)
     return (/* @__PURE__ */ new Date()).toISOString();
@@ -75738,7 +75951,7 @@ function buildIosLogStreamArgs(deviceId, pid) {
 async function resolveIosAppPid(deviceId, bundleId, signal) {
   let stdout;
   try {
-    ({ stdout } = await execFile18("xcrun", ["simctl", "spawn", deviceId, "launchctl", "list"], {
+    ({ stdout } = await execFile19("xcrun", ["simctl", "spawn", deviceId, "launchctl", "list"], {
       timeout: PID_PROBE_TIMEOUT_MS,
       signal
     }));
@@ -76102,13 +76315,13 @@ function createCollectLogsHandler(getClient2) {
     }
   };
 }
-var execFile18, SIGKILL_GRACE_MS3, PID_PROBE_TIMEOUT_MS, LOGCAT_RE, ANDROID_LEVEL_MAP;
+var execFile19, SIGKILL_GRACE_MS3, PID_PROBE_TIMEOUT_MS, LOGCAT_RE, ANDROID_LEVEL_MAP;
 var init_collect_logs = __esm({
   "packages/rn-dev-agent-core/dist/tools/collect-logs.js"() {
     "use strict";
     init_agent_device_wrapper();
     init_utils();
-    execFile18 = promisify20(execFileCb16);
+    execFile19 = promisify21(execFileCb17);
     SIGKILL_GRACE_MS3 = 1500;
     PID_PROBE_TIMEOUT_MS = 5e3;
     LOGCAT_RE = /^(\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2}\.\d{3})\s+(\d+)\s+\d+\s+([VDIWEFS])\s+([\w./-]+)\s*:\s*(.*)$/;
@@ -76125,8 +76338,8 @@ var init_collect_logs = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/device-permission.js
-import { execFile as execFile19 } from "node:child_process";
-import { promisify as promisify21 } from "node:util";
+import { execFile as execFile20 } from "node:child_process";
+import { promisify as promisify22 } from "node:util";
 function escapeRegex2(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -76277,7 +76490,7 @@ var init_device_permission = __esm({
     "use strict";
     init_utils();
     init_maestro_validator();
-    execFileAsync4 = promisify21(execFile19);
+    execFileAsync4 = promisify22(execFile20);
     EXEC_TIMEOUT = 1e4;
     IOS_PERMISSIONS = {
       notifications: "notifications",
@@ -77143,8 +77356,8 @@ var init_device_system_dialog = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/device-deeplink.js
-import { execFile as execFileCb17 } from "node:child_process";
-import { promisify as promisify22 } from "node:util";
+import { execFile as execFileCb18 } from "node:child_process";
+import { promisify as promisify23 } from "node:util";
 function iosDeeplinkCommandArgs(url, deviceId) {
   if (!deviceId)
     throw new Error("DEVICE_AUTHORITY_MISMATCH: exact iOS deviceId is required");
@@ -77152,7 +77365,7 @@ function iosDeeplinkCommandArgs(url, deviceId) {
 }
 async function openIosDeeplink(url, deviceId) {
   try {
-    const { stdout, stderr } = await execFile20("xcrun", iosDeeplinkCommandArgs(url, deviceId), {
+    const { stdout, stderr } = await execFile21("xcrun", iosDeeplinkCommandArgs(url, deviceId), {
       timeout: EXEC_TIMEOUT_MS
     });
     return okResult({
@@ -77196,7 +77409,7 @@ function androidDeeplinkCommandArgs(url, packageName, deviceId) {
 async function openAndroidDeeplink(url, packageName, deviceId) {
   const args = androidDeeplinkCommandArgs(url, packageName, deviceId);
   try {
-    const { stdout, stderr } = await execFile20("adb", args, { timeout: EXEC_TIMEOUT_MS });
+    const { stdout, stderr } = await execFile21("adb", args, { timeout: EXEC_TIMEOUT_MS });
     const output = (stdout || stderr).trim();
     if (/Error:|Error type \d|Warning: Activity not started|No Activity found|Status: error/i.test(output)) {
       return failResult(`adb am start reported error: ${output.slice(0, 300)}`, {
@@ -77281,7 +77494,7 @@ function createDeviceDeeplinkHandler(deps = {}) {
     }
   };
 }
-var execFile20, EXEC_TIMEOUT_MS;
+var execFile21, EXEC_TIMEOUT_MS;
 var init_device_deeplink = __esm({
   "packages/rn-dev-agent-core/dist/tools/device-deeplink.js"() {
     "use strict";
@@ -77291,16 +77504,16 @@ var init_device_deeplink = __esm({
     init_dev_client_picker();
     init_device_system_dialog();
     init_authority_gate();
-    execFile20 = promisify22(execFileCb17);
+    execFile21 = promisify23(execFileCb18);
     EXEC_TIMEOUT_MS = 1e4;
   }
 });
 
 // packages/rn-dev-agent-core/dist/tools/device-record.js
-import { execFile as execFile21 } from "node:child_process";
+import { execFile as execFile22 } from "node:child_process";
 import { createHash as createHash16 } from "node:crypto";
 import { existsSync as existsSync31 } from "node:fs";
-import { promisify as promisify23 } from "node:util";
+import { promisify as promisify24 } from "node:util";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 import { dirname as dirname19, join as join40 } from "node:path";
 function parseAllBootedIosDevices(jsonText) {
@@ -77722,7 +77935,7 @@ var init_device_record = __esm({
     init_process_birth();
     init_runtime();
     init_process_cleanup();
-    execFileAsync5 = promisify23(execFile21);
+    execFileAsync5 = promisify24(execFile22);
     START_TIMEOUT_MS = 1e4;
     STATUS_TIMEOUT_MS = 5e3;
     GIF_TIMEOUT_MS = 6e4;
@@ -81136,8 +81349,8 @@ var init_nav_graph = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/auto-login.js
-import { execFile as execFileCb18 } from "node:child_process";
-import { promisify as promisify24 } from "node:util";
+import { execFile as execFileCb19 } from "node:child_process";
+import { promisify as promisify25 } from "node:util";
 import { existsSync as existsSync33, readFileSync as readFileSync31, writeFileSync as writeFileSync16, readdirSync as readdirSync10 } from "node:fs";
 import { join as join43 } from "node:path";
 import { homedir as homedir10 } from "node:os";
@@ -81268,7 +81481,7 @@ async function handleAutoLogin(client2, opts = {}) {
     };
   }
   try {
-    await runFlowParked(() => execFile22(runnerPath, ["--platform", platform, "test", wrapperPath], {
+    await runFlowParked(() => execFile23(runnerPath, ["--platform", platform, "test", wrapperPath], {
       timeout: 12e4,
       encoding: "utf8"
     }), {
@@ -81302,7 +81515,7 @@ async function handleAutoLogin(client2, opts = {}) {
     flow: flowPath
   };
 }
-var execFile22, AUTH_ROUTE_PATTERNS, LOGIN_FLOW_PRIORITY;
+var execFile23, AUTH_ROUTE_PATTERNS, LOGIN_FLOW_PRIORITY;
 var init_auto_login = __esm({
   "packages/rn-dev-agent-core/dist/tools/auto-login.js"() {
     "use strict";
@@ -81311,7 +81524,7 @@ var init_auto_login = __esm({
     init_project_config();
     init_maestro_validator();
     init_maestro_run();
-    execFile22 = promisify24(execFileCb18);
+    execFile23 = promisify25(execFileCb19);
     AUTH_ROUTE_PATTERNS = [
       "login",
       "signin",
@@ -81532,8 +81745,8 @@ var init_connection = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/restart.js
-import { execFile as execFileCb19 } from "node:child_process";
-import { promisify as promisify25 } from "node:util";
+import { execFile as execFileCb20 } from "node:child_process";
+import { promisify as promisify26 } from "node:util";
 function safeSimctlTarget(deviceId) {
   return deviceId && SIMULATOR_UDID_RE.test(deviceId) ? deviceId : null;
 }
@@ -81562,7 +81775,7 @@ async function resolveExactRestartTargetId(client2, input, execute2) {
   return exactCandidates[0].id;
 }
 function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) {
-  const execFile26 = deps.execFile ?? defaultExecFile3;
+  const execFile27 = deps.execFile ?? defaultExecFile3;
   const stopFastRunner2 = deps.stopFastRunner ?? stopFastRunner;
   const unbindRunner = deps.unbindRunner ?? (() => {
   });
@@ -81570,7 +81783,7 @@ function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) 
   const probeAppInstalledFn = deps.probeAppInstalled ?? probeAppInstalled;
   const snapshotHintFn = deps.snapshotHint ?? snapshotHintForBundleId;
   const resetDetachedBudgetFn = deps.resetDetachedBudget ?? resetDetachedRecoveryCounter;
-  const resolveExactTargetId = deps.resolveExactTargetId ?? ((client2, input) => resolveExactRestartTargetId(client2, input, execFile26));
+  const resolveExactTargetId = deps.resolveExactTargetId ?? ((client2, input) => resolveExactRestartTargetId(client2, input, execFile27));
   async function doRestart(args) {
     try {
       logger.info("MCP", `cdp_restart: in-process state reset requested (hardReset=${!!args.hardReset})`);
@@ -81603,7 +81816,7 @@ function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) 
             return failResult("cdp_restart refused a non-exact iOS simulator identifier", "DEVICE_AUTHORITY_MISMATCH");
           }
           try {
-            await execFile26("xcrun", ["simctl", "terminate", targetUdid, bundleId], {
+            await execFile27("xcrun", ["simctl", "terminate", targetUdid, bundleId], {
               timeout: 5e3
             });
             hardResetSteps.push(`simctl terminate ${bundleId}:ok`);
@@ -81611,7 +81824,7 @@ function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) 
             hardResetSteps.push(`simctl terminate:warn(${err instanceof Error ? err.message : err})`);
           }
           try {
-            await execFile26("xcrun", ["simctl", "launch", targetUdid, bundleId], { timeout: 8e3 });
+            await execFile27("xcrun", ["simctl", "launch", targetUdid, bundleId], { timeout: 8e3 });
             hardResetSteps.push(`simctl launch ${bundleId}:ok`);
           } catch (err) {
             const msg3 = err instanceof Error ? err.message : String(err);
@@ -81631,11 +81844,11 @@ function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) 
           await sleep6(3e3);
         } else if (bundleId && targetPlatform === "android") {
           try {
-            await execFile26("adb", ["-s", args.deviceId, "shell", "am", "force-stop", bundleId], {
+            await execFile27("adb", ["-s", args.deviceId, "shell", "am", "force-stop", bundleId], {
               timeout: 5e3
             });
             hardResetSteps.push(`adb force-stop ${bundleId}:ok`);
-            await execFile26("adb", [
+            await execFile27("adb", [
               "-s",
               args.deviceId,
               "shell",
@@ -81734,7 +81947,7 @@ var init_restart = __esm({
     init_maestro_validator();
     init_status();
     init_target_device_authority();
-    defaultExecFile3 = promisify25(execFileCb19);
+    defaultExecFile3 = promisify26(execFileCb20);
     SIMULATOR_UDID_RE = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
     inflightRestart = null;
   }
@@ -81893,8 +82106,8 @@ var init_maestro_generate = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/maestro-test-all.js
-import { execFile as execFileCb20 } from "node:child_process";
-import { promisify as promisify26 } from "node:util";
+import { execFile as execFileCb21 } from "node:child_process";
+import { promisify as promisify27 } from "node:util";
 import { existsSync as existsSync35, readdirSync as readdirSync11, readFileSync as readFileSync32, writeFileSync as writeFileSync18 } from "node:fs";
 import { join as join45 } from "node:path";
 import { tmpdir as tmpdir12 } from "node:os";
@@ -82016,7 +82229,7 @@ function createMaestroTestAllHandler() {
           writeFileSync18(safeFlowFile, buildMaestroFlow(parsedAppId !== void 0 ? { appId: parsedAppId } : {}, [
             ...commands
           ]), "utf-8");
-          return execFile23(flowDispatch.binPath, finalArgs, {
+          return execFile24(flowDispatch.binPath, finalArgs, {
             timeout: remainingTimeout,
             encoding: "utf8",
             maxBuffer: 10 * 1024 * 1024
@@ -82114,7 +82327,7 @@ function createMaestroTestAllHandler() {
     return okResult(summary);
   };
 }
-var execFile23;
+var execFile24;
 var init_maestro_test_all = __esm({
   "packages/rn-dev-agent-core/dist/tools/maestro-test-all.js"() {
     "use strict";
@@ -82130,7 +82343,7 @@ var init_maestro_test_all = __esm({
     init_maestro_runner_report();
     init_authority_gate();
     init_registry();
-    execFile23 = promisify26(execFileCb20);
+    execFile24 = promisify27(execFileCb21);
   }
 });
 
@@ -83876,11 +84089,11 @@ var init_jpeg_stream = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/observability/mirror/sources.js
-import { spawn as spawn9, execFile as execFile24 } from "node:child_process";
+import { spawn as spawn9, execFile as execFile25 } from "node:child_process";
 import { readFile as readFile2, unlink } from "node:fs/promises";
 import { tmpdir as tmpdir14 } from "node:os";
 import { join as join51 } from "node:path";
-async function probeIdbClient(execFileFn = execFile24) {
+async function probeIdbClient(execFileFn = execFile25) {
   return new Promise((resolve12) => {
     execFileFn("idb", ["--help"], { timeout: 3e3 }, (err) => {
       if (!err)
@@ -83895,7 +84108,7 @@ function isEnoent(err) {
 function defaultExecJpeg(cmd, args, signal) {
   const outPath = args[args.length - 1];
   return new Promise((resolve12, reject) => {
-    execFile24(cmd, args, { maxBuffer: 16 * 1024 * 1024, timeout: 1e4, signal }, (err) => {
+    execFile25(cmd, args, { maxBuffer: 16 * 1024 * 1024, timeout: 1e4, signal }, (err) => {
       if (err) {
         reject(err);
         return;
@@ -86166,8 +86379,8 @@ __export(index_exports, {
 });
 import { createHash as createHash23, createHmac as createHmac5, randomUUID as randomUUID10 } from "node:crypto";
 import { readFileSync as readFileSync41, rmSync as rmSync11 } from "node:fs";
-import { execFile as execFile25 } from "node:child_process";
-import { promisify as promisify27 } from "node:util";
+import { execFile as execFile26 } from "node:child_process";
+import { promisify as promisify28 } from "node:util";
 import { fileURLToPath as fileURLToPath7 } from "node:url";
 import { dirname as dirname25, join as join57 } from "node:path";
 function trackedTool(name, desc, schema, handler) {
@@ -86803,7 +87016,7 @@ var init_index = __esm({
       const status = authorityRuntime.status();
       return configureClientLifecycle(status.available && status.bindings.bundle ? client.createReplacement(port) : new CDPClient(port));
     };
-    execFileP = promisify27(execFile25);
+    execFileP = promisify28(execFile26);
     mustOk = (res, what) => {
       const env = JSON.parse(res.content[0].text);
       if (env.ok === false)
@@ -87550,13 +87763,14 @@ var init_index = __esm({
         return false;
       }
     }));
-    trackedTool("device_find", 'Find a UI element by visible text and optionally interact with it. Use action="click" to tap, omit for find-only. Returns element ref for use with device_press/device_fill. Requires an open session. For overlapping labels (e.g. "Property damaged" vs "Property lost"), pass exact=true for strict match or index=N to pick the Nth candidate directly \u2014 both short-circuit AMBIGUOUS_MATCH. If AMBIGUOUS_MATCH still occurs, the result includes a candidates[] array with refs you can pass to device_press.', {
+    trackedTool("device_find", 'Find a UI element by visible text and optionally interact with it. Android matching is app-window-only by default; includeSystemUi=true explicitly allows system chrome and may leave the app. Use action="click" to tap, omit for find-only. Returns element ref for use with device_press/device_fill. Requires an open session. For overlapping labels (e.g. "Property damaged" vs "Property lost"), pass exact=true for strict match or index=N to pick the Nth candidate directly \u2014 both short-circuit AMBIGUOUS_MATCH. If AMBIGUOUS_MATCH still occurs, the result includes a candidates[] array with refs you can pass to device_press.', {
       text: external_exports.string().describe("Visible text, accessibility label, or identifier to find"),
       action: external_exports.string().optional().describe('Action to perform: "click" to tap, omit for search-only'),
       exact: external_exports.boolean().optional().describe("Require exact label match (case-sensitive). Skips fuzzy matching entirely."),
-      index: external_exports.number().int().min(0).optional().describe("Pick the Nth candidate (0-based) when multiple elements match. Short-circuits AMBIGUOUS_MATCH.")
+      index: external_exports.number().int().min(0).optional().describe("Pick the Nth candidate (0-based) when multiple elements match. Short-circuits AMBIGUOUS_MATCH."),
+      includeSystemUi: external_exports.boolean().optional().describe("Include Android system UI in matching (default false; may leave the app).")
     }, createDeviceFindHandler(getClient));
-    trackedTool("device_press", 'Tap a UI element by its @ref from device_snapshot, or at explicit raw x/y coordinates. Pass exactly one target form. On iOS, a latest-snapshot Key/Keyboard ref is runner-validated against the current live keyboard and activated exactly once (meta.keyboardGuard="keyboard_target"); stale, forged, missing-keyboard, or raw-coordinate targets never receive that exemption. Ordinary app-content taps dismiss only through a safe native hide/dismiss control or optional JS tier, then refresh and uniquely re-resolve before one tap. Supports double-tap, repeated taps, long hold, and post-tap focus settle. Requires an open session. Stale ordinary app @refs self-heal by identity re-resolution (meta.reResolved); stale iOS Key/Keyboard refs refuse with KEYBOARD_TARGET_STALE and mutation:none. Swallowed ordinary taps auto-retry once, but validated keyboard targets and keyboard/transport recovery never replay.', {
+    trackedTool("device_press", 'Tap a UI element by its @ref from device_snapshot, or at explicit raw x/y coordinates. Pass exactly one target form. On iOS, a latest-snapshot Key/Keyboard ref is runner-validated against the current live keyboard and activated exactly once (meta.keyboardGuard="keyboard_target"); stale, forged, missing-keyboard, or raw-coordinate targets never receive that exemption. Ordinary app-content taps dismiss only through a safe native hide/dismiss control or optional JS tier, then refresh and uniquely re-resolve before one tap. Supports double-tap, repeated taps, long hold, and post-tap focus settle. Requires an open session. Stale ordinary app @refs self-heal by identity re-resolution (meta.reResolved); stale iOS Key/Keyboard refs refuse with KEYBOARD_TARGET_STALE and mutation:none. A command is never replayed after a possible dispatch; uncertain Android effects fail with one-attempt typed uncertainty. On Android the tap is scoped to the owned app window: a @ref belonging to another package (system navigation, IME, dialogs) is refused with OUTSIDE_APP_WINDOW \u2014 use device_find with includeSystemUi=true and action="click" for system UI.', {
       ref: external_exports.string().optional().describe('Element ref from device_snapshot (e.g. "e3" or "@e3"). Omit when using x/y.'),
       x: external_exports.number().optional().describe("Raw tap X coordinate; requires y and no ref"),
       y: external_exports.number().optional().describe("Raw tap Y coordinate; requires x and no ref"),
@@ -87565,7 +87779,7 @@ var init_index = __esm({
       holdMs: external_exports.number().int().min(0).max(1e4).optional().describe("Hold duration in ms (for long-press via ref)"),
       waitForFocusMs: external_exports.number().int().min(0).max(5e3).optional().describe("Sleep this many ms after tap to let keyboard focus settle \u2014 useful in sequential press+fill flows where focus would otherwise not propagate."),
       settleTimeoutMs: external_exports.number().int().min(500).max(3e4).optional().describe("Override the post-action settle budget in ms (default 6000). Settle waits for the UI to stabilize after the action; see meta.settle in the result. Budget knob only \u2014 RN_SETTLE=0 disables settle."),
-      retryIfNoChange: external_exports.boolean().optional().describe("Story 05: when an ordinary tap produces no UI change, one automatic re-tap fires by default. Validated iOS Key/Keyboard targets and transport/keyboard recovery are never replayed. Set false to disable for other taps (e.g. intentional no-op taps). RN_SELF_HEAL=0 disables globally.")
+      retryIfNoChange: external_exports.boolean().optional().describe("Deprecated compatibility option. Interactions are never automatically replayed after a possible dispatch; uncertainty is reported from the first attempt.")
     }, createDevicePressHandler(getClient));
     trackedTool("device_fill", "Fill one exact TextInput and report success only after stable exact read-back by the mutation owner. A unique controlled React TextInput uses one onChangeText dispatch and fiber read-back; an uncontrolled input uses one native runner transaction. Focus is skipped only when that exact owner is positively focused. Ambiguity, transformation, unreadability, staleness, target loss, secure or occluded targets, and timeout uncertainty hard-fail without automatic retyping, adb input, or Maestro fallback. Public results and diagnostics expose status and length metadata, never the requested or observed text. Requires an open session and connected helpers.", {
       ref: external_exports.string().describe('Input field ref from device_snapshot (e.g. "e5" or "@e5")'),
@@ -87591,7 +87805,7 @@ var init_index = __esm({
       x: external_exports.number().optional().describe("X coordinate (use with y for coordinate-based long press)"),
       y: external_exports.number().optional().describe("Y coordinate"),
       durationMs: external_exports.number().int().min(100).max(1e4).optional().describe("Hold duration in ms (default 1000)"),
-      retryIfNoChange: external_exports.boolean().optional().describe("Story 05: when the tap produces no UI change, one automatic re-tap fires by default. Set false to disable (e.g. intentional no-op taps). RN_SELF_HEAL=0 disables globally.")
+      retryIfNoChange: external_exports.boolean().optional().describe("Deprecated compatibility option. Interactions are never automatically replayed after a possible dispatch; uncertainty is reported from the first attempt.")
     }, createDeviceLongPressHandler(getClient));
     trackedTool("device_scroll", "Scroll the screen in a direction. Smoother than device_swipe for list scrolling. Requires an open session.", {
       direction: external_exports.enum(["up", "down", "left", "right"]).describe("Scroll direction"),

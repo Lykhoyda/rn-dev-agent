@@ -24,6 +24,7 @@ export const REQUIRED_IOS_COMMANDS = [
     'status',
 ];
 export const REQUIRED_IOS_FEATURES = ['EXACT_KEYBOARD_TARGET_GUARD'];
+export const REQUIRED_ANDROID_FEATURES = ['APP_SCOPED_EXACT_INTERACTION'];
 export const REQUIRED_ANDROID_COMMANDS = [
     'tap',
     'type',

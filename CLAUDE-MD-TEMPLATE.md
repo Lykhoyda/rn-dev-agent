@@ -315,7 +315,7 @@ error health.
 #### "I need to tap a button / fill an input"
 - **If you don't know the testID / @ref yet**: `device_snapshot` FIRST.
 - **Know the @ref** (from `device_snapshot`): `device_press(ref="@e3")`
-- **Know the visible text**: `device_find(text="Submit", action="click")` — finds and taps in one call
+- **Know the visible text**: `device_find(text="Submit", action="click")` — finds and taps in one call. On Android it matches only the app's own window; pass `includeSystemUi=true` to also match system chrome (status/navigation bar), which may leave the app.
 - **Fill a text input**: `device_fill(ref="@e5", text="hello@example.com")`
 - **Multiple steps at once**: `device_batch` — chain press/fill/swipe actions in one call. Its implicit final snapshot defaults to `salient` (actionable nodes only); pass `finalSnapshot: 'none'` for action-only batches you verify via `expect_*`/`cdp_store_state`, or `'full'` for the complete node list.
 - **Swipe/scroll**: `device_swipe`, `device_scroll`, `device_scrollintoview`
@@ -323,7 +323,7 @@ error health.
 - **NEVER** use `xcrun simctl` or `adb input` for UI interaction
 - **For KNOWN testIDs**: prefer `cdp_interact(testID=…)` (fiber-tree-resolved, no coordinate caching) OR `device_batch` with the `testID` field on find/press/fill (snapshot-resolved per call). Both eliminate the stale-ref-across-step-transitions failure mode. `cdp_interact` also resolves RNTL-style selectors — `role`/`name`/`text`/`placeholder` — and fails closed on ambiguity rather than picking the wrong element.
 - **For UNKNOWN elements** (need to discover what's on screen): `device_snapshot` first, then `device_press(ref="@eN")`.
-- Stale-`@ref` taps self-heal: the runner re-resolves by identity signature when the match is unique and retries a no-effect tap once (`meta.reResolved` / `meta.tapRetried`). Treat that as a safety net, not a license to reuse old refs — ambiguous re-resolution still fails with `STALE_REF`.
+- Stale-`@ref` taps self-heal: the runner re-resolves by identity signature when the match is unique (`meta.reResolved`), but a dispatched tap is never replayed when its effect is uncertain. Treat that as a safety net, not a license to reuse old refs — ambiguous re-resolution still fails with `STALE_REF`.
 
 #### "I need to navigate to a specific screen"
 - **Best option:** `cdp_nav_graph(action="go", screen="ProfileScreen")` — scans navigation graph, plans route, navigates in one call
@@ -445,7 +445,7 @@ Built-in reliability layers on `device_*` interactions (all default-ON, each wit
 | Layer | What it does | Surfaced as | Opt out |
 |---|---|---|---|
 | **Settle engine** | Every mutating `device_*` verb waits for the UI to actually stabilize (window-update probe / screenshot-static compare, snapshot-hash fallback) instead of fixed sleeps. `device_batch` settles between steps by default. | `meta.settle: {method, settled}` | `RN_SETTLE=0` global, `settle: false` per batch step, `settleTimeoutMs` budget knob |
-| **Self-healing taps** | A stale `@ref` re-resolves inline by identity signature (unique match only — ambiguous/absent → `STALE_REF` with candidates); a tap that produced no UI change retries exactly once, unless keyboard-guard or transport recovery already consumed that single retry budget (then it reports `meta.noUiChange` without re-firing); `device_batch` testID resolution refuses ambiguous matches (`AMBIGUOUS_TESTID`). | `meta.reResolved`, `meta.tapRetried`, `meta.noUiChange` | `RN_SELF_HEAL=0` global, `retryIfNoChange: false` per call |
+| **Self-healing taps** | A stale `@ref` re-resolves inline by identity signature (unique match only — ambiguous/absent → `STALE_REF` with candidates). Once a command may have been dispatched it is never replayed merely because effect observation is uncertain. On iOS an unchanged tap stays a success carrying `meta.noUiChange`; on Android it fails with `INTERACTION_EFFECT_UNVERIFIED` (`mutation: possible`, `attempts: 1`), and so does a tap whose effect cannot be probed. An Android gesture the runner could not safely actuate — including a same-window actionable control covering its owned point — fails before mutation with `INTERACTION_NOT_ACTUATED` (`mutation: none`). `device_batch` testID resolution refuses ambiguous matches (`AMBIGUOUS_TESTID`). | `meta.reResolved`, `meta.noUiChange` | `RN_SELF_HEAL=0` disables stale-ref healing; disabling settle opts out of effect observation |
 | **Keyboard guard** | A latest-snapshot iOS `Key`/`Keyboard` ref qualifies only when the runner retains the same generation/index/type/identity/frame and uniquely re-resolves that live keyboard target; it is activated once as `keyboard_target`. Raw, forged, stale, relaid-out, missing-keyboard, Button/Other, and case/region guesses never qualify. Ordinary app targets use only a native hide/dismiss button inside the keyboard or injected JS with hidden-state proof, then refresh/re-resolve and tap once; no automatic keyboard swipe or Return/Done/accessory action occurs. | `meta.keyboardGuard` (`keyboard_target` or `auto_dismissed`), `meta.keyboardAutoHeal`, `meta.via`, `meta.timings_ms.keyboardGuard` | — |
 
 Three consecutive no-change taps on distinct targets surface a wedged-runtime hint — reboot the simulator rather than blaming app code.

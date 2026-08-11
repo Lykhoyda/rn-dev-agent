@@ -7,7 +7,10 @@ import {
   _setFetchForTest,
   _setAndroidRunnerStateForTest,
 } from '../../dist/runners/rn-android-runner-client.js';
-import { REQUIRED_ANDROID_COMMANDS } from '../../dist/runners/protocol.js';
+import {
+  REQUIRED_ANDROID_COMMANDS,
+  REQUIRED_ANDROID_FEATURES,
+} from '../../dist/runners/protocol.js';
 
 afterEach(() => {
   _setAndroidRunnerStateForTest(null);
@@ -106,6 +109,7 @@ test('#243 runAndroid returns RN_ANDROID_RUNNER_DOWN (not bare "fetch failed") o
           ok: true,
           protocolVersion: 1,
           commands: [...REQUIRED_ANDROID_COMMANDS],
+          capabilities: [...REQUIRED_ANDROID_FEATURES],
         }),
       };
     }

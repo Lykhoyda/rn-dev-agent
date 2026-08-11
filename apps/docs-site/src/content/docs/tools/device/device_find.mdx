@@ -5,7 +5,7 @@ sidebar:
   order: 22
 ---
 
-Find a UI element by visible text and optionally interact with it. Use action="click" to tap, omit for find-only. Returns element ref for use with device_press/device_fill. Requires an open session. For overlapping labels (e.g. "Property damaged" vs "Property lost"), pass exact=true for strict match or index=N to pick the Nth candidate directly — both short-circuit AMBIGUOUS_MATCH. If AMBIGUOUS_MATCH still occurs, the result includes a candidates[] array with refs you can pass to device_press.
+Find a UI element by visible text and optionally interact with it. Android matching is app-window-only by default; includeSystemUi=true explicitly allows system chrome and may leave the app. Use action="click" to tap, omit for find-only. Returns element ref for use with device_press/device_fill. Requires an open session. For overlapping labels (e.g. "Property damaged" vs "Property lost"), pass exact=true for strict match or index=N to pick the Nth candidate directly — both short-circuit AMBIGUOUS_MATCH. If AMBIGUOUS_MATCH still occurs, the result includes a candidates[] array with refs you can pass to device_press.
 
 ## Parameters
 
@@ -15,6 +15,7 @@ Find a UI element by visible text and optionally interact with it. Use action="c
 | `action` | `unknown` | No |  |  | Action to perform: "click" to tap, omit for search-only |
 | `exact` | `unknown` | No |  |  | Require exact label match (case-sensitive). Skips fuzzy matching entirely. |
 | `index` | `unknown` | No |  | min: 0, integer |  |
+| `includeSystemUi` | `unknown` | No |  |  | Include Android system UI in matching (default false; may leave the app). |
 
 ## Usage
 
