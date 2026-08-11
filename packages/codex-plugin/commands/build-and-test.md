@@ -31,7 +31,11 @@ MCP tools are not inherited by spawned subagents. Use `rn-device-control` and
    connected, skip the build and continue to Phase B.
 4. Local mode: preview and confirm session integration, then run literal
    `pnpm ios` or `pnpm android`; the adapter owns exact device, Metro, and
-   build/install receipt injection.
+   build/install receipt injection. For Expo Android, keep the exact adb serial
+   as authority: the adapter uniquely maps it to Expo's model/AVD display name
+   only for `--device`, pins adb with `ANDROID_SERIAL`, and refuses
+   `EXPO_DEVICE_IDENTITY_MISMATCH` before Expo for missing, unauthorized,
+   duplicate, foreign, or drifted mappings.
 5. EAS mode:
    - validate profile with `[A-Za-z0-9_-]+`;
    - enter one shell scope, create one caller-owned artifact directory with

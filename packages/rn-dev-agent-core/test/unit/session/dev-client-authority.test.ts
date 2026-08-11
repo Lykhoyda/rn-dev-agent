@@ -75,6 +75,102 @@ test('dev-client pin opens only the declared URL on the exact device and binds i
   assert.equal(binding.sourceFidelity, 'not-proven');
 });
 
+test('Android staged client publishes only after marker proof and atomic precommit assertion', async () => {
+  const androidExpected = { ...expected, platform: 'android' };
+  const marker = buildSignedMetroMarker(androidExpected, 'signer');
+  const events: string[] = [];
+  const connection = {
+    targetId: 'android-target',
+    connectionGeneration: 4,
+    deviceId: 'emulator-5554',
+    client: {} as never,
+    assertActive: () => events.push('assert'),
+    run: async (operation) => {
+      events.push('marker-boundary');
+      return operation();
+    },
+    publish: () => events.push('publish'),
+    cancel: () => events.push('cancel'),
+  };
+
+  await pinExactDevClient(
+    {
+      ...androidExpected,
+      deviceId: 'emulator-5554',
+      metroPort: 8341,
+      runtimeKind: 'bare-react-native',
+      signerCapability: 'signer',
+    },
+    {
+      openUrl: async () => assert.fail('bare runtime must not open a URL'),
+      launchExactApp: async () => {},
+      acceptIosOpenDialog: async () => {},
+      connectExact: async () => connection,
+      readMarker: async () => {
+        events.push('marker');
+        return { status: 'signed', marker };
+      },
+      commitBundle: (_bundle, promotion) => {
+        events.push('transaction');
+        assert.equal(events.includes('publish'), false);
+        promotion.assertActive();
+        events.push('commit');
+        promotion.assertActive();
+        promotion.publish();
+      },
+    },
+  );
+
+  assert.deepEqual(events, [
+    'marker-boundary',
+    'marker',
+    'assert',
+    'transaction',
+    'assert',
+    'commit',
+    'assert',
+    'publish',
+  ]);
+});
+
+test('Android staged client cancellation leaves publication untouched when atomic commit fails', async () => {
+  const androidExpected = { ...expected, platform: 'android' };
+  const marker = buildSignedMetroMarker(androidExpected, 'signer');
+  const events: string[] = [];
+  await assert.rejects(
+    pinExactDevClient(
+      {
+        ...androidExpected,
+        deviceId: 'emulator-5554',
+        metroPort: 8341,
+        runtimeKind: 'bare-react-native',
+        signerCapability: 'signer',
+      },
+      {
+        openUrl: async () => {},
+        launchExactApp: async () => {},
+        acceptIosOpenDialog: async () => {},
+        connectExact: async () => ({
+          targetId: 'android-target',
+          connectionGeneration: 4,
+          deviceId: 'emulator-5554',
+          client: {} as never,
+          assertActive: () => {},
+          run: (operation) => operation(),
+          publish: () => events.push('publish'),
+          cancel: () => events.push('cancel'),
+        }),
+        readMarker: async () => ({ status: 'signed', marker }),
+        commitBundle: () => {
+          throw new Error('deadline expired at COMMIT');
+        },
+      },
+    ),
+    /deadline expired at COMMIT/,
+  );
+  assert.deepEqual(events, ['cancel']);
+});
+
 test('dev-client pin refuses any URL drift and never falls back to a picker row', async () => {
   await assert.rejects(
     pinExactDevClient(
@@ -99,6 +195,47 @@ test('dev-client pin refuses any URL drift and never falls back to a picker row'
         }),
         readMarker: async () => null,
       },
+    ),
+    /DEV_CLIENT_ENDPOINT_NOT_FOUND/,
+  );
+});
+
+test('dev-client pin refuses a one-sided dev-client URL instead of deriving the missing side', async () => {
+  const refusingDependencies = {
+    openUrl: async () => {
+      throw new Error('must not open');
+    },
+    launchExactApp: async () => {
+      throw new Error('must not launch');
+    },
+    launchExactAppWithInitialUrl: async () => {
+      throw new Error('must not launch');
+    },
+    acceptIosOpenDialog: async () => {},
+    connectExact: async () => ({
+      targetId: 'target-a',
+      connectionGeneration: 7,
+      deviceId: 'IOS-UUID',
+    }),
+    readMarker: async () => null,
+    readManagedManifest: async () => exactManifestResponse,
+  };
+  const base = {
+    ...expected,
+    deviceId: 'IOS-UUID',
+    metroPort: 8341,
+    runtimeKind: 'expo-dev-client' as const,
+    signerCapability: 'signer',
+  };
+
+  await assert.rejects(
+    pinExactDevClient({ ...base, devClientUrl: 'http://127.0.0.1:8341' }, refusingDependencies),
+    /DEV_CLIENT_ENDPOINT_NOT_FOUND/,
+  );
+  await assert.rejects(
+    pinExactDevClient(
+      { ...base, expectedDevClientUrl: 'http://127.0.0.1:8341' },
+      refusingDependencies,
     ),
     /DEV_CLIENT_ENDPOINT_NOT_FOUND/,
   );
@@ -137,7 +274,7 @@ test('bare RN pin launches the exact claimed app without inventing a dev-client 
   assert.equal(binding.devClientUrl, undefined);
 });
 
-test('receipted Expo pin verifies the managed manifest without a dev-client URL', async () => {
+test('receipted iOS Expo pin launches through the authority-bound Metro without a dev-client URL', async () => {
   const calls = [];
   const marker = buildSignedMetroMarker(expected, 'signer');
   const binding = await pinExactDevClient(
@@ -150,10 +287,13 @@ test('receipted Expo pin verifies the managed manifest without a dev-client URL'
     },
     {
       openUrl: async () => {
-        throw new Error('missing URL must launch the exact app');
+        throw new Error('missing URL must not use openurl');
       },
-      launchExactApp: async (platform, deviceId, appId) =>
-        calls.push(['launch', platform, deviceId, appId]),
+      launchExactApp: async () => {
+        throw new Error('Expo Dev Client must not be stranded by a bare app launch');
+      },
+      launchExactAppWithInitialUrl: async (deviceId, appId, initialUrl) =>
+        calls.push(['launch-with-initial-url', deviceId, appId, initialUrl]),
       acceptIosOpenDialog: async () => {},
       connectExact: async () => ({
         targetId: 'target-expo',
@@ -170,9 +310,35 @@ test('receipted Expo pin verifies the managed manifest without a dev-client URL'
 
   assert.deepEqual(calls, [
     ['manifest', '127.0.0.1', 8341],
-    ['launch', 'ios', 'IOS-UUID', 'com.example.app'],
+    ['launch-with-initial-url', 'IOS-UUID', 'com.example.app', 'http://127.0.0.1:8341'],
   ]);
   assert.equal(binding.targetId, 'target-expo');
+  assert.equal(binding.devClientUrl, undefined, 'a bare Metro URL is not a dev-client deep link');
+  assert.equal(binding.launchMethod, 'app');
+});
+
+test('iOS Expo pin refuses when no authority-bound Metro port exists', async () => {
+  await assert.rejects(
+    pinExactDevClient(
+      {
+        ...expected,
+        deviceId: 'IOS-UUID',
+        metroPort: undefined as unknown as number,
+        runtimeKind: 'expo-dev-client',
+        signerCapability: 'signer',
+      },
+      {
+        openUrl: async () => assert.fail('must not open a URL'),
+        launchExactApp: async () => assert.fail('must not bare-launch the app'),
+        launchExactAppWithInitialUrl: async () => assert.fail('must not derive without authority'),
+        acceptIosOpenDialog: async () => {},
+        connectExact: async () => assert.fail('must not connect without Metro authority'),
+        readMarker: async () => null,
+        readManagedManifest: async () => assert.fail('must not guess a manifest endpoint'),
+      },
+    ),
+    /DEV_CLIENT_ENDPOINT_NOT_FOUND: authority-bound Metro port is unavailable/,
+  );
 });
 
 test('loader or error targets remain rejected until the exact runtime exposes its signed marker', async () => {

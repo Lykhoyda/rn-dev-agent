@@ -46,10 +46,18 @@ path.
 
 ## Passive environment checklist
 
+Resolve `APP_ROOT` to the exact existing target React Native app directory before
+starting the checklist. Use the app selected by the user or the uniquely matching
+app from the available project evidence; in a monorepo, use the nested app
+directory rather than the repository root. If multiple candidates remain, ask
+which app is authoritative. Never run the source-declaration probe with
+`APP_ROOT` unset or empty.
+
 Read/report without mutation:
 
 | Check | Passive evidence | Guidance only |
 |---|---|---|
+| Source declaration | `git -C "$APP_ROOT" rev-parse --show-toplevel`; for a non-Git app root, `RN_DEV_AGENT_DECLARED_ROOT` and `RN_DEV_AGENT_DECLARED_MANIFESTS` in the supervisor environment | Report the missing declaration and point to the [session-authority contract](https://lykhoyda.github.io/rn-dev-agent/session-authority/#what-each-source-identity-proves) |
 | Node | `node --version` | Node 22.18+ LTS command if missing/old |
 | Core package | selected package runtime files | marketplace refresh/materialization |
 | iOS runner | packaged Xcode project/artifact presence | one-time build command |
@@ -59,12 +67,18 @@ Read/report without mutation:
 | Metro | `rn_session` and passive `cdp_status` reads | integrated package script |
 | CDP/app | prior supplied observation only | active `check-env` later |
 | ffmpeg/idb | version/help and install-state reads | exact install commands |
-| physical device | prerequisite file/tool reads | signing/pairing guidance |
+| physical device | list-only readiness plus pre-existing Android reverse-forward reads | signing/pairing guidance; session authority is the sole reverse-forward writer |
 | Vercel rules | packaged rules index/checker presence | refresh package if missing |
 | auto-connect | environment/project config read | informational only |
 
+Read the source-declaration row first: it is the only row that can fail before a
+session exists at all. Report `NON_GIT_MANIFEST_REQUIRED` before setup or build,
+then defer declaration requirements to the
+[session-authority contract](https://lykhoyda.github.io/rn-dev-agent/session-authority/#what-each-source-identity-proves).
+
 Doctor never runs a runner build, installer, update, MCP app call, Observe
-control, or cleanup. It prints commands for later user confirmation.
+control, cleanup, or `adb reverse` mutation. It reports pre-existing foreign
+forwards truthfully and prints commands for later user confirmation.
 
 ## Setup routing
 

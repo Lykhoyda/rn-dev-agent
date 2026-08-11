@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, openSync, writeSync, closeSync, readFileSync, unlinkSync, writeFileSync, } from 'node:fs';
 import { tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
-const DEFAULT_STALE_MS = 90_000;
+export const DEVICE_LOCK_STALE_MS = 90_000;
 function defaultProcessAlive(pid) {
     try {
         process.kill(pid, 0);
@@ -53,7 +53,7 @@ export class DeviceLock {
         this.version = opts.version;
         this.clock = opts.clock ?? Date.now;
         this.processAlive = opts.processAlive ?? defaultProcessAlive;
-        this.staleMs = opts.staleMs ?? DEFAULT_STALE_MS;
+        this.staleMs = opts.staleMs ?? DEVICE_LOCK_STALE_MS;
         this.lockPath = join(this.tmpDir, `rn-dev-agent-device-${uid}-${this.platform}-${this.deviceId}.lock`);
     }
     acquire() {

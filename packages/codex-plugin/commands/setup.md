@@ -22,6 +22,12 @@ passive `rn-setup` checks. Do not install/update/reinstall, build a runner, call
 in this phase. Present independent host/install/materialization/MCP/schema/task
 axes and ordered user-confirmed recovery commands.
 
+Abort project onboarding for a non-Git app root with a missing
+`RN_DEV_AGENT_DECLARED_ROOT` or `RN_DEV_AGENT_DECLARED_MANIFESTS` declaration.
+Name the missing variable and point to the
+[session-authority contract](https://lykhoyda.github.io/rn-dev-agent/session-authority/#what-each-source-identity-proves)
+before any injection or build.
+
 Abort project onboarding for missing Node/runtime/package files. Device, Metro,
 CDP, ffmpeg/idb, and runner build readiness may be deferred with exact
 instructions. If recovery changes plugin state externally, require Codex

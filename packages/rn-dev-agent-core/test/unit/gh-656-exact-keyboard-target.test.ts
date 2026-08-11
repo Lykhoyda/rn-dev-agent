@@ -95,11 +95,15 @@ test('GH-656: old generation and noncanonical types cannot seed a keyboard descr
   }
 });
 
-test('GH-656: exact keyboard refs are ineligible for hierarchy no-change replay', () => {
+test('GH-656: keyboard refs skip effect verification while ordinary taps are never replayed', () => {
   seed();
-  assert.equal(tapRetryPolicy(['press', '@e7'], 'tap', 25, 617, {}).eligible, false);
+  const keyboard = tapRetryPolicy(['press', '@e7'], 'tap', 25, 617, {});
+  assert.equal(keyboard.eligible, false);
+  assert.equal(keyboard.verificationRequired, false);
   seed('Button');
-  assert.equal(tapRetryPolicy(['press', '@e7'], 'tap', 25, 617, {}).eligible, true);
+  const ordinary = tapRetryPolicy(['press', '@e7'], 'tap', 25, 617, {});
+  assert.equal(ordinary.eligible, false);
+  assert.equal(ordinary.verificationRequired, true);
 });
 
 test('GH-656: iOS feature compatibility rejects old swipe-capable artifacts only when required', () => {

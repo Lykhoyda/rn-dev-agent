@@ -511,6 +511,21 @@ function isOk(result: ToolResult): boolean {
   }
 }
 
+export function mustStopBatchAfterFillFailure(
+  mutation: unknown,
+): mutation is 'observed' | 'possible' {
+  return mutation === 'observed' || mutation === 'possible';
+}
+
+function extractMutation(result: ToolResult): unknown {
+  try {
+    const parsed = JSON.parse(result.content[0].text) as { meta?: { mutation?: unknown } };
+    return parsed.meta?.mutation;
+  } catch {
+    return undefined;
+  }
+}
+
 function extractData(result: ToolResult): unknown {
   try {
     const parsed = JSON.parse(result.content[0].text) as { data?: unknown };
@@ -596,8 +611,8 @@ export function createDeviceBatchHandler(
             meta?: Record<string, unknown>;
           };
           stepResult.error = parsed.error;
-          stepResult.code = parsed.code;
-          stepResult.meta = parsed.meta;
+          if (parsed.code) stepResult.code = parsed.code;
+          if (parsed.meta) stepResult.meta = parsed.meta;
         } catch {
           /* ignore */
         }
@@ -620,9 +635,11 @@ export function createDeviceBatchHandler(
       // start a later OTP/form fill behind a timed-out mutation: that is the
       // interleaving boundary. Timeout therefore overrides optional and
       // continueOnError, while ordinary failures retain their legacy policy.
-      const possibleFillFailure =
-        !success && step.action === 'fill' && stepResult.meta?.mutation === 'possible';
-      if (!success && (!step.optional || stepTimedOut || possibleFillFailure)) {
+      const uncertainFillMutation =
+        !success &&
+        step.action === 'fill' &&
+        mustStopBatchAfterFillFailure(extractMutation(result));
+      if (!success && (!step.optional || stepTimedOut || uncertainFillMutation)) {
         // Capture failure screenshot regardless of continueOnError so the
         // diagnostic trail isn't lost.
         if (screenshotOn === 'failure' || screenshotOn === 'each') {
@@ -637,7 +654,7 @@ export function createDeviceBatchHandler(
           }
         }
 
-        if (continueOnError && !stepTimedOut && !possibleFillFailure) {
+        if (continueOnError && !stepTimedOut && !uncertainFillMutation) {
           // Phase 125: record the failure and proceed. failedStep stays null
           // so the batch returns success-shape with failure_count populated.
           failureRecords.push(stepResult);

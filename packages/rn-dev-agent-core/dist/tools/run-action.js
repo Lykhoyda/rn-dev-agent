@@ -40,7 +40,22 @@ import { SessionAuthorityError } from '../session/registry.js';
 import { isExactPresent, runCdpReplay, firstReplayTestId, } from './cdp-replay-dispatch.js';
 import { UnsupportedStepError } from '../domain/cdp-flow-replay.js';
 import { evaluateBlindProbeGate } from '../domain/blind-probe-gate.js';
-import { claimManagedNativeOriginAuthority, completeManagedRunnerParkAuthority, completeManagedNativeOriginAuthority, relaunchManagedNativeOriginApp, } from '../session/authority-gate.js';
+import { claimManagedNativeOriginAuthority, completeManagedRunnerParkAuthority, completeManagedNativeOriginAuthority, reissueManagedInstallAuthority, relaunchManagedNativeOriginApp, reproveManagedNativeOrigin, } from '../session/authority-gate.js';
+import { getWorkerAuthorityRuntime } from '../session/runtime.js';
+import { flowUsesClearState, resolveIosAppFile } from './resolve-ios-app-file.js';
+/** GH #705: the session's attested install receipt, or null outside a session. */
+function boundInstallReceipt() {
+    try {
+        const status = getWorkerAuthorityRuntime().status();
+        if (!status.available)
+            return null;
+        const install = status.bindings.install;
+        return install ?? null;
+    }
+    catch {
+        return null;
+    }
+}
 /**
  * Map a parsed Maestro failure kind to an `ActionFailureCode` (for
  * RunRecord telemetry) and a `ToolErrorCode` (for the failResult
@@ -240,6 +255,11 @@ export function createRunActionHandler(deps = {}) {
     const claimNativeOrigin = deps.claimNativeOrigin ?? claimManagedNativeOriginAuthority;
     const completeNativeOrigin = deps.completeNativeOrigin ?? completeManagedNativeOriginAuthority;
     const relaunchManagedApp = deps.relaunchManagedApp ?? relaunchManagedNativeOriginApp;
+    const reproveManagedOrigin = deps.reproveManagedOrigin ?? reproveManagedNativeOrigin;
+    const reissueInstallReceipt = deps.reissueInstallReceipt ?? reissueManagedInstallAuthority;
+    const installReceipt = deps.installReceipt ?? boundInstallReceipt;
+    const resolveAppFile = deps.resolveAppFile ??
+        ((appId, deviceId) => resolveIosAppFile(appId, { deviceId }));
     return async (args) => {
         if (!args.actionId || typeof args.actionId !== 'string') {
             return failResult('cdp_run_action requires actionId', 'BAD_FILENAME');
@@ -279,6 +299,18 @@ export function createRunActionHandler(deps = {}) {
         const maestroDeviceId = (!args.platform || activeTarget?.platform === args.platform) && activeTarget?.deviceId
             ? activeTarget.deviceId
             : undefined;
+        // GH #705: a clearState flow uninstalls the app, so Maestro needs the
+        // bundle to reinstall from. Resolve it off the session's attested install
+        // receipt — the exact device and appId it was signed for — so the
+        // "Pass appFile=<path>" advice is followable through this tool.
+        const receipt = args.appFile ? null : installReceipt();
+        const appFile = args.appFile ??
+            (flowUsesClearState(action.body) &&
+                receipt?.platform === 'ios' &&
+                typeof receipt.appId === 'string' &&
+                typeof receipt.deviceId === 'string'
+                ? (resolveAppFile(receipt.appId, receipt.deviceId) ?? undefined)
+                : undefined);
         // GH #397: deviceId threading. Handler-scoped (not inside the try) because
         // the outer catch also persists a RunRecord and must carry the device too.
         let probeDeviceId = null;
@@ -421,13 +453,16 @@ export function createRunActionHandler(deps = {}) {
                 flowPath: action.filePath,
                 platform: args.platform,
                 appId: args.appId,
+                ...(appFile ? { appFile } : {}),
                 deviceId: maestroDeviceId,
                 timeoutMs,
                 params: args.params,
                 claimNativeOrigin: () => claimNativeOrigin(args),
                 completeNativeOrigin: (targetExpected) => completeNativeOrigin(args, targetExpected),
                 relaunchManagedApp: () => relaunchManagedApp(args),
+                reproveManagedOrigin: () => reproveManagedOrigin(args),
                 completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
+                reissueInstallReceipt: () => reissueInstallReceipt(args),
             });
             const firstAttemptMs = Date.now() - tBeforeFirst;
             const firstEnv = parseEnvelope(firstResult, 'maestro_run');
@@ -762,13 +797,16 @@ export function createRunActionHandler(deps = {}) {
                 flowPath: reloadedAction.filePath,
                 platform: args.platform,
                 appId: args.appId,
+                ...(appFile ? { appFile } : {}),
                 deviceId: maestroDeviceId,
                 timeoutMs,
                 params: args.params,
                 claimNativeOrigin: () => claimNativeOrigin(args),
                 completeNativeOrigin: (targetExpected) => completeNativeOrigin(args, targetExpected),
                 relaunchManagedApp: () => relaunchManagedApp(args),
+                reproveManagedOrigin: () => reproveManagedOrigin(args),
                 completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
+                reissueInstallReceipt: () => reissueInstallReceipt(args),
             });
             const retryMs = Date.now() - tBeforeRetry;
             const retryEnv = parseEnvelope(retryResult, 'maestro_run');

@@ -2890,6 +2890,31 @@ test('bounded CAS recovery restores a file captured during worker timeout', () =
   }
 });
 
+test('a bound operation slower than five seconds commits instead of timing out', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-bound-slow-'));
+  const markerPath = join(root, 'authority-marker.js');
+  writeFileSync(markerPath, 'before\n');
+  const directory = openBoundDirectory(root);
+  try {
+    casBoundDirectoryFiles(
+      directory,
+      [
+        {
+          expected: Buffer.from('before\n'),
+          mode: 0o600,
+          name: 'authority-marker.js',
+          replacement: Buffer.from('after\n'),
+        },
+      ],
+      { afterCaptureDelayMs: 6_000 },
+    );
+    assert.equal(readFileSync(markerPath, 'utf8'), 'after\n');
+  } finally {
+    closeBoundDirectory(directory);
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
 test('bounded CAS recovery refuses a journal-less timeout outcome', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-bound-unknown-'));
   const markerPath = join(root, 'authority-marker.js');
@@ -3165,7 +3190,7 @@ test('bound CAS preserves known commit after cleanup retry failure', () => {
         cleanupRecoveryDelayMs: 5_000,
         failCleanupAfterCommit: true,
         failCleanupRecovery: true,
-        recoveryTimeoutMs: 100,
+        recoveryTimeoutMs: 1_000,
       },
     );
     assert.equal(result.committed, true);
@@ -3693,10 +3718,14 @@ test(
       const sessionCli = join(root, 'rn-session.js');
       writeFileSync(sessionCli, '');
 
-      applyPackageIntegration({ appRoot: root, sessionCli });
+      const boundOperationDependencies = {
+        recoveryTimeoutMs: 15_000,
+        timeoutMs: 15_000,
+      };
+      applyPackageIntegration({ appRoot: root, sessionCli }, { boundOperationDependencies });
       assert.equal(statSync(packagePath).mode & 0o777, 0o600);
       assert.equal(statSync(metroPath).mode & 0o777, 0o600);
-      restorePackageIntegrationFiles({ appRoot: root });
+      restorePackageIntegrationFiles({ appRoot: root }, { boundOperationDependencies });
 
       assert.deepEqual(JSON.parse(readFileSync(packagePath, 'utf8')), packageJson);
       assert.equal(readFileSync(metroPath, 'utf8'), metroBefore);
@@ -3714,6 +3743,10 @@ test(
 
 test('restoration resumes after package scripts were already restored', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-session-restore-resume-'));
+  const boundOperationDependencies = {
+    recoveryTimeoutMs: 15_000,
+    timeoutMs: 15_000,
+  };
   try {
     const packagePath = join(root, 'package.json');
     const metroPath = join(root, 'metro.config.js');
@@ -3721,16 +3754,19 @@ test('restoration resumes after package scripts were already restored', () => {
     writeFileSync(packagePath, `${JSON.stringify(packageJson)}\n`);
     writeFileSync(metroPath, metroBefore);
 
-    const preview = applyPackageIntegration({
-      appRoot: root,
-      sessionCli: join(root, 'rn-session.js'),
-    });
+    const preview = applyPackageIntegration(
+      {
+        appRoot: root,
+        sessionCli: join(root, 'rn-session.js'),
+      },
+      { boundOperationDependencies },
+    );
     writeFileSync(
       packagePath,
       `${JSON.stringify(restorePackageIntegration(preview.packageJson, preview.manifest), null, 2)}\n`,
     );
 
-    restorePackageIntegrationFiles({ appRoot: root });
+    restorePackageIntegrationFiles({ appRoot: root }, { boundOperationDependencies });
 
     assert.deepEqual(JSON.parse(readFileSync(packagePath, 'utf8')), packageJson);
     assert.equal(readFileSync(metroPath, 'utf8'), metroBefore);
@@ -4025,7 +4061,7 @@ test('copied adapter aborts pending build authority on every pre-completion fail
     chmodSync(join(binRoot, 'xcrun'), 0o755);
     writeFileSync(
       sessionCliPath,
-      "const fs=require('node:fs');const args=process.argv.slice(2);if(args[0]==='prepare-build'){const platform=args[1];fs.appendFileSync(process.env.ADAPTER_PREPARE,JSON.stringify({args})+'\\n');process.stdout.write(JSON.stringify(platform==='ios'?{platform:'ios',deviceId:'session-ios-device',appId:'dev.example',metroPort:8341,sessionId:'session-ios',buildToken:args[2],simulator:true}:{platform:'android',deviceId:'emulator-5582',appId:'dev.example.android',metroPort:8342,sessionId:'session-android',buildToken:args[2]}));}else if(args[0]==='abort-build'){if(process.env.ADAPTER_ABORT_FAIL==='1'){process.stderr.write('SESSION_BUILD_IDENTITY_CONFLICT: build abort capability is stale or foreign\\n');process.exit(2);}fs.appendFileSync(process.env.ADAPTER_ABORT,JSON.stringify({args,session:process.env.RN_DEV_AGENT_SESSION_ID})+'\\n');process.stdout.write('{\"aborted\":true}\\n');}else{fs.writeFileSync(process.env.ADAPTER_COMPLETION,JSON.stringify({args,session:process.env.RN_DEV_AGENT_SESSION_ID}));process.stdout.write('{\"receipt\":true}\\n');}",
+      "const fs=require('node:fs');const args=process.argv.slice(2);if(args[0]==='prepare-build'){const platform=args[1];fs.appendFileSync(process.env.ADAPTER_PREPARE,JSON.stringify({args})+'\\n');process.stdout.write(JSON.stringify(platform==='ios'?{platform:'ios',deviceId:'session-ios-device',appId:'dev.example',metroPort:8341,sessionId:'session-ios',buildToken:args[2],simulator:true}:{platform:'android',deviceId:'emulator-5582',appId:'dev.example.android',metroPort:8342,sessionId:'session-android',buildToken:args[2]}));}else if(args[0]==='resolve-expo-android-device'){process.stdout.write(JSON.stringify({deviceId:args[1],displayName:'Pixel_API_35'}));}else if(args[0]==='abort-build'){if(process.env.ADAPTER_ABORT_FAIL==='1'){process.stderr.write('SESSION_BUILD_IDENTITY_CONFLICT: build abort capability is stale or foreign\\n');process.exit(2);}fs.appendFileSync(process.env.ADAPTER_ABORT,JSON.stringify({args,session:process.env.RN_DEV_AGENT_SESSION_ID})+'\\n');process.stdout.write('{\"aborted\":true}\\n');}else{fs.writeFileSync(process.env.ADAPTER_COMPLETION,JSON.stringify({args,session:process.env.RN_DEV_AGENT_SESSION_ID}));process.stdout.write('{\"receipt\":true}\\n');}",
     );
     const preparePath = join(root, 'prepare.jsonl');
     const environment = {
@@ -4112,7 +4148,7 @@ test('copied adapter aborts pending build authority on every pre-completion fail
       'expo',
       'run:android',
       '--device',
-      'emulator-5582',
+      'Pixel_API_35',
       '--no-bundler',
     ]);
     assert.deepEqual(JSON.parse(readFileSync(completionPath, 'utf8')), {
@@ -4571,4 +4607,117 @@ test('a first authenticated child exchange that never completes fails typed inst
     if (evidenceDescriptor !== undefined) closeSync(evidenceDescriptor);
     rmSync(root, { force: true, recursive: true });
   }
+});
+
+test('orphaned package integration refuses instead of starting an unmanaged bundler', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-session-adapter-orphaned-'));
+  try {
+    const integrationRoot = join(root, '.rn-agent', 'integration');
+    const binRoot = join(root, 'bin');
+    const adapterPath = join(integrationRoot, 'rn-session-adapter.cjs');
+    const sessionCliPath = join(root, 'rn-session.cjs');
+    const bundlerStartedPath = join(root, 'bundler-started.json');
+    const abortPath = join(root, 'abort.jsonl');
+    mkdirSync(integrationRoot, { recursive: true });
+    mkdirSync(binRoot, { recursive: true });
+    writeFileSync(adapterPath, renderProjectAdapter(), { mode: 0o755 });
+    writeFileSync(
+      join(integrationRoot, 'rn-session-integration.json'),
+      JSON.stringify({
+        version: 1,
+        adapter: '.rn-agent/integration/rn-session-adapter.cjs',
+        sessionCli: sessionCliPath,
+        originalScripts: {
+          ios: ['npx', 'expo', 'run:ios'],
+          android: ['npx', 'expo', 'run:android'],
+        },
+      }),
+    );
+    writeFileSync(
+      sessionCliPath,
+      "const fs=require('node:fs');const args=process.argv.slice(2);if(args[0]==='prepare-build'){process.stderr.write('SESSION_AUTHORITY_REQUIRED: no live session matches this canonical worktree and app root\\n');process.exit(2);}fs.appendFileSync(process.env.ADAPTER_ABORT,JSON.stringify({args})+'\\n');process.stdout.write('{}\\n');",
+    );
+    writeFileSync(
+      join(binRoot, 'npx'),
+      "#!/usr/bin/env node\nconst fs=require('node:fs');const net=require('node:net');const server=net.createServer();server.listen(0,'127.0.0.1',()=>{fs.writeFileSync(process.env.BUNDLER_STARTED,JSON.stringify({pid:process.pid,port:server.address().port,args:process.argv.slice(2)}));});setInterval(()=>{},1000);\n",
+    );
+    chmodSync(join(binRoot, 'npx'), 0o755);
+
+    // File-backed stdio plus SIGKILL turns a leaked spawnSync child into a failed assertion.
+    const logPath = join(root, 'adapter.log');
+    const logFd = openSync(logPath, 'a');
+    let result;
+    try {
+      result = spawnSync(process.execPath, [adapterPath, 'ios'], {
+        cwd: root,
+        encoding: 'utf8',
+        timeout: 30_000,
+        killSignal: 'SIGKILL',
+        stdio: ['ignore', logFd, logFd],
+        env: {
+          ...process.env,
+          PATH: `${binRoot}:${process.env.PATH}`,
+          ADAPTER_ABORT: abortPath,
+          BUNDLER_STARTED: bundlerStartedPath,
+        },
+      });
+    } finally {
+      closeSync(logFd);
+    }
+    const output = readFileSync(logPath, 'utf8');
+
+    assert.equal(
+      result.error,
+      undefined,
+      `the adapter must return without hitting the deadline: ${output}`,
+    );
+    assert.equal(result.status, 2, output);
+    assert.match(output, /SESSION_AUTHORITY_REQUIRED/);
+    assert.match(output, /no live session exists in the configured authority registry/);
+    assert.match(output, /rn_session\(action="restore_integration", confirmed=true\)/);
+    assert.equal(
+      existsSync(bundlerStartedPath),
+      false,
+      'a refused build must never start an unmanaged bundler',
+    );
+    assert.equal(
+      existsSync(abortPath),
+      false,
+      'no build capability was ever published, so nothing may be aborted',
+    );
+  } finally {
+    if (existsSync(join(root, 'bundler-started.json'))) {
+      const leaked = JSON.parse(readFileSync(join(root, 'bundler-started.json'), 'utf8')) as {
+        pid: number;
+      };
+      try {
+        process.kill(leaked.pid, 'SIGKILL');
+      } catch {}
+    }
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test('every stdio-capturing session-CLI wait in the adapter is bounded', () => {
+  const adapter = renderProjectAdapter();
+  const spawnBlocks = adapter
+    .split('spawnSync(')
+    .slice(1)
+    .map((block) => block.slice(0, block.indexOf('});')));
+
+  for (const block of spawnBlocks) {
+    if (block.includes("stdio: 'inherit'")) continue;
+    assert.match(
+      block,
+      /timeout:/,
+      `a stdio-capturing spawnSync must declare a timeout: ${block.slice(0, 120)}`,
+    );
+  }
+
+  assert.match(
+    adapter,
+    /failOnSessionCliError\(complete, 'complete-build'\)/,
+    'a timed-out complete-build must fail instead of reading as a truncated success',
+  );
+  assert.match(adapter, /SESSION_CLI_TIMEOUT/);
 });

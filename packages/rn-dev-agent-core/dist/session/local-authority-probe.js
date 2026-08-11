@@ -10,6 +10,7 @@ import { readProcessBirth } from './process-birth.js';
 import { SessionAuthorityError } from './registry.js';
 import { resolveSourceIdentity } from './source-identity.js';
 import { proveTargetDeviceAssociations, } from './target-device-authority.js';
+import { requiresExactInstalledArtifact } from './tool-profiles.js';
 import { deviceExistsOnHost } from './device-existence.js';
 function identity(value) {
     return createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -115,8 +116,7 @@ export function createLocalAuthorityProbe(dependencies) {
         }
         if (axis === 'I') {
             const expected = objectBinding(status, 'install');
-            const exactArtifactBoundary = tool === 'proof_capture' &&
-                (args?.action === 'begin_rehearsal' || args?.action === 'finalize');
+            const exactArtifactBoundary = requiresExactInstalledArtifact(tool ?? '', args ?? {});
             try {
                 if (exactArtifactBoundary) {
                     verifyInstalledArtifact(expected, captureInstalled(expected));
@@ -324,21 +324,6 @@ export function createLocalAuthorityProbe(dependencies) {
                     protocolVersion: runner.protocolVersion,
                 }),
             };
-        }
-        if (axis === 'O') {
-            const observe = objectBinding(status, 'observe');
-            const port = Number(observe.port);
-            const capability = dependencies.getSecret()?.observeCapability ?? '';
-            const observed = await fetchJson(`http://127.0.0.1:${port}/api/authority`, {
-                headers: {
-                    authorization: `Bearer ${capability}`,
-                    'x-rn-observe-instance': String(observe.instanceId ?? ''),
-                },
-            });
-            if (observed.sessionId !== status.sessionId || observed.instanceId !== observe.instanceId) {
-                throw new SessionAuthorityError('OBSERVE_AUTHORITY_MISMATCH', 'Observe endpoint no longer matches the session binding');
-            }
-            return { axis, identity: identity(observed) };
         }
         const proof = objectBinding(status, 'proof');
         const runId = String(proof.runId ?? '');

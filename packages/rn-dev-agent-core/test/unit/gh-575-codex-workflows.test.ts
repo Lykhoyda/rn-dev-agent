@@ -23,12 +23,12 @@ function directories(path: string): string[] {
     .sort();
 }
 
-test('GH-575 generated Codex skill inventory is exactly 25 with migration disabled', () => {
-  assert.equal(contract.adaptedDomainSkills.length, 10);
-  assert.equal(contract.adaptedCommands.length, 15);
+test('GH-575 generated Codex skill inventory is exactly 27 with migration disabled', () => {
+  assert.equal(contract.adaptedDomainSkills.length, 11);
+  assert.equal(contract.adaptedCommands.length, 16);
   assert.deepEqual(contract.commandSkills, contract.adaptedCommands);
   const expected = [...contract.adaptedDomainSkills, ...contract.commandSkills].sort();
-  assert.equal(new Set(expected).size, 25);
+  assert.equal(new Set(expected).size, 27);
   assert.deepEqual(directories(join(codex, 'skills')), expected);
   const manifest = JSON.parse(readFileSync(join(codex, '.codex-plugin/plugin.json'), 'utf8')) as {
     commands?: unknown;

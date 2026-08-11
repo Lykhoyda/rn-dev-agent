@@ -42,7 +42,7 @@ The page is a three-pane layout:
 | Pane | Contents |
 |------|----------|
 | **Timeline** (left) | Every tool call as it happens — colour-coded by family (interaction, introspection, navigation, lifecycle, testing), with duration, success/failure, and self-healing "ghost" markers. Filter by family, free-text search, or errors-only. Click an event to inspect its arguments and (redacted) payload; events that produced a screenshot show it inline. |
-| **Device mirror** (middle) | A live mirror of the simulator/emulator screen. iOS uses `idb video-stream` when `idb` + `idb-companion` are installed, falling back to a `simctl` screenshot loop otherwise; Android streams `adb screenrecord` through `ffmpeg`. The current route is overlaid as it changes. |
+| **Device mirror** (middle) | A live mirror of the simulator/emulator screen. iOS uses `idb video-stream` when `idb` + `idb-companion` are installed and the client actually runs, falling back to a `simctl` screenshot loop otherwise — an installed-but-crashing client is reported as an interpreter incompatibility, not as a missing install; Android streams `adb screenrecord` through `ffmpeg`. The current route is overlaid as it changes. |
 | **State** (right) | Five tabs: **Route** (latest navigation state), **Store** (latest Zustand/Redux snapshot), **Tree** (latest component tree), **Actions**, and **E2E**. The first three update whenever the agent reads that state — you're seeing exactly what the agent saw. |
 
 ## Using observe with actions
@@ -70,6 +70,7 @@ The UI serves no general mutation surface — you can't edit files, change state
 - Binds to `127.0.0.1` only, on a random or configured port — never exposed to the network.
 - Rejects cross-origin requests via Host-header and `Sec-Fetch-Site` checks.
 - Tool arguments are deep-redacted **fail-closed** before reaching the stream — tokens, passwords, and PII render as `[REDACTED_*]`.
+- Text the agent types into the app never reaches the stream verbatim, whatever it contains. `device_fill`, `fill` steps inside `device_batch`, and `cdp_interact` `typeText` / `setFieldValue` have their text replaced with `[REDACTED:string]` plus a `textLength` (or `valueLength`) count, and the `text` echoed back in a `device_fill` result is redacted the same way. Ordering, the target element, status, and every other diagnostic field stay visible, so the timeline is still readable for debugging.
 - The event timeline lives in a small bounded in-memory ring buffer — the observability stream itself never touches disk. (Action and E2E replays you trigger from the UI still write their normal run records under `.rn-agent/`, exactly as a CLI-triggered replay would.)
 
 ## When to use

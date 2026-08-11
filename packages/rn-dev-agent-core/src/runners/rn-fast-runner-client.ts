@@ -1416,6 +1416,9 @@ export interface RunIOSArgs {
   x2?: number;
   y2?: number;
   text?: string;
+  /** Exact-fill descriptor resolved afresh by the runner within one command. */
+  exactIdentifier?: string;
+  exactType?: string;
   durationMs?: number;
   direction?: 'up' | 'down' | 'left' | 'right';
   scale?: number;
@@ -1423,9 +1426,9 @@ export interface RunIOSArgs {
   compact?: boolean;
   depth?: number;
   scope?: string;
-  /** #191: per-character typing delay (ms) for the corrective retype. */
+  /** Optional per-character delay for explicit native type commands. */
   delayMs?: number;
-  /** #191: clear the field before typing (the runner only clears on this flag). */
+  /** Clear before an explicit native type command. */
   clearFirst?: boolean;
   /**
    * Internal sentinel: when buildRunIOSArgs() in agent-device-wrapper resolves
@@ -1458,7 +1461,7 @@ export interface RunIOSArgs {
 interface RunnerResponse {
   ok: boolean;
   data?: unknown;
-  error?: { message: string; code?: string; mutation?: string };
+  error?: { message: string; code?: string; mutation?: string; reason?: string };
   v?: number;
 }
 
@@ -1894,6 +1897,8 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
   if (args.x2 !== undefined) body.x2 = args.x2;
   if (args.y2 !== undefined) body.y2 = args.y2;
   if (args.text !== undefined) body.text = args.text;
+  if (args.exactIdentifier !== undefined) body.exactIdentifier = args.exactIdentifier;
+  if (args.exactType !== undefined) body.exactType = args.exactType;
   if (args.durationMs !== undefined) body.durationMs = args.durationMs;
   if (args.delayMs !== undefined) body.delayMs = args.delayMs;
   if (args.clearFirst !== undefined) body.clearFirst = args.clearFirst;
@@ -2092,9 +2097,11 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
       return containTypeTimeout(args, commandAuthorityBefore);
     }
     const mutation = resp.error?.mutation;
+    const reason = resp.error?.reason;
     const failExtras = {
       ...(recovery ? { transportRecovery: recovery } : {}),
       ...(mutation !== undefined ? { mutation } : {}),
+      ...(reason !== undefined ? { reason } : {}),
     };
     if (code) {
       return failResult(

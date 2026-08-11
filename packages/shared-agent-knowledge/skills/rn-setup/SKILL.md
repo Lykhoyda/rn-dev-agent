@@ -18,6 +18,30 @@ This skill checks every prerequisite and installs missing dependencies.
 
 ## Checklist — run each check in order
 
+Resolve `APP_ROOT` to the exact existing target React Native app directory before
+starting the checklist. Use the app selected by the user or the uniquely matching
+app from the available project evidence; in a monorepo, use the nested app
+directory rather than the repository root. If multiple candidates remain, ask
+which app is authoritative. Never run check 0 with `APP_ROOT` unset or empty.
+
+### 0. Source declaration (non-Git app roots only)
+
+The session binds one source identity before any setup or build step runs. A Git
+app root is detected automatically and declares nothing. A non-Git app root has
+no such identity and must declare one explicitly, or every authoritative tool
+refuses with `NON_GIT_MANIFEST_REQUIRED`.
+
+```bash
+git -C "$APP_ROOT" rev-parse --show-toplevel 2>/dev/null && echo GIT || echo NON_GIT
+```
+
+`GIT` → report `N/A (Git worktree)` and move on. `NON_GIT` → check the
+supervisor environment for `RN_DEV_AGENT_DECLARED_ROOT` and
+`RN_DEV_AGENT_DECLARED_MANIFESTS`. Report `MISSING_ROOT`,
+`MISSING_MANIFEST_LIST`, or `MISSING_MANIFEST`, then point to the
+[session-authority contract](https://lykhoyda.github.io/rn-dev-agent/session-authority/#what-each-source-identity-proves).
+Setup diagnoses this preflight; it never supplies a declaration.
+
 ### 1. Node.js version
 ```bash
 node --version
@@ -152,34 +176,46 @@ If missing: `brew install ffmpeg` (not critical — videos work without it, GIF 
 
 ### 10. idb (optional — fast screen mirroring)
 ```bash
-command -v idb && { command -v idb_companion || command -v idb-companion; }
+command -v idb >/dev/null && { idb --help >/dev/null 2>&1 && echo "idb client OK" || echo "idb client BROKEN"; } || echo "idb MISSING"
+command -v idb_companion >/dev/null || command -v idb-companion >/dev/null && echo "idb-companion OK" || echo "idb-companion MISSING"
 ```
 Both binaries present → the observe UI's live mirror uses `idb video-stream`
 (20–30fps). Missing → the mirror still works via a ~6fps `simctl screenshot`
 loop. SessionStart auto-installs in the background (`scripts/ensure-idb.sh`);
 if `~/.rn-dev-agent/idb/install.pid` exists and its PID is alive, report
 "installing in background (log: ~/.rn-dev-agent/idb/install.log)" instead of
-MISSING. Manual install: `brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install fb-idb`.
+MISSING. A client that is on PATH but exits non-zero is BROKEN, not MISSING. State
+the cause as probable, not certain: the probe only sees a non-zero exit, and a
+timeout or EACCES lands there too. The most likely cause is fb-idb needing
+`asyncio.get_event_loop()`, which Python 3.14 removed (GH#578). Never tell the
+developer to install what they already installed. Manual install/repair (the
+interpreter pin is required; a bare `pipx install fb-idb` resolves the newest Python
+and recreates the break): `brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install --python python3.13 --force fb-idb`.
+On a machine with no supported interpreter, prepend the interpreter install:
+`brew install python@3.13 && ...` (same form `install_command()` produces).
+When the client is OK and only the companion is missing, give the companion half
+alone — `brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion`
+(same form `companion_command()` produces) — never the fb-idb reinstall.
 
 ### 11. Physical device prerequisites (optional — M9 / Phase 111)
 
 Only runs if a physical device is USB-connected. Simulators/emulators skip
-this section. Runs two checks + applies one (safe, reversible) side-effect:
+this section. Both checks are read-only; session authority is the sole writer
+of an exact physical Android Metro reverse:
 
 ```bash
 bash ${CLAUDE_PLUGIN_ROOT}/scripts/check-physical-devices.sh
 ```
 
 Expected outputs:
-- **Physical Android present**: `[OK] adb reverse tcp:8081 tcp:8081` — device can reach Metro over USB. Auto-applied; no user action needed.
+- **Physical Android present**: `[READY] authorized adb serial <serial>` confirms read-only device readiness. `[OK] no pre-existing adb reverse forwards` is clean; `[WARN] pre-existing adb reverse forwards` lists foreign state truthfully without adopting, replacing, or removing it. The exact session serial/port lifecycle establishes and cleans its own Metro reverse later.
 - **Physical iOS present + idb-companion installed**: `[OK] idb-companion installed`.
 - **Physical iOS present but idb-companion missing**: `[MISSING] idb-companion — install with: brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion`. Not auto-run (brew installs are slow and can fail mid-flight); user runs the command.
 - **No physical devices**: two "skipping" lines. Add "Physical devices" row to the table as "N/A (no devices connected)".
 
 **WiFi debugging is not supported** automatically. Connect by USB. If users
-need WiFi they can `adb connect <ip>` manually — the script then treats the
-device as physical and runs `adb reverse` over the TCP transport (works
-the same as USB).
+need WiFi they can `adb connect <ip>` manually — the script reports that device
+as physical but remains read-only; only session authority may create a reverse.
 
 ### 12. Plugin version freshness
 
@@ -256,6 +292,7 @@ Present results as a table:
 
 | Check | Status | Action Needed |
 |-------|--------|--------------|
+| Source declaration | N/A (Git worktree) / OK (declared) / MISSING_ROOT / MISSING_MANIFEST_LIST / MISSING_MANIFEST | Name the missing `RN_DEV_AGENT_DECLARED_ROOT` or `RN_DEV_AGENT_DECLARED_MANIFESTS` declaration and point to the [session-authority contract](https://lykhoyda.github.io/rn-dev-agent/session-authority/#what-each-source-identity-proves) |
 | Node.js | OK (v22.18.0) | — |
 | CDP bridge | OK | — |
 | rn-fast-runner (iOS) | OK (built) / NEEDS_BUILD / N/A (non-macOS) | NEEDS_BUILD self-builds on first use (slow); offer the one-time `xcodebuild build-for-testing` to skip the wait (see check 3 above) |
@@ -267,7 +304,7 @@ Present results as a table:
 | CDP connection | CONNECTED | — |
 | Injected helpers | OK / MISSING | If MISSING: fall back to `device_*` tools or call `cdp_reload`. Do not retry `cdp_status` in a loop. |
 | ffmpeg | OK (v7.1) | — |
-| idb (screen mirror fast path) | OK / INSTALLING (background) / MISSING | If MISSING: `brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install fb-idb` (optional — mirror falls back to ~6fps simctl) |
+| idb (screen mirror fast path) | OK / INSTALLING (background) / BROKEN (installed, did not respond) / MISSING | If MISSING or BROKEN: `brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install --python python3.13 --force fb-idb`, prefixed with `brew install python@3.13 &&` when no supported interpreter is installed. If only the companion is missing, drop the `pipx` half. The `--python` pin is required (GH#578). Report the incompatibility as the probable cause, not a certainty. Optional — mirror falls back to ~6fps simctl |
 | Physical devices | N/A (none connected) OR "Android USB reverse: OK" / "iOS: idb-companion missing — install with brew" | Run installed command if iOS-companion missing |
 | Plugin version | OK (latest) / BEHIND (installed X, latest Y) / OFFLINE / AHEAD (dev install) | Run: `/plugin update rn-dev-agent` if BEHIND |
 | Vercel rules sync | OK (N rules, fetched X days ago) / STALE (> 30 days) / MISSING / DRIFT / N/A (installed plugin) | Repo checkout only: node scripts/sync-vercel-skills.mjs --fix --ref \<sha\> |
@@ -293,6 +330,7 @@ Setup is boring — agents skip it and pay for it later.
 | "rn-fast-runner build is fine, it'll lazy-build on demand" | True now, but with a caveat. `startFastRunner()` runs `xcodebuild build-for-testing` + `test-without-building` when no `.xctestrun` exists (#424 — the build artifact persists, so only the FIRST call ever is slow), so the first `device_snapshot action=open` self-builds and succeeds on a fresh machine — it does NOT fail with "no such file or directory" anymore. The cost is latency: that first call blocks for several minutes while Xcode compiles. Offer check 3's one-time `build-for-testing` to move that cost out of the first interaction; don't claim the runner is "broken" when it's just cold-building. |
 | "I'll skip the Metro check — I'll start it later when I need it" | Without Metro, `cdp_status` fails, Phase 5.5 fails, and the whole pipeline stops. Start Metro FIRST. |
 | "The user can pre-build the device runner themselves" | They ran `/rn-dev-agent:setup` expecting guidance. Give them the exact pre-build command for their target (iOS: the `xcodebuild build-for-testing` form in check 3; Android: `./gradlew assembleDebug assembleDebugAndroidTest` in check 3b) — don't punt. |
+| "The project isn't in Git, but setup can continue without source declarations" | It cannot. Check `RN_DEV_AGENT_DECLARED_ROOT` and `RN_DEV_AGENT_DECLARED_MANIFESTS` first, then follow the [session-authority contract](https://lykhoyda.github.io/rn-dev-agent/session-authority/#what-each-source-identity-proves); surface `NON_GIT_MANIFEST_REQUIRED` before setup or build. |
 | "I'll proceed with the feature — setup can be done in parallel" | No. Feature development depends on critical checks passing (steps 10 + 11 are optional — N/A when no physical device, OFFLINE acceptable for the version check). Get the environment green first, then proceed. |
 
 ## Red Flags — Stop and Reconsider
@@ -305,6 +343,7 @@ Setup is boring — agents skip it and pay for it later.
 
 ## Verification — Setup Complete When
 
+- [ ] Source-declaration row is `N/A (Git worktree)` or `OK (declared)` under the canonical session-authority contract
 - [ ] Node.js is an even-numbered version >= 22.18 (v22.18+, v24, NOT v23, v25)
 - [ ] `corepack yarn workspace rn-dev-agent-core exec npm ls --depth=0` shows no WARN/ERR
 - [ ] **Android targets**: `packages/rn-android-runner/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk` exists (build once via `./gradlew assembleDebug assembleDebugAndroidTest`) — only required if targeting Android; iOS uses the in-tree `rn-fast-runner` (D1219)
@@ -313,7 +352,7 @@ Setup is boring — agents skip it and pay for it later.
 - [ ] At least ONE of: iOS simulator booted OR Android emulator running
 - [ ] `rn_session(action="status")` and `cdp_status` report the bound Metro
 - [ ] Passive `cdp_status` reports `cdp.connected: true` and a narrow `cdp_component_tree` query succeeds
-- [ ] Physical-device row is `N/A (no devices)` OR reports `adb reverse: OK` / `idb-companion: OK or install hint` (M9 / D668)
+- [ ] Physical-device row is `N/A (no devices)` OR reports an authorized Android serial plus truthful pre-existing-forward state / `idb-companion: OK or install hint` (M9 / D668)
 - [ ] idb row is `OK`, `INSTALLING (background)`, or `MISSING` with the manual command — never blocks setup (mirror falls back to simctl)
 - [ ] Plugin-version row is `OK` (installed = latest) / `OFFLINE` (acceptable) / `AHEAD (dev install)` — if `BEHIND`, surface the `/plugin update rn-dev-agent` instruction; user decides whether to update before continuing
 - [ ] Present the full results table to the user — no hidden failures

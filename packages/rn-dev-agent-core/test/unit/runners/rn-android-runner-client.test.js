@@ -6,7 +6,10 @@ import {
   _setAndroidRunnerStateForTest,
 } from '../../../dist/runners/rn-android-runner-client.js';
 import { refCenter, clearRefMap } from '../../../dist/fast-runner-ref-map.js';
-import { REQUIRED_ANDROID_COMMANDS } from '../../../dist/runners/protocol.js';
+import {
+  REQUIRED_ANDROID_COMMANDS,
+  REQUIRED_ANDROID_FEATURES,
+} from '../../../dist/runners/protocol.js';
 
 _setAndroidRunnerStateForTest({
   hostPort: 22089,
@@ -34,6 +37,7 @@ _setFetchForTest(async (url, init) => {
         ok: true,
         protocolVersion: 1,
         commands: [...REQUIRED_ANDROID_COMMANDS],
+        capabilities: [...REQUIRED_ANDROID_FEATURES],
       }),
     };
   }

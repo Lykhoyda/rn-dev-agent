@@ -1,7 +1,9 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { dirname } from 'node:path';
 import { stopBoundObserve, stopBoundRecorder, stopBoundRunner } from './process-cleanup.js';
 import { openSessionRegistry } from './registry.js';
 import { stopManagedMetro } from './managed-metro.js';
+import { removeAndroidMetroReverse, } from './android-metro-reverse.js';
 import { createAuthorityStateLayout, sessionRuntimeDirectory, writeSessionPublicReceipt, writeSessionSecret, } from './state-root.js';
 const RELEASABLE_SESSION_STATES = new Set([
     'active',
@@ -12,6 +14,46 @@ const RELEASABLE_SESSION_STATES = new Set([
     'runtime_bound',
     'ready',
 ]);
+/**
+ * GH #706: a released (or fenced) session owns nothing and can never be transitioned
+ * again, so the supervisor must mint a successor instead of handing the terminal row
+ * to the next worker.
+ */
+export function supervisorSessionIsTerminal(authority) {
+    let state;
+    try {
+        state = authority.registry.getSessionStatus(authority.session.sessionId)?.state;
+    }
+    catch {
+        return false;
+    }
+    return state === undefined || state === 'released' || state === 'stale';
+}
+/**
+ * GH #706: resolve the session the next worker inherits. A terminal row is replaced by
+ * a freshly minted session — exactly what a cold supervisor start would have produced —
+ * so `release` stops being a one-way door.
+ */
+export function resolveSupervisorAuthorityForSpawn(current, mint) {
+    if (!current || !supervisorSessionIsTerminal(current)) {
+        return { authority: current, error: null, minted: false };
+    }
+    void current.close().catch(() => {
+        /* a terminal session owns nothing; cleanup refusals must not block the successor */
+    });
+    try {
+        return { authority: mint(), error: null, minted: true };
+    }
+    catch (error) {
+        return {
+            authority: null,
+            error: error instanceof Error
+                ? error.message
+                : 'AUTHORITY_STORE_UNAVAILABLE: authority session could not be initialized',
+            minted: false,
+        };
+    }
+}
 export function createSupervisorAuthority(input, dependencies = {}) {
     if (!input.supervisorBirth) {
         throw new Error('PROCESS_BIRTH_UNAVAILABLE: supervisor process birth could not be proven conservatively');
@@ -34,7 +76,9 @@ export function createSupervisorAuthority(input, dependencies = {}) {
             pid: input.supervisorBirth.pid,
             token: input.supervisorBirth.token,
         },
-        source: { ...input.source },
+        // L4: the session-model discriminator lives in write-once source_json until the
+        // schema-v5 column lands; grouped-v1 sessions never mint recovery handles.
+        source: { ...input.source, model: 'grouped-v1' },
     });
     const rollbackInitialization = (error) => {
         let failure = error;
@@ -146,6 +190,7 @@ export function createSupervisorAuthority(input, dependencies = {}) {
             RN_DEV_AGENT_SESSION_ID: session.sessionId,
             RN_DEV_AGENT_CLAIM_EPOCH: String(session.claimEpoch),
             RN_DEV_AGENT_REGISTRY_PATH: layout.registry,
+            RN_DEV_AGENT_STATE_DIR: dirname(layout.root),
             RN_DEV_AGENT_SESSION_SECRET_PATH: secretPath,
             RN_DEV_AGENT_SESSION_RUNTIME_ROOT: sessionRuntimeDirectory(layout, sessionId),
             RN_DEV_AGENT_WORKER_INSTANCE: workerInstance,
@@ -168,6 +213,10 @@ export function createSupervisorAuthority(input, dependencies = {}) {
                     status = registry.beginSessionClose(session);
                 }
                 if (status) {
+                    const androidMetroReverse = status.bindings.androidMetroReverse;
+                    if (androidMetroReverse) {
+                        (dependencies.removeAndroidMetroReverse ?? removeAndroidMetroReverse)(androidMetroReverse);
+                    }
                     const recorder = status.bindings.recorder;
                     if (recorder) {
                         const claimKey = `${String(recorder.platform)}:${String(recorder.deviceId)}`;

@@ -31,6 +31,7 @@ import {
   RUNNER_PROTOCOL_VERSION,
   MIN_SUPPORTED_RUNNER_PROTOCOL,
   REQUIRED_ANDROID_COMMANDS,
+  REQUIRED_ANDROID_FEATURES,
   getPluginVersion,
   classifyRunnerCompatibility,
 } from './protocol.js';
@@ -145,7 +146,11 @@ export interface RunAndroidArgs {
   x2?: number;
   y2?: number;
   text?: string;
+  /** Exact-fill descriptor resolved afresh by the runner within one command. */
+  exactIdentifier?: string;
+  exactType?: string;
   exact?: boolean;
+  includeSystemUi?: boolean;
   durationMs?: number;
   /** Story 04 (#385): window-gate probe timeout for isWindowUpdating (Kotlin clamps to 0..2000ms). */
   timeoutMs?: number;
@@ -169,7 +174,7 @@ export interface RunAndroidArgs {
 interface RunnerResponse {
   ok: boolean;
   data?: unknown;
-  error?: { message: string; code?: string; mutation?: string };
+  error?: { message: string; code?: string; mutation?: string; reason?: string };
   v?: number;
 }
 
@@ -178,6 +183,8 @@ interface RunnerSnapshotNode {
   type?: string;
   label?: string;
   identifier?: string;
+  packageName?: string;
+  checked?: boolean;
   rect?: { x: number; y: number; width: number; height: number };
   enabled?: boolean;
   hittable?: boolean;
@@ -854,15 +861,17 @@ export async function reapActiveAndroidRunner(deviceId?: string): Promise<void> 
   await reapMismatchedAndroidRunner(runnerState ?? (deviceId ? { deviceId } : null));
 }
 
-function classifyAndroidHealth(info: AndroidHealthInfo) {
+export function classifyAndroidHealth(info: AndroidHealthInfo) {
   return classifyRunnerCompatibility(
     {
       ...(info.protocolVersion !== undefined ? { protocolVersion: info.protocolVersion } : {}),
       ...(info.runnerVersion !== undefined ? { runnerVersion: info.runnerVersion } : {}),
       ...(info.commands !== undefined ? { commands: info.commands } : {}),
+      ...(info.capabilities !== undefined ? { capabilities: info.capabilities } : {}),
     },
     getPluginVersion(),
     REQUIRED_ANDROID_COMMANDS,
+    REQUIRED_ANDROID_FEATURES,
   );
 }
 
@@ -1873,6 +1882,8 @@ function mapRunnerNodesToFlat(nodes: RunnerSnapshotNode[]): FlatNode[] {
     const flat: FlatNode = { ref, type: n.type ?? '', rect: n.rect };
     if (n.label !== undefined) flat.label = n.label;
     if (n.identifier !== undefined) flat.identifier = n.identifier;
+    if (n.packageName !== undefined) flat.packageName = n.packageName;
+    if (n.checked !== undefined) flat.checked = n.checked;
     if (n.enabled !== undefined) flat.enabled = n.enabled;
     if (n.hittable !== undefined) flat.hittable = n.hittable;
     if (n.secure !== undefined) flat.secure = n.secure;
@@ -1914,7 +1925,10 @@ export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
   if (args.x2 !== undefined) body.x2 = args.x2;
   if (args.y2 !== undefined) body.y2 = args.y2;
   if (args.text !== undefined) body.text = args.text;
+  if (args.exactIdentifier !== undefined) body.exactIdentifier = args.exactIdentifier;
+  if (args.exactType !== undefined) body.exactType = args.exactType;
   if (args.exact !== undefined) body.exact = args.exact;
+  if (args.includeSystemUi !== undefined) body.includeSystemUi = args.includeSystemUi;
   if (args.durationMs !== undefined) body.durationMs = args.durationMs;
   if (args.timeoutMs !== undefined) body.timeoutMs = args.timeoutMs;
   if (args.scale !== undefined) body.scale = args.scale;
@@ -1989,10 +2003,11 @@ export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
     // never report idle, so the call resolves with an `InvocationTargetException`
     // wrapping "Could not detect idle state" AFTER the text has already been
     // appended to the field. Live trials (Task 10) confirm the side-effect
-    // always succeeds. Treat this specific error shape as success on `.type`
-    // and surface a meta marker so callers can audit telemetry.
+    // always succeeds — but that is attempt evidence, not field truth, so this
+    // shape fails as TYPE_IDLE_TIMEOUT with mutation:'possible' (GH #581).
     if (
       args.command === 'type' &&
+      args.exactIdentifier === undefined &&
       typeof message === 'string' &&
       (message.includes('Could not detect idle state') ||
         message.includes('window-content-idle') ||
@@ -2018,9 +2033,11 @@ export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
         : args.command === 'type' || args.command === 'fill'
           ? 'possible'
           : undefined;
+    const reason = resp.error?.reason;
     const failExtras = {
       ...(recovery ? { transportRecovery: recovery } : {}),
       ...(mutation !== undefined ? { mutation } : {}),
+      ...(reason !== undefined ? { reason } : {}),
     };
     if (code) {
       return failResult(
@@ -2032,6 +2049,32 @@ export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
     return Object.keys(failExtras).length > 0
       ? failResult(message, failExtras)
       : failResult(message);
+  }
+
+  if (args.command === 'tap') {
+    const data = resp.data as { tapped?: unknown } | undefined;
+    if (data?.tapped !== true) {
+      // NOTE: ACTION_CLICK is atomic, but a false coordinate click can mean the
+      // touch-up failed after the app already received the touch-down.
+      const exactTarget = args.exactIdentifier !== undefined && args.exactType !== undefined;
+      if (exactTarget) {
+        return failResult(
+          'Android runner could not prove that the requested interaction was actuated.',
+          'INTERACTION_NOT_ACTUATED',
+          { mutation: 'none', reason: 'runner-rejected-tap', ...recoveryMeta },
+        );
+      }
+      return failResult(
+        'The Android coordinate tap did not complete, and part of the gesture may have reached the app.',
+        'INTERACTION_EFFECT_UNVERIFIED',
+        {
+          mutation: 'possible',
+          reason: 'coordinate-tap-incomplete',
+          attempts: 1,
+          ...recoveryMeta,
+        },
+      );
+    }
   }
 
   if (args.command === 'snapshot' && resp.data && typeof resp.data === 'object') {

@@ -1,4 +1,17 @@
 import { inspectAuthorityMigration } from './migration-diagnostic.js';
+import { authorityRemedyNextAction } from './registry.js';
+const SELECTED_STATES = new Set(['active', 'source_bound', 'device_claimed', 'metro_bound']);
+const RUNNING_STATES = new Set(['device_bound', 'runtime_bound', 'ready']);
+// ADR §2.3 (L0): non-operational states keep only their internal name in `detail`.
+function derivePublicPhase(state, buildPending) {
+    if (state === 'closing')
+        return 'closing';
+    if (!SELECTED_STATES.has(state) && !RUNNING_STATES.has(state))
+        return undefined;
+    if (buildPending)
+        return 'building';
+    return RUNNING_STATES.has(state) ? 'running' : 'selected';
+}
 // GH #672: an expired handle must never be advertised — `validateStaleAdoption`
 // refuses it, which is what made a freshly fetched status look self-contradictory.
 // The caller refreshes before projecting; anything still expired here is reported
@@ -10,11 +23,33 @@ function liveHandle(handle, now) {
         return undefined;
     return handle.token;
 }
+function installIdentityRefusal(inspection, proofBound) {
+    if (inspection?.verdict === 'changed') {
+        return {
+            state: 'install_identity_changed',
+            detail: inspection.reason ?? 'installed artifact identity no longer matches the session build',
+            nextAction: 'The installed app is no longer the attested session build. Rebuild and re-attest it ' +
+                '(rn_session build, or bind_device with a fresh signed build receipt), then re-open the device session.',
+        };
+    }
+    if (inspection?.verdict === 'reissue-pending' && proofBound) {
+        return {
+            state: 'install_identity_reissue_blocked',
+            detail: 'the app was reinstalled while a strict proof run is bound',
+            nextAction: 'The app was reinstalled during a strict proof run, so gated tools refuse ' +
+                'APP_INSTALL_IDENTITY_CHANGED and the gate does not re-issue the receipt under the attestation. ' +
+                'Discard the run (proof_capture action "discard"), then capture the proof again.',
+        };
+    }
+    return {};
+}
 export function projectPublicAuthorityStatus(status, options = {}) {
     if (!status.available) {
+        const nextAction = authorityRemedyNextAction(status.code);
         return {
             available: false,
             code: status.code,
+            ...(nextAction ? { nextAction } : {}),
         };
     }
     const now = (options.now ?? Date.now)();
@@ -56,10 +91,22 @@ export function projectPublicAuthorityStatus(status, options = {}) {
     });
     const metro = status.bindings.metro;
     const metroTerminal = status.bindings.metroTerminal;
+    const projectedMetroTerminal = metroTerminal
+        ? {
+            code: metroTerminal.code,
+            reason: metroTerminal.reason,
+            phase: metroTerminal.phase,
+            observedAt: metroTerminal.observedAt,
+        }
+        : undefined;
+    const sandbox = metro?.runtimeEvidenceAuthority === 'managed-sandbox-v1' ? 'managed-sandbox-v1' : 'unavailable';
+    const phase = derivePublicPhase(status.state, Boolean(status.bindings.pendingBuild));
     return {
         available: true,
         ...(options.includeSessionId ? { sessionId: status.sessionId } : {}),
         state: status.state,
+        ...(phase ? { phase } : {}),
+        detail: status.state,
         sourceKind: status.source.kind,
         metroPort: status.bindings.metroPort,
         observePort: status.bindings.observePort,
@@ -67,22 +114,40 @@ export function projectPublicAuthorityStatus(status, options = {}) {
         deviceBound: Boolean(status.bindings.device),
         installBound: Boolean(status.bindings.install),
         metroBound: Boolean(status.bindings.metro),
-        ...(metroTerminal
-            ? {
-                metroTerminal: {
-                    code: metroTerminal.code,
-                    reason: metroTerminal.reason,
-                    phase: metroTerminal.phase,
-                    observedAt: metroTerminal.observedAt,
-                },
-            }
-            : {}),
-        sandbox: metro?.runtimeEvidenceAuthority === 'managed-sandbox-v1'
-            ? 'managed-sandbox-v1'
-            : 'unavailable',
+        ...(projectedMetroTerminal ? { metroTerminal: projectedMetroTerminal } : {}),
+        sandbox,
         bundleBound: Boolean(status.bindings.bundle),
         runnerBound: Boolean(status.bindings.runner),
         recorderBound: Boolean(status.bindings.recorder),
+        session: {
+            sourceKind: status.source.kind,
+            metroPort: status.bindings.metroPort,
+            observePort: status.bindings.observePort,
+            observe: Boolean(status.bindings.observe),
+        },
+        target: {
+            platform: status.bindings.device?.platform,
+            deviceBound: Boolean(status.bindings.device),
+            installBound: Boolean(status.bindings.install),
+        },
+        runtime: {
+            metroBound: Boolean(status.bindings.metro),
+            bundleBound: Boolean(status.bindings.bundle),
+            sandbox,
+            ...(projectedMetroTerminal ? { metroTerminal: projectedMetroTerminal } : {}),
+        },
+        automation: {
+            runnerBound: Boolean(status.bindings.runner),
+            recorderBound: Boolean(status.bindings.recorder),
+        },
+        proof: Boolean(status.bindings.proof),
+        // ADR §5.2 (L3): strict proof is an opt-in overlay outside the four groups, never a group.
+        proofOverlay: { active: Boolean(status.bindings.proof) },
+        ...(options.installIdentity ? { installIdentity: options.installIdentity.verdict } : {}),
+        // A live axis-I refusal means every gated tool refuses too — status must
+        // not read `ready` while that is true. A pending re-issue reads ready only
+        // because the gate heals it, which it does not do under a bound proof run.
+        ...installIdentityRefusal(options.installIdentity, Boolean(status.bindings.proof)),
         ...(recoveryStatus ? { recovery: recoveryStatus } : {}),
         ...(cleanupNextAction
             ? {
@@ -93,11 +158,24 @@ export function projectPublicAuthorityStatus(status, options = {}) {
                 },
             }
             : {}),
+        // Retained cleanup refusals follow the identifier-free staleDeviceCleanup discipline.
+        ...(options.recoveryRequirement?.startupCleanupBlocked
+            ? {
+                startupCleanupBlocked: {
+                    code: options.recoveryRequirement.startupCleanupBlocked.code,
+                    reason: options.recoveryRequirement.startupCleanupBlocked.reason,
+                    nextAction: options.recoveryRequirement.nextAction,
+                },
+            }
+            : {}),
         ...(options.recoveryRequirement && options.recoveryRequirement.requirement !== 'none'
             ? {
                 recoveryRequirement: {
                     requirement: options.recoveryRequirement.requirement,
                     priorOwner: options.recoveryRequirement.priorOwner,
+                    ...(typeof options.recoveryRequirement.priorOwnerHeartbeatAgeMs === 'number'
+                        ? { priorOwnerHeartbeatAgeMs: options.recoveryRequirement.priorOwnerHeartbeatAgeMs }
+                        : {}),
                     nextAction: options.recoveryRequirement.nextAction,
                 },
             }
@@ -114,7 +192,7 @@ export function projectPublicAuthorityStatus(status, options = {}) {
                         : {
                             expired: true,
                             nextAction: cleanupNextAction ??
-                                'The stale device release offer expired. Re-run rn_session({ action: "bind_device" }) to mint a fresh one.',
+                                'The stale device release offer expired. Re-run rn_session({ action: "bind_device", confirmed: true }) to release the proven-dead owner inline.',
                         }),
                 },
             }

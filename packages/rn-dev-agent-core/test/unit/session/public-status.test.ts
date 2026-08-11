@@ -215,6 +215,211 @@ test('GH#672: an outstanding cleanup journal exposes an identifier-free resume a
   }
 });
 
+function operationalStatus(state: string, bindings: Record<string, unknown> = {}) {
+  return {
+    available: true as const,
+    sessionId: 'session-secret',
+    sourceKey: 'source-secret',
+    worktreeKey: 'worktree-secret',
+    appRootKey: 'app-secret',
+    state,
+    claimEpoch: 1,
+    authorityVersion: 1,
+    leaseUntilMs: 100,
+    source: { kind: 'git' },
+    bindings,
+    claims: [],
+    worker: { instanceId: 'worker-secret', pid: 1, birthAvailable: true },
+  };
+}
+
+// ADR §2.3 (L0): the grouped projection appears alongside every legacy field.
+test('L0: phase folds pre-install operational states into selected', () => {
+  for (const state of ['active', 'source_bound', 'device_claimed', 'metro_bound']) {
+    assert.equal(projectPublicAuthorityStatus(operationalStatus(state)).phase, 'selected', state);
+  }
+});
+
+test('L0: phase reports running for install-complete states', () => {
+  for (const state of ['device_bound', 'runtime_bound', 'ready']) {
+    assert.equal(projectPublicAuthorityStatus(operationalStatus(state)).phase, 'running', state);
+  }
+});
+
+test('L0: a pending build projects the building phase for any operational state', () => {
+  for (const state of ['device_claimed', 'ready']) {
+    const projected = projectPublicAuthorityStatus(
+      operationalStatus(state, { pendingBuild: { buildToken: 'build-token-secret' } }),
+    );
+    assert.equal(projected.phase, 'building', state);
+    assert.equal(JSON.stringify(projected).includes('build-token-secret'), false);
+  }
+});
+
+test('L0: closing wins over a lingering pending build', () => {
+  const projected = projectPublicAuthorityStatus(
+    operationalStatus('closing', { pendingBuild: { buildToken: 'build-token-secret' } }),
+  );
+  assert.equal(projected.phase, 'closing');
+});
+
+test('L0: non-operational states expose no phase, only their internal name in detail', () => {
+  for (const state of ['blocked', 'handoff', 'handoff_cleanup', 'released', 'stale']) {
+    const projected = projectPublicAuthorityStatus(operationalStatus(state));
+    assert.equal('phase' in projected, false, state);
+    assert.equal(projected.detail, state);
+    assert.equal(projected.state, state);
+  }
+});
+
+test('L0: grouped sub-objects mirror the legacy fields without replacing them', () => {
+  const projected = projectPublicAuthorityStatus(
+    operationalStatus('ready', {
+      metroPort: 8193,
+      observePort: 7333,
+      device: { platform: 'ios', deviceId: 'SECRET-UDID' },
+      install: { artifactDigest: 'digest-secret' },
+      metro: { runtimeEvidenceAuthority: 'managed-sandbox-v1' },
+      metroTerminal: { code: 'METRO_EXITED', reason: 'exit 1', phase: 'serve', observedAt: 5 },
+      bundle: { targetId: 'target-secret' },
+      runner: { capability: 'bearer-secret' },
+      recorder: { claimKey: 'recorder-secret' },
+      observe: { port: 7333, cleanupCapability: 'observe-capability-secret' },
+      proof: { runId: 'proof-run-secret' },
+    }),
+  );
+
+  assert.equal(projected.state, 'ready');
+  assert.equal(projected.detail, 'ready');
+  assert.equal(projected.phase, 'running');
+  assert.equal(projected.sourceKind, 'git');
+  assert.equal(projected.metroPort, 8193);
+  assert.equal(projected.observePort, 7333);
+  assert.equal(projected.platform, 'ios');
+  assert.equal(projected.deviceBound, true);
+  assert.equal(projected.installBound, true);
+  assert.equal(projected.metroBound, true);
+  assert.equal(projected.sandbox, 'managed-sandbox-v1');
+  assert.equal(projected.bundleBound, true);
+  assert.equal(projected.runnerBound, true);
+  assert.equal(projected.recorderBound, true);
+
+  assert.deepEqual(projected.session, {
+    sourceKind: 'git',
+    metroPort: 8193,
+    observePort: 7333,
+    observe: true,
+  });
+  assert.deepEqual(projected.target, { platform: 'ios', deviceBound: true, installBound: true });
+  assert.deepEqual(projected.runtime, {
+    metroBound: true,
+    bundleBound: true,
+    sandbox: 'managed-sandbox-v1',
+    metroTerminal: { code: 'METRO_EXITED', reason: 'exit 1', phase: 'serve', observedAt: 5 },
+  });
+  assert.deepEqual(
+    projected.metroTerminal,
+    (projected.runtime as Record<string, unknown>).metroTerminal,
+  );
+  assert.deepEqual(projected.automation, { runnerBound: true, recorderBound: true });
+  assert.equal(projected.proof, true);
+});
+
+test('L0: an unbound session projects empty groups and inactive child flags', () => {
+  const projected = projectPublicAuthorityStatus(operationalStatus('active'));
+
+  assert.equal(projected.phase, 'selected');
+  assert.deepEqual(projected.session, {
+    sourceKind: 'git',
+    metroPort: undefined,
+    observePort: undefined,
+    observe: false,
+  });
+  assert.deepEqual(projected.target, {
+    platform: undefined,
+    deviceBound: false,
+    installBound: false,
+  });
+  assert.deepEqual(projected.runtime, {
+    metroBound: false,
+    bundleBound: false,
+    sandbox: 'unavailable',
+  });
+  assert.deepEqual(projected.automation, { runnerBound: false, recorderBound: false });
+  assert.equal(projected.proof, false);
+});
+
+test('L0: the grouped projection redacts child capabilities and identities', () => {
+  const projected = projectPublicAuthorityStatus(
+    operationalStatus('ready', {
+      device: { platform: 'ios', deviceId: 'SECRET-UDID' },
+      install: { artifactDigest: 'digest-secret' },
+      pendingBuild: { buildToken: 'build-token-secret', buildGeneration: 7, buildKind: 'debug' },
+      observe: {
+        port: 7333,
+        cleanupCapability: 'observe-capability-secret',
+        processBirth: 'observe-birth-secret',
+        instanceId: 'observe-instance-secret',
+      },
+      recorder: {
+        claimKey: 'recorder-claim-secret',
+        output: '/private/recording.mp4',
+        processBirth: 'recorder-birth-secret',
+      },
+      runner: { capability: 'bearer-secret', processBirth: 'runner-birth-secret' },
+      proof: { runId: 'proof-run-secret' },
+    }),
+  );
+  const serialized = JSON.stringify(projected);
+
+  for (const secret of [
+    'SECRET-UDID',
+    'digest-secret',
+    'build-token-secret',
+    'observe-capability-secret',
+    'observe-birth-secret',
+    'observe-instance-secret',
+    'recorder-claim-secret',
+    '/private/recording.mp4',
+    'recorder-birth-secret',
+    'bearer-secret',
+    'runner-birth-secret',
+    'proof-run-secret',
+  ]) {
+    assert.equal(serialized.includes(secret), false, secret);
+  }
+});
+
+// ADR §5.2 (L3): strict proof is an explicit opt-in overlay outside the four groups.
+test('L3: an inactive proof overlay is projected explicitly, not merely absent', () => {
+  const projected = projectPublicAuthorityStatus(operationalStatus('ready'));
+
+  assert.deepEqual(projected.proofOverlay, { active: false });
+  assert.equal(projected.proof, false);
+});
+
+test('L3: an active proof run projects the overlay outside the group sub-objects', () => {
+  const projected = projectPublicAuthorityStatus(
+    operationalStatus('ready', { proof: { runId: 'proof-run-secret' } }),
+  );
+
+  assert.deepEqual(projected.proofOverlay, { active: true });
+  assert.equal(projected.proof, true, 'the L0 child flag remains during the window');
+  for (const group of ['session', 'target', 'runtime', 'automation'] as const) {
+    const sub = projected[group] as Record<string, unknown>;
+    assert.equal('proof' in sub, false, group);
+    assert.equal('proofOverlay' in sub, false, group);
+  }
+});
+
+test('L3: the proof overlay never exposes the run identity', () => {
+  const projected = projectPublicAuthorityStatus(
+    operationalStatus('ready', { proof: { runId: 'proof-run-secret' } }),
+  );
+
+  assert.equal(JSON.stringify(projected).includes('proof-run-secret'), false);
+});
+
 test('handoff_cleanup public status never exposes recovery tokens or capabilities', () => {
   const projected = projectPublicAuthorityStatus({
     available: true,

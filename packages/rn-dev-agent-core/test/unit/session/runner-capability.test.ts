@@ -234,8 +234,9 @@ test('runner binding commits its claim and binding in one registry transaction',
   assert.equal(update.bindings.runner.instanceId, 'runner-1');
 });
 
-test('runner unbind finalizes the bound platform before releasing authority', () => {
+test('runner unbind finalizes the bound platform before one atomic release+unbind write', () => {
   const calls: string[] = [];
+  let update;
   const status = {
     bindings: {
       bundle: null,
@@ -246,8 +247,10 @@ test('runner unbind finalizes the bound platform before releasing authority', ()
     requireAvailable: () => ({
       registry: {
         getSessionStatus: () => status,
-        releaseResources: () => calls.push('release'),
-        updateBindings: () => calls.push('unbind'),
+        updateBindings: (_session, input) => {
+          calls.push('unbind');
+          update = input;
+        },
       },
       session: { sessionId: 'session-1', claimEpoch: 9 },
     }),
@@ -255,7 +258,10 @@ test('runner unbind finalizes the bound platform before releasing authority', ()
 
   unbindNativeRunner(runtime, (platform) => calls.push(`finalize:${platform}`));
 
-  assert.deepEqual(calls, ['finalize:ios', 'release', 'unbind']);
+  // Claim release and binding clear must share one registry transaction.
+  assert.deepEqual(calls, ['finalize:ios', 'unbind']);
+  assert.deepEqual(update.releaseResources, [{ type: 'runner', key: 'ios:device-1:9100' }]);
+  assert.equal(update.bindings.runner, null);
 });
 
 test('runner unbind skips finalization when authority is absent', () => {

@@ -5,6 +5,191 @@ description: "Release history for rn-dev-agent"
 
 ## Claude plugin
 
+### 0.76.1
+
+#### Patch Changes
+
+- f538146: Fold the initial stale-device transfer into `bind_device` with `confirmed: true`: a proven-dead device owner is released inline through the same journaled cleanup engine with death re-proven from durable state and no capability token minted, an interrupted journal resumes token-lessly via a bare `bind_device` of the same target, and `release_stale_device` stays as a token-less compatibility alias that accepts `confirmed: true` (or a previously minted legacy handle) while live, unproven, split, foreign-worker, and mismatched-journal cases keep refusing without mutation.
+- 95efdf1: Launch iOS Expo dev clients through the session's authority-bound Metro when no explicit dev-client deep link was bound.
+- Updated dependencies [f538146]
+- Updated dependencies [95efdf1]
+  - rn-dev-agent-core@0.71.1
+
+### 0.76.0
+
+#### Minor Changes
+
+- 7419435: Replace the text-entry fallback ladder with exact fiber/native owners that mutate once and require stable exact read-back.
+
+#### Patch Changes
+
+- e4465e5: Enforce Android exact-target readiness as one absolute 120-second wall-clock deadline, staging the exact client off-global until live proof and an atomic authority commit succeed while preserving ambient state on failure and iOS behavior.
+- 26d41da: Capture sanitized local failure and recovery patterns through the existing tool observer, deduplicate and bound the evidence store, and add a read-only trend report command.
+- 6c1533f: Report an installed-but-crashing fb-idb client as an interpreter incompatibility instead of looping on an "install idb" hint that reinstalls the same broken combination (#578).
+- 2d4b44f: Let a Maestro flow containing a mid-flow `launchApp` relaunch run to completion by re-proving the managed native origin once at flow end — reconnect-only, with no second cold start — instead of aborting between stages when the relaunched dev-client has not re-registered yet, so the flow's own post-launch steps can drive it back to the managed origin while a genuine authority mismatch still fails the run.
+- b2c8cc8: Redact `device_fill` text from stored Observe timeline events while retaining the target, text length, status, and other diagnostic metadata.
+- 722349e: Let `cdp_restart hardReset=true` complete the cold start it promises from a runner-bound session by classifying a terminated-but-unreaped process as absent rather than as an unreadable identity, and by escalating the bound runner's stop to SIGKILL after its SIGTERM grace once the pid is re-proven to carry that binding's exact birth token.
+- 8a7510b: Recover the session after a plugin-initiated byte-identical reinstall (for example a runner-respawn recovery) by retrying a refused install-identity preflight once behind the existing artifact-digest proof, except while a strict proof run is bound where the reinstall stays a hard stop and status projects the new install_identity_reissue_blocked state naming proof_capture discard as the way out, so rn_session status and cdp_status always report a truthful installIdentity verdict instead of claiming ready while gated tools refuse.
+- Updated dependencies [e4465e5]
+- Updated dependencies [26d41da]
+- Updated dependencies [6c1533f]
+- Updated dependencies [2d4b44f]
+- Updated dependencies [b2c8cc8]
+- Updated dependencies [722349e]
+- Updated dependencies [8a7510b]
+- Updated dependencies [7419435]
+  - rn-dev-agent-core@0.71.0
+
+### 0.75.3
+
+#### Patch Changes
+
+- 3563b3c: Report a stale-device release that already committed as a success naming the lost fence, instead of failing the whole call with `AUTHORITY_LOST_DURING_OPERATION` when the authority generation moves on after the commit.
+- Updated dependencies [3563b3c]
+  - rn-dev-agent-core@0.70.3
+
+### 0.75.2
+
+#### Patch Changes
+
+- 661979e: Capture navigation-initiating taps on controls mounted before recording starts without duplicating app handler calls, so saved open/close actions begin with the initiating tap instead of an unreachable visibility assertion.
+- Updated dependencies [661979e]
+  - rn-dev-agent-core@0.70.2
+
+### 0.75.1
+
+#### Patch Changes
+
+- 9a3d901: Derive every gated-tool `SESSION_AUTHORITY_REQUIRED` refusal from the session's own measured `recoveryRequirement` instead of naming unreachable `accept_handoff`/`adopt_stale` actions, retain and project a refused proven-dead startup cleanup as a `startupCleanupBlocked` carrying its typed code and truthful remedy rather than promising that another transport restart converges — redacting the refusal at the outcome boundary so no producer diagnostic, serial, PID, or path is ever logged, journaled, or projected — and propagate the ownership-recovery contract into the replay, readiness, and discovery workflow surfaces.
+- Updated dependencies [9a3d901]
+  - rn-dev-agent-core@0.70.1
+
+### 0.75.0
+
+#### Minor Changes
+
+- cafb36d: Add the `rn-workflow` skill and `/rn-dev-agent:run-workflow` command that sequence the proven operating chain before a real device journey — declared package-manager install, read-only inventory, typed `rn_session` recovery with status as the sole classifier, one exclusive device, managed integration and Metro, replay only via `cdp_run_action` after readiness proof, and reverse-order cleanup verified by the new deterministic `workflow-check` CLI.
+
+#### Patch Changes
+
+- 7cb0d40: Re-issue the install receipt after a Maestro `clearState` reinstall of the session's own artifact — proven by re-hashing the installed bytes against the bound artifact digest, with any other or unattestable artifact still refused as `APP_INSTALL_IDENTITY_CHANGED` — and accept an `appFile` on `cdp_run_action` that otherwise resolves from that same receipt.
+- Updated dependencies [7cb0d40]
+- Updated dependencies [cafb36d]
+  - rn-dev-agent-core@0.70.0
+
+### 0.74.6
+
+#### Patch Changes
+
+- f20c90f: Resolve a fresh session for the next worker when the current one is released or proven stale, so `rn_session action=release` is no longer a `SESSION_OWNER_LOST` dead end and released or proven-stale rows never trigger a spurious `SESSION_AUTHORITY_REQUIRED: multiple live sessions`.
+- b219094: Name the exact non-Git declaration remedy — `RN_DEV_AGENT_DECLARED_ROOT` for the exact existing application root and `RN_DEV_AGENT_DECLARED_MANIFESTS` for the required existing manifest files — in `NON_GIT_MANIFEST_REQUIRED` refusals, unavailable session status, and the canonical session-authority, setup, and readiness-workflow documentation, while keeping refusal and mutation behavior, Git-worktree identity, implicit-directory distrust, symlink containment, and the never-generated declaration unchanged.
+- 6716c15: Refuse orphaned integrated builds with exit code 2 and the supported `restore_integration` repair instead of starting an unmanaged bundler, and bound every stdio-capturing session-CLI wait so wedged CLIs fail typed; projects integrated by an earlier version must re-apply integration to refresh their on-disk adapter.
+- Updated dependencies [f20c90f]
+- Updated dependencies [b219094]
+- Updated dependencies [6716c15]
+  - rn-dev-agent-core@0.69.6
+
+### 0.74.5
+
+#### Patch Changes
+
+- d7a814f: Return a successful `release_stale_device` envelope only after its authenticated, device-scoped cleanup commit atomically advances the contender's fenced authority generation while preserving stale-owner death proof, exact claim epochs and handles, resumable runner/recorder cleanup, and neighboring source, Metro, install, package-integration, and port authority.
+- Updated dependencies [d7a814f]
+  - rn-dev-agent-core@0.69.5
+
+### 0.74.4
+
+#### Patch Changes
+
+- 03603da: Replace default stale-owner adoption for new `grouped-v1` sessions with automatic verified-dead startup cleanup: a restarting supervisor journals obligations on the proven-dead same-root session's row before any side effect, stops its recorded children by exact identity, restores package integration only from the SHA-256-verified manifest, releases claims only after every obligation is durably complete, and mints no adoption or handoff-recipient handles, while a live or unproven owner keeps refusing and legacy sessions retain the adoption surface for drain.
+- Updated dependencies [03603da]
+  - rn-dev-agent-core@0.69.4
+
+### 0.74.3
+
+#### Patch Changes
+
+- c070bf0: Give Android exact Dev Client pinning a bounded cold-start readiness window so a target that passes its initial CDP probe but stalls during setup can be disconnected and re-listed once it becomes responsive, while preserving exact Metro, app, and device filtering and the existing iOS timeout.
+- c070bf0: Keep the adb serial as Android authority while translating it to Expo's uniquely verified model or AVD display name only at the Expo CLI boundary, refusing missing, unauthorized, duplicate, foreign, or drifted mappings before Expo starts, pinning Expo's adb work with `ANDROID_SERIAL`, and preserving serial-bound build completion and abort behavior.
+- Updated dependencies [c070bf0]
+- Updated dependencies [c070bf0]
+  - rn-dev-agent-core@0.69.3
+
+### 0.74.2
+
+#### Patch Changes
+
+- e4bf0c2: Make runner unbind release its exclusive claim and clear the runner binding in one atomic registry transaction, so an interrupted device close or reacquire can no longer leave a divergent store whose dead session permanently vetoes `adopt_stale` with `RUNNER_OWNERSHIP_MISMATCH` (GH #692).
+- Updated dependencies [e4bf0c2]
+  - rn-dev-agent-core@0.69.2
+
+### 0.74.1
+
+#### Patch Changes
+
+- 9cccec7: Regroup authority-profile bookkeeping around the four ownership groups (Session, Target, Runtime, Automation) with every tool's resolved facet set, live probes, and error codes unchanged, and verify profile exhaustiveness at worker startup so an unprofiled registered tool fails at boot instead of at first call.
+- Updated dependencies [9cccec7]
+  - rn-dev-agent-core@0.69.1
+
+### 0.74.0
+
+#### Minor Changes
+
+- 5e37f16: Project strict proof as an explicit opt-in `proofOverlay` (`active` only while a run is in flight between `begin_rehearsal` and `finalize`/`discard`) outside the grouped `session`/`target`/`runtime`/`automation` sub-objects, keeping the existing `proof` child flag and all redaction rules unchanged.
+
+#### Patch Changes
+
+- c8b03c1: Reset an exact Android CDP connection after an advertised inspector handshakes but fails the mandatory runtime probe, serially re-list only the session's allocated Metro for the same app and serial/model association, and retain the actionable probe-timeout leaf when bounded re-registration expires.
+- Updated dependencies [c8b03c1]
+- Updated dependencies [5e37f16]
+  - rn-dev-agent-core@0.69.0
+
+### 0.73.0
+
+#### Minor Changes
+
+- 5365f82: Make Observe a read-only child of the session: `observe start` and `restart` now require only the live session (matching autostart's degraded mode) instead of the full device/Metro/bundle/runner authority chain, while the observe-port claim, capability and instance request authentication, fenced stop/cleanup chain, and the full authority gates on the E2E run and action panels all stay exactly as before.
+
+#### Patch Changes
+
+- Updated dependencies [5365f82]
+  - rn-dev-agent-core@0.68.0
+
+### 0.72.0
+
+#### Minor Changes
+
+- e953f49: Add an additive grouped projection to session status — a happy-path `phase` (`selected`/`building`/`running`/`closing`), the internal state in `detail`, `session`/`target`/`runtime`/`automation` sub-objects, and `observe`/`proof` child flags — alongside every existing field, with unchanged redaction.
+
+#### Patch Changes
+
+- Updated dependencies [e953f49]
+  - rn-dev-agent-core@0.67.0
+
+### 0.71.8
+
+#### Patch Changes
+
+- 76a6045: Stop a second supervisor for the same app root from misreading the live owner as a reused PID and stealing its single-instance lock, keep blocked contenders from opening operational children, rotate expired adoption handles so `status` never advertises a capability `adopt_stale` refuses, add a bounded capability-authenticated release for a proven-dead device or runner owner discovered after startup that transfers only the exact device cleanup obligations, and report whether recovery needs a transport restart, an attach, or an adoption.
+- Updated dependencies [76a6045]
+  - rn-dev-agent-core@0.66.8
+
+### 0.71.7
+
+#### Patch Changes
+
+- 3ee229d: Keep managed Metro descendants strict by default while allowing only Expo's canonical runtime-version manifest utility without session capability and requiring exact managed launch provenance.
+- Updated dependencies [3ee229d]
+  - rn-dev-agent-core@0.66.7
+
+### 0.71.6
+
+#### Patch Changes
+
+- 5b0a93f: Keep `.rn-agent` real and worktree-local by inheriting only `.rn-agent/actions` through consented setup and repository-local post-checkout integration, keeping SessionStart report-only, and migrating recognized legacy root links without copying mutable integration or session state.
+- Updated dependencies [5b0a93f]
+  - rn-dev-agent-core@0.66.6
+
 ### 0.71.5
 
 #### Patch Changes
@@ -1262,6 +1447,136 @@ identifier, hittable? }`, with a `fullNodeCount`. Far fewer tokens; `@ref`s for
   #188 shipped these to `main` with no version bump, leaving them undeliverable to marketplace installs; this patch publishes them.
 
 ## Core MCP server
+
+### 0.71.1
+
+#### Patch Changes
+
+- f538146: Fold the initial stale-device transfer into `bind_device` with `confirmed: true`: a proven-dead device owner is released inline through the same journaled cleanup engine with death re-proven from durable state and no capability token minted, an interrupted journal resumes token-lessly via a bare `bind_device` of the same target, and `release_stale_device` stays as a token-less compatibility alias that accepts `confirmed: true` (or a previously minted legacy handle) while live, unproven, split, foreign-worker, and mismatched-journal cases keep refusing without mutation.
+- 95efdf1: Launch iOS Expo dev clients through the session's authority-bound Metro when no explicit dev-client deep link was bound.
+
+### 0.71.0
+
+#### Minor Changes
+
+- 7419435: Replace the text-entry fallback ladder with exact fiber/native owners that mutate once and require stable exact read-back.
+
+#### Patch Changes
+
+- e4465e5: Enforce Android exact-target readiness as one absolute 120-second wall-clock deadline, staging the exact client off-global until live proof and an atomic authority commit succeed while preserving ambient state on failure and iOS behavior.
+- 26d41da: Capture sanitized local failure and recovery patterns through the existing tool observer, deduplicate and bound the evidence store, and add a read-only trend report command.
+- 6c1533f: Report an installed-but-crashing fb-idb client as an interpreter incompatibility instead of looping on an "install idb" hint that reinstalls the same broken combination (#578).
+- 2d4b44f: Let a Maestro flow containing a mid-flow `launchApp` relaunch run to completion by re-proving the managed native origin once at flow end — reconnect-only, with no second cold start — instead of aborting between stages when the relaunched dev-client has not re-registered yet, so the flow's own post-launch steps can drive it back to the managed origin while a genuine authority mismatch still fails the run.
+- b2c8cc8: Redact `device_fill` text from stored Observe timeline events while retaining the target, text length, status, and other diagnostic metadata.
+- 722349e: Let `cdp_restart hardReset=true` complete the cold start it promises from a runner-bound session by classifying a terminated-but-unreaped process as absent rather than as an unreadable identity, and by escalating the bound runner's stop to SIGKILL after its SIGTERM grace once the pid is re-proven to carry that binding's exact birth token.
+- 8a7510b: Recover the session after a plugin-initiated byte-identical reinstall (for example a runner-respawn recovery) by retrying a refused install-identity preflight once behind the existing artifact-digest proof, except while a strict proof run is bound where the reinstall stays a hard stop and status projects the new install_identity_reissue_blocked state naming proof_capture discard as the way out, so rn_session status and cdp_status always report a truthful installIdentity verdict instead of claiming ready while gated tools refuse.
+
+### 0.70.3
+
+#### Patch Changes
+
+- 3563b3c: Report a stale-device release that already committed as a success naming the lost fence, instead of failing the whole call with `AUTHORITY_LOST_DURING_OPERATION` when the authority generation moves on after the commit.
+
+### 0.70.2
+
+#### Patch Changes
+
+- 661979e: Capture navigation-initiating taps on controls mounted before recording starts without duplicating app handler calls, so saved open/close actions begin with the initiating tap instead of an unreachable visibility assertion.
+
+### 0.70.1
+
+#### Patch Changes
+
+- 9a3d901: Derive every gated-tool `SESSION_AUTHORITY_REQUIRED` refusal from the session's own measured `recoveryRequirement` instead of naming unreachable `accept_handoff`/`adopt_stale` actions, retain and project a refused proven-dead startup cleanup as a `startupCleanupBlocked` carrying its typed code and truthful remedy rather than promising that another transport restart converges — redacting the refusal at the outcome boundary so no producer diagnostic, serial, PID, or path is ever logged, journaled, or projected — and propagate the ownership-recovery contract into the replay, readiness, and discovery workflow surfaces.
+
+### 0.70.0
+
+#### Minor Changes
+
+- cafb36d: Add the `rn-workflow` skill and `/rn-dev-agent:run-workflow` command that sequence the proven operating chain before a real device journey — declared package-manager install, read-only inventory, typed `rn_session` recovery with status as the sole classifier, one exclusive device, managed integration and Metro, replay only via `cdp_run_action` after readiness proof, and reverse-order cleanup verified by the new deterministic `workflow-check` CLI.
+
+#### Patch Changes
+
+- 7cb0d40: Re-issue the install receipt after a Maestro `clearState` reinstall of the session's own artifact — proven by re-hashing the installed bytes against the bound artifact digest, with any other or unattestable artifact still refused as `APP_INSTALL_IDENTITY_CHANGED` — and accept an `appFile` on `cdp_run_action` that otherwise resolves from that same receipt.
+
+### 0.69.6
+
+#### Patch Changes
+
+- f20c90f: Resolve a fresh session for the next worker when the current one is released or proven stale, so `rn_session action=release` is no longer a `SESSION_OWNER_LOST` dead end and released or proven-stale rows never trigger a spurious `SESSION_AUTHORITY_REQUIRED: multiple live sessions`.
+- b219094: Name the exact non-Git declaration remedy — `RN_DEV_AGENT_DECLARED_ROOT` for the exact existing application root and `RN_DEV_AGENT_DECLARED_MANIFESTS` for the required existing manifest files — in `NON_GIT_MANIFEST_REQUIRED` refusals, unavailable session status, and the canonical session-authority, setup, and readiness-workflow documentation, while keeping refusal and mutation behavior, Git-worktree identity, implicit-directory distrust, symlink containment, and the never-generated declaration unchanged.
+- 6716c15: Refuse orphaned integrated builds with exit code 2 and the supported `restore_integration` repair instead of starting an unmanaged bundler, and bound every stdio-capturing session-CLI wait so wedged CLIs fail typed; projects integrated by an earlier version must re-apply integration to refresh their on-disk adapter.
+
+### 0.69.5
+
+#### Patch Changes
+
+- d7a814f: Return a successful `release_stale_device` envelope only after its authenticated, device-scoped cleanup commit atomically advances the contender's fenced authority generation while preserving stale-owner death proof, exact claim epochs and handles, resumable runner/recorder cleanup, and neighboring source, Metro, install, package-integration, and port authority.
+
+### 0.69.4
+
+#### Patch Changes
+
+- 03603da: Replace default stale-owner adoption for new `grouped-v1` sessions with automatic verified-dead startup cleanup: a restarting supervisor journals obligations on the proven-dead same-root session's row before any side effect, stops its recorded children by exact identity, restores package integration only from the SHA-256-verified manifest, releases claims only after every obligation is durably complete, and mints no adoption or handoff-recipient handles, while a live or unproven owner keeps refusing and legacy sessions retain the adoption surface for drain.
+
+### 0.69.3
+
+#### Patch Changes
+
+- c070bf0: Give Android exact Dev Client pinning a bounded cold-start readiness window so a target that passes its initial CDP probe but stalls during setup can be disconnected and re-listed once it becomes responsive, while preserving exact Metro, app, and device filtering and the existing iOS timeout.
+- c070bf0: Keep the adb serial as Android authority while translating it to Expo's uniquely verified model or AVD display name only at the Expo CLI boundary, refusing missing, unauthorized, duplicate, foreign, or drifted mappings before Expo starts, pinning Expo's adb work with `ANDROID_SERIAL`, and preserving serial-bound build completion and abort behavior.
+
+### 0.69.2
+
+#### Patch Changes
+
+- e4bf0c2: Make runner unbind release its exclusive claim and clear the runner binding in one atomic registry transaction, so an interrupted device close or reacquire can no longer leave a divergent store whose dead session permanently vetoes `adopt_stale` with `RUNNER_OWNERSHIP_MISMATCH` (GH #692).
+
+### 0.69.1
+
+#### Patch Changes
+
+- 9cccec7: Regroup authority-profile bookkeeping around the four ownership groups (Session, Target, Runtime, Automation) with every tool's resolved facet set, live probes, and error codes unchanged, and verify profile exhaustiveness at worker startup so an unprofiled registered tool fails at boot instead of at first call.
+
+### 0.69.0
+
+#### Minor Changes
+
+- 5e37f16: Project strict proof as an explicit opt-in `proofOverlay` (`active` only while a run is in flight between `begin_rehearsal` and `finalize`/`discard`) outside the grouped `session`/`target`/`runtime`/`automation` sub-objects, keeping the existing `proof` child flag and all redaction rules unchanged.
+
+#### Patch Changes
+
+- c8b03c1: Reset an exact Android CDP connection after an advertised inspector handshakes but fails the mandatory runtime probe, serially re-list only the session's allocated Metro for the same app and serial/model association, and retain the actionable probe-timeout leaf when bounded re-registration expires.
+
+### 0.68.0
+
+#### Minor Changes
+
+- 5365f82: Make Observe a read-only child of the session: `observe start` and `restart` now require only the live session (matching autostart's degraded mode) instead of the full device/Metro/bundle/runner authority chain, while the observe-port claim, capability and instance request authentication, fenced stop/cleanup chain, and the full authority gates on the E2E run and action panels all stay exactly as before.
+
+### 0.67.0
+
+#### Minor Changes
+
+- e953f49: Add an additive grouped projection to session status — a happy-path `phase` (`selected`/`building`/`running`/`closing`), the internal state in `detail`, `session`/`target`/`runtime`/`automation` sub-objects, and `observe`/`proof` child flags — alongside every existing field, with unchanged redaction.
+
+### 0.66.8
+
+#### Patch Changes
+
+- 76a6045: Stop a second supervisor for the same app root from misreading the live owner as a reused PID and stealing its single-instance lock, keep blocked contenders from opening operational children, rotate expired adoption handles so `status` never advertises a capability `adopt_stale` refuses, add a bounded capability-authenticated release for a proven-dead device or runner owner discovered after startup that transfers only the exact device cleanup obligations, and report whether recovery needs a transport restart, an attach, or an adoption.
+
+### 0.66.7
+
+#### Patch Changes
+
+- 3ee229d: Keep managed Metro descendants strict by default while allowing only Expo's canonical runtime-version manifest utility without session capability and requiring exact managed launch provenance.
+
+### 0.66.6
+
+#### Patch Changes
+
+- 5b0a93f: Keep `.rn-agent` real and worktree-local by inheriting only `.rn-agent/actions` through consented setup and repository-local post-checkout integration, keeping SessionStart report-only, and migrating recognized legacy root links without copying mutable integration or session state.
 
 ### 0.66.5
 

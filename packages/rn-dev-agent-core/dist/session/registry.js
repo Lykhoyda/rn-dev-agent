@@ -1,6 +1,8 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { openAuthorityStore, } from './authority-store.js';
+import { hasCompleteRecorderCleanupIdentity, hasCompleteRunnerCleanupIdentity, } from './cleanup-identity.js';
+import { NON_GIT_DECLARATION_NEXT_ACTION } from './declared-source-contract.js';
 import { probeMetroListener } from './metro-binding.js';
 const INITIALIZATION_WAIT = new Int32Array(new SharedArrayBuffer(4));
 export const AUTHORITY_REGISTRY_SCHEMA_VERSION = 4;
@@ -18,6 +20,7 @@ function referencesMetroEvidenceSocket(value, path) {
 export class SessionAuthorityError extends Error {
     code;
     holder;
+    supplementalMeta;
     details;
     constructor(code, message, holder, details) {
         super(`${code}: ${message}`);
@@ -25,6 +28,12 @@ export class SessionAuthorityError extends Error {
         this.code = code;
         this.holder = holder;
         this.details = details;
+    }
+    attachMeta(meta) {
+        this.supplementalMeta = { ...this.supplementalMeta, ...meta };
+    }
+    getSupplementalMeta() {
+        return { ...this.supplementalMeta };
     }
 }
 // GH #672: recovery handles are bounded. `status` rotates one that is expired or
@@ -38,6 +47,7 @@ const errorAxes = {
     OPERATION_ALREADY_IN_PROGRESS: 'C',
     SOURCE_WORKTREE_MISMATCH: 'S',
     SOURCE_REVISION_NOT_BUNDLED: 'S',
+    NON_GIT_MANIFEST_REQUIRED: 'S',
     APP_INSTALL_IDENTITY_CHANGED: 'I',
     METRO_PORT_CLAIM_CONFLICT: 'M',
     PORT_OCCUPIED_UNOWNED: 'M',
@@ -60,11 +70,19 @@ const errorAxes = {
     OBSERVE_AUTHORITY_MISMATCH: 'O',
     PROOF_AUTHORITY_MISMATCH: 'P',
 };
+// Codes whose repair is a named declaration/configuration path, not another status read.
+const errorNextActions = {
+    NON_GIT_MANIFEST_REQUIRED: NON_GIT_DECLARATION_NEXT_ACTION,
+};
+export function authorityRemedyNextAction(code) {
+    return errorNextActions[code];
+}
 export function shortAuthorityIdentity(value) {
     return createHash('sha256').update(JSON.stringify(value)).digest('hex').slice(0, 16);
 }
 export function authorityErrorMeta(error) {
     return {
+        ...error.getSupplementalMeta(),
         axis: error.details?.axis ?? errorAxes[error.code],
         expected: error.details?.expected,
         observed: error.details?.observed,
@@ -75,6 +93,7 @@ export function authorityErrorMeta(error) {
             }
             : undefined,
         nextAction: error.details?.nextAction ??
+            errorNextActions[error.code] ??
             'Run rn_session with action "status" and repair the named authority axis.',
     };
 }
@@ -113,6 +132,30 @@ function isOperationalState(state) {
 }
 function isFenceableState(state) {
     return isOperationalState(state) || state === 'handoff';
+}
+function readStartupCleanupBlocker(bindingsJson) {
+    let journal;
+    try {
+        const bindings = JSON.parse(bindingsJson);
+        const value = bindings.startupCleanup;
+        journal = value && typeof value === 'object' ? value : undefined;
+    }
+    catch {
+        return undefined;
+    }
+    if (!journal || typeof journal.finishedAt === 'number')
+        return undefined;
+    const refusal = journal.refusal;
+    if (!refusal || typeof refusal !== 'object')
+        return undefined;
+    const record = refusal;
+    if (typeof record.code !== 'string' || typeof record.reason !== 'string')
+        return undefined;
+    return {
+        code: record.code,
+        reason: record.reason,
+        ...(typeof record.nextAction === 'string' ? { nextAction: record.nextAction } : {}),
+    };
 }
 function bindingsRunnerPresent(bindingsJson) {
     const bindings = JSON.parse(bindingsJson);
@@ -259,26 +302,7 @@ export class SessionRegistry {
             if (resources.some((resource) => resource.type === 'device')) {
                 this.#assertNoStaleDeviceCleanup(bindings);
             }
-            for (const resource of resources) {
-                const claim = this.#findConflictingClaim(resource);
-                if (!claim ||
-                    (claim.session_id === session.sessionId && claim.claim_epoch === session.claimEpoch)) {
-                    continue;
-                }
-                const probe = probes.get(claim.session_id);
-                if (!probe || probe.claimEpoch !== claim.claim_epoch) {
-                    throw claimConflict(claim);
-                }
-                if (probe.status === 'match')
-                    throw claimConflict(claim);
-                if (probe.status === 'unknown') {
-                    if (claim.lease_until_ms < now) {
-                        throw new SessionAuthorityError('STALE_LEASE_NOT_RECLAIMABLE', 'expired lease owner identity could not be proven', { sessionId: claim.session_id, claimEpoch: claim.claim_epoch });
-                    }
-                    throw claimConflict(claim);
-                }
-                throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'a proven-stale owner requires explicit adopt_stale before claims transfer', { sessionId: claim.session_id, claimEpoch: claim.claim_epoch });
-            }
+            this.#assertClaimsAvailable(session, resources, probes, now);
             const leaseUntil = now + this.#leaseMs;
             for (const resource of resources) {
                 this.#database
@@ -445,6 +469,9 @@ export class SessionRegistry {
                     throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', 'managed Metro donor authority changed during recovery worker rotation');
                 }
             }
+            // L4: grouped-v1 sessions never mint adoption or handoff-recipient handles —
+            // a proven-dead same-root owner is released by startup cleanup instead.
+            const grouped = JSON.parse(row.source_json).model === 'grouped-v1';
             const expiresMs = now + RECOVERY_HANDLE_TTL_MS;
             const priorHandles = bindings.recoveryHandles;
             const resumableAdoptStale = row.state === 'handoff_cleanup' &&
@@ -495,7 +522,7 @@ export class SessionRegistry {
                bindings_json = ?, authority_version = authority_version + 1, updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ?
              AND state IN ('blocked', 'handoff_cleanup')`)
-                .run(worker.instanceId, worker.pid, worker.token, JSON.stringify({ ...bindings, recoveryHandles }), now, session.sessionId, session.claimEpoch);
+                .run(worker.instanceId, worker.pid, worker.token, grouped ? JSON.stringify(bindings) : JSON.stringify({ ...bindings, recoveryHandles }), now, session.sessionId, session.claimEpoch);
         });
     }
     /**
@@ -568,7 +595,8 @@ export class SessionRegistry {
      */
     inspectRecoveryRequirement(sessionId) {
         const row = asSession(this.#database
-            .prepare(`SELECT state, bindings_json FROM sessions WHERE session_id = ?`)
+            .prepare(`SELECT source_key, worktree_key, app_root_key, state, source_json, bindings_json
+           FROM sessions WHERE session_id = ?`)
             .get(sessionId));
         if (!row || (row.state !== 'blocked' && row.state !== 'handoff_cleanup')) {
             return { requirement: 'none', priorOwner: 'absent', nextAction: '' };
@@ -580,12 +608,14 @@ export class SessionRegistry {
                 nextAction: 'Resume the transferred cleanup with rn_session({ action: "adopt_stale", adoptionHandle }).',
             };
         }
+        const grouped = JSON.parse(row.source_json).model === 'grouped-v1';
         const bindings = JSON.parse(row.bindings_json);
         const adoptionRequired = bindings.adoptionRequired;
         const priorSessionId = typeof adoptionRequired?.sessionId === 'string' ? adoptionRequired.sessionId : null;
         const prior = priorSessionId
             ? asSession(this.#database
-                .prepare(`SELECT session_id, claim_epoch, supervisor_pid, supervisor_birth
+                .prepare(`SELECT session_id, source_key, worktree_key, app_root_key, claim_epoch,
+                      supervisor_pid, supervisor_birth, heartbeat_ms, bindings_json
                FROM sessions WHERE session_id = ?`)
                 .get(priorSessionId))
             : null;
@@ -608,15 +638,50 @@ export class SessionRegistry {
             status = 'unknown';
         }
         if (status === 'mismatch') {
+            if (grouped) {
+                const isSameAppRoot = prior.worktree_key === row.worktree_key && prior.app_root_key === row.app_root_key;
+                if (!isSameAppRoot) {
+                    return {
+                        requirement: 'attach',
+                        priorOwner: 'stale',
+                        nextAction: "The proven-dead owner belongs to a different app root in this worktree, so startup cleanup cannot release it here. Start and close rn-dev-agent from the prior owner's app root to release its authority, or use a separate worktree.",
+                    };
+                }
+                if (prior.source_key !== row.source_key) {
+                    return {
+                        requirement: 'attach',
+                        priorOwner: 'stale',
+                        nextAction: 'The proven-dead owner has a different source identity for this app root, so startup cleanup cannot release it under the current declared manifests. Restore the declared manifests that produced the prior identity, start and close rn-dev-agent to release its authority, then reapply the manifest changes; otherwise use a separate worktree.',
+                    };
+                }
+                // Only cleanup without a retained refusal may promise automatic convergence.
+                const blocked = readStartupCleanupBlocker(prior.bindings_json);
+                if (blocked) {
+                    return {
+                        requirement: 'transport-restart',
+                        priorOwner: 'stale',
+                        startupCleanupBlocked: blocked,
+                        nextAction: blocked.nextAction ??
+                            `Startup cleanup refused with ${blocked.code} and will refuse again on the next restart: ${blocked.reason}. Resolve that refusal before restarting the MCP transport.`,
+                    };
+                }
+                return {
+                    requirement: 'transport-restart',
+                    priorOwner: 'stale',
+                    nextAction: 'The prior owner is proven dead. Restart the MCP transport (/mcp); startup cleanup releases it automatically.',
+                };
+            }
             return {
                 requirement: 'adoption',
                 priorOwner: 'stale',
                 nextAction: 'The prior owner is proven dead. Adopt it with rn_session({ action: "adopt_stale", adoptionHandle }).',
             };
         }
+        const heartbeatAgeMs = Math.min(Math.max(0, this.#now() - (typeof prior.heartbeat_ms === 'number' ? prior.heartbeat_ms : 0)), 24 * 3_600_000);
         return {
             requirement: 'attach',
             priorOwner: status === 'match' ? 'live' : 'unknown',
+            ...(grouped ? { priorOwnerHeartbeatAgeMs: heartbeatAgeMs } : {}),
             nextAction: status === 'match'
                 ? 'Another live rn-dev-agent supervisor owns this worktree. Close it or work in a separate worktree; a live owner is never adopted.'
                 : 'The prior owner identity could not be proven, so it is treated as live. Close the other session or re-run once its process state is observable.',
@@ -680,26 +745,22 @@ export class SessionRegistry {
      * offers a bounded, capability-authenticated release for the exact device only — it
      * never transfers source, package-integration, Metro, or port authority, so a dead
      * owner from a foreign worktree can be cleaned up without adopting its session.
+     * ADR L5: new code no longer mints these offers; `beginConfirmedStaleDeviceRelease`
+     * is the default path. This mint stays only as the trivially revertible legacy path.
      */
     prepareStaleResourceRelease(session, target) {
         const deviceKey = `${target.platform}:${target.deviceId}`;
         const now = this.#now();
         return this.#transaction(() => {
             const current = this.#requireSession(session);
-            const claims = this.#deviceFamilyClaims(deviceKey).filter((claim) => claim.session_id !== session.sessionId);
-            if (claims.length === 0) {
-                throw new SessionAuthorityError('DEVICE_CLAIM_CONFLICT', `no foreign claim on ${deviceKey} needs release`);
-            }
-            const owners = new Set(claims.map((claim) => `${claim.session_id}\0${claim.claim_epoch}`));
-            if (owners.size !== 1) {
-                throw new SessionAuthorityError('DEVICE_CLAIM_CONFLICT', `${deviceKey} is split across several claim epochs; release each owner explicitly`);
-            }
-            const prior = this.#requireProvenDeadOwner(claims[0].session_id, claims[0].claim_epoch);
-            const priorBindings = JSON.parse(prior.bindings_json);
+            const prior = this.#requireSingleProvenDeadDeviceOwner(session, deviceKey);
+            const family = this.#requireExactStaleDeviceFamily(session, prior, target);
             const obligations = [];
-            if (this.#bindingMatchesDevice(priorBindings.runner, target))
+            if (family.androidMetroReverse)
+                obligations.push('androidMetroReverse');
+            if (family.runner)
                 obligations.push('runner');
-            if (this.#bindingMatchesDevice(priorBindings.recorder, target))
+            if (family.recorder)
                 obligations.push('recorder');
             const offer = {
                 token: randomBytes(32).toString('base64url'),
@@ -726,6 +787,62 @@ export class SessionRegistry {
         });
     }
     /**
+     * ADR L5: read-only view of what a confirmed inline release would transfer. Proves
+     * the owner's death and computes the exact obligations without minting a capability
+     * or writing any state.
+     */
+    inspectStaleDeviceRelease(session, target) {
+        const deviceKey = `${target.platform}:${target.deviceId}`;
+        this.#requireSession(session);
+        const prior = this.#requireSingleProvenDeadDeviceOwner(session, deviceKey);
+        const family = this.#requireExactStaleDeviceFamily(session, prior, target);
+        const obligations = [];
+        if (family.androidMetroReverse)
+            obligations.push('androidMetroReverse');
+        if (family.runner)
+            obligations.push('runner');
+        if (family.recorder)
+            obligations.push('recorder');
+        return {
+            priorSessionId: prior.session_id,
+            priorClaimEpoch: prior.claim_epoch,
+            obligations,
+        };
+    }
+    /**
+     * ADR L5 (captain-approved D3): confirmed inline replacement for the capability-token
+     * transfer. Authorization is the caller's explicit confirmation plus positive death
+     * proof re-read from durable state inside this transaction, scoped to the exact
+     * requested device. An existing journal resumes token-lessly; nothing is minted and
+     * nothing expires.
+     */
+    beginConfirmedStaleDeviceRelease(session, workerInstance, target) {
+        const now = this.#now();
+        return this.#transaction(() => {
+            const current = this.#requireSession(session);
+            const bindings = JSON.parse(current.bindings_json);
+            if (current.worker_instance !== workerInstance) {
+                throw new SessionAuthorityError('HANDOFF_TARGET_MISMATCH', 'stale device release is not owned by this worker');
+            }
+            const resumed = bindings.staleDeviceCleanup;
+            if (resumed) {
+                this.#assertStaleReleaseJournalScope(current, resumed, target);
+                return {
+                    platform: String(resumed.platform),
+                    deviceId: String(resumed.deviceId),
+                    ...(resumed.androidMetroReverse
+                        ? { androidMetroReverse: resumed.androidMetroReverse }
+                        : {}),
+                    runner: resumed.runner ?? null,
+                    recorder: resumed.recorder ?? null,
+                };
+            }
+            const deviceKey = `${target.platform}:${target.deviceId}`;
+            const prior = this.#requireSingleProvenDeadDeviceOwner(session, deviceKey);
+            return this.#transferStaleDeviceAuthority(session, bindings, prior, target, now);
+        });
+    }
+    /**
      * GH #672: take over the dead owner's exact device-family claims and its cleanup
      * obligations. Every proof is re-read from durable state here, not trusted from the
      * mint: a prior owner that came back to life, changed epoch, or cannot be identified
@@ -745,6 +862,9 @@ export class SessionRegistry {
                 return {
                     platform: String(resumed.platform),
                     deviceId: String(resumed.deviceId),
+                    ...(resumed.androidMetroReverse
+                        ? { androidMetroReverse: resumed.androidMetroReverse }
+                        : {}),
                     runner: resumed.runner ?? null,
                     recorder: resumed.recorder ?? null,
                 };
@@ -766,67 +886,173 @@ export class SessionRegistry {
             if (target && (target.platform !== platform || target.deviceId !== deviceId)) {
                 throw new SessionAuthorityError('DEVICE_AUTHORITY_MISMATCH', 'stale device release offer does not match the requested exact device', undefined, { axis: 'D', nextAction: 'Run rn_session with action "status" for the exact recovery.' });
             }
-            const deviceKey = `${platform}:${deviceId}`;
             if (offer.expiresMs < now) {
                 throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', 'stale device release capability is invalid or expired');
             }
             const prior = this.#requireProvenDeadOwner(offer.priorSessionId, offer.priorClaimEpoch);
-            const priorBindings = JSON.parse(prior.bindings_json);
-            const claims = this.#deviceFamilyClaims(deviceKey).filter((claim) => claim.session_id === prior.session_id && claim.claim_epoch === prior.claim_epoch);
-            const runner = this.#bindingMatchesDevice(priorBindings.runner, { platform, deviceId })
-                ? priorBindings.runner
-                : null;
-            const recorder = this.#bindingMatchesDevice(priorBindings.recorder, { platform, deviceId })
-                ? priorBindings.recorder
-                : null;
-            for (const claim of claims) {
-                this.#database
-                    .prepare(`UPDATE claims SET session_id = ?, claim_epoch = ?, lease_until_ms = ?
-             WHERE resource_type = ? AND resource_key = ?
-               AND session_id = ? AND claim_epoch = ?`)
-                    .run(session.sessionId, session.claimEpoch, now + this.#leaseMs, claim.resource_type, claim.resource_key, prior.session_id, prior.claim_epoch);
-            }
-            const runnerClaimKey = runner ? `${platform}:${deviceId}:${String(runner.port)}` : null;
-            const cleanup = {
+            return this.#transferStaleDeviceAuthority(session, bindings, prior, { platform, deviceId }, now);
+        });
+    }
+    #transferStaleDeviceAuthority(session, bindings, prior, target, now) {
+        const { platform, deviceId } = target;
+        const deviceKey = `${platform}:${deviceId}`;
+        const priorBindings = JSON.parse(prior.bindings_json);
+        const family = this.#requireExactStaleDeviceFamily(session, prior, target);
+        const { androidMetroReverse, runner, recorder } = family;
+        for (const claim of family.claims) {
+            this.#database
+                .prepare(`UPDATE claims SET session_id = ?, claim_epoch = ?, lease_until_ms = ?
+           WHERE resource_type = ? AND resource_key = ?
+             AND session_id = ? AND claim_epoch = ?`)
+                .run(session.sessionId, session.claimEpoch, now + this.#leaseMs, claim.resource_type, claim.resource_key, prior.session_id, prior.claim_epoch);
+        }
+        const runnerClaimKey = runner ? `${platform}:${deviceId}:${String(runner.port)}` : null;
+        const cleanup = {
+            platform,
+            deviceId,
+            priorSessionId: prior.session_id,
+            priorClaimEpoch: prior.claim_epoch,
+            transferredAt: now,
+            ...(androidMetroReverse
+                ? {
+                    androidMetroReverse: {
+                        ...androidMetroReverse,
+                        claimKey: deviceKey,
+                        stopRequestedAt: now,
+                        completedAt: null,
+                    },
+                }
+                : {}),
+            runner: runner
+                ? { ...runner, claimKey: runnerClaimKey, stopRequestedAt: now, completedAt: null }
+                : null,
+            recorder: recorder
+                ? { ...recorder, claimKey: deviceKey, stopRequestedAt: now, completedAt: null }
+                : null,
+        };
+        this.#database
+            .prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
+         WHERE session_id = ? AND claim_epoch = ?`)
+            .run(JSON.stringify({ ...bindings, staleDeviceCleanup: cleanup }), now, session.sessionId, session.claimEpoch);
+        // The dead owner keeps a durable record of WHAT left and to whom: its cleanup
+        // journal must survive, but it must never be replayed by a later adoption.
+        this.#database
+            .prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
+         WHERE session_id = ? AND claim_epoch = ?`)
+            .run(JSON.stringify({
+            ...priorBindings,
+            device: null,
+            androidMetroReverse: null,
+            runner: null,
+            recorder: null,
+            deviceReleased: {
+                toSessionId: session.sessionId,
+                toClaimEpoch: session.claimEpoch,
+                at: now,
                 platform,
                 deviceId,
-                priorSessionId: prior.session_id,
-                priorClaimEpoch: prior.claim_epoch,
-                transferredAt: now,
-                runner: runner
-                    ? { ...runner, claimKey: runnerClaimKey, stopRequestedAt: now, completedAt: null }
-                    : null,
-                recorder: recorder
-                    ? { ...recorder, claimKey: deviceKey, stopRequestedAt: now, completedAt: null }
-                    : null,
-            };
-            this.#database
-                .prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`)
-                .run(JSON.stringify({ ...bindings, staleDeviceCleanup: cleanup }), now, session.sessionId, session.claimEpoch);
-            // The dead owner keeps a durable record of WHAT left and to whom: its cleanup
-            // journal must survive, but it must never be replayed by a later adoption.
-            this.#database
-                .prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
-           WHERE session_id = ? AND claim_epoch = ?`)
-                .run(JSON.stringify({
-                ...priorBindings,
-                device: null,
-                runner: null,
-                recorder: null,
-                deviceReleased: {
-                    toSessionId: session.sessionId,
-                    toClaimEpoch: session.claimEpoch,
-                    at: now,
-                    platform,
-                    deviceId,
-                    device: priorBindings.device ?? null,
-                    runner,
-                    recorder,
-                },
-            }), now, prior.session_id, prior.claim_epoch);
-            return { platform, deviceId, runner: cleanup.runner, recorder: cleanup.recorder };
-        });
+                device: priorBindings.device ?? null,
+                androidMetroReverse,
+                runner,
+                recorder,
+            },
+        }), now, prior.session_id, prior.claim_epoch);
+        return {
+            platform,
+            deviceId,
+            ...(cleanup.androidMetroReverse ? { androidMetroReverse: cleanup.androidMetroReverse } : {}),
+            runner: cleanup.runner,
+            recorder: cleanup.recorder,
+        };
+    }
+    #requireSingleProvenDeadDeviceOwner(session, deviceKey) {
+        const claims = this.#deviceFamilyClaims(deviceKey);
+        if (claims.length === 0) {
+            throw new SessionAuthorityError('DEVICE_CLAIM_CONFLICT', `no foreign claim on ${deviceKey} needs release`);
+        }
+        const owners = new Set(claims.map((claim) => `${claim.session_id}\0${claim.claim_epoch}`));
+        if (owners.size !== 1) {
+            throw new SessionAuthorityError('DEVICE_CLAIM_CONFLICT', `${deviceKey} is split across several claim epochs; release each owner explicitly`);
+        }
+        if (claims[0].session_id === session.sessionId &&
+            claims[0].claim_epoch === session.claimEpoch) {
+            throw new SessionAuthorityError('DEVICE_CLAIM_CONFLICT', `no foreign claim on ${deviceKey} needs release`);
+        }
+        return this.#requireProvenDeadOwner(claims[0].session_id, claims[0].claim_epoch);
+    }
+    #requireExactStaleDeviceFamily(session, prior, target) {
+        const deviceKey = `${target.platform}:${target.deviceId}`;
+        const claims = this.#deviceFamilyClaims(deviceKey);
+        if (claims.length === 0 ||
+            claims.some((claim) => claim.session_id !== prior.session_id || claim.claim_epoch !== prior.claim_epoch)) {
+            throw new SessionAuthorityError('DEVICE_CLAIM_CONFLICT', `${deviceKey} is split across several claim epochs; release each owner explicitly`);
+        }
+        if (claims.some((claim) => claim.resource_type === 'device-receipt' || claim.resource_type === 'runner-receipt')) {
+            throw new SessionAuthorityError('DEVICE_AUTHORITY_MISMATCH', 'stale device cleanup cannot transfer platform validation receipt authority');
+        }
+        const bindings = JSON.parse(prior.bindings_json);
+        if (!this.#bindingMatchesDevice(bindings.device, target)) {
+            throw new SessionAuthorityError('DEVICE_AUTHORITY_MISMATCH', 'stale device claim does not match its owner binding');
+        }
+        const deviceClaims = claims.filter((claim) => claim.resource_type === 'device');
+        if (deviceClaims.length !== 1 || deviceClaims[0].resource_key !== deviceKey) {
+            throw new SessionAuthorityError('DEVICE_AUTHORITY_MISMATCH', 'stale device binding has no exclusive cleanup claim');
+        }
+        const current = this.#requireSession(session);
+        const currentBindings = JSON.parse(current.bindings_json);
+        if (this.#bindingMatchesDevice(currentBindings.device, target) ||
+            this.#bindingMatchesDevice(currentBindings.runner, target) ||
+            this.#bindingMatchesDevice(currentBindings.recorder, target)) {
+            throw new SessionAuthorityError('DEVICE_AUTHORITY_MISMATCH', 'stale device cleanup conflicts with existing target bindings');
+        }
+        const reverseValue = bindings.androidMetroReverse;
+        const androidMetroReverse = reverseValue &&
+            typeof reverseValue === 'object' &&
+            target.platform === 'android' &&
+            reverseValue.platform === 'android' &&
+            reverseValue.deviceId === target.deviceId &&
+            Number.isSafeInteger(reverseValue.metroPort) &&
+            reverseValue.local ===
+                `tcp:${String(reverseValue.metroPort)}` &&
+            reverseValue.remote ===
+                `tcp:${String(reverseValue.metroPort)}`
+            ? reverseValue
+            : null;
+        if (reverseValue !== null && reverseValue !== undefined && !androidMetroReverse) {
+            throw new SessionAuthorityError('PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN', 'stale physical Android Metro reverse binding does not match the exact device and port');
+        }
+        const runnerClaims = claims.filter((claim) => claim.resource_type === 'runner');
+        const runnerValue = bindings.runner;
+        const runner = this.#bindingMatchesDevice(runnerValue, target)
+            ? runnerValue
+            : null;
+        if (runnerValue !== null && runnerValue !== undefined && !runner) {
+            throw new SessionAuthorityError('RUNNER_OWNERSHIP_MISMATCH', 'stale runner binding targets another device');
+        }
+        if (runner && !hasCompleteRunnerCleanupIdentity(runner)) {
+            throw new SessionAuthorityError('RUNNER_ADOPTION_REQUIRED', 'stale runner cleanup identity is incomplete');
+        }
+        const runnerClaimKey = runner ? `${deviceKey}:${String(runner.port)}` : null;
+        if (runnerClaims.length !== (runner ? 1 : 0) ||
+            (runner && runnerClaims[0].resource_key !== runnerClaimKey)) {
+            throw new SessionAuthorityError('RUNNER_OWNERSHIP_MISMATCH', 'stale runner binding has no exclusive cleanup claim');
+        }
+        const recorderClaims = claims.filter((claim) => claim.resource_type === 'recorder');
+        const recorderValue = bindings.recorder;
+        const recorder = this.#bindingMatchesDevice(recorderValue, target)
+            ? recorderValue
+            : null;
+        if (recorderValue !== null && recorderValue !== undefined && !recorder) {
+            throw new SessionAuthorityError('RECORDING_AUTHORITY_MISMATCH', 'stale recorder binding targets another device');
+        }
+        if (recorder && !hasCompleteRecorderCleanupIdentity(recorder)) {
+            throw new SessionAuthorityError('RECORDING_AUTHORITY_MISMATCH', 'stale recorder cleanup identity is incomplete');
+        }
+        if (recorderClaims.length !== (recorder ? 1 : 0) ||
+            (recorder && recorderClaims[0].resource_key !== deviceKey)) {
+            throw new SessionAuthorityError('RECORDING_AUTHORITY_MISMATCH', 'stale recorder binding has no exclusive cleanup claim');
+        }
+        return { claims, androidMetroReverse, runner, recorder };
     }
     completeStaleResourceRelease(session, workerInstance, resource) {
         const now = this.#now();
@@ -841,12 +1067,14 @@ export class SessionRegistry {
             }
             if (typeof entry.completedAt === 'number')
                 return;
-            const claimType = resource === 'runner' ? 'runner' : 'recorder';
-            this.#database
-                .prepare(`DELETE FROM claims
-           WHERE resource_type = ? AND resource_key = ?
-             AND session_id = ? AND claim_epoch = ?`)
-                .run(claimType, String(entry.claimKey), session.sessionId, session.claimEpoch);
+            if (resource !== 'androidMetroReverse') {
+                const claimType = resource === 'runner' ? 'runner' : 'recorder';
+                this.#database
+                    .prepare(`DELETE FROM claims
+             WHERE resource_type = ? AND resource_key = ?
+               AND session_id = ? AND claim_epoch = ?`)
+                    .run(claimType, String(entry.claimKey), session.sessionId, session.claimEpoch);
+            }
             this.#database
                 .prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`)
@@ -860,7 +1088,7 @@ export class SessionRegistry {
         const now = this.#now();
         this.#transaction(() => {
             const { row, bindings, cleanup } = this.#requireStaleReleaseOwner(session, workerInstance);
-            for (const resource of ['runner', 'recorder']) {
+            for (const resource of ['androidMetroReverse', 'runner', 'recorder']) {
                 const binding = cleanup[resource];
                 if (binding &&
                     typeof binding === 'object' &&
@@ -869,21 +1097,333 @@ export class SessionRegistry {
                 }
             }
             const deviceKey = `${String(cleanup.platform)}:${String(cleanup.deviceId)}`;
-            for (const claim of this.#deviceFamilyClaims(deviceKey)) {
-                if (claim.session_id !== session.sessionId || claim.claim_epoch !== session.claimEpoch) {
-                    continue;
+            const unrelatedClaim = this.#deviceFamilyClaims(deviceKey).find((claim) => claim.resource_type !== 'device');
+            if (unrelatedClaim) {
+                throw new SessionAuthorityError('DEVICE_AUTHORITY_MISMATCH', 'stale device cleanup found authority outside its completed journal');
+            }
+            this.#database
+                .prepare(`DELETE FROM claims
+           WHERE resource_type = 'device' AND resource_key = ?
+             AND session_id = ? AND claim_epoch = ?`)
+                .run(deviceKey, session.sessionId, session.claimEpoch);
+            const nextAuthorityVersion = row.authority_version + 1;
+            this.#database
+                .prepare(`UPDATE sessions
+           SET bindings_json = ?, authority_version = ?, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ? AND authority_version = ?`)
+                .run(JSON.stringify({ ...bindings, staleDeviceCleanup: null, staleDeviceRelease: null }), nextAuthorityVersion, now, row.session_id, row.claim_epoch, row.authority_version);
+            this.#advanceActiveOperationFence(session, row.authority_version, nextAuthorityVersion, true);
+        });
+    }
+    /**
+     * L4: verified-dead startup cleanup. The durable journal lives on the DEAD session's
+     * row and is written before any side effect; claims release only in finish, after
+     * every obligation is durably complete. Death is positively re-proven by every method.
+     */
+    findStartupCleanupCandidate(input) {
+        const claim = this.#findClaim('source', input.worktreeKey);
+        if (!claim)
+            return null;
+        const row = asSession(this.#database
+            .prepare(`SELECT session_id, source_key, worktree_key, app_root_key, claim_epoch
+           FROM sessions WHERE session_id = ?`)
+            .get(claim.session_id));
+        if (!row ||
+            row.claim_epoch !== claim.claim_epoch ||
+            row.source_key !== input.sourceKey ||
+            row.worktree_key !== input.worktreeKey ||
+            row.app_root_key !== input.appRootKey) {
+            return null;
+        }
+        return { sessionId: claim.session_id, claimEpoch: claim.claim_epoch };
+    }
+    beginStartupOwnerCleanup(prior) {
+        const now = this.#now();
+        return this.#transaction(() => {
+            const row = this.#requireProvenDeadStartupOwner(prior);
+            const bindings = JSON.parse(row.bindings_json);
+            const existing = bindings.startupCleanup;
+            if (existing && typeof existing === 'object' && typeof existing.finishedAt !== 'number') {
+                return {
+                    resumed: true,
+                    obligations: (existing.obligations ?? {}),
+                    integration: (existing.integration ?? null),
+                };
+            }
+            const record = (value) => value && typeof value === 'object' ? { ...value } : null;
+            const obligation = (source, claimKey) => source
+                ? {
+                    ...source,
+                    claimKey: String(source.claimKey ?? claimKey ?? ''),
+                    stopRequestedAt: typeof source.stopRequestedAt === 'number' ? source.stopRequestedAt : now,
+                    completedAt: typeof source.completedAt === 'number' ? source.completedAt : null,
                 }
-                this.#database
-                    .prepare(`DELETE FROM claims
-             WHERE resource_type = ? AND resource_key = ?
-               AND session_id = ? AND claim_epoch = ?`)
-                    .run(claim.resource_type, claim.resource_key, session.sessionId, session.claimEpoch);
+                : undefined;
+            const handoffCleanup = record(bindings.handoffCleanup);
+            const staleDevice = record(bindings.staleDeviceCleanup);
+            const androidMetroReverseSource = record(bindings.androidMetroReverse) ?? record(staleDevice?.androidMetroReverse);
+            const recorderSource = record(bindings.recorder) ??
+                record(staleDevice?.recorder) ??
+                record(handoffCleanup?.recorder);
+            const runnerSource = record(bindings.runner) ?? record(staleDevice?.runner) ?? record(handoffCleanup?.runner);
+            const observeSource = record(bindings.observe) ?? record(handoffCleanup?.observe);
+            const liveMetro = record(bindings.metroCleanup) ?? record(bindings.metro);
+            const metroSource = liveMetro && liveMetro.mode === 'managed' ? liveMetro : record(handoffCleanup?.metro);
+            const obligations = {};
+            const androidMetroReverseEntry = obligation(androidMetroReverseSource, androidMetroReverseSource ? `android:${String(androidMetroReverseSource.deviceId)}` : null);
+            if (androidMetroReverseEntry) {
+                obligations.androidMetroReverse = androidMetroReverseEntry;
+            }
+            const recorderEntry = obligation(recorderSource, recorderSource
+                ? `${String(recorderSource.platform)}:${String(recorderSource.deviceId)}`
+                : null);
+            if (recorderEntry)
+                obligations.recorder = recorderEntry;
+            const runnerEntry = obligation(runnerSource, runnerSource
+                ? `${String(runnerSource.platform)}:${String(runnerSource.deviceId)}:${String(runnerSource.port)}`
+                : null);
+            if (runnerEntry)
+                obligations.runner = runnerEntry;
+            const observeEntry = obligation(observeSource, observeSource ? String(observeSource.port) : null);
+            if (observeEntry)
+                obligations.observe = observeEntry;
+            const metroEntry = obligation(metroSource, metroSource ? String(metroSource.port) : null);
+            if (metroEntry)
+                obligations.metro = metroEntry;
+            const integrationBinding = record(bindings.packageIntegration);
+            const integration = integrationBinding
+                ? {
+                    installedBySessionId: integrationBinding.installedBySessionId ?? null,
+                    manifestSha256: integrationBinding.manifestSha256 ?? null,
+                    requestedAt: now,
+                    completedAt: null,
+                }
+                : null;
+            this.#database
+                .prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`)
+                .run(JSON.stringify({
+                ...bindings,
+                startupCleanup: { journaledAt: now, obligations, integration },
+            }), now, row.session_id, row.claim_epoch);
+            return { resumed: false, obligations, integration };
+        });
+    }
+    /** Re-recording an identical cleanup refusal is a no-op across repeated restarts. */
+    recordStartupCleanupRefusal(prior, refusal) {
+        const now = this.#now();
+        this.#transaction(() => {
+            const row = this.#requireProvenDeadStartupOwner(prior);
+            const { bindings, journal } = this.#requireStartupCleanupJournal(row);
+            if (typeof journal.finishedAt === 'number')
+                return;
+            const existing = journal.refusal;
+            if (existing &&
+                existing.code === refusal.code &&
+                existing.reason === refusal.reason &&
+                existing.nextAction === refusal.nextAction) {
+                return;
             }
             this.#database
                 .prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`)
-                .run(JSON.stringify({ ...bindings, staleDeviceCleanup: null, staleDeviceRelease: null }), now, row.session_id, row.claim_epoch);
+                .run(JSON.stringify({
+                ...bindings,
+                startupCleanup: {
+                    ...journal,
+                    refusal: {
+                        code: refusal.code,
+                        reason: refusal.reason,
+                        ...(refusal.nextAction ? { nextAction: refusal.nextAction } : {}),
+                    },
+                },
+            }), now, row.session_id, row.claim_epoch);
         });
+    }
+    verifyStartupOwnerObligation(prior, resource) {
+        const row = this.#requireProvenDeadStartupOwner(prior);
+        const { journal } = this.#requireStartupCleanupJournal(row);
+        const entry = journal.obligations?.[resource];
+        if (!entry || typeof entry !== 'object')
+            return null;
+        const binding = entry;
+        if (typeof binding.completedAt === 'number')
+            return binding;
+        this.#assertStartupObligationScope(row, resource, binding);
+        return binding;
+    }
+    completeStartupOwnerObligation(prior, resource) {
+        const now = this.#now();
+        this.#transaction(() => {
+            const row = this.#requireProvenDeadStartupOwner(prior);
+            const { bindings, journal } = this.#requireStartupCleanupJournal(row);
+            const obligations = (journal.obligations ?? {});
+            const entry = obligations[resource];
+            if (!entry || typeof entry !== 'object')
+                return;
+            const binding = entry;
+            if (typeof binding.completedAt === 'number')
+                return;
+            if (typeof binding.stopRequestedAt !== 'number') {
+                throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', `${resource} cleanup was not durably requested`);
+            }
+            this.#assertStartupObligationScope(row, resource, binding);
+            this.#database
+                .prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`)
+                .run(JSON.stringify({
+                ...bindings,
+                startupCleanup: {
+                    ...journal,
+                    obligations: { ...obligations, [resource]: { ...binding, completedAt: now } },
+                },
+            }), now, row.session_id, row.claim_epoch);
+        });
+    }
+    completeStartupOwnerIntegrationRestore(prior, input) {
+        const now = this.#now();
+        this.#transaction(() => {
+            const row = this.#requireProvenDeadStartupOwner(prior);
+            const { bindings, journal } = this.#requireStartupCleanupJournal(row);
+            const integration = journal.integration;
+            if (!integration || typeof integration !== 'object')
+                return;
+            if (typeof integration.completedAt === 'number')
+                return;
+            const binding = bindings.packageIntegration;
+            if (!binding ||
+                typeof binding !== 'object' ||
+                binding.manifestSha256 !== input.manifestSha256 ||
+                integration.manifestSha256 !== input.manifestSha256) {
+                throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'integration restoration requires the recorded manifest authority');
+            }
+            this.#database
+                .prepare(`UPDATE sessions SET bindings_json = ?, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`)
+                .run(JSON.stringify({
+                ...bindings,
+                packageIntegration: null,
+                startupCleanup: { ...journal, integration: { ...integration, completedAt: now } },
+            }), now, row.session_id, row.claim_epoch);
+        });
+    }
+    verifyStartupOwnerIntegrationRestore(prior, input) {
+        const row = this.#requireProvenDeadStartupOwner(prior);
+        this.#assertStartupSourceScope(row, input);
+        const { bindings, journal } = this.#requireStartupCleanupJournal(row);
+        const integration = journal.integration;
+        const binding = bindings.packageIntegration;
+        if (!integration ||
+            typeof integration !== 'object' ||
+            typeof integration.completedAt === 'number' ||
+            !binding ||
+            typeof binding !== 'object' ||
+            binding.manifestSha256 !== input.manifestSha256 ||
+            integration.manifestSha256 !== input.manifestSha256) {
+            throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'integration restoration requires the active startup journal and recorded manifest authority');
+        }
+    }
+    finishStartupOwnerCleanup(prior) {
+        const now = this.#now();
+        this.#transaction(() => {
+            const row = this.#requireProvenDeadStartupOwner(prior);
+            const { bindings, journal } = this.#requireStartupCleanupJournal(row);
+            const obligations = (journal.obligations ?? {});
+            for (const resource of ['androidMetroReverse', 'recorder', 'runner', 'observe']) {
+                const entry = obligations[resource];
+                if (entry &&
+                    typeof entry === 'object' &&
+                    typeof entry.completedAt !== 'number') {
+                    throw new SessionAuthorityError('AUTOMATION_CLEANUP_UNPROVEN', `${resource} cleanup has not been durably completed`);
+                }
+            }
+            const metro = obligations.metro;
+            if (metro &&
+                typeof metro === 'object' &&
+                typeof metro.completedAt !== 'number') {
+                throw new SessionAuthorityError('METRO_CLEANUP_PENDING', 'managed Metro cleanup has not been durably completed');
+            }
+            this.#requireIntegrationRestored(bindings);
+            this.#database
+                .prepare('DELETE FROM claims WHERE session_id = ? AND claim_epoch = ?')
+                .run(row.session_id, row.claim_epoch);
+            this.#database
+                .prepare(`UPDATE sessions
+           SET state = 'released', claim_epoch = claim_epoch + 1,
+               authority_version = authority_version + 1, bindings_json = ?, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ?`)
+                .run(JSON.stringify({ ...bindings, startupCleanup: { ...journal, finishedAt: now } }), now, row.session_id, row.claim_epoch);
+        });
+    }
+    #requireProvenDeadStartupOwner(prior) {
+        const row = asSession(this.#database
+            .prepare(`SELECT session_id, source_key, worktree_key, app_root_key,
+                  claim_epoch, state, supervisor_pid, supervisor_birth,
+                  lease_until_ms, bindings_json
+           FROM sessions WHERE session_id = ?`)
+            .get(prior.sessionId));
+        if (!row || row.claim_epoch !== prior.claimEpoch) {
+            throw new SessionAuthorityError('SESSION_OWNER_LOST', 'the startup cleanup owner no longer matches the proven claim epoch');
+        }
+        let status = 'unknown';
+        try {
+            status = this.#ownerStatus({
+                sessionId: row.session_id,
+                pid: row.supervisor_pid,
+                token: row.supervisor_birth,
+            });
+        }
+        catch {
+            status = 'unknown';
+        }
+        if (status === 'match') {
+            throw new SessionAuthorityError('RESOURCE_CLAIM_CONFLICT', 'the same-root owner is live; a live owner is never released', { sessionId: row.session_id, claimEpoch: row.claim_epoch });
+        }
+        if (status !== 'mismatch') {
+            if (row.lease_until_ms < this.#now()) {
+                throw new SessionAuthorityError('STALE_LEASE_NOT_RECLAIMABLE', 'expired lease owner identity could not be proven', { sessionId: row.session_id, claimEpoch: row.claim_epoch });
+            }
+            throw new SessionAuthorityError('RESOURCE_CLAIM_CONFLICT', 'the same-root owner identity could not be proven, so it is treated as live', { sessionId: row.session_id, claimEpoch: row.claim_epoch });
+        }
+        return row;
+    }
+    #requireStartupCleanupJournal(row) {
+        const bindings = JSON.parse(row.bindings_json);
+        const journal = bindings.startupCleanup;
+        if (!journal || typeof journal !== 'object') {
+            throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'no startup cleanup is in progress');
+        }
+        return { bindings, journal: journal };
+    }
+    #assertStartupSourceScope(row, input) {
+        if (row.source_key !== input.sourceKey ||
+            row.worktree_key !== input.worktreeKey ||
+            row.app_root_key !== input.appRootKey) {
+            throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'startup cleanup no longer matches the exact source and app root');
+        }
+    }
+    #assertStartupObligationScope(row, resource, entry) {
+        const claimType = resource === 'observe'
+            ? 'observe-port'
+            : resource === 'metro'
+                ? 'metro-port'
+                : resource === 'androidMetroReverse'
+                    ? 'device'
+                    : resource;
+        const claimKey = String(entry.claimKey ?? '');
+        const claim = this.#findClaim(claimType, claimKey);
+        if (!claimKey ||
+            claim?.session_id !== row.session_id ||
+            claim.claim_epoch !== row.claim_epoch) {
+            const codes = {
+                androidMetroReverse: 'PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN',
+                recorder: 'RECORDING_AUTHORITY_MISMATCH',
+                runner: 'RUNNER_OWNERSHIP_MISMATCH',
+                observe: 'OBSERVE_AUTHORITY_MISMATCH',
+                metro: 'METRO_AUTHORITY_MISMATCH',
+            };
+            throw new SessionAuthorityError(codes[resource], `startup ${resource} cleanup journal no longer owns its exact claim`);
+        }
     }
     #requireStaleReleaseOwner(session, workerInstance) {
         const row = this.#requireSession(session);
@@ -906,7 +1446,8 @@ export class SessionRegistry {
         }
         throw new SessionAuthorityError('AUTOMATION_CLEANUP_UNPROVEN', 'stale device cleanup journal is incomplete', undefined, {
             axis: 'D',
-            nextAction: 'Resume it with rn_session({ action: "release_stale_device" }) before binding any device.',
+            nextAction: 'Resume it with rn_session({ action: "bind_device" }) for the exact journaled device ' +
+                'or rn_session({ action: "release_stale_device" }) before binding any other device.',
         });
     }
     #assertStaleReleaseJournalScope(row, cleanup, target) {
@@ -919,6 +1460,13 @@ export class SessionRegistry {
         const deviceClaim = this.#findClaim('device', deviceKey);
         if (deviceClaim?.session_id !== row.session_id || deviceClaim.claim_epoch !== row.claim_epoch) {
             throw new SessionAuthorityError('DEVICE_AUTHORITY_MISMATCH', 'stale device cleanup journal no longer owns its exact device claim');
+        }
+        const reverse = cleanup.androidMetroReverse;
+        if (reverse &&
+            typeof reverse === 'object' &&
+            typeof reverse.completedAt !== 'number' &&
+            String(reverse.claimKey ?? '') !== deviceKey) {
+            throw new SessionAuthorityError('PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN', 'stale physical Android Metro cleanup journal no longer matches its exact device claim');
         }
         for (const resource of ['runner', 'recorder']) {
             const entry = cleanup[resource];
@@ -982,6 +1530,10 @@ export class SessionRegistry {
         return prior;
     }
     updateBindings(session, input) {
+        const claimed = input.claimResources ?? [];
+        const probes = input.probeClaimOwners && claimed.length > 0
+            ? this.#probeClaimOwners(session, claimed)
+            : null;
         const now = this.#now();
         this.#transaction(() => {
             const current = this.#requireSession(session);
@@ -993,17 +1545,10 @@ export class SessionRegistry {
                 ...JSON.parse(current.bindings_json),
                 ...input.bindings,
             };
-            for (const resource of input.claimResources ?? []) {
-                const claim = this.#findConflictingClaim(resource);
-                if (claim &&
-                    (claim.session_id !== session.sessionId || claim.claim_epoch !== session.claimEpoch)) {
-                    throw claimConflict(claim);
-                }
-            }
+            this.#assertClaimsAvailable(session, claimed, probes, now);
             if (Object.hasOwn(input.bindings, 'device') || Object.hasOwn(input.bindings, 'install')) {
                 const currentBindings = JSON.parse(current.bindings_json);
-                const platform = String((input.bindings.device ?? currentBindings.device)
-                    ?.platform ?? '');
+                const platform = String((input.bindings.device ?? currentBindings.device)?.platform ?? '');
                 if (platform) {
                     this.#invalidatePlatformReceipt(session, platform);
                 }
@@ -1034,7 +1579,7 @@ export class SessionRegistry {
            WHERE session_id = ? AND claim_epoch = ?`)
                 .run(input.state ?? current.state, JSON.stringify(bindings), now, session.sessionId, session.claimEpoch);
             this.#advanceActiveOperationFence(session, current.authority_version, current.authority_version + 1);
-        });
+        }, input.assertBeforeCommit, input.onCommitted);
     }
     replaceBindingsDuringOperation(operation, input) {
         const now = this.#now();
@@ -1101,7 +1646,7 @@ export class SessionRegistry {
                 context.authorityVersion = nextAuthorityVersion;
             }
             return { ...operation, authorityVersion: nextAuthorityVersion };
-        });
+        }, input.assertBeforeCommit, input.onCommitted);
     }
     endOperationWithBindings(operation, bindings) {
         const now = this.#now();
@@ -1205,15 +1750,30 @@ export class SessionRegistry {
             }
         });
     }
+    // GH #706: released and proven-stale rows are not live sessions, so they never
+    // count towards the "multiple live sessions match this worktree" refusal.
     findSessionsByWorktree(worktreeKey) {
         const rows = this.#database
-            .prepare(`SELECT session_id FROM sessions
+            .prepare(`SELECT session_id, supervisor_pid, supervisor_birth FROM sessions
          WHERE worktree_key = ? AND state NOT IN ('released', 'stale')
          ORDER BY updated_ms DESC`)
             .all(worktreeKey);
         return rows
-            .map((row) => this.getSessionStatus(String(row.session_id)))
+            .filter((row) => !this.#supervisorProvenDead(row))
+            .map((row) => this.getSessionStatus(row.session_id))
             .filter((status) => status !== null);
+    }
+    #supervisorProvenDead(row) {
+        try {
+            return (this.#ownerStatus({
+                sessionId: row.session_id,
+                pid: row.supervisor_pid,
+                token: row.supervisor_birth,
+            }) === 'mismatch');
+        }
+        catch {
+            return false;
+        }
     }
     getControllerBinding(session) {
         const row = this.#requireSession(session);
@@ -2656,6 +3216,30 @@ export class SessionRegistry {
         }
         return owners;
     }
+    #assertClaimsAvailable(session, resources, probes, now) {
+        for (const resource of resources) {
+            const claim = this.#findConflictingClaim(resource);
+            if (!claim ||
+                (claim.session_id === session.sessionId && claim.claim_epoch === session.claimEpoch)) {
+                continue;
+            }
+            if (!probes)
+                throw claimConflict(claim);
+            const probe = probes.get(claim.session_id);
+            if (!probe || probe.claimEpoch !== claim.claim_epoch) {
+                throw claimConflict(claim);
+            }
+            if (probe.status === 'match')
+                throw claimConflict(claim);
+            if (probe.status === 'unknown') {
+                if (claim.lease_until_ms < now) {
+                    throw new SessionAuthorityError('STALE_LEASE_NOT_RECLAIMABLE', 'expired lease owner identity could not be proven', { sessionId: claim.session_id, claimEpoch: claim.claim_epoch });
+                }
+                throw claimConflict(claim);
+            }
+            throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'a proven-stale owner requires explicit adopt_stale before claims transfer', { sessionId: claim.session_id, claimEpoch: claim.claim_epoch });
+        }
+    }
     #requireSession(session) {
         const row = asSession(this.#database
             .prepare(`SELECT session_id, state, claim_epoch, authority_version,
@@ -2853,14 +3437,20 @@ export class SessionRegistry {
             reservation: exactReservation ? reservation : null,
         };
     }
-    #advanceActiveOperationFence(session, priorAuthorityVersion, nextAuthorityVersion) {
+    #advanceActiveOperationFence(session, priorAuthorityVersion, nextAuthorityVersion, requireActiveFence = false) {
         const active = this.#database
             .prepare(`SELECT operation_id, authority_version FROM operations
          WHERE session_id = ? AND claim_epoch = ? LIMIT 1`)
             .get(session.sessionId, session.claimEpoch);
-        if (!active)
-            return;
         const context = this.#operationContext.getStore();
+        if (!active) {
+            if (requireActiveFence &&
+                context?.sessionId === session.sessionId &&
+                context.claimEpoch === session.claimEpoch) {
+                throw new SessionAuthorityError('AUTHORITY_LOST_DURING_OPERATION', 'active operation fence disappeared before authority commit');
+            }
+            return;
+        }
         if (!context ||
             context.operationId !== active.operation_id ||
             context.sessionId !== session.sessionId ||
@@ -3037,17 +3627,36 @@ export class SessionRegistry {
          WHERE session_id = ?`)
             .run(now, sessionId);
     }
-    #transaction(operation) {
+    #transaction(operation, assertBeforeCommit, onCommitted) {
         this.#database.exec('BEGIN IMMEDIATE');
+        const context = this.#operationContext.getStore();
+        const priorContextAuthorityVersion = context?.authorityVersion;
+        let committed = false;
         try {
             const result = operation();
+            assertBeforeCommit?.();
             this.#database.exec('COMMIT');
-            this.#secureFiles();
+            committed = true;
+            try {
+                onCommitted?.(result);
+            }
+            finally {
+                this.#secureFiles();
+            }
             return result;
         }
         catch (error) {
-            this.#database.exec('ROLLBACK');
-            this.#secureFiles();
+            if (!committed) {
+                try {
+                    this.#database.exec('ROLLBACK');
+                }
+                finally {
+                    if (context && priorContextAuthorityVersion !== undefined) {
+                        context.authorityVersion = priorContextAuthorityVersion;
+                    }
+                    this.#secureFiles();
+                }
+            }
             throw error;
         }
     }

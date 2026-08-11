@@ -4,24 +4,30 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createBuildReceipt } from './session/build-receipt.js';
 import { captureInstalledArtifact } from './session/install-authority.js';
+import { resolveExpoAndroidDevice } from './session/expo-android-device.js';
+import { parseDeclaredManifests } from './session/declared-source-contract.js';
 import { buildSignedMetroMarker, createMetroAuthorityModule } from './session/metro-authority.js';
 import { captureMetroBinding } from './session/metro-binding.js';
 import { inspectManagedMetroLifecycle, refreshManagedMetroBuildGeneration, startManagedMetro, stopManagedMetro, verifyManagedMetroManagementProof, } from './session/managed-metro.js';
 import { inspectSessionOwner } from './session/process-owner.js';
 import { openSessionRegistry, SessionAuthorityError, } from './session/registry.js';
 import { resolveSourceIdentity } from './session/source-identity.js';
-import { createAuthorityStateLayout, sessionRuntimeDirectory } from './session/state-root.js';
+import { createAuthorityStateLayout, openAuthorityStateLayout, sessionRuntimeDirectory, } from './session/state-root.js';
 import { inspectAuthorityMigration } from './session/migration-diagnostic.js';
 import { projectPublicAuthorityStatus } from './session/public-status.js';
 import { stopBoundObserve, stopBoundRecorder, stopBoundRunner } from './session/process-cleanup.js';
+import { ensureAndroidMetroReverse, removeAndroidMetroReverse, } from './session/android-metro-reverse.js';
 import { closeBoundDirectories, openBoundDirectory, openBoundSubdirectory, writeBoundDirectoryFile, } from './session/bound-directory.js';
 function resolveStatus() {
-    const layout = createAuthorityStateLayout(process.env.RN_DEV_AGENT_STATE_DIR);
+    const requestedStateHome = process.env.RN_DEV_AGENT_STATE_DIR;
+    const layout = requestedStateHome
+        ? openAuthorityStateLayout(requestedStateHome)
+        : createAuthorityStateLayout();
     const registry = openSessionRegistry(layout.registry, { ownerStatus: inspectSessionOwner });
     const explicit = process.env.RN_DEV_AGENT_SESSION_ID;
     const source = resolveSourceIdentity(process.cwd(), {
         declaredRoot: process.env.RN_DEV_AGENT_DECLARED_ROOT,
-        declaredManifests: process.env.RN_DEV_AGENT_DECLARED_MANIFESTS?.split(',').filter(Boolean),
+        declaredManifests: parseDeclaredManifests(process.env.RN_DEV_AGENT_DECLARED_MANIFESTS),
     });
     const candidates = explicit
         ? [registry.getSessionStatus(explicit)].filter((status) => status !== null)
@@ -31,8 +37,8 @@ function resolveStatus() {
     if (candidates.length !== 1) {
         registry.close();
         throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', candidates.length === 0
-            ? 'no live session matches this canonical worktree and app root'
-            : 'multiple live sessions match this worktree and app root; set RN_DEV_AGENT_SESSION_ID');
+            ? `no live session in authority registry ${layout.registry} matches this canonical worktree and app root`
+            : `multiple live sessions in authority registry ${layout.registry} match this worktree and app root; set RN_DEV_AGENT_SESSION_ID`);
     }
     const status = candidates[0];
     if (explicit &&
@@ -99,6 +105,60 @@ function reconcileManagedMetroStatus(status) {
         registry: status.registry,
         layout: status.layout,
     });
+}
+function sameAndroidMetroReverse(current, next) {
+    if (!current || !next)
+        return current === next;
+    const binding = current;
+    return (binding.platform === next.platform &&
+        binding.deviceId === next.deviceId &&
+        binding.metroPort === next.metroPort &&
+        binding.local === next.local &&
+        binding.remote === next.remote);
+}
+function ensurePhysicalAndroidMetroReachability(status) {
+    const device = status.bindings.device;
+    if (device?.platform !== 'android' || typeof device.deviceId !== 'string')
+        return status;
+    const existing = status.bindings.androidMetroReverse;
+    const result = ensureAndroidMetroReverse({
+        deviceId: device.deviceId,
+        metroPort: Number(status.bindings.metroPort),
+        binding: existing,
+    });
+    if (sameAndroidMetroReverse(existing ?? null, result.binding))
+        return status;
+    try {
+        status.registry.updateBindings({ sessionId: status.sessionId, claimEpoch: status.claimEpoch }, {
+            expectedAuthorityVersion: status.authorityVersion,
+            bindings: { androidMetroReverse: result.binding },
+        });
+    }
+    catch (error) {
+        if (result.created && result.binding) {
+            try {
+                removeAndroidMetroReverse(result.binding);
+            }
+            catch (cleanupError) {
+                throw new AggregateError([error, cleanupError], 'PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN: adb reverse was created but its authority binding could not be persisted or safely cleaned');
+            }
+        }
+        throw error;
+    }
+    const current = status.registry.getSessionStatus(status.sessionId);
+    if (!current) {
+        throw new SessionAuthorityError('SESSION_OWNER_LOST', 'session disappeared after physical Android Metro reachability was established');
+    }
+    return Object.assign(current, {
+        closeRegistry: status.closeRegistry,
+        registry: status.registry,
+        layout: status.layout,
+    });
+}
+function removeSessionAndroidMetroReverse(status) {
+    const binding = status.bindings.androidMetroReverse;
+    if (binding)
+        removeAndroidMetroReverse(binding);
 }
 function beginCliOperation(status, tool, profile) {
     const operation = status.registry.beginOperation({ sessionId: status.sessionId, claimEpoch: status.claimEpoch }, { operationId: randomUUID(), tool, profile });
@@ -334,6 +394,17 @@ async function main() {
             })}\n`);
             return;
         }
+        if (command === 'resolve-expo-android-device') {
+            const requestedDeviceId = process.argv[3];
+            const device = status.bindings.device;
+            if (device?.platform !== 'android' ||
+                typeof device.deviceId !== 'string' ||
+                requestedDeviceId !== device.deviceId) {
+                throw new SessionAuthorityError('EXPO_DEVICE_IDENTITY_MISMATCH', 'the requested Expo device does not equal the authority-bound adb serial');
+            }
+            process.stdout.write(`${JSON.stringify(resolveExpoAndroidDevice(device.deviceId))}\n`);
+            return;
+        }
         if (command === 'prepare-build') {
             const platform = process.argv[3];
             const deliveredBuildToken = process.argv[4];
@@ -369,6 +440,7 @@ async function main() {
                     ? `${metroInspection.reason}; ${recovery} before retrying`
                     : 'build requires authenticated managed Metro authority');
             }
+            status = ensurePhysicalAndroidMetroReachability(status);
             const buildGeneration = Math.max(Number(metro.buildGeneration ?? 0), Number(status.bindings.install?.buildGeneration ?? 0)) + 1;
             const buildToken = deliveredBuildToken;
             const buildMetro = refreshManagedMetroBuildGeneration(metro, {
@@ -436,16 +508,23 @@ async function main() {
                 status.registry.cancelOperation(currentOperation);
                 throw error;
             }
+            const metroPort = Number(status.bindings.metroPort);
+            const metroReverse = status.bindings.androidMetroReverse;
             process.stdout.write(`${JSON.stringify({
                 platform,
                 deviceId: device.deviceId,
                 appId: device.appId,
-                metroPort: Number(status.bindings.metroPort),
+                metroPort,
                 sessionId: status.sessionId,
                 buildToken,
                 buildKind,
                 ...(platform === 'ios' ? { simulator: true } : {}),
                 ...(typeof device.devClientUrl === 'string' ? { devClientUrl: device.devClientUrl } : {}),
+                ...(metroReverse &&
+                    metroReverse.deviceId === device.deviceId &&
+                    metroReverse.metroPort === metroPort
+                    ? { androidMetroReverse: metroReverse }
+                    : {}),
             })}\n`);
             return;
         }
@@ -567,6 +646,8 @@ async function main() {
             let released = false;
             try {
                 await status.registry.runWithOperation(operation, async () => {
+                    removeSessionAndroidMetroReverse(status);
+                    status.registry.verifyOperation(operation);
                     if (recorder) {
                         await stopBoundRecorder(recorder);
                         status.registry.verifyOperation(operation);

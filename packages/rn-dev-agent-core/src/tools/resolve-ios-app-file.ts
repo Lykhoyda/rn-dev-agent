@@ -15,8 +15,10 @@ export function flowUsesClearState(flowText: string): boolean {
 }
 
 export interface ResolveAppFileDeps {
+  /** GH #705: exact simulator UDID to read the container from; `booted` otherwise. */
+  deviceId?: string;
   /** Returns the installed `.app` container path for a bundle id, or null. */
-  getAppContainer?: (bundleId: string) => string | null;
+  getAppContainer?: (bundleId: string, deviceId?: string) => string | null;
   /** Returns the newest built `.app` under DerivedData, or null. */
   newestDerivedDataApp?: () => string | null;
   /** Existence check (injectable for tests). */
@@ -60,7 +62,7 @@ export function resolveIosAppFile(bundleId: string, deps: ResolveAppFileDeps = {
   const exists = deps.exists ?? existsSync;
   const getAppContainer = deps.getAppContainer ?? defaultGetAppContainer;
   const snapshotApp = deps.snapshotApp ?? defaultSnapshotApp;
-  const fromContainer = getAppContainer(bundleId);
+  const fromContainer = getAppContainer(bundleId, deps.deviceId);
   if (fromContainer && exists(fromContainer)) {
     const snapshot = snapshotApp(fromContainer);
     if (snapshot) return snapshot;
@@ -109,9 +111,10 @@ export function resolveAppFileForClearState(
   return { ok: true, appFile };
 }
 
-function defaultGetAppContainer(bundleId: string): string | null {
+function defaultGetAppContainer(bundleId: string, deviceId?: string): string | null {
   try {
-    const out = execFileSync('xcrun', ['simctl', 'get_app_container', 'booted', bundleId, 'app'], {
+    const target = deviceId && !/\s/.test(deviceId) ? deviceId : 'booted';
+    const out = execFileSync('xcrun', ['simctl', 'get_app_container', target, bundleId, 'app'], {
       encoding: 'utf8',
       timeout: 5_000,
     }).trim();

@@ -129,7 +129,7 @@ Update Claude Code to v1.0.33+: `npm update -g @anthropic-ai/claude-code`
 
 Claude: run `/reload-plugins` or clear its plugin cache. Codex: a supported
 same-app mutation should appear on a later turn; otherwise relaunch. A supported
-Codex install exposes exactly 25 rn-dev-agent skills and no
+Codex install exposes exactly 27 rn-dev-agent skills and no
 `source-command-*` skills.
 
 ### Plugin update fails with ENOTEMPTY
@@ -166,11 +166,48 @@ The crash is native, not JavaScript. Use `adb logcat -b crash` (Android) or chec
 
 Use `device_list` to diagnose connected emulators, then bind the intended serial
 and app ID with `rn_session(action="bind_device", ...)`. The plugin never turns
-the first available device or `ANDROID_SERIAL` into session authority.
+the first available device or `ANDROID_SERIAL` into session authority. Without a
+bound session, `maestro_run` still needs one exact serial and accepts an explicit
+`deviceId` or `ANDROID_SERIAL` as its runner target only; an ambient or default
+adb target is never selected.
 
 ### Maestro gRPC error on Android
 
 Use maestro-runner instead of classic Maestro — it uses HTTP to UIAutomator2 instead of gRPC. The plugin enforces this by default.
+
+### `UiAutomation not connected` when a flow starts on Android
+
+An MCP reconnect can leave plugin-owned Android instrumentation behind, so
+maestro-runner fails session creation with `failed to create driver: create
+session: session not created: java.lang.IllegalStateException: UiAutomation not
+connected`. Recovery triggers only when the Maestro subprocess exits nonzero and
+that structured session-creation record is its entire stderr. `maestro_run` then
+force-stops only the two rn-dev-agent runner packages on the exact bound serial
+and retries the flow once. On a successful or warning response,
+`data.androidUiAutomationRecovery` reports `retried` and `retryCount` (never more
+than 1); on a failed or refused response, the same diagnostic is under
+`meta.androidUiAutomationRecovery`. Maestro's own orphaned session self-heals,
+so no Maestro, Appium, or foreign package is ever killed. A copy of the same text
+anywhere else — app logcat, console or network output, a partially executed flow's
+step output, or stderr mixed with other records — is not the wedge and never
+retries or releases packages.
+
+Recovery never extends the flow: both the cleanup and the retry run inside the
+original `maestro_run` deadline. With no budget left the cleanup is skipped
+without touching the device; if the cleanup fails or the budget lapses while it
+runs, the retry is never dispatched and the timeout or release failure is
+attached to the returned error as its cause. Every one of these paths preserves
+the original wedge failure, exposes a release warning, and truthfully reports
+`retried: false` / `retryCount: 0`. The diagnostic is present whenever recovery
+was attempted, including these skipped cases; `retried` becomes true only when a
+second Maestro subprocess actually runs.
+
+Pre-flow and recovery release problems are not swallowed. Successful and warning
+responses expose them as `data.androidSlotReleaseWarnings` and in the response
+warning text; failed and refused responses expose them as
+`meta.androidSlotReleaseWarnings`. If the same wedge survives the single retry,
+re-open the device session (`device_snapshot action=open`) on that serial and
+retry.
 
 ## Error codes
 
@@ -180,17 +217,23 @@ Codes returned by `cdp_*`/`device_*`/flow tools, what they mean, and the fix.
 
 | Codes | Meaning and repair |
 |---|---|
-| `SESSION_NOT_INITIALIZED`, `SESSION_AUTHORITY_REQUIRED`, `SESSION_OWNER_LOST` | The supervised worker has no current fenced owner. Inspect `rn_session(action="status")`; create or rebind the intended session instead of selecting ambient state. |
+| `SESSION_NOT_INITIALIZED` | No fenced session is available. Run setup for the intended worktree instead of selecting ambient state. |
+| `SESSION_AUTHORITY_REQUIRED` | The requested operation lacks authority. Inspect `rn_session(action="status")`; when `state` is `blocked`, follow `recoveryRequirement.nextAction` and resolve any `startupCleanupBlocked` refusal before restarting. Never rebind around a blocked session. For other states, follow the operation's exact refusal and next action. See [parallel session authority](/rn-dev-agent/session-authority/). |
+| `SESSION_OWNER_LOST` | The supervised session is terminal. Start a new supervisor to create a successor session. |
+| `SESSION_CLI_TIMEOUT` | The generated build adapter's bounded `prepare-build`, `ensure-metro`, or `complete-build` session-CLI call did not return within 120 seconds. Inspect `rn_session(action="status")`; retry only after the named authority step is healthy. The build fails instead of treating truncated output as success. |
 | `SESSION_INITIALIZATION_ROLLBACK_FAILED` | Session startup failed and could not prove that every partial claim was released. Do not retry against the same resources until `rn_session(action="status")` shows their ownership clearly. |
 | `SESSION_INTEGRATION_PATH_UNSAFE` | `.rn-agent`, its integration directory, or a retained path ancestor was symlinked, replaced, or changed during a fenced operation. Restore the intended real directory tree, inspect any preserved recovery journal, and retry. |
 | `AUTHORITY_STORE_UNAVAILABLE`, `AUTHORITY_STORE_BUSY`, `PROCESS_BIRTH_UNAVAILABLE` | The SQLite registry or conservative process identity is unavailable. Retry after the named substrate is healthy; there is no JSON, PID-only, or warning-only fallback. |
 | `SOURCE_WORKTREE_MISMATCH`, `SOURCE_REVISION_NOT_BUNDLED` | The session or strict-proof source does not match the running bundle. Return to the intended worktree and load a fresh initial bundle before retrying. |
+| `NON_GIT_MANIFEST_REQUIRED`, `NON_GIT_ROOT_MISMATCH`, `NON_GIT_MANIFEST_OUTSIDE_ROOT` | Repair `RN_DEV_AGENT_DECLARED_ROOT` and `RN_DEV_AGENT_DECLARED_MANIFESTS`, then restart the supervisor. See [parallel session authority](/rn-dev-agent/session-authority/) for the required values, containment rules, and refusal contract. |
 | `METRO_PORT_CLAIM_CONFLICT`, `PORT_OCCUPIED_UNOWNED`, `METRO_AUTHORITY_MISMATCH`, `METRO_INSTANCE_CHANGED`, `METRO_START_CLEANUP_UNPROVEN` | The allocated port or Metro process cannot be proven, or failed startup cleanup could not prove both managed processes and the port stopped. Use the session's literal `pnpm ios`/`pnpm android` integration; never adopt or signal the first listening process. |
 | `METRO_LAUNCHER_ENVIRONMENT_INVALID`, `METRO_LAUNCHER_EVIDENCE_UNAVAILABLE`, `METRO_LAUNCHER_ENFORCEMENT_REFUSED`, `METRO_LAUNCHER_CHILD_SPAWN_FAILED`, `METRO_LAUNCHER_PRE_EVIDENCE_FAILED`, `METRO_LAUNCHER_POLICY_UNAVAILABLE` | Managed Metro failed before authoritative runtime evidence was available. The bounded diagnostic names the failed stage without exposing credentials or local paths. For a policy failure, restore a real, private `.rn-agent/integration` directory without symlinks or hard-linked policy files; otherwise repair the named stage, then retry the literal package script. |
 | `MANAGED_TRANSFORM_CHANNEL_STALLED` | An authenticated transform child exited or did not complete its first exchange before the watchdog expired. Inspect the Metro log for the failing transformer, stop the managed Metro generation, repair the transformer or dependency, and retry the literal package script; strict proof remains unavailable for the violated generation. |
-| `DEVICE_CLAIM_CONFLICT`, `DEVICE_AUTHORITY_MISMATCH`, `PLATFORM_AUTHORITY_MISMATCH`, `APP_INSTALL_IDENTITY_CHANGED` | The exact UUID/serial, platform, app, or installed generation differs. Bind the intended device and rebuild or reinstall that generation. |
-| `BUNDLE_HANDSHAKE_UNAVAILABLE`, `BUNDLE_IDENTITY_MISMATCH`, `CDP_TARGET_AUTHORITY_MISMATCH`, `TARGET_CLAIM_CONFLICT` | The signed initial-bundle marker or exact CDP target is absent, changed, or owned elsewhere. Load the intended app from the bound Metro and call `cdp_connect`; do not choose another target. |
-| `RUNNER_OWNERSHIP_MISMATCH`, `RUNNER_ADOPTION_REQUIRED`, `RUNNER_CLAIM_CONFLICT` | Native-runner capability or ownership differs. Rebind the exact runner, or complete the explicit handoff/adoption flow. A live runner is never force-stolen. |
+| `DEVICE_CLAIM_CONFLICT`, `DEVICE_AUTHORITY_MISMATCH`, `PLATFORM_AUTHORITY_MISMATCH`, `APP_INSTALL_IDENTITY_CHANGED` | The exact UUID/serial, platform, or app differs, or the installed artifact is no longer the attested session build. Bind the intended device and rebuild or reinstall that generation. A byte-identical reinstall is re-issued automatically on the next gated call, except while a strict proof run is bound; see [parallel session authority](/rn-dev-agent/session-authority/). |
+| `EXPO_DEVICE_IDENTITY_MISMATCH` | Expo Android could not uniquely map the bound adb serial to its required model/AVD display name, or that mapping changed immediately before launch. Keep the same exact serial bound, disconnect duplicate model/AVD names, authorize or reconnect that device, and retry literal `pnpm android`; never pass a display name as session authority or let Expo choose an ambient device. |
+| `EXACT_ANDROID_DEVICE_REQUIRED` | Releasing the plugin-owned Android interaction slot needs one exact serial, and none was available (typically several adb targets attached with no bound session). Nothing on any device was mutated. Bind the intended device with `rn_session(action="bind_device", ...)`, pass `deviceId` to `maestro_run`, or set `ANDROID_SERIAL`, then retry. An ambient or default adb target is never selected. |
+| `BUNDLE_HANDSHAKE_UNAVAILABLE`, `BUNDLE_IDENTITY_MISMATCH`, `CDP_TARGET_AUTHORITY_MISMATCH`, `TARGET_CLAIM_CONFLICT` | The signed initial-bundle marker or exact CDP target is absent, changed, unresponsive, or owned elsewhere. Exact pinning serially resets an inspector that handshakes but fails its mandatory `Runtime.evaluate('1+1')` probe, then re-lists only the allocated Metro and retries the same app/device authority. If the deadline expires, the error retains that probe-timeout leaf. Load the intended app from the bound Metro and call `cdp_connect`; never choose another target. |
+| `RUNNER_OWNERSHIP_MISMATCH`, `RUNNER_ADOPTION_REQUIRED`, `RUNNER_CLAIM_CONFLICT` | Native-runner capability or ownership differs. Rebind the exact runner, or complete the explicit handoff/adoption flow. A live runner is never force-stolen; see [parallel session authority](/rn-dev-agent/session-authority/) for the unsupported legacy split-store case. |
 | `OBSERVE_AUTHORITY_MISMATCH`, `OBSERVE_PORT_CLAIM_CONFLICT`, `PROOF_AUTHORITY_MISMATCH` | Observe or proof belongs to another fenced generation. Start a session-scoped instance or proof run. |
 | `HANDOFF_NOT_AUTHORIZED`, `STALE_LEASE_NOT_RECLAIMABLE` | The handoff/adoption token is invalid, or the prior owner's death is not proven. Lease expiry alone never authorizes reclamation. |
 | `AUTHORITY_LOST_DURING_OPERATION`, `OPERATION_ALREADY_IN_PROGRESS` | Authority changed or another fenced operation is active. Treat any apparent handler success as failed, inspect status, and retry only after the session is stable. |
@@ -297,12 +340,27 @@ reports missing commands, update the plugin checkout.
 
 The iOS runner didn't answer within the command budget. On a
 non-cancellable `type`/`fill` main-thread timeout the runner is poisoned
-and reaped, and the call succeeds only when an independent exact CDP
-readback proves the requested value landed
-(`meta.runnerTimeoutRecovery.verification: "exact-readback"`); otherwise it
-fails closed. Further commands are refused before dispatch while the
-poisoned runner is being reaped. Reconnect CDP, re-open the device session,
-and retry from a fresh snapshot — don't re-type blindly.
+and reaped, and `device_fill` fails closed with a possible mutation outcome.
+Further commands are refused before dispatch while the poisoned runner is
+being reaped. Inspect the current field state before deciding whether a new
+fill is safe, then re-open the device session and use a fresh snapshot — do
+not re-type blindly.
+
+### NO_TEXT_INPUT_TARGET / TEXT_TARGET_LOST / TEXT_TARGET_FOCUS_FAILED / TEXT_ENTRY_UNVERIFIED
+
+`device_fill` refuses anything it cannot prove. `NO_TEXT_INPUT_TARGET` means no
+single exact editable target could be bound from the fresh snapshot (missing
+identity, ambiguous testID, target lost, or a non-text-input node).
+`TEXT_TARGET_LOST` means the bound owner disappeared during the fill.
+`TEXT_TARGET_FOCUS_FAILED` means focus on that exact owner could not be proven.
+`TEXT_ENTRY_UNVERIFIED` covers everything else that ends without stable exact
+read-back: helpers unavailable, secure or occluded fields, unreadable values,
+transformed input, and uncertain dispatch.
+
+Every failure carries `meta.mutation`. `none` means nothing was typed — refresh
+the snapshot, resolve one exact input, and retry. `observed` or `possible` means
+the field may already have changed; inspect current state before issuing any new
+fill. There is no automatic retype, adb input, or Maestro fallback.
 
 ### KEYBOARD_DISMISS_FAILED
 
@@ -327,14 +385,22 @@ rebuilt by reopening the exact-device session before dispatch.
 
 ### DEVICE_BUSY / DEVICE_CLAIM_CONFLICT
 
-`DEVICE_BUSY` means an in-flight compatibility operation holds this exact
-simulator; wait for that operation or close its owner. `DEVICE_CLAIM_CONFLICT`
-means another live worktree session owns the resource and requires explicit
-handoff or conservatively proven stale adoption; heartbeat or sleep expiry
-alone does not reclaim it. As a capacity workaround, boot a different free
-simulator, bind it through `rn_session bind_device`, and run the normal managed
-build/install receipt flow. Do not force-steal or manually install an unrelated
-snapshot to bypass authority.
+A `DEVICE_BUSY` refusal reports whether the holder is alive and its heartbeat
+age bounded to 0–90s. It does not expose the holder PID, project path, or app ID,
+and it does not mutate the holder.
+
+From the holder worktree, run `device_snapshot action=close` to release it safely.
+
+Alternatively, boot a dedicated simulator (or emulator), bind its exact ID with `rn_session action=bind_device`, run the normal managed build/install there, then select that exact ID with `device_snapshot action=open ... attachOnly=true` when the app is already running.
+
+Dead holders self-heal on the next open attempt; live holders self-heal once their heartbeat is stale beyond the existing 90s recovery window.
+
+A healthy live holder is never stolen or changed by this refusal.
+
+`DEVICE_CLAIM_CONFLICT` is separate: another live worktree session owns the
+resource and requires explicit handoff or conservatively proven stale adoption;
+heartbeat or sleep expiry alone does not reclaim it. Do not force-steal or
+manually install an unrelated snapshot to bypass authority.
 
 ### Native iOS deep-link dialog remains visible
 

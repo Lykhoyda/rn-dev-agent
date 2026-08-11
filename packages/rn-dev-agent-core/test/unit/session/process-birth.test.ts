@@ -13,7 +13,7 @@ test('macOS process identity uses full kernel start time and boot session', () =
   const runForBoot = (bootSession, startMicroseconds = '345678') => ({
     run: (command, args) => {
       if (command === '/bin/ps') {
-        assert.deepEqual(args, ['-p', '123', '-o', 'pid=']);
+        assert.deepEqual(args, ['-p', '123', '-o', 'pid=,state=']);
         return '123\n';
       }
       if (command === '/usr/sbin/sysctl') {
@@ -62,6 +62,25 @@ test('macOS process probes distinguish confirmed absence from unreadable identit
       run: (command) => (command === '/bin/ps' ? '123\n' : 'unparseable\n'),
     }),
     { status: 'unknown' },
+  );
+});
+
+test('a terminated but unreaped process reads as absent, not as an unknown identity', () => {
+  assert.deepEqual(
+    probeProcessBirth(123, {
+      platform: 'darwin',
+      run: (command) => (command === '/bin/ps' ? '  123 Z+\n' : assert.fail()),
+      runVerifiedHelper: () => assert.fail('a zombie must not reach the identity helper'),
+    }),
+    { status: 'absent' },
+  );
+  assert.deepEqual(
+    probeProcessBirth(123, {
+      platform: 'linux',
+      read: (path) =>
+        path.includes('boot_id') ? 'boot-1\n' : '123 (runner) Z 1 1 0 0 -1 0 0 0 0 0 0 0\n',
+    }),
+    { status: 'absent' },
   );
 });
 

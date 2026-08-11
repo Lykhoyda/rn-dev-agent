@@ -102,7 +102,19 @@ test('blocked worker runtime exposes only capability-bound recovery', () => {
 
   try {
     assert.equal(runtime.status().state, 'blocked');
-    assert.throws(() => runtime.requireOperational(), /only accept_handoff and adopt_stale/);
+    // The refusal names the reachable diagnostic and carries the measured remedy.
+    assert.throws(
+      () => runtime.requireOperational(),
+      /rn_session\(\{ action: "status" \}\) is the only available action/,
+    );
+    assert.throws(
+      () => runtime.requireOperational(),
+      (error: Error) => !/accept_handoff|adopt_stale/.test(error.message),
+    );
+    assert.equal(
+      runtime.blockedContenderError().details?.nextAction,
+      runtime.inspectRecoveryRequirement()?.nextAction,
+    );
     assert.doesNotThrow(() => runtime.requireRecovery());
   } finally {
     runtime.close();

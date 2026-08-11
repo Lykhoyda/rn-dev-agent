@@ -43,6 +43,7 @@ export interface PackageIntegrationManifest {
   version: 1;
   adapter: string;
   sessionCli?: string;
+  stateDir?: string;
   originalScripts: {
     ios: string[];
     android: string[];
@@ -3196,6 +3197,14 @@ function parseSupportedScript(script: string, platform: 'ios' | 'android'): stri
       metroPort: 8081,
       sessionId: 'preview-session',
     },
+    ...(platform === 'android'
+      ? {
+          resolveExpoAndroidDevice: (deviceId: string) => ({
+            deviceId,
+            displayName: 'preview-emulator',
+          }),
+        }
+      : {}),
   });
   return command;
 }
@@ -3204,6 +3213,7 @@ export function previewPackageIntegration(
   packageJson: PackageJson,
   existing?: PackageIntegrationManifest,
   sessionCli?: string,
+  stateDir?: string,
 ): PackageIntegrationPreview {
   if (
     existing &&
@@ -3212,7 +3222,14 @@ export function previewPackageIntegration(
   ) {
     return {
       packageJson,
-      manifest: sessionCli ? { ...existing, sessionCli: resolve(sessionCli) } : existing,
+      manifest:
+        sessionCli || stateDir
+          ? {
+              ...existing,
+              ...(sessionCli ? { sessionCli: resolve(sessionCli) } : {}),
+              ...(stateDir ? { stateDir: resolve(stateDir) } : {}),
+            }
+          : existing,
     };
   }
 
@@ -3226,6 +3243,7 @@ export function previewPackageIntegration(
     version: 1,
     adapter: ADAPTER,
     ...(sessionCli ? { sessionCli: resolve(sessionCli) } : {}),
+    ...(stateDir ? { stateDir: resolve(stateDir) } : {}),
     originalScripts: {
       ios: parseSupportedScript(ios, 'ios'),
       android: parseSupportedScript(android, 'android'),
@@ -3286,6 +3304,13 @@ if (platform !== 'ios' && platform !== 'android') {
 }
 const manifestPath = path.join(process.cwd(), '.rn-agent', 'integration', 'rn-session-integration.json');
 const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+if (manifest.stateDir !== undefined && (typeof manifest.stateDir !== 'string' || !path.isAbsolute(manifest.stateDir))) {
+  process.stderr.write('AUTHORITY_STATE_HOME_UNKNOWN: integration manifest state home is invalid\n');
+  process.exit(2);
+}
+const authorityEnvironment = manifest.stateDir === undefined
+  ? process.env
+  : { ...process.env, RN_DEV_AGENT_STATE_DIR: manifest.stateDir };
 const original = manifest.originalScripts && manifest.originalScripts[platform];
 if (!Array.isArray(original) || original.length === 0 || original.some((part) => typeof part !== 'string')) {
   process.stderr.write('SESSION_BUILD_COMMAND_UNSUPPORTED: integration manifest is invalid\n');
@@ -3301,16 +3326,19 @@ let sessionCli = null;
 let buildCapability = null;
 let buildKind = null;
 const MANAGED_BUILD_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'];
+const SESSION_CLI_TIMEOUT_MS = 120000;
 const buildRecovery = { abortAttempted: false, abortFailure: null, released: false, completed: false };
 function abortPendingBuild() {
   if (!buildCapability || !sessionCli) return null;
   const abort = spawnSync(process.execPath, [...sqliteFlag, sessionCli, 'abort-build', platform, buildCapability.buildToken], {
     cwd: process.cwd(),
     env: session && typeof session.sessionId === 'string' ? {
-      ...process.env,
+      ...authorityEnvironment,
       RN_DEV_AGENT_SESSION_ID: session.sessionId,
-    } : process.env,
+    } : authorityEnvironment,
     encoding: 'utf8',
+    timeout: SESSION_CLI_TIMEOUT_MS,
+    killSignal: 'SIGKILL',
   });
   if (abort.error) return abort.error.message;
   if (abort.status !== 0) return String(abort.stderr).trim() || ('abort-build exited with status ' + abort.status);
@@ -3341,6 +3369,13 @@ function failBuild(code, message) {
   reportAbortOutcome(abortFailure);
   process.exit(code);
 }
+async function failOnSessionCliError(result, label) {
+  if (!result.error) return;
+  await drainBuildTerminationSignals();
+  failBuild(2, result.error.code === 'ETIMEDOUT'
+    ? 'SESSION_CLI_TIMEOUT: rn-session ' + label + ' did not return within ' + (SESSION_CLI_TIMEOUT_MS / 1000) + 's'
+    : 'SESSION_AUTHORITY_REQUIRED: rn-session ' + label + ' failed: ' + result.error.message);
+}
 function exitForBuildSignal(signal) {
   for (const name of MANAGED_BUILD_SIGNALS) process.removeAllListeners(name);
   process.kill(process.pid, signal);
@@ -3369,6 +3404,46 @@ function ensureValue(flag, value) {
 function ensureFlag(flag) {
   if (!command.includes(flag)) command.push(flag);
 }
+function translateExpoAndroidDevice(serial, displayName) {
+  let found = false;
+  for (let index = 0; index < command.length; index += 1) {
+    if (command[index] === '--device') {
+      found = true;
+      if (command[index + 1] !== serial) {
+        failBuild(2, 'EXPO_DEVICE_IDENTITY_MISMATCH: a user-supplied --device does not equal the authority-bound adb serial');
+      }
+      command[index + 1] = displayName;
+    } else if (command[index].startsWith('--device=')) {
+      found = true;
+      if (command[index] !== '--device=' + serial) {
+        failBuild(2, 'EXPO_DEVICE_IDENTITY_MISMATCH: a user-supplied --device does not equal the authority-bound adb serial');
+      }
+      command[index] = '--device=' + displayName;
+    }
+  }
+  if (!found) command.push('--device', displayName);
+}
+function resolveExpoAndroidDevice(deviceId) {
+  const resolved = spawnSync(process.execPath, [...sqliteFlag, sessionCli, 'resolve-expo-android-device', deviceId], {
+    cwd: process.cwd(),
+    env: {
+      ...authorityEnvironment,
+      RN_DEV_AGENT_SESSION_ID: session.sessionId,
+    },
+    encoding: 'utf8',
+    timeout: SESSION_CLI_TIMEOUT_MS,
+    killSignal: 'SIGKILL',
+  });
+  if (resolved.error || resolved.status !== 0) {
+    failBuild(2, String(resolved.stderr).trim() || 'EXPO_DEVICE_IDENTITY_MISMATCH: exact Android device identity resolution failed');
+  }
+  let parsed = null;
+  try { parsed = JSON.parse(String(resolved.stdout)); } catch {}
+  if (!parsed || parsed.deviceId !== deviceId || typeof parsed.displayName !== 'string' || !parsed.displayName) {
+    failBuild(2, 'EXPO_DEVICE_IDENTITY_MISMATCH: resolver output does not match the authority-bound adb serial');
+  }
+  return parsed;
+}
 function removeManagedPortFlag(value) {
   for (let index = 0; index < command.length;) {
     const part = command[index];
@@ -3385,11 +3460,22 @@ function removeManagedPortFlag(value) {
     command.splice(index, separator >= 0 ? 1 : 2);
   }
 }
+function authorityBoundReverseTunnel(binding) {
+  const reverse = binding.androidMetroReverse;
+  if (!reverse || typeof reverse !== 'object') return false;
+  const exact = 'tcp:' + binding.metroPort;
+  return reverse.platform === 'android'
+    && reverse.deviceId === binding.deviceId
+    && reverse.metroPort === binding.metroPort
+    && reverse.local === exact
+    && reverse.remote === exact;
+}
 function managedMetroProxyUrl(binding) {
   if (binding.platform === 'ios') return 'http://127.0.0.1:' + binding.metroPort;
   if (/^emulator-\d+$/.test(binding.deviceId)) return 'http://10.0.2.2:' + binding.metroPort;
   if (typeof binding.devClientUrl !== 'string') {
-    failBuild(2, 'DEV_CLIENT_ENDPOINT_NOT_FOUND: physical Android session requires an exact Dev Client URL');
+    if (authorityBoundReverseTunnel(binding)) return 'http://127.0.0.1:' + binding.metroPort;
+    failBuild(2, 'DEV_CLIENT_ENDPOINT_NOT_FOUND: physical Android session requires an exact Dev Client URL or a proven adb reverse tunnel to the authority-bound Metro port');
   }
   let metroUrl = null;
   try {
@@ -3433,24 +3519,33 @@ function managedMetroProxyUrl(binding) {
     buildCapability = { buildToken: randomUUID() };
     let probe = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'prepare-build', platform, buildCapability.buildToken, buildKind], {
       cwd: process.cwd(),
-      env: process.env,
+      env: authorityEnvironment,
       encoding: 'utf8',
+      timeout: SESSION_CLI_TIMEOUT_MS,
+      killSignal: 'SIGKILL',
     });
+    await failOnSessionCliError(probe, 'prepare-build');
     if (probe.status !== 0 && String(probe.stderr).includes('live Metro binding')) {
       const metro = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'ensure-metro'], {
         cwd: process.cwd(),
-        env: process.env,
+        env: authorityEnvironment,
         encoding: 'utf8',
+        timeout: SESSION_CLI_TIMEOUT_MS,
+        killSignal: 'SIGKILL',
       });
+      await failOnSessionCliError(metro, 'ensure-metro');
       if (metro.status !== 0) {
         await drainBuildTerminationSignals();
         failBuild(2, String(metro.stderr).trim() || 'METRO_START_UNAVAILABLE: managed Metro failed');
       }
       probe = spawnSync(process.execPath, [...sqliteFlag, manifest.sessionCli, 'prepare-build', platform, buildCapability.buildToken, buildKind], {
         cwd: process.cwd(),
-        env: process.env,
+        env: authorityEnvironment,
         encoding: 'utf8',
+        timeout: SESSION_CLI_TIMEOUT_MS,
+        killSignal: 'SIGKILL',
       });
+      await failOnSessionCliError(probe, 'prepare-build');
     }
     if (probe.status === 0) {
       let parsed = null;
@@ -3460,8 +3555,10 @@ function managedMetroProxyUrl(binding) {
         failBuild(2, 'SESSION_BUILD_IDENTITY_CONFLICT: rn-session returned invalid JSON');
       }
       session = parsed;
-    } else if (String(probe.stderr).includes('no live session matches this canonical worktree')) {
+    } else if (String(probe.stderr).includes('no live session matches this canonical worktree') || String(probe.stderr).includes('no live session in authority registry')) {
       buildCapability = null;
+      await drainBuildTerminationSignals();
+      failBuild(2, 'SESSION_AUTHORITY_REQUIRED: package integration is installed but no live session exists in the configured authority registry for this worktree; start a session in that registry before building, or restore the original scripts with rn_session(action="restore_integration", confirmed=true)');
     } else {
       await drainBuildTerminationSignals();
       failBuild(2, String(probe.stderr).trim() || 'SESSION_AUTHORITY_REQUIRED: rn-session lookup failed');
@@ -3469,6 +3566,7 @@ function managedMetroProxyUrl(binding) {
   }
   await drainBuildTerminationSignals();
   let expoProxyUrl = null;
+  let expoAndroidDevice = null;
   if (session) {
     if (session.platform !== platform || typeof session.deviceId !== 'string' || typeof session.appId !== 'string' || !Number.isInteger(session.metroPort) || typeof session.sessionId !== 'string' || typeof session.buildToken !== 'string' || (session.simulator !== undefined && typeof session.simulator !== 'boolean')) {
       failBuild(2, 'SESSION_BUILD_IDENTITY_CONFLICT: session binding is incomplete');
@@ -3480,7 +3578,12 @@ function managedMetroProxyUrl(binding) {
       failBuild(2, 'SESSION_AUTHORITY_REQUIRED: session build completion requires the package-local rn-session CLI');
     }
     if (buildKind === 'expo') {
-      ensureValue('--device', session.deviceId);
+      if (platform === 'android') {
+        expoAndroidDevice = resolveExpoAndroidDevice(session.deviceId);
+        translateExpoAndroidDevice(session.deviceId, expoAndroidDevice.displayName);
+      } else {
+        ensureValue('--device', session.deviceId);
+      }
       removeManagedPortFlag(String(session.metroPort));
       ensureFlag('--no-bundler');
       expoProxyUrl = managedMetroProxyUrl(session);
@@ -3495,15 +3598,22 @@ function managedMetroProxyUrl(binding) {
     }
   }
 
+  if (expoAndroidDevice) {
+    const verified = resolveExpoAndroidDevice(session.deviceId);
+    if (verified.deviceId !== expoAndroidDevice.deviceId || verified.displayName !== expoAndroidDevice.displayName) {
+      failBuild(2, 'EXPO_DEVICE_IDENTITY_MISMATCH: the serial-to-display-name mapping changed immediately before Expo; reconnect the exact device and retry');
+    }
+  }
   const child = spawnSync(command[0], command.slice(1), {
     cwd: process.cwd(),
     env: session ? {
-      ...process.env,
+      ...authorityEnvironment,
       ORG_GRADLE_PROJECT_reactNativeDevServerPort: String(session.metroPort),
       RCT_METRO_PORT: String(session.metroPort),
       RN_DEV_AGENT_SESSION_ID: session.sessionId,
+      ...(buildKind === 'expo' && platform === 'android' ? { ANDROID_SERIAL: session.deviceId } : {}),
       ...(expoProxyUrl ? { EXPO_PACKAGER_PROXY_URL: expoProxyUrl } : {}),
-    } : process.env,
+    } : authorityEnvironment,
     stdio: 'inherit',
   });
   await drainBuildTerminationSignals();
@@ -3522,7 +3632,7 @@ function managedMetroProxyUrl(binding) {
   if (session && platform === 'ios' && expoProxyUrl && session.simulator === true) {
     const installed = spawnSync('xcrun', ['simctl', 'get_app_container', session.deviceId, session.appId, 'app'], {
       cwd: process.cwd(),
-      env: process.env,
+      env: authorityEnvironment,
       encoding: 'utf8',
       timeout: 30_000,
     });
@@ -3543,7 +3653,7 @@ function managedMetroProxyUrl(binding) {
       expoProxyUrl,
     ], {
       cwd: process.cwd(),
-      env: process.env,
+      env: authorityEnvironment,
       encoding: 'utf8',
       timeout: 30_000,
     });
@@ -3557,11 +3667,14 @@ function managedMetroProxyUrl(binding) {
     const complete = spawnSync(process.execPath, [...sqliteFlag, sessionCli, 'complete-build', platform, session.buildToken], {
       cwd: process.cwd(),
       env: {
-        ...process.env,
+        ...authorityEnvironment,
         RN_DEV_AGENT_SESSION_ID: session.sessionId,
       },
       encoding: 'utf8',
+      timeout: SESSION_CLI_TIMEOUT_MS,
+      killSignal: 'SIGKILL',
     });
+    await failOnSessionCliError(complete, 'complete-build');
     if (complete.status !== 0) {
       failBuild(2, String(complete.stderr).trim() || 'APP_INSTALL_IDENTITY_CHANGED: build receipt could not be recorded');
     }
@@ -3934,6 +4047,7 @@ export function applyPackageIntegration(
   input: {
     appRoot: string;
     sessionCli: string;
+    stateDir?: string;
   },
   dependencies: PackageIntegrationDependencies = {},
 ): PackageIntegrationPreview {
@@ -3985,7 +4099,12 @@ export function applyPackageIntegration(
         if (!(error instanceof SyntaxError)) throw error;
       }
     }
-    const preview = previewPackageIntegration(packageJson, existing, input.sessionCli);
+    const preview = previewPackageIntegration(
+      packageJson,
+      existing,
+      input.sessionCli,
+      input.stateDir,
+    );
     const nextMetroSource = previewMetroIntegration(metroSnapshot.contents.toString('utf8'));
     preview.manifest.metroConfig = metroConfigPath.slice(appRoot.length + 1);
     dependencies.beforeCommit?.();
@@ -4156,14 +4275,18 @@ export function restorePackageIntegrationFiles(
     const packageOutput = Buffer.from(
       `${JSON.stringify(restorePackageIntegration(packageJson, manifest), null, 2)}\n`,
     );
-    const packageResult = casReplaceBoundBatch(directories.app, [
-      {
-        snapshot: packageSnapshot,
-        expected: packageSnapshot.contents,
-        replacement: packageOutput,
-        mode: packageSnapshot.mode,
-      },
-    ]);
+    const packageResult = casReplaceBoundBatch(
+      directories.app,
+      [
+        {
+          snapshot: packageSnapshot,
+          expected: packageSnapshot.contents,
+          replacement: packageOutput,
+          mode: packageSnapshot.mode,
+        },
+      ],
+      dependencies.boundOperationDependencies,
+    );
     applied.push({
       snapshot: packageSnapshot,
       written: packageOutput,
@@ -4173,14 +4296,18 @@ export function restorePackageIntegrationFiles(
     dependencies.afterWrite?.(packagePath);
     assertBoundCleanup(packageResult);
     const metroOutput = Buffer.from(restoreMetroIntegration(metroSource));
-    const metroResult = casReplaceBoundBatch(directories.app, [
-      {
-        snapshot: metroSnapshot,
-        expected: metroSnapshot.contents,
-        replacement: metroOutput,
-        mode: metroSnapshot.mode,
-      },
-    ]);
+    const metroResult = casReplaceBoundBatch(
+      directories.app,
+      [
+        {
+          snapshot: metroSnapshot,
+          expected: metroSnapshot.contents,
+          replacement: metroOutput,
+          mode: metroSnapshot.mode,
+        },
+      ],
+      dependencies.boundOperationDependencies,
+    );
     applied.push({
       snapshot: metroSnapshot,
       written: metroOutput,

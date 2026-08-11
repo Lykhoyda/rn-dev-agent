@@ -155,13 +155,18 @@ export function buildIosProbes(bundleId) {
         now: () => Date.now(),
     };
 }
+export function hashAndroidAppSnapshotNodes(nodes, bundleId) {
+    if (!bundleId)
+        return null;
+    return hashSnapshotNodes(nodes.filter((node) => node.packageName === bundleId));
+}
 export function buildAndroidProbes(bundleId) {
     const pinnedHostPort = getAndroidRunnerHostPort() ?? undefined;
     return {
         isWindowUpdating: (timeoutMs) => androidIsWindowUpdatingProbe(timeoutMs, bundleId, pinnedHostPort),
         snapshotHash: async () => {
             const nodes = await androidSnapshotNodesViaProbe(bundleId, pinnedHostPort);
-            return nodes ? hashSnapshotNodes(nodes) : null;
+            return nodes ? hashAndroidAppSnapshotNodes(nodes, bundleId) : null;
         },
         sleep: realSleep,
         now: () => Date.now(),

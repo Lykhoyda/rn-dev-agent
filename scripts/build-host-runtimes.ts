@@ -38,10 +38,10 @@ if (!codexAdaptation) {
 const CODEX_COMMAND_SKILLS = codexAdaptation.commandSkills;
 if (
   !Array.isArray(CODEX_COMMAND_SKILLS) ||
-  CODEX_COMMAND_SKILLS.length !== 15 ||
-  new Set(CODEX_COMMAND_SKILLS).size !== 15
+  CODEX_COMMAND_SKILLS.length !== 16 ||
+  new Set(CODEX_COMMAND_SKILLS).size !== 16
 ) {
-  console.error('build-host-runtimes: Codex command-skill inventory must contain 15 unique names');
+  console.error('build-host-runtimes: Codex command-skill inventory must contain 16 unique names');
   process.exit(1);
 }
 const CODEX_DOMAIN_SKILLS = new Set(codexAdaptation.adaptedDomainSkills ?? []);
@@ -84,7 +84,9 @@ const RUNTIME_ENTRIES = [
   'startup-integrity-loader.js',
   'startup-integrity-register.js',
   'rn-session.js',
+  'experience-trends.js',
   'worktree-inheritance.js',
+  'workflow-check.js',
 ];
 
 // Helper scripts the Claude package's hooks and skills invoke at runtime.
@@ -118,6 +120,7 @@ for (const file of RUNTIME_ENTRIES) {
   }
 }
 chmodSync(join(coreRoot, 'dist', 'supervisor.js'), 0o755);
+chmodSync(join(coreRoot, 'dist', 'experience-trends.js'), 0o755);
 
 if (!existsSync(observeWebDistSource)) {
   console.error(`build-host-runtimes: missing observe web bundle at ${observeWebDistSource}`);
@@ -194,7 +197,7 @@ for (const file of RUNTIME_ENTRIES) {
   copyFileSync(join(codexRuntimeRoot, 'dist', file), join(claudeRuntimeRoot, 'dist', file));
 }
 
-// Generate the exact fifteen explicit-only Codex workflow skill adapters. The
+// Generate the exact sixteen explicit-only Codex workflow skill adapters. The
 // long workflow bodies stay in package-local commands/*.md; these marker-owned
 // wrappers provide a native $skill surface without relying on Codex's
 // best-effort command migration.

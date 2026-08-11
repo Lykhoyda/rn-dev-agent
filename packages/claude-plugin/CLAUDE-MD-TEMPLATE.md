@@ -32,6 +32,10 @@ auth/deeplink, build quirks) and **Troubleshooting** (failure→resolution gotch
 
 ### 🚨 MANDATORY PRE-FLIGHT (before ANY device_* call)
 
+For a full journey (build, test, or proof end to end), `/rn-dev-agent:run-workflow`
+sequences the entire proven operating chain — preflight, typed session recovery,
+exclusive device, managed Metro, proof, reverse cleanup — in one contract.
+
 Run this 3-step checklist at the start of every UI-touching task. This is the
 single highest-leverage rule in the plugin — it prevents the most common
 failure mode (multi-minute manual `device_*` walks for flows that already
@@ -311,7 +315,7 @@ error health.
 #### "I need to tap a button / fill an input"
 - **If you don't know the testID / @ref yet**: `device_snapshot` FIRST.
 - **Know the @ref** (from `device_snapshot`): `device_press(ref="@e3")`
-- **Know the visible text**: `device_find(text="Submit", action="click")` — finds and taps in one call
+- **Know the visible text**: `device_find(text="Submit", action="click")` — finds and taps in one call. On Android it matches only the app's own window; pass `includeSystemUi=true` to also match system chrome (status/navigation bar), which may leave the app.
 - **Fill a text input**: `device_fill(ref="@e5", text="hello@example.com")`
 - **Multiple steps at once**: `device_batch` — chain press/fill/swipe actions in one call. Its implicit final snapshot defaults to `salient` (actionable nodes only); pass `finalSnapshot: 'none'` for action-only batches you verify via `expect_*`/`cdp_store_state`, or `'full'` for the complete node list.
 - **Swipe/scroll**: `device_swipe`, `device_scroll`, `device_scrollintoview`
@@ -319,7 +323,7 @@ error health.
 - **NEVER** use `xcrun simctl` or `adb input` for UI interaction
 - **For KNOWN testIDs**: prefer `cdp_interact(testID=…)` (fiber-tree-resolved, no coordinate caching) OR `device_batch` with the `testID` field on find/press/fill (snapshot-resolved per call). Both eliminate the stale-ref-across-step-transitions failure mode. `cdp_interact` also resolves RNTL-style selectors — `role`/`name`/`text`/`placeholder` — and fails closed on ambiguity rather than picking the wrong element.
 - **For UNKNOWN elements** (need to discover what's on screen): `device_snapshot` first, then `device_press(ref="@eN")`.
-- Stale-`@ref` taps self-heal: the runner re-resolves by identity signature when the match is unique and retries a no-effect tap once (`meta.reResolved` / `meta.tapRetried`). Treat that as a safety net, not a license to reuse old refs — ambiguous re-resolution still fails with `STALE_REF`.
+- Stale-`@ref` taps self-heal: the runner re-resolves by identity signature when the match is unique (`meta.reResolved`), but a dispatched tap is never replayed when its effect is uncertain. Treat that as a safety net, not a license to reuse old refs — ambiguous re-resolution still fails with `STALE_REF`.
 
 #### "I need to navigate to a specific screen"
 - **Best option:** `cdp_nav_graph(action="go", screen="ProfileScreen")` — scans navigation graph, plans route, navigates in one call
@@ -404,7 +408,14 @@ If `device_list` shows more than one booted device (e.g., both an iOS simulator 
 
 The fenced session owns the platform and exact device. `cdp_status` only reports
 the current client; conflicting authoritative tool arguments fail instead of
-silently re-targeting.
+silently re-targeting. Expo Android's `--device` is the one compatibility
+boundary that requires a display name: the integrated adapter uniquely maps the
+bound adb serial to its model/AVD name immediately before Expo while retaining
+the serial in `ANDROID_SERIAL`, session state, receipts, adb targeting, runner
+ownership, and diagnostics. `EXPO_DEVICE_IDENTITY_MISMATCH` means the serial is
+missing/offline/unauthorized, a name or serial is duplicated, a supplied device
+is foreign, or the mapping drifted; fix that exact condition rather than letting
+Expo select an ambient device.
 
 An explicit `platform:` on `device_screenshot` resolves the booted device
 directly and captures via raw `simctl` / `adb` (GH #60 — fixed), so
@@ -434,7 +445,7 @@ Built-in reliability layers on `device_*` interactions (all default-ON, each wit
 | Layer | What it does | Surfaced as | Opt out |
 |---|---|---|---|
 | **Settle engine** | Every mutating `device_*` verb waits for the UI to actually stabilize (window-update probe / screenshot-static compare, snapshot-hash fallback) instead of fixed sleeps. `device_batch` settles between steps by default. | `meta.settle: {method, settled}` | `RN_SETTLE=0` global, `settle: false` per batch step, `settleTimeoutMs` budget knob |
-| **Self-healing taps** | A stale `@ref` re-resolves inline by identity signature (unique match only — ambiguous/absent → `STALE_REF` with candidates); a tap that produced no UI change retries exactly once, unless keyboard-guard or transport recovery already consumed that single retry budget (then it reports `meta.noUiChange` without re-firing); `device_batch` testID resolution refuses ambiguous matches (`AMBIGUOUS_TESTID`). | `meta.reResolved`, `meta.tapRetried`, `meta.noUiChange` | `RN_SELF_HEAL=0` global, `retryIfNoChange: false` per call |
+| **Self-healing taps** | A stale `@ref` re-resolves inline by identity signature (unique match only — ambiguous/absent → `STALE_REF` with candidates). Once a command may have been dispatched it is never replayed merely because effect observation is uncertain. On iOS an unchanged tap stays a success carrying `meta.noUiChange`; on Android it fails with `INTERACTION_EFFECT_UNVERIFIED` (`mutation: possible`, `attempts: 1`), and so does a tap whose effect cannot be probed. An Android gesture the runner could not safely actuate — including a same-window actionable control covering its owned point — fails before mutation with `INTERACTION_NOT_ACTUATED` (`mutation: none`). `device_batch` testID resolution refuses ambiguous matches (`AMBIGUOUS_TESTID`). | `meta.reResolved`, `meta.noUiChange` | `RN_SELF_HEAL=0` disables stale-ref healing; disabling settle opts out of effect observation |
 | **Keyboard guard** | A latest-snapshot iOS `Key`/`Keyboard` ref qualifies only when the runner retains the same generation/index/type/identity/frame and uniquely re-resolves that live keyboard target; it is activated once as `keyboard_target`. Raw, forged, stale, relaid-out, missing-keyboard, Button/Other, and case/region guesses never qualify. Ordinary app targets use only a native hide/dismiss button inside the keyboard or injected JS with hidden-state proof, then refresh/re-resolve and tap once; no automatic keyboard swipe or Return/Done/accessory action occurs. | `meta.keyboardGuard` (`keyboard_target` or `auto_dismissed`), `meta.keyboardAutoHeal`, `meta.via`, `meta.timings_ms.keyboardGuard` | — |
 
 Three consecutive no-change taps on distinct targets surface a wedged-runtime hint — reboot the simulator rather than blaming app code.
@@ -523,6 +534,7 @@ the runner's settle engine.
 
 | Symptom | Diagnostic tool | Likely cause | Recovery |
 |---------|----------------|--------------|----------|
+| `NON_GIT_MANIFEST_REQUIRED` | `/rn-dev-agent:check-env` (source-declaration row) | This non-Git app root has an incomplete source declaration | Repair `RN_DEV_AGENT_DECLARED_ROOT` and `RN_DEV_AGENT_DECLARED_MANIFESTS` under the [session-authority contract](https://lykhoyda.github.io/rn-dev-agent/session-authority/#what-each-source-identity-proves), then restart the supervisor |
 | `cdp_status` fails | `rn_session(action="status")` | Session Metro or target binding is unavailable | Use the integrated package script, then `cdp_connect` |
 | `cdp_component_tree` returns "No fiber roots" | Wait 2s, retry | App still mounting after reload | Retry; if persistent, `cdp_reload` |
 | `cdp_evaluate` returns `__RN_AGENT is not defined` | Automatic (retry) | Helpers lost after reload | Tool auto-re-injects; if stuck, `cdp_reload` |
@@ -534,7 +546,7 @@ the runner's settle engine.
 | `BUSY_FOREIGN_FLOW` refusal | `cdp_status` | A genuinely foreign Maestro/XCUITest session is driving the simulator | Wait for its owner; do not run plugin recovery against it. CDP reads and `device_screenshot` still work |
 | `BUSY_FLOW_ACTIVE` refusal | `rn_session(action="status")` | This bridge has an active whole-device or dynamically escalated inline Maestro flow | Wait for it to finish; do not clear the arbiter while work is live |
 | `AUTOMATION_CLEANUP_UNPROVEN` | Inline Maestro tool response | Plugin-owned process-group absence could not be confirmed | Run the returned manual `kill -TERM -<pgid>` command, then retry in the same bridge process |
-| `DEVICE_BUSY` / `DEVICE_CLAIM_CONFLICT` | `rn_session(action="status")` | Compatibility operation / another live worktree owns the exact device | Wait/close the operation, or explicitly hand off; a second free simulator must be bound and built through normal authority—never force-steal |
+| `DEVICE_BUSY` / `DEVICE_CLAIM_CONFLICT` | `rn_session(action="status")` | A fresh live device-lock holder / another live worktree owns the exact device | For `DEVICE_BUSY`, use its bounded holder diagnostics: close with `device_snapshot action=close` from the holder worktree, or bind/build a dedicated simulator and open its exact ID with `attachOnly=true` when already running. Dead or heartbeat-stale locks self-heal; never force-steal |
 | `RUNNER_COMMANDS_STALE` / `RUNNER_PROTOCOL_MISMATCH` | failing `device_*` result | Runner artifact predates the installed plugin | `device_snapshot action=open` auto-invalidates + rebuilds; only a surviving mismatch needs the rebuild commands in the error |
 | `KEYBOARD_DISMISS_FAILED` refusal (iOS) | `device_snapshot` | A visible keyboard could not be proven hidden by a safe native hide/dismiss control or the optional injected JS tier, so no app tap was performed | Connect CDP so the JS tier can run, or dismiss explicitly, then retry with a fresh snapshot/ref |
 | `KEYBOARD_TARGET_STALE` refusal (iOS) | `device_snapshot` | The retained latest-snapshot `Key`/`Keyboard` no longer uniquely matches the live keyboard; no gesture or dismissal ran | Capture a fresh snapshot and use its new exact ref; rebuild/reopen if the runner lacks `EXACT_KEYBOARD_TARGET_GUARD` |
@@ -582,6 +594,7 @@ After implementing any feature, in this order:
 
 | Command | When to use |
 |---------|-------------|
+| `/rn-dev-agent:run-workflow [journey]` | Before any real device journey — validates and establishes the proven operating sequence (declared package manager + deps, typed session recovery, one exclusive device, managed Metro, reverse cleanup) |
 | `/rn-dev-agent:rn-feature-dev <desc>` | Building a new feature end-to-end (8-phase pipeline: explore, design, implement, verify) |
 | `/rn-dev-agent:test-feature` | Feature is implemented, need to verify it works on simulator |
 | `/rn-dev-agent:build-and-test` | Need to build from scratch (EAS/local), install, and test |

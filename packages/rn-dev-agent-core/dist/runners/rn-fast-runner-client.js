@@ -1412,6 +1412,10 @@ export async function runIOS(args) {
         body.y2 = args.y2;
     if (args.text !== undefined)
         body.text = args.text;
+    if (args.exactIdentifier !== undefined)
+        body.exactIdentifier = args.exactIdentifier;
+    if (args.exactType !== undefined)
+        body.exactType = args.exactType;
     if (args.durationMs !== undefined)
         body.durationMs = args.durationMs;
     if (args.delayMs !== undefined)
@@ -1615,9 +1619,11 @@ export async function runIOS(args) {
             return containTypeTimeout(args, commandAuthorityBefore);
         }
         const mutation = resp.error?.mutation;
+        const reason = resp.error?.reason;
         const failExtras = {
             ...(recovery ? { transportRecovery: recovery } : {}),
             ...(mutation !== undefined ? { mutation } : {}),
+            ...(reason !== undefined ? { reason } : {}),
         };
         if (code) {
             return failResult(message, code, Object.keys(failExtras).length > 0 ? failExtras : undefined);

@@ -8,12 +8,24 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { inspectSessionOwner } from '../session/process-owner.js';
+import { inspectInstallIdentity } from '../session/install-identity-inspection.js';
 import { projectPublicAuthorityStatus } from '../session/public-status.js';
 import { probeProcessBirth } from '../session/process-birth.js';
 import { inspectManagedMetroCleanupEvidence, inspectManagedMetroLifecycle, probeManagedMetroListener, stopManagedMetro, stopManagedMetroWithEvidence, } from '../session/managed-metro.js';
 import { arbiter } from '../lifecycle/device-arbiter.js';
 import { stopBoundObserve, stopBoundRecorder, stopBoundRunner, } from '../session/process-cleanup.js';
 import { deviceExistsOnHost } from '../session/device-existence.js';
+import { removeAndroidMetroReverse, } from '../session/android-metro-reverse.js';
+function sameAndroidMetroReverse(current, next) {
+    if (!current || !next)
+        return current === next;
+    const binding = current;
+    return (binding.platform === next.platform &&
+        binding.deviceId === next.deviceId &&
+        binding.metroPort === next.metroPort &&
+        binding.local === next.local &&
+        binding.remote === next.remote);
+}
 function sameMetroAuthority(current, next) {
     return (current?.port === next.port &&
         current.pid === next.pid &&
@@ -173,13 +185,43 @@ export function reconcileManagedMetroStatus(runtime, dependencies = {}) {
     dependencies.onBundleInvalidated?.();
     return runtime.status();
 }
+async function completeStaleDeviceCleanupPlan(registry, session, workerInstance, plan, dependencies) {
+    const completed = [];
+    if (plan.androidMetroReverse && typeof plan.androidMetroReverse.completedAt !== 'number') {
+        if (!dependencies.removeAndroidMetroReverse) {
+            throw new SessionAuthorityError('PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN', 'physical Android Metro cleanup integration is unavailable');
+        }
+        dependencies.removeAndroidMetroReverse(plan.androidMetroReverse);
+        registry.completeStaleResourceRelease(session, workerInstance, 'androidMetroReverse');
+        completed.push('androidMetroReverse');
+    }
+    if (plan.recorder && typeof plan.recorder.completedAt !== 'number') {
+        await (dependencies.stopHandoffRecorder ?? stopBoundRecorder)(plan.recorder);
+        registry.completeStaleResourceRelease(session, workerInstance, 'recorder');
+        completed.push('recorder');
+    }
+    if (plan.runner && typeof plan.runner.completedAt !== 'number') {
+        if (dependencies.stopHandoffRunner) {
+            await dependencies.stopHandoffRunner(plan.runner);
+        }
+        else {
+            await stopHandoffRunner(plan.runner, dependencies.probeProcessBirth, dependencies.signalProcess, dependencies.cleanupTimeoutMs);
+        }
+        registry.completeStaleResourceRelease(session, workerInstance, 'runner');
+        completed.push('runner');
+    }
+    return completed;
+}
 /**
- * GH #672: `replaceDeviceAuthority` demanded `adopt_stale` for a proven-dead device
- * owner, but adoption handles are only minted at startup for source/port conflicts —
- * so the advertised recovery had no reachable path. Mint a bounded, device-scoped
- * release offer instead and name it in the refusal.
+ * GH #672 / ADR L5 (captain-approved D3): a proven-dead device owner is released
+ * inline by `bind_device` under `confirmed: true` — no capability token is minted,
+ * death is re-proven from durable state at execution, and only the exact device
+ * family transfers through the same journaled cleanup engine `release_stale_device`
+ * uses. Without confirmation, the refusal names the confirmed retry and nothing
+ * mutates.
  */
-function withStaleDeviceReleaseOffer(registry, session, target, operation) {
+async function withInlineStaleDeviceCleanup(registry, session, dependencies, input, requireWorkerInstance, revalidate, operation) {
+    const target = { platform: input.platform, deviceId: input.deviceId };
     try {
         return operation();
     }
@@ -189,21 +231,87 @@ function withStaleDeviceReleaseOffer(registry, session, target, operation) {
             !error.message.includes('proven-stale device owner')) {
             throw error;
         }
-        let offer;
-        try {
-            offer = registry.prepareStaleResourceRelease(session, target);
+        if (input.confirmed !== true) {
+            let inspection;
+            try {
+                inspection = registry.inspectStaleDeviceRelease(session, target);
+            }
+            catch (inspectError) {
+                throw inspectError instanceof SessionAuthorityError ? inspectError : error;
+            }
+            throw new SessionAuthorityError('STALE_DEVICE_RELEASE_REQUIRED', `exact ${target.platform} device ${target.deviceId} is claimed by a proven-dead owner; ` +
+                'confirm the exact device, runner, and recorder cleanup before rebinding', error.holder, {
+                axis: 'D',
+                nextAction: `rn_session({ action: "bind_device", platform: "${target.platform}", ` +
+                    `deviceId: "${target.deviceId}", appId: "${input.appId}", confirmed: true }). ` +
+                    `This releases only the exact device cleanup obligations (${inspection.obligations.length ? inspection.obligations.join(', ') : 'none'}) after re-proving the owner's death, and never the dead owner source, ` +
+                    'package-integration, or Metro authority. release_stale_device with ' +
+                    'confirmed: true remains a compatible alias.',
+            });
         }
-        catch (offerError) {
-            throw offerError instanceof SessionAuthorityError ? offerError : error;
-        }
-        throw new SessionAuthorityError('STALE_DEVICE_RELEASE_REQUIRED', `exact ${target.platform} device ${target.deviceId} is claimed by a proven-dead owner; ` +
-            `release its exact device, runner, and recorder obligations before rebinding`, error.holder, {
-            axis: 'D',
-            nextAction: `rn_session({ action: "release_stale_device", platform: "${target.platform}", ` +
-                `deviceId: "${target.deviceId}", releaseHandle: "${offer.token}" }), then retry bind_device. ` +
-                `This transfers only the exact device cleanup obligations (${offer.obligations.length ? offer.obligations.join(', ') : 'none'}) and never the dead owner source, package-integration, or Metro authority.`,
+        const workerInstance = requireWorkerInstance();
+        const plan = registry.beginConfirmedStaleDeviceRelease(session, workerInstance, target);
+        await completeStaleDeviceCleanupPlan(registry, session, workerInstance, plan, dependencies);
+        registry.finishStaleResourceRelease(session, workerInstance);
+        revalidate();
+        return operation();
+    }
+}
+function ensurePhysicalAndroidMetroReachability(registry, session, status, dependencies) {
+    const device = status.bindings.device;
+    if (device?.platform !== 'android' || typeof device.deviceId !== 'string')
+        return status;
+    const metroPort = Number(status.bindings.metroPort);
+    const existing = status.bindings.androidMetroReverse;
+    if (!dependencies.ensureAndroidMetroReverse)
+        return status;
+    const result = dependencies.ensureAndroidMetroReverse({
+        deviceId: device.deviceId,
+        metroPort,
+        binding: existing,
+    });
+    if (sameAndroidMetroReverse(existing ?? null, result.binding))
+        return status;
+    try {
+        registry.updateBindings(session, {
+            expectedAuthorityVersion: status.authorityVersion,
+            bindings: { androidMetroReverse: result.binding },
         });
     }
+    catch (error) {
+        if (result.created && result.binding) {
+            try {
+                (dependencies.removeAndroidMetroReverse ?? removeAndroidMetroReverse)(result.binding);
+            }
+            catch (cleanupError) {
+                throw new AggregateError([error, cleanupError], 'PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN: adb reverse was created but its authority binding could not be persisted or safely cleaned');
+            }
+        }
+        throw error;
+    }
+    const current = registry.getSessionStatus(session.sessionId);
+    if (!current) {
+        throw new SessionAuthorityError('SESSION_OWNER_LOST', 'session disappeared after physical Android Metro reachability was established');
+    }
+    return current;
+}
+function removeSessionAndroidMetroReverse(registry, session, status, dependencies) {
+    const binding = status.bindings.androidMetroReverse;
+    if (!binding)
+        return status;
+    if (!dependencies.removeAndroidMetroReverse) {
+        throw new SessionAuthorityError('PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN', 'physical Android Metro cleanup integration is unavailable');
+    }
+    dependencies.removeAndroidMetroReverse(binding);
+    registry.updateBindings(session, {
+        expectedAuthorityVersion: status.authorityVersion,
+        bindings: { androidMetroReverse: null },
+    });
+    const current = registry.getSessionStatus(session.sessionId);
+    if (!current) {
+        throw new SessionAuthorityError('SESSION_OWNER_LOST', 'session disappeared after physical Android Metro reachability cleanup');
+    }
+    return current;
 }
 export function createSessionHandler(runtime, dependencies = {}) {
     return async (input) => {
@@ -213,12 +321,16 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 // handle that adopt_stale would then refuse as expired.
                 runtime.refreshRecoveryHandles();
                 const projectedAuthority = reconcileManagedMetroStatus(runtime, dependencies);
+                const installIdentity = projectedAuthority.available
+                    ? (dependencies.inspectInstallIdentity ?? inspectInstallIdentity)(projectedAuthority.bindings.install)
+                    : null;
                 return okResult({
                     authoritative: false,
                     authority: projectPublicAuthorityStatus(projectedAuthority, {
                         includeSessionId: true,
                         now: dependencies.now,
                         recoveryRequirement: runtime.inspectRecoveryRequirement(),
+                        installIdentity,
                     }),
                 });
             }
@@ -260,7 +372,8 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 const journal = current?.bindings.staleDeviceCleanup;
                 const authority = journal ?? offer;
                 if (target &&
-                    (authority?.platform !== target.platform || authority.deviceId !== target.deviceId)) {
+                    authority &&
+                    (authority.platform !== target.platform || authority.deviceId !== target.deviceId)) {
                     throw new SessionAuthorityError('DEVICE_AUTHORITY_MISMATCH', 'the stale release request does not match the exact cleanup journal or offer', undefined, {
                         axis: 'D',
                         nextAction: 'Run rn_session with action "status" for the exact recovery.',
@@ -269,26 +382,24 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 if (!journal && !target) {
                     throw new SessionAuthorityError('DEVICE_AUTHORITY_MISMATCH', 'platform and deviceId are required for the initial stale device transfer');
                 }
+                let plan;
                 if (!journal && typeof releaseHandle !== 'string') {
-                    throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', 'releaseHandle is required before stale device claims transfer');
-                }
-                const plan = registry.beginStaleResourceRelease(session, releaseHandle, workerInstance, target);
-                const completed = [];
-                if (plan.recorder && typeof plan.recorder.completedAt !== 'number') {
-                    await (dependencies.stopHandoffRecorder ?? stopBoundRecorder)(plan.recorder);
-                    registry.completeStaleResourceRelease(session, workerInstance, 'recorder');
-                    completed.push('recorder');
-                }
-                if (plan.runner && typeof plan.runner.completedAt !== 'number') {
-                    if (dependencies.stopHandoffRunner) {
-                        await dependencies.stopHandoffRunner(plan.runner);
+                    // ADR L5 (captain-approved D3): confirmed: true replaces the release-offer
+                    // capability token; death is re-proven from durable state in the transfer.
+                    if (input.confirmed !== true) {
+                        throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'the initial stale device transfer requires confirmed: true', undefined, {
+                            axis: 'D',
+                            nextAction: `rn_session({ action: "release_stale_device", platform: "${target.platform}", ` +
+                                `deviceId: "${target.deviceId}", confirmed: true }), or re-run bind_device ` +
+                                'with confirmed: true to release and rebind in one step.',
+                        });
                     }
-                    else {
-                        await stopHandoffRunner(plan.runner, dependencies.probeProcessBirth, dependencies.signalProcess, dependencies.cleanupTimeoutMs);
-                    }
-                    registry.completeStaleResourceRelease(session, workerInstance, 'runner');
-                    completed.push('runner');
+                    plan = registry.beginConfirmedStaleDeviceRelease(session, workerInstance, target);
                 }
+                else {
+                    plan = registry.beginStaleResourceRelease(session, releaseHandle, workerInstance, target);
+                }
+                const completed = await completeStaleDeviceCleanupPlan(registry, session, workerInstance, plan, dependencies);
                 registry.finishStaleResourceRelease(session, workerInstance);
                 return okResult({
                     released: { platform: plan.platform, cleanupCompleted: completed },
@@ -300,7 +411,7 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 const platform = required(input.platform, 'platform');
                 const deviceId = required(input.deviceId, 'deviceId');
                 const appId = required(input.appId, 'appId');
-                const status = registry.getSessionStatus(session.sessionId);
+                let status = registry.getSessionStatus(session.sessionId);
                 const signer = dependencies.getSignerCapability?.();
                 if (!status) {
                     throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'session disappeared before device binding');
@@ -308,15 +419,43 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 if (status.bindings.runner || status.bindings.observe || status.bindings.proof) {
                     throw new SessionAuthorityError('DEVICE_AUTHORITY_MISMATCH', 'device rebinding requires runner, Observe, or proof authority to be released first');
                 }
-                let deviceExists;
-                try {
-                    deviceExists = (dependencies.deviceExists ?? deviceExistsOnHost)(platform, deviceId);
+                const requireWorkerInstance = () => {
+                    const workerInstance = status.worker.instanceId;
+                    if (!workerInstance) {
+                        throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', 'release worker identity is unavailable');
+                    }
+                    return workerInstance;
+                };
+                // ADR L5: an interrupted exact-device cleanup journal resumes token-lessly on a
+                // bare bind of the same target; a different target keeps refusing below.
+                const cleanupJournal = status.bindings.staleDeviceCleanup;
+                if (cleanupJournal &&
+                    cleanupJournal.platform === platform &&
+                    cleanupJournal.deviceId === deviceId) {
+                    const workerInstance = requireWorkerInstance();
+                    const plan = registry.beginConfirmedStaleDeviceRelease(session, workerInstance, {
+                        platform,
+                        deviceId,
+                    });
+                    await completeStaleDeviceCleanupPlan(registry, session, workerInstance, plan, dependencies);
+                    registry.finishStaleResourceRelease(session, workerInstance);
                 }
-                catch (error) {
-                    throw new SessionAuthorityError('DEVICE_DISCOVERY_UNAVAILABLE', `could not verify exact ${platform} device ${deviceId}: ${error instanceof Error ? error.message : String(error)}`);
-                }
-                if (!deviceExists) {
-                    throw new SessionAuthorityError('DEVICE_NOT_FOUND', `exact ${platform} device ${deviceId} does not exist or is unavailable`);
+                const requireExactDevice = () => {
+                    let deviceExists;
+                    try {
+                        deviceExists = (dependencies.deviceExists ?? deviceExistsOnHost)(platform, deviceId);
+                    }
+                    catch (error) {
+                        throw new SessionAuthorityError('DEVICE_DISCOVERY_UNAVAILABLE', `could not verify exact ${platform} device ${deviceId}: ${error instanceof Error ? error.message : String(error)}`);
+                    }
+                    if (!deviceExists) {
+                        throw new SessionAuthorityError('DEVICE_NOT_FOUND', `exact ${platform} device ${deviceId} does not exist or is unavailable`);
+                    }
+                };
+                requireExactDevice();
+                const retainedReverse = status.bindings.androidMetroReverse;
+                if (retainedReverse && (platform !== 'android' || retainedReverse.deviceId !== deviceId)) {
+                    status = removeSessionAndroidMetroReverse(registry, session, status, dependencies);
                 }
                 const currentInstall = status.bindings.install;
                 if (!input.buildReceipt &&
@@ -328,7 +467,7 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 }
                 if (!input.buildReceipt) {
                     const invalidatesBundle = Boolean(status.bindings.bundle);
-                    withStaleDeviceReleaseOffer(registry, session, { platform, deviceId }, () => registry.replaceDeviceAuthority(session, {
+                    await withInlineStaleDeviceCleanup(registry, session, dependencies, { platform, deviceId, appId, confirmed: input.confirmed }, requireWorkerInstance, requireExactDevice, () => registry.replaceDeviceAuthority(session, {
                         resource: { type: 'device', key: `${platform}:${deviceId}` },
                         device: {
                             platform,
@@ -357,15 +496,21 @@ export function createSessionHandler(runtime, dependencies = {}) {
                     appId,
                     metroPort: Number(status.bindings.metroPort),
                 });
-                const observedGeneration = (dependencies.captureInstallGeneration ?? captureInstallGeneration)({
-                    platform,
-                    deviceId,
-                    appId,
-                });
-                if (observedGeneration !== receipt.installGeneration) {
-                    throw new SessionAuthorityError('APP_INSTALL_IDENTITY_CHANGED', 'installed artifact generation does not match the signed build receipt');
-                }
-                withStaleDeviceReleaseOffer(registry, session, { platform, deviceId }, () => registry.replaceDeviceAuthority(session, {
+                const requireInstallGeneration = () => {
+                    const observedGeneration = (dependencies.captureInstallGeneration ?? captureInstallGeneration)({
+                        platform,
+                        deviceId,
+                        appId,
+                    });
+                    if (observedGeneration !== receipt.installGeneration) {
+                        throw new SessionAuthorityError('APP_INSTALL_IDENTITY_CHANGED', 'installed artifact generation does not match the signed build receipt');
+                    }
+                };
+                requireInstallGeneration();
+                await withInlineStaleDeviceCleanup(registry, session, dependencies, { platform, deviceId, appId, confirmed: input.confirmed }, requireWorkerInstance, () => {
+                    requireExactDevice();
+                    requireInstallGeneration();
+                }, () => registry.replaceDeviceAuthority(session, {
                     resource: { type: 'device', key: `${platform}:${deviceId}` },
                     device: { platform, deviceId, appId },
                     install: { ...receipt },
@@ -416,7 +561,7 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 return okResult({ session: projectPublicAuthorityStatus(runtime.status()) });
             }
             if (input.action === 'pin_dev_client') {
-                const status = registry.getSessionStatus(session.sessionId);
+                let status = registry.getSessionStatus(session.sessionId);
                 if (!status || !dependencies.pinDevClient) {
                     throw new SessionAuthorityError('BUNDLE_HANDSHAKE_UNAVAILABLE', 'pinning integration is unavailable');
                 }
@@ -425,9 +570,18 @@ export function createSessionHandler(runtime, dependencies = {}) {
                         throw new SessionAuthorityError('BUNDLE_HANDSHAKE_UNAVAILABLE', `${requiredBinding} must be bound before pinning`);
                     }
                 }
+                status = ensurePhysicalAndroidMetroReachability(registry, session, status, dependencies);
                 const priorTargetId = status.bindings.bundle
                     ?.targetId;
-                if (input.force === true && typeof priorTargetId === 'string') {
+                const priorBundle = status.bindings.bundle ?? null;
+                const priorState = status.state;
+                const priorAuthorityVersion = status.authorityVersion;
+                const devicePlatform = status.bindings.device
+                    ?.platform;
+                const atomicAndroidReplacement = devicePlatform === 'android';
+                if (input.force === true &&
+                    !atomicAndroidReplacement &&
+                    typeof priorTargetId === 'string') {
                     registry.releaseResources(session, [
                         { type: 'target', key: `${String(status.bindings.metroPort)}:${priorTargetId}` },
                     ]);
@@ -437,15 +591,49 @@ export function createSessionHandler(runtime, dependencies = {}) {
                     });
                     dependencies.onBundleInvalidated?.();
                 }
-                const bundle = await dependencies.pinDevClient(status, {
-                    force: input.force === true,
-                });
-                registry.claimResources(session, [
-                    { type: 'target', key: `${bundle.metroPort}:${bundle.targetId}` },
-                ]);
-                registry.updateBindings(session, {
-                    state: 'ready',
-                    bindings: { bundle },
+                await dependencies.pinDevClient(status, { force: input.force === true }, (candidate, promotion) => {
+                    const candidateTarget = {
+                        type: 'target',
+                        key: `${candidate.metroPort}:${candidate.targetId}`,
+                    };
+                    const targetChanged = priorTargetId !== candidate.targetId;
+                    const priorTarget = typeof priorTargetId === 'string' && targetChanged
+                        ? {
+                            type: 'target',
+                            key: `${candidate.metroPort}:${priorTargetId}`,
+                        }
+                        : null;
+                    let committed = false;
+                    try {
+                        registry.updateBindings(session, {
+                            state: 'ready',
+                            bindings: { bundle: candidate },
+                            expectedAuthorityVersion: atomicAndroidReplacement
+                                ? priorAuthorityVersion
+                                : undefined,
+                            releaseResources: atomicAndroidReplacement && priorTarget ? [priorTarget] : [],
+                            claimResources: [candidateTarget],
+                            probeClaimOwners: true,
+                            assertBeforeCommit: promotion.assertActive,
+                            onCommitted: () => {
+                                committed = true;
+                            },
+                        });
+                        promotion.assertActive();
+                        promotion.publish();
+                    }
+                    catch (error) {
+                        if (committed && atomicAndroidReplacement) {
+                            registry.updateBindings(session, {
+                                state: priorState,
+                                bindings: { bundle: priorBundle },
+                                expectedAuthorityVersion: priorAuthorityVersion + 1,
+                                releaseResources: targetChanged ? [candidateTarget] : [],
+                                claimResources: priorTarget ? [priorTarget] : [],
+                            });
+                        }
+                        throw error;
+                    }
                 });
                 return okResult({ session: projectPublicAuthorityStatus(runtime.status()) });
             }
@@ -465,7 +653,7 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 });
             }
             if (input.action === 'stop_metro') {
-                const status = registry.getSessionStatus(session.sessionId);
+                let status = registry.getSessionStatus(session.sessionId);
                 if (!status) {
                     throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'session disappeared before managed Metro cleanup');
                 }
@@ -488,6 +676,7 @@ export function createSessionHandler(runtime, dependencies = {}) {
                             throw new SessionAuthorityError('METRO_CLEANUP_PENDING', `allocated Metro port ${metroPort} is still ${listener.status}${listenerIdentity} after cleanup authority was invalidated; do not signal an unbound process, wait for managed launcher cleanup, then retry rn_session stop_metro`);
                         }
                     }
+                    status = removeSessionAndroidMetroReverse(registry, session, status, dependencies);
                     return okResult({
                         stopped: false,
                         alreadyStopped: true,
@@ -574,6 +763,7 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 if (!cleanup.authenticated && input.confirmed !== true) {
                     throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'non-signaling Metro authority release requires confirmed=true after exact process, listener, and socket absence is verified');
                 }
+                status = removeSessionAndroidMetroReverse(registry, session, status, dependencies);
                 const priorTargetId = status.bindings.bundle
                     ?.targetId;
                 registry.updateBindings(session, {
@@ -647,6 +837,7 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 }
                 const sessionCli = process.env.RN_DEV_AGENT_SESSION_CLI ??
                     join(dirname(fileURLToPath(import.meta.url)), '..', 'rn-session.js');
+                const stateDir = process.env.RN_DEV_AGENT_STATE_DIR;
                 if (input.action === 'restore_integration') {
                     if (input.confirmed !== true) {
                         throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'restore_integration requires confirmed=true');
@@ -686,7 +877,7 @@ export function createSessionHandler(runtime, dependencies = {}) {
                     });
                     return okResult({ restored: true, packagePath, manifestPath });
                 }
-                const preview = previewPackageIntegration(packageJson, existing, sessionCli);
+                const preview = previewPackageIntegration(packageJson, existing, sessionCli, stateDir);
                 const metroConfigPath = integrationInputs.metroConfig.path;
                 const metroBefore = integrationInputs.metroConfig.contents;
                 const metroAfter = previewMetroIntegration(metroBefore);
@@ -735,7 +926,7 @@ export function createSessionHandler(runtime, dependencies = {}) {
                     });
                 }
                 try {
-                    applyPackageIntegration({ appRoot, sessionCli });
+                    applyPackageIntegration({ appRoot, sessionCli, stateDir });
                     const installedManifest = readPackageIntegrationInputs(appRoot).manifest;
                     if (!installedManifest) {
                         throw new Error('SESSION_INTEGRATION_PATH_UNSAFE: applied manifest is unavailable');
@@ -949,8 +1140,13 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 });
             }
             if (input.action === 'adopt_stale') {
-                const adoptionHandle = required(input.adoptionHandle, 'adoptionHandle');
                 const current = registry.getSessionStatus(session.sessionId);
+                if (current?.source.model === 'grouped-v1') {
+                    throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', 'this session never mints adoption handles; a proven-dead same-root owner is released automatically at startup', undefined, {
+                        nextAction: 'Restart the MCP transport (/mcp) so startup cleanup releases a dead owner, or close the live owner session.',
+                    });
+                }
+                const adoptionHandle = required(input.adoptionHandle, 'adoptionHandle');
                 if (!current?.worker.instanceId) {
                     throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', 'recovery worker identity is unavailable');
                 }
@@ -1062,13 +1258,14 @@ export function createSessionHandler(runtime, dependencies = {}) {
                     },
                 });
             }
-            const status = registry.getSessionStatus(session.sessionId);
+            let status = registry.getSessionStatus(session.sessionId);
             if (!status) {
                 throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'session disappeared before release cleanup');
             }
             if (status.bindings.packageIntegration) {
                 throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'package integration must be restored before session release');
             }
+            status = removeSessionAndroidMetroReverse(registry, session, status, dependencies);
             const metro = status.bindings.metro;
             const runner = status.bindings.runner;
             const recorder = status.bindings.recorder;
@@ -1132,7 +1329,23 @@ export function createSessionHandler(runtime, dependencies = {}) {
             registry.releaseSession(session);
             if (status.bindings.bundle)
                 dependencies.onBundleInvalidated?.();
-            return okResult({ released: true, sessionId: session.sessionId });
+            // GH #706: the released row can never be transitioned again. Ask the supervisor
+            // to resolve a fresh session so the next call is not a dead end.
+            let recycleRequested = false;
+            try {
+                recycleRequested = dependencies.requestWorkerRecycle?.() === true;
+            }
+            catch {
+                /* release already succeeded; recovery falls back to a transport restart */
+            }
+            return okResult({
+                released: true,
+                sessionId: session.sessionId,
+                recycleRequested,
+                nextAction: recycleRequested
+                    ? 'A fresh session is minted automatically; retry rn_session (bind_device, apply_integration) on this worktree.'
+                    : 'No supervisor can mint a successor here; restart the MCP transport before the next rn_session action on this worktree.',
+            });
         }
         catch (error) {
             return authorityFailure(error);

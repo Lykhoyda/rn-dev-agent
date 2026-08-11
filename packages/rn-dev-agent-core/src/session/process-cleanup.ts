@@ -1,6 +1,10 @@
 import { execFile as execFileCb, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { OWNED_PACKAGES } from '../runners/release-android-slot.js';
+import {
+  hasCompleteRecorderCleanupIdentity,
+  hasCompleteRunnerCleanupIdentity,
+} from './cleanup-identity.js';
 import { probeManagedMetroListener, type ManagedMetroListenerProbe } from './managed-metro.js';
 import {
   probeProcessBirth,
@@ -172,22 +176,31 @@ export async function runRecordProofScript(
   );
 }
 
+async function awaitExactStopped(
+  probe: () => 'running' | 'stopped' | 'unknown',
+  deadlineMs: number,
+  code: string,
+  message: string,
+): Promise<boolean> {
+  while (true) {
+    const status = probe();
+    if (status === 'stopped') return true;
+    if (status === 'unknown') {
+      throw new SessionAuthorityError(code, `${message}; shutdown identity is unknown`);
+    }
+    if (Date.now() >= deadlineMs) return false;
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+  }
+}
+
 async function waitForExactStopped(
   probe: () => 'running' | 'stopped' | 'unknown',
   deadlineMs: number,
   code: string,
   message: string,
 ): Promise<void> {
-  while (true) {
-    const status = probe();
-    if (status === 'stopped') return;
-    if (status === 'unknown') {
-      throw new SessionAuthorityError(code, `${message}; shutdown identity is unknown`);
-    }
-    if (Date.now() >= deadlineMs) {
-      throw new SessionAuthorityError(code, message);
-    }
-    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+  if (!(await awaitExactStopped(probe, deadlineMs, code, message))) {
+    throw new SessionAuthorityError(code, message);
   }
 }
 
@@ -295,21 +308,20 @@ export async function stopBoundRunner(
   timeoutMs = 2_000,
   runAdb: (args: string[]) => Promise<{ stdout: string; stderr: string }> = async (args) =>
     execFile('adb', args, { timeout: 5_000, encoding: 'utf8' }),
+  termGraceMs = 500,
 ): Promise<void> {
   const deadlineMs = Date.now() + timeoutMs;
-  const pid = Number(binding.pid);
-  const expectedBirth = String(binding.processBirth ?? '');
-  const instanceId = String(binding.instanceId ?? '');
-  const capability = String(binding.capability ?? '');
-  if (!Number.isSafeInteger(pid) || !expectedBirth || !instanceId || !capability) {
+  if (!hasCompleteRunnerCleanupIdentity(binding)) {
     throw new SessionAuthorityError(
       'RUNNER_ADOPTION_REQUIRED',
       'runner cleanup identity is incomplete',
     );
   }
+  const pid = binding.pid as number;
+  const expectedBirth = String(binding.processBirth ?? '');
   const platform = String(binding.platform ?? '');
   const deviceId = String(binding.deviceId ?? '');
-  const port = Number(binding.port);
+  const port = binding.port as number;
   const current = processProbe(pid);
   if (current.status === 'unknown') {
     throw new SessionAuthorityError(
@@ -318,19 +330,38 @@ export async function stopBoundRunner(
     );
   }
   if (current.status === 'present' && current.birth.token === expectedBirth) {
-    signalProcess(pid, 'SIGTERM');
-    await waitForExactStopped(
-      () => {
-        const observed = processProbe(pid);
-        if (observed.status === 'unknown') return 'unknown';
-        return observed.status === 'present' && observed.birth.token === expectedBirth
-          ? 'running'
-          : 'stopped';
-      },
-      deadlineMs,
-      'RUNNER_ADOPTION_REQUIRED',
-      'runner process did not stop before the cleanup deadline',
-    );
+    const observeStop = (): 'running' | 'stopped' | 'unknown' => {
+      const observed = processProbe(pid);
+      if (observed.status === 'unknown') return 'unknown';
+      return observed.status === 'present' && observed.birth.token === expectedBirth
+        ? 'running'
+        : 'stopped';
+    };
+    const message = 'runner process did not stop before the cleanup deadline';
+    const signalTolerated = (value: NodeJS.Signals): void => {
+      try {
+        signalProcess(pid, value);
+      } catch {}
+    };
+    signalTolerated('SIGTERM');
+    const graceDeadlineMs = Math.min(deadlineMs, Date.now() + termGraceMs);
+    if (
+      !(await awaitExactStopped(observeStop, graceDeadlineMs, 'RUNNER_ADOPTION_REQUIRED', message))
+    ) {
+      // Escalate only while the pid still carries this binding's exact birth
+      // token, so a reused pid or another session's runner is never killed.
+      const escalation = processProbe(pid);
+      if (escalation.status === 'unknown') {
+        throw new SessionAuthorityError(
+          'RUNNER_ADOPTION_REQUIRED',
+          `${message}; shutdown identity is unknown`,
+        );
+      }
+      if (escalation.status === 'present' && escalation.birth.token === expectedBirth) {
+        signalTolerated('SIGKILL');
+      }
+      await waitForExactStopped(observeStop, deadlineMs, 'RUNNER_ADOPTION_REQUIRED', message);
+    }
   }
   if (platform !== 'android') return;
   if (!deviceId || !Number.isSafeInteger(port)) {
@@ -381,9 +412,7 @@ export async function stopBoundRecorder(
 ): Promise<string> {
   const script = String(binding.script ?? '');
   const scope = String(binding.scope ?? '');
-  const pid = Number(binding.pid);
-  const expectedBirth = String(binding.processBirth ?? '');
-  if (!script || !/^[a-f0-9]{64}$/.test(scope)) {
+  if (!hasCompleteRecorderCleanupIdentity(binding)) {
     throw new SessionAuthorityError(
       'RECORDING_AUTHORITY_MISMATCH',
       'recorder cleanup identity is incomplete',
@@ -416,12 +445,8 @@ export async function stopBoundRecorder(
       );
     }
   }
-  if (!Number.isSafeInteger(pid) || !expectedBirth) {
-    throw new SessionAuthorityError(
-      'RECORDING_AUTHORITY_MISMATCH',
-      'recorder cleanup identity is incomplete',
-    );
-  }
+  const pid = binding.pid as number;
+  const expectedBirth = String(binding.processBirth ?? '');
   try {
     const stopped = await runRecorder(script, ['stop', scope, String(pid), expectedBirth]);
     const status = await runRecorder(script, ['status', scope]);

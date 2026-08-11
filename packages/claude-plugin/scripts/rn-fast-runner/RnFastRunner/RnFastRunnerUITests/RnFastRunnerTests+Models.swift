@@ -236,11 +236,13 @@ struct ErrorPayload: Codable {
   let code: String?
   let message: String
   let mutation: String?
+  let reason: String?
 
-  init(code: String? = nil, message: String, mutation: String? = nil) {
+  init(code: String? = nil, message: String, mutation: String? = nil, reason: String? = nil) {
     self.code = code
     self.message = message
     self.mutation = mutation
+    self.reason = reason
   }
 }
 

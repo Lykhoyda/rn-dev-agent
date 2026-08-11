@@ -235,6 +235,8 @@ export type ToolErrorCode =
   | 'METRO_CLEANUP_PENDING'
   | 'METRO_ORIGIN_MISMATCH'
   | 'METRO_INSTANCE_CHANGED'
+  | 'PHYSICAL_ANDROID_METRO_UNREACHABLE'
+  | 'PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN'
   | 'DEVICE_CLAIM_CONFLICT'
   | 'DEVICE_DISCOVERY_UNAVAILABLE'
   | 'DEVICE_NOT_FOUND'
@@ -246,6 +248,7 @@ export type ToolErrorCode =
   | 'CDP_TARGET_AUTHORITY_MISMATCH'
   | 'RUNNER_OWNERSHIP_MISMATCH'
   | 'RUNNER_ADOPTION_REQUIRED'
+  | 'EXACT_ANDROID_DEVICE_REQUIRED'
   | 'AUTOMATION_CLEANUP_UNPROVEN'
   | 'PICK_DATE_TIMEOUT'
   | 'PICK_DATE_INCOMPLETE'
@@ -307,9 +310,7 @@ export type ToolErrorCode =
   | 'STORE_TRUNCATED' // expect_redux when store payload exceeded safeStringify cap
   // Phase 134.2: appId / packageName validation at adb shell boundary.
   | 'INVALID_APPID' // device_permission
-  // Story 10 (#391): the focused Android field ignored ACTION_SET_TEXT (and
-  // any applicable keyevent fallback) — device_fill descends to its adb /
-  // maestro tiers instead of re-tapping a healthy focus.
+  // The exact Android owner rejected its single accessibility mutation.
   | 'SET_TEXT_REJECTED'
   // GH #581: exact fill truth — no unique bound input (nothing was typed)…
   | 'NO_TEXT_INPUT_TARGET'
@@ -348,6 +349,11 @@ export type ToolErrorCode =
   // retry after injected Keyboard.dismiss() proves the keyboard hidden (#379).
   | 'KEYBOARD_OCCLUDED'
   | 'KEYBOARD_DISMISS_FAILED'
+  | 'INTERACTION_NOT_ACTUATED'
+  // GH #736: an Android @ref owned by a package other than the session app was
+  // handed to an app-scoped mutating verb (device_press / device_fill / longpress).
+  | 'OUTSIDE_APP_WINDOW'
+  | 'INTERACTION_EFFECT_UNVERIFIED'
   | 'RUNNER_TIMEOUT'
   | 'WDA_BOOTSTRAP_FAILED'
   // Direct maestro-runner/WDA device evidence did not match the exact target.
@@ -370,8 +376,11 @@ export type ToolErrorCode =
   // GH#186 Phase 6: a FOREIGN Maestro/XCUITest session holds the flow plane
   // (UDID-scoped detection). L2/L3 refuse fast; L1 reads stay free.
   | 'BUSY_FOREIGN_FLOW'
-  // GH #191: native fill + retype + maestro all failed to produce the expected value.
+  // GH #581: exact fill refused before or after its single mutation.
   | 'TEXT_ENTRY_UNVERIFIED'
+  | 'NO_TEXT_INPUT_TARGET'
+  | 'TEXT_TARGET_LOST'
+  | 'TEXT_TARGET_FOCUS_FAILED'
   // eradicate-agent-device Phase 2: runNative has no legacy daemon/CLI tier to fall to.
   | 'NO_NATIVE_ROUTE'
   // eradicate-agent-device Phase 2 Task 9: RN_ANDROID_RUNNER=0 set explicitly — disabled by operator.

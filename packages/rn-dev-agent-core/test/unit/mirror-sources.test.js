@@ -2,6 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { readFileSync } from 'node:fs';
 import { PassThrough } from 'node:stream';
 import {
   RestartGate,
@@ -9,7 +10,10 @@ import {
   IosSimctlLoopSource,
   AndroidScreenrecordSource,
   SIMCTL_HINT,
+  SIMCTL_BROKEN_IDB_HINT,
+  IDB_INSTALL_COMMAND,
   detectIdb,
+  probeIdbClient,
 } from '../../dist/observability/mirror/sources.js';
 
 const SOI = Buffer.from([0xff, 0xd8]);
@@ -348,4 +352,60 @@ test('detectIdb: missing client (ENOENT) resolves false', async () => {
     cb(Object.assign(new Error('spawn idb ENOENT'), { code: 'ENOENT' }));
   });
   assert.equal(ok, false);
+});
+
+// GH#578: the three client states must stay distinct. Collapsing
+// present-but-broken into absent is what produced the non-converging
+// "install idb" loop, and the printed command must never be the unpinned
+// `pipx install fb-idb` that reinstalls the crashing combination.
+test('probeIdbClient: exit 0 -> ready', async () => {
+  const state = await probeIdbClient((_cmd, _args, _opts, cb) => cb(null));
+  assert.equal(state, 'ready');
+});
+
+test('probeIdbClient: ENOENT -> absent', async () => {
+  const state = await probeIdbClient((_cmd, _args, _opts, cb) =>
+    cb(Object.assign(new Error('spawn idb ENOENT'), { code: 'ENOENT' })),
+  );
+  assert.equal(state, 'absent');
+});
+
+test('probeIdbClient: crash on invocation -> broken, distinct from absent', async () => {
+  const state = await probeIdbClient((_cmd, _args, _opts, cb) =>
+    cb(Object.assign(new Error('RuntimeError: There is no current event loop'), { code: 1 })),
+  );
+  assert.equal(state, 'broken');
+});
+
+test('idb install command pins the interpreter (never bare `pipx install fb-idb`)', () => {
+  assert.match(IDB_INSTALL_COMMAND, /pipx install --python python3\.13 --force fb-idb/);
+  // GH#578: a python3.14-only machine must not be handed `pipx: No such python`.
+  assert.match(IDB_INSTALL_COMMAND, /^brew install python@3\.13 &&/);
+  for (const hint of [SIMCTL_HINT, SIMCTL_BROKEN_IDB_HINT, IDB_INSTALL_COMMAND]) {
+    assert.doesNotMatch(hint, /pipx install fb-idb/);
+  }
+});
+
+test('SIMCTL_BROKEN_IDB_HINT names the incompatibility, not a missing install', () => {
+  assert.match(SIMCTL_BROKEN_IDB_HINT, /installed/);
+  assert.match(SIMCTL_BROKEN_IDB_HINT, /Python 3\.14/);
+  assert.match(SIMCTL_BROKEN_IDB_HINT, /asyncio\.get_event_loop/);
+  assert.doesNotMatch(SIMCTL_BROKEN_IDB_HINT, /install idb for smoother mirroring/);
+});
+
+test('simctl fallback carries the broken-client hint when idb crashes', () => {
+  const broken = new IosSimctlLoopSource('UDID', { degradedHint: SIMCTL_BROKEN_IDB_HINT });
+  assert.equal(broken.degradedHint, SIMCTL_BROKEN_IDB_HINT);
+  assert.equal(new IosSimctlLoopSource('UDID').degradedHint, SIMCTL_HINT);
+});
+
+// The TS constant duplicates the shell's no-interpreter install command by
+// design (no runtime probing in the core package), so guard the duplication
+// rather than building machinery to keep the two in sync.
+test('IDB_INSTALL_COMMAND matches the command ensure-idb.sh produces', () => {
+  const shell = readFileSync(new URL('../../../../scripts/ensure-idb.sh', import.meta.url), 'utf8');
+  assert.ok(
+    shell.includes(IDB_INSTALL_COMMAND),
+    'ensure-idb.sh no longer emits the exact IDB_INSTALL_COMMAND string — they have drifted',
+  );
 });

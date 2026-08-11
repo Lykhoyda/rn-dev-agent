@@ -116,11 +116,13 @@ seeded-bug acceptance check). Permissions: `contents: read`, `issues: write`
   fixture APK → inside the emulator step: `adb install` fixture → run driver.
 - Simulator/emulator logs + screenshots uploaded as artifacts on failure.
 
-### Golden-set driver — `scripts/cdp-bridge/test/smoke/device-smoke.ts`
+### Golden-set driver — `packages/rn-dev-agent-core/test/smoke/device-smoke.ts`
 
 `node:test`, reusing `test/helpers/supervisor-harness.js`: spawn
-`dist/supervisor.js` over MCP stdio, cwd = tmp project dir, env
-`RN_RUNNER_BUILD=local` (forces `build-local` provenance in
+`dist/supervisor.js` over MCP stdio from a temporary non-Git project containing
+a minimal `package.json`. The driver passes `RN_DEV_AGENT_DECLARED_ROOT=<cwd>`,
+`RN_DEV_AGENT_DECLARED_MANIFESTS=package.json`, and `RN_RUNNER_BUILD=local`
+(which forces `build-local` provenance in
 `runner-artifacts.ts:156` so a version-matching release can never shadow the
 fresh main-HEAD build). CDP is intentionally absent; `device_fill` exercises its
 native read-back path by design.

@@ -81,14 +81,15 @@ export function unbindNativeRunner(
   if (runner.platform === 'ios' || runner.platform === 'android') {
     beforeRelease?.(runner.platform);
   }
-  registry.releaseResources(session, [
-    {
-      type: 'runner',
-      key: `${String(runner.platform)}:${String(runner.deviceId)}:${String(runner.port)}`,
-    },
-  ]);
+  // Keep claim release and binding clear atomic so interrupted unbind cannot split ownership state.
   registry.updateBindings(session, {
     state: status.bindings.bundle ? 'ready' : 'device_bound',
+    releaseResources: [
+      {
+        type: 'runner',
+        key: `${String(runner.platform)}:${String(runner.deviceId)}:${String(runner.port)}`,
+      },
+    ],
     bindings: { runner: null },
   });
 }

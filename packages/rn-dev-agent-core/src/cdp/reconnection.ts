@@ -62,6 +62,7 @@ export interface ReconnectContext {
   setBgPollTimer: (timer: ReturnType<typeof setInterval> | null) => void;
   getBgPollTimer: () => ReturnType<typeof setInterval> | null;
   isConnected: () => boolean;
+  clearActiveState?: () => void;
   /**
    * Debugger-seat opt-out (spec 2026-06-10): when present and false, the
    * BACKGROUND reconnect paths (handleClose loop, background poll) are
@@ -85,6 +86,14 @@ function isPassive(ctx: ReconnectContext): boolean {
   return ctx.isAutoConnectEnabled !== undefined && !ctx.isAutoConnectEnabled();
 }
 
+function clearActiveState(ctx: ReconnectContext): void {
+  if (ctx.clearActiveState) {
+    ctx.clearActiveState();
+    return;
+  }
+  clearActiveFlag();
+}
+
 export function handleClose(ctx: ReconnectContext, code: number): void {
   resetState(ctx.getResettableState());
 
@@ -92,7 +101,7 @@ export function handleClose(ctx: ReconnectContext, code: number): void {
 
   if (isPassive(ctx)) {
     ctx.setState('disconnected');
-    clearActiveFlag();
+    clearActiveState(ctx);
     logger.info('CDP', `WebSocket closed (code ${code}); auto-reconnect disabled — staying down`);
     console.error(
       'CDP: connection closed (code ' +
@@ -188,7 +197,7 @@ export async function reconnect(ctx: ReconnectContext): Promise<void> {
   }
   ctx.setReconnecting(false);
   ctx.setState('disconnected');
-  clearActiveFlag();
+  clearActiveState(ctx);
   console.error(
     'CDP: reconnect failed after ' + RECONNECT_ATTEMPTS + ' attempts. Starting background poll...',
   );

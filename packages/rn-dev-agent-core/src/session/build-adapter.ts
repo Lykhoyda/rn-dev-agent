@@ -1,3 +1,10 @@
+import {
+  assertStableExpoAndroidDevice,
+  expoAndroidDeviceIdentityError,
+  resolveExpoAndroidDevice,
+  type ExpoAndroidDeviceBinding,
+} from './expo-android-device.js';
+
 export interface SessionBuildBinding {
   platform: 'ios' | 'android';
   deviceId: string;
@@ -24,11 +31,40 @@ function conflict(flag: string): never {
 
 function ensureValue(command: string[], flag: string, value: string): void {
   let found = false;
-  for (let index = command.indexOf(flag); index >= 0; index = command.indexOf(flag, index + 1)) {
-    found = true;
-    if (command[index + 1] !== value) conflict(flag);
+  for (let index = 0; index < command.length; index += 1) {
+    if (command[index] === flag) {
+      found = true;
+      if (command[index + 1] !== value) conflict(flag);
+    } else if (command[index]?.startsWith(`${flag}=`)) {
+      found = true;
+      if (command[index] !== `${flag}=${value}`) conflict(flag);
+    }
   }
   if (!found) command.push(flag, value);
+}
+
+function translateExpoAndroidDevice(command: string[], serial: string, displayName: string): void {
+  let found = false;
+  for (let index = 0; index < command.length; index += 1) {
+    if (command[index] === '--device') {
+      found = true;
+      if (command[index + 1] !== serial) {
+        throw expoAndroidDeviceIdentityError(
+          'a user-supplied --device does not equal the authority-bound adb serial',
+        );
+      }
+      command[index + 1] = displayName;
+    } else if (command[index]?.startsWith('--device=')) {
+      found = true;
+      if (command[index] !== `--device=${serial}`) {
+        throw expoAndroidDeviceIdentityError(
+          'a user-supplied --device does not equal the authority-bound adb serial',
+        );
+      }
+      command[index] = `--device=${displayName}`;
+    }
+  }
+  if (!found) command.push('--device', displayName);
 }
 
 function ensureFlag(command: string[], flag: string): void {
@@ -51,7 +87,7 @@ function removeManagedPortFlag(command: string[], value: string): void {
   }
 }
 
-function managedMetroProxyUrl(session: SessionBuildBinding): string {
+export function managedMetroProxyUrl(session: SessionBuildBinding): string {
   if (session.platform === 'ios') {
     return `http://127.0.0.1:${session.metroPort}`;
   }
@@ -101,6 +137,7 @@ export function createBuildLaunchPlan(input: {
   platform: 'ios' | 'android';
   command: readonly string[];
   session: SessionBuildBinding | null;
+  resolveExpoAndroidDevice?: (serial: string) => ExpoAndroidDeviceBinding;
 }): BuildLaunchPlan {
   const command = [...input.command];
   if (!input.session) return { mode: 'passthrough', command, env: {} };
@@ -114,7 +151,22 @@ export function createBuildLaunchPlan(input: {
   }
 
   if (kind === 'expo') {
-    ensureValue(command, '--device', input.session.deviceId);
+    if (input.platform === 'android') {
+      const resolveDevice = input.resolveExpoAndroidDevice ?? resolveExpoAndroidDevice;
+      const initial = resolveDevice(input.session.deviceId);
+      const verified = assertStableExpoAndroidDevice(
+        initial,
+        resolveDevice(input.session.deviceId),
+      );
+      if (verified.deviceId !== input.session.deviceId) {
+        throw expoAndroidDeviceIdentityError(
+          'the resolved Expo device does not equal the authority-bound adb serial',
+        );
+      }
+      translateExpoAndroidDevice(command, input.session.deviceId, verified.displayName);
+    } else {
+      ensureValue(command, '--device', input.session.deviceId);
+    }
     removeManagedPortFlag(command, String(input.session.metroPort));
     ensureFlag(command, '--no-bundler');
   } else if (kind === 'bare-ios') {
@@ -131,6 +183,9 @@ export function createBuildLaunchPlan(input: {
     ORG_GRADLE_PROJECT_reactNativeDevServerPort: String(input.session.metroPort),
     RCT_METRO_PORT: String(input.session.metroPort),
     RN_DEV_AGENT_SESSION_ID: input.session.sessionId,
+    ...(kind === 'expo' && input.platform === 'android'
+      ? { ANDROID_SERIAL: input.session.deviceId }
+      : {}),
     ...(kind === 'expo' ? { EXPO_PACKAGER_PROXY_URL: managedMetroProxyUrl(input.session) } : {}),
   };
   const postInstall =

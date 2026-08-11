@@ -38,13 +38,20 @@ export function computeReconnectDelay(attempt, opts = {}) {
 function isPassive(ctx) {
     return ctx.isAutoConnectEnabled !== undefined && !ctx.isAutoConnectEnabled();
 }
+function clearActiveState(ctx) {
+    if (ctx.clearActiveState) {
+        ctx.clearActiveState();
+        return;
+    }
+    clearActiveFlag();
+}
 export function handleClose(ctx, code) {
     resetState(ctx.getResettableState());
     if (ctx.isDisposed() || ctx.isReconnecting())
         return;
     if (isPassive(ctx)) {
         ctx.setState('disconnected');
-        clearActiveFlag();
+        clearActiveState(ctx);
         logger.info('CDP', `WebSocket closed (code ${code}); auto-reconnect disabled — staying down`);
         console.error('CDP: connection closed (code ' +
             code +
@@ -127,7 +134,7 @@ export async function reconnect(ctx) {
     }
     ctx.setReconnecting(false);
     ctx.setState('disconnected');
-    clearActiveFlag();
+    clearActiveState(ctx);
     console.error('CDP: reconnect failed after ' + RECONNECT_ATTEMPTS + ' attempts. Starting background poll...');
     startBackgroundPoll(ctx);
 }

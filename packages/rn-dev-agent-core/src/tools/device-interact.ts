@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
 
 import {
   runNative,
@@ -9,6 +11,7 @@ import {
   getCachedSnapshot,
   isSnapshotCacheValid,
   markSnapshotDirty,
+  IME_KEY_FLAG,
 } from '../agent-device-wrapper.js';
 import {
   isFastRunnerAvailable,
@@ -23,6 +26,7 @@ import {
   type KeyboardAutoHealDeps,
 } from '../runners/keyboard-guard.js';
 import { resolveBundleId } from '../project-config.js';
+import { isValidBundleId } from '../domain/maestro-validator.js';
 import { withSession } from '../utils.js';
 import type { ToolResult } from '../utils.js';
 import { okResult, failResult, createStepTimer } from '../utils.js';
@@ -52,14 +56,20 @@ import {
   type FinalVerification,
 } from './fill-verify.js';
 
+const execFile = promisify(execFileCb);
+const IME_PROBE_TIMEOUT_MS = 5_000;
+
 export interface SnapshotNode {
   ref: string;
   label?: string;
   identifier?: string;
   type?: string;
+  packageName?: string;
+  checked?: boolean;
   hittable?: boolean;
   /** GH #581: Android password fields (iOS secure inputs are typed SecureTextField). */
   secure?: boolean;
+  enabled?: boolean;
   rect?: { x: number; y: number; width: number; height: number };
 }
 
@@ -250,16 +260,35 @@ export type FindCandidatesResult =
   | { ok: false; reason: 'empty-capture' }
   | { ok: false; reason: 'runner-leak-unrecovered'; recoveryReason?: string };
 
+export function scopeSnapshotNodesForFind(
+  nodes: SnapshotNode[],
+  platform: string | undefined,
+  appId: string | undefined,
+  includeSystemUi: boolean,
+): SnapshotNode[] {
+  if (platform !== 'android' || includeSystemUi) return nodes;
+  if (!appId) return [];
+  return nodes.filter((node) => node.packageName === appId);
+}
+
 export async function fetchFindCandidates(
   query: string,
   exact = false,
   allowCache = false,
+  includeSystemUi = false,
 ): Promise<FindCandidatesResult> {
   const snap = await fetchSnapshotNodes(allowCache);
   if (!snap.ok) return snap;
 
+  const session = getActiveSession();
+  const scopedNodes = scopeSnapshotNodesForFind(
+    snap.nodes,
+    session?.platform,
+    session?.appId,
+    includeSystemUi,
+  );
   const needle = query.toLowerCase();
-  const matched = snap.nodes.filter((n) => {
+  const matched = scopedNodes.filter((n) => {
     const label = n.label ?? '';
     const id = n.identifier ?? '';
     if (exact) return label === query || id === query;
@@ -290,17 +319,23 @@ export async function pressCandidate(
   candidate: FindCandidate,
   action?: string,
   getClient?: () => CDPClient,
+  includeSystemUi = false,
 ): Promise<ToolResult> {
   const ref = candidate.ref.startsWith('@') ? candidate.ref : `@${candidate.ref}`;
   if (action === 'click') {
-    const tap = async (): Promise<ToolResult> =>
-      surfaceKeyboardGuard(await runNative(['press', ref]));
+    const tapArgs = ['press', ref, ...(includeSystemUi ? ['--include-system-ui'] : [])];
+    const tap = async (): Promise<ToolResult> => surfaceKeyboardGuard(await runNative(tapArgs));
     const first = await tap();
     return first.isError && getClient
       ? healKeyboardOccludedTap(first, keyboardHealDeps(getClient, tap))
       : first;
   }
-  return okResult({ ref: candidate.ref, label: candidate.label, testID: candidate.testID });
+  return okResult({
+    ref: candidate.ref,
+    label: candidate.label,
+    testID: candidate.testID,
+    ...(includeSystemUi ? { scope: 'system-ui-explicit' } : {}),
+  });
 }
 
 // B119: when an underlying snapshot triggered runner-leak recovery, surface
@@ -328,6 +363,7 @@ interface FindArgs {
   action?: string;
   exact?: boolean;
   index?: number;
+  includeSystemUi?: boolean;
 }
 
 export function createDeviceFindHandler(
@@ -338,7 +374,12 @@ export function createDeviceFindHandler(
     // go straight to a snapshot-based client-side match so we never roll the dice
     // on agent-device's fuzzy matcher returning AMBIGUOUS_MATCH.
     if (args.exact === true || args.index !== undefined) {
-      const find = await fetchFindCandidates(args.text, args.exact === true, true);
+      const find = await fetchFindCandidates(
+        args.text,
+        args.exact === true,
+        true,
+        args.includeSystemUi === true,
+      );
       if (!find.ok) {
         if (find.reason === 'runner-leak-unrecovered') {
           return runnerLeakFailResult(args.text, find.recoveryReason);
@@ -369,14 +410,24 @@ export function createDeviceFindHandler(
           );
         }
         return tagPressIfRecovered(
-          await pressCandidate(candidates[args.index], args.action, getClient),
+          await pressCandidate(
+            candidates[args.index],
+            args.action,
+            getClient,
+            args.includeSystemUi === true,
+          ),
           recoveredTier,
         );
       }
       // exact=true, no index: require single match
       if (candidates.length === 1) {
         return tagPressIfRecovered(
-          await pressCandidate(candidates[0], args.action, getClient),
+          await pressCandidate(
+            candidates[0],
+            args.action,
+            getClient,
+            args.includeSystemUi === true,
+          ),
           recoveredTier,
         );
       }
@@ -403,7 +454,7 @@ export function createDeviceFindHandler(
       activeSession?.platform === 'ios' ||
       (activeSession?.platform === 'android' && process.env.RN_ANDROID_RUNNER !== '0');
     if (usesInTreeRunner) {
-      const find = await fetchFindCandidates(args.text, false, true);
+      const find = await fetchFindCandidates(args.text, false, true, args.includeSystemUi === true);
       if (!find.ok) {
         if (find.reason === 'runner-leak-unrecovered') {
           return runnerLeakFailResult(args.text, find.recoveryReason);
@@ -430,7 +481,12 @@ export function createDeviceFindHandler(
       }
       if (candidates.length === 1) {
         return tagPressIfRecovered(
-          await pressCandidate(candidates[0], args.action, getClient),
+          await pressCandidate(
+            candidates[0],
+            args.action,
+            getClient,
+            args.includeSystemUi === true,
+          ),
           recoveredTier,
         );
       }
@@ -761,7 +817,7 @@ export function createDeviceLongPressHandler(
 
 // --- Fill (exact target + final verification — GH #581) ---
 
-interface FillArgs {
+export interface FillArgs {
   ref: string;
   text: string;
   /** Bounded in-operation focus wait forwarded to the runner (default 1500ms). */
@@ -835,8 +891,8 @@ function extractSettleMeta(result: ToolResult): { settle?: unknown; settleMs?: n
 
 export function cdpClientOrNull(getClient: () => CDPClient): CDPClient | null {
   try {
-    const c = getClient();
-    return c && c.isConnected ? c : null;
+    const client = getClient();
+    return client?.isConnected ? client : null;
   } catch {
     return null;
   }
@@ -855,7 +911,8 @@ export function cdpClientOrNull(getClient: () => CDPClient): CDPClient | null {
 export function resolveCachedIdentifier(ref: string): string | undefined {
   const bareRef = ref.replace(/^@/, '');
   if (!isRefMapFresh() || lookupRef(bareRef) === null) return undefined;
-  return getCachedMetadata(bareRef)?.identifier;
+  const identifier = getCachedMetadata(bareRef)?.identifier?.trim();
+  return identifier || undefined;
 }
 
 export type FillMutationDisposition = 'none' | 'observed' | 'possible';
@@ -1926,6 +1983,67 @@ export function createDeviceBackHandler(): (args: Record<string, never>) => Prom
 // should use device_press on the next input @ref directly instead of this tool.
 const NEXT_KEY_LABELS = ['Go', 'Done', 'Return', 'Next'];
 
+// GH #736: an Android IME key lives in the input-method package, never the
+// session app, so the app-window ownership gate would refuse it. The grant is
+// per-call and per-ref (it lives only in this call's CLI args, so nothing
+// persists for a later device_press) and requires the node to belong to the
+// device's actual default IME — a label match on any other outside-app window
+// earns nothing.
+export function parseDefaultInputMethodPackage(raw: string): string | null {
+  const value = raw.trim().split(/\r?\n/)[0]?.trim() ?? '';
+  if (!value || value === 'null') return null;
+  const pkg = value.split('/')[0]?.trim() ?? '';
+  return isValidBundleId(pkg) ? pkg : null;
+}
+
+export async function resolveAndroidImePackage(
+  deviceId: string | undefined,
+): Promise<string | null> {
+  try {
+    const { stdout } = await execFile(
+      'adb',
+      [
+        ...(deviceId ? ['-s', deviceId] : []),
+        'shell',
+        'settings',
+        'get',
+        'secure',
+        'default_input_method',
+      ],
+      { timeout: IME_PROBE_TIMEOUT_MS },
+    );
+    return parseDefaultInputMethodPackage(stdout);
+  } catch {
+    return null;
+  }
+}
+
+let _imePackageResolverForTest: ((deviceId: string | undefined) => Promise<string | null>) | null =
+  null;
+
+export function _setImePackageResolverForTest(
+  fn: ((deviceId: string | undefined) => Promise<string | null>) | null,
+): void {
+  _imePackageResolverForTest = fn;
+}
+
+export function focusNextPressArgs(
+  ref: string,
+  nodePackageName: string | undefined,
+  platform: string | undefined,
+  appId: string | undefined,
+  imePackage: string | null,
+): string[] {
+  const target = ref.startsWith('@') ? ref : `@${ref}`;
+  const imeOwnedKey =
+    platform === 'android' &&
+    appId !== undefined &&
+    imePackage !== null &&
+    imePackage !== appId &&
+    nodePackageName === imePackage;
+  return imeOwnedKey ? ['press', target, '--include-system-ui', IME_KEY_FLAG] : ['press', target];
+}
+
 export function createDeviceFocusNextHandler(): (
   args: Record<string, never>,
 ) => Promise<ToolResult> {
@@ -1949,11 +2067,28 @@ export function createDeviceFocusNextHandler(): (
     }
 
     const { nodes, recoveredTier } = snap;
+    const session = getActiveSession();
+    const imePackage =
+      session?.platform === 'android'
+        ? await (_imePackageResolverForTest ?? resolveAndroidImePackage)(session.deviceId)
+        : null;
+    let lastPressFailure: ToolResult | null = null;
     for (const label of NEXT_KEY_LABELS) {
       const match = nodes.find((n) => n.label === label);
       if (!match) continue;
-      const pressResult = await runNative(['press', `@${match.ref}`]);
-      if (pressResult.isError) continue; // Match found but tap failed — try next label
+      const pressResult = await runNative(
+        focusNextPressArgs(
+          match.ref,
+          match.packageName,
+          session?.platform,
+          session?.appId,
+          imePackage,
+        ),
+      );
+      if (pressResult.isError) {
+        lastPressFailure = pressResult;
+        continue; // Match found but tap failed — try next label
+      }
       try {
         const envelope = JSON.parse(pressResult.content[0].text) as { ok: true; data: unknown };
         const meta: Record<string, unknown> = { keyUsed: label, ref: match.ref };
@@ -1966,6 +2101,8 @@ export function createDeviceFocusNextHandler(): (
         return pressResult;
       }
     }
+
+    if (lastPressFailure) return lastPressFailure;
 
     return failResult(
       `No keyboard ${NEXT_KEY_LABELS.join('/')} key visible in the accessibility tree. Tried: ${NEXT_KEY_LABELS.join(', ')}`,

@@ -8324,6 +8324,7 @@ __metadata:
     zod-to-json-schema: "npm:3.25.2"
   bin:
     rn-dev-agent-core: ./dist/supervisor.js
+    rn-experience-trends: ./dist/experience-trends.js
   languageName: unknown
   linkType: soft
 

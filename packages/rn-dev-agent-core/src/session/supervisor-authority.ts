@@ -1,10 +1,15 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { dirname } from 'node:path';
 import type { ProcessBirth } from './process-birth.js';
 import { stopBoundObserve, stopBoundRecorder, stopBoundRunner } from './process-cleanup.js';
 import type { OwnerStatus, SessionRef, SessionRegistry } from './registry.js';
 import { openSessionRegistry } from './registry.js';
 import type { SourceIdentity } from './source-identity.js';
 import { stopManagedMetro, type ManagedMetroBinding } from './managed-metro.js';
+import {
+  removeAndroidMetroReverse,
+  type AndroidMetroReverseBinding,
+} from './android-metro-reverse.js';
 import {
   createAuthorityStateLayout,
   sessionRuntimeDirectory,
@@ -34,6 +39,50 @@ export interface SupervisorAuthority {
   close(): Promise<void>;
 }
 
+/**
+ * GH #706: a released (or fenced) session owns nothing and can never be transitioned
+ * again, so the supervisor must mint a successor instead of handing the terminal row
+ * to the next worker.
+ */
+export function supervisorSessionIsTerminal(authority: SupervisorAuthority): boolean {
+  let state: string | undefined;
+  try {
+    state = authority.registry.getSessionStatus(authority.session.sessionId)?.state;
+  } catch {
+    return false;
+  }
+  return state === undefined || state === 'released' || state === 'stale';
+}
+
+/**
+ * GH #706: resolve the session the next worker inherits. A terminal row is replaced by
+ * a freshly minted session — exactly what a cold supervisor start would have produced —
+ * so `release` stops being a one-way door.
+ */
+export function resolveSupervisorAuthorityForSpawn(
+  current: SupervisorAuthority | null,
+  mint: () => SupervisorAuthority,
+): { authority: SupervisorAuthority | null; error: string | null; minted: boolean } {
+  if (!current || !supervisorSessionIsTerminal(current)) {
+    return { authority: current, error: null, minted: false };
+  }
+  void current.close().catch(() => {
+    /* a terminal session owns nothing; cleanup refusals must not block the successor */
+  });
+  try {
+    return { authority: mint(), error: null, minted: true };
+  } catch (error) {
+    return {
+      authority: null,
+      error:
+        error instanceof Error
+          ? error.message
+          : 'AUTHORITY_STORE_UNAVAILABLE: authority session could not be initialized',
+      minted: false,
+    };
+  }
+}
+
 export function createSupervisorAuthority(
   input: {
     stateDir?: string;
@@ -50,6 +99,7 @@ export function createSupervisorAuthority(
     stopBoundRunner?: typeof stopBoundRunner;
     stopBoundRecorder?: typeof stopBoundRecorder;
     stopBoundObserve?: typeof stopBoundObserve;
+    removeAndroidMetroReverse?: typeof removeAndroidMetroReverse;
   } = {},
 ): SupervisorAuthority {
   if (!input.supervisorBirth) {
@@ -75,7 +125,9 @@ export function createSupervisorAuthority(
       pid: input.supervisorBirth.pid,
       token: input.supervisorBirth.token,
     },
-    source: { ...input.source },
+    // L4: the session-model discriminator lives in write-once source_json until the
+    // schema-v5 column lands; grouped-v1 sessions never mint recovery handles.
+    source: { ...input.source, model: 'grouped-v1' },
   });
   const rollbackInitialization = (error: unknown): never => {
     let failure = error;
@@ -198,6 +250,7 @@ export function createSupervisorAuthority(
       RN_DEV_AGENT_SESSION_ID: session.sessionId,
       RN_DEV_AGENT_CLAIM_EPOCH: String(session.claimEpoch),
       RN_DEV_AGENT_REGISTRY_PATH: layout.registry,
+      RN_DEV_AGENT_STATE_DIR: dirname(layout.root),
       RN_DEV_AGENT_SESSION_SECRET_PATH: secretPath,
       RN_DEV_AGENT_SESSION_RUNTIME_ROOT: sessionRuntimeDirectory(layout, sessionId),
       RN_DEV_AGENT_WORKER_INSTANCE: workerInstance,
@@ -221,6 +274,15 @@ export function createSupervisorAuthority(
           status = registry.beginSessionClose(session);
         }
         if (status) {
+          const androidMetroReverse = status.bindings.androidMetroReverse as
+            | AndroidMetroReverseBinding
+            | null
+            | undefined;
+          if (androidMetroReverse) {
+            (dependencies.removeAndroidMetroReverse ?? removeAndroidMetroReverse)(
+              androidMetroReverse,
+            );
+          }
           const recorder = status.bindings.recorder as Record<string, unknown> | null | undefined;
           if (recorder) {
             const claimKey = `${String(recorder.platform)}:${String(recorder.deviceId)}`;

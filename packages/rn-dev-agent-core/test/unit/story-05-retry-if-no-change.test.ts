@@ -2,42 +2,34 @@ import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { settleWithRetryIfNoChange, tapRetryPolicy } from '../../dist/agent-device-wrapper.js';
 import { updateRefMapFromFlat, clearRefMap } from '../../dist/fast-runner-ref-map.js';
-import {
-  _resetNoChangeStreakForTest,
-  recordNoUiChange,
-} from '../../dist/lifecycle/no-change-tracker.js';
-import { okResult, failResult } from '../../dist/utils.js';
+import { _resetNoChangeStreakForTest } from '../../dist/lifecycle/no-change-tracker.js';
+import { okResult } from '../../dist/utils.js';
 
 const seedRefMap = () =>
   updateRefMapFromFlat([
     { ref: '@e0', type: 'Button', label: 'Go', rect: { x: 0, y: 0, width: 100, height: 40 } },
   ]);
-const parse = (r) => JSON.parse(r.content[0].text);
-const ctx = { platform: 'ios', verb: 'tap' };
-const policy = { eligible: true, targetKey: 'tap@50,20' };
-const depsWith = (outcomes) => {
-  let i = 0;
-  const seenHashes = [];
-  return {
-    enabled: () => true,
-    capabilities: () => [],
-    probes: () => ({
-      snapshotHash: async () => 'H',
-      sleep: async () => {},
-      now: () => 0,
-    }),
-    wait: async (opts) => {
-      assert.equal(opts.initialSnapshotHash !== undefined, true);
-      seenHashes.push(opts.initialSnapshotHash);
-      return outcomes[Math.min(i++, outcomes.length - 1)];
-    },
-    seenHashes,
-  };
-};
+const parse = (result) => JSON.parse(result.content[0].text);
+const androidContext = { platform: 'android', verb: 'tap' };
+const iosContext = { platform: 'ios', verb: 'tap' };
+const policy = { eligible: false, verificationRequired: true, targetKey: 'tap@50,20' };
 const changed = { settled: true, method: 'snapshot-eq', ms: 10, hierarchyChanged: true };
 const unchanged = { settled: true, method: 'snapshot-eq', ms: 10, hierarchyChanged: false };
-// Fail-open fixture: NO hierarchyChanged key (probe failure / settle timeout).
 const probeFailed = { settled: false, method: 'timeout', ms: 10 };
+
+const depsWith = (outcome) => ({
+  enabled: () => true,
+  capabilities: () => [],
+  probes: () => ({
+    snapshotHash: async () => 'H',
+    sleep: async () => {},
+    now: () => 0,
+  }),
+  wait: async (opts) => {
+    assert.notEqual(opts.initialSnapshotHash, undefined);
+    return outcome;
+  },
+});
 
 beforeEach(() => {
   clearRefMap();
@@ -45,259 +37,113 @@ beforeEach(() => {
   seedRefMap();
 });
 
-test('changed hierarchy → no retry, no flags', async () => {
-  let dispatches = 0;
+test('changed hierarchy returns the first successful result without replay', async () => {
+  let redispatches = 0;
   const result = await settleWithRetryIfNoChange(
     okResult({ tapped: true }),
     async () => {
-      dispatches++;
+      redispatches++;
       return okResult({ tapped: true });
     },
-    ctx,
+    androidContext,
     policy,
-    depsWith([changed]),
+    depsWith(changed),
   );
-  assert.equal(dispatches, 0);
-  const env = parse(result);
-  assert.equal(env.meta.tapRetried, undefined);
-  assert.equal(env.meta.noUiChange, undefined);
+
+  assert.equal(redispatches, 0);
+  assert.equal(parse(result).ok, true);
+  assert.equal(parse(result).meta.tapRetried, undefined);
 });
 
-test('unchanged → exactly one retry; changed after retry → tapRetried only', async () => {
-  let dispatches = 0;
-  const deps = depsWith([unchanged, changed]);
+test('uncertain Android effect fails after one possible dispatch and never re-actuates', async () => {
+  let redispatches = 0;
   const result = await settleWithRetryIfNoChange(
     okResult({ tapped: true }),
     async () => {
-      dispatches++;
+      redispatches++;
       return okResult({ tapped: true });
     },
-    ctx,
-    policy,
-    deps,
+    androidContext,
+    // This deliberately models the pre-simplification retry-eligible policy.
+    { ...policy, eligible: true },
+    depsWith(unchanged),
   );
-  assert.equal(dispatches, 1);
-  const env = parse(result);
-  assert.equal(env.meta.tapRetried, true);
-  assert.equal(env.meta.noUiChange, undefined);
-  // The retry's settle compares against the SAME pre-first-tap baseline —
-  // guards against re-reading getLastSnapshotHash() between attempts.
-  assert.equal(deps.seenHashes.length, 2);
-  assert.equal(deps.seenHashes[0], deps.seenHashes[1]);
+
+  const envelope = parse(result);
+  assert.equal(redispatches, 0, 'effect uncertainty must never authorize a second actuation');
+  assert.equal(result.isError, true);
+  assert.equal(envelope.code, 'INTERACTION_EFFECT_UNVERIFIED');
+  assert.equal(envelope.meta.reason, 'no-ui-change');
+  assert.equal(envelope.meta.attempts, 1);
+  assert.equal(envelope.meta.tapRetried, undefined);
 });
 
-test('probe failure on first settle (hierarchyChanged undefined) → fail-open, no retry, no flags', async () => {
-  let dispatches = 0;
+test('unavailable Android effect probe fails after one possible dispatch without replay', async () => {
+  let redispatches = 0;
   const result = await settleWithRetryIfNoChange(
     okResult({ tapped: true }),
     async () => {
-      dispatches++;
+      redispatches++;
       return okResult({ tapped: true });
     },
-    ctx,
-    policy,
-    depsWith([probeFailed]),
+    androidContext,
+    { ...policy, eligible: true },
+    depsWith(probeFailed),
   );
-  assert.equal(dispatches, 0);
-  const env = parse(result);
-  assert.equal(env.ok, true);
-  assert.equal(env.meta.tapRetried, undefined);
-  assert.equal(env.meta.noUiChange, undefined);
+
+  const envelope = parse(result);
+  assert.equal(redispatches, 0);
+  assert.equal(envelope.code, 'INTERACTION_EFFECT_UNVERIFIED');
+  assert.equal(envelope.meta.reason, 'effect-probe-unavailable');
+  assert.equal(envelope.meta.attempts, 1);
 });
 
-test('unchanged then probe failure on retry settle → tapRetried only, streak untouched', async () => {
-  // Pre-seed one streak entry so BOTH wrongful mutations are detectable:
-  // a wrongful flagNoUiChange would make the next distinct count 3, a
-  // wrongful recordUiChange would clear the streak and make it 1.
-  assert.equal(recordNoUiChange('pre-existing'), 1);
-  let dispatches = 0;
+test('iOS unchanged effect stays advisory but is never replayed', async () => {
+  let redispatches = 0;
   const result = await settleWithRetryIfNoChange(
     okResult({ tapped: true }),
     async () => {
-      dispatches++;
+      redispatches++;
       return okResult({ tapped: true });
     },
-    ctx,
-    policy,
-    depsWith([unchanged, probeFailed]),
+    iosContext,
+    { ...policy, eligible: true },
+    depsWith(unchanged),
   );
-  assert.equal(dispatches, 1);
-  const env = parse(result);
-  assert.equal(env.ok, true);
-  assert.equal(env.meta.tapRetried, true);
-  assert.equal(env.meta.noUiChange, undefined);
-  assert.equal(env.meta.hint, undefined);
-  assert.equal(recordNoUiChange('probe-check'), 2); // pre-existing + probe-check only
+
+  const envelope = parse(result);
+  assert.equal(redispatches, 0);
+  assert.equal(result.isError, undefined);
+  assert.equal(envelope.ok, true);
+  assert.equal(envelope.meta.noUiChange, true);
+  assert.equal(envelope.meta.tapRetried, undefined);
 });
 
-test('unchanged twice → tapRetried + noUiChange, exactly 2 attempts total, still success', async () => {
-  let dispatches = 0;
-  const result = await settleWithRetryIfNoChange(
-    okResult({ tapped: true }),
-    async () => {
-      dispatches++;
-      return okResult({ tapped: true });
-    },
-    ctx,
-    policy,
-    depsWith([unchanged, unchanged]),
-  );
-  assert.equal(dispatches, 1); // + the first dispatch made by the caller = 2 total
-  const env = parse(result);
-  assert.equal(env.ok, true);
-  assert.equal(env.meta.tapRetried, true);
-  assert.equal(env.meta.noUiChange, true);
-  assert.equal(env.meta.hint, undefined); // one distinct target only
-});
-
-test('wedged hint after noUiChange on 3 distinct targets', async () => {
-  for (const key of ['tap@1,1', 'tap@2,2']) {
-    await settleWithRetryIfNoChange(
-      okResult({}),
-      async () => okResult({}),
-      ctx,
-      { eligible: true, targetKey: key },
-      depsWith([unchanged, unchanged]),
+test('three distinct unchanged Android controls still surface the wedged hint', async () => {
+  let result;
+  for (const targetKey of ['tap@1,1', 'tap@2,2', 'tap@3,3']) {
+    result = await settleWithRetryIfNoChange(
+      okResult({ tapped: true }),
+      async () => okResult({ tapped: true }),
+      androidContext,
+      { ...policy, targetKey },
+      depsWith(unchanged),
     );
   }
-  const result = await settleWithRetryIfNoChange(
-    okResult({}),
-    async () => okResult({}),
-    ctx,
-    { eligible: true, targetKey: 'tap@3,3' },
-    depsWith([unchanged, unchanged]),
-  );
-  const env = parse(result);
-  assert.match(env.meta.hint, /wedged/);
+
+  assert.match(parse(result).meta.hint, /wedged/);
 });
 
-test('transport-recovered send, hierarchy unchanged → no retap, noUiChange only (Story 14 #407)', async () => {
-  let dispatches = 0;
-  const result = await settleWithRetryIfNoChange(
-    okResult({ tapped: true }, { meta: { transportRecovery: { via: 'status', commandId: 'c1' } } }),
-    async () => {
-      dispatches++;
-      return okResult({ tapped: true });
-    },
-    ctx,
-    policy,
-    depsWith([unchanged]),
-  );
-  assert.equal(dispatches, 0); // transport already consumed the ambiguity budget
-  const env = parse(result);
-  assert.equal(env.ok, true);
-  assert.equal(env.meta.noUiChange, true);
-  assert.equal(env.meta.tapRetried, undefined);
-});
-
-test('keyboard auto-dismiss recovery, hierarchy unchanged → intended tap is not repeated', async () => {
-  let dispatches = 0;
-  const result = await settleWithRetryIfNoChange(
-    okResult({ tapped: true }, { meta: { keyboardGuard: 'auto_dismissed' } }),
-    async () => {
-      dispatches++;
-      return okResult({ tapped: true });
-    },
-    ctx,
-    policy,
-    depsWith([unchanged]),
-  );
-  assert.equal(dispatches, 0);
-  const env = parse(result);
-  assert.equal(env.meta.noUiChange, true);
-  assert.equal(env.meta.tapRetried, undefined);
-});
-
-test('runner-native auto-dismiss (data.keyboardGuard, pre-lift), hierarchy unchanged → intended tap is not repeated', async () => {
-  let dispatches = 0;
-  const result = await settleWithRetryIfNoChange(
-    okResult({ tapped: true, keyboardGuard: 'auto_dismissed' }),
-    async () => {
-      dispatches++;
-      return okResult({ tapped: true });
-    },
-    ctx,
-    policy,
-    depsWith([unchanged]),
-  );
-  assert.equal(dispatches, 0);
-  const env = parse(result);
-  assert.equal(env.meta.noUiChange, true);
-  assert.equal(env.meta.tapRetried, undefined);
-});
-
-test('exact keyboard target, hierarchy unchanged → key gesture is never repeated', async () => {
-  let dispatches = 0;
-  const result = await settleWithRetryIfNoChange(
-    okResult({ tapped: true, keyboardGuard: 'keyboard_target' }),
-    async () => {
-      dispatches++;
-      return okResult({ tapped: true });
-    },
-    ctx,
-    policy,
-    depsWith([unchanged]),
-  );
-  assert.equal(dispatches, 0);
-  assert.equal(parse(result).meta.noUiChange, true);
-});
-
-test('control: data.keyboardGuard no_keyboard does not consume the retry budget', async () => {
-  let dispatches = 0;
-  await settleWithRetryIfNoChange(
-    okResult({ tapped: true, keyboardGuard: 'no_keyboard' }),
-    async () => {
-      dispatches++;
-      return okResult({ tapped: true });
-    },
-    ctx,
-    policy,
-    depsWith([unchanged, unchanged]),
-  );
-  assert.equal(dispatches, 1);
-});
-
-test('control: no transportRecovery marker, hierarchy unchanged → exactly one retap', async () => {
-  let dispatches = 0;
+test('non-verifiable gestures settle without effect classification or replay', async () => {
+  let redispatches = 0;
   const result = await settleWithRetryIfNoChange(
     okResult({ tapped: true }),
     async () => {
-      dispatches++;
+      redispatches++;
       return okResult({ tapped: true });
     },
-    ctx,
-    policy,
-    depsWith([unchanged, unchanged]),
-  );
-  assert.equal(dispatches, 1); // existing behavior intact without the marker
-  const env = parse(result);
-  assert.equal(env.meta.tapRetried, true);
-});
-
-test('retap dispatch error → first success kept, flagged noUiChange (advisory contract)', async () => {
-  const result = await settleWithRetryIfNoChange(
-    okResult({ tapped: true }),
-    async () => failResult('runner died', 'RN_FAST_RUNNER_DOWN'),
-    ctx,
-    policy,
-    depsWith([unchanged]),
-  );
-  const env = parse(result);
-  assert.equal(env.ok, true);
-  assert.equal(env.meta.tapRetried, true);
-  assert.equal(env.meta.noUiChange, true);
-});
-
-test('ineligible policy → single settle, no initial hash requirement, no retry', async () => {
-  let dispatches = 0;
-  const result = await settleWithRetryIfNoChange(
-    okResult({}),
-    async () => {
-      dispatches++;
-      return okResult({});
-    },
-    ctx,
-    { eligible: false, targetKey: '' },
+    androidContext,
+    { eligible: false, verificationRequired: false, targetKey: '' },
     {
       enabled: () => true,
       capabilities: () => [],
@@ -308,39 +154,38 @@ test('ineligible policy → single settle, no initial hash requirement, no retry
       },
     },
   );
-  assert.equal(dispatches, 0);
+
+  assert.equal(redispatches, 0);
+  assert.equal(parse(result).ok, true);
   assert.equal(parse(result).meta.noUiChange, undefined);
 });
 
-test('tapRetryPolicy gates on command, flags, coords, env, and opt-out', () => {
-  assert.equal(tapRetryPolicy(['press', '@e0'], 'tap', 50, 20, {}).eligible, true);
-  assert.equal(tapRetryPolicy(['press', '@e0'], 'tap', 50, 20, {}).targetKey, 'tap@50,20');
-  assert.equal(tapRetryPolicy(['longpress', '50', '20'], 'longPress', 50, 20, {}).eligible, true);
-  assert.equal(tapRetryPolicy(['fill', '@e0', 'hi'], 'type', 50, 20, {}).eligible, false);
-  assert.equal(tapRetryPolicy(['press', '@e0', '--double-tap'], 'tap', 50, 20, {}).eligible, false);
-  assert.equal(tapRetryPolicy(['press', '@e0', '--count', '3'], 'tap', 50, 20, {}).eligible, false);
-  // PR #459 review (Codex P2): hold gestures (device_press holdMs /
-  // device_longpress by ref → ['press', ref, '--hold-ms', N] → command 'tap')
-  // are excluded — re-dispatching a timed hold would change the interaction.
+test('tap policy preserves effect-verification boundaries while disabling every replay', () => {
+  const ordinary = tapRetryPolicy(['press', '@e0'], 'tap', 50, 20, {});
+  assert.equal(ordinary.eligible, false);
+  assert.equal(ordinary.verificationRequired, true);
+  assert.equal(ordinary.targetKey, 'tap@50,20');
+
+  const optedOut = tapRetryPolicy(['press', '@e0'], 'tap', 50, 20, {
+    retryIfNoChange: false,
+  });
+  assert.equal(optedOut.eligible, false);
+  assert.equal(optedOut.verificationRequired, true);
+
   assert.equal(
-    tapRetryPolicy(['press', '@e0', '--hold-ms', '1000'], 'tap', 50, 20, {}).eligible,
-    false,
-  );
-  // A genuine coordinate long-press carries duration positionally (no --hold-ms
-  // flag) and stays eligible per the plan's RETRYABLE_TAP_COMMANDS.
-  assert.equal(
-    tapRetryPolicy(['longpress', '50', '20', '800'], 'longPress', 50, 20, {}).eligible,
+    tapRetryPolicy(['longpress', '50', '20'], 'longPress', 50, 20, {}).verificationRequired,
     true,
   );
-  assert.equal(tapRetryPolicy(['press', '@e0'], 'tap', undefined, undefined, {}).eligible, false);
   assert.equal(
-    tapRetryPolicy(['press', '@e0'], 'tap', 50, 20, { retryIfNoChange: false }).eligible,
+    tapRetryPolicy(['press', '@e0', '--double-tap'], 'tap', 50, 20, {}).verificationRequired,
     false,
   );
-  process.env.RN_SELF_HEAL = '0';
-  try {
-    assert.equal(tapRetryPolicy(['press', '@e0'], 'tap', 50, 20, {}).eligible, false);
-  } finally {
-    delete process.env.RN_SELF_HEAL;
-  }
+  assert.equal(
+    tapRetryPolicy(['press', '@e0', '--hold-ms', '1000'], 'tap', 50, 20, {}).verificationRequired,
+    false,
+  );
+  assert.equal(
+    tapRetryPolicy(['fill', '@e0', 'hi'], 'type', 50, 20, {}).verificationRequired,
+    false,
+  );
 });

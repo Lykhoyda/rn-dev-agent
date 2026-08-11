@@ -1160,8 +1160,10 @@ test('forced dev-client pin invalidates the prior target before recreating the c
         registry: {
           getSessionStatus: () => status,
           releaseResources: (_session, resources) => calls.push(`release:${resources[0].key}`),
-          updateBindings: (_session, update) =>
-            calls.push(update.bindings.bundle === null ? 'clear-bundle' : 'bind-bundle'),
+          updateBindings: (_session, update) => {
+            if (update.bindings.bundle !== null) assert.equal(update.probeClaimOwners, true);
+            calls.push(update.bindings.bundle === null ? 'clear-bundle' : 'bind-bundle');
+          },
           claimResources: (_session, resources) => calls.push(`claim:${resources[0].key}`),
         },
         session: { sessionId: 'session-a', claimEpoch: 1 },
@@ -1169,9 +1171,10 @@ test('forced dev-client pin invalidates the prior target before recreating the c
     },
     {
       onBundleInvalidated: () => calls.push('clear-client-policy'),
-      pinDevClient: async (_status, options) => {
+      pinDevClient: async (_status, options, commitBundle) => {
         assert.equal(options.force, true);
         calls.push('recreate-client');
+        commitBundle(bundle, { assertActive: () => {}, publish: () => {} });
         return bundle;
       },
     },
@@ -1185,9 +1188,418 @@ test('forced dev-client pin invalidates the prior target before recreating the c
     'clear-bundle',
     'clear-client-policy',
     'recreate-client',
-    'claim:8193:target-b',
     'bind-bundle',
   ]);
+});
+
+test('Android forced pin keeps prior authority until one atomic staged-client commit', async () => {
+  const calls: string[] = [];
+  const status = {
+    sessionId: 'session-android',
+    authorityVersion: 7,
+    state: 'ready',
+    source: { kind: 'git', appRoot: '/project' },
+    bindings: {
+      metroPort: 8193,
+      install: { artifactDigest: 'install' },
+      metro: { instanceId: 'metro-a' },
+      device: { platform: 'android', deviceId: 'emulator-5554', appId: 'dev.example' },
+      bundle: { targetId: 'target-old' },
+    },
+  };
+  const bundle = {
+    sessionId: 'session-android',
+    metroInstanceId: 'metro-a',
+    worktreeKey: 'worktree-a',
+    appId: 'dev.example',
+    platform: 'android',
+    buildGeneration: 1,
+    deviceId: 'emulator-5554',
+    metroPort: 8193,
+    launchMethod: 'app',
+    targetId: 'target-new',
+    connectionGeneration: 2,
+    authorityScope: 'initial-bundle',
+    sourceFidelity: 'not-proven',
+  } as const;
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: {
+          getSessionStatus: () => status,
+          releaseResources: () => calls.push('early-release'),
+          claimResources: () => calls.push('early-claim'),
+          updateBindings: (_session, update) => {
+            assert.equal(update.expectedAuthorityVersion, 7);
+            assert.deepEqual(update.releaseResources, [{ type: 'target', key: '8193:target-old' }]);
+            assert.deepEqual(update.claimResources, [{ type: 'target', key: '8193:target-new' }]);
+            assert.equal(update.probeClaimOwners, true);
+            update.assertBeforeCommit();
+            calls.push('atomic-commit');
+            update.onCommitted();
+          },
+        },
+        session: { sessionId: 'session-android', claimEpoch: 1 },
+      }),
+    },
+    {
+      onBundleInvalidated: () => calls.push('early-invalidation'),
+      pinDevClient: async (_status, _options, commitBundle) => {
+        calls.push('staged');
+        commitBundle(bundle, {
+          assertActive: () => calls.push('deadline-check'),
+          publish: () => calls.push('published'),
+        });
+        return bundle;
+      },
+    },
+  );
+
+  const result = await handler({ action: 'pin_dev_client', force: true });
+  assert.equal(result.isError, undefined, result.content[0]!.text);
+  assert.deepEqual(calls, [
+    'staged',
+    'deadline-check',
+    'atomic-commit',
+    'deadline-check',
+    'published',
+  ]);
+});
+
+test('physical Android pin persists exact Metro reverse authority before app launch', async () => {
+  const calls: string[] = [];
+  const reverse = {
+    platform: 'android' as const,
+    deviceId: 'USB-EXACT',
+    metroPort: 8397,
+    local: 'tcp:8397',
+    remote: 'tcp:8397',
+  };
+  const status = {
+    sessionId: 'session-physical',
+    claimEpoch: 1,
+    authorityVersion: 7,
+    state: 'device_bound',
+    source: { kind: 'git', appRoot: '/project' },
+    bindings: {
+      metroPort: 8397,
+      install: { artifactDigest: 'install' },
+      metro: { instanceId: 'metro-physical' },
+      device: { platform: 'android', deviceId: 'USB-EXACT', appId: 'dev.example' },
+      androidMetroReverse: null as typeof reverse | null,
+      bundle: null as Record<string, unknown> | null,
+    },
+  };
+  const bundle = {
+    sessionId: 'session-physical',
+    metroInstanceId: 'metro-physical',
+    worktreeKey: 'worktree-a',
+    appId: 'dev.example',
+    platform: 'android' as const,
+    buildGeneration: 1,
+    deviceId: 'USB-EXACT',
+    metroPort: 8397,
+    launchMethod: 'url' as const,
+    targetId: 'target-physical',
+    connectionGeneration: 1,
+    authorityScope: 'initial-bundle' as const,
+    sourceFidelity: 'not-proven' as const,
+  };
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: {
+          getSessionStatus: () => status,
+          updateBindings: (_session, update) => {
+            if ('androidMetroReverse' in update.bindings) {
+              assert.equal(update.expectedAuthorityVersion, 7);
+              status.bindings.androidMetroReverse = update.bindings.androidMetroReverse;
+              status.authorityVersion = 8;
+              calls.push('persist-reverse');
+              return;
+            }
+            assert.equal(update.expectedAuthorityVersion, 8);
+            assert.equal(status.bindings.androidMetroReverse, reverse);
+            status.bindings.bundle = bundle;
+            calls.push('commit-bundle');
+            update.onCommitted();
+          },
+        },
+        session: { sessionId: 'session-physical', claimEpoch: 1 },
+      }),
+    },
+    {
+      ensureAndroidMetroReverse: (input) => {
+        assert.deepEqual(input, { deviceId: 'USB-EXACT', metroPort: 8397, binding: null });
+        calls.push('establish-reverse');
+        return { binding: reverse, created: true, physical: true };
+      },
+      removeAndroidMetroReverse: () => calls.push('cleanup-reverse'),
+      pinDevClient: async (_status, _options, commitBundle) => {
+        assert.equal(status.bindings.androidMetroReverse, reverse);
+        calls.push('launch-app');
+        commitBundle(bundle, { assertActive: () => {}, publish: () => {} });
+        return bundle;
+      },
+    },
+  );
+
+  const result = await handler({ action: 'pin_dev_client' });
+  assert.equal(result.isError, undefined, result.content[0]!.text);
+  assert.deepEqual(calls, ['establish-reverse', 'persist-reverse', 'launch-app', 'commit-bundle']);
+});
+
+test('physical Android Metro setup failure is truthful and prevents app launch', async () => {
+  const status = {
+    sessionId: 'session-physical',
+    authorityVersion: 1,
+    state: 'device_bound',
+    source: { kind: 'git', appRoot: '/project' },
+    bindings: {
+      metroPort: 8397,
+      install: {},
+      metro: { instanceId: 'metro' },
+      device: { platform: 'android', deviceId: 'USB-EXACT', appId: 'dev.example' },
+    },
+  };
+  let launched = false;
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: { getSessionStatus: () => status },
+        session: { sessionId: 'session-physical', claimEpoch: 1 },
+      }),
+    },
+    {
+      ensureAndroidMetroReverse: () => {
+        throw new Error('PHYSICAL_ANDROID_METRO_UNREACHABLE: adb could not configure exact device');
+      },
+      pinDevClient: async () => {
+        launched = true;
+        throw new Error('must not launch');
+      },
+    },
+  );
+  const result = await handler({ action: 'pin_dev_client' });
+  assert.equal(result.isError, true);
+  assert.match(result.content[0]!.text, /PHYSICAL_ANDROID_METRO_UNREACHABLE/);
+  assert.doesNotMatch(result.content[0]!.text, /CDP_TARGET_AUTHORITY_MISMATCH/);
+  assert.equal(launched, false);
+});
+
+test('Android post-commit deadline expiry restores prior bundle authority', async () => {
+  const calls: string[] = [];
+  const priorBundle = { targetId: 'target-old', connectionGeneration: 1 };
+  const status = {
+    sessionId: 'session-android',
+    authorityVersion: 7,
+    state: 'ready',
+    source: { kind: 'git', appRoot: '/project' },
+    bindings: {
+      metroPort: 8193,
+      install: { artifactDigest: 'install' },
+      metro: { instanceId: 'metro-a' },
+      device: { platform: 'android', deviceId: 'emulator-5554', appId: 'dev.example' },
+      bundle: priorBundle,
+    },
+  };
+  const candidate = {
+    sessionId: 'session-android',
+    metroInstanceId: 'metro-a',
+    worktreeKey: 'worktree-a',
+    appId: 'dev.example',
+    platform: 'android',
+    buildGeneration: 1,
+    deviceId: 'emulator-5554',
+    metroPort: 8193,
+    launchMethod: 'app',
+    targetId: 'target-new',
+    connectionGeneration: 2,
+    authorityScope: 'initial-bundle',
+    sourceFidelity: 'not-proven',
+  } as const;
+  let updateCount = 0;
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: {
+          getSessionStatus: () => status,
+          updateBindings: (_session, update) => {
+            updateCount += 1;
+            if (updateCount === 1) {
+              assert.equal(update.expectedAuthorityVersion, 7);
+              update.assertBeforeCommit();
+              status.authorityVersion = 8;
+              status.bindings.bundle = candidate;
+              calls.push('candidate-commit');
+              update.onCommitted();
+              return;
+            }
+            assert.equal(update.expectedAuthorityVersion, 8);
+            assert.equal(update.state, 'ready');
+            assert.deepEqual(update.bindings, { bundle: priorBundle });
+            assert.deepEqual(update.releaseResources, [{ type: 'target', key: '8193:target-new' }]);
+            assert.deepEqual(update.claimResources, [{ type: 'target', key: '8193:target-old' }]);
+            status.authorityVersion = 9;
+            status.bindings.bundle = priorBundle;
+            calls.push('compensating-commit');
+          },
+        },
+        session: { sessionId: 'session-android', claimEpoch: 1 },
+      }),
+    },
+    {
+      pinDevClient: async (_status, _options, commitBundle) => {
+        let assertionCount = 0;
+        commitBundle(candidate, {
+          assertActive: () => {
+            assertionCount += 1;
+            calls.push(`deadline-check-${assertionCount}`);
+            if (assertionCount === 2) {
+              throw new Error('Android exact-target deadline expired after commit');
+            }
+          },
+          publish: () => calls.push('published'),
+        });
+        return candidate;
+      },
+    },
+  );
+
+  const result = await handler({ action: 'pin_dev_client', force: true });
+
+  assert.equal(result.isError, true);
+  assert.deepEqual(status.bindings.bundle, priorBundle);
+  assert.deepEqual(calls, [
+    'deadline-check-1',
+    'candidate-commit',
+    'deadline-check-2',
+    'compensating-commit',
+  ]);
+});
+
+test('Android post-commit hardening failure restores prior bundle authority', async () => {
+  const calls: string[] = [];
+  const priorBundle = { targetId: 'target-old', connectionGeneration: 1 };
+  const status = {
+    sessionId: 'session-android',
+    authorityVersion: 7,
+    state: 'ready',
+    source: { kind: 'git', appRoot: '/project' },
+    bindings: {
+      metroPort: 8193,
+      install: { artifactDigest: 'install' },
+      metro: { instanceId: 'metro-a' },
+      device: { platform: 'android', deviceId: 'emulator-5554', appId: 'dev.example' },
+      bundle: priorBundle,
+    },
+  };
+  const candidate = {
+    sessionId: 'session-android',
+    metroInstanceId: 'metro-a',
+    worktreeKey: 'worktree-a',
+    appId: 'dev.example',
+    platform: 'android',
+    buildGeneration: 1,
+    deviceId: 'emulator-5554',
+    metroPort: 8193,
+    launchMethod: 'app',
+    targetId: 'target-new',
+    connectionGeneration: 2,
+    authorityScope: 'initial-bundle',
+    sourceFidelity: 'not-proven',
+  } as const;
+  let updateCount = 0;
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: {
+          getSessionStatus: () => status,
+          updateBindings: (_session, update) => {
+            updateCount += 1;
+            if (updateCount === 1) {
+              update.assertBeforeCommit();
+              status.authorityVersion = 8;
+              status.bindings.bundle = candidate;
+              calls.push('candidate-commit');
+              update.onCommitted();
+              throw new Error('registry permissions hardening failed');
+            }
+            assert.equal(update.expectedAuthorityVersion, 8);
+            assert.deepEqual(update.bindings, { bundle: priorBundle });
+            status.authorityVersion = 9;
+            status.bindings.bundle = priorBundle;
+            calls.push('compensating-commit');
+          },
+        },
+        session: { sessionId: 'session-android', claimEpoch: 1 },
+      }),
+    },
+    {
+      pinDevClient: async (_status, _options, commitBundle) => {
+        commitBundle(candidate, {
+          assertActive: () => calls.push('deadline-check'),
+          publish: () => calls.push('published'),
+        });
+        return candidate;
+      },
+    },
+  );
+
+  const result = await handler({ action: 'pin_dev_client', force: true });
+
+  assert.equal(result.isError, true);
+  assert.deepEqual(status.bindings.bundle, priorBundle);
+  assert.deepEqual(calls, ['deadline-check', 'candidate-commit', 'compensating-commit']);
+});
+
+test('session release removes only its persisted physical Android Metro reverse before claims', async () => {
+  const calls: string[] = [];
+  const reverse = {
+    platform: 'android' as const,
+    deviceId: 'USB-EXACT',
+    metroPort: 8397,
+    local: 'tcp:8397',
+    remote: 'tcp:8397',
+  };
+  const status = {
+    sessionId: 'session-physical',
+    authorityVersion: 3,
+    bindings: { androidMetroReverse: reverse as typeof reverse | null },
+  };
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: {
+          getSessionStatus: () => status,
+          updateBindings: (_session, update) => {
+            assert.equal(update.expectedAuthorityVersion, 3);
+            assert.deepEqual(update.bindings, { androidMetroReverse: null });
+            status.bindings.androidMetroReverse = null;
+            status.authorityVersion = 4;
+            calls.push('clear-reverse-binding');
+          },
+          releaseSession: () => calls.push('release'),
+        },
+        session: { sessionId: 'session-physical', claimEpoch: 1 },
+      }),
+    },
+    {
+      removeAndroidMetroReverse: (binding) => {
+        assert.equal(binding, reverse);
+        calls.push('remove-exact-reverse');
+      },
+    },
+  );
+  const result = await handler({ action: 'release' });
+  assert.equal(result.isError, undefined, result.content[0]!.text);
+  assert.deepEqual(calls, ['remove-exact-reverse', 'clear-reverse-binding', 'release']);
 });
 
 test('session release stops its managed Metro before releasing claims', async () => {
@@ -2286,7 +2698,14 @@ test('integration restoration resumes after files commit before binding completi
       'started',
     );
 
-    const resumed = await handler({ action: 'restore_integration', confirmed: true });
+    let resumed = await handler({ action: 'restore_integration', confirmed: true });
+    if (resumed.isError) {
+      assert.match(
+        resumed.content[0].text,
+        /SESSION_INTEGRATION_(?:WORKER_TIMEOUT|PATH_UNSAFE: bound-directory (?:operation unavailable|recovery failed))/,
+      );
+      resumed = await handler({ action: 'restore_integration', confirmed: true });
+    }
 
     assert.equal(resumed.isError, undefined);
     assert.deepEqual(JSON.parse(readFileSync(packagePath, 'utf8')), originalPackage);

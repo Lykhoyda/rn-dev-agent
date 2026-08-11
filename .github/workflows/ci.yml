@@ -80,6 +80,12 @@ jobs:
       - name: MCP upgrade-notice + bridge-probe guard
         run: bash scripts/test/mcp-upgrade-notice.test.sh
 
+      # GH#578: an installed-but-crashing idb client must be reported as an
+      # interpreter incompatibility, never as "idb missing" with an install
+      # hint that reinstalls the same broken combination.
+      - name: ensure-idb client-state guard
+        run: bash scripts/test/ensure-idb.test.sh
+
       # GH#432: the freshness gate is itself tested (house rule for CI guards).
       - name: Dist-freshness guard unit test
         run: bash scripts/test/check-dist-fresh.test.sh

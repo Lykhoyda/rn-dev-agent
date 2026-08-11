@@ -1,3 +1,4 @@
+import { managedMetroProxyUrl } from './build-adapter.js';
 import { verifyManagedManifestLaunchAsset } from './expo-manifest.js';
 import { verifyMetroAuthorityMarker } from './metro-authority.js';
 export async function reconcileAuthoritativeBundle(status, dependencies) {
@@ -74,6 +75,12 @@ export function boundConnectConflict(status, request) {
     return null;
 }
 export async function pinExactDevClient(input, dependencies) {
+    if (!Number.isSafeInteger(input.metroPort) || input.metroPort < 1 || input.metroPort > 65_535) {
+        throw new Error('DEV_CLIENT_ENDPOINT_NOT_FOUND: authority-bound Metro port is unavailable');
+    }
+    const derivedIosExpoLaunchTarget = input.platform === 'ios' && input.runtimeKind === 'expo-dev-client'
+        ? managedMetroProxyUrl(input)
+        : undefined;
     if (input.devClientUrl !== input.expectedDevClientUrl) {
         throw new Error('DEV_CLIENT_ENDPOINT_NOT_FOUND: declared dev-client URL does not match the session endpoint');
     }
@@ -100,6 +107,9 @@ export async function pinExactDevClient(input, dependencies) {
         if (input.platform === 'ios')
             await dependencies.acceptIosOpenDialog(input.deviceId);
     }
+    else if (derivedIosExpoLaunchTarget) {
+        await dependencies.launchExactAppWithInitialUrl(input.deviceId, input.appId, derivedIosExpoLaunchTarget);
+    }
     else {
         await dependencies.launchExactApp(input.platform, input.deviceId, input.appId);
     }
@@ -109,27 +119,48 @@ export async function pinExactDevClient(input, dependencies) {
         appId: input.appId,
         deviceId: input.deviceId,
     });
-    if (connected.deviceId !== input.deviceId) {
-        throw new Error('CDP_TARGET_AUTHORITY_MISMATCH: selected target is not proven on the claimed device');
+    try {
+        if (connected.deviceId !== input.deviceId) {
+            throw new Error('CDP_TARGET_AUTHORITY_MISMATCH: selected target is not proven on the claimed device');
+        }
+        const hasStagedLifecycle = 'run' in connected;
+        const authority = await (hasStagedLifecycle
+            ? connected.run(() => dependencies.readMarker(connected))
+            : dependencies.readMarker(connected));
+        if (!authority?.marker || authority.status !== 'signed') {
+            throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: runtime did not expose a signed authority marker');
+        }
+        verifyMetroAuthorityMarker(authority.marker, input.signerCapability, {
+            sessionId: input.sessionId,
+            metroInstanceId: input.metroInstanceId,
+            worktreeKey: input.worktreeKey,
+            appId: input.appId,
+            platform: input.platform,
+            buildGeneration: input.buildGeneration,
+        });
+        const bundle = buildBundleAuthorityBinding({
+            ...input,
+            deviceId: input.deviceId,
+            metroPort: input.metroPort,
+            ...(input.devClientUrl ? { devClientUrl: input.devClientUrl } : {}),
+            targetId: connected.targetId,
+            connectionGeneration: connected.connectionGeneration,
+        });
+        if (hasStagedLifecycle) {
+            connected.assertActive();
+            if (!dependencies.commitBundle) {
+                throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: atomic bundle commit is unavailable');
+            }
+            dependencies.commitBundle(bundle, {
+                assertActive: connected.assertActive,
+                publish: connected.publish,
+            });
+        }
+        return bundle;
     }
-    const authority = await dependencies.readMarker();
-    if (!authority?.marker || authority.status !== 'signed') {
-        throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: runtime did not expose a signed authority marker');
+    catch (error) {
+        if ('cancel' in connected)
+            connected.cancel();
+        throw error;
     }
-    verifyMetroAuthorityMarker(authority.marker, input.signerCapability, {
-        sessionId: input.sessionId,
-        metroInstanceId: input.metroInstanceId,
-        worktreeKey: input.worktreeKey,
-        appId: input.appId,
-        platform: input.platform,
-        buildGeneration: input.buildGeneration,
-    });
-    return buildBundleAuthorityBinding({
-        ...input,
-        deviceId: input.deviceId,
-        metroPort: input.metroPort,
-        ...(input.devClientUrl ? { devClientUrl: input.devClientUrl } : {}),
-        targetId: connected.targetId,
-        connectionGeneration: connected.connectionGeneration,
-    });
 }
