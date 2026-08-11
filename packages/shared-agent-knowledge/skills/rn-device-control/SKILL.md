@@ -329,6 +329,8 @@ simctl/adb for interactive testing. There is no external `agent-device` CLI invo
 
 `device_fill` hard-fails ambiguous, transformed, unreadable, lost, or uncertain fills. It never automatically retypes or falls back to ambient typing, adb input, or Maestro. If failure metadata says `mutation: observed|possible`, inspect current state before deciding on any new fill.
 
+On Android, `device_find` matches only nodes whose package is the session's app; pass `includeSystemUi=true` to also match system chrome (status/navigation bar), which may leave the app. Android taps also fail closed: a gesture the runner cannot actuate returns `INTERACTION_NOT_ACTUATED` (`mutation: none`), and one whose UI effect cannot be observed returns `INTERACTION_EFFECT_UNVERIFIED` (`mutation: possible`) instead of reporting success.
+
 ### Session Lifecycle
 
 ```

@@ -4,6 +4,7 @@ let metadataMap = new Map();
 let screenRect = null;
 let lastUpdated = 0;
 let lastSnapshotHash = null;
+const lastPackageSnapshotHashes = new Map();
 let snapshotGeneration = 0;
 let keyboardStateAtSnapshot = null;
 // #519 review: honest hittable (#395) guarantees only the CENTER is on-screen,
@@ -137,6 +138,7 @@ export function clearRefMap() {
     screenRect = null;
     lastUpdated = 0;
     lastSnapshotHash = null;
+    lastPackageSnapshotHashes.clear();
     snapshotGeneration = 0;
     keyboardStateAtSnapshot = null;
 }
@@ -244,6 +246,8 @@ export function updateRefMapFromFlat(nodes, freshness = {}) {
             meta.label = node.label;
         if (node.identifier !== undefined)
             meta.identifier = node.identifier;
+        if (node.packageName !== undefined)
+            meta.packageName = node.packageName;
         metadataMap.set(key, meta);
         hashed.push(node);
         entries.push({ rect: node.rect, hittable: node.hittable, type: node.type });
@@ -256,9 +260,22 @@ export function updateRefMapFromFlat(nodes, freshness = {}) {
     // probes is preserved. Fail-open on hash error (matches settle.ts).
     try {
         lastSnapshotHash = hashSnapshotNodes(hashed);
+        lastPackageSnapshotHashes.clear();
+        const byPackage = new Map();
+        for (const node of hashed) {
+            if (!node.packageName)
+                continue;
+            const packageNodes = byPackage.get(node.packageName) ?? [];
+            packageNodes.push(node);
+            byPackage.set(node.packageName, packageNodes);
+        }
+        for (const [packageName, packageNodes] of byPackage) {
+            lastPackageSnapshotHashes.set(packageName, hashSnapshotNodes(packageNodes));
+        }
     }
     catch {
         lastSnapshotHash = null;
+        lastPackageSnapshotHashes.clear();
     }
     lastUpdated = Date.now();
     return { applied: true };
@@ -296,6 +313,10 @@ export function getCachedMetadata(ref) {
         meta.identifier = rec.identifier;
     return meta;
 }
+export function getCachedPackageName(ref) {
+    const key = ref.startsWith('@') ? ref.slice(1) : ref;
+    return metadataMap.get(key)?.packageName ?? null;
+}
 export function getCachedSignature(ref) {
     const key = ref.startsWith('@') ? ref.slice(1) : ref;
     const rec = metadataMap.get(key);
@@ -315,11 +336,15 @@ export function getCachedSignature(ref) {
 export function getLastSnapshotHash() {
     return lastSnapshotHash;
 }
+export function getLastSnapshotHashForPackage(packageName) {
+    return lastPackageSnapshotHashes.get(packageName) ?? null;
+}
 // Story 05 (#386): called when a mutating verb settles without any hash
 // observation — the screen may have changed unobserved, so the baseline must
 // not be compared against. Fail-open beats fail-wrong.
 export function invalidateLastSnapshotHash() {
     lastSnapshotHash = null;
+    lastPackageSnapshotHashes.clear();
 }
 function metadataMatches(a, b) {
     return a.type === b.type && a.label === b.label && a.identifier === b.identifier;

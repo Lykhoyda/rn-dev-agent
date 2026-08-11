@@ -7,11 +7,11 @@ import type { FlatNode } from '../fast-runner-ref-map.js';
 // excluded (#519 review): it is derived from enabled + rect + viewport, and
 // its center-vs-viewport-edge comparison is unquantized — hashing it lets
 // sub-bucket jitter at the screen edge flip the hash every poll, defeating
-// the quantization. Known limitation: FlatNode carries no value/focused (the
-// runners do emit them), so the snapshot-eq FALLBACK tier can miss motion
-// that only changes a field's text value or focus — the primary tiers
-// (screen-static pixels, window-gate) observe it, so this only affects
-// legacy artifacts without capabilities.
+// the quantization. `checked` is included because Android Switch state can
+// change without moving or relabeling the node; omitting it made a proven
+// toggle look like a swallowed tap. Value/focus remain unavailable on every
+// runner, so the snapshot-eq fallback can still miss changes limited to those
+// fields; primary pixel/window probes cover current runner artifacts.
 const BOUNDS_QUANTUM_PX = 4;
 
 export function normalizeNodeForHash(node: FlatNode): string {
@@ -28,6 +28,7 @@ export function normalizeNodeForHash(node: FlatNode): string {
     q(node.rect.width),
     q(node.rect.height),
     node.enabled ?? null,
+    node.checked ?? null,
   ]);
 }
 

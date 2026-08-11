@@ -13,7 +13,7 @@ import { findFreePort } from './free-port.js';
 import { join } from 'node:path';
 import { withKeyboardGuard } from './keyboard-guard.js';
 import { runnerStatePath, readJsonStateFile, writeJsonStateFileAtomic, deleteStateFile, readLegacyTmpState, cleanupLegacyTmpState, } from '../util/secure-state-file.js';
-import { RUNNER_PROTOCOL_VERSION, MIN_SUPPORTED_RUNNER_PROTOCOL, REQUIRED_ANDROID_COMMANDS, getPluginVersion, classifyRunnerCompatibility, } from './protocol.js';
+import { RUNNER_PROTOCOL_VERSION, MIN_SUPPORTED_RUNNER_PROTOCOL, REQUIRED_ANDROID_COMMANDS, REQUIRED_ANDROID_FEATURES, getPluginVersion, classifyRunnerCompatibility, } from './protocol.js';
 import { artifactProvenanceToState, resolveAndroidRunnerArtifacts } from './runner-artifacts.js';
 import { resolveNativeRunnerDir } from './runtime-paths.js';
 import { decideRecovery, generateCommandId, isAmbiguousTransportFailure, parseStatusProbeReply, } from './transport-recovery.js';
@@ -565,12 +565,13 @@ export async function reapActiveAndroidRunner(deviceId) {
     adoptPersistedAndroidState(deviceId);
     await reapMismatchedAndroidRunner(runnerState ?? (deviceId ? { deviceId } : null));
 }
-function classifyAndroidHealth(info) {
+export function classifyAndroidHealth(info) {
     return classifyRunnerCompatibility({
         ...(info.protocolVersion !== undefined ? { protocolVersion: info.protocolVersion } : {}),
         ...(info.runnerVersion !== undefined ? { runnerVersion: info.runnerVersion } : {}),
         ...(info.commands !== undefined ? { commands: info.commands } : {}),
-    }, getPluginVersion(), REQUIRED_ANDROID_COMMANDS);
+        ...(info.capabilities !== undefined ? { capabilities: info.capabilities } : {}),
+    }, getPluginVersion(), REQUIRED_ANDROID_COMMANDS, REQUIRED_ANDROID_FEATURES);
 }
 // GH #418: mid-flow refusal + retry-once signal. The message prefix is the
 // wire contract — device-session.ts and agent-device-wrapper.ts map it to the
@@ -1351,6 +1352,10 @@ function mapRunnerNodesToFlat(nodes) {
             flat.label = n.label;
         if (n.identifier !== undefined)
             flat.identifier = n.identifier;
+        if (n.packageName !== undefined)
+            flat.packageName = n.packageName;
+        if (n.checked !== undefined)
+            flat.checked = n.checked;
         if (n.enabled !== undefined)
             flat.enabled = n.enabled;
         if (n.hittable !== undefined)
@@ -1394,6 +1399,8 @@ export async function runAndroid(args) {
         body.exactType = args.exactType;
     if (args.exact !== undefined)
         body.exact = args.exact;
+    if (args.includeSystemUi !== undefined)
+        body.includeSystemUi = args.includeSystemUi;
     if (args.durationMs !== undefined)
         body.durationMs = args.durationMs;
     if (args.timeoutMs !== undefined)
@@ -1478,6 +1485,23 @@ export async function runAndroid(args) {
         if (code)
             return failResult(message, code, Object.keys(failExtras).length ? failExtras : undefined);
         return Object.keys(failExtras).length ? failResult(message, failExtras) : failResult(message);
+    }
+    if (args.command === 'tap') {
+        const data = resp.data;
+        if (data?.tapped !== true) {
+            // NOTE: ACTION_CLICK is atomic, but a false coordinate click can mean the
+            // touch-up failed after the app already received the touch-down.
+            const exactTarget = args.exactIdentifier !== undefined && args.exactType !== undefined;
+            if (exactTarget) {
+                return failResult('Android runner could not prove that the requested interaction was actuated.', 'INTERACTION_NOT_ACTUATED', { mutation: 'none', reason: 'runner-rejected-tap', ...recoveryMeta });
+            }
+            return failResult('The Android coordinate tap did not complete, and part of the gesture may have reached the app.', 'INTERACTION_EFFECT_UNVERIFIED', {
+                mutation: 'possible',
+                reason: 'coordinate-tap-incomplete',
+                attempts: 1,
+                ...recoveryMeta,
+            });
+        }
     }
     if (args.command === 'snapshot' && resp.data && typeof resp.data === 'object') {
         const data = resp.data;

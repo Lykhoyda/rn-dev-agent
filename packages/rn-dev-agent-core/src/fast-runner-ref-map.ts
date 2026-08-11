@@ -13,6 +13,8 @@ interface SnapshotNode {
   label?: string;
   identifier?: string;
   type?: string;
+  packageName?: string;
+  checked?: boolean;
   enabled?: boolean;
   hittable?: boolean;
 }
@@ -22,6 +24,8 @@ export interface FlatNode {
   type: string;
   label?: string;
   identifier?: string;
+  packageName?: string;
+  checked?: boolean;
   rect: ElementRect;
   enabled?: boolean;
   hittable?: boolean;
@@ -52,6 +56,7 @@ export interface RefSignature {
 }
 
 interface StoredRefRecord extends RefMetadata {
+  packageName?: string;
   flatIndex: number;
   snapshotNodeIndex: number;
   nodeCount: number;
@@ -64,6 +69,7 @@ let metadataMap = new Map<string, StoredRefRecord>();
 let screenRect: ElementRect | null = null;
 let lastUpdated = 0;
 let lastSnapshotHash: string | null = null;
+const lastPackageSnapshotHashes = new Map<string, string>();
 let snapshotGeneration = 0;
 let keyboardStateAtSnapshot: boolean | null = null;
 
@@ -233,6 +239,7 @@ export function clearRefMap(): void {
   screenRect = null;
   lastUpdated = 0;
   lastSnapshotHash = null;
+  lastPackageSnapshotHashes.clear();
   snapshotGeneration = 0;
   keyboardStateAtSnapshot = null;
 }
@@ -364,6 +371,7 @@ export function updateRefMapFromFlat(
     };
     if (node.label !== undefined) meta.label = node.label;
     if (node.identifier !== undefined) meta.identifier = node.identifier;
+    if (node.packageName !== undefined) meta.packageName = node.packageName;
     metadataMap.set(key, meta);
     hashed.push(node);
 
@@ -378,8 +386,20 @@ export function updateRefMapFromFlat(
   // probes is preserved. Fail-open on hash error (matches settle.ts).
   try {
     lastSnapshotHash = hashSnapshotNodes(hashed);
+    lastPackageSnapshotHashes.clear();
+    const byPackage = new Map<string, FlatNode[]>();
+    for (const node of hashed) {
+      if (!node.packageName) continue;
+      const packageNodes = byPackage.get(node.packageName) ?? [];
+      packageNodes.push(node);
+      byPackage.set(node.packageName, packageNodes);
+    }
+    for (const [packageName, packageNodes] of byPackage) {
+      lastPackageSnapshotHashes.set(packageName, hashSnapshotNodes(packageNodes));
+    }
   } catch {
     lastSnapshotHash = null;
+    lastPackageSnapshotHashes.clear();
   }
   lastUpdated = Date.now();
   return { applied: true };
@@ -431,6 +451,11 @@ export function getCachedMetadata(ref: string): RefMetadata | null {
   return meta;
 }
 
+export function getCachedPackageName(ref: string): string | null {
+  const key = ref.startsWith('@') ? ref.slice(1) : ref;
+  return metadataMap.get(key)?.packageName ?? null;
+}
+
 export function getCachedSignature(ref: string): RefSignature | null {
   const key = ref.startsWith('@') ? ref.slice(1) : ref;
   const rec = metadataMap.get(key);
@@ -449,11 +474,16 @@ export function getLastSnapshotHash(): string | null {
   return lastSnapshotHash;
 }
 
+export function getLastSnapshotHashForPackage(packageName: string): string | null {
+  return lastPackageSnapshotHashes.get(packageName) ?? null;
+}
+
 // Story 05 (#386): called when a mutating verb settles without any hash
 // observation — the screen may have changed unobserved, so the baseline must
 // not be compared against. Fail-open beats fail-wrong.
 export function invalidateLastSnapshotHash(): void {
   lastSnapshotHash = null;
+  lastPackageSnapshotHashes.clear();
 }
 
 function metadataMatches(a: RefMetadata, b: RefMetadata): boolean {

@@ -197,6 +197,14 @@ export function buildIosProbes(bundleId?: string): SettleProbes {
   };
 }
 
+export function hashAndroidAppSnapshotNodes(
+  nodes: FlatNode[],
+  bundleId: string | undefined,
+): string | null {
+  if (!bundleId) return null;
+  return hashSnapshotNodes(nodes.filter((node) => node.packageName === bundleId));
+}
+
 export function buildAndroidProbes(bundleId?: string): SettleProbes {
   const pinnedHostPort = getAndroidRunnerHostPort() ?? undefined;
   return {
@@ -204,7 +212,7 @@ export function buildAndroidProbes(bundleId?: string): SettleProbes {
       androidIsWindowUpdatingProbe(timeoutMs, bundleId, pinnedHostPort),
     snapshotHash: async () => {
       const nodes = await androidSnapshotNodesViaProbe(bundleId, pinnedHostPort);
-      return nodes ? hashSnapshotNodes(nodes) : null;
+      return nodes ? hashAndroidAppSnapshotNodes(nodes, bundleId) : null;
     },
     sleep: realSleep,
     now: () => Date.now(),

@@ -11272,6 +11272,15 @@ var init_platform_utils = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/domain/maestro-validator.js
+var import_yaml2;
+var init_maestro_validator = __esm({
+  "packages/rn-dev-agent-core/dist/domain/maestro-validator.js"() {
+    "use strict";
+    import_yaml2 = __toESM(require_dist(), 1);
+  }
+});
+
 // packages/rn-dev-agent-core/dist/tools/runner-leak-recovery.js
 var init_runner_leak_recovery = __esm({
   "packages/rn-dev-agent-core/dist/tools/runner-leak-recovery.js"() {
@@ -11354,15 +11363,6 @@ var init_external_runner_detect = __esm({
     "use strict";
     SHELL_WRAPPERS = /^(?:sh|bash|zsh|dash|ksh|env)$/i;
     RN_FAST_RUNNER_RE = /RnFastRunner/i;
-  }
-});
-
-// packages/rn-dev-agent-core/dist/domain/maestro-validator.js
-var import_yaml2;
-var init_maestro_validator = __esm({
-  "packages/rn-dev-agent-core/dist/domain/maestro-validator.js"() {
-    "use strict";
-    import_yaml2 = __toESM(require_dist(), 1);
   }
 });
 
@@ -11666,6 +11666,9 @@ var init_fill_coordinator = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/device-interact.js
+import { execFile as execFileCb8 } from "node:child_process";
+import { promisify as promisify10 } from "node:util";
+var execFile10;
 var init_device_interact = __esm({
   "packages/rn-dev-agent-core/dist/tools/device-interact.js"() {
     "use strict";
@@ -11674,12 +11677,14 @@ var init_device_interact = __esm({
     init_rn_android_runner_client();
     init_keyboard_guard();
     init_project_config();
+    init_maestro_validator();
     init_utils();
     init_utils();
     init_runner_leak_recovery();
     init_device_session();
     init_fast_runner_ref_map();
     init_fill_coordinator();
+    execFile10 = promisify10(execFileCb8);
   }
 });
 
@@ -11712,8 +11717,8 @@ var init_free_port = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/runners/rn-android-runner-client.js
-import { spawn as spawn4, execFile as execFile10 } from "node:child_process";
-import { promisify as promisify10 } from "node:util";
+import { spawn as spawn4, execFile as execFile11 } from "node:child_process";
+import { promisify as promisify11 } from "node:util";
 import { join as join14 } from "node:path";
 var execFileAsync2, RN_ANDROID_RUNNER_DIR, GRADLEW, APK_APP, APK_TEST, ANDROID_REBUILD_ROOT, ANDROID_REBUILD_LOCK_DATABASE, ANDROID_REBUILD_LOCK_STALE_MS, fetchImpl2;
 var init_rn_android_runner_client = __esm({
@@ -11730,7 +11735,7 @@ var init_rn_android_runner_client = __esm({
     init_transport_recovery();
     init_process_birth();
     init_authority_store();
-    execFileAsync2 = promisify10(execFile10);
+    execFileAsync2 = promisify11(execFile11);
     RN_ANDROID_RUNNER_DIR = resolveNativeRunnerDir("rn-android-runner");
     GRADLEW = join14(RN_ANDROID_RUNNER_DIR, "gradlew");
     APK_APP = join14(RN_ANDROID_RUNNER_DIR, "app", "build", "outputs", "apk", "debug", "app-debug.apk");
@@ -11743,17 +11748,17 @@ var init_rn_android_runner_client = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/runners/release-android-slot.js
-import { execFile as execFileCb8 } from "node:child_process";
-import { promisify as promisify11 } from "node:util";
+import { execFile as execFileCb9 } from "node:child_process";
+import { promisify as promisify12 } from "node:util";
 import { homedir as homedir4 } from "node:os";
 import { join as join15 } from "node:path";
-var execFile11, DAEMON_JSON2, DAEMON_LOCK2, OWNED_PACKAGES;
+var execFile12, DAEMON_JSON2, DAEMON_LOCK2, OWNED_PACKAGES;
 var init_release_android_slot = __esm({
   "packages/rn-dev-agent-core/dist/runners/release-android-slot.js"() {
     "use strict";
     init_rn_android_runner_client();
     init_agent_device_wrapper();
-    execFile11 = promisify11(execFileCb8);
+    execFile12 = promisify12(execFileCb9);
     DAEMON_JSON2 = join15(homedir4(), ".agent-device", "daemon.json");
     DAEMON_LOCK2 = join15(homedir4(), ".agent-device", "daemon.lock");
     OWNED_PACKAGES = [
@@ -16947,11 +16952,11 @@ function projectPublicAuthorityStatus(status, options = {}) {
 // packages/rn-dev-agent-core/dist/session/process-cleanup.js
 init_release_android_slot();
 init_cleanup_identity();
-import { execFile as execFileCb9, spawn as spawn5 } from "node:child_process";
-import { promisify as promisify12 } from "node:util";
+import { execFile as execFileCb10, spawn as spawn5 } from "node:child_process";
+import { promisify as promisify13 } from "node:util";
 init_process_birth();
 init_registry();
-var execFile12 = promisify12(execFileCb9);
+var execFile13 = promisify13(execFileCb10);
 var RECORDER_POST_KILL_CONFIRM_MS = 2e3;
 function executeRecorderScript(script, args, options) {
   return new Promise((resolve6, reject) => {
@@ -17163,7 +17168,7 @@ async function stopBoundObserve(binding, listenerProbe = probeManagedMetroListen
     return observed.status === "listening" && observed.pid === pid ? "running" : "stopped";
   }, deadlineMs, "OBSERVE_AUTHORITY_MISMATCH", "Observe listener did not stop before the cleanup deadline");
 }
-async function stopBoundRunner(binding, processProbe = probeProcessBirth, signalProcess = process.kill, timeoutMs = 2e3, runAdb = async (args) => execFile12("adb", args, { timeout: 5e3, encoding: "utf8" }), termGraceMs = 500) {
+async function stopBoundRunner(binding, processProbe = probeProcessBirth, signalProcess = process.kill, timeoutMs = 2e3, runAdb = async (args) => execFile13("adb", args, { timeout: 5e3, encoding: "utf8" }), termGraceMs = 500) {
   const deadlineMs = Date.now() + timeoutMs;
   if (!hasCompleteRunnerCleanupIdentity(binding)) {
     throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "runner cleanup identity is incomplete");

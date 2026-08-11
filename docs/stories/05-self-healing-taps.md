@@ -1,6 +1,6 @@
 # Story 05 — Self-healing taps: inline re-resolution + retry-if-no-change
 
-**Status:** Implemented (2026-07-04, #386)
+**Status:** Implemented (2026-07-04, #386); the retry-if-no-change behaviour below is superseded by #736 — taps are no longer replayed on any platform, and Android reports uncertain effects as a typed failure. See the interaction reliability table in `CLAUDE-MD-TEMPLATE.md`
 **Epic:** [Maestro adoption](README.md)
 **Impact:** Converts most `STALE_REF` refusals (a full agent round-trip: error → re-snapshot → re-find → retry) into a transparent in-tool repair; adds change-detection so a swallowed tap retries itself once
 **Effort:** M

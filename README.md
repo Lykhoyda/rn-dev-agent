@@ -185,7 +185,7 @@ The committed tool surface is asserted in CI against a golden registry (`package
 
 **Reliability features baked into the tool layer:**
 
-- **Self-healing taps** — a stale `@ref` is re-bound by identity (testID/label/role, unique match only), and a tap whose settle hash shows no UI change is re-tapped exactly once. Opt out with `RN_SELF_HEAL=0`.
+- **Self-healing taps** — a stale `@ref` is re-bound by identity (testID/label/role, unique match only). Opt out with `RN_SELF_HEAL=0`. A dispatched tap is never replayed because its effect is uncertain: on iOS an unchanged tap stays a success carrying `meta.noUiChange`, and on Android a tap whose effect cannot be observed fails (`INTERACTION_EFFECT_UNVERIFIED`, `mutation: possible`) rather than reporting success.
 - **Quiescence bypass (iOS)** — XCTest's private idle-wait is disabled by default so apps with Reanimated/looping animations can't hang queries (the same WebDriverAgent-lineage technique Maestro uses). Opt out with `RN_QUIESCENCE_BYPASS=0`.
 - **Engine pinning** — maestro-runner installs a tested pin, checksum-verified fail-closed; replay results and `/doctor` report drift.
 - **Degraded-runtime detection** — when taps succeed but the app doesn't respond, results carry a "simulator likely wedged, reboot it" hint instead of a misleading "element not found."
@@ -282,7 +282,7 @@ Claude Code / Codex
 | Need an intentional coordinate tap | Use `device_press({x, y})` (or a batch press step with `x`/`y`). With a visible iOS keyboard, raw coordinates are geometry-unknown: the keyboard is proven hidden before the one tap. Prefer fresh refs for normal UI controls. |
 | Native logs include another device/app | Reopen the exact device session. `collect_logs` pins Android to that session's adb serial and iOS to that simulator plus the current target-app PID; it fails closed when exact scope cannot be resolved. When the probe runs and proves the app is not running, the stream stays pinned to that simulator and reports `scopes.native_ios.process = app-not-running-device-scoped` so a crash trail is still captured. |
 | Want XCTest's stock idle-waits back | Kill the running runner (`pkill -f RnFastRunnerUITests`), set `RN_QUIESCENCE_BYPASS=0`, reopen the device session, and inspect the next device result's `meta.quiescenceBypass` |
-| Seeing `meta.reResolved` / `meta.tapRetried` | Self-healing taps at work (Story 05, #386). Disable per call with `retryIfNoChange: false` or globally with `RN_SELF_HEAL=0` |
+| Seeing `meta.reResolved` / `meta.noUiChange` | Stale-ref healing at work; `meta.noUiChange` means the iOS tap was dispatched but changed nothing. Disable ref healing with `RN_SELF_HEAL=0` (`retryIfNoChange` is a deprecated no-op — taps are never replayed) |
 
 </details>
 

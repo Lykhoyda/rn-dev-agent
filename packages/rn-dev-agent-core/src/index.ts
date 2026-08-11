@@ -2290,7 +2290,7 @@ trackedTool(
 
 trackedTool(
   'device_find',
-  'Find a UI element by visible text and optionally interact with it. Use action="click" to tap, omit for find-only. Returns element ref for use with device_press/device_fill. Requires an open session. For overlapping labels (e.g. "Property damaged" vs "Property lost"), pass exact=true for strict match or index=N to pick the Nth candidate directly — both short-circuit AMBIGUOUS_MATCH. If AMBIGUOUS_MATCH still occurs, the result includes a candidates[] array with refs you can pass to device_press.',
+  'Find a UI element by visible text and optionally interact with it. Android matching is app-window-only by default; includeSystemUi=true explicitly allows system chrome and may leave the app. Use action="click" to tap, omit for find-only. Returns element ref for use with device_press/device_fill. Requires an open session. For overlapping labels (e.g. "Property damaged" vs "Property lost"), pass exact=true for strict match or index=N to pick the Nth candidate directly — both short-circuit AMBIGUOUS_MATCH. If AMBIGUOUS_MATCH still occurs, the result includes a candidates[] array with refs you can pass to device_press.',
   {
     text: z.string().describe('Visible text, accessibility label, or identifier to find'),
     action: z
@@ -2309,13 +2309,17 @@ trackedTool(
       .describe(
         'Pick the Nth candidate (0-based) when multiple elements match. Short-circuits AMBIGUOUS_MATCH.',
       ),
+    includeSystemUi: z
+      .boolean()
+      .optional()
+      .describe('Include Android system UI in matching (default false; may leave the app).'),
   },
   createDeviceFindHandler(getClient),
 );
 
 trackedTool(
   'device_press',
-  'Tap a UI element by its @ref from device_snapshot, or at explicit raw x/y coordinates. Pass exactly one target form. On iOS, a latest-snapshot Key/Keyboard ref is runner-validated against the current live keyboard and activated exactly once (meta.keyboardGuard="keyboard_target"); stale, forged, missing-keyboard, or raw-coordinate targets never receive that exemption. Ordinary app-content taps dismiss only through a safe native hide/dismiss control or optional JS tier, then refresh and uniquely re-resolve before one tap. Supports double-tap, repeated taps, long hold, and post-tap focus settle. Requires an open session. Stale ordinary app @refs self-heal by identity re-resolution (meta.reResolved); stale iOS Key/Keyboard refs refuse with KEYBOARD_TARGET_STALE and mutation:none. Swallowed ordinary taps auto-retry once, but validated keyboard targets and keyboard/transport recovery never replay.',
+  'Tap a UI element by its @ref from device_snapshot, or at explicit raw x/y coordinates. Pass exactly one target form. On iOS, a latest-snapshot Key/Keyboard ref is runner-validated against the current live keyboard and activated exactly once (meta.keyboardGuard="keyboard_target"); stale, forged, missing-keyboard, or raw-coordinate targets never receive that exemption. Ordinary app-content taps dismiss only through a safe native hide/dismiss control or optional JS tier, then refresh and uniquely re-resolve before one tap. Supports double-tap, repeated taps, long hold, and post-tap focus settle. Requires an open session. Stale ordinary app @refs self-heal by identity re-resolution (meta.reResolved); stale iOS Key/Keyboard refs refuse with KEYBOARD_TARGET_STALE and mutation:none. A command is never replayed after a possible dispatch; uncertain Android effects fail with one-attempt typed uncertainty. On Android the tap is scoped to the owned app window: a @ref belonging to another package (system navigation, IME, dialogs) is refused with OUTSIDE_APP_WINDOW — use device_find with includeSystemUi=true and action="click" for system UI.',
   {
     ref: z
       .string()
@@ -2360,7 +2364,7 @@ trackedTool(
       .boolean()
       .optional()
       .describe(
-        'Story 05: when an ordinary tap produces no UI change, one automatic re-tap fires by default. Validated iOS Key/Keyboard targets and transport/keyboard recovery are never replayed. Set false to disable for other taps (e.g. intentional no-op taps). RN_SELF_HEAL=0 disables globally.',
+        'Deprecated compatibility option. Interactions are never automatically replayed after a possible dispatch; uncertainty is reported from the first attempt.',
       ),
   },
   createDevicePressHandler(getClient),
@@ -2472,7 +2476,7 @@ trackedTool(
       .boolean()
       .optional()
       .describe(
-        'Story 05: when the tap produces no UI change, one automatic re-tap fires by default. Set false to disable (e.g. intentional no-op taps). RN_SELF_HEAL=0 disables globally.',
+        'Deprecated compatibility option. Interactions are never automatically replayed after a possible dispatch; uncertainty is reported from the first attempt.',
       ),
   },
   createDeviceLongPressHandler(getClient),
