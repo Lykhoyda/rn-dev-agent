@@ -327,9 +327,9 @@ maestro-runner --platform android test .maestro/feature.yaml
    is unreliable (UNAVAILABLE: io exception). maestro-runner talks directly
    to UIAutomator2 over HTTP, bypassing the fragile gRPC stack entirely.
 
-2. **Text input**: Use `device_fill` for text input on Android. It resolves one
-   exact owner, performs one accessibility mutation, and requires stable exact
-   read-back. Never use raw `adb shell input text` for complex strings.
+2. **Text input**: Use `device_fill` for text input on Android. It binds one
+   exact input, types through the native runner, and succeeds only after stable
+   exact read-back. Never use raw `adb shell input text`.
 
 3. **Emulator boot timing**: Android emulators report "device" to ADB before
    the system is fully booted. Always verify `sys.boot_completed == 1` before

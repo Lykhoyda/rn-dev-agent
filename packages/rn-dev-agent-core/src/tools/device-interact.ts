@@ -1,5 +1,7 @@
+import { randomUUID } from 'node:crypto';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
+
 import {
   runNative,
   getActiveSession,
@@ -28,18 +30,31 @@ import { isValidBundleId } from '../domain/maestro-validator.js';
 import { withSession } from '../utils.js';
 import type { ToolResult } from '../utils.js';
 import { okResult, failResult, createStepTimer } from '../utils.js';
+import { maestroRefusalResult, runMaestroInline, yamlEscape } from '../maestro-invoke.js';
 import { isAgentDeviceRunnerSentinel, recoverFromRunnerLeak } from './runner-leak-recovery.js';
 import type { RecoveryTier } from './runner-leak-recovery.js';
 import { reopenSessionForRecovery } from './device-session.js';
 import type { FlatNode } from '../fast-runner-ref-map.js';
 import type { CDPClient } from '../cdp-client.js';
-import { getCachedMetadata, isRefMapFresh, lookupRef } from '../fast-runner-ref-map.js';
 import {
-  runFillCoordinator,
-  type FillDescriptor,
-  type FillOwnerResult,
-  type FillRequest,
-} from './fill-coordinator.js';
+  getCachedMetadata,
+  getCachedSignature,
+  isRefMapFresh,
+  lookupRef,
+  refCenter,
+  type RefSignature,
+} from '../fast-runner-ref-map.js';
+import {
+  attemptJsFill,
+  settleRead,
+  probeInputState,
+  finalFiberVerify,
+  combineVerificationOracles,
+  decideNativeRetype,
+  type FiberVerifyOutcome,
+  type NativeVerifyVerdict,
+  type FinalVerification,
+} from './fill-verify.js';
 
 const execFile = promisify(execFileCb);
 const IME_PROBE_TIMEOUT_MS = 5_000;
@@ -52,6 +67,8 @@ export interface SnapshotNode {
   packageName?: string;
   checked?: boolean;
   hittable?: boolean;
+  /** GH #581: Android password fields (iOS secure inputs are typed SecureTextField). */
+  secure?: boolean;
   enabled?: boolean;
   rect?: { x: number; y: number; width: number; height: number };
 }
@@ -510,29 +527,169 @@ export function isDaemonTimeoutError(text: string): boolean {
   );
 }
 
-// Compatibility helper for callers mapping `${name}-pressable` to `${name}`;
-// exact fill proves controlled wrapper ownership through the fiber instead.
-const TEXT_INPUT_TYPES = new Set(['TextField', 'SecureTextField', 'TextView', 'EditText']);
+// GH #581: exact fill-target binding. Bind exactly one current-generation
+// input to the caller's direct ref/testID, or uniquely map a
+// `${base}-pressable` wrapper to exactly one `${base}` recognized input in the
+// same snapshot. Zero/duplicate/conflicting matches reject without mutation.
+const IOS_INPUT_TYPES = new Set(['TextField', 'SecureTextField', 'SearchField', 'TextView']);
+const ANDROID_INPUT_TYPE_RE = /.+\.(\w*EditText|\w*AutoCompleteTextView)$/;
 const PRESSABLE_SUFFIX = '-pressable';
 
-export function isExactTextInputType(type: string): boolean {
-  return TEXT_INPUT_TYPES.has(type) || /(?:EditText|TextField|TextView)$/.test(type);
+export function isRecognizedInputType(type: string | undefined): boolean {
+  if (!type) return false;
+  return IOS_INPUT_TYPES.has(type) || ANDROID_INPUT_TYPE_RE.test(type);
 }
 
-export function findInputForPressable(
-  nodes: SnapshotNode[] | null,
-  pressableRef: string,
-): string | null {
-  if (!nodes) return null;
-  const cleanRef = pressableRef.replace(/^@/, '');
-  const pressableNode = nodes.find((n) => n.ref === cleanRef);
-  if (!pressableNode?.identifier?.endsWith(PRESSABLE_SUFFIX)) return null;
-  const baseId = pressableNode.identifier.slice(0, -PRESSABLE_SUFFIX.length);
-  if (!baseId) return null;
-  const inputNode = nodes.find(
-    (n) => n.identifier === baseId && n.type !== undefined && isExactTextInputType(n.type),
+function isSecureInputNode(node: SnapshotNode): boolean {
+  return node.type === 'SecureTextField' || node.secure === true;
+}
+
+export interface ExactFillBinding {
+  inputRef: string;
+  inputTestId: string | null;
+  inputSignature: RefSignature;
+  focusRef: string;
+  wrapper: boolean;
+  secure: boolean;
+}
+
+export type ExactBindOutcome =
+  | { ok: true; binding: ExactFillBinding }
+  | { ok: false; detail: string };
+
+function cleanNodeRef(node: SnapshotNode): string {
+  return node.ref.startsWith('@') ? node.ref.slice(1) : node.ref;
+}
+
+function inputTestId(identifier: string | undefined): string | null {
+  return identifier && identifier.trim().length > 0 ? identifier : null;
+}
+
+function signatureForNode(nodes: SnapshotNode[], node: SnapshotNode): RefSignature {
+  return {
+    type: node.type ?? '',
+    label: node.label,
+    identifier: node.identifier,
+    rect: node.rect,
+    flatIndex: nodes.indexOf(node),
+    nodeCount: nodes.length,
+  };
+}
+
+function rectsMatch(
+  a: NonNullable<SnapshotNode['rect']>,
+  b: NonNullable<SnapshotNode['rect']>,
+  tolerance = 8,
+): boolean {
+  return (
+    Math.abs(a.x + a.width / 2 - (b.x + b.width / 2)) <= tolerance &&
+    Math.abs(a.y + a.height / 2 - (b.y + b.height / 2)) <= tolerance &&
+    Math.abs(a.width - b.width) <= tolerance &&
+    Math.abs(a.height - b.height) <= tolerance
   );
-  return inputNode ? `@${inputNode.ref}` : null;
+}
+
+// A positional @eN may only bind when its identity still matches the
+// signature captured BEFORE this binding snapshot; a shifted generation
+// rebinds by unique identity or rejects — never by recycled position.
+export function bindExactFillTarget(
+  nodes: SnapshotNode[],
+  rawRef: string,
+  priorSignature?: RefSignature | null,
+): ExactBindOutcome {
+  const clean = rawRef.replace(/^@/, '');
+  const positional = /^e\d+$/.test(clean);
+  let node: SnapshotNode | undefined;
+  if (positional) {
+    const hasRobustIdentity =
+      priorSignature !== null &&
+      priorSignature !== undefined &&
+      ((priorSignature.identifier?.trim().length ?? 0) > 0 ||
+        (priorSignature.label?.trim().length ?? 0) > 0 ||
+        priorSignature.rect !== undefined);
+    if (!hasRobustIdentity) {
+      return {
+        ok: false,
+        detail: `ref @${clean} has no robust pre-refresh identity for unique rebinding`,
+      };
+    }
+    const signature = priorSignature as RefSignature;
+    const signatureIdentifier = inputTestId(signature.identifier);
+    const matches = nodes.filter((n) => {
+      if ((n.type ?? '') !== signature.type) return false;
+      if (signatureIdentifier !== null) return n.identifier === signatureIdentifier;
+      if (signature.rect !== undefined && n.rect !== undefined) {
+        return rectsMatch(n.rect, signature.rect);
+      }
+      return n.label === signature.label && inputTestId(n.identifier) === null;
+    });
+    if (matches.length !== 1) {
+      return {
+        ok: false,
+        detail: `ref @${clean} identity ${matches.length > 1 ? 'matches multiple elements' : 'is absent'} in the current snapshot`,
+      };
+    }
+    node = matches[0];
+  } else {
+    const matches = nodes.filter((n) => n.identifier === clean);
+    if (matches.length === 0) {
+      return { ok: false, detail: `no element with testID "${clean}" in the current snapshot` };
+    }
+    if (matches.length > 1) {
+      return {
+        ok: false,
+        detail: `testID "${clean}" matches ${matches.length} elements — duplicate identifiers cannot bind an exact input`,
+      };
+    }
+    node = matches[0];
+  }
+  if (isRecognizedInputType(node.type)) {
+    return {
+      ok: true,
+      binding: {
+        inputRef: `@${cleanNodeRef(node)}`,
+        inputTestId: inputTestId(node.identifier),
+        inputSignature: signatureForNode(nodes, node),
+        focusRef: `@${cleanNodeRef(node)}`,
+        wrapper: false,
+        secure: isSecureInputNode(node),
+      },
+    };
+  }
+  const id = node.identifier;
+  if (id?.endsWith(PRESSABLE_SUFFIX)) {
+    const base = id.slice(0, -PRESSABLE_SUFFIX.length);
+    if (base) {
+      const inputs = nodes.filter((n) => n.identifier === base && isRecognizedInputType(n.type));
+      if (inputs.length === 1) {
+        return {
+          ok: true,
+          binding: {
+            inputRef: `@${cleanNodeRef(inputs[0])}`,
+            inputTestId: base,
+            inputSignature: signatureForNode(nodes, inputs[0]),
+            focusRef: `@${cleanNodeRef(node)}`,
+            wrapper: true,
+            secure: isSecureInputNode(inputs[0]),
+          },
+        };
+      }
+      if (inputs.length > 1) {
+        return {
+          ok: false,
+          detail: `wrapper "${id}" maps to ${inputs.length} inputs with testID "${base}" — ambiguous`,
+        };
+      }
+      return {
+        ok: false,
+        detail: `wrapper "${id}" has no recognized input with testID "${base}" in the current snapshot`,
+      };
+    }
+  }
+  return {
+    ok: false,
+    detail: `element @${cleanNodeRef(node)} (${node.type ?? 'unknown type'}) is not a recognized text input — pass the inner input's ref or testID`,
+  };
 }
 
 // --- Press (enhanced with doubleTap, count, holdMs, waitForFocusMs) ---
@@ -658,81 +815,42 @@ export function createDeviceLongPressHandler(
   });
 }
 
-// --- Fill (exact owner, one mutation) ---
+// --- Fill (exact target + final verification — GH #581) ---
 
 export interface FillArgs {
   ref: string;
   text: string;
+  /** Bounded in-operation focus wait forwarded to the runner (default 1500ms). */
   waitForKeyboardMs?: number;
+  /** Explicit fiber testID; it must equal the exact bound input's current identifier. */
   testID?: string;
+  /** Story 04 (#385): per-call settle budget override in ms. */
   settleTimeoutMs?: number;
 }
 
-// Retained as public compatibility helpers for callers that build explicit adb
-// commands. device_fill no longer uses adb as a mutation fallback.
-export function splitChunkAroundPercentS(chunk: string): string[] {
-  const parts = chunk.split('%s');
-  if (parts.length === 1) return [chunk];
-  const segments: string[] = [];
-  for (let i = 0; i < parts.length; i++) {
-    if (i > 0) {
-      segments.push('%');
-      const rest = 's' + parts[i];
-      if (rest.length > 0) segments.push(rest);
-    } else if (parts[i].length > 0) {
-      segments.push(parts[i]);
-    }
-  }
-  return segments;
+function isAndroidSession(): boolean {
+  const session = getActiveSession();
+  if (session?.platform === 'android') return true;
+  if (session?.platform) return false;
+  return !!process.env.ANDROID_SERIAL;
 }
 
-export function buildAdbInputTextArgv(chunk: string): string[] {
-  const escaped = chunk.replace(/ /g, '%s').replace(/'/g, "'\\''");
-  return ['shell', 'input', 'text', `'${escaped}'`];
-}
-
-export function isAdbInputTextSafe(text: string): boolean {
-  // eslint-disable-next-line no-control-regex
-  return /^[\x20-\x7E]*$/.test(text);
-}
-
-const FOCUS_DELAY_MS = 150;
-export function focusDelayAfterPreTap(
-  preTapEnvelopeText: string | undefined,
-  waitForKeyboardMs: number | undefined,
-): number {
-  if (waitForKeyboardMs !== undefined) return waitForKeyboardMs;
-  if (preTapEnvelopeText) {
-    try {
-      const envelope = JSON.parse(preTapEnvelopeText) as { meta?: { settle?: unknown } };
-      if (envelope.meta?.settle !== undefined) return 0;
-    } catch {
-      // Legacy compatibility helper only.
-    }
-  }
-  return FOCUS_DELAY_MS;
-}
-
-export type FillPrimaryDescent = 'return-primary' | 'refocus-ladder' | 'reject-ladder';
-export function classifyFillPrimaryError(primary: ToolResult): FillPrimaryDescent {
-  if (!primary.isError) return 'return-primary';
+// Story 10 (#391): the Android runner proved setText AND keyevents don't land —
+// descend to the clear-first Maestro tier instead of re-tapping healthy focus.
+function isSetTextRejectedError(result: ToolResult): boolean {
+  if (!result.isError) return false;
+  const text = result.content?.[0]?.text ?? '';
   try {
-    const envelope = JSON.parse(primary.content[0]?.text ?? '') as {
-      code?: string;
-      error?: string;
-    };
-    if (envelope.code === 'SET_TEXT_REJECTED') return 'reject-ladder';
-    if (
-      /no focused text input|no focused element|element is not focused/i.test(envelope.error ?? '')
-    ) {
-      return 'refocus-ladder';
-    }
+    const envelope = JSON.parse(text) as { code?: string };
+    return envelope.code === 'SET_TEXT_REJECTED';
   } catch {
-    // Preserve the legacy pure helper's fail-closed default.
+    return false;
   }
-  return 'return-primary';
 }
 
+// Story 10 (#391): typing telemetry the iOS runner attaches to its `type`
+// response (two-burst recipe + keyboard-presence wait). Surfaced as
+// meta.typing when device_fill re-wraps the runner envelope.
 export function extractTypingMeta(
   result: ToolResult,
 ): { burst?: boolean; keyboardWaitMs?: number } | null {
@@ -751,85 +869,27 @@ export function extractTypingMeta(
   }
 }
 
-export function resolveCachedIdentifier(ref: string): string | undefined {
-  const bareRef = ref.replace(/^@/, '');
-  if (!isRefMapFresh() || lookupRef(bareRef) === null) return undefined;
-  const identifier = getCachedMetadata(bareRef)?.identifier?.trim();
-  return identifier || undefined;
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
-interface ExactFillBinding {
-  descriptor: FillDescriptor;
-  ref: string;
-}
-
-function bindExactFillTarget(
-  nodes: SnapshotNode[],
-  ref: string,
-  assertedTestID?: string,
-  cachedIdentifier?: string,
-): ExactFillBinding | { code: string; reason: string } {
-  const bareRef = ref.replace(/^@/, '');
-  const literal = !/^e\d+$/.test(bareRef) && !/^\d+$/.test(bareRef) ? bareRef : undefined;
-  const testID = assertedTestID?.trim() || cachedIdentifier?.trim() || literal?.trim();
-  if (!testID) return { code: 'NO_TEXT_INPUT_TARGET', reason: 'missing-identity' };
-
-  const matches = nodes.filter((node) => node.identifier?.trim() === testID);
-  if (matches.length !== 1) {
-    return { code: 'NO_TEXT_INPUT_TARGET', reason: matches.length ? 'ambiguous' : 'target-lost' };
-  }
-  const node = matches[0];
-  if (!node.type) {
-    return { code: 'NO_TEXT_INPUT_TARGET', reason: 'not-text-input' };
-  }
-  if (node.hittable !== true || node.enabled === false) {
-    return { code: 'TEXT_ENTRY_UNVERIFIED', reason: 'occluded' };
-  }
-  return {
-    descriptor: { testID, nativeType: node.type ?? '' },
-    ref: `@${node.ref.replace(/^@/, '')}`,
-  };
-}
-
-function textUnits(text: string): number[] {
-  return Array.from({ length: text.length }, (_, index) => text.charCodeAt(index));
-}
-
-const HELPER_MISSING_VERDICT: FillOwnerResult = {
-  kind: 'failure',
-  code: 'TEXT_ENTRY_UNVERIFIED',
-  mutation: 'none',
-  reason: 'fiber-unavailable',
-};
-
-function parseControlledOwnerResult(value: unknown): FillOwnerResult {
-  let parsed = value;
-  if (typeof parsed === 'string') parsed = JSON.parse(parsed);
-  if (!parsed || typeof parsed !== 'object') throw new Error('controlled fill returned no verdict');
-  const candidate = parsed as Partial<FillOwnerResult> & Record<string, unknown>;
-  if (candidate.kind === 'native-eligible') return { kind: 'native-eligible' };
-  if (candidate.kind === 'success' && typeof candidate.focusedBefore === 'boolean') {
-    return { kind: 'success', focusedBefore: candidate.focusedBefore };
-  }
-  if (
-    candidate.kind === 'failure' &&
-    typeof candidate.code === 'string' &&
-    (candidate.mutation === 'none' ||
-      candidate.mutation === 'observed' ||
-      candidate.mutation === 'possible') &&
-    typeof candidate.reason === 'string'
-  ) {
-    return {
-      kind: 'failure',
-      code: candidate.code,
-      mutation: candidate.mutation,
-      reason: candidate.reason,
+function extractSettleMeta(result: ToolResult): { settle?: unknown; settleMs?: number } {
+  try {
+    const envelope = JSON.parse(result.content[0].text) as {
+      meta?: { settle?: unknown; timings_ms?: { settle?: number } };
     };
+    const out: { settle?: unknown; settleMs?: number } = {};
+    if (envelope.meta?.settle !== undefined) out.settle = envelope.meta.settle;
+    if (typeof envelope.meta?.timings_ms?.settle === 'number') {
+      out.settleMs = envelope.meta.timings_ms.settle;
+    }
+    return out;
+  } catch {
+    return {};
   }
-  throw new Error('controlled fill returned an invalid verdict');
 }
 
-function cdpClientOrNull(getClient: () => CDPClient): CDPClient | null {
+export function cdpClientOrNull(getClient: () => CDPClient): CDPClient | null {
   try {
     const client = getClient();
     return client?.isConnected ? client : null;
@@ -838,171 +898,612 @@ function cdpClientOrNull(getClient: () => CDPClient): CDPClient | null {
   }
 }
 
-function fillErrorCode(
-  code: string,
-):
-  | 'TEXT_ENTRY_UNVERIFIED'
-  | 'NO_TEXT_INPUT_TARGET'
-  | 'TEXT_TARGET_LOST'
-  | 'TEXT_TARGET_FOCUS_FAILED' {
-  if (
-    code === 'NO_TEXT_INPUT_TARGET' ||
-    code === 'TEXT_TARGET_LOST' ||
-    code === 'TEXT_TARGET_FOCUS_FAILED'
-  )
-    return code;
-  return 'TEXT_ENTRY_UNVERIFIED';
+// Multi-review "H3" guard: a cached identifier may only seed the JS-first
+// testID resolution when the ref is BOTH map-fresh AND present in the
+// CURRENT snapshot generation. Pre-#386 signature retention, getCachedMetadata
+// returned null for any ref not in the latest snapshot, so `isRefMapFresh()`
+// alone was sufficient. Since 4ff56662, metadataMap retains signatures for ref
+// ids absent from the newest snapshot (to heal stale taps by identity), so
+// getCachedMetadata can return an OLD-generation identifier even when the map
+// is otherwise fresh. lookupRef reads refMap, which IS still cleared every
+// generation, so `lookupRef(ref) !== null` proves the ref exists in the
+// CURRENT generation.
+export function resolveCachedIdentifier(ref: string): string | undefined {
+  const bareRef = ref.replace(/^@/, '');
+  if (!isRefMapFresh() || lookupRef(bareRef) === null) return undefined;
+  const identifier = getCachedMetadata(bareRef)?.identifier?.trim();
+  return identifier || undefined;
 }
 
-function parseToolEnvelope(result: ToolResult): Record<string, unknown> | null {
+export type FillMutationDisposition = 'none' | 'observed' | 'possible';
+
+// Conservative default: an unlabeled failure after dispatch may have mutated.
+export function extractMutationDisposition(result: ToolResult): FillMutationDisposition {
   try {
-    return JSON.parse(result.content[0]?.text ?? '') as Record<string, unknown>;
+    const envelope = JSON.parse(result.content[0]?.text ?? '{}') as {
+      meta?: { mutation?: unknown };
+    };
+    const m = envelope.meta?.mutation;
+    if (m === 'none' || m === 'observed' || m === 'possible') return m;
   } catch {
-    return null;
+    /* fall through */
+  }
+  return 'possible';
+}
+
+function extractErrorText(result: ToolResult): string {
+  try {
+    const envelope = JSON.parse(result.content[0]?.text ?? '{}') as { error?: string };
+    return typeof envelope.error === 'string' ? envelope.error : 'unknown runner error';
+  } catch {
+    return 'unknown runner error';
   }
 }
 
-async function runNativeFillOwner(
-  request: FillRequest,
-): Promise<Exclude<FillOwnerResult, { kind: 'native-eligible' }>> {
-  const encoded = Buffer.from(request.text, 'utf8').toString('base64');
-  const result = await runNative(
-    [
-      'fill',
-      '@exact-fill',
-      '--text-base64',
-      encoded,
-      '--exact-id',
-      request.descriptor.testID,
-      '--exact-type',
-      request.descriptor.nativeType,
-    ],
-    { settle: { enabled: false } },
-  );
-  const envelope = parseToolEnvelope(result);
-  if (result.isError) {
-    const meta = envelope?.meta as Record<string, unknown> | undefined;
-    const mutation =
-      meta?.mutation === 'none' || meta?.mutation === 'observed' || meta?.mutation === 'possible'
-        ? meta.mutation
-        : meta?.dispatched === false
-          ? 'none'
-          : 'possible';
-    return {
-      kind: 'failure',
-      code: typeof envelope?.code === 'string' ? envelope.code : 'TEXT_ENTRY_UNVERIFIED',
-      mutation,
-      reason: typeof meta?.reason === 'string' ? meta.reason : 'dispatch-uncertain',
+function extractErrorCode(result: ToolResult): string | undefined {
+  try {
+    const envelope = JSON.parse(result.content[0]?.text ?? '{}') as { code?: unknown };
+    return typeof envelope.code === 'string' ? envelope.code : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const NATIVE_VERIFY_VERDICTS = new Set([
+  'exact',
+  'mismatch',
+  'unreadable',
+  'secure-masked',
+  'target-lost',
+  'ambiguous',
+]);
+
+async function runNativeVerifyInput(
+  binding: ExactFillBinding,
+  text: string,
+  operationToken?: string,
+): Promise<{ verdict: NativeVerifyVerdict; stable: boolean }> {
+  const result = await runNative(['verify-input', binding.inputRef, text], {
+    settle: { enabled: false },
+    exactTarget: {
+      inputRef: binding.inputRef,
+      secure: binding.secure,
+      ...(operationToken ? { operationToken } : {}),
+    },
+  });
+  if (result.isError) return { verdict: 'unavailable', stable: false };
+  try {
+    const envelope = JSON.parse(result.content[0].text) as {
+      data?: { verifyVerdict?: string; verifyStable?: boolean };
     };
+    const v = envelope.data?.verifyVerdict;
+    if (typeof v === 'string' && NATIVE_VERIFY_VERDICTS.has(v)) {
+      return { verdict: v as NativeVerifyVerdict, stable: envelope.data?.verifyStable === true };
+    }
+  } catch {
+    /* fall through */
   }
-  const data = envelope?.data as Record<string, unknown> | undefined;
-  if (data?.filled === true && data.verify === 'exact' && typeof data.focusedBefore === 'boolean') {
-    return { kind: 'success', focusedBefore: data.focusedBefore };
+  return { verdict: 'unavailable', stable: false };
+}
+
+async function rebindExactFillTarget(binding: ExactFillBinding): Promise<ExactFillBinding | null> {
+  const snap = await fetchSnapshotNodes();
+  if (!snap.ok) return null;
+  const rebound = bindExactFillTarget(
+    snap.nodes,
+    binding.inputTestId ?? binding.inputRef,
+    binding.inputSignature,
+  );
+  return rebound.ok ? rebound.binding : null;
+}
+
+// The single fill arbiter's evidence gatherer: fiber oracle (controlled
+// inputs) + native verifyInput (uncontrolled inputs), combined per the GH #581
+// contract — disagreement is inconclusive, inconclusive is failure.
+async function finalVerification(
+  client: CDPClient | null,
+  binding: ExactFillBinding,
+  jsTestId: string | null,
+  text: string,
+  operationToken?: string,
+): Promise<FinalVerification> {
+  const fiberId = binding.inputTestId ?? jsTestId;
+  let fiber: FiberVerifyOutcome | 'unavailable' = 'unavailable';
+  if (client && fiberId) {
+    fiber = await finalFiberVerify({ evaluate: (e) => client.evaluate(e) }, fiberId, text);
   }
-  return {
-    kind: 'failure',
-    code: 'TEXT_ENTRY_UNVERIFIED',
-    mutation: 'possible',
-    reason: 'unreadable',
+  const nativeBinding = operationToken ? binding : await rebindExactFillTarget(binding);
+  if (!nativeBinding) return combineVerificationOracles(fiber, 'target-lost', false);
+  const native = await runNativeVerifyInput(nativeBinding, text, operationToken);
+  return combineVerificationOracles(fiber, native.verdict, native.stable);
+}
+
+type FillMethod = 'js-onChangeText' | 'native' | 'maestro';
+
+// The ONLY producer of public fill success (single-success-rule invariant).
+function verifiedFillResult(
+  method: FillMethod,
+  textLength: number,
+  meta: Record<string, unknown>,
+): ToolResult {
+  return okResult(
+    { filled: true, method, length: textLength },
+    { meta: { ...meta, verify: 'exact' } },
+  );
+}
+
+interface FillFailureOpts {
+  mutation: FillMutationDisposition;
+  pathsTried: string[];
+  verification?: FinalVerification;
+  hint?: string;
+}
+
+function fillFailure(
+  code: 'NO_TEXT_INPUT_TARGET' | 'FOCUS_TARGET_OCCLUDED' | 'TEXT_ENTRY_UNVERIFIED',
+  message: string,
+  opts: FillFailureOpts,
+): ToolResult {
+  return failResult(message, code, {
+    mutation: opts.mutation,
+    pathsTried: opts.pathsTried,
+    ...(opts.verification
+      ? {
+          verification: {
+            fiber: opts.verification.fiber,
+            native: opts.verification.native,
+            nativeStable: opts.verification.nativeStable,
+          },
+        }
+      : {}),
+    hint:
+      opts.hint ??
+      (opts.mutation === 'none'
+        ? 'No text was entered. Refresh the snapshot (device_snapshot action=snapshot) and rebind the input before retrying.'
+        : 'The field may have been mutated. Read the field state (device_snapshot or the fiber) before any manual retry — do not blindly re-run device_fill.'),
+  });
+}
+
+function attachFillFailureDisposition(
+  result: ToolResult,
+  mutation: FillMutationDisposition,
+  pathsTried: string[],
+): ToolResult {
+  try {
+    const envelope = JSON.parse(result.content[0]?.text ?? '{}') as {
+      error?: unknown;
+      code?: unknown;
+      meta?: Record<string, unknown>;
+    };
+    const error = typeof envelope.error === 'string' ? envelope.error : 'Text entry was refused.';
+    const meta = {
+      ...envelope.meta,
+      mutation,
+      pathsTried,
+      hint:
+        mutation === 'none'
+          ? 'No text was entered. Refresh the snapshot (device_snapshot action=snapshot) and rebind the input before retrying.'
+          : 'The field may have been mutated. Read the field state (device_snapshot or the fiber) before any manual retry — do not blindly re-run device_fill.',
+    };
+    return typeof envelope.code === 'string'
+      ? failResult(error, envelope.code as never, meta)
+      : failResult(error, meta);
+  } catch {
+    return fillFailure('TEXT_ENTRY_UNVERIFIED', 'Text entry was refused.', {
+      mutation,
+      pathsTried,
+    });
+  }
+}
+
+async function clearControlledValue(client: CDPClient, testID: string): Promise<boolean> {
+  try {
+    await client.evaluate(
+      '__RN_AGENT.interact(' + JSON.stringify({ action: 'typeText', testID, text: '' }) + ')',
+    );
+  } catch {
+    return false;
+  }
+  const settled = await settleRead({ evaluate: (e) => client.evaluate(e) }, testID, '', null);
+  return settled.value === '';
+}
+
+function exactTypeReadback(
+  client: CDPClient | null,
+  testID: string | null,
+): ((expected: string) => Promise<{ matches: boolean; actual?: string | null }>) | undefined {
+  if (!client || !testID) return undefined;
+  return async (expected) => {
+    const result = await client.evaluate(`__RN_AGENT.readInputValue(${JSON.stringify(testID)})`);
+    if (typeof result.value !== 'string') return { matches: false };
+    try {
+      const parsed = JSON.parse(result.value) as { value?: unknown };
+      const actual = typeof parsed.value === 'string' ? parsed.value : null;
+      return { matches: actual === expected, actual };
+    } catch {
+      return { matches: false };
+    }
   };
 }
 
+// Post-mutation corrective tier: always clear-first (eraseText) so a
+// corrective attempt never appends; Maestro exit status is attempt evidence
+// only and never public success. Failure output is not echoed (it can embed
+// the flow's inputText).
+async function maestroFillAttempt(
+  targetId: string,
+  text: string,
+  platform: 'ios' | 'android',
+  authorityArgs?: object,
+): Promise<{ attempted: boolean; refusal?: ToolResult }> {
+  const escapedRef = yamlEscape(targetId.replace(/^@/, ''));
+  const escapedText = yamlEscape(text);
+  const yaml = `- tapOn:\n    id: "${escapedRef}"\n- eraseText\n- inputText: "${escapedText}"`;
+  const result = await runMaestroInline(yaml, {
+    platform,
+    slug: 'fill-fallback',
+    timeoutMs: 120_000,
+    authorityArgs,
+  });
+  if (result.passed) return { attempted: true };
+  const refusal = maestroRefusalResult(result, 'Maestro fill fallback was refused.', {
+    tried: ['js', 'native', 'maestro'],
+  });
+  if (refusal) return { attempted: false, refusal };
+  return { attempted: false };
+}
+
+const MAX_NATIVE_RETYPE = 2;
+
+export interface ExactFillTiers {
+  js: boolean;
+  maestro: boolean;
+  abortSignal?: AbortSignal;
+}
+
+interface ExactFillDeps {
+  maestroFillAttempt?: typeof maestroFillAttempt;
+}
+
+// GH #581 exact fill orchestrator (device_fill and device_batch's fill step):
+// bind exactly one input, mutate through the runner's single exact operation,
+// and emit success only from the final verification arbiter.
 export async function performExactFill(
   args: FillArgs,
-  getClient: () => CDPClient,
+  client: CDPClient | null,
+  tiers: ExactFillTiers,
+  deps: ExactFillDeps = {},
 ): Promise<ToolResult> {
-  const ref = args.ref.startsWith('@') ? args.ref : `@${args.ref}`;
-  const cachedIdentifier = resolveCachedIdentifier(ref);
-  const snapshot = await fetchSnapshotNodes();
-  if (!snapshot.ok) {
-    return failResult(
-      'device_fill could not capture a trustworthy target snapshot; no text was entered.',
-      fillErrorCode('NO_TEXT_INPUT_TARGET'),
-      {
-        mutation: 'none',
-        reason: snapshot.reason,
-        pathsTried: [],
-      },
+  const platform: 'ios' | 'android' = isAndroidSession() ? 'android' : 'ios';
+  const pathsTried: string[] = [];
+  let mutationSeen: FillMutationDisposition = 'none';
+
+  // Capture the positional ref's identity BEFORE the binding snapshot so a
+  // refreshed generation can only rebind by identity, never by recycled id.
+  const cleanRefForSignature = args.ref.replace(/^@/, '');
+  const cachedSignature = /^e\d+$/.test(cleanRefForSignature)
+    ? getCachedSignature(cleanRefForSignature)
+    : null;
+  const cachedRect = cachedSignature ? lookupRef(cleanRefForSignature) : null;
+  const priorSignature =
+    cachedSignature && cachedRect ? { ...cachedSignature, rect: cachedRect } : cachedSignature;
+
+  const snap = await fetchSnapshotNodes(true);
+  if (!snap.ok) {
+    if (snap.reason === 'runner-leak-unrecovered') {
+      return attachFillFailureDisposition(
+        runnerLeakFailResult(args.ref, snap.recoveryReason),
+        'none',
+        pathsTried,
+      );
+    }
+    return fillFailure(
+      'NO_TEXT_INPUT_TARGET',
+      `device_fill could not snapshot the screen to bind "${args.ref}" (${snap.reason}); no text was entered.`,
+      { mutation: 'none', pathsTried },
     );
   }
-  const binding = bindExactFillTarget(snapshot.nodes, ref, args.testID, cachedIdentifier);
-  if ('code' in binding) {
-    return failResult(
-      'device_fill could not bind one exact editable target; no text was entered.',
-      fillErrorCode(binding.code),
-      {
-        mutation: 'none',
-        reason: binding.reason,
-        pathsTried: [],
-      },
+  const bind = bindExactFillTarget(snap.nodes, args.ref, priorSignature);
+  if (!bind.ok) {
+    return fillFailure(
+      'NO_TEXT_INPUT_TARGET',
+      `device_fill could not bind an exact input: ${bind.detail}. No text was entered.`,
+      { mutation: 'none', pathsTried },
     );
   }
+  const binding = bind.binding;
 
-  const client = cdpClientOrNull(getClient);
-  if (!client || !client.helpersInjected) {
-    return failResult(
-      'device_fill cannot prove React ownership while the helper is unavailable; no text was entered.',
-      'TEXT_ENTRY_UNVERIFIED',
-      {
-        mutation: 'none',
-        reason: 'fiber-unavailable',
-        pathsTried: [],
-      },
+  if (args.testID && args.testID !== binding.inputTestId) {
+    return fillFailure(
+      'NO_TEXT_INPUT_TARGET',
+      `device_fill could not prove that testID "${args.testID}" identifies the bound input. No text was entered.`,
+      { mutation: 'none', pathsTried },
     );
   }
+  const fiberId = binding.inputTestId;
+  const evalSeam = client ? { evaluate: (e: string) => client.evaluate(e) } : null;
 
-  const request: FillRequest = { descriptor: binding.descriptor, text: args.text };
-  const started = Date.now();
-  const outcome = await runFillCoordinator(request, {
-    controlledFill: async () => {
-      const call = `__RN_AGENT.fillControlledInput(${JSON.stringify(binding.descriptor.testID)},${JSON.stringify(textUnits(args.text))})`;
-      const expression = `(typeof __RN_AGENT !== 'undefined' && typeof __RN_AGENT.fillControlledInput === 'function' ? ${call} : ${JSON.stringify(HELPER_MISSING_VERDICT)})`;
-      const evaluated = await client.evaluate(expression, true);
-      if (evaluated.error) throw new Error(String(evaluated.error));
-      return parseControlledOwnerResult(evaluated.value);
-    },
-    nativeFill: runNativeFillOwner,
-  });
+  // Controlled inputs go through the fiber; the probe never fires handlers, so
+  // uncontrolled inputs skip straight to native (no double-mutation window).
+  if (tiers.js && client && evalSeam && fiberId) {
+    const probe = await probeInputState(evalSeam, fiberId);
+    if (probe.readable && probe.controlled) {
+      pathsTried.push('js');
+      const tJs = Date.now();
+      const js = await attemptJsFill(evalSeam, fiberId, args.text);
+      if (!js.handled && js.dispatchUncertain) {
+        return fillFailure(
+          'TEXT_ENTRY_UNVERIFIED',
+          'The JS fill dispatch failed after it may have reached the app; not typing again.',
+          { mutation: 'possible', pathsTried },
+        );
+      }
+      if (js.handled) {
+        mutationSeen = 'observed';
+        if (js.outcome === 'exact') {
+          const verification = await finalVerification(client, binding, fiberId, args.text);
+          if (verification.verified) {
+            return verifiedFillResult('js-onChangeText', args.text.length, {
+              textEntryPath: 'js',
+              verifiedOracle: verification.oracle,
+              handler: js.handler,
+              timings_ms: { jsType: Date.now() - tJs },
+            });
+          }
+          if (!verification.observedMismatch) {
+            return fillFailure(
+              'TEXT_ENTRY_UNVERIFIED',
+              'The controlled fill could not be verified against the bound native input; not retrying.',
+              { mutation: 'possible', pathsTried, verification },
+            );
+          }
+        }
+        if (js.outcome === 'unreadable') {
+          return fillFailure(
+            'TEXT_ENTRY_UNVERIFIED',
+            'The onChangeText handler fired but the resulting value is unreadable — app state may have changed; not retrying.',
+            { mutation: 'possible', pathsTried },
+          );
+        }
+        // Readable but not (stably) exact: correct clear-first via the same
+        // handler, prove the clear, then descend to the native tier.
+        const cleared = await clearControlledValue(client, fiberId);
+        if (!cleared) {
+          return fillFailure(
+            'TEXT_ENTRY_UNVERIFIED',
+            'device_fill could not verify the JS fill and could not prove a clean clear; not retrying.',
+            { mutation: 'possible', pathsTried },
+          );
+        }
+      }
+    }
+  }
 
-  if (outcome.kind === 'success') {
-    return okResult(
+  pathsTried.push('native');
+  if (tiers.abortSignal?.aborted) {
+    return fillFailure('TEXT_ENTRY_UNVERIFIED', 'device_fill was cancelled before native typing.', {
+      mutation: mutationSeen === 'none' ? 'none' : 'possible',
+      pathsTried,
+    });
+  }
+  const focusCenter = isRefMapFresh() ? refCenter(binding.focusRef) : null;
+  const exactTarget = {
+    inputRef: binding.inputRef,
+    ...(focusCenter ? { focusX: focusCenter.x, focusY: focusCenter.y } : {}),
+    ...(args.waitForKeyboardMs !== undefined ? { focusWaitMs: args.waitForKeyboardMs } : {}),
+  };
+  const tNative = Date.now();
+  let lastVerification: FinalVerification | null = null;
+  for (let attempt = 0; attempt <= MAX_NATIVE_RETYPE; attempt++) {
+    const operationToken = randomUUID();
+    const clearFirst = attempt > 0 || args.text.length === 0;
+    const primary = await runNative(
+      ['fill', binding.inputRef, args.text, ...(clearFirst ? ['--clear-first'] : [])],
       {
-        filled: true,
-        method: outcome.owner === 'fiber' ? 'js-onChangeText' : 'native',
-        length: args.text.length,
+        ...(attempt === 0 ? settleOpts(args) : { settle: { enabled: false } }),
+        exactTarget: { ...exactTarget, operationToken },
+        verifyTypeReadback: exactTypeReadback(client, fiberId),
       },
-      {
-        meta: {
-          verify: 'exact',
-          verifiedOracle: outcome.owner,
-          textEntryPath: outcome.owner,
-          focusedBefore: outcome.focusedBefore,
-          timings_ms: { fill: Date.now() - started },
+    );
+    if (primary.isError) {
+      const mutation = extractMutationDisposition(primary);
+      if (isSetTextRejectedError(primary)) {
+        if (mutation === 'possible') {
+          return fillFailure(
+            'TEXT_ENTRY_UNVERIFIED',
+            `device_fill's native attempt may have mutated the field before rejecting text entry: ${extractErrorText(primary)}`,
+            { mutation: 'possible', pathsTried },
+          );
+        }
+        if (mutation === 'observed') {
+          mutationSeen = 'observed';
+          const verification = await finalVerification(
+            client,
+            binding,
+            fiberId,
+            args.text,
+            operationToken,
+          );
+          lastVerification = verification;
+          if (verification.verified) {
+            return verifiedFillResult('native', args.text.length, {
+              textEntryPath: attempt === 0 ? 'native' : 'native-retype',
+              verifiedOracle: verification.oracle,
+              recovered: 'post-error-exact-readback',
+              retypes: attempt,
+              timings_ms: { nativeType: Date.now() - tNative },
+            });
+          }
+          if (!verification.observedMismatch) {
+            return fillFailure(
+              'TEXT_ENTRY_UNVERIFIED',
+              'device_fill observed a rejected native mutation but could not prove a stable mismatch; not retrying.',
+              { mutation: 'possible', pathsTried, verification },
+            );
+          }
+        }
+        break;
+      }
+      if (mutation === 'none') {
+        if (mutationSeen !== 'none') {
+          return fillFailure(
+            'TEXT_ENTRY_UNVERIFIED',
+            `device_fill's corrective native attempt was refused after an earlier mutation: ${extractErrorText(primary)}`,
+            { mutation: 'possible', pathsTried },
+          );
+        }
+        const code = extractErrorCode(primary);
+        return fillFailure(
+          code === 'FOCUS_TARGET_OCCLUDED' ? 'FOCUS_TARGET_OCCLUDED' : 'NO_TEXT_INPUT_TARGET',
+          `device_fill's native attempt was refused before mutation: ${extractErrorText(primary)}`,
+          { mutation: 'none', pathsTried },
+        );
+      }
+      // Runner-timeout discipline: never resend; only an exact independent
+      // read-back may promote a possibly-mutating failure to success.
+      const verification = await finalVerification(
+        client,
+        binding,
+        fiberId,
+        args.text,
+        operationToken,
+      );
+      if (verification.verified) {
+        return verifiedFillResult('native', args.text.length, {
+          textEntryPath: attempt === 0 ? 'native' : 'native-retype',
+          verifiedOracle: verification.oracle,
+          recovered: 'post-error-exact-readback',
+          retypes: attempt,
+          timings_ms: { nativeType: Date.now() - tNative },
+        });
+      }
+      return fillFailure(
+        'TEXT_ENTRY_UNVERIFIED',
+        `device_fill's native attempt failed and the field could not be verified: ${extractErrorText(primary)}`,
+        {
+          mutation: mutationSeen === 'none' ? mutation : 'possible',
+          pathsTried,
+          verification,
         },
+      );
+    }
+    mutationSeen = 'observed';
+    const primarySettle = extractSettleMeta(primary);
+    const primaryTyping = extractTypingMeta(primary);
+    const verification = await finalVerification(
+      client,
+      binding,
+      fiberId,
+      args.text,
+      operationToken,
+    );
+    lastVerification = verification;
+    if (verification.verified) {
+      return verifiedFillResult('native', args.text.length, {
+        textEntryPath: attempt === 0 ? 'native' : 'native-retype',
+        verifiedOracle: verification.oracle,
+        retypes: attempt,
+        ...(primaryTyping ? { typing: primaryTyping } : {}),
+        ...(primarySettle.settle !== undefined ? { settle: primarySettle.settle } : {}),
+        timings_ms: {
+          nativeType: Date.now() - tNative,
+          ...(primarySettle.settleMs !== undefined ? { settle: primarySettle.settleMs } : {}),
+        },
+      });
+    }
+    const decision = decideNativeRetype(verification, attempt, MAX_NATIVE_RETYPE);
+    if (decision.action === 'escalate') {
+      if (!verification.observedMismatch) {
+        return fillFailure(
+          'TEXT_ENTRY_UNVERIFIED',
+          'device_fill typed but the final read-back is inconclusive; not retrying.',
+          { mutation: 'possible', pathsTried, verification },
+        );
+      }
+      break;
+    }
+    if (tiers.abortSignal?.aborted) {
+      return fillFailure(
+        'TEXT_ENTRY_UNVERIFIED',
+        'device_fill was cancelled after a native attempt; no corrective retype was dispatched.',
+        { mutation: 'possible', pathsTried, verification },
+      );
+    }
+    await sleep(decision.delayMs);
+    if (tiers.abortSignal?.aborted) {
+      return fillFailure(
+        'TEXT_ENTRY_UNVERIFIED',
+        'device_fill was cancelled before a corrective retype was dispatched.',
+        { mutation: 'possible', pathsTried, verification },
+      );
+    }
+  }
+
+  // Corrective Maestro tier: reachable only after an observed stable mismatch
+  // or a runner-proven SET_TEXT_REJECTED — both safe for clear-first entry.
+  if (!tiers.maestro) {
+    return fillFailure(
+      'TEXT_ENTRY_UNVERIFIED',
+      'device_fill could not verify the fill and this caller does not use the Maestro tier.',
+      {
+        mutation: mutationSeen,
+        pathsTried,
+        verification: lastVerification ?? undefined,
       },
     );
   }
-
-  return failResult(
-    'device_fill did not obtain stable exact read-back; no automatic retry was attempted.',
-    fillErrorCode(outcome.code),
-    {
-      mutation: outcome.mutation,
-      reason: outcome.reason,
-      owner: outcome.owner,
-      pathsTried: [outcome.owner],
-      hint:
-        outcome.mutation === 'none'
-          ? 'Refresh the snapshot and resolve one exact input before retrying.'
-          : 'The field may have changed. Inspect current state before deciding whether to issue a new fill.',
-    },
+  pathsTried.push('maestro');
+  if (tiers.abortSignal?.aborted) {
+    return fillFailure(
+      'TEXT_ENTRY_UNVERIFIED',
+      'device_fill was cancelled before the Maestro correction was dispatched.',
+      { mutation: 'possible', pathsTried, verification: lastVerification ?? undefined },
+    );
+  }
+  const maestroId = binding.inputTestId;
+  if (!maestroId) {
+    return fillFailure(
+      'TEXT_ENTRY_UNVERIFIED',
+      'device_fill could not verify the fill and the input has no testID for the Maestro tier.',
+      { mutation: mutationSeen, pathsTried, verification: lastVerification ?? undefined },
+    );
+  }
+  const maestro = await (deps.maestroFillAttempt ?? maestroFillAttempt)(
+    maestroId,
+    args.text,
+    platform,
+    args,
+  );
+  if (!maestro.attempted) {
+    if (maestro.refusal)
+      return attachFillFailureDisposition(maestro.refusal, 'possible', pathsTried);
+    return fillFailure(
+      'TEXT_ENTRY_UNVERIFIED',
+      'device_fill fell through all tiers; the Maestro attempt did not run cleanly.',
+      { mutation: 'possible', pathsTried, verification: lastVerification ?? undefined },
+    );
+  }
+  const maestroVerification = await finalVerification(client, binding, fiberId, args.text);
+  if (maestroVerification.verified) {
+    return verifiedFillResult('maestro', args.text.length, {
+      textEntryPath: 'maestro',
+      verifiedOracle: maestroVerification.oracle,
+      timings_ms: { nativeType: Date.now() - tNative },
+    });
+  }
+  return fillFailure(
+    'TEXT_ENTRY_UNVERIFIED',
+    'Text entry could not be verified after native and Maestro attempts.',
+    { mutation: 'possible', pathsTried, verification: maestroVerification },
   );
 }
 
 export function createDeviceFillHandler(
   getClient: () => CDPClient,
 ): (args: FillArgs) => Promise<ToolResult> {
-  return withSession((args) => performExactFill(args, getClient));
+  return withSession(async (args) =>
+    performExactFill(args, cdpClientOrNull(getClient), { js: true, maestro: true }),
+  );
 }
 
 // --- Swipe (coordinate-based with direction shortcut) ---

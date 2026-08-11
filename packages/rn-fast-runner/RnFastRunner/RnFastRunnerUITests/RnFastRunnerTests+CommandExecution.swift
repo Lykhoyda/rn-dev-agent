@@ -185,6 +185,17 @@ extension RnFastRunnerTests {
       }
     }
 
+    // GH #581: the recorded type target is only valid while nothing else can
+    // change the screen — any verb outside the type/verify pair drops it, and
+    // every new type attempt starts with a clean record so a failed attempt
+    // can never leave an earlier field's record for verifyInput to prefer.
+    switch command.command {
+    case .verifyInput, .snapshot, .status, .uptime, .isScreenStatic, .screenshot:
+      break
+    default:
+      lastExactTypeTarget = nil
+    }
+
     switch command.command {
     case .shutdown:
       return Response(ok: true, data: DataPayload(message: "shutdown"))
@@ -565,65 +576,74 @@ extension RnFastRunnerTests {
       guard let text = command.text else {
         return Response(ok: false, error: ErrorPayload(message: "type requires text"))
       }
-      if let exactIdentifier = command.exactIdentifier,
-         let exactType = command.exactType,
-         !exactIdentifier.isEmpty,
-         !exactType.isEmpty
-      {
-        var exactResponse: Response?
-        withTemporaryScrollIdleTimeoutIfSupported(activeApp) {
-          exactResponse = executeExactTextMutation(
-            app: activeApp,
-            identifier: exactIdentifier,
-            typeName: exactType,
-            text: text
-          )
-        }
-        return exactResponse ?? Response(
-          ok: false,
-          error: ErrorPayload(
-            code: "TEXT_ENTRY_UNVERIFIED",
-            message: "Exact text mutation returned no verdict.",
-            mutation: "possible",
-            reason: "dispatch-uncertain"
-          )
-        )
-      }
       let delaySeconds = Double(max(command.delayMs ?? 0, 0)) / 1000.0
-      // GH #105 iOS-MVP follow-up: every step that touches XCTest's element
-      // resolver (textInputAt / focusedTextInput walk `descendants(...).allElementsBoundByIndex`)
-      // OR triggers `typeText()` must run under withTemporaryScrollIdleTimeoutIfSupported.
-      // Without it, RN's never-quiescing main thread (Reanimated keeps the
-      // loop active) causes XCTest's default waitForIdle to throw "main thread
-      // execution timed out" — even though the underlying typing succeeded.
-      var target: XCUIElement?
+      // GH #581: one exact operation — bind the declared input (never an
+      // ambient-focused substitute), skip the focus tap only when THAT input
+      // is proven focused, otherwise tap the declared focus target and prove
+      // the same input gained focus before any keystroke.
+      var resolved: TypeTargetOutcome = .failure(
+        Response(ok: false, error: ErrorPayload(code: "NO_TEXT_INPUT_TARGET", message: "NO_TEXT_INPUT_TARGET: target resolution did not run", mutation: "none"))
+      )
       withTemporaryScrollIdleTimeoutIfSupported(activeApp) {
-        if let x = command.x, let y = command.y {
-          target = textInputAt(app: activeApp, x: x, y: y) ?? focusedTextInput(app: activeApp)
-        } else {
-          target = focusedTextInput(app: activeApp)
+        resolved = resolveTypeCommandTarget(app: activeApp, command: command)
+      }
+      let target: XCUIElement
+      let inputResolution: String
+      switch resolved {
+      case .failure(let response):
+        return response
+      case .bound(let element, _, let resolution):
+        target = element
+        inputResolution = resolution
+      }
+      var focusTap = "skipped-exact-focused"
+      var alreadyFocused = false
+      withTemporaryScrollIdleTimeoutIfSupported(activeApp) {
+        alreadyFocused = isExactInputFocused(app: activeApp, element: target)
+      }
+      if !alreadyFocused {
+        var focusPoint = CGPoint(x: command.focusX ?? 0, y: command.focusY ?? 0)
+        if command.focusX == nil || command.focusY == nil {
+          let frame = target.frame
+          focusPoint = CGPoint(x: frame.midX, y: frame.midY)
         }
-      }
-      guard let resolvedTarget = target else {
-        return Response(
-          ok: false,
-          error: ErrorPayload(
-            code: "NO_TEXT_INPUT_TARGET",
-            message: "No exact text input resolved; app-wide focused typing is disabled.",
-            mutation: "none",
-            reason: "target-lost"
+        if let keyboardFrame = keyboardFrameIfVisible(app: activeApp),
+           keyboardFrame.contains(focusPoint) {
+          return Response(
+            ok: false,
+            error: ErrorPayload(
+              code: "FOCUS_TARGET_OCCLUDED",
+              message: "FOCUS_TARGET_OCCLUDED: the focus tap point sits inside the visible keyboard; no tap or typing was performed. Dismiss the keyboard or scroll the input into view, then retry.",
+              mutation: "none"
+            )
           )
-        )
-      }
-      func typeIntoTarget(_ value: String) {
-        resolvedTarget.typeText(value)
+        }
+        withTemporaryScrollIdleTimeoutIfSupported(activeApp) {
+          _ = tapAt(app: activeApp, x: focusPoint.x, y: focusPoint.y)
+        }
+        var focusProven = false
+        withTemporaryScrollIdleTimeoutIfSupported(activeApp) {
+          focusProven = waitForExactInputFocus(
+            app: activeApp,
+            element: target,
+            timeoutMs: command.focusWaitMs ?? 1500
+          )
+        }
+        guard focusProven else {
+          return Response(
+            ok: false,
+            error: ErrorPayload(
+              code: "TEXT_TARGET_FOCUS_FAILED",
+              message: "TEXT_TARGET_FOCUS_FAILED: the bound input did not gain keyboard focus after tapping the declared focus target; no typing was performed. Increase waitForKeyboardMs or refresh the snapshot and retry.",
+              mutation: "none"
+            )
+          )
+        }
+        focusTap = "performed"
       }
       // Story 10 (#391): never type into a keyboard that isn't up — iOS drops
-      // keystrokes sent during keyboard appearance. Best-effort: a simulator
-      // with a hardware keyboard attached may never present the software
-      // keyboard, so a timeout proceeds instead of failing. The keyboard-guard
-      // (#370) dismisses keyboards that occlude taps; this wait REQUIRES one —
-      // the two intents stay separate.
+      // keystrokes sent during keyboard appearance; best-effort because a
+      // hardware-keyboard simulator may never present the software keyboard.
       var keyboardWait: (appeared: Bool, waitedMs: Int) = (false, 0)
       withTemporaryScrollIdleTimeoutIfSupported(activeApp) {
         keyboardWait = TypingRecipe.waitForKeyboard(
@@ -632,19 +652,39 @@ extension RnFastRunnerTests {
           keyboardVisible: { activeApp.keyboards.count > 0 }
         )
       }
-      if command.clearFirst == true {
+      // Re-prove focus operation-fresh after the keyboard wait — focus may
+      // have moved during it, and typing must never proceed on a stale proof.
+      var focusStillProven = false
+      withTemporaryScrollIdleTimeoutIfSupported(activeApp) {
+        focusStillProven = isExactInputFocused(app: activeApp, element: target)
+      }
+      guard focusStillProven else {
+        return Response(
+          ok: false,
+          error: ErrorPayload(
+            code: "TEXT_TARGET_FOCUS_FAILED",
+            message: "TEXT_TARGET_FOCUS_FAILED: keyboard focus left the bound input before typing began; no typing was performed. Refresh the snapshot and retry.",
+            mutation: "none"
+          )
+        )
+      }
+      // Empty text is an unconditional exact-target clear (GH #581); clearFirst
+      // additionally clears before a non-empty retype.
+      if command.clearFirst == true || text.isEmpty {
         withTemporaryScrollIdleTimeoutIfSupported(activeApp) {
-          clearTextInput(resolvedTarget)
+          clearTextInput(target)
         }
       }
       var usedBurst = false
       withTemporaryScrollIdleTimeoutIfSupported(activeApp) {
-        if delaySeconds > 0 && text.count > 1 {
+        if text.isEmpty {
+          // Cleared above; nothing to type.
+        } else if delaySeconds > 0 && text.count > 1 {
           // Explicit per-char pacing (--delay-ms, the corrective-retype
           // contract) wins over the two-burst recipe.
           let chunks = Array(text)
           for (index, character) in chunks.enumerated() {
-            typeIntoTarget(String(character))
+            target.typeText(String(character))
             if index + 1 < chunks.count {
               Thread.sleep(forTimeInterval: delaySeconds)
             }
@@ -652,21 +692,123 @@ extension RnFastRunnerTests {
         } else if let bursts = TypingRecipe.bursts(for: text) {
           // Story 10 (#391): two-burst send — first character alone, sit out
           // the post-appearance drop window, then stream the remainder.
-          typeIntoTarget(bursts.first)
+          target.typeText(bursts.first)
           Thread.sleep(forTimeInterval: TypingRecipe.interBurstDelay)
-          typeIntoTarget(bursts.remainder)
+          target.typeText(bursts.remainder)
           usedBurst = true
         } else {
-          typeIntoTarget(text)
+          target.typeText(text)
         }
+      }
+      withTemporaryScrollIdleTimeoutIfSupported(activeApp) {
+        lastExactTypeTarget = RecordedExactTypeTarget(
+          operationToken: command.operationToken,
+          element: target,
+          generation: currentSnapshotGeneration,
+          nodeIndex: command.snapshotNodeIndex,
+          attributes: liveAttributes(of: target)
+        )
       }
       return Response(
         ok: true,
         data: DataPayload(
           message: "typed",
           typingBurst: usedBurst,
-          keyboardWaitMs: keyboardWait.waitedMs
+          keyboardWaitMs: keyboardWait.waitedMs,
+          inputResolution: inputResolution,
+          focusTap: focusTap
         )
+      )
+    case .verifyInput:
+      guard let expected = command.text else {
+        return Response(ok: false, error: ErrorPayload(code: "INVALID_ARGUMENT", message: "verifyInput requires text"))
+      }
+      var verifyTarget: XCUIElement?
+      var lostVerdict = TextInputTarget.VerifyVerdict.targetLost
+      withTemporaryScrollIdleTimeoutIfSupported(activeApp) {
+        if let operationToken = command.operationToken {
+          if let recorded = lastExactTypeTarget,
+             recorded.operationToken == operationToken {
+            verifyTarget = recorded.element
+          }
+        } else {
+          let verifyDescriptor = exactInputDescriptor(from: command)
+          var recordAgreesWithRequest = false
+          if let recorded = lastExactTypeTarget,
+             let attributes = recorded.attributes,
+             let descriptor = verifyDescriptor {
+            recordAgreesWithRequest = TextInputTarget.recordedRequestAgrees(
+              recorded: attributes,
+              recordedGeneration: recorded.generation,
+              recordedNodeIndex: recorded.nodeIndex,
+              descriptorType: descriptor.type,
+              descriptorIdentifier: descriptor.identifier,
+              descriptorGeneration: descriptor.generation,
+              requestedNodeIndex: command.snapshotNodeIndex
+            )
+          }
+          if let recorded = lastExactTypeTarget,
+             let attributes = recorded.attributes,
+             recorded.generation == currentSnapshotGeneration,
+             recordAgreesWithRequest {
+            switch resolveRecordedTextInput(app: activeApp, recorded: attributes) {
+            case .bound(let element):
+              verifyTarget = element
+            case .ambiguous:
+              lostVerdict = .ambiguous
+            case .absent:
+              break
+            }
+          }
+          if verifyTarget == nil, lostVerdict == .targetLost, let descriptor = verifyDescriptor {
+            let sameGeneration = descriptor.generation == currentSnapshotGeneration
+            switch resolveExactTextInput(
+              app: activeApp,
+              descriptor: descriptor,
+              sameGeneration: sameGeneration,
+              requireFrameMatch: true
+            ) {
+            case .bound(let element):
+              verifyTarget = element
+            case .ambiguous:
+              lostVerdict = .ambiguous
+            case .absent:
+              lostVerdict = .targetLost
+            }
+          }
+        }
+      }
+      guard let verifyElement = verifyTarget else {
+        return Response(
+          ok: true,
+          data: DataPayload(verifyVerdict: lostVerdict.rawValue, verifyStable: false)
+        )
+      }
+      let isSecure = verifyElement.elementType == .secureTextField
+      var verdict = TextInputTarget.VerifyVerdict.unreadable
+      var stable = false
+      withTemporaryScrollIdleTimeoutIfSupported(activeApp) {
+        var previous: TextInputTarget.VerifyObservation?
+        for attempt in 0..<3 {
+          let read = readExactInputValue(verifyElement)
+          let observation = TextInputTarget.verifyObservation(
+            expected: expected,
+            rawValue: read.raw,
+            placeholder: read.placeholder,
+            isSecure: isSecure
+          )
+          verdict = observation.verdict
+          if previous == observation {
+            stable = true
+            break
+          }
+          previous = observation
+          if attempt < 2 { Thread.sleep(forTimeInterval: 0.15) }
+        }
+      }
+      return Response(
+        ok: true,
+        data: DataPayload(verifyVerdict: verdict.rawValue, verifyStable: stable)
       )
     case .interactionFrame:
       let frame = resolvedTouchReferenceFrame(app: activeApp, appFrame: activeApp.frame)

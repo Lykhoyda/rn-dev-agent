@@ -39,9 +39,7 @@ test('Android runner fill keeps its privacy canary out of diagnostics and public
         }),
       );
     }
-    return new Response(
-      JSON.stringify({ ok: true, data: { filled: true, verify: 'exact', focusedBefore: false } }),
-    );
+    return new Response(JSON.stringify({ ok: true, data: { typed: true } }));
   });
 
   try {
@@ -49,8 +47,8 @@ test('Android runner fill keeps its privacy canary out of diagnostics and public
       command: 'fill',
       bundleId: 'dev.test',
       text: canary,
-      exactIdentifier: 'field',
-      exactType: 'android.widget.EditText',
+      snapshotIdentifier: 'field',
+      snapshotElementType: 'android.widget.EditText',
     });
     assert.equal(result.isError, undefined);
     assert.doesNotMatch(result.content[0]!.text, new RegExp(canary));
@@ -116,8 +114,8 @@ test('Android exact fill timeout is not replayed and runner health remains probe
         deviceId: 'emulator-581',
         bundleId: 'dev.test',
         text: 'timeout-canary',
-        exactIdentifier: 'field',
-        exactType: 'android.widget.EditText',
+        snapshotIdentifier: 'field',
+        snapshotElementType: 'android.widget.EditText',
       }),
       /RUNNER_TIMEOUT/,
     );

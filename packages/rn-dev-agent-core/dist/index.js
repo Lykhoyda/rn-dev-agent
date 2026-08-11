@@ -1762,16 +1762,16 @@ trackedTool('device_press', 'Tap a UI element by its @ref from device_snapshot, 
         .optional()
         .describe('Deprecated compatibility option. Interactions are never automatically replayed after a possible dispatch; uncertainty is reported from the first attempt.'),
 }, createDevicePressHandler(getClient));
-trackedTool('device_fill', 'Fill one exact TextInput and report success only after stable exact read-back by the mutation owner. A unique controlled React TextInput uses one onChangeText dispatch and fiber read-back; an uncontrolled input uses one native runner transaction. Focus is skipped only when that exact owner is positively focused. Ambiguity, transformation, unreadability, staleness, target loss, secure or occluded targets, and timeout uncertainty hard-fail without automatic retyping, adb input, or Maestro fallback. Public results and diagnostics expose status and length metadata, never the requested or observed text. Requires an open session and connected helpers.', {
-    ref: z.string().describe('Input field ref from device_snapshot (e.g. "e5" or "@e5")'),
-    text: z.string().describe('Text to type into the field'),
+trackedTool('device_fill', 'Type text into an input field by its @ref or testID from device_snapshot, binding exactly one direct TextInput or one `${name}-pressable` wrapper uniquely mapped to its inner `${name}` input before mutation. The tool skips the focus tap only when that exact input is already focused and returns filled:true ONLY after a stable exact post-settle read-back (fiber value for controlled inputs, native read for uncontrolled; meta.verify is always "exact" on success). Tiers: controlled inputs fill via onChangeText, others via the native runner, with a clear-first retype and a clear-first Maestro attempt for observed wrong values. Unverifiable outcomes hard-fail: NO_TEXT_INPUT_TARGET means nothing was typed (rebind after a fresh snapshot); TEXT_ENTRY_UNVERIFIED means an attempt ran but the exact value could not be proven — check meta.mutation: "none" = safe to retry after a fresh snapshot; "observed" = the field holds a wrong value, take a fresh snapshot and re-read before a corrective fill; "possible" = do NOT retry the same ref — take a fresh device_snapshot, rebind the input by identity, and read its state first (a blind retry can double-type). Secure fields verify only when controlled (masked native values are never proof); empty text is a verified clear. Requires an open session.', {
+    ref: z.string().describe('Input ref from device_snapshot (for example "@e5"), or a testID'),
+    text: z.string().describe('Text to type into the field (empty string = verified clear)'),
     waitForKeyboardMs: z
         .number()
         .int()
         .min(0)
         .max(5000)
         .optional()
-        .describe('Deprecated compatibility option. Exact fill now owns and proves focus inside its selected mutation path.'),
+        .describe('Bounded wait for the exact input to gain focus after the in-operation focus tap (default 1500). Bump to 3000-5000ms for slow keyboard animations on Pressable-wrapped TextInputs.'),
     testID: z
         .string()
         .optional()

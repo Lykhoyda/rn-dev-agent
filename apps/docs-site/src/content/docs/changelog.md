@@ -5,6 +5,41 @@ description: "Release history for rn-dev-agent"
 
 ## Claude plugin
 
+### 0.76.1
+
+#### Patch Changes
+
+- f538146: Fold the initial stale-device transfer into `bind_device` with `confirmed: true`: a proven-dead device owner is released inline through the same journaled cleanup engine with death re-proven from durable state and no capability token minted, an interrupted journal resumes token-lessly via a bare `bind_device` of the same target, and `release_stale_device` stays as a token-less compatibility alias that accepts `confirmed: true` (or a previously minted legacy handle) while live, unproven, split, foreign-worker, and mismatched-journal cases keep refusing without mutation.
+- 95efdf1: Launch iOS Expo dev clients through the session's authority-bound Metro when no explicit dev-client deep link was bound.
+- Updated dependencies [f538146]
+- Updated dependencies [95efdf1]
+  - rn-dev-agent-core@0.71.1
+
+### 0.76.0
+
+#### Minor Changes
+
+- 7419435: Replace the text-entry fallback ladder with exact fiber/native owners that mutate once and require stable exact read-back.
+
+#### Patch Changes
+
+- e4465e5: Enforce Android exact-target readiness as one absolute 120-second wall-clock deadline, staging the exact client off-global until live proof and an atomic authority commit succeed while preserving ambient state on failure and iOS behavior.
+- 26d41da: Capture sanitized local failure and recovery patterns through the existing tool observer, deduplicate and bound the evidence store, and add a read-only trend report command.
+- 6c1533f: Report an installed-but-crashing fb-idb client as an interpreter incompatibility instead of looping on an "install idb" hint that reinstalls the same broken combination (#578).
+- 2d4b44f: Let a Maestro flow containing a mid-flow `launchApp` relaunch run to completion by re-proving the managed native origin once at flow end — reconnect-only, with no second cold start — instead of aborting between stages when the relaunched dev-client has not re-registered yet, so the flow's own post-launch steps can drive it back to the managed origin while a genuine authority mismatch still fails the run.
+- b2c8cc8: Redact `device_fill` text from stored Observe timeline events while retaining the target, text length, status, and other diagnostic metadata.
+- 722349e: Let `cdp_restart hardReset=true` complete the cold start it promises from a runner-bound session by classifying a terminated-but-unreaped process as absent rather than as an unreadable identity, and by escalating the bound runner's stop to SIGKILL after its SIGTERM grace once the pid is re-proven to carry that binding's exact birth token.
+- 8a7510b: Recover the session after a plugin-initiated byte-identical reinstall (for example a runner-respawn recovery) by retrying a refused install-identity preflight once behind the existing artifact-digest proof, except while a strict proof run is bound where the reinstall stays a hard stop and status projects the new install_identity_reissue_blocked state naming proof_capture discard as the way out, so rn_session status and cdp_status always report a truthful installIdentity verdict instead of claiming ready while gated tools refuse.
+- Updated dependencies [e4465e5]
+- Updated dependencies [26d41da]
+- Updated dependencies [6c1533f]
+- Updated dependencies [2d4b44f]
+- Updated dependencies [b2c8cc8]
+- Updated dependencies [722349e]
+- Updated dependencies [8a7510b]
+- Updated dependencies [7419435]
+  - rn-dev-agent-core@0.71.0
+
 ### 0.75.3
 
 #### Patch Changes
@@ -1412,6 +1447,29 @@ identifier, hittable? }`, with a `fullNodeCount`. Far fewer tokens; `@ref`s for
   #188 shipped these to `main` with no version bump, leaving them undeliverable to marketplace installs; this patch publishes them.
 
 ## Core MCP server
+
+### 0.71.1
+
+#### Patch Changes
+
+- f538146: Fold the initial stale-device transfer into `bind_device` with `confirmed: true`: a proven-dead device owner is released inline through the same journaled cleanup engine with death re-proven from durable state and no capability token minted, an interrupted journal resumes token-lessly via a bare `bind_device` of the same target, and `release_stale_device` stays as a token-less compatibility alias that accepts `confirmed: true` (or a previously minted legacy handle) while live, unproven, split, foreign-worker, and mismatched-journal cases keep refusing without mutation.
+- 95efdf1: Launch iOS Expo dev clients through the session's authority-bound Metro when no explicit dev-client deep link was bound.
+
+### 0.71.0
+
+#### Minor Changes
+
+- 7419435: Replace the text-entry fallback ladder with exact fiber/native owners that mutate once and require stable exact read-back.
+
+#### Patch Changes
+
+- e4465e5: Enforce Android exact-target readiness as one absolute 120-second wall-clock deadline, staging the exact client off-global until live proof and an atomic authority commit succeed while preserving ambient state on failure and iOS behavior.
+- 26d41da: Capture sanitized local failure and recovery patterns through the existing tool observer, deduplicate and bound the evidence store, and add a read-only trend report command.
+- 6c1533f: Report an installed-but-crashing fb-idb client as an interpreter incompatibility instead of looping on an "install idb" hint that reinstalls the same broken combination (#578).
+- 2d4b44f: Let a Maestro flow containing a mid-flow `launchApp` relaunch run to completion by re-proving the managed native origin once at flow end — reconnect-only, with no second cold start — instead of aborting between stages when the relaunched dev-client has not re-registered yet, so the flow's own post-launch steps can drive it back to the managed origin while a genuine authority mismatch still fails the run.
+- b2c8cc8: Redact `device_fill` text from stored Observe timeline events while retaining the target, text length, status, and other diagnostic metadata.
+- 722349e: Let `cdp_restart hardReset=true` complete the cold start it promises from a runner-bound session by classifying a terminated-but-unreaped process as absent rather than as an unreadable identity, and by escalating the bound runner's stop to SIGKILL after its SIGTERM grace once the pid is re-proven to carry that binding's exact birth token.
+- 8a7510b: Recover the session after a plugin-initiated byte-identical reinstall (for example a runner-respawn recovery) by retrying a refused install-identity preflight once behind the existing artifact-digest proof, except while a strict proof run is bound where the reinstall stays a hard stop and status projects the new install_identity_reissue_blocked state naming proof_capture discard as the way out, so rn_session status and cdp_status always report a truthful installIdentity verdict instead of claiming ready while gated tools refuse.
 
 ### 0.70.3
 

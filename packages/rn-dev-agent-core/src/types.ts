@@ -312,6 +312,15 @@ export type ToolErrorCode =
   | 'INVALID_APPID' // device_permission
   // The exact Android owner rejected its single accessibility mutation.
   | 'SET_TEXT_REJECTED'
+  // GH #581: exact fill truth — no unique bound input (nothing was typed)…
+  | 'NO_TEXT_INPUT_TARGET'
+  // …or the bound input did not gain/keep focus, or the focus point sits
+  // inside the visible keyboard (typed by the runner; mutation:'none').
+  | 'TEXT_TARGET_FOCUS_FAILED'
+  | 'FOCUS_TARGET_OCCLUDED'
+  | 'TYPE_OPERATION_FAILED' // runner type raised; field value unknown (mutation:'possible')
+  | 'VERIFY_OPERATION_FAILED' // runner verifyInput failed to execute
+  | 'TYPE_IDLE_TIMEOUT' // Android idle-detect fired post-dispatch; unverified (mutation:'possible')
   // GH #418: command-surface gate.
   | 'UNSUPPORTED_COMMAND' // runner rejected a verb its artifact predates (typed by the runner)
   | 'RUNNER_COMMANDS_STALE' // liveness gate: artifact lacks required commands; re-open to rebuild

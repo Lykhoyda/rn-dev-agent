@@ -254,23 +254,254 @@ extension RnFastRunnerTests {
     element.typeText(deletes)
   }
 
-  func textInputAt(app: XCUIApplication, x: Double, y: Double) -> XCUIElement? {
-    let point = CGPoint(x: x, y: y)
-    var matched: XCUIElement?
+  // MARK: - Exact text-input targeting (GH #581)
+
+  struct ExactInputDescriptor {
+    let generation: Int?
+    let type: String
+    let identifier: String?
+    let label: String?
+    let rect: CGRect
+  }
+
+  enum ExactInputResolution {
+    case bound(XCUIElement)
+    case ambiguous
+    case absent
+  }
+
+  static let exactInputElementTypes: [XCUIElement.ElementType] = [
+    .textField, .secureTextField, .searchField, .textView,
+  ]
+
+  private func liveInputCandidates(app: XCUIApplication) -> [XCUIElement] {
+    var candidates: [XCUIElement] = []
     let exceptionMessage = RunnerObjCExceptionCatcher.catchException({
-      // Prefer the smallest matching field so nested editable controls win over large containers.
-      // Restrict the query to text-input types so XCTest materializes only those
-      // elements instead of the entire accessibility tree. The post-filter already
-      // kept exactly these four types, so semantics are unchanged — this just
-      // avoids resolving every live element on the hot `.type` path.
-      let inputTypeRawValues = [
-        XCUIElement.ElementType.textField,
-        .secureTextField,
-        .searchField,
-        .textView,
-      ].map { $0.rawValue }
-      let inputPredicate = NSPredicate(format: "elementType IN %@", inputTypeRawValues)
-      let candidates = app.descendants(matching: .any).matching(inputPredicate).allElementsBoundByIndex
+      let rawValues = Self.exactInputElementTypes.map { $0.rawValue }
+      let predicate = NSPredicate(format: "elementType IN %@", rawValues)
+      candidates = app.descendants(matching: .any).matching(predicate).allElementsBoundByIndex
+        .filter { $0.exists && !$0.frame.isEmpty }
+    })
+    if exceptionMessage != nil { return [] }
+    return candidates
+  }
+
+  func resolveExactTextInput(
+    app: XCUIApplication,
+    descriptor: ExactInputDescriptor,
+    sameGeneration: Bool,
+    requireFrameMatch: Bool = false
+  ) -> ExactInputResolution {
+    let live = liveInputCandidates(app: app)
+    // Fail closed if any candidate's attributes cannot be read exception-safely.
+    let attributes = live.compactMap { liveAttributes(of: $0) }
+    guard attributes.count == live.count else { return .absent }
+    switch TextInputTarget.resolve(
+      candidates: attributes,
+      descriptorType: descriptor.type,
+      descriptorIdentifier: descriptor.identifier,
+      descriptorLabel: descriptor.label,
+      descriptorRect: descriptor.rect,
+      sameGeneration: sameGeneration,
+      requireFrameMatch: requireFrameMatch
+    ) {
+    case .unique(let index):
+      return .bound(live[index])
+    case .ambiguous:
+      return .ambiguous
+    case .absent:
+      return .absent
+    }
+  }
+
+  func liveAttributes(of element: XCUIElement) -> TextInputTarget.CandidateAttributes? {
+    var attributes: TextInputTarget.CandidateAttributes?
+    let exceptionMessage = RunnerObjCExceptionCatcher.catchException({
+      let identifier = element.identifier.trimmingCharacters(in: .whitespacesAndNewlines)
+      let label = element.label.trimmingCharacters(in: .whitespacesAndNewlines)
+      attributes = TextInputTarget.CandidateAttributes(
+        type: elementTypeName(element.elementType),
+        identifier: identifier.isEmpty ? nil : identifier,
+        label: label.isEmpty ? nil : label,
+        frame: element.frame
+      )
+    })
+    if exceptionMessage != nil { return nil }
+    return attributes
+  }
+
+  func resolveRecordedTextInput(
+    app: XCUIApplication,
+    recorded: TextInputTarget.CandidateAttributes
+  ) -> ExactInputResolution {
+    let live = liveInputCandidates(app: app)
+    let attributes = live.compactMap { liveAttributes(of: $0) }
+    guard attributes.count == live.count else { return .absent }
+    switch TextInputTarget.resolveByRecordedAttributes(candidates: attributes, recorded: recorded) {
+    case .unique(let index):
+      return .bound(live[index])
+    case .ambiguous:
+      return .ambiguous
+    case .absent:
+      return .absent
+    }
+  }
+
+  // Operation-fresh proof that the keyboard-focused input IS the bound
+  // element: type, identifier, label, and live frame midpoint must all agree.
+  func isExactInputFocused(app: XCUIApplication, element: XCUIElement) -> Bool {
+    guard let focused = focusedTextInput(app: app) else { return false }
+    var same = false
+    let exceptionMessage = RunnerObjCExceptionCatcher.catchException({
+      guard focused.elementType == element.elementType else { return }
+      guard focused.identifier == element.identifier else { return }
+      guard focused.label == element.label else { return }
+      same = TextInputTarget.framesMatch(focused.frame, element.frame)
+    })
+    if exceptionMessage != nil { return false }
+    return same
+  }
+
+  // Polls the ALREADY-BOUND element handle — never rebinds to a replacement
+  // that happens to match the descriptor after the tap.
+  func waitForExactInputFocus(
+    app: XCUIApplication,
+    element: XCUIElement,
+    timeoutMs: Int
+  ) -> Bool {
+    let deadline = ProcessInfo.processInfo.systemUptime + Double(max(timeoutMs, 0)) / 1000.0
+    while true {
+      if isExactInputFocused(app: app, element: element) { return true }
+      if ProcessInfo.processInfo.systemUptime >= deadline { return false }
+      Thread.sleep(forTimeInterval: 0.1)
+    }
+  }
+
+  // Secret-free read: raw value + placeholder travel only into the in-process
+  // classifier, never onto the wire.
+  func readExactInputValue(_ element: XCUIElement) -> (raw: String?, placeholder: String?) {
+    var raw: String?
+    var placeholder: String?
+    let exceptionMessage = RunnerObjCExceptionCatcher.catchException({
+      raw = element.value as? String
+      placeholder = element.placeholderValue
+    })
+    if exceptionMessage != nil { return (nil, nil) }
+    return (raw, placeholder)
+  }
+
+  func exactInputDescriptor(from command: Command) -> ExactInputDescriptor? {
+    guard let type = command.snapshotElementType,
+          TextInputTarget.isInputTypeName(type),
+          let bounds = command.targetBounds
+    else { return nil }
+    return ExactInputDescriptor(
+      generation: command.snapshotGeneration,
+      type: type,
+      identifier: command.snapshotIdentifier,
+      label: command.snapshotLabel,
+      rect: CGRect(x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height)
+    )
+  }
+
+  enum TypeTargetOutcome {
+    case bound(XCUIElement, descriptor: ExactInputDescriptor?, resolution: String)
+    case failure(Response)
+  }
+
+  private func noTextInputTargetResponse(_ message: String) -> Response {
+    Response(
+      ok: false,
+      error: ErrorPayload(
+        code: "NO_TEXT_INPUT_TARGET",
+        message: "NO_TEXT_INPUT_TARGET: \(message)",
+        mutation: "none"
+      )
+    )
+  }
+
+  // GH #581: the type target is exact or nothing — supplied target metadata
+  // fails closed, and the pre-#581 "fall back to whatever input already had
+  // focus" substitution is gone. A no-metadata, no-coordinate call may still
+  // use a positively focused input (internal callers), never the whole app.
+  func resolveTypeCommandTarget(app: XCUIApplication, command: Command) -> TypeTargetOutcome {
+    let hasTargetMetadata =
+      command.snapshotElementType != nil
+      || command.targetBounds != nil
+      || command.snapshotNodeIndex != nil
+      || command.snapshotIdentifier != nil
+      || command.snapshotLabel != nil
+      || command.snapshotGeneration != nil
+    if hasTargetMetadata {
+      guard let descriptor = exactInputDescriptor(from: command) else {
+        return .failure(noTextInputTargetResponse(
+          "the supplied target metadata does not describe a recognized text input; no typing was performed"
+        ))
+      }
+      guard let generation = descriptor.generation, generation == currentSnapshotGeneration else {
+        return .failure(noTextInputTargetResponse(
+          "the target descriptor is not from the runner's current snapshot generation; refresh the snapshot and rebind the input before typing"
+        ))
+      }
+      switch resolveExactTextInput(
+        app: app,
+        descriptor: descriptor,
+        sameGeneration: true,
+        requireFrameMatch: true
+      ) {
+      case .bound(let element):
+        return .bound(element, descriptor: descriptor, resolution: "descriptor")
+      case .ambiguous:
+        return .failure(noTextInputTargetResponse(
+          "the target descriptor matches more than one live text input; no typing was performed"
+        ))
+      case .absent:
+        return .failure(noTextInputTargetResponse(
+          "the described text input is no longer present on screen; no typing was performed"
+        ))
+      }
+    }
+    if let x = command.x, let y = command.y {
+      let outcome = strictTextInputAt(app: app, x: x, y: y)
+      if let target = outcome.element {
+        return .bound(target, descriptor: nil, resolution: "point")
+      }
+      if outcome.ambiguous {
+        return .failure(noTextInputTargetResponse(
+          "multiple non-nested text inputs overlap (\(Int(x)), \(Int(y))); bind the input's ref/testID and retry"
+        ))
+      }
+      return .failure(noTextInputTargetResponse(
+        "no text input exists at (\(Int(x)), \(Int(y))); typing into a previously focused field was removed — bind the input's ref/testID and retry"
+      ))
+    }
+    var focusedTarget: XCUIElement?
+    withTemporaryScrollIdleTimeoutIfSupported(app) {
+      focusedTarget = focusedTextInput(app: app)
+    }
+    if let target = focusedTarget {
+      return .bound(target, descriptor: nil, resolution: "focused")
+    }
+    return .failure(noTextInputTargetResponse(
+      "no text input is focused and no target was provided; app-wide blind typing was removed"
+    ))
+  }
+
+  // Coordinate targeting accepts only an unambiguous hit: exactly one input
+  // containing the point, or a strict containment chain (compound controls
+  // like SearchField wrapping its TextField) where the innermost wins.
+  func strictTextInputAt(
+    app: XCUIApplication,
+    x: Double,
+    y: Double
+  ) -> (element: XCUIElement?, ambiguous: Bool) {
+    let point = CGPoint(x: x, y: y)
+    var containing: [XCUIElement] = []
+    var frames: [CGRect] = []
+    let exceptionMessage = RunnerObjCExceptionCatcher.catchException({
+      let rawValues = Self.exactInputElementTypes.map { $0.rawValue }
+      let predicate = NSPredicate(format: "elementType IN %@", rawValues)
+      let hits = app.descendants(matching: .any).matching(predicate).allElementsBoundByIndex
         .filter { element in
           guard element.exists else { return false }
           let frame = element.frame
@@ -279,192 +510,28 @@ extension RnFastRunnerTests {
         .sorted { left, right in
           let leftArea = max(1, left.frame.width * left.frame.height)
           let rightArea = max(1, right.frame.width * right.frame.height)
-          if leftArea != rightArea {
-            return leftArea < rightArea
-          }
-          if left.frame.minY != right.frame.minY {
-            return left.frame.minY < right.frame.minY
-          }
-          if left.frame.minX != right.frame.minX {
-            return left.frame.minX < right.frame.minX
-          }
-          return left.elementType.rawValue < right.elementType.rawValue
+          return leftArea < rightArea
         }
-      matched = candidates.first
+      containing = hits
+      frames = hits.map { $0.frame }
     })
-    if let exceptionMessage {
-      NSLog(
-        "RN_FAST_RUNNER_TEXT_INPUT_AT_POINT_IGNORED_EXCEPTION=%@",
-        exceptionMessage
-      )
-      return nil
+    if exceptionMessage != nil { return (nil, false) }
+    if containing.isEmpty { return (nil, false) }
+    if containing.count == 1 { return (containing[0], false) }
+    // Only a STRICT containment chain (compound control) may disambiguate:
+    // each outer frame must contain AND be meaningfully larger than the inner —
+    // equal/near-equal stacked inputs are ambiguous, never a pick.
+    for index in 0..<(frames.count - 1) {
+      let inner = frames[index]
+      let outer = frames[index + 1]
+      if TextInputTarget.framesMatch(inner, outer) { return (nil, true) }
+      if !outer.insetBy(dx: -1, dy: -1).contains(inner) { return (nil, true) }
     }
-    return matched
+    return (containing[0], false)
   }
 
-  func exactTextInput(
-    app: XCUIApplication,
-    identifier: String,
-    typeName: String
-  ) -> (element: XCUIElement?, ambiguous: Bool) {
-    let inputTypes: [XCUIElement.ElementType] = [.textField, .secureTextField, .searchField, .textView]
-    let predicate = NSPredicate(
-      format: "identifier == %@ AND elementType IN %@",
-      identifier,
-      inputTypes.map { $0.rawValue }
-    )
-    let candidates = app.descendants(matching: .any).matching(predicate).allElementsBoundByIndex
-      .filter { $0.exists && elementTypeName($0.elementType) == typeName }
-    if candidates.count != 1 {
-      return (nil, candidates.count > 1)
-    }
-    return (candidates[0], false)
-  }
 
-  func exactTextInputIsFocused(_ element: XCUIElement, app: XCUIApplication) -> Bool {
-    guard let focused = focusedTextInput(app: app) else { return false }
-    return focused.identifier == element.identifier && focused.elementType == element.elementType
-  }
 
-  func executeExactTextMutation(
-    app: XCUIApplication,
-    identifier: String,
-    typeName: String,
-    text: String
-  ) -> Response {
-    var resolved = exactTextInput(app: app, identifier: identifier, typeName: typeName)
-    guard let initial = resolved.element else {
-      return Response(
-        ok: false,
-        error: ErrorPayload(
-          code: "NO_TEXT_INPUT_TARGET",
-          message: "The exact text input descriptor did not resolve uniquely; no text was entered.",
-          mutation: "none",
-          reason: resolved.ambiguous ? "ambiguous" : "target-lost"
-        )
-      )
-    }
-    guard initial.isEnabled && initial.isHittable else {
-      return Response(
-        ok: false,
-        error: ErrorPayload(
-          code: "TEXT_ENTRY_UNVERIFIED",
-          message: "The exact text input is not safely actionable; no text was entered.",
-          mutation: "none",
-          reason: "occluded"
-        )
-      )
-    }
-    if initial.elementType == .secureTextField {
-      return Response(
-        ok: false,
-        error: ErrorPayload(
-          code: "TEXT_ENTRY_UNVERIFIED",
-          message: "Secure text input cannot provide exact readable verification; no text was entered.",
-          mutation: "none",
-          reason: "secure"
-        )
-      )
-    }
-
-    let focusedBefore = exactTextInputIsFocused(initial, app: app)
-    if !focusedBefore {
-      initial.tap()
-      let deadline = ProcessInfo.processInfo.systemUptime + 0.8
-      while ProcessInfo.processInfo.systemUptime < deadline {
-        resolved = exactTextInput(app: app, identifier: identifier, typeName: typeName)
-        guard let candidate = resolved.element else {
-          return Response(
-            ok: false,
-            error: ErrorPayload(
-              code: "TEXT_TARGET_LOST",
-              message: "The exact text input disappeared or became ambiguous during focus; no text was entered.",
-              mutation: "none",
-              reason: resolved.ambiguous ? "ambiguous" : "target-lost"
-            )
-          )
-        }
-        if exactTextInputIsFocused(candidate, app: app) { break }
-        Thread.sleep(forTimeInterval: 0.04)
-      }
-    }
-
-    // Re-resolve the original descriptor immediately before mutation. This is
-    // the focus-time replacement boundary; no retained XCUI handle is trusted.
-    resolved = exactTextInput(app: app, identifier: identifier, typeName: typeName)
-    guard let target = resolved.element else {
-      return Response(
-        ok: false,
-        error: ErrorPayload(
-          code: "TEXT_TARGET_LOST",
-          message: "The exact text input was lost before mutation; no text was entered.",
-          mutation: "none",
-          reason: resolved.ambiguous ? "ambiguous" : "target-lost"
-        )
-      )
-    }
-    guard exactTextInputIsFocused(target, app: app) else {
-      return Response(
-        ok: false,
-        error: ErrorPayload(
-          code: "TEXT_TARGET_FOCUS_FAILED",
-          message: "The exact text input did not prove focused before mutation; no text was entered.",
-          mutation: "none",
-          reason: "focus-unproven"
-        )
-      )
-    }
-
-    let before = target.value as? String
-    let placeholder = target.placeholderValue
-    clearTextInput(target)
-    if !text.isEmpty { target.typeText(text) }
-
-    var consecutiveExact = 0
-    var finalVerdict = TextInputMutation.Verdict.unreadable
-    var observedChanged = false
-    for attempt in 0..<6 {
-      resolved = exactTextInput(app: app, identifier: identifier, typeName: typeName)
-      guard let current = resolved.element else {
-        return Response(
-          ok: false,
-          error: ErrorPayload(
-            code: "TEXT_TARGET_LOST",
-            message: "The exact text input was lost after mutation.",
-            mutation: "possible",
-            reason: resolved.ambiguous ? "ambiguous" : "target-lost"
-          )
-        )
-      }
-      let after = current.value as? String
-      observedChanged = observedChanged || after != before
-      finalVerdict = TextInputMutation.classify(
-        expected: text,
-        before: before,
-        after: after,
-        placeholder: placeholder,
-        secure: false
-      )
-      consecutiveExact = finalVerdict == .exact ? consecutiveExact + 1 : 0
-      if consecutiveExact >= 2 {
-        return Response(
-          ok: true,
-          data: DataPayload(filled: true, verify: "exact", focusedBefore: focusedBefore)
-        )
-      }
-      if attempt < 5 { Thread.sleep(forTimeInterval: 0.08) }
-    }
-
-    return Response(
-      ok: false,
-      error: ErrorPayload(
-        code: "TEXT_ENTRY_UNVERIFIED",
-        message: "Text mutation did not produce stable exact read-back.",
-        mutation: observedChanged ? "observed" : "possible",
-        reason: finalVerdict == .mismatch ? "mismatch" : "unreadable"
-      )
-    )
-  }
 
   func focusedTextInput(app: XCUIApplication) -> XCUIElement? {
     var focused: XCUIElement?

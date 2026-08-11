@@ -1360,6 +1360,8 @@ function mapRunnerNodesToFlat(nodes) {
             flat.enabled = n.enabled;
         if (n.hittable !== undefined)
             flat.hittable = n.hittable;
+        if (n.secure !== undefined)
+            flat.secure = n.secure;
         out.push(flat);
     }
     return out;
@@ -1373,6 +1375,7 @@ export async function runAndroid(args) {
             cachedMetadata: getCachedMetadata(args._staleRef),
             reResolution: 'self-heal-disabled',
             candidates: [],
+            mutation: 'none',
             hint: 'Call device_snapshot action=snapshot to refresh refs, then retry the action with the new ref.',
         });
     }
@@ -1409,6 +1412,26 @@ export async function runAndroid(args) {
         body.scale = args.scale;
     if (args.interactiveOnly !== undefined)
         body.interactiveOnly = args.interactiveOnly;
+    if (args.snapshotGeneration !== undefined)
+        body.snapshotGeneration = args.snapshotGeneration;
+    if (args.snapshotNodeIndex !== undefined)
+        body.snapshotNodeIndex = args.snapshotNodeIndex;
+    if (args.snapshotIdentifier !== undefined)
+        body.snapshotIdentifier = args.snapshotIdentifier;
+    if (args.snapshotElementType !== undefined)
+        body.snapshotElementType = args.snapshotElementType;
+    if (args.targetBounds !== undefined)
+        body.targetBounds = args.targetBounds;
+    if (args.focusX !== undefined)
+        body.focusX = args.focusX;
+    if (args.focusY !== undefined)
+        body.focusY = args.focusY;
+    if (args.focusWaitMs !== undefined)
+        body.focusWaitMs = args.focusWaitMs;
+    if (args.secureInput !== undefined)
+        body.secureInput = args.secureInput;
+    if (args.operationToken !== undefined)
+        body.operationToken = args.operationToken;
     let resp;
     let recovery;
     try {
@@ -1465,26 +1488,41 @@ export async function runAndroid(args) {
         // never report idle, so the call resolves with an `InvocationTargetException`
         // wrapping "Could not detect idle state" AFTER the text has already been
         // appended to the field. Live trials (Task 10) confirm the side-effect
-        // always succeeds. Treat this specific error shape as success on `.type`
-        // and surface a meta marker so callers can audit telemetry.
+        // always succeeds — but that is attempt evidence, not field truth, so this
+        // shape fails as TYPE_IDLE_TIMEOUT with mutation:'possible' (GH #581).
         if (args.command === 'type' &&
             args.exactIdentifier === undefined &&
             typeof message === 'string' &&
             (message.includes('Could not detect idle state') ||
                 message.includes('window-content-idle') ||
                 message.includes('Idle timeout exceeded'))) {
-            return okResult({ typed: true }, { meta: { sideEffectSucceeded: true, runnerTimeoutShim: true, ...recoveryMeta } });
+            // GH #581: UIAutomator's idle-detection failure fires AFTER the text
+            // landed (Task 10 live trials), but that is attempt evidence, not field
+            // truth — fail with mutation:'possible' so only the arbiter's exact
+            // read-back can promote it. Never echoes the requested text.
+            return failResult('rn-android-runner type hit the window-idle timeout after dispatching the mutation; the field value is unverified', 'TYPE_IDLE_TIMEOUT', { mutation: 'possible', runnerTimeoutShim: true, ...recoveryMeta });
         }
-        const mutation = resp.error?.mutation;
+        // GH #581: mutating-command failures always carry a valid disposition;
+        // absent/invalid ones conservatively become 'possible'.
+        const VALID_MUTATIONS = new Set(['none', 'observed', 'possible']);
+        const rawMutation = resp.error?.mutation;
+        const mutation = rawMutation !== undefined && VALID_MUTATIONS.has(rawMutation)
+            ? rawMutation
+            : args.command === 'type' || args.command === 'fill'
+                ? 'possible'
+                : undefined;
         const reason = resp.error?.reason;
         const failExtras = {
             ...(recovery ? { transportRecovery: recovery } : {}),
             ...(mutation !== undefined ? { mutation } : {}),
             ...(reason !== undefined ? { reason } : {}),
         };
-        if (code)
-            return failResult(message, code, Object.keys(failExtras).length ? failExtras : undefined);
-        return Object.keys(failExtras).length ? failResult(message, failExtras) : failResult(message);
+        if (code) {
+            return failResult(message, code, Object.keys(failExtras).length > 0 ? failExtras : undefined);
+        }
+        return Object.keys(failExtras).length > 0
+            ? failResult(message, failExtras)
+            : failResult(message);
     }
     if (args.command === 'tap') {
         const data = resp.data;

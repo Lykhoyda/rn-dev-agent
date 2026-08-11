@@ -30,6 +30,9 @@ export type RunnerCompatibility =
 export const REQUIRED_IOS_COMMANDS = [
   'tap',
   'type',
+  // GH #581: exact post-settle fill verification. Gating on this command
+  // rejects/rebuilds pre-#581 artifacts whose `type` still blind-types.
+  'verifyInput',
   'drag',
   'longPress',
   'pinch',
@@ -47,6 +50,8 @@ export const REQUIRED_ANDROID_FEATURES = ['APP_SCOPED_EXACT_INTERACTION'] as con
 export const REQUIRED_ANDROID_COMMANDS = [
   'tap',
   'type',
+  // GH #581: same exact-verification gate as iOS.
+  'verifyInput',
   'drag',
   'longPress',
   'pinch',

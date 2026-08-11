@@ -195,14 +195,26 @@ extension RnFastRunnerTests {
       return (statusResponse(commandId: probe?.commandId), false)
     }
 
+    // Decode failures never reach execution — mutation is provably "none".
+    let command: Command
     do {
-      let command = try JSONDecoder().decode(Command.self, from: data)
+      command = try JSONDecoder().decode(Command.self, from: data)
+    } catch {
+      let response = Response(
+        ok: false,
+        error: ErrorPayload(code: "INVALID_ARGUMENT", message: "command failed to decode", mutation: "none")
+      )
+      let body = encodeBody(response)
+      commandJournal.record(commandId: probe?.commandId, command: probe?.command, ok: false, body: body)
+      return (httpResponse(status: 400, body: String(decoding: body, as: UTF8.self)), false)
+    }
+    do {
       let response = try execute(command: command)
       let body = encodeBody(response)
       commandJournal.record(commandId: probe?.commandId, command: probe?.command, ok: response.ok, body: body)
       return (httpResponse(status: 200, body: String(decoding: body, as: UTF8.self)), command.command == .shutdown)
     } catch {
-      let response = Response(ok: false, error: runnerErrorPayload(error))
+      let response = Response(ok: false, error: runnerErrorPayload(error, command: probe?.command))
       let body = encodeBody(response)
       commandJournal.record(commandId: probe?.commandId, command: probe?.command, ok: false, body: body)
       return (httpResponse(status: 500, body: String(decoding: body, as: UTF8.self)), false)

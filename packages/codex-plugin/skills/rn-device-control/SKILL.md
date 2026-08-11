@@ -325,13 +325,13 @@ simctl/adb for interactive testing. There is no external `agent-device` CLI invo
 | Tap an element by text | `device_find text="Sign In" action=click` | No testID needed |
 | Tap by element ref | `device_press ref=@e3` | After getting refs from snapshot |
 | Tap an iOS software-keyboard key | Fresh snapshot `Key`/`Keyboard` ref, then `device_press` | Runner proves the same live keyboard target and performs one gesture |
-| Fill a text input | `device_fill ref=@e5 text="hello"` | One exact owner mutates once and requires stable exact read-back |
+| Fill a text input | `device_fill ref=@e5 text="hello"` | Binds one exact input and requires stable exact read-back |
 | Scroll/swipe | `device_swipe direction=up` | Native gesture |
 | Navigate back | `device_back` | System back (Android) or gesture (iOS) |
 | Persistent E2E test file | maestro-runner (YAML) | CI-ready test artifacts |
 | Deep React state inspection | `cdp_store_state` | Redux/Zustand internals |
 
-`device_fill` hard-fails ambiguous, transformed, unreadable, lost, or uncertain fills. It never automatically retypes or falls back to ambient typing, adb input, or Maestro. If failure metadata says `mutation: observed|possible`, inspect current state before deciding on any new fill.
+`device_fill` hard-fails ambiguous, transformed, unreadable, lost, or uncertain fills, and never types into ambient focus or falls back to raw adb input. Corrective clear-first retypes (and a clear-first Maestro attempt) target only the same exact bound input, and success is emitted only after stable exact read-back. If failure metadata says `mutation: observed|possible`, inspect current state before deciding on any new fill.
 
 On Android, `device_find` matches only nodes whose package is the session's app; pass `includeSystemUi=true` to also match system chrome (status/navigation bar), which may leave the app. Android taps also fail closed: a gesture the runner cannot actuate returns `INTERACTION_NOT_ACTUATED` (`mutation: none`), and one whose UI effect cannot be observed returns `INTERACTION_EFFECT_UNVERIFIED` (`mutation: possible`) instead of reporting success.
 
@@ -515,7 +515,7 @@ Device control commands are low-level — agents reach for bash too readily.
 |--------|---------|
 | "I need a screenshot fast — `xcrun simctl io booted screenshot` is simpler" | `device_screenshot` handles path conventions, format fallbacks, and works cross-platform with the same call. Use it. |
 | "I'll `xcrun simctl launch` to restart — faster than going through the plugin" | `cdp_reload` (full=true) is the supported path, auto-reconnects CDP, and re-injects helpers. `simctl launch` loses the CDP session. |
-| "I'll `adb shell input text` directly instead of `device_fill`" | `device_fill` resolves one exact owner and requires stable exact read-back. Raw adb input proves neither the target nor the final value. |
+| "I'll `adb shell input text` directly instead of `device_fill`" | `device_fill` binds one exact input and verifies its final value. Direct ADB typing is ambient-focus mutation with no exact-target or read-back guarantee. |
 | "I need to read UI — `xcrun simctl ui` gives hierarchy" | For React components, use `cdp_component_tree`. For the native a11y tree, use `device_snapshot`. Both give structured data agents can filter — raw `simctl ui` output is lossy. |
 | "The simulator isn't booted, I'll `xcrun simctl boot` quickly" | Fine for one-off boots. But if you're booting to run the agent, `device_list` first — the user may already have a target booted, and you'd boot a different one. |
 | "Let me screenshot to see what's on screen" | Use `device_snapshot` — returns the a11y tree with `@ref` handles in ~5ms vs ~150ms for a screenshot, and the JSON is far cheaper in LLM context than an image. Screenshot only when a human needs to see it. |

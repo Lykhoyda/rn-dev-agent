@@ -1,6 +1,6 @@
 import { runNative } from '../agent-device-wrapper.js';
 import { settleEnabled } from '../lifecycle/settle.js';
-import { buildDirectionalScrollCliArgs, buildDirectionalSwipeCliArgs, fetchFindCandidates, performExactFill, pressCandidate, } from './device-interact.js';
+import { buildDirectionalScrollCliArgs, buildDirectionalSwipeCliArgs, cdpClientOrNull, fetchFindCandidates, performExactFill, pressCandidate, } from './device-interact.js';
 import { withSession, okResult, failResult } from '../utils.js';
 import { dismissKeyboardWithParity, healKeyboardOccludedTap, surfaceKeyboardGuard, } from '../runners/keyboard-guard.js';
 import { captureAndResizeScreenshot } from './device-list.js';
@@ -205,7 +205,7 @@ async function guardedBatchPress(cliArgs, opts, getClient) {
         retryTap: tap,
     });
 }
-async function executeStep(step, getClient) {
+async function executeStep(step, getClient, abortSignal) {
     switch (step.action) {
         case 'find': {
             // Phase 125: testID-keyed find re-resolves via snapshot per call.
@@ -292,33 +292,26 @@ async function executeStep(step, getClient) {
             return failResult('press requires ref, testID, or both x and y coordinates');
         }
         case 'fill': {
-            if (typeof step.text !== 'string')
-                return failResult('fill requires text');
-            if (step.testID) {
-                const { refs, envelope, snapshotFailed } = await resolveTestIDViaSnapshot(step.testID);
-                if (snapshotFailed) {
-                    return failResult(`Snapshot failed while resolving testID "${step.testID}" for fill — agent-device unreachable`, 'SNAPSHOT_FAILED', { testID: step.testID, envelope: envelope?.slice(0, 500) });
-                }
-                if (refs.length > 1)
-                    return ambiguousTestIDFail(step.testID, refs);
-                const ref = refs[0];
-                if (!ref) {
-                    return failResult(`testID "${step.testID}" not found in current UI snapshot`, 'TESTID_NOT_FOUND', {
-                        testID: step.testID,
-                    });
-                }
-                if (!getClient) {
-                    return failResult('fill requires a connected React ownership helper', 'TEXT_ENTRY_UNVERIFIED', { mutation: 'none', reason: 'fiber-unavailable' });
-                }
-                return performExactFill({ ref: `@${ref}`, testID: step.testID, text: step.text }, getClient);
+            // GH #581: batch fills route through the same exact-target orchestrator
+            // and final-verification arbiter as device_fill (no JS/Maestro tiers —
+            // batch stays a scripted native surface, but truth rules are identical).
+            if (step.text === undefined) {
+                return failResult('fill requires text', { mutation: 'none' });
             }
-            if (!step.ref)
-                return failResult('fill requires ref or testID. Use a find+tap step first to focus the field, or pass testID for fresh resolution.');
-            if (!getClient) {
-                return failResult('fill requires a connected React ownership helper', 'TEXT_ENTRY_UNVERIFIED', { mutation: 'none', reason: 'fiber-unavailable' });
+            const targetRef = step.testID ?? step.ref;
+            if (!targetRef) {
+                return failResult('fill requires ref or testID. Use a find+tap step first to focus the field, or pass testID for fresh resolution.', { mutation: 'none' });
             }
-            const ref = step.ref.startsWith('@') ? step.ref : `@${step.ref}`;
-            return performExactFill({ ref, text: step.text }, getClient);
+            const client = getClient ? cdpClientOrNull(getClient) : null;
+            return performExactFill({
+                ref: targetRef,
+                text: step.text,
+                settleTimeoutMs: step.settle === false ? 0 : BATCH_STEP_SETTLE_BUDGET_MS,
+            }, client, {
+                js: false,
+                maestro: false,
+                ...(abortSignal ? { abortSignal } : {}),
+            });
         }
         case 'swipe': {
             if (!step.direction)
@@ -427,14 +420,19 @@ export function createDeviceBatchHandler(getClient) {
             const stepTimeout = step.timeoutMs ?? 15_000;
             let stepTimer;
             let stepTimedOut = false;
+            const abortController = new AbortController();
             const result = await Promise.race([
-                executeStep(step, getClient),
+                executeStep(step, getClient, abortController.signal),
                 new Promise((resolve) => {
                     stepTimer = setTimeout(() => {
                         stepTimedOut = true;
-                        resolve(failResult(`Step ${i + 1} timed out after ${stepTimeout}ms; remaining steps were not started because the operation may still be completing`, step.action === 'fill'
-                            ? { mutation: 'possible', reason: 'dispatch-uncertain' }
-                            : undefined));
+                        abortController.abort();
+                        resolve(step.action === 'fill'
+                            ? failResult(`Step ${i + 1} timed out after ${stepTimeout}ms; the fill may have mutated the field and no correction or later step will be started`, 'TEXT_ENTRY_UNVERIFIED', {
+                                mutation: 'possible',
+                                hint: 'Read the field state before any manual retry — do not blindly re-run the fill.',
+                            })
+                            : failResult(`Step ${i + 1} timed out after ${stepTimeout}ms; remaining steps were not started because the native operation may still be completing`));
                     }, stepTimeout);
                 }),
             ]);

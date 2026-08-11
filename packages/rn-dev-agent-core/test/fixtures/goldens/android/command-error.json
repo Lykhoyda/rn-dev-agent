@@ -1,6 +1,6 @@
 {
   "_provenance": {
-    "capturedAt": "2026-07-20T22:31:03.378Z",
+    "capturedAt": "2026-08-04T16:05:06.962Z",
     "capturedBy": "test/contract/capture-goldens.ts — captured, never hand-edit",
     "recapture": "re-run when RUNNER_PROTOCOL_VERSION bumps or the runner wire shape changes (GOLDEN_PLATFORM=android node test/contract/capture-goldens.ts)",
     "platform": "android",
@@ -8,9 +8,9 @@
     "os": "Android 16",
     "appId": "dev.lykhoyda.rndevagent.fixture",
     "httpStatus": 200,
-    "runnerVersion": "0.70.8",
+    "runnerVersion": "0.71.4",
     "protocolVersion": 2,
-    "runnerPort": 49629,
+    "runnerPort": 23585,
     "note": "deliberately unknown verb — pins the error-envelope shape"
   },
   "payload": {

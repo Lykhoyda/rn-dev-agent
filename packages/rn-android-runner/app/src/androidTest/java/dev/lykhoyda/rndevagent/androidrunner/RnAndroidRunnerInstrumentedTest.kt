@@ -76,9 +76,9 @@ class RnAndroidRunnerInstrumentedTest {
     }
 
     // Story 14 (#407): the server MUST journal error outcomes too, so a client
-    // that lost the reply can probe `status`. Drive a `type` with no focused
-    // input (raises NoFocusedInputException) over the real HTTP path, then read
-    // its outcome back through `status`.
+    // that lost the reply can probe `status`. Drive a `type` with no target and
+    // no focused input (raises NoTextInputTargetException, GH #581) over the
+    // real HTTP path, then read its outcome back through `status`.
     @Test
     fun errorOutcomeIsJournaledAndReadableViaStatus() {
         val id = "journal-err-${System.nanoTime()}"
@@ -93,7 +93,7 @@ class RnAndroidRunnerInstrumentedTest {
         val data = statusResponse.getJSONObject("data")
         assertEquals("failed", data.getString("state"))
         assertEquals(
-            "NO_FOCUSED_INPUT",
+            "NO_TEXT_INPUT_TARGET",
             data.getJSONObject("result").getJSONObject("error").getString("code"),
         )
     }

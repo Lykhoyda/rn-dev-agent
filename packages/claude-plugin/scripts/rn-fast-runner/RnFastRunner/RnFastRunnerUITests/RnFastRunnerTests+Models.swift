@@ -1,3 +1,5 @@
+import XCTest
+
 // MARK: - Wire Models
 
 enum CommandType: String, Codable, CaseIterable {
@@ -10,6 +12,7 @@ enum CommandType: String, Codable, CaseIterable {
   case dragSeries
   case remotePress
   case type
+  case verifyInput
   case swipe
   case findText
   case readText
@@ -35,8 +38,6 @@ struct Command: Codable {
   let commandId: String?
   let appBundleId: String?
   let text: String?
-  let exactIdentifier: String?
-  let exactType: String?
   let delayMs: Int?
   let clearFirst: Bool?
   let action: String?
@@ -69,6 +70,13 @@ struct Command: Codable {
   var snapshotLabel: String? = nil
   var snapshotIdentifier: String? = nil
   var keyboardStateAtSnapshot: Bool? = nil
+  // GH #581: declared focus-tap point for exact `type` (wrapper center when the
+  // caller targeted a `${name}-pressable`, input center otherwise) and the
+  // bounded wait for focus to land after that tap.
+  var focusX: Double? = nil
+  var focusY: Double? = nil
+  var focusWaitMs: Int? = nil
+  var operationToken: String? = nil
 }
 
 struct Response: Codable {
@@ -149,9 +157,13 @@ struct DataPayload: Codable {
   // how long the keyboard-presence wait blocked before the first keystroke.
   let typingBurst: Bool?
   let keyboardWaitMs: Int?
-  let filled: Bool?
-  let verify: String?
-  let focusedBefore: Bool?
+  // GH #581: exact-type observation — how the input was resolved, whether the
+  // focus tap ran or was skipped as already-focused, and the secret-free
+  // verifyInput verdict/stability pair.
+  let inputResolution: String?
+  let focusTap: String?
+  let verifyVerdict: String?
+  let verifyStable: Bool?
 
   init(
     message: String? = nil,
@@ -181,9 +193,10 @@ struct DataPayload: Codable {
     `static`: Bool? = nil,
     typingBurst: Bool? = nil,
     keyboardWaitMs: Int? = nil,
-    filled: Bool? = nil,
-    verify: String? = nil,
-    focusedBefore: Bool? = nil
+    inputResolution: String? = nil,
+    focusTap: String? = nil,
+    verifyVerdict: String? = nil,
+    verifyStable: Bool? = nil
   ) {
     self.message = message
     self.text = text
@@ -212,9 +225,10 @@ struct DataPayload: Codable {
     self.`static` = `static`
     self.typingBurst = typingBurst
     self.keyboardWaitMs = keyboardWaitMs
-    self.filled = filled
-    self.verify = verify
-    self.focusedBefore = focusedBefore
+    self.inputResolution = inputResolution
+    self.focusTap = focusTap
+    self.verifyVerdict = verifyVerdict
+    self.verifyStable = verifyStable
   }
 }
 
@@ -232,12 +246,35 @@ struct ErrorPayload: Codable {
   }
 }
 
-func runnerErrorPayload(_ error: Error) -> ErrorPayload {
+func runnerErrorPayload(_ error: Error, command: String? = nil) -> ErrorPayload {
   let nativeError = error as NSError
   if nativeError.domain == RnFastRunnerTests.RunnerErrorDomain.general,
      nativeError.code == RnFastRunnerTests.RunnerErrorCode.mainThreadExecutionTimedOut
   {
-    return ErrorPayload(code: "RUNNER_TIMEOUT", message: nativeError.localizedDescription)
+    // Fixed literal (never the platform description — those embed element
+    // snapshots); the wedged command may have mutated before timing out.
+    return ErrorPayload(
+      code: "RUNNER_TIMEOUT",
+      message: "main thread execution timed out",
+      mutation: "possible"
+    )
+  }
+  // GH #581: XCTest error descriptions embed element snapshots (including
+  // field values) — text-surface failures ship a fixed secret-free message.
+  if command == CommandType.type.rawValue {
+    return ErrorPayload(
+      code: "TYPE_OPERATION_FAILED",
+      message: "native type operation failed before completion; the field value is unknown — refresh and re-read before any retry",
+      mutation: "possible"
+    )
+  }
+  if command == CommandType.verifyInput.rawValue {
+    // The preceding type attempt's mutation stands unverified.
+    return ErrorPayload(
+      code: "VERIFY_OPERATION_FAILED",
+      message: "native input verification failed to execute; the fill outcome is unverified",
+      mutation: "possible"
+    )
   }
   return ErrorPayload(message: "\(error)")
 }
@@ -272,6 +309,14 @@ struct RetainedSnapshotTarget {
   let label: String?
   let identifier: String?
   let rect: SnapshotRect
+}
+
+struct RecordedExactTypeTarget {
+  let operationToken: String?
+  let element: XCUIElement
+  let generation: Int
+  let nodeIndex: Int?
+  let attributes: TextInputTarget.CandidateAttributes?
 }
 
 struct SnapshotOptions {

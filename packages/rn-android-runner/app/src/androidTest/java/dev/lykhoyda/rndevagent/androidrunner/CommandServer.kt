@@ -74,17 +74,8 @@ class CommandServer(
             val body = RunnerRuntime.dispatcher.dispatch(parsed)
             record(parsed, body)
             json(Response.Status.OK, body)
-        } catch (e: NoFocusedInputException) {
-            errorResponse(command, "NO_FOCUSED_INPUT", e.message ?: "no focused input", Response.Status.OK)
-        } catch (e: ExactFillException) {
-            errorResponse(
-                command,
-                e.fillCode,
-                e.message ?: "exact fill failed",
-                Response.Status.OK,
-                mutation = e.mutation,
-                reason = e.reason,
-            )
+        } catch (e: TypedRunnerException) {
+            errorResponse(command, e.code, e.message ?: e.code, Response.Status.OK, e.mutation.wire)
         } catch (e: SnapshotParseException) {
             errorResponse(command, "SNAPSHOT_PARSE_FAILED", e.message ?: "snapshot parse failed", Response.Status.OK)
         } catch (e: ExactPressException) {

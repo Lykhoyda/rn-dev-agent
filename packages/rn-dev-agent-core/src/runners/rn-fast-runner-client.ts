@@ -1399,6 +1399,7 @@ export interface RunIOSArgs {
     | 'pinch'
     | 'findText'
     | 'type'
+    | 'verifyInput'
     | 'keyboardDismiss'
     | 'isScreenStatic'
     | 'screenshot'
@@ -1446,6 +1447,11 @@ export interface RunIOSArgs {
   snapshotLabel?: string;
   snapshotIdentifier?: string;
   keyboardStateAtSnapshot?: boolean;
+  /** GH #581: declared focus-tap point for exact `type` (wrapper center for Pressable-wrapped inputs). */
+  focusX?: number;
+  focusY?: number;
+  focusWaitMs?: number;
+  operationToken?: string;
   /** Independent CDP/helper readback; never serialized onto the runner wire. */
   _verifyExactReadback?: (
     expected: string,
@@ -1487,7 +1493,7 @@ export function _setHttpTimeoutForTest(ms: number | null): void {
 // returning the success-shaped message we depend on, and large trees take a
 // while to serialize), so they get a window wider than that internal cap.
 // Everything else is a fast interaction and must not hang past HTTP_TIMEOUT_MS.
-const SLOW_RUNNER_COMMANDS = new Set(['type', 'snapshot', 'screenshot']);
+const SLOW_RUNNER_COMMANDS = new Set(['type', 'verifyInput', 'snapshot', 'screenshot']);
 function commandTimeoutMs(command: unknown): number {
   if (httpTimeoutOverrideMs !== null) return httpTimeoutOverrideMs;
   return SLOW_RUNNER_COMMANDS.has(command as string) ? 35_000 : HTTP_TIMEOUT_MS;
@@ -1687,13 +1693,12 @@ async function containTypeTimeout(
       activateLaunchedApp: 'unverified',
       semantics: 'runner host is lazily relaunched; target activation semantics are unchanged',
     },
-    ...(verification.actual !== undefined ? { actual: verification.actual } : {}),
+    // GH #581: never carry the actual field value — the verdict alone ships.
   };
   if (verification.matches) {
     return okResult(
       {
         typed: true,
-        text: args.text,
         recovered: true,
         verification: 'exact-readback',
       },
@@ -1705,7 +1710,7 @@ async function containTypeTimeout(
       ? 'RUNNER_TIMEOUT: rn-fast-runner main-thread execution timed out and independent exact CDP readback did not prove the requested value. The poisoned runner was contained before any further mutation.'
       : 'RUNNER_TIMEOUT: rn-fast-runner authority was lost after a success-shaped type response, and independent exact CDP readback did not prove the requested value. The triggering runner was contained without signaling any replacement.',
     'RUNNER_TIMEOUT',
-    { runnerTimeoutRecovery },
+    { mutation: 'possible', runnerTimeoutRecovery },
   );
 }
 
@@ -1879,6 +1884,7 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
         cachedMetadata: getCachedMetadata(args._staleRef),
         reResolution: 'self-heal-disabled',
         candidates: [],
+        mutation: 'none',
         hint: 'Call device_snapshot action=snapshot to refresh refs, then retry the action with the new ref.',
       },
     );
@@ -1910,6 +1916,10 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
   if (args.snapshotIdentifier !== undefined) body.snapshotIdentifier = args.snapshotIdentifier;
   if (args.keyboardStateAtSnapshot !== undefined)
     body.keyboardStateAtSnapshot = args.keyboardStateAtSnapshot;
+  if (args.focusX !== undefined) body.focusX = args.focusX;
+  if (args.focusY !== undefined) body.focusY = args.focusY;
+  if (args.focusWaitMs !== undefined) body.focusWaitMs = args.focusWaitMs;
+  if (args.operationToken !== undefined) body.operationToken = args.operationToken;
 
   // Transport-level refusals must surface as typed results from every runner
   // round trip, not just the main dispatch — `withSession` does not catch, so a
@@ -2031,6 +2041,7 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
 
   let resp: RunnerResponse;
   let recovery: TransportRecovery | undefined;
+  let commandAuthorityBefore = captureFastRunnerCommandAuthority();
   try {
     ({ resp, recovery } = await postCommandWithRecovery(
       withKeyboardGuard(body, args.command, process.env) as Record<string, unknown>,
@@ -2039,8 +2050,10 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
     const mapped = mapRunnerDispatchError(err);
     if (mapped) return mapped;
     const m = err instanceof Error ? err.message : String(err);
-    if (args.command === 'type' && m.startsWith('RUNNER_TIMEOUT')) {
-      return containTypeTimeout(args);
+    if (m.startsWith('RUNNER_TIMEOUT')) {
+      return args.command === 'type'
+        ? containTypeTimeout(args, commandAuthorityBefore)
+        : containRunnerTimeout(args.command, m, commandAuthorityBefore);
     }
     throw err;
   }
@@ -2048,9 +2061,22 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
     if (!(await refreshTargetAfterKeyboard())) {
       return refreshFailure.result ?? staleAfterKeyboardDismissal(args._targetRef);
     }
-    ({ resp, recovery } = await postCommandWithRecovery(
-      withKeyboardGuard(body, args.command, process.env) as Record<string, unknown>,
-    ));
+    commandAuthorityBefore = captureFastRunnerCommandAuthority();
+    try {
+      ({ resp, recovery } = await postCommandWithRecovery(
+        withKeyboardGuard(body, args.command, process.env) as Record<string, unknown>,
+      ));
+    } catch (err) {
+      const mapped = mapRunnerDispatchError(err);
+      if (mapped) return mapped;
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.startsWith('RUNNER_TIMEOUT')) {
+        return args.command === 'type'
+          ? containTypeTimeout(args, commandAuthorityBefore)
+          : containRunnerTimeout(args.command, message, commandAuthorityBefore);
+      }
+      throw err;
+    }
     keyboardRelayoutRecovered = true;
   }
   const recoveryMeta = recovery ? { transportRecovery: recovery } : {};
@@ -2060,15 +2086,15 @@ export async function runIOS(args: RunIOSArgs): Promise<ToolResult> {
     const code = resp.error?.code;
     if (code === 'RUNNER_TIMEOUT') {
       return args.command === 'type'
-        ? containTypeTimeout(args)
-        : containRunnerTimeout(args.command, message);
+        ? containTypeTimeout(args, commandAuthorityBefore)
+        : containRunnerTimeout(args.command, message, commandAuthorityBefore);
     }
     if (
       args.command === 'type' &&
       typeof message === 'string' &&
       message.includes('main thread execution timed out')
     ) {
-      return containTypeTimeout(args);
+      return containTypeTimeout(args, commandAuthorityBefore);
     }
     const mutation = resp.error?.mutation;
     const reason = resp.error?.reason;

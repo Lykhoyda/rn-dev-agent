@@ -11,6 +11,7 @@ import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
 import org.json.JSONObject
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -25,26 +26,43 @@ class ExactFillPrivacyInstrumentedTest {
 
         shell("logcat -b all -c")
         val canary = "RN_FILL_LOGCAT_PRIVACY_CANARY_581"
-        val response = dispatchFill(ExactFillPrivacyFixtureActivity.FIELD_IDENTIFIER, canary)
-        assertTrue(response.optBoolean("ok"))
-        assertFalse(response.toString().contains(canary))
+        val token = "op-privacy-581"
+        val fill = dispatchFill(ExactFillPrivacyFixtureActivity.FIELD_IDENTIFIER, canary, token)
+        assertTrue(fill.toString(), fill.optBoolean("ok"))
+        assertFalse(fill.toString().contains(canary))
+
+        val verify = dispatchVerify(canary, token)
+        assertEquals(verify.toString(), "exact", verifyVerdict(verify))
+        assertFalse(verify.toString().contains(canary))
 
         SystemClock.sleep(250)
         assertFalse(shell("logcat -b all -d -v raw").contains(canary))
     }
 
+    // GH #581: a plain empty clear proves exact; a placeholder-bearing field
+    // reads back its hint after the clear, which the recipe deliberately
+    // refuses as "ambiguous" so a hint can never false-succeed as field text.
     @Test
-    fun exactAccessibilityFillProvesPlaceholderAndPlainEmptyClear() {
+    fun exactAccessibilityFillArbitratesEmptyClearsTruthfully() {
         launchFixture(ExactFillPrivacyFixtureActivity.PLACEHOLDER_CLEAR_IDENTIFIER)
 
-        for (identifier in listOf(
-            ExactFillPrivacyFixtureActivity.PLACEHOLDER_CLEAR_IDENTIFIER,
+        val plainToken = "op-plain-clear-581"
+        val plainFill = dispatchFill(
             ExactFillPrivacyFixtureActivity.PLAIN_CLEAR_IDENTIFIER,
-        )) {
-            val response = dispatchFill(identifier, "")
-            assertTrue(response.optBoolean("ok"))
-            assertTrue(response.optJSONObject("data")?.optString("verify") == "exact")
-        }
+            "",
+            plainToken,
+        )
+        assertTrue(plainFill.toString(), plainFill.optBoolean("ok"))
+        assertEquals("exact", verifyVerdict(dispatchVerify("", plainToken)))
+
+        val placeholderToken = "op-placeholder-clear-581"
+        val placeholderFill = dispatchFill(
+            ExactFillPrivacyFixtureActivity.PLACEHOLDER_CLEAR_IDENTIFIER,
+            "",
+            placeholderToken,
+        )
+        assertTrue(placeholderFill.toString(), placeholderFill.optBoolean("ok"))
+        assertEquals("ambiguous", verifyVerdict(dispatchVerify("", placeholderToken)))
     }
 
     private fun launchFixture(identifier: String) {
@@ -62,17 +80,45 @@ class ExactFillPrivacyInstrumentedTest {
         )
     }
 
-    private fun dispatchFill(identifier: String, text: String): JSONObject {
+    private val dispatcher: CommandDispatcher by lazy {
+        CommandDispatcher(InstrumentationRegistry.getInstrumentation())
+    }
+
+    private fun dispatchFill(identifier: String, text: String, operationToken: String): JSONObject {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
-        return CommandDispatcher(instrumentation).dispatch(
+        val device = UiDevice.getInstance(instrumentation)
+        val field = device.findObject(By.desc(identifier))
+        assertTrue("fixture field $identifier must be on screen", field != null)
+        val bounds = field.visibleBounds
+        return dispatcher.dispatch(
             JSONObject()
                 .put("command", "fill")
                 .put("appBundleId", instrumentation.context.packageName)
                 .put("text", text)
-                .put("exactIdentifier", identifier)
-                .put("exactType", EditText::class.java.name),
+                .put("snapshotIdentifier", identifier)
+                .put("snapshotElementType", EditText::class.java.name)
+                .put(
+                    "targetBounds",
+                    JSONObject()
+                        .put("x", bounds.left)
+                        .put("y", bounds.top)
+                        .put("width", bounds.width())
+                        .put("height", bounds.height()),
+                )
+                .put("operationToken", operationToken),
         )
     }
+
+    private fun dispatchVerify(text: String, operationToken: String): JSONObject =
+        dispatcher.dispatch(
+            JSONObject()
+                .put("command", "verifyInput")
+                .put("text", text)
+                .put("operationToken", operationToken),
+        )
+
+    private fun verifyVerdict(response: JSONObject): String? =
+        response.optJSONObject("data")?.optString("verifyVerdict")
 
     private fun shell(command: String): String {
         val descriptor = InstrumentationRegistry.getInstrumentation()

@@ -15,6 +15,7 @@ test('buildRunAndroidArgs maps Android MVP verbs', () => {
     'case "tap":',
     'case "fill":',
     'case "type":',
+    'case "verify-input":',
     'case "snapshot":',
     'case "back":',
     'case "screenshot":',
@@ -27,6 +28,9 @@ test('buildRunAndroidArgs maps Android MVP verbs', () => {
   ]) {
     assert.ok(normalized.includes(fragment), `missing ${fragment}`);
   }
+  const routeSetStart = source.indexOf('const RN_ANDROID_RUNNER_COMMANDS');
+  const routeSetEnd = source.indexOf(']);', routeSetStart);
+  assert.match(source.slice(routeSetStart, routeSetEnd), /'verify-input'/);
 });
 
 test('buildRunAndroidArgs includes stale-ref sentinel and screenshot out path', () => {
