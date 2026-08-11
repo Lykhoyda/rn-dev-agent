@@ -11,6 +11,7 @@ import {
   IME_KEY_FLAG,
   outsideAppWindowFailResult,
   rebuildHealedAndroidArgs,
+  settleAfterMutationWithOutcome,
   settleWithRetryIfNoChange,
   tapRetryPolicy,
 } from '../../dist/agent-device-wrapper.js';
@@ -20,7 +21,7 @@ import {
   invalidateLastSnapshotHash,
   updateRefMapFromFlat,
 } from '../../dist/fast-runner-ref-map.js';
-import { okResult } from '../../dist/utils.js';
+import { failResult, okResult } from '../../dist/utils.js';
 import { hashSnapshotNodes } from '../../dist/lifecycle/settle-hash.js';
 import { hashAndroidAppSnapshotNodes } from '../../dist/lifecycle/settle.js';
 import {
@@ -624,6 +625,9 @@ test('exact press disambiguates duplicates by the requested point and clicks the
   assert.match(source, /candidate\.isClickable/);
   assert.match(source, /requireNoSameWindowOccluder\(clickable, requested\)\s*return clickable/);
   assert.match(source, /"exact-target-not-hittable"/);
+  // A coordinate outside the display is refused before any injection.
+  assert.match(source, /CoordinateBounds\.contains\(device\.displayWidth, device\.displayHeight, x, y\)/);
+  assert.match(source, /"coordinate-out-of-bounds"/);
 });
 
 const baselinePolicy = { eligible: false, verificationRequired: true, targetKey: 'tap@960,430' };
@@ -680,6 +684,26 @@ test('a mutating verb that invalidated the baseline does not fail the next tap',
   const envelope = JSON.parse(result.content[0].text) as { ok: boolean };
   assert.equal(result.isError, undefined);
   assert.equal(envelope.ok, true);
+});
+
+test('a possibly dispatched gesture drops the effect baseline it may have invalidated', async () => {
+  updateRefMapFromFlat([appHome]);
+  assert.notEqual(getLastSnapshotHash(), null);
+  await settleAfterMutationWithOutcome(
+    failResult('refused before actuation', 'INTERACTION_NOT_ACTUATED', { mutation: 'none' }),
+    { platform: 'android', verb: 'tap', appId },
+    probeDeps(null),
+  );
+  assert.notEqual(getLastSnapshotHash(), null);
+
+  await settleAfterMutationWithOutcome(
+    failResult('the gesture may have landed', 'INTERACTION_EFFECT_UNVERIFIED', {
+      mutation: 'possible',
+    }),
+    { platform: 'android', verb: 'tap', appId },
+    probeDeps(null),
+  );
+  assert.equal(getLastSnapshotHash(), null);
 });
 
 test('a device_batch step with settle:false neither probes a baseline nor fails the tap', async () => {

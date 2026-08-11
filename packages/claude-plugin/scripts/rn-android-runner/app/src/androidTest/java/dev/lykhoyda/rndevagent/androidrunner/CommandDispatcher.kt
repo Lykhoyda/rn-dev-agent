@@ -275,6 +275,15 @@ class CommandDispatcher(
 
         val x = cmd.getDouble("x").roundToInt()
         val y = cmd.getDouble("y").roundToInt()
+        if (!CoordinateBounds.contains(device.displayWidth, device.displayHeight, x, y)) {
+            throw ExactPressException(
+                "INTERACTION_NOT_ACTUATED",
+                "none",
+                "coordinate-out-of-bounds",
+                "Requested tap point ($x, $y) lies outside the " +
+                    "${device.displayWidth}x${device.displayHeight} display; nothing was injected.",
+            )
+        }
         val kbStart = SystemClock.uptimeMillis()
         val kb = applyKeyboardGuard(cmd, x, y)
         val kbMs = SystemClock.uptimeMillis() - kbStart

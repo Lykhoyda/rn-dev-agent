@@ -1062,9 +1062,22 @@ export function attachMetaNote(result, note) {
 // without a hash observation invalidates the ref-map's last snapshot hash —
 // the screen may have changed unobserved, and a later tap comparing against
 // the stale baseline would get a WRONG change verdict.
+function resultMutation(result) {
+    try {
+        const envelope = JSON.parse(result.content[0]?.text ?? '{}');
+        return envelope.meta?.mutation;
+    }
+    catch {
+        return undefined;
+    }
+}
 export async function settleAfterMutationWithOutcome(result, ctx, deps = {}) {
-    if (result.isError)
-        return { result, outcome: null }; // dispatch never landed — baseline keeps
+    if (result.isError) {
+        // mutation:'possible' means the gesture may have landed unobserved.
+        if (resultMutation(result) === 'possible')
+            invalidateLastSnapshotHash();
+        return { result, outcome: null };
+    }
     if (!SNAPSHOT_MUTATING_VERBS.has(ctx.verb))
         return { result, outcome: null };
     if (ctx.settle?.enabled === false) {

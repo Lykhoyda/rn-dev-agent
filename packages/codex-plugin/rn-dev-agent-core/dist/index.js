@@ -28314,9 +28314,20 @@ function attachMeta(result, patch) {
 function attachMetaNote(result, note) {
   return attachMeta(result, { note });
 }
+function resultMutation(result) {
+  try {
+    const envelope = JSON.parse(result.content[0]?.text ?? "{}");
+    return envelope.meta?.mutation;
+  } catch {
+    return void 0;
+  }
+}
 async function settleAfterMutationWithOutcome(result, ctx, deps = {}) {
-  if (result.isError)
+  if (result.isError) {
+    if (resultMutation(result) === "possible")
+      invalidateLastSnapshotHash();
     return { result, outcome: null };
+  }
   if (!SNAPSHOT_MUTATING_VERBS.has(ctx.verb))
     return { result, outcome: null };
   if (ctx.settle?.enabled === false) {

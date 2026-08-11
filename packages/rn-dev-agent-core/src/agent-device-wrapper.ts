@@ -1355,12 +1355,27 @@ export interface SettleAfterMutationDeps {
 // without a hash observation invalidates the ref-map's last snapshot hash —
 // the screen may have changed unobserved, and a later tap comparing against
 // the stale baseline would get a WRONG change verdict.
+function resultMutation(result: ToolResult): unknown {
+  try {
+    const envelope = JSON.parse(result.content[0]?.text ?? '{}') as {
+      meta?: { mutation?: unknown };
+    };
+    return envelope.meta?.mutation;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function settleAfterMutationWithOutcome(
   result: ToolResult,
   ctx: SettleContext,
   deps: SettleAfterMutationDeps = {},
 ): Promise<{ result: ToolResult; outcome: SettleOutcome | null }> {
-  if (result.isError) return { result, outcome: null }; // dispatch never landed — baseline keeps
+  if (result.isError) {
+    // mutation:'possible' means the gesture may have landed unobserved.
+    if (resultMutation(result) === 'possible') invalidateLastSnapshotHash();
+    return { result, outcome: null };
+  }
   if (!SNAPSHOT_MUTATING_VERBS.has(ctx.verb)) return { result, outcome: null };
   if (ctx.settle?.enabled === false) {
     invalidateLastSnapshotHash(); // mutated + settled blind
