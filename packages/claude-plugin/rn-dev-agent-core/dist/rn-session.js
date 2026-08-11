@@ -11571,7 +11571,7 @@ function add(names, profile) {
     profiles.set(name, profile);
   }
 }
-var groupFacets, facetOrder, session, osScoped, nativeControl, throughRuntime, allGroups, diagnostic, transition, sourceState, nativeRead, nativeVerdict, nativeMutation, managedNativeMutation, hybridMutation, optionalHybridMutation, nativeDiagnostic, cdpRead, cdpMutation, observe, proof, profiles;
+var groupFacets, facetOrder, session, osScoped, nativeControl, throughRuntime, allGroups, diagnostic, transition, sourceState, nativeRead, nativeVerdict, nativeMutation, managedNativeMutation, hybridMutation, optionalHybridMutation, nativeDiagnostic, cdpRead, pickerRecovery, cdpMutation, observe, proof, profiles;
 var init_tool_profiles = __esm({
   "packages/rn-dev-agent-core/dist/session/tool-profiles.js"() {
     "use strict";
@@ -11651,9 +11651,9 @@ var init_tool_profiles = __esm({
       "expect_text",
       "expect_visible_by_testid"
     ];
+    pickerRecovery = ["cdp_dismiss_dev_client_picker"];
     cdpMutation = [
       "cdp_dev_settings",
-      "cdp_dismiss_dev_client_picker",
       "cdp_dispatch",
       "cdp_evaluate",
       "cdp_exception_breakpoint",
@@ -11761,6 +11761,14 @@ var init_tool_profiles = __esm({
       axes: facetsOf(throughRuntime, { without: ["A"] }),
       mutation: true,
       liveBundleProbe: true
+    });
+    add(pickerRecovery, {
+      kind: "authoritative",
+      groups: throughRuntime,
+      axes: facetsOf(throughRuntime, { without: ["A", "B"] }),
+      managedOrigin: true,
+      mutation: true,
+      liveBundleProbe: false
     });
     add(observe, {
       kind: "authoritative",
@@ -12258,6 +12266,7 @@ var init_dev_client_picker = __esm({
     init_platform_utils();
     init_utils();
     init_device_interact();
+    init_authority_gate();
   }
 });
 

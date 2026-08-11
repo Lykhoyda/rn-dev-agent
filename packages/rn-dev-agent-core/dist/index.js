@@ -896,7 +896,7 @@ async function reconnectSessionRuntime(status) {
         const current = getClient();
         await current.disconnect();
         setClient(createClient(metroPort));
-        await connectExactSessionTarget({ metroPort, platform, appId, deviceId }, 15_000);
+        await connectExactSessionTarget({ metroPort, platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
         return;
     }
     const connection = await connectExactSessionTarget({ metroPort, platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
@@ -917,7 +917,7 @@ async function relaunchSessionRuntime(status) {
             '--initialUrl',
             `http://127.0.0.1:${String(metroPort)}`,
         ]);
-        await connectExactSessionTarget({ metroPort, platform, appId, deviceId }, 15_000);
+        await connectExactSessionTarget({ metroPort, platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
         return;
     }
     if (!boundDevClientUrl) {
@@ -1149,7 +1149,7 @@ trackedTool('cdp_connect', 'Connect only the exact app target on the authority-b
     targetId: z
         .string()
         .optional()
-        .describe('Optional target already proven by this session; foreign or previously unbound IDs refuse'),
+        .describe('Advisory; refuses only if it conflicts with the bound target'),
     bundleId: z
         .string()
         .optional()

@@ -122,6 +122,55 @@ export function enginePinCaveat(status) {
     }
     return null;
 }
+// GH #750 (B223-class): drifted runners translate Maestro regex text selectors
+// into literal WDA `CONTAINS[c]` predicates that can never match. Only
+// regex-shaped selectors change semantics; plain literals behave identically.
+const REGEX_SHAPED_SELECTOR = /\.\*|\.\+|\\[dDwWsSbB]|\[[^\]]*\]|\|/;
+const TEXT_SELECTOR_KEYS = new Set([
+    'tapOn',
+    'doubleTapOn',
+    'longPressOn',
+    'assertVisible',
+    'assertNotVisible',
+    'visible',
+    'notVisible',
+    'text',
+]);
+export function findRegexTextSelectors(commands) {
+    const found = [];
+    const visit = (value, underSelectorKey) => {
+        if (typeof value === 'string') {
+            if (underSelectorKey && REGEX_SHAPED_SELECTOR.test(value))
+                found.push(value);
+            return;
+        }
+        if (Array.isArray(value)) {
+            for (const entry of value)
+                visit(entry, underSelectorKey);
+            return;
+        }
+        if (value && typeof value === 'object') {
+            for (const [key, nested] of Object.entries(value)) {
+                visit(nested, TEXT_SELECTOR_KEYS.has(key));
+            }
+        }
+    };
+    visit([...commands], false);
+    return found;
+}
+export function driftedRegexSelectorRefusal(status, commands) {
+    const cls = status?.pin.status;
+    if (cls !== 'drift-newer' && cls !== 'drift-older')
+        return null;
+    const selectors = findRegexTextSelectors(commands);
+    if (selectors.length === 0)
+        return null;
+    return (`maestro_run refused: maestro-runner ${status.version ?? 'unknown'} drifted from the tested pin ` +
+        `${status.pin.pinned} and the flow uses regex text selectors (${selectors[0]}). Drifted runners ` +
+        `translate Maestro regex into a literal WDA CONTAINS predicate that can never match (B223-class, ` +
+        `GH #750). Reinstall the pin via ensure-maestro-runner.sh, or rewrite the selectors as literal ` +
+        `text or id selectors.`);
+}
 export function strictPinRefusal(status, envValue) {
     const strict = envValue === '1' || envValue === 'true';
     if (!strict || !status)

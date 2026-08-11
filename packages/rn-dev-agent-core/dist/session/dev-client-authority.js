@@ -65,8 +65,11 @@ export function boundConnectConflict(status, request) {
             message: 'bundleId does not match the authority-bound app',
         };
     }
+    // GH #750: while B is unbound the pin flow proves the sole exact-device
+    // target itself, so an advisory targetId must not dead-end the recovery.
     if (typeof request.targetId === 'string' &&
-        (typeof bundle?.targetId !== 'string' || request.targetId !== bundle.targetId)) {
+        bundle &&
+        (typeof bundle.targetId !== 'string' || request.targetId !== bundle.targetId)) {
         return {
             code: 'CDP_TARGET_AUTHORITY_MISMATCH',
             message: 'targetId is not the target already proven by this session',

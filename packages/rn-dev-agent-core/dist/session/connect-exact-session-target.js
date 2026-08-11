@@ -1,7 +1,9 @@
 import { CDPProbeTimeoutError } from '../cdp/connect.js';
 import { targetMatchesSession } from '../tools/status.js';
 import { filterTargetsForExactDevice, proveTargetDeviceAssociation, } from './target-device-authority.js';
-const IOS_EXACT_TARGET_READINESS_TIMEOUT_MS = 15_000;
+// GH #750: iOS dev-client re-registration after terminate+relaunch can exceed
+// 15s, and each connect attempt restarts that clock — match Android (GH #724).
+const IOS_EXACT_TARGET_READINESS_TIMEOUT_MS = 120_000;
 const ANDROID_EXACT_TARGET_READINESS_TIMEOUT_MS = 120_000;
 export function exactSessionTargetReadinessTimeoutMs(platform) {
     return platform === 'android'

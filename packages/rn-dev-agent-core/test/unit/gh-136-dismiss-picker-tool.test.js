@@ -123,11 +123,73 @@ test('handler: Android dismissed → ok dismissed:true with timings', async () =
     }
     return { ok: true, candidates: [] };
   });
+  const originCalls = [];
+  const handleWithOrigin = createDismissDevClientPickerHandler(() => 8081, {
+    reproveOrigin: async () => {
+      originCalls.push('reprove');
+    },
+    completeOrigin: async (_args, targetExpected) => {
+      originCalls.push(`complete:${targetExpected}`);
+    },
+  });
   try {
-    const r = await handle({ platform: 'android' });
+    const r = await handleWithOrigin({ platform: 'android' });
     const p = parse(r);
     assert.equal(p.data.dismissed, true);
     assert.ok(p.meta && typeof p.meta.timings_ms.total === 'number');
+    assert.deepEqual(originCalls, ['reprove', 'complete:true']);
+  } finally {
+    _resetFetchCandidatesForTest();
+    _resetHasSessionForTest();
+  }
+});
+
+// GH #750: the picker tool exists for the stranded-picker state where B is
+// unbound, so its profile admits it without A/B — but a successful dismissal
+// must then reconnect the exact target and prove A/B via the managed origin.
+test('GH #750 handler: dismissal without a picker performs no origin proof', async () => {
+  _setHasSessionForTest(true);
+  _setFetchCandidatesForTest(async () => ({ ok: true, candidates: [] }));
+  const originCalls = [];
+  const handleWithOrigin = createDismissDevClientPickerHandler(() => 8081, {
+    reproveOrigin: async () => {
+      originCalls.push('reprove');
+    },
+    completeOrigin: async () => {
+      originCalls.push('complete');
+    },
+  });
+  try {
+    const r = await handleWithOrigin({ platform: 'android' });
+    const p = parse(r);
+    assert.equal(p.data.dismissed, false);
+    assert.deepEqual(originCalls, [], 'an untouched screen must not re-pin authority');
+  } finally {
+    _resetFetchCandidatesForTest();
+    _resetHasSessionForTest();
+  }
+});
+
+test('GH #750 handler: a failed post-dismissal proof surfaces instead of a silent ok', async () => {
+  _setHasSessionForTest(true);
+  let findCount = 0;
+  _setFetchCandidatesForTest(async (text) => {
+    if (text === 'Development servers' || text === 'DEVELOPMENT SERVERS') {
+      findCount += 1;
+      return findCount >= 2
+        ? { ok: true, candidates: [] }
+        : { ok: true, candidates: [{ ref: 'e1', label: text }] };
+    }
+    return { ok: true, candidates: [] };
+  });
+  const handleWithOrigin = createDismissDevClientPickerHandler(() => 8081, {
+    reproveOrigin: async () => {},
+    completeOrigin: async () => {
+      throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: reattachment proof failed');
+    },
+  });
+  try {
+    await assert.rejects(handleWithOrigin({ platform: 'android' }), /BUNDLE_HANDSHAKE_UNAVAILABLE/);
   } finally {
     _resetFetchCandidatesForTest();
     _resetHasSessionForTest();

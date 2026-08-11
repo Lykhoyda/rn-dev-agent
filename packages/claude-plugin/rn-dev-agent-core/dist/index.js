@@ -29323,6 +29323,37 @@ function enginePinCaveat(status) {
   }
   return null;
 }
+function findRegexTextSelectors(commands) {
+  const found = [];
+  const visit = (value, underSelectorKey) => {
+    if (typeof value === "string") {
+      if (underSelectorKey && REGEX_SHAPED_SELECTOR.test(value))
+        found.push(value);
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const entry of value)
+        visit(entry, underSelectorKey);
+      return;
+    }
+    if (value && typeof value === "object") {
+      for (const [key, nested] of Object.entries(value)) {
+        visit(nested, TEXT_SELECTOR_KEYS.has(key));
+      }
+    }
+  };
+  visit([...commands], false);
+  return found;
+}
+function driftedRegexSelectorRefusal(status, commands) {
+  const cls = status?.pin.status;
+  if (cls !== "drift-newer" && cls !== "drift-older")
+    return null;
+  const selectors = findRegexTextSelectors(commands);
+  if (selectors.length === 0)
+    return null;
+  return `maestro_run refused: maestro-runner ${status.version ?? "unknown"} drifted from the tested pin ${status.pin.pinned} and the flow uses regex text selectors (${selectors[0]}). Drifted runners translate Maestro regex into a literal WDA CONTAINS predicate that can never match (B223-class, GH #750). Reinstall the pin via ensure-maestro-runner.sh, or rewrite the selectors as literal text or id selectors.`;
+}
 function strictPinRefusal(status, envValue) {
   const strict = envValue === "1" || envValue === "true";
   if (!strict || !status)
@@ -29382,7 +29413,7 @@ function getEngineStatus(resolvers) {
   }
   return cachedStatus;
 }
-var execFile5, MAESTRO_RUNNER_PIN, MAESTRO_RUNNER_MIN_ANDROID_API, PRE_O_REMEDY, OLDER_SDK_TOKEN, INSTALL_REJECT_CONTEXT, cachedStatus;
+var execFile5, MAESTRO_RUNNER_PIN, MAESTRO_RUNNER_MIN_ANDROID_API, PRE_O_REMEDY, OLDER_SDK_TOKEN, INSTALL_REJECT_CONTEXT, REGEX_SHAPED_SELECTOR, TEXT_SELECTOR_KEYS, cachedStatus;
 var init_engine_pin = __esm({
   "packages/rn-dev-agent-core/dist/domain/engine-pin.js"() {
     "use strict";
@@ -29415,6 +29446,17 @@ var init_engine_pin = __esm({
     PRE_O_REMEDY = "Action replay / E2E via the maestro engine is unsupported on this device; the direct device_* interaction tier still works (rn-android-runner supports API 23+), except for the few device_* paths that fall back to maestro (dev-client picker, system dialogs, device_fill correction), which hit this same limit.";
     OLDER_SDK_TOKEN = /INSTALL_FAILED_OLDER_SDK/g;
     INSTALL_REJECT_CONTEXT = /\b(?:adb|install|installing|failure|uiautomator2)\b|\.apk\b/i;
+    REGEX_SHAPED_SELECTOR = /\.\*|\.\+|\\[dDwWsSbB]|\[[^\]]*\]|\|/;
+    TEXT_SELECTOR_KEYS = /* @__PURE__ */ new Set([
+      "tapOn",
+      "doubleTapOn",
+      "longPressOn",
+      "assertVisible",
+      "assertNotVisible",
+      "visible",
+      "notVisible",
+      "text"
+    ]);
     cachedStatus = null;
   }
 });
@@ -30349,7 +30391,7 @@ function assertAuthorityProfilesExhaustive(toolNames) {
     throw new Error(`UNPROFILED_AUTHORITY_TOOL: missing=${missing.join(",") || "none"} stale=${stale.join(",") || "none"}`);
   }
 }
-var groupFacets, facetOrder, session, osScoped, nativeControl, throughRuntime, allGroups, diagnostic, transition, sourceState, nativeRead, nativeVerdict, nativeMutation, managedNativeMutation, hybridMutation, optionalHybridMutation, nativeDiagnostic, inlineMaestroMutation, cdpRead, cdpMutation, observe, proof, profiles;
+var groupFacets, facetOrder, session, osScoped, nativeControl, throughRuntime, allGroups, diagnostic, transition, sourceState, nativeRead, nativeVerdict, nativeMutation, managedNativeMutation, hybridMutation, optionalHybridMutation, nativeDiagnostic, inlineMaestroMutation, cdpRead, pickerRecovery, cdpMutation, observe, proof, profiles;
 var init_tool_profiles = __esm({
   "packages/rn-dev-agent-core/dist/session/tool-profiles.js"() {
     "use strict";
@@ -30436,9 +30478,9 @@ var init_tool_profiles = __esm({
       "expect_text",
       "expect_visible_by_testid"
     ];
+    pickerRecovery = ["cdp_dismiss_dev_client_picker"];
     cdpMutation = [
       "cdp_dev_settings",
-      "cdp_dismiss_dev_client_picker",
       "cdp_dispatch",
       "cdp_evaluate",
       "cdp_exception_breakpoint",
@@ -30546,6 +30588,14 @@ var init_tool_profiles = __esm({
       axes: facetsOf(throughRuntime, { without: ["A"] }),
       mutation: true,
       liveBundleProbe: true
+    });
+    add(pickerRecovery, {
+      kind: "authoritative",
+      groups: throughRuntime,
+      axes: facetsOf(throughRuntime, { without: ["A", "B"] }),
+      managedOrigin: true,
+      mutation: true,
+      liveBundleProbe: false
     });
     add(observe, {
       kind: "authoritative",
@@ -32247,6 +32297,13 @@ function createMaestroRunHandler(deps = {}) {
     const strictRefusal = strictPinRefusal(engineStatus, process.env.RN_ENGINE_PIN_STRICT);
     if (strictRefusal) {
       return failResult(strictRefusal, "ENGINE_PIN_MISMATCH");
+    }
+    const regexDriftRefusal = driftedRegexSelectorRefusal(engineStatus, validatedCommands);
+    if (regexDriftRefusal) {
+      return failResult(regexDriftRefusal, "ENGINE_PIN_MISMATCH", {
+        pin: engineStatus?.pin,
+        installedVersion: engineStatus?.version ?? null
+      });
     }
     let probedAndroidApiLevel = null;
     if (platform === "android" && dispatch.runner === "maestro-runner" && requestedDeviceId) {
@@ -36254,7 +36311,7 @@ async function isDevClientPickerShowing() {
     return false;
   return isPickerIndicatorPresent();
 }
-function createDismissDevClientPickerHandler(getMetroPort) {
+function createDismissDevClientPickerHandler(getMetroPort, authorityDeps2 = {}) {
   return async (args) => {
     const t0 = Date.now();
     let preferredPort;
@@ -36269,6 +36326,8 @@ function createDismissDevClientPickerHandler(getMetroPort) {
       return failResult('No device session open. Call device_snapshot action="open" first.', "DEV_CLIENT_PICKER_NO_SESSION", meta);
     }
     if (outcome.dismissed) {
+      await (authorityDeps2.reproveOrigin ?? reproveManagedNativeOrigin)(args);
+      await (authorityDeps2.completeOrigin ?? completeManagedNativeOriginAuthority)(args, true);
       return okResult({ dismissed: true, reason: outcome.reason, platform: outcome.platform }, { meta });
     }
     if (outcome.reason.toLowerCase().includes("could not find")) {
@@ -36285,6 +36344,7 @@ var init_dev_client_picker = __esm({
     init_platform_utils();
     init_utils();
     init_device_interact();
+    init_authority_gate();
     runAgentDeviceFn = runNative;
     fetchCandidatesFn = fetchFindCandidates;
     pressCandidateFn = pressCandidate;
@@ -84954,7 +85014,7 @@ function boundConnectConflict(status, request2) {
       message: "bundleId does not match the authority-bound app"
     };
   }
-  if (typeof request2.targetId === "string" && (typeof bundle?.targetId !== "string" || request2.targetId !== bundle.targetId)) {
+  if (typeof request2.targetId === "string" && bundle && (typeof bundle.targetId !== "string" || request2.targetId !== bundle.targetId)) {
     return {
       code: "CDP_TARGET_AUTHORITY_MISMATCH",
       message: "targetId is not the target already proven by this session"
@@ -85062,7 +85122,7 @@ function createRegisteredConnectHandler(runtime, pinBoundSession) {
 }
 
 // packages/rn-dev-agent-core/dist/session/connect-exact-session-target.js
-var IOS_EXACT_TARGET_READINESS_TIMEOUT_MS = 15e3;
+var IOS_EXACT_TARGET_READINESS_TIMEOUT_MS = 12e4;
 var ANDROID_EXACT_TARGET_READINESS_TIMEOUT_MS = 12e4;
 function exactSessionTargetReadinessTimeoutMs(platform) {
   return platform === "android" ? ANDROID_EXACT_TARGET_READINESS_TIMEOUT_MS : IOS_EXACT_TARGET_READINESS_TIMEOUT_MS;
@@ -85968,7 +86028,7 @@ async function reconnectSessionRuntime(status) {
     const current = getClient();
     await current.disconnect();
     setClient(createClient(metroPort));
-    await connectExactSessionTarget2({ metroPort, platform, appId, deviceId }, 15e3);
+    await connectExactSessionTarget2({ metroPort, platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
     return;
   }
   const connection = await connectExactSessionTarget2({ metroPort, platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
@@ -85989,7 +86049,7 @@ async function relaunchSessionRuntime(status) {
       "--initialUrl",
       `http://127.0.0.1:${String(metroPort)}`
     ]);
-    await connectExactSessionTarget2({ metroPort, platform, appId, deviceId }, 15e3);
+    await connectExactSessionTarget2({ metroPort, platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
     return;
   }
   if (!boundDevClientUrl) {
@@ -86170,7 +86230,7 @@ trackedTool("cdp_diagnostic_renderers", 'Diagnostic helper for "fiber root invis
 trackedTool("cdp_connect", "Connect only the exact app target on the authority-bound Metro and commit its signed initial-bundle handshake. Omitted port/platform/app values come from the session; conflicts refuse.", {
   metroPort: external_exports.number().optional().describe("Must equal the authority-bound Metro port; omitted uses that exact port"),
   platform: external_exports.string().optional().describe('Filter target by platform (e.g. "ios", "android"). If already connected to a different platform, forces reconnection to the correct target.'),
-  targetId: external_exports.string().optional().describe("Optional target already proven by this session; foreign or previously unbound IDs refuse"),
+  targetId: external_exports.string().optional().describe("Advisory; refuses only if it conflicts with the bound target"),
   bundleId: external_exports.string().optional().describe('App bundle id to match against target.description (e.g. "com.myapp.dev"). Filters out zombie Expo Go host pages when the real app target is present. B111/D635.'),
   force: external_exports.boolean().optional().default(false).describe("Force disconnect and reconnect even if already connected. Use to switch targets or recover from stale connections.")
 }, connectBoundSession);

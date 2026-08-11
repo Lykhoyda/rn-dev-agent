@@ -489,7 +489,7 @@ test('Android cold setup re-lists only the same exact target within its readines
   assert.deepEqual(listedPorts, [8191, 8191]);
   assert.deepEqual(connectedTargetIds, [exactTarget.id, exactTarget.id]);
   assert.deepEqual(disconnectedAttempts, [0, 1]);
-  assert.ok(now > 15_000, 'the recovery must exercise more than the iOS readiness budget');
+  assert.ok(now > 15_000, 'the recovery must exercise more than the legacy 15s readiness window');
   assert.ok(now < 120_000, 'the Android cold-start recovery must remain bounded');
 });
 
@@ -773,8 +773,72 @@ test('iOS retains the existing retry budget without replacing the exact client',
   );
 
   assert.equal(connected.targetId, target.id);
-  assert.equal(exactSessionTargetReadinessTimeoutMs('ios'), 15_000);
+  assert.equal(exactSessionTargetReadinessTimeoutMs('ios'), 120_000);
   assert.deepEqual(retryBudgets, [5, 5]);
   assert.equal(disconnectCalls, 0);
   assert.equal(createCalls, 0);
+});
+
+// GH #750: Expo dev-client re-registration after the managed terminate+relaunch
+// exceeded the old 15s iOS window, so every cdp_connect reported "found 0" for
+// a target cdp_targets could prove moments later. The readiness budget must
+// outlast a >15s re-registration on the exact device.
+test('iOS admits the sole exact-device target that re-registers after more than 15 seconds', async () => {
+  const target = {
+    id: 'ios-late-exact-1',
+    title: `${appId} (iPhone 17 Pro)`,
+    description: 'React Native Bridgeless [C++ connection]',
+    appId,
+    type: 'node',
+    webSocketDebuggerUrl: 'ws://127.0.0.1:8081/ios-late',
+    deviceName: 'iPhone 17 Pro',
+    platform: 'ios',
+    platformInference: 'probed',
+  };
+  let now = 0;
+  const registrationAtMs = 40_000;
+  const client = {
+    metroPort: 8081,
+    connectedTarget: null as typeof target | null,
+    connectionGeneration: 0,
+    listTargetsExact: async () => ({
+      port: 8081,
+      targets: now >= registrationAtMs ? [target] : [],
+    }),
+    connectExact: async () => {
+      client.connectedTarget = target;
+      client.connectionGeneration = 1;
+    },
+    disconnect: async () => {},
+  };
+
+  const connected = await connectExactSessionTarget(
+    { metroPort: 8081, platform: 'ios', appId, deviceId: 'ios-device-id' },
+    exactSessionTargetReadinessTimeoutMs('ios'),
+    {
+      getClient: () => client as unknown as CDPClient,
+      setClient: () => assert.fail('iOS must retain the existing exact client'),
+      createClient: () => client as unknown as CDPClient,
+      execute: async (file, args) => {
+        assert.equal(file, 'xcrun');
+        assert.deepEqual(args, ['simctl', 'list', 'devices', '--json']);
+        return {
+          stdout: JSON.stringify({
+            devices: {
+              runtime: [{ udid: 'ios-device-id', name: 'iPhone 17 Pro', state: 'Booted' }],
+            },
+          }),
+        };
+      },
+      now: () => now,
+      wait: async (ms) => {
+        now += ms;
+      },
+    },
+  );
+
+  assert.equal(connected.targetId, target.id);
+  assert.equal(connected.deviceId, 'ios-device-id');
+  assert.ok(now >= registrationAtMs, 'admission must have waited for the late re-registration');
+  assert.ok(now < 120_000, 'the iOS readiness budget must remain bounded');
 });

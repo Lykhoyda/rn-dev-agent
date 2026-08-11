@@ -8,6 +8,10 @@ import { okResult, failResult, warnResult } from '../utils.js';
 import type { ToolResult } from '../utils.js';
 import { fetchFindCandidates, pressCandidate } from './device-interact.js';
 import type { FindCandidate } from './device-interact.js';
+import {
+  completeManagedNativeOriginAuthority,
+  reproveManagedNativeOrigin,
+} from '../session/authority-gate.js';
 
 // GH #136 test seam: production code calls `runAgentDevice` through this
 // indirection so unit tests can swap a mock without touching the real
@@ -395,8 +399,14 @@ export async function isDevClientPickerShowing(): Promise<boolean> {
   return isPickerIndicatorPresent();
 }
 
+export interface DismissPickerAuthorityDeps {
+  reproveOrigin?: (args: object) => Promise<void>;
+  completeOrigin?: (args: object, targetExpected: boolean) => Promise<void>;
+}
+
 export function createDismissDevClientPickerHandler(
   getMetroPort?: () => number | null | undefined,
+  authorityDeps: DismissPickerAuthorityDeps = {},
 ): (args: { platform?: 'ios' | 'android' }) => Promise<ToolResult> {
   return async (args) => {
     const t0 = Date.now();
@@ -419,6 +429,10 @@ export function createDismissDevClientPickerHandler(
       );
     }
     if (outcome.dismissed) {
+      // GH #750: the tool runs without A/B (the stranded state it repairs), so
+      // after a dismissal it must reconnect the exact target and prove A/B.
+      await (authorityDeps.reproveOrigin ?? reproveManagedNativeOrigin)(args);
+      await (authorityDeps.completeOrigin ?? completeManagedNativeOriginAuthority)(args, true);
       return okResult(
         { dismissed: true, reason: outcome.reason, platform: outcome.platform },
         { meta },

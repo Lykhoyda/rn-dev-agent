@@ -1161,7 +1161,10 @@ async function reconnectSessionRuntime(
     const current = getClient();
     await current.disconnect();
     setClient(createClient(metroPort));
-    await connectExactSessionTarget({ metroPort, platform, appId, deviceId }, 15_000);
+    await connectExactSessionTarget(
+      { metroPort, platform, appId, deviceId },
+      exactSessionTargetReadinessTimeoutMs(platform),
+    );
     return;
   }
   const connection = await connectExactSessionTarget(
@@ -1194,7 +1197,10 @@ async function relaunchSessionRuntime(
       '--initialUrl',
       `http://127.0.0.1:${String(metroPort)}`,
     ]);
-    await connectExactSessionTarget({ metroPort, platform, appId, deviceId }, 15_000);
+    await connectExactSessionTarget(
+      { metroPort, platform, appId, deviceId },
+      exactSessionTargetReadinessTimeoutMs(platform),
+    );
     return;
   }
 
@@ -1496,9 +1502,7 @@ trackedTool(
     targetId: z
       .string()
       .optional()
-      .describe(
-        'Optional target already proven by this session; foreign or previously unbound IDs refuse',
-      ),
+      .describe('Advisory; refuses only if it conflicts with the bound target'),
     bundleId: z
       .string()
       .optional()

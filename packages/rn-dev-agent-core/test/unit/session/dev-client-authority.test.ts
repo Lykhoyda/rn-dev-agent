@@ -493,6 +493,41 @@ test('bound connect rejects every explicit target dimension that contradicts the
   );
 });
 
+// GH #750: with B unbound there is no proven target to conflict with, so a
+// cdp_targets-derived targetId must reach the pin flow (which proves the sole
+// exact-device target itself) instead of dead-ending the recovery.
+test('bound connect accepts an advisory targetId while the bundle is unbound', () => {
+  const unbound = {
+    bindings: {
+      metroPort: 8341,
+      device: { platform: 'ios', appId: 'com.example.app' },
+      bundle: null,
+    },
+  };
+
+  assert.equal(boundConnectConflict(unbound, { targetId: 'target-from-cdp-targets' }), null);
+  assert.equal(
+    boundConnectConflict(unbound, {
+      metroPort: 8341,
+      platform: 'ios',
+      bundleId: 'com.example.app',
+      targetId: 'target-from-cdp-targets',
+    }),
+    null,
+  );
+  const corrupt = {
+    bindings: {
+      metroPort: 8341,
+      device: { platform: 'ios', appId: 'com.example.app' },
+      bundle: { targetId: 42 },
+    },
+  };
+  assert.equal(
+    boundConnectConflict(corrupt, { targetId: 'target-a' })?.code,
+    'CDP_TARGET_AUTHORITY_MISMATCH',
+  );
+});
+
 test('dev-client pin refuses a manifest whose launch asset leaves the managed endpoint', async () => {
   const marker = buildSignedMetroMarker(expected, 'signer');
   const launched = [];

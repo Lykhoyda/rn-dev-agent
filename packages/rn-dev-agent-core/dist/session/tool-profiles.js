@@ -90,9 +90,11 @@ const cdpRead = [
     'expect_text',
     'expect_visible_by_testid',
 ];
+// GH #750: picker recovery drives native primitives while A/B are missing (the
+// stranded-picker state it repairs), then proves A/B via the managed origin.
+const pickerRecovery = ['cdp_dismiss_dev_client_picker'];
 const cdpMutation = [
     'cdp_dev_settings',
-    'cdp_dismiss_dev_client_picker',
     'cdp_dispatch',
     'cdp_evaluate',
     'cdp_exception_breakpoint',
@@ -210,6 +212,14 @@ add(cdpMutation, {
     axes: facetsOf(throughRuntime, { without: ['A'] }),
     mutation: true,
     liveBundleProbe: true,
+});
+add(pickerRecovery, {
+    kind: 'authoritative',
+    groups: throughRuntime,
+    axes: facetsOf(throughRuntime, { without: ['A', 'B'] }),
+    managedOrigin: true,
+    mutation: true,
+    liveBundleProbe: false,
 });
 // Observe is a read-only Session child; its mutating web routes keep their own gates.
 add(observe, {

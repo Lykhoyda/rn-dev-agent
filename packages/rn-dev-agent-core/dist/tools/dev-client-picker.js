@@ -2,6 +2,7 @@ import { runNative as _runAgentDeviceImpl, hasActiveSession, getActiveSession, }
 import { detectPlatform } from './platform-utils.js';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { fetchFindCandidates, pressCandidate } from './device-interact.js';
+import { completeManagedNativeOriginAuthority, reproveManagedNativeOrigin, } from '../session/authority-gate.js';
 // GH #136 test seam: production code calls `runAgentDevice` through this
 // indirection so unit tests can swap a mock without touching the real
 // agent-device CLI subprocess. Production behavior is identity-equivalent
@@ -350,7 +351,7 @@ export async function isDevClientPickerShowing() {
         return false;
     return isPickerIndicatorPresent();
 }
-export function createDismissDevClientPickerHandler(getMetroPort) {
+export function createDismissDevClientPickerHandler(getMetroPort, authorityDeps = {}) {
     return async (args) => {
         const t0 = Date.now();
         // GH #523 sub-3: prefer the picker row matching the project's Metro port
@@ -368,6 +369,10 @@ export function createDismissDevClientPickerHandler(getMetroPort) {
             return failResult('No device session open. Call device_snapshot action="open" first.', 'DEV_CLIENT_PICKER_NO_SESSION', meta);
         }
         if (outcome.dismissed) {
+            // GH #750: the tool runs without A/B (the stranded state it repairs), so
+            // after a dismissal it must reconnect the exact target and prove A/B.
+            await (authorityDeps.reproveOrigin ?? reproveManagedNativeOrigin)(args);
+            await (authorityDeps.completeOrigin ?? completeManagedNativeOriginAuthority)(args, true);
             return okResult({ dismissed: true, reason: outcome.reason, platform: outcome.platform }, { meta });
         }
         if (outcome.reason.toLowerCase().includes('could not find')) {
