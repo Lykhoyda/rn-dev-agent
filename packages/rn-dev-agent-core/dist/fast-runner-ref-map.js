@@ -7,7 +7,6 @@ let lastSnapshotHash = null;
 const lastPackageSnapshotHashes = new Map();
 let snapshotGeneration = 0;
 let keyboardStateAtSnapshot = null;
-const systemUiAuthorizedRefs = new Set();
 // #519 review: honest hittable (#395) guarantees only the CENTER is on-screen,
 // so a straddling card (x=250..550 on a 402pt viewport) is legitimately
 // hittable and would seed the union past the physical screen. iOS snapshots
@@ -136,7 +135,6 @@ export function isRefMapFresh(maxAgeMs = MAX_REF_MAP_AGE_MS) {
 export function clearRefMap() {
     refMap.clear();
     metadataMap.clear();
-    systemUiAuthorizedRefs.clear();
     screenRect = null;
     lastUpdated = 0;
     lastSnapshotHash = null;
@@ -213,9 +211,6 @@ export function updateRefMapFromFlat(nodes, freshness = {}) {
     if (validCount === 0 && refMap.size > 0) {
         return { applied: false, reason: 'empty-capture' };
     }
-    // System-UI scope is explicit per trustworthy snapshot. Never carry an
-    // authorization onto refs minted by a later hierarchy generation.
-    systemUiAuthorizedRefs.clear();
     // refMap IS cleared (coordinates must never be served across generations —
     // only the CURRENT snapshot is tappable), but metadataMap is NOT: ref ids are
     // positional, so ids absent from this snapshot cannot collide with current
@@ -321,15 +316,6 @@ export function getCachedMetadata(ref) {
 export function getCachedPackageName(ref) {
     const key = ref.startsWith('@') ? ref.slice(1) : ref;
     return metadataMap.get(key)?.packageName ?? null;
-}
-export function authorizeSystemUiRef(ref) {
-    const key = ref.startsWith('@') ? ref.slice(1) : ref;
-    if (metadataMap.has(key))
-        systemUiAuthorizedRefs.add(key);
-}
-export function isSystemUiRefAuthorized(ref) {
-    const key = ref.startsWith('@') ? ref.slice(1) : ref;
-    return metadataMap.has(key) && systemUiAuthorizedRefs.has(key);
 }
 export function getCachedSignature(ref) {
     const key = ref.startsWith('@') ? ref.slice(1) : ref;

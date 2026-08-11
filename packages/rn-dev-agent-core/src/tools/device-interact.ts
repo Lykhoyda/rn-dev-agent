@@ -31,7 +31,7 @@ import { okResult, failResult, createStepTimer } from '../utils.js';
 import { isAgentDeviceRunnerSentinel, recoverFromRunnerLeak } from './runner-leak-recovery.js';
 import type { RecoveryTier } from './runner-leak-recovery.js';
 import { reopenSessionForRecovery } from './device-session.js';
-import { authorizeSystemUiRef, type FlatNode } from '../fast-runner-ref-map.js';
+import type { FlatNode } from '../fast-runner-ref-map.js';
 import type { CDPClient } from '../cdp-client.js';
 import { getCachedMetadata, isRefMapFresh, lookupRef } from '../fast-runner-ref-map.js';
 import {
@@ -305,7 +305,6 @@ export async function pressCandidate(
   includeSystemUi = false,
 ): Promise<ToolResult> {
   const ref = candidate.ref.startsWith('@') ? candidate.ref : `@${candidate.ref}`;
-  if (includeSystemUi) authorizeSystemUiRef(ref);
   if (action === 'click') {
     const tapArgs = ['press', ref, ...(includeSystemUi ? ['--include-system-ui'] : [])];
     const tap = async (): Promise<ToolResult> => surfaceKeyboardGuard(await runNative(tapArgs));
@@ -1485,9 +1484,10 @@ const NEXT_KEY_LABELS = ['Go', 'Done', 'Return', 'Next'];
 
 // GH #736: an Android IME key lives in the input-method package, never the
 // session app, so the app-window ownership gate would refuse it. The grant is
-// per-call and per-ref (no authorizeSystemUiRef, so nothing persists for a
-// later device_press) and requires the node to belong to the device's actual
-// default IME — a label match on any other outside-app window earns nothing.
+// per-call and per-ref (it lives only in this call's CLI args, so nothing
+// persists for a later device_press) and requires the node to belong to the
+// device's actual default IME — a label match on any other outside-app window
+// earns nothing.
 export function parseDefaultInputMethodPackage(raw: string): string | null {
   const value = raw.trim().split(/\r?\n/)[0]?.trim() ?? '';
   if (!value || value === 'null') return null;

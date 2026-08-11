@@ -8,8 +8,11 @@ package dev.lykhoyda.rndevagent.androidrunner
 object ExactPressSafety {
     data class ZOrderStep(
         val nodeIdentity: Int,
-        val drawingOrder: Int,
+        // null on API < 24, where AccessibilityNodeInfo.drawingOrder does not exist.
+        val drawingOrder: Int?,
     )
+
+    enum class OcclusionVerdict { CLEAR, OCCLUDED, UNKNOWN }
 
     fun traversalComplete(pendingNodeCount: Int): Boolean = pendingNodeCount == 0
 
@@ -20,18 +23,25 @@ object ExactPressSafety {
     ): Boolean = enabled && visibleToUser && containsRequestedPoint
 
     /**
-     * Returns true when a distinct same-window branch at the requested point
-     * may draw over the exact target. Ancestors and descendants are part of the
-     * target's own ownership chain and therefore are not blockers.
+     * Classifies whether a distinct same-window branch at the requested point
+     * draws over the exact target. Ancestors and descendants are part of the
+     * target's own ownership chain and therefore are not blockers; a missing
+     * drawing order is reported as UNKNOWN rather than assumed either way.
      */
-    fun sameWindowNodeMayOcclude(
+    fun sameWindowOcclusion(
         targetPath: List<ZOrderStep>,
         candidatePath: List<ZOrderStep>,
-    ): Boolean {
+    ): OcclusionVerdict {
         val shared = targetPath.zip(candidatePath).takeWhile { (target, candidate) ->
             target.nodeIdentity == candidate.nodeIdentity
         }.size
-        if (shared == targetPath.size || shared == candidatePath.size) return false
-        return candidatePath[shared].drawingOrder >= targetPath[shared].drawingOrder
+        if (shared == targetPath.size || shared == candidatePath.size) return OcclusionVerdict.CLEAR
+        val candidateOrder = candidatePath[shared].drawingOrder ?: return OcclusionVerdict.UNKNOWN
+        val targetOrder = targetPath[shared].drawingOrder ?: return OcclusionVerdict.UNKNOWN
+        return if (candidateOrder >= targetOrder) {
+            OcclusionVerdict.OCCLUDED
+        } else {
+            OcclusionVerdict.CLEAR
+        }
     }
 }

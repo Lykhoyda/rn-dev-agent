@@ -18,7 +18,6 @@ import {
   clearRefMap,
   getLastSnapshotHash,
   invalidateLastSnapshotHash,
-  isSystemUiRefAuthorized,
   updateRefMapFromFlat,
 } from '../../dist/fast-runner-ref-map.js';
 import { okResult } from '../../dist/utils.js';
@@ -108,11 +107,13 @@ test('explicit system-UI find scope is preserved on the returned ref', async () 
     data: { ref: string; scope: string };
   };
   assert.equal(envelope.data.scope, 'system-ui-explicit');
-  assert.equal(isSystemUiRefAuthorized(systemHome.ref), true);
-  assert.equal(buildRunAndroidArgs(['press', systemHome.ref], appId).includeSystemUi, true);
+  assert.equal(
+    buildRunAndroidArgs(['press', systemHome.ref, '--include-system-ui'], appId).includeSystemUi,
+    true,
+  );
 });
 
-test('system-UI ref authorization never crosses snapshot generations', async () => {
+test('an explicit system-UI press never grants a later untyped device_press', async () => {
   updateRefMapFromFlat([systemHome]);
   await pressCandidate(
     { ref: systemHome.ref, testID: systemHome.identifier, type: systemHome.type },
@@ -120,8 +121,11 @@ test('system-UI ref authorization never crosses snapshot generations', async () 
     undefined,
     true,
   );
-  updateRefMapFromFlat([appHome]);
-  assert.equal(isSystemUiRefAuthorized(systemHome.ref), false);
+  assert.equal(buildRunAndroidArgs(['press', systemHome.ref], appId).includeSystemUi, undefined);
+  assert.equal(
+    androidOutsideAppWindowRefusal(['press', systemHome.ref], appId)?.packageName,
+    'com.android.systemui',
+  );
 });
 
 test('fresh testID refs use exact accessibility ownership instead of snapshot coordinates', () => {
@@ -202,7 +206,7 @@ test('stale Android runners without scoped exact-interaction semantics are rejec
   );
 });
 
-test('Android runner reports a rejected tap as failure instead of success', async () => {
+test('Android runner reports a rejected tap truthfully per dispatch mechanism', async () => {
   _setAndroidRunnerStateForTest({
     schemaVersion: 1,
     hostPort: 22089,
@@ -244,6 +248,22 @@ test('Android runner reports a rejected tap as failure instead of success', asyn
   assert.equal(envelope.ok, false);
   assert.equal(envelope.code, 'INTERACTION_NOT_ACTUATED');
   assert.equal(envelope.meta.mutation, 'none');
+
+  const coordinateResult = await runAndroid({
+    command: 'tap',
+    x: 960,
+    y: 430,
+    bundleId: appId,
+  });
+  const coordinateEnvelope = JSON.parse(coordinateResult.content[0].text) as {
+    ok: boolean;
+    code: string;
+    meta: { mutation: string; attempts: number };
+  };
+  assert.equal(coordinateResult.isError, true);
+  assert.equal(coordinateEnvelope.code, 'INTERACTION_EFFECT_UNVERIFIED');
+  assert.equal(coordinateEnvelope.meta.mutation, 'possible');
+  assert.equal(coordinateEnvelope.meta.attempts, 1);
 });
 
 test('effect hashes ignore system-window changes and observe owned-app changes', () => {
@@ -347,7 +367,10 @@ test('owned-app refs, explicit system scope, and coordinate taps stay unrefused'
     undefined,
     true,
   );
-  assert.equal(androidOutsideAppWindowRefusal(['press', systemHome.ref], appId), null);
+  assert.equal(
+    androidOutsideAppWindowRefusal(['press', systemHome.ref], appId)?.packageName,
+    'com.android.systemui',
+  );
 });
 
 test('device_focus_next keeps actuating the Android IME key it already matched', () => {
@@ -442,7 +465,6 @@ test('the default-IME probe accepts only a well-formed package', () => {
 test('the focus-next keyboard grant never leaks into device_press', () => {
   updateRefMapFromFlat([appHome, imeKey, systemHome]);
   focusNextPressArgs(imeKey.ref, imeKey.packageName, 'android', appId, imePackage);
-  assert.equal(isSystemUiRefAuthorized(imeKey.ref), false);
   assert.equal(
     androidOutsideAppWindowRefusal(['press', imeKey.ref], appId)?.packageName,
     'com.google.android.inputmethod.latin',
@@ -596,7 +618,9 @@ test('exact press disambiguates duplicates by the requested point and clicks the
   assert.match(source, /ExactPressSafety\.traversalComplete\(stack\.size\)/);
   assert.match(source, /ExactPressSafety\.liveTargetIsHittable/);
   assert.match(source, /requireNoSameWindowOccluder\(clickable, requested\)/);
-  assert.match(source, /ExactPressSafety\.sameWindowNodeMayOcclude/);
+  assert.match(source, /ExactPressSafety\.sameWindowOcclusion\(targetPath, it\)/);
+  assert.match(source, /ExactPressSafety\.OcclusionVerdict\.OCCLUDED -> occluded = true/);
+  assert.match(source, /else -> zOrderUnresolved = true/);
   assert.match(source, /candidate\.isClickable/);
   assert.match(source, /requireNoSameWindowOccluder\(clickable, requested\)\s*return clickable/);
   assert.match(source, /"exact-target-not-hittable"/);

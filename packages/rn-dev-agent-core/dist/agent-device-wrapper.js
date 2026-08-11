@@ -5,7 +5,7 @@ import { failResult } from './utils.js';
 import { startFastRunner, probeFastRunnerLiveness, probeFastRunnerLivenessDetailed, adoptPersistedFastRunnerState, reapStaleFastRunner, hasBuiltTestProduct, derivedDataPathForRunner, acquireRunnerRebuildLock, releaseRunnerRebuildLock, runnerRebuildBudget, consumePendingFastRunnerArtifactNote, getRunnerPostMortem, } from './runners/rn-fast-runner-client.js';
 import { getPluginVersion } from './runners/protocol.js';
 import { resolveBootedIosUdid } from './tools/device-screenshot-raw.js';
-import { refCenter, getScreenRect, clearRefMap, isRefMapFresh, MAX_REF_MAP_AGE_MS, getCachedSignature, getCachedMetadata, getCachedPackageName, getFreshRefTarget, isSystemUiRefAuthorized, refreshRef, getLastSnapshotHash, getLastSnapshotHashForPackage, invalidateLastSnapshotHash, } from './fast-runner-ref-map.js';
+import { refCenter, getScreenRect, clearRefMap, isRefMapFresh, MAX_REF_MAP_AGE_MS, getCachedSignature, getCachedMetadata, getCachedPackageName, getFreshRefTarget, refreshRef, getLastSnapshotHash, getLastSnapshotHashForPackage, invalidateLastSnapshotHash, } from './fast-runner-ref-map.js';
 import { recordNoUiChange, recordUiChange, WEDGED_DISTINCT_TARGETS, WEDGED_RUNTIME_HINT, } from './lifecycle/no-change-tracker.js';
 import { resolveBundleId } from './project-config.js';
 import { getStateDir, readJsonStateFile, writeJsonStateFileAtomic, } from './util/secure-state-file.js';
@@ -561,7 +561,7 @@ export function buildRunAndroidArgs(cliArgs, bundleId) {
         case 'tap': {
             const ref = positionals[0];
             if (ref && ref.startsWith('@')) {
-                const includeSystemUi = cliArgs.includes('--include-system-ui') || isSystemUiRefAuthorized(ref);
+                const includeSystemUi = cliArgs.includes('--include-system-ui');
                 const center = isRefMapFresh() ? refCenter(ref) : null;
                 if (!center) {
                     return {
@@ -720,7 +720,7 @@ export function androidOutsideAppWindowRefusal(cliArgs, appId, ref) {
     const target = ref !== undefined ? (ref.startsWith('@') ? ref : `@${ref}`) : positionalArgs(cliArgs)[0];
     if (!target || !target.startsWith('@'))
         return null;
-    if (cliArgs.includes('--include-system-ui') || isSystemUiRefAuthorized(target))
+    if (cliArgs.includes('--include-system-ui'))
         return null;
     const packageName = getCachedPackageName(target);
     if (!packageName || packageName === appId)

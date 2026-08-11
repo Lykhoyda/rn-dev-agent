@@ -36,7 +36,6 @@ import {
   getCachedMetadata,
   getCachedPackageName,
   getFreshRefTarget,
-  isSystemUiRefAuthorized,
   refreshRef,
   getLastSnapshotHash,
   getLastSnapshotHashForPackage,
@@ -712,8 +711,7 @@ export function buildRunAndroidArgs(
     case 'tap': {
       const ref = positionals[0];
       if (ref && ref.startsWith('@')) {
-        const includeSystemUi =
-          cliArgs.includes('--include-system-ui') || isSystemUiRefAuthorized(ref);
+        const includeSystemUi = cliArgs.includes('--include-system-ui');
         const center = isRefMapFresh() ? refCenter(ref) : null;
         if (!center) {
           return {
@@ -895,7 +893,7 @@ export function androidOutsideAppWindowRefusal(
   const target =
     ref !== undefined ? (ref.startsWith('@') ? ref : `@${ref}`) : positionalArgs(cliArgs)[0];
   if (!target || !target.startsWith('@')) return null;
-  if (cliArgs.includes('--include-system-ui') || isSystemUiRefAuthorized(target)) return null;
+  if (cliArgs.includes('--include-system-ui')) return null;
   const packageName = getCachedPackageName(target);
   if (!packageName || packageName === appId) return null;
   return { ref: target, packageName, appId };

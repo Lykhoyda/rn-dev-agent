@@ -2012,10 +2012,25 @@ export async function runAndroid(args: RunAndroidArgs): Promise<ToolResult> {
   if (args.command === 'tap') {
     const data = resp.data as { tapped?: unknown } | undefined;
     if (data?.tapped !== true) {
+      // NOTE: ACTION_CLICK is atomic, but a false coordinate click can mean the
+      // touch-up failed after the app already received the touch-down.
+      const exactTarget = args.exactIdentifier !== undefined && args.exactType !== undefined;
+      if (exactTarget) {
+        return failResult(
+          'Android runner could not prove that the requested interaction was actuated.',
+          'INTERACTION_NOT_ACTUATED',
+          { mutation: 'none', reason: 'runner-rejected-tap', ...recoveryMeta },
+        );
+      }
       return failResult(
-        'Android runner could not prove that the requested interaction was actuated.',
-        'INTERACTION_NOT_ACTUATED',
-        { mutation: 'none', reason: 'runner-rejected-tap', ...recoveryMeta },
+        'The Android coordinate tap did not complete, and part of the gesture may have reached the app.',
+        'INTERACTION_EFFECT_UNVERIFIED',
+        {
+          mutation: 'possible',
+          reason: 'coordinate-tap-incomplete',
+          attempts: 1,
+          ...recoveryMeta,
+        },
       );
     }
   }

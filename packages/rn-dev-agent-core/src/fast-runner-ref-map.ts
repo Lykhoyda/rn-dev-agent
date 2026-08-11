@@ -72,7 +72,6 @@ let lastSnapshotHash: string | null = null;
 const lastPackageSnapshotHashes = new Map<string, string>();
 let snapshotGeneration = 0;
 let keyboardStateAtSnapshot: boolean | null = null;
-const systemUiAuthorizedRefs = new Set<string>();
 
 // Screen-rect derivation: hittable-seeded union GROWN BY OVERLAP.
 //
@@ -237,7 +236,6 @@ export function isRefMapFresh(maxAgeMs: number = MAX_REF_MAP_AGE_MS): boolean {
 export function clearRefMap(): void {
   refMap.clear();
   metadataMap.clear();
-  systemUiAuthorizedRefs.clear();
   screenRect = null;
   lastUpdated = 0;
   lastSnapshotHash = null;
@@ -338,10 +336,6 @@ export function updateRefMapFromFlat(
   if (validCount === 0 && refMap.size > 0) {
     return { applied: false, reason: 'empty-capture' };
   }
-
-  // System-UI scope is explicit per trustworthy snapshot. Never carry an
-  // authorization onto refs minted by a later hierarchy generation.
-  systemUiAuthorizedRefs.clear();
 
   // refMap IS cleared (coordinates must never be served across generations —
   // only the CURRENT snapshot is tappable), but metadataMap is NOT: ref ids are
@@ -460,16 +454,6 @@ export function getCachedMetadata(ref: string): RefMetadata | null {
 export function getCachedPackageName(ref: string): string | null {
   const key = ref.startsWith('@') ? ref.slice(1) : ref;
   return metadataMap.get(key)?.packageName ?? null;
-}
-
-export function authorizeSystemUiRef(ref: string): void {
-  const key = ref.startsWith('@') ? ref.slice(1) : ref;
-  if (metadataMap.has(key)) systemUiAuthorizedRefs.add(key);
-}
-
-export function isSystemUiRefAuthorized(ref: string): boolean {
-  const key = ref.startsWith('@') ? ref.slice(1) : ref;
-  return metadataMap.has(key) && systemUiAuthorizedRefs.has(key);
 }
 
 export function getCachedSignature(ref: string): RefSignature | null {

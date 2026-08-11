@@ -437,7 +437,7 @@ class CommandDispatcher(
         target: AccessibilityNodeInfo,
         requested: Point,
     ) {
-        val targetPath = zOrderPath(target) ?: throw exactTargetNotHittable()
+        val targetPath = zOrderPath(target) ?: throw exactTargetZOrderUnresolved()
         val window = instrumentation.uiAutomation.windows.firstOrNull { it.id == target.windowId }
             ?: throw exactTargetNotHittable()
         val root = window.root ?: throw exactTargetNotHittable()
@@ -445,6 +445,7 @@ class CommandDispatcher(
         stack.addLast(AccessibilityNodeInfo.obtain(root))
         var visited = 0
         var occluded = false
+        var zOrderUnresolved = false
         val bounds = Rect()
         while (stack.isNotEmpty() && visited++ < 20_000) {
             val candidate = stack.removeLast()
@@ -456,19 +457,21 @@ class CommandDispatcher(
                 candidate.isClickable && !bounds.isEmpty &&
                 bounds.contains(requested.x, requested.y)
             if (actionableAtPoint) {
-                val candidatePath = zOrderPath(candidate)
-                if (candidatePath == null ||
-                    ExactPressSafety.sameWindowNodeMayOcclude(targetPath, candidatePath)
-                ) {
-                    occluded = true
+                when (zOrderPath(candidate)?.let {
+                    ExactPressSafety.sameWindowOcclusion(targetPath, it)
+                }) {
+                    ExactPressSafety.OcclusionVerdict.OCCLUDED -> occluded = true
+                    ExactPressSafety.OcclusionVerdict.CLEAR -> Unit
+                    else -> zOrderUnresolved = true
                 }
             }
             candidate.recycle()
-            if (occluded) break
+            if (occluded || zOrderUnresolved) break
         }
         val traversalComplete = ExactPressSafety.traversalComplete(stack.size)
         while (stack.isNotEmpty()) stack.removeLast().recycle()
         if (occluded) throw exactTargetNotHittable()
+        if (zOrderUnresolved) throw exactTargetZOrderUnresolved()
         if (!traversalComplete) {
             throw ExactPressException(
                 "INTERACTION_NOT_ACTUATED",
@@ -478,6 +481,15 @@ class CommandDispatcher(
             )
         }
     }
+
+    private fun exactTargetZOrderUnresolved(): ExactPressException = ExactPressException(
+        "INTERACTION_NOT_ACTUATED",
+        "none",
+        "exact-target-unresolved",
+        "Exact Android draw order at the requested point could not be resolved " +
+            "(unavailable below API 24, or the node path exceeded its depth cap); " +
+            "refusing rather than pressing a possibly covered control.",
+    )
 
     private fun zOrderPath(node: AccessibilityNodeInfo): List<ExactPressSafety.ZOrderStep>? {
         val path = mutableListOf<ExactPressSafety.ZOrderStep>()
@@ -490,7 +502,7 @@ class CommandDispatcher(
                     drawingOrder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                         current.drawingOrder
                     } else {
-                        0
+                        null
                     },
                 ),
             )

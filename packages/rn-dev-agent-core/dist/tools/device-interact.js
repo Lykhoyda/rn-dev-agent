@@ -10,7 +10,6 @@ import { withSession } from '../utils.js';
 import { okResult, failResult, createStepTimer } from '../utils.js';
 import { isAgentDeviceRunnerSentinel, recoverFromRunnerLeak } from './runner-leak-recovery.js';
 import { reopenSessionForRecovery } from './device-session.js';
-import { authorizeSystemUiRef } from '../fast-runner-ref-map.js';
 import { getCachedMetadata, isRefMapFresh, lookupRef } from '../fast-runner-ref-map.js';
 import { runFillCoordinator, } from './fill-coordinator.js';
 const execFile = promisify(execFileCb);
@@ -208,8 +207,6 @@ function runnerLeakFailResult(query, recoveryReason) {
 }
 export async function pressCandidate(candidate, action, getClient, includeSystemUi = false) {
     const ref = candidate.ref.startsWith('@') ? candidate.ref : `@${candidate.ref}`;
-    if (includeSystemUi)
-        authorizeSystemUiRef(ref);
     if (action === 'click') {
         const tapArgs = ['press', ref, ...(includeSystemUi ? ['--include-system-ui'] : [])];
         const tap = async () => surfaceKeyboardGuard(await runNative(tapArgs));
@@ -1077,9 +1074,10 @@ export function createDeviceBackHandler() {
 const NEXT_KEY_LABELS = ['Go', 'Done', 'Return', 'Next'];
 // GH #736: an Android IME key lives in the input-method package, never the
 // session app, so the app-window ownership gate would refuse it. The grant is
-// per-call and per-ref (no authorizeSystemUiRef, so nothing persists for a
-// later device_press) and requires the node to belong to the device's actual
-// default IME — a label match on any other outside-app window earns nothing.
+// per-call and per-ref (it lives only in this call's CLI args, so nothing
+// persists for a later device_press) and requires the node to belong to the
+// device's actual default IME — a label match on any other outside-app window
+// earns nothing.
 export function parseDefaultInputMethodPackage(raw) {
     const value = raw.trim().split(/\r?\n/)[0]?.trim() ?? '';
     if (!value || value === 'null')

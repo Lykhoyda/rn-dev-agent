@@ -1489,7 +1489,18 @@ export async function runAndroid(args) {
     if (args.command === 'tap') {
         const data = resp.data;
         if (data?.tapped !== true) {
-            return failResult('Android runner could not prove that the requested interaction was actuated.', 'INTERACTION_NOT_ACTUATED', { mutation: 'none', reason: 'runner-rejected-tap', ...recoveryMeta });
+            // NOTE: ACTION_CLICK is atomic, but a false coordinate click can mean the
+            // touch-up failed after the app already received the touch-down.
+            const exactTarget = args.exactIdentifier !== undefined && args.exactType !== undefined;
+            if (exactTarget) {
+                return failResult('Android runner could not prove that the requested interaction was actuated.', 'INTERACTION_NOT_ACTUATED', { mutation: 'none', reason: 'runner-rejected-tap', ...recoveryMeta });
+            }
+            return failResult('The Android coordinate tap did not complete, and part of the gesture may have reached the app.', 'INTERACTION_EFFECT_UNVERIFIED', {
+                mutation: 'possible',
+                reason: 'coordinate-tap-incomplete',
+                attempts: 1,
+                ...recoveryMeta,
+            });
         }
     }
     if (args.command === 'snapshot' && resp.data && typeof resp.data === 'object') {

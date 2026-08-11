@@ -19763,7 +19763,6 @@ function isRefMapFresh(maxAgeMs = MAX_REF_MAP_AGE_MS) {
 function clearRefMap() {
   refMap.clear();
   metadataMap.clear();
-  systemUiAuthorizedRefs.clear();
   screenRect = null;
   lastUpdated = 0;
   lastSnapshotHash = null;
@@ -19792,7 +19791,6 @@ function updateRefMapFromFlat(nodes, freshness = {}) {
   if (validCount === 0 && refMap.size > 0) {
     return { applied: false, reason: "empty-capture" };
   }
-  systemUiAuthorizedRefs.clear();
   refMap.clear();
   screenRect = null;
   snapshotGeneration = freshness.snapshotGeneration ?? snapshotGeneration + 1;
@@ -19880,15 +19878,6 @@ function getCachedPackageName(ref) {
   const key = ref.startsWith("@") ? ref.slice(1) : ref;
   return metadataMap.get(key)?.packageName ?? null;
 }
-function authorizeSystemUiRef(ref) {
-  const key = ref.startsWith("@") ? ref.slice(1) : ref;
-  if (metadataMap.has(key))
-    systemUiAuthorizedRefs.add(key);
-}
-function isSystemUiRefAuthorized(ref) {
-  const key = ref.startsWith("@") ? ref.slice(1) : ref;
-  return metadataMap.has(key) && systemUiAuthorizedRefs.has(key);
-}
 function getCachedSignature(ref) {
   const key = ref.startsWith("@") ? ref.slice(1) : ref;
   const rec = metadataMap.get(key);
@@ -19935,7 +19924,7 @@ function refreshRef(sig, nodes) {
   }
   return { kind: "ambiguous", candidates: matches.map((m) => m.node) };
 }
-var refMap, metadataMap, screenRect, lastUpdated, lastSnapshotHash, lastPackageSnapshotHashes, snapshotGeneration, keyboardStateAtSnapshot, systemUiAuthorizedRefs, WINDOW_TYPES, MAX_REF_MAP_AGE_MS;
+var refMap, metadataMap, screenRect, lastUpdated, lastSnapshotHash, lastPackageSnapshotHashes, snapshotGeneration, keyboardStateAtSnapshot, WINDOW_TYPES, MAX_REF_MAP_AGE_MS;
 var init_fast_runner_ref_map = __esm({
   "packages/rn-dev-agent-core/dist/fast-runner-ref-map.js"() {
     "use strict";
@@ -19948,7 +19937,6 @@ var init_fast_runner_ref_map = __esm({
     lastPackageSnapshotHashes = /* @__PURE__ */ new Map();
     snapshotGeneration = 0;
     keyboardStateAtSnapshot = null;
-    systemUiAuthorizedRefs = /* @__PURE__ */ new Set();
     WINDOW_TYPES = /* @__PURE__ */ new Set(["Application", "Window"]);
     MAX_REF_MAP_AGE_MS = 6e4;
   }
@@ -27371,7 +27359,16 @@ async function runAndroid(args) {
   if (args.command === "tap") {
     const data = resp.data;
     if (data?.tapped !== true) {
-      return failResult("Android runner could not prove that the requested interaction was actuated.", "INTERACTION_NOT_ACTUATED", { mutation: "none", reason: "runner-rejected-tap", ...recoveryMeta });
+      const exactTarget = args.exactIdentifier !== void 0 && args.exactType !== void 0;
+      if (exactTarget) {
+        return failResult("Android runner could not prove that the requested interaction was actuated.", "INTERACTION_NOT_ACTUATED", { mutation: "none", reason: "runner-rejected-tap", ...recoveryMeta });
+      }
+      return failResult("The Android coordinate tap did not complete, and part of the gesture may have reached the app.", "INTERACTION_EFFECT_UNVERIFIED", {
+        mutation: "possible",
+        reason: "coordinate-tap-incomplete",
+        attempts: 1,
+        ...recoveryMeta
+      });
     }
   }
   if (args.command === "snapshot" && resp.data && typeof resp.data === "object") {
@@ -27965,7 +27962,7 @@ function buildRunAndroidArgs(cliArgs, bundleId) {
     case "tap": {
       const ref = positionals[0];
       if (ref && ref.startsWith("@")) {
-        const includeSystemUi = cliArgs.includes("--include-system-ui") || isSystemUiRefAuthorized(ref);
+        const includeSystemUi = cliArgs.includes("--include-system-ui");
         const center = isRefMapFresh() ? refCenter(ref) : null;
         if (!center) {
           return {
@@ -28107,7 +28104,7 @@ function androidOutsideAppWindowRefusal(cliArgs, appId, ref) {
   const target = ref !== void 0 ? ref.startsWith("@") ? ref : `@${ref}` : positionalArgs(cliArgs)[0];
   if (!target || !target.startsWith("@"))
     return null;
-  if (cliArgs.includes("--include-system-ui") || isSystemUiRefAuthorized(target))
+  if (cliArgs.includes("--include-system-ui"))
     return null;
   const packageName = getCachedPackageName(target);
   if (!packageName || packageName === appId)
@@ -30642,8 +30639,6 @@ function runnerLeakFailResult(query, recoveryReason) {
 }
 async function pressCandidate(candidate, action, getClient2, includeSystemUi = false) {
   const ref = candidate.ref.startsWith("@") ? candidate.ref : `@${candidate.ref}`;
-  if (includeSystemUi)
-    authorizeSystemUiRef(ref);
   if (action === "click") {
     const tapArgs = ["press", ref, ...includeSystemUi ? ["--include-system-ui"] : []];
     const tap = async () => surfaceKeyboardGuard(await runNative(tapArgs));
@@ -31388,7 +31383,6 @@ var init_device_interact = __esm({
     init_utils();
     init_runner_leak_recovery();
     init_device_session();
-    init_fast_runner_ref_map();
     init_fast_runner_ref_map();
     init_fill_coordinator();
     execFile12 = promisify12(execFileCb9);
