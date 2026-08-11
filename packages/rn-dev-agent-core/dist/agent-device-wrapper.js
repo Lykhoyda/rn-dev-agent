@@ -239,10 +239,13 @@ export function promoteSnapshotOriginSince(checkpoint) {
             snapshot.authorityReceipt.originAuthority === 'proven') {
             continue;
         }
-        snapshot.authorityReceipt.originAuthority = 'proven';
-        if (snapshot.authorityReceipt.sessionId !== null) {
-            snapshotAuthorityProvider?.record(snapshot.authorityReceipt);
-        }
+        const promoted = {
+            ...snapshot.authorityReceipt,
+            originAuthority: 'proven',
+        };
+        if (promoted.sessionId !== null)
+            snapshotAuthorityProvider?.record(promoted);
+        snapshot.authorityReceipt = promoted;
     }
 }
 export function getCachedSnapshot(platform) {

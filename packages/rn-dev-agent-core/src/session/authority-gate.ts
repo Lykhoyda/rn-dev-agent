@@ -683,6 +683,40 @@ async function probeOptionalNativeOrigin(
   }
 }
 
+async function beginOptionalNativeOrigin(
+  dependencies: AuthorityGateDependencies,
+  input: Omit<AuthorityProbeInput, 'axis' | 'phase'>,
+): Promise<AuthorityObservation[]> {
+  if (input.profile.nativeOrigin !== 'optional') return [];
+  return probeOptionalNativeOrigin(dependencies, { ...input, phase: 'preflight' });
+}
+
+async function confirmOptionalNativeOrigin(
+  dependencies: AuthorityGateDependencies,
+  before: readonly AuthorityObservation[],
+  input: Omit<AuthorityProbeInput, 'axis' | 'phase'>,
+): Promise<{ after: AuthorityObservation[]; proven: boolean }> {
+  const after =
+    before.length > 0
+      ? await probeOptionalNativeOrigin(dependencies, { ...input, phase: 'postflight' })
+      : [];
+  const proven =
+    before.length === 2 &&
+    after.length === 2 &&
+    before.every(
+      (observation) =>
+        observation.identity ===
+        after.find((candidate) => candidate.axis === observation.axis)?.identity,
+    );
+  return { after, proven };
+}
+
+// Staged snapshot receipts re-validate against the live runner binding at
+// commit, so a gate-owned runner release leaves nothing committable.
+function platformReceiptAuthorityHeld(status: SessionStatus): boolean {
+  return Boolean(status.bindings.runner);
+}
+
 function nativeOriginMeta(
   profile: AuthorityProfile,
   proven: boolean,
@@ -1143,16 +1177,12 @@ export function createAuthorityGate(
             operation = preflight.operation;
             status = preflight.status;
             initialAuthorityVersion = status.authorityVersion;
-            const optionalOriginBefore =
-              profile.nativeOrigin === 'optional'
-                ? await probeOptionalNativeOrigin(dependencies, {
-                    phase: 'preflight',
-                    tool,
-                    profile,
-                    status,
-                    args,
-                  })
-                : [];
+            const optionalOriginBefore = await beginOptionalNativeOrigin(dependencies, {
+              tool,
+              profile,
+              status,
+              args,
+            });
             registry.verifyOperation(operation);
             const snapshotCheckpoint = dependencies.snapshotCaptureCheckpoint?.();
             const result = await registry.runWithOperation(operation, () =>
@@ -1253,25 +1283,13 @@ export function createAuthorityGate(
                 dependencies.probe({ axis, phase: 'postflight', tool, profile, status, args }),
               ),
             );
-            const optionalOriginAfter =
-              optionalOriginBefore.length > 0
-                ? await probeOptionalNativeOrigin(dependencies, {
-                    phase: 'postflight',
-                    tool,
-                    profile,
-                    status,
-                    args,
-                  })
-                : [];
-            const optionalOriginProven =
-              optionalOriginBefore.length === 2 &&
-              optionalOriginAfter.length === 2 &&
-              optionalOriginBefore.every(
-                (observation) =>
-                  observation.identity ===
-                  optionalOriginAfter.find((candidate) => candidate.axis === observation.axis)
-                    ?.identity,
-              );
+            const { after: optionalOriginAfter, proven: optionalOriginProven } =
+              await confirmOptionalNativeOrigin(dependencies, optionalOriginBefore, {
+                tool,
+                profile,
+                status,
+                args,
+              });
             for (const observation of before) {
               if (runtimeTargetChanged && observation.axis === 'B') continue;
               if (observation.axis === 'C' || !transitionAxes.after.includes(observation.axis)) {
@@ -1307,9 +1325,11 @@ export function createAuthorityGate(
               }
               status = proofStatus;
             }
+            const transitionReceiptsCommittable = platformReceiptAuthorityHeld(status);
             if (
               operation &&
               optionalOriginProven &&
+              transitionReceiptsCommittable &&
               snapshotCheckpoint !== undefined &&
               dependencies.promoteSnapshotOrigin
             ) {
@@ -1317,7 +1337,9 @@ export function createAuthorityGate(
                 dependencies.promoteSnapshotOrigin!(snapshotCheckpoint);
               });
             }
-            if (operation) registry.commitPlatformAuthorityReceipts(operation);
+            if (operation && transitionReceiptsCommittable) {
+              registry.commitPlatformAuthorityReceipts(operation);
+            }
             const transitionReceiptProfile = optionalOriginProven
               ? {
                   ...profile,
@@ -1372,6 +1394,7 @@ export function createAuthorityGate(
               return addMeta(committedStaleDeviceRelease.result, {
                 authoritative: false,
                 authorityTransition: true,
+                ...nativeOriginMeta(profile, false),
                 ...postCommitFailureMeta(error, committedStaleDeviceRelease.scope),
               });
             }
@@ -1430,16 +1453,12 @@ export function createAuthorityGate(
           operation = preflight.operation;
           status = preflight.status;
           const initialOperationAuthorityVersion = operation.authorityVersion;
-          const optionalNativeOriginBefore =
-            profile.nativeOrigin === 'optional'
-              ? await probeOptionalNativeOrigin(dependencies, {
-                  phase: 'preflight',
-                  tool,
-                  profile,
-                  status,
-                  args,
-                })
-              : [];
+          const optionalNativeOriginBefore = await beginOptionalNativeOrigin(dependencies, {
+            tool,
+            profile,
+            status,
+            args,
+          });
           const optionalBefore: AuthorityObservation[] = [];
           const managedOriginObservations: AuthorityObservation[] = [];
           const managedBundleObservations: AuthorityObservation[] = [];
@@ -1954,25 +1973,13 @@ export function createAuthorityGate(
               runtimeTargetChanged ||= reconciliation.runtimeTargetChanged;
             }
           }
-          const optionalNativeOriginAfter =
-            optionalNativeOriginBefore.length > 0
-              ? await probeOptionalNativeOrigin(dependencies, {
-                  phase: 'postflight',
-                  tool,
-                  profile,
-                  status,
-                  args,
-                })
-              : [];
-          const optionalNativeOriginProven =
-            optionalNativeOriginBefore.length === 2 &&
-            optionalNativeOriginAfter.length === 2 &&
-            optionalNativeOriginBefore.every(
-              (observation) =>
-                observation.identity ===
-                optionalNativeOriginAfter.find((candidate) => candidate.axis === observation.axis)
-                  ?.identity,
-            );
+          const { after: optionalNativeOriginAfter, proven: optionalNativeOriginProven } =
+            await confirmOptionalNativeOrigin(dependencies, optionalNativeOriginBefore, {
+              tool,
+              profile,
+              status,
+              args,
+            });
           const effectiveProfile =
             optionalBefore.length > 0
               ? { ...profile, axes: [...profile.axes, ...optionalBefore.map(({ axis }) => axis)] }
@@ -2106,9 +2113,12 @@ export function createAuthorityGate(
               'strict native evidence requires proven managed app origin',
             );
           }
+          const receiptsCommittable =
+            !runnerAuthorityReleased && platformReceiptAuthorityHeld(status);
           if (
             operation &&
             nativeOriginProven &&
+            receiptsCommittable &&
             snapshotCheckpoint !== undefined &&
             dependencies.promoteSnapshotOrigin
           ) {
@@ -2116,7 +2126,9 @@ export function createAuthorityGate(
               dependencies.promoteSnapshotOrigin!(snapshotCheckpoint);
             });
           }
-          if (operation) registry.commitPlatformAuthorityReceipts(operation);
+          if (operation && receiptsCommittable) {
+            registry.commitPlatformAuthorityReceipts(operation);
+          }
           return addMeta(result, {
             ...nativeOriginMeta(profile, nativeOriginProven),
             authorityReceipt: receipt(status, receiptProfile, receiptObservations),

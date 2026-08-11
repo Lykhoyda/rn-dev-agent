@@ -1127,6 +1127,41 @@ test('raw native control upgrades only a fully stable optional origin', async ()
   assert.deepEqual(promotedCheckpoints, [23, 23]);
 });
 
+test('parked runner authority skips origin promotion instead of failing the mutation', async () => {
+  const { runtime, registry, status, calls } = fixture();
+  status.bindings.runner = {
+    platform: 'ios',
+    deviceId: 'device',
+    port: 9100,
+    instanceId: 'runner',
+  };
+  registry.replaceBindingsDuringOperation = (operation, input) => {
+    status.bindings = { ...status.bindings, ...input.bindings };
+    status.authorityVersion += 1;
+    return { ...operation, authorityVersion: status.authorityVersion };
+  };
+  let promoted = false;
+  const gate = createAuthorityGate(runtime, {
+    snapshotCaptureCheckpoint: () => 23,
+    promoteSnapshotOrigin: () => {
+      promoted = true;
+    },
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+  });
+
+  const result = await gate.wrap('device_fill', async (args) => {
+    await completeManagedRunnerParkAuthority(args);
+    return okResult({ filled: true });
+  })({ ref: '@e0', text: 'hello', platform: 'ios' });
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, true);
+  assert.equal(status.bindings.runner, null);
+  assert.equal(promoted, false);
+  assert.equal(calls.includes('commit-receipts'), false);
+  assert.equal(envelope.meta.originAuthority, 'proven');
+});
+
 test('raw native reads cannot launder an origin-unproven cached snapshot', async () => {
   const { runtime } = fixture();
   let promoted = false;

@@ -374,10 +374,12 @@ export function promoteSnapshotOriginSince(checkpoint: number): void {
     ) {
       continue;
     }
-    snapshot.authorityReceipt.originAuthority = 'proven';
-    if (snapshot.authorityReceipt.sessionId !== null) {
-      snapshotAuthorityProvider?.record(snapshot.authorityReceipt);
-    }
+    const promoted: SnapshotAuthorityReceipt = {
+      ...snapshot.authorityReceipt,
+      originAuthority: 'proven',
+    };
+    if (promoted.sessionId !== null) snapshotAuthorityProvider?.record(promoted);
+    snapshot.authorityReceipt = promoted;
   }
 }
 
