@@ -426,6 +426,16 @@ export function selectTarget(validTargets, filtersOrPlatform) {
                 warning: `targetId "${filters.targetId}" not found. Available ids: ${validTargets.map((t) => t.id).join(', ')}`,
             };
         }
+        else if (!filters.bundleId) {
+            // Device affinity without proven app identity cannot re-resolve a stale
+            // pin — a device can run several debuggable apps. Fail closed.
+            return {
+                targets: [],
+                warning: `Pinned targetId "${filters.targetId}" is stale and no proven bundle identity is pinned; refusing to re-resolve on device "${filters.deviceName.trim()}" without app identity. ` +
+                    `Candidates: ${filteredTargets.map(describeTarget).join('; ')}. ` +
+                    `Re-pin deliberately via cdp_targets + cdp_connect targetId.`,
+            };
+        }
         else {
             warnings.push(`Pinned targetId "${filters.targetId}" is stale (Metro page ids change on reload); re-resolving on pinned device "${filters.deviceName.trim()}".`);
         }

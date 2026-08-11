@@ -56,9 +56,22 @@ test('GH-625: a reused page id on the wrong device cannot escape the pinned devi
   const result = selectTarget([simA, simB], {
     targetId: '10-9', // matches sim A's live id, but the pin was on sim B
     deviceName: 'iPhone 17 Pro',
+    bundleId: 'com.example.app',
   });
   assert.equal(result.targets.length, 1);
   assert.equal(result.targets[0]!.deviceName, 'iPhone 17 Pro');
+});
+
+test('GH-625: a stale pin without proven bundle identity refuses instead of guessing the app', () => {
+  // A device can run several debuggable apps; deviceName alone must not
+  // re-resolve a stale pin onto whichever app happens to be newest.
+  const simB = simTarget('12-3', 'iPhone 17 Pro');
+  const result = selectTarget([simB], {
+    targetId: '3-1',
+    deviceName: 'iPhone 17 Pro',
+  });
+  assert.equal(result.targets.length, 0);
+  assert.match(result.warning ?? '', /bundle identity/i);
 });
 
 test('GH-625: truthful refusal when the pinned device has no live target', () => {
@@ -134,6 +147,7 @@ test('GH-625: multiple pages of one device connection stay resolvable after a st
   const result = selectTarget([pageA, pageB], {
     targetId: '3-1',
     deviceName: 'iPhone 17 Pro',
+    bundleId: 'com.example.app',
   });
   assert.equal(result.targets.length, 2, 'both same-device pages remain candidates');
   assert.equal(result.targets[0]!.id, '12-3', 'newest page first');
@@ -416,7 +430,9 @@ test('GH-625: reconnect refuses truthfully when only the sibling device remains'
       undefined,
       fakeDiscover([liveTarget('13-9', 'iPhone 16')]) as never,
     ),
-    /[Pp]inned device/,
-    'must surface the pinned-device refusal instead of binding the sibling',
+    // The propagated refusal must both name the pinned device AND disclose the
+    // live sibling candidate so the caller can re-pin deliberately.
+    /[Pp]inned device[\s\S]*iPhone 16/,
+    'must surface the pinned-device refusal with candidates instead of binding the sibling',
   );
 });
