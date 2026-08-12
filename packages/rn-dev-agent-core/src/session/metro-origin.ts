@@ -104,11 +104,79 @@ export async function findForeignMetroOrigin(
 }
 
 export const FOREIGN_METRO_SCAN_DEADLINE_MS = 8_000;
+export const FOREIGN_METRO_SCAN_UNPROVABLE_TTL_MS = 10_000;
+export const FOREIGN_METRO_SCAN_EVIDENCE_TTL_MS = 2_000;
+const FOREIGN_METRO_SCAN_CACHE_CAPACITY = 32;
+
+export interface MemoizedForeignMetroOriginScanner extends ForeignMetroOriginScanner {
+  invalidate(query?: ForeignMetroOriginQuery): void;
+}
+
+function scanCacheKey(query: ForeignMetroOriginQuery): string {
+  return JSON.stringify([query.platform, query.deviceId, query.appId, query.expectedMetroPort]);
+}
+
+/** Collapses a repeated device_* loop onto one scan; failures are never cached. */
+export function memoizeForeignMetroOriginScanner(
+  scan: ForeignMetroOriginScanner,
+  options: {
+    now?: () => number;
+    unprovableTtlMs?: number;
+    evidenceTtlMs?: number;
+    capacity?: number;
+  } = {},
+): MemoizedForeignMetroOriginScanner {
+  const now = options.now ?? (() => Date.now());
+  const unprovableTtlMs = options.unprovableTtlMs ?? FOREIGN_METRO_SCAN_UNPROVABLE_TTL_MS;
+  const evidenceTtlMs = options.evidenceTtlMs ?? FOREIGN_METRO_SCAN_EVIDENCE_TTL_MS;
+  const capacity = options.capacity ?? FOREIGN_METRO_SCAN_CACHE_CAPACITY;
+  const settled = new Map<
+    string,
+    { expiresAt: number; value: ForeignMetroOriginEvidence | null }
+  >();
+  const inFlight = new Map<string, Promise<ForeignMetroOriginEvidence | null>>();
+  const memoized: MemoizedForeignMetroOriginScanner = Object.assign(
+    (query: ForeignMetroOriginQuery) => {
+      const key = scanCacheKey(query);
+      const cached = settled.get(key);
+      if (cached) {
+        if (cached.expiresAt > now()) return Promise.resolve(cached.value);
+        settled.delete(key);
+      }
+      const pending = inFlight.get(key);
+      if (pending) return pending;
+      const started = scan(query)
+        .then((value) => {
+          settled.set(key, {
+            value,
+            expiresAt: now() + (value ? evidenceTtlMs : unprovableTtlMs),
+          });
+          if (settled.size > capacity) {
+            const oldest = settled.keys().next();
+            if (!oldest.done) settled.delete(oldest.value);
+          }
+          return value;
+        })
+        .finally(() => {
+          inFlight.delete(key);
+        });
+      inFlight.set(key, started);
+      return started;
+    },
+    {
+      invalidate(query?: ForeignMetroOriginQuery) {
+        if (query) settled.delete(scanCacheKey(query));
+        else settled.clear();
+      },
+    },
+  );
+  return memoized;
+}
 
 export function createForeignMetroOriginScanner(
   authority: TargetDeviceAuthorityDependencies,
   overrides: Partial<ForeignMetroOriginDependencies> = {},
-): ForeignMetroOriginScanner {
+): MemoizedForeignMetroOriginScanner {
   const dependencies: ForeignMetroOriginDependencies = {
     listSiblingMetroPorts:
       overrides.listSiblingMetroPorts ??
@@ -124,7 +192,7 @@ export function createForeignMetroOriginScanner(
   };
   // A deadline overrun means "unprovable", never a verdict — same as any other
   // evidence-gathering failure inside the scan.
-  return (query) => {
+  return memoizeForeignMetroOriginScanner((query) => {
     let timer: NodeJS.Timeout | undefined;
     const deadline = new Promise<null>((resolveDeadline) => {
       timer = setTimeout(() => resolveDeadline(null), FOREIGN_METRO_SCAN_DEADLINE_MS);
@@ -133,7 +201,7 @@ export function createForeignMetroOriginScanner(
     return Promise.race([findForeignMetroOrigin(query, dependencies), deadline]).finally(() => {
       if (timer !== undefined) clearTimeout(timer);
     });
-  };
+  });
 }
 
 const PROVEN_METRO_ORIGIN_META_KEY = 'metroOriginPinning';

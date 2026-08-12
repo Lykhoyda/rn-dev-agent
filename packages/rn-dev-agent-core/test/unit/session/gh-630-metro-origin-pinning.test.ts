@@ -7,6 +7,7 @@ import {
   createForeignMetroOriginScanner,
   findForeignMetroOrigin,
   isProvenMetroOriginMismatch,
+  memoizeForeignMetroOriginScanner,
   provenMetroOriginMismatch,
 } from '../../../dist/session/metro-origin.js';
 import { SessionAuthorityError } from '../../../dist/session/registry.js';
@@ -307,6 +308,116 @@ test('axis A accepts a device binding pinned to the bound Metro origin', async (
   });
 
   assert.equal(observation.axis, 'A');
+});
+
+test('repeated preflights against a killed app pay the foreign-Metro scan once', async () => {
+  let scans = 0;
+  const scan = scannerWith({
+    listSiblingMetroPorts: async () => {
+      scans += 1;
+      return [8081];
+    },
+    fetchPortTargets: async () => [],
+  });
+  const probe = probeWith({
+    fetchTargets: async () => [],
+    proveTargetDevices: async () => {
+      throw new Error('target does not expose device association');
+    },
+    findForeignMetroOrigin: scan,
+  });
+  const preflight = () =>
+    probe({
+      axis: 'A',
+      status: probeStatus({
+        metro: { port: 8082 },
+        device: { platform: 'ios', deviceId: SESSION_DEVICE, appId: APP_ID },
+      }),
+    });
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await assert.rejects(preflight, (error) => {
+      assert.equal(error.code, 'METRO_ORIGIN_MISMATCH');
+      assert.equal(isProvenMetroOriginMismatch(error), false);
+      return true;
+    });
+  }
+  await Promise.all([scan(query), scan(query)]);
+
+  assert.equal(scans, 1);
+});
+
+test('memoized scans are shared in flight, keyed per device, and re-run after invalidation', async () => {
+  let scans = 0;
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const memoized = memoizeForeignMetroOriginScanner(async () => {
+    scans += 1;
+    await gate;
+    return null;
+  });
+  const concurrent = [memoized(query), memoized(query), memoized({ ...query, deviceId: 'OTHER' })];
+  release();
+
+  assert.deepEqual(await Promise.all(concurrent), [null, null, null]);
+  assert.equal(scans, 2);
+
+  assert.equal(await memoized(query), null);
+  assert.equal(scans, 2);
+
+  memoized.invalidate(query);
+  assert.equal(await memoized(query), null);
+  assert.equal(scans, 3);
+  assert.equal(await memoized({ ...query, deviceId: 'OTHER' }), null);
+  assert.equal(scans, 3);
+
+  memoized.invalidate();
+  assert.equal(await memoized({ ...query, deviceId: 'OTHER' }), null);
+  assert.equal(scans, 4);
+});
+
+test('memoized proven evidence expires sooner than an unprovable verdict', async () => {
+  let clock = 0;
+  let scans = 0;
+  let evidence = { port: 8081, targetDeviceName: SESSION_DEVICE_NAME };
+  const memoized = memoizeForeignMetroOriginScanner(
+    async () => {
+      scans += 1;
+      return evidence;
+    },
+    { now: () => clock, unprovableTtlMs: 10_000, evidenceTtlMs: 2_000 },
+  );
+
+  assert.deepEqual(await memoized(query), evidence);
+  clock = 1_999;
+  assert.deepEqual(await memoized(query), evidence);
+  assert.equal(scans, 1);
+  clock = 2_001;
+  evidence = null;
+  assert.equal(await memoized(query), null);
+  assert.equal(scans, 2);
+
+  clock = 9_000;
+  assert.equal(await memoized(query), null);
+  assert.equal(scans, 2);
+  clock = 12_002;
+  assert.equal(await memoized(query), null);
+  assert.equal(scans, 3);
+});
+
+test('a rejected memoized scan is never cached', async () => {
+  let scans = 0;
+  const memoized = memoizeForeignMetroOriginScanner(async () => {
+    scans += 1;
+    throw new Error('scanner exploded');
+  });
+
+  await assert.rejects(() => memoized(query), /scanner exploded/);
+  await assert.rejects(() => memoized(query), /scanner exploded/);
+
+  assert.equal(scans, 2);
 });
 
 function gateFixture() {

@@ -30237,13 +30237,60 @@ async function findForeignMetroOrigin(query, dependencies) {
   const match = matches.find((candidate) => candidate.deviceName?.trim());
   return match?.deviceName ? { port: match.port, targetDeviceName: match.deviceName.trim() } : null;
 }
+function scanCacheKey(query) {
+  return JSON.stringify([query.platform, query.deviceId, query.appId, query.expectedMetroPort]);
+}
+function memoizeForeignMetroOriginScanner(scan, options = {}) {
+  const now = options.now ?? (() => Date.now());
+  const unprovableTtlMs = options.unprovableTtlMs ?? FOREIGN_METRO_SCAN_UNPROVABLE_TTL_MS;
+  const evidenceTtlMs = options.evidenceTtlMs ?? FOREIGN_METRO_SCAN_EVIDENCE_TTL_MS;
+  const capacity = options.capacity ?? FOREIGN_METRO_SCAN_CACHE_CAPACITY;
+  const settled = /* @__PURE__ */ new Map();
+  const inFlight2 = /* @__PURE__ */ new Map();
+  const memoized = Object.assign((query) => {
+    const key = scanCacheKey(query);
+    const cached2 = settled.get(key);
+    if (cached2) {
+      if (cached2.expiresAt > now())
+        return Promise.resolve(cached2.value);
+      settled.delete(key);
+    }
+    const pending2 = inFlight2.get(key);
+    if (pending2)
+      return pending2;
+    const started = scan(query).then((value) => {
+      settled.set(key, {
+        value,
+        expiresAt: now() + (value ? evidenceTtlMs : unprovableTtlMs)
+      });
+      if (settled.size > capacity) {
+        const oldest = settled.keys().next();
+        if (!oldest.done)
+          settled.delete(oldest.value);
+      }
+      return value;
+    }).finally(() => {
+      inFlight2.delete(key);
+    });
+    inFlight2.set(key, started);
+    return started;
+  }, {
+    invalidate(query) {
+      if (query)
+        settled.delete(scanCacheKey(query));
+      else
+        settled.clear();
+    }
+  });
+  return memoized;
+}
 function createForeignMetroOriginScanner(authority, overrides = {}) {
   const dependencies = {
     listSiblingMetroPorts: overrides.listSiblingMetroPorts ?? ((expectedMetroPort) => discoverAllMetroPorts([...new Set(resolveDefaultPorts())].filter((port) => port !== expectedMetroPort), DISCOVERY_TIMEOUT_MS)),
     fetchPortTargets: overrides.fetchPortTargets ?? ((port) => fetchTargets(port, DISCOVERY_TIMEOUT_MS)),
     filterForExactDevice: overrides.filterForExactDevice ?? ((input) => filterTargetsForExactDevice(input, authority))
   };
-  return (query) => {
+  return memoizeForeignMetroOriginScanner((query) => {
     let timer;
     const deadline = new Promise((resolveDeadline) => {
       timer = setTimeout(() => resolveDeadline(null), FOREIGN_METRO_SCAN_DEADLINE_MS);
@@ -30253,7 +30300,7 @@ function createForeignMetroOriginScanner(authority, overrides = {}) {
       if (timer !== void 0)
         clearTimeout(timer);
     });
-  };
+  });
 }
 function provenMetroOriginMismatch(expectedMetroPort, context, evidence) {
   const error2 = new SessionAuthorityError("METRO_ORIGIN_MISMATCH", `the bound ${context.platform} device ${context.deviceId} is running ${context.appId} served by Metro :${evidence.port}, not this session's Metro :${expectedMetroPort}`, void 0, {
@@ -30279,7 +30326,7 @@ function recordedMetroOriginConflict(expectedMetroPort, boundMetroPort) {
 function isProvenMetroOriginMismatch(error2) {
   return error2 instanceof SessionAuthorityError && error2.code === "METRO_ORIGIN_MISMATCH" && error2.getSupplementalMeta()[PROVEN_METRO_ORIGIN_META_KEY] !== void 0;
 }
-var FOREIGN_METRO_SCAN_DEADLINE_MS, PROVEN_METRO_ORIGIN_META_KEY;
+var FOREIGN_METRO_SCAN_DEADLINE_MS, FOREIGN_METRO_SCAN_UNPROVABLE_TTL_MS, FOREIGN_METRO_SCAN_EVIDENCE_TTL_MS, FOREIGN_METRO_SCAN_CACHE_CAPACITY, PROVEN_METRO_ORIGIN_META_KEY;
 var init_metro_origin = __esm({
   "packages/rn-dev-agent-core/dist/session/metro-origin.js"() {
     "use strict";
@@ -30287,6 +30334,9 @@ var init_metro_origin = __esm({
     init_registry();
     init_target_device_authority();
     FOREIGN_METRO_SCAN_DEADLINE_MS = 8e3;
+    FOREIGN_METRO_SCAN_UNPROVABLE_TTL_MS = 1e4;
+    FOREIGN_METRO_SCAN_EVIDENCE_TTL_MS = 2e3;
+    FOREIGN_METRO_SCAN_CACHE_CAPACITY = 32;
     PROVEN_METRO_ORIGIN_META_KEY = "metroOriginPinning";
   }
 });
@@ -86213,6 +86263,7 @@ async function pinSessionDevClient(status, options, commitBundle) {
   } else if (suspendedPolicy) {
     current.clearAuthoritativeSessionPolicy();
   }
+  foreignMetroOriginScanner.invalidate();
   try {
     const bundle = await pinExactDevClient({
       sessionId: status.sessionId,
@@ -86307,6 +86358,7 @@ async function pinSessionDevClient(status, options, commitBundle) {
       }
     });
     getClient().setAuthoritativeSessionPolicy(createAuthoritativeSessionPolicy(status));
+    foreignMetroOriginScanner.invalidate();
     return bundle;
   } catch (error2) {
     if (suspendedPolicy && getClient() === current) {

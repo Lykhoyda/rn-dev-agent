@@ -941,6 +941,7 @@ async function pinSessionDevClient(
   } else if (suspendedPolicy) {
     current.clearAuthoritativeSessionPolicy();
   }
+  foreignMetroOriginScanner.invalidate();
   try {
     const bundle = await pinExactDevClient(
       {
@@ -1053,6 +1054,7 @@ async function pinSessionDevClient(
       },
     );
     getClient().setAuthoritativeSessionPolicy(createAuthoritativeSessionPolicy(status));
+    foreignMetroOriginScanner.invalidate();
     return bundle;
   } catch (error) {
     if (suspendedPolicy && getClient() === current) {

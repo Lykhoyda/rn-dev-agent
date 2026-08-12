@@ -725,6 +725,7 @@ async function pinSessionDevClient(status, options, commitBundle) {
     else if (suspendedPolicy) {
         current.clearAuthoritativeSessionPolicy();
     }
+    foreignMetroOriginScanner.invalidate();
     try {
         const bundle = await pinExactDevClient({
             sessionId: status.sessionId,
@@ -825,6 +826,7 @@ async function pinSessionDevClient(status, options, commitBundle) {
             },
         });
         getClient().setAuthoritativeSessionPolicy(createAuthoritativeSessionPolicy(status));
+        foreignMetroOriginScanner.invalidate();
         return bundle;
     }
     catch (error) {
