@@ -51,7 +51,8 @@ import { createInteractHandler } from './tools/interact.js';
 import { createCollectLogsHandler } from './tools/collect-logs.js';
 import { createDeviceListHandler, createDeviceScreenshotHandler } from './tools/device-list.js';
 import { createDeviceSnapshotHandler } from './tools/device-session.js';
-import { isAppRunning, releaseDeviceLockForSession } from './tools/device-session.js';
+import { releaseDeviceLockForSession } from './tools/device-session.js';
+import { createSessionRuntimeAbsenceProbe } from './session/session-runtime-absence.js';
 import {
   createDeviceFindHandler,
   createDevicePressHandler,
@@ -1178,27 +1179,16 @@ async function reconnectSessionRuntime(
   return stageAndroidRuntimeConnection(connection);
 }
 
-/**
- * GH #750: distinguishes "the dev-client is still re-registering" from "nothing
- * is running on the bound device", so a picker probe only fails fast for the
- * latter. Any inconclusive answer reports "present" and keeps the wider budget.
- */
-async function isSessionRuntimeAbsent(): Promise<boolean> {
-  try {
+const isSessionRuntimeAbsent = createSessionRuntimeAbsenceProbe({
+  resolveBinding: () => {
     const status = authorityRuntime.status();
-    if (!status.available) return false;
+    if (!status.available) return null;
     const { platform, deviceId, appId, metroPort } = resolveManagedRuntimeLaunchBinding(status);
-    const listed = await getClient().listTargetsExact(metroPort);
-    if (listed.port !== metroPort) return false;
-    const advertised = listed.targets.some((candidate) =>
-      targetMatchesSession(candidate, { platform, bundleId: appId }),
-    );
-    if (advertised) return false;
-    return !(await isAppRunning(platform, appId, undefined, deviceId));
-  } catch {
-    return false;
-  }
-}
+    return { platform, deviceId, appId, metroPort };
+  },
+  listTargets: (metroPort) => getClient().listTargetsExact(metroPort),
+  execute: (file, args, options) => execFileP(file, args, options),
+});
 
 async function relaunchSessionRuntime(
   status: SessionStatus,

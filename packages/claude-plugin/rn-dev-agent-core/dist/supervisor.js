@@ -77218,6 +77218,67 @@ var init_collect_logs = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/session/session-runtime-absence.js
+function stdoutText(output) {
+  return typeof output.stdout === "string" ? output.stdout : output.stdout.toString("utf8");
+}
+async function isSessionAppRunning(binding, dependencies) {
+  if (binding.platform === "ios") {
+    const output = await dependencies.execute("xcrun", buildIosAppRunningArgs(binding.deviceId), {
+      timeout: IOS_APP_PROBE_TIMEOUT_MS
+    });
+    return stdoutText(output).includes(`UIKitApplication:${binding.appId}`);
+  }
+  try {
+    const output = await dependencies.execute("adb", buildAndroidPidofArgs(binding.appId, binding.deviceId), { timeout: ANDROID_APP_PROBE_TIMEOUT_MS });
+    return stdoutText(output).trim().length > 0;
+  } catch (error2) {
+    const failure = error2;
+    if (failure.code === 1 && failure.killed !== true)
+      return false;
+    throw error2;
+  }
+}
+async function observeSessionRuntimeAbsent(dependencies) {
+  const binding = dependencies.resolveBinding();
+  if (!binding)
+    throw new InconclusiveRuntimeProbeError("session runtime binding is unresolved");
+  const listed = await dependencies.listTargets(binding.metroPort);
+  if (listed.port !== binding.metroPort) {
+    throw new InconclusiveRuntimeProbeError("target discovery escaped the bound Metro port");
+  }
+  const advertised = listed.targets.some((candidate) => targetMatchesSession(candidate, { platform: binding.platform, bundleId: binding.appId }));
+  if (advertised)
+    return false;
+  return !await isSessionAppRunning(binding, dependencies);
+}
+function createSessionRuntimeAbsenceProbe(dependencies) {
+  const wait = dependencies.wait ?? ((ms) => new Promise((resolve12) => setTimeout(resolve12, ms)));
+  return async () => {
+    try {
+      if (!await observeSessionRuntimeAbsent(dependencies))
+        return false;
+      await wait(SESSION_RUNTIME_ABSENCE_RESAMPLE_MS);
+      return await observeSessionRuntimeAbsent(dependencies);
+    } catch {
+      return false;
+    }
+  };
+}
+var SESSION_RUNTIME_ABSENCE_RESAMPLE_MS, IOS_APP_PROBE_TIMEOUT_MS, ANDROID_APP_PROBE_TIMEOUT_MS, InconclusiveRuntimeProbeError;
+var init_session_runtime_absence = __esm({
+  "packages/rn-dev-agent-core/dist/session/session-runtime-absence.js"() {
+    "use strict";
+    init_status();
+    init_device_session();
+    SESSION_RUNTIME_ABSENCE_RESAMPLE_MS = 1500;
+    IOS_APP_PROBE_TIMEOUT_MS = 5e3;
+    ANDROID_APP_PROBE_TIMEOUT_MS = 3e3;
+    InconclusiveRuntimeProbeError = class extends Error {
+    };
+  }
+});
+
 // packages/rn-dev-agent-core/dist/tools/device-permission.js
 import { execFile as execFile20 } from "node:child_process";
 import { promisify as promisify22 } from "node:util";
@@ -87523,23 +87584,6 @@ async function reconnectSessionRuntime(status, options) {
   const connection = await connectExactSessionTarget2({ metroPort, platform, appId, deviceId }, readinessTimeoutMs);
   return stageAndroidRuntimeConnection(connection);
 }
-async function isSessionRuntimeAbsent() {
-  try {
-    const status = authorityRuntime.status();
-    if (!status.available)
-      return false;
-    const { platform, deviceId, appId, metroPort } = resolveManagedRuntimeLaunchBinding(status);
-    const listed = await getClient().listTargetsExact(metroPort);
-    if (listed.port !== metroPort)
-      return false;
-    const advertised = listed.targets.some((candidate) => targetMatchesSession(candidate, { platform, bundleId: appId }));
-    if (advertised)
-      return false;
-    return !await isAppRunning(platform, appId, void 0, deviceId);
-  } catch {
-    return false;
-  }
-}
 async function relaunchSessionRuntime(status) {
   const { platform, deviceId, appId, metroPort, devClientUrl: boundDevClientUrl } = resolveManagedRuntimeLaunchBinding(status);
   if (platform === "ios") {
@@ -87774,7 +87818,7 @@ async function main() {
     });
   }
 }
-var pkgPath, pkgVersion, lockfile, diagnosticContractProbe, noLock, client, getClient, configureClientLifecycle, setClient, publishClient, createClient, execFileP, mustOk, makeReplayDeps, server2, strictProofMonitor, experienceRecorder, authorityRuntime, createRuntimeAuthorityProbe, localAuthorityProbe, authorityGate, blindProbeContext, mirrorCfg, mirrorManager2, liveEnabled, liveDeps, registeredToolNames, persistedAuthorityStatus, getSessionSignerCapability, spawningSupervisorPid, requestWorkerRecycle, sessionHandler, disconnectClientHandler, connectBoundSession, resolveNativeProofDevice, proofReadiness, proofCaptureHandler, e2ePreflight, e2eReload, e2eSuiteHandler, e2eCsrfToken, projectRootFor, triggerE2eRun, runActionHandler, observeRunActionHandler, observeTriggerRun, gatedObserveState, shutdown, stopParentWatch;
+var pkgPath, pkgVersion, lockfile, diagnosticContractProbe, noLock, client, getClient, configureClientLifecycle, setClient, publishClient, createClient, execFileP, mustOk, makeReplayDeps, server2, strictProofMonitor, experienceRecorder, authorityRuntime, createRuntimeAuthorityProbe, localAuthorityProbe, authorityGate, blindProbeContext, mirrorCfg, mirrorManager2, liveEnabled, liveDeps, registeredToolNames, isSessionRuntimeAbsent, persistedAuthorityStatus, getSessionSignerCapability, spawningSupervisorPid, requestWorkerRecycle, sessionHandler, disconnectClientHandler, connectBoundSession, resolveNativeProofDevice, proofReadiness, proofCaptureHandler, e2ePreflight, e2eReload, e2eSuiteHandler, e2eCsrfToken, projectRootFor, triggerE2eRun, runActionHandler, observeRunActionHandler, observeTriggerRun, gatedObserveState, shutdown, stopParentWatch;
 var init_index = __esm({
   "packages/rn-dev-agent-core/dist/index.js"() {
     "use strict";
@@ -87816,6 +87860,7 @@ var init_index = __esm({
     init_device_list();
     init_device_session();
     init_device_session();
+    init_session_runtime_absence();
     init_device_interact();
     init_device_permission();
     init_device_reset_state();
@@ -88317,6 +88362,17 @@ var init_index = __esm({
       isMirrorActive: () => mirrorManager2?.isStreaming() ?? false
     });
     registeredToolNames = [];
+    isSessionRuntimeAbsent = createSessionRuntimeAbsenceProbe({
+      resolveBinding: () => {
+        const status = authorityRuntime.status();
+        if (!status.available)
+          return null;
+        const { platform, deviceId, appId, metroPort } = resolveManagedRuntimeLaunchBinding(status);
+        return { platform, deviceId, appId, metroPort };
+      },
+      listTargets: (metroPort) => getClient().listTargetsExact(metroPort),
+      execute: (file, args, options) => execFileP(file, args, options)
+    });
     persistedAuthorityStatus = authorityRuntime.status();
     if (persistedAuthorityStatus.available && persistedAuthorityStatus.bindings.bundle) {
       getClient().setAuthoritativeSessionPolicy(createAuthoritativeSessionPolicy(persistedAuthorityStatus));

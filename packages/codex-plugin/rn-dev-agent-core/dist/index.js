@@ -74628,6 +74628,62 @@ function createCollectLogsHandler(getClient2) {
 // packages/rn-dev-agent-core/dist/index.js
 init_device_session();
 init_device_session();
+
+// packages/rn-dev-agent-core/dist/session/session-runtime-absence.js
+init_device_session();
+var SESSION_RUNTIME_ABSENCE_RESAMPLE_MS = 1500;
+var IOS_APP_PROBE_TIMEOUT_MS = 5e3;
+var ANDROID_APP_PROBE_TIMEOUT_MS = 3e3;
+var InconclusiveRuntimeProbeError = class extends Error {
+};
+function stdoutText(output) {
+  return typeof output.stdout === "string" ? output.stdout : output.stdout.toString("utf8");
+}
+async function isSessionAppRunning(binding, dependencies) {
+  if (binding.platform === "ios") {
+    const output = await dependencies.execute("xcrun", buildIosAppRunningArgs(binding.deviceId), {
+      timeout: IOS_APP_PROBE_TIMEOUT_MS
+    });
+    return stdoutText(output).includes(`UIKitApplication:${binding.appId}`);
+  }
+  try {
+    const output = await dependencies.execute("adb", buildAndroidPidofArgs(binding.appId, binding.deviceId), { timeout: ANDROID_APP_PROBE_TIMEOUT_MS });
+    return stdoutText(output).trim().length > 0;
+  } catch (error2) {
+    const failure = error2;
+    if (failure.code === 1 && failure.killed !== true)
+      return false;
+    throw error2;
+  }
+}
+async function observeSessionRuntimeAbsent(dependencies) {
+  const binding = dependencies.resolveBinding();
+  if (!binding)
+    throw new InconclusiveRuntimeProbeError("session runtime binding is unresolved");
+  const listed = await dependencies.listTargets(binding.metroPort);
+  if (listed.port !== binding.metroPort) {
+    throw new InconclusiveRuntimeProbeError("target discovery escaped the bound Metro port");
+  }
+  const advertised = listed.targets.some((candidate) => targetMatchesSession(candidate, { platform: binding.platform, bundleId: binding.appId }));
+  if (advertised)
+    return false;
+  return !await isSessionAppRunning(binding, dependencies);
+}
+function createSessionRuntimeAbsenceProbe(dependencies) {
+  const wait = dependencies.wait ?? ((ms) => new Promise((resolve12) => setTimeout(resolve12, ms)));
+  return async () => {
+    try {
+      if (!await observeSessionRuntimeAbsent(dependencies))
+        return false;
+      await wait(SESSION_RUNTIME_ABSENCE_RESAMPLE_MS);
+      return await observeSessionRuntimeAbsent(dependencies);
+    } catch {
+      return false;
+    }
+  };
+}
+
+// packages/rn-dev-agent-core/dist/index.js
 init_device_interact();
 
 // packages/rn-dev-agent-core/dist/tools/device-permission.js
@@ -86089,23 +86145,17 @@ async function reconnectSessionRuntime(status, options) {
   const connection = await connectExactSessionTarget2({ metroPort, platform, appId, deviceId }, readinessTimeoutMs);
   return stageAndroidRuntimeConnection(connection);
 }
-async function isSessionRuntimeAbsent() {
-  try {
+var isSessionRuntimeAbsent = createSessionRuntimeAbsenceProbe({
+  resolveBinding: () => {
     const status = authorityRuntime.status();
     if (!status.available)
-      return false;
+      return null;
     const { platform, deviceId, appId, metroPort } = resolveManagedRuntimeLaunchBinding(status);
-    const listed = await getClient().listTargetsExact(metroPort);
-    if (listed.port !== metroPort)
-      return false;
-    const advertised = listed.targets.some((candidate) => targetMatchesSession(candidate, { platform, bundleId: appId }));
-    if (advertised)
-      return false;
-    return !await isAppRunning(platform, appId, void 0, deviceId);
-  } catch {
-    return false;
-  }
-}
+    return { platform, deviceId, appId, metroPort };
+  },
+  listTargets: (metroPort) => getClient().listTargetsExact(metroPort),
+  execute: (file, args, options) => execFileP(file, args, options)
+});
 async function relaunchSessionRuntime(status) {
   const { platform, deviceId, appId, metroPort, devClientUrl: boundDevClientUrl } = resolveManagedRuntimeLaunchBinding(status);
   if (platform === "ios") {
