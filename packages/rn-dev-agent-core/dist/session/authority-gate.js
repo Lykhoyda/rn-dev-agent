@@ -3,6 +3,7 @@ import { realpathSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { failResult } from '../utils.js';
 import { authorityErrorMeta, SessionAuthorityError, shortAuthorityIdentity } from './registry.js';
+import { isProvenMetroOriginMismatch } from './metro-origin.js';
 import { reissueInstallBinding } from './install-reissue.js';
 import { authorityProfileFor, requiresExactInstalledArtifact, } from './tool-profiles.js';
 const optionalBundleAdmission = Symbol('optionalBundleAdmission');
@@ -403,7 +404,11 @@ function isOptionalBundleFailure(error) {
         code === 'CDP_TARGET_AUTHORITY_MISMATCH' ||
         code === 'TARGET_CLAIM_CONFLICT');
 }
+// GH #630: unavailable managed-origin evidence stays optional for raw native
+// control (GH #677), but a PROVEN foreign-Metro origin must refuse fail-closed.
 function isOptionalNativeOriginFailure(error) {
+    if (isProvenMetroOriginMismatch(error))
+        return false;
     const code = authorityErrorCode(error);
     return (code === 'METRO_INSTANCE_CHANGED' ||
         code === 'METRO_AUTHORITY_MISMATCH' ||
@@ -412,10 +417,17 @@ function isOptionalNativeOriginFailure(error) {
 async function probeOptionalNativeOrigin(dependencies, input) {
     if (!input.status.bindings.metro || !input.status.bindings.device)
         return [];
+    let metro = null;
     try {
-        const metro = await dependencies.probe({ ...input, axis: 'M' });
+        metro = await dependencies.probe({ ...input, axis: 'M' });
+    }
+    catch (error) {
+        if (!isOptionalNativeOriginFailure(error))
+            throw error;
+    }
+    try {
         const origin = await dependencies.probe({ ...input, axis: 'A' });
-        return [metro, origin];
+        return metro ? [metro, origin] : [];
     }
     catch (error) {
         if (isOptionalNativeOriginFailure(error))

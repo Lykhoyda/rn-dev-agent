@@ -11,6 +11,11 @@ import {
 } from './install-authority.js';
 import type { AuthorityObservation } from './authority-gate.js';
 import { verifyMetroAuthorityMarker, type MetroAuthorityMarker } from './metro-authority.js';
+import {
+  provenMetroOriginMismatch,
+  recordedMetroOriginConflict,
+  type ForeignMetroOriginScanner,
+} from './metro-origin.js';
 import { metroListenerPid } from './metro-binding.js';
 import { inspectSessionOwner } from './process-owner.js';
 import { readProcessBirth } from './process-birth.js';
@@ -33,6 +38,7 @@ interface LocalAuthorityProbeDependencies {
   fetchJson?: (url: string, init?: RequestInit) => Promise<Record<string, unknown>>;
   fetchTargets?: (port: number) => Promise<HermesTarget[]>;
   proveTargetDevices?: (input: TargetDeviceAssociations) => Promise<void>;
+  findForeignMetroOrigin?: ForeignMetroOriginScanner;
   deviceExists?: (platform: 'ios' | 'android', deviceId: string) => boolean;
   proofActive?: (runId: string) => boolean;
   inspectOwner?: typeof inspectSessionOwner;
@@ -287,15 +293,31 @@ export function createLocalAuthorityProbe(
           'native app origin authority is incomplete',
         );
       }
+      const expectedMetroPort = Number(device.expectedMetroPort ?? port);
+      if (Number.isSafeInteger(expectedMetroPort) && expectedMetroPort !== port) {
+        throw recordedMetroOriginConflict(expectedMetroPort, port);
+      }
+      const refuseWithForeignOriginEvidence = async (
+        unprovable: SessionAuthorityError,
+      ): Promise<never> => {
+        const evidence = await dependencies
+          .findForeignMetroOrigin?.({ expectedMetroPort: port, platform, deviceId, appId })
+          .catch(() => null);
+        if (evidence)
+          throw provenMetroOriginMismatch(port, { platform, deviceId, appId }, evidence);
+        throw unprovable;
+      };
       let targets: HermesTarget[];
       try {
         targets = filterValidTargets(await fetchTargets(port)).filter((target) =>
           targetMatchesBundleId(target, appId),
         );
       } catch {
-        throw new SessionAuthorityError(
-          'METRO_ORIGIN_MISMATCH',
-          'authority-bound Metro targets could not be inspected',
+        return refuseWithForeignOriginEvidence(
+          new SessionAuthorityError(
+            'METRO_ORIGIN_MISMATCH',
+            'authority-bound Metro targets could not be inspected',
+          ),
         );
       }
       try {
@@ -305,9 +327,11 @@ export function createLocalAuthorityProbe(
           targetDeviceNames: targets.map(({ deviceName }) => deviceName),
         });
       } catch {
-        throw new SessionAuthorityError(
-          'METRO_ORIGIN_MISMATCH',
-          'the claimed device app is not attached to the authority-bound Metro',
+        return refuseWithForeignOriginEvidence(
+          new SessionAuthorityError(
+            'METRO_ORIGIN_MISMATCH',
+            'the claimed device app is not attached to the authority-bound Metro',
+          ),
         );
       }
       return {

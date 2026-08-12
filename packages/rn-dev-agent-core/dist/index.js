@@ -113,6 +113,8 @@ import { ensureAndroidMetroReverse, removeAndroidMetroReverse, } from './session
 import { bindNativeRunner, unbindNativeRunner } from './session/runner-binding.js';
 import { claimOptionalBundleAuthority, createAuthorityGate, } from './session/authority-gate.js';
 import { createLocalAuthorityProbe } from './session/local-authority-probe.js';
+import { createForeignMetroOriginScanner } from './session/metro-origin.js';
+import { DISCOVERY_TIMEOUT_MS, discoverAllMetroPorts, resolveDefaultPorts, } from './cdp/discovery.js';
 import { assertAuthorityProfilesExhaustive } from './session/tool-profiles.js';
 import { readJsonStateFile } from './util/secure-state-file.js';
 import { buildBundleAuthorityBinding, pinExactDevClient, reconcileAuthoritativeBundle, } from './session/dev-client-authority.js';
@@ -422,12 +424,26 @@ setSnapshotAuthorityProvider({
         }
     },
 });
+const foreignMetroOriginScanner = createForeignMetroOriginScanner({ execute: (file, args) => execFileP(file, args, { timeout: 5_000 }) }, {
+    listSiblingMetroPorts: async (expectedMetroPort) => {
+        let allocated = [];
+        try {
+            allocated = authorityRuntime.requireAvailable().registry.allocatedServicePorts('metro');
+        }
+        catch {
+            // Registry unavailable: fall back to the default discovery ports only.
+        }
+        const candidates = [...new Set([...allocated, ...resolveDefaultPorts()])].filter((port) => port !== expectedMetroPort);
+        return discoverAllMetroPorts(candidates, DISCOVERY_TIMEOUT_MS);
+    },
+});
 const createRuntimeAuthorityProbe = (resolveClient) => createLocalAuthorityProbe({
     runtime: authorityRuntime,
     getClient: resolveClient,
     getSecret: () => process.env.RN_DEV_AGENT_SESSION_SECRET_PATH
         ? readJsonStateFile(process.env.RN_DEV_AGENT_SESSION_SECRET_PATH)
         : null,
+    findForeignMetroOrigin: foreignMetroOriginScanner,
     proofActive: (runId) => strictProofMonitor.ownsRun(runId),
 });
 const localAuthorityProbe = createRuntimeAuthorityProbe(getClient);
@@ -771,6 +787,7 @@ async function pinSessionDevClient(status, options, commitBundle) {
             connectExact: async ({ metroPort, platform, appId, deviceId }) => {
                 return connectExactSessionTarget({ metroPort, platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
             },
+            detectForeignMetroOrigin: foreignMetroOriginScanner,
             readMarker: async (connection) => {
                 const markerClient = 'client' in connection ? connection.client : getClient();
                 const result = await markerClient.evaluate('JSON.stringify(globalThis.__RN_DEV_AGENT_AUTHORITY__ ?? null)');

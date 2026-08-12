@@ -465,6 +465,16 @@ export function createSessionHandler(runtime, dependencies = {}) {
                         currentInstall.appId !== appId)) {
                     throw new SessionAuthorityError('DEVICE_RECEIPT_INCOMPATIBLE', 'cannot replace exact-device authority while an incompatible install receipt is bound');
                 }
+                // GH #630: pin the device binding to the session's Metro origin so the
+                // native-origin probe can refuse a dev-client fallback fail-closed.
+                const expectedMetroPort = status.bindings.metroPort;
+                if (typeof expectedMetroPort !== 'number' ||
+                    !Number.isSafeInteger(expectedMetroPort) ||
+                    expectedMetroPort < 1 ||
+                    expectedMetroPort > 65_535) {
+                    throw new SessionAuthorityError('METRO_ORIGIN_MISMATCH', 'device binding cannot be pinned to a Metro origin: the session has no valid allocated Metro port');
+                }
+                const expectedMetroOrigin = { expectedMetroPort };
                 if (!input.buildReceipt) {
                     const invalidatesBundle = Boolean(status.bindings.bundle);
                     await withInlineStaleDeviceCleanup(registry, session, dependencies, { platform, deviceId, appId, confirmed: input.confirmed }, requireWorkerInstance, requireExactDevice, () => registry.replaceDeviceAuthority(session, {
@@ -473,6 +483,7 @@ export function createSessionHandler(runtime, dependencies = {}) {
                             platform,
                             deviceId,
                             appId,
+                            ...expectedMetroOrigin,
                             ...(input.devClientUrl ? { devClientUrl: input.devClientUrl } : {}),
                         },
                     }));
@@ -512,7 +523,7 @@ export function createSessionHandler(runtime, dependencies = {}) {
                     requireInstallGeneration();
                 }, () => registry.replaceDeviceAuthority(session, {
                     resource: { type: 'device', key: `${platform}:${deviceId}` },
-                    device: { platform, deviceId, appId },
+                    device: { platform, deviceId, appId, ...expectedMetroOrigin },
                     install: { ...receipt },
                 }));
                 if (status.bindings.bundle)

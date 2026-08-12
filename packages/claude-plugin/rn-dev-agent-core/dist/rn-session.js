@@ -10615,6 +10615,12 @@ var init_registry = __esm({
           leaseUntilMs: claim.lease_until_ms
         } : null;
       }
+      // GH #630: every allocated port for a service across all worktrees, own
+      // session included — foreign-origin scanners must exclude their own port.
+      allocatedServicePorts(service) {
+        const rows = this.#database.prepare("SELECT port, worktree_key FROM allocations WHERE service = ?").all(service);
+        return rows.map((row) => row.port).filter((port) => Number.isSafeInteger(port));
+      }
       allocatePort(input) {
         if (!Number.isSafeInteger(input.base) || input.base < 1 || !Number.isSafeInteger(input.span) || input.span < 1 || input.base + input.span > 65536) {
           throw new SessionAuthorityError("INVALID_PORT_RANGE", "port allocation range is invalid");
@@ -11546,6 +11552,33 @@ var init_maestro_runner_report = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/cdp/discovery.js
+var init_discovery = __esm({
+  "packages/rn-dev-agent-core/dist/cdp/discovery.js"() {
+    "use strict";
+    init_logger();
+    init_maestro_validator();
+    init_metro_cwd();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/target-device-authority.js
+var init_target_device_authority = __esm({
+  "packages/rn-dev-agent-core/dist/session/target-device-authority.js"() {
+    "use strict";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/metro-origin.js
+var init_metro_origin = __esm({
+  "packages/rn-dev-agent-core/dist/session/metro-origin.js"() {
+    "use strict";
+    init_discovery();
+    init_registry();
+    init_target_device_authority();
+  }
+});
+
 // packages/rn-dev-agent-core/dist/session/install-reissue.js
 var init_install_reissue = __esm({
   "packages/rn-dev-agent-core/dist/session/install-reissue.js"() {
@@ -11794,6 +11827,7 @@ var init_authority_gate = __esm({
     "use strict";
     init_utils();
     init_registry();
+    init_metro_origin();
     init_install_reissue();
     init_tool_profiles();
   }
@@ -12103,16 +12137,6 @@ var init_app_lifecycle = __esm({
   "packages/rn-dev-agent-core/dist/tools/app-lifecycle.js"() {
     "use strict";
     execFile5 = promisify6(execFileCb4);
-  }
-});
-
-// packages/rn-dev-agent-core/dist/cdp/discovery.js
-var init_discovery = __esm({
-  "packages/rn-dev-agent-core/dist/cdp/discovery.js"() {
-    "use strict";
-    init_logger();
-    init_maestro_validator();
-    init_metro_cwd();
   }
 });
 
