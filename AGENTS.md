@@ -101,6 +101,13 @@ corepack yarn test
 corepack yarn build:docs
 ```
 
+Live device verification against the sibling `rn-dev-agent-workspace/test-app`
+cannot use this repo's own MCP session (Metro serving-root pinning refuses an
+app outside the source worktree). Spawn the worktree build directly instead —
+`node packages/claude-plugin/rn-dev-agent-core/dist/supervisor.js` with cwd set
+to the test-app, drive it over stdio JSON-RPC, and stop the auto-started
+observe server (`observe action=stop`) before `bind_device`.
+
 Native runner checks:
 
 ```bash

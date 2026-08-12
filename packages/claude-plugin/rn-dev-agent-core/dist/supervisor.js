@@ -63470,7 +63470,7 @@ var HELPERS_VERSION, INJECTED_HELPERS, NETWORK_HOOK_SCRIPT, NETWORK_CB_BUFFERED_
 var init_injected_helpers = __esm({
   "packages/rn-dev-agent-core/dist/injected-helpers.js"() {
     "use strict";
-    HELPERS_VERSION = 40;
+    HELPERS_VERSION = 41;
     INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -65335,7 +65335,12 @@ var init_injected_helpers = __esm({
         var fiber = stack.pop();
         if (!fiber) continue;
         count++;
-        var name = fiber.type && (fiber.type.displayName || fiber.type.name);
+        // GH #597: React Navigation 7 exports the container as a forwardRef
+        // wrapper \u2014 the fiber.type object has no displayName/name; the real
+        // name survives only on type.render.
+        var t = fiber.type;
+        var name = t && (t.displayName || t.name);
+        if (!name && t && t.render) name = t.render.displayName || t.render.name;
         if (name === 'NavigationContainer' || name === 'NavigationContainerInner') {
           var r = fiber.ref;
           if (r && typeof r === 'object' && r.current && typeof r.current.navigate === 'function') {

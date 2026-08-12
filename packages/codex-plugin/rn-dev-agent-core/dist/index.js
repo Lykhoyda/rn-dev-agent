@@ -52702,7 +52702,7 @@ async function detectBridge(client2, evaluate = (expression) => client2.evaluate
 init_logger();
 
 // packages/rn-dev-agent-core/dist/injected-helpers.js
-var HELPERS_VERSION = 40;
+var HELPERS_VERSION = 41;
 var INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -54567,7 +54567,12 @@ var INJECTED_HELPERS = `
         var fiber = stack.pop();
         if (!fiber) continue;
         count++;
-        var name = fiber.type && (fiber.type.displayName || fiber.type.name);
+        // GH #597: React Navigation 7 exports the container as a forwardRef
+        // wrapper \u2014 the fiber.type object has no displayName/name; the real
+        // name survives only on type.render.
+        var t = fiber.type;
+        var name = t && (t.displayName || t.name);
+        if (!name && t && t.render) name = t.render.displayName || t.render.name;
         if (name === 'NavigationContainer' || name === 'NavigationContainerInner') {
           var r = fiber.ref;
           if (r && typeof r === 'object' && r.current && typeof r.current.navigate === 'function') {

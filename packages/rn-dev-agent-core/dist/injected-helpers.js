@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 40;
+export const HELPERS_VERSION = 41;
 export const INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -1867,7 +1867,12 @@ export const INJECTED_HELPERS = `
         var fiber = stack.pop();
         if (!fiber) continue;
         count++;
-        var name = fiber.type && (fiber.type.displayName || fiber.type.name);
+        // GH #597: React Navigation 7 exports the container as a forwardRef
+        // wrapper — the fiber.type object has no displayName/name; the real
+        // name survives only on type.render.
+        var t = fiber.type;
+        var name = t && (t.displayName || t.name);
+        if (!name && t && t.render) name = t.render.displayName || t.render.name;
         if (name === 'NavigationContainer' || name === 'NavigationContainerInner') {
           var r = fiber.ref;
           if (r && typeof r === 'object' && r.current && typeof r.current.navigate === 'function') {
