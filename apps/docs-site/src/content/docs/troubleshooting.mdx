@@ -233,7 +233,7 @@ Codes returned by `cdp_*`/`device_*`/flow tools, what they mean, and the fix.
 | `EXPO_DEVICE_IDENTITY_MISMATCH` | Expo Android could not uniquely map the bound adb serial to its required model/AVD display name, or that mapping changed immediately before launch. Keep the same exact serial bound, disconnect duplicate model/AVD names, authorize or reconnect that device, and retry literal `pnpm android`; never pass a display name as session authority or let Expo choose an ambient device. |
 | `EXACT_ANDROID_DEVICE_REQUIRED` | Releasing the plugin-owned Android interaction slot needs one exact serial, and none was available (typically several adb targets attached with no bound session). Nothing on any device was mutated. Bind the intended device with `rn_session(action="bind_device", ...)`, pass `deviceId` to `maestro_run`, or set `ANDROID_SERIAL`, then retry. An ambient or default adb target is never selected. |
 | `BUNDLE_HANDSHAKE_UNAVAILABLE`, `BUNDLE_IDENTITY_MISMATCH`, `CDP_TARGET_AUTHORITY_MISMATCH`, `TARGET_CLAIM_CONFLICT` | The signed initial-bundle marker or exact CDP target is absent, changed, unresponsive, or owned elsewhere. Exact pinning serially resets an inspector that handshakes but fails its mandatory `Runtime.evaluate('1+1')` probe, then re-lists only the allocated Metro and retries the same app/device authority. If the deadline expires, the error retains that probe-timeout leaf. Load the intended app from the bound Metro and call `cdp_connect`; never choose another target. |
-| `RUNNER_OWNERSHIP_MISMATCH`, `RUNNER_ADOPTION_REQUIRED`, `RUNNER_CLAIM_CONFLICT` | Native-runner capability or ownership differs. Rebind the exact runner, or complete the explicit handoff/adoption flow. A live runner is never force-stolen; see [parallel session authority](/rn-dev-agent/session-authority/) for the unsupported legacy split-store case. |
+| `RUNNER_OWNERSHIP_MISMATCH`, `RUNNER_ADOPTION_REQUIRED`, `RUNNER_CLAIM_CONFLICT` | Native-runner capability or ownership differs. For `RUNNER_OWNERSHIP_MISMATCH`, re-open the device with `device_snapshot(action="open", …)` on the same platform, `deviceId`, and `appId` — that restarts and rebinds the interaction runner; `rn_session(action="status")` only reports state and cannot rebind it. Otherwise rebind the exact runner or complete the explicit handoff/adoption flow. A live runner is never force-stolen; see [parallel session authority](/rn-dev-agent/session-authority/) for the unsupported legacy split-store case. |
 | `OBSERVE_AUTHORITY_MISMATCH`, `OBSERVE_PORT_CLAIM_CONFLICT`, `PROOF_AUTHORITY_MISMATCH` | Observe or proof belongs to another fenced generation. Start a session-scoped instance or proof run. |
 | `HANDOFF_NOT_AUTHORIZED`, `STALE_LEASE_NOT_RECLAIMABLE` | The handoff/adoption token is invalid, or the prior owner's death is not proven. Lease expiry alone never authorizes reclamation. |
 | `AUTHORITY_LOST_DURING_OPERATION`, `OPERATION_ALREADY_IN_PROGRESS` | Authority changed or another fenced operation is active. Treat any apparent handler success as failed, inspect status, and retry only after the session is stable. |
@@ -320,6 +320,22 @@ either way and the replay fails closed. Shutting down simulators will not
 clear it; upgrade maestro-runner to a build whose report carries a real
 `udid`/`deviceId`/`deviceSerial` (`~/.maestro-runner/bin/maestro-runner`,
 reinstalled via `scripts/ensure-maestro-runner.sh`).
+
+### ANDROID_API_UNSUPPORTED
+
+The Android target runs below API 26, which the pinned maestro-runner cannot
+drive — its bundled UiAutomator2 server APK declares `minSdk 26`, so the install
+is rejected with `INSTALL_FAILED_OLDER_SDK`. When the exact serial is known,
+`maestro_run` probes the target's API level up front (`adb shell getprop
+ro.build.version.sdk`) and refuses before the flow starts; a runtime install
+reject maps to the same code, so this never surfaces as an opaque runner error
+or a false ownership mismatch. A probe that cannot answer fails open, so probe
+flakiness never blocks a supported device.
+
+There is no repair for the pinned engine: use the `device_*` interaction tier
+instead, which drives API 23+ through `rn-android-runner`. The few `device_*`
+paths that fall back to maestro (dev-client picker, system dialogs, `device_fill`
+correction) hit the same limit. See [engine version pinning](/rn-dev-agent/actions/#engine-version-pinning).
 
 ### RUNNER_PROTOCOL_MISMATCH
 

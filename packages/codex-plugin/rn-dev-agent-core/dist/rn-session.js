@@ -8380,7 +8380,10 @@ var init_registry = __esm({
     RECOVERY_HANDLE_TTL_MS = 5 * 6e4;
     RECOVERY_HANDLE_RENEW_MS = 6e4;
     errorNextActions = {
-      NON_GIT_MANIFEST_REQUIRED: NON_GIT_DECLARATION_NEXT_ACTION
+      NON_GIT_MANIFEST_REQUIRED: NON_GIT_DECLARATION_NEXT_ACTION,
+      // GH #741: a released/stale runner axis is invisible to a status read — only
+      // re-opening the device snapshot restarts and rebinds the interaction runner.
+      RUNNER_OWNERSHIP_MISMATCH: 'Re-open the device with device_snapshot action "open" (same platform, deviceId, and appId) to restart and rebind the interaction runner; rn_session "status" only reports state and cannot rebind it.'
     };
     conflictCodes = {
       device: "DEVICE_CLAIM_CONFLICT",
@@ -11485,13 +11488,6 @@ var init_maestro_error_parser = __esm({
   }
 });
 
-// packages/rn-dev-agent-core/dist/tools/resolve-ios-app-file.js
-var init_resolve_ios_app_file = __esm({
-  "packages/rn-dev-agent-core/dist/tools/resolve-ios-app-file.js"() {
-    "use strict";
-  }
-});
-
 // packages/rn-dev-agent-core/dist/domain/engine-pin.js
 import { execFile as execFileCb2, spawnSync as spawnSync2 } from "node:child_process";
 import { promisify as promisify3 } from "node:util";
@@ -11501,6 +11497,13 @@ var init_engine_pin = __esm({
     "use strict";
     init_maestro_invoke();
     execFile3 = promisify3(execFileCb2);
+  }
+});
+
+// packages/rn-dev-agent-core/dist/tools/resolve-ios-app-file.js
+var init_resolve_ios_app_file = __esm({
+  "packages/rn-dev-agent-core/dist/tools/resolve-ios-app-file.js"() {
+    "use strict";
   }
 });
 
@@ -12064,6 +12067,7 @@ var init_maestro_invoke = __esm({
     init_maestro_validator();
     init_maestro_dispatch();
     init_maestro_error_parser();
+    init_engine_pin();
     init_resolve_ios_app_file();
     init_maestro_run();
     init_agent_device_wrapper();

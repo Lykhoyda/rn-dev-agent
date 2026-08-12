@@ -132,7 +132,7 @@ If it still fails, give the user these manual instructions:
 5. Verify: `maestro-runner --version` should print a version number
 
 The plugin pins the tested engine version (GH #397; the pin lives in `packages/rn-dev-agent-core/src/domain/engine-pin.ts`, currently `1.0.9`). Compare the installed `maestro-runner --version` with that pin; replay results carry the engine-pin verdict and known quirks. Report the row as:
-- `pinned-ok` → healthy, e.g. `maestro-runner 1.0.9 (pinned, quirks: android-hidekeyboard-noop, requires-adb-on-ios)`
+- `pinned-ok` → healthy, e.g. `maestro-runner 1.0.9 (pinned, quirks: <the pin's knownQuirks ids>)`
 - drift/checksum states → WARN with the installed vs pinned versions; a drifted install still works but is untested (B223-class behavior changes arrive silently). Reinstall the pin with the command in step 1 above.
 - `unverified` → informational only (no hash shipped for this platform, or hashing failed); not a failure.
 

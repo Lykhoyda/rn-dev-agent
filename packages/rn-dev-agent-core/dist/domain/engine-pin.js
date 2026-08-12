@@ -29,8 +29,50 @@ export const MAESTRO_RUNNER_PIN = {
             ref: 'B59',
             note: 'requires adb in PATH even with --platform ios',
         },
+        {
+            id: 'android-pre-o-unsupported',
+            ref: 'GH #741',
+            note: 'bundled UiAutomator2 server APK declares minSdk 26; API 23-25 installs fail with INSTALL_FAILED_OLDER_SDK',
+        },
     ],
 };
+// GH #741: the pinned engine's bundled appium-uiautomator2-server APK declares
+// minSdk 26, so pre-O devices reject it with INSTALL_FAILED_OLDER_SDK.
+export const MAESTRO_RUNNER_MIN_ANDROID_API = 26;
+const PRE_O_REMEDY = 'Action replay / E2E via the maestro engine is unsupported on this device; the direct device_* ' +
+    'interaction tier still works (rn-android-runner supports API 23+), except for the few device_* ' +
+    'paths that fall back to maestro (dev-client picker, system dialogs, device_fill correction), ' +
+    'which hit this same limit.';
+function engineLabel(runner) {
+    return runner === 'maestro-runner'
+        ? `the pinned maestro-runner ${MAESTRO_RUNNER_PIN.version}`
+        : 'the Maestro CLI';
+}
+export function preOAndroidApiRefusal(apiLevel) {
+    if (apiLevel >= MAESTRO_RUNNER_MIN_ANDROID_API)
+        return null;
+    return (`maestro_run refused: Android API ${apiLevel} is below API ${MAESTRO_RUNNER_MIN_ANDROID_API}, ` +
+        `the minimum the pinned maestro-runner ${MAESTRO_RUNNER_PIN.version} can drive — its bundled ` +
+        `UiAutomator2 server APK declares minSdk ${MAESTRO_RUNNER_MIN_ANDROID_API}, so the install ` +
+        `fails with INSTALL_FAILED_OLDER_SDK. ${PRE_O_REMEDY}`);
+}
+const OLDER_SDK_TOKEN = /INSTALL_FAILED_OLDER_SDK/g;
+// The token alone is not proof: `combined` also carries the app's own console
+// and logcat output, and GH #249 already burned us with a bare `FAILED` scan.
+// Require the SAME LINE to read like a package-install reject once the token
+// itself (which contains INSTALL/FAILED) is stripped out.
+const INSTALL_REJECT_CONTEXT = /\b(?:adb|install|installing|failure|uiautomator2)\b|\.apk\b/i;
+export function isOlderSdkInstallFailure(output) {
+    return output
+        .split(/\r?\n/)
+        .some((line) => line.includes('INSTALL_FAILED_OLDER_SDK') &&
+        INSTALL_REJECT_CONTEXT.test(line.replace(OLDER_SDK_TOKEN, ' ')));
+}
+export function olderSdkInstallDiagnosis(runner = 'maestro-runner') {
+    return (`The device rejected the bundled UiAutomator2 server APK with INSTALL_FAILED_OLDER_SDK: ` +
+        `${engineLabel(runner)} requires Android API ` +
+        `${MAESTRO_RUNNER_MIN_ANDROID_API}+ and this device is below it. ${PRE_O_REMEDY}`);
+}
 export function compareVersions(a, b) {
     const pa = a.split('.').map(Number);
     const pb = b.split('.').map(Number);
