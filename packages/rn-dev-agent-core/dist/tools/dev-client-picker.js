@@ -2,6 +2,7 @@ import { runNative as _runAgentDeviceImpl, hasActiveSession, getActiveSession, }
 import { detectPlatform } from './platform-utils.js';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { fetchFindCandidates, pressCandidate } from './device-interact.js';
+import { completeManagedNativeOriginAuthority, hasManagedNativeOriginAuthority, reproveManagedNativeOrigin, } from '../session/authority-gate.js';
 // GH #136 test seam: production code calls `runAgentDevice` through this
 // indirection so unit tests can swap a mock without touching the real
 // agent-device CLI subprocess. Production behavior is identity-equivalent
@@ -224,7 +225,7 @@ export async function handleDevClientPicker(preferredPort) {
             reason: 'Stale-server error dialog dismissed (no picker shown afterwards)',
         };
     }
-    return { dismissed: false, reason: 'Dev Client picker not detected' };
+    return { dismissed: false, reason: 'Dev Client picker not detected', pickerPresent: false };
 }
 /**
  * GH #136 sub-3 / GH #523 sub-3: the single guarded seam every on-demand/auto
@@ -316,6 +317,7 @@ export async function dismissPicker(preferredPort) {
     }
     return {
         dismissed: false,
+        pickerPresent: true,
         reason: 'Dev Client picker detected but could not find a server entry to tap. Select the Metro server manually.',
     };
 }
@@ -350,7 +352,14 @@ export async function isDevClientPickerShowing() {
         return false;
     return isPickerIndicatorPresent();
 }
-export function createDismissDevClientPickerHandler(getMetroPort) {
+// GH #750: a defensive picker probe only fails fast when the exact device
+// advertises no session target AND the app is provably not running; a slow
+// bridgeless re-registration still gets a window wider than the >15s the
+// dev-client needs, while cdp_connect keeps the full exact-target budget.
+const PICKER_PROBE_ABSENT_RUNTIME_TIMEOUT_MS = 15_000;
+const PICKER_PROBE_READINESS_TIMEOUT_MS = 45_000;
+export function createDismissDevClientPickerHandler(getMetroPort, authorityDeps = {}) {
+    let dismissalAwaitingProof = false;
     return async (args) => {
         const t0 = Date.now();
         // GH #523 sub-3: prefer the picker row matching the project's Metro port
@@ -367,8 +376,44 @@ export function createDismissDevClientPickerHandler(getMetroPort) {
         if (outcome === null) {
             return failResult('No device session open. Call device_snapshot action="open" first.', 'DEV_CLIENT_PICKER_NO_SESSION', meta);
         }
+        // GH #750: the tool runs without A/B (the stranded state it repairs), so
+        // after a dismissal it must reconnect the exact target and prove A/B.
+        const proveOrigin = async (readinessTimeoutMs) => {
+            await (authorityDeps.reproveOrigin ?? reproveManagedNativeOrigin)(args, readinessTimeoutMs === undefined ? undefined : { readinessTimeoutMs });
+            await (authorityDeps.completeOrigin ?? completeManagedNativeOriginAuthority)(args, true);
+            dismissalAwaitingProof = false;
+        };
+        const pickerProbeReadinessTimeoutMs = async () => {
+            if (dismissalAwaitingProof)
+                return undefined;
+            let runtimeAbsent = false;
+            try {
+                runtimeAbsent = (await authorityDeps.isSessionRuntimeAbsent?.()) ?? false;
+            }
+            catch {
+                runtimeAbsent = false;
+            }
+            return runtimeAbsent
+                ? PICKER_PROBE_ABSENT_RUNTIME_TIMEOUT_MS
+                : PICKER_PROBE_READINESS_TIMEOUT_MS;
+        };
         if (outcome.dismissed) {
+            dismissalAwaitingProof = true;
+            await proveOrigin();
             return okResult({ dismissed: true, reason: outcome.reason, platform: outcome.platform }, { meta });
+        }
+        // GH #750: a retry after a failed post-dismissal proof finds the picker
+        // already gone; re-prove rather than reporting ok with B still unbound. A
+        // probe that never dismissed anything gets the bounded budget instead.
+        const isBundleBound = authorityDeps.isBundleBound ?? (() => true);
+        const bundleBound = isBundleBound();
+        if (bundleBound)
+            dismissalAwaitingProof = false;
+        if (outcome.pickerPresent === false &&
+            !bundleBound &&
+            (authorityDeps.reproveOrigin !== undefined || hasManagedNativeOriginAuthority(args))) {
+            await proveOrigin(await pickerProbeReadinessTimeoutMs());
+            return okResult({ dismissed: false, reproved: true, reason: outcome.reason, platform: outcome.platform }, { meta });
         }
         if (outcome.reason.toLowerCase().includes('could not find')) {
             return warnResult({ dismissed: false, platform: outcome.platform }, outcome.reason, meta);

@@ -37,6 +37,10 @@ export interface StagedRuntimeRelaunch {
   cancel(): void;
 }
 
+export interface ManagedNativeOriginReproveOptions {
+  readinessTimeoutMs?: number;
+}
+
 interface AuthorityGateRuntime {
   requireAvailable(): { registry: SessionRegistry; session: SessionRef };
   status(): WorkerAuthorityStatus;
@@ -49,7 +53,10 @@ interface AuthorityGateDependencies {
   runtimeConnectionChanged?(status: SessionStatus): boolean;
   refreshRuntimeBinding?(status: SessionStatus): Promise<Record<string, unknown>>;
   relaunchBoundRuntime?(status: SessionStatus): Promise<StagedRuntimeRelaunch | void>;
-  reconnectBoundRuntime?(status: SessionStatus): Promise<StagedRuntimeRelaunch | void>;
+  reconnectBoundRuntime?(
+    status: SessionStatus,
+    options?: ManagedNativeOriginReproveOptions,
+  ): Promise<StagedRuntimeRelaunch | void>;
   onRunnerReleased?(runner: Record<string, unknown>): Promise<void> | void;
   onRuntimeBundleInvalidated?(): void;
   snapshotCaptureCheckpoint?(): number;
@@ -70,7 +77,7 @@ type AuthorityAwareArgs = Record<string, unknown> & {
     claim(): Promise<void>;
     complete(targetExpected: boolean): Promise<void>;
     relaunch(): Promise<void>;
-    reprove(): Promise<void>;
+    reprove(options?: ManagedNativeOriginReproveOptions): Promise<void>;
   };
   [managedRunnerPark]?: () => Promise<void>;
   [managedInstallReissue]?: () => Promise<void>;
@@ -121,7 +128,10 @@ export async function relaunchManagedNativeOriginApp(args: object): Promise<void
  * dev-client only re-registered once the flow's own post-launch steps ran.
  * Reconnect-only — it never relaunches, so the flow's end state survives.
  */
-export async function reproveManagedNativeOrigin(args: object): Promise<void> {
+export async function reproveManagedNativeOrigin(
+  args: object,
+  options?: ManagedNativeOriginReproveOptions,
+): Promise<void> {
   const authority = (args as AuthorityAwareArgs)[managedNativeOrigin];
   if (!authority) {
     throw new SessionAuthorityError(
@@ -129,7 +139,7 @@ export async function reproveManagedNativeOrigin(args: object): Promise<void> {
       'managed native origin re-prove authority is unavailable',
     );
   }
-  await authority.reprove();
+  await authority.reprove(options);
 }
 
 /**
@@ -146,6 +156,10 @@ export async function reissueManagedInstallAuthority(args: object): Promise<void
     );
   }
   await reissue();
+}
+
+export function hasManagedNativeOriginAuthority(args: object): boolean {
+  return (args as AuthorityAwareArgs)[managedNativeOrigin] !== undefined;
 }
 
 export function hasManagedInstallReissueAuthority(args: object): boolean {
@@ -1732,7 +1746,7 @@ export function createAuthorityGate(
                     (await dependencies.relaunchBoundRuntime(currentStatus)) ?? undefined;
                   registry!.verifyOperation(operation!);
                 },
-                reprove: async () => {
+                reprove: async (options?: ManagedNativeOriginReproveOptions) => {
                   const currentStatus = runtime.status();
                   if (!currentStatus.available) {
                     throw new SessionAuthorityError(currentStatus.code, currentStatus.reason);
@@ -1747,7 +1761,7 @@ export function createAuthorityGate(
                   stagedRuntimeRelaunch?.cancel();
                   stagedRuntimeRelaunch = undefined;
                   stagedRuntimeRelaunch =
-                    (await dependencies.reconnectBoundRuntime(currentStatus)) ?? undefined;
+                    (await dependencies.reconnectBoundRuntime(currentStatus, options)) ?? undefined;
                   registry!.verifyOperation(operation!);
                 },
                 complete: async (targetExpected: boolean) => {

@@ -38,12 +38,12 @@ export async function relaunchManagedNativeOriginApp(args) {
  * dev-client only re-registered once the flow's own post-launch steps ran.
  * Reconnect-only — it never relaunches, so the flow's end state survives.
  */
-export async function reproveManagedNativeOrigin(args) {
+export async function reproveManagedNativeOrigin(args, options) {
     const authority = args[managedNativeOrigin];
     if (!authority) {
         throw new SessionAuthorityError('METRO_ORIGIN_MISMATCH', 'managed native origin re-prove authority is unavailable');
     }
-    await authority.reprove();
+    await authority.reprove(options);
 }
 /**
  * GH #705: commit a new install receipt after Maestro reinstalled the session's
@@ -56,6 +56,9 @@ export async function reissueManagedInstallAuthority(args) {
         throw new SessionAuthorityError('APP_INSTALL_IDENTITY_CHANGED', 'managed install re-issue authority is unavailable');
     }
     await reissue();
+}
+export function hasManagedNativeOriginAuthority(args) {
+    return args[managedNativeOrigin] !== undefined;
 }
 export function hasManagedInstallReissueAuthority(args) {
     return typeof args[managedInstallReissue] === 'function';
@@ -1247,7 +1250,7 @@ export function createAuthorityGate(runtime, dependencies) {
                                     (await dependencies.relaunchBoundRuntime(currentStatus)) ?? undefined;
                                 registry.verifyOperation(operation);
                             },
-                            reprove: async () => {
+                            reprove: async (options) => {
                                 const currentStatus = runtime.status();
                                 if (!currentStatus.available) {
                                     throw new SessionAuthorityError(currentStatus.code, currentStatus.reason);
@@ -1259,7 +1262,7 @@ export function createAuthorityGate(runtime, dependencies) {
                                 stagedRuntimeRelaunch?.cancel();
                                 stagedRuntimeRelaunch = undefined;
                                 stagedRuntimeRelaunch =
-                                    (await dependencies.reconnectBoundRuntime(currentStatus)) ?? undefined;
+                                    (await dependencies.reconnectBoundRuntime(currentStatus, options)) ?? undefined;
                                 registry.verifyOperation(operation);
                             },
                             complete: async (targetExpected) => {

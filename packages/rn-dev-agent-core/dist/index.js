@@ -42,6 +42,7 @@ import { createCollectLogsHandler } from './tools/collect-logs.js';
 import { createDeviceListHandler, createDeviceScreenshotHandler } from './tools/device-list.js';
 import { createDeviceSnapshotHandler } from './tools/device-session.js';
 import { releaseDeviceLockForSession } from './tools/device-session.js';
+import { createSessionRuntimeAbsenceProbe } from './session/session-runtime-absence.js';
 import { createDeviceFindHandler, createDevicePressHandler, createDeviceFillHandler, createDeviceSwipeHandler, createDeviceScrollHandler, createDeviceScrollIntoViewHandler, createDeviceLongPressHandler, createDevicePinchHandler, createDeviceBackHandler, createDeviceFocusNextHandler, } from './tools/device-interact.js';
 import { createDevicePermissionHandler } from './tools/device-permission.js';
 import { createDeviceResetStateHandler } from './tools/device-reset-state.js';
@@ -890,18 +891,33 @@ function stageAndroidRuntimeConnection(connection) {
  * A mid-flow relaunch whose dev-client only re-registers after the flow's own
  * post-launch steps needs the connection back, not another cold start.
  */
-async function reconnectSessionRuntime(status) {
+async function reconnectSessionRuntime(status, options) {
     const { platform, deviceId, appId, metroPort } = resolveManagedRuntimeLaunchBinding(status);
+    const platformBudgetMs = exactSessionTargetReadinessTimeoutMs(platform);
+    const readinessTimeoutMs = typeof options?.readinessTimeoutMs === 'number'
+        ? Math.max(1, Math.min(options.readinessTimeoutMs, platformBudgetMs))
+        : platformBudgetMs;
     if (platform === 'ios') {
         const current = getClient();
         await current.disconnect();
         setClient(createClient(metroPort));
-        await connectExactSessionTarget({ metroPort, platform, appId, deviceId }, 15_000);
+        await connectExactSessionTarget({ metroPort, platform, appId, deviceId }, readinessTimeoutMs);
         return;
     }
-    const connection = await connectExactSessionTarget({ metroPort, platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
+    const connection = await connectExactSessionTarget({ metroPort, platform, appId, deviceId }, readinessTimeoutMs);
     return stageAndroidRuntimeConnection(connection);
 }
+const isSessionRuntimeAbsent = createSessionRuntimeAbsenceProbe({
+    resolveBinding: () => {
+        const status = authorityRuntime.status();
+        if (!status.available)
+            return null;
+        const { platform, deviceId, appId, metroPort } = resolveManagedRuntimeLaunchBinding(status);
+        return { platform, deviceId, appId, metroPort };
+    },
+    listTargets: (metroPort) => getClient().listTargetsExact(metroPort),
+    execute: (file, args, options) => execFileP(file, args, options),
+});
 async function relaunchSessionRuntime(status) {
     const { platform, deviceId, appId, metroPort, devClientUrl: boundDevClientUrl, } = resolveManagedRuntimeLaunchBinding(status);
     if (platform === 'ios') {
@@ -917,7 +933,7 @@ async function relaunchSessionRuntime(status) {
             '--initialUrl',
             `http://127.0.0.1:${String(metroPort)}`,
         ]);
-        await connectExactSessionTarget({ metroPort, platform, appId, deviceId }, 15_000);
+        await connectExactSessionTarget({ metroPort, platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
         return;
     }
     if (!boundDevClientUrl) {
@@ -1149,7 +1165,7 @@ trackedTool('cdp_connect', 'Connect only the exact app target on the authority-b
     targetId: z
         .string()
         .optional()
-        .describe('Optional target already proven by this session; foreign or previously unbound IDs refuse'),
+        .describe('Advisory; refuses only if it conflicts with the bound target'),
     bundleId: z
         .string()
         .optional()
@@ -1949,7 +1965,13 @@ trackedTool('cdp_dismiss_dev_client_picker', 'Dismiss the Expo Dev Client "Devel
         .enum(['ios', 'android'])
         .optional()
         .describe('Authority-bound platform; conflicting values are refused'),
-}, createDismissDevClientPickerHandler(() => getClient().metroPort));
+}, createDismissDevClientPickerHandler(() => getClient().metroPort, {
+    isBundleBound: () => {
+        const status = authorityRuntime.status();
+        return status.available && Boolean(status.bindings.bundle);
+    },
+    isSessionRuntimeAbsent: isSessionRuntimeAbsent,
+}));
 trackedTool('device_accept_system_dialog', 'Tap an OS-level accept button on the exact session device. iOS prefers the capability-bound native runner so SpringBoard-owned dialogs are reachable; DIALOG_BUTTON_NOT_FOUND returns availableButtons for an exact-label retry.', {
     label: z
         .string()

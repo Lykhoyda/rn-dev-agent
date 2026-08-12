@@ -453,6 +453,18 @@ itself was proven wrong. Re-run the replay (bootstrap retries itself),
 check network access, and inspect the maestro-runner WDA installation
 (`~/.maestro-runner/bin/maestro-runner`).
 
+### Replay refused with ENGINE_PIN_MISMATCH on regex selectors
+
+The installed maestro-runner drifted from the tested `1.0.9` pin and the
+flow (including steps nested under `runFlow`) targets elements with regex
+text selectors. Drifted runners translate Maestro regex into a literal
+iOS `label CONTAINS[c]` predicate containing the raw regex text, which can
+never match, so the replay is refused up front instead of failing as a phantom
+`SELECTOR_NOT_FOUND`. Reinstall the pinned runner
+(`scripts/ensure-maestro-runner.sh`), or rewrite the selectors as literal
+text or `id` selectors. Unlike the `RN_ENGINE_PIN_STRICT` refusal, this
+one is unconditional — the mistranslation is proven for regex selectors.
+
 ### `/setup` skipped a step
 
 Re-run `/rn-dev-agent:setup`. It's idempotent — already-injected blocks are detected and skipped, so only the missing pieces get applied.

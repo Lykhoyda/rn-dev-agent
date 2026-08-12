@@ -37,13 +37,41 @@ export interface ExactSessionTargetConnection {
   cancel(): void;
 }
 
-const IOS_EXACT_TARGET_READINESS_TIMEOUT_MS = 15_000;
+// GH #750: iOS dev-client re-registration after terminate+relaunch can exceed
+// 15s, and each connect attempt restarts that clock — match Android (GH #724).
+const IOS_EXACT_TARGET_READINESS_TIMEOUT_MS = 120_000;
 const ANDROID_EXACT_TARGET_READINESS_TIMEOUT_MS = 120_000;
 
 export function exactSessionTargetReadinessTimeoutMs(platform: 'ios' | 'android'): number {
   return platform === 'android'
     ? ANDROID_EXACT_TARGET_READINESS_TIMEOUT_MS
     : IOS_EXACT_TARGET_READINESS_TIMEOUT_MS;
+}
+
+// GH #750: the readiness loop re-lists every 250ms; the device-authority probe
+// it feeds spawns simctl/adb, so cap those spawns instead of the poll cadence.
+const DEVICE_AUTHORITY_PROBE_MIN_INTERVAL_MS = 2_000;
+
+function rateLimitedDeviceAuthority(
+  dependencies: TargetDeviceAuthorityDependencies,
+  now: () => number,
+): TargetDeviceAuthorityDependencies {
+  const cache = new Map<string, { at: number; result: Promise<{ stdout: string }> }>();
+  return {
+    ...dependencies,
+    execute: (file, args) => {
+      const key = JSON.stringify([file, args]);
+      const cached = cache.get(key);
+      if (cached && now() - cached.at < DEVICE_AUTHORITY_PROBE_MIN_INTERVAL_MS)
+        return cached.result;
+      const result = dependencies.execute(file, args);
+      cache.set(key, { at: now(), result });
+      void result.catch(() => {
+        if (cache.get(key)?.result === result) cache.delete(key);
+      });
+      return result;
+    },
+  };
 }
 
 function errorMessage(error: unknown): string {
@@ -142,6 +170,10 @@ async function connectExactAndroidSessionTarget(
     ...dependencies,
     awaitWithinBoundary: awaitWithinDeadline,
   };
+  const discoveryAuthorityDependencies = rateLimitedDeviceAuthority(
+    boundedAuthorityDependencies,
+    now,
+  );
 
   while (now() < deadline) {
     try {
@@ -163,7 +195,7 @@ async function connectExactAndroidSessionTarget(
           deviceId: input.deviceId,
           targets: sessionCandidates,
         },
-        boundedAuthorityDependencies,
+        discoveryAuthorityDependencies,
       );
       if (exactCandidates.length !== 1) {
         throw new Error(
@@ -302,6 +334,7 @@ export async function connectExactSessionTarget(
   }
 
   const deadline = now() + timeoutMs;
+  const discoveryAuthorityDependencies = rateLimitedDeviceAuthority(dependencies, now);
   let lastError: unknown;
   do {
     try {
@@ -323,7 +356,7 @@ export async function connectExactSessionTarget(
           deviceId: input.deviceId,
           targets: sessionCandidates,
         },
-        dependencies,
+        discoveryAuthorityDependencies,
       );
       if (exactCandidates.length !== 1) {
         throw new Error(

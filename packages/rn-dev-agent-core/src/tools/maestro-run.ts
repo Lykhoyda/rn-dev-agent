@@ -13,6 +13,7 @@ import {
   isOlderSdkInstallFailure,
   olderSdkInstallDiagnosis,
   MAESTRO_RUNNER_MIN_ANDROID_API,
+  driftedRegexSelectorRefusal,
 } from '../domain/engine-pin.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
 import { resolveBundleId, readExpoSlug } from '../project-config.js';
@@ -653,6 +654,16 @@ export function createMaestroRunHandler(
     const strictRefusal = strictPinRefusal(engineStatus, process.env.RN_ENGINE_PIN_STRICT);
     if (strictRefusal) {
       return failResult(strictRefusal, 'ENGINE_PIN_MISMATCH');
+    }
+    // GH #750: unlike the env-gated strict refusal, this one is unconditional —
+    // the mistranslation is proven for regex selectors, so replay would only
+    // produce an impossible CONTAINS predicate (covers runFlow-nested steps).
+    const regexDriftRefusal = driftedRegexSelectorRefusal(engineStatus, validatedCommands);
+    if (regexDriftRefusal) {
+      return failResult(regexDriftRefusal, 'ENGINE_PIN_MISMATCH', {
+        pin: engineStatus?.pin,
+        installedVersion: engineStatus?.version ?? null,
+      });
     }
 
     // GH #741: the pinned engine cannot drive pre-O Android — refuse with the

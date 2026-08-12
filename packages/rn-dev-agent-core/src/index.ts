@@ -52,6 +52,7 @@ import { createCollectLogsHandler } from './tools/collect-logs.js';
 import { createDeviceListHandler, createDeviceScreenshotHandler } from './tools/device-list.js';
 import { createDeviceSnapshotHandler } from './tools/device-session.js';
 import { releaseDeviceLockForSession } from './tools/device-session.js';
+import { createSessionRuntimeAbsenceProbe } from './session/session-runtime-absence.js';
 import {
   createDeviceFindHandler,
   createDevicePressHandler,
@@ -205,6 +206,7 @@ import { bindNativeRunner, unbindNativeRunner } from './session/runner-binding.j
 import {
   claimOptionalBundleAuthority,
   createAuthorityGate,
+  type ManagedNativeOriginReproveOptions,
   type StagedRuntimeRelaunch,
 } from './session/authority-gate.js';
 import { createLocalAuthorityProbe } from './session/local-authority-probe.js';
@@ -1155,21 +1157,38 @@ function stageAndroidRuntimeConnection(
  */
 async function reconnectSessionRuntime(
   status: SessionStatus,
+  options?: ManagedNativeOriginReproveOptions,
 ): Promise<StagedRuntimeRelaunch | void> {
   const { platform, deviceId, appId, metroPort } = resolveManagedRuntimeLaunchBinding(status);
+  const platformBudgetMs = exactSessionTargetReadinessTimeoutMs(platform);
+  const readinessTimeoutMs =
+    typeof options?.readinessTimeoutMs === 'number'
+      ? Math.max(1, Math.min(options.readinessTimeoutMs, platformBudgetMs))
+      : platformBudgetMs;
   if (platform === 'ios') {
     const current = getClient();
     await current.disconnect();
     setClient(createClient(metroPort));
-    await connectExactSessionTarget({ metroPort, platform, appId, deviceId }, 15_000);
+    await connectExactSessionTarget({ metroPort, platform, appId, deviceId }, readinessTimeoutMs);
     return;
   }
   const connection = await connectExactSessionTarget(
     { metroPort, platform, appId, deviceId },
-    exactSessionTargetReadinessTimeoutMs(platform),
+    readinessTimeoutMs,
   );
   return stageAndroidRuntimeConnection(connection);
 }
+
+const isSessionRuntimeAbsent = createSessionRuntimeAbsenceProbe({
+  resolveBinding: () => {
+    const status = authorityRuntime.status();
+    if (!status.available) return null;
+    const { platform, deviceId, appId, metroPort } = resolveManagedRuntimeLaunchBinding(status);
+    return { platform, deviceId, appId, metroPort };
+  },
+  listTargets: (metroPort) => getClient().listTargetsExact(metroPort),
+  execute: (file, args, options) => execFileP(file, args, options),
+});
 
 async function relaunchSessionRuntime(
   status: SessionStatus,
@@ -1194,7 +1213,10 @@ async function relaunchSessionRuntime(
       '--initialUrl',
       `http://127.0.0.1:${String(metroPort)}`,
     ]);
-    await connectExactSessionTarget({ metroPort, platform, appId, deviceId }, 15_000);
+    await connectExactSessionTarget(
+      { metroPort, platform, appId, deviceId },
+      exactSessionTargetReadinessTimeoutMs(platform),
+    );
     return;
   }
 
@@ -1496,9 +1518,7 @@ trackedTool(
     targetId: z
       .string()
       .optional()
-      .describe(
-        'Optional target already proven by this session; foreign or previously unbound IDs refuse',
-      ),
+      .describe('Advisory; refuses only if it conflicts with the bound target'),
     bundleId: z
       .string()
       .optional()
@@ -2655,7 +2675,13 @@ trackedTool(
       .optional()
       .describe('Authority-bound platform; conflicting values are refused'),
   },
-  createDismissDevClientPickerHandler(() => getClient().metroPort),
+  createDismissDevClientPickerHandler(() => getClient().metroPort, {
+    isBundleBound: () => {
+      const status = authorityRuntime.status();
+      return status.available && Boolean(status.bindings.bundle);
+    },
+    isSessionRuntimeAbsent: isSessionRuntimeAbsent,
+  }),
 );
 
 trackedTool(

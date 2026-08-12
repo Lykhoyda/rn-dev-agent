@@ -123,11 +123,227 @@ test('handler: Android dismissed → ok dismissed:true with timings', async () =
     }
     return { ok: true, candidates: [] };
   });
+  const originCalls = [];
+  const handleWithOrigin = createDismissDevClientPickerHandler(() => 8081, {
+    reproveOrigin: async () => {
+      originCalls.push('reprove');
+    },
+    completeOrigin: async (_args, targetExpected) => {
+      originCalls.push(`complete:${targetExpected}`);
+    },
+  });
   try {
-    const r = await handle({ platform: 'android' });
+    const r = await handleWithOrigin({ platform: 'android' });
     const p = parse(r);
     assert.equal(p.data.dismissed, true);
     assert.ok(p.meta && typeof p.meta.timings_ms.total === 'number');
+    assert.deepEqual(originCalls, ['reprove', 'complete:true']);
+  } finally {
+    _resetFetchCandidatesForTest();
+    _resetHasSessionForTest();
+  }
+});
+
+// GH #750: the picker tool exists for the stranded-picker state where B is
+// unbound, so its profile admits it without A/B — but a successful dismissal
+// must then reconnect the exact target and prove A/B via the managed origin.
+test('GH #750 handler: dismissal without a picker performs no origin proof', async () => {
+  _setHasSessionForTest(true);
+  _setFetchCandidatesForTest(async () => ({ ok: true, candidates: [] }));
+  const originCalls = [];
+  const handleWithOrigin = createDismissDevClientPickerHandler(() => 8081, {
+    reproveOrigin: async () => {
+      originCalls.push('reprove');
+    },
+    completeOrigin: async () => {
+      originCalls.push('complete');
+    },
+  });
+  try {
+    const r = await handleWithOrigin({ platform: 'android' });
+    const p = parse(r);
+    assert.equal(p.data.dismissed, false);
+    assert.deepEqual(originCalls, [], 'an untouched screen must not re-pin authority');
+  } finally {
+    _resetFetchCandidatesForTest();
+    _resetHasSessionForTest();
+  }
+});
+
+test('GH #750 handler: a failed post-dismissal proof surfaces instead of a silent ok', async () => {
+  _setHasSessionForTest(true);
+  let findCount = 0;
+  _setFetchCandidatesForTest(async (text) => {
+    if (text === 'Development servers' || text === 'DEVELOPMENT SERVERS') {
+      findCount += 1;
+      return findCount >= 2
+        ? { ok: true, candidates: [] }
+        : { ok: true, candidates: [{ ref: 'e1', label: text }] };
+    }
+    return { ok: true, candidates: [] };
+  });
+  const handleWithOrigin = createDismissDevClientPickerHandler(() => 8081, {
+    reproveOrigin: async () => {},
+    completeOrigin: async () => {
+      throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: reattachment proof failed');
+    },
+  });
+  try {
+    await assert.rejects(handleWithOrigin({ platform: 'android' }), /BUNDLE_HANDSHAKE_UNAVAILABLE/);
+  } finally {
+    _resetFetchCandidatesForTest();
+    _resetHasSessionForTest();
+  }
+});
+
+// GH #750: the proof can fail after the picker was already tapped away. The
+// retry then finds no picker at all, so it must still re-prove B instead of
+// returning ok with the authority the tool exists to repair still unbound.
+test('GH #750 handler: a retry after a failed proof still re-proves an unbound bundle', async () => {
+  _setHasSessionForTest(true);
+  let findCount = 0;
+  _setFetchCandidatesForTest(async (text) => {
+    if (text === 'Development servers' || text === 'DEVELOPMENT SERVERS') {
+      findCount += 1;
+      return findCount >= 2
+        ? { ok: true, candidates: [] }
+        : { ok: true, candidates: [{ ref: 'e1', label: text }] };
+    }
+    return { ok: true, candidates: [] };
+  });
+  const originCalls = [];
+  const reproveBudgets = [];
+  let bundleBound = false;
+  let proofFails = true;
+  const handleWithOrigin = createDismissDevClientPickerHandler(() => 8081, {
+    isBundleBound: () => bundleBound,
+    reproveOrigin: async (_args, options) => {
+      originCalls.push('reprove');
+      reproveBudgets.push(options?.readinessTimeoutMs);
+    },
+    completeOrigin: async (_args, targetExpected) => {
+      if (proofFails) throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: reattachment proof failed');
+      originCalls.push(`complete:${targetExpected}`);
+      bundleBound = true;
+    },
+  });
+  try {
+    await assert.rejects(handleWithOrigin({ platform: 'android' }), /BUNDLE_HANDSHAKE_UNAVAILABLE/);
+    assert.equal(bundleBound, false);
+
+    proofFails = false;
+    const retry = await handleWithOrigin({ platform: 'android' });
+    const p = parse(retry);
+    assert.equal(retry.isError, undefined);
+    assert.equal(p.data.dismissed, false);
+    assert.equal(p.data.reproved, true);
+    assert.deepEqual(originCalls, ['reprove', 'reprove', 'complete:true']);
+    assert.deepEqual(
+      reproveBudgets,
+      [undefined, undefined],
+      'a retry after a real dismissal keeps the full exact-target readiness budget',
+    );
+    assert.equal(bundleBound, true, 'the retry must leave B bound');
+
+    const settled = await handleWithOrigin({ platform: 'android' });
+    assert.equal(parse(settled).data.reproved, undefined, 'a bound bundle is not re-proved');
+    assert.deepEqual(originCalls, ['reprove', 'reprove', 'complete:true']);
+
+    bundleBound = false;
+    await handleWithOrigin({ platform: 'android' });
+    assert.equal(
+      reproveBudgets.at(-1),
+      45_000,
+      'once B was bound again the retry window must not stay sticky',
+    );
+  } finally {
+    _resetFetchCandidatesForTest();
+    _resetHasSessionForTest();
+  }
+});
+
+// GH #750: a probe on a device that advertises no session target and whose app
+// is provably not running fails fast instead of burning the exact-target budget.
+test('GH #750 handler: a no-picker probe fails fast when the session runtime is absent', async () => {
+  _setHasSessionForTest(true);
+  _setFetchCandidatesForTest(async () => ({ ok: true, candidates: [] }));
+  const reproveBudgets = [];
+  const handleWithOrigin = createDismissDevClientPickerHandler(() => 8081, {
+    isBundleBound: () => false,
+    isSessionRuntimeAbsent: async () => true,
+    reproveOrigin: async (_args, options) => {
+      reproveBudgets.push(options?.readinessTimeoutMs);
+    },
+    completeOrigin: async () => {},
+  });
+  try {
+    const r = await handleWithOrigin({ platform: 'android' });
+    const p = parse(r);
+    assert.equal(p.data.dismissed, false);
+    assert.equal(p.data.reproved, true);
+    assert.deepEqual(reproveBudgets, [15_000]);
+  } finally {
+    _resetFetchCandidatesForTest();
+    _resetHasSessionForTest();
+  }
+});
+
+// GH #750: a dev-client that is still re-registering (the ~40s bridgeless
+// window this branch models) must be repairable by the same probe, so it keeps
+// a budget wider than the re-registration window instead of refusing at 15s.
+test('GH #750 handler: a no-picker probe outlasts a slow bridgeless re-registration', async () => {
+  _setHasSessionForTest(true);
+  _setFetchCandidatesForTest(async () => ({ ok: true, candidates: [] }));
+  const reproveBudgets = [];
+  let bundleBound = false;
+  const handleWithOrigin = createDismissDevClientPickerHandler(() => 8081, {
+    isBundleBound: () => bundleBound,
+    isSessionRuntimeAbsent: async () => false,
+    reproveOrigin: async (_args, options) => {
+      reproveBudgets.push(options?.readinessTimeoutMs);
+    },
+    completeOrigin: async () => {
+      bundleBound = true;
+    },
+  });
+  try {
+    const r = await handleWithOrigin({ platform: 'android' });
+    const p = parse(r);
+    assert.equal(p.data.reproved, true);
+    assert.equal(reproveBudgets.length, 1);
+    assert.ok(
+      reproveBudgets[0] > 40_000,
+      `the probe must outlast the modeled re-registration window, saw ${String(reproveBudgets[0])}`,
+    );
+    assert.ok(reproveBudgets[0] < 120_000, 'the 120s budget stays reserved for cdp_connect');
+    assert.equal(bundleBound, true);
+  } finally {
+    _resetFetchCandidatesForTest();
+    _resetHasSessionForTest();
+  }
+});
+
+// GH #750: an inconclusive or failing runtime probe must not shorten the budget.
+test('GH #750 handler: an unavailable runtime probe keeps the wider repair budget', async () => {
+  _setHasSessionForTest(true);
+  _setFetchCandidatesForTest(async () => ({ ok: true, candidates: [] }));
+  const reproveBudgets = [];
+  const handleWithOrigin = createDismissDevClientPickerHandler(() => 8081, {
+    isBundleBound: () => false,
+    isSessionRuntimeAbsent: async () => {
+      throw new Error('simctl unavailable');
+    },
+    reproveOrigin: async (_args, options) => {
+      reproveBudgets.push(options?.readinessTimeoutMs);
+    },
+    completeOrigin: async () => {},
+  });
+  try {
+    const r = await handleWithOrigin({ platform: 'android' });
+    const p = parse(r);
+    assert.equal(p.data.dismissed, false);
+    assert.equal(p.data.reproved, true);
+    assert.deepEqual(reproveBudgets, [45_000]);
   } finally {
     _resetFetchCandidatesForTest();
     _resetHasSessionForTest();

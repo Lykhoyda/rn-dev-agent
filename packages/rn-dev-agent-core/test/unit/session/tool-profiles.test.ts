@@ -65,11 +65,14 @@ const GOLDEN: Record<string, GoldenProfile> = {
     liveBundleProbe: true,
   },
   cdp_disconnect: { kind: 'transition', axes: 'CS', mutation: true, liveBundleProbe: false },
+  // GH #750: picker recovery runs while A/B are missing (the stranded state it
+  // repairs) and proves A/B via the managed origin lifecycle after dismissal.
   cdp_dismiss_dev_client_picker: {
     kind: 'authoritative',
-    axes: 'CSIMBD',
+    axes: 'CSIMD',
+    managedOrigin: true,
     mutation: true,
-    liveBundleProbe: true,
+    liveBundleProbe: false,
   },
   cdp_dispatch: { kind: 'authoritative', axes: 'CSIMBD', mutation: true, liveBundleProbe: true },
   cdp_error_log: { kind: 'authoritative', axes: 'CSIMBD', mutation: false, liveBundleProbe: true },
@@ -754,6 +757,16 @@ test('the retired O axis appears in no tool profile', () => {
       assert.equal(axes.includes('O'), false, `${tool} must not carry the retired O axis`);
     }
   }
+});
+
+test('GH #750: picker recovery is admitted while A/B are missing and proves them after', () => {
+  const profile = authorityProfileFor('cdp_dismiss_dev_client_picker');
+
+  assert.equal(profile.axes.includes('A'), false);
+  assert.equal(profile.axes.includes('B'), false);
+  assert.equal(profile.managedOrigin, true);
+  assert.equal(profile.liveBundleProbe, false);
+  assert.equal(profile.mutation, true);
 });
 
 test('iOS hard reset transitions through runner authority', () => {
