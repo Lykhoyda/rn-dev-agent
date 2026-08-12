@@ -6,10 +6,14 @@ import { captureInstalledArtifact } from './install-authority.js';
 // still refuses stale or foreign origins; any mismatch falls back to the
 // bumped generation, which keeps the pin gate refusing fail-closed.
 export function resolveManagedMetroRestartGeneration(input, dependencies = {}) {
-    const fallback = { buildGeneration: input.fallbackGeneration, receiptPreserved: false };
+    const fallback = (reason) => ({
+        buildGeneration: input.fallbackGeneration,
+        receiptPreserved: false,
+        reason,
+    });
     const install = input.install;
     if (!install)
-        return fallback;
+        return fallback('no-install-receipt');
     const generation = install.buildGeneration;
     if (install.sessionId !== input.session.sessionId ||
         install.sourceKey !== input.session.sourceKey ||
@@ -26,7 +30,7 @@ export function resolveManagedMetroRestartGeneration(input, dependencies = {}) {
         install.installGeneration === '' ||
         !Number.isSafeInteger(generation) ||
         Number(generation) < 1) {
-        return fallback;
+        return fallback('receipt-axis-mismatch');
     }
     let observed;
     try {
@@ -37,11 +41,11 @@ export function resolveManagedMetroRestartGeneration(input, dependencies = {}) {
         });
     }
     catch {
-        return fallback;
+        return fallback('install-capture-failed');
     }
     if (observed.artifactDigest !== install.artifactDigest ||
         observed.installGeneration !== install.installGeneration) {
-        return fallback;
+        return fallback('installed-artifact-changed');
     }
-    return { buildGeneration: Number(generation), receiptPreserved: true };
+    return { buildGeneration: Number(generation), receiptPreserved: true, reason: 'preserved' };
 }

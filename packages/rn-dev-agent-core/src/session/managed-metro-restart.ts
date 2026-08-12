@@ -17,9 +17,17 @@ export interface ManagedMetroRestartInput {
   fallbackGeneration: number;
 }
 
+export type ManagedMetroRestartReason =
+  | 'preserved'
+  | 'no-install-receipt'
+  | 'receipt-axis-mismatch'
+  | 'install-capture-failed'
+  | 'installed-artifact-changed';
+
 export interface ManagedMetroRestartGeneration {
   buildGeneration: number;
   receiptPreserved: boolean;
+  reason: ManagedMetroRestartReason;
 }
 
 // A managed Metro restart is not a native rebuild: when the bound signed
@@ -32,9 +40,13 @@ export function resolveManagedMetroRestartGeneration(
   input: ManagedMetroRestartInput,
   dependencies: ManagedMetroRestartDependencies = {},
 ): ManagedMetroRestartGeneration {
-  const fallback = { buildGeneration: input.fallbackGeneration, receiptPreserved: false };
+  const fallback = (reason: ManagedMetroRestartReason): ManagedMetroRestartGeneration => ({
+    buildGeneration: input.fallbackGeneration,
+    receiptPreserved: false,
+    reason,
+  });
   const install = input.install;
-  if (!install) return fallback;
+  if (!install) return fallback('no-install-receipt');
   const generation = install.buildGeneration;
   if (
     install.sessionId !== input.session.sessionId ||
@@ -53,7 +65,7 @@ export function resolveManagedMetroRestartGeneration(
     !Number.isSafeInteger(generation) ||
     Number(generation) < 1
   ) {
-    return fallback;
+    return fallback('receipt-axis-mismatch');
   }
   let observed;
   try {
@@ -63,13 +75,13 @@ export function resolveManagedMetroRestartGeneration(
       appId: input.device.appId,
     });
   } catch {
-    return fallback;
+    return fallback('install-capture-failed');
   }
   if (
     observed.artifactDigest !== install.artifactDigest ||
     observed.installGeneration !== install.installGeneration
   ) {
-    return fallback;
+    return fallback('installed-artifact-changed');
   }
-  return { buildGeneration: Number(generation), receiptPreserved: true };
+  return { buildGeneration: Number(generation), receiptPreserved: true, reason: 'preserved' };
 }

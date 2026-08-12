@@ -198,6 +198,7 @@ test('ensure-metro preserves a revalidated receipt generation and bumps a change
         });
         assert.equal(payload.buildGeneration, 4);
         assert.notEqual(payload.metroInstanceId, 'stale-metro-instance');
+        assert.doesNotMatch(result.stderr, /install receipt generation not preserved/);
       },
     );
 
@@ -206,6 +207,10 @@ test('ensure-metro preserves a revalidated receipt generation and bumps a change
       const result = runEnsureMetro();
       assert.notEqual(result.status, 0);
       assert.match(result.stderr, /project is neither Expo nor bare React Native/);
+      assert.match(
+        result.stderr,
+        /install receipt generation not preserved \(installed-artifact-changed\)/,
+      );
       const marker = readSignedMarker(appRoot);
       const payload = verifyMetroAuthorityMarker(marker as never, 'signer', {
         sessionId: session.sessionId,
@@ -219,6 +224,10 @@ test('ensure-metro preserves a revalidated receipt generation and bumps a change
       const result = runEnsureMetro();
       assert.notEqual(result.status, 0);
       assert.match(result.stderr, /project is neither Expo nor bare React Native/);
+      assert.match(
+        result.stderr,
+        /install receipt generation not preserved \(install-capture-failed\)/,
+      );
       const payload = readSignedMarker(appRoot).payload as { buildGeneration: number };
       assert.equal(payload.buildGeneration, 5);
     });

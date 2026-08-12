@@ -55,31 +55,40 @@ function resolve(
 }
 
 test('a byte-identical revalidated receipt preserves its generation across restart', () => {
-  assert.deepEqual(resolve({ ...RECEIPT }), { buildGeneration: 4, receiptPreserved: true });
+  assert.deepEqual(resolve({ ...RECEIPT }), {
+    buildGeneration: 4,
+    receiptPreserved: true,
+    reason: 'preserved',
+  });
 });
 
 test('a bare-react-native receipt preserves its generation the same way', () => {
   assert.deepEqual(resolve({ ...RECEIPT, buildKind: 'bare-react-native' }), {
     buildGeneration: 4,
     receiptPreserved: true,
+    reason: 'preserved',
   });
 });
 
 test('a missing install falls back to the bumped generation', () => {
-  assert.deepEqual(resolve(null), { buildGeneration: 5, receiptPreserved: false });
+  assert.deepEqual(resolve(null), {
+    buildGeneration: 5,
+    receiptPreserved: false,
+    reason: 'no-install-receipt',
+  });
 });
 
 test('a changed installed artifact never preserves the receipt generation', () => {
   assert.deepEqual(
     resolve({ ...RECEIPT }, captureReturning('foreign-digest', RECEIPT.installGeneration)),
-    { buildGeneration: 5, receiptPreserved: false },
+    { buildGeneration: 5, receiptPreserved: false, reason: 'installed-artifact-changed' },
   );
 });
 
 test('a rotated install generation never preserves the receipt generation', () => {
   assert.deepEqual(
     resolve({ ...RECEIPT }, captureReturning(RECEIPT.artifactDigest, 'install-generation-2')),
-    { buildGeneration: 5, receiptPreserved: false },
+    { buildGeneration: 5, receiptPreserved: false, reason: 'installed-artifact-changed' },
   );
 });
 
@@ -88,7 +97,7 @@ test('an unattestable install falls back instead of admitting the receipt', () =
     resolve({ ...RECEIPT }, () => {
       throw new Error('exact iOS app container was not found');
     }),
-    { buildGeneration: 5, receiptPreserved: false },
+    { buildGeneration: 5, receiptPreserved: false, reason: 'install-capture-failed' },
   );
 });
 
@@ -114,7 +123,7 @@ test('foreign or drifted receipt axes always fall back to the bumped generation'
   for (const drift of drifts) {
     assert.deepEqual(
       resolve({ ...RECEIPT, ...drift }),
-      { buildGeneration: 5, receiptPreserved: false },
+      { buildGeneration: 5, receiptPreserved: false, reason: 'receipt-axis-mismatch' },
       JSON.stringify(drift),
     );
   }
@@ -127,7 +136,11 @@ test('empty identity evidence refuses structurally, before any capture runs', ()
       captured = true;
       return { ...DEVICE, artifactDigest: '', installGeneration: '' };
     });
-    assert.deepEqual(result, { buildGeneration: 5, receiptPreserved: false });
+    assert.deepEqual(result, {
+      buildGeneration: 5,
+      receiptPreserved: false,
+      reason: 'receipt-axis-mismatch',
+    });
     assert.equal(captured, false, JSON.stringify(drift));
   }
 });
@@ -148,7 +161,7 @@ test('an exact Android receipt preserves its generation with exact-target attest
       },
     },
   );
-  assert.deepEqual(result, { buildGeneration: 4, receiptPreserved: true });
+  assert.deepEqual(result, { buildGeneration: 4, receiptPreserved: true, reason: 'preserved' });
 });
 
 test('the structural gate refuses before any on-device capture runs', () => {
@@ -161,6 +174,10 @@ test('the structural gate refuses before any on-device capture runs', () => {
       installGeneration: RECEIPT.installGeneration,
     };
   });
-  assert.deepEqual(result, { buildGeneration: 5, receiptPreserved: false });
+  assert.deepEqual(result, {
+    buildGeneration: 5,
+    receiptPreserved: false,
+    reason: 'receipt-axis-mismatch',
+  });
   assert.equal(captured, false);
 });

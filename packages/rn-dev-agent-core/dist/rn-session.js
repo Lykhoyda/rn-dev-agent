@@ -9,7 +9,7 @@ import { parseDeclaredManifests } from './session/declared-source-contract.js';
 import { buildSignedMetroMarker, createMetroAuthorityModule } from './session/metro-authority.js';
 import { captureMetroBinding } from './session/metro-binding.js';
 import { inspectManagedMetroLifecycle, refreshManagedMetroBuildGeneration, startManagedMetro, stopManagedMetro, verifyManagedMetroManagementProof, } from './session/managed-metro.js';
-import { resolveManagedMetroRestartGeneration } from './session/managed-metro-restart.js';
+import { resolveManagedMetroRestartGeneration, } from './session/managed-metro-restart.js';
 import { inspectSessionOwner } from './session/process-owner.js';
 import { openSessionRegistry, SessionAuthorityError, } from './session/registry.js';
 import { resolveSourceIdentity } from './session/source-identity.js';
@@ -215,6 +215,7 @@ async function ensureManagedMetro(status) {
     let bindingCommitted = false;
     let restarted = false;
     let receiptPreserved = false;
+    let receiptPreservedReason = 'metro-already-live';
     try {
         await status.registry.runWithOperation(operation, async () => {
             if (retainedCleanup) {
@@ -290,6 +291,10 @@ async function ensureManagedMetro(status) {
             });
             const buildGeneration = restart.buildGeneration;
             receiptPreserved = restart.receiptPreserved;
+            receiptPreservedReason = restart.reason;
+            if (!receiptPreserved) {
+                process.stderr.write(`rn-session ensure-metro: install receipt generation not preserved (${restart.reason}); pin_dev_client will refuse until the install is re-proved by stop_metro + ensure-metro or a rebuild\n`);
+            }
             writeMarker(status, {
                 platform,
                 appId,
@@ -325,7 +330,7 @@ async function ensureManagedMetro(status) {
             bindingCommitted = true;
         });
         status.registry.endOperation(currentOperation);
-        return { restarted, receiptPreserved };
+        return { restarted, receiptPreserved, receiptPreservedReason };
     }
     catch (error) {
         let failure = error;
@@ -414,6 +419,7 @@ async function main() {
                     ?.buildGeneration,
                 restarted: ensured.restarted,
                 receiptPreserved: ensured.receiptPreserved,
+                receiptPreservedReason: ensured.receiptPreservedReason,
             })}\n`);
             return;
         }

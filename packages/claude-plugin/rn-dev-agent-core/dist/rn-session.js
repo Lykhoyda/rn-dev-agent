@@ -15133,13 +15133,17 @@ async function stopManagedMetro(binding, input, dependencies = {}) {
 // packages/rn-dev-agent-core/dist/session/managed-metro-restart.js
 init_install_authority();
 function resolveManagedMetroRestartGeneration(input, dependencies = {}) {
-  const fallback = { buildGeneration: input.fallbackGeneration, receiptPreserved: false };
+  const fallback = (reason) => ({
+    buildGeneration: input.fallbackGeneration,
+    receiptPreserved: false,
+    reason
+  });
   const install = input.install;
   if (!install)
-    return fallback;
+    return fallback("no-install-receipt");
   const generation2 = install.buildGeneration;
   if (install.sessionId !== input.session.sessionId || install.sourceKey !== input.session.sourceKey || install.worktreeKey !== input.session.worktreeKey || install.appRootKey !== input.session.appRootKey || install.platform !== input.device.platform || install.deviceId !== input.device.deviceId || install.appId !== input.device.appId || install.metroPort !== input.session.metroPort || install.buildKind !== "expo" && install.buildKind !== "bare-react-native" || typeof install.artifactDigest !== "string" || install.artifactDigest === "" || typeof install.installGeneration !== "string" || install.installGeneration === "" || !Number.isSafeInteger(generation2) || Number(generation2) < 1) {
-    return fallback;
+    return fallback("receipt-axis-mismatch");
   }
   let observed;
   try {
@@ -15149,12 +15153,12 @@ function resolveManagedMetroRestartGeneration(input, dependencies = {}) {
       appId: input.device.appId
     });
   } catch {
-    return fallback;
+    return fallback("install-capture-failed");
   }
   if (observed.artifactDigest !== install.artifactDigest || observed.installGeneration !== install.installGeneration) {
-    return fallback;
+    return fallback("installed-artifact-changed");
   }
-  return { buildGeneration: Number(generation2), receiptPreserved: true };
+  return { buildGeneration: Number(generation2), receiptPreserved: true, reason: "preserved" };
 }
 
 // packages/rn-dev-agent-core/dist/session/process-owner.js
@@ -18058,6 +18062,7 @@ async function ensureManagedMetro(status) {
   let bindingCommitted = false;
   let restarted = false;
   let receiptPreserved = false;
+  let receiptPreservedReason = "metro-already-live";
   try {
     await status.registry.runWithOperation(operation, async () => {
       if (retainedCleanup) {
@@ -18129,6 +18134,11 @@ async function ensureManagedMetro(status) {
       });
       const buildGeneration = restart.buildGeneration;
       receiptPreserved = restart.receiptPreserved;
+      receiptPreservedReason = restart.reason;
+      if (!receiptPreserved) {
+        process.stderr.write(`rn-session ensure-metro: install receipt generation not preserved (${restart.reason}); pin_dev_client will refuse until the install is re-proved by stop_metro + ensure-metro or a rebuild
+`);
+      }
       writeMarker(status, {
         platform,
         appId,
@@ -18164,7 +18174,7 @@ async function ensureManagedMetro(status) {
       bindingCommitted = true;
     });
     status.registry.endOperation(currentOperation);
-    return { restarted, receiptPreserved };
+    return { restarted, receiptPreserved, receiptPreservedReason };
   } catch (error) {
     let failure = error;
     let cleanupProven = startedBinding === null || bindingCommitted;
@@ -18248,7 +18258,8 @@ async function main() {
         metroPort: current?.bindings.metroPort,
         buildGeneration: current?.bindings.metro?.buildGeneration,
         restarted: ensured.restarted,
-        receiptPreserved: ensured.receiptPreserved
+        receiptPreserved: ensured.receiptPreserved,
+        receiptPreservedReason: ensured.receiptPreservedReason
       })}
 `);
       return;
