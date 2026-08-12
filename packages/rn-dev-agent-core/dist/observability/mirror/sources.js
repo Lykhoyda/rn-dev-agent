@@ -39,6 +39,15 @@ export const SIMCTL_BROKEN_IDB_HINT = 'idb is installed but did not respond succ
 export const IDB_NO_FIRST_FRAME_REASON = 'idb video-stream produced no first frame';
 export const IDB_MALFORMED_FRAME_REASON = 'idb video-stream produced a malformed frame';
 export const IDB_STREAM_UNHEALTHY_HINT = 'idb video-stream produced no usable frame — using simctl screenshot loop';
+// The banner must describe what actually happened: a stream that ran healthily
+// for minutes and then hit the restart gate is not "no usable frame".
+export function idbDemotionHint(cause) {
+    if (cause?.hint)
+        return cause.hint;
+    if (cause?.reason)
+        return `${cause.reason} — using simctl screenshot loop`;
+    return IDB_STREAM_UNHEALTHY_HINT;
+}
 // Alive child ≠ ready stream. Technique considered from
 // https://github.com/mobile-dev-inc/maestro @ e08f33ac (not copied):
 // `DeviceStream.awaitStreamReady` in
@@ -48,7 +57,7 @@ export const IDB_STREAM_UNHEALTHY_HINT = 'idb video-stream produced no usable fr
 // status==="streaming" && streamUrl. Archived mobile-dev-inc/maestro-mcp is
 // historical CLI wrapping only — no live mirror. We bound JPEG SOI/EOI on the
 // existing idb pipe and demote to simctl.
-const DEFAULT_IDB_FIRST_FRAME_TIMEOUT_MS = 5_000;
+export const DEFAULT_IDB_FIRST_FRAME_TIMEOUT_MS = 30_000;
 const IDB_HINT = `idb not found — ${IDB_INSTALL_COMMAND}`;
 const FFMPEG_HINT = 'ffmpeg not found — run scripts/ensure-ffmpeg.sh or brew install ffmpeg';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -396,13 +405,16 @@ export class AndroidScreenrecordSource {
         this.ffmpeg?.kill();
     }
 }
-export async function createMirrorSource(target, fps) {
+export async function createMirrorSource(target, fps, opts = {}) {
     if (target.platform === 'android') {
         return new AndroidScreenrecordSource(target.deviceId);
     }
     const state = await probeIdbClient();
-    if (state === 'ready')
-        return new IosIdbSource(target.deviceId, fps);
+    if (state === 'ready') {
+        return new IosIdbSource(target.deviceId, fps, {
+            firstFrameTimeoutMs: opts.firstFrameTimeoutMs,
+        });
+    }
     // GH#578: a crashing client is NOT "idb missing" — telling the developer to
     // install what they already installed is the loop this fix removes.
     return new IosSimctlLoopSource(target.deviceId, {

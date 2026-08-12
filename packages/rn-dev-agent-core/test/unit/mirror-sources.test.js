@@ -14,6 +14,10 @@ import {
   IDB_INSTALL_COMMAND,
   detectIdb,
   probeIdbClient,
+  idbDemotionHint,
+  IDB_NO_FIRST_FRAME_REASON,
+  IDB_MALFORMED_FRAME_REASON,
+  IDB_STREAM_UNHEALTHY_HINT,
 } from '../../dist/observability/mirror/sources.js';
 
 const SOI = Buffer.from([0xff, 0xd8]);
@@ -497,4 +501,20 @@ test('IDB_INSTALL_COMMAND matches the command ensure-idb.sh produces', () => {
     shell.includes(IDB_INSTALL_COMMAND),
     'ensure-idb.sh no longer emits the exact IDB_INSTALL_COMMAND string — they have drifted',
   );
+});
+
+test('idbDemotionHint keeps the demotion cause truthful', () => {
+  assert.equal(
+    idbDemotionHint({ reason: IDB_NO_FIRST_FRAME_REASON, hint: IDB_STREAM_UNHEALTHY_HINT }),
+    IDB_STREAM_UNHEALTHY_HINT,
+  );
+  assert.equal(
+    idbDemotionHint({ reason: IDB_MALFORMED_FRAME_REASON }),
+    `${IDB_MALFORMED_FRAME_REASON} — using simctl screenshot loop`,
+  );
+  assert.equal(
+    idbDemotionHint({ reason: 'idb video-stream keeps exiting' }),
+    'idb video-stream keeps exiting — using simctl screenshot loop',
+  );
+  assert.equal(idbDemotionHint(), IDB_STREAM_UNHEALTHY_HINT);
 });

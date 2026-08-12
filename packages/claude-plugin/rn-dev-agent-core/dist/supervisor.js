@@ -24093,12 +24093,424 @@ var init_no_change_tracker = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/observability/mirror/jpeg-stream.js
+var MAX_FRAME_BYTES, SOI, EOI, JpegFrameExtractor;
+var init_jpeg_stream = __esm({
+  "packages/rn-dev-agent-core/dist/observability/mirror/jpeg-stream.js"() {
+    "use strict";
+    MAX_FRAME_BYTES = 8e6;
+    SOI = Buffer.from([255, 216]);
+    EOI = Buffer.from([255, 217]);
+    JpegFrameExtractor = class {
+      acc = Buffer.alloc(0);
+      /** Sticky: a SOI without EOI exceeded MAX_FRAME_BYTES. Process liveness is not a valid frame. */
+      overflowed = false;
+      push(chunk) {
+        this.acc = this.acc.length === 0 ? chunk : Buffer.concat([this.acc, chunk]);
+        const frames = [];
+        for (; ; ) {
+          const soi = this.acc.indexOf(SOI);
+          if (soi === -1) {
+            this.acc = this.acc.length > 0 && this.acc[this.acc.length - 1] === 255 ? this.acc.subarray(this.acc.length - 1) : Buffer.alloc(0);
+            break;
+          }
+          if (soi > 0)
+            this.acc = this.acc.subarray(soi);
+          const eoi = this.acc.indexOf(EOI, SOI.length);
+          if (eoi === -1) {
+            if (this.acc.length > MAX_FRAME_BYTES) {
+              this.overflowed = true;
+              this.acc = Buffer.alloc(0);
+            }
+            break;
+          }
+          frames.push(this.acc.subarray(0, eoi + EOI.length));
+          this.acc = this.acc.subarray(eoi + EOI.length);
+        }
+        return frames;
+      }
+    };
+  }
+});
+
+// packages/rn-dev-agent-core/dist/observability/mirror/sources.js
+import { spawn as spawn5, execFile as execFile2 } from "node:child_process";
+import { readFile, unlink } from "node:fs/promises";
+import { tmpdir as tmpdir4 } from "node:os";
+import { join as join14 } from "node:path";
+function idbDemotionHint(cause) {
+  if (cause?.hint)
+    return cause.hint;
+  if (cause?.reason)
+    return `${cause.reason} \u2014 using simctl screenshot loop`;
+  return IDB_STREAM_UNHEALTHY_HINT;
+}
+async function probeIdbClient(execFileFn = execFile2) {
+  return new Promise((resolve12) => {
+    execFileFn("idb", ["--help"], { timeout: 3e3 }, (err) => {
+      if (!err)
+        return resolve12("ready");
+      resolve12(isEnoent(err) ? "absent" : "broken");
+    });
+  });
+}
+function isEnoent(err) {
+  return !!err && typeof err === "object" && err.code === "ENOENT";
+}
+function defaultExecJpeg(cmd, args, signal) {
+  const outPath = args[args.length - 1];
+  return new Promise((resolve12, reject) => {
+    execFile2(cmd, args, { maxBuffer: 16 * 1024 * 1024, timeout: 1e4, signal }, (err) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      readFile(outPath).then((buf) => {
+        void unlink(outPath).catch(() => {
+        });
+        resolve12(buf);
+      }).catch((readErr) => {
+        void unlink(outPath).catch(() => {
+        });
+        reject(readErr);
+      });
+    });
+  });
+}
+async function createMirrorSource(target, fps, opts = {}) {
+  if (target.platform === "android") {
+    return new AndroidScreenrecordSource(target.deviceId);
+  }
+  const state = await probeIdbClient();
+  if (state === "ready") {
+    return new IosIdbSource(target.deviceId, fps, {
+      firstFrameTimeoutMs: opts.firstFrameTimeoutMs
+    });
+  }
+  return new IosSimctlLoopSource(target.deviceId, {
+    degradedHint: state === "broken" ? SIMCTL_BROKEN_IDB_HINT : SIMCTL_HINT
+  });
+}
+var RestartGate, IDB_INSTALL_COMMAND, SIMCTL_HINT, SIMCTL_BROKEN_IDB_HINT, IDB_NO_FIRST_FRAME_REASON, IDB_MALFORMED_FRAME_REASON, IDB_STREAM_UNHEALTHY_HINT, DEFAULT_IDB_FIRST_FRAME_TIMEOUT_MS, IDB_HINT, FFMPEG_HINT, sleep, scheduleAfter, defaultSpawn, IosIdbSource, IosSimctlLoopSource, AndroidScreenrecordSource;
+var init_sources = __esm({
+  "packages/rn-dev-agent-core/dist/observability/mirror/sources.js"() {
+    "use strict";
+    init_jpeg_stream();
+    RestartGate = class {
+      limit;
+      windowMs;
+      now;
+      exits = [];
+      constructor(limit = 3, windowMs = 1e4, now = Date.now) {
+        this.limit = limit;
+        this.windowMs = windowMs;
+        this.now = now;
+      }
+      record() {
+        const t = this.now();
+        this.exits = this.exits.filter((e) => t - e < this.windowMs);
+        this.exits.push(t);
+        return this.exits.length < this.limit;
+      }
+    };
+    IDB_INSTALL_COMMAND = "brew install python@3.13 && brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install --python python3.13 --force fb-idb";
+    SIMCTL_HINT = `install idb for smoother mirroring (${IDB_INSTALL_COMMAND})`;
+    SIMCTL_BROKEN_IDB_HINT = "idb is installed but did not respond successfully \u2014 most likely fb-idb 1.1.7 under Python 3.14, which removed the asyncio.get_event_loop() it needs. Reinstall it under a supported interpreter: pipx install --python python3.13 --force fb-idb";
+    IDB_NO_FIRST_FRAME_REASON = "idb video-stream produced no first frame";
+    IDB_MALFORMED_FRAME_REASON = "idb video-stream produced a malformed frame";
+    IDB_STREAM_UNHEALTHY_HINT = "idb video-stream produced no usable frame \u2014 using simctl screenshot loop";
+    DEFAULT_IDB_FIRST_FRAME_TIMEOUT_MS = 3e4;
+    IDB_HINT = `idb not found \u2014 ${IDB_INSTALL_COMMAND}`;
+    FFMPEG_HINT = "ffmpeg not found \u2014 run scripts/ensure-ffmpeg.sh or brew install ffmpeg";
+    sleep = (ms) => new Promise((resolve12) => setTimeout(resolve12, ms));
+    scheduleAfter = (fn, delayMs) => {
+      if (delayMs <= 0)
+        setImmediate(fn);
+      else
+        setTimeout(fn, delayMs);
+    };
+    defaultSpawn = (cmd, args) => spawn5(cmd, args, { stdio: ["pipe", "pipe", "pipe"] });
+    IosIdbSource = class {
+      udid;
+      pipeline = "idb";
+      nominalFps;
+      active = false;
+      proc = null;
+      firstFrameTimer = null;
+      spawnFn;
+      gate;
+      restartDelayMs;
+      firstFrameTimeoutMs;
+      constructor(udid, fps, opts = {}) {
+        this.udid = udid;
+        this.nominalFps = fps;
+        this.spawnFn = opts.spawnFn ?? defaultSpawn;
+        this.gate = new RestartGate(3, 1e4, opts.now ?? Date.now);
+        this.restartDelayMs = opts.restartDelayMs ?? 300;
+        this.firstFrameTimeoutMs = opts.firstFrameTimeoutMs ?? DEFAULT_IDB_FIRST_FRAME_TIMEOUT_MS;
+      }
+      start(sink) {
+        this.active = true;
+        this.spawnOnce(sink);
+      }
+      spawnOnce(sink) {
+        const extractor = new JpegFrameExtractor();
+        let gotFrame = false;
+        const proc = this.spawnFn("idb", [
+          "video-stream",
+          "--udid",
+          this.udid,
+          "--fps",
+          String(this.nominalFps),
+          "--format",
+          "mjpeg",
+          "--compression-quality",
+          "0.7"
+        ]);
+        this.proc = proc;
+        proc.stderr?.resume();
+        this.armFirstFrameTimer(sink);
+        proc.stdout.on("data", (chunk) => {
+          if (!this.active)
+            return;
+          for (const frame of extractor.push(chunk)) {
+            gotFrame = true;
+            this.clearFirstFrameTimer();
+            if (this.active)
+              sink.onFrame(frame);
+          }
+          if (this.active && extractor.overflowed && !gotFrame) {
+            this.fail(sink, IDB_MALFORMED_FRAME_REASON);
+          }
+        });
+        proc.on("error", (err) => {
+          if (!this.active)
+            return;
+          if (isEnoent(err)) {
+            this.fail(sink, "idb not found", IDB_HINT);
+          }
+        });
+        proc.on("close", () => {
+          if (!this.active)
+            return;
+          this.clearFirstFrameTimer();
+          if (this.gate.record()) {
+            scheduleAfter(() => {
+              if (this.active)
+                this.spawnOnce(sink);
+            }, this.restartDelayMs);
+          } else {
+            this.fail(sink, "idb video-stream keeps exiting");
+          }
+        });
+      }
+      armFirstFrameTimer(sink) {
+        this.clearFirstFrameTimer();
+        this.firstFrameTimer = setTimeout(() => {
+          this.firstFrameTimer = null;
+          if (!this.active)
+            return;
+          this.fail(sink, IDB_NO_FIRST_FRAME_REASON, IDB_STREAM_UNHEALTHY_HINT);
+        }, this.firstFrameTimeoutMs);
+      }
+      fail(sink, reason, hint) {
+        if (!this.active)
+          return;
+        this.active = false;
+        this.clearFirstFrameTimer();
+        this.proc?.kill();
+        sink.onExit({ reason, hint });
+      }
+      clearFirstFrameTimer() {
+        if (this.firstFrameTimer) {
+          clearTimeout(this.firstFrameTimer);
+          this.firstFrameTimer = null;
+        }
+      }
+      stop() {
+        this.active = false;
+        this.clearFirstFrameTimer();
+        this.proc?.kill();
+      }
+    };
+    IosSimctlLoopSource = class {
+      udid;
+      pipeline = "simctl";
+      nominalFps = 6;
+      degradedHint;
+      active = false;
+      inFlight = null;
+      execJpeg;
+      gate;
+      idleDelayMs;
+      failurePauseMs;
+      tmpPath;
+      constructor(udid, opts = {}) {
+        this.udid = udid;
+        this.execJpeg = opts.execJpeg ?? defaultExecJpeg;
+        this.gate = new RestartGate(3, 1e4, opts.now ?? Date.now);
+        this.idleDelayMs = opts.idleDelayMs ?? 25;
+        this.failurePauseMs = opts.failurePauseMs ?? 500;
+        this.tmpPath = opts.tmpPath ?? (() => join14(tmpdir4(), "rn-mirror-simctl-" + process.pid + ".jpg"));
+        this.degradedHint = opts.degradedHint ?? SIMCTL_HINT;
+      }
+      start(sink) {
+        this.active = true;
+        void this.loop(sink);
+      }
+      async loop(sink) {
+        while (this.active) {
+          const controller = new AbortController();
+          this.inFlight = controller;
+          try {
+            const buf = await this.execJpeg("xcrun", ["simctl", "io", this.udid, "screenshot", "--type=jpeg", this.tmpPath()], controller.signal);
+            sink.onFrame(buf);
+            if (!this.active)
+              break;
+            await sleep(this.idleDelayMs);
+          } catch {
+            if (!this.active)
+              break;
+            if (!this.gate.record()) {
+              if (this.active)
+                sink.onExit({ reason: "simctl screenshot failing", hint: this.degradedHint });
+              this.active = false;
+              break;
+            }
+            await sleep(this.failurePauseMs);
+          } finally {
+            this.inFlight = null;
+          }
+        }
+      }
+      stop() {
+        this.active = false;
+        this.inFlight?.abort();
+      }
+    };
+    AndroidScreenrecordSource = class {
+      serial;
+      pipeline = "screenrecord";
+      nominalFps = 25;
+      active = false;
+      adb = null;
+      ffmpeg = null;
+      spawnFn;
+      gate;
+      restartDelayMs;
+      constructor(serial, opts = {}) {
+        this.serial = serial;
+        this.spawnFn = opts.spawnFn ?? defaultSpawn;
+        this.gate = new RestartGate(3, 1e4, opts.now ?? Date.now);
+        this.restartDelayMs = opts.restartDelayMs ?? 300;
+      }
+      start(sink) {
+        this.active = true;
+        this.spawnCycle(sink);
+      }
+      spawnCycle(sink) {
+        let cycleDone = false;
+        const extractor = new JpegFrameExtractor();
+        const adb2 = this.spawnFn("adb", [
+          "-s",
+          this.serial,
+          "exec-out",
+          "screenrecord",
+          "--output-format=h264",
+          "--time-limit=179",
+          "-"
+        ]);
+        const ffmpeg = this.spawnFn("ffmpeg", [
+          "-loglevel",
+          "error",
+          "-fflags",
+          "nobuffer",
+          "-f",
+          "h264",
+          "-i",
+          "pipe:0",
+          "-q:v",
+          "7",
+          "-f",
+          "mjpeg",
+          "pipe:1"
+        ]);
+        this.adb = adb2;
+        this.ffmpeg = ffmpeg;
+        adb2.stderr?.resume();
+        ffmpeg.stderr?.resume();
+        if (ffmpeg.stdin) {
+          ffmpeg.stdin.on("error", () => {
+          });
+          adb2.stdout.pipe(ffmpeg.stdin);
+        }
+        ffmpeg.stdout.on("data", (chunk) => {
+          if (!this.active)
+            return;
+          for (const frame of extractor.push(chunk)) {
+            if (this.active)
+              sink.onFrame(frame);
+          }
+        });
+        const killSibling = (self) => {
+          if (self === "adb")
+            ffmpeg.kill();
+          else
+            adb2.kill();
+        };
+        adb2.on("error", (err) => {
+          if (!this.active || cycleDone)
+            return;
+          if (isEnoent(err)) {
+            cycleDone = true;
+            this.active = false;
+            killSibling("adb");
+            sink.onExit({ reason: "adb not found" });
+          }
+        });
+        ffmpeg.on("error", (err) => {
+          if (!this.active || cycleDone)
+            return;
+          if (isEnoent(err)) {
+            cycleDone = true;
+            this.active = false;
+            killSibling("ffmpeg");
+            sink.onExit({ reason: "ffmpeg not found", hint: FFMPEG_HINT });
+          }
+        });
+        const onClose = (self) => {
+          if (!this.active || cycleDone)
+            return;
+          cycleDone = true;
+          killSibling(self);
+          if (this.gate.record()) {
+            scheduleAfter(() => {
+              if (this.active)
+                this.spawnCycle(sink);
+            }, this.restartDelayMs);
+          } else {
+            this.active = false;
+            sink.onExit({ reason: "screen capture pipeline keeps exiting" });
+          }
+        };
+        adb2.on("close", () => onClose("adb"));
+        ffmpeg.on("close", () => onClose("ffmpeg"));
+      }
+      stop() {
+        this.active = false;
+        this.adb?.kill();
+        this.ffmpeg?.kill();
+      }
+    };
+  }
+});
+
 // packages/rn-dev-agent-core/dist/project-config.js
 import { existsSync as existsSync13, readFileSync as readFileSync14 } from "node:fs";
-import { join as join14 } from "node:path";
+import { join as join15 } from "node:path";
 function readAppId(projectRoot, platform) {
   for (const filename of ["app.json", "app.config.json"]) {
-    const p = join14(projectRoot, filename);
+    const p = join15(projectRoot, filename);
     if (!existsSync13(p))
       continue;
     try {
@@ -24126,7 +24538,7 @@ function readExpoSlug() {
   if (!projectRoot)
     return null;
   for (const filename of ["app.json", "app.config.json"]) {
-    const p = join14(projectRoot, filename);
+    const p = join15(projectRoot, filename);
     if (!existsSync13(p))
       continue;
     try {
@@ -24142,7 +24554,7 @@ function readRnAgentConfig(projectRoot) {
   const root = projectRoot ?? findProjectRoot();
   if (!root)
     return null;
-  const p = join14(root, ".rn-agent", "config.json");
+  const p = join15(root, ".rn-agent", "config.json");
   if (!existsSync13(p))
     return null;
   try {
@@ -24207,26 +24619,31 @@ function resolveMirrorConfig(deps = {}) {
   }
   const rawFps = cfg?.observe?.mirror?.fps;
   const fps = typeof rawFps === "number" && Number.isFinite(rawFps) ? Math.min(MIRROR_FPS_MAX, Math.max(MIRROR_FPS_MIN, Math.round(rawFps))) : DEFAULT_MIRROR_FPS;
+  const rawTimeout = cfg?.observe?.mirror?.firstFrameTimeoutMs;
+  const firstFrameTimeoutMs = typeof rawTimeout === "number" && Number.isFinite(rawTimeout) ? Math.min(MIRROR_FIRST_FRAME_TIMEOUT_MAX_MS, Math.max(MIRROR_FIRST_FRAME_TIMEOUT_MIN_MS, Math.round(rawTimeout))) : DEFAULT_IDB_FIRST_FRAME_TIMEOUT_MS;
   if (envRaw === "0" || envRaw === "false")
-    return { enabled: false, fps, source: "env" };
+    return { enabled: false, fps, firstFrameTimeoutMs, source: "env" };
   if (envRaw === "1" || envRaw === "true")
-    return { enabled: true, fps, source: "env" };
+    return { enabled: true, fps, firstFrameTimeoutMs, source: "env" };
   const cfgEnabled = cfg?.observe?.mirror?.enabled;
   if (typeof cfgEnabled === "boolean")
-    return { enabled: cfgEnabled, fps, source: "config" };
-  return { enabled: true, fps, source: "default" };
+    return { enabled: cfgEnabled, fps, firstFrameTimeoutMs, source: "config" };
+  return { enabled: true, fps, firstFrameTimeoutMs, source: "default" };
 }
-var warnedBadConfig, DEFAULT_OBSERVE_PORT, DEFAULT_MIRROR_FPS, MIRROR_FPS_MIN, MIRROR_FPS_MAX;
+var warnedBadConfig, DEFAULT_OBSERVE_PORT, DEFAULT_MIRROR_FPS, MIRROR_FPS_MIN, MIRROR_FPS_MAX, MIRROR_FIRST_FRAME_TIMEOUT_MIN_MS, MIRROR_FIRST_FRAME_TIMEOUT_MAX_MS;
 var init_project_config = __esm({
   "packages/rn-dev-agent-core/dist/project-config.js"() {
     "use strict";
     init_storage();
     init_logger();
+    init_sources();
     warnedBadConfig = false;
     DEFAULT_OBSERVE_PORT = 7333;
     DEFAULT_MIRROR_FPS = 20;
     MIRROR_FPS_MIN = 5;
     MIRROR_FPS_MAX = 30;
+    MIRROR_FIRST_FRAME_TIMEOUT_MIN_MS = 1e3;
+    MIRROR_FIRST_FRAME_TIMEOUT_MAX_MS = 12e4;
   }
 });
 
@@ -24395,11 +24812,11 @@ var init_settle = __esm({
 
 // packages/rn-dev-agent-core/dist/agent-device-wrapper.js
 import { unlinkSync as unlinkSync4, rmSync as rmSync7 } from "node:fs";
-import { join as join15 } from "node:path";
+import { join as join16 } from "node:path";
 import { createHash as createHash9 } from "node:crypto";
 function getSessionFilePath() {
   const projectId = createHash9("sha256").update(process.cwd()).digest("hex").slice(0, 12);
-  return join15(getStateDir(), `session-${projectId}.json`);
+  return join16(getStateDir(), `session-${projectId}.json`);
 }
 function getActiveSession() {
   return activeSession;
@@ -25624,7 +26041,7 @@ async function detectPlatform() {
     return session2.platform;
   }
   try {
-    const { stdout } = await execFile2("xcrun", ["simctl", "list", "devices", "booted"], {
+    const { stdout } = await execFile3("xcrun", ["simctl", "list", "devices", "booted"], {
       timeout: PROBE_TIMEOUT_MS
     });
     if (stdout.includes("Booted"))
@@ -25632,25 +26049,25 @@ async function detectPlatform() {
   } catch {
   }
   try {
-    const { stdout } = await execFile2("adb", ["devices"], { timeout: PROBE_TIMEOUT_MS });
+    const { stdout } = await execFile3("adb", ["devices"], { timeout: PROBE_TIMEOUT_MS });
     if (/\tdevice$/m.test(stdout))
       return "android";
   } catch {
   }
   return null;
 }
-var execFile2, PROBE_TIMEOUT_MS;
+var execFile3, PROBE_TIMEOUT_MS;
 var init_platform_utils = __esm({
   "packages/rn-dev-agent-core/dist/tools/platform-utils.js"() {
     "use strict";
     init_agent_device_wrapper();
-    execFile2 = promisify2(execFileCb);
+    execFile3 = promisify2(execFileCb);
     PROBE_TIMEOUT_MS = 1e4;
   }
 });
 
 // packages/rn-dev-agent-core/dist/domain/maestro-validator.js
-import { join as join16, dirname as dirname9, isAbsolute as isAbsolute4, sep as sep3 } from "node:path";
+import { join as join17, dirname as dirname9, isAbsolute as isAbsolute4, sep as sep3 } from "node:path";
 import { readFileSync as readFileSync15, realpathSync as realpathSync7 } from "node:fs";
 function isValidBundleId(s) {
   if (typeof s !== "string")
@@ -25817,7 +26234,7 @@ function resolveRunFlowTarget(file, opts) {
   let resolved;
   let rootReal;
   try {
-    resolved = realpath(join16(opts.flowDir, file));
+    resolved = realpath(join17(opts.flowDir, file));
     rootReal = realpath(opts.flowRoot);
   } catch (err) {
     throw new MaestroValidationError(`runFlow file ref "${file}" could not be resolved: ${err.message}`);
@@ -25987,7 +26404,7 @@ var init_maestro_validator = __esm({
 // packages/rn-dev-agent-core/dist/tools/maestro-dispatch.js
 import { spawnSync as spawnSync2 } from "node:child_process";
 import { existsSync as existsSync14 } from "node:fs";
-import { join as join17 } from "node:path";
+import { join as join18 } from "node:path";
 import { homedir as homedir4 } from "node:os";
 function defaultWhichAdb() {
   if (cache.adb !== void 0)
@@ -26004,7 +26421,7 @@ function defaultWhichMaestro() {
   return cache.maestro;
 }
 function defaultMaestroRunnerPath() {
-  const path = join17(homedir4(), ".maestro-runner", "bin", "maestro-runner");
+  const path = join18(homedir4(), ".maestro-runner", "bin", "maestro-runner");
   return existsSync14(path) ? path : null;
 }
 function shouldWarnFallback(reason) {
@@ -26391,7 +26808,7 @@ function defaultCliPresent() {
   return r.status === 0 && r.stdout.trim().length > 0;
 }
 async function defaultExecVersion(bin) {
-  const { stdout, stderr } = await execFile3(bin, ["--version"], {
+  const { stdout, stderr } = await execFile4(bin, ["--version"], {
     timeout: 5e3,
     encoding: "utf8"
   });
@@ -26436,12 +26853,12 @@ function getEngineStatus(resolvers) {
   }
   return cachedStatus;
 }
-var execFile3, MAESTRO_RUNNER_PIN, MAESTRO_RUNNER_MIN_ANDROID_API, PRE_O_REMEDY, OLDER_SDK_TOKEN, INSTALL_REJECT_CONTEXT, REGEX_SHAPED_SELECTOR, TEXT_SELECTOR_KEYS, cachedStatus;
+var execFile4, MAESTRO_RUNNER_PIN, MAESTRO_RUNNER_MIN_ANDROID_API, PRE_O_REMEDY, OLDER_SDK_TOKEN, INSTALL_REJECT_CONTEXT, REGEX_SHAPED_SELECTOR, TEXT_SELECTOR_KEYS, cachedStatus;
 var init_engine_pin = __esm({
   "packages/rn-dev-agent-core/dist/domain/engine-pin.js"() {
     "use strict";
     init_maestro_invoke();
-    execFile3 = promisify3(execFileCb2);
+    execFile4 = promisify3(execFileCb2);
     MAESTRO_RUNNER_PIN = {
       version: "1.0.9",
       sha256: {
@@ -26487,15 +26904,15 @@ var init_engine_pin = __esm({
 // packages/rn-dev-agent-core/dist/tools/resolve-ios-app-file.js
 import { execFileSync as execFileSync10 } from "node:child_process";
 import { existsSync as existsSync15, cpSync, rmSync as rmSync8, mkdirSync as mkdirSync11, readdirSync as readdirSync5, statSync as statSync8 } from "node:fs";
-import { tmpdir as tmpdir4 } from "node:os";
-import { join as join18, basename as basename4 } from "node:path";
+import { tmpdir as tmpdir5 } from "node:os";
+import { join as join19, basename as basename4 } from "node:path";
 function flowUsesClearState(flowText) {
   return /clearState:\s*true\b/.test(flowText) || /^[ \t]*-[ \t]*clearState[ \t]*$/m.test(flowText);
 }
 function defaultSnapshotApp(appPath) {
   try {
-    const destDir = join18(tmpdir4(), "rn-appfile-snapshots");
-    const dest = join18(destDir, basename4(appPath));
+    const destDir = join19(tmpdir5(), "rn-appfile-snapshots");
+    const dest = join19(destDir, basename4(appPath));
     rmSync8(dest, { recursive: true, force: true });
     mkdirSync11(destDir, { recursive: true });
     try {
@@ -26556,16 +26973,16 @@ function defaultGetAppContainer(bundleId, deviceId) {
   }
 }
 function defaultListSnapshots() {
-  const dir = join18(tmpdir4(), "rn-appfile-snapshots");
+  const dir = join19(tmpdir5(), "rn-appfile-snapshots");
   try {
-    return readdirSync5(dir).filter((name) => name.endsWith(".app")).map((name) => join18(dir, name));
+    return readdirSync5(dir).filter((name) => name.endsWith(".app")).map((name) => join19(dir, name));
   } catch {
     return [];
   }
 }
 function defaultReadBundleId(appPath, timeoutMs) {
   try {
-    const out = execFileSync10("plutil", ["-extract", "CFBundleIdentifier", "raw", join18(appPath, "Info.plist")], { timeout: timeoutMs, encoding: "utf8" });
+    const out = execFileSync10("plutil", ["-extract", "CFBundleIdentifier", "raw", join19(appPath, "Info.plist")], { timeout: timeoutMs, encoding: "utf8" });
     return out.trim() || null;
   } catch {
     return null;
@@ -26821,7 +27238,7 @@ async function recoverFromStaleTarget(client2) {
   let probe = await probeDev(client2, FRESHNESS_PROBE_MS);
   let isStale = !probe.ok;
   if (isStale && probe.timedOut) {
-    await sleep(STALE_RETRY_DELAY_MS);
+    await sleep2(STALE_RETRY_DELAY_MS);
     probe = await probeDev(client2, STALE_RETRY_PROBE_MS);
     isStale = !probe.ok;
   }
@@ -26860,7 +27277,7 @@ async function probeDev(client2, timeoutMs) {
     return { ok: false, timedOut: false };
   }
 }
-function sleep(ms) {
+function sleep2(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 var FRESHNESS_PROBE_MS, STALE_RETRY_DELAY_MS, STALE_RETRY_PROBE_MS, cdpStale;
@@ -26976,8 +27393,8 @@ var init_maestro_device_authority = __esm({
 
 // packages/rn-dev-agent-core/dist/domain/maestro-runner-report.js
 import { existsSync as existsSync16, readFileSync as readFileSync17, rmSync as rmSync9 } from "node:fs";
-import { tmpdir as tmpdir5 } from "node:os";
-import { join as join19 } from "node:path";
+import { tmpdir as tmpdir6 } from "node:os";
+import { join as join20 } from "node:path";
 function idsFrom(value, keys) {
   if (!value || typeof value !== "object")
     return [];
@@ -27001,7 +27418,7 @@ function containerDeviceIdsFrom(value) {
   return idsFrom(value, CONTAINER_DEVICE_ID_KEYS);
 }
 function reportDeviceIds(reportDir) {
-  const reportPath = join19(reportDir, "report.json");
+  const reportPath = join20(reportDir, "report.json");
   if (!existsSync16(reportPath))
     return { ids: [], strength: "none" };
   try {
@@ -27028,7 +27445,7 @@ function reportDeviceIds(reportDir) {
 function createRunnerReportDir(runner, prefix) {
   if (runner !== "maestro-runner")
     return null;
-  return join19(tmpdir5(), `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  return join20(tmpdir6(), `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
 }
 function runnerReportArgs(reportDir) {
   return reportDir ? ["--output", reportDir, "--flatten"] : [];
@@ -27042,7 +27459,7 @@ function collectDirectRunnerEvidence(reportDir, output) {
     reportDeviceIds: report.ids,
     reportDeviceIdStrength: report.strength
   };
-  const logPath = join19(reportDir, "maestro-runner.log");
+  const logPath = join20(reportDir, "maestro-runner.log");
   if (!existsSync16(logPath))
     return evidence;
   try {
@@ -27823,7 +28240,7 @@ var init_metro_origin = __esm({
 import { execFileSync as execFileSync12 } from "node:child_process";
 import { createHash as createHash11 } from "node:crypto";
 import { lstatSync as lstatSync9, readFileSync as readFileSync18, readdirSync as readdirSync6, readlinkSync as readlinkSync3, realpathSync as realpathSync8, statSync as statSync9 } from "node:fs";
-import { isAbsolute as isAbsolute5, join as join20, relative as relative3 } from "node:path";
+import { isAbsolute as isAbsolute5, join as join21, relative as relative3 } from "node:path";
 function runText(command, args) {
   return execFileSync12(command, [...args], {
     encoding: "utf8",
@@ -27855,7 +28272,7 @@ function listAppFiles(appPath) {
   const files = [];
   const visit = (directory) => {
     for (const entry of readdirSync6(directory, { withFileTypes: true })) {
-      const path = join20(directory, entry.name);
+      const path = join21(directory, entry.name);
       if (entry.isDirectory()) {
         visit(path);
       } else if (entry.isFile() || entry.isSymbolicLink()) {
@@ -27894,7 +28311,7 @@ function captureInstallGeneration(target, dependencies = {}) {
     if (!appPath) {
       throw new Error("APP_INSTALL_IDENTITY_CHANGED: exact iOS app container was not found");
     }
-    const infoPath = join20(appPath, "Info.plist");
+    const infoPath = join21(appPath, "Info.plist");
     const executable = text("plutil", [
       "-extract",
       "CFBundleExecutable",
@@ -27908,7 +28325,7 @@ function captureInstallGeneration(target, dependencies = {}) {
     }
     const stat2 = dependencies.stat ?? statSync9;
     const metadata2 = iosAppFiles(appPath, dependencies).map((entry) => {
-      const path = join20(appPath, entry);
+      const path = join21(appPath, entry);
       const value = stat2(path);
       return `${entry}:${String(value.ino)}:${value.size}:${value.mtimeMs}`;
     });
@@ -27947,7 +28364,7 @@ function captureInstalledArtifact(target, dependencies = {}) {
     if (!appPath) {
       throw new Error("APP_INSTALL_IDENTITY_CHANGED: exact iOS app container was not found");
     }
-    const infoPath = join20(appPath, "Info.plist");
+    const infoPath = join21(appPath, "Info.plist");
     const executable = text("plutil", [
       "-extract",
       "CFBundleExecutable",
@@ -27965,7 +28382,7 @@ function captureInstalledArtifact(target, dependencies = {}) {
     const realpath = dependencies.realpath ?? realpathSync8;
     const artifactParts = [];
     for (const entry of files) {
-      const path = join20(appPath, entry);
+      const path = join21(appPath, entry);
       const stat2 = lstat(path);
       artifactParts.push(Buffer.from(entry));
       if (stat2.isFile()) {
@@ -29776,8 +30193,8 @@ var init_authority_gate = __esm({
 import { execFile as execFileCb3 } from "node:child_process";
 import { promisify as promisify4 } from "node:util";
 import { existsSync as existsSync17, readFileSync as readFileSync19, writeFileSync as writeFileSync8 } from "node:fs";
-import { tmpdir as tmpdir6 } from "node:os";
-import { join as join21, dirname as dirname10 } from "node:path";
+import { tmpdir as tmpdir7 } from "node:os";
+import { join as join22, dirname as dirname10 } from "node:path";
 async function runFlowParked(run, opts = {}) {
   const stale = opts.markCdpStale ?? markCdpStale;
   try {
@@ -30016,7 +30433,7 @@ function createMaestroRunHandler(deps = {}) {
       const rawAppId = resolveAppId(args.appId, platform);
       headerAppId = resolveMaestroFlowAppId(rawAppId || void 0, parsed.appId);
       validatedContent = buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, parsed.commands);
-      flowFile = join21(tmpdir6(), `rn-maestro-run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
+      flowFile = join22(tmpdir7(), `rn-maestro-run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
       writeFileSync8(flowFile, validatedContent, "utf-8");
     } catch (err) {
       if (err instanceof MaestroValidationError) {
@@ -30387,9 +30804,9 @@ var init_maestro_run = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/managed-automation.js
-import { spawn as spawn5 } from "node:child_process";
+import { spawn as spawn6 } from "node:child_process";
 import { readdirSync as readdirSync7, readFileSync as readFileSync20, unlinkSync as unlinkSync5 } from "node:fs";
-function sleep2(ms) {
+function sleep3(ms) {
   return new Promise((resolve12) => setTimeout(resolve12, ms));
 }
 function cleanupKey(platform, deviceId) {
@@ -30483,8 +30900,8 @@ function activeRefusal(platform, deviceId, signalGroup, groupLiveness) {
   return refusal.public;
 }
 async function spawnManagedProcessGroup(bin, args, options, dependencies = {}) {
-  const spawnProcess = dependencies.spawn ?? spawn5;
-  const delay = dependencies.sleep ?? sleep2;
+  const spawnProcess = dependencies.spawn ?? spawn6;
+  const delay = dependencies.sleep ?? sleep3;
   const signalGroup = dependencies.signalGroup ?? ((pgid, signal) => {
     if (process.platform === "win32")
       process.kill(pgid, signal);
@@ -30615,14 +31032,14 @@ var init_managed_automation = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/runners/external-runner-detect.js
-import { execFile as execFile4 } from "node:child_process";
+import { execFile as execFile5 } from "node:child_process";
 import { promisify as promisify5 } from "node:util";
-async function detectAndroidExternalRunner(execFileImpl = execFile4, serialArgs = []) {
+async function detectAndroidExternalRunner(execFileImpl = execFile5, serialArgs = []) {
   try {
     const bin = "adb";
     const argv = [...serialArgs, "shell", "ps", "-A"];
     const opts = { timeout: 2e3, encoding: "utf8" };
-    const run = execFileImpl === execFile4 ? promisify5(execFileImpl) : execFileImpl;
+    const run = execFileImpl === execFile5 ? promisify5(execFileImpl) : execFileImpl;
     const { stdout } = await run(bin, argv, opts);
     const lines = stdout.split("\n").filter((line) => /uiautomator|agent-device|AgentDevice/i.test(line)).filter((line) => !/dev\.lykhoyda\.rndevagent\.androidrunner/.test(line));
     if (lines.length === 0)
@@ -30667,10 +31084,10 @@ function isIosExternalRunnerProcessLine(line) {
   }
   return false;
 }
-async function detectIosExternalRunner(execFileImpl = execFile4, udid) {
+async function detectIosExternalRunner(execFileImpl = execFile5, udid) {
   try {
     const opts = { timeout: 2e3, encoding: "utf8" };
-    const run = execFileImpl === execFile4 ? promisify5(execFileImpl) : execFileImpl;
+    const run = execFileImpl === execFile5 ? promisify5(execFileImpl) : execFileImpl;
     const { stdout } = await run("ps", ["axww", "-o", "pid=,command="], opts);
     const lines = stdout.split("\n").filter((line) => isIosExternalRunnerProcessLine(line)).filter((line) => !RN_FAST_RUNNER_RE.test(line)).filter((line) => udid ? line.includes(udid) : true).map((line) => line.trim()).filter((line) => line.length > 0);
     if (lines.length === 0)
@@ -31021,8 +31438,8 @@ var init_device_arbiter = __esm({
 
 // packages/rn-dev-agent-core/dist/maestro-invoke.js
 import { existsSync as existsSync18, writeFileSync as writeFileSync9 } from "node:fs";
-import { join as join22 } from "node:path";
-import { homedir as homedir5, tmpdir as tmpdir7 } from "node:os";
+import { join as join23 } from "node:path";
+import { homedir as homedir5, tmpdir as tmpdir8 } from "node:os";
 function yamlEscape(s) {
   return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n").replace(/\r/g, "\\r").replace(/\t/g, "\\t");
 }
@@ -31039,7 +31456,7 @@ function maestroRefusalResult(result, fallbackMessage, meta) {
   });
 }
 function getMaestroRunnerPath() {
-  const path = join22(homedir5(), ".maestro-runner", "bin", "maestro-runner");
+  const path = join23(homedir5(), ".maestro-runner", "bin", "maestro-runner");
   return existsSync18(path) ? path : null;
 }
 async function runMaestroInline(yaml2, opts, dependencies = {}) {
@@ -31050,7 +31467,7 @@ async function runMaestroInline(yaml2, opts, dependencies = {}) {
     return { passed: false, output: "", flowFile: "", error: dispatch.error };
   }
   const rawAppId = opts.appId ?? resolveBundleId(opts.platform) ?? readExpoSlug() ?? "";
-  const flowFile = join22(tmpdir7(), `rn-maestro-invoke-${opts.slug ?? "flow"}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
+  const flowFile = join23(tmpdir8(), `rn-maestro-invoke-${opts.slug ?? "flow"}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
   let content;
   let headerAppId;
   try {
@@ -31368,12 +31785,12 @@ function resolveAndroidLifecycleTarget(deviceId) {
 }
 async function terminateApp(bundleId, platform, deviceId) {
   if (platform === "ios") {
-    await execFile5("xcrun", buildIosTerminateArgv(bundleId, deviceId), {
+    await execFile6("xcrun", buildIosTerminateArgv(bundleId, deviceId), {
       timeout: TERMINATE_TIMEOUT_MS,
       encoding: "utf8"
     });
   } else {
-    await execFile5("adb", [...resolveAndroidLifecycleTarget(deviceId), "shell", "am", "force-stop", bundleId], {
+    await execFile6("adb", [...resolveAndroidLifecycleTarget(deviceId), "shell", "am", "force-stop", bundleId], {
       timeout: TERMINATE_TIMEOUT_MS,
       encoding: "utf8"
     });
@@ -31399,22 +31816,22 @@ function buildAndroidLaunchArgv(bundleId, deviceId) {
 }
 async function launchApp(bundleId, platform, deviceId) {
   if (platform === "ios") {
-    await execFile5("xcrun", buildIosLaunchArgv(bundleId, deviceId), {
+    await execFile6("xcrun", buildIosLaunchArgv(bundleId, deviceId), {
       timeout: LAUNCH_TIMEOUT_MS,
       encoding: "utf8"
     });
   } else {
-    await execFile5("adb", buildAndroidLaunchArgv(bundleId, deviceId), {
+    await execFile6("adb", buildAndroidLaunchArgv(bundleId, deviceId), {
       timeout: LAUNCH_TIMEOUT_MS,
       encoding: "utf8"
     });
   }
 }
-var execFile5, TERMINATE_TIMEOUT_MS, LAUNCH_TIMEOUT_MS, IOS_UDID_RE, ANDROID_SERIAL_RE2;
+var execFile6, TERMINATE_TIMEOUT_MS, LAUNCH_TIMEOUT_MS, IOS_UDID_RE, ANDROID_SERIAL_RE2;
 var init_app_lifecycle = __esm({
   "packages/rn-dev-agent-core/dist/tools/app-lifecycle.js"() {
     "use strict";
-    execFile5 = promisify6(execFileCb4);
+    execFile6 = promisify6(execFileCb4);
     TERMINATE_TIMEOUT_MS = 1e4;
     LAUNCH_TIMEOUT_MS = 15e3;
     IOS_UDID_RE = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
@@ -31426,7 +31843,7 @@ var init_app_lifecycle = __esm({
 import { execFileSync as execFileSync13 } from "node:child_process";
 import { existsSync as existsSync19, readFileSync as readFileSync21, unlinkSync as unlinkSync6 } from "node:fs";
 import { homedir as homedir6 } from "node:os";
-import { join as join23 } from "node:path";
+import { join as join24 } from "node:path";
 function selectInstalledLegacyApps(installed) {
   return LEGACY_BUNDLE_IDS.filter((id) => installed.has(id));
 }
@@ -31582,8 +31999,8 @@ var init_ensure_single_runner = __esm({
   "packages/rn-dev-agent-core/dist/runners/ensure-single-runner.js"() {
     "use strict";
     init_discovery();
-    DAEMON_JSON = join23(homedir6(), ".agent-device", "daemon.json");
-    DAEMON_LOCK = join23(homedir6(), ".agent-device", "daemon.lock");
+    DAEMON_JSON = join24(homedir6(), ".agent-device", "daemon.json");
+    DAEMON_LOCK = join24(homedir6(), ".agent-device", "daemon.lock");
     DAEMON_FILES = [DAEMON_JSON, DAEMON_LOCK];
     SIGKILL_GRACE_MS = 500;
     LEGACY_BUNDLE_IDS = [
@@ -31597,7 +32014,7 @@ var init_ensure_single_runner = __esm({
 import { execFile as execFileCb5 } from "node:child_process";
 import { promisify as promisify7 } from "node:util";
 function defaultDeps2() {
-  return { run: (args) => execFile6("xcrun", args, { timeout: 5e3 }) };
+  return { run: (args) => execFile7("xcrun", args, { timeout: 5e3 }) };
 }
 async function suppressIOSAutocorrect(udid, deps = defaultDeps2()) {
   const warnings = [];
@@ -31615,11 +32032,11 @@ async function suppressIOSAutocorrect(udid, deps = defaultDeps2()) {
   timings.suppress = Date.now() - t;
   return { warnings, skipped: false, meta: { timings_ms: timings } };
 }
-var execFile6, IOS_KEYBOARD_PREF_KEYS;
+var execFile7, IOS_KEYBOARD_PREF_KEYS;
 var init_suppress_ios_autocorrect = __esm({
   "packages/rn-dev-agent-core/dist/runners/suppress-ios-autocorrect.js"() {
     "use strict";
-    execFile6 = promisify7(execFileCb5);
+    execFile7 = promisify7(execFileCb5);
     IOS_KEYBOARD_PREF_KEYS = [
       ["KeyboardAutocorrection", "-bool", "false"],
       ["KeyboardPrediction", "-bool", "false"],
@@ -31634,7 +32051,7 @@ import { promisify as promisify8 } from "node:util";
 function resetWedgeRecoveryCounter() {
   attempts = 0;
 }
-var execFile7, attempts;
+var execFile8, attempts;
 var init_recover_wedge = __esm({
   "packages/rn-dev-agent-core/dist/cdp/recover-wedge.js"() {
     "use strict";
@@ -31642,7 +32059,7 @@ var init_recover_wedge = __esm({
     init_rn_fast_runner_client();
     init_device_arbiter();
     init_recovery();
-    execFile7 = promisify8(execFileCb6);
+    execFile8 = promisify8(execFileCb6);
     attempts = 0;
   }
 });
@@ -31653,7 +32070,7 @@ import { promisify as promisify9 } from "node:util";
 function isAppMissingSignal(stderr) {
   return /nsposixerrordomain/i.test(stderr) && /\bcode\s*[=:]?\s*2\b/i.test(stderr);
 }
-async function probeAppInstalled(udid, appId, exec = execFile8) {
+async function probeAppInstalled(udid, appId, exec = execFile9) {
   try {
     await exec("xcrun", ["simctl", "get_app_container", udid, appId, "app"], { timeout: 5e3 });
     return true;
@@ -31677,11 +32094,11 @@ function buildNotInstalledAdvice(udid, appId, hint) {
     return base;
   return `${base} Or reinstall the snapshot taken at the last clearState, ${hint.ageMinutes} min ago (may be stale): xcrun simctl install ${posixSingleQuote(udid)} ${posixSingleQuote(hint.path)}`;
 }
-var execFile8, DEVICE_ERROR;
+var execFile9, DEVICE_ERROR;
 var init_app_installed_probe = __esm({
   "packages/rn-dev-agent-core/dist/cdp/app-installed-probe.js"() {
     "use strict";
-    execFile8 = promisify9(execFileCb7);
+    execFile9 = promisify9(execFileCb7);
     DEVICE_ERROR = /Invalid device|No devices/i;
   }
 });
@@ -31693,7 +32110,7 @@ function resetDetachedRecoveryCounter() {
   attempts2 = 0;
   confirmedNotInstalled = null;
 }
-var execFile9, attempts2, confirmedNotInstalled;
+var execFile10, attempts2, confirmedNotInstalled;
 var init_recover_detached = __esm({
   "packages/rn-dev-agent-core/dist/cdp/recover-detached.js"() {
     "use strict";
@@ -31703,7 +32120,7 @@ var init_recover_detached = __esm({
     init_recovery();
     init_app_installed_probe();
     init_maestro_validator();
-    execFile9 = promisify10(execFileCb8);
+    execFile10 = promisify10(execFileCb8);
     attempts2 = 0;
     confirmedNotInstalled = null;
   }
@@ -31711,8 +32128,8 @@ var init_recover_detached = __esm({
 
 // packages/rn-dev-agent-core/dist/lifecycle/device-lock.js
 import { existsSync as existsSync20, mkdirSync as mkdirSync12, openSync as openSync8, writeSync as writeSync3, closeSync as closeSync8, readFileSync as readFileSync22, unlinkSync as unlinkSync7, writeFileSync as writeFileSync10 } from "node:fs";
-import { tmpdir as tmpdir8, userInfo as userInfo2 } from "node:os";
-import { join as join24 } from "node:path";
+import { tmpdir as tmpdir9, userInfo as userInfo2 } from "node:os";
+import { join as join25 } from "node:path";
 function defaultProcessAlive3(pid) {
   try {
     process.kill(pid, 0);
@@ -31758,14 +32175,14 @@ var init_device_lock = __esm({
         this.deviceId = opts.deviceId;
         this.projectRoot = opts.projectRoot ?? process.env.CLAUDE_USER_CWD ?? process.cwd();
         const uid = opts.uid ?? userInfo2().uid;
-        this.tmpDir = opts.tmpDir ?? tmpdir8();
+        this.tmpDir = opts.tmpDir ?? tmpdir9();
         this.pid = opts.pid ?? process.pid;
         this.appId = opts.appId;
         this.version = opts.version;
         this.clock = opts.clock ?? Date.now;
         this.processAlive = opts.processAlive ?? defaultProcessAlive3;
         this.staleMs = opts.staleMs ?? DEVICE_LOCK_STALE_MS;
-        this.lockPath = join24(this.tmpDir, `rn-dev-agent-device-${uid}-${this.platform}-${this.deviceId}.lock`);
+        this.lockPath = join25(this.tmpDir, `rn-dev-agent-device-${uid}-${this.platform}-${this.deviceId}.lock`);
       }
       acquire() {
         try {
@@ -31971,7 +32388,7 @@ function buildIosAppRunningArgs(deviceId) {
 }
 async function defaultIOSProbe(bundleId, deviceId) {
   try {
-    const { stdout } = await execFile10("xcrun", buildIosAppRunningArgs(deviceId), {
+    const { stdout } = await execFile11("xcrun", buildIosAppRunningArgs(deviceId), {
       timeout: 5e3,
       encoding: "utf8"
     });
@@ -31985,7 +32402,7 @@ function buildAndroidPidofArgs(bundleId, deviceId) {
 }
 async function defaultAndroidProbe(bundleId, deviceId) {
   try {
-    const { stdout } = await execFile10("adb", buildAndroidPidofArgs(bundleId, deviceId), {
+    const { stdout } = await execFile11("adb", buildAndroidPidofArgs(bundleId, deviceId), {
       timeout: 3e3,
       encoding: "utf8"
     });
@@ -32014,7 +32431,7 @@ function createDeviceSnapshotHandler(deps = {}) {
   const isAppRunningFn = deps.isAppRunning ?? ((platform, appId, deviceId) => isAppRunning(platform, appId, void 0, deviceId));
   const startAndroidRunnerFn = deps.startAndroidRunner ?? ((deviceId, appId) => startAndroidRunner(deviceId, appId, void 0, { allowArtifactRebuild: true }));
   const launchAndroidApp = deps.launchAndroidApp ?? (async (deviceId, appId) => {
-    await execFile10("adb", buildAndroidAppLaunchArgs(deviceId, appId), {
+    await execFile11("adb", buildAndroidAppLaunchArgs(deviceId, appId), {
       timeout: 1e4,
       encoding: "utf8"
     });
@@ -32085,7 +32502,7 @@ function createDeviceSnapshotHandler(deps = {}) {
           }
           upgradeNote = ready.note ?? consumePendingFastRunnerArtifactNote();
           if (!args.attachOnly) {
-            await execFile10("xcrun", ["simctl", "launch", deviceId, appId], {
+            await execFile11("xcrun", ["simctl", "launch", deviceId, appId], {
               timeout: 1e4,
               encoding: "utf8"
             }).catch(() => {
@@ -32405,7 +32822,7 @@ async function reopenSessionForRecovery(appId, platform, attachOnly, deviceId, d
     sessionName: recoveryName
   });
 }
-var execFile10, HEARTBEAT_MS, activeDeviceLock, heartbeatTimer, DEVICE_BUSY_CLOSE_GUIDANCE, DEVICE_BUSY_ALTERNATE_GUIDANCE, DEVICE_BUSY_STALE_GUIDANCE, DEVICE_BUSY_OWNERSHIP_GUIDANCE, AndroidAppLaunchError;
+var execFile11, HEARTBEAT_MS, activeDeviceLock, heartbeatTimer, DEVICE_BUSY_CLOSE_GUIDANCE, DEVICE_BUSY_ALTERNATE_GUIDANCE, DEVICE_BUSY_STALE_GUIDANCE, DEVICE_BUSY_OWNERSHIP_GUIDANCE, AndroidAppLaunchError;
 var init_device_session = __esm({
   "packages/rn-dev-agent-core/dist/tools/device-session.js"() {
     "use strict";
@@ -32427,7 +32844,7 @@ var init_device_session = __esm({
     init_device_lock();
     init_device_arbiter();
     init_device_session_close();
-    execFile10 = promisify11(execFileCb9);
+    execFile11 = promisify11(execFileCb9);
     HEARTBEAT_MS = 3e4;
     activeDeviceLock = null;
     heartbeatTimer = null;
@@ -33120,7 +33537,7 @@ function extractTypingMeta(result) {
     return null;
   }
 }
-function sleep3(ms) {
+function sleep4(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 function extractSettleMeta(result) {
@@ -33452,7 +33869,7 @@ async function performExactFill(args, client2, tiers, deps = {}) {
     if (tiers.abortSignal?.aborted) {
       return fillFailure("TEXT_ENTRY_UNVERIFIED", "device_fill was cancelled after a native attempt; no corrective retype was dispatched.", { mutation: "possible", pathsTried, verification });
     }
-    await sleep3(decision.delayMs);
+    await sleep4(decision.delayMs);
     if (tiers.abortSignal?.aborted) {
       return fillFailure("TEXT_ENTRY_UNVERIFIED", "device_fill was cancelled before a corrective retype was dispatched.", { mutation: "possible", pathsTried, verification });
     }
@@ -33772,7 +34189,7 @@ function parseDefaultInputMethodPackage(raw) {
 }
 async function resolveAndroidImePackage(deviceId) {
   try {
-    const { stdout } = await execFile11("adb", [
+    const { stdout } = await execFile12("adb", [
       ...deviceId ? ["-s", deviceId] : [],
       "shell",
       "settings",
@@ -33869,7 +34286,7 @@ function decideScrollDirection(element, screen) {
     return "right";
   return null;
 }
-var execFile11, IME_PROBE_TIMEOUT_MS, TYPE_PRIORITY_FOR_TAP, IOS_INPUT_TYPES, ANDROID_INPUT_TYPE_RE, PRESSABLE_SUFFIX, NATIVE_VERIFY_VERDICTS, MAX_NATIVE_RETYPE, DEFAULT_SCREEN, SWIPE_FRACTION, DEFAULT_SWIPE_DURATION_MS, NEXT_KEY_LABELS, _imePackageResolverForTest;
+var execFile12, IME_PROBE_TIMEOUT_MS, TYPE_PRIORITY_FOR_TAP, IOS_INPUT_TYPES, ANDROID_INPUT_TYPE_RE, PRESSABLE_SUFFIX, NATIVE_VERIFY_VERDICTS, MAX_NATIVE_RETYPE, DEFAULT_SCREEN, SWIPE_FRACTION, DEFAULT_SWIPE_DURATION_MS, NEXT_KEY_LABELS, _imePackageResolverForTest;
 var init_device_interact = __esm({
   "packages/rn-dev-agent-core/dist/tools/device-interact.js"() {
     "use strict";
@@ -33886,7 +34303,7 @@ var init_device_interact = __esm({
     init_device_session();
     init_fast_runner_ref_map();
     init_fill_verify();
-    execFile11 = promisify12(execFileCb10);
+    execFile12 = promisify12(execFileCb10);
     IME_PROBE_TIMEOUT_MS = 5e3;
     TYPE_PRIORITY_FOR_TAP = {
       Button: 100,
@@ -34520,12 +34937,12 @@ __export(rn_android_runner_client_exports, {
   stopAndroidRunner: () => stopAndroidRunner,
   waitForAndroidRunnerHealth: () => waitForAndroidRunnerHealth
 });
-import { spawn as spawn6, execFile as execFile12 } from "node:child_process";
+import { spawn as spawn7, execFile as execFile13 } from "node:child_process";
 import { promisify as promisify13 } from "node:util";
 import { existsSync as existsSync21, rmSync as rmSync10, writeFileSync as writeFileSync11 } from "node:fs";
-import { tmpdir as tmpdir9 } from "node:os";
+import { tmpdir as tmpdir10 } from "node:os";
 import { randomBytes as randomBytes5, randomUUID as randomUUID7 } from "node:crypto";
-import { join as join25 } from "node:path";
+import { join as join26 } from "node:path";
 function getAndroidRunnerState() {
   return runnerState2;
 }
@@ -35308,7 +35725,7 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
       void execFileAsync2("adb", buildAdbForwardRemoveArgs(serial, hostPort)).catch(() => {
       });
     };
-    const child = spawn6("adb", [
+    const child = spawn7("adb", [
       ...adbSerialArgs(deviceId),
       "shell",
       "am",
@@ -35729,7 +36146,7 @@ async function runAndroid(args) {
     const data = resp.data;
     if (!data?.pngBase64)
       return failResult("Android runner screenshot response did not include pngBase64", "SCREENSHOT_FAILED", recovery ? { transportRecovery: recovery } : void 0);
-    const outPath = args.outPath ?? join25(tmpdir9(), `rn-android-screenshot-${Date.now()}.png`);
+    const outPath = args.outPath ?? join26(tmpdir10(), `rn-android-screenshot-${Date.now()}.png`);
     writeFileSync11(outPath, Buffer.from(data.pngBase64, "base64"));
     return okResult({ path: outPath }, Object.keys(recoveryMeta).length ? { meta: recoveryMeta } : void 0);
   }
@@ -35756,7 +36173,7 @@ var init_rn_android_runner_client = __esm({
     init_transport_recovery();
     init_process_birth();
     init_authority_store();
-    execFileAsync2 = promisify13(execFile12);
+    execFileAsync2 = promisify13(execFile13);
     DEFAULT_PORT = 22089;
     READY_TIMEOUT_MS2 = 3e4;
     INSTRUMENTATION = "dev.lykhoyda.rndevagent.androidrunner.test/androidx.test.runner.AndroidJUnitRunner";
@@ -35764,11 +36181,11 @@ var init_rn_android_runner_client = __esm({
     HEALTH_POLL_INTERVAL_MS = 150;
     HEALTH_PROBE_TIMEOUT_MS = 1e3;
     RN_ANDROID_RUNNER_DIR = resolveNativeRunnerDir("rn-android-runner");
-    GRADLEW = join25(RN_ANDROID_RUNNER_DIR, "gradlew");
-    APK_APP = join25(RN_ANDROID_RUNNER_DIR, "app", "build", "outputs", "apk", "debug", "app-debug.apk");
-    APK_TEST = join25(RN_ANDROID_RUNNER_DIR, "app", "build", "outputs", "apk", "androidTest", "debug", "app-debug-androidTest.apk");
-    ANDROID_REBUILD_ROOT = join25(RN_ANDROID_RUNNER_DIR, "app", "build");
-    ANDROID_REBUILD_LOCK_DATABASE = join25(ANDROID_REBUILD_ROOT, ".authority-rebuild", "lock.sqlite");
+    GRADLEW = join26(RN_ANDROID_RUNNER_DIR, "gradlew");
+    APK_APP = join26(RN_ANDROID_RUNNER_DIR, "app", "build", "outputs", "apk", "debug", "app-debug.apk");
+    APK_TEST = join26(RN_ANDROID_RUNNER_DIR, "app", "build", "outputs", "apk", "androidTest", "debug", "app-debug-androidTest.apk");
+    ANDROID_REBUILD_ROOT = join26(RN_ANDROID_RUNNER_DIR, "app", "build");
+    ANDROID_REBUILD_LOCK_DATABASE = join26(ANDROID_REBUILD_ROOT, ".authority-rebuild", "lock.sqlite");
     ANDROID_REBUILD_LOCK_STALE_MS = 15 * 6e4;
     ANDROID_REBUILD_HEARTBEAT_MS = 6e4;
     ANDROID_REBUILD_COMPLETION_RETRY_MS = 1e3;
@@ -35817,7 +36234,7 @@ import { execFile as execFileCb11 } from "node:child_process";
 import { promisify as promisify14 } from "node:util";
 import { existsSync as existsSync22, readFileSync as readFileSync23, unlinkSync as unlinkSync8 } from "node:fs";
 import { homedir as homedir7 } from "node:os";
-import { join as join26 } from "node:path";
+import { join as join27 } from "node:path";
 function isProtectedPid(pid, selfPid, parentPid) {
   return pid === selfPid || pid === parentPid;
 }
@@ -35825,7 +36242,7 @@ function defaultDeps3() {
   return {
     stopOwnRunner: (deviceId, signal) => stopAndroidRunner(deviceId, signal),
     adbForceStop: async (pkg, serial, signal) => {
-      await execFile13("adb", [...serial, "shell", "am", "force-stop", pkg], {
+      await execFile14("adb", [...serial, "shell", "am", "force-stop", pkg], {
         timeout: ADB_TIMEOUT_MS,
         encoding: "utf8",
         signal
@@ -35957,15 +36374,15 @@ async function releaseAndroidInteractionSlot(opts = {}, deps = defaultDeps3()) {
 function msg2(err) {
   return err instanceof Error ? err.message : String(err);
 }
-var execFile13, DAEMON_JSON2, DAEMON_LOCK2, DAEMON_FILES2, SIGKILL_GRACE_MS2, ADB_TIMEOUT_MS, OWNED_PACKAGES, ExactAndroidDeviceRequiredError;
+var execFile14, DAEMON_JSON2, DAEMON_LOCK2, DAEMON_FILES2, SIGKILL_GRACE_MS2, ADB_TIMEOUT_MS, OWNED_PACKAGES, ExactAndroidDeviceRequiredError;
 var init_release_android_slot = __esm({
   "packages/rn-dev-agent-core/dist/runners/release-android-slot.js"() {
     "use strict";
     init_rn_android_runner_client();
     init_agent_device_wrapper();
-    execFile13 = promisify14(execFileCb11);
-    DAEMON_JSON2 = join26(homedir7(), ".agent-device", "daemon.json");
-    DAEMON_LOCK2 = join26(homedir7(), ".agent-device", "daemon.lock");
+    execFile14 = promisify14(execFileCb11);
+    DAEMON_JSON2 = join27(homedir7(), ".agent-device", "daemon.json");
+    DAEMON_LOCK2 = join27(homedir7(), ".agent-device", "daemon.lock");
     DAEMON_FILES2 = [DAEMON_JSON2, DAEMON_LOCK2];
     SIGKILL_GRACE_MS2 = 500;
     ADB_TIMEOUT_MS = 5e3;
@@ -35984,11 +36401,11 @@ var init_release_android_slot = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/process-cleanup.js
-import { execFile as execFileCb12, spawn as spawn7 } from "node:child_process";
+import { execFile as execFileCb12, spawn as spawn8 } from "node:child_process";
 import { promisify as promisify15 } from "node:util";
 function executeRecorderScript(script, args, options) {
   return new Promise((resolve12, reject) => {
-    const child = spawn7(script, args, {
+    const child = spawn8(script, args, {
       detached: process.platform !== "win32",
       env: options.env,
       stdio: ["ignore", "pipe", "pipe"]
@@ -36196,7 +36613,7 @@ async function stopBoundObserve(binding, listenerProbe = probeManagedMetroListen
     return observed.status === "listening" && observed.pid === pid ? "running" : "stopped";
   }, deadlineMs, "OBSERVE_AUTHORITY_MISMATCH", "Observe listener did not stop before the cleanup deadline");
 }
-async function stopBoundRunner(binding, processProbe = probeProcessBirth, signalProcess = process.kill, timeoutMs = 2e3, runAdb = async (args) => execFile14("adb", args, { timeout: 5e3, encoding: "utf8" }), termGraceMs = 500) {
+async function stopBoundRunner(binding, processProbe = probeProcessBirth, signalProcess = process.kill, timeoutMs = 2e3, runAdb = async (args) => execFile15("adb", args, { timeout: 5e3, encoding: "utf8" }), termGraceMs = 500) {
   const deadlineMs = Date.now() + timeoutMs;
   if (!hasCompleteRunnerCleanupIdentity(binding)) {
     throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "runner cleanup identity is incomplete");
@@ -36307,7 +36724,7 @@ async function stopBoundRecorder(binding, _processProbe = probeProcessBirth, run
     throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", `recorder termination is unproven: ${error2 instanceof Error ? error2.message : String(error2)}`);
   }
 }
-var execFile14, RECORDER_POST_KILL_CONFIRM_MS;
+var execFile15, RECORDER_POST_KILL_CONFIRM_MS;
 var init_process_cleanup = __esm({
   "packages/rn-dev-agent-core/dist/session/process-cleanup.js"() {
     "use strict";
@@ -36316,14 +36733,14 @@ var init_process_cleanup = __esm({
     init_managed_metro();
     init_process_birth();
     init_registry();
-    execFile14 = promisify15(execFileCb12);
+    execFile15 = promisify15(execFileCb12);
     RECORDER_POST_KILL_CONFIRM_MS = 2e3;
   }
 });
 
 // packages/rn-dev-agent-core/dist/env-setup.js
 import { existsSync as existsSync23, readFileSync as readFileSync24 } from "node:fs";
-import { join as join29 } from "node:path";
+import { join as join30 } from "node:path";
 function ensureAndroidEnv() {
   if (!process.env.ANDROID_HOME) {
     if (process.env.ANDROID_SDK_ROOT) {
@@ -36331,8 +36748,8 @@ function ensureAndroidEnv() {
     } else {
       const home = process.env.HOME ?? "";
       const candidates = [
-        join29(home, "Library/Android/sdk"),
-        join29(home, "Android/Sdk"),
+        join30(home, "Library/Android/sdk"),
+        join30(home, "Android/Sdk"),
         "/opt/android-sdk"
       ];
       for (const c of candidates) {
@@ -36344,8 +36761,8 @@ function ensureAndroidEnv() {
     }
   }
   if (process.env.ANDROID_HOME) {
-    const pt = join29(process.env.ANDROID_HOME, "platform-tools");
-    const emu = join29(process.env.ANDROID_HOME, "emulator");
+    const pt = join30(process.env.ANDROID_HOME, "platform-tools");
+    const emu = join30(process.env.ANDROID_HOME, "emulator");
     const path = process.env.PATH ?? "";
     if (!path.includes(pt))
       process.env.PATH = `${pt}:${path}`;
@@ -36353,7 +36770,7 @@ function ensureAndroidEnv() {
       process.env.PATH = `${emu}:${process.env.PATH}`;
   }
   if (!process.env.ANDROID_SERIAL) {
-    const serialFile = join29(process.env.TMPDIR ?? "/tmp", "rn-dev-agent-android-serial");
+    const serialFile = join30(process.env.TMPDIR ?? "/tmp", "rn-dev-agent-android-serial");
     if (existsSync23(serialFile)) {
       process.env.ANDROID_SERIAL = readFileSync24(serialFile, "utf8").trim();
     }
@@ -36361,11 +36778,11 @@ function ensureAndroidEnv() {
 }
 function ensureJavaEnv() {
   const path = process.env.PATH ?? "";
-  if (path.split(":").some((p) => existsSync23(join29(p, "java"))))
+  if (path.split(":").some((p) => existsSync23(join30(p, "java"))))
     return;
   const candidates = ["/opt/homebrew/opt/openjdk@17", "/opt/homebrew/opt/openjdk"];
   for (const jdk of candidates) {
-    if (existsSync23(join29(jdk, "bin/java"))) {
+    if (existsSync23(join30(jdk, "bin/java"))) {
       process.env.JAVA_HOME = jdk;
       process.env.PATH = `${jdk}/bin:${process.env.PATH}`;
       break;
@@ -62214,8 +62631,8 @@ var init_ws_origin = __esm({
 
 // packages/rn-dev-agent-core/dist/cdp/state.js
 import { writeFileSync as writeFileSync12, unlinkSync as unlinkSync9 } from "node:fs";
-import { tmpdir as tmpdir10 } from "node:os";
-import { join as join30 } from "node:path";
+import { tmpdir as tmpdir11 } from "node:os";
+import { join as join31 } from "node:path";
 function resetState(s) {
   s.setState("disconnected");
   s.setHelpersInjected(false);
@@ -62254,15 +62671,15 @@ function clearActiveFlag() {
   } catch {
   }
 }
-function sleep4(ms) {
+function sleep5(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 var CDP_ACTIVE_FLAG, CDP_SESSION_FILE;
 var init_state = __esm({
   "packages/rn-dev-agent-core/dist/cdp/state.js"() {
     "use strict";
-    CDP_ACTIVE_FLAG = join30(tmpdir10(), "rn-dev-agent-cdp-active");
-    CDP_SESSION_FILE = join30(tmpdir10(), "rn-dev-agent-cdp-session.json");
+    CDP_ACTIVE_FLAG = join31(tmpdir11(), "rn-dev-agent-cdp-active");
+    CDP_SESSION_FILE = join31(tmpdir11(), "rn-dev-agent-cdp-session.json");
   }
 });
 
@@ -62319,7 +62736,7 @@ async function interruptibleSleep(delayMs, ctx, sliceMs = 500) {
     if (ctx.isDisposed() || ctx.isSoftReconnectRequested())
       return false;
     const remaining = deadline - Date.now();
-    await sleep4(Math.min(sliceMs, remaining));
+    await sleep5(Math.min(sliceMs, remaining));
   }
   return true;
 }
@@ -62368,7 +62785,7 @@ async function softReconnect(ctx) {
     ctx.setSoftReconnectRequested(true);
     const bailDeadline = Date.now() + 3e3;
     while (ctx.isReconnecting() && Date.now() < bailDeadline) {
-      await sleep4(200);
+      await sleep5(200);
     }
     ctx.setSoftReconnectRequested(false);
   }
@@ -66270,7 +66687,7 @@ async function probeReactReachable(evaluate, budgetMs, pollMs = REACT_READY_POLL
         return true;
     } catch {
     }
-    await sleep4(pollMs);
+    await sleep5(pollMs);
   }
   return false;
 }
@@ -66285,7 +66702,7 @@ async function waitForReact(evaluate, timeout, pollInterval) {
         return;
     } catch {
     }
-    await sleep4(effectivePoll);
+    await sleep5(effectivePoll);
   }
   console.error(`CDP: React not ready after ${effectiveTimeout}ms \u2014 helpers will be injected anyway`);
 }
@@ -66731,7 +67148,7 @@ async function connectToTarget(ctx, target, retries = 5, intent = "default") {
         throw new Error("CDP connection refused. Is Metro running and the app loaded?");
       }
       if (i < retries - 1)
-        await sleep4(2e3);
+        await sleep5(2e3);
     }
   }
   ctx.setState("disconnected");
@@ -67612,7 +68029,7 @@ var init_cdp_client = __esm({
               return { value: val.v };
             }
           }
-          await sleep4(100);
+          await sleep5(100);
         }
         void this.sendWithTimeout("Runtime.evaluate", {
           expression: `delete globalThis['${slot}']`,
@@ -67992,7 +68409,7 @@ var init_mutation_absence = __esm({
 
 // packages/rn-dev-agent-core/dist/verification/config.js
 import { existsSync as existsSync24, readFileSync as readFileSync25 } from "node:fs";
-import { join as join31 } from "node:path";
+import { join as join32 } from "node:path";
 function getCachedProjectRoot() {
   if (_cachedProjectRoot === void 0) {
     _cachedProjectRoot = findProjectRoot();
@@ -68044,7 +68461,7 @@ function loadVerificationConfig(projectRoot) {
   const cached2 = cache2.get(projectRoot);
   if (cached2)
     return cached2;
-  const path = join31(projectRoot, ".rn-agent", "config.json");
+  const path = join32(projectRoot, ".rn-agent", "config.json");
   if (!existsSync24(path)) {
     cache2.set(projectRoot, DEFAULTS);
     return DEFAULTS;
@@ -68470,7 +68887,7 @@ var init_device_session_health = __esm({
 
 // packages/rn-dev-agent-core/dist/session/runtime-paths.js
 import { chmodSync as chmodSync3, lstatSync as lstatSync10, mkdirSync as mkdirSync13 } from "node:fs";
-import { join as join32, resolve as resolve8 } from "node:path";
+import { join as join33, resolve as resolve8 } from "node:path";
 function privateDirectory(path) {
   mkdirSync13(path, { recursive: true, mode: 448 });
   const stat2 = lstatSync10(path);
@@ -68482,14 +68899,14 @@ function privateDirectory(path) {
 }
 function sessionRuntimeRoot(projectRoot) {
   const configured = process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT;
-  return configured ? privateDirectory(resolve8(configured)) : join32(resolve8(projectRoot), ".rn-agent");
+  return configured ? privateDirectory(resolve8(configured)) : join33(resolve8(projectRoot), ".rn-agent");
 }
 function sessionStateDirectory(projectRoot) {
-  const path = join32(sessionRuntimeRoot(projectRoot), "state");
+  const path = join33(sessionRuntimeRoot(projectRoot), "state");
   return process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT ? privateDirectory(path) : path;
 }
 function sessionRecordingsDirectory(projectRoot) {
-  const path = join32(sessionRuntimeRoot(projectRoot), "recordings");
+  const path = join33(sessionRuntimeRoot(projectRoot), "recordings");
   return process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT ? privateDirectory(path) : path;
 }
 var init_runtime_paths2 = __esm({
@@ -68501,7 +68918,7 @@ var init_runtime_paths2 = __esm({
 // packages/rn-dev-agent-core/dist/domain/action-db.js
 import { createRequire as createRequire2 } from "node:module";
 import { existsSync as existsSync25, mkdirSync as mkdirSync14, readdirSync as readdirSync8, readFileSync as readFileSync26 } from "node:fs";
-import { dirname as dirname13, join as join33 } from "node:path";
+import { dirname as dirname13, join as join34 } from "node:path";
 function loadSqlite() {
   try {
     const mod = _require("node:sqlite");
@@ -68515,7 +68932,7 @@ function openActionDb(projectRoot, opts = {}) {
   if (!Ctor)
     return null;
   try {
-    const dbPath = join33(sessionStateDirectory(projectRoot), "actions.db");
+    const dbPath = join34(sessionStateDirectory(projectRoot), "actions.db");
     mkdirSync14(dirname13(dbPath), { recursive: true });
     const db = new Ctor(dbPath);
     db.exec(SCHEMA);
@@ -68658,7 +69075,7 @@ function openActionDb(projectRoot, opts = {}) {
         return row.cnt;
       },
       migrateSidecars() {
-        const stateDir = join33(projectRoot, ".rn-agent", "state");
+        const stateDir = join34(projectRoot, ".rn-agent", "state");
         if (!existsSync25(stateDir))
           return { migrated: 0 };
         let migrated = 0;
@@ -68670,7 +69087,7 @@ function openActionDb(projectRoot, opts = {}) {
           if (exists)
             continue;
           try {
-            const parsed = JSON.parse(readFileSync26(join33(stateDir, f), "utf8"));
+            const parsed = JSON.parse(readFileSync26(join34(stateDir, f), "utf8"));
             if (parsed?.schemaVersion !== 1)
               continue;
             if (!Array.isArray(parsed.runHistory) || !Array.isArray(parsed.repairHistory)) {
@@ -68954,14 +69371,14 @@ var init_reusable_action = __esm({
 
 // packages/rn-dev-agent-core/dist/domain/sidecar-io.js
 import { existsSync as existsSync26, readFileSync as readFileSync27, writeFileSync as writeFileSync13, mkdirSync as mkdirSync15, statSync as statSync10 } from "node:fs";
-import { join as join34, dirname as dirname14 } from "node:path";
+import { join as join35, dirname as dirname14 } from "node:path";
 function sidecarPathFor(yamlFilePath) {
   const dir = dirname14(yamlFilePath);
   const parent = dirname14(dir);
   const filename = yamlFilePath.replace(/\.ya?ml$/i, ".state.json");
   const base = filename.split(/[\\/]/).pop();
-  const stateDirectory = process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT ? sessionStateDirectory(dirname14(parent)) : join34(parent, "state");
-  return join34(stateDirectory, base);
+  const stateDirectory = process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT ? sessionStateDirectory(dirname14(parent)) : join35(parent, "state");
+  return join35(stateDirectory, base);
 }
 function loadOrInitSidecar(yamlFilePath, now = () => /* @__PURE__ */ new Date()) {
   const path = sidecarPathFor(yamlFilePath);
@@ -69151,9 +69568,9 @@ var init_install_identity_inspection = __esm({
 // packages/rn-dev-agent-core/dist/session/migration-diagnostic.js
 import { createHash as createHash14 } from "node:crypto";
 import { existsSync as existsSync27, readFileSync as readFileSync28 } from "node:fs";
-import { join as join35 } from "node:path";
+import { join as join36 } from "node:path";
 function readPackageIntegrationManifest(appRoot, dependencies) {
-  const manifestPath = join35(appRoot, ".rn-agent", "integration", "rn-session-integration.json");
+  const manifestPath = join36(appRoot, ".rn-agent", "integration", "rn-session-integration.json");
   if (dependencies.exists || dependencies.readText) {
     const exists = dependencies.exists ?? existsSync27;
     if (!exists(manifestPath))
@@ -69161,7 +69578,7 @@ function readPackageIntegrationManifest(appRoot, dependencies) {
     const readText = dependencies.readText ?? ((path) => readFileSync28(path, "utf8"));
     return readText(manifestPath);
   }
-  const agent = openBoundDirectory(join35(appRoot, ".rn-agent"));
+  const agent = openBoundDirectory(join36(appRoot, ".rn-agent"));
   let integration;
   let primaryError;
   try {
@@ -69474,7 +69891,7 @@ var init_device_existence = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/session.js
-import { dirname as dirname16, join as join36 } from "node:path";
+import { dirname as dirname16, join as join37 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 import { createHash as createHash15 } from "node:crypto";
 function sameAndroidMetroReverse(current, next) {
@@ -70146,9 +70563,9 @@ function createSessionHandler(runtime, dependencies = {}) {
         if (!status2 || !appRoot) {
           throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", "session app root is unavailable for integration");
         }
-        const packagePath = join36(appRoot, "package.json");
+        const packagePath = join37(appRoot, "package.json");
         const integrationInputs = readPackageIntegrationInputs(appRoot);
-        const manifestPath = join36(appRoot, ".rn-agent", "integration", "rn-session-integration.json");
+        const manifestPath = join37(appRoot, ".rn-agent", "integration", "rn-session-integration.json");
         const packageJson = JSON.parse(integrationInputs.packageJson);
         const integrationBinding = status2.bindings.packageIntegration;
         const installationManifestSource = integrationBinding?.installation?.phase === "started" && typeof integrationBinding.installation.manifestSource === "string" ? integrationBinding.installation.manifestSource : void 0;
@@ -70161,7 +70578,7 @@ function createSessionHandler(runtime, dependencies = {}) {
           if (!(error2 instanceof SyntaxError))
             throw error2;
         }
-        const sessionCli = process.env.RN_DEV_AGENT_SESSION_CLI ?? join36(dirname16(fileURLToPath2(import.meta.url)), "..", "rn-session.js");
+        const sessionCli = process.env.RN_DEV_AGENT_SESSION_CLI ?? join37(dirname16(fileURLToPath2(import.meta.url)), "..", "rn-session.js");
         const stateDir = process.env.RN_DEV_AGENT_STATE_DIR;
         if (input.action === "restore_integration") {
           if (input.confirmed !== true) {
@@ -71025,7 +71442,7 @@ function dedupeByMessage(entries) {
   return out;
 }
 async function defaultRunIOS(sinceSeconds, deviceId) {
-  const { stdout } = await execFile15("xcrun", [
+  const { stdout } = await execFile16("xcrun", [
     "simctl",
     "spawn",
     deviceId,
@@ -71039,7 +71456,7 @@ async function defaultRunIOS(sinceSeconds, deviceId) {
   return stdout;
 }
 async function defaultRunAndroid(sinceSeconds, deviceId) {
-  const { stdout } = await execFile15("adb", ["-s", deviceId, "logcat", "-d", "-v", "time", "-t", `${sinceSeconds * 100}`, "*:E"], { timeout: 1e4, encoding: "utf8", maxBuffer: 10 * 1024 * 1024 });
+  const { stdout } = await execFile16("adb", ["-s", deviceId, "logcat", "-d", "-v", "time", "-t", `${sinceSeconds * 100}`, "*:E"], { timeout: 1e4, encoding: "utf8", maxBuffer: 10 * 1024 * 1024 });
   return stdout;
 }
 async function readNativeErrors(opts = {}) {
@@ -71109,12 +71526,12 @@ function createNativeErrorsHandler(getClient2) {
     }
   };
 }
-var execFile15, IOS_NOISE_PATTERNS, ANDROID_NOISE_PATTERNS;
+var execFile16, IOS_NOISE_PATTERNS, ANDROID_NOISE_PATTERNS;
 var init_native_errors = __esm({
   "packages/rn-dev-agent-core/dist/tools/native-errors.js"() {
     "use strict";
     init_utils();
-    execFile15 = promisify17(execFileCb14);
+    execFile16 = promisify17(execFileCb14);
     IOS_NOISE_PATTERNS = [
       /Cannot find native module/i,
       /Module \w+ is not a registered callable module/i,
@@ -71933,7 +72350,7 @@ import { statSync as statSync11 } from "node:fs";
 async function checkSipsAvailable(deps) {
   if (sipsAvailable !== null)
     return sipsAvailable;
-  const runner = deps.exec ?? execFile16;
+  const runner = deps.exec ?? execFile17;
   try {
     await runner("sips", ["--version"], { timeout: 1500 });
     sipsAvailable = true;
@@ -71950,7 +72367,7 @@ function parseSipsDimensions(stdout) {
   return { width: parseInt(wMatch[1], 10), height: parseInt(hMatch[1], 10) };
 }
 async function getDimensions(path, deps) {
-  const runner = deps.exec ?? execFile16;
+  const runner = deps.exec ?? execFile17;
   try {
     const { stdout } = await runner("sips", ["-g", "pixelWidth", "-g", "pixelHeight", path], {
       timeout: 5e3,
@@ -71989,7 +72406,7 @@ async function resizeWithSips(path, opts = {}, deps = {}) {
   }
   const fileSize = deps.fileSize ?? defaultFileSize;
   const originalBytes = fileSize(path);
-  const runner = deps.exec ?? execFile16;
+  const runner = deps.exec ?? execFile17;
   const quality = opts.quality ?? DEFAULT_QUALITY;
   try {
     await runner("sips", buildSipsResizeArgs(path, maxWidth, quality), { timeout: 1e4 });
@@ -72007,11 +72424,11 @@ async function resizeWithSips(path, opts = {}, deps = {}) {
     newBytes
   };
 }
-var execFile16, DEFAULT_MAX_WIDTH, DEFAULT_QUALITY, sipsAvailable, defaultFileSize;
+var execFile17, DEFAULT_MAX_WIDTH, DEFAULT_QUALITY, sipsAvailable, defaultFileSize;
 var init_device_screenshot_resize = __esm({
   "packages/rn-dev-agent-core/dist/tools/device-screenshot-resize.js"() {
     "use strict";
-    execFile16 = promisify18(execFileCb15);
+    execFile17 = promisify18(execFileCb15);
     DEFAULT_MAX_WIDTH = 800;
     DEFAULT_QUALITY = 85;
     sipsAvailable = null;
@@ -72549,9 +72966,9 @@ var init_recorder = __esm({
 
 // packages/rn-dev-agent-core/dist/tools/device-list.js
 import { mkdirSync as mkdirSync16 } from "node:fs";
-import { execFile as execFile17 } from "node:child_process";
+import { execFile as execFile18 } from "node:child_process";
 import { promisify as promisify19 } from "node:util";
-import { dirname as dirname17, join as join37, resolve as resolve10 } from "node:path";
+import { dirname as dirname17, join as join38, resolve as resolve10 } from "node:path";
 import { homedir as homedir9 } from "node:os";
 function parseSimctlDevicesAll(jsonText) {
   try {
@@ -72595,7 +73012,7 @@ function deriveScreenshotPath(args, now = Date.now, rand = Math.random) {
   }
   if (args.path?.startsWith("~")) {
     if (args.path.startsWith("~/"))
-      return join37(homedir9(), args.path.slice(2));
+      return join38(homedir9(), args.path.slice(2));
     throw new TildeScreenshotPathError(`Screenshot path "${args.path}" starts with '~' which the bridge cannot expand (only a leading '~/' is expanded to the home directory). Pass an absolute path instead.`);
   }
   if (args.path)
@@ -72793,7 +73210,7 @@ var init_device_list = __esm({
     init_recorder();
     init_public_diagnostics();
     runAgentDeviceFn2 = runNative;
-    execFileAsync3 = promisify19(execFile17);
+    execFileAsync3 = promisify19(execFile18);
     defaultExec2 = (cmd, args) => execFileAsync3(cmd, args);
     execFn = defaultExec2;
     PathTraversalScreenshotError = class extends Error {
@@ -72907,7 +73324,7 @@ function resolveBatchDelayMs(explicit, env) {
     return explicit;
   return settleEnabled(env) ? 0 : 300;
 }
-function sleep5(ms) {
+function sleep6(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 async function guardedBatchPress(cliArgs, opts, getClient2) {
@@ -73072,7 +73489,7 @@ async function executeStep(step, getClient2, abortSignal) {
       return captureAndResizeScreenshot({});
     }
     case "wait": {
-      await sleep5(step.ms ?? 500);
+      await sleep6(step.ms ?? 500);
       return okResult({ waited: step.ms ?? 500 });
     }
     default:
@@ -73190,7 +73607,7 @@ function createDeviceBatchHandler(getClient2) {
         }
       }
       if (i < steps.length - 1 && step.action !== "wait" && delayMs > 0) {
-        await sleep5(delayMs);
+        await sleep6(delayMs);
       }
     }
     if (!failedStep && screenshotOn === "end") {
@@ -73785,13 +74202,13 @@ var init_atomic_writer = __esm({
 
 // packages/rn-dev-agent-core/dist/domain/action-store.js
 import { existsSync as existsSync29, readFileSync as readFileSync29, statSync as statSync13 } from "node:fs";
-import { join as join38 } from "node:path";
+import { join as join39 } from "node:path";
 function actionPathFor(projectRoot, actionId) {
   assertValidActionId(actionId, "actionPathFor");
-  const actionsDir = join38(projectRoot, ".rn-agent", "actions");
+  const actionsDir = join39(projectRoot, ".rn-agent", "actions");
   const fileName = `${actionId}.yaml`;
   assertWithinDir(fileName, actionsDir);
-  return join38(actionsDir, fileName);
+  return join39(actionsDir, fileName);
 }
 function splitYaml(text) {
   const allLines = text.split("\n");
@@ -75059,8 +75476,8 @@ var init_test_recorder_generators = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/test-recorder.js
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
-import { join as join39 } from "node:path";
+import { mkdir, readdir, readFile as readFile2, writeFile } from "node:fs/promises";
+import { join as join40 } from "node:path";
 function deduplicateEvents(events) {
   const out = [];
   for (let i = 0; i < events.length; i++) {
@@ -75238,7 +75655,7 @@ function createRecordTestSaveHandler(getClient2) {
     if (!safe) {
       return failResult("Filename is empty after sanitization", "BAD_FILENAME");
     }
-    const filePath = join39(dir, `${safe}.json`);
+    const filePath = join40(dir, `${safe}.json`);
     const payload = { savedAt: (/* @__PURE__ */ new Date()).toISOString(), events: storedEvents };
     await writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
     return okResult({
@@ -75259,10 +75676,10 @@ function createRecordTestLoadHandler(getClient2) {
     if (!safe) {
       return failResult("Filename is empty after sanitization", "BAD_FILENAME");
     }
-    const filePath = join39(dir, `${safe}.json`);
+    const filePath = join40(dir, `${safe}.json`);
     let raw;
     try {
-      raw = await readFile(filePath, "utf8");
+      raw = await readFile2(filePath, "utf8");
     } catch (err) {
       const msg3 = err instanceof Error ? err.message : String(err);
       return failResult(`Could not load ${filePath}: ${msg3}`, "LOAD_FAILED");
@@ -75773,7 +76190,7 @@ function parseIosRuntimeMajorForUdid(simctlJson, udid) {
   }
   return null;
 }
-async function getIosRuntimeMajorForUdid(udid, execFn2 = (cmd, args) => execFile18(cmd, args, { timeout: 5e3, encoding: "utf8" })) {
+async function getIosRuntimeMajorForUdid(udid, execFn2 = (cmd, args) => execFile19(cmd, args, { timeout: 5e3, encoding: "utf8" })) {
   if (runtimeCache.has(udid))
     return runtimeCache.get(udid) ?? null;
   try {
@@ -75785,11 +76202,11 @@ async function getIosRuntimeMajorForUdid(udid, execFn2 = (cmd, args) => execFile
     return null;
   }
 }
-var execFile18, WDA_BLIND_MIN_IOS_MAJOR, RECENT_WINDOW, runtimeCache;
+var execFile19, WDA_BLIND_MIN_IOS_MAJOR, RECENT_WINDOW, runtimeCache;
 var init_blind_probe_gate = __esm({
   "packages/rn-dev-agent-core/dist/domain/blind-probe-gate.js"() {
     "use strict";
-    execFile18 = promisify20(execFileCb16);
+    execFile19 = promisify20(execFileCb16);
     WDA_BLIND_MIN_IOS_MAJOR = 26;
     RECENT_WINDOW = 5;
     runtimeCache = /* @__PURE__ */ new Map();
@@ -77010,7 +77427,7 @@ var init_interact = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/collect-logs.js
-import { execFile as execFileCb17, spawn as spawn8 } from "node:child_process";
+import { execFile as execFileCb17, spawn as spawn9 } from "node:child_process";
 import { promisify as promisify21 } from "node:util";
 function normalizeTimestamp(ts) {
   if (!ts)
@@ -77083,7 +77500,7 @@ function buildIosLogStreamArgs(deviceId, pid) {
 async function resolveIosAppPid(deviceId, bundleId, signal) {
   let stdout;
   try {
-    ({ stdout } = await execFile19("xcrun", ["simctl", "spawn", deviceId, "launchctl", "list"], {
+    ({ stdout } = await execFile20("xcrun", ["simctl", "spawn", deviceId, "launchctl", "list"], {
       timeout: PID_PROBE_TIMEOUT_MS,
       signal
     }));
@@ -77104,7 +77521,7 @@ async function collectNativeIos(durationMs, signal, deviceId, bundleId, onResolv
     let settled = false;
     let proc;
     try {
-      proc = spawn8("xcrun", buildIosLogStreamArgs(deviceId, pid), {
+      proc = spawn9("xcrun", buildIosLogStreamArgs(deviceId, pid), {
         stdio: ["ignore", "pipe", "pipe"]
       });
     } catch (err) {
@@ -77240,7 +77657,7 @@ function collectNativeAndroid(durationMs, signal, serial) {
     let settled = false;
     let proc;
     try {
-      proc = spawn8("adb", buildAndroidLogcatArgs(serial), { stdio: ["ignore", "pipe", "pipe"] });
+      proc = spawn9("adb", buildAndroidLogcatArgs(serial), { stdio: ["ignore", "pipe", "pipe"] });
     } catch (err) {
       reject(err instanceof Error ? err : new Error("Failed to spawn adb"));
       return;
@@ -77447,13 +77864,13 @@ function createCollectLogsHandler(getClient2) {
     }
   };
 }
-var execFile19, SIGKILL_GRACE_MS3, PID_PROBE_TIMEOUT_MS, LOGCAT_RE, ANDROID_LEVEL_MAP;
+var execFile20, SIGKILL_GRACE_MS3, PID_PROBE_TIMEOUT_MS, LOGCAT_RE, ANDROID_LEVEL_MAP;
 var init_collect_logs = __esm({
   "packages/rn-dev-agent-core/dist/tools/collect-logs.js"() {
     "use strict";
     init_agent_device_wrapper();
     init_utils();
-    execFile19 = promisify21(execFileCb17);
+    execFile20 = promisify21(execFileCb17);
     SIGKILL_GRACE_MS3 = 1500;
     PID_PROBE_TIMEOUT_MS = 5e3;
     LOGCAT_RE = /^(\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2}\.\d{3})\s+(\d+)\s+\d+\s+([VDIWEFS])\s+([\w./-]+)\s*:\s*(.*)$/;
@@ -77531,7 +77948,7 @@ var init_session_runtime_absence = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/device-permission.js
-import { execFile as execFile20 } from "node:child_process";
+import { execFile as execFile21 } from "node:child_process";
 import { promisify as promisify22 } from "node:util";
 function escapeRegex2(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -77683,7 +78100,7 @@ var init_device_permission = __esm({
     "use strict";
     init_utils();
     init_maestro_validator();
-    execFileAsync4 = promisify22(execFile20);
+    execFileAsync4 = promisify22(execFile21);
     EXEC_TIMEOUT = 1e4;
     IOS_PERMISSIONS = {
       notifications: "notifications",
@@ -78558,7 +78975,7 @@ function iosDeeplinkCommandArgs(url, deviceId) {
 }
 async function openIosDeeplink(url, deviceId) {
   try {
-    const { stdout, stderr } = await execFile21("xcrun", iosDeeplinkCommandArgs(url, deviceId), {
+    const { stdout, stderr } = await execFile22("xcrun", iosDeeplinkCommandArgs(url, deviceId), {
       timeout: EXEC_TIMEOUT_MS
     });
     return okResult({
@@ -78602,7 +79019,7 @@ function androidDeeplinkCommandArgs(url, packageName, deviceId) {
 async function openAndroidDeeplink(url, packageName, deviceId) {
   const args = androidDeeplinkCommandArgs(url, packageName, deviceId);
   try {
-    const { stdout, stderr } = await execFile21("adb", args, { timeout: EXEC_TIMEOUT_MS });
+    const { stdout, stderr } = await execFile22("adb", args, { timeout: EXEC_TIMEOUT_MS });
     const output = (stdout || stderr).trim();
     if (/Error:|Error type \d|Warning: Activity not started|No Activity found|Status: error/i.test(output)) {
       return failResult(`adb am start reported error: ${output.slice(0, 300)}`, {
@@ -78687,7 +79104,7 @@ function createDeviceDeeplinkHandler(deps = {}) {
     }
   };
 }
-var execFile21, EXEC_TIMEOUT_MS;
+var execFile22, EXEC_TIMEOUT_MS;
 var init_device_deeplink = __esm({
   "packages/rn-dev-agent-core/dist/tools/device-deeplink.js"() {
     "use strict";
@@ -78697,18 +79114,18 @@ var init_device_deeplink = __esm({
     init_dev_client_picker();
     init_device_system_dialog();
     init_authority_gate();
-    execFile21 = promisify23(execFileCb18);
+    execFile22 = promisify23(execFileCb18);
     EXEC_TIMEOUT_MS = 1e4;
   }
 });
 
 // packages/rn-dev-agent-core/dist/tools/device-record.js
-import { execFile as execFile22 } from "node:child_process";
+import { execFile as execFile23 } from "node:child_process";
 import { createHash as createHash16 } from "node:crypto";
 import { existsSync as existsSync31 } from "node:fs";
 import { promisify as promisify24 } from "node:util";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
-import { dirname as dirname19, join as join40 } from "node:path";
+import { dirname as dirname19, join as join41 } from "node:path";
 function parseAllBootedIosDevices(jsonText) {
   let data;
   try {
@@ -78792,15 +79209,15 @@ function candidateRecordScripts(baseDir = dirname19(fileURLToPath3(import.meta.u
   const claudePluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
   return compactUnique2([
     process.env.RN_DEV_AGENT_RECORD_PROOF_SCRIPT,
-    codexPluginRoot ? join40(codexPluginRoot, "scripts", "record_proof.sh") : void 0,
-    claudePluginRoot ? join40(claudePluginRoot, "scripts", "record_proof.sh") : void 0,
-    claudePluginRoot ? join40(claudePluginRoot, "..", "..", "scripts", "record_proof.sh") : void 0,
+    codexPluginRoot ? join41(codexPluginRoot, "scripts", "record_proof.sh") : void 0,
+    claudePluginRoot ? join41(claudePluginRoot, "scripts", "record_proof.sh") : void 0,
+    claudePluginRoot ? join41(claudePluginRoot, "..", "..", "scripts", "record_proof.sh") : void 0,
     // Bundled Codex runtime: <plugin>/rn-dev-agent-core/dist.
-    join40(baseDir, "..", "..", "scripts", "record_proof.sh"),
+    join41(baseDir, "..", "..", "scripts", "record_proof.sh"),
     // Source core bundle: packages/rn-dev-agent-core/dist/supervisor.js.
-    join40(baseDir, "..", "..", "..", "scripts", "record_proof.sh"),
+    join41(baseDir, "..", "..", "..", "scripts", "record_proof.sh"),
     // Source module build: packages/rn-dev-agent-core/dist/tools/device-record.js.
-    join40(baseDir, "..", "..", "..", "..", "scripts", "record_proof.sh")
+    join41(baseDir, "..", "..", "..", "..", "scripts", "record_proof.sh")
   ]);
 }
 function resolveRecordScript(baseDir = dirname19(fileURLToPath3(import.meta.url))) {
@@ -79128,7 +79545,7 @@ var init_device_record = __esm({
     init_process_birth();
     init_runtime();
     init_process_cleanup();
-    execFileAsync5 = promisify24(execFile22);
+    execFileAsync5 = promisify24(execFile23);
     START_TIMEOUT_MS = 1e4;
     STATUS_TIMEOUT_MS = 5e3;
     GIF_TIMEOUT_MS = 6e4;
@@ -79681,7 +80098,7 @@ var init_startup_integrity = __esm({
 import { createHash as createHash18, randomUUID as randomUUID9 } from "node:crypto";
 import { execFileSync as execFileSync15 } from "node:child_process";
 import { chmodSync as chmodSync4, closeSync as closeSync10, existsSync as existsSync32, fsyncSync, lstatSync as lstatSync11, mkdirSync as mkdirSync18, openSync as openSync10, readFileSync as readFileSync30, realpathSync as realpathSync10, renameSync as renameSync7, unlinkSync as unlinkSync11, writeFileSync as writeFileSync15 } from "node:fs";
-import { basename as basename7, dirname as dirname20, extname, isAbsolute as isAbsolute8, join as join41, relative as relative5, resolve as resolve11, sep as sep6 } from "node:path";
+import { basename as basename7, dirname as dirname20, extname, isAbsolute as isAbsolute8, join as join42, relative as relative5, resolve as resolve11, sep as sep6 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 function proofActionPayload(unparsedArgs) {
   if (!unparsedArgs || typeof unparsedArgs !== "object" || Array.isArray(unparsedArgs)) {
@@ -79767,9 +80184,9 @@ function resolveProofCandidateEntrypoint(candidateRoot, argv) {
     return null;
   }
   for (const host of ["claude-plugin", "codex-plugin"]) {
-    const hostRoot = join41(root, "packages", host);
-    const coreIndex = realpathOrSelf(join41(hostRoot, "rn-dev-agent-core", "dist", "index.js"));
-    const coreSupervisor = realpathOrSelf(join41(hostRoot, "rn-dev-agent-core", "dist", "supervisor.js"));
+    const hostRoot = join42(root, "packages", host);
+    const coreIndex = realpathOrSelf(join42(hostRoot, "rn-dev-agent-core", "dist", "index.js"));
+    const coreSupervisor = realpathOrSelf(join42(hostRoot, "rn-dev-agent-core", "dist", "supervisor.js"));
     if (arg === coreIndex) {
       return {
         host,
@@ -79788,7 +80205,7 @@ function resolveProofCandidateEntrypoint(candidateRoot, argv) {
         kind: "core-supervisor"
       };
     }
-    if (host === "codex-plugin" && arg === realpathOrSelf(join41(hostRoot, "bin", "cdp-supervisor.js"))) {
+    if (host === "codex-plugin" && arg === realpathOrSelf(join42(hostRoot, "bin", "cdp-supervisor.js"))) {
       if (!existsSync32(coreIndex) || !existsSync32(coreSupervisor))
         return null;
       return {
@@ -79823,7 +80240,7 @@ function proofCandidateEntrypointEnvironmentMatches(entrypoint, env) {
   }
   if (supervisorOverride && supervisorOverride !== entrypoint.coreSupervisor)
     return false;
-  if (coreRootOverride && join41(coreRootOverride, "dist", "supervisor.js") !== entrypoint.coreSupervisor) {
+  if (coreRootOverride && join42(coreRootOverride, "dist", "supervisor.js") !== entrypoint.coreSupervisor) {
     return false;
   }
   if (workerOverride && workerOverride !== entrypoint.coreBundle)
@@ -79881,7 +80298,7 @@ function readProofCandidateRuntime(candidateRoot, startup = proofWorkerStartup) 
     throw new Error("CANDIDATE_MCP_PROCESS_MISMATCH");
   }
   const { host, coreBundle } = entrypoint;
-  const runnerManifest = join41(root, "packages", host, "runner-manifest.json");
+  const runnerManifest = join42(root, "packages", host, "runner-manifest.json");
   const artifacts = readProofCandidateHeadArtifacts(root, [coreBundle, runnerManifest]);
   if (!artifacts) {
     throw new Error("CANDIDATE_CHECKOUT_NOT_CLEAN");
@@ -79973,7 +80390,7 @@ function validCaptureContext(args, expectedRoot) {
   }
   if (!/^[a-z0-9][a-z0-9-]*$/.test(args.runId))
     return false;
-  const proofRoot = join41(expectedRoot, "docs", "proof", args.runId);
+  const proofRoot = join42(expectedRoot, "docs", "proof", args.runId);
   const screenshots = args.storyboard.steps.map((step) => step.screenshotPath);
   const destinations = [args.receiptPath, args.videoPath, args.contactSheetPath, ...screenshots];
   if (destinations.some((path) => !isNormalizedDescendant(proofRoot, path) || hasExistingSymlink(expectedRoot, path)) || new Set(destinations).size !== destinations.length) {
@@ -79987,7 +80404,7 @@ function validCaptureContext(args, expectedRoot) {
   }));
 }
 function proofRootExists(args) {
-  const proofRoot = join41(args.projectRoot, "docs", "proof", args.runId);
+  const proofRoot = join42(args.projectRoot, "docs", "proof", args.runId);
   try {
     lstatSync11(proofRoot);
     return true;
@@ -80472,7 +80889,7 @@ function createProofCaptureHandler(deps) {
         return proofFailure(["PROOF_ACTION_IDENTITY_MISMATCH"], "idle");
       }
       try {
-        const proofRoot = join41(args.projectRoot, "docs", "proof", args.runId);
+        const proofRoot = join42(args.projectRoot, "docs", "proof", args.runId);
         if (deps.proofRootTracked(args.projectRoot, proofRoot)) {
           return proofFailure(["PROOF_ROOT_TRACKED"], "idle");
         }
@@ -81041,8 +81458,8 @@ var init_proof_capture2 = __esm({
 import { createHash as createHash19 } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { mkdir as mkdir2, mkdtemp, rm, stat } from "node:fs/promises";
-import { tmpdir as tmpdir11 } from "node:os";
-import { dirname as dirname21, join as join42 } from "node:path";
+import { tmpdir as tmpdir12 } from "node:os";
+import { dirname as dirname21, join as join43 } from "node:path";
 function fail2(reason) {
   throw new MediaFailure(reason);
 }
@@ -81171,7 +81588,7 @@ async function matchScreenshotAt(process3, input) {
   if (input.videoDurationMs !== void 0 && (!Number.isFinite(input.videoDurationMs) || input.videoDurationMs <= 0)) {
     fail2("INVALID_MEDIA_INPUT");
   }
-  const normalizedScreenshotPath = join42(input.scratchDir, `screenshot-${index}.png`);
+  const normalizedScreenshotPath = join43(input.scratchDir, `screenshot-${index}.png`);
   await rm(normalizedScreenshotPath, { force: true });
   await runFrameProcess(process3, [
     "-y",
@@ -81196,7 +81613,7 @@ async function matchScreenshotAt(process3, input) {
   let best = null;
   let decodedFrameCount = 0;
   for (const [sampleIndex, timestampMs] of sampleTimestamps.entries()) {
-    const framePath = join42(input.scratchDir, `frame-${index}-${sampleIndex}.jpg`);
+    const framePath = join43(input.scratchDir, `frame-${index}-${sampleIndex}.jpg`);
     await rm(framePath, { force: true });
     try {
       await runFrameProcess(process3, [
@@ -81317,10 +81734,10 @@ async function validateMedia(process3, input) {
       fail2("VIDEO_TOO_SHORT");
     if (probedVideo.durationMs > bounds.hardMaximumMs)
       fail2("VIDEO_TOO_LONG");
-    const scratchRoot = input.scratchRoot ?? tmpdir11();
+    const scratchRoot = input.scratchRoot ?? tmpdir12();
     try {
       await mkdir2(scratchRoot, { recursive: true });
-      scratchDir = await mkdtemp(join42(scratchRoot, "proof-media-"));
+      scratchDir = await mkdtemp(join43(scratchRoot, "proof-media-"));
     } catch {
       fail2("MEDIA_IO_FAILED");
     }
@@ -82545,7 +82962,7 @@ var init_nav_graph = __esm({
 import { execFile as execFileCb19 } from "node:child_process";
 import { promisify as promisify25 } from "node:util";
 import { existsSync as existsSync33, readFileSync as readFileSync31, writeFileSync as writeFileSync16, readdirSync as readdirSync10 } from "node:fs";
-import { join as join43 } from "node:path";
+import { join as join44 } from "node:path";
 import { homedir as homedir10 } from "node:os";
 function matchesAuthPattern(routeName) {
   const lower = routeName.toLowerCase();
@@ -82576,7 +82993,7 @@ async function isOnAuthScreen(client2) {
   }
 }
 function findLoginFlow(projectRoot) {
-  const searchDirs = [join43(projectRoot, ".maestro", "subflows"), join43(projectRoot, ".maestro")];
+  const searchDirs = [join44(projectRoot, ".maestro", "subflows"), join44(projectRoot, ".maestro")];
   for (const dir of searchDirs) {
     if (!existsSync33(dir))
       continue;
@@ -82588,12 +83005,12 @@ function findLoginFlow(projectRoot) {
     }
     for (const candidate of LOGIN_FLOW_PRIORITY) {
       if (files.includes(candidate)) {
-        return join43(dir, candidate);
+        return join44(dir, candidate);
       }
     }
     const authFile = files.find((f) => /\.(ya?ml)$/.test(f) && AUTH_ROUTE_PATTERNS.some((p) => f.toLowerCase().includes(p)));
     if (authFile)
-      return join43(dir, authFile);
+      return join44(dir, authFile);
   }
   return null;
 }
@@ -82666,7 +83083,7 @@ async function handleAutoLogin(client2, opts = {}) {
   }
   const wrapperPath = "/tmp/rn-auto-login-wrapper.yaml";
   writeFileSync16(wrapperPath, wrapperContent, "utf-8");
-  const runnerPath = join43(homedir10(), ".maestro-runner", "bin", "maestro-runner");
+  const runnerPath = join44(homedir10(), ".maestro-runner", "bin", "maestro-runner");
   if (!existsSync33(runnerPath)) {
     return {
       loggedIn: false,
@@ -82674,7 +83091,7 @@ async function handleAutoLogin(client2, opts = {}) {
     };
   }
   try {
-    await runFlowParked(() => execFile23(runnerPath, ["--platform", platform, "test", wrapperPath], {
+    await runFlowParked(() => execFile24(runnerPath, ["--platform", platform, "test", wrapperPath], {
       timeout: 12e4,
       encoding: "utf8"
     }), {
@@ -82708,7 +83125,7 @@ async function handleAutoLogin(client2, opts = {}) {
     flow: flowPath
   };
 }
-var execFile23, AUTH_ROUTE_PATTERNS, LOGIN_FLOW_PRIORITY;
+var execFile24, AUTH_ROUTE_PATTERNS, LOGIN_FLOW_PRIORITY;
 var init_auto_login = __esm({
   "packages/rn-dev-agent-core/dist/tools/auto-login.js"() {
     "use strict";
@@ -82717,7 +83134,7 @@ var init_auto_login = __esm({
     init_project_config();
     init_maestro_validator();
     init_maestro_run();
-    execFile23 = promisify25(execFileCb19);
+    execFile24 = promisify25(execFileCb19);
     AUTH_ROUTE_PATTERNS = [
       "login",
       "signin",
@@ -83196,7 +83613,7 @@ var init_graceful_shutdown = __esm({
 
 // packages/rn-dev-agent-core/dist/tools/maestro-generate.js
 import { existsSync as existsSync34, mkdirSync as mkdirSync19, writeFileSync as writeFileSync17 } from "node:fs";
-import { join as join44 } from "node:path";
+import { join as join45 } from "node:path";
 function stepToMaestroCommands(step) {
   const ALLOWED_DIRECTIONS = /* @__PURE__ */ new Set(["up", "down", "left", "right"]);
   switch (step.action) {
@@ -83252,7 +83669,7 @@ function createMaestroGenerateHandler() {
       return failResult("Provide a flow name and at least one step.");
     }
     const root = findProjectRoot();
-    const outputDir = args.outputDir ?? (root ? join44(root, ".rn-agent", "actions") : null);
+    const outputDir = args.outputDir ?? (root ? join45(root, ".rn-agent", "actions") : null);
     if (!outputDir) {
       return failResult("Cannot determine project root. Pass outputDir explicitly.");
     }
@@ -83261,7 +83678,7 @@ function createMaestroGenerateHandler() {
     }
     const sanitizedName = args.name.replace(/[^a-zA-Z0-9_-]/g, "-").toLowerCase();
     const fileName = `${sanitizedName}.yaml`;
-    const filePath = join44(outputDir, fileName);
+    const filePath = join45(outputDir, fileName);
     if (args.appId !== void 0 && !isValidBundleId(args.appId)) {
       return failResult(`Invalid appId '${String(args.appId).slice(0, 80)}' (Phase 134.1)`);
     }
@@ -83302,13 +83719,13 @@ var init_maestro_generate = __esm({
 import { execFile as execFileCb21 } from "node:child_process";
 import { promisify as promisify27 } from "node:util";
 import { existsSync as existsSync35, readdirSync as readdirSync11, readFileSync as readFileSync32, writeFileSync as writeFileSync18 } from "node:fs";
-import { join as join45 } from "node:path";
-import { tmpdir as tmpdir12 } from "node:os";
+import { join as join46 } from "node:path";
+import { tmpdir as tmpdir13 } from "node:os";
 function discoverFlows(dir, pattern) {
   if (!existsSync35(dir))
     return [];
   const files = readdirSync11(dir, { recursive: true });
-  const yamls = files.filter((f) => f.endsWith(".yaml") || f.endsWith(".yml")).map((f) => join45(dir, f)).sort();
+  const yamls = files.filter((f) => f.endsWith(".yaml") || f.endsWith(".yml")).map((f) => join46(dir, f)).sort();
   if (pattern) {
     if (pattern.length > 256) {
       return yamls;
@@ -83347,7 +83764,7 @@ function createMaestroTestAllHandler(deps = {}) {
       return failResult(dispatch.error);
     }
     const root = findProjectRoot();
-    const flowDir = args.flowDir ?? (root ? join45(root, ".rn-agent", "actions") : null);
+    const flowDir = args.flowDir ?? (root ? join46(root, ".rn-agent", "actions") : null);
     if (!flowDir) {
       return failResult("Cannot determine project root. Pass flowDir explicitly.");
     }
@@ -83384,7 +83801,7 @@ function createMaestroTestAllHandler(deps = {}) {
         parsedAppId = resolveMaestroFlowAppId(boundAppId, parsed.appId);
         flowHasHideKeyboard = flowContainsHideKeyboard(parsed.commands);
         const canonical = buildMaestroFlow(parsedAppId !== void 0 ? { appId: parsedAppId } : {}, parsed.commands);
-        safeFlowFile = join45(tmpdir12(), `rn-maestro-validated-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
+        safeFlowFile = join46(tmpdir13(), `rn-maestro-validated-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
         writeFileSync18(safeFlowFile, canonical, "utf-8");
         const appFileResolution = resolveAppFile(platform, canonical, parsedAppId, void 0, {
           deviceId: requestedDeviceId
@@ -83569,7 +83986,7 @@ var init_maestro_test_all = __esm({
 
 // packages/rn-dev-agent-core/dist/tools/cross-platform-verify.js
 import { readFileSync as readFileSync33, readdirSync as readdirSync12, lstatSync as lstatSync12 } from "node:fs";
-import { join as join46, extname as extname2 } from "node:path";
+import { join as join47, extname as extname2 } from "node:path";
 function findElement(nodes, query, matchBy) {
   const q = query.toLowerCase();
   return nodes.some((n) => {
@@ -83592,7 +84009,7 @@ function discoverTestIDs(dir) {
     for (const entry of entries) {
       if (entry === "node_modules" || entry.startsWith("."))
         continue;
-      const full = join46(d, entry);
+      const full = join47(d, entry);
       try {
         const st = lstatSync12(full);
         if (st.isSymbolicLink())
@@ -83950,7 +84367,7 @@ var init_instrumentation = __esm({
 import { createHash as createHash20, randomUUID as randomUUID10 } from "node:crypto";
 import { chmodSync as chmodSync5, existsSync as existsSync36, mkdirSync as mkdirSync20, readFileSync as readFileSync34, renameSync as renameSync8, unlinkSync as unlinkSync12, writeFileSync as writeFileSync19 } from "node:fs";
 import { homedir as homedir11, platform as hostPlatform, release } from "node:os";
-import { dirname as dirname22, join as join47 } from "node:path";
+import { dirname as dirname22, join as join48 } from "node:path";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
 function sanitizeString(value, redact2 = applyRedactionRules) {
   try {
@@ -84000,7 +84417,7 @@ function readAppIdentity() {
   return appIdentityCache.identity;
 }
 function loadAppIdentity(root) {
-  const manifest = join47(root, "app.json");
+  const manifest = join48(root, "app.json");
   try {
     if (!existsSync36(manifest))
       return { name: null, slug: null };
@@ -84019,10 +84436,10 @@ function discoverPluginVersion(fromUrl = import.meta.url) {
     return process.env.RN_DEV_AGENT_PLUGIN_VERSION;
   const start = dirname22(fileURLToPath5(fromUrl));
   const candidates = [
-    join47(start, "..", "..", ".claude-plugin", "plugin.json"),
-    join47(start, "..", "..", ".codex-plugin", "plugin.json"),
-    join47(start, "..", "..", "..", "claude-plugin", ".claude-plugin", "plugin.json"),
-    join47(start, "..", "..", "..", "codex-plugin", ".codex-plugin", "plugin.json")
+    join48(start, "..", "..", ".claude-plugin", "plugin.json"),
+    join48(start, "..", "..", ".codex-plugin", "plugin.json"),
+    join48(start, "..", "..", "..", "claude-plugin", ".claude-plugin", "plugin.json"),
+    join48(start, "..", "..", "..", "codex-plugin", ".codex-plugin", "plugin.json")
   ];
   for (const candidate of candidates) {
     try {
@@ -84145,7 +84562,7 @@ var init_evidence = __esm({
     DEFAULT_MAX_RECORDS = 500;
     DEFAULT_RETENTION_DAYS = 14;
     MAX_EVIDENCE_POINTERS = 3;
-    EXPERIENCE_DIRECTORY = join47(homedir11(), ".claude", "rn-agent", "experience");
+    EXPERIENCE_DIRECTORY = join48(homedir11(), ".claude", "rn-agent", "experience");
     EXPERIENCE_STORE_NAME = "patterns.jsonl";
     MAX_SYMPTOM_LENGTH = 2048;
     DAY_MS = 24 * 60 * 60 * 1e3;
@@ -84190,7 +84607,7 @@ var init_evidence = __esm({
       previousFailure = null;
       constructor(options) {
         this.directory = options.directory ?? process.env.RN_DEV_AGENT_EXPERIENCE_DIR ?? EXPERIENCE_DIRECTORY;
-        this.path = join47(this.directory, EXPERIENCE_STORE_NAME);
+        this.path = join48(this.directory, EXPERIENCE_STORE_NAME);
         this.candidate = {
           pluginVersion: options.pluginVersion ?? null,
           coreVersion: options.coreVersion
@@ -84334,7 +84751,7 @@ var init_evidence = __esm({
       }
       write(records) {
         mkdirSync20(this.directory, { recursive: true, mode: 448 });
-        const temp = join47(this.directory, `.${EXPERIENCE_STORE_NAME}.${process.pid}.${randomUUID10()}`);
+        const temp = join48(this.directory, `.${EXPERIENCE_STORE_NAME}.${process.pid}.${randomUUID10()}`);
         try {
           const sanitized = records.map((record2) => record2.redactionVersion === REDACTION_RULES_VERSION ? record2 : {
             ...sanitizeForEvidence(record2),
@@ -84402,8 +84819,8 @@ var init_evidence = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/observability/live-device.js
-import { join as join48 } from "node:path";
-import { tmpdir as tmpdir13 } from "node:os";
+import { join as join49 } from "node:path";
+import { tmpdir as tmpdir14 } from "node:os";
 function isStateMutating(tool, args) {
   if (FLOW_MUTATION_TOOLS.has(tool))
     return true;
@@ -84506,7 +84923,7 @@ function buildLiveDeps(input) {
     // iterable" when invoked as deps.pushLive(...). The live device gate caught
     // this — the unit fakes used standalone arrows and missed it.
     pushLive: (frame) => input.recorder.pushLive(frame),
-    tmpPath: () => join48(tmpdir13(), `rn-observe-live-${process.pid}.jpg`),
+    tmpPath: () => join49(tmpdir14(), `rn-observe-live-${process.pid}.jpg`),
     isMirrorActive: input.isMirrorActive
   };
 }
@@ -84603,7 +85020,7 @@ var init_e2e_csrf = __esm({
 import { createServer as createServer3 } from "node:http";
 import { readFileSync as readFileSync35 } from "node:fs";
 import { fileURLToPath as fileURLToPath6 } from "node:url";
-import { dirname as dirname23, join as join49 } from "node:path";
+import { dirname as dirname23, join as join50 } from "node:path";
 function listen(server3, port) {
   return new Promise((resolve12, reject) => {
     const onErr = (e) => {
@@ -84857,7 +85274,7 @@ var init_server3 = __esm({
       }
       index(res) {
         try {
-          let html = readFileSync35(join49(__dir, "web-dist", "index.html"), "utf8");
+          let html = readFileSync35(join50(__dir, "web-dist", "index.html"), "utf8");
           if (this.e2e) {
             const tokenJs = JSON.stringify(this.e2e.token).replace(/</g, "\\u003c");
             html = html.replace("</head>", `<script>window.__E2E_CSRF__=${tokenJs}</script></head>`);
@@ -85024,10 +85441,10 @@ var init_server3 = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/observability/observe-state.js
-import { join as join50 } from "node:path";
+import { join as join51 } from "node:path";
 function observeStatePath(projectRoot) {
   const safe = projectRoot.replace(/[^A-Za-z0-9._-]/g, "_");
-  return join50(getStateDir(), "observe", `${safe}.json`);
+  return join51(getStateDir(), "observe", `${safe}.json`);
 }
 function writeObserveState(url, port, projectRoot = findProjectRoot(), now = () => /* @__PURE__ */ new Date()) {
   try {
@@ -85272,408 +85689,6 @@ var init_autostart = __esm({
   }
 });
 
-// packages/rn-dev-agent-core/dist/observability/mirror/jpeg-stream.js
-var MAX_FRAME_BYTES, SOI, EOI, JpegFrameExtractor;
-var init_jpeg_stream = __esm({
-  "packages/rn-dev-agent-core/dist/observability/mirror/jpeg-stream.js"() {
-    "use strict";
-    MAX_FRAME_BYTES = 8e6;
-    SOI = Buffer.from([255, 216]);
-    EOI = Buffer.from([255, 217]);
-    JpegFrameExtractor = class {
-      acc = Buffer.alloc(0);
-      /** Sticky: a SOI without EOI exceeded MAX_FRAME_BYTES. Process liveness is not a valid frame. */
-      overflowed = false;
-      push(chunk) {
-        this.acc = this.acc.length === 0 ? chunk : Buffer.concat([this.acc, chunk]);
-        const frames = [];
-        for (; ; ) {
-          const soi = this.acc.indexOf(SOI);
-          if (soi === -1) {
-            this.acc = this.acc.length > 0 && this.acc[this.acc.length - 1] === 255 ? this.acc.subarray(this.acc.length - 1) : Buffer.alloc(0);
-            break;
-          }
-          if (soi > 0)
-            this.acc = this.acc.subarray(soi);
-          const eoi = this.acc.indexOf(EOI, SOI.length);
-          if (eoi === -1) {
-            if (this.acc.length > MAX_FRAME_BYTES) {
-              this.overflowed = true;
-              this.acc = Buffer.alloc(0);
-            }
-            break;
-          }
-          frames.push(this.acc.subarray(0, eoi + EOI.length));
-          this.acc = this.acc.subarray(eoi + EOI.length);
-        }
-        return frames;
-      }
-    };
-  }
-});
-
-// packages/rn-dev-agent-core/dist/observability/mirror/sources.js
-import { spawn as spawn9, execFile as execFile24 } from "node:child_process";
-import { readFile as readFile2, unlink } from "node:fs/promises";
-import { tmpdir as tmpdir14 } from "node:os";
-import { join as join51 } from "node:path";
-async function probeIdbClient(execFileFn = execFile24) {
-  return new Promise((resolve12) => {
-    execFileFn("idb", ["--help"], { timeout: 3e3 }, (err) => {
-      if (!err)
-        return resolve12("ready");
-      resolve12(isEnoent(err) ? "absent" : "broken");
-    });
-  });
-}
-function isEnoent(err) {
-  return !!err && typeof err === "object" && err.code === "ENOENT";
-}
-function defaultExecJpeg(cmd, args, signal) {
-  const outPath = args[args.length - 1];
-  return new Promise((resolve12, reject) => {
-    execFile24(cmd, args, { maxBuffer: 16 * 1024 * 1024, timeout: 1e4, signal }, (err) => {
-      if (err) {
-        reject(err);
-        return;
-      }
-      readFile2(outPath).then((buf) => {
-        void unlink(outPath).catch(() => {
-        });
-        resolve12(buf);
-      }).catch((readErr) => {
-        void unlink(outPath).catch(() => {
-        });
-        reject(readErr);
-      });
-    });
-  });
-}
-async function createMirrorSource(target, fps) {
-  if (target.platform === "android") {
-    return new AndroidScreenrecordSource(target.deviceId);
-  }
-  const state = await probeIdbClient();
-  if (state === "ready")
-    return new IosIdbSource(target.deviceId, fps);
-  return new IosSimctlLoopSource(target.deviceId, {
-    degradedHint: state === "broken" ? SIMCTL_BROKEN_IDB_HINT : SIMCTL_HINT
-  });
-}
-var RestartGate, IDB_INSTALL_COMMAND, SIMCTL_HINT, SIMCTL_BROKEN_IDB_HINT, IDB_NO_FIRST_FRAME_REASON, IDB_MALFORMED_FRAME_REASON, IDB_STREAM_UNHEALTHY_HINT, DEFAULT_IDB_FIRST_FRAME_TIMEOUT_MS, IDB_HINT, FFMPEG_HINT, sleep6, scheduleAfter, defaultSpawn, IosIdbSource, IosSimctlLoopSource, AndroidScreenrecordSource;
-var init_sources = __esm({
-  "packages/rn-dev-agent-core/dist/observability/mirror/sources.js"() {
-    "use strict";
-    init_jpeg_stream();
-    RestartGate = class {
-      limit;
-      windowMs;
-      now;
-      exits = [];
-      constructor(limit = 3, windowMs = 1e4, now = Date.now) {
-        this.limit = limit;
-        this.windowMs = windowMs;
-        this.now = now;
-      }
-      record() {
-        const t = this.now();
-        this.exits = this.exits.filter((e) => t - e < this.windowMs);
-        this.exits.push(t);
-        return this.exits.length < this.limit;
-      }
-    };
-    IDB_INSTALL_COMMAND = "brew install python@3.13 && brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install --python python3.13 --force fb-idb";
-    SIMCTL_HINT = `install idb for smoother mirroring (${IDB_INSTALL_COMMAND})`;
-    SIMCTL_BROKEN_IDB_HINT = "idb is installed but did not respond successfully \u2014 most likely fb-idb 1.1.7 under Python 3.14, which removed the asyncio.get_event_loop() it needs. Reinstall it under a supported interpreter: pipx install --python python3.13 --force fb-idb";
-    IDB_NO_FIRST_FRAME_REASON = "idb video-stream produced no first frame";
-    IDB_MALFORMED_FRAME_REASON = "idb video-stream produced a malformed frame";
-    IDB_STREAM_UNHEALTHY_HINT = "idb video-stream produced no usable frame \u2014 using simctl screenshot loop";
-    DEFAULT_IDB_FIRST_FRAME_TIMEOUT_MS = 5e3;
-    IDB_HINT = `idb not found \u2014 ${IDB_INSTALL_COMMAND}`;
-    FFMPEG_HINT = "ffmpeg not found \u2014 run scripts/ensure-ffmpeg.sh or brew install ffmpeg";
-    sleep6 = (ms) => new Promise((resolve12) => setTimeout(resolve12, ms));
-    scheduleAfter = (fn, delayMs) => {
-      if (delayMs <= 0)
-        setImmediate(fn);
-      else
-        setTimeout(fn, delayMs);
-    };
-    defaultSpawn = (cmd, args) => spawn9(cmd, args, { stdio: ["pipe", "pipe", "pipe"] });
-    IosIdbSource = class {
-      udid;
-      pipeline = "idb";
-      nominalFps;
-      active = false;
-      proc = null;
-      firstFrameTimer = null;
-      spawnFn;
-      gate;
-      restartDelayMs;
-      firstFrameTimeoutMs;
-      constructor(udid, fps, opts = {}) {
-        this.udid = udid;
-        this.nominalFps = fps;
-        this.spawnFn = opts.spawnFn ?? defaultSpawn;
-        this.gate = new RestartGate(3, 1e4, opts.now ?? Date.now);
-        this.restartDelayMs = opts.restartDelayMs ?? 300;
-        this.firstFrameTimeoutMs = opts.firstFrameTimeoutMs ?? DEFAULT_IDB_FIRST_FRAME_TIMEOUT_MS;
-      }
-      start(sink) {
-        this.active = true;
-        this.spawnOnce(sink);
-      }
-      spawnOnce(sink) {
-        const extractor = new JpegFrameExtractor();
-        let gotFrame = false;
-        const proc = this.spawnFn("idb", [
-          "video-stream",
-          "--udid",
-          this.udid,
-          "--fps",
-          String(this.nominalFps),
-          "--format",
-          "mjpeg",
-          "--compression-quality",
-          "0.7"
-        ]);
-        this.proc = proc;
-        proc.stderr?.resume();
-        this.armFirstFrameTimer(sink);
-        proc.stdout.on("data", (chunk) => {
-          if (!this.active)
-            return;
-          for (const frame of extractor.push(chunk)) {
-            gotFrame = true;
-            this.clearFirstFrameTimer();
-            if (this.active)
-              sink.onFrame(frame);
-          }
-          if (this.active && extractor.overflowed && !gotFrame) {
-            this.fail(sink, IDB_MALFORMED_FRAME_REASON);
-          }
-        });
-        proc.on("error", (err) => {
-          if (!this.active)
-            return;
-          if (isEnoent(err)) {
-            this.fail(sink, "idb not found", IDB_HINT);
-          }
-        });
-        proc.on("close", () => {
-          if (!this.active)
-            return;
-          this.clearFirstFrameTimer();
-          if (this.gate.record()) {
-            scheduleAfter(() => {
-              if (this.active)
-                this.spawnOnce(sink);
-            }, this.restartDelayMs);
-          } else {
-            this.fail(sink, "idb video-stream keeps exiting");
-          }
-        });
-      }
-      armFirstFrameTimer(sink) {
-        this.clearFirstFrameTimer();
-        this.firstFrameTimer = setTimeout(() => {
-          this.firstFrameTimer = null;
-          if (!this.active)
-            return;
-          this.fail(sink, IDB_NO_FIRST_FRAME_REASON, IDB_STREAM_UNHEALTHY_HINT);
-        }, this.firstFrameTimeoutMs);
-      }
-      fail(sink, reason, hint) {
-        if (!this.active)
-          return;
-        this.active = false;
-        this.clearFirstFrameTimer();
-        this.proc?.kill();
-        sink.onExit({ reason, hint });
-      }
-      clearFirstFrameTimer() {
-        if (this.firstFrameTimer) {
-          clearTimeout(this.firstFrameTimer);
-          this.firstFrameTimer = null;
-        }
-      }
-      stop() {
-        this.active = false;
-        this.clearFirstFrameTimer();
-        this.proc?.kill();
-      }
-    };
-    IosSimctlLoopSource = class {
-      udid;
-      pipeline = "simctl";
-      nominalFps = 6;
-      degradedHint;
-      active = false;
-      inFlight = null;
-      execJpeg;
-      gate;
-      idleDelayMs;
-      failurePauseMs;
-      tmpPath;
-      constructor(udid, opts = {}) {
-        this.udid = udid;
-        this.execJpeg = opts.execJpeg ?? defaultExecJpeg;
-        this.gate = new RestartGate(3, 1e4, opts.now ?? Date.now);
-        this.idleDelayMs = opts.idleDelayMs ?? 25;
-        this.failurePauseMs = opts.failurePauseMs ?? 500;
-        this.tmpPath = opts.tmpPath ?? (() => join51(tmpdir14(), "rn-mirror-simctl-" + process.pid + ".jpg"));
-        this.degradedHint = opts.degradedHint ?? SIMCTL_HINT;
-      }
-      start(sink) {
-        this.active = true;
-        void this.loop(sink);
-      }
-      async loop(sink) {
-        while (this.active) {
-          const controller = new AbortController();
-          this.inFlight = controller;
-          try {
-            const buf = await this.execJpeg("xcrun", ["simctl", "io", this.udid, "screenshot", "--type=jpeg", this.tmpPath()], controller.signal);
-            sink.onFrame(buf);
-            if (!this.active)
-              break;
-            await sleep6(this.idleDelayMs);
-          } catch {
-            if (!this.active)
-              break;
-            if (!this.gate.record()) {
-              if (this.active)
-                sink.onExit({ reason: "simctl screenshot failing", hint: this.degradedHint });
-              this.active = false;
-              break;
-            }
-            await sleep6(this.failurePauseMs);
-          } finally {
-            this.inFlight = null;
-          }
-        }
-      }
-      stop() {
-        this.active = false;
-        this.inFlight?.abort();
-      }
-    };
-    AndroidScreenrecordSource = class {
-      serial;
-      pipeline = "screenrecord";
-      nominalFps = 25;
-      active = false;
-      adb = null;
-      ffmpeg = null;
-      spawnFn;
-      gate;
-      restartDelayMs;
-      constructor(serial, opts = {}) {
-        this.serial = serial;
-        this.spawnFn = opts.spawnFn ?? defaultSpawn;
-        this.gate = new RestartGate(3, 1e4, opts.now ?? Date.now);
-        this.restartDelayMs = opts.restartDelayMs ?? 300;
-      }
-      start(sink) {
-        this.active = true;
-        this.spawnCycle(sink);
-      }
-      spawnCycle(sink) {
-        let cycleDone = false;
-        const extractor = new JpegFrameExtractor();
-        const adb2 = this.spawnFn("adb", [
-          "-s",
-          this.serial,
-          "exec-out",
-          "screenrecord",
-          "--output-format=h264",
-          "--time-limit=179",
-          "-"
-        ]);
-        const ffmpeg = this.spawnFn("ffmpeg", [
-          "-loglevel",
-          "error",
-          "-fflags",
-          "nobuffer",
-          "-f",
-          "h264",
-          "-i",
-          "pipe:0",
-          "-q:v",
-          "7",
-          "-f",
-          "mjpeg",
-          "pipe:1"
-        ]);
-        this.adb = adb2;
-        this.ffmpeg = ffmpeg;
-        adb2.stderr?.resume();
-        ffmpeg.stderr?.resume();
-        if (ffmpeg.stdin) {
-          ffmpeg.stdin.on("error", () => {
-          });
-          adb2.stdout.pipe(ffmpeg.stdin);
-        }
-        ffmpeg.stdout.on("data", (chunk) => {
-          if (!this.active)
-            return;
-          for (const frame of extractor.push(chunk)) {
-            if (this.active)
-              sink.onFrame(frame);
-          }
-        });
-        const killSibling = (self) => {
-          if (self === "adb")
-            ffmpeg.kill();
-          else
-            adb2.kill();
-        };
-        adb2.on("error", (err) => {
-          if (!this.active || cycleDone)
-            return;
-          if (isEnoent(err)) {
-            cycleDone = true;
-            this.active = false;
-            killSibling("adb");
-            sink.onExit({ reason: "adb not found" });
-          }
-        });
-        ffmpeg.on("error", (err) => {
-          if (!this.active || cycleDone)
-            return;
-          if (isEnoent(err)) {
-            cycleDone = true;
-            this.active = false;
-            killSibling("ffmpeg");
-            sink.onExit({ reason: "ffmpeg not found", hint: FFMPEG_HINT });
-          }
-        });
-        const onClose = (self) => {
-          if (!this.active || cycleDone)
-            return;
-          cycleDone = true;
-          killSibling(self);
-          if (this.gate.record()) {
-            scheduleAfter(() => {
-              if (this.active)
-                this.spawnCycle(sink);
-            }, this.restartDelayMs);
-          } else {
-            this.active = false;
-            sink.onExit({ reason: "screen capture pipeline keeps exiting" });
-          }
-        };
-        adb2.on("close", () => onClose("adb"));
-        ffmpeg.on("close", () => onClose("ffmpeg"));
-      }
-      stop() {
-        this.active = false;
-        this.adb?.kill();
-        this.ffmpeg?.kill();
-      }
-    };
-  }
-});
-
 // packages/rn-dev-agent-core/dist/observability/mirror/manager.js
 function framePart(frame) {
   return Buffer.concat([
@@ -85908,7 +85923,7 @@ var init_manager = __esm({
         this.source = null;
         if (canDemote && target) {
           this.demoted = true;
-          void this.startFallback(target);
+          void this.startFallback(target, err);
           return;
         }
         this.activeTarget = null;
@@ -85923,10 +85938,10 @@ var init_manager = __esm({
         });
         this.endAllClients();
       }
-      async startFallback(target) {
+      async startFallback(target, cause) {
         const myCycle = this.cycle;
         try {
-          const source = await this.deps.createFallbackSource(target);
+          const source = await this.deps.createFallbackSource(target, cause);
           if (myCycle !== this.cycle) {
             source.stop();
             return;
@@ -88750,13 +88765,15 @@ var init_index = __esm({
           }
         }
       }),
-      createSource: (t) => createMirrorSource(t, mirrorCfg.fps),
-      createFallbackSource: async (t) => {
+      createSource: (t) => createMirrorSource(t, mirrorCfg.fps, {
+        firstFrameTimeoutMs: mirrorCfg.firstFrameTimeoutMs
+      }),
+      createFallbackSource: async (t, cause) => {
         if (t.platform !== "ios") {
           throw new Error("mirror fallback is iOS simctl only");
         }
         return new IosSimctlLoopSource(t.deviceId, {
-          degradedHint: IDB_STREAM_UNHEALTHY_HINT
+          degradedHint: idbDemotionHint(cause)
         });
       },
       // MirrorStatus is a closed interface (no index signature); recorder.push
@@ -89893,7 +89910,7 @@ init_process_cleanup();
 init_registry();
 init_state_root();
 import { createHash as createHash12 } from "node:crypto";
-import { join as join27 } from "node:path";
+import { join as join28 } from "node:path";
 function startupCleanupFailureMessage() {
   return "rn-dev-agent startup cleanup failed: STARTUP_CLEANUP_FAILED\n";
 }
@@ -89945,7 +89962,7 @@ async function runStartupCleanupForSource(input) {
       appRootKey: input.source.appRootKey,
       appRoot: input.source.appRoot
     }, {
-      readSessionSecret: (sessionId) => readJsonStateFile(join27(layout.sessions, sessionId, "secret.json"))
+      readSessionSecret: (sessionId) => readJsonStateFile(join28(layout.sessions, sessionId, "secret.json"))
     });
   } finally {
     registry2.close();
@@ -90311,7 +90328,7 @@ function createSupervisorAuthority(input, dependencies = {}) {
 }
 
 // packages/rn-dev-agent-core/dist/supervisor-args.js
-import { dirname as dirname12, join as join28 } from "node:path";
+import { dirname as dirname12, join as join29 } from "node:path";
 function sqliteFlagForNode(version2) {
   const v = version2 ?? process.versions.node;
   const [majorStr, minorStr] = v.split(".");
@@ -90337,7 +90354,7 @@ function workerSpawnArgs(workerPath, sqliteWarningFilterPath2, version2, forward
     "--import",
     sqliteWarningFilterPath2,
     "--import",
-    join28(dirname12(sqliteWarningFilterPath2), "startup-integrity-register.js"),
+    join29(dirname12(sqliteWarningFilterPath2), "startup-integrity-register.js"),
     workerPath,
     "--no-lock",
     ...diagnosticArgs

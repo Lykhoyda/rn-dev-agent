@@ -185,7 +185,7 @@ import { buildMirrorTargetResolver } from './observability/mirror/target.js';
 import {
   createMirrorSource,
   IosSimctlLoopSource,
-  IDB_STREAM_UNHEALTHY_HINT,
+  idbDemotionHint,
 } from './observability/mirror/sources.js';
 import { parseAllAdbDevices } from './tools/device-record.js';
 import { createLockE2eTestHandler } from './tools/lock-e2e-test.js';
@@ -788,13 +788,16 @@ const mirrorManager = mirrorCfg.enabled
           }
         },
       }),
-      createSource: (t) => createMirrorSource(t, mirrorCfg.fps),
-      createFallbackSource: async (t) => {
+      createSource: (t) =>
+        createMirrorSource(t, mirrorCfg.fps, {
+          firstFrameTimeoutMs: mirrorCfg.firstFrameTimeoutMs,
+        }),
+      createFallbackSource: async (t, cause) => {
         if (t.platform !== 'ios') {
           throw new Error('mirror fallback is iOS simctl only');
         }
         return new IosSimctlLoopSource(t.deviceId, {
-          degradedHint: IDB_STREAM_UNHEALTHY_HINT,
+          degradedHint: idbDemotionHint(cause),
         });
       },
       // MirrorStatus is a closed interface (no index signature); recorder.push

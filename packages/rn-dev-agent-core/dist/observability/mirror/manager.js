@@ -255,7 +255,7 @@ export class MirrorManager {
             // Keep the 200 multipart client; do not push 'starting' (DevicePane
             // remounts <img> on starting and would double-attach).
             this.demoted = true;
-            void this.startFallback(target);
+            void this.startFallback(target, err);
             return;
         }
         this.activeTarget = null;
@@ -270,10 +270,10 @@ export class MirrorManager {
         });
         this.endAllClients();
     }
-    async startFallback(target) {
+    async startFallback(target, cause) {
         const myCycle = this.cycle;
         try {
-            const source = await this.deps.createFallbackSource(target);
+            const source = await this.deps.createFallbackSource(target, cause);
             if (myCycle !== this.cycle) {
                 source.stop();
                 return;

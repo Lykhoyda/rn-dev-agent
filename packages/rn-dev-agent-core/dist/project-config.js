@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { findProjectRoot } from './nav-graph/storage.js';
 import { logger } from './logger.js';
+import { DEFAULT_IDB_FIRST_FRAME_TIMEOUT_MS } from './observability/mirror/sources.js';
 /**
  * Read bundle ID / package name from app.json or app.config.json.
  * Returns the platform-appropriate ID, or falls back cross-platform.
@@ -159,6 +160,8 @@ export function resolveObservePort(deps = {}) {
 export const DEFAULT_MIRROR_FPS = 20;
 const MIRROR_FPS_MIN = 5;
 const MIRROR_FPS_MAX = 30;
+const MIRROR_FIRST_FRAME_TIMEOUT_MIN_MS = 1_000;
+const MIRROR_FIRST_FRAME_TIMEOUT_MAX_MS = 120_000;
 /** Spec 2026-07-04 (observe live mirror): env > config > default; errors fail open. */
 export function resolveMirrorConfig(deps = {}) {
     const envRaw = 'env' in deps ? deps.env : process.env.RN_AGENT_OBSERVE_MIRROR;
@@ -173,12 +176,16 @@ export function resolveMirrorConfig(deps = {}) {
     const fps = typeof rawFps === 'number' && Number.isFinite(rawFps)
         ? Math.min(MIRROR_FPS_MAX, Math.max(MIRROR_FPS_MIN, Math.round(rawFps)))
         : DEFAULT_MIRROR_FPS;
+    const rawTimeout = cfg?.observe?.mirror?.firstFrameTimeoutMs;
+    const firstFrameTimeoutMs = typeof rawTimeout === 'number' && Number.isFinite(rawTimeout)
+        ? Math.min(MIRROR_FIRST_FRAME_TIMEOUT_MAX_MS, Math.max(MIRROR_FIRST_FRAME_TIMEOUT_MIN_MS, Math.round(rawTimeout)))
+        : DEFAULT_IDB_FIRST_FRAME_TIMEOUT_MS;
     if (envRaw === '0' || envRaw === 'false')
-        return { enabled: false, fps, source: 'env' };
+        return { enabled: false, fps, firstFrameTimeoutMs, source: 'env' };
     if (envRaw === '1' || envRaw === 'true')
-        return { enabled: true, fps, source: 'env' };
+        return { enabled: true, fps, firstFrameTimeoutMs, source: 'env' };
     const cfgEnabled = cfg?.observe?.mirror?.enabled;
     if (typeof cfgEnabled === 'boolean')
-        return { enabled: cfgEnabled, fps, source: 'config' };
-    return { enabled: true, fps, source: 'default' };
+        return { enabled: cfgEnabled, fps, firstFrameTimeoutMs, source: 'config' };
+    return { enabled: true, fps, firstFrameTimeoutMs, source: 'default' };
 }

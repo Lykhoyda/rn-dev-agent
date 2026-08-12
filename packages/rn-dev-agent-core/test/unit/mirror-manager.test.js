@@ -171,11 +171,12 @@ test('idb exit before first frame demotes to simctl; clients stay attached', asy
   const mgr = new MirrorManager({
     resolveTarget: async () => ({ ok: true, target: { platform: 'ios', deviceId: 'U1' } }),
     createSource: async () => idb,
-    createFallbackSource: async (target) => {
+    createFallbackSource: async (target, cause) => {
       events.push('fallback.create');
       fallbackCalls++;
       assert.equal(target.deviceId, 'U1');
       assert.equal(target.platform, 'ios');
+      assert.equal(cause?.reason, 'idb video-stream produced no first frame');
       return simctl;
     },
     pushStatus: (s) => statuses.push(s),

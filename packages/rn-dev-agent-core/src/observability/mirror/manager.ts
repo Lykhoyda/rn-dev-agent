@@ -14,6 +14,11 @@ export interface MirrorStatus {
   reason?: string;
 }
 
+export interface MirrorExitInfo {
+  reason: string;
+  hint?: string;
+}
+
 export interface MirrorClient {
   writeHead(status: number, headers: Record<string, string>): void;
   write(chunk: Buffer | string): boolean;
@@ -30,7 +35,7 @@ export interface MirrorManagerDeps {
    * iOS-only idb→simctl demotion. Must not re-enter createSource (that re-selects idb).
    * Absent → source-exit is a typed terminal error (bounded empty-200 failure).
    */
-  createFallbackSource?(target: MirrorTarget): Promise<MirrorSource>;
+  createFallbackSource?(target: MirrorTarget, cause?: MirrorExitInfo): Promise<MirrorSource>;
   pushStatus(s: MirrorStatus): void;
   graceMs?: number;
 }
@@ -287,7 +292,7 @@ export class MirrorManager {
     this.broadcast(frame);
   }
 
-  private onSourceExit(err?: { reason: string; hint?: string }): void {
+  private onSourceExit(err?: MirrorExitInfo): void {
     const dying = this.source;
     const target = this.activeTarget;
     const canDemote =
@@ -305,7 +310,7 @@ export class MirrorManager {
       // Keep the 200 multipart client; do not push 'starting' (DevicePane
       // remounts <img> on starting and would double-attach).
       this.demoted = true;
-      void this.startFallback(target);
+      void this.startFallback(target, err);
       return;
     }
 
@@ -322,10 +327,10 @@ export class MirrorManager {
     this.endAllClients();
   }
 
-  private async startFallback(target: MirrorTarget): Promise<void> {
+  private async startFallback(target: MirrorTarget, cause?: MirrorExitInfo): Promise<void> {
     const myCycle = this.cycle;
     try {
-      const source = await this.deps.createFallbackSource!(target);
+      const source = await this.deps.createFallbackSource!(target, cause);
       if (myCycle !== this.cycle) {
         source.stop();
         return;
