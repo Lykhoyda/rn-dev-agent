@@ -3,4 +3,4 @@
 'rn-dev-agent-core': patch
 ---
 
-An explicit `cdp_connect force=true` issued while a supervised reconnect is in flight now deterministically supersedes the reconnect with the caller's exact target instead of dead-ending with "Already connecting to Metro...", and without force the refusal now says how to supersede.
+The legacy ambient connect handler exported by `rn-dev-agent-core` no longer dead-ends an explicit force reconnect while a supervised reconnect is in flight (it now supersedes it, with a new `CONNECT_IN_FLIGHT` refusal code for non-force callers); the registered `cdp_connect` tool was already safe and is unchanged.
