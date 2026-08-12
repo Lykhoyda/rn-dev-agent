@@ -205,6 +205,7 @@ import { bindNativeRunner, unbindNativeRunner } from './session/runner-binding.j
 import {
   claimOptionalBundleAuthority,
   createAuthorityGate,
+  type ManagedNativeOriginReproveOptions,
   type StagedRuntimeRelaunch,
 } from './session/authority-gate.js';
 import { createLocalAuthorityProbe } from './session/local-authority-probe.js';
@@ -1155,21 +1156,24 @@ function stageAndroidRuntimeConnection(
  */
 async function reconnectSessionRuntime(
   status: SessionStatus,
+  options?: ManagedNativeOriginReproveOptions,
 ): Promise<StagedRuntimeRelaunch | void> {
   const { platform, deviceId, appId, metroPort } = resolveManagedRuntimeLaunchBinding(status);
+  const platformBudgetMs = exactSessionTargetReadinessTimeoutMs(platform);
+  const readinessTimeoutMs =
+    typeof options?.readinessTimeoutMs === 'number'
+      ? Math.max(1, Math.min(options.readinessTimeoutMs, platformBudgetMs))
+      : platformBudgetMs;
   if (platform === 'ios') {
     const current = getClient();
     await current.disconnect();
     setClient(createClient(metroPort));
-    await connectExactSessionTarget(
-      { metroPort, platform, appId, deviceId },
-      exactSessionTargetReadinessTimeoutMs(platform),
-    );
+    await connectExactSessionTarget({ metroPort, platform, appId, deviceId }, readinessTimeoutMs);
     return;
   }
   const connection = await connectExactSessionTarget(
     { metroPort, platform, appId, deviceId },
-    exactSessionTargetReadinessTimeoutMs(platform),
+    readinessTimeoutMs,
   );
   return stageAndroidRuntimeConnection(connection);
 }

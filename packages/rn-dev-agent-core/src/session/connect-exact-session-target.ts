@@ -62,7 +62,8 @@ function rateLimitedDeviceAuthority(
     execute: (file, args) => {
       const key = JSON.stringify([file, args]);
       const cached = cache.get(key);
-      if (cached && now() - cached.at < DEVICE_AUTHORITY_PROBE_MIN_INTERVAL_MS) return cached.result;
+      if (cached && now() - cached.at < DEVICE_AUTHORITY_PROBE_MIN_INTERVAL_MS)
+        return cached.result;
       const result = dependencies.execute(file, args);
       cache.set(key, { at: now(), result });
       void result.catch(() => {

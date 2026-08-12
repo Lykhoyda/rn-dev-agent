@@ -890,16 +890,20 @@ function stageAndroidRuntimeConnection(connection) {
  * A mid-flow relaunch whose dev-client only re-registers after the flow's own
  * post-launch steps needs the connection back, not another cold start.
  */
-async function reconnectSessionRuntime(status) {
+async function reconnectSessionRuntime(status, options) {
     const { platform, deviceId, appId, metroPort } = resolveManagedRuntimeLaunchBinding(status);
+    const platformBudgetMs = exactSessionTargetReadinessTimeoutMs(platform);
+    const readinessTimeoutMs = typeof options?.readinessTimeoutMs === 'number'
+        ? Math.max(1, Math.min(options.readinessTimeoutMs, platformBudgetMs))
+        : platformBudgetMs;
     if (platform === 'ios') {
         const current = getClient();
         await current.disconnect();
         setClient(createClient(metroPort));
-        await connectExactSessionTarget({ metroPort, platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
+        await connectExactSessionTarget({ metroPort, platform, appId, deviceId }, readinessTimeoutMs);
         return;
     }
-    const connection = await connectExactSessionTarget({ metroPort, platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
+    const connection = await connectExactSessionTarget({ metroPort, platform, appId, deviceId }, readinessTimeoutMs);
     return stageAndroidRuntimeConnection(connection);
 }
 async function relaunchSessionRuntime(status) {

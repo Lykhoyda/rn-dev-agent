@@ -352,7 +352,11 @@ export async function isDevClientPickerShowing() {
         return false;
     return isPickerIndicatorPresent();
 }
+// GH #750: a defensive picker probe on a screen with no picker must not inherit
+// the exact-target readiness budget an actual dev-client relaunch needs.
+const PICKER_PROBE_READINESS_TIMEOUT_MS = 15_000;
 export function createDismissDevClientPickerHandler(getMetroPort, authorityDeps = {}) {
+    let dismissalAwaitingProof = false;
     return async (args) => {
         const t0 = Date.now();
         // GH #523 sub-3: prefer the picker row matching the project's Metro port
@@ -371,21 +375,24 @@ export function createDismissDevClientPickerHandler(getMetroPort, authorityDeps 
         }
         // GH #750: the tool runs without A/B (the stranded state it repairs), so
         // after a dismissal it must reconnect the exact target and prove A/B.
-        const proveOrigin = async () => {
-            await (authorityDeps.reproveOrigin ?? reproveManagedNativeOrigin)(args);
+        const proveOrigin = async (readinessTimeoutMs) => {
+            await (authorityDeps.reproveOrigin ?? reproveManagedNativeOrigin)(args, readinessTimeoutMs === undefined ? undefined : { readinessTimeoutMs });
             await (authorityDeps.completeOrigin ?? completeManagedNativeOriginAuthority)(args, true);
+            dismissalAwaitingProof = false;
         };
         if (outcome.dismissed) {
+            dismissalAwaitingProof = true;
             await proveOrigin();
             return okResult({ dismissed: true, reason: outcome.reason, platform: outcome.platform }, { meta });
         }
         // GH #750: a retry after a failed post-dismissal proof finds the picker
-        // already gone; re-prove rather than reporting ok with B still unbound.
+        // already gone; re-prove rather than reporting ok with B still unbound. A
+        // probe that never dismissed anything gets the bounded budget instead.
         const isBundleBound = authorityDeps.isBundleBound ?? (() => true);
         if (outcome.pickerPresent === false &&
             !isBundleBound() &&
             (authorityDeps.reproveOrigin !== undefined || hasManagedNativeOriginAuthority(args))) {
-            await proveOrigin();
+            await proveOrigin(dismissalAwaitingProof ? undefined : PICKER_PROBE_READINESS_TIMEOUT_MS);
             return okResult({ dismissed: false, reproved: true, reason: outcome.reason, platform: outcome.platform }, { meta });
         }
         if (outcome.reason.toLowerCase().includes('could not find')) {

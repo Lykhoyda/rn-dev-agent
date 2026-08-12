@@ -27660,12 +27660,12 @@ async function relaunchManagedNativeOriginApp(args) {
   }
   await authority.relaunch();
 }
-async function reproveManagedNativeOrigin(args) {
+async function reproveManagedNativeOrigin(args, options) {
   const authority = args[managedNativeOrigin];
   if (!authority) {
     throw new SessionAuthorityError("METRO_ORIGIN_MISMATCH", "managed native origin re-prove authority is unavailable");
   }
-  await authority.reprove();
+  await authority.reprove(options);
 }
 async function reissueManagedInstallAuthority(args) {
   const reissue = args[managedInstallReissue];
@@ -28662,7 +28662,7 @@ function createAuthorityGate(runtime, dependencies) {
                 stagedRuntimeRelaunch = await dependencies.relaunchBoundRuntime(currentStatus) ?? void 0;
                 registry2.verifyOperation(operation);
               },
-              reprove: async () => {
+              reprove: async (options) => {
                 const currentStatus = runtime.status();
                 if (!currentStatus.available) {
                   throw new SessionAuthorityError(currentStatus.code, currentStatus.reason);
@@ -28673,7 +28673,7 @@ function createAuthorityGate(runtime, dependencies) {
                 }
                 stagedRuntimeRelaunch?.cancel();
                 stagedRuntimeRelaunch = void 0;
-                stagedRuntimeRelaunch = await dependencies.reconnectBoundRuntime(currentStatus) ?? void 0;
+                stagedRuntimeRelaunch = await dependencies.reconnectBoundRuntime(currentStatus, options) ?? void 0;
                 registry2.verifyOperation(operation);
               },
               complete: async (targetExpected) => {
@@ -33789,6 +33789,7 @@ async function isDevClientPickerShowing() {
   return isPickerIndicatorPresent();
 }
 function createDismissDevClientPickerHandler(getMetroPort, authorityDeps2 = {}) {
+  let dismissalAwaitingProof = false;
   return async (args) => {
     const t0 = Date.now();
     let preferredPort;
@@ -33802,17 +33803,19 @@ function createDismissDevClientPickerHandler(getMetroPort, authorityDeps2 = {}) 
     if (outcome === null) {
       return failResult('No device session open. Call device_snapshot action="open" first.', "DEV_CLIENT_PICKER_NO_SESSION", meta);
     }
-    const proveOrigin = async () => {
-      await (authorityDeps2.reproveOrigin ?? reproveManagedNativeOrigin)(args);
+    const proveOrigin = async (readinessTimeoutMs) => {
+      await (authorityDeps2.reproveOrigin ?? reproveManagedNativeOrigin)(args, readinessTimeoutMs === void 0 ? void 0 : { readinessTimeoutMs });
       await (authorityDeps2.completeOrigin ?? completeManagedNativeOriginAuthority)(args, true);
+      dismissalAwaitingProof = false;
     };
     if (outcome.dismissed) {
+      dismissalAwaitingProof = true;
       await proveOrigin();
       return okResult({ dismissed: true, reason: outcome.reason, platform: outcome.platform }, { meta });
     }
     const isBundleBound = authorityDeps2.isBundleBound ?? (() => true);
     if (outcome.pickerPresent === false && !isBundleBound() && (authorityDeps2.reproveOrigin !== void 0 || hasManagedNativeOriginAuthority(args))) {
-      await proveOrigin();
+      await proveOrigin(dismissalAwaitingProof ? void 0 : PICKER_PROBE_READINESS_TIMEOUT_MS);
       return okResult({ dismissed: false, reproved: true, reason: outcome.reason, platform: outcome.platform }, { meta });
     }
     if (outcome.reason.toLowerCase().includes("could not find")) {
@@ -33821,7 +33824,7 @@ function createDismissDevClientPickerHandler(getMetroPort, authorityDeps2 = {}) 
     return okResult({ dismissed: false, reason: outcome.reason, platform: outcome.platform }, { meta });
   };
 }
-var runAgentDeviceFn, fetchCandidatesFn, pressCandidateFn, hasActiveSessionFn, PICKER_INDICATORS, PORT_PATTERN, IPV4_QUAD_RE, VERSION_SHAPE_RE, HOSTNAME_RE, FOOTER_ROWS, HEADER_PATTERNS, ERROR_DIALOG_INDICATORS, ERROR_DIALOG_DISMISS_LABELS;
+var runAgentDeviceFn, fetchCandidatesFn, pressCandidateFn, hasActiveSessionFn, PICKER_INDICATORS, PORT_PATTERN, IPV4_QUAD_RE, VERSION_SHAPE_RE, HOSTNAME_RE, FOOTER_ROWS, HEADER_PATTERNS, ERROR_DIALOG_INDICATORS, ERROR_DIALOG_DISMISS_LABELS, PICKER_PROBE_READINESS_TIMEOUT_MS;
 var init_dev_client_picker = __esm({
   "packages/rn-dev-agent-core/dist/tools/dev-client-picker.js"() {
     "use strict";
@@ -33848,6 +33851,7 @@ var init_dev_client_picker = __esm({
     HEADER_PATTERNS = [/development servers/i];
     ERROR_DIALOG_INDICATORS = ["Error loading app"];
     ERROR_DIALOG_DISMISS_LABELS = ["Dismiss", "OK", "Close"];
+    PICKER_PROBE_READINESS_TIMEOUT_MS = 15e3;
   }
 });
 
@@ -87490,16 +87494,18 @@ function stageAndroidRuntimeConnection(connection) {
     cancel: connection.cancel
   };
 }
-async function reconnectSessionRuntime(status) {
+async function reconnectSessionRuntime(status, options) {
   const { platform, deviceId, appId, metroPort } = resolveManagedRuntimeLaunchBinding(status);
+  const platformBudgetMs = exactSessionTargetReadinessTimeoutMs(platform);
+  const readinessTimeoutMs = typeof options?.readinessTimeoutMs === "number" ? Math.max(1, Math.min(options.readinessTimeoutMs, platformBudgetMs)) : platformBudgetMs;
   if (platform === "ios") {
     const current = getClient();
     await current.disconnect();
     setClient(createClient(metroPort));
-    await connectExactSessionTarget2({ metroPort, platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
+    await connectExactSessionTarget2({ metroPort, platform, appId, deviceId }, readinessTimeoutMs);
     return;
   }
-  const connection = await connectExactSessionTarget2({ metroPort, platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
+  const connection = await connectExactSessionTarget2({ metroPort, platform, appId, deviceId }, readinessTimeoutMs);
   return stageAndroidRuntimeConnection(connection);
 }
 async function relaunchSessionRuntime(status) {
