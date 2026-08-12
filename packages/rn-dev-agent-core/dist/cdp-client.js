@@ -22,6 +22,7 @@ export async function discoverAuthoritativeTarget(policy, requestedFilters, disc
         ...policy.filters,
         targetId: undefined,
         preferredBundleId: undefined,
+        deviceName: undefined,
     });
     if (result.errorCode || result.targets.length === 0)
         return result;
@@ -484,6 +485,10 @@ export class CDPClient {
     _connectFilters = {};
     _reconnectDiscover;
     _exactDiscoveryPort;
+    /** GH #625: pinned device affinity, if an explicit targetId pin captured one. */
+    get pinnedDeviceName() {
+        return this._connectFilters.deviceName;
+    }
     createAuthoritativeDiscover(awaitWithinBoundary) {
         return async (_port, filtersOrPlatform) => {
             const policy = this._authoritativeSessionPolicy;

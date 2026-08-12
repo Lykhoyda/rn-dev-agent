@@ -2,7 +2,7 @@ import WebSocket from 'ws';
 import { logger } from '../logger.js';
 import { metroOrigin } from '../ws-origin.js';
 import { resolveBundleId } from '../project-config.js';
-import { discover, TargetSelectionError } from './discovery.js';
+import { discover, targetBundleIdentity, TargetSelectionError } from './discovery.js';
 import type { SelectTargetFilters } from './discovery.js';
 import { sleep } from './state.js';
 import { CDP_TIMEOUT_FAST } from './timeout-config.js';
@@ -72,6 +72,8 @@ export interface ConnectFilters {
   targetId?: string;
   bundleId?: string;
   preferredBundleId?: string;
+  /** GH #625: durable device affinity captured when a targetId is pinned. */
+  deviceName?: string;
 }
 
 export interface ConnectContext {
@@ -164,6 +166,7 @@ export async function discoverAndConnect(
     targetId: mergedFilters.targetId,
     bundleId: mergedFilters.bundleId,
     preferredBundleId: mergedFilters.preferredBundleId,
+    deviceName: mergedFilters.deviceName,
   };
 
   let result;
@@ -248,6 +251,12 @@ export async function discoverAndConnect(
   const stickyFilters = stickyPlatformFilters(ctx.getConnectFilters(), connectedTarget!.platform);
   if (stickyFilters) ctx.setConnectFilters(stickyFilters);
 
+  // GH #625: an explicit targetId pin persists the connected target's durable
+  // device + bundle identity so reconnects re-resolve on the SAME device (page
+  // ids churn on reload) and fail closed instead of binding a sibling simulator.
+  const pinnedDeviceFilters = stickyPinnedDeviceFilters(ctx.getConnectFilters(), connectedTarget!);
+  if (pinnedDeviceFilters) ctx.setConnectFilters(pinnedDeviceFilters);
+
   const msg = `Connected to ${connectedTarget!.title} on port ${metroPort}`;
   return selectionWarning ? `${msg}. WARNING: ${selectionWarning}` : msg;
 }
@@ -268,6 +277,35 @@ export function stickyPlatformFilters(
   if (current.platform) return null;
   if (!resolvedPlatform) return null;
   return { ...current, platform: resolvedPlatform };
+}
+
+/**
+ * GH #625: pure helper that persists the durable identity of an explicitly
+ * pinned target — deviceName plus proven bundle identity — and refreshes the
+ * volatile page-scoped targetId to the live one. Returns null when there is no
+ * pin, no durable identity to capture, or nothing changed.
+ */
+export function stickyPinnedDeviceFilters(
+  current: ConnectFilters,
+  connectedTarget: HermesTarget,
+): ConnectFilters | null {
+  if (!current.targetId) return null;
+  const deviceName = connectedTarget.deviceName?.trim();
+  if (!deviceName) return null;
+  const bundleId = current.bundleId ?? targetBundleIdentity(connectedTarget) ?? undefined;
+  if (
+    current.targetId === connectedTarget.id &&
+    current.deviceName === deviceName &&
+    current.bundleId === bundleId
+  ) {
+    return null;
+  }
+  return {
+    ...current,
+    targetId: connectedTarget.id,
+    deviceName,
+    ...(bundleId ? { bundleId } : {}),
+  };
 }
 
 /**

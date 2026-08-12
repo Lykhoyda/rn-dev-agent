@@ -19237,6 +19237,19 @@ function describeTarget(target) {
   const confidence = target.platformInference ?? "probed";
   return `${target.id} title="${target.title || "?"}" appId="${target.appId ?? "?"}" device="${target.deviceName ?? "?"}" description="${target.description ?? "?"}" platform=${target.platform ?? "?"} confidence=${confidence}`;
 }
+function metroDeviceConnectionId(id) {
+  if (!id)
+    return "";
+  const cut = id.lastIndexOf("-");
+  return cut > 0 ? id.slice(0, cut) : id;
+}
+function metroPageNumber(id) {
+  if (!id)
+    return 0;
+  const cut = id.lastIndexOf("-");
+  const page = cut > 0 ? Number.parseInt(id.slice(cut + 1), 10) : NaN;
+  return Number.isNaN(page) ? 0 : page;
+}
 function classifyAndroidDeviceKind(deviceName) {
   if (!deviceName)
     return "unknown";
@@ -19251,15 +19264,47 @@ function selectTarget(validTargets, filtersOrPlatform) {
   let filteredTargets = validTargets;
   const warnings = [];
   let warnNoPlatformFilter = false;
+  if (filters.deviceName) {
+    const pinnedDevice = filters.deviceName.trim();
+    const deviceMatched = filteredTargets.filter((target) => target.deviceName?.trim() === pinnedDevice);
+    if (deviceMatched.length === 0) {
+      return {
+        targets: [],
+        warning: `Pinned device "${pinnedDevice}" has no live CDP target on this Metro; refusing to silently bind a different device. Candidates: ${validTargets.map(describeTarget).join("; ")}. Relaunch the app on the pinned device, or re-pin deliberately via cdp_targets + cdp_connect targetId.`
+      };
+    }
+    const devicePrefixes = new Set(deviceMatched.map((t) => metroDeviceConnectionId(t.id)));
+    if (devicePrefixes.size > 1) {
+      const bundleScoped = filters.bundleId ? deviceMatched.filter((target) => targetMatchesBundleId(target, filters.bundleId)) : [];
+      const bundleConnections = new Set(bundleScoped.map((t) => metroDeviceConnectionId(t.id)));
+      if (bundleConnections.size !== 1) {
+        return {
+          targets: [],
+          warning: `Pinned device name "${pinnedDevice}" matches ${devicePrefixes.size} live Metro device connections and ` + (filters.bundleId ? `pinned bundleId "${filters.bundleId}" narrows them to ${bundleConnections.size}` : `no proven bundle identity is pinned to narrow them`) + `; refusing an ambiguous bind. Candidates: ${deviceMatched.map(describeTarget).join("; ")}. Re-pin deliberately via cdp_targets + cdp_connect targetId.`
+        };
+      }
+      filteredTargets = bundleScoped;
+    } else {
+      filteredTargets = deviceMatched;
+    }
+  }
   if (filters.targetId) {
-    const idMatched = validTargets.filter((t) => t.id === filters.targetId);
-    if (idMatched.length === 0) {
+    const idMatched = filteredTargets.filter((t) => t.id === filters.targetId);
+    if (idMatched.length > 0) {
+      filteredTargets = idMatched;
+    } else if (!filters.deviceName) {
       return {
         targets: [],
         warning: `targetId "${filters.targetId}" not found. Available ids: ${validTargets.map((t) => t.id).join(", ")}`
       };
+    } else if (!filters.bundleId) {
+      return {
+        targets: [],
+        warning: `Pinned targetId "${filters.targetId}" is stale and no proven bundle identity is pinned; refusing to re-resolve on device "${filters.deviceName.trim()}" without app identity. Candidates: ${filteredTargets.map(describeTarget).join("; ")}. Re-pin deliberately via cdp_targets + cdp_connect targetId.`
+      };
+    } else {
+      warnings.push(`Pinned targetId "${filters.targetId}" is stale (Metro page ids change on reload); re-resolving on pinned device "${filters.deviceName.trim()}".`);
     }
-    filteredTargets = idMatched;
   }
   if (filters.platform) {
     const platform = filters.platform.toLowerCase();
@@ -19273,7 +19318,7 @@ function selectTarget(validTargets, filtersOrPlatform) {
       };
     }
     filteredTargets = platformMatched;
-  } else if (validTargets.length > 0 && !filters.targetId && !filters.bundleId && !filters.deviceKind && !filters.preferredBundleId) {
+  } else if (validTargets.length > 0 && !filters.targetId && !filters.bundleId && !filters.deviceKind && !filters.preferredBundleId && !filters.deviceName) {
     warnNoPlatformFilter = true;
   }
   if (filters.deviceKind) {
@@ -19310,8 +19355,8 @@ function selectTarget(validTargets, filtersOrPlatform) {
     }
   }
   const sorted = [...filteredTargets].sort((a, b) => {
-    const aPage = parseInt(a.id?.split("-")[1] ?? "0", 10);
-    const bPage = parseInt(b.id?.split("-")[1] ?? "0", 10);
+    const aPage = metroPageNumber(a.id);
+    const bPage = metroPageNumber(b.id);
     if (aPage !== bPage)
       return bPage - aPage;
     if (prefLower) {
@@ -19394,6 +19439,8 @@ async function discover(currentPort, platformFilterOrFilters) {
     hints.push(`bundleId=${filters.bundleId}`);
   if (filters.preferredBundleId)
     hints.push(`preferredBundleId=${filters.preferredBundleId}`);
+  if (filters.deviceName)
+    hints.push(`deviceName=${filters.deviceName}`);
   logger.debug("CDP", `Discovering Metro on ports: ${ports.join(", ")}${hints.length ? ` (${hints.join(", ")})` : ""}`);
   const runningPorts = await discoverAllMetroPorts(ports, DISCOVERY_TIMEOUT_MS);
   if (runningPorts.length === 0) {
@@ -55398,7 +55445,8 @@ async function discoverAndConnect(ctx, portHint, filters, discoverFn = discover,
     deviceKind: mergedFilters.deviceKind,
     targetId: mergedFilters.targetId,
     bundleId: mergedFilters.bundleId,
-    preferredBundleId: mergedFilters.preferredBundleId
+    preferredBundleId: mergedFilters.preferredBundleId,
+    deviceName: mergedFilters.deviceName
   };
   let result;
   try {
@@ -55457,6 +55505,9 @@ async function discoverAndConnect(ctx, portHint, filters, discoverFn = discover,
   const stickyFilters = stickyPlatformFilters(ctx.getConnectFilters(), connectedTarget.platform);
   if (stickyFilters)
     ctx.setConnectFilters(stickyFilters);
+  const pinnedDeviceFilters = stickyPinnedDeviceFilters(ctx.getConnectFilters(), connectedTarget);
+  if (pinnedDeviceFilters)
+    ctx.setConnectFilters(pinnedDeviceFilters);
   const msg3 = `Connected to ${connectedTarget.title} on port ${metroPort}`;
   return selectionWarning ? `${msg3}. WARNING: ${selectionWarning}` : msg3;
 }
@@ -55466,6 +55517,23 @@ function stickyPlatformFilters(current, resolvedPlatform) {
   if (!resolvedPlatform)
     return null;
   return { ...current, platform: resolvedPlatform };
+}
+function stickyPinnedDeviceFilters(current, connectedTarget) {
+  if (!current.targetId)
+    return null;
+  const deviceName = connectedTarget.deviceName?.trim();
+  if (!deviceName)
+    return null;
+  const bundleId = current.bundleId ?? targetBundleIdentity(connectedTarget) ?? void 0;
+  if (current.targetId === connectedTarget.id && current.deviceName === deviceName && current.bundleId === bundleId) {
+    return null;
+  }
+  return {
+    ...current,
+    targetId: connectedTarget.id,
+    deviceName,
+    ...bundleId ? { bundleId } : {}
+  };
 }
 function formatConnectFailureMessage(retries, attempts3, bundleHint, lastErrorMessage) {
   const allHandshakesSucceeded = attempts3.length > 0 && attempts3.every((a) => a.handshakeOk);
@@ -55643,7 +55711,8 @@ async function discoverAuthoritativeTarget(policy, requestedFilters, discoverFn 
     ...requestedFilters,
     ...policy.filters,
     targetId: void 0,
-    preferredBundleId: void 0
+    preferredBundleId: void 0,
+    deviceName: void 0
   });
   if (result.errorCode || result.targets.length === 0)
     return result;
@@ -56079,6 +56148,10 @@ var CDPClient = class _CDPClient {
   _connectFilters = {};
   _reconnectDiscover;
   _exactDiscoveryPort;
+  /** GH #625: pinned device affinity, if an explicit targetId pin captured one. */
+  get pinnedDeviceName() {
+    return this._connectFilters.deviceName;
+  }
   createAuthoritativeDiscover(awaitWithinBoundary) {
     return async (_port, filtersOrPlatform) => {
       const policy = this._authoritativeSessionPolicy;
@@ -57011,6 +57084,7 @@ function captureClientState(client2) {
     port: client2.metroPort,
     platform: target?.platform,
     bundleId: target?.description ?? void 0,
+    deviceName: client2.pinnedDeviceName,
     proxyWasActive: client2.proxyDesired
   };
 }
@@ -57038,6 +57112,9 @@ async function forceReconnect(oldClient, setClient2, createClient2, captured, au
     const filters = {
       platform: authorityTarget?.platform ?? captured.platform,
       bundleId: authorityTarget?.appId ?? captured.bundleId,
+      // GH #625: without an exact authority target, the pinned device affinity
+      // is the only thing keeping recovery off a sibling simulator.
+      ...authorityTarget ? {} : { deviceName: captured.deviceName },
       ...authorityTarget && resolveExactTargetId ? { targetId: await resolveExactTargetId(newClient, captured, authorityTarget) } : {}
     };
     await raceWithTimeout(authorityTarget ? newClient.connectExact(captured.port, filters) : newClient.autoConnect(captured.port, filters), FORCE_FALLBACK_TIMEOUT_MS, "force_reconnect");
@@ -87027,9 +87104,11 @@ var e2eReload = async () => {
   const session2 = getActiveSession();
   if (!session2?.deviceId || !session2.appId)
     return false;
+  const sessionPlatform = session2.platform === "ios" || session2.platform === "android" ? session2.platform : void 0;
   try {
     const r = await createReloadHandler(getClient, setClient, createClient)({
       full: true,
+      ...sessionPlatform ? { platform: sessionPlatform } : {},
       deviceId: session2.deviceId,
       appId: session2.appId
     });

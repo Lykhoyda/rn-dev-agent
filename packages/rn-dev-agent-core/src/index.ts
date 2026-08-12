@@ -3851,6 +3851,11 @@ const e2eReload = async (): Promise<boolean> => {
   if (!getClient().isConnected) return false;
   const session = getActiveSession();
   if (!session?.deviceId || !session.appId) return false;
+  // GH #625: recoverAfterFailedReconnect only engages exact-device recovery
+  // when platform+deviceId+appId are ALL present — omitting platform silently
+  // downgraded recovery to device-blind platform+bundle filters.
+  const sessionPlatform =
+    session.platform === 'ios' || session.platform === 'android' ? session.platform : undefined;
   try {
     const r = await createReloadHandler(
       getClient,
@@ -3858,6 +3863,7 @@ const e2eReload = async (): Promise<boolean> => {
       createClient,
     )({
       full: true,
+      ...(sessionPlatform ? { platform: sessionPlatform } : {}),
       deviceId: session.deviceId,
       appId: session.appId,
     });

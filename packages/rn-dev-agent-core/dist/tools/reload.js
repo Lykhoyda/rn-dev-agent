@@ -20,6 +20,7 @@ export function captureClientState(client) {
         port: client.metroPort,
         platform: target?.platform,
         bundleId: target?.description ?? undefined,
+        deviceName: client.pinnedDeviceName,
         proxyWasActive: client.proxyDesired,
     };
 }
@@ -48,6 +49,9 @@ export async function forceReconnect(oldClient, setClient, createClient, capture
         const filters = {
             platform: authorityTarget?.platform ?? captured.platform,
             bundleId: authorityTarget?.appId ?? captured.bundleId,
+            // GH #625: without an exact authority target, the pinned device affinity
+            // is the only thing keeping recovery off a sibling simulator.
+            ...(authorityTarget ? {} : { deviceName: captured.deviceName }),
             ...(authorityTarget && resolveExactTargetId
                 ? { targetId: await resolveExactTargetId(newClient, captured, authorityTarget) }
                 : {}),
