@@ -25148,6 +25148,12 @@ var init_registry = __esm({
           leaseUntilMs: claim.lease_until_ms
         } : null;
       }
+      // GH #630: every allocated port for a service across all worktrees, own
+      // session included — foreign-origin scanners must exclude their own port.
+      allocatedServicePorts(service) {
+        const rows = this.#database.prepare("SELECT port, worktree_key FROM allocations WHERE service = ?").all(service);
+        return rows.map((row) => row.port).filter((port) => Number.isSafeInteger(port));
+      }
       allocatePort(input) {
         if (!Number.isSafeInteger(input.base) || input.base < 1 || !Number.isSafeInteger(input.span) || input.span < 1 || input.base + input.span > 65536) {
           throw new SessionAuthorityError("INVALID_PORT_RANGE", "port allocation range is invalid");
@@ -30095,6 +30101,251 @@ var init_maestro_runner_report = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/session/target-device-authority.js
+function executeWithinBoundary(dependencies, file, args) {
+  const operation = () => dependencies.execute(file, args);
+  return dependencies.awaitWithinBoundary ? dependencies.awaitWithinBoundary(operation) : operation();
+}
+async function filterTargetsForExactDevice(input, dependencies) {
+  if (input.platform === "ios") {
+    const output = await executeWithinBoundary(dependencies, "xcrun", [
+      "simctl",
+      "list",
+      "devices",
+      "--json"
+    ]);
+    const parsed = JSON.parse(output.stdout);
+    const booted = Object.values(parsed.devices ?? {}).flat().filter((device) => device.state === "Booted" && typeof device.udid === "string" && typeof device.name === "string");
+    const exact2 = booted.find((device) => device.udid === input.deviceId);
+    if (!exact2 || booted.filter((device) => device.name === exact2.name).length !== 1) {
+      throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: iOS target association is ambiguous or foreign");
+    }
+    return input.targets.filter((target) => target.deviceName?.trim() === exact2.name);
+  }
+  const devices = (await executeWithinBoundary(dependencies, "adb", ["devices"])).stdout.split("\n").map((line) => line.trim().split(/\s+/)).filter((parts) => parts[0] && parts[1] === "device").map((parts) => parts[0]);
+  if (!devices.includes(input.deviceId)) {
+    throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: Android target association is ambiguous or foreign");
+  }
+  const models = await Promise.all(devices.map(async (serial) => ({
+    serial,
+    model: (await executeWithinBoundary(dependencies, "adb", [
+      "-s",
+      serial,
+      "shell",
+      "getprop",
+      "ro.product.model"
+    ])).stdout.trim()
+  })));
+  const exact = models.find((entry) => entry.serial === input.deviceId);
+  if (!exact?.model || models.filter((entry) => entry.model === exact.model).length !== 1) {
+    throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: Android target association is ambiguous or foreign");
+  }
+  return input.targets.filter((target) => {
+    const name = target.deviceName?.trim();
+    return name === exact.model || name?.startsWith(`${exact.model} -`) === true;
+  });
+}
+async function proveTargetDeviceAssociation(input, dependencies) {
+  return proveTargetDeviceAssociations({
+    platform: input.platform,
+    deviceId: input.deviceId,
+    targetDeviceNames: [input.targetDeviceName]
+  }, dependencies);
+}
+async function proveTargetDeviceAssociations(input, dependencies) {
+  const targetDeviceNames = new Set(input.targetDeviceNames.map((name) => name?.trim()).filter((name) => Boolean(name)));
+  if (targetDeviceNames.size === 0) {
+    throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: target does not expose device association");
+  }
+  if (input.platform === "ios") {
+    const output = await executeWithinBoundary(dependencies, "xcrun", [
+      "simctl",
+      "list",
+      "devices",
+      "--json"
+    ]);
+    const parsed = JSON.parse(output.stdout);
+    const matching2 = Object.values(parsed.devices ?? {}).flat().filter((device) => device.state === "Booted" && typeof device.name === "string" && targetDeviceNames.has(device.name));
+    if (matching2.length !== 1 || matching2[0]?.udid !== input.deviceId) {
+      throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: iOS target association is ambiguous or foreign");
+    }
+    return;
+  }
+  const devices = (await executeWithinBoundary(dependencies, "adb", ["devices"])).stdout.split("\n").map((line) => line.trim().split(/\s+/)).filter((parts) => parts[0] && parts[1] === "device").map((parts) => parts[0]);
+  const matching = [];
+  for (const serial of devices) {
+    const model = (await executeWithinBoundary(dependencies, "adb", [
+      "-s",
+      serial,
+      "shell",
+      "getprop",
+      "ro.product.model"
+    ])).stdout.trim();
+    if (model && [...targetDeviceNames].some((targetDeviceName) => targetDeviceName === model || targetDeviceName.startsWith(`${model} -`))) {
+      matching.push(serial);
+    }
+  }
+  if (matching.length !== 1 || matching[0] !== input.deviceId) {
+    throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: Android target association is ambiguous or foreign");
+  }
+}
+var init_target_device_authority = __esm({
+  "packages/rn-dev-agent-core/dist/session/target-device-authority.js"() {
+    "use strict";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/metro-origin.js
+function targetServedByPort(target, port) {
+  try {
+    const { hostname: hostname2, port: targetPort } = new URL(target.webSocketDebuggerUrl);
+    return (hostname2 === "127.0.0.1" || hostname2 === "localhost") && Number(targetPort) === port;
+  } catch {
+    return false;
+  }
+}
+async function findForeignMetroOrigin(query, dependencies) {
+  let siblingPorts;
+  try {
+    siblingPorts = (await dependencies.listSiblingMetroPorts(query.expectedMetroPort)).filter((port) => port !== query.expectedMetroPort);
+  } catch {
+    return null;
+  }
+  if (siblingPorts.length === 0)
+    return null;
+  const candidates = [];
+  await Promise.all(siblingPorts.map(async (port) => {
+    try {
+      const targets = filterValidTargets(await dependencies.fetchPortTargets(port)).filter((target) => targetMatchesBundleId(target, query.appId) && targetServedByPort(target, port) && (inferPlatformFromDeviceName(target.deviceName) ?? query.platform) === query.platform);
+      for (const target of targets)
+        candidates.push({ deviceName: target.deviceName, port });
+    } catch {
+    }
+  }));
+  if (candidates.length === 0)
+    return null;
+  let matches;
+  try {
+    matches = await dependencies.filterForExactDevice({
+      platform: query.platform,
+      deviceId: query.deviceId,
+      targets: candidates
+    });
+  } catch {
+    return null;
+  }
+  const match = matches.find((candidate) => candidate.deviceName?.trim());
+  return match?.deviceName ? { port: match.port, targetDeviceName: match.deviceName.trim() } : null;
+}
+function scanCacheKey(query) {
+  return JSON.stringify([query.platform, query.deviceId, query.appId, query.expectedMetroPort]);
+}
+function memoizeForeignMetroOriginScanner(scan, options = {}) {
+  const now = options.now ?? (() => Date.now());
+  const unprovableTtlMs = options.unprovableTtlMs ?? FOREIGN_METRO_SCAN_UNPROVABLE_TTL_MS;
+  const evidenceTtlMs = options.evidenceTtlMs ?? FOREIGN_METRO_SCAN_EVIDENCE_TTL_MS;
+  const capacity = options.capacity ?? FOREIGN_METRO_SCAN_CACHE_CAPACITY;
+  const settled = /* @__PURE__ */ new Map();
+  const inFlight2 = /* @__PURE__ */ new Map();
+  let epoch = 0;
+  const memoized = Object.assign((query) => {
+    const key = scanCacheKey(query);
+    const cached2 = settled.get(key);
+    if (cached2) {
+      if (cached2.expiresAt > now())
+        return Promise.resolve(cached2.value);
+      settled.delete(key);
+    }
+    const pending2 = inFlight2.get(key);
+    if (pending2)
+      return pending2;
+    const startedEpoch = epoch;
+    const started = scan(query).then((value) => {
+      if (startedEpoch !== epoch)
+        return value;
+      settled.set(key, {
+        value,
+        expiresAt: now() + (value ? evidenceTtlMs : unprovableTtlMs)
+      });
+      if (settled.size > capacity) {
+        const oldest = settled.keys().next();
+        if (!oldest.done)
+          settled.delete(oldest.value);
+      }
+      return value;
+    }).finally(() => {
+      inFlight2.delete(key);
+    });
+    inFlight2.set(key, started);
+    return started;
+  }, {
+    invalidate(query) {
+      epoch += 1;
+      if (query)
+        settled.delete(scanCacheKey(query));
+      else
+        settled.clear();
+    }
+  });
+  return memoized;
+}
+function createForeignMetroOriginScanner(authority, overrides = {}) {
+  const dependencies = {
+    listSiblingMetroPorts: overrides.listSiblingMetroPorts ?? ((expectedMetroPort) => discoverAllMetroPorts([...new Set(resolveDefaultPorts())].filter((port) => port !== expectedMetroPort), DISCOVERY_TIMEOUT_MS)),
+    fetchPortTargets: overrides.fetchPortTargets ?? ((port) => fetchTargets(port, DISCOVERY_TIMEOUT_MS)),
+    filterForExactDevice: overrides.filterForExactDevice ?? ((input) => filterTargetsForExactDevice(input, authority))
+  };
+  return memoizeForeignMetroOriginScanner((query) => {
+    let timer;
+    const deadline = new Promise((resolveDeadline) => {
+      timer = setTimeout(() => resolveDeadline(null), FOREIGN_METRO_SCAN_DEADLINE_MS);
+      timer.unref?.();
+    });
+    return Promise.race([findForeignMetroOrigin(query, dependencies), deadline]).finally(() => {
+      if (timer !== void 0)
+        clearTimeout(timer);
+    });
+  });
+}
+function provenMetroOriginMismatch(expectedMetroPort, context, evidence) {
+  const error2 = new SessionAuthorityError("METRO_ORIGIN_MISMATCH", `the bound ${context.platform} device ${context.deviceId} is running ${context.appId} served by Metro :${evidence.port}, not this session's Metro :${expectedMetroPort}`, void 0, {
+    expected: `Metro :${expectedMetroPort}`,
+    observed: `Metro :${evidence.port} (target on ${evidence.targetDeviceName})`,
+    nextAction: `Re-point the dev client to this session's Metro with rn_session action "pin_dev_client", then retry.`
+  });
+  error2.attachMeta({
+    [PROVEN_METRO_ORIGIN_META_KEY]: "proven-foreign-metro",
+    foreignMetroPort: evidence.port
+  });
+  return error2;
+}
+function recordedMetroOriginConflict(expectedMetroPort, boundMetroPort) {
+  const error2 = new SessionAuthorityError("METRO_ORIGIN_MISMATCH", `the device binding recorded Metro :${expectedMetroPort} as its expected origin, but the session's Metro authority is bound to :${boundMetroPort}`, void 0, {
+    expected: `Metro :${expectedMetroPort}`,
+    observed: `Metro :${boundMetroPort}`,
+    nextAction: 'Re-bind the device with rn_session action "bind_device" so its expected Metro origin matches the bound Metro.'
+  });
+  error2.attachMeta({ [PROVEN_METRO_ORIGIN_META_KEY]: "recorded-origin-conflict" });
+  return error2;
+}
+function isProvenMetroOriginMismatch(error2) {
+  return error2 instanceof SessionAuthorityError && error2.code === "METRO_ORIGIN_MISMATCH" && error2.getSupplementalMeta()[PROVEN_METRO_ORIGIN_META_KEY] !== void 0;
+}
+var FOREIGN_METRO_SCAN_DEADLINE_MS, FOREIGN_METRO_SCAN_UNPROVABLE_TTL_MS, FOREIGN_METRO_SCAN_EVIDENCE_TTL_MS, FOREIGN_METRO_SCAN_CACHE_CAPACITY, PROVEN_METRO_ORIGIN_META_KEY;
+var init_metro_origin = __esm({
+  "packages/rn-dev-agent-core/dist/session/metro-origin.js"() {
+    "use strict";
+    init_discovery();
+    init_registry();
+    init_target_device_authority();
+    FOREIGN_METRO_SCAN_DEADLINE_MS = 8e3;
+    FOREIGN_METRO_SCAN_UNPROVABLE_TTL_MS = 1e4;
+    FOREIGN_METRO_SCAN_EVIDENCE_TTL_MS = 2e3;
+    FOREIGN_METRO_SCAN_CACHE_CAPACITY = 32;
+    PROVEN_METRO_ORIGIN_META_KEY = "metroOriginPinning";
+  }
+});
+
 // packages/rn-dev-agent-core/dist/session/install-authority.js
 import { execFileSync as execFileSync7 } from "node:child_process";
 import { createHash as createHash7 } from "node:crypto";
@@ -30969,16 +31220,24 @@ function isOptionalBundleFailure(error2) {
   return code === "BUNDLE_HANDSHAKE_UNAVAILABLE" || code === "BUNDLE_IDENTITY_MISMATCH" || code === "CDP_TARGET_AUTHORITY_MISMATCH" || code === "TARGET_CLAIM_CONFLICT";
 }
 function isOptionalNativeOriginFailure(error2) {
+  if (isProvenMetroOriginMismatch(error2))
+    return false;
   const code = authorityErrorCode(error2);
   return code === "METRO_INSTANCE_CHANGED" || code === "METRO_AUTHORITY_MISMATCH" || code === "METRO_ORIGIN_MISMATCH";
 }
 async function probeOptionalNativeOrigin(dependencies, input) {
   if (!input.status.bindings.metro || !input.status.bindings.device)
     return [];
+  let metro = null;
   try {
-    const metro = await dependencies.probe({ ...input, axis: "M" });
+    metro = await dependencies.probe({ ...input, axis: "M" });
+  } catch (error2) {
+    if (!isOptionalNativeOriginFailure(error2))
+      throw error2;
+  }
+  try {
     const origin = await dependencies.probe({ ...input, axis: "A" });
-    return [metro, origin];
+    return metro ? [metro, origin] : [];
   } catch (error2) {
     if (isOptionalNativeOriginFailure(error2))
       return [];
@@ -32011,6 +32270,7 @@ var init_authority_gate = __esm({
     "use strict";
     init_utils();
     init_registry();
+    init_metro_origin();
     init_install_reissue();
     init_tool_profiles();
     optionalBundleAdmission = /* @__PURE__ */ Symbol("optionalBundleAdmission");
@@ -57074,97 +57334,7 @@ async function autoDismissDevMenuMeta(client2) {
 
 // packages/rn-dev-agent-core/dist/tools/reload.js
 init_maestro_validator();
-
-// packages/rn-dev-agent-core/dist/session/target-device-authority.js
-function executeWithinBoundary(dependencies, file, args) {
-  const operation = () => dependencies.execute(file, args);
-  return dependencies.awaitWithinBoundary ? dependencies.awaitWithinBoundary(operation) : operation();
-}
-async function filterTargetsForExactDevice(input, dependencies) {
-  if (input.platform === "ios") {
-    const output = await executeWithinBoundary(dependencies, "xcrun", [
-      "simctl",
-      "list",
-      "devices",
-      "--json"
-    ]);
-    const parsed = JSON.parse(output.stdout);
-    const booted = Object.values(parsed.devices ?? {}).flat().filter((device) => device.state === "Booted" && typeof device.udid === "string" && typeof device.name === "string");
-    const exact2 = booted.find((device) => device.udid === input.deviceId);
-    if (!exact2 || booted.filter((device) => device.name === exact2.name).length !== 1) {
-      throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: iOS target association is ambiguous or foreign");
-    }
-    return input.targets.filter((target) => target.deviceName?.trim() === exact2.name);
-  }
-  const devices = (await executeWithinBoundary(dependencies, "adb", ["devices"])).stdout.split("\n").map((line) => line.trim().split(/\s+/)).filter((parts) => parts[0] && parts[1] === "device").map((parts) => parts[0]);
-  if (!devices.includes(input.deviceId)) {
-    throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: Android target association is ambiguous or foreign");
-  }
-  const models = await Promise.all(devices.map(async (serial) => ({
-    serial,
-    model: (await executeWithinBoundary(dependencies, "adb", [
-      "-s",
-      serial,
-      "shell",
-      "getprop",
-      "ro.product.model"
-    ])).stdout.trim()
-  })));
-  const exact = models.find((entry) => entry.serial === input.deviceId);
-  if (!exact?.model || models.filter((entry) => entry.model === exact.model).length !== 1) {
-    throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: Android target association is ambiguous or foreign");
-  }
-  return input.targets.filter((target) => {
-    const name = target.deviceName?.trim();
-    return name === exact.model || name?.startsWith(`${exact.model} -`) === true;
-  });
-}
-async function proveTargetDeviceAssociation(input, dependencies) {
-  return proveTargetDeviceAssociations({
-    platform: input.platform,
-    deviceId: input.deviceId,
-    targetDeviceNames: [input.targetDeviceName]
-  }, dependencies);
-}
-async function proveTargetDeviceAssociations(input, dependencies) {
-  const targetDeviceNames = new Set(input.targetDeviceNames.map((name) => name?.trim()).filter((name) => Boolean(name)));
-  if (targetDeviceNames.size === 0) {
-    throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: target does not expose device association");
-  }
-  if (input.platform === "ios") {
-    const output = await executeWithinBoundary(dependencies, "xcrun", [
-      "simctl",
-      "list",
-      "devices",
-      "--json"
-    ]);
-    const parsed = JSON.parse(output.stdout);
-    const matching2 = Object.values(parsed.devices ?? {}).flat().filter((device) => device.state === "Booted" && typeof device.name === "string" && targetDeviceNames.has(device.name));
-    if (matching2.length !== 1 || matching2[0]?.udid !== input.deviceId) {
-      throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: iOS target association is ambiguous or foreign");
-    }
-    return;
-  }
-  const devices = (await executeWithinBoundary(dependencies, "adb", ["devices"])).stdout.split("\n").map((line) => line.trim().split(/\s+/)).filter((parts) => parts[0] && parts[1] === "device").map((parts) => parts[0]);
-  const matching = [];
-  for (const serial of devices) {
-    const model = (await executeWithinBoundary(dependencies, "adb", [
-      "-s",
-      serial,
-      "shell",
-      "getprop",
-      "ro.product.model"
-    ])).stdout.trim();
-    if (model && [...targetDeviceNames].some((targetDeviceName) => targetDeviceName === model || targetDeviceName.startsWith(`${model} -`))) {
-      matching.push(serial);
-    }
-  }
-  if (matching.length !== 1 || matching[0] !== input.deviceId) {
-    throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: Android target association is ambiguous or foreign");
-  }
-}
-
-// packages/rn-dev-agent-core/dist/tools/reload.js
+init_target_device_authority();
 var defaultExecFile2 = promisify15(execFileCb12);
 var sessionReloadCount = 0;
 var SOFT_RECONNECT_DEADLINE_MS = 3e4;
@@ -67405,6 +67575,11 @@ function createSessionHandler(runtime, dependencies = {}) {
         if (!input.buildReceipt && currentInstall && (currentInstall.platform !== platform || currentInstall.deviceId !== deviceId || currentInstall.appId !== appId)) {
           throw new SessionAuthorityError("DEVICE_RECEIPT_INCOMPATIBLE", "cannot replace exact-device authority while an incompatible install receipt is bound");
         }
+        const expectedMetroPort = status2.bindings.metroPort;
+        if (typeof expectedMetroPort !== "number" || !Number.isSafeInteger(expectedMetroPort) || expectedMetroPort < 1 || expectedMetroPort > 65535) {
+          throw new SessionAuthorityError("METRO_ORIGIN_MISMATCH", "device binding cannot be pinned to a Metro origin: the session has no valid allocated Metro port");
+        }
+        const expectedMetroOrigin = { expectedMetroPort };
         if (!input.buildReceipt) {
           const invalidatesBundle = Boolean(status2.bindings.bundle);
           await withInlineStaleDeviceCleanup(registry2, session2, dependencies, { platform, deviceId, appId, confirmed: input.confirmed }, requireWorkerInstance, requireExactDevice, () => registry2.replaceDeviceAuthority(session2, {
@@ -67413,6 +67588,7 @@ function createSessionHandler(runtime, dependencies = {}) {
               platform,
               deviceId,
               appId,
+              ...expectedMetroOrigin,
               ...input.devClientUrl ? { devClientUrl: input.devClientUrl } : {}
             }
           }));
@@ -67452,7 +67628,7 @@ function createSessionHandler(runtime, dependencies = {}) {
           requireInstallGeneration();
         }, () => registry2.replaceDeviceAuthority(session2, {
           resource: { type: "device", key: `${platform}:${deviceId}` },
-          device: { platform, deviceId, appId },
+          device: { platform, deviceId, appId, ...expectedMetroOrigin },
           install: { ...receipt2 }
         }));
         if (status2.bindings.bundle)
@@ -80063,6 +80239,7 @@ init_resolve_ios_app_file();
 init_maestro_validator();
 import { execFile as execFileCb20 } from "node:child_process";
 import { promisify as promisify26 } from "node:util";
+init_target_device_authority();
 var defaultExecFile3 = promisify26(execFileCb20);
 var SIMULATOR_UDID_RE = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
 function safeSimctlTarget(deviceId) {
@@ -84028,6 +84205,7 @@ init_metro_cwd();
 init_install_authority();
 import { execFileSync as execFileSync18 } from "node:child_process";
 import { createHash as createHash20 } from "node:crypto";
+init_metro_origin();
 init_metro_binding();
 init_process_birth();
 init_registry();
@@ -84769,6 +84947,7 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
 }
 
 // packages/rn-dev-agent-core/dist/session/local-authority-probe.js
+init_target_device_authority();
 init_tool_profiles();
 function identity(value) {
   return createHash20("sha256").update(JSON.stringify(value)).digest("hex");
@@ -84922,11 +85101,21 @@ function createLocalAuthorityProbe(dependencies) {
       if (!Number.isSafeInteger(port) || platform !== "ios" && platform !== "android" || !deviceId || !appId) {
         throw new SessionAuthorityError("METRO_ORIGIN_MISMATCH", "native app origin authority is incomplete");
       }
+      const expectedMetroPort = Number(device.expectedMetroPort ?? port);
+      if (Number.isSafeInteger(expectedMetroPort) && expectedMetroPort !== port) {
+        throw recordedMetroOriginConflict(expectedMetroPort, port);
+      }
+      const refuseWithForeignOriginEvidence = async (unprovable) => {
+        const evidence = await dependencies.findForeignMetroOrigin?.({ expectedMetroPort: port, platform, deviceId, appId }).catch(() => null);
+        if (evidence)
+          throw provenMetroOriginMismatch(port, { platform, deviceId, appId }, evidence);
+        throw unprovable;
+      };
       let targets;
       try {
         targets = filterValidTargets(await fetchTargets2(port)).filter((target) => targetMatchesBundleId(target, appId));
       } catch {
-        throw new SessionAuthorityError("METRO_ORIGIN_MISMATCH", "authority-bound Metro targets could not be inspected");
+        return refuseWithForeignOriginEvidence(new SessionAuthorityError("METRO_ORIGIN_MISMATCH", "authority-bound Metro targets could not be inspected"));
       }
       try {
         await proveTargetDevices({
@@ -84935,7 +85124,7 @@ function createLocalAuthorityProbe(dependencies) {
           targetDeviceNames: targets.map(({ deviceName }) => deviceName)
         });
       } catch {
-        throw new SessionAuthorityError("METRO_ORIGIN_MISMATCH", "the claimed device app is not attached to the authority-bound Metro");
+        return refuseWithForeignOriginEvidence(new SessionAuthorityError("METRO_ORIGIN_MISMATCH", "the claimed device app is not attached to the authority-bound Metro"));
       }
       return {
         axis,
@@ -85056,6 +85245,8 @@ function createLocalAuthorityProbe(dependencies) {
 }
 
 // packages/rn-dev-agent-core/dist/index.js
+init_metro_origin();
+init_discovery();
 init_tool_profiles();
 init_secure_state_file();
 
@@ -85147,6 +85338,7 @@ function verifyManagedManifestLaunchAsset(response, endpoint2) {
 }
 
 // packages/rn-dev-agent-core/dist/session/dev-client-authority.js
+init_metro_origin();
 async function reconcileAuthoritativeBundle(status, dependencies) {
   const prior = status.bindings.bundle;
   if (!prior) {
@@ -85248,12 +85440,27 @@ async function pinExactDevClient(input, dependencies) {
   } else {
     await dependencies.launchExactApp(input.platform, input.deviceId, input.appId);
   }
-  const connected = await dependencies.connectExact({
-    metroPort: input.metroPort,
-    platform: input.platform,
-    appId: input.appId,
-    deviceId: input.deviceId
-  });
+  let connectedResult;
+  try {
+    connectedResult = await dependencies.connectExact({
+      metroPort: input.metroPort,
+      platform: input.platform,
+      appId: input.appId,
+      deviceId: input.deviceId
+    });
+  } catch (error2) {
+    const evidence = await dependencies.detectForeignMetroOrigin?.({
+      expectedMetroPort: input.metroPort,
+      platform: input.platform,
+      deviceId: input.deviceId,
+      appId: input.appId
+    }).catch(() => null);
+    if (evidence) {
+      throw provenMetroOriginMismatch(input.metroPort, { platform: input.platform, deviceId: input.deviceId, appId: input.appId }, evidence);
+    }
+    throw error2;
+  }
+  const connected = connectedResult;
   try {
     if (connected.deviceId !== input.deviceId) {
       throw new Error("CDP_TARGET_AUTHORITY_MISMATCH: selected target is not proven on the claimed device");
@@ -85312,7 +85519,11 @@ function createRegisteredConnectHandler(runtime, pinBoundSession) {
   };
 }
 
+// packages/rn-dev-agent-core/dist/index.js
+init_target_device_authority();
+
 // packages/rn-dev-agent-core/dist/session/connect-exact-session-target.js
+init_target_device_authority();
 var IOS_EXACT_TARGET_READINESS_TIMEOUT_MS = 12e4;
 var ANDROID_EXACT_TARGET_READINESS_TIMEOUT_MS = 12e4;
 function exactSessionTargetReadinessTimeoutMs(platform) {
@@ -85845,10 +86056,22 @@ setSnapshotAuthorityProvider({
     }
   }
 });
+var foreignMetroOriginScanner = createForeignMetroOriginScanner({ execute: (file, args) => execFileP(file, args, { timeout: 5e3 }) }, {
+  listSiblingMetroPorts: async (expectedMetroPort) => {
+    let allocated = [];
+    try {
+      allocated = authorityRuntime.requireAvailable().registry.allocatedServicePorts("metro");
+    } catch {
+    }
+    const candidates = [.../* @__PURE__ */ new Set([...allocated, ...resolveDefaultPorts()])].filter((port) => port !== expectedMetroPort);
+    return discoverAllMetroPorts(candidates, DISCOVERY_TIMEOUT_MS);
+  }
+});
 var createRuntimeAuthorityProbe = (resolveClient) => createLocalAuthorityProbe({
   runtime: authorityRuntime,
   getClient: resolveClient,
   getSecret: () => process.env.RN_DEV_AGENT_SESSION_SECRET_PATH ? readJsonStateFile(process.env.RN_DEV_AGENT_SESSION_SECRET_PATH) : null,
+  findForeignMetroOrigin: foreignMetroOriginScanner,
   proofActive: (runId) => strictProofMonitor.ownsRun(runId)
 });
 var localAuthorityProbe = createRuntimeAuthorityProbe(getClient);
@@ -86072,6 +86295,7 @@ async function pinSessionDevClient(status, options, commitBundle) {
   } else if (suspendedPolicy) {
     current.clearAuthoritativeSessionPolicy();
   }
+  foreignMetroOriginScanner.invalidate();
   try {
     const bundle = await pinExactDevClient({
       sessionId: status.sessionId,
@@ -86132,6 +86356,7 @@ async function pinSessionDevClient(status, options, commitBundle) {
       connectExact: async ({ metroPort, platform, appId, deviceId }) => {
         return connectExactSessionTarget2({ metroPort, platform, appId, deviceId }, exactSessionTargetReadinessTimeoutMs(platform));
       },
+      detectForeignMetroOrigin: foreignMetroOriginScanner,
       readMarker: async (connection) => {
         const markerClient = "client" in connection ? connection.client : getClient();
         const result = await markerClient.evaluate("JSON.stringify(globalThis.__RN_DEV_AGENT_AUTHORITY__ ?? null)");
@@ -86165,6 +86390,7 @@ async function pinSessionDevClient(status, options, commitBundle) {
       }
     });
     getClient().setAuthoritativeSessionPolicy(createAuthoritativeSessionPolicy(status));
+    foreignMetroOriginScanner.invalidate();
     return bundle;
   } catch (error2) {
     if (suspendedPolicy && getClient() === current) {

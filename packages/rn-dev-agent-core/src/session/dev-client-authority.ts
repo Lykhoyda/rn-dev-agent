@@ -3,6 +3,7 @@ import type { ManagedManifestResponse } from './expo-manifest.js';
 import { verifyManagedManifestLaunchAsset } from './expo-manifest.js';
 import type { MetroAuthorityBinding, MetroAuthorityMarker } from './metro-authority.js';
 import { verifyMetroAuthorityMarker } from './metro-authority.js';
+import { provenMetroOriginMismatch, type ForeignMetroOriginScanner } from './metro-origin.js';
 import type { SessionStatus } from './registry.js';
 import type { ToolErrorCode } from '../types.js';
 import type { ExactSessionTargetConnection } from './connect-exact-session-target.js';
@@ -41,6 +42,7 @@ interface PinDevClientDependencies {
     metroPort: number;
     platform: 'ios' | 'android';
   }): Promise<ManagedManifestResponse>;
+  detectForeignMetroOrigin?: ForeignMetroOriginScanner;
 }
 
 export interface BundleAuthorityBinding extends MetroAuthorityBinding, Record<string, unknown> {
@@ -232,12 +234,35 @@ export async function pinExactDevClient(
   } else {
     await dependencies.launchExactApp(input.platform, input.deviceId, input.appId);
   }
-  const connected = await dependencies.connectExact({
-    metroPort: input.metroPort,
-    platform: input.platform,
-    appId: input.appId,
-    deviceId: input.deviceId,
-  });
+  let connectedResult: ExactSessionTargetConnection | ExactConnectionSummary;
+  try {
+    connectedResult = await dependencies.connectExact({
+      metroPort: input.metroPort,
+      platform: input.platform,
+      appId: input.appId,
+      deviceId: input.deviceId,
+    });
+  } catch (error) {
+    // GH #630: refuse with the exact hazard when the exact device's app is
+    // provably served by a sibling Metro (dev-client fallback).
+    const evidence = await dependencies
+      .detectForeignMetroOrigin?.({
+        expectedMetroPort: input.metroPort,
+        platform: input.platform,
+        deviceId: input.deviceId,
+        appId: input.appId,
+      })
+      .catch(() => null);
+    if (evidence) {
+      throw provenMetroOriginMismatch(
+        input.metroPort,
+        { platform: input.platform, deviceId: input.deviceId, appId: input.appId },
+        evidence,
+      );
+    }
+    throw error;
+  }
+  const connected = connectedResult;
   try {
     if (connected.deviceId !== input.deviceId) {
       throw new Error(

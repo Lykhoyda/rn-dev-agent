@@ -210,6 +210,12 @@ import {
   type StagedRuntimeRelaunch,
 } from './session/authority-gate.js';
 import { createLocalAuthorityProbe } from './session/local-authority-probe.js';
+import { createForeignMetroOriginScanner } from './session/metro-origin.js';
+import {
+  DISCOVERY_TIMEOUT_MS,
+  discoverAllMetroPorts,
+  resolveDefaultPorts,
+} from './cdp/discovery.js';
 import { assertAuthorityProfilesExhaustive } from './session/tool-profiles.js';
 import { readJsonStateFile } from './util/secure-state-file.js';
 import {
@@ -560,6 +566,23 @@ setSnapshotAuthorityProvider({
     }
   },
 });
+const foreignMetroOriginScanner = createForeignMetroOriginScanner(
+  { execute: (file, args) => execFileP(file, args, { timeout: 5_000 }) },
+  {
+    listSiblingMetroPorts: async (expectedMetroPort) => {
+      let allocated: number[] = [];
+      try {
+        allocated = authorityRuntime.requireAvailable().registry.allocatedServicePorts('metro');
+      } catch {
+        // Registry unavailable: fall back to the default discovery ports only.
+      }
+      const candidates = [...new Set([...allocated, ...resolveDefaultPorts()])].filter(
+        (port) => port !== expectedMetroPort,
+      );
+      return discoverAllMetroPorts(candidates, DISCOVERY_TIMEOUT_MS);
+    },
+  },
+);
 const createRuntimeAuthorityProbe = (resolveClient: () => CDPClient) =>
   createLocalAuthorityProbe({
     runtime: authorityRuntime,
@@ -570,6 +593,7 @@ const createRuntimeAuthorityProbe = (resolveClient: () => CDPClient) =>
             process.env.RN_DEV_AGENT_SESSION_SECRET_PATH,
           )
         : null,
+    findForeignMetroOrigin: foreignMetroOriginScanner,
     proofActive: (runId) => strictProofMonitor.ownsRun(runId),
   });
 const localAuthorityProbe = createRuntimeAuthorityProbe(getClient);
@@ -917,6 +941,7 @@ async function pinSessionDevClient(
   } else if (suspendedPolicy) {
     current.clearAuthoritativeSessionPolicy();
   }
+  foreignMetroOriginScanner.invalidate();
   try {
     const bundle = await pinExactDevClient(
       {
@@ -984,6 +1009,7 @@ async function pinSessionDevClient(
             exactSessionTargetReadinessTimeoutMs(platform),
           );
         },
+        detectForeignMetroOrigin: foreignMetroOriginScanner,
         readMarker: async (connection) => {
           const markerClient = 'client' in connection ? connection.client : getClient();
           const result = await markerClient.evaluate(
@@ -1028,6 +1054,7 @@ async function pinSessionDevClient(
       },
     );
     getClient().setAuthoritativeSessionPolicy(createAuthoritativeSessionPolicy(status));
+    foreignMetroOriginScanner.invalidate();
     return bundle;
   } catch (error) {
     if (suspendedPolicy && getClient() === current) {

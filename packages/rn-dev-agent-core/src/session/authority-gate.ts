@@ -5,6 +5,7 @@ import type { ToolErrorCode } from '../types.js';
 import { failResult, type ToolResult } from '../utils.js';
 import type { OperationRef, SessionRef, SessionRegistry, SessionStatus } from './registry.js';
 import { authorityErrorMeta, SessionAuthorityError, shortAuthorityIdentity } from './registry.js';
+import { isProvenMetroOriginMismatch } from './metro-origin.js';
 import { reissueInstallBinding } from './install-reissue.js';
 import type { WorkerAuthorityStatus } from './runtime.js';
 import {
@@ -673,7 +674,10 @@ function isOptionalBundleFailure(error: unknown): boolean {
   );
 }
 
+// GH #630: unavailable managed-origin evidence stays optional for raw native
+// control (GH #677), but a PROVEN foreign-Metro origin must refuse fail-closed.
 function isOptionalNativeOriginFailure(error: unknown): boolean {
+  if (isProvenMetroOriginMismatch(error)) return false;
   const code = authorityErrorCode(error);
   return (
     code === 'METRO_INSTANCE_CHANGED' ||
@@ -687,10 +691,15 @@ async function probeOptionalNativeOrigin(
   input: Omit<AuthorityProbeInput, 'axis'>,
 ): Promise<AuthorityObservation[]> {
   if (!input.status.bindings.metro || !input.status.bindings.device) return [];
+  let metro: AuthorityObservation | null = null;
   try {
-    const metro = await dependencies.probe({ ...input, axis: 'M' });
+    metro = await dependencies.probe({ ...input, axis: 'M' });
+  } catch (error) {
+    if (!isOptionalNativeOriginFailure(error)) throw error;
+  }
+  try {
     const origin = await dependencies.probe({ ...input, axis: 'A' });
-    return [metro, origin];
+    return metro ? [metro, origin] : [];
   } catch (error) {
     if (isOptionalNativeOriginFailure(error)) return [];
     throw error;

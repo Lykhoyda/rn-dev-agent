@@ -4,6 +4,7 @@ import { filterValidTargets, targetMatchesBundleId } from '../cdp/discovery.js';
 import { cwdForPort, pathIsWithinRoot } from '../cdp/metro-cwd.js';
 import { captureInstalledArtifact, captureInstallGeneration, verifyInstalledArtifact, } from './install-authority.js';
 import { verifyMetroAuthorityMarker } from './metro-authority.js';
+import { provenMetroOriginMismatch, recordedMetroOriginConflict, } from './metro-origin.js';
 import { metroListenerPid } from './metro-binding.js';
 import { inspectSessionOwner } from './process-owner.js';
 import { readProcessBirth } from './process-birth.js';
@@ -194,12 +195,24 @@ export function createLocalAuthorityProbe(dependencies) {
                 !appId) {
                 throw new SessionAuthorityError('METRO_ORIGIN_MISMATCH', 'native app origin authority is incomplete');
             }
+            const expectedMetroPort = Number(device.expectedMetroPort ?? port);
+            if (Number.isSafeInteger(expectedMetroPort) && expectedMetroPort !== port) {
+                throw recordedMetroOriginConflict(expectedMetroPort, port);
+            }
+            const refuseWithForeignOriginEvidence = async (unprovable) => {
+                const evidence = await dependencies
+                    .findForeignMetroOrigin?.({ expectedMetroPort: port, platform, deviceId, appId })
+                    .catch(() => null);
+                if (evidence)
+                    throw provenMetroOriginMismatch(port, { platform, deviceId, appId }, evidence);
+                throw unprovable;
+            };
             let targets;
             try {
                 targets = filterValidTargets(await fetchTargets(port)).filter((target) => targetMatchesBundleId(target, appId));
             }
             catch {
-                throw new SessionAuthorityError('METRO_ORIGIN_MISMATCH', 'authority-bound Metro targets could not be inspected');
+                return refuseWithForeignOriginEvidence(new SessionAuthorityError('METRO_ORIGIN_MISMATCH', 'authority-bound Metro targets could not be inspected'));
             }
             try {
                 await proveTargetDevices({
@@ -209,7 +222,7 @@ export function createLocalAuthorityProbe(dependencies) {
                 });
             }
             catch {
-                throw new SessionAuthorityError('METRO_ORIGIN_MISMATCH', 'the claimed device app is not attached to the authority-bound Metro');
+                return refuseWithForeignOriginEvidence(new SessionAuthorityError('METRO_ORIGIN_MISMATCH', 'the claimed device app is not attached to the authority-bound Metro'));
             }
             return {
                 axis,

@@ -4800,6 +4800,15 @@ export class SessionRegistry {
       : null;
   }
 
+  // GH #630: every allocated port for a service across all worktrees, own
+  // session included — foreign-origin scanners must exclude their own port.
+  allocatedServicePorts(service: string): number[] {
+    const rows = this.#database
+      .prepare('SELECT port, worktree_key FROM allocations WHERE service = ?')
+      .all(service) as unknown as AllocationRow[];
+    return rows.map((row) => row.port).filter((port) => Number.isSafeInteger(port));
+  }
+
   allocatePort(input: {
     service: string;
     worktreeKey: string;

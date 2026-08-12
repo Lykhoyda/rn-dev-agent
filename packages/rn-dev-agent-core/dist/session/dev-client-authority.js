@@ -1,6 +1,7 @@
 import { managedMetroProxyUrl } from './build-adapter.js';
 import { verifyManagedManifestLaunchAsset } from './expo-manifest.js';
 import { verifyMetroAuthorityMarker } from './metro-authority.js';
+import { provenMetroOriginMismatch } from './metro-origin.js';
 export async function reconcileAuthoritativeBundle(status, dependencies) {
     const prior = status.bindings.bundle;
     if (!prior) {
@@ -116,12 +117,32 @@ export async function pinExactDevClient(input, dependencies) {
     else {
         await dependencies.launchExactApp(input.platform, input.deviceId, input.appId);
     }
-    const connected = await dependencies.connectExact({
-        metroPort: input.metroPort,
-        platform: input.platform,
-        appId: input.appId,
-        deviceId: input.deviceId,
-    });
+    let connectedResult;
+    try {
+        connectedResult = await dependencies.connectExact({
+            metroPort: input.metroPort,
+            platform: input.platform,
+            appId: input.appId,
+            deviceId: input.deviceId,
+        });
+    }
+    catch (error) {
+        // GH #630: refuse with the exact hazard when the exact device's app is
+        // provably served by a sibling Metro (dev-client fallback).
+        const evidence = await dependencies
+            .detectForeignMetroOrigin?.({
+            expectedMetroPort: input.metroPort,
+            platform: input.platform,
+            deviceId: input.deviceId,
+            appId: input.appId,
+        })
+            .catch(() => null);
+        if (evidence) {
+            throw provenMetroOriginMismatch(input.metroPort, { platform: input.platform, deviceId: input.deviceId, appId: input.appId }, evidence);
+        }
+        throw error;
+    }
+    const connected = connectedResult;
     try {
         if (connected.deviceId !== input.deviceId) {
             throw new Error('CDP_TARGET_AUTHORITY_MISMATCH: selected target is not proven on the claimed device');

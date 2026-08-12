@@ -870,7 +870,7 @@ test('device binding rejects a nonexistent exact device before claiming it', asy
 });
 
 test('device binding preserves the registry foreign-claim refusal', async () => {
-  const status = { sessionId: 'session-a', bindings: {} };
+  const status = { sessionId: 'session-a', bindings: { metroPort: 8081 } };
   const handler = createSessionHandler(
     {
       status: () => ({ available: true, ...status }),
@@ -916,6 +916,7 @@ test('same-session cross-platform rebind accepts an existing unclaimed device wi
     leaseUntilMs: 100,
     source: { kind: 'git' },
     bindings: {
+      metroPort: 8081,
       device: { platform: 'ios', deviceId: 'SIM-1', appId: 'dev.example' },
       install: null,
     },
