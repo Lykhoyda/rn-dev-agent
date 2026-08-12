@@ -36,6 +36,28 @@ export const SIMCTL_HINT = `install idb for smoother mirroring (${IDB_INSTALL_CO
 // same defect as a hint that cannot be followed.
 export const SIMCTL_BROKEN_IDB_HINT = 'idb is installed but did not respond successfully — most likely fb-idb 1.1.7 under Python 3.14, which removed the asyncio.get_event_loop() it needs. ' +
     'Reinstall it under a supported interpreter: pipx install --python python3.13 --force fb-idb';
+export const IDB_NO_FIRST_FRAME_REASON = 'idb video-stream produced no first frame';
+export const IDB_MALFORMED_FRAME_REASON = 'idb video-stream produced a malformed frame';
+export const IDB_STREAM_UNHEALTHY_HINT = 'idb video-stream produced no usable frame — using simctl screenshot loop';
+// The banner must describe what actually happened: a stream that ran healthily
+// for minutes and then hit the restart gate is not "no usable frame".
+export function idbDemotionHint(cause) {
+    if (cause?.hint)
+        return cause.hint;
+    if (cause?.reason)
+        return `${cause.reason} — using simctl screenshot loop`;
+    return IDB_STREAM_UNHEALTHY_HINT;
+}
+// Alive child ≠ ready stream. Technique considered from
+// https://github.com/mobile-dev-inc/maestro @ e08f33ac (not copied):
+// `DeviceStream.awaitStreamReady` in
+// maestro-cli/src/main/java/maestro/cli/mcp/viewer/McpViewerServer.kt waits
+// ≤30s for a `stream_ready ` line, else typed error + process cleanup;
+// maestro-cli/mcp-viewer/src/main.tsx mounts <img> only when
+// status==="streaming" && streamUrl. Archived mobile-dev-inc/maestro-mcp is
+// historical CLI wrapping only — no live mirror. We bound JPEG SOI/EOI on the
+// existing idb pipe and demote to simctl.
+export const DEFAULT_IDB_FIRST_FRAME_TIMEOUT_MS = 30_000;
 const IDB_HINT = `idb not found — ${IDB_INSTALL_COMMAND}`;
 const FFMPEG_HINT = 'ffmpeg not found — run scripts/ensure-ffmpeg.sh or brew install ffmpeg';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -76,15 +98,18 @@ export class IosIdbSource {
     nominalFps;
     active = false;
     proc = null;
+    firstFrameTimer = null;
     spawnFn;
     gate;
     restartDelayMs;
+    firstFrameTimeoutMs;
     constructor(udid, fps, opts = {}) {
         this.udid = udid;
         this.nominalFps = fps;
         this.spawnFn = opts.spawnFn ?? defaultSpawn;
         this.gate = new RestartGate(3, 10_000, opts.now ?? Date.now);
         this.restartDelayMs = opts.restartDelayMs ?? 300;
+        this.firstFrameTimeoutMs = opts.firstFrameTimeoutMs ?? DEFAULT_IDB_FIRST_FRAME_TIMEOUT_MS;
     }
     start(sink) {
         this.active = true;
@@ -92,6 +117,7 @@ export class IosIdbSource {
     }
     spawnOnce(sink) {
         const extractor = new JpegFrameExtractor();
+        let gotFrame = false;
         const proc = this.spawnFn('idb', [
             'video-stream',
             '--udid',
@@ -107,25 +133,33 @@ export class IosIdbSource {
         // Undrained stderr can fill the 64KB pipe and block the child mid-write —
         // resume() discards it.
         proc.stderr?.resume();
+        this.armFirstFrameTimer(sink);
         proc.stdout.on('data', (chunk) => {
             if (!this.active)
                 return;
             for (const frame of extractor.push(chunk)) {
+                gotFrame = true;
+                this.clearFirstFrameTimer();
                 if (this.active)
                     sink.onFrame(frame);
+            }
+            // Alive + oversized SOI without EOI is not a healthy stream. Fail before
+            // the first-frame timer so a garbage producer cannot occupy the attach.
+            if (this.active && extractor.overflowed && !gotFrame) {
+                this.fail(sink, IDB_MALFORMED_FRAME_REASON);
             }
         });
         proc.on('error', (err) => {
             if (!this.active)
                 return;
             if (isEnoent(err)) {
-                this.active = false;
-                sink.onExit({ reason: 'idb not found', hint: IDB_HINT });
+                this.fail(sink, 'idb not found', IDB_HINT);
             }
         });
         proc.on('close', () => {
             if (!this.active)
                 return;
+            this.clearFirstFrameTimer();
             if (this.gate.record()) {
                 scheduleAfter(() => {
                     if (this.active)
@@ -133,13 +167,36 @@ export class IosIdbSource {
                 }, this.restartDelayMs);
             }
             else {
-                this.active = false;
-                sink.onExit({ reason: 'idb video-stream keeps exiting' });
+                this.fail(sink, 'idb video-stream keeps exiting');
             }
         });
     }
+    armFirstFrameTimer(sink) {
+        this.clearFirstFrameTimer();
+        this.firstFrameTimer = setTimeout(() => {
+            this.firstFrameTimer = null;
+            if (!this.active)
+                return;
+            this.fail(sink, IDB_NO_FIRST_FRAME_REASON, IDB_STREAM_UNHEALTHY_HINT);
+        }, this.firstFrameTimeoutMs);
+    }
+    fail(sink, reason, hint) {
+        if (!this.active)
+            return;
+        this.active = false;
+        this.clearFirstFrameTimer();
+        this.proc?.kill();
+        sink.onExit({ reason, hint });
+    }
+    clearFirstFrameTimer() {
+        if (this.firstFrameTimer) {
+            clearTimeout(this.firstFrameTimer);
+            this.firstFrameTimer = null;
+        }
+    }
     stop() {
         this.active = false;
+        this.clearFirstFrameTimer();
         this.proc?.kill();
     }
 }
@@ -148,6 +205,7 @@ export class IosSimctlLoopSource {
     pipeline = 'simctl';
     nominalFps = 6;
     degradedHint;
+    failureHint;
     active = false;
     inFlight = null;
     execJpeg;
@@ -164,6 +222,7 @@ export class IosSimctlLoopSource {
         this.tmpPath =
             opts.tmpPath ?? (() => join(tmpdir(), 'rn-mirror-simctl-' + process.pid + '.jpg'));
         this.degradedHint = opts.degradedHint ?? SIMCTL_HINT;
+        this.failureHint = opts.failureHint;
     }
     start(sink) {
         this.active = true;
@@ -188,7 +247,7 @@ export class IosSimctlLoopSource {
                     break;
                 if (!this.gate.record()) {
                     if (this.active)
-                        sink.onExit({ reason: 'simctl screenshot failing', hint: this.degradedHint });
+                        sink.onExit({ reason: 'simctl screenshot failing', hint: this.failureHint });
                     this.active = false;
                     break;
                 }
@@ -348,16 +407,21 @@ export class AndroidScreenrecordSource {
         this.ffmpeg?.kill();
     }
 }
-export async function createMirrorSource(target, fps) {
+export async function createMirrorSource(target, fps, opts = {}) {
     if (target.platform === 'android') {
         return new AndroidScreenrecordSource(target.deviceId);
     }
     const state = await probeIdbClient();
-    if (state === 'ready')
-        return new IosIdbSource(target.deviceId, fps);
+    if (state === 'ready') {
+        return new IosIdbSource(target.deviceId, fps, {
+            firstFrameTimeoutMs: opts.firstFrameTimeoutMs,
+        });
+    }
     // GH#578: a crashing client is NOT "idb missing" — telling the developer to
     // install what they already installed is the loop this fix removes.
+    const idbHint = state === 'broken' ? SIMCTL_BROKEN_IDB_HINT : SIMCTL_HINT;
     return new IosSimctlLoopSource(target.deviceId, {
-        degradedHint: state === 'broken' ? SIMCTL_BROKEN_IDB_HINT : SIMCTL_HINT,
+        degradedHint: idbHint,
+        failureHint: idbHint,
     });
 }

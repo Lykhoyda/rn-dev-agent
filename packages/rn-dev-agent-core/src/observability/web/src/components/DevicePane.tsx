@@ -97,7 +97,9 @@ export function DevicePane({
       ? `mirror: ${mirror.pipeline}${mirror.fps ? ` ~${mirror.fps}fps` : ''}`
       : mirror?.status === 'error'
         ? `mirror off: ${mirror.reason ?? 'error'}`
-        : null;
+        : mirror?.status === 'starting'
+          ? 'mirror: connecting…'
+          : null;
 
   // A hint on a *streaming* status is the backend saying the pipeline works
   // but a better one is available (simctl fallback → install idb); that is

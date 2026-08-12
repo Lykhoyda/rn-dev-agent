@@ -11404,12 +11404,35 @@ var init_logger = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/observability/mirror/jpeg-stream.js
+var SOI, EOI;
+var init_jpeg_stream = __esm({
+  "packages/rn-dev-agent-core/dist/observability/mirror/jpeg-stream.js"() {
+    "use strict";
+    SOI = Buffer.from([255, 216]);
+    EOI = Buffer.from([255, 217]);
+  }
+});
+
+// packages/rn-dev-agent-core/dist/observability/mirror/sources.js
+var IDB_INSTALL_COMMAND, SIMCTL_HINT, IDB_HINT;
+var init_sources = __esm({
+  "packages/rn-dev-agent-core/dist/observability/mirror/sources.js"() {
+    "use strict";
+    init_jpeg_stream();
+    IDB_INSTALL_COMMAND = "brew install python@3.13 && brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install --python python3.13 --force fb-idb";
+    SIMCTL_HINT = `install idb for smoother mirroring (${IDB_INSTALL_COMMAND})`;
+    IDB_HINT = `idb not found \u2014 ${IDB_INSTALL_COMMAND}`;
+  }
+});
+
 // packages/rn-dev-agent-core/dist/project-config.js
 var init_project_config = __esm({
   "packages/rn-dev-agent-core/dist/project-config.js"() {
     "use strict";
     init_storage();
     init_logger();
+    init_sources();
   }
 });
 

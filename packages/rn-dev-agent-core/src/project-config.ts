@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { findProjectRoot } from './nav-graph/storage.js';
 import { logger } from './logger.js';
+import { DEFAULT_IDB_FIRST_FRAME_TIMEOUT_MS } from './observability/mirror/sources.js';
 
 interface AppConfig {
   expo?: {
@@ -93,7 +94,11 @@ export function readExpoSlug(): string | null {
 
 export interface RnAgentConfig {
   cdp?: { autoConnect?: boolean };
-  observe?: { autoStart?: boolean; port?: number; mirror?: { enabled?: boolean; fps?: number } };
+  observe?: {
+    autoStart?: boolean;
+    port?: number;
+    mirror?: { enabled?: boolean; fps?: number; firstFrameTimeoutMs?: number };
+  };
 }
 
 let warnedBadConfig = false;
@@ -200,10 +205,13 @@ export function resolveObservePort(
 export const DEFAULT_MIRROR_FPS = 20;
 const MIRROR_FPS_MIN = 5;
 const MIRROR_FPS_MAX = 30;
+const MIRROR_FIRST_FRAME_TIMEOUT_MIN_MS = 1_000;
+const MIRROR_FIRST_FRAME_TIMEOUT_MAX_MS = 120_000;
 
 export interface MirrorConfigResolution {
   enabled: boolean;
   fps: number;
+  firstFrameTimeoutMs: number;
   source: 'env' | 'config' | 'default';
 }
 
@@ -223,9 +231,20 @@ export function resolveMirrorConfig(
     typeof rawFps === 'number' && Number.isFinite(rawFps)
       ? Math.min(MIRROR_FPS_MAX, Math.max(MIRROR_FPS_MIN, Math.round(rawFps)))
       : DEFAULT_MIRROR_FPS;
-  if (envRaw === '0' || envRaw === 'false') return { enabled: false, fps, source: 'env' };
-  if (envRaw === '1' || envRaw === 'true') return { enabled: true, fps, source: 'env' };
+  const rawTimeout = cfg?.observe?.mirror?.firstFrameTimeoutMs;
+  const firstFrameTimeoutMs =
+    typeof rawTimeout === 'number' && Number.isFinite(rawTimeout)
+      ? Math.min(
+          MIRROR_FIRST_FRAME_TIMEOUT_MAX_MS,
+          Math.max(MIRROR_FIRST_FRAME_TIMEOUT_MIN_MS, Math.round(rawTimeout)),
+        )
+      : DEFAULT_IDB_FIRST_FRAME_TIMEOUT_MS;
+  if (envRaw === '0' || envRaw === 'false')
+    return { enabled: false, fps, firstFrameTimeoutMs, source: 'env' };
+  if (envRaw === '1' || envRaw === 'true')
+    return { enabled: true, fps, firstFrameTimeoutMs, source: 'env' };
   const cfgEnabled = cfg?.observe?.mirror?.enabled;
-  if (typeof cfgEnabled === 'boolean') return { enabled: cfgEnabled, fps, source: 'config' };
-  return { enabled: true, fps, source: 'default' };
+  if (typeof cfgEnabled === 'boolean')
+    return { enabled: cfgEnabled, fps, firstFrameTimeoutMs, source: 'config' };
+  return { enabled: true, fps, firstFrameTimeoutMs, source: 'default' };
 }

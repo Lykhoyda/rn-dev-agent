@@ -14,6 +14,10 @@ import {
   IDB_INSTALL_COMMAND,
   detectIdb,
   probeIdbClient,
+  idbDemotionHint,
+  IDB_NO_FIRST_FRAME_REASON,
+  IDB_MALFORMED_FRAME_REASON,
+  IDB_STREAM_UNHEALTHY_HINT,
 } from '../../dist/observability/mirror/sources.js';
 
 const SOI = Buffer.from([0xff, 0xd8]);
@@ -62,6 +66,95 @@ test('RestartGate: exits outside the window do not accumulate', () => {
   gate.record();
   t += 11_000;
   assert.equal(gate.record(), true, 'spaced-out exits keep restarting');
+});
+
+test('IosIdbSource: alive process with no first frame → typed onExit and killed child', async () => {
+  const spawned = [];
+  const src = new IosIdbSource('UDID-1', 20, {
+    spawnFn: () => {
+      const p = fakeProc();
+      p.kill = () => {
+        p.killed = true;
+        setImmediate(() => p.emit('close', 1));
+      };
+      spawned.push(p);
+      return p;
+    },
+    restartDelayMs: 0,
+    firstFrameTimeoutMs: 20,
+  });
+  const rec = sinkRecorder();
+  src.start(rec.sink);
+  await new Promise((r) => setTimeout(r, 60));
+  assert.ok(rec.getExit(), 'alive/no-frame must not hang forever');
+  assert.match(rec.getExit().reason, /no first frame/i);
+  assert.equal(spawned[0].killed, true, 'timed-out idb child must be reaped');
+  assert.equal(spawned.length, 1, 'timeout must not RestartGate-respawn');
+  assert.equal(rec.frames.length, 0);
+});
+
+test('IosIdbSource: garbage stdout does not count as a first frame', async () => {
+  const spawned = [];
+  const src = new IosIdbSource('UDID-1', 20, {
+    spawnFn: () => {
+      const p = fakeProc();
+      spawned.push(p);
+      return p;
+    },
+    restartDelayMs: 0,
+    firstFrameTimeoutMs: 20,
+  });
+  const rec = sinkRecorder();
+  src.start(rec.sink);
+  spawned[0].stdout.write(Buffer.from('not-a-jpeg'));
+  spawned[0].stdout.write(Buffer.from([0xff, 0xd8, 0x00, 0x01]));
+  await new Promise((r) => setTimeout(r, 60));
+  assert.ok(rec.getExit(), 'unterminated JPEG must still time out');
+  assert.match(rec.getExit().reason, /no first frame/i);
+  assert.equal(rec.frames.length, 0);
+  src.stop();
+});
+
+test('IosIdbSource: successful first frame cancels the no-frame timer', async () => {
+  const spawned = [];
+  const src = new IosIdbSource('UDID-1', 20, {
+    spawnFn: () => {
+      const p = fakeProc();
+      spawned.push(p);
+      return p;
+    },
+    restartDelayMs: 0,
+    firstFrameTimeoutMs: 40,
+  });
+  const rec = sinkRecorder();
+  src.start(rec.sink);
+  spawned[0].stdout.write(jpeg(1));
+  await new Promise((r) => setTimeout(r, 70));
+  assert.equal(rec.frames.length, 1);
+  assert.equal(rec.getExit(), null, 'healthy first frame must not fail the source');
+  assert.equal(spawned[0].killed, false);
+  src.stop();
+});
+
+test('IosIdbSource: oversized malformed stream before first frame → typed onExit and killed child', async () => {
+  const spawned = [];
+  const src = new IosIdbSource('UDID-1', 20, {
+    spawnFn: () => {
+      const p = fakeProc();
+      spawned.push(p);
+      return p;
+    },
+    restartDelayMs: 0,
+    firstFrameTimeoutMs: 5_000,
+  });
+  const rec = sinkRecorder();
+  src.start(rec.sink);
+  spawned[0].stdout.write(Buffer.concat([SOI, Buffer.alloc(8_000_000, 0)]));
+  await tick();
+  assert.ok(rec.getExit(), 'malformed first frame must fail bounded');
+  assert.match(rec.getExit().reason, /malformed/i);
+  assert.equal(spawned[0].killed, true);
+  assert.equal(rec.frames.length, 0);
 });
 
 test('IosIdbSource: spawns idb with mjpeg args and emits parsed frames', async () => {
@@ -408,4 +501,48 @@ test('IDB_INSTALL_COMMAND matches the command ensure-idb.sh produces', () => {
     shell.includes(IDB_INSTALL_COMMAND),
     'ensure-idb.sh no longer emits the exact IDB_INSTALL_COMMAND string — they have drifted',
   );
+});
+
+test('idbDemotionHint keeps the demotion cause truthful', () => {
+  assert.equal(
+    idbDemotionHint({ reason: IDB_NO_FIRST_FRAME_REASON, hint: IDB_STREAM_UNHEALTHY_HINT }),
+    IDB_STREAM_UNHEALTHY_HINT,
+  );
+  assert.equal(
+    idbDemotionHint({ reason: IDB_MALFORMED_FRAME_REASON }),
+    `${IDB_MALFORMED_FRAME_REASON} — using simctl screenshot loop`,
+  );
+  assert.equal(
+    idbDemotionHint({ reason: 'idb video-stream keeps exiting' }),
+    'idb video-stream keeps exiting — using simctl screenshot loop',
+  );
+  assert.equal(idbDemotionHint(), IDB_STREAM_UNHEALTHY_HINT);
+});
+
+test('IosSimctlLoopSource: terminal exit never carries the idb demotion banner', async () => {
+  const failing = (opts) =>
+    new IosSimctlLoopSource('U', {
+      execJpeg: async () => {
+        throw new Error('capture failed');
+      },
+      now: () => 0,
+      idleDelayMs: 0,
+      failurePauseMs: 0,
+      ...opts,
+    });
+
+  const demoted = failing({ degradedHint: idbDemotionHint({ reason: IDB_NO_FIRST_FRAME_REASON }) });
+  const demotedRec = sinkRecorder();
+  demoted.start(demotedRec.sink);
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(demotedRec.getExit().hint, undefined);
+
+  const selected = failing({
+    degradedHint: SIMCTL_BROKEN_IDB_HINT,
+    failureHint: SIMCTL_BROKEN_IDB_HINT,
+  });
+  const selectedRec = sinkRecorder();
+  selected.start(selectedRec.sink);
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(selectedRec.getExit().hint, SIMCTL_BROKEN_IDB_HINT);
 });
