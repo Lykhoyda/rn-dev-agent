@@ -135,6 +135,7 @@ export function memoizeForeignMetroOriginScanner(
     { expiresAt: number; value: ForeignMetroOriginEvidence | null }
   >();
   const inFlight = new Map<string, Promise<ForeignMetroOriginEvidence | null>>();
+  let epoch = 0;
   const memoized: MemoizedForeignMetroOriginScanner = Object.assign(
     (query: ForeignMetroOriginQuery) => {
       const key = scanCacheKey(query);
@@ -145,8 +146,10 @@ export function memoizeForeignMetroOriginScanner(
       }
       const pending = inFlight.get(key);
       if (pending) return pending;
+      const startedEpoch = epoch;
       const started = scan(query)
         .then((value) => {
+          if (startedEpoch !== epoch) return value;
           settled.set(key, {
             value,
             expiresAt: now() + (value ? evidenceTtlMs : unprovableTtlMs),
@@ -165,6 +168,7 @@ export function memoizeForeignMetroOriginScanner(
     },
     {
       invalidate(query?: ForeignMetroOriginQuery) {
+        epoch += 1;
         if (query) settled.delete(scanCacheKey(query));
         else settled.clear();
       },

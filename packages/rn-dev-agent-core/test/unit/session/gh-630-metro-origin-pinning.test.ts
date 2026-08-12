@@ -378,6 +378,28 @@ test('memoized scans are shared in flight, keyed per device, and re-run after in
   assert.equal(scans, 4);
 });
 
+test('an invalidated in-flight scan cannot resurrect its pre-invalidation verdict', async () => {
+  let scans = 0;
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const memoized = memoizeForeignMetroOriginScanner(async () => {
+    scans += 1;
+    await gate;
+    return null;
+  });
+
+  const overlapping = memoized(query);
+  memoized.invalidate();
+  release();
+
+  assert.equal(await overlapping, null);
+  assert.equal(scans, 1);
+  assert.equal(await memoized(query), null);
+  assert.equal(scans, 2);
+});
+
 test('memoized proven evidence expires sooner than an unprovable verdict', async () => {
   let clock = 0;
   let scans = 0;

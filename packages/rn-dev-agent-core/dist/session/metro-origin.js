@@ -74,6 +74,7 @@ export function memoizeForeignMetroOriginScanner(scan, options = {}) {
     const capacity = options.capacity ?? FOREIGN_METRO_SCAN_CACHE_CAPACITY;
     const settled = new Map();
     const inFlight = new Map();
+    let epoch = 0;
     const memoized = Object.assign((query) => {
         const key = scanCacheKey(query);
         const cached = settled.get(key);
@@ -85,8 +86,11 @@ export function memoizeForeignMetroOriginScanner(scan, options = {}) {
         const pending = inFlight.get(key);
         if (pending)
             return pending;
+        const startedEpoch = epoch;
         const started = scan(query)
             .then((value) => {
+            if (startedEpoch !== epoch)
+                return value;
             settled.set(key, {
                 value,
                 expiresAt: now() + (value ? evidenceTtlMs : unprovableTtlMs),
@@ -105,6 +109,7 @@ export function memoizeForeignMetroOriginScanner(scan, options = {}) {
         return started;
     }, {
         invalidate(query) {
+            epoch += 1;
             if (query)
                 settled.delete(scanCacheKey(query));
             else

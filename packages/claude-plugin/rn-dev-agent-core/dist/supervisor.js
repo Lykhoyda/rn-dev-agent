@@ -27720,6 +27720,7 @@ function memoizeForeignMetroOriginScanner(scan, options = {}) {
   const capacity = options.capacity ?? FOREIGN_METRO_SCAN_CACHE_CAPACITY;
   const settled = /* @__PURE__ */ new Map();
   const inFlight2 = /* @__PURE__ */ new Map();
+  let epoch = 0;
   const memoized = Object.assign((query) => {
     const key = scanCacheKey(query);
     const cached2 = settled.get(key);
@@ -27731,7 +27732,10 @@ function memoizeForeignMetroOriginScanner(scan, options = {}) {
     const pending2 = inFlight2.get(key);
     if (pending2)
       return pending2;
+    const startedEpoch = epoch;
     const started = scan(query).then((value) => {
+      if (startedEpoch !== epoch)
+        return value;
       settled.set(key, {
         value,
         expiresAt: now() + (value ? evidenceTtlMs : unprovableTtlMs)
@@ -27749,6 +27753,7 @@ function memoizeForeignMetroOriginScanner(scan, options = {}) {
     return started;
   }, {
     invalidate(query) {
+      epoch += 1;
       if (query)
         settled.delete(scanCacheKey(query));
       else
