@@ -78,6 +78,7 @@ function createSandbox(hook: RendererHook) {
           navigateTo: (screen: string) => string;
           getNavState: () => string;
           getTree: (opts?: object) => string;
+          getNavGraph: () => string;
         }
       | undefined,
   };
@@ -275,4 +276,81 @@ test('GH #597: no-match control — scanning every renderer never fabricates a r
   assert.equal(navigationResult.navigated, undefined);
   assert.match(String(navigationResult.__agent_error), /^Navigation ref not found\./);
   assert.match(String(stateResult.error), /^Navigation state not found\./);
+});
+
+test('GH #597: nav graph resolves a forwardRef-named container fiber on a later renderer', () => {
+  const { fiber } = createNavigationFixture();
+  const forwardRefFiber = {
+    ...fiber,
+    type: {
+      $$typeof: Symbol.for('react.forward_ref'),
+      render: function NavigationContainer() {},
+    },
+    ref: null,
+  } as unknown as Fiber;
+  const hook: RendererHook = {
+    renderers: new Map([
+      [1, {}],
+      [2, {}],
+    ]),
+    getFiberRoots: (rendererId) =>
+      rendererId === 2 ? new Set([{ current: forwardRefFiber }]) : new Set(),
+  };
+
+  const graph = JSON.parse(createSandbox(hook).getNavGraph());
+
+  assert.equal(graph.error, undefined);
+  assert.equal(graph.containers_found, 1);
+  assert.equal(graph.library, 'react-navigation');
+  assert.deepEqual(
+    graph.navigators[0].routes.map((route: { name: string }) => route.name),
+    ['Home', 'Profile'],
+  );
+});
+
+test('GH #597: nav graph falls back to nav-ref discovery for NavigationContainerInner', () => {
+  const { fiber } = createNavigationFixture();
+  const forwardRefFiber = {
+    ...fiber,
+    type: {
+      $$typeof: Symbol.for('react.forward_ref'),
+      render: function NavigationContainerInner() {},
+    },
+  } as unknown as Fiber;
+  const hook: RendererHook = {
+    renderers: new Map([
+      [1, {}],
+      [2, {}],
+    ]),
+    getFiberRoots: (rendererId) =>
+      rendererId === 2 ? new Set([{ current: forwardRefFiber }]) : new Set(),
+  };
+
+  const graph = JSON.parse(createSandbox(hook).getNavGraph());
+
+  assert.equal(graph.error, undefined);
+  assert.equal(graph.library, 'react-navigation');
+  assert.deepEqual(
+    graph.navigators[0].routes.map((route: { name: string }) => route.name),
+    ['Home', 'Profile'],
+  );
+});
+
+test('GH #597: nav graph no-match control keeps its exact error semantics', () => {
+  const shell: Fiber = {
+    type: { displayName: 'LogBox' },
+    child: null,
+    sibling: null,
+  };
+  const hook: RendererHook = {
+    renderers: new Map([
+      [1, {}],
+      [2, {}],
+    ]),
+    getFiberRoots: (rendererId) => (rendererId === 2 ? new Set([{ current: shell }]) : new Set()),
+  };
+
+  const graph = JSON.parse(createSandbox(hook).getNavGraph());
+
+  assert.match(String(graph.error), /^No navigation state found\./);
 });

@@ -953,7 +953,9 @@ export const INJECTED_HELPERS = `
         for (var ar = 0; ar < allRoots.length; ar++) {
           (function findContainers(fiber, d) {
             if (!fiber || d > 30) return;
-            var fname = fiber.type && (fiber.type.displayName || fiber.type.name);
+            var ft = fiber.type;
+            var fname = ft && (ft.displayName || ft.name);
+            if (!fname && ft && ft.render) fname = ft.render.displayName || ft.render.name;
             if (fname === 'NavigationContainer' || fname === 'ExpoRoot') {
               containerFibers.push(fiber);
             }
@@ -979,11 +981,36 @@ export const INJECTED_HELPERS = `
                 linkingMap = flattenLinking(linking.config, '');
               }
             } catch(e) {}
-            var fName = cf.type && (cf.type.displayName || cf.type.name);
+            var cft = cf.type;
+            var fName = cft && (cft.displayName || cft.name);
+            if (!fName && cft && cft.render) fName = cft.render.displayName || cft.render.name;
             if (fName === 'ExpoRoot') library = 'expo-router';
             else library = 'react-navigation';
           }
         }
+      }
+
+      // GH #597: React Navigation 7 renders the container through a forwardRef
+      // whose inner name (NavigationContainerInner) is outside the accepted
+      // container-name set — reuse the proven nav-ref discovery walk.
+      if (!rootState) {
+        try {
+          var graphRef = findNavRef();
+          if (graphRef && graphRef.getRootState) {
+            var graphState = graphRef.getRootState();
+            if (isNavState(graphState)) {
+              rootState = graphState;
+              library = 'react-navigation';
+              if (!containersFound) containersFound = 1;
+              try {
+                if (graphRef.getLinkingOptions) {
+                  var graphLinking = graphRef.getLinkingOptions();
+                  if (graphLinking && graphLinking.config) linkingMap = flattenLinking(graphLinking.config, '');
+                }
+              } catch(e) {}
+            }
+          }
+        } catch(e) {}
       }
 
       // Also try to harvest linking config from __NAV_REF__ if fiber didn't get it
