@@ -182,7 +182,11 @@ import { removeObserveState } from './observability/observe-state.js';
 import { resolveObserveAutostart, resolveMirrorConfig } from './project-config.js';
 import { MirrorManager } from './observability/mirror/manager.js';
 import { buildMirrorTargetResolver } from './observability/mirror/target.js';
-import { createMirrorSource } from './observability/mirror/sources.js';
+import {
+  createMirrorSource,
+  IosSimctlLoopSource,
+  IDB_STREAM_UNHEALTHY_HINT,
+} from './observability/mirror/sources.js';
 import { parseAllAdbDevices } from './tools/device-record.js';
 import { createLockE2eTestHandler } from './tools/lock-e2e-test.js';
 import { createRunE2eSuiteHandler, type RunE2eSuiteArgs } from './tools/run-e2e-suite.js';
@@ -785,6 +789,14 @@ const mirrorManager = mirrorCfg.enabled
         },
       }),
       createSource: (t) => createMirrorSource(t, mirrorCfg.fps),
+      createFallbackSource: async (t) => {
+        if (t.platform !== 'ios') {
+          throw new Error('mirror fallback is iOS simctl only');
+        }
+        return new IosSimctlLoopSource(t.deviceId, {
+          degradedHint: IDB_STREAM_UNHEALTHY_HINT,
+        });
+      },
       // MirrorStatus is a closed interface (no index signature); recorder.push
       // takes the open event shape every other recorder.push(...) call site
       // uses. Spread into a fresh literal so structural assignability applies.

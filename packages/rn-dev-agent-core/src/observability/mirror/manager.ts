@@ -26,6 +26,11 @@ export interface MirrorClient {
 export interface MirrorManagerDeps {
   resolveTarget(): Promise<MirrorTargetResolution>;
   createSource(target: MirrorTarget): Promise<MirrorSource>;
+  /**
+   * iOS-only idb→simctl demotion. Must not re-enter createSource (that re-selects idb).
+   * Absent → source-exit is a typed terminal error (bounded empty-200 failure).
+   */
+  createFallbackSource?(target: MirrorTarget): Promise<MirrorSource>;
   pushStatus(s: MirrorStatus): void;
   graceMs?: number;
 }
@@ -58,6 +63,9 @@ export class MirrorManager {
   private state: 'idle' | 'starting' | 'streaming' | 'error' = 'idle';
   private latest: Buffer | null = null;
   private source: MirrorSource | null = null;
+  private activeTarget: MirrorTarget | null = null;
+  private streamingPipeline: string | null = null;
+  private demoted = false;
   private graceTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly graceMs: number;
   // Bumped on every teardown (grace-stop, shutdown, source exit) and at the
@@ -131,6 +139,9 @@ export class MirrorManager {
     }
     this.source?.stop();
     this.source = null;
+    this.activeTarget = null;
+    this.streamingPipeline = null;
+    this.demoted = false;
     this.endAllClients();
     this.latest = null;
     this.state = 'idle';
@@ -147,6 +158,9 @@ export class MirrorManager {
       this.cycle += 1;
       this.source?.stop();
       this.source = null;
+      this.activeTarget = null;
+      this.streamingPipeline = null;
+      this.demoted = false;
       this.latest = null;
       this.state = 'idle';
       this.deps.pushStatus({ type: 'mirror', status: 'idle' });
@@ -204,6 +218,9 @@ export class MirrorManager {
       const { target } = resolution;
       platform = target.platform;
       deviceId = target.deviceId;
+      this.activeTarget = target;
+      this.demoted = false;
+      this.streamingPipeline = null;
       this.deps.pushStatus({
         type: 'mirror',
         status: 'starting',
@@ -236,6 +253,9 @@ export class MirrorManager {
       this.cycle += 1;
       this.source?.stop();
       this.source = null;
+      this.activeTarget = null;
+      this.streamingPipeline = null;
+      this.demoted = false;
       this.state = 'error';
       this.deps.pushStatus({
         type: 'mirror',
@@ -250,8 +270,10 @@ export class MirrorManager {
 
   private onSourceFrame(frame: Buffer, target: MirrorTarget, source: MirrorSource): void {
     this.latest = frame;
-    if (this.state !== 'streaming') {
+    const pipelineChanged = this.streamingPipeline !== source.pipeline;
+    if (this.state !== 'streaming' || pipelineChanged) {
       this.state = 'streaming';
+      this.streamingPipeline = source.pipeline;
       this.deps.pushStatus({
         type: 'mirror',
         status: 'streaming',
@@ -266,8 +288,29 @@ export class MirrorManager {
   }
 
   private onSourceExit(err?: { reason: string; hint?: string }): void {
+    const dying = this.source;
+    const target = this.activeTarget;
+    const canDemote =
+      dying?.pipeline === 'idb' &&
+      target?.platform === 'ios' &&
+      typeof this.deps.createFallbackSource === 'function' &&
+      !this.demoted &&
+      this.clients.size > 0;
+
     this.cycle += 1;
+    dying?.stop();
     this.source = null;
+
+    if (canDemote && target) {
+      // Keep the 200 multipart client; do not push 'starting' (DevicePane
+      // remounts <img> on starting and would double-attach).
+      this.demoted = true;
+      void this.startFallback(target);
+      return;
+    }
+
+    this.activeTarget = null;
+    this.streamingPipeline = null;
     this.latest = null;
     this.state = 'error';
     this.deps.pushStatus({
@@ -277,5 +320,33 @@ export class MirrorManager {
       hint: err?.hint,
     });
     this.endAllClients();
+  }
+
+  private async startFallback(target: MirrorTarget): Promise<void> {
+    const myCycle = this.cycle;
+    try {
+      const source = await this.deps.createFallbackSource!(target);
+      if (myCycle !== this.cycle) {
+        source.stop();
+        return;
+      }
+      this.source = source;
+      const sink: MirrorFrameSink = {
+        onFrame: (frame) => {
+          if (myCycle !== this.cycle) return;
+          this.onSourceFrame(frame, target, source);
+        },
+        onExit: (exitErr) => {
+          if (myCycle !== this.cycle) return;
+          this.onSourceExit(exitErr);
+        },
+      };
+      source.start(sink);
+    } catch (err) {
+      if (myCycle !== this.cycle) return;
+      this.onSourceExit({
+        reason: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 }

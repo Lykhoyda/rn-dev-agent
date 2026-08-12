@@ -82817,6 +82817,8 @@ var SOI = Buffer.from([255, 216]);
 var EOI = Buffer.from([255, 217]);
 var JpegFrameExtractor = class {
   acc = Buffer.alloc(0);
+  /** Sticky: a SOI without EOI exceeded MAX_FRAME_BYTES. Process liveness is not a valid frame. */
+  overflowed = false;
   push(chunk) {
     this.acc = this.acc.length === 0 ? chunk : Buffer.concat([this.acc, chunk]);
     const frames = [];
@@ -82830,8 +82832,10 @@ var JpegFrameExtractor = class {
         this.acc = this.acc.subarray(soi);
       const eoi = this.acc.indexOf(EOI, SOI.length);
       if (eoi === -1) {
-        if (this.acc.length > MAX_FRAME_BYTES)
+        if (this.acc.length > MAX_FRAME_BYTES) {
+          this.overflowed = true;
           this.acc = Buffer.alloc(0);
+        }
         break;
       }
       frames.push(this.acc.subarray(0, eoi + EOI.length));
@@ -82862,6 +82866,10 @@ var RestartGate = class {
 var IDB_INSTALL_COMMAND = "brew install python@3.13 && brew tap facebook/fb && brew trust facebook/fb && brew install idb-companion && pipx install --python python3.13 --force fb-idb";
 var SIMCTL_HINT = `install idb for smoother mirroring (${IDB_INSTALL_COMMAND})`;
 var SIMCTL_BROKEN_IDB_HINT = "idb is installed but did not respond successfully \u2014 most likely fb-idb 1.1.7 under Python 3.14, which removed the asyncio.get_event_loop() it needs. Reinstall it under a supported interpreter: pipx install --python python3.13 --force fb-idb";
+var IDB_NO_FIRST_FRAME_REASON = "idb video-stream produced no first frame";
+var IDB_MALFORMED_FRAME_REASON = "idb video-stream produced a malformed frame";
+var IDB_STREAM_UNHEALTHY_HINT = "idb video-stream produced no usable frame \u2014 using simctl screenshot loop";
+var DEFAULT_IDB_FIRST_FRAME_TIMEOUT_MS = 5e3;
 var IDB_HINT = `idb not found \u2014 ${IDB_INSTALL_COMMAND}`;
 var FFMPEG_HINT = "ffmpeg not found \u2014 run scripts/ensure-ffmpeg.sh or brew install ffmpeg";
 var sleep6 = (ms) => new Promise((resolve12) => setTimeout(resolve12, ms));
@@ -82890,15 +82898,18 @@ var IosIdbSource = class {
   nominalFps;
   active = false;
   proc = null;
+  firstFrameTimer = null;
   spawnFn;
   gate;
   restartDelayMs;
+  firstFrameTimeoutMs;
   constructor(udid, fps, opts = {}) {
     this.udid = udid;
     this.nominalFps = fps;
     this.spawnFn = opts.spawnFn ?? defaultSpawn;
     this.gate = new RestartGate(3, 1e4, opts.now ?? Date.now);
     this.restartDelayMs = opts.restartDelayMs ?? 300;
+    this.firstFrameTimeoutMs = opts.firstFrameTimeoutMs ?? DEFAULT_IDB_FIRST_FRAME_TIMEOUT_MS;
   }
   start(sink) {
     this.active = true;
@@ -82906,6 +82917,7 @@ var IosIdbSource = class {
   }
   spawnOnce(sink) {
     const extractor = new JpegFrameExtractor();
+    let gotFrame = false;
     const proc = this.spawnFn("idb", [
       "video-stream",
       "--udid",
@@ -82919,38 +82931,67 @@ var IosIdbSource = class {
     ]);
     this.proc = proc;
     proc.stderr?.resume();
+    this.armFirstFrameTimer(sink);
     proc.stdout.on("data", (chunk) => {
       if (!this.active)
         return;
       for (const frame of extractor.push(chunk)) {
+        gotFrame = true;
+        this.clearFirstFrameTimer();
         if (this.active)
           sink.onFrame(frame);
+      }
+      if (this.active && extractor.overflowed && !gotFrame) {
+        this.fail(sink, IDB_MALFORMED_FRAME_REASON);
       }
     });
     proc.on("error", (err) => {
       if (!this.active)
         return;
       if (isEnoent(err)) {
-        this.active = false;
-        sink.onExit({ reason: "idb not found", hint: IDB_HINT });
+        this.fail(sink, "idb not found", IDB_HINT);
       }
     });
     proc.on("close", () => {
       if (!this.active)
         return;
+      this.clearFirstFrameTimer();
       if (this.gate.record()) {
         scheduleAfter(() => {
           if (this.active)
             this.spawnOnce(sink);
         }, this.restartDelayMs);
       } else {
-        this.active = false;
-        sink.onExit({ reason: "idb video-stream keeps exiting" });
+        this.fail(sink, "idb video-stream keeps exiting");
       }
     });
   }
+  armFirstFrameTimer(sink) {
+    this.clearFirstFrameTimer();
+    this.firstFrameTimer = setTimeout(() => {
+      this.firstFrameTimer = null;
+      if (!this.active)
+        return;
+      this.fail(sink, IDB_NO_FIRST_FRAME_REASON, IDB_STREAM_UNHEALTHY_HINT);
+    }, this.firstFrameTimeoutMs);
+  }
+  fail(sink, reason, hint) {
+    if (!this.active)
+      return;
+    this.active = false;
+    this.clearFirstFrameTimer();
+    this.proc?.kill();
+    sink.onExit({ reason, hint });
+  }
+  clearFirstFrameTimer() {
+    if (this.firstFrameTimer) {
+      clearTimeout(this.firstFrameTimer);
+      this.firstFrameTimer = null;
+    }
+  }
   stop() {
     this.active = false;
+    this.clearFirstFrameTimer();
     this.proc?.kill();
   }
 };
@@ -83179,6 +83220,9 @@ var MirrorManager = class {
   state = "idle";
   latest = null;
   source = null;
+  activeTarget = null;
+  streamingPipeline = null;
+  demoted = false;
   graceTimer = null;
   graceMs;
   // Bumped on every teardown (grace-stop, shutdown, source exit) and at the
@@ -83235,6 +83279,9 @@ var MirrorManager = class {
     }
     this.source?.stop();
     this.source = null;
+    this.activeTarget = null;
+    this.streamingPipeline = null;
+    this.demoted = false;
     this.endAllClients();
     this.latest = null;
     this.state = "idle";
@@ -83249,6 +83296,9 @@ var MirrorManager = class {
       this.cycle += 1;
       this.source?.stop();
       this.source = null;
+      this.activeTarget = null;
+      this.streamingPipeline = null;
+      this.demoted = false;
       this.latest = null;
       this.state = "idle";
       this.deps.pushStatus({ type: "mirror", status: "idle" });
@@ -83300,6 +83350,9 @@ var MirrorManager = class {
       const { target } = resolution;
       platform = target.platform;
       deviceId = target.deviceId;
+      this.activeTarget = target;
+      this.demoted = false;
+      this.streamingPipeline = null;
       this.deps.pushStatus({
         type: "mirror",
         status: "starting",
@@ -83331,6 +83384,9 @@ var MirrorManager = class {
       this.cycle += 1;
       this.source?.stop();
       this.source = null;
+      this.activeTarget = null;
+      this.streamingPipeline = null;
+      this.demoted = false;
       this.state = "error";
       this.deps.pushStatus({
         type: "mirror",
@@ -83344,8 +83400,10 @@ var MirrorManager = class {
   }
   onSourceFrame(frame, target, source) {
     this.latest = frame;
-    if (this.state !== "streaming") {
+    const pipelineChanged = this.streamingPipeline !== source.pipeline;
+    if (this.state !== "streaming" || pipelineChanged) {
       this.state = "streaming";
+      this.streamingPipeline = source.pipeline;
       this.deps.pushStatus({
         type: "mirror",
         status: "streaming",
@@ -83359,8 +83417,19 @@ var MirrorManager = class {
     this.broadcast(frame);
   }
   onSourceExit(err) {
+    const dying = this.source;
+    const target = this.activeTarget;
+    const canDemote = dying?.pipeline === "idb" && target?.platform === "ios" && typeof this.deps.createFallbackSource === "function" && !this.demoted && this.clients.size > 0;
     this.cycle += 1;
+    dying?.stop();
     this.source = null;
+    if (canDemote && target) {
+      this.demoted = true;
+      void this.startFallback(target);
+      return;
+    }
+    this.activeTarget = null;
+    this.streamingPipeline = null;
     this.latest = null;
     this.state = "error";
     this.deps.pushStatus({
@@ -83370,6 +83439,36 @@ var MirrorManager = class {
       hint: err?.hint
     });
     this.endAllClients();
+  }
+  async startFallback(target) {
+    const myCycle = this.cycle;
+    try {
+      const source = await this.deps.createFallbackSource(target);
+      if (myCycle !== this.cycle) {
+        source.stop();
+        return;
+      }
+      this.source = source;
+      const sink = {
+        onFrame: (frame) => {
+          if (myCycle !== this.cycle)
+            return;
+          this.onSourceFrame(frame, target, source);
+        },
+        onExit: (exitErr) => {
+          if (myCycle !== this.cycle)
+            return;
+          this.onSourceExit(exitErr);
+        }
+      };
+      source.start(sink);
+    } catch (err) {
+      if (myCycle !== this.cycle)
+        return;
+      this.onSourceExit({
+        reason: err instanceof Error ? err.message : String(err)
+      });
+    }
   }
 };
 
@@ -86212,6 +86311,14 @@ var mirrorManager2 = mirrorCfg.enabled ? new MirrorManager({
     }
   }),
   createSource: (t) => createMirrorSource(t, mirrorCfg.fps),
+  createFallbackSource: async (t) => {
+    if (t.platform !== "ios") {
+      throw new Error("mirror fallback is iOS simctl only");
+    }
+    return new IosSimctlLoopSource(t.deviceId, {
+      degradedHint: IDB_STREAM_UNHEALTHY_HINT
+    });
+  },
   // MirrorStatus is a closed interface (no index signature); recorder.push
   // takes the open event shape every other recorder.push(...) call site
   // uses. Spread into a fresh literal so structural assignability applies.

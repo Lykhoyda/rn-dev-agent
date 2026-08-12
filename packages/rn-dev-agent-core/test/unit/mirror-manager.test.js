@@ -149,6 +149,272 @@ test('resolution failure → error status with reason, clients ended, no source 
   assert.equal(c.ended, true);
 });
 
+test('idb exit before first frame demotes to simctl; clients stay attached', async () => {
+  const events = [];
+  const idb = fakeSource();
+  const origStop = idb.stop.bind(idb);
+  idb.stop = function stop() {
+    events.push('idb.stop');
+    origStop();
+  };
+  const simctl = fakeSource();
+  simctl.pipeline = 'simctl';
+  simctl.nominalFps = 6;
+  simctl.degradedHint = 'using simctl screenshot loop';
+  const origStart = simctl.start.bind(simctl);
+  simctl.start = function start(s) {
+    events.push('simctl.start');
+    origStart(s);
+  };
+  let fallbackCalls = 0;
+  const statuses = [];
+  const mgr = new MirrorManager({
+    resolveTarget: async () => ({ ok: true, target: { platform: 'ios', deviceId: 'U1' } }),
+    createSource: async () => idb,
+    createFallbackSource: async (target) => {
+      events.push('fallback.create');
+      fallbackCalls++;
+      assert.equal(target.deviceId, 'U1');
+      assert.equal(target.platform, 'ios');
+      return simctl;
+    },
+    pushStatus: (s) => statuses.push(s),
+    graceMs: 15,
+  });
+  const c = fakeClient();
+  mgr.attach(c);
+  await tick();
+  assert.equal(idb.stopped, false);
+  idb.exit({ reason: 'idb video-stream produced no first frame' });
+  await tick();
+  assert.deepEqual(events, ['idb.stop', 'fallback.create', 'simctl.start']);
+  assert.equal(fallbackCalls, 1);
+  assert.equal(c.ended, false, 'demotion must not tear the 200 multipart client');
+  assert.equal(
+    statuses.find((s) => s.status === 'error'),
+    undefined,
+    'successful demotion is not a terminal error',
+  );
+  // Stale idb callbacks after replacement must not double-write or re-exit.
+  idb.frame(jpeg(1));
+  idb.exit({ reason: 'stale idb exit' });
+  await tick();
+  assert.equal(c.ended, false);
+  assert.equal(
+    statuses.find((s) => s.status === 'error'),
+    undefined,
+  );
+  simctl.frame(jpeg(9));
+  assert.equal(statuses.at(-1).status, 'streaming');
+  assert.equal(statuses.at(-1).pipeline, 'simctl');
+  assert.ok(Buffer.concat(c.chunks).includes(jpeg(9)));
+  assert.equal(
+    Buffer.concat(c.chunks).includes(jpeg(1)),
+    false,
+    'stale idb frame must not be broadcast after demotion',
+  );
+});
+
+test('healthy idb first frame does not create a fallback source', async () => {
+  const idb = fakeSource();
+  let fallbackCalls = 0;
+  const statuses = [];
+  const mgr = new MirrorManager({
+    resolveTarget: async () => ({ ok: true, target: { platform: 'ios', deviceId: 'U1' } }),
+    createSource: async () => idb,
+    createFallbackSource: async () => {
+      fallbackCalls++;
+      return fakeSource();
+    },
+    pushStatus: (s) => statuses.push(s),
+    graceMs: 15,
+  });
+  const c = fakeClient();
+  mgr.attach(c);
+  await tick();
+  idb.frame(jpeg(1));
+  await tick();
+  assert.equal(fallbackCalls, 0);
+  assert.equal(statuses.at(-1).status, 'streaming');
+  assert.equal(statuses.at(-1).pipeline, 'idb');
+  assert.equal(mgr.isStreaming(), true);
+});
+
+test('idb exit without fallback source → typed error, clients ended', async () => {
+  const { mgr, src, statuses } = build();
+  const c = fakeClient();
+  mgr.attach(c);
+  await tick();
+  src.exit({ reason: 'idb video-stream produced no first frame' });
+  assert.equal(statuses.at(-1).status, 'error');
+  assert.match(statuses.at(-1).reason, /no first frame/);
+  assert.equal(c.ended, true);
+  assert.equal(mgr.isStreaming(), false);
+});
+
+test('fallback source is used once; its exit is terminal and does not respawn idb', async () => {
+  const idb = fakeSource();
+  const simctl = fakeSource();
+  simctl.pipeline = 'simctl';
+  let createCalls = 0;
+  let fallbackCalls = 0;
+  const statuses = [];
+  const mgr = new MirrorManager({
+    resolveTarget: async () => ({ ok: true, target: { platform: 'ios', deviceId: 'U1' } }),
+    createSource: async () => {
+      createCalls++;
+      return idb;
+    },
+    createFallbackSource: async () => {
+      fallbackCalls++;
+      return simctl;
+    },
+    pushStatus: (s) => statuses.push(s),
+    graceMs: 15,
+  });
+  const c = fakeClient();
+  mgr.attach(c);
+  await tick();
+  idb.exit({ reason: 'idb video-stream produced no first frame' });
+  await tick();
+  simctl.exit({ reason: 'simctl screenshot failing' });
+  await tick();
+  assert.equal(createCalls, 1, 'must not re-enter createSource (would re-select idb)');
+  assert.equal(fallbackCalls, 1, 'must not demote twice');
+  assert.equal(statuses.at(-1).status, 'error');
+  assert.equal(c.ended, true);
+  assert.equal(idb.stopped, true);
+  assert.equal(simctl.stopped, true);
+});
+
+test('stale idb frames during pending fallback are ignored', async () => {
+  const idb = fakeSource();
+  let release;
+  const pending = new Promise((resolve) => {
+    release = resolve;
+  });
+  const simctl = fakeSource();
+  simctl.pipeline = 'simctl';
+  const statuses = [];
+  const mgr = new MirrorManager({
+    resolveTarget: async () => ({ ok: true, target: { platform: 'ios', deviceId: 'U1' } }),
+    createSource: async () => idb,
+    createFallbackSource: async () => {
+      await pending;
+      return simctl;
+    },
+    pushStatus: (s) => statuses.push(s),
+    graceMs: 15,
+  });
+  const c = fakeClient();
+  mgr.attach(c);
+  await tick();
+  idb.exit({ reason: 'idb video-stream produced no first frame' });
+  await tick();
+  idb.frame(jpeg(3));
+  idb.exit({ reason: 'stale' });
+  assert.equal(c.ended, false);
+  assert.equal(Buffer.concat(c.chunks).includes(jpeg(3)), false);
+  release(undefined);
+  await tick();
+  simctl.frame(jpeg(4));
+  assert.ok(Buffer.concat(c.chunks).includes(jpeg(4)));
+  assert.equal(statuses.at(-1).pipeline, 'simctl');
+});
+
+test('last-client close during pending fallback stops the late simctl source', async () => {
+  const idb = fakeSource();
+  let release;
+  const pending = new Promise((resolve) => {
+    release = resolve;
+  });
+  const simctl = fakeSource();
+  simctl.pipeline = 'simctl';
+  const mgr = new MirrorManager({
+    resolveTarget: async () => ({ ok: true, target: { platform: 'ios', deviceId: 'U1' } }),
+    createSource: async () => idb,
+    createFallbackSource: async () => {
+      await pending;
+      return simctl;
+    },
+    pushStatus: () => {},
+    graceMs: 15,
+  });
+  const c = fakeClient();
+  mgr.attach(c);
+  await tick();
+  idb.exit({ reason: 'idb video-stream produced no first frame' });
+  await tick();
+  c.emit('close');
+  await new Promise((r) => setTimeout(r, 30));
+  release(undefined);
+  await tick();
+  assert.equal(simctl.stopped, true, 'late fallback must not leak after client cancel');
+});
+
+test('shutdown during in-flight fallback stops the replacement and does not leak it', async () => {
+  const idb = fakeSource();
+  let release;
+  const pending = new Promise((resolve) => {
+    release = resolve;
+  });
+  const simctl = fakeSource();
+  simctl.pipeline = 'simctl';
+  const statuses = [];
+  const mgr = new MirrorManager({
+    resolveTarget: async () => ({ ok: true, target: { platform: 'ios', deviceId: 'U1' } }),
+    createSource: async () => idb,
+    createFallbackSource: async () => {
+      await pending;
+      return simctl;
+    },
+    pushStatus: (s) => statuses.push(s),
+    graceMs: 15,
+  });
+  const c = fakeClient();
+  mgr.attach(c);
+  await tick();
+  idb.exit({ reason: 'idb video-stream produced no first frame' });
+  await tick();
+  mgr.shutdown();
+  release(undefined);
+  await tick();
+  assert.equal(simctl.stopped, true, 'superseded fallback must be stopped');
+  assert.equal(c.ended, true);
+  assert.equal(
+    statuses.find((s) => s.status === 'streaming'),
+    undefined,
+  );
+});
+
+test('android screenrecord exit does not invoke iOS simctl demotion', async () => {
+  const src = fakeSource();
+  src.pipeline = 'screenrecord';
+  let fallbackCalls = 0;
+  const statuses = [];
+  const mgr = new MirrorManager({
+    resolveTarget: async () => ({
+      ok: true,
+      target: { platform: 'android', deviceId: 'emulator-5554' },
+    }),
+    createSource: async () => src,
+    createFallbackSource: async () => {
+      fallbackCalls++;
+      return fakeSource();
+    },
+    pushStatus: (s) => statuses.push(s),
+    graceMs: 15,
+  });
+  const c = fakeClient();
+  mgr.attach(c);
+  await tick();
+  src.exit({ reason: 'screen capture pipeline keeps exiting' });
+  await tick();
+  assert.equal(fallbackCalls, 0);
+  assert.equal(statuses.at(-1).status, 'error');
+  assert.equal(c.ended, true);
+});
+
 test('source exit → error status, clients ended, next attach retries fresh', async () => {
   const { mgr, src, statuses } = build();
   const c = fakeClient();

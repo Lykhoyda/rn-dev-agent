@@ -63,9 +63,21 @@ test('resets accumulator when a frame exceeds MAX_FRAME_BYTES without EOI', () =
   const x = new JpegFrameExtractor();
   const oversized = Buffer.concat([SOI, Buffer.alloc(MAX_FRAME_BYTES, 0)]);
   assert.deepEqual(x.push(oversized), []);
+  assert.equal(x.overflowed, true, 'callers must be able to treat overflow as a typed failure');
   // After the reset a fresh well-formed frame must still come through.
   const f = jpeg(5);
   const frames = x.push(f);
   assert.equal(frames.length, 1);
   assert.deepEqual(frames[0], f);
+});
+
+test('overflow is detected across multiple sub-limit chunks', () => {
+  const x = new JpegFrameExtractor();
+  const chunk = Math.floor(MAX_FRAME_BYTES / 3);
+  assert.deepEqual(x.push(Buffer.concat([SOI, Buffer.alloc(chunk, 1)])), []);
+  assert.equal(x.overflowed, false);
+  assert.deepEqual(x.push(Buffer.alloc(chunk, 2)), []);
+  assert.equal(x.overflowed, false);
+  assert.deepEqual(x.push(Buffer.alloc(chunk + 8, 3)), []);
+  assert.equal(x.overflowed, true);
 });

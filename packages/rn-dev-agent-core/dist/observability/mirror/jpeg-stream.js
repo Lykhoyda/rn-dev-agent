@@ -9,6 +9,8 @@ const SOI = Buffer.from([0xff, 0xd8]);
 const EOI = Buffer.from([0xff, 0xd9]);
 export class JpegFrameExtractor {
     acc = Buffer.alloc(0);
+    /** Sticky: a SOI without EOI exceeded MAX_FRAME_BYTES. Process liveness is not a valid frame. */
+    overflowed = false;
     push(chunk) {
         this.acc = this.acc.length === 0 ? chunk : Buffer.concat([this.acc, chunk]);
         const frames = [];
@@ -28,8 +30,10 @@ export class JpegFrameExtractor {
                 this.acc = this.acc.subarray(soi);
             const eoi = this.acc.indexOf(EOI, SOI.length);
             if (eoi === -1) {
-                if (this.acc.length > MAX_FRAME_BYTES)
+                if (this.acc.length > MAX_FRAME_BYTES) {
+                    this.overflowed = true;
                     this.acc = Buffer.alloc(0);
+                }
                 break;
             }
             frames.push(this.acc.subarray(0, eoi + EOI.length));

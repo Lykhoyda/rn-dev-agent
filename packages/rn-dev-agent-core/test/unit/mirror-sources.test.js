@@ -64,6 +64,95 @@ test('RestartGate: exits outside the window do not accumulate', () => {
   assert.equal(gate.record(), true, 'spaced-out exits keep restarting');
 });
 
+test('IosIdbSource: alive process with no first frame → typed onExit and killed child', async () => {
+  const spawned = [];
+  const src = new IosIdbSource('UDID-1', 20, {
+    spawnFn: () => {
+      const p = fakeProc();
+      p.kill = () => {
+        p.killed = true;
+        setImmediate(() => p.emit('close', 1));
+      };
+      spawned.push(p);
+      return p;
+    },
+    restartDelayMs: 0,
+    firstFrameTimeoutMs: 20,
+  });
+  const rec = sinkRecorder();
+  src.start(rec.sink);
+  await new Promise((r) => setTimeout(r, 60));
+  assert.ok(rec.getExit(), 'alive/no-frame must not hang forever');
+  assert.match(rec.getExit().reason, /no first frame/i);
+  assert.equal(spawned[0].killed, true, 'timed-out idb child must be reaped');
+  assert.equal(spawned.length, 1, 'timeout must not RestartGate-respawn');
+  assert.equal(rec.frames.length, 0);
+});
+
+test('IosIdbSource: garbage stdout does not count as a first frame', async () => {
+  const spawned = [];
+  const src = new IosIdbSource('UDID-1', 20, {
+    spawnFn: () => {
+      const p = fakeProc();
+      spawned.push(p);
+      return p;
+    },
+    restartDelayMs: 0,
+    firstFrameTimeoutMs: 20,
+  });
+  const rec = sinkRecorder();
+  src.start(rec.sink);
+  spawned[0].stdout.write(Buffer.from('not-a-jpeg'));
+  spawned[0].stdout.write(Buffer.from([0xff, 0xd8, 0x00, 0x01]));
+  await new Promise((r) => setTimeout(r, 60));
+  assert.ok(rec.getExit(), 'unterminated JPEG must still time out');
+  assert.match(rec.getExit().reason, /no first frame/i);
+  assert.equal(rec.frames.length, 0);
+  src.stop();
+});
+
+test('IosIdbSource: successful first frame cancels the no-frame timer', async () => {
+  const spawned = [];
+  const src = new IosIdbSource('UDID-1', 20, {
+    spawnFn: () => {
+      const p = fakeProc();
+      spawned.push(p);
+      return p;
+    },
+    restartDelayMs: 0,
+    firstFrameTimeoutMs: 40,
+  });
+  const rec = sinkRecorder();
+  src.start(rec.sink);
+  spawned[0].stdout.write(jpeg(1));
+  await new Promise((r) => setTimeout(r, 70));
+  assert.equal(rec.frames.length, 1);
+  assert.equal(rec.getExit(), null, 'healthy first frame must not fail the source');
+  assert.equal(spawned[0].killed, false);
+  src.stop();
+});
+
+test('IosIdbSource: oversized malformed stream before first frame → typed onExit and killed child', async () => {
+  const spawned = [];
+  const src = new IosIdbSource('UDID-1', 20, {
+    spawnFn: () => {
+      const p = fakeProc();
+      spawned.push(p);
+      return p;
+    },
+    restartDelayMs: 0,
+    firstFrameTimeoutMs: 5_000,
+  });
+  const rec = sinkRecorder();
+  src.start(rec.sink);
+  spawned[0].stdout.write(Buffer.concat([SOI, Buffer.alloc(8_000_000, 0)]));
+  await tick();
+  assert.ok(rec.getExit(), 'malformed first frame must fail bounded');
+  assert.match(rec.getExit().reason, /malformed/i);
+  assert.equal(spawned[0].killed, true);
+  assert.equal(rec.frames.length, 0);
+});
+
 test('IosIdbSource: spawns idb with mjpeg args and emits parsed frames', async () => {
   const spawned = [];
   const src = new IosIdbSource('UDID-1', 20, {

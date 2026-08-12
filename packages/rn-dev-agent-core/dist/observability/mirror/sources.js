@@ -36,6 +36,10 @@ export const SIMCTL_HINT = `install idb for smoother mirroring (${IDB_INSTALL_CO
 // same defect as a hint that cannot be followed.
 export const SIMCTL_BROKEN_IDB_HINT = 'idb is installed but did not respond successfully — most likely fb-idb 1.1.7 under Python 3.14, which removed the asyncio.get_event_loop() it needs. ' +
     'Reinstall it under a supported interpreter: pipx install --python python3.13 --force fb-idb';
+export const IDB_NO_FIRST_FRAME_REASON = 'idb video-stream produced no first frame';
+export const IDB_MALFORMED_FRAME_REASON = 'idb video-stream produced a malformed frame';
+export const IDB_STREAM_UNHEALTHY_HINT = 'idb video-stream produced no usable frame — using simctl screenshot loop';
+const DEFAULT_IDB_FIRST_FRAME_TIMEOUT_MS = 5_000;
 const IDB_HINT = `idb not found — ${IDB_INSTALL_COMMAND}`;
 const FFMPEG_HINT = 'ffmpeg not found — run scripts/ensure-ffmpeg.sh or brew install ffmpeg';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -76,15 +80,18 @@ export class IosIdbSource {
     nominalFps;
     active = false;
     proc = null;
+    firstFrameTimer = null;
     spawnFn;
     gate;
     restartDelayMs;
+    firstFrameTimeoutMs;
     constructor(udid, fps, opts = {}) {
         this.udid = udid;
         this.nominalFps = fps;
         this.spawnFn = opts.spawnFn ?? defaultSpawn;
         this.gate = new RestartGate(3, 10_000, opts.now ?? Date.now);
         this.restartDelayMs = opts.restartDelayMs ?? 300;
+        this.firstFrameTimeoutMs = opts.firstFrameTimeoutMs ?? DEFAULT_IDB_FIRST_FRAME_TIMEOUT_MS;
     }
     start(sink) {
         this.active = true;
@@ -92,6 +99,7 @@ export class IosIdbSource {
     }
     spawnOnce(sink) {
         const extractor = new JpegFrameExtractor();
+        let gotFrame = false;
         const proc = this.spawnFn('idb', [
             'video-stream',
             '--udid',
@@ -107,25 +115,33 @@ export class IosIdbSource {
         // Undrained stderr can fill the 64KB pipe and block the child mid-write —
         // resume() discards it.
         proc.stderr?.resume();
+        this.armFirstFrameTimer(sink);
         proc.stdout.on('data', (chunk) => {
             if (!this.active)
                 return;
             for (const frame of extractor.push(chunk)) {
+                gotFrame = true;
+                this.clearFirstFrameTimer();
                 if (this.active)
                     sink.onFrame(frame);
+            }
+            // Alive + oversized SOI without EOI is not a healthy stream. Fail before
+            // the first-frame timer so a garbage producer cannot occupy the attach.
+            if (this.active && extractor.overflowed && !gotFrame) {
+                this.fail(sink, IDB_MALFORMED_FRAME_REASON);
             }
         });
         proc.on('error', (err) => {
             if (!this.active)
                 return;
             if (isEnoent(err)) {
-                this.active = false;
-                sink.onExit({ reason: 'idb not found', hint: IDB_HINT });
+                this.fail(sink, 'idb not found', IDB_HINT);
             }
         });
         proc.on('close', () => {
             if (!this.active)
                 return;
+            this.clearFirstFrameTimer();
             if (this.gate.record()) {
                 scheduleAfter(() => {
                     if (this.active)
@@ -133,13 +149,36 @@ export class IosIdbSource {
                 }, this.restartDelayMs);
             }
             else {
-                this.active = false;
-                sink.onExit({ reason: 'idb video-stream keeps exiting' });
+                this.fail(sink, 'idb video-stream keeps exiting');
             }
         });
     }
+    armFirstFrameTimer(sink) {
+        this.clearFirstFrameTimer();
+        this.firstFrameTimer = setTimeout(() => {
+            this.firstFrameTimer = null;
+            if (!this.active)
+                return;
+            this.fail(sink, IDB_NO_FIRST_FRAME_REASON, IDB_STREAM_UNHEALTHY_HINT);
+        }, this.firstFrameTimeoutMs);
+    }
+    fail(sink, reason, hint) {
+        if (!this.active)
+            return;
+        this.active = false;
+        this.clearFirstFrameTimer();
+        this.proc?.kill();
+        sink.onExit({ reason, hint });
+    }
+    clearFirstFrameTimer() {
+        if (this.firstFrameTimer) {
+            clearTimeout(this.firstFrameTimer);
+            this.firstFrameTimer = null;
+        }
+    }
     stop() {
         this.active = false;
+        this.clearFirstFrameTimer();
         this.proc?.kill();
     }
 }

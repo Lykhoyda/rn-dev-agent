@@ -45,6 +45,8 @@ export interface SourceOpts {
   spawnFn?: SpawnFn;
   now?: () => number;
   restartDelayMs?: number;
+  /** Bound for an alive child that never emits a valid JPEG. Default 5000. */
+  firstFrameTimeoutMs?: number;
 }
 
 export interface LoopOpts {
@@ -85,6 +87,13 @@ export const SIMCTL_HINT = `install idb for smoother mirroring (${IDB_INSTALL_CO
 export const SIMCTL_BROKEN_IDB_HINT =
   'idb is installed but did not respond successfully — most likely fb-idb 1.1.7 under Python 3.14, which removed the asyncio.get_event_loop() it needs. ' +
   'Reinstall it under a supported interpreter: pipx install --python python3.13 --force fb-idb';
+
+export const IDB_NO_FIRST_FRAME_REASON = 'idb video-stream produced no first frame';
+export const IDB_MALFORMED_FRAME_REASON = 'idb video-stream produced a malformed frame';
+export const IDB_STREAM_UNHEALTHY_HINT =
+  'idb video-stream produced no usable frame — using simctl screenshot loop';
+
+const DEFAULT_IDB_FIRST_FRAME_TIMEOUT_MS = 5_000;
 
 const IDB_HINT = `idb not found — ${IDB_INSTALL_COMMAND}`;
 const FFMPEG_HINT = 'ffmpeg not found — run scripts/ensure-ffmpeg.sh or brew install ffmpeg';
@@ -135,9 +144,11 @@ export class IosIdbSource implements MirrorSource {
   readonly nominalFps: number;
   private active = false;
   private proc: SpawnedLike | null = null;
+  private firstFrameTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly spawnFn: SpawnFn;
   private readonly gate: RestartGate;
   private readonly restartDelayMs: number;
+  private readonly firstFrameTimeoutMs: number;
 
   constructor(
     private readonly udid: string,
@@ -148,6 +159,7 @@ export class IosIdbSource implements MirrorSource {
     this.spawnFn = opts.spawnFn ?? defaultSpawn;
     this.gate = new RestartGate(3, 10_000, opts.now ?? Date.now);
     this.restartDelayMs = opts.restartDelayMs ?? 300;
+    this.firstFrameTimeoutMs = opts.firstFrameTimeoutMs ?? DEFAULT_IDB_FIRST_FRAME_TIMEOUT_MS;
   }
 
   start(sink: MirrorFrameSink): void {
@@ -157,6 +169,7 @@ export class IosIdbSource implements MirrorSource {
 
   private spawnOnce(sink: MirrorFrameSink): void {
     const extractor = new JpegFrameExtractor();
+    let gotFrame = false;
     const proc = this.spawnFn('idb', [
       'video-stream',
       '--udid',
@@ -173,36 +186,69 @@ export class IosIdbSource implements MirrorSource {
     // resume() discards it.
     proc.stderr?.resume();
 
+    this.armFirstFrameTimer(sink);
+
     proc.stdout.on('data', (chunk: Buffer) => {
       if (!this.active) return;
       for (const frame of extractor.push(chunk)) {
+        gotFrame = true;
+        this.clearFirstFrameTimer();
         if (this.active) sink.onFrame(frame);
+      }
+      // Alive + oversized SOI without EOI is not a healthy stream. Fail before
+      // the first-frame timer so a garbage producer cannot occupy the attach.
+      if (this.active && extractor.overflowed && !gotFrame) {
+        this.fail(sink, IDB_MALFORMED_FRAME_REASON);
       }
     });
 
     proc.on('error', (err?: unknown) => {
       if (!this.active) return;
       if (isEnoent(err)) {
-        this.active = false;
-        sink.onExit({ reason: 'idb not found', hint: IDB_HINT });
+        this.fail(sink, 'idb not found', IDB_HINT);
       }
     });
 
     proc.on('close', () => {
       if (!this.active) return;
+      this.clearFirstFrameTimer();
       if (this.gate.record()) {
         scheduleAfter(() => {
           if (this.active) this.spawnOnce(sink);
         }, this.restartDelayMs);
       } else {
-        this.active = false;
-        sink.onExit({ reason: 'idb video-stream keeps exiting' });
+        this.fail(sink, 'idb video-stream keeps exiting');
       }
     });
   }
 
+  private armFirstFrameTimer(sink: MirrorFrameSink): void {
+    this.clearFirstFrameTimer();
+    this.firstFrameTimer = setTimeout(() => {
+      this.firstFrameTimer = null;
+      if (!this.active) return;
+      this.fail(sink, IDB_NO_FIRST_FRAME_REASON, IDB_STREAM_UNHEALTHY_HINT);
+    }, this.firstFrameTimeoutMs);
+  }
+
+  private fail(sink: MirrorFrameSink, reason: string, hint?: string): void {
+    if (!this.active) return;
+    this.active = false;
+    this.clearFirstFrameTimer();
+    this.proc?.kill();
+    sink.onExit({ reason, hint });
+  }
+
+  private clearFirstFrameTimer(): void {
+    if (this.firstFrameTimer) {
+      clearTimeout(this.firstFrameTimer);
+      this.firstFrameTimer = null;
+    }
+  }
+
   stop(): void {
     this.active = false;
+    this.clearFirstFrameTimer();
     this.proc?.kill();
   }
 }
