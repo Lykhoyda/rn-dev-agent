@@ -45,7 +45,7 @@ export interface SourceOpts {
   spawnFn?: SpawnFn;
   now?: () => number;
   restartDelayMs?: number;
-  /** Bound for an alive child that never emits a valid JPEG. Default 5000. */
+  /** Bound for an alive child that never emits a valid JPEG. Default DEFAULT_IDB_FIRST_FRAME_TIMEOUT_MS. */
   firstFrameTimeoutMs?: number;
 }
 
