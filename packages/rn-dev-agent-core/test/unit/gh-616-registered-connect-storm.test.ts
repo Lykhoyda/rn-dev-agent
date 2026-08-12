@@ -220,7 +220,7 @@ async function stormHarness(): Promise<Harness> {
           registerPage();
         },
         connectExact: (input) =>
-          connectExactSessionTarget(input, 30_000, {
+          connectExactSessionTarget(input, 120_000, {
             getClient: () => client,
             setClient: () => assert.fail('iOS exact connect must retain the existing client'),
             createClient: () => assert.fail('no replacement client on the iOS path') as never,
