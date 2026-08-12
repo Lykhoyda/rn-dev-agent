@@ -21,13 +21,14 @@ import {
   assembleMaestroArgs,
   executeMaestroAuthorityStages,
   MaestroStageExecutionError,
+  nestedMaestroAuthorityCallbacks,
   planMaestroAuthorityStages,
   resolveMaestroFlowAppId,
   runFlowParked,
 } from './maestro-run.js';
 import { outputIndicatesFlowFailure } from '../domain/maestro-error-parser.js';
 import { isOlderSdkInstallFailure, olderSdkInstallDiagnosis } from '../domain/engine-pin.js';
-import { resolveAppFileForClearState } from './resolve-ios-app-file.js';
+import { flowUsesClearState, resolveAppFileForClearState } from './resolve-ios-app-file.js';
 import {
   maestroAuthorityRefusal,
   sameDevice,
@@ -40,16 +41,10 @@ import {
   disposeRunnerReportDir,
   runnerReportArgs,
 } from '../domain/maestro-runner-report.js';
-import {
-  completeManagedRunnerParkAuthority,
-  claimManagedNativeOriginAuthority,
-  completeManagedNativeOriginAuthority,
-  relaunchManagedNativeOriginApp,
-  reproveManagedNativeOrigin,
-} from '../session/authority-gate.js';
 import { SessionAuthorityError } from '../session/registry.js';
+import type { SessionState } from '../types.js';
 
-const execFile = promisify(execFileCb);
+const defaultExecFile = promisify(execFileCb);
 
 interface MaestroTestAllArgs {
   platform?: 'ios' | 'android';
@@ -59,6 +54,25 @@ interface MaestroTestAllArgs {
   pattern?: string;
   timeoutPerFlow?: number;
   stopOnFailure?: boolean;
+}
+
+export interface MaestroTestAllDeps {
+  getActiveSession?: () => SessionState | null;
+  chooseDispatch?: typeof chooseMaestroDispatch;
+  parkFlow?: typeof runFlowParked;
+  resolveAppFile?: typeof resolveAppFileForClearState;
+  claimNativeOrigin?: () => Promise<void>;
+  completeNativeOrigin?: (targetExpected: boolean) => Promise<void>;
+  relaunchManagedApp?: () => Promise<void>;
+  reproveManagedOrigin?: () => Promise<void>;
+  completeRunnerPark?: () => Promise<void>;
+  reissueInstallReceipt?: () => Promise<void>;
+  execFile?: (
+    file: string,
+    args: string[],
+    options: { timeout: number; encoding: 'utf8'; maxBuffer: number },
+  ) => Promise<{ stdout: string; stderr: string }>;
+  now?: () => number;
 }
 
 interface FlowResult {
@@ -97,16 +111,21 @@ function discoverFlows(dir: string, pattern?: string): string[] {
   return yamls;
 }
 
-export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Promise<ToolResult> {
+export function createMaestroTestAllHandler(
+  deps: MaestroTestAllDeps = {},
+): (args: MaestroTestAllArgs) => Promise<ToolResult> {
+  const activeSession = deps.getActiveSession ?? getActiveSession;
+  const selectDispatch = deps.chooseDispatch ?? chooseMaestroDispatch;
+  const parkFlow = deps.parkFlow ?? runFlowParked;
+  const resolveAppFile = deps.resolveAppFile ?? resolveAppFileForClearState;
+  const execute = deps.execFile ?? defaultExecFile;
+  const now = deps.now ?? Date.now;
   return async (args) => {
-    const platform = (args.platform ?? getActiveSession()?.platform) as
-      | 'ios'
-      | 'android'
-      | undefined;
+    const platform = (args.platform ?? activeSession()?.platform) as 'ios' | 'android' | undefined;
     if (!platform) {
       return failResult('Cannot determine platform. Pass platform or open a device session first.');
     }
-    const session = getActiveSession();
+    const session = activeSession();
     const boundAppId = args.appId ?? (session?.platform === platform ? session.appId : undefined);
     const matchingSessionDeviceId =
       session?.platform === platform && session.deviceId ? session.deviceId : undefined;
@@ -125,7 +144,7 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
 
     // B59: tiered dispatch (see maestro-dispatch.ts) — picks maestro-runner
     // when viable, falls back to the Maestro CLI on iOS+no-adb machines.
-    const dispatch = chooseMaestroDispatch({ platform });
+    const dispatch = selectDispatch({ platform });
     if ('error' in dispatch) {
       return failResult(dispatch.error);
     }
@@ -144,6 +163,14 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
     }
 
     const timeout = args.timeoutPerFlow ?? 120_000;
+    const managedAuthority = nestedMaestroAuthorityCallbacks(args);
+    const claimOrigin = deps.claimNativeOrigin ?? managedAuthority.claimNativeOrigin;
+    const completeOrigin = deps.completeNativeOrigin ?? managedAuthority.completeNativeOrigin;
+    const relaunchManagedApp = deps.relaunchManagedApp ?? managedAuthority.relaunchManagedApp;
+    const reproveManagedOrigin = deps.reproveManagedOrigin ?? managedAuthority.reproveManagedOrigin;
+    const completeRunnerPark = deps.completeRunnerPark ?? managedAuthority.completeRunnerPark;
+    const reissueInstallReceipt =
+      deps.reissueInstallReceipt ?? managedAuthority.reissueInstallReceipt;
     const results: FlowResult[] = [];
     let passed = 0;
     let failed = 0;
@@ -153,7 +180,7 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
 
     for (const flow of flows) {
       const name = flow.replace(flowDir + '/', '');
-      const start = Date.now();
+      const start = now();
 
       // Phase 134.1 (deepsec CRITICAL #5): read + validate every
       // discovered flow before execution. Auto-discovery is the highest-
@@ -167,6 +194,7 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
       let flowHasHideKeyboard = false;
       let parsedCommands: unknown[] = [];
       let parsedAppId: string | undefined;
+      let reinstallsApp = false;
       try {
         const yamlText = readFileSync(flow, 'utf-8');
         const parsed = parseAndValidateFlow(yamlText);
@@ -184,18 +212,17 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
         );
         writeFileSync(safeFlowFile, canonical, 'utf-8');
         // GH#201 parity with maestro_run: an iOS clearState flow must reinstall
-        // the app, which maestro-runner can only do given --app-file.
-        const appFileResolution = resolveAppFileForClearState(
-          platform,
-          canonical,
-          parsedAppId,
-          undefined,
-        );
+        // the app, which maestro-runner can only do given --app-file. GH #705
+        // follow-up: the container must come from the authority-bound
+        // simulator, never generic `booted`.
+        const appFileResolution = resolveAppFile(platform, canonical, parsedAppId, undefined, {
+          deviceId: requestedDeviceId,
+        });
         if (!appFileResolution.ok) {
           results.push({
             name,
             passed: false,
-            durationMs: Date.now() - start,
+            durationMs: now() - start,
             error: appFileResolution.error.slice(0, 300),
           });
           failed++;
@@ -203,6 +230,9 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
           continue;
         }
         appFile = appFileResolution.appFile;
+        // GH #705 follow-up: only a clearState flow uninstalls and reinstalls;
+        // an --app-file carried by any other flow must not re-issue the receipt.
+        reinstallsApp = Boolean(appFile) && flowUsesClearState(canonical);
       } catch (err) {
         const reason =
           err instanceof MaestroValidationError
@@ -211,7 +241,7 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
         results.push({
           name,
           passed: false,
-          durationMs: Date.now() - start,
+          durationMs: now() - start,
           error: reason.slice(0, 300),
         });
         failed++;
@@ -224,7 +254,7 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
       // Re-route per flow; fall back to the base dispatch if re-selection errors.
       let flowDispatch = dispatch;
       if (platform === 'android' && flowHasHideKeyboard) {
-        const rerouted = chooseMaestroDispatch({ platform, flowHasHideKeyboard: true });
+        const rerouted = selectDispatch({ platform, flowHasHideKeyboard: true });
         if (!('error' in rerouted)) {
           flowDispatch = rerouted;
           if (rerouted.degradedReason) keyboardCaveat ??= rerouted.degradedReason;
@@ -235,13 +265,23 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
       const baseArgs = flowDispatch.buildArgs(platform, safeFlowFile, appFile, requestedDeviceId);
       const finalArgs = assembleMaestroArgs(baseArgs, runnerReportArgs(runnerReportDir));
 
+      // GH #705 follow-up: commit a fresh install receipt after a clearState
+      // reinstall — mirrors maestro_run, so the first clearState flow in a
+      // corpus no longer breaks axis I for every flow and tool call after it.
+      let installReceiptCommitted = false;
+      const commitReinstalledInstall = async (): Promise<void> => {
+        if (!reinstallsApp || installReceiptCommitted || !reissueInstallReceipt) return;
+        installReceiptCommitted = true;
+        await reissueInstallReceipt();
+      };
+
       try {
-        const stageResults = await runFlowParked(
+        const stageResults = await parkFlow(
           () =>
             executeMaestroAuthorityStages(
               parsedCommands,
               async (commands) => {
-                const remainingTimeout = start + timeout - Date.now();
+                const remainingTimeout = start + timeout - now();
                 if (remainingTimeout <= 0) {
                   const error = new Error('Maestro flow timeout exhausted before the next stage');
                   Object.assign(error, { code: 'ETIMEDOUT' });
@@ -254,23 +294,24 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
                   ]),
                   'utf-8',
                 );
-                return execFile(flowDispatch.binPath, finalArgs, {
+                return execute(flowDispatch.binPath, finalArgs, {
                   timeout: remainingTimeout,
                   encoding: 'utf8',
                   maxBuffer: 10 * 1024 * 1024,
                 });
               },
-              () => claimManagedNativeOriginAuthority(args),
-              (targetExpected) => completeManagedNativeOriginAuthority(args, targetExpected),
-              () => relaunchManagedNativeOriginApp(args),
-              () => reproveManagedNativeOrigin(args),
+              claimOrigin,
+              completeOrigin,
+              relaunchManagedApp,
+              reproveManagedOrigin,
             ),
           {
             platform,
             deviceId: requestedDeviceId,
-            completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
+            completeRunnerPark,
           },
         );
+        await commitReinstalledInstall();
         const stdout = stageResults.map((result) => result.stdout).join('\n');
         const stderr = stageResults.map((result) => result.stderr).join('\n');
         const output = (stdout + '\n' + stderr).trim();
@@ -295,7 +336,7 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
         results.push({
           name,
           passed: ok,
-          durationMs: Date.now() - start,
+          durationMs: now() - start,
           error: authorityRefusal ?? (ok ? undefined : output.slice(0, 300)),
           deviceAuthority,
         });
@@ -305,6 +346,9 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
 
         if (!ok && args.stopOnFailure) break;
       } catch (err) {
+        // A flow that died mid-way may still have reinstalled: re-issue before
+        // reporting, so the failure is the flow's and not a broken axis I.
+        await commitReinstalledInstall();
         if (err instanceof SessionAuthorityError) throw err;
         const stageError = err instanceof MaestroStageExecutionError ? err.stageError : err;
         const msg = stageError instanceof Error ? stageError.message : String(stageError);
@@ -353,7 +397,7 @@ export function createMaestroTestAllHandler(): (args: MaestroTestAllArgs) => Pro
         results.push({
           name,
           passed: false,
-          durationMs: Date.now() - start,
+          durationMs: now() - start,
           error: preOFailure ?? authorityRefusal ?? msg.slice(0, 300),
           ...(deviceAuthority && !preOFailure ? { deviceAuthority } : {}),
         });

@@ -367,7 +367,9 @@ export function authorityProfileFor(
       postflightAxes: facetsOf(throughRuntime, { without: ['A', 'B'] }),
       managedOrigin: true,
       managedRunnerPark: true,
-      managedInstallReissue: tool === 'maestro_run',
+      // GH #705 (+follow-up): both flow executors reinstall on clearState and
+      // commit the proof-carrying receipt re-issue themselves.
+      managedInstallReissue: true,
       mutation: true,
       liveBundleProbe: false,
     };

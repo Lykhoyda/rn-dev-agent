@@ -27378,7 +27378,9 @@ function authorityProfileFor(tool, args = {}) {
       postflightAxes: facetsOf(throughRuntime, { without: ["A", "B"] }),
       managedOrigin: true,
       managedRunnerPark: true,
-      managedInstallReissue: tool === "maestro_run",
+      // GH #705 (+follow-up): both flow executors reinstall on clearState and
+      // commit the proof-carrying receipt re-issue themselves.
+      managedInstallReissue: true,
       mutation: true,
       liveBundleProbe: false
     };
@@ -68080,9 +68082,9 @@ async function resolveExactReloadTargetId(client2, captured, authorityTarget, ex
   return exactCandidates[0].id;
 }
 async function recoverAfterFailedReconnect(getClient2, setClient2, createClient2, captured, deps = {}, authorityTarget) {
-  const execFile27 = deps.execFile ?? defaultExecFile2;
+  const execFile26 = deps.execFile ?? defaultExecFile2;
   const sleep7 = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
-  const resolveExactTargetId = deps.resolveExactTargetId ?? ((client2, state, target) => resolveExactReloadTargetId(client2, state, target, execFile27));
+  const resolveExactTargetId = deps.resolveExactTargetId ?? ((client2, state, target) => resolveExactReloadTargetId(client2, state, target, execFile26));
   const first = await forceReconnect(getClient2(), setClient2, createClient2, captured, authorityTarget, authorityTarget ? resolveExactTargetId : void 0);
   if (first.ok) {
     return {
@@ -68103,12 +68105,12 @@ async function recoverAfterFailedReconnect(getClient2, setClient2, createClient2
   const platform = authorityTarget.platform;
   try {
     if (platform === "ios") {
-      await execFile27("xcrun", ["simctl", "terminate", deviceId, bundleId], {
+      await execFile26("xcrun", ["simctl", "terminate", deviceId, bundleId], {
         timeout: 5e3
       });
       steps.push(`simctl terminate ${bundleId}:ok`);
     } else {
-      await execFile27("adb", ["-s", deviceId, "shell", "am", "force-stop", bundleId], {
+      await execFile26("adb", ["-s", deviceId, "shell", "am", "force-stop", bundleId], {
         timeout: 5e3
       });
       steps.push(`adb force-stop ${bundleId}:ok`);
@@ -68118,12 +68120,12 @@ async function recoverAfterFailedReconnect(getClient2, setClient2, createClient2
   }
   try {
     if (platform === "ios") {
-      await execFile27("xcrun", ["simctl", "launch", deviceId, bundleId], {
+      await execFile26("xcrun", ["simctl", "launch", deviceId, bundleId], {
         timeout: 8e3
       });
       steps.push(`simctl launch ${bundleId}:ok`);
     } else {
-      await execFile27("adb", [
+      await execFile26("adb", [
         "-s",
         deviceId,
         "shell",
@@ -82794,7 +82796,7 @@ async function resolveExactRestartTargetId(client2, input, execute2) {
   return exactCandidates[0].id;
 }
 function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) {
-  const execFile27 = deps.execFile ?? defaultExecFile3;
+  const execFile26 = deps.execFile ?? defaultExecFile3;
   const stopFastRunner2 = deps.stopFastRunner ?? stopFastRunner;
   const unbindRunner = deps.unbindRunner ?? (() => {
   });
@@ -82802,7 +82804,7 @@ function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) 
   const probeAppInstalledFn = deps.probeAppInstalled ?? probeAppInstalled;
   const snapshotHintFn = deps.snapshotHint ?? snapshotHintForBundleId;
   const resetDetachedBudgetFn = deps.resetDetachedBudget ?? resetDetachedRecoveryCounter;
-  const resolveExactTargetId = deps.resolveExactTargetId ?? ((client2, input) => resolveExactRestartTargetId(client2, input, execFile27));
+  const resolveExactTargetId = deps.resolveExactTargetId ?? ((client2, input) => resolveExactRestartTargetId(client2, input, execFile26));
   async function doRestart(args) {
     try {
       logger.info("MCP", `cdp_restart: in-process state reset requested (hardReset=${!!args.hardReset})`);
@@ -82835,7 +82837,7 @@ function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) 
             return failResult("cdp_restart refused a non-exact iOS simulator identifier", "DEVICE_AUTHORITY_MISMATCH");
           }
           try {
-            await execFile27("xcrun", ["simctl", "terminate", targetUdid, bundleId], {
+            await execFile26("xcrun", ["simctl", "terminate", targetUdid, bundleId], {
               timeout: 5e3
             });
             hardResetSteps.push(`simctl terminate ${bundleId}:ok`);
@@ -82843,7 +82845,7 @@ function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) 
             hardResetSteps.push(`simctl terminate:warn(${err instanceof Error ? err.message : err})`);
           }
           try {
-            await execFile27("xcrun", ["simctl", "launch", targetUdid, bundleId], { timeout: 8e3 });
+            await execFile26("xcrun", ["simctl", "launch", targetUdid, bundleId], { timeout: 8e3 });
             hardResetSteps.push(`simctl launch ${bundleId}:ok`);
           } catch (err) {
             const msg3 = err instanceof Error ? err.message : String(err);
@@ -82863,11 +82865,11 @@ function createRestartHandler(getClient2, setClient2, createClient2, deps = {}) 
           await sleep7(3e3);
         } else if (bundleId && targetPlatform === "android") {
           try {
-            await execFile27("adb", ["-s", args.deviceId, "shell", "am", "force-stop", bundleId], {
+            await execFile26("adb", ["-s", args.deviceId, "shell", "am", "force-stop", bundleId], {
               timeout: 5e3
             });
             hardResetSteps.push(`adb force-stop ${bundleId}:ok`);
-            await execFile27("adb", [
+            await execFile26("adb", [
               "-s",
               args.deviceId,
               "shell",
@@ -83149,20 +83151,26 @@ function discoverFlows(dir, pattern) {
   }
   return yamls;
 }
-function createMaestroTestAllHandler() {
+function createMaestroTestAllHandler(deps = {}) {
+  const activeSession2 = deps.getActiveSession ?? getActiveSession;
+  const selectDispatch = deps.chooseDispatch ?? chooseMaestroDispatch;
+  const parkFlow = deps.parkFlow ?? runFlowParked;
+  const resolveAppFile = deps.resolveAppFile ?? resolveAppFileForClearState;
+  const execute2 = deps.execFile ?? defaultExecFile4;
+  const now = deps.now ?? Date.now;
   return async (args) => {
-    const platform = args.platform ?? getActiveSession()?.platform;
+    const platform = args.platform ?? activeSession2()?.platform;
     if (!platform) {
       return failResult("Cannot determine platform. Pass platform or open a device session first.");
     }
-    const session2 = getActiveSession();
+    const session2 = activeSession2();
     const boundAppId = args.appId ?? (session2?.platform === platform ? session2.appId : void 0);
     const matchingSessionDeviceId = session2?.platform === platform && session2.deviceId ? session2.deviceId : void 0;
     if (args.deviceId && matchingSessionDeviceId && !sameDevice(args.deviceId, matchingSessionDeviceId)) {
       return failResult(`Refusing Maestro suite target ${args.deviceId}: active ${platform} session is bound to ${matchingSessionDeviceId}.`, "TARGET_SESSION_MISMATCH", { requestedDeviceId: args.deviceId, activeSessionDeviceId: matchingSessionDeviceId });
     }
     const requestedDeviceId = args.deviceId ?? matchingSessionDeviceId;
-    const dispatch = chooseMaestroDispatch({ platform });
+    const dispatch = selectDispatch({ platform });
     if ("error" in dispatch) {
       return failResult(dispatch.error);
     }
@@ -83176,18 +83184,26 @@ function createMaestroTestAllHandler() {
       return failResult(`No Maestro flows found in ${flowDir}. Generate flows with maestro_generate first.`);
     }
     const timeout = args.timeoutPerFlow ?? 12e4;
+    const managedAuthority = nestedMaestroAuthorityCallbacks(args);
+    const claimOrigin = deps.claimNativeOrigin ?? managedAuthority.claimNativeOrigin;
+    const completeOrigin = deps.completeNativeOrigin ?? managedAuthority.completeNativeOrigin;
+    const relaunchManagedApp = deps.relaunchManagedApp ?? managedAuthority.relaunchManagedApp;
+    const reproveManagedOrigin = deps.reproveManagedOrigin ?? managedAuthority.reproveManagedOrigin;
+    const completeRunnerPark = deps.completeRunnerPark ?? managedAuthority.completeRunnerPark;
+    const reissueInstallReceipt = deps.reissueInstallReceipt ?? managedAuthority.reissueInstallReceipt;
     const results = [];
     let passed = 0;
     let failed = 0;
     let keyboardCaveat = null;
     for (const flow of flows) {
       const name = flow.replace(flowDir + "/", "");
-      const start = Date.now();
+      const start = now();
       let safeFlowFile;
       let appFile;
       let flowHasHideKeyboard = false;
       let parsedCommands = [];
       let parsedAppId;
+      let reinstallsApp = false;
       try {
         const yamlText = readFileSync32(flow, "utf-8");
         const parsed = parseAndValidateFlow(yamlText);
@@ -83198,12 +83214,14 @@ function createMaestroTestAllHandler() {
         const canonical = buildMaestroFlow(parsedAppId !== void 0 ? { appId: parsedAppId } : {}, parsed.commands);
         safeFlowFile = join45(tmpdir12(), `rn-maestro-validated-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
         writeFileSync18(safeFlowFile, canonical, "utf-8");
-        const appFileResolution = resolveAppFileForClearState(platform, canonical, parsedAppId, void 0);
+        const appFileResolution = resolveAppFile(platform, canonical, parsedAppId, void 0, {
+          deviceId: requestedDeviceId
+        });
         if (!appFileResolution.ok) {
           results.push({
             name,
             passed: false,
-            durationMs: Date.now() - start,
+            durationMs: now() - start,
             error: appFileResolution.error.slice(0, 300)
           });
           failed++;
@@ -83212,12 +83230,13 @@ function createMaestroTestAllHandler() {
           continue;
         }
         appFile = appFileResolution.appFile;
+        reinstallsApp = Boolean(appFile) && flowUsesClearState(canonical);
       } catch (err) {
         const reason = err instanceof MaestroValidationError ? `Refused by validator: ${err.message}` : `Read/parse error: ${err.message}`;
         results.push({
           name,
           passed: false,
-          durationMs: Date.now() - start,
+          durationMs: now() - start,
           error: reason.slice(0, 300)
         });
         failed++;
@@ -83227,7 +83246,7 @@ function createMaestroTestAllHandler() {
       }
       let flowDispatch = dispatch;
       if (platform === "android" && flowHasHideKeyboard) {
-        const rerouted = chooseMaestroDispatch({ platform, flowHasHideKeyboard: true });
+        const rerouted = selectDispatch({ platform, flowHasHideKeyboard: true });
         if (!("error" in rerouted)) {
           flowDispatch = rerouted;
           if (rerouted.degradedReason)
@@ -83237,9 +83256,16 @@ function createMaestroTestAllHandler() {
       const runnerReportDir = createRunnerReportDir(flowDispatch.runner, "rn-maestro-suite-report");
       const baseArgs = flowDispatch.buildArgs(platform, safeFlowFile, appFile, requestedDeviceId);
       const finalArgs = assembleMaestroArgs(baseArgs, runnerReportArgs(runnerReportDir));
+      let installReceiptCommitted = false;
+      const commitReinstalledInstall = async () => {
+        if (!reinstallsApp || installReceiptCommitted || !reissueInstallReceipt)
+          return;
+        installReceiptCommitted = true;
+        await reissueInstallReceipt();
+      };
       try {
-        const stageResults = await runFlowParked(() => executeMaestroAuthorityStages(parsedCommands, async (commands) => {
-          const remainingTimeout = start + timeout - Date.now();
+        const stageResults = await parkFlow(() => executeMaestroAuthorityStages(parsedCommands, async (commands) => {
+          const remainingTimeout = start + timeout - now();
           if (remainingTimeout <= 0) {
             const error2 = new Error("Maestro flow timeout exhausted before the next stage");
             Object.assign(error2, { code: "ETIMEDOUT" });
@@ -83248,16 +83274,17 @@ function createMaestroTestAllHandler() {
           writeFileSync18(safeFlowFile, buildMaestroFlow(parsedAppId !== void 0 ? { appId: parsedAppId } : {}, [
             ...commands
           ]), "utf-8");
-          return execFile24(flowDispatch.binPath, finalArgs, {
+          return execute2(flowDispatch.binPath, finalArgs, {
             timeout: remainingTimeout,
             encoding: "utf8",
             maxBuffer: 10 * 1024 * 1024
           });
-        }, () => claimManagedNativeOriginAuthority(args), (targetExpected) => completeManagedNativeOriginAuthority(args, targetExpected), () => relaunchManagedNativeOriginApp(args), () => reproveManagedNativeOrigin(args)), {
+        }, claimOrigin, completeOrigin, relaunchManagedApp, reproveManagedOrigin), {
           platform,
           deviceId: requestedDeviceId,
-          completeRunnerPark: () => completeManagedRunnerParkAuthority(args)
+          completeRunnerPark
         });
+        await commitReinstalledInstall();
         const stdout = stageResults.map((result) => result.stdout).join("\n");
         const stderr = stageResults.map((result) => result.stderr).join("\n");
         const output = (stdout + "\n" + stderr).trim();
@@ -83277,7 +83304,7 @@ function createMaestroTestAllHandler() {
         results.push({
           name,
           passed: ok,
-          durationMs: Date.now() - start,
+          durationMs: now() - start,
           error: authorityRefusal ?? (ok ? void 0 : output.slice(0, 300)),
           deviceAuthority
         });
@@ -83288,6 +83315,7 @@ function createMaestroTestAllHandler() {
         if (!ok && args.stopOnFailure)
           break;
       } catch (err) {
+        await commitReinstalledInstall();
         if (err instanceof SessionAuthorityError)
           throw err;
         const stageError = err instanceof MaestroStageExecutionError ? err.stageError : err;
@@ -83313,7 +83341,7 @@ function createMaestroTestAllHandler() {
         results.push({
           name,
           passed: false,
-          durationMs: Date.now() - start,
+          durationMs: now() - start,
           error: preOFailure ?? authorityRefusal ?? msg3.slice(0, 300),
           ...deviceAuthority && !preOFailure ? { deviceAuthority } : {}
         });
@@ -83347,7 +83375,7 @@ function createMaestroTestAllHandler() {
     return okResult(summary);
   };
 }
-var execFile24;
+var defaultExecFile4;
 var init_maestro_test_all = __esm({
   "packages/rn-dev-agent-core/dist/tools/maestro-test-all.js"() {
     "use strict";
@@ -83362,9 +83390,8 @@ var init_maestro_test_all = __esm({
     init_resolve_ios_app_file();
     init_maestro_device_authority();
     init_maestro_runner_report();
-    init_authority_gate();
     init_registry();
-    execFile24 = promisify27(execFileCb21);
+    defaultExecFile4 = promisify27(execFileCb21);
   }
 });
 
@@ -85110,11 +85137,11 @@ var init_jpeg_stream = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/observability/mirror/sources.js
-import { spawn as spawn9, execFile as execFile25 } from "node:child_process";
+import { spawn as spawn9, execFile as execFile24 } from "node:child_process";
 import { readFile as readFile2, unlink } from "node:fs/promises";
 import { tmpdir as tmpdir14 } from "node:os";
 import { join as join51 } from "node:path";
-async function probeIdbClient(execFileFn = execFile25) {
+async function probeIdbClient(execFileFn = execFile24) {
   return new Promise((resolve12) => {
     execFileFn("idb", ["--help"], { timeout: 3e3 }, (err) => {
       if (!err)
@@ -85129,7 +85156,7 @@ function isEnoent(err) {
 function defaultExecJpeg(cmd, args, signal) {
   const outPath = args[args.length - 1];
   return new Promise((resolve12, reject) => {
-    execFile25(cmd, args, { maxBuffer: 16 * 1024 * 1024, timeout: 1e4, signal }, (err) => {
+    execFile24(cmd, args, { maxBuffer: 16 * 1024 * 1024, timeout: 1e4, signal }, (err) => {
       if (err) {
         reject(err);
         return;
@@ -87427,7 +87454,7 @@ __export(index_exports, {
 });
 import { createHash as createHash23, createHmac as createHmac5, randomUUID as randomUUID11 } from "node:crypto";
 import { readFileSync as readFileSync41, rmSync as rmSync11 } from "node:fs";
-import { execFile as execFile26 } from "node:child_process";
+import { execFile as execFile25 } from "node:child_process";
 import { promisify as promisify28 } from "node:util";
 import { fileURLToPath as fileURLToPath7 } from "node:url";
 import { dirname as dirname25, join as join57 } from "node:path";
@@ -88067,7 +88094,7 @@ var init_index = __esm({
       const status = authorityRuntime.status();
       return configureClientLifecycle(status.available && status.bindings.bundle ? client.createReplacement(port) : new CDPClient(port));
     };
-    execFileP = promisify28(execFile26);
+    execFileP = promisify28(execFile25);
     mustOk = (res, what) => {
       const env = JSON.parse(res.content[0].text);
       if (env.ok === false)

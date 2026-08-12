@@ -640,8 +640,10 @@ test('device_find click and lifecycle tools use mutation-aware origin authority'
   for (const tool of ['maestro_run', 'maestro_test_all']) {
     assert.equal(authorityProfileFor(tool).managedRunnerPark, true);
   }
+  // GH #705 follow-up: maestro_test_all now commits the clearState reinstall
+  // re-issue itself, so the capability grant is no longer inert there.
   assert.equal(authorityProfileFor('maestro_run').managedInstallReissue, true);
-  assert.equal(authorityProfileFor('maestro_test_all').managedInstallReissue, false);
+  assert.equal(authorityProfileFor('maestro_test_all').managedInstallReissue, true);
   const storageReset = authorityProfileFor('device_reset_state', { storageKeys: ['token'] });
   assert.equal(storageReset.axes.includes('B'), true);
   assert.equal(storageReset.postflightAxes?.includes('B'), false);
