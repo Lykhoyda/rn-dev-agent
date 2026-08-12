@@ -85,7 +85,7 @@ export function createConnectHandler(getClient, setClient, createClient) {
                 const inFlight = client.reconnectState?.active
                     ? `a supervised reconnect (attempt ${client.reconnectState.attemptCount})`
                     : 'another connect attempt';
-                return failResult(`cdp_connect refused: ${inFlight} is already in flight. Pass force=true to supersede it with this explicit connect, or retry after it settles.`, { reconnect: client.reconnectState });
+                return failResult(`cdp_connect refused: ${inFlight} is already in flight. Pass force=true to supersede it with this explicit connect, or retry after it settles.`, 'CONNECT_IN_FLIGHT', { reconnect: client.reconnectState });
             }
             const port = args.metroPort ?? client.metroPort;
             await client.disconnect();

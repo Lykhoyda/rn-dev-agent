@@ -125,6 +125,7 @@ export function createConnectHandler(
           : 'another connect attempt';
         return failResult(
           `cdp_connect refused: ${inFlight} is already in flight. Pass force=true to supersede it with this explicit connect, or retry after it settles.`,
+          'CONNECT_IN_FLIGHT',
           { reconnect: client.reconnectState },
         );
       }

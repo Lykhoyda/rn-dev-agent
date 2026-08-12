@@ -153,8 +153,19 @@ test('GH-616: a superseded storm cannot overwrite the explicit connect result', 
 test('GH-616: cdp_connect without force during an active reconnect refuses actionably', async () => {
   const h = stormHarness();
   const result = await h.handler({ targetId: 'android-7-2' });
-  const data = JSON.parse(result.content[0]!.text) as { ok: boolean; error?: string };
+  const data = JSON.parse(result.content[0]!.text) as {
+    ok: boolean;
+    error?: string;
+    code?: string;
+    meta?: { reconnect?: { active?: boolean } };
+  };
   assert.equal(data.ok, false);
+  assert.equal(
+    data.code,
+    'CONNECT_IN_FLIGHT',
+    'the supersede contract must be machine-detectable, not prose-only',
+  );
+  assert.equal(data.meta?.reconnect?.active, true, 'the in-flight reconnect state must survive');
   assert.match(
     data.error ?? '',
     /force=true/,
