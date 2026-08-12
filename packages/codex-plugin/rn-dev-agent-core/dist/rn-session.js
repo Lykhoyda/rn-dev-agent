@@ -18136,7 +18136,8 @@ async function ensureManagedMetro(status) {
       receiptPreserved = restart.receiptPreserved;
       receiptPreservedReason = restart.reason;
       if (!receiptPreserved) {
-        process.stderr.write(`rn-session ensure-metro: install receipt generation not preserved (${restart.reason}); pin_dev_client will refuse until the install is re-proved by stop_metro + ensure-metro or a rebuild
+        const recovery = restart.reason === "install-capture-failed" ? "retry stop_metro + ensure-metro to re-prove the unchanged install, or rebuild if the probe keeps failing" : "rebuild to reissue the install receipt";
+        process.stderr.write(`rn-session ensure-metro: install receipt generation not preserved (${restart.reason}); pin_dev_client will refuse until the receipt and Metro generations agree \u2014 ${recovery}
 `);
       }
       writeMarker(status, {

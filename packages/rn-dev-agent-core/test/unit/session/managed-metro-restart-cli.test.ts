@@ -209,7 +209,7 @@ test('ensure-metro preserves a revalidated receipt generation and bumps a change
       assert.match(result.stderr, /project is neither Expo nor bare React Native/);
       assert.match(
         result.stderr,
-        /install receipt generation not preserved \(installed-artifact-changed\)/,
+        /install receipt generation not preserved \(installed-artifact-changed\); pin_dev_client will refuse until the receipt and Metro generations agree — rebuild to reissue the install receipt/,
       );
       const marker = readSignedMarker(appRoot);
       const payload = verifyMetroAuthorityMarker(marker as never, 'signer', {
@@ -226,7 +226,7 @@ test('ensure-metro preserves a revalidated receipt generation and bumps a change
       assert.match(result.stderr, /project is neither Expo nor bare React Native/);
       assert.match(
         result.stderr,
-        /install receipt generation not preserved \(install-capture-failed\)/,
+        /install receipt generation not preserved \(install-capture-failed\); pin_dev_client will refuse until the receipt and Metro generations agree — retry stop_metro \+ ensure-metro/,
       );
       const payload = readSignedMarker(appRoot).payload as { buildGeneration: number };
       assert.equal(payload.buildGeneration, 5);
