@@ -51,7 +51,7 @@ import { createInteractHandler } from './tools/interact.js';
 import { createCollectLogsHandler } from './tools/collect-logs.js';
 import { createDeviceListHandler, createDeviceScreenshotHandler } from './tools/device-list.js';
 import { createDeviceSnapshotHandler } from './tools/device-session.js';
-import { releaseDeviceLockForSession } from './tools/device-session.js';
+import { isAppRunning, releaseDeviceLockForSession } from './tools/device-session.js';
 import {
   createDeviceFindHandler,
   createDevicePressHandler,
@@ -1176,6 +1176,28 @@ async function reconnectSessionRuntime(
     readinessTimeoutMs,
   );
   return stageAndroidRuntimeConnection(connection);
+}
+
+/**
+ * GH #750: distinguishes "the dev-client is still re-registering" from "nothing
+ * is running on the bound device", so a picker probe only fails fast for the
+ * latter. Any inconclusive answer reports "present" and keeps the wider budget.
+ */
+async function isSessionRuntimeAbsent(): Promise<boolean> {
+  try {
+    const status = authorityRuntime.status();
+    if (!status.available) return false;
+    const { platform, deviceId, appId, metroPort } = resolveManagedRuntimeLaunchBinding(status);
+    const listed = await getClient().listTargetsExact(metroPort);
+    if (listed.port !== metroPort) return false;
+    const advertised = listed.targets.some((candidate) =>
+      targetMatchesSession(candidate, { platform, bundleId: appId }),
+    );
+    if (advertised) return false;
+    return !(await isAppRunning(platform, appId, undefined, deviceId));
+  } catch {
+    return false;
+  }
 }
 
 async function relaunchSessionRuntime(
@@ -2668,6 +2690,7 @@ trackedTool(
       const status = authorityRuntime.status();
       return status.available && Boolean(status.bindings.bundle);
     },
+    isSessionRuntimeAbsent: isSessionRuntimeAbsent,
   }),
 );
 

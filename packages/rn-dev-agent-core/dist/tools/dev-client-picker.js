@@ -352,9 +352,12 @@ export async function isDevClientPickerShowing() {
         return false;
     return isPickerIndicatorPresent();
 }
-// GH #750: a defensive picker probe on a screen with no picker must not inherit
-// the exact-target readiness budget an actual dev-client relaunch needs.
-const PICKER_PROBE_READINESS_TIMEOUT_MS = 15_000;
+// GH #750: a defensive picker probe only fails fast when the exact device
+// advertises no session target AND the app is provably not running; a slow
+// bridgeless re-registration still gets a window wider than the >15s the
+// dev-client needs, while cdp_connect keeps the full exact-target budget.
+const PICKER_PROBE_ABSENT_RUNTIME_TIMEOUT_MS = 15_000;
+const PICKER_PROBE_READINESS_TIMEOUT_MS = 45_000;
 export function createDismissDevClientPickerHandler(getMetroPort, authorityDeps = {}) {
     let dismissalAwaitingProof = false;
     return async (args) => {
@@ -380,6 +383,20 @@ export function createDismissDevClientPickerHandler(getMetroPort, authorityDeps 
             await (authorityDeps.completeOrigin ?? completeManagedNativeOriginAuthority)(args, true);
             dismissalAwaitingProof = false;
         };
+        const pickerProbeReadinessTimeoutMs = async () => {
+            if (dismissalAwaitingProof)
+                return undefined;
+            let runtimeAbsent = false;
+            try {
+                runtimeAbsent = (await authorityDeps.isSessionRuntimeAbsent?.()) ?? false;
+            }
+            catch {
+                runtimeAbsent = false;
+            }
+            return runtimeAbsent
+                ? PICKER_PROBE_ABSENT_RUNTIME_TIMEOUT_MS
+                : PICKER_PROBE_READINESS_TIMEOUT_MS;
+        };
         if (outcome.dismissed) {
             dismissalAwaitingProof = true;
             await proveOrigin();
@@ -389,10 +406,13 @@ export function createDismissDevClientPickerHandler(getMetroPort, authorityDeps 
         // already gone; re-prove rather than reporting ok with B still unbound. A
         // probe that never dismissed anything gets the bounded budget instead.
         const isBundleBound = authorityDeps.isBundleBound ?? (() => true);
+        const bundleBound = isBundleBound();
+        if (bundleBound)
+            dismissalAwaitingProof = false;
         if (outcome.pickerPresent === false &&
-            !isBundleBound() &&
+            !bundleBound &&
             (authorityDeps.reproveOrigin !== undefined || hasManagedNativeOriginAuthority(args))) {
-            await proveOrigin(dismissalAwaitingProof ? undefined : PICKER_PROBE_READINESS_TIMEOUT_MS);
+            await proveOrigin(await pickerProbeReadinessTimeoutMs());
             return okResult({ dismissed: false, reproved: true, reason: outcome.reason, platform: outcome.platform }, { meta });
         }
         if (outcome.reason.toLowerCase().includes('could not find')) {

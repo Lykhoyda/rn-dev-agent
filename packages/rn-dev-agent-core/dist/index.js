@@ -41,7 +41,7 @@ import { createInteractHandler } from './tools/interact.js';
 import { createCollectLogsHandler } from './tools/collect-logs.js';
 import { createDeviceListHandler, createDeviceScreenshotHandler } from './tools/device-list.js';
 import { createDeviceSnapshotHandler } from './tools/device-session.js';
-import { releaseDeviceLockForSession } from './tools/device-session.js';
+import { isAppRunning, releaseDeviceLockForSession } from './tools/device-session.js';
 import { createDeviceFindHandler, createDevicePressHandler, createDeviceFillHandler, createDeviceSwipeHandler, createDeviceScrollHandler, createDeviceScrollIntoViewHandler, createDeviceLongPressHandler, createDevicePinchHandler, createDeviceBackHandler, createDeviceFocusNextHandler, } from './tools/device-interact.js';
 import { createDevicePermissionHandler } from './tools/device-permission.js';
 import { createDeviceResetStateHandler } from './tools/device-reset-state.js';
@@ -905,6 +905,29 @@ async function reconnectSessionRuntime(status, options) {
     }
     const connection = await connectExactSessionTarget({ metroPort, platform, appId, deviceId }, readinessTimeoutMs);
     return stageAndroidRuntimeConnection(connection);
+}
+/**
+ * GH #750: distinguishes "the dev-client is still re-registering" from "nothing
+ * is running on the bound device", so a picker probe only fails fast for the
+ * latter. Any inconclusive answer reports "present" and keeps the wider budget.
+ */
+async function isSessionRuntimeAbsent() {
+    try {
+        const status = authorityRuntime.status();
+        if (!status.available)
+            return false;
+        const { platform, deviceId, appId, metroPort } = resolveManagedRuntimeLaunchBinding(status);
+        const listed = await getClient().listTargetsExact(metroPort);
+        if (listed.port !== metroPort)
+            return false;
+        const advertised = listed.targets.some((candidate) => targetMatchesSession(candidate, { platform, bundleId: appId }));
+        if (advertised)
+            return false;
+        return !(await isAppRunning(platform, appId, undefined, deviceId));
+    }
+    catch {
+        return false;
+    }
 }
 async function relaunchSessionRuntime(status) {
     const { platform, deviceId, appId, metroPort, devClientUrl: boundDevClientUrl, } = resolveManagedRuntimeLaunchBinding(status);
@@ -1958,6 +1981,7 @@ trackedTool('cdp_dismiss_dev_client_picker', 'Dismiss the Expo Dev Client "Devel
         const status = authorityRuntime.status();
         return status.available && Boolean(status.bindings.bundle);
     },
+    isSessionRuntimeAbsent: isSessionRuntimeAbsent,
 }));
 trackedTool('device_accept_system_dialog', 'Tap an OS-level accept button on the exact session device. iOS prefers the capability-bound native runner so SpringBoard-owned dialogs are reachable; DIALOG_BUTTON_NOT_FOUND returns availableButtons for an exact-label retry.', {
     label: z

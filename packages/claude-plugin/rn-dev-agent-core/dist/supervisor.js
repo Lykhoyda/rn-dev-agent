@@ -33808,14 +33808,28 @@ function createDismissDevClientPickerHandler(getMetroPort, authorityDeps2 = {}) 
       await (authorityDeps2.completeOrigin ?? completeManagedNativeOriginAuthority)(args, true);
       dismissalAwaitingProof = false;
     };
+    const pickerProbeReadinessTimeoutMs = async () => {
+      if (dismissalAwaitingProof)
+        return void 0;
+      let runtimeAbsent = false;
+      try {
+        runtimeAbsent = await authorityDeps2.isSessionRuntimeAbsent?.() ?? false;
+      } catch {
+        runtimeAbsent = false;
+      }
+      return runtimeAbsent ? PICKER_PROBE_ABSENT_RUNTIME_TIMEOUT_MS : PICKER_PROBE_READINESS_TIMEOUT_MS;
+    };
     if (outcome.dismissed) {
       dismissalAwaitingProof = true;
       await proveOrigin();
       return okResult({ dismissed: true, reason: outcome.reason, platform: outcome.platform }, { meta });
     }
     const isBundleBound = authorityDeps2.isBundleBound ?? (() => true);
-    if (outcome.pickerPresent === false && !isBundleBound() && (authorityDeps2.reproveOrigin !== void 0 || hasManagedNativeOriginAuthority(args))) {
-      await proveOrigin(dismissalAwaitingProof ? void 0 : PICKER_PROBE_READINESS_TIMEOUT_MS);
+    const bundleBound = isBundleBound();
+    if (bundleBound)
+      dismissalAwaitingProof = false;
+    if (outcome.pickerPresent === false && !bundleBound && (authorityDeps2.reproveOrigin !== void 0 || hasManagedNativeOriginAuthority(args))) {
+      await proveOrigin(await pickerProbeReadinessTimeoutMs());
       return okResult({ dismissed: false, reproved: true, reason: outcome.reason, platform: outcome.platform }, { meta });
     }
     if (outcome.reason.toLowerCase().includes("could not find")) {
@@ -33824,7 +33838,7 @@ function createDismissDevClientPickerHandler(getMetroPort, authorityDeps2 = {}) 
     return okResult({ dismissed: false, reason: outcome.reason, platform: outcome.platform }, { meta });
   };
 }
-var runAgentDeviceFn, fetchCandidatesFn, pressCandidateFn, hasActiveSessionFn, PICKER_INDICATORS, PORT_PATTERN, IPV4_QUAD_RE, VERSION_SHAPE_RE, HOSTNAME_RE, FOOTER_ROWS, HEADER_PATTERNS, ERROR_DIALOG_INDICATORS, ERROR_DIALOG_DISMISS_LABELS, PICKER_PROBE_READINESS_TIMEOUT_MS;
+var runAgentDeviceFn, fetchCandidatesFn, pressCandidateFn, hasActiveSessionFn, PICKER_INDICATORS, PORT_PATTERN, IPV4_QUAD_RE, VERSION_SHAPE_RE, HOSTNAME_RE, FOOTER_ROWS, HEADER_PATTERNS, ERROR_DIALOG_INDICATORS, ERROR_DIALOG_DISMISS_LABELS, PICKER_PROBE_ABSENT_RUNTIME_TIMEOUT_MS, PICKER_PROBE_READINESS_TIMEOUT_MS;
 var init_dev_client_picker = __esm({
   "packages/rn-dev-agent-core/dist/tools/dev-client-picker.js"() {
     "use strict";
@@ -33851,7 +33865,8 @@ var init_dev_client_picker = __esm({
     HEADER_PATTERNS = [/development servers/i];
     ERROR_DIALOG_INDICATORS = ["Error loading app"];
     ERROR_DIALOG_DISMISS_LABELS = ["Dismiss", "OK", "Close"];
-    PICKER_PROBE_READINESS_TIMEOUT_MS = 15e3;
+    PICKER_PROBE_ABSENT_RUNTIME_TIMEOUT_MS = 15e3;
+    PICKER_PROBE_READINESS_TIMEOUT_MS = 45e3;
   }
 });
 
@@ -87508,6 +87523,23 @@ async function reconnectSessionRuntime(status, options) {
   const connection = await connectExactSessionTarget2({ metroPort, platform, appId, deviceId }, readinessTimeoutMs);
   return stageAndroidRuntimeConnection(connection);
 }
+async function isSessionRuntimeAbsent() {
+  try {
+    const status = authorityRuntime.status();
+    if (!status.available)
+      return false;
+    const { platform, deviceId, appId, metroPort } = resolveManagedRuntimeLaunchBinding(status);
+    const listed = await getClient().listTargetsExact(metroPort);
+    if (listed.port !== metroPort)
+      return false;
+    const advertised = listed.targets.some((candidate) => targetMatchesSession(candidate, { platform, bundleId: appId }));
+    if (advertised)
+      return false;
+    return !await isAppRunning(platform, appId, void 0, deviceId);
+  } catch {
+    return false;
+  }
+}
 async function relaunchSessionRuntime(status) {
   const { platform, deviceId, appId, metroPort, devClientUrl: boundDevClientUrl } = resolveManagedRuntimeLaunchBinding(status);
   if (platform === "ios") {
@@ -88753,7 +88785,8 @@ var init_index = __esm({
       isBundleBound: () => {
         const status = authorityRuntime.status();
         return status.available && Boolean(status.bindings.bundle);
-      }
+      },
+      isSessionRuntimeAbsent
     }));
     trackedTool("device_accept_system_dialog", "Tap an OS-level accept button on the exact session device. iOS prefers the capability-bound native runner so SpringBoard-owned dialogs are reachable; DIALOG_BUTTON_NOT_FOUND returns availableButtons for an exact-label retry.", {
       label: external_exports.string().optional().describe("Specific button label to tap. Omit to try common defaults (Allow, OK, Open, Continue, Yes, Accept)."),
