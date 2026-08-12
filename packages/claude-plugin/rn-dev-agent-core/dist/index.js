@@ -19638,8 +19638,10 @@ async function createMirrorSource(target, fps, opts = {}) {
       firstFrameTimeoutMs: opts.firstFrameTimeoutMs
     });
   }
+  const idbHint = state === "broken" ? SIMCTL_BROKEN_IDB_HINT : SIMCTL_HINT;
   return new IosSimctlLoopSource(target.deviceId, {
-    degradedHint: state === "broken" ? SIMCTL_BROKEN_IDB_HINT : SIMCTL_HINT
+    degradedHint: idbHint,
+    failureHint: idbHint
   });
 }
 var RestartGate, IDB_INSTALL_COMMAND, SIMCTL_HINT, SIMCTL_BROKEN_IDB_HINT, IDB_NO_FIRST_FRAME_REASON, IDB_MALFORMED_FRAME_REASON, IDB_STREAM_UNHEALTHY_HINT, DEFAULT_IDB_FIRST_FRAME_TIMEOUT_MS, IDB_HINT, FFMPEG_HINT, sleep2, scheduleAfter, defaultSpawn, IosIdbSource, IosSimctlLoopSource, AndroidScreenrecordSource;
@@ -19789,6 +19791,7 @@ var init_sources = __esm({
       pipeline = "simctl";
       nominalFps = 6;
       degradedHint;
+      failureHint;
       active = false;
       inFlight = null;
       execJpeg;
@@ -19804,6 +19807,7 @@ var init_sources = __esm({
         this.failurePauseMs = opts.failurePauseMs ?? 500;
         this.tmpPath = opts.tmpPath ?? (() => join6(tmpdir3(), "rn-mirror-simctl-" + process.pid + ".jpg"));
         this.degradedHint = opts.degradedHint ?? SIMCTL_HINT;
+        this.failureHint = opts.failureHint;
       }
       start(sink) {
         this.active = true;
@@ -19824,7 +19828,7 @@ var init_sources = __esm({
               break;
             if (!this.gate.record()) {
               if (this.active)
-                sink.onExit({ reason: "simctl screenshot failing", hint: this.degradedHint });
+                sink.onExit({ reason: "simctl screenshot failing", hint: this.failureHint });
               this.active = false;
               break;
             }

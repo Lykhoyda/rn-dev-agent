@@ -56,6 +56,7 @@ export interface LoopOpts {
   failurePauseMs?: number;
   tmpPath?: () => string;
   degradedHint?: string;
+  failureHint?: string;
 }
 
 export type SpawnFn = (cmd: string, args: string[]) => SpawnedLike;
@@ -274,6 +275,7 @@ export class IosSimctlLoopSource implements MirrorSource {
   readonly pipeline = 'simctl' as const;
   readonly nominalFps = 6;
   readonly degradedHint: string;
+  private readonly failureHint?: string;
   private active = false;
   private inFlight: AbortController | null = null;
   private readonly execJpeg: (cmd: string, args: string[], signal?: AbortSignal) => Promise<Buffer>;
@@ -293,6 +295,7 @@ export class IosSimctlLoopSource implements MirrorSource {
     this.tmpPath =
       opts.tmpPath ?? (() => join(tmpdir(), 'rn-mirror-simctl-' + process.pid + '.jpg'));
     this.degradedHint = opts.degradedHint ?? SIMCTL_HINT;
+    this.failureHint = opts.failureHint;
   }
 
   start(sink: MirrorFrameSink): void {
@@ -320,7 +323,7 @@ export class IosSimctlLoopSource implements MirrorSource {
         if (!this.active) break;
         if (!this.gate.record()) {
           if (this.active)
-            sink.onExit({ reason: 'simctl screenshot failing', hint: this.degradedHint });
+            sink.onExit({ reason: 'simctl screenshot failing', hint: this.failureHint });
           this.active = false;
           break;
         }
@@ -503,7 +506,9 @@ export async function createMirrorSource(
   }
   // GH#578: a crashing client is NOT "idb missing" — telling the developer to
   // install what they already installed is the loop this fix removes.
+  const idbHint = state === 'broken' ? SIMCTL_BROKEN_IDB_HINT : SIMCTL_HINT;
   return new IosSimctlLoopSource(target.deviceId, {
-    degradedHint: state === 'broken' ? SIMCTL_BROKEN_IDB_HINT : SIMCTL_HINT,
+    degradedHint: idbHint,
+    failureHint: idbHint,
   });
 }

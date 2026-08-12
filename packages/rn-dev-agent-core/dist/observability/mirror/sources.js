@@ -205,6 +205,7 @@ export class IosSimctlLoopSource {
     pipeline = 'simctl';
     nominalFps = 6;
     degradedHint;
+    failureHint;
     active = false;
     inFlight = null;
     execJpeg;
@@ -221,6 +222,7 @@ export class IosSimctlLoopSource {
         this.tmpPath =
             opts.tmpPath ?? (() => join(tmpdir(), 'rn-mirror-simctl-' + process.pid + '.jpg'));
         this.degradedHint = opts.degradedHint ?? SIMCTL_HINT;
+        this.failureHint = opts.failureHint;
     }
     start(sink) {
         this.active = true;
@@ -245,7 +247,7 @@ export class IosSimctlLoopSource {
                     break;
                 if (!this.gate.record()) {
                     if (this.active)
-                        sink.onExit({ reason: 'simctl screenshot failing', hint: this.degradedHint });
+                        sink.onExit({ reason: 'simctl screenshot failing', hint: this.failureHint });
                     this.active = false;
                     break;
                 }
@@ -417,7 +419,9 @@ export async function createMirrorSource(target, fps, opts = {}) {
     }
     // GH#578: a crashing client is NOT "idb missing" — telling the developer to
     // install what they already installed is the loop this fix removes.
+    const idbHint = state === 'broken' ? SIMCTL_BROKEN_IDB_HINT : SIMCTL_HINT;
     return new IosSimctlLoopSource(target.deviceId, {
-        degradedHint: state === 'broken' ? SIMCTL_BROKEN_IDB_HINT : SIMCTL_HINT,
+        degradedHint: idbHint,
+        failureHint: idbHint,
     });
 }

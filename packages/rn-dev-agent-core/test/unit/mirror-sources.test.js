@@ -518,3 +518,31 @@ test('idbDemotionHint keeps the demotion cause truthful', () => {
   );
   assert.equal(idbDemotionHint(), IDB_STREAM_UNHEALTHY_HINT);
 });
+
+test('IosSimctlLoopSource: terminal exit never carries the idb demotion banner', async () => {
+  const failing = (opts) =>
+    new IosSimctlLoopSource('U', {
+      execJpeg: async () => {
+        throw new Error('capture failed');
+      },
+      now: () => 0,
+      idleDelayMs: 0,
+      failurePauseMs: 0,
+      ...opts,
+    });
+
+  const demoted = failing({ degradedHint: idbDemotionHint({ reason: IDB_NO_FIRST_FRAME_REASON }) });
+  const demotedRec = sinkRecorder();
+  demoted.start(demotedRec.sink);
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(demotedRec.getExit().hint, undefined);
+
+  const selected = failing({
+    degradedHint: SIMCTL_BROKEN_IDB_HINT,
+    failureHint: SIMCTL_BROKEN_IDB_HINT,
+  });
+  const selectedRec = sinkRecorder();
+  selected.start(selectedRec.sink);
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(selectedRec.getExit().hint, SIMCTL_BROKEN_IDB_HINT);
+});
