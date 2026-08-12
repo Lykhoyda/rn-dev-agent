@@ -116,6 +116,7 @@ test('authoritative discovery re-resolves rotated target IDs from the managed po
       platform: 'ios',
       bundleId: 'com.example.app',
       preferredBundleId: undefined,
+      deviceName: undefined,
     },
   ]);
 });
