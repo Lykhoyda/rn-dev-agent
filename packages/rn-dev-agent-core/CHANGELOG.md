@@ -1,5 +1,12 @@
 # rn-dev-agent-core
 
+## 0.71.3
+
+### Patch Changes
+
+- 64b29b2: Refuse maestro-runner action replay on Android below API 26 with a truthful capability diagnosis instead of an opaque install error, and point RUNNER_OWNERSHIP_MISMATCH refusals at the device_snapshot re-open repair instead of a status read that repairs nothing.
+- 89ee7f4: Separate exact native device control from managed source-origin evidence so raw snapshot, screenshot, press, fill, batch, and equivalent runner operations use exact controller/source/install/device/runner authority, explicitly report `originAuthority`, and keep origin-unproven captures out of strict proof, cross-platform verdicts, and learned-action evidence.
+
 ## 0.71.2
 
 ### Patch Changes
