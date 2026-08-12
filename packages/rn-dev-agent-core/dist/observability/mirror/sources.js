@@ -39,6 +39,15 @@ export const SIMCTL_BROKEN_IDB_HINT = 'idb is installed but did not respond succ
 export const IDB_NO_FIRST_FRAME_REASON = 'idb video-stream produced no first frame';
 export const IDB_MALFORMED_FRAME_REASON = 'idb video-stream produced a malformed frame';
 export const IDB_STREAM_UNHEALTHY_HINT = 'idb video-stream produced no usable frame — using simctl screenshot loop';
+// Alive child ≠ ready stream. Technique considered from
+// https://github.com/mobile-dev-inc/maestro @ e08f33ac (not copied):
+// `DeviceStream.awaitStreamReady` in
+// maestro-cli/src/main/java/maestro/cli/mcp/viewer/McpViewerServer.kt waits
+// ≤30s for a `stream_ready ` line, else typed error + process cleanup;
+// maestro-cli/mcp-viewer/src/main.tsx mounts <img> only when
+// status==="streaming" && streamUrl. Archived mobile-dev-inc/maestro-mcp is
+// historical CLI wrapping only — no live mirror. We bound JPEG SOI/EOI on the
+// existing idb pipe and demote to simctl.
 const DEFAULT_IDB_FIRST_FRAME_TIMEOUT_MS = 5_000;
 const IDB_HINT = `idb not found — ${IDB_INSTALL_COMMAND}`;
 const FFMPEG_HINT = 'ffmpeg not found — run scripts/ensure-ffmpeg.sh or brew install ffmpeg';
