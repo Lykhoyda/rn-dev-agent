@@ -298,9 +298,7 @@ function writeMarker(
   }
 }
 
-async function ensureManagedMetro(
-  status: ReturnType<typeof resolveStatus>,
-): Promise<{
+async function ensureManagedMetro(status: ReturnType<typeof resolveStatus>): Promise<{
   restarted: boolean;
   receiptPreserved: boolean;
   receiptPreservedReason: ManagedMetroRestartReason | 'metro-already-live';
