@@ -73,6 +73,25 @@ export function createConnectHandler(getClient, setClient, createClient) {
             client = createClient(args.metroPort);
             setClient(client);
         }
+        else if (client.reconnectState?.active ||
+            client.state === 'connecting' ||
+            client.state === 'reconnecting') {
+            // GH #616: a bare autoConnect below would dead-end on the connect.ts
+            // "Already connecting to Metro..." guard. force=true supersedes the
+            // in-flight attempt: disposal aborts its loop deterministically (every
+            // attempt observes isDisposed, so a stale completion cannot land), and
+            // the fresh client honors the caller's exact filters.
+            if (!args.force) {
+                const inFlight = client.reconnectState?.active
+                    ? `a supervised reconnect (attempt ${client.reconnectState.attemptCount})`
+                    : 'another connect attempt';
+                return failResult(`cdp_connect refused: ${inFlight} is already in flight. Pass force=true to supersede it with this explicit connect, or retry after it settles.`, 'CONNECT_IN_FLIGHT', { reconnect: client.reconnectState });
+            }
+            const port = args.metroPort ?? client.metroPort;
+            await client.disconnect();
+            client = createClient(port);
+            setClient(client);
+        }
         try {
             const msg = await client.autoConnect(args.metroPort, effectiveFilters);
             const target = client.connectedTarget;

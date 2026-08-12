@@ -52,6 +52,12 @@ GitHub Issues, PRs, or the sibling workspace only when explicitly requested.
 
 - Core MCP behavior: edit `packages/rn-dev-agent-core/src/`, then run
   `corepack yarn build:core` and `corepack yarn build:host-runtimes`.
+- The registered `cdp_connect` tool is `createRegisteredConnectHandler`
+  (`src/session/registered-connect.ts` → `rn_session` `pin_dev_client` →
+  `pinSessionDevClient`/`connectExactSessionTarget` in `src/index.ts`);
+  `createConnectHandler` in `src/tools/connection.ts` is the unregistered
+  ambient compat connector, tree-shaken out of host bundles but still pinned
+  by contract tests.
 - Claude-only host behavior: edit `packages/claude-plugin/`.
 - Codex-only host behavior: edit `packages/codex-plugin/`.
 - Host-neutral workflow knowledge: edit `packages/shared-agent-knowledge/`,
