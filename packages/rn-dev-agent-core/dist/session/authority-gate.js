@@ -57,6 +57,9 @@ export async function reissueManagedInstallAuthority(args) {
     }
     await reissue();
 }
+export function hasManagedNativeOriginAuthority(args) {
+    return args[managedNativeOrigin] !== undefined;
+}
 export function hasManagedInstallReissueAuthority(args) {
     return typeof args[managedInstallReissue] === 'function';
 }

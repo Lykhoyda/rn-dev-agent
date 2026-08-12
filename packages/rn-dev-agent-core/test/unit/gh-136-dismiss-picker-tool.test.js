@@ -196,6 +196,57 @@ test('GH #750 handler: a failed post-dismissal proof surfaces instead of a silen
   }
 });
 
+// GH #750: the proof can fail after the picker was already tapped away. The
+// retry then finds no picker at all, so it must still re-prove B instead of
+// returning ok with the authority the tool exists to repair still unbound.
+test('GH #750 handler: a retry after a failed proof still re-proves an unbound bundle', async () => {
+  _setHasSessionForTest(true);
+  let findCount = 0;
+  _setFetchCandidatesForTest(async (text) => {
+    if (text === 'Development servers' || text === 'DEVELOPMENT SERVERS') {
+      findCount += 1;
+      return findCount >= 2
+        ? { ok: true, candidates: [] }
+        : { ok: true, candidates: [{ ref: 'e1', label: text }] };
+    }
+    return { ok: true, candidates: [] };
+  });
+  const originCalls = [];
+  let bundleBound = false;
+  let proofFails = true;
+  const handleWithOrigin = createDismissDevClientPickerHandler(() => 8081, {
+    isBundleBound: () => bundleBound,
+    reproveOrigin: async () => {
+      originCalls.push('reprove');
+    },
+    completeOrigin: async (_args, targetExpected) => {
+      if (proofFails) throw new Error('BUNDLE_HANDSHAKE_UNAVAILABLE: reattachment proof failed');
+      originCalls.push(`complete:${targetExpected}`);
+      bundleBound = true;
+    },
+  });
+  try {
+    await assert.rejects(handleWithOrigin({ platform: 'android' }), /BUNDLE_HANDSHAKE_UNAVAILABLE/);
+    assert.equal(bundleBound, false);
+
+    proofFails = false;
+    const retry = await handleWithOrigin({ platform: 'android' });
+    const p = parse(retry);
+    assert.equal(retry.isError, undefined);
+    assert.equal(p.data.dismissed, false);
+    assert.equal(p.data.reproved, true);
+    assert.deepEqual(originCalls, ['reprove', 'reprove', 'complete:true']);
+    assert.equal(bundleBound, true, 'the retry must leave B bound');
+
+    const settled = await handleWithOrigin({ platform: 'android' });
+    assert.equal(parse(settled).data.reproved, undefined, 'a bound bundle is not re-proved');
+    assert.deepEqual(originCalls, ['reprove', 'reprove', 'complete:true']);
+  } finally {
+    _resetFetchCandidatesForTest();
+    _resetHasSessionForTest();
+  }
+});
+
 test('handler: Android picker not detected → ok dismissed:false (no warning)', async () => {
   _setHasSessionForTest(true);
   // find goes through fetchCandidatesFn — no candidates means picker not detected

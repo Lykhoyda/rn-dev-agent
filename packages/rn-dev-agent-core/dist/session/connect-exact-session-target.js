@@ -10,6 +10,28 @@ export function exactSessionTargetReadinessTimeoutMs(platform) {
         ? ANDROID_EXACT_TARGET_READINESS_TIMEOUT_MS
         : IOS_EXACT_TARGET_READINESS_TIMEOUT_MS;
 }
+// GH #750: the readiness loop re-lists every 250ms; the device-authority probe
+// it feeds spawns simctl/adb, so cap those spawns instead of the poll cadence.
+const DEVICE_AUTHORITY_PROBE_MIN_INTERVAL_MS = 2_000;
+function rateLimitedDeviceAuthority(dependencies, now) {
+    const cache = new Map();
+    return {
+        ...dependencies,
+        execute: (file, args) => {
+            const key = JSON.stringify([file, args]);
+            const cached = cache.get(key);
+            if (cached && now() - cached.at < DEVICE_AUTHORITY_PROBE_MIN_INTERVAL_MS)
+                return cached.result;
+            const result = dependencies.execute(file, args);
+            cache.set(key, { at: now(), result });
+            void result.catch(() => {
+                if (cache.get(key)?.result === result)
+                    cache.delete(key);
+            });
+            return result;
+        },
+    };
+}
 function errorMessage(error) {
     return error instanceof Error ? error.message : String(error);
 }
@@ -94,6 +116,7 @@ async function connectExactAndroidSessionTarget(input, timeoutMs, dependencies) 
         ...dependencies,
         awaitWithinBoundary: awaitWithinDeadline,
     };
+    const discoveryAuthorityDependencies = rateLimitedDeviceAuthority(boundedAuthorityDependencies, now);
     while (now() < deadline) {
         try {
             const listed = await awaitWithinDeadline(() => exactClient.listTargetsExact(input.metroPort));
@@ -108,7 +131,7 @@ async function connectExactAndroidSessionTarget(input, timeoutMs, dependencies) 
                 platform: input.platform,
                 deviceId: input.deviceId,
                 targets: sessionCandidates,
-            }, boundedAuthorityDependencies);
+            }, discoveryAuthorityDependencies);
             if (exactCandidates.length !== 1) {
                 throw new Error(`CDP_TARGET_AUTHORITY_MISMATCH: expected one target on the exact device, found ${exactCandidates.length}`);
             }
@@ -218,6 +241,7 @@ export async function connectExactSessionTarget(input, timeoutMs, dependencies) 
         dependencies.setClient(exactClient);
     }
     const deadline = now() + timeoutMs;
+    const discoveryAuthorityDependencies = rateLimitedDeviceAuthority(dependencies, now);
     let lastError;
     do {
         try {
@@ -233,7 +257,7 @@ export async function connectExactSessionTarget(input, timeoutMs, dependencies) 
                 platform: input.platform,
                 deviceId: input.deviceId,
                 targets: sessionCandidates,
-            }, dependencies);
+            }, discoveryAuthorityDependencies);
             if (exactCandidates.length !== 1) {
                 throw new Error(`CDP_TARGET_AUTHORITY_MISMATCH: expected one target on the exact device, found ${exactCandidates.length}`);
             }

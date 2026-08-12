@@ -148,6 +148,10 @@ export async function reissueManagedInstallAuthority(args: object): Promise<void
   await reissue();
 }
 
+export function hasManagedNativeOriginAuthority(args: object): boolean {
+  return (args as AuthorityAwareArgs)[managedNativeOrigin] !== undefined;
+}
+
 export function hasManagedInstallReissueAuthority(args: object): boolean {
   return typeof (args as AuthorityAwareArgs)[managedInstallReissue] === 'function';
 }

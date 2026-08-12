@@ -1949,7 +1949,12 @@ trackedTool('cdp_dismiss_dev_client_picker', 'Dismiss the Expo Dev Client "Devel
         .enum(['ios', 'android'])
         .optional()
         .describe('Authority-bound platform; conflicting values are refused'),
-}, createDismissDevClientPickerHandler(() => getClient().metroPort));
+}, createDismissDevClientPickerHandler(() => getClient().metroPort, {
+    isBundleBound: () => {
+        const status = authorityRuntime.status();
+        return status.available && Boolean(status.bindings.bundle);
+    },
+}));
 trackedTool('device_accept_system_dialog', 'Tap an OS-level accept button on the exact session device. iOS prefers the capability-bound native runner so SpringBoard-owned dialogs are reachable; DIALOG_BUTTON_NOT_FOUND returns availableButtons for an exact-label retry.', {
     label: z
         .string()

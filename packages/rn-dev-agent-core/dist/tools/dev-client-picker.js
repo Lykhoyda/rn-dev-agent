@@ -2,7 +2,7 @@ import { runNative as _runAgentDeviceImpl, hasActiveSession, getActiveSession, }
 import { detectPlatform } from './platform-utils.js';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { fetchFindCandidates, pressCandidate } from './device-interact.js';
-import { completeManagedNativeOriginAuthority, reproveManagedNativeOrigin, } from '../session/authority-gate.js';
+import { completeManagedNativeOriginAuthority, hasManagedNativeOriginAuthority, reproveManagedNativeOrigin, } from '../session/authority-gate.js';
 // GH #136 test seam: production code calls `runAgentDevice` through this
 // indirection so unit tests can swap a mock without touching the real
 // agent-device CLI subprocess. Production behavior is identity-equivalent
@@ -225,7 +225,7 @@ export async function handleDevClientPicker(preferredPort) {
             reason: 'Stale-server error dialog dismissed (no picker shown afterwards)',
         };
     }
-    return { dismissed: false, reason: 'Dev Client picker not detected' };
+    return { dismissed: false, reason: 'Dev Client picker not detected', pickerPresent: false };
 }
 /**
  * GH #136 sub-3 / GH #523 sub-3: the single guarded seam every on-demand/auto
@@ -317,6 +317,7 @@ export async function dismissPicker(preferredPort) {
     }
     return {
         dismissed: false,
+        pickerPresent: true,
         reason: 'Dev Client picker detected but could not find a server entry to tap. Select the Metro server manually.',
     };
 }
@@ -368,12 +369,24 @@ export function createDismissDevClientPickerHandler(getMetroPort, authorityDeps 
         if (outcome === null) {
             return failResult('No device session open. Call device_snapshot action="open" first.', 'DEV_CLIENT_PICKER_NO_SESSION', meta);
         }
-        if (outcome.dismissed) {
-            // GH #750: the tool runs without A/B (the stranded state it repairs), so
-            // after a dismissal it must reconnect the exact target and prove A/B.
+        // GH #750: the tool runs without A/B (the stranded state it repairs), so
+        // after a dismissal it must reconnect the exact target and prove A/B.
+        const proveOrigin = async () => {
             await (authorityDeps.reproveOrigin ?? reproveManagedNativeOrigin)(args);
             await (authorityDeps.completeOrigin ?? completeManagedNativeOriginAuthority)(args, true);
+        };
+        if (outcome.dismissed) {
+            await proveOrigin();
             return okResult({ dismissed: true, reason: outcome.reason, platform: outcome.platform }, { meta });
+        }
+        // GH #750: a retry after a failed post-dismissal proof finds the picker
+        // already gone; re-prove rather than reporting ok with B still unbound.
+        const isBundleBound = authorityDeps.isBundleBound ?? (() => true);
+        if (outcome.pickerPresent === false &&
+            !isBundleBound() &&
+            (authorityDeps.reproveOrigin !== undefined || hasManagedNativeOriginAuthority(args))) {
+            await proveOrigin();
+            return okResult({ dismissed: false, reproved: true, reason: outcome.reason, platform: outcome.platform }, { meta });
         }
         if (outcome.reason.toLowerCase().includes('could not find')) {
             return warnResult({ dismissed: false, platform: outcome.platform }, outcome.reason, meta);

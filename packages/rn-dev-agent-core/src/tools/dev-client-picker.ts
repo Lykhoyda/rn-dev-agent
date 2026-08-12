@@ -10,6 +10,7 @@ import { fetchFindCandidates, pressCandidate } from './device-interact.js';
 import type { FindCandidate } from './device-interact.js';
 import {
   completeManagedNativeOriginAuthority,
+  hasManagedNativeOriginAuthority,
   reproveManagedNativeOrigin,
 } from '../session/authority-gate.js';
 
@@ -75,11 +76,13 @@ const PICKER_INDICATORS = ['Development servers', 'DEVELOPMENT SERVERS'];
 export interface PickerResult {
   dismissed: boolean;
   reason: string;
+  pickerPresent?: boolean;
 }
 
 export interface PickerOutcome {
   dismissed: boolean;
   reason: string;
+  pickerPresent?: boolean;
   platform?: 'ios' | 'android' | null;
 }
 
@@ -259,7 +262,7 @@ export async function handleDevClientPicker(preferredPort?: number): Promise<Pic
     };
   }
 
-  return { dismissed: false, reason: 'Dev Client picker not detected' };
+  return { dismissed: false, reason: 'Dev Client picker not detected', pickerPresent: false };
 }
 
 /**
@@ -363,6 +366,7 @@ export async function dismissPicker(preferredPort?: number): Promise<PickerResul
 
   return {
     dismissed: false,
+    pickerPresent: true,
     reason:
       'Dev Client picker detected but could not find a server entry to tap. Select the Metro server manually.',
   };
@@ -402,6 +406,7 @@ export async function isDevClientPickerShowing(): Promise<boolean> {
 export interface DismissPickerAuthorityDeps {
   reproveOrigin?: (args: object) => Promise<void>;
   completeOrigin?: (args: object, targetExpected: boolean) => Promise<void>;
+  isBundleBound?: () => boolean;
 }
 
 export function createDismissDevClientPickerHandler(
@@ -428,13 +433,30 @@ export function createDismissDevClientPickerHandler(
         meta,
       );
     }
-    if (outcome.dismissed) {
-      // GH #750: the tool runs without A/B (the stranded state it repairs), so
-      // after a dismissal it must reconnect the exact target and prove A/B.
+    // GH #750: the tool runs without A/B (the stranded state it repairs), so
+    // after a dismissal it must reconnect the exact target and prove A/B.
+    const proveOrigin = async (): Promise<void> => {
       await (authorityDeps.reproveOrigin ?? reproveManagedNativeOrigin)(args);
       await (authorityDeps.completeOrigin ?? completeManagedNativeOriginAuthority)(args, true);
+    };
+    if (outcome.dismissed) {
+      await proveOrigin();
       return okResult(
         { dismissed: true, reason: outcome.reason, platform: outcome.platform },
+        { meta },
+      );
+    }
+    // GH #750: a retry after a failed post-dismissal proof finds the picker
+    // already gone; re-prove rather than reporting ok with B still unbound.
+    const isBundleBound = authorityDeps.isBundleBound ?? (() => true);
+    if (
+      outcome.pickerPresent === false &&
+      !isBundleBound() &&
+      (authorityDeps.reproveOrigin !== undefined || hasManagedNativeOriginAuthority(args))
+    ) {
+      await proveOrigin();
+      return okResult(
+        { dismissed: false, reproved: true, reason: outcome.reason, platform: outcome.platform },
         { meta },
       );
     }

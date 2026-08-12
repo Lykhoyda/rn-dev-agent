@@ -30657,6 +30657,9 @@ async function reissueManagedInstallAuthority(args) {
   }
   await reissue();
 }
+function hasManagedNativeOriginAuthority(args) {
+  return args[managedNativeOrigin] !== void 0;
+}
 function hasManagedInstallReissueAuthority(args) {
   return typeof args[managedInstallReissue] === "function";
 }
@@ -36234,7 +36237,7 @@ async function handleDevClientPicker(preferredPort) {
       reason: "Stale-server error dialog dismissed (no picker shown afterwards)"
     };
   }
-  return { dismissed: false, reason: "Dev Client picker not detected" };
+  return { dismissed: false, reason: "Dev Client picker not detected", pickerPresent: false };
 }
 async function clearDevClientPickerIfPresent(platform, preferredPort) {
   if (preferredPort === void 0) {
@@ -36292,6 +36295,7 @@ async function dismissPicker(preferredPort) {
   }
   return {
     dismissed: false,
+    pickerPresent: true,
     reason: "Dev Client picker detected but could not find a server entry to tap. Select the Metro server manually."
   };
 }
@@ -36325,10 +36329,18 @@ function createDismissDevClientPickerHandler(getMetroPort, authorityDeps2 = {}) 
     if (outcome === null) {
       return failResult('No device session open. Call device_snapshot action="open" first.', "DEV_CLIENT_PICKER_NO_SESSION", meta);
     }
-    if (outcome.dismissed) {
+    const proveOrigin = async () => {
       await (authorityDeps2.reproveOrigin ?? reproveManagedNativeOrigin)(args);
       await (authorityDeps2.completeOrigin ?? completeManagedNativeOriginAuthority)(args, true);
+    };
+    if (outcome.dismissed) {
+      await proveOrigin();
       return okResult({ dismissed: true, reason: outcome.reason, platform: outcome.platform }, { meta });
+    }
+    const isBundleBound = authorityDeps2.isBundleBound ?? (() => true);
+    if (outcome.pickerPresent === false && !isBundleBound() && (authorityDeps2.reproveOrigin !== void 0 || hasManagedNativeOriginAuthority(args))) {
+      await proveOrigin();
+      return okResult({ dismissed: false, reproved: true, reason: outcome.reason, platform: outcome.platform }, { meta });
     }
     if (outcome.reason.toLowerCase().includes("could not find")) {
       return warnResult({ dismissed: false, platform: outcome.platform }, outcome.reason, meta);
@@ -85127,6 +85139,26 @@ var ANDROID_EXACT_TARGET_READINESS_TIMEOUT_MS = 12e4;
 function exactSessionTargetReadinessTimeoutMs(platform) {
   return platform === "android" ? ANDROID_EXACT_TARGET_READINESS_TIMEOUT_MS : IOS_EXACT_TARGET_READINESS_TIMEOUT_MS;
 }
+var DEVICE_AUTHORITY_PROBE_MIN_INTERVAL_MS = 2e3;
+function rateLimitedDeviceAuthority(dependencies, now) {
+  const cache3 = /* @__PURE__ */ new Map();
+  return {
+    ...dependencies,
+    execute: (file, args) => {
+      const key = JSON.stringify([file, args]);
+      const cached2 = cache3.get(key);
+      if (cached2 && now() - cached2.at < DEVICE_AUTHORITY_PROBE_MIN_INTERVAL_MS)
+        return cached2.result;
+      const result = dependencies.execute(file, args);
+      cache3.set(key, { at: now(), result });
+      void result.catch(() => {
+        if (cache3.get(key)?.result === result)
+          cache3.delete(key);
+      });
+      return result;
+    }
+  };
+}
 function errorMessage(error2) {
   return error2 instanceof Error ? error2.message : String(error2);
 }
@@ -85210,6 +85242,7 @@ async function connectExactAndroidSessionTarget(input, timeoutMs, dependencies) 
     ...dependencies,
     awaitWithinBoundary: awaitWithinDeadline
   };
+  const discoveryAuthorityDependencies = rateLimitedDeviceAuthority(boundedAuthorityDependencies, now);
   while (now() < deadline) {
     try {
       const listed = await awaitWithinDeadline(() => exactClient.listTargetsExact(input.metroPort));
@@ -85224,7 +85257,7 @@ async function connectExactAndroidSessionTarget(input, timeoutMs, dependencies) 
         platform: input.platform,
         deviceId: input.deviceId,
         targets: sessionCandidates
-      }, boundedAuthorityDependencies);
+      }, discoveryAuthorityDependencies);
       if (exactCandidates.length !== 1) {
         throw new Error(`CDP_TARGET_AUTHORITY_MISMATCH: expected one target on the exact device, found ${exactCandidates.length}`);
       }
@@ -85322,6 +85355,7 @@ async function connectExactSessionTarget(input, timeoutMs, dependencies) {
     dependencies.setClient(exactClient);
   }
   const deadline = now() + timeoutMs;
+  const discoveryAuthorityDependencies = rateLimitedDeviceAuthority(dependencies, now);
   let lastError;
   do {
     try {
@@ -85337,7 +85371,7 @@ async function connectExactSessionTarget(input, timeoutMs, dependencies) {
         platform: input.platform,
         deviceId: input.deviceId,
         targets: sessionCandidates
-      }, dependencies);
+      }, discoveryAuthorityDependencies);
       if (exactCandidates.length !== 1) {
         throw new Error(`CDP_TARGET_AUTHORITY_MISMATCH: expected one target on the exact device, found ${exactCandidates.length}`);
       }
@@ -86604,7 +86638,12 @@ trackedTool("device_deeplink", "Open a deep link on the exact authority-bound iO
 }, createDeviceDeeplinkHandler());
 trackedTool("cdp_dismiss_dev_client_picker", 'Dismiss the Expo Dev Client "Development servers" picker on demand. The picker is a native expo-dev-menu screen that blocks the JS bundle after deep links, restarts, permission changes, or clearState; this taps the Metro server entry (preferring the row matching the project\'s Metro port, deprioritizing stale link-local addresses) so CDP/the bundle can proceed. Also clears the native stale-server "Error loading app" dialog that can hide the picker after a network change. iOS + Android (requires an open device session \u2014 call device_snapshot action="open" first). Prefer this over a racy Maestro `runFlow when: visible: "DEVELOPMENT SERVERS"` block.', {
   platform: external_exports.enum(["ios", "android"]).optional().describe("Authority-bound platform; conflicting values are refused")
-}, createDismissDevClientPickerHandler(() => getClient().metroPort));
+}, createDismissDevClientPickerHandler(() => getClient().metroPort, {
+  isBundleBound: () => {
+    const status = authorityRuntime.status();
+    return status.available && Boolean(status.bindings.bundle);
+  }
+}));
 trackedTool("device_accept_system_dialog", "Tap an OS-level accept button on the exact session device. iOS prefers the capability-bound native runner so SpringBoard-owned dialogs are reachable; DIALOG_BUTTON_NOT_FOUND returns availableButtons for an exact-label retry.", {
   label: external_exports.string().optional().describe("Specific button label to tap. Omit to try common defaults (Allow, OK, Open, Continue, Yes, Accept)."),
   platform: external_exports.enum(["ios", "android"]).optional().describe("Authority-bound platform; conflicting values are refused"),

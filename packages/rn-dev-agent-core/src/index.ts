@@ -2659,7 +2659,12 @@ trackedTool(
       .optional()
       .describe('Authority-bound platform; conflicting values are refused'),
   },
-  createDismissDevClientPickerHandler(() => getClient().metroPort),
+  createDismissDevClientPickerHandler(() => getClient().metroPort, {
+    isBundleBound: () => {
+      const status = authorityRuntime.status();
+      return status.available && Boolean(status.bindings.bundle);
+    },
+  }),
 );
 
 trackedTool(

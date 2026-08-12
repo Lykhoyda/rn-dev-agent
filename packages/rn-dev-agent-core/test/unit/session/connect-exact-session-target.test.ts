@@ -796,6 +796,7 @@ test('iOS admits the sole exact-device target that re-registers after more than 
     platformInference: 'probed',
   };
   let now = 0;
+  let simctlSpawns = 0;
   const registrationAtMs = 40_000;
   const client = {
     metroPort: 8081,
@@ -822,6 +823,7 @@ test('iOS admits the sole exact-device target that re-registers after more than 
       execute: async (file, args) => {
         assert.equal(file, 'xcrun');
         assert.deepEqual(args, ['simctl', 'list', 'devices', '--json']);
+        simctlSpawns += 1;
         return {
           stdout: JSON.stringify({
             devices: {
@@ -841,4 +843,9 @@ test('iOS admits the sole exact-device target that re-registers after more than 
   assert.equal(connected.deviceId, 'ios-device-id');
   assert.ok(now >= registrationAtMs, 'admission must have waited for the late re-registration');
   assert.ok(now < 120_000, 'the iOS readiness budget must remain bounded');
+  // GH #750: the 250ms readiness poll must not spawn simctl on every pass.
+  assert.ok(
+    simctlSpawns <= registrationAtMs / 2_000 + 4,
+    `device-authority probes must be rate-limited, saw ${String(simctlSpawns)}`,
+  );
 });
