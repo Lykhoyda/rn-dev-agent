@@ -28,6 +28,15 @@ function simTarget(id: string, deviceName: string): HermesTarget {
   };
 }
 
+function appTarget(id: string, deviceName: string, bundleId: string): HermesTarget {
+  return {
+    ...simTarget(id, deviceName),
+    title: `${bundleId} (${deviceName})`,
+    description: bundleId,
+    appId: bundleId,
+  };
+}
+
 test('GH-625: stale pinned targetId re-resolves on the pinned device, never the sibling', () => {
   // Sibling sim A carries the NEWER page id, so an affinity-blind fallback
   // (drop stale pin → newest-page-first sort) would silently pick sim A.
@@ -137,6 +146,45 @@ test('GH-625: hyphenated device ids still distinguish live device connections', 
   });
   assert.equal(result.targets.length, 0, 'two hyphenated device connections must stay ambiguous');
   assert.match(result.warning ?? '', /ambiguous/i);
+});
+
+test('GH-625: a second debuggable app on the pinned device is disambiguated by the pinned bundle', () => {
+  // Metro opens one device connection per debuggable runtime, so a dev client
+  // plus a second app on ONE simulator produce two prefixes under one name.
+  // The proven bundle identity resolves that without guessing a device.
+  const pinnedApp = simTarget('7-1', 'iPhone 17 Pro');
+  const otherApp = appTarget('9-2', 'iPhone 17 Pro', 'host.exp.Exponent');
+  const result = selectTarget([pinnedApp, otherApp], {
+    targetId: '7-1',
+    deviceName: 'iPhone 17 Pro',
+    bundleId: 'com.example.app',
+  });
+  assert.equal(result.targets.length, 1);
+  assert.equal(result.targets[0]!.id, '7-1');
+});
+
+test('GH-625: same-name clones running the pinned bundle still refuse an ambiguous bind', () => {
+  const cloneA = simTarget('12-3', 'iPhone 17 Pro');
+  const cloneB = simTarget('13-1', 'iPhone 17 Pro');
+  const result = selectTarget([cloneA, cloneB], {
+    targetId: '12-3',
+    deviceName: 'iPhone 17 Pro',
+    bundleId: 'com.example.app',
+  });
+  assert.equal(result.targets.length, 0, 'the pinned bundle cannot tell two clones apart');
+  assert.match(result.warning ?? '', /ambiguous/i);
+});
+
+test('GH-625: hyphenated device ids sort by numeric page, newest first', () => {
+  const stalePage = simTarget('emulator-5554-2', 'sdk_gphone64_arm64');
+  const freshPage = simTarget('emulator-5554-11', 'sdk_gphone64_arm64');
+  const result = selectTarget([stalePage, freshPage], {
+    targetId: 'emulator-5554-9',
+    deviceName: 'sdk_gphone64_arm64',
+    bundleId: 'com.example.app',
+  });
+  assert.equal(result.targets.length, 2);
+  assert.equal(result.targets[0]!.id, 'emulator-5554-11', 'page 11 is newer than page 2');
 });
 
 test('GH-625: multiple pages of one device connection stay resolvable after a stale pin', () => {

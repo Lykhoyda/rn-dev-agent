@@ -80,6 +80,7 @@ export async function discoverAuthoritativeTarget(
     ...policy.filters,
     targetId: undefined,
     preferredBundleId: undefined,
+    deviceName: undefined,
   });
   if (result.errorCode || result.targets.length === 0) return result;
   const resolveTargetId = () => policy.resolveTargetId(result.targets, awaitWithinBoundary);

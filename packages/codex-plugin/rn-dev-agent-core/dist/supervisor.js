@@ -30799,6 +30799,13 @@ function metroDeviceConnectionId(id) {
   const cut = id.lastIndexOf("-");
   return cut > 0 ? id.slice(0, cut) : id;
 }
+function metroPageNumber(id) {
+  if (!id)
+    return 0;
+  const cut = id.lastIndexOf("-");
+  const page = cut > 0 ? Number.parseInt(id.slice(cut + 1), 10) : NaN;
+  return Number.isNaN(page) ? 0 : page;
+}
 function classifyAndroidDeviceKind(deviceName) {
   if (!deviceName)
     return "unknown";
@@ -30824,12 +30831,18 @@ function selectTarget(validTargets, filtersOrPlatform) {
     }
     const devicePrefixes = new Set(deviceMatched.map((t) => metroDeviceConnectionId(t.id)));
     if (devicePrefixes.size > 1) {
-      return {
-        targets: [],
-        warning: `Pinned device name "${pinnedDevice}" matches ${devicePrefixes.size} live Metro device connections; refusing an ambiguous bind. Candidates: ${deviceMatched.map(describeTarget).join("; ")}. Re-pin deliberately via cdp_targets + cdp_connect targetId.`
-      };
+      const bundleScoped = filters.bundleId ? deviceMatched.filter((target) => targetMatchesBundleId(target, filters.bundleId)) : [];
+      const bundleConnections = new Set(bundleScoped.map((t) => metroDeviceConnectionId(t.id)));
+      if (bundleConnections.size !== 1) {
+        return {
+          targets: [],
+          warning: `Pinned device name "${pinnedDevice}" matches ${devicePrefixes.size} live Metro device connections and ` + (filters.bundleId ? `pinned bundleId "${filters.bundleId}" narrows them to ${bundleConnections.size}` : `no proven bundle identity is pinned to narrow them`) + `; refusing an ambiguous bind. Candidates: ${deviceMatched.map(describeTarget).join("; ")}. Re-pin deliberately via cdp_targets + cdp_connect targetId.`
+        };
+      }
+      filteredTargets = bundleScoped;
+    } else {
+      filteredTargets = deviceMatched;
     }
-    filteredTargets = deviceMatched;
   }
   if (filters.targetId) {
     const idMatched = filteredTargets.filter((t) => t.id === filters.targetId);
@@ -30898,8 +30911,8 @@ function selectTarget(validTargets, filtersOrPlatform) {
     }
   }
   const sorted = [...filteredTargets].sort((a, b) => {
-    const aPage = parseInt(a.id?.split("-")[1] ?? "0", 10);
-    const bPage = parseInt(b.id?.split("-")[1] ?? "0", 10);
+    const aPage = metroPageNumber(a.id);
+    const bPage = metroPageNumber(b.id);
     if (aPage !== bPage)
       return bPage - aPage;
     if (prefLower) {
@@ -66505,7 +66518,8 @@ async function discoverAuthoritativeTarget(policy, requestedFilters, discoverFn 
     ...requestedFilters,
     ...policy.filters,
     targetId: void 0,
-    preferredBundleId: void 0
+    preferredBundleId: void 0,
+    deviceName: void 0
   });
   if (result.errorCode || result.targets.length === 0)
     return result;

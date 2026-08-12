@@ -22,6 +22,7 @@ export async function discoverAuthoritativeTarget(policy, requestedFilters, disc
         ...policy.filters,
         targetId: undefined,
         preferredBundleId: undefined,
+        deviceName: undefined,
     });
     if (result.errorCode || result.targets.length === 0)
         return result;

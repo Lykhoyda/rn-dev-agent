@@ -350,6 +350,13 @@ function metroDeviceConnectionId(id) {
     const cut = id.lastIndexOf('-');
     return cut > 0 ? id.slice(0, cut) : id;
 }
+function metroPageNumber(id) {
+    if (!id)
+        return 0;
+    const cut = id.lastIndexOf('-');
+    const page = cut > 0 ? Number.parseInt(id.slice(cut + 1), 10) : NaN;
+    return Number.isNaN(page) ? 0 : page;
+}
 export class TargetSelectionError extends Error {
     code;
     candidates;
@@ -397,20 +404,35 @@ export function selectTarget(validTargets, filtersOrPlatform) {
             };
         }
         // The affinity must land on exactly ONE Metro device connection. Metro ids
-        // are `<device>-<page>` (device may itself contain hyphens), so multiple
-        // device prefixes under one deviceName mean two live devices share that
-        // name — indistinguishable from Metro metadata, and after a Metro restart
-        // even an exact page-id match cannot prove which clone owns it. Fail closed.
+        // are `<device>-<page>` (device may itself contain hyphens). Metro opens a
+        // device connection per debuggable runtime, so several prefixes under one
+        // deviceName can be either one device running several apps — which the
+        // proven bundle identity disambiguates — or two same-named devices, which
+        // Metro metadata cannot tell apart even on an exact page-id match (ids are
+        // recycled across Metro restarts). Fail closed unless the bundle narrows it.
         const devicePrefixes = new Set(deviceMatched.map((t) => metroDeviceConnectionId(t.id)));
         if (devicePrefixes.size > 1) {
-            return {
-                targets: [],
-                warning: `Pinned device name "${pinnedDevice}" matches ${devicePrefixes.size} live Metro device connections; refusing an ambiguous bind. ` +
-                    `Candidates: ${deviceMatched.map(describeTarget).join('; ')}. ` +
-                    `Re-pin deliberately via cdp_targets + cdp_connect targetId.`,
-            };
+            const bundleScoped = filters.bundleId
+                ? deviceMatched.filter((target) => targetMatchesBundleId(target, filters.bundleId))
+                : [];
+            const bundleConnections = new Set(bundleScoped.map((t) => metroDeviceConnectionId(t.id)));
+            if (bundleConnections.size !== 1) {
+                return {
+                    targets: [],
+                    warning: `Pinned device name "${pinnedDevice}" matches ${devicePrefixes.size} live Metro device connections and ` +
+                        (filters.bundleId
+                            ? `pinned bundleId "${filters.bundleId}" narrows them to ${bundleConnections.size}`
+                            : `no proven bundle identity is pinned to narrow them`) +
+                        `; refusing an ambiguous bind. ` +
+                        `Candidates: ${deviceMatched.map(describeTarget).join('; ')}. ` +
+                        `Re-pin deliberately via cdp_targets + cdp_connect targetId.`,
+                };
+            }
+            filteredTargets = bundleScoped;
         }
-        filteredTargets = deviceMatched;
+        else {
+            filteredTargets = deviceMatched;
+        }
     }
     // Selection precedence continues with an exact target id. It is exact
     // identity, but it never overrides an explicit/session platform constraint —
@@ -510,8 +532,8 @@ export function selectTarget(validTargets, filtersOrPlatform) {
     // Tie-break 1: preferredBundleId-matched targets win.
     // Tie-break 2: lexicographic by full id (eliminates JS sort stability dependency).
     const sorted = [...filteredTargets].sort((a, b) => {
-        const aPage = parseInt(a.id?.split('-')[1] ?? '0', 10);
-        const bPage = parseInt(b.id?.split('-')[1] ?? '0', 10);
+        const aPage = metroPageNumber(a.id);
+        const bPage = metroPageNumber(b.id);
         if (aPage !== bPage)
             return bPage - aPage;
         if (prefLower) {
