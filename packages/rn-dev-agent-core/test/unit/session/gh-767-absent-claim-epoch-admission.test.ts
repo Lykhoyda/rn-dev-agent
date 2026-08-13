@@ -164,6 +164,45 @@ test('GH#767: a blocked absent-prior session is reminted on the documented trans
   }
 });
 
+test('GH#767: a failed remint still closes the terminal authority', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'rn-gh767-remint-fail-'));
+  roots.push(stateDir);
+  const ownerStates = new Map<string, OwnerStatus>();
+  const ownerStatus = (owner: SessionOwner): OwnerStatus =>
+    ownerStates.get(owner.sessionId) ?? 'match';
+
+  const owner = mint(stateDir, { pid: 101, token: 'owner-birth', ownerStatus });
+  ownerStates.set(owner.session.sessionId, 'match');
+  const blocked = mint(stateDir, { pid: 202, token: 'blocked-birth', ownerStatus });
+  owner.registry.releaseSession(owner.session);
+  ownerStates.set(owner.session.sessionId, 'mismatch');
+  assert.equal(supervisorSessionIsTerminal(blocked), true);
+
+  let closes = 0;
+  const observed: SupervisorAuthority = {
+    ...blocked,
+    close: async () => {
+      closes += 1;
+      await blocked.close();
+    },
+  };
+
+  const resolution = resolveSupervisorAuthorityForSpawn(observed, () => {
+    throw new Error('AUTHORITY_STORE_UNAVAILABLE: authority session could not be initialized');
+  });
+  assert.equal(resolution.minted, false);
+  assert.equal(resolution.authority, null);
+  assert.match(resolution.error ?? '', /AUTHORITY_STORE_UNAVAILABLE/);
+
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(closes, 1, 'the terminal authority must be closed when the remint fails');
+  assert.throws(
+    () => blocked.registry.getSessionStatus(blocked.session.sessionId),
+    'the terminal registry handle must not stay open',
+  );
+  await owner.close().catch(() => undefined);
+});
+
 test('GH#767: a live owner is never cleared or reminted', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'rn-gh767-live-'));
   roots.push(stateDir);

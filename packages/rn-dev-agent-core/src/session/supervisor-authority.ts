@@ -60,13 +60,17 @@ export function resolveSupervisorAuthorityForSpawn(
   if (!current || !supervisorSessionIsTerminal(current)) {
     return { authority: current, error: null, minted: false };
   }
-  try {
-    const authority = mint();
+  const closeTerminal = (): void => {
     void current.close().catch(() => {
       /* a terminal session owns nothing; cleanup refusals must not block the successor */
     });
+  };
+  try {
+    const authority = mint();
+    closeTerminal();
     return { authority, error: null, minted: true };
   } catch (error) {
+    closeTerminal();
     return {
       authority: null,
       error:

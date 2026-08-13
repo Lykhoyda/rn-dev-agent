@@ -90261,12 +90261,16 @@ function resolveSupervisorAuthorityForSpawn(current, mint) {
   if (!current || !supervisorSessionIsTerminal(current)) {
     return { authority: current, error: null, minted: false };
   }
-  try {
-    const authority = mint();
+  const closeTerminal = () => {
     void current.close().catch(() => {
     });
+  };
+  try {
+    const authority = mint();
+    closeTerminal();
     return { authority, error: null, minted: true };
   } catch (error2) {
+    closeTerminal();
     return {
       authority: null,
       error: error2 instanceof Error ? error2.message : "AUTHORITY_STORE_UNAVAILABLE: authority session could not be initialized",
