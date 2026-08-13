@@ -30,6 +30,10 @@ namespace as a single import-time sweep. Final names:
 | Bundle id | `dev.lykhoyda.rndevagent.fastrunner` |
 | Splash text | `rn-dev-agent fast runner` |
 
+Post-import: the splash was later split into `rn-dev-agent` / `fast runner`
+lines, and the title now carries the stable `runner-splash-title`
+accessibility identifier that launch-contract tests key on.
+
 ## Dropped at import time
 
 - `RunnerTests+ScreenRecorder.swift` — our `device_record` uses `xcrun simctl io recordVideo` directly
