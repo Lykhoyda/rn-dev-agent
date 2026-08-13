@@ -39,26 +39,20 @@ export interface SupervisorAuthority {
   close(): Promise<void>;
 }
 
-/**
- * GH #706: a released (or fenced) session owns nothing and can never be transitioned
- * again, so the supervisor must mint a successor instead of handing the terminal row
- * to the next worker.
- */
+/** GH #706/#767: released, stale, or blocked-with-absent-prior rows cannot be reused. */
 export function supervisorSessionIsTerminal(authority: SupervisorAuthority): boolean {
-  let state: string | undefined;
   try {
-    state = authority.registry.getSessionStatus(authority.session.sessionId)?.state;
+    const state = authority.registry.getSessionStatus(authority.session.sessionId)?.state;
+    if (state === undefined || state === 'released' || state === 'stale') return true;
+    if (state !== 'blocked') return false;
+    const requirement = authority.registry.inspectRecoveryRequirement(authority.session.sessionId);
+    return requirement.requirement === 'transport-restart' && requirement.priorOwner === 'absent';
   } catch {
     return false;
   }
-  return state === undefined || state === 'released' || state === 'stale';
 }
 
-/**
- * GH #706: resolve the session the next worker inherits. A terminal row is replaced by
- * a freshly minted session — exactly what a cold supervisor start would have produced —
- * so `release` stops being a one-way door.
- */
+/** GH #706: a terminal row is replaced by a freshly minted successor. */
 export function resolveSupervisorAuthorityForSpawn(
   current: SupervisorAuthority | null,
   mint: () => SupervisorAuthority,
@@ -66,12 +60,17 @@ export function resolveSupervisorAuthorityForSpawn(
   if (!current || !supervisorSessionIsTerminal(current)) {
     return { authority: current, error: null, minted: false };
   }
-  void current.close().catch(() => {
-    /* a terminal session owns nothing; cleanup refusals must not block the successor */
-  });
+  const closeTerminal = (): void => {
+    void current.close().catch(() => {
+      /* a terminal session owns nothing; cleanup refusals must not block the successor */
+    });
+  };
   try {
-    return { authority: mint(), error: null, minted: true };
+    const authority = mint();
+    closeTerminal();
+    return { authority, error: null, minted: true };
   } catch (error) {
+    closeTerminal();
     return {
       authority: null,
       error:
