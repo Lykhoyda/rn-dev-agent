@@ -21136,13 +21136,15 @@ var init_registry = __esm({
       }
       createSession(input) {
         const now = this.#now();
-        this.#database.prepare(`INSERT INTO sessions(
-          session_id, source_key, worktree_key, app_root_key, state,
-          claim_epoch, authority_version, supervisor_pid, supervisor_birth,
-          worker_instance, worker_pid, worker_birth, heartbeat_ms, lease_until_ms,
-          source_json, bindings_json, created_ms, updated_ms
-        ) VALUES (?, ?, ?, ?, 'active', 1, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(input.sessionId, input.sourceKey, input.worktreeKey, input.appRootKey, input.supervisor.pid, input.supervisor.token, input.worker?.instanceId ?? null, input.worker?.pid ?? null, input.worker?.token ?? null, now, now + this.#leaseMs, JSON.stringify(input.source ?? {}), JSON.stringify(input.bindings ?? {}), now, now);
-        this.#secureFiles();
+        this.#transaction(() => {
+          this.#discardAbsentBlockedContenders(input);
+          this.#database.prepare(`INSERT INTO sessions(
+            session_id, source_key, worktree_key, app_root_key, state,
+            claim_epoch, authority_version, supervisor_pid, supervisor_birth,
+            worker_instance, worker_pid, worker_birth, heartbeat_ms, lease_until_ms,
+            source_json, bindings_json, created_ms, updated_ms
+          ) VALUES (?, ?, ?, ?, 'active', 1, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(input.sessionId, input.sourceKey, input.worktreeKey, input.appRootKey, input.supervisor.pid, input.supervisor.token, input.worker?.instanceId ?? null, input.worker?.pid ?? null, input.worker?.token ?? null, now, now + this.#leaseMs, JSON.stringify(input.source ?? {}), JSON.stringify(input.bindings ?? {}), now, now);
+        });
         return { sessionId: input.sessionId, claimEpoch: 1 };
       }
       claimResources(session2, resources) {
@@ -22455,6 +22457,26 @@ var init_registry = __esm({
                authority_version = authority_version + 1, updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`).run(now, session2.sessionId, session2.claimEpoch);
         });
+      }
+      #discardAbsentBlockedContenders(input) {
+        if (this.#findClaim("source", input.worktreeKey))
+          return;
+        const rows = this.#database.prepare(`SELECT session_id, claim_epoch FROM sessions
+         WHERE state = 'blocked' AND source_key = ? AND worktree_key = ? AND app_root_key = ?`).all(input.sourceKey, input.worktreeKey, input.appRootKey);
+        const now = this.#now();
+        for (const row of rows) {
+          const requirement = this.inspectRecoveryRequirement(row.session_id);
+          if (requirement.requirement !== "transport-restart" || requirement.priorOwner !== "absent") {
+            continue;
+          }
+          const owned = this.#database.prepare("SELECT resource_key FROM claims WHERE session_id = ? LIMIT 1").get(row.session_id);
+          if (owned)
+            continue;
+          this.#database.prepare(`UPDATE sessions
+           SET state = 'released', claim_epoch = claim_epoch + 1,
+               authority_version = authority_version + 1, updated_ms = ?
+           WHERE session_id = ? AND claim_epoch = ? AND state = 'blocked'`).run(now, row.session_id, row.claim_epoch);
+        }
       }
       discardBlockedSession(session2) {
         const now = this.#now();
@@ -90223,22 +90245,27 @@ var RELEASABLE_SESSION_STATES = /* @__PURE__ */ new Set([
   "ready"
 ]);
 function supervisorSessionIsTerminal(authority) {
-  let state;
   try {
-    state = authority.registry.getSessionStatus(authority.session.sessionId)?.state;
+    const state = authority.registry.getSessionStatus(authority.session.sessionId)?.state;
+    if (state === void 0 || state === "released" || state === "stale")
+      return true;
+    if (state !== "blocked")
+      return false;
+    const requirement = authority.registry.inspectRecoveryRequirement(authority.session.sessionId);
+    return requirement.requirement === "transport-restart" && requirement.priorOwner === "absent";
   } catch {
     return false;
   }
-  return state === void 0 || state === "released" || state === "stale";
 }
 function resolveSupervisorAuthorityForSpawn(current, mint) {
   if (!current || !supervisorSessionIsTerminal(current)) {
     return { authority: current, error: null, minted: false };
   }
-  void current.close().catch(() => {
-  });
   try {
-    return { authority: mint(), error: null, minted: true };
+    const authority = mint();
+    void current.close().catch(() => {
+    });
+    return { authority, error: null, minted: true };
   } catch (error2) {
     return {
       authority: null,
