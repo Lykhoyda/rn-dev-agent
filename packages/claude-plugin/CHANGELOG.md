@@ -1,5 +1,13 @@
 # rn-dev-agent-plugin
 
+## 0.76.5
+
+### Patch Changes
+
+- a43ee7d: Allow canonical detect-libc Linux getconf/ldd module-load probes through managed Metro's descendant fence without opening arbitrary descendant execution.
+- Updated dependencies [a43ee7d]
+  - rn-dev-agent-core@0.71.5
+
 ## 0.76.4
 
 ### Patch Changes
