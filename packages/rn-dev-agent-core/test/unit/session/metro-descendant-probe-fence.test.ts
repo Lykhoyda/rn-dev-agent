@@ -202,6 +202,69 @@ try {
 );
 
 test(
+  'nonce-carrying Metro transform workers may still load detect-libc',
+  { skip: unsupportedPlatform },
+  () => {
+    const harness = createHarness('libc-worker');
+    try {
+      assert.ok(systemGetconf, 'test host must provide a system getconf');
+      const workerEntrypoint = join(harness.root, 'transform-worker.cjs');
+      writeFileSync(
+        workerEntrypoint,
+        `const { isMainThread, parentPort } = require('node:worker_threads');
+require(${JSON.stringify(harness.detectLibcPath)});
+parentPort.postMessage({ isMainThread });
+`,
+      );
+      const parent = join(harness.root, 'transform-worker-parent.cjs');
+      writeFileSync(
+        parent,
+        `const compose = require(${JSON.stringify(harness.adapterPath)});
+compose({});
+const { Worker } = require('node:worker_threads');
+const worker = new Worker(${JSON.stringify(workerEntrypoint)});
+worker.once('message', (message) => {
+  if (message.isMainThread !== false) {
+    console.error(JSON.stringify(message));
+    process.exit(3);
+  }
+  process.exit(0);
+});
+worker.once('error', (error) => {
+  console.error(error);
+  process.exit(4);
+});
+worker.once('exit', (code) => process.exit(code === 0 ? 5 : code));
+`,
+      );
+      const result = spawnSync(process.execPath, [parent], {
+        cwd: harness.root,
+        encoding: 'utf8',
+        env: harness.environment,
+      });
+      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+      const observations = readObservations(harness);
+      assert.equal(
+        observations.some((entry) => entry.kind === 'launch'),
+        true,
+        'the probing worker must be an authenticated nonce-carrying descendant',
+      );
+      const utilities = observations
+        .filter((entry) => entry.kind === 'unattested-utility')
+        .map((entry) => JSON.parse(entry.value) as { command: string; lane: string });
+      assert.equal(
+        utilities.filter((entry) => entry.command === 'getconf' && entry.lane === 'libc-probe')
+          .length,
+        1,
+        JSON.stringify(utilities),
+      );
+    } finally {
+      rmSync(harness.root, { force: true, recursive: true });
+    }
+  },
+);
+
+test(
   'PATH substitution cannot impersonate the Linux libc probes',
   { skip: unsupportedPlatform },
   () => {
