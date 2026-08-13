@@ -15130,6 +15130,37 @@ async function stopManagedMetro(binding, input, dependencies = {}) {
   return removeManagedMetroEvidenceSocketSafely(binding.runtimeEvidenceSocket, dependencies);
 }
 
+// packages/rn-dev-agent-core/dist/session/managed-metro-restart.js
+init_install_authority();
+function resolveManagedMetroRestartGeneration(input, dependencies = {}) {
+  const fallback = (reason) => ({
+    buildGeneration: input.fallbackGeneration,
+    receiptPreserved: false,
+    reason
+  });
+  const install = input.install;
+  if (!install)
+    return fallback("no-install-receipt");
+  const generation2 = install.buildGeneration;
+  if (install.sessionId !== input.session.sessionId || install.sourceKey !== input.session.sourceKey || install.worktreeKey !== input.session.worktreeKey || install.appRootKey !== input.session.appRootKey || install.platform !== input.device.platform || install.deviceId !== input.device.deviceId || install.appId !== input.device.appId || install.metroPort !== input.session.metroPort || install.buildKind !== "expo" && install.buildKind !== "bare-react-native" || typeof install.artifactDigest !== "string" || install.artifactDigest === "" || typeof install.installGeneration !== "string" || install.installGeneration === "" || !Number.isSafeInteger(generation2) || Number(generation2) < 1) {
+    return fallback("receipt-axis-mismatch");
+  }
+  let observed;
+  try {
+    observed = (dependencies.captureInstalled ?? captureInstalledArtifact)({
+      platform: input.device.platform,
+      deviceId: input.device.deviceId,
+      appId: input.device.appId
+    });
+  } catch {
+    return fallback("install-capture-failed");
+  }
+  if (observed.artifactDigest !== install.artifactDigest || observed.installGeneration !== install.installGeneration) {
+    return fallback("installed-artifact-changed");
+  }
+  return { buildGeneration: Number(generation2), receiptPreserved: true, reason: "preserved" };
+}
+
 // packages/rn-dev-agent-core/dist/session/process-owner.js
 init_process_birth();
 function defaultProcessState(pid) {
@@ -18029,6 +18060,9 @@ async function ensureManagedMetro(status) {
   let startedBinding = null;
   let cleanupBindingCommitted = false;
   let bindingCommitted = false;
+  let restarted = false;
+  let receiptPreserved = false;
+  let receiptPreservedReason = "metro-already-live";
   try {
     await status.registry.runWithOperation(operation, async () => {
       if (retainedCleanup) {
@@ -18084,7 +18118,28 @@ async function ensureManagedMetro(status) {
         });
       }
       const instanceId = randomUUID3();
-      const buildGeneration = Math.max(Number(existing?.buildGeneration ?? 0), Number(retainedCleanup?.buildGeneration ?? 0), Number(status.bindings.install?.buildGeneration ?? 0)) + 1;
+      restarted = true;
+      const install = status.bindings.install;
+      const restart = resolveManagedMetroRestartGeneration({
+        session: {
+          sessionId: status.sessionId,
+          sourceKey: status.sourceKey,
+          worktreeKey: status.worktreeKey,
+          appRootKey: status.appRootKey,
+          metroPort: Number(status.bindings.metroPort)
+        },
+        device: { platform, deviceId: String(device.deviceId ?? ""), appId },
+        install,
+        fallbackGeneration: Math.max(Number(existing?.buildGeneration ?? 0), Number(retainedCleanup?.buildGeneration ?? 0), Number(install?.buildGeneration ?? 0)) + 1
+      });
+      const buildGeneration = restart.buildGeneration;
+      receiptPreserved = restart.receiptPreserved;
+      receiptPreservedReason = restart.reason;
+      if (!receiptPreserved) {
+        const recovery = restart.reason === "install-capture-failed" ? "retry stop_metro + ensure-metro to re-prove the unchanged install, or rebuild if the probe keeps failing" : "rebuild to reissue the install receipt";
+        process.stderr.write(`rn-session ensure-metro: install receipt generation not preserved (${restart.reason}); pin_dev_client will refuse until the receipt and Metro generations agree \u2014 ${recovery}
+`);
+      }
       writeMarker(status, {
         platform,
         appId,
@@ -18120,6 +18175,7 @@ async function ensureManagedMetro(status) {
       bindingCommitted = true;
     });
     status.registry.endOperation(currentOperation);
+    return { restarted, receiptPreserved, receiptPreservedReason };
   } catch (error) {
     let failure = error;
     let cleanupProven = startedBinding === null || bindingCommitted;
@@ -18196,11 +18252,15 @@ async function main() {
       return;
     }
     if (command === "ensure-metro") {
-      await ensureManagedMetro(status);
+      const ensured = await ensureManagedMetro(status);
       const current = status.registry.getSessionStatus(status.sessionId);
       process.stdout.write(`${JSON.stringify({
         metroBound: true,
-        metroPort: current?.bindings.metroPort
+        metroPort: current?.bindings.metroPort,
+        buildGeneration: current?.bindings.metro?.buildGeneration,
+        restarted: ensured.restarted,
+        receiptPreserved: ensured.receiptPreserved,
+        receiptPreservedReason: ensured.receiptPreservedReason
       })}
 `);
       return;

@@ -9,6 +9,7 @@ import { parseDeclaredManifests } from './session/declared-source-contract.js';
 import { buildSignedMetroMarker, createMetroAuthorityModule } from './session/metro-authority.js';
 import { captureMetroBinding } from './session/metro-binding.js';
 import { inspectManagedMetroLifecycle, refreshManagedMetroBuildGeneration, startManagedMetro, stopManagedMetro, verifyManagedMetroManagementProof, } from './session/managed-metro.js';
+import { resolveManagedMetroRestartGeneration, } from './session/managed-metro-restart.js';
 import { inspectSessionOwner } from './session/process-owner.js';
 import { openSessionRegistry, SessionAuthorityError, } from './session/registry.js';
 import { resolveSourceIdentity } from './session/source-identity.js';
@@ -212,6 +213,9 @@ async function ensureManagedMetro(status) {
     let startedBinding = null;
     let cleanupBindingCommitted = false;
     let bindingCommitted = false;
+    let restarted = false;
+    let receiptPreserved = false;
+    let receiptPreservedReason = 'metro-already-live';
     try {
         await status.registry.runWithOperation(operation, async () => {
             if (retainedCleanup) {
@@ -271,7 +275,29 @@ async function ensureManagedMetro(status) {
                 });
             }
             const instanceId = randomUUID();
-            const buildGeneration = Math.max(Number(existing?.buildGeneration ?? 0), Number(retainedCleanup?.buildGeneration ?? 0), Number(status.bindings.install?.buildGeneration ?? 0)) + 1;
+            restarted = true;
+            const install = status.bindings.install;
+            const restart = resolveManagedMetroRestartGeneration({
+                session: {
+                    sessionId: status.sessionId,
+                    sourceKey: status.sourceKey,
+                    worktreeKey: status.worktreeKey,
+                    appRootKey: status.appRootKey,
+                    metroPort: Number(status.bindings.metroPort),
+                },
+                device: { platform, deviceId: String(device.deviceId ?? ''), appId },
+                install,
+                fallbackGeneration: Math.max(Number(existing?.buildGeneration ?? 0), Number(retainedCleanup?.buildGeneration ?? 0), Number(install?.buildGeneration ?? 0)) + 1,
+            });
+            const buildGeneration = restart.buildGeneration;
+            receiptPreserved = restart.receiptPreserved;
+            receiptPreservedReason = restart.reason;
+            if (!receiptPreserved) {
+                const recovery = restart.reason === 'install-capture-failed'
+                    ? 'retry stop_metro + ensure-metro to re-prove the unchanged install, or rebuild if the probe keeps failing'
+                    : 'rebuild to reissue the install receipt';
+                process.stderr.write(`rn-session ensure-metro: install receipt generation not preserved (${restart.reason}); pin_dev_client will refuse until the receipt and Metro generations agree — ${recovery}\n`);
+            }
             writeMarker(status, {
                 platform,
                 appId,
@@ -307,6 +333,7 @@ async function ensureManagedMetro(status) {
             bindingCommitted = true;
         });
         status.registry.endOperation(currentOperation);
+        return { restarted, receiptPreserved, receiptPreservedReason };
     }
     catch (error) {
         let failure = error;
@@ -386,11 +413,16 @@ async function main() {
             return;
         }
         if (command === 'ensure-metro') {
-            await ensureManagedMetro(status);
+            const ensured = await ensureManagedMetro(status);
             const current = status.registry.getSessionStatus(status.sessionId);
             process.stdout.write(`${JSON.stringify({
                 metroBound: true,
                 metroPort: current?.bindings.metroPort,
+                buildGeneration: current?.bindings.metro
+                    ?.buildGeneration,
+                restarted: ensured.restarted,
+                receiptPreserved: ensured.receiptPreserved,
+                receiptPreservedReason: ensured.receiptPreservedReason,
             })}\n`);
             return;
         }
