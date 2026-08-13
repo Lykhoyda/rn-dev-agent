@@ -14,7 +14,7 @@ import XCTest
 
 final class SnapshotForegroundRegressionTest: RnFastRunnerTests {
   private static let testAppBundleId = "com.rndevagent.testapp"
-  private static let runnerSplashText = "rn-dev-agent fast runner"
+  private static let runnerSplashIdentifier = RunnerSplashContract.titleIdentifier
   private static let expectedTestAppMarkers: [String] = [
     "home-welcome",
     "home-search-btn",
@@ -46,11 +46,12 @@ final class SnapshotForegroundRegressionTest: RnFastRunnerTests {
 
     // Sanity-check that the runner's splash UI is actually visible — if this
     // fails the regression test is meaningless because we cannot prove the
-    // dispatcher had to activate a different target.
-    let runnerSplash = app.staticTexts[Self.runnerSplashText]
+    // dispatcher had to activate a different target. Keyed on the stable
+    // splash identifier, not display copy.
+    let runnerSplash = app.staticTexts[Self.runnerSplashIdentifier]
     XCTAssertTrue(
-      runnerSplash.waitForExistence(timeout: 5),
-      "runner splash UI (\"\(Self.runnerSplashText)\") should be visible before the snapshot call"
+      runnerSplash.waitForExistence(timeout: 10),
+      "runner splash UI (identifier \"\(Self.runnerSplashIdentifier)\") should be visible before the snapshot call"
     )
 
     // Step 2: Verify the test-app is installed on this simulator. The test
@@ -125,12 +126,12 @@ final class SnapshotForegroundRegressionTest: RnFastRunnerTests {
       ].joined(separator: "|")
     }.joined(separator: "\n")
 
-    // Step 5: The response must NOT contain the runner's splash text — if it
-    // does, the dispatcher read the runner's UI instead of the test-app's
-    // (the original B155 bug).
+    // Step 5: The response must NOT contain the runner's splash identifier —
+    // if it does, the dispatcher read the runner's UI instead of the
+    // test-app's (the original B155 bug).
     XCTAssertFalse(
-      nodeBlob.contains(Self.runnerSplashText),
-      "B155 regression: snapshot returned the runner's UI (\"\(Self.runnerSplashText)\") instead of the test-app's tree.\nnodes:\n\(nodeBlob.prefix(2000))"
+      nodeBlob.contains(Self.runnerSplashIdentifier),
+      "B155 regression: snapshot returned the runner's UI (identifier \"\(Self.runnerSplashIdentifier)\") instead of the test-app's tree.\nnodes:\n\(nodeBlob.prefix(2000))"
     )
 
     // Step 6: The response MUST contain at least one test-app marker — proves

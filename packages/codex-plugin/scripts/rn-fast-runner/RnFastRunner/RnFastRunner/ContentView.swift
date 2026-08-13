@@ -12,6 +12,7 @@ struct ContentView: View {
             Text("rn-dev-agent")
                 .font(.title2)
                 .fontWeight(.semibold)
+                .accessibilityIdentifier("runner-splash-title")
             Text("fast runner")
                 .font(.body)
                 .foregroundStyle(.secondary)
