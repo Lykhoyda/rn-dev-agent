@@ -15258,6 +15258,11 @@ function withinManifestUtilityBoundary() {
     workerThreads.isMainThread
   );
 }
+const libcProbeCapability = Object.freeze({});
+const libcProbeScope = new AsyncLocalStorage();
+function withinLibcProbeBoundary() {
+  return libcProbeScope.getStore() === libcProbeCapability;
+}
 function canonicalPackageFile(resolvedFile, packageName, relativePath) {
   let cursor = path.dirname(resolvedFile);
   while (true) {
@@ -15324,6 +15329,57 @@ function isExpoUpdatesRuntimeVersionInvocation(command, args, cwd, environmentEn
   }
   return args.length === 3 || args[3] === '--debug';
 }
+function isLinuxLibcProbeInvocation(command, args, cwd, environmentEntries) {
+  if (!intrinsicArrayIsArray(args) || args.length !== 1 || typeof args[0] !== 'string') {
+    return false;
+  }
+  const resolvedCommand = resolveInvocationExecutable(command, cwd, environmentEntries);
+  if (!resolvedCommand) return false;
+  const executableName = path.basename(resolvedCommand);
+  let directory;
+  try {
+    directory = fs.realpathSync(path.dirname(resolvedCommand));
+  } catch {
+    return false;
+  }
+  const systemDirectories = ['/usr/bin', '/bin', '/usr/sbin', '/sbin'];
+  let allowedDirectory = false;
+  for (let index = 0; index < systemDirectories.length; index += 1) {
+    try {
+      if (fs.realpathSync(systemDirectories[index]) === directory) {
+        allowedDirectory = true;
+        break;
+      }
+    } catch {}
+  }
+  if (!allowedDirectory) return false;
+  if (executableName === 'getconf') return args[0] === 'GNU_LIBC_VERSION';
+  if (executableName === 'ldd') return args[0] === '--version';
+  return false;
+}
+const canonicalLoadTargets = privateArrayMap(
+  [
+    { boundary: 'libc-probe', packageName: 'detect-libc', relativePath: 'lib/detect-libc.js' },
+    {
+      boundary: 'expo-manifest-middleware',
+      packageName: '@expo/cli',
+      relativePath: 'build/src/start/server/middleware/ExpoGoManifestHandlerMiddleware.js',
+    },
+  ],
+  (target) => ({ ...target, fileName: path.basename(target.relativePath) }),
+);
+function canonicalLoadBoundary(resolvedFile) {
+  if (!resolvedFile) return null;
+  const fileName = path.basename(resolvedFile);
+  for (let index = 0; index < canonicalLoadTargets.length; index += 1) {
+    const target = canonicalLoadTargets[index];
+    if (target.fileName !== fileName) continue;
+    if (canonicalPackageFile(resolvedFile, target.packageName, target.relativePath)) {
+      return target.boundary;
+    }
+  }
+  return null;
+}
 function installExpoManifestUtilityBoundary() {
   const originalLoad = moduleApi._load;
   const originalResolveFilename = moduleApi._resolveFilename;
@@ -15332,7 +15388,6 @@ function installExpoManifestUtilityBoundary() {
     configurable: false,
     enumerable: true,
     value(request, parent, isMain) {
-      const loaded = intrinsicReflectApply(originalLoad, this, [request, parent, isMain]);
       let resolved;
       try {
         const filename = intrinsicReflectApply(originalResolveFilename, moduleApi, [
@@ -15342,16 +15397,13 @@ function installExpoManifestUtilityBoundary() {
         ]);
         resolved = typeof filename === 'string' ? fs.realpathSync(filename) : null;
       } catch {
-        return loaded;
+        resolved = null;
       }
-      if (
-        !resolved ||
-        !canonicalPackageFile(
-          resolved,
-          '@expo/cli',
-          'build/src/start/server/middleware/ExpoGoManifestHandlerMiddleware.js',
-        )
-      ) {
+      const boundary = canonicalLoadBoundary(resolved);
+      const load = () => intrinsicReflectApply(originalLoad, this, [request, parent, isMain]);
+      const loaded =
+        boundary === 'libc-probe' ? libcProbeScope.run(libcProbeCapability, load) : load();
+      if (boundary !== 'expo-manifest-middleware') {
         return loaded;
       }
       const Middleware = loaded?.ExpoGoManifestHandlerMiddleware;
@@ -15411,13 +15463,13 @@ function utilityChildArguments(args, optionsIndex, options) {
   }
   return nextArgs;
 }
-function recordUtilityInvocation(mode, command, args, cwd) {
+function recordUtilityInvocation(mode, command, args, cwd, lane) {
   persistLoaderObservation(
     'unattested-utility',
     canonicalAuthorityJson({
       version: 1,
       mode,
-      lane: 'manifest-utility',
+      lane,
       proofBearing: false,
       command: typeof command === 'string' ? command : null,
       argumentDigest: createHash('sha256')
@@ -15442,7 +15494,7 @@ function recordUtilityInvocation(mode, command, args, cwd) {
   );
 }
 // Utility children get no RN_DEV_AGENT_* capability, evidence descriptor, or authority NODE_OPTIONS.
-function runManifestUtility(original, receiver, args, optionsIndex, mode) {
+function admittedUtilityInvocation(args, optionsIndex, mode, lane, admits) {
   const candidate = args[optionsIndex];
   const rawOptions = candidate && typeof candidate === 'object' ? { ...candidate } : {};
   if (rawOptions.shell || rawOptions.signal !== undefined) throw descendantError();
@@ -15451,13 +15503,7 @@ function runManifestUtility(original, receiver, args, optionsIndex, mode) {
   }
   const cwd = invocationCwd(rawOptions.cwd);
   const environmentEntries = normalizedInvocationEnvironment(rawOptions.env);
-  if (
-    mode !== 'node' ||
-    !withinManifestUtilityBoundary() ||
-    !isExpoUpdatesRuntimeVersionInvocation(args[0], args[1], cwd, environmentEntries)
-  ) {
-    throw descendantError();
-  }
+  if (!admits(mode, args, cwd, environmentEntries)) throw descendantError();
   const stdio = utilityChildStdio(rawOptions.stdio);
   const utilityOptions = {
     ...rawOptions,
@@ -15466,7 +15512,31 @@ function runManifestUtility(original, receiver, args, optionsIndex, mode) {
     ...(stdio === undefined || stdio === null ? {} : { stdio }),
   };
   const utilityArgs = utilityChildArguments(args, optionsIndex, utilityOptions);
-  recordUtilityInvocation(mode, args[0], args[1], cwd);
+  recordUtilityInvocation(mode, args[0], args[1], cwd, lane);
+  return { utilityArgs, utilityOptions };
+}
+function admitsManifestUtility(mode, args, cwd, environmentEntries) {
+  return (
+    mode === 'node' &&
+    withinManifestUtilityBoundary() &&
+    isExpoUpdatesRuntimeVersionInvocation(args[0], args[1], cwd, environmentEntries)
+  );
+}
+function admitsLibcProbe(mode, args, cwd, environmentEntries) {
+  return (
+    mode === 'sync' &&
+    withinLibcProbeBoundary() &&
+    isLinuxLibcProbeInvocation(args[0], args[1], cwd, environmentEntries)
+  );
+}
+function runManifestUtility(original, receiver, args, optionsIndex, mode) {
+  const { utilityArgs, utilityOptions } = admittedUtilityInvocation(
+    args,
+    optionsIndex,
+    mode,
+    'manifest-utility',
+    admitsManifestUtility,
+  );
   const nonce = randomBytes(16).toString('hex');
   const spawnAuthorization =
     mode === 'sync'
@@ -15510,6 +15580,16 @@ function runManifestUtility(original, receiver, args, optionsIndex, mode) {
     }
   }
   return child;
+}
+function runLibcProbeUtility(original, receiver, args, optionsIndex, mode) {
+  const { utilityArgs } = admittedUtilityInvocation(
+    args,
+    optionsIndex,
+    mode,
+    'libc-probe',
+    admitsLibcProbe,
+  );
+  return intrinsicReflectApply(original, receiver, utilityArgs);
 }
 const CHILD_EXCHANGE_STALL_CODE = 'MANAGED_TRANSFORM_CHANNEL_STALLED';
 function childExchangeStallBound() {
@@ -16119,6 +16199,9 @@ function fenceChildProcessMethod(name, optionsIndex, mode) {
       const args = [...receivedArgs];
       if (Array.isArray(args[1])) args[1] = [...args[1]];
       const index = typeof optionsIndex === 'function' ? optionsIndex(args) : optionsIndex;
+      if (mode === 'sync' && withinLibcProbeBoundary()) {
+        return runLibcProbeUtility(original, this, args, index, mode);
+      }
       if (mode !== 'fork' && withinManifestUtilityBoundary()) {
         return runManifestUtility(original, this, args, index, mode);
       }
