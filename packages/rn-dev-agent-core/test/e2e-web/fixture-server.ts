@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ObservabilityServer } from '../../dist/observability/server.js';
 import { Recorder } from '../../dist/observability/recorder.js';
+import { okResult } from '../../dist/utils.js';
 
 export const CSRF_TOKEN = 'e2e-fixture-token';
 const OBSERVE_AUTHORITY = {
@@ -29,7 +30,14 @@ export interface Fixture {
   stop: () => Promise<void>;
 }
 
-export async function startFixture(): Promise<Fixture> {
+export interface FixtureOverrides {
+  /** Replaces the canned POST /api/e2e/run body (a cdp_run_e2e_suite ToolResult). */
+  triggerRun?: () => Promise<unknown>;
+  /** Replaces the canned GET /api/e2e/actions dep; throw to exercise refusals. */
+  listActions?: () => Promise<unknown>;
+}
+
+export async function startFixture(overrides: FixtureOverrides = {}): Promise<Fixture> {
   const recorder = new Recorder(100);
 
   const shotPath = join(mkdtempSync(join(tmpdir(), 'observe-e2e-')), 'screen.jpg');
@@ -67,16 +75,21 @@ export async function startFixture(): Promise<Fixture> {
 
   const e2eStub = {
     token: CSRF_TOKEN,
-    triggerRun: async () => ({
-      ok: true,
-      data: {
-        runId: 'run-live',
-        verdict: 'green',
-        totals: { total: 1, passed: 1, failed: 0, skipped: 0 },
-        results: [{ testId: 'flow-a', passed: true, durationMs: 1200, classification: 'pass' }],
-        newlyFailing: [],
-      },
-    }),
+    // Production answers with the gate-wrapped cdp_run_e2e_suite ToolResult,
+    // whose text carries the tool envelope around the run envelope.
+    triggerRun:
+      overrides.triggerRun ??
+      (async () =>
+        okResult({
+          ok: true,
+          data: {
+            runId: 'run-live',
+            verdict: 'green',
+            totals: { total: 1, passed: 1, failed: 0, skipped: 0 },
+            results: [{ testId: 'flow-a', passed: true, durationMs: 1200, classification: 'pass' }],
+            newlyFailing: [],
+          },
+        })),
     listRuns: async () => [
       {
         runId: 'run-1',
@@ -107,15 +120,17 @@ export async function startFixture(): Promise<Fixture> {
             ],
           }
         : null,
-    listActions: async () => [
-      {
-        id: 'login',
-        intent: 'Log into the app with credentials',
-        status: 'active',
-        params: ['USERNAME', 'PASSWORD'],
-        mutates: true,
-      },
-    ],
+    listActions:
+      overrides.listActions ??
+      (async () => [
+        {
+          id: 'login',
+          intent: 'Log into the app with credentials',
+          status: 'active',
+          params: ['USERNAME', 'PASSWORD'],
+          mutates: true,
+        },
+      ]),
     runAction: async (actionId: string, params?: Record<string, string>) => {
       const missing = ['USERNAME', 'PASSWORD'].filter((p) => !params?.[p]);
       if (actionId === 'login' && missing.length > 0) {

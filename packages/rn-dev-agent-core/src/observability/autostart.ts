@@ -4,8 +4,10 @@
  * and NEVER fatally: an autostart failure is a warning, not a boot error.
  * Dependency-injected so the gating logic is unit-testable without sockets.
  */
+import type { ObserveRootResolution } from './observe-project-root.js';
+
 export interface AutostartDeps {
-  findRoot: () => string | null;
+  findRoot: () => ObserveRootResolution;
   resolveEnabled: () => { enabled: boolean; source: 'env' | 'config' | 'default' };
   /** GH #672: reason this session may not open operational children (blocked contender), or null. */
   recoveryOnlyReason?: () => string | null;
@@ -24,10 +26,14 @@ export async function autostartObserve(deps: AutostartDeps): Promise<{ url: stri
       deps.info(`observe UI autostart skipped (${recoveryOnly})`);
       return null;
     }
-    if (!deps.findRoot()) return null;
     const res = deps.resolveEnabled();
     if (!res.enabled) {
       deps.info(`observe UI autostart disabled (${res.source})`);
+      return null;
+    }
+    const root = deps.findRoot();
+    if (!root.ok) {
+      deps.warn(`observe UI autostart skipped: ${root.reason}`);
       return null;
     }
     const { url } = await deps.start();

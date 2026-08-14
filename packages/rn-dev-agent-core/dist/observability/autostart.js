@@ -8,11 +8,14 @@ export async function autostartObserve(deps) {
             deps.info(`observe UI autostart skipped (${recoveryOnly})`);
             return null;
         }
-        if (!deps.findRoot())
-            return null;
         const res = deps.resolveEnabled();
         if (!res.enabled) {
             deps.info(`observe UI autostart disabled (${res.source})`);
+            return null;
+        }
+        const root = deps.findRoot();
+        if (!root.ok) {
+            deps.warn(`observe UI autostart skipped: ${root.reason}`);
             return null;
         }
         const { url } = await deps.start();

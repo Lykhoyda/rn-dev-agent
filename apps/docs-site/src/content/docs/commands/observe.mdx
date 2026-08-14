@@ -59,6 +59,8 @@ This closes a nice loop with the rest of the UI: trigger a replay and you watch 
 
 If the tab says *"No learned actions"*, nothing has been recorded yet — run [`/test-feature`](../test-feature/) and a verified walk will be saved automatically (see [Creating an action](../../actions/#creating-an-action)).
 
+The actions and E2E surfaces read the project the **bound session** declared, falling back to `RN_PROJECT_ROOT` and then to discovery from the working directory. When none of those proves a single React Native project — a foreign, missing, or ambiguous root — the tab shows *"Actions unavailable"* with the reason instead of an empty list, and the endpoints answer `503 PROJECT_ROOT_UNAVAILABLE`. See [`PROJECT_ROOT_UNAVAILABLE`](../../troubleshooting/#session-authority-errors) for the repair.
+
 The **E2E** tab does the same for the locked regression suite in `.rn-agent/e2e/`: run the whole suite from the browser, watch per-flow progress live, and browse the history of previous runs with per-flow pass/fail detail. Suites started by the agent (via `cdp_run_e2e_suite`) show up here too.
 
 <Aside type="note" title="Read-only, with two deliberate exceptions">

@@ -1,4 +1,4 @@
-import { useEffect, useState, type JSX } from 'react';
+import { useEffect, useRef, useState, type JSX } from 'react';
 import { observeFetch } from '../authority';
 import type {
   E2eFlowResult,
@@ -23,13 +23,31 @@ export function E2ePanel({ e2eProgress, e2eDoneCount }: E2ePanelProps): JSX.Elem
   const [runDetails, setRunDetails] = useState<Record<string, E2eRunDetail | 'loading' | 'error'>>(
     {},
   );
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [runError, setRunError] = useState<string | null>(null);
+  const historyFetchGeneration = useRef(0);
 
   const fetchHistory = async (): Promise<void> => {
+    const generation = ++historyFetchGeneration.current;
+    const fresh = (): boolean => generation === historyFetchGeneration.current;
     try {
       const r = await observeFetch('/api/e2e/runs');
-      if (r.ok) setHistory((await r.json()) as E2eRunIndexEntry[]);
-    } catch {
-      /* non-fatal */
+      if (!fresh()) return;
+      if (r.ok) {
+        const runs = (await r.json()) as E2eRunIndexEntry[];
+        if (!fresh()) return;
+        setHistory(runs);
+        setHistoryError(null);
+        return;
+      }
+      const body = (await r.json().catch(() => null)) as { error?: string } | null;
+      if (!fresh()) return;
+      setHistory([]);
+      setHistoryError(body?.error ?? `run history unavailable (HTTP ${r.status})`);
+    } catch (e) {
+      if (!fresh()) return;
+      setHistory([]);
+      setHistoryError(`run history unavailable: ${e instanceof Error ? e.message : String(e)}`);
     }
   };
 
@@ -57,16 +75,28 @@ export function E2ePanel({ e2eProgress, e2eDoneCount }: E2ePanelProps): JSX.Elem
   const runSuite = async (): Promise<void> => {
     setRunning(true);
     setResult(null);
+    setRunError(null);
     try {
       const r = await observeFetch('/api/e2e/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken() },
         body: '{}',
       });
-      setResult((await r.json()) as E2eRunResult);
+      if (!r.ok) {
+        const body = (await r.json().catch(() => null)) as { error?: string } | null;
+        setRunError(body?.error ?? `run refused (HTTP ${r.status})`);
+        return;
+      }
+      const envelope = asRunEnvelope(await r.json());
+      if (envelope.ok === false) {
+        const reason = envelope.error ?? 'run refused';
+        setRunError(envelope.code ? `${reason} (${envelope.code})` : reason);
+        return;
+      }
+      setResult(envelope);
       await fetchHistory();
-    } catch {
-      /* non-fatal */
+    } catch (e) {
+      setRunError(`run failed: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setRunning(false);
     }
@@ -106,6 +136,12 @@ export function E2ePanel({ e2eProgress, e2eDoneCount }: E2ePanelProps): JSX.Elem
             </span>
           )}
         </div>
+        {runError && (
+          <div className="empty empty-guide" data-testid="e2e-run-unavailable">
+            <div className="empty-title">Run unavailable</div>
+            <div>{runError}</div>
+          </div>
+        )}
         {result?.data?.results && result.data.results.length > 0 && (
           <div className="result-list">
             {result.data.results.map((r) => (
@@ -120,7 +156,12 @@ export function E2ePanel({ e2eProgress, e2eDoneCount }: E2ePanelProps): JSX.Elem
       </div>
       <div className="reg-history">
         <div className="pane-head">Run History</div>
-        {history.length === 0 ? (
+        {historyError ? (
+          <div className="empty empty-guide" data-testid="e2e-history-unavailable">
+            <div className="empty-title">Run history unavailable</div>
+            <div>{historyError}</div>
+          </div>
+        ) : history.length === 0 ? (
           <div className="empty">no runs yet</div>
         ) : (
           history.map((h) => (
@@ -136,6 +177,23 @@ export function E2ePanel({ e2eProgress, e2eDoneCount }: E2ePanelProps): JSX.Elem
       </div>
     </div>
   );
+}
+
+// POST /api/e2e/run answers with the gate's ToolResult; unwrap it to the run envelope.
+function asRunEnvelope(body: unknown): E2eRunResult {
+  const record = (body ?? {}) as Record<string, unknown>;
+  const text = (record.content as { text?: string }[] | undefined)?.[0]?.text;
+  let envelope = record;
+  if (typeof text === 'string') {
+    try {
+      envelope = JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      return { ok: false, error: text };
+    }
+  }
+  const inner = envelope.data as Record<string, unknown> | undefined;
+  if (inner && typeof inner.ok === 'boolean') return inner as E2eRunResult;
+  return envelope as E2eRunResult;
 }
 
 interface FlowResultRowProps {

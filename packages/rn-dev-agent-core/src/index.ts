@@ -194,8 +194,17 @@ import { recoverInterruptedRequests } from './domain/e2e-run-request.js';
 import { preflight, probeMetro } from './e2e/preflight.js';
 import { resolveIosUdid } from './tools/device-screenshot-raw.js';
 import { probeAppInstalled } from './cdp/app-installed-probe.js';
-import { findProjectRoot } from './nav-graph/storage.js';
+import {
+  collectMatchingRnProjects,
+  findProjectRoot,
+  isRnProject,
+  readProjectBundleId,
+} from './nav-graph/storage.js';
 import { makeCsrfToken } from './observability/e2e-csrf.js';
+import {
+  createObserveRootResolver,
+  ObserveRootUnavailableError,
+} from './observability/observe-project-root.js';
 import { loadIndex, loadRunRecord } from './domain/e2e-run.js';
 import { listActions } from './domain/action-inventory.js';
 import { loadAction } from './domain/action-store.js';
@@ -3961,17 +3970,32 @@ trackedTool(
 
 const e2eCsrfToken = makeCsrfToken();
 
-// Resolve the project root of the connected app by its bundleId so a stray
-// sibling RN repo can't hijack findProjectRoot()'s heuristic scan (which would
-// empty the Regression actions list and make the suite discover zero tests).
-const projectRootFor = (): string =>
-  findProjectRoot({ bundleId: getActiveSession()?.appId }) ?? process.cwd();
+// GH #637: bound-session app root wins; unprovable roots refuse truthfully.
+const observeRootResolver = createObserveRootResolver({
+  sessionAppRoot: () => {
+    const status = authorityRuntime.status();
+    if (!status.available) return null;
+    const appRoot = status.source['appRoot'];
+    return typeof appRoot === 'string' && appRoot.length > 0 ? appRoot : null;
+  },
+  sessionAppId: () => getActiveSession()?.appId ?? null,
+  explicitEnvRoot: () => process.env.RN_PROJECT_ROOT ?? null,
+  heuristicRoot: (bundleId) => findProjectRoot({ bundleId }),
+  matchingRoots: collectMatchingRnProjects,
+  isProject: isRnProject,
+  projectBundleId: readProjectBundleId,
+});
+const projectRootFor = (): string => {
+  const resolved = observeRootResolver();
+  if (!resolved.ok) throw new ObserveRootUnavailableError(resolved.reason);
+  return resolved.root;
+};
 
 const triggerE2eRun = async (args: RunE2eSuiteArgs): Promise<unknown> => {
   const L = arbiter.tryAcquire('flow', 'cdp_run_e2e_suite');
   if (!L.ok) return { ok: false, error: 'a flow is already running', code: L.code };
   try {
-    args.projectRoot ??= projectRootFor();
+    args.projectRoot = projectRootFor();
     const r = await e2eSuiteHandler(args);
     const env = JSON.parse(r.content[0].text) as {
       ok?: boolean;
@@ -4012,12 +4036,20 @@ const gatedObserveState = (
 
 setObserveE2eDeps({
   token: e2eCsrfToken,
-  triggerRun: async (pattern) => observeTriggerRun({ pattern }),
+  triggerRun: async (pattern) => {
+    projectRootFor();
+    return observeTriggerRun({ pattern });
+  },
   listRuns: async () => loadIndex(projectRootFor()),
   loadRun: async (id: string) => loadRunRecord(projectRootFor(), id),
   listActions: async () => listActions(projectRootFor()),
   runAction: async (actionId: string, params?: Record<string, string>) => {
-    const root = projectRootFor();
+    let root: string;
+    try {
+      root = projectRootFor();
+    } catch (e: unknown) {
+      return { ok: false as const, error: e instanceof Error ? e.message : String(e) };
+    }
     const action = loadAction(root, actionId);
     if (!action) return { ok: false as const, error: `action not found: ${actionId}` };
     const required = action.metadata.params ?? [];
@@ -4210,10 +4242,12 @@ async function main() {
   logger.info('MCP', 'MCP server connected and ready');
 
   if (!diagnosticContractProbe) {
-    const root = findProjectRoot();
-    if (root) {
+    const rootResolution = observeRootResolver();
+    if (!rootResolution.ok) {
+      logger.warn('OBSERVE', `interrupted e2e run recovery skipped: ${rootResolution.reason}`);
+    } else {
       const recovered = recoverInterruptedRequests(
-        root,
+        rootResolution.root,
         (pid) => {
           try {
             process.kill(pid, 0);
@@ -4233,7 +4267,7 @@ async function main() {
   // is already connected.
   if (!diagnosticContractProbe) {
     void autostartObserve({
-      findRoot: findProjectRoot,
+      findRoot: observeRootResolver,
       resolveEnabled: resolveObserveAutostart,
       recoveryOnlyReason: () => {
         const status = authorityRuntime.status();

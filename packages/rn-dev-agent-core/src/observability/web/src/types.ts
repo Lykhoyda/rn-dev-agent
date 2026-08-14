@@ -34,6 +34,8 @@ export interface E2eProgress {
 /** Client-side parse of POST /api/e2e/run — the run-e2e-suite tool envelope. */
 export interface E2eRunResult {
   ok?: boolean;
+  error?: string;
+  code?: string;
   data?: {
     runId?: string | null;
     verdict?: string | null;
