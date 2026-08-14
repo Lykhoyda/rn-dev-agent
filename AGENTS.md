@@ -65,7 +65,10 @@ GitHub Issues, PRs, or the sibling workspace only when explicitly requested.
   falling back to another checkout. Exception: `POST /api/e2e/actions/run`
   keeps its `ok:false` result contract and reports the same reason as
   HTTP 500. `POST /api/e2e/run` must resolve the root before entering
-  `authorityGate.wrap`, which converts throws into `ok:false` values.
+  `authorityGate.wrap`, which converts throws into `ok:false` values —
+  but must not pass it as a gate argument, since `bindSourcePaths` fences
+  a supplied `projectRoot` to `status.source.appRoot` and would refuse the
+  sibling-workspace primary checkout.
 - Claude-only host behavior: edit `packages/claude-plugin/`.
 - Codex-only host behavior: edit `packages/codex-plugin/`.
 - Host-neutral workflow knowledge: edit `packages/shared-agent-knowledge/`,

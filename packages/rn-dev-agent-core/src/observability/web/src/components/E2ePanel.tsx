@@ -87,7 +87,13 @@ export function E2ePanel({ e2eProgress, e2eDoneCount }: E2ePanelProps): JSX.Elem
         setRunError(body?.error ?? `run refused (HTTP ${r.status})`);
         return;
       }
-      setResult((await r.json()) as E2eRunResult);
+      const envelope = asRunEnvelope(await r.json());
+      if (envelope.ok === false) {
+        const reason = envelope.error ?? 'run refused';
+        setRunError(envelope.code ? `${reason} (${envelope.code})` : reason);
+        return;
+      }
+      setResult(envelope);
       await fetchHistory();
     } catch (e) {
       setRunError(`run failed: ${e instanceof Error ? e.message : String(e)}`);
@@ -171,6 +177,23 @@ export function E2ePanel({ e2eProgress, e2eDoneCount }: E2ePanelProps): JSX.Elem
       </div>
     </div>
   );
+}
+
+// POST /api/e2e/run answers with the gate's ToolResult; unwrap it to the run envelope.
+function asRunEnvelope(body: unknown): E2eRunResult {
+  const record = (body ?? {}) as Record<string, unknown>;
+  const text = (record.content as { text?: string }[] | undefined)?.[0]?.text;
+  let envelope = record;
+  if (typeof text === 'string') {
+    try {
+      envelope = JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      return { ok: false, error: text };
+    }
+  }
+  const inner = envelope.data as Record<string, unknown> | undefined;
+  if (inner && typeof inner.ok === 'boolean') return inner as E2eRunResult;
+  return envelope as E2eRunResult;
 }
 
 interface FlowResultRowProps {

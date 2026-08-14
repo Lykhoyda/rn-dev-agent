@@ -2945,7 +2945,7 @@ const triggerE2eRun = async (args) => {
     if (!L.ok)
         return { ok: false, error: 'a flow is already running', code: L.code };
     try {
-        args.projectRoot = args.projectRoot ?? projectRootFor();
+        args.projectRoot = projectRootFor();
         const r = await e2eSuiteHandler(args);
         const env = JSON.parse(r.content[0].text);
         recorder.push({
@@ -2974,9 +2974,10 @@ const observeTriggerRun = authorityGate.wrap('cdp_run_e2e_suite', async (...raw)
 const gatedObserveState = (tool, handler, args) => authorityGate.wrap(tool, handler)(args);
 setObserveE2eDeps({
     token: e2eCsrfToken,
-    // Resolve before the authority gate: gate.wrap turns throws into ok:false values,
-    // which would hide the refusal behind HTTP 200.
-    triggerRun: async (pattern) => observeTriggerRun({ pattern, projectRoot: projectRootFor() }),
+    triggerRun: async (pattern) => {
+        projectRootFor();
+        return observeTriggerRun({ pattern });
+    },
     listRuns: async () => loadIndex(projectRootFor()),
     loadRun: async (id) => loadRunRecord(projectRootFor(), id),
     listActions: async () => listActions(projectRootFor()),
