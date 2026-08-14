@@ -24,8 +24,9 @@ WATCHED='^packages/rn-dev-agent-core/src/|^packages/(claude-plugin|codex-plugin|
 
 if [ -n "${CHANGED_FILES+x}" ]; then
   changed="$CHANGED_FILES"
-else
-  changed="$(git -C "$ROOT" diff --name-only "${BASE_REF}...HEAD")"
+elif ! changed="$(git -C "$ROOT" diff --name-only "${BASE_REF}...HEAD")"; then
+  echo "ERROR: require-changeset: git diff against ${BASE_REF} failed — refusing to pass without a changed-file list." >&2
+  exit 1
 fi
 
 # Inverse guard (GH #578 phantom-0.70.5 post-mortem): a PR that ADDS a changeset
@@ -36,8 +37,9 @@ fi
 # Deleting or rewording a pending changeset stays allowed (Version Packages bot).
 if [ -n "${CHANGED_FILES+x}" ]; then
   added="${ADDED_FILES-}"
-else
-  added="$(git -C "$ROOT" diff --diff-filter=A --name-only "${BASE_REF}...HEAD" -- '.changeset')"
+elif ! added="$(git -C "$ROOT" diff --diff-filter=A --name-only "${BASE_REF}...HEAD" -- '.changeset')"; then
+  echo "ERROR: require-changeset: git diff against ${BASE_REF} failed — refusing to pass without an added-file list." >&2
+  exit 1
 fi
 non_changeset_changed="$(printf '%s\n' "$changed" | grep -v '^\.changeset/' | grep -v '^$' || true)"
 added_changesets="$(printf '%s\n' "$added" | grep -E '^\.changeset/[^/]+\.md$' | grep -vE '^\.changeset/README\.md$' || true)"

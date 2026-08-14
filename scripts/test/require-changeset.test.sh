@@ -142,4 +142,9 @@ CHANGED_FILES=$'.changeset/one.md\n.changeset/two.md' ADDED_FILES=$'.changeset/o
   REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
 check "multi-changeset-only addition fails" 1 $?
 
+# 6. git-mode diff failure ($tmp is not a git repo) -> MUST fail closed instead
+# of passing on an empty changed-file list.
+env -u CHANGED_FILES -u ADDED_FILES REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
+check "git diff failure fails closed" 1 $?
+
 if [ "$fail" = 0 ]; then echo "ALL PASS"; else echo "FAILURES"; exit 1; fi
