@@ -64,10 +64,21 @@ final class SnapshotForegroundRegressionTest: RnFastRunnerTests {
       "test-app \(Self.testAppBundleId) must be installed and launchable for this regression to be meaningful"
     )
     // Put runner foreground AGAIN so the dispatcher starts from the broken state.
+    // waitForExistence passes for a backgrounded app, so wait on state itself (GH #765).
     app.activate()
-    XCTAssertTrue(
-      app.waitForExistence(timeout: 5),
-      "runner must be foreground before the snapshot dispatch (B155 setup)"
+    let runnerForeground = XCTNSPredicateExpectation(
+      predicate: NSPredicate(format: "state == %d", XCUIApplication.State.runningForeground.rawValue),
+      object: app
+    )
+    XCTAssertEqual(
+      XCTWaiter.wait(for: [runnerForeground], timeout: 10),
+      .completed,
+      "runner must be foreground before the snapshot dispatch (B155 setup); state=\(app.state.rawValue)"
+    )
+    XCTAssertEqual(
+      app.state,
+      .runningForeground,
+      "runner app should be foreground before the snapshot dispatch"
     )
     currentApp = app
     currentBundleId = nil
