@@ -124,6 +124,10 @@ corepack yarn build:docs
 
 ## Changesets And Versions
 
+- A changeset must land in the same PR as the change it describes. A
+  changeset-only PR is rejected by `scripts/require-changeset.sh` (phantom
+  0.70.5 post-mortem: a merged release declaration produced a changelog claim
+  with no shipped code).
 - Changes under `packages/rn-dev-agent-core/src/` are shippable source changes.
   They require a changeset that bumps `rn-dev-agent-plugin` so marketplace
   installs receive the updated bundled runtime. Usually bump

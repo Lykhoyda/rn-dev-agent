@@ -8,6 +8,7 @@
 #
 # Test seams (scripts/test/require-changeset.test.sh):
 #   CHANGED_FILES  newline-separated changed paths (overrides git diff)
+#   ADDED_FILES    newline-separated added paths (used with CHANGED_FILES)
 #   REPO_ROOT      where to look for .changeset/ (default: repo root)
 #   BASE_REF       git diff base when CHANGED_FILES is unset (default origin/main)
 set -uo pipefail
@@ -23,8 +24,38 @@ WATCHED='^packages/rn-dev-agent-core/src/|^packages/(claude-plugin|codex-plugin|
 
 if [ -n "${CHANGED_FILES+x}" ]; then
   changed="$CHANGED_FILES"
-else
-  changed="$(git -C "$ROOT" diff --name-only "${BASE_REF}...HEAD")"
+elif ! changed="$(git -C "$ROOT" diff --name-only "${BASE_REF}...HEAD")"; then
+  echo "ERROR: require-changeset: git diff against ${BASE_REF} failed — refusing to pass without a changed-file list." >&2
+  exit 1
+fi
+
+# Inverse guard (GH #578 phantom-0.70.5 post-mortem): a PR that ADDS a changeset
+# while changing nothing outside .changeset/ declares a release claim with no
+# shipped change — `changeset version` then mints a changelog entry for behavior
+# that never landed (the fddcfae/#601 changeset-only merge made 0.70.5 claim the
+# ensure-idb Python 3.14 fix 11 releases before the code shipped in 0.76.0).
+# Deleting or rewording a pending changeset stays allowed (Version Packages bot).
+if [ -n "${CHANGED_FILES+x}" ]; then
+  added="${ADDED_FILES-}"
+elif ! added="$(git -C "$ROOT" diff --no-renames --diff-filter=A --name-only "${BASE_REF}...HEAD" -- '.changeset')"; then
+  echo "ERROR: require-changeset: git diff against ${BASE_REF} failed — refusing to pass without an added-file list." >&2
+  exit 1
+fi
+non_changeset_changed="$(printf '%s\n' "$changed" | grep -v '^\.changeset/' | grep -v '^$' || true)"
+added_changesets="$(printf '%s\n' "$added" | grep -E '^\.changeset/[^/]+\.md$' | grep -vE '^\.changeset/README\.md$' || true)"
+if [ -z "$non_changeset_changed" ] && [ -n "$added_changesets" ]; then
+  echo "ERROR: this PR adds a changeset but changes nothing outside .changeset/:" >&2
+  printf '%s\n' "$added_changesets" | sed 's/^/  /' >&2
+  cat >&2 <<'MSG'
+
+A changeset that merges without the change it describes becomes a phantom
+changelog entry at the next `changeset version` (GH #578 post-mortem: the
+fddcfae/#601 changeset-only merge made 0.70.5 claim the ensure-idb
+Python 3.14 fix 11 releases before the code shipped in 0.76.0).
+
+Fix: land the changeset in the same PR as the change it describes.
+MSG
+  exit 1
 fi
 
 src_changed="$(printf '%s\n' "$changed" | grep -E "$WATCHED" || true)"

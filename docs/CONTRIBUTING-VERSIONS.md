@@ -102,8 +102,13 @@ You can add one after the fact:
 corepack yarn changeset
 ```
 
-…and amend it into your PR (or push as a follow-up commit). If you
-genuinely have no user-facing change (e.g. fixing a typo in a comment),
+…and push it to the same PR as the change it describes. Do **not** open a
+separate changeset-only PR: `scripts/require-changeset.sh` rejects a PR that
+adds a changeset while changing nothing outside `.changeset/`, because such a
+changeset mints a CHANGELOG entry for code that never shipped (the phantom
+0.70.5 entry). Deleting or rewording a pending changeset is still allowed.
+
+If you genuinely have no user-facing change (e.g. fixing a typo in a comment),
 you can ship a PR with no changeset — `changeset version` will simply
 not bump anything for that PR.
 

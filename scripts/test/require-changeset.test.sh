@@ -114,4 +114,80 @@ check "manifest/CHANGELOG/mirror-only change without changeset passes" 0 $?
 CHANGED_FILES="" REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
 check "empty diff passes" 0 $?
 
+# 5. changeset-only PR (adds a changeset, changes nothing else) -> MUST fail.
+# GH #578 phantom-0.70.5 post-mortem: the fddcfae/#601 changeset-only merge made
+# `changeset version` mint a 0.70.5 changelog entry for the ensure-idb Python
+# 3.14 fix 11 releases before the code shipped (0.76.0).
+CHANGED_FILES=$'.changeset/lone-claims.md' ADDED_FILES=$'.changeset/lone-claims.md' \
+  REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
+check "changeset-only addition fails (phantom 0.70.5 class)" 1 $?
+
+# 5b. changeset deletion/reword-only (nothing ADDED) -> passes — the Version
+# Packages bot deletes consumed changesets, and pending-changeset text edits
+# describe already-merged code.
+CHANGED_FILES=$'.changeset/stale-entry.md' ADDED_FILES='' \
+  REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
+check "changeset deletion/reword-only passes" 0 $?
+
+# 5c. changeset ADDED alongside the change it describes -> passes
+printf -- '---\n"rn-dev-agent-plugin": patch\n---\nship\n' > "$tmp/.changeset/paired-claims.md"
+CHANGED_FILES=$'.changeset/paired-claims.md\npackages/rn-dev-agent-core/src/index.ts' \
+  ADDED_FILES=$'.changeset/paired-claims.md' \
+  REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
+check "changeset addition alongside code passes" 0 $?
+rm -f "$tmp/.changeset/paired-claims.md"
+
+# 5d. multiple changesets added, still nothing outside .changeset/ -> MUST fail
+CHANGED_FILES=$'.changeset/one.md\n.changeset/two.md' ADDED_FILES=$'.changeset/one.md\n.changeset/two.md' \
+  REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
+check "multi-changeset-only addition fails" 1 $?
+
+# 5e. a regenerated changeset arrives as a rename pair (old deleted, new added):
+# with git's default rename detection the addition would be invisible and the
+# phantom claim would merge. Seam form of the git-mode case below.
+CHANGED_FILES=$'.changeset/old-claims.md\n.changeset/new-claims.md' ADDED_FILES=$'.changeset/new-claims.md' \
+  REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
+check "renamed changeset-only addition fails" 1 $?
+
+# 6. git-mode diff failure ($tmp is not a git repo) -> MUST fail closed instead
+# of passing on an empty changed-file list.
+env -u CHANGED_FILES -u ADDED_FILES REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
+check "git diff failure fails closed" 1 $?
+
+# 7. git mode, real repo: a changeset-only PR that RENAMES a pending changeset
+# still declares a fresh release claim with no shipped code. git pairs it as
+# `R old -> new` by default, so the guard must disable rename detection to see
+# the addition.
+gitrepo="$(mktemp -d)"
+trap 'rm -rf "$tmp" "$gitrepo"' EXIT
+(
+  set -e
+  cd "$gitrepo"
+  git init -q -b main .
+  git config user.email test@example.com
+  git config user.name test
+  mkdir .changeset
+  echo "# changesets readme" > .changeset/README.md
+  printf -- '---\n"rn-dev-agent-plugin": patch\n---\nclaim\n' > .changeset/old-name.md
+  git add -A
+  git commit -qm base
+  git checkout -qb feature
+  git mv .changeset/old-name.md .changeset/new-name.md
+  git commit -qam regenerate
+) >/dev/null 2>&1
+env -u CHANGED_FILES -u ADDED_FILES REPO_ROOT="$gitrepo" BASE_REF=main bash "$GUARD" >/dev/null 2>&1
+check "git-mode renamed changeset-only PR fails" 1 $?
+
+# 7b. git mode: deleting a pending changeset (Version Packages bot) still passes.
+(
+  set -e
+  cd "$gitrepo"
+  git checkout -q main
+  git checkout -qb consume
+  git rm -q .changeset/new-name.md 2>/dev/null || git rm -q .changeset/old-name.md
+  git commit -qm consume
+) >/dev/null 2>&1
+env -u CHANGED_FILES -u ADDED_FILES REPO_ROOT="$gitrepo" BASE_REF=main bash "$GUARD" >/dev/null 2>&1
+check "git-mode changeset deletion passes" 0 $?
+
 if [ "$fail" = 0 ]; then echo "ALL PASS"; else echo "FAILURES"; exit 1; fi
