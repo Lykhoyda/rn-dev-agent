@@ -14,25 +14,31 @@ interface Script {
   probes: FastRunnerLivenessDetail[];
   ensureCalls: Array<{ deviceId: string; attachOnly?: boolean }>;
   events: string[];
+  launches: number;
 }
 
 function makeDeps(
   probeSequence: FastRunnerLivenessDetail[],
-  opts: { attachOnly?: boolean; spawnExitSettles?: boolean } = {},
+  opts: { attachOnly?: boolean; spawnExitSettles?: boolean; reachesLaunch?: boolean } = {},
 ) {
-  const script: Script = { probes: [...probeSequence], ensureCalls: [], events: [] };
+  const script: Script = { probes: [...probeSequence], ensureCalls: [], events: [], launches: 0 };
   const lastProbe = probeSequence[probeSequence.length - 1]!;
   return {
     script,
     deps: {
       probe: async () => script.probes.shift() ?? lastProbe,
+      // ensureFastRunner swallows startFastRunner errors, so a spawn that never
+      // reached the launch xcodebuild is indistinguishable here except by the
+      // launch counter — which the fixture only advances when it did.
       ensure: async (deviceId: string, _bundleId: string, o?: { attachOnly?: boolean }) => {
         script.events.push('ensure');
         script.ensureCalls.push({
           deviceId,
           ...(o?.attachOnly !== undefined ? { attachOnly: o.attachOnly } : {}),
         });
+        if (opts.reachesLaunch ?? true) script.launches += 1;
       },
+      launchCount: () => script.launches,
       prebuilt: () => true,
       adopt: () => {},
       awaitSpawnExit: async () => {
@@ -68,6 +74,27 @@ test('retry is refused when the first spawn survives kill escalation (no stacked
   assert.equal(result.ok, false);
   assert.ok(!result.ok && /did not become ready after auto-spawn/.test(result.message));
   assert.equal(script.ensureCalls.length, 1, 'a surviving first spawn forbids the retry');
+});
+
+test('retry is refused when the first attempt never reached the launch xcodebuild', async () => {
+  // Artifact resolution / cold-build failure: ensureFastRunner swallowed the
+  // error, so the probe reads dead with no staleReason — but no launch child
+  // ever existed, and re-entering ensure() would re-pay the whole build window.
+  const { script, deps } = makeDeps([DEAD, DEAD], { reachesLaunch: false });
+  const result = await ensureRunnerForCommand('SIM-UDID', 'com.example.app', deps);
+  assert.equal(result.ok, false);
+  assert.equal(script.ensureCalls.length, 1, 'a pre-launch failure must not be retried');
+  assert.deepEqual(script.events, ['ensure'], 'no settle wait for a spawn that never launched');
+  assert.ok(!result.ok && !/one internal retry included/.test(result.message));
+});
+
+test('retry is permitted once the first attempt did launch, and is reported as such', async () => {
+  const { script, deps } = makeDeps([DEAD, DEAD, DEAD], { reachesLaunch: true });
+  const result = await ensureRunnerForCommand('SIM-UDID', 'com.example.app', deps);
+  assert.equal(result.ok, false);
+  assert.equal(script.ensureCalls.length, 2, 'a launched-then-dead first spawn earns the retry');
+  assert.deepEqual(script.events, ['ensure', 'awaitSpawnExit', 'ensure']);
+  assert.ok(!result.ok && /one internal retry included/.test(result.message));
 });
 
 test('genuine runner failure stays typed and bounded: exactly two spawn attempts', async () => {

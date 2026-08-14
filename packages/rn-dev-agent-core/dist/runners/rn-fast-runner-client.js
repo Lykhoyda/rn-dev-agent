@@ -88,6 +88,10 @@ export function createReadySignalParser() {
 }
 // --- Singleton state ---
 let runnerProcess = null;
+// GH #629: monotonic count of launch xcodebuild children actually spawned.
+// ensureFastRunner swallows startFastRunner errors, so this is the only way a
+// caller can tell a READY-timeout apart from a failure before the launch step.
+let runnerLaunchCount = 0;
 let runnerState = null;
 let runnerPoisoned = false;
 let poisonReap = null;
@@ -611,6 +615,7 @@ opts = {}) {
             stdio: ['ignore', 'pipe', 'pipe'],
         });
         runnerProcess = child;
+        runnerLaunchCount += 1;
         runnerOutputTail = '';
         lastRunnerCommand = null;
         lastRunnerPostMortem = null;
@@ -693,6 +698,10 @@ opts = {}) {
             reject(new Error(`xcodebuild exited unexpectedly (code ${code}, signal ${signal ?? 'none'})`));
         });
     });
+}
+/** GH #629: launches observed so far — sample across a start to prove one ran. */
+export function getRunnerLaunchCount() {
+    return runnerLaunchCount;
 }
 /**
  * GH #629: bounded settle before the single first-start retry. The READY

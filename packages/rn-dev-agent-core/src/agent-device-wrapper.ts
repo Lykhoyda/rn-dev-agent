@@ -10,6 +10,7 @@ import {
   probeFastRunnerLivenessDetailed,
   adoptPersistedFastRunnerState,
   awaitSpawnedRunnerExit,
+  getRunnerLaunchCount,
   reapStaleFastRunner,
   hasBuiltTestProduct,
   derivedDataPathForRunner,
@@ -1068,6 +1069,8 @@ export interface EnsureRunnerDeps {
   /** GH #629: bounded wait for the failed first spawn to exit before the retry;
    * resolves false (retry refused) when the process survives escalation. */
   awaitSpawnExit?: () => Promise<boolean>;
+  /** GH #629: monotonic launch-child count; the retry needs it to advance. */
+  launchCount?: () => number;
   releaseBuildLock?: () => void;
   rebuildBudget?: { alreadyRebuiltFor(v: string): boolean; recordRebuild(v: string): void };
   pluginVersion?: string | null;
@@ -1242,13 +1245,18 @@ export async function ensureRunnerForCommand(
 
   const spawnDeviceId = decision.action === 'spawn' ? decision.deviceId : deviceId!;
   const spawnOpts = deps.attachOnly === true ? { attachOnly: true } : {};
+  const launchCount = deps.launchCount ?? getRunnerLaunchCount;
+  const launchesBefore = launchCount();
   await ensure(spawnDeviceId, bundleId, spawnOpts);
   let after = await probe();
   // GH #629: a fresh simulator's first XCTest bootstrap predictably overruns
   // the warm READY window and primes the next spawn — absorb it with exactly
-  // one retry, gated on the failed first spawn having provably exited.
+  // one retry, gated on the first attempt having actually reached the launch
+  // step (ensureFastRunner swallows artifact/cold-build failures, and re-paying
+  // a multi-minute build that failed deterministically helps nobody) and on
+  // that launch child having provably exited.
   let firstStartRetried = false;
-  if (after.liveness === 'dead' && !after.staleReason) {
+  if (after.liveness === 'dead' && !after.staleReason && launchCount() > launchesBefore) {
     const firstSpawnGone = await (deps.awaitSpawnExit ?? awaitSpawnedRunnerExit)();
     if (firstSpawnGone) {
       firstStartRetried = true;
