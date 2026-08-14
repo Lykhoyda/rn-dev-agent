@@ -3153,9 +3153,11 @@ async function main() {
     logger.info('MCP', 'MCP server connected and ready');
     if (!diagnosticContractProbe) {
         const rootResolution = observeRootResolver();
-        const root = rootResolution.ok ? rootResolution.root : null;
-        if (root) {
-            const recovered = recoverInterruptedRequests(root, (pid) => {
+        if (!rootResolution.ok) {
+            logger.warn('OBSERVE', `interrupted e2e run recovery skipped: ${rootResolution.reason}`);
+        }
+        else {
+            const recovered = recoverInterruptedRequests(rootResolution.root, (pid) => {
                 try {
                     process.kill(pid, 0);
                     return true;
@@ -3173,10 +3175,7 @@ async function main() {
     // is already connected.
     if (!diagnosticContractProbe) {
         void autostartObserve({
-            findRoot: () => {
-                const resolved = observeRootResolver();
-                return resolved.ok ? resolved.root : null;
-            },
+            findRoot: observeRootResolver,
             resolveEnabled: resolveObserveAutostart,
             recoveryOnlyReason: () => {
                 const status = authorityRuntime.status();

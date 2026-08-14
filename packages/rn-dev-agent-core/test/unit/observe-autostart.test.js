@@ -5,7 +5,7 @@ import { autostartObserve } from '../../dist/observability/autostart.js';
 function deps(overrides = {}) {
   const calls = { start: 0, warn: [], info: [] };
   const d = {
-    findRoot: () => '/some/project',
+    findRoot: () => ({ ok: true, root: '/some/project', origin: 'heuristic' }),
     resolveEnabled: () => ({ enabled: true, source: 'default' }),
     start: async () => {
       calls.start++;
@@ -27,10 +27,32 @@ test('starts and reports the url when a project root exists and autostart is ena
   assert.match(calls.info.join('\n'), /http:\/\/127\.0\.0\.1:7333/);
 });
 
-test('no project root → never starts', async () => {
-  const { d, calls } = deps({ findRoot: () => null });
+test('no project root → never starts, and the refusal reason is reported', async () => {
+  const { d, calls } = deps({
+    findRoot: () => ({
+      ok: false,
+      reason:
+        'no React Native project root: no bound session app root and heuristic discovery found none',
+    }),
+  });
   assert.equal(await autostartObserve(d), null);
   assert.equal(calls.start, 0);
+  assert.match(calls.warn.join('\n'), /heuristic discovery found none/);
+});
+
+test('GH#637: an unprovable project root reports why observe never came up', async () => {
+  const { d, calls } = deps({
+    findRoot: () => ({
+      ok: false,
+      reason: 'RN_PROJECT_ROOT is not a React Native project (/gone/app)',
+    }),
+  });
+  assert.equal(await autostartObserve(d), null);
+  assert.equal(calls.start, 0);
+  assert.match(
+    calls.warn.join('\n'),
+    /RN_PROJECT_ROOT is not a React Native project \(\/gone\/app\)/,
+  );
 });
 
 test('disabled via env/config → never starts, logs the source', async () => {
