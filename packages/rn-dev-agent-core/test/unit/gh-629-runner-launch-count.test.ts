@@ -19,9 +19,12 @@ const runnerRoot = mkdtempSync(join(tmpdir(), 'gh-629-runner-root-'));
 mkdirSync(join(runnerRoot, 'rn-fast-runner'), { recursive: true });
 process.env.RN_DEV_AGENT_NATIVE_RUNNER_ROOT = runnerRoot;
 
-const { startFastRunner, getRunnerLaunchCount, awaitSpawnedRunnerExit } = await import(
-  '../../dist/runners/rn-fast-runner-client.js'
-);
+const {
+  startFastRunner,
+  getRunnerLaunchCount,
+  awaitSpawnedRunnerExit,
+  _setFastRunnerStateForTest,
+} = await import('../../dist/runners/rn-fast-runner-client.js');
 
 test.after(() => {
   rmSync(runnerRoot, { recursive: true, force: true });
@@ -65,6 +68,31 @@ test('the settle refuses when the launch handle belongs to a newer generation', 
 
 test('the settle proceeds for the generation the caller actually observed', async () => {
   assert.equal(await awaitSpawnedRunnerExit(50, getRunnerLaunchCount()), true);
+});
+
+test('a runner that came up mid-settle is not claimed as this caller settling its own launch', async () => {
+  // The seam sets runnerState while nulling the handle — the shape a concurrent
+  // dispatch leaves behind when its start reaches READY during our settle.
+  // Without the state guard this falls through to the null handle and answers
+  // true, which would let the caller retry and then report another dispatch's
+  // runner as 'ready after one first-start retry'.
+  _setFastRunnerStateForTest({
+    schemaVersion: 1,
+    pid: process.pid,
+    port: 22088,
+    deviceId: 'gh-629-concurrent',
+    bundleId: 'com.example.gh629',
+    startedAt: new Date(0).toISOString(),
+    protocolVersion: 2,
+  } as never);
+  try {
+    const t0 = Date.now();
+    // Generation matches, so only the live-runner guard can refuse here.
+    assert.equal(await awaitSpawnedRunnerExit(50, getRunnerLaunchCount()), false);
+    assert.ok(Date.now() - t0 < 500, 'a live runner must short-circuit, not settle or signal');
+  } finally {
+    _setFastRunnerStateForTest(null);
+  }
 });
 
 test('a start refused for missing session authority does not advance the launch count', async () => {

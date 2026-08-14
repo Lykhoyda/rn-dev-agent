@@ -891,8 +891,10 @@ export async function awaitSpawnedRunnerExit(
 ): Promise<boolean> {
   // A concurrent dispatch's start replaces the global handle (and a successful
   // one leaves it live), so signalling it blind would SIGKILL a runner this
-  // caller never launched. Only the generation the caller observed is ours.
-  if (runnerState) return true;
+  // caller never launched. Only the generation the caller observed is ours; a
+  // runner that came up meanwhile is someone else's success, never this
+  // caller's retry.
+  if (runnerState) return false;
   if (expectedLaunchCount !== undefined && runnerLaunchCount !== expectedLaunchCount) return false;
   return awaitChildExit(runnerProcess, graceMs);
 }
