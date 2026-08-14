@@ -33,6 +33,8 @@ export interface Fixture {
 export interface FixtureOverrides {
   /** Replaces the canned POST /api/e2e/run body (a cdp_run_e2e_suite ToolResult). */
   triggerRun?: () => Promise<unknown>;
+  /** Replaces the canned GET /api/e2e/actions dep; throw to exercise refusals. */
+  listActions?: () => Promise<unknown>;
 }
 
 export async function startFixture(overrides: FixtureOverrides = {}): Promise<Fixture> {
@@ -118,15 +120,17 @@ export async function startFixture(overrides: FixtureOverrides = {}): Promise<Fi
             ],
           }
         : null,
-    listActions: async () => [
-      {
-        id: 'login',
-        intent: 'Log into the app with credentials',
-        status: 'active',
-        params: ['USERNAME', 'PASSWORD'],
-        mutates: true,
-      },
-    ],
+    listActions:
+      overrides.listActions ??
+      (async () => [
+        {
+          id: 'login',
+          intent: 'Log into the app with credentials',
+          status: 'active',
+          params: ['USERNAME', 'PASSWORD'],
+          mutates: true,
+        },
+      ]),
     runAction: async (actionId: string, params?: Record<string, string>) => {
       const missing = ['USERNAME', 'PASSWORD'].filter((p) => !params?.[p]);
       if (actionId === 'login' && missing.length > 0) {

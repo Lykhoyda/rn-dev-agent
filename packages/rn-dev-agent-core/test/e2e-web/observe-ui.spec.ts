@@ -4,6 +4,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { startFixture, type Fixture } from './fixture-server';
 import { failResult, okResult } from '../../dist/utils.js';
+import { ObserveRootUnavailableError } from '../../dist/observability/observe-project-root.js';
 
 let fx: Fixture | undefined;
 
@@ -152,6 +153,46 @@ test('a busy-device run envelope is shown instead of a silent panel', async ({ p
   await openTab(page, 'e2e');
   await page.getByTestId('e2e-run').click();
   await expect(page.getByTestId('e2e-run-unavailable')).toContainText('a flow is already running');
+});
+
+// GH #637 — a worktree checkout whose project root cannot be proven must say so
+// in the Actions panel instead of rendering the misleading empty state.
+test('actions panel shows the refusal reason instead of a silent empty state', async ({ page }) => {
+  const reason =
+    'session app root is not a React Native project (/tmp/wt/plugin) and heuristic discovery found none';
+  await fx?.stop();
+  fx = await startFixture({
+    listActions: async () => {
+      throw new ObserveRootUnavailableError(reason);
+    },
+  });
+  await page.goto(fx.url);
+  await openTab(page, 'actions');
+
+  const banner = page.getByTestId('actions-unavailable');
+  await expect(banner).toContainText('Actions unavailable');
+  await expect(banner).toContainText(reason);
+  await expect(page.getByTestId('action-item')).toHaveCount(0);
+
+  const probe = await page.evaluate(async () => {
+    const auth = (
+      window as unknown as {
+        __RN_OBSERVE_AUTHORITY__?: { capability: string; instanceId: string };
+      }
+    ).__RN_OBSERVE_AUTHORITY__;
+    const r = await fetch('/api/e2e/actions', {
+      headers: {
+        authorization: `Bearer ${auth?.capability}`,
+        'x-rn-observe-instance': `${auth?.instanceId}`,
+      },
+    });
+    return { status: r.status, body: await r.json() };
+  });
+  expect(probe.status).toBe(503);
+  expect((probe.body as { code?: string }).code).toBe('PROJECT_ROOT_UNAVAILABLE');
+
+  const out = process.env.OBSERVE_EVIDENCE_DIR;
+  if (out) await page.screenshot({ path: `${out}/actions-unavailable.png`, fullPage: true });
 });
 
 test('actions panel enforces params then runs the action', async ({ page }) => {
