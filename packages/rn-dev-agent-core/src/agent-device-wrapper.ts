@@ -1256,8 +1256,10 @@ export async function ensureRunnerForCommand(
   // a multi-minute build that failed deterministically helps nobody) and on
   // that launch child having provably exited.
   let firstStartRetried = false;
-  if (after.liveness === 'dead' && !after.staleReason && launchCount() > launchesBefore) {
-    const firstSpawnGone = await (deps.awaitSpawnExit ?? awaitSpawnedRunnerExit)();
+  const launchesAfter = launchCount();
+  if (after.liveness === 'dead' && !after.staleReason && launchesAfter > launchesBefore) {
+    const firstSpawnGone = await (deps.awaitSpawnExit ??
+      (() => awaitSpawnedRunnerExit(undefined, launchesAfter)))();
     if (firstSpawnGone) {
       firstStartRetried = true;
       await ensure(spawnDeviceId, bundleId, spawnOpts);

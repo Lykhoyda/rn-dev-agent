@@ -709,7 +709,14 @@ export function getRunnerLaunchCount() {
  * wait for the child to actually exit (escalating to SIGKILL at the grace
  * cap) so a retry can never stack a second launch on a still-dying first one.
  */
-export async function awaitSpawnedRunnerExit(graceMs = 5000) {
+export async function awaitSpawnedRunnerExit(graceMs = 5000, expectedLaunchCount) {
+    // A concurrent dispatch's start replaces the global handle (and a successful
+    // one leaves it live), so signalling it blind would SIGKILL a runner this
+    // caller never launched. Only the generation the caller observed is ours.
+    if (runnerState)
+        return true;
+    if (expectedLaunchCount !== undefined && runnerLaunchCount !== expectedLaunchCount)
+        return false;
     return awaitChildExit(runnerProcess, graceMs);
 }
 export async function awaitChildExit(child, graceMs = 5000) {

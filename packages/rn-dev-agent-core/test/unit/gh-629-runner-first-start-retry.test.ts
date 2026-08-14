@@ -97,6 +97,25 @@ test('retry is permitted once the first attempt did launch, and is reported as s
   assert.ok(!result.ok && /one internal retry included/.test(result.message));
 });
 
+test('the real settle refuses the retry when another dispatch owns the launch handle', async () => {
+  // No awaitSpawnExit injected: the production settle runs. The fixture reports
+  // a launch generation this process never produced — the shape a concurrent
+  // device_* dispatch creates by replacing the global handle mid-settle.
+  const script = { probes: [DEAD, DEAD] as FastRunnerLivenessDetail[], ensures: 0 };
+  const result = await ensureRunnerForCommand('SIM-UDID', 'com.example.app', {
+    probe: async () => script.probes.shift() ?? DEAD,
+    ensure: async () => {
+      script.ensures += 1;
+    },
+    launchCount: () => script.ensures,
+    prebuilt: () => true,
+    adopt: () => {},
+  });
+  assert.equal(result.ok, false);
+  assert.equal(script.ensures, 1, 'a handle owned by another dispatch forbids the retry');
+  assert.ok(!result.ok && !/one internal retry included/.test(result.message));
+});
+
 test('genuine runner failure stays typed and bounded: exactly two spawn attempts', async () => {
   const { script, deps } = makeDeps([DEAD, DEAD, DEAD]);
   const result = await ensureRunnerForCommand('SIM-UDID', 'com.example.app', deps);

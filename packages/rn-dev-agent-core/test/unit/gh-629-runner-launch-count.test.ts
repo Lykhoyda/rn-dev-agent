@@ -19,7 +19,7 @@ const runnerRoot = mkdtempSync(join(tmpdir(), 'gh-629-runner-root-'));
 mkdirSync(join(runnerRoot, 'rn-fast-runner'), { recursive: true });
 process.env.RN_DEV_AGENT_NATIVE_RUNNER_ROOT = runnerRoot;
 
-const { startFastRunner, getRunnerLaunchCount } = await import(
+const { startFastRunner, getRunnerLaunchCount, awaitSpawnedRunnerExit } = await import(
   '../../dist/runners/rn-fast-runner-client.js'
 );
 
@@ -52,6 +52,19 @@ test('a start that fails before the launch step does not advance the launch coun
     if (saved.claimEpoch === undefined) delete process.env.RN_DEV_AGENT_CLAIM_EPOCH;
     else process.env.RN_DEV_AGENT_CLAIM_EPOCH = saved.claimEpoch;
   }
+});
+
+test('the settle refuses when the launch handle belongs to a newer generation', async () => {
+  // A concurrent dispatch's start replaces the global handle. Signalling it
+  // would SIGKILL a runner this caller never launched, so a generation the
+  // module no longer recognises must refuse — immediately, without settling.
+  const t0 = Date.now();
+  assert.equal(await awaitSpawnedRunnerExit(50, getRunnerLaunchCount() + 1), false);
+  assert.ok(Date.now() - t0 < 500, 'a foreign generation must short-circuit, not wait or signal');
+});
+
+test('the settle proceeds for the generation the caller actually observed', async () => {
+  assert.equal(await awaitSpawnedRunnerExit(50, getRunnerLaunchCount()), true);
 });
 
 test('a start refused for missing session authority does not advance the launch count', async () => {
