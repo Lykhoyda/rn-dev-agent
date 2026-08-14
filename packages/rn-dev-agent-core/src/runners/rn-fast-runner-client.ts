@@ -899,10 +899,7 @@ export async function awaitSpawnedRunnerExit(
   return awaitChildExit(runnerProcess, graceMs);
 }
 
-export async function awaitChildExit(
-  child: ChildProcess | null,
-  graceMs = 5000,
-): Promise<boolean> {
+export async function awaitChildExit(child: ChildProcess | null, graceMs = 5000): Promise<boolean> {
   if (!child || child.exitCode !== null || child.signalCode !== null) return true;
   return new Promise<boolean>((resolve) => {
     const killTimer = setTimeout(() => {
