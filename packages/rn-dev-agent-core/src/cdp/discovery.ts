@@ -37,6 +37,37 @@ export class AppDetachedError extends Error {
 export const DISCOVERY_TIMEOUT_MS = 1500;
 
 /**
+ * GH #629: thrown by `discover()` when NO candidate port is a running Metro.
+ * Typed so cdp_status can skip its picker fallback (which auto-spawns the
+ * device runner) and surface this truthful result within the discovery budget.
+ */
+export class MetroNotFoundError extends Error {
+  readonly ports: number[];
+  constructor(ports: number[]) {
+    super(
+      'Metro not found on ports ' +
+        ports.join(', ') +
+        '. Is the dev server running? Try: npx expo start or npx react-native start',
+    );
+    this.name = 'MetroNotFoundError';
+    this.ports = ports;
+  }
+}
+
+/**
+ * GH #629: bounded "is any Metro up at all?" pre-check. One parallel
+ * DISCOVERY_TIMEOUT_MS pass over the candidate ports — closed localhost ports
+ * refuse in milliseconds, so a dead-Metro answer costs well under 2s.
+ */
+export async function anyMetroRunning(
+  currentPort: number,
+  timeout: number = DISCOVERY_TIMEOUT_MS,
+): Promise<boolean> {
+  const ports = [...new Set([currentPort, ...resolveDefaultPorts()])];
+  return (await discoverAllMetroPorts(ports, timeout)).length > 0;
+}
+
+/**
  * GH #577: default discovery ports, resolved lazily at call time. When
  * RN_CDP_DISCOVERY_PORTS is set it REPLACES the built-in defaults (including
  * the RN_METRO_PORT entry) — an empty value yields no defaults, so discovery
@@ -787,11 +818,7 @@ export async function discover(
   // target so a detached sibling-worktree Metro can't shadow a healthy one.
   const runningPorts = await discoverAllMetroPorts(ports, DISCOVERY_TIMEOUT_MS);
   if (runningPorts.length === 0) {
-    throw new Error(
-      'Metro not found on ports ' +
-        ports.join(', ') +
-        '. Is the dev server running? Try: npx expo start or npx react-native start',
-    );
+    throw new MetroNotFoundError(ports);
   }
 
   const perPort = await Promise.all(

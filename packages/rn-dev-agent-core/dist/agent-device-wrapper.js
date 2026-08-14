@@ -2,7 +2,7 @@ import { unlinkSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { failResult } from './utils.js';
-import { startFastRunner, probeFastRunnerLiveness, probeFastRunnerLivenessDetailed, adoptPersistedFastRunnerState, reapStaleFastRunner, hasBuiltTestProduct, derivedDataPathForRunner, acquireRunnerRebuildLock, releaseRunnerRebuildLock, runnerRebuildBudget, consumePendingFastRunnerArtifactNote, getRunnerPostMortem, } from './runners/rn-fast-runner-client.js';
+import { startFastRunner, probeFastRunnerLiveness, probeFastRunnerLivenessDetailed, adoptPersistedFastRunnerState, awaitSpawnedRunnerExit, getRunnerLaunchCount, reapStaleFastRunner, hasBuiltTestProduct, derivedDataPathForRunner, acquireRunnerRebuildLock, releaseRunnerRebuildLock, runnerRebuildBudget, consumePendingFastRunnerArtifactNote, getRunnerPostMortem, } from './runners/rn-fast-runner-client.js';
 import { getPluginVersion } from './runners/protocol.js';
 import { resolveBootedIosUdid } from './tools/device-screenshot-raw.js';
 import { refCenter, getScreenRect, clearRefMap, isRefMapFresh, MAX_REF_MAP_AGE_MS, getCachedSignature, getCachedMetadata, getCachedPackageName, getFreshRefTarget, refreshRef, getLastSnapshotHash, getLastSnapshotHashForPackage, invalidateLastSnapshotHash, } from './fast-runner-ref-map.js';
@@ -998,8 +998,28 @@ export async function ensureRunnerForCommand(deviceId, bundleId, deps = {}) {
         }
         return { ok: false, message: decision.message };
     }
-    await ensure(decision.action === 'spawn' ? decision.deviceId : deviceId, bundleId, deps.attachOnly === true ? { attachOnly: true } : {});
-    const after = await probe();
+    const spawnDeviceId = decision.action === 'spawn' ? decision.deviceId : deviceId;
+    const spawnOpts = deps.attachOnly === true ? { attachOnly: true } : {};
+    const launchCount = deps.launchCount ?? getRunnerLaunchCount;
+    const launchesBefore = launchCount();
+    await ensure(spawnDeviceId, bundleId, spawnOpts);
+    let after = await probe();
+    // GH #629: a fresh simulator's first XCTest bootstrap predictably overruns
+    // the warm READY window and primes the next spawn — absorb it with exactly
+    // one retry, gated on the first attempt having actually reached the launch
+    // step (ensureFastRunner swallows artifact/cold-build failures, and re-paying
+    // a multi-minute build that failed deterministically helps nobody) and on
+    // that launch child having provably exited.
+    let firstStartRetried = false;
+    const launchesAfter = launchCount();
+    if (after.liveness === 'dead' && !after.staleReason && launchesAfter > launchesBefore) {
+        const firstSpawnGone = await (deps.awaitSpawnExit ?? (() => awaitSpawnedRunnerExit(undefined, launchesAfter)))();
+        if (firstSpawnGone) {
+            firstStartRetried = true;
+            await ensure(spawnDeviceId, bundleId, spawnOpts);
+            after = await probe();
+        }
+    }
     if (after.liveness === 'alive') {
         if (first.staleReason &&
             (PROTOCOL_STALE_REASONS.has(first.staleReason) || first.staleReason === 'authority-mismatch')) {
@@ -1012,6 +1032,12 @@ export async function ensureRunnerForCommand(deviceId, bundleId, deps = {}) {
                         : first.staleReason === 'authority-mismatch'
                             ? 'runner upgraded (authority identity mismatch)'
                             : 'runner upgraded (protocol/version mismatch)',
+            };
+        }
+        if (firstStartRetried) {
+            return {
+                ok: true,
+                note: 'runner ready after one first-start retry (fresh-simulator XCTest bootstrap)',
             };
         }
         return { ok: true };
@@ -1057,7 +1083,8 @@ export async function ensureRunnerForCommand(deviceId, bundleId, deps = {}) {
     }
     return {
         ok: false,
-        message: 'rn-fast-runner did not become ready after auto-spawn. Retry, or run `device_snapshot action=open appId=<your.app.id> platform=ios` to surface the build error.',
+        message: `rn-fast-runner did not become ready after auto-spawn${firstStartRetried ? ' (one internal retry included)' : ''}. ` +
+            'Retry, or run `device_snapshot action=open appId=<your.app.id> platform=ios` to surface the build error.',
     };
 }
 export async function ensureFastRunner(deviceId, bundleId, 

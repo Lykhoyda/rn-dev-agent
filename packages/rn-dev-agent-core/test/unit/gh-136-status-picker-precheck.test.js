@@ -7,6 +7,7 @@
 // assert the sequence directly — `pickerProbe` must precede `autoConnect`.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
 import { createMockClient } from '../helpers/mock-cdp-client.js';
 import { expectOk } from '../helpers/result-helpers.js';
 import { createStatusHandler } from '../../dist/tools/status.js';
@@ -18,6 +19,26 @@ import {
   _setFetchCandidatesForTest,
   _resetFetchCandidatesForTest,
 } from '../../dist/tools/dev-client-picker.js';
+
+// GH #629 gates the pre-connect probe on a bounded Metro pre-scan: with no
+// Metro up, a picker dismissal cannot help and the probe is skipped. The
+// ordering guarantee below is therefore asserted against a live fake Metro,
+// so it no longer depends on whatever happens to listen on 8081.
+function startFakeMetro() {
+  return new Promise((resolve, reject) => {
+    const server = createServer((req, res) => {
+      if (req.url === '/status') {
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end('packager-status:running');
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    server.listen(0, '127.0.0.1', () => resolve({ server, port: server.address().port }));
+    server.on('error', reject);
+  });
+}
 
 function makeStatusProbe(extraAppInfo = {}) {
   return JSON.stringify({
@@ -31,6 +52,9 @@ function makeStatusProbe(extraAppInfo = {}) {
 
 test('cdp_status: picker probe runs BEFORE autoConnect when not connected', async () => {
   const events = [];
+  const savedDiscoveryPorts = process.env.RN_CDP_DISCOVERY_PORTS;
+  const { server, port } = await startFakeMetro();
+  process.env.RN_CDP_DISCOVERY_PORTS = '';
   _setHasSessionForTest(true);
   let probeCount = 0;
   _setFetchCandidatesForTest(async (_text) => {
@@ -44,6 +68,7 @@ test('cdp_status: picker probe runs BEFORE autoConnect when not connected', asyn
   const client = createMockClient({
     _isConnected: false,
     _helpersInjected: true,
+    _metroPort: port,
     autoConnect: async () => {
       events.push('autoConnect');
       client._isConnected = true;
@@ -65,6 +90,9 @@ test('cdp_status: picker probe runs BEFORE autoConnect when not connected', asyn
       `events out of order: ${JSON.stringify(events)}`,
     );
   } finally {
+    if (savedDiscoveryPorts === undefined) delete process.env.RN_CDP_DISCOVERY_PORTS;
+    else process.env.RN_CDP_DISCOVERY_PORTS = savedDiscoveryPorts;
+    await new Promise((resolve) => server.close(resolve));
     _resetFetchCandidatesForTest();
     _resetHasSessionForTest();
   }

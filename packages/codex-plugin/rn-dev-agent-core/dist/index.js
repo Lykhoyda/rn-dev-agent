@@ -19484,7 +19484,7 @@ async function discover(currentPort, platformFilterOrFilters) {
   logger.debug("CDP", `Discovering Metro on ports: ${ports.join(", ")}${hints.length ? ` (${hints.join(", ")})` : ""}`);
   const runningPorts = await discoverAllMetroPorts(ports, DISCOVERY_TIMEOUT_MS);
   if (runningPorts.length === 0) {
-    throw new Error("Metro not found on ports " + ports.join(", ") + ". Is the dev server running? Try: npx expo start or npx react-native start");
+    throw new MetroNotFoundError(ports);
   }
   const perPort = await Promise.all(runningPorts.map(async (p) => {
     try {
@@ -19544,7 +19544,7 @@ async function discoverForList(currentPort, portHint) {
   inferPlatforms(targets);
   return { port: chosen, targets };
 }
-var AppDetachedError, DISCOVERY_TIMEOUT_MS, PACKAGE_PROBE_TTL_MS, PACKAGE_PROBE_FAILURE_TTL_MS, PACKAGE_PROBE_SLOW_FAILURE_MS, packageProbeCache, TargetSelectionError;
+var AppDetachedError, DISCOVERY_TIMEOUT_MS, MetroNotFoundError, PACKAGE_PROBE_TTL_MS, PACKAGE_PROBE_FAILURE_TTL_MS, PACKAGE_PROBE_SLOW_FAILURE_MS, packageProbeCache, TargetSelectionError;
 var init_discovery = __esm({
   "packages/rn-dev-agent-core/dist/cdp/discovery.js"() {
     "use strict";
@@ -19567,6 +19567,14 @@ var init_discovery = __esm({
       }
     };
     DISCOVERY_TIMEOUT_MS = 1500;
+    MetroNotFoundError = class extends Error {
+      ports;
+      constructor(ports) {
+        super("Metro not found on ports " + ports.join(", ") + ". Is the dev server running? Try: npx expo start or npx react-native start");
+        this.name = "MetroNotFoundError";
+        this.ports = ports;
+      }
+    };
     PACKAGE_PROBE_TTL_MS = 15e3;
     PACKAGE_PROBE_FAILURE_TTL_MS = 1500;
     PACKAGE_PROBE_SLOW_FAILURE_MS = 1e3;
@@ -21488,6 +21496,8 @@ __export(rn_fast_runner_client_exports, {
   _setRunnerStateForTest: () => _setRunnerStateForTest,
   acquireRunnerRebuildLock: () => acquireRunnerRebuildLock,
   adoptPersistedFastRunnerState: () => adoptPersistedFastRunnerState,
+  awaitChildExit: () => awaitChildExit,
+  awaitSpawnedRunnerExit: () => awaitSpawnedRunnerExit,
   buildRunnerAttachOnlyEnv: () => buildRunnerAttachOnlyEnv,
   buildRunnerAuthorityEnv: () => buildRunnerAuthorityEnv,
   buildRunnerPortEnv: () => buildRunnerPortEnv,
@@ -21502,6 +21512,7 @@ __export(rn_fast_runner_client_exports, {
   fastSwipe: () => fastSwipe,
   getFastRunnerCapabilities: () => getFastRunnerCapabilities,
   getFastRunnerState: () => getFastRunnerState,
+  getRunnerLaunchCount: () => getRunnerLaunchCount,
   getRunnerPostMortem: () => getRunnerPostMortem,
   hasBuiltTestProduct: () => hasBuiltTestProduct,
   iosStatePath: () => iosStatePath,
@@ -21934,6 +21945,7 @@ async function startFastRunner(deviceId, bundleId, port, opts = {}) {
       stdio: ["ignore", "pipe", "pipe"]
     });
     runnerProcess = child;
+    runnerLaunchCount += 1;
     runnerOutputTail = "";
     lastRunnerCommand = null;
     lastRunnerPostMortem = null;
@@ -22013,6 +22025,38 @@ async function startFastRunner(deviceId, bundleId, port, opts = {}) {
       clearTimeout(timer);
       reject(new Error(`xcodebuild exited unexpectedly (code ${code}, signal ${signal ?? "none"})`));
     });
+  });
+}
+function getRunnerLaunchCount() {
+  return runnerLaunchCount;
+}
+async function awaitSpawnedRunnerExit(graceMs = 5e3, expectedLaunchCount) {
+  if (runnerState)
+    return false;
+  if (expectedLaunchCount !== void 0 && runnerLaunchCount !== expectedLaunchCount)
+    return false;
+  return awaitChildExit(runnerProcess, graceMs);
+}
+async function awaitChildExit(child, graceMs = 5e3) {
+  if (!child || child.exitCode !== null || child.signalCode !== null)
+    return true;
+  return new Promise((resolve12) => {
+    const killTimer = setTimeout(() => {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+      }
+    }, graceMs);
+    const backstop = setTimeout(() => {
+      child.removeListener("exit", onExit);
+      resolve12(false);
+    }, graceMs + 2e3);
+    const onExit = () => {
+      clearTimeout(killTimer);
+      clearTimeout(backstop);
+      resolve12(true);
+    };
+    child.once("exit", onExit);
   });
 }
 async function stopFastRunner(deviceId) {
@@ -22809,7 +22853,7 @@ async function runIOS(args) {
   };
   return okResult(resp.data ?? {}, Object.keys(finalMeta).length ? { meta: finalMeta } : void 0);
 }
-var READY_TIMEOUT_MS, BUILD_READY_TIMEOUT_MS, HTTP_TIMEOUT_MS, FAST_RUNNER_PROJECT, runnerProcess, runnerState, runnerPoisoned, poisonReap, poisonHolders, runnerOutputTail, lastRunnerCommand, lastRunnerPostMortem, lastKnownCapabilities, quiescenceAnnouncementPending, QUIESCENCE_STATUSES, REBUILD_LOCK_DIR, REBUILD_LOCK_STALE_MS, REBUILD_BUDGET_FILE, runnerRebuildBudget, pendingFastRunnerArtifactNote, staleHittableWarned, runnerTestFaultForwarded, fetchImpl, httpTimeoutOverrideMs, SLOW_RUNNER_COMMANDS, STATUS_PROBE_TIMEOUT_MS, POST_SETTLE_HEALTH_ATTEMPTS, POST_SETTLE_HEALTH_RETRY_MS;
+var READY_TIMEOUT_MS, BUILD_READY_TIMEOUT_MS, HTTP_TIMEOUT_MS, FAST_RUNNER_PROJECT, runnerProcess, runnerLaunchCount, runnerState, runnerPoisoned, poisonReap, poisonHolders, runnerOutputTail, lastRunnerCommand, lastRunnerPostMortem, lastKnownCapabilities, quiescenceAnnouncementPending, QUIESCENCE_STATUSES, REBUILD_LOCK_DIR, REBUILD_LOCK_STALE_MS, REBUILD_BUDGET_FILE, runnerRebuildBudget, pendingFastRunnerArtifactNote, staleHittableWarned, runnerTestFaultForwarded, fetchImpl, httpTimeoutOverrideMs, SLOW_RUNNER_COMMANDS, STATUS_PROBE_TIMEOUT_MS, POST_SETTLE_HEALTH_ATTEMPTS, POST_SETTLE_HEALTH_RETRY_MS;
 var init_rn_fast_runner_client = __esm({
   "packages/rn-dev-agent-core/dist/runners/rn-fast-runner-client.js"() {
     "use strict";
@@ -22828,6 +22872,7 @@ var init_rn_fast_runner_client = __esm({
     HTTP_TIMEOUT_MS = 1e4;
     FAST_RUNNER_PROJECT = resolveNativeRunnerDir("rn-fast-runner");
     runnerProcess = null;
+    runnerLaunchCount = 0;
     runnerState = null;
     runnerPoisoned = false;
     poisonReap = null;
@@ -28930,13 +28975,33 @@ async function ensureRunnerForCommand(deviceId, bundleId, deps = {}) {
     }
     return { ok: false, message: decision.message };
   }
-  await ensure(decision.action === "spawn" ? decision.deviceId : deviceId, bundleId, deps.attachOnly === true ? { attachOnly: true } : {});
-  const after = await probe();
+  const spawnDeviceId = decision.action === "spawn" ? decision.deviceId : deviceId;
+  const spawnOpts = deps.attachOnly === true ? { attachOnly: true } : {};
+  const launchCount = deps.launchCount ?? getRunnerLaunchCount;
+  const launchesBefore = launchCount();
+  await ensure(spawnDeviceId, bundleId, spawnOpts);
+  let after = await probe();
+  let firstStartRetried = false;
+  const launchesAfter = launchCount();
+  if (after.liveness === "dead" && !after.staleReason && launchesAfter > launchesBefore) {
+    const firstSpawnGone = await (deps.awaitSpawnExit ?? (() => awaitSpawnedRunnerExit(void 0, launchesAfter)))();
+    if (firstSpawnGone) {
+      firstStartRetried = true;
+      await ensure(spawnDeviceId, bundleId, spawnOpts);
+      after = await probe();
+    }
+  }
   if (after.liveness === "alive") {
     if (first.staleReason && (PROTOCOL_STALE_REASONS.has(first.staleReason) || first.staleReason === "authority-mismatch")) {
       return {
         ok: true,
         note: first.staleReason === "missing-commands" ? "runner upgraded (stale command surface)" : first.staleReason === "missing-features" ? "runner upgraded (stale feature surface)" : first.staleReason === "authority-mismatch" ? "runner upgraded (authority identity mismatch)" : "runner upgraded (protocol/version mismatch)"
+      };
+    }
+    if (firstStartRetried) {
+      return {
+        ok: true,
+        note: "runner ready after one first-start retry (fresh-simulator XCTest bootstrap)"
       };
     }
     return { ok: true };
@@ -28969,7 +29034,7 @@ async function ensureRunnerForCommand(deviceId, bundleId, deps = {}) {
   }
   return {
     ok: false,
-    message: "rn-fast-runner did not become ready after auto-spawn. Retry, or run `device_snapshot action=open appId=<your.app.id> platform=ios` to surface the build error."
+    message: `rn-fast-runner did not become ready after auto-spawn${firstStartRetried ? " (one internal retry included)" : ""}. Retry, or run \`device_snapshot action=open appId=<your.app.id> platform=ios\` to surface the build error.`
   };
 }
 async function ensureFastRunner(deviceId, bundleId, opts = {}) {

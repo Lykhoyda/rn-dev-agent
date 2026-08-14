@@ -88,6 +88,10 @@ export function createReadySignalParser() {
 }
 // --- Singleton state ---
 let runnerProcess = null;
+// GH #629: monotonic count of launch xcodebuild children actually spawned.
+// ensureFastRunner swallows startFastRunner errors, so this is the only way a
+// caller can tell a READY-timeout apart from a failure before the launch step.
+let runnerLaunchCount = 0;
 let runnerState = null;
 let runnerPoisoned = false;
 let poisonReap = null;
@@ -611,6 +615,7 @@ opts = {}) {
             stdio: ['ignore', 'pipe', 'pipe'],
         });
         runnerProcess = child;
+        runnerLaunchCount += 1;
         runnerOutputTail = '';
         lastRunnerCommand = null;
         lastRunnerPostMortem = null;
@@ -692,6 +697,55 @@ opts = {}) {
             clearTimeout(timer);
             reject(new Error(`xcodebuild exited unexpectedly (code ${code}, signal ${signal ?? 'none'})`));
         });
+    });
+}
+/** GH #629: launches observed so far — sample across a start to prove one ran. */
+export function getRunnerLaunchCount() {
+    return runnerLaunchCount;
+}
+/**
+ * GH #629: bounded settle before the single first-start retry. The READY
+ * timeout SIGTERMs the launch xcodebuild, but its teardown is asynchronous —
+ * wait for the child to actually exit (escalating to SIGKILL at the grace
+ * cap) so a retry can never stack a second launch on a still-dying first one.
+ */
+export async function awaitSpawnedRunnerExit(graceMs = 5000, expectedLaunchCount) {
+    // A concurrent dispatch's start replaces the global handle (and a successful
+    // one leaves it live), so signalling it blind would SIGKILL a runner this
+    // caller never launched. Only the generation the caller observed is ours; a
+    // runner that came up meanwhile is someone else's success, never this
+    // caller's retry.
+    if (runnerState)
+        return false;
+    if (expectedLaunchCount !== undefined && runnerLaunchCount !== expectedLaunchCount)
+        return false;
+    return awaitChildExit(runnerProcess, graceMs);
+}
+export async function awaitChildExit(child, graceMs = 5000) {
+    if (!child || child.exitCode !== null || child.signalCode !== null)
+        return true;
+    return new Promise((resolve) => {
+        const killTimer = setTimeout(() => {
+            try {
+                child.kill('SIGKILL');
+            }
+            catch {
+                /* already gone */
+            }
+        }, graceMs);
+        // Backstop: an unkillable zombie must not wedge the caller forever —
+        // resolve false so the caller refuses the retry instead of stacking a
+        // second launch on a process that provably survived SIGKILL.
+        const backstop = setTimeout(() => {
+            child.removeListener('exit', onExit);
+            resolve(false);
+        }, graceMs + 2000);
+        const onExit = () => {
+            clearTimeout(killTimer);
+            clearTimeout(backstop);
+            resolve(true);
+        };
+        child.once('exit', onExit);
     });
 }
 // GH #383 (review amendment): adoption-aware teardown. A post-respawn stop

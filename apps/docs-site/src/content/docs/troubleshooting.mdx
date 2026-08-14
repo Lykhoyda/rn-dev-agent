@@ -266,7 +266,11 @@ The in-tree device runner couldn't start. Check that the simulator/emulator
 is booted and (Android) the SDK is available. iOS self-builds on first use —
 a cold build takes several minutes; if it times out, pre-build once with
 `xcodebuild build-for-testing` (see Getting Started) and re-open the device
-session.
+session. On iOS a freshly created simulator's first XCTest bootstrap can
+overrun the warm ready gate; the bridge absorbs that with exactly one internal
+retry, so a message ending in `(one internal retry included)` means two spawn
+attempts already failed — fix the runner build or the simulator rather than
+retrying by hand.
 
 ### APP_LAUNCH_FAILED
 
