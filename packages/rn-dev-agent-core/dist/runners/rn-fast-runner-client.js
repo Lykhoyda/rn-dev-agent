@@ -710,7 +710,9 @@ export function getRunnerLaunchCount() {
  * cap) so a retry can never stack a second launch on a still-dying first one.
  */
 export async function awaitSpawnedRunnerExit(graceMs = 5000) {
-    const child = runnerProcess;
+    return awaitChildExit(runnerProcess, graceMs);
+}
+export async function awaitChildExit(child, graceMs = 5000) {
     if (!child || child.exitCode !== null || child.signalCode !== null)
         return true;
     return new Promise((resolve) => {
