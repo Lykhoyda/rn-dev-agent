@@ -89991,7 +89991,7 @@ var init_index = __esm({
       if (!L.ok)
         return { ok: false, error: "a flow is already running", code: L.code };
       try {
-        args.projectRoot = projectRootFor();
+        args.projectRoot = args.projectRoot ?? projectRootFor();
         const r = await e2eSuiteHandler(args);
         const env = JSON.parse(r.content[0].text);
         recorder.push({
@@ -90019,7 +90019,9 @@ var init_index = __esm({
     gatedObserveState = (tool, handler, args) => authorityGate.wrap(tool, handler)(args);
     setObserveE2eDeps({
       token: e2eCsrfToken,
-      triggerRun: async (pattern) => observeTriggerRun({ pattern }),
+      // Resolve before the authority gate: gate.wrap turns throws into ok:false values,
+      // which would hide the refusal behind HTTP 200.
+      triggerRun: async (pattern) => observeTriggerRun({ pattern, projectRoot: projectRootFor() }),
       listRuns: async () => loadIndex(projectRootFor()),
       loadRun: async (id) => loadRunRecord(projectRootFor(), id),
       listActions: async () => listActions(projectRootFor()),

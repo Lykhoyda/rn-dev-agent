@@ -62,7 +62,10 @@ GitHub Issues, PRs, or the sibling workspace only when explicitly requested.
   `createObserveRootResolver` (`src/observability/observe-project-root.ts`):
   bound-session `source.appRoot` > `RN_PROJECT_ROOT` > heuristic discovery,
   refusing truthfully (HTTP 503 `PROJECT_ROOT_UNAVAILABLE`) instead of
-  falling back to another checkout.
+  falling back to another checkout. Exception: `POST /api/e2e/actions/run`
+  keeps its `ok:false` result contract and reports the same reason as
+  HTTP 500. `POST /api/e2e/run` must resolve the root before entering
+  `authorityGate.wrap`, which converts throws into `ok:false` values.
 - Claude-only host behavior: edit `packages/claude-plugin/`.
 - Codex-only host behavior: edit `packages/codex-plugin/`.
 - Host-neutral workflow knowledge: edit `packages/shared-agent-knowledge/`,

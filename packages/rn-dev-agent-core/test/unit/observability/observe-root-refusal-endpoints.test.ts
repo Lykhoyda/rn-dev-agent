@@ -77,18 +77,24 @@ test('POST /api/e2e/run refuses truthfully when no project root resolves', async
   });
 });
 
-test('POST /api/e2e/actions/run refuses truthfully when no project root resolves', async () => {
-  await withServer(refusingDeps(), async (url) => {
-    const r = await fetch(`${url}/api/e2e/actions/run`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-csrf-token': 'tok1' },
-      body: JSON.stringify({ actionId: 'login' }),
-    });
-    assert.equal(r.status, 503);
-    const body = (await r.json()) as { error: string; code: string };
-    assert.equal(body.error, REASON);
-    assert.equal(body.code, 'PROJECT_ROOT_UNAVAILABLE');
-  });
+test('POST /api/e2e/actions/run reports the refusal through its ok:false result contract', async () => {
+  await withServer(
+    {
+      ...refusingDeps(),
+      runAction: async () => ({ ok: false as const, error: REASON }),
+    },
+    async (url) => {
+      const r = await fetch(`${url}/api/e2e/actions/run`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-csrf-token': 'tok1' },
+        body: JSON.stringify({ actionId: 'login' }),
+      });
+      assert.equal(r.status, 500);
+      const body = (await r.json()) as { ok: boolean; error: string };
+      assert.equal(body.ok, false);
+      assert.equal(body.error, REASON);
+    },
+  );
 });
 
 test('unexpected errors still return the generic 500', async () => {
