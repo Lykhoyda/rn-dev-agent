@@ -9,6 +9,7 @@ import {
   probeFastRunnerLiveness,
   probeFastRunnerLivenessDetailed,
   adoptPersistedFastRunnerState,
+  awaitSpawnedRunnerExit,
   reapStaleFastRunner,
   hasBuiltTestProduct,
   derivedDataPathForRunner,
@@ -1064,6 +1065,9 @@ export interface EnsureRunnerDeps {
   invalidateArtifact?: () => void;
   reap?: () => Promise<void>;
   acquireBuildLock?: () => boolean;
+  /** GH #629: bounded wait for the failed first spawn to exit before the retry;
+   * resolves false (retry refused) when the process survives escalation. */
+  awaitSpawnExit?: () => Promise<boolean>;
   releaseBuildLock?: () => void;
   rebuildBudget?: { alreadyRebuiltFor(v: string): boolean; recordRebuild(v: string): void };
   pluginVersion?: string | null;
@@ -1236,12 +1240,22 @@ export async function ensureRunnerForCommand(
     return { ok: false, message: decision.message };
   }
 
-  await ensure(
-    decision.action === 'spawn' ? decision.deviceId : deviceId!,
-    bundleId,
-    deps.attachOnly === true ? { attachOnly: true } : {},
-  );
-  const after = await probe();
+  const spawnDeviceId = decision.action === 'spawn' ? decision.deviceId : deviceId!;
+  const spawnOpts = deps.attachOnly === true ? { attachOnly: true } : {};
+  await ensure(spawnDeviceId, bundleId, spawnOpts);
+  let after = await probe();
+  // GH #629: a fresh simulator's first XCTest bootstrap predictably overruns
+  // the warm READY window and primes the next spawn — absorb it with exactly
+  // one retry, gated on the failed first spawn having provably exited.
+  let firstStartRetried = false;
+  if (after.liveness === 'dead' && !after.staleReason) {
+    const firstSpawnGone = await (deps.awaitSpawnExit ?? awaitSpawnedRunnerExit)();
+    if (firstSpawnGone) {
+      firstStartRetried = true;
+      await ensure(spawnDeviceId, bundleId, spawnOpts);
+      after = await probe();
+    }
+  }
   if (after.liveness === 'alive') {
     if (
       first.staleReason &&
@@ -1257,6 +1271,12 @@ export async function ensureRunnerForCommand(
               : first.staleReason === 'authority-mismatch'
                 ? 'runner upgraded (authority identity mismatch)'
                 : 'runner upgraded (protocol/version mismatch)',
+      };
+    }
+    if (firstStartRetried) {
+      return {
+        ok: true,
+        note: 'runner ready after one first-start retry (fresh-simulator XCTest bootstrap)',
       };
     }
     return { ok: true };
@@ -1309,7 +1329,8 @@ export async function ensureRunnerForCommand(
   return {
     ok: false,
     message:
-      'rn-fast-runner did not become ready after auto-spawn. Retry, or run `device_snapshot action=open appId=<your.app.id> platform=ios` to surface the build error.',
+      `rn-fast-runner did not become ready after auto-spawn${firstStartRetried ? ' (one internal retry included)' : ''}. ` +
+      'Retry, or run `device_snapshot action=open appId=<your.app.id> platform=ios` to surface the build error.',
   };
 }
 

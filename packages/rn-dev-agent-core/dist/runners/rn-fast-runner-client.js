@@ -694,6 +694,40 @@ opts = {}) {
         });
     });
 }
+/**
+ * GH #629: bounded settle before the single first-start retry. The READY
+ * timeout SIGTERMs the launch xcodebuild, but its teardown is asynchronous —
+ * wait for the child to actually exit (escalating to SIGKILL at the grace
+ * cap) so a retry can never stack a second launch on a still-dying first one.
+ */
+export async function awaitSpawnedRunnerExit(graceMs = 5000) {
+    const child = runnerProcess;
+    if (!child || child.exitCode !== null || child.signalCode !== null)
+        return true;
+    return new Promise((resolve) => {
+        const killTimer = setTimeout(() => {
+            try {
+                child.kill('SIGKILL');
+            }
+            catch {
+                /* already gone */
+            }
+        }, graceMs);
+        // Backstop: an unkillable zombie must not wedge the caller forever —
+        // resolve false so the caller refuses the retry instead of stacking a
+        // second launch on a process that provably survived SIGKILL.
+        const backstop = setTimeout(() => {
+            child.removeListener('exit', onExit);
+            resolve(false);
+        }, graceMs + 2000);
+        const onExit = () => {
+            clearTimeout(killTimer);
+            clearTimeout(backstop);
+            resolve(true);
+        };
+        child.once('exit', onExit);
+    });
+}
 // GH #383 (review amendment): adoption-aware teardown. A post-respawn stop
 // (session close, restart, maestro park) would otherwise no-op against empty
 // in-memory state and leak the persisted runner — so adopt first, then reap.

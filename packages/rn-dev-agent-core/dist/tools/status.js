@@ -7,7 +7,7 @@ import { recoverWedge } from '../cdp/recover-wedge.js';
 import { recoverDetached } from '../cdp/recover-detached.js';
 import { buildNotInstalledAdvice } from '../cdp/app-installed-probe.js';
 import { snapshotHintForBundleId } from './resolve-ios-app-file.js';
-import { AppDetachedError, TargetSelectionError, androidTargetMatchesKind, enumerateMetroCandidates, targetBundleIdentity, targetMatchesBundleId, } from '../cdp/discovery.js';
+import { AppDetachedError, MetroNotFoundError, TargetSelectionError, androidTargetMatchesKind, anyMetroRunning, enumerateMetroCandidates, targetBundleIdentity, targetMatchesBundleId, } from '../cdp/discovery.js';
 import { resolveBridgeProjectRoot, pathMatchesRoot } from '../cdp/metro-cwd.js';
 import { getDeviceSessionHealth } from './device-session-health.js';
 import { detectIosExternalRunner } from '../runners/external-runner-detect.js';
@@ -265,13 +265,19 @@ export function createStatusHandler(getClient, setClient, createClient, deps = {
                 // picker first lets autoConnect see a real target on its first
                 // attempt. Best-effort: any failure here falls through to the
                 // existing catch-block picker check as a safety net.
-                try {
-                    if (await isDevClientPickerShowing()) {
-                        await handleDevClientPicker();
+                // GH #629: gate the probe on a bounded Metro pre-scan. Each picker
+                // probe dispatches a runner auto-spawn (30s readiness wait); with no
+                // Metro up at all, a dismissal cannot help, so skip straight to
+                // discover()'s truthful not-found failure (seconds, not minutes).
+                if (await anyMetroRunning(client.metroPort)) {
+                    try {
+                        if (await isDevClientPickerShowing()) {
+                            await handleDevClientPicker();
+                        }
                     }
-                }
-                catch {
-                    /* fall through to autoConnect */
+                    catch {
+                        /* fall through to autoConnect */
+                    }
                 }
                 // GH #208 (RC1): when a reconnect storm is in flight, bare autoConnect
                 // throws "Already connecting to Metro..." (connect.ts guard) and dead-ends
@@ -494,6 +500,16 @@ export function createStatusHandler(getClient, setClient, createClient, deps = {
                     autoConnect: getClient().autoConnectState,
                     bridge: bridgeEnvState(process.env),
                     recovery,
+                });
+            }
+            // GH #629: no Metro is up at all — the picker fallback below spawns the
+            // device runner and cannot help. Surface the truthful not-found result
+            // now, keeping cdp_status bounded by the discovery scan budget.
+            if (err instanceof MetroNotFoundError) {
+                return failResult(message, {
+                    reconnect: getClient().reconnectState,
+                    autoConnect: getClient().autoConnectState,
+                    bridge: bridgeEnvState(process.env),
                 });
             }
             // GH #184: the status-scoped connect aborted fast because React was
