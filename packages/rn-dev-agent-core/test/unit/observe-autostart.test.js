@@ -62,6 +62,20 @@ test('disabled via env/config → never starts, logs the source', async () => {
   assert.match(calls.info.join('\n'), /disabled \(config\)/);
 });
 
+test('a disabled session stays quiet about an unresolvable root', async () => {
+  const { d, calls } = deps({
+    resolveEnabled: () => ({ enabled: false, source: 'env' }),
+    findRoot: () => ({
+      ok: false,
+      reason: 'RN_PROJECT_ROOT is not a React Native project (/gone)',
+    }),
+  });
+  assert.equal(await autostartObserve(d), null);
+  assert.equal(calls.start, 0);
+  assert.equal(calls.warn.length, 0);
+  assert.match(calls.info.join('\n'), /disabled \(env\)/);
+});
+
 test('GH#672: a blocked recovery contender never autostarts an operational child', async () => {
   const { d, calls } = deps({
     recoveryOnlyReason: () => 'session is a blocked recovery contender',
