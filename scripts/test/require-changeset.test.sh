@@ -114,4 +114,32 @@ check "manifest/CHANGELOG/mirror-only change without changeset passes" 0 $?
 CHANGED_FILES="" REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
 check "empty diff passes" 0 $?
 
+# 5. changeset-only PR (adds a changeset, changes nothing else) -> MUST fail.
+# GH #578 phantom-0.70.5 post-mortem: the fddcfae/#601 changeset-only merge made
+# `changeset version` mint a 0.70.5 changelog entry for the ensure-idb Python
+# 3.14 fix 11 releases before the code shipped (0.76.0).
+CHANGED_FILES=$'.changeset/lone-claims.md' ADDED_FILES=$'.changeset/lone-claims.md' \
+  REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
+check "changeset-only addition fails (phantom 0.70.5 class)" 1 $?
+
+# 5b. changeset deletion/reword-only (nothing ADDED) -> passes — the Version
+# Packages bot deletes consumed changesets, and pending-changeset text edits
+# describe already-merged code.
+CHANGED_FILES=$'.changeset/stale-entry.md' ADDED_FILES='' \
+  REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
+check "changeset deletion/reword-only passes" 0 $?
+
+# 5c. changeset ADDED alongside the change it describes -> passes
+printf -- '---\n"rn-dev-agent-plugin": patch\n---\nship\n' > "$tmp/.changeset/paired-claims.md"
+CHANGED_FILES=$'.changeset/paired-claims.md\npackages/rn-dev-agent-core/src/index.ts' \
+  ADDED_FILES=$'.changeset/paired-claims.md' \
+  REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
+check "changeset addition alongside code passes" 0 $?
+rm -f "$tmp/.changeset/paired-claims.md"
+
+# 5d. multiple changesets added, still nothing outside .changeset/ -> MUST fail
+CHANGED_FILES=$'.changeset/one.md\n.changeset/two.md' ADDED_FILES=$'.changeset/one.md\n.changeset/two.md' \
+  REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
+check "multi-changeset-only addition fails" 1 $?
+
 if [ "$fail" = 0 ]; then echo "ALL PASS"; else echo "FAILURES"; exit 1; fi

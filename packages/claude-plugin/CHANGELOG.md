@@ -370,7 +370,7 @@
 
 ### Patch Changes
 
-- fddcfae: On Python 3.14 with an installed-but-crashing fb-idb, ensure-idb reports the interpreter incompatibility and recommends reinstalling fb-idb under Python 3.13, and stops retrying once the incompatible-Python verdict is reached.
+- fddcfae: Release-record correction: this entry originally claimed the ensure-idb Python 3.14 incompatibility fix, but only the release-declaring changeset merged (#601) — no corresponding code shipped in 0.70.5. The fix shipped in 0.76.0 (#578, see the 6c1533f entry).
 
 ## 0.70.4
 
