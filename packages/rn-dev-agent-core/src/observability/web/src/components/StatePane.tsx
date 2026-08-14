@@ -51,6 +51,8 @@ export function StatePane({
 }: StatePaneProps): JSX.Element {
   const [tab, setTab] = useState<Tab>('route');
   const [actions, setActions] = useState<ActionSummary[]>([]);
+  const [actionsError, setActionsError] = useState<string | null>(null);
+  const actionsFetchGeneration = useRef(0);
   // GH #579: payload tabs auto-read live state when shown empty; refresh re-reads on demand.
   const [fetched, setFetched] = useState<Partial<Record<PayloadTab, FetchedState>>>({});
   const [loading, setLoading] = useState<PayloadTab | null>(null);
@@ -107,12 +109,27 @@ export function StatePane({
   }, [tab, evOk, fetched, loading, refresh]);
 
   useEffect(() => {
+    const generation = ++actionsFetchGeneration.current;
+    const fresh = (): boolean => generation === actionsFetchGeneration.current;
     const fetchActions = async (): Promise<void> => {
       try {
         const r = await observeFetch('/api/e2e/actions');
-        if (r.ok) setActions((await r.json()) as ActionSummary[]);
-      } catch {
-        /* non-fatal */
+        if (!fresh()) return;
+        if (r.ok) {
+          const list = (await r.json()) as ActionSummary[];
+          if (!fresh()) return;
+          setActions(list);
+          setActionsError(null);
+        } else {
+          const body = (await r.json().catch(() => null)) as { error?: string } | null;
+          if (!fresh()) return;
+          setActions([]);
+          setActionsError(body?.error ?? `actions unavailable (HTTP ${r.status})`);
+        }
+      } catch (e) {
+        if (!fresh()) return;
+        setActions([]);
+        setActionsError(`actions unavailable: ${e instanceof Error ? e.message : String(e)}`);
       }
     };
     void fetchActions();
@@ -139,7 +156,7 @@ export function StatePane({
       </div>
       {tab === 'actions' ? (
         <div className="state-panel">
-          <ActionsPanel actions={actions} />
+          <ActionsPanel actions={actions} error={actionsError} />
         </div>
       ) : tab === 'e2e' ? (
         <div className="state-panel">

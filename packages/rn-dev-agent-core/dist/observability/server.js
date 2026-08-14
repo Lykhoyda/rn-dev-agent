@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { isPostAllowed } from './e2e-csrf.js';
+import { ObserveRootUnavailableError } from './observe-project-root.js';
 import { logger } from '../logger.js';
 const HOST = '127.0.0.1';
 const __dir = dirname(fileURLToPath(import.meta.url));
@@ -314,6 +315,14 @@ export class ObservabilityServer {
     internalError(res) {
         this.json(res, 500, { error: 'internal server error' });
     }
+    // GH #637: an unresolvable project root is a truthful refusal, not a 500.
+    e2eError(res, error) {
+        if (error instanceof ObserveRootUnavailableError) {
+            this.json(res, 503, { error: error.message, code: error.code });
+            return;
+        }
+        this.internalError(res);
+    }
     async e2eRun(req, res) {
         if (!this.e2e) {
             this.json(res, 501, { error: 'e2e not configured' });
@@ -345,8 +354,8 @@ export class ObservabilityServer {
             const result = await this.e2e.triggerRun(parsed.pattern);
             this.json(res, 200, result);
         }
-        catch {
-            this.internalError(res);
+        catch (error) {
+            this.e2eError(res, error);
         }
     }
     async e2eListRuns(res) {
@@ -358,8 +367,8 @@ export class ObservabilityServer {
             const runs = await this.e2e.listRuns();
             this.json(res, 200, runs);
         }
-        catch {
-            this.internalError(res);
+        catch (error) {
+            this.e2eError(res, error);
         }
     }
     async e2eLoadRun(id, res) {
@@ -375,8 +384,8 @@ export class ObservabilityServer {
             }
             this.json(res, 200, run);
         }
-        catch {
-            this.internalError(res);
+        catch (error) {
+            this.e2eError(res, error);
         }
     }
     async e2eListActions(res) {
@@ -388,8 +397,8 @@ export class ObservabilityServer {
             const actions = await this.e2e.listActions();
             this.json(res, 200, actions);
         }
-        catch {
-            this.internalError(res);
+        catch (error) {
+            this.e2eError(res, error);
         }
     }
     async e2eRunAction(req, res) {
@@ -435,8 +444,8 @@ export class ObservabilityServer {
             }
             this.json(res, 200, result);
         }
-        catch {
-            this.internalError(res);
+        catch (error) {
+            this.e2eError(res, error);
         }
     }
 }

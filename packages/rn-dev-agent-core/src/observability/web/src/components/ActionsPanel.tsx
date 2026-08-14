@@ -5,9 +5,10 @@ import { csrfToken } from '../derive';
 
 interface ActionsPanelProps {
   actions: ActionSummary[];
+  error?: string | null;
 }
 
-export function ActionsPanel({ actions }: ActionsPanelProps): JSX.Element {
+export function ActionsPanel({ actions, error }: ActionsPanelProps): JSX.Element {
   const [states, setStates] = useState<Record<string, ActionRunState>>({});
   const [paramValues, setParamValues] = useState<Record<string, Record<string, string>>>({});
   const [openOutput, setOpenOutput] = useState<string | null>(null);
@@ -39,7 +40,12 @@ export function ActionsPanel({ actions }: ActionsPanelProps): JSX.Element {
     <div className="reg-container">
       <div className="actions-panel">
         <div className="pane-head">Actions</div>
-        {actions.length === 0 ? (
+        {error ? (
+          <div className="empty empty-guide" data-testid="actions-unavailable">
+            <div className="empty-title">Actions unavailable</div>
+            <div>{error}</div>
+          </div>
+        ) : actions.length === 0 ? (
           <div className="empty empty-guide">
             <div className="empty-title">No learned actions</div>
             <div>Save a verified flow with cdp_record_test_save_as_action and it appears here.</div>

@@ -8328,7 +8328,7 @@ var require_dist = __commonJS({
 });
 
 // packages/rn-dev-agent-core/dist/nav-graph/storage.js
-import { readFileSync as readFileSync3, writeFileSync as writeFileSync2, existsSync as existsSync5, renameSync, readdirSync, lstatSync as lstatSync2, mkdirSync as mkdirSync3 } from "node:fs";
+import { readFileSync as readFileSync3, writeFileSync as writeFileSync2, existsSync as existsSync5, renameSync, readdirSync, lstatSync as lstatSync2, mkdirSync as mkdirSync3, realpathSync as realpathSync2 } from "node:fs";
 import { join as join4, dirname as dirname2 } from "node:path";
 function isRnProject(dir) {
   const pkgPath2 = join4(dir, "package.json");
@@ -8481,6 +8481,46 @@ function findProjectRoot(opts = {}) {
       return siblingScan;
   }
   return null;
+}
+function collectMatchingRnProjects(bundleId) {
+  const seen = /* @__PURE__ */ new Set();
+  const matches = [];
+  const consider = (dir) => {
+    if (readProjectBundleId(dir) !== bundleId)
+      return;
+    let canonical = dir;
+    try {
+      canonical = realpathSync2(dir);
+    } catch {
+    }
+    if (seen.has(canonical))
+      return;
+    seen.add(canonical);
+    matches.push(canonical);
+  };
+  const starts = [process.env.CLAUDE_USER_CWD, process.cwd()].filter(Boolean);
+  for (const start of starts) {
+    let dir = start;
+    for (let i = 0; i < 10; i++) {
+      if (isRnProject(dir)) {
+        consider(dir);
+        break;
+      }
+      const parent = join4(dir, "..");
+      if (parent === dir)
+        break;
+      dir = parent;
+    }
+  }
+  const cwd = process.cwd();
+  const all = [];
+  collectRnProjects(cwd, 0, all);
+  const parentOfCwd = join4(cwd, "..");
+  if (parentOfCwd !== cwd)
+    collectRnProjects(parentOfCwd, 1, all);
+  for (const candidate of all)
+    consider(candidate);
+  return matches;
 }
 function getProjectSlug(projectRoot) {
   try {
@@ -8782,7 +8822,7 @@ var init_storage = __esm({
 
 // packages/rn-dev-agent-core/dist/cdp/metro-cwd.js
 import { execFileSync as execFileSync3 } from "node:child_process";
-import { readlinkSync, realpathSync as realpathSync2 } from "node:fs";
+import { readlinkSync, realpathSync as realpathSync3 } from "node:fs";
 import { resolve as resolve2, sep } from "node:path";
 function parseLsofPid(stdout) {
   for (const line of stdout.split("\n")) {
@@ -8860,7 +8900,7 @@ function cwdForProcess(pid, platform = process.platform, exec = defaultExec, rea
 }
 function realpathOrResolve(p) {
   try {
-    return realpathSync2(resolve2(p));
+    return realpathSync3(resolve2(p));
   } catch {
     return resolve2(p);
   }
@@ -9005,7 +9045,7 @@ var init_authority_json = __esm({
 // packages/rn-dev-agent-core/dist/session/managed-metro-enforcement.js
 import { spawnSync } from "node:child_process";
 import { createHash as createHash3 } from "node:crypto";
-import { closeSync as closeSync3, constants as constants2, existsSync as existsSync6, mkdirSync as mkdirSync4, openSync as openSync3, readFileSync as readFileSync4, realpathSync as realpathSync3, rmSync, statSync as statSync2, symlinkSync, writeSync as writeSync2 } from "node:fs";
+import { closeSync as closeSync3, constants as constants2, existsSync as existsSync6, mkdirSync as mkdirSync4, openSync as openSync3, readFileSync as readFileSync4, realpathSync as realpathSync4, rmSync, statSync as statSync2, symlinkSync, writeSync as writeSync2 } from "node:fs";
 import { dirname as dirname3, resolve as resolve3 } from "node:path";
 function sha256(value) {
   return createHash3("sha256").update(value).digest("hex");
@@ -9028,7 +9068,7 @@ function field(details, name) {
 }
 function verifiedSandboxExecutable(dependencies) {
   const exists = dependencies.exists ?? existsSync6;
-  const canonicalize = dependencies.canonicalize ?? realpathSync3;
+  const canonicalize = dependencies.canonicalize ?? realpathSync4;
   const stat2 = dependencies.stat ?? statSync2;
   const readBytes = dependencies.readBytes ?? readFileSync4;
   const run = dependencies.run ?? defaultRun2;
@@ -9102,7 +9142,7 @@ function defaultRuntimeCache(exists) {
   ].find(exists) ?? null;
 }
 function attestRuntimeFile(path, dependencies) {
-  const canonicalize = dependencies.canonicalize ?? realpathSync3;
+  const canonicalize = dependencies.canonicalize ?? realpathSync4;
   const stat2 = dependencies.stat ?? statSync2;
   const readBytes = dependencies.readBytes ?? readFileSync4;
   const run = dependencies.run ?? defaultRun2;
@@ -9212,7 +9252,7 @@ function prepareManagedMetroEnforcement(input, dependencies = {}) {
   if (!sandbox) {
     return { status: "unsupported", reason: "sandbox-executable-unverified" };
   }
-  const canonicalize = dependencies.canonicalize ?? realpathSync3;
+  const canonicalize = dependencies.canonicalize ?? realpathSync4;
   const sourceRoot = canonicalPath(input.sourceRoot, canonicalize);
   const appRoot = canonicalPath(input.appRoot, canonicalize);
   const runtimeRoot = canonicalPath(input.runtimeRoot, canonicalize);
@@ -9480,7 +9520,7 @@ const processGroupExists = (pid) => {
 // packages/rn-dev-agent-core/dist/session/source-identity.js
 import { createHash as createHash4, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { execFileSync as execFileSync4 } from "node:child_process";
-import { closeSync as closeSync4, constants as constants3, existsSync as existsSync7, fstatSync as fstatSync2, lstatSync as lstatSync3, openSync as openSync4, readdirSync as readdirSync2, readFileSync as readFileSync5, readlinkSync as readlinkSync2, readSync as readSync2, realpathSync as realpathSync4 } from "node:fs";
+import { closeSync as closeSync4, constants as constants3, existsSync as existsSync7, fstatSync as fstatSync2, lstatSync as lstatSync3, openSync as openSync4, readdirSync as readdirSync2, readFileSync as readFileSync5, readlinkSync as readlinkSync2, readSync as readSync2, realpathSync as realpathSync5 } from "node:fs";
 import { dirname as dirname4, isAbsolute, join as join5, relative, resolve as resolve4 } from "node:path";
 function digest(parts) {
   const hash = createHash4("sha256");
@@ -9558,7 +9598,7 @@ function updateDependencyPath(hash, path, label, state) {
     updateFramed(hash, String(stat2.mode & 511));
     if (stat2.isSymbolicLink()) {
       const link = readlinkSync2(current.path);
-      const target = realpathSync4(current.path);
+      const target = realpathSync5(current.path);
       state.totalBytes += Buffer.byteLength(link);
       if (state.totalBytes > MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES) {
         throw new Error("STRICT_PROOF_DEPENDENCY_LIMIT: dependency bytes exceed the total limit");
@@ -9574,7 +9614,7 @@ function updateDependencyPath(hash, path, label, state) {
       continue;
     }
     if (stat2.isDirectory()) {
-      const canonical = realpathSync4(current.path);
+      const canonical = realpathSync5(current.path);
       if (state.visitedDirectories.has(canonical)) {
         updateFramed(hash, "directory-reference");
         updateFramed(hash, canonical);
@@ -9879,8 +9919,8 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead, verifyRuntim
     if (!["node", "sync", "fork", "worker"].includes(semantics.mode) || typeof semantics.entrypoint !== "string" || typeof semantics.entrypointDigest !== "string" || !/^[a-f0-9]{64}$/.test(semantics.entrypointDigest) || !Array.isArray(semantics.execArgv) || semantics.execArgv.some((entry) => typeof entry !== "string") || typeof semantics.invocationDigest !== "string" || !/^[a-f0-9]{64}$/.test(semantics.invocationDigest) || canonicalAuthorityJson(semantics.allowedCodeRoots) !== canonicalAuthorityJson(allowedCodeRoots) || !semanticAuthority || semanticAuthority.sessionId !== authority.sessionId || semanticAuthority.metroInstanceId !== authority.metroInstanceId || semanticAuthority.contentRoot !== identity2.contentRoot || semanticAuthority.appRoot !== identity2.appRoot || semanticAuthority.parentIdentity !== execution.parent.identity || semanticAuthority.parentNonce !== execution.parent.nonce) {
       throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant execution semantics are invalid");
     }
-    const entrypoint = realpathSync4(semantics.entrypoint);
-    if (!allowedCodeRoots.some((root) => isContained(realpathSync4(root), entrypoint))) {
+    const entrypoint = realpathSync5(semantics.entrypoint);
+    if (!allowedCodeRoots.some((root) => isContained(realpathSync5(root), entrypoint))) {
       throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant entrypoint is outside allowed code roots");
     }
     const observedEntrypoint = runtimeLoads.get(`input\0${entrypoint}`);
@@ -9892,7 +9932,7 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead, verifyRuntim
     if (load.kind === "violation") {
       throw new Error(`STRICT_PROOF_UNVERIFIED_METRO_POLICY: ${load.value}`);
     }
-    const candidate = realpathSync4(load.value);
+    const candidate = realpathSync5(load.value);
     if (fileDigest(candidate) !== load.digest) {
       throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input bytes changed after execution");
     }
@@ -9900,7 +9940,7 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead, verifyRuntim
   }
   return {
     paths: [...runtimeInputs].sort().flatMap((entry) => {
-      const candidate = realpathSync4(entry);
+      const candidate = realpathSync5(entry);
       return !isContained(identity2.contentRoot, candidate) || isExcludedRuntimePath(identity2.contentRoot, candidate) ? [candidate] : [];
     }),
     semantics: orderedRuntimeSemantics
@@ -10022,7 +10062,7 @@ function resolveDeclaredIdentity(appRoot, dependencies, canonicalize) {
   };
 }
 function resolveSourceIdentity(inputRoot, dependencies = {}) {
-  const canonicalize = dependencies.canonicalize ?? realpathSync4;
+  const canonicalize = dependencies.canonicalize ?? realpathSync5;
   const appRoot = canonicalize(resolve4(inputRoot));
   const git = dependencies.git ?? defaultGit;
   try {
@@ -10124,7 +10164,7 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
       continue;
     }
     if (stat2.isSymbolicLink()) {
-      const target = realpathSync4(file);
+      const target = realpathSync5(file);
       assertContained(identity2.contentRoot, target, "STRICT_PROOF_PATH_ESCAPE");
       const link = readlinkSync2(file);
       const targetStat = lstatSync3(target);
@@ -10397,7 +10437,7 @@ var init_metro_binding = __esm({
 // packages/rn-dev-agent-core/dist/session/managed-metro.js
 import { execFileSync as execFileSync6, spawn } from "node:child_process";
 import { createHash as createHash5, createHmac as createHmac2, timingSafeEqual as timingSafeEqual2 } from "node:crypto";
-import { closeSync as closeSync5, existsSync as existsSync8, fstatSync as fstatSync3, mkdirSync as mkdirSync6, openSync as openSync5, readFileSync as readFileSync7, readSync as readSync3, realpathSync as realpathSync5, rmSync as rmSync2 } from "node:fs";
+import { closeSync as closeSync5, existsSync as existsSync8, fstatSync as fstatSync3, mkdirSync as mkdirSync6, openSync as openSync5, readFileSync as readFileSync7, readSync as readSync3, realpathSync as realpathSync6, rmSync as rmSync2 } from "node:fs";
 function parseNodeOptions(value) {
   const tokens = [];
   let token2 = "";
@@ -12283,7 +12323,7 @@ var init_state_root = __esm({
 // packages/rn-dev-agent-core/dist/session/bound-directory.js
 import { spawn as spawn2 } from "node:child_process";
 import { randomUUID as randomUUID2 } from "node:crypto";
-import { closeSync as closeSync6, constants as constants4, existsSync as existsSync9, fstatSync as fstatSync4, lstatSync as lstatSync6, mkdtempSync, openSync as openSync6, readFileSync as readFileSync9, realpathSync as realpathSync6, renameSync as renameSync4, rmSync as rmSync4, writeFileSync as writeFileSync5 } from "node:fs";
+import { closeSync as closeSync6, constants as constants4, existsSync as existsSync9, fstatSync as fstatSync4, lstatSync as lstatSync6, mkdtempSync, openSync as openSync6, readFileSync as readFileSync9, realpathSync as realpathSync7, renameSync as renameSync4, rmSync as rmSync4, writeFileSync as writeFileSync5 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
 import { join as join8 } from "node:path";
 function sameIdentity(left, right) {
@@ -12511,7 +12551,7 @@ function runBoundOperation(directory, request2, dependencies = {}) {
   let currentRealPath;
   try {
     current = lstatSync6(directory.path, { bigint: true });
-    currentRealPath = realpathSync6(directory.path);
+    currentRealPath = realpathSync7(directory.path);
   } catch {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound directory path is unavailable");
   }
@@ -12634,7 +12674,7 @@ function openValidatedDirectory(path, expected) {
     descriptor = openSync6(path, constants4.O_RDONLY | (constants4.O_DIRECTORY ?? 0) | (constants4.O_NOFOLLOW ?? 0));
     const opened = fstatSync4(descriptor, { bigint: true });
     const after = lstatSync6(path, { bigint: true });
-    const realPath = realpathSync6(path);
+    const realPath = realpathSync7(path);
     if (!opened.isDirectory() || !sameIdentity(before, opened) || !sameIdentity(after, opened) || expected !== void 0 && (!sameIdentity(expected.identity, opened) || expected.realPath !== realPath)) {
       throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration ancestor changed while opening");
     }
@@ -26177,7 +26217,7 @@ var init_platform_utils = __esm({
 
 // packages/rn-dev-agent-core/dist/domain/maestro-validator.js
 import { join as join17, dirname as dirname9, isAbsolute as isAbsolute4, sep as sep3 } from "node:path";
-import { readFileSync as readFileSync15, realpathSync as realpathSync7 } from "node:fs";
+import { readFileSync as readFileSync15, realpathSync as realpathSync8 } from "node:fs";
 function isValidBundleId(s) {
   if (typeof s !== "string")
     return false;
@@ -26339,7 +26379,7 @@ function resolveRunFlowTarget(file, opts) {
   if (!/\.ya?ml$/i.test(file)) {
     throw new MaestroValidationError(`runFlow file ref must be a .yaml/.yml file: ${file}`);
   }
-  const realpath = opts.realpathFn ?? realpathSync7;
+  const realpath = opts.realpathFn ?? realpathSync8;
   let resolved;
   let rootReal;
   try {
@@ -28348,7 +28388,7 @@ var init_metro_origin = __esm({
 // packages/rn-dev-agent-core/dist/session/install-authority.js
 import { execFileSync as execFileSync12 } from "node:child_process";
 import { createHash as createHash11 } from "node:crypto";
-import { lstatSync as lstatSync9, readFileSync as readFileSync18, readdirSync as readdirSync6, readlinkSync as readlinkSync3, realpathSync as realpathSync8, statSync as statSync9 } from "node:fs";
+import { lstatSync as lstatSync9, readFileSync as readFileSync18, readdirSync as readdirSync6, readlinkSync as readlinkSync3, realpathSync as realpathSync9, statSync as statSync9 } from "node:fs";
 import { isAbsolute as isAbsolute5, join as join21, relative as relative3 } from "node:path";
 function runText(command, args) {
   return execFileSync12(command, [...args], {
@@ -28488,7 +28528,7 @@ function captureInstalledArtifact(target, dependencies = {}) {
     const files = iosAppFiles(appPath, dependencies);
     const lstat = dependencies.lstat ?? lstatSync9;
     const readLink = dependencies.readLink ?? readlinkSync3;
-    const realpath = dependencies.realpath ?? realpathSync8;
+    const realpath = dependencies.realpath ?? realpathSync9;
     const artifactParts = [];
     for (const entry of files) {
       const path = join21(appPath, entry);
@@ -28916,7 +28956,7 @@ var init_tool_profiles = __esm({
 
 // packages/rn-dev-agent-core/dist/session/authority-gate.js
 import { randomUUID as randomUUID5 } from "node:crypto";
-import { realpathSync as realpathSync9 } from "node:fs";
+import { realpathSync as realpathSync10 } from "node:fs";
 import { isAbsolute as isAbsolute6, relative as relative4, resolve as resolve7 } from "node:path";
 async function claimOptionalBundleAuthority(args) {
   return await args[optionalBundleAdmission]?.() ?? false;
@@ -29153,7 +29193,7 @@ function bindSourcePaths(status, args) {
   try {
     if (typeof status.source.appRoot !== "string")
       throw new Error("missing app root");
-    appRoot = realpathSync9(status.source.appRoot);
+    appRoot = realpathSync10(status.source.appRoot);
   } catch {
     throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", "active session app root is unavailable");
   }
@@ -29166,7 +29206,7 @@ function bindSourcePaths(status, args) {
     }
     let candidate;
     try {
-      candidate = realpathSync9(isAbsolute6(supplied) ? supplied : resolve7(appRoot, supplied));
+      candidate = realpathSync10(isAbsolute6(supplied) ? supplied : resolve7(appRoot, supplied));
     } catch {
       throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", `${field2} cannot be resolved within the active app root`);
     }
@@ -80238,7 +80278,7 @@ var init_startup_integrity = __esm({
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
 import { createHash as createHash18, randomUUID as randomUUID9 } from "node:crypto";
 import { execFileSync as execFileSync15 } from "node:child_process";
-import { chmodSync as chmodSync4, closeSync as closeSync10, existsSync as existsSync32, fsyncSync, lstatSync as lstatSync11, mkdirSync as mkdirSync18, openSync as openSync10, readFileSync as readFileSync30, realpathSync as realpathSync10, renameSync as renameSync7, unlinkSync as unlinkSync11, writeFileSync as writeFileSync15 } from "node:fs";
+import { chmodSync as chmodSync4, closeSync as closeSync10, existsSync as existsSync32, fsyncSync, lstatSync as lstatSync11, mkdirSync as mkdirSync18, openSync as openSync10, readFileSync as readFileSync30, realpathSync as realpathSync11, renameSync as renameSync7, unlinkSync as unlinkSync11, writeFileSync as writeFileSync15 } from "node:fs";
 import { basename as basename7, dirname as dirname20, extname, isAbsolute as isAbsolute8, join as join42, relative as relative5, resolve as resolve11, sep as sep6 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 function proofActionPayload(unparsedArgs) {
@@ -80280,14 +80320,14 @@ function captureProofWorkerStartup(argv = process.argv, attestation = readStartu
   let coreBundleSha256 = null;
   try {
     if (typeof argv[1] === "string" && isAbsolute8(argv[1])) {
-      executedEntrypointPath = realpathSync10(argv[1]);
+      executedEntrypointPath = realpathSync11(argv[1]);
     }
   } catch {
     executedEntrypointPath = null;
   }
   if (attestation) {
     try {
-      loadedCoreBundlePath = realpathSync10(fileURLToPath4(attestation.entrypointUrl));
+      loadedCoreBundlePath = realpathSync11(fileURLToPath4(attestation.entrypointUrl));
       coreBundleSha256 = attestation.coreBundleSha256;
     } catch {
       loadedCoreBundlePath = null;
@@ -80303,7 +80343,7 @@ function captureProofWorkerStartup(argv = process.argv, attestation = readStartu
 }
 function realpathOrSelf(path) {
   try {
-    return realpathSync10(path);
+    return realpathSync11(path);
   } catch {
     return path;
   }
@@ -80311,7 +80351,7 @@ function realpathOrSelf(path) {
 function resolveProofCandidateEntrypoint(candidateRoot, argv) {
   let root;
   try {
-    root = realpathSync10(candidateRoot);
+    root = realpathSync11(candidateRoot);
   } catch {
     return null;
   }
@@ -80320,7 +80360,7 @@ function resolveProofCandidateEntrypoint(candidateRoot, argv) {
     return null;
   let arg;
   try {
-    arg = realpathSync10(authorityArg);
+    arg = realpathSync11(authorityArg);
   } catch {
     return null;
   }
@@ -80368,7 +80408,7 @@ function proofCandidateEntrypointEnvironmentMatches(entrypoint, env) {
     if (!value || !isAbsolute8(value))
       return value ? null : "";
     try {
-      return realpathSync10(value);
+      return realpathSync11(value);
     } catch {
       return null;
     }
@@ -80390,7 +80430,7 @@ function proofCandidateEntrypointEnvironmentMatches(entrypoint, env) {
 }
 function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
   try {
-    const root = realpathSync10(candidateRoot);
+    const root = realpathSync11(candidateRoot);
     const statusArgs = [
       "-C",
       root,
@@ -80403,7 +80443,7 @@ function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
       return null;
     const verifiedBytes = [];
     for (const artifactPath of artifactPaths) {
-      const resolvedArtifactPath = realpathSync10(artifactPath);
+      const resolvedArtifactPath = realpathSync11(artifactPath);
       const artifactRelativePath = relative5(root, resolvedArtifactPath).split(sep6).join("/");
       if (!artifactRelativePath || artifactRelativePath === ".." || artifactRelativePath.startsWith("../")) {
         return null;
@@ -80423,7 +80463,7 @@ function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
   }
 }
 function readProofCandidateRuntime(candidateRoot, startup = proofWorkerStartup) {
-  const root = realpathSync10(resolve11(candidateRoot));
+  const root = realpathSync11(resolve11(candidateRoot));
   const sha = execFileSync15("git", ["-C", root, "rev-parse", "HEAD"], {
     encoding: "utf8"
   }).trim();
@@ -85157,6 +85197,66 @@ var init_e2e_csrf = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/observability/observe-project-root.js
+function createObserveRootResolver(deps) {
+  return () => {
+    const declared = deps.sessionAppRoot();
+    if (declared && deps.isProject(declared)) {
+      return { ok: true, root: declared, origin: "session" };
+    }
+    const envRoot = deps.explicitEnvRoot();
+    if (envRoot) {
+      if (!deps.isProject(envRoot)) {
+        return {
+          ok: false,
+          reason: `RN_PROJECT_ROOT is not a React Native project (${envRoot})`
+        };
+      }
+      return { ok: true, root: envRoot, origin: "env" };
+    }
+    const appId = deps.sessionAppId();
+    const discovered = deps.heuristicRoot(appId ?? void 0);
+    if (!discovered) {
+      return {
+        ok: false,
+        reason: declared ? `session app root is not a React Native project (${declared}) and heuristic discovery found none` : "no React Native project root: no bound session app root and heuristic discovery found none"
+      };
+    }
+    if (appId) {
+      const discoveredId = deps.projectBundleId(discovered);
+      if (discoveredId && discoveredId !== appId) {
+        return {
+          ok: false,
+          reason: `discovered project ${discovered} declares ${discoveredId}, not the bound app ${appId}`
+        };
+      }
+      if (discoveredId === appId) {
+        const matches = deps.matchingRoots(appId);
+        if (matches.length > 1) {
+          return {
+            ok: false,
+            reason: `multiple checkouts declare the bound app ${appId}: ${matches.join(", ")}; set RN_PROJECT_ROOT to choose one`
+          };
+        }
+      }
+    }
+    return { ok: true, root: discovered, origin: "heuristic" };
+  };
+}
+var ObserveRootUnavailableError;
+var init_observe_project_root = __esm({
+  "packages/rn-dev-agent-core/dist/observability/observe-project-root.js"() {
+    "use strict";
+    ObserveRootUnavailableError = class extends Error {
+      code = "PROJECT_ROOT_UNAVAILABLE";
+      constructor(reason) {
+        super(reason);
+        this.name = "ObserveRootUnavailableError";
+      }
+    };
+  }
+});
+
 // packages/rn-dev-agent-core/dist/observability/server.js
 import { createServer as createServer3 } from "node:http";
 import { readFileSync as readFileSync35 } from "node:fs";
@@ -85181,6 +85281,7 @@ var init_server3 = __esm({
   "packages/rn-dev-agent-core/dist/observability/server.js"() {
     "use strict";
     init_e2e_csrf();
+    init_observe_project_root();
     init_logger();
     HOST = "127.0.0.1";
     __dir = dirname23(fileURLToPath6(import.meta.url));
@@ -85459,6 +85560,14 @@ var init_server3 = __esm({
       internalError(res) {
         this.json(res, 500, { error: "internal server error" });
       }
+      // GH #637: an unresolvable project root is a truthful refusal, not a 500.
+      e2eError(res, error2) {
+        if (error2 instanceof ObserveRootUnavailableError) {
+          this.json(res, 503, { error: error2.message, code: error2.code });
+          return;
+        }
+        this.internalError(res);
+      }
       async e2eRun(req, res) {
         if (!this.e2e) {
           this.json(res, 501, { error: "e2e not configured" });
@@ -85488,8 +85597,8 @@ var init_server3 = __esm({
         try {
           const result = await this.e2e.triggerRun(parsed.pattern);
           this.json(res, 200, result);
-        } catch {
-          this.internalError(res);
+        } catch (error2) {
+          this.e2eError(res, error2);
         }
       }
       async e2eListRuns(res) {
@@ -85500,8 +85609,8 @@ var init_server3 = __esm({
         try {
           const runs = await this.e2e.listRuns();
           this.json(res, 200, runs);
-        } catch {
-          this.internalError(res);
+        } catch (error2) {
+          this.e2eError(res, error2);
         }
       }
       async e2eLoadRun(id, res) {
@@ -85516,8 +85625,8 @@ var init_server3 = __esm({
             return;
           }
           this.json(res, 200, run);
-        } catch {
-          this.internalError(res);
+        } catch (error2) {
+          this.e2eError(res, error2);
         }
       }
       async e2eListActions(res) {
@@ -85528,8 +85637,8 @@ var init_server3 = __esm({
         try {
           const actions = await this.e2e.listActions();
           this.json(res, 200, actions);
-        } catch {
-          this.internalError(res);
+        } catch (error2) {
+          this.e2eError(res, error2);
         }
       }
       async e2eRunAction(req, res) {
@@ -85573,8 +85682,8 @@ var init_server3 = __esm({
             return;
           }
           this.json(res, 200, result);
-        } catch {
-          this.internalError(res);
+        } catch (error2) {
+          this.e2eError(res, error2);
         }
       }
     };
@@ -88348,7 +88457,8 @@ async function main() {
   await server2.connect(transport);
   logger.info("MCP", "MCP server connected and ready");
   if (!diagnosticContractProbe) {
-    const root = findProjectRoot();
+    const rootResolution = observeRootResolver();
+    const root = rootResolution.ok ? rootResolution.root : null;
     if (root) {
       const recovered = recoverInterruptedRequests(root, (pid) => {
         try {
@@ -88364,7 +88474,10 @@ async function main() {
   }
   if (!diagnosticContractProbe) {
     void autostartObserve({
-      findRoot: findProjectRoot,
+      findRoot: () => {
+        const resolved = observeRootResolver();
+        return resolved.ok ? resolved.root : null;
+      },
       resolveEnabled: resolveObserveAutostart,
       recoveryOnlyReason: () => {
         const status = authorityRuntime.status();
@@ -88379,7 +88492,7 @@ async function main() {
     });
   }
 }
-var pkgPath, pkgVersion, lockfile, diagnosticContractProbe, noLock, client, getClient, configureClientLifecycle, setClient, publishClient, createClient, execFileP, mustOk, makeReplayDeps, server2, strictProofMonitor, experienceRecorder, authorityRuntime, foreignMetroOriginScanner, createRuntimeAuthorityProbe, localAuthorityProbe, authorityGate, blindProbeContext, mirrorCfg, mirrorManager2, liveEnabled, liveDeps, registeredToolNames, isSessionRuntimeAbsent, persistedAuthorityStatus, getSessionSignerCapability, spawningSupervisorPid, requestWorkerRecycle, sessionHandler, disconnectClientHandler, connectBoundSession, resolveNativeProofDevice, proofReadiness, proofCaptureHandler, e2ePreflight, e2eReload, e2eSuiteHandler, e2eCsrfToken, projectRootFor, triggerE2eRun, runActionHandler, observeRunActionHandler, observeTriggerRun, gatedObserveState, shutdown, stopParentWatch;
+var pkgPath, pkgVersion, lockfile, diagnosticContractProbe, noLock, client, getClient, configureClientLifecycle, setClient, publishClient, createClient, execFileP, mustOk, makeReplayDeps, server2, strictProofMonitor, experienceRecorder, authorityRuntime, foreignMetroOriginScanner, createRuntimeAuthorityProbe, localAuthorityProbe, authorityGate, blindProbeContext, mirrorCfg, mirrorManager2, liveEnabled, liveDeps, registeredToolNames, isSessionRuntimeAbsent, persistedAuthorityStatus, getSessionSignerCapability, spawningSupervisorPid, requestWorkerRecycle, sessionHandler, disconnectClientHandler, connectBoundSession, resolveNativeProofDevice, proofReadiness, proofCaptureHandler, e2ePreflight, e2eReload, e2eSuiteHandler, e2eCsrfToken, observeRootResolver, projectRootFor, triggerE2eRun, runActionHandler, observeRunActionHandler, observeTriggerRun, gatedObserveState, shutdown, stopParentWatch;
 var init_index = __esm({
   "packages/rn-dev-agent-core/dist/index.js"() {
     "use strict";
@@ -88482,6 +88595,7 @@ var init_index = __esm({
     init_app_installed_probe();
     init_storage();
     init_e2e_csrf();
+    init_observe_project_root();
     init_e2e_run();
     init_action_inventory();
     init_action_store();
@@ -89851,13 +89965,33 @@ var init_index = __esm({
       deviceId: external_exports.string().optional()
     }, e2eSuiteHandler);
     e2eCsrfToken = makeCsrfToken();
-    projectRootFor = () => findProjectRoot({ bundleId: getActiveSession()?.appId }) ?? process.cwd();
+    observeRootResolver = createObserveRootResolver({
+      sessionAppRoot: () => {
+        const status = authorityRuntime.status();
+        if (!status.available)
+          return null;
+        const appRoot = status.source["appRoot"];
+        return typeof appRoot === "string" && appRoot.length > 0 ? appRoot : null;
+      },
+      sessionAppId: () => getActiveSession()?.appId ?? null,
+      explicitEnvRoot: () => process.env.RN_PROJECT_ROOT ?? null,
+      heuristicRoot: (bundleId) => findProjectRoot({ bundleId }),
+      matchingRoots: collectMatchingRnProjects,
+      isProject: isRnProject,
+      projectBundleId: readProjectBundleId
+    });
+    projectRootFor = () => {
+      const resolved = observeRootResolver();
+      if (!resolved.ok)
+        throw new ObserveRootUnavailableError(resolved.reason);
+      return resolved.root;
+    };
     triggerE2eRun = async (args) => {
       const L = arbiter.tryAcquire("flow", "cdp_run_e2e_suite");
       if (!L.ok)
         return { ok: false, error: "a flow is already running", code: L.code };
       try {
-        args.projectRoot ??= projectRootFor();
+        args.projectRoot = projectRootFor();
         const r = await e2eSuiteHandler(args);
         const env = JSON.parse(r.content[0].text);
         recorder.push({
@@ -89890,7 +90024,12 @@ var init_index = __esm({
       loadRun: async (id) => loadRunRecord(projectRootFor(), id),
       listActions: async () => listActions(projectRootFor()),
       runAction: async (actionId, params) => {
-        const root = projectRootFor();
+        let root;
+        try {
+          root = projectRootFor();
+        } catch (e) {
+          return { ok: false, error: e instanceof Error ? e.message : String(e) };
+        }
         const action = loadAction(root, actionId);
         if (!action)
           return { ok: false, error: `action not found: ${actionId}` };

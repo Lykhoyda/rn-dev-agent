@@ -6,6 +6,7 @@ import {
   readdirSync,
   lstatSync,
   mkdirSync,
+  realpathSync,
 } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { stringify as yamlStringify, parse as yamlParse } from 'yaml';
@@ -28,7 +29,7 @@ const RN_AGENT_DIR = '.rn-agent';
 const GRAPH_FILENAME = 'nav-graph.yaml';
 const LEGACY_GRAPH_FILENAME = '.rn-nav-graph.yaml';
 
-function isRnProject(dir: string): boolean {
+export function isRnProject(dir: string): boolean {
   const pkgPath = join(dir, 'package.json');
   if (!existsSync(pkgPath)) return false;
   try {
@@ -231,6 +232,44 @@ export function findProjectRoot(opts: FindProjectRootOpts = {}): string | null {
     if (siblingScan) return siblingScan;
   }
   return null;
+}
+
+// Mirrors findProjectRoot's cascade so Observe can refuse ambiguous matches.
+export function collectMatchingRnProjects(bundleId: string): string[] {
+  const seen = new Set<string>();
+  const matches: string[] = [];
+  const consider = (dir: string): void => {
+    if (readProjectBundleId(dir) !== bundleId) return;
+    let canonical = dir;
+    try {
+      canonical = realpathSync(dir);
+    } catch {
+      /* keep the lexical path when realpath fails */
+    }
+    if (seen.has(canonical)) return;
+    seen.add(canonical);
+    matches.push(canonical);
+  };
+  const starts = [process.env.CLAUDE_USER_CWD, process.cwd()].filter(Boolean) as string[];
+  for (const start of starts) {
+    let dir = start;
+    for (let i = 0; i < 10; i++) {
+      if (isRnProject(dir)) {
+        consider(dir);
+        break;
+      }
+      const parent = join(dir, '..');
+      if (parent === dir) break;
+      dir = parent;
+    }
+  }
+  const cwd = process.cwd();
+  const all: string[] = [];
+  collectRnProjects(cwd, 0, all);
+  const parentOfCwd = join(cwd, '..');
+  if (parentOfCwd !== cwd) collectRnProjects(parentOfCwd, 1, all);
+  for (const candidate of all) consider(candidate);
+  return matches;
 }
 
 function getProjectSlug(projectRoot: string): string {

@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import type { Recorder } from './recorder.js';
 import type { MirrorManager } from './mirror/manager.js';
 import { isPostAllowed } from './e2e-csrf.js';
+import { ObserveRootUnavailableError } from './observe-project-root.js';
 import type { ActionRunResult } from './wire-types.js';
 import { logger } from '../logger.js';
 
@@ -340,6 +341,15 @@ export class ObservabilityServer {
     this.json(res, 500, { error: 'internal server error' });
   }
 
+  // GH #637: an unresolvable project root is a truthful refusal, not a 500.
+  private e2eError(res: ServerResponse, error: unknown): void {
+    if (error instanceof ObserveRootUnavailableError) {
+      this.json(res, 503, { error: error.message, code: error.code });
+      return;
+    }
+    this.internalError(res);
+  }
+
   private async e2eRun(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (!this.e2e) {
       this.json(res, 501, { error: 'e2e not configured' });
@@ -372,8 +382,8 @@ export class ObservabilityServer {
     try {
       const result = await this.e2e.triggerRun(parsed.pattern);
       this.json(res, 200, result);
-    } catch {
-      this.internalError(res);
+    } catch (error) {
+      this.e2eError(res, error);
     }
   }
 
@@ -385,8 +395,8 @@ export class ObservabilityServer {
     try {
       const runs = await this.e2e.listRuns();
       this.json(res, 200, runs);
-    } catch {
-      this.internalError(res);
+    } catch (error) {
+      this.e2eError(res, error);
     }
   }
 
@@ -402,8 +412,8 @@ export class ObservabilityServer {
         return;
       }
       this.json(res, 200, run);
-    } catch {
-      this.internalError(res);
+    } catch (error) {
+      this.e2eError(res, error);
     }
   }
 
@@ -415,8 +425,8 @@ export class ObservabilityServer {
     try {
       const actions = await this.e2e.listActions();
       this.json(res, 200, actions);
-    } catch {
-      this.internalError(res);
+    } catch (error) {
+      this.e2eError(res, error);
     }
   }
 
@@ -464,8 +474,8 @@ export class ObservabilityServer {
         return;
       }
       this.json(res, 200, result);
-    } catch {
-      this.internalError(res);
+    } catch (error) {
+      this.e2eError(res, error);
     }
   }
 }

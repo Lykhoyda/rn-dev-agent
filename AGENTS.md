@@ -58,6 +58,11 @@ GitHub Issues, PRs, or the sibling workspace only when explicitly requested.
   `createConnectHandler` in `src/tools/connection.ts` is the unregistered
   ambient compat connector, tree-shaken out of host bundles but still pinned
   by contract tests.
+- Observe actions/e2e panels resolve their project root through
+  `createObserveRootResolver` (`src/observability/observe-project-root.ts`):
+  bound-session `source.appRoot` > `RN_PROJECT_ROOT` > heuristic discovery,
+  refusing truthfully (HTTP 503 `PROJECT_ROOT_UNAVAILABLE`) instead of
+  falling back to another checkout.
 - Claude-only host behavior: edit `packages/claude-plugin/`.
 - Codex-only host behavior: edit `packages/codex-plugin/`.
 - Host-neutral workflow knowledge: edit `packages/shared-agent-knowledge/`,
