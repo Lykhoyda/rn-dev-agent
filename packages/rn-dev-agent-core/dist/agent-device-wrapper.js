@@ -1013,8 +1013,7 @@ export async function ensureRunnerForCommand(deviceId, bundleId, deps = {}) {
     let firstStartRetried = false;
     const launchesAfter = launchCount();
     if (after.liveness === 'dead' && !after.staleReason && launchesAfter > launchesBefore) {
-        const firstSpawnGone = await (deps.awaitSpawnExit ??
-            (() => awaitSpawnedRunnerExit(undefined, launchesAfter)))();
+        const firstSpawnGone = await (deps.awaitSpawnExit ?? (() => awaitSpawnedRunnerExit(undefined, launchesAfter)))();
         if (firstSpawnGone) {
             firstStartRetried = true;
             await ensure(spawnDeviceId, bundleId, spawnOpts);
