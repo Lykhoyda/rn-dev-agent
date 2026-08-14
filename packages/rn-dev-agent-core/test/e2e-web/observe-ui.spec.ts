@@ -3,6 +3,7 @@
 // committed single-file SPA bundle exactly as production serves it.
 import { test, expect, type Page } from '@playwright/test';
 import { startFixture, type Fixture } from './fixture-server';
+import { failResult, okResult } from '../../dist/utils.js';
 
 let fx: Fixture | undefined;
 
@@ -123,6 +124,34 @@ test('Run E2E Suite round-trips through the CSRF-guarded endpoint', async ({ pag
     return r.status;
   });
   expect(noTokenStatus).toBe(403);
+});
+
+test('an authority refusal on the run endpoint is shown instead of a silent panel', async ({
+  page,
+}) => {
+  await fx?.stop();
+  fx = await startFixture({
+    triggerRun: async () =>
+      failResult('projectRoot is outside the active session app root', 'SOURCE_WORKTREE_MISMATCH'),
+  });
+  await page.goto(fx.url);
+  await openTab(page, 'e2e');
+  await page.getByTestId('e2e-run').click();
+  const banner = page.getByTestId('e2e-run-unavailable');
+  await expect(banner).toContainText('projectRoot is outside the active session app root');
+  await expect(banner).toContainText('SOURCE_WORKTREE_MISMATCH');
+  await expect(page.getByTestId('e2e-verdict')).toHaveCount(0);
+});
+
+test('a busy-device run envelope is shown instead of a silent panel', async ({ page }) => {
+  await fx?.stop();
+  fx = await startFixture({
+    triggerRun: async () => okResult({ ok: false, error: 'a flow is already running' }),
+  });
+  await page.goto(fx.url);
+  await openTab(page, 'e2e');
+  await page.getByTestId('e2e-run').click();
+  await expect(page.getByTestId('e2e-run-unavailable')).toContainText('a flow is already running');
 });
 
 test('actions panel enforces params then runs the action', async ({ page }) => {
