@@ -37,7 +37,7 @@ fi
 # Deleting or rewording a pending changeset stays allowed (Version Packages bot).
 if [ -n "${CHANGED_FILES+x}" ]; then
   added="${ADDED_FILES-}"
-elif ! added="$(git -C "$ROOT" diff --diff-filter=A --name-only "${BASE_REF}...HEAD" -- '.changeset')"; then
+elif ! added="$(git -C "$ROOT" diff --no-renames --diff-filter=A --name-only "${BASE_REF}...HEAD" -- '.changeset')"; then
   echo "ERROR: require-changeset: git diff against ${BASE_REF} failed — refusing to pass without an added-file list." >&2
   exit 1
 fi

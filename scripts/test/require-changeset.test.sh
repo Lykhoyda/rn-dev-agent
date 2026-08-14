@@ -142,9 +142,52 @@ CHANGED_FILES=$'.changeset/one.md\n.changeset/two.md' ADDED_FILES=$'.changeset/o
   REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
 check "multi-changeset-only addition fails" 1 $?
 
+# 5e. a regenerated changeset arrives as a rename pair (old deleted, new added):
+# with git's default rename detection the addition would be invisible and the
+# phantom claim would merge. Seam form of the git-mode case below.
+CHANGED_FILES=$'.changeset/old-claims.md\n.changeset/new-claims.md' ADDED_FILES=$'.changeset/new-claims.md' \
+  REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
+check "renamed changeset-only addition fails" 1 $?
+
 # 6. git-mode diff failure ($tmp is not a git repo) -> MUST fail closed instead
 # of passing on an empty changed-file list.
 env -u CHANGED_FILES -u ADDED_FILES REPO_ROOT="$tmp" bash "$GUARD" >/dev/null 2>&1
 check "git diff failure fails closed" 1 $?
+
+# 7. git mode, real repo: a changeset-only PR that RENAMES a pending changeset
+# still declares a fresh release claim with no shipped code. git pairs it as
+# `R old -> new` by default, so the guard must disable rename detection to see
+# the addition.
+gitrepo="$(mktemp -d)"
+trap 'rm -rf "$tmp" "$gitrepo"' EXIT
+(
+  set -e
+  cd "$gitrepo"
+  git init -q -b main .
+  git config user.email test@example.com
+  git config user.name test
+  mkdir .changeset
+  echo "# changesets readme" > .changeset/README.md
+  printf -- '---\n"rn-dev-agent-plugin": patch\n---\nclaim\n' > .changeset/old-name.md
+  git add -A
+  git commit -qm base
+  git checkout -qb feature
+  git mv .changeset/old-name.md .changeset/new-name.md
+  git commit -qam regenerate
+) >/dev/null 2>&1
+env -u CHANGED_FILES -u ADDED_FILES REPO_ROOT="$gitrepo" BASE_REF=main bash "$GUARD" >/dev/null 2>&1
+check "git-mode renamed changeset-only PR fails" 1 $?
+
+# 7b. git mode: deleting a pending changeset (Version Packages bot) still passes.
+(
+  set -e
+  cd "$gitrepo"
+  git checkout -q main
+  git checkout -qb consume
+  git rm -q .changeset/new-name.md 2>/dev/null || git rm -q .changeset/old-name.md
+  git commit -qm consume
+) >/dev/null 2>&1
+env -u CHANGED_FILES -u ADDED_FILES REPO_ROOT="$gitrepo" BASE_REF=main bash "$GUARD" >/dev/null 2>&1
+check "git-mode changeset deletion passes" 0 $?
 
 if [ "$fail" = 0 ]; then echo "ALL PASS"; else echo "FAILURES"; exit 1; fi
