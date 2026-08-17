@@ -40,9 +40,10 @@ let boundAuthority = null;
  * stopObserveServer awaits it, so a stop racing a pending start can never
  * orphan a listening server (PR #403 review).
  */
-export async function startObserveServer() {
+export async function startObserveServer(options = {}) {
     if (starting)
         return starting;
+    const autostarted = options.autostarted === true;
     starting = (async () => {
         const resolved = authorityDeps?.resolve();
         if (!server) {
@@ -55,7 +56,7 @@ export async function startObserveServer() {
             const res = await server.start(port);
             if (resolved) {
                 bindAttempted = true;
-                authorityDeps?.bind({ port: res.port, authority: resolved.authority });
+                authorityDeps?.bind({ port: res.port, authority: resolved.authority, autostarted });
                 boundAuthority = resolved.authority;
             }
             stateWriteAttempted = true;

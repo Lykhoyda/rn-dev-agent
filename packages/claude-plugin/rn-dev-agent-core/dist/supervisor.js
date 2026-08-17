@@ -37188,6 +37188,197 @@ var init_process_cleanup = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/session/startup-cleanup.js
+import { createHash as createHash12 } from "node:crypto";
+import { join as join29 } from "node:path";
+function startupCleanupFailureMessage() {
+  return "rn-dev-agent startup cleanup failed: STARTUP_CLEANUP_FAILED\n";
+}
+async function runStartupOwnerCleanup(input, dependencies = {}) {
+  const released = [];
+  for (let round = 0; round < 8; round += 1) {
+    const candidate = input.registry.findStartupCleanupCandidate(input);
+    if (!candidate)
+      return { status: "clean", released };
+    try {
+      const plan = input.registry.beginStartupOwnerCleanup(candidate);
+      await completeObligations(input.registry, candidate, dependencies);
+      restoreDeadOwnerIntegration(input, candidate, plan, dependencies);
+      input.registry.finishStartupOwnerCleanup(candidate);
+      released.push(candidate.sessionId);
+    } catch (error2) {
+      const refusal = refusalOf(error2);
+      retainRefusal(input.registry, candidate, refusal);
+      return { status: "refused", released, refusal };
+    }
+  }
+  return {
+    status: "refused",
+    released,
+    refusal: publicRefusal({
+      code: "RESOURCE_CLAIM_CONFLICT",
+      message: "startup cleanup did not converge for this worktree"
+    })
+  };
+}
+async function runStartupCleanupForSource(input) {
+  const layout = createAuthorityStateLayout(input.stateDir);
+  const registry2 = openSessionRegistry(layout.registry, {
+    ownerStatus: input.ownerStatus,
+    leaseMs: 3e4
+  });
+  try {
+    return await runStartupOwnerCleanup({
+      registry: registry2,
+      sourceKey: input.source.sourceKey,
+      worktreeKey: input.source.worktreeKey,
+      appRootKey: input.source.appRootKey,
+      appRoot: input.source.appRoot
+    }, {
+      readSessionSecret: (sessionId) => readJsonStateFile(join29(layout.sessions, sessionId, "secret.json"))
+    });
+  } finally {
+    registry2.close();
+  }
+}
+async function completeObligations(registry2, prior, dependencies) {
+  for (const resource of EXECUTION_ORDER) {
+    const entry = registry2.verifyStartupOwnerObligation(prior, resource);
+    if (!entry || typeof entry.completedAt === "number")
+      continue;
+    if (resource === "androidMetroReverse") {
+      (dependencies.removeAndroidMetroReverse ?? removeAndroidMetroReverse)(entry);
+    } else if (resource === "recorder") {
+      await (dependencies.stopBoundRecorder ?? stopBoundRecorder)(entry);
+    } else if (resource === "runner") {
+      await (dependencies.stopBoundRunner ?? stopBoundRunner)(entry);
+    } else if (resource === "observe") {
+      await (dependencies.stopBoundObserve ?? stopBoundObserve)(entry);
+    } else {
+      const secret = dependencies.readSessionSecret?.(prior.sessionId) ?? null;
+      const signerCapability = typeof secret?.signerCapability === "string" ? secret.signerCapability : "";
+      const stop = dependencies.stopManagedMetro ?? ((binding, stopInput) => stopManagedMetro(binding, stopInput));
+      const stopped = await stop(entry, { sessionId: prior.sessionId, signerCapability });
+      if (!stopped) {
+        throw new SessionAuthorityError("METRO_CLEANUP_PENDING", "managed Metro could not be stopped with exact process authority");
+      }
+    }
+    registry2.completeStartupOwnerObligation(prior, resource);
+  }
+}
+function restoreDeadOwnerIntegration(input, prior, plan, dependencies) {
+  if (!plan.integration || typeof plan.integration.completedAt === "number")
+    return;
+  const binding = input.registry.getSessionStatus(prior.sessionId)?.bindings.packageIntegration;
+  if (!binding || typeof binding !== "object")
+    return;
+  const manifestSha256 = typeof binding.manifestSha256 === "string" ? binding.manifestSha256 : "";
+  const manifestSource = verifiedDeadOwnerManifestSource(input.appRoot, binding, manifestSha256);
+  if (!manifestSource) {
+    throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "integration restoration requires a SHA-256-verified manifest and none is available; the dead owner binding is preserved", void 0, {
+      nextAction: "Restore the exact integration manifest at .rn-agent/integration/rn-session-integration.json from your own version control history or backups so it matches the manifest SHA-256 recorded on the binding, then restart the MCP transport."
+    });
+  }
+  input.registry.verifyStartupOwnerIntegrationRestore(prior, {
+    sourceKey: input.sourceKey,
+    worktreeKey: input.worktreeKey,
+    appRootKey: input.appRootKey,
+    manifestSha256
+  });
+  (dependencies.restoreIntegrationFiles ?? restorePackageIntegrationFiles)({
+    appRoot: input.appRoot,
+    manifestSource
+  });
+  input.registry.completeStartupOwnerIntegrationRestore(prior, { manifestSha256 });
+}
+function verifiedDeadOwnerManifestSource(appRoot, binding, manifestSha256) {
+  if (!/^[0-9a-f]{64}$/.test(manifestSha256))
+    return void 0;
+  const verified = (candidate) => typeof candidate === "string" && createHash12("sha256").update(candidate).digest("hex") === manifestSha256 ? candidate : void 0;
+  let liveManifest;
+  try {
+    liveManifest = readPackageIntegrationInputs(appRoot).manifest ?? void 0;
+  } catch {
+    liveManifest = void 0;
+  }
+  const phase = (value) => value && typeof value === "object" ? value : null;
+  const restoration = phase(binding.restoration);
+  const installation = phase(binding.installation);
+  return verified(liveManifest) ?? verified(restoration?.phase === "started" ? restoration.manifestSource : void 0) ?? verified(installation?.phase === "started" ? installation.manifestSource : void 0) ?? verified(binding.manifestSource);
+}
+function retainRefusal(registry2, prior, refusal) {
+  try {
+    registry2.recordStartupCleanupRefusal(prior, {
+      code: refusal.code,
+      reason: refusal.message,
+      ...refusal.nextAction ? { nextAction: refusal.nextAction } : {}
+    });
+  } catch {
+  }
+}
+function publicRefusal(refusal) {
+  const sentence = refusal.message.replace(/^[A-Z][A-Z0-9_]+: /, "");
+  const authored = PUBLIC_REFUSAL_REASONS.has(sentence);
+  return {
+    code: refusal.code,
+    message: authored ? sentence : `startup cleanup refused with ${refusal.code} and preserved the prior owner binding`,
+    nextAction: authored ? refusal.nextAction ?? GENERIC_REFUSAL_REMEDY : GENERIC_REFUSAL_REMEDY
+  };
+}
+function refusalOf(error2) {
+  if (error2 instanceof SessionAuthorityError) {
+    return publicRefusal({
+      code: error2.code,
+      message: error2.message,
+      ...error2.details?.nextAction ? { nextAction: error2.details.nextAction } : {}
+    });
+  }
+  const code = error2 && typeof error2 === "object" && typeof error2.code === "string" ? error2.code : "STARTUP_CLEANUP_FAILED";
+  return publicRefusal({
+    code,
+    message: error2 instanceof Error ? error2.message : String(error2)
+  });
+}
+var EXECUTION_ORDER, PUBLIC_REFUSAL_REASONS, GENERIC_REFUSAL_REMEDY;
+var init_startup_cleanup = __esm({
+  "packages/rn-dev-agent-core/dist/session/startup-cleanup.js"() {
+    "use strict";
+    init_secure_state_file();
+    init_managed_metro();
+    init_android_metro_reverse();
+    init_package_integration();
+    init_process_cleanup();
+    init_registry();
+    init_state_root();
+    EXECUTION_ORDER = [
+      "androidMetroReverse",
+      "recorder",
+      "runner",
+      "observe",
+      "metro"
+    ];
+    PUBLIC_REFUSAL_REASONS = /* @__PURE__ */ new Set([
+      "integration restoration requires a SHA-256-verified manifest and none is available; the dead owner binding is preserved",
+      "integration restoration requires the recorded manifest authority",
+      "integration restoration requires the active startup journal and recorded manifest authority",
+      "managed Metro could not be stopped with exact process authority",
+      "managed Metro cleanup has not been durably completed",
+      "startup cleanup did not converge for this worktree",
+      "startup cleanup no longer matches the exact source and app root",
+      "no startup cleanup is in progress",
+      "the same-root owner is live; a live owner is never released",
+      "the same-root owner identity could not be proven, so it is treated as live",
+      "expired lease owner identity could not be proven",
+      "the startup cleanup owner no longer matches the proven claim epoch",
+      ...["androidMetroReverse", "recorder", "runner", "observe", "metro"].flatMap((resource) => [
+        `${resource} cleanup has not been durably completed`,
+        `${resource} cleanup was not durably requested`
+      ])
+    ]);
+    GENERIC_REFUSAL_REMEDY = "Startup cleanup refused and preserved the prior owner binding. Resolve the refusal named by this code, then restart the MCP transport; another restart alone does not release the owner.";
+  }
+});
+
 // packages/rn-dev-agent-core/dist/env-setup.js
 import { existsSync as existsSync23, readFileSync as readFileSync24 } from "node:fs";
 import { join as join31 } from "node:path";
@@ -70696,6 +70887,9 @@ function defaultDeclareSuccessorSource(declaration) {
   }
   writeSuccessorSourceDeclaration(runtimeRoot, declaration);
 }
+async function defaultReleaseDeadSourceOwner(source) {
+  return runStartupCleanupForSource({ source, ownerStatus: inspectSessionOwner });
+}
 function defaultWithdrawSuccessorSource() {
   const runtimeRoot = process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT;
   if (!runtimeRoot)
@@ -71113,6 +71307,14 @@ function createSessionHandler(runtime, dependencies = {}) {
             nextAction: 'Run rn_session action "restore_integration", then retry bind_source.'
           });
         }
+        const priorOwnerCleanup = await (dependencies.releaseDeadSourceOwner ?? defaultReleaseDeadSourceOwner)(declared);
+        if (priorOwnerCleanup.status === "refused") {
+          const refusal = priorOwnerCleanup.refusal;
+          throw new SessionAuthorityError(refusal?.code ?? "SESSION_AUTHORITY_REQUIRED", `the declared project root ${declared.appRoot} is still owned by another session: ${refusal?.message ?? "its prior owner could not be released"}`, void 0, {
+            axis: "S",
+            ...refusal?.nextAction ? { nextAction: refusal.nextAction } : {}
+          });
+        }
         (dependencies.declareSuccessorSource ?? defaultDeclareSuccessorSource)({
           version: 1,
           projectRoot: declared.appRoot,
@@ -71152,14 +71354,22 @@ function createSessionHandler(runtime, dependencies = {}) {
         if (status.bindings.runner || status.bindings.proof) {
           throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "device rebinding requires runner or proof authority to be released first");
         }
+        let observeYieldedPort = null;
         const yieldObserveDeviceAxis = async () => {
           const current = registry2.getSessionStatus(session2.sessionId);
           if (!current) {
             throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "session disappeared before Observe yielded the device axis");
           }
           status = current;
-          if (!current.bindings.observe)
+          const observe2 = current.bindings.observe;
+          if (!observe2)
             return;
+          if (observe2.autostarted !== true) {
+            throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "device rebinding requires the explicitly started Observe authority to be released first", void 0, {
+              axis: "D",
+              nextAction: `Run observe action "stop" for this session, then retry bind_device. Only the session-autostarted Observe yields the device axis automatically.`
+            });
+          }
           await stopVerifiedSessionObserve(current, session2, dependencies);
           registry2.updateBindings(session2, {
             expectedAuthorityVersion: current.authorityVersion,
@@ -71170,6 +71380,12 @@ function createSessionHandler(runtime, dependencies = {}) {
             throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "session disappeared after Observe yielded the device axis");
           }
           status = refreshed;
+          observeYieldedPort = Number.isSafeInteger(Number(observe2.port)) ? Number(observe2.port) : null;
+        };
+        const observeYieldReport = () => observeYieldedPort === null ? {} : {
+          observeYielded: true,
+          observePort: observeYieldedPort,
+          observeNextAction: 'Observe yielded the device axis and was stopped; run observe action "start" to reopen the web UI.'
         };
         const requireWorkerInstance = () => {
           const workerInstance = status.worker.instanceId;
@@ -71229,7 +71445,8 @@ function createSessionHandler(runtime, dependencies = {}) {
             dependencies.onBundleInvalidated?.();
           return okResult({
             session: projectPublicAuthorityStatus(runtime.status()),
-            buildReceiptRequired: true
+            buildReceiptRequired: true,
+            ...observeYieldReport()
           });
         }
         if (!signer) {
@@ -71266,7 +71483,10 @@ function createSessionHandler(runtime, dependencies = {}) {
         }), yieldObserveDeviceAxis);
         if (status.bindings.bundle)
           dependencies.onBundleInvalidated?.();
-        return okResult({ session: projectPublicAuthorityStatus(runtime.status()) });
+        return okResult({
+          session: projectPublicAuthorityStatus(runtime.status()),
+          ...observeYieldReport()
+        });
       }
       if (input.action === "bind_metro") {
         if (input.mode === "managed") {
@@ -71509,7 +71729,9 @@ function createSessionHandler(runtime, dependencies = {}) {
         if (!status || !appRoot) {
           throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", "session app root is unavailable for integration");
         }
-        assertDeclaredProjectRootMatches(status, input.projectRoot, sessionSourceResolver(status, dependencies));
+        if (input.action !== "restore_integration") {
+          assertDeclaredProjectRootMatches(status, input.projectRoot, sessionSourceResolver(status, dependencies));
+        }
         const packagePath = join38(appRoot, "package.json");
         const integrationInputs = readPackageIntegrationInputs(appRoot);
         const manifestPath = join38(appRoot, ".rn-agent", "integration", "rn-session-integration.json");
@@ -71937,6 +72159,7 @@ var init_session = __esm({
     init_source_identity();
     init_successor_source();
     init_process_owner();
+    init_startup_cleanup();
     init_install_identity_inspection();
     init_public_status();
     init_process_birth();
@@ -86482,9 +86705,10 @@ function setObserveMirror(m) {
 function setObserveAuthorityDeps(deps) {
   authorityDeps = deps;
 }
-async function startObserveServer() {
+async function startObserveServer(options = {}) {
   if (starting)
     return starting;
+  const autostarted = options.autostarted === true;
   starting = (async () => {
     const resolved = authorityDeps?.resolve();
     if (!server) {
@@ -86497,7 +86721,7 @@ async function startObserveServer() {
       const res = await server.start(port);
       if (resolved) {
         bindAttempted = true;
-        authorityDeps?.bind({ port: res.port, authority: resolved.authority });
+        authorityDeps?.bind({ port: res.port, authority: resolved.authority, autostarted });
         boundAuthority = resolved.authority;
       }
       stateWriteAttempted = true;
@@ -89376,7 +89600,7 @@ async function main() {
           return null;
         return status.state === "blocked" || status.state === "handoff_cleanup" ? `session is a ${status.state} recovery contender` : null;
       },
-      start: startObserveServer,
+      start: () => startObserveServer({ autostarted: true }),
       warn: (m) => logger.warn("OBSERVE", m),
       info: (m) => logger.info("OBSERVE", m)
     }).catch(() => {
@@ -89859,7 +90083,7 @@ var init_index = __esm({
           }
         };
       },
-      bind: ({ port, authority }) => {
+      bind: ({ port, authority, autostarted }) => {
         const { registry: registry2, session: session2 } = authorityRuntime.requireAvailable();
         const controller = registry2.getControllerBinding(session2);
         registry2.updateBindings(session2, {
@@ -89871,7 +90095,8 @@ var init_index = __esm({
               instanceId: authority.instanceId,
               cleanupCapability: authority.capability,
               pid: controller.worker.pid,
-              processBirth: controller.worker.token
+              processBirth: controller.worker.token,
+              autostarted
             }
           }
         });
@@ -91118,191 +91343,7 @@ init_process_owner();
 init_process_birth();
 init_source_identity();
 init_successor_source();
-
-// packages/rn-dev-agent-core/dist/session/startup-cleanup.js
-init_secure_state_file();
-init_managed_metro();
-init_android_metro_reverse();
-init_package_integration();
-init_process_cleanup();
-init_registry();
-init_state_root();
-import { createHash as createHash12 } from "node:crypto";
-import { join as join29 } from "node:path";
-function startupCleanupFailureMessage() {
-  return "rn-dev-agent startup cleanup failed: STARTUP_CLEANUP_FAILED\n";
-}
-var EXECUTION_ORDER = [
-  "androidMetroReverse",
-  "recorder",
-  "runner",
-  "observe",
-  "metro"
-];
-async function runStartupOwnerCleanup(input, dependencies = {}) {
-  const released = [];
-  for (let round = 0; round < 8; round += 1) {
-    const candidate = input.registry.findStartupCleanupCandidate(input);
-    if (!candidate)
-      return { status: "clean", released };
-    try {
-      const plan = input.registry.beginStartupOwnerCleanup(candidate);
-      await completeObligations(input.registry, candidate, dependencies);
-      restoreDeadOwnerIntegration(input, candidate, plan, dependencies);
-      input.registry.finishStartupOwnerCleanup(candidate);
-      released.push(candidate.sessionId);
-    } catch (error2) {
-      const refusal = refusalOf(error2);
-      retainRefusal(input.registry, candidate, refusal);
-      return { status: "refused", released, refusal };
-    }
-  }
-  return {
-    status: "refused",
-    released,
-    refusal: publicRefusal({
-      code: "RESOURCE_CLAIM_CONFLICT",
-      message: "startup cleanup did not converge for this worktree"
-    })
-  };
-}
-async function runStartupCleanupForSource(input) {
-  const layout = createAuthorityStateLayout(input.stateDir);
-  const registry2 = openSessionRegistry(layout.registry, {
-    ownerStatus: input.ownerStatus,
-    leaseMs: 3e4
-  });
-  try {
-    return await runStartupOwnerCleanup({
-      registry: registry2,
-      sourceKey: input.source.sourceKey,
-      worktreeKey: input.source.worktreeKey,
-      appRootKey: input.source.appRootKey,
-      appRoot: input.source.appRoot
-    }, {
-      readSessionSecret: (sessionId) => readJsonStateFile(join29(layout.sessions, sessionId, "secret.json"))
-    });
-  } finally {
-    registry2.close();
-  }
-}
-async function completeObligations(registry2, prior, dependencies) {
-  for (const resource of EXECUTION_ORDER) {
-    const entry = registry2.verifyStartupOwnerObligation(prior, resource);
-    if (!entry || typeof entry.completedAt === "number")
-      continue;
-    if (resource === "androidMetroReverse") {
-      (dependencies.removeAndroidMetroReverse ?? removeAndroidMetroReverse)(entry);
-    } else if (resource === "recorder") {
-      await (dependencies.stopBoundRecorder ?? stopBoundRecorder)(entry);
-    } else if (resource === "runner") {
-      await (dependencies.stopBoundRunner ?? stopBoundRunner)(entry);
-    } else if (resource === "observe") {
-      await (dependencies.stopBoundObserve ?? stopBoundObserve)(entry);
-    } else {
-      const secret = dependencies.readSessionSecret?.(prior.sessionId) ?? null;
-      const signerCapability = typeof secret?.signerCapability === "string" ? secret.signerCapability : "";
-      const stop = dependencies.stopManagedMetro ?? ((binding, stopInput) => stopManagedMetro(binding, stopInput));
-      const stopped = await stop(entry, { sessionId: prior.sessionId, signerCapability });
-      if (!stopped) {
-        throw new SessionAuthorityError("METRO_CLEANUP_PENDING", "managed Metro could not be stopped with exact process authority");
-      }
-    }
-    registry2.completeStartupOwnerObligation(prior, resource);
-  }
-}
-function restoreDeadOwnerIntegration(input, prior, plan, dependencies) {
-  if (!plan.integration || typeof plan.integration.completedAt === "number")
-    return;
-  const binding = input.registry.getSessionStatus(prior.sessionId)?.bindings.packageIntegration;
-  if (!binding || typeof binding !== "object")
-    return;
-  const manifestSha256 = typeof binding.manifestSha256 === "string" ? binding.manifestSha256 : "";
-  const manifestSource = verifiedDeadOwnerManifestSource(input.appRoot, binding, manifestSha256);
-  if (!manifestSource) {
-    throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "integration restoration requires a SHA-256-verified manifest and none is available; the dead owner binding is preserved", void 0, {
-      nextAction: "Restore the exact integration manifest at .rn-agent/integration/rn-session-integration.json from your own version control history or backups so it matches the manifest SHA-256 recorded on the binding, then restart the MCP transport."
-    });
-  }
-  input.registry.verifyStartupOwnerIntegrationRestore(prior, {
-    sourceKey: input.sourceKey,
-    worktreeKey: input.worktreeKey,
-    appRootKey: input.appRootKey,
-    manifestSha256
-  });
-  (dependencies.restoreIntegrationFiles ?? restorePackageIntegrationFiles)({
-    appRoot: input.appRoot,
-    manifestSource
-  });
-  input.registry.completeStartupOwnerIntegrationRestore(prior, { manifestSha256 });
-}
-function verifiedDeadOwnerManifestSource(appRoot, binding, manifestSha256) {
-  if (!/^[0-9a-f]{64}$/.test(manifestSha256))
-    return void 0;
-  const verified = (candidate) => typeof candidate === "string" && createHash12("sha256").update(candidate).digest("hex") === manifestSha256 ? candidate : void 0;
-  let liveManifest;
-  try {
-    liveManifest = readPackageIntegrationInputs(appRoot).manifest ?? void 0;
-  } catch {
-    liveManifest = void 0;
-  }
-  const phase = (value) => value && typeof value === "object" ? value : null;
-  const restoration = phase(binding.restoration);
-  const installation = phase(binding.installation);
-  return verified(liveManifest) ?? verified(restoration?.phase === "started" ? restoration.manifestSource : void 0) ?? verified(installation?.phase === "started" ? installation.manifestSource : void 0) ?? verified(binding.manifestSource);
-}
-function retainRefusal(registry2, prior, refusal) {
-  try {
-    registry2.recordStartupCleanupRefusal(prior, {
-      code: refusal.code,
-      reason: refusal.message,
-      ...refusal.nextAction ? { nextAction: refusal.nextAction } : {}
-    });
-  } catch {
-  }
-}
-var PUBLIC_REFUSAL_REASONS = /* @__PURE__ */ new Set([
-  "integration restoration requires a SHA-256-verified manifest and none is available; the dead owner binding is preserved",
-  "integration restoration requires the recorded manifest authority",
-  "integration restoration requires the active startup journal and recorded manifest authority",
-  "managed Metro could not be stopped with exact process authority",
-  "managed Metro cleanup has not been durably completed",
-  "startup cleanup did not converge for this worktree",
-  "startup cleanup no longer matches the exact source and app root",
-  "no startup cleanup is in progress",
-  "the same-root owner is live; a live owner is never released",
-  "the same-root owner identity could not be proven, so it is treated as live",
-  "expired lease owner identity could not be proven",
-  "the startup cleanup owner no longer matches the proven claim epoch",
-  ...["androidMetroReverse", "recorder", "runner", "observe", "metro"].flatMap((resource) => [
-    `${resource} cleanup has not been durably completed`,
-    `${resource} cleanup was not durably requested`
-  ])
-]);
-var GENERIC_REFUSAL_REMEDY = "Startup cleanup refused and preserved the prior owner binding. Resolve the refusal named by this code, then restart the MCP transport; another restart alone does not release the owner.";
-function publicRefusal(refusal) {
-  const sentence = refusal.message.replace(/^[A-Z][A-Z0-9_]+: /, "");
-  const authored = PUBLIC_REFUSAL_REASONS.has(sentence);
-  return {
-    code: refusal.code,
-    message: authored ? sentence : `startup cleanup refused with ${refusal.code} and preserved the prior owner binding`,
-    nextAction: authored ? refusal.nextAction ?? GENERIC_REFUSAL_REMEDY : GENERIC_REFUSAL_REMEDY
-  };
-}
-function refusalOf(error2) {
-  if (error2 instanceof SessionAuthorityError) {
-    return publicRefusal({
-      code: error2.code,
-      message: error2.message,
-      ...error2.details?.nextAction ? { nextAction: error2.details.nextAction } : {}
-    });
-  }
-  const code = error2 && typeof error2 === "object" && typeof error2.code === "string" ? error2.code : "STARTUP_CLEANUP_FAILED";
-  return publicRefusal({
-    code,
-    message: error2 instanceof Error ? error2.message : String(error2)
-  });
-}
+init_startup_cleanup();
 
 // packages/rn-dev-agent-core/dist/session/supervisor-authority.js
 init_process_cleanup();

@@ -545,7 +545,7 @@ setObserveAuthorityDeps({
             },
         };
     },
-    bind: ({ port, authority }) => {
+    bind: ({ port, authority, autostarted }) => {
         const { registry, session } = authorityRuntime.requireAvailable();
         const controller = registry.getControllerBinding(session);
         registry.updateBindings(session, {
@@ -558,6 +558,7 @@ setObserveAuthorityDeps({
                     cleanupCapability: authority.capability,
                     pid: controller.worker.pid,
                     processBirth: controller.worker.token,
+                    autostarted,
                 },
             },
         });
@@ -3239,7 +3240,7 @@ async function main() {
                     ? `session is a ${status.state} recovery contender`
                     : null;
             },
-            start: startObserveServer,
+            start: () => startObserveServer({ autostarted: true }),
             warn: (m) => logger.warn('OBSERVE', m),
             info: (m) => logger.info('OBSERVE', m),
         }).catch(() => { });

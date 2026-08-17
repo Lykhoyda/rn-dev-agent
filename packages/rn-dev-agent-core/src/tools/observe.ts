@@ -33,7 +33,7 @@ let stateDeps: StateServerDeps | undefined;
 let authorityDeps:
   | {
       resolve(): { port: number; authority: ObserveAuthority };
-      bind(input: { port: number; authority: ObserveAuthority }): void;
+      bind(input: { port: number; authority: ObserveAuthority; autostarted: boolean }): void;
       unbind(authority: ObserveAuthority): void;
     }
   | undefined;
@@ -65,8 +65,11 @@ let boundAuthority: ObserveAuthority | null = null;
  * stopObserveServer awaits it, so a stop racing a pending start can never
  * orphan a listening server (PR #403 review).
  */
-export async function startObserveServer(): Promise<{ url: string; port: number }> {
+export async function startObserveServer(options: {
+  autostarted?: boolean;
+} = {}): Promise<{ url: string; port: number }> {
   if (starting) return starting;
+  const autostarted = options.autostarted === true;
   starting = (async () => {
     const resolved = authorityDeps?.resolve();
     if (!server) {
@@ -86,7 +89,7 @@ export async function startObserveServer(): Promise<{ url: string; port: number 
       const res = await server.start(port);
       if (resolved) {
         bindAttempted = true;
-        authorityDeps?.bind({ port: res.port, authority: resolved.authority });
+        authorityDeps?.bind({ port: res.port, authority: resolved.authority, autostarted });
         boundAuthority = resolved.authority;
       }
       stateWriteAttempted = true;

@@ -9244,7 +9244,7 @@ var require_websocket = __commonJS({
     var http = __require("http");
     var net = __require("net");
     var tls = __require("tls");
-    var { randomBytes: randomBytes8, createHash: createHash22 } = __require("crypto");
+    var { randomBytes: randomBytes8, createHash: createHash23 } = __require("crypto");
     var { Duplex, Readable } = __require("stream");
     var { URL: URL2 } = __require("url");
     var PerMessageDeflate2 = require_permessage_deflate();
@@ -9912,7 +9912,7 @@ var require_websocket = __commonJS({
           abortHandshake(websocket, socket, "Invalid Upgrade header");
           return;
         }
-        const digest3 = createHash22("sha1").update(key + GUID).digest("base64");
+        const digest3 = createHash23("sha1").update(key + GUID).digest("base64");
         if (res.headers["sec-websocket-accept"] !== digest3) {
           abortHandshake(websocket, socket, "Invalid Sec-WebSocket-Accept header");
           return;
@@ -10281,7 +10281,7 @@ var require_websocket_server = __commonJS({
     var EventEmitter = __require("events");
     var http = __require("http");
     var { Duplex } = __require("stream");
-    var { createHash: createHash22 } = __require("crypto");
+    var { createHash: createHash23 } = __require("crypto");
     var extension2 = require_extension();
     var PerMessageDeflate2 = require_permessage_deflate();
     var subprotocol2 = require_subprotocol();
@@ -10588,7 +10588,7 @@ var require_websocket_server = __commonJS({
           );
         }
         if (this._state > RUNNING) return abortHandshake(socket, 503);
-        const digest3 = createHash22("sha1").update(key + GUID).digest("base64");
+        const digest3 = createHash23("sha1").update(key + GUID).digest("base64");
         const headers = [
           "HTTP/1.1 101 Switching Protocols",
           "Upgrade: websocket",
@@ -37750,12 +37750,12 @@ ensureJavaEnv();
 ensureCwd();
 
 // packages/rn-dev-agent-core/dist/index.js
-import { createHash as createHash21, createHmac as createHmac5, randomUUID as randomUUID10 } from "node:crypto";
+import { createHash as createHash22, createHmac as createHmac5, randomUUID as randomUUID10 } from "node:crypto";
 import { readFileSync as readFileSync41, rmSync as rmSync11 } from "node:fs";
 import { execFile as execFile25 } from "node:child_process";
 import { promisify as promisify28 } from "node:util";
 import { fileURLToPath as fileURLToPath7 } from "node:url";
-import { dirname as dirname23, join as join56 } from "node:path";
+import { dirname as dirname23, join as join57 } from "node:path";
 
 // node_modules/zod/v3/external.js
 var external_exports = {};
@@ -67780,9 +67780,9 @@ function restorePackageIntegrationFiles(input, dependencies = {}) {
 }
 
 // packages/rn-dev-agent-core/dist/tools/session.js
-import { dirname as dirname14, isAbsolute as isAbsolute7, join as join35, resolve as resolve8 } from "node:path";
+import { dirname as dirname14, isAbsolute as isAbsolute7, join as join36, resolve as resolve8 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
-import { createHash as createHash12 } from "node:crypto";
+import { createHash as createHash13 } from "node:crypto";
 
 // packages/rn-dev-agent-core/dist/session/source-identity.js
 init_metro_cwd();
@@ -68561,9 +68561,143 @@ function inspectSessionOwner(owner, dependencies = {}) {
   return observed.token === owner.token ? "match" : "mismatch";
 }
 
-// packages/rn-dev-agent-core/dist/tools/session.js
-init_process_birth();
-init_device_arbiter();
+// packages/rn-dev-agent-core/dist/session/startup-cleanup.js
+init_secure_state_file();
+import { createHash as createHash12 } from "node:crypto";
+import { join as join35 } from "node:path";
+
+// packages/rn-dev-agent-core/dist/session/android-metro-reverse.js
+import { execFileSync as execFileSync12 } from "node:child_process";
+function execute(dependencies, file, args) {
+  if (dependencies.execute)
+    return dependencies.execute(file, args);
+  return execFileSync12(file, args, {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 1e4
+  });
+}
+function endpoint(port) {
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65535) {
+    throw new Error("PHYSICAL_ANDROID_METRO_UNREACHABLE: authority-bound Metro port is invalid");
+  }
+  return `tcp:${port}`;
+}
+var AndroidDeviceDisconnectedError = class extends Error {
+};
+var DEVICE_DISCONNECTED = /device\s+('[^']*'\s+)?not found|no devices\/emulators found|device offline/i;
+function describeExecutionFailure(error2) {
+  const parts = error2 && typeof error2 === "object" ? [
+    error2.message,
+    error2.stderr,
+    error2.stdout
+  ] : [String(error2)];
+  return parts.map((part) => typeof part === "string" ? part : Buffer.isBuffer(part) ? part.toString("utf8") : "").filter((part) => part.length > 0).join("\n");
+}
+function adb(deviceId, args, dependencies) {
+  try {
+    return execute(dependencies, "adb", ["-s", deviceId, ...args]);
+  } catch (error2) {
+    const details = describeExecutionFailure(error2);
+    const message = `PHYSICAL_ANDROID_METRO_UNREACHABLE: adb could not configure Metro reachability on exact device ${deviceId}: ${details || String(error2)}`;
+    throw DEVICE_DISCONNECTED.test(details) ? new AndroidDeviceDisconnectedError(message) : new Error(message);
+  }
+}
+function isPhysicalAndroid(deviceId, dependencies) {
+  if (/^emulator-\d+$/.test(deviceId))
+    return false;
+  return adb(deviceId, ["shell", "getprop", "ro.kernel.qemu"], dependencies).trim() !== "1";
+}
+function listReverseForwards(deviceId, dependencies) {
+  return adb(deviceId, ["reverse", "--list"], dependencies).split("\n").map((line) => line.trim().split(/\s+/)).filter((parts) => parts.length >= 2).map((parts) => ({
+    local: parts[parts.length - 2],
+    remote: parts[parts.length - 1]
+  })).filter((forward) => forward.local.startsWith("tcp:") && forward.remote.startsWith("tcp:"));
+}
+function assertBindingMatches(binding, deviceId, metroPort) {
+  const exact = endpoint(metroPort);
+  if (binding.platform !== "android" || binding.deviceId !== deviceId || binding.metroPort !== metroPort || binding.local !== exact || binding.remote !== exact) {
+    throw new Error("PHYSICAL_ANDROID_METRO_UNREACHABLE: retained adb reverse authority does not match the exact device and Metro port");
+  }
+}
+function removeExactForwardAfterFailedSetup(deviceId, exact, dependencies) {
+  try {
+    const current = listReverseForwards(deviceId, dependencies).filter((forward) => forward.local === exact);
+    if (current.length === 1 && current[0].remote === exact) {
+      adb(deviceId, ["reverse", "--remove", exact], dependencies);
+    }
+  } catch (error2) {
+    if (error2 instanceof AndroidDeviceDisconnectedError)
+      return;
+    throw error2;
+  }
+}
+function ensureAndroidMetroReverse(input, dependencies = {}) {
+  const exact = endpoint(input.metroPort);
+  if (!isPhysicalAndroid(input.deviceId, dependencies)) {
+    if (input.binding) {
+      throw new Error("PHYSICAL_ANDROID_METRO_UNREACHABLE: emulator authority cannot retain a physical-device adb reverse binding");
+    }
+    return { binding: null, created: false, physical: false };
+  }
+  if (input.binding)
+    assertBindingMatches(input.binding, input.deviceId, input.metroPort);
+  const matchingLocal = listReverseForwards(input.deviceId, dependencies).filter((forward) => forward.local === exact);
+  if (matchingLocal.length > 0) {
+    if (input.binding && matchingLocal.length === 1 && matchingLocal[0].remote === exact) {
+      return { binding: input.binding, created: false, physical: true };
+    }
+    throw new Error(`PHYSICAL_ANDROID_METRO_UNREACHABLE: exact device ${input.deviceId} already has a foreign adb reverse for ${exact}; refusing to replace or adopt it. After confirming nothing else owns it, clear it manually with: adb -s ${input.deviceId} reverse --remove ${exact}`);
+  }
+  let created = false;
+  try {
+    adb(input.deviceId, ["reverse", exact, exact], dependencies);
+    created = true;
+    const verified = listReverseForwards(input.deviceId, dependencies).filter((forward) => forward.local === exact);
+    if (verified.length !== 1 || verified[0].remote !== exact) {
+      throw new Error(`PHYSICAL_ANDROID_METRO_UNREACHABLE: adb did not verify ${exact} -> ${exact} on exact device ${input.deviceId}`);
+    }
+    return {
+      binding: {
+        platform: "android",
+        deviceId: input.deviceId,
+        metroPort: input.metroPort,
+        local: exact,
+        remote: exact
+      },
+      created: true,
+      physical: true
+    };
+  } catch (error2) {
+    if (!created)
+      throw error2;
+    try {
+      removeExactForwardAfterFailedSetup(input.deviceId, exact, dependencies);
+    } catch (cleanupError) {
+      throw new AggregateError([error2, cleanupError], "PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN: failed setup left exact adb reverse cleanup unresolved");
+    }
+    throw error2;
+  }
+}
+function removeAndroidMetroReverse(binding, dependencies = {}) {
+  assertBindingMatches(binding, binding.deviceId, binding.metroPort);
+  try {
+    const matchingLocal = listReverseForwards(binding.deviceId, dependencies).filter((forward) => forward.local === binding.local);
+    if (matchingLocal.length === 0)
+      return;
+    if (matchingLocal.length !== 1 || matchingLocal[0].remote !== binding.remote) {
+      throw new Error(`PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN: ${binding.local} on exact device ${binding.deviceId} changed to a foreign forward; refusing to remove it. After confirming nothing else owns it, clear it manually with: adb -s ${binding.deviceId} reverse --remove ${binding.local}`);
+    }
+    adb(binding.deviceId, ["reverse", "--remove", binding.local], dependencies);
+    if (listReverseForwards(binding.deviceId, dependencies).some((forward) => forward.local === binding.local)) {
+      throw new Error(`PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN: session-owned ${binding.local} remains on exact device ${binding.deviceId}`);
+    }
+  } catch (error2) {
+    if (error2 instanceof AndroidDeviceDisconnectedError)
+      return;
+    throw error2;
+  }
+}
 
 // packages/rn-dev-agent-core/dist/session/process-cleanup.js
 init_release_android_slot();
@@ -68896,11 +69030,189 @@ async function stopBoundRecorder(binding, _processProbe = probeProcessBirth, run
   }
 }
 
+// packages/rn-dev-agent-core/dist/session/startup-cleanup.js
+init_registry();
+var EXECUTION_ORDER = [
+  "androidMetroReverse",
+  "recorder",
+  "runner",
+  "observe",
+  "metro"
+];
+async function runStartupOwnerCleanup(input, dependencies = {}) {
+  const released = [];
+  for (let round = 0; round < 8; round += 1) {
+    const candidate = input.registry.findStartupCleanupCandidate(input);
+    if (!candidate)
+      return { status: "clean", released };
+    try {
+      const plan = input.registry.beginStartupOwnerCleanup(candidate);
+      await completeObligations(input.registry, candidate, dependencies);
+      restoreDeadOwnerIntegration(input, candidate, plan, dependencies);
+      input.registry.finishStartupOwnerCleanup(candidate);
+      released.push(candidate.sessionId);
+    } catch (error2) {
+      const refusal = refusalOf(error2);
+      retainRefusal(input.registry, candidate, refusal);
+      return { status: "refused", released, refusal };
+    }
+  }
+  return {
+    status: "refused",
+    released,
+    refusal: publicRefusal({
+      code: "RESOURCE_CLAIM_CONFLICT",
+      message: "startup cleanup did not converge for this worktree"
+    })
+  };
+}
+async function runStartupCleanupForSource(input) {
+  const layout = createAuthorityStateLayout(input.stateDir);
+  const registry2 = openSessionRegistry(layout.registry, {
+    ownerStatus: input.ownerStatus,
+    leaseMs: 3e4
+  });
+  try {
+    return await runStartupOwnerCleanup({
+      registry: registry2,
+      sourceKey: input.source.sourceKey,
+      worktreeKey: input.source.worktreeKey,
+      appRootKey: input.source.appRootKey,
+      appRoot: input.source.appRoot
+    }, {
+      readSessionSecret: (sessionId) => readJsonStateFile(join35(layout.sessions, sessionId, "secret.json"))
+    });
+  } finally {
+    registry2.close();
+  }
+}
+async function completeObligations(registry2, prior, dependencies) {
+  for (const resource of EXECUTION_ORDER) {
+    const entry = registry2.verifyStartupOwnerObligation(prior, resource);
+    if (!entry || typeof entry.completedAt === "number")
+      continue;
+    if (resource === "androidMetroReverse") {
+      (dependencies.removeAndroidMetroReverse ?? removeAndroidMetroReverse)(entry);
+    } else if (resource === "recorder") {
+      await (dependencies.stopBoundRecorder ?? stopBoundRecorder)(entry);
+    } else if (resource === "runner") {
+      await (dependencies.stopBoundRunner ?? stopBoundRunner)(entry);
+    } else if (resource === "observe") {
+      await (dependencies.stopBoundObserve ?? stopBoundObserve)(entry);
+    } else {
+      const secret = dependencies.readSessionSecret?.(prior.sessionId) ?? null;
+      const signerCapability = typeof secret?.signerCapability === "string" ? secret.signerCapability : "";
+      const stop = dependencies.stopManagedMetro ?? ((binding, stopInput) => stopManagedMetro(binding, stopInput));
+      const stopped = await stop(entry, { sessionId: prior.sessionId, signerCapability });
+      if (!stopped) {
+        throw new SessionAuthorityError("METRO_CLEANUP_PENDING", "managed Metro could not be stopped with exact process authority");
+      }
+    }
+    registry2.completeStartupOwnerObligation(prior, resource);
+  }
+}
+function restoreDeadOwnerIntegration(input, prior, plan, dependencies) {
+  if (!plan.integration || typeof plan.integration.completedAt === "number")
+    return;
+  const binding = input.registry.getSessionStatus(prior.sessionId)?.bindings.packageIntegration;
+  if (!binding || typeof binding !== "object")
+    return;
+  const manifestSha256 = typeof binding.manifestSha256 === "string" ? binding.manifestSha256 : "";
+  const manifestSource = verifiedDeadOwnerManifestSource(input.appRoot, binding, manifestSha256);
+  if (!manifestSource) {
+    throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "integration restoration requires a SHA-256-verified manifest and none is available; the dead owner binding is preserved", void 0, {
+      nextAction: "Restore the exact integration manifest at .rn-agent/integration/rn-session-integration.json from your own version control history or backups so it matches the manifest SHA-256 recorded on the binding, then restart the MCP transport."
+    });
+  }
+  input.registry.verifyStartupOwnerIntegrationRestore(prior, {
+    sourceKey: input.sourceKey,
+    worktreeKey: input.worktreeKey,
+    appRootKey: input.appRootKey,
+    manifestSha256
+  });
+  (dependencies.restoreIntegrationFiles ?? restorePackageIntegrationFiles)({
+    appRoot: input.appRoot,
+    manifestSource
+  });
+  input.registry.completeStartupOwnerIntegrationRestore(prior, { manifestSha256 });
+}
+function verifiedDeadOwnerManifestSource(appRoot, binding, manifestSha256) {
+  if (!/^[0-9a-f]{64}$/.test(manifestSha256))
+    return void 0;
+  const verified = (candidate) => typeof candidate === "string" && createHash12("sha256").update(candidate).digest("hex") === manifestSha256 ? candidate : void 0;
+  let liveManifest;
+  try {
+    liveManifest = readPackageIntegrationInputs(appRoot).manifest ?? void 0;
+  } catch {
+    liveManifest = void 0;
+  }
+  const phase = (value) => value && typeof value === "object" ? value : null;
+  const restoration = phase(binding.restoration);
+  const installation = phase(binding.installation);
+  return verified(liveManifest) ?? verified(restoration?.phase === "started" ? restoration.manifestSource : void 0) ?? verified(installation?.phase === "started" ? installation.manifestSource : void 0) ?? verified(binding.manifestSource);
+}
+function retainRefusal(registry2, prior, refusal) {
+  try {
+    registry2.recordStartupCleanupRefusal(prior, {
+      code: refusal.code,
+      reason: refusal.message,
+      ...refusal.nextAction ? { nextAction: refusal.nextAction } : {}
+    });
+  } catch {
+  }
+}
+var PUBLIC_REFUSAL_REASONS = /* @__PURE__ */ new Set([
+  "integration restoration requires a SHA-256-verified manifest and none is available; the dead owner binding is preserved",
+  "integration restoration requires the recorded manifest authority",
+  "integration restoration requires the active startup journal and recorded manifest authority",
+  "managed Metro could not be stopped with exact process authority",
+  "managed Metro cleanup has not been durably completed",
+  "startup cleanup did not converge for this worktree",
+  "startup cleanup no longer matches the exact source and app root",
+  "no startup cleanup is in progress",
+  "the same-root owner is live; a live owner is never released",
+  "the same-root owner identity could not be proven, so it is treated as live",
+  "expired lease owner identity could not be proven",
+  "the startup cleanup owner no longer matches the proven claim epoch",
+  ...["androidMetroReverse", "recorder", "runner", "observe", "metro"].flatMap((resource) => [
+    `${resource} cleanup has not been durably completed`,
+    `${resource} cleanup was not durably requested`
+  ])
+]);
+var GENERIC_REFUSAL_REMEDY = "Startup cleanup refused and preserved the prior owner binding. Resolve the refusal named by this code, then restart the MCP transport; another restart alone does not release the owner.";
+function publicRefusal(refusal) {
+  const sentence = refusal.message.replace(/^[A-Z][A-Z0-9_]+: /, "");
+  const authored = PUBLIC_REFUSAL_REASONS.has(sentence);
+  return {
+    code: refusal.code,
+    message: authored ? sentence : `startup cleanup refused with ${refusal.code} and preserved the prior owner binding`,
+    nextAction: authored ? refusal.nextAction ?? GENERIC_REFUSAL_REMEDY : GENERIC_REFUSAL_REMEDY
+  };
+}
+function refusalOf(error2) {
+  if (error2 instanceof SessionAuthorityError) {
+    return publicRefusal({
+      code: error2.code,
+      message: error2.message,
+      ...error2.details?.nextAction ? { nextAction: error2.details.nextAction } : {}
+    });
+  }
+  const code = error2 && typeof error2 === "object" && typeof error2.code === "string" ? error2.code : "STARTUP_CLEANUP_FAILED";
+  return publicRefusal({
+    code,
+    message: error2 instanceof Error ? error2.message : String(error2)
+  });
+}
+
+// packages/rn-dev-agent-core/dist/tools/session.js
+init_process_birth();
+init_device_arbiter();
+
 // packages/rn-dev-agent-core/dist/session/device-existence.js
-import { execFileSync as execFileSync12 } from "node:child_process";
+import { execFileSync as execFileSync13 } from "node:child_process";
 function deviceExistsOnHost(platform, deviceId) {
   if (platform === "ios") {
-    const output2 = execFileSync12("xcrun", ["simctl", "list", "devices", "--json"], {
+    const output2 = execFileSync13("xcrun", ["simctl", "list", "devices", "--json"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 5e3
@@ -68908,145 +69220,12 @@ function deviceExistsOnHost(platform, deviceId) {
     const parsed = JSON.parse(output2);
     return Object.values(parsed.devices ?? {}).flat().some((device) => device.udid === deviceId && device.isAvailable !== false);
   }
-  const output = execFileSync12("adb", ["devices"], {
+  const output = execFileSync13("adb", ["devices"], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
     timeout: 5e3
   });
   return output.split("\n").some((line) => line.split(/\s+/)[0] === deviceId && /\sdevice\s*$/.test(line));
-}
-
-// packages/rn-dev-agent-core/dist/session/android-metro-reverse.js
-import { execFileSync as execFileSync13 } from "node:child_process";
-function execute(dependencies, file, args) {
-  if (dependencies.execute)
-    return dependencies.execute(file, args);
-  return execFileSync13(file, args, {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-    timeout: 1e4
-  });
-}
-function endpoint(port) {
-  if (!Number.isSafeInteger(port) || port < 1 || port > 65535) {
-    throw new Error("PHYSICAL_ANDROID_METRO_UNREACHABLE: authority-bound Metro port is invalid");
-  }
-  return `tcp:${port}`;
-}
-var AndroidDeviceDisconnectedError = class extends Error {
-};
-var DEVICE_DISCONNECTED = /device\s+('[^']*'\s+)?not found|no devices\/emulators found|device offline/i;
-function describeExecutionFailure(error2) {
-  const parts = error2 && typeof error2 === "object" ? [
-    error2.message,
-    error2.stderr,
-    error2.stdout
-  ] : [String(error2)];
-  return parts.map((part) => typeof part === "string" ? part : Buffer.isBuffer(part) ? part.toString("utf8") : "").filter((part) => part.length > 0).join("\n");
-}
-function adb(deviceId, args, dependencies) {
-  try {
-    return execute(dependencies, "adb", ["-s", deviceId, ...args]);
-  } catch (error2) {
-    const details = describeExecutionFailure(error2);
-    const message = `PHYSICAL_ANDROID_METRO_UNREACHABLE: adb could not configure Metro reachability on exact device ${deviceId}: ${details || String(error2)}`;
-    throw DEVICE_DISCONNECTED.test(details) ? new AndroidDeviceDisconnectedError(message) : new Error(message);
-  }
-}
-function isPhysicalAndroid(deviceId, dependencies) {
-  if (/^emulator-\d+$/.test(deviceId))
-    return false;
-  return adb(deviceId, ["shell", "getprop", "ro.kernel.qemu"], dependencies).trim() !== "1";
-}
-function listReverseForwards(deviceId, dependencies) {
-  return adb(deviceId, ["reverse", "--list"], dependencies).split("\n").map((line) => line.trim().split(/\s+/)).filter((parts) => parts.length >= 2).map((parts) => ({
-    local: parts[parts.length - 2],
-    remote: parts[parts.length - 1]
-  })).filter((forward) => forward.local.startsWith("tcp:") && forward.remote.startsWith("tcp:"));
-}
-function assertBindingMatches(binding, deviceId, metroPort) {
-  const exact = endpoint(metroPort);
-  if (binding.platform !== "android" || binding.deviceId !== deviceId || binding.metroPort !== metroPort || binding.local !== exact || binding.remote !== exact) {
-    throw new Error("PHYSICAL_ANDROID_METRO_UNREACHABLE: retained adb reverse authority does not match the exact device and Metro port");
-  }
-}
-function removeExactForwardAfterFailedSetup(deviceId, exact, dependencies) {
-  try {
-    const current = listReverseForwards(deviceId, dependencies).filter((forward) => forward.local === exact);
-    if (current.length === 1 && current[0].remote === exact) {
-      adb(deviceId, ["reverse", "--remove", exact], dependencies);
-    }
-  } catch (error2) {
-    if (error2 instanceof AndroidDeviceDisconnectedError)
-      return;
-    throw error2;
-  }
-}
-function ensureAndroidMetroReverse(input, dependencies = {}) {
-  const exact = endpoint(input.metroPort);
-  if (!isPhysicalAndroid(input.deviceId, dependencies)) {
-    if (input.binding) {
-      throw new Error("PHYSICAL_ANDROID_METRO_UNREACHABLE: emulator authority cannot retain a physical-device adb reverse binding");
-    }
-    return { binding: null, created: false, physical: false };
-  }
-  if (input.binding)
-    assertBindingMatches(input.binding, input.deviceId, input.metroPort);
-  const matchingLocal = listReverseForwards(input.deviceId, dependencies).filter((forward) => forward.local === exact);
-  if (matchingLocal.length > 0) {
-    if (input.binding && matchingLocal.length === 1 && matchingLocal[0].remote === exact) {
-      return { binding: input.binding, created: false, physical: true };
-    }
-    throw new Error(`PHYSICAL_ANDROID_METRO_UNREACHABLE: exact device ${input.deviceId} already has a foreign adb reverse for ${exact}; refusing to replace or adopt it. After confirming nothing else owns it, clear it manually with: adb -s ${input.deviceId} reverse --remove ${exact}`);
-  }
-  let created = false;
-  try {
-    adb(input.deviceId, ["reverse", exact, exact], dependencies);
-    created = true;
-    const verified = listReverseForwards(input.deviceId, dependencies).filter((forward) => forward.local === exact);
-    if (verified.length !== 1 || verified[0].remote !== exact) {
-      throw new Error(`PHYSICAL_ANDROID_METRO_UNREACHABLE: adb did not verify ${exact} -> ${exact} on exact device ${input.deviceId}`);
-    }
-    return {
-      binding: {
-        platform: "android",
-        deviceId: input.deviceId,
-        metroPort: input.metroPort,
-        local: exact,
-        remote: exact
-      },
-      created: true,
-      physical: true
-    };
-  } catch (error2) {
-    if (!created)
-      throw error2;
-    try {
-      removeExactForwardAfterFailedSetup(input.deviceId, exact, dependencies);
-    } catch (cleanupError) {
-      throw new AggregateError([error2, cleanupError], "PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN: failed setup left exact adb reverse cleanup unresolved");
-    }
-    throw error2;
-  }
-}
-function removeAndroidMetroReverse(binding, dependencies = {}) {
-  assertBindingMatches(binding, binding.deviceId, binding.metroPort);
-  try {
-    const matchingLocal = listReverseForwards(binding.deviceId, dependencies).filter((forward) => forward.local === binding.local);
-    if (matchingLocal.length === 0)
-      return;
-    if (matchingLocal.length !== 1 || matchingLocal[0].remote !== binding.remote) {
-      throw new Error(`PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN: ${binding.local} on exact device ${binding.deviceId} changed to a foreign forward; refusing to remove it. After confirming nothing else owns it, clear it manually with: adb -s ${binding.deviceId} reverse --remove ${binding.local}`);
-    }
-    adb(binding.deviceId, ["reverse", "--remove", binding.local], dependencies);
-    if (listReverseForwards(binding.deviceId, dependencies).some((forward) => forward.local === binding.local)) {
-      throw new Error(`PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN: session-owned ${binding.local} remains on exact device ${binding.deviceId}`);
-    }
-  } catch (error2) {
-    if (error2 instanceof AndroidDeviceDisconnectedError)
-      return;
-    throw error2;
-  }
 }
 
 // packages/rn-dev-agent-core/dist/tools/session.js
@@ -69062,7 +69241,7 @@ function sameMetroAuthority(current, next) {
 function verifiedManifestSource(candidate, manifestSha256) {
   if (typeof candidate !== "string" || typeof manifestSha256 !== "string")
     return void 0;
-  return createHash12("sha256").update(candidate).digest("hex") === manifestSha256 ? candidate : void 0;
+  return createHash13("sha256").update(candidate).digest("hex") === manifestSha256 ? candidate : void 0;
 }
 function durableBindingManifestSource(binding) {
   return verifiedManifestSource(binding?.manifestSource, binding?.manifestSha256);
@@ -69119,6 +69298,9 @@ function defaultDeclareSuccessorSource(declaration) {
     throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "successor source declaration requires the supervised session runtime root; start the MCP transport from the intended worktree instead");
   }
   writeSuccessorSourceDeclaration(runtimeRoot, declaration);
+}
+async function defaultReleaseDeadSourceOwner(source) {
+  return runStartupCleanupForSource({ source, ownerStatus: inspectSessionOwner });
 }
 function defaultWithdrawSuccessorSource() {
   const runtimeRoot = process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT;
@@ -69537,6 +69719,14 @@ function createSessionHandler(runtime, dependencies = {}) {
             nextAction: 'Run rn_session action "restore_integration", then retry bind_source.'
           });
         }
+        const priorOwnerCleanup = await (dependencies.releaseDeadSourceOwner ?? defaultReleaseDeadSourceOwner)(declared);
+        if (priorOwnerCleanup.status === "refused") {
+          const refusal = priorOwnerCleanup.refusal;
+          throw new SessionAuthorityError(refusal?.code ?? "SESSION_AUTHORITY_REQUIRED", `the declared project root ${declared.appRoot} is still owned by another session: ${refusal?.message ?? "its prior owner could not be released"}`, void 0, {
+            axis: "S",
+            ...refusal?.nextAction ? { nextAction: refusal.nextAction } : {}
+          });
+        }
         (dependencies.declareSuccessorSource ?? defaultDeclareSuccessorSource)({
           version: 1,
           projectRoot: declared.appRoot,
@@ -69576,14 +69766,22 @@ function createSessionHandler(runtime, dependencies = {}) {
         if (status.bindings.runner || status.bindings.proof) {
           throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "device rebinding requires runner or proof authority to be released first");
         }
+        let observeYieldedPort = null;
         const yieldObserveDeviceAxis = async () => {
           const current = registry2.getSessionStatus(session2.sessionId);
           if (!current) {
             throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "session disappeared before Observe yielded the device axis");
           }
           status = current;
-          if (!current.bindings.observe)
+          const observe2 = current.bindings.observe;
+          if (!observe2)
             return;
+          if (observe2.autostarted !== true) {
+            throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "device rebinding requires the explicitly started Observe authority to be released first", void 0, {
+              axis: "D",
+              nextAction: `Run observe action "stop" for this session, then retry bind_device. Only the session-autostarted Observe yields the device axis automatically.`
+            });
+          }
           await stopVerifiedSessionObserve(current, session2, dependencies);
           registry2.updateBindings(session2, {
             expectedAuthorityVersion: current.authorityVersion,
@@ -69594,6 +69792,12 @@ function createSessionHandler(runtime, dependencies = {}) {
             throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "session disappeared after Observe yielded the device axis");
           }
           status = refreshed;
+          observeYieldedPort = Number.isSafeInteger(Number(observe2.port)) ? Number(observe2.port) : null;
+        };
+        const observeYieldReport = () => observeYieldedPort === null ? {} : {
+          observeYielded: true,
+          observePort: observeYieldedPort,
+          observeNextAction: 'Observe yielded the device axis and was stopped; run observe action "start" to reopen the web UI.'
         };
         const requireWorkerInstance = () => {
           const workerInstance = status.worker.instanceId;
@@ -69653,7 +69857,8 @@ function createSessionHandler(runtime, dependencies = {}) {
             dependencies.onBundleInvalidated?.();
           return okResult({
             session: projectPublicAuthorityStatus(runtime.status()),
-            buildReceiptRequired: true
+            buildReceiptRequired: true,
+            ...observeYieldReport()
           });
         }
         if (!signer) {
@@ -69690,7 +69895,10 @@ function createSessionHandler(runtime, dependencies = {}) {
         }), yieldObserveDeviceAxis);
         if (status.bindings.bundle)
           dependencies.onBundleInvalidated?.();
-        return okResult({ session: projectPublicAuthorityStatus(runtime.status()) });
+        return okResult({
+          session: projectPublicAuthorityStatus(runtime.status()),
+          ...observeYieldReport()
+        });
       }
       if (input.action === "bind_metro") {
         if (input.mode === "managed") {
@@ -69933,10 +70141,12 @@ function createSessionHandler(runtime, dependencies = {}) {
         if (!status || !appRoot) {
           throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", "session app root is unavailable for integration");
         }
-        assertDeclaredProjectRootMatches(status, input.projectRoot, sessionSourceResolver(status, dependencies));
-        const packagePath = join35(appRoot, "package.json");
+        if (input.action !== "restore_integration") {
+          assertDeclaredProjectRootMatches(status, input.projectRoot, sessionSourceResolver(status, dependencies));
+        }
+        const packagePath = join36(appRoot, "package.json");
         const integrationInputs = readPackageIntegrationInputs(appRoot);
-        const manifestPath = join35(appRoot, ".rn-agent", "integration", "rn-session-integration.json");
+        const manifestPath = join36(appRoot, ".rn-agent", "integration", "rn-session-integration.json");
         const packageJson = JSON.parse(integrationInputs.packageJson);
         const integrationBinding = status.bindings.packageIntegration;
         const installationManifestSource = integrationBinding?.installation?.phase === "started" && typeof integrationBinding.installation.manifestSource === "string" ? integrationBinding.installation.manifestSource : void 0;
@@ -69949,7 +70159,7 @@ function createSessionHandler(runtime, dependencies = {}) {
           if (!(error2 instanceof SyntaxError))
             throw error2;
         }
-        const sessionCli = process.env.RN_DEV_AGENT_SESSION_CLI ?? join35(dirname14(fileURLToPath2(import.meta.url)), "..", "rn-session.js");
+        const sessionCli = process.env.RN_DEV_AGENT_SESSION_CLI ?? join36(dirname14(fileURLToPath2(import.meta.url)), "..", "rn-session.js");
         const stateDir = process.env.RN_DEV_AGENT_STATE_DIR;
         if (input.action === "restore_integration") {
           if (input.confirmed !== true) {
@@ -69966,7 +70176,7 @@ function createSessionHandler(runtime, dependencies = {}) {
             });
           }
           assertPackageIntegrationInactive(status.bindings, input.action);
-          const manifestSha256 = createHash12("sha256").update(manifestSource ?? "").digest("hex");
+          const manifestSha256 = createHash13("sha256").update(manifestSource ?? "").digest("hex");
           if (integrationBinding?.version !== 1 || typeof integrationBinding.installedBySessionId !== "string" || integrationBinding.manifestSha256 !== manifestSha256) {
             throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "integration restoration requires the transferred manifest authority binding");
           }
@@ -70013,7 +70223,7 @@ function createSessionHandler(runtime, dependencies = {}) {
         }
         preview.manifest.metroConfig = metroConfigPath.slice(appRoot.length + 1);
         const expectedManifestSource = installationManifestSource ?? serializePackageIntegrationManifest(preview.manifest);
-        const expectedManifestSha256 = createHash12("sha256").update(expectedManifestSource).digest("hex");
+        const expectedManifestSha256 = createHash13("sha256").update(expectedManifestSource).digest("hex");
         if (installationManifestSource && (integrationBinding?.version !== 1 || integrationBinding.installedBySessionId !== session2.sessionId || integrationBinding.manifestSha256 !== expectedManifestSha256)) {
           throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "integration installation requires the original session manifest authority binding");
         }
@@ -70035,7 +70245,7 @@ function createSessionHandler(runtime, dependencies = {}) {
           if (!installedManifest) {
             throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: applied manifest is unavailable");
           }
-          if (createHash12("sha256").update(installedManifest).digest("hex") !== expectedManifestSha256) {
+          if (createHash13("sha256").update(installedManifest).digest("hex") !== expectedManifestSha256) {
             throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "applied integration manifest no longer matches its durable installation authority");
           }
           registry2.updateBindings(session2, {
@@ -71528,7 +71738,7 @@ init_utils();
 import { mkdirSync as mkdirSync15 } from "node:fs";
 import { execFile as execFile18 } from "node:child_process";
 import { promisify as promisify19 } from "node:util";
-import { dirname as dirname15, join as join36, resolve as resolve10 } from "node:path";
+import { dirname as dirname15, join as join37, resolve as resolve10 } from "node:path";
 import { homedir as homedir9 } from "node:os";
 
 // packages/rn-dev-agent-core/dist/tools/device-screenshot-resize.js
@@ -72177,7 +72387,7 @@ function deriveScreenshotPath(args, now = Date.now, rand = Math.random) {
   }
   if (args.path?.startsWith("~")) {
     if (args.path.startsWith("~/"))
-      return join36(homedir9(), args.path.slice(2));
+      return join37(homedir9(), args.path.slice(2));
     throw new TildeScreenshotPathError(`Screenshot path "${args.path}" starts with '~' which the bridge cannot expand (only a leading '~/' is expanded to the home directory). Pass an absolute path instead.`);
   }
   if (args.path)
@@ -73219,7 +73429,7 @@ init_utils();
 
 // packages/rn-dev-agent-core/dist/domain/action-store.js
 import { existsSync as existsSync28, readFileSync as readFileSync28, statSync as statSync12 } from "node:fs";
-import { join as join37 } from "node:path";
+import { join as join38 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/domain/atomic-writer.js
 import { writeFileSync as writeFileSync13, renameSync as renameSync6, statSync as statSync11, mkdirSync as mkdirSync16, existsSync as existsSync27, unlinkSync as unlinkSync9, readdirSync as readdirSync9 } from "node:fs";
@@ -73330,10 +73540,10 @@ var atomicWriter = {
 // packages/rn-dev-agent-core/dist/domain/action-store.js
 function actionPathFor(projectRoot, actionId) {
   assertValidActionId(actionId, "actionPathFor");
-  const actionsDir = join37(projectRoot, ".rn-agent", "actions");
+  const actionsDir = join38(projectRoot, ".rn-agent", "actions");
   const fileName = `${actionId}.yaml`;
   assertWithinDir(fileName, actionsDir);
-  return join37(actionsDir, fileName);
+  return join38(actionsDir, fileName);
 }
 function splitYaml(text) {
   const allLines = text.split("\n");
@@ -73875,7 +74085,7 @@ import { existsSync as existsSync29 } from "node:fs";
 init_utils();
 init_storage();
 import { mkdir, readdir, readFile as readFile2, writeFile } from "node:fs/promises";
-import { join as join38 } from "node:path";
+import { join as join39 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/cdp/test-recorder-helpers.js
 var DEV_CHECK_JS = `(typeof __DEV__ !== 'undefined' && __DEV__ === true)`;
@@ -74749,7 +74959,7 @@ function createRecordTestSaveHandler(getClient2) {
     if (!safe) {
       return failResult("Filename is empty after sanitization", "BAD_FILENAME");
     }
-    const filePath = join38(dir, `${safe}.json`);
+    const filePath = join39(dir, `${safe}.json`);
     const payload = { savedAt: (/* @__PURE__ */ new Date()).toISOString(), events: storedEvents };
     await writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
     return okResult({
@@ -74770,7 +74980,7 @@ function createRecordTestLoadHandler(getClient2) {
     if (!safe) {
       return failResult("Filename is empty after sanitization", "BAD_FILENAME");
     }
-    const filePath = join38(dir, `${safe}.json`);
+    const filePath = join39(dir, `${safe}.json`);
     let raw;
     try {
       raw = await readFile2(filePath, "utf8");
@@ -78090,11 +78300,11 @@ init_dev_client_picker();
 // packages/rn-dev-agent-core/dist/tools/device-record.js
 init_utils();
 import { execFile as execFile23 } from "node:child_process";
-import { createHash as createHash13 } from "node:crypto";
+import { createHash as createHash14 } from "node:crypto";
 import { existsSync as existsSync30 } from "node:fs";
 import { promisify as promisify24 } from "node:util";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
-import { dirname as dirname17, join as join39 } from "node:path";
+import { dirname as dirname17, join as join40 } from "node:path";
 init_process_birth();
 var execFileAsync5 = promisify24(execFile23);
 var START_TIMEOUT_MS = 1e4;
@@ -78183,15 +78393,15 @@ function candidateRecordScripts(baseDir = dirname17(fileURLToPath3(import.meta.u
   const claudePluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
   return compactUnique2([
     process.env.RN_DEV_AGENT_RECORD_PROOF_SCRIPT,
-    codexPluginRoot ? join39(codexPluginRoot, "scripts", "record_proof.sh") : void 0,
-    claudePluginRoot ? join39(claudePluginRoot, "scripts", "record_proof.sh") : void 0,
-    claudePluginRoot ? join39(claudePluginRoot, "..", "..", "scripts", "record_proof.sh") : void 0,
+    codexPluginRoot ? join40(codexPluginRoot, "scripts", "record_proof.sh") : void 0,
+    claudePluginRoot ? join40(claudePluginRoot, "scripts", "record_proof.sh") : void 0,
+    claudePluginRoot ? join40(claudePluginRoot, "..", "..", "scripts", "record_proof.sh") : void 0,
     // Bundled Codex runtime: <plugin>/rn-dev-agent-core/dist.
-    join39(baseDir, "..", "..", "scripts", "record_proof.sh"),
+    join40(baseDir, "..", "..", "scripts", "record_proof.sh"),
     // Source core bundle: packages/rn-dev-agent-core/dist/supervisor.js.
-    join39(baseDir, "..", "..", "..", "scripts", "record_proof.sh"),
+    join40(baseDir, "..", "..", "..", "scripts", "record_proof.sh"),
     // Source module build: packages/rn-dev-agent-core/dist/tools/device-record.js.
-    join39(baseDir, "..", "..", "..", "..", "scripts", "record_proof.sh")
+    join40(baseDir, "..", "..", "..", "..", "scripts", "record_proof.sh")
   ]);
 }
 function resolveRecordScript(baseDir = dirname17(fileURLToPath3(import.meta.url))) {
@@ -78243,7 +78453,7 @@ function parseStatusOutput(stdout) {
   return active;
 }
 function recordingScope(args) {
-  return createHash13("sha256").update(`${args.sessionId}\0${args.claimEpoch}\0${args.platform}\0${args.deviceId}`).digest("hex");
+  return createHash14("sha256").update(`${args.sessionId}\0${args.claimEpoch}\0${args.platform}\0${args.deviceId}`).digest("hex");
 }
 function bindRecorderSession(runtime, args) {
   const available = runtime.requireAvailable();
@@ -78512,14 +78722,14 @@ function createDeviceRecordHandler(deps = {}) {
 }
 
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
-import { createHash as createHash15, randomUUID as randomUUID8 } from "node:crypto";
+import { createHash as createHash16, randomUUID as randomUUID8 } from "node:crypto";
 import { execFileSync as execFileSync14 } from "node:child_process";
 import { chmodSync as chmodSync4, closeSync as closeSync9, existsSync as existsSync31, fsyncSync, lstatSync as lstatSync11, mkdirSync as mkdirSync17, openSync as openSync9, readFileSync as readFileSync29, realpathSync as realpathSync11, renameSync as renameSync7, unlinkSync as unlinkSync10, writeFileSync as writeFileSync14 } from "node:fs";
-import { basename as basename7, dirname as dirname18, extname, isAbsolute as isAbsolute9, join as join40, relative as relative5, resolve as resolve11, sep as sep6 } from "node:path";
+import { basename as basename7, dirname as dirname18, extname, isAbsolute as isAbsolute9, join as join41, relative as relative5, resolve as resolve11, sep as sep6 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 
 // packages/rn-dev-agent-core/dist/domain/proof-capture.js
-import { createHash as createHash14 } from "node:crypto";
+import { createHash as createHash15 } from "node:crypto";
 var StrictProofMonitor = class {
   now;
   events = [];
@@ -78593,14 +78803,14 @@ function hashProofArgs(params) {
   return hashProofValue(redact(params));
 }
 function hashProofValue(value) {
-  return createHash14("sha256").update(JSON.stringify(canonicalizeProofValue(value))).digest("hex");
+  return createHash15("sha256").update(JSON.stringify(canonicalizeProofValue(value))).digest("hex");
 }
 function proofRuntimeAuthorityMarker(input) {
   return hashProofValue(input);
 }
 function hashObservedValue(value) {
   const bytes = JSON.stringify(value) ?? String(value);
-  return createHash14("sha256").update(bytes).digest("hex");
+  return createHash15("sha256").update(bytes).digest("hex");
 }
 function resultEnvelope(result) {
   if (!result || typeof result !== "object")
@@ -79162,7 +79372,7 @@ var readinessSchema = external_exports.object({
   runtime: proofRuntimeSchema
 }).strict();
 function hashBytes(bytes) {
-  return createHash15("sha256").update(bytes).digest("hex");
+  return createHash16("sha256").update(bytes).digest("hex");
 }
 function captureProofWorkerStartup(argv = process.argv, attestation = readStartupIntegrityAttestation()) {
   let executedEntrypointPath = null;
@@ -79216,9 +79426,9 @@ function resolveProofCandidateEntrypoint(candidateRoot, argv) {
     return null;
   }
   for (const host of ["claude-plugin", "codex-plugin"]) {
-    const hostRoot = join40(root, "packages", host);
-    const coreIndex = realpathOrSelf(join40(hostRoot, "rn-dev-agent-core", "dist", "index.js"));
-    const coreSupervisor = realpathOrSelf(join40(hostRoot, "rn-dev-agent-core", "dist", "supervisor.js"));
+    const hostRoot = join41(root, "packages", host);
+    const coreIndex = realpathOrSelf(join41(hostRoot, "rn-dev-agent-core", "dist", "index.js"));
+    const coreSupervisor = realpathOrSelf(join41(hostRoot, "rn-dev-agent-core", "dist", "supervisor.js"));
     if (arg === coreIndex) {
       return {
         host,
@@ -79237,7 +79447,7 @@ function resolveProofCandidateEntrypoint(candidateRoot, argv) {
         kind: "core-supervisor"
       };
     }
-    if (host === "codex-plugin" && arg === realpathOrSelf(join40(hostRoot, "bin", "cdp-supervisor.js"))) {
+    if (host === "codex-plugin" && arg === realpathOrSelf(join41(hostRoot, "bin", "cdp-supervisor.js"))) {
       if (!existsSync31(coreIndex) || !existsSync31(coreSupervisor))
         return null;
       return {
@@ -79272,7 +79482,7 @@ function proofCandidateEntrypointEnvironmentMatches(entrypoint, env) {
   }
   if (supervisorOverride && supervisorOverride !== entrypoint.coreSupervisor)
     return false;
-  if (coreRootOverride && join40(coreRootOverride, "dist", "supervisor.js") !== entrypoint.coreSupervisor) {
+  if (coreRootOverride && join41(coreRootOverride, "dist", "supervisor.js") !== entrypoint.coreSupervisor) {
     return false;
   }
   if (workerOverride && workerOverride !== entrypoint.coreBundle)
@@ -79330,7 +79540,7 @@ function readProofCandidateRuntime(candidateRoot, startup = proofWorkerStartup) 
     throw new Error("CANDIDATE_MCP_PROCESS_MISMATCH");
   }
   const { host, coreBundle } = entrypoint;
-  const runnerManifest = join40(root, "packages", host, "runner-manifest.json");
+  const runnerManifest = join41(root, "packages", host, "runner-manifest.json");
   const artifacts = readProofCandidateHeadArtifacts(root, [coreBundle, runnerManifest]);
   if (!artifacts) {
     throw new Error("CANDIDATE_CHECKOUT_NOT_CLEAN");
@@ -79391,7 +79601,7 @@ function readProofActionIdentity(appProjectRoot, actionId) {
     return {
       id: actionId,
       version: String(action.state.revision),
-      sha256: createHash15("sha256").update(bytesAfter).digest("hex")
+      sha256: createHash16("sha256").update(bytesAfter).digest("hex")
     };
   } catch {
     return null;
@@ -79422,7 +79632,7 @@ function validCaptureContext(args, expectedRoot) {
   }
   if (!/^[a-z0-9][a-z0-9-]*$/.test(args.runId))
     return false;
-  const proofRoot = join40(expectedRoot, "docs", "proof", args.runId);
+  const proofRoot = join41(expectedRoot, "docs", "proof", args.runId);
   const screenshots = args.storyboard.steps.map((step) => step.screenshotPath);
   const destinations = [args.receiptPath, args.videoPath, args.contactSheetPath, ...screenshots];
   if (destinations.some((path) => !isNormalizedDescendant(proofRoot, path) || hasExistingSymlink(expectedRoot, path)) || new Set(destinations).size !== destinations.length) {
@@ -79436,7 +79646,7 @@ function validCaptureContext(args, expectedRoot) {
   }));
 }
 function proofRootExists(args) {
-  const proofRoot = join40(args.projectRoot, "docs", "proof", args.runId);
+  const proofRoot = join41(args.projectRoot, "docs", "proof", args.runId);
   try {
     lstatSync11(proofRoot);
     return true;
@@ -79921,7 +80131,7 @@ function createProofCaptureHandler(deps) {
         return proofFailure(["PROOF_ACTION_IDENTITY_MISMATCH"], "idle");
       }
       try {
-        const proofRoot = join40(args.projectRoot, "docs", "proof", args.runId);
+        const proofRoot = join41(args.projectRoot, "docs", "proof", args.runId);
         if (deps.proofRootTracked(args.projectRoot, proofRoot)) {
           return proofFailure(["PROOF_ROOT_TRACKED"], "idle");
         }
@@ -80387,11 +80597,11 @@ function createProofCaptureHandler(deps) {
 }
 
 // packages/rn-dev-agent-core/dist/tools/proof-media.js
-import { createHash as createHash16 } from "node:crypto";
+import { createHash as createHash17 } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { mkdir as mkdir2, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir as tmpdir11 } from "node:os";
-import { dirname as dirname19, join as join41 } from "node:path";
+import { dirname as dirname19, join as join42 } from "node:path";
 var MediaFailure = class extends Error {
   reason;
   constructor(reason) {
@@ -80430,7 +80640,7 @@ async function hashAcceptedFile(path) {
   }
 }
 async function sha256File2(path) {
-  const hash = createHash16("sha256");
+  const hash = createHash17("sha256");
   const stream = createReadStream(path);
   for await (const chunk of stream)
     hash.update(chunk);
@@ -80528,7 +80738,7 @@ async function matchScreenshotAt(process3, input) {
   if (input.videoDurationMs !== void 0 && (!Number.isFinite(input.videoDurationMs) || input.videoDurationMs <= 0)) {
     fail2("INVALID_MEDIA_INPUT");
   }
-  const normalizedScreenshotPath = join41(input.scratchDir, `screenshot-${index}.png`);
+  const normalizedScreenshotPath = join42(input.scratchDir, `screenshot-${index}.png`);
   await rm(normalizedScreenshotPath, { force: true });
   await runFrameProcess(process3, [
     "-y",
@@ -80553,7 +80763,7 @@ async function matchScreenshotAt(process3, input) {
   let best = null;
   let decodedFrameCount = 0;
   for (const [sampleIndex, timestampMs] of sampleTimestamps.entries()) {
-    const framePath = join41(input.scratchDir, `frame-${index}-${sampleIndex}.jpg`);
+    const framePath = join42(input.scratchDir, `frame-${index}-${sampleIndex}.jpg`);
     await rm(framePath, { force: true });
     try {
       await runFrameProcess(process3, [
@@ -80677,7 +80887,7 @@ async function validateMedia(process3, input) {
     const scratchRoot = input.scratchRoot ?? tmpdir11();
     try {
       await mkdir2(scratchRoot, { recursive: true });
-      scratchDir = await mkdtemp(join41(scratchRoot, "proof-media-"));
+      scratchDir = await mkdtemp(join42(scratchRoot, "proof-media-"));
     } catch {
       fail2("MEDIA_IO_FAILED");
     }
@@ -81868,7 +82078,7 @@ init_maestro_run();
 import { execFile as execFileCb19 } from "node:child_process";
 import { promisify as promisify25 } from "node:util";
 import { existsSync as existsSync32, readFileSync as readFileSync30, writeFileSync as writeFileSync15, readdirSync as readdirSync10 } from "node:fs";
-import { join as join42 } from "node:path";
+import { join as join43 } from "node:path";
 import { homedir as homedir10 } from "node:os";
 var execFile24 = promisify25(execFileCb19);
 var AUTH_ROUTE_PATTERNS = [
@@ -81930,7 +82140,7 @@ async function isOnAuthScreen(client2) {
   }
 }
 function findLoginFlow(projectRoot) {
-  const searchDirs = [join42(projectRoot, ".maestro", "subflows"), join42(projectRoot, ".maestro")];
+  const searchDirs = [join43(projectRoot, ".maestro", "subflows"), join43(projectRoot, ".maestro")];
   for (const dir of searchDirs) {
     if (!existsSync32(dir))
       continue;
@@ -81942,12 +82152,12 @@ function findLoginFlow(projectRoot) {
     }
     for (const candidate of LOGIN_FLOW_PRIORITY) {
       if (files.includes(candidate)) {
-        return join42(dir, candidate);
+        return join43(dir, candidate);
       }
     }
     const authFile = files.find((f) => /\.(ya?ml)$/.test(f) && AUTH_ROUTE_PATTERNS.some((p) => f.toLowerCase().includes(p)));
     if (authFile)
-      return join42(dir, authFile);
+      return join43(dir, authFile);
   }
   return null;
 }
@@ -82020,7 +82230,7 @@ async function handleAutoLogin(client2, opts = {}) {
   }
   const wrapperPath = "/tmp/rn-auto-login-wrapper.yaml";
   writeFileSync15(wrapperPath, wrapperContent, "utf-8");
-  const runnerPath = join42(homedir10(), ".maestro-runner", "bin", "maestro-runner");
+  const runnerPath = join43(homedir10(), ".maestro-runner", "bin", "maestro-runner");
   if (!existsSync32(runnerPath)) {
     return {
       loggedIn: false,
@@ -82480,11 +82690,11 @@ function buildGracefulShutdown(deps) {
 }
 
 // packages/rn-dev-agent-core/dist/lifecycle/lockfile.js
-import { createHash as createHash17 } from "node:crypto";
+import { createHash as createHash18 } from "node:crypto";
 import { execFileSync as execFileSync16 } from "node:child_process";
 import { closeSync as closeSync10, existsSync as existsSync33, mkdirSync as mkdirSync18, openSync as openSync10, readFileSync as readFileSync31, statSync as statSync13, unlinkSync as unlinkSync11, writeFileSync as writeFileSync16, writeSync as writeSync3 } from "node:fs";
 import { tmpdir as tmpdir12, userInfo as userInfo2 } from "node:os";
-import { join as join43, resolve as resolve12 } from "node:path";
+import { join as join44, resolve as resolve12 } from "node:path";
 var DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
 var DEFAULT_PROCESS_NAME_NEEDLE = "cdp-bridge";
 var PROCESS_IDENTITY_MARKERS = ["cdp-bridge", "rn-dev-agent", "supervisor.js"];
@@ -82533,7 +82743,7 @@ function defaultSelfPpid() {
   return typeof process.ppid === "number" ? process.ppid : 0;
 }
 function hashProjectRoot(projectRoot) {
-  return createHash17("md5").update(resolve12(projectRoot)).digest("hex").slice(0, 8);
+  return createHash18("md5").update(resolve12(projectRoot)).digest("hex").slice(0, 8);
 }
 var Lockfile = class {
   opts;
@@ -82560,7 +82770,7 @@ var Lockfile = class {
       processIdentity: opts.processIdentity ?? defaultProcessIdentity(),
       staleMs: opts.staleMs ?? DEFAULT_STALE_MS
     };
-    this.lockPath = join43(tmpDir, `rn-dev-agent-cdp-${uid}-${hash}.lock`);
+    this.lockPath = join44(tmpDir, `rn-dev-agent-cdp-${uid}-${hash}.lock`);
   }
   // GH#251: acquire via atomic exclusive-create (same pattern as DeviceLock).
   // The previous read-then-writeFileSync let two bridges starting in the same
@@ -82801,7 +83011,7 @@ init_utils();
 init_storage();
 init_maestro_validator();
 import { existsSync as existsSync34, mkdirSync as mkdirSync19, writeFileSync as writeFileSync17 } from "node:fs";
-import { join as join44 } from "node:path";
+import { join as join45 } from "node:path";
 function stepToMaestroCommands(step) {
   const ALLOWED_DIRECTIONS = /* @__PURE__ */ new Set(["up", "down", "left", "right"]);
   switch (step.action) {
@@ -82857,7 +83067,7 @@ function createMaestroGenerateHandler() {
       return failResult("Provide a flow name and at least one step.");
     }
     const root = findProjectRoot();
-    const outputDir = args.outputDir ?? (root ? join44(root, ".rn-agent", "actions") : null);
+    const outputDir = args.outputDir ?? (root ? join45(root, ".rn-agent", "actions") : null);
     if (!outputDir) {
       return failResult("Cannot determine project root. Pass outputDir explicitly.");
     }
@@ -82866,7 +83076,7 @@ function createMaestroGenerateHandler() {
     }
     const sanitizedName = args.name.replace(/[^a-zA-Z0-9_-]/g, "-").toLowerCase();
     const fileName = `${sanitizedName}.yaml`;
-    const filePath = join44(outputDir, fileName);
+    const filePath = join45(outputDir, fileName);
     if (args.appId !== void 0 && !isValidBundleId(args.appId)) {
       return failResult(`Invalid appId '${String(args.appId).slice(0, 80)}' (Phase 134.1)`);
     }
@@ -82911,14 +83121,14 @@ init_registry();
 import { execFile as execFileCb21 } from "node:child_process";
 import { promisify as promisify27 } from "node:util";
 import { existsSync as existsSync35, readdirSync as readdirSync11, readFileSync as readFileSync32, writeFileSync as writeFileSync18 } from "node:fs";
-import { join as join45 } from "node:path";
+import { join as join46 } from "node:path";
 import { tmpdir as tmpdir13 } from "node:os";
 var defaultExecFile4 = promisify27(execFileCb21);
 function discoverFlows(dir, pattern) {
   if (!existsSync35(dir))
     return [];
   const files = readdirSync11(dir, { recursive: true });
-  const yamls = files.filter((f) => f.endsWith(".yaml") || f.endsWith(".yml")).map((f) => join45(dir, f)).sort();
+  const yamls = files.filter((f) => f.endsWith(".yaml") || f.endsWith(".yml")).map((f) => join46(dir, f)).sort();
   if (pattern) {
     if (pattern.length > 256) {
       return yamls;
@@ -82957,7 +83167,7 @@ function createMaestroTestAllHandler(deps = {}) {
       return failResult(dispatch.error);
     }
     const root = findProjectRoot();
-    const flowDir = args.flowDir ?? (root ? join45(root, ".rn-agent", "actions") : null);
+    const flowDir = args.flowDir ?? (root ? join46(root, ".rn-agent", "actions") : null);
     if (!flowDir) {
       return failResult("Cannot determine project root. Pass flowDir explicitly.");
     }
@@ -82994,7 +83204,7 @@ function createMaestroTestAllHandler(deps = {}) {
         parsedAppId = resolveMaestroFlowAppId(boundAppId, parsed.appId);
         flowHasHideKeyboard = flowContainsHideKeyboard(parsed.commands);
         const canonical = buildMaestroFlow(parsedAppId !== void 0 ? { appId: parsedAppId } : {}, parsed.commands);
-        safeFlowFile = join45(tmpdir13(), `rn-maestro-validated-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
+        safeFlowFile = join46(tmpdir13(), `rn-maestro-validated-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
         writeFileSync18(safeFlowFile, canonical, "utf-8");
         const appFileResolution = resolveAppFile(platform, canonical, parsedAppId, void 0, {
           deviceId: requestedDeviceId
@@ -83162,7 +83372,7 @@ function createMaestroTestAllHandler(deps = {}) {
 init_agent_device_wrapper();
 init_utils();
 import { readFileSync as readFileSync33, readdirSync as readdirSync12, lstatSync as lstatSync12 } from "node:fs";
-import { join as join46, extname as extname2 } from "node:path";
+import { join as join47, extname as extname2 } from "node:path";
 function findElement(nodes, query, matchBy) {
   const q = query.toLowerCase();
   return nodes.some((n) => {
@@ -83187,7 +83397,7 @@ function discoverTestIDs(dir) {
     for (const entry of entries) {
       if (entry === "node_modules" || entry.startsWith("."))
         continue;
-      const full = join46(d, entry);
+      const full = join47(d, entry);
       try {
         const st = lstatSync12(full);
         if (st.isSymbolicLink())
@@ -83520,16 +83730,16 @@ function instrumentTool(toolName, handler) {
 }
 
 // packages/rn-dev-agent-core/dist/experience/evidence.js
-import { createHash as createHash18, randomUUID as randomUUID9 } from "node:crypto";
+import { createHash as createHash19, randomUUID as randomUUID9 } from "node:crypto";
 import { chmodSync as chmodSync5, existsSync as existsSync36, mkdirSync as mkdirSync20, readFileSync as readFileSync34, renameSync as renameSync8, unlinkSync as unlinkSync12, writeFileSync as writeFileSync19 } from "node:fs";
 import { homedir as homedir11, platform as hostPlatform, release } from "node:os";
-import { dirname as dirname20, join as join47 } from "node:path";
+import { dirname as dirname20, join as join48 } from "node:path";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
 var UNKNOWN_CLASSIFICATION = "UNKNOWN";
 var DEFAULT_MAX_RECORDS = 500;
 var DEFAULT_RETENTION_DAYS = 14;
 var MAX_EVIDENCE_POINTERS = 3;
-var EXPERIENCE_DIRECTORY = join47(homedir11(), ".claude", "rn-agent", "experience");
+var EXPERIENCE_DIRECTORY = join48(homedir11(), ".claude", "rn-agent", "experience");
 var EXPERIENCE_STORE_NAME = "patterns.jsonl";
 var MAX_SYMPTOM_LENGTH = 2048;
 var DAY_MS = 24 * 60 * 60 * 1e3;
@@ -83610,7 +83820,7 @@ function readAppIdentity() {
   return appIdentityCache.identity;
 }
 function loadAppIdentity(root) {
-  const manifest = join47(root, "app.json");
+  const manifest = join48(root, "app.json");
   try {
     if (!existsSync36(manifest))
       return { name: null, slug: null };
@@ -83636,7 +83846,7 @@ var ExperienceRecorder = class {
   previousFailure = null;
   constructor(options) {
     this.directory = options.directory ?? process.env.RN_DEV_AGENT_EXPERIENCE_DIR ?? EXPERIENCE_DIRECTORY;
-    this.path = join47(this.directory, EXPERIENCE_STORE_NAME);
+    this.path = join48(this.directory, EXPERIENCE_STORE_NAME);
     this.candidate = {
       pluginVersion: options.pluginVersion ?? null,
       coreVersion: options.coreVersion
@@ -83780,7 +83990,7 @@ var ExperienceRecorder = class {
   }
   write(records) {
     mkdirSync20(this.directory, { recursive: true, mode: 448 });
-    const temp = join47(this.directory, `.${EXPERIENCE_STORE_NAME}.${process.pid}.${randomUUID9()}`);
+    const temp = join48(this.directory, `.${EXPERIENCE_STORE_NAME}.${process.pid}.${randomUUID9()}`);
     try {
       const sanitized = records.map((record2) => record2.redactionVersion === REDACTION_RULES_VERSION ? record2 : {
         ...sanitizeForEvidence(record2),
@@ -83809,10 +84019,10 @@ function discoverPluginVersion(fromUrl = import.meta.url) {
     return process.env.RN_DEV_AGENT_PLUGIN_VERSION;
   const start = dirname20(fileURLToPath5(fromUrl));
   const candidates = [
-    join47(start, "..", "..", ".claude-plugin", "plugin.json"),
-    join47(start, "..", "..", ".codex-plugin", "plugin.json"),
-    join47(start, "..", "..", "..", "claude-plugin", ".claude-plugin", "plugin.json"),
-    join47(start, "..", "..", "..", "codex-plugin", ".codex-plugin", "plugin.json")
+    join48(start, "..", "..", ".claude-plugin", "plugin.json"),
+    join48(start, "..", "..", ".codex-plugin", "plugin.json"),
+    join48(start, "..", "..", "..", "claude-plugin", ".claude-plugin", "plugin.json"),
+    join48(start, "..", "..", "..", "codex-plugin", ".codex-plugin", "plugin.json")
   ];
   for (const candidate of candidates) {
     try {
@@ -83852,7 +84062,7 @@ function pruneExperienceRecords(records, now, maxRecords = DEFAULT_MAX_RECORDS, 
   }).sort((a, b) => Date.parse(b.lastSeen) - Date.parse(a.lastSeen) || a.signature.localeCompare(b.signature)).slice(0, Math.max(0, maxRecords)).sort((a, b) => a.signature.localeCompare(b.signature));
 }
 function experienceSignature(input) {
-  return createHash18("sha256").update(JSON.stringify([
+  return createHash19("sha256").update(JSON.stringify([
     input.classification,
     input.tool,
     input.normalizedSymptomShape,
@@ -83969,7 +84179,7 @@ function boundedPointers(existing, incoming) {
 }
 
 // packages/rn-dev-agent-core/dist/observability/live-device.js
-import { join as join48 } from "node:path";
+import { join as join49 } from "node:path";
 import { tmpdir as tmpdir14 } from "node:os";
 function isStateMutating(tool, args) {
   if (FLOW_MUTATION_TOOLS.has(tool))
@@ -84121,7 +84331,7 @@ function buildLiveDeps(input) {
     // iterable" when invoked as deps.pushLive(...). The live device gate caught
     // this — the unit fakes used standalone arrows and missed it.
     pushLive: (frame) => input.recorder.pushLive(frame),
-    tmpPath: () => join48(tmpdir14(), `rn-observe-live-${process.pid}.jpg`),
+    tmpPath: () => join49(tmpdir14(), `rn-observe-live-${process.pid}.jpg`),
     isMirrorActive: input.isMirrorActive
   };
 }
@@ -84137,7 +84347,7 @@ init_utils();
 import { createServer as createServer3 } from "node:http";
 import { readFileSync as readFileSync35 } from "node:fs";
 import { fileURLToPath as fileURLToPath6 } from "node:url";
-import { dirname as dirname21, join as join49 } from "node:path";
+import { dirname as dirname21, join as join50 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/observability/e2e-csrf.js
 import { randomBytes as randomBytes7, timingSafeEqual as timingSafeEqual7 } from "node:crypto";
@@ -84467,7 +84677,7 @@ var ObservabilityServer = class {
   }
   index(res) {
     try {
-      let html = readFileSync35(join49(__dir, "web-dist", "index.html"), "utf8");
+      let html = readFileSync35(join50(__dir, "web-dist", "index.html"), "utf8");
       if (this.e2e) {
         const tokenJs = JSON.stringify(this.e2e.token).replace(/</g, "\\u003c");
         html = html.replace("</head>", `<script>window.__E2E_CSRF__=${tokenJs}</script></head>`);
@@ -84668,10 +84878,10 @@ init_project_config();
 // packages/rn-dev-agent-core/dist/observability/observe-state.js
 init_secure_state_file();
 init_storage();
-import { join as join50 } from "node:path";
+import { join as join51 } from "node:path";
 function observeStatePath(projectRoot) {
   const safe = projectRoot.replace(/[^A-Za-z0-9._-]/g, "_");
-  return join50(getStateDir(), "observe", `${safe}.json`);
+  return join51(getStateDir(), "observe", `${safe}.json`);
 }
 function writeObserveState(url, port, projectRoot = findProjectRoot(), now = () => /* @__PURE__ */ new Date()) {
   try {
@@ -84725,9 +84935,10 @@ function setObserveAuthorityDeps(deps) {
 }
 var starting = null;
 var boundAuthority = null;
-async function startObserveServer() {
+async function startObserveServer(options = {}) {
   if (starting)
     return starting;
+  const autostarted = options.autostarted === true;
   starting = (async () => {
     const resolved = authorityDeps?.resolve();
     if (!server) {
@@ -84740,7 +84951,7 @@ async function startObserveServer() {
       const res = await server.start(port);
       if (resolved) {
         bindAttempted = true;
-        authorityDeps?.bind({ port: res.port, authority: resolved.authority });
+        authorityDeps?.bind({ port: res.port, authority: resolved.authority, autostarted });
         boundAuthority = resolved.authority;
       }
       stateWriteAttempted = true;
@@ -85347,17 +85558,17 @@ init_sources();
 import { readFileSync as readFileSync38 } from "node:fs";
 
 // packages/rn-dev-agent-core/dist/domain/e2e-test.js
-import { dirname as dirname22, join as join51 } from "node:path";
+import { dirname as dirname22, join as join52 } from "node:path";
 import { mkdirSync as mkdirSync21, writeFileSync as writeFileSync20, renameSync as renameSync9, readFileSync as readFileSync36, readdirSync as readdirSync13, existsSync as existsSync37 } from "node:fs";
-import { createHash as createHash19 } from "node:crypto";
+import { createHash as createHash20 } from "node:crypto";
 var FLOW_SENTINEL = "# e2e-locked-flow-below";
 function e2eDirFor(projectRoot) {
-  return join51(projectRoot, ".rn-agent", "e2e");
+  return join52(projectRoot, ".rn-agent", "e2e");
 }
 function e2ePathFor(projectRoot, id) {
   assertValidActionId(id, "e2ePathFor");
   const dir = e2eDirFor(projectRoot);
-  const file = join51(dir, `${id}.yaml`);
+  const file = join52(dir, `${id}.yaml`);
   assertWithinDir(file, dir);
   return file;
 }
@@ -85381,7 +85592,7 @@ function serializeLockedTest(meta) {
 ${meta.flow}`;
 }
 function hashBody(s) {
-  return createHash19("sha256").update(s).digest("hex");
+  return createHash20("sha256").update(s).digest("hex");
 }
 function freezeLockedTest(projectRoot, source, ctx) {
   const filePath = e2ePathFor(projectRoot, source.id);
@@ -85451,9 +85662,9 @@ function parseLockedTest(text, filePath) {
 
 // packages/rn-dev-agent-core/dist/domain/e2e-config.js
 import { readFileSync as readFileSync37 } from "node:fs";
-import { join as join52 } from "node:path";
+import { join as join53 } from "node:path";
 function loadE2eConfig(projectRoot) {
-  const filePath = join52(projectRoot, ".rn-agent", "e2e.config.json");
+  const filePath = join53(projectRoot, ".rn-agent", "e2e.config.json");
   try {
     const raw = readFileSync37(filePath, "utf8");
     return JSON.parse(raw);
@@ -85586,7 +85797,7 @@ function createLockE2eTestHandler(deps = {}) {
 
 // packages/rn-dev-agent-core/dist/domain/e2e-run.js
 init_maestro_error_parser();
-import { join as join53 } from "node:path";
+import { join as join54 } from "node:path";
 import { mkdirSync as mkdirSync22, writeFileSync as writeFileSync21, renameSync as renameSync10, readFileSync as readFileSync39, existsSync as existsSync38 } from "node:fs";
 function classifyFlowResult(input) {
   if (input.passed) {
@@ -85642,16 +85853,16 @@ function diffNewlyFailing(current, previousGreen) {
 }
 var INDEX_MAX = 100;
 function e2eRunsDirFor(projectRoot) {
-  return join53(sessionStateDirectory(projectRoot), "e2e-runs");
+  return join54(sessionStateDirectory(projectRoot), "e2e-runs");
 }
 function writeJsonAtomic(file, value) {
-  mkdirSync22(join53(file, ".."), { recursive: true });
+  mkdirSync22(join54(file, ".."), { recursive: true });
   const tmp = `${file}.tmp`;
   writeFileSync21(tmp, JSON.stringify(value, null, 2), "utf8");
   renameSync10(tmp, file);
 }
 function loadIndex(projectRoot) {
-  const file = join53(e2eRunsDirFor(projectRoot), "index.json");
+  const file = join54(e2eRunsDirFor(projectRoot), "index.json");
   if (!existsSync38(file))
     return [];
   try {
@@ -85664,7 +85875,7 @@ function loadIndex(projectRoot) {
 function writeRunRecord(projectRoot, rec) {
   assertValidActionId(rec.runId, "writeRunRecord");
   const dir = e2eRunsDirFor(projectRoot);
-  writeJsonAtomic(join53(dir, `${rec.runId}.json`), rec);
+  writeJsonAtomic(join54(dir, `${rec.runId}.json`), rec);
   const entry = {
     runId: rec.runId,
     finishedAt: rec.finishedAt,
@@ -85672,11 +85883,11 @@ function writeRunRecord(projectRoot, rec) {
     totals: rec.totals
   };
   const next = [entry, ...loadIndex(projectRoot).filter((e) => e.runId !== rec.runId)].slice(0, INDEX_MAX);
-  writeJsonAtomic(join53(dir, "index.json"), next);
+  writeJsonAtomic(join54(dir, "index.json"), next);
 }
 function loadRunRecord(projectRoot, runId) {
   assertValidActionId(runId, "loadRunRecord");
-  const file = join53(e2eRunsDirFor(projectRoot), `${runId}.json`);
+  const file = join54(e2eRunsDirFor(projectRoot), `${runId}.json`);
   if (!existsSync38(file))
     return null;
   try {
@@ -85696,7 +85907,7 @@ init_storage();
 init_utils();
 
 // packages/rn-dev-agent-core/dist/domain/e2e-run-request.js
-import { join as join54 } from "node:path";
+import { join as join55 } from "node:path";
 import { mkdirSync as mkdirSync23, writeFileSync as writeFileSync22, renameSync as renameSync11, readFileSync as readFileSync40, readdirSync as readdirSync14, existsSync as existsSync39 } from "node:fs";
 var TERMINAL_STATUSES = /* @__PURE__ */ new Set([
   "done",
@@ -85705,11 +85916,11 @@ var TERMINAL_STATUSES = /* @__PURE__ */ new Set([
   "interrupted"
 ]);
 function requestsDir(projectRoot) {
-  return join54(e2eRunsDirFor(projectRoot), "requests");
+  return join55(e2eRunsDirFor(projectRoot), "requests");
 }
 function requestPath(projectRoot, runId) {
   assertValidActionId(runId, "e2e-run-request");
-  return join54(requestsDir(projectRoot), `${runId}.json`);
+  return join55(requestsDir(projectRoot), `${runId}.json`);
 }
 function writeRequest(projectRoot, req) {
   const file = requestPath(projectRoot, req.runId);
@@ -86029,9 +86240,9 @@ init_storage();
 
 // packages/rn-dev-agent-core/dist/domain/action-inventory.js
 import { readdirSync as readdirSync15 } from "node:fs";
-import { join as join55 } from "node:path";
+import { join as join56 } from "node:path";
 async function listActions(projectRoot) {
-  const actionsDir = join55(projectRoot, ".rn-agent", "actions");
+  const actionsDir = join56(projectRoot, ".rn-agent", "actions");
   let files;
   try {
     files = readdirSync15(actionsDir);
@@ -86136,7 +86347,7 @@ init_discovery();
 init_metro_cwd();
 init_install_authority();
 import { execFileSync as execFileSync18 } from "node:child_process";
-import { createHash as createHash20 } from "node:crypto";
+import { createHash as createHash21 } from "node:crypto";
 init_metro_origin();
 init_metro_binding();
 init_process_birth();
@@ -86144,7 +86355,7 @@ init_registry();
 init_target_device_authority();
 init_tool_profiles();
 function identity(value) {
-  return createHash20("sha256").update(JSON.stringify(value)).digest("hex");
+  return createHash21("sha256").update(JSON.stringify(value)).digest("hex");
 }
 function objectBinding(status, name) {
   const value = status.bindings[name];
@@ -87017,7 +87228,7 @@ async function connectExactSessionTarget(input, timeoutMs, dependencies) {
 }
 
 // packages/rn-dev-agent-core/dist/index.js
-var pkgPath = join56(dirname23(fileURLToPath7(import.meta.url)), "..", "package.json");
+var pkgPath = join57(dirname23(fileURLToPath7(import.meta.url)), "..", "package.json");
 var pkgVersion = JSON.parse(readFileSync41(pkgPath, "utf8")).version;
 var lockfile = null;
 var diagnosticContractProbe = process.argv.includes("--diagnostic-contract-probe");
@@ -87158,7 +87369,7 @@ setSnapshotAuthorityProvider({
       runnerInstanceId: runner?.instanceId,
       runnerPid: runner?.pid,
       runnerProcessBirth: runner?.processBirth,
-      runnerCapabilityHash: typeof runner?.capability === "string" ? createHash21("sha256").update(runner.capability).digest("hex") : void 0,
+      runnerCapabilityHash: typeof runner?.capability === "string" ? createHash22("sha256").update(runner.capability).digest("hex") : void 0,
       runnerPort: runner?.port,
       runnerClaim: status.claims.find((claim) => claim.type === "runner")?.key,
       deviceClaim: status.claims.find((claim) => claim.type === "device")?.key
@@ -87368,7 +87579,7 @@ setObserveAuthorityDeps({
       }
     };
   },
-  bind: ({ port, authority }) => {
+  bind: ({ port, authority, autostarted }) => {
     const { registry: registry2, session: session2 } = authorityRuntime.requireAvailable();
     const controller = registry2.getControllerBinding(session2);
     registry2.updateBindings(session2, {
@@ -87380,7 +87591,8 @@ setObserveAuthorityDeps({
           instanceId: authority.instanceId,
           cleanupCapability: authority.capability,
           pid: controller.worker.pid,
-          processBirth: controller.worker.token
+          processBirth: controller.worker.token,
+          autostarted
         }
       }
     });
@@ -87821,7 +88033,7 @@ var getSessionSignerCapability = (sessionId) => {
     return null;
   if (sessionId && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(sessionId))
     return null;
-  const secretPath = sessionId ? join56(dirname23(dirname23(currentSecretPath)), sessionId, "secret.json") : currentSecretPath;
+  const secretPath = sessionId ? join57(dirname23(dirname23(currentSecretPath)), sessionId, "secret.json") : currentSecretPath;
   return readJsonStateFile(secretPath)?.signerCapability ?? null;
 };
 var spawningSupervisorPid = process.ppid;
@@ -88402,7 +88614,7 @@ var proofReadiness = async () => {
       connectedAt: current.connectedAt
     }),
     errorCount: errors.length,
-    errorSha256: createHash21("sha256").update(errorBytes).digest("hex"),
+    errorSha256: createHash22("sha256").update(errorBytes).digest("hex"),
     device: identity2.device,
     runtime: identity2.runtime
   };
@@ -89052,7 +89264,7 @@ async function main() {
           return null;
         return status.state === "blocked" || status.state === "handoff_cleanup" ? `session is a ${status.state} recovery contender` : null;
       },
-      start: startObserveServer,
+      start: () => startObserveServer({ autostarted: true }),
       warn: (m) => logger.warn("OBSERVE", m),
       info: (m) => logger.info("OBSERVE", m)
     }).catch(() => {

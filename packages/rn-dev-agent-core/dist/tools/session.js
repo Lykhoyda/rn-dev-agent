@@ -10,6 +10,7 @@ import { createHash } from 'node:crypto';
 import { resolveSourceIdentity } from '../session/source-identity.js';
 import { clearSuccessorSourceDeclaration, writeSuccessorSourceDeclaration, } from '../session/successor-source.js';
 import { inspectSessionOwner } from '../session/process-owner.js';
+import { runStartupCleanupForSource, } from '../session/startup-cleanup.js';
 import { inspectInstallIdentity } from '../session/install-identity-inspection.js';
 import { projectPublicAuthorityStatus } from '../session/public-status.js';
 import { probeProcessBirth } from '../session/process-birth.js';
@@ -109,6 +110,9 @@ function defaultDeclareSuccessorSource(declaration) {
         throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'successor source declaration requires the supervised session runtime root; start the MCP transport from the intended worktree instead');
     }
     writeSuccessorSourceDeclaration(runtimeRoot, declaration);
+}
+async function defaultReleaseDeadSourceOwner(source) {
+    return runStartupCleanupForSource({ source, ownerStatus: inspectSessionOwner });
 }
 function defaultWithdrawSuccessorSource() {
     const runtimeRoot = process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT;
@@ -611,6 +615,17 @@ export function createSessionHandler(runtime, dependencies = {}) {
                         nextAction: 'Run rn_session action "restore_integration", then retry bind_source.',
                     });
                 }
+                // GH #776: the supervisor only runs startup cleanup for its boot source, so
+                // a proven-dead owner of the declared root would block the successor in a
+                // state a transport restart there would have cleaned up automatically.
+                const priorOwnerCleanup = await (dependencies.releaseDeadSourceOwner ?? defaultReleaseDeadSourceOwner)(declared);
+                if (priorOwnerCleanup.status === 'refused') {
+                    const refusal = priorOwnerCleanup.refusal;
+                    throw new SessionAuthorityError(refusal?.code ?? 'SESSION_AUTHORITY_REQUIRED', `the declared project root ${declared.appRoot} is still owned by another session: ${refusal?.message ?? 'its prior owner could not be released'}`, undefined, {
+                        axis: 'S',
+                        ...(refusal?.nextAction ? { nextAction: refusal.nextAction } : {}),
+                    });
+                }
                 (dependencies.declareSuccessorSource ?? defaultDeclareSuccessorSource)({
                     version: 1,
                     projectRoot: declared.appRoot,
@@ -657,18 +672,27 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 if (status.bindings.runner || status.bindings.proof) {
                     throw new SessionAuthorityError('DEVICE_AUTHORITY_MISMATCH', 'device rebinding requires runner or proof authority to be released first');
                 }
-                // GH #776: autostarted Observe yields the device axis on the first
+                // GH #776: an autostarted Observe yields the device axis on the first
                 // bind_device instead of forcing a manual observe stop. It runs as the
                 // commit's prepare step — after every device-side check and after the
                 // device claim is proven available — so a refused bind keeps Observe up.
+                // An Observe the caller started explicitly is theirs to stop.
+                let observeYieldedPort = null;
                 const yieldObserveDeviceAxis = async () => {
                     const current = registry.getSessionStatus(session.sessionId);
                     if (!current) {
                         throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'session disappeared before Observe yielded the device axis');
                     }
                     status = current;
-                    if (!current.bindings.observe)
+                    const observe = current.bindings.observe;
+                    if (!observe)
                         return;
+                    if (observe.autostarted !== true) {
+                        throw new SessionAuthorityError('DEVICE_AUTHORITY_MISMATCH', 'device rebinding requires the explicitly started Observe authority to be released first', undefined, {
+                            axis: 'D',
+                            nextAction: `Run observe action "stop" for this session, then retry bind_device. Only the session-autostarted Observe yields the device axis automatically.`,
+                        });
+                    }
                     await stopVerifiedSessionObserve(current, session, dependencies);
                     registry.updateBindings(session, {
                         expectedAuthorityVersion: current.authorityVersion,
@@ -679,7 +703,17 @@ export function createSessionHandler(runtime, dependencies = {}) {
                         throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'session disappeared after Observe yielded the device axis');
                     }
                     status = refreshed;
+                    observeYieldedPort = Number.isSafeInteger(Number(observe.port))
+                        ? Number(observe.port)
+                        : null;
                 };
+                const observeYieldReport = () => observeYieldedPort === null
+                    ? {}
+                    : {
+                        observeYielded: true,
+                        observePort: observeYieldedPort,
+                        observeNextAction: 'Observe yielded the device axis and was stopped; run observe action "start" to reopen the web UI.',
+                    };
                 const requireWorkerInstance = () => {
                     const workerInstance = status.worker.instanceId;
                     if (!workerInstance) {
@@ -753,6 +787,7 @@ export function createSessionHandler(runtime, dependencies = {}) {
                     return okResult({
                         session: projectPublicAuthorityStatus(runtime.status()),
                         buildReceiptRequired: true,
+                        ...observeYieldReport(),
                     });
                 }
                 if (!signer) {
@@ -789,7 +824,10 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 }), yieldObserveDeviceAxis);
                 if (status.bindings.bundle)
                     dependencies.onBundleInvalidated?.();
-                return okResult({ session: projectPublicAuthorityStatus(runtime.status()) });
+                return okResult({
+                    session: projectPublicAuthorityStatus(runtime.status()),
+                    ...observeYieldReport(),
+                });
             }
             if (input.action === 'bind_metro') {
                 if (input.mode === 'managed') {
@@ -1074,7 +1112,9 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 if (!status || !appRoot) {
                     throw new SessionAuthorityError('SOURCE_WORKTREE_MISMATCH', 'session app root is unavailable for integration');
                 }
-                assertDeclaredProjectRootMatches(status, input.projectRoot, sessionSourceResolver(status, dependencies));
+                if (input.action !== 'restore_integration') {
+                    assertDeclaredProjectRootMatches(status, input.projectRoot, sessionSourceResolver(status, dependencies));
+                }
                 const packagePath = join(appRoot, 'package.json');
                 const integrationInputs = readPackageIntegrationInputs(appRoot);
                 const manifestPath = join(appRoot, '.rn-agent', 'integration', 'rn-session-integration.json');

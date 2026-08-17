@@ -34,6 +34,10 @@ import {
   type SuccessorSourceDeclaration,
 } from '../session/successor-source.js';
 import { inspectSessionOwner } from '../session/process-owner.js';
+import {
+  runStartupCleanupForSource,
+  type StartupCleanupOutcome,
+} from '../session/startup-cleanup.js';
 import { inspectInstallIdentity } from '../session/install-identity-inspection.js';
 import { projectPublicAuthorityStatus } from '../session/public-status.js';
 import { probeProcessBirth, type ProcessBirthProbe } from '../session/process-birth.js';
@@ -173,6 +177,7 @@ interface SessionHandlerDependencies extends ManagedMetroStatusDependencies {
   removeAndroidMetroReverse?: (binding: AndroidMetroReverseBinding) => void;
   declareSuccessorSource?: (declaration: SuccessorSourceDeclaration) => void;
   withdrawSuccessorSource?: () => void;
+  releaseDeadSourceOwner?: (source: SourceIdentity) => Promise<StartupCleanupOutcome>;
   resolveSourceIdentity?: (projectRoot: string) => SourceIdentity;
 }
 
@@ -325,6 +330,12 @@ function defaultDeclareSuccessorSource(declaration: SuccessorSourceDeclaration):
     );
   }
   writeSuccessorSourceDeclaration(runtimeRoot, declaration);
+}
+
+async function defaultReleaseDeadSourceOwner(
+  source: SourceIdentity,
+): Promise<StartupCleanupOutcome> {
+  return runStartupCleanupForSource({ source, ownerStatus: inspectSessionOwner });
 }
 
 function defaultWithdrawSuccessorSource(): void {
@@ -1070,6 +1081,26 @@ export function createSessionHandler(
             },
           );
         }
+        // GH #776: the supervisor only runs startup cleanup for its boot source, so
+        // a proven-dead owner of the declared root would block the successor in a
+        // state a transport restart there would have cleaned up automatically.
+        const priorOwnerCleanup = await (
+          dependencies.releaseDeadSourceOwner ?? defaultReleaseDeadSourceOwner
+        )(declared);
+        if (priorOwnerCleanup.status === 'refused') {
+          const refusal = priorOwnerCleanup.refusal;
+          throw new SessionAuthorityError(
+            (refusal?.code as ToolErrorCode | undefined) ?? 'SESSION_AUTHORITY_REQUIRED',
+            `the declared project root ${declared.appRoot} is still owned by another session: ${
+              refusal?.message ?? 'its prior owner could not be released'
+            }`,
+            undefined,
+            {
+              axis: 'S',
+              ...(refusal?.nextAction ? { nextAction: refusal.nextAction } : {}),
+            },
+          );
+        }
         (dependencies.declareSuccessorSource ?? defaultDeclareSuccessorSource)({
           version: 1,
           projectRoot: declared.appRoot,
@@ -1125,10 +1156,12 @@ export function createSessionHandler(
             'device rebinding requires runner or proof authority to be released first',
           );
         }
-        // GH #776: autostarted Observe yields the device axis on the first
+        // GH #776: an autostarted Observe yields the device axis on the first
         // bind_device instead of forcing a manual observe stop. It runs as the
         // commit's prepare step — after every device-side check and after the
         // device claim is proven available — so a refused bind keeps Observe up.
+        // An Observe the caller started explicitly is theirs to stop.
+        let observeYieldedPort: number | null = null;
         const yieldObserveDeviceAxis = async () => {
           const current = registry.getSessionStatus(session.sessionId);
           if (!current) {
@@ -1138,7 +1171,22 @@ export function createSessionHandler(
             );
           }
           status = current;
-          if (!current.bindings.observe) return;
+          const observe = current.bindings.observe as
+            | { port?: unknown; autostarted?: unknown }
+            | null
+            | undefined;
+          if (!observe) return;
+          if (observe.autostarted !== true) {
+            throw new SessionAuthorityError(
+              'DEVICE_AUTHORITY_MISMATCH',
+              'device rebinding requires the explicitly started Observe authority to be released first',
+              undefined,
+              {
+                axis: 'D',
+                nextAction: `Run observe action "stop" for this session, then retry bind_device. Only the session-autostarted Observe yields the device axis automatically.`,
+              },
+            );
+          }
           await stopVerifiedSessionObserve(current, session, dependencies);
           registry.updateBindings(session, {
             expectedAuthorityVersion: current.authorityVersion,
@@ -1152,7 +1200,19 @@ export function createSessionHandler(
             );
           }
           status = refreshed;
+          observeYieldedPort = Number.isSafeInteger(Number(observe.port))
+            ? Number(observe.port)
+            : null;
         };
+        const observeYieldReport = () =>
+          observeYieldedPort === null
+            ? {}
+            : {
+                observeYielded: true,
+                observePort: observeYieldedPort,
+                observeNextAction:
+                  'Observe yielded the device axis and was stopped; run observe action "start" to reopen the web UI.',
+              };
         const requireWorkerInstance = () => {
           const workerInstance = status!.worker.instanceId;
           if (!workerInstance) {
@@ -1269,6 +1329,7 @@ export function createSessionHandler(
           return okResult({
             session: projectPublicAuthorityStatus(runtime.status()),
             buildReceiptRequired: true,
+            ...observeYieldReport(),
           });
         }
         if (!signer) {
@@ -1322,7 +1383,10 @@ export function createSessionHandler(
           yieldObserveDeviceAxis,
         );
         if (status.bindings.bundle) dependencies.onBundleInvalidated?.();
-        return okResult({ session: projectPublicAuthorityStatus(runtime.status()) });
+        return okResult({
+          session: projectPublicAuthorityStatus(runtime.status()),
+          ...observeYieldReport(),
+        });
       }
 
       if (input.action === 'bind_metro') {
@@ -1683,11 +1747,13 @@ export function createSessionHandler(
             'session app root is unavailable for integration',
           );
         }
-        assertDeclaredProjectRootMatches(
-          status,
-          input.projectRoot,
-          sessionSourceResolver(status, dependencies),
-        );
+        if (input.action !== 'restore_integration') {
+          assertDeclaredProjectRootMatches(
+            status,
+            input.projectRoot,
+            sessionSourceResolver(status, dependencies),
+          );
+        }
         const packagePath = join(appRoot, 'package.json');
         const integrationInputs = readPackageIntegrationInputs(appRoot);
         const manifestPath = join(

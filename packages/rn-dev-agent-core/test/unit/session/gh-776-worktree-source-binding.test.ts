@@ -255,6 +255,7 @@ interface HandlerHarness {
 function makeBindSourceHarness(
   primary: string,
   extraBindings: Record<string, unknown> = {},
+  overrides: Record<string, unknown> = {},
 ): HandlerHarness {
   const source = resolveSourceIdentity(primary);
   const status = {
@@ -285,6 +286,10 @@ function makeBindSourceHarness(
       }),
     } as never,
     {
+      releaseDeadSourceOwner: async () => {
+        calls.push('prior-owner-cleanup');
+        return { status: 'clean', released: [] } as never;
+      },
       declareSuccessorSource: (declaration) => {
         declared.push(declaration as never);
         calls.push('declare');
@@ -293,6 +298,7 @@ function makeBindSourceHarness(
         calls.push('recycle');
         return true;
       },
+      ...overrides,
     },
   );
   return { handler, calls, declared };
@@ -306,7 +312,7 @@ test('bind_source declares the linked worktree and releases toward a recycled su
   const body = JSON.parse(result.content[0]!.text);
 
   assert.equal(result.isError, undefined, result.content[0]!.text);
-  assert.deepEqual(calls, ['declare', 'release', 'recycle']);
+  assert.deepEqual(calls, ['prior-owner-cleanup', 'declare', 'release', 'recycle']);
   assert.equal(declared[0]!.projectRoot, realpathSync(linked));
   assert.equal(declared[0]!.sessionId, 'session-776');
   assert.equal(body.data.released, true);
@@ -358,6 +364,48 @@ test('bind_source refuses while package integration is applied in the bound tree
   assert.deepEqual(calls, []);
 });
 
+test('bind_source releases a proven-dead owner of the declared root before it declares', async () => {
+  const { primary, linked } = makeRepoWithWorktree();
+  const cleaned: string[] = [];
+  const { handler, calls } = makeBindSourceHarness(primary, {}, {
+    releaseDeadSourceOwner: async (source: { appRoot: string }) => {
+      cleaned.push(source.appRoot);
+      return { status: 'clean', released: ['dead-predecessor'] } as never;
+    },
+  });
+
+  const result = await handler({ action: 'bind_source', projectRoot: linked } as never);
+
+  assert.equal(result.isError, undefined, result.content[0]!.text);
+  assert.deepEqual(cleaned, [realpathSync(linked)]);
+  assert.deepEqual(calls, ['declare', 'release', 'recycle']);
+});
+
+test('bind_source refuses while the declared root is still owned by a live session', async () => {
+  const { primary, linked } = makeRepoWithWorktree();
+  const { handler, calls } = makeBindSourceHarness(primary, {}, {
+    releaseDeadSourceOwner: async () =>
+      ({
+        status: 'refused',
+        released: [],
+        refusal: {
+          code: 'RESOURCE_CLAIM_CONFLICT',
+          message: 'another live rn-dev-agent supervisor owns this worktree',
+          nextAction: 'Close the other session, then retry bind_source.',
+        },
+      }) as never,
+  });
+
+  const result = await handler({ action: 'bind_source', projectRoot: linked } as never);
+  const body = JSON.parse(result.content[0]!.text);
+
+  assert.equal(body.code, 'RESOURCE_CLAIM_CONFLICT');
+  assert.ok(String(body.error).includes(realpathSync(linked)));
+  assert.match(String(body.error), /another live rn-dev-agent supervisor/);
+  assert.match(String(body.meta?.nextAction ?? ''), /Close the other session/);
+  assert.deepEqual(calls, []);
+});
+
 test('a failed release withdraws the successor declaration it just wrote', async () => {
   const { primary, linked } = makeRepoWithWorktree();
   const source = resolveSourceIdentity(primary);
@@ -388,6 +436,7 @@ test('a failed release withdraws the successor declaration it just wrote', async
       }),
     } as never,
     {
+      releaseDeadSourceOwner: async () => ({ status: 'clean', released: [] }) as never,
       declareSuccessorSource: () => calls.push('declare'),
       withdrawSuccessorSource: () => calls.push('withdraw'),
       getSignerCapability: () => undefined as never,
@@ -541,6 +590,7 @@ test('bind_device yields an autostarted Observe binding instead of refusing', as
     processBirth: 'observe-birth',
     instanceId: 'observe',
     cleanupCapability: 'capability',
+    autostarted: true,
   };
   const status: Record<string, unknown> = {
     sessionId: 'session-776',
@@ -603,6 +653,72 @@ test('bind_device yields an autostarted Observe binding instead of refusing', as
     (replacement?.device as Record<string, unknown> | undefined)?.deviceId,
     'emulator-5554',
   );
+  const body = JSON.parse(result.content[0]!.text);
+  assert.equal(body.data.observeYielded, true);
+  assert.equal(body.data.observePort, 7333);
+  assert.match(String(body.data.observeNextAction), /observe action "start"/);
+});
+
+test('an explicitly started Observe refuses the device axis instead of being stopped', async () => {
+  const calls: string[] = [];
+  const status: Record<string, unknown> = {
+    sessionId: 'session-776',
+    state: 'source_bound',
+    claimEpoch: 1,
+    authorityVersion: 5,
+    leaseUntilMs: 100,
+    source: { kind: 'git' },
+    bindings: {
+      observe: {
+        port: 7333,
+        pid: 456,
+        processBirth: 'observe-birth',
+        instanceId: 'observe',
+        cleanupCapability: 'capability',
+        autostarted: false,
+      },
+      observePort: 7333,
+      metroPort: 8081,
+    },
+    claims: [
+      { type: 'observe-port', key: '7333', sessionId: 'session-776', claimEpoch: 1 },
+    ],
+    worker: { instanceId: 'worker', pid: 1, birthAvailable: true },
+  };
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: {
+          getSessionStatus: () => status,
+          updateBindings: () => calls.push('clear-observe'),
+          inspectDeviceAuthorityAvailability: () => {},
+          replaceDeviceAuthority: () => calls.push('replace-device'),
+        },
+        session: { sessionId: 'session-776', claimEpoch: 1 },
+      }),
+    } as never,
+    {
+      stopHandoffObserve: async () => {
+        calls.push('stop-observe');
+      },
+      deviceExists: () => true,
+    },
+  );
+
+  const result = await handler({
+    action: 'bind_device',
+    platform: 'android',
+    deviceId: 'emulator-5554',
+    appId: 'com.example.app',
+  } as never);
+  const body = JSON.parse(result.content[0]!.text);
+
+  assert.equal(body.code, 'DEVICE_AUTHORITY_MISMATCH');
+  assert.match(String(body.error), /explicitly started Observe/);
+  assert.match(String(body.meta?.nextAction ?? ''), /observe action "stop"/);
+  assert.deepEqual(calls, []);
+  assert.equal((status.bindings as Record<string, unknown>).observe != null, true);
 });
 
 test('a refused bind_device leaves the autostarted Observe binding running', async () => {
@@ -621,6 +737,7 @@ test('a refused bind_device leaves the autostarted Observe binding running', asy
         processBirth: 'observe-birth',
         instanceId: 'observe',
         cleanupCapability: 'capability',
+        autostarted: true,
       },
       observePort: 7333,
       metroPort: 8081,
@@ -685,6 +802,7 @@ test('an unconfirmed stale-device refusal leaves the autostarted Observe binding
         processBirth: 'observe-birth',
         instanceId: 'observe',
         cleanupCapability: 'capability',
+        autostarted: true,
       },
       observePort: 7333,
       metroPort: 8081,
