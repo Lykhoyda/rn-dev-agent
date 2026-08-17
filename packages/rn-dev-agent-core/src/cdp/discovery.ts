@@ -248,11 +248,36 @@ export function clearPackageProbeCache(): void {
   packageProbeCache.clear();
 }
 
-// GH #777 QA: adb reads are fenced to the session's authorized device. Only a
-// bound Android serial may be queried; an ambient shared phone is never probed.
+// GH #777 QA: adb reads are fenced to the device the registry binding authorizes
+// — the same authority cdp_connect derives its exact-device proof from. Only that
+// serial may be queried; an ambient shared phone is never probed.
+export interface SessionDeviceBinding {
+  platform?: string;
+  deviceId?: string;
+}
+
 export interface AndroidInventoryDependencies {
   execute?: (file: string, args: string[]) => string;
-  getSession?: () => { platform?: string; deviceId?: string } | null;
+  getSession?: () => SessionDeviceBinding | null;
+  getRegistryBinding?: () => SessionDeviceBinding | null;
+}
+
+let registryDeviceBindingProvider: (() => SessionDeviceBinding | null) | null = null;
+
+export function setRegistryDeviceBindingProvider(
+  provider: (() => SessionDeviceBinding | null) | null,
+): void {
+  registryDeviceBindingProvider = provider;
+}
+
+// An unavailable registry lookup is an absence of authorization, never a grant.
+function registryDeviceBinding(): SessionDeviceBinding | null {
+  if (!registryDeviceBindingProvider) return null;
+  try {
+    return registryDeviceBindingProvider() ?? null;
+  } catch {
+    return null;
+  }
 }
 
 function runAdbSync(file: string, args: string[]): string {
@@ -263,29 +288,29 @@ function runAdbSync(file: string, args: string[]): string {
   });
 }
 
-export function authorizedAndroidSerial(
-  getSession: () => { platform?: string; deviceId?: string } | null = getActiveSession,
-): string | null {
-  const session = getSession();
-  return session?.platform === 'android' && session.deviceId ? session.deviceId : null;
-}
-
 type AndroidAdbScope =
   | { kind: 'ambient' }
   | { kind: 'serial'; serial: string }
   | { kind: 'fenced' };
 
-// A bound session fences adb to its own authorized serial; any session bound to
-// another platform (or malformed) yields no adb access at all. Only a fully
-// session-less legacy flow keeps the pre-existing single ambient read.
-function androidAdbScope(
-  getSession: () => { platform?: string; deviceId?: string } | null = getActiveSession,
-): AndroidAdbScope {
-  const session = getSession();
-  if (session === null || session === undefined) return { kind: 'ambient' };
-  if (session.platform === 'android' && session.deviceId)
-    return { kind: 'serial', serial: session.deviceId };
-  return { kind: 'fenced' };
+// The registry binding is the only source that can authorize a serial; the
+// device-wrapper session (including its disk-rehydrated state) can only revoke.
+// Only a flow with both stores empty keeps the pre-existing single ambient read.
+function androidAdbScope(deps: AndroidInventoryDependencies = {}): AndroidAdbScope {
+  const registry = (deps.getRegistryBinding ?? registryDeviceBinding)();
+  const session = (deps.getSession ?? getActiveSession)();
+  if (!registry && !session) return { kind: 'ambient' };
+  const authorized =
+    registry?.platform === 'android' && registry.deviceId ? registry.deviceId : null;
+  if (!authorized) return { kind: 'fenced' };
+  if (session && (session.platform !== 'android' || session.deviceId !== authorized))
+    return { kind: 'fenced' };
+  return { kind: 'serial', serial: authorized };
+}
+
+export function authorizedAndroidSerial(deps: AndroidInventoryDependencies = {}): string | null {
+  const scope = androidAdbScope(deps);
+  return scope.kind === 'serial' ? scope.serial : null;
 }
 
 function probeAndroidPackagesInScope(
@@ -310,7 +335,7 @@ function probeAndroidPackagesInScope(
 }
 
 export function probeAndroidPackages(deps: AndroidInventoryDependencies = {}): Set<string> | null {
-  return probeAndroidPackagesInScope(androidAdbScope(deps.getSession), deps.execute);
+  return probeAndroidPackagesInScope(androidAdbScope(deps), deps.execute);
 }
 
 // The UDID and the device-name probe both need `simctl list devices booted`, so
@@ -391,7 +416,7 @@ function readIOSPackages(): Set<string> | null {
 // An empty inventory is an ABSENCE of evidence, never proof that a name is not
 // a simulator: return null so the short failure TTL applies and a simulator
 // booted moments later is seen on the next connect (mirrors probeIOSPackages).
-function probeIOSBootedSimulatorNames(): Set<string> | null {
+function readIOSDeviceNames(): Set<string> | null {
   const inventory = readBootedSimulatorInventory();
   if (!inventory) return null;
   const names = new Set<string>();
@@ -402,12 +427,13 @@ function probeIOSBootedSimulatorNames(): Set<string> | null {
   return names.size > 0 ? names : null;
 }
 
-function probeAndroidModelForSerial(
-  serial: string,
+function probeAndroidModelsInScope(
+  scope: AndroidAdbScope,
   execute: (file: string, args: string[]) => string = runAdbSync,
 ): Set<string> | null {
+  if (scope.kind !== 'serial') return null;
   try {
-    const model = execute('adb', ['-s', serial, 'shell', 'getprop', 'ro.product.model'])
+    const model = execute('adb', ['-s', scope.serial, 'shell', 'getprop', 'ro.product.model'])
       .trim()
       .toLowerCase();
     return model ? new Set([model]) : null;
@@ -419,20 +445,14 @@ function probeAndroidModelForSerial(
 export function probeAndroidDeviceModels(
   deps: AndroidInventoryDependencies = {},
 ): Set<string> | null {
-  const serial = authorizedAndroidSerial(deps.getSession);
-  if (!serial) return null;
-  return probeAndroidModelForSerial(serial, deps.execute);
-}
-
-function readIOSDeviceNames(): Set<string> | null {
-  return cachedPackageProbe('ios-device-names', probeIOSBootedSimulatorNames);
+  return probeAndroidModelsInScope(androidAdbScope(deps), deps.execute);
 }
 
 function readAndroidDeviceModels(): Set<string> | null {
-  const serial = authorizedAndroidSerial();
-  if (!serial) return null;
-  return cachedPackageProbe(`android-device-models:${serial}`, () =>
-    probeAndroidModelForSerial(serial),
+  const scope = androidAdbScope();
+  if (scope.kind !== 'serial') return null;
+  return cachedPackageProbe(`android-device-models:${scope.serial}`, () =>
+    probeAndroidModelsInScope(scope),
   );
 }
 

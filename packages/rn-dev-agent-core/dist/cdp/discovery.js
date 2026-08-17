@@ -217,6 +217,21 @@ export function cachedPackageProbe(key, probe, clock = Date.now) {
 export function clearPackageProbeCache() {
     packageProbeCache.clear();
 }
+let registryDeviceBindingProvider = null;
+export function setRegistryDeviceBindingProvider(provider) {
+    registryDeviceBindingProvider = provider;
+}
+// An unavailable registry lookup is an absence of authorization, never a grant.
+function registryDeviceBinding() {
+    if (!registryDeviceBindingProvider)
+        return null;
+    try {
+        return registryDeviceBindingProvider() ?? null;
+    }
+    catch {
+        return null;
+    }
+}
 function runAdbSync(file, args) {
     return execFileSync(file, args, {
         timeout: 3000,
@@ -224,20 +239,24 @@ function runAdbSync(file, args) {
         stdio: ['ignore', 'pipe', 'ignore'],
     });
 }
-export function authorizedAndroidSerial(getSession = getActiveSession) {
-    const session = getSession();
-    return session?.platform === 'android' && session.deviceId ? session.deviceId : null;
-}
-// A bound session fences adb to its own authorized serial; any session bound to
-// another platform (or malformed) yields no adb access at all. Only a fully
-// session-less legacy flow keeps the pre-existing single ambient read.
-function androidAdbScope(getSession = getActiveSession) {
-    const session = getSession();
-    if (session === null || session === undefined)
+// The registry binding is the only source that can authorize a serial; the
+// device-wrapper session (including its disk-rehydrated state) can only revoke.
+// Only a flow with both stores empty keeps the pre-existing single ambient read.
+function androidAdbScope(deps = {}) {
+    const registry = (deps.getRegistryBinding ?? registryDeviceBinding)();
+    const session = (deps.getSession ?? getActiveSession)();
+    if (!registry && !session)
         return { kind: 'ambient' };
-    if (session.platform === 'android' && session.deviceId)
-        return { kind: 'serial', serial: session.deviceId };
-    return { kind: 'fenced' };
+    const authorized = registry?.platform === 'android' && registry.deviceId ? registry.deviceId : null;
+    if (!authorized)
+        return { kind: 'fenced' };
+    if (session && (session.platform !== 'android' || session.deviceId !== authorized))
+        return { kind: 'fenced' };
+    return { kind: 'serial', serial: authorized };
+}
+export function authorizedAndroidSerial(deps = {}) {
+    const scope = androidAdbScope(deps);
+    return scope.kind === 'serial' ? scope.serial : null;
 }
 function probeAndroidPackagesInScope(scope, execute = runAdbSync) {
     if (scope.kind === 'fenced')
@@ -256,7 +275,7 @@ function probeAndroidPackagesInScope(scope, execute = runAdbSync) {
     }
 }
 export function probeAndroidPackages(deps = {}) {
-    return probeAndroidPackagesInScope(androidAdbScope(deps.getSession), deps.execute);
+    return probeAndroidPackagesInScope(androidAdbScope(deps), deps.execute);
 }
 // The UDID and the device-name probe both need `simctl list devices booted`, so
 // one cached parse feeds both instead of spawning the same 5s subprocess twice.
@@ -335,7 +354,7 @@ function readIOSPackages() {
 // An empty inventory is an ABSENCE of evidence, never proof that a name is not
 // a simulator: return null so the short failure TTL applies and a simulator
 // booted moments later is seen on the next connect (mirrors probeIOSPackages).
-function probeIOSBootedSimulatorNames() {
+function readIOSDeviceNames() {
     const inventory = readBootedSimulatorInventory();
     if (!inventory)
         return null;
@@ -347,9 +366,11 @@ function probeIOSBootedSimulatorNames() {
     }
     return names.size > 0 ? names : null;
 }
-function probeAndroidModelForSerial(serial, execute = runAdbSync) {
+function probeAndroidModelsInScope(scope, execute = runAdbSync) {
+    if (scope.kind !== 'serial')
+        return null;
     try {
-        const model = execute('adb', ['-s', serial, 'shell', 'getprop', 'ro.product.model'])
+        const model = execute('adb', ['-s', scope.serial, 'shell', 'getprop', 'ro.product.model'])
             .trim()
             .toLowerCase();
         return model ? new Set([model]) : null;
@@ -359,19 +380,13 @@ function probeAndroidModelForSerial(serial, execute = runAdbSync) {
     }
 }
 export function probeAndroidDeviceModels(deps = {}) {
-    const serial = authorizedAndroidSerial(deps.getSession);
-    if (!serial)
-        return null;
-    return probeAndroidModelForSerial(serial, deps.execute);
-}
-function readIOSDeviceNames() {
-    return cachedPackageProbe('ios-device-names', probeIOSBootedSimulatorNames);
+    return probeAndroidModelsInScope(androidAdbScope(deps), deps.execute);
 }
 function readAndroidDeviceModels() {
-    const serial = authorizedAndroidSerial();
-    if (!serial)
+    const scope = androidAdbScope();
+    if (scope.kind !== 'serial')
         return null;
-    return cachedPackageProbe(`android-device-models:${serial}`, () => probeAndroidModelForSerial(serial));
+    return cachedPackageProbe(`android-device-models:${scope.serial}`, () => probeAndroidModelsInScope(scope));
 }
 // Metro reports Android deviceName as `<model>` or `<model> - <os> - API <n>`.
 function nameMatchesAndroidModel(name, models) {

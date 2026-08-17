@@ -138,9 +138,11 @@ test('gh-777: targets without a deviceName never consult the device inventory', 
   assert.equal(targets[0]!.platformInference, 'probed');
 });
 
-// GH #777 QA follow-up: Android inventory reads are fenced to the session's
-// authorized serial — an ambient shared phone must never be queried.
+// GH #777 QA follow-up: Android inventory reads are fenced to the device the
+// registry binding authorizes — the same authority cdp_connect proves against.
+// An ambient shared phone, or a stale device-wrapper session, is never queried.
 const boundSerial = '1A2B3C4D';
+const staleSerial = '9Z8Y7X6W';
 const ambientPhoneSerial = '46828c2c';
 
 function execSpy(model = 'be2013') {
@@ -155,29 +157,77 @@ function execSpy(model = 'be2013') {
   };
 }
 
-test('gh-777-qa: no session — the models probe never runs adb at all', () => {
+function noStores() {
+  return { getSession: () => null, getRegistryBinding: () => null };
+}
+
+test('gh-777-qa: no bound session at all — the models probe never runs adb', () => {
   const spy = execSpy();
-  const result = probeAndroidDeviceModels({ execute: spy.execute, getSession: () => null });
+  const result = probeAndroidDeviceModels({ execute: spy.execute, ...noStores() });
   assert.equal(result, null);
   assert.deepEqual(spy.calls, []);
 });
 
-test('gh-777-qa: iOS-bound session — no adb read runs, ambient phone untouched', () => {
+test('gh-777-qa: iOS registry binding before any device_snapshot open fences adb entirely', () => {
   const spy = execSpy();
-  const session = { platform: 'ios', deviceId: simulatorUdid };
-  assert.equal(
-    authorizedAndroidSerial(() => session),
-    null,
-  );
-  assert.equal(probeAndroidDeviceModels({ execute: spy.execute, getSession: () => session }), null);
-  assert.equal(probeAndroidPackages({ execute: spy.execute, getSession: () => session }), null);
+  const stores = {
+    getSession: () => null,
+    getRegistryBinding: () => ({ platform: 'ios', deviceId: simulatorUdid }),
+  };
+  assert.equal(authorizedAndroidSerial(stores), null);
+  assert.equal(probeAndroidDeviceModels({ execute: spy.execute, ...stores }), null);
+  assert.equal(probeAndroidPackages({ execute: spy.execute, ...stores }), null);
   assert.deepEqual(spy.calls, []);
 });
 
-test('gh-777-qa: android-bound session — exactly one getprop scoped to the bound serial', () => {
+test('gh-777-qa: iOS device-wrapper session — no adb read runs, ambient phone untouched', () => {
   const spy = execSpy();
-  const session = { platform: 'android', deviceId: boundSerial };
-  const models = probeAndroidDeviceModels({ execute: spy.execute, getSession: () => session });
+  const stores = {
+    getSession: () => ({ platform: 'ios', deviceId: simulatorUdid }),
+    getRegistryBinding: () => null,
+  };
+  assert.equal(authorizedAndroidSerial(stores), null);
+  assert.equal(probeAndroidDeviceModels({ execute: spy.execute, ...stores }), null);
+  assert.equal(probeAndroidPackages({ execute: spy.execute, ...stores }), null);
+  assert.deepEqual(spy.calls, []);
+});
+
+test('gh-777-qa: a stale persisted android session with no registry binding is fenced', () => {
+  const spy = execSpy();
+  const stores = {
+    getSession: () => ({ platform: 'android', deviceId: staleSerial }),
+    getRegistryBinding: () => null,
+  };
+  assert.equal(authorizedAndroidSerial(stores), null);
+  assert.equal(probeAndroidDeviceModels({ execute: spy.execute, ...stores }), null);
+  assert.equal(probeAndroidPackages({ execute: spy.execute, ...stores }), null);
+  assert.deepEqual(spy.calls, []);
+});
+
+test('gh-777-qa: a stale android session disagreeing with the registry binding is fenced', () => {
+  const spy = execSpy();
+  const stores = {
+    getSession: () => ({ platform: 'android', deviceId: staleSerial }),
+    getRegistryBinding: () => ({ platform: 'android', deviceId: boundSerial }),
+  };
+  assert.equal(authorizedAndroidSerial(stores), null);
+  assert.equal(probeAndroidDeviceModels({ execute: spy.execute, ...stores }), null);
+  assert.equal(probeAndroidPackages({ execute: spy.execute, ...stores }), null);
+  assert.deepEqual(spy.calls, []);
+  assert.ok(
+    spy.calls.every((call) => !call.includes(staleSerial)),
+    'a stale serial must never reach adb',
+  );
+});
+
+test('gh-777-qa: registry-bound android device — exactly one getprop scoped to that serial', () => {
+  const spy = execSpy();
+  const stores = {
+    getSession: () => null,
+    getRegistryBinding: () => ({ platform: 'android', deviceId: boundSerial }),
+  };
+  assert.equal(authorizedAndroidSerial(stores), boundSerial);
+  const models = probeAndroidDeviceModels({ execute: spy.execute, ...stores });
   assert.deepEqual([...(models ?? [])], ['be2013']);
   assert.deepEqual(spy.calls, [['adb', '-s', boundSerial, 'shell', 'getprop', 'ro.product.model']]);
   assert.ok(
@@ -186,17 +236,20 @@ test('gh-777-qa: android-bound session — exactly one getprop scoped to the bou
   );
 });
 
-test('gh-777-qa: android-bound session — package probe is scoped with -s to the bound serial', () => {
+test('gh-777-qa: registry-bound android device — package probe is scoped with -s', () => {
   const spy = execSpy();
-  const session = { platform: 'android', deviceId: boundSerial };
-  const packages = probeAndroidPackages({ execute: spy.execute, getSession: () => session });
+  const stores = {
+    getSession: () => ({ platform: 'android', deviceId: boundSerial }),
+    getRegistryBinding: () => ({ platform: 'android', deviceId: boundSerial }),
+  };
+  const packages = probeAndroidPackages({ execute: spy.execute, ...stores });
   assert.ok(packages?.has(appId));
   assert.deepEqual(spy.calls, [['adb', '-s', boundSerial, 'shell', 'pm', 'list', 'packages']]);
 });
 
-test('gh-777-qa: session-less legacy flow keeps the single pre-existing baseline read', () => {
+test('gh-777-qa: both stores empty keeps the single pre-existing baseline read', () => {
   const spy = execSpy();
-  const packages = probeAndroidPackages({ execute: spy.execute, getSession: () => null });
+  const packages = probeAndroidPackages({ execute: spy.execute, ...noStores() });
   assert.ok(packages?.has(appId));
   assert.deepEqual(spy.calls, [['adb', 'shell', 'pm', 'list', 'packages']]);
 });
@@ -328,6 +381,8 @@ test('gh-777: duplicate booted simulator names keep refusing the exact-device bi
   );
 });
 
+// The Android side is fenced (no registry binding is wired in-process), so this
+// exercises the one-sided iOS-inventory branch through the production readers.
 test('gh-777: the real discovery path proves a custom-named simulator target', async () => {
   const server = createServer((request, response) => {
     if (request.url !== '/json/list') {
@@ -350,8 +405,10 @@ test('gh-777: the real discovery path proves a custom-named simulator target', a
   clearPackageProbeCache();
   cachedPackageProbe('ios', () => new Set([appId]));
   cachedPackageProbe('android', () => new Set([appId]));
-  cachedPackageProbe('ios-device-names', () => new Set([customSimulatorName]));
-  cachedPackageProbe('android-device-models', () => new Set(['be2013']));
+  cachedPackageProbe(
+    'ios-booted-simulators',
+    () => new Set([`${simulatorUdid}\t${customSimulatorName}\tBooted`]),
+  );
   try {
     const discovered = await discoverExactPort(port, { platform: 'ios', bundleId: appId });
     assert.equal(discovered.targets.length, 1);

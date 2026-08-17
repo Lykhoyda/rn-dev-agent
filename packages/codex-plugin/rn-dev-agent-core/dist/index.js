@@ -37097,6 +37097,18 @@ function cachedPackageProbe(key, probe, clock = Date.now) {
   });
   return value;
 }
+function setRegistryDeviceBindingProvider(provider) {
+  registryDeviceBindingProvider = provider;
+}
+function registryDeviceBinding() {
+  if (!registryDeviceBindingProvider)
+    return null;
+  try {
+    return registryDeviceBindingProvider() ?? null;
+  } catch {
+    return null;
+  }
+}
 function runAdbSync(file, args) {
   return execFileSync8(file, args, {
     timeout: 3e3,
@@ -37104,17 +37116,17 @@ function runAdbSync(file, args) {
     stdio: ["ignore", "pipe", "ignore"]
   });
 }
-function authorizedAndroidSerial(getSession = getActiveSession) {
-  const session2 = getSession();
-  return session2?.platform === "android" && session2.deviceId ? session2.deviceId : null;
-}
-function androidAdbScope(getSession = getActiveSession) {
-  const session2 = getSession();
-  if (session2 === null || session2 === void 0)
+function androidAdbScope(deps = {}) {
+  const registry2 = (deps.getRegistryBinding ?? registryDeviceBinding)();
+  const session2 = (deps.getSession ?? getActiveSession)();
+  if (!registry2 && !session2)
     return { kind: "ambient" };
-  if (session2.platform === "android" && session2.deviceId)
-    return { kind: "serial", serial: session2.deviceId };
-  return { kind: "fenced" };
+  const authorized = registry2?.platform === "android" && registry2.deviceId ? registry2.deviceId : null;
+  if (!authorized)
+    return { kind: "fenced" };
+  if (session2 && (session2.platform !== "android" || session2.deviceId !== authorized))
+    return { kind: "fenced" };
+  return { kind: "serial", serial: authorized };
 }
 function probeAndroidPackagesInScope(scope, execute2 = runAdbSync) {
   if (scope.kind === "fenced")
@@ -37188,7 +37200,7 @@ function readAndroidPackages() {
 function readIOSPackages() {
   return cachedPackageProbe("ios", probeIOSPackages);
 }
-function probeIOSBootedSimulatorNames() {
+function readIOSDeviceNames() {
   const inventory = readBootedSimulatorInventory();
   if (!inventory)
     return null;
@@ -37200,22 +37212,21 @@ function probeIOSBootedSimulatorNames() {
   }
   return names.size > 0 ? names : null;
 }
-function probeAndroidModelForSerial(serial, execute2 = runAdbSync) {
+function probeAndroidModelsInScope(scope, execute2 = runAdbSync) {
+  if (scope.kind !== "serial")
+    return null;
   try {
-    const model = execute2("adb", ["-s", serial, "shell", "getprop", "ro.product.model"]).trim().toLowerCase();
+    const model = execute2("adb", ["-s", scope.serial, "shell", "getprop", "ro.product.model"]).trim().toLowerCase();
     return model ? /* @__PURE__ */ new Set([model]) : null;
   } catch {
     return null;
   }
 }
-function readIOSDeviceNames() {
-  return cachedPackageProbe("ios-device-names", probeIOSBootedSimulatorNames);
-}
 function readAndroidDeviceModels() {
-  const serial = authorizedAndroidSerial();
-  if (!serial)
+  const scope = androidAdbScope();
+  if (scope.kind !== "serial")
     return null;
-  return cachedPackageProbe(`android-device-models:${serial}`, () => probeAndroidModelForSerial(serial));
+  return cachedPackageProbe(`android-device-models:${scope.serial}`, () => probeAndroidModelsInScope(scope));
 }
 function nameMatchesAndroidModel(name, models) {
   if (!models)
@@ -37552,7 +37563,7 @@ async function discoverForList(currentPort, portHint) {
   inferPlatforms(targets);
   return { port: chosen, targets };
 }
-var AppDetachedError, DISCOVERY_TIMEOUT_MS, MetroNotFoundError, PACKAGE_PROBE_TTL_MS, PACKAGE_PROBE_FAILURE_TTL_MS, PACKAGE_PROBE_SLOW_FAILURE_MS, packageProbeCache, TargetSelectionError;
+var AppDetachedError, DISCOVERY_TIMEOUT_MS, MetroNotFoundError, PACKAGE_PROBE_TTL_MS, PACKAGE_PROBE_FAILURE_TTL_MS, PACKAGE_PROBE_SLOW_FAILURE_MS, packageProbeCache, registryDeviceBindingProvider, TargetSelectionError;
 var init_discovery = __esm({
   "packages/rn-dev-agent-core/dist/cdp/discovery.js"() {
     "use strict";
@@ -37588,6 +37599,7 @@ var init_discovery = __esm({
     PACKAGE_PROBE_FAILURE_TTL_MS = 1500;
     PACKAGE_PROBE_SLOW_FAILURE_MS = 1e3;
     packageProbeCache = /* @__PURE__ */ new Map();
+    registryDeviceBindingProvider = null;
     TargetSelectionError = class extends Error {
       code;
       candidates;
@@ -86467,6 +86479,18 @@ addToolObserver((o) => recorder.record(o));
 addToolObserver((o) => strictProofMonitor.record(o));
 addToolObserver((o) => experienceRecorder.observe(o));
 var authorityRuntime = getWorkerAuthorityRuntime();
+setRegistryDeviceBindingProvider(() => {
+  const status = authorityRuntime.status();
+  if (!status.available)
+    return null;
+  const device = status.bindings.device;
+  if (!device)
+    return null;
+  return {
+    platform: typeof device.platform === "string" ? device.platform : void 0,
+    deviceId: typeof device.deviceId === "string" ? device.deviceId : void 0
+  };
+});
 setSnapshotAuthorityProvider({
   current: () => {
     const status = authorityRuntime.status();
