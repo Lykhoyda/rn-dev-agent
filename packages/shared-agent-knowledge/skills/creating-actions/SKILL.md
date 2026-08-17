@@ -119,7 +119,7 @@ Copy-adapt the complete worked example: `examples/add-product-to-cart.yaml`.
 
 ## Step 5 — Validate Before First Replay
 
-1. **Header parses + inventory lists it**: re-run the Step-0 command with `--filter <id>` — confirm `intent`, `tags`, `mutates`, `status` come back exactly as written (not `?`). This also proves the embedded diagram didn't corrupt the header.
+1. **Header parses + inventory lists it**: re-run the Step-0 command with `--filter <id>` — confirm `intent`, `tags`, `mutates`, `status` come back exactly as written (not `?`, `-`, or `pre-M7`). This also proves the embedded diagram didn't corrupt the header.
 2. **Placeholder coverage**: `grep -o '\${[A-Z_]*}' <file>` over the steps ↔ `# params` list, both directions.
 3. **Selector audit**: every `id:` in the YAML appears in the Step-2 evidence.
 4. **Syntax**: if the maestro MCP server is connected, `check_flow_syntax` on the body; otherwise the first replay doubles as the syntax check.
