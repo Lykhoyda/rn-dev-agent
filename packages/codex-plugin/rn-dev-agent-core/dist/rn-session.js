@@ -11601,6 +11601,7 @@ var init_maestro_runner_report = __esm({
 var init_discovery = __esm({
   "packages/rn-dev-agent-core/dist/cdp/discovery.js"() {
     "use strict";
+    init_agent_device_wrapper();
     init_logger();
     init_maestro_validator();
     init_metro_cwd();

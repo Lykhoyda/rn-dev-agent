@@ -27793,13 +27793,30 @@ function cachedPackageProbe(key, probe, clock = Date.now) {
   });
   return value;
 }
-function probeAndroidPackages() {
+function runAdbSync(file, args) {
+  return execFileSync11(file, args, {
+    timeout: 3e3,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"]
+  });
+}
+function authorizedAndroidSerial(getSession = getActiveSession) {
+  const session2 = getSession();
+  return session2?.platform === "android" && session2.deviceId ? session2.deviceId : null;
+}
+function androidAdbScope(getSession = getActiveSession) {
+  const session2 = getSession();
+  if (session2 === null || session2 === void 0)
+    return { kind: "ambient" };
+  if (session2.platform === "android" && session2.deviceId)
+    return { kind: "serial", serial: session2.deviceId };
+  return { kind: "fenced" };
+}
+function probeAndroidPackagesInScope(scope, execute2 = runAdbSync) {
+  if (scope.kind === "fenced")
+    return null;
   try {
-    const out = execFileSync11("adb", ["shell", "pm", "list", "packages"], {
-      timeout: 3e3,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"]
-    });
+    const out = scope.kind === "serial" ? execute2("adb", ["-s", scope.serial, "shell", "pm", "list", "packages"]) : execute2("adb", ["shell", "pm", "list", "packages"]);
     return new Set(out.split("\n").map((line) => line.replace("package:", "").trim()).filter(Boolean));
   } catch {
     return null;
@@ -27858,7 +27875,11 @@ function probeIOSPackages() {
   return probed ? ids : null;
 }
 function readAndroidPackages() {
-  return cachedPackageProbe("android", probeAndroidPackages);
+  const scope = androidAdbScope();
+  if (scope.kind === "fenced")
+    return null;
+  const key = scope.kind === "serial" ? `android:${scope.serial}` : "android";
+  return cachedPackageProbe(key, () => probeAndroidPackagesInScope(scope));
 }
 function readIOSPackages() {
   return cachedPackageProbe("ios", probeIOSPackages);
@@ -27875,30 +27896,10 @@ function probeIOSBootedSimulatorNames() {
   }
   return names.size > 0 ? names : null;
 }
-function probeAndroidDeviceModels() {
+function probeAndroidModelForSerial(serial, execute2 = runAdbSync) {
   try {
-    const out = execFileSync11("adb", ["devices"], {
-      timeout: 3e3,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"]
-    });
-    const serials = out.split("\n").map((line) => line.trim().split(/\s+/)).filter((parts) => parts[0] && parts[1] === "device").map((parts) => parts[0]);
-    if (serials.length === 0)
-      return null;
-    const models = /* @__PURE__ */ new Set();
-    for (const serial of serials) {
-      try {
-        const model = execFileSync11("adb", ["-s", serial, "shell", "getprop", "ro.product.model"], {
-          timeout: 3e3,
-          encoding: "utf8",
-          stdio: ["ignore", "pipe", "ignore"]
-        }).trim().toLowerCase();
-        if (model)
-          models.add(model);
-      } catch {
-      }
-    }
-    return models.size > 0 ? models : null;
+    const model = execute2("adb", ["-s", serial, "shell", "getprop", "ro.product.model"]).trim().toLowerCase();
+    return model ? /* @__PURE__ */ new Set([model]) : null;
   } catch {
     return null;
   }
@@ -27907,7 +27908,10 @@ function readIOSDeviceNames() {
   return cachedPackageProbe("ios-device-names", probeIOSBootedSimulatorNames);
 }
 function readAndroidDeviceModels() {
-  return cachedPackageProbe("android-device-models", probeAndroidDeviceModels);
+  const serial = authorizedAndroidSerial();
+  if (!serial)
+    return null;
+  return cachedPackageProbe(`android-device-models:${serial}`, () => probeAndroidModelForSerial(serial));
 }
 function nameMatchesAndroidModel(name, models) {
   if (!models)
@@ -28248,6 +28252,7 @@ var AppDetachedError, DISCOVERY_TIMEOUT_MS, MetroNotFoundError, PACKAGE_PROBE_TT
 var init_discovery = __esm({
   "packages/rn-dev-agent-core/dist/cdp/discovery.js"() {
     "use strict";
+    init_agent_device_wrapper();
     init_logger();
     init_maestro_validator();
     init_metro_cwd();

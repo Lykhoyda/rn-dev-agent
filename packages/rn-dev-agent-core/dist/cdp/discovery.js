@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { getActiveSession } from '../agent-device-wrapper.js';
 import { logger } from '../logger.js';
 import { isValidBundleId } from '../domain/maestro-validator.js';
 import { cwdForPort, pathMatchesRoot, resolveBridgeProjectRoot } from './metro-cwd.js';
@@ -216,13 +217,35 @@ export function cachedPackageProbe(key, probe, clock = Date.now) {
 export function clearPackageProbeCache() {
     packageProbeCache.clear();
 }
-function probeAndroidPackages() {
+function runAdbSync(file, args) {
+    return execFileSync(file, args, {
+        timeout: 3000,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+    });
+}
+export function authorizedAndroidSerial(getSession = getActiveSession) {
+    const session = getSession();
+    return session?.platform === 'android' && session.deviceId ? session.deviceId : null;
+}
+// A bound session fences adb to its own authorized serial; any session bound to
+// another platform (or malformed) yields no adb access at all. Only a fully
+// session-less legacy flow keeps the pre-existing single ambient read.
+function androidAdbScope(getSession = getActiveSession) {
+    const session = getSession();
+    if (session === null || session === undefined)
+        return { kind: 'ambient' };
+    if (session.platform === 'android' && session.deviceId)
+        return { kind: 'serial', serial: session.deviceId };
+    return { kind: 'fenced' };
+}
+function probeAndroidPackagesInScope(scope, execute = runAdbSync) {
+    if (scope.kind === 'fenced')
+        return null;
     try {
-        const out = execFileSync('adb', ['shell', 'pm', 'list', 'packages'], {
-            timeout: 3000,
-            encoding: 'utf8',
-            stdio: ['ignore', 'pipe', 'ignore'],
-        });
+        const out = scope.kind === 'serial'
+            ? execute('adb', ['-s', scope.serial, 'shell', 'pm', 'list', 'packages'])
+            : execute('adb', ['shell', 'pm', 'list', 'packages']);
         return new Set(out
             .split('\n')
             .map((line) => line.replace('package:', '').trim())
@@ -231,6 +254,9 @@ function probeAndroidPackages() {
     catch {
         return null;
     }
+}
+export function probeAndroidPackages(deps = {}) {
+    return probeAndroidPackagesInScope(androidAdbScope(deps.getSession), deps.execute);
 }
 // The UDID and the device-name probe both need `simctl list devices booted`, so
 // one cached parse feeds both instead of spawning the same 5s subprocess twice.
@@ -294,7 +320,11 @@ function probeIOSPackages() {
     return probed ? ids : null;
 }
 function readAndroidPackages() {
-    return cachedPackageProbe('android', probeAndroidPackages);
+    const scope = androidAdbScope();
+    if (scope.kind === 'fenced')
+        return null;
+    const key = scope.kind === 'serial' ? `android:${scope.serial}` : 'android';
+    return cachedPackageProbe(key, () => probeAndroidPackagesInScope(scope));
 }
 function readIOSPackages() {
     return cachedPackageProbe('ios', probeIOSPackages);
@@ -317,48 +347,31 @@ function probeIOSBootedSimulatorNames() {
     }
     return names.size > 0 ? names : null;
 }
-function probeAndroidDeviceModels() {
+function probeAndroidModelForSerial(serial, execute = runAdbSync) {
     try {
-        const out = execFileSync('adb', ['devices'], {
-            timeout: 3000,
-            encoding: 'utf8',
-            stdio: ['ignore', 'pipe', 'ignore'],
-        });
-        const serials = out
-            .split('\n')
-            .map((line) => line.trim().split(/\s+/))
-            .filter((parts) => parts[0] && parts[1] === 'device')
-            .map((parts) => parts[0]);
-        if (serials.length === 0)
-            return null;
-        const models = new Set();
-        for (const serial of serials) {
-            try {
-                const model = execFileSync('adb', ['-s', serial, 'shell', 'getprop', 'ro.product.model'], {
-                    timeout: 3000,
-                    encoding: 'utf8',
-                    stdio: ['ignore', 'pipe', 'ignore'],
-                })
-                    .trim()
-                    .toLowerCase();
-                if (model)
-                    models.add(model);
-            }
-            catch {
-                // One unreadable device must not blind the others.
-            }
-        }
-        return models.size > 0 ? models : null;
+        const model = execute('adb', ['-s', serial, 'shell', 'getprop', 'ro.product.model'])
+            .trim()
+            .toLowerCase();
+        return model ? new Set([model]) : null;
     }
     catch {
         return null;
     }
 }
+export function probeAndroidDeviceModels(deps = {}) {
+    const serial = authorizedAndroidSerial(deps.getSession);
+    if (!serial)
+        return null;
+    return probeAndroidModelForSerial(serial, deps.execute);
+}
 function readIOSDeviceNames() {
     return cachedPackageProbe('ios-device-names', probeIOSBootedSimulatorNames);
 }
 function readAndroidDeviceModels() {
-    return cachedPackageProbe('android-device-models', probeAndroidDeviceModels);
+    const serial = authorizedAndroidSerial();
+    if (!serial)
+        return null;
+    return cachedPackageProbe(`android-device-models:${serial}`, () => probeAndroidModelForSerial(serial));
 }
 // Metro reports Android deviceName as `<model>` or `<model> - <os> - API <n>`.
 function nameMatchesAndroidModel(name, models) {

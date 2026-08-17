@@ -250,8 +250,9 @@ through one internally consistent Metro field — `appId`, an exact bundle-id
 or ambiguous platform guess never satisfies a platform filter. A `deviceName`
 that carries no platform token — a custom simulator name such as `rn-qa` —
 is proven against the live device inventory (booted `simctl` simulator names
-and `adb` device models); a name that matches both inventories, or neither,
-stays on the fail-closed bundle inference. The refusal lists the candidate
+and, only when the session has a bound Android serial, that one device's `adb`
+model — an ambient adb device is never queried); a name that matches both
+inventories, or neither, stays on the fail-closed bundle inference. The refusal lists the candidate
 targets with their inference confidence. Run
 `cdp_targets` only to diagnose the mismatch, relaunch the authority-bound app,
 and call `cdp_connect` again. Omitted values come only from the fenced session;

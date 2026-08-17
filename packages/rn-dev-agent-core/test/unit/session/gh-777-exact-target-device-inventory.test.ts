@@ -3,10 +3,13 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { test } from 'node:test';
 import {
+  authorizedAndroidSerial,
   cachedPackageProbe,
   clearPackageProbeCache,
   discoverExactPort,
   inferPlatforms,
+  probeAndroidDeviceModels,
+  probeAndroidPackages,
 } from '../../../dist/cdp/discovery.js';
 import type { CDPClient } from '../../../dist/cdp-client.js';
 import { connectExactSessionTarget } from '../../../dist/session/connect-exact-session-target.js';
@@ -133,6 +136,69 @@ test('gh-777: targets without a deviceName never consult the device inventory', 
   assert.equal(inventoryReads, 0);
   assert.equal(targets[0]!.platform, 'ios');
   assert.equal(targets[0]!.platformInference, 'probed');
+});
+
+// GH #777 QA follow-up: Android inventory reads are fenced to the session's
+// authorized serial — an ambient shared phone must never be queried.
+const boundSerial = '1A2B3C4D';
+const ambientPhoneSerial = '46828c2c';
+
+function execSpy(model = 'be2013') {
+  const calls: string[][] = [];
+  return {
+    calls,
+    execute: (file: string, args: string[]) => {
+      calls.push([file, ...args]);
+      if (args.includes('getprop')) return `${model}\n`;
+      return `package:${appId}\n`;
+    },
+  };
+}
+
+test('gh-777-qa: no session — the models probe never runs adb at all', () => {
+  const spy = execSpy();
+  const result = probeAndroidDeviceModels({ execute: spy.execute, getSession: () => null });
+  assert.equal(result, null);
+  assert.deepEqual(spy.calls, []);
+});
+
+test('gh-777-qa: iOS-bound session — no adb read runs, ambient phone untouched', () => {
+  const spy = execSpy();
+  const session = { platform: 'ios', deviceId: simulatorUdid };
+  assert.equal(
+    authorizedAndroidSerial(() => session),
+    null,
+  );
+  assert.equal(probeAndroidDeviceModels({ execute: spy.execute, getSession: () => session }), null);
+  assert.equal(probeAndroidPackages({ execute: spy.execute, getSession: () => session }), null);
+  assert.deepEqual(spy.calls, []);
+});
+
+test('gh-777-qa: android-bound session — exactly one getprop scoped to the bound serial', () => {
+  const spy = execSpy();
+  const session = { platform: 'android', deviceId: boundSerial };
+  const models = probeAndroidDeviceModels({ execute: spy.execute, getSession: () => session });
+  assert.deepEqual([...(models ?? [])], ['be2013']);
+  assert.deepEqual(spy.calls, [['adb', '-s', boundSerial, 'shell', 'getprop', 'ro.product.model']]);
+  assert.ok(
+    spy.calls.every((call) => !call.includes('devices') && !call.includes(ambientPhoneSerial)),
+    'no adb devices enumeration and no ambient serial may ever be queried',
+  );
+});
+
+test('gh-777-qa: android-bound session — package probe is scoped with -s to the bound serial', () => {
+  const spy = execSpy();
+  const session = { platform: 'android', deviceId: boundSerial };
+  const packages = probeAndroidPackages({ execute: spy.execute, getSession: () => session });
+  assert.ok(packages?.has(appId));
+  assert.deepEqual(spy.calls, [['adb', '-s', boundSerial, 'shell', 'pm', 'list', 'packages']]);
+});
+
+test('gh-777-qa: session-less legacy flow keeps the single pre-existing baseline read', () => {
+  const spy = execSpy();
+  const packages = probeAndroidPackages({ execute: spy.execute, getSession: () => null });
+  assert.ok(packages?.has(appId));
+  assert.deepEqual(spy.calls, [['adb', 'shell', 'pm', 'list', 'packages']]);
 });
 
 function iosExactFixture(listedTargets: unknown[]) {
