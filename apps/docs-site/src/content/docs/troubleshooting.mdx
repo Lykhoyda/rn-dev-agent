@@ -252,9 +252,11 @@ that carries no platform token — a custom simulator name such as `rn-qa` —
 is proven against the live device inventory (booted `simctl` simulator names
 and, only when the session authority binds that exact Android serial, that one
 device's `adb` model — any other initialized authority, including one that binds
-no device at all, one whose session owner was lost, or one whose binding cannot
-be read, fences `adb` entirely and an ambient adb device is never queried; only
-a runtime that was never initialized keeps the legacy ambient read); a name that
+no device at all, one whose session owner was lost, one whose worker birth or
+authority store failed to open, or one whose binding cannot be read, fences
+`adb` entirely and an ambient adb device is never queried; only a runtime that
+was never initialized (`SESSION_NOT_INITIALIZED`) keeps the legacy ambient
+read); a name that
 matches both inventories, or neither, stays on the fail-closed bundle inference.
 The refusal lists the candidate targets with their inference confidence. Run
 `cdp_targets` only to diagnose the mismatch, relaunch the authority-bound app,

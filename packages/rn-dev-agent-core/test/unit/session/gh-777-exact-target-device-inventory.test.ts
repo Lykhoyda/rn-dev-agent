@@ -257,9 +257,10 @@ test('gh-777-qa: both stores empty keeps the single pre-existing baseline read',
 
 // P1 (PR #782 / #786 review): the provider mapping is a pure three-state seam —
 // never-initialized => null, available with no/null device => {}, device present =>
-// {platform,deviceId}. SESSION_OWNER_LOST on an initialized runtime is {}, never
-// null. The consumer tests below still prove the {} sentinel fences adb, and a
-// throwing lookup never becomes ambient.
+// {platform,deviceId}. Any unavailable code other than SESSION_NOT_INITIALIZED
+// (SESSION_OWNER_LOST, PROCESS_BIRTH_UNAVAILABLE, AUTHORITY_STORE_UNAVAILABLE)
+// is {}, never null. The consumer tests below still prove the {} sentinel
+// fences adb, and a throwing lookup never becomes ambient.
 test('gh-777-qa: provider mapping — unavailable authority is null', () => {
   assert.equal(mapRegistryDeviceBinding({ available: false }), null);
   assert.equal(
@@ -272,6 +273,24 @@ test('gh-777-qa: provider mapping — SESSION_OWNER_LOST from an initialized run
   assert.deepEqual(mapRegistryDeviceBinding({ available: false, code: 'SESSION_OWNER_LOST' }), {});
   assert.deepEqual(
     mapRegistryDeviceBinding({ available: false, code: 'SESSION_OWNER_LOST' }, true),
+    {},
+  );
+});
+
+test('gh-777-qa: provider mapping — supervisor-present init failures are the fence sentinel', () => {
+  // Discriminating vs a5d7a4a9: that head fenced only SESSION_OWNER_LOST, so
+  // PROCESS_BIRTH_UNAVAILABLE / AUTHORITY_STORE_UNAVAILABLE collapsed to null
+  // (ambient) even though the supervisor had already supplied a session context.
+  assert.notEqual(
+    mapRegistryDeviceBinding({ available: false, code: 'PROCESS_BIRTH_UNAVAILABLE' }),
+    null,
+  );
+  assert.deepEqual(
+    mapRegistryDeviceBinding({ available: false, code: 'PROCESS_BIRTH_UNAVAILABLE' }),
+    {},
+  );
+  assert.deepEqual(
+    mapRegistryDeviceBinding({ available: false, code: 'AUTHORITY_STORE_UNAVAILABLE' }),
     {},
   );
 });

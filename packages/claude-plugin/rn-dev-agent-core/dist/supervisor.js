@@ -27795,7 +27795,8 @@ function cachedPackageProbe(key, probe, clock = Date.now) {
 }
 function mapRegistryDeviceBinding(status, runtimeInitialized = false) {
   if (!status.available) {
-    return runtimeInitialized || status.code === "SESSION_OWNER_LOST" ? {} : null;
+    const neverInitialized = !runtimeInitialized && (status.code === void 0 || status.code === "SESSION_NOT_INITIALIZED");
+    return neverInitialized ? null : {};
   }
   const device = status.bindings.device;
   if (!device)
