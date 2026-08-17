@@ -221,16 +221,14 @@ let registryDeviceBindingProvider = null;
 export function setRegistryDeviceBindingProvider(provider) {
     registryDeviceBindingProvider = provider;
 }
-// An unavailable registry lookup is an absence of authorization, never a grant.
+// Null means NO authority session exists in this worker (provider uninstalled
+// or the runtime reports unavailable) — only then may legacy ambient behavior
+// apply. An installed provider reporting an available authority with no device
+// binding returns the {} sentinel instead, which fences adb downstream.
 function registryDeviceBinding() {
     if (!registryDeviceBindingProvider)
         return null;
-    try {
-        return registryDeviceBindingProvider() ?? null;
-    }
-    catch {
-        return null;
-    }
+    return registryDeviceBindingProvider() ?? null;
 }
 function runAdbSync(file, args) {
     return execFileSync(file, args, {
@@ -243,7 +241,14 @@ function runAdbSync(file, args) {
 // device-wrapper session (including its disk-rehydrated state) can only revoke.
 // Only a flow with both stores empty keeps the pre-existing single ambient read.
 function androidAdbScope(deps = {}) {
-    const registry = (deps.getRegistryBinding ?? registryDeviceBinding)();
+    let registry;
+    try {
+        registry = (deps.getRegistryBinding ?? registryDeviceBinding)();
+    }
+    catch {
+        // A failing authority lookup is an unknown state, never ambient license.
+        registry = {};
+    }
     const session = (deps.getSession ?? getActiveSession)();
     if (!registry && !session)
         return { kind: 'ambient' };

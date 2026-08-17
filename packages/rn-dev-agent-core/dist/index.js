@@ -275,8 +275,10 @@ setRegistryDeviceBindingProvider(() => {
     if (!status.available)
         return null;
     const device = status.bindings.device;
+    // An available authority with no device binding (e.g. source/Metro bound
+    // before bind_device) is authority-present: the {} sentinel fences adb.
     if (!device)
-        return null;
+        return {};
     return {
         platform: typeof device.platform === 'string' ? device.platform : undefined,
         deviceId: typeof device.deviceId === 'string' ? device.deviceId : undefined,

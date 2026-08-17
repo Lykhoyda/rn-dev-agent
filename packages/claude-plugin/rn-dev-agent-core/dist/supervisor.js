@@ -27799,11 +27799,7 @@ function setRegistryDeviceBindingProvider(provider) {
 function registryDeviceBinding() {
   if (!registryDeviceBindingProvider)
     return null;
-  try {
-    return registryDeviceBindingProvider() ?? null;
-  } catch {
-    return null;
-  }
+  return registryDeviceBindingProvider() ?? null;
 }
 function runAdbSync(file, args) {
   return execFileSync11(file, args, {
@@ -27813,7 +27809,12 @@ function runAdbSync(file, args) {
   });
 }
 function androidAdbScope(deps = {}) {
-  const registry2 = (deps.getRegistryBinding ?? registryDeviceBinding)();
+  let registry2;
+  try {
+    registry2 = (deps.getRegistryBinding ?? registryDeviceBinding)();
+  } catch {
+    registry2 = {};
+  }
   const session2 = (deps.getSession ?? getActiveSession)();
   if (!registry2 && !session2)
     return { kind: "ambient" };
@@ -88925,7 +88926,7 @@ var init_index = __esm({
         return null;
       const device = status.bindings.device;
       if (!device)
-        return null;
+        return {};
       return {
         platform: typeof device.platform === "string" ? device.platform : void 0,
         deviceId: typeof device.deviceId === "string" ? device.deviceId : void 0

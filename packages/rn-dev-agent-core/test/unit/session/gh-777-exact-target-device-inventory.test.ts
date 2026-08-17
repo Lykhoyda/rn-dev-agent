@@ -254,6 +254,35 @@ test('gh-777-qa: both stores empty keeps the single pre-existing baseline read',
   assert.deepEqual(spy.calls, [['adb', 'shell', 'pm', 'list', 'packages']]);
 });
 
+// P1 (PR #782 review): an available authority runtime with NO device binding
+// reports the {} sentinel, never null — a source/Metro-bound worker must not
+// collapse to the ambient legacy read when the wrapper session is also empty.
+test('gh-777-qa: source/Metro-bound authority with no device binding fences adb entirely', () => {
+  const spy = execSpy();
+  const stores = {
+    getSession: () => null,
+    getRegistryBinding: () => ({}),
+  };
+  assert.equal(authorizedAndroidSerial(stores), null);
+  assert.equal(probeAndroidDeviceModels({ execute: spy.execute, ...stores }), null);
+  assert.equal(probeAndroidPackages({ execute: spy.execute, ...stores }), null);
+  assert.deepEqual(spy.calls, []);
+});
+
+test('gh-777-qa: a throwing registry lookup is fenced, never ambient', () => {
+  const spy = execSpy();
+  const stores = {
+    getSession: () => null,
+    getRegistryBinding: () => {
+      throw new Error('authority runtime unavailable');
+    },
+  };
+  assert.equal(authorizedAndroidSerial(stores), null);
+  assert.equal(probeAndroidDeviceModels({ execute: spy.execute, ...stores }), null);
+  assert.equal(probeAndroidPackages({ execute: spy.execute, ...stores }), null);
+  assert.deepEqual(spy.calls, []);
+});
+
 function iosExactFixture(listedTargets: unknown[]) {
   let now = 0;
   const client = {
