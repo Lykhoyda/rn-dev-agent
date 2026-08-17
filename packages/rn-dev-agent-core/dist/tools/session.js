@@ -8,7 +8,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { resolveSourceIdentity } from '../session/source-identity.js';
-import { writeSuccessorSourceDeclaration, } from '../session/successor-source.js';
+import { clearSuccessorSourceDeclaration, writeSuccessorSourceDeclaration, } from '../session/successor-source.js';
 import { inspectSessionOwner } from '../session/process-owner.js';
 import { inspectInstallIdentity } from '../session/install-identity-inspection.js';
 import { projectPublicAuthorityStatus } from '../session/public-status.js';
@@ -110,10 +110,17 @@ function defaultDeclareSuccessorSource(declaration) {
     }
     writeSuccessorSourceDeclaration(runtimeRoot, declaration);
 }
-// GH #776: a caller-declared projectRoot in a different git worktree refuses with
-// both paths named instead of silently mutating the session's tree. Identity is
-// compared by canonical worktree toplevel, never by filesystem containment — a
-// linked worktree may be nested beneath the bound checkout.
+function defaultWithdrawSuccessorSource() {
+    const runtimeRoot = process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT;
+    if (!runtimeRoot)
+        return;
+    clearSuccessorSourceDeclaration(runtimeRoot);
+}
+// GH #776: a caller-declared projectRoot that is not the session's exact source
+// root refuses with both paths named instead of silently mutating another tree.
+// Identity is the same (worktree toplevel, app root) pair bind_source compares,
+// never filesystem containment — a linked worktree may be nested beneath the
+// bound checkout, and a sibling app package shares its toplevel.
 function assertDeclaredProjectRootMatches(status, projectRoot, resolveIdentity) {
     if (projectRoot === undefined)
         return;
@@ -128,11 +135,15 @@ function assertDeclaredProjectRootMatches(status, projectRoot, resolveIdentity) 
     catch (error) {
         throw new SessionAuthorityError('SOURCE_ROOT_DIVERGENCE', `declared project root ${projectRoot} cannot be resolved as a source root (session source root: ${boundAppRoot}): ${error instanceof Error ? error.message : 'unknown error'}`, undefined, { axis: 'S' });
     }
-    if (declared.worktreeKey === status.worktreeKey)
+    if (declared.worktreeKey === status.worktreeKey && declared.appRootKey === status.appRootKey) {
         return;
-    throw new SessionAuthorityError('SOURCE_ROOT_DIVERGENCE', `session source is bound to ${boundAppRoot} but the caller declared ${declared.appRoot} in a different worktree`, undefined, {
+    }
+    const divergence = declared.worktreeKey === status.worktreeKey
+        ? 'a different app root of the same worktree'
+        : 'a different worktree';
+    throw new SessionAuthorityError('SOURCE_ROOT_DIVERGENCE', `session source is bound to ${boundAppRoot} but the caller declared ${declared.appRoot} in ${divergence}`, undefined, {
         axis: 'S',
-        nextAction: `Run rn_session action "bind_source" with projectRoot "${declared.appRoot}" to rebind this session to that worktree, then retry.`,
+        nextAction: `Run rn_session action "bind_source" with projectRoot "${declared.appRoot}" to rebind this session to that root, then retry.`,
     });
 }
 async function stopVerifiedSessionObserve(status, session, dependencies) {
@@ -575,7 +586,21 @@ export function createSessionHandler(runtime, dependencies = {}) {
                     sessionId: session.sessionId,
                     declaredAtMs: Date.now(),
                 });
-                const outcome = await releaseSessionAuthority(registry, session, dependencies);
+                let outcome;
+                try {
+                    outcome = await releaseSessionAuthority(registry, session, dependencies);
+                }
+                catch (error) {
+                    // GH #776: the session still holds its old root, so a declaration left
+                    // behind here would silently redirect an unrelated later release.
+                    try {
+                        (dependencies.withdrawSuccessorSource ?? defaultWithdrawSuccessorSource)();
+                    }
+                    catch {
+                        /* the release refusal is the actionable failure */
+                    }
+                    throw error;
+                }
                 return okResult({
                     bound: false,
                     released: true,
@@ -600,12 +625,20 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 if (status.bindings.runner || status.bindings.proof) {
                     throw new SessionAuthorityError('DEVICE_AUTHORITY_MISMATCH', 'device rebinding requires runner or proof authority to be released first');
                 }
-                if (status.bindings.observe) {
-                    // GH #776: autostarted Observe yields the device axis on the first
-                    // bind_device instead of forcing a manual observe stop.
-                    await stopVerifiedSessionObserve(status, session, dependencies);
+                // GH #776: autostarted Observe yields the device axis on the first
+                // bind_device instead of forcing a manual observe stop. It runs only once
+                // every device-side check has passed, so a refused bind keeps Observe up.
+                const yieldObserveDeviceAxis = async () => {
+                    const current = registry.getSessionStatus(session.sessionId);
+                    if (!current) {
+                        throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'session disappeared before Observe yielded the device axis');
+                    }
+                    status = current;
+                    if (!current.bindings.observe)
+                        return;
+                    await stopVerifiedSessionObserve(current, session, dependencies);
                     registry.updateBindings(session, {
-                        expectedAuthorityVersion: status.authorityVersion,
+                        expectedAuthorityVersion: current.authorityVersion,
                         bindings: { observe: null },
                     });
                     const refreshed = registry.getSessionStatus(session.sessionId);
@@ -613,7 +646,7 @@ export function createSessionHandler(runtime, dependencies = {}) {
                         throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'session disappeared after Observe yielded the device axis');
                     }
                     status = refreshed;
-                }
+                };
                 const requireWorkerInstance = () => {
                     const workerInstance = status.worker.instanceId;
                     if (!workerInstance) {
@@ -671,6 +704,7 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 }
                 const expectedMetroOrigin = { expectedMetroPort };
                 if (!input.buildReceipt) {
+                    await yieldObserveDeviceAxis();
                     const invalidatesBundle = Boolean(status.bindings.bundle);
                     await withInlineStaleDeviceCleanup(registry, session, dependencies, { platform, deviceId, appId, confirmed: input.confirmed }, requireWorkerInstance, requireExactDevice, () => registry.replaceDeviceAuthority(session, {
                         resource: { type: 'device', key: `${platform}:${deviceId}` },
@@ -713,6 +747,7 @@ export function createSessionHandler(runtime, dependencies = {}) {
                     }
                 };
                 requireInstallGeneration();
+                await yieldObserveDeviceAxis();
                 await withInlineStaleDeviceCleanup(registry, session, dependencies, { platform, deviceId, appId, confirmed: input.confirmed }, requireWorkerInstance, () => {
                     requireExactDevice();
                     requireInstallGeneration();

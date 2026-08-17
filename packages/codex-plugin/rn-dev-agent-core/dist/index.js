@@ -68509,6 +68509,9 @@ function successorSourceDeclarationPath(runtimeRoot) {
 function writeSuccessorSourceDeclaration(runtimeRoot, declaration) {
   writeJsonStateFileAtomic(successorSourceDeclarationPath(runtimeRoot), declaration);
 }
+function clearSuccessorSourceDeclaration(runtimeRoot) {
+  deleteStateFile(successorSourceDeclarationPath(runtimeRoot));
+}
 
 // packages/rn-dev-agent-core/dist/session/process-owner.js
 init_process_birth();
@@ -69096,6 +69099,12 @@ function defaultDeclareSuccessorSource(declaration) {
   }
   writeSuccessorSourceDeclaration(runtimeRoot, declaration);
 }
+function defaultWithdrawSuccessorSource() {
+  const runtimeRoot = process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT;
+  if (!runtimeRoot)
+    return;
+  clearSuccessorSourceDeclaration(runtimeRoot);
+}
 function assertDeclaredProjectRootMatches(status, projectRoot, resolveIdentity) {
   if (projectRoot === void 0)
     return;
@@ -69109,11 +69118,13 @@ function assertDeclaredProjectRootMatches(status, projectRoot, resolveIdentity) 
   } catch (error2) {
     throw new SessionAuthorityError("SOURCE_ROOT_DIVERGENCE", `declared project root ${projectRoot} cannot be resolved as a source root (session source root: ${boundAppRoot}): ${error2 instanceof Error ? error2.message : "unknown error"}`, void 0, { axis: "S" });
   }
-  if (declared.worktreeKey === status.worktreeKey)
+  if (declared.worktreeKey === status.worktreeKey && declared.appRootKey === status.appRootKey) {
     return;
-  throw new SessionAuthorityError("SOURCE_ROOT_DIVERGENCE", `session source is bound to ${boundAppRoot} but the caller declared ${declared.appRoot} in a different worktree`, void 0, {
+  }
+  const divergence = declared.worktreeKey === status.worktreeKey ? "a different app root of the same worktree" : "a different worktree";
+  throw new SessionAuthorityError("SOURCE_ROOT_DIVERGENCE", `session source is bound to ${boundAppRoot} but the caller declared ${declared.appRoot} in ${divergence}`, void 0, {
     axis: "S",
-    nextAction: `Run rn_session action "bind_source" with projectRoot "${declared.appRoot}" to rebind this session to that worktree, then retry.`
+    nextAction: `Run rn_session action "bind_source" with projectRoot "${declared.appRoot}" to rebind this session to that root, then retry.`
   });
 }
 async function stopVerifiedSessionObserve(status, session2, dependencies) {
@@ -69489,7 +69500,16 @@ function createSessionHandler(runtime, dependencies = {}) {
           sessionId: session2.sessionId,
           declaredAtMs: Date.now()
         });
-        const outcome2 = await releaseSessionAuthority(registry2, session2, dependencies);
+        let outcome2;
+        try {
+          outcome2 = await releaseSessionAuthority(registry2, session2, dependencies);
+        } catch (error2) {
+          try {
+            (dependencies.withdrawSuccessorSource ?? defaultWithdrawSuccessorSource)();
+          } catch {
+          }
+          throw error2;
+        }
         return okResult({
           bound: false,
           released: true,
@@ -69512,10 +69532,17 @@ function createSessionHandler(runtime, dependencies = {}) {
         if (status.bindings.runner || status.bindings.proof) {
           throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "device rebinding requires runner or proof authority to be released first");
         }
-        if (status.bindings.observe) {
-          await stopVerifiedSessionObserve(status, session2, dependencies);
+        const yieldObserveDeviceAxis = async () => {
+          const current = registry2.getSessionStatus(session2.sessionId);
+          if (!current) {
+            throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "session disappeared before Observe yielded the device axis");
+          }
+          status = current;
+          if (!current.bindings.observe)
+            return;
+          await stopVerifiedSessionObserve(current, session2, dependencies);
           registry2.updateBindings(session2, {
-            expectedAuthorityVersion: status.authorityVersion,
+            expectedAuthorityVersion: current.authorityVersion,
             bindings: { observe: null }
           });
           const refreshed = registry2.getSessionStatus(session2.sessionId);
@@ -69523,7 +69550,7 @@ function createSessionHandler(runtime, dependencies = {}) {
             throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "session disappeared after Observe yielded the device axis");
           }
           status = refreshed;
-        }
+        };
         const requireWorkerInstance = () => {
           const workerInstance = status.worker.instanceId;
           if (!workerInstance) {
@@ -69567,6 +69594,7 @@ function createSessionHandler(runtime, dependencies = {}) {
         }
         const expectedMetroOrigin = { expectedMetroPort };
         if (!input.buildReceipt) {
+          await yieldObserveDeviceAxis();
           const invalidatesBundle = Boolean(status.bindings.bundle);
           await withInlineStaleDeviceCleanup(registry2, session2, dependencies, { platform, deviceId, appId, confirmed: input.confirmed }, requireWorkerInstance, requireExactDevice, () => registry2.replaceDeviceAuthority(session2, {
             resource: { type: "device", key: `${platform}:${deviceId}` },
@@ -69609,6 +69637,7 @@ function createSessionHandler(runtime, dependencies = {}) {
           }
         };
         requireInstallGeneration();
+        await yieldObserveDeviceAxis();
         await withInlineStaleDeviceCleanup(registry2, session2, dependencies, { platform, deviceId, appId, confirmed: input.confirmed }, requireWorkerInstance, () => {
           requireExactDevice();
           requireInstallGeneration();

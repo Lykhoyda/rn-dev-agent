@@ -8,6 +8,9 @@ export function successorSourceDeclarationPath(runtimeRoot) {
 export function writeSuccessorSourceDeclaration(runtimeRoot, declaration) {
     writeJsonStateFileAtomic(successorSourceDeclarationPath(runtimeRoot), declaration);
 }
+export function clearSuccessorSourceDeclaration(runtimeRoot) {
+    deleteStateFile(successorSourceDeclarationPath(runtimeRoot));
+}
 export function consumeSuccessorSourceDeclaration(layout, sessionId) {
     const path = successorSourceDeclarationPath(sessionRuntimeDirectory(layout, sessionId));
     const value = readJsonStateFile(path);

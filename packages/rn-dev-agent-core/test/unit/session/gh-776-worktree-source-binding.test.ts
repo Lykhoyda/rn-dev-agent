@@ -47,6 +47,27 @@ function makeRepoWithWorktree(): { primary: string; linked: string } {
   return { primary, linked };
 }
 
+function makeMonorepoApps(): { mobile: string; other: string } {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'rn-gh776-monorepo-')));
+  roots.push(root);
+  git(root, ['init', '-q', '.']);
+  git(root, ['config', 'user.email', 'fixture@example.test']);
+  git(root, ['config', 'user.name', 'fixture']);
+  git(root, ['config', 'commit.gpgsign', 'false']);
+  const mobile = join(root, 'apps', 'mobile');
+  const other = join(root, 'apps', 'other');
+  for (const app of [mobile, other]) {
+    mkdirSync(app, { recursive: true });
+    writeFileSync(
+      join(app, 'package.json'),
+      JSON.stringify({ name: app, dependencies: { 'react-native': '0.76.0' } }),
+    );
+  }
+  git(root, ['add', '-A']);
+  git(root, ['commit', '-qm', 'init']);
+  return { mobile, other };
+}
+
 function makeForeignRepo(): string {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'rn-gh776-foreign-')));
   roots.push(root);
@@ -294,6 +315,94 @@ test('bind_source refuses while package integration is applied in the bound tree
   assert.deepEqual(calls, []);
 });
 
+test('a failed release withdraws the successor declaration it just wrote', async () => {
+  const { primary, linked } = makeRepoWithWorktree();
+  const source = resolveSourceIdentity(primary);
+  const status = {
+    sessionId: 'session-776',
+    sourceKey: source.sourceKey,
+    worktreeKey: source.worktreeKey,
+    appRootKey: source.appRootKey,
+    state: 'metro_bound',
+    claimEpoch: 1,
+    authorityVersion: 1,
+    leaseUntilMs: 100,
+    source: { ...source },
+    bindings: { metro: { mode: 'managed', port: 8081 } },
+    claims: [],
+    worker: { instanceId: 'worker', pid: 1, birthAvailable: true },
+  };
+  const calls: string[] = [];
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: {
+          getSessionStatus: () => status,
+          releaseSession: () => calls.push('release'),
+        },
+        session: { sessionId: 'session-776', claimEpoch: 1 },
+      }),
+    } as never,
+    {
+      declareSuccessorSource: () => calls.push('declare'),
+      withdrawSuccessorSource: () => calls.push('withdraw'),
+      getSignerCapability: () => undefined as never,
+      requestWorkerRecycle: () => {
+        calls.push('recycle');
+        return true;
+      },
+    },
+  );
+
+  const result = await handler({ action: 'bind_source', projectRoot: linked } as never);
+  const body = JSON.parse(result.content[0]!.text);
+
+  assert.equal(result.isError, true);
+  assert.equal(body.code, 'SESSION_AUTHORITY_REQUIRED');
+  assert.deepEqual(calls, ['declare', 'withdraw']);
+});
+
+test('integration actions refuse a declared root from a different app package of the same worktree', async () => {
+  const { mobile, other } = makeMonorepoApps();
+  const source = resolveSourceIdentity(mobile);
+  const status = {
+    sessionId: 'session-776',
+    sourceKey: source.sourceKey,
+    worktreeKey: source.worktreeKey,
+    appRootKey: source.appRootKey,
+    state: 'source_bound',
+    claimEpoch: 1,
+    authorityVersion: 1,
+    leaseUntilMs: 100,
+    source: { ...source },
+    bindings: {},
+    claims: [],
+    worker: { instanceId: 'worker', pid: 1, birthAvailable: true },
+  };
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: { getSessionStatus: () => status },
+        session: { sessionId: 'session-776', claimEpoch: 1 },
+      }),
+    } as never,
+    {},
+  );
+
+  const result = await handler({
+    action: 'preview_integration',
+    projectRoot: other,
+  } as never);
+  const body = JSON.parse(result.content[0]!.text);
+
+  assert.equal(body.code, 'SOURCE_ROOT_DIVERGENCE');
+  assert.ok(String(body.error).includes(realpathSync(other)));
+  assert.ok(String(body.error).includes(realpathSync(mobile)));
+  assert.match(String(body.meta?.nextAction ?? ''), /bind_source/);
+});
+
 test('integration actions refuse a declared root from a different worktree naming both paths', async () => {
   const { primary, linked } = makeRepoWithWorktree();
   const source = resolveSourceIdentity(primary);
@@ -403,6 +512,69 @@ test('bind_device yields an autostarted Observe binding instead of refusing', as
     (replacement?.device as Record<string, unknown> | undefined)?.deviceId,
     'emulator-5554',
   );
+});
+
+test('a refused bind_device leaves the autostarted Observe binding running', async () => {
+  const calls: string[] = [];
+  const status: Record<string, unknown> = {
+    sessionId: 'session-776',
+    state: 'source_bound',
+    claimEpoch: 1,
+    authorityVersion: 5,
+    leaseUntilMs: 100,
+    source: { kind: 'git' },
+    bindings: {
+      observe: {
+        port: 7333,
+        pid: 456,
+        processBirth: 'observe-birth',
+        instanceId: 'observe',
+        cleanupCapability: 'capability',
+      },
+      observePort: 7333,
+      metroPort: 8081,
+    },
+    claims: [
+      {
+        type: 'observe-port',
+        key: '7333',
+        sessionId: 'session-776',
+        claimEpoch: 1,
+      },
+    ],
+    worker: { instanceId: 'worker', pid: 1, birthAvailable: true },
+  };
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: {
+          getSessionStatus: () => status,
+          updateBindings: () => calls.push('clear-observe'),
+          replaceDeviceAuthority: () => calls.push('replace-device'),
+        },
+        session: { sessionId: 'session-776', claimEpoch: 1 },
+      }),
+    } as never,
+    {
+      stopHandoffObserve: async () => {
+        calls.push('stop-observe');
+      },
+      deviceExists: () => false,
+    },
+  );
+
+  const result = await handler({
+    action: 'bind_device',
+    platform: 'android',
+    deviceId: 'emulator-9999',
+    appId: 'com.example.app',
+  } as never);
+  const body = JSON.parse(result.content[0]!.text);
+
+  assert.equal(body.code, 'DEVICE_NOT_FOUND');
+  assert.deepEqual(calls, []);
+  assert.equal((status.bindings as Record<string, unknown>).observe != null, true);
 });
 
 for (const blocking of [

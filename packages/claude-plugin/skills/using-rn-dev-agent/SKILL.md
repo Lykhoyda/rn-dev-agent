@@ -319,7 +319,8 @@ of building around the session:
   the session and mints its successor bound to that worktree. Same repository
   only — a foreign tree is refused with `SOURCE_ROOT_DIVERGENCE`, never attached.
 - Pass `projectRoot` on `bind_device`, `preview_integration`, or
-  `apply_integration` to fence them: a declared root in a different worktree
+  `apply_integration` to fence them: it must be the session's exact source root.
+  A different worktree — or a different app package inside the same worktree —
   refuses with `SOURCE_ROOT_DIVERGENCE` naming both paths instead of silently
   mutating the bound tree.
 

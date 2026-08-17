@@ -30,6 +30,10 @@ export function writeSuccessorSourceDeclaration(
   writeJsonStateFileAtomic(successorSourceDeclarationPath(runtimeRoot), declaration);
 }
 
+export function clearSuccessorSourceDeclaration(runtimeRoot: string): void {
+  deleteStateFile(successorSourceDeclarationPath(runtimeRoot));
+}
+
 export function consumeSuccessorSourceDeclaration(
   layout: AuthorityStateLayout,
   sessionId: string,
