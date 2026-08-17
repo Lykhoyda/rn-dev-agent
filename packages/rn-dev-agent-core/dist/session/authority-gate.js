@@ -119,6 +119,15 @@ function requireCompleteAxes(status, profile) {
         }
     }
 }
+function isAlreadyBoundSourceResult(result) {
+    try {
+        const envelope = JSON.parse(result.content?.[0]?.text ?? '{}');
+        return envelope.ok === true && envelope.data?.alreadyBound === true;
+    }
+    catch {
+        return false;
+    }
+}
 function isAuthenticatedIdempotentMetroStop(tool, args, result) {
     if (tool !== 'rn_session' || args.action !== 'stop_metro')
         return false;
@@ -844,6 +853,20 @@ export function createAuthorityGate(runtime, dependencies) {
                         };
                     }
                     if (tool === 'rn_session' && args.action === 'release') {
+                        operation = null;
+                        return addMeta(result, {
+                            authoritative: false,
+                            authorityTransition: true,
+                        });
+                    }
+                    // GH #776: a bind_source that released the session toward a successor mint
+                    // is terminal like release — the released row can never complete the
+                    // fenced operation. The already-bound no-op instead completes its
+                    // operation normally below, skipping only the advancing-authority verify.
+                    const idempotentBindSource = tool === 'rn_session' &&
+                        args.action === 'bind_source' &&
+                        isAlreadyBoundSourceResult(result);
+                    if (tool === 'rn_session' && args.action === 'bind_source' && !idempotentBindSource) {
                         operation = null;
                         return addMeta(result, {
                             authoritative: false,

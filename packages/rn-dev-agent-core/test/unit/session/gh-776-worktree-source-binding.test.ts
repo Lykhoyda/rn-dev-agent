@@ -350,7 +350,7 @@ test('bind_device yields an autostarted Observe binding instead of refusing', as
     authorityVersion: 5,
     leaseUntilMs: 100,
     source: { kind: 'git' },
-    bindings: { observe: observeBinding, observePort: 7333 },
+    bindings: { observe: observeBinding, observePort: 7333, metroPort: 8081 },
     claims: [
       {
         type: 'observe-port',
@@ -361,6 +361,7 @@ test('bind_device yields an autostarted Observe binding instead of refusing', as
     ],
     worker: { instanceId: 'worker', pid: 1, birthAvailable: true },
   };
+  let replacement: Record<string, unknown> | undefined;
   const handler = createSessionHandler(
     {
       status: () => ({ available: true, ...status }),
@@ -372,6 +373,10 @@ test('bind_device yields an autostarted Observe binding instead of refusing', as
             (status.bindings as Record<string, unknown>).observe = null;
             calls.push('clear-observe');
           },
+          replaceDeviceAuthority: (_session: unknown, input: Record<string, unknown>) => {
+            replacement = input;
+            calls.push('replace-device');
+          },
         },
         session: { sessionId: 'session-776', claimEpoch: 1 },
       }),
@@ -381,10 +386,7 @@ test('bind_device yields an autostarted Observe binding instead of refusing', as
         assert.equal(binding.port, 7333);
         calls.push('stop-observe');
       },
-      deviceExists: () => {
-        calls.push('device-exists');
-        throw new Error('HALT_AFTER_YIELD');
-      },
+      deviceExists: () => true,
     },
   );
 
@@ -395,10 +397,12 @@ test('bind_device yields an autostarted Observe binding instead of refusing', as
     appId: 'com.example.app',
   } as never);
 
-  assert.deepEqual(calls, ['stop-observe', 'clear-observe', 'device-exists']);
-  const body = JSON.parse(result.content[0]!.text);
-  assert.equal(body.code, 'DEVICE_DISCOVERY_UNAVAILABLE');
-  assert.match(String(body.error), /HALT_AFTER_YIELD/);
+  assert.equal(result.isError, undefined, result.content[0]!.text);
+  assert.deepEqual(calls, ['stop-observe', 'clear-observe', 'replace-device']);
+  assert.equal(
+    (replacement?.device as Record<string, unknown> | undefined)?.deviceId,
+    'emulator-5554',
+  );
 });
 
 for (const blocking of [

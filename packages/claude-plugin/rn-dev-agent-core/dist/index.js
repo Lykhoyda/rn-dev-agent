@@ -29297,6 +29297,14 @@ function requireCompleteAxes(status, profile) {
     }
   }
 }
+function isAlreadyBoundSourceResult(result) {
+  try {
+    const envelope = JSON.parse(result.content?.[0]?.text ?? "{}");
+    return envelope.ok === true && envelope.data?.alreadyBound === true;
+  } catch {
+    return false;
+  }
+}
 function isAuthenticatedIdempotentMetroStop(tool, args, result) {
   if (tool !== "rn_session" || args.action !== "stop_metro")
     return false;
@@ -29860,6 +29868,14 @@ function createAuthorityGate(runtime, dependencies) {
             };
           }
           if (tool === "rn_session" && args.action === "release") {
+            operation2 = null;
+            return addMeta2(result, {
+              authoritative: false,
+              authorityTransition: true
+            });
+          }
+          const idempotentBindSource = tool === "rn_session" && args.action === "bind_source" && isAlreadyBoundSourceResult(result);
+          if (tool === "rn_session" && args.action === "bind_source" && !idempotentBindSource) {
             operation2 = null;
             return addMeta2(result, {
               authoritative: false,
