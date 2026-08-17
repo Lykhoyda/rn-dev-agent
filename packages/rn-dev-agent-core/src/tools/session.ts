@@ -338,6 +338,23 @@ function defaultWithdrawSuccessorSource(): void {
 // Identity is the same (worktree toplevel, app root) pair bind_source compares,
 // never filesystem containment — a linked worktree may be nested beneath the
 // bound checkout, and a sibling app package shares its toplevel.
+// GH #776: a declared-root (non-git) session carries its contract in the session
+// source; resolving a caller-declared root without it refuses a correct root.
+function sessionSourceResolver(
+  status: SessionStatus,
+  dependencies: SessionHandlerDependencies,
+): (root: string) => SourceIdentity {
+  if (dependencies.resolveSourceIdentity) return dependencies.resolveSourceIdentity;
+  const stored = status.source as unknown as SourceIdentity;
+  return (root) =>
+    resolveSourceIdentity(
+      root,
+      stored?.kind === 'declared-root'
+        ? { declaredRoot: stored.contentRoot, declaredManifests: stored.declaredManifests }
+        : {},
+    );
+}
+
 function assertDeclaredProjectRootMatches(
   status: SessionStatus,
   projectRoot: string | undefined,
@@ -595,10 +612,19 @@ async function withInlineStaleDeviceCleanup<T>(
   requireWorkerInstance: () => string,
   revalidate: () => void,
   operation: () => T,
+  prepareCommit?: () => Promise<void>,
 ): Promise<T> {
   const target = { platform: input.platform, deviceId: input.deviceId };
-  try {
+  const commit = async (): Promise<T> => {
+    registry.inspectDeviceAuthorityAvailability(session, {
+      type: 'device',
+      key: `${target.platform}:${target.deviceId}`,
+    });
+    await prepareCommit?.();
     return operation();
+  };
+  try {
+    return await commit();
   } catch (error) {
     if (
       !(error instanceof SessionAuthorityError) ||
@@ -637,6 +663,7 @@ async function withInlineStaleDeviceCleanup<T>(
     await completeStaleDeviceCleanupPlan(registry, session, workerInstance, plan, dependencies);
     registry.finishStaleResourceRelease(session, workerInstance);
     revalidate();
+    await prepareCommit?.();
     return operation();
   }
 }
@@ -981,7 +1008,7 @@ export function createSessionHandler(
         const boundAppRoot = String(status.source.appRoot ?? '');
         let declared: SourceIdentity;
         try {
-          declared = (dependencies.resolveSourceIdentity ?? resolveSourceIdentity)(projectRoot);
+          declared = sessionSourceResolver(status, dependencies)(projectRoot);
         } catch (error) {
           throw new SessionAuthorityError(
             'SOURCE_ROOT_DIVERGENCE',
@@ -1077,7 +1104,7 @@ export function createSessionHandler(
         assertDeclaredProjectRootMatches(
           status,
           input.projectRoot,
-          dependencies.resolveSourceIdentity ?? resolveSourceIdentity,
+          sessionSourceResolver(status, dependencies),
         );
         if (status.bindings.runner || status.bindings.proof) {
           throw new SessionAuthorityError(
@@ -1086,8 +1113,9 @@ export function createSessionHandler(
           );
         }
         // GH #776: autostarted Observe yields the device axis on the first
-        // bind_device instead of forcing a manual observe stop. It runs only once
-        // every device-side check has passed, so a refused bind keeps Observe up.
+        // bind_device instead of forcing a manual observe stop. It runs as the
+        // commit's prepare step — after every device-side check and after the
+        // device claim is proven available — so a refused bind keeps Observe up.
         const yieldObserveDeviceAxis = async () => {
           const current = registry.getSessionStatus(session.sessionId);
           if (!current) {
@@ -1203,7 +1231,6 @@ export function createSessionHandler(
         }
         const expectedMetroOrigin = { expectedMetroPort };
         if (!input.buildReceipt) {
-          await yieldObserveDeviceAxis();
           const invalidatesBundle = Boolean(status.bindings.bundle);
           await withInlineStaleDeviceCleanup(
             registry,
@@ -1223,6 +1250,7 @@ export function createSessionHandler(
                   ...(input.devClientUrl ? { devClientUrl: input.devClientUrl } : {}),
                 },
               }),
+            yieldObserveDeviceAxis,
           );
           if (invalidatesBundle) dependencies.onBundleInvalidated?.();
           return okResult({
@@ -1262,7 +1290,6 @@ export function createSessionHandler(
           }
         };
         requireInstallGeneration();
-        await yieldObserveDeviceAxis();
         await withInlineStaleDeviceCleanup(
           registry,
           session,
@@ -1279,6 +1306,7 @@ export function createSessionHandler(
               device: { platform, deviceId, appId, ...expectedMetroOrigin },
               install: { ...receipt },
             }),
+          yieldObserveDeviceAxis,
         );
         if (status.bindings.bundle) dependencies.onBundleInvalidated?.();
         return okResult({ session: projectPublicAuthorityStatus(runtime.status()) });
@@ -1645,7 +1673,7 @@ export function createSessionHandler(
         assertDeclaredProjectRootMatches(
           status,
           input.projectRoot,
-          dependencies.resolveSourceIdentity ?? resolveSourceIdentity,
+          sessionSourceResolver(status, dependencies),
         );
         const packagePath = join(appRoot, 'package.json');
         const integrationInputs = readPackageIntegrationInputs(appRoot);

@@ -332,6 +332,12 @@ function bindExactArgument(args, field, expected, code) {
     }
     args[field] = expected;
 }
+const SOURCE_FENCED_SESSION_ACTIONS = new Set([
+    'bind_source',
+    'bind_device',
+    'preview_integration',
+    'apply_integration',
+]);
 function bindSourcePaths(status, args, tool) {
     let appRoot;
     try {
@@ -346,10 +352,15 @@ function bindSourcePaths(status, args, tool) {
         const supplied = args[field];
         if (supplied === undefined)
             continue;
-        // GH #776: bind_source exists to declare a root OUTSIDE the bound app root;
-        // the session handler validates it against the repository identity instead.
+        // GH #776: these rn_session actions own projectRoot as a repository-identity
+        // fence, not a path inside the bound app root — bind_source declares a root
+        // outside it, and the fenced actions refuse SOURCE_ROOT_DIVERGENCE naming
+        // both paths. Filesystem containment would pre-empt that typed refusal.
         // Scoped to the exact rn_session tool so no other surface can skip the fence.
-        if (field === 'projectRoot' && tool === 'rn_session' && args.action === 'bind_source') {
+        if (field === 'projectRoot' &&
+            tool === 'rn_session' &&
+            typeof args.action === 'string' &&
+            SOURCE_FENCED_SESSION_ACTIONS.has(args.action)) {
             continue;
         }
         if (typeof supplied !== 'string' || supplied.length === 0) {

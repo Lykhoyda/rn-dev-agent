@@ -26020,6 +26020,29 @@ var init_registry = __esm({
           nextAction: status === "match" ? "Another live rn-dev-agent supervisor owns this worktree. Close it or work in a separate worktree; a live owner is never adopted." : "The prior owner identity could not be proven, so it is treated as live. Close the other session or re-run once its process state is observable."
         };
       }
+      #assertDeviceAuthorityAvailable(session2, resource, probes, currentBindings) {
+        this.#assertNoStaleDeviceCleanup(currentBindings);
+        const claim = this.#findConflictingClaim(resource);
+        if (claim && (claim.session_id !== session2.sessionId || claim.claim_epoch !== session2.claimEpoch)) {
+          const probe = probes.get(claim.session_id);
+          if (!probe || probe.claimEpoch !== claim.claim_epoch || probe.status !== "mismatch") {
+            throw claimConflict(claim);
+          }
+          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "a proven-stale device owner requires explicit adopt_stale before rebinding", { sessionId: claim.session_id, claimEpoch: claim.claim_epoch });
+        }
+      }
+      /**
+       * GH #776: the exact refusals replaceDeviceAuthority would raise, proven without
+       * writing anything, so a caller can refuse before it yields any other axis.
+       */
+      inspectDeviceAuthorityAvailability(session2, resource) {
+        const probes = this.#probeClaimOwners(session2, [resource]);
+        this.#transaction(() => {
+          const current = this.#requireSession(session2);
+          const currentBindings = JSON.parse(current.bindings_json);
+          this.#assertDeviceAuthorityAvailable(session2, resource, probes, currentBindings);
+        });
+      }
       replaceDeviceAuthority(session2, input) {
         const resource = input.resource ?? {
           type: "device",
@@ -26030,15 +26053,7 @@ var init_registry = __esm({
         this.#transaction(() => {
           const current = this.#requireSession(session2);
           const currentBindings = JSON.parse(current.bindings_json);
-          this.#assertNoStaleDeviceCleanup(currentBindings);
-          const claim = this.#findConflictingClaim(resource);
-          if (claim && (claim.session_id !== session2.sessionId || claim.claim_epoch !== session2.claimEpoch)) {
-            const probe = probes.get(claim.session_id);
-            if (!probe || probe.claimEpoch !== claim.claim_epoch || probe.status !== "mismatch") {
-              throw claimConflict(claim);
-            }
-            throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "a proven-stale device owner requires explicit adopt_stale before rebinding", { sessionId: claim.session_id, claimEpoch: claim.claim_epoch });
-          }
+          this.#assertDeviceAuthorityAvailable(session2, resource, probes, currentBindings);
           this.#database.prepare(`DELETE FROM claims
            WHERE session_id = ? AND claim_epoch = ?
              AND resource_type IN ('device', 'target', 'runner')`).run(session2.sessionId, session2.claimEpoch);
@@ -29468,7 +29483,7 @@ function bindSourcePaths(status, args, tool) {
     const supplied = args[field2];
     if (supplied === void 0)
       continue;
-    if (field2 === "projectRoot" && tool === "rn_session" && args.action === "bind_source") {
+    if (field2 === "projectRoot" && tool === "rn_session" && typeof args.action === "string" && SOURCE_FENCED_SESSION_ACTIONS.has(args.action)) {
       continue;
     }
     if (typeof supplied !== "string" || supplied.length === 0) {
@@ -30583,7 +30598,7 @@ function createAuthorityGate(runtime, dependencies) {
     }
   };
 }
-var optionalBundleAdmission, managedNativeOrigin, managedRunnerPark, managedInstallReissue, axisBinding, axisErrors;
+var optionalBundleAdmission, managedNativeOrigin, managedRunnerPark, managedInstallReissue, axisBinding, axisErrors, SOURCE_FENCED_SESSION_ACTIONS;
 var init_authority_gate = __esm({
   "packages/rn-dev-agent-core/dist/session/authority-gate.js"() {
     "use strict";
@@ -30615,6 +30630,12 @@ var init_authority_gate = __esm({
       R: "RUNNER_OWNERSHIP_MISMATCH",
       P: "PROOF_AUTHORITY_MISMATCH"
     };
+    SOURCE_FENCED_SESSION_ACTIONS = /* @__PURE__ */ new Set([
+      "bind_source",
+      "bind_device",
+      "preview_integration",
+      "apply_integration"
+    ]);
   }
 });
 
@@ -69105,6 +69126,12 @@ function defaultWithdrawSuccessorSource() {
     return;
   clearSuccessorSourceDeclaration(runtimeRoot);
 }
+function sessionSourceResolver(status, dependencies) {
+  if (dependencies.resolveSourceIdentity)
+    return dependencies.resolveSourceIdentity;
+  const stored = status.source;
+  return (root) => resolveSourceIdentity(root, stored?.kind === "declared-root" ? { declaredRoot: stored.contentRoot, declaredManifests: stored.declaredManifests } : {});
+}
 function assertDeclaredProjectRootMatches(status, projectRoot, resolveIdentity) {
   if (projectRoot === void 0)
     return;
@@ -69241,10 +69268,18 @@ async function completeStaleDeviceCleanupPlan(registry2, session2, workerInstanc
   }
   return completed;
 }
-async function withInlineStaleDeviceCleanup(registry2, session2, dependencies, input, requireWorkerInstance, revalidate, operation) {
+async function withInlineStaleDeviceCleanup(registry2, session2, dependencies, input, requireWorkerInstance, revalidate, operation, prepareCommit) {
   const target = { platform: input.platform, deviceId: input.deviceId };
-  try {
+  const commit = async () => {
+    registry2.inspectDeviceAuthorityAvailability(session2, {
+      type: "device",
+      key: `${target.platform}:${target.deviceId}`
+    });
+    await prepareCommit?.();
     return operation();
+  };
+  try {
+    return await commit();
   } catch (error2) {
     if (!(error2 instanceof SessionAuthorityError) || error2.code !== "SESSION_AUTHORITY_REQUIRED" || !error2.message.includes("proven-stale device owner")) {
       throw error2;
@@ -69266,6 +69301,7 @@ async function withInlineStaleDeviceCleanup(registry2, session2, dependencies, i
     await completeStaleDeviceCleanupPlan(registry2, session2, workerInstance, plan, dependencies);
     registry2.finishStaleResourceRelease(session2, workerInstance);
     revalidate();
+    await prepareCommit?.();
     return operation();
   }
 }
@@ -69466,7 +69502,7 @@ function createSessionHandler(runtime, dependencies = {}) {
         const boundAppRoot = String(status.source.appRoot ?? "");
         let declared;
         try {
-          declared = (dependencies.resolveSourceIdentity ?? resolveSourceIdentity)(projectRoot);
+          declared = sessionSourceResolver(status, dependencies)(projectRoot);
         } catch (error2) {
           throw new SessionAuthorityError("SOURCE_ROOT_DIVERGENCE", `declared project root ${projectRoot} cannot be resolved as a source root (session source root: ${boundAppRoot}): ${error2 instanceof Error ? error2.message : "unknown error"}`, void 0, {
             axis: "S",
@@ -69528,7 +69564,7 @@ function createSessionHandler(runtime, dependencies = {}) {
         if (!status) {
           throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "session disappeared before device binding");
         }
-        assertDeclaredProjectRootMatches(status, input.projectRoot, dependencies.resolveSourceIdentity ?? resolveSourceIdentity);
+        assertDeclaredProjectRootMatches(status, input.projectRoot, sessionSourceResolver(status, dependencies));
         if (status.bindings.runner || status.bindings.proof) {
           throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "device rebinding requires runner or proof authority to be released first");
         }
@@ -69594,7 +69630,6 @@ function createSessionHandler(runtime, dependencies = {}) {
         }
         const expectedMetroOrigin = { expectedMetroPort };
         if (!input.buildReceipt) {
-          await yieldObserveDeviceAxis();
           const invalidatesBundle = Boolean(status.bindings.bundle);
           await withInlineStaleDeviceCleanup(registry2, session2, dependencies, { platform, deviceId, appId, confirmed: input.confirmed }, requireWorkerInstance, requireExactDevice, () => registry2.replaceDeviceAuthority(session2, {
             resource: { type: "device", key: `${platform}:${deviceId}` },
@@ -69605,7 +69640,7 @@ function createSessionHandler(runtime, dependencies = {}) {
               ...expectedMetroOrigin,
               ...input.devClientUrl ? { devClientUrl: input.devClientUrl } : {}
             }
-          }));
+          }), yieldObserveDeviceAxis);
           if (invalidatesBundle)
             dependencies.onBundleInvalidated?.();
           return okResult({
@@ -69637,7 +69672,6 @@ function createSessionHandler(runtime, dependencies = {}) {
           }
         };
         requireInstallGeneration();
-        await yieldObserveDeviceAxis();
         await withInlineStaleDeviceCleanup(registry2, session2, dependencies, { platform, deviceId, appId, confirmed: input.confirmed }, requireWorkerInstance, () => {
           requireExactDevice();
           requireInstallGeneration();
@@ -69645,7 +69679,7 @@ function createSessionHandler(runtime, dependencies = {}) {
           resource: { type: "device", key: `${platform}:${deviceId}` },
           device: { platform, deviceId, appId, ...expectedMetroOrigin },
           install: { ...receipt2 }
-        }));
+        }), yieldObserveDeviceAxis);
         if (status.bindings.bundle)
           dependencies.onBundleInvalidated?.();
         return okResult({ session: projectPublicAuthorityStatus(runtime.status()) });
@@ -69891,7 +69925,7 @@ function createSessionHandler(runtime, dependencies = {}) {
         if (!status || !appRoot) {
           throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", "session app root is unavailable for integration");
         }
-        assertDeclaredProjectRootMatches(status, input.projectRoot, dependencies.resolveSourceIdentity ?? resolveSourceIdentity);
+        assertDeclaredProjectRootMatches(status, input.projectRoot, sessionSourceResolver(status, dependencies));
         const packagePath = join35(appRoot, "package.json");
         const integrationInputs = readPackageIntegrationInputs(appRoot);
         const manifestPath = join35(appRoot, ".rn-agent", "integration", "rn-session-integration.json");

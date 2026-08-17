@@ -818,6 +818,7 @@ test('device rebinding refuses to discard live runner or proof authority', async
     requireOperational: () => ({
       registry: {
         getSessionStatus: () => status,
+        inspectDeviceAuthorityAvailability: () => {},
         replaceDeviceAuthority: () => {
           replaced = true;
         },
@@ -847,6 +848,7 @@ test('device binding rejects a nonexistent exact device before claiming it', asy
       requireOperational: () => ({
         registry: {
           getSessionStatus: () => status,
+          inspectDeviceAuthorityAvailability: () => {},
           replaceDeviceAuthority: () => {
             replaced = true;
           },
@@ -877,6 +879,7 @@ test('device binding preserves the registry foreign-claim refusal', async () => 
       requireOperational: () => ({
         registry: {
           getSessionStatus: () => status,
+          inspectDeviceAuthorityAvailability: () => {},
           replaceDeviceAuthority: () => {
             const error = new Error(
               'DEVICE_CLAIM_CONFLICT: exact device is claimed by another session',
@@ -929,6 +932,7 @@ test('same-session cross-platform rebind accepts an existing unclaimed device wi
       requireOperational: () => ({
         registry: {
           getSessionStatus: () => status,
+          inspectDeviceAuthorityAvailability: () => {},
           replaceDeviceAuthority: (_session: unknown, input: Record<string, unknown>) => {
             replacement = input;
           },
@@ -971,6 +975,7 @@ test('cross-platform rebind refuses to discard an incompatible install receipt',
       requireOperational: () => ({
         registry: {
           getSessionStatus: () => status,
+          inspectDeviceAuthorityAvailability: () => {},
           replaceDeviceAuthority: () => {
             replaced = true;
           },
@@ -1017,6 +1022,7 @@ for (const incompatibleBinding of [
         requireOperational: () => ({
           registry: {
             getSessionStatus: () => status,
+            inspectDeviceAuthorityAvailability: () => {},
             replaceDeviceAuthority: () => {
               replaced = true;
             },

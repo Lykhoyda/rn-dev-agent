@@ -1236,6 +1236,43 @@ export class SessionRegistry {
     };
   }
 
+  #assertDeviceAuthorityAvailable(
+    session: SessionRef,
+    resource: ResourceClaim,
+    probes: Map<string, { claimEpoch: number; status: OwnerStatus }>,
+    currentBindings: Record<string, unknown>,
+  ): void {
+    this.#assertNoStaleDeviceCleanup(currentBindings);
+    const claim = this.#findConflictingClaim(resource);
+    if (
+      claim &&
+      (claim.session_id !== session.sessionId || claim.claim_epoch !== session.claimEpoch)
+    ) {
+      const probe = probes.get(claim.session_id);
+      if (!probe || probe.claimEpoch !== claim.claim_epoch || probe.status !== 'mismatch') {
+        throw claimConflict(claim);
+      }
+      throw new SessionAuthorityError(
+        'SESSION_AUTHORITY_REQUIRED',
+        'a proven-stale device owner requires explicit adopt_stale before rebinding',
+        { sessionId: claim.session_id, claimEpoch: claim.claim_epoch },
+      );
+    }
+  }
+
+  /**
+   * GH #776: the exact refusals replaceDeviceAuthority would raise, proven without
+   * writing anything, so a caller can refuse before it yields any other axis.
+   */
+  inspectDeviceAuthorityAvailability(session: SessionRef, resource: ResourceClaim): void {
+    const probes = this.#probeClaimOwners(session, [resource]);
+    this.#transaction(() => {
+      const current = this.#requireSession(session);
+      const currentBindings = JSON.parse(current.bindings_json) as Record<string, unknown>;
+      this.#assertDeviceAuthorityAvailable(session, resource, probes, currentBindings);
+    });
+  }
+
   replaceDeviceAuthority(
     session: SessionRef,
     input: {
@@ -1255,22 +1292,7 @@ export class SessionRegistry {
     this.#transaction(() => {
       const current = this.#requireSession(session);
       const currentBindings = JSON.parse(current.bindings_json) as Record<string, unknown>;
-      this.#assertNoStaleDeviceCleanup(currentBindings);
-      const claim = this.#findConflictingClaim(resource);
-      if (
-        claim &&
-        (claim.session_id !== session.sessionId || claim.claim_epoch !== session.claimEpoch)
-      ) {
-        const probe = probes.get(claim.session_id);
-        if (!probe || probe.claimEpoch !== claim.claim_epoch || probe.status !== 'mismatch') {
-          throw claimConflict(claim);
-        }
-        throw new SessionAuthorityError(
-          'SESSION_AUTHORITY_REQUIRED',
-          'a proven-stale device owner requires explicit adopt_stale before rebinding',
-          { sessionId: claim.session_id, claimEpoch: claim.claim_epoch },
-        );
-      }
+      this.#assertDeviceAuthorityAvailable(session, resource, probes, currentBindings);
       this.#database
         .prepare(
           `DELETE FROM claims

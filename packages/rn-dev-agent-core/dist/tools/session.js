@@ -121,6 +121,16 @@ function defaultWithdrawSuccessorSource() {
 // Identity is the same (worktree toplevel, app root) pair bind_source compares,
 // never filesystem containment — a linked worktree may be nested beneath the
 // bound checkout, and a sibling app package shares its toplevel.
+// GH #776: a declared-root (non-git) session carries its contract in the session
+// source; resolving a caller-declared root without it refuses a correct root.
+function sessionSourceResolver(status, dependencies) {
+    if (dependencies.resolveSourceIdentity)
+        return dependencies.resolveSourceIdentity;
+    const stored = status.source;
+    return (root) => resolveSourceIdentity(root, stored?.kind === 'declared-root'
+        ? { declaredRoot: stored.contentRoot, declaredManifests: stored.declaredManifests }
+        : {});
+}
 function assertDeclaredProjectRootMatches(status, projectRoot, resolveIdentity) {
     if (projectRoot === undefined)
         return;
@@ -285,10 +295,18 @@ async function completeStaleDeviceCleanupPlan(registry, session, workerInstance,
  * uses. Without confirmation, the refusal names the confirmed retry and nothing
  * mutates.
  */
-async function withInlineStaleDeviceCleanup(registry, session, dependencies, input, requireWorkerInstance, revalidate, operation) {
+async function withInlineStaleDeviceCleanup(registry, session, dependencies, input, requireWorkerInstance, revalidate, operation, prepareCommit) {
     const target = { platform: input.platform, deviceId: input.deviceId };
-    try {
+    const commit = async () => {
+        registry.inspectDeviceAuthorityAvailability(session, {
+            type: 'device',
+            key: `${target.platform}:${target.deviceId}`,
+        });
+        await prepareCommit?.();
         return operation();
+    };
+    try {
+        return await commit();
     }
     catch (error) {
         if (!(error instanceof SessionAuthorityError) ||
@@ -319,6 +337,7 @@ async function withInlineStaleDeviceCleanup(registry, session, dependencies, inp
         await completeStaleDeviceCleanupPlan(registry, session, workerInstance, plan, dependencies);
         registry.finishStaleResourceRelease(session, workerInstance);
         revalidate();
+        await prepareCommit?.();
         return operation();
     }
 }
@@ -550,7 +569,7 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 const boundAppRoot = String(status.source.appRoot ?? '');
                 let declared;
                 try {
-                    declared = (dependencies.resolveSourceIdentity ?? resolveSourceIdentity)(projectRoot);
+                    declared = sessionSourceResolver(status, dependencies)(projectRoot);
                 }
                 catch (error) {
                     throw new SessionAuthorityError('SOURCE_ROOT_DIVERGENCE', `declared project root ${projectRoot} cannot be resolved as a source root (session source root: ${boundAppRoot}): ${error instanceof Error ? error.message : 'unknown error'}`, undefined, {
@@ -621,13 +640,14 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 if (!status) {
                     throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'session disappeared before device binding');
                 }
-                assertDeclaredProjectRootMatches(status, input.projectRoot, dependencies.resolveSourceIdentity ?? resolveSourceIdentity);
+                assertDeclaredProjectRootMatches(status, input.projectRoot, sessionSourceResolver(status, dependencies));
                 if (status.bindings.runner || status.bindings.proof) {
                     throw new SessionAuthorityError('DEVICE_AUTHORITY_MISMATCH', 'device rebinding requires runner or proof authority to be released first');
                 }
                 // GH #776: autostarted Observe yields the device axis on the first
-                // bind_device instead of forcing a manual observe stop. It runs only once
-                // every device-side check has passed, so a refused bind keeps Observe up.
+                // bind_device instead of forcing a manual observe stop. It runs as the
+                // commit's prepare step — after every device-side check and after the
+                // device claim is proven available — so a refused bind keeps Observe up.
                 const yieldObserveDeviceAxis = async () => {
                     const current = registry.getSessionStatus(session.sessionId);
                     if (!current) {
@@ -704,7 +724,6 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 }
                 const expectedMetroOrigin = { expectedMetroPort };
                 if (!input.buildReceipt) {
-                    await yieldObserveDeviceAxis();
                     const invalidatesBundle = Boolean(status.bindings.bundle);
                     await withInlineStaleDeviceCleanup(registry, session, dependencies, { platform, deviceId, appId, confirmed: input.confirmed }, requireWorkerInstance, requireExactDevice, () => registry.replaceDeviceAuthority(session, {
                         resource: { type: 'device', key: `${platform}:${deviceId}` },
@@ -715,7 +734,7 @@ export function createSessionHandler(runtime, dependencies = {}) {
                             ...expectedMetroOrigin,
                             ...(input.devClientUrl ? { devClientUrl: input.devClientUrl } : {}),
                         },
-                    }));
+                    }), yieldObserveDeviceAxis);
                     if (invalidatesBundle)
                         dependencies.onBundleInvalidated?.();
                     return okResult({
@@ -747,7 +766,6 @@ export function createSessionHandler(runtime, dependencies = {}) {
                     }
                 };
                 requireInstallGeneration();
-                await yieldObserveDeviceAxis();
                 await withInlineStaleDeviceCleanup(registry, session, dependencies, { platform, deviceId, appId, confirmed: input.confirmed }, requireWorkerInstance, () => {
                     requireExactDevice();
                     requireInstallGeneration();
@@ -755,7 +773,7 @@ export function createSessionHandler(runtime, dependencies = {}) {
                     resource: { type: 'device', key: `${platform}:${deviceId}` },
                     device: { platform, deviceId, appId, ...expectedMetroOrigin },
                     install: { ...receipt },
-                }));
+                }), yieldObserveDeviceAxis);
                 if (status.bindings.bundle)
                     dependencies.onBundleInvalidated?.();
                 return okResult({ session: projectPublicAuthorityStatus(runtime.status()) });
@@ -1043,7 +1061,7 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 if (!status || !appRoot) {
                     throw new SessionAuthorityError('SOURCE_WORKTREE_MISMATCH', 'session app root is unavailable for integration');
                 }
-                assertDeclaredProjectRootMatches(status, input.projectRoot, dependencies.resolveSourceIdentity ?? resolveSourceIdentity);
+                assertDeclaredProjectRootMatches(status, input.projectRoot, sessionSourceResolver(status, dependencies));
                 const packagePath = join(appRoot, 'package.json');
                 const integrationInputs = readPackageIntegrationInputs(appRoot);
                 const manifestPath = join(appRoot, '.rn-agent', 'integration', 'rn-session-integration.json');

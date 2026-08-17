@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, test } from 'node:test';
 import { createSessionHandler } from '../../../dist/tools/session.js';
+import { SessionAuthorityError } from '../../../dist/session/registry.js';
 import { resolveSourceIdentity } from '../../../dist/session/source-identity.js';
 import {
   consumeSuccessorSourceDeclaration,
@@ -482,6 +483,7 @@ test('bind_device yields an autostarted Observe binding instead of refusing', as
             (status.bindings as Record<string, unknown>).observe = null;
             calls.push('clear-observe');
           },
+          inspectDeviceAuthorityAvailability: () => {},
           replaceDeviceAuthority: (_session: unknown, input: Record<string, unknown>) => {
             replacement = input;
             calls.push('replace-device');
@@ -551,6 +553,7 @@ test('a refused bind_device leaves the autostarted Observe binding running', asy
         registry: {
           getSessionStatus: () => status,
           updateBindings: () => calls.push('clear-observe'),
+          inspectDeviceAuthorityAvailability: () => {},
           replaceDeviceAuthority: () => calls.push('replace-device'),
         },
         session: { sessionId: 'session-776', claimEpoch: 1 },
@@ -575,6 +578,128 @@ test('a refused bind_device leaves the autostarted Observe binding running', asy
   assert.equal(body.code, 'DEVICE_NOT_FOUND');
   assert.deepEqual(calls, []);
   assert.equal((status.bindings as Record<string, unknown>).observe != null, true);
+});
+
+test('an unconfirmed stale-device refusal leaves the autostarted Observe binding running', async () => {
+  const calls: string[] = [];
+  const status: Record<string, unknown> = {
+    sessionId: 'session-776',
+    state: 'source_bound',
+    claimEpoch: 1,
+    authorityVersion: 5,
+    leaseUntilMs: 100,
+    source: { kind: 'git' },
+    bindings: {
+      observe: {
+        port: 7333,
+        pid: 456,
+        processBirth: 'observe-birth',
+        instanceId: 'observe',
+        cleanupCapability: 'capability',
+      },
+      observePort: 7333,
+      metroPort: 8081,
+    },
+    claims: [
+      {
+        type: 'observe-port',
+        key: '7333',
+        sessionId: 'session-776',
+        claimEpoch: 1,
+      },
+    ],
+    worker: { instanceId: 'worker', pid: 1, birthAvailable: true },
+  };
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: {
+          getSessionStatus: () => status,
+          updateBindings: () => calls.push('clear-observe'),
+          inspectDeviceAuthorityAvailability: () => {
+            calls.push('inspect-availability');
+            throw new SessionAuthorityError(
+              'SESSION_AUTHORITY_REQUIRED',
+              'a proven-stale device owner requires explicit adopt_stale before rebinding',
+              { sessionId: 'dead-session', claimEpoch: 2 },
+            );
+          },
+          inspectStaleDeviceRelease: () => ({
+            priorSessionId: 'dead-session',
+            priorClaimEpoch: 2,
+            obligations: ['runner'],
+          }),
+          replaceDeviceAuthority: () => calls.push('replace-device'),
+        },
+        session: { sessionId: 'session-776', claimEpoch: 1 },
+      }),
+    } as never,
+    {
+      stopHandoffObserve: async () => {
+        calls.push('stop-observe');
+      },
+      deviceExists: () => true,
+    },
+  );
+
+  const result = await handler({
+    action: 'bind_device',
+    platform: 'android',
+    deviceId: 'emulator-5554',
+    appId: 'com.example.app',
+  } as never);
+  const body = JSON.parse(result.content[0]!.text);
+
+  assert.equal(body.code, 'STALE_DEVICE_RELEASE_REQUIRED');
+  assert.deepEqual(calls, ['inspect-availability']);
+  assert.equal((status.bindings as Record<string, unknown>).observe != null, true);
+});
+
+test('the projectRoot fence accepts the bound root of a declared-root session', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'rn-gh776-declared-')));
+  roots.push(root);
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'declared-app' }));
+  const declaredSource = resolveSourceIdentity(root, {
+    declaredRoot: root,
+    declaredManifests: ['package.json'],
+  });
+  assert.equal(declaredSource.kind, 'declared-root');
+  const status = {
+    sessionId: 'session-776',
+    sourceKey: declaredSource.sourceKey,
+    worktreeKey: declaredSource.worktreeKey,
+    appRootKey: declaredSource.appRootKey,
+    state: 'source_bound',
+    claimEpoch: 1,
+    authorityVersion: 1,
+    leaseUntilMs: 100,
+    source: { ...declaredSource },
+    bindings: { metroPort: 8081 },
+    claims: [],
+    worker: { instanceId: 'worker', pid: 1, birthAvailable: true },
+  };
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: { getSessionStatus: () => status },
+        session: { sessionId: 'session-776', claimEpoch: 1 },
+      }),
+    } as never,
+    { deviceExists: () => false },
+  );
+
+  const result = await handler({
+    action: 'bind_device',
+    platform: 'android',
+    deviceId: 'emulator-5554',
+    appId: 'com.example.app',
+    projectRoot: root,
+  } as never);
+  const body = JSON.parse(result.content[0]!.text);
+
+  assert.equal(body.code, 'DEVICE_NOT_FOUND', result.content[0]!.text);
 });
 
 for (const blocking of [

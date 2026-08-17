@@ -668,6 +668,7 @@ function bindDeviceHandler(bindings, onReplace) {
       requireOperational: () => ({
         registry: {
           getSessionStatus: () => status,
+          inspectDeviceAuthorityAvailability: () => {},
           replaceDeviceAuthority: (_session, input) => onReplace(input),
         },
         session: { sessionId: 'session-a', claimEpoch: 1 },

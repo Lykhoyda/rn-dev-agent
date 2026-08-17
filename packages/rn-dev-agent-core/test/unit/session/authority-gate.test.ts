@@ -467,6 +467,41 @@ test('authoritative source paths cannot escape the bound app root', async () => 
   assert.equal(dispatched, false);
 });
 
+test('rn_session source-fenced actions reach their handler with a projectRoot outside the app root', async () => {
+  const outside = resolve(process.cwd(), '..');
+  for (const action of ['bind_source', 'bind_device', 'preview_integration', 'apply_integration']) {
+    const { runtime } = fixture();
+    let observed: unknown;
+    const gate = createAuthorityGate(runtime, {
+      probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+    });
+    const result = await gate.wrap('rn_session', async (args) => {
+      observed = args.projectRoot;
+      return failResult('handler fence owns this root', 'SOURCE_ROOT_DIVERGENCE');
+    })({ action, projectRoot: outside });
+
+    const envelope = JSON.parse(result.content[0].text);
+    assert.equal(envelope.code, 'SOURCE_ROOT_DIVERGENCE', `${action}: ${result.content[0].text}`);
+    assert.equal(observed, outside, action);
+  }
+});
+
+test('rn_session actions without a source fence still refuse a projectRoot outside the app root', async () => {
+  const { runtime } = fixture();
+  let dispatched = false;
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+  });
+  const result = await gate.wrap('rn_session', async () => {
+    dispatched = true;
+    return okResult({});
+  })({ action: 'restore_integration', projectRoot: resolve(process.cwd(), '..') });
+
+  const envelope = JSON.parse(result.content[0].text);
+  assert.equal(envelope.code, 'SOURCE_WORKTREE_MISMATCH');
+  assert.equal(dispatched, false);
+});
+
 test('origin-disrupting lifecycle tools replace bundle authority at successful completion', async () => {
   const { runtime, registry, calls, status } = fixture();
   registry.replaceBindingsDuringOperation = (operation, input) => {
