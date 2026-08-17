@@ -249,6 +249,7 @@ import {
 } from './session/target-device-authority.js';
 import {
   connectExactSessionTarget as connectExactSessionTargetWithDependencies,
+  exactCandidateMismatchError,
   exactSessionTargetReadinessTimeoutMs,
   type ExactSessionTargetConnection,
 } from './session/connect-exact-session-target.js';
@@ -1111,15 +1112,16 @@ function createAuthoritativeSessionPolicy(status: SessionStatus): AuthoritativeS
         { execute: execFileP, awaitWithinBoundary },
       );
       if (exactCandidates.length !== 1) {
-        if (exactCandidates.length === 0 && targets.length > 0) {
-          throw new Error(
-            `CDP_TARGET_AUTHORITY_MISMATCH: ${targets.length} session target(s) exist, but none is provably on device ${device.deviceId}. deviceName(s): ${targets
-              .map((target) => target.deviceName?.trim() || '<none>')
-              .join(', ')}`,
-          );
-        }
-        throw new Error(
-          `CDP_TARGET_AUTHORITY_MISMATCH: expected one target on the exact device, found ${exactCandidates.length}`,
+        throw exactCandidateMismatchError(
+          {
+            metroPort,
+            platform: device.platform,
+            appId: device.appId,
+            deviceId: device.deviceId,
+          },
+          targets,
+          targets,
+          exactCandidates,
         );
       }
       return exactCandidates[0]!.id;

@@ -265,21 +265,40 @@ function probeAndroidPackages(): Set<string> | null {
   }
 }
 
-export function bootedSimulatorUdids(): string[] {
+// The UDID and the device-name probe both need `simctl list devices booted`, so
+// one cached parse feeds both instead of spawning the same 5s subprocess twice.
+function probeBootedSimulatorInventory(): Set<string> | null {
   try {
     const out = execFileSync('xcrun', ['simctl', 'list', 'devices', 'booted', '-j'], {
       timeout: 5000,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
     });
-    const parsed = JSON.parse(out) as { devices?: Record<string, Array<{ udid?: string }>> };
-    return Object.values(parsed.devices ?? {})
-      .flat()
-      .map((device) => device.udid)
-      .filter((udid): udid is string => typeof udid === 'string' && udid.length > 0);
+    const parsed = JSON.parse(out) as {
+      devices?: Record<string, Array<{ udid?: string; name?: string; state?: string }>>;
+    };
+    const entries = new Set<string>();
+    for (const device of Object.values(parsed.devices ?? {}).flat()) {
+      const udid = typeof device.udid === 'string' ? device.udid.trim() : '';
+      const name = typeof device.name === 'string' ? device.name.trim() : '';
+      const state = typeof device.state === 'string' ? device.state.trim() : '';
+      if (!udid && !name) continue;
+      entries.add(`${udid}\t${name}\t${state}`);
+    }
+    return entries.size > 0 ? entries : null;
   } catch {
-    return [];
+    return null;
   }
+}
+
+function readBootedSimulatorInventory(): Set<string> | null {
+  return cachedPackageProbe('ios-booted-simulators', probeBootedSimulatorInventory);
+}
+
+export function bootedSimulatorUdids(): string[] {
+  const inventory = readBootedSimulatorInventory();
+  if (!inventory) return [];
+  return [...inventory].map((entry) => entry.split('\t')[0] ?? '').filter(Boolean);
 }
 
 // `simctl listapps booted` errors out as soon as more than one simulator is
@@ -318,26 +337,18 @@ function readIOSPackages(): Set<string> | null {
 // GH #777: custom device names ("rn-qa", "ix-…-iPhone17Pro") carry no platform
 // token, so pattern inference misses them and the bundle probe can only say
 // "installed on both" — proving the platform requires the live device inventory.
+// An empty inventory is an ABSENCE of evidence, never proof that a name is not
+// a simulator: return null so the short failure TTL applies and a simulator
+// booted moments later is seen on the next connect (mirrors probeIOSPackages).
 function probeIOSBootedSimulatorNames(): Set<string> | null {
-  try {
-    const out = execFileSync('xcrun', ['simctl', 'list', 'devices', 'booted', '-j'], {
-      timeout: 5000,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
-    const parsed = JSON.parse(out) as {
-      devices?: Record<string, Array<{ name?: string; state?: string }>>;
-    };
-    const names = new Set<string>();
-    for (const device of Object.values(parsed.devices ?? {}).flat()) {
-      if (device.state === 'Booted' && typeof device.name === 'string' && device.name.trim()) {
-        names.add(device.name.trim().toLowerCase());
-      }
-    }
-    return names;
-  } catch {
-    return null;
+  const inventory = readBootedSimulatorInventory();
+  if (!inventory) return null;
+  const names = new Set<string>();
+  for (const entry of inventory) {
+    const [, name, state] = entry.split('\t');
+    if (state === 'Booted' && name) names.add(name.toLowerCase());
   }
+  return names.size > 0 ? names : null;
 }
 
 function probeAndroidDeviceModels(): Set<string> | null {
@@ -352,6 +363,7 @@ function probeAndroidDeviceModels(): Set<string> | null {
       .map((line) => line.trim().split(/\s+/))
       .filter((parts) => parts[0] && parts[1] === 'device')
       .map((parts) => parts[0]!);
+    if (serials.length === 0) return null;
     const models = new Set<string>();
     for (const serial of serials) {
       try {
@@ -367,7 +379,7 @@ function probeAndroidDeviceModels(): Set<string> | null {
         // One unreadable device must not blind the others.
       }
     }
-    return models;
+    return models.size > 0 ? models : null;
   } catch {
     return null;
   }
