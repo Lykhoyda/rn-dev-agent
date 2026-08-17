@@ -24,7 +24,7 @@ import {
   type PackageIntegrationFileState,
   type PackageIntegrationManifest,
 } from '../session/package-integration.js';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { resolveSourceIdentity, type SourceIdentity } from '../session/source-identity.js';
@@ -355,6 +355,17 @@ function sessionSourceResolver(
     );
 }
 
+// GH #776: a relative declared root is anchored to the session's bound app root,
+// never to the worker process cwd — that cwd is the harness startup tree this
+// fence exists to keep out.
+function anchorDeclaredProjectRoot(status: SessionStatus, projectRoot: string): string {
+  if (isAbsolute(projectRoot)) return projectRoot;
+  const boundAppRoot = status.source?.appRoot;
+  return typeof boundAppRoot === 'string' && boundAppRoot.length > 0
+    ? resolve(boundAppRoot, projectRoot)
+    : projectRoot;
+}
+
 function assertDeclaredProjectRootMatches(
   status: SessionStatus,
   projectRoot: string | undefined,
@@ -370,13 +381,14 @@ function assertDeclaredProjectRootMatches(
       { axis: 'S' },
     );
   }
+  const anchored = anchorDeclaredProjectRoot(status, projectRoot);
   let declared: SourceIdentity;
   try {
-    declared = resolveIdentity(projectRoot);
+    declared = resolveIdentity(anchored);
   } catch (error) {
     throw new SessionAuthorityError(
       'SOURCE_ROOT_DIVERGENCE',
-      `declared project root ${projectRoot} cannot be resolved as a source root (session source root: ${boundAppRoot}): ${
+      `declared project root ${anchored} cannot be resolved as a source root (session source root: ${boundAppRoot}): ${
         error instanceof Error ? error.message : 'unknown error'
       }`,
       undefined,
@@ -1006,13 +1018,14 @@ export function createSessionHandler(
           );
         }
         const boundAppRoot = String(status.source.appRoot ?? '');
+        const anchoredProjectRoot = anchorDeclaredProjectRoot(status, projectRoot);
         let declared: SourceIdentity;
         try {
-          declared = sessionSourceResolver(status, dependencies)(projectRoot);
+          declared = sessionSourceResolver(status, dependencies)(anchoredProjectRoot);
         } catch (error) {
           throw new SessionAuthorityError(
             'SOURCE_ROOT_DIVERGENCE',
-            `declared project root ${projectRoot} cannot be resolved as a source root (session source root: ${boundAppRoot}): ${
+            `declared project root ${anchoredProjectRoot} cannot be resolved as a source root (session source root: ${boundAppRoot}): ${
               error instanceof Error ? error.message : 'unknown error'
             }`,
             undefined,

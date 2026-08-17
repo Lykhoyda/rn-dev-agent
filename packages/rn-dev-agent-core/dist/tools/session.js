@@ -4,7 +4,7 @@ import { verifyBuildReceipt } from '../session/build-receipt.js';
 import { captureInstallGeneration, } from '../session/install-authority.js';
 import { captureMetroBinding } from '../session/metro-binding.js';
 import { applyPackageIntegration, inspectPackageIntegrationFileState, previewMetroIntegration, previewPackageIntegration, readPackageIntegrationInputs, restorePackageIntegrationFiles, serializePackageIntegrationManifest, } from '../session/package-integration.js';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { resolveSourceIdentity } from '../session/source-identity.js';
@@ -131,6 +131,17 @@ function sessionSourceResolver(status, dependencies) {
         ? { declaredRoot: stored.contentRoot, declaredManifests: stored.declaredManifests }
         : {});
 }
+// GH #776: a relative declared root is anchored to the session's bound app root,
+// never to the worker process cwd — that cwd is the harness startup tree this
+// fence exists to keep out.
+function anchorDeclaredProjectRoot(status, projectRoot) {
+    if (isAbsolute(projectRoot))
+        return projectRoot;
+    const boundAppRoot = status.source?.appRoot;
+    return typeof boundAppRoot === 'string' && boundAppRoot.length > 0
+        ? resolve(boundAppRoot, projectRoot)
+        : projectRoot;
+}
 function assertDeclaredProjectRootMatches(status, projectRoot, resolveIdentity) {
     if (projectRoot === undefined)
         return;
@@ -138,12 +149,13 @@ function assertDeclaredProjectRootMatches(status, projectRoot, resolveIdentity) 
     if (typeof projectRoot !== 'string' || projectRoot.length === 0) {
         throw new SessionAuthorityError('SOURCE_ROOT_DIVERGENCE', `projectRoot must be a non-empty path (session source root: ${boundAppRoot})`, undefined, { axis: 'S' });
     }
+    const anchored = anchorDeclaredProjectRoot(status, projectRoot);
     let declared;
     try {
-        declared = resolveIdentity(projectRoot);
+        declared = resolveIdentity(anchored);
     }
     catch (error) {
-        throw new SessionAuthorityError('SOURCE_ROOT_DIVERGENCE', `declared project root ${projectRoot} cannot be resolved as a source root (session source root: ${boundAppRoot}): ${error instanceof Error ? error.message : 'unknown error'}`, undefined, { axis: 'S' });
+        throw new SessionAuthorityError('SOURCE_ROOT_DIVERGENCE', `declared project root ${anchored} cannot be resolved as a source root (session source root: ${boundAppRoot}): ${error instanceof Error ? error.message : 'unknown error'}`, undefined, { axis: 'S' });
     }
     if (declared.worktreeKey === status.worktreeKey && declared.appRootKey === status.appRootKey) {
         return;
@@ -567,12 +579,13 @@ export function createSessionHandler(runtime, dependencies = {}) {
                     throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'session disappeared before source binding');
                 }
                 const boundAppRoot = String(status.source.appRoot ?? '');
+                const anchoredProjectRoot = anchorDeclaredProjectRoot(status, projectRoot);
                 let declared;
                 try {
-                    declared = sessionSourceResolver(status, dependencies)(projectRoot);
+                    declared = sessionSourceResolver(status, dependencies)(anchoredProjectRoot);
                 }
                 catch (error) {
-                    throw new SessionAuthorityError('SOURCE_ROOT_DIVERGENCE', `declared project root ${projectRoot} cannot be resolved as a source root (session source root: ${boundAppRoot}): ${error instanceof Error ? error.message : 'unknown error'}`, undefined, {
+                    throw new SessionAuthorityError('SOURCE_ROOT_DIVERGENCE', `declared project root ${anchoredProjectRoot} cannot be resolved as a source root (session source root: ${boundAppRoot}): ${error instanceof Error ? error.message : 'unknown error'}`, undefined, {
                         axis: 'S',
                         nextAction: 'Pass an existing checkout directory of the repository this session was started for.',
                     });

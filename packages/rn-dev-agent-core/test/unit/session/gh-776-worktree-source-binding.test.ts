@@ -7,6 +7,7 @@ import { afterEach, test } from 'node:test';
 import { createSessionHandler } from '../../../dist/tools/session.js';
 import { SessionAuthorityError } from '../../../dist/session/registry.js';
 import { resolveSourceIdentity } from '../../../dist/session/source-identity.js';
+import { declaredSourceContractFromEnv } from '../../../dist/session/declared-source-contract.js';
 import {
   consumeSuccessorSourceDeclaration,
   resolveSuccessorMintSource,
@@ -202,6 +203,47 @@ test('a released session source stays sticky for the successor without a declara
   });
   assert.equal(minted.worktreeKey, worktreeSource.worktreeKey);
   assert.equal(minted.appRoot, realpathSync(linked));
+});
+
+test('a declared-root successor mints on the declared app root through the env contract', () => {
+  const contentRoot = realpathSync(mkdtempSync(join(tmpdir(), 'rn-gh776-declared-mint-')));
+  roots.push(contentRoot);
+  writeFileSync(join(contentRoot, 'package.json'), JSON.stringify({ name: 'declared-workspace' }));
+  const mobile = join(contentRoot, 'apps', 'mobile');
+  const other = join(contentRoot, 'apps', 'other');
+  for (const app of [mobile, other]) mkdirSync(app, { recursive: true });
+  const env = {
+    RN_DEV_AGENT_DECLARED_ROOT: contentRoot,
+    RN_DEV_AGENT_DECLARED_MANIFESTS: 'package.json',
+  };
+  const contract = declaredSourceContractFromEnv(env as never);
+  const terminalSource = resolveSourceIdentity(mobile, contract);
+  const layout = makeLayout();
+  const runtime = join(layout.root, 'sessions', 'terminal', 'runtime');
+  mkdirSync(runtime, { recursive: true });
+  writeSuccessorSourceDeclaration(runtime, {
+    version: 1,
+    projectRoot: other,
+    sourceKey: terminalSource.sourceKey,
+    sessionId: 'terminal',
+    declaredAtMs: Date.now(),
+  });
+
+  const diagnostics: string[] = [];
+  const minted = resolveSuccessorMintSource({
+    terminal: {
+      layout: layout as never,
+      session: { sessionId: 'terminal' },
+      source: terminalSource,
+    },
+    bootSource: terminalSource,
+    resolveIdentity: (root) => resolveSourceIdentity(root, contract),
+    diagnostic: (message) => diagnostics.push(message),
+  });
+
+  assert.deepEqual(diagnostics, []);
+  assert.equal(minted.appRoot, realpathSync(other));
+  assert.notEqual(minted.appRootKey, terminalSource.appRootKey);
 });
 
 interface HandlerHarness {
@@ -402,6 +444,53 @@ test('integration actions refuse a declared root from a different app package of
   assert.ok(String(body.error).includes(realpathSync(other)));
   assert.ok(String(body.error).includes(realpathSync(mobile)));
   assert.match(String(body.meta?.nextAction ?? ''), /bind_source/);
+});
+
+test('a relative projectRoot is anchored to the bound app root, not the worker cwd', async () => {
+  const { mobile, other } = makeMonorepoApps();
+  const source = resolveSourceIdentity(mobile);
+  const status = {
+    sessionId: 'session-776',
+    sourceKey: source.sourceKey,
+    worktreeKey: source.worktreeKey,
+    appRootKey: source.appRootKey,
+    state: 'source_bound',
+    claimEpoch: 1,
+    authorityVersion: 1,
+    leaseUntilMs: 100,
+    source: { ...source },
+    bindings: { metroPort: 8081 },
+    claims: [],
+    worker: { instanceId: 'worker', pid: 1, birthAvailable: true },
+  };
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: { getSessionStatus: () => status },
+        session: { sessionId: 'session-776', claimEpoch: 1 },
+      }),
+    } as never,
+    { deviceExists: () => false },
+  );
+  const bindDevice = async (projectRoot: string) => {
+    const result = await handler({
+      action: 'bind_device',
+      platform: 'android',
+      deviceId: 'emulator-5554',
+      appId: 'com.example.app',
+      projectRoot,
+    } as never);
+    return JSON.parse(result.content[0]!.text);
+  };
+
+  const bound = await bindDevice('.');
+  assert.equal(bound.code, 'DEVICE_NOT_FOUND', JSON.stringify(bound));
+
+  const sibling = await bindDevice(join('..', 'other'));
+  assert.equal(sibling.code, 'SOURCE_ROOT_DIVERGENCE');
+  assert.ok(String(sibling.error).includes(realpathSync(other)));
+  assert.ok(String(sibling.error).includes(realpathSync(mobile)));
 });
 
 test('integration actions refuse a declared root from a different worktree naming both paths', async () => {

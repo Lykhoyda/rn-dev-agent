@@ -664,6 +664,12 @@ function parseDeclaredManifests(value) {
     return void 0;
   return value.split(",").map((entry) => entry.trim()).filter(Boolean);
 }
+function declaredSourceContractFromEnv(env = process.env) {
+  return {
+    declaredRoot: env[DECLARED_ROOT_ENV],
+    declaredManifests: parseDeclaredManifests(env[DECLARED_MANIFESTS_ENV])
+  };
+}
 function missingDeclaredRootMessage() {
   return `NON_GIT_MANIFEST_REQUIRED: ${DECLARED_ROOT_ENV} is not set. ${NON_GIT_DECLARATION_NEXT_ACTION}`;
 }
@@ -10894,7 +10900,7 @@ async function stopManagedMetroProcesses(input, dependencies) {
   const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
   const probeListener = dependencies.probeListener ?? probeManagedMetroListener;
   const signalTree = dependencies.signalTree ?? signalProcessTree;
-  const wait = dependencies.wait ?? ((ms) => new Promise((resolve12) => setTimeout(resolve12, ms)));
+  const wait = dependencies.wait ?? ((ms) => new Promise((resolve13) => setTimeout(resolve13, ms)));
   const inspect = () => {
     const launcher = exactProcessState(input.launcher, probeBirth(input.launcher.pid));
     const listener = input.listener ? exactProcessState(input.listener, probeBirth(input.listener.pid)) : "stopped";
@@ -18726,7 +18732,7 @@ function keyboardVisibility(result) {
     return null;
   }
 }
-async function waitForKeyboardHidden(refreshSnapshot, sleep7 = (ms) => new Promise((resolve12) => setTimeout(resolve12, ms))) {
+async function waitForKeyboardHidden(refreshSnapshot, sleep7 = (ms) => new Promise((resolve13) => setTimeout(resolve13, ms))) {
   let last = "unknown";
   for (let attempt = 0; attempt < KEYBOARD_POSTCHECK_ATTEMPTS; attempt += 1) {
     const visible = keyboardVisibility(await refreshSnapshot());
@@ -19758,7 +19764,7 @@ function buildRunnerTestFaultEnv(env) {
   };
 }
 function runXcodebuildToExit(args, timeoutMs) {
-  return new Promise((resolve12, reject) => {
+  return new Promise((resolve13, reject) => {
     const child = spawn3("xcodebuild", args, { stdio: ["ignore", "ignore", "pipe"] });
     let stderrTail = "";
     const timer = setTimeout(() => {
@@ -19776,7 +19782,7 @@ function runXcodebuildToExit(args, timeoutMs) {
     child.on("exit", (code) => {
       clearTimeout(timer);
       if (code === 0)
-        resolve12();
+        resolve13();
       else
         reject(new Error(`xcodebuild ${args[0]} failed (code ${code})${stderrTail ? `: ${stderrTail.trim()}` : ""}`));
     });
@@ -19817,7 +19823,7 @@ async function startFastRunner(deviceId, bundleId, port, opts = {}) {
   }
   const launch = plan[plan.length - 1];
   const runnerTestFaultEnv = runnerTestFaultForwarded ? {} : buildRunnerTestFaultEnv(process.env);
-  return new Promise((resolve12, reject) => {
+  return new Promise((resolve13, reject) => {
     const child = spawn3("xcodebuild", launch.args, {
       env: {
         ...process.env,
@@ -19884,7 +19890,7 @@ async function startFastRunner(deviceId, bundleId, port, opts = {}) {
       } catch {
       }
       cleanupLegacyTmpState();
-      resolve12(state);
+      resolve13(state);
     };
     child.stdout.setEncoding("utf-8");
     child.stdout.on("data", (chunk) => handleChunk(chunk, "stdout"));
@@ -19927,7 +19933,7 @@ async function awaitSpawnedRunnerExit(graceMs = 5e3, expectedLaunchCount) {
 async function awaitChildExit(child, graceMs = 5e3) {
   if (!child || child.exitCode !== null || child.signalCode !== null)
     return true;
-  return new Promise((resolve12) => {
+  return new Promise((resolve13) => {
     const killTimer = setTimeout(() => {
       try {
         child.kill("SIGKILL");
@@ -19936,12 +19942,12 @@ async function awaitChildExit(child, graceMs = 5e3) {
     }, graceMs);
     const backstop = setTimeout(() => {
       child.removeListener("exit", onExit);
-      resolve12(false);
+      resolve13(false);
     }, graceMs + 2e3);
     const onExit = () => {
       clearTimeout(killTimer);
       clearTimeout(backstop);
-      resolve12(true);
+      resolve13(true);
     };
     child.once("exit", onExit);
   });
@@ -20208,7 +20214,7 @@ async function reapStaleFastRunner(deps = {}) {
     return;
   }
   const spawnedChild = runnerProcess?.pid === state.pid ? runnerProcess : null;
-  const spawnedExit = spawnedChild ? new Promise((resolve12) => spawnedChild.once("exit", () => resolve12())) : null;
+  const spawnedExit = spawnedChild ? new Promise((resolve13) => spawnedChild.once("exit", () => resolve13())) : null;
   try {
     sendSignal(state.pid, "SIGTERM");
   } catch {
@@ -20437,7 +20443,7 @@ async function verifyTypeResultAfterSettle(args, result, authorityBefore) {
       if (health.liveness === "alive")
         return result;
       if (attempt < POST_SETTLE_HEALTH_ATTEMPTS - 1) {
-        await new Promise((resolve12) => setTimeout(resolve12, POST_SETTLE_HEALTH_RETRY_MS));
+        await new Promise((resolve13) => setTimeout(resolve13, POST_SETTLE_HEALTH_RETRY_MS));
       }
     }
   }
@@ -23989,7 +23995,7 @@ var init_registry = __esm({
             if (Date.now() >= deadline) {
               throw new SessionAuthorityError("AUTHORITY_STORE_BUSY", "authority registry remained contended past the retry deadline");
             }
-            await new Promise((resolve12) => setTimeout(resolve12, retryDelayMs));
+            await new Promise((resolve13) => setTimeout(resolve13, retryDelayMs));
           }
         }
       }
@@ -24249,7 +24255,7 @@ var init_device_screenshot_raw = __esm({
       stdio: ["ignore", "pipe", "pipe"]
     });
     androidSpawn = defaultAndroidSpawn;
-    defaultAndroidCapturer = async (emuId, path) => new Promise((resolve12) => {
+    defaultAndroidCapturer = async (emuId, path) => new Promise((resolve13) => {
       let settled = false;
       let streamFinished = false;
       let procCode = null;
@@ -24275,7 +24281,7 @@ var init_device_screenshot_raw = __esm({
           return;
         settled = true;
         clearTimeout(timer);
-        resolve12(ok);
+        resolve13(ok);
       };
       const maybeSettle = () => {
         const outcome = resolveCaptureOutcome(streamFinished, procCode);
@@ -24394,11 +24400,11 @@ function idbDemotionHint(cause) {
   return IDB_STREAM_UNHEALTHY_HINT;
 }
 async function probeIdbClient(execFileFn = execFile2) {
-  return new Promise((resolve12) => {
+  return new Promise((resolve13) => {
     execFileFn("idb", ["--help"], { timeout: 3e3 }, (err) => {
       if (!err)
-        return resolve12("ready");
-      resolve12(isEnoent(err) ? "absent" : "broken");
+        return resolve13("ready");
+      resolve13(isEnoent(err) ? "absent" : "broken");
     });
   });
 }
@@ -24407,7 +24413,7 @@ function isEnoent(err) {
 }
 function defaultExecJpeg(cmd, args, signal) {
   const outPath = args[args.length - 1];
-  return new Promise((resolve12, reject) => {
+  return new Promise((resolve13, reject) => {
     execFile2(cmd, args, { maxBuffer: 16 * 1024 * 1024, timeout: 1e4, signal }, (err) => {
       if (err) {
         reject(err);
@@ -24416,7 +24422,7 @@ function defaultExecJpeg(cmd, args, signal) {
       readFile(outPath).then((buf) => {
         void unlink(outPath).catch(() => {
         });
-        resolve12(buf);
+        resolve13(buf);
       }).catch((readErr) => {
         void unlink(outPath).catch(() => {
         });
@@ -24472,7 +24478,7 @@ var init_sources = __esm({
     DEFAULT_IDB_FIRST_FRAME_TIMEOUT_MS = 3e4;
     IDB_HINT = `idb not found \u2014 ${IDB_INSTALL_COMMAND}`;
     FFMPEG_HINT = "ffmpeg not found \u2014 run scripts/ensure-ffmpeg.sh or brew install ffmpeg";
-    sleep = (ms) => new Promise((resolve12) => setTimeout(resolve12, ms));
+    sleep = (ms) => new Promise((resolve13) => setTimeout(resolve13, ms));
     scheduleAfter = (fn, delayMs) => {
       if (delayMs <= 0)
         setImmediate(fn);
@@ -27542,8 +27548,8 @@ async function probeDev(client2, timeoutMs) {
     });
     const result = await Promise.race([
       evalPromise,
-      new Promise((resolve12) => {
-        timer = setTimeout(() => resolve12({ error: "probe timeout" }), timeoutMs);
+      new Promise((resolve13) => {
+        timer = setTimeout(() => resolve13({ error: "probe timeout" }), timeoutMs);
       })
     ]);
     if (timer)
@@ -31243,7 +31249,7 @@ var init_maestro_run = __esm({
 import { spawn as spawn6 } from "node:child_process";
 import { readdirSync as readdirSync7, readFileSync as readFileSync20, unlinkSync as unlinkSync5 } from "node:fs";
 function sleep3(ms) {
-  return new Promise((resolve12) => setTimeout(resolve12, ms));
+  return new Promise((resolve13) => setTimeout(resolve13, ms));
 }
 function cleanupKey(platform, deviceId) {
   return `${platform}:${deviceId}`;
@@ -31302,7 +31308,7 @@ async function waitForGroupAbsence(pgid, signalGroup, groupLiveness, delay, time
 }
 function observeChildTerminal(child, timeoutMs) {
   let closeResult = null;
-  const result = new Promise((resolve12) => {
+  const result = new Promise((resolve13) => {
     let settled = false;
     let timer;
     const done = (value) => {
@@ -31311,7 +31317,7 @@ function observeChildTerminal(child, timeoutMs) {
       settled = true;
       if (timer)
         clearTimeout(timer);
-      resolve12(value);
+      resolve13(value);
     };
     child.once("error", (error2) => done({ code: null, signal: null, timedOut: false, error: error2.message }));
     child.once("close", (code, signal) => {
@@ -32354,7 +32360,7 @@ function defaultDeps() {
     },
     fileExists: (path) => existsSync19(path),
     removeFile: (path) => unlinkSync6(path),
-    delay: (ms) => new Promise((resolve12) => setTimeout(resolve12, ms)),
+    delay: (ms) => new Promise((resolve13) => setTimeout(resolve13, ms)),
     listApps: (udid) => execFileSync13("xcrun", ["simctl", "listapps", udid], {
       encoding: "utf8",
       timeout: 5e3,
@@ -35298,7 +35304,7 @@ var init_utils = __esm({
 // packages/rn-dev-agent-core/dist/runners/free-port.js
 import { createServer } from "node:net";
 function findFreePort(preferred) {
-  return new Promise((resolve12, reject) => {
+  return new Promise((resolve13, reject) => {
     const tryListen = (port, fallbackToAny) => {
       const srv = createServer();
       srv.once("error", (err) => {
@@ -35314,7 +35320,7 @@ function findFreePort(preferred) {
           srv.close(() => reject(new Error("findFreePort: OS returned port 0")));
           return;
         }
-        srv.close(() => resolve12(chosen));
+        srv.close(() => resolve13(chosen));
       });
     };
     tryListen(preferred, true);
@@ -35980,8 +35986,8 @@ async function runBoundedAndroidRunnerRebuild(error2, rebuild, cleanup, dependen
       if (!refreshAuthority())
         return false;
       if (attempt + 1 < transitionAttempts) {
-        await new Promise((resolve12) => {
-          setTimeout(resolve12, dependencies.completionRetryIntervalMs ?? ANDROID_REBUILD_COMPLETION_RETRY_MS);
+        await new Promise((resolve13) => {
+          setTimeout(resolve13, dependencies.completionRetryIntervalMs ?? ANDROID_REBUILD_COMPLETION_RETRY_MS);
         });
       }
     }
@@ -36001,8 +36007,8 @@ async function runBoundedAndroidRunnerRebuild(error2, rebuild, cleanup, dependen
       } catch {
       }
       if (attempt + 1 < transitionAttempts) {
-        await new Promise((resolve12) => {
-          setTimeout(resolve12, dependencies.completionRetryIntervalMs ?? ANDROID_REBUILD_COMPLETION_RETRY_MS);
+        await new Promise((resolve13) => {
+          setTimeout(resolve13, dependencies.completionRetryIntervalMs ?? ANDROID_REBUILD_COMPLETION_RETRY_MS);
         });
       }
     }
@@ -36159,7 +36165,7 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
       signal: opts._rebuildSignal
     });
   }
-  return new Promise((resolve12, reject) => {
+  return new Promise((resolve13, reject) => {
     let resolved = false;
     let forwardRemoved = false;
     const removeForward = () => {
@@ -36232,7 +36238,7 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
         }
       }
       cleanupLegacyTmpState();
-      resolve12(state);
+      resolve13(state);
     };
     child.on("error", (err) => {
       removeForward();
@@ -36713,7 +36719,7 @@ function defaultDeps3() {
     kill: (pid, sig) => process.kill(pid, sig),
     fileExists: (p) => existsSync22(p),
     removeFile: (p) => unlinkSync8(p),
-    delay: (ms) => new Promise((resolve12) => setTimeout(resolve12, ms)),
+    delay: (ms) => new Promise((resolve13) => setTimeout(resolve13, ms)),
     killLegacy: () => process.env.RN_DEVICE_KILL_LEGACY !== "0",
     now: () => Date.now()
   };
@@ -36848,7 +36854,7 @@ var init_release_android_slot = __esm({
 import { execFile as execFileCb12, spawn as spawn8 } from "node:child_process";
 import { promisify as promisify15 } from "node:util";
 function executeRecorderScript(script, args, options) {
-  return new Promise((resolve12, reject) => {
+  return new Promise((resolve13, reject) => {
     const child = spawn8(script, args, {
       detached: process.platform !== "win32",
       env: options.env,
@@ -36876,7 +36882,7 @@ function executeRecorderScript(script, args, options) {
       if (error2)
         reject(error2);
       else
-        resolve12(result);
+        resolve13(result);
     };
     const signal = (value) => {
       if (child.pid === void 0)
@@ -36992,7 +36998,7 @@ async function awaitExactStopped(probe, deadlineMs, code, message) {
     }
     if (Date.now() >= deadlineMs)
       return false;
-    await new Promise((resolve12) => setTimeout(resolve12, 25));
+    await new Promise((resolve13) => setTimeout(resolve13, 25));
   }
 }
 async function waitForExactStopped(probe, deadlineMs, code, message) {
@@ -50003,7 +50009,7 @@ var init_protocol2 = __esm({
               return;
             }
             const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-            await new Promise((resolve12) => setTimeout(resolve12, pollInterval));
+            await new Promise((resolve13) => setTimeout(resolve13, pollInterval));
             options?.signal?.throwIfAborted();
           }
         } catch (error2) {
@@ -50020,7 +50026,7 @@ var init_protocol2 = __esm({
        */
       request(request2, resultSchema, options) {
         const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-        return new Promise((resolve12, reject) => {
+        return new Promise((resolve13, reject) => {
           const earlyReject = (error2) => {
             reject(error2);
           };
@@ -50098,7 +50104,7 @@ var init_protocol2 = __esm({
               if (!parseResult.success) {
                 reject(parseResult.error);
               } else {
-                resolve12(parseResult.data);
+                resolve13(parseResult.data);
               }
             } catch (error2) {
               reject(error2);
@@ -50359,12 +50365,12 @@ var init_protocol2 = __esm({
           }
         } catch {
         }
-        return new Promise((resolve12, reject) => {
+        return new Promise((resolve13, reject) => {
           if (signal.aborted) {
             reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
             return;
           }
-          const timeoutId = setTimeout(resolve12, interval);
+          const timeoutId = setTimeout(resolve13, interval);
           signal.addEventListener("abort", () => {
             clearTimeout(timeoutId);
             reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -53391,7 +53397,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve12.call(this, root, ref);
+      let _sch = resolve13.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a = root.localRefs) === null || _a === void 0 ? void 0 : _a[ref];
         const { schemaId } = this.opts;
@@ -53418,7 +53424,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve12(root, ref) {
+    function resolve13(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -54143,7 +54149,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve12(baseURI, relativeURI, options) {
+    function resolve13(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const resolved = resolveComponent(parse3(baseURI, schemelessOptions), parse3(relativeURI, schemelessOptions), schemelessOptions, true);
       schemelessOptions.skipEscape = true;
@@ -54400,7 +54406,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve: resolve12,
+      resolve: resolve13,
       resolveComponent,
       equal,
       serialize: serialize2,
@@ -58527,7 +58533,7 @@ var init_mcp = __esm({
         let task = createTaskResult.task;
         const pollInterval = task.pollInterval ?? 5e3;
         while (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
-          await new Promise((resolve12) => setTimeout(resolve12, pollInterval));
+          await new Promise((resolve13) => setTimeout(resolve13, pollInterval));
           const updatedTask = await extra.taskStore.getTask(taskId);
           if (!updatedTask) {
             throw new McpError(ErrorCode.InternalError, `Task ${taskId} not found during polling`);
@@ -59121,12 +59127,12 @@ var init_stdio2 = __esm({
         this.onclose?.();
       }
       send(message) {
-        return new Promise((resolve12) => {
+        return new Promise((resolve13) => {
           const json = serializeMessage(message);
           if (this._stdout.write(json)) {
-            resolve12();
+            resolve13();
           } else {
-            this._stdout.once("drain", resolve12);
+            this._stdout.once("drain", resolve13);
           }
         });
       }
@@ -63406,7 +63412,7 @@ var init_events_client = __esm({
       async connectOnce() {
         this.state = "connecting";
         const url = `ws://${this.opts.host}:${this.opts.port}/events`;
-        return new Promise((resolve12) => {
+        return new Promise((resolve13) => {
           const ws = new wrapper_default(url, {
             headers: { Origin: metroOrigin(url) }
           });
@@ -63420,7 +63426,7 @@ var init_events_client = __esm({
             this._connectionEpoch += 1;
             this.reconnectAttempt = 0;
             logger.info(this.opts.logTag, `connected to ${url}`);
-            resolve12();
+            resolve13();
           };
           const onFail = (reason) => {
             if (outcome !== null)
@@ -63428,7 +63434,7 @@ var init_events_client = __esm({
             outcome = "failed";
             logger.debug(this.opts.logTag, `connect failed: ${reason}`);
             this.scheduleReconnect();
-            resolve12();
+            resolve13();
           };
           ws.once("open", onOpen);
           ws.once("error", (err) => onFail(err instanceof Error ? err.message : String(err)));
@@ -63639,7 +63645,7 @@ var init_multiplexer = __esm({
         logger.info(this.opts.logTag, "multiplexer stopped");
       }
       startConsumerServer() {
-        return new Promise((resolve12, reject) => {
+        return new Promise((resolve13, reject) => {
           this.httpServer = createServer2();
           this.wss = new import_websocket_server.default({
             server: this.httpServer,
@@ -63671,12 +63677,12 @@ var init_multiplexer = __esm({
               return;
             }
             this.boundPort = addr.port;
-            resolve12(addr.port);
+            resolve13(addr.port);
           });
         });
       }
       connectHermes() {
-        return new Promise((resolve12, reject) => {
+        return new Promise((resolve13, reject) => {
           const ws = new wrapper_default(this.opts.hermesUrl, {
             headers: { Origin: metroOrigin(this.opts.hermesUrl) }
           });
@@ -63687,7 +63693,7 @@ var init_multiplexer = __esm({
               ws.send(msg3);
             this.hermesBuffer = [];
             logger.info(this.opts.logTag, `connected to upstream Hermes at ${this.opts.hermesUrl}`);
-            resolve12();
+            resolve13();
           };
           const onError = (err) => {
             ws.off("open", onOpen);
@@ -63865,8 +63871,8 @@ var init_multiplexer = __esm({
           this.wss = null;
         }
         if (this.httpServer) {
-          await new Promise((resolve12) => {
-            this.httpServer?.close(() => resolve12());
+          await new Promise((resolve13) => {
+            this.httpServer?.close(() => resolve13());
           });
           this.httpServer = null;
         }
@@ -67453,13 +67459,13 @@ function sendWithTimeout(ws, pending2, nextId, method, params, ms) {
   if (!ws || ws.readyState !== wrapper_default.OPEN) {
     return Promise.reject(new Error("WebSocket not connected"));
   }
-  return new Promise((resolve12, reject) => {
+  return new Promise((resolve13, reject) => {
     const id = nextId();
     const timer = setTimeout(() => {
       pending2.delete(id);
       reject(new Error(`CDP timeout (${ms}ms): ${method}. JS thread may be blocked, paused on a breakpoint, or waiting on an unresolved promise.`));
     }, ms);
-    pending2.set(id, { resolve: resolve12, reject, timer });
+    pending2.set(id, { resolve: resolve13, reject, timer });
     try {
       if (!ws || ws.readyState !== wrapper_default.OPEN) {
         throw new Error("WebSocket closed between check and send");
@@ -67892,7 +67898,7 @@ function connectWebSocket(ctx, url, createSocket = (socketUrl) => new wrapper_de
   maxPayload: 100 * 1024 * 1024,
   headers: { Origin: metroOrigin(socketUrl) }
 })) {
-  return new Promise((resolve12, reject) => {
+  return new Promise((resolve13, reject) => {
     const ws = createSocket(url);
     let settled = false;
     const guard = setTimeout(() => {
@@ -67918,7 +67924,7 @@ function connectWebSocket(ctx, url, createSocket = (socketUrl) => new wrapper_de
       }
       ctx.setWs(ws);
       ctx.setState("connected");
-      resolve12(ws);
+      resolve13(ws);
     });
     ws.on("error", (err) => {
       if (!settled) {
@@ -70620,7 +70626,7 @@ var init_device_existence = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/session.js
-import { dirname as dirname16, join as join38 } from "node:path";
+import { dirname as dirname16, isAbsolute as isAbsolute7, join as join38, resolve as resolve9 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 import { createHash as createHash15 } from "node:crypto";
 function sameAndroidMetroReverse(current, next) {
@@ -70702,6 +70708,12 @@ function sessionSourceResolver(status, dependencies) {
   const stored = status.source;
   return (root) => resolveSourceIdentity(root, stored?.kind === "declared-root" ? { declaredRoot: stored.contentRoot, declaredManifests: stored.declaredManifests } : {});
 }
+function anchorDeclaredProjectRoot(status, projectRoot) {
+  if (isAbsolute7(projectRoot))
+    return projectRoot;
+  const boundAppRoot = status.source?.appRoot;
+  return typeof boundAppRoot === "string" && boundAppRoot.length > 0 ? resolve9(boundAppRoot, projectRoot) : projectRoot;
+}
 function assertDeclaredProjectRootMatches(status, projectRoot, resolveIdentity) {
   if (projectRoot === void 0)
     return;
@@ -70709,11 +70721,12 @@ function assertDeclaredProjectRootMatches(status, projectRoot, resolveIdentity) 
   if (typeof projectRoot !== "string" || projectRoot.length === 0) {
     throw new SessionAuthorityError("SOURCE_ROOT_DIVERGENCE", `projectRoot must be a non-empty path (session source root: ${boundAppRoot})`, void 0, { axis: "S" });
   }
+  const anchored = anchorDeclaredProjectRoot(status, projectRoot);
   let declared;
   try {
-    declared = resolveIdentity(projectRoot);
+    declared = resolveIdentity(anchored);
   } catch (error2) {
-    throw new SessionAuthorityError("SOURCE_ROOT_DIVERGENCE", `declared project root ${projectRoot} cannot be resolved as a source root (session source root: ${boundAppRoot}): ${error2 instanceof Error ? error2.message : "unknown error"}`, void 0, { axis: "S" });
+    throw new SessionAuthorityError("SOURCE_ROOT_DIVERGENCE", `declared project root ${anchored} cannot be resolved as a source root (session source root: ${boundAppRoot}): ${error2 instanceof Error ? error2.message : "unknown error"}`, void 0, { axis: "S" });
   }
   if (declared.worktreeKey === status.worktreeKey && declared.appRootKey === status.appRootKey) {
     return;
@@ -71070,11 +71083,12 @@ function createSessionHandler(runtime, dependencies = {}) {
           throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "session disappeared before source binding");
         }
         const boundAppRoot = String(status.source.appRoot ?? "");
+        const anchoredProjectRoot = anchorDeclaredProjectRoot(status, projectRoot);
         let declared;
         try {
-          declared = sessionSourceResolver(status, dependencies)(projectRoot);
+          declared = sessionSourceResolver(status, dependencies)(anchoredProjectRoot);
         } catch (error2) {
-          throw new SessionAuthorityError("SOURCE_ROOT_DIVERGENCE", `declared project root ${projectRoot} cannot be resolved as a source root (session source root: ${boundAppRoot}): ${error2 instanceof Error ? error2.message : "unknown error"}`, void 0, {
+          throw new SessionAuthorityError("SOURCE_ROOT_DIVERGENCE", `declared project root ${anchoredProjectRoot} cannot be resolved as a source root (session source root: ${boundAppRoot}): ${error2 instanceof Error ? error2.message : "unknown error"}`, void 0, {
             axis: "S",
             nextAction: "Pass an existing checkout directory of the repository this session was started for."
           });
@@ -73324,7 +73338,7 @@ var init_device_screenshot_resize = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/path-safety.js
-import { resolve as resolve9, sep as sep5 } from "node:path";
+import { resolve as resolve10, sep as sep5 } from "node:path";
 function isValidActionId(s) {
   if (typeof s !== "string")
     return false;
@@ -73341,8 +73355,8 @@ function assertValidActionId(s, context) {
   }
 }
 function assertWithinDir(child, baseDir) {
-  const resolvedBase = resolve9(baseDir);
-  const resolvedChild = resolve9(baseDir, child);
+  const resolvedBase = resolve10(baseDir);
+  const resolvedChild = resolve10(baseDir, child);
   if (resolvedChild === resolvedBase)
     return;
   const baseWithSep = resolvedBase.endsWith(sep5) ? resolvedBase : resolvedBase + sep5;
@@ -73664,11 +73678,11 @@ var init_events = __esm({
 
 // packages/rn-dev-agent-core/dist/observability/recorder.js
 import { closeSync as closeSync9, constants as constants6, fstatSync as fstatSync6, openSync as openSync9, readSync as readSync4 } from "node:fs";
-import { isAbsolute as isAbsolute7 } from "node:path";
+import { isAbsolute as isAbsolute8 } from "node:path";
 function extractScreenshotPath(result) {
   const data = unwrapResult(result)?.data ?? result?.data;
   const p = data?.path ?? data?.message;
-  return typeof p === "string" && isAbsolute7(p) && (p.endsWith(".jpg") || p.endsWith(".jpeg") || p.endsWith(".png")) ? p : null;
+  return typeof p === "string" && isAbsolute8(p) && (p.endsWith(".jpg") || p.endsWith(".jpeg") || p.endsWith(".png")) ? p : null;
 }
 function readShotBounded(p) {
   let fd;
@@ -73761,7 +73775,7 @@ var init_recorder = __esm({
        * whatever path the pipeline actually captured to.
        */
       registerCapturedScreenshot(p) {
-        if (typeof p !== "string" || !isAbsolute7(p))
+        if (typeof p !== "string" || !isAbsolute8(p))
           return;
         this.trustedShotPaths.delete(p);
         this.trustedShotPaths.add(p);
@@ -73849,7 +73863,7 @@ var init_recorder = __esm({
 import { mkdirSync as mkdirSync16 } from "node:fs";
 import { execFile as execFile18 } from "node:child_process";
 import { promisify as promisify19 } from "node:util";
-import { dirname as dirname17, join as join39, resolve as resolve10 } from "node:path";
+import { dirname as dirname17, join as join39, resolve as resolve11 } from "node:path";
 import { homedir as homedir9 } from "node:os";
 function parseSimctlDevicesAll(jsonText) {
   try {
@@ -73897,7 +73911,7 @@ function deriveScreenshotPath(args, now = Date.now, rand = Math.random) {
     throw new TildeScreenshotPathError(`Screenshot path "${args.path}" starts with '~' which the bridge cannot expand (only a leading '~/' is expanded to the home directory). Pass an absolute path instead.`);
   }
   if (args.path)
-    return resolve10(args.path);
+    return resolve11(args.path);
   const ext = args.format === "jpeg" ? "jpg" : args.format === "png" ? "png" : "jpg";
   const suffix = rand().toString(36).slice(2, 8);
   return `/tmp/rn-screenshot-${now()}-${suffix}.${ext}`;
@@ -74425,11 +74439,11 @@ function createDeviceBatchHandler(getClient2) {
       const abortController = new AbortController();
       const result = await Promise.race([
         executeStep(step, getClient2, abortController.signal),
-        new Promise((resolve12) => {
+        new Promise((resolve13) => {
           stepTimer = setTimeout(() => {
             stepTimedOut = true;
             abortController.abort();
-            resolve12(step.action === "fill" ? failResult(`Step ${i + 1} timed out after ${stepTimeout}ms; the fill may have mutated the field and no correction or later step will be started`, "TEXT_ENTRY_UNVERIFIED", {
+            resolve13(step.action === "fill" ? failResult(`Step ${i + 1} timed out after ${stepTimeout}ms; the fill may have mutated the field and no correction or later step will be started`, "TEXT_ENTRY_UNVERIFIED", {
               mutation: "possible",
               hint: "Read the field state before any manual retry \u2014 do not blindly re-run the fill."
             }) : failResult(`Step ${i + 1} timed out after ${stepTimeout}ms; remaining steps were not started because the native operation may still be completing`));
@@ -78399,7 +78413,7 @@ async function collectNativeIos(durationMs, signal, deviceId, bundleId, onResolv
     return [];
   const pid = await resolveIosAppPid(deviceId, bundleId, signal);
   onResolvedPid?.(pid);
-  return new Promise((resolve12, reject) => {
+  return new Promise((resolve13, reject) => {
     const entries = [];
     let killed = false;
     let killedByUs = false;
@@ -78468,7 +78482,7 @@ async function collectNativeIos(durationMs, signal, deviceId, bundleId, onResolv
       if (!killedByUs && code !== 0 && entries.length === 0) {
         reject(new Error(`xcrun simctl log stream exited ${code}: ${stderrBuf.slice(0, 200)}`));
       } else {
-        resolve12(entries);
+        resolve13(entries);
       }
     });
     proc.on("error", (err) => {
@@ -78533,7 +78547,7 @@ function buildAndroidLogcatArgs(serial) {
 function collectNativeAndroid(durationMs, signal, serial) {
   if (signal.aborted)
     return Promise.resolve([]);
-  return new Promise((resolve12, reject) => {
+  return new Promise((resolve13, reject) => {
     const entries = [];
     const year = (/* @__PURE__ */ new Date()).getFullYear();
     const killMs = durationMs > 0 ? durationMs : 100;
@@ -78601,7 +78615,7 @@ function collectNativeAndroid(durationMs, signal, serial) {
       if (!killedByUs && code !== 0 && entries.length === 0) {
         reject(new Error(`adb logcat exited ${code}: ${stderrBuf.slice(0, 200)}`));
       } else {
-        resolve12(entries);
+        resolve13(entries);
       }
     });
     proc.on("error", (err) => {
@@ -78806,7 +78820,7 @@ async function observeSessionRuntimeAbsent(dependencies) {
   return !await isSessionAppRunning(binding, dependencies);
 }
 function createSessionRuntimeAbsenceProbe(dependencies) {
-  const wait = dependencies.wait ?? ((ms) => new Promise((resolve12) => setTimeout(resolve12, ms)));
+  const wait = dependencies.wait ?? ((ms) => new Promise((resolve13) => setTimeout(resolve13, ms)));
   return async () => {
     try {
       if (!await observeSessionRuntimeAbsent(dependencies))
@@ -80983,7 +80997,7 @@ var init_startup_integrity = __esm({
 import { createHash as createHash18, randomUUID as randomUUID9 } from "node:crypto";
 import { execFileSync as execFileSync15 } from "node:child_process";
 import { chmodSync as chmodSync4, closeSync as closeSync10, existsSync as existsSync32, fsyncSync, lstatSync as lstatSync11, mkdirSync as mkdirSync18, openSync as openSync10, readFileSync as readFileSync30, realpathSync as realpathSync11, renameSync as renameSync7, unlinkSync as unlinkSync11, writeFileSync as writeFileSync15 } from "node:fs";
-import { basename as basename7, dirname as dirname20, extname, isAbsolute as isAbsolute8, join as join43, relative as relative5, resolve as resolve11, sep as sep6 } from "node:path";
+import { basename as basename7, dirname as dirname20, extname, isAbsolute as isAbsolute9, join as join43, relative as relative5, resolve as resolve12, sep as sep6 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 function proofActionPayload(unparsedArgs) {
   if (!unparsedArgs || typeof unparsedArgs !== "object" || Array.isArray(unparsedArgs)) {
@@ -81023,7 +81037,7 @@ function captureProofWorkerStartup(argv = process.argv, attestation = readStartu
   let loadedCoreBundlePath = null;
   let coreBundleSha256 = null;
   try {
-    if (typeof argv[1] === "string" && isAbsolute8(argv[1])) {
+    if (typeof argv[1] === "string" && isAbsolute9(argv[1])) {
       executedEntrypointPath = realpathSync11(argv[1]);
     }
   } catch {
@@ -81060,7 +81074,7 @@ function resolveProofCandidateEntrypoint(candidateRoot, argv) {
     return null;
   }
   const authorityArg = argv[1];
-  if (typeof authorityArg !== "string" || !isAbsolute8(authorityArg))
+  if (typeof authorityArg !== "string" || !isAbsolute9(authorityArg))
     return null;
   let arg;
   try {
@@ -81109,7 +81123,7 @@ function proofCandidateStartupMatches(entrypoint, startup, headCoreBundleSha256)
 }
 function proofCandidateEntrypointEnvironmentMatches(entrypoint, env) {
   const normalizedOverride = (value) => {
-    if (!value || !isAbsolute8(value))
+    if (!value || !isAbsolute9(value))
       return value ? null : "";
     try {
       return realpathSync11(value);
@@ -81167,7 +81181,7 @@ function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
   }
 }
 function readProofCandidateRuntime(candidateRoot, startup = proofWorkerStartup) {
-  const root = realpathSync11(resolve11(candidateRoot));
+  const root = realpathSync11(resolve12(candidateRoot));
   const sha = execFileSync15("git", ["-C", root, "rev-parse", "HEAD"], {
     encoding: "utf8"
   }).trim();
@@ -81251,16 +81265,16 @@ function readProofActionIdentity(appProjectRoot, actionId) {
   }
 }
 function isNormalizedDescendant(root, path) {
-  if (!isAbsolute8(root) || !isAbsolute8(path) || resolve11(root) !== root || resolve11(path) !== path) {
+  if (!isAbsolute9(root) || !isAbsolute9(path) || resolve12(root) !== root || resolve12(path) !== path) {
     return false;
   }
   const fromRoot = relative5(root, path);
-  return fromRoot.length > 0 && fromRoot !== ".." && !fromRoot.startsWith(`..${sep6}`) && !isAbsolute8(fromRoot);
+  return fromRoot.length > 0 && fromRoot !== ".." && !fromRoot.startsWith(`..${sep6}`) && !isAbsolute9(fromRoot);
 }
 function hasExistingSymlink(root, path) {
   const parts = relative5(root, path).split(sep6);
   for (let length = 0; length <= parts.length; length += 1) {
-    const candidate = resolve11(root, ...parts.slice(0, length));
+    const candidate = resolve12(root, ...parts.slice(0, length));
     try {
       if (lstatSync11(candidate).isSymbolicLink())
         return true;
@@ -81270,7 +81284,7 @@ function hasExistingSymlink(root, path) {
   return false;
 }
 function validCaptureContext(args, expectedRoot) {
-  if (!expectedRoot || args.projectRoot !== expectedRoot || resolve11(expectedRoot) !== expectedRoot) {
+  if (!expectedRoot || args.projectRoot !== expectedRoot || resolve12(expectedRoot) !== expectedRoot) {
     return false;
   }
   if (!/^[a-z0-9][a-z0-9-]*$/.test(args.runId))
@@ -81298,7 +81312,7 @@ function proofRootExists(args) {
   }
 }
 function resolveProofWorktreeRoot(detectedProjectRoot) {
-  if (!detectedProjectRoot || !isAbsolute8(detectedProjectRoot) || resolve11(detectedProjectRoot) !== detectedProjectRoot) {
+  if (!detectedProjectRoot || !isAbsolute9(detectedProjectRoot) || resolve12(detectedProjectRoot) !== detectedProjectRoot) {
     return null;
   }
   try {
@@ -81306,7 +81320,7 @@ function resolveProofWorktreeRoot(detectedProjectRoot) {
       cwd: detectedProjectRoot,
       encoding: "utf8"
     }).trim();
-    return root && isAbsolute8(root) && resolve11(root) === root ? root : null;
+    return root && isAbsolute9(root) && resolve12(root) === root ? root : null;
   } catch {
     return null;
   }
@@ -81424,8 +81438,8 @@ function traceFor(storyboard, events) {
 function readProofContractAt(moduleUrl = import.meta.url) {
   const moduleDir = dirname20(fileURLToPath4(moduleUrl));
   const candidates = [
-    resolve11(moduleDir, "../../schemas/proof-receipt.schema.json"),
-    resolve11(moduleDir, "../schemas/proof-receipt.schema.json")
+    resolve12(moduleDir, "../../schemas/proof-receipt.schema.json"),
+    resolve12(moduleDir, "../schemas/proof-receipt.schema.json")
   ];
   for (const path of candidates) {
     try {
@@ -81439,7 +81453,7 @@ function readProofContractAt(moduleUrl = import.meta.url) {
 function writeProofReceiptAtomic(path, receipt2) {
   const directory = dirname20(path);
   mkdirSync18(directory, { recursive: true, mode: 448 });
-  const temporary = resolve11(directory, `.${randomUUID9()}.proof-receipt.tmp`);
+  const temporary = resolve12(directory, `.${randomUUID9()}.proof-receipt.tmp`);
   let descriptor = null;
   try {
     descriptor = openSync10(temporary, "wx", 384);
@@ -81633,7 +81647,7 @@ function createProofCaptureHandler(deps) {
     ].map((path) => repositoryPath(active, path));
     const requiredOutputs = new Set(phase === "finalized" ? [...proofOutputs, repositoryPath(active, active.context.receiptPath)] : proofOutputs);
     const allowedOutputs = phase === "setup" ? observedSetupScreenshots(active) : phase === "clean" ? /* @__PURE__ */ new Set() : requiredOutputs;
-    const invalidChange = git.changes.some((change) => isAbsolute8(change.path) || change.path === ".." || change.path.startsWith("../") || change.indexStatus !== "?" || change.worktreeStatus !== "?" || change.sourcePath !== void 0);
+    const invalidChange = git.changes.some((change) => isAbsolute9(change.path) || change.path === ".." || change.path.startsWith("../") || change.indexStatus !== "?" || change.worktreeStatus !== "?" || change.sourcePath !== void 0);
     const changedPaths = new Set(git.changes.map((change) => change.path.replaceAll("\\", "/")));
     const unrelated = [...changedPaths].some((path) => !allowedOutputs.has(path));
     const missing = (phase === "validation" || phase === "finalized") && [...requiredOutputs].some((path) => !changedPaths.has(path));
@@ -82248,7 +82262,7 @@ var init_proof_capture2 = __esm({
     init_proof_receipt();
     init_utils();
     init_startup_integrity();
-    absolutePathSchema = external_exports.string().min(1).refine(isAbsolute8, "path must be absolute");
+    absolutePathSchema = external_exports.string().min(1).refine(isAbsolute9, "path must be absolute");
     beginRehearsalSchema = external_exports.object({
       action: external_exports.literal("begin_rehearsal"),
       projectRoot: absolutePathSchema,
@@ -84475,10 +84489,10 @@ function buildGracefulShutdown(deps) {
       }
     })();
     let timeoutHandle = null;
-    const timeout = new Promise((resolve12) => {
+    const timeout = new Promise((resolve13) => {
       timeoutHandle = setTimeout(() => {
         logger.warn("MCP", `shutdown: cleanup timeout after ${timeoutMs}ms, forcing exit`);
-        resolve12();
+        resolve13();
       }, timeoutMs);
     });
     await Promise.race([cleanup, timeout]);
@@ -85967,7 +85981,7 @@ import { readFileSync as readFileSync35 } from "node:fs";
 import { fileURLToPath as fileURLToPath6 } from "node:url";
 import { dirname as dirname23, join as join51 } from "node:path";
 function listen(server3, port) {
-  return new Promise((resolve12, reject) => {
+  return new Promise((resolve13, reject) => {
     const onErr = (e) => {
       server3.removeListener("error", onErr);
       reject(e);
@@ -85976,7 +85990,7 @@ function listen(server3, port) {
     server3.listen(port, HOST, () => {
       server3.removeListener("error", onErr);
       const addr = server3.address();
-      resolve12(typeof addr === "object" && addr ? addr.port : port);
+      resolve13(typeof addr === "object" && addr ? addr.port : port);
     });
   });
 }
@@ -86251,20 +86265,20 @@ var init_server3 = __esm({
       // handle() fire-and-forgets the async routes, so a rejecting await here
       // would crash the process on an oversized/aborted request (GH #438 review).
       readBody(req) {
-        return new Promise((resolve12) => {
+        return new Promise((resolve13) => {
           let body = "";
           let bytes = 0;
           req.on("data", (chunk) => {
             bytes += chunk.length;
             if (bytes > 65536) {
               req.destroy();
-              resolve12(null);
+              resolve13(null);
               return;
             }
             body += chunk.toString();
           });
-          req.on("end", () => resolve12(body));
-          req.on("error", () => resolve12(null));
+          req.on("end", () => resolve13(body));
+          req.on("error", () => resolve13(null));
         });
       }
       json(res, status, obj) {
@@ -87836,15 +87850,15 @@ function preflight(input) {
   return { ok: true };
 }
 function probeMetro(port, timeoutMs = 1500) {
-  return new Promise((resolve12) => {
+  return new Promise((resolve13) => {
     const req = request({ host: "127.0.0.1", port, path: "/status", method: "GET", timeout: timeoutMs }, (res) => {
       res.resume();
-      resolve12((res.statusCode ?? 500) < 500);
+      resolve13((res.statusCode ?? 500) < 500);
     });
-    req.on("error", () => resolve12(false));
+    req.on("error", () => resolve13(false));
     req.on("timeout", () => {
       req.destroy();
-      resolve12(false);
+      resolve13(false);
     });
     req.end();
   });
@@ -88615,7 +88629,7 @@ function exactCandidateMismatchError(input, listedTargets, sessionCandidates, ex
 }
 async function connectExactAndroidSessionTarget(input, timeoutMs, dependencies) {
   const now = dependencies.now ?? Date.now;
-  const wait = dependencies.wait ?? ((ms) => new Promise((resolve12) => setTimeout(resolve12, ms)));
+  const wait = dependencies.wait ?? ((ms) => new Promise((resolve13) => setTimeout(resolve13, ms)));
   const setDeadlineTimer = dependencies.setDeadlineTimer ?? ((callback, ms) => setTimeout(callback, ms));
   const clearDeadlineTimer = dependencies.clearDeadlineTimer ?? ((timer) => clearTimeout(timer));
   const deadline = now() + timeoutMs;
@@ -88791,7 +88805,7 @@ async function connectExactSessionTarget(input, timeoutMs, dependencies) {
     return connectExactAndroidSessionTarget(input, timeoutMs, dependencies);
   }
   const now = dependencies.now ?? Date.now;
-  const wait = dependencies.wait ?? ((ms) => new Promise((resolve12) => setTimeout(resolve12, ms)));
+  const wait = dependencies.wait ?? ((ms) => new Promise((resolve13) => setTimeout(resolve13, ms)));
   let exactClient = dependencies.getClient();
   if (exactClient.metroPort !== input.metroPort) {
     await exactClient.disconnect();
@@ -90338,7 +90352,7 @@ var init_index = __esm({
           const probe = await client2.evaluate('typeof globalThis.__RN_AGENT !== "undefined" && globalThis.__RN_AGENT.isReady() === true').catch(() => ({ value: false }));
           if (probe.value === true)
             return true;
-          await new Promise((resolve12) => setTimeout(resolve12, 250));
+          await new Promise((resolve13) => setTimeout(resolve13, 250));
         }
         return false;
       }
@@ -91601,7 +91615,7 @@ if (supervisorFlag.length > 0 && !process.execArgv.includes("--experimental-sqli
   for (const signal of ["SIGTERM", "SIGINT", "SIGHUP", "SIGUSR2"]) {
     process.on(signal, () => child.kill(signal));
   }
-  const outcome = await new Promise((resolve12) => child.on("exit", (code, signal) => resolve12({ code, signal })));
+  const outcome = await new Promise((resolve13) => child.on("exit", (code, signal) => resolve13({ code, signal })));
   if (outcome.signal) {
     process.removeAllListeners(outcome.signal);
     process.kill(process.pid, outcome.signal);
@@ -91725,10 +91739,8 @@ if (process.env.RN_BRIDGE_SUPERVISOR === "0") {
   try {
     if (diagnosticContractProbe2)
       throw new Error("DIAGNOSTIC_MODE_READ_ONLY");
-    const source = resolveSourceIdentity(process.cwd(), {
-      declaredRoot: process.env.RN_DEV_AGENT_DECLARED_ROOT,
-      declaredManifests: parseDeclaredManifests(process.env.RN_DEV_AGENT_DECLARED_MANIFESTS)
-    });
+    const declaredContract = declaredSourceContractFromEnv();
+    const source = resolveSourceIdentity(process.cwd(), declaredContract);
     try {
       const cleanup = await runStartupCleanupForSource({
         source,
@@ -91753,7 +91765,7 @@ if (process.env.RN_BRIDGE_SUPERVISOR === "0") {
       source: resolveSuccessorMintSource({
         terminal: authority ? { layout: authority.layout, session: authority.session, source: authority.source } : null,
         bootSource: source,
-        resolveIdentity: (root) => resolveSourceIdentity(root),
+        resolveIdentity: (root) => resolveSourceIdentity(root, declaredContract),
         diagnostic: (message) => process.stderr.write(`rn-dev-agent successor source: ${message}
 `)
       }),

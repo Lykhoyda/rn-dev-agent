@@ -9,7 +9,7 @@ import { startParentDeathWatch } from './lifecycle/parent-watch.js';
 import { LineSplitter } from './lifecycle/stdio-frames.js';
 import { SupervisorCore, type SupervisorAction } from './lifecycle/supervisor-core.js';
 import { logger } from './logger.js';
-import { parseDeclaredManifests } from './session/declared-source-contract.js';
+import { declaredSourceContractFromEnv } from './session/declared-source-contract.js';
 import { inspectSessionOwner } from './session/process-owner.js';
 import { readProcessBirth } from './session/process-birth.js';
 import { resolveSourceIdentity } from './session/source-identity.js';
@@ -103,10 +103,8 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
   let mintAuthority: (() => SupervisorAuthority) | null = null;
   try {
     if (diagnosticContractProbe) throw new Error('DIAGNOSTIC_MODE_READ_ONLY');
-    const source = resolveSourceIdentity(process.cwd(), {
-      declaredRoot: process.env.RN_DEV_AGENT_DECLARED_ROOT,
-      declaredManifests: parseDeclaredManifests(process.env.RN_DEV_AGENT_DECLARED_MANIFESTS),
-    });
+    const declaredContract = declaredSourceContractFromEnv();
+    const source = resolveSourceIdentity(process.cwd(), declaredContract);
     // L4: release a proven-dead same-root predecessor before claiming. Any refusal
     // (live/unproven owner, unproven obligation) falls through to the blocked path.
     try {
@@ -142,7 +140,7 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
             ? { layout: authority.layout, session: authority.session, source: authority.source }
             : null,
           bootSource: source,
-          resolveIdentity: (root) => resolveSourceIdentity(root),
+          resolveIdentity: (root) => resolveSourceIdentity(root, declaredContract),
           diagnostic: (message) =>
             process.stderr.write(`rn-dev-agent successor source: ${message}\n`),
         }),
