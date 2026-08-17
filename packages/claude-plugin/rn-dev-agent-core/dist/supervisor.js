@@ -27845,6 +27845,66 @@ function readAndroidPackages() {
 function readIOSPackages() {
   return cachedPackageProbe("ios", probeIOSPackages);
 }
+function probeIOSBootedSimulatorNames() {
+  try {
+    const out = execFileSync11("xcrun", ["simctl", "list", "devices", "booted", "-j"], {
+      timeout: 5e3,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"]
+    });
+    const parsed = JSON.parse(out);
+    const names = /* @__PURE__ */ new Set();
+    for (const device of Object.values(parsed.devices ?? {}).flat()) {
+      if (device.state === "Booted" && typeof device.name === "string" && device.name.trim()) {
+        names.add(device.name.trim().toLowerCase());
+      }
+    }
+    return names;
+  } catch {
+    return null;
+  }
+}
+function probeAndroidDeviceModels() {
+  try {
+    const out = execFileSync11("adb", ["devices"], {
+      timeout: 3e3,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"]
+    });
+    const serials = out.split("\n").map((line) => line.trim().split(/\s+/)).filter((parts) => parts[0] && parts[1] === "device").map((parts) => parts[0]);
+    const models = /* @__PURE__ */ new Set();
+    for (const serial of serials) {
+      try {
+        const model = execFileSync11("adb", ["-s", serial, "shell", "getprop", "ro.product.model"], {
+          timeout: 3e3,
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "ignore"]
+        }).trim().toLowerCase();
+        if (model)
+          models.add(model);
+      } catch {
+      }
+    }
+    return models;
+  } catch {
+    return null;
+  }
+}
+function readIOSDeviceNames() {
+  return cachedPackageProbe("ios-device-names", probeIOSBootedSimulatorNames);
+}
+function readAndroidDeviceModels() {
+  return cachedPackageProbe("android-device-models", probeAndroidDeviceModels);
+}
+function nameMatchesAndroidModel(name, models) {
+  if (!models)
+    return false;
+  for (const model of models) {
+    if (name === model || name.startsWith(`${model} -`))
+      return true;
+  }
+  return false;
+}
 function inferPlatformFromDeviceName(deviceName) {
   if (!deviceName)
     return null;
@@ -27860,12 +27920,26 @@ function inferPlatformFromDeviceName(deviceName) {
 function inferPlatforms(targets, readers = {}) {
   const androidPackages = (readers.readAndroid ?? readAndroidPackages)();
   const iosPackages = (readers.readIOS ?? readIOSPackages)();
+  let iosDeviceNames;
+  let androidDeviceModels;
+  const bootedIOSNames = () => iosDeviceNames ??= (readers.readIOSDeviceNames ?? readIOSDeviceNames)();
+  const liveAndroidModels = () => androidDeviceModels ??= (readers.readAndroidDeviceModels ?? readAndroidDeviceModels)();
   for (const t of targets) {
     const fromDeviceName = inferPlatformFromDeviceName(t.deviceName);
     if (fromDeviceName) {
       t.platform = fromDeviceName;
       t.platformInference = "probed";
       continue;
+    }
+    const inventoryName = t.deviceName?.trim().toLowerCase();
+    if (inventoryName) {
+      const inIOSInventory = bootedIOSNames()?.has(inventoryName) ?? false;
+      const inAndroidInventory = nameMatchesAndroidModel(inventoryName, liveAndroidModels());
+      if (inIOSInventory !== inAndroidInventory) {
+        t.platform = inIOSInventory ? "ios" : "android";
+        t.platformInference = "probed";
+        continue;
+      }
     }
     const bundleIdentity = targetBundleIdentity(t);
     const inAndroid = bundleIdentity ? androidPackages?.has(bundleIdentity) ?? false : false;
@@ -87811,6 +87885,20 @@ function rateLimitedDeviceAuthority(dependencies, now) {
 function errorMessage(error2) {
   return error2 instanceof Error ? error2.message : String(error2);
 }
+function exactCandidateMismatchError(input, listedTargets, sessionCandidates, exactCandidates) {
+  if (exactCandidates.length > 1) {
+    return new Error(`CDP_TARGET_AUTHORITY_MISMATCH: ${exactCandidates.length} session-matched targets are proven on device ${input.deviceId} \u2014 target selection is ambiguous on the exact device`);
+  }
+  if (listedTargets.length === 0) {
+    return new Error(`CDP_TARGET_AUTHORITY_MISMATCH: expected one target on the exact device, found 0 \u2014 Metro on port ${input.metroPort} advertises no debuggable targets`);
+  }
+  if (sessionCandidates.length === 0) {
+    const appMatched = listedTargets.filter((target) => targetMatchesBundleId(target, input.appId));
+    const stage = appMatched.length === 0 ? `none carries the proven app identity appId=${input.appId}` : `${appMatched.length} carry appId=${input.appId} but their platform=${input.platform} association is unproven`;
+    return new Error(`CDP_TARGET_AUTHORITY_MISMATCH: Metro on port ${input.metroPort} advertises ${listedTargets.length} live target(s), but ${stage}. Candidates: ${listedTargets.map(describeTarget).join("; ")}`);
+  }
+  return new Error(`CDP_TARGET_AUTHORITY_MISMATCH: ${sessionCandidates.length} session-matched target(s) exist on Metro port ${input.metroPort}, but none is provably on device ${input.deviceId}. Target deviceName(s): ${sessionCandidates.map((target) => target.deviceName?.trim() || "<none>").join(", ")}`);
+}
 async function connectExactAndroidSessionTarget(input, timeoutMs, dependencies) {
   const now = dependencies.now ?? Date.now;
   const wait = dependencies.wait ?? ((ms) => new Promise((resolve12) => setTimeout(resolve12, ms)));
@@ -87901,7 +87989,7 @@ async function connectExactAndroidSessionTarget(input, timeoutMs, dependencies) 
         targets: sessionCandidates
       }, discoveryAuthorityDependencies);
       if (exactCandidates.length !== 1) {
-        throw new Error(`CDP_TARGET_AUTHORITY_MISMATCH: expected one target on the exact device, found ${exactCandidates.length}`);
+        throw exactCandidateMismatchError(input, listed.targets, sessionCandidates, exactCandidates);
       }
       await awaitWithinDeadline(() => exactClient.connectExact(input.metroPort, {
         platform: input.platform,
@@ -88015,7 +88103,7 @@ async function connectExactSessionTarget(input, timeoutMs, dependencies) {
         targets: sessionCandidates
       }, discoveryAuthorityDependencies);
       if (exactCandidates.length !== 1) {
-        throw new Error(`CDP_TARGET_AUTHORITY_MISMATCH: expected one target on the exact device, found ${exactCandidates.length}`);
+        throw exactCandidateMismatchError(input, listed.targets, sessionCandidates, exactCandidates);
       }
       await exactClient.connectExact(input.metroPort, {
         platform: input.platform,
@@ -88063,6 +88151,7 @@ var init_connect_exact_session_target = __esm({
   "packages/rn-dev-agent-core/dist/session/connect-exact-session-target.js"() {
     "use strict";
     init_connect();
+    init_discovery();
     init_status();
     init_target_device_authority();
     IOS_EXACT_TARGET_READINESS_TIMEOUT_MS = 12e4;
@@ -88259,6 +88348,9 @@ function createAuthoritativeSessionPolicy(status) {
         targets
       }, { execute: execFileP, awaitWithinBoundary });
       if (exactCandidates.length !== 1) {
+        if (exactCandidates.length === 0 && targets.length > 0) {
+          throw new Error(`CDP_TARGET_AUTHORITY_MISMATCH: ${targets.length} session target(s) exist, but none is provably on device ${device.deviceId}. deviceName(s): ${targets.map((target) => target.deviceName?.trim() || "<none>").join(", ")}`);
+        }
         throw new Error(`CDP_TARGET_AUTHORITY_MISMATCH: expected one target on the exact device, found ${exactCandidates.length}`);
       }
       return exactCandidates[0].id;

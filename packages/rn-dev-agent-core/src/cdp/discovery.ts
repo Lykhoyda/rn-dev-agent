@@ -315,9 +315,86 @@ function readIOSPackages(): Set<string> | null {
   return cachedPackageProbe('ios', probeIOSPackages);
 }
 
+// GH #777: custom device names ("rn-qa", "ix-…-iPhone17Pro") carry no platform
+// token, so pattern inference misses them and the bundle probe can only say
+// "installed on both" — proving the platform requires the live device inventory.
+function probeIOSBootedSimulatorNames(): Set<string> | null {
+  try {
+    const out = execFileSync('xcrun', ['simctl', 'list', 'devices', 'booted', '-j'], {
+      timeout: 5000,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const parsed = JSON.parse(out) as {
+      devices?: Record<string, Array<{ name?: string; state?: string }>>;
+    };
+    const names = new Set<string>();
+    for (const device of Object.values(parsed.devices ?? {}).flat()) {
+      if (device.state === 'Booted' && typeof device.name === 'string' && device.name.trim()) {
+        names.add(device.name.trim().toLowerCase());
+      }
+    }
+    return names;
+  } catch {
+    return null;
+  }
+}
+
+function probeAndroidDeviceModels(): Set<string> | null {
+  try {
+    const out = execFileSync('adb', ['devices'], {
+      timeout: 3000,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const serials = out
+      .split('\n')
+      .map((line) => line.trim().split(/\s+/))
+      .filter((parts) => parts[0] && parts[1] === 'device')
+      .map((parts) => parts[0]!);
+    const models = new Set<string>();
+    for (const serial of serials) {
+      try {
+        const model = execFileSync('adb', ['-s', serial, 'shell', 'getprop', 'ro.product.model'], {
+          timeout: 3000,
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+        })
+          .trim()
+          .toLowerCase();
+        if (model) models.add(model);
+      } catch {
+        // One unreadable device must not blind the others.
+      }
+    }
+    return models;
+  } catch {
+    return null;
+  }
+}
+
+function readIOSDeviceNames(): Set<string> | null {
+  return cachedPackageProbe('ios-device-names', probeIOSBootedSimulatorNames);
+}
+
+function readAndroidDeviceModels(): Set<string> | null {
+  return cachedPackageProbe('android-device-models', probeAndroidDeviceModels);
+}
+
+// Metro reports Android deviceName as `<model>` or `<model> - <os> - API <n>`.
+function nameMatchesAndroidModel(name: string, models: Set<string> | null): boolean {
+  if (!models) return false;
+  for (const model of models) {
+    if (name === model || name.startsWith(`${model} -`)) return true;
+  }
+  return false;
+}
+
 export interface PlatformInferenceReaders {
   readAndroid?: () => Set<string> | null;
   readIOS?: () => Set<string> | null;
+  readIOSDeviceNames?: () => Set<string> | null;
+  readAndroidDeviceModels?: () => Set<string> | null;
 }
 
 /**
@@ -371,6 +448,12 @@ export function inferPlatforms(
 ): void {
   const androidPackages = (readers.readAndroid ?? readAndroidPackages)();
   const iosPackages = (readers.readIOS ?? readIOSPackages)();
+  let iosDeviceNames: Set<string> | null | undefined;
+  let androidDeviceModels: Set<string> | null | undefined;
+  const bootedIOSNames = () =>
+    (iosDeviceNames ??= (readers.readIOSDeviceNames ?? readIOSDeviceNames)());
+  const liveAndroidModels = () =>
+    (androidDeviceModels ??= (readers.readAndroidDeviceModels ?? readAndroidDeviceModels)());
 
   for (const t of targets) {
     // B131 (D660): deviceName is the most reliable signal when present.
@@ -382,6 +465,20 @@ export function inferPlatforms(
       t.platform = fromDeviceName;
       t.platformInference = 'probed';
       continue;
+    }
+
+    // GH #777: a token-less deviceName can still be proven against the live
+    // device inventory. Only a one-sided match counts — a name in both
+    // inventories stays with the fail-closed bundle inference below.
+    const inventoryName = t.deviceName?.trim().toLowerCase();
+    if (inventoryName) {
+      const inIOSInventory = bootedIOSNames()?.has(inventoryName) ?? false;
+      const inAndroidInventory = nameMatchesAndroidModel(inventoryName, liveAndroidModels());
+      if (inIOSInventory !== inAndroidInventory) {
+        t.platform = inIOSInventory ? 'ios' : 'android';
+        t.platformInference = 'probed';
+        continue;
+      }
     }
 
     const bundleIdentity = targetBundleIdentity(t);
@@ -415,7 +512,7 @@ export interface SelectTargetResult {
   errorCode?: 'PLATFORM_TARGET_NOT_FOUND' | 'TARGET_PLATFORM_CONFLICT';
 }
 
-function describeTarget(target: HermesTarget): string {
+export function describeTarget(target: HermesTarget): string {
   const confidence = target.platformInference ?? 'probed';
   return `${target.id} title="${target.title || '?'}" appId="${target.appId ?? '?'}" device="${target.deviceName ?? '?'}" description="${target.description ?? '?'}" platform=${target.platform ?? '?'} confidence=${confidence}`;
 }

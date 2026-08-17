@@ -282,6 +282,80 @@ function readAndroidPackages() {
 function readIOSPackages() {
     return cachedPackageProbe('ios', probeIOSPackages);
 }
+// GH #777: custom device names ("rn-qa", "ix-…-iPhone17Pro") carry no platform
+// token, so pattern inference misses them and the bundle probe can only say
+// "installed on both" — proving the platform requires the live device inventory.
+function probeIOSBootedSimulatorNames() {
+    try {
+        const out = execFileSync('xcrun', ['simctl', 'list', 'devices', 'booted', '-j'], {
+            timeout: 5000,
+            encoding: 'utf8',
+            stdio: ['ignore', 'pipe', 'ignore'],
+        });
+        const parsed = JSON.parse(out);
+        const names = new Set();
+        for (const device of Object.values(parsed.devices ?? {}).flat()) {
+            if (device.state === 'Booted' && typeof device.name === 'string' && device.name.trim()) {
+                names.add(device.name.trim().toLowerCase());
+            }
+        }
+        return names;
+    }
+    catch {
+        return null;
+    }
+}
+function probeAndroidDeviceModels() {
+    try {
+        const out = execFileSync('adb', ['devices'], {
+            timeout: 3000,
+            encoding: 'utf8',
+            stdio: ['ignore', 'pipe', 'ignore'],
+        });
+        const serials = out
+            .split('\n')
+            .map((line) => line.trim().split(/\s+/))
+            .filter((parts) => parts[0] && parts[1] === 'device')
+            .map((parts) => parts[0]);
+        const models = new Set();
+        for (const serial of serials) {
+            try {
+                const model = execFileSync('adb', ['-s', serial, 'shell', 'getprop', 'ro.product.model'], {
+                    timeout: 3000,
+                    encoding: 'utf8',
+                    stdio: ['ignore', 'pipe', 'ignore'],
+                })
+                    .trim()
+                    .toLowerCase();
+                if (model)
+                    models.add(model);
+            }
+            catch {
+                // One unreadable device must not blind the others.
+            }
+        }
+        return models;
+    }
+    catch {
+        return null;
+    }
+}
+function readIOSDeviceNames() {
+    return cachedPackageProbe('ios-device-names', probeIOSBootedSimulatorNames);
+}
+function readAndroidDeviceModels() {
+    return cachedPackageProbe('android-device-models', probeAndroidDeviceModels);
+}
+// Metro reports Android deviceName as `<model>` or `<model> - <os> - API <n>`.
+function nameMatchesAndroidModel(name, models) {
+    if (!models)
+        return false;
+    for (const model of models) {
+        if (name === model || name.startsWith(`${model} -`))
+            return true;
+    }
+    return false;
+}
 /**
  * B116 (D639): look up each target's description against BOTH iOS simctl and
  * Android adb installed-package sets. If present in only one, tag that
@@ -326,6 +400,10 @@ export function inferPlatformFromDeviceName(deviceName) {
 export function inferPlatforms(targets, readers = {}) {
     const androidPackages = (readers.readAndroid ?? readAndroidPackages)();
     const iosPackages = (readers.readIOS ?? readIOSPackages)();
+    let iosDeviceNames;
+    let androidDeviceModels;
+    const bootedIOSNames = () => (iosDeviceNames ??= (readers.readIOSDeviceNames ?? readIOSDeviceNames)());
+    const liveAndroidModels = () => (androidDeviceModels ??= (readers.readAndroidDeviceModels ?? readAndroidDeviceModels)());
     for (const t of targets) {
         // B131 (D660): deviceName is the most reliable signal when present.
         // It's deterministic (doesn't depend on adb/simctl running) and correct
@@ -336,6 +414,19 @@ export function inferPlatforms(targets, readers = {}) {
             t.platform = fromDeviceName;
             t.platformInference = 'probed';
             continue;
+        }
+        // GH #777: a token-less deviceName can still be proven against the live
+        // device inventory. Only a one-sided match counts — a name in both
+        // inventories stays with the fail-closed bundle inference below.
+        const inventoryName = t.deviceName?.trim().toLowerCase();
+        if (inventoryName) {
+            const inIOSInventory = bootedIOSNames()?.has(inventoryName) ?? false;
+            const inAndroidInventory = nameMatchesAndroidModel(inventoryName, liveAndroidModels());
+            if (inIOSInventory !== inAndroidInventory) {
+                t.platform = inIOSInventory ? 'ios' : 'android';
+                t.platformInference = 'probed';
+                continue;
+            }
         }
         const bundleIdentity = targetBundleIdentity(t);
         const inAndroid = bundleIdentity ? (androidPackages?.has(bundleIdentity) ?? false) : false;
@@ -363,7 +454,7 @@ export function inferPlatforms(targets, readers = {}) {
         }
     }
 }
-function describeTarget(target) {
+export function describeTarget(target) {
     const confidence = target.platformInference ?? 'probed';
     return `${target.id} title="${target.title || '?'}" appId="${target.appId ?? '?'}" device="${target.deviceName ?? '?'}" description="${target.description ?? '?'}" platform=${target.platform ?? '?'} confidence=${confidence}`;
 }
