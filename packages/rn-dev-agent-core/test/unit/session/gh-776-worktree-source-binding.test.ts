@@ -863,6 +863,161 @@ test('an unconfirmed stale-device refusal leaves the autostarted Observe binding
   assert.equal((status.bindings as Record<string, unknown>).observe != null, true);
 });
 
+test('the Observe yield tolerates the authority version its own stop path advances', async () => {
+  const calls: string[] = [];
+  const status: Record<string, unknown> = {
+    sessionId: 'session-776',
+    state: 'source_bound',
+    claimEpoch: 1,
+    authorityVersion: 5,
+    leaseUntilMs: 100,
+    source: { kind: 'git' },
+    bindings: {
+      observe: {
+        port: 7333,
+        pid: 456,
+        processBirth: 'observe-birth',
+        instanceId: 'observe',
+        cleanupCapability: 'capability',
+        autostarted: true,
+      },
+      observePort: 7333,
+      metroPort: 8081,
+    },
+    claims: [
+      { type: 'observe-port', key: '7333', sessionId: 'session-776', claimEpoch: 1 },
+    ],
+    worker: { instanceId: 'worker', pid: 1, birthAvailable: true },
+  };
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: {
+          getSessionStatus: () => status,
+          updateBindings: (
+            _session: unknown,
+            update: { bindings: Record<string, unknown>; expectedAuthorityVersion?: number },
+          ) => {
+            if (
+              update.expectedAuthorityVersion !== undefined &&
+              update.expectedAuthorityVersion !== status.authorityVersion
+            ) {
+              throw new SessionAuthorityError(
+                'AUTHORITY_LOST_DURING_OPERATION',
+                'session authority version changed before binding commit',
+              );
+            }
+            Object.assign(status.bindings as Record<string, unknown>, update.bindings);
+            status.authorityVersion = (status.authorityVersion as number) + 1;
+            calls.push('clear-observe');
+          },
+          inspectDeviceAuthorityAvailability: () => {},
+          replaceDeviceAuthority: () => calls.push('replace-device'),
+        },
+        session: { sessionId: 'session-776', claimEpoch: 1 },
+      }),
+    } as never,
+    {
+      // The fenced /api/stop is served by the Observe server's own stop owner,
+      // which unbinds and advances the authority version before this resolves.
+      stopHandoffObserve: async () => {
+        (status.bindings as Record<string, unknown>).observe = null;
+        status.authorityVersion = (status.authorityVersion as number) + 1;
+        calls.push('stop-observe');
+      },
+      deviceExists: () => true,
+    },
+  );
+
+  const result = await handler({
+    action: 'bind_device',
+    platform: 'android',
+    deviceId: 'emulator-5554',
+    appId: 'com.example.app',
+  } as never);
+  const body = JSON.parse(result.content[0]!.text);
+
+  assert.equal(result.isError, undefined, result.content[0]!.text);
+  assert.deepEqual(calls, ['stop-observe', 'replace-device']);
+  assert.equal(body.data.observeYielded, true);
+  assert.equal(body.data.observePort, 7333);
+});
+
+test('an explicitly started Observe refuses before any bind_device step mutates state', async () => {
+  const calls: string[] = [];
+  const status: Record<string, unknown> = {
+    sessionId: 'session-776',
+    state: 'device_bound',
+    claimEpoch: 1,
+    authorityVersion: 5,
+    leaseUntilMs: 100,
+    source: { kind: 'git' },
+    bindings: {
+      observe: {
+        port: 7333,
+        pid: 456,
+        processBirth: 'observe-birth',
+        instanceId: 'observe',
+        cleanupCapability: 'capability',
+        autostarted: false,
+      },
+      observePort: 7333,
+      metroPort: 8081,
+      androidMetroReverse: {
+        platform: 'android',
+        deviceId: 'emulator-5556',
+        metroPort: 8081,
+        local: 'tcp:8081',
+        remote: 'tcp:8081',
+      },
+      staleDeviceCleanup: { platform: 'android', deviceId: 'emulator-5554' },
+    },
+    claims: [
+      { type: 'observe-port', key: '7333', sessionId: 'session-776', claimEpoch: 1 },
+    ],
+    worker: { instanceId: 'worker', pid: 1, birthAvailable: true },
+  };
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: {
+          getSessionStatus: () => status,
+          updateBindings: () => calls.push('update-bindings'),
+          beginConfirmedStaleDeviceRelease: () => {
+            calls.push('begin-stale-release');
+            return {};
+          },
+          finishStaleResourceRelease: () => calls.push('finish-stale-release'),
+          inspectDeviceAuthorityAvailability: () => {},
+          replaceDeviceAuthority: () => calls.push('replace-device'),
+        },
+        session: { sessionId: 'session-776', claimEpoch: 1 },
+      }),
+    } as never,
+    {
+      stopHandoffObserve: async () => calls.push('stop-observe'),
+      removeAndroidMetroReverse: () => calls.push('remove-reverse'),
+      deviceExists: () => true,
+    },
+  );
+
+  const result = await handler({
+    action: 'bind_device',
+    platform: 'android',
+    deviceId: 'emulator-5554',
+    appId: 'com.example.app',
+  } as never);
+  const body = JSON.parse(result.content[0]!.text);
+
+  assert.equal(body.code, 'DEVICE_AUTHORITY_MISMATCH');
+  assert.match(String(body.error), /explicitly started Observe/);
+  assert.deepEqual(calls, []);
+  assert.equal((status.bindings as Record<string, unknown>).staleDeviceCleanup != null, true);
+  assert.equal((status.bindings as Record<string, unknown>).androidMetroReverse != null, true);
+});
+
 test('the projectRoot fence accepts the bound root of a declared-root session', async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'rn-gh776-declared-')));
   roots.push(root);

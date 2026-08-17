@@ -673,10 +673,20 @@ export function createSessionHandler(runtime, dependencies = {}) {
                     throw new SessionAuthorityError('DEVICE_AUTHORITY_MISMATCH', 'device rebinding requires runner or proof authority to be released first');
                 }
                 // GH #776: an autostarted Observe yields the device axis on the first
-                // bind_device instead of forcing a manual observe stop. It runs as the
-                // commit's prepare step — after every device-side check and after the
-                // device claim is proven available — so a refused bind keeps Observe up.
-                // An Observe the caller started explicitly is theirs to stop.
+                // bind_device instead of forcing a manual observe stop. The stop itself
+                // runs as the commit's prepare step — after every device-side check and
+                // after the device claim is proven available — so a refused bind keeps
+                // Observe up. An Observe the caller started explicitly is theirs to
+                // stop, and that pure binding refusal is raised before anything mutates.
+                const assertObserveYieldable = (observe) => {
+                    if (!observe || observe.autostarted === true)
+                        return;
+                    throw new SessionAuthorityError('DEVICE_AUTHORITY_MISMATCH', 'device rebinding requires the explicitly started Observe authority to be released first', undefined, {
+                        axis: 'D',
+                        nextAction: 'Run observe action "stop" for this session, then retry bind_device. Only the session-autostarted Observe yields the device axis automatically.',
+                    });
+                };
+                assertObserveYieldable(status.bindings.observe);
                 let observeYieldedPort = null;
                 const yieldObserveDeviceAxis = async () => {
                     const current = registry.getSessionStatus(session.sessionId);
@@ -687,22 +697,28 @@ export function createSessionHandler(runtime, dependencies = {}) {
                     const observe = current.bindings.observe;
                     if (!observe)
                         return;
-                    if (observe.autostarted !== true) {
-                        throw new SessionAuthorityError('DEVICE_AUTHORITY_MISMATCH', 'device rebinding requires the explicitly started Observe authority to be released first', undefined, {
-                            axis: 'D',
-                            nextAction: `Run observe action "stop" for this session, then retry bind_device. Only the session-autostarted Observe yields the device axis automatically.`,
-                        });
-                    }
+                    assertObserveYieldable(observe);
                     await stopVerifiedSessionObserve(current, session, dependencies);
-                    registry.updateBindings(session, {
-                        expectedAuthorityVersion: current.authorityVersion,
-                        bindings: { observe: null },
-                    });
-                    const refreshed = registry.getSessionStatus(session.sessionId);
-                    if (!refreshed) {
+                    // GH #776: the fenced stop is served by the Observe server's own stop
+                    // owner, which unbinds the binding and advances the authority version
+                    // before the listener is observed gone — so the pre-stop version is
+                    // already stale here and an unbind we did not need is a no-op.
+                    const stopped = registry.getSessionStatus(session.sessionId);
+                    if (!stopped) {
                         throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'session disappeared after Observe yielded the device axis');
                     }
-                    status = refreshed;
+                    status = stopped;
+                    if (stopped.bindings.observe) {
+                        registry.updateBindings(session, {
+                            expectedAuthorityVersion: stopped.authorityVersion,
+                            bindings: { observe: null },
+                        });
+                        const refreshed = registry.getSessionStatus(session.sessionId);
+                        if (!refreshed) {
+                            throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'session disappeared after Observe yielded the device axis');
+                        }
+                        status = refreshed;
+                    }
                     observeYieldedPort = Number.isSafeInteger(Number(observe.port))
                         ? Number(observe.port)
                         : null;

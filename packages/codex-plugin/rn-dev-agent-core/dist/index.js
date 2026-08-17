@@ -69766,6 +69766,15 @@ function createSessionHandler(runtime, dependencies = {}) {
         if (status.bindings.runner || status.bindings.proof) {
           throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "device rebinding requires runner or proof authority to be released first");
         }
+        const assertObserveYieldable = (observe2) => {
+          if (!observe2 || observe2.autostarted === true)
+            return;
+          throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "device rebinding requires the explicitly started Observe authority to be released first", void 0, {
+            axis: "D",
+            nextAction: 'Run observe action "stop" for this session, then retry bind_device. Only the session-autostarted Observe yields the device axis automatically.'
+          });
+        };
+        assertObserveYieldable(status.bindings.observe);
         let observeYieldedPort = null;
         const yieldObserveDeviceAxis = async () => {
           const current = registry2.getSessionStatus(session2.sessionId);
@@ -69776,22 +69785,24 @@ function createSessionHandler(runtime, dependencies = {}) {
           const observe2 = current.bindings.observe;
           if (!observe2)
             return;
-          if (observe2.autostarted !== true) {
-            throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "device rebinding requires the explicitly started Observe authority to be released first", void 0, {
-              axis: "D",
-              nextAction: `Run observe action "stop" for this session, then retry bind_device. Only the session-autostarted Observe yields the device axis automatically.`
-            });
-          }
+          assertObserveYieldable(observe2);
           await stopVerifiedSessionObserve(current, session2, dependencies);
-          registry2.updateBindings(session2, {
-            expectedAuthorityVersion: current.authorityVersion,
-            bindings: { observe: null }
-          });
-          const refreshed = registry2.getSessionStatus(session2.sessionId);
-          if (!refreshed) {
+          const stopped = registry2.getSessionStatus(session2.sessionId);
+          if (!stopped) {
             throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "session disappeared after Observe yielded the device axis");
           }
-          status = refreshed;
+          status = stopped;
+          if (stopped.bindings.observe) {
+            registry2.updateBindings(session2, {
+              expectedAuthorityVersion: stopped.authorityVersion,
+              bindings: { observe: null }
+            });
+            const refreshed = registry2.getSessionStatus(session2.sessionId);
+            if (!refreshed) {
+              throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "session disappeared after Observe yielded the device axis");
+            }
+            status = refreshed;
+          }
           observeYieldedPort = Number.isSafeInteger(Number(observe2.port)) ? Number(observe2.port) : null;
         };
         const observeYieldReport = () => observeYieldedPort === null ? {} : {
