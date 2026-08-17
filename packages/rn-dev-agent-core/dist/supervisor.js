@@ -2,7 +2,7 @@
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Lockfile, formatLockConflictMessage } from './lifecycle/lockfile.js';
 import { startParentDeathWatch } from './lifecycle/parent-watch.js';
@@ -13,7 +13,7 @@ import { declaredSourceContractFromEnv } from './session/declared-source-contrac
 import { inspectSessionOwner } from './session/process-owner.js';
 import { readProcessBirth } from './session/process-birth.js';
 import { resolveSourceIdentity } from './session/source-identity.js';
-import { resolveSuccessorMintSource } from './session/successor-source.js';
+import { resolveSuccessorMintSource, resolveWorkerSpawnCwd } from './session/successor-source.js';
 import { runStartupCleanupForSource, startupCleanupFailureMessage, } from './session/startup-cleanup.js';
 import { createSupervisorAuthority, resolveSupervisorAuthorityForSpawn, } from './session/supervisor-authority.js';
 import { sqliteFlagForNode, supervisorRelaunchArgs, unsupportedNodeVersionMessage, workerSpawnArgs, } from './supervisor-args.js';
@@ -53,7 +53,11 @@ if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
     await import('./index.js');
 }
 else {
-    const workerPath = process.env.RN_BRIDGE_WORKER_PATH ?? join(here, 'index.js');
+    // Anchor a relative override to the supervisor boot cwd — the worker itself
+    // spawns in the bound source root (GH #776), which may be a different tree.
+    const workerPath = process.env.RN_BRIDGE_WORKER_PATH
+        ? resolve(process.env.RN_BRIDGE_WORKER_PATH)
+        : join(here, 'index.js');
     const noLock = process.argv.includes('--no-lock');
     const diagnosticContractProbe = process.argv.includes('--diagnostic-contract-probe');
     let lockfile = null;
@@ -70,10 +74,12 @@ else {
     let authority = null;
     let authorityError = null;
     let mintAuthority = null;
+    let resolveIdentityForSpawn = (root) => resolveSourceIdentity(root);
     try {
         if (diagnosticContractProbe)
             throw new Error('DIAGNOSTIC_MODE_READ_ONLY');
         const declaredContract = declaredSourceContractFromEnv();
+        resolveIdentityForSpawn = (root) => resolveSourceIdentity(root, declaredContract);
         const source = resolveSourceIdentity(process.cwd(), declaredContract);
         // L4: release a proven-dead same-root predecessor before claiming. Any refusal
         // (live/unproven owner, unproven obligation) falls through to the blocked path.
@@ -160,7 +166,28 @@ else {
     function spawnWorker() {
         resolveAuthorityForSpawn();
         const workerInstance = randomUUID();
+        // GH #776: cwd-default tools (args.projectRoot ?? process.cwd()) must
+        // resolve the bound source root after a bind_source recycle. A bound root
+        // that disappeared fails the session closed instead of silently running
+        // the worker in the supervisor's boot checkout.
+        let workerCwd = process.cwd();
+        let spawnAuthorityError = null;
+        try {
+            workerCwd = resolveWorkerSpawnCwd({
+                authoritySource: authority?.source,
+                fallbackCwd: process.cwd(),
+                resolveIdentity: resolveIdentityForSpawn,
+            });
+        }
+        catch (error) {
+            spawnAuthorityError =
+                error instanceof Error
+                    ? error.message
+                    : 'SOURCE_ROOT_UNAVAILABLE: bound source root is unavailable';
+            process.stderr.write(`rn-dev-agent worker spawn: ${spawnAuthorityError}\n`);
+        }
         const child = spawn(process.execPath, workerSpawnArgs(workerPath, sqliteWarningFilterPath, undefined, process.argv.slice(2)), {
+            cwd: workerCwd,
             stdio: ['pipe', 'pipe', 'inherit'],
             env: {
                 ...process.env,
@@ -168,9 +195,11 @@ else {
                 RN_DEV_AGENT_SESSION_CLI: join(here, 'rn-session.js'),
                 RN_BRIDGE_RESTARTS: String(core.restartCount),
                 ...(core.lastExit ? { RN_BRIDGE_LAST_EXIT: core.lastExit } : {}),
-                ...(authority
+                ...(authority && spawnAuthorityError === null
                     ? authority.workerEnvironment(workerInstance)
-                    : { RN_DEV_AGENT_AUTHORITY_ERROR: authorityError ?? 'AUTHORITY_STORE_UNAVAILABLE' }),
+                    : {
+                        RN_DEV_AGENT_AUTHORITY_ERROR: spawnAuthorityError ?? authorityError ?? 'AUTHORITY_STORE_UNAVAILABLE',
+                    }),
             },
         });
         worker = child;

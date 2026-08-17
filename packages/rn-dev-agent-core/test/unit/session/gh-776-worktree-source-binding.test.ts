@@ -1,8 +1,16 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, test } from 'node:test';
 import { createSessionHandler } from '../../../dist/tools/session.js';
 import { SessionAuthorityError } from '../../../dist/session/registry.js';
@@ -11,6 +19,7 @@ import { declaredSourceContractFromEnv } from '../../../dist/session/declared-so
 import {
   consumeSuccessorSourceDeclaration,
   resolveSuccessorMintSource,
+  resolveWorkerSpawnCwd,
   successorSourceDeclarationPath,
   writeSuccessorSourceDeclaration,
 } from '../../../dist/session/successor-source.js';
@@ -1217,4 +1226,97 @@ test('release names the root the successor will bind instead of "this worktree"'
   assert.match(body.data.nextAction, /minted automatically for \/repo\/linked-worktree/);
   assert.doesNotMatch(body.data.nextAction, /on this worktree/);
   assert.match(body.data.nextAction, /bind_source/);
+});
+
+test('resolveWorkerSpawnCwd returns the bound linked worktree, not the boot cwd', () => {
+  const { primary, linked } = makeRepoWithWorktree();
+  const bound = resolveSourceIdentity(linked);
+  const cwd = resolveWorkerSpawnCwd({
+    authoritySource: bound,
+    fallbackCwd: primary,
+    resolveIdentity: (root) => resolveSourceIdentity(root),
+  });
+  assert.equal(cwd, linked);
+});
+
+test('a missing bound source root refuses with a typed error naming both paths', () => {
+  const { primary, linked } = makeRepoWithWorktree();
+  const bound = resolveSourceIdentity(linked);
+  rmSync(linked, { force: true, recursive: true });
+  assert.throws(
+    () =>
+      resolveWorkerSpawnCwd({
+        authoritySource: bound,
+        fallbackCwd: primary,
+        resolveIdentity: (root) => resolveSourceIdentity(root),
+      }),
+    (error: Error) => {
+      assert.match(error.message, /^SOURCE_ROOT_UNAVAILABLE/);
+      assert.ok(error.message.includes(linked), 'names the bound root');
+      assert.ok(error.message.includes(primary), 'names the refused fallback');
+      return true;
+    },
+  );
+});
+
+test('a foreign tree recreated at the bound path refuses instead of spawning there', () => {
+  const { primary, linked } = makeRepoWithWorktree();
+  const bound = resolveSourceIdentity(linked);
+  rmSync(linked, { force: true, recursive: true });
+  mkdirSync(linked, { recursive: true });
+  git(linked, ['init', '-q', '.']);
+  git(linked, ['config', 'user.email', 'fixture@example.test']);
+  git(linked, ['config', 'user.name', 'fixture']);
+  git(linked, ['config', 'commit.gpgsign', 'false']);
+  writeFileSync(join(linked, 'package.json'), JSON.stringify({ name: 'imposter' }));
+  git(linked, ['add', '-A']);
+  git(linked, ['commit', '-qm', 'imposter']);
+  assert.throws(
+    () =>
+      resolveWorkerSpawnCwd({
+        authoritySource: bound,
+        fallbackCwd: primary,
+        resolveIdentity: (root) => resolveSourceIdentity(root),
+      }),
+    (error: Error) => {
+      assert.match(error.message, /^SOURCE_WORKTREE_MISMATCH/);
+      assert.ok(error.message.includes(linked), 'names the bound root');
+      assert.ok(error.message.includes(primary), 'names the refused fallback');
+      return true;
+    },
+  );
+});
+
+test('a symlink to a sibling worktree of the same repository refuses instead of transferring', () => {
+  const { primary, linked } = makeRepoWithWorktree();
+  const bound = resolveSourceIdentity(linked);
+  const sibling = join(dirname(linked), 'sibling');
+  git(primary, ['worktree', 'add', '-q', sibling, '-b', 'sibling']);
+  rmSync(linked, { force: true, recursive: true });
+  symlinkSync(sibling, linked);
+  assert.throws(
+    () =>
+      resolveWorkerSpawnCwd({
+        authoritySource: bound,
+        fallbackCwd: primary,
+        resolveIdentity: (root) => resolveSourceIdentity(root),
+      }),
+    (error: Error) => {
+      assert.match(error.message, /^SOURCE_WORKTREE_MISMATCH/);
+      assert.ok(error.message.includes(linked), 'names the bound root');
+      assert.ok(error.message.includes(sibling), 'names the tree it now resolves to');
+      return true;
+    },
+  );
+});
+
+test('an absent authority source keeps the worker in the boot cwd', () => {
+  const cwd = resolveWorkerSpawnCwd({
+    authoritySource: undefined,
+    fallbackCwd: '/supervisor/boot-cwd',
+    resolveIdentity: () => {
+      throw new Error('must not resolve without a bound source');
+    },
+  });
+  assert.equal(cwd, '/supervisor/boot-cwd');
 });

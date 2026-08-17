@@ -102,3 +102,43 @@ export function resolveSuccessorMintSource(input: {
   }
   return terminal.source;
 }
+
+// GH #776: handlers default projectRoot to process.cwd(), so the worker must
+// run in the bound source root — after a bind_source recycle that is the
+// declared worktree, not the supervisor's boot cwd. The root is re-resolved at
+// spawn time and compared by repository identity (not mere path existence), so
+// a missing root or a foreign tree recreated at the same path fails closed
+// instead of silently redirecting the worker.
+export function resolveWorkerSpawnCwd(input: {
+  authoritySource: SourceIdentity | undefined;
+  fallbackCwd: string;
+  resolveIdentity: (root: string) => SourceIdentity;
+}): string {
+  const source = input.authoritySource;
+  if (!source) return input.fallbackCwd;
+  let observed: SourceIdentity;
+  try {
+    observed = input.resolveIdentity(source.appRoot);
+  } catch (error) {
+    throw new Error(
+      `SOURCE_ROOT_UNAVAILABLE: bound source root ${source.appRoot} is unavailable (${
+        error instanceof Error ? error.message : 'unresolvable'
+      }); refusing to run the worker in ${input.fallbackCwd}`,
+    );
+  }
+  // worktreeKey/appRootKey pin the exact checkout (a symlink to a sibling
+  // worktree of the same repository must refuse); the git sourceKey pins the
+  // repository. Declared kinds skip the manifest-derived sourceKey so manifest
+  // content drift does not refuse the root.
+  const matches =
+    observed.kind === source.kind &&
+    observed.worktreeKey === source.worktreeKey &&
+    observed.appRootKey === source.appRootKey &&
+    (source.kind !== 'git' || observed.sourceKey === source.sourceKey);
+  if (!matches) {
+    throw new Error(
+      `SOURCE_WORKTREE_MISMATCH: bound source root ${source.appRoot} no longer matches the session's repository identity (it now resolves to ${observed.appRoot}); refusing to run the worker there or in ${input.fallbackCwd}`,
+    );
+  }
+  return observed.appRoot;
+}

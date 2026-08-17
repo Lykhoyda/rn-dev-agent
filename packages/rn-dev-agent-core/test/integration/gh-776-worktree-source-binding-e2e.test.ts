@@ -41,6 +41,22 @@ async function callOnce(supervisor, args) {
   return JSON.parse(reply.result?.content?.[0]?.text ?? '{}');
 }
 
+function workerPids(supervisor) {
+  return [...supervisor.stderrText().matchAll(/worker pid (\d+)/g)].map((match) =>
+    Number(match[1]),
+  );
+}
+
+function processCwd(pid) {
+  if (process.platform === 'linux') return realpathSync(`/proc/${pid}/cwd`);
+  const out = spawnSync('lsof', ['-a', '-p', String(pid), '-d', 'cwd', '-Fn'], {
+    encoding: 'utf8',
+  });
+  const line = (out.stdout ?? '').split('\n').find((entry) => entry.startsWith('n'));
+  if (!line) throw new Error(`could not read cwd of pid ${pid}: ${out.stderr}`);
+  return realpathSync(line.slice(1));
+}
+
 // The axis-C fence re-proves the worker's process birth through a signed helper
 // with a 2s budget and fails closed when that budget is blown. On a machine busy
 // enough to do that, the refusal is a probe artifact, not a session verdict, so
@@ -178,6 +194,15 @@ test(
       });
       record('5. preview_integration on the linked worktree after rebind — accepted', preview);
       assert.equal(preview.ok, true, `preview_integration failed: ${JSON.stringify(preview)}`);
+
+      // The successor WORKER PROCESS runs in the linked worktree, so every
+      // cwd-default fallback (args.projectRoot ?? process.cwd()) resolves the
+      // bound root instead of the boot checkout.
+      const pids = workerPids(supervisor);
+      assert.ok(pids.length >= 2, `expected a recycled worker; saw pids ${pids.join(', ')}`);
+      const successorCwd = processCwd(pids[pids.length - 1]);
+      record('6. successor worker process cwd', { pids, successorCwd });
+      assert.equal(successorCwd, linked, 'the successor worker runs in the linked worktree');
 
       // The fence follows the new binding: the primary checkout is now foreign.
       const reversed = await callSession(supervisor, {
