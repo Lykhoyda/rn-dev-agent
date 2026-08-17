@@ -251,7 +251,8 @@ or ambiguous platform guess never satisfies a platform filter. A `deviceName`
 that carries no platform token — a custom simulator name such as `rn-qa` —
 is proven against the live device inventory (booted `simctl` simulator names
 and, only when the session authority binds that exact Android serial, that one
-device's `adb` model — any other bound session, including a stale one, fences
+device's `adb` model — any other live authority, including one that binds no
+device at all, a stale one, or one whose binding cannot be read, fences
 `adb` entirely and an ambient adb device is never queried); a name that matches both
 inventories, or neither, stays on the fail-closed bundle inference. The refusal lists the candidate
 targets with their inference confidence. Run
