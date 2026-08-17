@@ -110,7 +110,7 @@ test('#525 bare rn-collect-feedback invocations appear only after a command -v g
       ...walkMarkdown(join(pkg, 'skills')),
     ]) {
       const text = fs.readFileSync(doc, 'utf8');
-      const blocks = text.match(/```(?:bash|sh)?\n[\s\S]*?```/g) ?? [];
+      const blocks = text.match(/```[^\n]*\n[\s\S]*?```/g) ?? [];
       for (const block of blocks) {
         const lines = block.split('\n');
         // The only supported shape is the guarded fallback branch:
