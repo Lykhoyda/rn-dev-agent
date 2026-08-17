@@ -1,4 +1,5 @@
-import { join } from 'node:path';
+import { realpathSync } from 'node:fs';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { deleteStateFile, readJsonStateFile, writeJsonStateFileAtomic, } from '../util/secure-state-file.js';
 import { sessionRuntimeDirectory } from './state-root.js';
 const DECLARATION_FILE = 'successor-source.json';
@@ -59,16 +60,39 @@ export function resolveSuccessorMintSource(input) {
 // spawn time and compared by repository identity (not mere path existence), so
 // a missing root or a foreign tree recreated at the same path fails closed
 // instead of silently redirecting the worker.
+// A probe failure only proves the root is gone when the filesystem says so or
+// the tree is not a repository at all; a git budget blown under load must not
+// poison the session, so it degrades to the already-bound root instead of the
+// unrelated boot checkout.
+function isProvenUnavailable(error) {
+    if (!(error instanceof Error))
+        return false;
+    const code = error.code;
+    if (code === 'ENOENT' || code === 'ENOTDIR' || code === 'EACCES' || code === 'ELOOP')
+        return true;
+    return (error.message.startsWith('APP_ROOT_OUTSIDE_WORKTREE') || error.message.startsWith('NON_GIT_'));
+}
 export function resolveWorkerSpawnCwd(input) {
     const source = input.authoritySource;
     if (!source)
         return input.fallbackCwd;
-    let observed;
-    try {
-        observed = input.resolveIdentity(source.appRoot);
+    const attempts = Math.max(1, input.attempts ?? 2);
+    let observed = null;
+    let lastError = null;
+    for (let attempt = 0; attempt < attempts && observed === null; attempt += 1) {
+        try {
+            observed = input.resolveIdentity(source.appRoot);
+        }
+        catch (error) {
+            lastError = error;
+            if (isProvenUnavailable(error)) {
+                throw new Error(`SOURCE_ROOT_UNAVAILABLE: bound source root ${source.appRoot} is unavailable (${error instanceof Error ? error.message : 'unresolvable'}); refusing to run the worker in ${input.fallbackCwd}`);
+            }
+        }
     }
-    catch (error) {
-        throw new Error(`SOURCE_ROOT_UNAVAILABLE: bound source root ${source.appRoot} is unavailable (${error instanceof Error ? error.message : 'unresolvable'}); refusing to run the worker in ${input.fallbackCwd}`);
+    if (observed === null) {
+        input.diagnostic?.(`bound source root ${source.appRoot} could not be re-proven (${lastError instanceof Error ? lastError.message : 'unresolvable'}); running the worker in the bound root without a fresh identity probe`);
+        return source.appRoot;
     }
     // worktreeKey/appRootKey pin the exact checkout (a symlink to a sibling
     // worktree of the same repository must refuse); the git sourceKey pins the
@@ -82,4 +106,41 @@ export function resolveWorkerSpawnCwd(input) {
         throw new Error(`SOURCE_WORKTREE_MISMATCH: bound source root ${source.appRoot} no longer matches the session's repository identity (it now resolves to ${observed.appRoot}); refusing to run the worker there or in ${input.fallbackCwd}`);
     }
     return observed.appRoot;
+}
+function canonicalOrRaw(path, canonicalize) {
+    try {
+        return canonicalize(resolve(path));
+    }
+    catch {
+        return resolve(path);
+    }
+}
+function isWithin(root, candidate) {
+    if (candidate === root)
+        return true;
+    const child = relative(root, candidate);
+    return child.length > 0 && !child.startsWith('..') && !isAbsolute(child);
+}
+// GH #776: pinning only the worker's process cwd is not enough — findProjectRoot()
+// prefers RN_PROJECT_ROOT and CLAUDE_USER_CWD over the cwd, so a recycle into a
+// linked worktree would still resolve the harness startup tree for every
+// cwd-default handler. The inherited roots are rewritten to the bound root when
+// the spawn diverges from the supervisor's boot cwd; a first boot (no divergence)
+// only gets an accurate PWD.
+export function resolveWorkerSpawnRootEnvironment(input) {
+    const canonicalize = input.canonicalize ?? realpathSync;
+    const worker = canonicalOrRaw(input.workerCwd, canonicalize);
+    const set = { PWD: worker };
+    const unset = [];
+    if (canonicalOrRaw(input.bootCwd, canonicalize) === worker)
+        return { set, unset };
+    const userCwd = input.inherited.CLAUDE_USER_CWD;
+    if (userCwd && !isWithin(worker, canonicalOrRaw(userCwd, canonicalize))) {
+        set.CLAUDE_USER_CWD = worker;
+    }
+    const projectRoot = input.inherited.RN_PROJECT_ROOT;
+    if (projectRoot && !isWithin(worker, canonicalOrRaw(projectRoot, canonicalize))) {
+        unset.push('RN_PROJECT_ROOT');
+    }
+    return { set, unset };
 }

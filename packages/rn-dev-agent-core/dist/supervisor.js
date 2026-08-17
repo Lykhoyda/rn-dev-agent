@@ -13,7 +13,7 @@ import { declaredSourceContractFromEnv } from './session/declared-source-contrac
 import { inspectSessionOwner } from './session/process-owner.js';
 import { readProcessBirth } from './session/process-birth.js';
 import { resolveSourceIdentity } from './session/source-identity.js';
-import { resolveSuccessorMintSource, resolveWorkerSpawnCwd } from './session/successor-source.js';
+import { resolveSuccessorMintSource, resolveWorkerSpawnCwd, resolveWorkerSpawnRootEnvironment, } from './session/successor-source.js';
 import { runStartupCleanupForSource, startupCleanupFailureMessage, } from './session/startup-cleanup.js';
 import { createSupervisorAuthority, resolveSupervisorAuthorityForSpawn, } from './session/supervisor-authority.js';
 import { sqliteFlagForNode, supervisorRelaunchArgs, unsupportedNodeVersionMessage, workerSpawnArgs, } from './supervisor-args.js';
@@ -177,6 +177,7 @@ else {
                 authoritySource: authority?.source,
                 fallbackCwd: process.cwd(),
                 resolveIdentity: resolveIdentityForSpawn,
+                diagnostic: (message) => process.stderr.write(`rn-dev-agent worker spawn: ${message}\n`),
             });
         }
         catch (error) {
@@ -186,21 +187,33 @@ else {
                     : 'SOURCE_ROOT_UNAVAILABLE: bound source root is unavailable';
             process.stderr.write(`rn-dev-agent worker spawn: ${spawnAuthorityError}\n`);
         }
+        const rootEnvironment = resolveWorkerSpawnRootEnvironment({
+            workerCwd,
+            bootCwd: process.cwd(),
+            inherited: {
+                CLAUDE_USER_CWD: process.env.CLAUDE_USER_CWD,
+                RN_PROJECT_ROOT: process.env.RN_PROJECT_ROOT,
+            },
+        });
+        const workerEnvironment = {
+            ...process.env,
+            RN_BRIDGE_SUPERVISED: '1',
+            RN_DEV_AGENT_SESSION_CLI: join(here, 'rn-session.js'),
+            RN_BRIDGE_RESTARTS: String(core.restartCount),
+            ...(core.lastExit ? { RN_BRIDGE_LAST_EXIT: core.lastExit } : {}),
+            ...(authority && spawnAuthorityError === null
+                ? authority.workerEnvironment(workerInstance)
+                : {
+                    RN_DEV_AGENT_AUTHORITY_ERROR: spawnAuthorityError ?? authorityError ?? 'AUTHORITY_STORE_UNAVAILABLE',
+                }),
+            ...rootEnvironment.set,
+        };
+        for (const key of rootEnvironment.unset)
+            delete workerEnvironment[key];
         const child = spawn(process.execPath, workerSpawnArgs(workerPath, sqliteWarningFilterPath, undefined, process.argv.slice(2)), {
             cwd: workerCwd,
             stdio: ['pipe', 'pipe', 'inherit'],
-            env: {
-                ...process.env,
-                RN_BRIDGE_SUPERVISED: '1',
-                RN_DEV_AGENT_SESSION_CLI: join(here, 'rn-session.js'),
-                RN_BRIDGE_RESTARTS: String(core.restartCount),
-                ...(core.lastExit ? { RN_BRIDGE_LAST_EXIT: core.lastExit } : {}),
-                ...(authority && spawnAuthorityError === null
-                    ? authority.workerEnvironment(workerInstance)
-                    : {
-                        RN_DEV_AGENT_AUTHORITY_ERROR: spawnAuthorityError ?? authorityError ?? 'AUTHORITY_STORE_UNAVAILABLE',
-                    }),
-            },
+            env: workerEnvironment,
         });
         worker = child;
         process.stderr.write(`rn-bridge-supervisor: worker pid ${child.pid}\n`);

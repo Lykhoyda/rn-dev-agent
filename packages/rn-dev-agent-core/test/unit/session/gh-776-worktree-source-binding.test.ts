@@ -20,6 +20,7 @@ import {
   consumeSuccessorSourceDeclaration,
   resolveSuccessorMintSource,
   resolveWorkerSpawnCwd,
+  resolveWorkerSpawnRootEnvironment,
   successorSourceDeclarationPath,
   writeSuccessorSourceDeclaration,
 } from '../../../dist/session/successor-source.js';
@@ -1319,4 +1320,125 @@ test('an absent authority source keeps the worker in the boot cwd', () => {
     },
   });
   assert.equal(cwd, '/supervisor/boot-cwd');
+});
+
+test('a transient identity probe failure retries instead of poisoning the session', () => {
+  const { primary, linked } = makeRepoWithWorktree();
+  const bound = resolveSourceIdentity(linked);
+  let calls = 0;
+  const cwd = resolveWorkerSpawnCwd({
+    authoritySource: bound,
+    fallbackCwd: primary,
+    resolveIdentity: (root) => {
+      calls += 1;
+      if (calls === 1) {
+        const error: NodeJS.ErrnoException = new Error('git rev-parse timed out');
+        error.code = 'ETIMEDOUT';
+        throw error;
+      }
+      return resolveSourceIdentity(root);
+    },
+  });
+  assert.equal(calls, 2, 'the probe is retried once before any verdict');
+  assert.equal(cwd, linked);
+});
+
+test('an unprovable identity probe keeps the worker in the bound root, never the boot cwd', () => {
+  const { primary, linked } = makeRepoWithWorktree();
+  const bound = resolveSourceIdentity(linked);
+  const diagnostics: string[] = [];
+  const cwd = resolveWorkerSpawnCwd({
+    authoritySource: bound,
+    fallbackCwd: primary,
+    resolveIdentity: () => {
+      const error: NodeJS.ErrnoException = new Error('git rev-parse timed out');
+      error.code = 'ETIMEDOUT';
+      throw error;
+    },
+    diagnostic: (message) => diagnostics.push(message),
+  });
+  assert.equal(cwd, linked, 'a blown probe budget must not redirect the worker');
+  assert.equal(diagnostics.length, 1);
+  assert.match(diagnostics[0]!, /could not be re-proven/);
+});
+
+test('the spawn environment rewrites a stale user cwd to the bound worktree', () => {
+  const { primary, linked } = makeRepoWithWorktree();
+  const environment = resolveWorkerSpawnRootEnvironment({
+    workerCwd: linked,
+    bootCwd: primary,
+    inherited: { CLAUDE_USER_CWD: primary, RN_PROJECT_ROOT: primary },
+  });
+  assert.equal(environment.set.PWD, linked);
+  assert.equal(environment.set.CLAUDE_USER_CWD, linked);
+  assert.deepEqual(environment.unset, ['RN_PROJECT_ROOT']);
+});
+
+test('a user cwd inside the bound worktree survives the recycle', () => {
+  const { primary, linked } = makeRepoWithWorktree();
+  const nested = join(linked, 'src');
+  mkdirSync(nested, { recursive: true });
+  const environment = resolveWorkerSpawnRootEnvironment({
+    workerCwd: linked,
+    bootCwd: primary,
+    inherited: { CLAUDE_USER_CWD: nested, RN_PROJECT_ROOT: linked },
+  });
+  assert.equal(environment.set.PWD, linked);
+  assert.equal(environment.set.CLAUDE_USER_CWD, undefined, 'a contained user cwd is preserved');
+  assert.deepEqual(environment.unset, []);
+});
+
+test('a first boot only gains an accurate PWD', () => {
+  const { primary } = makeRepoWithWorktree();
+  const elsewhere = realpathSync(mkdtempSync(join(tmpdir(), 'rn-gh776-user-')));
+  roots.push(elsewhere);
+  const environment = resolveWorkerSpawnRootEnvironment({
+    workerCwd: primary,
+    bootCwd: primary,
+    inherited: { CLAUDE_USER_CWD: elsewhere, RN_PROJECT_ROOT: elsewhere },
+  });
+  assert.deepEqual(environment, { set: { PWD: primary }, unset: [] });
+});
+
+// findProjectRoot() is the shared cwd-default resolver behind cdp_run_e2e_suite,
+// cdp_lock_e2e_test, cdp_nav_graph, the test recorder and the Metro serving-root
+// pin; it is executed here in a real child process started exactly the way the
+// supervisor starts a recycled worker.
+function probeProjectRoot(cwd: string, environment: NodeJS.ProcessEnv): string | null {
+  const probe = join(realpathSync(mkdtempSync(join(tmpdir(), 'rn-gh776-probe-'))), 'probe.mjs');
+  roots.push(dirname(probe));
+  const storage = new URL('../../../dist/nav-graph/storage.js', import.meta.url).href;
+  writeFileSync(
+    probe,
+    `import { findProjectRoot } from ${JSON.stringify(storage)};\n` +
+      'process.stdout.write(JSON.stringify(findProjectRoot() ?? null));\n',
+  );
+  const result = spawnSync(process.execPath, [probe], { cwd, env: environment, encoding: 'utf8' });
+  if (result.status !== 0) throw new Error(`probe failed: ${result.stderr}`);
+  return JSON.parse(result.stdout) as string | null;
+}
+
+test('cwd-default handlers resolve the bound worktree after a bind_source recycle', () => {
+  const { primary, linked } = makeRepoWithWorktree();
+  const inherited = { ...process.env, CLAUDE_USER_CWD: primary, RN_PROJECT_ROOT: primary };
+  delete inherited.RN_AGENT_PROJECT_ROOT;
+
+  assert.equal(
+    probeProjectRoot(linked, inherited),
+    primary,
+    'inheriting the harness startup roots resolves the wrong tree',
+  );
+
+  const environment = resolveWorkerSpawnRootEnvironment({
+    workerCwd: linked,
+    bootCwd: primary,
+    inherited: {
+      CLAUDE_USER_CWD: inherited.CLAUDE_USER_CWD,
+      RN_PROJECT_ROOT: inherited.RN_PROJECT_ROOT,
+    },
+  });
+  const spawned: NodeJS.ProcessEnv = { ...inherited, ...environment.set };
+  for (const key of environment.unset) delete spawned[key];
+
+  assert.equal(probeProjectRoot(linked, spawned), linked);
 });
