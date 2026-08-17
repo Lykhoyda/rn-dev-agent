@@ -217,6 +217,22 @@ export function cachedPackageProbe(key, probe, clock = Date.now) {
 export function clearPackageProbeCache() {
     packageProbeCache.clear();
 }
+// Pure producer for the three-state fence. Unavailable authority is null
+// (legacy ambient may apply). An available authority with no device binding
+// is the {} sentinel (fences adb). A present device copies only string fields.
+export function mapRegistryDeviceBinding(status) {
+    if (!status.available)
+        return null;
+    const device = status.bindings.device;
+    if (!device)
+        return {};
+    const mapped = {};
+    if (typeof device.platform === 'string')
+        mapped.platform = device.platform;
+    if (typeof device.deviceId === 'string')
+        mapped.deviceId = device.deviceId;
+    return mapped;
+}
 let registryDeviceBindingProvider = null;
 export function setRegistryDeviceBindingProvider(provider) {
     registryDeviceBindingProvider = provider;

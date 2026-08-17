@@ -115,7 +115,7 @@ import { bindNativeRunner, unbindNativeRunner } from './session/runner-binding.j
 import { claimOptionalBundleAuthority, createAuthorityGate, } from './session/authority-gate.js';
 import { createLocalAuthorityProbe } from './session/local-authority-probe.js';
 import { createForeignMetroOriginScanner } from './session/metro-origin.js';
-import { DISCOVERY_TIMEOUT_MS, discoverAllMetroPorts, resolveDefaultPorts, setRegistryDeviceBindingProvider, } from './cdp/discovery.js';
+import { DISCOVERY_TIMEOUT_MS, discoverAllMetroPorts, resolveDefaultPorts, mapRegistryDeviceBinding, setRegistryDeviceBindingProvider, } from './cdp/discovery.js';
 import { assertAuthorityProfilesExhaustive } from './session/tool-profiles.js';
 import { readJsonStateFile } from './util/secure-state-file.js';
 import { buildBundleAuthorityBinding, pinExactDevClient, reconcileAuthoritativeBundle, } from './session/dev-client-authority.js';
@@ -270,20 +270,7 @@ addToolObserver((o) => recorder.record(o));
 addToolObserver((o) => strictProofMonitor.record(o));
 addToolObserver((o) => experienceRecorder.observe(o));
 const authorityRuntime = getWorkerAuthorityRuntime();
-setRegistryDeviceBindingProvider(() => {
-    const status = authorityRuntime.status();
-    if (!status.available)
-        return null;
-    const device = status.bindings.device;
-    // An available authority with no device binding (e.g. source/Metro bound
-    // before bind_device) is authority-present: the {} sentinel fences adb.
-    if (!device)
-        return {};
-    return {
-        platform: typeof device.platform === 'string' ? device.platform : undefined,
-        deviceId: typeof device.deviceId === 'string' ? device.deviceId : undefined,
-    };
-});
+setRegistryDeviceBindingProvider(() => mapRegistryDeviceBinding(authorityRuntime.status()));
 setSnapshotAuthorityProvider({
     current: () => {
         const status = authorityRuntime.status();

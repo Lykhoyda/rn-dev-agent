@@ -37097,6 +37097,19 @@ function cachedPackageProbe(key, probe, clock = Date.now) {
   });
   return value;
 }
+function mapRegistryDeviceBinding(status) {
+  if (!status.available)
+    return null;
+  const device = status.bindings.device;
+  if (!device)
+    return {};
+  const mapped = {};
+  if (typeof device.platform === "string")
+    mapped.platform = device.platform;
+  if (typeof device.deviceId === "string")
+    mapped.deviceId = device.deviceId;
+  return mapped;
+}
 function setRegistryDeviceBindingProvider(provider) {
   registryDeviceBindingProvider = provider;
 }
@@ -86480,18 +86493,7 @@ addToolObserver((o) => recorder.record(o));
 addToolObserver((o) => strictProofMonitor.record(o));
 addToolObserver((o) => experienceRecorder.observe(o));
 var authorityRuntime = getWorkerAuthorityRuntime();
-setRegistryDeviceBindingProvider(() => {
-  const status = authorityRuntime.status();
-  if (!status.available)
-    return null;
-  const device = status.bindings.device;
-  if (!device)
-    return {};
-  return {
-    platform: typeof device.platform === "string" ? device.platform : void 0,
-    deviceId: typeof device.deviceId === "string" ? device.deviceId : void 0
-  };
-});
+setRegistryDeviceBindingProvider(() => mapRegistryDeviceBinding(authorityRuntime.status()));
 setSnapshotAuthorityProvider({
   current: () => {
     const status = authorityRuntime.status();

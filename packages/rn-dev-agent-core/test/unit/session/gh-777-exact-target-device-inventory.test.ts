@@ -8,6 +8,7 @@ import {
   clearPackageProbeCache,
   discoverExactPort,
   inferPlatforms,
+  mapRegistryDeviceBinding,
   probeAndroidDeviceModels,
   probeAndroidPackages,
 } from '../../../dist/cdp/discovery.js';
@@ -254,9 +255,56 @@ test('gh-777-qa: both stores empty keeps the single pre-existing baseline read',
   assert.deepEqual(spy.calls, [['adb', 'shell', 'pm', 'list', 'packages']]);
 });
 
-// P1 (PR #782 review): an available authority runtime with NO device binding
-// reports the {} sentinel, never null — a source/Metro-bound worker must not
-// collapse to the ambient legacy read when the wrapper session is also empty.
+// P1 (PR #782 review): the provider mapping is a pure three-state seam —
+// unavailable => null, available with no/null device => {}, device present =>
+// {platform,deviceId}. The consumer tests below still prove the {} sentinel
+// fences adb, and a throwing lookup never becomes ambient.
+test('gh-777-qa: provider mapping — unavailable authority is null', () => {
+  assert.equal(mapRegistryDeviceBinding({ available: false }), null);
+});
+
+test('gh-777-qa: provider mapping — available with no device is the fence sentinel', () => {
+  const missing = mapRegistryDeviceBinding({ available: true, bindings: {} });
+  const unbound = mapRegistryDeviceBinding({ available: true, bindings: { device: null } });
+  assert.notEqual(missing, null);
+  assert.deepEqual(missing, {});
+  assert.notEqual(unbound, null);
+  assert.deepEqual(unbound, {});
+});
+
+test('gh-777-qa: provider mapping — available with a device copies string fields only', () => {
+  assert.deepEqual(
+    mapRegistryDeviceBinding({
+      available: true,
+      bindings: {
+        device: { platform: 'android', deviceId: boundSerial, appId },
+      },
+    }),
+    { platform: 'android', deviceId: boundSerial },
+  );
+  assert.deepEqual(
+    mapRegistryDeviceBinding({
+      available: true,
+      bindings: { device: { platform: 'ios', deviceId: simulatorUdid } },
+    }),
+    { platform: 'ios', deviceId: simulatorUdid },
+  );
+  assert.deepEqual(
+    mapRegistryDeviceBinding({
+      available: true,
+      bindings: { device: { platform: 1, deviceId: false, appId } },
+    }),
+    {},
+  );
+  assert.deepEqual(
+    mapRegistryDeviceBinding({
+      available: true,
+      bindings: { device: { platform: 'android', deviceId: 99 } },
+    }),
+    { platform: 'android' },
+  );
+});
+
 test('gh-777-qa: source/Metro-bound authority with no device binding fences adb entirely', () => {
   const spy = execSpy();
   const stores = {

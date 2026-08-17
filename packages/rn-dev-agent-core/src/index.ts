@@ -228,6 +228,7 @@ import {
   DISCOVERY_TIMEOUT_MS,
   discoverAllMetroPorts,
   resolveDefaultPorts,
+  mapRegistryDeviceBinding,
   setRegistryDeviceBindingProvider,
 } from './cdp/discovery.js';
 import { assertAuthorityProfilesExhaustive } from './session/tool-profiles.js';
@@ -417,18 +418,7 @@ addToolObserver((o) => strictProofMonitor.record(o));
 addToolObserver((o) => experienceRecorder.observe(o));
 
 const authorityRuntime = getWorkerAuthorityRuntime();
-setRegistryDeviceBindingProvider(() => {
-  const status = authorityRuntime.status();
-  if (!status.available) return null;
-  const device = status.bindings.device as { platform?: unknown; deviceId?: unknown } | undefined;
-  // An available authority with no device binding (e.g. source/Metro bound
-  // before bind_device) is authority-present: the {} sentinel fences adb.
-  if (!device) return {};
-  return {
-    platform: typeof device.platform === 'string' ? device.platform : undefined,
-    deviceId: typeof device.deviceId === 'string' ? device.deviceId : undefined,
-  };
-});
+setRegistryDeviceBindingProvider(() => mapRegistryDeviceBinding(authorityRuntime.status()));
 setSnapshotAuthorityProvider({
   current: () => {
     const status = authorityRuntime.status();
