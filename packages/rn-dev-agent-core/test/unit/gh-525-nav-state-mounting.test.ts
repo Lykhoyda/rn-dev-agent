@@ -116,6 +116,17 @@ function logBoxShellRoot(): SandboxFiber {
   return buildFiber(LOG_BOX_SHELL);
 }
 
+// The idle dev shell surface: a committed root that has rendered nothing named
+// yet. Reanimated/Bridgeless setups register a secondary renderer whose root
+// looks like this while the app bundle is still booting.
+function idleRoot(): SandboxFiber {
+  return buildFiber({});
+}
+
+function hostOnlyRoot(): SandboxFiber {
+  return buildFiber({ name: 'RCTView', host: true, children: [{ name: 'RCTView', host: true }] });
+}
+
 // An ordinarily mounted app screen that simply has no navigation container.
 // Dev builds render the LogBox notification container inside AppContainer, right
 // beside the app's own components — so the shell probe must reject this root.
@@ -173,6 +184,25 @@ test('#525 post-reload shell-only tree: hedged mounting retry, never the bare fr
   assert.equal(result.mounting, true);
   assert.equal(result.shellOnly, true);
   assert.equal(result.retryInMs, 2000);
+});
+
+test('#525 idle dev-shell root with nothing named rendered yet: hedged mounting retry', () => {
+  // The strongest mid-mount evidence there is — a committed root that has not
+  // rendered a single named composite — must not read as a mounted app.
+  for (const roots of [[idleRoot()], [hostOnlyRoot()], [logBoxShellRoot(), idleRoot()]]) {
+    const sandbox = createSandbox({ hook: hookWithRoots(roots) });
+    const result = JSON.parse(sandbox.__RN_AGENT.getNavState());
+    assert.match(result.error, /still mounting[\s\S]*[Rr]etry in ~2s/);
+    assert.equal(result.mounting, true);
+    assert.equal(result.shellOnly, true);
+  }
+});
+
+test('#525 an idle secondary renderer root can NOT mask app content on another root', () => {
+  const sandbox = createSandbox({ hook: hookWithRoots([idleRoot(), plainAppRoot()]) });
+  const result = JSON.parse(sandbox.__RN_AGENT.getNavState());
+  assert.equal(result.error, LEGACY_MESSAGE);
+  assert.notEqual(result.mounting, true);
 });
 
 test('#525 mounted app root that embeds the LogBox container: the genuine framework message is preserved', () => {

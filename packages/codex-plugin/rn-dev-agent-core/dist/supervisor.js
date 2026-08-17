@@ -63807,11 +63807,11 @@ var init_injected_helpers = __esm({
   var MAX_REGISTERED_RENDERER_IDS = 100;
   var EARLY_EXIT_EMPTY_STREAK = 3;
 
-  // GH #525 \u2014 bounded shell-only render evidence for getNavState. Right after a
-  // reload the dev LogBox root commits long before any app root, so a tree that
-  // is nothing but that shell proves the UI is still mounting. Exclusivity plus
-  // the scan bound keep the probe fail-closed: in a dev build AppContainer also
-  // renders LogBox inside the mounted app root, so mere presence proves nothing.
+  // GH #525 \u2014 bounded no-app-content render evidence for getNavState. Right
+  // after a reload the dev shell roots commit long before any app component, so
+  // a root set with no app composite in it proves the UI is still mounting. The
+  // allowlist plus the scan bound keep the probe fail-closed: a mounted dev app
+  // always renders named composites (AppContainer renders LogBox beside them).
   var NAV_SHELL_SCAN_MAX = 200;
   var NAV_SHELL_NAME_RE = /^_?LogBox/;
 
@@ -63984,14 +63984,13 @@ var init_injected_helpers = __esm({
     return out;
   }
 
-  // GH #525 \u2014 is this root nothing but the dev LogBox shell? Bounded DFS asking
-  // for exclusivity: at least one LogBox composite and NO other named composite.
-  // Host primitives and unnamed fibers are neutral; one app component, an
-  // oversized tree, or a renamed LogBox internal all mean "not a shell".
-  function navShellOnlyRoot(rootFiber) {
+  // GH #525 \u2014 does this root carry app content? Bounded DFS over composites: any
+  // named composite outside the LogBox allowlist is app content, as is a tree too
+  // large to finish scanning. Host primitives and unnamed fibers are neutral, so
+  // an empty or host-only root (the idle dev shell surface) carries none.
+  function navRootWithoutAppContent(rootFiber) {
     var stack = [rootFiber];
     var visited = 0;
-    var sawShell = false;
     while (stack.length > 0) {
       var node = stack.pop();
       if (!node) continue;
@@ -63999,21 +63998,18 @@ var init_injected_helpers = __esm({
       var nodeType = node.type;
       if (nodeType && typeof nodeType !== 'string') {
         var nodeName = nodeType.displayName || nodeType.name;
-        if (nodeName) {
-          if (!NAV_SHELL_NAME_RE.test(nodeName)) return false;
-          sawShell = true;
-        }
+        if (nodeName && !NAV_SHELL_NAME_RE.test(nodeName)) return false;
       }
       if (node.sibling) stack.push(node.sibling);
       if (node.child) stack.push(node.child);
     }
-    return sawShell;
+    return true;
   }
 
   function navAllRootsShellOnly(roots) {
     for (var nsi = 0; nsi < roots.length; nsi++) {
       try {
-        if (!navShellOnlyRoot(roots[nsi].fiber)) return false;
+        if (!navRootWithoutAppContent(roots[nsi].fiber)) return false;
       } catch (eShellProbe) {
         return false;
       }
@@ -64615,11 +64611,11 @@ var init_injected_helpers = __esm({
           retryInMs: 2000
         });
       }
-      // Current-state render evidence, not a timer: every committed root is the
-      // dev LogBox shell, so no app UI has rendered yet.
+      // Current-state render evidence, not a timer: no committed root holds any
+      // app component yet \u2014 only the dev shell is rendered.
       if (mountScanClean && mountRoots.length > 0 && navAllRootsShellOnly(mountRoots)) {
         return JSON.stringify({
-          error: 'App UI is still mounting \u2014 only the development LogBox shell is rendered so far, no app root has committed. Retry in ~2s. If this persists, React Navigation or Expo Router may be missing.',
+          error: 'App UI is still mounting \u2014 no app components have rendered yet, only the development shell. Retry in ~2s. If this persists, React Navigation or Expo Router may be missing.',
           mounting: true,
           shellOnly: true,
           retryInMs: 2000
