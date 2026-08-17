@@ -94,6 +94,20 @@ appId: com.example.testapp
 `,
   );
 
+  // An explicitly empty produces map is present-but-valueless, like `tags: []`.
+  writeFileSync(
+    join(actionsDir, 'empty-produces-flow.yaml'),
+    `# id: empty-produces-flow
+# intent: Flow declaring an empty produces map
+# tags: []
+# mutates: false
+# produces: {}
+appId: com.example.testapp
+---
+- launchApp
+`,
+  );
+
   return dir;
 }
 
@@ -143,6 +157,18 @@ test('#525 present-but-unparseable values keep "?" as the parse-failure marker',
   }
 });
 
+test('#525 an empty produces map renders "-", never the parse-failure marker', () => {
+  const dir = makeFixture();
+  try {
+    const out = run(['--section', 'b'], dir);
+    const cells = rowFor(out, 'empty-produces-flow');
+    assert.equal(cells[6], '-'); // tags: [] — present, no values
+    assert.equal(cells[7], '-', `empty produces must render "-", got ${cells[7]}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('#525 a produces map with any malformed segment renders "?", never a partial map', () => {
   const dir = makeFixture();
   try {
@@ -185,6 +211,8 @@ test('#525 JSON output distinguishes pre-M7 absence from parse failure', () => {
     assert.equal(byFlow['valid-flow'].metaFormat, 'm7');
     assert.deepEqual((byFlow['broken-flow'].metaInvalid ?? []).sort(), ['mutates', 'produces']);
     assert.deepEqual(byFlow['mixed-produces-flow'].metaInvalid ?? [], ['produces']);
+    assert.deepEqual(byFlow['empty-produces-flow'].metaInvalid ?? [], []);
+    assert.deepEqual(byFlow['empty-produces-flow'].produces, {});
     assert.equal((byFlow['valid-flow'].metaInvalid ?? []).length, 0);
   } finally {
     rmSync(dir, { recursive: true, force: true });

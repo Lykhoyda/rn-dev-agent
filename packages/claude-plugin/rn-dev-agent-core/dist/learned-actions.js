@@ -195,7 +195,10 @@ function parseFlowMeta(text) {
   };
 }
 function parseProducesMap(raw) {
-  const inner = raw.trim().replace(/^\{|\}$/g, "").trim();
+  const trimmed = raw.trim();
+  if (/^\{\s*\}$/.test(trimmed))
+    return {};
+  const inner = trimmed.replace(/^\{|\}$/g, "").trim();
   if (!inner)
     return null;
   const result = {};
@@ -213,7 +216,7 @@ function parseProducesMap(raw) {
       result[key] = valueRaw.replace(/^['"]|['"]$/g, "");
     }
   }
-  return Object.keys(result).length ? result : null;
+  return result;
 }
 function scanSkeletons() {
   const candidates = [
@@ -367,7 +370,7 @@ if (want("b")) {
       const mut = f.mutates === null || f.mutates === void 0 ? f.metaInvalid.includes("mutates") ? "?" : absent : f.mutates ? "yes" : "no";
       const status = f.status || absent;
       const tags = f.tags ? f.tags.length ? f.tags.join(", ") : "-" : absent;
-      const produces = f.produces ? formatProducesCell(f.produces) : f.metaInvalid.includes("produces") ? "?" : absent;
+      const produces = f.produces ? Object.keys(f.produces).length ? formatProducesCell(f.produces) : "-" : f.metaInvalid.includes("produces") ? "?" : absent;
       parts.push(`| \`${f.flow}\` | ${escapeMarkdownTableCell(f.purpose)} | \`${f.appId || "?"}\` | ${mut} | ${status} | ${escapeMarkdownTableCell(tags)} | ${escapeMarkdownTableCell(produces)} | \`${f.replay}\` |`);
     }
   }

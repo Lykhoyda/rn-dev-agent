@@ -307,14 +307,14 @@ function parseFlowMeta(text: string): FlowMeta {
 
 // D1209 — parse the inline `produces` map: `{ key: value, key: value }`.
 // Values are typed as boolean (true/false), number, or string. Returns
-// null when empty or when ANY segment is malformed — a partial map would
-// render as fully parsed and hide the metadata loss (GH #525). Mirrors
+// null when ANY segment is malformed — a partial map would render as fully
+// parsed and hide the metadata loss (GH #525) — and an empty map for `{}`,
+// which is present-but-valueless ("-"), not a parse failure ("?"). Mirrors
 // parseProducesMap() in packages/rn-dev-agent-core/src/domain/reusable-action.ts.
 function parseProducesMap(raw: string): ProducesMap | null {
-  const inner = raw
-    .trim()
-    .replace(/^\{|\}$/g, '')
-    .trim();
+  const trimmed = raw.trim();
+  if (/^\{\s*\}$/.test(trimmed)) return {};
+  const inner = trimmed.replace(/^\{|\}$/g, '').trim();
   if (!inner) return null;
   const result: ProducesMap = {};
   for (const part of inner.split(',')) {
@@ -330,7 +330,7 @@ function parseProducesMap(raw: string): ProducesMap | null {
       result[key] = valueRaw.replace(/^['"]|['"]$/g, '');
     }
   }
-  return Object.keys(result).length ? result : null;
+  return result;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -549,7 +549,9 @@ if (want('b')) {
       const status = f.status || absent;
       const tags = f.tags ? (f.tags.length ? f.tags.join(', ') : '-') : absent;
       const produces = f.produces
-        ? formatProducesCell(f.produces)
+        ? Object.keys(f.produces).length
+          ? formatProducesCell(f.produces)
+          : '-'
         : f.metaInvalid.includes('produces')
           ? '?'
           : absent;
