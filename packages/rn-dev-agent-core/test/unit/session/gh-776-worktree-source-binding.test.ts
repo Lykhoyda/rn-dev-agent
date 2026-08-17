@@ -367,12 +367,16 @@ test('bind_source refuses while package integration is applied in the bound tree
 test('bind_source releases a proven-dead owner of the declared root before it declares', async () => {
   const { primary, linked } = makeRepoWithWorktree();
   const cleaned: string[] = [];
-  const { handler, calls } = makeBindSourceHarness(primary, {}, {
-    releaseDeadSourceOwner: async (source: { appRoot: string }) => {
-      cleaned.push(source.appRoot);
-      return { status: 'clean', released: ['dead-predecessor'] } as never;
+  const { handler, calls } = makeBindSourceHarness(
+    primary,
+    {},
+    {
+      releaseDeadSourceOwner: async (source: { appRoot: string }) => {
+        cleaned.push(source.appRoot);
+        return { status: 'clean', released: ['dead-predecessor'] } as never;
+      },
     },
-  });
+  );
 
   const result = await handler({ action: 'bind_source', projectRoot: linked } as never);
 
@@ -383,18 +387,22 @@ test('bind_source releases a proven-dead owner of the declared root before it de
 
 test('bind_source refuses while the declared root is still owned by a live session', async () => {
   const { primary, linked } = makeRepoWithWorktree();
-  const { handler, calls } = makeBindSourceHarness(primary, {}, {
-    releaseDeadSourceOwner: async () =>
-      ({
-        status: 'refused',
-        released: [],
-        refusal: {
-          code: 'RESOURCE_CLAIM_CONFLICT',
-          message: 'another live rn-dev-agent supervisor owns this worktree',
-          nextAction: 'Close the other session, then retry bind_source.',
-        },
-      }) as never,
-  });
+  const { handler, calls } = makeBindSourceHarness(
+    primary,
+    {},
+    {
+      releaseDeadSourceOwner: async () =>
+        ({
+          status: 'refused',
+          released: [],
+          refusal: {
+            code: 'RESOURCE_CLAIM_CONFLICT',
+            message: 'another live rn-dev-agent supervisor owns this worktree',
+            nextAction: 'Close the other session, then retry bind_source.',
+          },
+        }) as never,
+    },
+  );
 
   const result = await handler({ action: 'bind_source', projectRoot: linked } as never);
   const body = JSON.parse(result.content[0]!.text);
@@ -680,9 +688,7 @@ test('an explicitly started Observe refuses the device axis instead of being sto
       observePort: 7333,
       metroPort: 8081,
     },
-    claims: [
-      { type: 'observe-port', key: '7333', sessionId: 'session-776', claimEpoch: 1 },
-    ],
+    claims: [{ type: 'observe-port', key: '7333', sessionId: 'session-776', claimEpoch: 1 }],
     worker: { instanceId: 'worker', pid: 1, birthAvailable: true },
   };
   const handler = createSessionHandler(
@@ -884,9 +890,7 @@ test('the Observe yield clears the surviving binding on the authority version it
       observePort: 7333,
       metroPort: 8081,
     },
-    claims: [
-      { type: 'observe-port', key: '7333', sessionId: 'session-776', claimEpoch: 1 },
-    ],
+    claims: [{ type: 'observe-port', key: '7333', sessionId: 'session-776', claimEpoch: 1 }],
     worker: { instanceId: 'worker', pid: 1, birthAvailable: true },
   };
   const handler = createSessionHandler(
@@ -1051,9 +1055,7 @@ test('an explicitly started Observe refuses before any bind_device step mutates 
       },
       staleDeviceCleanup: { platform: 'android', deviceId: 'emulator-5554' },
     },
-    claims: [
-      { type: 'observe-port', key: '7333', sessionId: 'session-776', claimEpoch: 1 },
-    ],
+    claims: [{ type: 'observe-port', key: '7333', sessionId: 'session-776', claimEpoch: 1 }],
     worker: { instanceId: 'worker', pid: 1, birthAvailable: true },
   };
   const handler = createSessionHandler(
