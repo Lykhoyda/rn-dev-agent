@@ -1417,6 +1417,14 @@ export const INJECTED_HELPERS = `
           hint: 'Use a testID or accessibilityLabel for longPress / typeText / scroll / setFieldValue.'
         });
       }
+      // GH #525 — walkUp's bounded search and ambiguity refusal belong to the
+      // testID/accessibilityLabel path; refuse instead of silently dropping it.
+      if (opts.walkUp === true) {
+        return JSON.stringify({
+          error: 'walkUp is only supported with a testID or accessibilityLabel selector',
+          hint: 'Ladder selectors already press the nearest onPress ancestor; drop walkUp, or target the component by testID to get the bounded walk.'
+        });
+      }
       var ladderResult = resolveLadder(JSON.stringify({
         role: opts.role, name: opts.name, text: opts.text,
         placeholder: opts.placeholder, exact: opts.exact, includeHidden: opts.includeHidden

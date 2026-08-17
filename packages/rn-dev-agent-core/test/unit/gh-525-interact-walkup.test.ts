@@ -9,9 +9,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
-import { readFileSync } from 'node:fs';
-import { resolve as resolvePath, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { INJECTED_HELPERS } from '../../dist/injected-helpers.js';
 import { createMockClient } from '../helpers/mock-cdp-client.js';
 import { parseEnvelope } from '../helpers/result-helpers.js';
@@ -144,10 +141,7 @@ test('#525 default (no walkUp): duplicate testIDs keep strict first-match semant
   });
   const sandbox = createSandbox({ fiberRoot: root });
   const raw = sandbox.__RN_AGENT.interact({ action: 'press', testID: 'dup-plain' });
-  assert.equal(
-    raw,
-    '{"success":true,"action":"press","component":"Button","testID":"dup-plain"}',
-  );
+  assert.equal(raw, '{"success":true,"action":"press","component":"Button","testID":"dup-plain"}');
   assert.equal(first, 1);
   assert.equal(second, 0);
 });
@@ -453,16 +447,25 @@ test('#525 walkUp is press-only: other actions refuse it explicitly and never di
   assert.equal(typed, 0);
 });
 
-test('#525 the registered cdp_interact MCP schema exposes walkUp (source-wiring, gh-202 style)', () => {
-  const testDir = dirname(fileURLToPath(import.meta.url));
-  const indexSrc = readFileSync(resolvePath(testDir, '../../src/index.ts'), 'utf8');
-  const registration = indexSrc.match(/trackedTool\(\s*'cdp_interact',[\s\S]*?createInteractHandler\(getClient\)/);
-  assert.ok(registration, 'cdp_interact registration not found in index.ts');
-  assert.match(
-    registration[0],
-    /walkUp:\s*z\s*[\s\S]{0,40}\.boolean\(\)\s*[\s\S]{0,20}\.optional\(\)/,
-    'cdp_interact schema must expose walkUp as an OPTIONAL boolean',
+test('#525 walkUp refuses on ladder selectors instead of silently dropping the flag', () => {
+  let fired = 0;
+  const root = buildFiber({
+    name: 'App',
+    children: [
+      {
+        name: 'RCTView',
+        host: true,
+        props: { onPress: () => fired++ },
+        children: [{ name: 'RCTText', host: true, props: { children: 'Card' } }],
+      },
+    ],
+  });
+  const sandbox = createSandbox({ fiberRoot: root });
+  const result = JSON.parse(
+    sandbox.__RN_AGENT.interact({ action: 'press', text: 'Card', walkUp: true }),
   );
+  assert.match(result.error, /walkUp/);
+  assert.equal(fired, 0, 'a refused walkUp must fire nothing');
 });
 
 test('#525 tool layer forwards walkUp to the helper call', async () => {
@@ -511,7 +514,10 @@ test('#525 walkUp refusal names the host fiber it started from', () => {
   const root = buildFiber({
     name: 'App',
     children: [
-      { name: 'Wrapper', children: [{ name: 'RCTView', host: true, props: { testID: 'inert-host' } }] },
+      {
+        name: 'Wrapper',
+        children: [{ name: 'RCTView', host: true, props: { testID: 'inert-host' } }],
+      },
     ],
   });
   const sandbox = createSandbox({ fiberRoot: root });
@@ -530,13 +536,23 @@ test('#525 ambiguous walkUp candidates list real host-fiber names', () => {
         name: 'RCTView',
         host: true,
         props: { onPress: () => {}, testID: 'outer-host' },
-        children: [{ name: 'Wrap', children: [{ name: 'RCTText', host: true, props: { testID: 'dup-host' } }] }],
+        children: [
+          {
+            name: 'Wrap',
+            children: [{ name: 'RCTText', host: true, props: { testID: 'dup-host' } }],
+          },
+        ],
       },
       {
         name: 'RCTScrollView',
         host: true,
         props: { onPress: () => {}, testID: 'other-host' },
-        children: [{ name: 'Wrap', children: [{ name: 'RCTText', host: true, props: { testID: 'dup-host' } }] }],
+        children: [
+          {
+            name: 'Wrap',
+            children: [{ name: 'RCTText', host: true, props: { testID: 'dup-host' } }],
+          },
+        ],
       },
     ],
   });
@@ -601,7 +617,9 @@ test('#525 tool layer leaves refusals without diagnostics free of meta', async (
     evaluate: async () => ({ value: JSON.stringify({ error: 'Component not found' }) }),
   });
   const handler = createInteractHandler(() => client);
-  const envelope = parseEnvelope(await handler({ action: 'press', testID: 'gone', animated: true }));
+  const envelope = parseEnvelope(
+    await handler({ action: 'press', testID: 'gone', animated: true }),
+  );
   assert.equal(envelope.ok, false);
   assert.equal(envelope.meta, undefined);
 });

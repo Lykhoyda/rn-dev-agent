@@ -1655,7 +1655,7 @@ trackedTool('cdp_interact', 'Interact with React components by testID (preferred
     walkUp: z
         .boolean()
         .optional()
-        .describe('press only (opt-in, GH #525): when the matched component has no onPress (testID on a non-pressable wrapper), search up to 8 fiber ancestors for the nearest pressable and press it. Refuses when no pressable exists within the bound or when duplicate matches resolve to distinct pressable fibers (ambiguity). Default behavior without the flag is unchanged.'),
+        .describe('press only, testID/accessibilityLabel selectors only (opt-in, GH #525): when the matched component has no onPress (testID on a non-pressable wrapper), search up to 8 fiber ancestors for the nearest pressable and press it. Refuses when no pressable exists within the bound, when duplicate matches resolve to distinct pressable fibers (ambiguity), or when combined with a non-press action or a role/name/text/placeholder selector. Default behavior without the flag is unchanged.'),
 }, createInteractHandler(getClient));
 trackedTool('collect_logs', 'Collect logs from multiple sources in parallel: JS console (Hermes ring buffer snapshot), native iOS (xcrun simctl log stream), native Android (adb logcat). Results merged and sorted by timestamp. Works without CDP when only native sources requested. Use when debugging crashes that span JS and native layers.', {
     sources: z

@@ -54355,6 +54355,14 @@ var INJECTED_HELPERS = `
           hint: 'Use a testID or accessibilityLabel for longPress / typeText / scroll / setFieldValue.'
         });
       }
+      // GH #525 \u2014 walkUp's bounded search and ambiguity refusal belong to the
+      // testID/accessibilityLabel path; refuse instead of silently dropping it.
+      if (opts.walkUp === true) {
+        return JSON.stringify({
+          error: 'walkUp is only supported with a testID or accessibilityLabel selector',
+          hint: 'Ladder selectors already press the nearest onPress ancestor; drop walkUp, or target the component by testID to get the bounded walk.'
+        });
+      }
       var ladderResult = resolveLadder(JSON.stringify({
         role: opts.role, name: opts.name, text: opts.text,
         placeholder: opts.placeholder, exact: opts.exact, includeHidden: opts.includeHidden
@@ -87714,7 +87722,7 @@ trackedTool("cdp_interact", 'Interact with React components by testID (preferred
   value: external_exports.union([external_exports.string(), external_exports.number(), external_exports.boolean()]).optional().describe('Value to set. For setFieldValue: passed to setValue (a digit-string is kept a string when the field currently holds a string \u2014 give string fields a "" default so this applies). For press: when provided, onPress receives this value instead of a synthetic event \u2014 use for radio/chip-style value-bearing controls.'),
   shouldValidate: external_exports.boolean().optional().describe("For setFieldValue: pass-through to setValue's options.shouldValidate (default true). Set false to suppress synchronous validation."),
   shouldDirty: external_exports.boolean().optional().describe("For setFieldValue: pass-through to setValue's options.shouldDirty (default true). Set false to keep the field marked pristine."),
-  walkUp: external_exports.boolean().optional().describe("press only (opt-in, GH #525): when the matched component has no onPress (testID on a non-pressable wrapper), search up to 8 fiber ancestors for the nearest pressable and press it. Refuses when no pressable exists within the bound or when duplicate matches resolve to distinct pressable fibers (ambiguity). Default behavior without the flag is unchanged.")
+  walkUp: external_exports.boolean().optional().describe("press only, testID/accessibilityLabel selectors only (opt-in, GH #525): when the matched component has no onPress (testID on a non-pressable wrapper), search up to 8 fiber ancestors for the nearest pressable and press it. Refuses when no pressable exists within the bound, when duplicate matches resolve to distinct pressable fibers (ambiguity), or when combined with a non-press action or a role/name/text/placeholder selector. Default behavior without the flag is unchanged.")
 }, createInteractHandler(getClient));
 trackedTool("collect_logs", "Collect logs from multiple sources in parallel: JS console (Hermes ring buffer snapshot), native iOS (xcrun simctl log stream), native Android (adb logcat). Results merged and sorted by timestamp. Works without CDP when only native sources requested. Use when debugging crashes that span JS and native layers.", {
   sources: external_exports.array(external_exports.enum(["js_console", "native_ios", "native_android"])).default(["js_console"]).describe("Log sources to collect from (default: js_console only)"),
