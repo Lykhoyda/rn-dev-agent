@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFile, spawnSync } from 'node:child_process';
+import { execFile, spawn, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -338,6 +338,69 @@ done
   assert.equal(existsSync(`${prefix}-${scope}.pid`), false);
   supervisorPid = 0;
   childPid = 0;
+});
+
+test('an unreaped recorder process reads as absent, not as changed command identity', async (t) => {
+  const parent = spawn(
+    'python3',
+    [
+      '-c',
+      [
+        'import subprocess, sys, time',
+        'child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])',
+        'child.kill()',
+        'print(child.pid, flush=True)',
+        'time.sleep(600)',
+      ].join('\n'),
+    ],
+    { stdio: ['ignore', 'pipe', 'ignore'] },
+  );
+  t.after(() => {
+    try {
+      parent.kill('SIGKILL');
+    } catch {}
+  });
+
+  const zombiePid = await new Promise<number>((resolve, reject) => {
+    let buffered = '';
+    parent.stdout.setEncoding('utf8');
+    parent.stdout.on('data', (chunk: string) => {
+      buffered += chunk;
+      const line = buffered.split('\n')[0];
+      if (buffered.includes('\n')) resolve(Number(line.trim()));
+    });
+    parent.once('error', reject);
+    parent.once('exit', () => reject(new Error('zombie parent exited early')));
+  });
+
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (probeProcessPresence(zombiePid) === 'absent') break;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.equal(probeProcessPresence(zombiePid), 'absent');
+
+  const probe = spawnSync(
+    'bash',
+    [
+      '-c',
+      'source "$1"; probe_local_process "$2" "$3"; printf \'%s\\n\' "$LOCAL_PROCESS_STATE"',
+      'probe',
+      sourceScript,
+      String(zombiePid),
+      'marker-that-a-defunct-process-cannot-carry',
+    ],
+    {
+      encoding: 'utf8',
+      timeout: 10_000,
+      env: {
+        ...process.env,
+        RN_DEV_AGENT_PROCESS_BIRTH_HELPER: processBirthHelper,
+        RN_DEV_AGENT_PROCESS_BIRTH_REQUIREMENT: darwinProcessBirthRequirement(),
+      },
+    },
+  );
+  assert.equal(probe.status, 0, probe.stderr);
+  assert.equal(probe.stdout.trim(), 'absent');
 });
 
 test('recording stop delegates signals to the authenticated supervisor', () => {

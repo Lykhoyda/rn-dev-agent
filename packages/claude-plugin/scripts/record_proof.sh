@@ -926,6 +926,16 @@ is_alive() {
   kill -0 "$pid" 2>/dev/null
 }
 
+# GH#707: an unreaped zombie has already terminated — it runs no code and its
+# pid cannot be reused until the parent reaps it, so it must read as absent
+# instead of as a live process whose command identity suddenly changed.
+is_zombie() {
+  local pid="$1"
+  local state
+  state="$(ps -p "$pid" -o state= 2>/dev/null)" || return 1
+  [[ "${state//[[:space:]]/}" == Z* ]]
+}
+
 hash_process_identity() {
   {
     local index=0
@@ -1008,7 +1018,7 @@ probe_local_process() {
   LOCAL_PROCESS_STATE="unknown"
   LOCAL_PROCESS_BIRTH=""
   LOCAL_PROCESS_MARKER_MATCH="false"
-  if ! is_alive "$pid"; then
+  if ! is_alive "$pid" || is_zombie "$pid"; then
     LOCAL_PROCESS_STATE="absent"
     return 0
   fi
@@ -1104,6 +1114,10 @@ probe_local_process() {
     return 1
   }
   [[ "$command_after" == *"$marker"* ]] || LOCAL_PROCESS_MARKER_MATCH="false"
+  if is_zombie "$pid"; then
+    LOCAL_PROCESS_STATE="absent"
+    return 0
+  fi
   [[ "$LOCAL_PROCESS_BIRTH" =~ ^[a-f0-9]{64}$ ]] || {
     echo "Error: recorder process birth token is invalid" >&2
     return 1
@@ -2420,14 +2434,16 @@ PYEOF
   echo "Labeled video: $output ($size bytes)"
 }
 
-trap cleanup_pending_pull EXIT
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  trap cleanup_pending_pull EXIT
 
-case "${1:-}" in
-  start)       shift; cmd_start "$@" ;;
-  abort)       shift; cmd_abort "$@" ;;
-  stop)        shift; cmd_stop "$@" ;;
-  status)      shift; cmd_status "$@" ;;
-  convert-gif) shift; cmd_convert_gif "$@" ;;
-  label)       shift; cmd_label "$@" ;;
-  *)           usage ;;
-esac
+  case "${1:-}" in
+    start)       shift; cmd_start "$@" ;;
+    abort)       shift; cmd_abort "$@" ;;
+    stop)        shift; cmd_stop "$@" ;;
+    status)      shift; cmd_status "$@" ;;
+    convert-gif) shift; cmd_convert_gif "$@" ;;
+    label)       shift; cmd_label "$@" ;;
+    *)           usage ;;
+  esac
+fi
