@@ -113,10 +113,13 @@ for (const tool of ['device_accept_system_dialog', 'device_dismiss_system_dialog
       envelope.meta.authorityReceipt.axes.some(({ axis }) => axis === 'M' || axis === 'A'),
       false,
     );
-    assert.deepEqual(
-      probes.filter((axis) => ['C', 'S', 'I', 'D', 'R'].includes(axis)).sort(),
-      ['C', 'D', 'I', 'R', 'S'],
-    );
+    assert.deepEqual(probes.filter((axis) => ['C', 'S', 'I', 'D', 'R'].includes(axis)).sort(), [
+      'C',
+      'D',
+      'I',
+      'R',
+      'S',
+    ]);
   });
 
   test(`${tool} refuses fail-closed on a proven foreign Metro origin without dispatch`, async () => {
