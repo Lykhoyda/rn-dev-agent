@@ -35077,6 +35077,14 @@ function createStepTimer() {
     }
   };
 }
+function pickDefined(source, keys) {
+  const picked = {};
+  for (const key of keys) {
+    if (source[key] !== void 0)
+      picked[key] = source[key];
+  }
+  return Object.keys(picked).length > 0 ? picked : void 0;
+}
 function okResult(data, opts) {
   const envelope = { ok: true, data };
   if (opts?.truncated)
@@ -54478,6 +54486,12 @@ var INJECTED_HELPERS = `
         // GH #525 \u2014 nearest self-or-ancestor onPress within 8 fiber levels (one JSX wrapper is ~3 fibers under NativeWind CssInterop);
         // candidates collapse only when they are the exact same fiber.
         var WALK_UP_MAX = 8;
+        // Host fibers carry a string type (e.g. 'RCTView') \u2014 same extraction as the ladder press path.
+        var walkFiberName = function(f) {
+          return (f && f.type && (typeof f.type === 'string'
+            ? f.type
+            : (f.type.displayName || f.type.name))) || 'Unknown';
+        };
         var walkSources = walkUpMatches.length > 0 ? walkUpMatches : [found];
         var walkCandidates = [];
         for (var wi = 0; wi < walkSources.length; wi++) {
@@ -54501,7 +54515,7 @@ var INJECTED_HELPERS = `
           }
         }
         if (walkCandidates.length === 0) {
-          return JSON.stringify({ error: 'Component has no onPress handler', component: typeName, testID: selector, walkUpSearched: WALK_UP_MAX });
+          return JSON.stringify({ error: 'Component has no onPress handler', component: walkFiberName(found), testID: selector, walkUpSearched: WALK_UP_MAX });
         }
         if (walkCandidates.length > 1) {
           var walkDescriptors = [];
@@ -54509,7 +54523,7 @@ var INJECTED_HELPERS = `
             var wf = walkCandidates[wk].fiber;
             var wp = wf.memoizedProps || {};
             walkDescriptors.push({
-              component: (wf.type && (wf.type.displayName || wf.type.name)) || 'Unknown',
+              component: walkFiberName(wf),
               testID: wp.testID
             });
           }
@@ -54522,7 +54536,7 @@ var INJECTED_HELPERS = `
           });
         }
         var walkTarget = walkCandidates[0];
-        var walkTargetName = (walkTarget.fiber.type && (walkTarget.fiber.type.displayName || walkTarget.fiber.type.name)) || 'Unknown';
+        var walkTargetName = walkFiberName(walkTarget.fiber);
         if (opts.value !== undefined) {
           walkTarget.fiber.memoizedProps.onPress(opts.value);
         } else {
@@ -54531,7 +54545,7 @@ var INJECTED_HELPERS = `
         var walkResult = { success: true, action: 'press', component: walkTargetName, testID: selector };
         if (opts.value !== undefined) walkResult.value = opts.value;
         if (walkTarget.hops > 0) {
-          walkResult.walkedUpFrom = (walkTarget.source.type && (walkTarget.source.type.displayName || walkTarget.source.type.name)) || 'Unknown';
+          walkResult.walkedUpFrom = walkFiberName(walkTarget.source);
           walkResult.walkUpLevels = walkTarget.hops;
         }
         return JSON.stringify(walkResult);
@@ -69376,6 +69390,13 @@ async function readLiveRoute(client2) {
     return null;
   }
 }
+var NAV_STATE_GUIDANCE_FIELDS = [
+  "mounting",
+  "helpersRecentlyInjected",
+  "helperAgeMs",
+  "frameworkDetected",
+  "retryInMs"
+];
 function createNavigationStateHandler(getClient2, opts = {}) {
   return withConnection(getClient2, async (_args, client2) => {
     const result = await client2.evaluate(client2.helperExpr("getNavState()"));
@@ -69392,7 +69413,8 @@ function createNavigationStateHandler(getClient2, opts = {}) {
       return failResult(`getNavState returned non-JSON output: ${result.value.slice(0, 200)}`);
     }
     if (parsed.error) {
-      return failResult(`Navigation state error: ${parsed.error}`);
+      const meta = pickDefined(parsed, NAV_STATE_GUIDANCE_FIELDS);
+      return failResult(`Navigation state error: ${parsed.error}`, meta);
     }
     if (opts.annotate === false)
       return okResult(parsed);
@@ -75251,6 +75273,7 @@ function createDevSettingsHandler(getClient2) {
 
 // packages/rn-dev-agent-core/dist/tools/interact.js
 init_utils();
+var REFUSAL_FIELDS = ["hint", "walkUpSearched", "count", "candidates", "matches"];
 function createInteractHandler(getClient2) {
   return withConnection(getClient2, async (args, client2) => {
     const hasLadderSelector = Boolean(args.role || args.text || args.placeholder);
@@ -75312,7 +75335,7 @@ function createInteractHandler(getClient2) {
       return failResult(`Interact returned non-JSON: ${result.value.slice(0, 200)}`);
     }
     if (parsed.error) {
-      return failResult(`Interact failed: ${parsed.error}`, parsed.hint ? { hint: parsed.hint } : void 0);
+      return failResult(`Interact failed: ${parsed.error}`, pickDefined(parsed, REFUSAL_FIELDS));
     }
     if (parsed.action_executed && parsed.handler_error) {
       return failResult(`Action executed but handler threw: ${parsed.handler_error}`, {

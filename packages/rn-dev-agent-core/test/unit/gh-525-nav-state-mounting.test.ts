@@ -12,6 +12,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { INJECTED_HELPERS } from '../../dist/injected-helpers.js';
+import { createMockClient } from '../helpers/mock-cdp-client.js';
+import { parseEnvelope } from '../helpers/result-helpers.js';
+import { createNavigationStateHandler } from '../../dist/tools/navigation-state.js';
 
 const LEGACY_MESSAGE = 'Navigation state not found. Is React Navigation or Expo Router installed?';
 
@@ -180,6 +183,57 @@ test('#525 a mounted NavigationContainer still resolves normally after the chang
   const result = JSON.parse(sandbox.__RN_AGENT.getNavState());
   assert.equal(result.error, undefined);
   assert.equal(result.routeName, 'Home');
+});
+
+// The mid-mount fields are machine-readable API, so they must survive the
+// cdp_navigation_state boundary as envelope meta — an agent reading only the
+// MCP result has to be able to act on `mounting` / `retryInMs`.
+function navStateHandlerFor(payload: Record<string, unknown>) {
+  const client = createMockClient({
+    evaluate: async () => ({ value: JSON.stringify(payload) }),
+  });
+  return createNavigationStateHandler(() => client, { annotate: false });
+}
+
+test('#525 tool layer forwards the mounting guidance fields as envelope meta', async () => {
+  const handler = navStateHandlerFor({
+    error: 'App is still mounting — no React fiber roots exist yet. Retry in ~2s.',
+    mounting: true,
+    retryInMs: 2000,
+  });
+  const envelope = parseEnvelope(await handler({}));
+  assert.equal(envelope.ok, false);
+  assert.match(String(envelope.error), /still mounting/);
+  assert.equal(envelope.meta?.mounting, true);
+  assert.equal(envelope.meta?.retryInMs, 2000);
+});
+
+test('#525 tool layer forwards frameworkDetected and the reload-recency fields', async () => {
+  const bundled = parseEnvelope(
+    await navStateHandlerFor({
+      error: 'React Navigation is bundled but no navigation state was found.',
+      frameworkDetected: 'react-navigation',
+      retryInMs: 2000,
+    })({}),
+  );
+  assert.equal(bundled.meta?.frameworkDetected, 'react-navigation');
+
+  const reloaded = parseEnvelope(
+    await navStateHandlerFor({
+      error: 'Navigation state not found. Helpers were injected 120ms ago…',
+      helpersRecentlyInjected: true,
+      helperAgeMs: 120,
+      retryInMs: 2000,
+    })({}),
+  );
+  assert.equal(reloaded.meta?.helpersRecentlyInjected, true);
+  assert.equal(reloaded.meta?.helperAgeMs, 120);
+});
+
+test('#525 tool layer attaches no meta to the legacy framework-missing refusal', async () => {
+  const envelope = parseEnvelope(await navStateHandlerFor({ error: LEGACY_MESSAGE })({}));
+  assert.equal(envelope.ok, false);
+  assert.equal(envelope.meta, undefined);
 });
 
 test('#525 no DevTools hook: never claims mounting, whether helpers are fresh or aged', () => {

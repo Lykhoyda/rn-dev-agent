@@ -14,16 +14,19 @@ import { resolve as resolvePath, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { INJECTED_HELPERS } from '../../dist/injected-helpers.js';
 import { createMockClient } from '../helpers/mock-cdp-client.js';
+import { parseEnvelope } from '../helpers/result-helpers.js';
 import { createInteractHandler } from '../../dist/tools/interact.js';
 
 interface FiberSpec {
   name?: string;
+  // host:true builds a host fiber, whose `type` is a plain string (e.g. 'RCTView').
+  host?: boolean;
   props?: Record<string, unknown>;
   children?: FiberSpec[];
 }
 
 interface SandboxFiber {
-  type: { displayName: string } | null;
+  type: { displayName: string } | string | null;
   memoizedProps: Record<string, unknown>;
   return: SandboxFiber | null;
   child: SandboxFiber | null;
@@ -68,7 +71,7 @@ function createSandbox(opts: { fiberRoot?: SandboxFiber } = {}) {
 
 function buildFiber(spec: FiberSpec, parent: SandboxFiber | null = null): SandboxFiber {
   const fiber: SandboxFiber = {
-    type: spec.name ? { displayName: spec.name } : null,
+    type: spec.name ? (spec.host ? spec.name : { displayName: spec.name }) : null,
     memoizedProps: spec.props || {},
     return: parent,
     child: null,
@@ -421,6 +424,133 @@ test('#525 tool layer forwards walkUp to the helper call', async () => {
   await handler({ action: 'press', testID: 'card', walkUp: true, animated: true });
   const opts = JSON.parse(evaluated.replace(/^__RN_AGENT\.interact\(/, '').replace(/\)$/, ''));
   assert.equal(opts.walkUp, true);
+});
+
+test('#525 walkUp reports real host-fiber names (string fiber type) instead of Unknown', () => {
+  let fired = 0;
+  const root = buildFiber({
+    name: 'App',
+    children: [
+      {
+        name: 'RCTView',
+        host: true,
+        props: { onPress: () => fired++ },
+        children: [
+          {
+            name: 'CardWrapper',
+            children: [{ name: 'RCTTextView', host: true, props: { testID: 'host-card' } }],
+          },
+        ],
+      },
+    ],
+  });
+  const sandbox = createSandbox({ fiberRoot: root });
+  const result = JSON.parse(
+    sandbox.__RN_AGENT.interact({ action: 'press', testID: 'host-card', walkUp: true }),
+  );
+  assert.equal(result.success, true);
+  assert.equal(fired, 1);
+  assert.equal(result.component, 'RCTView');
+  assert.equal(result.walkedUpFrom, 'RCTTextView');
+});
+
+test('#525 walkUp refusal names the host fiber it started from', () => {
+  const root = buildFiber({
+    name: 'App',
+    children: [
+      { name: 'Wrapper', children: [{ name: 'RCTView', host: true, props: { testID: 'inert-host' } }] },
+    ],
+  });
+  const sandbox = createSandbox({ fiberRoot: root });
+  const result = JSON.parse(
+    sandbox.__RN_AGENT.interact({ action: 'press', testID: 'inert-host', walkUp: true }),
+  );
+  assert.equal(result.component, 'RCTView');
+  assert.equal(result.walkUpSearched, 8);
+});
+
+test('#525 ambiguous walkUp candidates list real host-fiber names', () => {
+  const root = buildFiber({
+    name: 'App',
+    children: [
+      {
+        name: 'RCTView',
+        host: true,
+        props: { onPress: () => {}, testID: 'outer-host' },
+        children: [{ name: 'Wrap', children: [{ name: 'RCTText', host: true, props: { testID: 'dup-host' } }] }],
+      },
+      {
+        name: 'RCTScrollView',
+        host: true,
+        props: { onPress: () => {}, testID: 'other-host' },
+        children: [{ name: 'Wrap', children: [{ name: 'RCTText', host: true, props: { testID: 'dup-host' } }] }],
+      },
+    ],
+  });
+  const sandbox = createSandbox({ fiberRoot: root });
+  const result = JSON.parse(
+    sandbox.__RN_AGENT.interact({ action: 'press', testID: 'dup-host', walkUp: true }),
+  );
+  assert.match(result.error, /[Aa]mbiguous/);
+  assert.deepEqual(
+    result.candidates.map((c: { component: string }) => c.component),
+    ['RCTView', 'RCTScrollView'],
+  );
+});
+
+test('#525 tool layer forwards walkUpSearched on a walkUp refusal', async () => {
+  const client = createMockClient({
+    evaluate: async () => ({
+      value: JSON.stringify({
+        error: 'Component has no onPress handler',
+        component: 'RCTView',
+        testID: 'card',
+        walkUpSearched: 8,
+      }),
+    }),
+  });
+  const handler = createInteractHandler(() => client);
+  const envelope = parseEnvelope(
+    await handler({ action: 'press', testID: 'card', walkUp: true, animated: true }),
+  );
+  assert.equal(envelope.ok, false);
+  assert.equal(envelope.meta?.walkUpSearched, 8);
+});
+
+test('#525 tool layer forwards ambiguity candidates and count on a walkUp refusal', async () => {
+  const candidates = [
+    { component: 'RCTView', testID: 'outer' },
+    { component: 'Pressable', testID: 'inner' },
+  ];
+  const client = createMockClient({
+    evaluate: async () => ({
+      value: JSON.stringify({
+        error: 'Ambiguous walkUp press target',
+        testID: 'dup',
+        count: 2,
+        candidates,
+        hint: 'Pass the testID of the exact pressable component instead.',
+      }),
+    }),
+  });
+  const handler = createInteractHandler(() => client);
+  const envelope = parseEnvelope(
+    await handler({ action: 'press', testID: 'dup', walkUp: true, animated: true }),
+  );
+  assert.equal(envelope.ok, false);
+  assert.equal(envelope.meta?.count, 2);
+  assert.deepEqual(envelope.meta?.candidates, candidates);
+  assert.match(String(envelope.meta?.hint), /exact pressable/);
+});
+
+test('#525 tool layer leaves refusals without diagnostics free of meta', async () => {
+  const client = createMockClient({
+    evaluate: async () => ({ value: JSON.stringify({ error: 'Component not found' }) }),
+  });
+  const handler = createInteractHandler(() => client);
+  const envelope = parseEnvelope(await handler({ action: 'press', testID: 'gone', animated: true }));
+  assert.equal(envelope.ok, false);
+  assert.equal(envelope.meta, undefined);
 });
 
 test('#525 tool layer omits walkUp when not requested (default unchanged)', async () => {

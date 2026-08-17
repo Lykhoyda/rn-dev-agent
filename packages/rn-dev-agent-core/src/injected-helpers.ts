@@ -1548,6 +1548,12 @@ export const INJECTED_HELPERS = `
         // GH #525 — nearest self-or-ancestor onPress within 8 fiber levels (one JSX wrapper is ~3 fibers under NativeWind CssInterop);
         // candidates collapse only when they are the exact same fiber.
         var WALK_UP_MAX = 8;
+        // Host fibers carry a string type (e.g. 'RCTView') — same extraction as the ladder press path.
+        var walkFiberName = function(f) {
+          return (f && f.type && (typeof f.type === 'string'
+            ? f.type
+            : (f.type.displayName || f.type.name))) || 'Unknown';
+        };
         var walkSources = walkUpMatches.length > 0 ? walkUpMatches : [found];
         var walkCandidates = [];
         for (var wi = 0; wi < walkSources.length; wi++) {
@@ -1571,7 +1577,7 @@ export const INJECTED_HELPERS = `
           }
         }
         if (walkCandidates.length === 0) {
-          return JSON.stringify({ error: 'Component has no onPress handler', component: typeName, testID: selector, walkUpSearched: WALK_UP_MAX });
+          return JSON.stringify({ error: 'Component has no onPress handler', component: walkFiberName(found), testID: selector, walkUpSearched: WALK_UP_MAX });
         }
         if (walkCandidates.length > 1) {
           var walkDescriptors = [];
@@ -1579,7 +1585,7 @@ export const INJECTED_HELPERS = `
             var wf = walkCandidates[wk].fiber;
             var wp = wf.memoizedProps || {};
             walkDescriptors.push({
-              component: (wf.type && (wf.type.displayName || wf.type.name)) || 'Unknown',
+              component: walkFiberName(wf),
               testID: wp.testID
             });
           }
@@ -1592,7 +1598,7 @@ export const INJECTED_HELPERS = `
           });
         }
         var walkTarget = walkCandidates[0];
-        var walkTargetName = (walkTarget.fiber.type && (walkTarget.fiber.type.displayName || walkTarget.fiber.type.name)) || 'Unknown';
+        var walkTargetName = walkFiberName(walkTarget.fiber);
         if (opts.value !== undefined) {
           walkTarget.fiber.memoizedProps.onPress(opts.value);
         } else {
@@ -1601,7 +1607,7 @@ export const INJECTED_HELPERS = `
         var walkResult = { success: true, action: 'press', component: walkTargetName, testID: selector };
         if (opts.value !== undefined) walkResult.value = opts.value;
         if (walkTarget.hops > 0) {
-          walkResult.walkedUpFrom = (walkTarget.source.type && (walkTarget.source.type.displayName || walkTarget.source.type.name)) || 'Unknown';
+          walkResult.walkedUpFrom = walkFiberName(walkTarget.source);
           walkResult.walkUpLevels = walkTarget.hops;
         }
         return JSON.stringify(walkResult);
