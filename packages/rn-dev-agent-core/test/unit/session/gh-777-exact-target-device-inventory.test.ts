@@ -8,6 +8,7 @@ import {
   clearPackageProbeCache,
   discoverExactPort,
   inferPlatforms,
+  mapRegistryDeviceBinding,
   probeAndroidDeviceModels,
   probeAndroidPackages,
 } from '../../../dist/cdp/discovery.js';
@@ -252,6 +253,114 @@ test('gh-777-qa: both stores empty keeps the single pre-existing baseline read',
   const packages = probeAndroidPackages({ execute: spy.execute, ...noStores() });
   assert.ok(packages?.has(appId));
   assert.deepEqual(spy.calls, [['adb', 'shell', 'pm', 'list', 'packages']]);
+});
+
+// P1 (PR #782 / #786 review): the provider mapping is a pure three-state seam —
+// never-initialized => null, available with no/null device => {}, device present =>
+// {platform,deviceId}. Any unavailable code other than SESSION_NOT_INITIALIZED
+// (SESSION_OWNER_LOST, PROCESS_BIRTH_UNAVAILABLE, AUTHORITY_STORE_UNAVAILABLE)
+// is {}, never null. The consumer tests below still prove the {} sentinel
+// fences adb, and a throwing lookup never becomes ambient.
+test('gh-777-qa: provider mapping — unavailable authority is null', () => {
+  assert.equal(mapRegistryDeviceBinding({ available: false }), null);
+  assert.equal(
+    mapRegistryDeviceBinding({ available: false, code: 'SESSION_NOT_INITIALIZED' }),
+    null,
+  );
+});
+
+test('gh-777-qa: provider mapping — SESSION_OWNER_LOST from an initialized runtime is the fence sentinel', () => {
+  assert.deepEqual(mapRegistryDeviceBinding({ available: false, code: 'SESSION_OWNER_LOST' }), {});
+  assert.deepEqual(
+    mapRegistryDeviceBinding({ available: false, code: 'SESSION_OWNER_LOST' }, true),
+    {},
+  );
+});
+
+test('gh-777-qa: provider mapping — supervisor-present init failures are the fence sentinel', () => {
+  // Discriminating vs a5d7a4a9: that head fenced only SESSION_OWNER_LOST, so
+  // PROCESS_BIRTH_UNAVAILABLE / AUTHORITY_STORE_UNAVAILABLE collapsed to null
+  // (ambient) even though the supervisor had already supplied a session context.
+  assert.notEqual(
+    mapRegistryDeviceBinding({ available: false, code: 'PROCESS_BIRTH_UNAVAILABLE' }),
+    null,
+  );
+  assert.deepEqual(
+    mapRegistryDeviceBinding({ available: false, code: 'PROCESS_BIRTH_UNAVAILABLE' }),
+    {},
+  );
+  assert.deepEqual(
+    mapRegistryDeviceBinding({ available: false, code: 'AUTHORITY_STORE_UNAVAILABLE' }),
+    {},
+  );
+});
+
+test('gh-777-qa: provider mapping — available with no device is the fence sentinel', () => {
+  const missing = mapRegistryDeviceBinding({ available: true, bindings: {} });
+  const unbound = mapRegistryDeviceBinding({ available: true, bindings: { device: null } });
+  assert.notEqual(missing, null);
+  assert.deepEqual(missing, {});
+  assert.notEqual(unbound, null);
+  assert.deepEqual(unbound, {});
+});
+
+test('gh-777-qa: provider mapping — available with a device copies string fields only', () => {
+  assert.deepEqual(
+    mapRegistryDeviceBinding({
+      available: true,
+      bindings: {
+        device: { platform: 'android', deviceId: boundSerial, appId },
+      },
+    }),
+    { platform: 'android', deviceId: boundSerial },
+  );
+  assert.deepEqual(
+    mapRegistryDeviceBinding({
+      available: true,
+      bindings: { device: { platform: 'ios', deviceId: simulatorUdid } },
+    }),
+    { platform: 'ios', deviceId: simulatorUdid },
+  );
+  assert.deepEqual(
+    mapRegistryDeviceBinding({
+      available: true,
+      bindings: { device: { platform: 1, deviceId: false, appId } },
+    }),
+    {},
+  );
+  assert.deepEqual(
+    mapRegistryDeviceBinding({
+      available: true,
+      bindings: { device: { platform: 'android', deviceId: 99 } },
+    }),
+    { platform: 'android' },
+  );
+});
+
+test('gh-777-qa: source/Metro-bound authority with no device binding fences adb entirely', () => {
+  const spy = execSpy();
+  const stores = {
+    getSession: () => null,
+    getRegistryBinding: () => ({}),
+  };
+  assert.equal(authorizedAndroidSerial(stores), null);
+  assert.equal(probeAndroidDeviceModels({ execute: spy.execute, ...stores }), null);
+  assert.equal(probeAndroidPackages({ execute: spy.execute, ...stores }), null);
+  assert.deepEqual(spy.calls, []);
+});
+
+test('gh-777-qa: a throwing registry lookup is fenced, never ambient', () => {
+  const spy = execSpy();
+  const stores = {
+    getSession: () => null,
+    getRegistryBinding: () => {
+      throw new Error('authority runtime unavailable');
+    },
+  };
+  assert.equal(authorizedAndroidSerial(stores), null);
+  assert.equal(probeAndroidDeviceModels({ execute: spy.execute, ...stores }), null);
+  assert.equal(probeAndroidPackages({ execute: spy.execute, ...stores }), null);
+  assert.deepEqual(spy.calls, []);
 });
 
 function iosExactFixture(listedTargets: unknown[]) {

@@ -60,16 +60,32 @@ if [ -z "$DEVICE_ID" ]; then
   exit 1
 fi
 
+DEVICE_LISTING=""
+
+# A listing that could not be produced is an unknown state, not a verdict:
+# retry before reporting the device absent, so one transient spawn failure
+# cannot masquerade as "not booted".
+probe_device_listing() {
+  local attempt=1
+  while [ "$attempt" -le 3 ]; do
+    DEVICE_LISTING=$("$@" 2>/dev/null) && return 0
+    attempt=$((attempt + 1))
+  done
+  DEVICE_LISTING=""
+  return 1
+}
+
 ios_device_is_booted() {
-  local devices
-  devices=$(xcrun simctl list devices booted 2>/dev/null) || return 1
-  printf '%s\n' "$devices" | grep -Fq "($DEVICE_ID) (Booted)"
+  probe_device_listing xcrun simctl list devices booted || return 1
+  case "$DEVICE_LISTING" in
+    *"($DEVICE_ID) (Booted)"*) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 android_device_is_connected() {
-  local devices
-  devices=$(adb devices 2>/dev/null) || return 1
-  printf '%s\n' "$devices" | awk -v id="$DEVICE_ID" '$1 == id && $2 == "device" { found = 1 } END { exit !found }'
+  probe_device_listing adb devices || return 1
+  printf '%s\n' "$DEVICE_LISTING" | awk -v id="$DEVICE_ID" '$1 == id && $2 == "device" { found = 1 } END { exit !found }'
 }
 
 if [ "$PLATFORM" = "auto" ]; then

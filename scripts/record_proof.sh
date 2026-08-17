@@ -926,6 +926,21 @@ is_alive() {
   kill -0 "$pid" 2>/dev/null
 }
 
+# GH#707: an unreaped zombie has already terminated — it runs no code and its
+# pid cannot be reused until the parent reaps it, so it must read as absent
+# instead of as a live process whose command identity suddenly changed.
+is_zombie() {
+  local pid="$1"
+  local state
+  state="$(ps -p "$pid" -o state= 2>/dev/null)" || return 1
+  [[ "${state//[[:space:]]/}" == Z* ]]
+}
+
+is_present() {
+  local pid="$1"
+  is_alive "$pid" && ! is_zombie "$pid"
+}
+
 hash_process_identity() {
   {
     local index=0
@@ -1008,14 +1023,14 @@ probe_local_process() {
   LOCAL_PROCESS_STATE="unknown"
   LOCAL_PROCESS_BIRTH=""
   LOCAL_PROCESS_MARKER_MATCH="false"
-  if ! is_alive "$pid"; then
+  if ! is_present "$pid"; then
     LOCAL_PROCESS_STATE="absent"
     return 0
   fi
 
   local command
   command="$(ps -ww -p "$pid" -o command= 2>/dev/null)" || {
-    is_alive "$pid" || {
+    is_present "$pid" || {
       LOCAL_PROCESS_STATE="absent"
       return 0
     }
@@ -1040,7 +1055,7 @@ probe_local_process() {
       return 1
     }
     info="$(darwin_process_birth_info "$helper" "$pid" "$requirement" 2>/dev/null)" || {
-      is_alive "$pid" || {
+      is_present "$pid" || {
         LOCAL_PROCESS_STATE="absent"
         return 0
       }
@@ -1059,7 +1074,7 @@ probe_local_process() {
     local stat_after
     local boot_id
     stat_before="$(cat "/proc/$pid/stat" 2>/dev/null)" || {
-      [[ ! -e "/proc/$pid" ]] && {
+      { [[ ! -e "/proc/$pid" ]] || is_zombie "$pid"; } && {
         LOCAL_PROCESS_STATE="absent"
         return 0
       }
@@ -1071,7 +1086,7 @@ probe_local_process() {
       return 1
     }
     stat_after="$(cat "/proc/$pid/stat" 2>/dev/null)" || {
-      [[ ! -e "/proc/$pid" ]] && {
+      { [[ ! -e "/proc/$pid" ]] || is_zombie "$pid"; } && {
         LOCAL_PROCESS_STATE="absent"
         return 0
       }
@@ -1096,7 +1111,7 @@ probe_local_process() {
 
   local command_after
   command_after="$(ps -ww -p "$pid" -o command= 2>/dev/null)" || {
-    is_alive "$pid" || {
+    is_present "$pid" || {
       LOCAL_PROCESS_STATE="absent"
       return 0
     }
@@ -1104,6 +1119,10 @@ probe_local_process() {
     return 1
   }
   [[ "$command_after" == *"$marker"* ]] || LOCAL_PROCESS_MARKER_MATCH="false"
+  if is_zombie "$pid"; then
+    LOCAL_PROCESS_STATE="absent"
+    return 0
+  fi
   [[ "$LOCAL_PROCESS_BIRTH" =~ ^[a-f0-9]{64}$ ]] || {
     echo "Error: recorder process birth token is invalid" >&2
     return 1
@@ -2420,14 +2439,16 @@ PYEOF
   echo "Labeled video: $output ($size bytes)"
 }
 
-trap cleanup_pending_pull EXIT
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  trap cleanup_pending_pull EXIT
 
-case "${1:-}" in
-  start)       shift; cmd_start "$@" ;;
-  abort)       shift; cmd_abort "$@" ;;
-  stop)        shift; cmd_stop "$@" ;;
-  status)      shift; cmd_status "$@" ;;
-  convert-gif) shift; cmd_convert_gif "$@" ;;
-  label)       shift; cmd_label "$@" ;;
-  *)           usage ;;
-esac
+  case "${1:-}" in
+    start)       shift; cmd_start "$@" ;;
+    abort)       shift; cmd_abort "$@" ;;
+    stop)        shift; cmd_stop "$@" ;;
+    status)      shift; cmd_status "$@" ;;
+    convert-gif) shift; cmd_convert_gif "$@" ;;
+    label)       shift; cmd_label "$@" ;;
+    *)           usage ;;
+  esac
+fi

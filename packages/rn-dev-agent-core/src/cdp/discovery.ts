@@ -256,6 +256,32 @@ export interface SessionDeviceBinding {
   deviceId?: string;
 }
 
+// Pure producer for the three-state fence. Only SESSION_NOT_INITIALIZED (or an
+// unavailable status with no code) maps to null — legacy ambient may apply.
+// Any other unavailable code is a present-but-failed authority
+// (SESSION_OWNER_LOST, PROCESS_BIRTH_UNAVAILABLE, AUTHORITY_STORE_UNAVAILABLE,
+// …) and must return the {} sentinel. An available authority with no device
+// binding is also {}. A present device copies only string fields.
+export function mapRegistryDeviceBinding(
+  status:
+    | { available: false; code?: string }
+    | { available: true; bindings: Record<string, unknown> },
+  runtimeInitialized = false,
+): SessionDeviceBinding | null {
+  if (!status.available) {
+    const neverInitialized =
+      !runtimeInitialized &&
+      (status.code === undefined || status.code === 'SESSION_NOT_INITIALIZED');
+    return neverInitialized ? null : {};
+  }
+  const device = status.bindings.device as { platform?: unknown; deviceId?: unknown } | undefined;
+  if (!device) return {};
+  const mapped: SessionDeviceBinding = {};
+  if (typeof device.platform === 'string') mapped.platform = device.platform;
+  if (typeof device.deviceId === 'string') mapped.deviceId = device.deviceId;
+  return mapped;
+}
+
 export interface AndroidInventoryDependencies {
   execute?: (file: string, args: string[]) => string;
   getSession?: () => SessionDeviceBinding | null;
@@ -270,14 +296,13 @@ export function setRegistryDeviceBindingProvider(
   registryDeviceBindingProvider = provider;
 }
 
-// An unavailable registry lookup is an absence of authorization, never a grant.
+// Null means NO authority session exists in this worker (provider uninstalled
+// or the runtime reports unavailable) — only then may legacy ambient behavior
+// apply. An installed provider reporting an available authority with no device
+// binding returns the {} sentinel instead, which fences adb downstream.
 function registryDeviceBinding(): SessionDeviceBinding | null {
   if (!registryDeviceBindingProvider) return null;
-  try {
-    return registryDeviceBindingProvider() ?? null;
-  } catch {
-    return null;
-  }
+  return registryDeviceBindingProvider() ?? null;
 }
 
 function runAdbSync(file: string, args: string[]): string {
@@ -297,7 +322,13 @@ type AndroidAdbScope =
 // device-wrapper session (including its disk-rehydrated state) can only revoke.
 // Only a flow with both stores empty keeps the pre-existing single ambient read.
 function androidAdbScope(deps: AndroidInventoryDependencies = {}): AndroidAdbScope {
-  const registry = (deps.getRegistryBinding ?? registryDeviceBinding)();
+  let registry: SessionDeviceBinding | null;
+  try {
+    registry = (deps.getRegistryBinding ?? registryDeviceBinding)();
+  } catch {
+    // A failing authority lookup is an unknown state, never ambient license.
+    registry = {};
+  }
   const session = (deps.getSession ?? getActiveSession)();
   if (!registry && !session) return { kind: 'ambient' };
   const authorized =
