@@ -1545,9 +1545,9 @@ export const INJECTED_HELPERS = `
 
     try {
       if (action === 'press' && opts.walkUp === true) {
-        // GH #525 — nearest self-or-ancestor onPress within 3 fiber levels;
+        // GH #525 — nearest self-or-ancestor onPress within 8 fiber levels (one JSX wrapper is ~3 fibers under NativeWind CssInterop);
         // candidates collapse only when they are the exact same fiber.
-        var WALK_UP_MAX = 3;
+        var WALK_UP_MAX = 8;
         var walkSources = walkUpMatches.length > 0 ? walkUpMatches : [found];
         var walkCandidates = [];
         for (var wi = 0; wi < walkSources.length; wi++) {

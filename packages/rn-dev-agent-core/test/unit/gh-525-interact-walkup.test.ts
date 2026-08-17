@@ -1,7 +1,7 @@
 // GH#525 finding 2: pressing a testID that sits on a non-pressable wrapper
 // (handler on an ancestor Pressable) failed with "Component has no onPress
 // handler", forcing a snapshot + coordinate-tap detour. Opt-in walkUp:true
-// searches a bounded number of fiber ancestors (3) for the nearest onPress;
+// searches a bounded number of fiber ancestors (8) for the nearest onPress;
 // default behavior (flag absent) stays byte-for-byte identical, and the walk
 // itself refuses when no pressable ancestor exists within the bound. testID
 // resolution semantics (strict first match) are shared with direct press and
@@ -166,61 +166,37 @@ test('#525 walkUp:true presses the nearest pressable ancestor and reports the wa
   assert.equal(result.walkUpLevels, 2);
 });
 
-test('#525 walkUp:true succeeds at exactly the 3-level bound (inclusive)', () => {
-  let fired = 0;
-  const root = buildFiber({
+function wrapperChain(levels: number, testID: string, onPress: () => void): SandboxFiber {
+  // Pressable > L1 > … > L<levels-1> > View[testID] — handler `levels` fiber
+  // hops above the match. Live NativeWind evidence (GH #525 proof run): one
+  // JSX wrapper costs ~3 fibers (CssInterop.View > View > RCTView), so the
+  // bound is 8 — two wrapped JSX levels.
+  let spec: FiberSpec = { name: 'View', props: { testID } };
+  for (let i = levels - 1; i >= 1; i--) spec = { name: `L${i}`, children: [spec] };
+  return buildFiber({
     name: 'App',
-    children: [
-      {
-        name: 'Pressable',
-        props: { onPress: () => fired++ },
-        children: [
-          {
-            name: 'L1',
-            children: [{ name: 'L2', children: [{ name: 'View', props: { testID: 'card3' } }] }],
-          },
-        ],
-      },
-    ],
+    children: [{ name: 'Pressable', props: { onPress }, children: [spec] }],
   });
-  const sandbox = createSandbox({ fiberRoot: root });
+}
+
+test('#525 walkUp:true succeeds at exactly the 8-level bound (inclusive)', () => {
+  let fired = 0;
+  const sandbox = createSandbox({ fiberRoot: wrapperChain(8, 'card8', () => fired++) });
   const result = JSON.parse(
-    sandbox.__RN_AGENT.interact({ action: 'press', testID: 'card3', walkUp: true }),
+    sandbox.__RN_AGENT.interact({ action: 'press', testID: 'card8', walkUp: true }),
   );
   assert.equal(result.success, true);
   assert.equal(fired, 1);
-  assert.equal(result.walkUpLevels, 3);
+  assert.equal(result.walkUpLevels, 8);
 });
 
-test('#525 walkUp:true still refuses when the pressable sits beyond the 3-level bound', () => {
+test('#525 walkUp:true still refuses when the pressable sits beyond the 8-level bound', () => {
   let fired = 0;
-  const root = buildFiber({
-    name: 'App',
-    children: [
-      {
-        name: 'Pressable',
-        props: { onPress: () => fired++ },
-        children: [
-          {
-            name: 'L1',
-            children: [
-              {
-                name: 'L2',
-                children: [
-                  { name: 'L3', children: [{ name: 'View', props: { testID: 'deep-card' } }] },
-                ],
-              },
-            ],
-          },
-        ],
-      },
-    ],
-  });
-  const sandbox = createSandbox({ fiberRoot: root });
+  const sandbox = createSandbox({ fiberRoot: wrapperChain(9, 'deep-card', () => fired++) });
   const raw = sandbox.__RN_AGENT.interact({ action: 'press', testID: 'deep-card', walkUp: true });
   assert.equal(
     raw,
-    '{"error":"Component has no onPress handler","component":"View","testID":"deep-card","walkUpSearched":3}',
+    '{"error":"Component has no onPress handler","component":"View","testID":"deep-card","walkUpSearched":8}',
   );
   assert.equal(fired, 0);
 });
@@ -234,7 +210,7 @@ test('#525 walkUp:true refuses when no ancestor has onPress at all', () => {
   const raw = sandbox.__RN_AGENT.interact({ action: 'press', testID: 'inert', walkUp: true });
   assert.equal(
     raw,
-    '{"error":"Component has no onPress handler","component":"View","testID":"inert","walkUpSearched":3}',
+    '{"error":"Component has no onPress handler","component":"View","testID":"inert","walkUpSearched":8}',
   );
 });
 
