@@ -340,7 +340,7 @@ done
   childPid = 0;
 });
 
-test('an unreaped recorder process reads as absent, not as changed command identity', async (t) => {
+async function createUnreapedPid(registerCleanup: (cleanup: () => void) => void): Promise<number> {
   const parent = spawn(
     'python3',
     [
@@ -355,7 +355,7 @@ test('an unreaped recorder process reads as absent, not as changed command ident
     ],
     { stdio: ['ignore', 'pipe', 'ignore'] },
   );
-  t.after(() => {
+  registerCleanup(() => {
     try {
       parent.kill('SIGKILL');
     } catch {}
@@ -378,15 +378,21 @@ test('an unreaped recorder process reads as absent, not as changed command ident
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   assert.equal(probeProcessPresence(zombiePid), 'absent');
+  return zombiePid;
+}
 
+function probeLocalProcess(
+  pid: number,
+  preamble = '',
+): { status: number | null; state: string; stderr: string } {
   const probe = spawnSync(
     'bash',
     [
       '-c',
-      'source "$1"; probe_local_process "$2" "$3"; printf \'%s\\n\' "$LOCAL_PROCESS_STATE"',
+      `source "$1"; ${preamble} probe_local_process "$2" "$3"; printf '%s\\n' "$LOCAL_PROCESS_STATE"`,
       'probe',
       sourceScript,
-      String(zombiePid),
+      String(pid),
       'marker-that-a-defunct-process-cannot-carry',
     ],
     {
@@ -399,8 +405,32 @@ test('an unreaped recorder process reads as absent, not as changed command ident
       },
     },
   );
+  return { status: probe.status, state: probe.stdout.trim(), stderr: probe.stderr };
+}
+
+test('an unreaped recorder process reads as absent, not as changed command identity', async (t) => {
+  const zombiePid = await createUnreapedPid((cleanup) => t.after(cleanup));
+
+  const probe = probeLocalProcess(zombiePid);
   assert.equal(probe.status, 0, probe.stderr);
-  assert.equal(probe.stdout.trim(), 'absent');
+  assert.equal(probe.state, 'absent');
+});
+
+test('a recorder that becomes unreaped mid-probe still reads as absent', async (t) => {
+  const zombiePid = await createUnreapedPid((cleanup) => t.after(cleanup));
+
+  const probe = probeLocalProcess(
+    zombiePid,
+    [
+      '__entry_checked=0;',
+      'is_present() {',
+      '  if (( __entry_checked == 0 )); then __entry_checked=1; return 0; fi;',
+      '  is_alive "$1" && ! is_zombie "$1";',
+      '};',
+    ].join(' '),
+  );
+  assert.equal(probe.status, 0, probe.stderr);
+  assert.equal(probe.state, 'absent');
 });
 
 test('recording stop delegates signals to the authenticated supervisor', () => {

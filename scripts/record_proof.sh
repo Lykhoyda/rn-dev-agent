@@ -936,6 +936,11 @@ is_zombie() {
   [[ "${state//[[:space:]]/}" == Z* ]]
 }
 
+is_present() {
+  local pid="$1"
+  is_alive "$pid" && ! is_zombie "$pid"
+}
+
 hash_process_identity() {
   {
     local index=0
@@ -1018,14 +1023,14 @@ probe_local_process() {
   LOCAL_PROCESS_STATE="unknown"
   LOCAL_PROCESS_BIRTH=""
   LOCAL_PROCESS_MARKER_MATCH="false"
-  if ! is_alive "$pid" || is_zombie "$pid"; then
+  if ! is_present "$pid"; then
     LOCAL_PROCESS_STATE="absent"
     return 0
   fi
 
   local command
   command="$(ps -ww -p "$pid" -o command= 2>/dev/null)" || {
-    is_alive "$pid" || {
+    is_present "$pid" || {
       LOCAL_PROCESS_STATE="absent"
       return 0
     }
@@ -1050,7 +1055,7 @@ probe_local_process() {
       return 1
     }
     info="$(darwin_process_birth_info "$helper" "$pid" "$requirement" 2>/dev/null)" || {
-      is_alive "$pid" || {
+      is_present "$pid" || {
         LOCAL_PROCESS_STATE="absent"
         return 0
       }
@@ -1069,7 +1074,7 @@ probe_local_process() {
     local stat_after
     local boot_id
     stat_before="$(cat "/proc/$pid/stat" 2>/dev/null)" || {
-      [[ ! -e "/proc/$pid" ]] && {
+      { [[ ! -e "/proc/$pid" ]] || is_zombie "$pid"; } && {
         LOCAL_PROCESS_STATE="absent"
         return 0
       }
@@ -1081,7 +1086,7 @@ probe_local_process() {
       return 1
     }
     stat_after="$(cat "/proc/$pid/stat" 2>/dev/null)" || {
-      [[ ! -e "/proc/$pid" ]] && {
+      { [[ ! -e "/proc/$pid" ]] || is_zombie "$pid"; } && {
         LOCAL_PROCESS_STATE="absent"
         return 0
       }
@@ -1106,7 +1111,7 @@ probe_local_process() {
 
   local command_after
   command_after="$(ps -ww -p "$pid" -o command= 2>/dev/null)" || {
-    is_alive "$pid" || {
+    is_present "$pid" || {
       LOCAL_PROCESS_STATE="absent"
       return 0
     }
