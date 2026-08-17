@@ -202,7 +202,7 @@ function parseProducesMap(raw) {
   for (const part of inner.split(",")) {
     const kv = part.match(/^\s*([a-zA-Z_][\w.-]*)\s*:\s*(.+?)\s*$/);
     if (!kv)
-      continue;
+      return null;
     const key = kv[1];
     const valueRaw = kv[2].trim();
     if (/^(true|false)$/i.test(valueRaw)) {

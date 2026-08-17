@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 42;
+export const HELPERS_VERSION = 43;
 
 export const INJECTED_HELPERS = `
 (function() {
@@ -24,12 +24,12 @@ export const INJECTED_HELPERS = `
   // allowlist plus the scan bound keep the probe fail-closed: a mounted dev app
   // always renders named composites (AppContainer renders LogBox beside them).
   var NAV_SHELL_SCAN_MAX = 200;
-  var NAV_SHELL_NAME_RE = /^_?LogBox/;
   // renderApplication wraps EVERY surface (LogBox's included) in
   // '<debugName>(RootComponent)' > AppContainer, and dev AppContainer renders two
   // composite Views plus these overlays — so the dev shell is not app content. An
   // app root still carries its own '<appName>(RootComponent)' plus app
-  // composites, which are not allowlisted.
+  // composites, which are not allowlisted. Exact names only: a real app merely
+  // NAMED LogBox-something (e.g. 'LogBoxDemo(RootComponent)') is app content.
   var NAV_SHELL_WRAPPERS = [
     'AppContainer',
     'View',
@@ -38,7 +38,14 @@ export const INJECTED_HELPERS = `
     'ReactDevToolsOverlayDeferred',
     'Inspector',
     'InspectorDeferred',
-    'TraceUpdateOverlay'
+    'TraceUpdateOverlay',
+    'LogBox(RootComponent)',
+    'LogBoxStateSubscription',
+    '_LogBoxStateSubscription',
+    'LogBoxNotificationContainer',
+    '_LogBoxNotificationContainer',
+    'LogBoxInspectorContainer',
+    '_LogBoxInspectorContainer'
   ];
 
   // Reset by every root-iteration pass; only valid when read synchronously
@@ -211,7 +218,7 @@ export const INJECTED_HELPERS = `
   }
 
   function navIsShellComposite(name) {
-    return NAV_SHELL_NAME_RE.test(name) || NAV_SHELL_WRAPPERS.indexOf(name) !== -1;
+    return NAV_SHELL_WRAPPERS.indexOf(name) !== -1;
   }
 
   // GH #525 — does this root carry app content? Bounded DFS over composites: any
@@ -245,6 +252,60 @@ export const INJECTED_HELPERS = `
       }
     }
     return true;
+  }
+
+  // GH #525 — bundled-framework evidence for getNavState. Evaluated code cannot
+  // require() by package name (Metro resolves only exact dev verboseNames), so
+  // the proof is Metro's dev module registry: __r.getModules() maps module IDs
+  // to definitions whose verboseName carries the bundled file path. Bounded and
+  // fail-closed: no registry, a throwing registry, or nothing matched within
+  // the bound degrade to null (the legacy message). A react-navigation match
+  // found WITHIN the bound is still reported when the bound then trips —
+  // positive evidence is monotone, and expo-router bundles @react-navigation/*
+  // so the hedged message stays truthful even if expo-router sat past the cut.
+  var NAV_MODULE_SCAN_MAX = 20000;
+
+  function navFrameworkFromModuleName(name) {
+    if (typeof name !== 'string') return null;
+    if (name.indexOf('node_modules/expo-router/') !== -1) return 'expo-router';
+    if (name.indexOf('node_modules/@react-navigation/') !== -1) return 'react-navigation';
+    return null;
+  }
+
+  function navDetectBundledFramework() {
+    try {
+      var metroReq = globalThis.__r;
+      if (!metroReq || typeof metroReq.getModules !== 'function') return null;
+      var mods = metroReq.getModules();
+      if (!mods) return null;
+      var found = null;
+      var seen = 0;
+      if (typeof mods.values === 'function') {
+        var iterator = mods.values();
+        var step;
+        while (!(step = iterator.next()).done) {
+          if (++seen > NAV_MODULE_SCAN_MAX) return found;
+          var hit = navFrameworkFromModuleName(step.value && step.value.verboseName);
+          // expo-router bundles @react-navigation underneath — keep scanning
+          // past a react-navigation hit so the more specific framework wins.
+          if (hit === 'expo-router') return hit;
+          if (hit) found = hit;
+        }
+      } else {
+        // Legacy object registry: enumerate incrementally so the bound also
+        // limits enumeration work, not just inspection.
+        for (var key in mods) {
+          if (!Object.prototype.hasOwnProperty.call(mods, key)) continue;
+          if (++seen > NAV_MODULE_SCAN_MAX) return found;
+          var hitObj = navFrameworkFromModuleName(mods[key] && mods[key].verboseName);
+          if (hitObj === 'expo-router') return hitObj;
+          if (hitObj) found = hitObj;
+        }
+      }
+      return found;
+    } catch (eNavFw) {
+      return null;
+    }
   }
 
   // GH #126 Gap B — convert a user-provided React component instance into
@@ -825,14 +886,7 @@ export const INJECTED_HELPERS = `
           retryInMs: 2000
         });
       }
-      var navFw = null;
-      try {
-        if (typeof require === 'function') {
-          try { if (require('@react-navigation/native')) navFw = 'react-navigation'; } catch(e1) {}
-          if (!navFw) { try { if (require('@react-navigation/core')) navFw = 'react-navigation'; } catch(e2) {} }
-          if (!navFw) { try { if (require('expo-router')) navFw = 'expo-router'; } catch(e3) {} }
-        }
-      } catch(e0) {}
+      var navFw = navDetectBundledFramework();
       if (navFw) {
         var navFwName = navFw === 'expo-router' ? 'Expo Router' : 'React Navigation';
         return JSON.stringify({

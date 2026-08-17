@@ -3,11 +3,13 @@
 // was still mounting — in a project where the router was introspected minutes
 // earlier. The helper must distinguish, in evidence order: (a) no fiber roots
 // yet (bundle still loading), (b) the framework provably in the bundle via
-// require(), (c) every committed root is nothing but the dev LogBox shell, so
-// no app UI has rendered yet — from (d) a genuinely absent navigation
-// framework; only (d) leads with the framework question. All evidence is
-// read from CURRENT render state: no injection timestamps, no age inference,
-// and any detection miss degrades to (d) rather than claiming mounting.
+// Metro's dev module registry (__r.getModules() verboseNames — runtime string
+// require() is NOT available to evaluated code, review r3798017292), (c) every
+// committed root is nothing but the dev LogBox shell, so no app UI has
+// rendered yet — from (d) a genuinely absent navigation framework; only (d)
+// leads with the framework question. All evidence is read from CURRENT render
+// state: no injection timestamps, no age inference, and any detection miss
+// degrades to (d) rather than claiming mounting.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
@@ -37,7 +39,9 @@ interface SandboxFiber {
   stateNode: null;
 }
 
-function createSandbox(opts: { hook?: unknown; require?: (name: string) => unknown } = {}) {
+function createSandbox(
+  opts: { hook?: unknown; metroRegistry?: unknown; require?: (name: string) => unknown } = {},
+) {
   const sandbox: Record<string, unknown> = {
     Array,
     Object,
@@ -62,9 +66,25 @@ function createSandbox(opts: { hook?: unknown; require?: (name: string) => unkno
   sandbox.globalThis = sandbox;
   if (opts.hook !== undefined) sandbox.__REACT_DEVTOOLS_GLOBAL_HOOK__ = opts.hook;
   if (opts.require) sandbox.require = opts.require;
+  if (opts.metroRegistry !== undefined) {
+    sandbox.__r = { getModules: () => opts.metroRegistry };
+  }
   vm.createContext(sandbox);
   vm.runInContext(INJECTED_HELPERS, sandbox);
   return sandbox as Record<string, any>;
+}
+
+// Metro's dev module registry (metro-runtime src/polyfills/require.js): a
+// Map<moduleId, {verboseName}> that __r.getModules() exposes in dev builds.
+function metroRegistry(verboseNames: string[]): Map<number, { verboseName: string }> {
+  return new Map(verboseNames.map((name, i) => [i, { verboseName: name }]));
+}
+
+// Metro's runtime require, faithfully: after bundling, string module names
+// resolve only as exact registered verboseNames, so a package name like
+// '@react-navigation/native' throws — evaluated CDP code can never use it.
+function metroFaithfulRequire(name: string): never {
+  throw new Error(`Unknown named module: "${name}"`);
 }
 
 function buildFiber(spec: FiberSpec, parent: SandboxFiber | null = null): SandboxFiber {
@@ -177,9 +197,9 @@ function plainAppRoot(): SandboxFiber {
 }
 
 // The main app surface, same dev-shell scaffolding with the app's own tree inside.
-function appSurface(appTree: FiberSpec): FiberSpec {
+function appSurface(appTree: FiberSpec, surfaceName = 'main(RootComponent)'): FiberSpec {
   return {
-    name: 'main(RootComponent)',
+    name: surfaceName,
     children: [
       {
         name: 'AppContainer',
@@ -204,18 +224,92 @@ test('#525 no fiber roots yet: reports app still mounting with retry, not a fram
 });
 
 test('#525 framework provably in the bundle but no nav state: evidence-based hedged message', () => {
+  // The real injected runtime: string require() throws, and the only bundle
+  // evidence is Metro's dev module registry. Fails when detection leans on
+  // runtime require('@react-navigation/native') (review r3798017292).
   const sandbox = createSandbox({
     hook: hookWithRoots([plainAppRoot()]),
-    require: (name: string) => {
-      if (name === '@react-navigation/native') return {};
-      throw new Error(`module not bundled: ${name}`);
-    },
+    require: metroFaithfulRequire,
+    metroRegistry: metroRegistry([
+      'node_modules/react-native/index.js',
+      'node_modules/@react-navigation/native/lib/module/index.js',
+      'src/screens/HomeScreen.tsx',
+    ]),
   });
   const result = JSON.parse(sandbox.__RN_AGENT.getNavState());
   assert.ok(result.error, 'expected an error payload');
   assert.equal(result.frameworkDetected, 'react-navigation');
   assert.match(result.error, /may still be mounting[\s\S]*retry in ~2s/i);
   assert.doesNotMatch(result.error, /Is React Navigation or Expo Router installed\?/);
+});
+
+test('#525 expo-router precedence: its bundled react-navigation dependency does not mask it', () => {
+  const sandbox = createSandbox({
+    hook: hookWithRoots([plainAppRoot()]),
+    require: metroFaithfulRequire,
+    metroRegistry: metroRegistry([
+      'node_modules/@react-navigation/core/lib/module/index.js',
+      'node_modules/expo-router/build/index.js',
+    ]),
+  });
+  const result = JSON.parse(sandbox.__RN_AGENT.getNavState());
+  assert.equal(result.frameworkDetected, 'expo-router');
+  assert.match(result.error, /Expo Router/);
+});
+
+test('#525 legacy object-shaped Metro registries still count as bundle evidence', () => {
+  const sandbox = createSandbox({
+    hook: hookWithRoots([plainAppRoot()]),
+    require: metroFaithfulRequire,
+    metroRegistry: {
+      0: { verboseName: 'node_modules/react-native/index.js' },
+      7: { verboseName: 'node_modules/@react-navigation/native/lib/module/index.js' },
+    },
+  });
+  const result = JSON.parse(sandbox.__RN_AGENT.getNavState());
+  assert.equal(result.frameworkDetected, 'react-navigation');
+});
+
+test('#525 a registry without navigation modules keeps the legacy message for a mounted app', () => {
+  // Disconfirming case: registry evidence must not fire on unrelated modules,
+  // and app source paths merely NAMED like the router are not the router.
+  const sandbox = createSandbox({
+    hook: hookWithRoots([plainAppRoot()]),
+    require: metroFaithfulRequire,
+    metroRegistry: metroRegistry([
+      'node_modules/react-native/index.js',
+      'src/expo-router/helpers.ts',
+      'src/screens/@react-navigation-shim.ts',
+    ]),
+  });
+  const result = JSON.parse(sandbox.__RN_AGENT.getNavState());
+  assert.equal(result.error, LEGACY_MESSAGE);
+  assert.equal(result.frameworkDetected, undefined);
+});
+
+test('#525 a nav module beyond the bounded registry scan is not detected (fail-closed)', () => {
+  const names: string[] = [];
+  for (let i = 0; i < 20000; i++) names.push(`src/generated/module-${i}.ts`);
+  names.push('node_modules/@react-navigation/native/lib/module/index.js');
+  const sandbox = createSandbox({
+    hook: hookWithRoots([plainAppRoot()]),
+    require: metroFaithfulRequire,
+    metroRegistry: metroRegistry(names),
+  });
+  const result = JSON.parse(sandbox.__RN_AGENT.getNavState());
+  assert.equal(result.error, LEGACY_MESSAGE);
+  assert.equal(result.frameworkDetected, undefined);
+});
+
+test('#525 a throwing module registry degrades to the legacy message', () => {
+  const sandbox = createSandbox({ hook: hookWithRoots([plainAppRoot()]) });
+  sandbox.__r = {
+    getModules: () => {
+      throw new Error('registry unavailable');
+    },
+  };
+  const result = JSON.parse(sandbox.__RN_AGENT.getNavState());
+  assert.equal(result.error, LEGACY_MESSAGE);
 });
 
 test('#525 post-reload shell-only tree: hedged mounting retry, never the bare framework question', () => {
@@ -260,6 +354,27 @@ test('#525 mounted app root that embeds the LogBox container: the genuine framew
   assert.equal(result.shellOnly, undefined);
 });
 
+test('#525 a real app registered as LogBoxDemo is app content, never the dev shell', () => {
+  // React Native names the wrapper '<appName>(RootComponent)', so an app
+  // registered as 'LogBoxDemo' renders 'LogBoxDemo(RootComponent)'. A prefix
+  // allowlist reads that as dev-shell and reports mounting forever (review
+  // r3798017304); only exact known LogBox names may classify as shell.
+  const sandbox = createSandbox({
+    hook: hookWithRoots([
+      buildFiber(
+        appSurface(
+          { name: 'View', children: [{ name: 'RCTView', host: true }] },
+          'LogBoxDemo(RootComponent)',
+        ),
+      ),
+    ]),
+  });
+  const result = JSON.parse(sandbox.__RN_AGENT.getNavState());
+  assert.equal(result.error, LEGACY_MESSAGE);
+  assert.notEqual(result.mounting, true);
+  assert.equal(result.shellOnly, undefined);
+});
+
 test('#525 the app surface RootComponent wrapper alone keeps the legacy message', () => {
   // Allowlisting AppContainer, View and the dev overlays must not open a hole: a
   // splash-style surface rendering only Views is still an app surface, because
@@ -275,7 +390,7 @@ test('#525 the app surface RootComponent wrapper alone keeps the legacy message'
 });
 
 test('#525 an unrecognized composite inside an otherwise pure shell degrades to the legacy message', () => {
-  // Fail-closed on renamed/unknown internals: only LogBox* composites qualify.
+  // Fail-closed on renamed/unknown internals: only exact known names qualify.
   const sandbox = createSandbox({
     hook: hookWithRoots([
       buildFiber({
@@ -298,11 +413,11 @@ test('#525 an app root alongside the LogBox shell can NOT be read as shell-only'
   assert.notEqual(result.mounting, true);
 });
 
-test('#525 a LogBox-named tree larger than the scan bound degrades to the legacy message', () => {
+test('#525 an allowlisted tree larger than the scan bound degrades to the legacy message', () => {
   // Fail-closed: a tree the bounded probe cannot fully walk is treated as app
   // content, never as a shell — a detection miss must not fake mounting.
   let deep: FiberSpec = { name: 'RCTView', host: true };
-  for (let i = 0; i < 250; i++) deep = { name: `LogBoxWrapper${i}`, children: [deep] };
+  for (let i = 0; i < 250; i++) deep = { name: 'View', children: [deep] };
   const sandbox = createSandbox({
     hook: hookWithRoots([buildFiber({ name: 'LogBoxStateSubscription', children: [deep] })]),
   });

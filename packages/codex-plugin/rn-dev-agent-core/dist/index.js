@@ -52941,7 +52941,7 @@ async function detectBridge(client2, evaluate = (expression) => client2.evaluate
 init_logger();
 
 // packages/rn-dev-agent-core/dist/injected-helpers.js
-var HELPERS_VERSION = 42;
+var HELPERS_VERSION = 43;
 var INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -52962,12 +52962,12 @@ var INJECTED_HELPERS = `
   // allowlist plus the scan bound keep the probe fail-closed: a mounted dev app
   // always renders named composites (AppContainer renders LogBox beside them).
   var NAV_SHELL_SCAN_MAX = 200;
-  var NAV_SHELL_NAME_RE = /^_?LogBox/;
   // renderApplication wraps EVERY surface (LogBox's included) in
   // '<debugName>(RootComponent)' > AppContainer, and dev AppContainer renders two
   // composite Views plus these overlays \u2014 so the dev shell is not app content. An
   // app root still carries its own '<appName>(RootComponent)' plus app
-  // composites, which are not allowlisted.
+  // composites, which are not allowlisted. Exact names only: a real app merely
+  // NAMED LogBox-something (e.g. 'LogBoxDemo(RootComponent)') is app content.
   var NAV_SHELL_WRAPPERS = [
     'AppContainer',
     'View',
@@ -52976,7 +52976,14 @@ var INJECTED_HELPERS = `
     'ReactDevToolsOverlayDeferred',
     'Inspector',
     'InspectorDeferred',
-    'TraceUpdateOverlay'
+    'TraceUpdateOverlay',
+    'LogBox(RootComponent)',
+    'LogBoxStateSubscription',
+    '_LogBoxStateSubscription',
+    'LogBoxNotificationContainer',
+    '_LogBoxNotificationContainer',
+    'LogBoxInspectorContainer',
+    '_LogBoxInspectorContainer'
   ];
 
   // Reset by every root-iteration pass; only valid when read synchronously
@@ -53149,7 +53156,7 @@ var INJECTED_HELPERS = `
   }
 
   function navIsShellComposite(name) {
-    return NAV_SHELL_NAME_RE.test(name) || NAV_SHELL_WRAPPERS.indexOf(name) !== -1;
+    return NAV_SHELL_WRAPPERS.indexOf(name) !== -1;
   }
 
   // GH #525 \u2014 does this root carry app content? Bounded DFS over composites: any
@@ -53183,6 +53190,60 @@ var INJECTED_HELPERS = `
       }
     }
     return true;
+  }
+
+  // GH #525 \u2014 bundled-framework evidence for getNavState. Evaluated code cannot
+  // require() by package name (Metro resolves only exact dev verboseNames), so
+  // the proof is Metro's dev module registry: __r.getModules() maps module IDs
+  // to definitions whose verboseName carries the bundled file path. Bounded and
+  // fail-closed: no registry, a throwing registry, or nothing matched within
+  // the bound degrade to null (the legacy message). A react-navigation match
+  // found WITHIN the bound is still reported when the bound then trips \u2014
+  // positive evidence is monotone, and expo-router bundles @react-navigation/*
+  // so the hedged message stays truthful even if expo-router sat past the cut.
+  var NAV_MODULE_SCAN_MAX = 20000;
+
+  function navFrameworkFromModuleName(name) {
+    if (typeof name !== 'string') return null;
+    if (name.indexOf('node_modules/expo-router/') !== -1) return 'expo-router';
+    if (name.indexOf('node_modules/@react-navigation/') !== -1) return 'react-navigation';
+    return null;
+  }
+
+  function navDetectBundledFramework() {
+    try {
+      var metroReq = globalThis.__r;
+      if (!metroReq || typeof metroReq.getModules !== 'function') return null;
+      var mods = metroReq.getModules();
+      if (!mods) return null;
+      var found = null;
+      var seen = 0;
+      if (typeof mods.values === 'function') {
+        var iterator = mods.values();
+        var step;
+        while (!(step = iterator.next()).done) {
+          if (++seen > NAV_MODULE_SCAN_MAX) return found;
+          var hit = navFrameworkFromModuleName(step.value && step.value.verboseName);
+          // expo-router bundles @react-navigation underneath \u2014 keep scanning
+          // past a react-navigation hit so the more specific framework wins.
+          if (hit === 'expo-router') return hit;
+          if (hit) found = hit;
+        }
+      } else {
+        // Legacy object registry: enumerate incrementally so the bound also
+        // limits enumeration work, not just inspection.
+        for (var key in mods) {
+          if (!Object.prototype.hasOwnProperty.call(mods, key)) continue;
+          if (++seen > NAV_MODULE_SCAN_MAX) return found;
+          var hitObj = navFrameworkFromModuleName(mods[key] && mods[key].verboseName);
+          if (hitObj === 'expo-router') return hitObj;
+          if (hitObj) found = hitObj;
+        }
+      }
+      return found;
+    } catch (eNavFw) {
+      return null;
+    }
   }
 
   // GH #126 Gap B \u2014 convert a user-provided React component instance into
@@ -53763,14 +53824,7 @@ var INJECTED_HELPERS = `
           retryInMs: 2000
         });
       }
-      var navFw = null;
-      try {
-        if (typeof require === 'function') {
-          try { if (require('@react-navigation/native')) navFw = 'react-navigation'; } catch(e1) {}
-          if (!navFw) { try { if (require('@react-navigation/core')) navFw = 'react-navigation'; } catch(e2) {} }
-          if (!navFw) { try { if (require('expo-router')) navFw = 'expo-router'; } catch(e3) {} }
-        }
-      } catch(e0) {}
+      var navFw = navDetectBundledFramework();
       if (navFw) {
         var navFwName = navFw === 'expo-router' ? 'Expo Router' : 'React Navigation';
         return JSON.stringify({
@@ -58943,7 +58997,7 @@ function parseProducesMap(raw) {
   for (const part of inner.split(",")) {
     const kv = part.match(/^\s*([a-zA-Z_][\w.-]*)\s*:\s*(.+?)\s*$/);
     if (!kv)
-      continue;
+      return void 0;
     const key = kv[1];
     const valueRaw = kv[2].trim();
     if (/^(true|false)$/i.test(valueRaw)) {
@@ -87706,7 +87760,7 @@ trackedTool("cdp_dev_settings", "Control React Native dev settings programmatica
     "hideDevMenu"
   ]).describe("Dev menu action to execute")
 }, createDevSettingsHandler(getClient));
-trackedTool("cdp_interact", 'Interact with React components by testID (preferred) or accessibilityLabel \u2014 press buttons, long-press, type text, scroll, or set a React Hook Form field value directly. Calls JS handlers directly (not native touch). testID matches strictly; accessibilityLabel matches in tiers (exact \u2192 trim/case-insensitive \u2192 substring) and returns an ambiguity error when >1 component matches. Prefer testID for unambiguous targeting. For native gestures (swipe, drag), use device_swipe/device_press instead. setFieldValue (GH #126 Gap A): explicit fallback when typeText fails because the field routes through a Controller \u2014 pass name + value, walks UP to the nearest FormProvider and calls its setValue. Use only when typeText returns "no handler". Portal-root coverage (GH #126 Gap B): if your app uses react-native-actions-sheet, @gorhom/bottom-sheet, or any Modal-based portal whose fiber root is not in React DevTools\' getFiberRoots() registry, set `globalThis.__RN_AGENT_EXTRA_ROOTS__ = () => [sheetRef.current, ...]` in your __DEV__ block \u2014 testID resolution will then reach inside those subtrees. See CLAUDE.md template for the canonical snippet.', {
+trackedTool("cdp_interact", 'Interact with React components by testID (preferred) or accessibilityLabel \u2014 press buttons, long-press, type text, scroll, or set a React Hook Form field value directly. Calls JS handlers directly (not native touch). testID matches strictly; accessibilityLabel matches in tiers (exact \u2192 trim/case-insensitive \u2192 substring) and returns an ambiguity error when >1 component matches. Prefer testID for unambiguous targeting. For native gestures (swipe, drag), use device_swipe/device_press instead. setFieldValue (GH #126 Gap A): explicit fallback when typeText fails because the field routes through a Controller \u2014 pass name + value, walks UP to the nearest FormProvider and calls its setValue. Use only when typeText returns "no handler". Portal-root coverage (GH #126 Gap B): if your app uses react-native-actions-sheet, @gorhom/bottom-sheet, or any Modal-based portal whose fiber root is not in React DevTools\' getFiberRoots() registry, set `globalThis.__RN_AGENT_EXTRA_ROOTS__ = () => [sheetRef.current, ...]` in your __DEV__ block \u2014 testID resolution will then reach inside those subtrees. See CLAUDE.md template for the canonical snippet. walkUp (GH #525, opt-in): for action:"press" with a testID/accessibilityLabel selector only \u2014 when the matched component has no onPress (testID on a non-pressable wrapper), walks up at most 8 fiber ancestors and presses the nearest pressable. Refuses when no pressable exists within the bound, when duplicate matches resolve to distinct pressable ancestors (ambiguous), or when combined with a non-press action or a role/name/text/placeholder selector; default behavior without the flag is unchanged.', {
   action: external_exports.enum(["press", "longPress", "typeText", "scroll", "setFieldValue"]).describe("press: calls onPress (with `value` if provided, for radio/chip-style value-bearing controls). longPress: calls onLongPress. typeText: calls onChangeText. scroll: calls scrollTo or onScroll. setFieldValue: walks UP to nearest React Hook Form FormProvider and calls setValue(name, value, {shouldValidate, shouldDirty})."),
   testID: external_exports.string().optional().describe("testID prop of the target component (strict match \u2014 preferred). For setFieldValue, this is the testID anchor inside the form's subtree from which to walk up."),
   accessibilityLabel: external_exports.string().optional().describe("accessibilityLabel prop (used if testID not provided). Tiered match: exact \u2192 normalized (trim+lowercase) \u2192 substring. Returns Ambiguous error if >1 component matches."),
@@ -87722,7 +87776,7 @@ trackedTool("cdp_interact", 'Interact with React components by testID (preferred
   value: external_exports.union([external_exports.string(), external_exports.number(), external_exports.boolean()]).optional().describe('Value to set. For setFieldValue: passed to setValue (a digit-string is kept a string when the field currently holds a string \u2014 give string fields a "" default so this applies). For press: when provided, onPress receives this value instead of a synthetic event \u2014 use for radio/chip-style value-bearing controls.'),
   shouldValidate: external_exports.boolean().optional().describe("For setFieldValue: pass-through to setValue's options.shouldValidate (default true). Set false to suppress synchronous validation."),
   shouldDirty: external_exports.boolean().optional().describe("For setFieldValue: pass-through to setValue's options.shouldDirty (default true). Set false to keep the field marked pristine."),
-  walkUp: external_exports.boolean().optional().describe("press only, testID/accessibilityLabel selectors only (opt-in, GH #525): when the matched component has no onPress (testID on a non-pressable wrapper), search up to 8 fiber ancestors for the nearest pressable and press it. Refuses when no pressable exists within the bound, when duplicate matches resolve to distinct pressable fibers (ambiguity), or when combined with a non-press action or a role/name/text/placeholder selector. Default behavior without the flag is unchanged.")
+  walkUp: external_exports.boolean().optional().describe("Opt-in press-only nearest-pressable-ancestor walk")
 }, createInteractHandler(getClient));
 trackedTool("collect_logs", "Collect logs from multiple sources in parallel: JS console (Hermes ring buffer snapshot), native iOS (xcrun simctl log stream), native Android (adb logcat). Results merged and sorted by timestamp. Works without CDP when only native sources requested. Use when debugging crashes that span JS and native layers.", {
   sources: external_exports.array(external_exports.enum(["js_console", "native_ios", "native_android"])).default(["js_console"]).describe("Log sources to collect from (default: js_console only)"),

@@ -8,12 +8,12 @@ description: Use when the user wants to send feedback, report an rn-dev-agent bu
 Follow the complete workflow in `../../commands/send-feedback.md`.
 
 Collect diagnostics with the plugin-owned `scripts/collect-feedback.sh`,
-resolving the plugin root with the workflow's Step 2 snippet. In Claude Code
-sessions `CLAUDE_PLUGIN_ROOT` points at the exact installed plugin version, so
-the packaged collector at `scripts/collect-feedback.sh` under that root is the
-supported surface. The `rn-collect-feedback` executable is a guarded legacy
-fallback only — marketplace installs do not add global executables; it exists
-solely for repo checkouts that put `bin/` on `PATH`.
+resolving the plugin root with the workflow's Step 2 snippet — each host's
+workflow document owns its own root resolution. The packaged collector at
+`scripts/collect-feedback.sh` under the resolved plugin root is the supported
+surface on every host. The `rn-collect-feedback` executable is a guarded
+legacy fallback only — plugin installs do not add global executables; it
+exists solely for repo checkouts that put `bin/` on `PATH`.
 
 The workflow's review gate is mandatory. Show the exact sanitized issue body
 to the user and obtain confirmation before submitting it with `gh`.

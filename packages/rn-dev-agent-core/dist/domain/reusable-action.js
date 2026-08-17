@@ -225,9 +225,9 @@ export function parseM7Header(yamlText, fallbackId) {
  * Values are typed as boolean (`true`/`false`), number (digits + optional
  * dot + optional sign), or string (everything else, with surrounding
  * single/double quotes stripped). Returns undefined when the input is
- * empty or unparseable so the caller can omit the field rather than
- * carry a half-parsed object. Single-line only; commas + newlines
- * inside values are not supported in v1.
+ * empty or ANY segment is malformed (GH #525) so the caller can omit
+ * the field rather than carry a half-parsed object. Single-line only;
+ * commas + newlines inside values are not supported in v1.
  */
 function parseProducesMap(raw) {
     const inner = raw
@@ -240,7 +240,7 @@ function parseProducesMap(raw) {
     for (const part of inner.split(',')) {
         const kv = part.match(/^\s*([a-zA-Z_][\w.-]*)\s*:\s*(.+?)\s*$/);
         if (!kv)
-            continue;
+            return undefined;
         const key = kv[1];
         const valueRaw = kv[2].trim();
         if (/^(true|false)$/i.test(valueRaw)) {

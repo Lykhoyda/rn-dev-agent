@@ -250,17 +250,42 @@ function namedHostRoots(file: string): string[] {
   return HOST_ROOT_ENV_VARS.filter((name) => identifiers.has(name)).sort();
 }
 
-test('#525 the canonical and Claude-packaged sending-feedback skill name only the Claude plugin root', () => {
-  for (const skill of [
-    join(CANONICAL_SKILLS, 'sending-feedback', 'SKILL.md'),
-    join(CLAUDE_PKG, 'skills', 'sending-feedback', 'SKILL.md'),
-  ]) {
-    assert.deepEqual(
-      namedHostRoots(skill),
-      ['CLAUDE_PLUGIN_ROOT'],
-      `${skill} must describe the Claude resolution surface only`,
-    );
-  }
+test('#525 the canonical sending-feedback skill stays host-neutral (review r3798017284)', () => {
+  // shared-agent-knowledge is the host-neutral source of truth: it may not
+  // name any host's plugin-root variable or any host session by name — that
+  // doctrine belongs to the per-host workflow surfaces.
+  const canonical = join(CANONICAL_SKILLS, 'sending-feedback', 'SKILL.md');
+  const canonicalText = fs.readFileSync(canonical, 'utf8');
+  assert.deepEqual(
+    namedHostRoots(canonical),
+    [],
+    `${canonical} must not name host-specific plugin roots`,
+  );
+  assert.doesNotMatch(
+    canonicalText,
+    /\bClaude\b|\bCodex\b/i,
+    `${canonical} must not name any host`,
+  );
+  assert.doesNotMatch(
+    canonicalText,
+    /\b\w+_PLUGIN_ROOT\b|\bCODEX_HOME\b/,
+    `${canonical} must not name any plugin-root-shaped identifier`,
+  );
+
+  // The Claude package ships the canonical skill byte-for-byte (sync gate) and
+  // keeps the Claude-specific CLAUDE_PLUGIN_ROOT guidance in its workflow.
+  const claudeSkill = join(CLAUDE_PKG, 'skills', 'sending-feedback', 'SKILL.md');
+  assert.equal(
+    fs.readFileSync(claudeSkill, 'utf8'),
+    canonicalText,
+    `${claudeSkill} must mirror the canonical skill byte-for-byte`,
+  );
+  const claudeWorkflow = join(CLAUDE_PKG, 'commands', 'send-feedback.md');
+  assert.ok(
+    namedHostRoots(claudeWorkflow).includes('CLAUDE_PLUGIN_ROOT'),
+    `${claudeWorkflow} must retain the Claude plugin-root collector guidance`,
+  );
+
   const codexSkill = join(CODEX_PKG, 'skills', 'sending-feedback', 'SKILL.md');
   assert.ok(
     !namedHostRoots(codexSkill).includes('CLAUDE_PLUGIN_ROOT'),

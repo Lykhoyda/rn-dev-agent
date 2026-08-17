@@ -2160,7 +2160,7 @@ trackedTool(
 
 trackedTool(
   'cdp_interact',
-  'Interact with React components by testID (preferred) or accessibilityLabel — press buttons, long-press, type text, scroll, or set a React Hook Form field value directly. Calls JS handlers directly (not native touch). testID matches strictly; accessibilityLabel matches in tiers (exact → trim/case-insensitive → substring) and returns an ambiguity error when >1 component matches. Prefer testID for unambiguous targeting. For native gestures (swipe, drag), use device_swipe/device_press instead. setFieldValue (GH #126 Gap A): explicit fallback when typeText fails because the field routes through a Controller — pass name + value, walks UP to the nearest FormProvider and calls its setValue. Use only when typeText returns "no handler". Portal-root coverage (GH #126 Gap B): if your app uses react-native-actions-sheet, @gorhom/bottom-sheet, or any Modal-based portal whose fiber root is not in React DevTools\' getFiberRoots() registry, set `globalThis.__RN_AGENT_EXTRA_ROOTS__ = () => [sheetRef.current, ...]` in your __DEV__ block — testID resolution will then reach inside those subtrees. See CLAUDE.md template for the canonical snippet.',
+  'Interact with React components by testID (preferred) or accessibilityLabel — press buttons, long-press, type text, scroll, or set a React Hook Form field value directly. Calls JS handlers directly (not native touch). testID matches strictly; accessibilityLabel matches in tiers (exact → trim/case-insensitive → substring) and returns an ambiguity error when >1 component matches. Prefer testID for unambiguous targeting. For native gestures (swipe, drag), use device_swipe/device_press instead. setFieldValue (GH #126 Gap A): explicit fallback when typeText fails because the field routes through a Controller — pass name + value, walks UP to the nearest FormProvider and calls its setValue. Use only when typeText returns "no handler". Portal-root coverage (GH #126 Gap B): if your app uses react-native-actions-sheet, @gorhom/bottom-sheet, or any Modal-based portal whose fiber root is not in React DevTools\' getFiberRoots() registry, set `globalThis.__RN_AGENT_EXTRA_ROOTS__ = () => [sheetRef.current, ...]` in your __DEV__ block — testID resolution will then reach inside those subtrees. See CLAUDE.md template for the canonical snippet. walkUp (GH #525, opt-in): for action:"press" with a testID/accessibilityLabel selector only — when the matched component has no onPress (testID on a non-pressable wrapper), walks up at most 8 fiber ancestors and presses the nearest pressable. Refuses when no pressable exists within the bound, when duplicate matches resolve to distinct pressable ancestors (ambiguous), or when combined with a non-press action or a role/name/text/placeholder selector; default behavior without the flag is unchanged.',
   {
     action: z
       .enum(['press', 'longPress', 'typeText', 'scroll', 'setFieldValue'])
@@ -2232,12 +2232,7 @@ trackedTool(
       .describe(
         "For setFieldValue: pass-through to setValue's options.shouldDirty (default true). Set false to keep the field marked pristine.",
       ),
-    walkUp: z
-      .boolean()
-      .optional()
-      .describe(
-        'press only, testID/accessibilityLabel selectors only (opt-in, GH #525): when the matched component has no onPress (testID on a non-pressable wrapper), search up to 8 fiber ancestors for the nearest pressable and press it. Refuses when no pressable exists within the bound, when duplicate matches resolve to distinct pressable fibers (ambiguity), or when combined with a non-press action or a role/name/text/placeholder selector. Default behavior without the flag is unchanged.',
-      ),
+    walkUp: z.boolean().optional().describe('Opt-in press-only nearest-pressable-ancestor walk'),
   },
   createInteractHandler(getClient),
 );

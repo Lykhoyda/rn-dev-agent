@@ -248,7 +248,8 @@ function parseFlowMeta(text) {
 }
 // D1209 — parse the inline `produces` map: `{ key: value, key: value }`.
 // Values are typed as boolean (true/false), number, or string. Returns
-// null when empty or unparseable so callers can omit the field. Mirrors
+// null when empty or when ANY segment is malformed — a partial map would
+// render as fully parsed and hide the metadata loss (GH #525). Mirrors
 // parseProducesMap() in packages/rn-dev-agent-core/src/domain/reusable-action.ts.
 function parseProducesMap(raw) {
     const inner = raw
@@ -261,7 +262,7 @@ function parseProducesMap(raw) {
     for (const part of inner.split(',')) {
         const kv = part.match(/^\s*([a-zA-Z_][\w.-]*)\s*:\s*(.+?)\s*$/);
         if (!kv)
-            continue;
+            return null;
         const key = kv[1];
         const valueRaw = kv[2].trim();
         if (/^(true|false)$/i.test(valueRaw)) {

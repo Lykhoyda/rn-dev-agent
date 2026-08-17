@@ -64,6 +64,21 @@ appId: com.example.testapp
 `,
   );
 
+  // Mixed produces: one valid pair plus a malformed segment. Any malformed
+  // segment is a FULL parse failure — a silently partial map would hide the
+  // metadata loss behind a healthy-looking cell (review r3798017301).
+  writeFileSync(
+    join(actionsDir, 'mixed-produces-flow.yaml'),
+    `# id: mixed-produces-flow
+# intent: Flow whose produces map is partially malformed
+# mutates: true
+# produces: { loggedIn: true, ### }
+appId: com.example.testapp
+---
+- launchApp
+`,
+  );
+
   // Fully valid M7 header — rendering must be unchanged.
   writeFileSync(
     join(actionsDir, 'valid-flow.yaml'),
@@ -128,6 +143,18 @@ test('#525 present-but-unparseable values keep "?" as the parse-failure marker',
   }
 });
 
+test('#525 a produces map with any malformed segment renders "?", never a partial map', () => {
+  const dir = makeFixture();
+  try {
+    const out = run(['--section', 'b'], dir);
+    const cells = rowFor(out, 'mixed-produces-flow');
+    assert.equal(cells[7], '?', `produces must be a full parse failure, got ${cells[7]}`);
+    assert.equal(cells[4], 'yes'); // other valid keys on the same header still parse
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('#525 fully valid M7 metadata renders exactly as before', () => {
   const dir = makeFixture();
   try {
@@ -157,6 +184,7 @@ test('#525 JSON output distinguishes pre-M7 absence from parse failure', () => {
     assert.equal(byFlow['legacy-flow'].metaFormat, 'pre-m7');
     assert.equal(byFlow['valid-flow'].metaFormat, 'm7');
     assert.deepEqual((byFlow['broken-flow'].metaInvalid ?? []).sort(), ['mutates', 'produces']);
+    assert.deepEqual(byFlow['mixed-produces-flow'].metaInvalid ?? [], ['produces']);
     assert.equal((byFlow['valid-flow'].metaInvalid ?? []).length, 0);
   } finally {
     rmSync(dir, { recursive: true, force: true });
