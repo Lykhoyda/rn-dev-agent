@@ -52958,10 +52958,11 @@ var INJECTED_HELPERS = `
 
   // GH #525 \u2014 bounded shell-only render evidence for getNavState. Right after a
   // reload the dev LogBox root commits long before any app root, so a tree that
-  // is nothing but that shell proves the UI is still mounting. Bounds keep the
-  // probe fail-closed: an unnamed or oversized tree is never called a shell.
+  // is nothing but that shell proves the UI is still mounting. Exclusivity plus
+  // the scan bound keep the probe fail-closed: in a dev build AppContainer also
+  // renders LogBox inside the mounted app root, so mere presence proves nothing.
   var NAV_SHELL_SCAN_MAX = 200;
-  var NAV_SHELL_TOP_NAMES = 12;
+  var NAV_SHELL_NAME_RE = /^_?LogBox/;
 
   // Reset by every root-iteration pass; only valid when read synchronously
   // after the pass that produced the tree (many helpers share the iterators).
@@ -53132,25 +53133,25 @@ var INJECTED_HELPERS = `
     return out;
   }
 
-  // GH #525 \u2014 is this root nothing but the dev LogBox shell? Bounded DFS: a tree
-  // larger than NAV_SHELL_SCAN_MAX, or one without a LogBox name among its first
-  // NAV_SHELL_TOP_NAMES named fibers, is app content as far as this probe knows.
+  // GH #525 \u2014 is this root nothing but the dev LogBox shell? Bounded DFS asking
+  // for exclusivity: at least one LogBox composite and NO other named composite.
+  // Host primitives and unnamed fibers are neutral; one app component, an
+  // oversized tree, or a renamed LogBox internal all mean "not a shell".
   function navShellOnlyRoot(rootFiber) {
     var stack = [rootFiber];
     var visited = 0;
-    var named = 0;
     var sawShell = false;
     while (stack.length > 0) {
       var node = stack.pop();
       if (!node) continue;
       if (++visited > NAV_SHELL_SCAN_MAX) return false;
       var nodeType = node.type;
-      var nodeName = typeof nodeType === 'string'
-        ? nodeType
-        : (nodeType && (nodeType.displayName || nodeType.name));
-      if (nodeName) {
-        named++;
-        if (named <= NAV_SHELL_TOP_NAMES && nodeName.indexOf('LogBox') !== -1) sawShell = true;
+      if (nodeType && typeof nodeType !== 'string') {
+        var nodeName = nodeType.displayName || nodeType.name;
+        if (nodeName) {
+          if (!NAV_SHELL_NAME_RE.test(nodeName)) return false;
+          sawShell = true;
+        }
       }
       if (node.sibling) stack.push(node.sibling);
       if (node.child) stack.push(node.child);

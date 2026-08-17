@@ -20,13 +20,15 @@ const LEGACY_MESSAGE = 'Navigation state not found. Is React Navigation or Expo 
 
 interface FiberSpec {
   name?: string;
+  // host:true builds a host primitive, whose `type` is a plain string.
+  host?: boolean;
   props?: Record<string, unknown>;
   memoizedState?: unknown;
   children?: FiberSpec[];
 }
 
 interface SandboxFiber {
-  type: { displayName: string } | null;
+  type: { displayName: string } | string | null;
   memoizedProps: Record<string, unknown>;
   memoizedState: unknown;
   return: SandboxFiber | null;
@@ -67,7 +69,7 @@ function createSandbox(opts: { hook?: unknown; require?: (name: string) => unkno
 
 function buildFiber(spec: FiberSpec, parent: SandboxFiber | null = null): SandboxFiber {
   const fiber: SandboxFiber = {
-    type: spec.name ? { displayName: spec.name } : null,
+    type: spec.name ? (spec.host ? spec.name : { displayName: spec.name }) : null,
     memoizedProps: spec.props || {},
     memoizedState: spec.memoizedState || null,
     return: parent,
@@ -96,20 +98,27 @@ function hookWithRoots(rootFibers: SandboxFiber[]) {
 }
 
 // The dev LogBox root commits well before any app root after a reload — this is
-// the tree shape cdp_navigation_state actually sees mid-mount.
+// the tree shape cdp_navigation_state actually sees mid-mount: LogBox internals
+// over host primitives, with no app component anywhere.
+const LOG_BOX_SHELL: FiberSpec = {
+  name: 'LogBoxStateSubscription',
+  children: [
+    {
+      name: '_LogBoxNotificationContainer',
+      children: [
+        { name: 'RCTView', host: true, children: [{ name: 'RCTText', host: true }] },
+      ],
+    },
+  ],
+};
+
 function logBoxShellRoot(): SandboxFiber {
-  return buildFiber({
-    name: 'LogBoxStateSubscription',
-    children: [
-      {
-        name: '_LogBoxNotificationContainer',
-        children: [{ name: 'View', children: [{ name: 'Text' }] }],
-      },
-    ],
-  });
+  return buildFiber(LOG_BOX_SHELL);
 }
 
 // An ordinarily mounted app screen that simply has no navigation container.
+// Dev builds render the LogBox notification container inside AppContainer, right
+// beside the app's own components — so the shell probe must reject this root.
 function plainAppRoot(): SandboxFiber {
   return buildFiber({
     name: 'AppContainer',
@@ -117,10 +126,14 @@ function plainAppRoot(): SandboxFiber {
       {
         name: 'HomeScreen',
         children: [
-          { name: 'View', children: [{ name: 'Text' }, { name: 'Text' }] },
-          { name: 'Button' },
+          {
+            name: 'RCTView',
+            host: true,
+            children: [{ name: 'RCTText', host: true }, { name: 'RCTText', host: true }],
+          },
         ],
       },
+      LOG_BOX_SHELL,
     ],
   });
 }
@@ -162,12 +175,29 @@ test('#525 post-reload shell-only tree: hedged mounting retry, never the bare fr
   assert.equal(result.retryInMs, 2000);
 });
 
-test('#525 ordinarily mounted app without navigation: the genuine framework message is preserved', () => {
+test('#525 mounted app root that embeds the LogBox container: the genuine framework message is preserved', () => {
+  // The production dev-build shape: app components AND LogBox internals under
+  // one root. Presence of a LogBox name must not make this read as mid-mount.
   const sandbox = createSandbox({ hook: hookWithRoots([plainAppRoot()]) });
   const result = JSON.parse(sandbox.__RN_AGENT.getNavState());
   assert.equal(result.error, LEGACY_MESSAGE);
   assert.notEqual(result.mounting, true);
   assert.equal(result.shellOnly, undefined);
+});
+
+test('#525 an unrecognized composite inside an otherwise pure shell degrades to the legacy message', () => {
+  // Fail-closed on renamed/unknown internals: only LogBox* composites qualify.
+  const sandbox = createSandbox({
+    hook: hookWithRoots([
+      buildFiber({
+        name: 'LogBoxStateSubscription',
+        children: [{ name: 'NotificationHost', children: [{ name: 'RCTView', host: true }] }],
+      }),
+    ]),
+  });
+  const result = JSON.parse(sandbox.__RN_AGENT.getNavState());
+  assert.equal(result.error, LEGACY_MESSAGE);
+  assert.notEqual(result.mounting, true);
 });
 
 test('#525 an app root alongside the LogBox shell can NOT be read as shell-only', () => {
@@ -182,8 +212,8 @@ test('#525 an app root alongside the LogBox shell can NOT be read as shell-only'
 test('#525 a LogBox-named tree larger than the scan bound degrades to the legacy message', () => {
   // Fail-closed: a tree the bounded probe cannot fully walk is treated as app
   // content, never as a shell — a detection miss must not fake mounting.
-  let deep: FiberSpec = { name: 'Leaf' };
-  for (let i = 0; i < 250; i++) deep = { name: `Wrapper${i}`, children: [deep] };
+  let deep: FiberSpec = { name: 'RCTView', host: true };
+  for (let i = 0; i < 250; i++) deep = { name: `LogBoxWrapper${i}`, children: [deep] };
   const sandbox = createSandbox({
     hook: hookWithRoots([buildFiber({ name: 'LogBoxStateSubscription', children: [deep] })]),
   });
