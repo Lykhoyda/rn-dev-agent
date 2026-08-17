@@ -256,8 +256,8 @@ no device at all, one whose session owner was lost, one whose worker birth or
 authority store failed to open, or one whose binding cannot be read, fences
 `adb` entirely and an ambient adb device is never queried; only a runtime that
 was never initialized (`SESSION_NOT_INITIALIZED`) keeps the legacy ambient
-read); a name that
-matches both inventories, or neither, stays on the fail-closed bundle inference.
+read); a name that matches both inventories, or neither, stays on the
+fail-closed bundle inference. Raw `device_*` tools are not fenced by this rule.
 The refusal lists the candidate targets with their inference confidence. Run
 `cdp_targets` only to diagnose the mismatch, relaunch the authority-bound app,
 and call `cdp_connect` again. Omitted values come only from the fenced session;
