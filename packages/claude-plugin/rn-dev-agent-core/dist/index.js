@@ -52933,7 +52933,7 @@ async function detectBridge(client2, evaluate = (expression) => client2.evaluate
 init_logger();
 
 // packages/rn-dev-agent-core/dist/injected-helpers.js
-var HELPERS_VERSION = 41;
+var HELPERS_VERSION = 42;
 var INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -52947,6 +52947,14 @@ var INJECTED_HELPERS = `
   var MAX_RENDERER_IDS = 20;
   var MAX_REGISTERED_RENDERER_IDS = 100;
   var EARLY_EXIT_EMPTY_STREAK = 3;
+
+  // GH #525 \u2014 reload evidence for getNavState: recency of this stamp marks a
+  // fresh (re)injection, and a zero root count at injection proves the context
+  // was still booting its bundle (ordinary injection into a mounted app sees
+  // committed roots here and never reads as a reload).
+  var __INJECTED_AT__ = Date.now();
+  var __ROOTS_AT_INJECTION__ = -1;
+  try { __ROOTS_AT_INJECTION__ = findAllRootFibers().length; } catch (eRootProbe) {}
 
   // Reset by every root-iteration pass; only valid when read synchronously
   // after the pass that produced the tree (many helpers share the iterators).
@@ -53680,7 +53688,48 @@ var INJECTED_HELPERS = `
       if (fallbackRef && fallbackRef.getRootState) navState = fallbackRef.getRootState();
     }
 
-    if (!navState) return JSON.stringify({ error: 'Navigation state not found. Is React Navigation or Expo Router installed?' });
+    // GH #525 \u2014 mid-mount evidence (empty roots, bundled framework, fresh
+    // reinjection) must not be misreported as a missing router install.
+    if (!navState) {
+      var mountHook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+      var mountHookUsable = !!(mountHook && typeof mountHook.getFiberRoots === 'function');
+      // Only a CLEAN empty scan is mounting evidence (throwing renderers can hide roots).
+      if (mountHookUsable && findAllRootFibers().length === 0 && lastRootScan.rendererErrors === 0) {
+        return JSON.stringify({
+          error: 'App is still mounting \u2014 no React fiber roots exist yet (the bundle is likely still loading). Retry in ~2s.',
+          mounting: true,
+          retryInMs: 2000
+        });
+      }
+      var navFw = null;
+      try {
+        if (typeof require === 'function') {
+          try { if (require('@react-navigation/native')) navFw = 'react-navigation'; } catch(e1) {}
+          if (!navFw) { try { if (require('@react-navigation/core')) navFw = 'react-navigation'; } catch(e2) {} }
+          if (!navFw) { try { if (require('expo-router')) navFw = 'expo-router'; } catch(e3) {} }
+        }
+      } catch(e0) {}
+      if (navFw) {
+        var navFwName = navFw === 'expo-router' ? 'Expo Router' : 'React Navigation';
+        return JSON.stringify({
+          error: navFwName + ' is bundled but no navigation state was found \u2014 the app may still be mounting after a reload (retry in ~2s), or no navigation container is rendered.',
+          frameworkDetected: navFw,
+          retryInMs: 2000
+        });
+      }
+      var helperAge = Date.now() - __INJECTED_AT__;
+      // Reload evidence, not a bare timer: the branch also requires that the
+      // context had ZERO committed roots when helpers landed (fresh bundle).
+      if (mountHookUsable && __ROOTS_AT_INJECTION__ === 0 && helperAge >= 0 && helperAge < 10000) {
+        return JSON.stringify({
+          error: 'Navigation state not found. Helpers were injected ' + helperAge + 'ms ago into a context that was still booting its bundle, so the app may still be mounting after a reload \u2014 retry in ~2s. If this persists, React Navigation or Expo Router may be missing.',
+          helpersRecentlyInjected: true,
+          helperAgeMs: helperAge,
+          retryInMs: 2000
+        });
+      }
+      return JSON.stringify({ error: 'Navigation state not found. Is React Navigation or Expo Router installed?' });
+    }
 
     function simplify(s) {
       if (!s) return null;
@@ -54221,6 +54270,15 @@ var INJECTED_HELPERS = `
 
     if (!action) return JSON.stringify({ error: 'action is required' });
 
+    // GH #525 \u2014 walkUp is a narrowly bounded press-only opt-in.
+    if (opts.walkUp === true && action !== 'press') {
+      return JSON.stringify({
+        error: 'walkUp is only supported for action:"press"',
+        requestedAction: action,
+        hint: 'typeText/setFieldValue already resolve wrapper indirection with their own bounded walks.'
+      });
+    }
+
     // Task 7 \u2014 ladder routing. When the caller passes a declarative selector
     // (role/name/text/placeholder) and NO testID/accessibilityLabel, resolve
     // via resolveLadder then press the found fiber or its nearest onPress
@@ -54293,6 +54351,9 @@ var INJECTED_HELPERS = `
     var exactMatches = [];
     var normMatches = [];
     var containsMatches = [];
+    // GH #525 \u2014 walkUp collects every strict-testID match so duplicates can refuse.
+    var walkUpCollect = opts.walkUp === true && !isLabelMatch;
+    var walkUpMatches = [];
 
     function findFiber(fiber) {
       var current = fiber;
@@ -54307,8 +54368,12 @@ var INJECTED_HELPERS = `
         if (props) {
           if (!isLabelMatch) {
             if (props[matchField] === selector) {
-              found = current;
-              return;
+              if (walkUpCollect) {
+                walkUpMatches.push(current);
+              } else {
+                found = current;
+                return;
+              }
             }
           } else {
             var raw = props.accessibilityLabel;
@@ -54395,6 +54460,8 @@ var INJECTED_HELPERS = `
       found = tier[0];
     }
 
+    if (walkUpCollect && walkUpMatches.length > 0) found = walkUpMatches[0];
+
     if (!found) {
       return JSON.stringify({
         error: 'Component not found',
@@ -54407,6 +54474,69 @@ var INJECTED_HELPERS = `
     var typeName = (found.type && (found.type.displayName || found.type.name)) || 'Unknown';
 
     try {
+      if (action === 'press' && opts.walkUp === true) {
+        // GH #525 \u2014 nearest self-or-ancestor onPress within 8 fiber levels (one JSX wrapper is ~3 fibers under NativeWind CssInterop);
+        // candidates collapse only when they are the exact same fiber.
+        var WALK_UP_MAX = 8;
+        var walkSources = walkUpMatches.length > 0 ? walkUpMatches : [found];
+        var walkCandidates = [];
+        for (var wi = 0; wi < walkSources.length; wi++) {
+          var walkNode = walkSources[wi];
+          var walkHops = 0;
+          while (walkNode && walkHops <= WALK_UP_MAX) {
+            var walkProps = walkNode.memoizedProps;
+            if (walkProps && typeof walkProps.onPress === 'function') break;
+            walkNode = walkNode.return;
+            walkHops++;
+          }
+          if (!walkNode || walkHops > WALK_UP_MAX) continue;
+          var existing = null;
+          for (var wj = 0; wj < walkCandidates.length; wj++) {
+            if (walkCandidates[wj].fiber === walkNode) { existing = walkCandidates[wj]; break; }
+          }
+          if (existing) {
+            if (walkHops < existing.hops) { existing.hops = walkHops; existing.source = walkSources[wi]; }
+          } else {
+            walkCandidates.push({ fiber: walkNode, hops: walkHops, source: walkSources[wi] });
+          }
+        }
+        if (walkCandidates.length === 0) {
+          return JSON.stringify({ error: 'Component has no onPress handler', component: typeName, testID: selector, walkUpSearched: WALK_UP_MAX });
+        }
+        if (walkCandidates.length > 1) {
+          var walkDescriptors = [];
+          for (var wk = 0; wk < walkCandidates.length && wk < 10; wk++) {
+            var wf = walkCandidates[wk].fiber;
+            var wp = wf.memoizedProps || {};
+            walkDescriptors.push({
+              component: (wf.type && (wf.type.displayName || wf.type.name)) || 'Unknown',
+              testID: wp.testID
+            });
+          }
+          return JSON.stringify({
+            error: 'Ambiguous walkUp press target',
+            testID: selector,
+            count: walkCandidates.length,
+            candidates: walkDescriptors,
+            hint: 'Multiple distinct pressable fibers resolve from this testID. Pass the testID of the exact pressable component instead.'
+          });
+        }
+        var walkTarget = walkCandidates[0];
+        var walkTargetName = (walkTarget.fiber.type && (walkTarget.fiber.type.displayName || walkTarget.fiber.type.name)) || 'Unknown';
+        if (opts.value !== undefined) {
+          walkTarget.fiber.memoizedProps.onPress(opts.value);
+        } else {
+          walkTarget.fiber.memoizedProps.onPress({ nativeEvent: {} });
+        }
+        var walkResult = { success: true, action: 'press', component: walkTargetName, testID: selector };
+        if (opts.value !== undefined) walkResult.value = opts.value;
+        if (walkTarget.hops > 0) {
+          walkResult.walkedUpFrom = (walkTarget.source.type && (walkTarget.source.type.displayName || walkTarget.source.type.name)) || 'Unknown';
+          walkResult.walkUpLevels = walkTarget.hops;
+        }
+        return JSON.stringify(walkResult);
+      }
+
       if (action === 'press') {
         if (typeof props.onPress !== 'function') {
           return JSON.stringify({ error: 'Component has no onPress handler', component: typeName, testID: selector });
@@ -75166,6 +75296,8 @@ function createInteractHandler(getClient2) {
       opts.exact = args.exact;
     if (args.includeHidden !== void 0)
       opts.includeHidden = args.includeHidden;
+    if (args.walkUp !== void 0)
+      opts.walkUp = args.walkUp;
     const result = await client2.evaluate(`__RN_AGENT.interact(${JSON.stringify(opts)})`);
     if (result.error) {
       return failResult(`Interact error: ${result.error}`);
@@ -87504,7 +87636,8 @@ trackedTool("cdp_interact", 'Interact with React components by testID (preferred
   name: external_exports.string().optional().describe('For setFieldValue: the React Hook Form field name (same string you passed to useController({name}) or <Controller name="...">). For the discovery ladder with `role`: the accessible name to match (e.g. role:"button" + name:"Save").'),
   value: external_exports.union([external_exports.string(), external_exports.number(), external_exports.boolean()]).optional().describe('Value to set. For setFieldValue: passed to setValue (a digit-string is kept a string when the field currently holds a string \u2014 give string fields a "" default so this applies). For press: when provided, onPress receives this value instead of a synthetic event \u2014 use for radio/chip-style value-bearing controls.'),
   shouldValidate: external_exports.boolean().optional().describe("For setFieldValue: pass-through to setValue's options.shouldValidate (default true). Set false to suppress synchronous validation."),
-  shouldDirty: external_exports.boolean().optional().describe("For setFieldValue: pass-through to setValue's options.shouldDirty (default true). Set false to keep the field marked pristine.")
+  shouldDirty: external_exports.boolean().optional().describe("For setFieldValue: pass-through to setValue's options.shouldDirty (default true). Set false to keep the field marked pristine."),
+  walkUp: external_exports.boolean().optional().describe("press only (opt-in, GH #525): when the matched component has no onPress (testID on a non-pressable wrapper), search up to 8 fiber ancestors for the nearest pressable and press it. Refuses when no pressable exists within the bound or when duplicate matches resolve to distinct pressable fibers (ambiguity). Default behavior without the flag is unchanged.")
 }, createInteractHandler(getClient));
 trackedTool("collect_logs", "Collect logs from multiple sources in parallel: JS console (Hermes ring buffer snapshot), native iOS (xcrun simctl log stream), native Android (adb logcat). Results merged and sorted by timestamp. Works without CDP when only native sources requested. Use when debugging crashes that span JS and native layers.", {
   sources: external_exports.array(external_exports.enum(["js_console", "native_ios", "native_android"])).default(["js_console"]).describe("Log sources to collect from (default: js_console only)"),
