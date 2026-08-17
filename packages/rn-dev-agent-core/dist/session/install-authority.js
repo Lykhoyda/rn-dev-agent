@@ -11,10 +11,12 @@ function runText(command, args) {
     });
 }
 function runBuffer(command, args) {
+    // NOTE: artifact content reads move whole APK/app bundles; tunneled adb
+    // transports (remote emulator farms) need well over 30s for ~100MB.
     return execFileSync(command, [...args], {
         encoding: 'buffer',
         stdio: ['ignore', 'pipe', 'ignore'],
-        timeout: 30_000,
+        timeout: 180_000,
         maxBuffer: 512 * 1024 * 1024,
     });
 }

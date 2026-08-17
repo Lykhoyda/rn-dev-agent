@@ -61,7 +61,7 @@ function runBuffer(command, args) {
   return execFileSync(command, [...args], {
     encoding: "buffer",
     stdio: ["ignore", "pipe", "ignore"],
-    timeout: 3e4,
+    timeout: 18e4,
     maxBuffer: 512 * 1024 * 1024
   });
 }
