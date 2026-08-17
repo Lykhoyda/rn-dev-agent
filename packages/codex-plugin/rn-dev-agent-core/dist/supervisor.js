@@ -63814,6 +63814,19 @@ var init_injected_helpers = __esm({
   // always renders named composites (AppContainer renders LogBox beside them).
   var NAV_SHELL_SCAN_MAX = 200;
   var NAV_SHELL_NAME_RE = /^_?LogBox/;
+  // renderApplication wraps EVERY surface (LogBox's included) in AppContainer >
+  // '<debugName>(RootComponent)', and dev AppContainer adds these overlays \u2014 so
+  // the dev shell is not app content. An app root still carries its own
+  // '<appName>(RootComponent)' plus app composites, which are not allowlisted.
+  var NAV_SHELL_WRAPPERS = [
+    'AppContainer',
+    'DebuggingOverlay',
+    'ReactDevToolsOverlay',
+    'ReactDevToolsOverlayDeferred',
+    'Inspector',
+    'InspectorDeferred',
+    'TraceUpdateOverlay'
+  ];
 
   // Reset by every root-iteration pass; only valid when read synchronously
   // after the pass that produced the tree (many helpers share the iterators).
@@ -63984,10 +63997,14 @@ var init_injected_helpers = __esm({
     return out;
   }
 
+  function navIsShellComposite(name) {
+    return NAV_SHELL_NAME_RE.test(name) || NAV_SHELL_WRAPPERS.indexOf(name) !== -1;
+  }
+
   // GH #525 \u2014 does this root carry app content? Bounded DFS over composites: any
-  // named composite outside the LogBox allowlist is app content, as is a tree too
-  // large to finish scanning. Host primitives and unnamed fibers are neutral, so
-  // an empty or host-only root (the idle dev shell surface) carries none.
+  // named composite outside the dev-shell allowlist is app content, as is a tree
+  // too large to finish scanning. Host primitives and unnamed fibers are neutral,
+  // so an empty or host-only root (the idle dev shell surface) carries none.
   function navRootWithoutAppContent(rootFiber) {
     var stack = [rootFiber];
     var visited = 0;
@@ -63998,7 +64015,7 @@ var init_injected_helpers = __esm({
       var nodeType = node.type;
       if (nodeType && typeof nodeType !== 'string') {
         var nodeName = nodeType.displayName || nodeType.name;
-        if (nodeName && !NAV_SHELL_NAME_RE.test(nodeName)) return false;
+        if (nodeName && !navIsShellComposite(nodeName)) return false;
       }
       if (node.sibling) stack.push(node.sibling);
       if (node.child) stack.push(node.child);
@@ -64006,7 +64023,7 @@ var init_injected_helpers = __esm({
     return true;
   }
 
-  function navAllRootsShellOnly(roots) {
+  function navAllRootsWithoutAppContent(roots) {
     for (var nsi = 0; nsi < roots.length; nsi++) {
       try {
         if (!navRootWithoutAppContent(roots[nsi].fiber)) return false;
@@ -64613,7 +64630,7 @@ var init_injected_helpers = __esm({
       }
       // Current-state render evidence, not a timer: no committed root holds any
       // app component yet \u2014 only the dev shell is rendered.
-      if (mountScanClean && mountRoots.length > 0 && navAllRootsShellOnly(mountRoots)) {
+      if (mountScanClean && mountRoots.length > 0 && navAllRootsWithoutAppContent(mountRoots)) {
         return JSON.stringify({
           error: 'App UI is still mounting \u2014 no app components have rendered yet, only the development shell. Retry in ~2s. If this persists, React Navigation or Expo Router may be missing.',
           mounting: true,
