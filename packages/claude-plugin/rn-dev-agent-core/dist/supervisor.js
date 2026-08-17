@@ -63814,12 +63814,14 @@ var init_injected_helpers = __esm({
   // always renders named composites (AppContainer renders LogBox beside them).
   var NAV_SHELL_SCAN_MAX = 200;
   var NAV_SHELL_NAME_RE = /^_?LogBox/;
-  // renderApplication wraps EVERY surface (LogBox's included) in AppContainer >
-  // '<debugName>(RootComponent)', and dev AppContainer adds these overlays \u2014 so
-  // the dev shell is not app content. An app root still carries its own
-  // '<appName>(RootComponent)' plus app composites, which are not allowlisted.
+  // renderApplication wraps EVERY surface (LogBox's included) in
+  // '<debugName>(RootComponent)' > AppContainer, and dev AppContainer renders two
+  // composite Views plus these overlays \u2014 so the dev shell is not app content. An
+  // app root still carries its own '<appName>(RootComponent)' plus app
+  // composites, which are not allowlisted.
   var NAV_SHELL_WRAPPERS = [
     'AppContainer',
+    'View',
     'DebuggingOverlay',
     'ReactDevToolsOverlay',
     'ReactDevToolsOverlayDeferred',
@@ -65382,6 +65384,7 @@ var init_injected_helpers = __esm({
 
     var props = found.memoizedProps || {};
     var typeName = (found.type && (found.type.displayName || found.type.name)) || 'Unknown';
+    var executedName = typeName;
 
     try {
       if (action === 'press' && opts.walkUp === true) {
@@ -65439,6 +65442,7 @@ var init_injected_helpers = __esm({
         }
         var walkTarget = walkCandidates[0];
         var walkTargetName = walkFiberName(walkTarget.fiber);
+        executedName = walkTargetName;
         if (opts.value !== undefined) {
           walkTarget.fiber.memoizedProps.onPress(opts.value);
         } else {
@@ -65776,7 +65780,7 @@ var init_injected_helpers = __esm({
       return JSON.stringify({
         success: false, action_executed: true,
         handler_error: (e && e.message || String(e)),
-        component: typeName, testID: selector,
+        component: executedName, testID: selector,
         hint: 'The action was dispatched but the app handler threw \u2014 the screen may now be in an error state. Check cdp_error_log before continuing.'
       });
     }

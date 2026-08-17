@@ -385,6 +385,59 @@ test('#525 a throwing walked-up handler keeps the GH#250 action_executed contrac
   assert.match(result.handler_error, /boom from ancestor/);
 });
 
+test('#525 a throwing walked-up handler names the fiber that actually ran', () => {
+  const root = buildFiber({
+    name: 'App',
+    children: [
+      {
+        name: 'RCTView',
+        host: true,
+        props: {
+          onPress: () => {
+            throw new Error('boom from host ancestor');
+          },
+        },
+        children: [
+          {
+            name: 'CardWrapper',
+            children: [{ name: 'RCTTextView', host: true, props: { testID: 'throwing-host' } }],
+          },
+        ],
+      },
+    ],
+  });
+  const sandbox = createSandbox({ fiberRoot: root });
+  const result = JSON.parse(
+    sandbox.__RN_AGENT.interact({ action: 'press', testID: 'throwing-host', walkUp: true }),
+  );
+  assert.equal(result.action_executed, true);
+  assert.match(result.handler_error, /boom from host ancestor/);
+  assert.equal(result.component, 'RCTView');
+});
+
+test('#525 a throwing direct press still names the matched component (default unchanged)', () => {
+  const root = buildFiber({
+    name: 'App',
+    children: [
+      {
+        name: 'Button',
+        props: {
+          testID: 'throwing-direct',
+          onPress: () => {
+            throw new Error('boom direct');
+          },
+        },
+      },
+    ],
+  });
+  const sandbox = createSandbox({ fiberRoot: root });
+  const result = JSON.parse(
+    sandbox.__RN_AGENT.interact({ action: 'press', testID: 'throwing-direct' }),
+  );
+  assert.equal(result.action_executed, true);
+  assert.equal(result.component, 'Button');
+});
+
 test('#525 walkUp is press-only: other actions refuse it explicitly and never dispatch', () => {
   let typed = 0;
   const root = buildFiber({

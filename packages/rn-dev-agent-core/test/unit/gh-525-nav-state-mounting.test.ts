@@ -97,39 +97,59 @@ function hookWithRoots(rootFibers: SandboxFiber[]) {
   };
 }
 
-// Shapes below follow react-native's own surface construction: renderApplication
-// renders AppContainer > '<debugName>(RootComponent)' for EVERY AppRegistry
-// surface, and dev AppContainer adds DebuggingOverlay / ReactDevToolsOverlay /
-// Inspector plus (for non-LogBox roots) LogBoxNotificationContainer.
+// Shapes below follow react-native's own surface construction (verified in
+// react-native's renderApplication.js / AppContainer-dev.js): every AppRegistry
+// surface is '<debugName>(RootComponent)' > AppContainer, dev AppContainer
+// renders two COMPOSITE Views (View.displayName === 'View', a forwardRef — not a
+// host string type) plus DebuggingOverlay / ReactDevToolsOverlayDeferred /
+// InspectorDeferred, and non-LogBox surfaces also get LogBoxNotificationContainer.
 const LOG_BOX_SHELL: FiberSpec = {
   name: 'LogBoxStateSubscription',
   children: [
     {
       name: '_LogBoxNotificationContainer',
       children: [
-        { name: 'RCTView', host: true, children: [{ name: 'RCTText', host: true }] },
+        { name: 'View', children: [{ name: 'RCTView', host: true }] },
       ],
     },
   ],
 };
 
+// The dev overlays AppContainer renders beside the surface's own children.
+const DEV_OVERLAYS: FiberSpec[] = [
+  { name: 'DebuggingOverlay', children: [{ name: 'View', children: [{ name: 'RCTView', host: true }] }] },
+  { name: 'ReactDevToolsOverlayDeferred' },
+  { name: 'InspectorDeferred' },
+];
+
 // The LogBox surface: it commits well before any app root after a reload, and
-// this is the tree cdp_navigation_state actually sees mid-mount.
+// this is the tree cdp_navigation_state actually sees mid-mount. With no logs
+// pending, LogBoxInspector renders null under _LogBoxInspectorContainer's View.
 const LOG_BOX_SURFACE: FiberSpec = {
-  name: 'AppContainer',
+  name: 'LogBox(RootComponent)',
   children: [
     {
-      name: 'LogBox(RootComponent)',
+      name: 'AppContainer',
       children: [
         {
-          name: 'LogBoxStateSubscription',
-          children: [{ name: '_LogBoxInspectorContainer' }],
+          name: 'View',
+          children: [
+            {
+              name: 'View',
+              children: [
+                {
+                  name: 'LogBoxStateSubscription',
+                  children: [
+                    { name: '_LogBoxInspectorContainer', children: [{ name: 'View' }] },
+                  ],
+                },
+              ],
+            },
+            ...DEV_OVERLAYS,
+          ],
         },
       ],
     },
-    { name: 'DebuggingOverlay', children: [{ name: 'RCTView', host: true }] },
-    { name: 'ReactDevToolsOverlayDeferred' },
-    { name: 'InspectorDeferred' },
   ],
 };
 
@@ -152,28 +172,29 @@ function hostOnlyRoot(): SandboxFiber {
 // app's own '<appName>(RootComponent)' wrapper and components sit beside the same
 // dev-shell overlays, so the probe must reject this root.
 function plainAppRoot(): SandboxFiber {
-  return buildFiber({
-    name: 'AppContainer',
+  return buildFiber(appSurface({ name: 'HomeScreen', children: [{ name: 'RCTText', host: true }] }));
+}
+
+// The main app surface, same dev-shell scaffolding with the app's own tree inside.
+function appSurface(appTree: FiberSpec): FiberSpec {
+  return {
+    name: 'main(RootComponent)',
     children: [
       {
-        name: 'main(RootComponent)',
+        name: 'AppContainer',
         children: [
           {
-            name: 'HomeScreen',
+            name: 'View',
             children: [
-              {
-                name: 'RCTView',
-                host: true,
-                children: [{ name: 'RCTText', host: true }, { name: 'RCTText', host: true }],
-              },
+              { name: 'View', children: [appTree] },
+              ...DEV_OVERLAYS,
+              LOG_BOX_SHELL,
             ],
           },
         ],
       },
-      { name: 'DebuggingOverlay' },
-      LOG_BOX_SHELL,
     ],
-  });
+  };
 }
 
 test('#525 no fiber roots yet: reports app still mounting with retry, not a framework question', () => {
@@ -243,18 +264,12 @@ test('#525 mounted app root that embeds the LogBox container: the genuine framew
 });
 
 test('#525 the app surface RootComponent wrapper alone keeps the legacy message', () => {
-  // Allowlisting AppContainer and the dev overlays must not open a hole: an app
-  // surface that has rendered nothing but its own root wrapper is still an app.
+  // Allowlisting AppContainer, View and the dev overlays must not open a hole: a
+  // splash-style surface rendering only Views is still an app surface, because
+  // renderApplication always gives it a '<appName>(RootComponent)' wrapper.
   const sandbox = createSandbox({
     hook: hookWithRoots([
-      buildFiber({
-        name: 'AppContainer',
-        children: [
-          { name: 'main(RootComponent)', children: [{ name: 'RCTView', host: true }] },
-          { name: 'DebuggingOverlay' },
-          LOG_BOX_SHELL,
-        ],
-      }),
+      buildFiber(appSurface({ name: 'View', children: [{ name: 'RCTView', host: true }] })),
     ]),
   });
   const result = JSON.parse(sandbox.__RN_AGENT.getNavState());
