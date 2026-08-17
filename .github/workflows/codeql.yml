@@ -13,6 +13,9 @@ name: CodeQL
 # Swift/Xcode files (most PRs) — the previous analysis on main still applies,
 # and push-to-main + the weekly schedule always run the full scan as a backstop.
 #
+# The JS/TS leg scans hand-written source only: .github/codeql/codeql-config.yml
+# keeps the committed dist bundles out of the database and the uploaded SARIF.
+#
 # All ${{ }} interpolations here read from matrix.*, needs.*, and github.* (event
 # name only) — they do not interpolate untrusted github.event.* text into shell.
 # The base SHA is passed through `env:` (not inline) so it can't be injected.
@@ -76,6 +79,7 @@ jobs:
           - language: javascript-typescript
             os: ubuntu-latest
             build-mode: none
+            config-file: .github/codeql/codeql-config.yml
           - language: actions
             os: ubuntu-latest
             build-mode: none
@@ -110,6 +114,7 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
+          config-file: ${{ matrix.config-file }}
 
       - name: Build rn-android-runner
         if: ${{ matrix.language == 'java-kotlin' }}
