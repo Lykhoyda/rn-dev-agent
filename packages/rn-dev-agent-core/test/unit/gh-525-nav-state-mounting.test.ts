@@ -108,16 +108,17 @@ const LOG_BOX_SHELL: FiberSpec = {
   children: [
     {
       name: '_LogBoxNotificationContainer',
-      children: [
-        { name: 'View', children: [{ name: 'RCTView', host: true }] },
-      ],
+      children: [{ name: 'View', children: [{ name: 'RCTView', host: true }] }],
     },
   ],
 };
 
 // The dev overlays AppContainer renders beside the surface's own children.
 const DEV_OVERLAYS: FiberSpec[] = [
-  { name: 'DebuggingOverlay', children: [{ name: 'View', children: [{ name: 'RCTView', host: true }] }] },
+  {
+    name: 'DebuggingOverlay',
+    children: [{ name: 'View', children: [{ name: 'RCTView', host: true }] }],
+  },
   { name: 'ReactDevToolsOverlayDeferred' },
   { name: 'InspectorDeferred' },
 ];
@@ -139,9 +140,7 @@ const LOG_BOX_SURFACE: FiberSpec = {
               children: [
                 {
                   name: 'LogBoxStateSubscription',
-                  children: [
-                    { name: '_LogBoxInspectorContainer', children: [{ name: 'View' }] },
-                  ],
+                  children: [{ name: '_LogBoxInspectorContainer', children: [{ name: 'View' }] }],
                 },
               ],
             },
@@ -172,7 +171,9 @@ function hostOnlyRoot(): SandboxFiber {
 // app's own '<appName>(RootComponent)' wrapper and components sit beside the same
 // dev-shell overlays, so the probe must reject this root.
 function plainAppRoot(): SandboxFiber {
-  return buildFiber(appSurface({ name: 'HomeScreen', children: [{ name: 'RCTText', host: true }] }));
+  return buildFiber(
+    appSurface({ name: 'HomeScreen', children: [{ name: 'RCTText', host: true }] }),
+  );
 }
 
 // The main app surface, same dev-shell scaffolding with the app's own tree inside.
@@ -185,11 +186,7 @@ function appSurface(appTree: FiberSpec): FiberSpec {
         children: [
           {
             name: 'View',
-            children: [
-              { name: 'View', children: [appTree] },
-              ...DEV_OVERLAYS,
-              LOG_BOX_SHELL,
-            ],
+            children: [{ name: 'View', children: [appTree] }, ...DEV_OVERLAYS, LOG_BOX_SHELL],
           },
         ],
       },
