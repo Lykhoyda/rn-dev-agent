@@ -1,5 +1,13 @@
 # rn-dev-agent-core
 
+## 0.71.6
+
+### Patch Changes
+
+- 7eff66a: Bound dead-Metro `cdp_status` to the discovery scan budget by skipping runner-spawning picker probes when no Metro is up, and absorb the fresh-simulator first-start rn-fast-runner transient with one bounded internal retry after the failed first spawn provably exits.
+- 83798d9: Resolve the Observe actions/e2e project root from the bound session's declared app root (falling back to RN_PROJECT_ROOT, then heuristic discovery) and refuse truthfully on foreign, missing, ambiguous, or non-project roots instead of showing another checkout's actions or a silently empty panel.
+- d046940: Admit a fresh MCP transport when the blocking claim epoch is already gone instead of rebinding the leftover blocked session.
+
 ## 0.71.5
 
 ### Patch Changes
