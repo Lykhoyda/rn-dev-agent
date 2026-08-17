@@ -23,7 +23,7 @@ The `appId: <bundle>` + `---` **top section** above the comments is Maestro's ow
 | `id` | yes | kebab-case slug `^[a-z0-9][a-z0-9-]*$` | Stable identifier; defaults to filename without `.yaml`. Set explicitly only to allow renaming the file later without breaking references. |
 | `intent` | yes | one line of prose | The routing key: `/list-learned-actions` surfaces it verbatim; agents match tasks against it. Write it as the goal, not the mechanics. Use bare param names (`PRODUCT_ID`), never `${...}`. |
 | `tags` | recommended | `[a, b, c]` lower-case kebab | Filter keywords. Conventions: feature area (`tasks`, `auth`, `cart`), operation (`create`, `update`, `delete`), markers (`smoke`, `regression`). |
-| `mutates` | recommended | `true` / `false` | `true` if the flow leaves persistent residue (created rows, toggled settings). Drives the `/run-action` confirmation gate. Missing → rendered as `?` in the inventory. |
+| `mutates` | recommended | `true` / `false` | `true` if the flow leaves persistent residue (created rows, toggled settings). Drives the `/run-action` confirmation gate. Missing → rendered as `-` in the inventory (`pre-M7` when the whole header predates M7); `?` marks a present value that failed to parse. |
 | `status` | yes (defaults `experimental`) | `experimental` \| `active` \| `deprecated` | Lifecycle. See transitions below. |
 | `params` | when the body has `${VAR}` | `[KEY_A, KEY_B]`, keys `[A-Z_][A-Z0-9_]*` | The `-e KEY=VAL` surface. Auto-extracted from the body if absent, but declare explicitly so the replay pre-flight reports gaps clearly. |
 | `appId` | strongly recommended | bundle id | Replay pre-flight refuses cross-app replays when the connected target's bundle differs. Duplicate of the top-section value on purpose. |

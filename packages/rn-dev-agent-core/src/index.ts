@@ -2232,6 +2232,12 @@ trackedTool(
       .describe(
         "For setFieldValue: pass-through to setValue's options.shouldDirty (default true). Set false to keep the field marked pristine.",
       ),
+    walkUp: z
+      .boolean()
+      .optional()
+      .describe(
+        'press only (opt-in, GH #525): when the matched component has no onPress (testID on a non-pressable wrapper), search up to 3 fiber ancestors for the nearest pressable and press it. Refuses when no pressable exists within the bound or when duplicate matches resolve to distinct pressable fibers (ambiguity). Default behavior without the flag is unchanged.',
+      ),
   },
   createInteractHandler(getClient),
 );

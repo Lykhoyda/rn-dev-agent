@@ -7,12 +7,13 @@ description: Use when the user wants to send feedback, report an rn-dev-agent bu
 
 Follow the complete workflow in `../../commands/send-feedback.md`.
 
-In Codex, slash commands are playbooks rather than native commands: read that
-file and execute each step with the available tools. Collect diagnostics with
-the plugin-owned `scripts/collect-feedback.sh`, resolving the plugin root with
-the workflow's Step 2 snippet (env overrides first, then the repo checkout,
-then the newest version in the Codex plugin cache); marketplace plugins do
-not install a global `rn-collect-feedback` executable.
+Collect diagnostics with the plugin-owned `scripts/collect-feedback.sh`,
+resolving the plugin root with the workflow's Step 2 snippet. In Claude Code
+sessions `CLAUDE_PLUGIN_ROOT` points at the exact installed plugin version, so
+the packaged collector at `scripts/collect-feedback.sh` under that root is the
+supported surface. The `rn-collect-feedback` executable is a guarded legacy
+fallback only — marketplace installs do not add global executables; it exists
+solely for repo checkouts that put `bin/` on `PATH`.
 
 The workflow's review gate is mandatory. Show the exact sanitized issue body
 to the user and obtain confirmation before submitting it with `gh`.

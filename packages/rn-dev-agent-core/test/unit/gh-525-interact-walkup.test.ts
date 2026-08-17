@@ -9,6 +9,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
+import { readFileSync } from 'node:fs';
+import { resolve as resolvePath, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { INJECTED_HELPERS } from '../../dist/injected-helpers.js';
 import { createMockClient } from '../helpers/mock-cdp-client.js';
 import { createInteractHandler } from '../../dist/tools/interact.js';
@@ -112,6 +115,38 @@ test('#525 default (no walkUp): the refusal payload is byte-for-byte unchanged a
     '{"error":"Component has no onPress handler","component":"View","testID":"externalCoverageCard_1"}',
   );
   assert.equal(fired, 0);
+});
+
+test('#525 default (no walkUp): direct press response stays byte-for-byte unchanged', () => {
+  let fired = 0;
+  const root = buildFiber({
+    name: 'App',
+    children: [{ name: 'Button', props: { testID: 'plain-btn', onPress: () => fired++ } }],
+  });
+  const sandbox = createSandbox({ fiberRoot: root });
+  const raw = sandbox.__RN_AGENT.interact({ action: 'press', testID: 'plain-btn' });
+  assert.equal(raw, '{"success":true,"action":"press","component":"Button","testID":"plain-btn"}');
+  assert.equal(fired, 1);
+});
+
+test('#525 default (no walkUp): duplicate testIDs keep strict first-match semantics', () => {
+  let first = 0;
+  let second = 0;
+  const root = buildFiber({
+    name: 'App',
+    children: [
+      { name: 'Button', props: { testID: 'dup-plain', onPress: () => first++ } },
+      { name: 'Button', props: { testID: 'dup-plain', onPress: () => second++ } },
+    ],
+  });
+  const sandbox = createSandbox({ fiberRoot: root });
+  const raw = sandbox.__RN_AGENT.interact({ action: 'press', testID: 'dup-plain' });
+  assert.equal(
+    raw,
+    '{"success":true,"action":"press","component":"Button","testID":"dup-plain"}',
+  );
+  assert.equal(first, 1);
+  assert.equal(second, 0);
 });
 
 test('#525 walkUp:true presses the nearest pressable ancestor and reports the walk', () => {
@@ -371,10 +406,11 @@ test('#525 a throwing walked-up handler keeps the GH#250 action_executed contrac
   assert.match(result.handler_error, /boom from ancestor/);
 });
 
-test('#525 walkUp is press-only: other actions refuse it explicitly', () => {
+test('#525 walkUp is press-only: other actions refuse it explicitly and never dispatch', () => {
+  let typed = 0;
   const root = buildFiber({
     name: 'App',
-    children: [{ name: 'Input', props: { testID: 'field', onChangeText: () => {} } }],
+    children: [{ name: 'Input', props: { testID: 'field', onChangeText: () => typed++ } }],
   });
   const sandbox = createSandbox({ fiberRoot: root });
   const result = JSON.parse(
@@ -382,6 +418,19 @@ test('#525 walkUp is press-only: other actions refuse it explicitly', () => {
   );
   assert.ok(result.error, 'walkUp with a non-press action must refuse');
   assert.match(result.error, /walkUp/);
+  assert.equal(typed, 0);
+});
+
+test('#525 the registered cdp_interact MCP schema exposes walkUp (source-wiring, gh-202 style)', () => {
+  const testDir = dirname(fileURLToPath(import.meta.url));
+  const indexSrc = readFileSync(resolvePath(testDir, '../../src/index.ts'), 'utf8');
+  const registration = indexSrc.match(/trackedTool\(\s*'cdp_interact',[\s\S]*?createInteractHandler\(getClient\)/);
+  assert.ok(registration, 'cdp_interact registration not found in index.ts');
+  assert.match(
+    registration[0],
+    /walkUp:\s*z\s*[\s\S]{0,40}\.boolean\(\)\s*[\s\S]{0,20}\.optional\(\)/,
+    'cdp_interact schema must expose walkUp as an OPTIONAL boolean',
+  );
 });
 
 test('#525 tool layer forwards walkUp to the helper call', async () => {

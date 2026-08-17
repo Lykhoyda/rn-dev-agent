@@ -21,6 +21,8 @@ interface InteractArgs {
   placeholder?: string;
   exact?: boolean;
   includeHidden?: boolean;
+  // GH #525 — press-only opt-in pressable-ancestor discovery.
+  walkUp?: boolean;
 }
 
 export function createInteractHandler(getClient: () => CDPClient) {
@@ -60,6 +62,7 @@ export function createInteractHandler(getClient: () => CDPClient) {
     if (args.placeholder !== undefined) opts.placeholder = args.placeholder;
     if (args.exact !== undefined) opts.exact = args.exact;
     if (args.includeHidden !== undefined) opts.includeHidden = args.includeHidden;
+    if (args.walkUp !== undefined) opts.walkUp = args.walkUp;
 
     const result = await client.evaluate(`__RN_AGENT.interact(${JSON.stringify(opts)})`);
 
