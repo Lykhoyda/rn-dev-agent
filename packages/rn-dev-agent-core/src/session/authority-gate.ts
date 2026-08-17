@@ -1303,7 +1303,10 @@ export function createAuthorityGate(
             if (!gateCommitsProof && !idempotentMetroStop && !idempotentRunnerClose) {
               registry.verifyOperation(operation);
               const nextStatus = runtime.status();
-              if (!nextStatus.available || nextStatus.authorityVersion <= initialAuthorityVersion) {
+              if (
+                !nextStatus.available ||
+                (!idempotentBindSource && nextStatus.authorityVersion <= initialAuthorityVersion)
+              ) {
                 throw new SessionAuthorityError(
                   'AUTHORITY_LOST_DURING_OPERATION',
                   'transition did not advance the fenced authority generation',

@@ -1700,6 +1700,27 @@ test('transition handlers remain fenced across their expected authority version 
   assert.equal(calls.at(-1), 'end');
 });
 
+test('already-bound bind_source completes as a fenced no-op without an authority advance', async () => {
+  const { runtime, status, calls } = fixture();
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+  });
+
+  const initialAuthorityVersion = status.authorityVersion;
+  const result = await gate.wrap('rn_session', async () =>
+    okResult({ alreadyBound: true, projectRoot: status.source.appRoot }),
+  )({ action: 'bind_source', projectRoot: status.source.appRoot });
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, true, result.content[0].text);
+  assert.equal(envelope.data.alreadyBound, true);
+  assert.equal(status.authorityVersion, initialAuthorityVersion);
+  assert.equal(envelope.meta.authorityReceipt.authorityVersion, initialAuthorityVersion);
+  assert.ok(calls.includes('cas'));
+  assert.equal(calls[0], 'begin:rn_session');
+  assert.equal(calls.at(-1), 'end');
+});
+
 test('stale-device release refuses a success envelope when no scoped commit advanced authority', async () => {
   const { runtime, status } = fixture();
   status.bindings.staleDeviceRelease = {
