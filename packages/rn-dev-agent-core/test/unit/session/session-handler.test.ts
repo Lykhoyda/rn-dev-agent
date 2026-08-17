@@ -803,7 +803,7 @@ test('Metro rebinding clears the prior bundle and releases its target claim', as
   assert.deepEqual(update.releaseResources, [{ type: 'target', key: '8193:target-a' }]);
 });
 
-test('device rebinding refuses to discard live runner, Observe, or proof authority', async () => {
+test('device rebinding refuses to discard live runner or proof authority', async () => {
   let replaced = false;
   const status = {
     sessionId: 'session-a',
@@ -835,7 +835,7 @@ test('device rebinding refuses to discard live runner, Observe, or proof authori
 
   assert.equal(result.isError, true);
   assert.equal(replaced, false);
-  assert.match(result.content[0].text, /runner, Observe, or proof authority/i);
+  assert.match(result.content[0].text, /runner or proof authority/i);
 });
 
 test('device binding rejects a nonexistent exact device before claiming it', async () => {

@@ -9,7 +9,8 @@ Inspect and transition the fenced rn-dev-agent authority session. Status reconci
 
 | Name | Type | Required | Default | Constraints | Description |
 |------|------|----------|---------|-------------|-------------|
-| `action` | `enum: status | bind_device | bind_metro | pin_dev_client | prepare_handoff | cancel_handoff | accept_handoff | adopt_stale | release_stale_device | recover_arbiter | preview_integration | apply_integration | restore_integration | stop_metro | release` | Yes |  |  |  |
+| `action` | `enum: status | bind_source | bind_device | bind_metro | pin_dev_client | prepare_handoff | cancel_handoff | accept_handoff | adopt_stale | release_stale_device | recover_arbiter | preview_integration | apply_integration | restore_integration | stop_metro | release` | Yes |  |  |  |
+| `projectRoot` | `unknown` | No |  |  | bind_source: same-repo worktree to rebind; other actions refuse on mismatch |
 | `platform` | `unknown` | No |  |  | Required with deviceId for foreign transfer; omit both to resume own journal |
 | `deviceId` | `unknown` | No |  |  | Required with platform for foreign transfer; omit both to resume own journal |
 | `appId` | `string` | No |  |  |  |
@@ -32,5 +33,5 @@ Inspect and transition the fenced rn-dev-agent authority session. Status reconci
 ## Usage
 
 ```
-rn_session(action: <enum: status | bind_device | bind_metro | pin_dev_client | prepare_handoff | cancel_handoff | accept_handoff | adopt_stale | release_stale_device | recover_arbiter | preview_integration | apply_integration | restore_integration | stop_metro | release>)
+rn_session(action: <enum: status | bind_source | bind_device | bind_metro | pin_dev_client | prepare_handoff | cancel_handoff | accept_handoff | adopt_stale | release_stale_device | recover_arbiter | preview_integration | apply_integration | restore_integration | stop_metro | release>)
 ```

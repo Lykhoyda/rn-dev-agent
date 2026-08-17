@@ -1498,6 +1498,7 @@ trackedTool(
   {
     action: z.enum([
       'status',
+      'bind_source',
       'bind_device',
       'bind_metro',
       'pin_dev_client',
@@ -1513,6 +1514,10 @@ trackedTool(
       'stop_metro',
       'release',
     ]),
+    projectRoot: z
+      .string()
+      .describe('bind_source: same-repo worktree to rebind; other actions refuse on mismatch')
+      .optional(),
     platform: z
       .enum(['ios', 'android'])
       .describe('Required with deviceId for foreign transfer; omit both to resume own journal')

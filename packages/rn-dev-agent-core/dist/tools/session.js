@@ -7,6 +7,8 @@ import { applyPackageIntegration, inspectPackageIntegrationFileState, previewMet
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
+import { resolveSourceIdentity } from '../session/source-identity.js';
+import { writeSuccessorSourceDeclaration, } from '../session/successor-source.js';
 import { inspectSessionOwner } from '../session/process-owner.js';
 import { inspectInstallIdentity } from '../session/install-identity-inspection.js';
 import { projectPublicAuthorityStatus } from '../session/public-status.js';
@@ -99,6 +101,58 @@ function assertPackageIntegrationInactive(bindings, action) {
             ? '; run observe action "stop" for this session, then retry apply_integration'
             : '';
         throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', `${action} requires releasing active ${activeBindings.join(', ')} authority${guidance}`);
+    }
+}
+function defaultDeclareSuccessorSource(declaration) {
+    const runtimeRoot = process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT;
+    if (!runtimeRoot) {
+        throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'successor source declaration requires the supervised session runtime root; start the MCP transport from the intended worktree instead');
+    }
+    writeSuccessorSourceDeclaration(runtimeRoot, declaration);
+}
+// GH #776: a caller-declared projectRoot in a different git worktree refuses with
+// both paths named instead of silently mutating the session's tree. Identity is
+// compared by canonical worktree toplevel, never by filesystem containment — a
+// linked worktree may be nested beneath the bound checkout.
+function assertDeclaredProjectRootMatches(status, projectRoot, resolveIdentity) {
+    if (projectRoot === undefined)
+        return;
+    const boundAppRoot = String(status.source.appRoot ?? '');
+    if (typeof projectRoot !== 'string' || projectRoot.length === 0) {
+        throw new SessionAuthorityError('SOURCE_ROOT_DIVERGENCE', `projectRoot must be a non-empty path (session source root: ${boundAppRoot})`, undefined, { axis: 'S' });
+    }
+    let declared;
+    try {
+        declared = resolveIdentity(projectRoot);
+    }
+    catch (error) {
+        throw new SessionAuthorityError('SOURCE_ROOT_DIVERGENCE', `declared project root ${projectRoot} cannot be resolved as a source root (session source root: ${boundAppRoot}): ${error instanceof Error ? error.message : 'unknown error'}`, undefined, { axis: 'S' });
+    }
+    if (declared.worktreeKey === status.worktreeKey)
+        return;
+    throw new SessionAuthorityError('SOURCE_ROOT_DIVERGENCE', `session source is bound to ${boundAppRoot} but the caller declared ${declared.appRoot} in a different worktree`, undefined, {
+        axis: 'S',
+        nextAction: `Run rn_session action "bind_source" with projectRoot "${declared.appRoot}" to rebind this session to that worktree, then retry.`,
+    });
+}
+async function stopVerifiedSessionObserve(status, session, dependencies) {
+    const observe = status.bindings.observe;
+    if (!observe)
+        return;
+    const port = String(observe.port);
+    if (status.bindings.observePort !== observe.port ||
+        !status.claims.some((claim) => claim.type === 'observe-port' &&
+            claim.key === port &&
+            claim.sessionId === session.sessionId &&
+            claim.claimEpoch === session.claimEpoch)) {
+        throw new SessionAuthorityError('OBSERVE_AUTHORITY_MISMATCH', 'Observe cleanup claim no longer matches the authenticated binding');
+    }
+    const cleanup = { ...observe, stopRequestedAt: Date.now() };
+    if (dependencies.stopHandoffObserve) {
+        await dependencies.stopHandoffObserve(cleanup);
+    }
+    else {
+        await stopBoundObserve(cleanup, dependencies.probeListener, dependencies.probeProcessBirth, dependencies.cleanupTimeoutMs);
     }
 }
 async function stopHandoffObserve(binding, listenerProbe, processProbe, timeoutMs = 2_000) {
@@ -313,6 +367,73 @@ function removeSessionAndroidMetroReverse(registry, session, status, dependencie
     }
     return current;
 }
+async function releaseSessionAuthority(registry, session, dependencies) {
+    let status = registry.getSessionStatus(session.sessionId);
+    if (!status) {
+        throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'session disappeared before release cleanup');
+    }
+    if (status.bindings.packageIntegration) {
+        throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'package integration must be restored before session release');
+    }
+    status = removeSessionAndroidMetroReverse(registry, session, status, dependencies);
+    const appRoot = String(status.source?.appRoot ?? '');
+    const metro = status.bindings.metro;
+    const runner = status.bindings.runner;
+    const recorder = status.bindings.recorder;
+    if (recorder) {
+        const claimKey = `${String(recorder.platform)}:${String(recorder.deviceId)}`;
+        if (!status.claims.some((claim) => claim.type === 'recorder' &&
+            claim.key === claimKey &&
+            claim.sessionId === session.sessionId &&
+            claim.claimEpoch === session.claimEpoch)) {
+            throw new SessionAuthorityError('RECORDING_AUTHORITY_MISMATCH', 'recorder cleanup claim no longer matches the authenticated binding');
+        }
+        await (dependencies.stopHandoffRecorder ?? stopBoundRecorder)(recorder);
+    }
+    if (runner) {
+        const claimKey = `${String(runner.platform)}:${String(runner.deviceId)}:${String(runner.port)}`;
+        if (!status.claims.some((claim) => claim.type === 'runner' &&
+            claim.key === claimKey &&
+            claim.sessionId === session.sessionId &&
+            claim.claimEpoch === session.claimEpoch)) {
+            throw new SessionAuthorityError('RUNNER_OWNERSHIP_MISMATCH', 'runner cleanup claim no longer matches the authenticated binding');
+        }
+        const cleanup = { ...runner, claimKey, stopRequestedAt: Date.now() };
+        if (dependencies.stopHandoffRunner) {
+            await dependencies.stopHandoffRunner(cleanup);
+        }
+        else {
+            await stopBoundRunner(cleanup, dependencies.probeProcessBirth, dependencies.signalProcess, dependencies.cleanupTimeoutMs);
+        }
+    }
+    await stopVerifiedSessionObserve(status, session, dependencies);
+    if (metro?.mode === 'managed') {
+        const signerCapability = dependencies.getSignerCapability?.();
+        if (!signerCapability) {
+            throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'managed Metro release requires the session signer capability');
+        }
+        const stopped = await (dependencies.stopManagedMetro ?? stopManagedMetro)(metro, {
+            sessionId: session.sessionId,
+            signerCapability,
+        });
+        if (!stopped) {
+            throw new SessionAuthorityError('METRO_AUTHORITY_MISMATCH', 'managed Metro could not be stopped with exact process authority');
+        }
+    }
+    registry.releaseSession(session);
+    if (status.bindings.bundle)
+        dependencies.onBundleInvalidated?.();
+    // GH #706: the released row can never be transitioned again. Ask the supervisor
+    // to resolve a fresh session so the next call is not a dead end.
+    let recycleRequested = false;
+    try {
+        recycleRequested = dependencies.requestWorkerRecycle?.() === true;
+    }
+    catch {
+        /* release already succeeded; recovery falls back to a transport restart */
+    }
+    return { appRoot, recycleRequested };
+}
 export function createSessionHandler(runtime, dependencies = {}) {
     return async (input) => {
         if (input.action === 'status') {
@@ -407,6 +528,65 @@ export function createSessionHandler(runtime, dependencies = {}) {
                     nextAction: 'The exact device, runner, and recorder claims are released. Re-run bind_device to claim the device.',
                 });
             }
+            if (input.action === 'bind_source') {
+                // GH #776: explicit rebind for linked git worktrees — the session releases
+                // and its successor mints on the declared root instead of the boot cwd.
+                const projectRoot = String(required(input.projectRoot, 'projectRoot'));
+                const status = registry.getSessionStatus(session.sessionId);
+                if (!status) {
+                    throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'session disappeared before source binding');
+                }
+                const boundAppRoot = String(status.source.appRoot ?? '');
+                let declared;
+                try {
+                    declared = (dependencies.resolveSourceIdentity ?? resolveSourceIdentity)(projectRoot);
+                }
+                catch (error) {
+                    throw new SessionAuthorityError('SOURCE_ROOT_DIVERGENCE', `declared project root ${projectRoot} cannot be resolved as a source root (session source root: ${boundAppRoot}): ${error instanceof Error ? error.message : 'unknown error'}`, undefined, {
+                        axis: 'S',
+                        nextAction: 'Pass an existing checkout directory of the repository this session was started for.',
+                    });
+                }
+                if (declared.worktreeKey === status.worktreeKey &&
+                    declared.appRootKey === status.appRootKey) {
+                    return okResult({
+                        bound: true,
+                        alreadyBound: true,
+                        appRoot: boundAppRoot,
+                        session: projectPublicAuthorityStatus(runtime.status(), { now: dependencies.now }),
+                    });
+                }
+                if (declared.sourceKey !== status.sourceKey) {
+                    throw new SessionAuthorityError('SOURCE_ROOT_DIVERGENCE', `declared project root ${declared.appRoot} belongs to a different repository than the session source root ${boundAppRoot}`, undefined, {
+                        axis: 'S',
+                        nextAction: 'rn_session never attaches to a foreign tree; start the MCP transport from the intended checkout to bind a different repository.',
+                    });
+                }
+                if (status.bindings.packageIntegration) {
+                    throw new SessionAuthorityError('SOURCE_ROOT_DIVERGENCE', `package integration is applied in ${boundAppRoot}; restore it before rebinding to ${declared.appRoot}`, undefined, {
+                        axis: 'S',
+                        nextAction: 'Run rn_session action "restore_integration", then retry bind_source.',
+                    });
+                }
+                (dependencies.declareSuccessorSource ?? defaultDeclareSuccessorSource)({
+                    version: 1,
+                    projectRoot: declared.appRoot,
+                    sourceKey: declared.sourceKey,
+                    sessionId: session.sessionId,
+                    declaredAtMs: Date.now(),
+                });
+                const outcome = await releaseSessionAuthority(registry, session, dependencies);
+                return okResult({
+                    bound: false,
+                    released: true,
+                    sessionId: session.sessionId,
+                    successorRoot: declared.appRoot,
+                    recycleRequested: outcome.recycleRequested,
+                    nextAction: outcome.recycleRequested
+                        ? `A fresh session is minted automatically for ${declared.appRoot}; retry rn_session (bind_device, apply_integration) there.`
+                        : `No supervisor can mint a successor here; start the MCP transport with its working directory at ${declared.appRoot} before the next rn_session action.`,
+                });
+            }
             if (input.action === 'bind_device') {
                 const platform = required(input.platform, 'platform');
                 const deviceId = required(input.deviceId, 'deviceId');
@@ -416,8 +596,23 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 if (!status) {
                     throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'session disappeared before device binding');
                 }
-                if (status.bindings.runner || status.bindings.observe || status.bindings.proof) {
-                    throw new SessionAuthorityError('DEVICE_AUTHORITY_MISMATCH', 'device rebinding requires runner, Observe, or proof authority to be released first');
+                assertDeclaredProjectRootMatches(status, input.projectRoot, dependencies.resolveSourceIdentity ?? resolveSourceIdentity);
+                if (status.bindings.runner || status.bindings.proof) {
+                    throw new SessionAuthorityError('DEVICE_AUTHORITY_MISMATCH', 'device rebinding requires runner or proof authority to be released first');
+                }
+                if (status.bindings.observe) {
+                    // GH #776: autostarted Observe yields the device axis on the first
+                    // bind_device instead of forcing a manual observe stop.
+                    await stopVerifiedSessionObserve(status, session, dependencies);
+                    registry.updateBindings(session, {
+                        expectedAuthorityVersion: status.authorityVersion,
+                        bindings: { observe: null },
+                    });
+                    const refreshed = registry.getSessionStatus(session.sessionId);
+                    if (!refreshed) {
+                        throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'session disappeared after Observe yielded the device axis');
+                    }
+                    status = refreshed;
                 }
                 const requireWorkerInstance = () => {
                     const workerInstance = status.worker.instanceId;
@@ -813,6 +1008,7 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 if (!status || !appRoot) {
                     throw new SessionAuthorityError('SOURCE_WORKTREE_MISMATCH', 'session app root is unavailable for integration');
                 }
+                assertDeclaredProjectRootMatches(status, input.projectRoot, dependencies.resolveSourceIdentity ?? resolveSourceIdentity);
                 const packagePath = join(appRoot, 'package.json');
                 const integrationInputs = readPackageIntegrationInputs(appRoot);
                 const manifestPath = join(appRoot, '.rn-agent', 'integration', 'rn-session-integration.json');
@@ -1269,93 +1465,15 @@ export function createSessionHandler(runtime, dependencies = {}) {
                     },
                 });
             }
-            let status = registry.getSessionStatus(session.sessionId);
-            if (!status) {
-                throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'session disappeared before release cleanup');
-            }
-            if (status.bindings.packageIntegration) {
-                throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'package integration must be restored before session release');
-            }
-            status = removeSessionAndroidMetroReverse(registry, session, status, dependencies);
-            const metro = status.bindings.metro;
-            const runner = status.bindings.runner;
-            const recorder = status.bindings.recorder;
-            if (recorder) {
-                const claimKey = `${String(recorder.platform)}:${String(recorder.deviceId)}`;
-                if (!status.claims.some((claim) => claim.type === 'recorder' &&
-                    claim.key === claimKey &&
-                    claim.sessionId === session.sessionId &&
-                    claim.claimEpoch === session.claimEpoch)) {
-                    throw new SessionAuthorityError('RECORDING_AUTHORITY_MISMATCH', 'recorder cleanup claim no longer matches the authenticated binding');
-                }
-                await (dependencies.stopHandoffRecorder ?? stopBoundRecorder)(recorder);
-            }
-            if (runner) {
-                const claimKey = `${String(runner.platform)}:${String(runner.deviceId)}:${String(runner.port)}`;
-                if (!status.claims.some((claim) => claim.type === 'runner' &&
-                    claim.key === claimKey &&
-                    claim.sessionId === session.sessionId &&
-                    claim.claimEpoch === session.claimEpoch)) {
-                    throw new SessionAuthorityError('RUNNER_OWNERSHIP_MISMATCH', 'runner cleanup claim no longer matches the authenticated binding');
-                }
-                const cleanup = { ...runner, claimKey, stopRequestedAt: Date.now() };
-                if (dependencies.stopHandoffRunner) {
-                    await dependencies.stopHandoffRunner(cleanup);
-                }
-                else {
-                    await stopBoundRunner(cleanup, dependencies.probeProcessBirth, dependencies.signalProcess, dependencies.cleanupTimeoutMs);
-                }
-            }
-            const observe = status.bindings.observe;
-            if (observe) {
-                const port = String(observe.port);
-                if (status.bindings.observePort !== observe.port ||
-                    !status.claims.some((claim) => claim.type === 'observe-port' &&
-                        claim.key === port &&
-                        claim.sessionId === session.sessionId &&
-                        claim.claimEpoch === session.claimEpoch)) {
-                    throw new SessionAuthorityError('OBSERVE_AUTHORITY_MISMATCH', 'Observe cleanup claim no longer matches the authenticated binding');
-                }
-                const cleanup = { ...observe, stopRequestedAt: Date.now() };
-                if (dependencies.stopHandoffObserve) {
-                    await dependencies.stopHandoffObserve(cleanup);
-                }
-                else {
-                    await stopBoundObserve(cleanup, dependencies.probeListener, dependencies.probeProcessBirth, dependencies.cleanupTimeoutMs);
-                }
-            }
-            if (metro?.mode === 'managed') {
-                const signerCapability = dependencies.getSignerCapability?.();
-                if (!signerCapability) {
-                    throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'managed Metro release requires the session signer capability');
-                }
-                const stopped = await (dependencies.stopManagedMetro ?? stopManagedMetro)(metro, {
-                    sessionId: session.sessionId,
-                    signerCapability,
-                });
-                if (!stopped) {
-                    throw new SessionAuthorityError('METRO_AUTHORITY_MISMATCH', 'managed Metro could not be stopped with exact process authority');
-                }
-            }
-            registry.releaseSession(session);
-            if (status.bindings.bundle)
-                dependencies.onBundleInvalidated?.();
-            // GH #706: the released row can never be transitioned again. Ask the supervisor
-            // to resolve a fresh session so the next call is not a dead end.
-            let recycleRequested = false;
-            try {
-                recycleRequested = dependencies.requestWorkerRecycle?.() === true;
-            }
-            catch {
-                /* release already succeeded; recovery falls back to a transport restart */
-            }
+            const outcome = await releaseSessionAuthority(registry, session, dependencies);
+            const releasedRoot = outcome.appRoot || 'the released source root';
             return okResult({
                 released: true,
                 sessionId: session.sessionId,
-                recycleRequested,
-                nextAction: recycleRequested
-                    ? 'A fresh session is minted automatically; retry rn_session (bind_device, apply_integration) on this worktree.'
-                    : 'No supervisor can mint a successor here; restart the MCP transport before the next rn_session action on this worktree.',
+                recycleRequested: outcome.recycleRequested,
+                nextAction: outcome.recycleRequested
+                    ? `A fresh session is minted automatically for ${releasedRoot}; retry rn_session (bind_device, apply_integration) there. If your branch work lives in a different worktree of this repository, run bind_source with that projectRoot first.`
+                    : 'No supervisor can mint a successor here; restart the MCP transport before the next rn_session action.',
             });
         }
         catch (error) {

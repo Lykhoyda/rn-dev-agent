@@ -228,6 +228,7 @@ export type ToolErrorCode =
   | 'AUTHORITY_STORE_UNAVAILABLE'
   | 'PROCESS_BIRTH_UNAVAILABLE'
   | 'SOURCE_WORKTREE_MISMATCH'
+  | 'SOURCE_ROOT_DIVERGENCE' // GH #776: caller's declared project root is not the session's bound source root
   | 'SOURCE_REVISION_NOT_BUNDLED'
   | 'METRO_PORT_CLAIM_CONFLICT'
   | 'PORT_OCCUPIED_UNOWNED'

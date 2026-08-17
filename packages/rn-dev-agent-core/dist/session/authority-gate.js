@@ -323,7 +323,7 @@ function bindExactArgument(args, field, expected, code) {
     }
     args[field] = expected;
 }
-function bindSourcePaths(status, args) {
+function bindSourcePaths(status, args, tool) {
     let appRoot;
     try {
         if (typeof status.source.appRoot !== 'string')
@@ -337,6 +337,12 @@ function bindSourcePaths(status, args) {
         const supplied = args[field];
         if (supplied === undefined)
             continue;
+        // GH #776: bind_source exists to declare a root OUTSIDE the bound app root;
+        // the session handler validates it against the repository identity instead.
+        // Scoped to the exact rn_session tool so no other surface can skip the fence.
+        if (field === 'projectRoot' && tool === 'rn_session' && args.action === 'bind_source') {
+            continue;
+        }
         if (typeof supplied !== 'string' || supplied.length === 0) {
             throw new SessionAuthorityError('SOURCE_WORKTREE_MISMATCH', `${field} must be a non-empty path within the active app root`);
         }
@@ -351,13 +357,18 @@ function bindSourcePaths(status, args) {
         if (child === '..' ||
             child.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) ||
             isAbsolute(child)) {
-            throw new SessionAuthorityError('SOURCE_WORKTREE_MISMATCH', `${field} is outside the active session app root`);
+            // GH #776: name both paths so a linked-worktree caller can see the divergence.
+            throw new SessionAuthorityError('SOURCE_WORKTREE_MISMATCH', `${field} ${candidate} is outside the active session app root ${appRoot}`, undefined, field === 'projectRoot'
+                ? {
+                    nextAction: `Run rn_session action "bind_source" with projectRoot "${candidate}" to rebind the session to that worktree, then retry.`,
+                }
+                : undefined);
         }
         args[field] = candidate;
     }
 }
-function bindSessionArguments(status, profile, args) {
-    bindSourcePaths(status, args);
+function bindSessionArguments(status, profile, args, tool) {
+    bindSourcePaths(status, args, tool);
     const device = status.bindings.device;
     const metro = status.bindings.metro;
     const install = status.bindings.install;
@@ -729,7 +740,7 @@ export function createAuthorityGate(runtime, dependencies) {
             }
             if (runtimeStatus.available && tool === 'cdp_restart' && args.hardReset === true) {
                 try {
-                    bindSessionArguments(runtimeStatus, profile, args);
+                    bindSessionArguments(runtimeStatus, profile, args, tool);
                     profile = authorityProfileFor(tool, args);
                 }
                 catch (error) {
@@ -757,7 +768,7 @@ export function createAuthorityGate(runtime, dependencies) {
                     const retainsRunnerCleanupAuthority = tool === 'device_snapshot' &&
                         args.action === 'close' &&
                         Boolean(status.bindings.runner);
-                    bindSessionArguments(status, profile, args);
+                    bindSessionArguments(status, profile, args, tool);
                     if (tool === 'device_snapshot')
                         requireDeviceTransition(status, args);
                     if (gateCommitsProof && status.bindings.proof) {
@@ -992,7 +1003,7 @@ export function createAuthorityGate(runtime, dependencies) {
                 }
                 let status = initialStatus;
                 requireCompleteAxes(status, profile);
-                bindSessionArguments(status, profile, args);
+                bindSessionArguments(status, profile, args, tool);
                 operation = registry.beginOperation(available.session, {
                     operationId: randomUUID(),
                     tool,

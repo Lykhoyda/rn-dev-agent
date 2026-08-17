@@ -13,6 +13,7 @@ import { parseDeclaredManifests } from './session/declared-source-contract.js';
 import { inspectSessionOwner } from './session/process-owner.js';
 import { readProcessBirth } from './session/process-birth.js';
 import { resolveSourceIdentity } from './session/source-identity.js';
+import { resolveSuccessorMintSource } from './session/successor-source.js';
 import { runStartupCleanupForSource, startupCleanupFailureMessage, } from './session/startup-cleanup.js';
 import { createSupervisorAuthority, resolveSupervisorAuthorityForSpawn, } from './session/supervisor-authority.js';
 import { sqliteFlagForNode, supervisorRelaunchArgs, unsupportedNodeVersionMessage, workerSpawnArgs, } from './supervisor-args.js';
@@ -97,8 +98,17 @@ else {
         catch {
             process.stderr.write(startupCleanupFailureMessage());
         }
+        // GH #776: a successor inherits the released session's source (or a validated
+        // bind_source declaration), never silently the supervisor's boot cwd.
         mintAuthority = () => createSupervisorAuthority({
-            source,
+            source: resolveSuccessorMintSource({
+                terminal: authority
+                    ? { layout: authority.layout, session: authority.session, source: authority.source }
+                    : null,
+                bootSource: source,
+                resolveIdentity: (root) => resolveSourceIdentity(root),
+                diagnostic: (message) => process.stderr.write(`rn-dev-agent successor source: ${message}\n`),
+            }),
             supervisorBirth: readProcessBirth(process.pid),
             uid: typeof process.getuid === 'function'
                 ? String(process.getuid())

@@ -1,0 +1,477 @@
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, test } from 'node:test';
+import { createSessionHandler } from '../../../dist/tools/session.js';
+import { resolveSourceIdentity } from '../../../dist/session/source-identity.js';
+import {
+  consumeSuccessorSourceDeclaration,
+  resolveSuccessorMintSource,
+  successorSourceDeclarationPath,
+  writeSuccessorSourceDeclaration,
+} from '../../../dist/session/successor-source.js';
+
+const roots: string[] = [];
+
+afterEach(() => {
+  while (roots.length > 0) {
+    rmSync(roots.pop()!, { force: true, recursive: true });
+  }
+});
+
+function git(cwd: string, args: string[]): string {
+  const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
+  if (result.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${result.stderr}`);
+  return (result.stdout ?? '').trim();
+}
+
+function makeRepoWithWorktree(): { primary: string; linked: string } {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'rn-gh776-')));
+  roots.push(root);
+  const primary = join(root, 'primary');
+  mkdirSync(primary, { recursive: true });
+  git(root, ['init', '-q', primary]);
+  git(primary, ['config', 'user.email', 'fixture@example.test']);
+  git(primary, ['config', 'user.name', 'fixture']);
+  git(primary, ['config', 'commit.gpgsign', 'false']);
+  writeFileSync(
+    join(primary, 'package.json'),
+    JSON.stringify({ name: 'app', dependencies: { 'react-native': '0.76.0' } }),
+  );
+  git(primary, ['add', '-A']);
+  git(primary, ['commit', '-qm', 'init']);
+  const linked = join(root, 'linked');
+  git(primary, ['worktree', 'add', '-q', linked, '-b', 'linked']);
+  return { primary, linked };
+}
+
+function makeForeignRepo(): string {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'rn-gh776-foreign-')));
+  roots.push(root);
+  git(root, ['init', '-q', '.']);
+  git(root, ['config', 'user.email', 'fixture@example.test']);
+  git(root, ['config', 'user.name', 'fixture']);
+  git(root, ['config', 'commit.gpgsign', 'false']);
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'foreign' }));
+  git(root, ['add', '-A']);
+  git(root, ['commit', '-qm', 'init']);
+  return root;
+}
+
+function makeLayout(): { root: string; registry: string } {
+  const stateRoot = realpathSync(mkdtempSync(join(tmpdir(), 'rn-gh776-state-')));
+  roots.push(stateRoot);
+  const root = join(stateRoot, 'v2');
+  mkdirSync(join(root, 'sessions'), { recursive: true });
+  return {
+    root,
+    registry: join(root, 'registry.sqlite3'),
+    sessions: join(root, 'sessions'),
+    runners: join(root, 'runners'),
+    observe: join(root, 'observe'),
+    migrations: join(root, 'migrations'),
+  } as never;
+}
+
+test('successor source declarations are consumed exactly once for the declaring session', () => {
+  const layout = makeLayout();
+  const runtime = join(layout.root, 'sessions', 'session-1', 'runtime');
+  mkdirSync(runtime, { recursive: true });
+  writeSuccessorSourceDeclaration(runtime, {
+    version: 1,
+    projectRoot: '/tmp/declared-root',
+    sourceKey: 'shared-source',
+    sessionId: 'session-1',
+    declaredAtMs: 123,
+  });
+  assert.equal(existsSync(successorSourceDeclarationPath(runtime)), true);
+  const consumed = consumeSuccessorSourceDeclaration(layout as never, 'session-1');
+  assert.equal(consumed?.projectRoot, '/tmp/declared-root');
+  assert.equal(existsSync(successorSourceDeclarationPath(runtime)), false);
+  assert.equal(consumeSuccessorSourceDeclaration(layout as never, 'session-1'), null);
+});
+
+test('a declaration written for another session is rejected and removed', () => {
+  const layout = makeLayout();
+  const runtime = join(layout.root, 'sessions', 'session-2', 'runtime');
+  mkdirSync(runtime, { recursive: true });
+  writeSuccessorSourceDeclaration(runtime, {
+    version: 1,
+    projectRoot: '/tmp/declared-root',
+    sourceKey: 'shared-source',
+    sessionId: 'other-session',
+    declaredAtMs: 123,
+  });
+  assert.equal(consumeSuccessorSourceDeclaration(layout as never, 'session-2'), null);
+  assert.equal(existsSync(successorSourceDeclarationPath(runtime)), false);
+});
+
+test('the successor mints on a declared linked worktree of the same repository', () => {
+  const { primary, linked } = makeRepoWithWorktree();
+  const layout = makeLayout();
+  const terminalSource = resolveSourceIdentity(primary);
+  const runtime = join(layout.root, 'sessions', 'terminal', 'runtime');
+  mkdirSync(runtime, { recursive: true });
+  writeSuccessorSourceDeclaration(runtime, {
+    version: 1,
+    projectRoot: linked,
+    sourceKey: terminalSource.sourceKey,
+    sessionId: 'terminal',
+    declaredAtMs: Date.now(),
+  });
+  const minted = resolveSuccessorMintSource({
+    terminal: {
+      layout: layout as never,
+      session: { sessionId: 'terminal' },
+      source: terminalSource,
+    },
+    bootSource: terminalSource,
+    resolveIdentity: (root) => resolveSourceIdentity(root),
+  });
+  assert.equal(minted.appRoot, realpathSync(linked));
+  assert.equal(minted.sourceKey, terminalSource.sourceKey);
+  assert.notEqual(minted.worktreeKey, terminalSource.worktreeKey);
+});
+
+test('a foreign-repository declaration is ignored and the terminal source is inherited', () => {
+  const { primary } = makeRepoWithWorktree();
+  const foreign = makeForeignRepo();
+  const layout = makeLayout();
+  const terminalSource = resolveSourceIdentity(primary);
+  const runtime = join(layout.root, 'sessions', 'terminal', 'runtime');
+  mkdirSync(runtime, { recursive: true });
+  writeSuccessorSourceDeclaration(runtime, {
+    version: 1,
+    projectRoot: foreign,
+    sourceKey: resolveSourceIdentity(foreign).sourceKey,
+    sessionId: 'terminal',
+    declaredAtMs: Date.now(),
+  });
+  const diagnostics: string[] = [];
+  const minted = resolveSuccessorMintSource({
+    terminal: {
+      layout: layout as never,
+      session: { sessionId: 'terminal' },
+      source: terminalSource,
+    },
+    bootSource: terminalSource,
+    resolveIdentity: (root) => resolveSourceIdentity(root),
+    diagnostic: (message) => diagnostics.push(message),
+  });
+  assert.equal(minted.worktreeKey, terminalSource.worktreeKey);
+  assert.equal(diagnostics.length, 1);
+});
+
+test('a released session source stays sticky for the successor without a declaration', () => {
+  const { linked } = makeRepoWithWorktree();
+  const layout = makeLayout();
+  const worktreeSource = resolveSourceIdentity(linked);
+  const bootSource = { ...worktreeSource, worktreeKey: 'boot-worktree', appRoot: '/boot' };
+  const minted = resolveSuccessorMintSource({
+    terminal: {
+      layout: layout as never,
+      session: { sessionId: 'terminal' },
+      source: worktreeSource,
+    },
+    bootSource: bootSource as never,
+    resolveIdentity: (root) => resolveSourceIdentity(root),
+  });
+  assert.equal(minted.worktreeKey, worktreeSource.worktreeKey);
+  assert.equal(minted.appRoot, realpathSync(linked));
+});
+
+interface HandlerHarness {
+  handler: ReturnType<typeof createSessionHandler>;
+  calls: string[];
+  declared: Record<string, unknown>[];
+}
+
+function makeBindSourceHarness(
+  primary: string,
+  extraBindings: Record<string, unknown> = {},
+): HandlerHarness {
+  const source = resolveSourceIdentity(primary);
+  const status = {
+    sessionId: 'session-776',
+    sourceKey: source.sourceKey,
+    worktreeKey: source.worktreeKey,
+    appRootKey: source.appRootKey,
+    state: 'source_bound',
+    claimEpoch: 1,
+    authorityVersion: 1,
+    leaseUntilMs: 100,
+    source: { ...source },
+    bindings: { ...extraBindings },
+    claims: [],
+    worker: { instanceId: 'worker', pid: 1, birthAvailable: true },
+  };
+  const calls: string[] = [];
+  const declared: Record<string, unknown>[] = [];
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: {
+          getSessionStatus: () => status,
+          releaseSession: () => calls.push('release'),
+        },
+        session: { sessionId: 'session-776', claimEpoch: 1 },
+      }),
+    } as never,
+    {
+      declareSuccessorSource: (declaration) => {
+        declared.push(declaration as never);
+        calls.push('declare');
+      },
+      requestWorkerRecycle: () => {
+        calls.push('recycle');
+        return true;
+      },
+    },
+  );
+  return { handler, calls, declared };
+}
+
+test('bind_source declares the linked worktree and releases toward a recycled successor', async () => {
+  const { primary, linked } = makeRepoWithWorktree();
+  const { handler, calls, declared } = makeBindSourceHarness(primary);
+
+  const result = await handler({ action: 'bind_source', projectRoot: linked } as never);
+  const body = JSON.parse(result.content[0]!.text);
+
+  assert.equal(result.isError, undefined, result.content[0]!.text);
+  assert.deepEqual(calls, ['declare', 'release', 'recycle']);
+  assert.equal(declared[0]!.projectRoot, realpathSync(linked));
+  assert.equal(declared[0]!.sessionId, 'session-776');
+  assert.equal(body.data.released, true);
+  assert.equal(body.data.successorRoot, realpathSync(linked));
+  assert.equal(body.data.recycleRequested, true);
+  assert.match(body.data.nextAction, /minted automatically for/);
+  assert.ok(String(body.data.nextAction).includes(realpathSync(linked)));
+});
+
+test('bind_source on the already-bound root is a no-op', async () => {
+  const { primary } = makeRepoWithWorktree();
+  const { handler, calls } = makeBindSourceHarness(primary);
+
+  const result = await handler({ action: 'bind_source', projectRoot: primary } as never);
+  const body = JSON.parse(result.content[0]!.text);
+
+  assert.equal(result.isError, undefined, result.content[0]!.text);
+  assert.equal(body.data.alreadyBound, true);
+  assert.deepEqual(calls, []);
+});
+
+test('bind_source refuses a foreign repository naming both paths', async () => {
+  const { primary } = makeRepoWithWorktree();
+  const foreign = makeForeignRepo();
+  const { handler, calls } = makeBindSourceHarness(primary);
+
+  const result = await handler({ action: 'bind_source', projectRoot: foreign } as never);
+  const body = JSON.parse(result.content[0]!.text);
+
+  assert.equal(body.code, 'SOURCE_ROOT_DIVERGENCE');
+  assert.ok(String(body.error).includes(realpathSync(foreign)));
+  assert.ok(String(body.error).includes(realpathSync(primary)));
+  assert.match(String(body.meta?.nextAction ?? ''), /never attaches to a foreign tree/);
+  assert.deepEqual(calls, []);
+});
+
+test('bind_source refuses while package integration is applied in the bound tree', async () => {
+  const { primary, linked } = makeRepoWithWorktree();
+  const { handler, calls } = makeBindSourceHarness(primary, {
+    packageIntegration: { version: 1 },
+  });
+
+  const result = await handler({ action: 'bind_source', projectRoot: linked } as never);
+  const body = JSON.parse(result.content[0]!.text);
+
+  assert.equal(body.code, 'SOURCE_ROOT_DIVERGENCE');
+  assert.match(String(body.error), /restore it before rebinding/);
+  assert.ok(String(body.error).includes(realpathSync(primary)));
+  assert.deepEqual(calls, []);
+});
+
+test('integration actions refuse a declared root from a different worktree naming both paths', async () => {
+  const { primary, linked } = makeRepoWithWorktree();
+  const source = resolveSourceIdentity(primary);
+  const status = {
+    sessionId: 'session-776',
+    sourceKey: source.sourceKey,
+    worktreeKey: source.worktreeKey,
+    appRootKey: source.appRootKey,
+    state: 'source_bound',
+    claimEpoch: 1,
+    authorityVersion: 1,
+    leaseUntilMs: 100,
+    source: { ...source },
+    bindings: {},
+    claims: [],
+    worker: { instanceId: 'worker', pid: 1, birthAvailable: true },
+  };
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: { getSessionStatus: () => status },
+        session: { sessionId: 'session-776', claimEpoch: 1 },
+      }),
+    } as never,
+    {},
+  );
+
+  const result = await handler({
+    action: 'preview_integration',
+    projectRoot: linked,
+  } as never);
+  const body = JSON.parse(result.content[0]!.text);
+
+  assert.equal(body.code, 'SOURCE_ROOT_DIVERGENCE');
+  assert.ok(String(body.error).includes(realpathSync(linked)));
+  assert.ok(String(body.error).includes(realpathSync(primary)));
+  assert.match(String(body.meta?.nextAction ?? ''), /bind_source/);
+});
+
+test('bind_device yields an autostarted Observe binding instead of refusing', async () => {
+  const calls: string[] = [];
+  const observeBinding = {
+    port: 7333,
+    pid: 456,
+    processBirth: 'observe-birth',
+    instanceId: 'observe',
+    cleanupCapability: 'capability',
+  };
+  const status: Record<string, unknown> = {
+    sessionId: 'session-776',
+    state: 'source_bound',
+    claimEpoch: 1,
+    authorityVersion: 5,
+    leaseUntilMs: 100,
+    source: { kind: 'git' },
+    bindings: { observe: observeBinding, observePort: 7333 },
+    claims: [
+      {
+        type: 'observe-port',
+        key: '7333',
+        sessionId: 'session-776',
+        claimEpoch: 1,
+      },
+    ],
+    worker: { instanceId: 'worker', pid: 1, birthAvailable: true },
+  };
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: {
+          getSessionStatus: () => status,
+          updateBindings: (_session: unknown, update: { bindings: Record<string, unknown> }) => {
+            assert.deepEqual(update.bindings, { observe: null });
+            (status.bindings as Record<string, unknown>).observe = null;
+            calls.push('clear-observe');
+          },
+        },
+        session: { sessionId: 'session-776', claimEpoch: 1 },
+      }),
+    } as never,
+    {
+      stopHandoffObserve: async (binding) => {
+        assert.equal(binding.port, 7333);
+        calls.push('stop-observe');
+      },
+      deviceExists: () => {
+        calls.push('device-exists');
+        throw new Error('HALT_AFTER_YIELD');
+      },
+    },
+  );
+
+  const result = await handler({
+    action: 'bind_device',
+    platform: 'android',
+    deviceId: 'emulator-5554',
+    appId: 'com.example.app',
+  } as never);
+
+  assert.deepEqual(calls, ['stop-observe', 'clear-observe', 'device-exists']);
+  const body = JSON.parse(result.content[0]!.text);
+  assert.equal(body.code, 'DEVICE_DISCOVERY_UNAVAILABLE');
+  assert.match(String(body.error), /HALT_AFTER_YIELD/);
+});
+
+for (const blocking of [
+  { name: 'runner', bindings: { runner: { platform: 'android' } } },
+  { name: 'proof', bindings: { proof: { runId: 'proof-a' } } },
+]) {
+  test(`bind_device still refuses while ${blocking.name} authority is bound`, async () => {
+    const status = {
+      sessionId: 'session-776',
+      state: 'ready',
+      claimEpoch: 1,
+      authorityVersion: 1,
+      leaseUntilMs: 100,
+      source: { kind: 'git' },
+      bindings: { ...blocking.bindings },
+      claims: [],
+      worker: { instanceId: 'worker', pid: 1, birthAvailable: true },
+    };
+    const handler = createSessionHandler(
+      {
+        status: () => ({ available: true, ...status }),
+        requireOperational: () => ({
+          registry: { getSessionStatus: () => status },
+          session: { sessionId: 'session-776', claimEpoch: 1 },
+        }),
+      } as never,
+      {},
+    );
+
+    const result = await handler({
+      action: 'bind_device',
+      platform: 'android',
+      deviceId: 'emulator-5554',
+      appId: 'com.example.app',
+    } as never);
+    const body = JSON.parse(result.content[0]!.text);
+
+    assert.equal(body.code, 'DEVICE_AUTHORITY_MISMATCH');
+    assert.match(String(body.error), /runner or proof authority/);
+  });
+}
+
+test('release names the root the successor will bind instead of "this worktree"', async () => {
+  const status = {
+    sessionId: 'session-776',
+    state: 'source_bound',
+    claimEpoch: 1,
+    authorityVersion: 1,
+    leaseUntilMs: 100,
+    source: { kind: 'git', appRoot: '/repo/linked-worktree' },
+    bindings: {},
+    claims: [],
+    worker: { instanceId: 'worker', pid: 1, birthAvailable: true },
+  };
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: {
+          getSessionStatus: () => status,
+          releaseSession: () => {},
+        },
+        session: { sessionId: 'session-776', claimEpoch: 1 },
+      }),
+    } as never,
+    { requestWorkerRecycle: () => true },
+  );
+
+  const result = await handler({ action: 'release' } as never);
+  const body = JSON.parse(result.content[0]!.text);
+
+  assert.equal(body.data.recycleRequested, true);
+  assert.match(body.data.nextAction, /minted automatically for \/repo\/linked-worktree/);
+  assert.doesNotMatch(body.data.nextAction, /on this worktree/);
+  assert.match(body.data.nextAction, /bind_source/);
+});
