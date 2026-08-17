@@ -13,6 +13,7 @@ import { okResult } from '../../../dist/utils.js';
 const APP_ID = 'com.example.app';
 
 function gateFixture() {
+  const operationAxes = new Set();
   const status = {
     available: true,
     sessionId: 'session-a',
@@ -27,25 +28,36 @@ function gateFixture() {
     bindings: {
       install: { digest: 'install', platform: 'ios', deviceId: 'device', appId: APP_ID },
       metro: { instanceId: 'metro', port: 8082 },
+      bundle: {
+        targetId: 'target',
+        connectionGeneration: 1,
+        authorityScope: 'initial-bundle',
+        sourceFidelity: 'not-proven',
+      },
       device: { platform: 'ios', deviceId: 'device', appId: APP_ID },
       runner: { instanceId: 'runner' },
     },
     claims: [],
     worker: { instanceId: 'worker', pid: 1, birthAvailable: true },
   };
-  const operation = {
-    operationId: 'op',
-    sessionId: 'session-a',
-    claimEpoch: 4,
-    authorityVersion: 9,
-  };
   const registry = {
-    beginOperation: () => operation,
+    beginOperation: (_session, input) => {
+      operationAxes.clear();
+      for (const axis of input.profile) operationAxes.add(axis);
+      return {
+        operationId: input.operationId,
+        sessionId: 'session-a',
+        claimEpoch: 4,
+        authorityVersion: 9,
+      };
+    },
     getClaim: () => null,
     verifyOperation: () => {},
-    operationHasAxis: () => true,
+    operationHasAxis: (_operation, axis) => operationAxes.has(axis),
     beginOperationAxisAdmission: () => {},
-    completeOperationAxisAdmission: () => {},
+    completeOperationAxisAdmission: (_operation, axis, admitted) => {
+      if (admitted) operationAxes.add(axis);
+    },
     runWithOperation: async (_operation, callback) => callback(),
     commitPlatformAuthorityReceipts: () => {},
     endOperation: () => {},
@@ -180,7 +192,7 @@ test('lost runner ownership refuses the bootstrap dialog without dispatch', asyn
 
 test('the bootstrap admission does not extend to runtime-bound tools before attachment', async () => {
   const { runtime, status } = gateFixture();
-  status.bindings.bundle = undefined;
+  delete status.bindings.bundle;
   let dispatched = false;
   const gate = createAuthorityGate(runtime, {
     probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
