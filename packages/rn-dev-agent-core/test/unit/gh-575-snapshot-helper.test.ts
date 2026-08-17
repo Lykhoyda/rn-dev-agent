@@ -209,6 +209,69 @@ exit 1
   }
 });
 
+// A device listing that could not be produced is an unknown state, never the
+// verdict "this device is absent" — a single failed probe spawn once reported a
+// booted simulator as not booted and failed the run.
+test('GH-575 snapshot retries a failed device listing instead of reporting the device absent', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'rn-agent-snapshot-probe-'));
+  const bin = join(root, 'bin');
+  const output = join(root, 'output');
+  const attempts = join(root, 'attempts');
+  const udid = 'AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE';
+  await mkdir(bin);
+  await mkdir(output, { mode: 0o700 });
+  await executable(
+    join(bin, 'xcrun'),
+    `#!/bin/sh
+if [ "$1 $2 $3" = "simctl list devices" ]; then
+  printf 'x' >> "$ATTEMPTS"
+  if [ "$(wc -c < "$ATTEMPTS")" -le 1 ]; then
+    exit 137
+  fi
+  printf '    iPhone One (%s) (Booted)\n' '${udid}'
+  exit 0
+fi
+printf 'jpeg\n' > "$6"
+`,
+  );
+  try {
+    const { stdout } = await pexecFile(
+      'bash',
+      [snapshotHelper, 'ios', '--device-id', udid, '--output-dir', output],
+      { env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, ATTEMPTS: attempts } },
+    );
+    const result = stdout.trim();
+    assert.match(result, /\/snapshot-ios-[A-Za-z0-9]+$/);
+    assert.equal(await readFile(join(result, 'screenshot.jpg'), 'utf8'), 'jpeg\n');
+    assert.equal((await readFile(attempts, 'utf8')).length, 2);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('GH-575 snapshot still reports a device that every listing omits', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'rn-agent-snapshot-absent-'));
+  const bin = join(root, 'bin');
+  const udid = 'AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE';
+  await mkdir(bin);
+  await executable(
+    join(bin, 'xcrun'),
+    `#!/bin/sh
+printf '    iPhone Other (11111111-2222-3333-4444-555555555555) (Booted)\n'
+`,
+  );
+  try {
+    await assert.rejects(
+      pexecFile('bash', [snapshotHelper, 'ios', '--device-id', udid], {
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, TMPDIR: root },
+      }),
+      /is not booted/,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('GH-575 snapshot cleans caller-owned staging when either Android artifact fails', async () => {
   const root = await mkdtemp(join(tmpdir(), 'rn-agent-snapshot-android-failure-'));
   const bin = join(root, 'bin');
