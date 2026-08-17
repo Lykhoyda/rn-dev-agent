@@ -228,6 +228,7 @@ import {
   DISCOVERY_TIMEOUT_MS,
   discoverAllMetroPorts,
   resolveDefaultPorts,
+  setRegistryDeviceBindingProvider,
 } from './cdp/discovery.js';
 import { assertAuthorityProfilesExhaustive } from './session/tool-profiles.js';
 import { readJsonStateFile } from './util/secure-state-file.js';
@@ -249,6 +250,7 @@ import {
 } from './session/target-device-authority.js';
 import {
   connectExactSessionTarget as connectExactSessionTargetWithDependencies,
+  exactCandidateMismatchError,
   exactSessionTargetReadinessTimeoutMs,
   type ExactSessionTargetConnection,
 } from './session/connect-exact-session-target.js';
@@ -415,6 +417,16 @@ addToolObserver((o) => strictProofMonitor.record(o));
 addToolObserver((o) => experienceRecorder.observe(o));
 
 const authorityRuntime = getWorkerAuthorityRuntime();
+setRegistryDeviceBindingProvider(() => {
+  const status = authorityRuntime.status();
+  if (!status.available) return null;
+  const device = status.bindings.device as { platform?: unknown; deviceId?: unknown } | undefined;
+  if (!device) return null;
+  return {
+    platform: typeof device.platform === 'string' ? device.platform : undefined,
+    deviceId: typeof device.deviceId === 'string' ? device.deviceId : undefined,
+  };
+});
 setSnapshotAuthorityProvider({
   current: () => {
     const status = authorityRuntime.status();
@@ -1111,8 +1123,16 @@ function createAuthoritativeSessionPolicy(status: SessionStatus): AuthoritativeS
         { execute: execFileP, awaitWithinBoundary },
       );
       if (exactCandidates.length !== 1) {
-        throw new Error(
-          `CDP_TARGET_AUTHORITY_MISMATCH: expected one target on the exact device, found ${exactCandidates.length}`,
+        throw exactCandidateMismatchError(
+          {
+            metroPort,
+            platform: device.platform,
+            appId: device.appId,
+            deviceId: device.deviceId,
+          },
+          targets,
+          targets,
+          exactCandidates,
         );
       }
       return exactCandidates[0]!.id;

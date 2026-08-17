@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { getActiveSession } from '../agent-device-wrapper.js';
 import { logger } from '../logger.js';
 import { isValidBundleId } from '../domain/maestro-validator.js';
 import { cwdForPort, pathMatchesRoot, resolveBridgeProjectRoot } from './metro-cwd.js';
@@ -216,13 +217,54 @@ export function cachedPackageProbe(key, probe, clock = Date.now) {
 export function clearPackageProbeCache() {
     packageProbeCache.clear();
 }
-function probeAndroidPackages() {
+let registryDeviceBindingProvider = null;
+export function setRegistryDeviceBindingProvider(provider) {
+    registryDeviceBindingProvider = provider;
+}
+// An unavailable registry lookup is an absence of authorization, never a grant.
+function registryDeviceBinding() {
+    if (!registryDeviceBindingProvider)
+        return null;
     try {
-        const out = execFileSync('adb', ['shell', 'pm', 'list', 'packages'], {
-            timeout: 3000,
-            encoding: 'utf8',
-            stdio: ['ignore', 'pipe', 'ignore'],
-        });
+        return registryDeviceBindingProvider() ?? null;
+    }
+    catch {
+        return null;
+    }
+}
+function runAdbSync(file, args) {
+    return execFileSync(file, args, {
+        timeout: 3000,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+    });
+}
+// The registry binding is the only source that can authorize a serial; the
+// device-wrapper session (including its disk-rehydrated state) can only revoke.
+// Only a flow with both stores empty keeps the pre-existing single ambient read.
+function androidAdbScope(deps = {}) {
+    const registry = (deps.getRegistryBinding ?? registryDeviceBinding)();
+    const session = (deps.getSession ?? getActiveSession)();
+    if (!registry && !session)
+        return { kind: 'ambient' };
+    const authorized = registry?.platform === 'android' && registry.deviceId ? registry.deviceId : null;
+    if (!authorized)
+        return { kind: 'fenced' };
+    if (session && (session.platform !== 'android' || session.deviceId !== authorized))
+        return { kind: 'fenced' };
+    return { kind: 'serial', serial: authorized };
+}
+export function authorizedAndroidSerial(deps = {}) {
+    const scope = androidAdbScope(deps);
+    return scope.kind === 'serial' ? scope.serial : null;
+}
+function probeAndroidPackagesInScope(scope, execute = runAdbSync) {
+    if (scope.kind === 'fenced')
+        return null;
+    try {
+        const out = scope.kind === 'serial'
+            ? execute('adb', ['-s', scope.serial, 'shell', 'pm', 'list', 'packages'])
+            : execute('adb', ['shell', 'pm', 'list', 'packages']);
         return new Set(out
             .split('\n')
             .map((line) => line.replace('package:', '').trim())
@@ -232,7 +274,12 @@ function probeAndroidPackages() {
         return null;
     }
 }
-export function bootedSimulatorUdids() {
+export function probeAndroidPackages(deps = {}) {
+    return probeAndroidPackagesInScope(androidAdbScope(deps), deps.execute);
+}
+// The UDID and the device-name probe both need `simctl list devices booted`, so
+// one cached parse feeds both instead of spawning the same 5s subprocess twice.
+function probeBootedSimulatorInventory() {
     try {
         const out = execFileSync('xcrun', ['simctl', 'list', 'devices', 'booted', '-j'], {
             timeout: 5000,
@@ -240,14 +287,29 @@ export function bootedSimulatorUdids() {
             stdio: ['ignore', 'pipe', 'ignore'],
         });
         const parsed = JSON.parse(out);
-        return Object.values(parsed.devices ?? {})
-            .flat()
-            .map((device) => device.udid)
-            .filter((udid) => typeof udid === 'string' && udid.length > 0);
+        const entries = new Set();
+        for (const device of Object.values(parsed.devices ?? {}).flat()) {
+            const udid = typeof device.udid === 'string' ? device.udid.trim() : '';
+            const name = typeof device.name === 'string' ? device.name.trim() : '';
+            const state = typeof device.state === 'string' ? device.state.trim() : '';
+            if (!udid && !name)
+                continue;
+            entries.add(`${udid}\t${name}\t${state}`);
+        }
+        return entries.size > 0 ? entries : null;
     }
     catch {
-        return [];
+        return null;
     }
+}
+function readBootedSimulatorInventory() {
+    return cachedPackageProbe('ios-booted-simulators', probeBootedSimulatorInventory);
+}
+export function bootedSimulatorUdids() {
+    const inventory = readBootedSimulatorInventory();
+    if (!inventory)
+        return [];
+    return [...inventory].map((entry) => entry.split('\t')[0] ?? '').filter(Boolean);
 }
 // `simctl listapps booted` errors out as soon as more than one simulator is
 // booted — the exact case this inference must survive. Probe each booted UDID
@@ -277,10 +339,64 @@ function probeIOSPackages() {
     return probed ? ids : null;
 }
 function readAndroidPackages() {
-    return cachedPackageProbe('android', probeAndroidPackages);
+    const scope = androidAdbScope();
+    if (scope.kind === 'fenced')
+        return null;
+    const key = scope.kind === 'serial' ? `android:${scope.serial}` : 'android';
+    return cachedPackageProbe(key, () => probeAndroidPackagesInScope(scope));
 }
 function readIOSPackages() {
     return cachedPackageProbe('ios', probeIOSPackages);
+}
+// GH #777: custom device names ("rn-qa", "ix-…-iPhone17Pro") carry no platform
+// token, so pattern inference misses them and the bundle probe can only say
+// "installed on both" — proving the platform requires the live device inventory.
+// An empty inventory is an ABSENCE of evidence, never proof that a name is not
+// a simulator: return null so the short failure TTL applies and a simulator
+// booted moments later is seen on the next connect (mirrors probeIOSPackages).
+function readIOSDeviceNames() {
+    const inventory = readBootedSimulatorInventory();
+    if (!inventory)
+        return null;
+    const names = new Set();
+    for (const entry of inventory) {
+        const [, name, state] = entry.split('\t');
+        if (state === 'Booted' && name)
+            names.add(name.toLowerCase());
+    }
+    return names.size > 0 ? names : null;
+}
+function probeAndroidModelsInScope(scope, execute = runAdbSync) {
+    if (scope.kind !== 'serial')
+        return null;
+    try {
+        const model = execute('adb', ['-s', scope.serial, 'shell', 'getprop', 'ro.product.model'])
+            .trim()
+            .toLowerCase();
+        return model ? new Set([model]) : null;
+    }
+    catch {
+        return null;
+    }
+}
+export function probeAndroidDeviceModels(deps = {}) {
+    return probeAndroidModelsInScope(androidAdbScope(deps), deps.execute);
+}
+function readAndroidDeviceModels() {
+    const scope = androidAdbScope();
+    if (scope.kind !== 'serial')
+        return null;
+    return cachedPackageProbe(`android-device-models:${scope.serial}`, () => probeAndroidModelsInScope(scope));
+}
+// Metro reports Android deviceName as `<model>` or `<model> - <os> - API <n>`.
+function nameMatchesAndroidModel(name, models) {
+    if (!models)
+        return false;
+    for (const model of models) {
+        if (name === model || name.startsWith(`${model} -`))
+            return true;
+    }
+    return false;
 }
 /**
  * B116 (D639): look up each target's description against BOTH iOS simctl and
@@ -326,6 +442,10 @@ export function inferPlatformFromDeviceName(deviceName) {
 export function inferPlatforms(targets, readers = {}) {
     const androidPackages = (readers.readAndroid ?? readAndroidPackages)();
     const iosPackages = (readers.readIOS ?? readIOSPackages)();
+    let iosDeviceNames;
+    let androidDeviceModels;
+    const bootedIOSNames = () => (iosDeviceNames ??= (readers.readIOSDeviceNames ?? readIOSDeviceNames)());
+    const liveAndroidModels = () => (androidDeviceModels ??= (readers.readAndroidDeviceModels ?? readAndroidDeviceModels)());
     for (const t of targets) {
         // B131 (D660): deviceName is the most reliable signal when present.
         // It's deterministic (doesn't depend on adb/simctl running) and correct
@@ -336,6 +456,19 @@ export function inferPlatforms(targets, readers = {}) {
             t.platform = fromDeviceName;
             t.platformInference = 'probed';
             continue;
+        }
+        // GH #777: a token-less deviceName can still be proven against the live
+        // device inventory. Only a one-sided match counts — a name in both
+        // inventories stays with the fail-closed bundle inference below.
+        const inventoryName = t.deviceName?.trim().toLowerCase();
+        if (inventoryName) {
+            const inIOSInventory = bootedIOSNames()?.has(inventoryName) ?? false;
+            const inAndroidInventory = nameMatchesAndroidModel(inventoryName, liveAndroidModels());
+            if (inIOSInventory !== inAndroidInventory) {
+                t.platform = inIOSInventory ? 'ios' : 'android';
+                t.platformInference = 'probed';
+                continue;
+            }
         }
         const bundleIdentity = targetBundleIdentity(t);
         const inAndroid = bundleIdentity ? (androidPackages?.has(bundleIdentity) ?? false) : false;
@@ -363,7 +496,7 @@ export function inferPlatforms(targets, readers = {}) {
         }
     }
 }
-function describeTarget(target) {
+export function describeTarget(target) {
     const confidence = target.platformInference ?? 'probed';
     return `${target.id} title="${target.title || '?'}" appId="${target.appId ?? '?'}" device="${target.deviceName ?? '?'}" description="${target.description ?? '?'}" platform=${target.platform ?? '?'} confidence=${confidence}`;
 }

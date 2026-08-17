@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { getActiveSession } from '../agent-device-wrapper.js';
 import { logger } from '../logger.js';
 import { isValidBundleId } from '../domain/maestro-validator.js';
 import type { HermesTarget, MetroCandidate } from '../types.js';
@@ -247,13 +248,81 @@ export function clearPackageProbeCache(): void {
   packageProbeCache.clear();
 }
 
-function probeAndroidPackages(): Set<string> | null {
+// GH #777 QA: adb reads are fenced to the device the registry binding authorizes
+// — the same authority cdp_connect derives its exact-device proof from. Only that
+// serial may be queried; an ambient shared phone is never probed.
+export interface SessionDeviceBinding {
+  platform?: string;
+  deviceId?: string;
+}
+
+export interface AndroidInventoryDependencies {
+  execute?: (file: string, args: string[]) => string;
+  getSession?: () => SessionDeviceBinding | null;
+  getRegistryBinding?: () => SessionDeviceBinding | null;
+}
+
+let registryDeviceBindingProvider: (() => SessionDeviceBinding | null) | null = null;
+
+export function setRegistryDeviceBindingProvider(
+  provider: (() => SessionDeviceBinding | null) | null,
+): void {
+  registryDeviceBindingProvider = provider;
+}
+
+// An unavailable registry lookup is an absence of authorization, never a grant.
+function registryDeviceBinding(): SessionDeviceBinding | null {
+  if (!registryDeviceBindingProvider) return null;
   try {
-    const out = execFileSync('adb', ['shell', 'pm', 'list', 'packages'], {
-      timeout: 3000,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
+    return registryDeviceBindingProvider() ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function runAdbSync(file: string, args: string[]): string {
+  return execFileSync(file, args, {
+    timeout: 3000,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+}
+
+type AndroidAdbScope =
+  | { kind: 'ambient' }
+  | { kind: 'serial'; serial: string }
+  | { kind: 'fenced' };
+
+// The registry binding is the only source that can authorize a serial; the
+// device-wrapper session (including its disk-rehydrated state) can only revoke.
+// Only a flow with both stores empty keeps the pre-existing single ambient read.
+function androidAdbScope(deps: AndroidInventoryDependencies = {}): AndroidAdbScope {
+  const registry = (deps.getRegistryBinding ?? registryDeviceBinding)();
+  const session = (deps.getSession ?? getActiveSession)();
+  if (!registry && !session) return { kind: 'ambient' };
+  const authorized =
+    registry?.platform === 'android' && registry.deviceId ? registry.deviceId : null;
+  if (!authorized) return { kind: 'fenced' };
+  if (session && (session.platform !== 'android' || session.deviceId !== authorized))
+    return { kind: 'fenced' };
+  return { kind: 'serial', serial: authorized };
+}
+
+export function authorizedAndroidSerial(deps: AndroidInventoryDependencies = {}): string | null {
+  const scope = androidAdbScope(deps);
+  return scope.kind === 'serial' ? scope.serial : null;
+}
+
+function probeAndroidPackagesInScope(
+  scope: AndroidAdbScope,
+  execute: (file: string, args: string[]) => string = runAdbSync,
+): Set<string> | null {
+  if (scope.kind === 'fenced') return null;
+  try {
+    const out =
+      scope.kind === 'serial'
+        ? execute('adb', ['-s', scope.serial, 'shell', 'pm', 'list', 'packages'])
+        : execute('adb', ['shell', 'pm', 'list', 'packages']);
     return new Set(
       out
         .split('\n')
@@ -265,21 +334,44 @@ function probeAndroidPackages(): Set<string> | null {
   }
 }
 
-export function bootedSimulatorUdids(): string[] {
+export function probeAndroidPackages(deps: AndroidInventoryDependencies = {}): Set<string> | null {
+  return probeAndroidPackagesInScope(androidAdbScope(deps), deps.execute);
+}
+
+// The UDID and the device-name probe both need `simctl list devices booted`, so
+// one cached parse feeds both instead of spawning the same 5s subprocess twice.
+function probeBootedSimulatorInventory(): Set<string> | null {
   try {
     const out = execFileSync('xcrun', ['simctl', 'list', 'devices', 'booted', '-j'], {
       timeout: 5000,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
     });
-    const parsed = JSON.parse(out) as { devices?: Record<string, Array<{ udid?: string }>> };
-    return Object.values(parsed.devices ?? {})
-      .flat()
-      .map((device) => device.udid)
-      .filter((udid): udid is string => typeof udid === 'string' && udid.length > 0);
+    const parsed = JSON.parse(out) as {
+      devices?: Record<string, Array<{ udid?: string; name?: string; state?: string }>>;
+    };
+    const entries = new Set<string>();
+    for (const device of Object.values(parsed.devices ?? {}).flat()) {
+      const udid = typeof device.udid === 'string' ? device.udid.trim() : '';
+      const name = typeof device.name === 'string' ? device.name.trim() : '';
+      const state = typeof device.state === 'string' ? device.state.trim() : '';
+      if (!udid && !name) continue;
+      entries.add(`${udid}\t${name}\t${state}`);
+    }
+    return entries.size > 0 ? entries : null;
   } catch {
-    return [];
+    return null;
   }
+}
+
+function readBootedSimulatorInventory(): Set<string> | null {
+  return cachedPackageProbe('ios-booted-simulators', probeBootedSimulatorInventory);
+}
+
+export function bootedSimulatorUdids(): string[] {
+  const inventory = readBootedSimulatorInventory();
+  if (!inventory) return [];
+  return [...inventory].map((entry) => entry.split('\t')[0] ?? '').filter(Boolean);
 }
 
 // `simctl listapps booted` errors out as soon as more than one simulator is
@@ -308,16 +400,76 @@ function probeIOSPackages(): Set<string> | null {
 }
 
 function readAndroidPackages(): Set<string> | null {
-  return cachedPackageProbe('android', probeAndroidPackages);
+  const scope = androidAdbScope();
+  if (scope.kind === 'fenced') return null;
+  const key = scope.kind === 'serial' ? `android:${scope.serial}` : 'android';
+  return cachedPackageProbe(key, () => probeAndroidPackagesInScope(scope));
 }
 
 function readIOSPackages(): Set<string> | null {
   return cachedPackageProbe('ios', probeIOSPackages);
 }
 
+// GH #777: custom device names ("rn-qa", "ix-…-iPhone17Pro") carry no platform
+// token, so pattern inference misses them and the bundle probe can only say
+// "installed on both" — proving the platform requires the live device inventory.
+// An empty inventory is an ABSENCE of evidence, never proof that a name is not
+// a simulator: return null so the short failure TTL applies and a simulator
+// booted moments later is seen on the next connect (mirrors probeIOSPackages).
+function readIOSDeviceNames(): Set<string> | null {
+  const inventory = readBootedSimulatorInventory();
+  if (!inventory) return null;
+  const names = new Set<string>();
+  for (const entry of inventory) {
+    const [, name, state] = entry.split('\t');
+    if (state === 'Booted' && name) names.add(name.toLowerCase());
+  }
+  return names.size > 0 ? names : null;
+}
+
+function probeAndroidModelsInScope(
+  scope: AndroidAdbScope,
+  execute: (file: string, args: string[]) => string = runAdbSync,
+): Set<string> | null {
+  if (scope.kind !== 'serial') return null;
+  try {
+    const model = execute('adb', ['-s', scope.serial, 'shell', 'getprop', 'ro.product.model'])
+      .trim()
+      .toLowerCase();
+    return model ? new Set([model]) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function probeAndroidDeviceModels(
+  deps: AndroidInventoryDependencies = {},
+): Set<string> | null {
+  return probeAndroidModelsInScope(androidAdbScope(deps), deps.execute);
+}
+
+function readAndroidDeviceModels(): Set<string> | null {
+  const scope = androidAdbScope();
+  if (scope.kind !== 'serial') return null;
+  return cachedPackageProbe(`android-device-models:${scope.serial}`, () =>
+    probeAndroidModelsInScope(scope),
+  );
+}
+
+// Metro reports Android deviceName as `<model>` or `<model> - <os> - API <n>`.
+function nameMatchesAndroidModel(name: string, models: Set<string> | null): boolean {
+  if (!models) return false;
+  for (const model of models) {
+    if (name === model || name.startsWith(`${model} -`)) return true;
+  }
+  return false;
+}
+
 export interface PlatformInferenceReaders {
   readAndroid?: () => Set<string> | null;
   readIOS?: () => Set<string> | null;
+  readIOSDeviceNames?: () => Set<string> | null;
+  readAndroidDeviceModels?: () => Set<string> | null;
 }
 
 /**
@@ -371,6 +523,12 @@ export function inferPlatforms(
 ): void {
   const androidPackages = (readers.readAndroid ?? readAndroidPackages)();
   const iosPackages = (readers.readIOS ?? readIOSPackages)();
+  let iosDeviceNames: Set<string> | null | undefined;
+  let androidDeviceModels: Set<string> | null | undefined;
+  const bootedIOSNames = () =>
+    (iosDeviceNames ??= (readers.readIOSDeviceNames ?? readIOSDeviceNames)());
+  const liveAndroidModels = () =>
+    (androidDeviceModels ??= (readers.readAndroidDeviceModels ?? readAndroidDeviceModels)());
 
   for (const t of targets) {
     // B131 (D660): deviceName is the most reliable signal when present.
@@ -382,6 +540,20 @@ export function inferPlatforms(
       t.platform = fromDeviceName;
       t.platformInference = 'probed';
       continue;
+    }
+
+    // GH #777: a token-less deviceName can still be proven against the live
+    // device inventory. Only a one-sided match counts — a name in both
+    // inventories stays with the fail-closed bundle inference below.
+    const inventoryName = t.deviceName?.trim().toLowerCase();
+    if (inventoryName) {
+      const inIOSInventory = bootedIOSNames()?.has(inventoryName) ?? false;
+      const inAndroidInventory = nameMatchesAndroidModel(inventoryName, liveAndroidModels());
+      if (inIOSInventory !== inAndroidInventory) {
+        t.platform = inIOSInventory ? 'ios' : 'android';
+        t.platformInference = 'probed';
+        continue;
+      }
     }
 
     const bundleIdentity = targetBundleIdentity(t);
@@ -415,7 +587,7 @@ export interface SelectTargetResult {
   errorCode?: 'PLATFORM_TARGET_NOT_FOUND' | 'TARGET_PLATFORM_CONFLICT';
 }
 
-function describeTarget(target: HermesTarget): string {
+export function describeTarget(target: HermesTarget): string {
   const confidence = target.platformInference ?? 'probed';
   return `${target.id} title="${target.title || '?'}" appId="${target.appId ?? '?'}" device="${target.deviceName ?? '?'}" description="${target.description ?? '?'}" platform=${target.platform ?? '?'} confidence=${confidence}`;
 }

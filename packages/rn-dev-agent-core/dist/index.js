@@ -115,14 +115,14 @@ import { bindNativeRunner, unbindNativeRunner } from './session/runner-binding.j
 import { claimOptionalBundleAuthority, createAuthorityGate, } from './session/authority-gate.js';
 import { createLocalAuthorityProbe } from './session/local-authority-probe.js';
 import { createForeignMetroOriginScanner } from './session/metro-origin.js';
-import { DISCOVERY_TIMEOUT_MS, discoverAllMetroPorts, resolveDefaultPorts, } from './cdp/discovery.js';
+import { DISCOVERY_TIMEOUT_MS, discoverAllMetroPorts, resolveDefaultPorts, setRegistryDeviceBindingProvider, } from './cdp/discovery.js';
 import { assertAuthorityProfilesExhaustive } from './session/tool-profiles.js';
 import { readJsonStateFile } from './util/secure-state-file.js';
 import { buildBundleAuthorityBinding, pinExactDevClient, reconcileAuthoritativeBundle, } from './session/dev-client-authority.js';
 import { createRegisteredConnectHandler } from './session/registered-connect.js';
 import { verifyMetroAuthorityMarker, } from './session/metro-authority.js';
 import { filterTargetsForExactDevice, proveTargetDeviceAssociation, } from './session/target-device-authority.js';
-import { connectExactSessionTarget as connectExactSessionTargetWithDependencies, exactSessionTargetReadinessTimeoutMs, } from './session/connect-exact-session-target.js';
+import { connectExactSessionTarget as connectExactSessionTargetWithDependencies, exactCandidateMismatchError, exactSessionTargetReadinessTimeoutMs, } from './session/connect-exact-session-target.js';
 import { strictProofSourceIdentity } from './session/source-identity.js';
 import { verifyManagedMetroManagementProof } from './session/managed-metro.js';
 import { stopBoundRunner } from './session/process-cleanup.js';
@@ -270,6 +270,18 @@ addToolObserver((o) => recorder.record(o));
 addToolObserver((o) => strictProofMonitor.record(o));
 addToolObserver((o) => experienceRecorder.observe(o));
 const authorityRuntime = getWorkerAuthorityRuntime();
+setRegistryDeviceBindingProvider(() => {
+    const status = authorityRuntime.status();
+    if (!status.available)
+        return null;
+    const device = status.bindings.device;
+    if (!device)
+        return null;
+    return {
+        platform: typeof device.platform === 'string' ? device.platform : undefined,
+        deviceId: typeof device.deviceId === 'string' ? device.deviceId : undefined,
+    };
+});
 setSnapshotAuthorityProvider({
     current: () => {
         const status = authorityRuntime.status();
@@ -860,7 +872,12 @@ function createAuthoritativeSessionPolicy(status) {
                 targets,
             }, { execute: execFileP, awaitWithinBoundary });
             if (exactCandidates.length !== 1) {
-                throw new Error(`CDP_TARGET_AUTHORITY_MISMATCH: expected one target on the exact device, found ${exactCandidates.length}`);
+                throw exactCandidateMismatchError({
+                    metroPort,
+                    platform: device.platform,
+                    appId: device.appId,
+                    deviceId: device.deviceId,
+                }, targets, targets, exactCandidates);
             }
             return exactCandidates[0].id;
         },

@@ -1,6 +1,8 @@
 import type { CDPClient } from '../cdp-client.js';
 import { CDPProbeTimeoutError } from '../cdp/connect.js';
+import { describeTarget, targetMatchesBundleId } from '../cdp/discovery.js';
 import { targetMatchesSession } from '../tools/status.js';
+import type { HermesTarget } from '../types.js';
 import {
   filterTargetsForExactDevice,
   proveTargetDeviceAssociation,
@@ -76,6 +78,42 @@ function rateLimitedDeviceAuthority(
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+// GH #777: refusals must name the failing stage, never a false "found 0".
+export function exactCandidateMismatchError(
+  input: ExactSessionTargetInput,
+  listedTargets: readonly HermesTarget[],
+  sessionCandidates: readonly HermesTarget[],
+  exactCandidates: readonly HermesTarget[],
+): Error {
+  if (exactCandidates.length > 1) {
+    return new Error(
+      `CDP_TARGET_AUTHORITY_MISMATCH: ${exactCandidates.length} session-matched targets are proven on device ${input.deviceId} — target selection is ambiguous on the exact device`,
+    );
+  }
+  if (listedTargets.length === 0) {
+    return new Error(
+      `CDP_TARGET_AUTHORITY_MISMATCH: expected one target on the exact device, found 0 — Metro on port ${input.metroPort} advertises no debuggable targets`,
+    );
+  }
+  if (sessionCandidates.length === 0) {
+    const appMatched = listedTargets.filter((target) => targetMatchesBundleId(target, input.appId));
+    const stage =
+      appMatched.length === 0
+        ? `none carries the proven app identity appId=${input.appId}`
+        : `${appMatched.length} carry appId=${input.appId} but their platform=${input.platform} association is unproven`;
+    return new Error(
+      `CDP_TARGET_AUTHORITY_MISMATCH: Metro on port ${input.metroPort} advertises ${listedTargets.length} live target(s), but ${stage}. ` +
+        `Candidates: ${listedTargets.map(describeTarget).join('; ')}`,
+    );
+  }
+  return new Error(
+    `CDP_TARGET_AUTHORITY_MISMATCH: ${sessionCandidates.length} session-matched target(s) exist on Metro port ${input.metroPort}, but none is provably on device ${input.deviceId}. ` +
+      `Target deviceName(s): ${sessionCandidates
+        .map((target) => target.deviceName?.trim() || '<none>')
+        .join(', ')}`,
+  );
 }
 
 export class AndroidExactTargetDeadlineError extends Error {
@@ -198,8 +236,11 @@ async function connectExactAndroidSessionTarget(
         discoveryAuthorityDependencies,
       );
       if (exactCandidates.length !== 1) {
-        throw new Error(
-          `CDP_TARGET_AUTHORITY_MISMATCH: expected one target on the exact device, found ${exactCandidates.length}`,
+        throw exactCandidateMismatchError(
+          input,
+          listed.targets,
+          sessionCandidates,
+          exactCandidates,
         );
       }
 
@@ -359,8 +400,11 @@ export async function connectExactSessionTarget(
         discoveryAuthorityDependencies,
       );
       if (exactCandidates.length !== 1) {
-        throw new Error(
-          `CDP_TARGET_AUTHORITY_MISMATCH: expected one target on the exact device, found ${exactCandidates.length}`,
+        throw exactCandidateMismatchError(
+          input,
+          listed.targets,
+          sessionCandidates,
+          exactCandidates,
         );
       }
 

@@ -27793,19 +27793,48 @@ function cachedPackageProbe(key, probe, clock = Date.now) {
   });
   return value;
 }
-function probeAndroidPackages() {
+function setRegistryDeviceBindingProvider(provider) {
+  registryDeviceBindingProvider = provider;
+}
+function registryDeviceBinding() {
+  if (!registryDeviceBindingProvider)
+    return null;
   try {
-    const out = execFileSync11("adb", ["shell", "pm", "list", "packages"], {
-      timeout: 3e3,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"]
-    });
+    return registryDeviceBindingProvider() ?? null;
+  } catch {
+    return null;
+  }
+}
+function runAdbSync(file, args) {
+  return execFileSync11(file, args, {
+    timeout: 3e3,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"]
+  });
+}
+function androidAdbScope(deps = {}) {
+  const registry2 = (deps.getRegistryBinding ?? registryDeviceBinding)();
+  const session2 = (deps.getSession ?? getActiveSession)();
+  if (!registry2 && !session2)
+    return { kind: "ambient" };
+  const authorized = registry2?.platform === "android" && registry2.deviceId ? registry2.deviceId : null;
+  if (!authorized)
+    return { kind: "fenced" };
+  if (session2 && (session2.platform !== "android" || session2.deviceId !== authorized))
+    return { kind: "fenced" };
+  return { kind: "serial", serial: authorized };
+}
+function probeAndroidPackagesInScope(scope, execute2 = runAdbSync) {
+  if (scope.kind === "fenced")
+    return null;
+  try {
+    const out = scope.kind === "serial" ? execute2("adb", ["-s", scope.serial, "shell", "pm", "list", "packages"]) : execute2("adb", ["shell", "pm", "list", "packages"]);
     return new Set(out.split("\n").map((line) => line.replace("package:", "").trim()).filter(Boolean));
   } catch {
     return null;
   }
 }
-function bootedSimulatorUdids() {
+function probeBootedSimulatorInventory() {
   try {
     const out = execFileSync11("xcrun", ["simctl", "list", "devices", "booted", "-j"], {
       timeout: 5e3,
@@ -27813,10 +27842,28 @@ function bootedSimulatorUdids() {
       stdio: ["ignore", "pipe", "ignore"]
     });
     const parsed = JSON.parse(out);
-    return Object.values(parsed.devices ?? {}).flat().map((device) => device.udid).filter((udid) => typeof udid === "string" && udid.length > 0);
+    const entries = /* @__PURE__ */ new Set();
+    for (const device of Object.values(parsed.devices ?? {}).flat()) {
+      const udid = typeof device.udid === "string" ? device.udid.trim() : "";
+      const name = typeof device.name === "string" ? device.name.trim() : "";
+      const state = typeof device.state === "string" ? device.state.trim() : "";
+      if (!udid && !name)
+        continue;
+      entries.add(`${udid}	${name}	${state}`);
+    }
+    return entries.size > 0 ? entries : null;
   } catch {
-    return [];
+    return null;
   }
+}
+function readBootedSimulatorInventory() {
+  return cachedPackageProbe("ios-booted-simulators", probeBootedSimulatorInventory);
+}
+function bootedSimulatorUdids() {
+  const inventory = readBootedSimulatorInventory();
+  if (!inventory)
+    return [];
+  return [...inventory].map((entry) => entry.split("	")[0] ?? "").filter(Boolean);
 }
 function probeIOSPackages() {
   const udids = bootedSimulatorUdids();
@@ -27840,10 +27887,51 @@ function probeIOSPackages() {
   return probed ? ids : null;
 }
 function readAndroidPackages() {
-  return cachedPackageProbe("android", probeAndroidPackages);
+  const scope = androidAdbScope();
+  if (scope.kind === "fenced")
+    return null;
+  const key = scope.kind === "serial" ? `android:${scope.serial}` : "android";
+  return cachedPackageProbe(key, () => probeAndroidPackagesInScope(scope));
 }
 function readIOSPackages() {
   return cachedPackageProbe("ios", probeIOSPackages);
+}
+function readIOSDeviceNames() {
+  const inventory = readBootedSimulatorInventory();
+  if (!inventory)
+    return null;
+  const names = /* @__PURE__ */ new Set();
+  for (const entry of inventory) {
+    const [, name, state] = entry.split("	");
+    if (state === "Booted" && name)
+      names.add(name.toLowerCase());
+  }
+  return names.size > 0 ? names : null;
+}
+function probeAndroidModelsInScope(scope, execute2 = runAdbSync) {
+  if (scope.kind !== "serial")
+    return null;
+  try {
+    const model = execute2("adb", ["-s", scope.serial, "shell", "getprop", "ro.product.model"]).trim().toLowerCase();
+    return model ? /* @__PURE__ */ new Set([model]) : null;
+  } catch {
+    return null;
+  }
+}
+function readAndroidDeviceModels() {
+  const scope = androidAdbScope();
+  if (scope.kind !== "serial")
+    return null;
+  return cachedPackageProbe(`android-device-models:${scope.serial}`, () => probeAndroidModelsInScope(scope));
+}
+function nameMatchesAndroidModel(name, models) {
+  if (!models)
+    return false;
+  for (const model of models) {
+    if (name === model || name.startsWith(`${model} -`))
+      return true;
+  }
+  return false;
 }
 function inferPlatformFromDeviceName(deviceName) {
   if (!deviceName)
@@ -27860,12 +27948,26 @@ function inferPlatformFromDeviceName(deviceName) {
 function inferPlatforms(targets, readers = {}) {
   const androidPackages = (readers.readAndroid ?? readAndroidPackages)();
   const iosPackages = (readers.readIOS ?? readIOSPackages)();
+  let iosDeviceNames;
+  let androidDeviceModels;
+  const bootedIOSNames = () => iosDeviceNames ??= (readers.readIOSDeviceNames ?? readIOSDeviceNames)();
+  const liveAndroidModels = () => androidDeviceModels ??= (readers.readAndroidDeviceModels ?? readAndroidDeviceModels)();
   for (const t of targets) {
     const fromDeviceName = inferPlatformFromDeviceName(t.deviceName);
     if (fromDeviceName) {
       t.platform = fromDeviceName;
       t.platformInference = "probed";
       continue;
+    }
+    const inventoryName = t.deviceName?.trim().toLowerCase();
+    if (inventoryName) {
+      const inIOSInventory = bootedIOSNames()?.has(inventoryName) ?? false;
+      const inAndroidInventory = nameMatchesAndroidModel(inventoryName, liveAndroidModels());
+      if (inIOSInventory !== inAndroidInventory) {
+        t.platform = inIOSInventory ? "ios" : "android";
+        t.platformInference = "probed";
+        continue;
+      }
     }
     const bundleIdentity = targetBundleIdentity(t);
     const inAndroid = bundleIdentity ? androidPackages?.has(bundleIdentity) ?? false : false;
@@ -28157,10 +28259,11 @@ async function discoverForList(currentPort, portHint) {
   inferPlatforms(targets);
   return { port: chosen, targets };
 }
-var AppDetachedError, DISCOVERY_TIMEOUT_MS, MetroNotFoundError, PACKAGE_PROBE_TTL_MS, PACKAGE_PROBE_FAILURE_TTL_MS, PACKAGE_PROBE_SLOW_FAILURE_MS, packageProbeCache, TargetSelectionError;
+var AppDetachedError, DISCOVERY_TIMEOUT_MS, MetroNotFoundError, PACKAGE_PROBE_TTL_MS, PACKAGE_PROBE_FAILURE_TTL_MS, PACKAGE_PROBE_SLOW_FAILURE_MS, packageProbeCache, registryDeviceBindingProvider, TargetSelectionError;
 var init_discovery = __esm({
   "packages/rn-dev-agent-core/dist/cdp/discovery.js"() {
     "use strict";
+    init_agent_device_wrapper();
     init_logger();
     init_maestro_validator();
     init_metro_cwd();
@@ -28192,6 +28295,7 @@ var init_discovery = __esm({
     PACKAGE_PROBE_FAILURE_TTL_MS = 1500;
     PACKAGE_PROBE_SLOW_FAILURE_MS = 1e3;
     packageProbeCache = /* @__PURE__ */ new Map();
+    registryDeviceBindingProvider = null;
     TargetSelectionError = class extends Error {
       code;
       candidates;
@@ -87811,6 +87915,20 @@ function rateLimitedDeviceAuthority(dependencies, now) {
 function errorMessage(error2) {
   return error2 instanceof Error ? error2.message : String(error2);
 }
+function exactCandidateMismatchError(input, listedTargets, sessionCandidates, exactCandidates) {
+  if (exactCandidates.length > 1) {
+    return new Error(`CDP_TARGET_AUTHORITY_MISMATCH: ${exactCandidates.length} session-matched targets are proven on device ${input.deviceId} \u2014 target selection is ambiguous on the exact device`);
+  }
+  if (listedTargets.length === 0) {
+    return new Error(`CDP_TARGET_AUTHORITY_MISMATCH: expected one target on the exact device, found 0 \u2014 Metro on port ${input.metroPort} advertises no debuggable targets`);
+  }
+  if (sessionCandidates.length === 0) {
+    const appMatched = listedTargets.filter((target) => targetMatchesBundleId(target, input.appId));
+    const stage = appMatched.length === 0 ? `none carries the proven app identity appId=${input.appId}` : `${appMatched.length} carry appId=${input.appId} but their platform=${input.platform} association is unproven`;
+    return new Error(`CDP_TARGET_AUTHORITY_MISMATCH: Metro on port ${input.metroPort} advertises ${listedTargets.length} live target(s), but ${stage}. Candidates: ${listedTargets.map(describeTarget).join("; ")}`);
+  }
+  return new Error(`CDP_TARGET_AUTHORITY_MISMATCH: ${sessionCandidates.length} session-matched target(s) exist on Metro port ${input.metroPort}, but none is provably on device ${input.deviceId}. Target deviceName(s): ${sessionCandidates.map((target) => target.deviceName?.trim() || "<none>").join(", ")}`);
+}
 async function connectExactAndroidSessionTarget(input, timeoutMs, dependencies) {
   const now = dependencies.now ?? Date.now;
   const wait = dependencies.wait ?? ((ms) => new Promise((resolve12) => setTimeout(resolve12, ms)));
@@ -87901,7 +88019,7 @@ async function connectExactAndroidSessionTarget(input, timeoutMs, dependencies) 
         targets: sessionCandidates
       }, discoveryAuthorityDependencies);
       if (exactCandidates.length !== 1) {
-        throw new Error(`CDP_TARGET_AUTHORITY_MISMATCH: expected one target on the exact device, found ${exactCandidates.length}`);
+        throw exactCandidateMismatchError(input, listed.targets, sessionCandidates, exactCandidates);
       }
       await awaitWithinDeadline(() => exactClient.connectExact(input.metroPort, {
         platform: input.platform,
@@ -88015,7 +88133,7 @@ async function connectExactSessionTarget(input, timeoutMs, dependencies) {
         targets: sessionCandidates
       }, discoveryAuthorityDependencies);
       if (exactCandidates.length !== 1) {
-        throw new Error(`CDP_TARGET_AUTHORITY_MISMATCH: expected one target on the exact device, found ${exactCandidates.length}`);
+        throw exactCandidateMismatchError(input, listed.targets, sessionCandidates, exactCandidates);
       }
       await exactClient.connectExact(input.metroPort, {
         platform: input.platform,
@@ -88063,6 +88181,7 @@ var init_connect_exact_session_target = __esm({
   "packages/rn-dev-agent-core/dist/session/connect-exact-session-target.js"() {
     "use strict";
     init_connect();
+    init_discovery();
     init_status();
     init_target_device_authority();
     IOS_EXACT_TARGET_READINESS_TIMEOUT_MS = 12e4;
@@ -88259,7 +88378,12 @@ function createAuthoritativeSessionPolicy(status) {
         targets
       }, { execute: execFileP, awaitWithinBoundary });
       if (exactCandidates.length !== 1) {
-        throw new Error(`CDP_TARGET_AUTHORITY_MISMATCH: expected one target on the exact device, found ${exactCandidates.length}`);
+        throw exactCandidateMismatchError({
+          metroPort,
+          platform: device.platform,
+          appId: device.appId,
+          deviceId: device.deviceId
+        }, targets, targets, exactCandidates);
       }
       return exactCandidates[0].id;
     },
@@ -88795,6 +88919,18 @@ var init_index = __esm({
     addToolObserver((o) => strictProofMonitor.record(o));
     addToolObserver((o) => experienceRecorder.observe(o));
     authorityRuntime = getWorkerAuthorityRuntime();
+    setRegistryDeviceBindingProvider(() => {
+      const status = authorityRuntime.status();
+      if (!status.available)
+        return null;
+      const device = status.bindings.device;
+      if (!device)
+        return null;
+      return {
+        platform: typeof device.platform === "string" ? device.platform : void 0,
+        deviceId: typeof device.deviceId === "string" ? device.deviceId : void 0
+      };
+    });
     setSnapshotAuthorityProvider({
       current: () => {
         const status = authorityRuntime.status();
