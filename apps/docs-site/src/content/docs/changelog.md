@@ -5,6 +5,50 @@ description: "Release history for rn-dev-agent"
 
 ## Claude plugin
 
+### 0.76.6
+
+#### Patch Changes
+
+- 800e550: Make the iOS B155 snapshot regression test wait for the runner to actually reach the foreground before dispatching the snapshot, so a failed or delayed re-activation fails the test instead of letting it pass vacuously.
+- 7eff66a: Bound dead-Metro `cdp_status` to the discovery scan budget by skipping runner-spawning picker probes when no Metro is up, and absorb the fresh-simulator first-start rn-fast-runner transient with one bounded internal retry after the failed first spawn provably exits.
+- 83798d9: Resolve the Observe actions/e2e project root from the bound session's declared app root (falling back to RN_PROJECT_ROOT, then heuristic discovery) and refuse truthfully on foreign, missing, ambiguous, or non-project roots instead of showing another checkout's actions or a silently empty panel.
+- d046940: Admit a fresh MCP transport when the blocking claim epoch is already gone instead of rebinding the leftover blocked session.
+- 28f80c0: Expose a stable `runner-splash-title` accessibility identifier on the iOS fast runner's splash screen so launch checks no longer depend on display copy.
+- Updated dependencies [7eff66a]
+- Updated dependencies [83798d9]
+- Updated dependencies [d046940]
+  - rn-dev-agent-core@0.71.6
+
+### 0.76.5
+
+#### Patch Changes
+
+- a43ee7d: Allow canonical detect-libc Linux getconf/ldd module-load probes through managed Metro's descendant fence without opening arbitrary descendant execution.
+- Updated dependencies [a43ee7d]
+  - rn-dev-agent-core@0.71.5
+
+### 0.76.4
+
+#### Patch Changes
+
+- d90e0ed: Fix the three linked iOS session-recovery defects from GH #750: extend the iOS exact-target readiness deadline to the Android 120s bound so the sole exact-device bridgeless target that re-registers slowly after the managed terminate+relaunch is admitted and B binds atomically (accepting an advisory `targetId` while B is unbound instead of refusing every id), reprofile `cdp_dismiss_dev_client_picker` to run without the A/B authority it exists to restore and prove A/B through the managed-origin lifecycle after a successful dismissal, and refuse maestro-runner replays on a drifted engine pin when the flow (including runFlow-nested steps) uses regex text selectors that drifted runners mistranslate into impossible WDA CONTAINS predicates.
+- d56efe1: Fix `cdp_navigate`/`cdp_navigation_state`/`cdp_nav_graph` nav-ref discovery failing with "Navigation ref not found" on multi-renderer bridgeless apps: the fiber walk now resolves NavigationContainer names through React Navigation 7's forwardRef wrapper (`fiber.type.render`) on every registered renderer.
+- de8d516: The legacy ambient connect handler exported by `rn-dev-agent-core` no longer dead-ends an explicit force reconnect while a supervised reconnect is in flight (it now supersedes it, with a new `CONNECT_IN_FLIGHT` refusal code for non-force callers); the registered `cdp_connect` tool was already safe and is unchanged.
+- 9475fe5: Reconnects now persist a pinned target's device and bundle identity so shared-Metro multi-simulator sessions re-bind the exact pinned device and fail closed with candidates listed instead of silently attaching to a sibling simulator.
+- 9c2fc53: maestro_test_all now commits the proof-carrying install-receipt re-issue after a clearState corpus flow reinstalls the app and resolves the iOS app container from the authority-bound simulator UDID instead of generic `booted`, so a corpus containing clearState flows no longer breaks install identity for every subsequent flow and tool call.
+- 992dafb: If the iOS idb live mirror stays alive without a first frame, Observe now fails that stream and falls back to the simctl screenshot loop on the same device instead of leaving a blank 0x0 image, with the bounded first-frame wait configurable via `observe.mirror.firstFrameTimeoutMs` (default 30000).
+- bbe8791: Pin device sessions to their Metro origin: record the expected Metro port on the device binding and refuse cdp*connect and device*\* tools with METRO_ORIGIN_MISMATCH when the bound device's app is proven to be served by a sibling Metro (dev-client fallback), while unprovable origin evidence keeps the existing optional-origin behavior.
+- e5a92d0: Preserve the signed install receipt's buildGeneration across an authenticated managed-Metro restart when the installed artifact re-proves byte-identical on-device, so `rn_session pin_dev_client force=true` recovers coherent authority without a ceremonial full rebuild while changed, missing, foreign, stale, or unattestable installs still fall back to the bumped generation and refuse fail-closed.
+- Updated dependencies [d90e0ed]
+- Updated dependencies [d56efe1]
+- Updated dependencies [de8d516]
+- Updated dependencies [9475fe5]
+- Updated dependencies [9c2fc53]
+- Updated dependencies [992dafb]
+- Updated dependencies [bbe8791]
+- Updated dependencies [e5a92d0]
+  - rn-dev-agent-core@0.71.4
+
 ### 0.76.3
 
 #### Patch Changes
@@ -1473,6 +1517,33 @@ identifier, hittable? }`, with a `fullNodeCount`. Far fewer tokens; `@ref`s for
   #188 shipped these to `main` with no version bump, leaving them undeliverable to marketplace installs; this patch publishes them.
 
 ## Core MCP server
+
+### 0.71.6
+
+#### Patch Changes
+
+- 7eff66a: Bound dead-Metro `cdp_status` to the discovery scan budget by skipping runner-spawning picker probes when no Metro is up, and absorb the fresh-simulator first-start rn-fast-runner transient with one bounded internal retry after the failed first spawn provably exits.
+- 83798d9: Resolve the Observe actions/e2e project root from the bound session's declared app root (falling back to RN_PROJECT_ROOT, then heuristic discovery) and refuse truthfully on foreign, missing, ambiguous, or non-project roots instead of showing another checkout's actions or a silently empty panel.
+- d046940: Admit a fresh MCP transport when the blocking claim epoch is already gone instead of rebinding the leftover blocked session.
+
+### 0.71.5
+
+#### Patch Changes
+
+- a43ee7d: Allow canonical detect-libc Linux getconf/ldd module-load probes through managed Metro's descendant fence without opening arbitrary descendant execution.
+
+### 0.71.4
+
+#### Patch Changes
+
+- d90e0ed: Fix the three linked iOS session-recovery defects from GH #750: extend the iOS exact-target readiness deadline to the Android 120s bound so the sole exact-device bridgeless target that re-registers slowly after the managed terminate+relaunch is admitted and B binds atomically (accepting an advisory `targetId` while B is unbound instead of refusing every id), reprofile `cdp_dismiss_dev_client_picker` to run without the A/B authority it exists to restore and prove A/B through the managed-origin lifecycle after a successful dismissal, and refuse maestro-runner replays on a drifted engine pin when the flow (including runFlow-nested steps) uses regex text selectors that drifted runners mistranslate into impossible WDA CONTAINS predicates.
+- d56efe1: Fix `cdp_navigate`/`cdp_navigation_state`/`cdp_nav_graph` nav-ref discovery failing with "Navigation ref not found" on multi-renderer bridgeless apps: the fiber walk now resolves NavigationContainer names through React Navigation 7's forwardRef wrapper (`fiber.type.render`) on every registered renderer.
+- de8d516: The legacy ambient connect handler exported by `rn-dev-agent-core` no longer dead-ends an explicit force reconnect while a supervised reconnect is in flight (it now supersedes it, with a new `CONNECT_IN_FLIGHT` refusal code for non-force callers); the registered `cdp_connect` tool was already safe and is unchanged.
+- 9475fe5: Reconnects now persist a pinned target's device and bundle identity so shared-Metro multi-simulator sessions re-bind the exact pinned device and fail closed with candidates listed instead of silently attaching to a sibling simulator.
+- 9c2fc53: maestro_test_all now commits the proof-carrying install-receipt re-issue after a clearState corpus flow reinstalls the app and resolves the iOS app container from the authority-bound simulator UDID instead of generic `booted`, so a corpus containing clearState flows no longer breaks install identity for every subsequent flow and tool call.
+- 992dafb: If the iOS idb live mirror stays alive without a first frame, Observe now fails that stream and falls back to the simctl screenshot loop on the same device instead of leaving a blank 0x0 image, with the bounded first-frame wait configurable via `observe.mirror.firstFrameTimeoutMs` (default 30000).
+- bbe8791: Pin device sessions to their Metro origin: record the expected Metro port on the device binding and refuse cdp*connect and device*\* tools with METRO_ORIGIN_MISMATCH when the bound device's app is proven to be served by a sibling Metro (dev-client fallback), while unprovable origin evidence keeps the existing optional-origin behavior.
+- e5a92d0: Preserve the signed install receipt's buildGeneration across an authenticated managed-Metro restart when the installed artifact re-proves byte-identical on-device, so `rn_session pin_dev_client force=true` recovers coherent authority without a ceremonial full rebuild while changed, missing, foreign, stale, or unattestable installs still fall back to the bumped generation and refuse fail-closed.
 
 ### 0.71.3
 

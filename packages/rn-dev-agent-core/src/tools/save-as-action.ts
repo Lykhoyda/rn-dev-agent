@@ -41,7 +41,8 @@ export interface SaveAsActionArgs {
    * Does this flow leave persistent residue? Required for /run-action's
    * safety pre-flight to know whether confirmation is needed before
    * replay. Defaults to undefined — the saved action will surface as
-   * `mutates: ?` in /list-learned-actions until the agent classifies it.
+   * `mutates: -` (omitted) in /list-learned-actions until the agent
+   * classifies it.
    */
   mutates?: boolean;
   /**

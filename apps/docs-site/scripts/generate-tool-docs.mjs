@@ -5,7 +5,12 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '../../..');
 const INDEX_TS = resolve(ROOT, 'packages/rn-dev-agent-core/src/index.ts');
-const OUT_BASE = resolve(__dirname, '../src/content/docs/tools');
+// RN_DEV_AGENT_DOCS_OUT lets a regression run the real generator into a scratch
+// directory instead of overwriting the committed docs.
+const OUT_ROOT = process.env.RN_DEV_AGENT_DOCS_OUT
+  ? resolve(process.env.RN_DEV_AGENT_DOCS_OUT)
+  : resolve(__dirname, '../src/content/docs');
+const OUT_BASE = resolve(OUT_ROOT, 'tools');
 
 const CATEGORIES = {
   cdp_status: 'cdp',
@@ -359,7 +364,7 @@ function packageChangelogSection(label, filePath) {
 const changelog = CHANGELOG_SOURCES.map(([label, filePath]) => {
   return packageChangelogSection(label, filePath);
 }).join('\n\n');
-const changelogOut = resolve(__dirname, '../src/content/docs/changelog.md');
+const changelogOut = resolve(OUT_ROOT, 'changelog.md');
 mkdirSync(dirname(changelogOut), { recursive: true });
 writeFileSync(
   changelogOut,

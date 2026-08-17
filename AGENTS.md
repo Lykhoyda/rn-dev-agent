@@ -47,6 +47,11 @@ GitHub Issues, PRs, or the sibling workspace only when explicitly requested.
   line after formatting: `apps/docs-site/scripts/generate-tool-docs.mjs` only
   parses a quote immediately after `describe(`, so a prettier-wrapped string
   silently drops the description from the generated tool docs.
+- Code in `src/injected-helpers.ts` is evaluated via CDP inside an
+  already-bundled Metro/Hermes runtime: `require('<package-name>')` throws
+  there (Metro resolves only exact dev verboseNames). Prove "is X bundled?"
+  with Metro's dev registry (`globalThis.__r.getModules()`, per-module
+  `verboseName`) or fiber/render evidence, bounded and fail-closed.
 
 ## Where To Make Changes
 

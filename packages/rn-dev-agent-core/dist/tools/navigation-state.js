@@ -1,4 +1,4 @@
-import { okResult, failResult, withConnection } from '../utils.js';
+import { okResult, failResult, withConnection, pickDefined } from '../utils.js';
 import { annotateMutationAbsence } from '../verification/mutation-absence.js';
 import { loadVerificationConfig, getCachedProjectRoot } from '../verification/config.js';
 /**
@@ -44,6 +44,13 @@ export async function readLiveRoute(client) {
         return null;
     }
 }
+// GH #525 — mid-mount guidance fields the injected getNavState may attach to a refusal.
+const NAV_STATE_GUIDANCE_FIELDS = [
+    'mounting',
+    'shellOnly',
+    'frameworkDetected',
+    'retryInMs',
+];
 // annotate:false = observationally pure read that never consumes the mutation-absence baseline.
 export function createNavigationStateHandler(getClient, opts = {}) {
     return withConnection(getClient, async (_args, client) => {
@@ -62,7 +69,8 @@ export function createNavigationStateHandler(getClient, opts = {}) {
             return failResult(`getNavState returned non-JSON output: ${result.value.slice(0, 200)}`);
         }
         if (parsed.error) {
-            return failResult(`Navigation state error: ${parsed.error}`);
+            const meta = pickDefined(parsed, NAV_STATE_GUIDANCE_FIELDS);
+            return failResult(`Navigation state error: ${parsed.error}`, meta);
         }
         if (opts.annotate === false)
             return okResult(parsed);

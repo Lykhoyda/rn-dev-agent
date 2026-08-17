@@ -109,7 +109,7 @@ appId: com.example.shop
 Contract rules (violations break replay, repair, or inventory):
 
 - **id / filename**: lower-case kebab-case `^[a-z0-9][a-z0-9-]*$`; file is `.rn-agent/actions/<id>.yaml`.
-- **Header**: `id`, `intent`, `tags`, `mutates`, `status` are the 5 inventory keys — a missing `mutates` renders as `?` in `/list-learned-actions`. Always `status: experimental` at creation; promotion to `active` is earned by a clean replay, never hand-set. Full field glossary (incl. `produces`, `expectedRouteSequence`, `author`): `references/m7-header-reference.md`.
+- **Header**: `id`, `intent`, `tags`, `mutates`, `status` are the 5 inventory keys — a missing `mutates` renders as `-` in `/list-learned-actions` (`pre-M7` when the whole header predates M7; `?` marks a present value that failed to parse). Always `status: experimental` at creation; promotion to `active` is earned by a clean replay, never hand-set. Full field glossary (incl. `produces`, `expectedRouteSequence`, `author`): `references/m7-header-reference.md`.
 - **Params**: keys match `[A-Z_][A-Z0-9_]*`; every `${VAR}` in the steps is listed in `# params`, and vice versa. The inventory scanner counts `${...}` occurrences **anywhere in the file, comments included** — so the diagram may mark real step params as `${PRODUCT_ID}`, but prose (e.g. the `intent` line) uses bare names, and no comment may mention a `${VAR}` the steps don't use.
 - **Body**: `launchApp: { stopApp: false }` self-bootstrap (works cold or warm, preserves login); conditional prologues via `runFlow: { when: { visible: ... } }`; `waitForAnimationToEnd` after transitions; the diagram's anchor `assertVisible` after each screen change; `scrollUntilVisible` for potentially off-screen targets.
 - **Never `clearState: true`** on an Expo Dev Client build — it wipes the Metro URL and strands the launcher (GH #8).
@@ -119,7 +119,7 @@ Copy-adapt the complete worked example: `examples/add-product-to-cart.yaml`.
 
 ## Step 5 — Validate Before First Replay
 
-1. **Header parses + inventory lists it**: re-run the Step-0 command with `--filter <id>` — confirm `intent`, `tags`, `mutates`, `status` come back exactly as written (not `?`). This also proves the embedded diagram didn't corrupt the header.
+1. **Header parses + inventory lists it**: re-run the Step-0 command with `--filter <id>` — confirm `intent`, `tags`, `mutates`, `status` come back exactly as written (not `?`, `-`, or `pre-M7`). This also proves the embedded diagram didn't corrupt the header.
 2. **Placeholder coverage**: `grep -o '\${[A-Z_]*}' <file>` over the steps ↔ `# params` list, both directions.
 3. **Selector audit**: every `id:` in the YAML appears in the Step-2 evidence.
 4. **Syntax**: if the maestro MCP server is connected, `check_flow_syntax` on the body; otherwise the first replay doubles as the syntax check.

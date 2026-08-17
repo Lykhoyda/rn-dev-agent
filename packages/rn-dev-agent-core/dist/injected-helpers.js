@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 41;
+export const HELPERS_VERSION = 43;
 export const INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -16,6 +16,36 @@ export const INJECTED_HELPERS = `
   var MAX_RENDERER_IDS = 20;
   var MAX_REGISTERED_RENDERER_IDS = 100;
   var EARLY_EXIT_EMPTY_STREAK = 3;
+
+  // GH #525 — bounded no-app-content render evidence for getNavState. Right
+  // after a reload the dev shell roots commit long before any app component, so
+  // a root set with no app composite in it proves the UI is still mounting. The
+  // allowlist plus the scan bound keep the probe fail-closed: a mounted dev app
+  // always renders named composites (AppContainer renders LogBox beside them).
+  var NAV_SHELL_SCAN_MAX = 200;
+  // renderApplication wraps EVERY surface (LogBox's included) in
+  // '<debugName>(RootComponent)' > AppContainer, and dev AppContainer renders two
+  // composite Views plus these overlays — so the dev shell is not app content. An
+  // app root still carries its own '<appName>(RootComponent)' plus app
+  // composites, which are not allowlisted. Exact names only: a real app merely
+  // NAMED LogBox-something (e.g. 'LogBoxDemo(RootComponent)') is app content.
+  var NAV_SHELL_WRAPPERS = [
+    'AppContainer',
+    'View',
+    'DebuggingOverlay',
+    'ReactDevToolsOverlay',
+    'ReactDevToolsOverlayDeferred',
+    'Inspector',
+    'InspectorDeferred',
+    'TraceUpdateOverlay',
+    'LogBox(RootComponent)',
+    'LogBoxStateSubscription',
+    '_LogBoxStateSubscription',
+    'LogBoxNotificationContainer',
+    '_LogBoxNotificationContainer',
+    'LogBoxInspectorContainer',
+    '_LogBoxInspectorContainer'
+  ];
 
   // Reset by every root-iteration pass; only valid when read synchronously
   // after the pass that produced the tree (many helpers share the iterators).
@@ -184,6 +214,97 @@ export const INJECTED_HELPERS = `
       return null; // explicit — keep collecting, never short-circuit
     });
     return out;
+  }
+
+  function navIsShellComposite(name) {
+    return NAV_SHELL_WRAPPERS.indexOf(name) !== -1;
+  }
+
+  // GH #525 — does this root carry app content? Bounded DFS over composites: any
+  // named composite outside the dev-shell allowlist is app content, as is a tree
+  // too large to finish scanning. Host primitives and unnamed fibers are neutral,
+  // so an empty or host-only root (the idle dev shell surface) carries none.
+  function navRootWithoutAppContent(rootFiber) {
+    var stack = [rootFiber];
+    var visited = 0;
+    while (stack.length > 0) {
+      var node = stack.pop();
+      if (!node) continue;
+      if (++visited > NAV_SHELL_SCAN_MAX) return false;
+      var nodeType = node.type;
+      if (nodeType && typeof nodeType !== 'string') {
+        var nodeName = nodeType.displayName || nodeType.name;
+        if (nodeName && !navIsShellComposite(nodeName)) return false;
+      }
+      if (node.sibling) stack.push(node.sibling);
+      if (node.child) stack.push(node.child);
+    }
+    return true;
+  }
+
+  function navAllRootsWithoutAppContent(roots) {
+    for (var nsi = 0; nsi < roots.length; nsi++) {
+      try {
+        if (!navRootWithoutAppContent(roots[nsi].fiber)) return false;
+      } catch (eShellProbe) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  // GH #525 — bundled-framework evidence for getNavState. Evaluated code cannot
+  // require() by package name (Metro resolves only exact dev verboseNames), so
+  // the proof is Metro's dev module registry: __r.getModules() maps module IDs
+  // to definitions whose verboseName carries the bundled file path. Bounded and
+  // fail-closed: no registry, a throwing registry, or nothing matched within
+  // the bound degrade to null (the legacy message). A react-navigation match
+  // found WITHIN the bound is still reported when the bound then trips —
+  // positive evidence is monotone, and expo-router bundles @react-navigation/*
+  // so the hedged message stays truthful even if expo-router sat past the cut.
+  var NAV_MODULE_SCAN_MAX = 20000;
+
+  function navFrameworkFromModuleName(name) {
+    if (typeof name !== 'string') return null;
+    if (name.indexOf('node_modules/expo-router/') !== -1) return 'expo-router';
+    if (name.indexOf('node_modules/@react-navigation/') !== -1) return 'react-navigation';
+    return null;
+  }
+
+  function navDetectBundledFramework() {
+    try {
+      var metroReq = globalThis.__r;
+      if (!metroReq || typeof metroReq.getModules !== 'function') return null;
+      var mods = metroReq.getModules();
+      if (!mods) return null;
+      var found = null;
+      var seen = 0;
+      if (typeof mods.values === 'function') {
+        var iterator = mods.values();
+        var step;
+        while (!(step = iterator.next()).done) {
+          if (++seen > NAV_MODULE_SCAN_MAX) return found;
+          var hit = navFrameworkFromModuleName(step.value && step.value.verboseName);
+          // expo-router bundles @react-navigation underneath — keep scanning
+          // past a react-navigation hit so the more specific framework wins.
+          if (hit === 'expo-router') return hit;
+          if (hit) found = hit;
+        }
+      } else {
+        // Legacy object registry: enumerate incrementally so the bound also
+        // limits enumeration work, not just inspection.
+        for (var key in mods) {
+          if (!Object.prototype.hasOwnProperty.call(mods, key)) continue;
+          if (++seen > NAV_MODULE_SCAN_MAX) return found;
+          var hitObj = navFrameworkFromModuleName(mods[key] && mods[key].verboseName);
+          if (hitObj === 'expo-router') return hitObj;
+          if (hitObj) found = hitObj;
+        }
+      }
+      return found;
+    } catch (eNavFw) {
+      return null;
+    }
   }
 
   // GH #126 Gap B — convert a user-provided React component instance into
@@ -749,7 +870,42 @@ export const INJECTED_HELPERS = `
       if (fallbackRef && fallbackRef.getRootState) navState = fallbackRef.getRootState();
     }
 
-    if (!navState) return JSON.stringify({ error: 'Navigation state not found. Is React Navigation or Expo Router installed?' });
+    // GH #525 — mid-mount evidence (empty roots, bundled framework, a
+    // shell-only tree) must not be misreported as a missing router install.
+    if (!navState) {
+      var mountHook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+      var mountHookUsable = !!(mountHook && typeof mountHook.getFiberRoots === 'function');
+      var mountRoots = mountHookUsable ? findAllRootFibers() : [];
+      // Only a CLEAN scan is mounting evidence (throwing renderers can hide roots).
+      var mountScanClean = mountHookUsable && lastRootScan.rendererErrors === 0;
+      if (mountScanClean && mountRoots.length === 0) {
+        return JSON.stringify({
+          error: 'App is still mounting — no React fiber roots exist yet (the bundle is likely still loading). Retry in ~2s.',
+          mounting: true,
+          retryInMs: 2000
+        });
+      }
+      var navFw = navDetectBundledFramework();
+      if (navFw) {
+        var navFwName = navFw === 'expo-router' ? 'Expo Router' : 'React Navigation';
+        return JSON.stringify({
+          error: navFwName + ' is bundled but no navigation state was found — the app may still be mounting after a reload (retry in ~2s), or no navigation container is rendered.',
+          frameworkDetected: navFw,
+          retryInMs: 2000
+        });
+      }
+      // Current-state render evidence, not a timer: no committed root holds any
+      // app component yet — only the dev shell is rendered.
+      if (mountScanClean && mountRoots.length > 0 && navAllRootsWithoutAppContent(mountRoots)) {
+        return JSON.stringify({
+          error: 'App UI is still mounting — no app components have rendered yet, only the development shell. Retry in ~2s. If this persists, React Navigation or Expo Router may be missing.',
+          mounting: true,
+          shellOnly: true,
+          retryInMs: 2000
+        });
+      }
+      return JSON.stringify({ error: 'Navigation state not found. Is React Navigation or Expo Router installed?' });
+    }
 
     function simplify(s) {
       if (!s) return null;
@@ -1290,6 +1446,15 @@ export const INJECTED_HELPERS = `
 
     if (!action) return JSON.stringify({ error: 'action is required' });
 
+    // GH #525 — walkUp is a narrowly bounded press-only opt-in.
+    if (opts.walkUp === true && action !== 'press') {
+      return JSON.stringify({
+        error: 'walkUp is only supported for action:"press"',
+        requestedAction: action,
+        hint: 'typeText/setFieldValue already resolve wrapper indirection with their own bounded walks.'
+      });
+    }
+
     // Task 7 — ladder routing. When the caller passes a declarative selector
     // (role/name/text/placeholder) and NO testID/accessibilityLabel, resolve
     // via resolveLadder then press the found fiber or its nearest onPress
@@ -1303,6 +1468,14 @@ export const INJECTED_HELPERS = `
           error: 'Ladder selectors (role/name/text/placeholder) support only action:"press"',
           requestedAction: opts.action,
           hint: 'Use a testID or accessibilityLabel for longPress / typeText / scroll / setFieldValue.'
+        });
+      }
+      // GH #525 — walkUp's bounded search and ambiguity refusal belong to the
+      // testID/accessibilityLabel path; refuse instead of silently dropping it.
+      if (opts.walkUp === true) {
+        return JSON.stringify({
+          error: 'walkUp is only supported with a testID or accessibilityLabel selector',
+          hint: 'Ladder selectors already press the nearest onPress ancestor; drop walkUp, or target the component by testID to get the bounded walk.'
         });
       }
       var ladderResult = resolveLadder(JSON.stringify({
@@ -1362,6 +1535,9 @@ export const INJECTED_HELPERS = `
     var exactMatches = [];
     var normMatches = [];
     var containsMatches = [];
+    // GH #525 — walkUp collects every strict-testID match so duplicates can refuse.
+    var walkUpCollect = opts.walkUp === true && !isLabelMatch;
+    var walkUpMatches = [];
 
     function findFiber(fiber) {
       var current = fiber;
@@ -1376,8 +1552,12 @@ export const INJECTED_HELPERS = `
         if (props) {
           if (!isLabelMatch) {
             if (props[matchField] === selector) {
-              found = current;
-              return;
+              if (walkUpCollect) {
+                walkUpMatches.push(current);
+              } else {
+                found = current;
+                return;
+              }
             }
           } else {
             var raw = props.accessibilityLabel;
@@ -1464,6 +1644,8 @@ export const INJECTED_HELPERS = `
       found = tier[0];
     }
 
+    if (walkUpCollect && walkUpMatches.length > 0) found = walkUpMatches[0];
+
     if (!found) {
       return JSON.stringify({
         error: 'Component not found',
@@ -1474,8 +1656,79 @@ export const INJECTED_HELPERS = `
 
     var props = found.memoizedProps || {};
     var typeName = (found.type && (found.type.displayName || found.type.name)) || 'Unknown';
+    var executedName = typeName;
 
     try {
+      if (action === 'press' && opts.walkUp === true) {
+        // GH #525 — nearest self-or-ancestor onPress within 8 fiber levels (one JSX wrapper is ~3 fibers under NativeWind CssInterop);
+        // candidates collapse only when they are the exact same fiber.
+        var WALK_UP_MAX = 8;
+        // Host fibers carry a string type (e.g. 'RCTView') — same extraction as the ladder press path.
+        var walkFiberName = function(f) {
+          return (f && f.type && (typeof f.type === 'string'
+            ? f.type
+            : (f.type.displayName || f.type.name))) || 'Unknown';
+        };
+        var walkSources = walkUpMatches.length > 0 ? walkUpMatches : [found];
+        var walkCandidates = [];
+        for (var wi = 0; wi < walkSources.length; wi++) {
+          var walkNode = walkSources[wi];
+          var walkHops = 0;
+          while (walkNode && walkHops <= WALK_UP_MAX) {
+            var walkProps = walkNode.memoizedProps;
+            if (walkProps && typeof walkProps.onPress === 'function') break;
+            walkNode = walkNode.return;
+            walkHops++;
+          }
+          if (!walkNode || walkHops > WALK_UP_MAX) continue;
+          var existing = null;
+          for (var wj = 0; wj < walkCandidates.length; wj++) {
+            if (walkCandidates[wj].fiber === walkNode) { existing = walkCandidates[wj]; break; }
+          }
+          if (existing) {
+            if (walkHops < existing.hops) { existing.hops = walkHops; existing.source = walkSources[wi]; }
+          } else {
+            walkCandidates.push({ fiber: walkNode, hops: walkHops, source: walkSources[wi] });
+          }
+        }
+        if (walkCandidates.length === 0) {
+          return JSON.stringify({ error: 'Component has no onPress handler', component: walkFiberName(found), testID: selector, walkUpSearched: WALK_UP_MAX });
+        }
+        if (walkCandidates.length > 1) {
+          var walkDescriptors = [];
+          for (var wk = 0; wk < walkCandidates.length && wk < 10; wk++) {
+            var wf = walkCandidates[wk].fiber;
+            var wp = wf.memoizedProps || {};
+            walkDescriptors.push({
+              component: walkFiberName(wf),
+              testID: wp.testID
+            });
+          }
+          return JSON.stringify({
+            error: 'Ambiguous walkUp press target',
+            testID: selector,
+            count: walkCandidates.length,
+            candidates: walkDescriptors,
+            hint: 'Multiple distinct pressable fibers resolve from this testID. Pass the testID of the exact pressable component instead.'
+          });
+        }
+        var walkTarget = walkCandidates[0];
+        var walkTargetName = walkFiberName(walkTarget.fiber);
+        executedName = walkTargetName;
+        if (opts.value !== undefined) {
+          walkTarget.fiber.memoizedProps.onPress(opts.value);
+        } else {
+          walkTarget.fiber.memoizedProps.onPress({ nativeEvent: {} });
+        }
+        var walkResult = { success: true, action: 'press', component: walkTargetName, testID: selector };
+        if (opts.value !== undefined) walkResult.value = opts.value;
+        if (walkTarget.hops > 0) {
+          walkResult.walkedUpFrom = walkFiberName(walkTarget.source);
+          walkResult.walkUpLevels = walkTarget.hops;
+        }
+        return JSON.stringify(walkResult);
+      }
+
       if (action === 'press') {
         if (typeof props.onPress !== 'function') {
           return JSON.stringify({ error: 'Component has no onPress handler', component: typeName, testID: selector });
@@ -1799,7 +2052,7 @@ export const INJECTED_HELPERS = `
       return JSON.stringify({
         success: false, action_executed: true,
         handler_error: (e && e.message || String(e)),
-        component: typeName, testID: selector,
+        component: executedName, testID: selector,
         hint: 'The action was dispatched but the app handler threw — the screen may now be in an error state. Check cdp_error_log before continuing.'
       });
     }

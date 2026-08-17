@@ -252,7 +252,7 @@ comment lines above the body (Maestro ignores them; the inventory and the
 | `id` | kebab-case slug | defaults to filename without `.yaml` |
 | `intent` | one-line goal | surfaced verbatim by `/list-learned-actions`; the routing key |
 | `tags` | `[a, b, c]` lower-case kebab | feature area (auth, tasks), operation (create, delete), markers (smoke, regression) |
-| `mutates` | `true`/`false` | persistent residue? drives the `/run-action` confirmation gate; missing parses as `null` and renders as `?` |
+| `mutates` | `true`/`false` | persistent residue? drives the `/run-action` confirmation gate; missing parses as `null` and renders as `-` (`pre-M7` for legacy headers; `?` marks an unparseable value) |
 | `status` | `experimental` \| `active` \| `deprecated` | start `experimental`; first clean replay promotes; `deprecated` = never replay |
 
 **Auto-generated flows** from `cdp_record_test_generate` populate these fields

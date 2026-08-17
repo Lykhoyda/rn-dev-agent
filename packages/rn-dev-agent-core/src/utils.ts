@@ -84,6 +84,19 @@ export function createStepTimer(): {
   };
 }
 
+// Forwards structured helper fields to a tool envelope's meta; undefined when
+// the payload carries none, so envelopes without guidance stay unchanged.
+export function pickDefined(
+  source: Record<string, unknown>,
+  keys: readonly string[],
+): Record<string, unknown> | undefined {
+  const picked: Record<string, unknown> = {};
+  for (const key of keys) {
+    if (source[key] !== undefined) picked[key] = source[key];
+  }
+  return Object.keys(picked).length > 0 ? picked : undefined;
+}
+
 export function okResult<T>(
   data: T,
   opts?: { truncated?: boolean; meta?: Record<string, unknown> },

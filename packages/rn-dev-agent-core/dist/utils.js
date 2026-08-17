@@ -61,6 +61,16 @@ export function createStepTimer() {
         },
     };
 }
+// Forwards structured helper fields to a tool envelope's meta; undefined when
+// the payload carries none, so envelopes without guidance stay unchanged.
+export function pickDefined(source, keys) {
+    const picked = {};
+    for (const key of keys) {
+        if (source[key] !== undefined)
+            picked[key] = source[key];
+    }
+    return Object.keys(picked).length > 0 ? picked : undefined;
+}
 export function okResult(data, opts) {
     const envelope = { ok: true, data };
     if (opts?.truncated)

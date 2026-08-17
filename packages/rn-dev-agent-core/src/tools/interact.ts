@@ -1,5 +1,9 @@
 import type { CDPClient } from '../cdp-client.js';
-import { okResult, failResult, withConnection } from '../utils.js';
+import { okResult, failResult, withConnection, pickDefined } from '../utils.js';
+
+// Diagnostics the injected interact attaches to a refusal — the caller needs
+// them to pick a different selector (GH #525 walkUp refusals included).
+const REFUSAL_FIELDS = ['hint', 'walkUpSearched', 'count', 'candidates', 'matches'] as const;
 
 type InteractAction = 'press' | 'longPress' | 'typeText' | 'scroll' | 'setFieldValue';
 
@@ -21,6 +25,8 @@ interface InteractArgs {
   placeholder?: string;
   exact?: boolean;
   includeHidden?: boolean;
+  // GH #525 — press-only opt-in pressable-ancestor discovery.
+  walkUp?: boolean;
 }
 
 export function createInteractHandler(getClient: () => CDPClient) {
@@ -60,6 +66,7 @@ export function createInteractHandler(getClient: () => CDPClient) {
     if (args.placeholder !== undefined) opts.placeholder = args.placeholder;
     if (args.exact !== undefined) opts.exact = args.exact;
     if (args.includeHidden !== undefined) opts.includeHidden = args.includeHidden;
+    if (args.walkUp !== undefined) opts.walkUp = args.walkUp;
 
     const result = await client.evaluate(`__RN_AGENT.interact(${JSON.stringify(opts)})`);
 
@@ -79,10 +86,7 @@ export function createInteractHandler(getClient: () => CDPClient) {
     }
 
     if (parsed.error) {
-      return failResult(
-        `Interact failed: ${parsed.error}`,
-        parsed.hint ? { hint: parsed.hint as string } : undefined,
-      );
+      return failResult(`Interact failed: ${parsed.error}`, pickDefined(parsed, REFUSAL_FIELDS));
     }
 
     // GH#250: a handler throw is an app-side failure, not a warning — the action
