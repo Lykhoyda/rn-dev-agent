@@ -86787,10 +86787,18 @@ async function stopObserveServer() {
   starting = null;
   await server?.stop();
   server = null;
-  if (boundAuthority)
-    authorityDeps?.unbind(boundAuthority);
+  let unbindError;
+  try {
+    if (boundAuthority)
+      authorityDeps?.unbind(boundAuthority);
+  } catch (error2) {
+    unbindError = error2;
+  }
   boundAuthority = null;
   removeObserveState();
+  if (unbindError !== void 0 && unbindError?.code !== "AUTHORITY_LOST_DURING_OPERATION") {
+    throw unbindError;
+  }
 }
 async function observeHandler(args) {
   const action = args.action ?? "status";

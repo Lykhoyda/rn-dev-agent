@@ -863,7 +863,7 @@ test('an unconfirmed stale-device refusal leaves the autostarted Observe binding
   assert.equal((status.bindings as Record<string, unknown>).observe != null, true);
 });
 
-test('the Observe yield tolerates the authority version its own stop path advances', async () => {
+test('the Observe yield clears the surviving binding on the authority version its stop advanced', async () => {
   const calls: string[] = [];
   const status: Record<string, unknown> = {
     sessionId: 'session-776',
@@ -919,8 +919,86 @@ test('the Observe yield tolerates the authority version its own stop path advanc
       }),
     } as never,
     {
-      // The fenced /api/stop is served by the Observe server's own stop owner,
-      // which unbinds and advances the authority version before this resolves.
+      // The stop owner's own unbind is rejected by the operation fence, so the
+      // binding survives the stop — but the version it CASes on has moved.
+      stopHandoffObserve: async () => {
+        status.authorityVersion = (status.authorityVersion as number) + 1;
+        calls.push('stop-observe');
+      },
+      deviceExists: () => true,
+    },
+  );
+
+  const result = await handler({
+    action: 'bind_device',
+    platform: 'android',
+    deviceId: 'emulator-5554',
+    appId: 'com.example.app',
+  } as never);
+  const body = JSON.parse(result.content[0]!.text);
+
+  assert.equal(result.isError, undefined, result.content[0]!.text);
+  assert.deepEqual(calls, ['stop-observe', 'clear-observe', 'replace-device']);
+  assert.equal((status.bindings as Record<string, unknown>).observe, null);
+  assert.equal(body.data.observeYielded, true);
+  assert.equal(body.data.observePort, 7333);
+});
+
+test('the Observe yield skips the clearing CAS when the stop path already unbound', async () => {
+  const calls: string[] = [];
+  const status: Record<string, unknown> = {
+    sessionId: 'session-776',
+    state: 'source_bound',
+    claimEpoch: 1,
+    authorityVersion: 5,
+    leaseUntilMs: 100,
+    source: { kind: 'git' },
+    bindings: {
+      observe: {
+        port: 7333,
+        pid: 456,
+        processBirth: 'observe-birth',
+        instanceId: 'observe',
+        cleanupCapability: 'capability',
+        autostarted: true,
+      },
+      observePort: 7333,
+      metroPort: 8081,
+    },
+    claims: [{ type: 'observe-port', key: '7333', sessionId: 'session-776', claimEpoch: 1 }],
+    worker: { instanceId: 'worker', pid: 1, birthAvailable: true },
+  };
+  const handler = createSessionHandler(
+    {
+      status: () => ({ available: true, ...status }),
+      requireOperational: () => ({
+        registry: {
+          getSessionStatus: () => status,
+          updateBindings: (
+            _session: unknown,
+            update: { bindings: Record<string, unknown>; expectedAuthorityVersion?: number },
+          ) => {
+            if (
+              update.expectedAuthorityVersion !== undefined &&
+              update.expectedAuthorityVersion !== status.authorityVersion
+            ) {
+              throw new SessionAuthorityError(
+                'AUTHORITY_LOST_DURING_OPERATION',
+                'session authority version changed before binding commit',
+              );
+            }
+            Object.assign(status.bindings as Record<string, unknown>, update.bindings);
+            status.authorityVersion = (status.authorityVersion as number) + 1;
+            calls.push('clear-observe');
+          },
+          inspectDeviceAuthorityAvailability: () => {},
+          replaceDeviceAuthority: () => calls.push('replace-device'),
+        },
+        session: { sessionId: 'session-776', claimEpoch: 1 },
+      }),
+    } as never,
+    {
+      // A stop owner reached outside the operation fence commits its own unbind.
       stopHandoffObserve: async () => {
         (status.bindings as Record<string, unknown>).observe = null;
         status.authorityVersion = (status.authorityVersion as number) + 1;

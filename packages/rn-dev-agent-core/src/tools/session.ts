@@ -1198,9 +1198,11 @@ export function createSessionHandler(
           assertObserveYieldable(observe);
           await stopVerifiedSessionObserve(current, session, dependencies);
           // GH #776: the fenced stop is served by the Observe server's own stop
-          // owner, which unbinds the binding and advances the authority version
-          // before the listener is observed gone — so the pre-stop version is
-          // already stale here and an unbind we did not need is a no-op.
+          // owner, whose unbind runs outside this operation's async context and
+          // is therefore rejected by the operation fence — this yield owns the
+          // binding mutation. Re-read anyway: the version this CAS must carry is
+          // whatever the stop advanced, and a stop owner that did commit the
+          // unbind leaves nothing to clear.
           const stopped = registry.getSessionStatus(session.sessionId);
           if (!stopped) {
             throw new SessionAuthorityError(
