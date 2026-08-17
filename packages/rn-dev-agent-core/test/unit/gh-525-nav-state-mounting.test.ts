@@ -128,10 +128,13 @@ test('#525 framework provably in the bundle but no nav state: evidence-based hed
   assert.doesNotMatch(result.error, /Is React Navigation or Expo Router installed\?/);
 });
 
-test('#525 roots present but helpers freshly (re)injected: hedged both-hypotheses retry message', () => {
-  const shell = buildFiber({ name: 'LogBoxShell', children: [{ name: 'View' }] });
-  const { sandbox } = createSandbox({ hook: hookWithRoots([shell]) });
-  // Freshly evaluated IIFE == freshly (re)injected helpers (age ~0ms).
+test('#525 reload flow (helpers landed before any root committed): hedged both-hypotheses retry message', () => {
+  // Concrete reload/render evidence: the IIFE evaluates while the fresh
+  // context has ZERO committed roots (bundle still booting); a shell root
+  // mounts afterwards. Only this shape may hedge toward "still mounting".
+  const roots: SandboxFiber[] = [];
+  const { sandbox } = createSandbox({ hook: hookWithRoots(roots) });
+  roots.push(buildFiber({ name: 'LogBoxShell', children: [{ name: 'View' }] }));
   const result = JSON.parse(sandbox.__RN_AGENT.getNavState());
   assert.ok(result.error, 'expected an error payload');
   assert.match(result.error, /may still be mounting[\s\S]*retry in ~2s/i);
@@ -139,6 +142,18 @@ test('#525 roots present but helpers freshly (re)injected: hedged both-hypothese
   assert.match(result.error, /React Navigation or Expo Router/);
   assert.doesNotMatch(result.error, /Is React Navigation or Expo Router installed\?/);
   assert.equal(result.helpersRecentlyInjected, true);
+});
+
+test('#525 ordinary injection into an already-mounted app: fresh helper age can NOT mask the framework message', () => {
+  // Disconfirming case: roots were already committed when the helpers were
+  // injected, so recency is not reload evidence — the legacy message shows
+  // immediately even at age ~0ms.
+  const shell = buildFiber({ name: 'PlainApp', children: [{ name: 'View' }] });
+  const { sandbox } = createSandbox({ hook: hookWithRoots([shell]) });
+  const result = JSON.parse(sandbox.__RN_AGENT.getNavState());
+  assert.equal(result.error, LEGACY_MESSAGE);
+  assert.notEqual(result.mounting, true);
+  assert.equal(result.helpersRecentlyInjected, undefined);
 });
 
 test('#525 roots present, helpers long-injected, no nav container: the genuine framework message is preserved', () => {

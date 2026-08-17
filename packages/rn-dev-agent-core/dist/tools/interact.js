@@ -44,6 +44,8 @@ export function createInteractHandler(getClient) {
             opts.exact = args.exact;
         if (args.includeHidden !== undefined)
             opts.includeHidden = args.includeHidden;
+        if (args.walkUp !== undefined)
+            opts.walkUp = args.walkUp;
         const result = await client.evaluate(`__RN_AGENT.interact(${JSON.stringify(opts)})`);
         if (result.error) {
             return failResult(`Interact error: ${result.error}`);

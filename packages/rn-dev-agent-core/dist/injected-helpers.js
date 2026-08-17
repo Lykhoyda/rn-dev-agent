@@ -2,7 +2,7 @@
 // whenever the injected surface changes; it flows into the IIFE's freshness
 // check (__RN_AGENT.__v) AND the post-injection log line, so they can never
 // drift (the log previously hard-coded a stale "v11").
-export const HELPERS_VERSION = 41;
+export const HELPERS_VERSION = 42;
 export const INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -16,6 +16,14 @@ export const INJECTED_HELPERS = `
   var MAX_RENDERER_IDS = 20;
   var MAX_REGISTERED_RENDERER_IDS = 100;
   var EARLY_EXIT_EMPTY_STREAK = 3;
+
+  // GH #525 — reload evidence for getNavState: recency of this stamp marks a
+  // fresh (re)injection, and a zero root count at injection proves the context
+  // was still booting its bundle (ordinary injection into a mounted app sees
+  // committed roots here and never reads as a reload).
+  var __INJECTED_AT__ = Date.now();
+  var __ROOTS_AT_INJECTION__ = -1;
+  try { __ROOTS_AT_INJECTION__ = findAllRootFibers().length; } catch (eRootProbe) {}
 
   // Reset by every root-iteration pass; only valid when read synchronously
   // after the pass that produced the tree (many helpers share the iterators).
@@ -749,7 +757,48 @@ export const INJECTED_HELPERS = `
       if (fallbackRef && fallbackRef.getRootState) navState = fallbackRef.getRootState();
     }
 
-    if (!navState) return JSON.stringify({ error: 'Navigation state not found. Is React Navigation or Expo Router installed?' });
+    // GH #525 — mid-mount evidence (empty roots, bundled framework, fresh
+    // reinjection) must not be misreported as a missing router install.
+    if (!navState) {
+      var mountHook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+      var mountHookUsable = !!(mountHook && typeof mountHook.getFiberRoots === 'function');
+      // Only a CLEAN empty scan is mounting evidence (throwing renderers can hide roots).
+      if (mountHookUsable && findAllRootFibers().length === 0 && lastRootScan.rendererErrors === 0) {
+        return JSON.stringify({
+          error: 'App is still mounting — no React fiber roots exist yet (the bundle is likely still loading). Retry in ~2s.',
+          mounting: true,
+          retryInMs: 2000
+        });
+      }
+      var navFw = null;
+      try {
+        if (typeof require === 'function') {
+          try { if (require('@react-navigation/native')) navFw = 'react-navigation'; } catch(e1) {}
+          if (!navFw) { try { if (require('@react-navigation/core')) navFw = 'react-navigation'; } catch(e2) {} }
+          if (!navFw) { try { if (require('expo-router')) navFw = 'expo-router'; } catch(e3) {} }
+        }
+      } catch(e0) {}
+      if (navFw) {
+        var navFwName = navFw === 'expo-router' ? 'Expo Router' : 'React Navigation';
+        return JSON.stringify({
+          error: navFwName + ' is bundled but no navigation state was found — the app may still be mounting after a reload (retry in ~2s), or no navigation container is rendered.',
+          frameworkDetected: navFw,
+          retryInMs: 2000
+        });
+      }
+      var helperAge = Date.now() - __INJECTED_AT__;
+      // Reload evidence, not a bare timer: the branch also requires that the
+      // context had ZERO committed roots when helpers landed (fresh bundle).
+      if (mountHookUsable && __ROOTS_AT_INJECTION__ === 0 && helperAge >= 0 && helperAge < 10000) {
+        return JSON.stringify({
+          error: 'Navigation state not found. Helpers were injected ' + helperAge + 'ms ago into a context that was still booting its bundle, so the app may still be mounting after a reload — retry in ~2s. If this persists, React Navigation or Expo Router may be missing.',
+          helpersRecentlyInjected: true,
+          helperAgeMs: helperAge,
+          retryInMs: 2000
+        });
+      }
+      return JSON.stringify({ error: 'Navigation state not found. Is React Navigation or Expo Router installed?' });
+    }
 
     function simplify(s) {
       if (!s) return null;
@@ -1290,6 +1339,15 @@ export const INJECTED_HELPERS = `
 
     if (!action) return JSON.stringify({ error: 'action is required' });
 
+    // GH #525 — walkUp is a narrowly bounded press-only opt-in.
+    if (opts.walkUp === true && action !== 'press') {
+      return JSON.stringify({
+        error: 'walkUp is only supported for action:"press"',
+        requestedAction: action,
+        hint: 'typeText/setFieldValue already resolve wrapper indirection with their own bounded walks.'
+      });
+    }
+
     // Task 7 — ladder routing. When the caller passes a declarative selector
     // (role/name/text/placeholder) and NO testID/accessibilityLabel, resolve
     // via resolveLadder then press the found fiber or its nearest onPress
@@ -1362,6 +1420,9 @@ export const INJECTED_HELPERS = `
     var exactMatches = [];
     var normMatches = [];
     var containsMatches = [];
+    // GH #525 — walkUp collects every strict-testID match so duplicates can refuse.
+    var walkUpCollect = opts.walkUp === true && !isLabelMatch;
+    var walkUpMatches = [];
 
     function findFiber(fiber) {
       var current = fiber;
@@ -1376,8 +1437,12 @@ export const INJECTED_HELPERS = `
         if (props) {
           if (!isLabelMatch) {
             if (props[matchField] === selector) {
-              found = current;
-              return;
+              if (walkUpCollect) {
+                walkUpMatches.push(current);
+              } else {
+                found = current;
+                return;
+              }
             }
           } else {
             var raw = props.accessibilityLabel;
@@ -1464,6 +1529,8 @@ export const INJECTED_HELPERS = `
       found = tier[0];
     }
 
+    if (walkUpCollect && walkUpMatches.length > 0) found = walkUpMatches[0];
+
     if (!found) {
       return JSON.stringify({
         error: 'Component not found',
@@ -1476,6 +1543,69 @@ export const INJECTED_HELPERS = `
     var typeName = (found.type && (found.type.displayName || found.type.name)) || 'Unknown';
 
     try {
+      if (action === 'press' && opts.walkUp === true) {
+        // GH #525 — nearest self-or-ancestor onPress within 3 fiber levels;
+        // candidates collapse only when they are the exact same fiber.
+        var WALK_UP_MAX = 3;
+        var walkSources = walkUpMatches.length > 0 ? walkUpMatches : [found];
+        var walkCandidates = [];
+        for (var wi = 0; wi < walkSources.length; wi++) {
+          var walkNode = walkSources[wi];
+          var walkHops = 0;
+          while (walkNode && walkHops <= WALK_UP_MAX) {
+            var walkProps = walkNode.memoizedProps;
+            if (walkProps && typeof walkProps.onPress === 'function') break;
+            walkNode = walkNode.return;
+            walkHops++;
+          }
+          if (!walkNode || walkHops > WALK_UP_MAX) continue;
+          var existing = null;
+          for (var wj = 0; wj < walkCandidates.length; wj++) {
+            if (walkCandidates[wj].fiber === walkNode) { existing = walkCandidates[wj]; break; }
+          }
+          if (existing) {
+            if (walkHops < existing.hops) { existing.hops = walkHops; existing.source = walkSources[wi]; }
+          } else {
+            walkCandidates.push({ fiber: walkNode, hops: walkHops, source: walkSources[wi] });
+          }
+        }
+        if (walkCandidates.length === 0) {
+          return JSON.stringify({ error: 'Component has no onPress handler', component: typeName, testID: selector, walkUpSearched: WALK_UP_MAX });
+        }
+        if (walkCandidates.length > 1) {
+          var walkDescriptors = [];
+          for (var wk = 0; wk < walkCandidates.length && wk < 10; wk++) {
+            var wf = walkCandidates[wk].fiber;
+            var wp = wf.memoizedProps || {};
+            walkDescriptors.push({
+              component: (wf.type && (wf.type.displayName || wf.type.name)) || 'Unknown',
+              testID: wp.testID
+            });
+          }
+          return JSON.stringify({
+            error: 'Ambiguous walkUp press target',
+            testID: selector,
+            count: walkCandidates.length,
+            candidates: walkDescriptors,
+            hint: 'Multiple distinct pressable fibers resolve from this testID. Pass the testID of the exact pressable component instead.'
+          });
+        }
+        var walkTarget = walkCandidates[0];
+        var walkTargetName = (walkTarget.fiber.type && (walkTarget.fiber.type.displayName || walkTarget.fiber.type.name)) || 'Unknown';
+        if (opts.value !== undefined) {
+          walkTarget.fiber.memoizedProps.onPress(opts.value);
+        } else {
+          walkTarget.fiber.memoizedProps.onPress({ nativeEvent: {} });
+        }
+        var walkResult = { success: true, action: 'press', component: walkTargetName, testID: selector };
+        if (opts.value !== undefined) walkResult.value = opts.value;
+        if (walkTarget.hops > 0) {
+          walkResult.walkedUpFrom = (walkTarget.source.type && (walkTarget.source.type.displayName || walkTarget.source.type.name)) || 'Unknown';
+          walkResult.walkUpLevels = walkTarget.hops;
+        }
+        return JSON.stringify(walkResult);
+      }
+
       if (action === 'press') {
         if (typeof props.onPress !== 'function') {
           return JSON.stringify({ error: 'Component has no onPress handler', component: typeName, testID: selector });

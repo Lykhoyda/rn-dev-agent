@@ -132,6 +132,8 @@ function scanFlows() {
                 status: meta.status,
                 params: uniqParams,
                 produces: meta.produces,
+                metaFormat: meta.metaFormat,
+                metaInvalid: meta.metaInvalid,
                 replay,
             });
         }
@@ -177,6 +179,10 @@ function parseFlowMeta(text) {
         produces: null,
     };
     const META_KEYS = new Set(['id', 'intent', 'tags', 'mutates', 'status', 'produces']);
+    // GH #525 — track which M7 keys are PRESENT and which of those failed to
+    // parse, so rendering can distinguish legacy absence from a parse failure.
+    const presentKeys = new Set();
+    const invalidKeys = [];
     let inComment = false;
     for (const line of lines) {
         if (line.startsWith('#')) {
@@ -188,6 +194,7 @@ function parseFlowMeta(text) {
             if (kv && META_KEYS.has(kv[1])) {
                 const key = kv[1];
                 const raw = kv[2].trim();
+                presentKeys.add(key);
                 if (key === 'tags') {
                     meta.tags = raw
                         .replace(/^\[|\]$/g, '')
@@ -196,10 +203,17 @@ function parseFlowMeta(text) {
                         .filter(Boolean);
                 }
                 else if (key === 'mutates') {
-                    meta.mutates = /^true$/i.test(raw);
+                    if (/^(true|false)$/i.test(raw)) {
+                        meta.mutates = /^true$/i.test(raw);
+                    }
+                    else {
+                        invalidKeys.push('mutates');
+                    }
                 }
                 else if (key === 'produces') {
                     meta.produces = parseProducesMap(raw);
+                    if (meta.produces === null)
+                        invalidKeys.push('produces');
                 }
                 else {
                     meta[key] = raw;
@@ -228,6 +242,8 @@ function parseFlowMeta(text) {
         mutates: meta.mutates,
         status: meta.status,
         produces: meta.produces,
+        metaFormat: presentKeys.size > 0 ? 'm7' : 'pre-m7',
+        metaInvalid: invalidKeys,
     };
 }
 // D1209 — parse the inline `produces` map: `{ key: value, key: value }`.
@@ -423,10 +439,23 @@ if (want('b')) {
         parts.push('| Flow | Purpose | App ID | Mutates | Status | Tags | Produces | Replay |');
         parts.push('|---|---|---|---|---|---|---|---|');
         for (const f of flows.items) {
-            const mut = f.mutates === null || f.mutates === undefined ? '?' : f.mutates ? 'yes' : 'no';
-            const status = f.status || '?';
-            const tags = f.tags && f.tags.length ? f.tags.join(', ') : '?';
-            const produces = formatProducesCell(f.produces);
+            // GH #525 — absence renders '-' ('pre-M7' for legacy headers); '?' is
+            // reserved for a key that is present but failed to parse.
+            const absent = f.metaFormat === 'pre-m7' ? 'pre-M7' : '-';
+            const mut = f.mutates === null || f.mutates === undefined
+                ? f.metaInvalid.includes('mutates')
+                    ? '?'
+                    : absent
+                : f.mutates
+                    ? 'yes'
+                    : 'no';
+            const status = f.status || absent;
+            const tags = f.tags ? (f.tags.length ? f.tags.join(', ') : '-') : absent;
+            const produces = f.produces
+                ? formatProducesCell(f.produces)
+                : f.metaInvalid.includes('produces')
+                    ? '?'
+                    : absent;
             parts.push(`| \`${f.flow}\` | ${escapeMarkdownTableCell(f.purpose)} | \`${f.appId || '?'}\` | ${mut} | ${status} | ${escapeMarkdownTableCell(tags)} | ${escapeMarkdownTableCell(produces)} | \`${f.replay}\` |`);
         }
     }
@@ -472,10 +501,7 @@ function escapeMarkdownTableCell(s) {
     return (s || '').toString().replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\n/g, ' ');
 }
 // D1209 — render the parsed produces map as a compact table cell.
-// Empty / null returns '?'.
 function formatProducesCell(produces) {
-    if (!produces || typeof produces !== 'object')
-        return '?';
     const keys = Object.keys(produces).sort();
     if (keys.length === 0)
         return '?';

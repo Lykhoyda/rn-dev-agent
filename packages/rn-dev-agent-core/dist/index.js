@@ -1652,6 +1652,10 @@ trackedTool('cdp_interact', 'Interact with React components by testID (preferred
         .boolean()
         .optional()
         .describe("For setFieldValue: pass-through to setValue's options.shouldDirty (default true). Set false to keep the field marked pristine."),
+    walkUp: z
+        .boolean()
+        .optional()
+        .describe('press only (opt-in, GH #525): when the matched component has no onPress (testID on a non-pressable wrapper), search up to 3 fiber ancestors for the nearest pressable and press it. Refuses when no pressable exists within the bound or when duplicate matches resolve to distinct pressable fibers (ambiguity). Default behavior without the flag is unchanged.'),
 }, createInteractHandler(getClient));
 trackedTool('collect_logs', 'Collect logs from multiple sources in parallel: JS console (Hermes ring buffer snapshot), native iOS (xcrun simctl log stream), native Android (adb logcat). Results merged and sorted by timestamp. Works without CDP when only native sources requested. Use when debugging crashes that span JS and native layers.', {
     sources: z

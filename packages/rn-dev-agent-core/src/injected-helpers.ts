@@ -18,9 +18,13 @@ export const INJECTED_HELPERS = `
   var MAX_REGISTERED_RENDERER_IDS = 100;
   var EARLY_EXIT_EMPTY_STREAK = 3;
 
-  // GH #525 — reload evidence for getNavState: a fresh JS context re-runs this
-  // IIFE, so recency of this stamp marks "helpers just (re)injected".
+  // GH #525 — reload evidence for getNavState: recency of this stamp marks a
+  // fresh (re)injection, and a zero root count at injection proves the context
+  // was still booting its bundle (ordinary injection into a mounted app sees
+  // committed roots here and never reads as a reload).
   var __INJECTED_AT__ = Date.now();
+  var __ROOTS_AT_INJECTION__ = -1;
+  try { __ROOTS_AT_INJECTION__ = findAllRootFibers().length; } catch (eRootProbe) {}
 
   // Reset by every root-iteration pass; only valid when read synchronously
   // after the pass that produced the tree (many helpers share the iterators).
@@ -784,9 +788,11 @@ export const INJECTED_HELPERS = `
         });
       }
       var helperAge = Date.now() - __INJECTED_AT__;
-      if (mountHookUsable && helperAge >= 0 && helperAge < 10000) {
+      // Reload evidence, not a bare timer: the branch also requires that the
+      // context had ZERO committed roots when helpers landed (fresh bundle).
+      if (mountHookUsable && __ROOTS_AT_INJECTION__ === 0 && helperAge >= 0 && helperAge < 10000) {
         return JSON.stringify({
-          error: 'Navigation state not found. Helpers were (re)injected ' + helperAge + 'ms ago, so the app may still be mounting after a reload — retry in ~2s. If this persists, React Navigation or Expo Router may be missing.',
+          error: 'Navigation state not found. Helpers were injected ' + helperAge + 'ms ago into a context that was still booting its bundle, so the app may still be mounting after a reload — retry in ~2s. If this persists, React Navigation or Expo Router may be missing.',
           helpersRecentlyInjected: true,
           helperAgeMs: helperAge,
           retryInMs: 2000
