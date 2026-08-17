@@ -406,7 +406,5 @@ function escapeMarkdownTableCell(s) {
 }
 function formatProducesCell(produces) {
   const keys = Object.keys(produces).sort();
-  if (keys.length === 0)
-    return "?";
   return keys.map((k) => `${k}=${produces[k]}`).join(", ");
 }

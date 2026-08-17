@@ -20,6 +20,7 @@ const REPO_ROOT = resolve(__dirname, '..', '..', '..', '..');
 
 const CLAUDE_PKG = join(REPO_ROOT, 'packages', 'claude-plugin');
 const CODEX_PKG = join(REPO_ROOT, 'packages', 'codex-plugin');
+const CANONICAL_SKILLS = join(REPO_ROOT, 'packages', 'shared-agent-knowledge', 'skills');
 
 function walkMarkdown(dir: string): string[] {
   if (!fs.existsSync(dir)) return [];
@@ -231,4 +232,38 @@ test('#525 each packaged sending-feedback skill points at a workflow inside its 
       );
     }
   }
+});
+
+// The plugin-root vocabulary is a host-resolution contract: a skill copy may
+// only name the roots its own host actually exports. Tokenize the shipped
+// markdown into SCREAMING_CASE identifiers and compare against that vocabulary
+// rather than matching sentences.
+const HOST_ROOT_ENV_VARS = [
+  'CLAUDE_PLUGIN_ROOT',
+  'CODEX_PLUGIN_ROOT',
+  'RN_DEV_AGENT_CODEX_PLUGIN_ROOT',
+  'CODEX_HOME',
+];
+
+function namedHostRoots(file: string): string[] {
+  const identifiers = new Set(fs.readFileSync(file, 'utf8').match(/\b[A-Z][A-Z0-9_]{2,}\b/g) ?? []);
+  return HOST_ROOT_ENV_VARS.filter((name) => identifiers.has(name)).sort();
+}
+
+test('#525 the canonical and Claude-packaged sending-feedback skill name only the Claude plugin root', () => {
+  for (const skill of [
+    join(CANONICAL_SKILLS, 'sending-feedback', 'SKILL.md'),
+    join(CLAUDE_PKG, 'skills', 'sending-feedback', 'SKILL.md'),
+  ]) {
+    assert.deepEqual(
+      namedHostRoots(skill),
+      ['CLAUDE_PLUGIN_ROOT'],
+      `${skill} must describe the Claude resolution surface only`,
+    );
+  }
+  const codexSkill = join(CODEX_PKG, 'skills', 'sending-feedback', 'SKILL.md');
+  assert.ok(
+    !namedHostRoots(codexSkill).includes('CLAUDE_PLUGIN_ROOT'),
+    `${codexSkill} must not describe the Claude resolution surface`,
+  );
 });

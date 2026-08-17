@@ -606,6 +606,5 @@ function escapeMarkdownTableCell(s: unknown): string {
 // D1209 — render the parsed produces map as a compact table cell.
 function formatProducesCell(produces: ProducesMap): string {
   const keys = Object.keys(produces).sort();
-  if (keys.length === 0) return '?';
   return keys.map((k) => `${k}=${produces[k]}`).join(', ');
 }
