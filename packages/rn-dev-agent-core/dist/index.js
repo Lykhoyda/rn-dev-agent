@@ -270,7 +270,7 @@ addToolObserver((o) => recorder.record(o));
 addToolObserver((o) => strictProofMonitor.record(o));
 addToolObserver((o) => experienceRecorder.observe(o));
 const authorityRuntime = getWorkerAuthorityRuntime();
-setRegistryDeviceBindingProvider(() => mapRegistryDeviceBinding(authorityRuntime.status()));
+setRegistryDeviceBindingProvider(() => mapRegistryDeviceBinding(authorityRuntime.status(), authorityRuntime.available));
 setSnapshotAuthorityProvider({
     current: () => {
         const status = authorityRuntime.status();

@@ -256,13 +256,20 @@ export interface SessionDeviceBinding {
   deviceId?: string;
 }
 
-// Pure producer for the three-state fence. Unavailable authority is null
-// (legacy ambient may apply). An available authority with no device binding
-// is the {} sentinel (fences adb). A present device copies only string fields.
+// Pure producer for the three-state fence. A runtime that was never
+// initialized maps to null (legacy ambient may apply). An initialized runtime
+// whose status is unavailable (SESSION_OWNER_LOST) is the {} sentinel, as is
+// an available authority with no device binding. A present device copies only
+// string fields.
 export function mapRegistryDeviceBinding(
-  status: { available: false } | { available: true; bindings: Record<string, unknown> },
+  status:
+    | { available: false; code?: string }
+    | { available: true; bindings: Record<string, unknown> },
+  runtimeInitialized = false,
 ): SessionDeviceBinding | null {
-  if (!status.available) return null;
+  if (!status.available) {
+    return runtimeInitialized || status.code === 'SESSION_OWNER_LOST' ? {} : null;
+  }
   const device = status.bindings.device as { platform?: unknown; deviceId?: unknown } | undefined;
   if (!device) return {};
   const mapped: SessionDeviceBinding = {};

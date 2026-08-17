@@ -217,12 +217,15 @@ export function cachedPackageProbe(key, probe, clock = Date.now) {
 export function clearPackageProbeCache() {
     packageProbeCache.clear();
 }
-// Pure producer for the three-state fence. Unavailable authority is null
-// (legacy ambient may apply). An available authority with no device binding
-// is the {} sentinel (fences adb). A present device copies only string fields.
-export function mapRegistryDeviceBinding(status) {
-    if (!status.available)
-        return null;
+// Pure producer for the three-state fence. A runtime that was never
+// initialized maps to null (legacy ambient may apply). An initialized runtime
+// whose status is unavailable (SESSION_OWNER_LOST) is the {} sentinel, as is
+// an available authority with no device binding. A present device copies only
+// string fields.
+export function mapRegistryDeviceBinding(status, runtimeInitialized = false) {
+    if (!status.available) {
+        return runtimeInitialized || status.code === 'SESSION_OWNER_LOST' ? {} : null;
+    }
     const device = status.bindings.device;
     if (!device)
         return {};

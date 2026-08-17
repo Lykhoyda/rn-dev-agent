@@ -255,12 +255,25 @@ test('gh-777-qa: both stores empty keeps the single pre-existing baseline read',
   assert.deepEqual(spy.calls, [['adb', 'shell', 'pm', 'list', 'packages']]);
 });
 
-// P1 (PR #782 review): the provider mapping is a pure three-state seam —
-// unavailable => null, available with no/null device => {}, device present =>
-// {platform,deviceId}. The consumer tests below still prove the {} sentinel
-// fences adb, and a throwing lookup never becomes ambient.
+// P1 (PR #782 / #786 review): the provider mapping is a pure three-state seam —
+// never-initialized => null, available with no/null device => {}, device present =>
+// {platform,deviceId}. SESSION_OWNER_LOST on an initialized runtime is {}, never
+// null. The consumer tests below still prove the {} sentinel fences adb, and a
+// throwing lookup never becomes ambient.
 test('gh-777-qa: provider mapping — unavailable authority is null', () => {
   assert.equal(mapRegistryDeviceBinding({ available: false }), null);
+  assert.equal(
+    mapRegistryDeviceBinding({ available: false, code: 'SESSION_NOT_INITIALIZED' }),
+    null,
+  );
+});
+
+test('gh-777-qa: provider mapping — SESSION_OWNER_LOST from an initialized runtime is the fence sentinel', () => {
+  assert.deepEqual(mapRegistryDeviceBinding({ available: false, code: 'SESSION_OWNER_LOST' }), {});
+  assert.deepEqual(
+    mapRegistryDeviceBinding({ available: false, code: 'SESSION_OWNER_LOST' }, true),
+    {},
+  );
 });
 
 test('gh-777-qa: provider mapping — available with no device is the fence sentinel', () => {

@@ -27793,9 +27793,10 @@ function cachedPackageProbe(key, probe, clock = Date.now) {
   });
   return value;
 }
-function mapRegistryDeviceBinding(status) {
-  if (!status.available)
-    return null;
+function mapRegistryDeviceBinding(status, runtimeInitialized = false) {
+  if (!status.available) {
+    return runtimeInitialized || status.code === "SESSION_OWNER_LOST" ? {} : null;
+  }
   const device = status.bindings.device;
   if (!device)
     return {};
@@ -88933,7 +88934,7 @@ var init_index = __esm({
     addToolObserver((o) => strictProofMonitor.record(o));
     addToolObserver((o) => experienceRecorder.observe(o));
     authorityRuntime = getWorkerAuthorityRuntime();
-    setRegistryDeviceBindingProvider(() => mapRegistryDeviceBinding(authorityRuntime.status()));
+    setRegistryDeviceBindingProvider(() => mapRegistryDeviceBinding(authorityRuntime.status(), authorityRuntime.available));
     setSnapshotAuthorityProvider({
       current: () => {
         const status = authorityRuntime.status();
