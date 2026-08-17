@@ -147,3 +147,29 @@ jobs:
         uses: github/codeql-action/analyze@v4
         with:
           category: "/language:${{ matrix.language }}"
+          output: ${{ runner.temp }}/codeql-sarif
+          upload: never
+
+      # The SARIF ingest API intermittently answers a generic 5xx ("No server is
+      # currently available"), which codeql-action does not retry — a fully green
+      # analysis then fails the check. Upload as its own retried step so a single
+      # flaky response no longer discards the analysis.
+      - name: Upload CodeQL results
+        id: upload
+        if: ${{ matrix.language != 'swift' || needs.changes.outputs.swift == 'true' }}
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: ${{ runner.temp }}/codeql-sarif
+          category: "/language:${{ matrix.language }}"
+
+      - name: Back off before retrying the upload
+        if: ${{ steps.upload.outcome == 'failure' }}
+        run: sleep 60
+
+      - name: Upload CodeQL results (retry)
+        if: ${{ steps.upload.outcome == 'failure' }}
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: ${{ runner.temp }}/codeql-sarif
+          category: "/language:${{ matrix.language }}"

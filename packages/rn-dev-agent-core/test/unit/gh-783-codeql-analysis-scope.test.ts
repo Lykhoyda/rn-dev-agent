@@ -10,6 +10,15 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..',
 
 type MatrixEntry = { language?: string; 'config-file'?: string };
 
+type WorkflowStep = {
+  name?: string;
+  id?: string;
+  if?: string;
+  uses?: string;
+  'continue-on-error'?: boolean;
+  with?: Record<string, string>;
+};
+
 function readYaml<T>(relativePath: string): T {
   return parse(readFileSync(join(repoRoot, relativePath), 'utf8')) as T;
 }
@@ -43,15 +52,31 @@ function trackedFiles(): string[] {
     .filter(Boolean);
 }
 
+function analyzeJob(): {
+  strategy: { matrix: { include: MatrixEntry[] } };
+  steps: WorkflowStep[];
+} {
+  return readYaml<{
+    jobs: {
+      analyze: { strategy: { matrix: { include: MatrixEntry[] } }; steps: WorkflowStep[] };
+    };
+  }>('.github/workflows/codeql.yml').jobs.analyze;
+}
+
 function jsMatrixEntry(): MatrixEntry {
-  const workflow = readYaml<{
-    jobs: { analyze: { strategy: { matrix: { include: MatrixEntry[] } } } };
-  }>('.github/workflows/codeql.yml');
-  const entry = workflow.jobs.analyze.strategy.matrix.include.find(
+  const entry = analyzeJob().strategy.matrix.include.find(
     (candidate) => candidate.language === 'javascript-typescript',
   );
   assert.ok(entry, 'the CodeQL matrix must still analyze javascript-typescript');
   return entry;
+}
+
+function condition(step: WorkflowStep): string {
+  return (step.if ?? '')
+    .replace(/^\s*\$\{\{/, '')
+    .replace(/\}\}\s*$/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 test('GH-783 CodeQL scope: the javascript-typescript leg loads an existing config file', () => {
@@ -82,4 +107,56 @@ test('GH-783 CodeQL scope: generated bundles are excluded, hand-written sources 
   ]) {
     assert.ok(scanned.includes(source), `${source} must still be analyzed by CodeQL`);
   }
+});
+
+// Contract under test: the `analyze` job definition consumed by the GitHub
+// Actions runner. A transient 5xx from the SARIF ingest API must not discard a
+// completed analysis, so uploading is a separate step that is retried once.
+test('GH-783 CodeQL upload: a failed SARIF upload is retried with the same results', () => {
+  const steps = analyzeJob().steps;
+  const analyze = steps.find((step) => step.uses?.includes('codeql-action/analyze'));
+  assert.ok(analyze, 'the analyze job must still run codeql-action/analyze');
+
+  const sarifPath = analyze.with?.output;
+  assert.ok(sarifPath, 'codeql-action/analyze must write its SARIF to a declared output path');
+  assert.equal(
+    analyze.with?.upload,
+    'never',
+    'codeql-action/analyze must not own the upload, so the upload can be retried on its own',
+  );
+
+  const uploads = steps.filter((step) => step.uses?.includes('codeql-action/upload-sarif'));
+  assert.equal(uploads.length, 2, 'the SARIF upload must have exactly one retry attempt');
+
+  const [first, retry] = uploads;
+  assert.equal(
+    first['continue-on-error'],
+    true,
+    'the first upload attempt must not fail the job before the retry runs',
+  );
+  assert.ok(first.id, 'the first upload attempt needs an id so the retry can gate on its outcome');
+  assert.equal(
+    condition(retry),
+    `steps.${first.id}.outcome == 'failure'`,
+    'the retry must run only when the first upload attempt failed',
+  );
+
+  for (const upload of uploads) {
+    assert.equal(
+      upload.with?.sarif_file,
+      sarifPath,
+      'every upload attempt must send the SARIF that codeql-action/analyze produced',
+    );
+    assert.equal(
+      upload.with?.category,
+      analyze.with?.category,
+      'every upload attempt must keep the analysis category so results replace, not duplicate',
+    );
+  }
+
+  assert.notEqual(
+    retry['continue-on-error'],
+    true,
+    'a failed retry must still fail the check — the upload is not optional',
+  );
 });
