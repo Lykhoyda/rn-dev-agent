@@ -3,11 +3,11 @@
 // was still mounting — in a project where the router was introspected minutes
 // earlier. The helper must distinguish, in evidence order: (a) no fiber roots
 // yet (bundle still loading), (b) the framework provably in the bundle via
-// require(), (c) helpers freshly (re)injected — the reload signal named by the
-// issue, reported as a hedged both-hypotheses message — from (d) a genuinely
-// absent navigation framework; only (d) leads with the framework question.
-// Tests age the helpers by advancing the sandbox clock, not via any writable
-// production seam.
+// require(), (c) every committed root is nothing but the dev LogBox shell, so
+// no app UI has rendered yet — from (d) a genuinely absent navigation
+// framework; only (d) leads with the framework question. All evidence is
+// read from CURRENT render state: no injection timestamps, no age inference,
+// and any detection miss degrades to (d) rather than claiming mounting.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
@@ -35,17 +35,7 @@ interface SandboxFiber {
   stateNode: null;
 }
 
-interface TestClock {
-  offsetMs: number;
-}
-
 function createSandbox(opts: { hook?: unknown; require?: (name: string) => unknown } = {}) {
-  const clock: TestClock = { offsetMs: 0 };
-  class ClockedDate extends Date {
-    static now(): number {
-      return Date.now() + clock.offsetMs;
-    }
-  }
   const sandbox: Record<string, unknown> = {
     Array,
     Object,
@@ -53,7 +43,7 @@ function createSandbox(opts: { hook?: unknown; require?: (name: string) => unkno
     Map,
     WeakSet,
     Error,
-    Date: ClockedDate,
+    Date,
     parseInt,
     parseFloat,
     console: { log() {}, error() {}, warn() {}, info() {}, debug() {} },
@@ -72,7 +62,7 @@ function createSandbox(opts: { hook?: unknown; require?: (name: string) => unkno
   if (opts.require) sandbox.require = opts.require;
   vm.createContext(sandbox);
   vm.runInContext(INJECTED_HELPERS, sandbox);
-  return { sandbox: sandbox as Record<string, any>, clock };
+  return sandbox as Record<string, any>;
 }
 
 function buildFiber(spec: FiberSpec, parent: SandboxFiber | null = null): SandboxFiber {
@@ -105,8 +95,38 @@ function hookWithRoots(rootFibers: SandboxFiber[]) {
   };
 }
 
+// The dev LogBox root commits well before any app root after a reload — this is
+// the tree shape cdp_navigation_state actually sees mid-mount.
+function logBoxShellRoot(): SandboxFiber {
+  return buildFiber({
+    name: 'LogBoxStateSubscription',
+    children: [
+      {
+        name: '_LogBoxNotificationContainer',
+        children: [{ name: 'View', children: [{ name: 'Text' }] }],
+      },
+    ],
+  });
+}
+
+// An ordinarily mounted app screen that simply has no navigation container.
+function plainAppRoot(): SandboxFiber {
+  return buildFiber({
+    name: 'AppContainer',
+    children: [
+      {
+        name: 'HomeScreen',
+        children: [
+          { name: 'View', children: [{ name: 'Text' }, { name: 'Text' }] },
+          { name: 'Button' },
+        ],
+      },
+    ],
+  });
+}
+
 test('#525 no fiber roots yet: reports app still mounting with retry, not a framework question', () => {
-  const { sandbox } = createSandbox({ hook: hookWithRoots([]) });
+  const sandbox = createSandbox({ hook: hookWithRoots([]) });
   const result = JSON.parse(sandbox.__RN_AGENT.getNavState());
   assert.ok(result.error, 'expected an error payload');
   assert.match(result.error, /App is still mounting[\s\S]*[Rr]etry in ~2s/);
@@ -114,16 +134,14 @@ test('#525 no fiber roots yet: reports app still mounting with retry, not a fram
   assert.equal(result.mounting, true);
 });
 
-test('#525 framework provably in the bundle but no nav state: evidence-based hedged message even when helpers are old', () => {
-  const shell = buildFiber({ name: 'PlainApp', children: [{ name: 'View' }] });
-  const { sandbox, clock } = createSandbox({
-    hook: hookWithRoots([shell]),
+test('#525 framework provably in the bundle but no nav state: evidence-based hedged message', () => {
+  const sandbox = createSandbox({
+    hook: hookWithRoots([plainAppRoot()]),
     require: (name: string) => {
       if (name === '@react-navigation/native') return {};
       throw new Error(`module not bundled: ${name}`);
     },
   });
-  clock.offsetMs = 60_000;
   const result = JSON.parse(sandbox.__RN_AGENT.getNavState());
   assert.ok(result.error, 'expected an error payload');
   assert.equal(result.frameworkDetected, 'react-navigation');
@@ -131,40 +149,56 @@ test('#525 framework provably in the bundle but no nav state: evidence-based hed
   assert.doesNotMatch(result.error, /Is React Navigation or Expo Router installed\?/);
 });
 
-test('#525 reload flow (helpers landed before any root committed): hedged both-hypotheses retry message', () => {
-  // Concrete reload/render evidence: the IIFE evaluates while the fresh
-  // context has ZERO committed roots (bundle still booting); a shell root
-  // mounts afterwards. Only this shape may hedge toward "still mounting".
-  const roots: SandboxFiber[] = [];
-  const { sandbox } = createSandbox({ hook: hookWithRoots(roots) });
-  roots.push(buildFiber({ name: 'LogBoxShell', children: [{ name: 'View' }] }));
+test('#525 post-reload shell-only tree: hedged mounting retry, never the bare framework question', () => {
+  const sandbox = createSandbox({ hook: hookWithRoots([logBoxShellRoot()]) });
   const result = JSON.parse(sandbox.__RN_AGENT.getNavState());
   assert.ok(result.error, 'expected an error payload');
-  assert.match(result.error, /may still be mounting[\s\S]*retry in ~2s/i);
+  assert.match(result.error, /still mounting[\s\S]*[Rr]etry in ~2s/);
   // The framework-missing hypothesis stays visible, hedged rather than asserted.
   assert.match(result.error, /React Navigation or Expo Router/);
   assert.doesNotMatch(result.error, /Is React Navigation or Expo Router installed\?/);
-  assert.equal(result.helpersRecentlyInjected, true);
+  assert.equal(result.mounting, true);
+  assert.equal(result.shellOnly, true);
+  assert.equal(result.retryInMs, 2000);
 });
 
-test('#525 ordinary injection into an already-mounted app: fresh helper age can NOT mask the framework message', () => {
-  // Disconfirming case: roots were already committed when the helpers were
-  // injected, so recency is not reload evidence — the legacy message shows
-  // immediately even at age ~0ms.
-  const shell = buildFiber({ name: 'PlainApp', children: [{ name: 'View' }] });
-  const { sandbox } = createSandbox({ hook: hookWithRoots([shell]) });
+test('#525 ordinarily mounted app without navigation: the genuine framework message is preserved', () => {
+  const sandbox = createSandbox({ hook: hookWithRoots([plainAppRoot()]) });
   const result = JSON.parse(sandbox.__RN_AGENT.getNavState());
   assert.equal(result.error, LEGACY_MESSAGE);
   assert.notEqual(result.mounting, true);
-  assert.equal(result.helpersRecentlyInjected, undefined);
+  assert.equal(result.shellOnly, undefined);
 });
 
-test('#525 roots present, helpers long-injected, no nav container: the genuine framework message is preserved', () => {
-  const shell = buildFiber({ name: 'PlainApp', children: [{ name: 'View' }] });
-  const { sandbox, clock } = createSandbox({ hook: hookWithRoots([shell]) });
-  clock.offsetMs = 60_000;
+test('#525 an app root alongside the LogBox shell can NOT be read as shell-only', () => {
+  // Disconfirming case: once app content has committed, the shell root is no
+  // longer evidence of mounting — the framework message must show immediately.
+  const sandbox = createSandbox({ hook: hookWithRoots([logBoxShellRoot(), plainAppRoot()]) });
   const result = JSON.parse(sandbox.__RN_AGENT.getNavState());
   assert.equal(result.error, LEGACY_MESSAGE);
+  assert.notEqual(result.mounting, true);
+});
+
+test('#525 a LogBox-named tree larger than the scan bound degrades to the legacy message', () => {
+  // Fail-closed: a tree the bounded probe cannot fully walk is treated as app
+  // content, never as a shell — a detection miss must not fake mounting.
+  let deep: FiberSpec = { name: 'Leaf' };
+  for (let i = 0; i < 250; i++) deep = { name: `Wrapper${i}`, children: [deep] };
+  const sandbox = createSandbox({
+    hook: hookWithRoots([buildFiber({ name: 'LogBoxStateSubscription', children: [deep] })]),
+  });
+  const result = JSON.parse(sandbox.__RN_AGENT.getNavState());
+  assert.equal(result.error, LEGACY_MESSAGE);
+  assert.notEqual(result.mounting, true);
+});
+
+test('#525 a root with no LogBox name anywhere is app content, not a shell', () => {
+  const sandbox = createSandbox({
+    hook: hookWithRoots([buildFiber({ name: 'Splash', children: [{ name: 'View' }] })]),
+  });
+  const result = JSON.parse(sandbox.__RN_AGENT.getNavState());
+  assert.equal(result.error, LEGACY_MESSAGE);
+  assert.notEqual(result.mounting, true);
 });
 
 test('#525 a mounted NavigationContainer still resolves normally after the change', () => {
@@ -179,15 +213,23 @@ test('#525 a mounted NavigationContainer still resolves normally after the chang
       },
     ],
   });
-  const { sandbox } = createSandbox({ hook: hookWithRoots([root]) });
+  const sandbox = createSandbox({ hook: hookWithRoots([root]) });
   const result = JSON.parse(sandbox.__RN_AGENT.getNavState());
   assert.equal(result.error, undefined);
   assert.equal(result.routeName, 'Home');
 });
 
+test('#525 no DevTools hook: never claims mounting, keeps the legacy message', () => {
+  const sandbox = createSandbox({});
+  const result = JSON.parse(sandbox.__RN_AGENT.getNavState());
+  assert.ok(result.error, 'expected an error payload');
+  assert.notEqual(result.mounting, true);
+  assert.equal(result.error, LEGACY_MESSAGE);
+});
+
 // The mid-mount fields are machine-readable API, so they must survive the
 // cdp_navigation_state boundary as envelope meta — an agent reading only the
-// MCP result has to be able to act on `mounting` / `retryInMs`.
+// MCP result has to be able to act on `mounting` / `shellOnly` / `retryInMs`.
 function navStateHandlerFor(payload: Record<string, unknown>) {
   const client = createMockClient({
     evaluate: async () => ({ value: JSON.stringify(payload) }),
@@ -208,7 +250,7 @@ test('#525 tool layer forwards the mounting guidance fields as envelope meta', a
   assert.equal(envelope.meta?.retryInMs, 2000);
 });
 
-test('#525 tool layer forwards frameworkDetected and the reload-recency fields', async () => {
+test('#525 tool layer forwards frameworkDetected and the shell-only marker', async () => {
   const bundled = parseEnvelope(
     await navStateHandlerFor({
       error: 'React Navigation is bundled but no navigation state was found.',
@@ -218,31 +260,20 @@ test('#525 tool layer forwards frameworkDetected and the reload-recency fields',
   );
   assert.equal(bundled.meta?.frameworkDetected, 'react-navigation');
 
-  const reloaded = parseEnvelope(
+  const shellOnly = parseEnvelope(
     await navStateHandlerFor({
-      error: 'Navigation state not found. Helpers were injected 120ms ago…',
-      helpersRecentlyInjected: true,
-      helperAgeMs: 120,
+      error: 'App UI is still mounting — only the development LogBox shell is rendered so far…',
+      mounting: true,
+      shellOnly: true,
       retryInMs: 2000,
     })({}),
   );
-  assert.equal(reloaded.meta?.helpersRecentlyInjected, true);
-  assert.equal(reloaded.meta?.helperAgeMs, 120);
+  assert.equal(shellOnly.meta?.shellOnly, true);
+  assert.equal(shellOnly.meta?.mounting, true);
 });
 
 test('#525 tool layer attaches no meta to the legacy framework-missing refusal', async () => {
   const envelope = parseEnvelope(await navStateHandlerFor({ error: LEGACY_MESSAGE })({}));
   assert.equal(envelope.ok, false);
   assert.equal(envelope.meta, undefined);
-});
-
-test('#525 no DevTools hook: never claims mounting, whether helpers are fresh or aged', () => {
-  for (const ageMs of [0, 60_000]) {
-    const { sandbox, clock } = createSandbox({});
-    clock.offsetMs = ageMs;
-    const result = JSON.parse(sandbox.__RN_AGENT.getNavState());
-    assert.ok(result.error, 'expected an error payload');
-    assert.notEqual(result.mounting, true, `age=${ageMs}: must not claim mounting without a hook`);
-    assert.equal(result.error, LEGACY_MESSAGE, `age=${ageMs}: legacy message preserved`);
-  }
 });

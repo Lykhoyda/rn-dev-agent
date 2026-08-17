@@ -253,8 +253,10 @@ test('GH #597: forwardRef-wrapped NavigationContainer on a later renderer is dis
 });
 
 test('GH #597: no-match control — scanning every renderer never fabricates a ref', () => {
+  // Mounted app content, not a LogBox shell: getNavState reads a shell-only
+  // tree as mid-mount (GH #525), which would mask this control's no-match case.
   const shell: Fiber = {
-    type: { displayName: 'LogBox' },
+    type: { displayName: 'MountedAppRoot' },
     child: null,
     sibling: null,
   };

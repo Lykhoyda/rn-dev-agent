@@ -47,8 +47,7 @@ export async function readLiveRoute(client) {
 // GH #525 — mid-mount guidance fields the injected getNavState may attach to a refusal.
 const NAV_STATE_GUIDANCE_FIELDS = [
     'mounting',
-    'helpersRecentlyInjected',
-    'helperAgeMs',
+    'shellOnly',
     'frameworkDetected',
     'retryInMs',
 ];

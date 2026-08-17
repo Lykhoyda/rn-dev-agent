@@ -52956,13 +52956,12 @@ var INJECTED_HELPERS = `
   var MAX_REGISTERED_RENDERER_IDS = 100;
   var EARLY_EXIT_EMPTY_STREAK = 3;
 
-  // GH #525 \u2014 reload evidence for getNavState: recency of this stamp marks a
-  // fresh (re)injection, and a zero root count at injection proves the context
-  // was still booting its bundle (ordinary injection into a mounted app sees
-  // committed roots here and never reads as a reload).
-  var __INJECTED_AT__ = Date.now();
-  var __ROOTS_AT_INJECTION__ = -1;
-  try { __ROOTS_AT_INJECTION__ = findAllRootFibers().length; } catch (eRootProbe) {}
+  // GH #525 \u2014 bounded shell-only render evidence for getNavState. Right after a
+  // reload the dev LogBox root commits long before any app root, so a tree that
+  // is nothing but that shell proves the UI is still mounting. Bounds keep the
+  // probe fail-closed: an unnamed or oversized tree is never called a shell.
+  var NAV_SHELL_SCAN_MAX = 200;
+  var NAV_SHELL_TOP_NAMES = 12;
 
   // Reset by every root-iteration pass; only valid when read synchronously
   // after the pass that produced the tree (many helpers share the iterators).
@@ -53131,6 +53130,43 @@ var INJECTED_HELPERS = `
       return null; // explicit \u2014 keep collecting, never short-circuit
     });
     return out;
+  }
+
+  // GH #525 \u2014 is this root nothing but the dev LogBox shell? Bounded DFS: a tree
+  // larger than NAV_SHELL_SCAN_MAX, or one without a LogBox name among its first
+  // NAV_SHELL_TOP_NAMES named fibers, is app content as far as this probe knows.
+  function navShellOnlyRoot(rootFiber) {
+    var stack = [rootFiber];
+    var visited = 0;
+    var named = 0;
+    var sawShell = false;
+    while (stack.length > 0) {
+      var node = stack.pop();
+      if (!node) continue;
+      if (++visited > NAV_SHELL_SCAN_MAX) return false;
+      var nodeType = node.type;
+      var nodeName = typeof nodeType === 'string'
+        ? nodeType
+        : (nodeType && (nodeType.displayName || nodeType.name));
+      if (nodeName) {
+        named++;
+        if (named <= NAV_SHELL_TOP_NAMES && nodeName.indexOf('LogBox') !== -1) sawShell = true;
+      }
+      if (node.sibling) stack.push(node.sibling);
+      if (node.child) stack.push(node.child);
+    }
+    return sawShell;
+  }
+
+  function navAllRootsShellOnly(roots) {
+    for (var nsi = 0; nsi < roots.length; nsi++) {
+      try {
+        if (!navShellOnlyRoot(roots[nsi].fiber)) return false;
+      } catch (eShellProbe) {
+        return false;
+      }
+    }
+    return true;
   }
 
   // GH #126 Gap B \u2014 convert a user-provided React component instance into
@@ -53696,13 +53732,15 @@ var INJECTED_HELPERS = `
       if (fallbackRef && fallbackRef.getRootState) navState = fallbackRef.getRootState();
     }
 
-    // GH #525 \u2014 mid-mount evidence (empty roots, bundled framework, fresh
-    // reinjection) must not be misreported as a missing router install.
+    // GH #525 \u2014 mid-mount evidence (empty roots, bundled framework, a
+    // shell-only tree) must not be misreported as a missing router install.
     if (!navState) {
       var mountHook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
       var mountHookUsable = !!(mountHook && typeof mountHook.getFiberRoots === 'function');
-      // Only a CLEAN empty scan is mounting evidence (throwing renderers can hide roots).
-      if (mountHookUsable && findAllRootFibers().length === 0 && lastRootScan.rendererErrors === 0) {
+      var mountRoots = mountHookUsable ? findAllRootFibers() : [];
+      // Only a CLEAN scan is mounting evidence (throwing renderers can hide roots).
+      var mountScanClean = mountHookUsable && lastRootScan.rendererErrors === 0;
+      if (mountScanClean && mountRoots.length === 0) {
         return JSON.stringify({
           error: 'App is still mounting \u2014 no React fiber roots exist yet (the bundle is likely still loading). Retry in ~2s.',
           mounting: true,
@@ -53725,14 +53763,13 @@ var INJECTED_HELPERS = `
           retryInMs: 2000
         });
       }
-      var helperAge = Date.now() - __INJECTED_AT__;
-      // Reload evidence, not a bare timer: the branch also requires that the
-      // context had ZERO committed roots when helpers landed (fresh bundle).
-      if (mountHookUsable && __ROOTS_AT_INJECTION__ === 0 && helperAge >= 0 && helperAge < 10000) {
+      // Current-state render evidence, not a timer: every committed root is the
+      // dev LogBox shell, so no app UI has rendered yet.
+      if (mountScanClean && mountRoots.length > 0 && navAllRootsShellOnly(mountRoots)) {
         return JSON.stringify({
-          error: 'Navigation state not found. Helpers were injected ' + helperAge + 'ms ago into a context that was still booting its bundle, so the app may still be mounting after a reload \u2014 retry in ~2s. If this persists, React Navigation or Expo Router may be missing.',
-          helpersRecentlyInjected: true,
-          helperAgeMs: helperAge,
+          error: 'App UI is still mounting \u2014 only the development LogBox shell is rendered so far, no app root has committed. Retry in ~2s. If this persists, React Navigation or Expo Router may be missing.',
+          mounting: true,
+          shellOnly: true,
           retryInMs: 2000
         });
       }
@@ -69392,8 +69429,7 @@ async function readLiveRoute(client2) {
 }
 var NAV_STATE_GUIDANCE_FIELDS = [
   "mounting",
-  "helpersRecentlyInjected",
-  "helperAgeMs",
+  "shellOnly",
   "frameworkDetected",
   "retryInMs"
 ];
