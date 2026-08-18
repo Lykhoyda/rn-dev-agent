@@ -164,8 +164,10 @@ export class IosIdbSource {
             this.clearFirstFrameTimer();
             if (this.gate.record()) {
                 scheduleAfter(() => {
-                    if (this.active)
-                        this.spawnOnce(sink);
+                    if (!this.active)
+                        return;
+                    sink.onRestart?.();
+                    this.spawnOnce(sink);
                 }, this.restartDelayMs);
             }
             else {
@@ -394,8 +396,10 @@ export class AndroidScreenrecordSource {
             killSibling(self);
             if (this.gate.record()) {
                 scheduleAfter(() => {
-                    if (this.active)
-                        this.spawnCycle(sink);
+                    if (!this.active)
+                        return;
+                    sink.onRestart?.();
+                    this.spawnCycle(sink);
                 }, this.restartDelayMs);
             }
             else {

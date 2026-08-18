@@ -7,6 +7,8 @@ import { JpegFrameExtractor } from './jpeg-stream.js';
 
 export interface MirrorFrameSink {
   onFrame(frame: Buffer): void;
+  /** A source re-arming its own first-frame budget, so the consumer's bound can outlast it. */
+  onRestart?(): void;
   /** Terminal for this attach cycle. err absent = deliberate stop. */
   onExit(err?: { reason: string; hint?: string; code?: string }): void;
 }
@@ -234,7 +236,9 @@ export class IosIdbSource implements MirrorSource {
       this.clearFirstFrameTimer();
       if (this.gate.record()) {
         scheduleAfter(() => {
-          if (this.active) this.spawnOnce(sink);
+          if (!this.active) return;
+          sink.onRestart?.();
+          this.spawnOnce(sink);
         }, this.restartDelayMs);
       } else {
         this.fail(sink, 'idb video-stream keeps exiting');
@@ -476,7 +480,9 @@ export class AndroidScreenrecordSource implements MirrorSource {
       killSibling(self);
       if (this.gate.record()) {
         scheduleAfter(() => {
-          if (this.active) this.spawnCycle(sink);
+          if (!this.active) return;
+          sink.onRestart?.();
+          this.spawnCycle(sink);
         }, this.restartDelayMs);
       } else {
         this.active = false;

@@ -23343,8 +23343,10 @@ var init_sources = __esm({
           this.clearFirstFrameTimer();
           if (this.gate.record()) {
             scheduleAfter(() => {
-              if (this.active)
-                this.spawnOnce(sink);
+              if (!this.active)
+                return;
+              sink.onRestart?.();
+              this.spawnOnce(sink);
             }, this.restartDelayMs);
           } else {
             this.fail(sink, "idb video-stream keeps exiting");
@@ -23537,8 +23539,10 @@ var init_sources = __esm({
           killSibling(self);
           if (this.gate.record()) {
             scheduleAfter(() => {
-              if (this.active)
-                this.spawnCycle(sink);
+              if (!this.active)
+                return;
+              sink.onRestart?.();
+              this.spawnCycle(sink);
             }, this.restartDelayMs);
           } else {
             this.active = false;
@@ -83958,6 +83962,7 @@ init_project_config();
 // packages/rn-dev-agent-core/dist/observability/mirror/manager.js
 init_sources();
 var MIRROR_BOUNDARY = "rnmirror";
+var MAX_WATCHDOG_REARMS = 3;
 var MULTIPART_HEADERS = {
   "Content-Type": `multipart/x-mixed-replace; boundary=${MIRROR_BOUNDARY}`,
   "Cache-Control": "no-store",
@@ -83985,6 +83990,8 @@ var MirrorManager = class {
   demoted = false;
   graceTimer = null;
   watchdogTimer = null;
+  watchdogRearms = 0;
+  unusableFrames = 0;
   graceMs;
   firstFrameWatchdogMs;
   // Bumped on every teardown (grace-stop, shutdown, source exit) and at the
@@ -84011,12 +84018,23 @@ var MirrorManager = class {
   armWatchdog() {
     if (this.watchdogTimer)
       clearTimeout(this.watchdogTimer);
+    this.unusableFrames = 0;
     this.watchdogTimer = setTimeout(() => {
       this.watchdogTimer = null;
       if (this.state === "streaming" || this.state === "idle" || this.state === "error")
         return;
+      const reason = this.framelessReason();
+      const dying = this.source;
+      const target = this.activeTarget;
+      if (target && this.canDemote(dying)) {
+        this.cycle += 1;
+        dying?.stop();
+        this.source = null;
+        this.demote(target, { reason });
+        return;
+      }
       this.cycle += 1;
-      this.source?.stop();
+      dying?.stop();
       this.source = null;
       this.activeTarget = null;
       this.streamingPipeline = null;
@@ -84026,11 +84044,39 @@ var MirrorManager = class {
       this.pushStatus({
         type: "mirror",
         status: "error",
-        reason: `no mirror frame within ${this.firstFrameWatchdogMs}ms`,
-        hint: "the device may be unreachable \u2014 check the session device, then reload Observe"
+        reason,
+        hint: this.unusableFrames > 0 ? "the capture source is producing data Observe cannot decode as JPEG \u2014 check the mirror pipeline" : "the device may be unreachable \u2014 check the session device, then reload Observe"
       });
       this.endAllClients();
     }, this.firstFrameWatchdogMs);
+  }
+  framelessReason() {
+    const base = `no mirror frame within ${this.firstFrameWatchdogMs}ms`;
+    return this.unusableFrames > 0 ? `${base} \u2014 ${this.unusableFrames} unusable buffer(s) discarded` : base;
+  }
+  // This bound is the source's own first-frame budget plus slack, so a source
+  // that re-arms its budget must restart this one too — otherwise it reaps the
+  // pipeline before the source can demote. Capped: a source that flaps forever
+  // still cannot hold a frameless stream open (GH #791).
+  onSourceRestart() {
+    if (this.state !== "starting")
+      return;
+    if (this.watchdogRearms >= MAX_WATCHDOG_REARMS)
+      return;
+    this.watchdogRearms += 1;
+    this.armWatchdog();
+  }
+  canDemote(dying, err) {
+    return dying?.pipeline === "idb" && this.activeTarget?.platform === "ios" && typeof this.deps.createFallbackSource === "function" && !this.demoted && // A typed exit is a terminal refusal (e.g. authority), never a capture
+    // failure worth demoting around.
+    !err?.code && this.clients.size > 0;
+  }
+  demote(target, cause) {
+    this.demoted = true;
+    this.state = "starting";
+    this.watchdogRearms = 0;
+    this.armWatchdog();
+    void this.startFallback(target, cause);
   }
   disarmWatchdog() {
     if (this.watchdogTimer) {
@@ -84135,6 +84181,7 @@ var MirrorManager = class {
   }
   async startPipeline() {
     const myCycle = ++this.cycle;
+    this.watchdogRearms = 0;
     this.armWatchdog();
     let platform;
     let deviceId;
@@ -84179,6 +84226,11 @@ var MirrorManager = class {
             return;
           this.onSourceFrame(frame, target, source);
         },
+        onRestart: () => {
+          if (myCycle !== this.cycle)
+            return;
+          this.onSourceRestart();
+        },
         onExit: (err) => {
           if (myCycle !== this.cycle)
             return;
@@ -84209,6 +84261,7 @@ var MirrorManager = class {
   }
   onSourceFrame(frame, target, source) {
     if (frame.length < 4 || frame[0] !== 255 || frame[1] !== 216 || frame[frame.length - 2] !== 255 || frame[frame.length - 1] !== 217) {
+      this.unusableFrames += 1;
       return;
     }
     this.disarmWatchdog();
@@ -84232,17 +84285,12 @@ var MirrorManager = class {
   onSourceExit(err) {
     const dying = this.source;
     const target = this.activeTarget;
-    const canDemote = dying?.pipeline === "idb" && target?.platform === "ios" && typeof this.deps.createFallbackSource === "function" && !this.demoted && // A typed exit is a terminal refusal (e.g. authority), never a capture
-    // failure worth demoting around.
-    !err?.code && this.clients.size > 0;
+    const canDemote = this.canDemote(dying, err);
     this.cycle += 1;
     dying?.stop();
     this.source = null;
     if (canDemote && target) {
-      this.demoted = true;
-      this.state = "starting";
-      this.armWatchdog();
-      void this.startFallback(target, err);
+      this.demote(target, err);
       return;
     }
     this.disarmWatchdog();

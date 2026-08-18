@@ -43,6 +43,7 @@ function fakeClient(): FakeClient {
 
 interface FakeSource extends MirrorSource {
   frame(f: Buffer): void;
+  restart(): void;
   exit(e?: { reason: string }): void;
   started: boolean;
 }
@@ -67,6 +68,9 @@ function fakeSource(): FakeSource & StopTracking {
     },
     frame(f: Buffer) {
       sink?.onFrame(f);
+    },
+    restart() {
+      sink?.onRestart?.();
     },
     exit(e?: { reason: string }) {
       sink?.onExit(e);
@@ -146,7 +150,116 @@ test('watchdog: empty and non-JPEG buffers are not liveness — still fails clos
   const err = statuses.find((s) => s.status === 'error');
   assert.ok(err, 'zero real frames must fail closed');
   assert.match(err.reason ?? '', /no mirror frame/i);
+  // "produced nothing" and "produced N buffers we rejected" are different
+  // failures and must not present as the same generic timeout (GH #791).
+  assert.match(err.reason ?? '', /2 unusable buffer/i);
+  assert.match(err.hint ?? '', /cannot decode as JPEG/i);
   assert.equal(c.ended, true);
+});
+
+// GH #791 regression: IosIdbSource re-arms its OWN first-frame budget on every
+// respawn its RestartGate allows, so a manager watchdog armed once per pipeline
+// (source budget + slack) can expire mid-respawn and reap the pipeline before
+// the source ever reaches the idb→simctl demotion the slack exists to protect.
+test('watchdog: a source respawn re-arms the bound so demotion still runs first', async () => {
+  const statuses: MirrorStatus[] = [];
+  const idb = fakeSource();
+  const fallback = fakeSource();
+  const mgr = new MirrorManager({
+    resolveTarget: async () => ({
+      ok: true,
+      target: { platform: 'ios', deviceId: 'U1' },
+    }),
+    createSource: async () => idb,
+    createFallbackSource: async () => fallback,
+    pushStatus: (s) => statuses.push(s),
+    graceMs: 5000,
+    firstFrameWatchdogMs: 150,
+  });
+  const c = fakeClient();
+  mgr.attach(c);
+  for (let i = 0; i < 20 && !idb.started; i++) await wait(5);
+
+  // The source's child died and respawned with a fresh first-frame budget…
+  await wait(100);
+  idb.restart();
+  // …so its own budget, not the manager's, is what must expire first: past the
+  // original deadline the pipeline is still the live idb attempt.
+  await wait(100);
+  assert.equal(
+    statuses.some((s) => s.status === 'error'),
+    false,
+    'the manager must not reap a source that just restarted its own budget',
+  );
+  assert.equal(
+    fallback.started,
+    false,
+    'the manager preempted the respawned source instead of letting its own budget decide',
+  );
+  assert.equal(idb.stops, 0, 'the respawned source must not be reaped mid-attempt');
+
+  idb.exit({ reason: 'idb video-stream produced no first frame' });
+  for (let i = 0; i < 20 && !fallback.started; i++) await wait(5);
+  assert.equal(fallback.started, true, 'the simctl fallback must still get its chance');
+  assert.equal(c.ended, false, 'demotion preserves the live multipart client');
+});
+
+test('watchdog: endless source respawns stay bounded and end in a typed error', async () => {
+  const statuses: MirrorStatus[] = [];
+  const src = fakeSource();
+  const mgr = new MirrorManager({
+    resolveTarget: async () => ({
+      ok: true,
+      target: { platform: 'ios', deviceId: 'U1' },
+    }),
+    createSource: async () => src,
+    pushStatus: (s) => statuses.push(s),
+    graceMs: 5000,
+    firstFrameWatchdogMs: 150,
+  });
+  const c = fakeClient();
+  mgr.attach(c);
+  for (let i = 0; i < 20 && !src.started; i++) await wait(5);
+  // A source flapping faster than its own budget would extend the bound
+  // forever if every respawn re-armed it — that is the frameless stream #791
+  // exists to close.
+  const flap = setInterval(() => src.restart(), 40);
+  await wait(1200);
+  clearInterval(flap);
+  const err = statuses.find((s) => s.status === 'error');
+  assert.ok(err, 'an endlessly respawning frameless source must still be reaped');
+  assert.match(err.reason ?? '', /no mirror frame/i);
+  assert.equal(c.ended, true);
+});
+
+test('watchdog: an expired idb budget demotes instead of killing a recoverable mirror', async () => {
+  const statuses: MirrorStatus[] = [];
+  const idb = fakeSource();
+  const fallback = fakeSource();
+  const mgr = new MirrorManager({
+    resolveTarget: async () => ({
+      ok: true,
+      target: { platform: 'ios', deviceId: 'U1' },
+    }),
+    createSource: async () => idb,
+    createFallbackSource: async () => fallback,
+    pushStatus: (s) => statuses.push(s),
+    graceMs: 5000,
+    firstFrameWatchdogMs: 150,
+  });
+  const c = fakeClient();
+  mgr.attach(c);
+  for (let i = 0; i < 20 && !idb.started; i++) await wait(5);
+  // The source never exits on its own (idb alive but silent past every budget).
+  for (let i = 0; i < 40 && !fallback.started; i++) await wait(10);
+  assert.equal(fallback.started, true, 'an expired idb budget must reach the simctl fallback');
+  assert.equal(idb.stops, 1, 'the silent idb source must be reaped, not leaked');
+  assert.equal(c.ended, false, 'the client the demotion exists for must survive');
+
+  // Still bounded: a fallback that is also frameless ends in a typed error.
+  fallback.frame(jpeg(2));
+  await wait(50);
+  assert.equal(mgr.isStreaming(), true, 'the demoted pipeline mirrors once it frames');
 });
 
 test('watchdog: a frame before the deadline disarms it', async () => {
