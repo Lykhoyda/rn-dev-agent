@@ -197,10 +197,11 @@ export class MirrorManager {
     }
     async startPipeline() {
         const myCycle = ++this.cycle;
-        // Status + watchdog precede resolution: a hung resolveTarget must never
-        // leave clients on a silent frameless multipart stream.
+        // The watchdog precedes resolution: a hung resolveTarget must never leave
+        // clients on a silent frameless multipart stream. No status is published
+        // yet — a 'starting' that a fast refusal immediately supersedes would
+        // re-arm DevicePane's retry budget and loop it back into attach (GH #791).
         this.armWatchdog();
-        this.pushStatus({ type: 'mirror', status: 'starting' });
         let platform;
         let deviceId;
         try {
@@ -226,6 +227,12 @@ export class MirrorManager {
             this.activeTarget = target;
             this.demoted = false;
             this.streamingPipeline = null;
+            this.pushStatus({
+                type: 'mirror',
+                status: 'starting',
+                platform: target.platform,
+                deviceId: target.deviceId,
+            });
             const source = await this.deps.createSource(target);
             if (myCycle !== this.cycle) {
                 // Superseded (shutdown/grace-stop) while resolving/creating — no client
@@ -312,15 +319,13 @@ export class MirrorManager {
         dying?.stop();
         this.source = null;
         if (canDemote && target) {
-            // Keep the 200 multipart client; do not push 'starting' (DevicePane
-            // remounts <img> on starting and would double-attach). Internally the
-            // fallback is a fresh frameless attempt: reset readiness and re-arm the
-            // watchdog so a hung/frameless fallback stays bounded (GH #791).
+            // Keep the 200 multipart client; do not push any status (DevicePane
+            // remounts <img> on starting and would tear down the very client this
+            // demotion exists to preserve). Internally the fallback is a fresh
+            // frameless attempt: reset readiness and re-arm the watchdog so a
+            // hung/frameless fallback still ends in a typed error (GH #791).
             this.demoted = true;
             this.state = 'starting';
-            // Keep the published status truthful during fallback spin-up; the pane
-            // re-arms on 'starting' but attach() during a live cycle only re-registers.
-            this.pushStatus({ type: 'mirror', status: 'starting' });
             this.armWatchdog();
             void this.startFallback(target, err);
             return;

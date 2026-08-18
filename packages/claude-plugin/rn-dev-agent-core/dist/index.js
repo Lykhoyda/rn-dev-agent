@@ -84136,7 +84136,6 @@ var MirrorManager = class {
   async startPipeline() {
     const myCycle = ++this.cycle;
     this.armWatchdog();
-    this.pushStatus({ type: "mirror", status: "starting" });
     let platform;
     let deviceId;
     try {
@@ -84162,6 +84161,12 @@ var MirrorManager = class {
       this.activeTarget = target;
       this.demoted = false;
       this.streamingPipeline = null;
+      this.pushStatus({
+        type: "mirror",
+        status: "starting",
+        platform: target.platform,
+        deviceId: target.deviceId
+      });
       const source = await this.deps.createSource(target);
       if (myCycle !== this.cycle) {
         source.stop();
@@ -84236,7 +84241,6 @@ var MirrorManager = class {
     if (canDemote && target) {
       this.demoted = true;
       this.state = "starting";
-      this.pushStatus({ type: "mirror", status: "starting" });
       this.armWatchdog();
       void this.startFallback(target, err);
       return;

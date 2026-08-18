@@ -211,3 +211,74 @@ test('watchdog: shutdown before the deadline never fires it', async () => {
     false,
   );
 });
+
+// GH #791 regression: an UNCODED refusal carries no typed code, so the web UI
+// has no latched blocked state to freeze on — every status the manager pushes
+// is fed straight back into DevicePane's retry budget. A status that a fast
+// refusal immediately supersedes therefore re-arms the pane, remounts <img>,
+// re-attaches, and restarts the pipeline forever.
+test('uncoded refusal: one error status, no re-arm loop across client re-attaches', async () => {
+  const statuses: MirrorStatus[] = [];
+  let mgr: MirrorManager | null = null;
+  let rearms = 0;
+  const MAX_REARMS = 8;
+  mgr = new MirrorManager({
+    resolveTarget: async () => ({ ok: false, reason: 'no active device session' }),
+    createSource: async () => fakeSource(),
+    pushStatus: (s) => {
+      statuses.push(s);
+      // DevicePane resets `attempts` and bumps the cache-busting nonce on a
+      // starting/streaming status; the resulting <img> remount re-attaches on
+      // a later turn, which is what closes the loop.
+      if (s.status !== 'starting' && s.status !== 'streaming') return;
+      if (rearms >= MAX_REARMS) return;
+      rearms += 1;
+      setTimeout(() => mgr?.attach(fakeClient()), 0);
+    },
+    graceMs: 10,
+    firstFrameWatchdogMs: 150,
+  });
+  mgr.attach(fakeClient());
+  await wait(400);
+  assert.equal(rearms, 0, 'a fast uncoded refusal must not re-arm the pane retry budget');
+  assert.deepEqual(
+    statuses.map((s) => s.status),
+    ['error'],
+    'exactly one error and nothing the client can treat as a fresh retry budget',
+  );
+});
+
+test('demotion: silent to the pane, still watchdog-bounded when the fallback is frameless', async () => {
+  const statuses: MirrorStatus[] = [];
+  const idb = fakeSource();
+  const fallback = fakeSource();
+  const mgr = new MirrorManager({
+    resolveTarget: async () => ({
+      ok: true,
+      target: { platform: 'ios', deviceId: 'U1' },
+    }),
+    createSource: async () => idb,
+    createFallbackSource: async () => fallback,
+    pushStatus: (s) => statuses.push(s),
+    graceMs: 5000,
+    firstFrameWatchdogMs: 150,
+  });
+  const c = fakeClient();
+  mgr.attach(c);
+  for (let i = 0; i < 20 && !idb.started; i++) await wait(5);
+  const beforeDemotion = statuses.length;
+  idb.exit({ reason: 'idb produced no frames' });
+  for (let i = 0; i < 20 && !fallback.started; i++) await wait(5);
+  assert.equal(c.ended, false, 'demotion must preserve the live multipart client');
+  assert.deepEqual(
+    statuses.slice(beforeDemotion),
+    [],
+    'any status here re-arms the pane, remounting <img> and tearing down that client',
+  );
+  await wait(300);
+  const err = statuses.find((s) => s.status === 'error');
+  assert.ok(err, 'a frameless fallback must still end in a typed error');
+  assert.match(err.reason ?? '', /no mirror frame/i);
+  assert.equal(fallback.stops, 1, 'the frameless fallback source must be reaped');
+  assert.equal(c.ended, true);
+});
