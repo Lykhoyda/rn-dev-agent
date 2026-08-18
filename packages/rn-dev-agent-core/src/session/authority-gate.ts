@@ -233,25 +233,13 @@ function requireCompleteAxes(status: SessionStatus, profile: AuthorityProfile): 
   }
 }
 
-function isAlreadyBoundSourceResult(result: unknown): boolean {
+function successEnvelopeFlag(result: unknown, field: string): boolean {
   try {
     const envelope = JSON.parse((result as ToolResult).content?.[0]?.text ?? '{}') as {
       ok?: unknown;
-      data?: { alreadyBound?: unknown };
+      data?: Record<string, unknown>;
     };
-    return envelope.ok === true && envelope.data?.alreadyBound === true;
-  } catch {
-    return false;
-  }
-}
-
-function isReleasedSourceResult(result: unknown): boolean {
-  try {
-    const envelope = JSON.parse((result as ToolResult).content?.[0]?.text ?? '{}') as {
-      ok?: unknown;
-      data?: { released?: unknown };
-    };
-    return envelope.ok === true && envelope.data?.released === true;
+    return envelope.ok === true && envelope.data?.[field] === true;
   } catch {
     return false;
   }
@@ -1309,8 +1297,8 @@ export function createAuthorityGate(
             // outcome must fall through, or it strands an operation row that refuses
             // every later call with OPERATION_ALREADY_IN_PROGRESS.
             const bindSource = tool === 'rn_session' && args.action === 'bind_source';
-            const idempotentBindSource = bindSource && isAlreadyBoundSourceResult(result);
-            if (bindSource && isReleasedSourceResult(result)) {
+            const idempotentBindSource = bindSource && successEnvelopeFlag(result, 'alreadyBound');
+            if (bindSource && successEnvelopeFlag(result, 'released')) {
               operation = null;
               return addMeta(result, {
                 authoritative: false,

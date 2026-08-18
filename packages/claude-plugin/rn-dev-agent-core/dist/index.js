@@ -29312,18 +29312,10 @@ function requireCompleteAxes(status, profile) {
     }
   }
 }
-function isAlreadyBoundSourceResult(result) {
+function successEnvelopeFlag(result, field2) {
   try {
     const envelope = JSON.parse(result.content?.[0]?.text ?? "{}");
-    return envelope.ok === true && envelope.data?.alreadyBound === true;
-  } catch {
-    return false;
-  }
-}
-function isReleasedSourceResult(result) {
-  try {
-    const envelope = JSON.parse(result.content?.[0]?.text ?? "{}");
-    return envelope.ok === true && envelope.data?.released === true;
+    return envelope.ok === true && envelope.data?.[field2] === true;
   } catch {
     return false;
   }
@@ -29898,8 +29890,8 @@ function createAuthorityGate(runtime, dependencies) {
             });
           }
           const bindSource = tool === "rn_session" && args.action === "bind_source";
-          const idempotentBindSource = bindSource && isAlreadyBoundSourceResult(result);
-          if (bindSource && isReleasedSourceResult(result)) {
+          const idempotentBindSource = bindSource && successEnvelopeFlag(result, "alreadyBound");
+          if (bindSource && successEnvelopeFlag(result, "released")) {
             operation2 = null;
             return addMeta2(result, {
               authoritative: false,
