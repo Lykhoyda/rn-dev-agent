@@ -181,6 +181,10 @@ export class ObservabilityServer {
       }
     });
     write({ type: 'snapshot', events: snapshot });
+    // GH #791: mirror statuses are transient — replay the current one so a
+    // subscriber that connected after a refusal still renders the blocked state.
+    const mirrorStatus = this.mirror?.currentStatus();
+    if (mirrorStatus) write(mirrorStatus);
     const hb = setInterval(() => {
       try {
         res.write(': hb\n\n');
@@ -235,7 +239,10 @@ export class ObservabilityServer {
       res.end();
       return;
     }
-    res.writeHead(200, { 'Content-Type': shot.contentType, 'Cache-Control': 'no-store' });
+    res.writeHead(200, {
+      'Content-Type': shot.contentType,
+      'Cache-Control': 'no-store',
+    });
     res.end(shot.buf);
   }
 
@@ -248,7 +255,10 @@ export class ObservabilityServer {
       res.end();
       return;
     }
-    res.writeHead(200, { 'Content-Type': shot.contentType, 'Cache-Control': 'no-store' });
+    res.writeHead(200, {
+      'Content-Type': shot.contentType,
+      'Cache-Control': 'no-store',
+    });
     res.end(shot.buf);
   }
 
@@ -333,7 +343,10 @@ export class ObservabilityServer {
 
   private json(res: ServerResponse, status: number, obj: unknown): void {
     const body = JSON.stringify(obj);
-    res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    res.writeHead(status, {
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-store',
+    });
     res.end(body);
   }
 
@@ -360,7 +373,10 @@ export class ObservabilityServer {
       return;
     }
     const check = isPostAllowed(
-      { method: req.method, headers: req.headers as Record<string, string | string[] | undefined> },
+      {
+        method: req.method,
+        headers: req.headers as Record<string, string | string[] | undefined>,
+      },
       this.e2e.token,
     );
     if (!check.ok) {
@@ -440,7 +456,10 @@ export class ObservabilityServer {
       return;
     }
     const check = isPostAllowed(
-      { method: req.method, headers: req.headers as Record<string, string | string[] | undefined> },
+      {
+        method: req.method,
+        headers: req.headers as Record<string, string | string[] | undefined>,
+      },
       this.e2e.token,
     );
     if (!check.ok) {
@@ -454,7 +473,10 @@ export class ObservabilityServer {
     }
     let parsed: { actionId?: string; params?: Record<string, string> } = {};
     try {
-      parsed = JSON.parse(body) as { actionId?: string; params?: Record<string, string> };
+      parsed = JSON.parse(body) as {
+        actionId?: string;
+        params?: Record<string, string>;
+      };
     } catch {
       this.json(res, 400, { error: 'invalid json body' });
       return;

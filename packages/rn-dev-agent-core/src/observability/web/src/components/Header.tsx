@@ -1,5 +1,6 @@
 import { useEffect, useState, type JSX } from 'react';
-import type { AgentEvent, Conn } from '../types';
+import type { AgentEvent, Conn, DeviceReadiness, MirrorState } from '../types';
+import { deviceReadiness } from '../types';
 import { fmtElapsed } from '../derive';
 
 interface HeaderProps {
@@ -7,9 +8,18 @@ interface HeaderProps {
   app?: string;
   route?: string;
   events: AgentEvent[];
+  /** GH #791: device-mirror state — rendered as its own pill so transport liveness never masks a dead device. */
+  mirror: MirrorState | null;
 }
 
-export function Header({ conn, app, route, events }: HeaderProps): JSX.Element {
+const DEVICE_DOT: Record<DeviceReadiness, string> = {
+  live: 'open',
+  connecting: 'connecting',
+  blocked: 'error',
+  off: 'error',
+};
+
+export function Header({ conn, app, route, events, mirror }: HeaderProps): JSX.Element {
   const startTs = events.length > 0 ? events[0].ts : null;
   const [, setTick] = useState(0);
   useEffect(() => {
@@ -19,6 +29,9 @@ export function Header({ conn, app, route, events }: HeaderProps): JSX.Element {
   }, [startTs]);
 
   const errors = events.reduce((n, e) => (e.ok ? n : n + 1), 0);
+  // A dead transport means the last mirror status may be stale — never keep
+  // presenting a positive device state over a disconnected stream.
+  const device = conn === 'open' ? deviceReadiness(mirror) : null;
 
   return (
     <div className="header" data-testid="header">
@@ -26,9 +39,13 @@ export function Header({ conn, app, route, events }: HeaderProps): JSX.Element {
         <strong>Observe</strong>
         <span>rn-dev-agent</span>
       </div>
-      <span className="conn-pill" data-testid="header-conn">
+      <span className="conn-pill" data-testid="header-conn" title="event-stream transport">
         <span className={`dot ${conn}`} />
-        {conn === 'open' ? 'live' : conn}
+        {conn === 'open' ? 'events live' : conn}
+      </span>
+      <span className="conn-pill" data-testid="header-device" title="device mirror readiness">
+        <span className={device ? `dot ${DEVICE_DOT[device]}` : 'dot'} />
+        device {device ?? 'waiting'}
       </span>
       {app && (
         <span className="chip" title={app}>

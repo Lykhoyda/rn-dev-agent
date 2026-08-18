@@ -1,5 +1,6 @@
 import { useEffect, useState, type JSX } from 'react';
 import { observeUrl } from '../authority';
+import { authorityRecoveryHint } from '../authority-hints';
 import type { MirrorState } from '../types';
 
 interface DevicePaneProps {
@@ -68,6 +69,10 @@ export function DevicePane({
 
   const useMirror = !mirrorBroken;
 
+  // A typed authority refusal is an explicit blocked state that replaces the
+  // mirror and any stale screenshot (App latches it across probe retries).
+  const blocked = mirror?.status === 'error' && mirror.code ? mirror : null;
+
   const fallbackSrc =
     liveShotSeq != null
       ? observeUrl(`/api/live-screenshot/${liveShotSeq}`)
@@ -116,7 +121,29 @@ export function DevicePane({
       </div>
       {streamingHint && <div className="mirror-banner">{streamingHint}</div>}
       <div className="screen">
-        {useMirror ? (
+        {blocked ? (
+          <>
+            <div className="empty empty-guide device-blocked" data-testid="device-blocked">
+              <div className="empty-title">Device blocked</div>
+              <div className="mono device-blocked-code">{blocked.code}</div>
+              {blocked.reason && <div className="device-blocked-reason">{blocked.reason}</div>}
+              {authorityRecoveryHint(blocked.code) && (
+                <div className="device-blocked-hint">{authorityRecoveryHint(blocked.code)}</div>
+              )}
+            </div>
+            {/* Hidden probe: keeps re-attaching (15s retry loop) so a later
+                authority bind pushes a fresh status and clears the blocked
+                state without a manual reload. */}
+            {useMirror && (
+              <img
+                style={{ display: 'none' }}
+                src={observeUrl(`/api/device/mirror?t=${nonce}`)}
+                alt=""
+                onError={onMirrorError}
+              />
+            )}
+          </>
+        ) : useMirror ? (
           <div className="device-frame">
             <img
               data-testid="device-mirror"

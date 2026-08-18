@@ -71,7 +71,9 @@ const scheduleAfter = (fn, delayMs) => {
     else
         setTimeout(fn, delayMs);
 };
-const defaultSpawn = (cmd, args) => spawn(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'] });
+const defaultSpawn = (cmd, args) => spawn(cmd, args, {
+    stdio: ['pipe', 'pipe', 'pipe'],
+});
 export async function probeIdbClient(execFileFn = execFile) {
     return new Promise((resolve) => {
         // B269/B263: PATH presence is not health. fb-idb on an incompatible
@@ -247,7 +249,10 @@ export class IosSimctlLoopSource {
                     break;
                 if (!this.gate.record()) {
                     if (this.active)
-                        sink.onExit({ reason: 'simctl screenshot failing', hint: this.failureHint });
+                        sink.onExit({
+                            reason: 'simctl screenshot failing',
+                            hint: this.failureHint,
+                        });
                     this.active = false;
                     break;
                 }

@@ -1,6 +1,24 @@
 // packages/rn-dev-agent-core/src/observability/mirror/target.ts
+function isMirrorPlatform(p) {
+    return p === 'ios' || p === 'android';
+}
 export function buildMirrorTargetResolver(deps) {
     return async () => {
+        const registry = deps.getRegistryDeviceBinding?.() ?? null;
+        if (registry !== null) {
+            if (isMirrorPlatform(registry.platform) && registry.deviceId) {
+                return {
+                    ok: true,
+                    target: { platform: registry.platform, deviceId: registry.deviceId },
+                };
+            }
+            return {
+                ok: false,
+                code: 'DEVICE_AUTHORITY_UNBOUND',
+                reason: 'device authority is not bound — run rn_session bind_device',
+                hint: 'Observe mirrors only the session-proven device while an authority session is present',
+            };
+        }
         const platform = deps.getPlatform();
         if (platform === null) {
             return {

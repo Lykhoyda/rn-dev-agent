@@ -337,7 +337,10 @@ const execFileP = promisify(execFile);
 
 // Parse an MCP envelope; throw when the handler reported failure.
 const mustOk = (res: { content: { text: string }[] }, what: string): void => {
-  const env = JSON.parse(res.content[0].text) as { ok?: boolean; error?: string };
+  const env = JSON.parse(res.content[0].text) as {
+    ok?: boolean;
+    error?: string;
+  };
   if (env.ok === false) throw new Error(`${what} failed: ${env.error ?? 'ok:false'}`);
 };
 
@@ -354,7 +357,12 @@ const makeReplayDeps = (): CdpReplayDeps | null => {
     },
     typeByTestId: async (id: string, text: string) => {
       mustOk(
-        await interact({ action: 'typeText', testID: id, text, animated: false }),
+        await interact({
+          action: 'typeText',
+          testID: id,
+          text,
+          animated: false,
+        }),
         `type "${id}"`,
       );
     },
@@ -608,9 +616,10 @@ const createRuntimeAuthorityProbe = (resolveClient: () => CDPClient) =>
     getClient: resolveClient,
     getSecret: () =>
       process.env.RN_DEV_AGENT_SESSION_SECRET_PATH
-        ? readJsonStateFile<{ signerCapability?: string; observeCapability?: string }>(
-            process.env.RN_DEV_AGENT_SESSION_SECRET_PATH,
-          )
+        ? readJsonStateFile<{
+            signerCapability?: string;
+            observeCapability?: string;
+          }>(process.env.RN_DEV_AGENT_SESSION_SECRET_PATH)
         : null,
     findForeignMetroOrigin: foreignMetroOriginScanner,
     proofActive: (runId) => strictProofMonitor.ownsRun(runId),
@@ -771,7 +780,10 @@ setForeignGateUdidProvider(() => {
 const blindProbeContext = async () => {
   const udid = foreignGateUdid();
   if (!udid) return null;
-  return { deviceId: udid, iosRuntimeMajor: await getIosRuntimeMajorForUdid(udid) };
+  return {
+    deviceId: udid,
+    iosRuntimeMajor: await getIosRuntimeMajorForUdid(udid),
+  };
 };
 
 // Mirror block declared BEFORE liveDeps: buildLiveDeps's isMirrorActive input
@@ -788,6 +800,10 @@ const mirrorManager = mirrorCfg.enabled
           return p === 'ios' || p === 'android' ? p : null;
         },
         getSessionDeviceId: () => getActiveSession()?.deviceId ?? undefined,
+        // GH #791: same fence as cdp discovery (PR #786) — an authority session
+        // without a proven device binding blocks the mirror instead of guessing.
+        getRegistryDeviceBinding: () =>
+          mapRegistryDeviceBinding(authorityRuntime.status(), authorityRuntime.available),
         resolveIosUdid: () => resolveIosUdid(),
         listAndroidSerials: async () => {
           try {
@@ -819,6 +835,8 @@ const mirrorManager = mirrorCfg.enabled
       // takes the open event shape every other recorder.push(...) call site
       // uses. Spread into a fresh literal so structural assignability applies.
       pushStatus: (s) => recorder.push({ ...s }),
+      // Outlasts the source-level idb first-frame timeout so demotion runs first.
+      firstFrameWatchdogMs: mirrorCfg.firstFrameTimeoutMs + 15_000,
     })
   : undefined;
 if (mirrorManager) setObserveMirror(mirrorManager);
@@ -1460,7 +1478,10 @@ async function disconnectBoundSession() {
   const targetId = (status?.bindings.bundle as { targetId?: unknown } | undefined)?.targetId;
   if (status && typeof targetId === 'string') {
     registry.releaseResources(session, [
-      { type: 'target', key: `${String(status.bindings.metroPort)}:${targetId}` },
+      {
+        type: 'target',
+        key: `${String(status.bindings.metroPort)}:${targetId}`,
+      },
     ]);
     registry.updateBindings(session, {
       state: 'device_bound',
@@ -2042,7 +2063,9 @@ trackedTool(
           var fc = fiber;
           for (var up = 0; up < 5 && fc; up++) {
             var p2 = fc.memoizedProps;
-            if (p2 && p2[${JSON.stringify(args.prop)}] && typeof p2[${JSON.stringify(args.prop)}] === 'object' && 'value' in p2[${JSON.stringify(args.prop)}]) {
+            if (p2 && p2[${JSON.stringify(args.prop)}] && typeof p2[${JSON.stringify(
+              args.prop,
+            )}] === 'object' && 'value' in p2[${JSON.stringify(args.prop)}]) {
               found = fc; return;
             }
             fc = fc.return;
@@ -2052,12 +2075,16 @@ trackedTool(
         if (fiber.sibling) walk(fiber.sibling, depth);
       }
       for (var ri = 0; ri < allRoots.length; ri++) walk(allRoots[ri].current, 0);
-      if (!found) return JSON.stringify({ __agent_error: 'No component with testID=' + ${JSON.stringify(args.testID)} + ' has a SharedValue prop named ' + ${JSON.stringify(args.prop)} });
+      if (!found) return JSON.stringify({ __agent_error: 'No component with testID=' + ${JSON.stringify(
+        args.testID,
+      )} + ' has a SharedValue prop named ' + ${JSON.stringify(args.prop)} });
       var sv = found.memoizedProps[${JSON.stringify(args.prop)}];
       if (!sv) {
         var fc2 = found;
         for (var up2 = 0; up2 < 5 && fc2; up2++) {
-          if (fc2.memoizedProps && fc2.memoizedProps[${JSON.stringify(args.prop)}]) { sv = fc2.memoizedProps[${JSON.stringify(args.prop)}]; break; }
+          if (fc2.memoizedProps && fc2.memoizedProps[${JSON.stringify(
+            args.prop,
+          )}]) { sv = fc2.memoizedProps[${JSON.stringify(args.prop)}]; break; }
           fc2 = fc2.return;
         }
       }
@@ -2065,7 +2092,11 @@ trackedTool(
       sv.value = ${args.value};
       var observed = sv.value;
       var drift = observed !== ${args.value};
-      return JSON.stringify({ ok: true, testID: ${JSON.stringify(args.testID)}, prop: ${JSON.stringify(args.prop)}, written: ${args.value}, observed: observed, drift: drift });
+      return JSON.stringify({ ok: true, testID: ${JSON.stringify(
+        args.testID,
+      )}, prop: ${JSON.stringify(args.prop)}, written: ${
+        args.value
+      }, observed: observed, drift: drift });
     })()`;
       const result = await client.evaluate(expression);
       if (result.error) return failResult(`SharedValue error: ${result.error}`);
@@ -2662,7 +2693,10 @@ trackedTool(
       .array(
         z.union([
           z.string(),
-          z.object({ name: z.string(), action: z.enum(['revoke', 'reset']).optional() }),
+          z.object({
+            name: z.string(),
+            action: z.enum(['revoke', 'reset']).optional(),
+          }),
         ]),
       )
       .optional()
@@ -2826,7 +2860,12 @@ const resolveNativeProofDevice = async (): Promise<{
         );
         if (device?.name) {
           const version = runtime.match(/iOS[-.]([0-9.-]+)$/)?.[1]?.replaceAll('-', '.');
-          if (version) return { id: session.deviceId, name: device.name, osVersion: version };
+          if (version)
+            return {
+              id: session.deviceId,
+              name: device.name,
+              osVersion: version,
+            };
         }
       }
     } catch {
@@ -3011,7 +3050,9 @@ const proofCaptureHandler = createProofCaptureHandler({
   projectRoot: () =>
     resolveProofWorktreeRoot(findProjectRoot({ bundleId: getActiveSession()?.appId })),
   readActionIdentity: (actionId) => {
-    const appProjectRoot = findProjectRoot({ bundleId: getActiveSession()?.appId });
+    const appProjectRoot = findProjectRoot({
+      bundleId: getActiveSession()?.appId,
+    });
     return appProjectRoot ? readProofActionIdentity(appProjectRoot, actionId) : null;
   },
   getGitInfo: readProofGitInfo,
@@ -3936,7 +3977,13 @@ const e2ePreflight = async (): Promise<ReturnType<typeof preflight>> => {
     udid = (await resolveIosUdid(session?.deviceId)) ?? null;
     appInstalled = udid && session?.appId ? await probeAppInstalled(udid, session.appId) : null;
   }
-  return preflight({ platform, udid, appId: session?.appId, metroReachable, appInstalled });
+  return preflight({
+    platform,
+    udid,
+    appId: session?.appId,
+    metroReachable,
+    appInstalled,
+  });
 };
 
 const e2eReload = async (): Promise<boolean> => {
@@ -3969,7 +4016,12 @@ const e2eSuiteHandler = createRunE2eSuiteHandler({
   preflightCheck: e2ePreflight,
   runReload: e2eReload,
   onProgress: (c: number, t: number, id: string) =>
-    recorder.push({ type: 'e2e-progress', completed: c, total: t, lastTestId: id }),
+    recorder.push({
+      type: 'e2e-progress',
+      completed: c,
+      total: t,
+      lastTestId: id,
+    }),
 });
 
 trackedTool(
@@ -4063,7 +4115,10 @@ setObserveE2eDeps({
     try {
       root = projectRootFor();
     } catch (e: unknown) {
-      return { ok: false as const, error: e instanceof Error ? e.message : String(e) };
+      return {
+        ok: false as const,
+        error: e instanceof Error ? e.message : String(e),
+      };
     }
     const action = loadAction(root, actionId);
     if (!action) return { ok: false as const, error: `action not found: ${actionId}` };
@@ -4089,7 +4144,10 @@ setObserveE2eDeps({
         ? { ok: false as const, error: text }
         : { ok: true as const, output: text };
     } catch (e: unknown) {
-      return { ok: false as const, error: e instanceof Error ? e.message : String(e) };
+      return {
+        ok: false as const,
+        error: e instanceof Error ? e.message : String(e),
+      };
     } finally {
       arbiter.release(L.lease);
     }

@@ -8,7 +8,7 @@ import { JpegFrameExtractor } from './jpeg-stream.js';
 export interface MirrorFrameSink {
   onFrame(frame: Buffer): void;
   /** Terminal for this attach cycle. err absent = deliberate stop. */
-  onExit(err?: { reason: string; hint?: string }): void;
+  onExit(err?: { reason: string; hint?: string; code?: string }): void;
 }
 
 export interface MirrorSource {
@@ -128,7 +128,9 @@ const scheduleAfter = (fn: () => void, delayMs: number): void => {
 };
 
 const defaultSpawn: SpawnFn = (cmd, args) =>
-  spawn(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'] }) as unknown as SpawnedLike;
+  spawn(cmd, args, {
+    stdio: ['pipe', 'pipe', 'pipe'],
+  }) as unknown as SpawnedLike;
 
 /** absent = not on PATH, ready = usable, broken = present but crashes (GH#578). */
 export type IdbClientState = 'absent' | 'ready' | 'broken';
@@ -323,7 +325,10 @@ export class IosSimctlLoopSource implements MirrorSource {
         if (!this.active) break;
         if (!this.gate.record()) {
           if (this.active)
-            sink.onExit({ reason: 'simctl screenshot failing', hint: this.failureHint });
+            sink.onExit({
+              reason: 'simctl screenshot failing',
+              hint: this.failureHint,
+            });
           this.active = false;
           break;
         }

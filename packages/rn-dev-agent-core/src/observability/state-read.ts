@@ -18,6 +18,17 @@ function isStateKind(kind: string): kind is StateKind {
   return (STATE_KINDS as readonly string[]).includes(kind);
 }
 
+// GH #791: thrown authority refusals carry a typed code the UI needs for the
+// blocked-state presentation and its recovery hint.
+function failEnvelope(e: unknown): { ok: false; error: string; code?: string } {
+  const code = typeof e === 'object' && e !== null ? (e as { code?: unknown }).code : undefined;
+  return {
+    ok: false,
+    error: e instanceof Error ? e.message : String(e),
+    ...(typeof code === 'string' ? { code } : {}),
+  };
+}
+
 export function buildStateRead(input: StateReadInput): StateReadFn {
   return async (kind: string): Promise<unknown | null> => {
     if (!isStateKind(kind)) return null;
@@ -25,7 +36,7 @@ export function buildStateRead(input: StateReadInput): StateReadFn {
     try {
       gate = input.acquire();
     } catch (e) {
-      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      return failEnvelope(e);
     }
     if (!gate.ok) {
       return {
@@ -44,7 +55,7 @@ export function buildStateRead(input: StateReadInput): StateReadFn {
         return { ok: false, error: 'non-JSON tool result' };
       }
     } catch (e) {
-      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      return failEnvelope(e);
     } finally {
       try {
         gate.release();
