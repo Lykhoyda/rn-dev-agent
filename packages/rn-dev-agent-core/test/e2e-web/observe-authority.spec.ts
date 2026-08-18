@@ -88,6 +88,9 @@ test('unbound authority renders an explicit blocked device state, never a positi
   // authority store, so the rendered recovery path must not name a step that
   // only clears one of them.
   await expect(blocked).not.toContainText(/bind_device/);
+  // The panel already carries code, reason and recovery — repeating them in the
+  // status footer buries the one actionable step.
+  await expect(page.locator('.mirror-footer')).toHaveCount(0);
   // The blocked state replaces any mirror/screenshot presentation entirely.
   await expect(page.getByTestId('device-mirror')).toHaveCount(0);
   await expect(page.getByTestId('device-screenshot')).toHaveCount(0);
@@ -197,6 +200,26 @@ test('a frameless mirror pipeline becomes an explicit off state, not an indefini
   await expect(page.getByTestId('device-mirror')).toHaveCount(0);
   // The failure reason is visible in the pane, not silently swallowed.
   await expect(page.locator('.mirror-footer')).toContainText(/mirror off: no mirror frame/i);
+});
+
+// GH #791: with the mirror configured off there is no MirrorManager, so no
+// status is ever published and the device pill sat on 'waiting' forever — a
+// pending state for an axis that will never resolve, while the pane below it
+// had already concluded the endpoint was absent and rendered a screenshot.
+test('a mirror configured off reads as an explicit disabled device axis, never pending', async ({
+  page,
+}) => {
+  // No `mirror` override — ObservabilityServer is built without a
+  // MirrorManager, exactly as observe.mirror.enabled=false does in production.
+  fx = await startFixture({});
+  await page.goto(fx.url);
+
+  await expect(page.getByTestId('header-conn')).toHaveText(/live/);
+  const pill = page.getByTestId('header-device');
+  await expect(pill).toHaveText(/disabled/i);
+  await expect(pill).not.toContainText(/waiting/i);
+  // The pane must agree with the header rather than presenting the mirror.
+  await expect(page.getByTestId('device-mirror')).toHaveCount(0);
 });
 
 test('a bound session with real mirror frames presents the positive live device state', async ({

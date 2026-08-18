@@ -67,7 +67,10 @@ export function DevicePane({
     return () => clearInterval(id);
   }, [mirrorBroken]);
 
-  const useMirror = !mirrorBroken;
+  // The server states this on stream open when no MirrorManager is configured,
+  // so the endpoint is a permanent 404 — never probe it.
+  const mirrorDisabled = mirror?.status === 'disabled';
+  const useMirror = !mirrorBroken && !mirrorDisabled;
 
   // A typed authority refusal is an explicit blocked state that replaces the
   // mirror and any stale screenshot (App latches it across probe retries).
@@ -97,21 +100,26 @@ export function DevicePane({
     }
   };
 
-  const statusLine =
-    mirror?.status === 'streaming'
+  // The blocked panel already carries the code, reason and recovery path;
+  // repeating them in the footer buries the one actionable step.
+  const statusLine = blocked
+    ? null
+    : mirror?.status === 'streaming'
       ? `mirror: ${mirror.pipeline}${mirror.fps ? ` ~${mirror.fps}fps` : ''}`
       : mirror?.status === 'error'
         ? `mirror off: ${mirror.reason ?? 'error'}`
         : mirror?.status === 'starting'
           ? 'mirror: connecting…'
-          : null;
+          : mirrorDisabled
+            ? 'mirror: disabled'
+            : null;
 
   // A hint on a *streaming* status is the backend saying the pipeline works
   // but a better one is available (simctl fallback → install idb); that is
   // advice, not a failure, so it gets the header banner. Hints on error
   // statuses stay in the footer next to the failure reason.
   const streamingHint = mirror?.status === 'streaming' ? mirror.hint : undefined;
-  const footerHint = mirror?.status === 'streaming' ? undefined : mirror?.hint;
+  const footerHint = blocked || mirror?.status === 'streaming' ? undefined : mirror?.hint;
 
   return (
     <div className="pane center" data-testid="device-pane">

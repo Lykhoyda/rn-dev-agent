@@ -17,6 +17,7 @@ const DEVICE_DOT: Record<DeviceReadiness, string> = {
   connecting: 'connecting',
   blocked: 'error',
   off: 'error',
+  disabled: '',
 };
 
 export function Header({ conn, app, route, events, mirror }: HeaderProps): JSX.Element {
@@ -44,7 +45,7 @@ export function Header({ conn, app, route, events, mirror }: HeaderProps): JSX.E
         {conn === 'open' ? 'events live' : conn}
       </span>
       <span className="conn-pill" data-testid="header-device" title="device mirror readiness">
-        <span className={device ? `dot ${DEVICE_DOT[device]}` : 'dot'} />
+        <span className={device ? `dot ${DEVICE_DOT[device]}`.trim() : 'dot'} />
         device {device ?? 'waiting'}
       </span>
       {app && (

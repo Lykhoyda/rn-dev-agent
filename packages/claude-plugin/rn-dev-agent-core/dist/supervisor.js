@@ -85902,6 +85902,8 @@ var init_server3 = __esm({
         const mirrorStatus = this.mirror?.currentStatus();
         if (mirrorStatus)
           write(mirrorStatus);
+        else if (!this.mirror)
+          write({ type: "mirror", status: "disabled" });
         const hb = setInterval(() => {
           try {
             res.write(": hb\n\n");

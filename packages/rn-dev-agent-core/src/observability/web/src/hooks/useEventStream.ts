@@ -4,7 +4,7 @@ import type { AgentEvent, Conn, E2eProgress, MirrorState } from '../types';
 
 const MAX_EVENTS = 500;
 
-const MIRROR_STATUSES = ['starting', 'streaming', 'error', 'idle'] as const;
+const MIRROR_STATUSES = ['starting', 'streaming', 'error', 'idle', 'disabled'] as const;
 
 export interface EventStream {
   events: AgentEvent[];
