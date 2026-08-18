@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildMirrorTargetResolver } from '../../dist/observability/mirror/target.js';
 import type { MirrorTargetDeps } from '../../dist/observability/mirror/target.js';
+import { mapRegistryDeviceBinding } from '../../dist/cdp/discovery.js';
 
 const mustNotProbe = {
   resolveIosUdid: async (): Promise<string | undefined> => {
@@ -32,9 +33,40 @@ test('fence sentinel {} refuses with a typed code and never probes ambient devic
   if (!r.ok) {
     assert.equal(r.code, 'DEVICE_AUTHORITY_UNBOUND');
     assert.match(r.reason, /device authority is not bound/i);
-    assert.match(r.reason, /bind_device/);
+    assert.match(r.reason, /rn_session status/);
   }
 });
+
+// The {} sentinel is lossy: every present-but-failed authority collapses into
+// it, so the one refusal it produces must not prescribe a recovery that only
+// fits the unbound-session case (GH #791).
+for (const code of [
+  'SESSION_OWNER_LOST',
+  'AUTHORITY_STORE_UNAVAILABLE',
+  'PROCESS_BIRTH_UNAVAILABLE',
+  'HANDOFF_NOT_AUTHORIZED',
+]) {
+  test(`${code} maps to the fence sentinel and refuses without prescribing bind_device`, async () => {
+    const binding = mapRegistryDeviceBinding({ available: false, code }, true);
+    assert.deepEqual(binding, {});
+
+    const r = await buildMirrorTargetResolver({
+      ...base,
+      ...mustNotProbe,
+      getRegistryDeviceBinding: () => binding,
+    })();
+    assert.equal(r.ok, false);
+    if (!r.ok) {
+      assert.equal(r.code, 'DEVICE_AUTHORITY_UNBOUND');
+      assert.doesNotMatch(
+        r.reason,
+        /bind_device/,
+        `${code} cannot be cleared by bind_device, so the refusal must not name it`,
+      );
+      assert.match(r.reason, /rn_session status/);
+    }
+  });
+}
 
 test('exact registry device binding resolves without any ambient probe', async () => {
   const ios = await buildMirrorTargetResolver({

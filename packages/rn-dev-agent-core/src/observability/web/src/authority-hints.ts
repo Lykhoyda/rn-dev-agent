@@ -4,7 +4,7 @@ const HINTS: Record<string, string> = {
   APP_INSTALL_IDENTITY_CHANGED:
     'bind install authority: run rn_session preview_integration, then apply_integration, then relaunch through the managed launcher',
   DEVICE_AUTHORITY_UNBOUND:
-    'bind the session device: run observe action=stop, then rn_session bind_device, then observe action=start',
+    'inspect the session authority: run rn_session status, then bind or repair the axis it names',
   DEVICE_AUTHORITY_MISMATCH:
     'bind the session device: run observe action=stop, then rn_session bind_device, then observe action=start',
   SESSION_AUTHORITY_REQUIRED: 'inspect the session: run rn_session status',

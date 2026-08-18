@@ -15,7 +15,7 @@ export function buildMirrorTargetResolver(deps) {
             return {
                 ok: false,
                 code: 'DEVICE_AUTHORITY_UNBOUND',
-                reason: 'device authority is not bound — run rn_session bind_device',
+                reason: 'device authority is not bound — run rn_session status and repair the authority axis it names',
                 hint: 'Observe mirrors only the session-proven device while an authority session is present',
             };
         }

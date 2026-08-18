@@ -83,7 +83,11 @@ test('unbound authority renders an explicit blocked device state, never a positi
   const blocked = page.getByTestId('device-blocked');
   await expect(blocked).toBeVisible();
   await expect(blocked).toContainText(/device authority is not bound/i);
-  await expect(blocked).toContainText(/rn_session bind_device/);
+  await expect(blocked).toContainText(/rn_session status/);
+  // The fence sentinel cannot distinguish an unbound session from a wedged
+  // authority store, so the rendered recovery path must not name a step that
+  // only clears one of them.
+  await expect(blocked).not.toContainText(/bind_device/);
   // The blocked state replaces any mirror/screenshot presentation entirely.
   await expect(page.getByTestId('device-mirror')).toHaveCount(0);
   await expect(page.getByTestId('device-screenshot')).toHaveCount(0);
