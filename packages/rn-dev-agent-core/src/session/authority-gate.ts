@@ -245,6 +245,18 @@ function isAlreadyBoundSourceResult(result: unknown): boolean {
   }
 }
 
+function isReleasedSourceResult(result: unknown): boolean {
+  try {
+    const envelope = JSON.parse((result as ToolResult).content?.[0]?.text ?? '{}') as {
+      ok?: unknown;
+      data?: { released?: unknown };
+    };
+    return envelope.ok === true && envelope.data?.released === true;
+  } catch {
+    return false;
+  }
+}
+
 function isAuthenticatedIdempotentMetroStop(
   tool: string,
   args: Record<string, unknown>,
@@ -1292,15 +1304,13 @@ export function createAuthorityGate(
                 authorityTransition: true,
               });
             }
-            // GH #776: a bind_source that released the session toward a successor mint
-            // is terminal like release — the released row can never complete the
-            // fenced operation. The already-bound no-op instead completes its
-            // operation normally below, skipping only the advancing-authority verify.
-            const idempotentBindSource =
-              tool === 'rn_session' &&
-              args.action === 'bind_source' &&
-              isAlreadyBoundSourceResult(result);
-            if (tool === 'rn_session' && args.action === 'bind_source' && !idempotentBindSource) {
+            // GH #776: terminality is proven by the envelope, never assumed from the
+            // action — only the released row cannot complete its own fence. Any other
+            // outcome must fall through, or it strands an operation row that refuses
+            // every later call with OPERATION_ALREADY_IN_PROGRESS.
+            const bindSource = tool === 'rn_session' && args.action === 'bind_source';
+            const idempotentBindSource = bindSource && isAlreadyBoundSourceResult(result);
+            if (bindSource && isReleasedSourceResult(result)) {
               operation = null;
               return addMeta(result, {
                 authoritative: false,

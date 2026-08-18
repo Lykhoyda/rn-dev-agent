@@ -13,8 +13,11 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, test } from 'node:test';
 import { createSessionHandler } from '../../../dist/tools/session.js';
+import { createAuthorityGate } from '../../../dist/session/authority-gate.js';
 import { SessionAuthorityError } from '../../../dist/session/registry.js';
+import { createWorkerAuthorityRuntime } from '../../../dist/session/runtime.js';
 import { resolveSourceIdentity } from '../../../dist/session/source-identity.js';
+import { createSupervisorAuthority } from '../../../dist/session/supervisor-authority.js';
 import { declaredSourceContractFromEnv } from '../../../dist/session/declared-source-contract.js';
 import {
   consumeSuccessorSourceDeclaration,
@@ -481,6 +484,57 @@ test('a failed release withdraws the successor declaration it just wrote', async
   assert.equal(result.isError, true);
   assert.equal(body.code, 'SESSION_AUTHORITY_REQUIRED');
   assert.deepEqual(calls, ['declare', 'withdraw']);
+});
+
+// GH #776: the end-to-end anti-wedge journey over the real registry — a refused
+// bind_source is non-mutating, so the session must stay usable instead of
+// refusing every later call with OPERATION_ALREADY_IN_PROGRESS.
+test('a refused bind_source leaves the session usable for the next fenced call', async () => {
+  const { primary } = makeRepoWithWorktree();
+  const foreign = makeForeignRepo();
+  const stateDir = realpathSync(mkdtempSync(join(tmpdir(), 'rn-gh776-fence-')));
+  roots.push(stateDir);
+  const authority = createSupervisorAuthority({
+    stateDir,
+    source: resolveSourceIdentity(primary),
+    supervisorBirth: { pid: process.pid, source: 'darwin-ps', token: 'supervisor-birth' },
+    uid: '501',
+    startHeartbeat: false,
+    ownerStatus: () => 'match',
+  } as never);
+  const runtime = createWorkerAuthorityRuntime(authority.workerEnvironment('worker-a'), {
+    readBirth: () => ({ pid: process.pid, source: 'darwin-ps', token: 'worker-birth' }),
+    ownerStatus: () => 'match',
+  } as never);
+  const gated = createAuthorityGate(runtime, {
+    probe: async ({ axis }: { axis: string }) => ({ axis, identity: `${axis}-identity` }),
+  } as never).wrap(
+    'rn_session',
+    createSessionHandler(runtime, { deviceExists: () => true, requestWorkerRecycle: () => true }),
+  );
+
+  const refused = JSON.parse(
+    (await gated({ action: 'bind_source', projectRoot: foreign })).content[0]!.text,
+  );
+  assert.equal(refused.ok, false);
+  assert.equal(refused.code, 'SOURCE_ROOT_DIVERGENCE');
+
+  // The refusal must have ended its fence: the very next non-terminal transition
+  // has to complete, not report the session already busy.
+  const noop = JSON.parse(
+    (await gated({ action: 'bind_source', projectRoot: primary })).content[0]!.text,
+  );
+  assert.notEqual(noop.code, 'OPERATION_ALREADY_IN_PROGRESS', JSON.stringify(noop));
+  assert.equal(noop.ok, true, JSON.stringify(noop));
+  assert.equal(noop.data.alreadyBound, true);
+
+  const repeated = JSON.parse(
+    (await gated({ action: 'bind_source', projectRoot: foreign })).content[0]!.text,
+  );
+  assert.equal(repeated.code, 'SOURCE_ROOT_DIVERGENCE', JSON.stringify(repeated));
+
+  assert.equal(runtime.status().source.appRoot, realpathSync(primary));
+  assert.equal(runtime.status().state, 'source_bound');
 });
 
 test('integration actions refuse a declared root from a different app package of the same worktree', async () => {

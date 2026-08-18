@@ -1756,6 +1756,81 @@ test('already-bound bind_source completes as a fenced no-op without an authority
   assert.equal(calls.at(-1), 'end');
 });
 
+// GH #776: only a proven release may strand the fenced operation row. Anything
+// else must end or cancel it, or every later call refuses with
+// OPERATION_ALREADY_IN_PROGRESS until the worker is restarted.
+test('a released bind_source stays terminal and leaves its row to the released session', async () => {
+  const { runtime, calls } = fixture();
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+  });
+
+  const result = await gate.wrap('rn_session', async () =>
+    okResult({ bound: false, released: true, successorRoot: '/linked', recycleRequested: true }),
+  )({ action: 'bind_source', projectRoot: '/linked' });
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, true, result.content[0].text);
+  assert.equal(envelope.meta.authorityTransition, true);
+  assert.ok(!calls.includes('end'), 'the released row cannot complete its own operation');
+  assert.ok(!calls.includes('cancel'));
+});
+
+for (const refusal of [
+  {
+    code: 'SOURCE_ROOT_DIVERGENCE',
+    error: 'declared project root belongs to a different repository',
+  },
+  {
+    code: 'RESOURCE_CLAIM_CONFLICT',
+    error: 'the declared project root is still owned by another session',
+  },
+  {
+    code: 'SESSION_AUTHORITY_REQUIRED',
+    error: 'managed Metro could not be stopped during release cleanup',
+  },
+]) {
+  test(`a bind_source refused with ${refusal.code} ends its operation fence`, async () => {
+    const { runtime, calls } = fixture();
+    const gate = createAuthorityGate(runtime, {
+      probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+    });
+
+    const result = await gate.wrap('rn_session', async () =>
+      failResult(refusal.error, refusal.code, { axis: 'S' }),
+    )({ action: 'bind_source', projectRoot: '/linked' });
+    const envelope = JSON.parse(result.content[0].text);
+
+    assert.equal(envelope.ok, false);
+    assert.equal(envelope.code, refusal.code);
+    assert.ok(
+      calls.includes('end') || calls.includes('cancel'),
+      `the refused fence leaked: ${JSON.stringify(calls)}`,
+    );
+  });
+}
+
+test('a bind_source success that does not prove a release ends its fence and fails closed', async () => {
+  const { runtime, calls, status } = fixture();
+  const initialAuthorityVersion = status.authorityVersion;
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+  });
+
+  const result = await gate.wrap('rn_session', async () =>
+    okResult({ bound: false, released: false }),
+  )({ action: 'bind_source', projectRoot: '/linked' });
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.ok, false, result.content[0].text);
+  assert.equal(envelope.code, 'AUTHORITY_LOST_DURING_OPERATION');
+  assert.equal(status.authorityVersion, initialAuthorityVersion);
+  assert.ok(
+    calls.includes('end') || calls.includes('cancel'),
+    `the unreleased fence leaked: ${JSON.stringify(calls)}`,
+  );
+});
+
 test('stale-device release refuses a success envelope when no scoped commit advanced authority', async () => {
   const { runtime, status } = fixture();
   status.bindings.staleDeviceRelease = {
