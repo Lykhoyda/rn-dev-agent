@@ -33,12 +33,16 @@ async function handshake(supervisor) {
   supervisor.notify('notifications/initialized');
 }
 
-async function callOnce(supervisor, args) {
-  const id = supervisor.send('tools/call', { name: 'rn_session', arguments: args });
+async function callTool(supervisor, name, args) {
+  const id = supervisor.send('tools/call', { name, arguments: args });
   const reply = JSON.parse(await supervisor.nextLine());
   assert.equal(reply.id, id);
   if (reply.error) return { transportError: reply.error.message };
   return JSON.parse(reply.result?.content?.[0]?.text ?? '{}');
+}
+
+function callOnce(supervisor, args) {
+  return callTool(supervisor, 'rn_session', args);
 }
 
 function workerPids(supervisor) {
@@ -129,6 +133,45 @@ async function writeApp(root, name) {
   await writeFile(join(root, 'app.json'), JSON.stringify({ expo: { name } }), 'utf8');
 }
 
+// .rn-agent/nav-graph.yaml is a persisted state contract of this package; the
+// e2e plants one per checkout so a cwd-default handler's answer names which
+// tree the worker actually resolved.
+async function writeNavGraph(root, screen) {
+  const stamp = new Date().toISOString();
+  await mkdir(join(root, '.rn-agent'), { recursive: true });
+  await writeFile(
+    join(root, '.rn-agent', 'nav-graph.yaml'),
+    JSON.stringify({
+      nav_graph: {
+        meta: {
+          schema_version: 1,
+          project_slug: screen,
+          nav_library: 'react-navigation',
+          rn_version: '0.76.0',
+          expo_sdk: null,
+          created_at: stamp,
+          last_scanned_at: stamp,
+          scan_count: 1,
+          containers_found: 1,
+          coverage: 1,
+        },
+        navigators: [
+          {
+            id: 'root',
+            kind: 'stack',
+            screens: [{ name: screen, is_active: true, reliability_score: 1, visit_count: 1 }],
+            active_screen: screen,
+            is_visited: true,
+            source: 'runtime',
+          },
+        ],
+        all_screens: [screen],
+      },
+    }),
+    'utf8',
+  );
+}
+
 test(
   'GH#776: bind_source rebinds a linked worktree and the fence names both roots end-to-end',
   { timeout: 180_000 },
@@ -150,6 +193,8 @@ test(
       git(primary, ['commit', '-qm', 'init']);
       git(primary, ['worktree', 'add', '-q', linked, '-b', 'fm/issue-776']);
       await writeApp(linked, 'gh776-linked');
+      await writeNavGraph(primary, 'PrimaryOnlyScreen');
+      await writeNavGraph(linked, 'LinkedOnlyScreen');
 
       // The transport boots in the PRIMARY checkout, exactly like an MCP harness
       // whose startup cwd is the repo's main tree.
@@ -158,6 +203,10 @@ test(
         env: {
           TMPDIR: lockDir,
           RN_AGENT_OBSERVE_AUTOSTART: '0',
+          // The harness startup roots every heuristic resolver prefers over the
+          // process cwd — they must follow the recycle, not survive it.
+          CLAUDE_USER_CWD: primary,
+          RN_PROJECT_ROOT: primary,
         },
         lineTimeoutMs: 30_000,
       });
@@ -203,6 +252,19 @@ test(
       const successorCwd = processCwd(pids[pids.length - 1]);
       record('6. successor worker process cwd', { pids, successorCwd });
       assert.equal(successorCwd, linked, 'the successor worker runs in the linked worktree');
+
+      // A cwd-default handler run through the real transport answers with the
+      // linked worktree: findProjectRoot() prefers RN_PROJECT_ROOT and
+      // CLAUDE_USER_CWD over the cwd, so this only holds when the supervisor
+      // rewrote them for the successor worker.
+      const navGraphReply = await callTool(supervisor, 'cdp_nav_graph', { action: 'read' });
+      record(
+        '7. cdp_nav_graph read — cwd-default root resolution after the recycle',
+        navGraphReply,
+      );
+      assert.equal(navGraphReply.ok, true, JSON.stringify(navGraphReply));
+      assert.equal(navGraphReply.data.file_path, join(linked, '.rn-agent', 'nav-graph.yaml'));
+      assert.deepEqual(navGraphReply.data.graph.all_screens, ['LinkedOnlyScreen']);
 
       // The fence follows the new binding: the primary checkout is now foreign.
       const reversed = await callSession(supervisor, {

@@ -1421,7 +1421,6 @@ function probeProjectRoot(cwd: string, environment: NodeJS.ProcessEnv): string |
 test('cwd-default handlers resolve the bound worktree after a bind_source recycle', () => {
   const { primary, linked } = makeRepoWithWorktree();
   const inherited = { ...process.env, CLAUDE_USER_CWD: primary, RN_PROJECT_ROOT: primary };
-  delete inherited.RN_AGENT_PROJECT_ROOT;
 
   assert.equal(
     probeProjectRoot(linked, inherited),
