@@ -10446,7 +10446,7 @@ var init_state_root = __esm({
 
 // packages/rn-dev-agent-core/dist/session/successor-source.js
 import { realpathSync as realpathSync6 } from "node:fs";
-import { isAbsolute as isAbsolute2, join as join8, relative as relative2, resolve as resolve6 } from "node:path";
+import { join as join8, resolve as resolve6 } from "node:path";
 function successorSourceDeclarationPath(runtimeRoot) {
   return join8(runtimeRoot, DECLARATION_FILE);
 }
@@ -10527,12 +10527,6 @@ function canonicalOrRaw(path, canonicalize) {
     return resolve6(path);
   }
 }
-function isWithin(root, candidate) {
-  if (candidate === root)
-    return true;
-  const child = relative2(root, candidate);
-  return child.length > 0 && !child.startsWith("..") && !isAbsolute2(child);
-}
 function resolveWorkerSpawnRootEnvironment(input) {
   const canonicalize = input.canonicalize ?? realpathSync6;
   const worker = canonicalOrRaw(input.workerCwd, canonicalize);
@@ -10540,12 +10534,9 @@ function resolveWorkerSpawnRootEnvironment(input) {
   const unset = [];
   if (canonicalOrRaw(input.bootCwd, canonicalize) === worker)
     return { set, unset };
-  const userCwd = input.inherited.CLAUDE_USER_CWD;
-  if (userCwd && !isWithin(worker, canonicalOrRaw(userCwd, canonicalize))) {
-    set.CLAUDE_USER_CWD = worker;
-  }
+  set.CLAUDE_USER_CWD = worker;
   const projectRoot = input.inherited.RN_PROJECT_ROOT;
-  if (projectRoot && !isWithin(worker, canonicalOrRaw(projectRoot, canonicalize))) {
+  if (projectRoot && canonicalOrRaw(projectRoot, canonicalize) !== worker) {
     unset.push("RN_PROJECT_ROOT");
   }
   return { set, unset };
@@ -14236,7 +14227,7 @@ var init_metro_authority = __esm({
 
 // packages/rn-dev-agent-core/dist/session/package-integration.js
 import { closeSync as closeSync7, constants as constants5, fstatSync as fstatSync5, lstatSync as lstatSync7, openSync as openSync7, readFileSync as readFileSync10 } from "node:fs";
-import { basename, isAbsolute as isAbsolute3, join as join10, relative as relative3, resolve as resolve7, sep as sep2 } from "node:path";
+import { basename, isAbsolute as isAbsolute2, join as join10, relative as relative2, resolve as resolve7, sep as sep2 } from "node:path";
 function serializePackageIntegrationManifest(manifest) {
   return `${JSON.stringify(manifest, null, 2)}
 `;
@@ -17940,8 +17931,8 @@ function assertBoundCleanup(result) {
   }
 }
 function assertNoSymlinkPath(root, candidate) {
-  const child = relative3(root, candidate);
-  if (child === ".." || child.startsWith(`..${sep2}`) || isAbsolute3(child)) {
+  const child = relative2(root, candidate);
+  if (child === ".." || child.startsWith(`..${sep2}`) || isAbsolute2(child)) {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration path escapes the app root");
   }
   let current = root;
@@ -24070,12 +24061,12 @@ var init_registry = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/util/public-diagnostics.js
-import { basename as basename2, isAbsolute as isAbsolute4 } from "node:path";
+import { basename as basename2, isAbsolute as isAbsolute3 } from "node:path";
 function publicDeviceIdentity(deviceId) {
   return `device-${shortAuthorityIdentity(deviceId).slice(0, 12)}`;
 }
 function publicLocalPath(path) {
-  return isAbsolute4(path) ? `<local-path>/${basename2(path)}` : path;
+  return isAbsolute3(path) ? `<local-path>/${basename2(path)}` : path;
 }
 function sanitizePublicDiagnostic(value, options = {}) {
   let safe = value.replace(/[^\t\n\r\x20-\x7e]/g, "?");
@@ -26420,7 +26411,7 @@ var init_platform_utils = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/maestro-validator.js
-import { join as join18, dirname as dirname9, isAbsolute as isAbsolute5, sep as sep3 } from "node:path";
+import { join as join18, dirname as dirname9, isAbsolute as isAbsolute4, sep as sep3 } from "node:path";
 import { readFileSync as readFileSync15, realpathSync as realpathSync9 } from "node:fs";
 function isValidBundleId(s) {
   if (typeof s !== "string")
@@ -26574,7 +26565,7 @@ function resolveRunFlowTarget(file, opts) {
   if (!opts.flowDir || !opts.flowRoot) {
     throw new MaestroValidationError(`runFlow file ref "${file}" requires a flow root context (flowDir + flowRoot)`);
   }
-  if (isAbsolute5(file)) {
+  if (isAbsolute4(file)) {
     throw new MaestroValidationError(`runFlow file ref must be relative, got absolute: ${file}`);
   }
   if (file.split(/[\\/]/).includes("..")) {
@@ -28721,7 +28712,7 @@ var init_metro_origin = __esm({
 import { execFileSync as execFileSync12 } from "node:child_process";
 import { createHash as createHash11 } from "node:crypto";
 import { lstatSync as lstatSync9, readFileSync as readFileSync18, readdirSync as readdirSync6, readlinkSync as readlinkSync3, realpathSync as realpathSync10, statSync as statSync9 } from "node:fs";
-import { isAbsolute as isAbsolute6, join as join22, relative as relative4 } from "node:path";
+import { isAbsolute as isAbsolute5, join as join22, relative as relative3 } from "node:path";
 function runText(command, args) {
   return execFileSync12(command, [...args], {
     encoding: "utf8",
@@ -28757,7 +28748,7 @@ function listAppFiles(appPath) {
       if (entry.isDirectory()) {
         visit(path);
       } else if (entry.isFile() || entry.isSymbolicLink()) {
-        files.push(relative4(appPath, path));
+        files.push(relative3(appPath, path));
       } else {
         throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS app contains an unsupported filesystem entry");
       }
@@ -28771,8 +28762,8 @@ function iosAppFiles(appPath, dependencies) {
 }
 function assertIosSymlinkContained(appPath, path, realpath) {
   const target = realpath(path);
-  const child = relative4(realpath(appPath), target);
-  if (child === ".." || child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute6(child)) {
+  const child = relative3(realpath(appPath), target);
+  if (child === ".." || child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute5(child)) {
     throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS app symlink escapes the installed bundle");
   }
 }
@@ -29289,7 +29280,7 @@ var init_tool_profiles = __esm({
 // packages/rn-dev-agent-core/dist/session/authority-gate.js
 import { randomUUID as randomUUID5 } from "node:crypto";
 import { realpathSync as realpathSync11 } from "node:fs";
-import { isAbsolute as isAbsolute7, relative as relative5, resolve as resolve8 } from "node:path";
+import { isAbsolute as isAbsolute6, relative as relative4, resolve as resolve8 } from "node:path";
 async function claimOptionalBundleAuthority(args) {
   return await args[optionalBundleAdmission]?.() ?? false;
 }
@@ -29549,12 +29540,12 @@ function bindSourcePaths(status, args, tool) {
     }
     let candidate;
     try {
-      candidate = realpathSync11(isAbsolute7(supplied) ? supplied : resolve8(appRoot, supplied));
+      candidate = realpathSync11(isAbsolute6(supplied) ? supplied : resolve8(appRoot, supplied));
     } catch {
       throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", `${field2} cannot be resolved within the active app root`);
     }
-    const child = relative5(appRoot, candidate);
-    if (child === ".." || child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute7(child)) {
+    const child = relative4(appRoot, candidate);
+    if (child === ".." || child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute6(child)) {
       throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", `${field2} ${candidate} is outside the active session app root ${appRoot}`, void 0, field2 === "projectRoot" ? {
         nextAction: `Run rn_session action "bind_source" with projectRoot "${candidate}" to rebind the session to that worktree, then retry.`
       } : void 0);
@@ -54412,49 +54403,49 @@ var require_fast_uri = __commonJS({
       schemelessOptions.skipEscape = true;
       return serialize2(resolved, schemelessOptions);
     }
-    function resolveComponent(base, relative7, options, skipNormalization) {
+    function resolveComponent(base, relative6, options, skipNormalization) {
       const target = {};
       if (!skipNormalization) {
         base = parse3(serialize2(base, options), options);
-        relative7 = parse3(serialize2(relative7, options), options);
+        relative6 = parse3(serialize2(relative6, options), options);
       }
       options = options || {};
-      if (!options.tolerant && relative7.scheme) {
-        target.scheme = relative7.scheme;
-        target.userinfo = relative7.userinfo;
-        target.host = relative7.host;
-        target.port = relative7.port;
-        target.path = removeDotSegments(relative7.path || "");
-        target.query = relative7.query;
+      if (!options.tolerant && relative6.scheme) {
+        target.scheme = relative6.scheme;
+        target.userinfo = relative6.userinfo;
+        target.host = relative6.host;
+        target.port = relative6.port;
+        target.path = removeDotSegments(relative6.path || "");
+        target.query = relative6.query;
       } else {
-        if (relative7.userinfo !== void 0 || relative7.host !== void 0 || relative7.port !== void 0) {
-          target.userinfo = relative7.userinfo;
-          target.host = relative7.host;
-          target.port = relative7.port;
-          target.path = removeDotSegments(relative7.path || "");
-          target.query = relative7.query;
+        if (relative6.userinfo !== void 0 || relative6.host !== void 0 || relative6.port !== void 0) {
+          target.userinfo = relative6.userinfo;
+          target.host = relative6.host;
+          target.port = relative6.port;
+          target.path = removeDotSegments(relative6.path || "");
+          target.query = relative6.query;
         } else {
-          if (!relative7.path) {
+          if (!relative6.path) {
             target.path = base.path;
-            if (relative7.query !== void 0) {
-              target.query = relative7.query;
+            if (relative6.query !== void 0) {
+              target.query = relative6.query;
             } else {
               target.query = base.query;
             }
           } else {
-            if (relative7.path[0] === "/") {
-              target.path = removeDotSegments(relative7.path);
+            if (relative6.path[0] === "/") {
+              target.path = removeDotSegments(relative6.path);
             } else {
               if ((base.userinfo !== void 0 || base.host !== void 0 || base.port !== void 0) && !base.path) {
-                target.path = "/" + relative7.path;
+                target.path = "/" + relative6.path;
               } else if (!base.path) {
-                target.path = relative7.path;
+                target.path = relative6.path;
               } else {
-                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative7.path;
+                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative6.path;
               }
               target.path = removeDotSegments(target.path);
             }
-            target.query = relative7.query;
+            target.query = relative6.query;
           }
           target.userinfo = base.userinfo;
           target.host = base.host;
@@ -54462,7 +54453,7 @@ var require_fast_uri = __commonJS({
         }
         target.scheme = base.scheme;
       }
-      target.fragment = relative7.fragment;
+      target.fragment = relative6.fragment;
       return target;
     }
     function equal(uriA, uriB, options) {
@@ -70883,7 +70874,7 @@ var init_device_existence = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/session.js
-import { dirname as dirname16, isAbsolute as isAbsolute8, join as join38, resolve as resolve10 } from "node:path";
+import { dirname as dirname16, isAbsolute as isAbsolute7, join as join38, resolve as resolve10 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 import { createHash as createHash15 } from "node:crypto";
 function sameAndroidMetroReverse(current, next) {
@@ -70969,7 +70960,7 @@ function sessionSourceResolver(status, dependencies) {
   return (root) => resolveSourceIdentity(root, stored?.kind === "declared-root" ? { declaredRoot: stored.contentRoot, declaredManifests: stored.declaredManifests } : {});
 }
 function anchorDeclaredProjectRoot(status, projectRoot) {
-  if (isAbsolute8(projectRoot))
+  if (isAbsolute7(projectRoot))
     return projectRoot;
   const boundAppRoot = status.source?.appRoot;
   return typeof boundAppRoot === "string" && boundAppRoot.length > 0 ? resolve10(boundAppRoot, projectRoot) : projectRoot;
@@ -73978,11 +73969,11 @@ var init_events = __esm({
 
 // packages/rn-dev-agent-core/dist/observability/recorder.js
 import { closeSync as closeSync9, constants as constants6, fstatSync as fstatSync6, openSync as openSync9, readSync as readSync4 } from "node:fs";
-import { isAbsolute as isAbsolute9 } from "node:path";
+import { isAbsolute as isAbsolute8 } from "node:path";
 function extractScreenshotPath(result) {
   const data = unwrapResult(result)?.data ?? result?.data;
   const p = data?.path ?? data?.message;
-  return typeof p === "string" && isAbsolute9(p) && (p.endsWith(".jpg") || p.endsWith(".jpeg") || p.endsWith(".png")) ? p : null;
+  return typeof p === "string" && isAbsolute8(p) && (p.endsWith(".jpg") || p.endsWith(".jpeg") || p.endsWith(".png")) ? p : null;
 }
 function readShotBounded(p) {
   let fd;
@@ -74075,7 +74066,7 @@ var init_recorder = __esm({
        * whatever path the pipeline actually captured to.
        */
       registerCapturedScreenshot(p) {
-        if (typeof p !== "string" || !isAbsolute9(p))
+        if (typeof p !== "string" || !isAbsolute8(p))
           return;
         this.trustedShotPaths.delete(p);
         this.trustedShotPaths.add(p);
@@ -81297,7 +81288,7 @@ var init_startup_integrity = __esm({
 import { createHash as createHash18, randomUUID as randomUUID9 } from "node:crypto";
 import { execFileSync as execFileSync15 } from "node:child_process";
 import { chmodSync as chmodSync4, closeSync as closeSync10, existsSync as existsSync32, fsyncSync, lstatSync as lstatSync11, mkdirSync as mkdirSync18, openSync as openSync10, readFileSync as readFileSync30, realpathSync as realpathSync12, renameSync as renameSync7, unlinkSync as unlinkSync11, writeFileSync as writeFileSync15 } from "node:fs";
-import { basename as basename7, dirname as dirname20, extname, isAbsolute as isAbsolute10, join as join43, relative as relative6, resolve as resolve13, sep as sep6 } from "node:path";
+import { basename as basename7, dirname as dirname20, extname, isAbsolute as isAbsolute9, join as join43, relative as relative5, resolve as resolve13, sep as sep6 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 function proofActionPayload(unparsedArgs) {
   if (!unparsedArgs || typeof unparsedArgs !== "object" || Array.isArray(unparsedArgs)) {
@@ -81337,7 +81328,7 @@ function captureProofWorkerStartup(argv = process.argv, attestation = readStartu
   let loadedCoreBundlePath = null;
   let coreBundleSha256 = null;
   try {
-    if (typeof argv[1] === "string" && isAbsolute10(argv[1])) {
+    if (typeof argv[1] === "string" && isAbsolute9(argv[1])) {
       executedEntrypointPath = realpathSync12(argv[1]);
     }
   } catch {
@@ -81374,7 +81365,7 @@ function resolveProofCandidateEntrypoint(candidateRoot, argv) {
     return null;
   }
   const authorityArg = argv[1];
-  if (typeof authorityArg !== "string" || !isAbsolute10(authorityArg))
+  if (typeof authorityArg !== "string" || !isAbsolute9(authorityArg))
     return null;
   let arg;
   try {
@@ -81423,7 +81414,7 @@ function proofCandidateStartupMatches(entrypoint, startup, headCoreBundleSha256)
 }
 function proofCandidateEntrypointEnvironmentMatches(entrypoint, env) {
   const normalizedOverride = (value) => {
-    if (!value || !isAbsolute10(value))
+    if (!value || !isAbsolute9(value))
       return value ? null : "";
     try {
       return realpathSync12(value);
@@ -81462,7 +81453,7 @@ function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
     const verifiedBytes = [];
     for (const artifactPath of artifactPaths) {
       const resolvedArtifactPath = realpathSync12(artifactPath);
-      const artifactRelativePath = relative6(root, resolvedArtifactPath).split(sep6).join("/");
+      const artifactRelativePath = relative5(root, resolvedArtifactPath).split(sep6).join("/");
       if (!artifactRelativePath || artifactRelativePath === ".." || artifactRelativePath.startsWith("../")) {
         return null;
       }
@@ -81565,14 +81556,14 @@ function readProofActionIdentity(appProjectRoot, actionId) {
   }
 }
 function isNormalizedDescendant(root, path) {
-  if (!isAbsolute10(root) || !isAbsolute10(path) || resolve13(root) !== root || resolve13(path) !== path) {
+  if (!isAbsolute9(root) || !isAbsolute9(path) || resolve13(root) !== root || resolve13(path) !== path) {
     return false;
   }
-  const fromRoot = relative6(root, path);
-  return fromRoot.length > 0 && fromRoot !== ".." && !fromRoot.startsWith(`..${sep6}`) && !isAbsolute10(fromRoot);
+  const fromRoot = relative5(root, path);
+  return fromRoot.length > 0 && fromRoot !== ".." && !fromRoot.startsWith(`..${sep6}`) && !isAbsolute9(fromRoot);
 }
 function hasExistingSymlink(root, path) {
-  const parts = relative6(root, path).split(sep6);
+  const parts = relative5(root, path).split(sep6);
   for (let length = 0; length <= parts.length; length += 1) {
     const candidate = resolve13(root, ...parts.slice(0, length));
     try {
@@ -81612,7 +81603,7 @@ function proofRootExists(args) {
   }
 }
 function resolveProofWorktreeRoot(detectedProjectRoot) {
-  if (!detectedProjectRoot || !isAbsolute10(detectedProjectRoot) || resolve13(detectedProjectRoot) !== detectedProjectRoot) {
+  if (!detectedProjectRoot || !isAbsolute9(detectedProjectRoot) || resolve13(detectedProjectRoot) !== detectedProjectRoot) {
     return null;
   }
   try {
@@ -81620,7 +81611,7 @@ function resolveProofWorktreeRoot(detectedProjectRoot) {
       cwd: detectedProjectRoot,
       encoding: "utf8"
     }).trim();
-    return root && isAbsolute10(root) && resolve13(root) === root ? root : null;
+    return root && isAbsolute9(root) && resolve13(root) === root ? root : null;
   } catch {
     return null;
   }
@@ -81659,7 +81650,7 @@ function readProofGitInfo(root) {
 function proofRootHasTrackedEntries(root, proofRoot) {
   if (!isNormalizedDescendant(root, proofRoot))
     throw new Error("INVALID_PROOF_ROOT");
-  const path = relative6(root, proofRoot).replaceAll(sep6, "/");
+  const path = relative5(root, proofRoot).replaceAll(sep6, "/");
   return execFileSync15("git", ["ls-files", "-z", "--", path], {
     cwd: root,
     encoding: "utf8"
@@ -81928,7 +81919,7 @@ function createProofCaptureHandler(deps) {
       return current.reasons;
     return sameProofAction(current.value, active.actionIdentity) ? [] : ["PROOF_ACTION_IDENTITY_CHANGED"];
   };
-  const repositoryPath = (active, path) => relative6(active.context.projectRoot, path).replaceAll(sep6, "/");
+  const repositoryPath = (active, path) => relative5(active.context.projectRoot, path).replaceAll(sep6, "/");
   const observedSetupScreenshots = (active) => {
     const owned = /* @__PURE__ */ new Set();
     for (const observation of deps.monitor.observations()) {
@@ -81947,7 +81938,7 @@ function createProofCaptureHandler(deps) {
     ].map((path) => repositoryPath(active, path));
     const requiredOutputs = new Set(phase === "finalized" ? [...proofOutputs, repositoryPath(active, active.context.receiptPath)] : proofOutputs);
     const allowedOutputs = phase === "setup" ? observedSetupScreenshots(active) : phase === "clean" ? /* @__PURE__ */ new Set() : requiredOutputs;
-    const invalidChange = git.changes.some((change) => isAbsolute10(change.path) || change.path === ".." || change.path.startsWith("../") || change.indexStatus !== "?" || change.worktreeStatus !== "?" || change.sourcePath !== void 0);
+    const invalidChange = git.changes.some((change) => isAbsolute9(change.path) || change.path === ".." || change.path.startsWith("../") || change.indexStatus !== "?" || change.worktreeStatus !== "?" || change.sourcePath !== void 0);
     const changedPaths = new Set(git.changes.map((change) => change.path.replaceAll("\\", "/")));
     const unrelated = [...changedPaths].some((path) => !allowedOutputs.has(path));
     const missing = (phase === "validation" || phase === "finalized") && [...requiredOutputs].some((path) => !changedPaths.has(path));
@@ -82562,7 +82553,7 @@ var init_proof_capture2 = __esm({
     init_proof_receipt();
     init_utils();
     init_startup_integrity();
-    absolutePathSchema = external_exports.string().min(1).refine(isAbsolute10, "path must be absolute");
+    absolutePathSchema = external_exports.string().min(1).refine(isAbsolute9, "path must be absolute");
     beginRehearsalSchema = external_exports.object({
       action: external_exports.literal("begin_rehearsal"),
       projectRoot: absolutePathSchema,
@@ -91794,10 +91785,7 @@ if (process.env.RN_BRIDGE_SUPERVISOR === "0") {
     const rootEnvironment = resolveWorkerSpawnRootEnvironment({
       workerCwd,
       bootCwd: process.cwd(),
-      inherited: {
-        CLAUDE_USER_CWD: process.env.CLAUDE_USER_CWD,
-        RN_PROJECT_ROOT: process.env.RN_PROJECT_ROOT
-      }
+      inherited: { RN_PROJECT_ROOT: process.env.RN_PROJECT_ROOT }
     });
     const workerEnvironment = {
       ...process.env,

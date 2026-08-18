@@ -190,10 +190,7 @@ else {
         const rootEnvironment = resolveWorkerSpawnRootEnvironment({
             workerCwd,
             bootCwd: process.cwd(),
-            inherited: {
-                CLAUDE_USER_CWD: process.env.CLAUDE_USER_CWD,
-                RN_PROJECT_ROOT: process.env.RN_PROJECT_ROOT,
-            },
+            inherited: { RN_PROJECT_ROOT: process.env.RN_PROJECT_ROOT },
         });
         const workerEnvironment = {
             ...process.env,

@@ -59,6 +59,16 @@ function makeRepoWithWorktree(): { primary: string; linked: string } {
   return { primary, linked };
 }
 
+// The layout this workflow actually uses: the harness boots inside a linked
+// worktree that lives UNDER the primary checkout, then binds the primary root.
+function makeRepoWithNestedWorktree(): { primary: string; nested: string } {
+  const { primary } = makeRepoWithWorktree();
+  const nested = join(primary, '.worktrees', 'x');
+  mkdirSync(dirname(nested), { recursive: true });
+  git(primary, ['worktree', 'add', '-q', nested, '-b', 'nested']);
+  return { primary, nested };
+}
+
 function makeMonorepoApps(): { mobile: string; other: string } {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'rn-gh776-monorepo-')));
   roots.push(root);
@@ -1367,24 +1377,33 @@ test('the spawn environment rewrites a stale user cwd to the bound worktree', ()
   const environment = resolveWorkerSpawnRootEnvironment({
     workerCwd: linked,
     bootCwd: primary,
-    inherited: { CLAUDE_USER_CWD: primary, RN_PROJECT_ROOT: primary },
+    inherited: { RN_PROJECT_ROOT: primary },
   });
   assert.equal(environment.set.PWD, linked);
   assert.equal(environment.set.CLAUDE_USER_CWD, linked);
   assert.deepEqual(environment.unset, ['RN_PROJECT_ROOT']);
 });
 
-test('a user cwd inside the bound worktree survives the recycle', () => {
+test('a root hint nested under the bound worktree does not survive the recycle', () => {
+  const { primary, nested } = makeRepoWithNestedWorktree();
+  const environment = resolveWorkerSpawnRootEnvironment({
+    workerCwd: primary,
+    bootCwd: nested,
+    inherited: { RN_PROJECT_ROOT: nested },
+  });
+  assert.equal(environment.set.PWD, primary);
+  assert.equal(environment.set.CLAUDE_USER_CWD, primary);
+  assert.deepEqual(environment.unset, ['RN_PROJECT_ROOT'], 'containment is not resolution');
+});
+
+test('a root hint that already names the bound root is kept', () => {
   const { primary, linked } = makeRepoWithWorktree();
-  const nested = join(linked, 'src');
-  mkdirSync(nested, { recursive: true });
   const environment = resolveWorkerSpawnRootEnvironment({
     workerCwd: linked,
     bootCwd: primary,
-    inherited: { CLAUDE_USER_CWD: nested, RN_PROJECT_ROOT: linked },
+    inherited: { RN_PROJECT_ROOT: linked },
   });
-  assert.equal(environment.set.PWD, linked);
-  assert.equal(environment.set.CLAUDE_USER_CWD, undefined, 'a contained user cwd is preserved');
+  assert.equal(environment.set.CLAUDE_USER_CWD, linked);
   assert.deepEqual(environment.unset, []);
 });
 
@@ -1395,7 +1414,7 @@ test('a first boot only gains an accurate PWD', () => {
   const environment = resolveWorkerSpawnRootEnvironment({
     workerCwd: primary,
     bootCwd: primary,
-    inherited: { CLAUDE_USER_CWD: elsewhere, RN_PROJECT_ROOT: elsewhere },
+    inherited: { RN_PROJECT_ROOT: elsewhere },
   });
   assert.deepEqual(environment, { set: { PWD: primary }, unset: [] });
 });
@@ -1418,6 +1437,27 @@ function probeProjectRoot(cwd: string, environment: NodeJS.ProcessEnv): string |
   return JSON.parse(result.stdout) as string | null;
 }
 
+test('a nested worktree root hint loses to the bound root for cwd-default handlers', () => {
+  const { primary, nested } = makeRepoWithNestedWorktree();
+  const inherited = { ...process.env, CLAUDE_USER_CWD: nested, RN_PROJECT_ROOT: nested };
+
+  assert.equal(
+    probeProjectRoot(primary, inherited),
+    nested,
+    'a root hint nested under the bound root still resolves to itself',
+  );
+
+  const environment = resolveWorkerSpawnRootEnvironment({
+    workerCwd: primary,
+    bootCwd: nested,
+    inherited: { RN_PROJECT_ROOT: inherited.RN_PROJECT_ROOT },
+  });
+  const spawned: NodeJS.ProcessEnv = { ...inherited, ...environment.set };
+  for (const key of environment.unset) delete spawned[key];
+
+  assert.equal(probeProjectRoot(primary, spawned), primary);
+});
+
 test('cwd-default handlers resolve the bound worktree after a bind_source recycle', () => {
   const { primary, linked } = makeRepoWithWorktree();
   const inherited = { ...process.env, CLAUDE_USER_CWD: primary, RN_PROJECT_ROOT: primary };
@@ -1431,10 +1471,7 @@ test('cwd-default handlers resolve the bound worktree after a bind_source recycl
   const environment = resolveWorkerSpawnRootEnvironment({
     workerCwd: linked,
     bootCwd: primary,
-    inherited: {
-      CLAUDE_USER_CWD: inherited.CLAUDE_USER_CWD,
-      RN_PROJECT_ROOT: inherited.RN_PROJECT_ROOT,
-    },
+    inherited: { RN_PROJECT_ROOT: inherited.RN_PROJECT_ROOT },
   });
   const spawned: NodeJS.ProcessEnv = { ...inherited, ...environment.set };
   for (const key of environment.unset) delete spawned[key];

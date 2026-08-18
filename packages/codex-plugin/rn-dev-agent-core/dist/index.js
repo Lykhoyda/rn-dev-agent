@@ -3756,49 +3756,49 @@ var require_fast_uri = __commonJS({
       schemelessOptions.skipEscape = true;
       return serialize2(resolved, schemelessOptions);
     }
-    function resolveComponent(base, relative7, options, skipNormalization) {
+    function resolveComponent(base, relative6, options, skipNormalization) {
       const target = {};
       if (!skipNormalization) {
         base = parse3(serialize2(base, options), options);
-        relative7 = parse3(serialize2(relative7, options), options);
+        relative6 = parse3(serialize2(relative6, options), options);
       }
       options = options || {};
-      if (!options.tolerant && relative7.scheme) {
-        target.scheme = relative7.scheme;
-        target.userinfo = relative7.userinfo;
-        target.host = relative7.host;
-        target.port = relative7.port;
-        target.path = removeDotSegments(relative7.path || "");
-        target.query = relative7.query;
+      if (!options.tolerant && relative6.scheme) {
+        target.scheme = relative6.scheme;
+        target.userinfo = relative6.userinfo;
+        target.host = relative6.host;
+        target.port = relative6.port;
+        target.path = removeDotSegments(relative6.path || "");
+        target.query = relative6.query;
       } else {
-        if (relative7.userinfo !== void 0 || relative7.host !== void 0 || relative7.port !== void 0) {
-          target.userinfo = relative7.userinfo;
-          target.host = relative7.host;
-          target.port = relative7.port;
-          target.path = removeDotSegments(relative7.path || "");
-          target.query = relative7.query;
+        if (relative6.userinfo !== void 0 || relative6.host !== void 0 || relative6.port !== void 0) {
+          target.userinfo = relative6.userinfo;
+          target.host = relative6.host;
+          target.port = relative6.port;
+          target.path = removeDotSegments(relative6.path || "");
+          target.query = relative6.query;
         } else {
-          if (!relative7.path) {
+          if (!relative6.path) {
             target.path = base.path;
-            if (relative7.query !== void 0) {
-              target.query = relative7.query;
+            if (relative6.query !== void 0) {
+              target.query = relative6.query;
             } else {
               target.query = base.query;
             }
           } else {
-            if (relative7.path[0] === "/") {
-              target.path = removeDotSegments(relative7.path);
+            if (relative6.path[0] === "/") {
+              target.path = removeDotSegments(relative6.path);
             } else {
               if ((base.userinfo !== void 0 || base.host !== void 0 || base.port !== void 0) && !base.path) {
-                target.path = "/" + relative7.path;
+                target.path = "/" + relative6.path;
               } else if (!base.path) {
-                target.path = relative7.path;
+                target.path = relative6.path;
               } else {
-                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative7.path;
+                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative6.path;
               }
               target.path = removeDotSegments(target.path);
             }
-            target.query = relative7.query;
+            target.query = relative6.query;
           }
           target.userinfo = base.userinfo;
           target.host = base.host;
@@ -3806,7 +3806,7 @@ var require_fast_uri = __commonJS({
         }
         target.scheme = base.scheme;
       }
-      target.fragment = relative7.fragment;
+      target.fragment = relative6.fragment;
       return target;
     }
     function equal(uriA, uriB, options) {
@@ -67780,7 +67780,7 @@ function restorePackageIntegrationFiles(input, dependencies = {}) {
 }
 
 // packages/rn-dev-agent-core/dist/tools/session.js
-import { dirname as dirname14, isAbsolute as isAbsolute8, join as join36, resolve as resolve9 } from "node:path";
+import { dirname as dirname14, isAbsolute as isAbsolute7, join as join36, resolve as resolve9 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 import { createHash as createHash13 } from "node:crypto";
 
@@ -68522,7 +68522,7 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
 
 // packages/rn-dev-agent-core/dist/session/successor-source.js
 init_secure_state_file();
-import { isAbsolute as isAbsolute7, join as join34, relative as relative5, resolve as resolve8 } from "node:path";
+import { join as join34, resolve as resolve8 } from "node:path";
 var DECLARATION_FILE = "successor-source.json";
 function successorSourceDeclarationPath(runtimeRoot) {
   return join34(runtimeRoot, DECLARATION_FILE);
@@ -69315,7 +69315,7 @@ function sessionSourceResolver(status, dependencies) {
   return (root) => resolveSourceIdentity(root, stored?.kind === "declared-root" ? { declaredRoot: stored.contentRoot, declaredManifests: stored.declaredManifests } : {});
 }
 function anchorDeclaredProjectRoot(status, projectRoot) {
-  if (isAbsolute8(projectRoot))
+  if (isAbsolute7(projectRoot))
     return projectRoot;
   const boundAppRoot = status.source?.appRoot;
   return typeof boundAppRoot === "string" && boundAppRoot.length > 0 ? resolve9(boundAppRoot, projectRoot) : projectRoot;
@@ -71896,7 +71896,7 @@ init_rn_android_runner_client();
 
 // packages/rn-dev-agent-core/dist/observability/recorder.js
 import { closeSync as closeSync8, constants as constants6, fstatSync as fstatSync6, openSync as openSync8, readSync as readSync4 } from "node:fs";
-import { isAbsolute as isAbsolute9 } from "node:path";
+import { isAbsolute as isAbsolute8 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/util/redact.js
 import { homedir as homedir8 } from "node:os";
@@ -72184,7 +72184,7 @@ var SHOT_REGISTRY_CAP = 64;
 function extractScreenshotPath(result) {
   const data = unwrapResult(result)?.data ?? result?.data;
   const p = data?.path ?? data?.message;
-  return typeof p === "string" && isAbsolute9(p) && (p.endsWith(".jpg") || p.endsWith(".jpeg") || p.endsWith(".png")) ? p : null;
+  return typeof p === "string" && isAbsolute8(p) && (p.endsWith(".jpg") || p.endsWith(".jpeg") || p.endsWith(".png")) ? p : null;
 }
 function readShotBounded(p) {
   let fd;
@@ -72268,7 +72268,7 @@ var Recorder = class {
    * whatever path the pipeline actually captured to.
    */
   registerCapturedScreenshot(p) {
-    if (typeof p !== "string" || !isAbsolute9(p))
+    if (typeof p !== "string" || !isAbsolute8(p))
       return;
     this.trustedShotPaths.delete(p);
     this.trustedShotPaths.add(p);
@@ -78736,7 +78736,7 @@ function createDeviceRecordHandler(deps = {}) {
 import { createHash as createHash16, randomUUID as randomUUID8 } from "node:crypto";
 import { execFileSync as execFileSync14 } from "node:child_process";
 import { chmodSync as chmodSync4, closeSync as closeSync9, existsSync as existsSync31, fsyncSync, lstatSync as lstatSync11, mkdirSync as mkdirSync17, openSync as openSync9, readFileSync as readFileSync29, realpathSync as realpathSync11, renameSync as renameSync7, unlinkSync as unlinkSync10, writeFileSync as writeFileSync14 } from "node:fs";
-import { basename as basename7, dirname as dirname18, extname, isAbsolute as isAbsolute10, join as join41, relative as relative6, resolve as resolve12, sep as sep6 } from "node:path";
+import { basename as basename7, dirname as dirname18, extname, isAbsolute as isAbsolute9, join as join41, relative as relative5, resolve as resolve12, sep as sep6 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 
 // packages/rn-dev-agent-core/dist/domain/proof-capture.js
@@ -79265,7 +79265,7 @@ function readStartupIntegrityAttestation() {
 }
 
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
-var absolutePathSchema = external_exports.string().min(1).refine(isAbsolute10, "path must be absolute");
+var absolutePathSchema = external_exports.string().min(1).refine(isAbsolute9, "path must be absolute");
 var beginRehearsalSchema = external_exports.object({
   action: external_exports.literal("begin_rehearsal"),
   projectRoot: absolutePathSchema,
@@ -79390,7 +79390,7 @@ function captureProofWorkerStartup(argv = process.argv, attestation = readStartu
   let loadedCoreBundlePath = null;
   let coreBundleSha256 = null;
   try {
-    if (typeof argv[1] === "string" && isAbsolute10(argv[1])) {
+    if (typeof argv[1] === "string" && isAbsolute9(argv[1])) {
       executedEntrypointPath = realpathSync11(argv[1]);
     }
   } catch {
@@ -79428,7 +79428,7 @@ function resolveProofCandidateEntrypoint(candidateRoot, argv) {
     return null;
   }
   const authorityArg = argv[1];
-  if (typeof authorityArg !== "string" || !isAbsolute10(authorityArg))
+  if (typeof authorityArg !== "string" || !isAbsolute9(authorityArg))
     return null;
   let arg;
   try {
@@ -79477,7 +79477,7 @@ function proofCandidateStartupMatches(entrypoint, startup, headCoreBundleSha256)
 }
 function proofCandidateEntrypointEnvironmentMatches(entrypoint, env) {
   const normalizedOverride = (value) => {
-    if (!value || !isAbsolute10(value))
+    if (!value || !isAbsolute9(value))
       return value ? null : "";
     try {
       return realpathSync11(value);
@@ -79516,7 +79516,7 @@ function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
     const verifiedBytes = [];
     for (const artifactPath of artifactPaths) {
       const resolvedArtifactPath = realpathSync11(artifactPath);
-      const artifactRelativePath = relative6(root, resolvedArtifactPath).split(sep6).join("/");
+      const artifactRelativePath = relative5(root, resolvedArtifactPath).split(sep6).join("/");
       if (!artifactRelativePath || artifactRelativePath === ".." || artifactRelativePath.startsWith("../")) {
         return null;
       }
@@ -79619,14 +79619,14 @@ function readProofActionIdentity(appProjectRoot, actionId) {
   }
 }
 function isNormalizedDescendant(root, path) {
-  if (!isAbsolute10(root) || !isAbsolute10(path) || resolve12(root) !== root || resolve12(path) !== path) {
+  if (!isAbsolute9(root) || !isAbsolute9(path) || resolve12(root) !== root || resolve12(path) !== path) {
     return false;
   }
-  const fromRoot = relative6(root, path);
-  return fromRoot.length > 0 && fromRoot !== ".." && !fromRoot.startsWith(`..${sep6}`) && !isAbsolute10(fromRoot);
+  const fromRoot = relative5(root, path);
+  return fromRoot.length > 0 && fromRoot !== ".." && !fromRoot.startsWith(`..${sep6}`) && !isAbsolute9(fromRoot);
 }
 function hasExistingSymlink(root, path) {
-  const parts = relative6(root, path).split(sep6);
+  const parts = relative5(root, path).split(sep6);
   for (let length = 0; length <= parts.length; length += 1) {
     const candidate = resolve12(root, ...parts.slice(0, length));
     try {
@@ -79666,7 +79666,7 @@ function proofRootExists(args) {
   }
 }
 function resolveProofWorktreeRoot(detectedProjectRoot) {
-  if (!detectedProjectRoot || !isAbsolute10(detectedProjectRoot) || resolve12(detectedProjectRoot) !== detectedProjectRoot) {
+  if (!detectedProjectRoot || !isAbsolute9(detectedProjectRoot) || resolve12(detectedProjectRoot) !== detectedProjectRoot) {
     return null;
   }
   try {
@@ -79674,7 +79674,7 @@ function resolveProofWorktreeRoot(detectedProjectRoot) {
       cwd: detectedProjectRoot,
       encoding: "utf8"
     }).trim();
-    return root && isAbsolute10(root) && resolve12(root) === root ? root : null;
+    return root && isAbsolute9(root) && resolve12(root) === root ? root : null;
   } catch {
     return null;
   }
@@ -79713,7 +79713,7 @@ function readProofGitInfo(root) {
 function proofRootHasTrackedEntries(root, proofRoot) {
   if (!isNormalizedDescendant(root, proofRoot))
     throw new Error("INVALID_PROOF_ROOT");
-  const path = relative6(root, proofRoot).replaceAll(sep6, "/");
+  const path = relative5(root, proofRoot).replaceAll(sep6, "/");
   return execFileSync14("git", ["ls-files", "-z", "--", path], {
     cwd: root,
     encoding: "utf8"
@@ -79982,7 +79982,7 @@ function createProofCaptureHandler(deps) {
       return current.reasons;
     return sameProofAction(current.value, active.actionIdentity) ? [] : ["PROOF_ACTION_IDENTITY_CHANGED"];
   };
-  const repositoryPath = (active, path) => relative6(active.context.projectRoot, path).replaceAll(sep6, "/");
+  const repositoryPath = (active, path) => relative5(active.context.projectRoot, path).replaceAll(sep6, "/");
   const observedSetupScreenshots = (active) => {
     const owned = /* @__PURE__ */ new Set();
     for (const observation of deps.monitor.observations()) {
@@ -80001,7 +80001,7 @@ function createProofCaptureHandler(deps) {
     ].map((path) => repositoryPath(active, path));
     const requiredOutputs = new Set(phase === "finalized" ? [...proofOutputs, repositoryPath(active, active.context.receiptPath)] : proofOutputs);
     const allowedOutputs = phase === "setup" ? observedSetupScreenshots(active) : phase === "clean" ? /* @__PURE__ */ new Set() : requiredOutputs;
-    const invalidChange = git.changes.some((change) => isAbsolute10(change.path) || change.path === ".." || change.path.startsWith("../") || change.indexStatus !== "?" || change.worktreeStatus !== "?" || change.sourcePath !== void 0);
+    const invalidChange = git.changes.some((change) => isAbsolute9(change.path) || change.path === ".." || change.path.startsWith("../") || change.indexStatus !== "?" || change.worktreeStatus !== "?" || change.sourcePath !== void 0);
     const changedPaths = new Set(git.changes.map((change) => change.path.replaceAll("\\", "/")));
     const unrelated = [...changedPaths].some((path) => !allowedOutputs.has(path));
     const missing = (phase === "validation" || phase === "finalized") && [...requiredOutputs].some((path) => !changedPaths.has(path));

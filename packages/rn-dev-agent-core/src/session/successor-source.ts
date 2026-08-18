@@ -1,5 +1,5 @@
 import { realpathSync } from 'node:fs';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import {
   deleteStateFile,
   readJsonStateFile,
@@ -182,22 +182,17 @@ function canonicalOrRaw(path: string, canonicalize: (value: string) => string): 
   }
 }
 
-function isWithin(root: string, candidate: string): boolean {
-  if (candidate === root) return true;
-  const child = relative(root, candidate);
-  return child.length > 0 && !child.startsWith('..') && !isAbsolute(child);
-}
-
 // GH #776: pinning only the worker's process cwd is not enough — findProjectRoot()
 // prefers RN_PROJECT_ROOT and CLAUDE_USER_CWD over the cwd, so a recycle into a
 // linked worktree would still resolve the harness startup tree for every
 // cwd-default handler. The inherited roots are rewritten to the bound root when
-// the spawn diverges from the supervisor's boot cwd; a first boot (no divergence)
-// only gets an accurate PWD.
+// the spawn diverges from the supervisor's boot cwd — containment under the bound
+// root is not enough, since a nested worktree or monorepo app under it resolves to
+// itself. A first boot (no divergence) only gets an accurate PWD.
 export function resolveWorkerSpawnRootEnvironment(input: {
   workerCwd: string;
   bootCwd: string;
-  inherited: { CLAUDE_USER_CWD?: string; RN_PROJECT_ROOT?: string };
+  inherited: { RN_PROJECT_ROOT?: string };
   canonicalize?: (path: string) => string;
 }): { set: Record<string, string>; unset: string[] } {
   const canonicalize = input.canonicalize ?? realpathSync;
@@ -205,12 +200,9 @@ export function resolveWorkerSpawnRootEnvironment(input: {
   const set: Record<string, string> = { PWD: worker };
   const unset: string[] = [];
   if (canonicalOrRaw(input.bootCwd, canonicalize) === worker) return { set, unset };
-  const userCwd = input.inherited.CLAUDE_USER_CWD;
-  if (userCwd && !isWithin(worker, canonicalOrRaw(userCwd, canonicalize))) {
-    set.CLAUDE_USER_CWD = worker;
-  }
+  set.CLAUDE_USER_CWD = worker;
   const projectRoot = input.inherited.RN_PROJECT_ROOT;
-  if (projectRoot && !isWithin(worker, canonicalOrRaw(projectRoot, canonicalize))) {
+  if (projectRoot && canonicalOrRaw(projectRoot, canonicalize) !== worker) {
     unset.push('RN_PROJECT_ROOT');
   }
   return { set, unset };
