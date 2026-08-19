@@ -77,7 +77,9 @@ an obligation such as `RUNNER_ADOPTION_REQUIRED` could not be discharged), or
 `ownerIsThisRoot: false` (a proven-dead owner of another app root or declared source in
 this worktree). Report a non-zero `abandonedContenders` too. Print the supported repair,
 `node <package-root>/rn-dev-agent-core/dist/session-doctor.js repair`, but do not execute
-it from doctor. It runs the same proven-dead startup cleanup a fresh transport runs and
+it from doctor. Print it rooted where it can succeed: when `ownerIsThisRoot` is false, that
+is the reported `ownerAppRoot`, because repair from the current root can never release
+another root's owner. It runs the same proven-dead startup cleanup a fresh transport runs and
 never releases a live or unprovable owner; not every stale lock self-heals, only a proven
 -dead owner does. Never recommend deleting or moving files in the authority store.
 

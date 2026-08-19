@@ -70624,7 +70624,7 @@ function createSessionHandler(runtime, dependencies = {}) {
         const current = registry2.getSessionStatus(session2.sessionId);
         if (current?.source.model === "grouped-v1") {
           throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "this session never mints adoption handles; a proven-dead same-root owner is released automatically at startup", void 0, {
-            nextAction: sessionOwnerInspectionRemedy("Adoption handles no longer exist; a proven-dead same-root owner is released by startup cleanup instead.")
+            nextAction: sessionRecoveryRemedy("Adoption handles no longer exist; a proven-dead same-root owner is released by startup cleanup instead.")
           });
         }
         const adoptionHandle = required2(input.adoptionHandle, "adoptionHandle");

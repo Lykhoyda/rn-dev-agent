@@ -60,7 +60,7 @@ import {
   stopBoundRunner,
 } from '../session/process-cleanup.js';
 import { deviceExistsOnHost } from '../session/device-existence.js';
-import { sessionOwnerInspectionRemedy } from '../session/recovery-remedy.js';
+import { sessionRecoveryRemedy } from '../session/recovery-remedy.js';
 import {
   ensureAndroidMetroReverse,
   removeAndroidMetroReverse,
@@ -2283,7 +2283,7 @@ export function createSessionHandler(
             'this session never mints adoption handles; a proven-dead same-root owner is released automatically at startup',
             undefined,
             {
-              nextAction: sessionOwnerInspectionRemedy(
+              nextAction: sessionRecoveryRemedy(
                 'Adoption handles no longer exist; a proven-dead same-root owner is released by startup cleanup instead.',
               ),
             },

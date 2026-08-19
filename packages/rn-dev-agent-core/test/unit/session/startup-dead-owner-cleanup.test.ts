@@ -845,7 +845,12 @@ test('L4: grouped adopt_stale refuses before requiring an unminted handle', asyn
     meta?: { nextAction?: string };
   };
   assert.equal(body.code, 'HANDOFF_NOT_AUTHORIZED');
-  assert.match(String(body.meta?.nextAction ?? ''), /startup|restart/i);
+  const nextAction = String(body.meta?.nextAction ?? '');
+  assert.match(nextAction, /startup cleanup/i);
+  assert.match(nextAction, /session-doctor\.js" repair/);
+  // The lead already states the owner is proven dead and released automatically, so the
+  // remedy must not send the reader off to close a session that is already gone.
+  assert.doesNotMatch(nextAction, /close that session/, nextAction);
   assert.equal(f.registry.getSessionStatus('contender')?.state, 'blocked');
   assert.equal(f.registry.getClaim('source', 'worktree-1')?.sessionId, 'owner');
 });
