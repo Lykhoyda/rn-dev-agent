@@ -27,3 +27,9 @@ export function sessionCleanupObligationRemedy(lead) {
         `clients can reconnect with /mcp instead. Neither releases a live or unprovable owner. ` +
         `${SESSION_RECOVERY_DOCS}.`);
 }
+export function sessionDeclaredSourceRemedy(lead) {
+    return (`${lead} Restore the declared manifests that produced the prior identity, then run ` +
+        `${HEADLESS_SESSION_RECOVERY_COMMAND} from this app root or reconnect the transport with ` +
+        `/mcp, and reapply the manifest changes afterwards; otherwise use a separate worktree. ` +
+        `${SESSION_RECOVERY_DOCS}.`);
+}

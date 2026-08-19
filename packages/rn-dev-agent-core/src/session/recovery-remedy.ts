@@ -43,3 +43,12 @@ export function sessionCleanupObligationRemedy(lead: string): string {
     `${SESSION_RECOVERY_DOCS}.`
   );
 }
+
+export function sessionDeclaredSourceRemedy(lead: string): string {
+  return (
+    `${lead} Restore the declared manifests that produced the prior identity, then run ` +
+    `${HEADLESS_SESSION_RECOVERY_COMMAND} from this app root or reconnect the transport with ` +
+    `/mcp, and reapply the manifest changes afterwards; otherwise use a separate worktree. ` +
+    `${SESSION_RECOVERY_DOCS}.`
+  );
+}

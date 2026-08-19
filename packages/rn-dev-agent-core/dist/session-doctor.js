@@ -4,7 +4,7 @@
 import { parseDeclaredManifests } from './session/declared-source-contract.js';
 import { inspectSessionOwner } from './session/process-owner.js';
 import { openSessionRegistry, SessionAuthorityError, } from './session/registry.js';
-import { HEADLESS_SESSION_RECOVERY_COMMAND, sessionCleanupObligationRemedy, sessionOtherRootRecoveryRemedy, sessionOwnerInspectionRemedy, sessionRecoveryRemedy, } from './session/recovery-remedy.js';
+import { HEADLESS_SESSION_RECOVERY_COMMAND, sessionCleanupObligationRemedy, sessionDeclaredSourceRemedy, sessionOtherRootRecoveryRemedy, sessionOwnerInspectionRemedy, sessionRecoveryRemedy, } from './session/recovery-remedy.js';
 import { resolveSourceIdentity } from './session/source-identity.js';
 import { runStartupCleanupForSource } from './session/startup-cleanup.js';
 import { resolveAuthorityStateLayout } from './session/state-root.js';
@@ -30,6 +30,9 @@ function remedyFor(ownership) {
         }
         if (ownership.owner === 'unprovable') {
             return sessionOwnerInspectionRemedy('The identity of the owner holding this worktree could not be proven, so it is treated as live; it belongs to a different app root or declared source.');
+        }
+        if (ownership.mismatch === 'source-identity') {
+            return sessionDeclaredSourceRemedy('The proven-dead owner has a different source identity for this same app root, so startup cleanup cannot release it under the current declared manifests.');
         }
         return sessionOtherRootRecoveryRemedy('The proven-dead owner belongs to a different app root or declared source in this worktree, so this root cannot release it.');
     }
@@ -64,6 +67,7 @@ function holderOf(ownership) {
     return {
         ownerSession: ownership.holder.session,
         ...(ownership.holder.appRoot === undefined ? {} : { ownerAppRoot: ownership.holder.appRoot }),
+        ...(ownership.mismatch === undefined ? {} : { ownerMismatch: ownership.mismatch }),
     };
 }
 function inspect() {

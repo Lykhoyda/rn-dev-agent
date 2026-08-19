@@ -74,12 +74,14 @@ instead of a generic stale-lock story:
 `sameRootOwner: unprovable` (the recorded owner's process identity cannot be read, so it
 is conservatively treated as live), `startupCleanupBlocked` (the owner is proven dead but
 an obligation such as `RUNNER_ADOPTION_REQUIRED` could not be discharged), or
-`ownerIsThisRoot: false` (a proven-dead owner of another app root or declared source in
-this worktree). Report a non-zero `abandonedContenders` too. Print the supported repair,
+`ownerIsThisRoot: false`, whose `ownerMismatch` says which: `app-root` (a proven-dead owner
+of another app root in this worktree) or `source-identity` (the same app root under different
+declared manifests). Report a non-zero `abandonedContenders` too. Print the supported repair,
 `node <package-root>/rn-dev-agent-core/dist/session-doctor.js repair`, but do not execute
-it from doctor. Print it rooted where it can succeed: when `ownerIsThisRoot` is false, that
-is the reported `ownerAppRoot`, because repair from the current root can never release
-another root's owner. It runs the same proven-dead startup cleanup a fresh transport runs and
+it from doctor. Print it rooted where it can succeed: for `ownerMismatch: app-root` that is
+the reported `ownerAppRoot`, because repair from the current root can never release another
+root's owner. For `ownerMismatch: source-identity` do not re-root it — the payload's own
+remedy names the declared-manifest restore that makes this root's repair work. It runs the same proven-dead startup cleanup a fresh transport runs and
 never releases a live or unprovable owner; not every stale lock self-heals, only a proven
 -dead owner does. Never recommend deleting or moving files in the authority store.
 

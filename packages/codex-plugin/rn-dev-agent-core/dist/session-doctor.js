@@ -7996,6 +7996,9 @@ function sessionOtherRootRecoveryRemedy(lead) {
 function sessionCleanupObligationRemedy(lead) {
   return `${lead} Read the outstanding obligation with ${HEADLESS_SESSION_REPORT_COMMAND} from the app root, clear what it names, then run ${HEADLESS_SESSION_RECOVERY_COMMAND}; interactive clients can reconnect with /mcp instead. Neither releases a live or unprovable owner. ${SESSION_RECOVERY_DOCS}.`;
 }
+function sessionDeclaredSourceRemedy(lead) {
+  return `${lead} Restore the declared manifests that produced the prior identity, then run ${HEADLESS_SESSION_RECOVERY_COMMAND} from this app root or reconnect the transport with /mcp, and reapply the manifest changes afterwards; otherwise use a separate worktree. ${SESSION_RECOVERY_DOCS}.`;
+}
 var SESSION_DOCTOR, HEADLESS_SESSION_RECOVERY_COMMAND, HEADLESS_SESSION_REPORT_COMMAND, SESSION_RECOVERY_DOCS;
 var init_recovery_remedy = __esm({
   "packages/rn-dev-agent-core/dist/session/recovery-remedy.js"() {
@@ -8533,7 +8536,7 @@ var init_registry = __esm({
               return {
                 requirement: "attach",
                 priorOwner: "stale",
-                nextAction: "The proven-dead owner has a different source identity for this app root, so startup cleanup cannot release it under the current declared manifests. Restore the declared manifests that produced the prior identity, start and close rn-dev-agent to release its authority, then reapply the manifest changes; otherwise use a separate worktree."
+                nextAction: sessionDeclaredSourceRemedy("The proven-dead owner has a different source identity for this app root, so startup cleanup cannot release it under the current declared manifests.")
               };
             }
             const blocked = readStartupCleanupBlocker(prior.bindings_json);
@@ -9623,9 +9626,12 @@ var init_registry = __esm({
           status = "unknown";
         }
         const blocked = readStartupCleanupBlocker(row.bindings_json);
+        const sameAppRoot = row.worktree_key === input.worktreeKey && row.app_root_key === input.appRootKey;
+        const sameSource = row.source_key === input.sourceKey;
         return {
           owner: status === "match" ? "live" : status === "mismatch" ? "stale" : "unprovable",
-          sameRoot: row.source_key === input.sourceKey && row.worktree_key === input.worktreeKey && row.app_root_key === input.appRootKey,
+          sameRoot: sameAppRoot && sameSource,
+          ...sameAppRoot ? sameSource ? {} : { mismatch: "source-identity" } : { mismatch: "app-root" },
           abandonedContenders,
           holder: {
             session: row.session_id.slice(0, 12),
@@ -16506,6 +16512,9 @@ function remedyFor(ownership) {
     if (ownership.owner === "unprovable") {
       return sessionOwnerInspectionRemedy("The identity of the owner holding this worktree could not be proven, so it is treated as live; it belongs to a different app root or declared source.");
     }
+    if (ownership.mismatch === "source-identity") {
+      return sessionDeclaredSourceRemedy("The proven-dead owner has a different source identity for this same app root, so startup cleanup cannot release it under the current declared manifests.");
+    }
     return sessionOtherRootRecoveryRemedy("The proven-dead owner belongs to a different app root or declared source in this worktree, so this root cannot release it.");
   }
   if (ownership.owner === "live") {
@@ -16535,7 +16544,8 @@ function holderOf(ownership) {
     return {};
   return {
     ownerSession: ownership.holder.session,
-    ...ownership.holder.appRoot === void 0 ? {} : { ownerAppRoot: ownership.holder.appRoot }
+    ...ownership.holder.appRoot === void 0 ? {} : { ownerAppRoot: ownership.holder.appRoot },
+    ...ownership.mismatch === void 0 ? {} : { ownerMismatch: ownership.mismatch }
   };
 }
 function inspect() {

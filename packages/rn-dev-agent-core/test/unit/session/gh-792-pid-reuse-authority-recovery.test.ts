@@ -1102,3 +1102,88 @@ test('GH #792: a cross-root owner is never described as same-root in the same re
   );
   assert.match(String(payload.remedy), /different app root or declared source/);
 });
+
+test('GH #792: declared-manifest drift gets the manifest remedy, not a self-referential root', () => {
+  const stateHome = temporaryStateHome();
+  const appRoot = join(stateHome, 'app');
+  mkdirSync(appRoot);
+  const manifest = join(appRoot, 'package.json');
+  writeFileSync(manifest, '{"name":"gh-792-declared","version":"1.0.0"}');
+  const environment = {
+    ...process.env,
+    XDG_STATE_HOME: stateHome,
+    RN_DEV_AGENT_DECLARED_ROOT: appRoot,
+    RN_DEV_AGENT_DECLARED_MANIFESTS: 'package.json',
+  };
+  const run = (command: string) => {
+    try {
+      return {
+        code: 0,
+        payload: JSON.parse(
+          execFileSync(process.execPath, [join(distRoot, 'session-doctor.js'), command, '--json'], {
+            cwd: appRoot,
+            encoding: 'utf8',
+            env: environment,
+          }),
+        ) as Record<string, unknown>,
+      };
+    } catch (error) {
+      const failure = error as { status?: number; stdout?: string };
+      return {
+        code: failure.status ?? 1,
+        payload: JSON.parse(String(failure.stdout)) as Record<string, unknown>,
+      };
+    }
+  };
+
+  const before = resolveSourceIdentity(appRoot, {
+    declaredRoot: appRoot,
+    declaredManifests: ['package.json'],
+  });
+  const layout = createAuthorityStateLayout(join(stateHome, 'rn-dev-agent'));
+  const registry = openSessionRegistry(layout.registry, { ownerStatus: inspectSessionOwner });
+  const owner = registry.createSession({
+    sessionId: 'declared-source-owner',
+    sourceKey: before.sourceKey,
+    worktreeKey: before.worktreeKey,
+    appRootKey: before.appRootKey,
+    supervisor: { pid: 1, token: 'birth-of-the-dead-owner' },
+    source: { ...before, model: 'grouped-v1' },
+    bindings: {},
+  });
+  registry.claimResources(owner, [{ type: 'source', key: before.worktreeKey }]);
+  registry.updateBindings(owner, { state: 'source_bound', bindings: {} });
+  registry.close();
+
+  // Editing a declared manifest re-derives sourceKey while the worktree and app root keys
+  // stay identical, so the claim survives on a root that can no longer match it.
+  writeFileSync(manifest, '{"name":"gh-792-declared","version":"1.0.1"}');
+  const after = resolveSourceIdentity(appRoot, {
+    declaredRoot: appRoot,
+    declaredManifests: ['package.json'],
+  });
+  assert.notEqual(after.sourceKey, before.sourceKey);
+  assert.equal(after.worktreeKey, before.worktreeKey);
+  assert.equal(after.appRootKey, before.appRootKey);
+
+  const report = run('report');
+  assert.equal(report.payload.ownerIsThisRoot, false);
+  assert.equal(report.payload.ownerMismatch, 'source-identity');
+  assert.equal(report.payload.sameRootOwner, 'stale');
+  // The owner's app root IS this directory, so re-rooting the repair is a loop.
+  assert.equal(report.payload.ownerAppRoot, report.payload.appRoot);
+  const remedy = String(report.payload.remedy);
+  assert.match(remedy, /declared manifests/);
+  assert.doesNotMatch(remedy, /from that app root/, remedy);
+  assert.match(remedy, /session-doctor\.js" repair/);
+
+  // Restoring the manifests is what makes this root's repair reachable again.
+  const stillWedged = run('repair');
+  assert.deepEqual(stillWedged.payload.released, []);
+  assert.equal(stillWedged.code, 1);
+  writeFileSync(manifest, '{"name":"gh-792-declared","version":"1.0.0"}');
+  const repaired = run('repair');
+  assert.deepEqual(repaired.payload.released, ['declared-source-owner']);
+  assert.equal(repaired.code, 0);
+  assert.equal(run('report').payload.sameRootOwner, 'absent');
+});

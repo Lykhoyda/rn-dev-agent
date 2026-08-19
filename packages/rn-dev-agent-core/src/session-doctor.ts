@@ -11,6 +11,7 @@ import {
 import {
   HEADLESS_SESSION_RECOVERY_COMMAND,
   sessionCleanupObligationRemedy,
+  sessionDeclaredSourceRemedy,
   sessionOtherRootRecoveryRemedy,
   sessionOwnerInspectionRemedy,
   sessionRecoveryRemedy,
@@ -48,6 +49,11 @@ function remedyFor(ownership: SourceOwnershipInspection): string {
     if (ownership.owner === 'unprovable') {
       return sessionOwnerInspectionRemedy(
         'The identity of the owner holding this worktree could not be proven, so it is treated as live; it belongs to a different app root or declared source.',
+      );
+    }
+    if (ownership.mismatch === 'source-identity') {
+      return sessionDeclaredSourceRemedy(
+        'The proven-dead owner has a different source identity for this same app root, so startup cleanup cannot release it under the current declared manifests.',
       );
     }
     return sessionOtherRootRecoveryRemedy(
@@ -89,6 +95,7 @@ function holderOf(ownership: SourceOwnershipInspection): Record<string, unknown>
   return {
     ownerSession: ownership.holder.session,
     ...(ownership.holder.appRoot === undefined ? {} : { ownerAppRoot: ownership.holder.appRoot }),
+    ...(ownership.mismatch === undefined ? {} : { ownerMismatch: ownership.mismatch }),
   };
 }
 

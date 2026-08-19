@@ -13,6 +13,7 @@ import { NON_GIT_DECLARATION_NEXT_ACTION } from './declared-source-contract.js';
 import { probeMetroListener } from './metro-binding.js';
 import {
   sessionCleanupObligationRemedy,
+  sessionDeclaredSourceRemedy,
   sessionOtherRootRecoveryRemedy,
   sessionOwnerInspectionRemedy,
   sessionRecoveryRemedy,
@@ -254,6 +255,8 @@ export interface StartupCleanupBlocker {
 export interface SourceOwnershipInspection {
   owner: 'absent' | 'live' | 'stale' | 'unprovable';
   sameRoot: boolean;
+  /** Which key differs when `sameRoot` is false; each has its own reachable remedy. */
+  mismatch?: 'app-root' | 'source-identity';
   abandonedContenders: number;
   /**
    * Same-user local diagnostics for the doctor CLI only. No refusal text and no
@@ -1228,8 +1231,9 @@ export class SessionRegistry {
           return {
             requirement: 'attach',
             priorOwner: 'stale',
-            nextAction:
-              'The proven-dead owner has a different source identity for this app root, so startup cleanup cannot release it under the current declared manifests. Restore the declared manifests that produced the prior identity, start and close rn-dev-agent to release its authority, then reapply the manifest changes; otherwise use a separate worktree.',
+            nextAction: sessionDeclaredSourceRemedy(
+              'The proven-dead owner has a different source identity for this app root, so startup cleanup cannot release it under the current declared manifests.',
+            ),
           };
         }
         // Only cleanup without a retained refusal may promise automatic convergence.
@@ -3272,12 +3276,19 @@ export class SessionRegistry {
       status = 'unknown';
     }
     const blocked = readStartupCleanupBlocker(row.bindings_json);
+    // Same order the cleanup-candidate gate and `inspectRecoveryRequirement` use: an app
+    // root the reader cannot reach, then a declared source identity they can restore.
+    const sameAppRoot =
+      row.worktree_key === input.worktreeKey && row.app_root_key === input.appRootKey;
+    const sameSource = row.source_key === input.sourceKey;
     return {
       owner: status === 'match' ? 'live' : status === 'mismatch' ? 'stale' : 'unprovable',
-      sameRoot:
-        row.source_key === input.sourceKey &&
-        row.worktree_key === input.worktreeKey &&
-        row.app_root_key === input.appRootKey,
+      sameRoot: sameAppRoot && sameSource,
+      ...(sameAppRoot
+        ? sameSource
+          ? {}
+          : { mismatch: 'source-identity' as const }
+        : { mismatch: 'app-root' as const }),
       abandonedContenders,
       holder: {
         session: row.session_id.slice(0, 12),

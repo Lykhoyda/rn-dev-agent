@@ -315,9 +315,10 @@ non-zero when it finds the root wedged. `repair`
 runs exactly the startup cleanup a fresh transport runs: it releases a
 **proven-dead** same-root owner and discards abandoned contender rows that never
 held a claim. It never releases an owner that is live or whose identity is
-unprovable, and exits non-zero when it finds one — the abandoned claim-less
-contender rows are still reaped. There is no force-steal, by timeout or
-otherwise.
+unprovable, and exits non-zero when that owner holds this exact root — a live
+owner of a different app root leaves nothing to clean up here, so that run exits
+zero while `report` still names the holder. The abandoned claim-less contender
+rows are reaped either way. There is no force-steal, by timeout or otherwise.
 
 A recorded pid that the OS has recycled into a process you cannot inspect counts
 as **proven dead** (GH #792): the recorded owner could only ever be a process of
