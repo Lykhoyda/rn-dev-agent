@@ -1,5 +1,6 @@
 import { useEffect, useState, type JSX } from 'react';
 import { observeUrl } from '../authority';
+import { authorityRecoveryHint } from '../authority-hints';
 import type { MirrorState } from '../types';
 
 interface DevicePaneProps {
@@ -66,7 +67,14 @@ export function DevicePane({
     return () => clearInterval(id);
   }, [mirrorBroken]);
 
-  const useMirror = !mirrorBroken;
+  // The server states this on stream open when no MirrorManager is configured,
+  // so the endpoint is a permanent 404 — never probe it.
+  const mirrorDisabled = mirror?.status === 'disabled';
+  const useMirror = !mirrorBroken && !mirrorDisabled;
+
+  // A typed authority refusal is an explicit blocked state that replaces the
+  // mirror and any stale screenshot (App latches it across probe retries).
+  const blocked = mirror?.status === 'error' && mirror.code ? mirror : null;
 
   const fallbackSrc =
     liveShotSeq != null
@@ -92,21 +100,26 @@ export function DevicePane({
     }
   };
 
-  const statusLine =
-    mirror?.status === 'streaming'
+  // The blocked panel already carries the code, reason and recovery path;
+  // repeating them in the footer buries the one actionable step.
+  const statusLine = blocked
+    ? null
+    : mirror?.status === 'streaming'
       ? `mirror: ${mirror.pipeline}${mirror.fps ? ` ~${mirror.fps}fps` : ''}`
       : mirror?.status === 'error'
         ? `mirror off: ${mirror.reason ?? 'error'}`
         : mirror?.status === 'starting'
           ? 'mirror: connecting…'
-          : null;
+          : mirrorDisabled
+            ? 'mirror: disabled'
+            : null;
 
   // A hint on a *streaming* status is the backend saying the pipeline works
   // but a better one is available (simctl fallback → install idb); that is
   // advice, not a failure, so it gets the header banner. Hints on error
   // statuses stay in the footer next to the failure reason.
   const streamingHint = mirror?.status === 'streaming' ? mirror.hint : undefined;
-  const footerHint = mirror?.status === 'streaming' ? undefined : mirror?.hint;
+  const footerHint = blocked || mirror?.status === 'streaming' ? undefined : mirror?.hint;
 
   return (
     <div className="pane center" data-testid="device-pane">
@@ -116,7 +129,29 @@ export function DevicePane({
       </div>
       {streamingHint && <div className="mirror-banner">{streamingHint}</div>}
       <div className="screen">
-        {useMirror ? (
+        {blocked ? (
+          <>
+            <div className="empty empty-guide device-blocked" data-testid="device-blocked">
+              <div className="empty-title">Device blocked</div>
+              <div className="mono device-blocked-code">{blocked.code}</div>
+              {blocked.reason && <div className="device-blocked-reason">{blocked.reason}</div>}
+              {authorityRecoveryHint(blocked.code) && (
+                <div className="device-blocked-hint">{authorityRecoveryHint(blocked.code)}</div>
+              )}
+            </div>
+            {/* Hidden probe: keeps re-attaching (15s retry loop) so a later
+                authority bind pushes a fresh status and clears the blocked
+                state without a manual reload. */}
+            {useMirror && (
+              <img
+                style={{ display: 'none' }}
+                src={observeUrl(`/api/device/mirror?t=${nonce}`)}
+                alt=""
+                onError={onMirrorError}
+              />
+            )}
+          </>
+        ) : useMirror ? (
           <div className="device-frame">
             <img
               data-testid="device-mirror"

@@ -46,9 +46,26 @@ export interface E2eRunResult {
 }
 
 export interface MirrorState {
-  status: 'starting' | 'streaming' | 'error' | 'idle';
+  status: 'starting' | 'streaming' | 'error' | 'idle' | 'disabled';
   pipeline?: string;
   fps?: number;
   hint?: string;
   reason?: string;
+  /** GH #791: typed authority code — drives the explicit blocked device state. */
+  code?: string;
+}
+
+/** GH #791: device-axis readiness, distinct from SSE transport liveness. */
+export type DeviceReadiness = 'live' | 'connecting' | 'blocked' | 'off' | 'disabled';
+
+export function deviceReadiness(mirror: MirrorState | null): DeviceReadiness | null {
+  if (mirror === null) return null;
+  // Configured off, not pending: nothing will ever resolve this axis.
+  if (mirror.status === 'disabled') return 'disabled';
+  // 'streaming' is frame-backed: the server only publishes it after a
+  // validated JPEG frame. A typed refusal code on any other status blocks.
+  if (mirror.status === 'streaming') return 'live';
+  if (mirror.code) return 'blocked';
+  if (mirror.status === 'starting') return 'connecting';
+  return 'off';
 }

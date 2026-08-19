@@ -7,19 +7,45 @@ export interface MirrorTarget {
 
 export type MirrorTargetResolution =
   | { ok: true; target: MirrorTarget }
-  | { ok: false; reason: string; hint?: string };
+  | { ok: false; reason: string; hint?: string; code?: string };
 
 export interface MirrorTargetDeps {
   getPlatform(): 'ios' | 'android' | null;
   getSessionDeviceId(): string | undefined;
   resolveIosUdid(): Promise<string | undefined>;
   listAndroidSerials(): Promise<string[]>;
+  /**
+   * GH #791: the PR #786 fence mapper — null permits legacy ambient inference,
+   * {} means an authority session exists without a proven device binding.
+   */
+  getRegistryDeviceBinding?(): { platform?: string; deviceId?: string } | null;
+}
+
+function isMirrorPlatform(p: string | undefined): p is 'ios' | 'android' {
+  return p === 'ios' || p === 'android';
 }
 
 export function buildMirrorTargetResolver(
   deps: MirrorTargetDeps,
 ): () => Promise<MirrorTargetResolution> {
   return async () => {
+    const registry = deps.getRegistryDeviceBinding?.() ?? null;
+    if (registry !== null) {
+      if (isMirrorPlatform(registry.platform) && registry.deviceId) {
+        return {
+          ok: true,
+          target: { platform: registry.platform, deviceId: registry.deviceId },
+        };
+      }
+      return {
+        ok: false,
+        code: 'DEVICE_AUTHORITY_UNBOUND',
+        reason:
+          'device authority is not bound — run rn_session status and repair the authority axis it names',
+        hint: 'Observe mirrors only the session-proven device while an authority session is present',
+      };
+    }
+
     const platform = deps.getPlatform();
     if (platform === null) {
       return {

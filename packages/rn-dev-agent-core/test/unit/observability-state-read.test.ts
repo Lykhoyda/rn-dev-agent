@@ -36,8 +36,14 @@ test('exposes exactly the three panel kinds', () => {
 
 test('returns the parsed tool envelope for each known kind', async () => {
   const read = buildStateRead({ acquire: openGate(), handlers: HANDLERS() });
-  assert.deepEqual(await read('route'), { ok: true, data: { routeName: 'Home' } });
-  assert.deepEqual(await read('store'), { ok: true, data: { cart: { items: 2 } } });
+  assert.deepEqual(await read('route'), {
+    ok: true,
+    data: { routeName: 'Home' },
+  });
+  assert.deepEqual(await read('store'), {
+    ok: true,
+    data: { cart: { items: 2 } },
+  });
   assert.deepEqual(await read('tree'), { ok: true, data: { components: [] } });
 });
 
@@ -67,7 +73,10 @@ test('refuses when the arbiter lease is denied — handler never runs', async ()
 
 test('the lease is released after a successful read', async () => {
   const released: string[] = [];
-  const read = buildStateRead({ acquire: openGate(released), handlers: HANDLERS() });
+  const read = buildStateRead({
+    acquire: openGate(released),
+    handlers: HANDLERS(),
+  });
   await read('route');
   assert.deepEqual(released, ['released']);
 });
@@ -125,12 +134,61 @@ test('a throwing acquire fails safe to an ok:false envelope', async () => {
   assert.equal(out.ok, false);
 });
 
+// GH #791: authority refusals thrown past the gate must keep their typed code
+// so the Observe UI can render a blocked state with a recovery path.
+test('a thrown coded error (SessionAuthorityError shape) keeps its code in the envelope', async () => {
+  const read = buildStateRead({
+    acquire: openGate(),
+    handlers: HANDLERS({
+      route: async () => {
+        throw Object.assign(new Error('APP_INSTALL_IDENTITY_CHANGED: I authority is not bound'), {
+          code: 'APP_INSTALL_IDENTITY_CHANGED',
+        });
+      },
+    }),
+  });
+  const out = (await read('route')) as Envelope;
+  assert.equal(out.ok, false);
+  assert.equal(out.code, 'APP_INSTALL_IDENTITY_CHANGED');
+  assert.match(out.error ?? '', /authority is not bound/);
+});
+
+test('a throwing acquire with a code keeps it in the envelope', async () => {
+  const read = buildStateRead({
+    acquire: () => {
+      throw Object.assign(new Error('DEVICE_AUTHORITY_MISMATCH: held elsewhere'), {
+        code: 'DEVICE_AUTHORITY_MISMATCH',
+      });
+    },
+    handlers: HANDLERS(),
+  });
+  const out = (await read('route')) as Envelope;
+  assert.equal(out.ok, false);
+  assert.equal(out.code, 'DEVICE_AUTHORITY_MISMATCH');
+});
+
+test('a handler rejecting with null still yields an ok:false envelope (never rejects)', async () => {
+  const read = buildStateRead({
+    acquire: openGate(),
+    handlers: HANDLERS({
+      route: async () => {
+        throw null;
+      },
+    }),
+  });
+  const out = (await read('route')) as Envelope;
+  assert.equal(out.ok, false);
+  assert.equal(out.code, undefined);
+});
+
 test('annotate:false route read returns nav state without mutation-absence meta', async () => {
   const navState = { routeName: 'Home', index: 0, routes: [{ name: 'Home' }] };
   const client = createMockClient({
     evaluate: async () => ({ value: JSON.stringify(navState) }),
   });
-  const handler = createNavigationStateHandler(() => client, { annotate: false });
+  const handler = createNavigationStateHandler(() => client, {
+    annotate: false,
+  });
   const out = JSON.parse((await handler({})).content[0].text) as Envelope;
   assert.equal(out.ok, true);
   assert.deepEqual(out.data, navState);

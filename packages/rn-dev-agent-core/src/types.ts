@@ -360,6 +360,8 @@ export type ToolErrorCode =
   | 'WDA_BOOTSTRAP_FAILED'
   // Direct maestro-runner/WDA device evidence did not match the exact target.
   | 'DEVICE_AUTHORITY_MISMATCH'
+  // GH #791: an authority session is present but no device binding is provable.
+  | 'DEVICE_AUTHORITY_UNBOUND'
   // Audit B5: cross_platform_verify verdict FAIL (elements differ across
   // platforms) — distinct from the partial-coverage missing-snapshot warning.
   | 'CROSS_PLATFORM_MISMATCH'

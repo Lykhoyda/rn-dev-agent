@@ -7,6 +7,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ObservabilityServer } from '../../dist/observability/server.js';
+import type { MirrorManager } from '../../dist/observability/mirror/manager.js';
 import { Recorder } from '../../dist/observability/recorder.js';
 import { okResult } from '../../dist/utils.js';
 
@@ -19,7 +20,7 @@ const OBSERVE_AUTHORITY = {
 };
 
 // Minimal decodable 1x1 JPEG so the device hero <img> gets naturalWidth > 0.
-const JPEG_1PX = Buffer.from(
+export const JPEG_1PX = Buffer.from(
   '/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==',
   'base64',
 );
@@ -35,6 +36,10 @@ export interface FixtureOverrides {
   triggerRun?: () => Promise<unknown>;
   /** Replaces the canned GET /api/e2e/actions dep; throw to exercise refusals. */
   listActions?: () => Promise<unknown>;
+  /** GH #791: replaces the canned GET /api/state/:kind reader (parsed envelope). */
+  stateRead?: (kind: string) => Promise<unknown | null>;
+  /** GH #791: builds the MirrorManager serving GET /api/device/mirror (wire pushStatus to recorder.push). */
+  mirror?: (recorder: Recorder) => MirrorManager;
 }
 
 export async function startFixture(overrides: FixtureOverrides = {}): Promise<Fixture> {
@@ -49,7 +54,12 @@ export async function startFixture(overrides: FixtureOverrides = {}): Promise<Fi
     status: 'PASS',
     latencyMs: 12,
   });
-  recorder.record({ tool: 'device_press', params: { ref: '@e3' }, status: 'PASS', latencyMs: 340 });
+  recorder.record({
+    tool: 'device_press',
+    params: { ref: '@e3' },
+    status: 'PASS',
+    latencyMs: 340,
+  });
   recorder.record({
     tool: 'cdp_store_state',
     params: {},
@@ -86,7 +96,14 @@ export async function startFixture(overrides: FixtureOverrides = {}): Promise<Fi
             runId: 'run-live',
             verdict: 'green',
             totals: { total: 1, passed: 1, failed: 0, skipped: 0 },
-            results: [{ testId: 'flow-a', passed: true, durationMs: 1200, classification: 'pass' }],
+            results: [
+              {
+                testId: 'flow-a',
+                passed: true,
+                durationMs: 1200,
+                classification: 'pass',
+              },
+            ],
             newlyFailing: [],
           },
         })),
@@ -109,7 +126,12 @@ export async function startFixture(overrides: FixtureOverrides = {}): Promise<Fi
             verdict: 'red',
             totals: { total: 2, passed: 1, failed: 1, skipped: 0 },
             results: [
-              { testId: 'login-flow', passed: true, durationMs: 800, classification: 'pass' },
+              {
+                testId: 'login-flow',
+                passed: true,
+                durationMs: 800,
+                classification: 'pass',
+              },
               {
                 testId: 'checkout-flow',
                 passed: false,
@@ -136,26 +158,41 @@ export async function startFixture(overrides: FixtureOverrides = {}): Promise<Fi
       if (actionId === 'login' && missing.length > 0) {
         return { ok: false, missingParams: missing };
       }
-      return { ok: true, output: `ran ${actionId} as ${params?.USERNAME ?? '?'}` };
+      return {
+        ok: true,
+        output: `ran ${actionId} as ${params?.USERNAME ?? '?'}`,
+      };
     },
   };
 
   // GH #579: values deliberately differ from seeded events so specs can tell the source apart.
   const stateStub = {
-    read: async (kind: string) =>
-      kind === 'route'
-        ? { ok: true, data: { routeName: 'LiveHome', routes: [{ name: 'LiveHome' }], index: 0 } }
-        : kind === 'store'
-          ? { ok: true, data: { cart: { items: 3, live: true } } }
-          : kind === 'tree'
-            ? { ok: true, data: { name: 'App', children: [{ name: 'LiveTree' }] } }
-            : null,
+    read:
+      overrides.stateRead ??
+      (async (kind: string) =>
+        kind === 'route'
+          ? {
+              ok: true,
+              data: {
+                routeName: 'LiveHome',
+                routes: [{ name: 'LiveHome' }],
+                index: 0,
+              },
+            }
+          : kind === 'store'
+            ? { ok: true, data: { cart: { items: 3, live: true } } }
+            : kind === 'tree'
+              ? {
+                  ok: true,
+                  data: { name: 'App', children: [{ name: 'LiveTree' }] },
+                }
+              : null),
   };
 
   const server = new ObservabilityServer(
     recorder,
     e2eStub,
-    undefined,
+    overrides.mirror?.(recorder),
     stateStub,
     OBSERVE_AUTHORITY,
   );

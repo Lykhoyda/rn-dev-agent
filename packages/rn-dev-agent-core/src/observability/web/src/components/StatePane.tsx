@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type JSX } from 'react';
 import { observeFetch } from '../authority';
+import { authorityRecoveryHint } from '../authority-hints';
 import type { ActionSummary, AgentEvent, E2eProgress } from '../types';
 import { fmtClock, pretty } from '../derive';
 import { ActionsPanel } from './ActionsPanel';
@@ -28,6 +29,10 @@ interface FetchedState {
   ok: boolean;
   payload?: unknown;
   error?: string;
+  /** Typed refusal code (e.g. APP_INSTALL_IDENTITY_CHANGED) for the recovery hint. */
+  code?: string;
+  /** Backend-authoritative recovery path from the gate's error meta. */
+  nextAction?: string;
   truncated?: boolean;
 }
 
@@ -69,11 +74,19 @@ export function StatePane({
         ok?: boolean;
         data?: unknown;
         error?: string;
+        code?: string;
+        meta?: { nextAction?: string };
         truncated?: boolean;
       };
       const next: FetchedState = env.ok
         ? { at, ok: true, payload: env.data, truncated: env.truncated }
-        : { at, ok: false, error: env.error ?? `HTTP ${r.status}` };
+        : {
+            at,
+            ok: false,
+            error: env.error ?? `HTTP ${r.status}`,
+            code: env.code,
+            nextAction: typeof env.meta?.nextAction === 'string' ? env.meta.nextAction : undefined,
+          };
       // A completion older than the stored result never overwrites it.
       setFetched((prev) => ((prev[t]?.at ?? 0) > at ? prev : { ...prev, [t]: next }));
     } catch (e) {
@@ -121,7 +134,9 @@ export function StatePane({
           setActions(list);
           setActionsError(null);
         } else {
-          const body = (await r.json().catch(() => null)) as { error?: string } | null;
+          const body = (await r.json().catch(() => null)) as {
+            error?: string;
+          } | null;
           if (!fresh()) return;
           setActions([]);
           setActionsError(body?.error ?? `actions unavailable (HTTP ${r.status})`);
@@ -139,6 +154,9 @@ export function StatePane({
   const f = isPayloadTab(tab) ? fetched[tab] : undefined;
   const liveWins = f?.ok === true && (!evOk || f.at > evOk.ts);
   const liveError = f && !f.ok && !evOk ? (f.error ?? 'live read failed') : undefined;
+  // The gate's own nextAction is authoritative; the static map only covers
+  // refusals that carry no meta (e.g. the mirror target fence).
+  const liveRecovery = liveError ? (f?.nextAction ?? authorityRecoveryHint(f?.code)) : undefined;
 
   return (
     <div className="pane right" data-testid="state-pane">
@@ -198,6 +216,11 @@ export function StatePane({
               {liveError && (
                 <div className="state-live-err" data-testid="state-live-err">
                   live read failed: {liveError}
+                </div>
+              )}
+              {liveRecovery && (
+                <div className="state-live-recovery" data-testid="state-live-recovery">
+                  {liveRecovery}
                 </div>
               )}
             </div>

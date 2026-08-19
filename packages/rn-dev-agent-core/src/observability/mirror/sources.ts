@@ -7,8 +7,10 @@ import { JpegFrameExtractor } from './jpeg-stream.js';
 
 export interface MirrorFrameSink {
   onFrame(frame: Buffer): void;
+  /** A source re-arming its own first-frame budget, so the consumer's bound can outlast it. */
+  onRestart?(): void;
   /** Terminal for this attach cycle. err absent = deliberate stop. */
-  onExit(err?: { reason: string; hint?: string }): void;
+  onExit(err?: { reason: string; hint?: string; code?: string }): void;
 }
 
 export interface MirrorSource {
@@ -128,7 +130,9 @@ const scheduleAfter = (fn: () => void, delayMs: number): void => {
 };
 
 const defaultSpawn: SpawnFn = (cmd, args) =>
-  spawn(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'] }) as unknown as SpawnedLike;
+  spawn(cmd, args, {
+    stdio: ['pipe', 'pipe', 'pipe'],
+  }) as unknown as SpawnedLike;
 
 /** absent = not on PATH, ready = usable, broken = present but crashes (GH#578). */
 export type IdbClientState = 'absent' | 'ready' | 'broken';
@@ -232,7 +236,9 @@ export class IosIdbSource implements MirrorSource {
       this.clearFirstFrameTimer();
       if (this.gate.record()) {
         scheduleAfter(() => {
-          if (this.active) this.spawnOnce(sink);
+          if (!this.active) return;
+          sink.onRestart?.();
+          this.spawnOnce(sink);
         }, this.restartDelayMs);
       } else {
         this.fail(sink, 'idb video-stream keeps exiting');
@@ -323,7 +329,10 @@ export class IosSimctlLoopSource implements MirrorSource {
         if (!this.active) break;
         if (!this.gate.record()) {
           if (this.active)
-            sink.onExit({ reason: 'simctl screenshot failing', hint: this.failureHint });
+            sink.onExit({
+              reason: 'simctl screenshot failing',
+              hint: this.failureHint,
+            });
           this.active = false;
           break;
         }
@@ -471,7 +480,9 @@ export class AndroidScreenrecordSource implements MirrorSource {
       killSibling(self);
       if (this.gate.record()) {
         scheduleAfter(() => {
-          if (this.active) this.spawnCycle(sink);
+          if (!this.active) return;
+          sink.onRestart?.();
+          this.spawnCycle(sink);
         }, this.restartDelayMs);
       } else {
         this.active = false;

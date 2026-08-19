@@ -176,6 +176,12 @@ button { font: inherit; }
 .empty { color: #565f89; padding: 14px; }
 .empty-guide { margin: auto; max-width: 320px; text-align: center; line-height: 1.6; }
 .empty-guide .empty-title { color: #a9b1d6; font-weight: 600; margin-bottom: 6px; font-size: 14px; }
+.device-blocked { border: 1px solid #f7768e55; border-radius: 10px; padding: 16px; }
+.device-blocked .empty-title { color: #f7768e; }
+.device-blocked-code { color: #f7768e; font-size: 11px; margin-bottom: 6px; }
+.device-blocked-reason { color: #f7768e; margin-bottom: 8px; }
+.device-blocked-hint { color: #e0af68; }
+.state-live-recovery { color: #e0af68; font-size: 12px; margin-top: 6px; }
 
 /* ── E2E panel (run history + suite results) ───────────── */
 /* The right pane is ~340-450px wide; tables cannot shrink below their

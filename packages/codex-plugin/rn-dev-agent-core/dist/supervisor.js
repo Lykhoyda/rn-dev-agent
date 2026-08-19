@@ -24413,7 +24413,9 @@ var init_sources = __esm({
       else
         setTimeout(fn, delayMs);
     };
-    defaultSpawn = (cmd, args) => spawn5(cmd, args, { stdio: ["pipe", "pipe", "pipe"] });
+    defaultSpawn = (cmd, args) => spawn5(cmd, args, {
+      stdio: ["pipe", "pipe", "pipe"]
+    });
     IosIdbSource = class {
       udid;
       pipeline = "idb";
@@ -24480,8 +24482,10 @@ var init_sources = __esm({
           this.clearFirstFrameTimer();
           if (this.gate.record()) {
             scheduleAfter(() => {
-              if (this.active)
-                this.spawnOnce(sink);
+              if (!this.active)
+                return;
+              sink.onRestart?.();
+              this.spawnOnce(sink);
             }, this.restartDelayMs);
           } else {
             this.fail(sink, "idb video-stream keeps exiting");
@@ -24559,7 +24563,10 @@ var init_sources = __esm({
               break;
             if (!this.gate.record()) {
               if (this.active)
-                sink.onExit({ reason: "simctl screenshot failing", hint: this.failureHint });
+                sink.onExit({
+                  reason: "simctl screenshot failing",
+                  hint: this.failureHint
+                });
               this.active = false;
               break;
             }
@@ -24671,8 +24678,10 @@ var init_sources = __esm({
           killSibling(self);
           if (this.gate.record()) {
             scheduleAfter(() => {
-              if (this.active)
-                this.spawnCycle(sink);
+              if (!this.active)
+                return;
+              sink.onRestart?.();
+              this.spawnCycle(sink);
             }, this.restartDelayMs);
           } else {
             this.active = false;
@@ -85890,6 +85899,11 @@ var init_server3 = __esm({
           }
         });
         write({ type: "snapshot", events: snapshot });
+        const mirrorStatus = this.mirror?.currentStatus();
+        if (mirrorStatus)
+          write(mirrorStatus);
+        else if (!this.mirror)
+          write({ type: "mirror", status: "disabled" });
         const hb = setInterval(() => {
           try {
             res.write(": hb\n\n");
@@ -85928,7 +85942,10 @@ var init_server3 = __esm({
           res.end();
           return;
         }
-        res.writeHead(200, { "Content-Type": shot.contentType, "Cache-Control": "no-store" });
+        res.writeHead(200, {
+          "Content-Type": shot.contentType,
+          "Cache-Control": "no-store"
+        });
         res.end(shot.buf);
       }
       liveScreenshot(res) {
@@ -85938,7 +85955,10 @@ var init_server3 = __esm({
           res.end();
           return;
         }
-        res.writeHead(200, { "Content-Type": shot.contentType, "Cache-Control": "no-store" });
+        res.writeHead(200, {
+          "Content-Type": shot.contentType,
+          "Cache-Control": "no-store"
+        });
         res.end(shot.buf);
       }
       mirrorStream(res) {
@@ -86012,7 +86032,10 @@ var init_server3 = __esm({
       }
       json(res, status, obj) {
         const body = JSON.stringify(obj);
-        res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+        res.writeHead(status, {
+          "Content-Type": "application/json",
+          "Cache-Control": "no-store"
+        });
         res.end(body);
       }
       internalError(res) {
@@ -86035,7 +86058,10 @@ var init_server3 = __esm({
           this.json(res, 405, { error: "method not allowed" });
           return;
         }
-        const check2 = isPostAllowed({ method: req.method, headers: req.headers }, this.e2e.token);
+        const check2 = isPostAllowed({
+          method: req.method,
+          headers: req.headers
+        }, this.e2e.token);
         if (!check2.ok) {
           this.json(res, check2.status, { error: check2.reason });
           return;
@@ -86108,7 +86134,10 @@ var init_server3 = __esm({
           this.json(res, 405, { error: "method not allowed" });
           return;
         }
-        const check2 = isPostAllowed({ method: req.method, headers: req.headers }, this.e2e.token);
+        const check2 = isPostAllowed({
+          method: req.method,
+          headers: req.headers
+        }, this.e2e.token);
         if (!check2.ok) {
           this.json(res, check2.status, { error: check2.reason });
           return;
@@ -86323,6 +86352,14 @@ var init_observe = __esm({
 function isStateKind(kind) {
   return STATE_KINDS.includes(kind);
 }
+function failEnvelope(e) {
+  const code = typeof e === "object" && e !== null ? e.code : void 0;
+  return {
+    ok: false,
+    error: e instanceof Error ? e.message : String(e),
+    ...typeof code === "string" ? { code } : {}
+  };
+}
 function buildStateRead(input) {
   return async (kind) => {
     if (!isStateKind(kind))
@@ -86331,7 +86368,7 @@ function buildStateRead(input) {
     try {
       gate = input.acquire();
     } catch (e) {
-      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      return failEnvelope(e);
     }
     if (!gate.ok) {
       return {
@@ -86351,7 +86388,7 @@ function buildStateRead(input) {
         return { ok: false, error: "non-JSON tool result" };
       }
     } catch (e) {
-      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      return failEnvelope(e);
     } finally {
       try {
         gate.release();
@@ -86412,12 +86449,13 @@ Content-Length: ${frame.length}\r
     Buffer.from("\r\n")
   ]);
 }
-var MIRROR_BOUNDARY, MULTIPART_HEADERS, MirrorManager;
+var MIRROR_BOUNDARY, MAX_WATCHDOG_REARMS, MULTIPART_HEADERS, MirrorManager;
 var init_manager = __esm({
   "packages/rn-dev-agent-core/dist/observability/mirror/manager.js"() {
     "use strict";
     init_sources();
     MIRROR_BOUNDARY = "rnmirror";
+    MAX_WATCHDOG_REARMS = 3;
     MULTIPART_HEADERS = {
       "Content-Type": `multipart/x-mixed-replace; boundary=${MIRROR_BOUNDARY}`,
       "Cache-Control": "no-store",
@@ -86433,7 +86471,11 @@ var init_manager = __esm({
       streamingPipeline = null;
       demoted = false;
       graceTimer = null;
+      watchdogTimer = null;
+      watchdogRearms = 0;
+      unusableFrames = 0;
       graceMs;
+      firstFrameWatchdogMs;
       // Bumped on every teardown (grace-stop, shutdown, source exit) and at the
       // start of every pipeline attempt. Sink callbacks close over the token that
       // was current when their source was started; a mismatch means the source
@@ -86441,9 +86483,88 @@ var init_manager = __esm({
       // (e.g. IosSimctlLoopSource's documented one-trailing-onFrame-after-stop)
       // and must be a no-op rather than reviving a dead cycle.
       cycle = 0;
+      lastStatus = null;
       constructor(deps) {
         this.deps = deps;
         this.graceMs = deps.graceMs ?? 5e3;
+        this.firstFrameWatchdogMs = deps.firstFrameWatchdogMs ?? 45e3;
+      }
+      /** Statuses are transient SSE messages; the server replays this to late subscribers. */
+      currentStatus() {
+        return this.lastStatus;
+      }
+      pushStatus(s) {
+        this.lastStatus = s;
+        this.deps.pushStatus(s);
+      }
+      armWatchdog() {
+        if (this.watchdogTimer)
+          clearTimeout(this.watchdogTimer);
+        this.unusableFrames = 0;
+        this.watchdogTimer = setTimeout(() => {
+          this.watchdogTimer = null;
+          if (this.state === "streaming" || this.state === "idle" || this.state === "error")
+            return;
+          const reason = this.framelessReason();
+          const dying = this.source;
+          const target = this.activeTarget;
+          if (target && this.canDemote(dying)) {
+            this.cycle += 1;
+            dying?.stop();
+            this.source = null;
+            this.demote(target, { reason });
+            return;
+          }
+          this.cycle += 1;
+          dying?.stop();
+          this.source = null;
+          this.activeTarget = null;
+          this.streamingPipeline = null;
+          this.demoted = false;
+          this.latest = null;
+          this.state = "error";
+          this.pushStatus({
+            type: "mirror",
+            status: "error",
+            reason,
+            hint: this.unusableFrames > 0 ? "the capture source is producing data Observe cannot decode as JPEG \u2014 check the mirror pipeline" : "the device may be unreachable \u2014 check the session device, then reload Observe"
+          });
+          this.endAllClients();
+        }, this.firstFrameWatchdogMs);
+      }
+      framelessReason() {
+        const base = `no mirror frame within ${this.firstFrameWatchdogMs}ms`;
+        return this.unusableFrames > 0 ? `${base} \u2014 ${this.unusableFrames} unusable buffer(s) discarded` : base;
+      }
+      // This bound is the source's own first-frame budget plus slack, so a source
+      // that re-arms its budget must restart this one too — otherwise it reaps the
+      // pipeline before the source can demote. Capped: a source that flaps forever
+      // still cannot hold a frameless stream open (GH #791).
+      onSourceRestart() {
+        if (this.state !== "starting")
+          return;
+        if (this.watchdogRearms >= MAX_WATCHDOG_REARMS)
+          return;
+        this.watchdogRearms += 1;
+        this.armWatchdog();
+      }
+      canDemote(dying, err) {
+        return dying?.pipeline === "idb" && this.activeTarget?.platform === "ios" && typeof this.deps.createFallbackSource === "function" && !this.demoted && // A typed exit is a terminal refusal (e.g. authority), never a capture
+        // failure worth demoting around.
+        !err?.code && this.clients.size > 0;
+      }
+      demote(target, cause) {
+        this.demoted = true;
+        this.state = "starting";
+        this.watchdogRearms = 0;
+        this.armWatchdog();
+        void this.startFallback(target, cause);
+      }
+      disarmWatchdog() {
+        if (this.watchdogTimer) {
+          clearTimeout(this.watchdogTimer);
+          this.watchdogTimer = null;
+        }
       }
       attach(client2) {
         client2.writeHead(200, MULTIPART_HEADERS);
@@ -86482,6 +86603,7 @@ var init_manager = __esm({
       }
       shutdown() {
         this.cycle += 1;
+        this.disarmWatchdog();
         if (this.graceTimer) {
           clearTimeout(this.graceTimer);
           this.graceTimer = null;
@@ -86494,6 +86616,7 @@ var init_manager = __esm({
         this.endAllClients();
         this.latest = null;
         this.state = "idle";
+        this.lastStatus = null;
       }
       scheduleGrace() {
         if (this.graceTimer)
@@ -86503,6 +86626,7 @@ var init_manager = __esm({
           if (this.state === "error")
             return;
           this.cycle += 1;
+          this.disarmWatchdog();
           this.source?.stop();
           this.source = null;
           this.activeTarget = null;
@@ -86510,7 +86634,7 @@ var init_manager = __esm({
           this.demoted = false;
           this.latest = null;
           this.state = "idle";
-          this.deps.pushStatus({ type: "mirror", status: "idle" });
+          this.pushStatus({ type: "mirror", status: "idle" });
         }, this.graceMs);
       }
       endAllClients() {
@@ -86539,6 +86663,8 @@ var init_manager = __esm({
       }
       async startPipeline() {
         const myCycle = ++this.cycle;
+        this.watchdogRearms = 0;
+        this.armWatchdog();
         let platform;
         let deviceId;
         try {
@@ -86546,12 +86672,14 @@ var init_manager = __esm({
           if (myCycle !== this.cycle)
             return;
           if (!resolution.ok) {
+            this.disarmWatchdog();
             this.state = "error";
-            this.deps.pushStatus({
+            this.pushStatus({
               type: "mirror",
               status: "error",
               reason: resolution.reason,
-              hint: resolution.hint
+              hint: resolution.hint,
+              code: resolution.code
             });
             this.endAllClients();
             return;
@@ -86562,7 +86690,7 @@ var init_manager = __esm({
           this.activeTarget = target;
           this.demoted = false;
           this.streamingPipeline = null;
-          this.deps.pushStatus({
+          this.pushStatus({
             type: "mirror",
             status: "starting",
             platform: target.platform,
@@ -86580,6 +86708,11 @@ var init_manager = __esm({
                 return;
               this.onSourceFrame(frame, target, source);
             },
+            onRestart: () => {
+              if (myCycle !== this.cycle)
+                return;
+              this.onSourceRestart();
+            },
             onExit: (err) => {
               if (myCycle !== this.cycle)
                 return;
@@ -86591,13 +86724,14 @@ var init_manager = __esm({
           if (myCycle !== this.cycle)
             return;
           this.cycle += 1;
+          this.disarmWatchdog();
           this.source?.stop();
           this.source = null;
           this.activeTarget = null;
           this.streamingPipeline = null;
           this.demoted = false;
           this.state = "error";
-          this.deps.pushStatus({
+          this.pushStatus({
             type: "mirror",
             status: "error",
             reason: err instanceof Error ? err.message : String(err),
@@ -86608,12 +86742,17 @@ var init_manager = __esm({
         }
       }
       onSourceFrame(frame, target, source) {
+        if (frame.length < 4 || frame[0] !== 255 || frame[1] !== 216 || frame[frame.length - 2] !== 255 || frame[frame.length - 1] !== 217) {
+          this.unusableFrames += 1;
+          return;
+        }
+        this.disarmWatchdog();
         this.latest = frame;
         const pipelineChanged = this.streamingPipeline !== source.pipeline;
         if (this.state !== "streaming" || pipelineChanged) {
           this.state = "streaming";
           this.streamingPipeline = source.pipeline;
-          this.deps.pushStatus({
+          this.pushStatus({
             type: "mirror",
             status: "streaming",
             platform: target.platform,
@@ -86628,24 +86767,25 @@ var init_manager = __esm({
       onSourceExit(err) {
         const dying = this.source;
         const target = this.activeTarget;
-        const canDemote = dying?.pipeline === "idb" && target?.platform === "ios" && typeof this.deps.createFallbackSource === "function" && !this.demoted && this.clients.size > 0;
+        const canDemote = this.canDemote(dying, err);
         this.cycle += 1;
         dying?.stop();
         this.source = null;
         if (canDemote && target) {
-          this.demoted = true;
-          void this.startFallback(target, err);
+          this.demote(target, err);
           return;
         }
+        this.disarmWatchdog();
         this.activeTarget = null;
         this.streamingPipeline = null;
         this.latest = null;
         this.state = "error";
-        this.deps.pushStatus({
+        this.pushStatus({
           type: "mirror",
           status: "error",
           reason: err?.reason ?? "capture stopped",
-          hint: err?.hint
+          hint: err?.hint,
+          code: err?.code
         });
         this.endAllClients();
       }
@@ -86684,8 +86824,26 @@ var init_manager = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/observability/mirror/target.js
+function isMirrorPlatform(p) {
+  return p === "ios" || p === "android";
+}
 function buildMirrorTargetResolver(deps) {
   return async () => {
+    const registry2 = deps.getRegistryDeviceBinding?.() ?? null;
+    if (registry2 !== null) {
+      if (isMirrorPlatform(registry2.platform) && registry2.deviceId) {
+        return {
+          ok: true,
+          target: { platform: registry2.platform, deviceId: registry2.deviceId }
+        };
+      }
+      return {
+        ok: false,
+        code: "DEVICE_AUTHORITY_UNBOUND",
+        reason: "device authority is not bound \u2014 run rn_session status and repair the authority axis it names",
+        hint: "Observe mirrors only the session-proven device while an authority session is present"
+      };
+    }
     const platform = deps.getPlatform();
     if (platform === null) {
       return {
@@ -88831,7 +88989,10 @@ async function disconnectBoundSession() {
   const targetId = status?.bindings.bundle?.targetId;
   if (status && typeof targetId === "string") {
     registry2.releaseResources(session2, [
-      { type: "target", key: `${String(status.bindings.metroPort)}:${targetId}` }
+      {
+        type: "target",
+        key: `${String(status.bindings.metroPort)}:${targetId}`
+      }
     ]);
     registry2.updateBindings(session2, {
       state: "device_bound",
@@ -89163,7 +89324,12 @@ var init_index = __esm({
           mustOk(await interact({ action: "press", testID: id, animated: false }), `press "${id}"`);
         },
         typeByTestId: async (id, text) => {
-          mustOk(await interact({ action: "typeText", testID: id, text, animated: false }), `type "${id}"`);
+          mustOk(await interact({
+            action: "typeText",
+            testID: id,
+            text,
+            animated: false
+          }), `type "${id}"`);
         },
         treeFor: async (id) => {
           const fetchTree = async (interactiveOnly) => JSON.parse((await tree({
@@ -89477,7 +89643,10 @@ var init_index = __esm({
       const udid = foreignGateUdid();
       if (!udid)
         return null;
-      return { deviceId: udid, iosRuntimeMajor: await getIosRuntimeMajorForUdid(udid) };
+      return {
+        deviceId: udid,
+        iosRuntimeMajor: await getIosRuntimeMajorForUdid(udid)
+      };
     };
     mirrorCfg = diagnosticContractProbe ? { enabled: false, fps: 0 } : resolveMirrorConfig();
     mirrorManager2 = mirrorCfg.enabled ? new MirrorManager({
@@ -89487,6 +89656,9 @@ var init_index = __esm({
           return p === "ios" || p === "android" ? p : null;
         },
         getSessionDeviceId: () => getActiveSession()?.deviceId ?? void 0,
+        // GH #791: same fence as cdp discovery (PR #786) — an authority session
+        // without a proven device binding blocks the mirror instead of guessing.
+        getRegistryDeviceBinding: () => mapRegistryDeviceBinding(authorityRuntime.status(), authorityRuntime.available),
         resolveIosUdid: () => resolveIosUdid(),
         listAndroidSerials: async () => {
           try {
@@ -89514,7 +89686,9 @@ var init_index = __esm({
       // MirrorStatus is a closed interface (no index signature); recorder.push
       // takes the open event shape every other recorder.push(...) call site
       // uses. Spread into a fresh literal so structural assignability applies.
-      pushStatus: (s) => recorder.push({ ...s })
+      pushStatus: (s) => recorder.push({ ...s }),
+      // Outlasts the source-level idb first-frame timeout so demotion runs first.
+      firstFrameWatchdogMs: mirrorCfg.firstFrameTimeoutMs + 15e3
     }) : void 0;
     if (mirrorManager2)
       setObserveMirror(mirrorManager2);
@@ -90000,7 +90174,10 @@ var init_index = __esm({
       deviceId: external_exports.string().optional().describe("Authority-bound exact device identifier; normally injected by the session"),
       permissions: external_exports.array(external_exports.union([
         external_exports.string(),
-        external_exports.object({ name: external_exports.string(), action: external_exports.enum(["revoke", "reset"]).optional() })
+        external_exports.object({
+          name: external_exports.string(),
+          action: external_exports.enum(["revoke", "reset"]).optional()
+        })
       ])).optional().describe("Permissions to revoke/reset before relaunch. String shorthand defaults to revoke. Each entry is processed via device_permission."),
       storageKeys: external_exports.array(external_exports.string()).optional().describe("MMKV keys to delete before terminate (so the app reads cleared values on next launch). Skipped if CDP is not connected."),
       mmkvInstanceId: external_exports.string().optional().describe("Forwarded to cdp_mmkv. Defaults to mmkv.default."),
@@ -90047,7 +90224,11 @@ var init_index = __esm({
             if (device?.name) {
               const version2 = runtime.match(/iOS[-.]([0-9.-]+)$/)?.[1]?.replaceAll("-", ".");
               if (version2)
-                return { id: session2.deviceId, name: device.name, osVersion: version2 };
+                return {
+                  id: session2.deviceId,
+                  name: device.name,
+                  osVersion: version2
+                };
             }
           }
         } catch {
@@ -90121,7 +90302,9 @@ var init_index = __esm({
       monitor: strictProofMonitor,
       projectRoot: () => resolveProofWorktreeRoot(findProjectRoot({ bundleId: getActiveSession()?.appId })),
       readActionIdentity: (actionId) => {
-        const appProjectRoot = findProjectRoot({ bundleId: getActiveSession()?.appId });
+        const appProjectRoot = findProjectRoot({
+          bundleId: getActiveSession()?.appId
+        });
         return appProjectRoot ? readProofActionIdentity(appProjectRoot, actionId) : null;
       },
       getGitInfo: readProofGitInfo,
@@ -90414,7 +90597,13 @@ var init_index = __esm({
         udid = await resolveIosUdid(session2?.deviceId) ?? null;
         appInstalled = udid && session2?.appId ? await probeAppInstalled(udid, session2.appId) : null;
       }
-      return preflight({ platform, udid, appId: session2?.appId, metroReachable, appInstalled });
+      return preflight({
+        platform,
+        udid,
+        appId: session2?.appId,
+        metroReachable,
+        appInstalled
+      });
     };
     e2eReload = async () => {
       if (!getClient().isConnected)
@@ -90438,7 +90627,12 @@ var init_index = __esm({
     e2eSuiteHandler = createRunE2eSuiteHandler({
       preflightCheck: e2ePreflight,
       runReload: e2eReload,
-      onProgress: (c, t, id) => recorder.push({ type: "e2e-progress", completed: c, total: t, lastTestId: id })
+      onProgress: (c, t, id) => recorder.push({
+        type: "e2e-progress",
+        completed: c,
+        total: t,
+        lastTestId: id
+      })
     });
     trackedTool("cdp_run_e2e_suite", "Run locked e2e tests strictly on the authority-bound session device and persist a session-scoped report.", {
       pattern: external_exports.string().optional().describe("Regex filter over locked-test ids"),
@@ -90512,7 +90706,10 @@ var init_index = __esm({
         try {
           root = projectRootFor();
         } catch (e) {
-          return { ok: false, error: e instanceof Error ? e.message : String(e) };
+          return {
+            ok: false,
+            error: e instanceof Error ? e.message : String(e)
+          };
         }
         const action = loadAction(root, actionId);
         if (!action)
@@ -90539,7 +90736,10 @@ var init_index = __esm({
           const text = result.content?.[0]?.text ?? "";
           return result.isError ? { ok: false, error: text } : { ok: true, output: text };
         } catch (e) {
-          return { ok: false, error: e instanceof Error ? e.message : String(e) };
+          return {
+            ok: false,
+            error: e instanceof Error ? e.message : String(e)
+          };
         } finally {
           arbiter.release(L.lease);
         }

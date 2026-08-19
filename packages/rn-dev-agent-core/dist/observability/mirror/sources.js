@@ -71,7 +71,9 @@ const scheduleAfter = (fn, delayMs) => {
     else
         setTimeout(fn, delayMs);
 };
-const defaultSpawn = (cmd, args) => spawn(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'] });
+const defaultSpawn = (cmd, args) => spawn(cmd, args, {
+    stdio: ['pipe', 'pipe', 'pipe'],
+});
 export async function probeIdbClient(execFileFn = execFile) {
     return new Promise((resolve) => {
         // B269/B263: PATH presence is not health. fb-idb on an incompatible
@@ -162,8 +164,10 @@ export class IosIdbSource {
             this.clearFirstFrameTimer();
             if (this.gate.record()) {
                 scheduleAfter(() => {
-                    if (this.active)
-                        this.spawnOnce(sink);
+                    if (!this.active)
+                        return;
+                    sink.onRestart?.();
+                    this.spawnOnce(sink);
                 }, this.restartDelayMs);
             }
             else {
@@ -247,7 +251,10 @@ export class IosSimctlLoopSource {
                     break;
                 if (!this.gate.record()) {
                     if (this.active)
-                        sink.onExit({ reason: 'simctl screenshot failing', hint: this.failureHint });
+                        sink.onExit({
+                            reason: 'simctl screenshot failing',
+                            hint: this.failureHint,
+                        });
                     this.active = false;
                     break;
                 }
@@ -389,8 +396,10 @@ export class AndroidScreenrecordSource {
             killSibling(self);
             if (this.gate.record()) {
                 scheduleAfter(() => {
-                    if (this.active)
-                        this.spawnCycle(sink);
+                    if (!this.active)
+                        return;
+                    sink.onRestart?.();
+                    this.spawnCycle(sink);
                 }, this.restartDelayMs);
             }
             else {

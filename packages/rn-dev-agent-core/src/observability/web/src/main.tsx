@@ -1,6 +1,6 @@
-import { useMemo, useState, type JSX } from 'react';
+import { useEffect, useMemo, useState, type JSX } from 'react';
 import { createRoot } from 'react-dom/client';
-import type { AgentEvent, Family } from './types';
+import type { AgentEvent, Family, MirrorState } from './types';
 import { CSS, FAMILIES } from './theme';
 import { appOf, latestByFamily, latestByTool, routeOf } from './derive';
 import { useEventStream } from './hooks/useEventStream';
@@ -16,6 +16,18 @@ function App(): JSX.Element {
   const { events, conn, liveShotSeq, liveRoute, e2eProgress, e2eDoneCount, mirror } =
     useEventStream();
   const [selected, setSelected] = useState<number | null>(null);
+  // Latch typed refusals across probe retries: only a frame-backed
+  // 'streaming' (or another terminal status) replaces them.
+  const [latchedRefusal, setLatchedRefusal] = useState<MirrorState | null>(null);
+  useEffect(() => {
+    if (!mirror) {
+      setLatchedRefusal(null);
+      return;
+    }
+    if (mirror.status === 'error' && mirror.code) setLatchedRefusal(mirror);
+    else if (mirror.status !== 'starting') setLatchedRefusal(null);
+  }, [mirror]);
+  const effectiveMirror = latchedRefusal ?? mirror;
   const [activeFamilies, setActiveFamilies] = useState<ReadonlySet<Family>>(new Set(FAMILIES));
   const [search, setSearch] = useState('');
   const [errorsOnly, setErrorsOnly] = useState(false);
@@ -60,7 +72,13 @@ function App(): JSX.Element {
 
   return (
     <div className="app">
-      <Header conn={conn} app={app} route={route ?? undefined} events={events} />
+      <Header
+        conn={conn}
+        app={app}
+        route={route ?? undefined}
+        events={events}
+        mirror={effectiveMirror}
+      />
       <div className="panes">
         <div className="pane left">
           <FilterBar
@@ -80,7 +98,7 @@ function App(): JSX.Element {
           />
         </div>
         <DevicePane
-          mirror={mirror}
+          mirror={effectiveMirror}
           liveShotSeq={liveShotSeq}
           fallbackSeq={shotEv && shotEv.ok ? shotEv.seq : null}
           route={route}

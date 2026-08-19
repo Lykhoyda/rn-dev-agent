@@ -1,5 +1,6 @@
 import { SIMCTL_HINT } from './sources.js';
 export const MIRROR_BOUNDARY = 'rnmirror';
+const MAX_WATCHDOG_REARMS = 3;
 const MULTIPART_HEADERS = {
     'Content-Type': `multipart/x-mixed-replace; boundary=${MIRROR_BOUNDARY}`,
     'Cache-Control': 'no-store',
@@ -22,7 +23,11 @@ export class MirrorManager {
     streamingPipeline = null;
     demoted = false;
     graceTimer = null;
+    watchdogTimer = null;
+    watchdogRearms = 0;
+    unusableFrames = 0;
     graceMs;
+    firstFrameWatchdogMs;
     // Bumped on every teardown (grace-stop, shutdown, source exit) and at the
     // start of every pipeline attempt. Sink callbacks close over the token that
     // was current when their source was started; a mismatch means the source
@@ -30,9 +35,105 @@ export class MirrorManager {
     // (e.g. IosSimctlLoopSource's documented one-trailing-onFrame-after-stop)
     // and must be a no-op rather than reviving a dead cycle.
     cycle = 0;
+    lastStatus = null;
     constructor(deps) {
         this.deps = deps;
         this.graceMs = deps.graceMs ?? 5000;
+        this.firstFrameWatchdogMs = deps.firstFrameWatchdogMs ?? 45_000;
+    }
+    /** Statuses are transient SSE messages; the server replays this to late subscribers. */
+    currentStatus() {
+        return this.lastStatus;
+    }
+    pushStatus(s) {
+        this.lastStatus = s;
+        this.deps.pushStatus(s);
+    }
+    armWatchdog() {
+        if (this.watchdogTimer)
+            clearTimeout(this.watchdogTimer);
+        this.unusableFrames = 0;
+        this.watchdogTimer = setTimeout(() => {
+            this.watchdogTimer = null;
+            // Only reaps a pipeline still waiting on its first frame.
+            if (this.state === 'streaming' || this.state === 'idle' || this.state === 'error')
+                return;
+            const reason = this.framelessReason();
+            const dying = this.source;
+            const target = this.activeTarget;
+            // A frameless idb pipeline is what the simctl fallback exists for; an
+            // expired budget must demote rather than kill a recoverable mirror.
+            if (target && this.canDemote(dying)) {
+                this.cycle += 1;
+                dying?.stop();
+                this.source = null;
+                this.demote(target, { reason });
+                return;
+            }
+            this.cycle += 1;
+            dying?.stop();
+            this.source = null;
+            this.activeTarget = null;
+            this.streamingPipeline = null;
+            this.demoted = false;
+            this.latest = null;
+            this.state = 'error';
+            this.pushStatus({
+                type: 'mirror',
+                status: 'error',
+                reason,
+                hint: this.unusableFrames > 0
+                    ? 'the capture source is producing data Observe cannot decode as JPEG — check the mirror pipeline'
+                    : 'the device may be unreachable — check the session device, then reload Observe',
+            });
+            this.endAllClients();
+        }, this.firstFrameWatchdogMs);
+    }
+    framelessReason() {
+        const base = `no mirror frame within ${this.firstFrameWatchdogMs}ms`;
+        return this.unusableFrames > 0
+            ? `${base} — ${this.unusableFrames} unusable buffer(s) discarded`
+            : base;
+    }
+    // This bound is the source's own first-frame budget plus slack, so a source
+    // that re-arms its budget must restart this one too — otherwise it reaps the
+    // pipeline before the source can demote. Capped: a source that flaps forever
+    // still cannot hold a frameless stream open (GH #791).
+    onSourceRestart() {
+        if (this.state !== 'starting')
+            return;
+        if (this.watchdogRearms >= MAX_WATCHDOG_REARMS)
+            return;
+        this.watchdogRearms += 1;
+        this.armWatchdog();
+    }
+    canDemote(dying, err) {
+        return (dying?.pipeline === 'idb' &&
+            this.activeTarget?.platform === 'ios' &&
+            typeof this.deps.createFallbackSource === 'function' &&
+            !this.demoted &&
+            // A typed exit is a terminal refusal (e.g. authority), never a capture
+            // failure worth demoting around.
+            !err?.code &&
+            this.clients.size > 0);
+    }
+    demote(target, cause) {
+        // Keep the 200 multipart client; do not push any status (DevicePane
+        // remounts <img> on starting and would tear down the very client this
+        // demotion exists to preserve). Internally the fallback is a fresh
+        // frameless attempt: reset readiness and re-arm the watchdog so a
+        // hung/frameless fallback still ends in a typed error (GH #791).
+        this.demoted = true;
+        this.state = 'starting';
+        this.watchdogRearms = 0;
+        this.armWatchdog();
+        void this.startFallback(target, cause);
+    }
+    disarmWatchdog() {
+        if (this.watchdogTimer) {
+            clearTimeout(this.watchdogTimer);
+            this.watchdogTimer = null;
+        }
     }
     attach(client) {
         client.writeHead(200, MULTIPART_HEADERS);
@@ -84,6 +185,7 @@ export class MirrorManager {
     }
     shutdown() {
         this.cycle += 1;
+        this.disarmWatchdog();
         if (this.graceTimer) {
             clearTimeout(this.graceTimer);
             this.graceTimer = null;
@@ -96,6 +198,7 @@ export class MirrorManager {
         this.endAllClients();
         this.latest = null;
         this.state = 'idle';
+        this.lastStatus = null;
     }
     scheduleGrace() {
         if (this.graceTimer)
@@ -108,6 +211,7 @@ export class MirrorManager {
             if (this.state === 'error')
                 return;
             this.cycle += 1;
+            this.disarmWatchdog();
             this.source?.stop();
             this.source = null;
             this.activeTarget = null;
@@ -115,7 +219,7 @@ export class MirrorManager {
             this.demoted = false;
             this.latest = null;
             this.state = 'idle';
-            this.deps.pushStatus({ type: 'mirror', status: 'idle' });
+            this.pushStatus({ type: 'mirror', status: 'idle' });
         }, this.graceMs);
     }
     endAllClients() {
@@ -151,6 +255,12 @@ export class MirrorManager {
     }
     async startPipeline() {
         const myCycle = ++this.cycle;
+        // The watchdog precedes resolution: a hung resolveTarget must never leave
+        // clients on a silent frameless multipart stream. No status is published
+        // yet — a 'starting' that a fast refusal immediately supersedes would
+        // re-arm DevicePane's retry budget and loop it back into attach (GH #791).
+        this.watchdogRearms = 0;
+        this.armWatchdog();
         let platform;
         let deviceId;
         try {
@@ -158,12 +268,14 @@ export class MirrorManager {
             if (myCycle !== this.cycle)
                 return;
             if (!resolution.ok) {
+                this.disarmWatchdog();
                 this.state = 'error';
-                this.deps.pushStatus({
+                this.pushStatus({
                     type: 'mirror',
                     status: 'error',
                     reason: resolution.reason,
                     hint: resolution.hint,
+                    code: resolution.code,
                 });
                 this.endAllClients();
                 return;
@@ -174,7 +286,7 @@ export class MirrorManager {
             this.activeTarget = target;
             this.demoted = false;
             this.streamingPipeline = null;
-            this.deps.pushStatus({
+            this.pushStatus({
                 type: 'mirror',
                 status: 'starting',
                 platform: target.platform,
@@ -194,6 +306,11 @@ export class MirrorManager {
                         return;
                     this.onSourceFrame(frame, target, source);
                 },
+                onRestart: () => {
+                    if (myCycle !== this.cycle)
+                        return;
+                    this.onSourceRestart();
+                },
                 onExit: (err) => {
                     if (myCycle !== this.cycle)
                         return;
@@ -206,13 +323,14 @@ export class MirrorManager {
             if (myCycle !== this.cycle)
                 return;
             this.cycle += 1;
+            this.disarmWatchdog();
             this.source?.stop();
             this.source = null;
             this.activeTarget = null;
             this.streamingPipeline = null;
             this.demoted = false;
             this.state = 'error';
-            this.deps.pushStatus({
+            this.pushStatus({
                 type: 'mirror',
                 status: 'error',
                 reason: err instanceof Error ? err.message : String(err),
@@ -223,12 +341,23 @@ export class MirrorManager {
         }
     }
     onSourceFrame(frame, target, source) {
+        // Only a complete JPEG (SOI…EOI) counts as liveness — an empty, truncated,
+        // or non-JPEG buffer must not disarm the watchdog or publish streaming.
+        if (frame.length < 4 ||
+            frame[0] !== 0xff ||
+            frame[1] !== 0xd8 ||
+            frame[frame.length - 2] !== 0xff ||
+            frame[frame.length - 1] !== 0xd9) {
+            this.unusableFrames += 1;
+            return;
+        }
+        this.disarmWatchdog();
         this.latest = frame;
         const pipelineChanged = this.streamingPipeline !== source.pipeline;
         if (this.state !== 'streaming' || pipelineChanged) {
             this.state = 'streaming';
             this.streamingPipeline = source.pipeline;
-            this.deps.pushStatus({
+            this.pushStatus({
                 type: 'mirror',
                 status: 'streaming',
                 platform: target.platform,
@@ -243,30 +372,25 @@ export class MirrorManager {
     onSourceExit(err) {
         const dying = this.source;
         const target = this.activeTarget;
-        const canDemote = dying?.pipeline === 'idb' &&
-            target?.platform === 'ios' &&
-            typeof this.deps.createFallbackSource === 'function' &&
-            !this.demoted &&
-            this.clients.size > 0;
+        const canDemote = this.canDemote(dying, err);
         this.cycle += 1;
         dying?.stop();
         this.source = null;
         if (canDemote && target) {
-            // Keep the 200 multipart client; do not push 'starting' (DevicePane
-            // remounts <img> on starting and would double-attach).
-            this.demoted = true;
-            void this.startFallback(target, err);
+            this.demote(target, err);
             return;
         }
+        this.disarmWatchdog();
         this.activeTarget = null;
         this.streamingPipeline = null;
         this.latest = null;
         this.state = 'error';
-        this.deps.pushStatus({
+        this.pushStatus({
             type: 'mirror',
             status: 'error',
             reason: err?.reason ?? 'capture stopped',
             hint: err?.hint,
+            code: err?.code,
         });
         this.endAllClients();
     }

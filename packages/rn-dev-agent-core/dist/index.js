@@ -214,7 +214,12 @@ const makeReplayDeps = () => {
             mustOk(await interact({ action: 'press', testID: id, animated: false }), `press "${id}"`);
         },
         typeByTestId: async (id, text) => {
-            mustOk(await interact({ action: 'typeText', testID: id, text, animated: false }), `type "${id}"`);
+            mustOk(await interact({
+                action: 'typeText',
+                testID: id,
+                text,
+                animated: false,
+            }), `type "${id}"`);
         },
         treeFor: async (id) => {
             const fetchTree = async (interactiveOnly) => JSON.parse((await tree({
@@ -582,7 +587,10 @@ const blindProbeContext = async () => {
     const udid = foreignGateUdid();
     if (!udid)
         return null;
-    return { deviceId: udid, iosRuntimeMajor: await getIosRuntimeMajorForUdid(udid) };
+    return {
+        deviceId: udid,
+        iosRuntimeMajor: await getIosRuntimeMajorForUdid(udid),
+    };
 };
 // Mirror block declared BEFORE liveDeps: buildLiveDeps's isMirrorActive input
 // closes over `mirrorManager`, so this must exist first (TDZ safety) even
@@ -598,6 +606,9 @@ const mirrorManager = mirrorCfg.enabled
                 return p === 'ios' || p === 'android' ? p : null;
             },
             getSessionDeviceId: () => getActiveSession()?.deviceId ?? undefined,
+            // GH #791: same fence as cdp discovery (PR #786) — an authority session
+            // without a proven device binding blocks the mirror instead of guessing.
+            getRegistryDeviceBinding: () => mapRegistryDeviceBinding(authorityRuntime.status(), authorityRuntime.available),
             resolveIosUdid: () => resolveIosUdid(),
             listAndroidSerials: async () => {
                 try {
@@ -629,6 +640,8 @@ const mirrorManager = mirrorCfg.enabled
         // takes the open event shape every other recorder.push(...) call site
         // uses. Spread into a fresh literal so structural assignability applies.
         pushStatus: (s) => recorder.push({ ...s }),
+        // Outlasts the source-level idb first-frame timeout so demotion runs first.
+        firstFrameWatchdogMs: mirrorCfg.firstFrameTimeoutMs + 15_000,
     })
     : undefined;
 if (mirrorManager)
@@ -1110,7 +1123,10 @@ async function disconnectBoundSession() {
     const targetId = status?.bindings.bundle?.targetId;
     if (status && typeof targetId === 'string') {
         registry.releaseResources(session, [
-            { type: 'target', key: `${String(status.bindings.metroPort)}:${targetId}` },
+            {
+                type: 'target',
+                key: `${String(status.bindings.metroPort)}:${targetId}`,
+            },
         ]);
         registry.updateBindings(session, {
             state: 'device_bound',
@@ -1949,7 +1965,10 @@ trackedTool('device_reset_state', 'Reset permissions/storage and relaunch the au
     permissions: z
         .array(z.union([
         z.string(),
-        z.object({ name: z.string(), action: z.enum(['revoke', 'reset']).optional() }),
+        z.object({
+            name: z.string(),
+            action: z.enum(['revoke', 'reset']).optional(),
+        }),
     ]))
         .optional()
         .describe('Permissions to revoke/reset before relaunch. String shorthand defaults to revoke. Each entry is processed via device_permission.'),
@@ -2058,7 +2077,11 @@ const resolveNativeProofDevice = async () => {
                 if (device?.name) {
                     const version = runtime.match(/iOS[-.]([0-9.-]+)$/)?.[1]?.replaceAll('-', '.');
                     if (version)
-                        return { id: session.deviceId, name: device.name, osVersion: version };
+                        return {
+                            id: session.deviceId,
+                            name: device.name,
+                            osVersion: version,
+                        };
                 }
             }
         }
@@ -2237,7 +2260,9 @@ const proofCaptureHandler = createProofCaptureHandler({
     monitor: strictProofMonitor,
     projectRoot: () => resolveProofWorktreeRoot(findProjectRoot({ bundleId: getActiveSession()?.appId })),
     readActionIdentity: (actionId) => {
-        const appProjectRoot = findProjectRoot({ bundleId: getActiveSession()?.appId });
+        const appProjectRoot = findProjectRoot({
+            bundleId: getActiveSession()?.appId,
+        });
         return appProjectRoot ? readProofActionIdentity(appProjectRoot, actionId) : null;
     },
     getGitInfo: readProofGitInfo,
@@ -2889,7 +2914,13 @@ const e2ePreflight = async () => {
         udid = (await resolveIosUdid(session?.deviceId)) ?? null;
         appInstalled = udid && session?.appId ? await probeAppInstalled(udid, session.appId) : null;
     }
-    return preflight({ platform, udid, appId: session?.appId, metroReachable, appInstalled });
+    return preflight({
+        platform,
+        udid,
+        appId: session?.appId,
+        metroReachable,
+        appInstalled,
+    });
 };
 const e2eReload = async () => {
     if (!getClient().isConnected)
@@ -2917,7 +2948,12 @@ const e2eReload = async () => {
 const e2eSuiteHandler = createRunE2eSuiteHandler({
     preflightCheck: e2ePreflight,
     runReload: e2eReload,
-    onProgress: (c, t, id) => recorder.push({ type: 'e2e-progress', completed: c, total: t, lastTestId: id }),
+    onProgress: (c, t, id) => recorder.push({
+        type: 'e2e-progress',
+        completed: c,
+        total: t,
+        lastTestId: id,
+    }),
 });
 trackedTool('cdp_run_e2e_suite', 'Run locked e2e tests strictly on the authority-bound session device and persist a session-scoped report.', {
     pattern: z.string().optional().describe('Regex filter over locked-test ids'),
@@ -2994,7 +3030,10 @@ setObserveE2eDeps({
             root = projectRootFor();
         }
         catch (e) {
-            return { ok: false, error: e instanceof Error ? e.message : String(e) };
+            return {
+                ok: false,
+                error: e instanceof Error ? e.message : String(e),
+            };
         }
         const action = loadAction(root, actionId);
         if (!action)
@@ -3024,7 +3063,10 @@ setObserveE2eDeps({
                 : { ok: true, output: text };
         }
         catch (e) {
-            return { ok: false, error: e instanceof Error ? e.message : String(e) };
+            return {
+                ok: false,
+                error: e instanceof Error ? e.message : String(e),
+            };
         }
         finally {
             arbiter.release(L.lease);

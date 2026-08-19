@@ -4,7 +4,7 @@ import type { AgentEvent, Conn, E2eProgress, MirrorState } from '../types';
 
 const MAX_EVENTS = 500;
 
-const MIRROR_STATUSES = ['starting', 'streaming', 'error', 'idle'] as const;
+const MIRROR_STATUSES = ['starting', 'streaming', 'error', 'idle', 'disabled'] as const;
 
 export interface EventStream {
   events: AgentEvent[];
@@ -67,7 +67,9 @@ export function useEventStream(): EventStream {
         return;
       }
       if (type === 'mirror') {
-        const p = parsed as { status?: MirrorState['status'] } & Partial<MirrorState>;
+        const p = parsed as {
+          status?: MirrorState['status'];
+        } & Partial<MirrorState>;
         if (p.status && (MIRROR_STATUSES as readonly string[]).includes(p.status)) {
           setMirror({
             status: p.status,
@@ -75,12 +77,17 @@ export function useEventStream(): EventStream {
             fps: p.fps,
             hint: p.hint,
             reason: p.reason,
+            code: p.code,
           });
         }
         return;
       }
       if (type === 'e2e-progress') {
-        const p = parsed as { completed?: number; total?: number; lastTestId?: string };
+        const p = parsed as {
+          completed?: number;
+          total?: number;
+          lastTestId?: string;
+        };
         setE2eProgress({
           completed: p.completed ?? 0,
           total: p.total ?? 0,
@@ -102,5 +109,13 @@ export function useEventStream(): EventStream {
     return () => es.close();
   }, []);
 
-  return { events, conn, liveShotSeq, liveRoute, e2eProgress, e2eDoneCount, mirror };
+  return {
+    events,
+    conn,
+    liveShotSeq,
+    liveRoute,
+    e2eProgress,
+    e2eDoneCount,
+    mirror,
+  };
 }

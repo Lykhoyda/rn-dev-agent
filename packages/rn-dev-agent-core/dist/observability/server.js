@@ -167,6 +167,13 @@ export class ObservabilityServer {
             }
         });
         write({ type: 'snapshot', events: snapshot });
+        // GH #791: mirror statuses are transient — replay the current one so a
+        // subscriber that connected after a refusal still renders the blocked state.
+        const mirrorStatus = this.mirror?.currentStatus();
+        if (mirrorStatus)
+            write(mirrorStatus);
+        else if (!this.mirror)
+            write({ type: 'mirror', status: 'disabled' });
         const hb = setInterval(() => {
             try {
                 res.write(': hb\n\n');
@@ -216,7 +223,10 @@ export class ObservabilityServer {
             res.end();
             return;
         }
-        res.writeHead(200, { 'Content-Type': shot.contentType, 'Cache-Control': 'no-store' });
+        res.writeHead(200, {
+            'Content-Type': shot.contentType,
+            'Cache-Control': 'no-store',
+        });
         res.end(shot.buf);
     }
     liveScreenshot(res) {
@@ -228,7 +238,10 @@ export class ObservabilityServer {
             res.end();
             return;
         }
-        res.writeHead(200, { 'Content-Type': shot.contentType, 'Cache-Control': 'no-store' });
+        res.writeHead(200, {
+            'Content-Type': shot.contentType,
+            'Cache-Control': 'no-store',
+        });
         res.end(shot.buf);
     }
     mirrorStream(res) {
@@ -309,7 +322,10 @@ export class ObservabilityServer {
     }
     json(res, status, obj) {
         const body = JSON.stringify(obj);
-        res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.writeHead(status, {
+            'Content-Type': 'application/json',
+            'Cache-Control': 'no-store',
+        });
         res.end(body);
     }
     internalError(res) {
@@ -332,7 +348,10 @@ export class ObservabilityServer {
             this.json(res, 405, { error: 'method not allowed' });
             return;
         }
-        const check = isPostAllowed({ method: req.method, headers: req.headers }, this.e2e.token);
+        const check = isPostAllowed({
+            method: req.method,
+            headers: req.headers,
+        }, this.e2e.token);
         if (!check.ok) {
             this.json(res, check.status, { error: check.reason });
             return;
@@ -410,7 +429,10 @@ export class ObservabilityServer {
             this.json(res, 405, { error: 'method not allowed' });
             return;
         }
-        const check = isPostAllowed({ method: req.method, headers: req.headers }, this.e2e.token);
+        const check = isPostAllowed({
+            method: req.method,
+            headers: req.headers,
+        }, this.e2e.token);
         if (!check.ok) {
             this.json(res, check.status, { error: check.reason });
             return;
