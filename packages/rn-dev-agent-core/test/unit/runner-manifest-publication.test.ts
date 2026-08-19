@@ -14,7 +14,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -632,41 +640,97 @@ test('main advancing while the manifest PR waits leaves its head untouched', () 
   }
 });
 
-test('a manifest branch carrying more than its own commit is rebuilt, not reused', () => {
+test('a branch this workflow already extended keeps being reused, never churned', () => {
+  // The workflow makes a second commit whenever the release digests drift. That
+  // must not turn its own branch into a foreign one: the head would then be
+  // rewritten on every advance of main, discarding the maintainer's approval
+  // each time and never letting the required check accumulate.
   const fixture = createFixture({ releaseAssets: completeRelease() });
   try {
     const first = runPublish(fixture, { workdir: checkout(fixture, 'run1') });
     assert.ok(first.ok, `first run failed at ${first.failed?.name}: ${first.failed?.stderr}`);
-    const head = originRef(fixture, BRANCH);
 
-    // A second commit on the branch — even one touching only the trust root —
-    // is no longer this workflow's single-commit product.
-    const dir = join(fixture.root, 'tamper');
-    git(fixture.root, 'clone', '--quiet', '--branch', BRANCH, `file://${fixture.origin}`, dir);
-    write(dir, 'runner-manifest.json', manifestFor('9.9.9') + '\n');
-    git(dir, 'add', '-A');
-    git(dir, 'commit', '--quiet', '-m', 'a second commit nobody asked for');
-    git(dir, 'push', '--quiet', 'origin', BRANCH);
-    const tampered = originRef(fixture, BRANCH);
-    assert.notEqual(tampered, head);
-
+    writeFileSync(fixture.gh.assetPath(TAG, IOS_ZIP), 'rebuilt-ios-runner-zip-bytes');
     const second = runPublish(fixture, { workdir: checkout(fixture, 'run2') });
     assert.ok(second.ok, `rerun failed at ${second.failed?.name}: ${second.failed?.stderr}`);
-    // A branch that is no longer one commit ahead of main is not this workflow's
-    // product, so its head is discarded even though the net diff looks harmless.
-    assert.match(stepStdout(second, BRANCH_STEP), /rebuilding/);
-    assert.equal(second.outputs.commit.pushed, 'true', 'the branch must be rebuilt');
+    assert.equal(second.outputs.commit.pushed, 'true', 'drifted digests must be re-committed');
+    const twoCommits = originRef(fixture, BRANCH);
     assert.equal(
       git(
         fixture.root,
         '--git-dir',
         fixture.origin,
-        'show',
-        `${originRef(fixture, BRANCH)}:runner-manifest.json`,
+        'rev-list',
+        '--count',
+        String(twoCommits),
+      ).trim(),
+      String(
+        Number(
+          git(
+            fixture.root,
+            '--git-dir',
+            fixture.origin,
+            'rev-list',
+            '--count',
+            String(originRef(fixture, 'main')),
+          ).trim(),
+        ) + 2,
       ),
-      currentManifest(),
-      'the trust root must be regenerated, never inherited from the branch',
+      'the branch now carries two commits of this workflow',
     );
+
+    advanceMain(fixture, 'docs/unrelated.md', 'more unrelated work\n');
+    const third = runPublish(fixture, { workdir: checkout(fixture, 'run3') });
+    assert.ok(third.ok, `third run failed at ${third.failed?.name}: ${third.failed?.stderr}`);
+    assert.match(stepStdout(third, BRANCH_STEP), /reusing/, 'two commits is not foreign');
+    assert.equal(third.outputs.commit.pushed, 'false');
+    assert.equal(originRef(fixture, BRANCH), twoCommits, 'the approved head must survive');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('a fork PR whose branch merely looks like a manifest branch is left alone', () => {
+  // Head-ref names on fork PRs are chosen by the contributor and need no
+  // repository permission, so a look-alike must not be closed — and because the
+  // close is fatal, must not be able to block trust-root delivery either.
+  const fixture = createFixture({
+    releaseAssets: completeRelease(),
+    prs: [
+      {
+        number: 7,
+        headRefName: 'chore/runner-manifest-v0.76.6',
+        headRepo: 'outsider/rn-dev-agent',
+        baseRefName: 'main',
+        state: 'OPEN',
+        autoMerge: null,
+        closeComment: null,
+      },
+      {
+        number: 8,
+        headRefName: 'chore/runner-manifest-vsomething',
+        baseRefName: 'main',
+        state: 'OPEN',
+        autoMerge: null,
+        closeComment: null,
+      },
+    ],
+  });
+  try {
+    const run = runPublish(fixture, { workdir: checkout(fixture, 'run1') });
+    assert.ok(run.ok, `job failed at ${run.failed?.name}: ${run.failed?.stderr}`);
+    const state = fixture.gh.state();
+    assert.equal(state.prs.find((pr) => pr.number === 7)?.state, 'OPEN', 'fork PR must be spared');
+    assert.equal(
+      state.prs.find((pr) => pr.number === 8)?.state,
+      'OPEN',
+      'a non-version suffix is not a manifest branch',
+    );
+    assert.equal(
+      ghCalls(fixture).some((c) => c.startsWith('pr close')),
+      false,
+    );
+    assert.equal(state.prs.find((pr) => pr.headRefName === BRANCH)?.autoMerge, 'squash');
   } finally {
     fixture.cleanup();
   }
@@ -1035,6 +1099,36 @@ for (const [jobId, asset, bytes] of [
   });
 }
 
+test('the step runner honours working-directory and refuses fields it does not model', () => {
+  // The harness claims to run steps the way the runner does, so a step field it
+  // cannot reproduce has to fail loudly rather than be dropped — a later test
+  // would otherwise pass or fail for the wrong reason.
+  const root = mkdtempSync(join(tmpdir(), 'workflow-harness-'));
+  try {
+    mkdirSync(join(root, 'nested'));
+    const harness = {
+      jobs: {
+        located: {
+          steps: [{ name: 'touch', run: 'touch marker', 'working-directory': 'nested' }],
+        },
+        unmodelled: { steps: [{ name: 'python', run: 'pass', shell: 'python' }] },
+      },
+    } as unknown as Parameters<typeof runJobSteps>[0]['workflow'];
+
+    const run = runJobSteps({ workflow: harness, jobId: 'located', cwd: root, ctx: {} });
+    assert.ok(run.ok, run.failed?.stderr);
+    assert.ok(existsSync(join(root, 'nested', 'marker')), 'the step must run in working-directory');
+    assert.equal(existsSync(join(root, 'marker')), false);
+
+    assert.throws(
+      () => runJobSteps({ workflow: harness, jobId: 'unmodelled', cwd: root, ctx: {} }),
+      /does not model: shell/,
+    );
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
 // --- structural contract (assertions the simulation cannot make) ---
 
 // Allowlist, not blacklist: `git push origin HEAD` while checked out on main
@@ -1047,8 +1141,29 @@ const PERMITTED_PUSHES = [
   ['git', 'push', 'origin', '--delete', '$ref'],
 ];
 
+// git's value-taking global options, so the subcommand is found rather than
+// guessed: `git -C . push` is a push, `git commit -m "... push ..."` is not.
+const GIT_GLOBAL_OPTIONS_WITH_VALUE = new Set([
+  '-C',
+  '-c',
+  '--git-dir',
+  '--work-tree',
+  '--namespace',
+  '--exec-path',
+  '--super-prefix',
+]);
+
+function gitSubcommand(tokens: string[]): string | undefined {
+  if (tokens[0] !== 'git') return undefined;
+  for (let i = 1; i < tokens.length; i++) {
+    if (!tokens[i].startsWith('-')) return tokens[i];
+    if (GIT_GLOBAL_OPTIONS_WITH_VALUE.has(tokens[i])) i++;
+  }
+  return undefined;
+}
+
 function isGitPush(tokens: string[]): boolean {
-  return tokens[0] === 'git' && tokens.includes('push');
+  return gitSubcommand(tokens) === 'push';
 }
 
 function isPermittedPush(tokens: string[]): boolean {
@@ -1083,18 +1198,30 @@ test('the push allowlist rejects default-branch writes however they are spelled'
     'git push origin HEAD',
     'git push origin main',
     'git -C . push origin HEAD:main',
+    'git -c user.name=x push origin main',
     'git --git-dir=.git push origin main',
     'git push --force origin "$BRANCH"',
     'git push origin "${BRANCH}:main"',
+    'if [ -n "$x" ]; then git push origin HEAD:main; fi',
+    'do git push origin main',
+    '! git push origin HEAD:main',
   ];
   for (const line of forbidden) {
-    const [tokens] = shellCommands(line);
-    assert.ok(isGitPush(tokens), `not recognised as a push, so never checked: ${line}`);
-    assert.equal(isPermittedPush(tokens), false, `allowlist accepted: ${line}`);
+    const pushes = shellCommands(line).filter(isGitPush);
+    assert.equal(pushes.length, 1, `not recognised as a push, so never checked: ${line}`);
+    assert.equal(isPermittedPush(pushes[0]), false, `allowlist accepted: ${line}`);
   }
-  for (const line of ['git push origin "$BRANCH"', 'git push origin --delete "$ref"']) {
-    const [tokens] = shellCommands(line);
-    assert.ok(isPermittedPush(tokens), `allowlist rejected a required push: ${line}`);
+  for (const line of ['git push origin "$BRANCH"', 'then git push origin "${BRANCH}"']) {
+    const pushes = shellCommands(line).filter(isGitPush);
+    assert.equal(pushes.length, 1, `not recognised as a push: ${line}`);
+    assert.ok(isPermittedPush(pushes[0]), `allowlist rejected a required push: ${line}`);
+  }
+  for (const line of ['git commit -m "chore: push the trust root"', 'gh pr merge --auto 1']) {
+    assert.deepEqual(
+      shellCommands(line).filter(isGitPush),
+      [],
+      `not a push, must not be policed as one: ${line}`,
+    );
   }
 });
 

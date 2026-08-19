@@ -17,7 +17,12 @@ export type WorkflowStep = {
   if?: string;
   env?: Record<string, string>;
   with?: Record<string, string>;
+  'working-directory'?: string;
 };
+
+// Everything the harness reproduces. A `run:` step carrying anything else is
+// refused rather than executed with that field silently dropped.
+const MODELLED_STEP_KEYS = new Set(['name', 'id', 'run', 'if', 'env', 'working-directory']);
 export type WorkflowJob = {
   if?: string;
   needs?: string | string[];
@@ -85,6 +90,12 @@ export function runJobSteps({ workflow, jobId, cwd, ctx, env, only }: RunJobOpti
     if (step.if && !only) {
       throw new Error(`step "${name}" is conditional; select steps explicitly to simulate it`);
     }
+    const unmodelled = Object.keys(step).filter((key) => !MODELLED_STEP_KEYS.has(key));
+    if (unmodelled.length > 0) {
+      throw new Error(
+        `step "${name}" uses fields the harness does not model: ${unmodelled.join(', ')}`,
+      );
+    }
     const scriptPath = join(scriptDir, `${index}.sh`);
     const outputPath = join(scriptDir, `${index++}.outputs`);
     writeFileSync(scriptPath, resolveExpressions(step.run, live));
@@ -93,7 +104,7 @@ export function runJobSteps({ workflow, jobId, cwd, ctx, env, only }: RunJobOpti
       'bash',
       ['--noprofile', '--norc', '-e', '-o', 'pipefail', scriptPath],
       {
-        cwd,
+        cwd: step['working-directory'] ? join(cwd, step['working-directory']) : cwd,
         encoding: 'utf8',
         env: {
           ...process.env,
@@ -142,15 +153,22 @@ export function shellCommands(script: string): string[][] {
     .map((line) => line.trim())
     .filter((line) => line !== '' && !line.startsWith('#'))
     .flatMap((line) => line.split(/\s*(?:\|\||&&|;)\s*/))
-    .map((command) =>
-      command
+    .map((command) => {
+      const tokens = command
         .trim()
         .split(/\s+/)
         .map((token) => token.replace(/["']/g, '').replace(/\$\{(\w+)\}/g, '$$$1'))
-        .filter(Boolean),
-    )
+        .filter(Boolean);
+      // A leading shell keyword must not hide the command it introduces: `then
+      // git push …` has to normalise to the same tokens as a bare `git push …`,
+      // or a caller inspecting commands is blind to the construct it sits in.
+      while (tokens.length > 0 && SHELL_KEYWORDS.has(tokens[0])) tokens.shift();
+      return tokens;
+    })
     .filter((tokens) => tokens.length > 0);
 }
+
+const SHELL_KEYWORDS = new Set(['then', 'else', 'elif', 'do', 'in', '!', '{', '(']);
 
 export type GhStub = {
   bin: string;
@@ -163,6 +181,7 @@ export type GhStub = {
 export type GhPullRequest = {
   number: number;
   headRefName: string;
+  headRepo?: string;
   baseRefName?: string;
   title?: string;
   body?: string;

@@ -266,25 +266,25 @@ jobs:
           fi
           # The branch is workflow-owned. Its head is kept — and with it the
           # maintainer's "Approve and run", which is bound to that exact SHA —
-          # only while GitHub's own comparison still proves the branch is this
-          # workflow's product: one commit ahead of main, touching nothing but the
-          # trust root. Main advancing underneath it changes neither. Anything
-          # else — a commit someone else pushed onto this unprotected branch, a
-          # rewritten history — is rebuilt away from main instead of riding into
+          # while what the PR would DELIVER is still nothing but the trust root:
+          # the comparison against the merge base must name no other path. That is
+          # the invariant that matters, and it does not depend on how many commits
+          # this workflow has already made on the branch, nor on main advancing
+          # underneath it. Anything else — a commit someone else pushed onto this
+          # unprotected branch — is rebuilt away from main instead of riding into
           # the auto-merging PR, the same hazard `ref: main` closes above.
           if ! gh api "repos/{owner}/{repo}/compare/main...$BRANCH" > compare.json; then
             echo "::error::could not compare $BRANCH against main" >&2
             exit 1
           fi
-          AHEAD=$(jq -r '.ahead_by' compare.json)
           FOREIGN=$(jq -r --argjson allow '["runner-manifest.json","packages/codex-plugin/runner-manifest.json","packages/claude-plugin/runner-manifest.json"]' \
             '[.files[].filename] - $allow | join(" ")' compare.json)
           git fetch --depth=1 origin "$BRANCH"
           git checkout -B "$BRANCH" FETCH_HEAD
-          if [ "$AHEAD" = 1 ] && [ -z "$FOREIGN" ]; then
-            echo "reusing $BRANCH: one trust-root commit ahead of main"
+          if [ -z "$FOREIGN" ]; then
+            echo "reusing $BRANCH: it delivers the trust root and nothing else"
           else
-            echo "::warning::rebuilding $BRANCH from main (ahead_by=$AHEAD, unexpected paths: ${FOREIGN:-none})"
+            echo "::warning::rebuilding $BRANCH from main (unexpected paths: $FOREIGN)"
             git read-tree -u --reset "$MAIN"
           fi
       - name: Generate the manifest (sha256 + bytes)
@@ -357,9 +357,17 @@ jobs:
           # is paged through rather than capped at a page size, so the invariant
           # cannot degrade silently once the repository carries many open PRs. The
           # branch comparison is done in shell, never in --jq, so a filter that
-          # mismatches can never close the PR we just opened.
-          STALE=$(gh api --paginate 'repos/{owner}/{repo}/pulls?state=open&per_page=100' \
-            --jq '.[] | select(.head.ref | startswith("chore/runner-manifest-v")) | "\(.number) \(.head.ref)"')
+          # mismatches can never close the PR we just opened. Head-ref names on
+          # fork PRs are chosen by the contributor and need no repository
+          # permission, so the sweep only ever considers same-repository branches
+          # whose suffix is a release version — otherwise anyone could name a fork
+          # branch `chore/runner-manifest-vX`, have this job close their PR, and
+          # (because that close is fatal) block trust-root delivery outright.
+          STALE=$(gh api --paginate 'repos/{owner}/{repo}/pulls?state=open&per_page=100' --jq '.[]' \
+            | jq -r --arg repo "$GH_REPO" '
+                select(.head.repo.full_name == $repo)
+                | select(.head.ref | test("^chore/runner-manifest-v[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$"))
+                | "\(.number) \(.head.ref)"')
           while read -r stale ref; do
             { [ -n "$stale" ] && [ "$ref" != "$BRANCH" ]; } || continue
             echo "closing superseded manifest PR #$stale ($ref)"

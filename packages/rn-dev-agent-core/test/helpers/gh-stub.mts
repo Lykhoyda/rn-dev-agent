@@ -148,7 +148,15 @@ if (group === 'release' && sub === 'view') {
     const matching = state.prs.filter((pr) => wantState === 'ALL' || pr.state === wantState);
     const pages = has('--paginate') ? [matching] : [matching.slice(0, perPage)];
     for (const page of pages) {
-      emit(page.map((pr) => ({ number: pr.number, head: { ref: pr.headRefName } })));
+      emit(
+        page.map((pr) => ({
+          number: pr.number,
+          head: {
+            ref: pr.headRefName,
+            repo: { full_name: pr.headRepo ?? process.env.GH_REPO ?? 'owner/repo' },
+          },
+        })),
+      );
     }
   } else if (/^repos\/[^/]+\/[^/]+\/compare\/.+\.\.\..+$/.test(path)) {
     // Answered from the fixture's real repository, so ahead_by/behind_by/files
