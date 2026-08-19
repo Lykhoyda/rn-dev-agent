@@ -34,7 +34,6 @@ import {
 import {
   ghCommands,
   installGhStub,
-  executableLines,
   loadWorkflow,
   runJobSteps,
   shellCommands,
@@ -1297,12 +1296,26 @@ function isGitPush(tokens: string[]): boolean {
   return gitSubcommand(tokens) === 'push';
 }
 
-function mentionsUnrecognisedPush(line: string): boolean {
-  return /\bpush\b/.test(line) && !shellCommands(line).some(isGitPush);
-}
-
 function isPermittedPush(tokens: string[]): boolean {
   return PERMITTED_PUSHES.some((allowed) => JSON.stringify(tokens) === JSON.stringify(allowed));
+}
+
+// A command that carries a push the parser cannot attribute to git — `xargs …
+// git push …`, `sh -c "git push …"`. Judged per COMMAND, never per line: a
+// permitted push sharing the line must not vouch for the one beside it. A git
+// command whose subcommand resolves (`git commit -m "… push …"`) is classified,
+// so prose is not mistaken for a carrier.
+function isUnrecognisedPushCarrier(tokens: string[]): boolean {
+  return tokens.includes('push') && gitSubcommand(tokens) === undefined;
+}
+
+// Everything a default-branch write could hide behind: a recognised push the
+// allowlist rejects, or a push the parser could not classify at all.
+function refusedPushForms(script: string): string[][] {
+  return shellCommands(script).filter(
+    (tokens) =>
+      isUnrecognisedPushCarrier(tokens) || (isGitPush(tokens) && !isPermittedPush(tokens)),
+  );
 }
 
 test('every push targets the version-derived manifest branch, never a default-branch ref', () => {
@@ -1350,47 +1363,51 @@ test('the push allowlist rejects default-branch writes however they are spelled'
     'out=$(git push origin HEAD:main)',
     'if ! out=$(git push origin HEAD:main); then :; fi',
     'eval "git push origin main"',
+    'echo x | xargs -I{} git push origin HEAD:main',
+    'git push origin "$BRANCH" && echo main | xargs -I{} git push origin HEAD:{}',
   ];
   for (const line of forbidden) {
-    const pushes = shellCommands(line).filter(isGitPush);
-    assert.equal(pushes.length, 1, `not recognised as a push, so never checked: ${line}`);
-    assert.equal(isPermittedPush(pushes[0]), false, `allowlist accepted: ${line}`);
+    assert.ok(
+      refusedPushForms(line).length > 0,
+      `neither refused by the allowlist nor flagged as unclassifiable: ${line}`,
+    );
   }
   for (const line of ['git push origin "$BRANCH"', 'then git push origin "${BRANCH}"']) {
-    const pushes = shellCommands(line).filter(isGitPush);
-    assert.equal(pushes.length, 1, `not recognised as a push: ${line}`);
-    assert.ok(isPermittedPush(pushes[0]), `allowlist rejected a required push: ${line}`);
+    assert.deepEqual(refusedPushForms(line), [], `a required push was refused: ${line}`);
+    assert.equal(shellCommands(line).filter(isGitPush).length, 1, `not recognised: ${line}`);
   }
-  for (const line of ['git commit -m "chore: the trust root"', 'gh pr merge --auto 1']) {
-    assert.deepEqual(
-      shellCommands(line).filter(isGitPush),
-      [],
-      `not a push, must not be policed as one: ${line}`,
-    );
+  // Prose that merely says the word is neither a push nor an unclassifiable
+  // carrier — the classifier resolves `git commit`, so it is not policed.
+  for (const line of ['git commit -m "chore: push the trust root"', 'gh pr merge --auto 1']) {
+    assert.deepEqual(refusedPushForms(line), [], `not a push, must not be policed: ${line}`);
+    assert.deepEqual(shellCommands(line).filter(isGitPush), []);
   }
 });
 
-test('no executable line mentions a push the allowlist cannot classify', () => {
-  // The backstop for the guard above. Five rounds running, a push spelling the
+test('no command carries a push the allowlist cannot classify', () => {
+  // The backstop for the guard above. Round after round, a push spelling the
   // parser could not see was silently EXEMPT from the allowlist rather than
-  // refused. A guard that skips what it cannot parse is not a guard, so an
-  // executable line that says `push` while producing no recognised push command
-  // fails here as unparseable — the allowlist can then only be evaded by a
-  // spelling that does not contain the word at all.
-  const unparseable = everyStep().flatMap(({ jobId, step }) =>
-    executableLines(step.run ?? '')
-      .filter(mentionsUnrecognisedPush)
-      .map((line) => `${jobId}: ${line}`),
+  // refused. A guard that skips what it cannot parse is not a guard, so a
+  // COMMAND that carries the word `push` without resolving to a git subcommand
+  // fails here as unclassifiable. Judged per command, so a permitted push
+  // elsewhere on the same line cannot vouch for it.
+  const carriers = everyStep().flatMap(({ jobId, step }) =>
+    shellCommands(step.run ?? '')
+      .filter(isUnrecognisedPushCarrier)
+      .map((tokens) => `${jobId}: ${tokens.join(' ')}`),
   );
   assert.deepEqual(
-    unparseable,
+    carriers,
     [],
-    'these lines mention a push the parser did not recognise — teach it the spelling, do not skip it',
+    'these carry a push the parser did not recognise — teach it the spelling, do not skip it',
   );
-  // And the backstop itself catches what the parser cannot classify, e.g. a push
-  // handed to another program rather than spelled as a command of its own.
-  assert.equal(mentionsUnrecognisedPush('echo x | xargs -I{} git push origin HEAD:main'), true);
-  assert.equal(mentionsUnrecognisedPush('git push origin "$BRANCH"'), false);
+  // A push handed to another program is caught even when a permitted push shares
+  // the line, which is precisely what a per-line check let through.
+  assert.deepEqual(
+    refusedPushForms('git push origin "$BRANCH" && echo main | xargs -I{} git push origin HEAD:{}'),
+    [['xargs', '-I{}', 'git', 'push', 'origin', 'HEAD:{}']],
+  );
+  assert.deepEqual(refusedPushForms('git push origin "$BRANCH"'), []);
 });
 
 test('the publish job is permitted to open a pull request', () => {
