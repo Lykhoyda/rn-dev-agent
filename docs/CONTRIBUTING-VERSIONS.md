@@ -105,9 +105,14 @@ every install to the slow local build.
 
 `.github/workflows/runner-artifacts.yml` keeps it current. It checks two
 things independently — whether release `v<version>` carries both runner
-zips, and whether the in-repo manifest matches the manifest published for
-that same version — and re-runs every 6 hours, so a manifest that has not
-landed yet is re-detected and re-delivered rather than silently skipped.
+zips *still serving the SHA-256 the trust root describes*, and whether the
+in-repo manifest matches the manifest published for that same version —
+and re-runs every 6 hours, so a manifest that has not landed yet is
+re-detected and re-delivered rather than silently skipped. The digest
+check comes from the release API's own `digest`/`size` for each asset, so
+a zip re-uploaded by a build job whose sibling failed cannot pass as
+published just because the two manifests (copies of each other) still
+agree.
 
 The manifest reaches `main` the same way everything else does: a
 `chore/runner-manifest-v<version>` branch, a pull request, the required
@@ -123,7 +128,10 @@ Open the PR and click **Approve and run**; auto-merge lands it as soon as
 local-build fallback. Reruns are safe — the branch name is derived from
 the version, an already-open PR is reused, release uploads clobber, and a
 manifest PR left over from an earlier version is closed as superseded so
-two of them can never land in either order.
+two of them can never land in either order. That sweep runs on every
+publish attempt, including one that finds the trust root already current
+and opens no PR of its own — a superseded PR may already be armed, so
+retiring it cannot depend on this run having something to deliver.
 
 Every job checks out `main`, so a `workflow_dispatch` started from a
 feature branch cannot smuggle unrelated commits into the auto-merging

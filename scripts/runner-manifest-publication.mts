@@ -7,12 +7,14 @@
 // the release "complete" and every later run reported success while
 // runner-manifest.json stayed pinned to an old version (v0.75.2 while the plugin
 // shipped v0.76.7 — every client then resolved provenance 'build-local').
-// Publication state therefore has TWO halves, and both are checked here.
+// Publication state therefore has TWO halves, and both are checked here. The
+// release half is checked against the assets' own server-reported SHA-256, never
+// against the manifest asset alone, which is only a copy of the trust root.
 //
 // Usage (CI):
 //   node scripts/runner-manifest-publication.mts \
 //     --plugin-version 0.76.7 [--force-version ''] \
-//     --release-assets assets.txt \
+//     --release-assets assets.json \
 //     --repo-manifest runner-manifest.json \
 //     --published-manifest published-manifest.json
 
@@ -62,6 +64,61 @@ function parseManifest(text) {
 // Key order must not decide publication: two manifests that differ only in
 // property order describe the same trust root, and treating them as different
 // would re-open a PR on every sweep forever.
+// Release assets may be given as bare names or as the {name, digest, size}
+// records `gh release view --json assets` returns; a bare name simply carries no
+// evidence about the bytes served.
+function indexReleaseAssets(list) {
+  const byName = new Map();
+  for (const entry of list ?? []) {
+    if (typeof entry === 'string') byName.set(entry, { name: entry });
+    else if (entry && typeof entry === 'object' && typeof entry.name === 'string') {
+      byName.set(entry.name, entry);
+    }
+  }
+  return byName;
+}
+
+const ASSET_DIGEST_RE = /^(?:sha256:)?([0-9a-f]{64})$/i;
+
+function assetDigest(asset) {
+  const match = ASSET_DIGEST_RE.exec(typeof asset.digest === 'string' ? asset.digest.trim() : '');
+  return match ? match[1].toLowerCase() : null;
+}
+
+function manifestAssets(manifest) {
+  const assets = manifest && typeof manifest === 'object' ? manifest.assets : null;
+  return ['ios', 'android'].flatMap((platform) =>
+    Array.isArray(assets?.[platform]) ? assets[platform] : [],
+  );
+}
+
+// The manifest asset published on a release is only a COPY of the trust root, so
+// comparing the two says nothing about the zips the release actually serves. A
+// zip re-uploaded with --clobber by a build job whose sibling failed (publication
+// is then skipped) leaves both manifests equal while the release serves bytes the
+// client verifies against a digest they no longer have — and it silently falls
+// back to a local build. Missing assets are left to the build check; only an
+// asset that IS there and disagrees counts as drift.
+function driftedAsset(manifest, byName) {
+  for (const entry of manifestAssets(manifest)) {
+    if (!entry || typeof entry.name !== 'string') continue;
+    const asset = byName.get(entry.name);
+    if (!asset) continue;
+    const digest = assetDigest(asset);
+    if (digest && typeof entry.sha256 === 'string' && digest !== entry.sha256.toLowerCase()) {
+      return entry.name;
+    }
+    if (
+      typeof asset.size === 'number' &&
+      typeof entry.bytes === 'number' &&
+      asset.size !== entry.bytes
+    ) {
+      return entry.name;
+    }
+  }
+  return null;
+}
+
 function canonical(value) {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
   if (value && typeof value === 'object') {
@@ -91,11 +148,12 @@ export function decideRunnerPublication(input) {
     );
   }
   const expected = expectedRunnerAssets(version);
-  const names = new Set(input.releaseAssets ?? []);
-  const buildRunners = forced || !(names.has(expected.ios) && names.has(expected.android));
+  const byName = indexReleaseAssets(input.releaseAssets);
+  const buildRunners = forced || !(byName.has(expected.ios) && byName.has(expected.android));
 
   const repo = parseManifest(input.repoManifest);
   const published = parseManifest(input.publishedManifest);
+  const drifted = repo === null ? null : driftedAsset(repo, byName);
 
   let publishManifest = true;
   let reason;
@@ -107,6 +165,8 @@ export function decideRunnerPublication(input) {
     reason = 'the in-repo runner-manifest.json is missing or unparseable';
   } else if (repo.version !== version) {
     reason = `the in-repo trust root is stale (v${repo.version} != v${version})`;
+  } else if (drifted !== null) {
+    reason = `release v${version} no longer serves the ${drifted} the trust root describes`;
   } else if (published === null) {
     reason = `release v${version} carries no runner-manifest.json asset`;
   } else if (canonical(repo) !== canonical(published)) {
@@ -137,16 +197,23 @@ function parseArgs(argv) {
   return args;
 }
 
+// The workflow writes this file as `gh release view --json assets` JSON. A
+// listing that cannot be read as an array of assets fails the run rather than
+// degrading to "the release carries nothing", which would silently rebuild.
+function parseReleaseAssets(text) {
+  const trimmed = (text ?? '').trim();
+  if (trimmed === '') return [];
+  const parsed = JSON.parse(trimmed);
+  if (!Array.isArray(parsed)) throw new Error('release asset listing is not a JSON array');
+  return parsed;
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
-  const assetsText = readIfPresent(args['release-assets']) ?? '';
   const decision = decideRunnerPublication({
     pluginVersion: args['plugin-version'],
     forceVersion: args['force-version'],
-    releaseAssets: assetsText
-      .split('\n')
-      .map((l) => l.trim())
-      .filter(Boolean),
+    releaseAssets: parseReleaseAssets(readIfPresent(args['release-assets'])),
     repoManifest: readIfPresent(args['repo-manifest']),
     publishedManifest: readIfPresent(args['published-manifest']),
   });

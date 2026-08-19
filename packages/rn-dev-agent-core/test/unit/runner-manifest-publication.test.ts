@@ -146,6 +146,86 @@ test('a missing or unparseable in-repo manifest is stale, never assumed current'
   }
 });
 
+// The {name, digest, size} records `gh release view --json assets` returns for a
+// release that still serves exactly what `manifest` describes.
+function servedAssets(
+  manifest: string,
+  overrides: Record<string, { digest?: string | null; size?: number }> = {},
+): Array<Record<string, unknown>> {
+  const parsed = JSON.parse(manifest);
+  const zips = [...parsed.assets.ios, ...parsed.assets.android].map((asset) => ({
+    name: asset.name,
+    digest: `sha256:${asset.sha256}`,
+    size: asset.bytes,
+    ...overrides[asset.name],
+  }));
+  return [...zips, { name: 'runner-manifest.json', digest: `sha256:${'f'.repeat(64)}`, size: 42 }];
+}
+
+test('a release still serving the zips the trust root describes is already published', () => {
+  const current = manifestFor(VERSION);
+  const decision = decideRunnerPublication({
+    pluginVersion: VERSION,
+    releaseAssets: servedAssets(current),
+    repoManifest: current,
+    publishedManifest: current,
+  });
+  assert.equal(decision.publishManifest, false);
+});
+
+test('a runner zip re-uploaded without a manifest refresh is detected as unpublished', () => {
+  // Both manifests still agree — they are copies of each other — so only the
+  // asset's own digest can reveal that the release serves different bytes.
+  const current = manifestFor(VERSION);
+  const decision = decideRunnerPublication({
+    pluginVersion: VERSION,
+    releaseAssets: servedAssets(current, { [IOS_ZIP]: { digest: `sha256:${'b'.repeat(64)}` } }),
+    repoManifest: current,
+    publishedManifest: current,
+  });
+  assert.equal(decision.publishManifest, true, 'the client cannot verify this iOS zip');
+  assert.equal(decision.buildRunners, false, 'both zips are present — republish, do not rebuild');
+  assert.match(decision.reason, new RegExp(IOS_ZIP.replace(/\./g, '\\.')));
+});
+
+test('a size change alone is drift, even when the release reports no digest', () => {
+  const current = manifestFor(VERSION);
+  const decision = decideRunnerPublication({
+    pluginVersion: VERSION,
+    releaseAssets: servedAssets(current, { [ANDROID_ZIP]: { digest: null, size: 999 } }),
+    repoManifest: current,
+    publishedManifest: current,
+  });
+  assert.equal(decision.publishManifest, true);
+  assert.equal(decision.buildRunners, false, 'the zip is present — republish, do not rebuild');
+});
+
+test('assets reported without digest or size never fabricate drift', () => {
+  // A release listing that carries no evidence about the bytes must fall through
+  // to the manifest comparison, not re-open a PR on every sweep forever.
+  const current = manifestFor(VERSION);
+  const decision = decideRunnerPublication({
+    pluginVersion: VERSION,
+    releaseAssets: COMPLETE_RELEASE,
+    repoManifest: current,
+    publishedManifest: current,
+  });
+  assert.equal(decision.publishManifest, false);
+});
+
+test('re-describing the drifted bytes converges: the next sweep stands down', () => {
+  // What the publish job does — it downloads the zips the release actually
+  // serves and re-hashes them — must end the loop rather than restart it.
+  const drifted = manifestFor(VERSION, 'b'.repeat(64));
+  const decision = decideRunnerPublication({
+    pluginVersion: VERSION,
+    releaseAssets: servedAssets(drifted),
+    repoManifest: drifted,
+    publishedManifest: drifted,
+  });
+  assert.equal(decision.publishManifest, false);
+});
+
 test('a release missing a runner zip rebuilds and republishes', () => {
   const decision = decideRunnerPublication({
     pluginVersion: VERSION,
@@ -1019,7 +1099,12 @@ test('a superseded PR that cannot be closed aborts the job before arming auto-me
       false,
       'auto-merge must not be armed while a superseded PR is still open',
     );
-    assert.equal(fixture.gh.state().prs.find((pr) => pr.headRefName === BRANCH)?.autoMerge, null);
+    // The sweep precedes PR creation, so this version's PR is not merely
+    // unarmed — it was never opened while a superseded one may still land.
+    assert.equal(
+      fixture.gh.state().prs.some((pr) => pr.headRefName === BRANCH),
+      false,
+    );
   } finally {
     fixture.cleanup();
   }
@@ -1083,6 +1168,51 @@ test('an already-current trust root with no manifest branch opens no PR', () => 
   }
 });
 
+test('a superseded PR is retired even when this run has nothing of its own to deliver', () => {
+  // Reachable whenever the trust root reached main by some other route (a
+  // maintainer's own PR) while the release still lacks its manifest asset:
+  // detect says publish, this job re-uploads the asset, and finds no branch and
+  // nothing to commit. Returning there would leave an armed PR from an earlier
+  // version free to land afterwards and rewrite main's trust root backwards.
+  const superseded = 'chore/runner-manifest-v0.76.6';
+  const fixture = createFixture({
+    repoManifest: currentManifest(),
+    releaseAssets: completeRelease(),
+    supersededBranches: [superseded],
+    prs: [
+      {
+        number: 7,
+        headRefName: superseded,
+        baseRefName: 'main',
+        state: 'OPEN',
+        autoMerge: 'squash',
+        closeComment: null,
+      },
+    ],
+  });
+  try {
+    const run = runPublish(fixture, { workdir: checkout(fixture, 'run1') });
+    assert.ok(run.ok, `job failed at ${run.failed?.name}: ${run.failed?.stderr}`);
+    assert.equal(run.outputs.commit.pushed, 'false', 'this run has nothing of its own to deliver');
+
+    const state = fixture.gh.state();
+    assert.equal(
+      state.prs.find((pr) => pr.number === 7)?.state,
+      'CLOSED',
+      'an armed PR from an earlier version must not survive a run with nothing to deliver',
+    );
+    assert.equal(originRef(fixture, superseded), null, 'its branch must be deleted too');
+    assert.equal(
+      state.prs.some((pr) => pr.headRefName === BRANCH),
+      false,
+      'nothing to deliver still means no PR of its own',
+    );
+    assert.equal(originRef(fixture, BRANCH), null);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test('the publish job refuses a trust root the installed plugin cannot use', () => {
   const fixture = createFixture({ pluginVersion: '0.76.8', releaseAssets: completeRelease() });
   try {
@@ -1129,7 +1259,7 @@ test('detect reports a stale trust root even when the release is complete', () =
 });
 
 test('detect stands down once the in-repo trust root matches the published manifest', () => {
-  const current = manifestFor(VERSION) + '\n';
+  const current = currentManifest();
   const fixture = createFixture({
     repoManifest: current,
     releaseAssets: { ...completeRelease(), 'runner-manifest.json': current },
@@ -1139,6 +1269,31 @@ test('detect stands down once the in-repo trust root matches the published manif
     assert.ok(run.ok, `detect failed: ${run.failed?.stderr}`);
     assert.equal(run.outputs.v.publish, 'false');
     assert.equal(run.outputs.v.build, 'false');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('detect re-publishes when a release zip no longer matches the trust root', () => {
+  // A build job that succeeded while its sibling failed re-uploads its zip with
+  // --clobber, and publish-manifest is skipped for that run. Afterwards both
+  // zips are present and the published manifest still equals the in-repo one, so
+  // an asset-name gate reports the release fully published while it serves an
+  // iOS zip whose SHA-256 no client can verify.
+  const current = currentManifest();
+  const fixture = createFixture({
+    repoManifest: current,
+    releaseAssets: {
+      ...completeRelease(),
+      [IOS_ZIP]: 'ios-runner-zip-bytes-rebuilt-by-a-later-run',
+      'runner-manifest.json': current,
+    },
+  });
+  try {
+    const run = runDetect(fixture);
+    assert.ok(run.ok, `detect failed: ${run.failed?.stderr}`);
+    assert.equal(run.outputs.v.publish, 'true', 'every client would fall back to a local build');
+    assert.equal(run.outputs.v.build, 'false', 'both zips are there — republish, do not rebuild');
   } finally {
     fixture.cleanup();
   }

@@ -10,6 +10,7 @@
 //   GH_STUB_LIST_HEAD_BLIND  `gh pr list --head` answers empty (replica lag)
 
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   appendFileSync,
   copyFileSync,
@@ -129,8 +130,20 @@ if (group === 'release' && sub === 'view') {
   const tag = positional[2];
   const release = state.releases[tag];
   if (!release) die(`release not found: ${tag}`);
-  if (has('--json')) emit({ assets: Object.keys(release.assets).map((name) => ({ name })) });
-  else process.stdout.write(`${tag}\n`);
+  // The release API reports each asset's server-side SHA-256 and byte count, so
+  // the double derives both from the stored bytes rather than echoing names.
+  if (has('--json')) {
+    emit({
+      assets: Object.keys(release.assets).map((name) => {
+        const bytes = readFileSync(assetPath(tag, name));
+        return {
+          name,
+          size: bytes.length,
+          digest: `sha256:${createHash('sha256').update(bytes).digest('hex')}`,
+        };
+      }),
+    });
+  } else process.stdout.write(`${tag}\n`);
 } else if (group === 'release' && sub === 'create') {
   const tag = positional[2];
   if (state.releases[tag]) die(`a release with tag ${tag} already exists`);
