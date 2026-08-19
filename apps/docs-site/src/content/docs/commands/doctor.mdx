@@ -32,6 +32,16 @@ axes for:
 Unknown or partial task evidence is never classified stale. A direct contract
 probe is not represented as the active task transport or app state.
 
+When the React Native app root is known, both hosts also run the packaged
+read-only `session-doctor report` probe and classify session-authority health as
+green, yellow (a proven-dead owner of this exact root, which the next transport
+start releases on its own), or red. A red report names the exact wedge — an
+owner whose process identity cannot be proven, a retained `startupCleanupBlocked`
+obligation, or an owner belonging to a different app root — instead of a generic
+stale-lock story, and names the supported repair command rooted where it can
+succeed. Only a *proven*-dead owner is ever released; see
+[recovering a wedged source root](../../session-authority/#recovering-a-wedged-source-root).
+
 <Aside type="caution" title="Strictly read-only">
 Doctor never installs, updates, removes, writes config/project/cache/state/log
 files, builds runners, attaches to an app/device, starts Observe, or

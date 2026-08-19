@@ -108,7 +108,7 @@ happens".
 |---|---|---|
 | `attach` | live | Close the other session or work in a separate worktree. Never kill it, never adopt it. |
 | `attach` | unknown | Unprovable identity is treated as live — same as above; re-run once its process state is observable. |
-| `transport-restart` | proven dead (current sessions) | Restart the MCP transport; startup cleanup releases the dead owner itself. |
+| `transport-restart` | proven dead (current sessions) | Run the remedy `nextAction` names — `/mcp` interactively, the packaged recovery command headlessly; startup cleanup releases the dead owner either way. See `using-rn-dev-agent` § "Session ownership recovery". |
 | `adoption` | proven dead (legacy sessions only) | `adopt_stale` with the advertised handle; a refusal (e.g. missing restoration manifest) is surfaced verbatim, not worked around. |
 | outstanding stale-device journal | — | The identifier-free `release_stale_device` resume action named by status. |
 
