@@ -124,9 +124,9 @@ app outside the source worktree). Spawn the worktree build directly instead —
 to the test-app and drive it over stdio JSON-RPC. The auto-started observe
 server yields the device axis on the first `bind_device` (the result reports
 `observeYielded` with the stopped port), so no manual `observe action=stop` is
-needed; an observe server you started yourself — or one you restarted with
-`observe action="restart"`, which forfeits the automatic yield — still refuses
-and must be stopped.
+needed; an observe server you started yourself — or one you brought back with
+`observe action="start"` or `"restart"`, either of which forfeits the automatic
+yield — still refuses and must be stopped.
 
 Native runner checks:
 
