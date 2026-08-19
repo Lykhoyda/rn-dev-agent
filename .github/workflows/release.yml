@@ -11,9 +11,10 @@ name: Release
 # No npm publish: the "package" is the plugin manifest the marketplace reads
 # from the repo, so only the version half of changesets/action is used.
 #
-# GH #292: the Version PR is created with GITHUB_TOKEN, and GitHub never
-# triggers other workflows (ci.yml) for GITHUB_TOKEN-generated events, so the
-# PR itself can have NO checks. Pre-merge validation therefore lives HERE:
+# GH #292: the Version PR is created with GITHUB_TOKEN, so its ci.yml run parks
+# at action_required until a maintainer approves it (see AGENTS.md) — the PR can
+# sit with no completed checks indefinitely. Pre-merge validation therefore
+# lives HERE:
 #   version  -> creates/updates the Version PR
 #   validate -> checks out changeset-release/main and runs the core CI gates
 #   merge    -> runs only after validate succeeds, and direct-merges only the

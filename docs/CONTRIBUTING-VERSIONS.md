@@ -84,8 +84,9 @@ This runs three steps:
    marketplace.json). The script is also wired as a pre-commit hook so
    manual edits don't drift.
 
-Review the diff, commit, push, open a "Version Packages" PR (or commit
-directly to main if your workflow allows).
+Review the diff, commit, push, and open a "Version Packages" PR — `main`
+is protected, so the bump lands only through a PR whose `Build & Test`
+check is green, never a direct commit.
 
 To publish the MCP server package (currently the plugin doesn't auto-
 publish — manual publish from the core workspace):
