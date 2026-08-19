@@ -126,7 +126,11 @@ two of them can never land in either order.
 
 Every job checks out `main`, so a `workflow_dispatch` started from a
 feature branch cannot smuggle unrelated commits into the auto-merging
-manifest PR. The `force_version` input re-publishes the *current* plugin
+manifest PR. `chore/runner-manifest-v<version>` is workflow-owned: each
+run rebuilds its content from `main` and adds only the trust root, so a
+commit pushed onto that branch by anyone else is reset rather than
+carried into the PR a maintainer approves. The `force_version` input
+re-publishes the *current* plugin
 version (skipping the missing-assets check); it will not accept a
 historical one, because the runners are built from current source and a
 backfill would both misattribute the binaries and downgrade the trust

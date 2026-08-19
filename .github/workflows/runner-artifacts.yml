@@ -236,7 +236,7 @@ jobs:
             exit 1
           fi
       - id: branch
-        name: Check out the version-keyed manifest branch
+        name: Rebuild the version-keyed manifest branch from main
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -248,20 +248,27 @@ jobs:
           rc=0
           git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null || rc=$?
           case "$rc" in
-            0)
-              echo "existed=true" >> "$GITHUB_OUTPUT"
-              git fetch --depth=1 origin "$BRANCH"
-              git checkout -B "$BRANCH" FETCH_HEAD
-              ;;
-            2)
-              echo "existed=false" >> "$GITHUB_OUTPUT"
-              git checkout -B "$BRANCH"
-              ;;
+            0) existed=true ;;
+            2) existed=false ;;
             *)
               echo "::error::could not ask origin whether $BRANCH exists (git ls-remote exit $rc)" >&2
               exit 1
               ;;
           esac
+          echo "existed=$existed" >> "$GITHUB_OUTPUT"
+          # The branch is workflow-owned, so its CONTENT is rebuilt from the
+          # checked-out main tree on every run. An existing head is reused only as
+          # the parent commit, which keeps the push a fast-forward: whatever
+          # anyone else pushed onto the branch is reset to main here and can never
+          # reach the auto-merging PR, the same hazard `ref: main` closes above.
+          MAIN=$(git rev-parse HEAD)
+          if [ "$existed" = true ]; then
+            git fetch --depth=1 origin "$BRANCH"
+            git checkout -B "$BRANCH" FETCH_HEAD
+            git read-tree -u --reset "$MAIN"
+          else
+            git checkout -B "$BRANCH" "$MAIN"
+          fi
       - name: Generate the manifest (sha256 + bytes)
         run: |
           node scripts/build-runner-manifest.mts \
