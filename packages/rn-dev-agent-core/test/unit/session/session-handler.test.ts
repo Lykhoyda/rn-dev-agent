@@ -803,7 +803,7 @@ test('Metro rebinding clears the prior bundle and releases its target claim', as
   assert.deepEqual(update.releaseResources, [{ type: 'target', key: '8193:target-a' }]);
 });
 
-test('device rebinding refuses to discard live runner, Observe, or proof authority', async () => {
+test('device rebinding refuses to discard live runner or proof authority', async () => {
   let replaced = false;
   const status = {
     sessionId: 'session-a',
@@ -818,6 +818,7 @@ test('device rebinding refuses to discard live runner, Observe, or proof authori
     requireOperational: () => ({
       registry: {
         getSessionStatus: () => status,
+        inspectDeviceAuthorityAvailability: () => {},
         replaceDeviceAuthority: () => {
           replaced = true;
         },
@@ -835,7 +836,7 @@ test('device rebinding refuses to discard live runner, Observe, or proof authori
 
   assert.equal(result.isError, true);
   assert.equal(replaced, false);
-  assert.match(result.content[0].text, /runner, Observe, or proof authority/i);
+  assert.match(result.content[0].text, /runner or proof authority/i);
 });
 
 test('device binding rejects a nonexistent exact device before claiming it', async () => {
@@ -847,6 +848,7 @@ test('device binding rejects a nonexistent exact device before claiming it', asy
       requireOperational: () => ({
         registry: {
           getSessionStatus: () => status,
+          inspectDeviceAuthorityAvailability: () => {},
           replaceDeviceAuthority: () => {
             replaced = true;
           },
@@ -877,6 +879,7 @@ test('device binding preserves the registry foreign-claim refusal', async () => 
       requireOperational: () => ({
         registry: {
           getSessionStatus: () => status,
+          inspectDeviceAuthorityAvailability: () => {},
           replaceDeviceAuthority: () => {
             const error = new Error(
               'DEVICE_CLAIM_CONFLICT: exact device is claimed by another session',
@@ -929,6 +932,7 @@ test('same-session cross-platform rebind accepts an existing unclaimed device wi
       requireOperational: () => ({
         registry: {
           getSessionStatus: () => status,
+          inspectDeviceAuthorityAvailability: () => {},
           replaceDeviceAuthority: (_session: unknown, input: Record<string, unknown>) => {
             replacement = input;
           },
@@ -971,6 +975,7 @@ test('cross-platform rebind refuses to discard an incompatible install receipt',
       requireOperational: () => ({
         registry: {
           getSessionStatus: () => status,
+          inspectDeviceAuthorityAvailability: () => {},
           replaceDeviceAuthority: () => {
             replaced = true;
           },
@@ -1017,6 +1022,7 @@ for (const incompatibleBinding of [
         requireOperational: () => ({
           registry: {
             getSessionStatus: () => status,
+            inspectDeviceAuthorityAvailability: () => {},
             replaceDeviceAuthority: () => {
               replaced = true;
             },

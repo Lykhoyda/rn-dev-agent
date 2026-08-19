@@ -1,0 +1,9 @@
+name: rn-dev-agent JavaScript/TypeScript CodeQL config
+
+# NOTE: this repo commits ~19 MB of built bundles (packages/*/dist) and vendors
+# the Yarn release; an alert inside a single-line bundle embeds a multi-megabyte
+# snippet region that blows up the SARIF upload, with no signal the sources lack.
+paths-ignore:
+  - '**/dist/**'
+  - '.yarn/**'
+  - 'third_party/**'

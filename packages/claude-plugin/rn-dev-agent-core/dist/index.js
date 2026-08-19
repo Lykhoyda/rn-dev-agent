@@ -2998,7 +2998,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve12.call(this, root, ref);
+      let _sch = resolve14.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a = root.localRefs) === null || _a === void 0 ? void 0 : _a[ref];
         const { schemaId } = this.opts;
@@ -3025,7 +3025,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve12(root, ref) {
+    function resolve14(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -3750,7 +3750,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve12(baseURI, relativeURI, options) {
+    function resolve14(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const resolved = resolveComponent(parse3(baseURI, schemelessOptions), parse3(relativeURI, schemelessOptions), schemelessOptions, true);
       schemelessOptions.skipEscape = true;
@@ -4007,7 +4007,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve: resolve12,
+      resolve: resolve14,
       resolveComponent,
       equal,
       serialize: serialize2,
@@ -9244,7 +9244,7 @@ var require_websocket = __commonJS({
     var http = __require("http");
     var net = __require("net");
     var tls = __require("tls");
-    var { randomBytes: randomBytes8, createHash: createHash22 } = __require("crypto");
+    var { randomBytes: randomBytes8, createHash: createHash23 } = __require("crypto");
     var { Duplex, Readable } = __require("stream");
     var { URL: URL2 } = __require("url");
     var PerMessageDeflate2 = require_permessage_deflate();
@@ -9912,7 +9912,7 @@ var require_websocket = __commonJS({
           abortHandshake(websocket, socket, "Invalid Upgrade header");
           return;
         }
-        const digest3 = createHash22("sha1").update(key + GUID).digest("base64");
+        const digest3 = createHash23("sha1").update(key + GUID).digest("base64");
         if (res.headers["sec-websocket-accept"] !== digest3) {
           abortHandshake(websocket, socket, "Invalid Sec-WebSocket-Accept header");
           return;
@@ -10281,7 +10281,7 @@ var require_websocket_server = __commonJS({
     var EventEmitter = __require("events");
     var http = __require("http");
     var { Duplex } = __require("stream");
-    var { createHash: createHash22 } = __require("crypto");
+    var { createHash: createHash23 } = __require("crypto");
     var extension2 = require_extension();
     var PerMessageDeflate2 = require_permessage_deflate();
     var subprotocol2 = require_subprotocol();
@@ -10588,7 +10588,7 @@ var require_websocket_server = __commonJS({
           );
         }
         if (this._state > RUNNING) return abortHandshake(socket, 503);
-        const digest3 = createHash22("sha1").update(key + GUID).digest("base64");
+        const digest3 = createHash23("sha1").update(key + GUID).digest("base64");
         const headers = [
           "HTTP/1.1 101 Switching Protocols",
           "Upgrade: websocket",
@@ -11181,7 +11181,7 @@ function keyboardVisibility(result) {
     return null;
   }
 }
-async function waitForKeyboardHidden(refreshSnapshot, sleep7 = (ms) => new Promise((resolve12) => setTimeout(resolve12, ms))) {
+async function waitForKeyboardHidden(refreshSnapshot, sleep7 = (ms) => new Promise((resolve14) => setTimeout(resolve14, ms))) {
   let last = "unknown";
   for (let attempt = 0; attempt < KEYBOARD_POSTCHECK_ATTEMPTS; attempt += 1) {
     const visible = keyboardVisibility(await refreshSnapshot());
@@ -12555,7 +12555,7 @@ function buildRunnerTestFaultEnv(env) {
   };
 }
 function runXcodebuildToExit(args, timeoutMs) {
-  return new Promise((resolve12, reject) => {
+  return new Promise((resolve14, reject) => {
     const child = spawn("xcodebuild", args, { stdio: ["ignore", "ignore", "pipe"] });
     let stderrTail = "";
     const timer = setTimeout(() => {
@@ -12573,7 +12573,7 @@ function runXcodebuildToExit(args, timeoutMs) {
     child.on("exit", (code) => {
       clearTimeout(timer);
       if (code === 0)
-        resolve12();
+        resolve14();
       else
         reject(new Error(`xcodebuild ${args[0]} failed (code ${code})${stderrTail ? `: ${stderrTail.trim()}` : ""}`));
     });
@@ -12614,7 +12614,7 @@ async function startFastRunner(deviceId, bundleId, port, opts = {}) {
   }
   const launch = plan[plan.length - 1];
   const runnerTestFaultEnv = runnerTestFaultForwarded ? {} : buildRunnerTestFaultEnv(process.env);
-  return new Promise((resolve12, reject) => {
+  return new Promise((resolve14, reject) => {
     const child = spawn("xcodebuild", launch.args, {
       env: {
         ...process.env,
@@ -12681,7 +12681,7 @@ async function startFastRunner(deviceId, bundleId, port, opts = {}) {
       } catch {
       }
       cleanupLegacyTmpState();
-      resolve12(state);
+      resolve14(state);
     };
     child.stdout.setEncoding("utf-8");
     child.stdout.on("data", (chunk) => handleChunk(chunk, "stdout"));
@@ -12724,7 +12724,7 @@ async function awaitSpawnedRunnerExit(graceMs = 5e3, expectedLaunchCount) {
 async function awaitChildExit(child, graceMs = 5e3) {
   if (!child || child.exitCode !== null || child.signalCode !== null)
     return true;
-  return new Promise((resolve12) => {
+  return new Promise((resolve14) => {
     const killTimer = setTimeout(() => {
       try {
         child.kill("SIGKILL");
@@ -12733,12 +12733,12 @@ async function awaitChildExit(child, graceMs = 5e3) {
     }, graceMs);
     const backstop = setTimeout(() => {
       child.removeListener("exit", onExit);
-      resolve12(false);
+      resolve14(false);
     }, graceMs + 2e3);
     const onExit = () => {
       clearTimeout(killTimer);
       clearTimeout(backstop);
-      resolve12(true);
+      resolve14(true);
     };
     child.once("exit", onExit);
   });
@@ -13005,7 +13005,7 @@ async function reapStaleFastRunner(deps = {}) {
     return;
   }
   const spawnedChild = runnerProcess?.pid === state.pid ? runnerProcess : null;
-  const spawnedExit = spawnedChild ? new Promise((resolve12) => spawnedChild.once("exit", () => resolve12())) : null;
+  const spawnedExit = spawnedChild ? new Promise((resolve14) => spawnedChild.once("exit", () => resolve14())) : null;
   try {
     sendSignal(state.pid, "SIGTERM");
   } catch {
@@ -13234,7 +13234,7 @@ async function verifyTypeResultAfterSettle(args, result, authorityBefore) {
       if (health.liveness === "alive")
         return result;
       if (attempt < POST_SETTLE_HEALTH_ATTEMPTS - 1) {
-        await new Promise((resolve12) => setTimeout(resolve12, POST_SETTLE_HEALTH_RETRY_MS));
+        await new Promise((resolve14) => setTimeout(resolve14, POST_SETTLE_HEALTH_RETRY_MS));
       }
     }
   }
@@ -13610,7 +13610,7 @@ var init_rn_fast_runner_client = __esm({
 // packages/rn-dev-agent-core/dist/runners/free-port.js
 import { createServer as createServer2 } from "node:net";
 function findFreePort(preferred) {
-  return new Promise((resolve12, reject) => {
+  return new Promise((resolve14, reject) => {
     const tryListen = (port, fallbackToAny) => {
       const srv = createServer2();
       srv.once("error", (err) => {
@@ -13626,7 +13626,7 @@ function findFreePort(preferred) {
           srv.close(() => reject(new Error("findFreePort: OS returned port 0")));
           return;
         }
-        srv.close(() => resolve12(chosen));
+        srv.close(() => resolve14(chosen));
       });
     };
     tryListen(preferred, true);
@@ -13845,7 +13845,7 @@ function defaultDeps() {
     kill: (pid, sig) => process.kill(pid, sig),
     fileExists: (p) => existsSync8(p),
     removeFile: (p) => unlinkSync3(p),
-    delay: (ms) => new Promise((resolve12) => setTimeout(resolve12, ms)),
+    delay: (ms) => new Promise((resolve14) => setTimeout(resolve14, ms)),
     killLegacy: () => process.env.RN_DEVICE_KILL_LEGACY !== "0",
     now: () => Date.now()
   };
@@ -14630,8 +14630,8 @@ async function runBoundedAndroidRunnerRebuild(error2, rebuild, cleanup, dependen
       if (!refreshAuthority())
         return false;
       if (attempt + 1 < transitionAttempts) {
-        await new Promise((resolve12) => {
-          setTimeout(resolve12, dependencies.completionRetryIntervalMs ?? ANDROID_REBUILD_COMPLETION_RETRY_MS);
+        await new Promise((resolve14) => {
+          setTimeout(resolve14, dependencies.completionRetryIntervalMs ?? ANDROID_REBUILD_COMPLETION_RETRY_MS);
         });
       }
     }
@@ -14651,8 +14651,8 @@ async function runBoundedAndroidRunnerRebuild(error2, rebuild, cleanup, dependen
       } catch {
       }
       if (attempt + 1 < transitionAttempts) {
-        await new Promise((resolve12) => {
-          setTimeout(resolve12, dependencies.completionRetryIntervalMs ?? ANDROID_REBUILD_COMPLETION_RETRY_MS);
+        await new Promise((resolve14) => {
+          setTimeout(resolve14, dependencies.completionRetryIntervalMs ?? ANDROID_REBUILD_COMPLETION_RETRY_MS);
         });
       }
     }
@@ -14809,7 +14809,7 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
       signal: opts._rebuildSignal
     });
   }
-  return new Promise((resolve12, reject) => {
+  return new Promise((resolve14, reject) => {
     let resolved = false;
     let forwardRemoved = false;
     const removeForward = () => {
@@ -14882,7 +14882,7 @@ async function startAndroidRunnerAttempt(deviceId, bundleId, devicePort = DEFAUL
         }
       }
       cleanupLegacyTmpState();
-      resolve12(state);
+      resolve14(state);
     };
     child.on("error", (err) => {
       removeForward();
@@ -23189,11 +23189,11 @@ function idbDemotionHint(cause) {
   return IDB_STREAM_UNHEALTHY_HINT;
 }
 async function probeIdbClient(execFileFn = execFile4) {
-  return new Promise((resolve12) => {
+  return new Promise((resolve14) => {
     execFileFn("idb", ["--help"], { timeout: 3e3 }, (err) => {
       if (!err)
-        return resolve12("ready");
-      resolve12(isEnoent(err) ? "absent" : "broken");
+        return resolve14("ready");
+      resolve14(isEnoent(err) ? "absent" : "broken");
     });
   });
 }
@@ -23202,7 +23202,7 @@ function isEnoent(err) {
 }
 function defaultExecJpeg(cmd, args, signal) {
   const outPath = args[args.length - 1];
-  return new Promise((resolve12, reject) => {
+  return new Promise((resolve14, reject) => {
     execFile4(cmd, args, { maxBuffer: 16 * 1024 * 1024, timeout: 1e4, signal }, (err) => {
       if (err) {
         reject(err);
@@ -23211,7 +23211,7 @@ function defaultExecJpeg(cmd, args, signal) {
       readFile(outPath).then((buf) => {
         void unlink(outPath).catch(() => {
         });
-        resolve12(buf);
+        resolve14(buf);
       }).catch((readErr) => {
         void unlink(outPath).catch(() => {
         });
@@ -23267,7 +23267,7 @@ var init_sources = __esm({
     DEFAULT_IDB_FIRST_FRAME_TIMEOUT_MS = 3e4;
     IDB_HINT = `idb not found \u2014 ${IDB_INSTALL_COMMAND}`;
     FFMPEG_HINT = "ffmpeg not found \u2014 run scripts/ensure-ffmpeg.sh or brew install ffmpeg";
-    sleep2 = (ms) => new Promise((resolve12) => setTimeout(resolve12, ms));
+    sleep2 = (ms) => new Promise((resolve14) => setTimeout(resolve14, ms));
     scheduleAfter = (fn, delayMs) => {
       if (delayMs <= 0)
         setImmediate(fn);
@@ -24898,8 +24898,8 @@ async function probeDev(client2, timeoutMs) {
     });
     const result = await Promise.race([
       evalPromise,
-      new Promise((resolve12) => {
-        timer = setTimeout(() => resolve12({ error: "probe timeout" }), timeoutMs);
+      new Promise((resolve14) => {
+        timer = setTimeout(() => resolve14({ error: "probe timeout" }), timeoutMs);
       })
     ]);
     if (timer)
@@ -25562,6 +25562,7 @@ var init_registry = __esm({
       SESSION_OWNER_LOST: "C",
       OPERATION_ALREADY_IN_PROGRESS: "C",
       SOURCE_WORKTREE_MISMATCH: "S",
+      SOURCE_ROOT_DIVERGENCE: "S",
       SOURCE_REVISION_NOT_BUNDLED: "S",
       NON_GIT_MANIFEST_REQUIRED: "S",
       APP_INSTALL_IDENTITY_CHANGED: "I",
@@ -26019,6 +26020,29 @@ var init_registry = __esm({
           nextAction: status === "match" ? "Another live rn-dev-agent supervisor owns this worktree. Close it or work in a separate worktree; a live owner is never adopted." : "The prior owner identity could not be proven, so it is treated as live. Close the other session or re-run once its process state is observable."
         };
       }
+      #assertDeviceAuthorityAvailable(session2, resource, probes, currentBindings) {
+        this.#assertNoStaleDeviceCleanup(currentBindings);
+        const claim = this.#findConflictingClaim(resource);
+        if (claim && (claim.session_id !== session2.sessionId || claim.claim_epoch !== session2.claimEpoch)) {
+          const probe = probes.get(claim.session_id);
+          if (!probe || probe.claimEpoch !== claim.claim_epoch || probe.status !== "mismatch") {
+            throw claimConflict(claim);
+          }
+          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "a proven-stale device owner requires explicit adopt_stale before rebinding", { sessionId: claim.session_id, claimEpoch: claim.claim_epoch });
+        }
+      }
+      /**
+       * GH #776: the exact refusals replaceDeviceAuthority would raise, proven without
+       * writing anything, so a caller can refuse before it yields any other axis.
+       */
+      inspectDeviceAuthorityAvailability(session2, resource) {
+        const probes = this.#probeClaimOwners(session2, [resource]);
+        this.#transaction(() => {
+          const current = this.#requireSession(session2);
+          const currentBindings = JSON.parse(current.bindings_json);
+          this.#assertDeviceAuthorityAvailable(session2, resource, probes, currentBindings);
+        });
+      }
       replaceDeviceAuthority(session2, input) {
         const resource = input.resource ?? {
           type: "device",
@@ -26029,15 +26053,7 @@ var init_registry = __esm({
         this.#transaction(() => {
           const current = this.#requireSession(session2);
           const currentBindings = JSON.parse(current.bindings_json);
-          this.#assertNoStaleDeviceCleanup(currentBindings);
-          const claim = this.#findConflictingClaim(resource);
-          if (claim && (claim.session_id !== session2.sessionId || claim.claim_epoch !== session2.claimEpoch)) {
-            const probe = probes.get(claim.session_id);
-            if (!probe || probe.claimEpoch !== claim.claim_epoch || probe.status !== "mismatch") {
-              throw claimConflict(claim);
-            }
-            throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "a proven-stale device owner requires explicit adopt_stale before rebinding", { sessionId: claim.session_id, claimEpoch: claim.claim_epoch });
-          }
+          this.#assertDeviceAuthorityAvailable(session2, resource, probes, currentBindings);
           this.#database.prepare(`DELETE FROM claims
            WHERE session_id = ? AND claim_epoch = ?
              AND resource_type IN ('device', 'target', 'runner')`).run(session2.sessionId, session2.claimEpoch);
@@ -28390,7 +28406,7 @@ var init_registry = __esm({
             if (Date.now() >= deadline) {
               throw new SessionAuthorityError("AUTHORITY_STORE_BUSY", "authority registry remained contended past the retry deadline");
             }
-            await new Promise((resolve12) => setTimeout(resolve12, retryDelayMs));
+            await new Promise((resolve14) => setTimeout(resolve14, retryDelayMs));
           }
         }
       }
@@ -28660,7 +28676,7 @@ function runBuffer(command, args) {
   return execFileSync6(command, [...args], {
     encoding: "buffer",
     stdio: ["ignore", "pipe", "ignore"],
-    timeout: 3e4,
+    timeout: 18e4,
     maxBuffer: 512 * 1024 * 1024
   });
 }
@@ -29296,6 +29312,14 @@ function requireCompleteAxes(status, profile) {
     }
   }
 }
+function successEnvelopeFlag(result, field2) {
+  try {
+    const envelope = JSON.parse(result.content?.[0]?.text ?? "{}");
+    return envelope.ok === true && envelope.data?.[field2] === true;
+  } catch {
+    return false;
+  }
+}
 function isAuthenticatedIdempotentMetroStop(tool, args, result) {
   if (tool !== "rn_session" || args.action !== "stop_metro")
     return false;
@@ -29446,7 +29470,7 @@ function bindExactArgument(args, field2, expected, code) {
   }
   args[field2] = expected;
 }
-function bindSourcePaths(status, args) {
+function bindSourcePaths(status, args, tool) {
   let appRoot;
   try {
     if (typeof status.source.appRoot !== "string")
@@ -29459,6 +29483,9 @@ function bindSourcePaths(status, args) {
     const supplied = args[field2];
     if (supplied === void 0)
       continue;
+    if (field2 === "projectRoot" && tool === "rn_session" && typeof args.action === "string" && SOURCE_FENCED_SESSION_ACTIONS.has(args.action)) {
+      continue;
+    }
     if (typeof supplied !== "string" || supplied.length === 0) {
       throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", `${field2} must be a non-empty path within the active app root`);
     }
@@ -29470,13 +29497,15 @@ function bindSourcePaths(status, args) {
     }
     const child = relative2(appRoot, candidate);
     if (child === ".." || child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute3(child)) {
-      throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", `${field2} is outside the active session app root`);
+      throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", `${field2} ${candidate} is outside the active session app root ${appRoot}`, void 0, field2 === "projectRoot" ? {
+        nextAction: `Run rn_session action "bind_source" with projectRoot "${candidate}" to rebind the session to that worktree, then retry.`
+      } : void 0);
     }
     args[field2] = candidate;
   }
 }
-function bindSessionArguments(status, profile, args) {
-  bindSourcePaths(status, args);
+function bindSessionArguments(status, profile, args, tool) {
+  bindSourcePaths(status, args, tool);
   const device = status.bindings.device;
   const metro = status.bindings.metro;
   const install = status.bindings.install;
@@ -29764,7 +29793,7 @@ function createAuthorityGate(runtime, dependencies) {
       }
       if (runtimeStatus.available && tool === "cdp_restart" && args.hardReset === true) {
         try {
-          bindSessionArguments(runtimeStatus, profile, args);
+          bindSessionArguments(runtimeStatus, profile, args, tool);
           profile = authorityProfileFor(tool, args);
         } catch (error2) {
           return authorityFailure(error2);
@@ -29789,7 +29818,7 @@ function createAuthorityGate(runtime, dependencies) {
           let initialAuthorityVersion = status.authorityVersion;
           const gateCommitsProof = tool === "proof_capture" && args.action === "begin_rehearsal";
           const retainsRunnerCleanupAuthority = tool === "device_snapshot" && args.action === "close" && Boolean(status.bindings.runner);
-          bindSessionArguments(status, profile, args);
+          bindSessionArguments(status, profile, args, tool);
           if (tool === "device_snapshot")
             requireDeviceTransition(status, args);
           if (gateCommitsProof && status.bindings.proof) {
@@ -29860,12 +29889,21 @@ function createAuthorityGate(runtime, dependencies) {
               authorityTransition: true
             });
           }
+          const bindSource = tool === "rn_session" && args.action === "bind_source";
+          const idempotentBindSource = bindSource && successEnvelopeFlag(result, "alreadyBound");
+          if (bindSource && successEnvelopeFlag(result, "released")) {
+            operation2 = null;
+            return addMeta2(result, {
+              authoritative: false,
+              authorityTransition: true
+            });
+          }
           const idempotentMetroStop = isAuthenticatedIdempotentMetroStop(tool, args, result);
           const idempotentRunnerClose = isAuthenticatedIdempotentRunnerClose(tool, args, result, initialStatus);
           if (!gateCommitsProof && !idempotentMetroStop && !idempotentRunnerClose) {
             registry3.verifyOperation(operation2);
             const nextStatus = runtime.status();
-            if (!nextStatus.available || nextStatus.authorityVersion <= initialAuthorityVersion) {
+            if (!nextStatus.available || !idempotentBindSource && nextStatus.authorityVersion <= initialAuthorityVersion) {
               throw new SessionAuthorityError("AUTHORITY_LOST_DURING_OPERATION", "transition did not advance the fenced authority generation");
             }
             status = nextStatus;
@@ -29999,7 +30037,7 @@ function createAuthorityGate(runtime, dependencies) {
         }
         let status = initialStatus;
         requireCompleteAxes(status, profile);
-        bindSessionArguments(status, profile, args);
+        bindSessionArguments(status, profile, args, tool);
         operation = registry2.beginOperation(available.session, {
           operationId: randomUUID4(),
           tool,
@@ -30561,7 +30599,7 @@ function createAuthorityGate(runtime, dependencies) {
     }
   };
 }
-var optionalBundleAdmission, managedNativeOrigin, managedRunnerPark, managedInstallReissue, axisBinding, axisErrors;
+var optionalBundleAdmission, managedNativeOrigin, managedRunnerPark, managedInstallReissue, axisBinding, axisErrors, SOURCE_FENCED_SESSION_ACTIONS;
 var init_authority_gate = __esm({
   "packages/rn-dev-agent-core/dist/session/authority-gate.js"() {
     "use strict";
@@ -30593,6 +30631,12 @@ var init_authority_gate = __esm({
       R: "RUNNER_OWNERSHIP_MISMATCH",
       P: "PROOF_AUTHORITY_MISMATCH"
     };
+    SOURCE_FENCED_SESSION_ACTIONS = /* @__PURE__ */ new Set([
+      "bind_source",
+      "bind_device",
+      "preview_integration",
+      "apply_integration"
+    ]);
   }
 });
 
@@ -31214,7 +31258,7 @@ var init_maestro_run = __esm({
 import { spawn as spawn4 } from "node:child_process";
 import { readdirSync as readdirSync6, readFileSync as readFileSync15, unlinkSync as unlinkSync4 } from "node:fs";
 function sleep4(ms) {
-  return new Promise((resolve12) => setTimeout(resolve12, ms));
+  return new Promise((resolve14) => setTimeout(resolve14, ms));
 }
 function cleanupKey(platform, deviceId) {
   return `${platform}:${deviceId}`;
@@ -31273,7 +31317,7 @@ async function waitForGroupAbsence(pgid, signalGroup, groupLiveness, delay, time
 }
 function observeChildTerminal(child, timeoutMs) {
   let closeResult = null;
-  const result = new Promise((resolve12) => {
+  const result = new Promise((resolve14) => {
     let settled = false;
     let timer;
     const done = (value) => {
@@ -31282,7 +31326,7 @@ function observeChildTerminal(child, timeoutMs) {
       settled = true;
       if (timer)
         clearTimeout(timer);
-      resolve12(value);
+      resolve14(value);
     };
     child.once("error", (error2) => done({ code: null, signal: null, timedOut: false, error: error2.message }));
     child.once("close", (code, signal) => {
@@ -32366,7 +32410,7 @@ function defaultDeps2() {
     },
     fileExists: (path) => existsSync17(path),
     removeFile: (path) => unlinkSync5(path),
-    delay: (ms) => new Promise((resolve12) => setTimeout(resolve12, ms)),
+    delay: (ms) => new Promise((resolve14) => setTimeout(resolve14, ms)),
     listApps: (udid) => execFileSync7("xcrun", ["simctl", "listapps", udid], {
       encoding: "utf8",
       timeout: 5e3,
@@ -35518,7 +35562,7 @@ var init_device_screenshot_raw = __esm({
       stdio: ["ignore", "pipe", "pipe"]
     });
     androidSpawn = defaultAndroidSpawn;
-    defaultAndroidCapturer = async (emuId, path) => new Promise((resolve12) => {
+    defaultAndroidCapturer = async (emuId, path) => new Promise((resolve14) => {
       let settled = false;
       let streamFinished = false;
       let procCode = null;
@@ -35544,7 +35588,7 @@ var init_device_screenshot_raw = __esm({
           return;
         settled = true;
         clearTimeout(timer);
-        resolve12(ok);
+        resolve14(ok);
       };
       const maybeSettle = () => {
         const outcome = resolveCaptureOutcome(streamFinished, procCode);
@@ -37707,12 +37751,12 @@ ensureJavaEnv();
 ensureCwd();
 
 // packages/rn-dev-agent-core/dist/index.js
-import { createHash as createHash21, createHmac as createHmac5, randomUUID as randomUUID10 } from "node:crypto";
+import { createHash as createHash22, createHmac as createHmac5, randomUUID as randomUUID10 } from "node:crypto";
 import { readFileSync as readFileSync41, rmSync as rmSync11 } from "node:fs";
 import { execFile as execFile25 } from "node:child_process";
 import { promisify as promisify28 } from "node:util";
 import { fileURLToPath as fileURLToPath7 } from "node:url";
-import { dirname as dirname23, join as join55 } from "node:path";
+import { dirname as dirname23, join as join57 } from "node:path";
 
 // node_modules/zod/v3/external.js
 var external_exports = {};
@@ -49805,7 +49849,7 @@ var Protocol = class {
           return;
         }
         const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-        await new Promise((resolve12) => setTimeout(resolve12, pollInterval));
+        await new Promise((resolve14) => setTimeout(resolve14, pollInterval));
         options?.signal?.throwIfAborted();
       }
     } catch (error2) {
@@ -49822,7 +49866,7 @@ var Protocol = class {
    */
   request(request2, resultSchema, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-    return new Promise((resolve12, reject) => {
+    return new Promise((resolve14, reject) => {
       const earlyReject = (error2) => {
         reject(error2);
       };
@@ -49900,7 +49944,7 @@ var Protocol = class {
           if (!parseResult.success) {
             reject(parseResult.error);
           } else {
-            resolve12(parseResult.data);
+            resolve14(parseResult.data);
           }
         } catch (error2) {
           reject(error2);
@@ -50161,12 +50205,12 @@ var Protocol = class {
       }
     } catch {
     }
-    return new Promise((resolve12, reject) => {
+    return new Promise((resolve14, reject) => {
       if (signal.aborted) {
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
         return;
       }
-      const timeoutId = setTimeout(resolve12, interval);
+      const timeoutId = setTimeout(resolve14, interval);
       signal.addEventListener("abort", () => {
         clearTimeout(timeoutId);
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -51266,7 +51310,7 @@ var McpServer = class {
     let task = createTaskResult.task;
     const pollInterval = task.pollInterval ?? 5e3;
     while (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
-      await new Promise((resolve12) => setTimeout(resolve12, pollInterval));
+      await new Promise((resolve14) => setTimeout(resolve14, pollInterval));
       const updatedTask = await extra.taskStore.getTask(taskId);
       if (!updatedTask) {
         throw new McpError(ErrorCode.InternalError, `Task ${taskId} not found during polling`);
@@ -51915,12 +51959,12 @@ var StdioServerTransport = class {
     this.onclose?.();
   }
   send(message) {
-    return new Promise((resolve12) => {
+    return new Promise((resolve14) => {
       const json = serializeMessage(message);
       if (this._stdout.write(json)) {
-        resolve12();
+        resolve14();
       } else {
-        this._stdout.once("drain", resolve12);
+        this._stdout.once("drain", resolve14);
       }
     });
   }
@@ -52479,7 +52523,7 @@ var MetroEventsClient = class {
   async connectOnce() {
     this.state = "connecting";
     const url = `ws://${this.opts.host}:${this.opts.port}/events`;
-    return new Promise((resolve12) => {
+    return new Promise((resolve14) => {
       const ws = new wrapper_default(url, {
         headers: { Origin: metroOrigin(url) }
       });
@@ -52493,7 +52537,7 @@ var MetroEventsClient = class {
         this._connectionEpoch += 1;
         this.reconnectAttempt = 0;
         logger.info(this.opts.logTag, `connected to ${url}`);
-        resolve12();
+        resolve14();
       };
       const onFail = (reason) => {
         if (outcome !== null)
@@ -52501,7 +52545,7 @@ var MetroEventsClient = class {
         outcome = "failed";
         logger.debug(this.opts.logTag, `connect failed: ${reason}`);
         this.scheduleReconnect();
-        resolve12();
+        resolve14();
       };
       ws.once("open", onOpen);
       ws.once("error", (err) => onFail(err instanceof Error ? err.message : String(err)));
@@ -52679,7 +52723,7 @@ var CDPMultiplexer = class {
     logger.info(this.opts.logTag, "multiplexer stopped");
   }
   startConsumerServer() {
-    return new Promise((resolve12, reject) => {
+    return new Promise((resolve14, reject) => {
       this.httpServer = createServer();
       this.wss = new import_websocket_server.default({
         server: this.httpServer,
@@ -52711,12 +52755,12 @@ var CDPMultiplexer = class {
           return;
         }
         this.boundPort = addr.port;
-        resolve12(addr.port);
+        resolve14(addr.port);
       });
     });
   }
   connectHermes() {
-    return new Promise((resolve12, reject) => {
+    return new Promise((resolve14, reject) => {
       const ws = new wrapper_default(this.opts.hermesUrl, {
         headers: { Origin: metroOrigin(this.opts.hermesUrl) }
       });
@@ -52727,7 +52771,7 @@ var CDPMultiplexer = class {
           ws.send(msg3);
         this.hermesBuffer = [];
         logger.info(this.opts.logTag, `connected to upstream Hermes at ${this.opts.hermesUrl}`);
-        resolve12();
+        resolve14();
       };
       const onError = (err) => {
         ws.off("open", onOpen);
@@ -52905,8 +52949,8 @@ var CDPMultiplexer = class {
       this.wss = null;
     }
     if (this.httpServer) {
-      await new Promise((resolve12) => {
-        this.httpServer?.close(() => resolve12());
+      await new Promise((resolve14) => {
+        this.httpServer?.close(() => resolve14());
       });
       this.httpServer = null;
     }
@@ -56494,13 +56538,13 @@ function sendWithTimeout(ws, pending2, nextId, method, params, ms) {
   if (!ws || ws.readyState !== wrapper_default.OPEN) {
     return Promise.reject(new Error("WebSocket not connected"));
   }
-  return new Promise((resolve12, reject) => {
+  return new Promise((resolve14, reject) => {
     const id = nextId();
     const timer = setTimeout(() => {
       pending2.delete(id);
       reject(new Error(`CDP timeout (${ms}ms): ${method}. JS thread may be blocked, paused on a breakpoint, or waiting on an unresolved promise.`));
     }, ms);
-    pending2.set(id, { resolve: resolve12, reject, timer });
+    pending2.set(id, { resolve: resolve14, reject, timer });
     try {
       if (!ws || ws.readyState !== wrapper_default.OPEN) {
         throw new Error("WebSocket closed between check and send");
@@ -56946,7 +56990,7 @@ function connectWebSocket(ctx, url, createSocket = (socketUrl) => new wrapper_de
   maxPayload: 100 * 1024 * 1024,
   headers: { Origin: metroOrigin(socketUrl) }
 })) {
-  return new Promise((resolve12, reject) => {
+  return new Promise((resolve14, reject) => {
     const ws = createSocket(url);
     let settled = false;
     const guard = setTimeout(() => {
@@ -56972,7 +57016,7 @@ function connectWebSocket(ctx, url, createSocket = (socketUrl) => new wrapper_de
       }
       ctx.setWs(ws);
       ctx.setState("connected");
-      resolve12(ws);
+      resolve14(ws);
     });
     ws.on("error", (err) => {
       if (!settled) {
@@ -63377,7 +63421,7 @@ async function stopManagedMetroProcesses(input, dependencies) {
   const probeBirth = dependencies.probeBirth ?? probeProcessBirth;
   const probeListener = dependencies.probeListener ?? probeManagedMetroListener;
   const signalTree = dependencies.signalTree ?? signalProcessTree;
-  const wait = dependencies.wait ?? ((ms) => new Promise((resolve12) => setTimeout(resolve12, ms)));
+  const wait = dependencies.wait ?? ((ms) => new Promise((resolve14) => setTimeout(resolve14, ms)));
   const inspect = () => {
     const launcher = exactProcessState(input.launcher, probeBirth(input.launcher.pid));
     const listener = input.listener ? exactProcessState(input.listener, probeBirth(input.listener.pid)) : "stopped";
@@ -67737,9 +67781,759 @@ function restorePackageIntegrationFiles(input, dependencies = {}) {
 }
 
 // packages/rn-dev-agent-core/dist/tools/session.js
-import { dirname as dirname13, join as join33 } from "node:path";
+import { dirname as dirname14, isAbsolute as isAbsolute7, join as join36, resolve as resolve9 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
-import { createHash as createHash11 } from "node:crypto";
+import { createHash as createHash13 } from "node:crypto";
+
+// packages/rn-dev-agent-core/dist/session/source-identity.js
+init_metro_cwd();
+import { createHash as createHash11, createHmac as createHmac4, randomBytes as randomBytes6, timingSafeEqual as timingSafeEqual6 } from "node:crypto";
+import { execFileSync as execFileSync11 } from "node:child_process";
+import { closeSync as closeSync7, constants as constants5, existsSync as existsSync26, fstatSync as fstatSync5, lstatSync as lstatSync10, openSync as openSync7, readdirSync as readdirSync8, readFileSync as readFileSync27, readlinkSync as readlinkSync3, readSync as readSync3, realpathSync as realpathSync10 } from "node:fs";
+import { dirname as dirname13, isAbsolute as isAbsolute6, join as join33, relative as relative4, resolve as resolve7 } from "node:path";
+init_declared_source_contract();
+function digest2(parts) {
+  const hash = createHash11("sha256");
+  for (const part of parts) {
+    hash.update(part);
+    hash.update("\0");
+  }
+  return hash.digest("hex");
+}
+var MAX_STRICT_PROOF_FILES = 4096;
+var MAX_STRICT_PROOF_FILE_BYTES = 16 * 1024 * 1024;
+var MAX_STRICT_PROOF_TOTAL_BYTES = 64 * 1024 * 1024;
+var MAX_STRICT_PROOF_DEPENDENCY_ENTRIES = 5e4;
+var MAX_STRICT_PROOF_DEPENDENCY_DEPTH = 128;
+var MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES = 128 * 1024 * 1024;
+var MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES = 512 * 1024 * 1024;
+var STRICT_PROOF_READ_BUFFER_BYTES = 64 * 1024;
+var DEPENDENCY_STORE_PATHS = [
+  ":(top,glob)**/node_modules/**",
+  ":(top,glob)**/.yarn/cache/**",
+  ":(top,glob)**/.yarn/unplugged/**"
+];
+var EXCLUDED_RUNTIME_DIRECTORIES = [
+  ".gradle",
+  ".expo",
+  ".cache",
+  "ios/Pods",
+  "ios/build",
+  "ios/DerivedData",
+  "android/build",
+  "android/app/build",
+  "android/app/.cxx"
+];
+var IGNORED_RUNTIME_INPUT_PATHS = [
+  ":(top,glob)**",
+  ":(top,exclude,glob)**/node_modules/**",
+  ":(top,exclude,glob)**/.yarn/cache/**",
+  ":(top,exclude,glob)**/.yarn/unplugged/**",
+  ...EXCLUDED_RUNTIME_DIRECTORIES.map((entry) => `:(top,exclude,glob)**/${entry}/**`)
+];
+var METRO_INTEGRATION_START = "// rn-dev-agent session integration: begin";
+var METRO_INTEGRATION_END = "// rn-dev-agent session integration: end";
+var METRO_INTEGRATION_BLOCK = `${METRO_INTEGRATION_START}
+module.exports = require('./.rn-agent/integration/rn-session-metro.cjs')(module.exports);
+${METRO_INTEGRATION_END}`;
+var METRO_RUNTIME_POLICY2 = ".rn-agent/integration/metro-runtime-policy.json";
+var METRO_EVIDENCE_HEAD_CLIENT = String.raw`
+const { createConnection } = require('node:net');
+const socket = createConnection(process.argv[1]);
+let response = '';
+socket.setEncoding('utf8');
+socket.setTimeout(1500);
+socket.once('connect', () => socket.write(process.argv[2] + '\n'));
+socket.on('data', (chunk) => {
+  response += chunk;
+  if (response.length > 4096) process.exit(2);
+});
+socket.once('end', () => process.stdout.write(response));
+socket.once('timeout', () => process.exit(3));
+socket.once('error', () => process.exit(4));
+`;
+function readMetroEvidenceHead(socket, challenge) {
+  return execFileSync11(process.execPath, ["-e", METRO_EVIDENCE_HEAD_CLIENT, socket, challenge], {
+    encoding: "utf8",
+    maxBuffer: 4096,
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 2e3
+  });
+}
+function updateFramed(hash, part) {
+  const bytes = Buffer.isBuffer(part) ? part : Buffer.from(part);
+  hash.update(`${bytes.byteLength}:`);
+  hash.update(bytes);
+}
+function updateStableFile(hash, path, maximumBytes, framed) {
+  const descriptor = openSync7(path, constants5.O_RDONLY | (constants5.O_NOFOLLOW ?? 0));
+  try {
+    const initial = fstatSync5(descriptor);
+    if (!initial.isFile() || initial.size > maximumBytes) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input is not bounded");
+    }
+    if (framed)
+      hash.update(`${initial.size}:`);
+    const buffer = Buffer.allocUnsafe(Math.min(STRICT_PROOF_READ_BUFFER_BYTES, Math.max(initial.size, 1)));
+    let offset = 0;
+    while (offset < initial.size) {
+      const bytesRead = readSync3(descriptor, buffer, 0, Math.min(buffer.length, initial.size - offset), offset);
+      if (bytesRead === 0 || offset + bytesRead > maximumBytes) {
+        throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input changed while hashing");
+      }
+      hash.update(buffer.subarray(0, bytesRead));
+      offset += bytesRead;
+    }
+    if (readSync3(descriptor, buffer, 0, 1, offset) !== 0) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input changed while hashing");
+    }
+    const final = fstatSync5(descriptor);
+    if (final.dev !== initial.dev || final.ino !== initial.ino || final.size !== initial.size || final.mtimeMs !== initial.mtimeMs || final.ctimeMs !== initial.ctimeMs) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input changed while hashing");
+    }
+    return initial.size;
+  } finally {
+    closeSync7(descriptor);
+  }
+}
+function updateFramedFile(hash, path, maximumBytes) {
+  return updateStableFile(hash, path, maximumBytes, true);
+}
+function fileDigest(path) {
+  const hash = createHash11("sha256");
+  updateStableFile(hash, path, MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES, false);
+  return hash.digest("hex");
+}
+function updateDependencyPath(hash, path, label, state) {
+  const pending2 = [{ path, label, depth: 0 }];
+  while (pending2.length > 0) {
+    const current = pending2.pop();
+    state.entries += 1;
+    if (state.entries > MAX_STRICT_PROOF_DEPENDENCY_ENTRIES) {
+      throw new Error("STRICT_PROOF_DEPENDENCY_LIMIT: dependency entry count exceeds the limit");
+    }
+    if (current.depth > MAX_STRICT_PROOF_DEPENDENCY_DEPTH) {
+      throw new Error("STRICT_PROOF_DEPENDENCY_LIMIT: dependency depth exceeds the limit");
+    }
+    const stat2 = lstatSync10(current.path);
+    updateFramed(hash, current.label);
+    updateFramed(hash, String(stat2.mode & 511));
+    if (stat2.isSymbolicLink()) {
+      const link = readlinkSync3(current.path);
+      const target = realpathSync10(current.path);
+      state.totalBytes += Buffer.byteLength(link);
+      if (state.totalBytes > MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES) {
+        throw new Error("STRICT_PROOF_DEPENDENCY_LIMIT: dependency bytes exceed the total limit");
+      }
+      updateFramed(hash, "symlink");
+      updateFramed(hash, link);
+      updateFramed(hash, target);
+      pending2.push({
+        path: target,
+        label: `target:${target}`,
+        depth: current.depth + 1
+      });
+      continue;
+    }
+    if (stat2.isDirectory()) {
+      const canonical = realpathSync10(current.path);
+      if (state.visitedDirectories.has(canonical)) {
+        updateFramed(hash, "directory-reference");
+        updateFramed(hash, canonical);
+        continue;
+      }
+      state.visitedDirectories.add(canonical);
+      updateFramed(hash, "directory");
+      for (const entry of readdirSync8(current.path).sort().reverse()) {
+        pending2.push({
+          path: join33(current.path, entry),
+          label: `${current.label}/${entry}`,
+          depth: current.depth + 1
+        });
+      }
+      continue;
+    }
+    if (!stat2.isFile()) {
+      throw new Error(`STRICT_PROOF_UNSUPPORTED_DEPENDENCY: ${current.label} is not a regular file, directory, or symlink`);
+    }
+    if (stat2.size > MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES) {
+      throw new Error(`STRICT_PROOF_DEPENDENCY_LIMIT: ${current.label} exceeds the per-file limit`);
+    }
+    updateFramed(hash, "file");
+    const stableSize = updateFramedFile(hash, current.path, MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES);
+    state.totalBytes += stableSize;
+    if (state.totalBytes > MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES) {
+      throw new Error("STRICT_PROOF_DEPENDENCY_LIMIT: dependency bytes exceed the total limit");
+    }
+  }
+}
+function isContained(root, candidate) {
+  const child = relative4(root, candidate);
+  return child !== ".." && !child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) && !isAbsolute6(child);
+}
+function isExcludedRuntimePath(root, candidate) {
+  const entry = relative4(root, candidate).split("\\").join("/");
+  return EXCLUDED_RUNTIME_DIRECTORIES.some((excluded) => entry === excluded || entry.startsWith(`${excluded}/`) || entry.endsWith(`/${excluded}`) || entry.includes(`/${excluded}/`));
+}
+function assertFinalMetroIntegration(identity2) {
+  const candidates = ["metro.config.js", "metro.config.cjs"].map((entry) => join33(identity2.appRoot, entry)).filter(existsSync26);
+  if (candidates.length === 0)
+    return;
+  const source = readFileSync27(candidates[0], "utf8");
+  const start = source.indexOf(METRO_INTEGRATION_START);
+  const end = source.indexOf(METRO_INTEGRATION_END);
+  if (start < 0 || end < start || source.indexOf(METRO_INTEGRATION_START, start + METRO_INTEGRATION_START.length) >= 0 || source.indexOf(METRO_INTEGRATION_END, end + METRO_INTEGRATION_END.length) >= 0 || source.slice(start, end + METRO_INTEGRATION_END.length) !== METRO_INTEGRATION_BLOCK || source.slice(end + METRO_INTEGRATION_END.length).trim()) {
+    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_CONFIG: session integration must be one exact terminal block");
+  }
+}
+function metroRuntimeInputs(identity2, authority, readEvidenceHead, verifyRuntimeEnforcement) {
+  if (!authority)
+    return { paths: [], semantics: [] };
+  const raw = readFileSync27(join33(identity2.appRoot, METRO_RUNTIME_POLICY2), "utf8");
+  const receipt2 = JSON.parse(raw);
+  const payload = {
+    version: receipt2.version,
+    runtimeEvidenceAuthority: receipt2.runtimeEvidenceAuthority,
+    sessionId: receipt2.sessionId,
+    metroInstanceId: receipt2.metroInstanceId,
+    contentRoot: receipt2.contentRoot,
+    appRoot: receipt2.appRoot,
+    runtimeEnforcement: receipt2.runtimeEnforcement,
+    runtimeEnforcementReceipt: receipt2.runtimeEnforcementReceipt,
+    runtimeManifest: receipt2.runtimeManifest,
+    runtimeInputs: receipt2.runtimeInputs,
+    violations: receipt2.violations
+  };
+  const expected = createHmac4("sha256", authority.capability).update(canonicalAuthorityJson(payload)).digest();
+  const observed = typeof receipt2.signature === "string" ? Buffer.from(receipt2.signature, "hex") : Buffer.alloc(0);
+  const runtimeManifest = receipt2.runtimeManifest && typeof receipt2.runtimeManifest === "object" ? receipt2.runtimeManifest : null;
+  if (receipt2.version !== 1 || receipt2.runtimeEvidenceAuthority !== authority.evidenceAuthority || receipt2.sessionId !== authority.sessionId || receipt2.metroInstanceId !== authority.metroInstanceId || receipt2.contentRoot !== identity2.contentRoot || receipt2.appRoot !== identity2.appRoot || !runtimeManifest || runtimeManifest.version !== 1 || typeof runtimeManifest.executable !== "string" || typeof runtimeManifest.sourceExecutable !== "string" || typeof runtimeManifest.nodeExecutable !== "string" || typeof runtimeManifest.nodeVersion !== "string" || !Number.isSafeInteger(runtimeManifest.port) || runtimeManifest.port < 1 || runtimeManifest.port > 65535 || !Array.isArray(runtimeManifest.args) || runtimeManifest.args.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.commandProbeArguments) || runtimeManifest.commandProbeArguments.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.commandExecutableMappings) || runtimeManifest.commandExecutableMappings.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.commandChainInputs) || runtimeManifest.commandChainInputs.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.protectedRuntimeRoots) || runtimeManifest.protectedRuntimeRoots.some((entry) => typeof entry !== "string") || typeof runtimeManifest.nodeOptions !== "string" || typeof runtimeManifest.environmentDigest !== "string" || !/^[a-f0-9]{64}$/.test(runtimeManifest.environmentDigest) || runtimeManifest.contentRoot !== identity2.contentRoot || runtimeManifest.appRoot !== identity2.appRoot || typeof runtimeManifest.servingRoot !== "string" || !Number.isSafeInteger(runtimeManifest.buildGeneration) || !Array.isArray(runtimeManifest.packageInputs) || runtimeManifest.packageInputs.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.metroConfigInputs) || runtimeManifest.metroConfigInputs.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.dependencyRoots) || runtimeManifest.dependencyRoots.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.runtimeInputs) || runtimeManifest.runtimeInputs.some((entry) => typeof entry !== "string") || !runtimeManifest.descendantAuthority || typeof runtimeManifest.descendantAuthority !== "object" || !Array.isArray(receipt2.runtimeInputs) || receipt2.runtimeInputs.some((entry) => typeof entry !== "string") || canonicalAuthorityJson(runtimeManifest.runtimeInputs) !== canonicalAuthorityJson(receipt2.runtimeInputs) || !Array.isArray(receipt2.violations) || receipt2.violations.some((entry) => typeof entry !== "string") || observed.length !== expected.length || !timingSafeEqual6(observed, expected)) {
+    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime policy receipt is invalid");
+  }
+  if (!pathIsWithinRoot(runtimeManifest.servingRoot, identity2.contentRoot)) {
+    throw new Error("STRICT_PROOF_SERVING_ROOT_MISMATCH: Metro serving root is outside the bound worktree");
+  }
+  const descendantAuthority = runtimeManifest.descendantAuthority;
+  if (descendantAuthority.version !== 1 || typeof descendantAuthority.rootNonce !== "string" || !/^[a-f0-9]{32}$/.test(descendantAuthority.rootNonce) || typeof descendantAuthority.rootIdentity !== "string" || !/^process:\d+$/.test(descendantAuthority.rootIdentity) || !Array.isArray(descendantAuthority.allowedCodeRoots) || descendantAuthority.allowedCodeRoots.length === 0 || descendantAuthority.allowedCodeRoots.some((entry) => typeof entry !== "string")) {
+    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant authority is invalid");
+  }
+  const allowedCodeRoots = descendantAuthority.allowedCodeRoots;
+  if (authority.evidenceAuthority === "managed-sandbox-v1" && (receipt2.runtimeEnforcement !== "os-enforced-v1" || !verifyRuntimeEnforcement({
+    platform: process.platform,
+    appRoot: identity2.appRoot,
+    sourceRoot: identity2.contentRoot,
+    runtimeRoot: dirname13(authority.evidencePath),
+    nodeExecutable: runtimeManifest.nodeExecutable,
+    nodeVersion: runtimeManifest.nodeVersion,
+    commandExecutable: runtimeManifest.executable,
+    commandArguments: runtimeManifest.args,
+    commandProbeArguments: runtimeManifest.commandProbeArguments,
+    commandExecutableMappings: runtimeManifest.commandExecutableMappings,
+    commandChainInputs: runtimeManifest.commandChainInputs,
+    protectedRuntimeRoots: runtimeManifest.protectedRuntimeRoots,
+    port: runtimeManifest.port,
+    instanceId: authority.metroInstanceId,
+    runtimeInputs: receipt2.runtimeInputs
+  }, receipt2.runtimeEnforcementReceipt))) {
+    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime enforcement attestation is invalid");
+  }
+  if (authority.evidenceAuthority === "reported-v1" && (receipt2.runtimeEnforcement !== "unsupported" || receipt2.runtimeEnforcementReceipt !== null)) {
+    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: sandbox tier is invalid");
+  }
+  if (receipt2.violations.length > 0) {
+    throw new Error(`STRICT_PROOF_UNVERIFIED_METRO_POLICY: ${receipt2.violations[0]}`);
+  }
+  const runtimeInputs = new Set(receipt2.runtimeInputs);
+  const runtimeLoadsPath = authority.evidencePath;
+  let runtimeLoadsRaw;
+  try {
+    const runtimeLoadsStat = lstatSync10(runtimeLoadsPath);
+    if (!runtimeLoadsStat.isFile() || runtimeLoadsStat.size > MAX_STRICT_PROOF_FILE_BYTES) {
+      throw new Error("runtime load evidence is not a bounded regular file");
+    }
+    runtimeLoadsRaw = readFileSync27(runtimeLoadsPath, "utf8");
+  } catch (error2) {
+    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid", {
+      cause: error2
+    });
+  }
+  const runtimeLoads = /* @__PURE__ */ new Map();
+  const descendantLaunches = /* @__PURE__ */ new Map();
+  const descendantAttestations = /* @__PURE__ */ new Map();
+  const descendantSemanticDigests = /* @__PURE__ */ new Set();
+  const pendingIpcCompletions = /* @__PURE__ */ new Set();
+  const completedIpcCompletions = /* @__PURE__ */ new Set();
+  const runtimeSemantics = /* @__PURE__ */ new Set();
+  const runtimeSemanticsByDigest = /* @__PURE__ */ new Map();
+  const orderedRuntimeSemantics = [];
+  const runtimeEvidenceKeys = /* @__PURE__ */ new Set();
+  let runtimeEvidenceEntryCount = 0;
+  let evidenceSequence = 0;
+  let previousEvidenceSignature = null;
+  for (const rawLoad of runtimeLoadsRaw.split("\n").filter(Boolean)) {
+    let load;
+    try {
+      load = JSON.parse(rawLoad);
+    } catch (error2) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid", {
+        cause: error2
+      });
+    }
+    const loadPayload = {
+      version: load.version,
+      runtimeEvidenceAuthority: load.runtimeEvidenceAuthority,
+      sessionId: load.sessionId,
+      metroInstanceId: load.metroInstanceId,
+      kind: load.kind,
+      value: load.value,
+      digest: load.digest,
+      sequence: load.sequence,
+      previousSignature: load.previousSignature
+    };
+    const expectedLoad = createHmac4("sha256", authority.capability).update(canonicalAuthorityJson(loadPayload)).digest();
+    const observedLoad = typeof load.signature === "string" ? Buffer.from(load.signature, "hex") : Buffer.alloc(0);
+    if (load.version !== 1 || load.runtimeEvidenceAuthority !== authority.evidenceAuthority || load.sessionId !== authority.sessionId || load.metroInstanceId !== authority.metroInstanceId || load.kind !== "input" && load.kind !== "violation" && load.kind !== "launch" && load.kind !== "attestation" && load.kind !== "semantics" && load.kind !== "pending" && load.kind !== "completion" && load.kind !== "stability" || typeof load.value !== "string" || !Number.isSafeInteger(load.sequence) || load.sequence !== evidenceSequence + 1 || load.previousSignature !== previousEvidenceSignature || (load.kind === "input" || load.kind === "stability" ? typeof load.digest !== "string" || !/^[a-f0-9]{64}$/.test(load.digest) : load.digest !== null) || observedLoad.length !== expectedLoad.length || !timingSafeEqual6(observedLoad, expectedLoad)) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid");
+    }
+    evidenceSequence = load.sequence;
+    previousEvidenceSignature = load.signature;
+    runtimeEvidenceEntryCount += 1;
+    if (runtimeEvidenceEntryCount > MAX_STRICT_PROOF_DEPENDENCY_ENTRIES) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is unbounded");
+    }
+    const key = `${load.kind}\0${load.value}`;
+    runtimeEvidenceKeys.add(key);
+    if (runtimeEvidenceKeys.size > MAX_STRICT_PROOF_DEPENDENCY_ENTRIES) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is unbounded");
+    }
+    if (load.kind === "launch" || load.kind === "attestation") {
+      let execution;
+      try {
+        execution = JSON.parse(load.value);
+      } catch {
+        throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid");
+      }
+      if (execution.version !== 1 || typeof execution.nonce !== "string" || !/^[a-f0-9]{32}$/.test(execution.nonce) || typeof execution.identity !== "string" || !/^(?:process|worker):\d+$/.test(execution.identity) || !execution.parent || typeof execution.parent.identity !== "string" || !/^(?:process|worker):\d+$/.test(execution.parent.identity) || typeof execution.parent.nonce !== "string" || !/^[a-f0-9]{32}$/.test(execution.parent.nonce) || typeof execution.semantics !== "string" || !/^[a-f0-9]{64}$/.test(execution.semantics) || !execution.authority || execution.authority.sessionId !== authority.sessionId || execution.authority.metroInstanceId !== authority.metroInstanceId || execution.authority.contentRoot !== identity2.contentRoot || execution.authority.appRoot !== identity2.appRoot) {
+        throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid");
+      }
+      const target = load.kind === "launch" ? descendantLaunches : descendantAttestations;
+      const priorExecution = target.get(load.value);
+      if (priorExecution && canonicalAuthorityJson(priorExecution) !== load.value) {
+        throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid");
+      }
+      target.set(load.value, execution);
+      descendantSemanticDigests.add(execution.semantics);
+      continue;
+    }
+    if (load.kind === "semantics") {
+      if (load.value.length > 4096) {
+        throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime semantics are unbounded");
+      }
+      runtimeSemantics.add(load.value);
+      runtimeSemanticsByDigest.set(createHash11("sha256").update(load.value).digest("hex"), load.value);
+      orderedRuntimeSemantics.push(load.value);
+      continue;
+    }
+    if (load.kind === "pending" || load.kind === "completion") {
+      if (!/^[a-f0-9]{32}$/.test(load.value)) {
+        throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid");
+      }
+      (load.kind === "pending" ? pendingIpcCompletions : completedIpcCompletions).add(load.value);
+      continue;
+    }
+    const prior = runtimeLoads.get(key);
+    if (prior && prior.digest !== load.digest) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input changed between executions");
+    }
+    runtimeLoads.set(key, {
+      kind: load.kind,
+      value: load.value,
+      digest: load.digest
+    });
+  }
+  if (evidenceSequence === 0 || previousEvidenceSignature === null) {
+    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is empty");
+  }
+  const challenge = randomBytes6(32).toString("hex");
+  let head;
+  try {
+    head = JSON.parse(readEvidenceHead(authority.evidenceSocket, challenge));
+  } catch (error2) {
+    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime evidence head is unavailable", {
+      cause: error2
+    });
+  }
+  const headPayload = {
+    version: head.version,
+    runtimeEvidenceAuthority: head.runtimeEvidenceAuthority,
+    sessionId: head.sessionId,
+    metroInstanceId: head.metroInstanceId,
+    challenge: head.challenge,
+    sequence: head.sequence,
+    journalSignature: head.journalSignature
+  };
+  const expectedHead = createHmac4("sha256", authority.capability).update(canonicalAuthorityJson(headPayload)).digest();
+  const observedHead = typeof head.signature === "string" ? Buffer.from(head.signature, "hex") : Buffer.alloc(0);
+  if (head.version !== 1 || head.runtimeEvidenceAuthority !== authority.evidenceAuthority || head.sessionId !== authority.sessionId || head.metroInstanceId !== authority.metroInstanceId || head.challenge !== challenge || head.sequence !== evidenceSequence || head.journalSignature !== previousEvidenceSignature || observedHead.length !== expectedHead.length || !timingSafeEqual6(observedHead, expectedHead)) {
+    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime evidence head is invalid");
+  }
+  for (const launch of descendantLaunches.keys()) {
+    if (!descendantAttestations.has(launch)) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant execution was not attested");
+    }
+  }
+  for (const attestation of descendantAttestations.keys()) {
+    if (!descendantLaunches.has(attestation)) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant attestation has no launch");
+    }
+  }
+  for (const pending2 of pendingIpcCompletions) {
+    if (!completedIpcCompletions.has(pending2)) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: IPC completion is pending");
+    }
+  }
+  for (const completion of completedIpcCompletions) {
+    if (!pendingIpcCompletions.has(completion)) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: IPC completion has no request");
+    }
+  }
+  const observedSemanticDigests = new Set(runtimeSemanticsByDigest.keys());
+  for (const semantics of descendantSemanticDigests) {
+    if (!observedSemanticDigests.has(semantics)) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant execution semantics are missing");
+    }
+  }
+  const descendantsByNonce = /* @__PURE__ */ new Map();
+  for (const execution of descendantLaunches.values()) {
+    if (descendantsByNonce.has(execution.nonce)) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant nonce was reused");
+    }
+    descendantsByNonce.set(execution.nonce, execution);
+  }
+  for (const execution of descendantLaunches.values()) {
+    let current = execution;
+    const visited = /* @__PURE__ */ new Set();
+    while (current.parent.nonce !== descendantAuthority.rootNonce) {
+      if (visited.has(current.nonce)) {
+        throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant tree contains a cycle");
+      }
+      visited.add(current.nonce);
+      const parent = descendantsByNonce.get(current.parent.nonce);
+      if (!parent || parent.identity !== current.parent.identity) {
+        throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant parent is outside the attested tree");
+      }
+      current = parent;
+    }
+    if (current.parent.identity !== descendantAuthority.rootIdentity) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant root identity does not match Metro");
+    }
+    const semanticsValue = runtimeSemanticsByDigest.get(execution.semantics);
+    if (!semanticsValue) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant execution semantics are missing");
+    }
+    let semantics;
+    try {
+      semantics = JSON.parse(semanticsValue);
+    } catch {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant execution semantics are invalid");
+    }
+    const semanticAuthority = semantics.authority && typeof semantics.authority === "object" ? semantics.authority : null;
+    if (!["node", "sync", "fork", "worker"].includes(semantics.mode) || typeof semantics.entrypoint !== "string" || typeof semantics.entrypointDigest !== "string" || !/^[a-f0-9]{64}$/.test(semantics.entrypointDigest) || !Array.isArray(semantics.execArgv) || semantics.execArgv.some((entry) => typeof entry !== "string") || typeof semantics.invocationDigest !== "string" || !/^[a-f0-9]{64}$/.test(semantics.invocationDigest) || canonicalAuthorityJson(semantics.allowedCodeRoots) !== canonicalAuthorityJson(allowedCodeRoots) || !semanticAuthority || semanticAuthority.sessionId !== authority.sessionId || semanticAuthority.metroInstanceId !== authority.metroInstanceId || semanticAuthority.contentRoot !== identity2.contentRoot || semanticAuthority.appRoot !== identity2.appRoot || semanticAuthority.parentIdentity !== execution.parent.identity || semanticAuthority.parentNonce !== execution.parent.nonce) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant execution semantics are invalid");
+    }
+    const entrypoint = realpathSync10(semantics.entrypoint);
+    if (!allowedCodeRoots.some((root) => isContained(realpathSync10(root), entrypoint))) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant entrypoint is outside allowed code roots");
+    }
+    const observedEntrypoint = runtimeLoads.get(`input\0${entrypoint}`);
+    if (!observedEntrypoint || observedEntrypoint.digest !== semantics.entrypointDigest) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant executable bytes are not attested");
+    }
+  }
+  for (const load of runtimeLoads.values()) {
+    if (load.kind === "violation") {
+      throw new Error(`STRICT_PROOF_UNVERIFIED_METRO_POLICY: ${load.value}`);
+    }
+    const candidate = realpathSync10(load.value);
+    if (fileDigest(candidate) !== load.digest) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input bytes changed after execution");
+    }
+    runtimeInputs.add(candidate);
+  }
+  return {
+    paths: [...runtimeInputs].sort().flatMap((entry) => {
+      const candidate = realpathSync10(entry);
+      return !isContained(identity2.contentRoot, candidate) || isExcludedRuntimePath(identity2.contentRoot, candidate) ? [candidate] : [];
+    }),
+    semantics: orderedRuntimeSemantics
+  };
+}
+function dependencyStoreRoots(identity2, git, pathExists) {
+  const entries = git(identity2.contentRoot, [
+    "ls-files",
+    "--others",
+    "--ignored",
+    "--exclude-standard",
+    "--directory",
+    "-z",
+    "--",
+    ...DEPENDENCY_STORE_PATHS
+  ]).split("\0").filter(Boolean);
+  for (const candidate of [
+    join33(identity2.contentRoot, "node_modules"),
+    join33(identity2.appRoot, "node_modules")
+  ]) {
+    if (pathExists(candidate))
+      entries.push(relative4(identity2.contentRoot, candidate));
+  }
+  const pnpRoots = [];
+  let pnpRoot = identity2.appRoot;
+  while (true) {
+    pnpRoots.push(pnpRoot);
+    if (pnpRoot === identity2.contentRoot)
+      break;
+    const parent = dirname13(pnpRoot);
+    if (parent === pnpRoot || !isContained(identity2.contentRoot, parent))
+      break;
+    pnpRoot = parent;
+  }
+  const pnpLoaders = [...new Set(pnpRoots)].flatMap((root) => [".pnp.js", ".pnp.cjs", ".pnp.loader.mjs"].map((entry) => join33(root, entry)).filter(pathExists));
+  if (pnpLoaders.length > 0) {
+    throw new Error("STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT: Plug\u2019n\u2019Play dependency resolution is unsupported");
+  }
+  let ancestor = dirname13(identity2.contentRoot);
+  while (true) {
+    if (pathExists(join33(ancestor, "node_modules"))) {
+      throw new Error("STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT: ancestor node_modules resolves outside the content root");
+    }
+    const parent = dirname13(ancestor);
+    if (parent === ancestor)
+      break;
+    ancestor = parent;
+  }
+  const roots = [...new Set(entries.map((entry) => resolve7(identity2.contentRoot, entry)))].sort();
+  for (const root of roots) {
+    assertContained(identity2.contentRoot, root, "STRICT_PROOF_DEPENDENCY_PATH_ESCAPE");
+  }
+  return roots.filter((candidate) => !roots.some((parent) => parent !== candidate && isContained(parent, candidate)));
+}
+function updateDependencyStores(hash, identity2, git, pathExists, runtimeInputs) {
+  const roots = dependencyStoreRoots(identity2, git, pathExists);
+  const state = {
+    entries: 0,
+    totalBytes: 0,
+    visitedDirectories: /* @__PURE__ */ new Set()
+  };
+  updateFramed(hash, "dependency-stores-v1");
+  for (const root of [.../* @__PURE__ */ new Set([...roots, ...runtimeInputs])].sort()) {
+    if (!pathExists(root))
+      continue;
+    updateDependencyPath(hash, root, relative4(identity2.contentRoot, root), state);
+  }
+}
+function defaultGit(root, args) {
+  return execFileSync11("git", ["-C", root, ...args], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 5e3,
+    maxBuffer: 64 * 1024 * 1024
+  }).trim();
+}
+function isDefinitiveNonGitError(error2) {
+  if (!(error2 instanceof Error))
+    return false;
+  const stderr = "stderr" in error2 && typeof error2.stderr === "string" ? error2.stderr : "stderr" in error2 && Buffer.isBuffer(error2.stderr) ? error2.stderr.toString("utf8") : "";
+  return `${error2.message}
+${stderr}`.toLowerCase().includes("not a git repository");
+}
+function assertContained(root, candidate, code) {
+  const child = relative4(root, candidate);
+  if (child === ".." || child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute6(child)) {
+    throw new Error(`${code}: path is outside the declared content root`);
+  }
+}
+function resolveDeclaredIdentity(appRoot, dependencies, canonicalize) {
+  if (!dependencies.declaredRoot)
+    throw new Error(missingDeclaredRootMessage());
+  if (!dependencies.declaredManifests?.length) {
+    throw new Error(missingDeclaredManifestListMessage());
+  }
+  const pathExists = dependencies.exists ?? existsSync26;
+  const contentRoot = canonicalize(resolve7(dependencies.declaredRoot));
+  assertContained(contentRoot, appRoot, "NON_GIT_ROOT_MISMATCH");
+  const manifestParts = [];
+  for (const entry of [...dependencies.declaredManifests].sort()) {
+    const declared = resolve7(contentRoot, entry);
+    if (!pathExists(declared))
+      throw new Error(missingDeclaredManifestMessage(entry));
+    const manifest = canonicalize(declared);
+    assertContained(contentRoot, manifest, "NON_GIT_MANIFEST_OUTSIDE_ROOT");
+    manifestParts.push(relative4(contentRoot, manifest), readFileSync27(manifest));
+  }
+  const manifestDigest = digest2(manifestParts);
+  const appRelative = relative4(contentRoot, appRoot) || ".";
+  return {
+    kind: "declared-root",
+    contentRoot,
+    appRoot,
+    sourceKey: digest2(["declared-source", contentRoot, manifestDigest]),
+    worktreeKey: digest2(["declared-root", contentRoot]),
+    appRootKey: digest2(["declared-app", appRelative]),
+    manifestDigest,
+    declaredManifests: [...dependencies.declaredManifests]
+  };
+}
+function resolveSourceIdentity(inputRoot, dependencies = {}) {
+  const canonicalize = dependencies.canonicalize ?? realpathSync10;
+  const appRoot = canonicalize(resolve7(inputRoot));
+  const git = dependencies.git ?? defaultGit;
+  try {
+    const contentRoot = canonicalize(git(appRoot, ["rev-parse", "--show-toplevel"]));
+    assertContained(contentRoot, appRoot, "APP_ROOT_OUTSIDE_WORKTREE");
+    const commonRaw = git(appRoot, ["rev-parse", "--git-common-dir"]);
+    const commonDirectory = canonicalize(isAbsolute6(commonRaw) ? commonRaw : join33(appRoot, commonRaw));
+    const head = git(appRoot, ["rev-parse", "HEAD"]);
+    const appRelative = relative4(contentRoot, appRoot) || ".";
+    return {
+      kind: "git",
+      contentRoot,
+      appRoot,
+      sourceKey: digest2(["git-source", commonDirectory]),
+      worktreeKey: digest2(["git-worktree", contentRoot]),
+      appRootKey: digest2(["git-app", appRelative]),
+      head
+    };
+  } catch (error2) {
+    if (error2 instanceof Error && (error2.message.startsWith("APP_ROOT_OUTSIDE_WORKTREE") || error2.message.startsWith("NON_GIT_"))) {
+      throw error2;
+    }
+    if (!isDefinitiveNonGitError(error2))
+      throw error2;
+    return resolveDeclaredIdentity(appRoot, dependencies, canonicalize);
+  }
+}
+function strictProofSourceIdentity(identity2, dependencies = {}) {
+  if (identity2.kind !== "git") {
+    throw new Error("STRICT_PROOF_GIT_REQUIRED: accepted strict proof requires a Git worktree");
+  }
+  const git = dependencies.git ?? defaultGit;
+  const pathExists = dependencies.exists ?? existsSync26;
+  assertFinalMetroIntegration(identity2);
+  const evidenceHeadReader = dependencies.readMetroEvidenceHead ?? readMetroEvidenceHead;
+  const runtimeEnforcementVerifier = dependencies.verifyMetroRuntimeEnforcement ?? verifyManagedMetroEnforcementReceipt;
+  const runtimeInputs = metroRuntimeInputs(identity2, dependencies.metroRuntimePolicy, evidenceHeadReader, runtimeEnforcementVerifier);
+  const head = git(identity2.contentRoot, ["rev-parse", "HEAD"]);
+  const diff = git(identity2.contentRoot, ["diff", "--binary", "--no-ext-diff", head, "--"]);
+  const untracked = git(identity2.contentRoot, ["ls-files", "--others", "--exclude-standard", "-z"]).split("\0").filter(Boolean).sort();
+  const ignored = git(identity2.contentRoot, [
+    "ls-files",
+    "--others",
+    "--ignored",
+    "--exclude-standard",
+    "-z",
+    "--",
+    ...IGNORED_RUNTIME_INPUT_PATHS
+  ]).split("\0").filter(Boolean).sort();
+  const gitlinks = git(identity2.contentRoot, ["ls-files", "--stage", "-z"]).split("\0").flatMap((entry) => {
+    const match = /^160000 [0-9a-f]+ \d+\t(.+)$/i.exec(entry);
+    return match?.[1] ? [match[1]] : [];
+  });
+  for (const entry of gitlinks) {
+    const submodule = resolve7(identity2.contentRoot, entry);
+    assertContained(identity2.contentRoot, submodule, "STRICT_PROOF_PATH_ESCAPE");
+    const status = git(submodule, [
+      "status",
+      "--porcelain=v1",
+      "--untracked-files=all",
+      "--ignore-submodules=none"
+    ]);
+    if (status) {
+      throw new Error(`STRICT_PROOF_DIRTY_SUBMODULE: ${entry} contains source changes outside the parent digest`);
+    }
+  }
+  const dirtyHash = createHash11("sha256");
+  updateFramed(dirtyHash, "git-dirty-v3");
+  updateFramed(dirtyHash, diff);
+  for (const semantics of runtimeInputs.semantics) {
+    updateFramed(dirtyHash, "runtime-semantics");
+    updateFramed(dirtyHash, semantics);
+  }
+  updateDependencyStores(dirtyHash, identity2, git, pathExists, runtimeInputs.paths);
+  const sourceEntries = [
+    ...untracked.map((entry) => ["untracked", entry]),
+    ...ignored.map((entry) => ["ignored-runtime", entry])
+  ];
+  if (sourceEntries.length > MAX_STRICT_PROOF_FILES) {
+    throw new Error("STRICT_PROOF_RUNTIME_INPUT_LIMIT: too many untracked runtime inputs");
+  }
+  let totalBytes = 0;
+  for (const [classification, entry] of sourceEntries) {
+    const file = resolve7(identity2.contentRoot, entry);
+    assertContained(identity2.contentRoot, file, "STRICT_PROOF_PATH_ESCAPE");
+    const stat2 = lstatSync10(file);
+    updateFramed(dirtyHash, classification);
+    updateFramed(dirtyHash, entry);
+    if (stat2.isFile()) {
+      if (stat2.size > MAX_STRICT_PROOF_FILE_BYTES) {
+        throw new Error(`STRICT_PROOF_RUNTIME_INPUT_LIMIT: ${entry} exceeds the per-file limit`);
+      }
+      updateFramed(dirtyHash, "file");
+      const stableSize = updateFramedFile(dirtyHash, file, MAX_STRICT_PROOF_FILE_BYTES);
+      totalBytes += stableSize;
+      if (totalBytes > MAX_STRICT_PROOF_TOTAL_BYTES) {
+        throw new Error("STRICT_PROOF_RUNTIME_INPUT_LIMIT: runtime inputs exceed the total limit");
+      }
+      continue;
+    }
+    if (stat2.isSymbolicLink()) {
+      const target = realpathSync10(file);
+      assertContained(identity2.contentRoot, target, "STRICT_PROOF_PATH_ESCAPE");
+      const link = readlinkSync3(file);
+      const targetStat = lstatSync10(target);
+      if (!targetStat.isFile()) {
+        throw new Error("STRICT_PROOF_UNSUPPORTED_FILE: untracked symlink target is not a regular file");
+      }
+      if (targetStat.size > MAX_STRICT_PROOF_FILE_BYTES) {
+        throw new Error(`STRICT_PROOF_RUNTIME_INPUT_LIMIT: ${entry} exceeds the per-file limit`);
+      }
+      updateFramed(dirtyHash, "symlink");
+      updateFramed(dirtyHash, link);
+      const stableSize = updateFramedFile(dirtyHash, target, MAX_STRICT_PROOF_FILE_BYTES);
+      totalBytes += Buffer.byteLength(link) + stableSize;
+      if (totalBytes > MAX_STRICT_PROOF_TOTAL_BYTES) {
+        throw new Error("STRICT_PROOF_RUNTIME_INPUT_LIMIT: runtime inputs exceed the total limit");
+      }
+      continue;
+    }
+    throw new Error("STRICT_PROOF_UNSUPPORTED_FILE: untracked source is neither a regular file nor a symlink");
+  }
+  const runtimeInputsAfter = metroRuntimeInputs(identity2, dependencies.metroRuntimePolicy, evidenceHeadReader, runtimeEnforcementVerifier);
+  if (canonicalAuthorityJson(runtimeInputsAfter) !== canonicalAuthorityJson(runtimeInputs)) {
+    throw new Error("STRICT_PROOF_SOURCE_READ_FAILED: Metro runtime inputs changed while hashing");
+  }
+  return {
+    kind: "git-strict-proof",
+    sourceKey: identity2.sourceKey,
+    worktreeKey: identity2.worktreeKey,
+    appRootKey: identity2.appRootKey,
+    head,
+    dirtyDigest: dirtyHash.digest("hex")
+  };
+}
+
+// packages/rn-dev-agent-core/dist/session/successor-source.js
+init_secure_state_file();
+import { join as join34, resolve as resolve8 } from "node:path";
+var DECLARATION_FILE = "successor-source.json";
+function successorSourceDeclarationPath(runtimeRoot) {
+  return join34(runtimeRoot, DECLARATION_FILE);
+}
+function writeSuccessorSourceDeclaration(runtimeRoot, declaration) {
+  writeJsonStateFileAtomic(successorSourceDeclarationPath(runtimeRoot), declaration);
+}
+function clearSuccessorSourceDeclaration(runtimeRoot) {
+  deleteStateFile(successorSourceDeclarationPath(runtimeRoot));
+}
 
 // packages/rn-dev-agent-core/dist/session/process-owner.js
 init_process_birth();
@@ -67768,9 +68562,143 @@ function inspectSessionOwner(owner, dependencies = {}) {
   return observed.token === owner.token ? "match" : "mismatch";
 }
 
-// packages/rn-dev-agent-core/dist/tools/session.js
-init_process_birth();
-init_device_arbiter();
+// packages/rn-dev-agent-core/dist/session/startup-cleanup.js
+init_secure_state_file();
+import { createHash as createHash12 } from "node:crypto";
+import { join as join35 } from "node:path";
+
+// packages/rn-dev-agent-core/dist/session/android-metro-reverse.js
+import { execFileSync as execFileSync12 } from "node:child_process";
+function execute(dependencies, file, args) {
+  if (dependencies.execute)
+    return dependencies.execute(file, args);
+  return execFileSync12(file, args, {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 1e4
+  });
+}
+function endpoint(port) {
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65535) {
+    throw new Error("PHYSICAL_ANDROID_METRO_UNREACHABLE: authority-bound Metro port is invalid");
+  }
+  return `tcp:${port}`;
+}
+var AndroidDeviceDisconnectedError = class extends Error {
+};
+var DEVICE_DISCONNECTED = /device\s+('[^']*'\s+)?not found|no devices\/emulators found|device offline/i;
+function describeExecutionFailure(error2) {
+  const parts = error2 && typeof error2 === "object" ? [
+    error2.message,
+    error2.stderr,
+    error2.stdout
+  ] : [String(error2)];
+  return parts.map((part) => typeof part === "string" ? part : Buffer.isBuffer(part) ? part.toString("utf8") : "").filter((part) => part.length > 0).join("\n");
+}
+function adb(deviceId, args, dependencies) {
+  try {
+    return execute(dependencies, "adb", ["-s", deviceId, ...args]);
+  } catch (error2) {
+    const details = describeExecutionFailure(error2);
+    const message = `PHYSICAL_ANDROID_METRO_UNREACHABLE: adb could not configure Metro reachability on exact device ${deviceId}: ${details || String(error2)}`;
+    throw DEVICE_DISCONNECTED.test(details) ? new AndroidDeviceDisconnectedError(message) : new Error(message);
+  }
+}
+function isPhysicalAndroid(deviceId, dependencies) {
+  if (/^emulator-\d+$/.test(deviceId))
+    return false;
+  return adb(deviceId, ["shell", "getprop", "ro.kernel.qemu"], dependencies).trim() !== "1";
+}
+function listReverseForwards(deviceId, dependencies) {
+  return adb(deviceId, ["reverse", "--list"], dependencies).split("\n").map((line) => line.trim().split(/\s+/)).filter((parts) => parts.length >= 2).map((parts) => ({
+    local: parts[parts.length - 2],
+    remote: parts[parts.length - 1]
+  })).filter((forward) => forward.local.startsWith("tcp:") && forward.remote.startsWith("tcp:"));
+}
+function assertBindingMatches(binding, deviceId, metroPort) {
+  const exact = endpoint(metroPort);
+  if (binding.platform !== "android" || binding.deviceId !== deviceId || binding.metroPort !== metroPort || binding.local !== exact || binding.remote !== exact) {
+    throw new Error("PHYSICAL_ANDROID_METRO_UNREACHABLE: retained adb reverse authority does not match the exact device and Metro port");
+  }
+}
+function removeExactForwardAfterFailedSetup(deviceId, exact, dependencies) {
+  try {
+    const current = listReverseForwards(deviceId, dependencies).filter((forward) => forward.local === exact);
+    if (current.length === 1 && current[0].remote === exact) {
+      adb(deviceId, ["reverse", "--remove", exact], dependencies);
+    }
+  } catch (error2) {
+    if (error2 instanceof AndroidDeviceDisconnectedError)
+      return;
+    throw error2;
+  }
+}
+function ensureAndroidMetroReverse(input, dependencies = {}) {
+  const exact = endpoint(input.metroPort);
+  if (!isPhysicalAndroid(input.deviceId, dependencies)) {
+    if (input.binding) {
+      throw new Error("PHYSICAL_ANDROID_METRO_UNREACHABLE: emulator authority cannot retain a physical-device adb reverse binding");
+    }
+    return { binding: null, created: false, physical: false };
+  }
+  if (input.binding)
+    assertBindingMatches(input.binding, input.deviceId, input.metroPort);
+  const matchingLocal = listReverseForwards(input.deviceId, dependencies).filter((forward) => forward.local === exact);
+  if (matchingLocal.length > 0) {
+    if (input.binding && matchingLocal.length === 1 && matchingLocal[0].remote === exact) {
+      return { binding: input.binding, created: false, physical: true };
+    }
+    throw new Error(`PHYSICAL_ANDROID_METRO_UNREACHABLE: exact device ${input.deviceId} already has a foreign adb reverse for ${exact}; refusing to replace or adopt it. After confirming nothing else owns it, clear it manually with: adb -s ${input.deviceId} reverse --remove ${exact}`);
+  }
+  let created = false;
+  try {
+    adb(input.deviceId, ["reverse", exact, exact], dependencies);
+    created = true;
+    const verified = listReverseForwards(input.deviceId, dependencies).filter((forward) => forward.local === exact);
+    if (verified.length !== 1 || verified[0].remote !== exact) {
+      throw new Error(`PHYSICAL_ANDROID_METRO_UNREACHABLE: adb did not verify ${exact} -> ${exact} on exact device ${input.deviceId}`);
+    }
+    return {
+      binding: {
+        platform: "android",
+        deviceId: input.deviceId,
+        metroPort: input.metroPort,
+        local: exact,
+        remote: exact
+      },
+      created: true,
+      physical: true
+    };
+  } catch (error2) {
+    if (!created)
+      throw error2;
+    try {
+      removeExactForwardAfterFailedSetup(input.deviceId, exact, dependencies);
+    } catch (cleanupError) {
+      throw new AggregateError([error2, cleanupError], "PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN: failed setup left exact adb reverse cleanup unresolved");
+    }
+    throw error2;
+  }
+}
+function removeAndroidMetroReverse(binding, dependencies = {}) {
+  assertBindingMatches(binding, binding.deviceId, binding.metroPort);
+  try {
+    const matchingLocal = listReverseForwards(binding.deviceId, dependencies).filter((forward) => forward.local === binding.local);
+    if (matchingLocal.length === 0)
+      return;
+    if (matchingLocal.length !== 1 || matchingLocal[0].remote !== binding.remote) {
+      throw new Error(`PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN: ${binding.local} on exact device ${binding.deviceId} changed to a foreign forward; refusing to remove it. After confirming nothing else owns it, clear it manually with: adb -s ${binding.deviceId} reverse --remove ${binding.local}`);
+    }
+    adb(binding.deviceId, ["reverse", "--remove", binding.local], dependencies);
+    if (listReverseForwards(binding.deviceId, dependencies).some((forward) => forward.local === binding.local)) {
+      throw new Error(`PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN: session-owned ${binding.local} remains on exact device ${binding.deviceId}`);
+    }
+  } catch (error2) {
+    if (error2 instanceof AndroidDeviceDisconnectedError)
+      return;
+    throw error2;
+  }
+}
 
 // packages/rn-dev-agent-core/dist/session/process-cleanup.js
 init_release_android_slot();
@@ -67782,7 +68710,7 @@ init_registry();
 var execFile15 = promisify16(execFileCb13);
 var RECORDER_POST_KILL_CONFIRM_MS = 2e3;
 function executeRecorderScript(script, args, options) {
-  return new Promise((resolve12, reject) => {
+  return new Promise((resolve14, reject) => {
     const child = spawn8(script, args, {
       detached: process.platform !== "win32",
       env: options.env,
@@ -67810,7 +68738,7 @@ function executeRecorderScript(script, args, options) {
       if (error2)
         reject(error2);
       else
-        resolve12(result);
+        resolve14(result);
     };
     const signal = (value) => {
       if (child.pid === void 0)
@@ -67926,7 +68854,7 @@ async function awaitExactStopped(probe, deadlineMs, code, message) {
     }
     if (Date.now() >= deadlineMs)
       return false;
-    await new Promise((resolve12) => setTimeout(resolve12, 25));
+    await new Promise((resolve14) => setTimeout(resolve14, 25));
   }
 }
 async function waitForExactStopped(probe, deadlineMs, code, message) {
@@ -68103,11 +69031,189 @@ async function stopBoundRecorder(binding, _processProbe = probeProcessBirth, run
   }
 }
 
+// packages/rn-dev-agent-core/dist/session/startup-cleanup.js
+init_registry();
+var EXECUTION_ORDER = [
+  "androidMetroReverse",
+  "recorder",
+  "runner",
+  "observe",
+  "metro"
+];
+async function runStartupOwnerCleanup(input, dependencies = {}) {
+  const released = [];
+  for (let round = 0; round < 8; round += 1) {
+    const candidate = input.registry.findStartupCleanupCandidate(input);
+    if (!candidate)
+      return { status: "clean", released };
+    try {
+      const plan = input.registry.beginStartupOwnerCleanup(candidate);
+      await completeObligations(input.registry, candidate, dependencies);
+      restoreDeadOwnerIntegration(input, candidate, plan, dependencies);
+      input.registry.finishStartupOwnerCleanup(candidate);
+      released.push(candidate.sessionId);
+    } catch (error2) {
+      const refusal = refusalOf(error2);
+      retainRefusal(input.registry, candidate, refusal);
+      return { status: "refused", released, refusal };
+    }
+  }
+  return {
+    status: "refused",
+    released,
+    refusal: publicRefusal({
+      code: "RESOURCE_CLAIM_CONFLICT",
+      message: "startup cleanup did not converge for this worktree"
+    })
+  };
+}
+async function runStartupCleanupForSource(input) {
+  const layout = createAuthorityStateLayout(input.stateDir);
+  const registry2 = openSessionRegistry(layout.registry, {
+    ownerStatus: input.ownerStatus,
+    leaseMs: 3e4
+  });
+  try {
+    return await runStartupOwnerCleanup({
+      registry: registry2,
+      sourceKey: input.source.sourceKey,
+      worktreeKey: input.source.worktreeKey,
+      appRootKey: input.source.appRootKey,
+      appRoot: input.source.appRoot
+    }, {
+      readSessionSecret: (sessionId) => readJsonStateFile(join35(layout.sessions, sessionId, "secret.json"))
+    });
+  } finally {
+    registry2.close();
+  }
+}
+async function completeObligations(registry2, prior, dependencies) {
+  for (const resource of EXECUTION_ORDER) {
+    const entry = registry2.verifyStartupOwnerObligation(prior, resource);
+    if (!entry || typeof entry.completedAt === "number")
+      continue;
+    if (resource === "androidMetroReverse") {
+      (dependencies.removeAndroidMetroReverse ?? removeAndroidMetroReverse)(entry);
+    } else if (resource === "recorder") {
+      await (dependencies.stopBoundRecorder ?? stopBoundRecorder)(entry);
+    } else if (resource === "runner") {
+      await (dependencies.stopBoundRunner ?? stopBoundRunner)(entry);
+    } else if (resource === "observe") {
+      await (dependencies.stopBoundObserve ?? stopBoundObserve)(entry);
+    } else {
+      const secret = dependencies.readSessionSecret?.(prior.sessionId) ?? null;
+      const signerCapability = typeof secret?.signerCapability === "string" ? secret.signerCapability : "";
+      const stop = dependencies.stopManagedMetro ?? ((binding, stopInput) => stopManagedMetro(binding, stopInput));
+      const stopped = await stop(entry, { sessionId: prior.sessionId, signerCapability });
+      if (!stopped) {
+        throw new SessionAuthorityError("METRO_CLEANUP_PENDING", "managed Metro could not be stopped with exact process authority");
+      }
+    }
+    registry2.completeStartupOwnerObligation(prior, resource);
+  }
+}
+function restoreDeadOwnerIntegration(input, prior, plan, dependencies) {
+  if (!plan.integration || typeof plan.integration.completedAt === "number")
+    return;
+  const binding = input.registry.getSessionStatus(prior.sessionId)?.bindings.packageIntegration;
+  if (!binding || typeof binding !== "object")
+    return;
+  const manifestSha256 = typeof binding.manifestSha256 === "string" ? binding.manifestSha256 : "";
+  const manifestSource = verifiedDeadOwnerManifestSource(input.appRoot, binding, manifestSha256);
+  if (!manifestSource) {
+    throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "integration restoration requires a SHA-256-verified manifest and none is available; the dead owner binding is preserved", void 0, {
+      nextAction: "Restore the exact integration manifest at .rn-agent/integration/rn-session-integration.json from your own version control history or backups so it matches the manifest SHA-256 recorded on the binding, then restart the MCP transport."
+    });
+  }
+  input.registry.verifyStartupOwnerIntegrationRestore(prior, {
+    sourceKey: input.sourceKey,
+    worktreeKey: input.worktreeKey,
+    appRootKey: input.appRootKey,
+    manifestSha256
+  });
+  (dependencies.restoreIntegrationFiles ?? restorePackageIntegrationFiles)({
+    appRoot: input.appRoot,
+    manifestSource
+  });
+  input.registry.completeStartupOwnerIntegrationRestore(prior, { manifestSha256 });
+}
+function verifiedDeadOwnerManifestSource(appRoot, binding, manifestSha256) {
+  if (!/^[0-9a-f]{64}$/.test(manifestSha256))
+    return void 0;
+  const verified = (candidate) => typeof candidate === "string" && createHash12("sha256").update(candidate).digest("hex") === manifestSha256 ? candidate : void 0;
+  let liveManifest;
+  try {
+    liveManifest = readPackageIntegrationInputs(appRoot).manifest ?? void 0;
+  } catch {
+    liveManifest = void 0;
+  }
+  const phase = (value) => value && typeof value === "object" ? value : null;
+  const restoration = phase(binding.restoration);
+  const installation = phase(binding.installation);
+  return verified(liveManifest) ?? verified(restoration?.phase === "started" ? restoration.manifestSource : void 0) ?? verified(installation?.phase === "started" ? installation.manifestSource : void 0) ?? verified(binding.manifestSource);
+}
+function retainRefusal(registry2, prior, refusal) {
+  try {
+    registry2.recordStartupCleanupRefusal(prior, {
+      code: refusal.code,
+      reason: refusal.message,
+      ...refusal.nextAction ? { nextAction: refusal.nextAction } : {}
+    });
+  } catch {
+  }
+}
+var PUBLIC_REFUSAL_REASONS = /* @__PURE__ */ new Set([
+  "integration restoration requires a SHA-256-verified manifest and none is available; the dead owner binding is preserved",
+  "integration restoration requires the recorded manifest authority",
+  "integration restoration requires the active startup journal and recorded manifest authority",
+  "managed Metro could not be stopped with exact process authority",
+  "managed Metro cleanup has not been durably completed",
+  "startup cleanup did not converge for this worktree",
+  "startup cleanup no longer matches the exact source and app root",
+  "no startup cleanup is in progress",
+  "the same-root owner is live; a live owner is never released",
+  "the same-root owner identity could not be proven, so it is treated as live",
+  "expired lease owner identity could not be proven",
+  "the startup cleanup owner no longer matches the proven claim epoch",
+  ...["androidMetroReverse", "recorder", "runner", "observe", "metro"].flatMap((resource) => [
+    `${resource} cleanup has not been durably completed`,
+    `${resource} cleanup was not durably requested`
+  ])
+]);
+var GENERIC_REFUSAL_REMEDY = "Startup cleanup refused and preserved the prior owner binding. Resolve the refusal named by this code, then restart the MCP transport; another restart alone does not release the owner.";
+function publicRefusal(refusal) {
+  const sentence = refusal.message.replace(/^[A-Z][A-Z0-9_]+: /, "");
+  const authored = PUBLIC_REFUSAL_REASONS.has(sentence);
+  return {
+    code: refusal.code,
+    message: authored ? sentence : `startup cleanup refused with ${refusal.code} and preserved the prior owner binding`,
+    nextAction: authored ? refusal.nextAction ?? GENERIC_REFUSAL_REMEDY : GENERIC_REFUSAL_REMEDY
+  };
+}
+function refusalOf(error2) {
+  if (error2 instanceof SessionAuthorityError) {
+    return publicRefusal({
+      code: error2.code,
+      message: error2.message,
+      ...error2.details?.nextAction ? { nextAction: error2.details.nextAction } : {}
+    });
+  }
+  const code = error2 && typeof error2 === "object" && typeof error2.code === "string" ? error2.code : "STARTUP_CLEANUP_FAILED";
+  return publicRefusal({
+    code,
+    message: error2 instanceof Error ? error2.message : String(error2)
+  });
+}
+
+// packages/rn-dev-agent-core/dist/tools/session.js
+init_process_birth();
+init_device_arbiter();
+
 // packages/rn-dev-agent-core/dist/session/device-existence.js
-import { execFileSync as execFileSync11 } from "node:child_process";
+import { execFileSync as execFileSync13 } from "node:child_process";
 function deviceExistsOnHost(platform, deviceId) {
   if (platform === "ios") {
-    const output2 = execFileSync11("xcrun", ["simctl", "list", "devices", "--json"], {
+    const output2 = execFileSync13("xcrun", ["simctl", "list", "devices", "--json"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 5e3
@@ -68115,145 +69221,12 @@ function deviceExistsOnHost(platform, deviceId) {
     const parsed = JSON.parse(output2);
     return Object.values(parsed.devices ?? {}).flat().some((device) => device.udid === deviceId && device.isAvailable !== false);
   }
-  const output = execFileSync11("adb", ["devices"], {
+  const output = execFileSync13("adb", ["devices"], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
     timeout: 5e3
   });
   return output.split("\n").some((line) => line.split(/\s+/)[0] === deviceId && /\sdevice\s*$/.test(line));
-}
-
-// packages/rn-dev-agent-core/dist/session/android-metro-reverse.js
-import { execFileSync as execFileSync12 } from "node:child_process";
-function execute(dependencies, file, args) {
-  if (dependencies.execute)
-    return dependencies.execute(file, args);
-  return execFileSync12(file, args, {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-    timeout: 1e4
-  });
-}
-function endpoint(port) {
-  if (!Number.isSafeInteger(port) || port < 1 || port > 65535) {
-    throw new Error("PHYSICAL_ANDROID_METRO_UNREACHABLE: authority-bound Metro port is invalid");
-  }
-  return `tcp:${port}`;
-}
-var AndroidDeviceDisconnectedError = class extends Error {
-};
-var DEVICE_DISCONNECTED = /device\s+('[^']*'\s+)?not found|no devices\/emulators found|device offline/i;
-function describeExecutionFailure(error2) {
-  const parts = error2 && typeof error2 === "object" ? [
-    error2.message,
-    error2.stderr,
-    error2.stdout
-  ] : [String(error2)];
-  return parts.map((part) => typeof part === "string" ? part : Buffer.isBuffer(part) ? part.toString("utf8") : "").filter((part) => part.length > 0).join("\n");
-}
-function adb(deviceId, args, dependencies) {
-  try {
-    return execute(dependencies, "adb", ["-s", deviceId, ...args]);
-  } catch (error2) {
-    const details = describeExecutionFailure(error2);
-    const message = `PHYSICAL_ANDROID_METRO_UNREACHABLE: adb could not configure Metro reachability on exact device ${deviceId}: ${details || String(error2)}`;
-    throw DEVICE_DISCONNECTED.test(details) ? new AndroidDeviceDisconnectedError(message) : new Error(message);
-  }
-}
-function isPhysicalAndroid(deviceId, dependencies) {
-  if (/^emulator-\d+$/.test(deviceId))
-    return false;
-  return adb(deviceId, ["shell", "getprop", "ro.kernel.qemu"], dependencies).trim() !== "1";
-}
-function listReverseForwards(deviceId, dependencies) {
-  return adb(deviceId, ["reverse", "--list"], dependencies).split("\n").map((line) => line.trim().split(/\s+/)).filter((parts) => parts.length >= 2).map((parts) => ({
-    local: parts[parts.length - 2],
-    remote: parts[parts.length - 1]
-  })).filter((forward) => forward.local.startsWith("tcp:") && forward.remote.startsWith("tcp:"));
-}
-function assertBindingMatches(binding, deviceId, metroPort) {
-  const exact = endpoint(metroPort);
-  if (binding.platform !== "android" || binding.deviceId !== deviceId || binding.metroPort !== metroPort || binding.local !== exact || binding.remote !== exact) {
-    throw new Error("PHYSICAL_ANDROID_METRO_UNREACHABLE: retained adb reverse authority does not match the exact device and Metro port");
-  }
-}
-function removeExactForwardAfterFailedSetup(deviceId, exact, dependencies) {
-  try {
-    const current = listReverseForwards(deviceId, dependencies).filter((forward) => forward.local === exact);
-    if (current.length === 1 && current[0].remote === exact) {
-      adb(deviceId, ["reverse", "--remove", exact], dependencies);
-    }
-  } catch (error2) {
-    if (error2 instanceof AndroidDeviceDisconnectedError)
-      return;
-    throw error2;
-  }
-}
-function ensureAndroidMetroReverse(input, dependencies = {}) {
-  const exact = endpoint(input.metroPort);
-  if (!isPhysicalAndroid(input.deviceId, dependencies)) {
-    if (input.binding) {
-      throw new Error("PHYSICAL_ANDROID_METRO_UNREACHABLE: emulator authority cannot retain a physical-device adb reverse binding");
-    }
-    return { binding: null, created: false, physical: false };
-  }
-  if (input.binding)
-    assertBindingMatches(input.binding, input.deviceId, input.metroPort);
-  const matchingLocal = listReverseForwards(input.deviceId, dependencies).filter((forward) => forward.local === exact);
-  if (matchingLocal.length > 0) {
-    if (input.binding && matchingLocal.length === 1 && matchingLocal[0].remote === exact) {
-      return { binding: input.binding, created: false, physical: true };
-    }
-    throw new Error(`PHYSICAL_ANDROID_METRO_UNREACHABLE: exact device ${input.deviceId} already has a foreign adb reverse for ${exact}; refusing to replace or adopt it. After confirming nothing else owns it, clear it manually with: adb -s ${input.deviceId} reverse --remove ${exact}`);
-  }
-  let created = false;
-  try {
-    adb(input.deviceId, ["reverse", exact, exact], dependencies);
-    created = true;
-    const verified = listReverseForwards(input.deviceId, dependencies).filter((forward) => forward.local === exact);
-    if (verified.length !== 1 || verified[0].remote !== exact) {
-      throw new Error(`PHYSICAL_ANDROID_METRO_UNREACHABLE: adb did not verify ${exact} -> ${exact} on exact device ${input.deviceId}`);
-    }
-    return {
-      binding: {
-        platform: "android",
-        deviceId: input.deviceId,
-        metroPort: input.metroPort,
-        local: exact,
-        remote: exact
-      },
-      created: true,
-      physical: true
-    };
-  } catch (error2) {
-    if (!created)
-      throw error2;
-    try {
-      removeExactForwardAfterFailedSetup(input.deviceId, exact, dependencies);
-    } catch (cleanupError) {
-      throw new AggregateError([error2, cleanupError], "PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN: failed setup left exact adb reverse cleanup unresolved");
-    }
-    throw error2;
-  }
-}
-function removeAndroidMetroReverse(binding, dependencies = {}) {
-  assertBindingMatches(binding, binding.deviceId, binding.metroPort);
-  try {
-    const matchingLocal = listReverseForwards(binding.deviceId, dependencies).filter((forward) => forward.local === binding.local);
-    if (matchingLocal.length === 0)
-      return;
-    if (matchingLocal.length !== 1 || matchingLocal[0].remote !== binding.remote) {
-      throw new Error(`PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN: ${binding.local} on exact device ${binding.deviceId} changed to a foreign forward; refusing to remove it. After confirming nothing else owns it, clear it manually with: adb -s ${binding.deviceId} reverse --remove ${binding.local}`);
-    }
-    adb(binding.deviceId, ["reverse", "--remove", binding.local], dependencies);
-    if (listReverseForwards(binding.deviceId, dependencies).some((forward) => forward.local === binding.local)) {
-      throw new Error(`PHYSICAL_ANDROID_METRO_CLEANUP_UNPROVEN: session-owned ${binding.local} remains on exact device ${binding.deviceId}`);
-    }
-  } catch (error2) {
-    if (error2 instanceof AndroidDeviceDisconnectedError)
-      return;
-    throw error2;
-  }
 }
 
 // packages/rn-dev-agent-core/dist/tools/session.js
@@ -68269,7 +69242,7 @@ function sameMetroAuthority(current, next) {
 function verifiedManifestSource(candidate, manifestSha256) {
   if (typeof candidate !== "string" || typeof manifestSha256 !== "string")
     return void 0;
-  return createHash11("sha256").update(candidate).digest("hex") === manifestSha256 ? candidate : void 0;
+  return createHash13("sha256").update(candidate).digest("hex") === manifestSha256 ? candidate : void 0;
 }
 function durableBindingManifestSource(binding) {
   return verifiedManifestSource(binding?.manifestSource, binding?.manifestSha256);
@@ -68318,6 +69291,72 @@ function assertPackageIntegrationInactive(bindings, action) {
   if (activeBindings.length > 0) {
     const guidance = action === "apply_integration" && activeBindings.length === 1 && activeBindings[0] === "observe" ? '; run observe action "stop" for this session, then retry apply_integration' : "";
     throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", `${action} requires releasing active ${activeBindings.join(", ")} authority${guidance}`);
+  }
+}
+function defaultDeclareSuccessorSource(declaration) {
+  const runtimeRoot = process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT;
+  if (!runtimeRoot) {
+    throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "successor source declaration requires the supervised session runtime root; start the MCP transport from the intended worktree instead");
+  }
+  writeSuccessorSourceDeclaration(runtimeRoot, declaration);
+}
+async function defaultReleaseDeadSourceOwner(source) {
+  return runStartupCleanupForSource({ source, ownerStatus: inspectSessionOwner });
+}
+function defaultWithdrawSuccessorSource() {
+  const runtimeRoot = process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT;
+  if (!runtimeRoot)
+    return;
+  clearSuccessorSourceDeclaration(runtimeRoot);
+}
+function sessionSourceResolver(status, dependencies) {
+  if (dependencies.resolveSourceIdentity)
+    return dependencies.resolveSourceIdentity;
+  const stored = status.source;
+  return (root) => resolveSourceIdentity(root, stored?.kind === "declared-root" ? { declaredRoot: stored.contentRoot, declaredManifests: stored.declaredManifests } : {});
+}
+function anchorDeclaredProjectRoot(status, projectRoot) {
+  if (isAbsolute7(projectRoot))
+    return projectRoot;
+  const boundAppRoot = status.source?.appRoot;
+  return typeof boundAppRoot === "string" && boundAppRoot.length > 0 ? resolve9(boundAppRoot, projectRoot) : projectRoot;
+}
+function assertDeclaredProjectRootMatches(status, projectRoot, resolveIdentity) {
+  if (projectRoot === void 0)
+    return;
+  const boundAppRoot = String(status.source.appRoot ?? "");
+  if (typeof projectRoot !== "string" || projectRoot.length === 0) {
+    throw new SessionAuthorityError("SOURCE_ROOT_DIVERGENCE", `projectRoot must be a non-empty path (session source root: ${boundAppRoot})`, void 0, { axis: "S" });
+  }
+  const anchored = anchorDeclaredProjectRoot(status, projectRoot);
+  let declared;
+  try {
+    declared = resolveIdentity(anchored);
+  } catch (error2) {
+    throw new SessionAuthorityError("SOURCE_ROOT_DIVERGENCE", `declared project root ${anchored} cannot be resolved as a source root (session source root: ${boundAppRoot}): ${error2 instanceof Error ? error2.message : "unknown error"}`, void 0, { axis: "S" });
+  }
+  if (declared.worktreeKey === status.worktreeKey && declared.appRootKey === status.appRootKey) {
+    return;
+  }
+  const divergence = declared.worktreeKey === status.worktreeKey ? "a different app root of the same worktree" : "a different worktree";
+  throw new SessionAuthorityError("SOURCE_ROOT_DIVERGENCE", `session source is bound to ${boundAppRoot} but the caller declared ${declared.appRoot} in ${divergence}`, void 0, {
+    axis: "S",
+    nextAction: `Run rn_session action "bind_source" with projectRoot "${declared.appRoot}" to rebind this session to that root, then retry.`
+  });
+}
+async function stopVerifiedSessionObserve(status, session2, dependencies) {
+  const observe2 = status.bindings.observe;
+  if (!observe2)
+    return;
+  const port = String(observe2.port);
+  if (status.bindings.observePort !== observe2.port || !status.claims.some((claim) => claim.type === "observe-port" && claim.key === port && claim.sessionId === session2.sessionId && claim.claimEpoch === session2.claimEpoch)) {
+    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe cleanup claim no longer matches the authenticated binding");
+  }
+  const cleanup = { ...observe2, stopRequestedAt: Date.now() };
+  if (dependencies.stopHandoffObserve) {
+    await dependencies.stopHandoffObserve(cleanup);
+  } else {
+    await stopBoundObserve(cleanup, dependencies.probeListener, dependencies.probeProcessBirth, dependencies.cleanupTimeoutMs);
   }
 }
 async function stopHandoffObserve(binding, listenerProbe, processProbe, timeoutMs = 2e3) {
@@ -68419,10 +69458,18 @@ async function completeStaleDeviceCleanupPlan(registry2, session2, workerInstanc
   }
   return completed;
 }
-async function withInlineStaleDeviceCleanup(registry2, session2, dependencies, input, requireWorkerInstance, revalidate, operation) {
+async function withInlineStaleDeviceCleanup(registry2, session2, dependencies, input, requireWorkerInstance, revalidate, operation, prepareCommit) {
   const target = { platform: input.platform, deviceId: input.deviceId };
-  try {
+  const commit = async () => {
+    registry2.inspectDeviceAuthorityAvailability(session2, {
+      type: "device",
+      key: `${target.platform}:${target.deviceId}`
+    });
+    await prepareCommit?.();
     return operation();
+  };
+  try {
+    return await commit();
   } catch (error2) {
     if (!(error2 instanceof SessionAuthorityError) || error2.code !== "SESSION_AUTHORITY_REQUIRED" || !error2.message.includes("proven-stale device owner")) {
       throw error2;
@@ -68444,6 +69491,7 @@ async function withInlineStaleDeviceCleanup(registry2, session2, dependencies, i
     await completeStaleDeviceCleanupPlan(registry2, session2, workerInstance, plan, dependencies);
     registry2.finishStaleResourceRelease(session2, workerInstance);
     revalidate();
+    await prepareCommit?.();
     return operation();
   }
 }
@@ -68500,6 +69548,62 @@ function removeSessionAndroidMetroReverse(registry2, session2, status, dependenc
     throw new SessionAuthorityError("SESSION_OWNER_LOST", "session disappeared after physical Android Metro reachability cleanup");
   }
   return current;
+}
+async function releaseSessionAuthority(registry2, session2, dependencies) {
+  let status = registry2.getSessionStatus(session2.sessionId);
+  if (!status) {
+    throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "session disappeared before release cleanup");
+  }
+  if (status.bindings.packageIntegration) {
+    throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "package integration must be restored before session release");
+  }
+  status = removeSessionAndroidMetroReverse(registry2, session2, status, dependencies);
+  const appRoot = String(status.source?.appRoot ?? "");
+  const metro = status.bindings.metro;
+  const runner = status.bindings.runner;
+  const recorder2 = status.bindings.recorder;
+  if (recorder2) {
+    const claimKey = `${String(recorder2.platform)}:${String(recorder2.deviceId)}`;
+    if (!status.claims.some((claim) => claim.type === "recorder" && claim.key === claimKey && claim.sessionId === session2.sessionId && claim.claimEpoch === session2.claimEpoch)) {
+      throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "recorder cleanup claim no longer matches the authenticated binding");
+    }
+    await (dependencies.stopHandoffRecorder ?? stopBoundRecorder)(recorder2);
+  }
+  if (runner) {
+    const claimKey = `${String(runner.platform)}:${String(runner.deviceId)}:${String(runner.port)}`;
+    if (!status.claims.some((claim) => claim.type === "runner" && claim.key === claimKey && claim.sessionId === session2.sessionId && claim.claimEpoch === session2.claimEpoch)) {
+      throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "runner cleanup claim no longer matches the authenticated binding");
+    }
+    const cleanup = { ...runner, claimKey, stopRequestedAt: Date.now() };
+    if (dependencies.stopHandoffRunner) {
+      await dependencies.stopHandoffRunner(cleanup);
+    } else {
+      await stopBoundRunner(cleanup, dependencies.probeProcessBirth, dependencies.signalProcess, dependencies.cleanupTimeoutMs);
+    }
+  }
+  await stopVerifiedSessionObserve(status, session2, dependencies);
+  if (metro?.mode === "managed") {
+    const signerCapability = dependencies.getSignerCapability?.();
+    if (!signerCapability) {
+      throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "managed Metro release requires the session signer capability");
+    }
+    const stopped = await (dependencies.stopManagedMetro ?? stopManagedMetro)(metro, {
+      sessionId: session2.sessionId,
+      signerCapability
+    });
+    if (!stopped) {
+      throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "managed Metro could not be stopped with exact process authority");
+    }
+  }
+  registry2.releaseSession(session2);
+  if (status.bindings.bundle)
+    dependencies.onBundleInvalidated?.();
+  let recycleRequested = false;
+  try {
+    recycleRequested = dependencies.requestWorkerRecycle?.() === true;
+  } catch {
+  }
+  return { appRoot, recycleRequested };
 }
 function createSessionHandler(runtime, dependencies = {}) {
   return async (input) => {
@@ -68579,26 +69683,142 @@ function createSessionHandler(runtime, dependencies = {}) {
           nextAction: "The exact device, runner, and recorder claims are released. Re-run bind_device to claim the device."
         });
       }
+      if (input.action === "bind_source") {
+        const projectRoot = String(required2(input.projectRoot, "projectRoot"));
+        const status = registry2.getSessionStatus(session2.sessionId);
+        if (!status) {
+          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "session disappeared before source binding");
+        }
+        const boundAppRoot = String(status.source.appRoot ?? "");
+        const anchoredProjectRoot = anchorDeclaredProjectRoot(status, projectRoot);
+        let declared;
+        try {
+          declared = sessionSourceResolver(status, dependencies)(anchoredProjectRoot);
+        } catch (error2) {
+          throw new SessionAuthorityError("SOURCE_ROOT_DIVERGENCE", `declared project root ${anchoredProjectRoot} cannot be resolved as a source root (session source root: ${boundAppRoot}): ${error2 instanceof Error ? error2.message : "unknown error"}`, void 0, {
+            axis: "S",
+            nextAction: "Pass an existing checkout directory of the repository this session was started for."
+          });
+        }
+        if (declared.worktreeKey === status.worktreeKey && declared.appRootKey === status.appRootKey) {
+          return okResult({
+            bound: true,
+            alreadyBound: true,
+            appRoot: boundAppRoot,
+            session: projectPublicAuthorityStatus(runtime.status(), { now: dependencies.now })
+          });
+        }
+        if (declared.sourceKey !== status.sourceKey) {
+          throw new SessionAuthorityError("SOURCE_ROOT_DIVERGENCE", `declared project root ${declared.appRoot} belongs to a different repository than the session source root ${boundAppRoot}`, void 0, {
+            axis: "S",
+            nextAction: "rn_session never attaches to a foreign tree; start the MCP transport from the intended checkout to bind a different repository."
+          });
+        }
+        if (status.bindings.packageIntegration) {
+          throw new SessionAuthorityError("SOURCE_ROOT_DIVERGENCE", `package integration is applied in ${boundAppRoot}; restore it before rebinding to ${declared.appRoot}`, void 0, {
+            axis: "S",
+            nextAction: 'Run rn_session action "restore_integration", then retry bind_source.'
+          });
+        }
+        const priorOwnerCleanup = await (dependencies.releaseDeadSourceOwner ?? defaultReleaseDeadSourceOwner)(declared);
+        if (priorOwnerCleanup.status === "refused") {
+          const refusal = priorOwnerCleanup.refusal;
+          throw new SessionAuthorityError(refusal?.code ?? "SESSION_AUTHORITY_REQUIRED", `the declared project root ${declared.appRoot} is still owned by another session: ${refusal?.message ?? "its prior owner could not be released"}`, void 0, {
+            axis: "S",
+            ...refusal?.nextAction ? { nextAction: refusal.nextAction } : {}
+          });
+        }
+        (dependencies.declareSuccessorSource ?? defaultDeclareSuccessorSource)({
+          version: 1,
+          projectRoot: declared.appRoot,
+          sourceKey: declared.sourceKey,
+          sessionId: session2.sessionId,
+          declaredAtMs: Date.now()
+        });
+        let outcome2;
+        try {
+          outcome2 = await releaseSessionAuthority(registry2, session2, dependencies);
+        } catch (error2) {
+          try {
+            (dependencies.withdrawSuccessorSource ?? defaultWithdrawSuccessorSource)();
+          } catch {
+          }
+          throw error2;
+        }
+        return okResult({
+          bound: false,
+          released: true,
+          sessionId: session2.sessionId,
+          successorRoot: declared.appRoot,
+          recycleRequested: outcome2.recycleRequested,
+          nextAction: outcome2.recycleRequested ? `A fresh session is minted automatically for ${declared.appRoot}; retry rn_session (bind_device, apply_integration) there.` : `No supervisor can mint a successor here; start the MCP transport with its working directory at ${declared.appRoot} before the next rn_session action.`
+        });
+      }
       if (input.action === "bind_device") {
         const platform = required2(input.platform, "platform");
         const deviceId = required2(input.deviceId, "deviceId");
         const appId = required2(input.appId, "appId");
-        let status2 = registry2.getSessionStatus(session2.sessionId);
+        let status = registry2.getSessionStatus(session2.sessionId);
         const signer = dependencies.getSignerCapability?.();
-        if (!status2) {
+        if (!status) {
           throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "session disappeared before device binding");
         }
-        if (status2.bindings.runner || status2.bindings.observe || status2.bindings.proof) {
-          throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "device rebinding requires runner, Observe, or proof authority to be released first");
+        assertDeclaredProjectRootMatches(status, input.projectRoot, sessionSourceResolver(status, dependencies));
+        if (status.bindings.runner || status.bindings.proof) {
+          throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "device rebinding requires runner or proof authority to be released first");
         }
+        const assertObserveYieldable = (observe2) => {
+          if (!observe2 || observe2.autostarted === true)
+            return;
+          throw new SessionAuthorityError("DEVICE_AUTHORITY_MISMATCH", "device rebinding requires the explicitly started Observe authority to be released first", void 0, {
+            axis: "D",
+            nextAction: 'Run observe action "stop" for this session, then retry bind_device. Only the session-autostarted Observe yields the device axis automatically.'
+          });
+        };
+        assertObserveYieldable(status.bindings.observe);
+        let observeYieldedPort = null;
+        const yieldObserveDeviceAxis = async () => {
+          const current = registry2.getSessionStatus(session2.sessionId);
+          if (!current) {
+            throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "session disappeared before Observe yielded the device axis");
+          }
+          status = current;
+          const observe2 = current.bindings.observe;
+          if (!observe2)
+            return;
+          assertObserveYieldable(observe2);
+          await stopVerifiedSessionObserve(current, session2, dependencies);
+          const stopped = registry2.getSessionStatus(session2.sessionId);
+          if (!stopped) {
+            throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "session disappeared after Observe yielded the device axis");
+          }
+          status = stopped;
+          if (stopped.bindings.observe) {
+            registry2.updateBindings(session2, {
+              expectedAuthorityVersion: stopped.authorityVersion,
+              bindings: { observe: null }
+            });
+            const refreshed = registry2.getSessionStatus(session2.sessionId);
+            if (!refreshed) {
+              throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "session disappeared after Observe yielded the device axis");
+            }
+            status = refreshed;
+          }
+          observeYieldedPort = Number.isSafeInteger(Number(observe2.port)) ? Number(observe2.port) : null;
+        };
+        const observeYieldReport = () => observeYieldedPort === null ? {} : {
+          observeYielded: true,
+          observePort: observeYieldedPort,
+          observeNextAction: 'Observe yielded the device axis and was stopped; run observe action "start" to reopen the web UI.'
+        };
         const requireWorkerInstance = () => {
-          const workerInstance = status2.worker.instanceId;
+          const workerInstance = status.worker.instanceId;
           if (!workerInstance) {
             throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "release worker identity is unavailable");
           }
           return workerInstance;
         };
-        const cleanupJournal = status2.bindings.staleDeviceCleanup;
+        const cleanupJournal = status.bindings.staleDeviceCleanup;
         if (cleanupJournal && cleanupJournal.platform === platform && cleanupJournal.deviceId === deviceId) {
           const workerInstance = requireWorkerInstance();
           const plan = registry2.beginConfirmedStaleDeviceRelease(session2, workerInstance, {
@@ -68620,21 +69840,21 @@ function createSessionHandler(runtime, dependencies = {}) {
           }
         };
         requireExactDevice();
-        const retainedReverse = status2.bindings.androidMetroReverse;
+        const retainedReverse = status.bindings.androidMetroReverse;
         if (retainedReverse && (platform !== "android" || retainedReverse.deviceId !== deviceId)) {
-          status2 = removeSessionAndroidMetroReverse(registry2, session2, status2, dependencies);
+          status = removeSessionAndroidMetroReverse(registry2, session2, status, dependencies);
         }
-        const currentInstall = status2.bindings.install;
+        const currentInstall = status.bindings.install;
         if (!input.buildReceipt && currentInstall && (currentInstall.platform !== platform || currentInstall.deviceId !== deviceId || currentInstall.appId !== appId)) {
           throw new SessionAuthorityError("DEVICE_RECEIPT_INCOMPATIBLE", "cannot replace exact-device authority while an incompatible install receipt is bound");
         }
-        const expectedMetroPort = status2.bindings.metroPort;
+        const expectedMetroPort = status.bindings.metroPort;
         if (typeof expectedMetroPort !== "number" || !Number.isSafeInteger(expectedMetroPort) || expectedMetroPort < 1 || expectedMetroPort > 65535) {
           throw new SessionAuthorityError("METRO_ORIGIN_MISMATCH", "device binding cannot be pinned to a Metro origin: the session has no valid allocated Metro port");
         }
         const expectedMetroOrigin = { expectedMetroPort };
         if (!input.buildReceipt) {
-          const invalidatesBundle = Boolean(status2.bindings.bundle);
+          const invalidatesBundle = Boolean(status.bindings.bundle);
           await withInlineStaleDeviceCleanup(registry2, session2, dependencies, { platform, deviceId, appId, confirmed: input.confirmed }, requireWorkerInstance, requireExactDevice, () => registry2.replaceDeviceAuthority(session2, {
             resource: { type: "device", key: `${platform}:${deviceId}` },
             device: {
@@ -68644,12 +69864,13 @@ function createSessionHandler(runtime, dependencies = {}) {
               ...expectedMetroOrigin,
               ...input.devClientUrl ? { devClientUrl: input.devClientUrl } : {}
             }
-          }));
+          }), yieldObserveDeviceAxis);
           if (invalidatesBundle)
             dependencies.onBundleInvalidated?.();
           return okResult({
             session: projectPublicAuthorityStatus(runtime.status()),
-            buildReceiptRequired: true
+            buildReceiptRequired: true,
+            ...observeYieldReport()
           });
         }
         if (!signer) {
@@ -68657,13 +69878,13 @@ function createSessionHandler(runtime, dependencies = {}) {
         }
         const receipt2 = verifyBuildReceipt(input.buildReceipt, signer, {
           sessionId: session2.sessionId,
-          sourceKey: status2.sourceKey,
-          worktreeKey: status2.worktreeKey,
-          appRootKey: status2.appRootKey,
+          sourceKey: status.sourceKey,
+          worktreeKey: status.worktreeKey,
+          appRootKey: status.appRootKey,
           platform,
           deviceId,
           appId,
-          metroPort: Number(status2.bindings.metroPort)
+          metroPort: Number(status.bindings.metroPort)
         });
         const requireInstallGeneration = () => {
           const observedGeneration = (dependencies.captureInstallGeneration ?? captureInstallGeneration)({
@@ -68683,10 +69904,13 @@ function createSessionHandler(runtime, dependencies = {}) {
           resource: { type: "device", key: `${platform}:${deviceId}` },
           device: { platform, deviceId, appId, ...expectedMetroOrigin },
           install: { ...receipt2 }
-        }));
-        if (status2.bindings.bundle)
+        }), yieldObserveDeviceAxis);
+        if (status.bindings.bundle)
           dependencies.onBundleInvalidated?.();
-        return okResult({ session: projectPublicAuthorityStatus(runtime.status()) });
+        return okResult({
+          session: projectPublicAuthorityStatus(runtime.status()),
+          ...observeYieldReport()
+        });
       }
       if (input.action === "bind_metro") {
         if (input.mode === "managed") {
@@ -68696,53 +69920,53 @@ function createSessionHandler(runtime, dependencies = {}) {
         const pid = required2(input.metroPid, "metroPid");
         const instanceId = required2(input.metroInstanceId, "metroInstanceId");
         const buildGeneration = required2(input.buildGeneration, "buildGeneration");
-        const status2 = registry2.getSessionStatus(session2.sessionId);
-        if (status2?.bindings.metroPort !== port) {
+        const status = registry2.getSessionStatus(session2.sessionId);
+        if (status?.bindings.metroPort !== port) {
           throw new SessionAuthorityError("METRO_PORT_CLAIM_CONFLICT", "requested Metro port does not match the session allocation");
         }
-        const sourceRoot = String(status2.source.contentRoot ?? "");
-        const metro2 = await (dependencies.captureMetro ?? captureMetroBinding)({
+        const sourceRoot = String(status.source.contentRoot ?? "");
+        const metro = await (dependencies.captureMetro ?? captureMetroBinding)({
           port,
           pid,
           instanceId,
           sourceRoot,
           buildGeneration
         });
-        const nextMetro = { ...metro2, mode: "external" };
-        const priorMetro = status2.bindings.metro;
-        const priorBundle = status2.bindings.bundle;
+        const nextMetro = { ...metro, mode: "external" };
+        const priorMetro = status.bindings.metro;
+        const priorBundle = status.bindings.bundle;
         const priorTargetId = priorBundle?.targetId;
         const metroUnchanged = sameMetroAuthority(priorMetro, nextMetro);
         registry2.claimResources(session2, [{ type: "metro-port", key: String(port) }]);
         registry2.updateBindings(session2, {
-          state: metroUnchanged ? status2.state : status2.bindings.install ? "device_bound" : "metro_bound",
+          state: metroUnchanged ? status.state : status.bindings.install ? "device_bound" : "metro_bound",
           bindings: metroUnchanged ? { metro: nextMetro } : { metro: nextMetro, bundle: null },
-          releaseResources: !metroUnchanged && typeof priorTargetId === "string" ? [{ type: "target", key: `${String(status2.bindings.metroPort)}:${priorTargetId}` }] : []
+          releaseResources: !metroUnchanged && typeof priorTargetId === "string" ? [{ type: "target", key: `${String(status.bindings.metroPort)}:${priorTargetId}` }] : []
         });
         if (!metroUnchanged && priorBundle)
           dependencies.onBundleInvalidated?.();
         return okResult({ session: projectPublicAuthorityStatus(runtime.status()) });
       }
       if (input.action === "pin_dev_client") {
-        let status2 = registry2.getSessionStatus(session2.sessionId);
-        if (!status2 || !dependencies.pinDevClient) {
+        let status = registry2.getSessionStatus(session2.sessionId);
+        if (!status || !dependencies.pinDevClient) {
           throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", "pinning integration is unavailable");
         }
         for (const requiredBinding of ["install", "metro", "device"]) {
-          if (!status2.bindings[requiredBinding]) {
+          if (!status.bindings[requiredBinding]) {
             throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", `${requiredBinding} must be bound before pinning`);
           }
         }
-        status2 = ensurePhysicalAndroidMetroReachability(registry2, session2, status2, dependencies);
-        const priorTargetId = status2.bindings.bundle?.targetId;
-        const priorBundle = status2.bindings.bundle ?? null;
-        const priorState = status2.state;
-        const priorAuthorityVersion = status2.authorityVersion;
-        const devicePlatform = status2.bindings.device?.platform;
+        status = ensurePhysicalAndroidMetroReachability(registry2, session2, status, dependencies);
+        const priorTargetId = status.bindings.bundle?.targetId;
+        const priorBundle = status.bindings.bundle ?? null;
+        const priorState = status.state;
+        const priorAuthorityVersion = status.authorityVersion;
+        const devicePlatform = status.bindings.device?.platform;
         const atomicAndroidReplacement = devicePlatform === "android";
         if (input.force === true && !atomicAndroidReplacement && typeof priorTargetId === "string") {
           registry2.releaseResources(session2, [
-            { type: "target", key: `${String(status2.bindings.metroPort)}:${priorTargetId}` }
+            { type: "target", key: `${String(status.bindings.metroPort)}:${priorTargetId}` }
           ]);
           registry2.updateBindings(session2, {
             state: "device_bound",
@@ -68750,7 +69974,7 @@ function createSessionHandler(runtime, dependencies = {}) {
           });
           dependencies.onBundleInvalidated?.();
         }
-        await dependencies.pinDevClient(status2, { force: input.force === true }, (candidate, promotion) => {
+        await dependencies.pinDevClient(status, { force: input.force === true }, (candidate, promotion) => {
           const candidateTarget = {
             type: "target",
             key: `${candidate.metroPort}:${candidate.targetId}`
@@ -68807,16 +70031,16 @@ function createSessionHandler(runtime, dependencies = {}) {
         });
       }
       if (input.action === "stop_metro") {
-        let status2 = registry2.getSessionStatus(session2.sessionId);
-        if (!status2) {
+        let status = registry2.getSessionStatus(session2.sessionId);
+        if (!status) {
           throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "session disappeared before managed Metro cleanup");
         }
-        if (status2.bindings.runner) {
+        if (status.bindings.runner) {
           throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "stop_metro requires device_snapshot action=close before releasing active runner authority");
         }
-        const metro2 = status2.bindings.metroCleanup ?? status2.bindings.metro;
-        if (!metro2) {
-          const metroPort2 = Number(status2.bindings.metroPort);
+        const metro = status.bindings.metroCleanup ?? status.bindings.metro;
+        if (!metro) {
+          const metroPort2 = Number(status.bindings.metroPort);
           if (Number.isSafeInteger(metroPort2)) {
             let listener = { status: "unknown" };
             try {
@@ -68828,19 +70052,19 @@ function createSessionHandler(runtime, dependencies = {}) {
               throw new SessionAuthorityError("METRO_CLEANUP_PENDING", `allocated Metro port ${metroPort2} is still ${listener.status}${listenerIdentity} after cleanup authority was invalidated; do not signal an unbound process, wait for managed launcher cleanup, then retry rn_session stop_metro`);
             }
           }
-          status2 = removeSessionAndroidMetroReverse(registry2, session2, status2, dependencies);
+          status = removeSessionAndroidMetroReverse(registry2, session2, status, dependencies);
           return okResult({
             stopped: false,
             alreadyStopped: true,
             session: projectPublicAuthorityStatus(runtime.status())
           });
         }
-        const metroPort = Number(status2.bindings.metroPort);
-        if (!Number.isSafeInteger(metroPort) || metro2.port !== metroPort) {
+        const metroPort = Number(status.bindings.metroPort);
+        if (!Number.isSafeInteger(metroPort) || metro.port !== metroPort) {
           throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "Metro cleanup binding does not match the exact allocated session port");
         }
         const signerCapability = dependencies.getSignerCapability?.();
-        const runtimeEvidenceSocket = metro2.mode === "managed" && typeof metro2.runtimeEvidenceSocket === "string" ? metro2.runtimeEvidenceSocket : void 0;
+        const runtimeEvidenceSocket = metro.mode === "managed" && typeof metro.runtimeEvidenceSocket === "string" ? metro.runtimeEvidenceSocket : void 0;
         let socketReferencedByOtherSession = true;
         if (runtimeEvidenceSocket) {
           try {
@@ -68856,14 +70080,14 @@ function createSessionHandler(runtime, dependencies = {}) {
           ...dependencies.removeEvidenceSocket ? { removeEvidenceSocket: dependencies.removeEvidenceSocket } : {}
         };
         let cleanup;
-        if (metro2.mode === "managed") {
+        if (metro.mode === "managed") {
           if (dependencies.stopManagedMetroWithEvidence) {
-            cleanup = await dependencies.stopManagedMetroWithEvidence(metro2, {
+            cleanup = await dependencies.stopManagedMetroWithEvidence(metro, {
               sessionId: session2.sessionId,
               signerCapability: signerCapability ?? ""
             }, evidenceDependencies);
           } else if (dependencies.stopManagedMetro && signerCapability) {
-            const stopped = await dependencies.stopManagedMetro(metro2, {
+            const stopped = await dependencies.stopManagedMetro(metro, {
               sessionId: session2.sessionId,
               signerCapability
             });
@@ -68873,16 +70097,16 @@ function createSessionHandler(runtime, dependencies = {}) {
               listener: "absent",
               port: { status: "absent" },
               evidenceSocket: "absent"
-            } : inspectManagedMetroCleanupEvidence(metro2, evidenceDependencies);
+            } : inspectManagedMetroCleanupEvidence(metro, evidenceDependencies);
             cleanup = { authenticated: stopped, stopped, evidence };
           } else {
-            cleanup = await stopManagedMetroWithEvidence(metro2, {
+            cleanup = await stopManagedMetroWithEvidence(metro, {
               sessionId: session2.sessionId,
               signerCapability: signerCapability ?? ""
             }, evidenceDependencies);
           }
         } else {
-          const evidence = inspectManagedMetroCleanupEvidence(metro2, evidenceDependencies);
+          const evidence = inspectManagedMetroCleanupEvidence(metro, evidenceDependencies);
           cleanup = { authenticated: false, stopped: false, evidence };
         }
         const onlySocketRemains = cleanup.evidence.launcher === "absent" && cleanup.evidence.listener === "absent" && cleanup.evidence.port.status === "absent" && cleanup.evidence.evidenceSocket === "present";
@@ -68899,11 +70123,11 @@ function createSessionHandler(runtime, dependencies = {}) {
         if (!cleanup.authenticated && input.confirmed !== true) {
           throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "non-signaling Metro authority release requires confirmed=true after exact process, listener, and socket absence is verified");
         }
-        status2 = removeSessionAndroidMetroReverse(registry2, session2, status2, dependencies);
-        const priorTargetId = status2.bindings.bundle?.targetId;
+        status = removeSessionAndroidMetroReverse(registry2, session2, status, dependencies);
+        const priorTargetId = status.bindings.bundle?.targetId;
         registry2.updateBindings(session2, {
-          expectedAuthorityVersion: status2.authorityVersion,
-          state: status2.bindings.install ? "device_bound" : status2.bindings.device ? "device_claimed" : "source_bound",
+          expectedAuthorityVersion: status.authorityVersion,
+          state: status.bindings.install ? "device_bound" : status.bindings.device ? "device_claimed" : "source_bound",
           bindings: {
             metro: null,
             metroCleanup: null,
@@ -68912,7 +70136,7 @@ function createSessionHandler(runtime, dependencies = {}) {
           },
           releaseResources: typeof priorTargetId === "string" && Number.isSafeInteger(metroPort) ? [{ type: "target", key: `${metroPort}:${priorTargetId}` }] : []
         });
-        if (status2.bindings.bundle)
+        if (status.bindings.bundle)
           dependencies.onBundleInvalidated?.();
         return okResult({
           stopped: cleanup.stopped,
@@ -68924,16 +70148,19 @@ function createSessionHandler(runtime, dependencies = {}) {
         });
       }
       if (input.action === "preview_integration" || input.action === "apply_integration" || input.action === "restore_integration") {
-        const status2 = registry2.getSessionStatus(session2.sessionId);
-        const appRoot = String(status2?.source.appRoot ?? "");
-        if (!status2 || !appRoot) {
+        const status = registry2.getSessionStatus(session2.sessionId);
+        const appRoot = String(status?.source.appRoot ?? "");
+        if (!status || !appRoot) {
           throw new SessionAuthorityError("SOURCE_WORKTREE_MISMATCH", "session app root is unavailable for integration");
         }
-        const packagePath = join33(appRoot, "package.json");
+        if (input.action !== "restore_integration") {
+          assertDeclaredProjectRootMatches(status, input.projectRoot, sessionSourceResolver(status, dependencies));
+        }
+        const packagePath = join36(appRoot, "package.json");
         const integrationInputs = readPackageIntegrationInputs(appRoot);
-        const manifestPath = join33(appRoot, ".rn-agent", "integration", "rn-session-integration.json");
+        const manifestPath = join36(appRoot, ".rn-agent", "integration", "rn-session-integration.json");
         const packageJson = JSON.parse(integrationInputs.packageJson);
-        const integrationBinding = status2.bindings.packageIntegration;
+        const integrationBinding = status.bindings.packageIntegration;
         const installationManifestSource = integrationBinding?.installation?.phase === "started" && typeof integrationBinding.installation.manifestSource === "string" ? integrationBinding.installation.manifestSource : void 0;
         const restorationManifestSource = integrationBinding?.restoration?.phase === "started" && typeof integrationBinding.restoration.manifestSource === "string" ? integrationBinding.restoration.manifestSource : void 0;
         const manifestSource = input.action === "restore_integration" && integrationBinding ? verifiedManifestSource(integrationInputs.manifest, integrationBinding?.manifestSha256) ?? verifiedManifestSource(restorationManifestSource, integrationBinding?.manifestSha256) ?? verifiedManifestSource(installationManifestSource, integrationBinding?.manifestSha256) ?? durableBindingManifestSource(integrationBinding) : integrationInputs.manifest ?? restorationManifestSource ?? installationManifestSource ?? durableBindingManifestSource(integrationBinding);
@@ -68944,7 +70171,7 @@ function createSessionHandler(runtime, dependencies = {}) {
           if (!(error2 instanceof SyntaxError))
             throw error2;
         }
-        const sessionCli = process.env.RN_DEV_AGENT_SESSION_CLI ?? join33(dirname13(fileURLToPath2(import.meta.url)), "..", "rn-session.js");
+        const sessionCli = process.env.RN_DEV_AGENT_SESSION_CLI ?? join36(dirname14(fileURLToPath2(import.meta.url)), "..", "rn-session.js");
         const stateDir = process.env.RN_DEV_AGENT_STATE_DIR;
         if (input.action === "restore_integration") {
           if (input.confirmed !== true) {
@@ -68960,8 +70187,8 @@ function createSessionHandler(runtime, dependencies = {}) {
               nextAction: manifestRecoveryNextAction(integrationBinding, "retry restore_integration with confirmed=true")
             });
           }
-          assertPackageIntegrationInactive(status2.bindings, input.action);
-          const manifestSha256 = createHash11("sha256").update(manifestSource ?? "").digest("hex");
+          assertPackageIntegrationInactive(status.bindings, input.action);
+          const manifestSha256 = createHash13("sha256").update(manifestSource ?? "").digest("hex");
           if (integrationBinding?.version !== 1 || typeof integrationBinding.installedBySessionId !== "string" || integrationBinding.manifestSha256 !== manifestSha256) {
             throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "integration restoration requires the transferred manifest authority binding");
           }
@@ -69000,7 +70227,7 @@ function createSessionHandler(runtime, dependencies = {}) {
         if (input.confirmed !== true) {
           throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "apply_integration requires confirmed=true after reviewing preview_integration");
         }
-        assertPackageIntegrationInactive(status2.bindings, input.action);
+        assertPackageIntegrationInactive(status.bindings, input.action);
         if (integrationBinding && !installationManifestSource) {
           throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "package integration is already owned by an active session lifecycle", void 0, {
             nextAction: "Run restore_integration with confirmed=true to restore or reconcile the owning integration binding, then retry apply_integration."
@@ -69008,7 +70235,7 @@ function createSessionHandler(runtime, dependencies = {}) {
         }
         preview.manifest.metroConfig = metroConfigPath.slice(appRoot.length + 1);
         const expectedManifestSource = installationManifestSource ?? serializePackageIntegrationManifest(preview.manifest);
-        const expectedManifestSha256 = createHash11("sha256").update(expectedManifestSource).digest("hex");
+        const expectedManifestSha256 = createHash13("sha256").update(expectedManifestSource).digest("hex");
         if (installationManifestSource && (integrationBinding?.version !== 1 || integrationBinding.installedBySessionId !== session2.sessionId || integrationBinding.manifestSha256 !== expectedManifestSha256)) {
           throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "integration installation requires the original session manifest authority binding");
         }
@@ -69030,7 +70257,7 @@ function createSessionHandler(runtime, dependencies = {}) {
           if (!installedManifest) {
             throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: applied manifest is unavailable");
           }
-          if (createHash11("sha256").update(installedManifest).digest("hex") !== expectedManifestSha256) {
+          if (createHash13("sha256").update(installedManifest).digest("hex") !== expectedManifestSha256) {
             throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "applied integration manifest no longer matches its durable installation authority");
           }
           registry2.updateBindings(session2, {
@@ -69062,30 +70289,30 @@ function createSessionHandler(runtime, dependencies = {}) {
       if (input.action === "accept_handoff") {
         const handoffId = required2(input.handoffId, "handoffId");
         const token2 = required2(input.token, "token");
-        const status2 = registry2.getSessionStatus(session2.sessionId);
-        if (!status2?.worker.instanceId) {
+        const status = registry2.getSessionStatus(session2.sessionId);
+        if (!status?.worker.instanceId) {
           throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "target worker identity is unavailable");
         }
-        if (status2.state !== "handoff_cleanup") {
+        if (status.state !== "handoff_cleanup") {
           registry2.validateHandoffInto(session2, {
             handoffId,
             token: token2,
-            targetInstance: status2.worker.instanceId
+            targetInstance: status.worker.instanceId
           });
         } else {
           registry2.validateHandoffCleanupResumption(session2, {
             handoffId,
             token: token2,
-            targetInstance: status2.worker.instanceId
+            targetInstance: status.worker.instanceId
           });
         }
-        let cleanup = status2.bindings.handoffCleanup;
+        let cleanup = status.bindings.handoffCleanup;
         const priorSessionId = registry2.getHandoffOwner(handoffId);
         const priorStatus = priorSessionId ? registry2.getSessionStatus(priorSessionId) : null;
         const priorRunner = cleanup?.runner ?? priorStatus?.bindings.runner;
-        const acceptAppRoot = String(status2.source.appRoot ?? "");
-        if (status2.state === "handoff_cleanup") {
-          const transferredBinding = status2.bindings.packageIntegration;
+        const acceptAppRoot = String(status.source.appRoot ?? "");
+        if (status.state === "handoff_cleanup") {
+          const transferredBinding = status.bindings.packageIntegration;
           if (transferredBinding && !durableRestorationMaterial(transferredBinding)) {
             throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", `resumed handoff cleanup carries package-integration authority without a SHA-256-verified restoration manifest; cleanup refuses before any lifecycle mutation, and canonical files were inspected for diagnostics only (${describeIntegrationFileDiagnostics(acceptAppRoot)})`, void 0, { nextAction: manifestTransferNextAction(transferredBinding) });
           }
@@ -69095,14 +70322,14 @@ function createSessionHandler(runtime, dependencies = {}) {
             throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", `handoff donor carries package-integration authority without a SHA-256-verified restoration manifest; acceptance refuses before any reservation, cleanup, transfer, or registry mutation, and canonical files were inspected for diagnostics only (${describeIntegrationFileDiagnostics(acceptAppRoot)})`, void 0, { nextAction: manifestTransferNextAction(donorBinding) });
           }
         }
-        if (status2.state !== "handoff_cleanup" && priorRunner && (typeof priorRunner.pid !== "number" || typeof priorRunner.processBirth !== "string" || inspectSessionOwner({
+        if (status.state !== "handoff_cleanup" && priorRunner && (typeof priorRunner.pid !== "number" || typeof priorRunner.processBirth !== "string" || inspectSessionOwner({
           sessionId: priorSessionId ?? "unknown",
           pid: priorRunner.pid,
           token: priorRunner.processBirth
         }) !== "match")) {
           throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "prior runner process identity cannot be proven for capability rotation");
         }
-        if (status2.state !== "handoff_cleanup") {
+        if (status.state !== "handoff_cleanup") {
           const priorManagedMetro = priorStatus?.bindings.metro && typeof priorStatus.bindings.metro === "object" && priorStatus.bindings.metro.mode === "managed" ? priorStatus.bindings.metro : null;
           let signerCapability = null;
           if (priorManagedMetro) {
@@ -69117,7 +70344,7 @@ function createSessionHandler(runtime, dependencies = {}) {
           const reservation = registry2.reserveManagedMetroHandoffCleanup(session2, {
             handoffId,
             token: token2,
-            targetInstance: status2.worker.instanceId
+            targetInstance: status.worker.instanceId
           });
           if (reservation && reservation.phase !== "shutdown_completed") {
             const sourceSessionId = reservation.metro.sourceSessionId;
@@ -69132,34 +70359,34 @@ function createSessionHandler(runtime, dependencies = {}) {
               registry2.refuseManagedMetroHandoffCleanup(session2, {
                 handoffId,
                 token: token2,
-                targetInstance: status2.worker.instanceId
+                targetInstance: status.worker.instanceId
               });
               throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "managed Metro shutdown was refused; the handoff was cancelled and donor authority was restored");
             }
             registry2.completeManagedMetroHandoffCleanup(session2, {
               handoffId,
               token: token2,
-              targetInstance: status2.worker.instanceId
+              targetInstance: status.worker.instanceId
             });
           }
           cleanup = registry2.acceptHandoffInto(session2, {
             handoffId,
             token: token2,
-            targetInstance: status2.worker.instanceId
+            targetInstance: status.worker.instanceId
           });
         }
         if (cleanup?.recorder && typeof cleanup.recorder.completedAt !== "number") {
-          const recorderCleanup = registry2.beginHandoffCleanupResource(session2, status2.worker.instanceId, "recorder");
+          const recorderCleanup = registry2.beginHandoffCleanupResource(session2, status.worker.instanceId, "recorder");
           if (!recorderCleanup) {
             throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "recorder cleanup binding disappeared while fenced");
           }
           await (dependencies.stopHandoffRecorder ?? stopBoundRecorder)(recorderCleanup);
-          registry2.completeHandoffCleanupResource(session2, status2.worker.instanceId, "recorder");
+          registry2.completeHandoffCleanupResource(session2, status.worker.instanceId, "recorder");
         }
         const afterRecorder = registry2.getSessionStatus(session2.sessionId);
         cleanup = afterRecorder?.bindings.handoffCleanup;
         if (cleanup?.runner && typeof cleanup.runner.completedAt !== "number") {
-          const runnerCleanup = registry2.beginHandoffCleanupResource(session2, status2.worker.instanceId, "runner");
+          const runnerCleanup = registry2.beginHandoffCleanupResource(session2, status.worker.instanceId, "runner");
           if (!runnerCleanup) {
             throw new SessionAuthorityError("RUNNER_ADOPTION_REQUIRED", "runner cleanup binding disappeared while fenced");
           }
@@ -69168,12 +70395,12 @@ function createSessionHandler(runtime, dependencies = {}) {
           } else {
             await stopHandoffRunner(runnerCleanup, dependencies.probeProcessBirth, dependencies.signalProcess, dependencies.cleanupTimeoutMs);
           }
-          registry2.completeHandoffCleanupResource(session2, status2.worker.instanceId, "runner");
+          registry2.completeHandoffCleanupResource(session2, status.worker.instanceId, "runner");
         }
         const afterRunner = registry2.getSessionStatus(session2.sessionId);
         cleanup = afterRunner?.bindings.handoffCleanup;
         if (cleanup?.observe && typeof cleanup.observe.completedAt !== "number") {
-          const observeCleanup = registry2.beginHandoffCleanupResource(session2, status2.worker.instanceId, "observe");
+          const observeCleanup = registry2.beginHandoffCleanupResource(session2, status.worker.instanceId, "observe");
           if (!observeCleanup) {
             throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe cleanup binding disappeared while fenced");
           }
@@ -69182,12 +70409,12 @@ function createSessionHandler(runtime, dependencies = {}) {
           } else {
             await stopHandoffObserve(observeCleanup, dependencies.probeListener, dependencies.probeProcessBirth, dependencies.cleanupTimeoutMs);
           }
-          registry2.completeHandoffCleanupResource(session2, status2.worker.instanceId, "observe");
+          registry2.completeHandoffCleanupResource(session2, status.worker.instanceId, "observe");
         }
         const afterObserve = registry2.getSessionStatus(session2.sessionId);
         cleanup = afterObserve?.bindings.handoffCleanup;
         if (cleanup?.metro && typeof cleanup.metro.completedAt !== "number") {
-          const metroCleanup = registry2.beginHandoffCleanupResource(session2, status2.worker.instanceId, "metro");
+          const metroCleanup = registry2.beginHandoffCleanupResource(session2, status.worker.instanceId, "metro");
           if (!metroCleanup || typeof metroCleanup.sourceSessionId !== "string") {
             throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "managed Metro cleanup binding disappeared while fenced");
           }
@@ -69202,9 +70429,9 @@ function createSessionHandler(runtime, dependencies = {}) {
           if (!stopped) {
             throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "managed Metro could not be stopped with its source session authority");
           }
-          registry2.completeHandoffCleanupResource(session2, status2.worker.instanceId, "metro");
+          registry2.completeHandoffCleanupResource(session2, status.worker.instanceId, "metro");
         }
-        registry2.finishHandoffCleanup(session2, status2.worker.instanceId);
+        registry2.finishHandoffCleanup(session2, status.worker.instanceId);
         const acceptedStatus = registry2.getSessionStatus(session2.sessionId);
         const transferredIntegration = acceptedStatus?.bindings.packageIntegration;
         return okResult({
@@ -69330,75 +70557,13 @@ function createSessionHandler(runtime, dependencies = {}) {
           }
         });
       }
-      let status = registry2.getSessionStatus(session2.sessionId);
-      if (!status) {
-        throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "session disappeared before release cleanup");
-      }
-      if (status.bindings.packageIntegration) {
-        throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "package integration must be restored before session release");
-      }
-      status = removeSessionAndroidMetroReverse(registry2, session2, status, dependencies);
-      const metro = status.bindings.metro;
-      const runner = status.bindings.runner;
-      const recorder2 = status.bindings.recorder;
-      if (recorder2) {
-        const claimKey = `${String(recorder2.platform)}:${String(recorder2.deviceId)}`;
-        if (!status.claims.some((claim) => claim.type === "recorder" && claim.key === claimKey && claim.sessionId === session2.sessionId && claim.claimEpoch === session2.claimEpoch)) {
-          throw new SessionAuthorityError("RECORDING_AUTHORITY_MISMATCH", "recorder cleanup claim no longer matches the authenticated binding");
-        }
-        await (dependencies.stopHandoffRecorder ?? stopBoundRecorder)(recorder2);
-      }
-      if (runner) {
-        const claimKey = `${String(runner.platform)}:${String(runner.deviceId)}:${String(runner.port)}`;
-        if (!status.claims.some((claim) => claim.type === "runner" && claim.key === claimKey && claim.sessionId === session2.sessionId && claim.claimEpoch === session2.claimEpoch)) {
-          throw new SessionAuthorityError("RUNNER_OWNERSHIP_MISMATCH", "runner cleanup claim no longer matches the authenticated binding");
-        }
-        const cleanup = { ...runner, claimKey, stopRequestedAt: Date.now() };
-        if (dependencies.stopHandoffRunner) {
-          await dependencies.stopHandoffRunner(cleanup);
-        } else {
-          await stopBoundRunner(cleanup, dependencies.probeProcessBirth, dependencies.signalProcess, dependencies.cleanupTimeoutMs);
-        }
-      }
-      const observe2 = status.bindings.observe;
-      if (observe2) {
-        const port = String(observe2.port);
-        if (status.bindings.observePort !== observe2.port || !status.claims.some((claim) => claim.type === "observe-port" && claim.key === port && claim.sessionId === session2.sessionId && claim.claimEpoch === session2.claimEpoch)) {
-          throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe cleanup claim no longer matches the authenticated binding");
-        }
-        const cleanup = { ...observe2, stopRequestedAt: Date.now() };
-        if (dependencies.stopHandoffObserve) {
-          await dependencies.stopHandoffObserve(cleanup);
-        } else {
-          await stopBoundObserve(cleanup, dependencies.probeListener, dependencies.probeProcessBirth, dependencies.cleanupTimeoutMs);
-        }
-      }
-      if (metro?.mode === "managed") {
-        const signerCapability = dependencies.getSignerCapability?.();
-        if (!signerCapability) {
-          throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "managed Metro release requires the session signer capability");
-        }
-        const stopped = await (dependencies.stopManagedMetro ?? stopManagedMetro)(metro, {
-          sessionId: session2.sessionId,
-          signerCapability
-        });
-        if (!stopped) {
-          throw new SessionAuthorityError("METRO_AUTHORITY_MISMATCH", "managed Metro could not be stopped with exact process authority");
-        }
-      }
-      registry2.releaseSession(session2);
-      if (status.bindings.bundle)
-        dependencies.onBundleInvalidated?.();
-      let recycleRequested = false;
-      try {
-        recycleRequested = dependencies.requestWorkerRecycle?.() === true;
-      } catch {
-      }
+      const outcome = await releaseSessionAuthority(registry2, session2, dependencies);
+      const releasedRoot = outcome.appRoot || "the released source root";
       return okResult({
         released: true,
         sessionId: session2.sessionId,
-        recycleRequested,
-        nextAction: recycleRequested ? "A fresh session is minted automatically; retry rn_session (bind_device, apply_integration) on this worktree." : "No supervisor can mint a successor here; restart the MCP transport before the next rn_session action on this worktree."
+        recycleRequested: outcome.recycleRequested,
+        nextAction: outcome.recycleRequested ? `A fresh session is minted automatically for ${releasedRoot}; retry rn_session (bind_device, apply_integration) there. If your branch work lives in a different worktree of this repository, run bind_source with that projectRoot first.` : "No supervisor can mint a successor here; restart the MCP transport before the next rn_session action."
       });
     } catch (error2) {
       return authorityFailure2(error2);
@@ -70585,7 +71750,7 @@ init_utils();
 import { mkdirSync as mkdirSync15 } from "node:fs";
 import { execFile as execFile18 } from "node:child_process";
 import { promisify as promisify19 } from "node:util";
-import { dirname as dirname14, join as join34, resolve as resolve8 } from "node:path";
+import { dirname as dirname15, join as join37, resolve as resolve11 } from "node:path";
 import { homedir as homedir9 } from "node:os";
 
 // packages/rn-dev-agent-core/dist/tools/device-screenshot-resize.js
@@ -70687,7 +71852,7 @@ init_device_arbiter();
 init_foreign_flow_gate();
 
 // packages/rn-dev-agent-core/dist/domain/path-safety.js
-import { resolve as resolve7, sep as sep5 } from "node:path";
+import { resolve as resolve10, sep as sep5 } from "node:path";
 var PathTraversalError = class extends Error {
   constructor(message) {
     super(message);
@@ -70712,8 +71877,8 @@ function assertValidActionId(s, context) {
   }
 }
 function assertWithinDir(child, baseDir) {
-  const resolvedBase = resolve7(baseDir);
-  const resolvedChild = resolve7(baseDir, child);
+  const resolvedBase = resolve10(baseDir);
+  const resolvedChild = resolve10(baseDir, child);
   if (resolvedChild === resolvedBase)
     return;
   const baseWithSep = resolvedBase.endsWith(sep5) ? resolvedBase : resolvedBase + sep5;
@@ -70731,8 +71896,8 @@ function pathHasTraversal(p) {
 init_rn_android_runner_client();
 
 // packages/rn-dev-agent-core/dist/observability/recorder.js
-import { closeSync as closeSync7, constants as constants5, fstatSync as fstatSync5, openSync as openSync7, readSync as readSync3 } from "node:fs";
-import { isAbsolute as isAbsolute6 } from "node:path";
+import { closeSync as closeSync8, constants as constants6, fstatSync as fstatSync6, openSync as openSync8, readSync as readSync4 } from "node:fs";
+import { isAbsolute as isAbsolute8 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/util/redact.js
 import { homedir as homedir8 } from "node:os";
@@ -71020,18 +72185,18 @@ var SHOT_REGISTRY_CAP = 64;
 function extractScreenshotPath(result) {
   const data = unwrapResult(result)?.data ?? result?.data;
   const p = data?.path ?? data?.message;
-  return typeof p === "string" && isAbsolute6(p) && (p.endsWith(".jpg") || p.endsWith(".jpeg") || p.endsWith(".png")) ? p : null;
+  return typeof p === "string" && isAbsolute8(p) && (p.endsWith(".jpg") || p.endsWith(".jpeg") || p.endsWith(".png")) ? p : null;
 }
 function readShotBounded(p) {
   let fd;
   try {
-    fd = openSync7(p, constants5.O_RDONLY | constants5.O_NOFOLLOW | constants5.O_NONBLOCK);
-    const st = fstatSync5(fd);
+    fd = openSync8(p, constants6.O_RDONLY | constants6.O_NOFOLLOW | constants6.O_NONBLOCK);
+    const st = fstatSync6(fd);
     if (!st.isFile() || st.size > MAX_SHOT_BYTES)
       return null;
     const size = Number(st.size);
     const buf = Buffer.alloc(size + 1);
-    const n = readSync3(fd, buf, 0, size + 1, 0);
+    const n = readSync4(fd, buf, 0, size + 1, 0);
     if (n > size)
       return null;
     return buf.subarray(0, n);
@@ -71040,7 +72205,7 @@ function readShotBounded(p) {
   } finally {
     if (fd !== void 0) {
       try {
-        closeSync7(fd);
+        closeSync8(fd);
       } catch {
       }
     }
@@ -71104,7 +72269,7 @@ var Recorder = class {
    * whatever path the pipeline actually captured to.
    */
   registerCapturedScreenshot(p) {
-    if (typeof p !== "string" || !isAbsolute6(p))
+    if (typeof p !== "string" || !isAbsolute8(p))
       return;
     this.trustedShotPaths.delete(p);
     this.trustedShotPaths.add(p);
@@ -71234,18 +72399,18 @@ function deriveScreenshotPath(args, now = Date.now, rand = Math.random) {
   }
   if (args.path?.startsWith("~")) {
     if (args.path.startsWith("~/"))
-      return join34(homedir9(), args.path.slice(2));
+      return join37(homedir9(), args.path.slice(2));
     throw new TildeScreenshotPathError(`Screenshot path "${args.path}" starts with '~' which the bridge cannot expand (only a leading '~/' is expanded to the home directory). Pass an absolute path instead.`);
   }
   if (args.path)
-    return resolve8(args.path);
+    return resolve11(args.path);
   const ext = args.format === "jpeg" ? "jpg" : args.format === "png" ? "png" : "jpg";
   const suffix = rand().toString(36).slice(2, 8);
   return `/tmp/rn-screenshot-${now()}-${suffix}.${ext}`;
 }
 function ensureScreenshotDir(path) {
   try {
-    mkdirSync15(dirname14(path), { recursive: true });
+    mkdirSync15(dirname15(path), { recursive: true });
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
@@ -71765,11 +72930,11 @@ function createDeviceBatchHandler(getClient2) {
       const abortController = new AbortController();
       const result = await Promise.race([
         executeStep(step, getClient2, abortController.signal),
-        new Promise((resolve12) => {
+        new Promise((resolve14) => {
           stepTimer = setTimeout(() => {
             stepTimedOut = true;
             abortController.abort();
-            resolve12(step.action === "fill" ? failResult(`Step ${i + 1} timed out after ${stepTimeout}ms; the fill may have mutated the field and no correction or later step will be started`, "TEXT_ENTRY_UNVERIFIED", {
+            resolve14(step.action === "fill" ? failResult(`Step ${i + 1} timed out after ${stepTimeout}ms; the fill may have mutated the field and no correction or later step will be started`, "TEXT_ENTRY_UNVERIFIED", {
               mutation: "possible",
               hint: "Read the field state before any manual retry \u2014 do not blindly re-run the fill."
             }) : failResult(`Step ${i + 1} timed out after ${stepTimeout}ms; remaining steps were not started because the native operation may still be completing`));
@@ -72275,12 +73440,12 @@ init_agent_device_wrapper();
 init_utils();
 
 // packages/rn-dev-agent-core/dist/domain/action-store.js
-import { existsSync as existsSync27, readFileSync as readFileSync27, statSync as statSync12 } from "node:fs";
-import { join as join35 } from "node:path";
+import { existsSync as existsSync28, readFileSync as readFileSync28, statSync as statSync12 } from "node:fs";
+import { join as join38 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/domain/atomic-writer.js
-import { writeFileSync as writeFileSync13, renameSync as renameSync6, statSync as statSync11, mkdirSync as mkdirSync16, existsSync as existsSync26, unlinkSync as unlinkSync9, readdirSync as readdirSync8 } from "node:fs";
-import { dirname as dirname15, basename as basename6 } from "node:path";
+import { writeFileSync as writeFileSync13, renameSync as renameSync6, statSync as statSync11, mkdirSync as mkdirSync16, existsSync as existsSync27, unlinkSync as unlinkSync9, readdirSync as readdirSync9 } from "node:fs";
+import { dirname as dirname16, basename as basename6 } from "node:path";
 var FUTURE_MTIME_BUFFER_MS = 1e3;
 var ORPHAN_MAX_AGE_MS = 5 * 60 * 1e3;
 function generateTmpStamp() {
@@ -72313,14 +73478,14 @@ function pairWriteImpl(yamlPath, yamlContent, sidecarPath, state) {
   return { yamlPath, sidecarPath, finalMtimeMs, refreshedSidecar: true };
 }
 function ensureDir(filePath) {
-  const dir = dirname15(filePath);
+  const dir = dirname16(filePath);
   if (!atomicWriter._exists(dir))
     atomicWriter._mkdir(dir);
 }
 function cleanupOrphans(yamlPath, sidecarPath) {
   const now = Date.now();
   for (const targetPath of [yamlPath, sidecarPath]) {
-    const dir = dirname15(targetPath);
+    const dir = dirname16(targetPath);
     const prefix = `${basename6(targetPath)}.tmp.`;
     let entries;
     try {
@@ -72359,7 +73524,7 @@ var atomicWriter = {
    *  cases for ensureDir / cleanupOrphans can simulate exotic failures
    *  (PR #109 review). */
   _exists(path) {
-    return existsSync26(path);
+    return existsSync27(path);
   },
   /** Underlying `fs.mkdirSync(path, { recursive: true })`. */
   _mkdir(path) {
@@ -72371,7 +73536,7 @@ var atomicWriter = {
   },
   /** Underlying `fs.readdirSync(path)`. Used by GH #111 prefix-scan cleanup. */
   _readdir(path) {
-    return readdirSync8(path);
+    return readdirSync9(path);
   },
   /**
    * Atomic pair-write. Cleans up any orphaned `.tmp` files before
@@ -72387,10 +73552,10 @@ var atomicWriter = {
 // packages/rn-dev-agent-core/dist/domain/action-store.js
 function actionPathFor(projectRoot, actionId) {
   assertValidActionId(actionId, "actionPathFor");
-  const actionsDir = join35(projectRoot, ".rn-agent", "actions");
+  const actionsDir = join38(projectRoot, ".rn-agent", "actions");
   const fileName = `${actionId}.yaml`;
   assertWithinDir(fileName, actionsDir);
-  return join35(actionsDir, fileName);
+  return join38(actionsDir, fileName);
 }
 function splitYaml(text) {
   const allLines = text.split("\n");
@@ -72453,9 +73618,9 @@ function joinYaml(parts) {
 }
 function loadAction(projectRoot, actionId) {
   const filePath = actionPathFor(projectRoot, actionId);
-  if (!existsSync27(filePath))
+  if (!existsSync28(filePath))
     return null;
-  const text = readFileSync27(filePath, "utf8");
+  const text = readFileSync28(filePath, "utf8");
   const metadata = parseM7Header(text, actionId);
   if (!metadata)
     return null;
@@ -72475,12 +73640,12 @@ var SaveActionPreconditionError = class extends Error {
   }
 };
 function saveAction(action) {
-  if (existsSync27(action.filePath) && actionWasEditedExternally(action)) {
+  if (existsSync28(action.filePath) && actionWasEditedExternally(action)) {
     throw new SaveActionPreconditionError(action.filePath);
   }
   let topSection = "";
-  if (existsSync27(action.filePath)) {
-    const existing = readFileSync27(action.filePath, "utf8");
+  if (existsSync28(action.filePath)) {
+    const existing = readFileSync28(action.filePath, "utf8");
     topSection = splitYaml(existing).topSection;
   }
   if (!topSection && action.metadata.appId) {
@@ -72533,7 +73698,7 @@ function canonicalRuntimeJson(state) {
 function runtimeSidecarMatches(sidecarPath, expected) {
   let onDisk;
   try {
-    onDisk = JSON.parse(readFileSync27(sidecarPath, "utf8"));
+    onDisk = JSON.parse(readFileSync28(sidecarPath, "utf8"));
   } catch {
     return false;
   }
@@ -72542,7 +73707,7 @@ function runtimeSidecarMatches(sidecarPath, expected) {
 }
 function saveActionRuntimeWithCAS(expected, nextState) {
   const sidecarPath = sidecarPathFor(expected.filePath);
-  if (existsSync27(sidecarPath)) {
+  if (existsSync28(sidecarPath)) {
     if (!runtimeSidecarMatches(sidecarPath, expected.state)) {
       return { ok: false, conflict: "EXTERNAL_WRITE" };
     }
@@ -72555,7 +73720,7 @@ function saveActionRuntimeWithCAS(expected, nextState) {
 }
 function promoteActionRuntimeWithCAS(expected, nextState) {
   const sidecarPath = sidecarPathFor(expected.filePath);
-  if (existsSync27(sidecarPath)) {
+  if (existsSync28(sidecarPath)) {
     if (!runtimeSidecarMatches(sidecarPath, expected.state)) {
       return { ok: false, conflict: "EXTERNAL_WRITE" };
     }
@@ -72564,7 +73729,7 @@ function promoteActionRuntimeWithCAS(expected, nextState) {
   }
   if (actionWasEditedExternally(expected))
     return { ok: false, conflict: "EXTERNAL_WRITE" };
-  const yaml2 = readFileSync27(expected.filePath, "utf8");
+  const yaml2 = readFileSync28(expected.filePath, "utf8");
   const marker = /^# status: experimental[ \t]*$/gm;
   if ((yaml2.match(marker) ?? []).length !== 1)
     return { ok: false, conflict: "EXTERNAL_WRITE" };
@@ -72926,13 +74091,13 @@ function createRepairActionHandler() {
 
 // packages/rn-dev-agent-core/dist/tools/save-as-action.js
 init_utils();
-import { existsSync as existsSync28 } from "node:fs";
+import { existsSync as existsSync29 } from "node:fs";
 
 // packages/rn-dev-agent-core/dist/tools/test-recorder.js
 init_utils();
 init_storage();
 import { mkdir, readdir, readFile as readFile2, writeFile } from "node:fs/promises";
-import { join as join36 } from "node:path";
+import { join as join39 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/cdp/test-recorder-helpers.js
 var DEV_CHECK_JS = `(typeof __DEV__ !== 'undefined' && __DEV__ === true)`;
@@ -73806,7 +74971,7 @@ function createRecordTestSaveHandler(getClient2) {
     if (!safe) {
       return failResult("Filename is empty after sanitization", "BAD_FILENAME");
     }
-    const filePath = join36(dir, `${safe}.json`);
+    const filePath = join39(dir, `${safe}.json`);
     const payload = { savedAt: (/* @__PURE__ */ new Date()).toISOString(), events: storedEvents };
     await writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
     return okResult({
@@ -73827,7 +74992,7 @@ function createRecordTestLoadHandler(getClient2) {
     if (!safe) {
       return failResult("Filename is empty after sanitization", "BAD_FILENAME");
     }
-    const filePath = join36(dir, `${safe}.json`);
+    const filePath = join39(dir, `${safe}.json`);
     let raw;
     try {
       raw = await readFile2(filePath, "utf8");
@@ -73887,7 +75052,7 @@ function createSaveAsActionHandler() {
     }
     const projectRoot = args.projectRoot ?? process.cwd();
     const filePath = actionPathFor(projectRoot, args.id);
-    const preexisted = existsSync28(filePath);
+    const preexisted = existsSync29(filePath);
     if (preexisted && !args.overwrite) {
       return failResult(`cdp_record_test_save_as_action: action "${args.id}" already exists at ${filePath}. Pass overwrite=true to replace, or pick a different id.`, "BAD_FILENAME", {
         actionId: args.id,
@@ -75582,7 +76747,7 @@ async function collectNativeIos(durationMs, signal, deviceId, bundleId, onResolv
     return [];
   const pid = await resolveIosAppPid(deviceId, bundleId, signal);
   onResolvedPid?.(pid);
-  return new Promise((resolve12, reject) => {
+  return new Promise((resolve14, reject) => {
     const entries = [];
     let killed = false;
     let killedByUs = false;
@@ -75651,7 +76816,7 @@ async function collectNativeIos(durationMs, signal, deviceId, bundleId, onResolv
       if (!killedByUs && code !== 0 && entries.length === 0) {
         reject(new Error(`xcrun simctl log stream exited ${code}: ${stderrBuf.slice(0, 200)}`));
       } else {
-        resolve12(entries);
+        resolve14(entries);
       }
     });
     proc.on("error", (err) => {
@@ -75716,7 +76881,7 @@ function buildAndroidLogcatArgs(serial) {
 function collectNativeAndroid(durationMs, signal, serial) {
   if (signal.aborted)
     return Promise.resolve([]);
-  return new Promise((resolve12, reject) => {
+  return new Promise((resolve14, reject) => {
     const entries = [];
     const year = (/* @__PURE__ */ new Date()).getFullYear();
     const killMs = durationMs > 0 ? durationMs : 100;
@@ -75784,7 +76949,7 @@ function collectNativeAndroid(durationMs, signal, serial) {
       if (!killedByUs && code !== 0 && entries.length === 0) {
         reject(new Error(`adb logcat exited ${code}: ${stderrBuf.slice(0, 200)}`));
       } else {
-        resolve12(entries);
+        resolve14(entries);
       }
     });
     proc.on("error", (err) => {
@@ -75988,7 +77153,7 @@ async function observeSessionRuntimeAbsent(dependencies) {
   return !await isSessionAppRunning(binding, dependencies);
 }
 function createSessionRuntimeAbsenceProbe(dependencies) {
-  const wait = dependencies.wait ?? ((ms) => new Promise((resolve12) => setTimeout(resolve12, ms)));
+  const wait = dependencies.wait ?? ((ms) => new Promise((resolve14) => setTimeout(resolve14, ms)));
   return async () => {
     try {
       if (!await observeSessionRuntimeAbsent(dependencies))
@@ -77147,11 +78312,11 @@ init_dev_client_picker();
 // packages/rn-dev-agent-core/dist/tools/device-record.js
 init_utils();
 import { execFile as execFile23 } from "node:child_process";
-import { createHash as createHash12 } from "node:crypto";
-import { existsSync as existsSync29 } from "node:fs";
+import { createHash as createHash14 } from "node:crypto";
+import { existsSync as existsSync30 } from "node:fs";
 import { promisify as promisify24 } from "node:util";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
-import { dirname as dirname16, join as join37 } from "node:path";
+import { dirname as dirname17, join as join40 } from "node:path";
 init_process_birth();
 var execFileAsync5 = promisify24(execFile23);
 var START_TIMEOUT_MS = 1e4;
@@ -77235,28 +78400,28 @@ function compactUnique2(paths) {
   }
   return out;
 }
-function candidateRecordScripts(baseDir = dirname16(fileURLToPath3(import.meta.url))) {
+function candidateRecordScripts(baseDir = dirname17(fileURLToPath3(import.meta.url))) {
   const codexPluginRoot = process.env.RN_DEV_AGENT_CODEX_PLUGIN_ROOT;
   const claudePluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
   return compactUnique2([
     process.env.RN_DEV_AGENT_RECORD_PROOF_SCRIPT,
-    codexPluginRoot ? join37(codexPluginRoot, "scripts", "record_proof.sh") : void 0,
-    claudePluginRoot ? join37(claudePluginRoot, "scripts", "record_proof.sh") : void 0,
-    claudePluginRoot ? join37(claudePluginRoot, "..", "..", "scripts", "record_proof.sh") : void 0,
+    codexPluginRoot ? join40(codexPluginRoot, "scripts", "record_proof.sh") : void 0,
+    claudePluginRoot ? join40(claudePluginRoot, "scripts", "record_proof.sh") : void 0,
+    claudePluginRoot ? join40(claudePluginRoot, "..", "..", "scripts", "record_proof.sh") : void 0,
     // Bundled Codex runtime: <plugin>/rn-dev-agent-core/dist.
-    join37(baseDir, "..", "..", "scripts", "record_proof.sh"),
+    join40(baseDir, "..", "..", "scripts", "record_proof.sh"),
     // Source core bundle: packages/rn-dev-agent-core/dist/supervisor.js.
-    join37(baseDir, "..", "..", "..", "scripts", "record_proof.sh"),
+    join40(baseDir, "..", "..", "..", "scripts", "record_proof.sh"),
     // Source module build: packages/rn-dev-agent-core/dist/tools/device-record.js.
-    join37(baseDir, "..", "..", "..", "..", "scripts", "record_proof.sh")
+    join40(baseDir, "..", "..", "..", "..", "scripts", "record_proof.sh")
   ]);
 }
-function resolveRecordScript(baseDir = dirname16(fileURLToPath3(import.meta.url))) {
+function resolveRecordScript(baseDir = dirname17(fileURLToPath3(import.meta.url))) {
   if (process.env.RN_DEV_AGENT_RECORD_PROOF_SCRIPT) {
     return process.env.RN_DEV_AGENT_RECORD_PROOF_SCRIPT;
   }
   const candidates = candidateRecordScripts(baseDir);
-  return candidates.find((path) => existsSync29(path)) ?? candidates[0];
+  return candidates.find((path) => existsSync30(path)) ?? candidates[0];
 }
 function getRecordScript() {
   return resolveRecordScript();
@@ -77300,7 +78465,7 @@ function parseStatusOutput(stdout) {
   return active;
 }
 function recordingScope(args) {
-  return createHash12("sha256").update(`${args.sessionId}\0${args.claimEpoch}\0${args.platform}\0${args.deviceId}`).digest("hex");
+  return createHash14("sha256").update(`${args.sessionId}\0${args.claimEpoch}\0${args.platform}\0${args.deviceId}`).digest("hex");
 }
 function bindRecorderSession(runtime, args) {
   const available = runtime.requireAvailable();
@@ -77569,14 +78734,14 @@ function createDeviceRecordHandler(deps = {}) {
 }
 
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
-import { createHash as createHash14, randomUUID as randomUUID8 } from "node:crypto";
-import { execFileSync as execFileSync13 } from "node:child_process";
-import { chmodSync as chmodSync4, closeSync as closeSync8, existsSync as existsSync30, fsyncSync, lstatSync as lstatSync10, mkdirSync as mkdirSync17, openSync as openSync8, readFileSync as readFileSync28, realpathSync as realpathSync10, renameSync as renameSync7, unlinkSync as unlinkSync10, writeFileSync as writeFileSync14 } from "node:fs";
-import { basename as basename7, dirname as dirname17, extname, isAbsolute as isAbsolute7, join as join38, relative as relative4, resolve as resolve9, sep as sep6 } from "node:path";
+import { createHash as createHash16, randomUUID as randomUUID8 } from "node:crypto";
+import { execFileSync as execFileSync14 } from "node:child_process";
+import { chmodSync as chmodSync4, closeSync as closeSync9, existsSync as existsSync31, fsyncSync, lstatSync as lstatSync11, mkdirSync as mkdirSync17, openSync as openSync9, readFileSync as readFileSync29, realpathSync as realpathSync11, renameSync as renameSync7, unlinkSync as unlinkSync10, writeFileSync as writeFileSync14 } from "node:fs";
+import { basename as basename7, dirname as dirname18, extname, isAbsolute as isAbsolute9, join as join41, relative as relative5, resolve as resolve12, sep as sep6 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 
 // packages/rn-dev-agent-core/dist/domain/proof-capture.js
-import { createHash as createHash13 } from "node:crypto";
+import { createHash as createHash15 } from "node:crypto";
 var StrictProofMonitor = class {
   now;
   events = [];
@@ -77650,14 +78815,14 @@ function hashProofArgs(params) {
   return hashProofValue(redact(params));
 }
 function hashProofValue(value) {
-  return createHash13("sha256").update(JSON.stringify(canonicalizeProofValue(value))).digest("hex");
+  return createHash15("sha256").update(JSON.stringify(canonicalizeProofValue(value))).digest("hex");
 }
 function proofRuntimeAuthorityMarker(input) {
   return hashProofValue(input);
 }
 function hashObservedValue(value) {
   const bytes = JSON.stringify(value) ?? String(value);
-  return createHash13("sha256").update(bytes).digest("hex");
+  return createHash15("sha256").update(bytes).digest("hex");
 }
 function resultEnvelope(result) {
   if (!result || typeof result !== "object")
@@ -78101,7 +79266,7 @@ function readStartupIntegrityAttestation() {
 }
 
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
-var absolutePathSchema = external_exports.string().min(1).refine(isAbsolute7, "path must be absolute");
+var absolutePathSchema = external_exports.string().min(1).refine(isAbsolute9, "path must be absolute");
 var beginRehearsalSchema = external_exports.object({
   action: external_exports.literal("begin_rehearsal"),
   projectRoot: absolutePathSchema,
@@ -78219,22 +79384,22 @@ var readinessSchema = external_exports.object({
   runtime: proofRuntimeSchema
 }).strict();
 function hashBytes(bytes) {
-  return createHash14("sha256").update(bytes).digest("hex");
+  return createHash16("sha256").update(bytes).digest("hex");
 }
 function captureProofWorkerStartup(argv = process.argv, attestation = readStartupIntegrityAttestation()) {
   let executedEntrypointPath = null;
   let loadedCoreBundlePath = null;
   let coreBundleSha256 = null;
   try {
-    if (typeof argv[1] === "string" && isAbsolute7(argv[1])) {
-      executedEntrypointPath = realpathSync10(argv[1]);
+    if (typeof argv[1] === "string" && isAbsolute9(argv[1])) {
+      executedEntrypointPath = realpathSync11(argv[1]);
     }
   } catch {
     executedEntrypointPath = null;
   }
   if (attestation) {
     try {
-      loadedCoreBundlePath = realpathSync10(fileURLToPath4(attestation.entrypointUrl));
+      loadedCoreBundlePath = realpathSync11(fileURLToPath4(attestation.entrypointUrl));
       coreBundleSha256 = attestation.coreBundleSha256;
     } catch {
       loadedCoreBundlePath = null;
@@ -78251,7 +79416,7 @@ function captureProofWorkerStartup(argv = process.argv, attestation = readStartu
 var proofWorkerStartup = captureProofWorkerStartup();
 function realpathOrSelf(path) {
   try {
-    return realpathSync10(path);
+    return realpathSync11(path);
   } catch {
     return path;
   }
@@ -78259,23 +79424,23 @@ function realpathOrSelf(path) {
 function resolveProofCandidateEntrypoint(candidateRoot, argv) {
   let root;
   try {
-    root = realpathSync10(candidateRoot);
+    root = realpathSync11(candidateRoot);
   } catch {
     return null;
   }
   const authorityArg = argv[1];
-  if (typeof authorityArg !== "string" || !isAbsolute7(authorityArg))
+  if (typeof authorityArg !== "string" || !isAbsolute9(authorityArg))
     return null;
   let arg;
   try {
-    arg = realpathSync10(authorityArg);
+    arg = realpathSync11(authorityArg);
   } catch {
     return null;
   }
   for (const host of ["claude-plugin", "codex-plugin"]) {
-    const hostRoot = join38(root, "packages", host);
-    const coreIndex = realpathOrSelf(join38(hostRoot, "rn-dev-agent-core", "dist", "index.js"));
-    const coreSupervisor = realpathOrSelf(join38(hostRoot, "rn-dev-agent-core", "dist", "supervisor.js"));
+    const hostRoot = join41(root, "packages", host);
+    const coreIndex = realpathOrSelf(join41(hostRoot, "rn-dev-agent-core", "dist", "index.js"));
+    const coreSupervisor = realpathOrSelf(join41(hostRoot, "rn-dev-agent-core", "dist", "supervisor.js"));
     if (arg === coreIndex) {
       return {
         host,
@@ -78294,8 +79459,8 @@ function resolveProofCandidateEntrypoint(candidateRoot, argv) {
         kind: "core-supervisor"
       };
     }
-    if (host === "codex-plugin" && arg === realpathOrSelf(join38(hostRoot, "bin", "cdp-supervisor.js"))) {
-      if (!existsSync30(coreIndex) || !existsSync30(coreSupervisor))
+    if (host === "codex-plugin" && arg === realpathOrSelf(join41(hostRoot, "bin", "cdp-supervisor.js"))) {
+      if (!existsSync31(coreIndex) || !existsSync31(coreSupervisor))
         return null;
       return {
         host,
@@ -78313,10 +79478,10 @@ function proofCandidateStartupMatches(entrypoint, startup, headCoreBundleSha256)
 }
 function proofCandidateEntrypointEnvironmentMatches(entrypoint, env) {
   const normalizedOverride = (value) => {
-    if (!value || !isAbsolute7(value))
+    if (!value || !isAbsolute9(value))
       return value ? null : "";
     try {
-      return realpathSync10(value);
+      return realpathSync11(value);
     } catch {
       return null;
     }
@@ -78329,7 +79494,7 @@ function proofCandidateEntrypointEnvironmentMatches(entrypoint, env) {
   }
   if (supervisorOverride && supervisorOverride !== entrypoint.coreSupervisor)
     return false;
-  if (coreRootOverride && join38(coreRootOverride, "dist", "supervisor.js") !== entrypoint.coreSupervisor) {
+  if (coreRootOverride && join41(coreRootOverride, "dist", "supervisor.js") !== entrypoint.coreSupervisor) {
     return false;
   }
   if (workerOverride && workerOverride !== entrypoint.coreBundle)
@@ -78338,7 +79503,7 @@ function proofCandidateEntrypointEnvironmentMatches(entrypoint, env) {
 }
 function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
   try {
-    const root = realpathSync10(candidateRoot);
+    const root = realpathSync11(candidateRoot);
     const statusArgs = [
       "-C",
       root,
@@ -78347,35 +79512,35 @@ function readProofCandidateHeadArtifacts(candidateRoot, artifactPaths) {
       "--untracked-files=all",
       "--ignore-submodules=none"
     ];
-    if (execFileSync13("git", statusArgs, { encoding: "utf8" }).trim())
+    if (execFileSync14("git", statusArgs, { encoding: "utf8" }).trim())
       return null;
     const verifiedBytes = [];
     for (const artifactPath of artifactPaths) {
-      const resolvedArtifactPath = realpathSync10(artifactPath);
-      const artifactRelativePath = relative4(root, resolvedArtifactPath).split(sep6).join("/");
+      const resolvedArtifactPath = realpathSync11(artifactPath);
+      const artifactRelativePath = relative5(root, resolvedArtifactPath).split(sep6).join("/");
       if (!artifactRelativePath || artifactRelativePath === ".." || artifactRelativePath.startsWith("../")) {
         return null;
       }
-      execFileSync13("git", ["-C", root, "ls-files", "--error-unmatch", artifactRelativePath]);
-      const headBytes = execFileSync13("git", ["-C", root, "show", `HEAD:${artifactRelativePath}`], {
+      execFileSync14("git", ["-C", root, "ls-files", "--error-unmatch", artifactRelativePath]);
+      const headBytes = execFileSync14("git", ["-C", root, "show", `HEAD:${artifactRelativePath}`], {
         maxBuffer: 128 * 1024 * 1024
       });
-      const artifactBytes = readFileSync28(resolvedArtifactPath);
+      const artifactBytes = readFileSync29(resolvedArtifactPath);
       if (hashBytes(artifactBytes) !== hashBytes(headBytes))
         return null;
       verifiedBytes.push(artifactBytes);
     }
-    return execFileSync13("git", statusArgs, { encoding: "utf8" }).trim() ? null : verifiedBytes;
+    return execFileSync14("git", statusArgs, { encoding: "utf8" }).trim() ? null : verifiedBytes;
   } catch {
     return null;
   }
 }
 function readProofCandidateRuntime(candidateRoot, startup = proofWorkerStartup) {
-  const root = realpathSync10(resolve9(candidateRoot));
-  const sha = execFileSync13("git", ["-C", root, "rev-parse", "HEAD"], {
+  const root = realpathSync11(resolve12(candidateRoot));
+  const sha = execFileSync14("git", ["-C", root, "rev-parse", "HEAD"], {
     encoding: "utf8"
   }).trim();
-  const remote = execFileSync13("git", ["-C", root, "remote", "get-url", "origin"], {
+  const remote = execFileSync14("git", ["-C", root, "remote", "get-url", "origin"], {
     encoding: "utf8"
   }).trim();
   if (!isOfficialProofCandidateRemote(remote)) {
@@ -78387,7 +79552,7 @@ function readProofCandidateRuntime(candidateRoot, startup = proofWorkerStartup) 
     throw new Error("CANDIDATE_MCP_PROCESS_MISMATCH");
   }
   const { host, coreBundle } = entrypoint;
-  const runnerManifest = join38(root, "packages", host, "runner-manifest.json");
+  const runnerManifest = join41(root, "packages", host, "runner-manifest.json");
   const artifacts = readProofCandidateHeadArtifacts(root, [coreBundle, runnerManifest]);
   if (!artifacts) {
     throw new Error("CANDIDATE_CHECKOUT_NOT_CLEAN");
@@ -78396,7 +79561,7 @@ function readProofCandidateRuntime(candidateRoot, startup = proofWorkerStartup) 
   if (!proofCandidateStartupMatches(entrypoint, startup, headCoreBundleSha256)) {
     throw new Error("CANDIDATE_MCP_PROCESS_MISMATCH");
   }
-  const confirmedSha = execFileSync13("git", ["-C", root, "rev-parse", "HEAD"], {
+  const confirmedSha = execFileSync14("git", ["-C", root, "rev-parse", "HEAD"], {
     encoding: "utf8"
   }).trim();
   if (confirmedSha !== sha)
@@ -78439,34 +79604,34 @@ function sameProofAction(left, right) {
 function readProofActionIdentity(appProjectRoot, actionId) {
   try {
     const path = actionPathFor(appProjectRoot, actionId);
-    const bytesBefore = readFileSync28(path);
+    const bytesBefore = readFileSync29(path);
     const action = loadAction(appProjectRoot, actionId);
-    const bytesAfter = readFileSync28(path);
+    const bytesAfter = readFileSync29(path);
     if (!action || action.metadata.id !== actionId || !bytesBefore.equals(bytesAfter) || !Number.isInteger(action.state.revision) || action.state.revision < 1) {
       return null;
     }
     return {
       id: actionId,
       version: String(action.state.revision),
-      sha256: createHash14("sha256").update(bytesAfter).digest("hex")
+      sha256: createHash16("sha256").update(bytesAfter).digest("hex")
     };
   } catch {
     return null;
   }
 }
 function isNormalizedDescendant(root, path) {
-  if (!isAbsolute7(root) || !isAbsolute7(path) || resolve9(root) !== root || resolve9(path) !== path) {
+  if (!isAbsolute9(root) || !isAbsolute9(path) || resolve12(root) !== root || resolve12(path) !== path) {
     return false;
   }
-  const fromRoot = relative4(root, path);
-  return fromRoot.length > 0 && fromRoot !== ".." && !fromRoot.startsWith(`..${sep6}`) && !isAbsolute7(fromRoot);
+  const fromRoot = relative5(root, path);
+  return fromRoot.length > 0 && fromRoot !== ".." && !fromRoot.startsWith(`..${sep6}`) && !isAbsolute9(fromRoot);
 }
 function hasExistingSymlink(root, path) {
-  const parts = relative4(root, path).split(sep6);
+  const parts = relative5(root, path).split(sep6);
   for (let length = 0; length <= parts.length; length += 1) {
-    const candidate = resolve9(root, ...parts.slice(0, length));
+    const candidate = resolve12(root, ...parts.slice(0, length));
     try {
-      if (lstatSync10(candidate).isSymbolicLink())
+      if (lstatSync11(candidate).isSymbolicLink())
         return true;
     } catch {
     }
@@ -78474,12 +79639,12 @@ function hasExistingSymlink(root, path) {
   return false;
 }
 function validCaptureContext(args, expectedRoot) {
-  if (!expectedRoot || args.projectRoot !== expectedRoot || resolve9(expectedRoot) !== expectedRoot) {
+  if (!expectedRoot || args.projectRoot !== expectedRoot || resolve12(expectedRoot) !== expectedRoot) {
     return false;
   }
   if (!/^[a-z0-9][a-z0-9-]*$/.test(args.runId))
     return false;
-  const proofRoot = join38(expectedRoot, "docs", "proof", args.runId);
+  const proofRoot = join41(expectedRoot, "docs", "proof", args.runId);
   const screenshots = args.storyboard.steps.map((step) => step.screenshotPath);
   const destinations = [args.receiptPath, args.videoPath, args.contactSheetPath, ...screenshots];
   if (destinations.some((path) => !isNormalizedDescendant(proofRoot, path) || hasExistingSymlink(expectedRoot, path)) || new Set(destinations).size !== destinations.length) {
@@ -78493,24 +79658,24 @@ function validCaptureContext(args, expectedRoot) {
   }));
 }
 function proofRootExists(args) {
-  const proofRoot = join38(args.projectRoot, "docs", "proof", args.runId);
+  const proofRoot = join41(args.projectRoot, "docs", "proof", args.runId);
   try {
-    lstatSync10(proofRoot);
+    lstatSync11(proofRoot);
     return true;
   } catch (error2) {
     return error2.code !== "ENOENT";
   }
 }
 function resolveProofWorktreeRoot(detectedProjectRoot) {
-  if (!detectedProjectRoot || !isAbsolute7(detectedProjectRoot) || resolve9(detectedProjectRoot) !== detectedProjectRoot) {
+  if (!detectedProjectRoot || !isAbsolute9(detectedProjectRoot) || resolve12(detectedProjectRoot) !== detectedProjectRoot) {
     return null;
   }
   try {
-    const root = execFileSync13("git", ["rev-parse", "--show-toplevel"], {
+    const root = execFileSync14("git", ["rev-parse", "--show-toplevel"], {
       cwd: detectedProjectRoot,
       encoding: "utf8"
     }).trim();
-    return root && isAbsolute7(root) && resolve9(root) === root ? root : null;
+    return root && isAbsolute9(root) && resolve12(root) === root ? root : null;
   } catch {
     return null;
   }
@@ -78538,8 +79703,8 @@ function parseProofGitChanges(porcelain) {
   return changes;
 }
 function readProofGitInfo(root) {
-  const sha = execFileSync13("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
-  const status = execFileSync13("git", ["status", "--porcelain=v1", "--untracked-files=all", "-z"], {
+  const sha = execFileSync14("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  const status = execFileSync14("git", ["status", "--porcelain=v1", "--untracked-files=all", "-z"], {
     cwd: root,
     encoding: "utf8"
   });
@@ -78549,8 +79714,8 @@ function readProofGitInfo(root) {
 function proofRootHasTrackedEntries(root, proofRoot) {
   if (!isNormalizedDescendant(root, proofRoot))
     throw new Error("INVALID_PROOF_ROOT");
-  const path = relative4(root, proofRoot).replaceAll(sep6, "/");
-  return execFileSync13("git", ["ls-files", "-z", "--", path], {
+  const path = relative5(root, proofRoot).replaceAll(sep6, "/");
+  return execFileSync14("git", ["ls-files", "-z", "--", path], {
     cwd: root,
     encoding: "utf8"
   }).length > 0;
@@ -78626,14 +79791,14 @@ function traceFor(storyboard, events) {
   return validateTrace([...required3, ...allowedExtras], events);
 }
 function readProofContractAt(moduleUrl = import.meta.url) {
-  const moduleDir = dirname17(fileURLToPath4(moduleUrl));
+  const moduleDir = dirname18(fileURLToPath4(moduleUrl));
   const candidates = [
-    resolve9(moduleDir, "../../schemas/proof-receipt.schema.json"),
-    resolve9(moduleDir, "../schemas/proof-receipt.schema.json")
+    resolve12(moduleDir, "../../schemas/proof-receipt.schema.json"),
+    resolve12(moduleDir, "../schemas/proof-receipt.schema.json")
   ];
   for (const path of candidates) {
     try {
-      const bytes = readFileSync28(path, "utf8");
+      const bytes = readFileSync29(path, "utf8");
       return { schema: JSON.parse(bytes), bytes, sha256: hashBytes(bytes) };
     } catch {
     }
@@ -78641,22 +79806,22 @@ function readProofContractAt(moduleUrl = import.meta.url) {
   throw new Error("PROOF_CONTRACT_MISSING");
 }
 function writeProofReceiptAtomic(path, receipt2) {
-  const directory = dirname17(path);
+  const directory = dirname18(path);
   mkdirSync17(directory, { recursive: true, mode: 448 });
-  const temporary = resolve9(directory, `.${randomUUID8()}.proof-receipt.tmp`);
+  const temporary = resolve12(directory, `.${randomUUID8()}.proof-receipt.tmp`);
   let descriptor = null;
   try {
-    descriptor = openSync8(temporary, "wx", 384);
+    descriptor = openSync9(temporary, "wx", 384);
     writeFileSync14(descriptor, `${JSON.stringify(receipt2, null, 2)}
 `, "utf8");
     fsyncSync(descriptor);
-    closeSync8(descriptor);
+    closeSync9(descriptor);
     descriptor = null;
     renameSync7(temporary, path);
     chmodSync4(path, 384);
   } catch (error2) {
     if (descriptor !== null)
-      closeSync8(descriptor);
+      closeSync9(descriptor);
     try {
       unlinkSync10(temporary);
     } catch {
@@ -78818,7 +79983,7 @@ function createProofCaptureHandler(deps) {
       return current.reasons;
     return sameProofAction(current.value, active.actionIdentity) ? [] : ["PROOF_ACTION_IDENTITY_CHANGED"];
   };
-  const repositoryPath = (active, path) => relative4(active.context.projectRoot, path).replaceAll(sep6, "/");
+  const repositoryPath = (active, path) => relative5(active.context.projectRoot, path).replaceAll(sep6, "/");
   const observedSetupScreenshots = (active) => {
     const owned = /* @__PURE__ */ new Set();
     for (const observation of deps.monitor.observations()) {
@@ -78837,7 +80002,7 @@ function createProofCaptureHandler(deps) {
     ].map((path) => repositoryPath(active, path));
     const requiredOutputs = new Set(phase === "finalized" ? [...proofOutputs, repositoryPath(active, active.context.receiptPath)] : proofOutputs);
     const allowedOutputs = phase === "setup" ? observedSetupScreenshots(active) : phase === "clean" ? /* @__PURE__ */ new Set() : requiredOutputs;
-    const invalidChange = git.changes.some((change) => isAbsolute7(change.path) || change.path === ".." || change.path.startsWith("../") || change.indexStatus !== "?" || change.worktreeStatus !== "?" || change.sourcePath !== void 0);
+    const invalidChange = git.changes.some((change) => isAbsolute9(change.path) || change.path === ".." || change.path.startsWith("../") || change.indexStatus !== "?" || change.worktreeStatus !== "?" || change.sourcePath !== void 0);
     const changedPaths = new Set(git.changes.map((change) => change.path.replaceAll("\\", "/")));
     const unrelated = [...changedPaths].some((path) => !allowedOutputs.has(path));
     const missing = (phase === "validation" || phase === "finalized") && [...requiredOutputs].some((path) => !changedPaths.has(path));
@@ -78978,7 +80143,7 @@ function createProofCaptureHandler(deps) {
         return proofFailure(["PROOF_ACTION_IDENTITY_MISMATCH"], "idle");
       }
       try {
-        const proofRoot = join38(args.projectRoot, "docs", "proof", args.runId);
+        const proofRoot = join41(args.projectRoot, "docs", "proof", args.runId);
         if (deps.proofRootTracked(args.projectRoot, proofRoot)) {
           return proofFailure(["PROOF_ROOT_TRACKED"], "idle");
         }
@@ -79444,11 +80609,11 @@ function createProofCaptureHandler(deps) {
 }
 
 // packages/rn-dev-agent-core/dist/tools/proof-media.js
-import { createHash as createHash15 } from "node:crypto";
+import { createHash as createHash17 } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { mkdir as mkdir2, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir as tmpdir11 } from "node:os";
-import { dirname as dirname18, join as join39 } from "node:path";
+import { dirname as dirname19, join as join42 } from "node:path";
 var MediaFailure = class extends Error {
   reason;
   constructor(reason) {
@@ -79487,7 +80652,7 @@ async function hashAcceptedFile(path) {
   }
 }
 async function sha256File2(path) {
-  const hash = createHash15("sha256");
+  const hash = createHash17("sha256");
   const stream = createReadStream(path);
   for await (const chunk of stream)
     hash.update(chunk);
@@ -79585,7 +80750,7 @@ async function matchScreenshotAt(process3, input) {
   if (input.videoDurationMs !== void 0 && (!Number.isFinite(input.videoDurationMs) || input.videoDurationMs <= 0)) {
     fail2("INVALID_MEDIA_INPUT");
   }
-  const normalizedScreenshotPath = join39(input.scratchDir, `screenshot-${index}.png`);
+  const normalizedScreenshotPath = join42(input.scratchDir, `screenshot-${index}.png`);
   await rm(normalizedScreenshotPath, { force: true });
   await runFrameProcess(process3, [
     "-y",
@@ -79610,7 +80775,7 @@ async function matchScreenshotAt(process3, input) {
   let best = null;
   let decodedFrameCount = 0;
   for (const [sampleIndex, timestampMs] of sampleTimestamps.entries()) {
-    const framePath = join39(input.scratchDir, `frame-${index}-${sampleIndex}.jpg`);
+    const framePath = join42(input.scratchDir, `frame-${index}-${sampleIndex}.jpg`);
     await rm(framePath, { force: true });
     try {
       await runFrameProcess(process3, [
@@ -79682,7 +80847,7 @@ async function buildContactSheet(process3, selectedFramePaths, contactSheetPath)
     await requireNonEmptyFile(path, "FRAME_PROCESS_FAILED", "FRAME_PROCESS_FAILED");
   }
   try {
-    await mkdir2(dirname18(contactSheetPath), { recursive: true });
+    await mkdir2(dirname19(contactSheetPath), { recursive: true });
     await rm(contactSheetPath, { force: true });
   } catch {
     fail2("MEDIA_IO_FAILED");
@@ -79734,7 +80899,7 @@ async function validateMedia(process3, input) {
     const scratchRoot = input.scratchRoot ?? tmpdir11();
     try {
       await mkdir2(scratchRoot, { recursive: true });
-      scratchDir = await mkdtemp(join39(scratchRoot, "proof-media-"));
+      scratchDir = await mkdtemp(join42(scratchRoot, "proof-media-"));
     } catch {
       fail2("MEDIA_IO_FAILED");
     }
@@ -80185,10 +81350,10 @@ function buildNavigationPlan(graph, targetScreen, fromScreen) {
 
 // packages/rn-dev-agent-core/dist/nav-graph/self-heal.js
 init_storage();
-import { execFileSync as execFileSync14 } from "node:child_process";
+import { execFileSync as execFileSync15 } from "node:child_process";
 function gitExec(args, cwd) {
   try {
-    return execFileSync14("git", args, { cwd, timeout: 5e3, encoding: "utf-8" }).trim();
+    return execFileSync15("git", args, { cwd, timeout: 5e3, encoding: "utf-8" }).trim();
   } catch {
     return null;
   }
@@ -80924,8 +82089,8 @@ init_maestro_validator();
 init_maestro_run();
 import { execFile as execFileCb19 } from "node:child_process";
 import { promisify as promisify25 } from "node:util";
-import { existsSync as existsSync31, readFileSync as readFileSync29, writeFileSync as writeFileSync15, readdirSync as readdirSync9 } from "node:fs";
-import { join as join40 } from "node:path";
+import { existsSync as existsSync32, readFileSync as readFileSync30, writeFileSync as writeFileSync15, readdirSync as readdirSync10 } from "node:fs";
+import { join as join43 } from "node:path";
 import { homedir as homedir10 } from "node:os";
 var execFile24 = promisify25(execFileCb19);
 var AUTH_ROUTE_PATTERNS = [
@@ -80987,24 +82152,24 @@ async function isOnAuthScreen(client2) {
   }
 }
 function findLoginFlow(projectRoot) {
-  const searchDirs = [join40(projectRoot, ".maestro", "subflows"), join40(projectRoot, ".maestro")];
+  const searchDirs = [join43(projectRoot, ".maestro", "subflows"), join43(projectRoot, ".maestro")];
   for (const dir of searchDirs) {
-    if (!existsSync31(dir))
+    if (!existsSync32(dir))
       continue;
     let files;
     try {
-      files = readdirSync9(dir);
+      files = readdirSync10(dir);
     } catch {
       continue;
     }
     for (const candidate of LOGIN_FLOW_PRIORITY) {
       if (files.includes(candidate)) {
-        return join40(dir, candidate);
+        return join43(dir, candidate);
       }
     }
     const authFile = files.find((f) => /\.(ya?ml)$/.test(f) && AUTH_ROUTE_PATTERNS.some((p) => f.toLowerCase().includes(p)));
     if (authFile)
-      return join40(dir, authFile);
+      return join43(dir, authFile);
   }
   return null;
 }
@@ -81040,7 +82205,7 @@ async function handleAutoLogin(client2, opts = {}) {
     };
   }
   const rawAppId = opts.appId ?? readAppId(projectRoot, platform) ?? "";
-  const originalContent = readFileSync29(flowPath, "utf-8");
+  const originalContent = readFileSync30(flowPath, "utf-8");
   const flowContent = stripClearState(originalContent);
   let validatedCommands;
   try {
@@ -81077,8 +82242,8 @@ async function handleAutoLogin(client2, opts = {}) {
   }
   const wrapperPath = "/tmp/rn-auto-login-wrapper.yaml";
   writeFileSync15(wrapperPath, wrapperContent, "utf-8");
-  const runnerPath = join40(homedir10(), ".maestro-runner", "bin", "maestro-runner");
-  if (!existsSync31(runnerPath)) {
+  const runnerPath = join43(homedir10(), ".maestro-runner", "bin", "maestro-runner");
+  if (!existsSync32(runnerPath)) {
     return {
       loggedIn: false,
       reason: "maestro-runner not found. Install with: curl -fsSL https://open.devicelab.dev/install/maestro-runner | bash"
@@ -81523,10 +82688,10 @@ function buildGracefulShutdown(deps) {
       }
     })();
     let timeoutHandle = null;
-    const timeout = new Promise((resolve12) => {
+    const timeout = new Promise((resolve14) => {
       timeoutHandle = setTimeout(() => {
         logger.warn("MCP", `shutdown: cleanup timeout after ${timeoutMs}ms, forcing exit`);
-        resolve12();
+        resolve14();
       }, timeoutMs);
     });
     await Promise.race([cleanup, timeout]);
@@ -81537,11 +82702,11 @@ function buildGracefulShutdown(deps) {
 }
 
 // packages/rn-dev-agent-core/dist/lifecycle/lockfile.js
-import { createHash as createHash16 } from "node:crypto";
-import { execFileSync as execFileSync15 } from "node:child_process";
-import { closeSync as closeSync9, existsSync as existsSync32, mkdirSync as mkdirSync18, openSync as openSync9, readFileSync as readFileSync30, statSync as statSync13, unlinkSync as unlinkSync11, writeFileSync as writeFileSync16, writeSync as writeSync3 } from "node:fs";
+import { createHash as createHash18 } from "node:crypto";
+import { execFileSync as execFileSync16 } from "node:child_process";
+import { closeSync as closeSync10, existsSync as existsSync33, mkdirSync as mkdirSync18, openSync as openSync10, readFileSync as readFileSync31, statSync as statSync13, unlinkSync as unlinkSync11, writeFileSync as writeFileSync16, writeSync as writeSync3 } from "node:fs";
 import { tmpdir as tmpdir12, userInfo as userInfo2 } from "node:os";
-import { join as join41, resolve as resolve10 } from "node:path";
+import { join as join44, resolve as resolve13 } from "node:path";
 var DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
 var DEFAULT_PROCESS_NAME_NEEDLE = "cdp-bridge";
 var PROCESS_IDENTITY_MARKERS = ["cdp-bridge", "rn-dev-agent", "supervisor.js"];
@@ -81559,7 +82724,7 @@ function defaultProcessAlive4(pid) {
 }
 function defaultProcessName(pid) {
   try {
-    const out = execFileSync15("ps", ["-ww", "-p", String(pid), "-o", "args="], {
+    const out = execFileSync16("ps", ["-ww", "-p", String(pid), "-o", "args="], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 1e3
@@ -81575,7 +82740,7 @@ function defaultProcessIdentity() {
 }
 function defaultProcessParent(pid) {
   try {
-    const out = execFileSync15("ps", ["-p", String(pid), "-o", "ppid="], {
+    const out = execFileSync16("ps", ["-p", String(pid), "-o", "ppid="], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 1e3
@@ -81590,7 +82755,7 @@ function defaultSelfPpid() {
   return typeof process.ppid === "number" ? process.ppid : 0;
 }
 function hashProjectRoot(projectRoot) {
-  return createHash16("md5").update(resolve10(projectRoot)).digest("hex").slice(0, 8);
+  return createHash18("md5").update(resolve13(projectRoot)).digest("hex").slice(0, 8);
 }
 var Lockfile = class {
   opts;
@@ -81617,7 +82782,7 @@ var Lockfile = class {
       processIdentity: opts.processIdentity ?? defaultProcessIdentity(),
       staleMs: opts.staleMs ?? DEFAULT_STALE_MS
     };
-    this.lockPath = join41(tmpDir, `rn-dev-agent-cdp-${uid}-${hash}.lock`);
+    this.lockPath = join44(tmpDir, `rn-dev-agent-cdp-${uid}-${hash}.lock`);
   }
   // GH#251: acquire via atomic exclusive-create (same pattern as DeviceLock).
   // The previous read-then-writeFileSync let two bridges starting in the same
@@ -81674,7 +82839,7 @@ var Lockfile = class {
     if (!this.acquired)
       return;
     try {
-      if (existsSync32(this.lockPath)) {
+      if (existsSync33(this.lockPath)) {
         const body = this.readExisting();
         if (body?.pid === this.opts.pid) {
           unlinkSync11(this.lockPath);
@@ -81708,10 +82873,10 @@ var Lockfile = class {
     return true;
   }
   readExisting() {
-    if (!existsSync32(this.lockPath))
+    if (!existsSync33(this.lockPath))
       return null;
     try {
-      const raw = readFileSync30(this.lockPath, "utf8");
+      const raw = readFileSync31(this.lockPath, "utf8");
       const parsed = JSON.parse(raw);
       if (!isValidLockBody(parsed))
         return null;
@@ -81781,14 +82946,14 @@ var Lockfile = class {
       version: this.opts.version || void 0
     };
     const dir = this.opts.tmpDir;
-    if (!existsSync32(dir)) {
+    if (!existsSync33(dir)) {
       mkdirSync18(dir, { recursive: true });
     }
-    const fd = openSync9(this.lockPath, "wx");
+    const fd = openSync10(this.lockPath, "wx");
     try {
       writeSync3(fd, JSON.stringify(body, null, 2));
     } finally {
-      closeSync9(fd);
+      closeSync10(fd);
     }
   }
 };
@@ -81857,8 +83022,8 @@ init_maestro_run();
 init_utils();
 init_storage();
 init_maestro_validator();
-import { existsSync as existsSync33, mkdirSync as mkdirSync19, writeFileSync as writeFileSync17 } from "node:fs";
-import { join as join42 } from "node:path";
+import { existsSync as existsSync34, mkdirSync as mkdirSync19, writeFileSync as writeFileSync17 } from "node:fs";
+import { join as join45 } from "node:path";
 function stepToMaestroCommands(step) {
   const ALLOWED_DIRECTIONS = /* @__PURE__ */ new Set(["up", "down", "left", "right"]);
   switch (step.action) {
@@ -81914,16 +83079,16 @@ function createMaestroGenerateHandler() {
       return failResult("Provide a flow name and at least one step.");
     }
     const root = findProjectRoot();
-    const outputDir = args.outputDir ?? (root ? join42(root, ".rn-agent", "actions") : null);
+    const outputDir = args.outputDir ?? (root ? join45(root, ".rn-agent", "actions") : null);
     if (!outputDir) {
       return failResult("Cannot determine project root. Pass outputDir explicitly.");
     }
-    if (!existsSync33(outputDir)) {
+    if (!existsSync34(outputDir)) {
       mkdirSync19(outputDir, { recursive: true });
     }
     const sanitizedName = args.name.replace(/[^a-zA-Z0-9_-]/g, "-").toLowerCase();
     const fileName = `${sanitizedName}.yaml`;
-    const filePath = join42(outputDir, fileName);
+    const filePath = join45(outputDir, fileName);
     if (args.appId !== void 0 && !isValidBundleId(args.appId)) {
       return failResult(`Invalid appId '${String(args.appId).slice(0, 80)}' (Phase 134.1)`);
     }
@@ -81967,15 +83132,15 @@ init_maestro_runner_report();
 init_registry();
 import { execFile as execFileCb21 } from "node:child_process";
 import { promisify as promisify27 } from "node:util";
-import { existsSync as existsSync34, readdirSync as readdirSync10, readFileSync as readFileSync31, writeFileSync as writeFileSync18 } from "node:fs";
-import { join as join43 } from "node:path";
+import { existsSync as existsSync35, readdirSync as readdirSync11, readFileSync as readFileSync32, writeFileSync as writeFileSync18 } from "node:fs";
+import { join as join46 } from "node:path";
 import { tmpdir as tmpdir13 } from "node:os";
 var defaultExecFile4 = promisify27(execFileCb21);
 function discoverFlows(dir, pattern) {
-  if (!existsSync34(dir))
+  if (!existsSync35(dir))
     return [];
-  const files = readdirSync10(dir, { recursive: true });
-  const yamls = files.filter((f) => f.endsWith(".yaml") || f.endsWith(".yml")).map((f) => join43(dir, f)).sort();
+  const files = readdirSync11(dir, { recursive: true });
+  const yamls = files.filter((f) => f.endsWith(".yaml") || f.endsWith(".yml")).map((f) => join46(dir, f)).sort();
   if (pattern) {
     if (pattern.length > 256) {
       return yamls;
@@ -82014,7 +83179,7 @@ function createMaestroTestAllHandler(deps = {}) {
       return failResult(dispatch.error);
     }
     const root = findProjectRoot();
-    const flowDir = args.flowDir ?? (root ? join43(root, ".rn-agent", "actions") : null);
+    const flowDir = args.flowDir ?? (root ? join46(root, ".rn-agent", "actions") : null);
     if (!flowDir) {
       return failResult("Cannot determine project root. Pass flowDir explicitly.");
     }
@@ -82044,14 +83209,14 @@ function createMaestroTestAllHandler(deps = {}) {
       let parsedAppId;
       let reinstallsApp = false;
       try {
-        const yamlText = readFileSync31(flow, "utf-8");
+        const yamlText = readFileSync32(flow, "utf-8");
         const parsed = parseAndValidateFlow(yamlText);
         planMaestroAuthorityStages(parsed.commands);
         parsedCommands = parsed.commands;
         parsedAppId = resolveMaestroFlowAppId(boundAppId, parsed.appId);
         flowHasHideKeyboard = flowContainsHideKeyboard(parsed.commands);
         const canonical = buildMaestroFlow(parsedAppId !== void 0 ? { appId: parsedAppId } : {}, parsed.commands);
-        safeFlowFile = join43(tmpdir13(), `rn-maestro-validated-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
+        safeFlowFile = join46(tmpdir13(), `rn-maestro-validated-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
         writeFileSync18(safeFlowFile, canonical, "utf-8");
         const appFileResolution = resolveAppFile(platform, canonical, parsedAppId, void 0, {
           deviceId: requestedDeviceId
@@ -82218,8 +83383,8 @@ function createMaestroTestAllHandler(deps = {}) {
 // packages/rn-dev-agent-core/dist/tools/cross-platform-verify.js
 init_agent_device_wrapper();
 init_utils();
-import { readFileSync as readFileSync32, readdirSync as readdirSync11, lstatSync as lstatSync11 } from "node:fs";
-import { join as join44, extname as extname2 } from "node:path";
+import { readFileSync as readFileSync33, readdirSync as readdirSync12, lstatSync as lstatSync12 } from "node:fs";
+import { join as join47, extname as extname2 } from "node:path";
 function findElement(nodes, query, matchBy) {
   const q = query.toLowerCase();
   return nodes.some((n) => {
@@ -82237,16 +83402,16 @@ function discoverTestIDs(dir) {
   function walk(d) {
     let entries;
     try {
-      entries = readdirSync11(d);
+      entries = readdirSync12(d);
     } catch {
       return;
     }
     for (const entry of entries) {
       if (entry === "node_modules" || entry.startsWith("."))
         continue;
-      const full = join44(d, entry);
+      const full = join47(d, entry);
       try {
-        const st = lstatSync11(full);
+        const st = lstatSync12(full);
         if (st.isSymbolicLink())
           continue;
         if (st.isDirectory()) {
@@ -82255,7 +83420,7 @@ function discoverTestIDs(dir) {
         }
         if (!SCAN_EXTENSIONS.has(extname2(entry)))
           continue;
-        const src = readFileSync32(full, "utf8");
+        const src = readFileSync33(full, "utf8");
         for (const m of src.matchAll(TESTID_RE)) {
           const id = m[1] ?? m[2] ?? m[3];
           if (id)
@@ -82577,16 +83742,16 @@ function instrumentTool(toolName, handler) {
 }
 
 // packages/rn-dev-agent-core/dist/experience/evidence.js
-import { createHash as createHash17, randomUUID as randomUUID9 } from "node:crypto";
-import { chmodSync as chmodSync5, existsSync as existsSync35, mkdirSync as mkdirSync20, readFileSync as readFileSync33, renameSync as renameSync8, unlinkSync as unlinkSync12, writeFileSync as writeFileSync19 } from "node:fs";
+import { createHash as createHash19, randomUUID as randomUUID9 } from "node:crypto";
+import { chmodSync as chmodSync5, existsSync as existsSync36, mkdirSync as mkdirSync20, readFileSync as readFileSync34, renameSync as renameSync8, unlinkSync as unlinkSync12, writeFileSync as writeFileSync19 } from "node:fs";
 import { homedir as homedir11, platform as hostPlatform, release } from "node:os";
-import { dirname as dirname19, join as join45 } from "node:path";
+import { dirname as dirname20, join as join48 } from "node:path";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
 var UNKNOWN_CLASSIFICATION = "UNKNOWN";
 var DEFAULT_MAX_RECORDS = 500;
 var DEFAULT_RETENTION_DAYS = 14;
 var MAX_EVIDENCE_POINTERS = 3;
-var EXPERIENCE_DIRECTORY = join45(homedir11(), ".claude", "rn-agent", "experience");
+var EXPERIENCE_DIRECTORY = join48(homedir11(), ".claude", "rn-agent", "experience");
 var EXPERIENCE_STORE_NAME = "patterns.jsonl";
 var MAX_SYMPTOM_LENGTH = 2048;
 var DAY_MS = 24 * 60 * 60 * 1e3;
@@ -82667,11 +83832,11 @@ function readAppIdentity() {
   return appIdentityCache.identity;
 }
 function loadAppIdentity(root) {
-  const manifest = join45(root, "app.json");
+  const manifest = join48(root, "app.json");
   try {
-    if (!existsSync35(manifest))
+    if (!existsSync36(manifest))
       return { name: null, slug: null };
-    const parsed = JSON.parse(readFileSync33(manifest, "utf8"));
+    const parsed = JSON.parse(readFileSync34(manifest, "utf8"));
     const expo = parsed.expo ?? parsed;
     return { name: usableIdentity(expo?.name), slug: usableIdentity(expo?.slug) };
   } catch {
@@ -82693,7 +83858,7 @@ var ExperienceRecorder = class {
   previousFailure = null;
   constructor(options) {
     this.directory = options.directory ?? process.env.RN_DEV_AGENT_EXPERIENCE_DIR ?? EXPERIENCE_DIRECTORY;
-    this.path = join45(this.directory, EXPERIENCE_STORE_NAME);
+    this.path = join48(this.directory, EXPERIENCE_STORE_NAME);
     this.candidate = {
       pluginVersion: options.pluginVersion ?? null,
       coreVersion: options.coreVersion
@@ -82837,7 +84002,7 @@ var ExperienceRecorder = class {
   }
   write(records) {
     mkdirSync20(this.directory, { recursive: true, mode: 448 });
-    const temp = join45(this.directory, `.${EXPERIENCE_STORE_NAME}.${process.pid}.${randomUUID9()}`);
+    const temp = join48(this.directory, `.${EXPERIENCE_STORE_NAME}.${process.pid}.${randomUUID9()}`);
     try {
       const sanitized = records.map((record2) => record2.redactionVersion === REDACTION_RULES_VERSION ? record2 : {
         ...sanitizeForEvidence(record2),
@@ -82864,16 +84029,16 @@ var ExperienceRecorder = class {
 function discoverPluginVersion(fromUrl = import.meta.url) {
   if (process.env.RN_DEV_AGENT_PLUGIN_VERSION)
     return process.env.RN_DEV_AGENT_PLUGIN_VERSION;
-  const start = dirname19(fileURLToPath5(fromUrl));
+  const start = dirname20(fileURLToPath5(fromUrl));
   const candidates = [
-    join45(start, "..", "..", ".claude-plugin", "plugin.json"),
-    join45(start, "..", "..", ".codex-plugin", "plugin.json"),
-    join45(start, "..", "..", "..", "claude-plugin", ".claude-plugin", "plugin.json"),
-    join45(start, "..", "..", "..", "codex-plugin", ".codex-plugin", "plugin.json")
+    join48(start, "..", "..", ".claude-plugin", "plugin.json"),
+    join48(start, "..", "..", ".codex-plugin", "plugin.json"),
+    join48(start, "..", "..", "..", "claude-plugin", ".claude-plugin", "plugin.json"),
+    join48(start, "..", "..", "..", "codex-plugin", ".codex-plugin", "plugin.json")
   ];
   for (const candidate of candidates) {
     try {
-      const parsed = JSON.parse(readFileSync33(candidate, "utf8"));
+      const parsed = JSON.parse(readFileSync34(candidate, "utf8"));
       if (typeof parsed.version === "string")
         return sanitizeString(parsed.version);
     } catch {
@@ -82882,9 +84047,9 @@ function discoverPluginVersion(fromUrl = import.meta.url) {
   return null;
 }
 function readExperienceStore(path) {
-  if (!existsSync35(path))
+  if (!existsSync36(path))
     return [];
-  const contents = readFileSync33(path, "utf8");
+  const contents = readFileSync34(path, "utf8");
   if (!contents.trim())
     return [];
   const records = [];
@@ -82909,7 +84074,7 @@ function pruneExperienceRecords(records, now, maxRecords = DEFAULT_MAX_RECORDS, 
   }).sort((a, b) => Date.parse(b.lastSeen) - Date.parse(a.lastSeen) || a.signature.localeCompare(b.signature)).slice(0, Math.max(0, maxRecords)).sort((a, b) => a.signature.localeCompare(b.signature));
 }
 function experienceSignature(input) {
-  return createHash17("sha256").update(JSON.stringify([
+  return createHash19("sha256").update(JSON.stringify([
     input.classification,
     input.tool,
     input.normalizedSymptomShape,
@@ -83026,7 +84191,7 @@ function boundedPointers(existing, incoming) {
 }
 
 // packages/rn-dev-agent-core/dist/observability/live-device.js
-import { join as join46 } from "node:path";
+import { join as join49 } from "node:path";
 import { tmpdir as tmpdir14 } from "node:os";
 function isStateMutating(tool, args) {
   if (FLOW_MUTATION_TOOLS.has(tool))
@@ -83178,7 +84343,7 @@ function buildLiveDeps(input) {
     // iterable" when invoked as deps.pushLive(...). The live device gate caught
     // this — the unit fakes used standalone arrows and missed it.
     pushLive: (frame) => input.recorder.pushLive(frame),
-    tmpPath: () => join46(tmpdir14(), `rn-observe-live-${process.pid}.jpg`),
+    tmpPath: () => join49(tmpdir14(), `rn-observe-live-${process.pid}.jpg`),
     isMirrorActive: input.isMirrorActive
   };
 }
@@ -83192,14 +84357,14 @@ init_utils();
 
 // packages/rn-dev-agent-core/dist/observability/server.js
 import { createServer as createServer3 } from "node:http";
-import { readFileSync as readFileSync34 } from "node:fs";
+import { readFileSync as readFileSync35 } from "node:fs";
 import { fileURLToPath as fileURLToPath6 } from "node:url";
-import { dirname as dirname20, join as join47 } from "node:path";
+import { dirname as dirname21, join as join50 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/observability/e2e-csrf.js
-import { randomBytes as randomBytes6, timingSafeEqual as timingSafeEqual6 } from "node:crypto";
+import { randomBytes as randomBytes7, timingSafeEqual as timingSafeEqual7 } from "node:crypto";
 function makeCsrfToken() {
-  return randomBytes6(24).toString("hex");
+  return randomBytes7(24).toString("hex");
 }
 function isPostAllowed(req, token2) {
   if ((req.method ?? "").toUpperCase() !== "POST") {
@@ -83210,7 +84375,7 @@ function isPostAllowed(req, token2) {
     const got = String(gotRaw);
     const a = Buffer.from(got);
     const b = Buffer.from(token2);
-    if (a.length !== b.length || !timingSafeEqual6(a, b)) {
+    if (a.length !== b.length || !timingSafeEqual7(a, b)) {
       return { ok: false, status: 403, reason: "bad csrf token" };
     }
   }
@@ -83281,7 +84446,7 @@ function createObserveRootResolver(deps) {
 // packages/rn-dev-agent-core/dist/observability/server.js
 init_logger();
 var HOST = "127.0.0.1";
-var __dir = dirname20(fileURLToPath6(import.meta.url));
+var __dir = dirname21(fileURLToPath6(import.meta.url));
 var ObservabilityServer = class {
   recorder;
   e2e;
@@ -83524,7 +84689,7 @@ var ObservabilityServer = class {
   }
   index(res) {
     try {
-      let html = readFileSync34(join47(__dir, "web-dist", "index.html"), "utf8");
+      let html = readFileSync35(join50(__dir, "web-dist", "index.html"), "utf8");
       if (this.e2e) {
         const tokenJs = JSON.stringify(this.e2e.token).replace(/</g, "\\u003c");
         html = html.replace("</head>", `<script>window.__E2E_CSRF__=${tokenJs}</script></head>`);
@@ -83544,20 +84709,20 @@ var ObservabilityServer = class {
   // handle() fire-and-forgets the async routes, so a rejecting await here
   // would crash the process on an oversized/aborted request (GH #438 review).
   readBody(req) {
-    return new Promise((resolve12) => {
+    return new Promise((resolve14) => {
       let body = "";
       let bytes = 0;
       req.on("data", (chunk) => {
         bytes += chunk.length;
         if (bytes > 65536) {
           req.destroy();
-          resolve12(null);
+          resolve14(null);
           return;
         }
         body += chunk.toString();
       });
-      req.on("end", () => resolve12(body));
-      req.on("error", () => resolve12(null));
+      req.on("end", () => resolve14(body));
+      req.on("error", () => resolve14(null));
     });
   }
   json(res, status, obj) {
@@ -83705,7 +84870,7 @@ var ObservabilityServer = class {
   }
 };
 function listen(server3, port) {
-  return new Promise((resolve12, reject) => {
+  return new Promise((resolve14, reject) => {
     const onErr = (e) => {
       server3.removeListener("error", onErr);
       reject(e);
@@ -83714,7 +84879,7 @@ function listen(server3, port) {
     server3.listen(port, HOST, () => {
       server3.removeListener("error", onErr);
       const addr = server3.address();
-      resolve12(typeof addr === "object" && addr ? addr.port : port);
+      resolve14(typeof addr === "object" && addr ? addr.port : port);
     });
   });
 }
@@ -83725,10 +84890,10 @@ init_project_config();
 // packages/rn-dev-agent-core/dist/observability/observe-state.js
 init_secure_state_file();
 init_storage();
-import { join as join48 } from "node:path";
+import { join as join51 } from "node:path";
 function observeStatePath(projectRoot) {
   const safe = projectRoot.replace(/[^A-Za-z0-9._-]/g, "_");
-  return join48(getStateDir(), "observe", `${safe}.json`);
+  return join51(getStateDir(), "observe", `${safe}.json`);
 }
 function writeObserveState(url, port, projectRoot = findProjectRoot(), now = () => /* @__PURE__ */ new Date()) {
   try {
@@ -83782,9 +84947,10 @@ function setObserveAuthorityDeps(deps) {
 }
 var starting = null;
 var boundAuthority = null;
-async function startObserveServer() {
+async function startObserveServer(options = {}) {
   if (starting)
     return starting;
+  const autostarted = options.autostarted === true;
   starting = (async () => {
     const resolved = authorityDeps?.resolve();
     if (!server) {
@@ -83797,7 +84963,7 @@ async function startObserveServer() {
       const res = await server.start(port);
       if (resolved) {
         bindAttempted = true;
-        authorityDeps?.bind({ port: res.port, authority: resolved.authority });
+        authorityDeps?.bind({ port: res.port, authority: resolved.authority, autostarted });
         boundAuthority = resolved.authority;
       }
       stateWriteAttempted = true;
@@ -83852,10 +85018,18 @@ async function stopObserveServer() {
   starting = null;
   await server?.stop();
   server = null;
-  if (boundAuthority)
-    authorityDeps?.unbind(boundAuthority);
+  let unbindError;
+  try {
+    if (boundAuthority)
+      authorityDeps?.unbind(boundAuthority);
+  } catch (error2) {
+    unbindError = error2;
+  }
   boundAuthority = null;
   removeObserveState();
+  if (unbindError !== void 0 && unbindError?.code !== "AUTHORITY_LOST_DURING_OPERATION") {
+    throw unbindError;
+  }
 }
 async function observeHandler(args) {
   const action = args.action ?? "status";
@@ -84401,20 +85575,20 @@ function buildMirrorTargetResolver(deps) {
 init_sources();
 
 // packages/rn-dev-agent-core/dist/tools/lock-e2e-test.js
-import { readFileSync as readFileSync37 } from "node:fs";
+import { readFileSync as readFileSync38 } from "node:fs";
 
 // packages/rn-dev-agent-core/dist/domain/e2e-test.js
-import { dirname as dirname21, join as join49 } from "node:path";
-import { mkdirSync as mkdirSync21, writeFileSync as writeFileSync20, renameSync as renameSync9, readFileSync as readFileSync35, readdirSync as readdirSync12, existsSync as existsSync36 } from "node:fs";
-import { createHash as createHash18 } from "node:crypto";
+import { dirname as dirname22, join as join52 } from "node:path";
+import { mkdirSync as mkdirSync21, writeFileSync as writeFileSync20, renameSync as renameSync9, readFileSync as readFileSync36, readdirSync as readdirSync13, existsSync as existsSync37 } from "node:fs";
+import { createHash as createHash20 } from "node:crypto";
 var FLOW_SENTINEL = "# e2e-locked-flow-below";
 function e2eDirFor(projectRoot) {
-  return join49(projectRoot, ".rn-agent", "e2e");
+  return join52(projectRoot, ".rn-agent", "e2e");
 }
 function e2ePathFor(projectRoot, id) {
   assertValidActionId(id, "e2ePathFor");
   const dir = e2eDirFor(projectRoot);
-  const file = join49(dir, `${id}.yaml`);
+  const file = join52(dir, `${id}.yaml`);
   assertWithinDir(file, dir);
   return file;
 }
@@ -84438,11 +85612,11 @@ function serializeLockedTest(meta) {
 ${meta.flow}`;
 }
 function hashBody(s) {
-  return createHash18("sha256").update(s).digest("hex");
+  return createHash20("sha256").update(s).digest("hex");
 }
 function freezeLockedTest(projectRoot, source, ctx) {
   const filePath = e2ePathFor(projectRoot, source.id);
-  mkdirSync21(dirname21(filePath), { recursive: true });
+  mkdirSync21(dirname22(filePath), { recursive: true });
   const meta = {
     id: source.id,
     intent: source.intent,
@@ -84462,15 +85636,15 @@ function freezeLockedTest(projectRoot, source, ctx) {
 }
 function loadLockedTest(projectRoot, id) {
   const filePath = e2ePathFor(projectRoot, id);
-  if (!existsSync36(filePath))
+  if (!existsSync37(filePath))
     return null;
-  return parseLockedTest(readFileSync35(filePath, "utf8"), filePath);
+  return parseLockedTest(readFileSync36(filePath, "utf8"), filePath);
 }
 function discoverLockedTests(projectRoot) {
   const dir = e2eDirFor(projectRoot);
-  if (!existsSync36(dir))
+  if (!existsSync37(dir))
     return [];
-  return readdirSync12(dir).filter((f) => f.endsWith(".yaml")).map((f) => f.replace(/\.yaml$/, "")).sort();
+  return readdirSync13(dir).filter((f) => f.endsWith(".yaml")).map((f) => f.replace(/\.yaml$/, "")).sort();
 }
 function parseLockedTest(text, filePath) {
   if (!/^#\s*e2e-locked-test:\s*true\s*$/m.test(text))
@@ -84507,12 +85681,12 @@ function parseLockedTest(text, filePath) {
 }
 
 // packages/rn-dev-agent-core/dist/domain/e2e-config.js
-import { readFileSync as readFileSync36 } from "node:fs";
-import { join as join50 } from "node:path";
+import { readFileSync as readFileSync37 } from "node:fs";
+import { join as join53 } from "node:path";
 function loadE2eConfig(projectRoot) {
-  const filePath = join50(projectRoot, ".rn-agent", "e2e.config.json");
+  const filePath = join53(projectRoot, ".rn-agent", "e2e.config.json");
   try {
-    const raw = readFileSync36(filePath, "utf8");
+    const raw = readFileSync37(filePath, "utf8");
     return JSON.parse(raw);
   } catch {
     return {};
@@ -84549,8 +85723,8 @@ function redactSecrets(text, secretValues) {
 }
 
 // packages/rn-dev-agent-core/dist/e2e/git-info.js
-import { execFileSync as execFileSync16 } from "node:child_process";
-var defaultExec3 = (cmd, args) => execFileSync16(cmd, args, { timeout: 5e3, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+import { execFileSync as execFileSync17 } from "node:child_process";
+var defaultExec3 = (cmd, args) => execFileSync17(cmd, args, { timeout: 5e3, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
 function getGitInfo(projectRoot, exec = (cmd, args) => defaultExec3(cmd, ["-C", projectRoot, ...args])) {
   try {
     const sha = exec("git", ["rev-parse", "--short", "HEAD"]).trim() || null;
@@ -84580,7 +85754,7 @@ function readPassed(result) {
 async function lockE2eTestCore(args, deps = {}) {
   const projectRoot = args.projectRoot ?? findProjectRoot() ?? process.cwd();
   const load = deps.loadAction ?? loadAction;
-  const readFile3 = deps.readActionFile ?? ((p) => readFileSync37(p, "utf8"));
+  const readFile3 = deps.readActionFile ?? ((p) => readFileSync38(p, "utf8"));
   const getGit = deps.getGitInfo ?? getGitInfo;
   const getSession = deps.getSession ?? getActiveSession;
   const now = deps.now ?? (() => /* @__PURE__ */ new Date());
@@ -84643,8 +85817,8 @@ function createLockE2eTestHandler(deps = {}) {
 
 // packages/rn-dev-agent-core/dist/domain/e2e-run.js
 init_maestro_error_parser();
-import { join as join51 } from "node:path";
-import { mkdirSync as mkdirSync22, writeFileSync as writeFileSync21, renameSync as renameSync10, readFileSync as readFileSync38, existsSync as existsSync37 } from "node:fs";
+import { join as join54 } from "node:path";
+import { mkdirSync as mkdirSync22, writeFileSync as writeFileSync21, renameSync as renameSync10, readFileSync as readFileSync39, existsSync as existsSync38 } from "node:fs";
 function classifyFlowResult(input) {
   if (input.passed) {
     return {
@@ -84699,20 +85873,20 @@ function diffNewlyFailing(current, previousGreen) {
 }
 var INDEX_MAX = 100;
 function e2eRunsDirFor(projectRoot) {
-  return join51(sessionStateDirectory(projectRoot), "e2e-runs");
+  return join54(sessionStateDirectory(projectRoot), "e2e-runs");
 }
 function writeJsonAtomic(file, value) {
-  mkdirSync22(join51(file, ".."), { recursive: true });
+  mkdirSync22(join54(file, ".."), { recursive: true });
   const tmp = `${file}.tmp`;
   writeFileSync21(tmp, JSON.stringify(value, null, 2), "utf8");
   renameSync10(tmp, file);
 }
 function loadIndex(projectRoot) {
-  const file = join51(e2eRunsDirFor(projectRoot), "index.json");
-  if (!existsSync37(file))
+  const file = join54(e2eRunsDirFor(projectRoot), "index.json");
+  if (!existsSync38(file))
     return [];
   try {
-    const parsed = JSON.parse(readFileSync38(file, "utf8"));
+    const parsed = JSON.parse(readFileSync39(file, "utf8"));
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
@@ -84721,7 +85895,7 @@ function loadIndex(projectRoot) {
 function writeRunRecord(projectRoot, rec) {
   assertValidActionId(rec.runId, "writeRunRecord");
   const dir = e2eRunsDirFor(projectRoot);
-  writeJsonAtomic(join51(dir, `${rec.runId}.json`), rec);
+  writeJsonAtomic(join54(dir, `${rec.runId}.json`), rec);
   const entry = {
     runId: rec.runId,
     finishedAt: rec.finishedAt,
@@ -84729,15 +85903,15 @@ function writeRunRecord(projectRoot, rec) {
     totals: rec.totals
   };
   const next = [entry, ...loadIndex(projectRoot).filter((e) => e.runId !== rec.runId)].slice(0, INDEX_MAX);
-  writeJsonAtomic(join51(dir, "index.json"), next);
+  writeJsonAtomic(join54(dir, "index.json"), next);
 }
 function loadRunRecord(projectRoot, runId) {
   assertValidActionId(runId, "loadRunRecord");
-  const file = join51(e2eRunsDirFor(projectRoot), `${runId}.json`);
-  if (!existsSync37(file))
+  const file = join54(e2eRunsDirFor(projectRoot), `${runId}.json`);
+  if (!existsSync38(file))
     return null;
   try {
-    return JSON.parse(readFileSync38(file, "utf8"));
+    return JSON.parse(readFileSync39(file, "utf8"));
   } catch {
     return null;
   }
@@ -84753,8 +85927,8 @@ init_storage();
 init_utils();
 
 // packages/rn-dev-agent-core/dist/domain/e2e-run-request.js
-import { join as join52 } from "node:path";
-import { mkdirSync as mkdirSync23, writeFileSync as writeFileSync22, renameSync as renameSync11, readFileSync as readFileSync39, readdirSync as readdirSync13, existsSync as existsSync38 } from "node:fs";
+import { join as join55 } from "node:path";
+import { mkdirSync as mkdirSync23, writeFileSync as writeFileSync22, renameSync as renameSync11, readFileSync as readFileSync40, readdirSync as readdirSync14, existsSync as existsSync39 } from "node:fs";
 var TERMINAL_STATUSES = /* @__PURE__ */ new Set([
   "done",
   "failed",
@@ -84762,11 +85936,11 @@ var TERMINAL_STATUSES = /* @__PURE__ */ new Set([
   "interrupted"
 ]);
 function requestsDir(projectRoot) {
-  return join52(e2eRunsDirFor(projectRoot), "requests");
+  return join55(e2eRunsDirFor(projectRoot), "requests");
 }
 function requestPath(projectRoot, runId) {
   assertValidActionId(runId, "e2e-run-request");
-  return join52(requestsDir(projectRoot), `${runId}.json`);
+  return join55(requestsDir(projectRoot), `${runId}.json`);
 }
 function writeRequest(projectRoot, req) {
   const file = requestPath(projectRoot, req.runId);
@@ -84777,10 +85951,10 @@ function writeRequest(projectRoot, req) {
 }
 function loadRequest(projectRoot, runId) {
   const file = requestPath(projectRoot, runId);
-  if (!existsSync38(file))
+  if (!existsSync39(file))
     return null;
   try {
-    return JSON.parse(readFileSync39(file, "utf8"));
+    return JSON.parse(readFileSync40(file, "utf8"));
   } catch {
     return null;
   }
@@ -84795,10 +85969,10 @@ function updateRequest(projectRoot, runId, patch) {
 }
 function listRequests(projectRoot) {
   const dir = requestsDir(projectRoot);
-  if (!existsSync38(dir))
+  if (!existsSync39(dir))
     return [];
   const out = [];
-  for (const f of readdirSync13(dir)) {
+  for (const f of readdirSync14(dir)) {
     if (!f.endsWith(".json"))
       continue;
     try {
@@ -85065,15 +86239,15 @@ function preflight(input) {
   return { ok: true };
 }
 function probeMetro(port, timeoutMs = 1500) {
-  return new Promise((resolve12) => {
+  return new Promise((resolve14) => {
     const req = request({ host: "127.0.0.1", port, path: "/status", method: "GET", timeout: timeoutMs }, (res) => {
       res.resume();
-      resolve12((res.statusCode ?? 500) < 500);
+      resolve14((res.statusCode ?? 500) < 500);
     });
-    req.on("error", () => resolve12(false));
+    req.on("error", () => resolve14(false));
     req.on("timeout", () => {
       req.destroy();
-      resolve12(false);
+      resolve14(false);
     });
     req.end();
   });
@@ -85085,13 +86259,13 @@ init_app_installed_probe();
 init_storage();
 
 // packages/rn-dev-agent-core/dist/domain/action-inventory.js
-import { readdirSync as readdirSync14 } from "node:fs";
-import { join as join53 } from "node:path";
+import { readdirSync as readdirSync15 } from "node:fs";
+import { join as join56 } from "node:path";
 async function listActions(projectRoot) {
-  const actionsDir = join53(projectRoot, ".rn-agent", "actions");
+  const actionsDir = join56(projectRoot, ".rn-agent", "actions");
   let files;
   try {
-    files = readdirSync14(actionsDir);
+    files = readdirSync15(actionsDir);
   } catch {
     return [];
   }
@@ -85193,753 +86367,15 @@ init_discovery();
 init_metro_cwd();
 init_install_authority();
 import { execFileSync as execFileSync18 } from "node:child_process";
-import { createHash as createHash20 } from "node:crypto";
+import { createHash as createHash21 } from "node:crypto";
 init_metro_origin();
 init_metro_binding();
 init_process_birth();
 init_registry();
-
-// packages/rn-dev-agent-core/dist/session/source-identity.js
-init_metro_cwd();
-import { createHash as createHash19, createHmac as createHmac4, randomBytes as randomBytes7, timingSafeEqual as timingSafeEqual7 } from "node:crypto";
-import { execFileSync as execFileSync17 } from "node:child_process";
-import { closeSync as closeSync10, constants as constants6, existsSync as existsSync39, fstatSync as fstatSync6, lstatSync as lstatSync12, openSync as openSync10, readdirSync as readdirSync15, readFileSync as readFileSync40, readlinkSync as readlinkSync3, readSync as readSync4, realpathSync as realpathSync11 } from "node:fs";
-import { dirname as dirname22, isAbsolute as isAbsolute8, join as join54, relative as relative5, resolve as resolve11 } from "node:path";
-init_declared_source_contract();
-function digest2(parts) {
-  const hash = createHash19("sha256");
-  for (const part of parts) {
-    hash.update(part);
-    hash.update("\0");
-  }
-  return hash.digest("hex");
-}
-var MAX_STRICT_PROOF_FILES = 4096;
-var MAX_STRICT_PROOF_FILE_BYTES = 16 * 1024 * 1024;
-var MAX_STRICT_PROOF_TOTAL_BYTES = 64 * 1024 * 1024;
-var MAX_STRICT_PROOF_DEPENDENCY_ENTRIES = 5e4;
-var MAX_STRICT_PROOF_DEPENDENCY_DEPTH = 128;
-var MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES = 128 * 1024 * 1024;
-var MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES = 512 * 1024 * 1024;
-var STRICT_PROOF_READ_BUFFER_BYTES = 64 * 1024;
-var DEPENDENCY_STORE_PATHS = [
-  ":(top,glob)**/node_modules/**",
-  ":(top,glob)**/.yarn/cache/**",
-  ":(top,glob)**/.yarn/unplugged/**"
-];
-var EXCLUDED_RUNTIME_DIRECTORIES = [
-  ".gradle",
-  ".expo",
-  ".cache",
-  "ios/Pods",
-  "ios/build",
-  "ios/DerivedData",
-  "android/build",
-  "android/app/build",
-  "android/app/.cxx"
-];
-var IGNORED_RUNTIME_INPUT_PATHS = [
-  ":(top,glob)**",
-  ":(top,exclude,glob)**/node_modules/**",
-  ":(top,exclude,glob)**/.yarn/cache/**",
-  ":(top,exclude,glob)**/.yarn/unplugged/**",
-  ...EXCLUDED_RUNTIME_DIRECTORIES.map((entry) => `:(top,exclude,glob)**/${entry}/**`)
-];
-var METRO_INTEGRATION_START = "// rn-dev-agent session integration: begin";
-var METRO_INTEGRATION_END = "// rn-dev-agent session integration: end";
-var METRO_INTEGRATION_BLOCK = `${METRO_INTEGRATION_START}
-module.exports = require('./.rn-agent/integration/rn-session-metro.cjs')(module.exports);
-${METRO_INTEGRATION_END}`;
-var METRO_RUNTIME_POLICY2 = ".rn-agent/integration/metro-runtime-policy.json";
-var METRO_EVIDENCE_HEAD_CLIENT = String.raw`
-const { createConnection } = require('node:net');
-const socket = createConnection(process.argv[1]);
-let response = '';
-socket.setEncoding('utf8');
-socket.setTimeout(1500);
-socket.once('connect', () => socket.write(process.argv[2] + '\n'));
-socket.on('data', (chunk) => {
-  response += chunk;
-  if (response.length > 4096) process.exit(2);
-});
-socket.once('end', () => process.stdout.write(response));
-socket.once('timeout', () => process.exit(3));
-socket.once('error', () => process.exit(4));
-`;
-function readMetroEvidenceHead(socket, challenge) {
-  return execFileSync17(process.execPath, ["-e", METRO_EVIDENCE_HEAD_CLIENT, socket, challenge], {
-    encoding: "utf8",
-    maxBuffer: 4096,
-    stdio: ["ignore", "pipe", "ignore"],
-    timeout: 2e3
-  });
-}
-function updateFramed(hash, part) {
-  const bytes = Buffer.isBuffer(part) ? part : Buffer.from(part);
-  hash.update(`${bytes.byteLength}:`);
-  hash.update(bytes);
-}
-function updateStableFile(hash, path, maximumBytes, framed) {
-  const descriptor = openSync10(path, constants6.O_RDONLY | (constants6.O_NOFOLLOW ?? 0));
-  try {
-    const initial = fstatSync6(descriptor);
-    if (!initial.isFile() || initial.size > maximumBytes) {
-      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input is not bounded");
-    }
-    if (framed)
-      hash.update(`${initial.size}:`);
-    const buffer = Buffer.allocUnsafe(Math.min(STRICT_PROOF_READ_BUFFER_BYTES, Math.max(initial.size, 1)));
-    let offset = 0;
-    while (offset < initial.size) {
-      const bytesRead = readSync4(descriptor, buffer, 0, Math.min(buffer.length, initial.size - offset), offset);
-      if (bytesRead === 0 || offset + bytesRead > maximumBytes) {
-        throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input changed while hashing");
-      }
-      hash.update(buffer.subarray(0, bytesRead));
-      offset += bytesRead;
-    }
-    if (readSync4(descriptor, buffer, 0, 1, offset) !== 0) {
-      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input changed while hashing");
-    }
-    const final = fstatSync6(descriptor);
-    if (final.dev !== initial.dev || final.ino !== initial.ino || final.size !== initial.size || final.mtimeMs !== initial.mtimeMs || final.ctimeMs !== initial.ctimeMs) {
-      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input changed while hashing");
-    }
-    return initial.size;
-  } finally {
-    closeSync10(descriptor);
-  }
-}
-function updateFramedFile(hash, path, maximumBytes) {
-  return updateStableFile(hash, path, maximumBytes, true);
-}
-function fileDigest(path) {
-  const hash = createHash19("sha256");
-  updateStableFile(hash, path, MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES, false);
-  return hash.digest("hex");
-}
-function updateDependencyPath(hash, path, label, state) {
-  const pending2 = [{ path, label, depth: 0 }];
-  while (pending2.length > 0) {
-    const current = pending2.pop();
-    state.entries += 1;
-    if (state.entries > MAX_STRICT_PROOF_DEPENDENCY_ENTRIES) {
-      throw new Error("STRICT_PROOF_DEPENDENCY_LIMIT: dependency entry count exceeds the limit");
-    }
-    if (current.depth > MAX_STRICT_PROOF_DEPENDENCY_DEPTH) {
-      throw new Error("STRICT_PROOF_DEPENDENCY_LIMIT: dependency depth exceeds the limit");
-    }
-    const stat2 = lstatSync12(current.path);
-    updateFramed(hash, current.label);
-    updateFramed(hash, String(stat2.mode & 511));
-    if (stat2.isSymbolicLink()) {
-      const link = readlinkSync3(current.path);
-      const target = realpathSync11(current.path);
-      state.totalBytes += Buffer.byteLength(link);
-      if (state.totalBytes > MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES) {
-        throw new Error("STRICT_PROOF_DEPENDENCY_LIMIT: dependency bytes exceed the total limit");
-      }
-      updateFramed(hash, "symlink");
-      updateFramed(hash, link);
-      updateFramed(hash, target);
-      pending2.push({
-        path: target,
-        label: `target:${target}`,
-        depth: current.depth + 1
-      });
-      continue;
-    }
-    if (stat2.isDirectory()) {
-      const canonical = realpathSync11(current.path);
-      if (state.visitedDirectories.has(canonical)) {
-        updateFramed(hash, "directory-reference");
-        updateFramed(hash, canonical);
-        continue;
-      }
-      state.visitedDirectories.add(canonical);
-      updateFramed(hash, "directory");
-      for (const entry of readdirSync15(current.path).sort().reverse()) {
-        pending2.push({
-          path: join54(current.path, entry),
-          label: `${current.label}/${entry}`,
-          depth: current.depth + 1
-        });
-      }
-      continue;
-    }
-    if (!stat2.isFile()) {
-      throw new Error(`STRICT_PROOF_UNSUPPORTED_DEPENDENCY: ${current.label} is not a regular file, directory, or symlink`);
-    }
-    if (stat2.size > MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES) {
-      throw new Error(`STRICT_PROOF_DEPENDENCY_LIMIT: ${current.label} exceeds the per-file limit`);
-    }
-    updateFramed(hash, "file");
-    const stableSize = updateFramedFile(hash, current.path, MAX_STRICT_PROOF_DEPENDENCY_FILE_BYTES);
-    state.totalBytes += stableSize;
-    if (state.totalBytes > MAX_STRICT_PROOF_DEPENDENCY_TOTAL_BYTES) {
-      throw new Error("STRICT_PROOF_DEPENDENCY_LIMIT: dependency bytes exceed the total limit");
-    }
-  }
-}
-function isContained(root, candidate) {
-  const child = relative5(root, candidate);
-  return child !== ".." && !child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) && !isAbsolute8(child);
-}
-function isExcludedRuntimePath(root, candidate) {
-  const entry = relative5(root, candidate).split("\\").join("/");
-  return EXCLUDED_RUNTIME_DIRECTORIES.some((excluded) => entry === excluded || entry.startsWith(`${excluded}/`) || entry.endsWith(`/${excluded}`) || entry.includes(`/${excluded}/`));
-}
-function assertFinalMetroIntegration(identity2) {
-  const candidates = ["metro.config.js", "metro.config.cjs"].map((entry) => join54(identity2.appRoot, entry)).filter(existsSync39);
-  if (candidates.length === 0)
-    return;
-  const source = readFileSync40(candidates[0], "utf8");
-  const start = source.indexOf(METRO_INTEGRATION_START);
-  const end = source.indexOf(METRO_INTEGRATION_END);
-  if (start < 0 || end < start || source.indexOf(METRO_INTEGRATION_START, start + METRO_INTEGRATION_START.length) >= 0 || source.indexOf(METRO_INTEGRATION_END, end + METRO_INTEGRATION_END.length) >= 0 || source.slice(start, end + METRO_INTEGRATION_END.length) !== METRO_INTEGRATION_BLOCK || source.slice(end + METRO_INTEGRATION_END.length).trim()) {
-    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_CONFIG: session integration must be one exact terminal block");
-  }
-}
-function metroRuntimeInputs(identity2, authority, readEvidenceHead, verifyRuntimeEnforcement) {
-  if (!authority)
-    return { paths: [], semantics: [] };
-  const raw = readFileSync40(join54(identity2.appRoot, METRO_RUNTIME_POLICY2), "utf8");
-  const receipt2 = JSON.parse(raw);
-  const payload = {
-    version: receipt2.version,
-    runtimeEvidenceAuthority: receipt2.runtimeEvidenceAuthority,
-    sessionId: receipt2.sessionId,
-    metroInstanceId: receipt2.metroInstanceId,
-    contentRoot: receipt2.contentRoot,
-    appRoot: receipt2.appRoot,
-    runtimeEnforcement: receipt2.runtimeEnforcement,
-    runtimeEnforcementReceipt: receipt2.runtimeEnforcementReceipt,
-    runtimeManifest: receipt2.runtimeManifest,
-    runtimeInputs: receipt2.runtimeInputs,
-    violations: receipt2.violations
-  };
-  const expected = createHmac4("sha256", authority.capability).update(canonicalAuthorityJson(payload)).digest();
-  const observed = typeof receipt2.signature === "string" ? Buffer.from(receipt2.signature, "hex") : Buffer.alloc(0);
-  const runtimeManifest = receipt2.runtimeManifest && typeof receipt2.runtimeManifest === "object" ? receipt2.runtimeManifest : null;
-  if (receipt2.version !== 1 || receipt2.runtimeEvidenceAuthority !== authority.evidenceAuthority || receipt2.sessionId !== authority.sessionId || receipt2.metroInstanceId !== authority.metroInstanceId || receipt2.contentRoot !== identity2.contentRoot || receipt2.appRoot !== identity2.appRoot || !runtimeManifest || runtimeManifest.version !== 1 || typeof runtimeManifest.executable !== "string" || typeof runtimeManifest.sourceExecutable !== "string" || typeof runtimeManifest.nodeExecutable !== "string" || typeof runtimeManifest.nodeVersion !== "string" || !Number.isSafeInteger(runtimeManifest.port) || runtimeManifest.port < 1 || runtimeManifest.port > 65535 || !Array.isArray(runtimeManifest.args) || runtimeManifest.args.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.commandProbeArguments) || runtimeManifest.commandProbeArguments.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.commandExecutableMappings) || runtimeManifest.commandExecutableMappings.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.commandChainInputs) || runtimeManifest.commandChainInputs.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.protectedRuntimeRoots) || runtimeManifest.protectedRuntimeRoots.some((entry) => typeof entry !== "string") || typeof runtimeManifest.nodeOptions !== "string" || typeof runtimeManifest.environmentDigest !== "string" || !/^[a-f0-9]{64}$/.test(runtimeManifest.environmentDigest) || runtimeManifest.contentRoot !== identity2.contentRoot || runtimeManifest.appRoot !== identity2.appRoot || typeof runtimeManifest.servingRoot !== "string" || !Number.isSafeInteger(runtimeManifest.buildGeneration) || !Array.isArray(runtimeManifest.packageInputs) || runtimeManifest.packageInputs.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.metroConfigInputs) || runtimeManifest.metroConfigInputs.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.dependencyRoots) || runtimeManifest.dependencyRoots.some((entry) => typeof entry !== "string") || !Array.isArray(runtimeManifest.runtimeInputs) || runtimeManifest.runtimeInputs.some((entry) => typeof entry !== "string") || !runtimeManifest.descendantAuthority || typeof runtimeManifest.descendantAuthority !== "object" || !Array.isArray(receipt2.runtimeInputs) || receipt2.runtimeInputs.some((entry) => typeof entry !== "string") || canonicalAuthorityJson(runtimeManifest.runtimeInputs) !== canonicalAuthorityJson(receipt2.runtimeInputs) || !Array.isArray(receipt2.violations) || receipt2.violations.some((entry) => typeof entry !== "string") || observed.length !== expected.length || !timingSafeEqual7(observed, expected)) {
-    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime policy receipt is invalid");
-  }
-  if (!pathIsWithinRoot(runtimeManifest.servingRoot, identity2.contentRoot)) {
-    throw new Error("STRICT_PROOF_SERVING_ROOT_MISMATCH: Metro serving root is outside the bound worktree");
-  }
-  const descendantAuthority = runtimeManifest.descendantAuthority;
-  if (descendantAuthority.version !== 1 || typeof descendantAuthority.rootNonce !== "string" || !/^[a-f0-9]{32}$/.test(descendantAuthority.rootNonce) || typeof descendantAuthority.rootIdentity !== "string" || !/^process:\d+$/.test(descendantAuthority.rootIdentity) || !Array.isArray(descendantAuthority.allowedCodeRoots) || descendantAuthority.allowedCodeRoots.length === 0 || descendantAuthority.allowedCodeRoots.some((entry) => typeof entry !== "string")) {
-    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant authority is invalid");
-  }
-  const allowedCodeRoots = descendantAuthority.allowedCodeRoots;
-  if (authority.evidenceAuthority === "managed-sandbox-v1" && (receipt2.runtimeEnforcement !== "os-enforced-v1" || !verifyRuntimeEnforcement({
-    platform: process.platform,
-    appRoot: identity2.appRoot,
-    sourceRoot: identity2.contentRoot,
-    runtimeRoot: dirname22(authority.evidencePath),
-    nodeExecutable: runtimeManifest.nodeExecutable,
-    nodeVersion: runtimeManifest.nodeVersion,
-    commandExecutable: runtimeManifest.executable,
-    commandArguments: runtimeManifest.args,
-    commandProbeArguments: runtimeManifest.commandProbeArguments,
-    commandExecutableMappings: runtimeManifest.commandExecutableMappings,
-    commandChainInputs: runtimeManifest.commandChainInputs,
-    protectedRuntimeRoots: runtimeManifest.protectedRuntimeRoots,
-    port: runtimeManifest.port,
-    instanceId: authority.metroInstanceId,
-    runtimeInputs: receipt2.runtimeInputs
-  }, receipt2.runtimeEnforcementReceipt))) {
-    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime enforcement attestation is invalid");
-  }
-  if (authority.evidenceAuthority === "reported-v1" && (receipt2.runtimeEnforcement !== "unsupported" || receipt2.runtimeEnforcementReceipt !== null)) {
-    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: sandbox tier is invalid");
-  }
-  if (receipt2.violations.length > 0) {
-    throw new Error(`STRICT_PROOF_UNVERIFIED_METRO_POLICY: ${receipt2.violations[0]}`);
-  }
-  const runtimeInputs = new Set(receipt2.runtimeInputs);
-  const runtimeLoadsPath = authority.evidencePath;
-  let runtimeLoadsRaw;
-  try {
-    const runtimeLoadsStat = lstatSync12(runtimeLoadsPath);
-    if (!runtimeLoadsStat.isFile() || runtimeLoadsStat.size > MAX_STRICT_PROOF_FILE_BYTES) {
-      throw new Error("runtime load evidence is not a bounded regular file");
-    }
-    runtimeLoadsRaw = readFileSync40(runtimeLoadsPath, "utf8");
-  } catch (error2) {
-    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid", {
-      cause: error2
-    });
-  }
-  const runtimeLoads = /* @__PURE__ */ new Map();
-  const descendantLaunches = /* @__PURE__ */ new Map();
-  const descendantAttestations = /* @__PURE__ */ new Map();
-  const descendantSemanticDigests = /* @__PURE__ */ new Set();
-  const pendingIpcCompletions = /* @__PURE__ */ new Set();
-  const completedIpcCompletions = /* @__PURE__ */ new Set();
-  const runtimeSemantics = /* @__PURE__ */ new Set();
-  const runtimeSemanticsByDigest = /* @__PURE__ */ new Map();
-  const orderedRuntimeSemantics = [];
-  const runtimeEvidenceKeys = /* @__PURE__ */ new Set();
-  let runtimeEvidenceEntryCount = 0;
-  let evidenceSequence = 0;
-  let previousEvidenceSignature = null;
-  for (const rawLoad of runtimeLoadsRaw.split("\n").filter(Boolean)) {
-    let load;
-    try {
-      load = JSON.parse(rawLoad);
-    } catch (error2) {
-      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid", {
-        cause: error2
-      });
-    }
-    const loadPayload = {
-      version: load.version,
-      runtimeEvidenceAuthority: load.runtimeEvidenceAuthority,
-      sessionId: load.sessionId,
-      metroInstanceId: load.metroInstanceId,
-      kind: load.kind,
-      value: load.value,
-      digest: load.digest,
-      sequence: load.sequence,
-      previousSignature: load.previousSignature
-    };
-    const expectedLoad = createHmac4("sha256", authority.capability).update(canonicalAuthorityJson(loadPayload)).digest();
-    const observedLoad = typeof load.signature === "string" ? Buffer.from(load.signature, "hex") : Buffer.alloc(0);
-    if (load.version !== 1 || load.runtimeEvidenceAuthority !== authority.evidenceAuthority || load.sessionId !== authority.sessionId || load.metroInstanceId !== authority.metroInstanceId || load.kind !== "input" && load.kind !== "violation" && load.kind !== "launch" && load.kind !== "attestation" && load.kind !== "semantics" && load.kind !== "pending" && load.kind !== "completion" && load.kind !== "stability" || typeof load.value !== "string" || !Number.isSafeInteger(load.sequence) || load.sequence !== evidenceSequence + 1 || load.previousSignature !== previousEvidenceSignature || (load.kind === "input" || load.kind === "stability" ? typeof load.digest !== "string" || !/^[a-f0-9]{64}$/.test(load.digest) : load.digest !== null) || observedLoad.length !== expectedLoad.length || !timingSafeEqual7(observedLoad, expectedLoad)) {
-      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid");
-    }
-    evidenceSequence = load.sequence;
-    previousEvidenceSignature = load.signature;
-    runtimeEvidenceEntryCount += 1;
-    if (runtimeEvidenceEntryCount > MAX_STRICT_PROOF_DEPENDENCY_ENTRIES) {
-      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is unbounded");
-    }
-    const key = `${load.kind}\0${load.value}`;
-    runtimeEvidenceKeys.add(key);
-    if (runtimeEvidenceKeys.size > MAX_STRICT_PROOF_DEPENDENCY_ENTRIES) {
-      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is unbounded");
-    }
-    if (load.kind === "launch" || load.kind === "attestation") {
-      let execution;
-      try {
-        execution = JSON.parse(load.value);
-      } catch {
-        throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid");
-      }
-      if (execution.version !== 1 || typeof execution.nonce !== "string" || !/^[a-f0-9]{32}$/.test(execution.nonce) || typeof execution.identity !== "string" || !/^(?:process|worker):\d+$/.test(execution.identity) || !execution.parent || typeof execution.parent.identity !== "string" || !/^(?:process|worker):\d+$/.test(execution.parent.identity) || typeof execution.parent.nonce !== "string" || !/^[a-f0-9]{32}$/.test(execution.parent.nonce) || typeof execution.semantics !== "string" || !/^[a-f0-9]{64}$/.test(execution.semantics) || !execution.authority || execution.authority.sessionId !== authority.sessionId || execution.authority.metroInstanceId !== authority.metroInstanceId || execution.authority.contentRoot !== identity2.contentRoot || execution.authority.appRoot !== identity2.appRoot) {
-        throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid");
-      }
-      const target = load.kind === "launch" ? descendantLaunches : descendantAttestations;
-      const priorExecution = target.get(load.value);
-      if (priorExecution && canonicalAuthorityJson(priorExecution) !== load.value) {
-        throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid");
-      }
-      target.set(load.value, execution);
-      descendantSemanticDigests.add(execution.semantics);
-      continue;
-    }
-    if (load.kind === "semantics") {
-      if (load.value.length > 4096) {
-        throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime semantics are unbounded");
-      }
-      runtimeSemantics.add(load.value);
-      runtimeSemanticsByDigest.set(createHash19("sha256").update(load.value).digest("hex"), load.value);
-      orderedRuntimeSemantics.push(load.value);
-      continue;
-    }
-    if (load.kind === "pending" || load.kind === "completion") {
-      if (!/^[a-f0-9]{32}$/.test(load.value)) {
-        throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is invalid");
-      }
-      (load.kind === "pending" ? pendingIpcCompletions : completedIpcCompletions).add(load.value);
-      continue;
-    }
-    const prior = runtimeLoads.get(key);
-    if (prior && prior.digest !== load.digest) {
-      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input changed between executions");
-    }
-    runtimeLoads.set(key, {
-      kind: load.kind,
-      value: load.value,
-      digest: load.digest
-    });
-  }
-  if (evidenceSequence === 0 || previousEvidenceSignature === null) {
-    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime load evidence is empty");
-  }
-  const challenge = randomBytes7(32).toString("hex");
-  let head;
-  try {
-    head = JSON.parse(readEvidenceHead(authority.evidenceSocket, challenge));
-  } catch (error2) {
-    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime evidence head is unavailable", {
-      cause: error2
-    });
-  }
-  const headPayload = {
-    version: head.version,
-    runtimeEvidenceAuthority: head.runtimeEvidenceAuthority,
-    sessionId: head.sessionId,
-    metroInstanceId: head.metroInstanceId,
-    challenge: head.challenge,
-    sequence: head.sequence,
-    journalSignature: head.journalSignature
-  };
-  const expectedHead = createHmac4("sha256", authority.capability).update(canonicalAuthorityJson(headPayload)).digest();
-  const observedHead = typeof head.signature === "string" ? Buffer.from(head.signature, "hex") : Buffer.alloc(0);
-  if (head.version !== 1 || head.runtimeEvidenceAuthority !== authority.evidenceAuthority || head.sessionId !== authority.sessionId || head.metroInstanceId !== authority.metroInstanceId || head.challenge !== challenge || head.sequence !== evidenceSequence || head.journalSignature !== previousEvidenceSignature || observedHead.length !== expectedHead.length || !timingSafeEqual7(observedHead, expectedHead)) {
-    throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime evidence head is invalid");
-  }
-  for (const launch of descendantLaunches.keys()) {
-    if (!descendantAttestations.has(launch)) {
-      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant execution was not attested");
-    }
-  }
-  for (const attestation of descendantAttestations.keys()) {
-    if (!descendantLaunches.has(attestation)) {
-      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant attestation has no launch");
-    }
-  }
-  for (const pending2 of pendingIpcCompletions) {
-    if (!completedIpcCompletions.has(pending2)) {
-      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: IPC completion is pending");
-    }
-  }
-  for (const completion of completedIpcCompletions) {
-    if (!pendingIpcCompletions.has(completion)) {
-      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: IPC completion has no request");
-    }
-  }
-  const observedSemanticDigests = new Set(runtimeSemanticsByDigest.keys());
-  for (const semantics of descendantSemanticDigests) {
-    if (!observedSemanticDigests.has(semantics)) {
-      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant execution semantics are missing");
-    }
-  }
-  const descendantsByNonce = /* @__PURE__ */ new Map();
-  for (const execution of descendantLaunches.values()) {
-    if (descendantsByNonce.has(execution.nonce)) {
-      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant nonce was reused");
-    }
-    descendantsByNonce.set(execution.nonce, execution);
-  }
-  for (const execution of descendantLaunches.values()) {
-    let current = execution;
-    const visited = /* @__PURE__ */ new Set();
-    while (current.parent.nonce !== descendantAuthority.rootNonce) {
-      if (visited.has(current.nonce)) {
-        throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant tree contains a cycle");
-      }
-      visited.add(current.nonce);
-      const parent = descendantsByNonce.get(current.parent.nonce);
-      if (!parent || parent.identity !== current.parent.identity) {
-        throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant parent is outside the attested tree");
-      }
-      current = parent;
-    }
-    if (current.parent.identity !== descendantAuthority.rootIdentity) {
-      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant root identity does not match Metro");
-    }
-    const semanticsValue = runtimeSemanticsByDigest.get(execution.semantics);
-    if (!semanticsValue) {
-      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant execution semantics are missing");
-    }
-    let semantics;
-    try {
-      semantics = JSON.parse(semanticsValue);
-    } catch {
-      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant execution semantics are invalid");
-    }
-    const semanticAuthority = semantics.authority && typeof semantics.authority === "object" ? semantics.authority : null;
-    if (!["node", "sync", "fork", "worker"].includes(semantics.mode) || typeof semantics.entrypoint !== "string" || typeof semantics.entrypointDigest !== "string" || !/^[a-f0-9]{64}$/.test(semantics.entrypointDigest) || !Array.isArray(semantics.execArgv) || semantics.execArgv.some((entry) => typeof entry !== "string") || typeof semantics.invocationDigest !== "string" || !/^[a-f0-9]{64}$/.test(semantics.invocationDigest) || canonicalAuthorityJson(semantics.allowedCodeRoots) !== canonicalAuthorityJson(allowedCodeRoots) || !semanticAuthority || semanticAuthority.sessionId !== authority.sessionId || semanticAuthority.metroInstanceId !== authority.metroInstanceId || semanticAuthority.contentRoot !== identity2.contentRoot || semanticAuthority.appRoot !== identity2.appRoot || semanticAuthority.parentIdentity !== execution.parent.identity || semanticAuthority.parentNonce !== execution.parent.nonce) {
-      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant execution semantics are invalid");
-    }
-    const entrypoint = realpathSync11(semantics.entrypoint);
-    if (!allowedCodeRoots.some((root) => isContained(realpathSync11(root), entrypoint))) {
-      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant entrypoint is outside allowed code roots");
-    }
-    const observedEntrypoint = runtimeLoads.get(`input\0${entrypoint}`);
-    if (!observedEntrypoint || observedEntrypoint.digest !== semantics.entrypointDigest) {
-      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: descendant executable bytes are not attested");
-    }
-  }
-  for (const load of runtimeLoads.values()) {
-    if (load.kind === "violation") {
-      throw new Error(`STRICT_PROOF_UNVERIFIED_METRO_POLICY: ${load.value}`);
-    }
-    const candidate = realpathSync11(load.value);
-    if (fileDigest(candidate) !== load.digest) {
-      throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input bytes changed after execution");
-    }
-    runtimeInputs.add(candidate);
-  }
-  return {
-    paths: [...runtimeInputs].sort().flatMap((entry) => {
-      const candidate = realpathSync11(entry);
-      return !isContained(identity2.contentRoot, candidate) || isExcludedRuntimePath(identity2.contentRoot, candidate) ? [candidate] : [];
-    }),
-    semantics: orderedRuntimeSemantics
-  };
-}
-function dependencyStoreRoots(identity2, git, pathExists) {
-  const entries = git(identity2.contentRoot, [
-    "ls-files",
-    "--others",
-    "--ignored",
-    "--exclude-standard",
-    "--directory",
-    "-z",
-    "--",
-    ...DEPENDENCY_STORE_PATHS
-  ]).split("\0").filter(Boolean);
-  for (const candidate of [
-    join54(identity2.contentRoot, "node_modules"),
-    join54(identity2.appRoot, "node_modules")
-  ]) {
-    if (pathExists(candidate))
-      entries.push(relative5(identity2.contentRoot, candidate));
-  }
-  const pnpRoots = [];
-  let pnpRoot = identity2.appRoot;
-  while (true) {
-    pnpRoots.push(pnpRoot);
-    if (pnpRoot === identity2.contentRoot)
-      break;
-    const parent = dirname22(pnpRoot);
-    if (parent === pnpRoot || !isContained(identity2.contentRoot, parent))
-      break;
-    pnpRoot = parent;
-  }
-  const pnpLoaders = [...new Set(pnpRoots)].flatMap((root) => [".pnp.js", ".pnp.cjs", ".pnp.loader.mjs"].map((entry) => join54(root, entry)).filter(pathExists));
-  if (pnpLoaders.length > 0) {
-    throw new Error("STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT: Plug\u2019n\u2019Play dependency resolution is unsupported");
-  }
-  let ancestor = dirname22(identity2.contentRoot);
-  while (true) {
-    if (pathExists(join54(ancestor, "node_modules"))) {
-      throw new Error("STRICT_PROOF_UNVERIFIED_DEPENDENCY_LAYOUT: ancestor node_modules resolves outside the content root");
-    }
-    const parent = dirname22(ancestor);
-    if (parent === ancestor)
-      break;
-    ancestor = parent;
-  }
-  const roots = [...new Set(entries.map((entry) => resolve11(identity2.contentRoot, entry)))].sort();
-  for (const root of roots) {
-    assertContained(identity2.contentRoot, root, "STRICT_PROOF_DEPENDENCY_PATH_ESCAPE");
-  }
-  return roots.filter((candidate) => !roots.some((parent) => parent !== candidate && isContained(parent, candidate)));
-}
-function updateDependencyStores(hash, identity2, git, pathExists, runtimeInputs) {
-  const roots = dependencyStoreRoots(identity2, git, pathExists);
-  const state = {
-    entries: 0,
-    totalBytes: 0,
-    visitedDirectories: /* @__PURE__ */ new Set()
-  };
-  updateFramed(hash, "dependency-stores-v1");
-  for (const root of [.../* @__PURE__ */ new Set([...roots, ...runtimeInputs])].sort()) {
-    if (!pathExists(root))
-      continue;
-    updateDependencyPath(hash, root, relative5(identity2.contentRoot, root), state);
-  }
-}
-function defaultGit(root, args) {
-  return execFileSync17("git", ["-C", root, ...args], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-    timeout: 5e3,
-    maxBuffer: 64 * 1024 * 1024
-  }).trim();
-}
-function isDefinitiveNonGitError(error2) {
-  if (!(error2 instanceof Error))
-    return false;
-  const stderr = "stderr" in error2 && typeof error2.stderr === "string" ? error2.stderr : "stderr" in error2 && Buffer.isBuffer(error2.stderr) ? error2.stderr.toString("utf8") : "";
-  return `${error2.message}
-${stderr}`.toLowerCase().includes("not a git repository");
-}
-function assertContained(root, candidate, code) {
-  const child = relative5(root, candidate);
-  if (child === ".." || child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute8(child)) {
-    throw new Error(`${code}: path is outside the declared content root`);
-  }
-}
-function resolveDeclaredIdentity(appRoot, dependencies, canonicalize) {
-  if (!dependencies.declaredRoot)
-    throw new Error(missingDeclaredRootMessage());
-  if (!dependencies.declaredManifests?.length) {
-    throw new Error(missingDeclaredManifestListMessage());
-  }
-  const pathExists = dependencies.exists ?? existsSync39;
-  const contentRoot = canonicalize(resolve11(dependencies.declaredRoot));
-  assertContained(contentRoot, appRoot, "NON_GIT_ROOT_MISMATCH");
-  const manifestParts = [];
-  for (const entry of [...dependencies.declaredManifests].sort()) {
-    const declared = resolve11(contentRoot, entry);
-    if (!pathExists(declared))
-      throw new Error(missingDeclaredManifestMessage(entry));
-    const manifest = canonicalize(declared);
-    assertContained(contentRoot, manifest, "NON_GIT_MANIFEST_OUTSIDE_ROOT");
-    manifestParts.push(relative5(contentRoot, manifest), readFileSync40(manifest));
-  }
-  const manifestDigest = digest2(manifestParts);
-  const appRelative = relative5(contentRoot, appRoot) || ".";
-  return {
-    kind: "declared-root",
-    contentRoot,
-    appRoot,
-    sourceKey: digest2(["declared-source", contentRoot, manifestDigest]),
-    worktreeKey: digest2(["declared-root", contentRoot]),
-    appRootKey: digest2(["declared-app", appRelative]),
-    manifestDigest,
-    declaredManifests: [...dependencies.declaredManifests]
-  };
-}
-function resolveSourceIdentity(inputRoot, dependencies = {}) {
-  const canonicalize = dependencies.canonicalize ?? realpathSync11;
-  const appRoot = canonicalize(resolve11(inputRoot));
-  const git = dependencies.git ?? defaultGit;
-  try {
-    const contentRoot = canonicalize(git(appRoot, ["rev-parse", "--show-toplevel"]));
-    assertContained(contentRoot, appRoot, "APP_ROOT_OUTSIDE_WORKTREE");
-    const commonRaw = git(appRoot, ["rev-parse", "--git-common-dir"]);
-    const commonDirectory = canonicalize(isAbsolute8(commonRaw) ? commonRaw : join54(appRoot, commonRaw));
-    const head = git(appRoot, ["rev-parse", "HEAD"]);
-    const appRelative = relative5(contentRoot, appRoot) || ".";
-    return {
-      kind: "git",
-      contentRoot,
-      appRoot,
-      sourceKey: digest2(["git-source", commonDirectory]),
-      worktreeKey: digest2(["git-worktree", contentRoot]),
-      appRootKey: digest2(["git-app", appRelative]),
-      head
-    };
-  } catch (error2) {
-    if (error2 instanceof Error && (error2.message.startsWith("APP_ROOT_OUTSIDE_WORKTREE") || error2.message.startsWith("NON_GIT_"))) {
-      throw error2;
-    }
-    if (!isDefinitiveNonGitError(error2))
-      throw error2;
-    return resolveDeclaredIdentity(appRoot, dependencies, canonicalize);
-  }
-}
-function strictProofSourceIdentity(identity2, dependencies = {}) {
-  if (identity2.kind !== "git") {
-    throw new Error("STRICT_PROOF_GIT_REQUIRED: accepted strict proof requires a Git worktree");
-  }
-  const git = dependencies.git ?? defaultGit;
-  const pathExists = dependencies.exists ?? existsSync39;
-  assertFinalMetroIntegration(identity2);
-  const evidenceHeadReader = dependencies.readMetroEvidenceHead ?? readMetroEvidenceHead;
-  const runtimeEnforcementVerifier = dependencies.verifyMetroRuntimeEnforcement ?? verifyManagedMetroEnforcementReceipt;
-  const runtimeInputs = metroRuntimeInputs(identity2, dependencies.metroRuntimePolicy, evidenceHeadReader, runtimeEnforcementVerifier);
-  const head = git(identity2.contentRoot, ["rev-parse", "HEAD"]);
-  const diff = git(identity2.contentRoot, ["diff", "--binary", "--no-ext-diff", head, "--"]);
-  const untracked = git(identity2.contentRoot, ["ls-files", "--others", "--exclude-standard", "-z"]).split("\0").filter(Boolean).sort();
-  const ignored = git(identity2.contentRoot, [
-    "ls-files",
-    "--others",
-    "--ignored",
-    "--exclude-standard",
-    "-z",
-    "--",
-    ...IGNORED_RUNTIME_INPUT_PATHS
-  ]).split("\0").filter(Boolean).sort();
-  const gitlinks = git(identity2.contentRoot, ["ls-files", "--stage", "-z"]).split("\0").flatMap((entry) => {
-    const match = /^160000 [0-9a-f]+ \d+\t(.+)$/i.exec(entry);
-    return match?.[1] ? [match[1]] : [];
-  });
-  for (const entry of gitlinks) {
-    const submodule = resolve11(identity2.contentRoot, entry);
-    assertContained(identity2.contentRoot, submodule, "STRICT_PROOF_PATH_ESCAPE");
-    const status = git(submodule, [
-      "status",
-      "--porcelain=v1",
-      "--untracked-files=all",
-      "--ignore-submodules=none"
-    ]);
-    if (status) {
-      throw new Error(`STRICT_PROOF_DIRTY_SUBMODULE: ${entry} contains source changes outside the parent digest`);
-    }
-  }
-  const dirtyHash = createHash19("sha256");
-  updateFramed(dirtyHash, "git-dirty-v3");
-  updateFramed(dirtyHash, diff);
-  for (const semantics of runtimeInputs.semantics) {
-    updateFramed(dirtyHash, "runtime-semantics");
-    updateFramed(dirtyHash, semantics);
-  }
-  updateDependencyStores(dirtyHash, identity2, git, pathExists, runtimeInputs.paths);
-  const sourceEntries = [
-    ...untracked.map((entry) => ["untracked", entry]),
-    ...ignored.map((entry) => ["ignored-runtime", entry])
-  ];
-  if (sourceEntries.length > MAX_STRICT_PROOF_FILES) {
-    throw new Error("STRICT_PROOF_RUNTIME_INPUT_LIMIT: too many untracked runtime inputs");
-  }
-  let totalBytes = 0;
-  for (const [classification, entry] of sourceEntries) {
-    const file = resolve11(identity2.contentRoot, entry);
-    assertContained(identity2.contentRoot, file, "STRICT_PROOF_PATH_ESCAPE");
-    const stat2 = lstatSync12(file);
-    updateFramed(dirtyHash, classification);
-    updateFramed(dirtyHash, entry);
-    if (stat2.isFile()) {
-      if (stat2.size > MAX_STRICT_PROOF_FILE_BYTES) {
-        throw new Error(`STRICT_PROOF_RUNTIME_INPUT_LIMIT: ${entry} exceeds the per-file limit`);
-      }
-      updateFramed(dirtyHash, "file");
-      const stableSize = updateFramedFile(dirtyHash, file, MAX_STRICT_PROOF_FILE_BYTES);
-      totalBytes += stableSize;
-      if (totalBytes > MAX_STRICT_PROOF_TOTAL_BYTES) {
-        throw new Error("STRICT_PROOF_RUNTIME_INPUT_LIMIT: runtime inputs exceed the total limit");
-      }
-      continue;
-    }
-    if (stat2.isSymbolicLink()) {
-      const target = realpathSync11(file);
-      assertContained(identity2.contentRoot, target, "STRICT_PROOF_PATH_ESCAPE");
-      const link = readlinkSync3(file);
-      const targetStat = lstatSync12(target);
-      if (!targetStat.isFile()) {
-        throw new Error("STRICT_PROOF_UNSUPPORTED_FILE: untracked symlink target is not a regular file");
-      }
-      if (targetStat.size > MAX_STRICT_PROOF_FILE_BYTES) {
-        throw new Error(`STRICT_PROOF_RUNTIME_INPUT_LIMIT: ${entry} exceeds the per-file limit`);
-      }
-      updateFramed(dirtyHash, "symlink");
-      updateFramed(dirtyHash, link);
-      const stableSize = updateFramedFile(dirtyHash, target, MAX_STRICT_PROOF_FILE_BYTES);
-      totalBytes += Buffer.byteLength(link) + stableSize;
-      if (totalBytes > MAX_STRICT_PROOF_TOTAL_BYTES) {
-        throw new Error("STRICT_PROOF_RUNTIME_INPUT_LIMIT: runtime inputs exceed the total limit");
-      }
-      continue;
-    }
-    throw new Error("STRICT_PROOF_UNSUPPORTED_FILE: untracked source is neither a regular file nor a symlink");
-  }
-  const runtimeInputsAfter = metroRuntimeInputs(identity2, dependencies.metroRuntimePolicy, evidenceHeadReader, runtimeEnforcementVerifier);
-  if (canonicalAuthorityJson(runtimeInputsAfter) !== canonicalAuthorityJson(runtimeInputs)) {
-    throw new Error("STRICT_PROOF_SOURCE_READ_FAILED: Metro runtime inputs changed while hashing");
-  }
-  return {
-    kind: "git-strict-proof",
-    sourceKey: identity2.sourceKey,
-    worktreeKey: identity2.worktreeKey,
-    appRootKey: identity2.appRootKey,
-    head,
-    dirtyDigest: dirtyHash.digest("hex")
-  };
-}
-
-// packages/rn-dev-agent-core/dist/session/local-authority-probe.js
 init_target_device_authority();
 init_tool_profiles();
 function identity(value) {
-  return createHash20("sha256").update(JSON.stringify(value)).digest("hex");
+  return createHash21("sha256").update(JSON.stringify(value)).digest("hex");
 }
 function objectBinding(status, name) {
   const value = status.bindings[name];
@@ -86565,7 +87001,7 @@ var AndroidExactTargetDeadlineError = class extends Error {
 };
 async function connectExactAndroidSessionTarget(input, timeoutMs, dependencies) {
   const now = dependencies.now ?? Date.now;
-  const wait = dependencies.wait ?? ((ms) => new Promise((resolve12) => setTimeout(resolve12, ms)));
+  const wait = dependencies.wait ?? ((ms) => new Promise((resolve14) => setTimeout(resolve14, ms)));
   const setDeadlineTimer = dependencies.setDeadlineTimer ?? ((callback, ms) => setTimeout(callback, ms));
   const clearDeadlineTimer = dependencies.clearDeadlineTimer ?? ((timer) => clearTimeout(timer));
   const deadline = now() + timeoutMs;
@@ -86741,7 +87177,7 @@ async function connectExactSessionTarget(input, timeoutMs, dependencies) {
     return connectExactAndroidSessionTarget(input, timeoutMs, dependencies);
   }
   const now = dependencies.now ?? Date.now;
-  const wait = dependencies.wait ?? ((ms) => new Promise((resolve12) => setTimeout(resolve12, ms)));
+  const wait = dependencies.wait ?? ((ms) => new Promise((resolve14) => setTimeout(resolve14, ms)));
   let exactClient = dependencies.getClient();
   if (exactClient.metroPort !== input.metroPort) {
     await exactClient.disconnect();
@@ -86812,7 +87248,7 @@ async function connectExactSessionTarget(input, timeoutMs, dependencies) {
 }
 
 // packages/rn-dev-agent-core/dist/index.js
-var pkgPath = join55(dirname23(fileURLToPath7(import.meta.url)), "..", "package.json");
+var pkgPath = join57(dirname23(fileURLToPath7(import.meta.url)), "..", "package.json");
 var pkgVersion = JSON.parse(readFileSync41(pkgPath, "utf8")).version;
 var lockfile = null;
 var diagnosticContractProbe = process.argv.includes("--diagnostic-contract-probe");
@@ -86953,7 +87389,7 @@ setSnapshotAuthorityProvider({
       runnerInstanceId: runner?.instanceId,
       runnerPid: runner?.pid,
       runnerProcessBirth: runner?.processBirth,
-      runnerCapabilityHash: typeof runner?.capability === "string" ? createHash21("sha256").update(runner.capability).digest("hex") : void 0,
+      runnerCapabilityHash: typeof runner?.capability === "string" ? createHash22("sha256").update(runner.capability).digest("hex") : void 0,
       runnerPort: runner?.port,
       runnerClaim: status.claims.find((claim) => claim.type === "runner")?.key,
       deviceClaim: status.claims.find((claim) => claim.type === "device")?.key
@@ -87163,7 +87599,7 @@ setObserveAuthorityDeps({
       }
     };
   },
-  bind: ({ port, authority }) => {
+  bind: ({ port, authority, autostarted }) => {
     const { registry: registry2, session: session2 } = authorityRuntime.requireAvailable();
     const controller = registry2.getControllerBinding(session2);
     registry2.updateBindings(session2, {
@@ -87175,7 +87611,8 @@ setObserveAuthorityDeps({
           instanceId: authority.instanceId,
           cleanupCapability: authority.capability,
           pid: controller.worker.pid,
-          processBirth: controller.worker.token
+          processBirth: controller.worker.token,
+          autostarted
         }
       }
     });
@@ -87616,7 +88053,7 @@ var getSessionSignerCapability = (sessionId) => {
     return null;
   if (sessionId && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(sessionId))
     return null;
-  const secretPath = sessionId ? join55(dirname23(dirname23(currentSecretPath)), sessionId, "secret.json") : currentSecretPath;
+  const secretPath = sessionId ? join57(dirname23(dirname23(currentSecretPath)), sessionId, "secret.json") : currentSecretPath;
   return readJsonStateFile(secretPath)?.signerCapability ?? null;
 };
 var spawningSupervisorPid = process.ppid;
@@ -87670,6 +88107,7 @@ async function disconnectBoundSession() {
 trackedTool("rn_session", "Inspect and transition the fenced rn-dev-agent authority session. Status reconciles lost managed Metro authority without touching the app; bind, handoff, adoption, recovery, managed Metro cleanup, and release actions are fail-closed.", {
   action: external_exports.enum([
     "status",
+    "bind_source",
     "bind_device",
     "bind_metro",
     "pin_dev_client",
@@ -87685,6 +88123,7 @@ trackedTool("rn_session", "Inspect and transition the fenced rn-dev-agent author
     "stop_metro",
     "release"
   ]),
+  projectRoot: external_exports.string().describe("bind_source: same-repo worktree to rebind; other actions refuse on mismatch").optional(),
   platform: external_exports.enum(["ios", "android"]).describe("Required with deviceId for foreign transfer; omit both to resume own journal").optional(),
   deviceId: external_exports.string().describe("Required with platform for foreign transfer; omit both to resume own journal").optional(),
   appId: external_exports.string().optional(),
@@ -88001,7 +88440,7 @@ trackedTool("device_snapshot", "Manage exact device sessions and capture UI snap
       const probe = await client2.evaluate('typeof globalThis.__RN_AGENT !== "undefined" && globalThis.__RN_AGENT.isReady() === true').catch(() => ({ value: false }));
       if (probe.value === true)
         return true;
-      await new Promise((resolve12) => setTimeout(resolve12, 250));
+      await new Promise((resolve14) => setTimeout(resolve14, 250));
     }
     return false;
   }
@@ -88195,7 +88634,7 @@ var proofReadiness = async () => {
       connectedAt: current.connectedAt
     }),
     errorCount: errors.length,
-    errorSha256: createHash21("sha256").update(errorBytes).digest("hex"),
+    errorSha256: createHash22("sha256").update(errorBytes).digest("hex"),
     device: identity2.device,
     runtime: identity2.runtime
   };
@@ -88845,7 +89284,7 @@ async function main() {
           return null;
         return status.state === "blocked" || status.state === "handoff_cleanup" ? `session is a ${status.state} recovery contender` : null;
       },
-      start: startObserveServer,
+      start: () => startObserveServer({ autostarted: true }),
       warn: (m) => logger.warn("OBSERVE", m),
       info: (m) => logger.info("OBSERVE", m)
     }).catch(() => {

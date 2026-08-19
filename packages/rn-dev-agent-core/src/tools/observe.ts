@@ -33,7 +33,7 @@ let stateDeps: StateServerDeps | undefined;
 let authorityDeps:
   | {
       resolve(): { port: number; authority: ObserveAuthority };
-      bind(input: { port: number; authority: ObserveAuthority }): void;
+      bind(input: { port: number; authority: ObserveAuthority; autostarted: boolean }): void;
       unbind(authority: ObserveAuthority): void;
     }
   | undefined;
@@ -65,8 +65,13 @@ let boundAuthority: ObserveAuthority | null = null;
  * stopObserveServer awaits it, so a stop racing a pending start can never
  * orphan a listening server (PR #403 review).
  */
-export async function startObserveServer(): Promise<{ url: string; port: number }> {
+export async function startObserveServer(
+  options: {
+    autostarted?: boolean;
+  } = {},
+): Promise<{ url: string; port: number }> {
   if (starting) return starting;
+  const autostarted = options.autostarted === true;
   starting = (async () => {
     const resolved = authorityDeps?.resolve();
     if (!server) {
@@ -86,7 +91,7 @@ export async function startObserveServer(): Promise<{ url: string; port: number 
       const res = await server.start(port);
       if (resolved) {
         bindAttempted = true;
-        authorityDeps?.bind({ port: res.port, authority: resolved.authority });
+        authorityDeps?.bind({ port: res.port, authority: resolved.authority, autostarted });
         boundAuthority = resolved.authority;
       }
       stateWriteAttempted = true;
@@ -150,9 +155,24 @@ export async function stopObserveServer(): Promise<void> {
   starting = null;
   await server?.stop();
   server = null;
-  if (boundAuthority) authorityDeps?.unbind(boundAuthority);
+  // GH #776: a fenced caller (bind_device's Observe yield) reaches this stop
+  // owner through the HTTP route, outside its operation's async context, so the
+  // registry rejects the unbind and clears the binding itself. Local teardown
+  // must still complete, and that rejection is not a shutdown failure.
+  let unbindError: unknown;
+  try {
+    if (boundAuthority) authorityDeps?.unbind(boundAuthority);
+  } catch (error) {
+    unbindError = error;
+  }
   boundAuthority = null;
   removeObserveState();
+  if (
+    unbindError !== undefined &&
+    (unbindError as { code?: unknown } | null)?.code !== 'AUTHORITY_LOST_DURING_OPERATION'
+  ) {
+    throw unbindError;
+  }
 }
 
 export async function observeHandler(args: ObserveArgs): Promise<ToolResult> {

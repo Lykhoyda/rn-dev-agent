@@ -119,6 +119,15 @@ function requireCompleteAxes(status, profile) {
         }
     }
 }
+function successEnvelopeFlag(result, field) {
+    try {
+        const envelope = JSON.parse(result.content?.[0]?.text ?? '{}');
+        return envelope.ok === true && envelope.data?.[field] === true;
+    }
+    catch {
+        return false;
+    }
+}
 function isAuthenticatedIdempotentMetroStop(tool, args, result) {
     if (tool !== 'rn_session' || args.action !== 'stop_metro')
         return false;
@@ -323,7 +332,13 @@ function bindExactArgument(args, field, expected, code) {
     }
     args[field] = expected;
 }
-function bindSourcePaths(status, args) {
+const SOURCE_FENCED_SESSION_ACTIONS = new Set([
+    'bind_source',
+    'bind_device',
+    'preview_integration',
+    'apply_integration',
+]);
+function bindSourcePaths(status, args, tool) {
     let appRoot;
     try {
         if (typeof status.source.appRoot !== 'string')
@@ -337,6 +352,17 @@ function bindSourcePaths(status, args) {
         const supplied = args[field];
         if (supplied === undefined)
             continue;
+        // GH #776: these rn_session actions own projectRoot as a repository-identity
+        // fence, not a path inside the bound app root — bind_source declares a root
+        // outside it, and the fenced actions refuse SOURCE_ROOT_DIVERGENCE naming
+        // both paths. Filesystem containment would pre-empt that typed refusal.
+        // Scoped to the exact rn_session tool so no other surface can skip the fence.
+        if (field === 'projectRoot' &&
+            tool === 'rn_session' &&
+            typeof args.action === 'string' &&
+            SOURCE_FENCED_SESSION_ACTIONS.has(args.action)) {
+            continue;
+        }
         if (typeof supplied !== 'string' || supplied.length === 0) {
             throw new SessionAuthorityError('SOURCE_WORKTREE_MISMATCH', `${field} must be a non-empty path within the active app root`);
         }
@@ -351,13 +377,18 @@ function bindSourcePaths(status, args) {
         if (child === '..' ||
             child.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) ||
             isAbsolute(child)) {
-            throw new SessionAuthorityError('SOURCE_WORKTREE_MISMATCH', `${field} is outside the active session app root`);
+            // GH #776: name both paths so a linked-worktree caller can see the divergence.
+            throw new SessionAuthorityError('SOURCE_WORKTREE_MISMATCH', `${field} ${candidate} is outside the active session app root ${appRoot}`, undefined, field === 'projectRoot'
+                ? {
+                    nextAction: `Run rn_session action "bind_source" with projectRoot "${candidate}" to rebind the session to that worktree, then retry.`,
+                }
+                : undefined);
         }
         args[field] = candidate;
     }
 }
-function bindSessionArguments(status, profile, args) {
-    bindSourcePaths(status, args);
+function bindSessionArguments(status, profile, args, tool) {
+    bindSourcePaths(status, args, tool);
     const device = status.bindings.device;
     const metro = status.bindings.metro;
     const install = status.bindings.install;
@@ -729,7 +760,7 @@ export function createAuthorityGate(runtime, dependencies) {
             }
             if (runtimeStatus.available && tool === 'cdp_restart' && args.hardReset === true) {
                 try {
-                    bindSessionArguments(runtimeStatus, profile, args);
+                    bindSessionArguments(runtimeStatus, profile, args, tool);
                     profile = authorityProfileFor(tool, args);
                 }
                 catch (error) {
@@ -757,7 +788,7 @@ export function createAuthorityGate(runtime, dependencies) {
                     const retainsRunnerCleanupAuthority = tool === 'device_snapshot' &&
                         args.action === 'close' &&
                         Boolean(status.bindings.runner);
-                    bindSessionArguments(status, profile, args);
+                    bindSessionArguments(status, profile, args, tool);
                     if (tool === 'device_snapshot')
                         requireDeviceTransition(status, args);
                     if (gateCommitsProof && status.bindings.proof) {
@@ -839,12 +870,26 @@ export function createAuthorityGate(runtime, dependencies) {
                             authorityTransition: true,
                         });
                     }
+                    // GH #776: terminality is proven by the envelope, never assumed from the
+                    // action — only the released row cannot complete its own fence. Any other
+                    // outcome must fall through, or it strands an operation row that refuses
+                    // every later call with OPERATION_ALREADY_IN_PROGRESS.
+                    const bindSource = tool === 'rn_session' && args.action === 'bind_source';
+                    const idempotentBindSource = bindSource && successEnvelopeFlag(result, 'alreadyBound');
+                    if (bindSource && successEnvelopeFlag(result, 'released')) {
+                        operation = null;
+                        return addMeta(result, {
+                            authoritative: false,
+                            authorityTransition: true,
+                        });
+                    }
                     const idempotentMetroStop = isAuthenticatedIdempotentMetroStop(tool, args, result);
                     const idempotentRunnerClose = isAuthenticatedIdempotentRunnerClose(tool, args, result, initialStatus);
                     if (!gateCommitsProof && !idempotentMetroStop && !idempotentRunnerClose) {
                         registry.verifyOperation(operation);
                         const nextStatus = runtime.status();
-                        if (!nextStatus.available || nextStatus.authorityVersion <= initialAuthorityVersion) {
+                        if (!nextStatus.available ||
+                            (!idempotentBindSource && nextStatus.authorityVersion <= initialAuthorityVersion)) {
                             throw new SessionAuthorityError('AUTHORITY_LOST_DURING_OPERATION', 'transition did not advance the fenced authority generation');
                         }
                         status = nextStatus;
@@ -992,7 +1037,7 @@ export function createAuthorityGate(runtime, dependencies) {
                 }
                 let status = initialStatus;
                 requireCompleteAxes(status, profile);
-                bindSessionArguments(status, profile, args);
+                bindSessionArguments(status, profile, args, tool);
                 operation = registry.beginOperation(available.session, {
                     operationId: randomUUID(),
                     tool,

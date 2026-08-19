@@ -729,7 +729,7 @@ setObserveAuthorityDeps({
       },
     };
   },
-  bind: ({ port, authority }) => {
+  bind: ({ port, authority, autostarted }) => {
     const { registry, session } = authorityRuntime.requireAvailable();
     const controller = registry.getControllerBinding(session);
     registry.updateBindings(session, {
@@ -742,6 +742,7 @@ setObserveAuthorityDeps({
           cleanupCapability: authority.capability,
           pid: controller.worker.pid,
           processBirth: controller.worker.token,
+          autostarted,
         },
       },
     });
@@ -1498,6 +1499,7 @@ trackedTool(
   {
     action: z.enum([
       'status',
+      'bind_source',
       'bind_device',
       'bind_metro',
       'pin_dev_client',
@@ -1513,6 +1515,10 @@ trackedTool(
       'stop_metro',
       'release',
     ]),
+    projectRoot: z
+      .string()
+      .describe('bind_source: same-repo worktree to rebind; other actions refuse on mismatch')
+      .optional(),
     platform: z
       .enum(['ios', 'android'])
       .describe('Required with deviceId for foreign transfer; omit both to resume own journal')
@@ -4349,7 +4355,7 @@ async function main() {
           ? `session is a ${status.state} recovery contender`
           : null;
       },
-      start: startObserveServer,
+      start: () => startObserveServer({ autostarted: true }),
       warn: (m) => logger.warn('OBSERVE', m),
       info: (m) => logger.info('OBSERVE', m),
     }).catch(() => {});

@@ -40,9 +40,10 @@ let boundAuthority = null;
  * stopObserveServer awaits it, so a stop racing a pending start can never
  * orphan a listening server (PR #403 review).
  */
-export async function startObserveServer() {
+export async function startObserveServer(options = {}) {
     if (starting)
         return starting;
+    const autostarted = options.autostarted === true;
     starting = (async () => {
         const resolved = authorityDeps?.resolve();
         if (!server) {
@@ -55,7 +56,7 @@ export async function startObserveServer() {
             const res = await server.start(port);
             if (resolved) {
                 bindAttempted = true;
-                authorityDeps?.bind({ port: res.port, authority: resolved.authority });
+                authorityDeps?.bind({ port: res.port, authority: resolved.authority, autostarted });
                 boundAuthority = resolved.authority;
             }
             stateWriteAttempted = true;
@@ -119,10 +120,24 @@ export async function stopObserveServer() {
     starting = null;
     await server?.stop();
     server = null;
-    if (boundAuthority)
-        authorityDeps?.unbind(boundAuthority);
+    // GH #776: a fenced caller (bind_device's Observe yield) reaches this stop
+    // owner through the HTTP route, outside its operation's async context, so the
+    // registry rejects the unbind and clears the binding itself. Local teardown
+    // must still complete, and that rejection is not a shutdown failure.
+    let unbindError;
+    try {
+        if (boundAuthority)
+            authorityDeps?.unbind(boundAuthority);
+    }
+    catch (error) {
+        unbindError = error;
+    }
     boundAuthority = null;
     removeObserveState();
+    if (unbindError !== undefined &&
+        unbindError?.code !== 'AUTHORITY_LOST_DURING_OPERATION') {
+        throw unbindError;
+    }
 }
 export async function observeHandler(args) {
     const action = args.action ?? 'status';

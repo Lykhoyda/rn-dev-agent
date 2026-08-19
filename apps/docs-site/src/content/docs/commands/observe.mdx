@@ -27,6 +27,8 @@ The UI **autostarts with the session** in a React Native project — you normall
 - `stop` — shut the UI down for the rest of the session.
 - `restart` — restart the server and print the (possibly new) URL. The event timeline is preserved across restarts.
 
+An autostarted UI holds the session's device axis, so the first `rn_session(action="bind_device")` stops it to yield that axis and reports `observeYielded` with the stopped port — bring it back with `restart`. A UI you bring back yourself, or started yourself, is treated as yours: it forfeits the automatic yield, and the next `bind_device` refuses until you stop it. See [parallel session authority](../../session-authority/).
+
 Permanent opt-out and port selection live in `.rn-agent/config.json`:
 
 ```json

@@ -8,6 +8,12 @@ export function parseDeclaredManifests(value) {
         .map((entry) => entry.trim())
         .filter(Boolean);
 }
+export function declaredSourceContractFromEnv(env = process.env) {
+    return {
+        declaredRoot: env[DECLARED_ROOT_ENV],
+        declaredManifests: parseDeclaredManifests(env[DECLARED_MANIFESTS_ENV]),
+    };
+}
 // Keep this public remedy path-free so diagnostic redaction preserves actionable guidance.
 export const NON_GIT_DECLARATION_NEXT_ACTION = `Declare the non-Git source explicitly: set ${DECLARED_ROOT_ENV} to the exact existing application root, ` +
     `and set ${DECLARED_MANIFESTS_ENV} to a comma-separated list of required existing manifest files inside that root, ` +

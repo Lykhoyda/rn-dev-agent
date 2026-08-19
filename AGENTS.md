@@ -121,8 +121,12 @@ Live device verification against the sibling `rn-dev-agent-workspace/test-app`
 cannot use this repo's own MCP session (Metro serving-root pinning refuses an
 app outside the source worktree). Spawn the worktree build directly instead —
 `node packages/claude-plugin/rn-dev-agent-core/dist/supervisor.js` with cwd set
-to the test-app, drive it over stdio JSON-RPC, and stop the auto-started
-observe server (`observe action=stop`) before `bind_device`.
+to the test-app and drive it over stdio JSON-RPC. The auto-started observe
+server yields the device axis on the first `bind_device` (the result reports
+`observeYielded` with the stopped port), so no manual `observe action=stop` is
+needed; an observe server you started yourself — or one you brought back with
+`observe action="start"` or `"restart"`, either of which forfeits the automatic
+yield — still refuses and must be stopped.
 
 Native runner checks:
 

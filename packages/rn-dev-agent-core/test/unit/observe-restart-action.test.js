@@ -1,11 +1,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { ObservabilityServer } from '../../dist/observability/server.js';
 import {
   observeHandler,
   setObserveAuthorityDeps,
   startObserveServer,
+  stopObserveServer,
 } from '../../dist/tools/observe.js';
+import { observeStatePath } from '../../dist/observability/observe-state.js';
+import { findProjectRoot } from '../../dist/nav-graph/storage.js';
 import { recorder } from '../../dist/observability/recorder.js';
 
 // Pin a unique port for this file so parallel test files can't collide on the
@@ -119,6 +125,106 @@ test('authority publication failure rolls back the listening server', async (t) 
   await assert.rejects(startObserveServer(), /binding failed/);
   assert.equal(unbound, 1);
   await assert.rejects(fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(2000) }));
+});
+
+// The discovery record is keyed by the resolved RN project root and written
+// under the state dir, so both are pinned into tmp for these two tests.
+function isolatedDiscoveryRecord(t) {
+  const stateHome = mkdtempSync(join(tmpdir(), 'rn-observe-state-'));
+  const projectRoot = mkdtempSync(join(tmpdir(), 'rn-observe-project-'));
+  writeFileSync(
+    join(projectRoot, 'package.json'),
+    JSON.stringify({ name: 'observe-fixture', dependencies: { 'react-native': '0.81.0' } }),
+  );
+  const priorStateHome = process.env.XDG_STATE_HOME;
+  const priorProjectRoot = process.env.RN_PROJECT_ROOT;
+  process.env.XDG_STATE_HOME = stateHome;
+  process.env.RN_PROJECT_ROOT = projectRoot;
+  t.after(() => {
+    if (priorStateHome === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = priorStateHome;
+    if (priorProjectRoot === undefined) delete process.env.RN_PROJECT_ROOT;
+    else process.env.RN_PROJECT_ROOT = priorProjectRoot;
+    rmSync(stateHome, { force: true, recursive: true });
+    rmSync(projectRoot, { force: true, recursive: true });
+  });
+}
+
+test('an operation-fenced unbind rejection still completes Observe teardown', async (t) => {
+  isolatedDiscoveryRecord(t);
+  const port = 51735;
+  let unbindAttempts = 0;
+  setObserveAuthorityDeps({
+    resolve: () => ({
+      port,
+      authority: {
+        sessionId: 'session-test',
+        claimEpoch: 1,
+        instanceId: 'observe-fenced',
+        capability: 'capability-test',
+      },
+    }),
+    bind: () => {},
+    // The bind_device yield reaches this stop owner through the HTTP route,
+    // outside its operation's async context, so the registry rejects the unbind.
+    unbind: () => {
+      unbindAttempts += 1;
+      const error = new Error('authority mutation is not owned by the active operation fence');
+      error.code = 'AUTHORITY_LOST_DURING_OPERATION';
+      throw error;
+    },
+  });
+  t.after(async () => {
+    setObserveAuthorityDeps(undefined);
+    await observeHandler({ action: 'stop' });
+  });
+
+  const started = await startObserveServer({ autostarted: true });
+  const statePath = observeStatePath(findProjectRoot());
+  assert.equal(existsSync(statePath), true, 'start publishes the discovery record');
+
+  await stopObserveServer();
+
+  assert.equal(unbindAttempts, 1);
+  assert.equal(existsSync(statePath), false, 'the stale discovery record must be removed');
+  await assert.rejects(
+    fetch(`http://127.0.0.1:${started.port}/`, { signal: AbortSignal.timeout(2000) }),
+  );
+  // The authority is torn down locally, so a second stop must not retry it.
+  await stopObserveServer();
+  assert.equal(unbindAttempts, 1);
+});
+
+test('an unexpected unbind failure completes teardown and still surfaces', async (t) => {
+  isolatedDiscoveryRecord(t);
+  const port = 51736;
+  setObserveAuthorityDeps({
+    resolve: () => ({
+      port,
+      authority: {
+        sessionId: 'session-test',
+        claimEpoch: 1,
+        instanceId: 'observe-broken',
+        capability: 'capability-test',
+      },
+    }),
+    bind: () => {},
+    unbind: () => {
+      throw new Error('registry unavailable');
+    },
+  });
+  t.after(async () => {
+    setObserveAuthorityDeps(undefined);
+    await observeHandler({ action: 'stop' });
+  });
+
+  await startObserveServer({ autostarted: true });
+  const statePath = observeStatePath(findProjectRoot());
+
+  await assert.rejects(stopObserveServer(), /registry unavailable/);
+  assert.equal(existsSync(statePath), false);
+  const status = JSON.parse((await observeHandler({ action: 'status' })).content[0].text);
+  assert.equal(status.data.running, false);
 });
 
 test('listen failure preserves a pre-existing Observe binding and state', async (t) => {

@@ -46,6 +46,7 @@ const errorAxes = {
     SESSION_OWNER_LOST: 'C',
     OPERATION_ALREADY_IN_PROGRESS: 'C',
     SOURCE_WORKTREE_MISMATCH: 'S',
+    SOURCE_ROOT_DIVERGENCE: 'S',
     SOURCE_REVISION_NOT_BUNDLED: 'S',
     NON_GIT_MANIFEST_REQUIRED: 'S',
     APP_INSTALL_IDENTITY_CHANGED: 'I',
@@ -694,6 +695,30 @@ export class SessionRegistry {
                 : 'The prior owner identity could not be proven, so it is treated as live. Close the other session or re-run once its process state is observable.',
         };
     }
+    #assertDeviceAuthorityAvailable(session, resource, probes, currentBindings) {
+        this.#assertNoStaleDeviceCleanup(currentBindings);
+        const claim = this.#findConflictingClaim(resource);
+        if (claim &&
+            (claim.session_id !== session.sessionId || claim.claim_epoch !== session.claimEpoch)) {
+            const probe = probes.get(claim.session_id);
+            if (!probe || probe.claimEpoch !== claim.claim_epoch || probe.status !== 'mismatch') {
+                throw claimConflict(claim);
+            }
+            throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'a proven-stale device owner requires explicit adopt_stale before rebinding', { sessionId: claim.session_id, claimEpoch: claim.claim_epoch });
+        }
+    }
+    /**
+     * GH #776: the exact refusals replaceDeviceAuthority would raise, proven without
+     * writing anything, so a caller can refuse before it yields any other axis.
+     */
+    inspectDeviceAuthorityAvailability(session, resource) {
+        const probes = this.#probeClaimOwners(session, [resource]);
+        this.#transaction(() => {
+            const current = this.#requireSession(session);
+            const currentBindings = JSON.parse(current.bindings_json);
+            this.#assertDeviceAuthorityAvailable(session, resource, probes, currentBindings);
+        });
+    }
     replaceDeviceAuthority(session, input) {
         const resource = input.resource ??
             {
@@ -705,16 +730,7 @@ export class SessionRegistry {
         this.#transaction(() => {
             const current = this.#requireSession(session);
             const currentBindings = JSON.parse(current.bindings_json);
-            this.#assertNoStaleDeviceCleanup(currentBindings);
-            const claim = this.#findConflictingClaim(resource);
-            if (claim &&
-                (claim.session_id !== session.sessionId || claim.claim_epoch !== session.claimEpoch)) {
-                const probe = probes.get(claim.session_id);
-                if (!probe || probe.claimEpoch !== claim.claim_epoch || probe.status !== 'mismatch') {
-                    throw claimConflict(claim);
-                }
-                throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'a proven-stale device owner requires explicit adopt_stale before rebinding', { sessionId: claim.session_id, claimEpoch: claim.claim_epoch });
-            }
+            this.#assertDeviceAuthorityAvailable(session, resource, probes, currentBindings);
             this.#database
                 .prepare(`DELETE FROM claims
            WHERE session_id = ? AND claim_epoch = ?

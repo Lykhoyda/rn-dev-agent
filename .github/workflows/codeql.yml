@@ -13,6 +13,9 @@ name: CodeQL
 # Swift/Xcode files (most PRs) — the previous analysis on main still applies,
 # and push-to-main + the weekly schedule always run the full scan as a backstop.
 #
+# The JS/TS leg scans hand-written source only: .github/codeql/codeql-config.yml
+# keeps the committed dist bundles out of the database and the uploaded SARIF.
+#
 # All ${{ }} interpolations here read from matrix.*, needs.*, and github.* (event
 # name only) — they do not interpolate untrusted github.event.* text into shell.
 # The base SHA is passed through `env:` (not inline) so it can't be injected.
@@ -76,6 +79,7 @@ jobs:
           - language: javascript-typescript
             os: ubuntu-latest
             build-mode: none
+            config-file: .github/codeql/codeql-config.yml
           - language: actions
             os: ubuntu-latest
             build-mode: none
@@ -110,6 +114,7 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
+          config-file: ${{ matrix.config-file }}
 
       - name: Build rn-android-runner
         if: ${{ matrix.language == 'java-kotlin' }}
@@ -141,4 +146,30 @@ jobs:
         if: ${{ matrix.language != 'swift' || needs.changes.outputs.swift == 'true' }}
         uses: github/codeql-action/analyze@v4
         with:
+          category: "/language:${{ matrix.language }}"
+          output: ${{ runner.temp }}/codeql-sarif
+          upload: never
+
+      # The SARIF ingest API intermittently answers a generic 5xx ("No server is
+      # currently available"), which codeql-action does not retry — a fully green
+      # analysis then fails the check. Upload as its own retried step so a single
+      # flaky response no longer discards the analysis.
+      - name: Upload CodeQL results
+        id: upload
+        if: ${{ matrix.language != 'swift' || needs.changes.outputs.swift == 'true' }}
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: ${{ runner.temp }}/codeql-sarif
+          category: "/language:${{ matrix.language }}"
+
+      - name: Back off before retrying the upload
+        if: ${{ steps.upload.outcome == 'failure' }}
+        run: sleep 60
+
+      - name: Upload CodeQL results (retry)
+        if: ${{ steps.upload.outcome == 'failure' }}
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: ${{ runner.temp }}/codeql-sarif
           category: "/language:${{ matrix.language }}"

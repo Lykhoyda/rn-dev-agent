@@ -291,6 +291,21 @@ Rules, no exceptions:
 - **Re-read `rn_session({action: "status"})` after any recovery step** and require
   a non-`blocked` state before resuming work.
 
+### Linked git worktrees — `SOURCE_ROOT_DIVERGENCE`
+
+The session binds the source root the MCP transport was started in. When branch
+work lives in a linked `git worktree` of the same repository, declare it instead
+of building around the session:
+
+- `rn_session({action: "bind_source", projectRoot: "<worktree path>"})` releases
+  the session and mints its successor bound to that worktree. Same repository
+  only — a foreign tree is refused with `SOURCE_ROOT_DIVERGENCE`, never attached.
+- Pass `projectRoot` on `bind_device`, `preview_integration`, or
+  `apply_integration` to fence them: it must be the session's exact source root.
+  A different worktree — or a different app package inside the same worktree —
+  refuses with `SOURCE_ROOT_DIVERGENCE` naming both paths instead of silently
+  mutating the bound tree.
+
 ---
 
 ## Verification — Session Ready When
