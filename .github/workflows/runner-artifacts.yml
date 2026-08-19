@@ -332,6 +332,12 @@ jobs:
           BRANCH_EXISTED: ${{ steps.branch.outputs.existed }}
           PUSHED: ${{ steps.commit.outputs.pushed }}
         run: |
+          # The runner's default shell is `bash -e`, which does NOT set pipefail:
+          # without this the superseded-PR sweep below would take the exit status
+          # of its trailing `jq` alone and silently close nothing when the listing
+          # failed, leaving an armed PR from an earlier version free to land after
+          # this one. The sweep is fatal by design, so it must fail as a pipeline.
+          set -o pipefail
           # Whether there is anything to deliver comes from the two steps that
           # know it authoritatively; origin is never re-asked, because a failed
           # query would otherwise read as "no branch" and finish this job green

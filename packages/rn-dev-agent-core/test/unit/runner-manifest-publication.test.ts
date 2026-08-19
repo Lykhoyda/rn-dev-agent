@@ -5,8 +5,8 @@
 // and every later run reported success. These tests pin both halves of the fix.
 //
 // The publication decision is tested through its exported functions; the delivery
-// path is tested by EXECUTING the workflow's steps the way the runner does (one
-// `bash -e -o pipefail` process per step, abort on failure) against a real local
+// path is tested by EXECUTING the workflow's steps the way the runner does (its
+// own default shell, one process per step, abort on failure) against a real local
 // git remote and a recording `gh` double, then asserting the resulting refs,
 // commits, release assets and CLI call sequence.
 
@@ -34,6 +34,7 @@ import {
 import {
   ghCommands,
   installGhStub,
+  executableLines,
   loadWorkflow,
   runJobSteps,
   shellCommands,
@@ -745,6 +746,7 @@ test('a branch replaced after tampering stops churning once main advances again'
   try {
     const first = runPublish(fixture, { workdir: checkout(fixture, 'run1') });
     assert.ok(first.ok, `first run failed at ${first.failed?.name}: ${first.failed?.stderr}`);
+    const firstPr = fixture.gh.state().prs[0].number;
 
     advanceMain(fixture, 'docs/a.md', 'unrelated work landed on main\n');
     const dir = join(fixture.root, 'tamper');
@@ -758,6 +760,20 @@ test('a branch replaced after tampering stops churning once main advances again'
     assert.ok(second.ok, `rerun failed at ${second.failed?.name}: ${second.failed?.stderr}`);
     assert.match(stepStdout(second, BRANCH_STEP), /discarding/);
     const replaced = originRef(fixture, BRANCH);
+    // Deleting the head branch closes its PR, so the replacement gets a new one
+    // rather than silently reusing the pull request opened over tampered content.
+    const afterDiscard = fixture.gh.state().prs;
+    assert.equal(
+      afterDiscard.find((pr) => pr.number === firstPr)?.closedByBranchDelete,
+      true,
+      'the PR over the tampered branch must be closed by the deletion',
+    );
+    assert.equal(afterDiscard.filter((pr) => pr.state === 'OPEN').length, 1);
+    assert.notEqual(
+      afterDiscard.find((pr) => pr.state === 'OPEN')?.number,
+      firstPr,
+      'a discarded branch must not keep the old pull request',
+    );
 
     advanceMain(fixture, 'docs/b.md', 'and more unrelated work\n');
     const third = runPublish(fixture, { workdir: checkout(fixture, 'run3') });
@@ -926,6 +942,45 @@ test('a manifest PR from an earlier version is closed before this one is armed',
     assert.ok(closeAt !== -1 && mergeAt !== -1);
     assert.ok(closeAt < mergeAt, 'the superseded PR must be retired BEFORE this one is armed');
     assert.equal(calls.filter((c) => c.startsWith('pr close')).length, 1);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('a failed pull-request listing aborts instead of sweeping nothing', () => {
+  // The sweep is a pipeline, and the runner's default shell has no pipefail, so
+  // a failing listing would otherwise yield an empty STALE, close nothing, and
+  // still arm this PR — leaving an armed PR from an earlier version free to land
+  // afterwards and restore a stale trust root.
+  const superseded = 'chore/runner-manifest-v0.76.6';
+  const fixture = createFixture({
+    releaseAssets: completeRelease(),
+    supersededBranches: [superseded],
+    prs: [
+      {
+        number: 7,
+        headRefName: superseded,
+        baseRefName: 'main',
+        state: 'OPEN',
+        autoMerge: 'squash',
+        closeComment: null,
+      },
+    ],
+  });
+  try {
+    const run = runPublish(fixture, {
+      workdir: checkout(fixture, 'run1'),
+      env: { GH_STUB_FAIL: 'api repos' },
+    });
+    assert.equal(run.ok, false, 'a swept-nothing run must not report success');
+    assert.equal(run.failed?.name, 'Open or reuse the manifest PR and arm auto-merge');
+    const calls = ghCalls(fixture);
+    assert.equal(
+      calls.some((c) => c.startsWith('pr merge')),
+      false,
+      'auto-merge must not be armed while a superseded PR may still be open',
+    );
+    assert.equal(fixture.gh.state().prs.find((pr) => pr.number === 7)?.state, 'OPEN');
   } finally {
     fixture.cleanup();
   }
@@ -1166,7 +1221,10 @@ test('the step runner honours working-directory and refuses fields it does not m
         located: {
           steps: [{ name: 'touch', run: 'touch marker', 'working-directory': 'nested' }],
         },
-        unmodelled: { steps: [{ name: 'python', run: 'pass', shell: 'python' }] },
+        unmodelled: { steps: [{ name: 'lenient', run: ':', 'continue-on-error': true }] },
+        pythonShell: { steps: [{ name: 'python', run: 'pass', shell: 'python' }] },
+        defaultShell: { steps: [{ name: 'pipeline', run: 'false | true' }] },
+        bashShell: { steps: [{ name: 'pipeline', run: 'false | true', shell: 'bash' }] },
       },
     } as unknown as Parameters<typeof runJobSteps>[0]['workflow'];
 
@@ -1177,7 +1235,24 @@ test('the step runner honours working-directory and refuses fields it does not m
 
     assert.throws(
       () => runJobSteps({ workflow: harness, jobId: 'unmodelled', cwd: root, ctx: {} }),
-      /does not model: shell/,
+      /does not model: continue-on-error/,
+    );
+    assert.throws(
+      () => runJobSteps({ workflow: harness, jobId: 'pythonShell', cwd: root, ctx: {} }),
+      /shell the harness does not model: python/,
+    );
+    // The runner's default shell has no pipefail; only `shell: bash` sets it. The
+    // harness must reproduce that, or a step relying on the stricter shell would
+    // pass here and swallow a failing pipeline in production.
+    assert.equal(
+      runJobSteps({ workflow: harness, jobId: 'defaultShell', cwd: root, ctx: {} }).ok,
+      true,
+      'the default shell must not set pipefail',
+    );
+    assert.equal(
+      runJobSteps({ workflow: harness, jobId: 'bashShell', cwd: root, ctx: {} }).ok,
+      false,
+      '`shell: bash` must set pipefail',
     );
   } finally {
     rmSync(root, { force: true, recursive: true });
@@ -1220,6 +1295,10 @@ function gitSubcommand(tokens: string[]): string | undefined {
 
 function isGitPush(tokens: string[]): boolean {
   return gitSubcommand(tokens) === 'push';
+}
+
+function mentionsUnrecognisedPush(line: string): boolean {
+  return /\bpush\b/.test(line) && !shellCommands(line).some(isGitPush);
 }
 
 function isPermittedPush(tokens: string[]): boolean {
@@ -1268,6 +1347,9 @@ test('the push allowlist rejects default-branch writes however they are spelled'
     'env GIT_DIR=.git git push origin main',
     'GIT_DIR=.git git push origin HEAD:main',
     '! git push origin HEAD:main',
+    'out=$(git push origin HEAD:main)',
+    'if ! out=$(git push origin HEAD:main); then :; fi',
+    'eval "git push origin main"',
   ];
   for (const line of forbidden) {
     const pushes = shellCommands(line).filter(isGitPush);
@@ -1279,13 +1361,36 @@ test('the push allowlist rejects default-branch writes however they are spelled'
     assert.equal(pushes.length, 1, `not recognised as a push: ${line}`);
     assert.ok(isPermittedPush(pushes[0]), `allowlist rejected a required push: ${line}`);
   }
-  for (const line of ['git commit -m "chore: push the trust root"', 'gh pr merge --auto 1']) {
+  for (const line of ['git commit -m "chore: the trust root"', 'gh pr merge --auto 1']) {
     assert.deepEqual(
       shellCommands(line).filter(isGitPush),
       [],
       `not a push, must not be policed as one: ${line}`,
     );
   }
+});
+
+test('no executable line mentions a push the allowlist cannot classify', () => {
+  // The backstop for the guard above. Five rounds running, a push spelling the
+  // parser could not see was silently EXEMPT from the allowlist rather than
+  // refused. A guard that skips what it cannot parse is not a guard, so an
+  // executable line that says `push` while producing no recognised push command
+  // fails here as unparseable — the allowlist can then only be evaded by a
+  // spelling that does not contain the word at all.
+  const unparseable = everyStep().flatMap(({ jobId, step }) =>
+    executableLines(step.run ?? '')
+      .filter(mentionsUnrecognisedPush)
+      .map((line) => `${jobId}: ${line}`),
+  );
+  assert.deepEqual(
+    unparseable,
+    [],
+    'these lines mention a push the parser did not recognise — teach it the spelling, do not skip it',
+  );
+  // And the backstop itself catches what the parser cannot classify, e.g. a push
+  // handed to another program rather than spelled as a command of its own.
+  assert.equal(mentionsUnrecognisedPush('echo x | xargs -I{} git push origin HEAD:main'), true);
+  assert.equal(mentionsUnrecognisedPush('git push origin "$BRANCH"'), false);
 });
 
 test('the publish job is permitted to open a pull request', () => {

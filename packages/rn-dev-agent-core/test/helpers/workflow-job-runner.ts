@@ -1,7 +1,13 @@
 // Executes the `run:` steps of a GitHub Actions job the way the runner does —
-// one `bash -e -o pipefail` process per step, job env merged under step env,
-// and no further steps once one fails — so workflow tests can assert observed
-// behaviour (git refs, files, recorded CLI calls) instead of shell source text.
+// one shell process per step, job env merged under step env, and no further
+// steps once one fails — so workflow tests can assert observed behaviour (git
+// refs, files, recorded CLI calls) instead of shell source text.
+//
+// The shell matches the runner exactly and is deliberately NOT made stricter: a
+// step with no `shell:` key gets `bash -e`, which does not set pipefail, so a
+// step whose correctness depends on a pipeline failing must say `set -o pipefail`
+// itself — and one that forgot to is caught here instead of masked. `shell: bash`
+// gets `bash --noprofile --norc -eo pipefail`, as GitHub documents.
 import { spawnSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -18,11 +24,20 @@ export type WorkflowStep = {
   env?: Record<string, string>;
   with?: Record<string, string>;
   'working-directory'?: string;
+  shell?: string;
 };
 
 // Everything the harness reproduces. A `run:` step carrying anything else is
 // refused rather than executed with that field silently dropped.
-const MODELLED_STEP_KEYS = new Set(['name', 'id', 'run', 'if', 'env', 'working-directory']);
+const MODELLED_STEP_KEYS = new Set([
+  'name',
+  'id',
+  'run',
+  'if',
+  'env',
+  'working-directory',
+  'shell',
+]);
 export type WorkflowJob = {
   if?: string;
   needs?: string | string[];
@@ -100,22 +115,25 @@ export function runJobSteps({ workflow, jobId, cwd, ctx, env, only }: RunJobOpti
     const outputPath = join(scriptDir, `${index++}.outputs`);
     writeFileSync(scriptPath, resolveExpressions(step.run, live));
     writeFileSync(outputPath, '');
-    const result = spawnSync(
-      'bash',
-      ['--noprofile', '--norc', '-e', '-o', 'pipefail', scriptPath],
-      {
-        cwd: step['working-directory'] ? join(cwd, step['working-directory']) : cwd,
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          ...env,
-          ...jobEnv,
-          ...resolveEnv(step.env, live),
-          GITHUB_WORKSPACE: cwd,
-          GITHUB_OUTPUT: outputPath,
-        },
+    if (step.shell !== undefined && step.shell !== 'bash') {
+      throw new Error(`step "${name}" uses a shell the harness does not model: ${step.shell}`);
+    }
+    const shellArgs =
+      step.shell === 'bash'
+        ? ['--noprofile', '--norc', '-e', '-o', 'pipefail', scriptPath]
+        : ['-e', scriptPath];
+    const result = spawnSync('bash', shellArgs, {
+      cwd: step['working-directory'] ? join(cwd, step['working-directory']) : cwd,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        ...env,
+        ...jobEnv,
+        ...resolveEnv(step.env, live),
+        GITHUB_WORKSPACE: cwd,
+        GITHUB_OUTPUT: outputPath,
       },
-    );
+    });
     const emitted = Object.fromEntries(
       readFileSync(outputPath, 'utf8')
         .split('\n')
@@ -147,17 +165,13 @@ export function runJobSteps({ workflow, jobId, cwd, ctx, env, only }: RunJobOpti
 // quoting and `${X}` / `$X` spelling collapsed so assertions describe the command
 // that runs rather than how it happens to be written.
 export function shellCommands(script: string): string[][] {
-  return script
-    .replace(/\\\n\s*/g, ' ')
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line !== '' && !line.startsWith('#'))
-    .flatMap((line) => line.split(/\s*(?:\|\||&&|;)\s*/))
+  return executableLines(script)
+    .flatMap((line) => splitCommands(line))
     .map((command) => {
       const tokens = command
         .trim()
         .split(/\s+/)
-        .map((token) => token.replace(/["']/g, '').replace(/\$\{(\w+)\}/g, '$$$1'))
+        .map((token) => token.replace(/["']/g, ''))
         .filter(Boolean);
       // Nothing a command can be prefixed with may hide it: `if ! git push …`
       // and `env FOO=1 git push …` have to normalise to the same tokens as a
@@ -174,6 +188,25 @@ export function shellCommands(script: string): string[][] {
     .filter((tokens) => tokens.length > 0);
 }
 
+// Every construct that starts a NEW command, so a nested one always begins its
+// own token array: substitutions and pipelines are separators, not text. Without
+// this, `out=$(git push …)` reads as an assignment followed by `push` and the
+// command inside it is invisible to anything inspecting the result.
+const COMMAND_SEPARATORS = /\s*(?:\|\||&&|;;|;|\$\(|`|\||&|\))\s*/;
+
+export function executableLines(script: string): string[] {
+  return script
+    .replace(/\\\n\s*/g, ' ')
+    .replace(/\$\{(\w+)\}/g, '$$$1')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line !== '' && !line.startsWith('#'));
+}
+
+function splitCommands(line: string): string[] {
+  return line.split(COMMAND_SEPARATORS);
+}
+
 const SHELL_KEYWORDS = new Set([
   'if',
   'then',
@@ -188,6 +221,7 @@ const SHELL_KEYWORDS = new Set([
   'env',
   'exec',
   'nohup',
+  'eval',
   '!',
   '{',
   '(',
@@ -211,6 +245,8 @@ export type GhPullRequest = {
   state: string;
   autoMerge: string | null;
   closeComment: string | null;
+  headSeenAlive?: boolean;
+  closedByBranchDelete?: boolean;
 };
 export type GhState = {
   releases: Record<string, { assets: Record<string, { uploads: number }> }>;

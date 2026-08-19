@@ -34,7 +34,9 @@ const injected = (process.env.GH_STUB_FAIL ?? '')
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean);
-if (injected.includes(command)) die(`gh stub: injected failure for \`gh ${command}\``);
+if (injected.some((f) => command.startsWith(f))) {
+  die(`gh stub: injected failure for \`gh ${command}\``);
+}
 
 function die(message) {
   process.stderr.write(`${message}\n`);
@@ -87,7 +89,41 @@ function assetPath(tag, name) {
 }
 
 const state = readState();
+reconcileDeletedBranches();
 const [group, sub] = argv;
+
+// GitHub closes a pull request the moment its head branch is deleted, and
+// re-pushing the same branch name does not reopen it. The stub never sees the
+// `git push --delete`, so every invocation reconciles same-repository PRs whose
+// branch it has previously observed alive — which is what makes the discard path
+// take `gh pr create` here exactly as it does in production. A PR whose branch
+// the fixture never created is left alone, so a sweep over seeded PRs still sees
+// them.
+function reconcileDeletedBranches() {
+  const gitDir = process.env.GH_STUB_GIT_DIR;
+  if (!gitDir) return;
+  let changed = false;
+  for (const pr of state.prs) {
+    if (pr.state !== 'OPEN' || (pr.headRepo ?? null) !== null) continue;
+    const alive =
+      spawnSync(
+        'git',
+        ['--git-dir', gitDir, 'show-ref', '--verify', '--quiet', `refs/heads/${pr.headRefName}`],
+        { encoding: 'utf8' },
+      ).status === 0;
+    if (alive) {
+      if (!pr.headSeenAlive) {
+        pr.headSeenAlive = true;
+        changed = true;
+      }
+    } else if (pr.headSeenAlive) {
+      pr.state = 'CLOSED';
+      pr.closedByBranchDelete = true;
+      changed = true;
+    }
+  }
+  if (changed) writeState(state);
+}
 
 if (group === 'release' && sub === 'view') {
   const tag = positional[2];
@@ -184,34 +220,6 @@ if (group === 'release' && sub === 'view') {
   }
 } else if (group === 'pr' && sub === 'list') {
   const head = flag('--head');
-  // Deleting a head branch closes its pull request. The stub never sees the
-  // `git push --delete`, so the branch this lookup asks about is reconciled
-  // against the fixture repository here (only that one, so a sweep over PRs
-  // whose branches the fixture never created keeps seeing them).
-  if (head && process.env.GH_STUB_GIT_DIR) {
-    const alive = spawnSync(
-      'git',
-      [
-        '--git-dir',
-        process.env.GH_STUB_GIT_DIR,
-        'show-ref',
-        '--verify',
-        '--quiet',
-        `refs/heads/${head}`,
-      ],
-      { encoding: 'utf8' },
-    );
-    if (alive.status !== 0) {
-      let changed = false;
-      for (const pr of state.prs) {
-        if (pr.headRefName === head && pr.state === 'OPEN' && (pr.headRepo ?? null) === null) {
-          pr.state = 'CLOSED';
-          changed = true;
-        }
-      }
-      if (changed) writeState(state);
-    }
-  }
   const base = flag('--base');
   const wantState = (flag('--state') ?? 'open').toUpperCase();
   const blind = head && process.env.GH_STUB_LIST_HEAD_BLIND === '1';
@@ -238,6 +246,8 @@ if (group === 'release' && sub === 'view') {
     state: 'OPEN',
     autoMerge: null,
     closeComment: null,
+    headSeenAlive: true,
+    closedByBranchDelete: false,
   });
   writeState(state);
   process.stdout.write(

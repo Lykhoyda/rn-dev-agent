@@ -129,12 +129,14 @@ feature branch cannot smuggle unrelated commits into the auto-merging
 manifest PR. `chore/runner-manifest-v<version>` is workflow-owned: a
 rerun keeps its head — and the approval bound to that SHA — while the
 branch still delivers nothing but the trust root, i.e. while comparing it
-against `main` names none of its own paths. That holds however many
-commits the workflow has made on the branch, and `main` advancing
-underneath an open manifest PR does not disturb it. A branch carrying
-anything else is deleted and cut again from `main` (which closes its PR,
-so the replacement starts from a clean base) rather than carried into the
-PR a maintainer approves.
+against `main` names no path outside `runner-manifest.json` and its two
+host-plugin copies (those three are expected to appear; they are what the
+PR delivers). That holds however many commits the workflow has made on
+the branch, and `main` advancing underneath an open manifest PR does not
+disturb it. A branch carrying anything else is deleted and cut again from
+`main` — which closes its PR, so the replacement starts from a clean base
+and gets a new PR — rather than carried into the PR a maintainer
+approves.
 
 The `force_version` input re-publishes the *current* plugin
 version (skipping the missing-assets check); it will not accept a
