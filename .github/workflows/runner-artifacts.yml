@@ -236,7 +236,7 @@ jobs:
             exit 1
           fi
       - id: branch
-        name: Reuse or rebuild the version-keyed manifest branch
+        name: Reuse or recreate the version-keyed manifest branch
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
@@ -258,35 +258,45 @@ jobs:
               exit 1
               ;;
           esac
-          echo "existed=$existed" >> "$GITHUB_OUTPUT"
           MAIN=$(git rev-parse HEAD)
-          if [ "$existed" != true ]; then
-            git checkout -B "$BRANCH" "$MAIN"
-            exit 0
-          fi
           # The branch is workflow-owned. Its head is kept — and with it the
           # maintainer's "Approve and run", which is bound to that exact SHA —
           # while what the PR would DELIVER is still nothing but the trust root:
           # the comparison against the merge base must name no other path. That is
           # the invariant that matters, and it does not depend on how many commits
           # this workflow has already made on the branch, nor on main advancing
-          # underneath it. Anything else — a commit someone else pushed onto this
-          # unprotected branch — is rebuilt away from main instead of riding into
-          # the auto-merging PR, the same hazard `ref: main` closes above.
-          if ! gh api "repos/{owner}/{repo}/compare/main...$BRANCH" > compare.json; then
-            echo "::error::could not compare $BRANCH against main" >&2
-            exit 1
+          # underneath it.
+          #
+          # Anything else — a commit someone else pushed onto this unprotected
+          # branch — must not ride into the auto-merging PR, the same hazard
+          # `ref: main` closes above. Such a branch is DISCARDED and cut again
+          # from current main rather than corrected in place: the comparison is
+          # against the merge base, which a correcting commit cannot move, so
+          # patching the tree would leave every later run reporting main's own
+          # files as foreign and rewriting the PR head on every merge to main.
+          # Deleting the branch also closes its PR, so the replacement starts
+          # from a clean base. It is a workflow-owned branch, never main.
+          if [ "$existed" = true ]; then
+            if ! gh api "repos/{owner}/{repo}/compare/main...$BRANCH" > compare.json; then
+              echo "::error::could not compare $BRANCH against main" >&2
+              exit 1
+            fi
+            FOREIGN=$(jq -r --argjson allow '["runner-manifest.json","packages/codex-plugin/runner-manifest.json","packages/claude-plugin/runner-manifest.json"]' \
+              '[.files[].filename] - $allow | join(" ")' compare.json)
           fi
-          FOREIGN=$(jq -r --argjson allow '["runner-manifest.json","packages/codex-plugin/runner-manifest.json","packages/claude-plugin/runner-manifest.json"]' \
-            '[.files[].filename] - $allow | join(" ")' compare.json)
-          git fetch --depth=1 origin "$BRANCH"
-          git checkout -B "$BRANCH" FETCH_HEAD
-          if [ -z "$FOREIGN" ]; then
+          if [ "$existed" = true ] && [ -z "$FOREIGN" ]; then
             echo "reusing $BRANCH: it delivers the trust root and nothing else"
+            git fetch --depth=1 origin "$BRANCH"
+            git checkout -B "$BRANCH" FETCH_HEAD
           else
-            echo "::warning::rebuilding $BRANCH from main (unexpected paths: $FOREIGN)"
-            git read-tree -u --reset "$MAIN"
+            if [ "$existed" = true ]; then
+              echo "::warning::discarding $BRANCH and cutting it again from main (unexpected paths: $FOREIGN)"
+              git push origin --delete "$BRANCH"
+              existed=false
+            fi
+            git checkout -B "$BRANCH" "$MAIN"
           fi
+          echo "existed=$existed" >> "$GITHUB_OUTPUT"
       - name: Generate the manifest (sha256 + bytes)
         run: |
           node scripts/build-runner-manifest.mts \

@@ -159,16 +159,39 @@ export function shellCommands(script: string): string[][] {
         .split(/\s+/)
         .map((token) => token.replace(/["']/g, '').replace(/\$\{(\w+)\}/g, '$$$1'))
         .filter(Boolean);
-      // A leading shell keyword must not hide the command it introduces: `then
-      // git push …` has to normalise to the same tokens as a bare `git push …`,
-      // or a caller inspecting commands is blind to the construct it sits in.
-      while (tokens.length > 0 && SHELL_KEYWORDS.has(tokens[0])) tokens.shift();
+      // Nothing a command can be prefixed with may hide it: `if ! git push …`
+      // and `env FOO=1 git push …` have to normalise to the same tokens as a
+      // bare `git push …`, or a caller inspecting commands is blind to the
+      // construct it sits in.
+      while (
+        tokens.length > 0 &&
+        (SHELL_KEYWORDS.has(tokens[0]) || /^[A-Za-z_]\w*=/.test(tokens[0]))
+      ) {
+        tokens.shift();
+      }
       return tokens;
     })
     .filter((tokens) => tokens.length > 0);
 }
 
-const SHELL_KEYWORDS = new Set(['then', 'else', 'elif', 'do', 'in', '!', '{', '(']);
+const SHELL_KEYWORDS = new Set([
+  'if',
+  'then',
+  'else',
+  'elif',
+  'while',
+  'until',
+  'do',
+  'in',
+  'time',
+  'command',
+  'env',
+  'exec',
+  'nohup',
+  '!',
+  '{',
+  '(',
+]);
 
 export type GhStub = {
   bin: string;

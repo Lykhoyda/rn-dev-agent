@@ -184,6 +184,34 @@ if (group === 'release' && sub === 'view') {
   }
 } else if (group === 'pr' && sub === 'list') {
   const head = flag('--head');
+  // Deleting a head branch closes its pull request. The stub never sees the
+  // `git push --delete`, so the branch this lookup asks about is reconciled
+  // against the fixture repository here (only that one, so a sweep over PRs
+  // whose branches the fixture never created keeps seeing them).
+  if (head && process.env.GH_STUB_GIT_DIR) {
+    const alive = spawnSync(
+      'git',
+      [
+        '--git-dir',
+        process.env.GH_STUB_GIT_DIR,
+        'show-ref',
+        '--verify',
+        '--quiet',
+        `refs/heads/${head}`,
+      ],
+      { encoding: 'utf8' },
+    );
+    if (alive.status !== 0) {
+      let changed = false;
+      for (const pr of state.prs) {
+        if (pr.headRefName === head && pr.state === 'OPEN' && (pr.headRepo ?? null) === null) {
+          pr.state = 'CLOSED';
+          changed = true;
+        }
+      }
+      if (changed) writeState(state);
+    }
+  }
   const base = flag('--base');
   const wantState = (flag('--state') ?? 'open').toUpperCase();
   const blind = head && process.env.GH_STUB_LIST_HEAD_BLIND === '1';
