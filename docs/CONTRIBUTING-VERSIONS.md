@@ -94,6 +94,44 @@ publish — manual publish from the core workspace):
 corepack yarn release-core
 ```
 
+## The runner trust root after a release
+
+`runner-manifest.json` (mirrored into both host plugin packages) is the
+client's offline SHA-256 trust root for the prebuilt runner zips. Clients
+use a prebuilt runner only when `manifest.version` equals the installed
+plugin version, so a manifest left behind by a release silently downgrades
+every install to the slow local build.
+
+`.github/workflows/runner-artifacts.yml` keeps it current. It checks two
+things independently — whether release `v<version>` carries both runner
+zips, and whether the in-repo manifest matches the manifest published for
+that same version — and re-runs every 6 hours, so a manifest that has not
+landed yet is re-detected and re-delivered rather than silently skipped.
+
+The manifest reaches `main` the same way everything else does: a
+`chore/runner-manifest-v<version>` branch, a pull request, the required
+`Build & Test` check, and auto-merge. It is never pushed to `main`
+directly and never carries `[skip ci]` — a commit that skips CI can never
+produce the required check, which is what stranded the trust root at
+v0.75.2 while releases shipped through v0.76.7.
+
+**Maintainer step after each release:** the manifest PR is opened by the
+workflow with `GITHUB_TOKEN`, so its CI run parks at *action_required*.
+Open the PR and click **Approve and run**; auto-merge lands it as soon as
+`Build & Test` is green. Until it lands, installs keep working on the
+local-build fallback. Reruns are safe — the branch name is derived from
+the version, an already-open PR is reused, release uploads clobber, and a
+manifest PR left over from an earlier version is closed as superseded so
+two of them can never land in either order.
+
+Every job checks out `main`, so a `workflow_dispatch` started from a
+feature branch cannot smuggle unrelated commits into the auto-merging
+manifest PR. The `force_version` input re-publishes the *current* plugin
+version (skipping the missing-assets check); it will not accept a
+historical one, because the runners are built from current source and a
+backfill would both misattribute the binaries and downgrade the trust
+root below what installed clients can use.
+
 ## What if I forget a changeset?
 
 You can add one after the fact:

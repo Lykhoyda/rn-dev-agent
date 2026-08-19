@@ -3,44 +3,65 @@ name: Runner artifacts
 # GH #382 (Story 01): publish prebuilt runner artifacts so the first
 # device_snapshot action=open never pays the multi-minute cold build.
 #
-# The gate is STATE-based, not event-based: any trigger (push, schedule,
-# dispatch) checks whether the GitHub Release for the CURRENT plugin.json
-# version already carries both runner zips + runner-manifest.json, and builds
-# only what's missing. This is what makes the pipeline self-healing:
-#   - release.yml merges the Version Packages PR as github-actions with
-#     GITHUB_TOKEN, and GitHub's recursion guard suppresses workflow triggers
-#     for GITHUB_TOKEN-initiated pushes (B258) — so a push-only gate NEVER
-#     fires on the normal automated release path. The scheduled sweep catches
-#     those releases within a few hours.
-#   - A partially failed run (one runner built, the other died) is healed the
-#     same way: assets incomplete -> rebuild both, uploads use --clobber.
-# Successful zips attach to Release v<version>; runner-manifest.json (the
-# client's offline SHA-256 trust root — see packages/rn-dev-agent-core/src/runners/
-# runner-artifacts.ts) is committed to main. Until this succeeds for a released
-# version, clients resolve to the local build (provenance 'local') — degraded,
-# not broken.
+# The gate is STATE-based, not event-based, and publication state has TWO
+# halves that are checked independently (scripts/runner-manifest-publication.mts):
+#   1. the GitHub Release for the CURRENT plugin.json version carries both
+#      runner zips, and
+#   2. the in-repository runner-manifest.json — the client's offline SHA-256
+#      trust root (packages/rn-dev-agent-core/src/runners/runner-artifacts.ts) —
+#      matches the manifest published for that same version.
+# Keying only on (1) is what let the manifest rot: the manifest asset uploads
+# BEFORE the repository update, so a failed update left the release looking
+# complete and every later run reported success while runner-manifest.json
+# stayed pinned to v0.75.2 through v0.76.7. Checking (2) makes the sweep
+# genuinely self-healing: a manifest that never landed is re-detected and
+# re-delivered on the next run.
+#
+# The trust root reaches main through the SAME protected-branch path releases
+# use — a branch, a pull request, required checks, a gated merge. It is never
+# pushed to main directly and never carries [skip ci]: main requires the
+# "Build & Test" status check, and a commit that skips CI can never produce it.
+#
+# Reruns are idempotent by construction: release uploads use --clobber, the
+# manifest branch name is derived from the version alone, an already-open PR for
+# that branch is reused rather than duplicated, and a manifest PR left over from
+# an earlier version is closed so two of them can never land in either order.
+#
+# Every job checks out main and publishes only the CURRENT plugin.json version.
+# force_version re-publishes that version (skipping the missing-assets check); it
+# cannot name a historical one, because the runners are built from current source
+# and a backfill would both misattribute the binaries and downgrade the trust root.
+#
+# Until the manifest PR lands for a released version, clients resolve to the
+# local build (provenance 'local') — degraded, not broken.
 #
 # PREREQUISITES (repo settings, cannot be set from this file):
 #   - Settings > Actions > General > Workflow permissions: "Read and write"
-#     (needed to create the release and push the manifest commit).
-#   - If branch protection blocks the Actions bot from pushing to main, the
-#     manifest commit step must be routed through a PR instead (see comment).
+#     and "Allow GitHub Actions to create and approve pull requests".
+#   - Settings > General > "Allow auto-merge".
+#   - A maintainer must approve the manifest PR's queued CI run ("Approve and
+#     run"): a workflow-opened PR authenticated with GITHUB_TOKEN parks its
+#     pull_request run at action_required, so "Build & Test" does not register
+#     on its own. Auto-merge lands the PR as soon as that check goes green.
 
 on:
   push:
     branches: [main]
   schedule:
     # Sweep for releases the push trigger can't see (GITHUB_TOKEN bot merges,
-    # B258) and for partially-failed builds. Off-hour minute to dodge load.
+    # B258), for partially-failed builds, and for a manifest PR that has not
+    # landed yet. Off-hour minute to dodge load.
     - cron: '23 */6 * * *'
   workflow_dispatch:
     inputs:
       force_version:
-        description: Build+publish artifacts for this exact version (skips the missing-assets check)
+        description: Re-publish artifacts for the CURRENT plugin version, skipping the missing-assets check
         required: false
         default: ''
 
-concurrency: runner-artifacts-${{ github.ref }}
+# One repository-wide group: publication targets a single release and a single
+# manifest branch, so runs from different refs must never overlap.
+concurrency: runner-artifacts
 
 # Minimal, explicit permissions (CodeQL actions/missing-workflow-permissions).
 permissions:
@@ -52,34 +73,44 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.v.outputs.version }}
-      changed: ${{ steps.v.outputs.changed }}
+      build: ${{ steps.v.outputs.build }}
+      publish: ${{ steps.v.outputs.publish }}
+      branch: ${{ steps.v.outputs.branch }}
     steps:
+      # Always main: workflow_dispatch can be started from any ref, and a manifest
+      # branch cut from a feature branch would carry unrelated commits into an
+      # auto-merging PR.
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 — SHA pin
+        with:
+          ref: main
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0 — SHA pin
+        with:
+          node-version: 22
       - id: v
-        name: Check whether release v<version> already has all artifacts
+        name: Decide what this run must build and publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           FORCE_VERSION: ${{ github.event.inputs.force_version }}
         run: |
+          # Publication always targets the current plugin version; force_version
+          # only skips the missing-assets check, and the decision script rejects
+          # it outright if it names anything else.
           CUR=$(jq -r '.version' packages/claude-plugin/plugin.json)
-          if [ -n "$FORCE_VERSION" ]; then
-            echo "version=$FORCE_VERSION" >> "$GITHUB_OUTPUT"
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            exit 0
+          gh release view "v$CUR" --json assets -q '.assets[].name' > release-assets.txt 2>/dev/null \
+            || : > release-assets.txt
+          rm -f published-manifest.json
+          if grep -qxF 'runner-manifest.json' release-assets.txt; then
+            gh release download "v$CUR" --pattern runner-manifest.json --output published-manifest.json \
+              || rm -f published-manifest.json
           fi
-          echo "version=$CUR" >> "$GITHUB_OUTPUT"
-          ASSETS=$(gh release view "v$CUR" --json assets -q '.assets[].name' 2>/dev/null || true)
-          if echo "$ASSETS" | grep -qxF "rn-fast-runner-$CUR-sim.zip" \
-            && echo "$ASSETS" | grep -qxF "rn-android-runner-$CUR.zip" \
-            && echo "$ASSETS" | grep -qxF "runner-manifest.json"; then
-            echo "release v$CUR is complete — nothing to build"
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "release v$CUR missing or incomplete — building"
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          fi
+          node scripts/runner-manifest-publication.mts \
+            --plugin-version "$CUR" \
+            --force-version "$FORCE_VERSION" \
+            --release-assets release-assets.txt \
+            --repo-manifest runner-manifest.json \
+            --published-manifest published-manifest.json
       - name: Create the release for this version (idempotent)
-        if: steps.v.outputs.changed == 'true'
+        if: steps.v.outputs.build == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.v.outputs.version }}
@@ -93,13 +124,18 @@ jobs:
   build-ios:
     name: Build rn-fast-runner (iOS)
     needs: detect
-    if: needs.detect.outputs.changed == 'true'
+    if: needs.detect.outputs.build == 'true'
     # macos-15 ships Xcode 16.x — required since RnFastRunner.xcodeproj moved to
     # project format 77 (Xcode 15.4 on macos-14 refuses to open it). Same runner
     # choice as native-tests.yml and codeql.yml, which build this project green.
     runs-on: macos-15
     steps:
+      # Always main: workflow_dispatch can be started from any ref, and a manifest
+      # branch cut from a feature branch would carry unrelated commits into an
+      # auto-merging PR.
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 — SHA pin
+        with:
+          ref: main
       - name: build-for-testing (no code signing, both arches)
         run: |
           xcodebuild build-for-testing \
@@ -124,10 +160,15 @@ jobs:
   build-android:
     name: Build rn-android-runner (Android)
     needs: detect
-    if: needs.detect.outputs.changed == 'true'
+    if: needs.detect.outputs.build == 'true'
     runs-on: ubuntu-latest
     steps:
+      # Always main: workflow_dispatch can be started from any ref, and a manifest
+      # branch cut from a feature branch would carry unrelated commits into an
+      # auto-merging PR.
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 — SHA pin
+        with:
+          ref: main
       # Ubuntu runners ship a JDK (JAVA_HOME set) and the Android SDK
       # ($ANDROID_HOME). If a future AGP needs a newer JDK, add actions/setup-java.
       - name: assembleDebug + assembleDebugAndroidTest
@@ -148,26 +189,65 @@ jobs:
         run: gh release upload "v$VERSION" "rn-android-runner-$VERSION.zip" --clobber
 
   publish-manifest:
-    name: Generate + commit runner-manifest.json
+    name: Publish runner-manifest.json through a protected-branch PR
     needs: [detect, build-ios, build-android]
-    if: needs.detect.outputs.changed == 'true'
+    # Runs whenever the trust root is stale — including when both builds were
+    # skipped because the release already carries its zips, which is exactly the
+    # self-heal case for a manifest update that failed on an earlier run.
+    if: >-
+      ${{ !cancelled()
+      && needs.detect.outputs.publish == 'true'
+      && contains(fromJSON('["success","skipped"]'), needs.build-ios.result)
+      && contains(fromJSON('["success","skipped"]'), needs.build-android.result) }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      VERSION: ${{ needs.detect.outputs.version }}
+      BRANCH: ${{ needs.detect.outputs.branch }}
     steps:
+      # Always main: workflow_dispatch can be started from any ref, and a manifest
+      # branch cut from a feature branch would carry unrelated commits into an
+      # auto-merging PR.
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 — SHA pin
+        with:
+          ref: main
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0 — SHA pin
         with:
           node-version: 22
       - name: Download both runner zips from the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ needs.detect.outputs.version }}
         run: |
           gh release download "v$VERSION" \
             --pattern "rn-fast-runner-$VERSION-sim.zip" \
-            --pattern "rn-android-runner-$VERSION.zip"
+            --pattern "rn-android-runner-$VERSION.zip" \
+            --clobber
+      - name: Refuse to deliver a trust root the installed plugin cannot use
+        run: |
+          # Defence in depth behind the same rule in the decision script: the
+          # in-repo manifest is only ever allowed to track plugin.json, because a
+          # client uses a prebuilt runner only when manifest.version equals the
+          # installed plugin version.
+          PLUGIN=$(jq -r '.version' packages/claude-plugin/plugin.json)
+          if [ "$VERSION" != "$PLUGIN" ]; then
+            echo "::error::refusing to publish a v$VERSION trust root while plugin.json is v$PLUGIN" >&2
+            exit 1
+          fi
+      - name: Check out the version-keyed manifest branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # One deterministic branch per version, so a rerun updates the same
+          # branch (and reuses its PR) instead of fanning out duplicates.
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            git fetch --depth=1 origin "$BRANCH"
+            git checkout -B "$BRANCH" FETCH_HEAD
+          else
+            git checkout -B "$BRANCH"
+          fi
       - name: Generate the manifest (sha256 + bytes)
-        env:
-          VERSION: ${{ needs.detect.outputs.version }}
         run: |
           node scripts/build-runner-manifest.mts \
             --version "$VERSION" \
@@ -180,18 +260,60 @@ jobs:
       - name: Attach the manifest to the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ needs.detect.outputs.version }}
         run: gh release upload "v$VERSION" runner-manifest.json --clobber
-      - name: Commit the manifest to main (client's offline trust root)
-        env:
-          VERSION: ${{ needs.detect.outputs.version }}
+      - name: Commit the manifest to the branch
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
           git add runner-manifest.json packages/codex-plugin/runner-manifest.json packages/claude-plugin/runner-manifest.json
-          # [skip ci] keeps CI off a manifest-only commit; even on a scheduled
-          # sweep the release is complete by now (detect -> changed=false).
-          git commit -m "chore(release): runner-manifest for v$VERSION [skip ci]" \
-            || { echo "manifest unchanged"; exit 0; }
-          # If branch protection rejects this push, route it through a PR instead.
-          git push origin HEAD:main
+          # No [skip ci]: main requires the "Build & Test" check, and a commit
+          # that skips CI can never produce it.
+          if git diff --cached --quiet; then
+            echo "manifest already current on $BRANCH — nothing to commit"
+          else
+            git commit -m "chore(release): runner-manifest for v$VERSION"
+            git push origin "$BRANCH"
+          fi
+      - name: Open or reuse the manifest PR and arm auto-merge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if ! git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            echo "the repository trust root already carries v$VERSION — no PR needed"
+            exit 0
+          fi
+          PR=$(gh pr list --head "$BRANCH" --base main --state open --json number --jq '.[0].number // empty')
+          if [ -z "$PR" ]; then
+            gh pr create --base main --head "$BRANCH" \
+              --title "chore(release): runner-manifest for v$VERSION" \
+              --body "Refreshes the in-repository runner trust root (\`runner-manifest.json\` and its two host-plugin copies) to the SHA-256 digests published on release v$VERSION. Generated by .github/workflows/runner-artifacts.yml; merges automatically once \"Build & Test\" is approved and green."
+            PR=$(gh pr list --head "$BRANCH" --base main --state open --json number --jq '.[0].number // empty')
+          fi
+          if [ -z "$PR" ]; then
+            echo "::error::could not open or find the manifest PR for v$VERSION" >&2
+            exit 1
+          fi
+          # A manifest PR left open from an earlier version would race this one:
+          # it may already have auto-merge armed and land AFTER it, restoring a
+          # stale trust root. Exactly one may be open, so closing them is fatal,
+          # not best-effort, and it happens before this PR is armed. The branch
+          # comparison is done in shell, never in --jq, so a filter that mismatches
+          # can never close the PR we just opened. --limit outruns the 30 default.
+          STALE=$(gh pr list --state open --limit 100 --json number,headRefName \
+            --jq '.[] | select(.headRefName | startswith("chore/runner-manifest-v")) | "\(.number) \(.headRefName)"')
+          while read -r stale ref; do
+            { [ -n "$stale" ] && [ "$ref" != "$BRANCH" ]; } || continue
+            echo "closing superseded manifest PR #$stale ($ref)"
+            gh pr close "$stale" --comment "Superseded by the runner-manifest PR for v$VERSION."
+            git push origin --delete "$ref" || echo "::warning::could not delete $ref"
+          done <<< "$STALE"
+          # Auto-merge respects branch protection: the PR lands only after the
+          # required check passes. Failure to ARM it is an operator-visible
+          # misconfiguration, so it fails the job rather than leaving the trust
+          # root silently stale.
+          if ! out=$(gh pr merge --squash --auto "$PR" 2>&1); then
+            echo "$out" >&2
+            echo "::error::could not arm auto-merge on PR #$PR — v$VERSION stays undelivered until it lands" >&2
+            exit 1
+          fi
+          echo "$out"
+          echo "::warning::runner-manifest v$VERSION is delivered by PR #$PR; approve its queued CI run so \"Build & Test\" can register and auto-merge can land it"
