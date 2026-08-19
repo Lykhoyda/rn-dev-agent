@@ -323,8 +323,20 @@ function createFixture(options: FixtureOptions = {}): Fixture {
     },
     prs: options.prs,
     nextPr: 11,
+    gitDir: origin,
   });
   return { root, origin, gh, cleanup: () => rmSync(root, { force: true, recursive: true }) };
+}
+
+let advanceCounter = 0;
+
+function advanceMain(fixture: Fixture, path: string, content: string): void {
+  const dir = join(fixture.root, `advance-${advanceCounter++}`);
+  git(fixture.root, 'clone', '--quiet', `file://${fixture.origin}`, dir);
+  write(dir, path, content);
+  git(dir, 'add', '-A');
+  git(dir, 'commit', '--quiet', '-m', 'unrelated work on main');
+  git(dir, 'push', '--quiet', 'origin', 'main');
 }
 
 function checkout(fixture: Fixture, name: string): string {
@@ -427,6 +439,14 @@ function originRef(fixture: Fixture, ref: string): string | null {
     `refs/heads/${ref}`,
   ).trim();
   return out === '' ? null : out;
+}
+
+const BRANCH_STEP = 'Reuse or rebuild the version-keyed manifest branch';
+
+function stepStdout(run: { steps: Array<{ name: string; stdout: string }> }, name: string): string {
+  const step = run.steps.find((s) => s.name === name);
+  assert.ok(step, `the job never ran the step "${name}"`);
+  return step.stdout;
 }
 
 function ghCalls(fixture: Fixture): string[] {
@@ -577,6 +597,76 @@ test('rerunning the publish job converges: no second commit, no second PR', () =
     );
     // Re-uploading the manifest asset must be tolerated, not a hard failure.
     assert.equal(state.releases[TAG].assets['runner-manifest.json'].uploads, 2);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('main advancing while the manifest PR waits leaves its head untouched', () => {
+  // A GITHUB_TOKEN PR's CI parks at action_required per head SHA, so re-pushing
+  // the branch discards the maintainer's "Approve and run". An unrelated commit
+  // on main must therefore not move the head at all.
+  const fixture = createFixture({ releaseAssets: completeRelease() });
+  try {
+    const first = runPublish(fixture, { workdir: checkout(fixture, 'run1') });
+    assert.ok(first.ok, `first run failed at ${first.failed?.name}: ${first.failed?.stderr}`);
+    const head = originRef(fixture, BRANCH);
+    const pr = fixture.gh.state().prs[0].number;
+
+    advanceMain(fixture, 'docs/unrelated.md', 'work that has nothing to do with runners\n');
+    advanceMain(fixture, 'README.md', 'main moved again\n');
+
+    const second = runPublish(fixture, { workdir: checkout(fixture, 'run2') });
+    assert.ok(second.ok, `rerun failed at ${second.failed?.name}: ${second.failed?.stderr}`);
+    assert.match(stepStdout(second, BRANCH_STEP), /reusing/, 'the head must be kept, not rebuilt');
+    assert.equal(second.outputs.commit.pushed, 'false', 'nothing changed — nothing to push');
+    assert.equal(originRef(fixture, BRANCH), head, 'the approved head SHA must survive');
+    assert.deepEqual(
+      fixture.gh.state().prs.map((p) => p.number),
+      [pr],
+      'the same PR must be reused',
+    );
+    assert.equal(fixture.gh.state().prs[0].autoMerge, 'squash');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('a manifest branch carrying more than its own commit is rebuilt, not reused', () => {
+  const fixture = createFixture({ releaseAssets: completeRelease() });
+  try {
+    const first = runPublish(fixture, { workdir: checkout(fixture, 'run1') });
+    assert.ok(first.ok, `first run failed at ${first.failed?.name}: ${first.failed?.stderr}`);
+    const head = originRef(fixture, BRANCH);
+
+    // A second commit on the branch — even one touching only the trust root —
+    // is no longer this workflow's single-commit product.
+    const dir = join(fixture.root, 'tamper');
+    git(fixture.root, 'clone', '--quiet', '--branch', BRANCH, `file://${fixture.origin}`, dir);
+    write(dir, 'runner-manifest.json', manifestFor('9.9.9') + '\n');
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '--quiet', '-m', 'a second commit nobody asked for');
+    git(dir, 'push', '--quiet', 'origin', BRANCH);
+    const tampered = originRef(fixture, BRANCH);
+    assert.notEqual(tampered, head);
+
+    const second = runPublish(fixture, { workdir: checkout(fixture, 'run2') });
+    assert.ok(second.ok, `rerun failed at ${second.failed?.name}: ${second.failed?.stderr}`);
+    // A branch that is no longer one commit ahead of main is not this workflow's
+    // product, so its head is discarded even though the net diff looks harmless.
+    assert.match(stepStdout(second, BRANCH_STEP), /rebuilding/);
+    assert.equal(second.outputs.commit.pushed, 'true', 'the branch must be rebuilt');
+    assert.equal(
+      git(
+        fixture.root,
+        '--git-dir',
+        fixture.origin,
+        'show',
+        `${originRef(fixture, BRANCH)}:runner-manifest.json`,
+      ),
+      currentManifest(),
+      'the trust root must be regenerated, never inherited from the branch',
+    );
   } finally {
     fixture.cleanup();
   }
@@ -790,7 +880,7 @@ test('a failed remote query fails the job instead of reading as "nothing to deli
     const run = runPublish(fixture, { workdir });
 
     assert.equal(run.ok, false, 'a green run here leaves the trust root undelivered');
-    assert.equal(run.failed?.name, 'Rebuild the version-keyed manifest branch from main');
+    assert.equal(run.failed?.name, 'Reuse or rebuild the version-keyed manifest branch');
     assert.match(run.failed?.stderr ?? '', /::error::could not ask origin whether/);
     assert.equal(
       ghCalls(fixture).some((c) => c.startsWith('pr ')),
@@ -980,7 +1070,7 @@ test('every push targets the version-derived manifest branch, never a default-br
     assert.ok(isPermittedPush(tokens), `${jobId} pushes somewhere unexpected: ${tokens.join(' ')}`);
   }
   assert.ok(
-    pushes.some(({ tokens }) => isPermittedPush(tokens)),
+    pushes.some(({ tokens }) => JSON.stringify(tokens) === JSON.stringify(PERMITTED_PUSHES[0])),
     'the manifest branch must be pushed',
   );
 });

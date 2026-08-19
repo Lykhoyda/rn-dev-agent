@@ -182,6 +182,7 @@ export type GhSeed = {
   releases?: Record<string, Record<string, string>>;
   prs?: GhPullRequest[];
   nextPr?: number;
+  gitDir?: string;
 };
 
 export function installGhStub(root: string, seed: GhSeed = {}): GhStub {
@@ -210,7 +211,11 @@ export function installGhStub(root: string, seed: GhSeed = {}): GhStub {
   chmodSync(join(bin, 'gh'), 0o755);
   return {
     bin,
-    env: { PATH: `${bin}:${process.env.PATH}`, GH_STUB_STATE: stateDir },
+    env: {
+      PATH: `${bin}:${process.env.PATH}`,
+      GH_STUB_STATE: stateDir,
+      ...(seed.gitDir ? { GH_STUB_GIT_DIR: seed.gitDir } : {}),
+    },
     calls: () =>
       readFileSync(join(stateDir, 'calls.jsonl'), 'utf8')
         .split('\n')

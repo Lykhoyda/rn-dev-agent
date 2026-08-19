@@ -236,7 +236,10 @@ jobs:
             exit 1
           fi
       - id: branch
-        name: Rebuild the version-keyed manifest branch from main
+        name: Reuse or rebuild the version-keyed manifest branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -256,18 +259,33 @@ jobs:
               ;;
           esac
           echo "existed=$existed" >> "$GITHUB_OUTPUT"
-          # The branch is workflow-owned, so its CONTENT is rebuilt from the
-          # checked-out main tree on every run. An existing head is reused only as
-          # the parent commit, which keeps the push a fast-forward: whatever
-          # anyone else pushed onto the branch is reset to main here and can never
-          # reach the auto-merging PR, the same hazard `ref: main` closes above.
           MAIN=$(git rev-parse HEAD)
-          if [ "$existed" = true ]; then
-            git fetch --depth=1 origin "$BRANCH"
-            git checkout -B "$BRANCH" FETCH_HEAD
-            git read-tree -u --reset "$MAIN"
-          else
+          if [ "$existed" != true ]; then
             git checkout -B "$BRANCH" "$MAIN"
+            exit 0
+          fi
+          # The branch is workflow-owned. Its head is kept — and with it the
+          # maintainer's "Approve and run", which is bound to that exact SHA —
+          # only while GitHub's own comparison still proves the branch is this
+          # workflow's product: one commit ahead of main, touching nothing but the
+          # trust root. Main advancing underneath it changes neither. Anything
+          # else — a commit someone else pushed onto this unprotected branch, a
+          # rewritten history — is rebuilt away from main instead of riding into
+          # the auto-merging PR, the same hazard `ref: main` closes above.
+          if ! gh api "repos/{owner}/{repo}/compare/main...$BRANCH" > compare.json; then
+            echo "::error::could not compare $BRANCH against main" >&2
+            exit 1
+          fi
+          AHEAD=$(jq -r '.ahead_by' compare.json)
+          FOREIGN=$(jq -r --argjson allow '["runner-manifest.json","packages/codex-plugin/runner-manifest.json","packages/claude-plugin/runner-manifest.json"]' \
+            '[.files[].filename] - $allow | join(" ")' compare.json)
+          git fetch --depth=1 origin "$BRANCH"
+          git checkout -B "$BRANCH" FETCH_HEAD
+          if [ "$AHEAD" = 1 ] && [ -z "$FOREIGN" ]; then
+            echo "reusing $BRANCH: one trust-root commit ahead of main"
+          else
+            echo "::warning::rebuilding $BRANCH from main (ahead_by=$AHEAD, unexpected paths: ${FOREIGN:-none})"
+            git read-tree -u --reset "$MAIN"
           fi
       - name: Generate the manifest (sha256 + bytes)
         run: |

@@ -134,23 +134,45 @@ if (group === 'release' && sub === 'view') {
   }
   writeState(state);
 } else if (group === 'api') {
-  // Only the open-pull-request listing this workflow needs, paged the way the
-  // REST API pages: without --paginate a caller sees at most one page.
   const endpoint = (positional[1] ?? '').replace(
     '{owner}/{repo}',
     process.env.GH_REPO ?? 'owner/repo',
   );
   const [path, query] = endpoint.split('?');
-  if (!/^repos\/[^/]+\/[^/]+\/pulls$/.test(path)) {
+  if (/^repos\/[^/]+\/[^/]+\/pulls$/.test(path)) {
+    // Paged the way the REST API pages: without --paginate a caller sees at
+    // most one page.
+    const params = new URLSearchParams(query ?? '');
+    const wantState = (params.get('state') ?? 'open').toUpperCase();
+    const perPage = Number(params.get('per_page') ?? 30);
+    const matching = state.prs.filter((pr) => wantState === 'ALL' || pr.state === wantState);
+    const pages = has('--paginate') ? [matching] : [matching.slice(0, perPage)];
+    for (const page of pages) {
+      emit(page.map((pr) => ({ number: pr.number, head: { ref: pr.headRefName } })));
+    }
+  } else if (/^repos\/[^/]+\/[^/]+\/compare\/.+\.\.\..+$/.test(path)) {
+    // Answered from the fixture's real repository, so ahead_by/behind_by/files
+    // carry the same merge-base semantics the compare endpoint does.
+    const gitDir = process.env.GH_STUB_GIT_DIR;
+    if (!gitDir) die('gh stub: GH_STUB_GIT_DIR is required to answer a compare');
+    const [base, head] = path.slice(path.indexOf('/compare/') + '/compare/'.length).split('...');
+    const git = (...args) => {
+      const result = spawnSync('git', ['--git-dir', gitDir, ...args], { encoding: 'utf8' });
+      if (result.status !== 0) die(`gh stub: git ${args.join(' ')} failed: ${result.stderr}`);
+      return result.stdout.trim();
+    };
+    const mergeBase = git('merge-base', base, head);
+    emit({
+      merge_base_commit: { sha: mergeBase },
+      ahead_by: Number(git('rev-list', '--count', `${mergeBase}..${head}`)),
+      behind_by: Number(git('rev-list', '--count', `${head}..${base}`)),
+      files: git('diff', '--name-only', mergeBase, head)
+        .split('\n')
+        .filter(Boolean)
+        .map((filename) => ({ filename })),
+    });
+  } else {
     die(`gh stub: unsupported api endpoint: ${endpoint}`);
-  }
-  const params = new URLSearchParams(query ?? '');
-  const wantState = (params.get('state') ?? 'open').toUpperCase();
-  const perPage = Number(params.get('per_page') ?? 30);
-  const matching = state.prs.filter((pr) => wantState === 'ALL' || pr.state === wantState);
-  const pages = has('--paginate') ? [matching] : [matching.slice(0, perPage)];
-  for (const page of pages) {
-    emit(page.map((pr) => ({ number: pr.number, head: { ref: pr.headRefName } })));
   }
 } else if (group === 'pr' && sub === 'list') {
   const head = flag('--head');
