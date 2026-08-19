@@ -34,17 +34,20 @@ For plugin-version or Vercel-rule drift, report the documented command but do
 not execute it. Offline version checks do not fail the plugin.
 
 For **session-authority health**, run the packaged read-only probe from the RN app root:
-`node "${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-$CODEX_PLUGIN_ROOT}}/rn-dev-agent-core/dist/session-doctor.js" report --json`. The report is
-three-state: GREEN when `wedged` and `repairable` are both false, YELLOW when `repairable`
-is true (a proven-dead owner of this exact root, which the next transport start or the
-repair command releases on its own), and RED when `wedged` is true. On RED, name the exact
+`node "${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}/rn-dev-agent-core/dist/session-doctor.js" report --json`. The report is
+three-state: GREEN when `sameRootOwner` is `absent` and `wedged` and `repairable` are both
+false, YELLOW when `repairable` is true (a proven-dead owner of this exact root, which the
+next transport start or the repair command releases on its own) or `sameRootOwner` is
+`live` (another session holds this worktree right now — name the live holder instead of
+reporting GREEN; it is never released and clears when that session closes), and RED when
+`wedged` is true. On RED, name the exact
 cause it returns rather than a generic stale-lock story:
 `sameRootOwner: unprovable` (the recorded owner's process identity cannot be read, so it is
 conservatively treated as live), `startupCleanupBlocked` (the owner is proven dead but an
 obligation such as `RUNNER_ADOPTION_REQUIRED` could not be discharged), or `ownerIsThisRoot:
 false` (a proven-dead owner of a different app root or declared source in this worktree). Also
 report `abandonedContenders` when it is non-zero. The supported repair is
-`node "${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-$CODEX_PLUGIN_ROOT}}/rn-dev-agent-core/dist/session-doctor.js" repair`, which runs the
+`node "${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}/rn-dev-agent-core/dist/session-doctor.js" repair`, which runs the
 same proven-dead startup cleanup a fresh transport runs; print it, and only run it after the
 user confirms. It never releases a live or unprovable owner and there is no force-steal —
 do not suggest deleting or moving files in the authority store. Not every stale lock

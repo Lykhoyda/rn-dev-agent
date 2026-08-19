@@ -678,6 +678,24 @@ test('GH #792: the headless remedy command resolves under every host that ships 
     run({ CLAUDE_PLUGIN_ROOT: claude, RN_DEV_AGENT_CODEX_PLUGIN_ROOT: codex }),
     'claude',
   );
+
+  // Read outside any host process — a human copying the remedy out of supervisor stderr —
+  // the command must name what is missing instead of failing on a path that exists nowhere.
+  const bareEnvironment: Record<string, string | undefined> = { ...process.env };
+  for (const key of ['CLAUDE_PLUGIN_ROOT', 'RN_DEV_AGENT_CODEX_PLUGIN_ROOT', 'CODEX_PLUGIN_ROOT']) {
+    delete bareEnvironment[key];
+  }
+  const bare = spawnSync('/bin/sh', ['-c', HEADLESS_SESSION_RECOVERY_COMMAND], {
+    encoding: 'utf8',
+    env: bareEnvironment,
+  });
+  assert.notEqual(bare.status, 0);
+  assert.match(bare.stderr, /CODEX_PLUGIN_ROOT: set it to the installed rn-dev-agent plugin root/);
+  assert.doesNotMatch(
+    bare.stderr,
+    /Cannot find module/,
+    `an unresolved plugin root must not read as a missing file: ${bare.stderr}`,
+  );
 });
 
 test('GH #792: session-doctor refuses a mistyped explicit state home instead of inventing one', () => {

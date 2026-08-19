@@ -65,8 +65,8 @@ An owner that dies ungracefully leaves its claims in the store, and the OS may t
 Two commands drive the same proven-dead cleanup a fresh transport runs. Both work in a headless `claude -p` session, which cannot run `/mcp`:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-$CODEX_PLUGIN_ROOT}}/rn-dev-agent-core/dist/session-doctor.js" report
-node "${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-$CODEX_PLUGIN_ROOT}}/rn-dev-agent-core/dist/session-doctor.js" repair
+node "${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}/rn-dev-agent-core/dist/session-doctor.js" report
+node "${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}/rn-dev-agent-core/dist/session-doctor.js" repair
 ```
 
 `report` is read-only. It prints the authority store path, `sameRootOwner` (`absent`, `live`, `stale`, or `unprovable`), whether that owner belongs to this exact app root, any retained `startupCleanupBlocked` refusal, the number of abandoned blocked contenders, and the remedy for what it found. `report` exits non-zero when it finds the root wedged, so it can gate a script. `repair` releases a proven-dead same-root owner and discards abandoned blocked-contender rows that never held a claim. It never releases a live or unprovable owner and exits non-zero when it finds one; the abandoned claim-less contender rows are still reaped in that case.
