@@ -4,10 +4,10 @@
 import { parseDeclaredManifests } from './session/declared-source-contract.js';
 import { inspectSessionOwner } from './session/process-owner.js';
 import { openSessionRegistry, SessionAuthorityError, } from './session/registry.js';
-import { HEADLESS_SESSION_RECOVERY_COMMAND, sessionOwnerInspectionRemedy, sessionRecoveryRemedy, } from './session/recovery-remedy.js';
+import { HEADLESS_SESSION_RECOVERY_COMMAND, sessionCleanupObligationRemedy, sessionOwnerInspectionRemedy, sessionRecoveryRemedy, } from './session/recovery-remedy.js';
 import { resolveSourceIdentity } from './session/source-identity.js';
 import { runStartupCleanupForSource } from './session/startup-cleanup.js';
-import { createAuthorityStateLayout } from './session/state-root.js';
+import { resolveAuthorityStateLayout } from './session/state-root.js';
 const USAGE = 'usage: session-doctor [report|repair] [--json]\n' +
     '  report  releases nothing: is this source root wedged, and by what\n' +
     '  repair  release a proven-dead same-root owner and reap abandoned contenders\n';
@@ -30,12 +30,17 @@ function remedyFor(ownership) {
     if (ownership.owner === 'stale' && !ownership.sameRoot) {
         return sessionOwnerInspectionRemedy('The proven-dead owner belongs to a different app root or declared source in this worktree, so this root cannot release it.');
     }
+    if (ownership.owner === 'stale' && ownership.startupCleanupBlocked) {
+        const blocked = ownership.startupCleanupBlocked;
+        return sessionCleanupObligationRemedy(`The prior owner is proven dead, but startup cleanup refused with ${blocked.code} and will refuse again until that is resolved: ${blocked.reason}.`);
+    }
     if (ownership.owner === 'stale') {
         return sessionRecoveryRemedy('The prior owner is proven dead and can be released now.');
     }
     return 'No same-root owner holds this worktree; nothing to recover.';
 }
-/** Nothing this root can release by itself: a live or unprovable owner, a retained refusal, or another root's owner. */
+// Nothing this root can release by itself: an unprovable owner, a retained refusal, or
+// another root's owner. A live owner is excluded — it self-heals when that session closes.
 function isWedged(ownership) {
     if (ownership.owner === 'unprovable')
         return true;
@@ -48,7 +53,7 @@ function isRepairable(ownership) {
     return ownership.owner === 'stale' && ownership.sameRoot && !isWedged(ownership);
 }
 function inspect() {
-    const layout = createAuthorityStateLayout(stateDir());
+    const layout = resolveAuthorityStateLayout(stateDir());
     const registry = openSessionRegistry(layout.registry, { ownerStatus: inspectSessionOwner });
     try {
         return { ownership: registry.inspectSourceOwnership(resolveSource()), layout };
@@ -80,7 +85,7 @@ function report() {
 }
 async function repair() {
     const source = resolveSource();
-    const layout = createAuthorityStateLayout(stateDir());
+    const layout = resolveAuthorityStateLayout(stateDir());
     const outcome = await runStartupCleanupForSource({
         source,
         stateDir: stateDir(),
@@ -132,8 +137,14 @@ async function main() {
     process.exitCode = result.ok ? 0 : 1;
 }
 main().catch((error) => {
-    const code = error instanceof SessionAuthorityError ? error.code : 'SESSION_DOCTOR_FAILED';
-    process.stderr.write(`${code}: ${error instanceof Error ? error.message : String(error)}\n` +
-        `Run ${HEADLESS_SESSION_RECOVERY_COMMAND} from the app root that owns this session.\n`);
+    const message = error instanceof Error ? error.message : String(error);
+    const typed = /^([A-Z][A-Z0-9_]+): ([\s\S]*)$/.exec(message);
+    const code = error instanceof SessionAuthorityError ? error.code : (typed?.[1] ?? 'SESSION_DOCTOR_FAILED');
+    const detail = typed !== null && typed[1] === code ? (typed[2] ?? message) : message;
+    // Repairing cannot resolve an unusable state home, so that failure names its own remedy.
+    const remedy = code.startsWith('AUTHORITY_STATE_')
+        ? 'Point RN_DEV_AGENT_STATE_DIR at the authority state home that holds this session, or unset it to use the default.'
+        : `Run ${HEADLESS_SESSION_RECOVERY_COMMAND} from the app root that owns this session.`;
+    process.stderr.write(`${code}: ${detail}\n${remedy}\n`);
     process.exitCode = 1;
 });

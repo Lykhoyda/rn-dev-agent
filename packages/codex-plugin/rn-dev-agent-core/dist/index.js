@@ -25452,11 +25452,14 @@ function sessionRecoveryRemedy(lead) {
 function sessionOwnerInspectionRemedy(lead) {
   return `${lead} Identify the recorded holder with ${HEADLESS_SESSION_REPORT_COMMAND} from the app root, close that process, then run ${HEADLESS_SESSION_RECOVERY_COMMAND}. A live or unprovable owner is never force-released. ${SESSION_RECOVERY_DOCS}.`;
 }
+function sessionCleanupObligationRemedy(lead) {
+  return `${lead} Read the outstanding obligation with ${HEADLESS_SESSION_REPORT_COMMAND} from the app root, clear what it names, then run ${HEADLESS_SESSION_RECOVERY_COMMAND}; interactive clients can reconnect with /mcp instead. Neither releases a live or unprovable owner. ${SESSION_RECOVERY_DOCS}.`;
+}
 var SESSION_DOCTOR, HEADLESS_SESSION_RECOVERY_COMMAND, HEADLESS_SESSION_REPORT_COMMAND, SESSION_RECOVERY_DOCS;
 var init_recovery_remedy = __esm({
   "packages/rn-dev-agent-core/dist/session/recovery-remedy.js"() {
     "use strict";
-    SESSION_DOCTOR = '"${CLAUDE_PLUGIN_ROOT:-$CODEX_PLUGIN_ROOT}/rn-dev-agent-core/dist/session-doctor.js"';
+    SESSION_DOCTOR = '"${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-$CODEX_PLUGIN_ROOT}}/rn-dev-agent-core/dist/session-doctor.js"';
     HEADLESS_SESSION_RECOVERY_COMMAND = `node ${SESSION_DOCTOR} repair`;
     HEADLESS_SESSION_REPORT_COMMAND = `node ${SESSION_DOCTOR} report`;
     SESSION_RECOVERY_DOCS = 'docs: session-authority "Recovering a wedged source root"';
@@ -26040,7 +26043,7 @@ var init_registry = __esm({
                 requirement: "transport-restart",
                 priorOwner: "stale",
                 startupCleanupBlocked: blocked,
-                nextAction: blocked.nextAction ?? sessionOwnerInspectionRemedy(`Startup cleanup refused with ${blocked.code} and will refuse again until that is resolved: ${blocked.reason}.`)
+                nextAction: blocked.nextAction ?? sessionCleanupObligationRemedy(`Startup cleanup refused with ${blocked.code} and will refuse again until that is resolved: ${blocked.reason}.`)
               };
             }
             return {
@@ -59457,6 +59460,32 @@ function createAuthorityStateLayout(stateDir = getStateDir()) {
   }
   return layout;
 }
+function openAuthorityStateLayout(stateDir) {
+  const layout = authorityStateLayout(stateDir);
+  try {
+    const registry2 = lstatSync7(layout.registry);
+    if (registry2.isSymbolicLink() || !registry2.isFile()) {
+      fail("AUTHORITY_STATE_HOME_UNKNOWN", "requested state home has no regular authority registry");
+    }
+  } catch (error2) {
+    if (error2 instanceof Error && error2.message.startsWith("AUTHORITY_STATE_HOME_UNKNOWN")) {
+      throw error2;
+    }
+    if (error2.code === "ENOENT") {
+      fail("AUTHORITY_STATE_HOME_UNKNOWN", "requested state home has no authority registry; refusing to initialize an empty registry");
+    }
+    fail("AUTHORITY_STATE_HOME_UNKNOWN", error2 instanceof Error ? error2.message : "requested authority registry is unavailable");
+  }
+  ensurePrivateDirectory(resolve4(stateDir));
+  ensurePrivateDirectory(layout.root);
+  for (const path of [layout.sessions, layout.runners, layout.observe, layout.migrations]) {
+    ensurePrivateDirectory(path);
+  }
+  return layout;
+}
+function resolveAuthorityStateLayout(requestedStateHome) {
+  return requestedStateHome ? openAuthorityStateLayout(requestedStateHome) : createAuthorityStateLayout();
+}
 function getBoundDirectoryJournalKey(layout = createAuthorityStateLayout()) {
   const path = join29(layout.root, "bound-directory.key");
   const temporary = join29(layout.root, `.bound-directory.${randomUUID6()}.key`);
@@ -69187,7 +69216,7 @@ async function runStartupOwnerCleanup(input, dependencies = {}) {
   };
 }
 async function runStartupCleanupForSource(input) {
-  const layout = createAuthorityStateLayout(input.stateDir);
+  const layout = resolveAuthorityStateLayout(input.stateDir);
   const registry2 = openSessionRegistry(layout.registry, {
     ownerStatus: input.ownerStatus,
     leaseMs: 3e4
@@ -69299,14 +69328,23 @@ var PUBLIC_REFUSAL_REASONS = /* @__PURE__ */ new Set([
     `${resource} cleanup was not durably requested`
   ])
 ]);
-var GENERIC_REFUSAL_REMEDY = sessionOwnerInspectionRemedy("Startup cleanup refused and preserved the prior owner binding; another restart alone does not release it.");
+var OWNER_IDENTITY_REFUSAL_REASONS = /* @__PURE__ */ new Set([
+  "the same-root owner is live; a live owner is never released",
+  "the same-root owner identity could not be proven, so it is treated as live",
+  "expired lease owner identity could not be proven"
+]);
+var OWNER_IDENTITY_REFUSAL_REMEDY = sessionOwnerInspectionRemedy("Startup cleanup refused because the recorded owner is live or its identity could not be proven, and preserved its binding.");
+function unmetObligationRemedy(code) {
+  return sessionCleanupObligationRemedy(`Startup cleanup refused with ${code} and preserved the prior owner binding; another restart alone repeats the same refusal.`);
+}
 function publicRefusal(refusal) {
   const sentence = refusal.message.replace(/^[A-Z][A-Z0-9_]+: /, "");
   const authored = PUBLIC_REFUSAL_REASONS.has(sentence);
+  const fallback = OWNER_IDENTITY_REFUSAL_REASONS.has(sentence) ? OWNER_IDENTITY_REFUSAL_REMEDY : unmetObligationRemedy(refusal.code);
   return {
     code: refusal.code,
     message: authored ? sentence : `startup cleanup refused with ${refusal.code} and preserved the prior owner binding`,
-    nextAction: authored ? refusal.nextAction ?? GENERIC_REFUSAL_REMEDY : GENERIC_REFUSAL_REMEDY
+    nextAction: authored ? refusal.nextAction ?? fallback : fallback
   };
 }
 function refusalOf(error2) {

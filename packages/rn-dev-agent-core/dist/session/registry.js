@@ -4,7 +4,7 @@ import { openAuthorityStore, } from './authority-store.js';
 import { hasCompleteRecorderCleanupIdentity, hasCompleteRunnerCleanupIdentity, } from './cleanup-identity.js';
 import { NON_GIT_DECLARATION_NEXT_ACTION } from './declared-source-contract.js';
 import { probeMetroListener } from './metro-binding.js';
-import { sessionOwnerInspectionRemedy, sessionRecoveryRemedy } from './recovery-remedy.js';
+import { sessionCleanupObligationRemedy, sessionOwnerInspectionRemedy, sessionRecoveryRemedy, } from './recovery-remedy.js';
 const INITIALIZATION_WAIT = new Int32Array(new SharedArrayBuffer(4));
 export const AUTHORITY_REGISTRY_SCHEMA_VERSION = 4;
 function referencesMetroEvidenceSocket(value, path) {
@@ -671,7 +671,7 @@ export class SessionRegistry {
                         priorOwner: 'stale',
                         startupCleanupBlocked: blocked,
                         nextAction: blocked.nextAction ??
-                            sessionOwnerInspectionRemedy(`Startup cleanup refused with ${blocked.code} and will refuse again until that is resolved: ${blocked.reason}.`),
+                            sessionCleanupObligationRemedy(`Startup cleanup refused with ${blocked.code} and will refuse again until that is resolved: ${blocked.reason}.`),
                     };
                 }
                 return {

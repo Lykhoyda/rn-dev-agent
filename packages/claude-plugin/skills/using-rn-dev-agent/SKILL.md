@@ -303,8 +303,8 @@ A `claude -p` run cannot reconnect its own transport, so every remedy also names
 a command it can execute from the app root:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT:-$CODEX_PLUGIN_ROOT}/rn-dev-agent-core/dist/session-doctor.js" report   # read-only
-node "${CLAUDE_PLUGIN_ROOT:-$CODEX_PLUGIN_ROOT}/rn-dev-agent-core/dist/session-doctor.js" repair   # release + reap
+node "${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-$CODEX_PLUGIN_ROOT}}/rn-dev-agent-core/dist/session-doctor.js" report   # read-only
+node "${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-$CODEX_PLUGIN_ROOT}}/rn-dev-agent-core/dist/session-doctor.js" repair   # release + reap
 ```
 
 `report` prints the authority store path, whether this source root is wedged,

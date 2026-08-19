@@ -5,8 +5,8 @@
 // Strict refusal still stands for a proven-live owner and for an identity that is
 // genuinely unreadable.
 import assert from 'node:assert/strict';
-import { execFileSync, spawn } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,6 +14,7 @@ import { afterEach, test } from 'node:test';
 import { probeProcessBirth } from '../../../dist/session/process-birth.js';
 import { inspectSessionOwner } from '../../../dist/session/process-owner.js';
 import { stopBoundObserve, stopBoundRunner } from '../../../dist/session/process-cleanup.js';
+import { HEADLESS_SESSION_RECOVERY_COMMAND } from '../../../dist/session/recovery-remedy.js';
 import { openSessionRegistry } from '../../../dist/session/registry.js';
 import { runStartupOwnerCleanup } from '../../../dist/session/startup-cleanup.js';
 import { resolveSourceIdentity } from '../../../dist/session/source-identity.js';
@@ -637,4 +638,207 @@ test('GH #792: repair never reports success while this root stays wedged by anot
   assert.equal(repaired.code, 1);
   assert.match(String(repaired.payload.remedy), /different app root/);
   assert.equal(run('report').payload.wedged, true);
+});
+
+test('GH #792: the headless remedy command resolves under every host that ships the core', () => {
+  const root = temporaryStateHome();
+  const packaged = (host: string) => {
+    const pluginRoot = join(root, host);
+    mkdirSync(join(pluginRoot, 'rn-dev-agent-core', 'dist'), { recursive: true });
+    writeFileSync(
+      join(pluginRoot, 'rn-dev-agent-core', 'dist', 'session-doctor.js'),
+      `process.stdout.write(${JSON.stringify(host)});\n`,
+    );
+    return pluginRoot;
+  };
+  const claude = packaged('claude');
+  const codex = packaged('codex');
+  // Run the remedy exactly as an agent would: through a shell, with only the variables
+  // that host actually exports.
+  const run = (exported: Record<string, string>) => {
+    const environment: Record<string, string | undefined> = { ...process.env, ...exported };
+    for (const key of [
+      'CLAUDE_PLUGIN_ROOT',
+      'RN_DEV_AGENT_CODEX_PLUGIN_ROOT',
+      'CODEX_PLUGIN_ROOT',
+    ]) {
+      if (!(key in exported)) delete environment[key];
+    }
+    return execFileSync('/bin/sh', ['-c', HEADLESS_SESSION_RECOVERY_COMMAND], {
+      encoding: 'utf8',
+      env: environment,
+    });
+  };
+  assert.equal(run({ CLAUDE_PLUGIN_ROOT: claude }), 'claude');
+  // The Codex launcher only ever exports RN_DEV_AGENT_CODEX_PLUGIN_ROOT
+  // (packages/codex-plugin/bin/cdp-supervisor.js), so the remedy must resolve from it.
+  assert.equal(run({ RN_DEV_AGENT_CODEX_PLUGIN_ROOT: codex }), 'codex');
+  assert.equal(run({ CODEX_PLUGIN_ROOT: codex }), 'codex');
+  assert.equal(
+    run({ CLAUDE_PLUGIN_ROOT: claude, RN_DEV_AGENT_CODEX_PLUGIN_ROOT: codex }),
+    'claude',
+  );
+});
+
+test('GH #792: session-doctor refuses a mistyped explicit state home instead of inventing one', () => {
+  const root = temporaryStateHome();
+  const appRoot = join(root, 'app');
+  mkdirSync(appRoot);
+  writeFileSync(join(appRoot, 'package.json'), '{"name":"gh-792-state-home"}');
+  const mistyped = join(root, 'authority-home-typo');
+  for (const command of ['report', 'repair']) {
+    const result = spawnSync(
+      process.execPath,
+      [join(distRoot, 'session-doctor.js'), command, '--json'],
+      {
+        cwd: appRoot,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          RN_DEV_AGENT_STATE_DIR: mistyped,
+          RN_DEV_AGENT_DECLARED_ROOT: appRoot,
+          RN_DEV_AGENT_DECLARED_MANIFESTS: 'package.json',
+        },
+      },
+    );
+    assert.notEqual(result.status, 0, command);
+    assert.match(
+      result.stderr,
+      /^AUTHORITY_STATE_HOME_UNKNOWN: requested state home has no authority registry/,
+      command,
+    );
+    assert.equal(result.stdout, '', `${command} must not answer from a store it never opened`);
+    assert.equal(existsSync(mistyped), false, `${command} must not create the requested home`);
+    assert.doesNotMatch(
+      result.stderr,
+      /session-doctor\.js" repair/,
+      'repairing cannot fix an unusable state home, so the remedy must not loop back to it',
+    );
+  }
+});
+
+function deadOwnerWithRunnerObligation() {
+  const root = temporaryStateHome();
+  const registry = openSessionRegistry(join(root, 'registry.sqlite3'), {
+    ownerStatus: (owner: { sessionId: string }) =>
+      owner.sessionId === 'dead-owner' ? 'mismatch' : 'match',
+    listenerStatus: () => 'absent',
+    leaseMs: 30_000,
+  });
+  const dead = registry.createSession({
+    sessionId: 'dead-owner',
+    sourceKey: 'repo',
+    worktreeKey: 'worktree-1',
+    appRootKey: '.',
+    supervisor: { pid: 4242, token: 'birth-owner' },
+    source: { kind: 'git', contentRoot: '/src/worktree-1', model: 'grouped-v1' },
+    bindings: {},
+  });
+  registry.claimResources(dead, [
+    { type: 'source', key: 'worktree-1' },
+    { type: 'device', key: 'ios:sim-1' },
+    { type: 'runner', key: 'ios:sim-1:9200' },
+  ]);
+  registry.updateBindings(dead, {
+    state: 'device_claimed',
+    bindings: {
+      device: { platform: 'ios', deviceId: 'sim-1', appId: 'com.example.app' },
+      runner: {
+        platform: 'ios',
+        deviceId: 'sim-1',
+        port: 9200,
+        capability: 'runner-capability',
+        instanceId: 'runner-instance',
+        processBirth: 'runner-birth',
+        pid: 9911,
+      },
+    },
+  });
+  return {
+    registry,
+    input: {
+      registry,
+      sourceKey: 'repo',
+      worktreeKey: 'worktree-1',
+      appRootKey: '.',
+      appRoot: join(root, 'app'),
+    },
+  };
+}
+
+test('GH #792: an unmet obligation on a proven-dead owner never tells the agent to close it', async () => {
+  const fixture = deadOwnerWithRunnerObligation();
+  const outcome = await runStartupOwnerCleanup(fixture.input, {
+    stopBoundRunner: async () => {
+      throw Object.assign(new Error('RUNNER_ADOPTION_REQUIRED: runner identity is unavailable'), {
+        code: 'RUNNER_ADOPTION_REQUIRED',
+      });
+    },
+  });
+  assert.equal(outcome.status, 'refused');
+  assert.equal(outcome.refusal?.code, 'RUNNER_ADOPTION_REQUIRED');
+  const remedy = String(outcome.refusal?.nextAction);
+  // The owner is already proven dead here, so "close that process" is unactionable advice.
+  assert.doesNotMatch(remedy, /close that process/, remedy);
+  assert.match(remedy, /RUNNER_ADOPTION_REQUIRED/, 'the remedy must name the unmet obligation');
+  assert.match(remedy, /session-doctor\.js" report/);
+  assert.match(remedy, /session-doctor\.js" repair/);
+
+  // The same wedge as the blocked contender sees it.
+  const contender = fixture.registry.createSession({
+    sessionId: 'contender',
+    sourceKey: 'repo',
+    worktreeKey: 'worktree-1',
+    appRootKey: '.',
+    supervisor: { pid: 4343, token: 'birth-contender' },
+    source: { kind: 'git', contentRoot: '/src/worktree-1', model: 'grouped-v1' },
+    bindings: {},
+  });
+  fixture.registry.updateBindings(contender, {
+    state: 'blocked',
+    bindings: {
+      adoptionRequired: { sessionId: 'dead-owner', claimEpoch: 1 },
+    },
+  });
+  const requirement = fixture.registry.inspectRecoveryRequirement('contender');
+  assert.equal(requirement.priorOwner, 'stale');
+  assert.equal(requirement.startupCleanupBlocked?.code, 'RUNNER_ADOPTION_REQUIRED');
+  assert.doesNotMatch(String(requirement.nextAction), /close that process/);
+  assert.match(String(requirement.nextAction), /session-doctor\.js" repair/);
+  fixture.registry.close();
+});
+
+test('GH #792: a live or unprovable owner still gets the close-the-holder remedy', async () => {
+  for (const status of ['match', 'unknown'] as const) {
+    const root = temporaryStateHome();
+    const registry = openSessionRegistry(join(root, 'registry.sqlite3'), {
+      ownerStatus: () => status,
+      listenerStatus: () => 'absent',
+      leaseMs: 30_000,
+    });
+    const owner = registry.createSession({
+      sessionId: 'owner',
+      sourceKey: 'repo',
+      worktreeKey: 'worktree-1',
+      appRootKey: '.',
+      supervisor: { pid: 4242, token: 'birth-owner' },
+      source: { kind: 'git', contentRoot: '/src/worktree-1', model: 'grouped-v1' },
+      bindings: {},
+    });
+    registry.claimResources(owner, [{ type: 'source', key: 'worktree-1' }]);
+    registry.updateBindings(owner, { state: 'source_bound', bindings: {} });
+    const outcome = await runStartupOwnerCleanup(
+      {
+        registry,
+        sourceKey: 'repo',
+        worktreeKey: 'worktree-1',
+        appRootKey: '.',
+        appRoot: join(root, 'app'),
+      },
+      {},
+    );
+    assert.equal(outcome.status, 'refused', status);
+    assert.match(String(outcome.refusal?.nextAction), /close that process/, status);
+    registry.close();
+  }
 });

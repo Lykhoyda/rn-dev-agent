@@ -1,7 +1,7 @@
 /** GH #792: one remedy pair for every refusal that can leave a source root unusable. */
 // The core ships into every host package, and refusal text carries no absolute paths.
 const SESSION_DOCTOR =
-  '"${CLAUDE_PLUGIN_ROOT:-$CODEX_PLUGIN_ROOT}/rn-dev-agent-core/dist/session-doctor.js"';
+  '"${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-$CODEX_PLUGIN_ROOT}}/rn-dev-agent-core/dist/session-doctor.js"';
 
 export const HEADLESS_SESSION_RECOVERY_COMMAND = `node ${SESSION_DOCTOR} repair`;
 
@@ -23,5 +23,14 @@ export function sessionOwnerInspectionRemedy(lead: string): string {
     `${lead} Identify the recorded holder with ${HEADLESS_SESSION_REPORT_COMMAND} from the ` +
     `app root, close that process, then run ${HEADLESS_SESSION_RECOVERY_COMMAND}. ` +
     `A live or unprovable owner is never force-released. ${SESSION_RECOVERY_DOCS}.`
+  );
+}
+
+export function sessionCleanupObligationRemedy(lead: string): string {
+  return (
+    `${lead} Read the outstanding obligation with ${HEADLESS_SESSION_REPORT_COMMAND} from the ` +
+    `app root, clear what it names, then run ${HEADLESS_SESSION_RECOVERY_COMMAND}; interactive ` +
+    `clients can reconnect with /mcp instead. Neither releases a live or unprovable owner. ` +
+    `${SESSION_RECOVERY_DOCS}.`
   );
 }

@@ -8290,11 +8290,14 @@ function sessionRecoveryRemedy(lead) {
 function sessionOwnerInspectionRemedy(lead) {
   return `${lead} Identify the recorded holder with ${HEADLESS_SESSION_REPORT_COMMAND} from the app root, close that process, then run ${HEADLESS_SESSION_RECOVERY_COMMAND}. A live or unprovable owner is never force-released. ${SESSION_RECOVERY_DOCS}.`;
 }
+function sessionCleanupObligationRemedy(lead) {
+  return `${lead} Read the outstanding obligation with ${HEADLESS_SESSION_REPORT_COMMAND} from the app root, clear what it names, then run ${HEADLESS_SESSION_RECOVERY_COMMAND}; interactive clients can reconnect with /mcp instead. Neither releases a live or unprovable owner. ${SESSION_RECOVERY_DOCS}.`;
+}
 var SESSION_DOCTOR, HEADLESS_SESSION_RECOVERY_COMMAND, HEADLESS_SESSION_REPORT_COMMAND, SESSION_RECOVERY_DOCS;
 var init_recovery_remedy = __esm({
   "packages/rn-dev-agent-core/dist/session/recovery-remedy.js"() {
     "use strict";
-    SESSION_DOCTOR = '"${CLAUDE_PLUGIN_ROOT:-$CODEX_PLUGIN_ROOT}/rn-dev-agent-core/dist/session-doctor.js"';
+    SESSION_DOCTOR = '"${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-$CODEX_PLUGIN_ROOT}}/rn-dev-agent-core/dist/session-doctor.js"';
     HEADLESS_SESSION_RECOVERY_COMMAND = `node ${SESSION_DOCTOR} repair`;
     HEADLESS_SESSION_REPORT_COMMAND = `node ${SESSION_DOCTOR} report`;
     SESSION_RECOVERY_DOCS = 'docs: session-authority "Recovering a wedged source root"';
@@ -8832,7 +8835,7 @@ var init_registry = __esm({
                 requirement: "transport-restart",
                 priorOwner: "stale",
                 startupCleanupBlocked: blocked,
-                nextAction: blocked.nextAction ?? sessionOwnerInspectionRemedy(`Startup cleanup refused with ${blocked.code} and will refuse again until that is resolved: ${blocked.reason}.`)
+                nextAction: blocked.nextAction ?? sessionCleanupObligationRemedy(`Startup cleanup refused with ${blocked.code} and will refuse again until that is resolved: ${blocked.reason}.`)
               };
             }
             return {
@@ -15557,6 +15560,9 @@ function openAuthorityStateLayout(stateDir) {
   }
   return layout;
 }
+function resolveAuthorityStateLayout(requestedStateHome) {
+  return requestedStateHome ? openAuthorityStateLayout(requestedStateHome) : createAuthorityStateLayout();
+}
 function getBoundDirectoryJournalKey(layout = createAuthorityStateLayout()) {
   const path = join6(layout.root, "bound-directory.key");
   const temporary = join6(layout.root, `.bound-directory.${randomUUID()}.key`);
@@ -18042,8 +18048,7 @@ function removeAndroidMetroReverse(binding, dependencies = {}) {
 
 // packages/rn-dev-agent-core/dist/rn-session.js
 function resolveStatus() {
-  const requestedStateHome = process.env.RN_DEV_AGENT_STATE_DIR;
-  const layout = requestedStateHome ? openAuthorityStateLayout(requestedStateHome) : createAuthorityStateLayout();
+  const layout = resolveAuthorityStateLayout(process.env.RN_DEV_AGENT_STATE_DIR);
   const registry = openSessionRegistry(layout.registry, { ownerStatus: inspectSessionOwner });
   const explicit = process.env.RN_DEV_AGENT_SESSION_ID;
   const source = resolveSourceIdentity(process.cwd(), {
