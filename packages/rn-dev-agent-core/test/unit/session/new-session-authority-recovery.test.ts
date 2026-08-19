@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, test } from 'node:test';
 import { createAuthorityGate } from '../../../dist/session/authority-gate.js';
 import { openSessionRegistry, SessionAuthorityError } from '../../../dist/session/registry.js';
+import { sessionRecoveryRemedy } from '../../../dist/session/recovery-remedy.js';
 import { projectPublicAuthorityStatus } from '../../../dist/session/public-status.js';
 import { runStartupOwnerCleanup } from '../../../dist/session/startup-cleanup.js';
 import { WorkerAuthorityRuntime } from '../../../dist/session/runtime.js';
@@ -19,8 +20,9 @@ const RECOVERY_WORKER = 'recovery-worker';
 const MANIFEST_SOURCE = '{"version":1,"dependencies":{},"scripts":{}}';
 const MANIFEST_SHA256 = createHash('sha256').update(MANIFEST_SOURCE).digest('hex');
 const UNVERIFIABLE_SHA256 = createHash('sha256').update('never-written-bytes').digest('hex');
-const AUTOMATIC_RELEASE_PROMISE =
-  'The prior owner is proven dead. Restart the MCP transport (/mcp); startup cleanup releases it automatically.';
+const AUTOMATIC_RELEASE_PROMISE = sessionRecoveryRemedy(
+  'The prior owner is proven dead and is released automatically.',
+);
 const ONLY_AVAILABLE_ACTION =
   'this session does not own this worktree; rn_session({ action: "status" }) is the only available action';
 
@@ -456,10 +458,11 @@ test('R4b: a producer diagnostic never reaches the log, the journal, or public s
     }
     // A redacted refusal is still actionable, not a bare code.
     assert.match(String(outcome.refusal?.message), new RegExp(leak.code));
-    assert.match(String(outcome.refusal?.nextAction), /restart the MCP transport/);
+    // GH #792: the remedy names a command a headless client can actually run.
+    assert.match(String(outcome.refusal?.nextAction), /session-doctor\.js" repair/);
     assert.match(
       String((projected.startupCleanupBlocked as Record<string, string>).nextAction),
-      /restart the MCP transport/,
+      /session-doctor\.js" repair/,
     );
   }
 });

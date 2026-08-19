@@ -58,6 +58,23 @@ Session initialization is transactional: if port allocation, resource claiming, 
 
 When the integration manifest has no session CLI, the copied package adapter runs the original package script and user arguments unchanged. When a session-capable integration is installed but no live session in the manifest's authority registry owns the worktree, the adapter exits with code 2 before starting the original script and names the supported repair: `rn_session(action="restore_integration", confirmed=true)`. An explicit session ID is accepted only for the current canonical worktree and app root. When a session exists, unsupported command shapes or conflicting explicit flags fail rather than falling through.
 
+## Recovering a wedged source root
+
+An owner that dies ungracefully leaves its claims in the store, and the OS may then recycle one of its recorded pids into an unrelated process. A recorded pid is only ever written for a process this user could read, so a pid this user can no longer inspect or signal is *positively not* the recorded owner — that counts as proven dead and startup cleanup releases it (GH #792). An identity that is unreadable for any other reason stays unprovable and keeps refusing: lease expiry, heartbeat age, and elapsed time are never authority, and there is no force-steal.
+
+Two commands drive the same proven-dead cleanup a fresh transport runs. Both work in a headless `claude -p` session, which cannot run `/mcp`:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}/rn-dev-agent-core/dist/session-doctor.js" report
+node "${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}/rn-dev-agent-core/dist/session-doctor.js" repair
+```
+
+`report` is read-only. It prints the authority store path, `sameRootOwner` (`absent`, `live`, `stale`, or `unprovable`), whether that owner belongs to this exact app root, `ownerAppRoot` and a truncated `ownerSession` naming the recorded holder (never its pid), `ownerMismatch` (`app-root` or `source-identity`) when it does not, any retained `startupCleanupBlocked` refusal, the number of abandoned blocked contenders, and the remedy for what it found. `report` exits non-zero when it finds the root wedged, so it can gate a script. `repair` releases a proven-dead same-root owner and discards abandoned blocked-contender rows that never held a claim. It never releases a live or unprovable owner, and exits non-zero when that owner holds this exact root; a live owner of a different app root in this worktree leaves nothing to clean up here, so that run exits zero while `report` still names the holder. The abandoned claim-less contender rows are reaped either way.
+
+A contender that never acquired authority no longer wedges the next attempt: blocked rows hold no claims, so an abandoned one whose supervisor is proven dead is discarded at the next startup instead of accumulating as the next attempt's unknown prior owner.
+
+Not every refusal on this path is a stale lock. `DEVICE_AUTHORITY_MISMATCH` from `bind_device` while `status` reports `deviceBound: false` means a runner, proof, or explicitly started Observe binding still holds the device axis — release that axis rather than looking for a wedged owner.
+
 ## What each source identity proves
 
 Normal development uses a coarse Git worktree identity, or a declared root plus declared-manifest hash for non-Git apps. That identity remains stable while source files are edited. Strict proof additionally freezes the Git HEAD and dirty-content digest.

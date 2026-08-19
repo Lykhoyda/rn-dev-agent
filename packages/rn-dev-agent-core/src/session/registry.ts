@@ -11,7 +11,22 @@ import {
 } from './cleanup-identity.js';
 import { NON_GIT_DECLARATION_NEXT_ACTION } from './declared-source-contract.js';
 import { probeMetroListener } from './metro-binding.js';
+import {
+  sessionCleanupObligationRemedy,
+  sessionDeclaredSourceRemedy,
+  sessionOtherRootRecoveryRemedy,
+  sessionOwnerInspectionRemedy,
+  sessionRecoveryRemedy,
+} from './recovery-remedy.js';
 import type { AuthorityAxis } from './tool-profiles.js';
+
+/** Refusals about the owner's identity rather than an unmet obligation; routed by exact text. */
+export const OWNER_IDENTITY_REFUSAL_REASONS = {
+  sourceOwnerLive: 'the same-root owner is live; a live owner is never released',
+  sourceOwnerUnprovable:
+    'the same-root owner identity could not be proven, so it is treated as live',
+  leaseOwnerUnprovable: 'expired lease owner identity could not be proven',
+} as const;
 
 const INITIALIZATION_WAIT = new Int32Array(new SharedArrayBuffer(4));
 export const AUTHORITY_REGISTRY_SCHEMA_VERSION = 4;
@@ -237,6 +252,20 @@ export interface StartupCleanupBlocker {
   nextAction?: string;
 }
 
+export interface SourceOwnershipInspection {
+  owner: 'absent' | 'live' | 'stale' | 'unprovable';
+  sameRoot: boolean;
+  /** Which key differs when `sameRoot` is false; each has its own reachable remedy. */
+  mismatch?: 'app-root' | 'source-identity';
+  abandonedContenders: number;
+  /**
+   * Same-user local diagnostics for the doctor CLI only. No refusal text and no
+   * cross-session projection reads it, and it never carries a pid.
+   */
+  holder?: { session: string; appRoot?: string };
+  startupCleanupBlocked?: StartupCleanupBlocker;
+}
+
 export interface RecoveryRequirementInspection {
   requirement: RecoveryRequirement;
   priorOwner: 'stale' | 'live' | 'unknown' | 'absent';
@@ -385,6 +414,15 @@ function isOperationalState(state: string): boolean {
 
 function isFenceableState(state: string): boolean {
   return isOperationalState(state) || state === 'handoff';
+}
+
+function readSourceAppRoot(sourceJson: string): string | undefined {
+  try {
+    const source = JSON.parse(sourceJson) as Record<string, unknown>;
+    return typeof source.appRoot === 'string' ? source.appRoot : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function readStartupCleanupBlocker(bindingsJson: string): StartupCleanupBlocker | undefined {
@@ -1161,8 +1199,9 @@ export class SessionRegistry {
       return {
         requirement: 'transport-restart',
         priorOwner: 'absent',
-        nextAction:
-          'The blocking claim epoch is gone. Restart the MCP transport (/mcp) to start a clean session.',
+        nextAction: sessionRecoveryRemedy(
+          'The blocking claim epoch is gone; a clean session can start here.',
+        ),
       };
     }
     let status: OwnerStatus = 'unknown';
@@ -1183,16 +1222,18 @@ export class SessionRegistry {
           return {
             requirement: 'attach',
             priorOwner: 'stale',
-            nextAction:
-              "The proven-dead owner belongs to a different app root in this worktree, so startup cleanup cannot release it here. Start and close rn-dev-agent from the prior owner's app root to release its authority, or use a separate worktree.",
+            nextAction: sessionOtherRootRecoveryRemedy(
+              'The proven-dead owner belongs to a different app root in this worktree, so startup cleanup cannot release it here.',
+            ),
           };
         }
         if (prior.source_key !== row.source_key) {
           return {
             requirement: 'attach',
             priorOwner: 'stale',
-            nextAction:
-              'The proven-dead owner has a different source identity for this app root, so startup cleanup cannot release it under the current declared manifests. Restore the declared manifests that produced the prior identity, start and close rn-dev-agent to release its authority, then reapply the manifest changes; otherwise use a separate worktree.',
+            nextAction: sessionDeclaredSourceRemedy(
+              'The proven-dead owner has a different source identity for this app root, so startup cleanup cannot release it under the current declared manifests.',
+            ),
           };
         }
         // Only cleanup without a retained refusal may promise automatic convergence.
@@ -1204,14 +1245,17 @@ export class SessionRegistry {
             startupCleanupBlocked: blocked,
             nextAction:
               blocked.nextAction ??
-              `Startup cleanup refused with ${blocked.code} and will refuse again on the next restart: ${blocked.reason}. Resolve that refusal before restarting the MCP transport.`,
+              sessionCleanupObligationRemedy(
+                `Startup cleanup refused with ${blocked.code} and will refuse again until that is resolved: ${blocked.reason}.`,
+              ),
           };
         }
         return {
           requirement: 'transport-restart',
           priorOwner: 'stale',
-          nextAction:
-            'The prior owner is proven dead. Restart the MCP transport (/mcp); startup cleanup releases it automatically.',
+          nextAction: sessionRecoveryRemedy(
+            'The prior owner is proven dead and is released automatically.',
+          ),
         };
       }
       return {
@@ -1231,8 +1275,12 @@ export class SessionRegistry {
       ...(grouped ? { priorOwnerHeartbeatAgeMs: heartbeatAgeMs } : {}),
       nextAction:
         status === 'match'
-          ? 'Another live rn-dev-agent supervisor owns this worktree. Close it or work in a separate worktree; a live owner is never adopted.'
-          : 'The prior owner identity could not be proven, so it is treated as live. Close the other session or re-run once its process state is observable.',
+          ? sessionOwnerInspectionRemedy(
+              'Another live rn-dev-agent supervisor owns this worktree; a live owner is never adopted.',
+            )
+          : sessionOwnerInspectionRemedy(
+              'The prior owner identity could not be proven, so it is treated as live.',
+            ),
     };
   }
 
@@ -2297,7 +2345,7 @@ export class SessionRegistry {
     if (status === 'match') {
       throw new SessionAuthorityError(
         'RESOURCE_CLAIM_CONFLICT',
-        'the same-root owner is live; a live owner is never released',
+        OWNER_IDENTITY_REFUSAL_REASONS.sourceOwnerLive,
         { sessionId: row.session_id, claimEpoch: row.claim_epoch },
       );
     }
@@ -2305,13 +2353,13 @@ export class SessionRegistry {
       if (row.lease_until_ms < this.#now()) {
         throw new SessionAuthorityError(
           'STALE_LEASE_NOT_RECLAIMABLE',
-          'expired lease owner identity could not be proven',
+          OWNER_IDENTITY_REFUSAL_REASONS.leaseOwnerUnprovable,
           { sessionId: row.session_id, claimEpoch: row.claim_epoch },
         );
       }
       throw new SessionAuthorityError(
         'RESOURCE_CLAIM_CONFLICT',
-        'the same-root owner identity could not be proven, so it is treated as live',
+        OWNER_IDENTITY_REFUSAL_REASONS.sourceOwnerUnprovable,
         { sessionId: row.session_id, claimEpoch: row.claim_epoch },
       );
     }
@@ -3195,6 +3243,119 @@ export class SessionRegistry {
         )
         .run(now, session.sessionId, session.claimEpoch);
     });
+  }
+
+  /** GH #792: the ownership picture headless recovery reports; releases nothing. */
+  inspectSourceOwnership(input: {
+    sourceKey: string;
+    worktreeKey: string;
+    appRootKey: string;
+  }): SourceOwnershipInspection {
+    const abandonedContenders = this.#countAbandonedBlockedContenders(input.worktreeKey);
+    const claim = this.#findClaim('source', input.worktreeKey);
+    if (!claim) return { owner: 'absent', sameRoot: false, abandonedContenders };
+    const row = asSession(
+      this.#database
+        .prepare(
+          `SELECT session_id, source_key, worktree_key, app_root_key, claim_epoch,
+                  supervisor_pid, supervisor_birth, source_json, bindings_json
+           FROM sessions WHERE session_id = ?`,
+        )
+        .get(claim.session_id),
+    );
+    if (!row) return { owner: 'absent', sameRoot: false, abandonedContenders };
+    const ownerAppRoot = readSourceAppRoot(row.source_json);
+    let status: OwnerStatus = 'unknown';
+    try {
+      status = this.#ownerStatus({
+        sessionId: row.session_id,
+        pid: row.supervisor_pid,
+        token: row.supervisor_birth,
+      });
+    } catch {
+      status = 'unknown';
+    }
+    const blocked = readStartupCleanupBlocker(row.bindings_json);
+    // Same order the cleanup-candidate gate and `inspectRecoveryRequirement` use: an app
+    // root the reader cannot reach, then a declared source identity they can restore.
+    const sameAppRoot =
+      row.worktree_key === input.worktreeKey && row.app_root_key === input.appRootKey;
+    const sameSource = row.source_key === input.sourceKey;
+    return {
+      owner: status === 'match' ? 'live' : status === 'mismatch' ? 'stale' : 'unprovable',
+      sameRoot: sameAppRoot && sameSource,
+      ...(sameAppRoot
+        ? sameSource
+          ? {}
+          : { mismatch: 'source-identity' as const }
+        : { mismatch: 'app-root' as const }),
+      abandonedContenders,
+      holder: {
+        session: row.session_id.slice(0, 12),
+        ...(ownerAppRoot === undefined ? {} : { appRoot: ownerAppRoot }),
+      },
+      ...(blocked ? { startupCleanupBlocked: blocked } : {}),
+    };
+  }
+
+  #countAbandonedBlockedContenders(worktreeKey: string): number {
+    const rows = this.#database
+      .prepare(
+        `SELECT session_id, supervisor_pid, supervisor_birth FROM sessions
+         WHERE worktree_key = ? AND state = 'blocked'
+           AND NOT EXISTS (SELECT 1 FROM claims WHERE claims.session_id = sessions.session_id)`,
+      )
+      .all(worktreeKey) as Array<{
+      session_id: string;
+      supervisor_pid: number;
+      supervisor_birth: string;
+    }>;
+    return rows.filter((row) => this.#supervisorProvenDead(row)).length;
+  }
+
+  /**
+   * GH #792: a blocked contender holds no authority, so an abandoned row must not survive
+   * as the next attempt's prior owner. Proven-dead and claim-less only.
+   */
+  discardAbandonedBlockedContenders(worktreeKey: string): string[] {
+    const rows = this.#database
+      .prepare(
+        `SELECT session_id, claim_epoch, supervisor_pid, supervisor_birth
+         FROM sessions WHERE worktree_key = ? AND state = 'blocked'
+         ORDER BY updated_ms ASC`,
+      )
+      .all(worktreeKey) as Array<{
+      session_id: string;
+      claim_epoch: number;
+      supervisor_pid: number;
+      supervisor_birth: string;
+    }>;
+    const discarded: string[] = [];
+    for (const row of rows) {
+      if (!this.#supervisorProvenDead(row)) continue;
+      try {
+        const now = this.#now();
+        const released = this.#transaction(() => {
+          const claim = this.#database
+            .prepare('SELECT resource_key FROM claims WHERE session_id = ? LIMIT 1')
+            .get(row.session_id);
+          if (claim) return false;
+          const update = this.#database
+            .prepare(
+              `UPDATE sessions
+               SET state = 'released', claim_epoch = claim_epoch + 1,
+                   authority_version = authority_version + 1, updated_ms = ?
+               WHERE session_id = ? AND claim_epoch = ? AND state = 'blocked'`,
+            )
+            .run(now, row.session_id, row.claim_epoch) as { changes?: number };
+          return update.changes === 1;
+        });
+        if (released) discarded.push(row.session_id);
+      } catch {
+        // A contender that cannot be discarded stays exactly as it was.
+      }
+    }
+    return discarded;
   }
 
   prepareHandoff(
@@ -5170,7 +5331,7 @@ export class SessionRegistry {
         if (claim.lease_until_ms < now) {
           throw new SessionAuthorityError(
             'STALE_LEASE_NOT_RECLAIMABLE',
-            'expired lease owner identity could not be proven',
+            OWNER_IDENTITY_REFUSAL_REASONS.leaseOwnerUnprovable,
             { sessionId: claim.session_id, claimEpoch: claim.claim_epoch },
           );
         }

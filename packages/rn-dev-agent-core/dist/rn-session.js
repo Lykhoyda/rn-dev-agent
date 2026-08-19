@@ -13,17 +13,14 @@ import { resolveManagedMetroRestartGeneration, } from './session/managed-metro-r
 import { inspectSessionOwner } from './session/process-owner.js';
 import { openSessionRegistry, SessionAuthorityError, } from './session/registry.js';
 import { resolveSourceIdentity } from './session/source-identity.js';
-import { createAuthorityStateLayout, openAuthorityStateLayout, sessionRuntimeDirectory, } from './session/state-root.js';
+import { resolveAuthorityStateLayout, sessionRuntimeDirectory } from './session/state-root.js';
 import { inspectAuthorityMigration } from './session/migration-diagnostic.js';
 import { projectPublicAuthorityStatus } from './session/public-status.js';
 import { stopBoundObserve, stopBoundRecorder, stopBoundRunner } from './session/process-cleanup.js';
 import { ensureAndroidMetroReverse, removeAndroidMetroReverse, } from './session/android-metro-reverse.js';
 import { closeBoundDirectories, openBoundDirectory, openBoundSubdirectory, writeBoundDirectoryFile, } from './session/bound-directory.js';
 function resolveStatus() {
-    const requestedStateHome = process.env.RN_DEV_AGENT_STATE_DIR;
-    const layout = requestedStateHome
-        ? openAuthorityStateLayout(requestedStateHome)
-        : createAuthorityStateLayout();
+    const layout = resolveAuthorityStateLayout(process.env.RN_DEV_AGENT_STATE_DIR);
     const registry = openSessionRegistry(layout.registry, { ownerStatus: inspectSessionOwner });
     const explicit = process.env.RN_DEV_AGENT_SESSION_ID;
     const source = resolveSourceIdentity(process.cwd(), {

@@ -12,7 +12,13 @@ import {
 } from './package-integration.js';
 import { stopBoundObserve, stopBoundRecorder, stopBoundRunner } from './process-cleanup.js';
 import {
+  sessionCleanupObligationRemedy,
+  sessionOwnerInspectionRemedy,
+  sessionRecoveryRemedy,
+} from './recovery-remedy.js';
+import {
   openSessionRegistry,
+  OWNER_IDENTITY_REFUSAL_REASONS,
   SessionAuthorityError,
   type OwnerStatus,
   type SessionOwner,
@@ -22,7 +28,7 @@ import {
   type StartupOwnerCleanupPlan,
 } from './registry.js';
 import type { SourceIdentity } from './source-identity.js';
-import { createAuthorityStateLayout } from './state-root.js';
+import { resolveAuthorityStateLayout } from './state-root.js';
 
 export interface StartupCleanupRefusal {
   code: string;
@@ -33,6 +39,8 @@ export interface StartupCleanupRefusal {
 export interface StartupCleanupOutcome {
   status: 'clean' | 'refused';
   released: string[];
+  /** GH #792: abandoned blocked contenders reaped before the owner is considered. */
+  discardedContenders: string[];
   refusal?: StartupCleanupRefusal;
 }
 
@@ -78,9 +86,15 @@ export async function runStartupOwnerCleanup(
   dependencies: StartupCleanupDependencies = {},
 ): Promise<StartupCleanupOutcome> {
   const released: string[] = [];
+  let discardedContenders: string[] = [];
+  try {
+    discardedContenders = input.registry.discardAbandonedBlockedContenders(input.worktreeKey);
+  } catch {
+    // Reaping is opportunistic; the owner decision below is the authoritative one.
+  }
   for (let round = 0; round < 8; round += 1) {
     const candidate = input.registry.findStartupCleanupCandidate(input);
-    if (!candidate) return { status: 'clean', released };
+    if (!candidate) return { status: 'clean', released, discardedContenders };
     try {
       const plan = input.registry.beginStartupOwnerCleanup(candidate);
       await completeObligations(input.registry, candidate, dependencies);
@@ -90,12 +104,13 @@ export async function runStartupOwnerCleanup(
     } catch (error) {
       const refusal = refusalOf(error);
       retainRefusal(input.registry, candidate, refusal);
-      return { status: 'refused', released, refusal };
+      return { status: 'refused', released, discardedContenders, refusal };
     }
   }
   return {
     status: 'refused',
     released,
+    discardedContenders,
     refusal: publicRefusal({
       code: 'RESOURCE_CLAIM_CONFLICT',
       message: 'startup cleanup did not converge for this worktree',
@@ -109,7 +124,7 @@ export async function runStartupCleanupForSource(input: {
   stateDir?: string;
   ownerStatus: (owner: SessionOwner) => OwnerStatus;
 }): Promise<StartupCleanupOutcome> {
-  const layout = createAuthorityStateLayout(input.stateDir);
+  const layout = resolveAuthorityStateLayout(input.stateDir);
   const registry = openSessionRegistry(layout.registry, {
     ownerStatus: input.ownerStatus,
     leaseMs: 30_000,
@@ -195,8 +210,9 @@ function restoreDeadOwnerIntegration(
       'integration restoration requires a SHA-256-verified manifest and none is available; the dead owner binding is preserved',
       undefined,
       {
-        nextAction:
-          'Restore the exact integration manifest at .rn-agent/integration/rn-session-integration.json from your own version control history or backups so it matches the manifest SHA-256 recorded on the binding, then restart the MCP transport.',
+        nextAction: sessionRecoveryRemedy(
+          'Restore the exact integration manifest at .rn-agent/integration/rn-session-integration.json from your own version control history or backups so it matches the manifest SHA-256 recorded on the binding.',
+        ),
       },
     );
   }
@@ -276,9 +292,7 @@ const PUBLIC_REFUSAL_REASONS: ReadonlySet<string> = new Set([
   'startup cleanup did not converge for this worktree',
   'startup cleanup no longer matches the exact source and app root',
   'no startup cleanup is in progress',
-  'the same-root owner is live; a live owner is never released',
-  'the same-root owner identity could not be proven, so it is treated as live',
-  'expired lease owner identity could not be proven',
+  ...Object.values(OWNER_IDENTITY_REFUSAL_REASONS),
   'the startup cleanup owner no longer matches the proven claim epoch',
   ...(['androidMetroReverse', 'recorder', 'runner', 'observe', 'metro'] as const).flatMap(
     (resource) => [
@@ -288,8 +302,20 @@ const PUBLIC_REFUSAL_REASONS: ReadonlySet<string> = new Set([
   ),
 ]);
 
-const GENERIC_REFUSAL_REMEDY =
-  'Startup cleanup refused and preserved the prior owner binding. Resolve the refusal named by this code, then restart the MCP transport; another restart alone does not release the owner.';
+/** The only refusals with a process left to close; every other one is reached with the owner already proven dead. */
+const OWNER_IDENTITY_REFUSALS: ReadonlySet<string> = new Set(
+  Object.values(OWNER_IDENTITY_REFUSAL_REASONS),
+);
+
+const OWNER_IDENTITY_REFUSAL_REMEDY = sessionOwnerInspectionRemedy(
+  'Startup cleanup refused because the recorded owner is live or its identity could not be proven, and preserved its binding.',
+);
+
+function unmetObligationRemedy(code: string): string {
+  return sessionCleanupObligationRemedy(
+    `Startup cleanup refused with ${code} and preserved the prior owner binding; another restart alone repeats the same refusal.`,
+  );
+}
 
 /**
  * The outcome is the single boundary where a refusal becomes durable — journaled on
@@ -303,12 +329,15 @@ function publicRefusal(refusal: StartupCleanupRefusal): StartupCleanupRefusal {
   // `SessionAuthorityError` renders as `CODE: sentence`; the code travels separately.
   const sentence = refusal.message.replace(/^[A-Z][A-Z0-9_]+: /, '');
   const authored = PUBLIC_REFUSAL_REASONS.has(sentence);
+  const fallback = OWNER_IDENTITY_REFUSALS.has(sentence)
+    ? OWNER_IDENTITY_REFUSAL_REMEDY
+    : unmetObligationRemedy(refusal.code);
   return {
     code: refusal.code,
     message: authored
       ? sentence
       : `startup cleanup refused with ${refusal.code} and preserved the prior owner binding`,
-    nextAction: authored ? (refusal.nextAction ?? GENERIC_REFUSAL_REMEDY) : GENERIC_REFUSAL_REMEDY,
+    nextAction: authored ? (refusal.nextAction ?? fallback) : fallback,
   };
 }
 

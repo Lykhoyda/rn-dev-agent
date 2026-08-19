@@ -78,6 +78,12 @@ export function openAuthorityStateLayout(stateDir) {
     }
     return layout;
 }
+/** An explicitly requested state home must already hold a registry; only the default is created. */
+export function resolveAuthorityStateLayout(requestedStateHome) {
+    return requestedStateHome
+        ? openAuthorityStateLayout(requestedStateHome)
+        : createAuthorityStateLayout();
+}
 export function getBoundDirectoryJournalKey(layout = createAuthorityStateLayout()) {
     const path = join(layout.root, 'bound-directory.key');
     const temporary = join(layout.root, `.bound-directory.${randomUUID()}.key`);

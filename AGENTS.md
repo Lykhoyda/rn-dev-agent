@@ -101,6 +101,11 @@ Claude helper scripts. If those outputs drift, edit the source and rerun:
 corepack yarn build:host-runtimes
 ```
 
+A new core CLI entry point ships to host packages only if its compiled name is
+listed in `RUNTIME_ENTRIES` in `scripts/build-host-runtimes.ts`; otherwise it
+exists in `packages/rn-dev-agent-core/dist/` and is silently absent from every
+marketplace install.
+
 ## Validation Commands
 
 Use the smallest relevant set first, then broaden before pushing risky changes.

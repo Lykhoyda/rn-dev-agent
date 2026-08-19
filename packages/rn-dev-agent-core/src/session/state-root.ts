@@ -116,6 +116,13 @@ export function openAuthorityStateLayout(stateDir: string): AuthorityStateLayout
   return layout;
 }
 
+/** An explicitly requested state home must already hold a registry; only the default is created. */
+export function resolveAuthorityStateLayout(requestedStateHome?: string): AuthorityStateLayout {
+  return requestedStateHome
+    ? openAuthorityStateLayout(requestedStateHome)
+    : createAuthorityStateLayout();
+}
+
 export function getBoundDirectoryJournalKey(
   layout: AuthorityStateLayout = createAuthorityStateLayout(),
 ): string {
