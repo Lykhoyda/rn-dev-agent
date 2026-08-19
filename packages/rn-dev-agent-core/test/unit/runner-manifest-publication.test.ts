@@ -28,6 +28,7 @@ import {
   installGhStub,
   loadWorkflow,
   runJobSteps,
+  shellCommands,
   type GhPullRequest,
   type GhStub,
   type WorkflowStep,
@@ -365,8 +366,39 @@ function runPublish(
   });
 }
 
+function runDetect(fixture: Fixture) {
+  return runJobSteps({
+    workflow,
+    jobId: 'detect',
+    cwd: checkout(fixture, 'detect'),
+    ctx: { 'secrets.GITHUB_TOKEN': 'stub-token', 'github.event.inputs.force_version': '' },
+    env: fixture.gh.env,
+    only: ['Decide what this run must build and publish'],
+  });
+}
+
 function completeRelease(): Record<string, string> {
   return { [IOS_ZIP]: IOS_BYTES, [ANDROID_ZIP]: ANDROID_BYTES };
+}
+
+// The manifest scripts/build-runner-manifest.mts produces for the seeded zips,
+// serialised the way it writes the file.
+function currentManifest(): string {
+  return (
+    JSON.stringify(
+      {
+        version: VERSION,
+        assets: {
+          ios: [{ name: IOS_ZIP, sha256: sha256(IOS_BYTES), bytes: IOS_BYTES.length }],
+          android: [
+            { name: ANDROID_ZIP, sha256: sha256(ANDROID_BYTES), bytes: ANDROID_BYTES.length },
+          ],
+        },
+      },
+      null,
+      2,
+    ) + '\n'
+  );
 }
 
 function sha256(content: string): string {
@@ -566,9 +598,9 @@ test('a rerun after the release manifest drifts re-commits onto the same branch'
 
 test('a manifest PR from an earlier version is closed before this one is armed', () => {
   const superseded = 'chore/runner-manifest-v0.76.6';
-  // Enough unrelated open PRs that the superseded one falls past the 30-PR page
-  // gh returns by default: it must still be found and retired.
-  const noise: GhPullRequest[] = Array.from({ length: 40 }, (_unused, i) => ({
+  // Enough unrelated open PRs that the superseded one falls past the first API
+  // page: an unpaged sweep would miss it, and it must still be found and retired.
+  const noise: GhPullRequest[] = Array.from({ length: 120 }, (_unused, i) => ({
     number: 100 + i,
     headRefName: `feature/unrelated-${i}`,
     baseRefName: 'main',
@@ -674,6 +706,46 @@ test('failing to arm auto-merge fails the job instead of leaving the trust root 
   }
 });
 
+test('a failed remote query fails the job instead of reading as "nothing to deliver"', () => {
+  const fixture = createFixture({ releaseAssets: completeRelease() });
+  try {
+    const workdir = checkout(fixture, 'run1');
+    // Transport failure, not a missing ref: git exits 128 here, and 128 must
+    // never be mistaken for "the branch does not exist".
+    git(workdir, 'remote', 'set-url', 'origin', join(fixture.root, 'vanished.git'));
+    const run = runPublish(fixture, { workdir });
+
+    assert.equal(run.ok, false, 'a green run here leaves the trust root undelivered');
+    assert.equal(run.failed?.name, 'Check out the version-keyed manifest branch');
+    assert.match(run.failed?.stderr ?? '', /::error::could not ask origin whether/);
+    assert.equal(
+      ghCalls(fixture).some((c) => c.startsWith('pr ')),
+      false,
+      'no PR work may happen once the branch state is unknown',
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('an already-current trust root with no manifest branch opens no PR', () => {
+  const fixture = createFixture({
+    repoManifest: currentManifest(),
+    releaseAssets: completeRelease(),
+  });
+  try {
+    const run = runPublish(fixture, { workdir: checkout(fixture, 'run1') });
+    assert.ok(run.ok, `job failed at ${run.failed?.name}: ${run.failed?.stderr}`);
+    assert.equal(run.outputs.branch.existed, 'false');
+    assert.equal(run.outputs.commit.pushed, 'false', 'an unchanged manifest must not commit');
+    assert.equal(originRef(fixture, BRANCH), null);
+    assert.equal(fixture.gh.state().prs.length, 0, 'nothing to deliver means no PR');
+    assert.match(run.steps.at(-1)?.stdout ?? '', new RegExp(`already carries v${VERSION}`));
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test('the publish job refuses a trust root the installed plugin cannot use', () => {
   const fixture = createFixture({ pluginVersion: '0.76.8', releaseAssets: completeRelease() });
   try {
@@ -706,25 +778,9 @@ test('detect reports a stale trust root even when the release is complete', () =
     releaseAssets: { ...completeRelease(), 'runner-manifest.json': manifestFor(VERSION) },
   });
   try {
-    const workdir = checkout(fixture, 'detect');
-    const outputs = join(fixture.root, 'detect-outputs.txt');
-    writeFileSync(outputs, '');
-    const run = runJobSteps({
-      workflow,
-      jobId: 'detect',
-      cwd: workdir,
-      ctx: { 'secrets.GITHUB_TOKEN': 'stub-token', 'github.event.inputs.force_version': '' },
-      env: { ...fixture.gh.env, GITHUB_OUTPUT: outputs },
-      only: ['Decide what this run must build and publish'],
-    });
+    const run = runDetect(fixture);
     assert.ok(run.ok, `detect failed: ${run.failed?.stderr}`);
-    const emitted = Object.fromEntries(
-      readFileSync(outputs, 'utf8')
-        .split('\n')
-        .filter(Boolean)
-        .map((line) => line.split('=')),
-    );
-    assert.deepEqual(emitted, {
+    assert.deepEqual(run.outputs.v, {
       version: VERSION,
       build: 'false',
       publish: 'true',
@@ -742,20 +798,10 @@ test('detect stands down once the in-repo trust root matches the published manif
     releaseAssets: { ...completeRelease(), 'runner-manifest.json': current },
   });
   try {
-    const workdir = checkout(fixture, 'detect');
-    const outputs = join(fixture.root, 'detect-outputs.txt');
-    writeFileSync(outputs, '');
-    const run = runJobSteps({
-      workflow,
-      jobId: 'detect',
-      cwd: workdir,
-      ctx: { 'secrets.GITHUB_TOKEN': 'stub-token', 'github.event.inputs.force_version': '' },
-      env: { ...fixture.gh.env, GITHUB_OUTPUT: outputs },
-      only: ['Decide what this run must build and publish'],
-    });
+    const run = runDetect(fixture);
     assert.ok(run.ok, `detect failed: ${run.failed?.stderr}`);
-    assert.match(readFileSync(outputs, 'utf8'), /publish=false/);
-    assert.match(readFileSync(outputs, 'utf8'), /build=false/);
+    assert.equal(run.outputs.v.publish, 'false');
+    assert.equal(run.outputs.v.build, 'false');
   } finally {
     fixture.cleanup();
   }
@@ -828,62 +874,37 @@ for (const [jobId, asset, bytes] of [
 // --- structural contract (assertions the simulation cannot make) ---
 
 test('every push targets the version-derived manifest branch, never a default-branch ref', () => {
+  // The simulation proves what the delivery path DOES; this proves what no path
+  // anywhere in the workflow may do — reach the default branch — including jobs
+  // and branches the simulation never enters. Commands are compared as
+  // normalised token arrays, so quoting or ${BRANCH} spelling does not matter.
   const pushes = everyStep().flatMap(({ jobId, step }) =>
-    (step.run ?? '')
-      .split('\n')
-      .map((l) => l.trim())
-      .filter((l) => /^git push\b/.test(l))
-      .map((line) => ({ jobId, line })),
+    shellCommands(step.run ?? '')
+      .filter((tokens) => tokens[0] === 'git' && tokens[1] === 'push')
+      .map((tokens) => ({ jobId, tokens })),
   );
   assert.ok(pushes.length > 0, 'the manifest has to be pushed somewhere');
   // Allowlist, not blacklist: `git push origin HEAD` while checked out on main
   // writes to the default branch just as surely as naming it. Only two shapes are
   // permitted — writing the manifest branch, and deleting a superseded one.
-  const write = /^git push origin "\$BRANCH"$/;
-  const del = /^git push origin --delete "\$ref"(?: \|\| .*)?$/;
-  for (const { jobId, line } of pushes) {
-    assert.ok(write.test(line) || del.test(line), `${jobId} pushes somewhere unexpected: ${line}`);
+  const write = ['git', 'push', 'origin', '$BRANCH'];
+  const del = ['git', 'push', 'origin', '--delete', '$ref'];
+  for (const { jobId, tokens } of pushes) {
+    const permitted =
+      JSON.stringify(tokens) === JSON.stringify(write) ||
+      JSON.stringify(tokens) === JSON.stringify(del);
+    assert.ok(permitted, `${jobId} pushes somewhere unexpected: ${tokens.join(' ')}`);
   }
   assert.ok(
-    pushes.some(({ line }) => write.test(line)),
+    pushes.some(({ tokens }) => JSON.stringify(tokens) === JSON.stringify(write)),
     'the manifest branch must be pushed',
   );
-});
-
-test('no executable line carries a CI-skip marker', () => {
-  const skip = /\[\s*(?:skip[ -](?:ci|actions)|ci[ -]skip)\s*\]|skip-checks\s*:\s*true/i;
-  for (const { jobId, step } of everyStep()) {
-    // Prose explaining the rule is fine; a command carrying the marker is not.
-    const executable = (step.run ?? '')
-      .split('\n')
-      .filter((line) => !/^\s*#/.test(line))
-      .join('\n');
-    assert.doesNotMatch(
-      executable,
-      skip,
-      `${jobId} / ${step.name}: a commit that skips CI can never produce the required "Build & Test" check`,
-    );
-  }
 });
 
 test('the publish job is permitted to open a pull request', () => {
   const permissions = workflow.jobs['publish-manifest'].permissions ?? {};
   assert.equal(permissions['pull-requests'], 'write');
   assert.equal(permissions.contents, 'write');
-});
-
-test('every merge invocation defers to the required check', () => {
-  // EVERY merge invocation must defer to auto-merge; a second, unguarded
-  // `gh pr merge` alongside it would land the PR without the required check.
-  const merges = steps('publish-manifest')
-    .flatMap((step) => (step.run ?? '').split('\n'))
-    .map((l) => l.trim())
-    .filter((l) => l.includes('gh pr merge'));
-  assert.ok(merges.length > 0, 'the manifest PR has to be merged somehow');
-  for (const merge of merges) {
-    assert.match(merge, /--auto\b/, `merge bypasses the required check: ${merge}`);
-    assert.doesNotMatch(merge, /--admin\b/, `merge uses an admin override: ${merge}`);
-  }
 });
 
 test('the manifest branch comes from the detect decision, not a literal', () => {

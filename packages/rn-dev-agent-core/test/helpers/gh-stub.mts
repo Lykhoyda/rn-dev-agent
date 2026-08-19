@@ -133,6 +133,25 @@ if (group === 'release' && sub === 'view') {
     release.assets[name] = { uploads: (release.assets[name]?.uploads ?? 0) + 1 };
   }
   writeState(state);
+} else if (group === 'api') {
+  // Only the open-pull-request listing this workflow needs, paged the way the
+  // REST API pages: without --paginate a caller sees at most one page.
+  const endpoint = (positional[1] ?? '').replace(
+    '{owner}/{repo}',
+    process.env.GH_REPO ?? 'owner/repo',
+  );
+  const [path, query] = endpoint.split('?');
+  if (!/^repos\/[^/]+\/[^/]+\/pulls$/.test(path)) {
+    die(`gh stub: unsupported api endpoint: ${endpoint}`);
+  }
+  const params = new URLSearchParams(query ?? '');
+  const wantState = (params.get('state') ?? 'open').toUpperCase();
+  const perPage = Number(params.get('per_page') ?? 30);
+  const matching = state.prs.filter((pr) => wantState === 'ALL' || pr.state === wantState);
+  const pages = has('--paginate') ? [matching] : [matching.slice(0, perPage)];
+  for (const page of pages) {
+    emit(page.map((pr) => ({ number: pr.number, head: { ref: pr.headRefName } })));
+  }
 } else if (group === 'pr' && sub === 'list') {
   const head = flag('--head');
   const base = flag('--base');

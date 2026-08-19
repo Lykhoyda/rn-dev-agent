@@ -50,7 +50,12 @@ function resolveEnv(
 }
 
 export type StepResult = { name: string; status: number; stdout: string; stderr: string };
-export type JobRun = { steps: StepResult[]; ok: boolean; failed?: StepResult };
+export type JobRun = {
+  steps: StepResult[];
+  ok: boolean;
+  failed?: StepResult;
+  outputs: Record<string, Record<string, string>>;
+};
 
 export type RunJobOptions = {
   workflow: Workflow;
@@ -64,10 +69,14 @@ export type RunJobOptions = {
 export function runJobSteps({ workflow, jobId, cwd, ctx, env, only }: RunJobOptions): JobRun {
   const job = workflow.jobs[jobId];
   if (!job) throw new Error(`no such job: ${jobId}`);
-  const jobEnv = resolveEnv(job.env, ctx);
+  // Step outputs written to $GITHUB_OUTPUT become `steps.<id>.outputs.<key>`
+  // expressions for every later step, the way the runner resolves them.
+  const live = { ...ctx };
+  const jobEnv = resolveEnv(job.env, live);
   const scriptDir = mkdtempSync(join(tmpdir(), 'workflow-step-'));
 
   const results: StepResult[] = [];
+  const outputs: Record<string, Record<string, string>> = {};
   let index = 0;
   for (const step of job.steps ?? []) {
     if (step.run === undefined) continue;
@@ -76,8 +85,10 @@ export function runJobSteps({ workflow, jobId, cwd, ctx, env, only }: RunJobOpti
     if (step.if && !only) {
       throw new Error(`step "${name}" is conditional; select steps explicitly to simulate it`);
     }
-    const scriptPath = join(scriptDir, `${index++}.sh`);
-    writeFileSync(scriptPath, resolveExpressions(step.run, ctx));
+    const scriptPath = join(scriptDir, `${index}.sh`);
+    const outputPath = join(scriptDir, `${index++}.outputs`);
+    writeFileSync(scriptPath, resolveExpressions(step.run, live));
+    writeFileSync(outputPath, '');
     const result = spawnSync(
       'bash',
       ['--noprofile', '--norc', '-e', '-o', 'pipefail', scriptPath],
@@ -88,11 +99,27 @@ export function runJobSteps({ workflow, jobId, cwd, ctx, env, only }: RunJobOpti
           ...process.env,
           ...env,
           ...jobEnv,
-          ...resolveEnv(step.env, ctx),
+          ...resolveEnv(step.env, live),
           GITHUB_WORKSPACE: cwd,
+          GITHUB_OUTPUT: outputPath,
         },
       },
     );
+    const emitted = Object.fromEntries(
+      readFileSync(outputPath, 'utf8')
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => {
+          const at = line.indexOf('=');
+          return [line.slice(0, at), line.slice(at + 1)];
+        }),
+    );
+    if (step.id) {
+      outputs[step.id] = emitted;
+      for (const [key, value] of Object.entries(emitted)) {
+        live[`steps.${step.id}.outputs.${key}`] = value;
+      }
+    }
     const stepResult: StepResult = {
       name,
       status: result.status ?? 1,
@@ -100,9 +127,29 @@ export function runJobSteps({ workflow, jobId, cwd, ctx, env, only }: RunJobOpti
       stderr: result.stderr ?? '',
     };
     results.push(stepResult);
-    if (stepResult.status !== 0) return { steps: results, ok: false, failed: stepResult };
+    if (stepResult.status !== 0) return { steps: results, ok: false, failed: stepResult, outputs };
   }
-  return { steps: results, ok: true };
+  return { steps: results, ok: true, outputs };
+}
+
+// Normalised view of a shell script: one token array per simple command, with
+// quoting and `${X}` / `$X` spelling collapsed so assertions describe the command
+// that runs rather than how it happens to be written.
+export function shellCommands(script: string): string[][] {
+  return script
+    .replace(/\\\n\s*/g, ' ')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line !== '' && !line.startsWith('#'))
+    .flatMap((line) => line.split(/\s*(?:\|\||&&|;)\s*/))
+    .map((command) =>
+      command
+        .trim()
+        .split(/\s+/)
+        .map((token) => token.replace(/["']/g, '').replace(/\$\{(\w+)\}/g, '$$$1'))
+        .filter(Boolean),
+    )
+    .filter((tokens) => tokens.length > 0);
 }
 
 export type GhStub = {

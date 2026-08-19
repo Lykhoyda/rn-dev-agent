@@ -235,18 +235,33 @@ jobs:
             echo "::error::refusing to publish a v$VERSION trust root while plugin.json is v$PLUGIN" >&2
             exit 1
           fi
-      - name: Check out the version-keyed manifest branch
+      - id: branch
+        name: Check out the version-keyed manifest branch
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           # One deterministic branch per version, so a rerun updates the same
-          # branch (and reuses its PR) instead of fanning out duplicates.
-          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
-            git fetch --depth=1 origin "$BRANCH"
-            git checkout -B "$BRANCH" FETCH_HEAD
-          else
-            git checkout -B "$BRANCH"
-          fi
+          # branch (and reuses its PR) instead of fanning out duplicates. This is
+          # the ONLY place origin is asked whether that branch exists, and only
+          # exit 2 ("no matching ref") counts as absent: a transport failure must
+          # never be readable as "nothing to deliver".
+          rc=0
+          git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null || rc=$?
+          case "$rc" in
+            0)
+              echo "existed=true" >> "$GITHUB_OUTPUT"
+              git fetch --depth=1 origin "$BRANCH"
+              git checkout -B "$BRANCH" FETCH_HEAD
+              ;;
+            2)
+              echo "existed=false" >> "$GITHUB_OUTPUT"
+              git checkout -B "$BRANCH"
+              ;;
+            *)
+              echo "::error::could not ask origin whether $BRANCH exists (git ls-remote exit $rc)" >&2
+              exit 1
+              ;;
+          esac
       - name: Generate the manifest (sha256 + bytes)
         run: |
           node scripts/build-runner-manifest.mts \
@@ -261,26 +276,42 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "v$VERSION" runner-manifest.json --clobber
-      - name: Commit the manifest to the branch
+      - id: commit
+        name: Commit the manifest to the branch
         run: |
           git add runner-manifest.json packages/codex-plugin/runner-manifest.json packages/claude-plugin/runner-manifest.json
           # No [skip ci]: main requires the "Build & Test" check, and a commit
           # that skips CI can never produce it.
           if git diff --cached --quiet; then
             echo "manifest already current on $BRANCH — nothing to commit"
+            echo "pushed=false" >> "$GITHUB_OUTPUT"
           else
             git commit -m "chore(release): runner-manifest for v$VERSION"
             git push origin "$BRANCH"
+            echo "pushed=true" >> "$GITHUB_OUTPUT"
           fi
       - name: Open or reuse the manifest PR and arm auto-merge
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
+          BRANCH_EXISTED: ${{ steps.branch.outputs.existed }}
+          PUSHED: ${{ steps.commit.outputs.pushed }}
         run: |
-          if ! git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
-            echo "the repository trust root already carries v$VERSION — no PR needed"
-            exit 0
-          fi
+          # Whether there is anything to deliver comes from the two steps that
+          # know it authoritatively; origin is never re-asked, because a failed
+          # query would otherwise read as "no branch" and finish this job green
+          # with the trust root pushed but undelivered.
+          case "$BRANCH_EXISTED:$PUSHED" in
+            true:true | true:false | false:true) ;;
+            false:false)
+              echo "the repository trust root already carries v$VERSION — no PR needed"
+              exit 0
+              ;;
+            *)
+              echo "::error::manifest branch state was not reported (existed='$BRANCH_EXISTED' pushed='$PUSHED')" >&2
+              exit 1
+              ;;
+          esac
           PR=$(gh pr list --head "$BRANCH" --base main --state open --json number --jq '.[0].number // empty')
           if [ -z "$PR" ]; then
             PR_URL=$(gh pr create --base main --head "$BRANCH" \
@@ -297,11 +328,13 @@ jobs:
           # A manifest PR left open from an earlier version would race this one:
           # it may already have auto-merge armed and land AFTER it, restoring a
           # stale trust root. Exactly one may be open, so closing them is fatal,
-          # not best-effort, and it happens before this PR is armed. The branch
-          # comparison is done in shell, never in --jq, so a filter that mismatches
-          # can never close the PR we just opened. --limit outruns the 30 default.
-          STALE=$(gh pr list --state open --limit 100 --json number,headRefName \
-            --jq '.[] | select(.headRefName | startswith("chore/runner-manifest-v")) | "\(.number) \(.headRefName)"')
+          # not best-effort, and it happens before this PR is armed. Every open PR
+          # is paged through rather than capped at a page size, so the invariant
+          # cannot degrade silently once the repository carries many open PRs. The
+          # branch comparison is done in shell, never in --jq, so a filter that
+          # mismatches can never close the PR we just opened.
+          STALE=$(gh api --paginate 'repos/{owner}/{repo}/pulls?state=open&per_page=100' \
+            --jq '.[] | select(.head.ref | startswith("chore/runner-manifest-v")) | "\(.number) \(.head.ref)"')
           while read -r stale ref; do
             { [ -n "$stale" ] && [ "$ref" != "$BRANCH" ]; } || continue
             echo "closing superseded manifest PR #$stale ($ref)"
