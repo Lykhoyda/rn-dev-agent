@@ -11,9 +11,15 @@ export function sessionRecoveryRemedy(lead) {
         `${SESSION_RECOVERY_DOCS}.`);
 }
 export function sessionOwnerInspectionRemedy(lead) {
-    return (`${lead} Identify the recorded holder with ${HEADLESS_SESSION_REPORT_COMMAND} from the ` +
-        `app root, close that process, then run ${HEADLESS_SESSION_RECOVERY_COMMAND}. ` +
+    return (`${lead} ${HEADLESS_SESSION_REPORT_COMMAND} from the app root names the owning app root ` +
+        `and session; close that session, then run ${HEADLESS_SESSION_RECOVERY_COMMAND}. ` +
         `A live or unprovable owner is never force-released. ${SESSION_RECOVERY_DOCS}.`);
+}
+export function sessionOtherRootRecoveryRemedy(lead) {
+    return (`${lead} ${HEADLESS_SESSION_REPORT_COMMAND} names the owning app root and session; run ` +
+        `${HEADLESS_SESSION_RECOVERY_COMMAND} from that app root — this one can never release it — ` +
+        `or work in a separate worktree. Nothing is force-released either way. ` +
+        `${SESSION_RECOVERY_DOCS}.`);
 }
 export function sessionCleanupObligationRemedy(lead) {
     return (`${lead} Read the outstanding obligation with ${HEADLESS_SESSION_REPORT_COMMAND} from the ` +

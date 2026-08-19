@@ -290,7 +290,8 @@ node <package-root>/rn-dev-agent-core/dist/session-doctor.js repair   # release 
 ```
 
 `report` prints the authority store path, whether this source root is wedged,
-`sameRootOwner` (`absent` / `live` / `stale` / `unprovable`), any retained
+`sameRootOwner` (`absent` / `live` / `stale` / `unprovable`), `ownerAppRoot` and a truncated
+`ownerSession` naming the recorded holder (never its pid), any retained
 `startupCleanupBlocked`, and the count of abandoned blocked contenders, and exits non-zero
 when it finds the root wedged. `repair` runs
 exactly the startup cleanup a fresh transport runs: it releases a **proven-dead**

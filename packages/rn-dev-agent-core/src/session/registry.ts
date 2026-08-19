@@ -13,6 +13,7 @@ import { NON_GIT_DECLARATION_NEXT_ACTION } from './declared-source-contract.js';
 import { probeMetroListener } from './metro-binding.js';
 import {
   sessionCleanupObligationRemedy,
+  sessionOtherRootRecoveryRemedy,
   sessionOwnerInspectionRemedy,
   sessionRecoveryRemedy,
 } from './recovery-remedy.js';
@@ -254,6 +255,11 @@ export interface SourceOwnershipInspection {
   owner: 'absent' | 'live' | 'stale' | 'unprovable';
   sameRoot: boolean;
   abandonedContenders: number;
+  /**
+   * Same-user local diagnostics for the doctor CLI only. No refusal text and no
+   * cross-session projection reads it, and it never carries a pid.
+   */
+  holder?: { session: string; appRoot?: string };
   startupCleanupBlocked?: StartupCleanupBlocker;
 }
 
@@ -405,6 +411,15 @@ function isOperationalState(state: string): boolean {
 
 function isFenceableState(state: string): boolean {
   return isOperationalState(state) || state === 'handoff';
+}
+
+function readSourceAppRoot(sourceJson: string): string | undefined {
+  try {
+    const source = JSON.parse(sourceJson) as Record<string, unknown>;
+    return typeof source.appRoot === 'string' ? source.appRoot : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function readStartupCleanupBlocker(bindingsJson: string): StartupCleanupBlocker | undefined {
@@ -1204,8 +1219,9 @@ export class SessionRegistry {
           return {
             requirement: 'attach',
             priorOwner: 'stale',
-            nextAction:
-              "The proven-dead owner belongs to a different app root in this worktree, so startup cleanup cannot release it here. Start and close rn-dev-agent from the prior owner's app root to release its authority, or use a separate worktree.",
+            nextAction: sessionOtherRootRecoveryRemedy(
+              'The proven-dead owner belongs to a different app root in this worktree, so startup cleanup cannot release it here.',
+            ),
           };
         }
         if (prior.source_key !== row.source_key) {
@@ -3238,12 +3254,13 @@ export class SessionRegistry {
       this.#database
         .prepare(
           `SELECT session_id, source_key, worktree_key, app_root_key, claim_epoch,
-                  supervisor_pid, supervisor_birth, bindings_json
+                  supervisor_pid, supervisor_birth, source_json, bindings_json
            FROM sessions WHERE session_id = ?`,
         )
         .get(claim.session_id),
     );
     if (!row) return { owner: 'absent', sameRoot: false, abandonedContenders };
+    const ownerAppRoot = readSourceAppRoot(row.source_json);
     let status: OwnerStatus = 'unknown';
     try {
       status = this.#ownerStatus({
@@ -3262,6 +3279,10 @@ export class SessionRegistry {
         row.worktree_key === input.worktreeKey &&
         row.app_root_key === input.appRootKey,
       abandonedContenders,
+      holder: {
+        session: row.session_id.slice(0, 12),
+        ...(ownerAppRoot === undefined ? {} : { appRoot: ownerAppRoot }),
+      },
       ...(blocked ? { startupCleanupBlocked: blocked } : {}),
     };
   }

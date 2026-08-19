@@ -67,8 +67,9 @@ When the RN app root is known, run the read-only packaged probe
 three-state: GREEN when `sameRootOwner` is `absent` and `wedged` and `repairable` are both
 false, YELLOW when `repairable` is true (a proven-dead owner of this exact root, released by
 the next transport start or by the repair command) or `sameRootOwner` is `live` (another
-session holds this worktree right now — name the live holder instead of reporting GREEN; it
-is never released and clears when that session closes), and RED when `wedged` is true. On RED, name the exact cause it returns
+session holds this worktree right now — report its `ownerSession` and `ownerAppRoot` instead
+of GREEN; it is never released and clears when that session closes), and RED when `wedged`
+is true. On RED, name the exact cause it returns
 instead of a generic stale-lock story:
 `sameRootOwner: unprovable` (the recorded owner's process identity cannot be read, so it
 is conservatively treated as live), `startupCleanupBlocked` (the owner is proven dead but

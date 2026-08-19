@@ -614,13 +614,19 @@ test('GH #792: repair never reports success while this root stays wedged by anot
   });
   const layout = createAuthorityStateLayout(join(stateHome, 'rn-dev-agent'));
   const registry = openSessionRegistry(layout.registry, { ownerStatus: inspectSessionOwner });
+  const ownerAppRoot = join(appRoot, 'packages', 'other-app');
   const owner = registry.createSession({
     sessionId: 'other-app-root-owner',
     sourceKey: source.sourceKey,
     worktreeKey: source.worktreeKey,
     appRootKey: 'packages/other-app',
     supervisor: { pid: 1, token: 'birth-of-the-dead-owner' },
-    source: { ...source, appRootKey: 'packages/other-app', model: 'grouped-v1' },
+    source: {
+      ...source,
+      appRoot: ownerAppRoot,
+      appRootKey: 'packages/other-app',
+      model: 'grouped-v1',
+    },
     bindings: {},
   });
   registry.claimResources(owner, [{ type: 'source', key: source.worktreeKey }]);
@@ -632,12 +638,101 @@ test('GH #792: repair never reports success while this root stays wedged by anot
   assert.equal(before.payload.ownerIsThisRoot, false);
   assert.equal(before.code, 1);
 
+  // The remedy is only executable if the payload says which root can run it.
+  assert.equal(before.payload.ownerAppRoot, ownerAppRoot);
+  assert.equal(before.payload.ownerSession, 'other-app-ro');
+  assert.notEqual(before.payload.ownerAppRoot, before.payload.appRoot);
+
   const repaired = run('repair');
   assert.deepEqual(repaired.payload.released, []);
   assert.equal(repaired.payload.wedged, true, 'a no-op cleanup must not read as recovered');
   assert.equal(repaired.code, 1);
   assert.match(String(repaired.payload.remedy), /different app root/);
+  assert.equal(repaired.payload.ownerAppRoot, ownerAppRoot);
+  // Repair from here just failed, so the remedy must send the reader to the root that can
+  // succeed — never back to closing an owner this branch already proved dead.
+  assert.match(String(repaired.payload.remedy), /from that app root/);
+  assert.doesNotMatch(String(repaired.payload.remedy), /close that session/);
   assert.equal(run('report').payload.wedged, true);
+});
+
+test('GH #792: report names the holder it tells the reader to act on, and never a pid', () => {
+  const stateHome = temporaryStateHome();
+  const appRoot = join(stateHome, 'app');
+  mkdirSync(appRoot);
+  writeFileSync(join(appRoot, 'package.json'), '{"name":"gh-792-holder"}');
+  const environment = {
+    ...process.env,
+    XDG_STATE_HOME: stateHome,
+    RN_DEV_AGENT_DECLARED_ROOT: appRoot,
+    RN_DEV_AGENT_DECLARED_MANIFESTS: 'package.json',
+  };
+  const source = resolveSourceIdentity(appRoot, {
+    declaredRoot: appRoot,
+    declaredManifests: ['package.json'],
+  });
+  const layout = createAuthorityStateLayout(join(stateHome, 'rn-dev-agent'));
+  const self = probeProcessBirth(process.pid);
+  const seedLiveOwner = (sessionId: string) => {
+    const registry = openSessionRegistry(layout.registry, { ownerStatus: inspectSessionOwner });
+    const owner = registry.createSession({
+      sessionId,
+      sourceKey: source.sourceKey,
+      worktreeKey: source.worktreeKey,
+      appRootKey: source.appRootKey,
+      // A real live owner: this test process, read only and never signalled.
+      supervisor: {
+        pid: process.pid,
+        token: self.status === 'present' ? self.birth.token : 'unreadable-identity',
+      },
+      source: { ...source, model: 'grouped-v1' },
+      bindings: {},
+    });
+    registry.claimResources(owner, [{ type: 'source', key: source.worktreeKey }]);
+    registry.updateBindings(owner, { state: 'source_bound', bindings: {} });
+    registry.close();
+    return owner;
+  };
+  const report = () => {
+    let stdout = '';
+    try {
+      stdout = execFileSync(
+        process.execPath,
+        [join(distRoot, 'session-doctor.js'), 'report', '--json'],
+        { cwd: appRoot, encoding: 'utf8', env: environment },
+      );
+    } catch (error) {
+      stdout = String((error as { stdout?: string }).stdout);
+    }
+    return JSON.parse(stdout) as Record<string, unknown>;
+  };
+
+  const empty = report();
+  assert.equal(empty.sameRootOwner, 'absent');
+  assert.equal(empty.ownerSession, undefined, 'no owner means no holder to name');
+
+  const first = seedLiveOwner('holder-alpha-0001');
+  const held = report();
+  assert.ok(['live', 'unprovable'].includes(String(held.sameRootOwner)));
+  assert.equal(held.ownerSession, 'holder-alpha');
+  assert.equal(held.ownerAppRoot, source.appRoot);
+  // The remedy tells the reader to close that session, so the payload must discriminate it.
+  assert.match(String(held.remedy), /names the owning app root and session/);
+  // A truncated session id identifies the holder; a pid never travels in this payload.
+  assert.doesNotMatch(JSON.stringify(held), new RegExp(`\\b${process.pid}\\b`));
+  assert.equal(
+    Object.keys(held).some((key) => /pid/i.test(key)),
+    false,
+    JSON.stringify(Object.keys(held)),
+  );
+
+  const registry = openSessionRegistry(layout.registry, { ownerStatus: inspectSessionOwner });
+  registry.releaseSession(first);
+  registry.close();
+  seedLiveOwner('holder-bravo-0002');
+  const second = report();
+  assert.equal(second.ownerSession, 'holder-bravo');
+  assert.notEqual(second.ownerSession, held.ownerSession);
 });
 
 test('GH #792: the headless remedy command resolves under every host that ships the core', () => {
@@ -796,8 +891,8 @@ test('GH #792: an unmet obligation on a proven-dead owner never tells the agent 
   assert.equal(outcome.status, 'refused');
   assert.equal(outcome.refusal?.code, 'RUNNER_ADOPTION_REQUIRED');
   const remedy = String(outcome.refusal?.nextAction);
-  // The owner is already proven dead here, so "close that process" is unactionable advice.
-  assert.doesNotMatch(remedy, /close that process/, remedy);
+  // The owner is already proven dead here, so "close that session" is unactionable advice.
+  assert.doesNotMatch(remedy, /close that session/, remedy);
   assert.match(remedy, /RUNNER_ADOPTION_REQUIRED/, 'the remedy must name the unmet obligation');
   assert.match(remedy, /session-doctor\.js" report/);
   assert.match(remedy, /session-doctor\.js" repair/);
@@ -821,7 +916,7 @@ test('GH #792: an unmet obligation on a proven-dead owner never tells the agent 
   const requirement = fixture.registry.inspectRecoveryRequirement('contender');
   assert.equal(requirement.priorOwner, 'stale');
   assert.equal(requirement.startupCleanupBlocked?.code, 'RUNNER_ADOPTION_REQUIRED');
-  assert.doesNotMatch(String(requirement.nextAction), /close that process/);
+  assert.doesNotMatch(String(requirement.nextAction), /close that session/);
   assert.match(String(requirement.nextAction), /session-doctor\.js" repair/);
   fixture.registry.close();
 });
@@ -856,7 +951,7 @@ test('GH #792: a live or unprovable owner still gets the close-the-holder remedy
       {},
     );
     assert.equal(outcome.status, 'refused', status);
-    assert.match(String(outcome.refusal?.nextAction), /close that process/, status);
+    assert.match(String(outcome.refusal?.nextAction), /close that session/, status);
     registry.close();
   }
 });
@@ -911,7 +1006,7 @@ test('GH #792: a live-owner repair reaps abandoned contenders and still refuses 
   // but abandoned claim-less contender rows are still reaped.
   assert.deepEqual(outcome.discardedContenders, ['dead-contender']);
   assert.equal(registry.getSessionStatus('dead-contender')?.state, 'released');
-  assert.match(String(outcome.refusal?.nextAction), /close that process/);
+  assert.match(String(outcome.refusal?.nextAction), /close that session/);
   registry.close();
 });
 
@@ -947,7 +1042,7 @@ test('GH #792: an expired lease with an unprovable owner keeps the close-the-hol
   assert.equal(outcome.status, 'refused');
   assert.equal(outcome.refusal?.code, 'STALE_LEASE_NOT_RECLAIMABLE');
   assert.deepEqual(outcome.released, [], 'lease expiry is never authority to release');
-  assert.match(String(outcome.refusal?.nextAction), /close that process/);
+  assert.match(String(outcome.refusal?.nextAction), /close that session/);
   assert.doesNotMatch(String(outcome.refusal?.nextAction), /outstanding obligation/);
   registry.close();
 });

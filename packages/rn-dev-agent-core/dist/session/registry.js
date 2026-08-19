@@ -4,7 +4,7 @@ import { openAuthorityStore, } from './authority-store.js';
 import { hasCompleteRecorderCleanupIdentity, hasCompleteRunnerCleanupIdentity, } from './cleanup-identity.js';
 import { NON_GIT_DECLARATION_NEXT_ACTION } from './declared-source-contract.js';
 import { probeMetroListener } from './metro-binding.js';
-import { sessionCleanupObligationRemedy, sessionOwnerInspectionRemedy, sessionRecoveryRemedy, } from './recovery-remedy.js';
+import { sessionCleanupObligationRemedy, sessionOtherRootRecoveryRemedy, sessionOwnerInspectionRemedy, sessionRecoveryRemedy, } from './recovery-remedy.js';
 /** Refusals about the owner's identity rather than an unmet obligation; routed by exact text. */
 export const OWNER_IDENTITY_REFUSAL_REASONS = {
     sourceOwnerLive: 'the same-root owner is live; a live owner is never released',
@@ -145,6 +145,15 @@ function isOperationalState(state) {
 }
 function isFenceableState(state) {
     return isOperationalState(state) || state === 'handoff';
+}
+function readSourceAppRoot(sourceJson) {
+    try {
+        const source = JSON.parse(sourceJson);
+        return typeof source.appRoot === 'string' ? source.appRoot : undefined;
+    }
+    catch {
+        return undefined;
+    }
 }
 function readStartupCleanupBlocker(bindingsJson) {
     let journal;
@@ -659,7 +668,7 @@ export class SessionRegistry {
                     return {
                         requirement: 'attach',
                         priorOwner: 'stale',
-                        nextAction: "The proven-dead owner belongs to a different app root in this worktree, so startup cleanup cannot release it here. Start and close rn-dev-agent from the prior owner's app root to release its authority, or use a separate worktree.",
+                        nextAction: sessionOtherRootRecoveryRemedy('The proven-dead owner belongs to a different app root in this worktree, so startup cleanup cannot release it here.'),
                     };
                 }
                 if (prior.source_key !== row.source_key) {
@@ -1976,11 +1985,12 @@ export class SessionRegistry {
             return { owner: 'absent', sameRoot: false, abandonedContenders };
         const row = asSession(this.#database
             .prepare(`SELECT session_id, source_key, worktree_key, app_root_key, claim_epoch,
-                  supervisor_pid, supervisor_birth, bindings_json
+                  supervisor_pid, supervisor_birth, source_json, bindings_json
            FROM sessions WHERE session_id = ?`)
             .get(claim.session_id));
         if (!row)
             return { owner: 'absent', sameRoot: false, abandonedContenders };
+        const ownerAppRoot = readSourceAppRoot(row.source_json);
         let status = 'unknown';
         try {
             status = this.#ownerStatus({
@@ -1999,6 +2009,10 @@ export class SessionRegistry {
                 row.worktree_key === input.worktreeKey &&
                 row.app_root_key === input.appRootKey,
             abandonedContenders,
+            holder: {
+                session: row.session_id.slice(0, 12),
+                ...(ownerAppRoot === undefined ? {} : { appRoot: ownerAppRoot }),
+            },
             ...(blocked ? { startupCleanupBlocked: blocked } : {}),
         };
     }

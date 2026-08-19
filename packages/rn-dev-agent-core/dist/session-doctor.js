@@ -4,7 +4,7 @@
 import { parseDeclaredManifests } from './session/declared-source-contract.js';
 import { inspectSessionOwner } from './session/process-owner.js';
 import { openSessionRegistry, SessionAuthorityError, } from './session/registry.js';
-import { HEADLESS_SESSION_RECOVERY_COMMAND, sessionCleanupObligationRemedy, sessionOwnerInspectionRemedy, sessionRecoveryRemedy, } from './session/recovery-remedy.js';
+import { HEADLESS_SESSION_RECOVERY_COMMAND, sessionCleanupObligationRemedy, sessionOtherRootRecoveryRemedy, sessionOwnerInspectionRemedy, sessionRecoveryRemedy, } from './session/recovery-remedy.js';
 import { resolveSourceIdentity } from './session/source-identity.js';
 import { runStartupCleanupForSource } from './session/startup-cleanup.js';
 import { resolveAuthorityStateLayout } from './session/state-root.js';
@@ -31,7 +31,7 @@ function remedyFor(ownership) {
         if (ownership.owner === 'unprovable') {
             return sessionOwnerInspectionRemedy('The identity of the owner holding this worktree could not be proven, so it is treated as live; it belongs to a different app root or declared source.');
         }
-        return sessionOwnerInspectionRemedy('The proven-dead owner belongs to a different app root or declared source in this worktree, so this root cannot release it.');
+        return sessionOtherRootRecoveryRemedy('The proven-dead owner belongs to a different app root or declared source in this worktree, so this root cannot release it.');
     }
     if (ownership.owner === 'live') {
         return sessionOwnerInspectionRemedy('A live same-root owner holds this worktree.');
@@ -58,6 +58,14 @@ function isWedged(ownership) {
 function isRepairable(ownership) {
     return ownership.owner === 'stale' && ownership.sameRoot && !isWedged(ownership);
 }
+function holderOf(ownership) {
+    if (!ownership.holder)
+        return {};
+    return {
+        ownerSession: ownership.holder.session,
+        ...(ownership.holder.appRoot === undefined ? {} : { ownerAppRoot: ownership.holder.appRoot }),
+    };
+}
 function inspect() {
     const layout = resolveAuthorityStateLayout(stateDir());
     const registry = openSessionRegistry(layout.registry, { ownerStatus: inspectSessionOwner });
@@ -79,6 +87,7 @@ function report() {
             worktree: source.worktreeKey.slice(0, 12),
             sameRootOwner: ownership.owner,
             ownerIsThisRoot: ownership.sameRoot,
+            ...holderOf(ownership),
             abandonedContenders: ownership.abandonedContenders,
             wedged: isWedged(ownership),
             repairable: isRepairable(ownership),
@@ -109,6 +118,7 @@ async function repair() {
             status: outcome.status,
             released: outcome.released,
             discardedContenders: outcome.discardedContenders,
+            ...holderOf(ownership),
             wedged,
             ...(outcome.refusal ? { refusal: outcome.refusal } : {}),
             remedy: wedged || ownership.owner === 'live'

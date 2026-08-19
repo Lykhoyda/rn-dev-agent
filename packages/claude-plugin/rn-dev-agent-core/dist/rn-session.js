@@ -8288,7 +8288,10 @@ function sessionRecoveryRemedy(lead) {
   return `${lead} Interactive: reconnect the transport with /mcp. Headless: run ${HEADLESS_SESSION_RECOVERY_COMMAND} from the app root. Both run the same proven-dead startup cleanup and neither releases a live or unprovable owner. ${SESSION_RECOVERY_DOCS}.`;
 }
 function sessionOwnerInspectionRemedy(lead) {
-  return `${lead} Identify the recorded holder with ${HEADLESS_SESSION_REPORT_COMMAND} from the app root, close that process, then run ${HEADLESS_SESSION_RECOVERY_COMMAND}. A live or unprovable owner is never force-released. ${SESSION_RECOVERY_DOCS}.`;
+  return `${lead} ${HEADLESS_SESSION_REPORT_COMMAND} from the app root names the owning app root and session; close that session, then run ${HEADLESS_SESSION_RECOVERY_COMMAND}. A live or unprovable owner is never force-released. ${SESSION_RECOVERY_DOCS}.`;
+}
+function sessionOtherRootRecoveryRemedy(lead) {
+  return `${lead} ${HEADLESS_SESSION_REPORT_COMMAND} names the owning app root and session; run ${HEADLESS_SESSION_RECOVERY_COMMAND} from that app root \u2014 this one can never release it \u2014 or work in a separate worktree. Nothing is force-released either way. ${SESSION_RECOVERY_DOCS}.`;
 }
 function sessionCleanupObligationRemedy(lead) {
   return `${lead} Read the outstanding obligation with ${HEADLESS_SESSION_REPORT_COMMAND} from the app root, clear what it names, then run ${HEADLESS_SESSION_RECOVERY_COMMAND}; interactive clients can reconnect with /mcp instead. Neither releases a live or unprovable owner. ${SESSION_RECOVERY_DOCS}.`;
@@ -8347,6 +8350,14 @@ function isOperationalState(state) {
 }
 function isFenceableState(state) {
   return isOperationalState(state) || state === "handoff";
+}
+function readSourceAppRoot(sourceJson) {
+  try {
+    const source = JSON.parse(sourceJson);
+    return typeof source.appRoot === "string" ? source.appRoot : void 0;
+  } catch {
+    return void 0;
+  }
 }
 function readStartupCleanupBlocker(bindingsJson) {
   let journal;
@@ -8824,7 +8835,7 @@ var init_registry = __esm({
               return {
                 requirement: "attach",
                 priorOwner: "stale",
-                nextAction: "The proven-dead owner belongs to a different app root in this worktree, so startup cleanup cannot release it here. Start and close rn-dev-agent from the prior owner's app root to release its authority, or use a separate worktree."
+                nextAction: sessionOtherRootRecoveryRemedy("The proven-dead owner belongs to a different app root in this worktree, so startup cleanup cannot release it here.")
               };
             }
             if (prior.source_key !== row.source_key) {
@@ -9905,10 +9916,11 @@ var init_registry = __esm({
         if (!claim)
           return { owner: "absent", sameRoot: false, abandonedContenders };
         const row = asSession(this.#database.prepare(`SELECT session_id, source_key, worktree_key, app_root_key, claim_epoch,
-                  supervisor_pid, supervisor_birth, bindings_json
+                  supervisor_pid, supervisor_birth, source_json, bindings_json
            FROM sessions WHERE session_id = ?`).get(claim.session_id));
         if (!row)
           return { owner: "absent", sameRoot: false, abandonedContenders };
+        const ownerAppRoot = readSourceAppRoot(row.source_json);
         let status = "unknown";
         try {
           status = this.#ownerStatus({
@@ -9924,6 +9936,10 @@ var init_registry = __esm({
           owner: status === "match" ? "live" : status === "mismatch" ? "stale" : "unprovable",
           sameRoot: row.source_key === input.sourceKey && row.worktree_key === input.worktreeKey && row.app_root_key === input.appRootKey,
           abandonedContenders,
+          holder: {
+            session: row.session_id.slice(0, 12),
+            ...ownerAppRoot === void 0 ? {} : { appRoot: ownerAppRoot }
+          },
           ...blocked ? { startupCleanupBlocked: blocked } : {}
         };
       }

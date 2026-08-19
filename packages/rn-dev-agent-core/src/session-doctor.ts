@@ -11,6 +11,7 @@ import {
 import {
   HEADLESS_SESSION_RECOVERY_COMMAND,
   sessionCleanupObligationRemedy,
+  sessionOtherRootRecoveryRemedy,
   sessionOwnerInspectionRemedy,
   sessionRecoveryRemedy,
 } from './session/recovery-remedy.js';
@@ -49,7 +50,7 @@ function remedyFor(ownership: SourceOwnershipInspection): string {
         'The identity of the owner holding this worktree could not be proven, so it is treated as live; it belongs to a different app root or declared source.',
       );
     }
-    return sessionOwnerInspectionRemedy(
+    return sessionOtherRootRecoveryRemedy(
       'The proven-dead owner belongs to a different app root or declared source in this worktree, so this root cannot release it.',
     );
   }
@@ -83,6 +84,14 @@ function isRepairable(ownership: SourceOwnershipInspection): boolean {
   return ownership.owner === 'stale' && ownership.sameRoot && !isWedged(ownership);
 }
 
+function holderOf(ownership: SourceOwnershipInspection): Record<string, unknown> {
+  if (!ownership.holder) return {};
+  return {
+    ownerSession: ownership.holder.session,
+    ...(ownership.holder.appRoot === undefined ? {} : { ownerAppRoot: ownership.holder.appRoot }),
+  };
+}
+
 function inspect(): { ownership: SourceOwnershipInspection; layout: AuthorityStateLayout } {
   const layout = resolveAuthorityStateLayout(stateDir());
   const registry = openSessionRegistry(layout.registry, { ownerStatus: inspectSessionOwner });
@@ -104,6 +113,7 @@ function report(): { payload: Record<string, unknown>; ok: boolean } {
       worktree: source.worktreeKey.slice(0, 12),
       sameRootOwner: ownership.owner,
       ownerIsThisRoot: ownership.sameRoot,
+      ...holderOf(ownership),
       abandonedContenders: ownership.abandonedContenders,
       wedged: isWedged(ownership),
       repairable: isRepairable(ownership),
@@ -135,6 +145,7 @@ async function repair(): Promise<{ payload: Record<string, unknown>; ok: boolean
       status: outcome.status,
       released: outcome.released,
       discardedContenders: outcome.discardedContenders,
+      ...holderOf(ownership),
       wedged,
       ...(outcome.refusal ? { refusal: outcome.refusal } : {}),
       remedy:
