@@ -18,6 +18,7 @@ import {
 } from './recovery-remedy.js';
 import {
   openSessionRegistry,
+  OWNER_IDENTITY_REFUSAL_REASONS,
   SessionAuthorityError,
   type OwnerStatus,
   type SessionOwner,
@@ -291,9 +292,7 @@ const PUBLIC_REFUSAL_REASONS: ReadonlySet<string> = new Set([
   'startup cleanup did not converge for this worktree',
   'startup cleanup no longer matches the exact source and app root',
   'no startup cleanup is in progress',
-  'the same-root owner is live; a live owner is never released',
-  'the same-root owner identity could not be proven, so it is treated as live',
-  'expired lease owner identity could not be proven',
+  ...Object.values(OWNER_IDENTITY_REFUSAL_REASONS),
   'the startup cleanup owner no longer matches the proven claim epoch',
   ...(['androidMetroReverse', 'recorder', 'runner', 'observe', 'metro'] as const).flatMap(
     (resource) => [
@@ -304,11 +303,9 @@ const PUBLIC_REFUSAL_REASONS: ReadonlySet<string> = new Set([
 ]);
 
 /** The only refusals with a process left to close; every other one is reached with the owner already proven dead. */
-const OWNER_IDENTITY_REFUSAL_REASONS: ReadonlySet<string> = new Set([
-  'the same-root owner is live; a live owner is never released',
-  'the same-root owner identity could not be proven, so it is treated as live',
-  'expired lease owner identity could not be proven',
-]);
+const OWNER_IDENTITY_REFUSALS: ReadonlySet<string> = new Set(
+  Object.values(OWNER_IDENTITY_REFUSAL_REASONS),
+);
 
 const OWNER_IDENTITY_REFUSAL_REMEDY = sessionOwnerInspectionRemedy(
   'Startup cleanup refused because the recorded owner is live or its identity could not be proven, and preserved its binding.',
@@ -332,7 +329,7 @@ function publicRefusal(refusal: StartupCleanupRefusal): StartupCleanupRefusal {
   // `SessionAuthorityError` renders as `CODE: sentence`; the code travels separately.
   const sentence = refusal.message.replace(/^[A-Z][A-Z0-9_]+: /, '');
   const authored = PUBLIC_REFUSAL_REASONS.has(sentence);
-  const fallback = OWNER_IDENTITY_REFUSAL_REASONS.has(sentence)
+  const fallback = OWNER_IDENTITY_REFUSALS.has(sentence)
     ? OWNER_IDENTITY_REFUSAL_REMEDY
     : unmetObligationRemedy(refusal.code);
   return {

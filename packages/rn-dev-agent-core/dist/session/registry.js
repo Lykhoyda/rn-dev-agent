@@ -5,6 +5,12 @@ import { hasCompleteRecorderCleanupIdentity, hasCompleteRunnerCleanupIdentity, }
 import { NON_GIT_DECLARATION_NEXT_ACTION } from './declared-source-contract.js';
 import { probeMetroListener } from './metro-binding.js';
 import { sessionCleanupObligationRemedy, sessionOwnerInspectionRemedy, sessionRecoveryRemedy, } from './recovery-remedy.js';
+/** Refusals about the owner's identity rather than an unmet obligation; routed by exact text. */
+export const OWNER_IDENTITY_REFUSAL_REASONS = {
+    sourceOwnerLive: 'the same-root owner is live; a live owner is never released',
+    sourceOwnerUnprovable: 'the same-root owner identity could not be proven, so it is treated as live',
+    leaseOwnerUnprovable: 'expired lease owner identity could not be proven',
+};
 const INITIALIZATION_WAIT = new Int32Array(new SharedArrayBuffer(4));
 export const AUTHORITY_REGISTRY_SCHEMA_VERSION = 4;
 function referencesMetroEvidenceSocket(value, path) {
@@ -1401,13 +1407,13 @@ export class SessionRegistry {
             status = 'unknown';
         }
         if (status === 'match') {
-            throw new SessionAuthorityError('RESOURCE_CLAIM_CONFLICT', 'the same-root owner is live; a live owner is never released', { sessionId: row.session_id, claimEpoch: row.claim_epoch });
+            throw new SessionAuthorityError('RESOURCE_CLAIM_CONFLICT', OWNER_IDENTITY_REFUSAL_REASONS.sourceOwnerLive, { sessionId: row.session_id, claimEpoch: row.claim_epoch });
         }
         if (status !== 'mismatch') {
             if (row.lease_until_ms < this.#now()) {
-                throw new SessionAuthorityError('STALE_LEASE_NOT_RECLAIMABLE', 'expired lease owner identity could not be proven', { sessionId: row.session_id, claimEpoch: row.claim_epoch });
+                throw new SessionAuthorityError('STALE_LEASE_NOT_RECLAIMABLE', OWNER_IDENTITY_REFUSAL_REASONS.leaseOwnerUnprovable, { sessionId: row.session_id, claimEpoch: row.claim_epoch });
             }
-            throw new SessionAuthorityError('RESOURCE_CLAIM_CONFLICT', 'the same-root owner identity could not be proven, so it is treated as live', { sessionId: row.session_id, claimEpoch: row.claim_epoch });
+            throw new SessionAuthorityError('RESOURCE_CLAIM_CONFLICT', OWNER_IDENTITY_REFUSAL_REASONS.sourceOwnerUnprovable, { sessionId: row.session_id, claimEpoch: row.claim_epoch });
         }
         return row;
     }
@@ -3372,7 +3378,7 @@ export class SessionRegistry {
                 throw claimConflict(claim);
             if (probe.status === 'unknown') {
                 if (claim.lease_until_ms < now) {
-                    throw new SessionAuthorityError('STALE_LEASE_NOT_RECLAIMABLE', 'expired lease owner identity could not be proven', { sessionId: claim.session_id, claimEpoch: claim.claim_epoch });
+                    throw new SessionAuthorityError('STALE_LEASE_NOT_RECLAIMABLE', OWNER_IDENTITY_REFUSAL_REASONS.leaseOwnerUnprovable, { sessionId: claim.session_id, claimEpoch: claim.claim_epoch });
                 }
                 throw claimConflict(claim);
             }

@@ -9,6 +9,8 @@ import {
   readProcessBirth,
 } from '../../../dist/session/process-birth.js';
 
+const noHostPidLookup = { signalPermission: () => 'unknown' as const };
+
 test('macOS process identity uses full kernel start time and boot session', () => {
   const runForBoot = (bootSession, startMicroseconds = '345678') => ({
     run: (command, args) => {
@@ -31,14 +33,17 @@ test('macOS process identity uses full kernel start time and boot session', () =
   });
   const before = readProcessBirth(123, {
     platform: 'darwin',
+    ...noHostPidLookup,
     ...runForBoot('C9D056AF-6F25-47A3-8A9A-63B86EF8519F'),
   });
   const after = readProcessBirth(123, {
     platform: 'darwin',
+    ...noHostPidLookup,
     ...runForBoot('D9D056AF-6F25-47A3-8A9A-63B86EF8519F'),
   });
   const sameMillisecond = readProcessBirth(123, {
     platform: 'darwin',
+    ...noHostPidLookup,
     ...runForBoot('C9D056AF-6F25-47A3-8A9A-63B86EF8519F', '345679'),
   });
 
@@ -52,6 +57,7 @@ test('macOS process probes distinguish confirmed absence from unreadable identit
   assert.deepEqual(
     probeProcessBirth(123, {
       platform: 'darwin',
+      ...noHostPidLookup,
       run: (command) => (command === '/bin/ps' ? '' : assert.fail()),
     }),
     { status: 'absent' },
@@ -59,6 +65,7 @@ test('macOS process probes distinguish confirmed absence from unreadable identit
   assert.deepEqual(
     probeProcessBirth(123, {
       platform: 'darwin',
+      ...noHostPidLookup,
       run: (command) => (command === '/bin/ps' ? '123\n' : 'unparseable\n'),
     }),
     { status: 'unknown' },
@@ -69,6 +76,7 @@ test('a terminated but unreaped process reads as absent, not as an unknown ident
   assert.deepEqual(
     probeProcessBirth(123, {
       platform: 'darwin',
+      ...noHostPidLookup,
       run: (command) => (command === '/bin/ps' ? '  123 Z+\n' : assert.fail()),
       runVerifiedHelper: () => assert.fail('a zombie must not reach the identity helper'),
     }),
@@ -77,6 +85,7 @@ test('a terminated but unreaped process reads as absent, not as an unknown ident
   assert.deepEqual(
     probeProcessBirth(123, {
       platform: 'linux',
+      ...noHostPidLookup,
       read: (path) =>
         path.includes('boot_id') ? 'boot-1\n' : '123 (runner) Z 1 1 0 0 -1 0 0 0 0 0 0 0\n',
     }),
@@ -88,6 +97,7 @@ test('macOS process identity refuses a replaced helper manifest', () => {
   let helperExecuted = false;
   const birth = probeProcessBirth(123, {
     platform: 'darwin',
+    ...noHostPidLookup,
     readBinary: (path) =>
       path.endsWith('.json')
         ? Buffer.from('{}')
@@ -121,6 +131,7 @@ test('macOS process identity requires the verified live helper CDHash', () => {
   let observedRequirement = '';
   const birth = readProcessBirth(123, {
     platform: 'darwin',
+    ...noHostPidLookup,
     helperPath: () => '/trusted/darwin-process-birth',
     canonicalize: (path) => path,
     lstat: () => metadata,
@@ -161,6 +172,7 @@ test('macOS process identity requires the verified live helper CDHash', () => {
 test('macOS process identity rejects a live helper outside the pinned CDHashes', () => {
   const birth = probeProcessBirth(123, {
     platform: 'darwin',
+    ...noHostPidLookup,
     run: (command) => (command === '/bin/ps' ? '123\n' : 'C9D056AF-6F25-47A3-8A9A-63B86EF8519F\n'),
     runVerifiedHelper: () => {
       throw new Error('live process failed its code requirement');
@@ -188,6 +200,7 @@ test('macOS helper verification waits for SIGSTOP and applies the pinned require
 test('Linux process identity handles process names containing spaces', () => {
   const birth = readProcessBirth(456, {
     platform: 'linux',
+    ...noHostPidLookup,
     read: (path) => {
       if (path === '/proc/sys/kernel/random/boot_id') return 'boot-123\n';
       if (path === '/proc/456/stat') {
@@ -207,6 +220,7 @@ test('Windows process identity uses a trusted absolute PowerShell executable', (
   const commands: string[] = [];
   const birth = probeProcessBirth(456, {
     platform: 'win32',
+    ...noHostPidLookup,
     executableDependencies: {
       environment: { SystemRoot: 'D:\\Windows' },
       exists: (path) => path === powershell,
@@ -225,6 +239,7 @@ test('Windows process identity fails closed without trusted PowerShell', () => {
   let executed = false;
   const birth = probeProcessBirth(456, {
     platform: 'win32',
+    ...noHostPidLookup,
     executableDependencies: { exists: () => false },
     run: () => {
       executed = true;
@@ -239,6 +254,7 @@ test('Windows process identity fails closed without trusted PowerShell', () => {
 test('unreadable process birth fails conservative', () => {
   const birth = readProcessBirth(789, {
     platform: 'darwin',
+    ...noHostPidLookup,
     run: () => {
       throw new Error('permission denied');
     },
@@ -250,6 +266,7 @@ test('unreadable process birth fails conservative', () => {
       { pid: 789, token: 'recorded' },
       {
         platform: 'darwin',
+        ...noHostPidLookup,
         run: () => {
           throw new Error('permission denied');
         },
@@ -266,12 +283,13 @@ test('process birth probes distinguish confirmed absence from unreadable identit
     if (path.endsWith('boot_id')) return 'boot-123';
     throw missing;
   };
-  assert.deepEqual(probeProcessBirth(789, { platform: 'linux', read }), {
+  assert.deepEqual(probeProcessBirth(789, { platform: 'linux', ...noHostPidLookup, read }), {
     status: 'absent',
   });
   assert.deepEqual(
     probeProcessBirth(789, {
       platform: 'linux',
+      ...noHostPidLookup,
       read: (path) => {
         if (path.endsWith('boot_id')) return 'boot-123';
         throw new Error('permission denied');

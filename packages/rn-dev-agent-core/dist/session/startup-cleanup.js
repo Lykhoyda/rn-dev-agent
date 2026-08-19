@@ -6,7 +6,7 @@ import { removeAndroidMetroReverse, } from './android-metro-reverse.js';
 import { readPackageIntegrationInputs, restorePackageIntegrationFiles, } from './package-integration.js';
 import { stopBoundObserve, stopBoundRecorder, stopBoundRunner } from './process-cleanup.js';
 import { sessionCleanupObligationRemedy, sessionOwnerInspectionRemedy, sessionRecoveryRemedy, } from './recovery-remedy.js';
-import { openSessionRegistry, SessionAuthorityError, } from './registry.js';
+import { openSessionRegistry, OWNER_IDENTITY_REFUSAL_REASONS, SessionAuthorityError, } from './registry.js';
 import { resolveAuthorityStateLayout } from './state-root.js';
 export function startupCleanupFailureMessage() {
     return 'rn-dev-agent startup cleanup failed: STARTUP_CLEANUP_FAILED\n';
@@ -188,9 +188,7 @@ const PUBLIC_REFUSAL_REASONS = new Set([
     'startup cleanup did not converge for this worktree',
     'startup cleanup no longer matches the exact source and app root',
     'no startup cleanup is in progress',
-    'the same-root owner is live; a live owner is never released',
-    'the same-root owner identity could not be proven, so it is treated as live',
-    'expired lease owner identity could not be proven',
+    ...Object.values(OWNER_IDENTITY_REFUSAL_REASONS),
     'the startup cleanup owner no longer matches the proven claim epoch',
     ...['androidMetroReverse', 'recorder', 'runner', 'observe', 'metro'].flatMap((resource) => [
         `${resource} cleanup has not been durably completed`,
@@ -198,11 +196,7 @@ const PUBLIC_REFUSAL_REASONS = new Set([
     ]),
 ]);
 /** The only refusals with a process left to close; every other one is reached with the owner already proven dead. */
-const OWNER_IDENTITY_REFUSAL_REASONS = new Set([
-    'the same-root owner is live; a live owner is never released',
-    'the same-root owner identity could not be proven, so it is treated as live',
-    'expired lease owner identity could not be proven',
-]);
+const OWNER_IDENTITY_REFUSALS = new Set(Object.values(OWNER_IDENTITY_REFUSAL_REASONS));
 const OWNER_IDENTITY_REFUSAL_REMEDY = sessionOwnerInspectionRemedy('Startup cleanup refused because the recorded owner is live or its identity could not be proven, and preserved its binding.');
 function unmetObligationRemedy(code) {
     return sessionCleanupObligationRemedy(`Startup cleanup refused with ${code} and preserved the prior owner binding; another restart alone repeats the same refusal.`);
@@ -219,7 +213,7 @@ function publicRefusal(refusal) {
     // `SessionAuthorityError` renders as `CODE: sentence`; the code travels separately.
     const sentence = refusal.message.replace(/^[A-Z][A-Z0-9_]+: /, '');
     const authored = PUBLIC_REFUSAL_REASONS.has(sentence);
-    const fallback = OWNER_IDENTITY_REFUSAL_REASONS.has(sentence)
+    const fallback = OWNER_IDENTITY_REFUSALS.has(sentence)
         ? OWNER_IDENTITY_REFUSAL_REMEDY
         : unmetObligationRemedy(refusal.code);
     return {

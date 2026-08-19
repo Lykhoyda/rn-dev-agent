@@ -313,8 +313,10 @@ node "${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-$CODEX_PLUGIN_ROOT
 non-zero when it finds the root wedged. `repair`
 runs exactly the startup cleanup a fresh transport runs: it releases a
 **proven-dead** same-root owner and discards abandoned contender rows that never
-held a claim. It exits non-zero and changes nothing when the owner is live or
-its identity is unprovable — there is no force-steal, by timeout or otherwise.
+held a claim. It never releases an owner that is live or whose identity is
+unprovable, and exits non-zero when it finds one — the abandoned claim-less
+contender rows are still reaped. There is no force-steal, by timeout or
+otherwise.
 
 A recorded pid that the OS has recycled into a process you cannot inspect counts
 as **proven dead** (GH #792): the recorded owner could only ever be a process of

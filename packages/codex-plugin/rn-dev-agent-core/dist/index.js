@@ -25571,7 +25571,7 @@ function openSessionRegistry(path, dependencies) {
     throw error2;
   }
 }
-var INITIALIZATION_WAIT2, AUTHORITY_REGISTRY_SCHEMA_VERSION, SessionAuthorityError, RECOVERY_HANDLE_TTL_MS, RECOVERY_HANDLE_RENEW_MS, errorAxes, errorNextActions, conflictCodes, SessionRegistry;
+var OWNER_IDENTITY_REFUSAL_REASONS, INITIALIZATION_WAIT2, AUTHORITY_REGISTRY_SCHEMA_VERSION, SessionAuthorityError, RECOVERY_HANDLE_TTL_MS, RECOVERY_HANDLE_RENEW_MS, errorAxes, errorNextActions, conflictCodes, SessionRegistry;
 var init_registry = __esm({
   "packages/rn-dev-agent-core/dist/session/registry.js"() {
     "use strict";
@@ -25580,6 +25580,11 @@ var init_registry = __esm({
     init_declared_source_contract();
     init_metro_binding();
     init_recovery_remedy();
+    OWNER_IDENTITY_REFUSAL_REASONS = {
+      sourceOwnerLive: "the same-root owner is live; a live owner is never released",
+      sourceOwnerUnprovable: "the same-root owner identity could not be proven, so it is treated as live",
+      leaseOwnerUnprovable: "expired lease owner identity could not be proven"
+    };
     INITIALIZATION_WAIT2 = new Int32Array(new SharedArrayBuffer(4));
     AUTHORITY_REGISTRY_SCHEMA_VERSION = 4;
     SessionAuthorityError = class extends Error {
@@ -26657,13 +26662,13 @@ var init_registry = __esm({
           status = "unknown";
         }
         if (status === "match") {
-          throw new SessionAuthorityError("RESOURCE_CLAIM_CONFLICT", "the same-root owner is live; a live owner is never released", { sessionId: row.session_id, claimEpoch: row.claim_epoch });
+          throw new SessionAuthorityError("RESOURCE_CLAIM_CONFLICT", OWNER_IDENTITY_REFUSAL_REASONS.sourceOwnerLive, { sessionId: row.session_id, claimEpoch: row.claim_epoch });
         }
         if (status !== "mismatch") {
           if (row.lease_until_ms < this.#now()) {
-            throw new SessionAuthorityError("STALE_LEASE_NOT_RECLAIMABLE", "expired lease owner identity could not be proven", { sessionId: row.session_id, claimEpoch: row.claim_epoch });
+            throw new SessionAuthorityError("STALE_LEASE_NOT_RECLAIMABLE", OWNER_IDENTITY_REFUSAL_REASONS.leaseOwnerUnprovable, { sessionId: row.session_id, claimEpoch: row.claim_epoch });
           }
-          throw new SessionAuthorityError("RESOURCE_CLAIM_CONFLICT", "the same-root owner identity could not be proven, so it is treated as live", { sessionId: row.session_id, claimEpoch: row.claim_epoch });
+          throw new SessionAuthorityError("RESOURCE_CLAIM_CONFLICT", OWNER_IDENTITY_REFUSAL_REASONS.sourceOwnerUnprovable, { sessionId: row.session_id, claimEpoch: row.claim_epoch });
         }
         return row;
       }
@@ -28193,7 +28198,7 @@ var init_registry = __esm({
             throw claimConflict(claim);
           if (probe.status === "unknown") {
             if (claim.lease_until_ms < now) {
-              throw new SessionAuthorityError("STALE_LEASE_NOT_RECLAIMABLE", "expired lease owner identity could not be proven", { sessionId: claim.session_id, claimEpoch: claim.claim_epoch });
+              throw new SessionAuthorityError("STALE_LEASE_NOT_RECLAIMABLE", OWNER_IDENTITY_REFUSAL_REASONS.leaseOwnerUnprovable, { sessionId: claim.session_id, claimEpoch: claim.claim_epoch });
             }
             throw claimConflict(claim);
           }
@@ -69319,20 +69324,14 @@ var PUBLIC_REFUSAL_REASONS = /* @__PURE__ */ new Set([
   "startup cleanup did not converge for this worktree",
   "startup cleanup no longer matches the exact source and app root",
   "no startup cleanup is in progress",
-  "the same-root owner is live; a live owner is never released",
-  "the same-root owner identity could not be proven, so it is treated as live",
-  "expired lease owner identity could not be proven",
+  ...Object.values(OWNER_IDENTITY_REFUSAL_REASONS),
   "the startup cleanup owner no longer matches the proven claim epoch",
   ...["androidMetroReverse", "recorder", "runner", "observe", "metro"].flatMap((resource) => [
     `${resource} cleanup has not been durably completed`,
     `${resource} cleanup was not durably requested`
   ])
 ]);
-var OWNER_IDENTITY_REFUSAL_REASONS = /* @__PURE__ */ new Set([
-  "the same-root owner is live; a live owner is never released",
-  "the same-root owner identity could not be proven, so it is treated as live",
-  "expired lease owner identity could not be proven"
-]);
+var OWNER_IDENTITY_REFUSALS = new Set(Object.values(OWNER_IDENTITY_REFUSAL_REASONS));
 var OWNER_IDENTITY_REFUSAL_REMEDY = sessionOwnerInspectionRemedy("Startup cleanup refused because the recorded owner is live or its identity could not be proven, and preserved its binding.");
 function unmetObligationRemedy(code) {
   return sessionCleanupObligationRemedy(`Startup cleanup refused with ${code} and preserved the prior owner binding; another restart alone repeats the same refusal.`);
@@ -69340,7 +69339,7 @@ function unmetObligationRemedy(code) {
 function publicRefusal(refusal) {
   const sentence = refusal.message.replace(/^[A-Z][A-Z0-9_]+: /, "");
   const authored = PUBLIC_REFUSAL_REASONS.has(sentence);
-  const fallback = OWNER_IDENTITY_REFUSAL_REASONS.has(sentence) ? OWNER_IDENTITY_REFUSAL_REMEDY : unmetObligationRemedy(refusal.code);
+  const fallback = OWNER_IDENTITY_REFUSALS.has(sentence) ? OWNER_IDENTITY_REFUSAL_REMEDY : unmetObligationRemedy(refusal.code);
   return {
     code: refusal.code,
     message: authored ? sentence : `startup cleanup refused with ${refusal.code} and preserved the prior owner binding`,

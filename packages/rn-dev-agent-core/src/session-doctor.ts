@@ -35,6 +35,24 @@ function stateDir(): string | undefined {
 }
 
 function remedyFor(ownership: SourceOwnershipInspection): string {
+  if (ownership.owner === 'absent') {
+    return 'No same-root owner holds this worktree; nothing to recover.';
+  }
+  if (!ownership.sameRoot) {
+    if (ownership.owner === 'live') {
+      return sessionOwnerInspectionRemedy(
+        'A live owner of a different app root or declared source in this worktree holds it.',
+      );
+    }
+    if (ownership.owner === 'unprovable') {
+      return sessionOwnerInspectionRemedy(
+        'The identity of the owner holding this worktree could not be proven, so it is treated as live; it belongs to a different app root or declared source.',
+      );
+    }
+    return sessionOwnerInspectionRemedy(
+      'The proven-dead owner belongs to a different app root or declared source in this worktree, so this root cannot release it.',
+    );
+  }
   if (ownership.owner === 'live') {
     return sessionOwnerInspectionRemedy('A live same-root owner holds this worktree.');
   }
@@ -43,21 +61,13 @@ function remedyFor(ownership: SourceOwnershipInspection): string {
       'The same-root owner identity could not be proven, so it is treated as live.',
     );
   }
-  if (ownership.owner === 'stale' && !ownership.sameRoot) {
-    return sessionOwnerInspectionRemedy(
-      'The proven-dead owner belongs to a different app root or declared source in this worktree, so this root cannot release it.',
-    );
-  }
-  if (ownership.owner === 'stale' && ownership.startupCleanupBlocked) {
+  if (ownership.startupCleanupBlocked) {
     const blocked = ownership.startupCleanupBlocked;
     return sessionCleanupObligationRemedy(
       `The prior owner is proven dead, but startup cleanup refused with ${blocked.code} and will refuse again until that is resolved: ${blocked.reason}.`,
     );
   }
-  if (ownership.owner === 'stale') {
-    return sessionRecoveryRemedy('The prior owner is proven dead and can be released now.');
-  }
-  return 'No same-root owner holds this worktree; nothing to recover.';
+  return sessionRecoveryRemedy('The prior owner is proven dead and can be released now.');
 }
 
 // Nothing this root can release by itself: an unprovable owner, a retained refusal, or

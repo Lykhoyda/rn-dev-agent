@@ -294,9 +294,10 @@ node <package-root>/rn-dev-agent-core/dist/session-doctor.js repair   # release 
 `startupCleanupBlocked`, and the count of abandoned blocked contenders, and exits non-zero
 when it finds the root wedged. `repair` runs
 exactly the startup cleanup a fresh transport runs: it releases a **proven-dead**
-same-root owner and discards abandoned contender rows that never held a claim. It exits
-non-zero and changes nothing when the owner is live or its identity is unprovable —
-there is no force-steal, by timeout or otherwise. The `nextAction` a refusal returns
+same-root owner and discards abandoned contender rows that never held a claim. It never
+releases an owner that is live or whose identity is unprovable, and exits non-zero when it
+finds one — the abandoned claim-less contender rows are still reaped. There is no
+force-steal, by timeout or otherwise. The `nextAction` a refusal returns
 names the Claude form of the same file; the artifact path inside the package is
 identical.
 

@@ -18,6 +18,14 @@ import {
 } from './recovery-remedy.js';
 import type { AuthorityAxis } from './tool-profiles.js';
 
+/** Refusals about the owner's identity rather than an unmet obligation; routed by exact text. */
+export const OWNER_IDENTITY_REFUSAL_REASONS = {
+  sourceOwnerLive: 'the same-root owner is live; a live owner is never released',
+  sourceOwnerUnprovable:
+    'the same-root owner identity could not be proven, so it is treated as live',
+  leaseOwnerUnprovable: 'expired lease owner identity could not be proven',
+} as const;
+
 const INITIALIZATION_WAIT = new Int32Array(new SharedArrayBuffer(4));
 export const AUTHORITY_REGISTRY_SCHEMA_VERSION = 4;
 
@@ -2317,7 +2325,7 @@ export class SessionRegistry {
     if (status === 'match') {
       throw new SessionAuthorityError(
         'RESOURCE_CLAIM_CONFLICT',
-        'the same-root owner is live; a live owner is never released',
+        OWNER_IDENTITY_REFUSAL_REASONS.sourceOwnerLive,
         { sessionId: row.session_id, claimEpoch: row.claim_epoch },
       );
     }
@@ -2325,13 +2333,13 @@ export class SessionRegistry {
       if (row.lease_until_ms < this.#now()) {
         throw new SessionAuthorityError(
           'STALE_LEASE_NOT_RECLAIMABLE',
-          'expired lease owner identity could not be proven',
+          OWNER_IDENTITY_REFUSAL_REASONS.leaseOwnerUnprovable,
           { sessionId: row.session_id, claimEpoch: row.claim_epoch },
         );
       }
       throw new SessionAuthorityError(
         'RESOURCE_CLAIM_CONFLICT',
-        'the same-root owner identity could not be proven, so it is treated as live',
+        OWNER_IDENTITY_REFUSAL_REASONS.sourceOwnerUnprovable,
         { sessionId: row.session_id, claimEpoch: row.claim_epoch },
       );
     }
@@ -5291,7 +5299,7 @@ export class SessionRegistry {
         if (claim.lease_until_ms < now) {
           throw new SessionAuthorityError(
             'STALE_LEASE_NOT_RECLAIMABLE',
-            'expired lease owner identity could not be proven',
+            OWNER_IDENTITY_REFUSAL_REASONS.leaseOwnerUnprovable,
             { sessionId: claim.session_id, claimEpoch: claim.claim_epoch },
           );
         }

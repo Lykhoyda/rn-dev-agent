@@ -8393,7 +8393,7 @@ function openSessionRegistry(path, dependencies) {
     throw error;
   }
 }
-var INITIALIZATION_WAIT2, AUTHORITY_REGISTRY_SCHEMA_VERSION, SessionAuthorityError, RECOVERY_HANDLE_TTL_MS, RECOVERY_HANDLE_RENEW_MS, errorNextActions, conflictCodes, SessionRegistry;
+var OWNER_IDENTITY_REFUSAL_REASONS, INITIALIZATION_WAIT2, AUTHORITY_REGISTRY_SCHEMA_VERSION, SessionAuthorityError, RECOVERY_HANDLE_TTL_MS, RECOVERY_HANDLE_RENEW_MS, errorNextActions, conflictCodes, SessionRegistry;
 var init_registry = __esm({
   "packages/rn-dev-agent-core/dist/session/registry.js"() {
     "use strict";
@@ -8402,6 +8402,11 @@ var init_registry = __esm({
     init_declared_source_contract();
     init_metro_binding();
     init_recovery_remedy();
+    OWNER_IDENTITY_REFUSAL_REASONS = {
+      sourceOwnerLive: "the same-root owner is live; a live owner is never released",
+      sourceOwnerUnprovable: "the same-root owner identity could not be proven, so it is treated as live",
+      leaseOwnerUnprovable: "expired lease owner identity could not be proven"
+    };
     INITIALIZATION_WAIT2 = new Int32Array(new SharedArrayBuffer(4));
     AUTHORITY_REGISTRY_SCHEMA_VERSION = 4;
     SessionAuthorityError = class extends Error {
@@ -9449,13 +9454,13 @@ var init_registry = __esm({
           status = "unknown";
         }
         if (status === "match") {
-          throw new SessionAuthorityError("RESOURCE_CLAIM_CONFLICT", "the same-root owner is live; a live owner is never released", { sessionId: row.session_id, claimEpoch: row.claim_epoch });
+          throw new SessionAuthorityError("RESOURCE_CLAIM_CONFLICT", OWNER_IDENTITY_REFUSAL_REASONS.sourceOwnerLive, { sessionId: row.session_id, claimEpoch: row.claim_epoch });
         }
         if (status !== "mismatch") {
           if (row.lease_until_ms < this.#now()) {
-            throw new SessionAuthorityError("STALE_LEASE_NOT_RECLAIMABLE", "expired lease owner identity could not be proven", { sessionId: row.session_id, claimEpoch: row.claim_epoch });
+            throw new SessionAuthorityError("STALE_LEASE_NOT_RECLAIMABLE", OWNER_IDENTITY_REFUSAL_REASONS.leaseOwnerUnprovable, { sessionId: row.session_id, claimEpoch: row.claim_epoch });
           }
-          throw new SessionAuthorityError("RESOURCE_CLAIM_CONFLICT", "the same-root owner identity could not be proven, so it is treated as live", { sessionId: row.session_id, claimEpoch: row.claim_epoch });
+          throw new SessionAuthorityError("RESOURCE_CLAIM_CONFLICT", OWNER_IDENTITY_REFUSAL_REASONS.sourceOwnerUnprovable, { sessionId: row.session_id, claimEpoch: row.claim_epoch });
         }
         return row;
       }
@@ -10985,7 +10990,7 @@ var init_registry = __esm({
             throw claimConflict(claim);
           if (probe.status === "unknown") {
             if (claim.lease_until_ms < now) {
-              throw new SessionAuthorityError("STALE_LEASE_NOT_RECLAIMABLE", "expired lease owner identity could not be proven", { sessionId: claim.session_id, claimEpoch: claim.claim_epoch });
+              throw new SessionAuthorityError("STALE_LEASE_NOT_RECLAIMABLE", OWNER_IDENTITY_REFUSAL_REASONS.leaseOwnerUnprovable, { sessionId: claim.session_id, claimEpoch: claim.claim_epoch });
             }
             throw claimConflict(claim);
           }

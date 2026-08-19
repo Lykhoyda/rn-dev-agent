@@ -842,3 +842,150 @@ test('GH #792: a live or unprovable owner still gets the close-the-holder remedy
     registry.close();
   }
 });
+
+test('GH #792: a live-owner repair reaps abandoned contenders and still refuses the owner', async () => {
+  const proven = new Map<string, string>([
+    ['live-owner', 'match'],
+    ['dead-contender', 'mismatch'],
+  ]);
+  const root = temporaryStateHome();
+  const registry = openSessionRegistry(join(root, 'registry.sqlite3'), {
+    ownerStatus: (owner: { sessionId: string }) => proven.get(owner.sessionId) ?? 'unknown',
+    listenerStatus: () => 'absent',
+    leaseMs: 30_000,
+  });
+  const owner = registry.createSession({
+    sessionId: 'live-owner',
+    sourceKey: 'repo',
+    worktreeKey: 'worktree-1',
+    appRootKey: '.',
+    supervisor: { pid: 4242, token: 'birth-owner' },
+    source: { kind: 'git', contentRoot: '/src/worktree-1', model: 'grouped-v1' },
+    bindings: {},
+  });
+  registry.claimResources(owner, [{ type: 'source', key: 'worktree-1' }]);
+  registry.updateBindings(owner, { state: 'source_bound', bindings: {} });
+  const contender = registry.createSession({
+    sessionId: 'dead-contender',
+    sourceKey: 'repo',
+    worktreeKey: 'worktree-1',
+    appRootKey: '.',
+    supervisor: { pid: 4343, token: 'birth-contender' },
+    source: { kind: 'git', contentRoot: '/src/worktree-1', model: 'grouped-v1' },
+    bindings: {},
+  });
+  registry.updateBindings(contender, {
+    state: 'blocked',
+    bindings: { adoptionRequired: { sessionId: 'live-owner', claimEpoch: owner.claimEpoch } },
+  });
+
+  const outcome = await runStartupOwnerCleanup({
+    registry,
+    sourceKey: 'repo',
+    worktreeKey: 'worktree-1',
+    appRootKey: '.',
+    appRoot: join(root, 'app'),
+  });
+  assert.equal(outcome.status, 'refused');
+  assert.deepEqual(outcome.released, [], 'a live owner is never released');
+  assert.equal(registry.getClaim('source', 'worktree-1')?.sessionId, 'live-owner');
+  // What the docs promise about running repair against a live session: the owner survives,
+  // but abandoned claim-less contender rows are still reaped.
+  assert.deepEqual(outcome.discardedContenders, ['dead-contender']);
+  assert.equal(registry.getSessionStatus('dead-contender')?.state, 'released');
+  assert.match(String(outcome.refusal?.nextAction), /close that process/);
+  registry.close();
+});
+
+test('GH #792: an expired lease with an unprovable owner keeps the close-the-holder remedy', async () => {
+  const root = temporaryStateHome();
+  let clock = 1_000_000;
+  const registry = openSessionRegistry(join(root, 'registry.sqlite3'), {
+    now: () => clock,
+    ownerStatus: () => 'unknown',
+    listenerStatus: () => 'absent',
+    leaseMs: 30_000,
+  });
+  const owner = registry.createSession({
+    sessionId: 'unprovable-owner',
+    sourceKey: 'repo',
+    worktreeKey: 'worktree-1',
+    appRootKey: '.',
+    supervisor: { pid: 4242, token: 'birth-owner' },
+    source: { kind: 'git', contentRoot: '/src/worktree-1', model: 'grouped-v1' },
+    bindings: {},
+  });
+  registry.claimResources(owner, [{ type: 'source', key: 'worktree-1' }]);
+  registry.updateBindings(owner, { state: 'source_bound', bindings: {} });
+  clock += 3_600_000;
+
+  const outcome = await runStartupOwnerCleanup({
+    registry,
+    sourceKey: 'repo',
+    worktreeKey: 'worktree-1',
+    appRootKey: '.',
+    appRoot: join(root, 'app'),
+  });
+  assert.equal(outcome.status, 'refused');
+  assert.equal(outcome.refusal?.code, 'STALE_LEASE_NOT_RECLAIMABLE');
+  assert.deepEqual(outcome.released, [], 'lease expiry is never authority to release');
+  assert.match(String(outcome.refusal?.nextAction), /close that process/);
+  assert.doesNotMatch(String(outcome.refusal?.nextAction), /outstanding obligation/);
+  registry.close();
+});
+
+test('GH #792: a cross-root owner is never described as same-root in the same report', () => {
+  const stateHome = temporaryStateHome();
+  const appRoot = join(stateHome, 'app');
+  mkdirSync(appRoot);
+  writeFileSync(join(appRoot, 'package.json'), '{"name":"gh-792-live-cross-root"}');
+  const environment = {
+    ...process.env,
+    XDG_STATE_HOME: stateHome,
+    RN_DEV_AGENT_DECLARED_ROOT: appRoot,
+    RN_DEV_AGENT_DECLARED_MANIFESTS: 'package.json',
+  };
+  const source = resolveSourceIdentity(appRoot, {
+    declaredRoot: appRoot,
+    declaredManifests: ['package.json'],
+  });
+  const layout = createAuthorityStateLayout(join(stateHome, 'rn-dev-agent'));
+  const registry = openSessionRegistry(layout.registry, { ownerStatus: inspectSessionOwner });
+  // This test process is a real, provably live owner; it is only ever read, never signalled.
+  const self = probeProcessBirth(process.pid);
+  const owner = registry.createSession({
+    sessionId: 'other-app-root-live-owner',
+    sourceKey: source.sourceKey,
+    worktreeKey: source.worktreeKey,
+    appRootKey: 'packages/other-app',
+    supervisor: {
+      pid: process.pid,
+      token: self.status === 'present' ? self.birth.token : 'unreadable-identity',
+    },
+    source: { ...source, appRootKey: 'packages/other-app', model: 'grouped-v1' },
+    bindings: {},
+  });
+  registry.claimResources(owner, [{ type: 'source', key: source.worktreeKey }]);
+  registry.updateBindings(owner, { state: 'source_bound', bindings: {} });
+  registry.close();
+
+  let stdout = '';
+  try {
+    stdout = execFileSync(
+      process.execPath,
+      [join(distRoot, 'session-doctor.js'), 'report', '--json'],
+      { cwd: appRoot, encoding: 'utf8', env: environment },
+    );
+  } catch (error) {
+    stdout = String((error as { stdout?: string }).stdout);
+  }
+  const payload = JSON.parse(stdout) as Record<string, unknown>;
+  assert.equal(payload.ownerIsThisRoot, false);
+  assert.notEqual(payload.sameRootOwner, 'absent');
+  assert.doesNotMatch(
+    String(payload.remedy),
+    /same-root/,
+    `a remedy must not claim same-root while ownerIsThisRoot is false: ${String(payload.remedy)}`,
+  );
+  assert.match(String(payload.remedy), /different app root or declared source/);
+});
