@@ -293,9 +293,33 @@ grouped sessions do not.
 
 | `recoveryRequirement.requirement` | What it means | What to do |
 |---|---|---|
-| `transport-restart` | the blocking claim is gone, or its owner is proven dead | restart the MCP transport (`/mcp`) as the `nextAction` says — **unless `startupCleanupBlocked` is also present**, which means startup cleanup refused for a stated reason and another restart will not clear it. Resolve that reason first. |
+| `transport-restart` | the blocking claim is gone, or its owner is proven dead | run the remedy the `nextAction` names — interactive clients reconnect with `/mcp`, headless clients run the packaged recovery command (below). **Unless `startupCleanupBlocked` is also present**, which means startup cleanup refused for a stated reason and another restart will not clear it. Resolve that reason first. |
 | `attach` | the prior owner is live, or its identity cannot be proven | use that session, or work in a separate worktree. A live or unprovable owner is never adopted |
 | `adoption` (legacy sessions only) | the prior owner is proven dead and minted an adoption handle | follow the handle named in the `nextAction` |
+
+### Headless recovery — when `/mcp` is not available
+
+A `claude -p` run cannot reconnect its own transport, so every remedy also names
+a command it can execute from the app root:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT:-$CODEX_PLUGIN_ROOT}/rn-dev-agent-core/dist/session-doctor.js" report   # read-only
+node "${CLAUDE_PLUGIN_ROOT:-$CODEX_PLUGIN_ROOT}/rn-dev-agent-core/dist/session-doctor.js" repair   # release + reap
+```
+
+`report` prints the authority store path, whether this source root is wedged,
+`sameRootOwner` (`absent` / `live` / `stale` / `unprovable`), any retained
+`startupCleanupBlocked`, and the count of abandoned blocked contenders, and exits
+non-zero when it finds the root wedged. `repair`
+runs exactly the startup cleanup a fresh transport runs: it releases a
+**proven-dead** same-root owner and discards abandoned contender rows that never
+held a claim. It exits non-zero and changes nothing when the owner is live or
+its identity is unprovable — there is no force-steal, by timeout or otherwise.
+
+A recorded pid that the OS has recycled into a process you cannot inspect counts
+as **proven dead** (GH #792): the recorded owner could only ever be a process of
+your own user, so a pid you cannot inspect is provably not it. An identity that
+is unreadable for any other reason stays `unprovable` and keeps refusing.
 
 Rules, no exceptions:
 

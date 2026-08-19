@@ -1,4 +1,4 @@
-import { readProcessBirth } from './process-birth.js';
+import { probeProcessBirth } from './process-birth.js';
 function defaultProcessState(pid) {
     try {
         process.kill(pid, 0);
@@ -19,8 +19,12 @@ export function inspectSessionOwner(owner, dependencies = {}) {
         return 'mismatch';
     if (state === 'unknown')
         return 'unknown';
-    const observed = (dependencies.readBirth ?? readProcessBirth)(owner.pid);
-    if (!observed)
+    const observed = (dependencies.probeBirth ?? probeProcessBirth)(owner.pid);
+    // GH #792: an absent recorded process disproves ownership; only an unreadable identity
+    // stays unknown, and an unknown owner is still treated as live.
+    if (observed.status === 'absent')
+        return 'mismatch';
+    if (observed.status === 'unknown')
         return 'unknown';
-    return observed.token === owner.token ? 'match' : 'mismatch';
+    return observed.birth.token === owner.token ? 'match' : 'mismatch';
 }

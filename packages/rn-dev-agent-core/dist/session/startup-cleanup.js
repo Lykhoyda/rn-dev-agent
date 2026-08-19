@@ -5,6 +5,7 @@ import { stopManagedMetro } from './managed-metro.js';
 import { removeAndroidMetroReverse, } from './android-metro-reverse.js';
 import { readPackageIntegrationInputs, restorePackageIntegrationFiles, } from './package-integration.js';
 import { stopBoundObserve, stopBoundRecorder, stopBoundRunner } from './process-cleanup.js';
+import { sessionOwnerInspectionRemedy, sessionRecoveryRemedy } from './recovery-remedy.js';
 import { openSessionRegistry, SessionAuthorityError, } from './registry.js';
 import { createAuthorityStateLayout } from './state-root.js';
 export function startupCleanupFailureMessage() {
@@ -24,10 +25,17 @@ const EXECUTION_ORDER = [
  */
 export async function runStartupOwnerCleanup(input, dependencies = {}) {
     const released = [];
+    let discardedContenders = [];
+    try {
+        discardedContenders = input.registry.discardAbandonedBlockedContenders(input.worktreeKey);
+    }
+    catch {
+        // Reaping is opportunistic; the owner decision below is the authoritative one.
+    }
     for (let round = 0; round < 8; round += 1) {
         const candidate = input.registry.findStartupCleanupCandidate(input);
         if (!candidate)
-            return { status: 'clean', released };
+            return { status: 'clean', released, discardedContenders };
         try {
             const plan = input.registry.beginStartupOwnerCleanup(candidate);
             await completeObligations(input.registry, candidate, dependencies);
@@ -38,12 +46,13 @@ export async function runStartupOwnerCleanup(input, dependencies = {}) {
         catch (error) {
             const refusal = refusalOf(error);
             retainRefusal(input.registry, candidate, refusal);
-            return { status: 'refused', released, refusal };
+            return { status: 'refused', released, discardedContenders, refusal };
         }
     }
     return {
         status: 'refused',
         released,
+        discardedContenders,
         refusal: publicRefusal({
             code: 'RESOURCE_CLAIM_CONFLICT',
             message: 'startup cleanup did not converge for this worktree',
@@ -112,7 +121,7 @@ function restoreDeadOwnerIntegration(input, prior, plan, dependencies) {
     const manifestSource = verifiedDeadOwnerManifestSource(input.appRoot, binding, manifestSha256);
     if (!manifestSource) {
         throw new SessionAuthorityError('SESSION_AUTHORITY_REQUIRED', 'integration restoration requires a SHA-256-verified manifest and none is available; the dead owner binding is preserved', undefined, {
-            nextAction: 'Restore the exact integration manifest at .rn-agent/integration/rn-session-integration.json from your own version control history or backups so it matches the manifest SHA-256 recorded on the binding, then restart the MCP transport.',
+            nextAction: sessionRecoveryRemedy('Restore the exact integration manifest at .rn-agent/integration/rn-session-integration.json from your own version control history or backups so it matches the manifest SHA-256 recorded on the binding.'),
         });
     }
     input.registry.verifyStartupOwnerIntegrationRestore(prior, {
@@ -188,7 +197,7 @@ const PUBLIC_REFUSAL_REASONS = new Set([
         `${resource} cleanup was not durably requested`,
     ]),
 ]);
-const GENERIC_REFUSAL_REMEDY = 'Startup cleanup refused and preserved the prior owner binding. Resolve the refusal named by this code, then restart the MCP transport; another restart alone does not release the owner.';
+const GENERIC_REFUSAL_REMEDY = sessionOwnerInspectionRemedy('Startup cleanup refused and preserved the prior owner binding; another restart alone does not release it.');
 /**
  * The outcome is the single boundary where a refusal becomes durable — journaled on
  * the dead owner's row, projected into the contender's public status, and written to

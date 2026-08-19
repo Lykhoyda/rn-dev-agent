@@ -11,6 +11,7 @@ import {
 } from './cleanup-identity.js';
 import { NON_GIT_DECLARATION_NEXT_ACTION } from './declared-source-contract.js';
 import { probeMetroListener } from './metro-binding.js';
+import { sessionOwnerInspectionRemedy, sessionRecoveryRemedy } from './recovery-remedy.js';
 import type { AuthorityAxis } from './tool-profiles.js';
 
 const INITIALIZATION_WAIT = new Int32Array(new SharedArrayBuffer(4));
@@ -235,6 +236,13 @@ export interface StartupCleanupBlocker {
   code: string;
   reason: string;
   nextAction?: string;
+}
+
+export interface SourceOwnershipInspection {
+  owner: 'absent' | 'live' | 'stale' | 'unprovable';
+  sameRoot: boolean;
+  abandonedContenders: number;
+  startupCleanupBlocked?: StartupCleanupBlocker;
 }
 
 export interface RecoveryRequirementInspection {
@@ -1161,8 +1169,9 @@ export class SessionRegistry {
       return {
         requirement: 'transport-restart',
         priorOwner: 'absent',
-        nextAction:
-          'The blocking claim epoch is gone. Restart the MCP transport (/mcp) to start a clean session.',
+        nextAction: sessionRecoveryRemedy(
+          'The blocking claim epoch is gone; a clean session can start here.',
+        ),
       };
     }
     let status: OwnerStatus = 'unknown';
@@ -1204,14 +1213,17 @@ export class SessionRegistry {
             startupCleanupBlocked: blocked,
             nextAction:
               blocked.nextAction ??
-              `Startup cleanup refused with ${blocked.code} and will refuse again on the next restart: ${blocked.reason}. Resolve that refusal before restarting the MCP transport.`,
+              sessionOwnerInspectionRemedy(
+                `Startup cleanup refused with ${blocked.code} and will refuse again until that is resolved: ${blocked.reason}.`,
+              ),
           };
         }
         return {
           requirement: 'transport-restart',
           priorOwner: 'stale',
-          nextAction:
-            'The prior owner is proven dead. Restart the MCP transport (/mcp); startup cleanup releases it automatically.',
+          nextAction: sessionRecoveryRemedy(
+            'The prior owner is proven dead and is released automatically.',
+          ),
         };
       }
       return {
@@ -1231,8 +1243,12 @@ export class SessionRegistry {
       ...(grouped ? { priorOwnerHeartbeatAgeMs: heartbeatAgeMs } : {}),
       nextAction:
         status === 'match'
-          ? 'Another live rn-dev-agent supervisor owns this worktree. Close it or work in a separate worktree; a live owner is never adopted.'
-          : 'The prior owner identity could not be proven, so it is treated as live. Close the other session or re-run once its process state is observable.',
+          ? sessionOwnerInspectionRemedy(
+              'Another live rn-dev-agent supervisor owns this worktree; a live owner is never adopted.',
+            )
+          : sessionOwnerInspectionRemedy(
+              'The prior owner identity could not be proven, so it is treated as live.',
+            ),
     };
   }
 
@@ -3195,6 +3211,107 @@ export class SessionRegistry {
         )
         .run(now, session.sessionId, session.claimEpoch);
     });
+  }
+
+  /** GH #792: the ownership picture headless recovery reports; releases nothing. */
+  inspectSourceOwnership(input: {
+    sourceKey: string;
+    worktreeKey: string;
+    appRootKey: string;
+  }): SourceOwnershipInspection {
+    const abandonedContenders = this.#countAbandonedBlockedContenders(input.worktreeKey);
+    const claim = this.#findClaim('source', input.worktreeKey);
+    if (!claim) return { owner: 'absent', sameRoot: false, abandonedContenders };
+    const row = asSession(
+      this.#database
+        .prepare(
+          `SELECT session_id, source_key, worktree_key, app_root_key, claim_epoch,
+                  supervisor_pid, supervisor_birth, bindings_json
+           FROM sessions WHERE session_id = ?`,
+        )
+        .get(claim.session_id),
+    );
+    if (!row) return { owner: 'absent', sameRoot: false, abandonedContenders };
+    let status: OwnerStatus = 'unknown';
+    try {
+      status = this.#ownerStatus({
+        sessionId: row.session_id,
+        pid: row.supervisor_pid,
+        token: row.supervisor_birth,
+      });
+    } catch {
+      status = 'unknown';
+    }
+    const blocked = readStartupCleanupBlocker(row.bindings_json);
+    return {
+      owner: status === 'match' ? 'live' : status === 'mismatch' ? 'stale' : 'unprovable',
+      sameRoot:
+        row.source_key === input.sourceKey &&
+        row.worktree_key === input.worktreeKey &&
+        row.app_root_key === input.appRootKey,
+      abandonedContenders,
+      ...(blocked ? { startupCleanupBlocked: blocked } : {}),
+    };
+  }
+
+  #countAbandonedBlockedContenders(worktreeKey: string): number {
+    const rows = this.#database
+      .prepare(
+        `SELECT session_id, supervisor_pid, supervisor_birth FROM sessions
+         WHERE worktree_key = ? AND state = 'blocked'
+           AND NOT EXISTS (SELECT 1 FROM claims WHERE claims.session_id = sessions.session_id)`,
+      )
+      .all(worktreeKey) as Array<{
+      session_id: string;
+      supervisor_pid: number;
+      supervisor_birth: string;
+    }>;
+    return rows.filter((row) => this.#supervisorProvenDead(row)).length;
+  }
+
+  /**
+   * GH #792: a blocked contender holds no authority, so an abandoned row must not survive
+   * as the next attempt's prior owner. Proven-dead and claim-less only.
+   */
+  discardAbandonedBlockedContenders(worktreeKey: string): string[] {
+    const rows = this.#database
+      .prepare(
+        `SELECT session_id, claim_epoch, supervisor_pid, supervisor_birth
+         FROM sessions WHERE worktree_key = ? AND state = 'blocked'
+         ORDER BY updated_ms ASC`,
+      )
+      .all(worktreeKey) as Array<{
+      session_id: string;
+      claim_epoch: number;
+      supervisor_pid: number;
+      supervisor_birth: string;
+    }>;
+    const discarded: string[] = [];
+    for (const row of rows) {
+      if (!this.#supervisorProvenDead(row)) continue;
+      try {
+        const now = this.#now();
+        const released = this.#transaction(() => {
+          const claim = this.#database
+            .prepare('SELECT resource_key FROM claims WHERE session_id = ? LIMIT 1')
+            .get(row.session_id);
+          if (claim) return false;
+          const update = this.#database
+            .prepare(
+              `UPDATE sessions
+               SET state = 'released', claim_epoch = claim_epoch + 1,
+                   authority_version = authority_version + 1, updated_ms = ?
+               WHERE session_id = ? AND claim_epoch = ? AND state = 'blocked'`,
+            )
+            .run(now, row.session_id, row.claim_epoch) as { changes?: number };
+          return update.changes === 1;
+        });
+        if (released) discarded.push(row.session_id);
+      } catch {
+        // A contender that cannot be discarded stays exactly as it was.
+      }
+    }
+    return discarded;
   }
 
   prepareHandoff(

@@ -18,6 +18,7 @@ import { inspectManagedMetroCleanupEvidence, inspectManagedMetroLifecycle, probe
 import { arbiter } from '../lifecycle/device-arbiter.js';
 import { stopBoundObserve, stopBoundRecorder, stopBoundRunner, } from '../session/process-cleanup.js';
 import { deviceExistsOnHost } from '../session/device-existence.js';
+import { sessionOwnerInspectionRemedy } from '../session/recovery-remedy.js';
 import { removeAndroidMetroReverse, } from '../session/android-metro-reverse.js';
 function sameAndroidMetroReverse(current, next) {
     if (!current || !next)
@@ -1474,7 +1475,7 @@ export function createSessionHandler(runtime, dependencies = {}) {
                 const current = registry.getSessionStatus(session.sessionId);
                 if (current?.source.model === 'grouped-v1') {
                     throw new SessionAuthorityError('HANDOFF_NOT_AUTHORIZED', 'this session never mints adoption handles; a proven-dead same-root owner is released automatically at startup', undefined, {
-                        nextAction: 'Restart the MCP transport (/mcp) so startup cleanup releases a dead owner, or close the live owner session.',
+                        nextAction: sessionOwnerInspectionRemedy('Adoption handles no longer exist; a proven-dead same-root owner is released by startup cleanup instead.'),
                     });
                 }
                 const adoptionHandle = required(input.adoptionHandle, 'adoptionHandle');

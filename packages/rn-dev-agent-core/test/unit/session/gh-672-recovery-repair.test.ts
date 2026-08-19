@@ -396,7 +396,9 @@ test('GH#672: recovery requirement separates adoption, attach, and transport res
   f.registry.releaseSession(f.owner);
   const gone = f.registry.inspectRecoveryRequirement('b');
   assert.equal(gone.requirement, 'transport-restart');
-  assert.match(gone.nextAction, /Restart the MCP transport/);
+  // GH #792: every remedy names an executable path for interactive AND headless clients.
+  assert.match(gone.nextAction, /\/mcp/);
+  assert.match(gone.nextAction, /session-doctor\.js" repair/);
 });
 
 test('GH#672 legacy axes-v1: source recovery completes on the handle status advertises after expiry', () => {

@@ -12026,7 +12026,31 @@ function readProcessBirth(pid, dependencies = {}) {
   const probe = probeProcessBirth(pid, dependencies);
   return probe.status === "present" ? probe.birth : null;
 }
+function defaultProcessSignalPermission(pid) {
+  try {
+    process.kill(pid, 0);
+    return "permitted";
+  } catch (error2) {
+    const code = error2.code;
+    if (code === "ESRCH")
+      return "absent";
+    if (code === "EPERM")
+      return "denied";
+    return "unknown";
+  }
+}
 function probeProcessBirth(pid, dependencies = {}) {
+  const probe = probeRecordedProcessBirth(pid, dependencies);
+  if (probe.status !== "unknown")
+    return probe;
+  if (!Number.isSafeInteger(pid) || pid <= 0)
+    return probe;
+  if ((dependencies.platform ?? process.platform) === "win32")
+    return probe;
+  const permission = (dependencies.signalPermission ?? defaultProcessSignalPermission)(pid);
+  return permission === "denied" ? { status: "absent", reason: "foreign" } : probe;
+}
+function probeRecordedProcessBirth(pid, dependencies) {
   if (!Number.isSafeInteger(pid) || pid <= 0)
     return { status: "unknown" };
   const platform = dependencies.platform ?? process.platform;
@@ -25421,6 +25445,24 @@ var init_metro_binding = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/session/recovery-remedy.js
+function sessionRecoveryRemedy(lead) {
+  return `${lead} Interactive: reconnect the transport with /mcp. Headless: run ${HEADLESS_SESSION_RECOVERY_COMMAND} from the app root. Both run the same proven-dead startup cleanup and neither releases a live or unprovable owner. ${SESSION_RECOVERY_DOCS}.`;
+}
+function sessionOwnerInspectionRemedy(lead) {
+  return `${lead} Identify the recorded holder with ${HEADLESS_SESSION_REPORT_COMMAND} from the app root, close that process, then run ${HEADLESS_SESSION_RECOVERY_COMMAND}. A live or unprovable owner is never force-released. ${SESSION_RECOVERY_DOCS}.`;
+}
+var SESSION_DOCTOR, HEADLESS_SESSION_RECOVERY_COMMAND, HEADLESS_SESSION_REPORT_COMMAND, SESSION_RECOVERY_DOCS;
+var init_recovery_remedy = __esm({
+  "packages/rn-dev-agent-core/dist/session/recovery-remedy.js"() {
+    "use strict";
+    SESSION_DOCTOR = '"${CLAUDE_PLUGIN_ROOT:-$CODEX_PLUGIN_ROOT}/rn-dev-agent-core/dist/session-doctor.js"';
+    HEADLESS_SESSION_RECOVERY_COMMAND = `node ${SESSION_DOCTOR} repair`;
+    HEADLESS_SESSION_REPORT_COMMAND = `node ${SESSION_DOCTOR} report`;
+    SESSION_RECOVERY_DOCS = 'docs: session-authority "Recovering a wedged source root"';
+  }
+});
+
 // packages/rn-dev-agent-core/dist/session/registry.js
 import { createHash as createHash5, randomBytes as randomBytes4, timingSafeEqual as timingSafeEqual2 } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -25534,6 +25576,7 @@ var init_registry = __esm({
     init_cleanup_identity();
     init_declared_source_contract();
     init_metro_binding();
+    init_recovery_remedy();
     INITIALIZATION_WAIT2 = new Int32Array(new SharedArrayBuffer(4));
     AUTHORITY_REGISTRY_SCHEMA_VERSION = 4;
     SessionAuthorityError = class extends Error {
@@ -25961,7 +26004,7 @@ var init_registry = __esm({
           return {
             requirement: "transport-restart",
             priorOwner: "absent",
-            nextAction: "The blocking claim epoch is gone. Restart the MCP transport (/mcp) to start a clean session."
+            nextAction: sessionRecoveryRemedy("The blocking claim epoch is gone; a clean session can start here.")
           };
         }
         let status = "unknown";
@@ -25997,13 +26040,13 @@ var init_registry = __esm({
                 requirement: "transport-restart",
                 priorOwner: "stale",
                 startupCleanupBlocked: blocked,
-                nextAction: blocked.nextAction ?? `Startup cleanup refused with ${blocked.code} and will refuse again on the next restart: ${blocked.reason}. Resolve that refusal before restarting the MCP transport.`
+                nextAction: blocked.nextAction ?? sessionOwnerInspectionRemedy(`Startup cleanup refused with ${blocked.code} and will refuse again until that is resolved: ${blocked.reason}.`)
               };
             }
             return {
               requirement: "transport-restart",
               priorOwner: "stale",
-              nextAction: "The prior owner is proven dead. Restart the MCP transport (/mcp); startup cleanup releases it automatically."
+              nextAction: sessionRecoveryRemedy("The prior owner is proven dead and is released automatically.")
             };
           }
           return {
@@ -26017,7 +26060,7 @@ var init_registry = __esm({
           requirement: "attach",
           priorOwner: status === "match" ? "live" : "unknown",
           ...grouped ? { priorOwnerHeartbeatAgeMs: heartbeatAgeMs } : {},
-          nextAction: status === "match" ? "Another live rn-dev-agent supervisor owns this worktree. Close it or work in a separate worktree; a live owner is never adopted." : "The prior owner identity could not be proven, so it is treated as live. Close the other session or re-run once its process state is observable."
+          nextAction: status === "match" ? sessionOwnerInspectionRemedy("Another live rn-dev-agent supervisor owns this worktree; a live owner is never adopted.") : sessionOwnerInspectionRemedy("The prior owner identity could not be proven, so it is treated as live.")
         };
       }
       #assertDeviceAuthorityAvailable(session2, resource, probes, currentBindings) {
@@ -27054,6 +27097,72 @@ var init_registry = __esm({
                authority_version = authority_version + 1, updated_ms = ?
            WHERE session_id = ? AND claim_epoch = ?`).run(now, session2.sessionId, session2.claimEpoch);
         });
+      }
+      /** GH #792: the ownership picture headless recovery reports; releases nothing. */
+      inspectSourceOwnership(input) {
+        const abandonedContenders = this.#countAbandonedBlockedContenders(input.worktreeKey);
+        const claim = this.#findClaim("source", input.worktreeKey);
+        if (!claim)
+          return { owner: "absent", sameRoot: false, abandonedContenders };
+        const row = asSession(this.#database.prepare(`SELECT session_id, source_key, worktree_key, app_root_key, claim_epoch,
+                  supervisor_pid, supervisor_birth, bindings_json
+           FROM sessions WHERE session_id = ?`).get(claim.session_id));
+        if (!row)
+          return { owner: "absent", sameRoot: false, abandonedContenders };
+        let status = "unknown";
+        try {
+          status = this.#ownerStatus({
+            sessionId: row.session_id,
+            pid: row.supervisor_pid,
+            token: row.supervisor_birth
+          });
+        } catch {
+          status = "unknown";
+        }
+        const blocked = readStartupCleanupBlocker(row.bindings_json);
+        return {
+          owner: status === "match" ? "live" : status === "mismatch" ? "stale" : "unprovable",
+          sameRoot: row.source_key === input.sourceKey && row.worktree_key === input.worktreeKey && row.app_root_key === input.appRootKey,
+          abandonedContenders,
+          ...blocked ? { startupCleanupBlocked: blocked } : {}
+        };
+      }
+      #countAbandonedBlockedContenders(worktreeKey) {
+        const rows = this.#database.prepare(`SELECT session_id, supervisor_pid, supervisor_birth FROM sessions
+         WHERE worktree_key = ? AND state = 'blocked'
+           AND NOT EXISTS (SELECT 1 FROM claims WHERE claims.session_id = sessions.session_id)`).all(worktreeKey);
+        return rows.filter((row) => this.#supervisorProvenDead(row)).length;
+      }
+      /**
+       * GH #792: a blocked contender holds no authority, so an abandoned row must not survive
+       * as the next attempt's prior owner. Proven-dead and claim-less only.
+       */
+      discardAbandonedBlockedContenders(worktreeKey) {
+        const rows = this.#database.prepare(`SELECT session_id, claim_epoch, supervisor_pid, supervisor_birth
+         FROM sessions WHERE worktree_key = ? AND state = 'blocked'
+         ORDER BY updated_ms ASC`).all(worktreeKey);
+        const discarded = [];
+        for (const row of rows) {
+          if (!this.#supervisorProvenDead(row))
+            continue;
+          try {
+            const now = this.#now();
+            const released = this.#transaction(() => {
+              const claim = this.#database.prepare("SELECT resource_key FROM claims WHERE session_id = ? LIMIT 1").get(row.session_id);
+              if (claim)
+                return false;
+              const update = this.#database.prepare(`UPDATE sessions
+               SET state = 'released', claim_epoch = claim_epoch + 1,
+                   authority_version = authority_version + 1, updated_ms = ?
+               WHERE session_id = ? AND claim_epoch = ? AND state = 'blocked'`).run(now, row.session_id, row.claim_epoch);
+              return update.changes === 1;
+            });
+            if (released)
+              discarded.push(row.session_id);
+          } catch {
+          }
+        }
+        return discarded;
       }
       prepareHandoff(session2, input) {
         const now = this.#now();
@@ -68556,10 +68665,12 @@ function inspectSessionOwner(owner, dependencies = {}) {
     return "mismatch";
   if (state === "unknown")
     return "unknown";
-  const observed = (dependencies.readBirth ?? readProcessBirth)(owner.pid);
-  if (!observed)
+  const observed = (dependencies.probeBirth ?? probeProcessBirth)(owner.pid);
+  if (observed.status === "absent")
+    return "mismatch";
+  if (observed.status === "unknown")
     return "unknown";
-  return observed.token === owner.token ? "match" : "mismatch";
+  return observed.birth.token === owner.token ? "match" : "mismatch";
 }
 
 // packages/rn-dev-agent-core/dist/session/startup-cleanup.js
@@ -68882,11 +68993,12 @@ async function stopBoundObserve(binding, listenerProbe = probeManagedMetroListen
   if (currentBirth.status === "unknown") {
     throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe process identity is unavailable");
   }
+  if (currentBirth.status === "absent" && currentBirth.reason === "foreign")
+    return;
+  if (currentBirth.status === "present" && currentBirth.birth.token !== expectedBirth)
+    return;
   if (currentBirth.status === "absent") {
     throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe listener identity is internally inconsistent");
-  }
-  if (currentBirth.birth.token !== expectedBirth) {
-    throw new SessionAuthorityError("OBSERVE_AUTHORITY_MISMATCH", "Observe listener PID was reused before cleanup completed");
   }
   const remainingMs = deadlineMs - Date.now();
   if (remainingMs <= 0) {
@@ -69032,6 +69144,7 @@ async function stopBoundRecorder(binding, _processProbe = probeProcessBirth, run
 }
 
 // packages/rn-dev-agent-core/dist/session/startup-cleanup.js
+init_recovery_remedy();
 init_registry();
 var EXECUTION_ORDER = [
   "androidMetroReverse",
@@ -69042,10 +69155,15 @@ var EXECUTION_ORDER = [
 ];
 async function runStartupOwnerCleanup(input, dependencies = {}) {
   const released = [];
+  let discardedContenders = [];
+  try {
+    discardedContenders = input.registry.discardAbandonedBlockedContenders(input.worktreeKey);
+  } catch {
+  }
   for (let round = 0; round < 8; round += 1) {
     const candidate = input.registry.findStartupCleanupCandidate(input);
     if (!candidate)
-      return { status: "clean", released };
+      return { status: "clean", released, discardedContenders };
     try {
       const plan = input.registry.beginStartupOwnerCleanup(candidate);
       await completeObligations(input.registry, candidate, dependencies);
@@ -69055,12 +69173,13 @@ async function runStartupOwnerCleanup(input, dependencies = {}) {
     } catch (error2) {
       const refusal = refusalOf(error2);
       retainRefusal(input.registry, candidate, refusal);
-      return { status: "refused", released, refusal };
+      return { status: "refused", released, discardedContenders, refusal };
     }
   }
   return {
     status: "refused",
     released,
+    discardedContenders,
     refusal: publicRefusal({
       code: "RESOURCE_CLAIM_CONFLICT",
       message: "startup cleanup did not converge for this worktree"
@@ -69122,7 +69241,7 @@ function restoreDeadOwnerIntegration(input, prior, plan, dependencies) {
   const manifestSource = verifiedDeadOwnerManifestSource(input.appRoot, binding, manifestSha256);
   if (!manifestSource) {
     throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "integration restoration requires a SHA-256-verified manifest and none is available; the dead owner binding is preserved", void 0, {
-      nextAction: "Restore the exact integration manifest at .rn-agent/integration/rn-session-integration.json from your own version control history or backups so it matches the manifest SHA-256 recorded on the binding, then restart the MCP transport."
+      nextAction: sessionRecoveryRemedy("Restore the exact integration manifest at .rn-agent/integration/rn-session-integration.json from your own version control history or backups so it matches the manifest SHA-256 recorded on the binding.")
     });
   }
   input.registry.verifyStartupOwnerIntegrationRestore(prior, {
@@ -69180,7 +69299,7 @@ var PUBLIC_REFUSAL_REASONS = /* @__PURE__ */ new Set([
     `${resource} cleanup was not durably requested`
   ])
 ]);
-var GENERIC_REFUSAL_REMEDY = "Startup cleanup refused and preserved the prior owner binding. Resolve the refusal named by this code, then restart the MCP transport; another restart alone does not release the owner.";
+var GENERIC_REFUSAL_REMEDY = sessionOwnerInspectionRemedy("Startup cleanup refused and preserved the prior owner binding; another restart alone does not release it.");
 function publicRefusal(refusal) {
   const sentence = refusal.message.replace(/^[A-Z][A-Z0-9_]+: /, "");
   const authored = PUBLIC_REFUSAL_REASONS.has(sentence);
@@ -69230,6 +69349,7 @@ function deviceExistsOnHost(platform, deviceId) {
 }
 
 // packages/rn-dev-agent-core/dist/tools/session.js
+init_recovery_remedy();
 function sameAndroidMetroReverse(current, next) {
   if (!current || !next)
     return current === next;
@@ -70451,7 +70571,7 @@ function createSessionHandler(runtime, dependencies = {}) {
         const current = registry2.getSessionStatus(session2.sessionId);
         if (current?.source.model === "grouped-v1") {
           throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "this session never mints adoption handles; a proven-dead same-root owner is released automatically at startup", void 0, {
-            nextAction: "Restart the MCP transport (/mcp) so startup cleanup releases a dead owner, or close the live owner session."
+            nextAction: sessionOwnerInspectionRemedy("Adoption handles no longer exist; a proven-dead same-root owner is released by startup cleanup instead.")
           });
         }
         const adoptionHandle = required2(input.adoptionHandle, "adoptionHandle");

@@ -84,6 +84,7 @@ const RUNTIME_ENTRIES = [
   'startup-integrity-loader.js',
   'startup-integrity-register.js',
   'rn-session.js',
+  'session-doctor.js',
   'experience-trends.js',
   'worktree-inheritance.js',
   'workflow-check.js',

@@ -513,7 +513,7 @@ test('L4: the executor cleans a dead same-root owner end to end with exact ident
 test('L4: the executor is a no-op when nothing conflicts', async () => {
   const f = fixture();
   const outcome = await runStartupOwnerCleanup(cleanupInput(f), executorDeps(f, []));
-  assert.deepEqual(outcome, { status: 'clean', released: [] });
+  assert.deepEqual(outcome, { status: 'clean', released: [], discardedContenders: [] });
 });
 
 test('L4: startup cleanup never selects another app root in the same worktree', async () => {
@@ -531,7 +531,7 @@ test('L4: startup cleanup never selects another app root in the same worktree', 
 
   const outcome = await runStartupOwnerCleanup(cleanupInput(f), executorDeps(f, calls));
 
-  assert.deepEqual(outcome, { status: 'clean', released: [] });
+  assert.deepEqual(outcome, { status: 'clean', released: [], discardedContenders: [] });
   assert.deepEqual(calls, []);
   assert.equal(f.registry.getClaim('source', 'worktree-1')?.sessionId, 'other-app-owner');
   assert.equal(journalOf(f.registry, 'other-app-owner'), undefined);
@@ -790,7 +790,8 @@ test('L4: grouped recovery guidance names startup cleanup for a dead owner, neve
   const dead = f.registry.inspectRecoveryRequirement('contender');
   assert.equal(dead.requirement, 'transport-restart');
   assert.equal(dead.priorOwner, 'stale');
-  assert.match(dead.nextAction, /restart/i);
+  assert.match(dead.nextAction, /session-doctor\.js" repair/);
+  assert.match(dead.nextAction, /\/mcp/);
   assert.doesNotMatch(dead.nextAction, /adopt_stale/);
 });
 

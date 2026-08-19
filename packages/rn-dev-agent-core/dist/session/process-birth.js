@@ -184,7 +184,37 @@ export function readProcessBirth(pid, dependencies = {}) {
     const probe = probeProcessBirth(pid, dependencies);
     return probe.status === 'present' ? probe.birth : null;
 }
+export function defaultProcessSignalPermission(pid) {
+    try {
+        process.kill(pid, 0);
+        return 'permitted';
+    }
+    catch (error) {
+        const code = error.code;
+        if (code === 'ESRCH')
+            return 'absent';
+        if (code === 'EPERM')
+            return 'denied';
+        return 'unknown';
+    }
+}
+/** GH #792: an unreadable identity is not the same as an unprovable one. */
 export function probeProcessBirth(pid, dependencies = {}) {
+    const probe = probeRecordedProcessBirth(pid, dependencies);
+    if (probe.status !== 'unknown')
+        return probe;
+    // 0 and negatives address process groups, not processes.
+    if (!Number.isSafeInteger(pid) || pid <= 0)
+        return probe;
+    // NOTE: POSIX only — on Windows `uv_kill` opens the target for PROCESS_TERMINATE even
+    // for signal 0, so this denies a live same-user process. An unreadable identity that is
+    // not disproved this way stays `unknown`; absence is the platform branches' job.
+    if ((dependencies.platform ?? process.platform) === 'win32')
+        return probe;
+    const permission = (dependencies.signalPermission ?? defaultProcessSignalPermission)(pid);
+    return permission === 'denied' ? { status: 'absent', reason: 'foreign' } : probe;
+}
+function probeRecordedProcessBirth(pid, dependencies) {
     if (!Number.isSafeInteger(pid) || pid <= 0)
         return { status: 'unknown' };
     const platform = dependencies.platform ?? process.platform;

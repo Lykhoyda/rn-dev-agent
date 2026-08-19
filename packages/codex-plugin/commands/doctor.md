@@ -60,5 +60,23 @@ inside doctor. Plugin recovery order is user-confirmed marketplace upgrade,
 materialization with `codex plugin add rn-dev-agent@rn-dev-agent --json`, Codex
 relaunch when required, then inventory recheck.
 
+## Session-authority wedge
+
+When the RN app root is known, run the read-only packaged probe
+`node <package-root>/rn-dev-agent-core/dist/session-doctor.js report --json`. The report is
+three-state: GREEN when `wedged` and `repairable` are both false, YELLOW when `repairable`
+is true (a proven-dead owner of this exact root, released by the next transport start or by
+the repair command), and RED when `wedged` is true. On RED, name the exact cause it returns
+instead of a generic stale-lock story:
+`sameRootOwner: unprovable` (the recorded owner's process identity cannot be read, so it
+is conservatively treated as live), `startupCleanupBlocked` (the owner is proven dead but
+an obligation such as `RUNNER_ADOPTION_REQUIRED` could not be discharged), or
+`ownerIsThisRoot: false` (a proven-dead owner of another app root or declared source in
+this worktree). Report a non-zero `abandonedContenders` too. Print the supported repair,
+`node <package-root>/rn-dev-agent-core/dist/session-doctor.js repair`, but do not execute
+it from doctor. It runs the same proven-dead startup cleanup a fresh transport runs and
+never releases a live or unprovable owner; not every stale lock self-heals, only a proven
+-dead owner does. Never recommend deleting or moving files in the authority store.
+
 Never recommend raw Maestro as strict-proof recovery and never kill a bridge
 owned by another host.

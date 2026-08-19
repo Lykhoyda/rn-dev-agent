@@ -27,8 +27,10 @@ export interface ProcessBirth {
 
 export type ProcessBirthProbe =
   | { status: 'present'; birth: ProcessBirth }
-  | { status: 'absent' }
+  | { status: 'absent'; reason?: 'foreign' }
   | { status: 'unknown' };
+
+export type ProcessSignalPermission = 'permitted' | 'denied' | 'absent' | 'unknown';
 
 interface ProcessBirthDependencies {
   platform?: NodeJS.Platform;
@@ -48,6 +50,7 @@ interface ProcessBirthDependencies {
   fstat?: (fd: number) => Pick<Stats, 'dev' | 'ino' | 'mode' | 'size' | 'uid'> & {
     isFile(): boolean;
   };
+  signalPermission?: (pid: number) => ProcessSignalPermission;
   uid?: number;
 }
 
@@ -272,9 +275,38 @@ export function readProcessBirth(
   return probe.status === 'present' ? probe.birth : null;
 }
 
+export function defaultProcessSignalPermission(pid: number): ProcessSignalPermission {
+  try {
+    process.kill(pid, 0);
+    return 'permitted';
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ESRCH') return 'absent';
+    if (code === 'EPERM') return 'denied';
+    return 'unknown';
+  }
+}
+
+/** GH #792: an unreadable identity is not the same as an unprovable one. */
 export function probeProcessBirth(
   pid: number,
   dependencies: ProcessBirthDependencies = {},
+): ProcessBirthProbe {
+  const probe = probeRecordedProcessBirth(pid, dependencies);
+  if (probe.status !== 'unknown') return probe;
+  // 0 and negatives address process groups, not processes.
+  if (!Number.isSafeInteger(pid) || pid <= 0) return probe;
+  // NOTE: POSIX only — on Windows `uv_kill` opens the target for PROCESS_TERMINATE even
+  // for signal 0, so this denies a live same-user process. An unreadable identity that is
+  // not disproved this way stays `unknown`; absence is the platform branches' job.
+  if ((dependencies.platform ?? process.platform) === 'win32') return probe;
+  const permission = (dependencies.signalPermission ?? defaultProcessSignalPermission)(pid);
+  return permission === 'denied' ? { status: 'absent', reason: 'foreign' } : probe;
+}
+
+function probeRecordedProcessBirth(
+  pid: number,
+  dependencies: ProcessBirthDependencies,
 ): ProcessBirthProbe {
   if (!Number.isSafeInteger(pid) || pid <= 0) return { status: 'unknown' };
 

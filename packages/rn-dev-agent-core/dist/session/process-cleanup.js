@@ -185,11 +185,14 @@ export async function stopBoundObserve(binding, listenerProbe = probeManagedMetr
     if (currentBirth.status === 'unknown') {
         throw new SessionAuthorityError('OBSERVE_AUTHORITY_MISMATCH', 'Observe process identity is unavailable');
     }
+    // GH #792: the recorded pid carries a different identity, so this session's Observe
+    // server is gone and no stop request may reach the stranger holding the port.
+    if (currentBirth.status === 'absent' && currentBirth.reason === 'foreign')
+        return;
+    if (currentBirth.status === 'present' && currentBirth.birth.token !== expectedBirth)
+        return;
     if (currentBirth.status === 'absent') {
         throw new SessionAuthorityError('OBSERVE_AUTHORITY_MISMATCH', 'Observe listener identity is internally inconsistent');
-    }
-    if (currentBirth.birth.token !== expectedBirth) {
-        throw new SessionAuthorityError('OBSERVE_AUTHORITY_MISMATCH', 'Observe listener PID was reused before cleanup completed');
     }
     const remainingMs = deadlineMs - Date.now();
     if (remainingMs <= 0) {

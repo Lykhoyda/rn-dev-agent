@@ -1,0 +1,640 @@
+// GH #792: an ungracefully dead owner whose recorded pid the OS has recycled into an
+// unrelated process must stay recoverable. A birth token is only ever recorded for a
+// process this user could read, so a pid the kernel refuses to let us inspect or
+// signal is positively NOT the recorded owner — that is disproof, not uncertainty.
+// Strict refusal still stands for a proven-live owner and for an identity that is
+// genuinely unreadable.
+import assert from 'node:assert/strict';
+import { execFileSync, spawn } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { afterEach, test } from 'node:test';
+import { probeProcessBirth } from '../../../dist/session/process-birth.js';
+import { inspectSessionOwner } from '../../../dist/session/process-owner.js';
+import { stopBoundObserve, stopBoundRunner } from '../../../dist/session/process-cleanup.js';
+import { openSessionRegistry } from '../../../dist/session/registry.js';
+import { runStartupOwnerCleanup } from '../../../dist/session/startup-cleanup.js';
+import { resolveSourceIdentity } from '../../../dist/session/source-identity.js';
+import { createAuthorityStateLayout } from '../../../dist/session/state-root.js';
+
+const distRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'dist');
+const OWNER = { sessionId: 'owner', pid: 4242, token: 'birth-owner' };
+const roots: string[] = [];
+
+afterEach(() => {
+  for (const root of roots.splice(0)) rmSync(root, { force: true, recursive: true });
+});
+
+function temporaryStateHome(): string {
+  const root = mkdtempSync(join(tmpdir(), 'rn-gh-792-'));
+  roots.push(root);
+  return root;
+}
+
+const present = (token: string) =>
+  ({ status: 'present', birth: { pid: OWNER.pid, source: 'linux-proc', token } }) as const;
+
+test('GH #792: the smallest counterfactual pair — same pid, birth match versus birth mismatch', () => {
+  assert.equal(
+    inspectSessionOwner(OWNER, {
+      processState: () => 'alive',
+      probeBirth: () => present('birth-owner'),
+    }),
+    'match',
+  );
+  assert.equal(
+    inspectSessionOwner(OWNER, {
+      processState: () => 'alive',
+      probeBirth: () => present('birth-of-the-recycling-process'),
+    }),
+    'mismatch',
+  );
+});
+
+test('GH #792: a pid this user cannot inspect is disproof, while an unreadable identity stays unknown', () => {
+  assert.equal(
+    inspectSessionOwner(OWNER, {
+      processState: () => 'alive',
+      probeBirth: () => ({ status: 'absent', reason: 'foreign' }),
+    }),
+    'mismatch',
+  );
+  assert.equal(
+    inspectSessionOwner(OWNER, {
+      processState: () => 'alive',
+      probeBirth: () => ({ status: 'absent' }),
+    }),
+    'mismatch',
+  );
+  assert.equal(
+    inspectSessionOwner(OWNER, {
+      processState: () => 'alive',
+      probeBirth: () => ({ status: 'unknown' }),
+    }),
+    'unknown',
+  );
+  assert.equal(
+    inspectSessionOwner(OWNER, {
+      processState: () => 'unknown',
+      probeBirth: () => ({ status: 'unknown' }),
+    }),
+    'unknown',
+  );
+  assert.equal(
+    inspectSessionOwner(OWNER, {
+      processState: () => 'dead',
+      probeBirth: () => ({ status: 'unknown' }),
+    }),
+    'mismatch',
+  );
+});
+
+test('GH #792: probeProcessBirth reports a signal-denied pid as absent, never as unknown', () => {
+  const unreadable = { run: () => '', platform: 'aix' as NodeJS.Platform };
+  assert.deepEqual(
+    probeProcessBirth(OWNER.pid, { ...unreadable, signalPermission: () => 'denied' }),
+    {
+      status: 'absent',
+      reason: 'foreign',
+    },
+  );
+  assert.deepEqual(
+    probeProcessBirth(OWNER.pid, { ...unreadable, signalPermission: () => 'permitted' }),
+    { status: 'unknown' },
+  );
+  // ESRCH stays `unknown` here: every platform branch already reports a missing process as
+  // absent from its own read, and `inspectSessionOwner` proves that case via `kill(pid, 0)`
+  // before it ever probes. Widening it would break the fail-closed contract that an
+  // unavailable identity path answers `unknown`.
+  assert.deepEqual(
+    probeProcessBirth(OWNER.pid, { ...unreadable, signalPermission: () => 'absent' }),
+    { status: 'unknown' },
+  );
+  assert.deepEqual(
+    probeProcessBirth(OWNER.pid, { ...unreadable, signalPermission: () => 'unknown' }),
+    { status: 'unknown' },
+  );
+});
+
+test('GH #792: EPERM is never disproof on Windows, and never consulted for an invalid pid', () => {
+  // `uv_kill` opens the target for PROCESS_TERMINATE even for signal 0, so integrity-level
+  // isolation denies a LIVE same-user elevated process — and the state root cannot be
+  // uid-pinned there, so "recorded owners are same-user" is unenforced. Releasing on EPERM
+  // would steal a live owner's authority.
+  const onWindows = (permission: 'denied' | 'absent') =>
+    probeProcessBirth(OWNER.pid, {
+      platform: 'win32',
+      run: () => '',
+      executableDependencies: { exists: () => false },
+      signalPermission: () => permission,
+    });
+  assert.deepEqual(onWindows('denied'), { status: 'unknown' });
+  // A non-pid must never reach `process.kill`, where 0 and negatives address process groups.
+  const consulted: number[] = [];
+  for (const pid of [0, -4242, 1.5]) {
+    assert.deepEqual(
+      probeProcessBirth(pid, {
+        platform: 'linux',
+        read: () => {
+          throw new Error('unreadable');
+        },
+        signalPermission: (value: number) => {
+          consulted.push(value);
+          return 'denied';
+        },
+      }),
+      { status: 'unknown' },
+    );
+  }
+  assert.deepEqual(consulted, []);
+});
+
+test('GH #792: a real recycled pid is disproved against real processes, without signalling them', () => {
+  // A controlled long-lived child stands in for the recycled pid deterministically: it is
+  // a real same-user process at a real pid, carrying a birth identity that is not the one
+  // the store recorded. This is the same-user half of the reuse case and needs no
+  // assumption about any other process on the host.
+  const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60_000)'], {
+    stdio: 'ignore',
+  });
+  try {
+    assert.ok(child.pid);
+    const probe = probeProcessBirth(child.pid);
+    const owner = (token: string) =>
+      inspectSessionOwner({ sessionId: 'owner', pid: child.pid as number, token });
+    if (probe.status === 'present') {
+      assert.equal(owner('a-prior-owners-birth'), 'mismatch');
+      assert.equal(owner(probe.birth.token), 'match');
+    } else {
+      // A loaded host can time out the identity read. `unknown` is the only acceptable
+      // answer then — never a `mismatch` inferred from something weaker than proof.
+      assert.equal(probe.status, 'unknown');
+      assert.equal(owner('a-prior-owners-birth'), 'unknown');
+    }
+  } finally {
+    child.kill('SIGKILL');
+  }
+
+  // pid 1 is the other half: a real process this user cannot inspect. It exists on every
+  // supported host, is only ever read, and is never signalled here.
+  assert.equal(
+    inspectSessionOwner({ sessionId: 'owner', pid: 1, token: 'not-this-owner' }),
+    'mismatch',
+  );
+  // This process is never foreign to itself. Its identity read can still time out on a
+  // loaded host, and `unknown` is the conservative answer there — but `absent` never is.
+  const self = probeProcessBirth(process.pid);
+  assert.notEqual(self.status, 'absent');
+  if (self.status !== 'present') return;
+  assert.equal(
+    inspectSessionOwner({ sessionId: 'owner', pid: process.pid, token: self.birth.token }),
+    'match',
+  );
+  assert.equal(
+    inspectSessionOwner({ sessionId: 'owner', pid: process.pid, token: 'a-prior-birth' }),
+    'mismatch',
+  );
+});
+
+function wedgedFixture(ownerStatus: (owner: { sessionId: string }) => string) {
+  const root = temporaryStateHome();
+  const registry = openSessionRegistry(join(root, 'registry.sqlite3'), {
+    ownerStatus,
+    listenerStatus: () => 'absent',
+    leaseMs: 30_000,
+  });
+  const dead = registry.createSession({
+    sessionId: 'dead-owner',
+    sourceKey: 'repo',
+    worktreeKey: 'worktree-1',
+    appRootKey: '.',
+    supervisor: { pid: 4242, token: 'birth-owner' },
+    source: { kind: 'git', contentRoot: '/src/worktree-1', model: 'grouped-v1' },
+    bindings: {},
+  });
+  registry.claimResources(dead, [
+    { type: 'source', key: 'worktree-1' },
+    { type: 'metro-port', key: '8300' },
+  ]);
+  registry.updateBindings(dead, { state: 'source_bound', bindings: { metroPort: 8300 } });
+  return {
+    registry,
+    input: {
+      registry,
+      sourceKey: 'repo',
+      worktreeKey: 'worktree-1',
+      appRootKey: '.',
+      appRoot: join(root, 'app'),
+    },
+  };
+}
+
+test('GH #792: startup cleanup releases an owner whose pid was recycled into a foreign process', async () => {
+  const foreignOccupant = (owner: { sessionId: string; pid: number; token: string }) =>
+    inspectSessionOwner(owner, {
+      processState: () => 'alive',
+      probeBirth: () => ({ status: 'absent', reason: 'foreign' }),
+    });
+  const fixture = wedgedFixture(foreignOccupant as never);
+  const outcome = await runStartupOwnerCleanup(fixture.input);
+  assert.equal(outcome.status, 'clean');
+  assert.deepEqual(outcome.released, ['dead-owner']);
+  assert.equal(fixture.registry.findStartupCleanupCandidate(fixture.input), null);
+  fixture.registry.close();
+});
+
+test('GH #792: a proven-live owner is never released and a genuinely unreadable one still refuses', async () => {
+  const live = wedgedFixture(((owner: { sessionId: string; pid: number; token: string }) =>
+    inspectSessionOwner(owner, {
+      processState: () => 'alive',
+      probeBirth: () => present(owner.token),
+    })) as never);
+  const liveOutcome = await runStartupOwnerCleanup(live.input);
+  assert.equal(liveOutcome.status, 'refused');
+  assert.equal(liveOutcome.refusal?.code, 'RESOURCE_CLAIM_CONFLICT');
+  assert.deepEqual(liveOutcome.released, []);
+  assert.notEqual(live.registry.findStartupCleanupCandidate(live.input), null);
+  live.registry.close();
+
+  const unreadable = wedgedFixture(((owner: { sessionId: string; pid: number; token: string }) =>
+    inspectSessionOwner(owner, {
+      processState: () => 'alive',
+      probeBirth: () => ({ status: 'unknown' }),
+    })) as never);
+  const unreadableOutcome = await runStartupOwnerCleanup(unreadable.input);
+  assert.equal(unreadableOutcome.status, 'refused');
+  assert.deepEqual(unreadableOutcome.released, []);
+  assert.notEqual(unreadable.registry.findStartupCleanupCandidate(unreadable.input), null);
+  unreadable.registry.close();
+});
+
+const runnerBinding = (platform: 'ios' | 'android') => ({
+  pid: 4242,
+  processBirth: 'birth-runner',
+  platform,
+  deviceId: platform === 'ios' ? 'sim-1' : 'emulator-5554',
+  port: 9200,
+  instanceId: 'runner-instance-1',
+  capability: 'runner-capability',
+});
+
+const foreignProbe = () => ({ status: 'absent', reason: 'foreign' }) as const;
+const recycledProbe = () =>
+  ({
+    status: 'present',
+    birth: { pid: 4242, source: 'linux-proc', token: 'birth-of-the-recycling-process' },
+  }) as const;
+
+test('GH #792: runner cleanup no longer wedges on a recycled runner pid, and signals nothing', async () => {
+  for (const probe of [foreignProbe, recycledProbe]) {
+    const signalled: number[] = [];
+    await stopBoundRunner(runnerBinding('ios'), probe, (pid: number) => {
+      signalled.push(pid);
+    });
+    assert.deepEqual(signalled, [], 'a pid that is not ours is never signalled');
+  }
+  await assert.rejects(
+    stopBoundRunner(
+      runnerBinding('ios'),
+      () => ({ status: 'unknown' }),
+      () => {},
+    ),
+    /RUNNER_ADOPTION_REQUIRED/,
+  );
+});
+
+test('GH #792: a recycled Android runner pid still gets its device-side cleanup, unsignalled', async () => {
+  // The host process being gone is exactly when orphaned instrumentation is most likely
+  // to survive on the device, so the adb leg must still run. It is fenced upstream by
+  // `verifyStartupOwnerObligation`, which re-proves the dead owner still holds this exact
+  // runner claim before any of this executes.
+  for (const probe of [foreignProbe, recycledProbe]) {
+    const signalled: number[] = [];
+    const adb: string[][] = [];
+    await stopBoundRunner(
+      runnerBinding('android'),
+      probe,
+      (pid: number) => {
+        signalled.push(pid);
+      },
+      2_000,
+      async (args: string[]) => {
+        adb.push(args);
+        return { stdout: '', stderr: '' };
+      },
+    );
+    assert.deepEqual(signalled, [], 'a pid that is not ours is never signalled');
+    assert.ok(
+      adb.some((args) => args.includes('force-stop')),
+      'device-side runner termination still runs',
+    );
+    assert.ok(
+      adb.every((args) => args[0] === '-s' && args[1] === 'emulator-5554'),
+      'every adb call is pinned to the exact recorded serial',
+    );
+  }
+});
+
+test('GH #792: observe cleanup completes on a recycled observe pid without contacting it', async () => {
+  const binding = {
+    port: 7400,
+    pid: 4242,
+    processBirth: 'birth-observe',
+    instanceId: 'instance-1',
+    cleanupCapability: 'capability',
+  };
+  for (const probe of [foreignProbe, recycledProbe]) {
+    let requests = 0;
+    await stopBoundObserve(
+      binding,
+      () => ({ status: 'listening', pid: 4242 }),
+      probe,
+      2_000,
+      (async () => {
+        requests += 1;
+        return new Response(null, { status: 200 });
+      }) as never,
+    );
+    assert.equal(requests, 0, 'no stop request is sent to a stranger holding the port');
+  }
+  // An identity that vanished while the listener still reports our pid is a genuine
+  // inconsistency, not a recycled pid, and still refuses.
+  await assert.rejects(
+    stopBoundObserve(
+      binding,
+      () => ({ status: 'listening', pid: 4242 }),
+      () => ({ status: 'absent' }),
+      2_000,
+      (async () => new Response(null, { status: 200 })) as never,
+    ),
+    /OBSERVE_AUTHORITY_MISMATCH/,
+  );
+});
+
+test('GH #792: an abandoned blocked contender leaves no record that wedges the next attempt', async () => {
+  const proven = new Map<string, string>([
+    ['dead-owner', 'mismatch'],
+    ['dead-contender', 'mismatch'],
+    ['live-contender', 'match'],
+  ]);
+  const root = temporaryStateHome();
+  const registry = openSessionRegistry(join(root, 'registry.sqlite3'), {
+    ownerStatus: (owner: { sessionId: string }) => proven.get(owner.sessionId) ?? 'unknown',
+    listenerStatus: () => 'absent',
+    leaseMs: 30_000,
+  });
+  const owner = registry.createSession({
+    sessionId: 'dead-owner',
+    sourceKey: 'repo',
+    worktreeKey: 'worktree-1',
+    appRootKey: '.',
+    supervisor: { pid: 4242, token: 'birth-owner' },
+    source: { kind: 'git', contentRoot: '/src/worktree-1', model: 'grouped-v1' },
+    bindings: {},
+  });
+  registry.claimResources(owner, [{ type: 'source', key: 'worktree-1' }]);
+  for (const sessionId of ['dead-contender', 'live-contender']) {
+    const contender = registry.createSession({
+      sessionId,
+      sourceKey: 'repo',
+      worktreeKey: 'worktree-1',
+      appRootKey: '.',
+      supervisor: { pid: 4343, token: `birth-${sessionId}` },
+      source: { kind: 'git', contentRoot: '/src/worktree-1', model: 'grouped-v1' },
+      bindings: {},
+    });
+    registry.updateBindings(contender, {
+      state: 'blocked',
+      bindings: { adoptionRequired: { sessionId: 'dead-owner', claimEpoch: owner.claimEpoch } },
+    });
+  }
+  const outcome = await runStartupOwnerCleanup({
+    registry,
+    sourceKey: 'repo',
+    worktreeKey: 'worktree-1',
+    appRootKey: '.',
+    appRoot: join(root, 'app'),
+  });
+  assert.equal(outcome.status, 'clean');
+  assert.deepEqual(outcome.discardedContenders, ['dead-contender']);
+  assert.equal(registry.getSessionStatus('dead-contender')?.state, 'released');
+  assert.equal(registry.getSessionStatus('live-contender')?.state, 'blocked');
+
+  // The invariant is about the NEXT attempt, so admit one and prove it is unobstructed.
+  proven.set('next-attempt', 'match');
+  const next = registry.createSession({
+    sessionId: 'next-attempt',
+    sourceKey: 'repo',
+    worktreeKey: 'worktree-1',
+    appRootKey: '.',
+    supervisor: { pid: 4444, token: 'birth-next-attempt' },
+    source: { kind: 'git', contentRoot: '/src/worktree-1', model: 'grouped-v1' },
+    bindings: {},
+  });
+  registry.claimResources(next, [{ type: 'source', key: 'worktree-1' }]);
+  registry.updateBindings(next, { state: 'source_bound', bindings: {} });
+  assert.equal(
+    registry.inspectRecoveryRequirement('next-attempt').requirement,
+    'none',
+    'the next attempt owns the worktree outright',
+  );
+  const live = registry.findSessionsByWorktree('worktree-1').map((status) => status.sessionId);
+  assert.ok(live.includes('next-attempt'));
+  assert.ok(
+    !live.includes('dead-contender'),
+    'a discarded contender never becomes a later prior owner',
+  );
+  registry.close();
+});
+
+test('GH #792: the headless recovery path releases a wedged root from a real command', () => {
+  const stateHome = temporaryStateHome();
+  const appRoot = join(stateHome, 'app');
+  mkdirSync(appRoot);
+  writeFileSync(join(appRoot, 'package.json'), '{"name":"gh-792-fixture"}');
+  const environment = {
+    ...process.env,
+    XDG_STATE_HOME: stateHome,
+    RN_DEV_AGENT_DECLARED_ROOT: appRoot,
+    RN_DEV_AGENT_DECLARED_MANIFESTS: 'package.json',
+  };
+  const run = (command: string) => {
+    const stdout = execFileSync(
+      process.execPath,
+      [join(distRoot, 'session-doctor.js'), command, '--json'],
+      { cwd: appRoot, encoding: 'utf8', env: environment },
+    );
+    return JSON.parse(stdout) as Record<string, unknown>;
+  };
+
+  const clean = run('report');
+  assert.equal(clean.wedged, false);
+  assert.equal(clean.sameRootOwner, 'absent');
+  assert.match(String(clean.authorityStore), /registry\.sqlite3$/);
+
+  // Seed the exact reported wedge: an owner whose recorded pid now hosts an unrelated
+  // process this user cannot inspect. pid 1 is read-only evidence and is never signalled.
+  const source = resolveSourceIdentity(appRoot, {
+    declaredRoot: appRoot,
+    declaredManifests: ['package.json'],
+  });
+  const layout = createAuthorityStateLayout(join(stateHome, 'rn-dev-agent'));
+  const registry = openSessionRegistry(layout.registry, { ownerStatus: inspectSessionOwner });
+  const owner = registry.createSession({
+    sessionId: 'recycled-pid-owner',
+    sourceKey: source.sourceKey,
+    worktreeKey: source.worktreeKey,
+    appRootKey: source.appRootKey,
+    supervisor: { pid: 1, token: 'birth-of-the-dead-owner' },
+    source: { ...source, model: 'grouped-v1' },
+    bindings: {},
+  });
+  registry.claimResources(owner, [{ type: 'source', key: source.worktreeKey }]);
+  registry.updateBindings(owner, { state: 'source_bound', bindings: {} });
+  registry.close();
+
+  const stale = run('report');
+  assert.equal(stale.sameRootOwner, 'stale');
+  assert.equal(stale.ownerIsThisRoot, true);
+  assert.match(String(stale.remedy), /session-doctor\.js" repair/);
+
+  const repaired = run('repair');
+  assert.equal(repaired.status, 'clean');
+  assert.deepEqual(repaired.released, ['recycled-pid-owner']);
+  assert.equal(run('report').sameRootOwner, 'absent');
+});
+
+test('GH #792: every recovery remedy names an executable path for interactive and headless clients', () => {
+  const owners = new Map<string, string>();
+  const root = temporaryStateHome();
+  const registry = openSessionRegistry(join(root, 'registry.sqlite3'), {
+    ownerStatus: (owner: { sessionId: string }) => owners.get(owner.sessionId) ?? 'unknown',
+    listenerStatus: () => 'absent',
+    leaseMs: 30_000,
+  });
+  const session = (sessionId: string, appRootKey = '.') =>
+    registry.createSession({
+      sessionId,
+      sourceKey: 'repo',
+      worktreeKey: 'worktree-1',
+      appRootKey,
+      supervisor: { pid: 4242, token: `birth-${sessionId}` },
+      source: { kind: 'git', contentRoot: '/src/worktree-1', model: 'grouped-v1' },
+      bindings: {},
+    });
+  const owner = session('owner');
+  registry.claimResources(owner, [{ type: 'source', key: 'worktree-1' }]);
+  const contender = session('contender');
+  registry.updateBindings(contender, {
+    state: 'blocked',
+    bindings: { adoptionRequired: { sessionId: 'owner', claimEpoch: owner.claimEpoch } },
+  });
+
+  const remedy = (status: string): string => {
+    owners.set('owner', status);
+    return registry.inspectRecoveryRequirement('contender').nextAction;
+  };
+  const provenDead = remedy('mismatch');
+  const live = remedy('match');
+  const unprovable = remedy('unknown');
+  const orphan = session('orphan-contender');
+  registry.updateBindings(orphan, {
+    state: 'blocked',
+    bindings: { adoptionRequired: { sessionId: 'owner', claimEpoch: owner.claimEpoch + 99 } },
+  });
+  const claimGone = registry.inspectRecoveryRequirement('orphan-contender').nextAction;
+  registry.close();
+
+  // Where recovery is automatic, the remedy must hand over the command that performs it.
+  for (const [label, text] of [
+    ['proven dead', provenDead],
+    ['claim epoch gone', claimGone],
+  ] as const) {
+    assert.match(text, /session-doctor\.js" repair/, label);
+    assert.match(text, /\/mcp/, `${label} must still name the interactive path`);
+  }
+  // Where it is not, the remedy must say how to identify the holder before repairing —
+  // never "restart and hope".
+  for (const [label, text] of [
+    ['live owner', live],
+    ['unprovable owner', unprovable],
+  ] as const) {
+    assert.match(text, /session-doctor\.js" report/, label);
+    assert.match(text, /session-doctor\.js" repair/, label);
+    assert.match(text, /never force-released/, label);
+  }
+  for (const text of [provenDead, claimGone, live, unprovable]) {
+    assert.match(text, /session-authority/, 'every remedy carries its docs anchor');
+    assert.doesNotMatch(
+      text,
+      /^[^`]*\/mcp[^.]*\.$/,
+      `a remedy must never be restart-only: ${text}`,
+    );
+  }
+});
+
+test('GH #792: repair never reports success while this root stays wedged by another app root', () => {
+  const stateHome = temporaryStateHome();
+  const appRoot = join(stateHome, 'app');
+  mkdirSync(appRoot);
+  writeFileSync(join(appRoot, 'package.json'), '{"name":"gh-792-cross-root"}');
+  const environment = {
+    ...process.env,
+    XDG_STATE_HOME: stateHome,
+    RN_DEV_AGENT_DECLARED_ROOT: appRoot,
+    RN_DEV_AGENT_DECLARED_MANIFESTS: 'package.json',
+  };
+  const run = (command: string) => {
+    try {
+      return {
+        code: 0,
+        payload: JSON.parse(
+          execFileSync(process.execPath, [join(distRoot, 'session-doctor.js'), command, '--json'], {
+            cwd: appRoot,
+            encoding: 'utf8',
+            env: environment,
+          }),
+        ) as Record<string, unknown>,
+      };
+    } catch (error) {
+      const failure = error as { status?: number; stdout?: string };
+      return {
+        code: failure.status ?? 1,
+        payload: JSON.parse(String(failure.stdout)) as Record<string, unknown>,
+      };
+    }
+  };
+
+  const source = resolveSourceIdentity(appRoot, {
+    declaredRoot: appRoot,
+    declaredManifests: ['package.json'],
+  });
+  const layout = createAuthorityStateLayout(join(stateHome, 'rn-dev-agent'));
+  const registry = openSessionRegistry(layout.registry, { ownerStatus: inspectSessionOwner });
+  const owner = registry.createSession({
+    sessionId: 'other-app-root-owner',
+    sourceKey: source.sourceKey,
+    worktreeKey: source.worktreeKey,
+    appRootKey: 'packages/other-app',
+    supervisor: { pid: 1, token: 'birth-of-the-dead-owner' },
+    source: { ...source, appRootKey: 'packages/other-app', model: 'grouped-v1' },
+    bindings: {},
+  });
+  registry.claimResources(owner, [{ type: 'source', key: source.worktreeKey }]);
+  registry.updateBindings(owner, { state: 'source_bound', bindings: {} });
+  registry.close();
+
+  const before = run('report');
+  assert.equal(before.payload.wedged, true);
+  assert.equal(before.payload.ownerIsThisRoot, false);
+  assert.equal(before.code, 1);
+
+  const repaired = run('repair');
+  assert.deepEqual(repaired.payload.released, []);
+  assert.equal(repaired.payload.wedged, true, 'a no-op cleanup must not read as recovered');
+  assert.equal(repaired.code, 1);
+  assert.match(String(repaired.payload.remedy), /different app root/);
+  assert.equal(run('report').payload.wedged, true);
+});
