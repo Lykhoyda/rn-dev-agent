@@ -50,8 +50,8 @@ root in this worktree) or `source-identity` (the same app root under different d
 manifests). Also
 report `abandonedContenders` when it is non-zero. The supported repair is
 `node "${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}/rn-dev-agent-core/dist/session-doctor.js" repair`, which runs the
-same proven-dead startup cleanup a fresh transport runs; print it, and only run it after the
-user confirms. Print it rooted where it can succeed: for `ownerMismatch: app-root` that is the
+same proven-dead startup cleanup a fresh transport runs; print it for the user to run, but do
+not execute it from doctor. Print it rooted where it can succeed: for `ownerMismatch: app-root` that is the
 reported `ownerAppRoot`, because repair from the current root can never release another root's
 owner. For `ownerMismatch: source-identity` do not re-root it — the payload's own remedy names
 the declared-manifest restore that makes this root's repair work. It never releases a live or unprovable owner and there is no force-steal —
