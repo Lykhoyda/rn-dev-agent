@@ -98,7 +98,9 @@ function manifestAssets(manifest) {
 // is then skipped) leaves both manifests equal while the release serves bytes the
 // client verifies against a digest they no longer have — and it silently falls
 // back to a local build. Missing assets are left to the build check; only an
-// asset that IS there and disagrees counts as drift.
+// asset that IS there and disagrees counts as drift. Re-hashing a drifted zip
+// would make the trust root vouch for bytes this workflow never built, so drift
+// stops publication instead of being adopted.
 function driftedAsset(manifest, byName) {
   for (const entry of manifestAssets(manifest)) {
     if (!entry || typeof entry.name !== 'string') continue;
@@ -153,7 +155,22 @@ export function decideRunnerPublication(input) {
 
   const repo = parseManifest(input.repoManifest);
   const published = parseManifest(input.publishedManifest);
-  const drifted = repo === null ? null : driftedAsset(repo, byName);
+  // Drift only has to be refused when nothing in this run rebuilds the zips: a
+  // missing zip (or a forced run) rebuilds BOTH from source, so the manifest
+  // that follows describes bytes this workflow just produced. Otherwise the only
+  // way to make the release and the trust root agree is to re-hash whatever is
+  // being served, which turns the client's rejection of substituted bytes into
+  // an auto-generated PR that blesses them.
+  const drifted = repo === null || buildRunners ? null : driftedAsset(repo, byName);
+  if (drifted !== null) {
+    throw new Error(
+      `release v${version} no longer serves the ${drifted} that runner-manifest.json describes. ` +
+        'Re-hashing it would make the trust root vouch for bytes this workflow did not build. ' +
+        `If a build job re-uploaded a zip while its sibling failed, re-run with force_version=${version} ` +
+        'to rebuild both from source; otherwise the release assets were changed outside this ' +
+        'workflow and need investigating before the trust root moves.',
+    );
+  }
 
   let publishManifest = true;
   let reason;
@@ -165,8 +182,6 @@ export function decideRunnerPublication(input) {
     reason = 'the in-repo runner-manifest.json is missing or unparseable';
   } else if (repo.version !== version) {
     reason = `the in-repo trust root is stale (v${repo.version} != v${version})`;
-  } else if (drifted !== null) {
-    reason = `release v${version} no longer serves the ${drifted} the trust root describes`;
   } else if (published === null) {
     reason = `release v${version} carries no runner-manifest.json asset`;
   } else if (canonical(repo) !== canonical(published)) {

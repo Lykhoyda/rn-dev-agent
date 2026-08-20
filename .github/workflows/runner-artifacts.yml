@@ -17,6 +17,11 @@ name: Runner artifacts
 # stayed pinned to v0.75.2 through v0.76.7. Checking (2) makes the sweep
 # genuinely self-healing: a manifest that never landed is re-detected and
 # re-delivered on the next run.
+# A release serving zips that no longer match the trust root, with nothing in the
+# run rebuilding them, STOPS publication rather than re-hashing what is served:
+# adopting those bytes would turn the client's rejection of a substituted archive
+# into a routine-looking PR that blesses it. Recovery is force_version, which
+# rebuilds both zips from source.
 #
 # The trust root reaches main through the SAME protected-branch path releases
 # use — a branch, a pull request, required checks, a gated merge. It is never
@@ -37,8 +42,10 @@ name: Runner artifacts
 # local build (provenance 'local') — degraded, not broken.
 #
 # PREREQUISITES (repo settings, cannot be set from this file):
-#   - Settings > Actions > General > Workflow permissions: "Read and write"
-#     and "Allow GitHub Actions to create and approve pull requests".
+#   - Settings > Actions > General > "Allow GitHub Actions to create and approve
+#     pull requests". The repository-wide default workflow permission stays
+#     read-only; every job here escalates explicitly via its own `permissions:`
+#     block, exactly as release.yml does.
 #   - Settings > General > "Allow auto-merge".
 #   - A maintainer must approve the manifest PR's queued CI run ("Approve and
 #     run"): a workflow-opened PR authenticated with GITHUB_TOKEN parks its
@@ -91,6 +98,7 @@ jobs:
         name: Decide what this run must build and publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
           FORCE_VERSION: ${{ github.event.inputs.force_version }}
         run: |
           # Publication always targets the current plugin version; force_version
@@ -103,9 +111,23 @@ jobs:
           # while the release serves bytes the trust root cannot verify. The
           # release API reports each asset's own SHA-256 and size, so that drift
           # is detected here without downloading anything.
-          gh release view "v$CUR" --json assets \
-            --jq '[.assets[] | {name, digest, size}]' > release-assets.json 2>/dev/null \
-            || echo '[]' > release-assets.json
+          if ! gh release view "v$CUR" --json assets \
+               --jq '[.assets[] | {name, digest, size}]' > release-assets.json 2> release-view.err; then
+            # A failed listing must never read as "the release carries no zips":
+            # that rebuilds binaries the release already serves, and neither
+            # Xcode nor Gradle is byte-reproducible, so the replacements would
+            # drift from the trust root and send every install to a local build.
+            # Only a release GitHub itself reports as absent counts as
+            # unpublished, and that verdict comes from the API's own 404 status
+            # rather than from a CLI message.
+            gh api "repos/{owner}/{repo}/releases/tags/v$CUR" > release-probe.json 2>/dev/null || :
+            if [ "$(jq -r '.status // "found"' release-probe.json 2>/dev/null)" != "404" ]; then
+              cat release-view.err >&2
+              echo "::error::could not determine what release v$CUR carries — refusing to guess" >&2
+              exit 1
+            fi
+            echo '[]' > release-assets.json
+          fi
           rm -f published-manifest.json
           if jq -e 'any(.[]; .name == "runner-manifest.json")' release-assets.json >/dev/null; then
             gh release download "v$CUR" --pattern runner-manifest.json --output published-manifest.json \

@@ -173,31 +173,65 @@ test('a release still serving the zips the trust root describes is already publi
   assert.equal(decision.publishManifest, false);
 });
 
-test('a runner zip re-uploaded without a manifest refresh is detected as unpublished', () => {
+test('a runner zip replaced without a manifest refresh is refused, never re-hashed', () => {
   // Both manifests still agree — they are copies of each other — so only the
-  // asset's own digest can reveal that the release serves different bytes.
+  // asset's own digest reveals that the release serves different bytes. Adopting
+  // them would turn the client's rejection of a substituted archive into a
+  // routine-looking trust-root PR that a maintainer approves as bot maintenance.
   const current = manifestFor(VERSION);
-  const decision = decideRunnerPublication({
-    pluginVersion: VERSION,
-    releaseAssets: servedAssets(current, { [IOS_ZIP]: { digest: `sha256:${'b'.repeat(64)}` } }),
-    repoManifest: current,
-    publishedManifest: current,
-  });
-  assert.equal(decision.publishManifest, true, 'the client cannot verify this iOS zip');
-  assert.equal(decision.buildRunners, false, 'both zips are present — republish, do not rebuild');
-  assert.match(decision.reason, new RegExp(IOS_ZIP.replace(/\./g, '\\.')));
+  assert.throws(
+    () =>
+      decideRunnerPublication({
+        pluginVersion: VERSION,
+        releaseAssets: servedAssets(current, { [IOS_ZIP]: { digest: `sha256:${'b'.repeat(64)}` } }),
+        repoManifest: current,
+        publishedManifest: current,
+      }),
+    new RegExp(`no longer serves the ${IOS_ZIP.replace(/\./g, '\\.')}`),
+  );
 });
 
 test('a size change alone is drift, even when the release reports no digest', () => {
   const current = manifestFor(VERSION);
+  assert.throws(
+    () =>
+      decideRunnerPublication({
+        pluginVersion: VERSION,
+        releaseAssets: servedAssets(current, { [ANDROID_ZIP]: { digest: null, size: 999 } }),
+        repoManifest: current,
+        publishedManifest: current,
+      }),
+    new RegExp(`no longer serves the ${ANDROID_ZIP.replace(/\./g, '\\.')}`),
+  );
+});
+
+test('drift alongside a missing zip rebuilds instead of refusing', () => {
+  // Both zips are rebuilt from source here, so the manifest that follows
+  // describes bytes this workflow just produced — there is nothing to adopt.
+  const current = manifestFor(VERSION);
   const decision = decideRunnerPublication({
     pluginVersion: VERSION,
-    releaseAssets: servedAssets(current, { [ANDROID_ZIP]: { digest: null, size: 999 } }),
+    releaseAssets: servedAssets(current, {
+      [IOS_ZIP]: { digest: `sha256:${'b'.repeat(64)}` },
+    }).filter((asset) => asset.name !== ANDROID_ZIP),
     repoManifest: current,
     publishedManifest: current,
   });
+  assert.equal(decision.buildRunners, true);
   assert.equal(decision.publishManifest, true);
-  assert.equal(decision.buildRunners, false, 'the zip is present — republish, do not rebuild');
+});
+
+test('force_version is the documented recovery from drift, not another refusal', () => {
+  const current = manifestFor(VERSION);
+  const decision = decideRunnerPublication({
+    pluginVersion: VERSION,
+    forceVersion: VERSION,
+    releaseAssets: servedAssets(current, { [IOS_ZIP]: { digest: `sha256:${'b'.repeat(64)}` } }),
+    repoManifest: current,
+    publishedManifest: current,
+  });
+  assert.equal(decision.buildRunners, true, 'both zips are rebuilt from source');
+  assert.equal(decision.publishManifest, true);
 });
 
 test('assets reported without digest or size never fabricate drift', () => {
@@ -213,9 +247,9 @@ test('assets reported without digest or size never fabricate drift', () => {
   assert.equal(decision.publishManifest, false);
 });
 
-test('re-describing the drifted bytes converges: the next sweep stands down', () => {
-  // What the publish job does — it downloads the zips the release actually
-  // serves and re-hashes them — must end the loop rather than restart it.
+test('a rebuilt release converges: the next sweep stands down', () => {
+  // What the publish job does after a rebuild — hash the zips now on the release
+  // and commit that manifest — must end the loop rather than restart it.
   const drifted = manifestFor(VERSION, 'b'.repeat(64));
   const decision = decideRunnerPublication({
     pluginVersion: VERSION,
@@ -478,12 +512,18 @@ function runPublish(
   });
 }
 
+const DETECT_CTX = {
+  'secrets.GITHUB_TOKEN': 'stub-token',
+  'github.repository': 'Lykhoyda/rn-dev-agent',
+  'github.event.inputs.force_version': '',
+};
+
 function runDetect(fixture: Fixture) {
   return runJobSteps({
     workflow,
     jobId: 'detect',
     cwd: checkout(fixture, 'detect'),
-    ctx: { 'secrets.GITHUB_TOKEN': 'stub-token', 'github.event.inputs.force_version': '' },
+    ctx: DETECT_CTX,
     env: fixture.gh.env,
     only: ['Decide what this run must build and publish'],
   });
@@ -1274,26 +1314,66 @@ test('detect stands down once the in-repo trust root matches the published manif
   }
 });
 
-test('detect re-publishes when a release zip no longer matches the trust root', () => {
-  // A build job that succeeded while its sibling failed re-uploads its zip with
-  // --clobber, and publish-manifest is skipped for that run. Afterwards both
-  // zips are present and the published manifest still equals the in-repo one, so
-  // an asset-name gate reports the release fully published while it serves an
-  // iOS zip whose SHA-256 no client can verify.
+test('detect stops when a release zip no longer matches the trust root', () => {
+  // Both zips are present and the published manifest still equals the in-repo
+  // one, so an asset-name gate reports the release fully published while it
+  // serves an iOS zip no client can verify. Nothing in this run would rebuild
+  // it, so the only way to make them agree is to re-hash bytes this workflow
+  // never built — which is exactly what must not happen.
   const current = currentManifest();
   const fixture = createFixture({
     repoManifest: current,
     releaseAssets: {
       ...completeRelease(),
-      [IOS_ZIP]: 'ios-runner-zip-bytes-rebuilt-by-a-later-run',
+      [IOS_ZIP]: 'ios-runner-zip-bytes-substituted-after-publication',
       'runner-manifest.json': current,
     },
   });
   try {
     const run = runDetect(fixture);
+    assert.equal(run.ok, false, 'a drifted zip must never be blessed by an auto-opened PR');
+    assert.match(run.failed?.stderr ?? '', /no longer serves the rn-fast-runner/);
+    assert.match(run.failed?.stderr ?? '', new RegExp(`force_version=${VERSION}`));
+    assert.deepEqual(run.outputs.v, {}, 'no decision may reach the build or publish jobs');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('detect treats a version with no release yet as unpublished', () => {
+  const fixture = createFixture({});
+  try {
+    const run = runDetect(fixture);
     assert.ok(run.ok, `detect failed: ${run.failed?.stderr}`);
-    assert.equal(run.outputs.v.publish, 'true', 'every client would fall back to a local build');
-    assert.equal(run.outputs.v.build, 'false', 'both zips are there — republish, do not rebuild');
+    assert.equal(run.outputs.v.build, 'true');
+    assert.equal(run.outputs.v.publish, 'true');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('detect refuses to read a failed release listing as an empty release', () => {
+  // "No release yet" and "the API blipped" both used to yield an empty asset
+  // list, which rebuilds zips the release already serves correctly — and since
+  // neither Xcode nor Gradle is byte-reproducible, the replacements drift from
+  // the trust root and send every install to a local build.
+  const current = currentManifest();
+  const fixture = createFixture({
+    repoManifest: current,
+    releaseAssets: { ...completeRelease(), 'runner-manifest.json': current },
+  });
+  try {
+    const run = runJobSteps({
+      workflow,
+      jobId: 'detect',
+      cwd: checkout(fixture, 'detect'),
+      ctx: DETECT_CTX,
+      env: { ...fixture.gh.env, GH_STUB_FAIL: 'release view' },
+      only: ['Decide what this run must build and publish'],
+    });
+    assert.equal(run.ok, false, 'a blip must not be readable as "nothing is published"');
+    assert.match(run.failed?.stderr ?? '', /::error::could not determine what release/);
+    assert.deepEqual(run.outputs.v, {}, 'no build decision may escape an unknown release state');
   } finally {
     fixture.cleanup();
   }

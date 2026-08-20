@@ -126,24 +126,27 @@ function reconcileDeletedBranches() {
   if (changed) writeState(state);
 }
 
+function releaseAssetRecords(tag, release) {
+  return Object.keys(release.assets).map((name) => {
+    const bytes = readFileSync(assetPath(tag, name));
+    return {
+      name,
+      size: bytes.length,
+      digest: `sha256:${createHash('sha256').update(bytes).digest('hex')}`,
+    };
+  });
+}
+
 if (group === 'release' && sub === 'view') {
   const tag = positional[2];
   const release = state.releases[tag];
-  if (!release) die(`release not found: ${tag}`);
+  // gh(1)'s own wording for an absent release, so a caller cannot tell the
+  // stub's 404 apart from the real one by its message.
+  if (!release) die('release not found');
   // The release API reports each asset's server-side SHA-256 and byte count, so
   // the double derives both from the stored bytes rather than echoing names.
-  if (has('--json')) {
-    emit({
-      assets: Object.keys(release.assets).map((name) => {
-        const bytes = readFileSync(assetPath(tag, name));
-        return {
-          name,
-          size: bytes.length,
-          digest: `sha256:${createHash('sha256').update(bytes).digest('hex')}`,
-        };
-      }),
-    });
-  } else process.stdout.write(`${tag}\n`);
+  if (has('--json')) emit({ assets: releaseAssetRecords(tag, release) });
+  else process.stdout.write(`${tag}\n`);
 } else if (group === 'release' && sub === 'create') {
   const tag = positional[2];
   if (state.releases[tag]) die(`a release with tag ${tag} already exists`);
@@ -207,6 +210,24 @@ if (group === 'release' && sub === 'view') {
         })),
       );
     }
+  } else if (/^repos\/[^/]+\/[^/]+\/releases\/tags\/.+$/.test(path)) {
+    // An absent release answers 404 the way the REST API does — the error body
+    // goes to stdout, the CLI message to stderr, and gh exits non-zero — so a
+    // caller can read `.status` instead of parsing a CLI message.
+    const tag = path.slice(path.lastIndexOf('/') + 1);
+    const release = state.releases[tag];
+    if (!release) {
+      process.stdout.write(
+        JSON.stringify({
+          message: 'Not Found',
+          documentation_url:
+            'https://docs.github.com/rest/releases/releases#get-a-release-by-tag-name',
+          status: '404',
+        }),
+      );
+      die('gh: Not Found (HTTP 404)');
+    }
+    emit({ tag_name: tag, assets: releaseAssetRecords(tag, release) });
   } else if (/^repos\/[^/]+\/[^/]+\/compare\/.+\.\.\..+$/.test(path)) {
     // Answered from the fixture's real repository, so ahead_by/behind_by/files
     // carry the same merge-base semantics the compare endpoint does.

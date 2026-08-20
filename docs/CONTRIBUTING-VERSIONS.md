@@ -114,6 +114,20 @@ a zip re-uploaded by a build job whose sibling failed cannot pass as
 published just because the two manifests (copies of each other) still
 agree.
 
+A drifted zip **stops** publication instead of being adopted: re-hashing
+whatever the release now serves would move the trust root onto bytes the
+workflow never built, turning the client's rejection of a substituted
+archive into a routine-looking bot PR. The run fails with the offending
+asset named. Recovery is a `force_version` dispatch for the current
+version, which rebuilds both zips from source and regenerates the
+manifest from them; if you did not expect drift, the release assets were
+changed outside this workflow and want investigating first. Until it is
+resolved, installs stay on the local-build fallback — degraded, not
+compromised. For the same reason, a release lookup that fails for any
+reason other than a genuine 404 fails the run rather than being read as
+"nothing is published", which would rebuild and re-upload zips the
+release already serves correctly.
+
 The manifest reaches `main` the same way everything else does: a
 `chore/runner-manifest-v<version>` branch, a pull request, the required
 `Build & Test` check, and auto-merge. It is never pushed to `main`
