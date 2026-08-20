@@ -64343,7 +64343,7 @@ var HELPERS_VERSION, INJECTED_HELPERS, NETWORK_HOOK_SCRIPT, NETWORK_CB_BUFFERED_
 var init_injected_helpers = __esm({
   "packages/rn-dev-agent-core/dist/injected-helpers.js"() {
     "use strict";
-    HELPERS_VERSION = 43;
+    HELPERS_VERSION = 45;
     INJECTED_HELPERS = `
 (function() {
   var __HELPERS_VERSION__ = ${HELPERS_VERSION};
@@ -64390,7 +64390,10 @@ var init_injected_helpers = __esm({
 
   // Reset by every root-iteration pass; only valid when read synchronously
   // after the pass that produced the tree (many helpers share the iterators).
-  var lastRootScan = { rendererErrors: 0, probedUpTo: 0 };
+  // complete is true only when the renderer-ID loop finished without the
+  // empty-streak early-exit \u2014 empty roots are mounting evidence only then
+  // (GH #789).
+  var lastRootScan = { rendererErrors: 0, probedUpTo: 0, complete: false };
 
   function computeUnscannedRendererIds() {
     try {
@@ -64428,7 +64431,7 @@ var init_injected_helpers = __esm({
   }
 
   function findActiveRenderer() {
-    lastRootScan = { rendererErrors: 0, probedUpTo: 0 };
+    lastRootScan = { rendererErrors: 0, probedUpTo: 0, complete: false };
     var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
     if (!hook || typeof hook.getFiberRoots !== 'function') return null;
     var rendererIds = getRegisteredRendererIds(hook);
@@ -64454,6 +64457,7 @@ var init_injected_helpers = __esm({
         lastRootScan.rendererErrors++;
       }
     }
+    lastRootScan.complete = true;
     return null;
   }
 
@@ -64470,7 +64474,7 @@ var init_injected_helpers = __esm({
   // native renderer loop so user-registered portals stay lower priority
   // than React's own registry.
   function iterateAllRoots(cb) {
-    lastRootScan = { rendererErrors: 0, probedUpTo: 0 };
+    lastRootScan = { rendererErrors: 0, probedUpTo: 0, complete: false };
     var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
     if (hook && typeof hook.getFiberRoots === 'function') {
       var rendererIds = getRegisteredRendererIds(hook);
@@ -64479,6 +64483,7 @@ var init_injected_helpers = __esm({
         if (rendererIds.indexOf(fallbackId) === -1) rendererIds.push(fallbackId);
       }
       var emptyStreak = 0;
+      var abortedEarly = false;
       for (var rii = 0; rii < rendererIds.length; rii++) {
         var ri = rendererIds[rii];
         if (ri > lastRootScan.probedUpTo) lastRootScan.probedUpTo = ri;
@@ -64496,13 +64501,17 @@ var init_injected_helpers = __esm({
             }
           } else if (!usingRegisteredIds) {
             emptyStreak++;
-            if (emptyStreak >= EARLY_EXIT_EMPTY_STREAK && ri >= 5) break;
+            if (emptyStreak >= EARLY_EXIT_EMPTY_STREAK && ri >= 5) {
+              abortedEarly = true;
+              break;
+            }
           }
         } catch (_) {
           if (!usingRegisteredIds) emptyStreak++;
           lastRootScan.rendererErrors++;
         }
       }
+      lastRootScan.complete = !abortedEarly;
     }
     // GH #126 Gap B \u2014 extra-roots step. Runs AFTER the native renderer
     // loop (above) so user-registered portals are lower priority than
@@ -65217,14 +65226,17 @@ var init_injected_helpers = __esm({
       var mountHook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
       var mountHookUsable = !!(mountHook && typeof mountHook.getFiberRoots === 'function');
       var mountRoots = mountHookUsable ? findAllRootFibers() : [];
-      // Only a CLEAN scan is mounting evidence (throwing renderers can hide roots).
-      var mountScanClean = mountHookUsable && lastRootScan.rendererErrors === 0;
+      // Only a complete, clean scan is mounting evidence.
+      var mountScanClean = mountHookUsable && lastRootScan.complete && lastRootScan.rendererErrors === 0;
       if (mountScanClean && mountRoots.length === 0) {
         return JSON.stringify({
           error: 'App is still mounting \u2014 no React fiber roots exist yet (the bundle is likely still loading). Retry in ~2s.',
           mounting: true,
           retryInMs: 2000
         });
+      }
+      if (mountHookUsable && !lastRootScan.complete && mountRoots.length === 0) {
+        return JSON.stringify({ error: 'Navigation state not found. Is React Navigation or Expo Router installed?' });
       }
       var navFw = navDetectBundledFramework();
       if (navFw) {
