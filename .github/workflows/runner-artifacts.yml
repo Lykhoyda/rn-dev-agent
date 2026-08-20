@@ -17,13 +17,15 @@ name: Runner artifacts
 # stayed pinned to v0.75.2 through v0.76.7. Checking (2) makes the sweep
 # genuinely self-healing: a manifest that never landed is re-detected and
 # re-delivered on the next run.
-# A release serving a zip this workflow did not publish is REBUILT from source
-# rather than re-hashed: adopting those bytes would turn the client's rejection of
-# a substituted archive into a routine-looking PR that blesses it. Drift is judged
-# against the manifest ASSET on the release — the workflow's own record of what it
-# last published, refreshed on every publication — because the in-repo manifest
-# still names an older version while a trust-root PR waits, which is exactly the
-# window that needs covering.
+# Drift — a release serving a zip that does not match what vouches for it — is
+# never adopted by re-hashing, because that would turn the client's rejection of a
+# substituted archive into a routine-looking PR that blesses it. Who vouches
+# depends on what main knows. Once main carries the trust root for this version it
+# is the authority (nothing outside a merged PR can write it) and a disagreeing
+# release STOPS the run: rebuilding would move the trust root onto bytes no PR has
+# approved, so every later sweep would rebuild again and rewrite that PR. Before
+# main knows this version, the manifest asset on the release is the only record
+# there is, and drift against it REBUILDS both runners from source.
 #
 # The trust root reaches main through the SAME protected-branch path releases
 # use — a branch, a pull request, required checks, a gated merge. It is never
@@ -226,8 +228,13 @@ jobs:
     # Runs whenever the trust root is stale — including when both builds were
     # skipped because the release already carries its zips, which is exactly the
     # self-heal case for a manifest update that failed on an earlier run.
+    # `needs.detect.result` is spelled out because a status-check function in an
+    # `if:` drops the implicit success() on needs: without it a detect that wrote
+    # its decision and then failed a later step would still publish, and the
+    # build jobs it asked for would have been skipped.
     if: >-
       ${{ !cancelled()
+      && needs.detect.result == 'success'
       && needs.detect.outputs.publish == 'true'
       && contains(fromJSON('["success","skipped"]'), needs.build-ios.result)
       && contains(fromJSON('["success","skipped"]'), needs.build-android.result) }}
@@ -330,12 +337,23 @@ jobs:
           fi
           echo "existed=$existed" >> "$GITHUB_OUTPUT"
       - name: Generate the manifest (sha256 + bytes)
+        env:
+          BUILT: ${{ needs.detect.outputs.build }}
         run: |
-          node scripts/build-runner-manifest.mts \
-            --version "$VERSION" \
-            --ios "rn-fast-runner-$VERSION-sim.zip" \
-            --android "rn-android-runner-$VERSION.zip" \
-            --out runner-manifest.json
+          # Downloaded bytes may only BECOME the trust root when main has nothing
+          # to say about this version, or when this run rebuilt them from source.
+          # A trust root main already vouches for is republished verbatim, so no
+          # release asset can rewrite it by being downloaded and re-hashed.
+          if [ "$BUILT" != true ] \
+             && [ "$(jq -r '.version // empty' runner-manifest.json 2>/dev/null)" = "$VERSION" ]; then
+            echo "runner-manifest.json already vouches for v$VERSION and nothing was rebuilt — republishing it verbatim"
+          else
+            node scripts/build-runner-manifest.mts \
+              --version "$VERSION" \
+              --ios "rn-fast-runner-$VERSION-sim.zip" \
+              --android "rn-android-runner-$VERSION.zip" \
+              --out runner-manifest.json
+          fi
           cp runner-manifest.json packages/codex-plugin/runner-manifest.json
           cp runner-manifest.json packages/claude-plugin/runner-manifest.json
           cat runner-manifest.json

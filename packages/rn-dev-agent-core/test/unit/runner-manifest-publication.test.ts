@@ -173,21 +173,42 @@ test('a release still serving the zips the trust root describes is already publi
   assert.equal(decision.publishManifest, false);
 });
 
-test('a runner zip replaced without a manifest refresh is rebuilt, never re-hashed', () => {
+test('a runner zip replaced under an approved trust root stops the run', () => {
   // Both manifests still agree — they are copies of each other — so only the
   // asset's own digest reveals that the release serves different bytes. Adopting
   // them would turn the client's rejection of a substituted archive into a
-  // routine-looking trust-root PR that a maintainer approves as bot maintenance.
+  // routine-looking trust-root PR a maintainer approves as bot maintenance, and
+  // rebuilding would move a trust root no merged PR has approved yet.
   const current = manifestFor(VERSION);
-  const decision = decideRunnerPublication({
-    pluginVersion: VERSION,
-    releaseAssets: servedAssets(current, { [IOS_ZIP]: { digest: `sha256:${'b'.repeat(64)}` } }),
-    repoManifest: current,
-    publishedManifest: current,
-  });
-  assert.equal(decision.buildRunners, true, 'the trust root may only describe bytes we built');
-  assert.equal(decision.publishManifest, true);
-  assert.match(decision.reason, new RegExp(IOS_ZIP.replace(/\./g, '\\.')));
+  assert.throws(
+    () =>
+      decideRunnerPublication({
+        pluginVersion: VERSION,
+        releaseAssets: servedAssets(current, { [IOS_ZIP]: { digest: `sha256:${'b'.repeat(64)}` } }),
+        repoManifest: current,
+        publishedManifest: current,
+      }),
+    new RegExp(`serves a ${IOS_ZIP.replace(/\./g, '\\.')} that runner-manifest.json on main`),
+  );
+});
+
+test('rewriting the manifest asset too does not make a substituted zip publishable', () => {
+  // The manifest asset is an ordinary release asset: the `contents: write` that
+  // swaps a zip can rewrite its attestation in the same breath, so a guard that
+  // trusted it would be bypassed by one extra write — and would then commit the
+  // substituted digests over a trust root main had already approved.
+  const substituted = manifestFor(VERSION, 'b'.repeat(64));
+  assert.throws(
+    () =>
+      decideRunnerPublication({
+        pluginVersion: VERSION,
+        releaseAssets: servedAssets(substituted),
+        repoManifest: manifestFor(VERSION),
+        publishedManifest: substituted,
+      }),
+    /does not vouch for/,
+    'main is the only record an attacker cannot write — it must outrank the asset',
+  );
 });
 
 test('a substituted zip is caught while the trust root is still stale', () => {
@@ -231,42 +252,47 @@ test('the rebuild that repairs drift converges instead of re-firing every sweep'
   assert.match(decision.reason, /stale/);
 });
 
-test('drift alongside a missing zip rebuilds too', () => {
+test('a size change alone is drift, even when the release reports no digest', () => {
   const current = manifestFor(VERSION);
+  assert.throws(
+    () =>
+      decideRunnerPublication({
+        pluginVersion: VERSION,
+        releaseAssets: servedAssets(current, { [ANDROID_ZIP]: { digest: null, size: 999 } }),
+        repoManifest: current,
+        publishedManifest: current,
+      }),
+    new RegExp(`serves a ${ANDROID_ZIP.replace(/\./g, '\\.')}`),
+  );
+});
+
+test('an approved trust root outranks a release with no manifest asset at all', () => {
+  const current = manifestFor(VERSION);
+  assert.throws(
+    () =>
+      decideRunnerPublication({
+        pluginVersion: VERSION,
+        releaseAssets: servedAssets(current, { [IOS_ZIP]: { digest: `sha256:${'b'.repeat(64)}` } }),
+        repoManifest: current,
+        publishedManifest: null,
+      }),
+    /does not vouch for/,
+  );
+});
+
+test('a stale trust root leaves drift to be repaired by a rebuild, not a stop', () => {
+  // Nothing on main names this version yet, so no approved trust root can be
+  // moved by rebuilding and the rebuild converges on its own.
   const decision = decideRunnerPublication({
     pluginVersion: VERSION,
-    releaseAssets: servedAssets(current, {
+    releaseAssets: servedAssets(manifestFor(VERSION), {
       [IOS_ZIP]: { digest: `sha256:${'b'.repeat(64)}` },
     }).filter((asset) => asset.name !== ANDROID_ZIP),
-    repoManifest: current,
-    publishedManifest: current,
+    repoManifest: manifestFor('0.75.2'),
+    publishedManifest: manifestFor(VERSION),
   });
   assert.equal(decision.buildRunners, true);
   assert.equal(decision.publishManifest, true);
-});
-
-test('a size change alone is drift, even when the release reports no digest', () => {
-  const current = manifestFor(VERSION);
-  const decision = decideRunnerPublication({
-    pluginVersion: VERSION,
-    releaseAssets: servedAssets(current, { [ANDROID_ZIP]: { digest: null, size: 999 } }),
-    repoManifest: current,
-    publishedManifest: current,
-  });
-  assert.equal(decision.buildRunners, true);
-  assert.match(decision.reason, new RegExp(ANDROID_ZIP.replace(/\./g, '\\.')));
-});
-
-test('the in-repo manifest is the drift evidence when the release has no manifest asset', () => {
-  const current = manifestFor(VERSION);
-  const decision = decideRunnerPublication({
-    pluginVersion: VERSION,
-    releaseAssets: servedAssets(current, { [IOS_ZIP]: { digest: `sha256:${'b'.repeat(64)}` } }),
-    repoManifest: current,
-    publishedManifest: null,
-  });
-  assert.equal(decision.buildRunners, true);
-  assert.match(decision.reason, new RegExp(IOS_ZIP.replace(/\./g, '\\.')));
 });
 
 test('force_version rebuilds regardless of what the release currently serves', () => {
@@ -531,6 +557,7 @@ function publishContext(overrides: Record<string, string> = {}): Record<string, 
   return {
     'needs.detect.outputs.version': VERSION,
     'needs.detect.outputs.branch': BRANCH,
+    'needs.detect.outputs.build': 'false',
     'secrets.GITHUB_TOKEN': 'stub-token',
     'github.repository': 'Lykhoyda/rn-dev-agent',
     ...overrides,
@@ -819,9 +846,12 @@ test('a branch this workflow already extended keeps being reused, never churned'
     assert.ok(first.ok, `first run failed at ${first.failed?.name}: ${first.failed?.stderr}`);
 
     writeFileSync(fixture.gh.assetPath(TAG, IOS_ZIP), 'rebuilt-ios-runner-zip-bytes');
-    const second = runPublish(fixture, { workdir: checkout(fixture, 'run2') });
+    const second = runPublish(fixture, {
+      workdir: checkout(fixture, 'run2'),
+      ctx: { 'needs.detect.outputs.build': 'true' },
+    });
     assert.ok(second.ok, `rerun failed at ${second.failed?.name}: ${second.failed?.stderr}`);
-    assert.equal(second.outputs.commit.pushed, 'true', 'drifted digests must be re-committed');
+    assert.equal(second.outputs.commit.pushed, 'true', 'rebuilt digests must be re-committed');
     const twoCommits = originRef(fixture, BRANCH);
     assert.equal(
       git(
@@ -1045,7 +1075,10 @@ test('a rerun after the release manifest drifts re-commits onto the same branch'
 
     // The runner zips were rebuilt, so the digests the manifest must carry change.
     writeFileSync(fixture.gh.assetPath(TAG, IOS_ZIP), 'rebuilt-ios-runner-zip-bytes');
-    const second = runPublish(fixture, { workdir: checkout(fixture, 'run2') });
+    const second = runPublish(fixture, {
+      workdir: checkout(fixture, 'run2'),
+      ctx: { 'needs.detect.outputs.build': 'true' },
+    });
     assert.ok(second.ok, `rerun failed at ${second.failed?.name}: ${second.failed?.stderr}`);
 
     const head = originRef(fixture, BRANCH);
@@ -1256,6 +1289,59 @@ test('an already-current trust root with no manifest branch opens no PR', () => 
   }
 });
 
+test('an approved trust root is republished verbatim, never re-hashed from downloads', () => {
+  // Defence in depth behind the detect guard: even handed a release whose zips
+  // disagree with the approved trust root, a run that rebuilt nothing must
+  // republish what main says rather than commit the served digests over it.
+  const approved = currentManifest();
+  const fixture = createFixture({
+    repoManifest: approved,
+    releaseAssets: { ...completeRelease(), [IOS_ZIP]: 'ios-runner-zip-bytes-substituted' },
+  });
+  try {
+    const run = runPublish(fixture, { workdir: checkout(fixture, 'run1') });
+    assert.ok(run.ok, `job failed at ${run.failed?.name}: ${run.failed?.stderr}`);
+    assert.equal(
+      run.outputs.commit.pushed,
+      'false',
+      'the approved trust root must not be rewritten',
+    );
+    assert.equal(originRef(fixture, BRANCH), null);
+    assert.equal(fixture.gh.state().prs.length, 0);
+    assert.equal(
+      readFileSync(fixture.gh.assetPath(TAG, 'runner-manifest.json'), 'utf8'),
+      approved,
+      'the release asset is re-anchored to what main approved',
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('a rebuild is what lets downloaded digests become the trust root', () => {
+  const fixture = createFixture({
+    repoManifest: currentManifest(),
+    releaseAssets: { ...completeRelease(), [IOS_ZIP]: 'ios-runner-zip-bytes-rebuilt-from-source' },
+  });
+  try {
+    const run = runPublish(fixture, {
+      workdir: checkout(fixture, 'run1'),
+      ctx: { 'needs.detect.outputs.build': 'true' },
+    });
+    assert.ok(run.ok, `job failed at ${run.failed?.name}: ${run.failed?.stderr}`);
+    assert.equal(run.outputs.commit.pushed, 'true', 'freshly built zips do move the trust root');
+    const head = originRef(fixture, BRANCH);
+    assert.equal(
+      JSON.parse(
+        git(fixture.root, '--git-dir', fixture.origin, 'show', `${head}:runner-manifest.json`),
+      ).assets.ios[0].sha256,
+      sha256('ios-runner-zip-bytes-rebuilt-from-source'),
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test('a superseded PR is retired even when this run has nothing of its own to deliver', () => {
   // Reachable whenever the trust root reached main by some other route (a
   // maintainer's own PR) while the release still lacks its manifest asset:
@@ -1362,11 +1448,12 @@ test('detect stands down once the in-repo trust root matches the published manif
   }
 });
 
-test('detect rebuilds when a release zip no longer matches what it published', () => {
+test('detect stops when a release zip contradicts an approved trust root', () => {
   // Both zips are present and the published manifest still equals the in-repo
   // one, so an asset-name gate reports the release fully published while it
   // serves an iOS zip no client can verify. Republishing would re-hash bytes
-  // this workflow never built; the repair is to rebuild both from source.
+  // this workflow never built; rebuilding would move a trust root main has
+  // already approved onto bytes no pull request has seen.
   const current = currentManifest();
   const fixture = createFixture({
     repoManifest: current,
@@ -1378,10 +1465,32 @@ test('detect rebuilds when a release zip no longer matches what it published', (
   });
   try {
     const run = runDetect(fixture);
-    assert.ok(run.ok, `detect failed: ${run.failed?.stderr}`);
-    assert.equal(run.outputs.v.build, 'true', 'a drifted zip must never be adopted as-is');
-    assert.equal(run.outputs.v.publish, 'true');
-    assert.match(run.steps.at(-1)?.stdout ?? '', /this workflow did not publish/);
+    assert.equal(run.ok, false, 'a drifted zip must never reach the publish job');
+    assert.match(run.failed?.stderr ?? '', /does not vouch for/);
+    assert.match(run.failed?.stderr ?? '', new RegExp(`force_version=${VERSION}`));
+    assert.deepEqual(run.outputs.v, {}, 'no decision may reach the build or publish jobs');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('detect stops even when the release manifest asset was rewritten to match', () => {
+  // The single extra write that would bypass a guard trusting the release's own
+  // attestation: swap the zip AND its manifest asset. Main still disagrees.
+  const substituted = currentManifest().replace(sha256(IOS_BYTES), 'b'.repeat(64));
+  const fixture = createFixture({
+    repoManifest: currentManifest(),
+    releaseAssets: {
+      ...completeRelease(),
+      [IOS_ZIP]: 'ios-runner-zip-bytes-substituted-with-a-matching-attestation',
+      'runner-manifest.json': substituted,
+    },
+  });
+  try {
+    const run = runDetect(fixture);
+    assert.equal(run.ok, false, 'a self-consistent forgery must not outrank main');
+    assert.match(run.failed?.stderr ?? '', /does not vouch for/);
+    assert.deepEqual(run.outputs.v, {});
   } finally {
     fixture.cleanup();
   }
@@ -1774,6 +1883,11 @@ test('publish still runs when both builds are skipped (the stale-manifest self-h
     'build-ios',
     'build-android',
   ]);
+  // A status-check function in an `if:` drops the implicit success() on needs,
+  // so a detect that wrote its decision and then failed a later step would
+  // otherwise publish with both build jobs skipped — downloading and blessing
+  // the very zips the decision asked to have rebuilt.
+  assert.match(condition, /needs\.detect\.result == 'success'/);
 });
 
 test('the build jobs are gated on the detect decision', () => {

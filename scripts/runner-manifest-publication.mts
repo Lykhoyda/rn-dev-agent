@@ -153,20 +153,30 @@ export function decideRunnerPublication(input) {
 
   const repo = parseManifest(input.repoManifest);
   const published = parseManifest(input.publishedManifest);
-  // Drift is measured against the manifest asset ON the release, because that is
-  // this workflow's own record of the bytes it last published and it is rewritten
-  // every time publication runs. The in-repo manifest only stands in when the
-  // release carries no manifest asset: while a trust-root PR waits for a
-  // maintainer it still describes an OLDER version, so its asset names match
-  // nothing on this release and it can prove nothing about what is served — which
-  // is precisely the post-release window an attacker would use. Measuring against
-  // the freshest attestation is also what makes a rebuild converge: the run that
-  // repairs drift republishes the asset, so the next sweep sees agreement.
-  const attested = published ?? repo;
+  // Only the in-repo manifest is beyond reach: it lives on protected main. The
+  // manifest ASSET is an ordinary release asset, writable by anything holding
+  // contents: write — the same permission needed to swap a zip — so it is
+  // evidence ONLY while main has nothing to say about this version. Once main
+  // vouches for v<version>, it is the authority and the asset is not.
+  const trustRootIsCurrent = repo !== null && repo.version === version;
+  const attested = trustRootIsCurrent ? repo : published;
   const drifted = attested === null ? null : driftedAsset(attested, byName);
-  // Drift is repaired by rebuilding BOTH zips from source, never by re-hashing
-  // what is being served: the trust root may only ever vouch for bytes this
-  // workflow produced.
+  // Moving the trust root takes a merged pull request, so a rebuild here cannot
+  // settle the disagreement: main would still name the old bytes on the next
+  // sweep, which would rebuild again and rewrite the pull request it is waiting
+  // on. Stop instead, and let force_version deliver one rebuild and one PR.
+  if (drifted !== null && trustRootIsCurrent && !forced) {
+    throw new Error(
+      `release v${version} serves a ${drifted} that runner-manifest.json on main does not vouch ` +
+        'for. Re-hashing it would move the trust root onto bytes this workflow did not build, and ' +
+        'rebuilding would move it onto bytes no merged pull request has approved yet. Find out why ' +
+        `the release assets changed, then dispatch this workflow with force_version=${version} to ` +
+        'rebuild both runners from source and deliver a single trust-root pull request.',
+    );
+  }
+  // Before main vouches for this version there is no trust root to protect, so a
+  // release serving bytes this workflow never published is repaired by rebuilding
+  // both runners from source rather than by re-hashing what is served.
   const buildRunners = forced || missingZip || drifted !== null;
 
   let publishManifest = true;

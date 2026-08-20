@@ -114,20 +114,41 @@ a zip re-uploaded by a build job whose sibling failed cannot pass as
 published just because the two manifests (copies of each other) still
 agree.
 
-A drifted zip is **rebuilt from source**, never re-hashed: adopting
-whatever the release now serves would move the trust root onto bytes the
-workflow never built, turning the client's rejection of a substituted
-archive into a routine-looking bot PR. Drift is judged against the
-`runner-manifest.json` *asset on the release* — the workflow's own record
-of what it last published, rewritten on every publication — rather than
-against the in-repo manifest, which still names an older version for as
-long as a trust-root PR is waiting and so cannot speak for the current
-release at all. That also makes the repair converge: the rebuilding run
-republishes the asset, so the next sweep sees agreement and opens no new
-commit. If you did not expect drift, the release assets were changed
-outside this workflow and want investigating; until the rebuild lands,
-installs stay on the local-build fallback — degraded, not compromised.
-For the same reason, a release lookup that fails for any
+A drifted zip — one whose served SHA-256 disagrees with what vouches for
+it — is never adopted by re-hashing, because that would turn the client's
+rejection of a substituted archive into a routine-looking bot PR. What
+happens instead depends on what `main` already knows, because **`main` is
+the only record an attacker cannot write**: the `runner-manifest.json`
+asset on the release is an ordinary release asset, writable by anything
+holding `contents: write` — the same permission needed to swap a zip.
+
+- **`main` already carries the trust root for this version.** It is the
+  authority; the release asset is not. A disagreement **stops the run**.
+  Rebuilding would move the trust root onto bytes no merged PR has
+  approved, and since only a merged PR can move it, the next sweep would
+  rebuild again and rewrite the PR it is waiting on. Find out why the
+  release changed, then dispatch `force_version` for the current version:
+  that rebuilds both runners from source and delivers one trust-root PR.
+- **`main` does not know this version yet** (the normal post-release
+  window). There is no trust root to protect and the release's own
+  manifest asset is the only record there is, so drift against it
+  **rebuilds both runners from source**. That converges: the rebuilding
+  run republishes the asset, so the next sweep sees agreement and opens
+  no new commit.
+
+The boundary is worth stating plainly: in that second window the evidence
+is release-side and therefore writable by the same permission that can
+swap a zip, so an actor who rewrites *both* the zip and the manifest asset
+is not detectable here. That was equally true before this workflow existed
+— publication has always hashed the release's own bytes — and closing it
+needs build attestation, not more release-asset comparison. What the rules
+above do guarantee is that a trust root `main` has already approved is
+never rewritten from downloaded bytes: when nothing was rebuilt and the
+in-repo manifest already targets this version, it is republished verbatim
+rather than regenerated. Until drift is resolved, installs stay on the
+local-build fallback — degraded, not compromised.
+
+A release lookup that fails for any
 reason other than a genuine 404 fails the run rather than being read as
 "nothing is published", which would rebuild and re-upload zips the
 release already serves correctly.
