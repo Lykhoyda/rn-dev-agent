@@ -43,8 +43,9 @@ name: Runner artifacts
 # PREREQUISITES (repo settings, cannot be set from this file):
 #   - Settings > Actions > General > "Allow GitHub Actions to create and approve
 #     pull requests". The repository-wide default workflow permission stays
-#     read-only; every job here escalates explicitly via its own `permissions:`
-#     block, exactly as release.yml does.
+#     read-only; the `permissions:` blocks below grant what this workflow needs —
+#     `contents: write` for the release, plus `pull-requests: write` on the
+#     publish job for the manifest PR.
 #   - Settings > General > "Allow auto-merge".
 #   - A maintainer must approve the manifest PR's queued CI run ("Approve and
 #     run"): a workflow-opened PR authenticated with GITHUB_TOKEN parks its

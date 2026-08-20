@@ -125,16 +125,6 @@ before unzipping it, and `acquireArtifact` falls back to provenance
 attestation of the published binaries is deliberately deferred to separate,
 authorized work.
 
-One narrower thing the workflow does guarantee: when a run rebuilt
-nothing, cut its manifest branch fresh from `main`, and found `main`'s
-manifest already targeting this version, that manifest is republished to
-the release verbatim rather than regenerated from whatever the release is
-serving. The "cut fresh from `main`" part is load-bearing —
-`chore/runner-manifest-v<version>` is workflow-owned but not protected, so
-on a *reused* branch the working tree is branch content, not `main`'s, and
-the manifest is always recomputed instead. Branch content therefore never
-reaches the release asset or the pull request unexamined.
-
 A release lookup that fails for any reason other than a genuine 404 fails
 the run rather than being read as "nothing is published", which would
 rebuild and re-upload zips the release already serves correctly.
@@ -160,17 +150,13 @@ retiring it cannot depend on this run having something to deliver.
 
 Every job checks out `main`, so a `workflow_dispatch` started from a
 feature branch cannot smuggle unrelated commits into the auto-merging
-manifest PR. `chore/runner-manifest-v<version>` is workflow-owned: a
-rerun keeps its head — and the approval bound to that SHA — while the
-branch still delivers nothing but the trust root, i.e. while comparing it
-against `main` names no path outside `runner-manifest.json` and its two
-host-plugin copies (those three are expected to appear; they are what the
-PR delivers). That holds however many commits the workflow has made on
-the branch, and `main` advancing underneath an open manifest PR does not
-disturb it. A branch carrying anything else is deleted and cut again from
-`main` — which closes its PR, so the replacement starts from a clean base
-and gets a new PR — rather than carried into the PR a maintainer
-approves.
+manifest PR. `chore/runner-manifest-v<version>` is workflow-owned: a rerun
+keeps its head — and the approval bound to that SHA — as long as the branch
+still delivers nothing but the trust root, and `main` advancing underneath
+an open manifest PR does not disturb it. A branch carrying anything else is
+discarded and cut again from `main` rather than ridden into the PR a
+maintainer approves. The exact reuse and republish invariants are documented
+where they are enforced, in `.github/workflows/runner-artifacts.yml`.
 
 The `force_version` input re-publishes the *current* plugin
 version (skipping the missing-assets check); it will not accept a
