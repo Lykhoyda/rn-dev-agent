@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { lstatSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Lockfile, formatLockConflictMessage } from './lifecycle/lockfile.js';
@@ -13,6 +13,7 @@ import { declaredSourceContractFromEnv } from './session/declared-source-contrac
 import { inspectSessionOwner } from './session/process-owner.js';
 import { readProcessBirth } from './session/process-birth.js';
 import { resolveSourceIdentity } from './session/source-identity.js';
+import { detectLegacyRootRepair } from './session/worktree-inheritance.js';
 import { resolveSuccessorMintSource, resolveWorkerSpawnCwd, resolveWorkerSpawnRootEnvironment, } from './session/successor-source.js';
 import { runStartupCleanupForSource, startupCleanupFailureMessage, } from './session/startup-cleanup.js';
 import { createSupervisorAuthority, resolveSupervisorAuthorityForSpawn, } from './session/supervisor-authority.js';
@@ -48,6 +49,20 @@ if (supervisorFlag.length > 0 &&
     }
     process.exit(outcome.code ?? 1);
 }
+function legacyRepairArtifactPresent(cwd) {
+    try {
+        if (lstatSync(join(cwd, '.rn-agent')).isSymbolicLink())
+            return true;
+    }
+    catch { }
+    try {
+        lstatSync(join(cwd, '.rn-agent.bak'));
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
 if (process.env.RN_BRIDGE_SUPERVISOR === '0') {
     // Escape hatch: legacy single-process bridge (debugging / bisecting).
     await import('./index.js');
@@ -78,6 +93,17 @@ else {
     try {
         if (diagnosticContractProbe)
             throw new Error('DIAGNOSTIC_MODE_READ_ONLY');
+        if (legacyRepairArtifactPresent(process.cwd())) {
+            try {
+                const repair = detectLegacyRootRepair({ cwd: process.cwd() });
+                if (repair.status === 'required' || repair.status === 'refused') {
+                    process.stderr.write(`rn-dev-agent worktree layout: ${repair.code}: ${repair.reason}\n`);
+                }
+            }
+            catch {
+                process.stderr.write('rn-dev-agent worktree layout: RN_AGENT_LEGACY_ROOT_REPAIR_REFUSED: detection failed without changing project state.\n');
+            }
+        }
         const declaredContract = declaredSourceContractFromEnv();
         resolveIdentityForSpawn = (root) => resolveSourceIdentity(root, declaredContract);
         const source = resolveSourceIdentity(process.cwd(), declaredContract);

@@ -18,8 +18,10 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import {
   applyInheritance,
+  detectLegacyRootRepair,
   parseWorktreeRecords,
   planInheritance,
+  repairLegacyRoot,
   resourcesForHost,
 } from '../../../dist/session/worktree-inheritance.js';
 
@@ -129,6 +131,17 @@ function assertSplitLayout(worktreeApp: string, primaryApp: string): void {
   );
 }
 
+function seedLegacyDamage(worktree: string, primaryApp: string): void {
+  const backup = join(worktree, '.rn-agent.bak');
+  mkdirSync(join(backup, 'integration'), { recursive: true });
+  mkdirSync(join(backup, 'local'), { recursive: true });
+  mkdirSync(join(backup, 'actions'), { recursive: true });
+  writeFileSync(join(backup, 'integration', 'launcher.cjs'), 'KEEP-INTEGRATION');
+  writeFileSync(join(backup, 'local', 'troubleshooting.md'), 'KEEP-LOCAL');
+  writeFileSync(join(backup, 'actions', 'local.yaml'), 'KEEP-LOCAL-ACTION');
+  symlinkSync(join(primaryApp, '.rn-agent'), join(worktree, '.rn-agent'), 'dir');
+}
+
 test('parses worktree porcelain paths with spaces', () => {
   const records = parseWorktreeRecords(
     'worktree /repos/with space/main\nHEAD abc\nbranch refs/heads/main\n\nworktree /gone\nprunable reason\n',
@@ -179,59 +192,262 @@ test('setup creates a real local root and inherits actions without foreign-root 
   }
 });
 
-test('legacy whole-root link migrates to actions-only without copying mutable authority', () => {
+test('non-linked projects keep their real integration and local state unchanged', () => {
   const fixture = makeFixture();
   try {
     const primaryApp = seedPrivateCorpus(fixture);
-    const worktree = addWorktree(fixture);
-    symlinkSync(join(primaryApp, '.rn-agent'), join(worktree, '.rn-agent'), 'dir');
+    mkdirSync(join(primaryApp, '.rn-agent', 'local'));
+    writeFileSync(join(primaryApp, '.rn-agent', 'local', 'troubleshooting.md'), 'KEEP-LOCAL');
 
-    const plan = planInheritance({ cwd: worktree, appRoot: worktree, host: 'claude' });
-    assert.equal(plan.resources[0].state, 'LEGACY_ROOT_LINK');
-    assert.equal(plan.resources[0].action, 'migrate');
-    const withoutConsent = applyInheritance({ cwd: worktree, appRoot: worktree, host: 'claude' });
-    assert.equal(withoutConsent.outcomes[0].result, 'skipped');
-    assert.equal(lstatSync(join(worktree, '.rn-agent')).isSymbolicLink(), true);
-
-    const migrated = applyInheritance({
-      cwd: worktree,
-      appRoot: worktree,
-      host: 'claude',
-      allowRepair: true,
-    });
-    assert.equal(migrated.outcomes[0].result, 'repaired');
-    assertSplitLayout(worktree, primaryApp);
-    for (const mutable of ['integration', 'state', 'recordings']) {
-      assert.equal(existsSync(join(worktree, '.rn-agent', mutable)), false);
-    }
+    assert.equal(detectLegacyRootRepair({ cwd: primaryApp }).status, 'unchanged');
+    assert.equal(repairLegacyRoot({ cwd: primaryApp }).status, 'unchanged');
     assert.equal(
       readFileSync(join(primaryApp, '.rn-agent', 'integration', 'authority.json'), 'utf8'),
       'FOREIGN-AUTHORITY',
+    );
+    assert.equal(
+      readFileSync(join(primaryApp, '.rn-agent', 'local', 'troubleshooting.md'), 'utf8'),
+      'KEEP-LOCAL',
     );
   } finally {
     fixture.cleanup();
   }
 });
 
-test('legacy migration rolls back when the split actions link would be Git-visible', () => {
-  const fixture = makeFixture({ ignore: '' });
+test('legacy damage is detection-only until explicit repair restores local state', () => {
+  const fixture = makeFixture();
   try {
     const primaryApp = seedPrivateCorpus(fixture);
     const worktree = addWorktree(fixture);
-    symlinkSync(join(primaryApp, '.rn-agent'), join(worktree, '.rn-agent'), 'dir');
+    seedLegacyDamage(worktree, primaryApp);
 
-    const report = applyInheritance({
+    const plan = planInheritance({ cwd: worktree, appRoot: worktree, host: 'claude' });
+    assert.equal(plan.resources[0].state, 'LEGACY_ROOT_LINK');
+    assert.equal(plan.resources[0].action, 'none');
+    assert.match(plan.resources[0].remediation ?? '', /RN_AGENT_LEGACY_ROOT_REPAIR_REQUIRED/);
+    assert.equal(detectLegacyRootRepair({ cwd: worktree }).status, 'required');
+
+    const startupApply = applyInheritance({
       cwd: worktree,
       appRoot: worktree,
       host: 'claude',
       allowRepair: true,
     });
-    assert.equal(report.outcomes[0].state, 'LINK_VALID_GIT_VISIBLE');
-    assert.equal(report.outcomes[0].result, 'refused');
+    assert.equal(startupApply.outcomes[0].result, 'skipped');
     assert.equal(lstatSync(join(worktree, '.rn-agent')).isSymbolicLink(), true);
     assert.equal(
-      readFileSync(join(primaryApp, '.rn-agent', 'state', 'session.json'), 'utf8'),
-      'FOREIGN-STATE',
+      readFileSync(join(worktree, '.rn-agent.bak', 'local', 'troubleshooting.md'), 'utf8'),
+      'KEEP-LOCAL',
+    );
+
+    const repaired = repairLegacyRoot({ cwd: worktree, appRoot: worktree });
+    assert.equal(repaired.status, 'repaired', JSON.stringify(repaired));
+    assert.equal(repaired.code, 'RN_AGENT_LEGACY_ROOT_REPAIR_COMPLETED');
+    assert.deepEqual(repaired.retainedPaths, ['.rn-agent/actions.pre-repair']);
+    assertSplitLayout(worktree, primaryApp);
+    assert.equal(
+      readFileSync(join(worktree, '.rn-agent', 'integration', 'launcher.cjs'), 'utf8'),
+      'KEEP-INTEGRATION',
+    );
+    assert.equal(
+      readFileSync(join(worktree, '.rn-agent', 'local', 'troubleshooting.md'), 'utf8'),
+      'KEEP-LOCAL',
+    );
+    assert.equal(
+      readFileSync(join(worktree, '.rn-agent', 'actions.pre-repair', 'local.yaml'), 'utf8'),
+      'KEEP-LOCAL-ACTION',
+    );
+    assert.equal(repairLegacyRoot({ cwd: worktree }).status, 'unchanged');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('explicit repair refuses Git-visible state without moving the legacy layout', () => {
+  const fixture = makeFixture({ ignore: '' });
+  try {
+    const primaryApp = seedPrivateCorpus(fixture);
+    const worktree = addWorktree(fixture);
+    seedLegacyDamage(worktree, primaryApp);
+
+    const report = repairLegacyRoot({ cwd: worktree, appRoot: worktree });
+    assert.equal(report.status, 'refused');
+    assert.match(report.reason, /Git-visible/);
+    assert.equal(lstatSync(join(worktree, '.rn-agent')).isSymbolicLink(), true);
+    assert.equal(
+      readFileSync(join(worktree, '.rn-agent.bak', 'local', 'troubleshooting.md'), 'utf8'),
+      'KEEP-LOCAL',
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('explicit repair preserves ambiguous action corpora and refuses a preservation collision', () => {
+  const fixture = makeFixture();
+  try {
+    const primaryApp = seedPrivateCorpus(fixture);
+    const worktree = addWorktree(fixture);
+    seedLegacyDamage(worktree, primaryApp);
+    mkdirSync(join(worktree, '.rn-agent.bak', 'actions.pre-repair'));
+    writeFileSync(
+      join(worktree, '.rn-agent.bak', 'actions.pre-repair', 'older.yaml'),
+      'KEEP-OLDER',
+    );
+
+    const report = repairLegacyRoot({ cwd: worktree });
+    assert.equal(report.status, 'refused');
+    assert.match(report.reason, /Both actions and actions\.pre-repair/);
+    assert.equal(lstatSync(join(worktree, '.rn-agent')).isSymbolicLink(), true);
+    assert.equal(
+      readFileSync(join(worktree, '.rn-agent.bak', 'actions', 'local.yaml'), 'utf8'),
+      'KEEP-LOCAL-ACTION',
+    );
+    assert.equal(
+      readFileSync(join(worktree, '.rn-agent.bak', 'actions.pre-repair', 'older.yaml'), 'utf8'),
+      'KEEP-OLDER',
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('explicit repair is serialized by the common-worktree lock', () => {
+  const fixture = makeFixture();
+  try {
+    const primaryApp = seedPrivateCorpus(fixture);
+    const worktree = addWorktree(fixture);
+    seedLegacyDamage(worktree, primaryApp);
+    const lockDirectory = join(fixture.primary, '.git', 'rn-dev-agent');
+    mkdirSync(lockDirectory);
+    writeFileSync(join(lockDirectory, 'worktree-root-repair.lock'), 'owned elsewhere');
+
+    const report = repairLegacyRoot({ cwd: worktree });
+    assert.equal(report.code, 'RN_AGENT_LEGACY_ROOT_REPAIR_LOCKED');
+    assert.equal(lstatSync(join(worktree, '.rn-agent')).isSymbolicLink(), true);
+    assert.equal(
+      readFileSync(join(worktree, '.rn-agent.bak', 'local', 'troubleshooting.md'), 'utf8'),
+      'KEEP-LOCAL',
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('explicit repair refuses a foreign repository-lock directory', () => {
+  const fixture = makeFixture();
+  try {
+    const primaryApp = seedPrivateCorpus(fixture);
+    const worktree = addWorktree(fixture);
+    seedLegacyDamage(worktree, primaryApp);
+    const foreign = join(fixture.root, 'foreign-lock-state');
+    mkdirSync(foreign);
+    symlinkSync(foreign, join(fixture.primary, '.git', 'rn-dev-agent'), 'dir');
+
+    const report = repairLegacyRoot({ cwd: worktree });
+    assert.equal(report.status, 'refused');
+    assert.match(report.reason, /lock directory is not a verified real directory/);
+    assert.equal(lstatSync(join(worktree, '.rn-agent')).isSymbolicLink(), true);
+    assert.equal(
+      readFileSync(join(worktree, '.rn-agent.bak', 'local', 'troubleshooting.md'), 'utf8'),
+      'KEEP-LOCAL',
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('explicit repair creates an empty canonical corpus when no actions corpus exists', () => {
+  const fixture = makeFixture();
+  try {
+    const primaryApp = appPath(fixture.primary, fixture.appRelative);
+    const worktree = addWorktree(fixture);
+    mkdirSync(join(worktree, '.rn-agent.bak', 'integration'), { recursive: true });
+    mkdirSync(join(worktree, '.rn-agent.bak', 'local'), { recursive: true });
+    writeFileSync(join(worktree, '.rn-agent.bak', 'local', 'troubleshooting.md'), 'KEEP-LOCAL');
+    symlinkSync(join(primaryApp, '.rn-agent'), join(worktree, '.rn-agent'), 'dir');
+
+    const report = repairLegacyRoot({ cwd: worktree });
+    assert.equal(report.status, 'repaired', JSON.stringify(report));
+    assert.equal(lstatSync(join(primaryApp, '.rn-agent')).isDirectory(), true);
+    assertSplitLayout(worktree, primaryApp);
+    assert.equal(
+      readFileSync(join(worktree, '.rn-agent', 'local', 'troubleshooting.md'), 'utf8'),
+      'KEEP-LOCAL',
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('explicit repair leaves a healthy real root unchanged and refuses partial backup collisions', () => {
+  const healthy = makeFixture();
+  try {
+    const primaryApp = seedPrivateCorpus(healthy);
+    const worktree = addWorktree(healthy);
+    applyInheritance({ cwd: worktree, appRoot: worktree, host: 'claude' });
+    mkdirSync(join(worktree, '.rn-agent', 'local'));
+    writeFileSync(join(worktree, '.rn-agent', 'local', 'unique.txt'), 'KEEP');
+
+    const unchanged = repairLegacyRoot({ cwd: worktree });
+    assert.equal(unchanged.status, 'unchanged');
+    assert.equal(readFileSync(join(worktree, '.rn-agent', 'local', 'unique.txt'), 'utf8'), 'KEEP');
+
+    mkdirSync(join(worktree, '.rn-agent.bak'));
+    writeFileSync(join(worktree, '.rn-agent.bak', 'retained.txt'), 'KEEP-BACKUP');
+    const partial = repairLegacyRoot({ cwd: worktree });
+    assert.equal(partial.status, 'refused');
+    assert.match(partial.reason, /partial migration/);
+    assert.equal(readFileSync(join(worktree, '.rn-agent', 'local', 'unique.txt'), 'utf8'), 'KEEP');
+    assert.equal(
+      readFileSync(join(worktree, '.rn-agent.bak', 'retained.txt'), 'utf8'),
+      'KEEP-BACKUP',
+    );
+    assertSplitLayout(worktree, primaryApp);
+  } finally {
+    healthy.cleanup();
+  }
+});
+
+test('explicit repair refuses missing-root and unsafe-backup partial migrations', () => {
+  const fixture = makeFixture();
+  try {
+    seedPrivateCorpus(fixture);
+    const worktree = addWorktree(fixture);
+    mkdirSync(join(worktree, '.rn-agent.bak'));
+    writeFileSync(join(worktree, '.rn-agent.bak', 'retained.txt'), 'KEEP');
+
+    const missingRoot = repairLegacyRoot({ cwd: worktree });
+    assert.equal(missingRoot.status, 'refused');
+    assert.match(missingRoot.reason, /without its displaced root/);
+    assert.equal(readFileSync(join(worktree, '.rn-agent.bak', 'retained.txt'), 'utf8'), 'KEEP');
+
+    const unsafeBackup = join(fixture.root, 'unsafe-backup');
+    mkdirSync(unsafeBackup);
+    symlinkSync(unsafeBackup, join(worktree, '.rn-agent'));
+    const foreign = repairLegacyRoot({ cwd: worktree });
+    assert.equal(foreign.status, 'refused');
+    assert.equal(readFileSync(join(worktree, '.rn-agent.bak', 'retained.txt'), 'utf8'), 'KEEP');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('report prints a typed executable remedy without mutating legacy damage', () => {
+  const fixture = makeFixture();
+  try {
+    const primaryApp = seedPrivateCorpus(fixture);
+    const worktree = addWorktree(fixture);
+    seedLegacyDamage(worktree, primaryApp);
+
+    const report = cli(worktree, ['report', '--host', 'claude', '--app-root', worktree]);
+    assert.equal(report.status, 0, report.stderr);
+    assert.match(report.stdout, /RN_AGENT_LEGACY_ROOT_REPAIR_REQUIRED/);
+    assert.match(report.stdout, /worktree-inheritance\.js.* repair --app-root/);
+    assert.equal(lstatSync(join(worktree, '.rn-agent')).isSymbolicLink(), true);
+    assert.equal(
+      readFileSync(join(worktree, '.rn-agent.bak', 'integration', 'launcher.cjs'), 'utf8'),
+      'KEEP-INTEGRATION',
     );
   } finally {
     fixture.cleanup();
@@ -424,17 +640,39 @@ test('post-checkout hook prepares fresh worktrees before SessionStart and keeps 
   }
 });
 
-test('SessionStart hook is report-only and cannot create a whole-root link', () => {
-  const hook = readFileSync(
-    join(CORE_ROOT, '..', 'claude-plugin', 'hooks', 'detect-rn-project.sh'),
-    'utf8',
-  );
-  const inheritanceBlock = hook.slice(
-    hook.indexOf('# REPORT ONLY:'),
-    hook.indexOf('# Scaffold the repo-local'),
-  );
-  assert.match(inheritanceBlock, /worktree-inheritance\.js" report/);
-  assert.doesNotMatch(inheritanceBlock, /\bln\b|\bcp\b|\bmv\b|\brm\b/);
+test('post-checkout lifecycle detects legacy damage without repairing it', () => {
+  const fixture = makeFixture();
+  try {
+    const primaryApp = seedPrivateCorpus(fixture);
+    const install = cli(fixture.primary, ['hook', 'install', '--host', 'claude'], PACKAGED_CLI);
+    assert.equal(install.status, 0, install.stderr);
+    const worktree = addWorktree(fixture, 'legacy-hook');
+    rmSync(join(worktree, '.rn-agent'), { recursive: true });
+    seedLegacyDamage(worktree, primaryApp);
+
+    const hook = join(fixture.primary, '.git', 'hooks', 'post-checkout');
+    const lifecycle = spawnSync(hook, ['old-head', 'new-head', '1'], {
+      cwd: worktree,
+      encoding: 'utf8',
+    });
+    assert.equal(lifecycle.status, 0, lifecycle.stderr);
+    assert.equal(lstatSync(join(worktree, '.rn-agent')).isSymbolicLink(), true);
+    assert.equal(
+      readFileSync(join(worktree, '.rn-agent.bak', 'local', 'troubleshooting.md'), 'utf8'),
+      'KEEP-LOCAL',
+    );
+    const lastRun = JSON.parse(
+      readFileSync(
+        join(fixture.primary, '.git', 'rn-dev-agent', 'worktree-inheritance-last-run.json'),
+        'utf8',
+      ),
+    ) as { outcomes: Array<{ state: string; result: string }> };
+    assert.deepEqual(lastRun.outcomes, [
+      { id: 'rn-agent-actions', state: 'LEGACY_ROOT_LINK', result: 'skipped' },
+    ]);
+  } finally {
+    fixture.cleanup();
+  }
 });
 
 test('CLI reports no private source paths or action bodies', () => {

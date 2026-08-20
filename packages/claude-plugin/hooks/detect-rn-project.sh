@@ -114,21 +114,29 @@ if [ "$has_rn_config" = true ]; then
   # REPORT ONLY: SessionStart must not mutate worktree inheritance. The safe
   # setup/post-checkout path creates a real local .rn-agent root and inherits
   # only .rn-agent/actions (GH #357/#671).
+  WORKTREE_LAYOUT_BLOCKED=0
   if command -v node >/dev/null 2>&1 && [ -f "$CORE_ROOT/dist/worktree-inheritance.js" ]; then
     if WORKTREE_REPORT=$(node "$CORE_ROOT/dist/worktree-inheritance.js" report \
       --host claude --app-root "$PWD" 2>/dev/null); then
       [ -n "$WORKTREE_REPORT" ] && printf '%s\n\n' "$WORKTREE_REPORT"
+      case "$WORKTREE_REPORT" in
+        *RN_AGENT_LEGACY_ROOT_REPAIR_*) WORKTREE_LAYOUT_BLOCKED=1 ;;
+      esac
     else
       echo "NOTICE: rn-dev-agent could not check linked-worktree action inheritance. Run /rn-dev-agent:doctor."
       echo ""
+      WORKTREE_LAYOUT_BLOCKED=1
     fi
   else
     echo "NOTICE: rn-dev-agent worktree helper unavailable (Node or packaged runtime missing). Run /rn-dev-agent:doctor."
     echo ""
+    WORKTREE_LAYOUT_BLOCKED=1
   fi
 
-  # Scaffold the repo-local troubleshooting memory (silent if already present)
-  bash "$SCRIPT_ROOT/ensure-troubleshooting-doc.sh" "$PWD" 2>/dev/null || true
+  # A damaged root is diagnostic-only until the explicit repair command runs.
+  if [ "$WORKTREE_LAYOUT_BLOCKED" -eq 0 ]; then
+    bash "$SCRIPT_ROOT/ensure-troubleshooting-doc.sh" "$PWD" 2>/dev/null || true
+  fi
 
   # Check Android emulator readiness (if Android device detected)
   bash "$SCRIPT_ROOT/ensure-android-ready.sh" 2>/dev/null || true
@@ -143,7 +151,7 @@ if [ "$has_rn_config" = true ]; then
 
   # Inject the repo-local troubleshooting memory so the agent starts informed.
   TROUBLE_DOC="$PWD/.rn-agent/local/troubleshooting.md"
-  if [ -f "$TROUBLE_DOC" ]; then
+  if [ "$WORKTREE_LAYOUT_BLOCKED" -eq 0 ] && [ -f "$TROUBLE_DOC" ]; then
     # Only inject when the doc has real content beyond the scaffold template
     # (ignore blank lines, markdown headers, and HTML-comment placeholder lines).
     if grep -qvE '^\s*(#|<!--|-->|$)' "$TROUBLE_DOC" 2>/dev/null; then
