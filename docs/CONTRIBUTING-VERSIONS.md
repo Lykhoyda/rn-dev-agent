@@ -84,8 +84,9 @@ This runs three steps:
    marketplace.json). The script is also wired as a pre-commit hook so
    manual edits don't drift.
 
-Review the diff, commit, push, open a "Version Packages" PR (or commit
-directly to main if your workflow allows).
+Review the diff, commit, push, and open a "Version Packages" PR — `main`
+is protected, so the bump lands only through a PR whose `Build & Test`
+check is green, never a direct commit.
 
 To publish the MCP server package (currently the plugin doesn't auto-
 publish — manual publish from the core workspace):
@@ -93,6 +94,75 @@ publish — manual publish from the core workspace):
 ```bash
 corepack yarn release-core
 ```
+
+## The runner trust root after a release
+
+`runner-manifest.json` (mirrored into both host plugin packages) is the
+client's offline SHA-256 trust root for the prebuilt runner zips. Clients
+use a prebuilt runner only when `manifest.version` equals the installed
+plugin version, so a manifest left behind by a release silently downgrades
+every install to the slow local build.
+
+`.github/workflows/runner-artifacts.yml` keeps it current. It checks two
+things independently — whether release `v<version>` carries both runner
+zips, and whether the in-repo manifest matches the manifest published for
+that same version — and re-runs every 6 hours, so a manifest that has not
+landed yet is re-detected and re-delivered rather than silently skipped.
+
+Whether the release's zips still match what vouches for them is
+deliberately **not** checked. Every record the workflow could compare them
+against — the zips themselves, and the `runner-manifest.json` asset beside
+them — is an ordinary release asset, writable by anything holding
+`contents: write`, the same permission needed to swap a zip. Comparing two
+things the same actor can write proves nothing, and acting on the result
+would turn a client-side rejection into a routine-looking bot PR that
+blesses the substitution.
+
+A substituted archive is caught where it can actually be caught: the
+client verifies each zip's SHA-256 against the in-repository trust root
+before unzipping it, and `acquireArtifact` falls back to provenance
+`build-local` on a mismatch — slower, never compromised. Stronger
+attestation of the published binaries is deliberately deferred to separate,
+authorized work.
+
+A release lookup that fails for any reason other than a genuine 404 fails
+the run rather than being read as "nothing is published", which would
+rebuild and re-upload zips the release already serves correctly.
+
+The manifest reaches `main` the same way everything else does: a
+`chore/runner-manifest-v<version>` branch, a pull request, the required
+`Build & Test` check, and auto-merge. It is never pushed to `main`
+directly and never carries `[skip ci]` — a commit that skips CI can never
+produce the required check, which is what stranded the trust root at
+v0.75.2 while releases shipped through v0.76.7.
+
+**Maintainer step after each release:** the manifest PR is opened by the
+workflow with `GITHUB_TOKEN`, so its CI run parks at *action_required*.
+Open the PR and click **Approve and run**; auto-merge lands it as soon as
+`Build & Test` is green. Until it lands, installs keep working on the
+local-build fallback. Reruns are safe — the branch name is derived from
+the version, an already-open PR is reused, release uploads clobber, and a
+manifest PR left over from an earlier version is closed as superseded so
+two of them can never land in either order. That sweep runs on every
+publish attempt, including one that finds the trust root already current
+and opens no PR of its own — a superseded PR may already be armed, so
+retiring it cannot depend on this run having something to deliver.
+
+Every job checks out `main`, so a `workflow_dispatch` started from a
+feature branch cannot smuggle unrelated commits into the auto-merging
+manifest PR. `chore/runner-manifest-v<version>` is workflow-owned: a rerun
+keeps its head — and the approval bound to that SHA — as long as the branch
+still delivers nothing but the trust root, and `main` advancing underneath
+an open manifest PR does not disturb it. A branch carrying anything else is
+discarded and cut again from `main` rather than ridden into the PR a
+maintainer approves. The exact reuse and republish invariants are documented
+where they are enforced, in `.github/workflows/runner-artifacts.yml`.
+
+The `force_version` input re-publishes the *current* plugin
+version (skipping the missing-assets check); it will not accept a
+historical one, because the runners are built from current source and a
+backfill would both misattribute the binaries and downgrade the trust
+root below what installed clients can use.
 
 ## What if I forget a changeset?
 

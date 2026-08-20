@@ -188,6 +188,15 @@ corepack yarn build:docs
 - Native runner source of truth: `packages/rn-fast-runner/` and
   `packages/rn-android-runner/`.
 - Deliverable docs app: `apps/docs-site/`.
+- `main` is protected and its only required check is `Build & Test` (`ci.yml`).
+  Nothing reaches `main` except a PR carrying that check green — never a direct
+  push, never a `[skip ci]` commit, which by construction can never produce it.
+- A PR opened by a workflow with `GITHUB_TOKEN` parks its CI run at
+  `action_required`; a maintainer must "Approve and run" before the required
+  check registers. Release automation must arm auto-merge and wait, never
+  assume the check appears on its own.
+- Keeping the runner trust root current after a release:
+  `docs/CONTRIBUTING-VERSIONS.md`.
 
 ## Maintaining this file
 
