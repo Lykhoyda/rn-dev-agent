@@ -149,7 +149,7 @@ function parseFlowMeta(text) {
       const stripped = line.replace(/^#\s?/, "").trim();
       if (!stripped)
         continue;
-      const kv = stripped.match(/^([a-zA-Z][\w-]*)\s*:\s*(.+)$/);
+      const kv = stripped.match(/^([a-zA-Z][\w-]*)\s*:\s*(.*)$/);
       if (kv && META_KEYS.has(kv[1])) {
         const key = kv[1];
         const raw = kv[2].trim();
