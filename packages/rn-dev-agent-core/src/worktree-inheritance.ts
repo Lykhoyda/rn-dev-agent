@@ -18,6 +18,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   applyInheritance,
+  repairLegacyRoot,
   planInheritance,
   resolveWorktreeLayout,
   resourcesForHost,
@@ -44,7 +45,7 @@ interface Flags {
   config?: string;
 }
 
-const COMMANDS = ['plan', 'report', 'apply', 'hook', 'post-checkout'];
+const COMMANDS = ['plan', 'report', 'apply', 'repair', 'hook', 'post-checkout'];
 const HOOK_SUBCOMMANDS = ['status', 'install', 'uninstall'];
 
 function parseFlags(argv: string[]): Flags | null {
@@ -571,6 +572,17 @@ function main(): number {
     return 2;
   }
   if (flags.command === 'post-checkout') return runPostCheckout(flags);
+
+  if (flags.command === 'repair') {
+    const report = repairLegacyRoot({ cwd: flags.cwd, appRoot: flags.appRoot });
+    if (flags.json) {
+      console.log(JSON.stringify(report, null, 2));
+    } else {
+      console.log(`${report.code}: ${report.reason}`);
+      for (const path of report.retainedPaths) console.log(`  retained: ${path}`);
+    }
+    return report.status === 'refused' ? 3 : 0;
+  }
 
   if (flags.command === 'apply') {
     const report = applyInheritance({

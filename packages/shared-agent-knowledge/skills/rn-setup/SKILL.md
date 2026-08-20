@@ -284,7 +284,7 @@ Expected outputs:
 
 ### 17. Linked-worktree action inheritance
 
-Resolve the RN app root explicitly (use the nested app directory in a monorepo). Run the host package's `rn-dev-agent-core/dist/worktree-inheritance.js plan --host claude --app-root <app> --json`, then `hook status`. This check is read-only. Report the single `.rn-agent/actions` resource: `TRACKED`, `LINK_VALID_SAFE`, `DEST_MISSING`, `LEGACY_ROOT_LINK`, an unsafe/collision/source state, or a layout refusal. Never infer or print the private source path, inspect action bodies, apply a link/migration, or install a hook. Setup owns those consented mutations.
+Resolve the RN app root explicitly (use the nested app directory in a monorepo). Run the host package's `rn-dev-agent-core/dist/worktree-inheritance.js plan --host claude --app-root <app> --json`, then `hook status`. This check is read-only. Report the single `.rn-agent/actions` resource: `TRACKED`, `LINK_VALID_SAFE`, `DEST_MISSING`, `LEGACY_ROOT_LINK`, an unsafe/collision/source state, or a layout refusal. `LEGACY_ROOT_LINK` stays detection-only until setup obtains separate consent and runs the typed `repair --app-root <app>` remedy; explicit legacy repair is limited to apps rooted at the worktree root. Never infer or print the private source path, inspect action bodies, apply a link/repair, or install a hook. Setup owns those consented mutations.
 
 ## Output format
 
@@ -308,7 +308,7 @@ Present results as a table:
 | Physical devices | N/A (none connected) OR "Android USB reverse: OK" / "iOS: idb-companion missing — install with brew" | Run installed command if iOS-companion missing |
 | Plugin version | OK (latest) / BEHIND (installed X, latest Y) / OFFLINE / AHEAD (dev install) | Run: `/plugin update rn-dev-agent` if BEHIND |
 | Vercel rules sync | OK (N rules, fetched X days ago) / STALE (> 30 days) / MISSING / DRIFT / N/A (installed plugin) | Repo checkout only: node scripts/sync-vercel-skills.mjs --fix --ref \<sha\> |
-| Linked-worktree actions | N/A (primary) / TRACKED / LINK_VALID_SAFE / DEST_MISSING / LEGACY_ROOT_LINK / BLOCKED (state or refusal); hook: installed / absent / foreign / managed path | `/rn-dev-agent:setup` for consented inheritance, migration, or hook install |
+| Linked-worktree actions | N/A (primary) / TRACKED / LINK_VALID_SAFE / DEST_MISSING / LEGACY_ROOT_LINK / BLOCKED (state or refusal); hook: installed / absent / foreign / managed path | `/rn-dev-agent:setup` for consented inheritance, explicit legacy repair, or hook install |
 
 If any critical check fails (CDP bridge, **rn-fast-runner on iOS targets**, **rn-android-runner on Android targets**, Metro, or simulator), provide step-by-step instructions to fix it. Do not proceed with feature development until all critical checks pass. Note: iOS-only setups do NOT need `rn-android-runner`; Android-only setups do NOT need `rn-fast-runner` build artifacts.
 

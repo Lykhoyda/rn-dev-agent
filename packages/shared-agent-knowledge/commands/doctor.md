@@ -14,7 +14,7 @@ Present results as a 17-row table. Follow the detailed probes and remediation
 rules in `rn-setup`; do not infer runner provenance, helper availability, or
 auto-reconnect configuration from passive `cdp_status`.
 
-For **linked-worktree action inheritance**, resolve the RN app root and run the packaged `worktree-inheritance.js plan --host claude --app-root <app> --json`. Report `.rn-agent/actions` as tracked, inherited, missing, legacy-migration-needed, unsafe, or refused. Also report `hook status`. Never apply, repair, install a hook, print a private source path, or inspect an action body from doctor.
+For **linked-worktree action inheritance**, resolve the RN app root and run the packaged `worktree-inheritance.js plan --host claude --app-root <app> --json`. Report `.rn-agent/actions` as tracked, inherited, missing, explicit-legacy-repair-needed, unsafe, or refused. Also report `hook status`. Never apply, repair, install a hook, print a private source path, or inspect an action body from doctor.
 
 For **idb**, require both a healthy `idb --help` and `idb_companion`; an active
 install PID is INSTALLING. A client on PATH whose `idb --help` fails is BROKEN,

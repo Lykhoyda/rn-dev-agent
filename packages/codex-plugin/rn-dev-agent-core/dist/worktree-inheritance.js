@@ -4,14 +4,24 @@ import { createRequire as __rnCreateRequire } from "node:module"; const require 
 // packages/rn-dev-agent-core/dist/worktree-inheritance.js
 import { spawnSync as spawnSync2 } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, copyFileSync, existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync2, renameSync as renameSync2, rmSync as rmSync2, rmdirSync, writeFileSync } from "node:fs";
-import { dirname, join as join2, resolve as resolve2 } from "node:path";
+import { chmodSync, copyFileSync, existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync2, renameSync as renameSync2, rmSync, rmdirSync, writeFileSync } from "node:fs";
+import { dirname as dirname2, join as join2, resolve as resolve2 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // packages/rn-dev-agent-core/dist/session/worktree-inheritance.js
 import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync } from "node:fs";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { closeSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, realpathSync, renameSync, statSync, symlinkSync, unlinkSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+
+// packages/rn-dev-agent-core/dist/session/worktree-repair-remedy.js
+var WORKTREE_REPAIR_ENTRY = '"${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}/rn-dev-agent-core/dist/worktree-inheritance.js"';
+var HEADLESS_WORKTREE_REPAIR_COMMAND = `node ${WORKTREE_REPAIR_ENTRY} repair --app-root "$PWD"`;
+var LEGACY_ROOT_REPAIR_REQUIRED = "RN_AGENT_LEGACY_ROOT_REPAIR_REQUIRED";
+function legacyRootRepairRemedy(lead) {
+  return `${LEGACY_ROOT_REPAIR_REQUIRED}: ${lead} Run ${HEADLESS_WORKTREE_REPAIR_COMMAND}.`;
+}
+
+// packages/rn-dev-agent-core/dist/session/worktree-inheritance.js
 var SHAREABLE_RESOURCES = [
   {
     id: "rn-agent-actions",
@@ -393,8 +403,8 @@ function planResource(layout, resource) {
       ...base,
       regime,
       state: "LEGACY_ROOT_LINK",
-      action: "migrate",
-      remediation: "Replace the legacy whole-root link with a real local .rn-agent directory containing only the inherited actions link. Mutable integration, state, recordings, and runtime data are not copied."
+      action: "none",
+      remediation: legacyRootRepairRemedy("A legacy whole-root link was detected; startup and reconnect never mutate it.")
     };
   }
   if (destinationState === "PERMISSION_DENIED" || sourceState === "PERMISSION_DENIED") {
@@ -536,6 +546,361 @@ function sameDirectoryIdentity(path, expected) {
     return false;
   }
 }
+function pathExistsNoFollow(path) {
+  try {
+    lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function directoryIdentity(path) {
+  try {
+    const stats = lstatSync(path, { bigint: true });
+    if (stats.isSymbolicLink() || !stats.isDirectory())
+      return null;
+    return { dev: String(stats.dev), ino: String(stats.ino) };
+  } catch {
+    return null;
+  }
+}
+function sameIdentity(left, right) {
+  return Boolean(left && right && left.dev === right.dev && left.ino === right.ino);
+}
+function trackedness(worktreeRoot, relativePath) {
+  const result = spawnSync("git", ["ls-files", "--error-unmatch", "--", relativePath, `:(glob)${relativePath}/**`], {
+    cwd: worktreeRoot,
+    encoding: "utf8",
+    env: gitEnvironment(),
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+  if (result.error)
+    return "unknown";
+  if (result.status === 0)
+    return "tracked";
+  if (result.status === 1)
+    return "untracked";
+  return "unknown";
+}
+function repairReport(status, code, reason, retainedPaths = []) {
+  return { status, code, reason, retainedPaths };
+}
+function expectedLegacyRoot(layout) {
+  return layout.primaryAppRoot ? resolve(layout.primaryAppRoot, ".rn-agent") : null;
+}
+function isVerifiedLegacyRootLink(root, expected) {
+  try {
+    if (resolve(dirname(root), readlinkSync(root)) !== expected)
+      return false;
+    const resolvedExpected = canonical(expected);
+    return resolvedExpected === null || canonical(root) === resolvedExpected;
+  } catch {
+    return false;
+  }
+}
+function detectLegacyRootRepair(input) {
+  const layout = resolveWorktreeLayout(input);
+  if (!("worktreeRoot" in layout) || layout.refusal || layout.kind !== "linked") {
+    return repairReport("unchanged", "RN_AGENT_LEGACY_ROOT_REPAIR_NOT_NEEDED", "No linked-worktree legacy root repair applies.");
+  }
+  if (layout.appRoot !== layout.worktreeRoot) {
+    return repairReport("unchanged", "RN_AGENT_LEGACY_ROOT_REPAIR_NOT_NEEDED", "Explicit legacy repair is scoped to an app rooted at the current worktree.");
+  }
+  const root = join(layout.appRoot, ".rn-agent");
+  const backup = `${root}.bak`;
+  const backupPresent = pathExistsNoFollow(backup);
+  let rootStats;
+  try {
+    rootStats = lstatSync(root);
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return backupPresent ? repairReport("refused", "RN_AGENT_LEGACY_ROOT_REPAIR_REFUSED", "A .rn-agent.bak recovery directory exists without its displaced root; preserve it and inspect the partial migration explicitly.", [".rn-agent.bak"]) : repairReport("unchanged", "RN_AGENT_LEGACY_ROOT_REPAIR_NOT_NEEDED", "No .rn-agent root exists.");
+    }
+    return repairReport("refused", "RN_AGENT_LEGACY_ROOT_REPAIR_REFUSED", "The .rn-agent root could not be inspected; fix permissions before repair.", backupPresent ? [".rn-agent", ".rn-agent.bak"] : [".rn-agent"]);
+  }
+  if (!rootStats.isSymbolicLink()) {
+    if (backupPresent) {
+      return repairReport("refused", "RN_AGENT_LEGACY_ROOT_REPAIR_REFUSED", "Both a real .rn-agent root and .rn-agent.bak exist; preserve both and resolve the partial migration explicitly.", [".rn-agent", ".rn-agent.bak"]);
+    }
+    return repairReport("unchanged", "RN_AGENT_LEGACY_ROOT_REPAIR_NOT_NEEDED", "The .rn-agent root is already local state, so reconnect leaves it unchanged.");
+  }
+  const expected = expectedLegacyRoot(layout);
+  if (!expected || !isVerifiedLegacyRootLink(root, expected)) {
+    return repairReport("refused", "RN_AGENT_LEGACY_ROOT_REPAIR_REFUSED", "The .rn-agent root is not the verified primary-worktree link; preserve it and repair manually.", [".rn-agent"]);
+  }
+  if (!directoryIdentity(backup)) {
+    return repairReport("refused", "RN_AGENT_LEGACY_ROOT_REPAIR_REFUSED", "The verified legacy root has no real .rn-agent.bak recovery directory; no state was changed.", pathExistsNoFollow(backup) ? [".rn-agent", ".rn-agent.bak"] : [".rn-agent"]);
+  }
+  return repairReport("required", LEGACY_ROOT_REPAIR_REQUIRED, legacyRootRepairRemedy("The verified legacy root detached the real .rn-agent.bak integration and local state."), [".rn-agent", ".rn-agent.bak"]);
+}
+function inspectRepairActions(backup, source) {
+  const actions = join(backup, "actions");
+  const preserved = join(backup, "actions.pre-repair");
+  try {
+    const stats = lstatSync(actions);
+    if (stats.isSymbolicLink()) {
+      const lexicalTarget = resolve(join(actions, ".."), readlinkSync(actions));
+      if (lexicalTarget !== source) {
+        return repairReport("refused", "RN_AGENT_LEGACY_ROOT_REPAIR_REFUSED", "The backup actions link targets another corpus; preserve both paths and resolve it explicitly.", [".rn-agent", ".rn-agent.bak/actions"]);
+      }
+      return "shared";
+    } else if (stats.isDirectory()) {
+      const real = canonical(actions);
+      if (!real || !contained(backup, real)) {
+        return repairReport("refused", "RN_AGENT_LEGACY_ROOT_REPAIR_REFUSED", "The backup actions directory crosses the recovery boundary; no state was changed.", [".rn-agent", ".rn-agent.bak/actions"]);
+      }
+      if (pathExistsNoFollow(preserved)) {
+        return repairReport("refused", "RN_AGENT_LEGACY_ROOT_REPAIR_REFUSED", "Both actions and actions.pre-repair exist in the backup; preserve them and resolve the collision explicitly.", [".rn-agent", ".rn-agent.bak/actions", ".rn-agent.bak/actions.pre-repair"]);
+      }
+      return "local";
+    } else {
+      return repairReport("refused", "RN_AGENT_LEGACY_ROOT_REPAIR_REFUSED", "The backup actions path is neither a directory nor the verified shared link.", [".rn-agent", ".rn-agent.bak/actions"]);
+    }
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      return repairReport("refused", "RN_AGENT_LEGACY_ROOT_REPAIR_REFUSED", "The backup actions path could not be inspected; no state was changed.", [".rn-agent", ".rn-agent.bak"]);
+    }
+    return "missing";
+  }
+}
+function prepareRepairActions(backup, source, state) {
+  const actions = join(backup, "actions");
+  const preserved = join(backup, "actions.pre-repair");
+  if (state === "local") {
+    renameSync(actions, preserved);
+  }
+  if (state !== "shared") {
+    symlinkSync(source, actions, "dir");
+    return {
+      createdLink: linkIdentity(actions),
+      preserved: state === "local",
+      preservedRelative: state === "local" ? ".rn-agent/actions.pre-repair" : void 0
+    };
+  }
+  return { createdLink: null, preserved: false };
+}
+function rollbackPreparedActions(backup, source, prepared) {
+  const actions = join(backup, "actions");
+  const preserved = join(backup, "actions.pre-repair");
+  try {
+    if (prepared.createdLink) {
+      const current = linkIdentity(actions);
+      if (!sameIdentity(current, prepared.createdLink) || readlinkSync(actions) !== source) {
+        return false;
+      }
+      unlinkSync(actions);
+    }
+    if (prepared.preserved) {
+      if (pathExistsNoFollow(actions) || !directoryIdentity(preserved))
+        return false;
+      renameSync(preserved, actions);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+function performLegacyRootRepair(layout) {
+  const root = join(layout.appRoot, ".rn-agent");
+  const backup = `${root}.bak`;
+  const source = join(layout.primaryAppRoot, ".rn-agent", "actions");
+  const retained = [];
+  for (const relativePath of [
+    ".rn-agent",
+    ".rn-agent.bak",
+    ".rn-agent.bak/actions",
+    ".rn-agent.bak/actions.pre-repair"
+  ]) {
+    const ownership = trackedness(layout.worktreeRoot, relativePath);
+    if (ownership !== "untracked") {
+      return repairReport("refused", "RN_AGENT_LEGACY_ROOT_REPAIR_REFUSED", ownership === "tracked" ? `Git owns ${relativePath}; explicit repair never mutates tracked state.` : `Git ownership of ${relativePath} could not be proven; explicit repair fails closed.`, [".rn-agent", ".rn-agent.bak"]);
+    }
+  }
+  const rootIdentity = linkIdentity(root);
+  const backupIdentity = directoryIdentity(backup);
+  const expected = expectedLegacyRoot(layout);
+  if (!rootIdentity || !backupIdentity || !expected || !isVerifiedLegacyRootLink(root, expected)) {
+    return repairReport("refused", "RN_AGENT_LEGACY_ROOT_REPAIR_REFUSED", "The legacy root or backup changed before repair; no state was changed.", [".rn-agent", ".rn-agent.bak"]);
+  }
+  const rootTarget = readlinkSync(root);
+  const localIdentities = /* @__PURE__ */ new Map();
+  for (const name of ["integration", "local"]) {
+    const path = join(backup, name);
+    if (!pathExistsNoFollow(path))
+      continue;
+    const identity = directoryIdentity(path);
+    if (!identity) {
+      return repairReport("refused", "RN_AGENT_LEGACY_ROOT_REPAIR_REFUSED", `.rn-agent.bak/${name} is not a real directory; preserve it and repair that collision explicitly.`, [".rn-agent", `.rn-agent.bak/${name}`]);
+    }
+    localIdentities.set(name, identity);
+  }
+  const actionInspection = inspectRepairActions(backup, source);
+  if (typeof actionInspection !== "string")
+    return actionInspection;
+  let sourceState = classifySource(source, "directory", layout.primaryRoot);
+  let createdSource = false;
+  let createdPrimaryAgent = false;
+  if (sourceState.state === "MISSING") {
+    const primaryAgent = join(layout.primaryAppRoot, ".rn-agent");
+    for (const relativePath of [".rn-agent", ".rn-agent/actions"]) {
+      const ownership = trackedness(layout.primaryRoot, relativePath);
+      if (ownership !== "untracked") {
+        return repairReport("refused", "RN_AGENT_LEGACY_ROOT_REPAIR_REFUSED", ownership === "tracked" ? `Git owns primary:${relativePath}; explicit repair never creates a shared corpus over tracked state.` : `Git ownership of primary:${relativePath} could not be proven; explicit repair fails closed.`, [".rn-agent", ".rn-agent.bak"]);
+      }
+    }
+    const primaryIdentity = directoryIdentity(primaryAgent);
+    if (!primaryIdentity && pathExistsNoFollow(primaryAgent)) {
+      return repairReport("refused", "RN_AGENT_LEGACY_ROOT_REPAIR_REFUSED", "The verified primary .rn-agent root is not a real directory; no state was changed.", [".rn-agent", ".rn-agent.bak"]);
+    }
+    if (!primaryIdentity) {
+      mkdirSync(primaryAgent, { mode: 448 });
+      createdPrimaryAgent = true;
+    }
+    mkdirSync(source, { mode: 448 });
+    createdSource = true;
+    sourceState = classifySource(source, "directory", layout.primaryRoot);
+  }
+  if (sourceState.state !== "AVAILABLE") {
+    return repairReport("refused", "RN_AGENT_LEGACY_ROOT_REPAIR_REFUSED", "The canonical primary actions corpus is unsafe or unavailable; no local state was moved.", [
+      ".rn-agent",
+      ".rn-agent.bak",
+      ...createdPrimaryAgent ? ["primary:.rn-agent"] : [],
+      ...createdSource ? ["primary:.rn-agent/actions"] : []
+    ]);
+  }
+  let prepared = null;
+  let rootUnlinked = false;
+  let published = false;
+  try {
+    prepared = prepareRepairActions(backup, source, actionInspection);
+    if (prepared.preservedRelative)
+      retained.push(prepared.preservedRelative);
+    const actionLink = linkIdentity(join(backup, "actions"));
+    if (!actionLink || canonical(join(backup, "actions")) !== canonical(source)) {
+      throw new Error("the prepared actions link did not resolve to the canonical corpus");
+    }
+    if (!sameIdentity(linkIdentity(root), rootIdentity) || !isVerifiedLegacyRootLink(root, expected)) {
+      throw new Error("the legacy root changed while repair was preparing local state");
+    }
+    if (!sameDirectoryIdentity(backup, backupIdentity)) {
+      throw new Error("the recovery backup changed while repair was preparing local state");
+    }
+    unlinkSync(root);
+    rootUnlinked = true;
+    renameSync(backup, root);
+    published = true;
+    if (!sameDirectoryIdentity(root, backupIdentity)) {
+      throw new Error("the restored local root changed during publication");
+    }
+    if (canonical(join(root, "actions")) !== canonical(source)) {
+      throw new Error("the restored actions link did not settle on the canonical corpus");
+    }
+    const settled = planResource(layout, SHAREABLE_RESOURCES[0]);
+    if (settled.state !== "LINK_VALID_SAFE") {
+      throw new Error(settled.state === "LINK_VALID_GIT_VISIBLE" ? "the restored private root would be Git-visible" : `the restored actions layout settled as ${settled.state}`);
+    }
+    for (const [name, identity] of localIdentities) {
+      if (!sameDirectoryIdentity(join(root, name), identity)) {
+        throw new Error(`the restored ${name} directory changed during publication`);
+      }
+    }
+    return repairReport("repaired", "RN_AGENT_LEGACY_ROOT_REPAIR_COMPLETED", retained.length > 0 ? "Restored local .rn-agent state, linked only actions, and retained the prior local actions corpus at .rn-agent/actions.pre-repair." : "Restored local .rn-agent state and linked only the canonical actions corpus.", retained);
+  } catch (error) {
+    let rollbackComplete = true;
+    try {
+      if (published) {
+        if (!sameDirectoryIdentity(root, backupIdentity) || pathExistsNoFollow(backup)) {
+          rollbackComplete = false;
+        } else {
+          renameSync(root, backup);
+          published = false;
+        }
+      }
+      if (rootUnlinked && !pathExistsNoFollow(root)) {
+        symlinkSync(rootTarget, root, "dir");
+        rootUnlinked = false;
+      }
+      if (prepared && sameDirectoryIdentity(backup, backupIdentity)) {
+        rollbackComplete = rollbackPreparedActions(backup, source, prepared) && rollbackComplete;
+      } else if (prepared) {
+        rollbackComplete = false;
+      }
+    } catch {
+      rollbackComplete = false;
+    }
+    const retainedPaths = rollbackComplete ? [
+      ".rn-agent",
+      ".rn-agent.bak",
+      ...createdPrimaryAgent ? ["primary:.rn-agent"] : [],
+      ...createdSource ? ["primary:.rn-agent/actions"] : []
+    ] : [
+      ".rn-agent",
+      ".rn-agent.bak",
+      ".rn-agent/actions.pre-repair",
+      ".rn-agent.bak/actions.pre-repair",
+      ...createdPrimaryAgent ? ["primary:.rn-agent"] : [],
+      ...createdSource ? ["primary:.rn-agent/actions"] : []
+    ];
+    return repairReport("refused", "RN_AGENT_LEGACY_ROOT_REPAIR_REFUSED", `${error instanceof Error ? error.message : "legacy repair failed"}; ${rollbackComplete ? "the original names were restored" : "rollback could not prove every name, so preserve every reported path"}.`, retainedPaths);
+  }
+}
+function repairLegacyRoot(input) {
+  const detection = detectLegacyRootRepair(input);
+  if (detection.status !== "required")
+    return detection;
+  const layout = resolveWorktreeLayout(input);
+  if (!("worktreeRoot" in layout) || layout.refusal || layout.kind !== "linked") {
+    return repairReport("refused", "RN_AGENT_LEGACY_ROOT_REPAIR_REFUSED", "The linked-worktree identity changed before repair.", detection.retainedPaths);
+  }
+  const stateDir = join(layout.commonDir, "rn-dev-agent");
+  const lockPath = join(stateDir, "worktree-root-repair.lock");
+  try {
+    mkdirSync(stateDir, { recursive: true, mode: 448 });
+  } catch {
+    return repairReport("refused", "RN_AGENT_LEGACY_ROOT_REPAIR_REFUSED", "The repository repair lock directory could not be created; no project state was changed.", detection.retainedPaths);
+  }
+  const stateDirectoryIdentity = directoryIdentity(stateDir);
+  if (!stateDirectoryIdentity || canonical(stateDir) !== resolve(stateDir) || !contained(layout.commonDir, resolve(stateDir))) {
+    return repairReport("refused", "RN_AGENT_LEGACY_ROOT_REPAIR_REFUSED", "The repository repair lock directory is not a verified real directory; no project state was changed.", [...detection.retainedPaths, "git-common:rn-dev-agent"]);
+  }
+  let lockFd;
+  try {
+    lockFd = openSync(lockPath, "wx", 384);
+  } catch (error) {
+    const code = error.code;
+    return repairReport("refused", code === "EEXIST" ? "RN_AGENT_LEGACY_ROOT_REPAIR_LOCKED" : "RN_AGENT_LEGACY_ROOT_REPAIR_REFUSED", code === "EEXIST" ? "Another explicit worktree repair owns the repository lock; wait for it to finish and retry." : "The repository repair lock could not be acquired; no project state was changed.", detection.retainedPaths);
+  }
+  let lockStats;
+  try {
+    lockStats = fstatSync(lockFd, { bigint: true });
+  } catch {
+    closeSync(lockFd);
+    return repairReport("refused", "RN_AGENT_LEGACY_ROOT_REPAIR_REFUSED", "The repository repair lock identity could not be verified; preserve the lock path and retry after inspection.", [...detection.retainedPaths, "git-common:rn-dev-agent/worktree-root-repair.lock"]);
+  }
+  const lockIdentity = { dev: String(lockStats.dev), ino: String(lockStats.ino) };
+  let report;
+  try {
+    const revalidated = detectLegacyRootRepair(input);
+    report = revalidated.status === "required" ? performLegacyRootRepair(layout) : revalidated.status === "unchanged" ? revalidated : repairReport("refused", "RN_AGENT_LEGACY_ROOT_REPAIR_REFUSED", `Repair state changed while acquiring the lock: ${revalidated.reason}`, revalidated.retainedPaths);
+  } catch (error) {
+    report = repairReport("refused", "RN_AGENT_LEGACY_ROOT_REPAIR_REFUSED", `${error instanceof Error ? error.message : "Explicit repair failed"}; preserve every reported path and retry only after resolving the named boundary.`, [...detection.retainedPaths, "primary:.rn-agent", "primary:.rn-agent/actions"]);
+  } finally {
+    closeSync(lockFd);
+  }
+  try {
+    const current = lstatSync(lockPath, { bigint: true });
+    if (sameDirectoryIdentity(stateDir, stateDirectoryIdentity) && current.isFile() && String(current.dev) === lockIdentity.dev && String(current.ino) === lockIdentity.ino) {
+      unlinkSync(lockPath);
+    } else {
+      report = repairReport("refused", "RN_AGENT_LEGACY_ROOT_REPAIR_REFUSED", `${report.reason} The repository repair lock changed identity and was retained.`, [...report.retainedPaths, "git-common:rn-dev-agent/worktree-root-repair.lock"]);
+    }
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      report = repairReport("refused", "RN_AGENT_LEGACY_ROOT_REPAIR_REFUSED", `${report.reason} The repository repair lock could not be released.`, [...report.retainedPaths, "git-common:rn-dev-agent/worktree-root-repair.lock"]);
+    }
+  }
+  return report;
+}
 function applyInheritance(input) {
   const plan = planInheritance(input);
   const outcomes = [];
@@ -589,13 +954,6 @@ function applyInheritance(input) {
       });
       continue;
     }
-    if (revalidated.action === "migrate") {
-      const outcome2 = migrateLegacyRoot(source, destination, plan.layout, spec, revalidated.sourceEvidence);
-      if (outcome2.result === "repaired")
-        applied += 1;
-      outcomes.push({ ...outcome2, id: resourcePlan.id });
-      continue;
-    }
     if (revalidated.action === "repair") {
       if (!removeStaleLink(destination, revalidated.evidence)) {
         outcomes.push({
@@ -614,97 +972,6 @@ function applyInheritance(input) {
     outcomes.push({ ...outcome, id: resourcePlan.id });
   }
   return { outcomes, applied, requested: plan.resources.length, refusal: plan.refusal };
-}
-function migrateLegacyRoot(source, destination, layout, spec, sourceEvidence) {
-  const root = join(layout.appRoot, spec.parent);
-  const staged = `${root}.local.${process.pid}.${probeCounter++}`;
-  const backup = `${root}.legacy.${process.pid}.${probeCounter++}`;
-  let original = null;
-  try {
-    const sourceCheck = classifySource(source, spec.type, layout.primaryRoot);
-    if (sourceCheck.state !== "AVAILABLE" || !sameSourceEvidence(sourceCheck.evidence, sourceEvidence)) {
-      return {
-        applied: false,
-        state: "SOURCE_WRONG_TYPE",
-        result: "refused",
-        reason: "canonical source changed before migration"
-      };
-    }
-    const rootStats = lstatSync(root, { bigint: true });
-    if (!rootStats.isSymbolicLink()) {
-      return {
-        applied: false,
-        state: "COLLISION_DIRECTORY",
-        result: "refused",
-        reason: "legacy root changed before migration"
-      };
-    }
-    original = { dev: String(rootStats.dev), ino: String(rootStats.ino) };
-    const expectedRoot = layout.primaryAppRoot ? canonical(join(layout.primaryAppRoot, spec.parent)) : null;
-    if (!expectedRoot || canonical(root) !== expectedRoot) {
-      return {
-        applied: false,
-        state: "LINK_FOREIGN",
-        result: "refused",
-        reason: "legacy root no longer points to the verified primary worktree"
-      };
-    }
-    mkdirSync(staged, { mode: 448 });
-    symlinkSync(source, join(staged, spec.path.slice(`${spec.parent}/`.length)), "dir");
-    const stagedAction = join(staged, spec.path.slice(`${spec.parent}/`.length));
-    if (canonical(stagedAction) !== canonical(source)) {
-      throw new Error("staged actions link did not resolve to the canonical source");
-    }
-    const current = lstatSync(root, { bigint: true });
-    if (!current.isSymbolicLink() || String(current.dev) !== original.dev || String(current.ino) !== original.ino) {
-      throw new Error("legacy root changed during migration");
-    }
-    renameSync(root, backup);
-    try {
-      renameSync(staged, root);
-    } catch (error) {
-      renameSync(backup, root);
-      throw error;
-    }
-    const settled = planResource(layout, spec);
-    if (settled.state !== "LINK_VALID_SAFE" || !sameSourceEvidence(settled.sourceEvidence, sourceEvidence)) {
-      rmSync(root, { force: true, recursive: true });
-      renameSync(backup, root);
-      return {
-        applied: false,
-        state: settled.state,
-        result: "refused",
-        reason: "the split layout would be Git-visible; the legacy link was restored"
-      };
-    }
-    unlinkSync(backup);
-    return {
-      applied: true,
-      state: "LINK_VALID_SAFE",
-      result: "repaired",
-      reason: "legacy whole-root link migrated without copying mutable data"
-    };
-  } catch (error) {
-    try {
-      if (!existsSync(root) && existsSync(backup))
-        renameSync(backup, root);
-    } catch {
-      return {
-        applied: false,
-        state: "LEGACY_ROOT_LINK",
-        result: "refused",
-        reason: "migration failed and the legacy root could not be restored"
-      };
-    }
-    return {
-      applied: false,
-      state: "LEGACY_ROOT_LINK",
-      result: "refused",
-      reason: error instanceof Error ? error.message : "legacy migration failed"
-    };
-  } finally {
-    rmSync(staged, { force: true, recursive: true });
-  }
 }
 function removeStaleLink(destination, evidence) {
   try {
@@ -861,7 +1128,7 @@ var HOOK_STATE_DIR = "rn-dev-agent";
 var HOOK_HELPER = "worktree-inheritance.js";
 var HOOK_CONFIG = "worktree-inheritance.json";
 var LAST_RUN = "worktree-inheritance-last-run.json";
-var COMMANDS = ["plan", "report", "apply", "hook", "post-checkout"];
+var COMMANDS = ["plan", "report", "apply", "repair", "hook", "post-checkout"];
 var HOOK_SUBCOMMANDS = ["status", "install", "uninstall"];
 function parseFlags(argv) {
   try {
@@ -1153,13 +1420,13 @@ function writeHookBody(paths, body, status, ownedSha) {
     writeFileSync(staged, body, { flag: "wx", mode: 493 });
     chmodSync(staged, 493);
     if (sha256(readFileSync2(paths.hook, "utf8")) !== ownedSha) {
-      rmSync2(staged, { force: true });
+      rmSync(staged, { force: true });
       return false;
     }
     renameSync2(staged, paths.hook);
     return true;
   } catch {
-    rmSync2(staged, { force: true });
+    rmSync(staged, { force: true });
     return false;
   }
 }
@@ -1200,7 +1467,7 @@ function installHook(flags) {
   const stagedConfig = `${paths.config}.${process.pid}.tmp`;
   copyFileSync(selfPath(), stagedHelper);
   if (!helperRuns(stagedHelper, flags.cwd)) {
-    rmSync2(stagedHelper, { force: true });
+    rmSync(stagedHelper, { force: true });
     console.error("refused: the packaged helper copy is not self-contained; install from the host plugin package.");
     return 3;
   }
@@ -1242,9 +1509,9 @@ function uninstallHook(flags) {
     console.error("refused: the post-checkout hook changed during removal; nothing was deleted.");
     return 3;
   }
-  rmSync2(paths.hook, { force: true });
+  rmSync(paths.hook, { force: true });
   for (const owned of [paths.helper, paths.config, join2(paths.stateDir, LAST_RUN)]) {
-    rmSync2(owned, { force: true });
+    rmSync(owned, { force: true });
   }
   try {
     rmdirSync(paths.stateDir);
@@ -1286,7 +1553,7 @@ function runPostCheckout(flags) {
   const appPresent = existsSync2(appRoot);
   const resources = appPresent ? config.resources : [];
   if (resources.length === 0) {
-    recordLastRun(dirname(flags.config), {
+    recordLastRun(dirname2(flags.config), {
       appRelative: config.appRelative,
       refusal: "PRIMARY_APP_MISSING",
       outcomes: []
@@ -1300,7 +1567,7 @@ function runPostCheckout(flags) {
     resources
   });
   const failed = report.refusal !== void 0 || report.outcomes.some((o) => o.result === "refused");
-  recordLastRun(dirname(flags.config), {
+  recordLastRun(dirname2(flags.config), {
     appRelative: config.appRelative,
     refusal: report.refusal,
     outcomes: report.outcomes.map((outcome) => ({
@@ -1337,6 +1604,17 @@ function main() {
   }
   if (flags.command === "post-checkout")
     return runPostCheckout(flags);
+  if (flags.command === "repair") {
+    const report = repairLegacyRoot({ cwd: flags.cwd, appRoot: flags.appRoot });
+    if (flags.json) {
+      console.log(JSON.stringify(report, null, 2));
+    } else {
+      console.log(`${report.code}: ${report.reason}`);
+      for (const path of report.retainedPaths)
+        console.log(`  retained: ${path}`);
+    }
+    return report.status === "refused" ? 3 : 0;
+  }
   if (flags.command === "apply") {
     const report = applyInheritance({
       cwd: flags.cwd,
