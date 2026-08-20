@@ -98,9 +98,7 @@ function manifestAssets(manifest) {
 // is then skipped) leaves both manifests equal while the release serves bytes the
 // client verifies against a digest they no longer have — and it silently falls
 // back to a local build. Missing assets are left to the build check; only an
-// asset that IS there and disagrees counts as drift. Re-hashing a drifted zip
-// would make the trust root vouch for bytes this workflow never built, so drift
-// stops publication instead of being adopted.
+// asset that IS there and disagrees counts as drift.
 function driftedAsset(manifest, byName) {
   for (const entry of manifestAssets(manifest)) {
     if (!entry || typeof entry.name !== 'string') continue;
@@ -151,32 +149,35 @@ export function decideRunnerPublication(input) {
   }
   const expected = expectedRunnerAssets(version);
   const byName = indexReleaseAssets(input.releaseAssets);
-  const buildRunners = forced || !(byName.has(expected.ios) && byName.has(expected.android));
+  const missingZip = !(byName.has(expected.ios) && byName.has(expected.android));
 
   const repo = parseManifest(input.repoManifest);
   const published = parseManifest(input.publishedManifest);
-  // Drift only has to be refused when nothing in this run rebuilds the zips: a
-  // missing zip (or a forced run) rebuilds BOTH from source, so the manifest
-  // that follows describes bytes this workflow just produced. Otherwise the only
-  // way to make the release and the trust root agree is to re-hash whatever is
-  // being served, which turns the client's rejection of substituted bytes into
-  // an auto-generated PR that blesses them.
-  const drifted = repo === null || buildRunners ? null : driftedAsset(repo, byName);
-  if (drifted !== null) {
-    throw new Error(
-      `release v${version} no longer serves the ${drifted} that runner-manifest.json describes. ` +
-        'Re-hashing it would make the trust root vouch for bytes this workflow did not build. ' +
-        `If a build job re-uploaded a zip while its sibling failed, re-run with force_version=${version} ` +
-        'to rebuild both from source; otherwise the release assets were changed outside this ' +
-        'workflow and need investigating before the trust root moves.',
-    );
-  }
+  // Drift is measured against the manifest asset ON the release, because that is
+  // this workflow's own record of the bytes it last published and it is rewritten
+  // every time publication runs. The in-repo manifest only stands in when the
+  // release carries no manifest asset: while a trust-root PR waits for a
+  // maintainer it still describes an OLDER version, so its asset names match
+  // nothing on this release and it can prove nothing about what is served — which
+  // is precisely the post-release window an attacker would use. Measuring against
+  // the freshest attestation is also what makes a rebuild converge: the run that
+  // repairs drift republishes the asset, so the next sweep sees agreement.
+  const attested = published ?? repo;
+  const drifted = attested === null ? null : driftedAsset(attested, byName);
+  // Drift is repaired by rebuilding BOTH zips from source, never by re-hashing
+  // what is being served: the trust root may only ever vouch for bytes this
+  // workflow produced.
+  const buildRunners = forced || missingZip || drifted !== null;
 
   let publishManifest = true;
   let reason;
   if (forced) {
     reason = `forced republication of v${version}`;
-  } else if (buildRunners) {
+  } else if (drifted !== null) {
+    reason =
+      `release v${version} serves a ${drifted} this workflow did not publish — ` +
+      'rebuilding both runners from source rather than trusting it';
+  } else if (missingZip) {
     reason = `release v${version} is missing a runner zip`;
   } else if (repo === null) {
     reason = 'the in-repo runner-manifest.json is missing or unparseable';

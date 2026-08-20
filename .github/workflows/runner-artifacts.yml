@@ -17,11 +17,13 @@ name: Runner artifacts
 # stayed pinned to v0.75.2 through v0.76.7. Checking (2) makes the sweep
 # genuinely self-healing: a manifest that never landed is re-detected and
 # re-delivered on the next run.
-# A release serving zips that no longer match the trust root, with nothing in the
-# run rebuilding them, STOPS publication rather than re-hashing what is served:
-# adopting those bytes would turn the client's rejection of a substituted archive
-# into a routine-looking PR that blesses it. Recovery is force_version, which
-# rebuilds both zips from source.
+# A release serving a zip this workflow did not publish is REBUILT from source
+# rather than re-hashed: adopting those bytes would turn the client's rejection of
+# a substituted archive into a routine-looking PR that blesses it. Drift is judged
+# against the manifest ASSET on the release — the workflow's own record of what it
+# last published, refreshed on every publication — because the in-repo manifest
+# still names an older version while a trust-root PR waits, which is exactly the
+# window that needs covering.
 #
 # The trust root reaches main through the SAME protected-branch path releases
 # use — a branch, a pull request, required checks, a gated merge. It is never
