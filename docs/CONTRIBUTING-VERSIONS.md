@@ -125,11 +125,15 @@ before unzipping it, and `acquireArtifact` falls back to provenance
 attestation of the published binaries is deliberately deferred to separate,
 authorized work.
 
-One thing the workflow does guarantee: a trust root `main` has already
-approved is never rewritten from downloaded bytes. When a run rebuilt
-nothing and the in-repo manifest already targets this version, that
-manifest is republished to the release verbatim rather than regenerated
-from whatever the release is serving.
+One narrower thing the workflow does guarantee: when a run rebuilt
+nothing, cut its manifest branch fresh from `main`, and found `main`'s
+manifest already targeting this version, that manifest is republished to
+the release verbatim rather than regenerated from whatever the release is
+serving. The "cut fresh from `main`" part is load-bearing —
+`chore/runner-manifest-v<version>` is workflow-owned but not protected, so
+on a *reused* branch the working tree is branch content, not `main`'s, and
+the manifest is always recomputed instead. Branch content therefore never
+reaches the release asset or the pull request unexamined.
 
 A release lookup that fails for any reason other than a genuine 404 fails
 the run rather than being read as "nothing is published", which would

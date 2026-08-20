@@ -341,12 +341,17 @@ jobs:
       - name: Generate the manifest (sha256 + bytes)
         env:
           BUILT: ${{ needs.detect.outputs.build }}
+          BRANCH_EXISTED: ${{ steps.branch.outputs.existed }}
         run: |
-          # Downloaded bytes may only BECOME the trust root when main has nothing
-          # to say about this version, or when this run rebuilt them from source.
-          # A trust root main already vouches for is republished verbatim, so no
-          # release asset can rewrite it by being downloaded and re-hashed.
-          if [ "$BUILT" != true ] \
+          # Republishing the trust root verbatim instead of re-deriving it from
+          # downloaded zips is only sound while the working tree is main's own:
+          # the branch step cuts a NEW branch from main, but a REUSED one carries
+          # whatever was pushed to it, and that branch is unprotected — the reuse
+          # allowlist admits any diff confined to the three manifest paths, which
+          # cannot distinguish this workflow's commit from anyone else's. On a
+          # reused branch the manifest is therefore always recomputed, so branch
+          # content can never reach the release asset or the PR unexamined.
+          if [ "$BUILT" != true ] && [ "$BRANCH_EXISTED" != true ] \
              && [ "$(jq -r '.version // empty' runner-manifest.json 2>/dev/null)" = "$VERSION" ]; then
             echo "runner-manifest.json already vouches for v$VERSION and nothing was rebuilt — republishing it verbatim"
           else
@@ -395,8 +400,8 @@ jobs:
           # know it authoritatively; origin is never re-asked, because a failed
           # query would otherwise read as "no branch" and finish this job green
           # with the trust root pushed but undelivered.
-          case "$BRANCH_EXISTED:$PUSHED:$AHEAD" in
-            true:true:* | true:false:* | false:true:* | false:false:*) ;;
+          case "$BRANCH_EXISTED:$PUSHED" in
+            true:true | true:false | false:true | false:false) ;;
             *)
               echo "::error::manifest branch state was not reported (existed='$BRANCH_EXISTED' pushed='$PUSHED')" >&2
               exit 1

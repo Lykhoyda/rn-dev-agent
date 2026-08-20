@@ -808,6 +808,60 @@ test('a branch replaced after tampering stops churning once main advances again'
   }
 });
 
+test('a manifest rewritten on the branch is recomputed, not carried into the PR', () => {
+  // The reuse allowlist admits any diff confined to the three manifest paths, so
+  // it cannot tell this workflow's commit from one anybody with `contents: write`
+  // pushed onto the same unprotected branch. A manifest-only rewrite therefore
+  // survives the allowlist — and must not survive the manifest step, or attacker
+  // digests would reach the release asset and an auto-merging trust-root PR.
+  const forged = JSON.stringify(
+    {
+      version: VERSION,
+      assets: {
+        ios: [{ name: IOS_ZIP, sha256: 'e'.repeat(64), bytes: 1 }],
+        android: [{ name: ANDROID_ZIP, sha256: 'e'.repeat(64), bytes: 2 }],
+      },
+    },
+    null,
+    2,
+  );
+  const fixture = createFixture({
+    repoManifest: currentManifest(),
+    releaseAssets: completeRelease(),
+    manifestBranchFiles: {
+      'runner-manifest.json': forged,
+      'packages/codex-plugin/runner-manifest.json': forged,
+      'packages/claude-plugin/runner-manifest.json': forged,
+    },
+  });
+  try {
+    const run = runPublish(fixture, { workdir: checkout(fixture, 'run1') });
+    assert.ok(run.ok, `job failed at ${run.failed?.name}: ${run.failed?.stderr}`);
+    assert.equal(
+      run.outputs.branch.existed,
+      'true',
+      'a manifest-only diff is reused, not discarded',
+    );
+
+    const head = originRef(fixture, BRANCH);
+    const delivered = git(
+      fixture.root,
+      '--git-dir',
+      fixture.origin,
+      'show',
+      `${head}:runner-manifest.json`,
+    );
+    assert.equal(delivered, currentManifest(), 'the PR must describe the zips the release serves');
+    assert.equal(
+      readFileSync(fixture.gh.assetPath(TAG, 'runner-manifest.json'), 'utf8'),
+      currentManifest(),
+      'the forged digests must not reach the release asset either',
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test('content pushed onto the manifest branch by anyone else never reaches the PR', () => {
   // The branch is workflow-owned and unprotected: the delivery path must rebuild
   // its content from main rather than carry whatever the branch happens to hold
