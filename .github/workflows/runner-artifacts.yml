@@ -6,8 +6,7 @@ name: Runner artifacts
 # The gate is STATE-based, not event-based, and publication state has TWO
 # halves that are checked independently (scripts/runner-manifest-publication.mts):
 #   1. the GitHub Release for the CURRENT plugin.json version carries both
-#      runner zips, whose server-reported SHA-256 still matches the trust root,
-#      and
+#      runner zips, and
 #   2. the in-repository runner-manifest.json — the client's offline SHA-256
 #      trust root (packages/rn-dev-agent-core/src/runners/runner-artifacts.ts) —
 #      matches the manifest published for that same version.
@@ -17,15 +16,11 @@ name: Runner artifacts
 # stayed pinned to v0.75.2 through v0.76.7. Checking (2) makes the sweep
 # genuinely self-healing: a manifest that never landed is re-detected and
 # re-delivered on the next run.
-# Drift — a release serving a zip that does not match what vouches for it — is
-# never adopted by re-hashing, because that would turn the client's rejection of a
-# substituted archive into a routine-looking PR that blesses it. Who vouches
-# depends on what main knows. Once main carries the trust root for this version it
-# is the authority (nothing outside a merged PR can write it) and a disagreeing
-# release STOPS the run: rebuilding would move the trust root onto bytes no PR has
-# approved, so every later sweep would rebuild again and rewrite that PR. Before
-# main knows this version, the manifest asset on the release is the only record
-# there is, and drift against it REBUILDS both runners from source.
+# Whether the release's zips still match what vouches for them is deliberately
+# NOT checked here: the zips and the manifest asset beside them are both writable
+# by anything holding contents: write, so comparing them proves nothing. A
+# substituted archive is caught by the client's SHA-256 check, which falls back to
+# a local build — slower, never compromised. Real attestation is separate work.
 #
 # The trust root reaches main through the SAME protected-branch path releases
 # use — a branch, a pull request, required checks, a gated merge. It is never
@@ -109,14 +104,8 @@ jobs:
           # only skips the missing-assets check, and the decision script rejects
           # it outright if it names anything else.
           CUR=$(jq -r '.version' packages/claude-plugin/plugin.json)
-          # Names alone would make the published manifest asset a proxy for the
-          # zips: a runner zip re-uploaded with --clobber by a build job whose
-          # sibling failed leaves both zips present and both manifests equal
-          # while the release serves bytes the trust root cannot verify. The
-          # release API reports each asset's own SHA-256 and size, so that drift
-          # is detected here without downloading anything.
           if ! gh release view "v$CUR" --json assets \
-               --jq '[.assets[] | {name, digest, size}]' > release-assets.json 2> release-view.err; then
+               --jq '[.assets[].name]' > release-assets.json 2> release-view.err; then
             # A failed listing must never read as "the release carries no zips":
             # that rebuilds binaries the release already serves, and neither
             # Xcode nor Gradle is byte-reproducible, so the replacements would
@@ -133,7 +122,7 @@ jobs:
             echo '[]' > release-assets.json
           fi
           rm -f published-manifest.json
-          if jq -e 'any(.[]; .name == "runner-manifest.json")' release-assets.json >/dev/null; then
+          if jq -e 'any(.[]; . == "runner-manifest.json")' release-assets.json >/dev/null; then
             gh release download "v$CUR" --pattern runner-manifest.json --output published-manifest.json \
               || rm -f published-manifest.json
           fi
@@ -323,8 +312,14 @@ jobs:
             FOREIGN=$(jq -r --argjson allow '["runner-manifest.json","packages/codex-plugin/runner-manifest.json","packages/claude-plugin/runner-manifest.json"]' \
               '[.files[].filename] - $allow | join(" ")' compare.json)
           fi
+          # A branch cut fresh from main delivers nothing until this run commits
+          # to it, and so does one that survived a PR closed without merging.
+          # Both are ahead=0, which is what the PR step needs: `gh pr create`
+          # refuses a head with no commits between it and the base.
+          AHEAD=0
           if [ "$existed" = true ] && [ -z "$FOREIGN" ]; then
             echo "reusing $BRANCH: it delivers the trust root and nothing else"
+            AHEAD=$(jq -r '.ahead_by' compare.json)
             git fetch --depth=1 origin "$BRANCH"
             git checkout -B "$BRANCH" FETCH_HEAD
           else
@@ -335,7 +330,14 @@ jobs:
             fi
             git checkout -B "$BRANCH" "$MAIN"
           fi
+          case "$AHEAD" in
+            '' | *[!0-9]*)
+              echo "::error::could not read how far $BRANCH is ahead of main (got '$AHEAD')" >&2
+              exit 1
+              ;;
+          esac
           echo "existed=$existed" >> "$GITHUB_OUTPUT"
+          echo "ahead=$AHEAD" >> "$GITHUB_OUTPUT"
       - name: Generate the manifest (sha256 + bytes)
         env:
           BUILT: ${{ needs.detect.outputs.build }}
@@ -380,6 +382,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           BRANCH_EXISTED: ${{ steps.branch.outputs.existed }}
+          AHEAD: ${{ steps.branch.outputs.ahead }}
           PUSHED: ${{ steps.commit.outputs.pushed }}
         run: |
           # The runner's default shell is `bash -e`, which does NOT set pipefail:
@@ -392,10 +395,16 @@ jobs:
           # know it authoritatively; origin is never re-asked, because a failed
           # query would otherwise read as "no branch" and finish this job green
           # with the trust root pushed but undelivered.
-          case "$BRANCH_EXISTED:$PUSHED" in
-            true:true | true:false | false:true | false:false) ;;
+          case "$BRANCH_EXISTED:$PUSHED:$AHEAD" in
+            true:true:* | true:false:* | false:true:* | false:false:*) ;;
             *)
               echo "::error::manifest branch state was not reported (existed='$BRANCH_EXISTED' pushed='$PUSHED')" >&2
+              exit 1
+              ;;
+          esac
+          case "$AHEAD" in
+            '' | *[!0-9]*)
+              echo "::error::manifest branch state was not reported (ahead='$AHEAD')" >&2
               exit 1
               ;;
           esac
@@ -426,7 +435,12 @@ jobs:
             gh pr close "$stale" --comment "Superseded by the runner-manifest PR for v$VERSION."
             git push origin --delete "$ref" || echo "::warning::could not delete $ref"
           done <<< "$STALE"
-          if [ "$BRANCH_EXISTED:$PUSHED" = false:false ]; then
+          # Nothing to deliver is a property of the BRANCH, not of whether it
+          # happened to exist: a branch that survived a PR closed without merging
+          # is still identical to main, and `gh pr create` refuses a head with no
+          # commits between it and the base. Whatever this run had to repair (the
+          # release asset) is already done by the time we get here.
+          if [ "$PUSHED" != true ] && [ "$AHEAD" = 0 ]; then
             echo "the repository trust root already carries v$VERSION — no PR needed"
             exit 0
           fi

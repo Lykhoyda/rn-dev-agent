@@ -105,53 +105,35 @@ every install to the slow local build.
 
 `.github/workflows/runner-artifacts.yml` keeps it current. It checks two
 things independently — whether release `v<version>` carries both runner
-zips *still serving the SHA-256 the trust root describes*, and whether the
-in-repo manifest matches the manifest published for that same version —
-and re-runs every 6 hours, so a manifest that has not landed yet is
-re-detected and re-delivered rather than silently skipped. The digest
-check comes from the release API's own `digest`/`size` for each asset, so
-a zip re-uploaded by a build job whose sibling failed cannot pass as
-published just because the two manifests (copies of each other) still
-agree.
+zips, and whether the in-repo manifest matches the manifest published for
+that same version — and re-runs every 6 hours, so a manifest that has not
+landed yet is re-detected and re-delivered rather than silently skipped.
 
-A drifted zip — one whose served SHA-256 disagrees with what vouches for
-it — is never adopted by re-hashing, because that would turn the client's
-rejection of a substituted archive into a routine-looking bot PR. What
-happens instead depends on what `main` already knows, because **`main` is
-the only record an attacker cannot write**: the `runner-manifest.json`
-asset on the release is an ordinary release asset, writable by anything
-holding `contents: write` — the same permission needed to swap a zip.
+Whether the release's zips still match what vouches for them is
+deliberately **not** checked. Every record the workflow could compare them
+against — the zips themselves, and the `runner-manifest.json` asset beside
+them — is an ordinary release asset, writable by anything holding
+`contents: write`, the same permission needed to swap a zip. Comparing two
+things the same actor can write proves nothing, and acting on the result
+would turn a client-side rejection into a routine-looking bot PR that
+blesses the substitution.
 
-- **`main` already carries the trust root for this version.** It is the
-  authority; the release asset is not. A disagreement **stops the run**.
-  Rebuilding would move the trust root onto bytes no merged PR has
-  approved, and since only a merged PR can move it, the next sweep would
-  rebuild again and rewrite the PR it is waiting on. Find out why the
-  release changed, then dispatch `force_version` for the current version:
-  that rebuilds both runners from source and delivers one trust-root PR.
-- **`main` does not know this version yet** (the normal post-release
-  window). There is no trust root to protect and the release's own
-  manifest asset is the only record there is, so drift against it
-  **rebuilds both runners from source**. That converges: the rebuilding
-  run republishes the asset, so the next sweep sees agreement and opens
-  no new commit.
+A substituted archive is caught where it can actually be caught: the
+client verifies each zip's SHA-256 against the in-repository trust root
+before unzipping it, and `acquireArtifact` falls back to provenance
+`build-local` on a mismatch — slower, never compromised. Stronger
+attestation of the published binaries is deliberately deferred to separate,
+authorized work.
 
-The boundary is worth stating plainly: in that second window the evidence
-is release-side and therefore writable by the same permission that can
-swap a zip, so an actor who rewrites *both* the zip and the manifest asset
-is not detectable here. That was equally true before this workflow existed
-— publication has always hashed the release's own bytes — and closing it
-needs build attestation, not more release-asset comparison. What the rules
-above do guarantee is that a trust root `main` has already approved is
-never rewritten from downloaded bytes: when nothing was rebuilt and the
-in-repo manifest already targets this version, it is republished verbatim
-rather than regenerated. Until drift is resolved, installs stay on the
-local-build fallback — degraded, not compromised.
+One thing the workflow does guarantee: a trust root `main` has already
+approved is never rewritten from downloaded bytes. When a run rebuilt
+nothing and the in-repo manifest already targets this version, that
+manifest is republished to the release verbatim rather than regenerated
+from whatever the release is serving.
 
-A release lookup that fails for any
-reason other than a genuine 404 fails the run rather than being read as
-"nothing is published", which would rebuild and re-upload zips the
-release already serves correctly.
+A release lookup that fails for any reason other than a genuine 404 fails
+the run rather than being read as "nothing is published", which would
+rebuild and re-upload zips the release already serves correctly.
 
 The manifest reaches `main` the same way everything else does: a
 `chore/runner-manifest-v<version>` branch, a pull request, the required

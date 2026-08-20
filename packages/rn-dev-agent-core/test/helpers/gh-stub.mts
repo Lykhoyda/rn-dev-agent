@@ -10,7 +10,6 @@
 //   GH_STUB_LIST_HEAD_BLIND  `gh pr list --head` answers empty (replica lag)
 
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import {
   appendFileSync,
   copyFileSync,
@@ -126,15 +125,8 @@ function reconcileDeletedBranches() {
   if (changed) writeState(state);
 }
 
-function releaseAssetRecords(tag, release) {
-  return Object.keys(release.assets).map((name) => {
-    const bytes = readFileSync(assetPath(tag, name));
-    return {
-      name,
-      size: bytes.length,
-      digest: `sha256:${createHash('sha256').update(bytes).digest('hex')}`,
-    };
-  });
+function releaseAssetRecords(release) {
+  return Object.keys(release.assets).map((name) => ({ name }));
 }
 
 if (group === 'release' && sub === 'view') {
@@ -143,9 +135,7 @@ if (group === 'release' && sub === 'view') {
   // gh(1)'s own wording for an absent release, so a caller cannot tell the
   // stub's 404 apart from the real one by its message.
   if (!release) die('release not found');
-  // The release API reports each asset's server-side SHA-256 and byte count, so
-  // the double derives both from the stored bytes rather than echoing names.
-  if (has('--json')) emit({ assets: releaseAssetRecords(tag, release) });
+  if (has('--json')) emit({ assets: releaseAssetRecords(release) });
   else process.stdout.write(`${tag}\n`);
 } else if (group === 'release' && sub === 'create') {
   const tag = positional[2];
@@ -227,7 +217,7 @@ if (group === 'release' && sub === 'view') {
       );
       die('gh: Not Found (HTTP 404)');
     }
-    emit({ tag_name: tag, assets: releaseAssetRecords(tag, release) });
+    emit({ tag_name: tag, assets: releaseAssetRecords(release) });
   } else if (/^repos\/[^/]+\/[^/]+\/compare\/.+\.\.\..+$/.test(path)) {
     // Answered from the fixture's real repository, so ahead_by/behind_by/files
     // carry the same merge-base semantics the compare endpoint does.
@@ -268,8 +258,22 @@ if (group === 'release' && sub === 'view') {
   emit(project(matches.slice(0, Number(flag('--limit') ?? 30)), flag('--json')));
 } else if (group === 'pr' && sub === 'create') {
   const head = flag('--head');
+  const base = flag('--base');
   const existing = state.prs.find((pr) => pr.headRefName === head && pr.state === 'OPEN');
   if (existing) die(`a pull request for branch "${head}" already exists: #${existing.number}`);
+  // GitHub refuses a head that is not ahead of its base, which a branch left
+  // behind by a PR closed without merging always is.
+  const prGitDir = process.env.GH_STUB_GIT_DIR;
+  if (prGitDir && base) {
+    const ahead = spawnSync(
+      'git',
+      ['--git-dir', prGitDir, 'rev-list', '--count', `${base}..${head}`],
+      { encoding: 'utf8' },
+    );
+    if (ahead.status === 0 && Number(ahead.stdout.trim()) === 0) {
+      die(`GraphQL: No commits between ${base} and ${head} (createPullRequest)`);
+    }
+  }
   const number = state.nextPr++;
   state.prs.push({
     number,

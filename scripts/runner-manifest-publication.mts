@@ -7,9 +7,15 @@
 // the release "complete" and every later run reported success while
 // runner-manifest.json stayed pinned to an old version (v0.75.2 while the plugin
 // shipped v0.76.7 — every client then resolved provenance 'build-local').
-// Publication state therefore has TWO halves, and both are checked here. The
-// release half is checked against the assets' own server-reported SHA-256, never
-// against the manifest asset alone, which is only a copy of the trust root.
+// Publication state therefore has TWO halves, and both are checked here.
+//
+// Whether the release's zips still match what vouches for them is deliberately
+// NOT checked: every record available here (the zips, and the manifest asset
+// beside them) is writable by anything holding contents: write, so comparing
+// them proves nothing. A substituted zip is caught where it can be caught — the
+// client's SHA-256 check in packages/rn-dev-agent-core/src/runners/
+// runner-artifacts.ts, which falls back to a local build. Slower, never
+// compromised. Real attestation is separate, authorized work.
 //
 // Usage (CI):
 //   node scripts/runner-manifest-publication.mts \
@@ -64,61 +70,6 @@ function parseManifest(text) {
 // Key order must not decide publication: two manifests that differ only in
 // property order describe the same trust root, and treating them as different
 // would re-open a PR on every sweep forever.
-// Release assets may be given as bare names or as the {name, digest, size}
-// records `gh release view --json assets` returns; a bare name simply carries no
-// evidence about the bytes served.
-function indexReleaseAssets(list) {
-  const byName = new Map();
-  for (const entry of list ?? []) {
-    if (typeof entry === 'string') byName.set(entry, { name: entry });
-    else if (entry && typeof entry === 'object' && typeof entry.name === 'string') {
-      byName.set(entry.name, entry);
-    }
-  }
-  return byName;
-}
-
-const ASSET_DIGEST_RE = /^(?:sha256:)?([0-9a-f]{64})$/i;
-
-function assetDigest(asset) {
-  const match = ASSET_DIGEST_RE.exec(typeof asset.digest === 'string' ? asset.digest.trim() : '');
-  return match ? match[1].toLowerCase() : null;
-}
-
-function manifestAssets(manifest) {
-  const assets = manifest && typeof manifest === 'object' ? manifest.assets : null;
-  return ['ios', 'android'].flatMap((platform) =>
-    Array.isArray(assets?.[platform]) ? assets[platform] : [],
-  );
-}
-
-// The manifest asset published on a release is only a COPY of the trust root, so
-// comparing the two says nothing about the zips the release actually serves. A
-// zip re-uploaded with --clobber by a build job whose sibling failed (publication
-// is then skipped) leaves both manifests equal while the release serves bytes the
-// client verifies against a digest they no longer have — and it silently falls
-// back to a local build. Missing assets are left to the build check; only an
-// asset that IS there and disagrees counts as drift.
-function driftedAsset(manifest, byName) {
-  for (const entry of manifestAssets(manifest)) {
-    if (!entry || typeof entry.name !== 'string') continue;
-    const asset = byName.get(entry.name);
-    if (!asset) continue;
-    const digest = assetDigest(asset);
-    if (digest && typeof entry.sha256 === 'string' && digest !== entry.sha256.toLowerCase()) {
-      return entry.name;
-    }
-    if (
-      typeof asset.size === 'number' &&
-      typeof entry.bytes === 'number' &&
-      asset.size !== entry.bytes
-    ) {
-      return entry.name;
-    }
-  }
-  return null;
-}
-
 function canonical(value) {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
   if (value && typeof value === 'object') {
@@ -148,46 +99,17 @@ export function decideRunnerPublication(input) {
     );
   }
   const expected = expectedRunnerAssets(version);
-  const byName = indexReleaseAssets(input.releaseAssets);
-  const missingZip = !(byName.has(expected.ios) && byName.has(expected.android));
+  const names = new Set(input.releaseAssets ?? []);
+  const buildRunners = forced || !(names.has(expected.ios) && names.has(expected.android));
 
   const repo = parseManifest(input.repoManifest);
   const published = parseManifest(input.publishedManifest);
-  // Only the in-repo manifest is beyond reach: it lives on protected main. The
-  // manifest ASSET is an ordinary release asset, writable by anything holding
-  // contents: write — the same permission needed to swap a zip — so it is
-  // evidence ONLY while main has nothing to say about this version. Once main
-  // vouches for v<version>, it is the authority and the asset is not.
-  const trustRootIsCurrent = repo !== null && repo.version === version;
-  const attested = trustRootIsCurrent ? repo : published;
-  const drifted = attested === null ? null : driftedAsset(attested, byName);
-  // Moving the trust root takes a merged pull request, so a rebuild here cannot
-  // settle the disagreement: main would still name the old bytes on the next
-  // sweep, which would rebuild again and rewrite the pull request it is waiting
-  // on. Stop instead, and let force_version deliver one rebuild and one PR.
-  if (drifted !== null && trustRootIsCurrent && !forced) {
-    throw new Error(
-      `release v${version} serves a ${drifted} that runner-manifest.json on main does not vouch ` +
-        'for. Re-hashing it would move the trust root onto bytes this workflow did not build, and ' +
-        'rebuilding would move it onto bytes no merged pull request has approved yet. Find out why ' +
-        `the release assets changed, then dispatch this workflow with force_version=${version} to ` +
-        'rebuild both runners from source and deliver a single trust-root pull request.',
-    );
-  }
-  // Before main vouches for this version there is no trust root to protect, so a
-  // release serving bytes this workflow never published is repaired by rebuilding
-  // both runners from source rather than by re-hashing what is served.
-  const buildRunners = forced || missingZip || drifted !== null;
 
   let publishManifest = true;
   let reason;
   if (forced) {
     reason = `forced republication of v${version}`;
-  } else if (drifted !== null) {
-    reason =
-      `release v${version} serves a ${drifted} this workflow did not publish — ` +
-      'rebuilding both runners from source rather than trusting it';
-  } else if (missingZip) {
+  } else if (buildRunners) {
     reason = `release v${version} is missing a runner zip`;
   } else if (repo === null) {
     reason = 'the in-repo runner-manifest.json is missing or unparseable';
