@@ -108,6 +108,60 @@ appId: com.example.testapp
 `,
   );
 
+  // GH #790 — key present, value empty. Must not be treated as omitted.
+  writeFileSync(
+    join(actionsDir, 'empty-mutates-flow.yaml'),
+    `# id: empty-mutates-flow
+# intent: Flow whose mutates field is present but empty
+# tags: [auth]
+# mutates:
+# status: active
+# produces: { loggedIn: true }
+appId: com.example.testapp
+---
+- launchApp
+`,
+  );
+
+  writeFileSync(
+    join(actionsDir, 'empty-produces-value-flow.yaml'),
+    `# id: empty-produces-value-flow
+# intent: Flow whose produces field is present but empty
+# mutates: false
+# status: active
+# produces:
+appId: com.example.testapp
+---
+- launchApp
+`,
+  );
+
+  writeFileSync(
+    join(actionsDir, 'empty-tags-value-flow.yaml'),
+    `# id: empty-tags-value-flow
+# intent: Flow whose tags field is present but empty
+# tags:
+# mutates: false
+# status: active
+appId: com.example.testapp
+---
+- launchApp
+`,
+  );
+
+  writeFileSync(
+    join(actionsDir, 'empty-string-fields-flow.yaml'),
+    `# id:
+# intent:
+# tags: [auth]
+# mutates: false
+# status:
+appId: com.example.testapp
+---
+- launchApp
+`,
+  );
+
   return dir;
 }
 
@@ -202,7 +256,12 @@ test('#525 JSON output distinguishes pre-M7 absence from parse failure', () => {
     const parsed = JSON.parse(out) as {
       sections: {
         flows: {
-          items: Array<{ flow: string; metaFormat?: string; metaInvalid?: string[] }>;
+          items: Array<{
+            flow: string;
+            metaFormat?: string;
+            metaInvalid?: string[];
+            produces?: Record<string, string | number | boolean> | null;
+          }>;
         };
       };
     };
@@ -214,6 +273,100 @@ test('#525 JSON output distinguishes pre-M7 absence from parse failure', () => {
     assert.deepEqual(byFlow['empty-produces-flow'].metaInvalid ?? [], []);
     assert.deepEqual(byFlow['empty-produces-flow'].produces, {});
     assert.equal((byFlow['valid-flow'].metaInvalid ?? []).length, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('#790 empty mutates value renders "?" and reports metaInvalid, not omitted', () => {
+  const dir = makeFixture();
+  try {
+    const table = run(['--section', 'b'], dir);
+    const cells = rowFor(table, 'empty-mutates-flow');
+    assert.equal(cells[4], '?', `empty # mutates: must render "?", got ${cells[4]}`);
+    assert.equal(cells[5], 'active');
+    assert.equal(cells[6], 'auth');
+    assert.equal(cells[7], 'loggedIn=true');
+
+    const jsonOut = run(['--section', 'b', '--json'], dir);
+    const parsed = JSON.parse(jsonOut) as {
+      sections: {
+        flows: {
+          items: Array<{ flow: string; metaInvalid?: string[] }>;
+        };
+      };
+    };
+    const byFlow = Object.fromEntries(parsed.sections.flows.items.map((f) => [f.flow, f]));
+    assert.deepEqual(byFlow['empty-mutates-flow'].metaInvalid ?? [], ['mutates']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('#790 empty produces value is invalid; empty tags stays present-but-valueless', () => {
+  const dir = makeFixture();
+  try {
+    const table = run(['--section', 'b'], dir);
+    const producesCells = rowFor(table, 'empty-produces-value-flow');
+    assert.equal(
+      producesCells[7],
+      '?',
+      `empty # produces: must render "?", got ${producesCells[7]}`,
+    );
+    assert.equal(producesCells[4], 'no');
+
+    const tagsCells = rowFor(table, 'empty-tags-value-flow');
+    assert.equal(tagsCells[6], '-', `empty # tags: must render "-", got ${tagsCells[6]}`);
+    assert.equal(tagsCells[4], 'no');
+
+    const jsonOut = run(['--section', 'b', '--json'], dir);
+    const parsed = JSON.parse(jsonOut) as {
+      sections: {
+        flows: {
+          items: Array<{ flow: string; metaInvalid?: string[]; tags?: string[] | null }>;
+        };
+      };
+    };
+    const byFlow = Object.fromEntries(parsed.sections.flows.items.map((f) => [f.flow, f]));
+    assert.deepEqual(byFlow['empty-produces-value-flow'].metaInvalid ?? [], ['produces']);
+    assert.deepEqual(byFlow['empty-tags-value-flow'].metaInvalid ?? [], []);
+    assert.deepEqual(byFlow['empty-tags-value-flow'].tags, []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('#790 empty id/intent/status stay present string fields, not metaInvalid', () => {
+  const dir = makeFixture();
+  try {
+    const table = run(['--section', 'b'], dir);
+    const cells = rowFor(table, 'empty-string-fields-flow');
+    assert.equal(cells[4], 'no');
+    assert.equal(cells[5], '-'); // empty status is falsy; no enum parser to mark "?"
+    assert.equal(cells[6], 'auth');
+
+    const jsonOut = run(['--section', 'b', '--json'], dir);
+    const parsed = JSON.parse(jsonOut) as {
+      sections: {
+        flows: {
+          items: Array<{
+            flow: string;
+            id?: string | null;
+            intent?: string | null;
+            status?: string | null;
+            metaFormat?: string;
+            metaInvalid?: string[];
+          }>;
+        };
+      };
+    };
+    const byFlow = Object.fromEntries(parsed.sections.flows.items.map((f) => [f.flow, f]));
+    const row = byFlow['empty-string-fields-flow'];
+    assert.equal(row.metaFormat, 'm7');
+    assert.equal(row.id, '');
+    assert.equal(row.intent, '');
+    assert.equal(row.status, '');
+    assert.deepEqual(row.metaInvalid ?? [], []);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
