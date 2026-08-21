@@ -254,6 +254,7 @@ export function loadAction(projectRoot, actionId) {
     const metadata = parseM7Header(text, actionId);
     if (!metadata)
         return null;
+    assertActionMetadataIdentity(filePath, metadata);
     const { bodyLines } = splitYaml(text);
     const state = loadOrInitSidecar(filePath);
     return {
@@ -290,10 +291,14 @@ export class SaveActionPreconditionError extends Error {
         this.name = 'SaveActionPreconditionError';
     }
 }
+const migrationPathIdentities = new WeakMap();
 function migrationConflict(filePath) {
     return new Error(`Action changed during migration: ${filePath}. Re-run migration.`);
 }
 function migrationBaselineMatches(filePath, baseline) {
+    const pathIdentity = migrationPathIdentities.get(baseline);
+    if (!pathIdentity || !migrationPathIdentityMatches(pathIdentity))
+        return false;
     if (!migrationYamlBaselineMatches(filePath, baseline))
         return false;
     const sidecarPath = sidecarPathFor(filePath);
@@ -301,6 +306,35 @@ function migrationBaselineMatches(filePath, baseline) {
     if (sidecarExists !== baseline.sidecarExisted)
         return false;
     return !sidecarExists || runtimeSidecarMatches(sidecarPath, baseline.state);
+}
+function captureMigrationPathIdentity(filePath) {
+    const actionsDir = dirname(filePath);
+    const rnAgentDir = dirname(actionsDir);
+    return [
+        { path: rnAgentDir, kind: 'directory' },
+        { path: actionsDir, kind: 'directory' },
+        { path: filePath, kind: 'file' },
+    ].map(({ path, kind }) => {
+        const stat = lstatSync(path);
+        const valid = !stat.isSymbolicLink() && (kind === 'directory' ? stat.isDirectory() : stat.isFile());
+        if (!valid)
+            throw new Error(`Refusing changed learned-action path at ${path}.`);
+        return { path, kind, dev: stat.dev, ino: stat.ino };
+    });
+}
+function migrationPathIdentityMatches(entries) {
+    try {
+        return entries.every((entry) => {
+            const stat = lstatSync(entry.path);
+            return (!stat.isSymbolicLink() &&
+                stat.dev === entry.dev &&
+                stat.ino === entry.ino &&
+                (entry.kind === 'directory' ? stat.isDirectory() : stat.isFile()));
+        });
+    }
+    catch {
+        return false;
+    }
 }
 function migrationYamlBaselineMatches(filePath, baseline) {
     try {
@@ -310,12 +344,20 @@ function migrationYamlBaselineMatches(filePath, baseline) {
         return false;
     }
 }
+function migrationYamlPublicationMatches(filePath, baseline) {
+    const pathIdentity = migrationPathIdentities.get(baseline);
+    return Boolean(pathIdentity &&
+        migrationPathIdentityMatches(pathIdentity) &&
+        migrationYamlBaselineMatches(filePath, baseline));
+}
 export function loadActionMigrationBaseline(filePath) {
     assertWritableActionFile(filePath);
+    const pathIdentity = captureMigrationPathIdentity(filePath);
     const yamlText = readFileSync(filePath, 'utf8');
     const sidecarExisted = existsSync(sidecarPathFor(filePath));
     const state = loadOrInitSidecar(filePath);
     const baseline = { yamlText, state, sidecarExisted };
+    migrationPathIdentities.set(baseline, pathIdentity);
     if (!migrationBaselineMatches(filePath, baseline))
         throw migrationConflict(filePath);
     return baseline;
@@ -323,7 +365,7 @@ export function loadActionMigrationBaseline(filePath) {
 export function commitMigratedActionText(filePath, baseline, yamlText) {
     assertWritableActionFile(filePath);
     const sidecarPath = sidecarPathFor(filePath);
-    const result = atomicWriter.pairWriteConditional(filePath, yamlText, sidecarPath, baseline.state, () => migrationBaselineMatches(filePath, baseline), () => migrationYamlBaselineMatches(filePath, baseline), baseline.yamlText);
+    const result = atomicWriter.pairWriteConditional(filePath, yamlText, sidecarPath, baseline.state, () => migrationBaselineMatches(filePath, baseline), () => migrationYamlPublicationMatches(filePath, baseline), baseline.yamlText);
     if (!result)
         throw migrationConflict(filePath);
     const nextState = { ...baseline.state, lastSeenMtimeMs: result.finalMtimeMs };
@@ -612,6 +654,12 @@ function assertWritableActionFile(filePath) {
     }
     assertOwnedActionCorpus(dirname(rnAgentDir));
     actionFileExists(filePath);
+}
+export function assertActionMetadataIdentity(filePath, metadata) {
+    const fileId = basename(filePath).replace(/\.ya?ml$/i, '');
+    if (metadata.id !== fileId) {
+        throw new Error(`Action metadata id ${metadata.id} does not match filename identity ${fileId}.`);
+    }
 }
 /**
  * Update only the M7 metadata of an action without touching the body.

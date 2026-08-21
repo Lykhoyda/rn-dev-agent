@@ -1,9 +1,9 @@
-import { existsSync, lstatSync, readdirSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { ACTION_ENGINE_PIN, MAESTRO_RUNNER_PIN, exactPinRefusal, findRegexTextSelectors, } from './engine-pin.js';
 import { parseAndValidateFlow, MaestroValidationError } from './maestro-validator.js';
 import { parseM7Header } from './reusable-action.js';
-import { commitMigratedActionText, loadActionMigrationBaseline, splitYaml, joinYaml, resolveActionPath, } from './action-store.js';
+import { commitMigratedActionText, loadActionMigrationBaseline, splitYaml, joinYaml, resolveActionPath, assertActionMetadataIdentity, } from './action-store.js';
 export function actionEnginePinRefusal(enginePin) {
     if (!enginePin) {
         return (`Action is not migrated to ${ACTION_ENGINE_PIN}. Run ` +
@@ -95,6 +95,9 @@ export function standaloneLearnedActionPathRefusal(path) {
         if (resolvedAction === null || resolve(resolvedAction) !== resolve(path)) {
             return `Action ${actionId} does not resolve uniquely to ${path}.`;
         }
+        const metadata = parseM7Header(readFileSync(path, 'utf8'), actionId);
+        if (metadata)
+            assertActionMetadataIdentity(path, metadata);
     }
     catch (err) {
         return err instanceof Error ? err.message : String(err);

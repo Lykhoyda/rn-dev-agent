@@ -100,15 +100,14 @@ test('gh-397: enginePinCaveat only fires on drift/checksum states', () => {
   assert.match(bad, /checksum/i);
 });
 
-test('gh-397: getEngineStatus revalidates across sequential spawn boundaries', async () => {
+test('gh-397: detection derives the exact version without executing the live cache', async () => {
   _resetEngineStatusForTest();
   let execCalls = 0;
-  let version = '1.1.24';
   const resolvers = {
     binPath: () => '/fake/maestro-runner',
     execVersion: async () => {
       execCalls++;
-      return `maestro-runner ${version}\n  Commit:  9728809`;
+      return 'maestro-runner 9.9.9';
     },
     hashFile: () => PIN_HASH,
     cliPresent: () => false,
@@ -117,11 +116,10 @@ test('gh-397: getEngineStatus revalidates across sequential spawn boundaries', a
   const s1 = await getEngineStatus(resolvers);
   assert.equal(s1.pin.status, 'pinned-ok');
   assert.equal(s1.version, '1.1.24');
-  version = '1.2.0';
   const s2 = await getEngineStatus(resolvers);
-  assert.equal(execCalls, 2);
-  assert.equal(s2.pin.status, 'drift-newer');
-  assert.equal(s2.version, '1.2.0');
+  assert.equal(execCalls, 0);
+  assert.equal(s2.pin.status, 'pinned-ok');
+  assert.equal(s2.version, '1.1.24');
 });
 
 test('gh-397: checksum mismatch is classified before executing the binary', async () => {
@@ -142,7 +140,7 @@ test('gh-397: checksum mismatch is classified before executing the binary', asyn
   _resetEngineStatusForTest();
 });
 
-test('gh-397: version drift is diagnosed only after checksum verification', async () => {
+test('gh-397: fabricated version output cannot redefine checksum identity', async () => {
   _resetEngineStatusForTest();
   const older = await getEngineStatus({
     binPath: () => '/fake/maestro-runner',
@@ -156,10 +154,10 @@ test('gh-397: version drift is diagnosed only after checksum verification', asyn
     hashFile: () => PIN_HASH,
     platformKey: KEY,
   });
-  assert.equal(older.pin.status, 'drift-older');
-  assert.equal(older.version, '1.0.9');
-  assert.equal(newer.pin.status, 'drift-newer');
-  assert.equal(newer.version, '1.2.0');
+  assert.equal(older.pin.status, 'pinned-ok');
+  assert.equal(older.version, '1.1.24');
+  assert.equal(newer.pin.status, 'pinned-ok');
+  assert.equal(newer.version, '1.1.24');
   _resetEngineStatusForTest();
 });
 

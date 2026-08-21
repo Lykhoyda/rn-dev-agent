@@ -284,6 +284,7 @@ export function loadAction(projectRoot: string, actionId: string): ReusableActio
   const text = readFileSync(filePath, 'utf8');
   const metadata = parseM7Header(text, actionId);
   if (!metadata) return null;
+  assertActionMetadataIdentity(filePath, metadata);
   const { bodyLines } = splitYaml(text);
   const state = loadOrInitSidecar(filePath);
   return {
@@ -343,16 +344,59 @@ export interface ActionMigrationBaseline {
   sidecarExisted: boolean;
 }
 
+interface MigrationPathEntry {
+  path: string;
+  dev: number;
+  ino: number;
+  kind: 'directory' | 'file';
+}
+
+const migrationPathIdentities = new WeakMap<ActionMigrationBaseline, MigrationPathEntry[]>();
+
 function migrationConflict(filePath: string): Error {
   return new Error(`Action changed during migration: ${filePath}. Re-run migration.`);
 }
 
 function migrationBaselineMatches(filePath: string, baseline: ActionMigrationBaseline): boolean {
+  const pathIdentity = migrationPathIdentities.get(baseline);
+  if (!pathIdentity || !migrationPathIdentityMatches(pathIdentity)) return false;
   if (!migrationYamlBaselineMatches(filePath, baseline)) return false;
   const sidecarPath = sidecarPathFor(filePath);
   const sidecarExists = existsSync(sidecarPath);
   if (sidecarExists !== baseline.sidecarExisted) return false;
   return !sidecarExists || runtimeSidecarMatches(sidecarPath, baseline.state);
+}
+
+function captureMigrationPathIdentity(filePath: string): MigrationPathEntry[] {
+  const actionsDir = dirname(filePath);
+  const rnAgentDir = dirname(actionsDir);
+  return [
+    { path: rnAgentDir, kind: 'directory' as const },
+    { path: actionsDir, kind: 'directory' as const },
+    { path: filePath, kind: 'file' as const },
+  ].map(({ path, kind }) => {
+    const stat = lstatSync(path);
+    const valid =
+      !stat.isSymbolicLink() && (kind === 'directory' ? stat.isDirectory() : stat.isFile());
+    if (!valid) throw new Error(`Refusing changed learned-action path at ${path}.`);
+    return { path, kind, dev: stat.dev, ino: stat.ino };
+  });
+}
+
+function migrationPathIdentityMatches(entries: readonly MigrationPathEntry[]): boolean {
+  try {
+    return entries.every((entry) => {
+      const stat = lstatSync(entry.path);
+      return (
+        !stat.isSymbolicLink() &&
+        stat.dev === entry.dev &&
+        stat.ino === entry.ino &&
+        (entry.kind === 'directory' ? stat.isDirectory() : stat.isFile())
+      );
+    });
+  } catch {
+    return false;
+  }
 }
 
 function migrationYamlBaselineMatches(
@@ -366,12 +410,26 @@ function migrationYamlBaselineMatches(
   }
 }
 
+function migrationYamlPublicationMatches(
+  filePath: string,
+  baseline: ActionMigrationBaseline,
+): boolean {
+  const pathIdentity = migrationPathIdentities.get(baseline);
+  return Boolean(
+    pathIdentity &&
+    migrationPathIdentityMatches(pathIdentity) &&
+    migrationYamlBaselineMatches(filePath, baseline),
+  );
+}
+
 export function loadActionMigrationBaseline(filePath: string): ActionMigrationBaseline {
   assertWritableActionFile(filePath);
+  const pathIdentity = captureMigrationPathIdentity(filePath);
   const yamlText = readFileSync(filePath, 'utf8');
   const sidecarExisted = existsSync(sidecarPathFor(filePath));
   const state = loadOrInitSidecar(filePath);
   const baseline = { yamlText, state, sidecarExisted };
+  migrationPathIdentities.set(baseline, pathIdentity);
   if (!migrationBaselineMatches(filePath, baseline)) throw migrationConflict(filePath);
   return baseline;
 }
@@ -389,7 +447,7 @@ export function commitMigratedActionText(
     sidecarPath,
     baseline.state,
     () => migrationBaselineMatches(filePath, baseline),
-    () => migrationYamlBaselineMatches(filePath, baseline),
+    () => migrationYamlPublicationMatches(filePath, baseline),
     baseline.yamlText,
   );
   if (!result) throw migrationConflict(filePath);
@@ -714,6 +772,18 @@ function assertWritableActionFile(filePath: string): void {
   }
   assertOwnedActionCorpus(dirname(rnAgentDir));
   actionFileExists(filePath);
+}
+
+export function assertActionMetadataIdentity(
+  filePath: string,
+  metadata: Pick<M7Metadata, 'id'>,
+): void {
+  const fileId = basename(filePath).replace(/\.ya?ml$/i, '');
+  if (metadata.id !== fileId) {
+    throw new Error(
+      `Action metadata id ${metadata.id} does not match filename identity ${fileId}.`,
+    );
+  }
 }
 
 /**

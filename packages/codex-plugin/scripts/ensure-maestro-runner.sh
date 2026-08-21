@@ -151,24 +151,6 @@ file_sha() {
   fi
 }
 
-installed_version() {
-  local remaining
-  remaining="$(remaining_install_seconds)"
-  if [ "$remaining" -le 0 ]; then
-    return 1
-  fi
-  node - "$1" "$remaining" <<'NODE'
-const { spawnSync } = require('node:child_process');
-const result = spawnSync(process.argv[2], ['--version'], {
-  encoding: 'utf8',
-  timeout: Math.min(5000, Number(process.argv[3]) * 1000),
-});
-const output = `${result.stdout ?? ''}\n${result.stderr ?? ''}`;
-const version = output.match(/[0-9]+\.[0-9]+\.[0-9]+/);
-if (version) process.stdout.write(version[0]);
-NODE
-}
-
 correction() {
   echo "Install exactly $MAESTRO_RUNNER_PIN_VERSION with: bash \"${BASH_SOURCE[0]}\""
   echo "Session runner is the pin-cache at $BIN — never PATH, ~/.maestro-runner, or brew maestro."
@@ -206,13 +188,9 @@ bin_path_matches_pin() {
   if [ ! -x "$path" ]; then
     return 1
   fi
-  local v got
+  local got
   got="$(file_sha "$path")"
   if [ -z "$got" ] || [ "$got" != "$EXPECTED_SHA" ]; then
-    return 1
-  fi
-  v="$(installed_version "$path")"
-  if [ "$v" != "$MAESTRO_RUNNER_PIN_VERSION" ]; then
     return 1
   fi
   return 0
@@ -259,9 +237,7 @@ pin_dir_matches_pin() {
 }
 
 report_success() {
-  local v
-  v="$(installed_version "$BIN")"
-  echo "maestro-runner pin ok: ${v} (session pin-cache)"
+  echo "maestro-runner pin ok: ${MAESTRO_RUNNER_PIN_VERSION} (session pin-cache)"
   echo "selectedPath: $BIN"
   echo "provenance: pin-cache"
   echo "pinned: $MAESTRO_RUNNER_PIN_VERSION"
@@ -314,33 +290,53 @@ lock_age_seconds() {
 }
 
 process_birth_identity() {
-  node - "$1" <<'NODE'
-const { readFileSync } = require('node:fs');
+  node - "$1" "$SCRIPT_DIR" <<'NODE'
+const { createHash } = require('node:crypto');
+const { lstatSync, readFileSync } = require('node:fs');
 const { spawnSync } = require('node:child_process');
+const { resolve } = require('node:path');
 const pid = process.argv[2];
+const scriptDir = process.argv[3];
 if (!/^\d+$/.test(pid)) process.exit(1);
 if (process.platform === 'linux') {
   try {
+    const boot = readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
     const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
     const fields = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/);
-    if (fields[19]) {
-      process.stdout.write(`linux:${fields[19]}`);
+    if (/^[0-9a-f-]+$/i.test(boot) && fields[19]) {
+      process.stdout.write(`linux:${boot.toLowerCase()}:${fields[19]}`);
       process.exit(0);
     }
   } catch {}
 }
-const result = spawnSync('/bin/ps', ['-o', 'lstart=', '-p', pid], { encoding: 'utf8' });
-const started = result.status === 0 ? result.stdout.trim().replace(/\s+/g, ' ') : '';
-if (!started) process.exit(1);
-process.stdout.write(`ps:${started}`);
+if (process.platform === 'darwin') {
+  const candidates = [
+    resolve(scriptDir, '..', 'rn-dev-agent-core', 'dist', 'native', 'darwin-process-birth'),
+    resolve(scriptDir, '..', 'packages', 'rn-dev-agent-core', 'native', 'darwin-process-birth'),
+  ];
+  for (const helper of candidates) {
+    const manifestPath = `${helper}.json`;
+    try {
+      const helperStat = lstatSync(helper);
+      const manifestStat = lstatSync(manifestPath);
+      if (!helperStat.isFile() || helperStat.isSymbolicLink() || !manifestStat.isFile() || manifestStat.isSymbolicLink()) continue;
+      const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+      const digest = createHash('sha256').update(readFileSync(helper)).digest('hex');
+      if (digest !== manifest.binarySha256) continue;
+      const result = spawnSync(helper, [pid], { encoding: 'utf8', timeout: 2000 });
+      const identity = result.status === 0 ? result.stdout.trim() : '';
+      if (!new RegExp(`^${pid}:[0-9]+:[0-9]+$`).test(identity)) continue;
+      process.stdout.write(`darwin:${identity}`);
+      process.exit(0);
+    } catch {}
+  }
+}
+process.exit(1);
 NODE
 }
 
 reclaim_stale_lock() {
   if ! mkdir "$RECLAIM_DIR" 2>/dev/null; then
-    if [ -d "$RECLAIM_DIR" ] && [ ! -L "$RECLAIM_DIR" ] && [ "$(lock_age_seconds "$RECLAIM_DIR")" -ge 10 ]; then
-      rmdir "$RECLAIM_DIR" 2>/dev/null || true
-    fi
     return
   fi
   local owner="" owner_birth="" current_birth="" age="0"
@@ -382,7 +378,15 @@ reclaim_stale_lock() {
 }
 
 try_claim_lock() {
-  node -e 'const fs=require("node:fs"); try { fs.linkSync(process.argv[1], process.argv[2]); } catch { process.exit(1); }' "$LOCK_OWNER_FILE" "$LOCK_FILE"
+  if ! mkdir "$RECLAIM_DIR" 2>/dev/null; then
+    return 1
+  fi
+  local claimed=0
+  if node -e 'const fs=require("node:fs"); try { fs.linkSync(process.argv[1], process.argv[2]); } catch { process.exit(1); }' "$LOCK_OWNER_FILE" "$LOCK_FILE"; then
+    claimed=1
+  fi
+  rmdir "$RECLAIM_DIR"
+  [ "$claimed" = "1" ]
 }
 
 acquire_install_lock() {
@@ -440,11 +444,7 @@ fi
 
 if [ -x "$BIN" ]; then
   GOT_SHA="$(file_sha "$BIN")"
-  GOT_V=""
-  if [ -n "$GOT_SHA" ] && [ "$GOT_SHA" = "$EXPECTED_SHA" ]; then
-    GOT_V="$(installed_version "$BIN")"
-  fi
-  echo "NOTE: pin-cache maestro-runner is not exactly $MAESTRO_RUNNER_PIN_VERSION (got version=${GOT_V:-unknown} sha=${GOT_SHA:-unhashed}). Converging."
+  echo "NOTE: pin-cache maestro-runner is not exactly $MAESTRO_RUNNER_PIN_VERSION (got sha=${GOT_SHA:-unhashed}). Converging."
 fi
 
 ARCHIVE="maestro-runner-${MAESTRO_RUNNER_PIN_VERSION}-${OS}-${ARCH}.tar.gz"
@@ -529,13 +529,8 @@ fi
 
 if ! pin_dir_matches_pin "$STAGED_PIN_DIR"; then
   GOT_SHA="$(file_sha "$STAGED_BIN")"
-  GOT_V=""
-  if [ -n "$GOT_SHA" ] && [ "$GOT_SHA" = "$EXPECTED_SHA" ]; then
-    GOT_V="$(installed_version "$STAGED_BIN")"
-  fi
   echo "ERROR: just-installed binary is not exactly $MAESTRO_RUNNER_PIN_VERSION."
   echo "  expected version: $MAESTRO_RUNNER_PIN_VERSION"
-  echo "  got version:      ${GOT_V:-unknown}"
   echo "  expected sha256:  $EXPECTED_SHA"
   echo "  got sha256:       ${GOT_SHA:-unhashed}"
   correction

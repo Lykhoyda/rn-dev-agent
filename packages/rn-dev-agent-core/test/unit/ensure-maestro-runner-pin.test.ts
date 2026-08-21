@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -48,13 +49,24 @@ function runEnsure(env: NodeJS.ProcessEnv) {
 
 function processBirthIdentity(pid: number): string {
   if (process.platform === 'linux') {
+    const boot = readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim().toLowerCase();
     const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
-    const fields = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/);
-    return `linux:${fields[19]}`;
+    const fields = stat
+      .slice(stat.lastIndexOf(')') + 2)
+      .trim()
+      .split(/\s+/);
+    return `linux:${boot}:${fields[19]}`;
   }
-  const result = spawnSync('/bin/ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8' });
+  const helper = join(
+    dirname(fileURLToPath(import.meta.url)),
+    '..',
+    '..',
+    'native',
+    'darwin-process-birth',
+  );
+  const result = spawnSync(helper, [String(pid)], { encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
-  return `ps:${result.stdout.trim().replace(/\s+/g, ' ')}`;
+  return `darwin:${result.stdout.trim()}`;
 }
 
 test('unsupported platform fails closed and does not download', () => {
@@ -182,11 +194,16 @@ test('installed fast path refuses a payload changed after verified installation'
   const payload = join(root, 'payload', 'maestro-runner');
   const archive = join(root, 'maestro-runner.tar.gz');
   const cache = join(root, 'cache');
+  const executionMarker = join(root, 'runner-executed');
   mkdirSync(scriptDir, { recursive: true });
   mkdirSync(join(payload, 'bin'), { recursive: true });
   mkdirSync(join(payload, 'drivers'), { recursive: true });
   const runner = join(payload, 'bin', 'maestro-runner');
-  writeFileSync(runner, '#!/bin/sh\necho maestro-runner 1.1.24\n', 'utf8');
+  writeFileSync(
+    runner,
+    `#!/bin/sh\nprintf executed > ${JSON.stringify(executionMarker)}\necho maestro-runner 1.1.24\n`,
+    'utf8',
+  );
   chmodSync(runner, 0o755);
   writeFileSync(join(payload, 'drivers', 'server.apk'), 'trusted-payload', 'utf8');
   const packed = spawnSync('tar', ['-czf', archive, '-C', join(root, 'payload'), 'maestro-runner']);
@@ -196,6 +213,18 @@ test('installed fast path refuses a payload changed after verified installation'
   const copiedScript = join(scriptDir, 'ensure-maestro-runner.sh');
   writeFileSync(copiedScript, readFileSync(SCRIPT), 'utf8');
   chmodSync(copiedScript, 0o755);
+  const packagedNativeDir = join(root, 'rn-dev-agent-core', 'dist', 'native');
+  const sourceNativeDir = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'native');
+  mkdirSync(packagedNativeDir, { recursive: true });
+  copyFileSync(
+    join(sourceNativeDir, 'darwin-process-birth'),
+    join(packagedNativeDir, 'darwin-process-birth'),
+  );
+  copyFileSync(
+    join(sourceNativeDir, 'darwin-process-birth.json'),
+    join(packagedNativeDir, 'darwin-process-birth.json'),
+  );
+  chmodSync(join(packagedNativeDir, 'darwin-process-birth'), 0o755);
   writeFileSync(
     join(scriptDir, 'maestro-runner-pin.json'),
     JSON.stringify({
@@ -226,6 +255,7 @@ test('installed fast path refuses a payload changed after verified installation'
 
   const installed = spawnSync('bash', [copiedScript], { encoding: 'utf8', env });
   assert.equal(installed.status, 0, `${installed.stdout}${installed.stderr}`);
+  assert.equal(existsSync(executionMarker), false);
   const liveDriver = join(
     cache,
     'maestro-runner',
@@ -238,6 +268,7 @@ test('installed fast path refuses a payload changed after verified installation'
   const refused = spawnSync('bash', [copiedScript, '--print-bin'], { encoding: 'utf8', env });
   assert.notEqual(refused.status, 0);
   assert.match(`${refused.stdout}${refused.stderr}`, /not exactly 1\.1\.24/);
+  assert.equal(existsSync(executionMarker), false);
 });
 
 test('installer reclaims a stale ownerless legacy lock', () => {

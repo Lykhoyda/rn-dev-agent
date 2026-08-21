@@ -49,9 +49,11 @@ import {
   lstatSync,
   readFileSync,
   linkSync,
+  constants,
 } from 'node:fs';
 import { dirname, basename } from 'node:path';
 import type { ActionRuntimeState } from './reusable-action.js';
+import { probeProcessBirth } from '../session/process-birth.js';
 
 // Multi-LLM review of PR #109 findings 1+2: `finalMtimeMs = _stat(yaml)`
 // breaks the safety invariant in two scenarios — (a) slow writes where
@@ -104,53 +106,109 @@ export interface PairWriteResult {
 }
 
 const ACTION_WRITE_LOCK_TIMEOUT_MS = 5_000;
-const ACTION_WRITE_LOCK_STALE_MS = 30_000;
 const lockWaitBuffer = new Int32Array(new SharedArrayBuffer(4));
+const ACTION_WRITE_PRECONDITION = Symbol('action-write-precondition');
 
-function withPairWriteLock<T>(yamlPath: string, operation: () => T): T {
+interface ActionWriteLockOwner {
+  pid: number;
+  birth: string;
+}
+
+let localLockOwner: ActionWriteLockOwner | null = null;
+
+function currentLockOwner(): ActionWriteLockOwner {
+  if (localLockOwner) return localLockOwner;
+  const observed = probeProcessBirth(process.pid);
+  if (observed.status !== 'present') {
+    throw new Error('Could not establish action writer process identity.');
+  }
+  localLockOwner = { pid: process.pid, birth: observed.birth.token };
+  return localLockOwner;
+}
+
+function readLockOwner(lockPath: string): ActionWriteLockOwner | null {
+  try {
+    const parsed = JSON.parse(readFileSync(lockPath, 'utf8')) as Partial<ActionWriteLockOwner>;
+    if (!Number.isSafeInteger(parsed.pid) || Number(parsed.pid) <= 0 || !parsed.birth) return null;
+    return { pid: Number(parsed.pid), birth: parsed.birth };
+  } catch {
+    return null;
+  }
+}
+
+function lockOwnerIsGone(owner: ActionWriteLockOwner): boolean {
+  const observed = probeProcessBirth(owner.pid);
+  return (
+    observed.status === 'absent' ||
+    (observed.status === 'present' && observed.birth.token !== owner.birth)
+  );
+}
+
+function withPairWriteLock<T>(
+  yamlPath: string,
+  operation: () => T,
+  acquisitionPrecondition?: () => boolean,
+): T {
+  if (acquisitionPrecondition && !acquisitionPrecondition()) throw ACTION_WRITE_PRECONDITION;
   ensureDir(yamlPath);
   const lockPath = `${yamlPath}.write.lock`;
+  const ownerPath = `${dirname(dirname(dirname(yamlPath)))}/.rn-action-write-owner.${generateTmpStamp()}`;
+  const owner = currentLockOwner();
+  const lockFd = openSync(ownerPath, 'wx', 0o600);
+  writeFileSync(lockFd, `${JSON.stringify(owner)}\n`, 'utf8');
   const deadline = Date.now() + ACTION_WRITE_LOCK_TIMEOUT_MS;
-  let lockFd: number | null = null;
-  while (lockFd === null) {
-    try {
-      lockFd = openSync(lockPath, 'wx', 0o600);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
-      let lockStat;
-      try {
-        lockStat = lstatSync(lockPath);
-      } catch (statError) {
-        if ((statError as NodeJS.ErrnoException).code === 'ENOENT') continue;
-        throw statError;
-      }
-      if (!lockStat.isFile() || lockStat.isSymbolicLink()) {
-        throw new Error(`Refusing invalid action write lock at ${lockPath}.`);
-      }
-      if (Date.now() - lockStat.mtimeMs >= ACTION_WRITE_LOCK_STALE_MS) {
-        try {
-          const current = lstatSync(lockPath);
-          if (current.dev === lockStat.dev && current.ino === lockStat.ino) unlinkSync(lockPath);
-        } catch (unlinkError) {
-          if ((unlinkError as NodeJS.ErrnoException).code !== 'ENOENT') throw unlinkError;
-        }
-        continue;
-      }
-      if (Date.now() >= deadline) {
-        throw new Error(`Timed out waiting for action write lock at ${lockPath}.`);
-      }
-      Atomics.wait(lockWaitBuffer, 0, 0, 10);
-    }
-  }
-  const identity = fstatSync(lockFd);
+  let acquired = false;
+  let identity: ReturnType<typeof fstatSync> | null = null;
   try {
+    while (!acquired) {
+      try {
+        if (acquisitionPrecondition && !acquisitionPrecondition()) {
+          throw ACTION_WRITE_PRECONDITION;
+        }
+        linkSync(ownerPath, lockPath);
+        acquired = true;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+        let lockStat;
+        try {
+          lockStat = lstatSync(lockPath);
+        } catch (statError) {
+          if ((statError as NodeJS.ErrnoException).code === 'ENOENT') continue;
+          throw statError;
+        }
+        if (!lockStat.isFile() || lockStat.isSymbolicLink()) {
+          throw new Error(`Refusing invalid action write lock at ${lockPath}.`);
+        }
+        const existingOwner = readLockOwner(lockPath);
+        if (existingOwner && lockOwnerIsGone(existingOwner)) {
+          try {
+            const current = lstatSync(lockPath);
+            if (current.dev === lockStat.dev && current.ino === lockStat.ino) unlinkSync(lockPath);
+          } catch (unlinkError) {
+            if ((unlinkError as NodeJS.ErrnoException).code !== 'ENOENT') throw unlinkError;
+          }
+          continue;
+        }
+        if (Date.now() >= deadline) {
+          throw new Error(`Timed out waiting for action write lock at ${lockPath}.`);
+        }
+        Atomics.wait(lockWaitBuffer, 0, 0, 10);
+      }
+    }
+    unlinkSync(ownerPath);
+    identity = fstatSync(lockFd);
     return operation();
   } finally {
-    try {
-      const current = lstatSync(lockPath);
-      if (current.dev === identity.dev && current.ino === identity.ino) unlinkSync(lockPath);
-    } catch {}
+    if (identity) {
+      try {
+        const current = lstatSync(lockPath);
+        if (current.dev === identity.dev && current.ino === identity.ino) unlinkSync(lockPath);
+      } catch {}
+    }
     closeSync(lockFd);
+    try {
+      unlinkSync(ownerPath);
+    } catch {}
   }
 }
 
@@ -180,6 +238,7 @@ function pairWriteImpl(
   yamlPublicationPrecondition?: () => boolean,
   expectedYamlContent?: string,
 ): PairWriteResult | null {
+  if (publicationPrecondition && !publicationPrecondition()) return null;
   ensureDir(yamlPath);
   ensureDir(sidecarPath);
 
@@ -197,7 +256,12 @@ function pairWriteImpl(
     ...state,
     lastSeenMtimeMs: projectedMtimeMs,
   };
+  if (publicationPrecondition && !publicationPrecondition()) return null;
   atomicWriter._writeFile(sidecarTmp, JSON.stringify(projectedState, null, 2) + '\n');
+  if (publicationPrecondition && !publicationPrecondition()) {
+    atomicWriter._unlink(sidecarTmp);
+    return null;
+  }
   atomicWriter._writeFile(yamlTmp, yamlContent);
   if (publicationPrecondition && !publicationPrecondition()) {
     atomicWriter._unlink(sidecarTmp);
@@ -212,8 +276,22 @@ function pairWriteImpl(
   const yamlPublished =
     expectedYamlContent === undefined
       ? !yamlPublicationPrecondition || yamlPublicationPrecondition()
-      : atomicWriter._publishIfUnchanged(yamlTmp, yamlPath, expectedYamlContent, stamp);
+      : atomicWriter._publishIfUnchanged(
+          yamlTmp,
+          yamlPath,
+          expectedYamlContent,
+          stamp,
+          yamlPublicationPrecondition,
+        );
   if (!yamlPublished) {
+    if (yamlPublicationPrecondition && !yamlPublicationPrecondition()) {
+      try {
+        const candidate = lstatSync(yamlTmp);
+        if (!candidate.isFile() || candidate.isSymbolicLink()) return null;
+      } catch {
+        return null;
+      }
+    }
     if (priorSidecar === null) {
       atomicWriter._unlink(sidecarPath);
     } else {
@@ -338,46 +416,36 @@ export const atomicWriter = {
     candidatePath: string,
     targetPath: string,
     expectedContent: string,
-    stamp: string,
+    _stamp: string,
+    publicationPrecondition?: () => boolean,
   ): boolean {
-    const displacedPath = `${targetPath}.cas.${stamp}`;
+    let targetFd: number;
     try {
-      renameSync(targetPath, displacedPath);
+      targetFd = openSync(targetPath, constants.O_RDONLY | constants.O_NOFOLLOW);
     } catch {
       return false;
     }
-    let matches = false;
     try {
-      const displaced = lstatSync(displacedPath);
-      matches =
-        displaced.isFile() &&
-        !displaced.isSymbolicLink() &&
-        readFileSync(displacedPath, 'utf8') === expectedContent;
-    } catch {
-      matches = false;
-    }
-    if (!matches) {
-      try {
-        linkSync(displacedPath, targetPath);
-        unlinkSync(displacedPath);
-      } catch {}
-      return false;
-    }
-    try {
-      linkSync(candidatePath, targetPath);
-      try {
-        unlinkSync(candidatePath);
-      } catch {}
-      try {
-        unlinkSync(displacedPath);
-      } catch {}
+      const opened = fstatSync(targetFd);
+      const current = lstatSync(targetPath);
+      if (
+        !opened.isFile() ||
+        current.isSymbolicLink() ||
+        current.dev !== opened.dev ||
+        current.ino !== opened.ino ||
+        readFileSync(targetFd, 'utf8') !== expectedContent ||
+        (publicationPrecondition && !publicationPrecondition())
+      ) {
+        return false;
+      }
+      const finalIdentity = lstatSync(targetPath);
+      if (finalIdentity.dev !== opened.dev || finalIdentity.ino !== opened.ino) return false;
+      atomicWriter._rename(candidatePath, targetPath);
       return true;
     } catch {
-      try {
-        linkSync(displacedPath, targetPath);
-        unlinkSync(displacedPath);
-      } catch {}
       return false;
+    } finally {
+      closeSync(targetFd);
     }
   },
 
@@ -410,21 +478,30 @@ export const atomicWriter = {
     sidecarPath: string,
     state: ActionRuntimeState,
     precondition: () => boolean,
-    yamlPublicationPrecondition: () => boolean = precondition,
+    yamlPublicationPrecondition?: () => boolean,
     expectedYamlContent?: string,
   ): PairWriteResult | null {
-    return withPairWriteLock(yamlPath, () => {
-      if (!precondition()) return null;
-      cleanupOrphans(yamlPath, sidecarPath);
-      return pairWriteImpl(
+    try {
+      return withPairWriteLock(
         yamlPath,
-        yamlContent,
-        sidecarPath,
-        state,
+        () => {
+          if (!precondition()) return null;
+          cleanupOrphans(yamlPath, sidecarPath);
+          return pairWriteImpl(
+            yamlPath,
+            yamlContent,
+            sidecarPath,
+            state,
+            precondition,
+            yamlPublicationPrecondition,
+            expectedYamlContent,
+          );
+        },
         precondition,
-        yamlPublicationPrecondition,
-        expectedYamlContent,
       );
-    });
+    } catch (error) {
+      if (error === ACTION_WRITE_PRECONDITION) return null;
+      throw error;
+    }
   },
 };

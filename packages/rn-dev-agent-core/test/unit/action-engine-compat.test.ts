@@ -7,8 +7,10 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   statSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -37,10 +39,12 @@ import { freshRuntimeState } from '../../dist/domain/reusable-action.js';
 import { sidecarPathFor } from '../../dist/domain/sidecar-io.js';
 import {
   commitMigratedActionText,
+  loadAction,
   loadActionMigrationBaseline,
 } from '../../dist/domain/action-store.js';
 import { prepareActionVerificationSuite } from '../../dist/domain/action-verification-suite.js';
 import { runMaestroInline } from '../../dist/maestro-invoke.js';
+import { readProcessBirth } from '../../dist/session/process-birth.js';
 import { createTmpProject } from '../helpers/tmp-project.js';
 
 const PINNED = () =>
@@ -322,6 +326,78 @@ test('migration conditional publication preserves an edit at the commit boundary
   assert.equal(existsSync(sidecarPathFor(actionPath)), false);
 });
 
+test('migration publication keeps the canonical action continuously available', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-action-migrate-available-'));
+  const dir = join(root, '.rn-agent', 'actions');
+  mkdirSync(dir, { recursive: true });
+  const actionPath = join(dir, 'checkout.yaml');
+  const source = actionYaml('checkout');
+  writeFileSync(actionPath, source, 'utf8');
+  const baseline = loadActionMigrationBaseline(actionPath);
+  const originalRename = atomicWriter._rename;
+  t.mock.method(atomicWriter, '_rename', (from: string, to: string) => {
+    if (to === actionPath) assert.equal(existsSync(actionPath), true);
+    originalRename(from, to);
+  });
+
+  commitMigratedActionText(actionPath, baseline, upsertEnginePinHeader(source).text);
+  assert.match(readFileSync(actionPath, 'utf8'), /enginePin/);
+});
+
+test('action writer never age-reclaims a live process lock', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-action-live-lock-'));
+  const dir = join(root, '.rn-agent', 'actions');
+  mkdirSync(dir, { recursive: true });
+  const actionPath = join(dir, 'checkout.yaml');
+  const sidecarPath = sidecarPathFor(actionPath);
+  writeFileSync(actionPath, actionYaml('checkout'), 'utf8');
+  const birth = readProcessBirth(process.pid);
+  assert.ok(birth);
+  const lockPath = `${actionPath}.write.lock`;
+  writeFileSync(lockPath, `${JSON.stringify({ pid: process.pid, birth: birth.token })}\n`, 'utf8');
+  const stale = new Date(Date.now() - 60_000);
+  utimesSync(lockPath, stale, stale);
+
+  assert.throws(
+    () =>
+      atomicWriter.pairWriteConditional(
+        actionPath,
+        actionYaml('checkout', '# enginePin: maestro-runner@1.1.24'),
+        sidecarPath,
+        freshRuntimeState(() => new Date('2026-01-01T00:00:00Z'), 1),
+        () => true,
+      ),
+    /Timed out waiting for action write lock/,
+  );
+  assert.equal(existsSync(lockPath), true);
+});
+
+test('migration refuses an actions-directory symlink swap at publication', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-action-migrate-swap-'));
+  const dir = join(root, '.rn-agent', 'actions');
+  const displaced = join(root, '.rn-agent', 'actions-original');
+  const shared = mkdtempSync(join(tmpdir(), 'rn-action-migrate-shared-'));
+  mkdirSync(dir, { recursive: true });
+  const actionPath = join(dir, 'checkout.yaml');
+  const source = actionYaml('checkout');
+  writeFileSync(actionPath, source, 'utf8');
+  writeFileSync(join(shared, 'checkout.yaml'), source, 'utf8');
+  const baseline = loadActionMigrationBaseline(actionPath);
+  const originalPublish = atomicWriter._publishIfUnchanged;
+  t.mock.method(atomicWriter, '_publishIfUnchanged', (...args) => {
+    renameSync(dir, displaced);
+    symlinkSync(shared, dir, 'dir');
+    return originalPublish(...args);
+  });
+
+  assert.throws(
+    () => commitMigratedActionText(actionPath, baseline, upsertEnginePinHeader(source).text),
+    /changed during migration/,
+  );
+  assert.equal(readFileSync(join(shared, 'checkout.yaml'), 'utf8'), source);
+  assert.equal(readdirSync(shared).length, 1);
+});
+
 test('migrateLearnedActions preserves the previous YAML when its atomic write fails', (t) => {
   const root = mkdtempSync(join(tmpdir(), 'rn-action-migrate-atomic-'));
   const dir = join(root, '.rn-agent', 'actions');
@@ -375,6 +451,19 @@ test('migration refuses metadata ids that differ from filename identity', () => 
   assert.equal(result?.status, 'incompatible');
   assert.match(String(result?.reason), /does not match filename identity/);
   assert.doesNotMatch(readFileSync(path, 'utf8'), /enginePin/);
+});
+
+test('learned-action loading and suite preflight reject filename identity drift', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-action-load-id-'));
+  const dir = join(root, '.rn-agent', 'actions');
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, 'checkout.yaml');
+  writeFileSync(path, actionYaml('checkout-v2', '# enginePin: maestro-runner@1.1.24'), 'utf8');
+
+  assert.throws(() => loadAction(root, 'checkout'), /does not match filename identity/);
+  const suite = prepareActionVerificationSuite([path], dir, PINNED());
+  assert.equal(suite.prepared.length, 0);
+  assert.match(String(suite.errors[0]?.error), /does not match filename identity/);
 });
 
 test('migrateLearnedActions refuses inherited .rn-agent/actions symlinks', () => {

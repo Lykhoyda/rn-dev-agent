@@ -6,8 +6,6 @@
 //   3. Reconcile knownQuirks (retest each listed quirk; add/remove entries).
 //   4. Update version + sha256 here AND in ensure-maestro-runner.sh; add a changeset.
 
-import { execFile as execFileCb } from 'node:child_process';
-import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
 import {
   accessSync,
@@ -15,17 +13,19 @@ import {
   constants,
   copyFileSync,
   lstatSync,
+  mkdirSync,
+  mkdtempSync,
   readFileSync,
   readdirSync,
   readlinkSync,
+  rmSync,
+  symlinkSync,
   unlinkSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import pinManifest from './maestro-runner-pin.json' with { type: 'json' };
-
-const execFile = promisify(execFileCb);
 
 interface MaestroRunnerPinManifest {
   readonly version: string;
@@ -175,10 +175,6 @@ export function pinnedRunnerBinPath(home?: string): string {
   return join(pinCacheRoot(home), 'bin', 'maestro-runner');
 }
 
-function pinnedRunnerArchivePath(home?: string): string {
-  return join(pinCacheRoot(home), '.payload.tar.gz');
-}
-
 type PayloadEntry = { kind: 'file'; sha256: string } | { kind: 'symlink'; target: string };
 
 function tarText(buffer: Buffer, offset: number, length: number): string {
@@ -236,16 +232,15 @@ function expectedPayloadEntries(archive: Buffer): Map<string, PayloadEntry> | nu
   return expected;
 }
 
-function installedPayloadMatchesPin(platformKey: string): boolean {
+function installedPayloadMatchesPin(platformKey: string, root = pinCacheRoot()): boolean {
   try {
     const expectedArchiveSha = MAESTRO_RUNNER_PIN.archiveSha256[platformKey];
     if (!expectedArchiveSha) return false;
-    const archivePath = pinnedRunnerArchivePath();
+    const archivePath = join(root, '.payload.tar.gz');
     const archive = readFileSync(archivePath);
     if (createHash('sha256').update(archive).digest('hex') !== expectedArchiveSha) return false;
     const expected = expectedPayloadEntries(archive);
     if (!expected) return false;
-    const root = pinCacheRoot();
     const seen = new Set<string>();
     const visit = (directory: string): boolean => {
       for (const entry of readdirSync(directory, { withFileTypes: true })) {
@@ -577,11 +572,7 @@ export async function withBoundExecutable<T>(
   if (!original.isFile() || original.isSymbolicLink()) {
     throw new Error('RUNNER_PIN_CHANGED: executable identity changed before execution.');
   }
-  copyFileSync(
-    executablePath,
-    boundPath,
-    constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE,
-  );
+  copyFileSync(executablePath, boundPath, constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE);
   chmodSync(boundPath, original.mode & 0o777);
   try {
     const bound = lstatSync(boundPath);
@@ -602,6 +593,34 @@ export async function withBoundExecutable<T>(
   }
 }
 
+function copyPayloadTree(source: string, destination: string): void {
+  const sourceStat = lstatSync(source);
+  if (!sourceStat.isDirectory() || sourceStat.isSymbolicLink()) {
+    throw new Error(`RUNNER_PIN_CHANGED: payload directory changed before execution.`);
+  }
+  mkdirSync(destination, { recursive: true });
+  for (const entry of readdirSync(source, { withFileTypes: true })) {
+    const sourcePath = join(source, entry.name);
+    const destinationPath = join(destination, entry.name);
+    const stat = lstatSync(sourcePath);
+    if (stat.isDirectory() && !stat.isSymbolicLink()) {
+      copyPayloadTree(sourcePath, destinationPath);
+      chmodSync(destinationPath, stat.mode & 0o777);
+    } else if (stat.isFile() && !stat.isSymbolicLink()) {
+      copyFileSync(
+        sourcePath,
+        destinationPath,
+        constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE,
+      );
+      chmodSync(destinationPath, stat.mode & 0o777);
+    } else if (stat.isSymbolicLink()) {
+      symlinkSync(readlinkSync(sourcePath), destinationPath);
+    } else {
+      throw new Error(`RUNNER_PIN_CHANGED: unsupported payload entry ${sourcePath}.`);
+    }
+  }
+}
+
 export async function withImmediatePinnedRunner<T>(
   runnerPath: string,
   resolveStatus: () => Promise<ReplayEngineStatus | null>,
@@ -613,7 +632,25 @@ export async function withImmediatePinnedRunner<T>(
   if (!expectedSha256) {
     throw new Error('RUNNER_PIN_CHANGED: runner checksum is unavailable for this platform.');
   }
-  return withBoundExecutable(runnerPath, expectedSha256, execute);
+  const snapshotRoot = mkdtempSync(
+    join(runnerCacheVersionsRoot(), `.spawn-${MAESTRO_RUNNER_PIN.version}-`),
+  );
+  try {
+    copyPayloadTree(pinCacheRoot(), snapshotRoot);
+    const snapshotRunner = join(snapshotRoot, 'bin', 'maestro-runner');
+    const snapshotStat = lstatSync(snapshotRunner);
+    if (
+      !snapshotStat.isFile() ||
+      snapshotStat.isSymbolicLink() ||
+      !installedPayloadMatchesPin(nodePlatformKey(), snapshotRoot) ||
+      createHash('sha256').update(readFileSync(snapshotRunner)).digest('hex') !== expectedSha256
+    ) {
+      throw new Error('RUNNER_PIN_CHANGED: payload content changed before execution.');
+    }
+    return await execute(snapshotRunner);
+  } finally {
+    rmSync(snapshotRoot, { recursive: true, force: true });
+  }
 }
 
 export interface PinDoctorReport {
@@ -663,14 +700,6 @@ export function _resetEngineStatusForTest(): void {
 
 export function _setEngineStatusForTest(s: ReplayEngineStatus): void {
   testStatus = s;
-}
-
-async function defaultExecVersion(bin: string): Promise<string> {
-  const { stdout, stderr } = await execFile(bin, ['--version'], {
-    timeout: 5000,
-    encoding: 'utf8',
-  });
-  return stdout + '\n' + stderr;
 }
 
 function defaultHashFile(bin: string): string | null {
@@ -747,15 +776,7 @@ async function detect(resolvers: EngineStatusResolvers): Promise<ReplayEngineSta
       provenance: 'pin-cache',
     });
   }
-  let version: string | null = null;
-  try {
-    const out = await (resolvers.execVersion ?? defaultExecVersion)(binPath);
-    version = out.match(/(\d+\.\d+\.\d+)/)?.[1] ?? null;
-  } catch {
-    version = null;
-  }
-  const cls = classifyEnginePin({ installed: true, version, sha256 }, platformKey);
-  return buildReplayEngineStatus(cls, version, false, {
+  return buildReplayEngineStatus('pinned-ok', MAESTRO_RUNNER_PIN.version, false, {
     selectedPath: binPath,
     provenance: 'pin-cache',
   });
