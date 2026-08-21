@@ -221,6 +221,10 @@ interface MaestroEnvelope {
     transport?: string;
     transportVersion?: string | null;
     fallback?: string;
+    enginePin?: {
+      pinned?: string;
+      status?: string;
+    };
     deviceAuthority?: MaestroDeviceAuthority;
     steps?: Array<{
       index: number;
@@ -232,6 +236,13 @@ interface MaestroEnvelope {
   };
   error?: string;
   meta?: Record<string, unknown>;
+}
+
+const PROVEN_ENGINE_PIN_DIVERGENCE = new Set(['drift-newer', 'drift-older', 'checksum-mismatch']);
+
+function strictEnginePinDivergence(env: MaestroEnvelope): string | null {
+  const status = env.data?.enginePin?.status;
+  return typeof status === 'string' && PROVEN_ENGINE_PIN_DIVERGENCE.has(status) ? status : null;
 }
 
 function parseEnvelope(toolResult: ToolResult, toolName: string): MaestroEnvelope {
@@ -676,6 +687,10 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       // Opt out globally with RN_BLIND_PROBE=0.
       let atRisk: BlindProbeAtRisk | null = null;
       const strictExecutor = usesStrictRunActionPolicy(args);
+      const strictRunRecordMeta = (outcome: PersistRunOutcome): Record<string, unknown> =>
+        strictExecutor && outcome.persistedRunId
+          ? { strictRunRecordId: outcome.persistedRunId }
+          : {};
       const inheritedBlindProbeDisabled =
         process.env.RN_BLIND_PROBE === '0' || process.env.RN_BLIND_PROBE === 'false';
       const blindProbeDisabled =
@@ -810,11 +825,43 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       );
       const firstAttemptMs = Date.now() - tBeforeFirst;
       const firstEnv = parseEnvelope(firstResult, 'maestro_run');
-      const firstPassed = firstEnv.ok === true && firstEnv.data?.passed === true;
       const firstOutput = readMaestroOutput(firstEnv);
       const firstFailureDetail = readMaestroFailureDetail(firstEnv, firstOutput);
       const firstDeviceAuthority = readMaestroDeviceAuthority(firstEnv);
       probeDeviceId = firstDeviceAuthority?.reportedDeviceId ?? observedDeviceId;
+      const enginePinDivergence = strictExecutor ? strictEnginePinDivergence(firstEnv) : null;
+
+      if (enginePinDivergence) {
+        const autoRepair: AutoRepairOutcome = {
+          attempted: false,
+          outcome: 'refused',
+          refusedReason: 'NOT_REPAIRABLE_KIND',
+          phases: { firstAttemptMs },
+        };
+        const persisted = await persistRunWithDevice({
+          timestamp: new Date().toISOString(),
+          durationMs: Date.now() - t0,
+          status: 'fail',
+          failureCode: 'UNKNOWN',
+          failureDetail: `Engine pin status ${enginePinDivergence}`,
+          trigger,
+          autoRepair,
+        });
+        return failResult(
+          `cdp_run_action: ${args.actionId} refused strict replay because the engine pin status is ${enginePinDivergence}.`,
+          'ENGINE_PIN_MISMATCH',
+          {
+            actionId: args.actionId,
+            failureKind: 'ENGINE_PIN_MISMATCH',
+            enginePin: firstEnv.data?.enginePin,
+            autoRepair,
+            writes: writeDisclosure('none', persisted),
+            ...strictRunRecordMeta(persisted),
+          },
+        );
+      }
+
+      const firstPassed = firstEnv.ok === true && firstEnv.data?.passed === true;
 
       if (firstEnv.code) {
         const typedCode = firstEnv.code as ToolErrorCode;
@@ -847,6 +894,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
             deviceAuthority: firstDeviceAuthority,
             autoRepair,
             writes: writeDisclosure('none', persisted),
+            ...strictRunRecordMeta(persisted),
           },
         );
       }
@@ -865,9 +913,21 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           trigger,
           autoRepair,
         });
+        if (strictExecutor && persisted.persistedRunId !== runId) {
+          return failResult(
+            `cdp_run_action: ${args.actionId} passed, but its authoritative RunRecord was not committed.`,
+            'LOAD_FAILED',
+            {
+              actionId: args.actionId,
+              failureKind: 'AUTHORITATIVE_RUN_RECORD_MISSING',
+              writes: writeDisclosure('none', persisted),
+            },
+          );
+        }
         return okResult({
           passed: true,
           actionId: args.actionId,
+          ...(strictExecutor ? { strictRunRecordId: persisted.persistedRunId } : {}),
           ...(proofReplay ? { proofReplay: true } : {}),
           ...replaySuccessEvidence(firstEnv),
           repair: autoRepair,
@@ -1058,7 +1118,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
               phases: { firstAttemptMs },
             };
         const { actionCode, toolCode } = classifyFailure(failure);
-        await persistRunWithDevice({
+        const persisted = await persistRunWithDevice({
           timestamp: new Date().toISOString(),
           durationMs: Date.now() - t0,
           status: 'fail',
@@ -1081,6 +1141,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           terminal: readMaestroTerminal(firstEnv),
           runnerResume: (firstEnv.meta as { runnerResume?: unknown } | undefined)?.runnerResume,
           ...(cdpJsFallback ? { cdpJsFallback } : {}),
+          ...strictRunRecordMeta(persisted),
         };
         let message =
           failure.kind === 'WDA_BOOTSTRAP_FAILED'
@@ -1391,6 +1452,7 @@ interface PersistRunOutcome {
   promoted: boolean;
   promotionRefused: boolean;
   runtimeStateRefused?: boolean;
+  persistedRunId?: string;
 }
 
 type WriteDisclosureKind =
@@ -1440,7 +1502,7 @@ async function persistRun(
           path: fresh.filePath,
         },
       });
-      return { promoted, promotionRefused };
+      return { promoted, promotionRefused, persistedRunId: record.runId };
     };
     // A promotion refusal is deterministic (externally edited YAML, or a missing
     // `# status: experimental` marker) — retrying cannot clear it, so degrade to

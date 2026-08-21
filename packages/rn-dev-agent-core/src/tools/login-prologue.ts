@@ -105,11 +105,6 @@ export function createLoginPrologueHandler(deps: LoginPrologueDependencies) {
         );
       }
 
-      const priorRunIds = new Set(
-        action.state.runHistory
-          .map((record) => record.runId)
-          .filter((runId): runId is string => typeof runId === 'string'),
-      );
       const replayArgs = Object.create(
         Object.getPrototypeOf(args),
         Object.getOwnPropertyDescriptors(args),
@@ -138,23 +133,32 @@ export function createLoginPrologueHandler(deps: LoginPrologueDependencies) {
       }
 
       const replay = parseEnvelope(replayResult);
+      const strictRunRecordId =
+        typeof replay.data?.strictRunRecordId === 'string'
+          ? replay.data.strictRunRecordId
+          : typeof replay.meta?.strictRunRecordId === 'string'
+            ? replay.meta.strictRunRecordId
+            : undefined;
       let freshRecord: RunRecord | undefined;
       await measure('verify-run-record', async () => {
         const reloaded = loadAction(projectRoot, LOGIN_PROLOGUE_ALIAS);
-        freshRecord = reloaded?.state.runHistory
-          .slice()
-          .reverse()
-          .find((record) => typeof record.runId === 'string' && !priorRunIds.has(record.runId));
+        freshRecord = strictRunRecordId
+          ? reloaded?.state.runHistory.find((record) => record.runId === strictRunRecordId)
+          : undefined;
       });
 
       if (replay.ok !== true || replay.data?.passed !== true) {
+        const metaFailureKind = replay.meta?.failureKind;
         return blocked(
-          replay.code ?? String(replay.data?.failureKind ?? 'ACTION_REPLAY_FAILED'),
+          replay.code ??
+            (typeof metaFailureKind === 'string'
+              ? metaFailureKind
+              : (freshRecord?.failureCode ?? 'ACTION_REPLAY_FAILED')),
           'The saved login action did not pass; exploratory login is now terminally blocked.',
           { actionId: LOGIN_PROLOGUE_ALIAS, ...(freshRecord ? { runRecord: freshRecord } : {}) },
         );
       }
-      if (!freshRecord || freshRecord.status !== 'pass') {
+      if (!strictRunRecordId || !freshRecord || freshRecord.status !== 'pass') {
         return blocked(
           'AUTHORITATIVE_RUN_RECORD_MISSING',
           'The saved login action reported success without a fresh passing RunRecord.',

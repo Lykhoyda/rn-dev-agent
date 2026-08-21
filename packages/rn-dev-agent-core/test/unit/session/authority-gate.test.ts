@@ -2788,8 +2788,17 @@ test('a supervisor token authorizes one blocked mutation and records a redacted 
     detail: 'selector drift',
   });
   const expectedToken = 'supervisor-token-123456';
+  let recoveryCalls = 0;
+  let probeCalls = 0;
   const gate = createAuthorityGate(runtime, {
-    probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+    recoverRuntimeConnection: async () => {
+      recoveryCalls += 1;
+      return false;
+    },
+    probe: async ({ axis }) => {
+      probeCalls += 1;
+      return { axis, identity: `${axis}-identity` };
+    },
     loginSupervisorOverrideToken: () => expectedToken,
   });
 
@@ -2800,6 +2809,8 @@ test('a supervisor token authorizes one blocked mutation and records a redacted 
   })({ expression: 'mutate()', supervisorOverrideToken: 'incorrect-token-1234' });
   assert.equal(JSON.parse(invalid.content[0].text).code, 'LOGIN_PROLOGUE_BLOCKED');
   assert.equal(invalidDispatched, false);
+  assert.equal(recoveryCalls, 0);
+  assert.equal(probeCalls, 0);
 
   let handlerArgs;
   const allowed = await gate.wrap('cdp_evaluate', async (args) => {
@@ -2832,24 +2843,8 @@ test('concurrent supervisor overrides cannot dispatch without a retained audit',
     }
     return replaceBindingsDuringOperation(operation, input);
   };
-  let releasePreflight!: () => void;
-  const preflightBarrier = new Promise<void>((resolve) => {
-    releasePreflight = resolve;
-  });
-  let preflightCount = 0;
-  let bothAtPreflight!: () => void;
-  const bothReady = new Promise<void>((resolve) => {
-    bothAtPreflight = resolve;
-  });
   const gate = createAuthorityGate(runtime, {
-    probe: async ({ axis, phase }) => {
-      if (phase === 'preflight' && axis === 'D') {
-        preflightCount += 1;
-        if (preflightCount === 2) bothAtPreflight();
-        await preflightBarrier;
-      }
-      return { axis, identity: `${axis}-identity` };
-    },
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
     loginSupervisorOverrideToken: () => expectedToken,
   });
   let dispatchCount = 0;
@@ -2862,13 +2857,83 @@ test('concurrent supervisor overrides cannot dispatch without a retained audit',
     wrapped({ expression: 'mutateA()', supervisorOverrideToken: expectedToken }),
     wrapped({ expression: 'mutateB()', supervisorOverrideToken: expectedToken }),
   ];
-  await bothReady;
-  releasePreflight();
   const envelopes = (await Promise.all(calls)).map((result) => JSON.parse(result.content[0].text));
 
   assert.equal(envelopes.filter(({ ok }) => ok === true).length, 1);
   assert.equal(dispatchCount, 1);
   assert.equal(status.bindings.loginPrologue.overrides.length, 1);
+});
+
+test('supervisor tokens are removed before session status can fail', async () => {
+  const { runtime } = fixture();
+  runtime.status = () => {
+    throw new Error('status unavailable');
+  };
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+  });
+  const args = {
+    expression: 'mutate()',
+    supervisorOverrideToken: 'supervisor-token-123456',
+  };
+
+  await assert.rejects(gate.wrap('cdp_evaluate', async () => okResult({}))(args));
+
+  assert.equal(args.supervisorOverrideToken, undefined);
+});
+
+test('login promotion rejects a different pending attempt generation', async () => {
+  const { runtime, status } = fixture();
+  status.bindings.loginPrologue = loginOutcome('passed');
+  const passed = {
+    ...loginOutcome('passed'),
+    runRecord: {
+      runId: 'fresh-login-run',
+      timestamp: '2026-08-21T10:00:00.100Z',
+      durationMs: 100,
+      status: 'pass',
+      trigger: 'agent',
+    },
+  };
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+  });
+
+  const result = await gate.wrap('cdp_login_prologue', async () => {
+    status.bindings.loginPrologue = {
+      ...status.bindings.loginPrologue,
+      attemptId: 'different-attempt',
+    };
+    return okResult(passed);
+  })({});
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.code, 'LOGIN_PROLOGUE_BLOCKED');
+  assert.equal(status.bindings.loginPrologue.state, 'LOGIN_PROLOGUE_BLOCKED');
+  assert.equal(status.bindings.loginPrologue.attemptId, 'different-attempt');
+});
+
+test('busy flow refusal leaves the login attempt blocked and releases its fence', async () => {
+  const { calls, runtime, status } = fixture();
+  status.bindings.loginPrologue = loginOutcome('passed');
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis, phase }) => {
+      calls.push(`${phase}:${axis}`);
+      return { axis, identity: `${axis}-identity` };
+    },
+  });
+
+  const result = await gate.wrap('cdp_login_prologue', async () => {
+    calls.push('arbiter-refusal');
+    return failResult('flow busy', 'BUSY_FLOW_ACTIVE');
+  })({});
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.code, 'LOGIN_PROLOGUE_BLOCKED');
+  assert.equal(status.bindings.loginPrologue.state, 'LOGIN_PROLOGUE_BLOCKED');
+  const firstPostflight = calls.findIndex((call) => call.startsWith('postflight:'));
+  assert.ok(firstPostflight > calls.indexOf('arbiter-refusal'));
+  assert.equal(calls.at(-1), 'end');
 });
 
 test('blocked transition overrides are rejected while cleanup exits remain available', async () => {

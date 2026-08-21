@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { writeFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { createLoginPrologueHandler } from '../../dist/tools/login-prologue.js';
 import { createRunActionHandler } from '../../dist/tools/run-action.js';
@@ -53,6 +54,7 @@ test('login prologue resolves the exact alias and requires a fresh passing RunRe
       });
       return okResult({
         passed: true,
+        strictRunRecordId: `login-run-${runNumber}`,
         transport: 'maestro',
         transportVersion: '1.0.9',
         perStepReadback: { complete: true, steps: [] },
@@ -118,7 +120,11 @@ test('login prologue preserves non-enumerable replay authority', async (t) => {
         status: 'pass',
         trigger: 'agent',
       });
-      return okResult({ passed: true, transport: 'maestro' });
+      return okResult({
+        passed: true,
+        strictRunRecordId: 'login-run-authoritative',
+        transport: 'maestro',
+      });
     },
   });
 
@@ -168,6 +174,88 @@ test('login prologue seals selector replay against every CDP fallback', async (t
   assert.equal(envelope.code, 'LOGIN_PROLOGUE_BLOCKED');
   assert.equal(envelope.meta.loginPrologue.failure.code, 'TESTID_NOT_FOUND');
   assert.equal(replayDepsCalled, false);
+});
+
+test('login prologue rejects a passing result from a divergent runner pin', async (t) => {
+  const project = createTmpProject();
+  t.after(() => project.cleanup());
+  seedLoginAction(project);
+  const runAction = createRunActionHandler({
+    maestroRun: async () =>
+      okResult({
+        passed: true,
+        enginePin: { pinned: '1.0.9', status: 'checksum-mismatch' },
+        transport: 'maestro-runner',
+      }),
+  });
+  const handler = createLoginPrologueHandler({ now: deterministicClock(), runAction });
+
+  const envelope = parse(await handler({ projectRoot: project.root }));
+
+  assert.equal(envelope.code, 'LOGIN_PROLOGUE_BLOCKED');
+  assert.equal(envelope.meta.loginPrologue.failure.code, 'ENGINE_PIN_MISMATCH');
+  assert.equal(project.readSidecar('user-login').runHistory.at(-1).status, 'fail');
+});
+
+test('login prologue requires the strict executor persisted run identity', async (t) => {
+  const project = createTmpProject();
+  t.after(() => project.cleanup());
+  seedLoginAction(project);
+  const handler = createLoginPrologueHandler({
+    now: deterministicClock(),
+    runAction: async () => {
+      appendRunRecordToSidecar(project.root, 'user-login', {
+        runId: 'concurrent-login-run',
+        timestamp: '2026-08-21T10:00:01.000Z',
+        durationMs: 125,
+        status: 'pass',
+        trigger: 'agent',
+      });
+      return okResult({
+        passed: true,
+        strictRunRecordId: 'uncommitted-attempt-run',
+        transport: 'maestro',
+      });
+    },
+  });
+
+  const envelope = parse(await handler({ projectRoot: project.root }));
+
+  assert.equal(envelope.code, 'LOGIN_PROLOGUE_BLOCKED');
+  assert.equal(envelope.meta.loginPrologue.failure.code, 'AUTHORITATIVE_RUN_RECORD_MISSING');
+});
+
+test('strict replay refuses success when RunRecord persistence is not committed', async (t) => {
+  const project = createTmpProject();
+  t.after(() => project.cleanup());
+  seedLoginAction(project);
+  const runAction = createRunActionHandler({
+    maestroRun: async () => {
+      writeFileSync(project.sidecarPath('user-login'), '{invalid-sidecar', 'utf8');
+      return okResult({ passed: true, transport: 'maestro-runner' });
+    },
+  });
+  const handler = createLoginPrologueHandler({ now: deterministicClock(), runAction });
+
+  const envelope = parse(await handler({ projectRoot: project.root }));
+
+  assert.equal(envelope.code, 'LOGIN_PROLOGUE_BLOCKED');
+  assert.equal(envelope.meta.loginPrologue.failure.code, 'LOAD_FAILED');
+});
+
+test('login prologue preserves timeout classification from replay metadata', async (t) => {
+  const project = createTmpProject();
+  t.after(() => project.cleanup());
+  seedLoginAction(project);
+  const handler = createLoginPrologueHandler({
+    now: deterministicClock(),
+    runAction: async () => failResult('timed out', { failureKind: 'TIMEOUT' }),
+  });
+
+  const envelope = parse(await handler({ projectRoot: project.root }));
+
+  assert.equal(envelope.code, 'LOGIN_PROLOGUE_BLOCKED');
+  assert.equal(envelope.meta.loginPrologue.failure.code, 'TIMEOUT');
 });
 
 test('login prologue blocks when the exact user-login action is missing', async (t) => {
@@ -238,7 +326,9 @@ for (const failure of [
           failureCode: failure.code === 'TESTID_NOT_FOUND' ? 'SELECTOR_NOT_FOUND' : 'TIMEOUT',
           trigger: args.trigger ?? 'agent',
         });
-        return failResult(`injected ${failure.name}`, failure.code as 'ENGINE_PIN_MISMATCH');
+        return failResult(`injected ${failure.name}`, failure.code as 'ENGINE_PIN_MISMATCH', {
+          strictRunRecordId: `failed-${failure.code}`,
+        });
       },
     });
 

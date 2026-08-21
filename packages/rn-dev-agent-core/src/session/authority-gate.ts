@@ -742,12 +742,13 @@ function missingLoginPrologueOutcome(): LoginPrologueOutcome {
   };
 }
 
-function pendingLoginPrologueOutcome(): LoginPrologueOutcome {
+function pendingLoginPrologueOutcome(attemptId: string): LoginPrologueOutcome {
   const timestamp = new Date().toISOString();
   return {
     schemaVersion: 1,
     state: LOGIN_PROLOGUE_BLOCKED,
     alias: LOGIN_PROLOGUE_ALIAS,
+    attemptId,
     startedAt: timestamp,
     endedAt: timestamp,
     elapsedMs: 0,
@@ -1166,6 +1167,11 @@ export function createAuthorityGate(
           handlerArgs[0] && typeof handlerArgs[0] === 'object'
             ? (handlerArgs[0] as Record<string, unknown>)
             : {};
+        const suppliedSupervisorOverrideToken =
+          typeof args.supervisorOverrideToken === 'string'
+            ? args.supervisorOverrideToken
+            : undefined;
+        delete args.supervisorOverrideToken;
         const baseProfile = authorityProfileFor(tool, args);
         let profile =
           tool === 'rn_session' &&
@@ -1225,9 +1231,8 @@ export function createAuthorityGate(
           mutation: profile.mutation,
         });
         const pendingSupervisorOverrideToken = loginGuard.blocked
-          ? loginGuard.suppliedOverride
+          ? suppliedSupervisorOverrideToken
           : undefined;
-        delete args.supervisorOverrideToken;
         if (loginGuard.blocked && pendingSupervisorOverrideToken === undefined) {
           return failResult(
             'LOGIN_PROLOGUE_BLOCKED: the deterministic login action did not produce an authoritative passing RunRecord; mutating tools are disabled for this session.',
@@ -1631,7 +1636,9 @@ export function createAuthorityGate(
             throw new SessionAuthorityError(initialStatus.code, initialStatus.reason);
           }
           let status: SessionStatus = initialStatus;
-          if (tool !== 'cdp_login_prologue') {
+          const deferredAdmissionChecks =
+            tool === 'cdp_login_prologue' || pendingSupervisorOverrideToken !== undefined;
+          if (!deferredAdmissionChecks) {
             requireCompleteAxes(status, profile);
             bindSessionArguments(status, profile, args, tool);
           }
@@ -1646,11 +1653,42 @@ export function createAuthorityGate(
               registry,
               operation,
               status,
-              pendingLoginPrologueOutcome(),
+              pendingLoginPrologueOutcome(operation.operationId),
             );
             operation = persisted.operation;
             status = persisted.status;
             loginPrologueAttemptOperationId = operation.operationId;
+            requireCompleteAxes(status, profile);
+            bindSessionArguments(status, profile, args, tool);
+          }
+          if (pendingSupervisorOverrideToken !== undefined) {
+            const outcome = readLoginPrologueOutcome(status.bindings.loginPrologue);
+            if (outcome?.state !== LOGIN_PROLOGUE_BLOCKED) {
+              throw new SessionAuthorityError(
+                'LOGIN_PROLOGUE_BLOCKED',
+                'the blocked login prologue state disappeared before override audit',
+              );
+            }
+            const audit = authorizeLoginSupervisorOverride({
+              expectedOverrideToken: dependencies.loginSupervisorOverrideToken?.(),
+              suppliedOverrideToken: pendingSupervisorOverrideToken,
+              tool,
+            });
+            if (!audit) {
+              throw new SessionAuthorityError(
+                'LOGIN_PROLOGUE_BLOCKED',
+                'the supervisor override token was rejected under the operation fence',
+              );
+            }
+            const persisted = persistLoginPrologueOutcome(
+              runtime,
+              registry,
+              operation,
+              status,
+              appendLoginOverrideAudit(outcome, audit),
+            );
+            operation = persisted.operation;
+            status = persisted.status;
             requireCompleteAxes(status, profile);
             bindSessionArguments(status, profile, args, tool);
           }
@@ -2079,35 +2117,6 @@ export function createAuthorityGate(
               },
             });
           }
-          if (pendingSupervisorOverrideToken !== undefined) {
-            const outcome = readLoginPrologueOutcome(status.bindings.loginPrologue);
-            if (outcome?.state !== LOGIN_PROLOGUE_BLOCKED) {
-              throw new SessionAuthorityError(
-                'LOGIN_PROLOGUE_BLOCKED',
-                'the blocked login prologue state disappeared before override audit',
-              );
-            }
-            const audit = authorizeLoginSupervisorOverride({
-              expectedOverrideToken: dependencies.loginSupervisorOverrideToken?.(),
-              suppliedOverrideToken: pendingSupervisorOverrideToken,
-              tool,
-            });
-            if (!audit) {
-              throw new SessionAuthorityError(
-                'LOGIN_PROLOGUE_BLOCKED',
-                'the supervisor override token was rejected under the operation fence',
-              );
-            }
-            const persisted = persistLoginPrologueOutcome(
-              runtime,
-              registry,
-              operation,
-              status,
-              appendLoginOverrideAudit(outcome, audit),
-            );
-            operation = persisted.operation;
-            status = persisted.status;
-          }
           registry.verifyOperation(operation);
           const snapshotCheckpoint = dependencies.snapshotCaptureCheckpoint?.();
           let result = await registry.runWithOperation(operation, () => handler(...handlerArgs));
@@ -2410,6 +2419,7 @@ export function createAuthorityGate(
             if (
               operation.operationId !== loginPrologueAttemptOperationId ||
               pendingOutcome?.state !== LOGIN_PROLOGUE_BLOCKED ||
+              pendingOutcome.attemptId !== loginPrologueAttemptOperationId ||
               pendingOutcome.failure?.code !== 'LOGIN_PROLOGUE_IN_PROGRESS'
             ) {
               throw new SessionAuthorityError(

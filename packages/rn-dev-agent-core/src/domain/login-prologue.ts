@@ -21,6 +21,7 @@ export interface LoginPrologueOutcome {
   state: 'passed' | typeof LOGIN_PROLOGUE_BLOCKED;
   alias: typeof LOGIN_PROLOGUE_ALIAS;
   actionId?: string;
+  attemptId?: string;
   startedAt: string;
   endedAt: string;
   elapsedMs: number;

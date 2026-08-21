@@ -36,7 +36,7 @@ const PII_PATTERNS = [
 ];
 
 const AUTH_PATHS =
-  /\b(auth|authorization|session|token|accessToken|refreshToken|credentials?|password|passwd|pwd|pass|secret|apiKey|api_key|cookie|set-cookie|clientSecret|client_secret)\b/i;
+  /\b(auth|authorization|session|token|accessToken|refreshToken|supervisorOverrideToken|credentials?|password|passwd|pwd|pass|secret|apiKey|api_key|cookie|set-cookie|clientSecret|client_secret)\b/i;
 
 const MAX_STRING_LENGTH = 2000;
 

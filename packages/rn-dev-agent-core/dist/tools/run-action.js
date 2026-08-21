@@ -89,6 +89,11 @@ function classifyFailure(failure) {
             return { actionCode: 'UNKNOWN', toolCode: undefined };
     }
 }
+const PROVEN_ENGINE_PIN_DIVERGENCE = new Set(['drift-newer', 'drift-older', 'checksum-mismatch']);
+function strictEnginePinDivergence(env) {
+    const status = env.data?.enginePin?.status;
+    return typeof status === 'string' && PROVEN_ENGINE_PIN_DIVERGENCE.has(status) ? status : null;
+}
 function parseEnvelope(toolResult, toolName) {
     try {
         return JSON.parse(toolResult.content?.[0]?.text ?? '{}');
@@ -420,6 +425,9 @@ export function createRunActionHandler(deps = {}) {
             // Opt out globally with RN_BLIND_PROBE=0.
             let atRisk = null;
             const strictExecutor = usesStrictRunActionPolicy(args);
+            const strictRunRecordMeta = (outcome) => strictExecutor && outcome.persistedRunId
+                ? { strictRunRecordId: outcome.persistedRunId }
+                : {};
             const inheritedBlindProbeDisabled = process.env.RN_BLIND_PROBE === '0' || process.env.RN_BLIND_PROBE === 'false';
             const blindProbeDisabled = strictExecutor ||
                 args.blindProbeMode === 'forbid' ||
@@ -542,11 +550,37 @@ export function createRunActionHandler(deps = {}) {
             }));
             const firstAttemptMs = Date.now() - tBeforeFirst;
             const firstEnv = parseEnvelope(firstResult, 'maestro_run');
-            const firstPassed = firstEnv.ok === true && firstEnv.data?.passed === true;
             const firstOutput = readMaestroOutput(firstEnv);
             const firstFailureDetail = readMaestroFailureDetail(firstEnv, firstOutput);
             const firstDeviceAuthority = readMaestroDeviceAuthority(firstEnv);
             probeDeviceId = firstDeviceAuthority?.reportedDeviceId ?? observedDeviceId;
+            const enginePinDivergence = strictExecutor ? strictEnginePinDivergence(firstEnv) : null;
+            if (enginePinDivergence) {
+                const autoRepair = {
+                    attempted: false,
+                    outcome: 'refused',
+                    refusedReason: 'NOT_REPAIRABLE_KIND',
+                    phases: { firstAttemptMs },
+                };
+                const persisted = await persistRunWithDevice({
+                    timestamp: new Date().toISOString(),
+                    durationMs: Date.now() - t0,
+                    status: 'fail',
+                    failureCode: 'UNKNOWN',
+                    failureDetail: `Engine pin status ${enginePinDivergence}`,
+                    trigger,
+                    autoRepair,
+                });
+                return failResult(`cdp_run_action: ${args.actionId} refused strict replay because the engine pin status is ${enginePinDivergence}.`, 'ENGINE_PIN_MISMATCH', {
+                    actionId: args.actionId,
+                    failureKind: 'ENGINE_PIN_MISMATCH',
+                    enginePin: firstEnv.data?.enginePin,
+                    autoRepair,
+                    writes: writeDisclosure('none', persisted),
+                    ...strictRunRecordMeta(persisted),
+                });
+            }
+            const firstPassed = firstEnv.ok === true && firstEnv.data?.passed === true;
             if (firstEnv.code) {
                 const typedCode = firstEnv.code;
                 const autoRepair = {
@@ -574,6 +608,7 @@ export function createRunActionHandler(deps = {}) {
                     deviceAuthority: firstDeviceAuthority,
                     autoRepair,
                     writes: writeDisclosure('none', persisted),
+                    ...strictRunRecordMeta(persisted),
                 });
             }
             if (firstPassed) {
@@ -590,9 +625,17 @@ export function createRunActionHandler(deps = {}) {
                     trigger,
                     autoRepair,
                 });
+                if (strictExecutor && persisted.persistedRunId !== runId) {
+                    return failResult(`cdp_run_action: ${args.actionId} passed, but its authoritative RunRecord was not committed.`, 'LOAD_FAILED', {
+                        actionId: args.actionId,
+                        failureKind: 'AUTHORITATIVE_RUN_RECORD_MISSING',
+                        writes: writeDisclosure('none', persisted),
+                    });
+                }
                 return okResult({
                     passed: true,
                     actionId: args.actionId,
+                    ...(strictExecutor ? { strictRunRecordId: persisted.persistedRunId } : {}),
                     ...(proofReplay ? { proofReplay: true } : {}),
                     ...replaySuccessEvidence(firstEnv),
                     repair: autoRepair,
@@ -764,7 +807,7 @@ export function createRunActionHandler(deps = {}) {
                         phases: { firstAttemptMs },
                     };
                 const { actionCode, toolCode } = classifyFailure(failure);
-                await persistRunWithDevice({
+                const persisted = await persistRunWithDevice({
                     timestamp: new Date().toISOString(),
                     durationMs: Date.now() - t0,
                     status: 'fail',
@@ -787,6 +830,7 @@ export function createRunActionHandler(deps = {}) {
                     terminal: readMaestroTerminal(firstEnv),
                     runnerResume: firstEnv.meta?.runnerResume,
                     ...(cdpJsFallback ? { cdpJsFallback } : {}),
+                    ...strictRunRecordMeta(persisted),
                 };
                 let message = failure.kind === 'WDA_BOOTSTRAP_FAILED'
                     ? `cdp_run_action: ${args.actionId} failed (WDA_BOOTSTRAP_FAILED) before the first replay step: ${failure.detail}. Re-run the replay (bootstrap retries itself); check network access; diagnose the pin-cache runner with ${PINNED_RUNNER_DIAGNOSE_HINT}. Supported correction: ${PINNED_RUNNER_INSTALL_HINT}. Never invoke PATH, ~/.maestro-runner, maestro-cli, or manual login. No preparation or cache mutation was attempted.`
@@ -1069,7 +1113,7 @@ async function persistRun(actionId, projectRoot, record) {
                     path: fresh.filePath,
                 },
             });
-            return { promoted, promotionRefused };
+            return { promoted, promotionRefused, persistedRunId: record.runId };
         };
         // A promotion refusal is deterministic (externally edited YAML, or a missing
         // `# status: experimental` marker) — retrying cannot clear it, so degrade to

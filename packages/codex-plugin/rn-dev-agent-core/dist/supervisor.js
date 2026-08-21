@@ -32796,12 +32796,13 @@ function missingLoginPrologueOutcome() {
     }
   };
 }
-function pendingLoginPrologueOutcome() {
+function pendingLoginPrologueOutcome(attemptId) {
   const timestamp = (/* @__PURE__ */ new Date()).toISOString();
   return {
     schemaVersion: 1,
     state: LOGIN_PROLOGUE_BLOCKED,
     alias: LOGIN_PROLOGUE_ALIAS,
+    attemptId,
     startedAt: timestamp,
     endedAt: timestamp,
     elapsedMs: 0,
@@ -33045,6 +33046,8 @@ function createAuthorityGate(runtime, dependencies) {
   return {
     wrap: (tool, handler) => async (...handlerArgs) => {
       const args = handlerArgs[0] && typeof handlerArgs[0] === "object" ? handlerArgs[0] : {};
+      const suppliedSupervisorOverrideToken = typeof args.supervisorOverrideToken === "string" ? args.supervisorOverrideToken : void 0;
+      delete args.supervisorOverrideToken;
       const baseProfile = authorityProfileFor(tool, args);
       let profile = tool === "rn_session" && (args.action === "status" || args.action === "preview_integration" || args.action === "accept_handoff" || args.action === "adopt_stale") ? {
         kind: "diagnostic",
@@ -33075,8 +33078,7 @@ function createAuthorityGate(runtime, dependencies) {
         args,
         mutation: profile.mutation
       });
-      const pendingSupervisorOverrideToken = loginGuard.blocked ? loginGuard.suppliedOverride : void 0;
-      delete args.supervisorOverrideToken;
+      const pendingSupervisorOverrideToken = loginGuard.blocked ? suppliedSupervisorOverrideToken : void 0;
       if (loginGuard.blocked && pendingSupervisorOverrideToken === void 0) {
         return failResult("LOGIN_PROLOGUE_BLOCKED: the deterministic login action did not produce an authoritative passing RunRecord; mutating tools are disabled for this session.", "LOGIN_PROLOGUE_BLOCKED", {
           loginPrologue: runtimeStatus.available ? runtimeStatus.bindings.loginPrologue : void 0,
@@ -33354,7 +33356,8 @@ function createAuthorityGate(runtime, dependencies) {
           throw new SessionAuthorityError(initialStatus.code, initialStatus.reason);
         }
         let status = initialStatus;
-        if (tool !== "cdp_login_prologue") {
+        const deferredAdmissionChecks = tool === "cdp_login_prologue" || pendingSupervisorOverrideToken !== void 0;
+        if (!deferredAdmissionChecks) {
           requireCompleteAxes(status, profile);
           bindSessionArguments(status, profile, args, tool);
         }
@@ -33364,10 +33367,29 @@ function createAuthorityGate(runtime, dependencies) {
           profile: profile.axes.join("")
         });
         if (tool === "cdp_login_prologue") {
-          const persisted = persistLoginPrologueOutcome(runtime, registry2, operation, status, pendingLoginPrologueOutcome());
+          const persisted = persistLoginPrologueOutcome(runtime, registry2, operation, status, pendingLoginPrologueOutcome(operation.operationId));
           operation = persisted.operation;
           status = persisted.status;
           loginPrologueAttemptOperationId = operation.operationId;
+          requireCompleteAxes(status, profile);
+          bindSessionArguments(status, profile, args, tool);
+        }
+        if (pendingSupervisorOverrideToken !== void 0) {
+          const outcome = readLoginPrologueOutcome(status.bindings.loginPrologue);
+          if (outcome?.state !== LOGIN_PROLOGUE_BLOCKED) {
+            throw new SessionAuthorityError("LOGIN_PROLOGUE_BLOCKED", "the blocked login prologue state disappeared before override audit");
+          }
+          const audit = authorizeLoginSupervisorOverride({
+            expectedOverrideToken: dependencies.loginSupervisorOverrideToken?.(),
+            suppliedOverrideToken: pendingSupervisorOverrideToken,
+            tool
+          });
+          if (!audit) {
+            throw new SessionAuthorityError("LOGIN_PROLOGUE_BLOCKED", "the supervisor override token was rejected under the operation fence");
+          }
+          const persisted = persistLoginPrologueOutcome(runtime, registry2, operation, status, appendLoginOverrideAudit(outcome, audit));
+          operation = persisted.operation;
+          status = persisted.status;
           requireCompleteAxes(status, profile);
           bindSessionArguments(status, profile, args, tool);
         }
@@ -33716,23 +33738,6 @@ function createAuthorityGate(runtime, dependencies) {
             }
           });
         }
-        if (pendingSupervisorOverrideToken !== void 0) {
-          const outcome = readLoginPrologueOutcome(status.bindings.loginPrologue);
-          if (outcome?.state !== LOGIN_PROLOGUE_BLOCKED) {
-            throw new SessionAuthorityError("LOGIN_PROLOGUE_BLOCKED", "the blocked login prologue state disappeared before override audit");
-          }
-          const audit = authorizeLoginSupervisorOverride({
-            expectedOverrideToken: dependencies.loginSupervisorOverrideToken?.(),
-            suppliedOverrideToken: pendingSupervisorOverrideToken,
-            tool
-          });
-          if (!audit) {
-            throw new SessionAuthorityError("LOGIN_PROLOGUE_BLOCKED", "the supervisor override token was rejected under the operation fence");
-          }
-          const persisted = persistLoginPrologueOutcome(runtime, registry2, operation, status, appendLoginOverrideAudit(outcome, audit));
-          operation = persisted.operation;
-          status = persisted.status;
-        }
         registry2.verifyOperation(operation);
         const snapshotCheckpoint = dependencies.snapshotCaptureCheckpoint?.();
         let result = await registry2.runWithOperation(operation, () => handler(...handlerArgs));
@@ -33919,7 +33924,7 @@ function createAuthorityGate(runtime, dependencies) {
         }
         if (operation && loginPrologueOutcome?.state === "passed") {
           const pendingOutcome = readLoginPrologueOutcome(status.bindings.loginPrologue);
-          if (operation.operationId !== loginPrologueAttemptOperationId || pendingOutcome?.state !== LOGIN_PROLOGUE_BLOCKED || pendingOutcome.failure?.code !== "LOGIN_PROLOGUE_IN_PROGRESS") {
+          if (operation.operationId !== loginPrologueAttemptOperationId || pendingOutcome?.state !== LOGIN_PROLOGUE_BLOCKED || pendingOutcome.attemptId !== loginPrologueAttemptOperationId || pendingOutcome.failure?.code !== "LOGIN_PROLOGUE_IN_PROGRESS") {
             throw new SessionAuthorityError("LOGIN_PROLOGUE_BLOCKED", "the passing login result does not match the active blocked attempt");
           }
           const persisted = persistLoginPrologueOutcome(runtime, registry2, operation, status, loginPrologueOutcome);
@@ -76497,7 +76502,7 @@ var init_redact = __esm({
       /\b\d{3}[-.]\d{3}[-.]\d{4}\b/g,
       /\b\d{3}-\d{2}-\d{4}\b/g
     ];
-    AUTH_PATHS = /\b(auth|authorization|session|token|accessToken|refreshToken|credentials?|password|passwd|pwd|pass|secret|apiKey|api_key|cookie|set-cookie|clientSecret|client_secret)\b/i;
+    AUTH_PATHS = /\b(auth|authorization|session|token|accessToken|refreshToken|supervisorOverrideToken|credentials?|password|passwd|pwd|pass|secret|apiKey|api_key|cookie|set-cookie|clientSecret|client_secret)\b/i;
     MAX_STRING_LENGTH = 2e3;
   }
 });
@@ -80103,6 +80108,10 @@ function classifyFailure(failure) {
       return { actionCode: "UNKNOWN", toolCode: void 0 };
   }
 }
+function strictEnginePinDivergence(env) {
+  const status = env.data?.enginePin?.status;
+  return typeof status === "string" && PROVEN_ENGINE_PIN_DIVERGENCE.has(status) ? status : null;
+}
 function parseEnvelope(toolResult, toolName) {
   try {
     return JSON.parse(toolResult.content?.[0]?.text ?? "{}");
@@ -80333,6 +80342,7 @@ function createRunActionHandler(deps = {}) {
     try {
       let atRisk = null;
       const strictExecutor = usesStrictRunActionPolicy(args);
+      const strictRunRecordMeta = (outcome) => strictExecutor && outcome.persistedRunId ? { strictRunRecordId: outcome.persistedRunId } : {};
       const inheritedBlindProbeDisabled = process.env.RN_BLIND_PROBE === "0" || process.env.RN_BLIND_PROBE === "false";
       const blindProbeDisabled = strictExecutor || args.blindProbeMode === "forbid" || args.blindProbeMode !== "allow" && inheritedBlindProbeDisabled;
       if (args.platform !== "android") {
@@ -80433,11 +80443,37 @@ function createRunActionHandler(deps = {}) {
       }));
       const firstAttemptMs = Date.now() - tBeforeFirst;
       const firstEnv = parseEnvelope(firstResult, "maestro_run");
-      const firstPassed = firstEnv.ok === true && firstEnv.data?.passed === true;
       const firstOutput = readMaestroOutput(firstEnv);
       const firstFailureDetail = readMaestroFailureDetail(firstEnv, firstOutput);
       const firstDeviceAuthority = readMaestroDeviceAuthority(firstEnv);
       probeDeviceId = firstDeviceAuthority?.reportedDeviceId ?? observedDeviceId;
+      const enginePinDivergence = strictExecutor ? strictEnginePinDivergence(firstEnv) : null;
+      if (enginePinDivergence) {
+        const autoRepair2 = {
+          attempted: false,
+          outcome: "refused",
+          refusedReason: "NOT_REPAIRABLE_KIND",
+          phases: { firstAttemptMs }
+        };
+        const persisted2 = await persistRunWithDevice({
+          timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+          durationMs: Date.now() - t0,
+          status: "fail",
+          failureCode: "UNKNOWN",
+          failureDetail: `Engine pin status ${enginePinDivergence}`,
+          trigger,
+          autoRepair: autoRepair2
+        });
+        return failResult(`cdp_run_action: ${args.actionId} refused strict replay because the engine pin status is ${enginePinDivergence}.`, "ENGINE_PIN_MISMATCH", {
+          actionId: args.actionId,
+          failureKind: "ENGINE_PIN_MISMATCH",
+          enginePin: firstEnv.data?.enginePin,
+          autoRepair: autoRepair2,
+          writes: writeDisclosure("none", persisted2),
+          ...strictRunRecordMeta(persisted2)
+        });
+      }
+      const firstPassed = firstEnv.ok === true && firstEnv.data?.passed === true;
       if (firstEnv.code) {
         const typedCode = firstEnv.code;
         const autoRepair2 = {
@@ -80460,7 +80496,8 @@ function createRunActionHandler(deps = {}) {
           failureKind: typedCode,
           deviceAuthority: firstDeviceAuthority,
           autoRepair: autoRepair2,
-          writes: writeDisclosure("none", persisted2)
+          writes: writeDisclosure("none", persisted2),
+          ...strictRunRecordMeta(persisted2)
         });
       }
       if (firstPassed) {
@@ -80476,9 +80513,17 @@ function createRunActionHandler(deps = {}) {
           trigger,
           autoRepair: autoRepair2
         });
+        if (strictExecutor && persisted2.persistedRunId !== runId) {
+          return failResult(`cdp_run_action: ${args.actionId} passed, but its authoritative RunRecord was not committed.`, "LOAD_FAILED", {
+            actionId: args.actionId,
+            failureKind: "AUTHORITATIVE_RUN_RECORD_MISSING",
+            writes: writeDisclosure("none", persisted2)
+          });
+        }
         return okResult({
           passed: true,
           actionId: args.actionId,
+          ...strictExecutor ? { strictRunRecordId: persisted2.persistedRunId } : {},
           ...proofReplay ? { proofReplay: true } : {},
           ...replaySuccessEvidence(firstEnv),
           repair: autoRepair2,
@@ -80608,7 +80653,7 @@ function createRunActionHandler(deps = {}) {
           phases: { firstAttemptMs }
         };
         const { actionCode, toolCode } = classifyFailure(failure);
-        await persistRunWithDevice({
+        const persisted2 = await persistRunWithDevice({
           timestamp: (/* @__PURE__ */ new Date()).toISOString(),
           durationMs: Date.now() - t0,
           status: "fail",
@@ -80628,7 +80673,8 @@ function createRunActionHandler(deps = {}) {
           firstAttemptOutput: boundedOutput(firstOutput),
           terminal: readMaestroTerminal(firstEnv),
           runnerResume: firstEnv.meta?.runnerResume,
-          ...cdpJsFallback ? { cdpJsFallback } : {}
+          ...cdpJsFallback ? { cdpJsFallback } : {},
+          ...strictRunRecordMeta(persisted2)
         };
         let message = failure.kind === "WDA_BOOTSTRAP_FAILED" ? `cdp_run_action: ${args.actionId} failed (WDA_BOOTSTRAP_FAILED) before the first replay step: ${failure.detail}. Re-run the replay (bootstrap retries itself); check network access; diagnose the pin-cache runner with ${PINNED_RUNNER_DIAGNOSE_HINT}. Supported correction: ${PINNED_RUNNER_INSTALL_HINT}. Never invoke PATH, ~/.maestro-runner, maestro-cli, or manual login. No preparation or cache mutation was attempted.` : `cdp_run_action: ${args.actionId} failed (${failure.kind})${autoRepairEnabled ? " \u2014 failure not auto-repairable" : " \u2014 auto-repair disabled"}: ${firstFailureDetail}`;
         if (cdpJsFallback?.reason === "cdp-unreachable") {
@@ -80854,7 +80900,7 @@ async function persistRun(actionId, projectRoot, record2) {
           path: fresh.filePath
         }
       });
-      return { promoted, promotionRefused: promotionRefused2 };
+      return { promoted, promotionRefused: promotionRefused2, persistedRunId: record2.runId };
     };
     const promotionRefused = promotes && !promoteActionRuntimeWithCAS(fresh, nextState).ok;
     if (promotes && !promotionRefused)
@@ -80868,7 +80914,7 @@ async function persistRun(actionId, projectRoot, record2) {
   }
   return { promoted: false, promotionRefused: false };
 }
-var strictRunActionPolicy, OUTPUT_BUDGET, OUTPUT_ELISION;
+var strictRunActionPolicy, PROVEN_ENGINE_PIN_DIVERGENCE, OUTPUT_BUDGET, OUTPUT_ELISION;
 var init_run_action = __esm({
   "packages/rn-dev-agent-core/dist/tools/run-action.js"() {
     "use strict";
@@ -80891,6 +80937,7 @@ var init_run_action = __esm({
     init_action_engine_compat();
     init_engine_pin();
     strictRunActionPolicy = /* @__PURE__ */ Symbol("strictRunActionPolicy");
+    PROVEN_ENGINE_PIN_DIVERGENCE = /* @__PURE__ */ new Set(["drift-newer", "drift-older", "checksum-mismatch"]);
     OUTPUT_BUDGET = 500;
     OUTPUT_ELISION = "\n\u2026\n";
   }
@@ -80994,7 +81041,6 @@ function createLoginPrologueHandler(deps) {
       if (action.metadata.id !== LOGIN_PROLOGUE_ALIAS) {
         return blocked("LOGIN_ACTION_ID_MISMATCH", `The ${LOGIN_PROLOGUE_ALIAS} action file declares a different action id.`);
       }
-      const priorRunIds = new Set(action.state.runHistory.map((record2) => record2.runId).filter((runId) => typeof runId === "string"));
       const replayArgs = Object.create(Object.getPrototypeOf(args), Object.getOwnPropertyDescriptors(args));
       Object.assign(replayArgs, {
         actionId: LOGIN_PROLOGUE_ALIAS,
@@ -81015,15 +81061,17 @@ function createLoginPrologueHandler(deps) {
         });
       }
       const replay = parseEnvelope2(replayResult);
+      const strictRunRecordId = typeof replay.data?.strictRunRecordId === "string" ? replay.data.strictRunRecordId : typeof replay.meta?.strictRunRecordId === "string" ? replay.meta.strictRunRecordId : void 0;
       let freshRecord;
       await measure("verify-run-record", async () => {
         const reloaded = loadAction(projectRoot, LOGIN_PROLOGUE_ALIAS);
-        freshRecord = reloaded?.state.runHistory.slice().reverse().find((record2) => typeof record2.runId === "string" && !priorRunIds.has(record2.runId));
+        freshRecord = strictRunRecordId ? reloaded?.state.runHistory.find((record2) => record2.runId === strictRunRecordId) : void 0;
       });
       if (replay.ok !== true || replay.data?.passed !== true) {
-        return blocked(replay.code ?? String(replay.data?.failureKind ?? "ACTION_REPLAY_FAILED"), "The saved login action did not pass; exploratory login is now terminally blocked.", { actionId: LOGIN_PROLOGUE_ALIAS, ...freshRecord ? { runRecord: freshRecord } : {} });
+        const metaFailureKind = replay.meta?.failureKind;
+        return blocked(replay.code ?? (typeof metaFailureKind === "string" ? metaFailureKind : freshRecord?.failureCode ?? "ACTION_REPLAY_FAILED"), "The saved login action did not pass; exploratory login is now terminally blocked.", { actionId: LOGIN_PROLOGUE_ALIAS, ...freshRecord ? { runRecord: freshRecord } : {} });
       }
-      if (!freshRecord || freshRecord.status !== "pass") {
+      if (!strictRunRecordId || !freshRecord || freshRecord.status !== "pass") {
         return blocked("AUTHORITATIVE_RUN_RECORD_MISSING", "The saved login action reported success without a fresh passing RunRecord.", { actionId: LOGIN_PROLOGUE_ALIAS });
       }
       const outcome = finish("passed", {
