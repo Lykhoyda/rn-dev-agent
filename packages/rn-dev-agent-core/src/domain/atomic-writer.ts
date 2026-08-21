@@ -45,6 +45,7 @@ import {
   readdirSync,
   openSync,
   closeSync,
+  chmodSync,
   fstatSync,
   lstatSync,
   readFileSync,
@@ -463,6 +464,7 @@ export const atomicWriter = {
         return false;
       }
       const expectedPath = `${candidatePath}.expected.${stamp}`;
+      chmodSync(candidatePath, opened.mode & 0o7777);
       atomicWriter._writeFile(expectedPath, expectedContent);
       try {
         return publishFileIfUnchangedDarwin(targetFd, targetPath, candidatePath, expectedPath);

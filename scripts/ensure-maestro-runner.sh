@@ -264,8 +264,20 @@ LOCK_HELD=0
 LOCK_OWNER_FILE=""
 LOCK_OWNER_BIRTH=""
 TEMP_DIR=""
+BACKUP_DIR=""
+PUBLICATION_COMPLETE=0
 
 cleanup() {
+  if [ -n "$BACKUP_DIR" ] && [ -d "$BACKUP_DIR" ] && [ ! -L "$BACKUP_DIR" ]; then
+    if [ "$PUBLICATION_COMPLETE" = "0" ]; then
+      if [ -e "$PIN_DIR" ] || [ -L "$PIN_DIR" ]; then
+        rm -rf "$PIN_DIR"
+      fi
+      mv "$BACKUP_DIR" "$PIN_DIR"
+    else
+      rm -rf "$BACKUP_DIR"
+    fi
+  fi
   if [ -n "$TEMP_DIR" ]; then
     rm -rf "$TEMP_DIR"
   fi
@@ -563,6 +575,7 @@ if ! deadline_run mv "$STAGED_PIN_DIR" "$PIN_DIR"; then
   correction
   exit 1
 fi
+PUBLICATION_COMPLETE=1
 if [ -d "$BACKUP_DIR" ]; then
   deadline_run rm -rf "$BACKUP_DIR" || true
 fi

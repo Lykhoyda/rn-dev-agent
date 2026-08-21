@@ -271,6 +271,86 @@ test('installed fast path refuses a payload changed after verified installation'
   assert.equal(existsSync(executionMarker), false);
 });
 
+test('installer restores the live pin when backup publication fails', () => {
+  const root = mkdtempSync(join(tmpdir(), 'mr-publication-rollback-'));
+  const scriptDir = join(root, 'scripts');
+  const payload = join(root, 'payload', 'maestro-runner');
+  const archive = join(root, 'maestro-runner.tar.gz');
+  const cache = join(root, 'cache');
+  const pinDir = join(cache, 'maestro-runner', MAESTRO_RUNNER_PIN.version);
+  const liveMarker = join(pinDir, 'live-before-publication');
+  mkdirSync(join(payload, 'bin'), { recursive: true });
+  mkdirSync(join(pinDir, 'bin'), { recursive: true });
+  mkdirSync(scriptDir);
+  const runner = join(payload, 'bin', 'maestro-runner');
+  writeFileSync(runner, '#!/bin/sh\necho maestro-runner 1.1.24\n', 'utf8');
+  chmodSync(runner, 0o755);
+  writeFileSync(join(pinDir, 'bin', 'maestro-runner'), '#!/bin/sh\necho previous\n', 'utf8');
+  chmodSync(join(pinDir, 'bin', 'maestro-runner'), 0o755);
+  writeFileSync(liveMarker, 'preserve-me', 'utf8');
+  const packed = spawnSync('tar', ['-czf', archive, '-C', join(root, 'payload'), 'maestro-runner']);
+  assert.equal(packed.status, 0, String(packed.stderr));
+  const copiedScript = join(scriptDir, 'ensure-maestro-runner.sh');
+  writeFileSync(copiedScript, readFileSync(SCRIPT), 'utf8');
+  chmodSync(copiedScript, 0o755);
+  writeFileSync(
+    join(scriptDir, 'maestro-runner-pin.json'),
+    JSON.stringify({
+      version: MAESTRO_RUNNER_PIN.version,
+      sha256: Object.fromEntries(
+        ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64'].map((key) => [
+          key,
+          createHash('sha256').update(readFileSync(runner)).digest('hex'),
+        ]),
+      ),
+      archiveSha256: Object.fromEntries(
+        ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64'].map((key) => [
+          key,
+          createHash('sha256').update(readFileSync(archive)).digest('hex'),
+        ]),
+      ),
+      knownQuirks: [],
+    }),
+    'utf8',
+  );
+  const nativeSource = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'native');
+  const nativeTarget = join(root, 'rn-dev-agent-core', 'dist', 'native');
+  mkdirSync(nativeTarget, { recursive: true });
+  for (const name of ['darwin-process-birth', 'darwin-process-birth.json']) {
+    copyFileSync(join(nativeSource, name), join(nativeTarget, name));
+  }
+  chmodSync(join(nativeTarget, 'darwin-process-birth'), 0o755);
+  const toolDir = join(root, 'tools');
+  mkdirSync(toolDir);
+  const realMv = (process.env.PATH ?? '')
+    .split(':')
+    .map((entry) => join(entry, 'mv'))
+    .find(existsSync);
+  assert.ok(realMv);
+  writeFileSync(
+    join(toolDir, 'mv'),
+    '#!/bin/sh\n"$REAL_MV" "$@"\ncase "$2" in *.backup.*) exit 124 ;; esac\n',
+  );
+  chmodSync(join(toolDir, 'mv'), 0o755);
+
+  const result = spawnSync('bash', [copiedScript], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      PATH: `${toolDir}:${process.env.PATH ?? ''}`,
+      REAL_MV: realMv,
+      RN_DEV_AGENT_RUNNER_CACHE: cache,
+      RN_DEV_AGENT_UNAME_S: 'Darwin',
+      RN_DEV_AGENT_UNAME_M: 'arm64',
+      RN_DEV_AGENT_MAESTRO_DOWNLOAD_URL: pathToFileURL(archive).href,
+    },
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.equal(readFileSync(liveMarker, 'utf8'), 'preserve-me');
+  assert.equal(existsSync(join(pinDir, 'bin', 'maestro-runner')), true);
+});
+
 test('installer reclaims a stale ownerless legacy lock', () => {
   const cache = mkdtempSync(join(tmpdir(), 'mr-ownerless-lock-'));
   const lock = join(cache, 'maestro-runner', `.install-${MAESTRO_RUNNER_PIN.version}.lock`);

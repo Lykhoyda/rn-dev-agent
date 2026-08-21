@@ -120,6 +120,12 @@ test('macOS process identity requires the verified live helper CDHash', () => {
   const helperBytes = readFileSync(
     new URL('../../../dist/native/darwin-process-birth', import.meta.url),
   );
+  const helperManifest = JSON.parse(
+    readFileSync(
+      new URL('../../../dist/native/darwin-process-birth.json', import.meta.url),
+      'utf8',
+    ),
+  );
   const metadata = {
     dev: 1,
     ino: 2,
@@ -140,19 +146,7 @@ test('macOS process identity requires the verified live helper CDHash', () => {
     close: () => {},
     uid: 501,
     readDescriptor: () => helperBytes,
-    readBinary: () =>
-      Buffer.from(
-        JSON.stringify({
-          sourceSha256: '99a8025ab1c3cfbe32db184f6e030216d75c535143bd4684a2a89aac61c54c4a',
-          recipeSha256: '4f40539bce137f7bcae4731fd1494fae5704cba5327177d7f2a2a47aec95afb3',
-          stableBinarySha256: '6b5db7f7a6933f3d11d4c53ecafba9c3ef82c2533faf4bfe07a11b3cb4022dea',
-          binarySha256: 'fee005927e8d680b1589574211002d8809e3478446b97d3c9291157ea57b0dd5',
-          cdhashes: [
-            '1e67841d4d49a5e5088d283e26430130f017b989',
-            '7f25b0eca55913e522781923a16c6b0cd98bb4fc',
-          ],
-        }),
-      ),
+    readBinary: () => Buffer.from(JSON.stringify(helperManifest)),
     run: (command) => (command === '/bin/ps' ? '123\n' : 'C9D056AF-6F25-47A3-8A9A-63B86EF8519F\n'),
     runVerifiedHelper: (path, pid, requirement) => {
       assert.equal(path, '/trusted/darwin-process-birth');
@@ -165,7 +159,7 @@ test('macOS process identity requires the verified live helper CDHash', () => {
   assert.equal(birth?.source, 'darwin-libproc');
   assert.equal(
     observedRequirement,
-    '(cdhash H"1e67841d4d49a5e5088d283e26430130f017b989" or cdhash H"7f25b0eca55913e522781923a16c6b0cd98bb4fc")',
+    `(${helperManifest.cdhashes.map((hash) => `cdhash H"${hash}"`).join(' or ')})`,
   );
 });
 
@@ -341,5 +335,31 @@ test('Darwin process helper ships executable in core and both host runtimes', ()
     for (const url of helperUrls) {
       assert.notEqual(statSync(url).mode & 0o111, 0);
     }
+  }
+});
+
+test('Linux publication helpers ship in core and both host runtimes', () => {
+  for (const [architecture, machine] of [
+    ['x64', 62],
+    ['arm64', 183],
+  ] as const) {
+    const relative = `native/linux-conditional-publication-${architecture}`;
+    const urls = [
+      new URL(`../../../dist/${relative}`, import.meta.url),
+      new URL(`../../../../claude-plugin/rn-dev-agent-core/dist/${relative}`, import.meta.url),
+      new URL(`../../../../codex-plugin/rn-dev-agent-core/dist/${relative}`, import.meta.url),
+    ];
+    const helpers = urls.map((url) => readFileSync(url));
+    const manifests = urls.map((url) =>
+      JSON.parse(readFileSync(`${fileURLToPath(url)}.json`, 'utf8')),
+    );
+
+    assert.deepEqual(helpers[1], helpers[0]);
+    assert.deepEqual(helpers[2], helpers[0]);
+    assert.deepEqual(manifests[1], manifests[0]);
+    assert.deepEqual(manifests[2], manifests[0]);
+    assert.equal(helpers[0].readUInt32BE(0), 0x7f454c46);
+    assert.equal(helpers[0].readUInt16LE(18), machine);
+    assert.equal(manifests[0].binarySha256, createHash('sha256').update(helpers[0]).digest('hex'));
   }
 });

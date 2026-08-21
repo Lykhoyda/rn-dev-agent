@@ -9,6 +9,7 @@
 //   corepack yarn build:host-runtimes
 const {
   chmodSync,
+  constants,
   cpSync,
   copyFileSync,
   existsSync,
@@ -18,7 +19,7 @@ const {
   writeFileSync,
 } = require('node:fs');
 const { spawnSync } = require('node:child_process');
-const { dirname, join } = require('node:path');
+const { basename, dirname, join } = require('node:path');
 
 const repoRoot = dirname(__dirname);
 const coreRoot = join(repoRoot, 'packages', 'rn-dev-agent-core');
@@ -28,6 +29,9 @@ const claudePluginRoot = join(repoRoot, 'packages', 'claude-plugin');
 const observeWebDistSource = join(coreRoot, 'dist', 'observability', 'web-dist');
 const darwinProcessBirthHelper = join(coreRoot, 'native', 'darwin-process-birth');
 const darwinProcessBirthManifest = `${darwinProcessBirthHelper}.json`;
+const linuxConditionalPublicationHelpers = ['x64', 'arm64'].map((architecture) =>
+  join(coreRoot, 'native', `linux-conditional-publication-${architecture}`),
+);
 const sourceMapPath = join(repoRoot, 'packages', 'shared-agent-knowledge', 'source-map.json');
 const maestroRunnerPinManifest = join(coreRoot, 'src', 'domain', 'maestro-runner-pin.json');
 const sourceMap = JSON.parse(readFileSync(sourceMapPath, 'utf8'));
@@ -75,6 +79,20 @@ if (processBirthHelperBuild.error) {
 }
 if (processBirthHelperBuild.status !== 0) {
   process.exit(processBirthHelperBuild.status ?? 1);
+}
+const conditionalPublicationHelperBuild = spawnSync(
+  process.execPath,
+  [join(repoRoot, 'scripts', 'build-linux-conditional-publication-helper.ts')],
+  { cwd: repoRoot, stdio: 'inherit' },
+);
+if (conditionalPublicationHelperBuild.error) {
+  console.error(
+    `build-host-runtimes: failed to verify Linux publication helpers: ${conditionalPublicationHelperBuild.error.message}`,
+  );
+  process.exit(1);
+}
+if (conditionalPublicationHelperBuild.status !== 0) {
+  process.exit(conditionalPublicationHelperBuild.status ?? 1);
 }
 
 const RUNTIME_ENTRIES = [
@@ -167,9 +185,15 @@ mkdirSync(join(claudeRuntimeRoot, 'dist'), { recursive: true });
 for (const runtimeRoot of [coreRoot, codexRuntimeRoot, claudeRuntimeRoot]) {
   const target = join(runtimeRoot, 'dist', 'native', 'darwin-process-birth');
   mkdirSync(dirname(target), { recursive: true });
-  copyFileSync(darwinProcessBirthHelper, target);
-  copyFileSync(darwinProcessBirthManifest, `${target}.json`);
+  copyFileSync(darwinProcessBirthHelper, target, constants.COPYFILE_FICLONE);
+  copyFileSync(darwinProcessBirthManifest, `${target}.json`, constants.COPYFILE_FICLONE);
   chmodSync(target, 0o755);
+  for (const helper of linuxConditionalPublicationHelpers) {
+    const linuxTarget = join(runtimeRoot, 'dist', 'native', basename(helper));
+    copyFileSync(helper, linuxTarget, constants.COPYFILE_FICLONE);
+    copyFileSync(`${helper}.json`, `${linuxTarget}.json`, constants.COPYFILE_FICLONE);
+    chmodSync(linuxTarget, 0o755);
+  }
 }
 
 for (const file of RUNTIME_ENTRIES) {

@@ -8584,6 +8584,9 @@ function verifyDarwinProcessBirthHelper(dependencies) {
   }
 }
 function publishFileIfUnchangedDarwin(targetFd, targetPath, candidatePath, expectedPath) {
+  if (process.platform === "linux") {
+    return publishFileIfUnchangedLinux(targetFd, targetPath, candidatePath, expectedPath);
+  }
   if (process.platform !== "darwin")
     return false;
   const target = fstatSync(targetFd);
@@ -8596,6 +8599,69 @@ function publishFileIfUnchangedDarwin(targetFd, targetPath, candidatePath, expec
   try {
     const digest = createHash2("sha256").update(readFileSync4(boundPath)).digest("hex");
     if (digest !== DARWIN_HELPER_MANIFEST.binarySha256) {
+      throw new Error("Conditional action publication helper changed before execution.");
+    }
+    execFileSync(boundPath, [
+      "--publish-if-unchanged",
+      targetPath,
+      candidatePath,
+      expectedPath,
+      String(target.dev),
+      String(target.ino)
+    ], { stdio: "ignore", timeout: 2e3 });
+    return true;
+  } catch (error) {
+    if (error.status === 10)
+      return false;
+    throw error;
+  } finally {
+    unlinkSync2(boundPath);
+  }
+}
+function linuxConditionalPublicationHelperPath(architecture) {
+  const moduleDirectory = dirname4(fileURLToPath(import.meta.url));
+  const name = `linux-conditional-publication-${architecture}`;
+  const candidates = [
+    join5(moduleDirectory, "native", name),
+    join5(moduleDirectory, "..", "native", name)
+  ];
+  for (const candidate of candidates) {
+    if (existsSync3(candidate))
+      return candidate;
+  }
+  return candidates[0];
+}
+function publishFileIfUnchangedLinux(targetFd, targetPath, candidatePath, expectedPath) {
+  if (process.platform !== "linux" || process.arch !== "x64" && process.arch !== "arm64") {
+    return false;
+  }
+  const architecture = process.arch;
+  const helperPath = linuxConditionalPublicationHelperPath(architecture);
+  if (realpathSync2(helperPath) !== helperPath) {
+    throw new Error("Linux conditional publication helper path is not canonical.");
+  }
+  const before = lstatSync3(helperPath);
+  const uid = process.getuid?.();
+  if (!before.isFile() || before.isSymbolicLink() || !(/* @__PURE__ */ new Set([0, ...uid === void 0 ? [] : [uid]])).has(before.uid) || (before.mode & 18) !== 0 || (before.mode & 73) === 0) {
+    throw new Error("Linux conditional publication helper metadata is untrusted.");
+  }
+  const helperFd = openSync(helperPath, constants2.O_RDONLY | constants2.O_NOFOLLOW);
+  try {
+    const opened = fstatSync(helperFd);
+    if (!opened.isFile() || !sameFile(before, opened) || createHash2("sha256").update(readFileSync4(helperFd)).digest("hex") !== LINUX_PUBLICATION_HELPER_SHA256[architecture]) {
+      throw new Error("Linux conditional publication helper changed during verification.");
+    }
+  } finally {
+    closeSync(helperFd);
+  }
+  const target = fstatSync(targetFd);
+  if (!target.isFile())
+    return false;
+  const boundPath = `${helperPath}.publish.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}`;
+  copyFileSync2(helperPath, boundPath, constants2.COPYFILE_EXCL | constants2.COPYFILE_FICLONE);
+  chmodSync3(boundPath, 448);
+  try {
+    if (createHash2("sha256").update(readFileSync4(boundPath)).digest("hex") !== LINUX_PUBLICATION_HELPER_SHA256[architecture]) {
       throw new Error("Conditional action publication helper changed before execution.");
     }
     execFileSync(boundPath, [
@@ -8714,20 +8780,24 @@ function probeRecordedProcessBirth(pid, dependencies) {
   }
   return { status: "unknown" };
 }
-var DARWIN_HELPER_MANIFEST, VERIFIED_HELPER_SCRIPT;
+var DARWIN_HELPER_MANIFEST, LINUX_PUBLICATION_HELPER_SHA256, VERIFIED_HELPER_SCRIPT;
 var init_process_birth = __esm({
   "packages/rn-dev-agent-core/dist/session/process-birth.js"() {
     "use strict";
     init_trusted_system_executable();
     DARWIN_HELPER_MANIFEST = {
-      sourceSha256: "18a850cc31258a012f5bb94e0a8c5c5864dc8c86352824f028b2771f5615df78",
-      recipeSha256: "1d12d850fb2d9245d932284aba182d52de4afb2e50054f2777f723648c27f51b",
-      stableBinarySha256: "e08f05d9be4b43971a22e5999c6778b553c8fb704b1781fc33a03a41e21cad6d",
-      binarySha256: "6531ba7f0ccbfeeb7af63e8592ea3d4e56c70857ed4cd519dd732818cd0eec34",
+      sourceSha256: "3162ff8a8c561b0b64f5a67df22cda26aef1ff31939d557c1b2901421e616230",
+      recipeSha256: "bd51a1c00d7d62715ed8b9fec2262876ef5a0badac2cf5eb259c60688e7a9b65",
+      stableBinarySha256: "6c0adc43359789b6b37d255653683c047521e8835e12cb602ce4722f1a367258",
+      binarySha256: "0e4f7912ca4454eb9f6a7c5075759241e9dc8fa527a96d1c8a7863d07f5bf046",
       cdhashes: [
-        "e8b3050e32ea7a65dc6c93507c1f80687253f536",
-        "7b6c3b56dd4fc5cb79ea90079ca699426709b432"
+        "61207f3b2bc1b94d1d41dd02d2f75ea505d167db",
+        "2fbf84ca583bbd32b9af872d1ee0a818182022e7"
       ]
+    };
+    LINUX_PUBLICATION_HELPER_SHA256 = {
+      x64: "ddce7d82bee5d431981a991e43b3555c4c0d4e10ab3de6d200c8f94e62139d97",
+      arm64: "422a8a803cc0f035c47a4eae6b47b625927c6c120cbc8ae5e1efafe18cae2402"
     };
     VERIFIED_HELPER_SCRIPT = `
 set -euo pipefail
@@ -8781,7 +8851,7 @@ print -r -- "$result"
 });
 
 // packages/rn-dev-agent-core/dist/domain/atomic-writer.js
-import { writeFileSync as writeFileSync2, renameSync, statSync as statSync2, mkdirSync as mkdirSync4, existsSync as existsSync4, unlinkSync as unlinkSync3, readdirSync as readdirSync2, openSync as openSync2, closeSync as closeSync2, fstatSync as fstatSync2, lstatSync as lstatSync4, readFileSync as readFileSync5, linkSync, constants as constants3 } from "node:fs";
+import { writeFileSync as writeFileSync2, renameSync, statSync as statSync2, mkdirSync as mkdirSync4, existsSync as existsSync4, unlinkSync as unlinkSync3, readdirSync as readdirSync2, openSync as openSync2, closeSync as closeSync2, chmodSync as chmodSync4, fstatSync as fstatSync2, lstatSync as lstatSync4, readFileSync as readFileSync5, linkSync, constants as constants3 } from "node:fs";
 import { dirname as dirname5, basename as basename2 } from "node:path";
 function generateTmpStamp() {
   const rand = Math.random().toString(36).slice(2, 10);
@@ -9053,6 +9123,7 @@ var init_atomic_writer = __esm({
             return false;
           }
           const expectedPath = `${candidatePath}.expected.${stamp}`;
+          chmodSync4(candidatePath, opened.mode & 4095);
           atomicWriter._writeFile(expectedPath, expectedContent);
           try {
             return publishFileIfUnchangedDarwin(targetFd, targetPath, candidatePath, expectedPath);

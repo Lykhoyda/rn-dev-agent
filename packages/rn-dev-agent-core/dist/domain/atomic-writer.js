@@ -34,7 +34,7 @@
 //
 // Test seam: the public API is on a single exported object so tests can
 // `mock.method(atomicWriter, '_writeFile', ...)` to inject failures.
-import { writeFileSync, renameSync, statSync, mkdirSync, existsSync, unlinkSync, readdirSync, openSync, closeSync, fstatSync, lstatSync, readFileSync, linkSync, constants, } from 'node:fs';
+import { writeFileSync, renameSync, statSync, mkdirSync, existsSync, unlinkSync, readdirSync, openSync, closeSync, chmodSync, fstatSync, lstatSync, readFileSync, linkSync, constants, } from 'node:fs';
 import { dirname, basename } from 'node:path';
 import { probeProcessBirth, publishFileIfUnchangedDarwin } from '../session/process-birth.js';
 // Multi-LLM review of PR #109 findings 1+2: `finalMtimeMs = _stat(yaml)`
@@ -412,6 +412,7 @@ export const atomicWriter = {
                 return false;
             }
             const expectedPath = `${candidatePath}.expected.${stamp}`;
+            chmodSync(candidatePath, opened.mode & 0o7777);
             atomicWriter._writeFile(expectedPath, expectedContent);
             try {
                 return publishFileIfUnchangedDarwin(targetFd, targetPath, candidatePath, expectedPath);

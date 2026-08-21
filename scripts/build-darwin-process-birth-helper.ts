@@ -88,6 +88,7 @@ static int publish_if_unchanged(
     if (renamex_np(target_path, candidate_path, RENAME_SWAP) != 0) return 12;
     return 10;
   }
+  if (unlink(candidate_path) != 0) return 11;
   return 0;
 }
 

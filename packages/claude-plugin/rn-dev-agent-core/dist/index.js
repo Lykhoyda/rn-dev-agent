@@ -12023,6 +12023,9 @@ async function withVerifiedDarwinProcessBirthHelper(callback) {
   return callback(verifyDarwinProcessBirthHelper({}));
 }
 function publishFileIfUnchangedDarwin(targetFd, targetPath, candidatePath, expectedPath) {
+  if (process.platform === "linux") {
+    return publishFileIfUnchangedLinux(targetFd, targetPath, candidatePath, expectedPath);
+  }
   if (process.platform !== "darwin")
     return false;
   const target = fstatSync(targetFd);
@@ -12035,6 +12038,69 @@ function publishFileIfUnchangedDarwin(targetFd, targetPath, candidatePath, expec
   try {
     const digest3 = createHash3("sha256").update(readFileSync5(boundPath)).digest("hex");
     if (digest3 !== DARWIN_HELPER_MANIFEST.binarySha256) {
+      throw new Error("Conditional action publication helper changed before execution.");
+    }
+    execFileSync2(boundPath, [
+      "--publish-if-unchanged",
+      targetPath,
+      candidatePath,
+      expectedPath,
+      String(target.dev),
+      String(target.ino)
+    ], { stdio: "ignore", timeout: 2e3 });
+    return true;
+  } catch (error2) {
+    if (error2.status === 10)
+      return false;
+    throw error2;
+  } finally {
+    unlinkSync3(boundPath);
+  }
+}
+function linuxConditionalPublicationHelperPath(architecture) {
+  const moduleDirectory = dirname3(fileURLToPath(import.meta.url));
+  const name = `linux-conditional-publication-${architecture}`;
+  const candidates = [
+    join7(moduleDirectory, "native", name),
+    join7(moduleDirectory, "..", "native", name)
+  ];
+  for (const candidate of candidates) {
+    if (existsSync6(candidate))
+      return candidate;
+  }
+  return candidates[0];
+}
+function publishFileIfUnchangedLinux(targetFd, targetPath, candidatePath, expectedPath) {
+  if (process.platform !== "linux" || process.arch !== "x64" && process.arch !== "arm64") {
+    return false;
+  }
+  const architecture = process.arch;
+  const helperPath = linuxConditionalPublicationHelperPath(architecture);
+  if (realpathSync(helperPath) !== helperPath) {
+    throw new Error("Linux conditional publication helper path is not canonical.");
+  }
+  const before = lstatSync2(helperPath);
+  const uid = process.getuid?.();
+  if (!before.isFile() || before.isSymbolicLink() || !(/* @__PURE__ */ new Set([0, ...uid === void 0 ? [] : [uid]])).has(before.uid) || (before.mode & 18) !== 0 || (before.mode & 73) === 0) {
+    throw new Error("Linux conditional publication helper metadata is untrusted.");
+  }
+  const helperFd = openSync(helperPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const opened = fstatSync(helperFd);
+    if (!opened.isFile() || !sameFile(before, opened) || createHash3("sha256").update(readFileSync5(helperFd)).digest("hex") !== LINUX_PUBLICATION_HELPER_SHA256[architecture]) {
+      throw new Error("Linux conditional publication helper changed during verification.");
+    }
+  } finally {
+    closeSync(helperFd);
+  }
+  const target = fstatSync(targetFd);
+  if (!target.isFile())
+    return false;
+  const boundPath = `${helperPath}.publish.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}`;
+  copyFileSync(helperPath, boundPath, constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE);
+  chmodSync(boundPath, 448);
+  try {
+    if (createHash3("sha256").update(readFileSync5(boundPath)).digest("hex") !== LINUX_PUBLICATION_HELPER_SHA256[architecture]) {
       throw new Error("Conditional action publication helper changed before execution.");
     }
     execFileSync2(boundPath, [
@@ -12157,20 +12223,24 @@ function probeRecordedProcessBirth(pid, dependencies) {
   }
   return { status: "unknown" };
 }
-var DARWIN_HELPER_MANIFEST, VERIFIED_HELPER_SCRIPT;
+var DARWIN_HELPER_MANIFEST, LINUX_PUBLICATION_HELPER_SHA256, VERIFIED_HELPER_SCRIPT;
 var init_process_birth = __esm({
   "packages/rn-dev-agent-core/dist/session/process-birth.js"() {
     "use strict";
     init_trusted_system_executable();
     DARWIN_HELPER_MANIFEST = {
-      sourceSha256: "18a850cc31258a012f5bb94e0a8c5c5864dc8c86352824f028b2771f5615df78",
-      recipeSha256: "1d12d850fb2d9245d932284aba182d52de4afb2e50054f2777f723648c27f51b",
-      stableBinarySha256: "e08f05d9be4b43971a22e5999c6778b553c8fb704b1781fc33a03a41e21cad6d",
-      binarySha256: "6531ba7f0ccbfeeb7af63e8592ea3d4e56c70857ed4cd519dd732818cd0eec34",
+      sourceSha256: "3162ff8a8c561b0b64f5a67df22cda26aef1ff31939d557c1b2901421e616230",
+      recipeSha256: "bd51a1c00d7d62715ed8b9fec2262876ef5a0badac2cf5eb259c60688e7a9b65",
+      stableBinarySha256: "6c0adc43359789b6b37d255653683c047521e8835e12cb602ce4722f1a367258",
+      binarySha256: "0e4f7912ca4454eb9f6a7c5075759241e9dc8fa527a96d1c8a7863d07f5bf046",
       cdhashes: [
-        "e8b3050e32ea7a65dc6c93507c1f80687253f536",
-        "7b6c3b56dd4fc5cb79ea90079ca699426709b432"
+        "61207f3b2bc1b94d1d41dd02d2f75ea505d167db",
+        "2fbf84ca583bbd32b9af872d1ee0a818182022e7"
       ]
+    };
+    LINUX_PUBLICATION_HELPER_SHA256 = {
+      x64: "ddce7d82bee5d431981a991e43b3555c4c0d4e10ab3de6d200c8f94e62139d97",
+      arm64: "422a8a803cc0f035c47a4eae6b47b625927c6c120cbc8ae5e1efafe18cae2402"
     };
     VERIFIED_HELPER_SCRIPT = `
 set -euo pipefail
@@ -25163,7 +25233,7 @@ var init_sidecar_io = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/atomic-writer.js
-import { writeFileSync as writeFileSync8, renameSync as renameSync3, statSync as statSync5, mkdirSync as mkdirSync10, existsSync as existsSync13, unlinkSync as unlinkSync6, readdirSync as readdirSync5, openSync as openSync2, closeSync as closeSync2, fstatSync as fstatSync2, lstatSync as lstatSync7, readFileSync as readFileSync13, linkSync, constants as constants3 } from "node:fs";
+import { writeFileSync as writeFileSync8, renameSync as renameSync3, statSync as statSync5, mkdirSync as mkdirSync10, existsSync as existsSync13, unlinkSync as unlinkSync6, readdirSync as readdirSync5, openSync as openSync2, closeSync as closeSync2, chmodSync as chmodSync5, fstatSync as fstatSync2, lstatSync as lstatSync7, readFileSync as readFileSync13, linkSync, constants as constants3 } from "node:fs";
 import { dirname as dirname9, basename as basename2 } from "node:path";
 function generateTmpStamp() {
   const rand = Math.random().toString(36).slice(2, 10);
@@ -25435,6 +25505,7 @@ var init_atomic_writer = __esm({
             return false;
           }
           const expectedPath = `${candidatePath}.expected.${stamp}`;
+          chmodSync5(candidatePath, opened.mode & 4095);
           atomicWriter._writeFile(expectedPath, expectedContent);
           try {
             return publishFileIfUnchangedDarwin(targetFd, targetPath, candidatePath, expectedPath);
@@ -60911,7 +60982,7 @@ import { join as join33 } from "node:path";
 // packages/rn-dev-agent-core/dist/session/state-root.js
 init_secure_state_file();
 import { randomBytes as randomBytes5, randomUUID as randomUUID6 } from "node:crypto";
-import { chmodSync as chmodSync5, linkSync as linkSync2, lstatSync as lstatSync12, mkdirSync as mkdirSync15, readFileSync as readFileSync25, renameSync as renameSync6, rmSync as rmSync8, statSync as statSync11, writeFileSync as writeFileSync13 } from "node:fs";
+import { chmodSync as chmodSync6, linkSync as linkSync2, lstatSync as lstatSync12, mkdirSync as mkdirSync15, readFileSync as readFileSync25, renameSync as renameSync6, rmSync as rmSync8, statSync as statSync11, writeFileSync as writeFileSync13 } from "node:fs";
 import { join as join32, resolve as resolve8 } from "node:path";
 function fail(code, detail) {
   throw new Error(`${code}: ${detail}`);
@@ -60924,7 +60995,7 @@ function ensurePrivateDirectory(path) {
     if (link.isSymbolicLink() || !link.isDirectory() || typeof process.getuid === "function" && stat2.uid !== process.getuid()) {
       fail("AUTHORITY_STATE_ROOT_UNSAFE", "state directory is not private and user-owned");
     }
-    chmodSync5(path, 448);
+    chmodSync6(path, 448);
   } catch (error2) {
     if (error2 instanceof Error && error2.message.startsWith("AUTHORITY_STATE_ROOT_UNSAFE")) {
       throw error2;
@@ -61001,7 +61072,7 @@ function getBoundDirectoryJournalKey(layout = createAuthorityStateLayout()) {
     if (link.isSymbolicLink() || !link.isFile() || key.length !== 32 || typeof process.getuid === "function" && stat2.uid !== process.getuid()) {
       fail("AUTHORITY_STATE_ROOT_UNSAFE", "bound-directory journal key is invalid");
     }
-    chmodSync5(path, 384);
+    chmodSync6(path, 384);
     return key.toString("base64url");
   } catch (error2) {
     if (error2 instanceof Error && error2.message.startsWith("AUTHORITY_STATE_ROOT_UNSAFE")) {
@@ -80160,7 +80231,7 @@ function createDeviceRecordHandler(deps = {}) {
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
 import { createHash as createHash16, randomUUID as randomUUID8 } from "node:crypto";
 import { execFileSync as execFileSync14 } from "node:child_process";
-import { chmodSync as chmodSync6, closeSync as closeSync11, existsSync as existsSync30, fsyncSync, lstatSync as lstatSync16, mkdirSync as mkdirSync19, openSync as openSync11, readFileSync as readFileSync32, realpathSync as realpathSync14, renameSync as renameSync8, unlinkSync as unlinkSync14, writeFileSync as writeFileSync15 } from "node:fs";
+import { chmodSync as chmodSync7, closeSync as closeSync11, existsSync as existsSync30, fsyncSync, lstatSync as lstatSync16, mkdirSync as mkdirSync19, openSync as openSync11, readFileSync as readFileSync32, realpathSync as realpathSync14, renameSync as renameSync8, unlinkSync as unlinkSync14, writeFileSync as writeFileSync15 } from "node:fs";
 import { basename as basename11, dirname as dirname23, extname, isAbsolute as isAbsolute10, join as join43, relative as relative7, resolve as resolve15, sep as sep8 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 init_action_store();
@@ -81251,7 +81322,7 @@ function writeProofReceiptAtomic(path, receipt2) {
     closeSync11(descriptor);
     descriptor = null;
     renameSync8(temporary, path);
-    chmodSync6(path, 384);
+    chmodSync7(path, 384);
   } catch (error2) {
     if (descriptor !== null)
       closeSync11(descriptor);
@@ -85344,7 +85415,7 @@ function instrumentTool(toolName, handler) {
 
 // packages/rn-dev-agent-core/dist/experience/evidence.js
 import { createHash as createHash19, randomUUID as randomUUID9 } from "node:crypto";
-import { chmodSync as chmodSync7, existsSync as existsSync33, mkdirSync as mkdirSync21, readFileSync as readFileSync37, renameSync as renameSync9, unlinkSync as unlinkSync16, writeFileSync as writeFileSync18 } from "node:fs";
+import { chmodSync as chmodSync8, existsSync as existsSync33, mkdirSync as mkdirSync21, readFileSync as readFileSync37, renameSync as renameSync9, unlinkSync as unlinkSync16, writeFileSync as writeFileSync18 } from "node:fs";
 import { homedir as homedir9, platform as hostPlatform, release } from "node:os";
 import { dirname as dirname28, join as join50 } from "node:path";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
@@ -85617,7 +85688,7 @@ var ExperienceRecorder = class {
         mode: 384
       });
       renameSync9(temp, this.path);
-      chmodSync7(this.path, 384);
+      chmodSync8(this.path, 384);
     } catch (error2) {
       try {
         unlinkSync16(temp);

@@ -344,6 +344,24 @@ test('migration publication keeps the canonical action continuously available', 
   assert.match(readFileSync(actionPath, 'utf8'), /enginePin/);
 });
 
+test('migration preserves action permissions and removes displaced YAML', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-action-migrate-mode-'));
+  const dir = join(root, '.rn-agent', 'actions');
+  mkdirSync(dir, { recursive: true });
+  const actionPath = join(dir, 'checkout.yaml');
+  const source = actionYaml('checkout');
+  writeFileSync(actionPath, source, { encoding: 'utf8', mode: 0o600 });
+  const baseline = loadActionMigrationBaseline(actionPath);
+
+  commitMigratedActionText(actionPath, baseline, upsertEnginePinHeader(source).text);
+
+  assert.equal(statSync(actionPath).mode & 0o7777, 0o600);
+  assert.deepEqual(
+    readdirSync(dir).filter((entry) => entry.startsWith('checkout.yaml.tmp.')),
+    [],
+  );
+});
+
 test('action writer never age-reclaims a live process lock', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-action-live-lock-'));
   const dir = join(root, '.rn-agent', 'actions');
