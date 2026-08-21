@@ -7558,18 +7558,25 @@ async function detect(resolvers) {
       provenance: "none"
     });
   }
+  let sha256 = null;
+  try {
+    sha256 = (resolvers.hashFile ?? defaultHashFile)(binPath);
+  } catch {
+    sha256 = null;
+  }
+  const expected = MAESTRO_RUNNER_PIN.sha256[platformKey];
+  if (expected && sha256 && sha256 !== expected) {
+    return buildReplayEngineStatus("checksum-mismatch", null, false, {
+      selectedPath: binPath,
+      provenance: "pin-cache"
+    });
+  }
   let version = null;
   try {
     const out = await (resolvers.execVersion ?? defaultExecVersion)(binPath);
     version = out.match(/(\d+\.\d+\.\d+)/)?.[1] ?? null;
   } catch {
     version = null;
-  }
-  let sha256 = null;
-  try {
-    sha256 = (resolvers.hashFile ?? defaultHashFile)(binPath);
-  } catch {
-    sha256 = null;
   }
   const cls = classifyEnginePin({ installed: true, version, sha256 }, platformKey);
   return buildReplayEngineStatus(cls, version, false, {

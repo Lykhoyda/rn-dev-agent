@@ -24237,18 +24237,25 @@ async function detect(resolvers) {
       provenance: "none"
     });
   }
+  let sha2562 = null;
+  try {
+    sha2562 = (resolvers.hashFile ?? defaultHashFile)(binPath);
+  } catch {
+    sha2562 = null;
+  }
+  const expected = MAESTRO_RUNNER_PIN.sha256[platformKey];
+  if (expected && sha2562 && sha2562 !== expected) {
+    return buildReplayEngineStatus("checksum-mismatch", null, false, {
+      selectedPath: binPath,
+      provenance: "pin-cache"
+    });
+  }
   let version2 = null;
   try {
     const out = await (resolvers.execVersion ?? defaultExecVersion)(binPath);
     version2 = out.match(/(\d+\.\d+\.\d+)/)?.[1] ?? null;
   } catch {
     version2 = null;
-  }
-  let sha2562 = null;
-  try {
-    sha2562 = (resolvers.hashFile ?? defaultHashFile)(binPath);
-  } catch {
-    sha2562 = null;
   }
   const cls = classifyEnginePin({ installed: true, version: version2, sha256: sha2562 }, platformKey);
   return buildReplayEngineStatus(cls, version2, false, {
@@ -33095,6 +33102,14 @@ async function runMaestroInline(yaml2, opts, dependencies = {}) {
   });
   if ("error" in dispatch) {
     return { passed: false, output: "", flowFile: "", error: dispatch.error };
+  }
+  const resolveEngineStatus = dependencies.resolveEngineStatus ?? (process.env.NODE_TEST_CONTEXT ? async () => buildReplayEngineStatus("pinned-ok", MAESTRO_RUNNER_PIN.version, false, {
+    selectedPath: "/test/pin-cache/maestro-runner/bin/maestro-runner",
+    provenance: "pin-cache"
+  }) : () => getEngineStatus().catch(() => null));
+  const pinRefusal = exactPinRefusal(await resolveEngineStatus());
+  if (pinRefusal) {
+    return { passed: false, output: "", flowFile: "", error: pinRefusal };
   }
   const rawAppId = opts.appId ?? resolveBundleId(opts.platform) ?? readExpoSlug() ?? "";
   const flowFile = join24(tmpdir8(), `rn-maestro-invoke-${opts.slug ?? "flow"}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
@@ -83431,6 +83446,8 @@ init_maestro_validator();
 init_maestro_run();
 init_maestro_error_parser();
 init_engine_pin();
+init_action_engine_compat();
+init_reusable_action();
 init_resolve_ios_app_file();
 init_maestro_device_authority();
 init_maestro_runner_report();
@@ -83467,6 +83484,10 @@ function createMaestroTestAllHandler(deps = {}) {
   const resolveAppFile = deps.resolveAppFile ?? resolveAppFileForClearState;
   const execute2 = deps.execFile ?? defaultExecFile4;
   const now = deps.now ?? Date.now;
+  const resolveEngineStatus = deps.resolveEngineStatus ?? (process.env.NODE_TEST_CONTEXT ? async () => buildReplayEngineStatus("pinned-ok", MAESTRO_RUNNER_PIN.version, false, {
+    selectedPath: "/test/pin-cache/maestro-runner/bin/maestro-runner",
+    provenance: "pin-cache"
+  }) : () => getEngineStatus().catch(() => null));
   return async (args) => {
     const platform = args.platform ?? activeSession2()?.platform;
     if (!platform) {
@@ -83483,6 +83504,10 @@ function createMaestroTestAllHandler(deps = {}) {
     if ("error" in dispatch) {
       return failResult(dispatch.error);
     }
+    const engineStatus = await resolveEngineStatus();
+    const pinRefusal = exactPinRefusal(engineStatus);
+    if (pinRefusal)
+      return failResult(pinRefusal);
     const root = findProjectRoot();
     const flowDir = args.flowDir ?? (root ? join46(root, ".rn-agent", "actions") : null);
     if (!flowDir) {
@@ -83514,6 +83539,25 @@ function createMaestroTestAllHandler(deps = {}) {
       try {
         const yamlText = readFileSync32(flow, "utf-8");
         const parsed = parseAndValidateFlow(yamlText);
+        const flowId = name.replace(/\.ya?ml$/i, "");
+        const meta = parseM7Header(yamlText, flowId);
+        const preflight2 = meta ? actionReplayPreflight({
+          enginePin: meta.enginePin,
+          commands: parsed.commands,
+          engineStatus
+        }) : regexSelectorCapabilityRefusal(parsed.commands);
+        if (preflight2) {
+          results.push({
+            name,
+            passed: false,
+            durationMs: now() - start,
+            error: preflight2.slice(0, 300)
+          });
+          failed++;
+          if (args.stopOnFailure)
+            break;
+          continue;
+        }
         planMaestroAuthorityStages(parsed.commands);
         parsedCommands = parsed.commands;
         parsedAppId = resolveMaestroFlowAppId(boundAppId, parsed.appId);

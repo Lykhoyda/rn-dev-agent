@@ -16,6 +16,7 @@ import {
   upsertEnginePinHeader,
 } from '../../dist/domain/action-engine-compat.js';
 import { createRunActionHandler } from '../../dist/tools/run-action.js';
+import { createMaestroTestAllHandler } from '../../dist/tools/maestro-test-all.js';
 import { createTmpProject } from '../helpers/tmp-project.js';
 
 const PINNED = () =>
@@ -180,4 +181,29 @@ test('actionReplayPreflight is session-pin then format then selector', () => {
     }),
     null,
   );
+});
+
+test('maestro_test_all refuses before spawn when the exact pin is missing', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'rn-test-all-pin-'));
+  writeFileSync(join(dir, 'browse.yaml'), 'appId: com.test.app\n---\n- tapOn:\n    id: "browse"\n');
+  let spawned = false;
+  const handler = createMaestroTestAllHandler({
+    getActiveSession: () => ({ platform: 'ios', deviceId: 'SIM', appId: 'com.test.app' }) as never,
+    chooseDispatch: () => ({
+      runner: 'maestro-runner',
+      binPath: '/fake/maestro-runner',
+      buildArgs: () => ['test', 'browse.yaml'],
+    }),
+    resolveEngineStatus: async () => buildReplayEngineStatus('not-installed', null, false),
+    execFile: async () => {
+      spawned = true;
+      return { stdout: '', stderr: '' };
+    },
+  });
+  const result = await handler({ platform: 'ios', flowDir: dir });
+  const body = JSON.parse(result.content[0]!.text);
+  assert.equal(body.ok, false);
+  assert.equal(spawned, false);
+  assert.equal(result.isError, true);
+  assert.match(String(body.error), /1\.1\.24|pin-cache|not installed/i);
 });

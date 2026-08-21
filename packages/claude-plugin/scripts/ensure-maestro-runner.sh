@@ -107,12 +107,12 @@ bin_matches_pin() {
     return 1
   fi
   local v got
-  v="$(installed_version "$BIN")"
-  if [ "$v" != "$MAESTRO_RUNNER_PIN_VERSION" ]; then
-    return 1
-  fi
   got="$(file_sha "$BIN")"
   if [ -z "$got" ] || [ "$got" != "$EXPECTED_SHA" ]; then
+    return 1
+  fi
+  v="$(installed_version "$BIN")"
+  if [ "$v" != "$MAESTRO_RUNNER_PIN_VERSION" ]; then
     return 1
   fi
   return 0

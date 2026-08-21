@@ -23,7 +23,20 @@ import {
   runFlowParked,
 } from './maestro-run.js';
 import { outputIndicatesFlowFailure } from '../domain/maestro-error-parser.js';
-import { isOlderSdkInstallFailure, olderSdkInstallDiagnosis } from '../domain/engine-pin.js';
+import {
+  buildReplayEngineStatus,
+  exactPinRefusal,
+  getEngineStatus,
+  isOlderSdkInstallFailure,
+  MAESTRO_RUNNER_PIN,
+  olderSdkInstallDiagnosis,
+  type ReplayEngineStatus,
+} from '../domain/engine-pin.js';
+import {
+  actionReplayPreflight,
+  regexSelectorCapabilityRefusal,
+} from '../domain/action-engine-compat.js';
+import { parseM7Header } from '../domain/reusable-action.js';
 import { flowUsesClearState, resolveAppFileForClearState } from './resolve-ios-app-file.js';
 import {
   maestroAuthorityRefusal,
@@ -69,6 +82,7 @@ export interface MaestroTestAllDeps {
     options: { timeout: number; encoding: 'utf8'; maxBuffer: number },
   ) => Promise<{ stdout: string; stderr: string }>;
   now?: () => number;
+  resolveEngineStatus?: () => Promise<ReplayEngineStatus | null>;
 }
 
 interface FlowResult {
@@ -116,6 +130,15 @@ export function createMaestroTestAllHandler(
   const resolveAppFile = deps.resolveAppFile ?? resolveAppFileForClearState;
   const execute = deps.execFile ?? defaultExecFile;
   const now = deps.now ?? Date.now;
+  const resolveEngineStatus =
+    deps.resolveEngineStatus ??
+    (process.env.NODE_TEST_CONTEXT
+      ? async () =>
+          buildReplayEngineStatus('pinned-ok', MAESTRO_RUNNER_PIN.version, false, {
+            selectedPath: '/test/pin-cache/maestro-runner/bin/maestro-runner',
+            provenance: 'pin-cache',
+          })
+      : () => getEngineStatus().catch(() => null));
   return async (args) => {
     const platform = (args.platform ?? activeSession()?.platform) as 'ios' | 'android' | undefined;
     if (!platform) {
@@ -138,12 +161,13 @@ export function createMaestroTestAllHandler(
     }
     const requestedDeviceId = args.deviceId ?? matchingSessionDeviceId;
 
-    // B59: tiered dispatch (see maestro-dispatch.ts) — picks maestro-runner
-    // when viable, falls back to the Maestro CLI on iOS+no-adb machines.
     const dispatch = selectDispatch({ platform });
     if ('error' in dispatch) {
       return failResult(dispatch.error);
     }
+    const engineStatus = await resolveEngineStatus();
+    const pinRefusal = exactPinRefusal(engineStatus);
+    if (pinRefusal) return failResult(pinRefusal);
 
     const root = findProjectRoot();
     const flowDir = args.flowDir ?? (root ? join(root, '.rn-agent', 'actions') : null);
@@ -190,6 +214,26 @@ export function createMaestroTestAllHandler(
       try {
         const yamlText = readFileSync(flow, 'utf-8');
         const parsed = parseAndValidateFlow(yamlText);
+        const flowId = name.replace(/\.ya?ml$/i, '');
+        const meta = parseM7Header(yamlText, flowId);
+        const preflight = meta
+          ? actionReplayPreflight({
+              enginePin: meta.enginePin,
+              commands: parsed.commands,
+              engineStatus,
+            })
+          : regexSelectorCapabilityRefusal(parsed.commands);
+        if (preflight) {
+          results.push({
+            name,
+            passed: false,
+            durationMs: now() - start,
+            error: preflight.slice(0, 300),
+          });
+          failed++;
+          if (args.stopOnFailure) break;
+          continue;
+        }
         planMaestroAuthorityStages(parsed.commands);
         parsedCommands = parsed.commands;
         parsedAppId = resolveMaestroFlowAppId(boundAppId, parsed.appId);

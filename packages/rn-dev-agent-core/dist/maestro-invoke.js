@@ -5,7 +5,7 @@ import { resolveBundleId, readExpoSlug } from './project-config.js';
 import { buildMaestroFlow, parseAndValidateFlow, isValidBundleId, MaestroValidationError, } from './domain/maestro-validator.js';
 import { chooseMaestroDispatch } from './tools/maestro-dispatch.js';
 import { outputIndicatesFlowFailure } from './domain/maestro-error-parser.js';
-import { isOlderSdkInstallFailure, olderSdkInstallDiagnosis } from './domain/engine-pin.js';
+import { exactPinRefusal, getEngineStatus, isOlderSdkInstallFailure, olderSdkInstallDiagnosis, buildReplayEngineStatus, MAESTRO_RUNNER_PIN, } from './domain/engine-pin.js';
 import { resolveAppFileForClearState } from './tools/resolve-ios-app-file.js';
 import { assembleMaestroArgs, runFlowParked } from './tools/maestro-run.js';
 import { getActiveSession } from './agent-device-wrapper.js';
@@ -42,6 +42,17 @@ export async function runMaestroInline(yaml, opts, dependencies = {}) {
     });
     if ('error' in dispatch) {
         return { passed: false, output: '', flowFile: '', error: dispatch.error };
+    }
+    const resolveEngineStatus = dependencies.resolveEngineStatus ??
+        (process.env.NODE_TEST_CONTEXT
+            ? async () => buildReplayEngineStatus('pinned-ok', MAESTRO_RUNNER_PIN.version, false, {
+                selectedPath: '/test/pin-cache/maestro-runner/bin/maestro-runner',
+                provenance: 'pin-cache',
+            })
+            : () => getEngineStatus().catch(() => null));
+    const pinRefusal = exactPinRefusal(await resolveEngineStatus());
+    if (pinRefusal) {
+        return { passed: false, output: '', flowFile: '', error: pinRefusal };
     }
     const rawAppId = opts.appId ?? resolveBundleId(opts.platform) ?? readExpoSlug() ?? '';
     const flowFile = join(tmpdir(), `rn-maestro-invoke-${opts.slug ?? 'flow'}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);

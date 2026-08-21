@@ -104,6 +104,23 @@ test('gh-397: getEngineStatus detects via injected resolvers and caches', async 
   assert.equal(s2, s1);
 });
 
+test('gh-397: checksum mismatch is classified before executing --version', async () => {
+  _resetEngineStatusForTest();
+  let execCalls = 0;
+  const s = await getEngineStatus({
+    binPath: () => '/fake/maestro-runner',
+    execVersion: async () => {
+      execCalls += 1;
+      return 'maestro-runner 1.1.24';
+    },
+    hashFile: () => 'f'.repeat(64),
+    platformKey: KEY,
+  });
+  assert.equal(s.pin.status, 'checksum-mismatch');
+  assert.equal(execCalls, 0);
+  _resetEngineStatusForTest();
+});
+
 test('gh-397: getEngineStatus fails open on resolver errors', async () => {
   _resetEngineStatusForTest();
   const s = await getEngineStatus({

@@ -100,12 +100,12 @@ const SHARED_HOST_HELPER_SCRIPTS = [
   'eas_resolve_artifact.sh',
   'check-vercel-rules.mjs',
   'snapshot_state.sh',
+  'ensure-maestro-runner.sh',
 ];
 
 const CLAUDE_HELPER_SCRIPTS = [
   'mcp-bridge-probe.mjs',
   'ensure-cdp-deps.sh',
-  'ensure-maestro-runner.sh',
   'ensure-idb-companion.sh',
   'ensure-idb.sh',
   'ensure-ffmpeg.sh',
