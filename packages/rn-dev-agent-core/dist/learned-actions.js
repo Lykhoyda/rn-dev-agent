@@ -27,7 +27,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { assertReadableActionCorpus, resolveActionPath } from './domain/action-store.js';
 const argv = process.argv.slice(2);
 const flags = {
     json: false,
@@ -99,14 +98,34 @@ function scanMemories() {
     items.sort((a, b) => a.name.localeCompare(b.name));
     return { exists: true, dir: memDir, items: items.slice(0, flags.max) };
 }
+function isDirectNode(target, kind) {
+    try {
+        const stat = fs.lstatSync(target);
+        return !stat.isSymbolicLink() && (kind === 'directory' ? stat.isDirectory() : stat.isFile());
+    }
+    catch {
+        return false;
+    }
+}
+function resolveFlowFile(actionsDir, id) {
+    const yamlPath = path.join(actionsDir, `${id}.yaml`);
+    const ymlPath = path.join(actionsDir, `${id}.yml`);
+    const yamlExists = isDirectNode(yamlPath, 'file');
+    const ymlExists = isDirectNode(ymlPath, 'file');
+    if (yamlExists && ymlExists)
+        return null;
+    if (yamlExists)
+        return yamlPath;
+    if (ymlExists)
+        return ymlPath;
+    return null;
+}
 function scanFlows() {
     const roots = collectFlowRoots(flags.workspaceRoot);
     const items = [];
     for (const root of roots) {
-        if (!fs.existsSync(root))
+        if (!isDirectNode(root, 'directory'))
             continue;
-        const projectRoot = path.dirname(path.dirname(root));
-        assertReadableActionCorpus(projectRoot);
         const ids = [
             ...new Set(fs
                 .readdirSync(root)
@@ -114,7 +133,7 @@ function scanFlows() {
                 .map((file) => file.replace(/\.ya?ml$/, ''))),
         ];
         for (const id of ids) {
-            const fp = resolveActionPath(projectRoot, id);
+            const fp = resolveFlowFile(root, id);
             if (!fp)
                 continue;
             const f = path.basename(fp);

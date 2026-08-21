@@ -153,7 +153,7 @@ export function fixtureYaml({
   selectors = ['fab-create-task'],
   tags = ['fixture'],
 } = {}) {
-  const tapLines = selectors.map((sel) => `  - tapOn:\n      id: "${sel}"`).join('\n');
+  const tapLines = selectors.map((sel) => `- tapOn:\n    id: "${sel}"`).join('\n');
   return [
     `appId: ${bundleId}`,
     '---',

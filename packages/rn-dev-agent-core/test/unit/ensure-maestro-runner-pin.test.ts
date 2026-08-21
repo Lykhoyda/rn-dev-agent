@@ -216,15 +216,19 @@ test('installed fast path refuses a payload changed after verified installation'
   const packagedNativeDir = join(root, 'rn-dev-agent-core', 'dist', 'native');
   const sourceNativeDir = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'native');
   mkdirSync(packagedNativeDir, { recursive: true });
-  copyFileSync(
-    join(sourceNativeDir, 'darwin-process-birth'),
-    join(packagedNativeDir, 'darwin-process-birth'),
-  );
-  copyFileSync(
-    join(sourceNativeDir, 'darwin-process-birth.json'),
-    join(packagedNativeDir, 'darwin-process-birth.json'),
-  );
+  for (const name of [
+    'darwin-process-birth',
+    'darwin-process-birth.json',
+    'linux-conditional-publication-x64',
+    'linux-conditional-publication-x64.json',
+    'linux-conditional-publication-arm64',
+    'linux-conditional-publication-arm64.json',
+  ]) {
+    copyFileSync(join(sourceNativeDir, name), join(packagedNativeDir, name));
+  }
   chmodSync(join(packagedNativeDir, 'darwin-process-birth'), 0o755);
+  chmodSync(join(packagedNativeDir, 'linux-conditional-publication-x64'), 0o755);
+  chmodSync(join(packagedNativeDir, 'linux-conditional-publication-arm64'), 0o755);
   writeFileSync(
     join(scriptDir, 'maestro-runner-pin.json'),
     JSON.stringify({

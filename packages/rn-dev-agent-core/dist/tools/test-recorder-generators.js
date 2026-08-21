@@ -181,11 +181,18 @@ export function nextSelector(events, fromIndex, selectorFn) {
 }
 // --- Maestro YAML ---
 export function generateMaestro(events, opts = {}) {
-    assertSafeGeneratedScalars(opts, 'metadata');
-    assertSafeGeneratedScalars(events, 'events');
+    assertSafeGeneratedScalars({
+        ...opts,
+        testName: opts.testName != null ? stripNewlines(opts.testName) : undefined,
+        bundleId: opts.bundleId != null ? stripNewlines(opts.bundleId) : undefined,
+        id: opts.id != null ? stripNewlines(opts.id) : undefined,
+        intent: opts.intent != null ? stripNewlines(opts.intent) : undefined,
+        startRoute: opts.startRoute != null ? stripNewlines(opts.startRoute) : undefined,
+        tags: opts.tags?.map((tag) => stripNewlines(tag)),
+    }, 'metadata');
     const lines = [];
     if (opts.bundleId) {
-        lines.push(`appId: ${stripNewlines(opts.bundleId)}`);
+        lines.push(`appId: ${maestroScalar(opts.bundleId)}`);
         lines.push('---');
     }
     lines.push(`# ${stripNewlines(opts.testName ?? 'Recorded flow')}`);
@@ -297,7 +304,8 @@ export function generateMaestro(events, opts = {}) {
         }
     }
     const yaml = lines.join('\n') + '\n';
-    const commands = parseAndValidateFlow(yaml).commands;
+    const bodyYaml = yaml.replace(/^appId:[^\n]*\n---\n/, '');
+    const commands = parseAndValidateFlow(bodyYaml).commands;
     assertRecorderCommandShapes(commands);
     if (opts.id && opts.intent) {
         const refusal = regexSelectorCapabilityRefusal(commands);
@@ -308,8 +316,6 @@ export function generateMaestro(events, opts = {}) {
 }
 // --- Detox JS ---
 export function generateDetox(events, opts = {}) {
-    assertSafeGeneratedScalars(opts, 'metadata');
-    assertSafeGeneratedScalars(events, 'events');
     const lines = [];
     const name = stripNewlines(opts.testName ?? 'Recorded flow');
     lines.push(`describe(${JSON.stringify(name)}, () => {`);

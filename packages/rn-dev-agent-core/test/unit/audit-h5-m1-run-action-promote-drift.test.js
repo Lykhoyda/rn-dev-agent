@@ -84,8 +84,8 @@ test('M1: a wired getLiveRoute reclassifies an off-sequence selector failure as 
     '# expectedRouteSequence: [Home, Detail]',
     '',
     '- launchApp',
-    '  - tapOn:',
-    '      id: "fab-create-task"',
+    '- tapOn:',
+    '    id: "fab-create-task"',
     '',
   ].join('\n');
   project.seedAction('demo', yaml);

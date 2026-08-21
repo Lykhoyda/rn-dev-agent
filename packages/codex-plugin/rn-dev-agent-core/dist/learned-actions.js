@@ -5,338 +5,6 @@ import { createRequire as __rnCreateRequire } from "node:module"; const require 
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-
-// packages/rn-dev-agent-core/dist/domain/action-store.js
-import { existsSync as existsSync3, lstatSync as lstatSync2, readFileSync as readFileSync2, realpathSync as realpathSync2, statSync as statSync2, unlinkSync as unlinkSync2 } from "node:fs";
-import { basename, dirname as dirname2, join as join3 } from "node:path";
-
-// packages/rn-dev-agent-core/dist/domain/atomic-writer.js
-var ORPHAN_MAX_AGE_MS = 5 * 60 * 1e3;
-var lockWaitBuffer = new Int32Array(new SharedArrayBuffer(4));
-
-// packages/rn-dev-agent-core/dist/domain/path-safety.js
-import { resolve, sep } from "node:path";
-var PathTraversalError = class extends Error {
-  constructor(message) {
-    super(message);
-    this.name = "PathTraversalError";
-  }
-};
-var ACTION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
-var ACTION_ID_MAX_LEN = 64;
-function isValidActionId(s) {
-  if (typeof s !== "string")
-    return false;
-  if (s.length === 0 || s.length > ACTION_ID_MAX_LEN)
-    return false;
-  if (s.includes(".."))
-    return false;
-  return ACTION_ID_RE.test(s);
-}
-function assertValidActionId(s, context) {
-  if (!isValidActionId(s)) {
-    const preview = JSON.stringify(s).slice(0, 80);
-    throw new PathTraversalError(`Invalid action ID for ${context}: ${preview}`);
-  }
-}
-function assertWithinDir(child, baseDir) {
-  const resolvedBase = resolve(baseDir);
-  const resolvedChild = resolve(baseDir, child);
-  if (resolvedChild === resolvedBase)
-    return;
-  const baseWithSep = resolvedBase.endsWith(sep) ? resolvedBase : resolvedBase + sep;
-  if (!resolvedChild.startsWith(baseWithSep)) {
-    throw new PathTraversalError(`Path "${child}" escapes containment dir "${baseDir}" (resolved to ${resolvedChild})`);
-  }
-}
-
-// packages/rn-dev-agent-core/dist/logger.js
-import { createWriteStream, mkdirSync, existsSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir, homedir } from "node:os";
-var configuredLevel = process.env.LOG_LEVEL ?? process.env.RN_DEV_AGENT_LOG_LEVEL ?? "warn";
-function resolveLogPath() {
-  if (process.argv.includes("--diagnostic-contract-probe"))
-    return null;
-  if (configuredLevel !== "debug" && configuredLevel !== "info")
-    return null;
-  const pluginData = process.env.CLAUDE_PLUGIN_DATA;
-  if (pluginData) {
-    try {
-      if (!existsSync(pluginData))
-        mkdirSync(pluginData, { recursive: true });
-      return join(pluginData, "cdp-bridge.log");
-    } catch {
-    }
-  }
-  const fallbackDir = join(homedir(), ".claude", "logs");
-  try {
-    if (!existsSync(fallbackDir))
-      mkdirSync(fallbackDir, { recursive: true });
-    return join(fallbackDir, "rn-dev-agent-cdp-bridge.log");
-  } catch {
-  }
-  return join(tmpdir(), "rn-dev-agent-cdp-bridge.log");
-}
-var logFilePath = resolveLogPath();
-
-// packages/rn-dev-agent-core/dist/domain/action-db.js
-import { createRequire } from "node:module";
-var _require = createRequire(import.meta.url);
-
-// packages/rn-dev-agent-core/dist/session/worktree-inheritance.js
-import { spawnSync } from "node:child_process";
-import { closeSync, existsSync as existsSync2, fstatSync, lstatSync, mkdirSync as mkdirSync2, openSync, readFileSync, readlinkSync, realpathSync, renameSync, statSync, symlinkSync, unlinkSync } from "node:fs";
-import { dirname, isAbsolute, join as join2, relative, resolve as resolve2, sep as sep2 } from "node:path";
-
-// packages/rn-dev-agent-core/dist/session/worktree-repair-remedy.js
-var WORKTREE_REPAIR_ENTRY = '"${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}/rn-dev-agent-core/dist/worktree-inheritance.js"';
-var HEADLESS_WORKTREE_REPAIR_COMMAND = `node ${WORKTREE_REPAIR_ENTRY} repair --app-root "$PWD"`;
-
-// packages/rn-dev-agent-core/dist/session/worktree-inheritance.js
-var GIT_ENV_OVERRIDES = [
-  "GIT_DIR",
-  "GIT_WORK_TREE",
-  "GIT_INDEX_FILE",
-  "GIT_COMMON_DIR",
-  "GIT_OBJECT_DIRECTORY",
-  "GIT_NAMESPACE"
-];
-function gitEnvironment() {
-  const env = { ...process.env };
-  for (const key of GIT_ENV_OVERRIDES)
-    delete env[key];
-  return env;
-}
-function git(cwd, args) {
-  const result = spawnSync("git", args, {
-    cwd,
-    encoding: "utf8",
-    env: gitEnvironment(),
-    stdio: ["ignore", "pipe", "pipe"]
-  });
-  if (result.error || result.status !== 0)
-    return { ok: false, stdout: "" };
-  return { ok: true, stdout: (result.stdout ?? "").replace(/\n$/, "") };
-}
-function canonical(path2) {
-  try {
-    return realpathSync(path2);
-  } catch {
-    return null;
-  }
-}
-function contained(parent, child) {
-  if (parent === child)
-    return true;
-  const rel = relative(parent, child);
-  return rel !== "" && !rel.startsWith(`..${sep2}`) && rel !== ".." && !isAbsolute(rel);
-}
-function toPosix(path2) {
-  return sep2 === "/" ? path2 : path2.split(sep2).join("/");
-}
-function isRnAppRoot(directory) {
-  const manifest = join2(directory, "package.json");
-  try {
-    const parsed = JSON.parse(readFileSync(manifest, "utf8"));
-    const deps = { ...parsed.dependencies, ...parsed.devDependencies };
-    return Boolean(deps["react-native"] || deps["expo"]);
-  } catch {
-    return false;
-  }
-}
-function parseWorktreeRecords(porcelain) {
-  const records = [];
-  let current = null;
-  for (const line of porcelain.split("\n")) {
-    if (line.startsWith("worktree ")) {
-      if (current)
-        records.push(current);
-      current = { path: line.slice("worktree ".length), bare: false, prunable: false };
-      continue;
-    }
-    if (!current)
-      continue;
-    if (line === "bare")
-      current.bare = true;
-    if (line === "prunable" || line.startsWith("prunable "))
-      current.prunable = true;
-  }
-  if (current)
-    records.push(current);
-  return records;
-}
-function verifiedPrimaries(worktreeRoot, commonDir) {
-  const listing = git(worktreeRoot, ["worktree", "list", "--porcelain"]);
-  if (!listing.ok)
-    return [];
-  const verified = /* @__PURE__ */ new Set();
-  for (const record of parseWorktreeRecords(listing.stdout)) {
-    if (record.bare || record.prunable)
-      continue;
-    const candidate = canonical(record.path);
-    if (!candidate)
-      continue;
-    try {
-      if (!statSync(candidate).isDirectory())
-        continue;
-    } catch {
-      continue;
-    }
-    const top = git(candidate, ["rev-parse", "--show-toplevel"]);
-    if (!top.ok || canonical(top.stdout) !== candidate)
-      continue;
-    const candidateGitDir = git(candidate, ["rev-parse", "--path-format=absolute", "--git-dir"]);
-    const candidateCommon = git(candidate, [
-      "rev-parse",
-      "--path-format=absolute",
-      "--git-common-dir"
-    ]);
-    if (!candidateGitDir.ok || !candidateCommon.ok)
-      continue;
-    const resolvedGitDir = canonical(candidateGitDir.stdout);
-    const resolvedCommon = canonical(candidateCommon.stdout);
-    if (!resolvedGitDir || !resolvedCommon)
-      continue;
-    if (resolvedCommon !== commonDir || resolvedGitDir !== resolvedCommon)
-      continue;
-    verified.add(candidate);
-  }
-  return [...verified];
-}
-function resolveWorktreeLayout(input) {
-  const cwd = canonical(input.cwd);
-  if (!cwd)
-    return { refusal: "NOT_GIT" };
-  const insideWorkTree = git(cwd, ["rev-parse", "--is-inside-work-tree"]);
-  if (!insideWorkTree.ok) {
-    const bare = git(cwd, ["rev-parse", "--is-bare-repository"]);
-    if (bare.ok && bare.stdout === "true")
-      return { refusal: "BARE" };
-    return { refusal: "NOT_GIT" };
-  }
-  if (insideWorkTree.stdout !== "true")
-    return { refusal: "BARE" };
-  const top = git(cwd, ["rev-parse", "--show-toplevel"]);
-  const gitDirRaw = git(cwd, ["rev-parse", "--path-format=absolute", "--git-dir"]);
-  const commonRaw = git(cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
-  if (!top.ok || !gitDirRaw.ok || !commonRaw.ok)
-    return { refusal: "GIT_UNAVAILABLE" };
-  const worktreeRoot = canonical(top.stdout);
-  const gitDir = canonical(gitDirRaw.stdout);
-  const commonDir = canonical(commonRaw.stdout);
-  if (!worktreeRoot || !gitDir || !commonDir)
-    return { refusal: "GIT_UNAVAILABLE" };
-  const appRootInput = canonical(input.appRoot ? resolve2(input.appRoot) : cwd);
-  if (!appRootInput)
-    return { refusal: "NOT_RN_APP" };
-  if (!contained(worktreeRoot, appRootInput))
-    return { refusal: "APP_OUTSIDE_WORKTREE" };
-  if (!input.allowNonRnApp && !isRnAppRoot(appRootInput))
-    return { refusal: "NOT_RN_APP" };
-  const appRelative = worktreeRoot === appRootInput ? "." : toPosix(relative(worktreeRoot, appRootInput));
-  const base = {
-    kind: gitDir === commonDir ? "primary" : "linked",
-    worktreeRoot,
-    commonDir,
-    gitDir,
-    appRoot: appRootInput,
-    appRelative
-  };
-  if (base.kind === "primary")
-    return base;
-  const primaries = verifiedPrimaries(worktreeRoot, commonDir);
-  if (primaries.length === 0)
-    return { ...base, refusal: "NO_PRIMARY" };
-  if (primaries.length > 1)
-    return { ...base, refusal: "AMBIGUOUS" };
-  const primaryRoot = primaries[0];
-  const primaryAppRoot = appRelative === "." ? primaryRoot : join2(primaryRoot, appRelative);
-  if (!contained(primaryRoot, primaryAppRoot))
-    return { ...base, refusal: "PRIMARY_APP_MISSING" };
-  let primaryAppReal = null;
-  try {
-    if (lstatSync(primaryAppRoot).isDirectory())
-      primaryAppReal = canonical(primaryAppRoot);
-  } catch {
-    primaryAppReal = null;
-  }
-  if (!primaryAppReal || !contained(primaryRoot, primaryAppReal)) {
-    return { ...base, refusal: "PRIMARY_APP_MISSING" };
-  }
-  return { ...base, primaryRoot, primaryAppRoot };
-}
-
-// packages/rn-dev-agent-core/dist/domain/action-store.js
-function assertReadableActionCorpus(projectRoot) {
-  const rnAgentDir = join3(projectRoot, ".rn-agent");
-  const actionsDir = join3(rnAgentDir, "actions");
-  const rnAgentStat = lstatIfPresent(rnAgentDir);
-  if (rnAgentStat?.isSymbolicLink()) {
-    throw new Error(`Refusing learned-action corpus symlink at ${rnAgentDir}.`);
-  }
-  const actionsStat = lstatIfPresent(actionsDir);
-  if (!actionsStat?.isSymbolicLink())
-    return;
-  const target = realpathSync2(actionsDir);
-  const layout = resolveWorktreeLayout({ cwd: projectRoot, appRoot: projectRoot });
-  const primaryRnAgentDir = "primaryAppRoot" in layout && layout.primaryAppRoot ? join3(layout.primaryAppRoot, ".rn-agent") : null;
-  const primaryActionsDir = primaryRnAgentDir ? join3(primaryRnAgentDir, "actions") : null;
-  const expectedTarget = primaryRnAgentDir && primaryActionsDir && "kind" in layout && layout.kind === "linked" && !layout.refusal && isOwnedDirectory(primaryRnAgentDir) && isOwnedDirectory(primaryActionsDir) ? canonicalPath(primaryActionsDir) : null;
-  if (!expectedTarget || target !== expectedTarget || !statSync2(target).isDirectory()) {
-    throw new Error(`Refusing foreign learned-action corpus symlink at ${actionsDir}.`);
-  }
-}
-function isOwnedDirectory(path2) {
-  const stat = lstatIfPresent(path2);
-  return Boolean(stat?.isDirectory() && !stat.isSymbolicLink());
-}
-function canonicalPath(path2) {
-  try {
-    return realpathSync2(path2);
-  } catch {
-    return null;
-  }
-}
-function lstatIfPresent(path2) {
-  try {
-    return lstatSync2(path2);
-  } catch (err) {
-    if (err.code === "ENOENT")
-      return null;
-    throw err;
-  }
-}
-function actionFileExists(path2) {
-  const stat = lstatIfPresent(path2);
-  if (!stat)
-    return false;
-  if (stat.isSymbolicLink()) {
-    throw new Error(`Refusing inherited action symlink at ${path2}.`);
-  }
-  return true;
-}
-function resolveActionPath(projectRoot, actionId) {
-  assertValidActionId(actionId, "resolveActionPath");
-  assertReadableActionCorpus(projectRoot);
-  const actionsDir = join3(projectRoot, ".rn-agent", "actions");
-  const fileName = `${actionId}.yaml`;
-  assertWithinDir(fileName, actionsDir);
-  const yamlPath = join3(actionsDir, fileName);
-  const ymlPath = yamlPath.replace(/\.yaml$/, ".yml");
-  const yamlExists = actionFileExists(yamlPath);
-  const ymlExists = actionFileExists(ymlPath);
-  if (yamlExists && ymlExists) {
-    throw new Error(`Action ${actionId} is ambiguous because both ${actionId}.yaml and ${actionId}.yml exist; keep exactly one file before replay.`);
-  }
-  if (yamlExists)
-    return yamlPath;
-  if (ymlExists)
-    return ymlPath;
-  return null;
-}
-
-// packages/rn-dev-agent-core/dist/learned-actions.js
 var argv = process.argv.slice(2);
 var flags = {
   json: false,
@@ -401,19 +69,38 @@ function scanMemories() {
   items.sort((a, b) => a.name.localeCompare(b.name));
   return { exists: true, dir: memDir, items: items.slice(0, flags.max) };
 }
+function isDirectNode(target, kind) {
+  try {
+    const stat = fs.lstatSync(target);
+    return !stat.isSymbolicLink() && (kind === "directory" ? stat.isDirectory() : stat.isFile());
+  } catch {
+    return false;
+  }
+}
+function resolveFlowFile(actionsDir, id) {
+  const yamlPath = path.join(actionsDir, `${id}.yaml`);
+  const ymlPath = path.join(actionsDir, `${id}.yml`);
+  const yamlExists = isDirectNode(yamlPath, "file");
+  const ymlExists = isDirectNode(ymlPath, "file");
+  if (yamlExists && ymlExists)
+    return null;
+  if (yamlExists)
+    return yamlPath;
+  if (ymlExists)
+    return ymlPath;
+  return null;
+}
 function scanFlows() {
   const roots = collectFlowRoots(flags.workspaceRoot);
   const items = [];
   for (const root of roots) {
-    if (!fs.existsSync(root))
+    if (!isDirectNode(root, "directory"))
       continue;
-    const projectRoot = path.dirname(path.dirname(root));
-    assertReadableActionCorpus(projectRoot);
     const ids = [
       ...new Set(fs.readdirSync(root).filter((file) => /\.ya?ml$/.test(file)).map((file) => file.replace(/\.ya?ml$/, "")))
     ];
     for (const id of ids) {
-      const fp = resolveActionPath(projectRoot, id);
+      const fp = resolveFlowFile(root, id);
       if (!fp)
         continue;
       const f = path.basename(fp);

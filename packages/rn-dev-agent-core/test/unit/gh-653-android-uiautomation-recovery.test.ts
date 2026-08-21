@@ -334,9 +334,8 @@ test('GH#653 recovery release failure keeps the original UiAutomation failure', 
 test('GH#653 exhausted flow deadline skips recovery cleanup and retry', async () => {
   let executions = 0;
   let releases = 0;
-  const times = [0, 0, 5_001];
   const handler = baseHandler({
-    now: () => times.shift() ?? 5_001,
+    now: () => (executions === 0 ? 0 : 5_001),
     execFile: async () => {
       executions += 1;
       throw execFailure(UIAUTOMATION_FAILURE);
@@ -386,9 +385,12 @@ test('GH#653 recovery cleanup is aborted by the remaining flow deadline', async 
 test('GH#653 a deadline lapsing after successful cleanup keeps the wedge and never retries', async () => {
   let executions = 0;
   let releases = 0;
-  const times = [0, 0, 1_000, 5_001];
   const handler = baseHandler({
-    now: () => times.shift() ?? 5_001,
+    now: () => {
+      if (executions === 0) return 0;
+      if (releases === 0) return 1_000;
+      return 5_001;
+    },
     execFile: async () => {
       executions += 1;
       throw execFailure(UIAUTOMATION_FAILURE, `Connecting to Android device: ${SERIAL}`);

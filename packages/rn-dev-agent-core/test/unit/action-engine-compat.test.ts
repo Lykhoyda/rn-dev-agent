@@ -847,7 +847,12 @@ test('Observe action inventory refuses symlinked corpora and extension collision
   const source = actionYaml('login');
   writeFileSync(join(collisionDir, 'login.yaml'), source, 'utf8');
   writeFileSync(join(collisionDir, 'login.yml'), source, 'utf8');
-  await assert.rejects(() => listActions(collisionRoot), /both login\.yaml and login\.yml/);
+  const listed = await listActions(collisionRoot);
+  assert.deepEqual(
+    listed.map((action) => action.id),
+    [],
+    'inventory omits yaml/yml twins instead of picking one',
+  );
 });
 
 test('maestro_run refuses a drifted learned action before spawn', async () => {

@@ -115,7 +115,9 @@ function withPairWriteLock(yamlPath, operation, acquisitionPrecondition) {
     const lockPath = actionWriteLockPath(yamlPath);
     if (heldWriteLocks.has(lockPath))
         return operation();
-    const ownerPath = `${dirname(dirname(dirname(yamlPath)))}/.rn-action-write-owner.${generateTmpStamp()}`;
+    // Owner inode must live beside the YAML so link(2) stays on-volume.
+    // Walking three parents put tmp-dir tests at `/.rn-action-write-owner.*` (EACCES).
+    const ownerPath = `${dirname(yamlPath)}/.rn-action-write-owner.${generateTmpStamp()}`;
     const owner = currentLockOwner();
     const lockFd = openSync(ownerPath, 'wx', 0o600);
     writeFileSync(lockFd, `${JSON.stringify(owner)}\n`, 'utf8');
@@ -272,40 +274,9 @@ function pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, publicationPre
         atomicWriter._unlink(sidecarTmp);
         return null;
     }
-    if (yamlMode === undefined)
-        atomicWriter._writeFile(yamlTmp, yamlContent);
-    else
-        atomicWriter._writeFileWithMode(yamlTmp, yamlContent, yamlMode);
-    if (publicationPrecondition && !publicationPrecondition()) {
-        atomicWriter._unlink(sidecarTmp);
-        atomicWriter._unlink(yamlTmp);
-        return null;
-    }
     const priorSidecarExisted = publicationPrecondition ? atomicWriter._exists(sidecarPath) : false;
     const priorSidecar = priorSidecarExisted ? readFileSync(sidecarPath, 'utf8') : null;
-    if (publicationPrecondition && !publicationPrecondition()) {
-        atomicWriter._unlink(sidecarTmp);
-        atomicWriter._unlink(yamlTmp);
-        return null;
-    }
-    atomicWriter._rename(sidecarTmp, sidecarPath);
-    const yamlPublished = createExclusive
-        ? (!publicationPrecondition || publicationPrecondition()) &&
-            atomicWriter._linkIfAbsent(yamlTmp, yamlPath, publicationPrecondition)
-        : expectedYamlContent === undefined
-            ? !yamlPublicationPrecondition || yamlPublicationPrecondition()
-            : atomicWriter._publishIfUnchanged(yamlTmp, yamlPath, expectedYamlContent, stamp, yamlPublicationPrecondition);
-    if (!yamlPublished) {
-        if (yamlPublicationPrecondition && !yamlPublicationPrecondition()) {
-            try {
-                const candidate = lstatSync(yamlTmp);
-                if (!candidate.isFile() || candidate.isSymbolicLink())
-                    return null;
-            }
-            catch {
-                return null;
-            }
-        }
+    function restorePriorSidecar() {
         if (priorSidecar === null) {
             atomicWriter._unlink(sidecarPath);
         }
@@ -313,13 +284,88 @@ function pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, publicationPre
             atomicWriter._writeFileWithMode(sidecarTmp, priorSidecar, sidecarMode);
             atomicWriter._rename(sidecarTmp, sidecarPath);
         }
-        atomicWriter._unlink(yamlTmp);
-        return null;
     }
-    if (createExclusive)
+    function writeYamlTmp() {
+        if (yamlMode === undefined)
+            atomicWriter._writeFile(yamlTmp, yamlContent);
+        else
+            atomicWriter._writeFileWithMode(yamlTmp, yamlContent, yamlMode);
+    }
+    if (createExclusive) {
+        // New files must not publish a sidecar without a YAML. Write YAML first.
+        try {
+            writeYamlTmp();
+        }
+        catch (error) {
+            try {
+                atomicWriter._unlink(sidecarTmp);
+            }
+            catch {
+                /* tmp may already be gone */
+            }
+            try {
+                atomicWriter._unlink(yamlTmp);
+            }
+            catch {
+                /* tmp may not exist yet */
+            }
+            throw error;
+        }
+        if (publicationPrecondition && !publicationPrecondition()) {
+            atomicWriter._unlink(sidecarTmp);
+            atomicWriter._unlink(yamlTmp);
+            return null;
+        }
+        const yamlPublished = (!publicationPrecondition || publicationPrecondition()) &&
+            atomicWriter._linkIfAbsent(yamlTmp, yamlPath, publicationPrecondition);
+        if (!yamlPublished) {
+            atomicWriter._unlink(sidecarTmp);
+            atomicWriter._unlink(yamlTmp);
+            return null;
+        }
+        atomicWriter._rename(sidecarTmp, sidecarPath);
         atomicWriter._unlink(yamlTmp);
-    else if (expectedYamlContent === undefined)
-        atomicWriter._rename(yamlTmp, yamlPath);
+    }
+    else {
+        // Existing files: sidecar-first so a YAML write failure cannot look like a human edit.
+        if (publicationPrecondition && !publicationPrecondition()) {
+            atomicWriter._unlink(sidecarTmp);
+            return null;
+        }
+        atomicWriter._rename(sidecarTmp, sidecarPath);
+        try {
+            writeYamlTmp();
+        }
+        catch (error) {
+            try {
+                atomicWriter._unlink(yamlTmp);
+            }
+            catch {
+                /* tmp may not exist yet */
+            }
+            throw error;
+        }
+        const yamlPublished = expectedYamlContent === undefined
+            ? !yamlPublicationPrecondition || yamlPublicationPrecondition()
+            : atomicWriter._publishIfUnchanged(yamlTmp, yamlPath, expectedYamlContent, stamp, yamlPublicationPrecondition);
+        if (!yamlPublished) {
+            if (yamlPublicationPrecondition && !yamlPublicationPrecondition()) {
+                try {
+                    const candidate = lstatSync(yamlTmp);
+                    if (!candidate.isFile() || candidate.isSymbolicLink())
+                        return null;
+                }
+                catch {
+                    return null;
+                }
+            }
+            restorePriorSidecar();
+            atomicWriter._unlink(yamlTmp);
+            return null;
+        }
+        if (expectedYamlContent === undefined)
+            atomicWriter._rename(yamlTmp, yamlPath);
+    }
     // Step 5 (mandatory after PR #109 review): resync sidecar to the
     // ACTUAL YAML mtime, but never let the recorded value regress below
     // `projectedMtimeMs`. This handles two failure modes the original
@@ -506,13 +552,18 @@ export const atomicWriter = {
             return withPairWriteLock(yamlPath, () => {
                 if (!precondition())
                     return false;
-                const candidatePath = `${dirname(dirname(dirname(yamlPath)))}/.rn-action-create.${generateTmpStamp()}`;
+                const candidatePath = `${dirname(yamlPath)}/.rn-action-create.${generateTmpStamp()}`;
                 atomicWriter._writeFileWithMode(candidatePath, content, 0o600);
                 try {
                     return atomicWriter._linkIfAbsent(candidatePath, yamlPath, precondition);
                 }
                 finally {
-                    atomicWriter._unlink(candidatePath);
+                    try {
+                        atomicWriter._unlink(candidatePath);
+                    }
+                    catch {
+                        /* candidate may vanish if the actions dir was swapped */
+                    }
                 }
             }, precondition);
         }

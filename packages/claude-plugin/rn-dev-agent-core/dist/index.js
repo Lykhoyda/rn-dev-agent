@@ -25370,7 +25370,7 @@ function withPairWriteLock(yamlPath, operation, acquisitionPrecondition) {
   const lockPath = actionWriteLockPath(yamlPath);
   if (heldWriteLocks.has(lockPath))
     return operation();
-  const ownerPath = `${dirname9(dirname9(dirname9(yamlPath)))}/.rn-action-write-owner.${generateTmpStamp()}`;
+  const ownerPath = `${dirname9(yamlPath)}/.rn-action-write-owner.${generateTmpStamp()}`;
   const owner = currentLockOwner();
   const lockFd = openSync2(ownerPath, "wx", 384);
   writeFileSync8(lockFd, `${JSON.stringify(owner)}
@@ -25496,47 +25496,82 @@ function pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, publicationPre
     atomicWriter._unlink(sidecarTmp);
     return null;
   }
-  if (yamlMode === void 0)
-    atomicWriter._writeFile(yamlTmp, yamlContent);
-  else
-    atomicWriter._writeFileWithMode(yamlTmp, yamlContent, yamlMode);
-  if (publicationPrecondition && !publicationPrecondition()) {
-    atomicWriter._unlink(sidecarTmp);
-    atomicWriter._unlink(yamlTmp);
-    return null;
-  }
   const priorSidecarExisted = publicationPrecondition ? atomicWriter._exists(sidecarPath) : false;
   const priorSidecar = priorSidecarExisted ? readFileSync13(sidecarPath, "utf8") : null;
-  if (publicationPrecondition && !publicationPrecondition()) {
-    atomicWriter._unlink(sidecarTmp);
-    atomicWriter._unlink(yamlTmp);
-    return null;
-  }
-  atomicWriter._rename(sidecarTmp, sidecarPath);
-  const yamlPublished = createExclusive ? (!publicationPrecondition || publicationPrecondition()) && atomicWriter._linkIfAbsent(yamlTmp, yamlPath, publicationPrecondition) : expectedYamlContent === void 0 ? !yamlPublicationPrecondition || yamlPublicationPrecondition() : atomicWriter._publishIfUnchanged(yamlTmp, yamlPath, expectedYamlContent, stamp, yamlPublicationPrecondition);
-  if (!yamlPublished) {
-    if (yamlPublicationPrecondition && !yamlPublicationPrecondition()) {
-      try {
-        const candidate = lstatSync7(yamlTmp);
-        if (!candidate.isFile() || candidate.isSymbolicLink())
-          return null;
-      } catch {
-        return null;
-      }
-    }
+  function restorePriorSidecar() {
     if (priorSidecar === null) {
       atomicWriter._unlink(sidecarPath);
     } else {
       atomicWriter._writeFileWithMode(sidecarTmp, priorSidecar, sidecarMode);
       atomicWriter._rename(sidecarTmp, sidecarPath);
     }
-    atomicWriter._unlink(yamlTmp);
-    return null;
   }
-  if (createExclusive)
+  function writeYamlTmp() {
+    if (yamlMode === void 0)
+      atomicWriter._writeFile(yamlTmp, yamlContent);
+    else
+      atomicWriter._writeFileWithMode(yamlTmp, yamlContent, yamlMode);
+  }
+  if (createExclusive) {
+    try {
+      writeYamlTmp();
+    } catch (error2) {
+      try {
+        atomicWriter._unlink(sidecarTmp);
+      } catch {
+      }
+      try {
+        atomicWriter._unlink(yamlTmp);
+      } catch {
+      }
+      throw error2;
+    }
+    if (publicationPrecondition && !publicationPrecondition()) {
+      atomicWriter._unlink(sidecarTmp);
+      atomicWriter._unlink(yamlTmp);
+      return null;
+    }
+    const yamlPublished = (!publicationPrecondition || publicationPrecondition()) && atomicWriter._linkIfAbsent(yamlTmp, yamlPath, publicationPrecondition);
+    if (!yamlPublished) {
+      atomicWriter._unlink(sidecarTmp);
+      atomicWriter._unlink(yamlTmp);
+      return null;
+    }
+    atomicWriter._rename(sidecarTmp, sidecarPath);
     atomicWriter._unlink(yamlTmp);
-  else if (expectedYamlContent === void 0)
-    atomicWriter._rename(yamlTmp, yamlPath);
+  } else {
+    if (publicationPrecondition && !publicationPrecondition()) {
+      atomicWriter._unlink(sidecarTmp);
+      return null;
+    }
+    atomicWriter._rename(sidecarTmp, sidecarPath);
+    try {
+      writeYamlTmp();
+    } catch (error2) {
+      try {
+        atomicWriter._unlink(yamlTmp);
+      } catch {
+      }
+      throw error2;
+    }
+    const yamlPublished = expectedYamlContent === void 0 ? !yamlPublicationPrecondition || yamlPublicationPrecondition() : atomicWriter._publishIfUnchanged(yamlTmp, yamlPath, expectedYamlContent, stamp, yamlPublicationPrecondition);
+    if (!yamlPublished) {
+      if (yamlPublicationPrecondition && !yamlPublicationPrecondition()) {
+        try {
+          const candidate = lstatSync7(yamlTmp);
+          if (!candidate.isFile() || candidate.isSymbolicLink())
+            return null;
+        } catch {
+          return null;
+        }
+      }
+      restorePriorSidecar();
+      atomicWriter._unlink(yamlTmp);
+      return null;
+    }
+    if (expectedYamlContent === void 0)
+      atomicWriter._rename(yamlTmp, yamlPath);
+  }
   const actualMtimeMs = atomicWriter._statMtimeMs(yamlPath);
   const finalMtimeMs = Math.max(actualMtimeMs, projectedMtimeMs);
   const finalState = {
@@ -25685,12 +25720,15 @@ var init_atomic_writer = __esm({
           return withPairWriteLock(yamlPath, () => {
             if (!precondition())
               return false;
-            const candidatePath = `${dirname9(dirname9(dirname9(yamlPath)))}/.rn-action-create.${generateTmpStamp()}`;
+            const candidatePath = `${dirname9(yamlPath)}/.rn-action-create.${generateTmpStamp()}`;
             atomicWriter._writeFileWithMode(candidatePath, content, 384);
             try {
               return atomicWriter._linkIfAbsent(candidatePath, yamlPath, precondition);
             } finally {
-              atomicWriter._unlink(candidatePath);
+              try {
+                atomicWriter._unlink(candidatePath);
+              } catch {
+              }
             }
           }, precondition);
         } catch (error2) {
@@ -26588,7 +26626,7 @@ function acknowledgeExternalEdit(action) {
     }
     const currentState = loadOrInitSidecar(action.filePath);
     if (currentMtimeMs <= currentState.lastSeenMtimeMs) {
-      return { ...action, state: currentState };
+      return action;
     }
     const nextState = markSeen(currentState, currentMtimeMs);
     saveSidecar(action.filePath, nextState);
@@ -76231,11 +76269,18 @@ function nextSelector(events, fromIndex, selectorFn) {
   return null;
 }
 function generateMaestro(events, opts = {}) {
-  assertSafeGeneratedScalars(opts, "metadata");
-  assertSafeGeneratedScalars(events, "events");
+  assertSafeGeneratedScalars({
+    ...opts,
+    testName: opts.testName != null ? stripNewlines(opts.testName) : void 0,
+    bundleId: opts.bundleId != null ? stripNewlines(opts.bundleId) : void 0,
+    id: opts.id != null ? stripNewlines(opts.id) : void 0,
+    intent: opts.intent != null ? stripNewlines(opts.intent) : void 0,
+    startRoute: opts.startRoute != null ? stripNewlines(opts.startRoute) : void 0,
+    tags: opts.tags?.map((tag) => stripNewlines(tag))
+  }, "metadata");
   const lines = [];
   if (opts.bundleId) {
-    lines.push(`appId: ${stripNewlines(opts.bundleId)}`);
+    lines.push(`appId: ${maestroScalar(opts.bundleId)}`);
     lines.push("---");
   }
   lines.push(`# ${stripNewlines(opts.testName ?? "Recorded flow")}`);
@@ -76342,7 +76387,8 @@ function generateMaestro(events, opts = {}) {
     }
   }
   const yaml2 = lines.join("\n") + "\n";
-  const commands = parseAndValidateFlow(yaml2).commands;
+  const bodyYaml = yaml2.replace(/^appId:[^\n]*\n---\n/, "");
+  const commands = parseAndValidateFlow(bodyYaml).commands;
   assertRecorderCommandShapes(commands);
   if (opts.id && opts.intent) {
     const refusal = regexSelectorCapabilityRefusal(commands);
@@ -76352,8 +76398,6 @@ function generateMaestro(events, opts = {}) {
   return yaml2;
 }
 function generateDetox(events, opts = {}) {
-  assertSafeGeneratedScalars(opts, "metadata");
-  assertSafeGeneratedScalars(events, "events");
   const lines = [];
   const name = stripNewlines(opts.testName ?? "Recorded flow");
   lines.push(`describe(${JSON.stringify(name)}, () => {`);
@@ -88173,6 +88217,8 @@ async function listActions(projectRoot) {
   const yamlFiles = files.filter((f) => /\.ya?ml$/.test(f)).sort();
   const results = [];
   for (const id of new Set(yamlFiles.map((file) => file.replace(/\.ya?ml$/, "")))) {
+    if (yamlFiles.includes(`${id}.yaml`) && yamlFiles.includes(`${id}.yml`))
+      continue;
     const action = loadAction(projectRoot, id);
     if (!action)
       continue;

@@ -28,7 +28,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { assertReadableActionCorpus, resolveActionPath } from './domain/action-store.js';
 
 interface Flags {
   json: boolean;
@@ -155,13 +154,31 @@ interface FlowsResult {
   roots: string[];
 }
 
+function isDirectNode(target: string, kind: 'directory' | 'file'): boolean {
+  try {
+    const stat = fs.lstatSync(target);
+    return !stat.isSymbolicLink() && (kind === 'directory' ? stat.isDirectory() : stat.isFile());
+  } catch {
+    return false;
+  }
+}
+
+function resolveFlowFile(actionsDir: string, id: string): string | null {
+  const yamlPath = path.join(actionsDir, `${id}.yaml`);
+  const ymlPath = path.join(actionsDir, `${id}.yml`);
+  const yamlExists = isDirectNode(yamlPath, 'file');
+  const ymlExists = isDirectNode(ymlPath, 'file');
+  if (yamlExists && ymlExists) return null;
+  if (yamlExists) return yamlPath;
+  if (ymlExists) return ymlPath;
+  return null;
+}
+
 function scanFlows(): FlowsResult {
   const roots = collectFlowRoots(flags.workspaceRoot);
   const items: FlowItem[] = [];
   for (const root of roots) {
-    if (!fs.existsSync(root)) continue;
-    const projectRoot = path.dirname(path.dirname(root));
-    assertReadableActionCorpus(projectRoot);
+    if (!isDirectNode(root, 'directory')) continue;
     const ids = [
       ...new Set(
         fs
@@ -171,7 +188,7 @@ function scanFlows(): FlowsResult {
       ),
     ];
     for (const id of ids) {
-      const fp = resolveActionPath(projectRoot, id);
+      const fp = resolveFlowFile(root, id);
       if (!fp) continue;
       const f = path.basename(fp);
       const text = fs.readFileSync(fp, 'utf8');

@@ -291,13 +291,22 @@ test('save-as-action: when YAML staging fails, the exclusive create leaves no pa
   // pre-existing or absent) YAML mtime, so a follow-up edit-detection
   // call returns false.
   const realWriteFile = atomicWriter._writeFile.bind(atomicWriter);
-  const stub = mock.method(atomicWriter, '_writeFile', (path, content) => {
+  const realWriteFileWithMode = atomicWriter._writeFileWithMode.bind(atomicWriter);
+  const failYamlTmp = (path, content, mode) => {
     // GH #111: tmp suffix is now `.tmp.<stamp>` rather than fixed `.tmp`.
     if (/\.yaml\.tmp\./.test(path)) {
       throw new Error('SIMULATED_DISK_FULL: yaml write failed');
     }
-    return realWriteFile(path, content);
-  });
+    return mode === undefined
+      ? realWriteFile(path, content)
+      : realWriteFileWithMode(path, content, mode);
+  };
+  const stub = mock.method(atomicWriter, '_writeFile', (path, content) =>
+    failYamlTmp(path, content),
+  );
+  const modeStub = mock.method(atomicWriter, '_writeFileWithMode', (path, content, mode) =>
+    failYamlTmp(path, content, mode),
+  );
 
   const handler = createSaveAsActionHandler();
 
@@ -332,6 +341,7 @@ test('save-as-action: when YAML staging fails, the exclusive create leaves no pa
   // with the same id should succeed cleanly (action correctly considered
   // absent and creatable).
   stub.mock.restore();
+  modeStub.mock.restore();
 
   const handler2 = createSaveAsActionHandler();
   const recovery = await handler2({
@@ -362,14 +372,23 @@ test('save-as-action: when sidecar write fails first, nothing is persisted and a
   // Fail on the very first write — the sidecar.tmp.
   let failedOnce = false;
   const realWriteFile = atomicWriter._writeFile.bind(atomicWriter);
-  const stub = mock.method(atomicWriter, '_writeFile', (path, content) => {
+  const realWriteFileWithMode = atomicWriter._writeFileWithMode.bind(atomicWriter);
+  const failSidecarTmp = (path, content, mode) => {
     // GH #111: tmp suffix is now `.tmp.<stamp>` rather than fixed `.tmp`.
     if (!failedOnce && /\.state\.json\.tmp\./.test(path)) {
       failedOnce = true;
       throw new Error('SIMULATED_DISK_FULL: sidecar write failed');
     }
-    return realWriteFile(path, content);
-  });
+    return mode === undefined
+      ? realWriteFile(path, content)
+      : realWriteFileWithMode(path, content, mode);
+  };
+  const stub = mock.method(atomicWriter, '_writeFile', (path, content) =>
+    failSidecarTmp(path, content),
+  );
+  const modeStub = mock.method(atomicWriter, '_writeFileWithMode', (path, content, mode) =>
+    failSidecarTmp(path, content, mode),
+  );
 
   const handler = createSaveAsActionHandler();
   await assert.rejects(
@@ -389,6 +408,7 @@ test('save-as-action: when sidecar write fails first, nothing is persisted and a
   // Retry succeeds (the stub has already let `failedOnce` flip, so subsequent
   // calls fall through to the real writer).
   stub.mock.restore();
+  modeStub.mock.restore();
   const recovery = await handler({
     id: 'sidecar-fail',
     intent: 'verify atomicity',

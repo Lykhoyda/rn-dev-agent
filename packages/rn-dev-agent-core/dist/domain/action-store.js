@@ -529,7 +529,7 @@ export function acknowledgeExternalEdit(action) {
         }
         const currentState = loadOrInitSidecar(action.filePath);
         if (currentMtimeMs <= currentState.lastSeenMtimeMs) {
-            return { ...action, state: currentState };
+            return action;
         }
         const nextState = markSeen(currentState, currentMtimeMs);
         saveSidecar(action.filePath, nextState);
