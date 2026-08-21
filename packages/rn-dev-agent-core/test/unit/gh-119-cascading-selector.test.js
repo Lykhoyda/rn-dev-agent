@@ -8,8 +8,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-
-const RUN_ACTION_PATH = '../../dist/tools/run-action.js';
+import { createPinnedRunActionHandler as createRunActionHandler } from '../helpers/tmp-project.js';
 
 function makeProject() {
   const root = mkdtempSync(join(tmpdir(), 'gh119-'));
@@ -23,6 +22,7 @@ function makeProject() {
       '# intent: a sample',
       '# status: experimental',
       '# mutates: false',
+      '# enginePin: maestro-runner@1.1.24',
       '- launchApp',
       '- tapOn:',
       '    id: "btn-A"',
@@ -32,7 +32,6 @@ function makeProject() {
 }
 
 test('AutoRepairOutcome.nextFailedSelector populated when retry fails on a different selector', async () => {
-  const { createRunActionHandler } = await import(RUN_ACTION_PATH);
   const root = makeProject();
 
   // First call: maestro fails with SELECTOR_NOT_FOUND on selector "btn-A".
@@ -116,7 +115,6 @@ test('AutoRepairOutcome.nextFailedSelector populated when retry fails on a diffe
 });
 
 test('AutoRepairOutcome.nextFailedSelector NOT populated when retry fails on the SAME selector (patch did not work)', async () => {
-  const { createRunActionHandler } = await import(RUN_ACTION_PATH);
   const root = makeProject();
 
   let mCount = 0;
@@ -188,7 +186,6 @@ test('AutoRepairOutcome.nextFailedSelector NOT populated when retry fails on the
 });
 
 test('AutoRepairOutcome.nextFailedSelector NOT populated when retry passed (happy repair path)', async () => {
-  const { createRunActionHandler } = await import(RUN_ACTION_PATH);
   const root = makeProject();
 
   let mCount = 0;

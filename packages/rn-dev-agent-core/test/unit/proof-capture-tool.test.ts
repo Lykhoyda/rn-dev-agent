@@ -142,6 +142,7 @@ const ACTION_YAML_BYTES = `appId: dev.rnproof.fixture
 # id: canonical-proof
 # intent: Create a task through the proof fixture
 # status: active
+# enginePin: maestro-runner@1.1.24
 - tapOn:
     id: open-task-form
 `;
@@ -2305,7 +2306,8 @@ test('production action identity reads exact app-root YAML bytes and runtime rev
 
 test('real canonical action proof replay is read-only while normal replay persists', async (t) => {
   const proofModule = await import('../../dist/tools/proof-capture.js');
-  const { createRunActionHandler } = await import('../../dist/tools/run-action.js');
+  const { createPinnedRunActionHandler: createRunActionHandler } =
+    await import('../helpers/tmp-project.js');
   const { addToolObserver, instrumentTool } =
     await import('../../dist/observability/instrumentation.js');
   const { resetActionStore } = await import('../../dist/domain/action-state-store.js');
@@ -2340,7 +2342,7 @@ test('real canonical action proof replay is read-only while normal replay persis
       flowFile: 'canonical-proof.yaml',
       platform: 'ios',
       transport: 'maestro-runner',
-      transportVersion: '1.0.9',
+      transportVersion: '1.1.24',
       fallback: 'none',
       steps: [
         { index: 0, name: 'tapOn: proof-continue', verb: 'tapOn', status: 'pass', durationMs: 20 },

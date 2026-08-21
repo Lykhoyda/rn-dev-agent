@@ -19,8 +19,10 @@ import {
 import { runCdpReplay, firstReplayTestId } from '../../dist/tools/cdp-replay-dispatch.js';
 import { attemptRepair, detectTransportBlind } from '../../dist/domain/repair-engine.js';
 import { loadAction } from '../../dist/domain/action-store.js';
-import { createRunActionHandler } from '../../dist/tools/run-action.js';
-import { createTmpProject } from '../helpers/tmp-project.js';
+import {
+  createPinnedRunActionHandler as createRunActionHandler,
+  createTmpProject,
+} from '../helpers/tmp-project.js';
 
 let project: ReturnType<typeof createTmpProject>;
 beforeEach(() => {

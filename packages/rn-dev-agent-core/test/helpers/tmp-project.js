@@ -24,6 +24,25 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { buildReplayEngineStatus, MAESTRO_RUNNER_PIN } from '../../dist/domain/engine-pin.js';
+import { createRunActionHandler } from '../../dist/tools/run-action.js';
+
+const PINNED_ENGINE_STATUS = buildReplayEngineStatus(
+  'pinned-ok',
+  MAESTRO_RUNNER_PIN.version,
+  false,
+  {
+    selectedPath: `/test/pin-cache/${MAESTRO_RUNNER_PIN.version}/bin/maestro-runner`,
+    provenance: 'pin-cache',
+  },
+);
+
+export function createPinnedRunActionHandler(deps = {}) {
+  return createRunActionHandler({
+    ...deps,
+    engineStatus: deps.engineStatus ?? (async () => PINNED_ENGINE_STATUS),
+  });
+}
 
 export function createTmpProject() {
   const root = mkdtempSync(join(tmpdir(), 'rn-agent-test-'));

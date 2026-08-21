@@ -9,8 +9,11 @@ import {
   saveActionRuntimeWithCAS,
 } from '../../dist/domain/action-store.js';
 import { appendRunRecord } from '../../dist/domain/reusable-action.js';
-import { createRunActionHandler } from '../../dist/tools/run-action.js';
-import { createTmpProject, freshFixtureState } from '../helpers/tmp-project.js';
+import {
+  createPinnedRunActionHandler as createRunActionHandler,
+  createTmpProject,
+  freshFixtureState,
+} from '../helpers/tmp-project.js';
 
 let project: ReturnType<typeof createTmpProject>;
 
@@ -35,6 +38,7 @@ function wizardYaml(status: 'active' | 'experimental' = 'active'): string {
     '# tags: [tasks, wizard, create]',
     '# mutates: true',
     `# status: ${status}`,
+    '# enginePin: maestro-runner@1.1.24',
     '',
     '- launchApp:',
     '    stopApp: false',
