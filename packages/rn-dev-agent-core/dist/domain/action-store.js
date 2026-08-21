@@ -5,7 +5,7 @@
 // composite. Underpins /run-action, self-repair, and auto-emission —
 // they all read/write through this single chokepoint so schema
 // invariants stay enforced.
-import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync, } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { parseM7Header, serializeM7Header, } from './reusable-action.js';
 import { loadOrInitSidecar, markSeen, saveSidecar, sidecarPathFor, yamlEditedSinceLastSeen, } from './sidecar-io.js';
@@ -119,6 +119,26 @@ export function resolveActionPath(projectRoot, actionId) {
     if (ymlExists)
         return ymlPath;
     return null;
+}
+export function createActionTextExclusive(projectRoot, actionId, yamlText) {
+    const yamlPath = actionPathFor(projectRoot, actionId);
+    const ymlPath = yamlPath.replace(/\.yaml$/, '.yml');
+    return atomicWriter.withLock(yamlPath, () => {
+        const existing = resolveActionPath(projectRoot, actionId);
+        if (existing)
+            throw new Error(`Action ${actionId} already exists at ${existing}.`);
+        writeFileSync(yamlPath, yamlText, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+        try {
+            if (!actionFileExists(ymlPath))
+                return yamlPath;
+            throw new Error(`Action ${actionId} changed during creation; keep exactly one extension.`);
+        }
+        catch (err) {
+            if (readFileSync(yamlPath, 'utf8') === yamlText)
+                unlinkSync(yamlPath);
+            throw err;
+        }
+    });
 }
 /**
  * Split a YAML file into (top-section before `---`, header comments
@@ -274,18 +294,21 @@ function migrationConflict(filePath) {
     return new Error(`Action changed during migration: ${filePath}. Re-run migration.`);
 }
 function migrationBaselineMatches(filePath, baseline) {
-    try {
-        if (readFileSync(filePath, 'utf8') !== baseline.yamlText)
-            return false;
-    }
-    catch {
+    if (!migrationYamlBaselineMatches(filePath, baseline))
         return false;
-    }
     const sidecarPath = sidecarPathFor(filePath);
     const sidecarExists = existsSync(sidecarPath);
     if (sidecarExists !== baseline.sidecarExisted)
         return false;
     return !sidecarExists || runtimeSidecarMatches(sidecarPath, baseline.state);
+}
+function migrationYamlBaselineMatches(filePath, baseline) {
+    try {
+        return readFileSync(filePath, 'utf8') === baseline.yamlText;
+    }
+    catch {
+        return false;
+    }
 }
 export function loadActionMigrationBaseline(filePath) {
     assertWritableActionFile(filePath);
@@ -300,7 +323,7 @@ export function loadActionMigrationBaseline(filePath) {
 export function commitMigratedActionText(filePath, baseline, yamlText) {
     assertWritableActionFile(filePath);
     const sidecarPath = sidecarPathFor(filePath);
-    const result = atomicWriter.pairWriteConditional(filePath, yamlText, sidecarPath, baseline.state, () => migrationBaselineMatches(filePath, baseline));
+    const result = atomicWriter.pairWriteConditional(filePath, yamlText, sidecarPath, baseline.state, () => migrationBaselineMatches(filePath, baseline), () => migrationYamlBaselineMatches(filePath, baseline));
     if (!result)
         throw migrationConflict(filePath);
     const nextState = { ...baseline.state, lastSeenMtimeMs: result.finalMtimeMs };

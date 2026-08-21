@@ -9,6 +9,7 @@ import {
   getEngineStatus,
   enginePinCaveat,
   exactPinRefusal,
+  immediateRunnerPinRefusal,
   preOAndroidApiRefusal,
   isOlderSdkInstallFailure,
   olderSdkInstallDiagnosis,
@@ -670,21 +671,21 @@ export function createMaestroRunHandler(
       return failResult(learnedActionPathRefusal, 'BAD_RECORDING');
     }
     const learnedAction = args.flowPath ? isLearnedActionPath(args.flowPath) : false;
-    const actionMeta =
-      args.flowPath
-        ? parseM7Header(rawYaml, basename(args.flowPath).replace(/\.ya?ml$/i, ''))
-        : null;
-    const compatibilityRefusal = learnedAction || actionMeta !== null
-      ? actionReplayPreflight({
-          enginePin: actionMeta?.enginePin,
-          commands: validatedCommands,
-          engineStatus,
-        })
-      : replayCompatibilityPreflight({
-          commands: validatedCommands,
-          engineStatus,
-          requireEnginePin: false,
-        });
+    const actionMeta = args.flowPath
+      ? parseM7Header(rawYaml, basename(args.flowPath).replace(/\.ya?ml$/i, ''))
+      : null;
+    const compatibilityRefusal =
+      learnedAction || actionMeta !== null
+        ? actionReplayPreflight({
+            enginePin: actionMeta?.enginePin,
+            commands: validatedCommands,
+            engineStatus,
+          })
+        : replayCompatibilityPreflight({
+            commands: validatedCommands,
+            engineStatus,
+            requireEnginePin: false,
+          });
     if (compatibilityRefusal) {
       return failResult(compatibilityRefusal, 'ENGINE_PIN_MISMATCH', {
         pin: engineStatus?.pin,
@@ -749,6 +750,11 @@ export function createMaestroRunHandler(
                   Object.assign(error, { code: 'ETIMEDOUT' });
                   throw error;
                 }
+                const immediateRefusal = await immediateRunnerPinRefusal(
+                  dispatch.binPath,
+                  resolveEngineStatus,
+                );
+                if (immediateRefusal) throw new Error(immediateRefusal);
                 beforeDispatch?.();
                 return execute(dispatch.binPath, finalArgs, {
                   timeout: remainingTimeout,

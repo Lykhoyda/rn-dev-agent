@@ -77,9 +77,10 @@ var init_maestro_runner_pin = __esm({
 import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
 import { createHash } from "node:crypto";
-import { accessSync, constants, lstatSync, readFileSync, readdirSync } from "node:fs";
+import { accessSync, constants, lstatSync, readFileSync, readdirSync, readlinkSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { gunzipSync } from "node:zlib";
 function engineLabel(_runner) {
   return `the pinned maestro-runner ${MAESTRO_RUNNER_PIN.version}`;
 }
@@ -131,6 +132,108 @@ function pinCacheRoot(home = homedir()) {
 }
 function pinnedRunnerBinPath(home) {
   return join(pinCacheRoot(home), "bin", "maestro-runner");
+}
+function pinnedRunnerArchivePath(home) {
+  return join(pinCacheRoot(home), ".payload.tar.gz");
+}
+function tarText(buffer, offset, length) {
+  const end = buffer.indexOf(0, offset);
+  return buffer.subarray(offset, end >= offset && end < offset + length ? end : offset + length).toString();
+}
+function expectedPayloadEntries(archive) {
+  const tar = gunzipSync(archive, { maxOutputLength: 1024 * 1024 * 1024 });
+  const raw = [];
+  let offset = 0;
+  let longPath = null;
+  while (offset + 512 <= tar.length) {
+    const header = tar.subarray(offset, offset + 512);
+    if (header.every((byte) => byte === 0))
+      break;
+    const prefix = tarText(header, 345, 155);
+    const name = tarText(header, 0, 100);
+    const sizeText = tarText(header, 124, 12).trim();
+    const size = Number.parseInt(sizeText || "0", 8);
+    if (!Number.isSafeInteger(size) || size < 0 || offset + 512 + size > tar.length)
+      return null;
+    const type = String.fromCharCode(header[156] || 48);
+    const data = tar.subarray(offset + 512, offset + 512 + size);
+    const archivePath = longPath ?? [prefix, name].filter(Boolean).join("/");
+    longPath = null;
+    if (type === "L") {
+      longPath = data.toString().replace(/\0.*$/s, "").trim();
+    } else if (type === "0" || type === "\0" || type === "2" || type === "5") {
+      raw.push({ path: archivePath, type, data, link: tarText(header, 157, 100) });
+    }
+    offset += 512 + Math.ceil(size / 512) * 512;
+  }
+  const runner = raw.find((entry) => (entry.type === "0" || entry.type === "\0") && (entry.path === "bin/maestro-runner" || entry.path.endsWith("/bin/maestro-runner")));
+  if (!runner)
+    return null;
+  const rootPrefix = runner.path.slice(0, -"bin/maestro-runner".length);
+  const expected = /* @__PURE__ */ new Map();
+  for (const entry of raw) {
+    if (!entry.path.startsWith(rootPrefix) || entry.type === "5")
+      continue;
+    const path = entry.path.slice(rootPrefix.length).replace(/^\.\//, "");
+    if (!path || path.startsWith("/") || path.split("/").some((part) => part === ".."))
+      return null;
+    if (entry.type === "2") {
+      expected.set(path, { kind: "symlink", target: entry.link });
+    } else {
+      expected.set(path, {
+        kind: "file",
+        sha256: createHash("sha256").update(entry.data).digest("hex")
+      });
+    }
+  }
+  return expected;
+}
+function installedPayloadMatchesPin(platformKey) {
+  try {
+    const expectedArchiveSha = MAESTRO_RUNNER_PIN.archiveSha256[platformKey];
+    if (!expectedArchiveSha)
+      return false;
+    const archivePath = pinnedRunnerArchivePath();
+    const archive = readFileSync(archivePath);
+    if (createHash("sha256").update(archive).digest("hex") !== expectedArchiveSha)
+      return false;
+    const expected = expectedPayloadEntries(archive);
+    if (!expected)
+      return false;
+    const root2 = pinCacheRoot();
+    const seen = /* @__PURE__ */ new Set();
+    const visit = (directory) => {
+      for (const entry of readdirSync(directory, { withFileTypes: true })) {
+        const path = join(directory, entry.name);
+        const rel = relative(root2, path).split(sep).join("/");
+        if (rel === ".payload.tar.gz")
+          continue;
+        if (entry.isDirectory()) {
+          if (!visit(path))
+            return false;
+          continue;
+        }
+        const wanted = expected.get(rel);
+        if (!wanted)
+          return false;
+        seen.add(rel);
+        if (entry.isSymbolicLink()) {
+          if (wanted.kind !== "symlink" || readlinkSync(path) !== wanted.target)
+            return false;
+          continue;
+        }
+        if (!entry.isFile() || wanted.kind !== "file")
+          return false;
+        const sha256 = createHash("sha256").update(readFileSync(path)).digest("hex");
+        if (sha256 !== wanted.sha256)
+          return false;
+      }
+      return true;
+    };
+    return visit(root2) && seen.size === expected.size;
+  } catch {
+    return false;
+  }
 }
 function isRegularPinCacheBinary(path) {
   try {
@@ -299,7 +402,7 @@ function pinCorrection(status, platformKey = nodePlatformKey()) {
       return `Session maestro-runner version could not be read. ${install2}`;
     case "unverified":
       if (status.version && compareVersions(status.version, pinned) > 0) {
-        return `Session pin-cache contains an unverified newer maestro-runner entry ${installed}; its directory name is not trusted binary evidence and it will not be executed. ${install2}`;
+        return `UNVERIFIED_NEWER_DRIFT: Session pin-cache contains an unverified newer maestro-runner entry ${installed}; its directory name is not trusted binary evidence and it will not be executed. ${install2}`;
       }
       return `Session maestro-runner ${installed} could not be checksum-verified on ${platformKey}. ${install2}`;
     case "pinned-ok":
@@ -313,6 +416,17 @@ function exactPinRefusal(status, platformKey = nodePlatformKey()) {
   if (status.pin.status === "pinned-ok")
     return null;
   return `maestro_run refused: ${pinCorrection(status, platformKey)}`;
+}
+async function immediateRunnerPinRefusal(runnerPath, resolveStatus = () => getEngineStatus().catch(() => null)) {
+  const status = await resolveStatus();
+  const refusal = exactPinRefusal(status);
+  if (refusal)
+    return `RUNNER_PIN_CHANGED: ${refusal}`;
+  const canonicalPath2 = getMaestroRunnerPath();
+  if (canonicalPath2 && status?.selectedPath && (resolve(canonicalPath2) !== resolve(runnerPath) || resolve(status.selectedPath) !== resolve(runnerPath))) {
+    return "RUNNER_PIN_CHANGED: verified runner path changed before execution.";
+  }
+  return null;
 }
 function doctorPinnedRunner(status, platformKey = nodePlatformKey()) {
   const platformStatus = pinArchiveCoords(platformKey) === null ? "unsupported" : "supported";
@@ -399,6 +513,12 @@ async function detect(resolvers) {
     });
   }
   if (sha256 !== expectedSha256) {
+    return buildReplayEngineStatus("checksum-mismatch", null, false, {
+      selectedPath: binPath,
+      provenance: "pin-cache"
+    });
+  }
+  if (!resolvers.binPath && !resolvers.hashFile && !installedPayloadMatchesPin(platformKey)) {
     return buildReplayEngineStatus("checksum-mismatch", null, false, {
       selectedPath: binPath,
       provenance: "pin-cache"
@@ -4446,10 +4566,10 @@ var require_resolve_block_map = __commonJS({
       let offset = bm.offset;
       let commentEnd = null;
       for (const collItem of bm.items) {
-        const { start, key, sep: sep5, value } = collItem;
+        const { start, key, sep: sep6, value } = collItem;
         const keyProps = resolveProps.resolveProps(start, {
           indicator: "explicit-key-ind",
-          next: key ?? sep5?.[0],
+          next: key ?? sep6?.[0],
           offset,
           onError,
           parentIndent: bm.indent,
@@ -4463,7 +4583,7 @@ var require_resolve_block_map = __commonJS({
             else if ("indent" in key && key.indent !== bm.indent)
               onError(offset, "BAD_INDENT", startColMsg);
           }
-          if (!keyProps.anchor && !keyProps.tag && !sep5) {
+          if (!keyProps.anchor && !keyProps.tag && !sep6) {
             commentEnd = keyProps.end;
             if (keyProps.comment) {
               if (map.comment)
@@ -4487,7 +4607,7 @@ var require_resolve_block_map = __commonJS({
         ctx.atKey = false;
         if (utilMapIncludes.mapIncludes(ctx, map.items, keyNode))
           onError(keyStart, "DUPLICATE_KEY", "Map keys must be unique");
-        const valueProps = resolveProps.resolveProps(sep5 ?? [], {
+        const valueProps = resolveProps.resolveProps(sep6 ?? [], {
           indicator: "map-value-ind",
           next: value,
           offset: keyNode.range[2],
@@ -4503,7 +4623,7 @@ var require_resolve_block_map = __commonJS({
             if (ctx.options.strict && keyProps.start < valueProps.found.offset - 1024)
               onError(keyNode.range, "KEY_OVER_1024_CHARS", "The : indicator must be at most 1024 chars after the start of an implicit block mapping key");
           }
-          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : composeEmptyNode(ctx, offset, sep5, null, valueProps, onError);
+          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : composeEmptyNode(ctx, offset, sep6, null, valueProps, onError);
           if (ctx.schema.compat)
             utilFlowIndentCheck.flowIndentCheck(bm.indent, value, onError);
           offset = valueNode.range[2];
@@ -4594,7 +4714,7 @@ var require_resolve_end = __commonJS({
       let comment = "";
       if (end) {
         let hasSpace = false;
-        let sep5 = "";
+        let sep6 = "";
         for (const token2 of end) {
           const { source, type } = token2;
           switch (type) {
@@ -4608,13 +4728,13 @@ var require_resolve_end = __commonJS({
               if (!comment)
                 comment = cb;
               else
-                comment += sep5 + cb;
-              sep5 = "";
+                comment += sep6 + cb;
+              sep6 = "";
               break;
             }
             case "newline":
               if (comment)
-                sep5 += source;
+                sep6 += source;
               hasSpace = true;
               break;
             default:
@@ -4657,18 +4777,18 @@ var require_resolve_flow_collection = __commonJS({
       let offset = fc.offset + fc.start.source.length;
       for (let i = 0; i < fc.items.length; ++i) {
         const collItem = fc.items[i];
-        const { start, key, sep: sep5, value } = collItem;
+        const { start, key, sep: sep6, value } = collItem;
         const props = resolveProps.resolveProps(start, {
           flow: fcName,
           indicator: "explicit-key-ind",
-          next: key ?? sep5?.[0],
+          next: key ?? sep6?.[0],
           offset,
           onError,
           parentIndent: fc.indent,
           startOnNewline: false
         });
         if (!props.found) {
-          if (!props.anchor && !props.tag && !sep5 && !value) {
+          if (!props.anchor && !props.tag && !sep6 && !value) {
             if (i === 0 && props.comma)
               onError(props.comma, "UNEXPECTED_TOKEN", `Unexpected , in ${fcName}`);
             else if (i < fc.items.length - 1)
@@ -4722,8 +4842,8 @@ var require_resolve_flow_collection = __commonJS({
             }
           }
         }
-        if (!isMap && !sep5 && !props.found) {
-          const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep5, null, props, onError);
+        if (!isMap && !sep6 && !props.found) {
+          const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep6, null, props, onError);
           coll.items.push(valueNode);
           offset = valueNode.range[2];
           if (isBlock(value))
@@ -4735,7 +4855,7 @@ var require_resolve_flow_collection = __commonJS({
           if (isBlock(key))
             onError(keyNode.range, "BLOCK_IN_FLOW", blockMsg);
           ctx.atKey = false;
-          const valueProps = resolveProps.resolveProps(sep5 ?? [], {
+          const valueProps = resolveProps.resolveProps(sep6 ?? [], {
             flow: fcName,
             indicator: "map-value-ind",
             next: value,
@@ -4746,8 +4866,8 @@ var require_resolve_flow_collection = __commonJS({
           });
           if (valueProps.found) {
             if (!isMap && !props.found && ctx.options.strict) {
-              if (sep5)
-                for (const st of sep5) {
+              if (sep6)
+                for (const st of sep6) {
                   if (st === valueProps.found)
                     break;
                   if (st.type === "newline") {
@@ -4764,7 +4884,7 @@ var require_resolve_flow_collection = __commonJS({
             else
               onError(valueProps.start, "MISSING_CHAR", `Missing , or : between ${fcName} items`);
           }
-          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep5, null, valueProps, onError) : null;
+          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep6, null, valueProps, onError) : null;
           if (valueNode) {
             if (isBlock(value))
               onError(valueNode.range, "BLOCK_IN_FLOW", blockMsg);
@@ -4944,7 +5064,7 @@ var require_resolve_block_scalar = __commonJS({
           chompStart = i + 1;
       }
       let value = "";
-      let sep5 = "";
+      let sep6 = "";
       let prevMoreIndented = false;
       for (let i = 0; i < contentStart; ++i)
         value += lines[i][0].slice(trimIndent) + "\n";
@@ -4961,24 +5081,24 @@ var require_resolve_block_scalar = __commonJS({
           indent = "";
         }
         if (type === Scalar.Scalar.BLOCK_LITERAL) {
-          value += sep5 + indent.slice(trimIndent) + content;
-          sep5 = "\n";
+          value += sep6 + indent.slice(trimIndent) + content;
+          sep6 = "\n";
         } else if (indent.length > trimIndent || content[0] === "	") {
-          if (sep5 === " ")
-            sep5 = "\n";
-          else if (!prevMoreIndented && sep5 === "\n")
-            sep5 = "\n\n";
-          value += sep5 + indent.slice(trimIndent) + content;
-          sep5 = "\n";
+          if (sep6 === " ")
+            sep6 = "\n";
+          else if (!prevMoreIndented && sep6 === "\n")
+            sep6 = "\n\n";
+          value += sep6 + indent.slice(trimIndent) + content;
+          sep6 = "\n";
           prevMoreIndented = true;
         } else if (content === "") {
-          if (sep5 === "\n")
+          if (sep6 === "\n")
             value += "\n";
           else
-            sep5 = "\n";
+            sep6 = "\n";
         } else {
-          value += sep5 + content;
-          sep5 = " ";
+          value += sep6 + content;
+          sep6 = " ";
           prevMoreIndented = false;
         }
       }
@@ -5160,25 +5280,25 @@ var require_resolve_flow_scalar = __commonJS({
       if (!match)
         return source;
       let res = match[1];
-      let sep5 = " ";
+      let sep6 = " ";
       let pos = first.lastIndex;
       line.lastIndex = pos;
       while (match = line.exec(source)) {
         if (match[1] === "") {
-          if (sep5 === "\n")
-            res += sep5;
+          if (sep6 === "\n")
+            res += sep6;
           else
-            sep5 = "\n";
+            sep6 = "\n";
         } else {
-          res += sep5 + match[1];
-          sep5 = " ";
+          res += sep6 + match[1];
+          sep6 = " ";
         }
         pos = line.lastIndex;
       }
       const last = /[ \t]*(.*)/sy;
       last.lastIndex = pos;
       match = last.exec(source);
-      return res + sep5 + (match?.[1] ?? "");
+      return res + sep6 + (match?.[1] ?? "");
     }
     function doubleQuotedValue(source, onError) {
       let res = "";
@@ -5988,14 +6108,14 @@ var require_cst_stringify = __commonJS({
         }
       }
     }
-    function stringifyItem({ start, key, sep: sep5, value }) {
+    function stringifyItem({ start, key, sep: sep6, value }) {
       let res = "";
       for (const st of start)
         res += st.source;
       if (key)
         res += stringifyToken(key);
-      if (sep5)
-        for (const st of sep5)
+      if (sep6)
+        for (const st of sep6)
           res += st.source;
       if (value)
         res += stringifyToken(value);
@@ -7162,18 +7282,18 @@ var require_parser = __commonJS({
         if (this.type === "map-value-ind") {
           const prev = getPrevProps(this.peek(2));
           const start = getFirstKeyStartProps(prev);
-          let sep5;
+          let sep6;
           if (scalar.end) {
-            sep5 = scalar.end;
-            sep5.push(this.sourceToken);
+            sep6 = scalar.end;
+            sep6.push(this.sourceToken);
             delete scalar.end;
           } else
-            sep5 = [this.sourceToken];
+            sep6 = [this.sourceToken];
           const map = {
             type: "block-map",
             offset: scalar.offset,
             indent: scalar.indent,
-            items: [{ start, key: scalar, sep: sep5 }]
+            items: [{ start, key: scalar, sep: sep6 }]
           };
           this.onKeyLine = true;
           this.stack[this.stack.length - 1] = map;
@@ -7326,15 +7446,15 @@ var require_parser = __commonJS({
                 } else if (isFlowToken(it.key) && !includesToken(it.sep, "newline")) {
                   const start2 = getFirstKeyStartProps(it.start);
                   const key = it.key;
-                  const sep5 = it.sep;
-                  sep5.push(this.sourceToken);
+                  const sep6 = it.sep;
+                  sep6.push(this.sourceToken);
                   delete it.key;
                   delete it.sep;
                   this.stack.push({
                     type: "block-map",
                     offset: this.offset,
                     indent: this.indent,
-                    items: [{ start: start2, key, sep: sep5 }]
+                    items: [{ start: start2, key, sep: sep6 }]
                   });
                 } else if (start.length > 0) {
                   it.sep = it.sep.concat(start, this.sourceToken);
@@ -7528,13 +7648,13 @@ var require_parser = __commonJS({
             const prev = getPrevProps(parent);
             const start = getFirstKeyStartProps(prev);
             fixFlowSeqItems(fc);
-            const sep5 = fc.end.splice(1, fc.end.length);
-            sep5.push(this.sourceToken);
+            const sep6 = fc.end.splice(1, fc.end.length);
+            sep6.push(this.sourceToken);
             const map = {
               type: "block-map",
               offset: fc.offset,
               indent: fc.indent,
-              items: [{ start, key: fc, sep: sep5 }]
+              items: [{ start, key: fc, sep: sep6 }]
             };
             this.onKeyLine = true;
             this.stack[this.stack.length - 1] = map;
@@ -7813,7 +7933,7 @@ var require_dist = __commonJS({
 });
 
 // packages/rn-dev-agent-core/dist/domain/maestro-validator.js
-import { join as join2, dirname as dirname2, isAbsolute, sep } from "node:path";
+import { join as join2, dirname as dirname2, isAbsolute, sep as sep2 } from "node:path";
 import { readFileSync as readFileSync2, realpathSync } from "node:fs";
 function isValidBundleId(s) {
   if (typeof s !== "string")
@@ -7985,7 +8105,7 @@ function resolveRunFlowTarget(file, opts) {
   } catch (err) {
     throw new MaestroValidationError(`runFlow file ref "${file}" could not be resolved: ${err.message}`);
   }
-  if (resolved !== rootReal && !resolved.startsWith(rootReal + sep)) {
+  if (resolved !== rootReal && !resolved.startsWith(rootReal + sep2)) {
     throw new MaestroValidationError(`runFlow file ref "${file}" escapes the flow root`);
   }
   return resolved;
@@ -8319,7 +8439,7 @@ var init_sidecar_io = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/atomic-writer.js
-import { writeFileSync as writeFileSync2, renameSync, statSync as statSync2, mkdirSync as mkdirSync3, existsSync as existsSync2, unlinkSync, readdirSync as readdirSync2, openSync, closeSync, fstatSync, lstatSync as lstatSync3 } from "node:fs";
+import { writeFileSync as writeFileSync2, renameSync, statSync as statSync2, mkdirSync as mkdirSync3, existsSync as existsSync2, unlinkSync, readdirSync as readdirSync2, openSync, closeSync, fstatSync, lstatSync as lstatSync3, readFileSync as readFileSync4 } from "node:fs";
 import { dirname as dirname4, basename as basename2 } from "node:path";
 function generateTmpStamp() {
   const rand = Math.random().toString(36).slice(2, 10);
@@ -8377,7 +8497,7 @@ function withPairWriteLock(yamlPath, operation) {
     closeSync(lockFd);
   }
 }
-function pairWriteImpl(yamlPath, yamlContent, sidecarPath, state) {
+function pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, publicationPrecondition, yamlPublicationPrecondition) {
   ensureDir(yamlPath);
   ensureDir(sidecarPath);
   const stamp = generateTmpStamp();
@@ -8389,8 +8509,25 @@ function pairWriteImpl(yamlPath, yamlContent, sidecarPath, state) {
     lastSeenMtimeMs: projectedMtimeMs
   };
   atomicWriter._writeFile(sidecarTmp, JSON.stringify(projectedState, null, 2) + "\n");
-  atomicWriter._rename(sidecarTmp, sidecarPath);
   atomicWriter._writeFile(yamlTmp, yamlContent);
+  if (publicationPrecondition && !publicationPrecondition()) {
+    atomicWriter._unlink(sidecarTmp);
+    atomicWriter._unlink(yamlTmp);
+    return null;
+  }
+  const priorSidecarExisted = publicationPrecondition ? atomicWriter._exists(sidecarPath) : false;
+  const priorSidecar = priorSidecarExisted ? readFileSync4(sidecarPath, "utf8") : null;
+  atomicWriter._rename(sidecarTmp, sidecarPath);
+  if (yamlPublicationPrecondition && !yamlPublicationPrecondition()) {
+    if (priorSidecar === null) {
+      atomicWriter._unlink(sidecarPath);
+    } else {
+      atomicWriter._writeFile(sidecarTmp, priorSidecar);
+      atomicWriter._rename(sidecarTmp, sidecarPath);
+    }
+    atomicWriter._unlink(yamlTmp);
+    return null;
+  }
   atomicWriter._rename(yamlTmp, yamlPath);
   const actualMtimeMs = atomicWriter._statMtimeMs(yamlPath);
   const finalMtimeMs = Math.max(actualMtimeMs, projectedMtimeMs);
@@ -8483,15 +8620,18 @@ var init_atomic_writer = __esm({
       pairWrite(yamlPath, yamlContent, sidecarPath, state) {
         return withPairWriteLock(yamlPath, () => {
           cleanupOrphans(yamlPath, sidecarPath);
-          return pairWriteImpl(yamlPath, yamlContent, sidecarPath, state);
+          const result = pairWriteImpl(yamlPath, yamlContent, sidecarPath, state);
+          if (!result)
+            throw new Error(`Unconditional pair write refused for ${yamlPath}.`);
+          return result;
         });
       },
-      pairWriteConditional(yamlPath, yamlContent, sidecarPath, state, precondition) {
+      pairWriteConditional(yamlPath, yamlContent, sidecarPath, state, precondition, yamlPublicationPrecondition = precondition) {
         return withPairWriteLock(yamlPath, () => {
           if (!precondition())
             return null;
           cleanupOrphans(yamlPath, sidecarPath);
-          return pairWriteImpl(yamlPath, yamlContent, sidecarPath, state);
+          return pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, precondition, yamlPublicationPrecondition);
         });
       }
     };
@@ -8499,7 +8639,7 @@ var init_atomic_writer = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/path-safety.js
-import { resolve as resolve3, sep as sep2 } from "node:path";
+import { resolve as resolve3, sep as sep3 } from "node:path";
 function isValidActionId(s) {
   if (typeof s !== "string")
     return false;
@@ -8520,7 +8660,7 @@ function assertWithinDir(child, baseDir) {
   const resolvedChild = resolve3(baseDir, child);
   if (resolvedChild === resolvedBase)
     return;
-  const baseWithSep = resolvedBase.endsWith(sep2) ? resolvedBase : resolvedBase + sep2;
+  const baseWithSep = resolvedBase.endsWith(sep3) ? resolvedBase : resolvedBase + sep3;
   if (!resolvedChild.startsWith(baseWithSep)) {
     throw new PathTraversalError(`Path "${child}" escapes containment dir "${baseDir}" (resolved to ${resolvedChild})`);
   }
@@ -8630,7 +8770,7 @@ var init_logger = __esm({
 
 // packages/rn-dev-agent-core/dist/domain/action-db.js
 import { createRequire } from "node:module";
-import { existsSync as existsSync4, mkdirSync as mkdirSync5, readdirSync as readdirSync3, readFileSync as readFileSync4 } from "node:fs";
+import { existsSync as existsSync4, mkdirSync as mkdirSync5, readdirSync as readdirSync3, readFileSync as readFileSync5 } from "node:fs";
 import { dirname as dirname5, join as join6 } from "node:path";
 function loadSqlite() {
   try {
@@ -8800,7 +8940,7 @@ function openActionDb(projectRoot, opts = {}) {
           if (exists)
             continue;
           try {
-            const parsed = JSON.parse(readFileSync4(join6(stateDir, f), "utf8"));
+            const parsed = JSON.parse(readFileSync5(join6(stateDir, f), "utf8"));
             if (parsed?.schemaVersion !== 1)
               continue;
             if (!Array.isArray(parsed.runHistory) || !Array.isArray(parsed.repairHistory)) {
@@ -8888,7 +9028,7 @@ CREATE INDEX IF NOT EXISTS idx_index_app     ON actions_index(app_id);
 });
 
 // packages/rn-dev-agent-core/dist/domain/action-state-store.js
-import { basename as basename3, dirname as dirname6, sep as sep3 } from "node:path";
+import { basename as basename3, dirname as dirname6, sep as sep4 } from "node:path";
 function dbFor(projectRoot) {
   if (dbCache.has(projectRoot))
     return dbCache.get(projectRoot) ?? null;
@@ -8938,7 +9078,7 @@ function projectRootFromYaml(yamlFilePath) {
   if (basename3(actionsDir) !== "actions" || basename3(rnAgentDir) !== ".rn-agent") {
     return null;
   }
-  if (!root2 || root2 === sep3)
+  if (!root2 || root2 === sep4)
     return null;
   return root2;
 }
@@ -8967,8 +9107,8 @@ var init_worktree_repair_remedy = __esm({
 
 // packages/rn-dev-agent-core/dist/session/worktree-inheritance.js
 import { spawnSync } from "node:child_process";
-import { closeSync as closeSync2, existsSync as existsSync5, fstatSync as fstatSync2, lstatSync as lstatSync4, mkdirSync as mkdirSync6, openSync as openSync2, readFileSync as readFileSync5, readlinkSync, realpathSync as realpathSync2, renameSync as renameSync2, statSync as statSync3, symlinkSync, unlinkSync as unlinkSync2 } from "node:fs";
-import { dirname as dirname7, isAbsolute as isAbsolute2, join as join7, relative, resolve as resolve4, sep as sep4 } from "node:path";
+import { closeSync as closeSync2, existsSync as existsSync5, fstatSync as fstatSync2, lstatSync as lstatSync4, mkdirSync as mkdirSync6, openSync as openSync2, readFileSync as readFileSync6, readlinkSync as readlinkSync2, realpathSync as realpathSync2, renameSync as renameSync2, statSync as statSync3, symlinkSync, unlinkSync as unlinkSync2 } from "node:fs";
+import { dirname as dirname7, isAbsolute as isAbsolute2, join as join7, relative as relative2, resolve as resolve4, sep as sep5 } from "node:path";
 function gitEnvironment() {
   const env = { ...process.env };
   for (const key of GIT_ENV_OVERRIDES)
@@ -8996,16 +9136,16 @@ function canonical(path) {
 function contained(parent, child) {
   if (parent === child)
     return true;
-  const rel = relative(parent, child);
-  return rel !== "" && !rel.startsWith(`..${sep4}`) && rel !== ".." && !isAbsolute2(rel);
+  const rel = relative2(parent, child);
+  return rel !== "" && !rel.startsWith(`..${sep5}`) && rel !== ".." && !isAbsolute2(rel);
 }
 function toPosix(path) {
-  return sep4 === "/" ? path : path.split(sep4).join("/");
+  return sep5 === "/" ? path : path.split(sep5).join("/");
 }
 function isRnAppRoot(directory) {
   const manifest = join7(directory, "package.json");
   try {
-    const parsed = JSON.parse(readFileSync5(manifest, "utf8"));
+    const parsed = JSON.parse(readFileSync6(manifest, "utf8"));
     const deps = { ...parsed.dependencies, ...parsed.devDependencies };
     return Boolean(deps["react-native"] || deps["expo"]);
   } catch {
@@ -9101,7 +9241,7 @@ function resolveWorktreeLayout(input) {
     return { refusal: "APP_OUTSIDE_WORKTREE" };
   if (!input.allowNonRnApp && !isRnAppRoot(appRootInput))
     return { refusal: "NOT_RN_APP" };
-  const appRelative = worktreeRoot === appRootInput ? "." : toPosix(relative(worktreeRoot, appRootInput));
+  const appRelative = worktreeRoot === appRootInput ? "." : toPosix(relative2(worktreeRoot, appRootInput));
   const base = {
     kind: gitDir === commonDir ? "primary" : "linked",
     worktreeRoot,
@@ -9150,7 +9290,7 @@ var init_worktree_inheritance = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/action-store.js
-import { existsSync as existsSync6, lstatSync as lstatSync5, readFileSync as readFileSync6, realpathSync as realpathSync3, statSync as statSync4 } from "node:fs";
+import { existsSync as existsSync6, lstatSync as lstatSync5, readFileSync as readFileSync7, realpathSync as realpathSync3, statSync as statSync4, unlinkSync as unlinkSync3, writeFileSync as writeFileSync3 } from "node:fs";
 import { basename as basename4, dirname as dirname8, join as join8 } from "node:path";
 function assertOwnedActionCorpus(projectRoot) {
   for (const path of [join8(projectRoot, ".rn-agent"), join8(projectRoot, ".rn-agent", "actions")]) {
@@ -9290,21 +9430,24 @@ function migrationConflict(filePath) {
   return new Error(`Action changed during migration: ${filePath}. Re-run migration.`);
 }
 function migrationBaselineMatches(filePath, baseline) {
-  try {
-    if (readFileSync6(filePath, "utf8") !== baseline.yamlText)
-      return false;
-  } catch {
+  if (!migrationYamlBaselineMatches(filePath, baseline))
     return false;
-  }
   const sidecarPath = sidecarPathFor(filePath);
   const sidecarExists = existsSync6(sidecarPath);
   if (sidecarExists !== baseline.sidecarExisted)
     return false;
   return !sidecarExists || runtimeSidecarMatches(sidecarPath, baseline.state);
 }
+function migrationYamlBaselineMatches(filePath, baseline) {
+  try {
+    return readFileSync7(filePath, "utf8") === baseline.yamlText;
+  } catch {
+    return false;
+  }
+}
 function loadActionMigrationBaseline(filePath) {
   assertWritableActionFile(filePath);
-  const yamlText = readFileSync6(filePath, "utf8");
+  const yamlText = readFileSync7(filePath, "utf8");
   const sidecarExisted = existsSync6(sidecarPathFor(filePath));
   const state = loadOrInitSidecar(filePath);
   const baseline = { yamlText, state, sidecarExisted };
@@ -9315,7 +9458,7 @@ function loadActionMigrationBaseline(filePath) {
 function commitMigratedActionText(filePath, baseline, yamlText) {
   assertWritableActionFile(filePath);
   const sidecarPath = sidecarPathFor(filePath);
-  const result = atomicWriter.pairWriteConditional(filePath, yamlText, sidecarPath, baseline.state, () => migrationBaselineMatches(filePath, baseline));
+  const result = atomicWriter.pairWriteConditional(filePath, yamlText, sidecarPath, baseline.state, () => migrationBaselineMatches(filePath, baseline), () => migrationYamlBaselineMatches(filePath, baseline));
   if (!result)
     throw migrationConflict(filePath);
   const nextState = { ...baseline.state, lastSeenMtimeMs: result.finalMtimeMs };
@@ -9343,7 +9486,7 @@ function canonicalRuntimeJson(state) {
 function runtimeSidecarMatches(sidecarPath, expected) {
   let onDisk;
   try {
-    onDisk = JSON.parse(readFileSync6(sidecarPath, "utf8"));
+    onDisk = JSON.parse(readFileSync7(sidecarPath, "utf8"));
   } catch {
     return false;
   }
@@ -9611,6 +9754,16 @@ function migrateLearnedActions(projectRoot) {
       });
       continue;
     }
+    if (meta.id !== id) {
+      results.push({
+        id,
+        path,
+        status: "incompatible",
+        reason: `Action metadata id ${meta.id} does not match filename identity ${id}.`,
+        mutated: false
+      });
+      continue;
+    }
     let commands = [];
     try {
       commands = parseAndValidateFlow(text, { flowDir: dirname9(path), flowRoot: dir }).commands;
@@ -9684,7 +9837,7 @@ var init_keyboard_guard = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/util/secure-state-file.js
-import { readFileSync as readFileSync7, writeFileSync as writeFileSync3, unlinkSync as unlinkSync3, mkdirSync as mkdirSync7, renameSync as renameSync3, lstatSync as lstatSync7 } from "node:fs";
+import { readFileSync as readFileSync8, writeFileSync as writeFileSync4, unlinkSync as unlinkSync4, mkdirSync as mkdirSync7, renameSync as renameSync3, lstatSync as lstatSync7 } from "node:fs";
 import { join as join10, dirname as dirname10 } from "node:path";
 import { homedir as homedir3 } from "node:os";
 function getStateDir() {
@@ -9705,7 +9858,7 @@ function readJsonStateFile(path) {
     const stat = lstatSync7(path);
     if (stat.isSymbolicLink())
       return null;
-    return JSON.parse(readFileSync7(path, "utf8"));
+    return JSON.parse(readFileSync8(path, "utf8"));
   } catch {
     return null;
   }
@@ -9713,12 +9866,12 @@ function readJsonStateFile(path) {
 function writeJsonStateFileAtomic(path, value) {
   mkdirSync7(dirname10(path), { recursive: true });
   const tmpPath = `${path}.tmp.${process.pid}`;
-  writeFileSync3(tmpPath, JSON.stringify(value), { encoding: "utf8", mode: 384 });
+  writeFileSync4(tmpPath, JSON.stringify(value), { encoding: "utf8", mode: 384 });
   renameSync3(tmpPath, path);
 }
 function deleteStateFile(path) {
   try {
-    unlinkSync3(path);
+    unlinkSync4(path);
   } catch {
   }
 }
@@ -9862,7 +10015,7 @@ var init_trusted_system_executable = __esm({
 // packages/rn-dev-agent-core/dist/session/process-birth.js
 import { execFileSync } from "node:child_process";
 import { createHash as createHash2 } from "node:crypto";
-import { closeSync as closeSync3, constants as constants2, existsSync as existsSync10, fstatSync as fstatSync3, lstatSync as lstatSync8, openSync as openSync3, readFileSync as readFileSync8, readSync, realpathSync as realpathSync5 } from "node:fs";
+import { closeSync as closeSync3, constants as constants2, existsSync as existsSync10, fstatSync as fstatSync3, lstatSync as lstatSync8, openSync as openSync3, readFileSync as readFileSync9, readSync, realpathSync as realpathSync5 } from "node:fs";
 import { dirname as dirname11, join as join12 } from "node:path";
 import { fileURLToPath } from "node:url";
 function defaultRun(command, args) {
@@ -9915,7 +10068,7 @@ function verifyDarwinProcessBirthHelper(dependencies) {
   const canonicalize = dependencies.canonicalize ?? realpathSync5;
   const metadata = dependencies.lstat ?? lstatSync8;
   const descriptorMetadata = dependencies.fstat ?? fstatSync3;
-  const readBinary = dependencies.readBinary ?? ((path) => readFileSync8(path));
+  const readBinary = dependencies.readBinary ?? ((path) => readFileSync9(path));
   const readDescriptor = dependencies.readDescriptor ?? ((fd2) => {
     const size = descriptorMetadata(fd2).size;
     const buffer = Buffer.alloc(size);
@@ -9987,7 +10140,7 @@ function probeRecordedProcessBirth(pid, dependencies) {
   if (!Number.isSafeInteger(pid) || pid <= 0)
     return { status: "unknown" };
   const platform = dependencies.platform ?? process.platform;
-  const read = dependencies.read ?? ((path) => readFileSync8(path, "utf8"));
+  const read = dependencies.read ?? ((path) => readFileSync9(path, "utf8"));
   const run = dependencies.run ?? defaultRun;
   const runVerifiedHelper = dependencies.runVerifiedHelper ?? defaultRunVerifiedHelper;
   try {
@@ -10433,14 +10586,14 @@ var init_declared_source_contract = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/nav-graph/storage.js
-import { readFileSync as readFileSync9, writeFileSync as writeFileSync4, existsSync as existsSync11, renameSync as renameSync4, readdirSync as readdirSync5, lstatSync as lstatSync9, mkdirSync as mkdirSync8, realpathSync as realpathSync6 } from "node:fs";
+import { readFileSync as readFileSync10, writeFileSync as writeFileSync5, existsSync as existsSync11, renameSync as renameSync4, readdirSync as readdirSync5, lstatSync as lstatSync9, mkdirSync as mkdirSync8, realpathSync as realpathSync6 } from "node:fs";
 import { join as join14, dirname as dirname12 } from "node:path";
 function isRnProject(dir) {
   const pkgPath = join14(dir, "package.json");
   if (!existsSync11(pkgPath))
     return false;
   try {
-    const pkg = JSON.parse(readFileSync9(pkgPath, "utf-8"));
+    const pkg = JSON.parse(readFileSync10(pkgPath, "utf-8"));
     const deps = { ...pkg.dependencies, ...pkg.devDependencies };
     return !!(deps["react-native"] || deps["expo"]);
   } catch {
@@ -10520,7 +10673,7 @@ function readProjectBundleId(projectRoot) {
   if (!existsSync11(appJsonPath))
     return null;
   try {
-    const raw = JSON.parse(readFileSync9(appJsonPath, "utf-8"));
+    const raw = JSON.parse(readFileSync10(appJsonPath, "utf-8"));
     const iosId = raw.expo?.ios?.bundleIdentifier ?? raw.ios?.bundleIdentifier;
     const androidId = raw.expo?.android?.package ?? raw.android?.package;
     if (typeof iosId === "string" && iosId.length > 0)
@@ -10714,7 +10867,7 @@ var init_sources = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/project-config.js
-import { existsSync as existsSync12, readFileSync as readFileSync10 } from "node:fs";
+import { existsSync as existsSync12, readFileSync as readFileSync11 } from "node:fs";
 import { join as join15 } from "node:path";
 function readAppId(projectRoot, platform) {
   for (const filename of ["app.json", "app.config.json"]) {
@@ -10722,7 +10875,7 @@ function readAppId(projectRoot, platform) {
     if (!existsSync12(p))
       continue;
     try {
-      const raw = JSON.parse(readFileSync10(p, "utf-8"));
+      const raw = JSON.parse(readFileSync11(p, "utf-8"));
       const expo = raw.expo ?? raw;
       const iosBundleId = expo?.ios?.bundleIdentifier;
       const androidPkg = expo?.android?.package;
@@ -10750,7 +10903,7 @@ function readExpoSlug() {
     if (!existsSync12(p))
       continue;
     try {
-      const raw = JSON.parse(readFileSync10(p, "utf-8"));
+      const raw = JSON.parse(readFileSync11(p, "utf-8"));
       return raw.expo?.slug ?? null;
     } catch {
       continue;
@@ -11371,7 +11524,7 @@ var init_maestro_device_authority = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/maestro-runner-report.js
-import { existsSync as existsSync14, readFileSync as readFileSync11, rmSync as rmSync2 } from "node:fs";
+import { existsSync as existsSync14, readFileSync as readFileSync12, rmSync as rmSync2 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
 import { join as join19 } from "node:path";
 function idsFrom(value, keys) {
@@ -11401,7 +11554,7 @@ function reportDeviceIds(reportDir) {
   if (!existsSync14(reportPath))
     return { ids: [], strength: "none" };
   try {
-    const report = JSON.parse(readFileSync11(reportPath, "utf8"));
+    const report = JSON.parse(readFileSync12(reportPath, "utf8"));
     const flows = Array.isArray(report.flows) ? report.flows : [];
     const devices = [report.device, ...flows.map((flow) => flow?.device)];
     const strong = [
@@ -11443,7 +11596,7 @@ function collectDirectRunnerEvidence(reportDir, output) {
     return evidence;
   try {
     evidence.output = `${output}
-${readFileSync11(logPath, "utf8")}`;
+${readFileSync12(logPath, "utf8")}`;
   } catch {
   }
   return evidence;
@@ -12064,7 +12217,6 @@ var init_maestro_invoke = __esm({
     init_device_arbiter();
     init_authority_gate();
     init_utils();
-    init_engine_pin();
   }
 });
 
@@ -12470,7 +12622,7 @@ var init_tap_latency = __esm({
 // packages/rn-dev-agent-core/dist/runners/release-android-slot.js
 import { execFile as execFileCb10 } from "node:child_process";
 import { promisify as promisify13 } from "node:util";
-import { existsSync as existsSync15, readFileSync as readFileSync12, unlinkSync as unlinkSync4 } from "node:fs";
+import { existsSync as existsSync15, readFileSync as readFileSync13, unlinkSync as unlinkSync5 } from "node:fs";
 import { homedir as homedir5 } from "node:os";
 import { join as join21 } from "node:path";
 function isProtectedPid(pid, selfPid, parentPid) {
@@ -12489,7 +12641,7 @@ function defaultDeps() {
     resolveSerial: (deviceId) => deviceId ? ["-s", deviceId] : getAdbSerial(),
     readDaemonPid: () => {
       try {
-        const parsed = JSON.parse(readFileSync12(DAEMON_JSON2, "utf8"));
+        const parsed = JSON.parse(readFileSync13(DAEMON_JSON2, "utf8"));
         return typeof parsed.pid === "number" ? parsed.pid : null;
       } catch {
         return null;
@@ -12506,7 +12658,7 @@ function defaultDeps() {
     protectedPids: () => ({ selfPid: process.pid, parentPid: process.ppid }),
     kill: (pid, sig) => process.kill(pid, sig),
     fileExists: (p) => existsSync15(p),
-    removeFile: (p) => unlinkSync4(p),
+    removeFile: (p) => unlinkSync5(p),
     delay: (ms) => new Promise((resolve7) => setTimeout(resolve7, ms)),
     killLegacy: () => process.env.RN_DEVICE_KILL_LEGACY !== "0",
     now: () => Date.now()
@@ -12641,7 +12793,7 @@ var init_release_android_slot = __esm({
 // packages/rn-dev-agent-core/dist/tools/maestro-run.js
 import { execFile as execFileCb11 } from "node:child_process";
 import { promisify as promisify14 } from "node:util";
-import { existsSync as existsSync16, readFileSync as readFileSync13, writeFileSync as writeFileSync5 } from "node:fs";
+import { existsSync as existsSync16, readFileSync as readFileSync14, writeFileSync as writeFileSync6 } from "node:fs";
 import { tmpdir as tmpdir4 } from "node:os";
 import { basename as basename7, join as join22, dirname as dirname13 } from "node:path";
 async function runFlowParked(run, opts = {}) {
@@ -12867,7 +13019,7 @@ function createMaestroRunHandler(deps = {}) {
         return failResult(`Flow file not found: ${args.flowPath}`);
       }
       try {
-        rawYaml = readFileSync13(args.flowPath, "utf-8");
+        rawYaml = readFileSync14(args.flowPath, "utf-8");
       } catch (err) {
         return failResult(`Failed to read flow file: ${err.message}`);
       }
@@ -12884,7 +13036,7 @@ function createMaestroRunHandler(deps = {}) {
       headerAppId = resolveMaestroFlowAppId(rawAppId || void 0, parsed.appId);
       validatedContent = buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, parsed.commands);
       flowFile = join22(tmpdir4(), `rn-maestro-run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
-      writeFileSync5(flowFile, validatedContent, "utf-8");
+      writeFileSync6(flowFile, validatedContent, "utf-8");
     } catch (err) {
       if (err instanceof MaestroValidationError) {
         return failResult(`Refusing to run Maestro: ${err.message} (Phase 134.1)`);
@@ -13000,7 +13152,7 @@ function createMaestroRunHandler(deps = {}) {
       const relaunchManagedApp = args.relaunchManagedApp ?? deps.relaunchManagedApp ?? managedAuthority.relaunchManagedApp;
       const reproveManagedOrigin = args.reproveManagedOrigin ?? deps.reproveManagedOrigin ?? managedAuthority.reproveManagedOrigin;
       const stageResults = await parkFlow(() => executeMaestroAuthorityStages(validatedCommands, async (commands) => {
-        writeFileSync5(flowFile, buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, [...commands]), "utf-8");
+        writeFileSync6(flowFile, buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, [...commands]), "utf-8");
         const executeOnce = async (beforeDispatch) => {
           const remainingTimeout = flowDeadline - now();
           if (remainingTimeout <= 0) {
@@ -13008,6 +13160,9 @@ function createMaestroRunHandler(deps = {}) {
             Object.assign(error, { code: "ETIMEDOUT" });
             throw error;
           }
+          const immediateRefusal = await immediateRunnerPinRefusal(dispatch.binPath, resolveEngineStatus);
+          if (immediateRefusal)
+            throw new Error(immediateRefusal);
           beforeDispatch?.();
           return execute(dispatch.binPath, finalArgs, {
             timeout: remainingTimeout,
@@ -13227,7 +13382,7 @@ function createMaestroRunHandler(deps = {}) {
       return failResult(failAug.message, failAug.meta);
     } finally {
       try {
-        writeFileSync5(flowFile, validatedContent, "utf-8");
+        writeFileSync6(flowFile, validatedContent, "utf-8");
       } finally {
         disposeRunnerReportDir(runnerReportDir);
       }
@@ -13284,7 +13439,7 @@ init_maestro_validator();
 init_reusable_action();
 init_action_store();
 import { spawnSync as spawnSync2 } from "node:child_process";
-import { existsSync as existsSync17, readFileSync as readFileSync14, readdirSync as readdirSync7 } from "node:fs";
+import { existsSync as existsSync17, readFileSync as readFileSync15, readdirSync as readdirSync7 } from "node:fs";
 import { dirname as dirname14, join as join23, resolve as resolve6 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 
@@ -13400,13 +13555,6 @@ async function verifyActions(argv) {
     console.error("verify-actions --timeout must be an integer from 5000 to 300000");
     return 2;
   }
-  _resetEngineStatusForTest();
-  const engineStatus = await getEngineStatus();
-  const pinRefusal = exactPinRefusal(engineStatus);
-  if (pinRefusal) {
-    console.error(pinRefusal);
-    return 2;
-  }
   if (pattern) {
     if (pattern.length > 256) {
       console.error("verify-actions --pattern must be at most 256 characters");
@@ -13415,14 +13563,20 @@ async function verifyActions(argv) {
   }
   const flowDir = resolve6(flowDirArg);
   const flowDirClassification = classifyLearnedActionPath(join23(flowDir, "__action__.yaml"));
-  if (flowDirClassification === "descendant") {
-    console.error(`Refusing to execute learned-action descendants from ${flowDir}.`);
+  if (flowDirClassification !== "action") {
+    console.error(`Refusing to execute flows outside an owned .rn-agent/actions corpus: ${flowDir}.`);
     return 2;
   }
-  const learnedCorpus = flowDirClassification === "action";
+  _resetEngineStatusForTest();
+  const engineStatus = await getEngineStatus();
+  const pinRefusal = exactPinRefusal(engineStatus);
+  if (pinRefusal) {
+    console.error(pinRefusal);
+    return 2;
+  }
   let files;
   try {
-    const discovered = learnedCorpus ? readdirSync7(flowDir) : readdirSync7(flowDir, { recursive: true });
+    const discovered = readdirSync7(flowDir);
     const yamlFiles = discovered.filter((file) => /\.ya?ml$/i.test(file));
     const filtered = pattern ? await filterWithBoundedRegex(yamlFiles, pattern) : { ok: true, matches: yamlFiles };
     if (!filtered.ok) {
@@ -13444,7 +13598,7 @@ async function verifyActions(argv) {
       const actionPathRefusal = standaloneLearnedActionPathRefusal(file);
       if (actionPathRefusal)
         throw new Error(actionPathRefusal);
-      const text = readFileSync14(file, "utf8");
+      const text = readFileSync15(file, "utf8");
       const parsed = parseAndValidateFlow(text, { flowDir: dirname14(file), flowRoot: flowDir });
       const id = file.split("/").pop().replace(/\.ya?ml$/i, "");
       const meta = parseM7Header(text, id);

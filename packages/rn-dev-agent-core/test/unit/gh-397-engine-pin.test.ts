@@ -192,6 +192,7 @@ test('gh-397: newer cache drift is reported without executing its binary', async
       assert.equal(status.selectedPath, join(binDir, 'maestro-runner'));
       assert.equal(status.engine, 'none');
       if (version === '1.2.0') {
+        assert.match(String(doctor.correction), /UNVERIFIED_NEWER_DRIFT/);
         assert.match(String(doctor.correction), /unverified newer/);
         assert.match(String(doctor.correction), /will not be executed/);
       }

@@ -8,9 +8,10 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
-import { accessSync, constants, lstatSync, readFileSync, readdirSync } from 'node:fs';
+import { accessSync, constants, lstatSync, readFileSync, readdirSync, readlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
+import { gunzipSync } from 'node:zlib';
 import pinManifest from './maestro-runner-pin.json' with { type: 'json' };
 const execFile = promisify(execFileCb);
 export const MAESTRO_RUNNER_PIN = Object.freeze({
@@ -103,6 +104,114 @@ export function pinCacheRoot(home = homedir()) {
 }
 export function pinnedRunnerBinPath(home) {
     return join(pinCacheRoot(home), 'bin', 'maestro-runner');
+}
+function pinnedRunnerArchivePath(home) {
+    return join(pinCacheRoot(home), '.payload.tar.gz');
+}
+function tarText(buffer, offset, length) {
+    const end = buffer.indexOf(0, offset);
+    return buffer
+        .subarray(offset, end >= offset && end < offset + length ? end : offset + length)
+        .toString();
+}
+function expectedPayloadEntries(archive) {
+    const tar = gunzipSync(archive, { maxOutputLength: 1024 * 1024 * 1024 });
+    const raw = [];
+    let offset = 0;
+    let longPath = null;
+    while (offset + 512 <= tar.length) {
+        const header = tar.subarray(offset, offset + 512);
+        if (header.every((byte) => byte === 0))
+            break;
+        const prefix = tarText(header, 345, 155);
+        const name = tarText(header, 0, 100);
+        const sizeText = tarText(header, 124, 12).trim();
+        const size = Number.parseInt(sizeText || '0', 8);
+        if (!Number.isSafeInteger(size) || size < 0 || offset + 512 + size > tar.length)
+            return null;
+        const type = String.fromCharCode(header[156] || 48);
+        const data = tar.subarray(offset + 512, offset + 512 + size);
+        const archivePath = longPath ?? [prefix, name].filter(Boolean).join('/');
+        longPath = null;
+        if (type === 'L') {
+            longPath = data.toString().replace(/\0.*$/s, '').trim();
+        }
+        else if (type === '0' || type === '\0' || type === '2' || type === '5') {
+            raw.push({ path: archivePath, type, data, link: tarText(header, 157, 100) });
+        }
+        offset += 512 + Math.ceil(size / 512) * 512;
+    }
+    const runner = raw.find((entry) => (entry.type === '0' || entry.type === '\0') &&
+        (entry.path === 'bin/maestro-runner' || entry.path.endsWith('/bin/maestro-runner')));
+    if (!runner)
+        return null;
+    const rootPrefix = runner.path.slice(0, -'bin/maestro-runner'.length);
+    const expected = new Map();
+    for (const entry of raw) {
+        if (!entry.path.startsWith(rootPrefix) || entry.type === '5')
+            continue;
+        const path = entry.path.slice(rootPrefix.length).replace(/^\.\//, '');
+        if (!path || path.startsWith('/') || path.split('/').some((part) => part === '..'))
+            return null;
+        if (entry.type === '2') {
+            expected.set(path, { kind: 'symlink', target: entry.link });
+        }
+        else {
+            expected.set(path, {
+                kind: 'file',
+                sha256: createHash('sha256').update(entry.data).digest('hex'),
+            });
+        }
+    }
+    return expected;
+}
+function installedPayloadMatchesPin(platformKey) {
+    try {
+        const expectedArchiveSha = MAESTRO_RUNNER_PIN.archiveSha256[platformKey];
+        if (!expectedArchiveSha)
+            return false;
+        const archivePath = pinnedRunnerArchivePath();
+        const archive = readFileSync(archivePath);
+        if (createHash('sha256').update(archive).digest('hex') !== expectedArchiveSha)
+            return false;
+        const expected = expectedPayloadEntries(archive);
+        if (!expected)
+            return false;
+        const root = pinCacheRoot();
+        const seen = new Set();
+        const visit = (directory) => {
+            for (const entry of readdirSync(directory, { withFileTypes: true })) {
+                const path = join(directory, entry.name);
+                const rel = relative(root, path).split(sep).join('/');
+                if (rel === '.payload.tar.gz')
+                    continue;
+                if (entry.isDirectory()) {
+                    if (!visit(path))
+                        return false;
+                    continue;
+                }
+                const wanted = expected.get(rel);
+                if (!wanted)
+                    return false;
+                seen.add(rel);
+                if (entry.isSymbolicLink()) {
+                    if (wanted.kind !== 'symlink' || readlinkSync(path) !== wanted.target)
+                        return false;
+                    continue;
+                }
+                if (!entry.isFile() || wanted.kind !== 'file')
+                    return false;
+                const sha256 = createHash('sha256').update(readFileSync(path)).digest('hex');
+                if (sha256 !== wanted.sha256)
+                    return false;
+            }
+            return true;
+        };
+        return visit(root) && seen.size === expected.size;
+    }
+    catch {
+        return false;
+    }
 }
 function isRegularPinCacheBinary(path) {
     try {
@@ -335,7 +444,7 @@ export function pinCorrection(status, platformKey = nodePlatformKey()) {
             return `Session maestro-runner version could not be read. ${install}`;
         case 'unverified':
             if (status.version && compareVersions(status.version, pinned) > 0) {
-                return (`Session pin-cache contains an unverified newer maestro-runner entry ${installed}; ` +
+                return (`UNVERIFIED_NEWER_DRIFT: Session pin-cache contains an unverified newer maestro-runner entry ${installed}; ` +
                     `its directory name is not trusted binary evidence and it will not be executed. ${install}`);
             }
             return `Session maestro-runner ${installed} could not be checksum-verified on ${platformKey}. ${install}`;
@@ -350,6 +459,20 @@ export function exactPinRefusal(status, platformKey = nodePlatformKey()) {
     if (status.pin.status === 'pinned-ok')
         return null;
     return `maestro_run refused: ${pinCorrection(status, platformKey)}`;
+}
+export async function immediateRunnerPinRefusal(runnerPath, resolveStatus = () => getEngineStatus().catch(() => null)) {
+    const status = await resolveStatus();
+    const refusal = exactPinRefusal(status);
+    if (refusal)
+        return `RUNNER_PIN_CHANGED: ${refusal}`;
+    const canonicalPath = getMaestroRunnerPath();
+    if (canonicalPath &&
+        status?.selectedPath &&
+        (resolve(canonicalPath) !== resolve(runnerPath) ||
+            resolve(status.selectedPath) !== resolve(runnerPath))) {
+        return 'RUNNER_PIN_CHANGED: verified runner path changed before execution.';
+    }
+    return null;
 }
 export function doctorPinnedRunner(status, platformKey = nodePlatformKey()) {
     const platformStatus = pinArchiveCoords(platformKey) === null ? 'unsupported' : 'supported';
@@ -442,6 +565,12 @@ async function detect(resolvers) {
         });
     }
     if (sha256 !== expectedSha256) {
+        return buildReplayEngineStatus('checksum-mismatch', null, false, {
+            selectedPath: binPath,
+            provenance: 'pin-cache',
+        });
+    }
+    if (!resolvers.binPath && !resolvers.hashFile && !installedPayloadMatchesPin(platformKey)) {
         return buildReplayEngineStatus('checksum-mismatch', null, false, {
             selectedPath: binPath,
             provenance: 'pin-cache',

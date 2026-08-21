@@ -874,6 +874,18 @@ test('registered MCP proof surface preserves a complete begin_rehearsal payload'
   assert.deepEqual(parsed.data, { stage: 'rehearsing', runId: 'run-42' });
 });
 
+test('strict proof rejects auto-login as storyboard or allowed proof authority', async (t) => {
+  const harness = createHarness(t);
+  const args = beginArgs();
+  args.storyboard.allowedTools.push('cdp_auto_login');
+
+  const result = await harness.handler(args);
+  const parsed = envelope(result);
+
+  assert.equal(parsed.ok, false);
+  assert.deepEqual(reasons(result), ['INVALID_PROOF_CONTEXT']);
+});
+
 async function createGateComposedProofSurface(
   t: TestContext,
   options: { failFirstBeginPostflight?: boolean } = {},

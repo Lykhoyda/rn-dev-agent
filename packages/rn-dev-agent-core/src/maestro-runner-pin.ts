@@ -90,13 +90,6 @@ async function verifyActions(argv: string[]): Promise<number> {
     console.error('verify-actions --timeout must be an integer from 5000 to 300000');
     return 2;
   }
-  _resetEngineStatusForTest();
-  const engineStatus = await getEngineStatus();
-  const pinRefusal = exactPinRefusal(engineStatus);
-  if (pinRefusal) {
-    console.error(pinRefusal);
-    return 2;
-  }
   if (pattern) {
     if (pattern.length > 256) {
       console.error('verify-actions --pattern must be at most 256 characters');
@@ -105,16 +98,22 @@ async function verifyActions(argv: string[]): Promise<number> {
   }
   const flowDir = resolve(flowDirArg);
   const flowDirClassification = classifyLearnedActionPath(join(flowDir, '__action__.yaml'));
-  if (flowDirClassification === 'descendant') {
-    console.error(`Refusing to execute learned-action descendants from ${flowDir}.`);
+  if (flowDirClassification !== 'action') {
+    console.error(
+      `Refusing to execute flows outside an owned .rn-agent/actions corpus: ${flowDir}.`,
+    );
     return 2;
   }
-  const learnedCorpus = flowDirClassification === 'action';
+  _resetEngineStatusForTest();
+  const engineStatus = await getEngineStatus();
+  const pinRefusal = exactPinRefusal(engineStatus);
+  if (pinRefusal) {
+    console.error(pinRefusal);
+    return 2;
+  }
   let files: string[];
   try {
-    const discovered = learnedCorpus
-      ? readdirSync(flowDir)
-      : (readdirSync(flowDir, { recursive: true }) as string[]);
+    const discovered = readdirSync(flowDir);
     const yamlFiles = discovered.filter((file) => /\.ya?ml$/i.test(file));
     const filtered = pattern
       ? await filterWithBoundedRegex(yamlFiles, pattern)

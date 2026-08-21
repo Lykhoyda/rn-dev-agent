@@ -275,6 +275,29 @@ test('migration commit validates after acquiring the cross-process write lock', 
   assert.equal(readFileSync(actionPath, 'utf8'), source);
 });
 
+test('migration rechecks YAML immediately before publication', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-action-migrate-publication-'));
+  const dir = join(root, '.rn-agent', 'actions');
+  mkdirSync(dir, { recursive: true });
+  const actionPath = join(dir, 'checkout.yaml');
+  const source = actionYaml('checkout');
+  const humanEdit = `${source}\n# concurrent human edit\n`;
+  writeFileSync(actionPath, source, 'utf8');
+  const baseline = loadActionMigrationBaseline(actionPath);
+  const originalRename = atomicWriter._rename;
+  t.mock.method(atomicWriter, '_rename', (from: string, to: string) => {
+    originalRename(from, to);
+    if (to === sidecarPathFor(actionPath)) writeFileSync(actionPath, humanEdit, 'utf8');
+  });
+
+  assert.throws(
+    () => commitMigratedActionText(actionPath, baseline, upsertEnginePinHeader(source).text),
+    /changed during migration/,
+  );
+  assert.equal(readFileSync(actionPath, 'utf8'), humanEdit);
+  assert.equal(existsSync(sidecarPathFor(actionPath)), false);
+});
+
 test('migrateLearnedActions preserves the previous YAML when its atomic write fails', (t) => {
   const root = mkdtempSync(join(tmpdir(), 'rn-action-migrate-atomic-'));
   const dir = join(root, '.rn-agent', 'actions');
@@ -303,6 +326,31 @@ test('recorder refuses to stamp regex-shaped selectors as compatible actions', (
       }),
     /regex text selectors.*Log\.n/,
   );
+});
+
+test('recorder refuses unsafe action metadata before serialization', () => {
+  assert.throws(
+    () =>
+      generateMaestro([{ type: 'tap', testID: 'continue', t: 1 }], {
+        id: 'continue',
+        intent: 'Continue\u2028- clearState',
+      }),
+    /Unsafe generated scalar/,
+  );
+});
+
+test('migration refuses metadata ids that differ from filename identity', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-action-migrate-id-'));
+  const dir = join(root, '.rn-agent', 'actions');
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, 'checkout.yaml');
+  writeFileSync(path, actionYaml('checkout-v2'), 'utf8');
+
+  const result = migrateLearnedActions(root).find((row) => row.id === 'checkout');
+
+  assert.equal(result?.status, 'incompatible');
+  assert.match(String(result?.reason), /does not match filename identity/);
+  assert.doesNotMatch(readFileSync(path, 'utf8'), /enginePin/);
 });
 
 test('migrateLearnedActions refuses inherited .rn-agent/actions symlinks', () => {
@@ -470,7 +518,8 @@ test('cdp_run_action preflights relative subflows from the action directory', as
 });
 
 test('maestro_generate emits a pinned replayable action without regex waits', async () => {
-  const outputDir = mkdtempSync(join(tmpdir(), 'rn-maestro-generate-'));
+  const root = mkdtempSync(join(tmpdir(), 'rn-maestro-generate-'));
+  const outputDir = join(root, '.rn-agent', 'actions');
   const result = await createMaestroGenerateHandler()({
     name: 'Wait for checkout',
     outputDir,
@@ -491,7 +540,9 @@ test('maestro_generate emits a pinned replayable action without regex waits', as
 });
 
 test('maestro_generate refuses invalid action ids before writing', async () => {
-  const outputDir = mkdtempSync(join(tmpdir(), 'rn-maestro-generate-invalid-'));
+  const root = mkdtempSync(join(tmpdir(), 'rn-maestro-generate-invalid-'));
+  const outputDir = join(root, '.rn-agent', 'actions');
+  mkdirSync(outputDir, { recursive: true });
   for (const name of [' login', 'a'.repeat(65)]) {
     const result = await createMaestroGenerateHandler()({
       name,
@@ -505,7 +556,9 @@ test('maestro_generate refuses invalid action ids before writing', async () => {
 });
 
 test('maestro_generate refuses unsafe metadata and incomplete steps before writing', async () => {
-  const outputDir = mkdtempSync(join(tmpdir(), 'rn-maestro-generate-shape-'));
+  const root = mkdtempSync(join(tmpdir(), 'rn-maestro-generate-shape-'));
+  const outputDir = join(root, '.rn-agent', 'actions');
+  mkdirSync(outputDir, { recursive: true });
   for (const args of [
     { name: 'unsafe\u0085intent', steps: [{ action: 'tap', testID: 'continue' }] },
     { name: 'missing tap target', steps: [{ action: 'tap' }] },
@@ -536,6 +589,20 @@ test('maestro_generate refuses an existing yml action instead of creating a coll
   assert.equal(envelope.ok, false);
   assert.match(String(envelope.error), /already exists/);
   assert.equal(existsSync(join(outputDir, 'login.yaml')), false);
+});
+
+test('maestro_generate refuses output outside the owned action corpus', async () => {
+  const outputDir = mkdtempSync(join(tmpdir(), 'rn-maestro-generate-unowned-'));
+  const result = await createMaestroGenerateHandler()({
+    name: 'login',
+    outputDir,
+    steps: [{ action: 'tap', testID: 'continue' }],
+  });
+
+  const envelope = JSON.parse(result.content[0]!.text);
+  assert.equal(envelope.ok, false);
+  assert.match(String(envelope.error), /owned \.rn-agent\/actions corpus/);
+  assert.deepEqual(readdirSync(outputDir), []);
 });
 
 test('maestro_generate refuses symlinked corpus ownership and dangling action links', async () => {
@@ -698,6 +765,33 @@ test('inline replay refuses selectors before spawn', async () => {
   assert.equal(result.passed, false);
   assert.match(String(result.error), /regex/);
   assert.equal(spawned, false);
+});
+
+test('inline replay revalidates the exact pin immediately before spawn', async () => {
+  let resolutions = 0;
+  let spawned = false;
+  const result = await runMaestroInline(
+    '- tapOn:\n    id: "continue"',
+    { platform: 'ios', appId: 'com.test.app' },
+    {
+      chooseDispatch: () => ({
+        runner: 'maestro-runner',
+        binPath: '/fake/maestro-runner',
+        buildArgs: () => [],
+      }),
+      resolveEngineStatus: async () =>
+        resolutions++ === 0 ? PINNED() : buildReplayEngineStatus('checksum-mismatch', null, false),
+      spawnManaged: async () => {
+        spawned = true;
+        throw new Error('must not spawn');
+      },
+    },
+  );
+
+  assert.equal(result.passed, false);
+  assert.match(String(result.error), /RUNNER_PIN_CHANGED/);
+  assert.equal(spawned, false);
+  assert.equal(resolutions, 2);
 });
 
 test('NODE_TEST_CONTEXT cannot bypass a corrupt pin-cache binary', async () => {
@@ -890,6 +984,48 @@ test('maestro_test_all preflights the complete suite before any execution', asyn
   assert.equal(body.meta.executed, 0);
   assert.match(String(body.meta.results[0].error), /Log\.n|regex/);
   assert.equal(spawned, false);
+});
+
+test('maestro_test_all revalidates the exact pin before each subprocess', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-owned-suite-spawn-pin-'));
+  const dir = join(root, '.rn-agent', 'actions');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, 'browse.yaml'),
+    actionYaml('browse', '# enginePin: maestro-runner@1.1.24'),
+    'utf8',
+  );
+  let resolutions = 0;
+  let spawned = false;
+  const handler = createMaestroTestAllHandler({
+    getActiveSession: () => ({ platform: 'ios', deviceId: 'SIM', appId: 'com.test.app' }) as never,
+    chooseDispatch: () => ({
+      runner: 'maestro-runner',
+      binPath: '/fake/maestro-runner',
+      buildArgs: () => [],
+    }),
+    resolveEngineStatus: async () =>
+      resolutions++ === 0 ? PINNED() : buildReplayEngineStatus('checksum-mismatch', null, false),
+    parkFlow: async (run) => run(),
+    claimNativeOrigin: async () => {},
+    completeNativeOrigin: async () => {},
+    relaunchManagedApp: async () => {},
+    reproveManagedOrigin: async () => {},
+    completeRunnerPark: async () => {},
+    execFile: async () => {
+      spawned = true;
+      return { stdout: '', stderr: '' };
+    },
+  });
+
+  const result = await handler({ platform: 'ios', flowDir: dir });
+  const envelope = JSON.parse(result.content[0]!.text);
+
+  assert.equal(envelope.ok, true);
+  assert.equal(envelope.data.failed, 1);
+  assert.match(String(envelope.data.results[0].error), /RUNNER_PIN_CHANGED/);
+  assert.equal(spawned, false);
+  assert.equal(resolutions, 2);
 });
 
 test('maestro_test_all refuses action extension collisions before execution', async () => {

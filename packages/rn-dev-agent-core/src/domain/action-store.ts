@@ -6,7 +6,15 @@
 // they all read/write through this single chokepoint so schema
 // invariants stay enforced.
 
-import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import {
+  existsSync,
+  lstatSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import {
   type ReusableAction,
@@ -136,6 +144,27 @@ export function resolveActionPath(projectRoot: string, actionId: string): string
   if (yamlExists) return yamlPath;
   if (ymlExists) return ymlPath;
   return null;
+}
+
+export function createActionTextExclusive(
+  projectRoot: string,
+  actionId: string,
+  yamlText: string,
+): string {
+  const yamlPath = actionPathFor(projectRoot, actionId);
+  const ymlPath = yamlPath.replace(/\.yaml$/, '.yml');
+  return atomicWriter.withLock(yamlPath, () => {
+    const existing = resolveActionPath(projectRoot, actionId);
+    if (existing) throw new Error(`Action ${actionId} already exists at ${existing}.`);
+    writeFileSync(yamlPath, yamlText, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+    try {
+      if (!actionFileExists(ymlPath)) return yamlPath;
+      throw new Error(`Action ${actionId} changed during creation; keep exactly one extension.`);
+    } catch (err) {
+      if (readFileSync(yamlPath, 'utf8') === yamlText) unlinkSync(yamlPath);
+      throw err;
+    }
+  });
 }
 
 /**
@@ -319,15 +348,22 @@ function migrationConflict(filePath: string): Error {
 }
 
 function migrationBaselineMatches(filePath: string, baseline: ActionMigrationBaseline): boolean {
-  try {
-    if (readFileSync(filePath, 'utf8') !== baseline.yamlText) return false;
-  } catch {
-    return false;
-  }
+  if (!migrationYamlBaselineMatches(filePath, baseline)) return false;
   const sidecarPath = sidecarPathFor(filePath);
   const sidecarExists = existsSync(sidecarPath);
   if (sidecarExists !== baseline.sidecarExisted) return false;
   return !sidecarExists || runtimeSidecarMatches(sidecarPath, baseline.state);
+}
+
+function migrationYamlBaselineMatches(
+  filePath: string,
+  baseline: ActionMigrationBaseline,
+): boolean {
+  try {
+    return readFileSync(filePath, 'utf8') === baseline.yamlText;
+  } catch {
+    return false;
+  }
 }
 
 export function loadActionMigrationBaseline(filePath: string): ActionMigrationBaseline {
@@ -353,6 +389,7 @@ export function commitMigratedActionText(
     sidecarPath,
     baseline.state,
     () => migrationBaselineMatches(filePath, baseline),
+    () => migrationYamlBaselineMatches(filePath, baseline),
   );
   if (!result) throw migrationConflict(filePath);
   const nextState = { ...baseline.state, lastSeenMtimeMs: result.finalMtimeMs };

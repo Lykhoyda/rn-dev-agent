@@ -8,7 +8,7 @@ import { stringify as yamlStringify } from 'yaml';
 import type { RecordedEvent } from './test-recorder.js';
 import { ACTION_ENGINE_PIN } from '../domain/engine-pin.js';
 import { regexSelectorCapabilityRefusal } from '../domain/action-engine-compat.js';
-import { parseAndValidateFlow } from '../domain/maestro-validator.js';
+import { isSafeMaestroScalar, parseAndValidateFlow } from '../domain/maestro-validator.js';
 
 /**
  * CDP-013: serialise a user-controlled string as a single-line YAML scalar.
@@ -48,6 +48,53 @@ export interface GenerateOpts {
 }
 
 type MetaPair = [string, string];
+
+function assertSafeGeneratedScalars(value: unknown, path: string): void {
+  if (typeof value === 'string') {
+    if (!isSafeMaestroScalar(value)) throw new Error(`Unsafe generated scalar at ${path}.`);
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) => assertSafeGeneratedScalars(entry, `${path}[${index}]`));
+    return;
+  }
+  if (!value || typeof value !== 'object') return;
+  for (const [key, nested] of Object.entries(value)) {
+    if (!isSafeMaestroScalar(key)) throw new Error(`Unsafe generated scalar key at ${path}.`);
+    assertSafeGeneratedScalars(nested, `${path}.${key}`);
+  }
+}
+
+const RECORDER_COMMANDS = new Set([
+  'launchApp',
+  'tapOn',
+  'longPressOn',
+  'assertVisible',
+  'inputText',
+  'pressKey',
+  'swipeUp',
+  'swipeDown',
+  'swipeLeft',
+  'swipeRight',
+  'hideKeyboard',
+]);
+
+function assertRecorderCommandShapes(commands: readonly unknown[]): void {
+  for (const command of commands) {
+    if (typeof command === 'string') {
+      if (!RECORDER_COMMANDS.has(command))
+        throw new Error(`Unsupported recorder command ${command}.`);
+      continue;
+    }
+    if (!command || typeof command !== 'object' || Array.isArray(command)) {
+      throw new Error('Unsupported recorder command shape.');
+    }
+    const keys = Object.keys(command);
+    if (keys.length !== 1 || !RECORDER_COMMANDS.has(keys[0]!)) {
+      throw new Error(`Unsupported recorder command ${keys[0] ?? 'unknown'}.`);
+    }
+  }
+}
 
 function metaPairs(opts: GenerateOpts): MetaPair[] {
   const out: MetaPair[] = [];
@@ -167,6 +214,8 @@ export function nextSelector(
 // --- Maestro YAML ---
 
 export function generateMaestro(events: RecordedEvent[], opts: GenerateOpts = {}): string {
+  assertSafeGeneratedScalars(opts, 'metadata');
+  assertSafeGeneratedScalars(events, 'events');
   const lines: string[] = [];
   if (opts.bundleId) {
     lines.push(`appId: ${stripNewlines(opts.bundleId)}`);
@@ -281,8 +330,9 @@ export function generateMaestro(events: RecordedEvent[], opts: GenerateOpts = {}
     }
   }
   const yaml = lines.join('\n') + '\n';
+  const commands = parseAndValidateFlow(yaml).commands;
+  assertRecorderCommandShapes(commands);
   if (opts.id && opts.intent) {
-    const commands = parseAndValidateFlow(yaml).commands;
     const refusal = regexSelectorCapabilityRefusal(commands);
     if (refusal) throw new Error(refusal);
   }
@@ -292,6 +342,8 @@ export function generateMaestro(events: RecordedEvent[], opts: GenerateOpts = {}
 // --- Detox JS ---
 
 export function generateDetox(events: RecordedEvent[], opts: GenerateOpts = {}): string {
+  assertSafeGeneratedScalars(opts, 'metadata');
+  assertSafeGeneratedScalars(events, 'events');
   const lines: string[] = [];
   const name = stripNewlines(opts.testName ?? 'Recorded flow');
   lines.push(`describe(${JSON.stringify(name)}, () => {`);

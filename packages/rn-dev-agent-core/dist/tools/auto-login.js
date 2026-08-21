@@ -110,11 +110,14 @@ function assertLegacyLoginFlow(projectRoot, flowPath) {
     }
     return resolvedFlow;
 }
-function stripClearState(yamlContent) {
-    return yamlContent
-        .split('\n')
-        .filter((line) => !/^\s*clearState\s*:\s*true/i.test(line))
-        .join('\n');
+function containsClearState(value) {
+    if (value === 'clearState')
+        return true;
+    if (Array.isArray(value))
+        return value.some(containsClearState);
+    if (!value || typeof value !== 'object')
+        return false;
+    return Object.entries(value).some(([key, nested]) => key === 'clearState' || containsClearState(nested));
 }
 function boundSessionProjectRoot() {
     const status = getWorkerAuthorityRuntime().status();
@@ -208,14 +211,20 @@ export async function handleAutoLogin(client, opts = {}, deps = {}) {
     }
     const rawAppId = opts.appId ?? projectAppId ?? '';
     const originalContent = readFileSync(flowPath, 'utf-8');
-    const flowContent = stripClearState(originalContent);
     let validatedCommands;
     try {
-        const parsed = parseAndValidateFlow(flowContent, {
+        const parsed = parseAndValidateFlow(originalContent, {
             flowDir: dirname(flowPath),
             flowRoot: join(projectRoot, '.maestro'),
         });
         validatedCommands = parsed.commands;
+        if (containsClearState(validatedCommands)) {
+            return {
+                loggedIn: false,
+                reason: 'Auto-login refuses clearState in the expanded login flow.',
+                flow: flowPath,
+            };
+        }
         const selectorRefusal = regexSelectorCapabilityRefusal(validatedCommands);
         if (selectorRefusal)
             return { loggedIn: false, reason: selectorRefusal, flow: flowPath };

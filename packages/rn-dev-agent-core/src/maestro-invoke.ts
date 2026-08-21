@@ -13,6 +13,8 @@ import { outputIndicatesFlowFailure } from './domain/maestro-error-parser.js';
 import {
   exactPinRefusal,
   getEngineStatus,
+  getMaestroRunnerPath,
+  immediateRunnerPinRefusal,
   isOlderSdkInstallFailure,
   olderSdkInstallDiagnosis,
   type ReplayEngineStatus,
@@ -95,7 +97,7 @@ export function maestroRefusalResult(
   });
 }
 
-export { getMaestroRunnerPath } from './domain/engine-pin.js';
+export { getMaestroRunnerPath };
 
 export async function runMaestroInline(
   yaml: string,
@@ -225,34 +227,48 @@ export async function runMaestroInline(
       requestedDeviceId,
     );
     const finalArgs = assembleMaestroArgs(baseArgs, runnerReportArgs(runnerReportDir));
-    const execute = () =>
-      (dependencies.spawnManaged ?? spawnManagedProcessGroup)(dispatch.binPath, finalArgs, {
+    const execute = async () => {
+      const immediateRefusal = await immediateRunnerPinRefusal(
+        dispatch.binPath,
+        resolveEngineStatus,
+      );
+      if (immediateRefusal) throw new Error(immediateRefusal);
+      return (dependencies.spawnManaged ?? spawnManagedProcessGroup)(dispatch.binPath, finalArgs, {
         timeoutMs: timeout,
         platform: opts.platform,
         deviceId: requestedDeviceId,
         tool: opts.slug ?? 'inline-maestro',
       });
+    };
 
     let execution;
-    if (opts.authorityArgs && hasManagedRunnerParkAuthority(opts.authorityArgs)) {
-      const promoted = promoteCurrentOperationToManagedFlow();
-      if (!promoted.ok) {
-        return {
-          passed: false,
-          output: '',
-          flowFile,
-          error:
-            'Inline Maestro could not enter the exclusive flow plane because another operation is active.',
-          errorCode: 'BUSY_FLOW_ACTIVE',
-        };
+    try {
+      if (opts.authorityArgs && hasManagedRunnerParkAuthority(opts.authorityArgs)) {
+        const promoted = promoteCurrentOperationToManagedFlow();
+        if (!promoted.ok) {
+          return {
+            passed: false,
+            output: '',
+            flowFile,
+            error:
+              'Inline Maestro could not enter the exclusive flow plane because another operation is active.',
+            errorCode: 'BUSY_FLOW_ACTIVE',
+          };
+        }
+        execution = await runFlowParked(execute, {
+          platform: opts.platform,
+          deviceId: requestedDeviceId,
+          completeRunnerPark: () => completeManagedRunnerParkAuthority(opts.authorityArgs!),
+        });
+      } else {
+        execution = await execute();
       }
-      execution = await runFlowParked(execute, {
-        platform: opts.platform,
-        deviceId: requestedDeviceId,
-        completeRunnerPark: () => completeManagedRunnerParkAuthority(opts.authorityArgs!),
-      });
-    } else {
-      execution = await execute();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.startsWith('RUNNER_PIN_CHANGED:')) {
+        return { passed: false, output: '', flowFile, error: message };
+      }
+      throw err;
     }
 
     const output = (execution.stdout + '\n' + execution.stderr).trim();

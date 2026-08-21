@@ -709,6 +709,11 @@ function validCaptureContext(args: BeginRehearsalArgs, expectedRoot: string | nu
     return false;
   }
   if (!/^[a-z0-9][a-z0-9-]*$/.test(args.runId)) return false;
+  const proofTools = [
+    ...args.storyboard.allowedTools,
+    ...args.storyboard.steps.flatMap((step) => [step.expectedTool, step.assertionTool]),
+  ];
+  if (proofTools.some((tool) => normalizeTool(tool) === 'cdp_auto_login')) return false;
   const proofRoot = join(expectedRoot, 'docs', 'proof', args.runId);
   const screenshots = args.storyboard.steps.map((step) => step.screenshotPath);
   const destinations = [args.receiptPath, args.videoPath, args.contactSheetPath, ...screenshots];

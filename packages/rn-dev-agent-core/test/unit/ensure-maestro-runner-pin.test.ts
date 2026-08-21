@@ -162,6 +162,70 @@ test('installer verifies the complete archive before replacing the live pin-cach
   assert.equal(existsSync(outsideStageMarker), false);
 });
 
+test('installed fast path refuses a payload changed after verified installation', () => {
+  const root = mkdtempSync(join(tmpdir(), 'mr-live-payload-'));
+  const scriptDir = join(root, 'scripts');
+  const payload = join(root, 'payload', 'maestro-runner');
+  const archive = join(root, 'maestro-runner.tar.gz');
+  const cache = join(root, 'cache');
+  mkdirSync(scriptDir, { recursive: true });
+  mkdirSync(join(payload, 'bin'), { recursive: true });
+  mkdirSync(join(payload, 'drivers'), { recursive: true });
+  const runner = join(payload, 'bin', 'maestro-runner');
+  writeFileSync(runner, '#!/bin/sh\necho maestro-runner 1.1.24\n', 'utf8');
+  chmodSync(runner, 0o755);
+  writeFileSync(join(payload, 'drivers', 'server.apk'), 'trusted-payload', 'utf8');
+  const packed = spawnSync('tar', ['-czf', archive, '-C', join(root, 'payload'), 'maestro-runner']);
+  assert.equal(packed.status, 0, String(packed.stderr));
+  const runnerSha = createHash('sha256').update(readFileSync(runner)).digest('hex');
+  const archiveSha = createHash('sha256').update(readFileSync(archive)).digest('hex');
+  const copiedScript = join(scriptDir, 'ensure-maestro-runner.sh');
+  writeFileSync(copiedScript, readFileSync(SCRIPT), 'utf8');
+  chmodSync(copiedScript, 0o755);
+  writeFileSync(
+    join(scriptDir, 'maestro-runner-pin.json'),
+    JSON.stringify({
+      version: '1.1.24',
+      sha256: {
+        'darwin-arm64': runnerSha,
+        'darwin-x64': runnerSha,
+        'linux-arm64': runnerSha,
+        'linux-x64': runnerSha,
+      },
+      archiveSha256: {
+        'darwin-arm64': archiveSha,
+        'darwin-x64': archiveSha,
+        'linux-arm64': archiveSha,
+        'linux-x64': archiveSha,
+      },
+      knownQuirks: [],
+    }),
+    'utf8',
+  );
+  const env = {
+    ...process.env,
+    RN_DEV_AGENT_RUNNER_CACHE: cache,
+    RN_DEV_AGENT_UNAME_S: 'Darwin',
+    RN_DEV_AGENT_UNAME_M: 'arm64',
+    RN_DEV_AGENT_MAESTRO_DOWNLOAD_URL: pathToFileURL(archive).href,
+  };
+
+  const installed = spawnSync('bash', [copiedScript], { encoding: 'utf8', env });
+  assert.equal(installed.status, 0, `${installed.stdout}${installed.stderr}`);
+  const liveDriver = join(
+    cache,
+    'maestro-runner',
+    MAESTRO_RUNNER_PIN.version,
+    'drivers',
+    'server.apk',
+  );
+  writeFileSync(liveDriver, 'tampered-payload', 'utf8');
+
+  const refused = spawnSync('bash', [copiedScript, '--print-bin'], { encoding: 'utf8', env });
+  assert.notEqual(refused.status, 0);
+  assert.match(`${refused.stdout}${refused.stderr}`, /not exactly 1\.1\.24/);
+});
+
 test('installer reclaims a stale ownerless legacy lock', () => {
   const cache = mkdtempSync(join(tmpdir(), 'mr-ownerless-lock-'));
   const lock = join(cache, 'maestro-runner', `.install-${MAESTRO_RUNNER_PIN.version}.lock`);
@@ -217,7 +281,7 @@ test('installer waits beyond ten seconds for a healthy lock owner', async () => 
   assert.doesNotMatch(`${result.stdout}${result.stderr}`, /timed out waiting/);
 });
 
-test('installer reclaims an aged lock whose pid was reused', () => {
+test('installer does not age-reclaim a demonstrably live lock owner', () => {
   const root = mkdtempSync(join(tmpdir(), 'mr-reused-pid-lock-'));
   const cache = join(root, 'cache');
   const lock = join(cache, 'maestro-runner', `.install-${MAESTRO_RUNNER_PIN.version}.lock`);
@@ -235,13 +299,13 @@ test('installer reclaims an aged lock whose pid was reused', () => {
     RN_DEV_AGENT_UNAME_S: 'Darwin',
     RN_DEV_AGENT_UNAME_M: 'arm64',
     RN_DEV_AGENT_MAESTRO_DOWNLOAD_URL: 'http://127.0.0.1:1/missing.tar.gz',
+    RN_DEV_AGENT_TEST_INSTALL_BUDGET_SECONDS: '12',
     PATH: `${toolDir}:${process.env.PATH ?? ''}`,
   });
 
   assert.notEqual(result.status, 0);
-  assert.match(`${result.stdout}${result.stderr}`, /failed to download/);
-  assert.doesNotMatch(`${result.stdout}${result.stderr}`, /timed out waiting/);
-  assert.equal(existsSync(lock), false);
+  assert.match(`${result.stdout}${result.stderr}`, /timed out waiting/);
+  assert.equal(existsSync(lock), true);
 });
 
 test('installer applies one deadline across lock wait and download', async () => {
@@ -538,6 +602,8 @@ test('feedback collection uses package-local pin diagnosis without executing amb
 
 test('verify.sh refuses PATH or ~/.maestro-runner and names the supported correction', () => {
   const cache = mkdtempSync(join(tmpdir(), 'mr-verify-'));
+  const flowDir = join(cache, '.rn-agent', 'actions');
+  mkdirSync(flowDir, { recursive: true });
   const pathDir = mkdtempSync(join(tmpdir(), 'mr-verify-path-'));
   const marker = join(cache, 'verify-path-hit');
   writeFileSync(
@@ -545,7 +611,7 @@ test('verify.sh refuses PATH or ~/.maestro-runner and names the supported correc
     `#!/bin/sh\necho PATH_HIT > "${marker}"\necho maestro-runner 9.9.9\n`,
   );
   chmodSync(join(pathDir, 'maestro-runner'), 0o755);
-  const result = spawnSync('bash', [VERIFY, '--platform', 'ios', '--flow-dir', cache], {
+  const result = spawnSync('bash', [VERIFY, '--platform', 'ios', '--flow-dir', flowDir], {
     encoding: 'utf8',
     env: {
       ...process.env,
@@ -560,6 +626,27 @@ test('verify.sh refuses PATH or ~/.maestro-runner and names the supported correc
   assert.match(out, /ensure-maestro-runner\.sh/);
   assert.doesNotMatch(out, /open\.devicelab\.dev\/install\/maestro-runner/);
   assert.throws(() => readFileSync(marker));
+});
+
+test('semantic verifier refuses an unowned flow directory before runner detection', () => {
+  const flowDir = mkdtempSync(join(tmpdir(), 'mr-unowned-verify-'));
+  writeFileSync(join(flowDir, 'flow.yaml'), '- launchApp\n', 'utf8');
+  const entry = join(
+    dirname(fileURLToPath(import.meta.url)),
+    '..',
+    '..',
+    'dist',
+    'maestro-runner-pin.js',
+  );
+
+  const result = spawnSync(
+    process.execPath,
+    [entry, 'verify-actions', '--platform', 'ios', '--flow-dir', flowDir],
+    { encoding: 'utf8' },
+  );
+
+  assert.equal(result.status, 2);
+  assert.match(`${result.stdout}${result.stderr}`, /outside an owned \.rn-agent\/actions corpus/);
 });
 
 test('verify.sh delegates replay to the packaged semantic verifier', () => {
@@ -590,7 +677,9 @@ test('verify.sh delegates replay to the packaged semantic verifier', () => {
 
 test('tracked bin/rn-verify resolves the pin helper through its symlink', () => {
   const cache = mkdtempSync(join(tmpdir(), 'mr-bin-verify-'));
-  const result = spawnSync(RN_VERIFY, ['--platform', 'ios', '--flow-dir', cache], {
+  const flowDir = join(cache, '.rn-agent', 'actions');
+  mkdirSync(flowDir, { recursive: true });
+  const result = spawnSync(RN_VERIFY, ['--platform', 'ios', '--flow-dir', flowDir], {
     encoding: 'utf8',
     env: {
       ...process.env,

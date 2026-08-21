@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, readdirSync, realpathSync, } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, realpathSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { ACTION_ENGINE_PIN, MAESTRO_RUNNER_PIN, exactPinRefusal, findRegexTextSelectors, } from './engine-pin.js';
 import { parseAndValidateFlow, MaestroValidationError } from './maestro-validator.js';
@@ -255,6 +255,16 @@ export function migrateLearnedActions(projectRoot) {
                 path,
                 status: 'unreadable',
                 reason: 'missing M7 id/intent',
+                mutated: false,
+            });
+            continue;
+        }
+        if (meta.id !== id) {
+            results.push({
+                id,
+                path,
+                status: 'incompatible',
+                reason: `Action metadata id ${meta.id} does not match filename identity ${id}.`,
                 mutated: false,
             });
             continue;

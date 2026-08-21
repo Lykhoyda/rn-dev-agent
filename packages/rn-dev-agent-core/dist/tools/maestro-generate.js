@@ -1,11 +1,10 @@
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { okResult, failResult } from '../utils.js';
 import { findProjectRoot } from '../nav-graph/storage.js';
 import { buildMaestroFlow, isValidBundleId, isSafeMaestroScalar, MaestroValidationError, } from '../domain/maestro-validator.js';
 import { ACTION_ENGINE_PIN } from '../domain/engine-pin.js';
 import { regexSelectorCapabilityRefusal } from '../domain/action-engine-compat.js';
-import { assertOwnedActionCorpus, joinYaml, resolveActionPath, splitYaml, } from '../domain/action-store.js';
+import { assertOwnedActionCorpus, createActionTextExclusive, joinYaml, splitYaml, } from '../domain/action-store.js';
 import { serializeM7Header } from '../domain/reusable-action.js';
 import { isValidActionId } from '../domain/path-safety.js';
 /**
@@ -87,19 +86,14 @@ export function createMaestroGenerateHandler() {
             return failResult('Flow name must produce an action id that starts with a letter or number and is at most 64 characters.');
         }
         const fileName = `${sanitizedName}.yaml`;
-        const filePath = join(outputDir, fileName);
+        const learnedProjectRoot = basename(outputDir) === 'actions' && basename(dirname(outputDir)) === '.rn-agent'
+            ? dirname(dirname(outputDir))
+            : null;
+        if (!learnedProjectRoot) {
+            return failResult('Generated actions must be written to an owned .rn-agent/actions corpus.');
+        }
         try {
-            const learnedProjectRoot = basename(outputDir) === 'actions' && basename(dirname(outputDir)) === '.rn-agent'
-                ? dirname(dirname(outputDir))
-                : null;
-            const existingPath = learnedProjectRoot
-                ? resolveActionPath(learnedProjectRoot, sanitizedName)
-                : [filePath, join(outputDir, `${sanitizedName}.yml`)].find((path) => existsSync(path));
-            if (existingPath) {
-                return failResult(`Action ${sanitizedName} already exists at ${existingPath}.`);
-            }
-            if (learnedProjectRoot)
-                assertOwnedActionCorpus(learnedProjectRoot);
+            assertOwnedActionCorpus(learnedProjectRoot);
         }
         catch (err) {
             return failResult(err instanceof Error ? err.message : String(err));
@@ -138,10 +132,13 @@ export function createMaestroGenerateHandler() {
             }
             throw err;
         }
-        if (!existsSync(outputDir)) {
-            mkdirSync(outputDir, { recursive: true });
+        let filePath;
+        try {
+            filePath = createActionTextExclusive(learnedProjectRoot, sanitizedName, content);
         }
-        writeFileSync(filePath, content, 'utf-8');
+        catch (err) {
+            return failResult(err instanceof Error ? err.message : String(err));
+        }
         return okResult({
             generated: true,
             path: filePath,

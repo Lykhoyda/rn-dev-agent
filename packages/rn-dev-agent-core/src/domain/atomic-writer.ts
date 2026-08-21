@@ -47,6 +47,7 @@ import {
   closeSync,
   fstatSync,
   lstatSync,
+  readFileSync,
 } from 'node:fs';
 import { dirname, basename } from 'node:path';
 import type { ActionRuntimeState } from './reusable-action.js';
@@ -174,7 +175,9 @@ function pairWriteImpl(
   yamlContent: string,
   sidecarPath: string,
   state: ActionRuntimeState,
-): PairWriteResult {
+  publicationPrecondition?: () => boolean,
+  yamlPublicationPrecondition?: () => boolean,
+): PairWriteResult | null {
   ensureDir(yamlPath);
   ensureDir(sidecarPath);
 
@@ -193,10 +196,28 @@ function pairWriteImpl(
     lastSeenMtimeMs: projectedMtimeMs,
   };
   atomicWriter._writeFile(sidecarTmp, JSON.stringify(projectedState, null, 2) + '\n');
+  atomicWriter._writeFile(yamlTmp, yamlContent);
+  if (publicationPrecondition && !publicationPrecondition()) {
+    atomicWriter._unlink(sidecarTmp);
+    atomicWriter._unlink(yamlTmp);
+    return null;
+  }
+
+  const priorSidecarExisted = publicationPrecondition ? atomicWriter._exists(sidecarPath) : false;
+  const priorSidecar = priorSidecarExisted ? readFileSync(sidecarPath, 'utf8') : null;
   atomicWriter._rename(sidecarTmp, sidecarPath);
 
-  // Step 3+4: YAML, atomic rename.
-  atomicWriter._writeFile(yamlTmp, yamlContent);
+  if (yamlPublicationPrecondition && !yamlPublicationPrecondition()) {
+    if (priorSidecar === null) {
+      atomicWriter._unlink(sidecarPath);
+    } else {
+      atomicWriter._writeFile(sidecarTmp, priorSidecar);
+      atomicWriter._rename(sidecarTmp, sidecarPath);
+    }
+    atomicWriter._unlink(yamlTmp);
+    return null;
+  }
+
   atomicWriter._rename(yamlTmp, yamlPath);
 
   // Step 5 (mandatory after PR #109 review): resync sidecar to the
@@ -325,7 +346,9 @@ export const atomicWriter = {
   ): PairWriteResult {
     return withPairWriteLock(yamlPath, () => {
       cleanupOrphans(yamlPath, sidecarPath);
-      return pairWriteImpl(yamlPath, yamlContent, sidecarPath, state);
+      const result = pairWriteImpl(yamlPath, yamlContent, sidecarPath, state);
+      if (!result) throw new Error(`Unconditional pair write refused for ${yamlPath}.`);
+      return result;
     });
   },
 
@@ -335,11 +358,19 @@ export const atomicWriter = {
     sidecarPath: string,
     state: ActionRuntimeState,
     precondition: () => boolean,
+    yamlPublicationPrecondition: () => boolean = precondition,
   ): PairWriteResult | null {
     return withPairWriteLock(yamlPath, () => {
       if (!precondition()) return null;
       cleanupOrphans(yamlPath, sidecarPath);
-      return pairWriteImpl(yamlPath, yamlContent, sidecarPath, state);
+      return pairWriteImpl(
+        yamlPath,
+        yamlContent,
+        sidecarPath,
+        state,
+        precondition,
+        yamlPublicationPrecondition,
+      );
     });
   },
 };

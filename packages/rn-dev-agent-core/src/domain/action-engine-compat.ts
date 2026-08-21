@@ -1,9 +1,4 @@
-import {
-  existsSync,
-  lstatSync,
-  readdirSync,
-  realpathSync,
-} from 'node:fs';
+import { existsSync, lstatSync, readdirSync, realpathSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import {
   ACTION_ENGINE_PIN,
@@ -76,9 +71,7 @@ export function isLearnedActionPath(path: string): boolean {
   return classifyLearnedActionPath(path) === 'action';
 }
 
-export function classifyLearnedActionPath(
-  path: string,
-): 'outside' | 'action' | 'descendant' {
+export function classifyLearnedActionPath(path: string): 'outside' | 'action' | 'descendant' {
   const lexical = classifyResolvedLearnedActionPath(resolve(path));
   try {
     const canonical = classifyResolvedLearnedActionPath(canonicalizeExistingPath(path));
@@ -90,9 +83,7 @@ export function classifyLearnedActionPath(
   }
 }
 
-function classifyResolvedLearnedActionPath(
-  path: string,
-): 'outside' | 'action' | 'descendant' {
+function classifyResolvedLearnedActionPath(path: string): 'outside' | 'action' | 'descendant' {
   let parent = dirname(path);
   let direct = true;
   while (true) {
@@ -299,6 +290,16 @@ export function migrateLearnedActions(projectRoot: string): ActionMigrationResul
         path,
         status: 'unreadable',
         reason: 'missing M7 id/intent',
+        mutated: false,
+      });
+      continue;
+    }
+    if (meta.id !== id) {
+      results.push({
+        id,
+        path,
+        status: 'incompatible',
+        reason: `Action metadata id ${meta.id} does not match filename identity ${id}.`,
         mutated: false,
       });
       continue;

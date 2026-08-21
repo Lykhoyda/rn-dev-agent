@@ -34,7 +34,7 @@
 //
 // Test seam: the public API is on a single exported object so tests can
 // `mock.method(atomicWriter, '_writeFile', ...)` to inject failures.
-import { writeFileSync, renameSync, statSync, mkdirSync, existsSync, unlinkSync, readdirSync, openSync, closeSync, fstatSync, lstatSync, } from 'node:fs';
+import { writeFileSync, renameSync, statSync, mkdirSync, existsSync, unlinkSync, readdirSync, openSync, closeSync, fstatSync, lstatSync, readFileSync, } from 'node:fs';
 import { dirname, basename } from 'node:path';
 // Multi-LLM review of PR #109 findings 1+2: `finalMtimeMs = _stat(yaml)`
 // breaks the safety invariant in two scenarios — (a) slow writes where
@@ -149,7 +149,7 @@ function withPairWriteLock(yamlPath, operation) {
  *               overridden by the writer (caller's value is ignored —
  *               the writer owns this field's timing-correctness).
  */
-function pairWriteImpl(yamlPath, yamlContent, sidecarPath, state) {
+function pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, publicationPrecondition, yamlPublicationPrecondition) {
     ensureDir(yamlPath);
     ensureDir(sidecarPath);
     // GH #111: unique stamp per call so two concurrent pairWrites against
@@ -166,9 +166,26 @@ function pairWriteImpl(yamlPath, yamlContent, sidecarPath, state) {
         lastSeenMtimeMs: projectedMtimeMs,
     };
     atomicWriter._writeFile(sidecarTmp, JSON.stringify(projectedState, null, 2) + '\n');
-    atomicWriter._rename(sidecarTmp, sidecarPath);
-    // Step 3+4: YAML, atomic rename.
     atomicWriter._writeFile(yamlTmp, yamlContent);
+    if (publicationPrecondition && !publicationPrecondition()) {
+        atomicWriter._unlink(sidecarTmp);
+        atomicWriter._unlink(yamlTmp);
+        return null;
+    }
+    const priorSidecarExisted = publicationPrecondition ? atomicWriter._exists(sidecarPath) : false;
+    const priorSidecar = priorSidecarExisted ? readFileSync(sidecarPath, 'utf8') : null;
+    atomicWriter._rename(sidecarTmp, sidecarPath);
+    if (yamlPublicationPrecondition && !yamlPublicationPrecondition()) {
+        if (priorSidecar === null) {
+            atomicWriter._unlink(sidecarPath);
+        }
+        else {
+            atomicWriter._writeFile(sidecarTmp, priorSidecar);
+            atomicWriter._rename(sidecarTmp, sidecarPath);
+        }
+        atomicWriter._unlink(yamlTmp);
+        return null;
+    }
     atomicWriter._rename(yamlTmp, yamlPath);
     // Step 5 (mandatory after PR #109 review): resync sidecar to the
     // ACTUAL YAML mtime, but never let the recorded value regress below
@@ -290,15 +307,18 @@ export const atomicWriter = {
     pairWrite(yamlPath, yamlContent, sidecarPath, state) {
         return withPairWriteLock(yamlPath, () => {
             cleanupOrphans(yamlPath, sidecarPath);
-            return pairWriteImpl(yamlPath, yamlContent, sidecarPath, state);
+            const result = pairWriteImpl(yamlPath, yamlContent, sidecarPath, state);
+            if (!result)
+                throw new Error(`Unconditional pair write refused for ${yamlPath}.`);
+            return result;
         });
     },
-    pairWriteConditional(yamlPath, yamlContent, sidecarPath, state, precondition) {
+    pairWriteConditional(yamlPath, yamlContent, sidecarPath, state, precondition, yamlPublicationPrecondition = precondition) {
         return withPairWriteLock(yamlPath, () => {
             if (!precondition())
                 return null;
             cleanupOrphans(yamlPath, sidecarPath);
-            return pairWriteImpl(yamlPath, yamlContent, sidecarPath, state);
+            return pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, precondition, yamlPublicationPrecondition);
         });
     },
 };

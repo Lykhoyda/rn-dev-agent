@@ -25,6 +25,32 @@ remaining_install_seconds() {
   echo "$remaining"
 }
 
+require_install_time() {
+  if [ "$(remaining_install_seconds)" -le 0 ]; then
+    echo "ERROR: maestro-runner install deadline expired during $1."
+    correction
+    exit 1
+  fi
+}
+
+deadline_run() {
+  local remaining
+  remaining="$(remaining_install_seconds)"
+  if [ "$remaining" -le 0 ]; then
+    return 124
+  fi
+  node -e 'const {spawnSync}=require("node:child_process"); const timeout=Number(process.argv[1])*1000; const result=spawnSync(process.argv[2],process.argv.slice(3),{stdio:"inherit",timeout}); if(result.error?.code==="ETIMEDOUT") process.exit(124); process.exit(result.status ?? 1)' "$remaining" "$@"
+}
+
+deadline_capture() {
+  local remaining
+  remaining="$(remaining_install_seconds)"
+  if [ "$remaining" -le 0 ]; then
+    return 124
+  fi
+  node -e 'const {spawnSync}=require("node:child_process"); const timeout=Number(process.argv[1])*1000; const result=spawnSync(process.argv[2],process.argv.slice(3),{encoding:"utf8",timeout}); if(result.error?.code==="ETIMEDOUT") process.exit(124); process.stdout.write(result.stdout ?? ""); process.stderr.write(result.stderr ?? ""); process.exit(result.status ?? 1)' "$remaining" "$@"
+}
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CANONICAL_PIN_MANIFEST="$SCRIPT_DIR/maestro-runner-pin.json"
 if [ ! -f "$CANONICAL_PIN_MANIFEST" ]; then
@@ -117,20 +143,25 @@ expected_archive_sha() {
 
 file_sha() {
   if command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 "$1" | awk '{print $1}'
+    deadline_capture shasum -a 256 "$1" | awk '{print $1}'
   elif command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$1" | awk '{print $1}'
+    deadline_capture sha256sum "$1" | awk '{print $1}'
   else
     echo ""
   fi
 }
 
 installed_version() {
-  node - "$1" <<'NODE'
+  local remaining
+  remaining="$(remaining_install_seconds)"
+  if [ "$remaining" -le 0 ]; then
+    return 1
+  fi
+  node - "$1" "$remaining" <<'NODE'
 const { spawnSync } = require('node:child_process');
 const result = spawnSync(process.argv[2], ['--version'], {
   encoding: 'utf8',
-  timeout: 5000,
+  timeout: Math.min(5000, Number(process.argv[3]) * 1000),
 });
 const output = `${result.stdout ?? ''}\n${result.stderr ?? ''}`;
 const version = output.match(/[0-9]+\.[0-9]+\.[0-9]+/);
@@ -188,7 +219,43 @@ bin_path_matches_pin() {
 }
 
 bin_matches_pin() {
-  bin_path_matches_pin "$BIN"
+  pin_dir_matches_pin "$PIN_DIR"
+}
+
+payload_matches_pin_at() {
+  local dir="$1"
+  local archive="$dir/.payload.tar.gz"
+  local archive_sha verify_dir expected_dir
+  if [ ! -f "$archive" ] || [ -L "$archive" ]; then
+    return 1
+  fi
+  archive_sha="$(file_sha "$archive")"
+  if [ -z "$archive_sha" ] || [ "$archive_sha" != "$EXPECTED_ARCHIVE_SHA" ]; then
+    return 1
+  fi
+  verify_dir="$(mktemp -d "$RUNNER_CACHE_ROOT/.verify-payload.XXXXXX")"
+  if ! deadline_run tar -xzf "$archive" -C "$verify_dir"; then
+    rm -rf "$verify_dir"
+    return 1
+  fi
+  if [ -f "$verify_dir/maestro-runner/bin/maestro-runner" ]; then
+    expected_dir="$verify_dir/maestro-runner"
+  elif [ -f "$verify_dir/bin/maestro-runner" ]; then
+    expected_dir="$verify_dir"
+  else
+    rm -rf "$verify_dir"
+    return 1
+  fi
+  if ! deadline_run diff -qr -x .payload.tar.gz "$expected_dir" "$dir" >/dev/null; then
+    rm -rf "$verify_dir"
+    return 1
+  fi
+  rm -rf "$verify_dir"
+}
+
+pin_dir_matches_pin() {
+  local dir="$1"
+  payload_matches_pin_at "$dir" && bin_path_matches_pin "$dir/bin/maestro-runner"
 }
 
 report_success() {
@@ -262,20 +329,16 @@ reclaim_stale_lock() {
     owner="$(sed -n '1p' "$LOCK_FILE" 2>/dev/null || true)"
   fi
   age="$(lock_age_seconds "$LOCK_FILE")"
-  if [ "$age" -ge "$LOCK_MAX_AGE_SECONDS" ]; then
-    if [ -d "$LOCK_FILE" ]; then
-      rm -rf "$LOCK_FILE"
-    else
-      rm -f "$LOCK_FILE"
-    fi
-  elif [[ "$owner" =~ ^[0-9]+$ ]] && ! kill -0 "$owner" 2>/dev/null; then
+  if [[ "$owner" =~ ^[0-9]+$ ]] && kill -0 "$owner" 2>/dev/null; then
+    :
+  elif [[ "$owner" =~ ^[0-9]+$ ]]; then
     if [ -d "$LOCK_FILE" ]; then
       rm -rf "$LOCK_FILE"
     else
       rm -f "$LOCK_FILE"
     fi
   elif [ -z "$owner" ]; then
-    if [ "$age" -ge 5 ]; then
+    if [ "$age" -ge 5 ] || [ "$age" -ge "$LOCK_MAX_AGE_SECONDS" ]; then
       if [ -d "$LOCK_FILE" ]; then
         rm -rf "$LOCK_FILE"
       else
@@ -380,6 +443,7 @@ if ! curl -fsSL --connect-timeout "$CONNECT_TIMEOUT_SECONDS" --max-time "$DOWNLO
 fi
 
 GOT_ARCHIVE_SHA="$(file_sha "$TEMP_DIR/$ARCHIVE")"
+require_install_time "archive verification"
 if [ -z "$GOT_ARCHIVE_SHA" ] || [ "$GOT_ARCHIVE_SHA" != "$EXPECTED_ARCHIVE_SHA" ]; then
   echo "ERROR: downloaded archive checksum does not match the $MAESTRO_RUNNER_PIN_VERSION pin manifest."
   echo "  expected archive sha256: $EXPECTED_ARCHIVE_SHA"
@@ -395,7 +459,7 @@ if [ ! -s "$TEMP_DIR/$ARCHIVE" ]; then
 fi
 
 mkdir -p "$TEMP_DIR/extract"
-if ! tar -xzf "$TEMP_DIR/$ARCHIVE" -C "$TEMP_DIR/extract"; then
+if ! deadline_run tar -xzf "$TEMP_DIR/$ARCHIVE" -C "$TEMP_DIR/extract"; then
   echo "ERROR: failed to extract maestro-runner archive"
   correction
   exit 1
@@ -414,14 +478,23 @@ fi
 
 STAGED_PIN_DIR="$TEMP_DIR/pin"
 mkdir -p "$STAGED_PIN_DIR"
-cp -R "$SRC/." "$STAGED_PIN_DIR/"
+if ! deadline_run cp -R "$SRC/." "$STAGED_PIN_DIR/"; then
+  echo "ERROR: maestro-runner install deadline expired while staging the payload."
+  correction
+  exit 1
+fi
+if ! deadline_run cp "$TEMP_DIR/$ARCHIVE" "$STAGED_PIN_DIR/.payload.tar.gz"; then
+  echo "ERROR: maestro-runner install deadline expired while retaining the payload attestation."
+  correction
+  exit 1
+fi
 STAGED_BIN="$STAGED_PIN_DIR/bin/maestro-runner"
 chmod +x "$STAGED_BIN"
 if [ "$(platform_key)" = "darwin" ]; then
   xattr -d com.apple.quarantine "$STAGED_BIN" 2>/dev/null || true
 fi
 
-if ! bin_path_matches_pin "$STAGED_BIN"; then
+if ! pin_dir_matches_pin "$STAGED_PIN_DIR"; then
   GOT_SHA="$(file_sha "$STAGED_BIN")"
   GOT_V=""
   if [ -n "$GOT_SHA" ] && [ "$GOT_SHA" = "$EXPECTED_SHA" ]; then
@@ -443,9 +516,14 @@ if [ -e "$BACKUP_DIR" ] || [ -L "$BACKUP_DIR" ]; then
   exit 1
 fi
 if [ -e "$PIN_DIR" ]; then
-  mv "$PIN_DIR" "$BACKUP_DIR"
+  if ! deadline_run mv "$PIN_DIR" "$BACKUP_DIR"; then
+    echo "ERROR: maestro-runner install deadline expired before publication."
+    correction
+    exit 1
+  fi
 fi
-if ! mv "$STAGED_PIN_DIR" "$PIN_DIR"; then
+require_install_time "payload publication"
+if ! deadline_run mv "$STAGED_PIN_DIR" "$PIN_DIR"; then
   if [ -d "$BACKUP_DIR" ] && [ ! -e "$PIN_DIR" ]; then
     mv "$BACKUP_DIR" "$PIN_DIR"
   fi
@@ -454,8 +532,9 @@ if ! mv "$STAGED_PIN_DIR" "$PIN_DIR"; then
   exit 1
 fi
 if [ -d "$BACKUP_DIR" ]; then
-  rm -rf "$BACKUP_DIR"
+  deadline_run rm -rf "$BACKUP_DIR" || true
 fi
 
+require_install_time "payload publication"
 report_success
 exit 0

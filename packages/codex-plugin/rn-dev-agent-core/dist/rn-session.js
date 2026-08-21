@@ -12475,7 +12475,6 @@ var init_maestro_invoke = __esm({
     init_device_arbiter();
     init_authority_gate();
     init_utils();
-    init_engine_pin();
   }
 });
 

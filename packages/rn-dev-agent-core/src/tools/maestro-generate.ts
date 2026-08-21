@@ -1,4 +1,3 @@
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import type { ToolResult } from '../utils.js';
 import { okResult, failResult } from '../utils.js';
@@ -13,8 +12,8 @@ import { ACTION_ENGINE_PIN } from '../domain/engine-pin.js';
 import { regexSelectorCapabilityRefusal } from '../domain/action-engine-compat.js';
 import {
   assertOwnedActionCorpus,
+  createActionTextExclusive,
   joinYaml,
-  resolveActionPath,
   splitYaml,
 } from '../domain/action-store.js';
 import { serializeM7Header } from '../domain/reusable-action.js';
@@ -125,20 +124,15 @@ export function createMaestroGenerateHandler(): (args: MaestroGenerateArgs) => P
       );
     }
     const fileName = `${sanitizedName}.yaml`;
-    const filePath = join(outputDir, fileName);
-
+    const learnedProjectRoot =
+      basename(outputDir) === 'actions' && basename(dirname(outputDir)) === '.rn-agent'
+        ? dirname(dirname(outputDir))
+        : null;
+    if (!learnedProjectRoot) {
+      return failResult('Generated actions must be written to an owned .rn-agent/actions corpus.');
+    }
     try {
-      const learnedProjectRoot =
-        basename(outputDir) === 'actions' && basename(dirname(outputDir)) === '.rn-agent'
-          ? dirname(dirname(outputDir))
-          : null;
-      const existingPath = learnedProjectRoot
-        ? resolveActionPath(learnedProjectRoot, sanitizedName)
-        : [filePath, join(outputDir, `${sanitizedName}.yml`)].find((path) => existsSync(path));
-      if (existingPath) {
-        return failResult(`Action ${sanitizedName} already exists at ${existingPath}.`);
-      }
-      if (learnedProjectRoot) assertOwnedActionCorpus(learnedProjectRoot);
+      assertOwnedActionCorpus(learnedProjectRoot);
     } catch (err) {
       return failResult(err instanceof Error ? err.message : String(err));
     }
@@ -179,10 +173,12 @@ export function createMaestroGenerateHandler(): (args: MaestroGenerateArgs) => P
       throw err;
     }
 
-    if (!existsSync(outputDir)) {
-      mkdirSync(outputDir, { recursive: true });
+    let filePath: string;
+    try {
+      filePath = createActionTextExclusive(learnedProjectRoot, sanitizedName, content);
+    } catch (err) {
+      return failResult(err instanceof Error ? err.message : String(err));
     }
-    writeFileSync(filePath, content, 'utf-8');
 
     return okResult({
       generated: true,

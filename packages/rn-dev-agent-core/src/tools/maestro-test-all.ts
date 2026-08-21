@@ -26,6 +26,7 @@ import { outputIndicatesFlowFailure } from '../domain/maestro-error-parser.js';
 import {
   exactPinRefusal,
   getEngineStatus,
+  immediateRunnerPinRefusal,
   isOlderSdkInstallFailure,
   olderSdkInstallDiagnosis,
   type ReplayEngineStatus,
@@ -244,8 +245,7 @@ export function createMaestroTestAllHandler(
           appId: parsedAppId,
           canonical,
           appFile: appFileResolution.appFile,
-          reinstallsApp:
-            Boolean(appFileResolution.appFile) && flowUsesClearState(canonical),
+          reinstallsApp: Boolean(appFileResolution.appFile) && flowUsesClearState(canonical),
         });
       } catch (err) {
         const reason =
@@ -340,6 +340,11 @@ export function createMaestroTestAllHandler(
                   ]),
                   'utf-8',
                 );
+                const immediateRefusal = await immediateRunnerPinRefusal(
+                  flowDispatch.binPath,
+                  resolveEngineStatus,
+                );
+                if (immediateRefusal) throw new Error(immediateRefusal);
                 return execute(flowDispatch.binPath, finalArgs, {
                   timeout: remainingTimeout,
                   encoding: 'utf8',
