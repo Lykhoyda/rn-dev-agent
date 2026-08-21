@@ -450,6 +450,23 @@ function missingLoginPrologueOutcome() {
         },
     };
 }
+function pendingLoginPrologueOutcome() {
+    const timestamp = new Date().toISOString();
+    return {
+        schemaVersion: 1,
+        state: LOGIN_PROLOGUE_BLOCKED,
+        alias: LOGIN_PROLOGUE_ALIAS,
+        startedAt: timestamp,
+        endedAt: timestamp,
+        elapsedMs: 0,
+        steps: [],
+        inventory: { count: 0, actionIds: [] },
+        failure: {
+            code: 'LOGIN_PROLOGUE_IN_PROGRESS',
+            detail: 'The login prologue has not completed authoritative validation.',
+        },
+    };
+}
 function persistLoginPrologueOutcome(runtime, registry, operation, status, outcome) {
     const priorOutcome = readLoginPrologueOutcome(status.bindings.loginPrologue);
     const overrides = outcome.overrides ?? priorOutcome?.overrides;
@@ -798,6 +815,15 @@ export function createAuthorityGate(runtime, dependencies) {
                         : undefined,
                     overrideRejected: loginDecision.suppliedOverride,
                     nextAction: 'Repair the exact user-login action and rerun cdp_login_prologue, or supply a supervisorOverrideToken configured by RN_LOGIN_PROLOGUE_OVERRIDE_TOKEN for this mutating call.',
+                });
+            }
+            if (loginDecision.override && profile.kind === 'transition') {
+                return failResult('LOGIN_PROLOGUE_BLOCKED: supervisor overrides cannot authorize transition mutations.', 'LOGIN_PROLOGUE_BLOCKED', {
+                    loginPrologue: runtimeStatus.available
+                        ? runtimeStatus.bindings.loginPrologue
+                        : undefined,
+                    transitionOverrideRejected: true,
+                    nextAction: 'Repair the exact user-login action and rerun cdp_login_prologue before this transition.',
                 });
             }
             if (profile.kind === 'diagnostic') {
@@ -1479,6 +1505,11 @@ export function createAuthorityGate(runtime, dependencies) {
                         throw new SessionAuthorityError('LOGIN_PROLOGUE_BLOCKED', 'the blocked login prologue state disappeared before override audit');
                     }
                     const persisted = persistLoginPrologueOutcome(runtime, registry, operation, status, appendLoginOverrideAudit(outcome, loginDecision.audit));
+                    operation = persisted.operation;
+                    status = persisted.status;
+                }
+                if (tool === 'cdp_login_prologue') {
+                    const persisted = persistLoginPrologueOutcome(runtime, registry, operation, status, pendingLoginPrologueOutcome());
                     operation = persisted.operation;
                     status = persisted.status;
                 }

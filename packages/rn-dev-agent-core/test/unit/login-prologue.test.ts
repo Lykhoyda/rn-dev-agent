@@ -80,20 +80,32 @@ test('login prologue resolves the exact alias and requires a fresh passing RunRe
   }
 
   assert.deepEqual(
-    seenArgs.map(({ actionId, autoRepair, forceReload, proofReplay, blindProbeMode, trigger }) => ({
-      actionId,
-      autoRepair,
-      forceReload,
-      proofReplay,
-      blindProbeMode,
-      trigger,
-    })),
+    seenArgs.map(
+      ({
+        actionId,
+        autoRepair,
+        forceReload,
+        proofReplay,
+        blindProbeMode,
+        cdpFallbackMode,
+        trigger,
+      }) => ({
+        actionId,
+        autoRepair,
+        forceReload,
+        proofReplay,
+        blindProbeMode,
+        cdpFallbackMode,
+        trigger,
+      }),
+    ),
     [1, 2].map(() => ({
       actionId: 'user-login',
       autoRepair: false,
       forceReload: false,
       proofReplay: false,
       blindProbeMode: 'forbid',
+      cdpFallbackMode: 'forbid',
       trigger: 'agent',
     })),
   );

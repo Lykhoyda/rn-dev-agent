@@ -411,8 +411,10 @@ export function createRunActionHandler(deps = {}) {
             // directly. Every branch fails open to the maestro-first path below.
             // Opt out globally with RN_BLIND_PROBE=0.
             let atRisk = null;
+            const cdpFallbackForbidden = args.cdpFallbackMode === 'forbid';
             const inheritedBlindProbeDisabled = process.env.RN_BLIND_PROBE === '0' || process.env.RN_BLIND_PROBE === 'false';
-            const blindProbeDisabled = args.blindProbeMode === 'forbid' ||
+            const blindProbeDisabled = cdpFallbackForbidden ||
+                args.blindProbeMode === 'forbid' ||
                 (args.blindProbeMode !== 'allow' && inheritedBlindProbeDisabled);
             if (args.platform !== 'android') {
                 // Resolve the device context even when the gate is opted out: a clean
@@ -642,7 +644,8 @@ export function createRunActionHandler(deps = {}) {
             // usually just relaunched the app), and every skip records its reason —
             // a silent skip surfaced in the field as an unexplained UNKNOWN.
             let cdpJsFallback;
-            if (failure.kind === 'SELECTOR_NOT_FOUND' || failure.kind === 'UNKNOWN') {
+            if (!cdpFallbackForbidden &&
+                (failure.kind === 'SELECTOR_NOT_FOUND' || failure.kind === 'UNKNOWN')) {
                 const candidate = getReplayDeps(args);
                 const replayDeps = candidate && (await claimBundleAuthority(args)) ? candidate : null;
                 const probe = !replayDeps

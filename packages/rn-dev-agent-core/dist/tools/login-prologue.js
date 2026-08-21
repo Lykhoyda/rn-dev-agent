@@ -74,6 +74,7 @@ export function createLoginPrologueHandler(deps) {
                 forceReload: false,
                 proofReplay: false,
                 blindProbeMode: 'forbid',
+                cdpFallbackMode: 'forbid',
                 trigger: args.trigger ?? 'agent',
             });
             let replayResult;

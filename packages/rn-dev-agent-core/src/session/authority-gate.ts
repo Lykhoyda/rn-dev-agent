@@ -741,6 +741,24 @@ function missingLoginPrologueOutcome(): LoginPrologueOutcome {
   };
 }
 
+function pendingLoginPrologueOutcome(): LoginPrologueOutcome {
+  const timestamp = new Date().toISOString();
+  return {
+    schemaVersion: 1,
+    state: LOGIN_PROLOGUE_BLOCKED,
+    alias: LOGIN_PROLOGUE_ALIAS,
+    startedAt: timestamp,
+    endedAt: timestamp,
+    elapsedMs: 0,
+    steps: [],
+    inventory: { count: 0, actionIds: [] },
+    failure: {
+      code: 'LOGIN_PROLOGUE_IN_PROGRESS',
+      detail: 'The login prologue has not completed authoritative validation.',
+    },
+  };
+}
+
 function persistLoginPrologueOutcome(
   runtime: AuthorityGateRuntime,
   registry: SessionRegistry,
@@ -1218,6 +1236,20 @@ export function createAuthorityGate(
               overrideRejected: loginDecision.suppliedOverride,
               nextAction:
                 'Repair the exact user-login action and rerun cdp_login_prologue, or supply a supervisorOverrideToken configured by RN_LOGIN_PROLOGUE_OVERRIDE_TOKEN for this mutating call.',
+            },
+          );
+        }
+        if (loginDecision.override && profile.kind === 'transition') {
+          return failResult(
+            'LOGIN_PROLOGUE_BLOCKED: supervisor overrides cannot authorize transition mutations.',
+            'LOGIN_PROLOGUE_BLOCKED',
+            {
+              loginPrologue: runtimeStatus.available
+                ? runtimeStatus.bindings.loginPrologue
+                : undefined,
+              transitionOverrideRejected: true,
+              nextAction:
+                'Repair the exact user-login action and rerun cdp_login_prologue before this transition.',
             },
           );
         }
@@ -2041,6 +2073,17 @@ export function createAuthorityGate(
               operation,
               status,
               appendLoginOverrideAudit(outcome, loginDecision.audit),
+            );
+            operation = persisted.operation;
+            status = persisted.status;
+          }
+          if (tool === 'cdp_login_prologue') {
+            const persisted = persistLoginPrologueOutcome(
+              runtime,
+              registry,
+              operation,
+              status,
+              pendingLoginPrologueOutcome(),
             );
             operation = persisted.operation;
             status = persisted.status;

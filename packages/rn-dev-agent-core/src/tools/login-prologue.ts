@@ -120,6 +120,7 @@ export function createLoginPrologueHandler(deps: LoginPrologueDependencies) {
         forceReload: false,
         proofReplay: false,
         blindProbeMode: 'forbid',
+        cdpFallbackMode: 'forbid',
         trigger: args.trigger ?? 'agent',
       });
 

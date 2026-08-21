@@ -32798,6 +32798,23 @@ function missingLoginPrologueOutcome() {
     }
   };
 }
+function pendingLoginPrologueOutcome() {
+  const timestamp = (/* @__PURE__ */ new Date()).toISOString();
+  return {
+    schemaVersion: 1,
+    state: LOGIN_PROLOGUE_BLOCKED,
+    alias: LOGIN_PROLOGUE_ALIAS,
+    startedAt: timestamp,
+    endedAt: timestamp,
+    elapsedMs: 0,
+    steps: [],
+    inventory: { count: 0, actionIds: [] },
+    failure: {
+      code: "LOGIN_PROLOGUE_IN_PROGRESS",
+      detail: "The login prologue has not completed authoritative validation."
+    }
+  };
+}
 function persistLoginPrologueOutcome(runtime, registry2, operation, status, outcome) {
   const priorOutcome = readLoginPrologueOutcome(status.bindings.loginPrologue);
   const overrides = outcome.overrides ?? priorOutcome?.overrides;
@@ -33067,6 +33084,13 @@ function createAuthorityGate(runtime, dependencies) {
           loginPrologue: runtimeStatus.available ? runtimeStatus.bindings.loginPrologue : void 0,
           overrideRejected: loginDecision.suppliedOverride,
           nextAction: "Repair the exact user-login action and rerun cdp_login_prologue, or supply a supervisorOverrideToken configured by RN_LOGIN_PROLOGUE_OVERRIDE_TOKEN for this mutating call."
+        });
+      }
+      if (loginDecision.override && profile.kind === "transition") {
+        return failResult("LOGIN_PROLOGUE_BLOCKED: supervisor overrides cannot authorize transition mutations.", "LOGIN_PROLOGUE_BLOCKED", {
+          loginPrologue: runtimeStatus.available ? runtimeStatus.bindings.loginPrologue : void 0,
+          transitionOverrideRejected: true,
+          nextAction: "Repair the exact user-login action and rerun cdp_login_prologue before this transition."
         });
       }
       if (profile.kind === "diagnostic") {
@@ -33689,6 +33713,11 @@ function createAuthorityGate(runtime, dependencies) {
             throw new SessionAuthorityError("LOGIN_PROLOGUE_BLOCKED", "the blocked login prologue state disappeared before override audit");
           }
           const persisted = persistLoginPrologueOutcome(runtime, registry2, operation, status, appendLoginOverrideAudit(outcome, loginDecision.audit));
+          operation = persisted.operation;
+          status = persisted.status;
+        }
+        if (tool === "cdp_login_prologue") {
+          const persisted = persistLoginPrologueOutcome(runtime, registry2, operation, status, pendingLoginPrologueOutcome());
           operation = persisted.operation;
           status = persisted.status;
         }
@@ -80280,8 +80309,9 @@ function createRunActionHandler(deps = {}) {
     });
     try {
       let atRisk = null;
+      const cdpFallbackForbidden = args.cdpFallbackMode === "forbid";
       const inheritedBlindProbeDisabled = process.env.RN_BLIND_PROBE === "0" || process.env.RN_BLIND_PROBE === "false";
-      const blindProbeDisabled = args.blindProbeMode === "forbid" || args.blindProbeMode !== "allow" && inheritedBlindProbeDisabled;
+      const blindProbeDisabled = cdpFallbackForbidden || args.blindProbeMode === "forbid" || args.blindProbeMode !== "allow" && inheritedBlindProbeDisabled;
       if (args.platform !== "android") {
         const ctx = await blindProbeContext2().catch(() => null);
         if (ctx) {
@@ -80467,7 +80497,7 @@ function createRunActionHandler(deps = {}) {
         }
       }
       let cdpJsFallback;
-      if (failure.kind === "SELECTOR_NOT_FOUND" || failure.kind === "UNKNOWN") {
+      if (!cdpFallbackForbidden && (failure.kind === "SELECTOR_NOT_FOUND" || failure.kind === "UNKNOWN")) {
         const candidate = getReplayDeps(args);
         const replayDeps = candidate && await claimBundleAuthority(args) ? candidate : null;
         const probe = !replayDeps ? null : failure.kind === "SELECTOR_NOT_FOUND" ? failure.selector : firstReplayTestId(cdpReplayYaml, args.params ?? {});
@@ -80948,6 +80978,7 @@ function createLoginPrologueHandler(deps) {
         forceReload: false,
         proofReplay: false,
         blindProbeMode: "forbid",
+        cdpFallbackMode: "forbid",
         trigger: args.trigger ?? "agent"
       });
       let replayResult;

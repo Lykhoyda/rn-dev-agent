@@ -289,6 +289,36 @@ test('typed runner refusal cannot be laundered through CDP fallback', async () =
   assert.equal(project.readSidecar('demo').runHistory[0].status, 'fail');
 });
 
+test('strict replay blocks selector failure without reactive CDP fallback', async () => {
+  project.seedAction('demo', replayFixtureYaml({ id: 'demo', selector: 'fab-create-task' }));
+  let replayDepsCalled = false;
+  const handler = createRunActionHandler({
+    maestroRun: fakeMaestroRun([FAIL_SELECTOR_ENV]),
+    replayDeps: () => {
+      replayDepsCalled = true;
+      return {
+        treeFor: async () => ({ testID: 'fab-create-task', children: [] }),
+        pressByTestId: async () => {},
+        typeByTestId: async () => {},
+        launchApp: async () => {},
+        settle: async () => {},
+      };
+    },
+  });
+
+  const result = await handler({
+    actionId: 'demo',
+    projectRoot: project.root,
+    autoRepair: false,
+    cdpFallbackMode: 'forbid',
+  });
+  const env = JSON.parse(result.content[0].text);
+
+  assert.equal(env.code, 'TESTID_NOT_FOUND');
+  assert.equal(replayDepsCalled, false);
+  assert.equal(project.readSidecar('demo').runHistory[0].status, 'fail');
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Test 4: a normal Maestro PASS exposes transport/readback but keeps legacy sidecar encoding
 // ─────────────────────────────────────────────────────────────────────────────
