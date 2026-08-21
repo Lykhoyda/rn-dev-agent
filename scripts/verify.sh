@@ -4,14 +4,14 @@
 # Discovers and runs all plugin-managed Maestro flows in .rn-agent/actions/
 # without requiring a Claude Code session. Uses only the exact pin-cache
 # maestro-runner (version + checksum). Never PATH, ~/.maestro-runner, or
-# maestro-cli. Pass --flow-dir to point at any other directory.
+# maestro-cli. Pass --flow-dir only for an owned .rn-agent/actions directory.
 #
 # Usage:
 #   rn-verify                              # Run all flows on auto-detected platform
 #   rn-verify --platform ios               # Run on iOS only
 #   rn-verify --platform android           # Run on Android only
 #   rn-verify --pattern "cart|checkout"     # Filter flows by regex
-#   rn-verify --flow-dir ./e2e/flows       # Custom flow directory
+#   rn-verify --flow-dir .rn-agent/actions # Explicit owned action corpus
 #   rn-verify --timeout 60000              # Per-flow timeout in ms (default: 120000)
 #   rn-verify --stop-on-failure            # Stop after first failure
 #

@@ -286,6 +286,7 @@ LOCK_FILE="$RUNNER_CACHE_ROOT/.install-${MAESTRO_RUNNER_PIN_VERSION}.lock"
 RECLAIM_DIR="$RUNNER_CACHE_ROOT/.install-${MAESTRO_RUNNER_PIN_VERSION}.reclaim"
 LOCK_HELD=0
 LOCK_OWNER_FILE=""
+LOCK_OWNER_BIRTH=""
 TEMP_DIR=""
 
 cleanup() {
@@ -296,9 +297,10 @@ cleanup() {
     rm -f "$LOCK_OWNER_FILE"
   fi
   if [ "$LOCK_HELD" = "1" ] && [ -f "$LOCK_FILE" ] && [ ! -L "$LOCK_FILE" ]; then
-    local owner
+    local owner owner_birth
     owner="$(sed -n '1p' "$LOCK_FILE" 2>/dev/null || true)"
-    if [ "$owner" = "$$" ]; then
+    owner_birth="$(sed -n '2p' "$LOCK_FILE" 2>/dev/null || true)"
+    if [ "$owner" = "$$" ] && [ "$owner_birth" = "$LOCK_OWNER_BIRTH" ]; then
       rm -f "$LOCK_FILE"
     fi
   fi
@@ -311,6 +313,29 @@ lock_age_seconds() {
   node -e 'const fs=require("node:fs"); try { const age=Math.max(0, Math.floor((Date.now()-fs.statSync(process.argv[1]).mtimeMs)/1000)); process.stdout.write(String(age)); } catch { process.stdout.write("0"); }' "$1"
 }
 
+process_birth_identity() {
+  node - "$1" <<'NODE'
+const { readFileSync } = require('node:fs');
+const { spawnSync } = require('node:child_process');
+const pid = process.argv[2];
+if (!/^\d+$/.test(pid)) process.exit(1);
+if (process.platform === 'linux') {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const fields = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/);
+    if (fields[19]) {
+      process.stdout.write(`linux:${fields[19]}`);
+      process.exit(0);
+    }
+  } catch {}
+}
+const result = spawnSync('/bin/ps', ['-o', 'lstart=', '-p', pid], { encoding: 'utf8' });
+const started = result.status === 0 ? result.stdout.trim().replace(/\s+/g, ' ') : '';
+if (!started) process.exit(1);
+process.stdout.write(`ps:${started}`);
+NODE
+}
+
 reclaim_stale_lock() {
   if ! mkdir "$RECLAIM_DIR" 2>/dev/null; then
     if [ -d "$RECLAIM_DIR" ] && [ ! -L "$RECLAIM_DIR" ] && [ "$(lock_age_seconds "$RECLAIM_DIR")" -ge 10 ]; then
@@ -318,18 +343,25 @@ reclaim_stale_lock() {
     fi
     return
   fi
-  local owner="" age="0"
+  local owner="" owner_birth="" current_birth="" age="0"
   if [ -L "$LOCK_FILE" ]; then
     rmdir "$RECLAIM_DIR"
     return
   fi
   if [ -d "$LOCK_FILE" ]; then
     owner="$(sed -n '1p' "$LOCK_FILE/pid" 2>/dev/null || true)"
+    owner_birth="$(sed -n '2p' "$LOCK_FILE/pid" 2>/dev/null || true)"
   elif [ -f "$LOCK_FILE" ]; then
     owner="$(sed -n '1p' "$LOCK_FILE" 2>/dev/null || true)"
+    owner_birth="$(sed -n '2p' "$LOCK_FILE" 2>/dev/null || true)"
   fi
   age="$(lock_age_seconds "$LOCK_FILE")"
-  if [[ "$owner" =~ ^[0-9]+$ ]] && kill -0 "$owner" 2>/dev/null; then
+  if [[ "$owner" =~ ^[0-9]+$ ]]; then
+    current_birth="$(process_birth_identity "$owner" 2>/dev/null || true)"
+  fi
+  if [ -n "$owner_birth" ] && [ "$current_birth" = "$owner_birth" ] && kill -0 "$owner" 2>/dev/null; then
+    :
+  elif [[ "$owner" =~ ^[0-9]+$ ]] && [ -z "$owner_birth" ] && [ -n "$current_birth" ] && [ "$age" -lt "$LOCK_MAX_AGE_SECONDS" ]; then
     :
   elif [[ "$owner" =~ ^[0-9]+$ ]]; then
     if [ -d "$LOCK_FILE" ]; then
@@ -356,7 +388,8 @@ try_claim_lock() {
 acquire_install_lock() {
   mkdir -p "$RUNNER_CACHE_ROOT"
   LOCK_OWNER_FILE="$(mktemp "$RUNNER_CACHE_ROOT/.install-owner.XXXXXX")"
-  if ! printf '%s\n' "$$" > "$LOCK_OWNER_FILE"; then
+  LOCK_OWNER_BIRTH="$(process_birth_identity "$$" 2>/dev/null || true)"
+  if [ -z "$LOCK_OWNER_BIRTH" ] || ! printf '%s\n%s\n' "$$" "$LOCK_OWNER_BIRTH" > "$LOCK_OWNER_FILE"; then
     echo "ERROR: failed to create maestro-runner install lock owner record."
     correction
     exit 1

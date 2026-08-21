@@ -39,6 +39,7 @@ import {
   commitMigratedActionText,
   loadActionMigrationBaseline,
 } from '../../dist/domain/action-store.js';
+import { prepareActionVerificationSuite } from '../../dist/domain/action-verification-suite.js';
 import { runMaestroInline } from '../../dist/maestro-invoke.js';
 import { createTmpProject } from '../helpers/tmp-project.js';
 
@@ -560,6 +561,7 @@ test('maestro_generate refuses unsafe metadata and incomplete steps before writi
   const outputDir = join(root, '.rn-agent', 'actions');
   mkdirSync(outputDir, { recursive: true });
   for (const args of [
+    { name: 'unsafe\u0080intent', steps: [{ action: 'tap', testID: 'continue' }] },
     { name: 'unsafe\u0085intent', steps: [{ action: 'tap', testID: 'continue' }] },
     { name: 'missing tap target', steps: [{ action: 'tap' }] },
     { name: 'missing fill input', steps: [{ action: 'fill', testID: 'email' }] },
@@ -984,6 +986,28 @@ test('maestro_test_all preflights the complete suite before any execution', asyn
   assert.equal(body.meta.executed, 0);
   assert.match(String(body.meta.results[0].error), /Log\.n|regex/);
   assert.equal(spawned, false);
+});
+
+test('action suite execution snapshots preserve the bytes accepted by preflight', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-owned-suite-snapshot-'));
+  const dir = join(root, '.rn-agent', 'actions');
+  mkdirSync(dir, { recursive: true });
+  const first = join(dir, 'a.yaml');
+  const second = join(dir, 'b.yaml');
+  writeFileSync(first, actionYaml('a', '# enginePin: maestro-runner@1.1.24'), 'utf8');
+  writeFileSync(second, actionYaml('b', '# enginePin: maestro-runner@1.1.24'), 'utf8');
+
+  const suite = prepareActionVerificationSuite([first, second], dir, PINNED());
+  assert.deepEqual(suite.errors, []);
+  assert.equal(suite.prepared.length, 2);
+  writeFileSync(
+    second,
+    actionYaml('b', '# enginePin: maestro-runner@1.1.24', '- copyTextFrom: "Log.n"\n'),
+    'utf8',
+  );
+
+  assert.doesNotMatch(suite.prepared[1]!.inlineYaml, /Log\.n/);
+  assert.match(readFileSync(second, 'utf8'), /Log\.n/);
 });
 
 test('maestro_test_all revalidates the exact pin before each subprocess', async () => {

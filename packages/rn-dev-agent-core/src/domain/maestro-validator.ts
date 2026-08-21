@@ -58,7 +58,7 @@ export function assertValidBundleId(s: unknown, context: string): asserts s is s
 // (newlines, document separators, unicode line breaks, control characters).
 
 // oxlint-disable-next-line no-control-regex -- intentional: security check rejects control chars to prevent YAML injection
-const UNSAFE_SCALAR_RE = /[\u0000-\u0008\u000A-\u001F\u0085\u2028\u2029]/;
+const UNSAFE_SCALAR_RE = /[\u0000-\u0008\u000A-\u001F\u007F-\u009F\u2028\u2029]/;
 const SCALAR_MAX_LEN = 4096;
 
 export function isSafeMaestroScalar(s: unknown): s is string {

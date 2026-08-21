@@ -1,14 +1,12 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { doctorPinnedRunner, exactPinRefusal, getEngineStatus, MAESTRO_RUNNER_PIN, nodePlatformKey, _resetEngineStatusForTest, } from './domain/engine-pin.js';
 import { migrateLearnedActions } from './domain/action-engine-compat.js';
-import { classifyLearnedActionPath, isLearnedActionPath, replayCompatibilityPreflight, standaloneLearnedActionPathRefusal, } from './domain/action-engine-compat.js';
-import { parseAndValidateFlow } from './domain/maestro-validator.js';
-import { parseM7Header } from './domain/reusable-action.js';
-import { resolveActionPath } from './domain/action-store.js';
+import { classifyLearnedActionPath } from './domain/action-engine-compat.js';
+import { prepareActionVerificationSuite } from './domain/action-verification-suite.js';
 import { filterWithBoundedRegex } from './domain/bounded-regex.js';
 import { createMaestroRunHandler } from './tools/maestro-run.js';
 const USAGE = 'usage: maestro-runner-pin [diagnose|install|migrate-actions|verify-actions] [--json] [--root <app>]';
@@ -111,43 +109,10 @@ async function verifyActions(argv) {
         console.error(`No Maestro flows found in ${flowDir}`);
         return 2;
     }
-    const preflightErrors = [];
-    for (const file of files) {
-        try {
-            const actionPathRefusal = standaloneLearnedActionPathRefusal(file);
-            if (actionPathRefusal)
-                throw new Error(actionPathRefusal);
-            const text = readFileSync(file, 'utf8');
-            const parsed = parseAndValidateFlow(text, { flowDir: dirname(file), flowRoot: flowDir });
-            const id = file
-                .split('/')
-                .pop()
-                .replace(/\.ya?ml$/i, '');
-            const meta = parseM7Header(text, id);
-            const owned = isLearnedActionPath(file);
-            if (owned) {
-                const projectRoot = dirname(dirname(dirname(file)));
-                const resolvedPath = resolveActionPath(projectRoot, id);
-                if (resolvedPath === null || resolve(resolvedPath) !== resolve(file)) {
-                    throw new Error(`Action ${id} did not resolve to ${file}`);
-                }
-            }
-            const refusal = replayCompatibilityPreflight({
-                enginePin: meta?.enginePin,
-                commands: parsed.commands,
-                engineStatus,
-                requireEnginePin: meta !== null || owned,
-            });
-            if (refusal)
-                throw new Error(refusal);
-        }
-        catch (err) {
-            preflightErrors.push({ file, error: err instanceof Error ? err.message : String(err) });
-        }
-    }
-    if (preflightErrors.length > 0) {
-        console.error(`Suite preflight refused ${preflightErrors.length} of ${files.length} flows before execution.`);
-        for (const row of preflightErrors)
+    const suite = prepareActionVerificationSuite(files, flowDir, engineStatus);
+    if (suite.errors.length > 0) {
+        console.error(`Suite preflight refused ${suite.errors.length} of ${files.length} flows before execution.`);
+        for (const row of suite.errors)
             console.error(`  FAIL  ${row.file}: ${row.error}`);
         return 1;
     }
@@ -159,12 +124,12 @@ async function verifyActions(argv) {
     const run = createMaestroRunHandler();
     let passed = 0;
     let failed = 0;
-    for (const file of files) {
+    for (const flow of suite.prepared) {
         const startedAt = Date.now();
-        const result = await run({ platform, flowPath: file, timeoutMs: timeout });
+        const result = await run({ platform, inlineYaml: flow.inlineYaml, timeoutMs: timeout });
         const envelope = JSON.parse(result.content[0].text);
         const ok = envelope.ok && envelope.data?.passed !== false;
-        console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${file.split('/').pop()}  (${Date.now() - startedAt}ms)`);
+        console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${flow.file.split('/').pop()}  (${Date.now() - startedAt}ms)`);
         if (ok)
             passed += 1;
         else {

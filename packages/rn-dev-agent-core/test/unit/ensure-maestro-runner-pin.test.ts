@@ -43,6 +43,17 @@ function runEnsure(env: NodeJS.ProcessEnv) {
   });
 }
 
+function processBirthIdentity(pid: number): string {
+  if (process.platform === 'linux') {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const fields = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/);
+    return `linux:${fields[19]}`;
+  }
+  const result = spawnSync('/bin/ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  return `ps:${result.stdout.trim().replace(/\s+/g, ' ')}`;
+}
+
 test('unsupported platform fails closed and does not download', () => {
   const cache = mkdtempSync(join(tmpdir(), 'mr-cache-'));
   const result = runEnsure({
@@ -288,7 +299,7 @@ test('installer does not age-reclaim a demonstrably live lock owner', () => {
   const toolDir = join(root, 'tools');
   mkdirSync(dirname(lock), { recursive: true });
   mkdirSync(toolDir);
-  writeFileSync(lock, `${process.pid}\n`);
+  writeFileSync(lock, `${process.pid}\n${processBirthIdentity(process.pid)}\n`);
   const stale = new Date(Date.now() - 120_000);
   utimesSync(lock, stale, stale);
   writeFileSync(join(toolDir, 'sleep'), '#!/bin/sh\nexit 0\n');
@@ -306,6 +317,27 @@ test('installer does not age-reclaim a demonstrably live lock owner', () => {
   assert.notEqual(result.status, 0);
   assert.match(`${result.stdout}${result.stderr}`, /timed out waiting/);
   assert.equal(existsSync(lock), true);
+});
+
+test('installer reclaims a stale lock after its pid is reused', () => {
+  const cache = mkdtempSync(join(tmpdir(), 'mr-reused-pid-lock-'));
+  const lock = join(cache, 'maestro-runner', `.install-${MAESTRO_RUNNER_PIN.version}.lock`);
+  mkdirSync(dirname(lock), { recursive: true });
+  writeFileSync(lock, `${process.pid}\nlinux:not-this-process\n`);
+  const stale = new Date(Date.now() - 120_000);
+  utimesSync(lock, stale, stale);
+
+  const result = runEnsure({
+    RN_DEV_AGENT_RUNNER_CACHE: cache,
+    RN_DEV_AGENT_UNAME_S: 'Darwin',
+    RN_DEV_AGENT_UNAME_M: 'arm64',
+    RN_DEV_AGENT_MAESTRO_DOWNLOAD_URL: 'http://127.0.0.1:1/missing.tar.gz',
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}${result.stderr}`, /failed to download/);
+  assert.doesNotMatch(`${result.stdout}${result.stderr}`, /timed out waiting/);
+  assert.equal(existsSync(lock), false);
 });
 
 test('installer applies one deadline across lock wait and download', async () => {
@@ -455,6 +487,13 @@ const COLLECT_FEEDBACK = join(
   'scripts',
   'collect-feedback.sh',
 );
+
+test('verify.sh help advertises only the owned action corpus', () => {
+  const result = spawnSync('bash', [VERIFY, '--help'], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /--flow-dir \.rn-agent\/actions/);
+  assert.doesNotMatch(result.stdout, /e2e\/flows|any other directory/);
+});
 
 test('test manifest cannot redefine canonical checksums or authorize execution', () => {
   const cache = mkdtempSync(join(tmpdir(), 'mr-checksum-override-'));

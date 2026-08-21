@@ -27122,7 +27122,7 @@ var init_maestro_validator = __esm({
     };
     BUNDLE_ID_RE = /^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z][A-Za-z0-9_-]*)+$/;
     BUNDLE_ID_MAX_LEN = 256;
-    UNSAFE_SCALAR_RE = /[\u0000-\u0008\u000A-\u001F\u0085\u2028\u2029]/;
+    UNSAFE_SCALAR_RE = /[\u0000-\u0008\u000A-\u001F\u007F-\u009F\u2028\u2029]/;
     SCALAR_MAX_LEN = 4096;
     ALLOWED_COMMANDS = /* @__PURE__ */ new Set([
       "launchApp",
