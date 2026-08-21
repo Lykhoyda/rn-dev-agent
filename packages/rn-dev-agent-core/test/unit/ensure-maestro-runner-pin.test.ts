@@ -362,10 +362,7 @@ test('installer keeps the live pin when atomic publication fails', () => {
   assert.equal(existsSync(join(pinDir, 'bin', 'maestro-runner')), true);
 
   copyFileSync(join(nativeSource, basename(failingHelper)), failingHelper);
-  copyFileSync(
-    join(nativeSource, `${basename(failingHelper)}.json`),
-    `${failingHelper}.json`,
-  );
+  copyFileSync(join(nativeSource, `${basename(failingHelper)}.json`), `${failingHelper}.json`);
   chmodSync(failingHelper, 0o755);
   const converged = spawnSync('bash', [copiedScript], {
     encoding: 'utf8',

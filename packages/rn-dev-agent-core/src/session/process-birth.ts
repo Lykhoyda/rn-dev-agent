@@ -345,33 +345,25 @@ export function linkFileIntoVerifiedDirectory(
   if (!directory.isDirectory() || dirname(targetPath) === targetPath) return false;
   if (process.platform === 'darwin') {
     const helper = verifyDarwinProcessBirthHelper({});
-    return runVerifiedPublicationHelper(
-      helper.path,
-      DARWIN_HELPER_MANIFEST.binarySha256,
-      [
-        '--link-into-directory',
-        candidatePath,
-        dirname(targetPath),
-        targetPath.slice(dirname(targetPath).length + 1),
-        String(directory.dev),
-        String(directory.ino),
-      ],
-    );
+    return runVerifiedPublicationHelper(helper.path, DARWIN_HELPER_MANIFEST.binarySha256, [
+      '--link-into-directory',
+      candidatePath,
+      dirname(targetPath),
+      targetPath.slice(dirname(targetPath).length + 1),
+      String(directory.dev),
+      String(directory.ino),
+    ]);
   }
   if (process.platform === 'linux' && (process.arch === 'x64' || process.arch === 'arm64')) {
     const helperPath = verifiedLinuxPublicationHelper(process.arch);
-    return runVerifiedPublicationHelper(
-      helperPath,
-      LINUX_PUBLICATION_HELPER_SHA256[process.arch],
-      [
-        '--link-into-directory',
-        candidatePath,
-        dirname(targetPath),
-        targetPath.slice(dirname(targetPath).length + 1),
-        String(directory.dev),
-        String(directory.ino),
-      ],
-    );
+    return runVerifiedPublicationHelper(helperPath, LINUX_PUBLICATION_HELPER_SHA256[process.arch], [
+      '--link-into-directory',
+      candidatePath,
+      dirname(targetPath),
+      targetPath.slice(dirname(targetPath).length + 1),
+      String(directory.dev),
+      String(directory.ino),
+    ]);
   }
   return false;
 }

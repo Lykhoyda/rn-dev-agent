@@ -499,7 +499,7 @@ export const atomicWriter = {
         dirname(targetPath),
         constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY,
       );
-    } catch (error) {
+    } catch {
       return false;
     }
     try {

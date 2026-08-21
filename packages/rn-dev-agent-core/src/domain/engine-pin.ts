@@ -203,7 +203,7 @@ function expectedPayloadEntries(archive: Buffer): Map<string, PayloadEntry> | nu
     const archivePath = longPath ?? [prefix, name].filter(Boolean).join('/');
     longPath = null;
     if (type === 'L') {
-      longPath = data.toString().replace(/\0.*$/s, '').trim();
+      longPath = data.toString().split('\u0000')[0].trim();
     } else if (type === '0' || type === '\0' || type === '2' || type === '5') {
       raw.push({ path: archivePath, type, data, link: tarText(header, 157, 100) });
     }

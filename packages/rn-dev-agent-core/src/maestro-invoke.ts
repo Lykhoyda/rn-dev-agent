@@ -240,10 +240,10 @@ export async function runMaestroInline(
           runnerPath,
           [...prefixArgs, ...finalArgs],
           {
-          timeoutMs: remainingTimeout,
-          platform: opts.platform,
-          deviceId: requestedDeviceId,
-          tool: opts.slug ?? 'inline-maestro',
+            timeoutMs: remainingTimeout,
+            platform: opts.platform,
+            deviceId: requestedDeviceId,
+            tool: opts.slug ?? 'inline-maestro',
           },
         );
       };

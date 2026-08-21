@@ -349,11 +349,7 @@ export function authorityProfileFor(
       liveBundleProbe: storageMutation,
     };
   }
-  if (
-    tool === 'cdp_auto_login' ||
-    tool === 'cdp_lock_e2e_test' ||
-    tool === 'cdp_run_e2e_suite'
-  ) {
+  if (tool === 'cdp_auto_login' || tool === 'cdp_lock_e2e_test' || tool === 'cdp_run_e2e_suite') {
     const profile = profiles.get(tool)!;
     return {
       ...profile,

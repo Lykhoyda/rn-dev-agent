@@ -298,10 +298,7 @@ export function createRecordTestGenerateHandler(): (args: GenerateArgs) => Promi
           ? generateMaestro(storedEvents, opts)
           : generateDetox(storedEvents, opts);
     } catch (err) {
-      return failResult(
-        err instanceof Error ? err.message : String(err),
-        'BAD_RECORDING',
-      );
+      return failResult(err instanceof Error ? err.message : String(err), 'BAD_RECORDING');
     }
     return okResult({
       format: args.format,

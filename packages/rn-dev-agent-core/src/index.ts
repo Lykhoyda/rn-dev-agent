@@ -13,7 +13,7 @@ import {
   type AuthoritativeSessionPolicy,
   type AwaitWithinBoundary,
 } from './cdp-client.js';
-import { okResult, failResult, warnResult, withConnection } from './utils.js';
+import { okResult, failResult, withConnection } from './utils.js';
 import { annotateMutationAbsence } from './verification/mutation-absence.js';
 import { loadVerificationConfig, getCachedProjectRoot } from './verification/config.js';
 import { logger } from './logger.js';
@@ -3849,9 +3849,7 @@ trackedTool(
   'cdp_repair_action',
   'Repair a learned action using a fresh snapshot from the exact authority-bound device and capability-bound native runner.',
   {
-    actionId: z
-      .string()
-      .describe('Owned action id; resolves one .yaml or .yml file.'),
+    actionId: z.string().describe('Owned action id; resolves one .yaml or .yml file.'),
     failedSelector: z
       .string()
       .describe(
@@ -3900,9 +3898,7 @@ trackedTool(
   'cdp_run_action',
   "Replay a learned action by id with end-to-end auto-repair. Loads the action from .rn-agent/actions/<actionId>.yaml or .yml, forwards the matching active session's exact device ID to Maestro, rejects mismatched direct runner/WDA evidence, and on a SELECTOR_NOT_FOUND failure automatically invokes cdp_repair_action and retries once. Appends a RunRecord to the sidecar with full auto-repair telemetry (passed/failed/refused/skipped + diff); its Maestro deviceId comes from direct runner evidence, never requested metadata. The repair attempt counts toward cdp_repair_action's 24h budget. Pass autoRepair=false to opt out of auto-repair (returns the raw maestro_run failure verbatim). forceReload defaults true: any human edit to the YAML since the agent's last write is acknowledged as the new baseline so downstream repair does not abort with STALE_TARGET (the right default for active composition). Pass forceReload=false for the strict \"respect offline human edits\" behavior: a successful replay still appends its RunRecord to the sidecar when only the tracked YAML mtime baseline is stale, while YAML-mutating promotion and repair stay refused. proofReplay=true is reserved for proof_capture rehearsal and requires autoRepair=false plus forceReload=false; it executes without RunRecord, promotion, YAML, sidecar, or DB persistence. The orchestrated home for the L3 self-healing loop — prefer this over invoking maestro_run + cdp_repair_action manually for any flow you intend to re-run on schedule. blindProbeMode provides per-call control of the proactive CDP/JS compatibility path: inherit (default) honors RN_BLIND_PROBE, allow explicitly enables it for this call, and forbid forces maestro-first for this call.",
   {
-    actionId: z
-      .string()
-      .describe('Owned action id; resolves one .yaml or .yml file.'),
+    actionId: z.string().describe('Owned action id; resolves one .yaml or .yml file.'),
     projectRoot: z.string().optional().describe('Override project root (default: process.cwd()).'),
     platform: z
       .enum(['ios', 'android'])

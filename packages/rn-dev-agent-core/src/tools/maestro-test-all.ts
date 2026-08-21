@@ -339,10 +339,7 @@ export function createMaestroTestAllHandler(
                   ]),
                   'utf-8',
                 );
-                const executeRunner = (
-                  runnerPath: string,
-                  prefixArgs: readonly string[] = [],
-                ) => {
+                const executeRunner = (runnerPath: string, prefixArgs: readonly string[] = []) => {
                   const remainingTimeout = start + timeout - now();
                   if (remainingTimeout <= 0) {
                     const error = new Error(

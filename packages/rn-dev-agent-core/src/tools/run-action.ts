@@ -510,11 +510,10 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
     try {
       loaded = loadAction(projectRoot, args.actionId);
     } catch (err) {
-      return failResult(
-        err instanceof Error ? err.message : String(err),
-        'BAD_FILENAME',
-        { actionId: args.actionId, fallback: 'none' },
-      );
+      return failResult(err instanceof Error ? err.message : String(err), 'BAD_FILENAME', {
+        actionId: args.actionId,
+        fallback: 'none',
+      });
     }
     if (!loaded) {
       return failResult(

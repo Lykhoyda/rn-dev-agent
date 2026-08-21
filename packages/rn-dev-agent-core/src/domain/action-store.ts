@@ -6,15 +6,7 @@
 // they all read/write through this single chokepoint so schema
 // invariants stay enforced.
 
-import {
-  existsSync,
-  lstatSync,
-  readFileSync,
-  realpathSync,
-  statSync,
-  unlinkSync,
-  writeFileSync,
-} from 'node:fs';
+import { existsSync, lstatSync, readFileSync, realpathSync, statSync, unlinkSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import {
   type ReusableAction,
@@ -248,13 +240,7 @@ export function writeRecordedActionTransaction(
           pathIsOwned,
           readFileSync(filePath, 'utf8'),
         )
-      : atomicWriter.pairWriteCreateExclusive(
-          filePath,
-          yamlText,
-          sidecarPath,
-          state,
-          pathIsOwned,
-        );
+      : atomicWriter.pairWriteCreateExclusive(filePath, yamlText, sidecarPath, state, pathIsOwned);
     if (!written) return { ok: false, existingPath: resolveActionPath(projectRoot, actionId) };
     return {
       ok: true,

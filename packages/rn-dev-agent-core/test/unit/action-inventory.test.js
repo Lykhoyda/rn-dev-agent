@@ -74,7 +74,10 @@ test('listActions includes yml actions and omits ambiguous ids', async () => {
     writeAction(root, 'collision');
     writeAction(root, 'collision', '', 'yml');
     const result = await listActions(root);
-    assert.deepEqual(result.map((action) => action.id), ['legacy-action']);
+    assert.deepEqual(
+      result.map((action) => action.id),
+      ['legacy-action'],
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
