@@ -398,7 +398,20 @@ async function detect(resolvers) {
             sha256 = null;
         }
         const expectedSha256 = TRUSTED_DRIFT_SHA256[cacheVersion]?.[platformKey];
-        if (!expectedSha256 || !sha256) {
+        if (!sha256) {
+            return buildReplayEngineStatus('unverified', null, false, {
+                selectedPath: binPath,
+                provenance: 'pin-cache',
+            });
+        }
+        const comparison = compareVersions(cacheVersion, MAESTRO_RUNNER_PIN.version);
+        if (!expectedSha256 && comparison > 0) {
+            return buildReplayEngineStatus('drift-newer', cacheVersion, false, {
+                selectedPath: binPath,
+                provenance: 'pin-cache',
+            });
+        }
+        if (!expectedSha256) {
             return buildReplayEngineStatus('unverified', null, false, {
                 selectedPath: binPath,
                 provenance: 'pin-cache',
@@ -410,7 +423,6 @@ async function detect(resolvers) {
                 provenance: 'pin-cache',
             });
         }
-        const comparison = compareVersions(cacheVersion, MAESTRO_RUNNER_PIN.version);
         const cls = comparison < 0 ? 'drift-older' : comparison > 0 ? 'drift-newer' : 'unknown-version';
         return buildReplayEngineStatus(cls, cacheVersion, false, {
             selectedPath: binPath,

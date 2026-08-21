@@ -4,7 +4,7 @@ import {
   PINNED_RUNNER_INSTALL_HINT,
 } from '../domain/engine-pin.js';
 
-export type MaestroRunner = 'maestro-runner';
+export type MaestroRunner = 'maestro-runner' | 'maestro';
 
 export interface MaestroDispatch {
   runner: MaestroRunner;

@@ -6,6 +6,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -352,6 +353,22 @@ test('maestro_generate refuses invalid action ids before writing', async () => {
   }
   assert.equal(existsSync(join(outputDir, '-login.yaml')), false);
   assert.equal(existsSync(join(outputDir, `${'a'.repeat(65)}.yaml`)), false);
+});
+
+test('maestro_generate refuses unsafe metadata and incomplete steps before writing', async () => {
+  const outputDir = mkdtempSync(join(tmpdir(), 'rn-maestro-generate-shape-'));
+  for (const args of [
+    { name: 'unsafe\u0085intent', steps: [{ action: 'tap', testID: 'continue' }] },
+    { name: 'missing tap target', steps: [{ action: 'tap' }] },
+    { name: 'missing fill input', steps: [{ action: 'fill', testID: 'email' }] },
+    { name: 'missing assertion target', steps: [{ action: 'assert' }] },
+    { name: 'missing navigation url', steps: [{ action: 'navigate' }] },
+    { name: 'invalid wait', steps: [{ action: 'wait', waitMs: 0 }] },
+  ] as const) {
+    const result = await createMaestroGenerateHandler()({ ...args, outputDir });
+    assert.equal(JSON.parse(result.content[0]!.text).ok, false);
+  }
+  assert.deepEqual(readdirSync(outputDir), []);
 });
 
 test('maestro_generate refuses an existing yml action instead of creating a collision', async () => {

@@ -6,6 +6,7 @@ import { findProjectRoot } from '../nav-graph/storage.js';
 import {
   buildMaestroFlow,
   isValidBundleId,
+  isSafeMaestroScalar,
   MaestroValidationError,
 } from '../domain/maestro-validator.js';
 import { ACTION_ENGINE_PIN } from '../domain/engine-pin.js';
@@ -107,6 +108,9 @@ export function createMaestroGenerateHandler(): (args: MaestroGenerateArgs) => P
     if (!args.name || !args.steps?.length) {
       return failResult('Provide a flow name and at least one step.');
     }
+    if (!isSafeMaestroScalar(args.name)) {
+      return failResult('Flow name contains an unsafe control character or is too long.');
+    }
 
     const root = findProjectRoot();
     const outputDir = args.outputDir ?? (root ? join(root, '.rn-agent', 'actions') : null);
@@ -144,10 +148,12 @@ export function createMaestroGenerateHandler(): (args: MaestroGenerateArgs) => P
     }
 
     const commands: unknown[] = [];
-    for (const step of args.steps) {
-      for (const cmd of stepToMaestroCommands(step)) {
-        commands.push(cmd);
+    for (const [index, step] of args.steps.entries()) {
+      const stepCommands = stepToMaestroCommands(step);
+      if (stepCommands.length === 0) {
+        return failResult(`Step ${index + 1} (${step.action}) is missing required input.`);
       }
+      commands.push(...stepCommands);
     }
 
     const compatibilityRefusal = regexSelectorCapabilityRefusal(commands);
@@ -161,7 +167,7 @@ export function createMaestroGenerateHandler(): (args: MaestroGenerateArgs) => P
         ...parts,
         headerLines: serializeM7Header({
           id: sanitizedName,
-          intent: args.name.replace(/[\r\n]+/g, ' '),
+          intent: args.name,
           status: 'experimental',
           enginePin: ACTION_ENGINE_PIN,
         }).split('\n'),

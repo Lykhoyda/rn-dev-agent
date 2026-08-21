@@ -27468,7 +27468,20 @@ async function detect(resolvers) {
       sha2563 = null;
     }
     const expectedSha2562 = TRUSTED_DRIFT_SHA256[cacheVersion]?.[platformKey];
-    if (!expectedSha2562 || !sha2563) {
+    if (!sha2563) {
+      return buildReplayEngineStatus("unverified", null, false, {
+        selectedPath: binPath,
+        provenance: "pin-cache"
+      });
+    }
+    const comparison = compareVersions(cacheVersion, MAESTRO_RUNNER_PIN.version);
+    if (!expectedSha2562 && comparison > 0) {
+      return buildReplayEngineStatus("drift-newer", cacheVersion, false, {
+        selectedPath: binPath,
+        provenance: "pin-cache"
+      });
+    }
+    if (!expectedSha2562) {
       return buildReplayEngineStatus("unverified", null, false, {
         selectedPath: binPath,
         provenance: "pin-cache"
@@ -27480,7 +27493,6 @@ async function detect(resolvers) {
         provenance: "pin-cache"
       });
     }
-    const comparison = compareVersions(cacheVersion, MAESTRO_RUNNER_PIN.version);
     const cls2 = comparison < 0 ? "drift-older" : comparison > 0 ? "drift-newer" : "unknown-version";
     return buildReplayEngineStatus(cls2, cacheVersion, false, {
       selectedPath: binPath,
@@ -85798,6 +85810,9 @@ function createMaestroGenerateHandler() {
     if (!args.name || !args.steps?.length) {
       return failResult("Provide a flow name and at least one step.");
     }
+    if (!isSafeMaestroScalar(args.name)) {
+      return failResult("Flow name contains an unsafe control character or is too long.");
+    }
     const root = findProjectRoot();
     const outputDir = args.outputDir ?? (root ? join48(root, ".rn-agent", "actions") : null);
     if (!outputDir) {
@@ -85824,10 +85839,12 @@ function createMaestroGenerateHandler() {
       return failResult(`Invalid appId '${String(args.appId).slice(0, 80)}' (Phase 134.1)`);
     }
     const commands = [];
-    for (const step of args.steps) {
-      for (const cmd of stepToMaestroCommands(step)) {
-        commands.push(cmd);
+    for (const [index, step] of args.steps.entries()) {
+      const stepCommands = stepToMaestroCommands(step);
+      if (stepCommands.length === 0) {
+        return failResult(`Step ${index + 1} (${step.action}) is missing required input.`);
       }
+      commands.push(...stepCommands);
     }
     const compatibilityRefusal = regexSelectorCapabilityRefusal(commands);
     if (compatibilityRefusal)
@@ -85840,7 +85857,7 @@ function createMaestroGenerateHandler() {
         ...parts,
         headerLines: serializeM7Header({
           id: sanitizedName,
-          intent: args.name.replace(/[\r\n]+/g, " "),
+          intent: args.name,
           status: "experimental",
           enginePin: ACTION_ENGINE_PIN
         }).split("\n")

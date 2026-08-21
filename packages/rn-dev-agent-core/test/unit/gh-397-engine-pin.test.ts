@@ -9,6 +9,7 @@ import {
   classifyEnginePin,
   compareVersions,
   buildReplayEngineStatus,
+  doctorPinnedRunner,
   enginePinCaveat,
   getEngineStatus,
   strictPinRefusal,
@@ -161,13 +162,13 @@ test('gh-397: version drift is diagnosed only after checksum verification', asyn
   _resetEngineStatusForTest();
 });
 
-test('gh-397: untrusted versioned cache entries are not reported as drift', async () => {
+test('gh-397: newer cache drift is reported without executing its binary', async () => {
   _resetEngineStatusForTest();
   const previousCache = process.env.RN_DEV_AGENT_RUNNER_CACHE;
   try {
-    for (const [version, expected] of [
-      ['1.0.9', 'checksum-mismatch'],
-      ['1.2.0', 'unverified'],
+    for (const [version, expected, expectedVersion] of [
+      ['1.0.9', 'checksum-mismatch', null],
+      ['1.2.0', 'drift-newer', '1.2.0'],
     ] as const) {
       const cache = mkdtempSync(join(tmpdir(), 'rn-versioned-runner-cache-'));
       const binDir = join(cache, 'maestro-runner', version, 'bin');
@@ -181,9 +182,12 @@ test('gh-397: untrusted versioned cache entries are not reported as drift', asyn
       process.env.RN_DEV_AGENT_RUNNER_CACHE = cache;
 
       const status = await getEngineStatus();
+      const doctor = doctorPinnedRunner(status);
 
       assert.equal(status.pin.status, expected);
-      assert.equal(status.version, null);
+      assert.equal(doctor.status, expected);
+      assert.equal(status.version, expectedVersion);
+      assert.equal(doctor.installedVersion, expectedVersion);
       assert.equal(status.selectedPath, join(binDir, 'maestro-runner'));
       assert.throws(() => readFileSync(marker));
     }

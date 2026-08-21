@@ -58,7 +58,7 @@ const PRE_O_REMEDY =
   'paths that fall back to maestro (dev-client picker, system dialogs, device_fill correction), ' +
   'which hit this same limit.';
 
-export type ReplayEngineTier = 'maestro-runner';
+export type ReplayEngineTier = 'maestro-runner' | 'maestro' | 'maestro-cli';
 
 function engineLabel(_runner: ReplayEngineTier): string {
   return `the pinned maestro-runner ${MAESTRO_RUNNER_PIN.version}`;
@@ -144,7 +144,7 @@ export function classifyEnginePin(
 export type RunnerProvenance = 'pin-cache' | 'none';
 
 export interface ReplayEngineStatus {
-  engine: 'maestro-runner' | 'none';
+  engine: 'maestro-runner' | 'maestro-cli' | 'none';
   version: string | null;
   pin: { pinned: string; status: EnginePinClassification };
   quirks: string[];
@@ -508,7 +508,20 @@ async function detect(resolvers: EngineStatusResolvers): Promise<ReplayEngineSta
         Record<string, Readonly<Partial<Record<string, string>>>>
       >
     )[cacheVersion]?.[platformKey];
-    if (!expectedSha256 || !sha256) {
+    if (!sha256) {
+      return buildReplayEngineStatus('unverified', null, false, {
+        selectedPath: binPath,
+        provenance: 'pin-cache',
+      });
+    }
+    const comparison = compareVersions(cacheVersion, MAESTRO_RUNNER_PIN.version);
+    if (!expectedSha256 && comparison > 0) {
+      return buildReplayEngineStatus('drift-newer', cacheVersion, false, {
+        selectedPath: binPath,
+        provenance: 'pin-cache',
+      });
+    }
+    if (!expectedSha256) {
       return buildReplayEngineStatus('unverified', null, false, {
         selectedPath: binPath,
         provenance: 'pin-cache',
@@ -520,7 +533,6 @@ async function detect(resolvers: EngineStatusResolvers): Promise<ReplayEngineSta
         provenance: 'pin-cache',
       });
     }
-    const comparison = compareVersions(cacheVersion, MAESTRO_RUNNER_PIN.version);
     const cls =
       comparison < 0 ? 'drift-older' : comparison > 0 ? 'drift-newer' : 'unknown-version';
     return buildReplayEngineStatus(cls, cacheVersion, false, {

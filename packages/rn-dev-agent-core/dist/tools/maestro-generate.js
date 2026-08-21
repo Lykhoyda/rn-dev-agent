@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { okResult, failResult } from '../utils.js';
 import { findProjectRoot } from '../nav-graph/storage.js';
-import { buildMaestroFlow, isValidBundleId, MaestroValidationError, } from '../domain/maestro-validator.js';
+import { buildMaestroFlow, isValidBundleId, isSafeMaestroScalar, MaestroValidationError, } from '../domain/maestro-validator.js';
 import { ACTION_ENGINE_PIN } from '../domain/engine-pin.js';
 import { regexSelectorCapabilityRefusal } from '../domain/action-engine-compat.js';
 import { assertOwnedActionCorpus, joinYaml, resolveActionPath, splitYaml, } from '../domain/action-store.js';
@@ -74,6 +74,9 @@ export function createMaestroGenerateHandler() {
         if (!args.name || !args.steps?.length) {
             return failResult('Provide a flow name and at least one step.');
         }
+        if (!isSafeMaestroScalar(args.name)) {
+            return failResult('Flow name contains an unsafe control character or is too long.');
+        }
         const root = findProjectRoot();
         const outputDir = args.outputDir ?? (root ? join(root, '.rn-agent', 'actions') : null);
         if (!outputDir) {
@@ -105,10 +108,12 @@ export function createMaestroGenerateHandler() {
             return failResult(`Invalid appId '${String(args.appId).slice(0, 80)}' (Phase 134.1)`);
         }
         const commands = [];
-        for (const step of args.steps) {
-            for (const cmd of stepToMaestroCommands(step)) {
-                commands.push(cmd);
+        for (const [index, step] of args.steps.entries()) {
+            const stepCommands = stepToMaestroCommands(step);
+            if (stepCommands.length === 0) {
+                return failResult(`Step ${index + 1} (${step.action}) is missing required input.`);
             }
+            commands.push(...stepCommands);
         }
         const compatibilityRefusal = regexSelectorCapabilityRefusal(commands);
         if (compatibilityRefusal)
@@ -121,7 +126,7 @@ export function createMaestroGenerateHandler() {
                 ...parts,
                 headerLines: serializeM7Header({
                     id: sanitizedName,
-                    intent: args.name.replace(/[\r\n]+/g, ' '),
+                    intent: args.name,
                     status: 'experimental',
                     enginePin: ACTION_ENGINE_PIN,
                 }).split('\n'),
