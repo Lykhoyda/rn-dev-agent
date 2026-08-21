@@ -32652,6 +32652,22 @@ function missingLoginPrologueOutcome() {
     }
   };
 }
+function persistLoginPrologueOutcome(runtime, registry2, operation, status, outcome) {
+  const priorOutcome = readLoginPrologueOutcome(status.bindings.loginPrologue);
+  const nextOperation = registry2.replaceBindingsDuringOperation(operation, {
+    bindings: {
+      loginPrologue: {
+        ...outcome,
+        ...priorOutcome?.overrides ? { overrides: priorOutcome.overrides } : {}
+      }
+    }
+  });
+  const nextStatus = runtime.status();
+  if (!nextStatus.available) {
+    throw new SessionAuthorityError(nextStatus.code, nextStatus.reason);
+  }
+  return { operation: nextOperation, status: nextStatus };
+}
 function isActionReplayTool(tool) {
   return tool === "cdp_run_action" || tool === "cdp_login_prologue";
 }
@@ -33548,6 +33564,11 @@ function createAuthorityGate(runtime, dependencies) {
             loginPrologueOutcome = missingLoginPrologueOutcome();
             result = failResult("Login prologue returned no valid terminal state.", "LOGIN_PROLOGUE_BLOCKED", { loginPrologue: loginPrologueOutcome });
           }
+          if (loginPrologueOutcome.state === LOGIN_PROLOGUE_BLOCKED) {
+            const persisted = persistLoginPrologueOutcome(runtime, registry2, operation, status, loginPrologueOutcome);
+            operation = persisted.operation;
+            status = persisted.status;
+          }
         }
         let runtimeTargetChanged = false;
         const postHandlerRecovery = await reconcileRecoverableRuntime(runtime, dependencies, registry2, operation, status, profile, resultSucceeded(result));
@@ -33668,21 +33689,10 @@ function createAuthorityGate(runtime, dependencies) {
           axes: [...runnerAwareReceiptProfile.axes, "M", "A"]
         } : runnerAwareReceiptProfile;
         const controllerGenerationAdvanced = operation.authorityVersion !== initialOperationAuthorityVersion;
-        if (loginPrologueOutcome) {
-          const priorOutcome = readLoginPrologueOutcome(status.bindings.loginPrologue);
-          operation = registry2.replaceBindingsDuringOperation(operation, {
-            bindings: {
-              loginPrologue: {
-                ...loginPrologueOutcome,
-                ...priorOutcome?.overrides ? { overrides: priorOutcome.overrides } : {}
-              }
-            }
-          });
-          const loginStatus = runtime.status();
-          if (!loginStatus.available) {
-            throw new SessionAuthorityError(loginStatus.code, loginStatus.reason);
-          }
-          status = loginStatus;
+        if (loginPrologueOutcome?.state === "passed") {
+          const persisted = persistLoginPrologueOutcome(runtime, registry2, operation, status, loginPrologueOutcome);
+          operation = persisted.operation;
+          status = persisted.status;
         }
         registry2.verifyOperation(operation);
         for (const observation of allBefore) {
@@ -35098,6 +35108,7 @@ var init_device_arbiter = __esm({
     FLOW_TOOLS = /* @__PURE__ */ new Set([
       "maestro_run",
       "maestro_test_all",
+      "cdp_login_prologue",
       "cdp_run_action",
       "cdp_auto_login",
       "cdp_reload",
@@ -78988,15 +78999,15 @@ function createLoginPrologueHandler(deps) {
         return blocked("LOGIN_ACTION_MISSING", `No exact ${LOGIN_PROLOGUE_ALIAS} learned action was found. Auth-tag or intent inference is not permitted.`);
       }
       const priorRunIds = new Set(action.state.runHistory.map((record2) => record2.runId).filter((runId) => typeof runId === "string"));
-      const replayArgs = {
-        ...args,
+      const replayArgs = Object.create(Object.getPrototypeOf(args), Object.getOwnPropertyDescriptors(args));
+      Object.assign(replayArgs, {
         actionId: LOGIN_PROLOGUE_ALIAS,
         autoRepair: false,
         forceReload: false,
         proofReplay: false,
         blindProbeMode: "forbid",
         trigger: args.trigger ?? "agent"
-      };
+      });
       let replayResult;
       try {
         replayResult = await measure("replay", () => deps.runAction(replayArgs));

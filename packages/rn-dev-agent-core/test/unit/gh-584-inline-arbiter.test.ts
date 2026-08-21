@@ -24,6 +24,45 @@ test('inline-capable tools receive lazy parking authority without static flow cl
   }
 });
 
+test('login prologue owns the flow plane for its entire replay', async () => {
+  const arbiter = new DeviceSessionArbiter(() => 20_000);
+  const noForeign = {
+    gate: { check: async () => ({ active: false, warning: null, scanMs: 0 }) },
+    getUdid: () => null,
+  };
+  let releaseReplay!: () => void;
+  const replayBlocked = new Promise<void>((resolve) => {
+    releaseReplay = resolve;
+  });
+  let replayStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    replayStarted = resolve;
+  });
+  const prologue = arbiterWrap(
+    'cdp_login_prologue',
+    async () => {
+      replayStarted();
+      await replayBlocked;
+      return { content: [{ type: 'text', text: '{"ok":true}' }] };
+    },
+    arbiter,
+    noForeign,
+  );
+  const running = prologue({});
+  await started;
+
+  const contender = arbiterWrap(
+    'device_press',
+    async () => ({ content: [{ type: 'text', text: '{"ok":true}' }] }),
+    arbiter,
+    noForeign,
+  );
+  assert.equal(body(await contender({})).code, 'BUSY_FLOW_ACTIVE');
+
+  releaseReplay();
+  assert.equal(body(await running).ok, true);
+});
+
 test('foreign automation refusal reuses the public sanitizer', async () => {
   const arbiter = new DeviceSessionArbiter(() => 20_000);
   const raw =

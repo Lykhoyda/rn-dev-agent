@@ -2666,6 +2666,35 @@ test('a failed login prologue becomes a durable terminal mutation gate', async (
   assert.equal(readDispatched, true);
 });
 
+test('a failed login prologue persists before fallible postflight checks', async () => {
+  const { runtime, status } = fixture();
+  const blocked = loginOutcome('LOGIN_PROLOGUE_BLOCKED', {
+    code: 'RECONNECT_TIMEOUT',
+    detail: 'timeout',
+  });
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis, phase }) => {
+      if (phase === 'postflight') {
+        assert.equal(status.bindings.loginPrologue.state, 'LOGIN_PROLOGUE_BLOCKED');
+        throw new SessionAuthorityError(
+          'AUTHORITY_LOST_DURING_OPERATION',
+          'postflight authority changed',
+        );
+      }
+      return { axis, identity: `${axis}-identity` };
+    },
+  });
+
+  const result = await gate.wrap('cdp_login_prologue', async () =>
+    failResult('blocked', 'LOGIN_PROLOGUE_BLOCKED', { loginPrologue: blocked }),
+  )({});
+  const envelope = JSON.parse(result.content[0].text);
+
+  assert.equal(envelope.code, 'AUTHORITY_LOST_DURING_OPERATION');
+  assert.equal(status.bindings.loginPrologue.state, 'LOGIN_PROLOGUE_BLOCKED');
+  assert.equal(status.bindings.loginPrologue.failure.code, 'RECONNECT_TIMEOUT');
+});
+
 test('a supervisor token authorizes one blocked mutation and records a redacted audit', async () => {
   const { runtime, status } = fixture();
   status.bindings.loginPrologue = loginOutcome('LOGIN_PROLOGUE_BLOCKED', {

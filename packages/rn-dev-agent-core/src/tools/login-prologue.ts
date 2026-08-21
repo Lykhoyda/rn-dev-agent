@@ -104,15 +104,18 @@ export function createLoginPrologueHandler(deps: LoginPrologueDependencies) {
           .map((record) => record.runId)
           .filter((runId): runId is string => typeof runId === 'string'),
       );
-      const replayArgs: RunActionArgs = {
-        ...args,
+      const replayArgs = Object.create(
+        Object.getPrototypeOf(args),
+        Object.getOwnPropertyDescriptors(args),
+      ) as RunActionArgs;
+      Object.assign(replayArgs, {
         actionId: LOGIN_PROLOGUE_ALIAS,
         autoRepair: false,
         forceReload: false,
         proofReplay: false,
         blindProbeMode: 'forbid',
         trigger: args.trigger ?? 'agent',
-      };
+      });
 
       let replayResult: ToolResult;
       try {

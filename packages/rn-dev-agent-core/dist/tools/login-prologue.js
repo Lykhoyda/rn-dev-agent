@@ -64,15 +64,15 @@ export function createLoginPrologueHandler(deps) {
             const priorRunIds = new Set(action.state.runHistory
                 .map((record) => record.runId)
                 .filter((runId) => typeof runId === 'string'));
-            const replayArgs = {
-                ...args,
+            const replayArgs = Object.create(Object.getPrototypeOf(args), Object.getOwnPropertyDescriptors(args));
+            Object.assign(replayArgs, {
                 actionId: LOGIN_PROLOGUE_ALIAS,
                 autoRepair: false,
                 forceReload: false,
                 proofReplay: false,
                 blindProbeMode: 'forbid',
                 trigger: args.trigger ?? 'agent',
-            };
+            });
             let replayResult;
             try {
                 replayResult = await measure('replay', () => deps.runAction(replayArgs));

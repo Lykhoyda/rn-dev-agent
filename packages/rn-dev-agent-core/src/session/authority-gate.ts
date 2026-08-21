@@ -741,6 +741,29 @@ function missingLoginPrologueOutcome(): LoginPrologueOutcome {
   };
 }
 
+function persistLoginPrologueOutcome(
+  runtime: AuthorityGateRuntime,
+  registry: SessionRegistry,
+  operation: OperationRef,
+  status: SessionStatus,
+  outcome: LoginPrologueOutcome,
+): { operation: OperationRef; status: SessionStatus } {
+  const priorOutcome = readLoginPrologueOutcome(status.bindings.loginPrologue);
+  const nextOperation = registry.replaceBindingsDuringOperation(operation, {
+    bindings: {
+      loginPrologue: {
+        ...outcome,
+        ...(priorOutcome?.overrides ? { overrides: priorOutcome.overrides } : {}),
+      },
+    },
+  });
+  const nextStatus = runtime.status();
+  if (!nextStatus.available) {
+    throw new SessionAuthorityError(nextStatus.code, nextStatus.reason);
+  }
+  return { operation: nextOperation, status: nextStatus };
+}
+
 function isActionReplayTool(tool: string): boolean {
   return tool === 'cdp_run_action' || tool === 'cdp_login_prologue';
 }
@@ -2041,6 +2064,17 @@ export function createAuthorityGate(
                 { loginPrologue: loginPrologueOutcome },
               );
             }
+            if (loginPrologueOutcome.state === LOGIN_PROLOGUE_BLOCKED) {
+              const persisted = persistLoginPrologueOutcome(
+                runtime,
+                registry,
+                operation,
+                status,
+                loginPrologueOutcome,
+              );
+              operation = persisted.operation;
+              status = persisted.status;
+            }
           }
           let runtimeTargetChanged = false;
           const postHandlerRecovery = await reconcileRecoverableRuntime(
@@ -2236,21 +2270,16 @@ export function createAuthorityGate(
           // identity change. An external generation change still fails CAS.
           const controllerGenerationAdvanced =
             operation.authorityVersion !== initialOperationAuthorityVersion;
-          if (loginPrologueOutcome) {
-            const priorOutcome = readLoginPrologueOutcome(status.bindings.loginPrologue);
-            operation = registry.replaceBindingsDuringOperation(operation, {
-              bindings: {
-                loginPrologue: {
-                  ...loginPrologueOutcome,
-                  ...(priorOutcome?.overrides ? { overrides: priorOutcome.overrides } : {}),
-                },
-              },
-            });
-            const loginStatus = runtime.status();
-            if (!loginStatus.available) {
-              throw new SessionAuthorityError(loginStatus.code, loginStatus.reason);
-            }
-            status = loginStatus;
+          if (loginPrologueOutcome?.state === 'passed') {
+            const persisted = persistLoginPrologueOutcome(
+              runtime,
+              registry,
+              operation,
+              status,
+              loginPrologueOutcome,
+            );
+            operation = persisted.operation;
+            status = persisted.status;
           }
           registry.verifyOperation(operation);
           for (const observation of allBefore) {

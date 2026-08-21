@@ -99,6 +99,33 @@ test('login prologue resolves the exact alias and requires a fresh passing RunRe
   );
 });
 
+test('login prologue preserves non-enumerable replay authority', async (t) => {
+  const project = createTmpProject();
+  t.after(() => project.cleanup());
+  seedLoginAction(project);
+  const authority = Symbol('replay-authority');
+  const args = { projectRoot: project.root };
+  Object.defineProperty(args, authority, { value: 'retained' });
+  const handler = createLoginPrologueHandler({
+    now: deterministicClock(),
+    runAction: async (replayArgs) => {
+      assert.equal((replayArgs as Record<symbol, unknown>)[authority], 'retained');
+      appendRunRecordToSidecar(project.root, 'user-login', {
+        runId: 'login-run-authoritative',
+        timestamp: '2026-08-21T10:00:01.000Z',
+        durationMs: 125,
+        status: 'pass',
+        trigger: 'agent',
+      });
+      return okResult({ passed: true, transport: 'maestro' });
+    },
+  });
+
+  const envelope = parse(await handler(args));
+  assert.equal(envelope.ok, true);
+  assert.equal(envelope.data.runRecord.runId, 'login-run-authoritative');
+});
+
 test('login prologue blocks when the exact user-login action is missing', async (t) => {
   const project = createTmpProject();
   t.after(() => project.cleanup());
