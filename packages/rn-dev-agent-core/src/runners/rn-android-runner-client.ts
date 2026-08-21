@@ -1722,7 +1722,7 @@ async function sendCommandOnce(
     resp = await fetchImpl(`http://127.0.0.1:${hostPort}/command`, {
       method: 'POST',
       headers: {
-        'content-type': 'application/json',
+        'content-type': 'application/json; charset=UTF-8',
         authorization: `Bearer ${capability}`,
       },
       body: JSON.stringify(body),
