@@ -114,7 +114,7 @@ afterward — discovery is a one-time cost, replay is the steady state.
 | Stage | Tool / command | What it does |
 |---|---|---|
 | **Discover** (record) | `cdp_record_test_start` → walk the app → `cdp_record_test_stop` | Buffers events to `.rn-agent/recordings/<id>.json` (pre-save) |
-| **Save** | `cdp_record_test_save_as_action` | Promotes a recording into a paired YAML + sidecar at `.rn-agent/actions/` + `.rn-agent/state/`. Auto-writes the M7 metadata header (`id`, `intent`, `tags`, `mutates`, `status`, optional `produces`) |
+| **Save** | `cdp_record_test_save_as_action` | Promotes a recording into a paired YAML + sidecar at `.rn-agent/actions/` + `.rn-agent/state/`. Auto-writes the M7 metadata header (`id`, `intent`, `tags`, `mutates`, `status`, required `enginePin`, optional `produces`) |
 | **List** | `/rn-dev-agent:list-learned-actions [keyword]` | Browse the corpus by intent / tags / appId. Section B of the output shows actions, Section C shows the UI skeleton, Section A surfaces feedback memories |
 | **Run** | `/rn-dev-agent:run-action <id> [-e KEY=VALUE …]` (calls `cdp_run_action`) | Replays with safety pre-flights (mutates flag, appId match, parameter coverage) and auto-repair on `SELECTOR_NOT_FOUND` |
 | **Self-heal** | `cdp_repair_action <id>` | Fuzzy-matches the stale testID against the live snapshot, patches the YAML in place, bumps `revision`, demotes `status` to `experimental` until next clean replay. Bounded: max 3 attempts/24h, refuses on human edits (mtime check) |

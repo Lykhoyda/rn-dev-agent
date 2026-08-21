@@ -3486,7 +3486,7 @@ trackedTool(
 
 trackedTool(
   'cdp_record_test_generate',
-  'Render the stored recording as replayable test code. Formats: maestro (YAML, primary), detox (JS). Appium returns NOT_IMPLEMENTED — file an issue if you need it. Requires a recording in memory (call start/stop or load first). Pass id/intent/tags/mutates/status to emit the M7 metadata header (D1203) into the YAML so the result is a first-class reusable action.',
+  'Render the stored recording as replayable test code. Formats: maestro (YAML, primary), detox (JS). Appium returns NOT_IMPLEMENTED — file an issue if you need it. Requires a recording in memory (call start/stop or load first). Pass id/intent/tags/mutates/status to emit the M7 metadata header and required engine pin into the YAML so the result is a first-class reusable action.',
   {
     format: z.enum(['maestro', 'detox', 'appium']).describe('Output format'),
     testName: z.string().optional().describe('Name shown in describe()/comment header'),
@@ -3775,7 +3775,7 @@ trackedTool(
 
 trackedTool(
   'cdp_record_test_save_as_action',
-  'Promote the in-memory recording (started via cdp_record_test_start) into a first-class L3 reusable action. Writes Maestro YAML with full M7 metadata header (id, intent, tags, mutates, status, produces) to <project>/.rn-agent/actions/<id>.yaml and initialises the sidecar runtime state. Status defaults to "experimental" — first clean /run-action replay auto-promotes to "active". Refuses if the id already exists unless overwrite=true. Distinct from cdp_record_test_save (which writes JSON to .rn-agent/recordings/) — that is for raw event archival; this is for shipping the recording as a replayable action. The optional `produces` field (D1209) records state postconditions — what state the action establishes when it runs cleanly — so downstream tasks can use it as a deterministic prologue.',
+  'Promote the in-memory recording (started via cdp_record_test_start) into a first-class L3 reusable action. Writes Maestro YAML with full M7 metadata header (id, intent, tags, mutates, status, enginePin, produces) to <project>/.rn-agent/actions/<id>.yaml and initialises the sidecar runtime state. Status defaults to "experimental" — first clean /run-action replay auto-promotes to "active". Refuses if the id already exists unless overwrite=true. Distinct from cdp_record_test_save (which writes JSON to .rn-agent/recordings/) — that is for raw event archival; this is for shipping the recording as a replayable action. The optional `produces` field (D1209) records state postconditions — what state the action establishes when it runs cleanly — so downstream tasks can use it as a deterministic prologue.',
   {
     id: z
       .string()

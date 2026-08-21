@@ -264,7 +264,6 @@ test('exact active UDID is forwarded to maestro-runner before the flow', () => {
     'test',
     '/tmp/flow.yaml',
   ]);
-
 });
 
 test('actual pinned-device log verifies exact runner and WDA identity, not requested metadata', () => {

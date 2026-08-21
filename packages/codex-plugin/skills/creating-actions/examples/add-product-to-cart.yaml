@@ -5,6 +5,7 @@ appId: com.example.shop
 # tags: [cart, add, smoke]
 # mutates: true
 # status: experimental
+# enginePin: maestro-runner@1.1.24
 # params: [PRODUCT_ID]
 # appId: com.example.shop
 # author: human

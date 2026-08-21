@@ -390,8 +390,9 @@ cdp_navigation_state → route should be a main screen (Home, Dashboard, Tabs)
 - **ALWAYS** pass `platform` to `maestro_run`
 - **Skip** the notification `permissions` config if testing notification
   permission flows (preserve undetermined state)
-- If no Maestro subflows found, inform the user and ask them to log in
-  manually or create `.maestro/subflows/login.yaml`
+- If no owned login subflow exists, stop and report that authentication cannot
+  proceed through an authorized reusable flow; do not substitute manual login
+  or create an unverified flow during replay
 
 ---
 
