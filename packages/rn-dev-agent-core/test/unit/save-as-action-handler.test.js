@@ -7,6 +7,9 @@
 
 import { test, beforeEach, afterEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
+import { existsSync, readFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { join } from 'node:path';
 import { createSaveAsActionHandler } from '../../dist/tools/save-as-action.js';
 import {
   _setStoredEvents,
@@ -195,6 +198,52 @@ test('save-as-action: duplicate id without overwrite refuses', async () => {
   assert.match(env.error, /already exists/);
 });
 
+test('save-as-action: action-id transaction observes a concurrent yml creator', async () => {
+  _setStoredEvents(SAMPLE_EVENTS);
+  const id = 'concurrent-id';
+  const yamlPath = join(project.actionsDir, `${id}.yaml`);
+  const ymlPath = join(project.actionsDir, `${id}.yml`);
+  const marker = join(project.root, 'creator-ready');
+  const atomicWriterUrl = new URL('../../dist/domain/atomic-writer.js', import.meta.url).href;
+  const holder = spawn(
+    process.execPath,
+    [
+      '--input-type=module',
+      '-e',
+      `import { writeFileSync } from 'node:fs';
+       import { atomicWriter } from ${JSON.stringify(atomicWriterUrl)};
+       const wait = new Int32Array(new SharedArrayBuffer(4));
+       atomicWriter.withLock(process.argv[1], () => {
+         writeFileSync(process.argv[3], 'ready');
+         Atomics.wait(wait, 0, 0, 200);
+         writeFileSync(process.argv[2], '# id: concurrent-id\\n- launchApp\\n');
+       });`,
+      yamlPath,
+      ymlPath,
+      marker,
+    ],
+    { stdio: 'ignore' },
+  );
+  for (let attempt = 0; attempt < 100 && !existsSync(marker); attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(existsSync(marker), true);
+
+  const result = await createSaveAsActionHandler()({
+    id,
+    intent: 'must not overwrite the concurrent action',
+    bundleId: 'com.test.app',
+    projectRoot: project.root,
+  });
+  if (holder.exitCode === null) {
+    await new Promise((resolve) => holder.once('exit', resolve));
+  }
+
+  assert.equal(result.isError, true);
+  assert.equal(existsSync(yamlPath), false);
+  assert.match(readFileSync(ymlPath, 'utf8'), /concurrent-id/);
+});
+
 test('save-as-action: duplicate id with overwrite=true succeeds and reports overwritten:true', async () => {
   _setStoredEvents(SAMPLE_EVENTS);
   _setRecordingStartRoute('home');
@@ -231,7 +280,7 @@ test('save-as-action: duplicate id with overwrite=true succeeds and reports over
 // (YAML) write fails after the (sidecar) first one succeeded.
 // ─────────────────────────────────────────────────────────────────────────────
 
-test('save-as-action: when YAML write fails after sidecar succeeds, no false-positive external-edit alarm', async () => {
+test('save-as-action: when YAML staging fails, the exclusive create leaves no partial pair', async () => {
   _setStoredEvents(SAMPLE_EVENTS);
   _setRecordingStartRoute('home');
 
@@ -273,23 +322,10 @@ test('save-as-action: when YAML write fails after sidecar succeeds, no false-pos
     'YAML should not be present after partial failure',
   );
 
-  // Sidecar exists (step 1+2 succeeded). Its lastSeenMtimeMs is the
-  // projected future mtime — strictly ≥ Date.now() at the moment of
-  // step 1's `Date.now() + FUTURE_MTIME_BUFFER_MS`. PR #109 review
-  // finding (D): the previous `>= Date.now() - 1_000` bound was too
-  // loose and would have permitted a buggy implementation that wrote
-  // `Date.now() - 500`. Tightened to `> Date.now() - 100` (small slack
-  // covers wall-clock advance during the test, but rules out values in
-  // the pre-test past).
   assert.equal(
     project.sidecarExists('partial-fail'),
-    true,
-    'sidecar should exist with projected mtime',
-  );
-  const sidecar = project.readSidecar('partial-fail');
-  assert.ok(
-    sidecar.lastSeenMtimeMs > Date.now() - 100,
-    `expected projected lastSeenMtimeMs near now or future, got ${sidecar.lastSeenMtimeMs} vs now=${Date.now()}`,
+    false,
+    'sidecar should not be published before exclusive YAML creation',
   );
 
   // Restore writer, reset mocks, simulate recovery: a subsequent call

@@ -7704,7 +7704,7 @@ var init_metro_cwd = __esm({
 // packages/rn-dev-agent-core/dist/session/process-birth.js
 import { execFileSync as execFileSync4 } from "node:child_process";
 import { createHash as createHash2 } from "node:crypto";
-import { closeSync, constants, existsSync as existsSync2, fstatSync, lstatSync as lstatSync2, openSync, readFileSync as readFileSync2, readSync, realpathSync as realpathSync3 } from "node:fs";
+import { closeSync, chmodSync, constants, copyFileSync, existsSync as existsSync2, fstatSync, lstatSync as lstatSync2, openSync, readFileSync as readFileSync2, readSync, realpathSync as realpathSync3, unlinkSync } from "node:fs";
 import { dirname, join as join2 } from "node:path";
 import { fileURLToPath } from "node:url";
 function defaultRun(command, args) {
@@ -7913,13 +7913,13 @@ var init_process_birth = __esm({
     "use strict";
     init_trusted_system_executable();
     DARWIN_HELPER_MANIFEST = {
-      sourceSha256: "99a8025ab1c3cfbe32db184f6e030216d75c535143bd4684a2a89aac61c54c4a",
-      recipeSha256: "4f40539bce137f7bcae4731fd1494fae5704cba5327177d7f2a2a47aec95afb3",
-      stableBinarySha256: "6b5db7f7a6933f3d11d4c53ecafba9c3ef82c2533faf4bfe07a11b3cb4022dea",
-      binarySha256: "fee005927e8d680b1589574211002d8809e3478446b97d3c9291157ea57b0dd5",
+      sourceSha256: "18a850cc31258a012f5bb94e0a8c5c5864dc8c86352824f028b2771f5615df78",
+      recipeSha256: "1d12d850fb2d9245d932284aba182d52de4afb2e50054f2777f723648c27f51b",
+      stableBinarySha256: "e08f05d9be4b43971a22e5999c6778b553c8fb704b1781fc33a03a41e21cad6d",
+      binarySha256: "6531ba7f0ccbfeeb7af63e8592ea3d4e56c70857ed4cd519dd732818cd0eec34",
       cdhashes: [
-        "1e67841d4d49a5e5088d283e26430130f017b989",
-        "7f25b0eca55913e522781923a16c6b0cd98bb4fc"
+        "e8b3050e32ea7a65dc6c93507c1f80687253f536",
+        "7b6c3b56dd4fc5cb79ea90079ca699426709b432"
       ]
     };
     VERIFIED_HELPER_SCRIPT = `
@@ -8090,7 +8090,7 @@ var init_metro_binding = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/authority-store.js
-import { chmodSync, lstatSync as lstatSync3, mkdirSync as mkdirSync3, statSync as statSync3 } from "node:fs";
+import { chmodSync as chmodSync2, lstatSync as lstatSync3, mkdirSync as mkdirSync3, statSync as statSync3 } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname as dirname4 } from "node:path";
 function loadAuthoritySqlite() {
@@ -8111,7 +8111,7 @@ function assertPrivateDirectory(path) {
   if (typeof process.getuid === "function" && stat.uid !== process.getuid()) {
     throw new Error("authority state root is not owned by the current user");
   }
-  chmodSync(path, 448);
+  chmodSync2(path, 448);
 }
 function secureDatabaseFiles(path) {
   for (const candidate of [path, `${path}-wal`, `${path}-shm`]) {
@@ -8124,7 +8124,7 @@ function secureDatabaseFiles(path) {
       if (typeof process.getuid === "function" && stat.uid !== process.getuid()) {
         throw new Error("authority database is not owned by the current user");
       }
-      chmodSync(candidate, 384);
+      chmodSync2(candidate, 384);
     } catch (error) {
       const code = error.code;
       if (code !== "ENOENT")
@@ -11346,7 +11346,7 @@ var init_registry = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/util/secure-state-file.js
-import { readFileSync as readFileSync6, writeFileSync, unlinkSync, mkdirSync as mkdirSync4, renameSync, lstatSync as lstatSync5 } from "node:fs";
+import { readFileSync as readFileSync6, writeFileSync, unlinkSync as unlinkSync2, mkdirSync as mkdirSync4, renameSync, lstatSync as lstatSync5 } from "node:fs";
 import { join as join5, dirname as dirname6 } from "node:path";
 import { homedir } from "node:os";
 function getStateDir() {
@@ -15667,7 +15667,7 @@ function resolveSourceIdentity(inputRoot, dependencies = {}) {
 // packages/rn-dev-agent-core/dist/session/state-root.js
 init_secure_state_file();
 import { randomBytes as randomBytes3, randomUUID } from "node:crypto";
-import { chmodSync as chmodSync2, linkSync, lstatSync as lstatSync6, mkdirSync as mkdirSync5, readFileSync as readFileSync7, renameSync as renameSync2, rmSync as rmSync3, statSync as statSync4, writeFileSync as writeFileSync2 } from "node:fs";
+import { chmodSync as chmodSync3, linkSync, lstatSync as lstatSync6, mkdirSync as mkdirSync5, readFileSync as readFileSync7, renameSync as renameSync2, rmSync as rmSync3, statSync as statSync4, writeFileSync as writeFileSync2 } from "node:fs";
 import { join as join6, resolve as resolve5 } from "node:path";
 function fail(code, detail) {
   throw new Error(`${code}: ${detail}`);
@@ -15680,7 +15680,7 @@ function ensurePrivateDirectory(path) {
     if (link.isSymbolicLink() || !link.isDirectory() || typeof process.getuid === "function" && stat.uid !== process.getuid()) {
       fail("AUTHORITY_STATE_ROOT_UNSAFE", "state directory is not private and user-owned");
     }
-    chmodSync2(path, 448);
+    chmodSync3(path, 448);
   } catch (error) {
     if (error instanceof Error && error.message.startsWith("AUTHORITY_STATE_ROOT_UNSAFE")) {
       throw error;
@@ -15765,7 +15765,7 @@ function getBoundDirectoryJournalKey(layout = createAuthorityStateLayout()) {
     if (link.isSymbolicLink() || !link.isFile() || key.length !== 32 || typeof process.getuid === "function" && stat.uid !== process.getuid()) {
       fail("AUTHORITY_STATE_ROOT_UNSAFE", "bound-directory journal key is invalid");
     }
-    chmodSync2(path, 384);
+    chmodSync3(path, 384);
     return key.toString("base64url");
   } catch (error) {
     if (error instanceof Error && error.message.startsWith("AUTHORITY_STATE_ROOT_UNSAFE")) {

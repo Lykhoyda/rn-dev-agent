@@ -207,8 +207,7 @@ export function createMaestroTestAllHandler(deps = {}) {
             };
             try {
                 const stageResults = await parkFlow(() => executeMaestroAuthorityStages(parsedCommands, async (commands) => {
-                    const remainingTimeout = start + timeout - now();
-                    if (remainingTimeout <= 0) {
+                    if (start + timeout - now() <= 0) {
                         const error = new Error('Maestro flow timeout exhausted before the next stage');
                         Object.assign(error, { code: 'ETIMEDOUT' });
                         throw error;
@@ -216,11 +215,19 @@ export function createMaestroTestAllHandler(deps = {}) {
                     writeFileSync(safeFlowFile, buildMaestroFlow(parsedAppId !== undefined ? { appId: parsedAppId } : {}, [
                         ...commands,
                     ]), 'utf-8');
-                    const executeRunner = (runnerPath) => execute(runnerPath, finalArgs, {
-                        timeout: remainingTimeout,
-                        encoding: 'utf8',
-                        maxBuffer: 10 * 1024 * 1024,
-                    });
+                    const executeRunner = (runnerPath) => {
+                        const remainingTimeout = start + timeout - now();
+                        if (remainingTimeout <= 0) {
+                            const error = new Error('Maestro flow timeout exhausted before runner execution');
+                            Object.assign(error, { code: 'ETIMEDOUT' });
+                            throw error;
+                        }
+                        return execute(runnerPath, finalArgs, {
+                            timeout: remainingTimeout,
+                            encoding: 'utf8',
+                            maxBuffer: 10 * 1024 * 1024,
+                        });
+                    };
                     if (deps.execFile) {
                         const immediateStatus = await resolveEngineStatus();
                         const refusal = exactPinRefusal(immediateStatus);

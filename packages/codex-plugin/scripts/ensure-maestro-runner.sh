@@ -355,12 +355,16 @@ reclaim_stale_lock() {
   if [[ "$owner" =~ ^[0-9]+$ ]]; then
     current_birth="$(process_birth_identity "$owner" 2>/dev/null || true)"
   fi
-  if [ -n "$owner_birth" ] && [ "$current_birth" = "$owner_birth" ] && kill -0 "$owner" 2>/dev/null; then
-    :
-  elif [[ "$owner" =~ ^[0-9]+$ ]] && [ -z "$owner_birth" ] && [ -n "$current_birth" ] && [ "$age" -lt "$LOCK_MAX_AGE_SECONDS" ]; then
-    :
-  elif [[ "$owner" =~ ^[0-9]+$ ]]; then
-    if [ -d "$LOCK_FILE" ]; then
+  if [[ "$owner" =~ ^[0-9]+$ ]]; then
+    if kill -0 "$owner" 2>/dev/null; then
+      if [ -z "$current_birth" ] || [ -z "$owner_birth" ] || [ "$current_birth" = "$owner_birth" ]; then
+        :
+      elif [ -d "$LOCK_FILE" ]; then
+        rm -rf "$LOCK_FILE"
+      else
+        rm -f "$LOCK_FILE"
+      fi
+    elif [ -d "$LOCK_FILE" ]; then
       rm -rf "$LOCK_FILE"
     else
       rm -f "$LOCK_FILE"

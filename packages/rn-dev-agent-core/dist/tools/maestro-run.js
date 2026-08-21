@@ -501,14 +501,19 @@ export function createMaestroRunHandler(deps = {}) {
             const stageResults = await parkFlow(() => executeMaestroAuthorityStages(validatedCommands, async (commands) => {
                 writeFileSync(flowFile, buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, [...commands]), 'utf-8');
                 const executeOnce = async (beforeDispatch) => {
-                    const remainingTimeout = flowDeadline - now();
-                    if (remainingTimeout <= 0) {
+                    if (flowDeadline - now() <= 0) {
                         const error = new Error('Maestro flow timeout exhausted before the next stage');
                         Object.assign(error, { code: 'ETIMEDOUT' });
                         throw error;
                     }
                     const executeRunner = (runnerPath) => {
                         beforeDispatch?.();
+                        const remainingTimeout = flowDeadline - now();
+                        if (remainingTimeout <= 0) {
+                            const error = new Error('Maestro flow timeout exhausted before runner execution');
+                            Object.assign(error, { code: 'ETIMEDOUT' });
+                            throw error;
+                        }
                         return execute(runnerPath, finalArgs, {
                             timeout: remainingTimeout,
                             encoding: 'utf8',

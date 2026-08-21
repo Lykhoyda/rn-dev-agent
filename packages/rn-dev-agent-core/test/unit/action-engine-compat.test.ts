@@ -1164,6 +1164,51 @@ test('maestro_test_all revalidates the exact pin before each subprocess', async 
   assert.equal(resolutions, 2);
 });
 
+test('maestro_test_all charges immediate runner attestation to the flow deadline', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-owned-suite-attestation-timeout-'));
+  const dir = join(root, '.rn-agent', 'actions');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, 'browse.yaml'),
+    actionYaml('browse', '# enginePin: maestro-runner@1.1.24'),
+    'utf8',
+  );
+  let clock = 0;
+  let resolutions = 0;
+  let spawned = false;
+  const handler = createMaestroTestAllHandler({
+    getActiveSession: () => ({ platform: 'ios', deviceId: 'SIM', appId: 'com.test.app' }) as never,
+    chooseDispatch: () => ({
+      runner: 'maestro-runner',
+      binPath: '/fake/maestro-runner',
+      buildArgs: () => [],
+    }),
+    resolveEngineStatus: async () => {
+      if (resolutions++ > 0) clock = 2_000;
+      return PINNED();
+    },
+    now: () => clock,
+    parkFlow: async (run) => run(),
+    claimNativeOrigin: async () => {},
+    completeNativeOrigin: async () => {},
+    relaunchManagedApp: async () => {},
+    reproveManagedOrigin: async () => {},
+    completeRunnerPark: async () => {},
+    execFile: async () => {
+      spawned = true;
+      return { stdout: '', stderr: '' };
+    },
+  });
+
+  const result = await handler({ platform: 'ios', flowDir: dir, timeoutPerFlow: 1_000 });
+  const envelope = JSON.parse(result.content[0]!.text);
+
+  assert.equal(envelope.ok, true);
+  assert.equal(envelope.data.failed, 1);
+  assert.match(String(envelope.data.results[0].error), /timeout exhausted/);
+  assert.equal(spawned, false);
+});
+
 test('maestro_test_all refuses action extension collisions before execution', async () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-owned-suite-collision-'));
   const dir = join(root, '.rn-agent', 'actions');

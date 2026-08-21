@@ -744,14 +744,21 @@ export function createMaestroRunHandler(
               const executeOnce = async (
                 beforeDispatch?: () => void,
               ): Promise<{ stdout: string; stderr: string }> => {
-                const remainingTimeout = flowDeadline - now();
-                if (remainingTimeout <= 0) {
+                if (flowDeadline - now() <= 0) {
                   const error = new Error('Maestro flow timeout exhausted before the next stage');
                   Object.assign(error, { code: 'ETIMEDOUT' });
                   throw error;
                 }
                 const executeRunner = (runnerPath: string) => {
                   beforeDispatch?.();
+                  const remainingTimeout = flowDeadline - now();
+                  if (remainingTimeout <= 0) {
+                    const error = new Error(
+                      'Maestro flow timeout exhausted before runner execution',
+                    );
+                    Object.assign(error, { code: 'ETIMEDOUT' });
+                    throw error;
+                  }
                   return execute(runnerPath, finalArgs, {
                     timeout: remainingTimeout,
                     encoding: 'utf8',

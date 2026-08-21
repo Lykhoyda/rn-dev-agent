@@ -140,6 +140,30 @@ export function createActionTextExclusive(projectRoot, actionId, yamlText) {
         }
     });
 }
+export function writeRecordedActionTransaction(projectRoot, actionId, yamlText, state, overwrite) {
+    const yamlPath = actionPathFor(projectRoot, actionId);
+    return atomicWriter.withLock(yamlPath, () => {
+        const existingPath = resolveActionPath(projectRoot, actionId);
+        if (existingPath && !overwrite)
+            return { ok: false, existingPath };
+        const filePath = existingPath ?? yamlPath;
+        const sidecarPath = sidecarPathFor(filePath);
+        if (!existingPath && existsSync(sidecarPath))
+            return { ok: false, existingPath: null };
+        const written = existingPath
+            ? atomicWriter.pairWrite(filePath, yamlText, sidecarPath, state)
+            : atomicWriter.pairWriteCreateExclusive(filePath, yamlText, sidecarPath, state);
+        if (!written)
+            return { ok: false, existingPath: resolveActionPath(projectRoot, actionId) };
+        return {
+            ok: true,
+            filePath,
+            sidecarPath,
+            finalMtimeMs: written.finalMtimeMs,
+            preexisted: existingPath !== null,
+        };
+    });
+}
 /**
  * Split a YAML file into (top-section before `---`, header comments
  * sitting above the first non-`#` content, body that follows). The body

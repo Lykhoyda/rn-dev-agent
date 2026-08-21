@@ -1,17 +1,17 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readFileSync, readSync, realpathSync, } from 'node:fs';
+import { closeSync, chmodSync, constants, copyFileSync, existsSync, fstatSync, lstatSync, openSync, readFileSync, readSync, realpathSync, unlinkSync, } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveTrustedSystemExecutable, } from '../util/trusted-system-executable.js';
 const DARWIN_HELPER_MANIFEST = {
-    sourceSha256: '99a8025ab1c3cfbe32db184f6e030216d75c535143bd4684a2a89aac61c54c4a',
-    recipeSha256: '4f40539bce137f7bcae4731fd1494fae5704cba5327177d7f2a2a47aec95afb3',
-    stableBinarySha256: '6b5db7f7a6933f3d11d4c53ecafba9c3ef82c2533faf4bfe07a11b3cb4022dea',
-    binarySha256: 'fee005927e8d680b1589574211002d8809e3478446b97d3c9291157ea57b0dd5',
+    sourceSha256: '18a850cc31258a012f5bb94e0a8c5c5864dc8c86352824f028b2771f5615df78',
+    recipeSha256: '1d12d850fb2d9245d932284aba182d52de4afb2e50054f2777f723648c27f51b',
+    stableBinarySha256: 'e08f05d9be4b43971a22e5999c6778b553c8fb704b1781fc33a03a41e21cad6d',
+    binarySha256: '6531ba7f0ccbfeeb7af63e8592ea3d4e56c70857ed4cd519dd732818cd0eec34',
     cdhashes: [
-        '1e67841d4d49a5e5088d283e26430130f017b989',
-        '7f25b0eca55913e522781923a16c6b0cd98bb4fc',
+        'e8b3050e32ea7a65dc6c93507c1f80687253f536',
+        '7b6c3b56dd4fc5cb79ea90079ca699426709b432',
     ],
 };
 function defaultRun(command, args) {
@@ -179,6 +179,40 @@ function verifyDarwinProcessBirthHelper(dependencies) {
 }
 export async function withVerifiedDarwinProcessBirthHelper(callback) {
     return callback(verifyDarwinProcessBirthHelper({}));
+}
+export function publishFileIfUnchangedDarwin(targetFd, targetPath, candidatePath, expectedPath) {
+    if (process.platform !== 'darwin')
+        return false;
+    const target = fstatSync(targetFd);
+    if (!target.isFile())
+        return false;
+    const helper = verifyDarwinProcessBirthHelper({});
+    const boundPath = `${helper.path}.publish.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}`;
+    copyFileSync(helper.path, boundPath, constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE);
+    chmodSync(boundPath, 0o700);
+    try {
+        const digest = createHash('sha256').update(readFileSync(boundPath)).digest('hex');
+        if (digest !== DARWIN_HELPER_MANIFEST.binarySha256) {
+            throw new Error('Conditional action publication helper changed before execution.');
+        }
+        execFileSync(boundPath, [
+            '--publish-if-unchanged',
+            targetPath,
+            candidatePath,
+            expectedPath,
+            String(target.dev),
+            String(target.ino),
+        ], { stdio: 'ignore', timeout: 2_000 });
+        return true;
+    }
+    catch (error) {
+        if (error.status === 10)
+            return false;
+        throw error;
+    }
+    finally {
+        unlinkSync(boundPath);
+    }
 }
 export function readProcessBirth(pid, dependencies = {}) {
     const probe = probeProcessBirth(pid, dependencies);

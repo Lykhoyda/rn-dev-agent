@@ -53,7 +53,7 @@ import {
 } from 'node:fs';
 import { dirname, basename } from 'node:path';
 import type { ActionRuntimeState } from './reusable-action.js';
-import { probeProcessBirth } from '../session/process-birth.js';
+import { probeProcessBirth, publishFileIfUnchangedDarwin } from '../session/process-birth.js';
 
 // Multi-LLM review of PR #109 findings 1+2: `finalMtimeMs = _stat(yaml)`
 // breaks the safety invariant in two scenarios — (a) slow writes where
@@ -115,6 +115,11 @@ interface ActionWriteLockOwner {
 }
 
 let localLockOwner: ActionWriteLockOwner | null = null;
+const heldWriteLocks = new Set<string>();
+
+function actionWriteLockPath(yamlPath: string): string {
+  return `${yamlPath.replace(/\.yml$/i, '.yaml')}.write.lock`;
+}
 
 function currentLockOwner(): ActionWriteLockOwner {
   if (localLockOwner) return localLockOwner;
@@ -151,7 +156,8 @@ function withPairWriteLock<T>(
 ): T {
   if (acquisitionPrecondition && !acquisitionPrecondition()) throw ACTION_WRITE_PRECONDITION;
   ensureDir(yamlPath);
-  const lockPath = `${yamlPath}.write.lock`;
+  const lockPath = actionWriteLockPath(yamlPath);
+  if (heldWriteLocks.has(lockPath)) return operation();
   const ownerPath = `${dirname(dirname(dirname(yamlPath)))}/.rn-action-write-owner.${generateTmpStamp()}`;
   const owner = currentLockOwner();
   const lockFd = openSync(ownerPath, 'wx', 0o600);
@@ -197,7 +203,12 @@ function withPairWriteLock<T>(
     }
     unlinkSync(ownerPath);
     identity = fstatSync(lockFd);
-    return operation();
+    heldWriteLocks.add(lockPath);
+    try {
+      return operation();
+    } finally {
+      heldWriteLocks.delete(lockPath);
+    }
   } finally {
     if (identity) {
       try {
@@ -237,6 +248,7 @@ function pairWriteImpl(
   publicationPrecondition?: () => boolean,
   yamlPublicationPrecondition?: () => boolean,
   expectedYamlContent?: string,
+  createExclusive = false,
 ): PairWriteResult | null {
   if (publicationPrecondition && !publicationPrecondition()) return null;
   ensureDir(yamlPath);
@@ -273,8 +285,9 @@ function pairWriteImpl(
   const priorSidecar = priorSidecarExisted ? readFileSync(sidecarPath, 'utf8') : null;
   atomicWriter._rename(sidecarTmp, sidecarPath);
 
-  const yamlPublished =
-    expectedYamlContent === undefined
+  const yamlPublished = createExclusive
+    ? atomicWriter._linkIfAbsent(yamlTmp, yamlPath)
+    : expectedYamlContent === undefined
       ? !yamlPublicationPrecondition || yamlPublicationPrecondition()
       : atomicWriter._publishIfUnchanged(
           yamlTmp,
@@ -301,7 +314,8 @@ function pairWriteImpl(
     atomicWriter._unlink(yamlTmp);
     return null;
   }
-  if (expectedYamlContent === undefined) atomicWriter._rename(yamlTmp, yamlPath);
+  if (createExclusive) atomicWriter._unlink(yamlTmp);
+  else if (expectedYamlContent === undefined) atomicWriter._rename(yamlTmp, yamlPath);
 
   // Step 5 (mandatory after PR #109 review): resync sidecar to the
   // ACTUAL YAML mtime, but never let the recorded value regress below
@@ -412,11 +426,21 @@ export const atomicWriter = {
     return readdirSync(path);
   },
 
+  _linkIfAbsent(candidatePath: string, targetPath: string): boolean {
+    try {
+      linkSync(candidatePath, targetPath);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false;
+      throw error;
+    }
+  },
+
   _publishIfUnchanged(
     candidatePath: string,
     targetPath: string,
     expectedContent: string,
-    _stamp: string,
+    stamp: string,
     publicationPrecondition?: () => boolean,
   ): boolean {
     let targetFd: number;
@@ -438,10 +462,13 @@ export const atomicWriter = {
       ) {
         return false;
       }
-      const finalIdentity = lstatSync(targetPath);
-      if (finalIdentity.dev !== opened.dev || finalIdentity.ino !== opened.ino) return false;
-      atomicWriter._rename(candidatePath, targetPath);
-      return true;
+      const expectedPath = `${candidatePath}.expected.${stamp}`;
+      atomicWriter._writeFile(expectedPath, expectedContent);
+      try {
+        return publishFileIfUnchangedDarwin(targetFd, targetPath, candidatePath, expectedPath);
+      } finally {
+        atomicWriter._unlink(expectedPath);
+      }
     } catch {
       return false;
     } finally {
@@ -469,6 +496,27 @@ export const atomicWriter = {
       const result = pairWriteImpl(yamlPath, yamlContent, sidecarPath, state);
       if (!result) throw new Error(`Unconditional pair write refused for ${yamlPath}.`);
       return result;
+    });
+  },
+
+  pairWriteCreateExclusive(
+    yamlPath: string,
+    yamlContent: string,
+    sidecarPath: string,
+    state: ActionRuntimeState,
+  ): PairWriteResult | null {
+    return withPairWriteLock(yamlPath, () => {
+      cleanupOrphans(yamlPath, sidecarPath);
+      return pairWriteImpl(
+        yamlPath,
+        yamlContent,
+        sidecarPath,
+        state,
+        undefined,
+        undefined,
+        undefined,
+        true,
+      );
     });
   },
 

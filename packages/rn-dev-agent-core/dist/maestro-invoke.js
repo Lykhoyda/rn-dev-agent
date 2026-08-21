@@ -135,13 +135,22 @@ export async function runMaestroInline(yaml, opts, dependencies = {}) {
         runnerReportDir = createRunnerReportDir(dispatch.runner, 'rn-maestro-inline-report');
         const baseArgs = dispatch.buildArgs(opts.platform, flowFile, appFileResolution.appFile, requestedDeviceId);
         const finalArgs = assembleMaestroArgs(baseArgs, runnerReportArgs(runnerReportDir));
+        const executionDeadline = Date.now() + timeout;
         const execute = async () => {
-            const spawn = (runnerPath) => (dependencies.spawnManaged ?? spawnManagedProcessGroup)(runnerPath, finalArgs, {
-                timeoutMs: timeout,
-                platform: opts.platform,
-                deviceId: requestedDeviceId,
-                tool: opts.slug ?? 'inline-maestro',
-            });
+            const spawn = (runnerPath) => {
+                const remainingTimeout = executionDeadline - Date.now();
+                if (remainingTimeout <= 0) {
+                    const error = new Error('Maestro flow timeout exhausted before runner execution');
+                    Object.assign(error, { code: 'ETIMEDOUT' });
+                    throw error;
+                }
+                return (dependencies.spawnManaged ?? spawnManagedProcessGroup)(runnerPath, finalArgs, {
+                    timeoutMs: remainingTimeout,
+                    platform: opts.platform,
+                    deviceId: requestedDeviceId,
+                    tool: opts.slug ?? 'inline-maestro',
+                });
+            };
             if (dependencies.spawnManaged) {
                 const immediateStatus = await resolveEngineStatus();
                 const refusal = exactPinRefusal(immediateStatus);
