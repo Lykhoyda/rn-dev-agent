@@ -107,7 +107,7 @@ test('gh-397: getEngineStatus revalidates across sequential spawn boundaries', a
   assert.equal(s2.version, '1.2.0');
 });
 
-test('gh-397: checksum mismatch is classified before executing --version', async () => {
+test('gh-397: exact-version checksum mismatch preserves the detected version', async () => {
   _resetEngineStatusForTest();
   let execCalls = 0;
   const s = await getEngineStatus({
@@ -120,7 +120,29 @@ test('gh-397: checksum mismatch is classified before executing --version', async
     platformKey: KEY,
   });
   assert.equal(s.pin.status, 'checksum-mismatch');
-  assert.equal(execCalls, 0);
+  assert.equal(s.version, '1.1.24');
+  assert.equal(execCalls, 1);
+  _resetEngineStatusForTest();
+});
+
+test('gh-397: version drift is diagnosed before the mismatched binary checksum', async () => {
+  _resetEngineStatusForTest();
+  const older = await getEngineStatus({
+    binPath: () => '/fake/maestro-runner',
+    execVersion: async () => 'maestro-runner 1.0.9',
+    hashFile: () => 'f'.repeat(64),
+    platformKey: KEY,
+  });
+  const newer = await getEngineStatus({
+    binPath: () => '/fake/maestro-runner',
+    execVersion: async () => 'maestro-runner 1.2.0',
+    hashFile: () => 'e'.repeat(64),
+    platformKey: KEY,
+  });
+  assert.equal(older.pin.status, 'drift-older');
+  assert.equal(older.version, '1.0.9');
+  assert.equal(newer.pin.status, 'drift-newer');
+  assert.equal(newer.version, '1.2.0');
   _resetEngineStatusForTest();
 });
 

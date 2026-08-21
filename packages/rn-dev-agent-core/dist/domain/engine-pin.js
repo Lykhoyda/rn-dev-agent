@@ -135,7 +135,7 @@ export function enginePinCaveat(status) {
 // GH #750 (B223-class): drifted runners translate Maestro regex text selectors
 // into literal WDA `CONTAINS[c]` predicates that can never match. Only
 // regex-shaped selectors change semantics; plain literals behave identically.
-const REGEX_SHAPED_SELECTOR = /(?:^\^|\$$|\.\*|\.\+|\\[AbBdDsSwWzZ]|\[[^\]]*\]|\(\?(?:[:=!<]|<[=!])|\([^)]*\)|\||\{\d+(?:,\d*)?\}|(?:^|[^\\])[+*?])/;
+const REGEX_SHAPED_SELECTOR = /(?:^\^|\$$|\.\*|\.\+|\\[AbBdDsSwWzZ]|\[[^\]]*\]|\(\?(?:[:=!<]|<[=!])|\||\{\d+(?:,\d*)?\}|(?:^|[^\\])[+*?])/;
 const TEXT_SELECTOR_KEYS = new Set([
     'tapOn',
     'doubleTapOn',
@@ -268,13 +268,6 @@ async function detect(resolvers) {
     }
     catch {
         sha256 = null;
-    }
-    const expected = MAESTRO_RUNNER_PIN.sha256[platformKey];
-    if (expected && sha256 && sha256 !== expected) {
-        return buildReplayEngineStatus('checksum-mismatch', null, false, {
-            selectedPath: binPath,
-            provenance: 'pin-cache',
-        });
     }
     let version = null;
     try {

@@ -24266,13 +24266,6 @@ async function detect(resolvers) {
   } catch {
     sha2562 = null;
   }
-  const expected = MAESTRO_RUNNER_PIN.sha256[platformKey];
-  if (expected && sha2562 && sha2562 !== expected) {
-    return buildReplayEngineStatus("checksum-mismatch", null, false, {
-      selectedPath: binPath,
-      provenance: "pin-cache"
-    });
-  }
   let version2 = null;
   try {
     const out = await (resolvers.execVersion ?? defaultExecVersion)(binPath);
@@ -24304,7 +24297,7 @@ var init_engine_pin = __esm({
     PRE_O_REMEDY = "Action replay / E2E via the maestro engine is unsupported on this device; the direct device_* interaction tier still works (rn-android-runner supports API 23+), except for the few device_* paths that fall back to maestro (dev-client picker, system dialogs, device_fill correction), which hit this same limit.";
     OLDER_SDK_TOKEN = /INSTALL_FAILED_OLDER_SDK/g;
     INSTALL_REJECT_CONTEXT = /\b(?:adb|install|installing|failure|uiautomator2)\b|\.apk\b/i;
-    REGEX_SHAPED_SELECTOR = /(?:^\^|\$$|\.\*|\.\+|\\[AbBdDsSwWzZ]|\[[^\]]*\]|\(\?(?:[:=!<]|<[=!])|\([^)]*\)|\||\{\d+(?:,\d*)?\}|(?:^|[^\\])[+*?])/;
+    REGEX_SHAPED_SELECTOR = /(?:^\^|\$$|\.\*|\.\+|\\[AbBdDsSwWzZ]|\[[^\]]*\]|\(\?(?:[:=!<]|<[=!])|\||\{\d+(?:,\d*)?\}|(?:^|[^\\])[+*?])/;
     TEXT_SELECTOR_KEYS = /* @__PURE__ */ new Set([
       "tapOn",
       "doubleTapOn",
