@@ -26,8 +26,14 @@ export const MAESTRO_RUNNER_PIN: MaestroRunnerPinManifest = pinManifest;
 
 export const ACTION_ENGINE_PIN = `maestro-runner@${MAESTRO_RUNNER_PIN.version}` as const;
 
+const HOST_PLUGIN_ROOT =
+  '${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}';
+
 export const PINNED_RUNNER_INSTALL_HINT =
-  `bash \${CLAUDE_PLUGIN_ROOT:-<plugin-root>}/scripts/ensure-maestro-runner.sh` as const;
+  `bash ${HOST_PLUGIN_ROOT}/scripts/ensure-maestro-runner.sh` as const;
+
+export const PINNED_RUNNER_DIAGNOSE_HINT =
+  `node ${HOST_PLUGIN_ROOT}/rn-dev-agent-core/dist/maestro-runner-pin.js diagnose` as const;
 
 // GH #741: the pinned engine's bundled appium-uiautomator2-server APK declares
 // minSdk 26, so pre-O devices reject it with INSTALL_FAILED_OLDER_SDK.
@@ -198,11 +204,34 @@ export function enginePinCaveat(status: ReplayEngineStatus): string | null {
   return null;
 }
 
-// GH #750 (B223-class): drifted runners translate Maestro regex text selectors
-// into literal WDA `CONTAINS[c]` predicates that can never match. Only
-// regex-shaped selectors change semantics; plain literals behave identically.
-const REGEX_SHAPED_SELECTOR =
-  /(?:^\^|\$$|\.\*|\.\+|\\[AbBdDsSwWzZ]|\[[^\]]*\]|\(\?(?:[:=!<]|<[=!])|\||\{\d+(?:,\d*)?\}|(?:^|[^\\])[+*?])/;
+// GH #750 (B223-class): maestro-runner text selectors are regex. Any unescaped
+// metacharacter — including the wildcard `.` in forms like `Log.n` — is
+// unsupported here and must be rewritten as id or literal text before replay.
+const REGEX_METACHARACTERS = new Set([
+  '.',
+  '^',
+  '$',
+  '*',
+  '+',
+  '?',
+  '(',
+  ')',
+  '[',
+  ']',
+  '{',
+  '}',
+  '|',
+]);
+
+export function isRegexShapedSelector(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    const ch = value[i]!;
+    if (ch === '\\') return true;
+    if (REGEX_METACHARACTERS.has(ch)) return true;
+  }
+  return false;
+}
+
 const TEXT_SELECTOR_KEYS = new Set([
   'tapOn',
   'doubleTapOn',
@@ -218,7 +247,7 @@ export function findRegexTextSelectors(commands: readonly unknown[]): string[] {
   const found: string[] = [];
   const visit = (value: unknown, underSelectorKey: boolean): void => {
     if (typeof value === 'string') {
-      if (underSelectorKey && REGEX_SHAPED_SELECTOR.test(value)) found.push(value);
+      if (underSelectorKey && isRegexShapedSelector(value)) found.push(value);
       return;
     }
     if (Array.isArray(value)) {

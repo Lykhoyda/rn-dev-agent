@@ -239,18 +239,14 @@ After the fix:
 2. Confirm the fixed state cheaply (`expect_*` / `cdp_store_state`); take a
    screenshot to compare with Step 1 when a visual record is needed
 3. `cdp_component_tree` and `cdp_error_log` -- confirm the RedBox and error are cleared
-4. Re-run the failing user action with Maestro to confirm it works.
+4. Re-run the failing user action through `cdp_run_action` (learned action) or
+   `maestro_run` (YAML flow) to confirm it works. Never invoke PATH
+   `maestro-runner`, maestro-cli, or manual login.
    Substitute placeholders with actual values from Step 0:
-   ```bash
-   cat > /tmp/verify.yaml << EOF
-   appId: <app-bundle-id>
-   ---
-   - tapOn:
-       id: "<element-id>"
-   - assertVisible: "<expected-text>"
-   EOF
+   ```text
    maestro_run(platform="<ios|android>", flowPath="/tmp/verify.yaml")
    ```
+   Write `/tmp/verify.yaml` with id selectors only, then call `maestro_run`.
 
 ## Critical Rules
 

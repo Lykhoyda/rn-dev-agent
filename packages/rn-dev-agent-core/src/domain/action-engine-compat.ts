@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { lstatSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import {
   ACTION_ENGINE_PIN,
@@ -82,18 +82,87 @@ export interface ActionMigrationResult {
   mutated: boolean;
 }
 
+function isOwnedActionFile(name: string): boolean {
+  return name.endsWith('.yaml') || name.endsWith('.yml');
+}
+
+function actionIdFromFile(name: string): string {
+  return name.replace(/\.ya?ml$/, '');
+}
+
+function inheritedActionsCorpusReason(projectRoot: string): string | null {
+  const rnAgentDir = join(projectRoot, '.rn-agent');
+  const actionsDir = join(rnAgentDir, 'actions');
+  try {
+    if (lstatSync(rnAgentDir).isSymbolicLink()) {
+      return (
+        `Refusing to migrate through inherited .rn-agent symlink at ${rnAgentDir}. ` +
+        `Symlink-inherited corpora are never modified.`
+      );
+    }
+  } catch {
+    return null;
+  }
+  try {
+    if (lstatSync(actionsDir).isSymbolicLink()) {
+      return (
+        `Refusing to migrate through inherited .rn-agent/actions symlink at ${actionsDir}. ` +
+        `Symlink-inherited corpora are never modified.`
+      );
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 export function migrateLearnedActions(projectRoot: string): ActionMigrationResult[] {
   const dir = join(projectRoot, '.rn-agent', 'actions');
+  const inherited = inheritedActionsCorpusReason(projectRoot);
+  if (inherited) {
+    return [
+      {
+        id: 'actions',
+        path: dir,
+        status: 'incompatible',
+        reason: inherited,
+        mutated: false,
+      },
+    ];
+  }
   let files: string[] = [];
   try {
-    files = readdirSync(dir).filter((name) => name.endsWith('.yaml'));
+    files = readdirSync(dir).filter(isOwnedActionFile);
   } catch {
     return [];
   }
   const results: ActionMigrationResult[] = [];
   for (const name of files) {
     const path = join(dir, name);
-    const id = name.replace(/\.yaml$/, '');
+    const id = actionIdFromFile(name);
+    try {
+      if (lstatSync(path).isSymbolicLink()) {
+        results.push({
+          id,
+          path,
+          status: 'incompatible',
+          reason:
+            `Refusing to migrate through inherited action symlink at ${path}. ` +
+            `Symlink-inherited corpora are never modified.`,
+          mutated: false,
+        });
+        continue;
+      }
+    } catch (err) {
+      results.push({
+        id,
+        path,
+        status: 'unreadable',
+        reason: err instanceof Error ? err.message : String(err),
+        mutated: false,
+      });
+      continue;
+    }
     let text: string;
     try {
       text = readFileSync(path, 'utf8');

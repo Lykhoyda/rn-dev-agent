@@ -1,6 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -70,6 +77,10 @@ test('regex text selectors are refused before any runner spawn', () => {
   assert.match(msg, /No UI mutation/);
 });
 
+test('wildcard regex text selectors such as Log.n are refused', () => {
+  assert.match(String(regexSelectorCapabilityRefusal([{ tapOn: 'Log.n' }])), /regex/);
+});
+
 test('anchored regex text selectors are refused', () => {
   assert.match(String(regexSelectorCapabilityRefusal([{ tapOn: '^Login$' }])), /regex/);
 });
@@ -93,10 +104,16 @@ test('migrateLearnedActions stamps compatible YAML and leaves regex actions unmu
   const dir = join(root, '.rn-agent', 'actions');
   mkdirSync(dir, { recursive: true });
   const okPath = join(dir, 'ok.yaml');
+  const ymlPath = join(dir, 'ok-yml.yml');
   const badPath = join(dir, 'regex.yaml');
   writeFileSync(
     okPath,
     'appId: com.x\n---\n# id: ok\n# intent: do it\n# status: active\n- tapOn:\n    id: "a"\n',
+    'utf8',
+  );
+  writeFileSync(
+    ymlPath,
+    'appId: com.x\n---\n# id: ok-yml\n# intent: do it\n# status: active\n- tapOn:\n    id: "b"\n',
     'utf8',
   );
   writeFileSync(
@@ -106,13 +123,60 @@ test('migrateLearnedActions stamps compatible YAML and leaves regex actions unmu
   );
   const results = migrateLearnedActions(root);
   const ok = results.find((r) => r.id === 'ok');
+  const yml = results.find((r) => r.id === 'ok-yml');
   const bad = results.find((r) => r.id === 'regex');
   assert.equal(ok?.status, 'migrated');
   assert.equal(ok?.mutated, true);
   assert.match(readFileSync(okPath, 'utf8'), /enginePin: maestro-runner@1\.1\.24/);
+  assert.equal(yml?.status, 'migrated');
+  assert.match(readFileSync(ymlPath, 'utf8'), /enginePin: maestro-runner@1\.1\.24/);
   assert.equal(bad?.status, 'incompatible');
   assert.equal(bad?.mutated, false);
   assert.doesNotMatch(readFileSync(badPath, 'utf8'), /enginePin/);
+});
+
+test('migrateLearnedActions refuses inherited .rn-agent/actions symlinks', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-action-symlink-'));
+  const shared = mkdtempSync(join(tmpdir(), 'rn-action-shared-'));
+  const sharedActions = join(shared, 'actions');
+  mkdirSync(sharedActions, { recursive: true });
+  const sharedPath = join(sharedActions, 'ok.yaml');
+  writeFileSync(
+    sharedPath,
+    'appId: com.x\n---\n# id: ok\n# intent: do it\n# status: active\n- tapOn:\n    id: "a"\n',
+    'utf8',
+  );
+  mkdirSync(join(root, '.rn-agent'));
+  symlinkSync(sharedActions, join(root, '.rn-agent', 'actions'));
+  const results = migrateLearnedActions(root);
+  assert.equal(results.length, 1);
+  assert.equal(results[0]?.status, 'incompatible');
+  assert.equal(results[0]?.mutated, false);
+  assert.match(
+    String(results[0]?.reason),
+    /symlink-inherited|inherited \.rn-agent\/actions symlink/i,
+  );
+  assert.doesNotMatch(readFileSync(sharedPath, 'utf8'), /enginePin/);
+});
+
+test('migrateLearnedActions refuses per-file action symlinks', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-action-file-symlink-'));
+  const shared = mkdtempSync(join(tmpdir(), 'rn-action-file-shared-'));
+  const sharedPath = join(shared, 'shared.yml');
+  writeFileSync(
+    sharedPath,
+    'appId: com.x\n---\n# id: shared\n# intent: do it\n# status: active\n- tapOn:\n    id: "a"\n',
+    'utf8',
+  );
+  const dir = join(root, '.rn-agent', 'actions');
+  mkdirSync(dir, { recursive: true });
+  symlinkSync(sharedPath, join(dir, 'shared.yml'));
+  const results = migrateLearnedActions(root);
+  assert.equal(results.length, 1);
+  assert.equal(results[0]?.status, 'incompatible');
+  assert.equal(results[0]?.mutated, false);
+  assert.match(String(results[0]?.reason), /inherited action symlink/i);
+  assert.doesNotMatch(readFileSync(sharedPath, 'utf8'), /enginePin/);
 });
 
 test('migrateLearnedActions expands contained runFlow files before pinning', () => {

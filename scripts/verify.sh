@@ -2,8 +2,9 @@
 # rn-verify — Headless CI runner for Maestro flows in .rn-agent/actions/
 #
 # Discovers and runs all plugin-managed Maestro flows in .rn-agent/actions/
-# without requiring a Claude Code session. Wraps maestro-runner directly.
-# Pass --flow-dir to point at any other directory (e.g. your own .maestro/flows/).
+# without requiring a Claude Code session. Uses only the exact pin-cache
+# maestro-runner (version + checksum). Never PATH, ~/.maestro-runner, or
+# maestro-cli. Pass --flow-dir to point at any other directory.
 #
 # Usage:
 #   rn-verify                              # Run all flows on auto-detected platform
@@ -17,9 +18,26 @@
 # Exit codes:
 #   0 — all flows passed
 #   1 — one or more flows failed
-#   2 — setup error (no maestro-runner, no flows, no platform)
+#   2 — setup error (pin missing/drifted/checksum, no flows, no platform)
 
 set -euo pipefail
+
+resolve_script_dir() {
+  local source="$1"
+  while [ -L "$source" ]; do
+    local dir
+    dir="$(cd "$(dirname "$source")" && pwd)"
+    source="$(readlink "$source")"
+    case "$source" in
+      /*) ;;
+      *) source="$dir/$source" ;;
+    esac
+  done
+  cd "$(dirname "$source")" && pwd
+}
+
+SCRIPT_DIR="$(resolve_script_dir "${BASH_SOURCE[0]}")"
+ENSURE="$SCRIPT_DIR/ensure-maestro-runner.sh"
 
 PLATFORM=""
 FLOW_DIR=""
@@ -42,17 +60,17 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Find maestro-runner
-RUNNER=""
-if command -v maestro-runner &>/dev/null; then
-  RUNNER="maestro-runner"
-elif [ -x "$HOME/.maestro-runner/bin/maestro-runner" ]; then
-  RUNNER="$HOME/.maestro-runner/bin/maestro-runner"
-else
-  echo "ERROR: maestro-runner not found."
-  echo "Install: curl -fsSL https://open.devicelab.dev/install/maestro-runner | bash"
+# Require the exact pin-cache runner (version + checksum). Never PATH or ~/.maestro-runner.
+if [ ! -f "$ENSURE" ]; then
+  echo "ERROR: ensure-maestro-runner.sh not found next to verify.sh."
   exit 2
 fi
+RUNNER="$(bash "$ENSURE" --print-bin)" || {
+  echo "ERROR: exact maestro-runner pin is required before verify."
+  echo "Supported correction: bash \"$ENSURE\""
+  echo "Never resolve PATH, ~/.maestro-runner, brew maestro, or maestro-cli."
+  exit 2
+}
 
 # Auto-detect platform if not specified
 if [ -z "$PLATFORM" ]; then

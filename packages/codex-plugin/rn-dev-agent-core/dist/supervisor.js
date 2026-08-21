@@ -27036,11 +27036,21 @@ function enginePinCaveat(status) {
   }
   return null;
 }
+function isRegexShapedSelector(value) {
+  for (let i = 0; i < value.length; i += 1) {
+    const ch = value[i];
+    if (ch === "\\")
+      return true;
+    if (REGEX_METACHARACTERS.has(ch))
+      return true;
+  }
+  return false;
+}
 function findRegexTextSelectors(commands) {
   const found = [];
   const visit = (value, underSelectorKey) => {
     if (typeof value === "string") {
-      if (underSelectorKey && REGEX_SHAPED_SELECTOR.test(value))
+      if (underSelectorKey && isRegexShapedSelector(value))
         found.push(value);
       return;
     }
@@ -27134,7 +27144,7 @@ function getEngineStatus(resolvers) {
     return Promise.resolve(testStatus);
   return detect(resolvers ?? {}).catch(() => buildReplayEngineStatus("unknown-version", null, false));
 }
-var execFile4, MAESTRO_RUNNER_PIN, ACTION_ENGINE_PIN, PINNED_RUNNER_INSTALL_HINT, MAESTRO_RUNNER_MIN_ANDROID_API, PRE_O_REMEDY, OLDER_SDK_TOKEN, INSTALL_REJECT_CONTEXT, REGEX_SHAPED_SELECTOR, TEXT_SELECTOR_KEYS, testStatus;
+var execFile4, MAESTRO_RUNNER_PIN, ACTION_ENGINE_PIN, HOST_PLUGIN_ROOT, PINNED_RUNNER_INSTALL_HINT, PINNED_RUNNER_DIAGNOSE_HINT, MAESTRO_RUNNER_MIN_ANDROID_API, PRE_O_REMEDY, OLDER_SDK_TOKEN, INSTALL_REJECT_CONTEXT, REGEX_METACHARACTERS, TEXT_SELECTOR_KEYS, testStatus;
 var init_engine_pin = __esm({
   "packages/rn-dev-agent-core/dist/domain/engine-pin.js"() {
     "use strict";
@@ -27142,12 +27152,28 @@ var init_engine_pin = __esm({
     execFile4 = promisify3(execFileCb2);
     MAESTRO_RUNNER_PIN = maestro_runner_pin_default;
     ACTION_ENGINE_PIN = `maestro-runner@${MAESTRO_RUNNER_PIN.version}`;
-    PINNED_RUNNER_INSTALL_HINT = `bash \${CLAUDE_PLUGIN_ROOT:-<plugin-root>}/scripts/ensure-maestro-runner.sh`;
+    HOST_PLUGIN_ROOT = "${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}";
+    PINNED_RUNNER_INSTALL_HINT = `bash ${HOST_PLUGIN_ROOT}/scripts/ensure-maestro-runner.sh`;
+    PINNED_RUNNER_DIAGNOSE_HINT = `node ${HOST_PLUGIN_ROOT}/rn-dev-agent-core/dist/maestro-runner-pin.js diagnose`;
     MAESTRO_RUNNER_MIN_ANDROID_API = 26;
     PRE_O_REMEDY = "Action replay / E2E via the maestro engine is unsupported on this device; the direct device_* interaction tier still works (rn-android-runner supports API 23+), except for the few device_* paths that fall back to maestro (dev-client picker, system dialogs, device_fill correction), which hit this same limit.";
     OLDER_SDK_TOKEN = /INSTALL_FAILED_OLDER_SDK/g;
     INSTALL_REJECT_CONTEXT = /\b(?:adb|install|installing|failure|uiautomator2)\b|\.apk\b/i;
-    REGEX_SHAPED_SELECTOR = /(?:^\^|\$$|\.\*|\.\+|\\[AbBdDsSwWzZ]|\[[^\]]*\]|\(\?(?:[:=!<]|<[=!])|\||\{\d+(?:,\d*)?\}|(?:^|[^\\])[+*?])/;
+    REGEX_METACHARACTERS = /* @__PURE__ */ new Set([
+      ".",
+      "^",
+      "$",
+      "*",
+      "+",
+      "?",
+      "(",
+      ")",
+      "[",
+      "]",
+      "{",
+      "}",
+      "|"
+    ]);
     TEXT_SELECTOR_KEYS = /* @__PURE__ */ new Set([
       "tapOn",
       "doubleTapOn",
@@ -78308,7 +78334,7 @@ function createRunActionHandler(deps = {}) {
           runnerResume: firstEnv.meta?.runnerResume,
           ...cdpJsFallback ? { cdpJsFallback } : {}
         };
-        let message = failure.kind === "WDA_BOOTSTRAP_FAILED" ? `cdp_run_action: ${args.actionId} failed (WDA_BOOTSTRAP_FAILED) before the first replay step: ${failure.detail}. Re-run the replay (bootstrap retries itself); check network access; inspect ~/.maestro-runner/bin/maestro-runner wda version. No preparation or cache mutation was attempted.` : `cdp_run_action: ${args.actionId} failed (${failure.kind})${autoRepairEnabled ? " \u2014 failure not auto-repairable" : " \u2014 auto-repair disabled"}: ${firstFailureDetail}`;
+        let message = failure.kind === "WDA_BOOTSTRAP_FAILED" ? `cdp_run_action: ${args.actionId} failed (WDA_BOOTSTRAP_FAILED) before the first replay step: ${failure.detail}. Re-run the replay (bootstrap retries itself); check network access; diagnose the pin-cache runner with ${PINNED_RUNNER_DIAGNOSE_HINT}. Supported correction: ${PINNED_RUNNER_INSTALL_HINT}. Never invoke PATH, ~/.maestro-runner, maestro-cli, or manual login. No preparation or cache mutation was attempted.` : `cdp_run_action: ${args.actionId} failed (${failure.kind})${autoRepairEnabled ? " \u2014 failure not auto-repairable" : " \u2014 auto-repair disabled"}: ${firstFailureDetail}`;
         if (cdpJsFallback?.reason === "cdp-unreachable") {
           message += ". Maestro failed before completing the flow (on iOS 26.x WDA often dies at startup) and the CDP/JS replay fallback was skipped: CDP was unreachable after the flow. Check cdp_status and reconnect, then retry; if another XCUITest automation is driving this simulator, stop it first.";
         }

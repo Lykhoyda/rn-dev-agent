@@ -145,8 +145,18 @@ report_success() {
 }
 
 if bin_matches_pin; then
+  if [ "${1:-}" = "--print-bin" ]; then
+    printf '%s\n' "$BIN"
+    exit 0
+  fi
   report_success
   exit 0
+fi
+
+if [ "${1:-}" = "--print-bin" ]; then
+  echo "ERROR: pin-cache maestro-runner is not exactly $MAESTRO_RUNNER_PIN_VERSION (missing, version drift, or checksum mismatch)." >&2
+  correction >&2
+  exit 1
 fi
 
 if [ -x "$BIN" ]; then

@@ -7399,7 +7399,9 @@ var maestro_runner_pin_default = {
 var execFile = promisify(execFileCb);
 var MAESTRO_RUNNER_PIN = maestro_runner_pin_default;
 var ACTION_ENGINE_PIN = `maestro-runner@${MAESTRO_RUNNER_PIN.version}`;
-var PINNED_RUNNER_INSTALL_HINT = `bash \${CLAUDE_PLUGIN_ROOT:-<plugin-root>}/scripts/ensure-maestro-runner.sh`;
+var HOST_PLUGIN_ROOT = "${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}";
+var PINNED_RUNNER_INSTALL_HINT = `bash ${HOST_PLUGIN_ROOT}/scripts/ensure-maestro-runner.sh`;
+var PINNED_RUNNER_DIAGNOSE_HINT = `node ${HOST_PLUGIN_ROOT}/rn-dev-agent-core/dist/maestro-runner-pin.js diagnose`;
 function compareVersions(a, b) {
   const pa = a.split(".").map(Number);
   const pb = b.split(".").map(Number);
@@ -7470,7 +7472,31 @@ function buildReplayEngineStatus(cls, version, _cliPresent, extras = {}) {
     provenance: extras.provenance ?? (cls === "not-installed" ? "none" : "pin-cache")
   };
 }
-var REGEX_SHAPED_SELECTOR = /(?:^\^|\$$|\.\*|\.\+|\\[AbBdDsSwWzZ]|\[[^\]]*\]|\(\?(?:[:=!<]|<[=!])|\||\{\d+(?:,\d*)?\}|(?:^|[^\\])[+*?])/;
+var REGEX_METACHARACTERS = /* @__PURE__ */ new Set([
+  ".",
+  "^",
+  "$",
+  "*",
+  "+",
+  "?",
+  "(",
+  ")",
+  "[",
+  "]",
+  "{",
+  "}",
+  "|"
+]);
+function isRegexShapedSelector(value) {
+  for (let i = 0; i < value.length; i += 1) {
+    const ch = value[i];
+    if (ch === "\\")
+      return true;
+    if (REGEX_METACHARACTERS.has(ch))
+      return true;
+  }
+  return false;
+}
 var TEXT_SELECTOR_KEYS = /* @__PURE__ */ new Set([
   "tapOn",
   "doubleTapOn",
@@ -7485,7 +7511,7 @@ function findRegexTextSelectors(commands) {
   const found = [];
   const visit = (value, underSelectorKey) => {
     if (typeof value === "string") {
-      if (underSelectorKey && REGEX_SHAPED_SELECTOR.test(value))
+      if (underSelectorKey && isRegexShapedSelector(value))
         found.push(value);
       return;
     }
@@ -7589,7 +7615,7 @@ function getEngineStatus(resolvers) {
 }
 
 // packages/rn-dev-agent-core/dist/domain/action-engine-compat.js
-import { readdirSync, readFileSync as readFileSync3, writeFileSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync as readFileSync3, writeFileSync } from "node:fs";
 import { basename, dirname as dirname2, join as join4, resolve } from "node:path";
 
 // packages/rn-dev-agent-core/dist/domain/maestro-validator.js
@@ -8124,18 +8150,76 @@ function upsertEnginePinHeader(text) {
     headerLines.push(nextLine);
   return { text: joinYaml({ ...parts, headerLines }), changed: true };
 }
+function isOwnedActionFile(name) {
+  return name.endsWith(".yaml") || name.endsWith(".yml");
+}
+function actionIdFromFile(name) {
+  return name.replace(/\.ya?ml$/, "");
+}
+function inheritedActionsCorpusReason(projectRoot) {
+  const rnAgentDir = join4(projectRoot, ".rn-agent");
+  const actionsDir = join4(rnAgentDir, "actions");
+  try {
+    if (lstatSync(rnAgentDir).isSymbolicLink()) {
+      return `Refusing to migrate through inherited .rn-agent symlink at ${rnAgentDir}. Symlink-inherited corpora are never modified.`;
+    }
+  } catch {
+    return null;
+  }
+  try {
+    if (lstatSync(actionsDir).isSymbolicLink()) {
+      return `Refusing to migrate through inherited .rn-agent/actions symlink at ${actionsDir}. Symlink-inherited corpora are never modified.`;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
 function migrateLearnedActions(projectRoot) {
   const dir = join4(projectRoot, ".rn-agent", "actions");
+  const inherited = inheritedActionsCorpusReason(projectRoot);
+  if (inherited) {
+    return [
+      {
+        id: "actions",
+        path: dir,
+        status: "incompatible",
+        reason: inherited,
+        mutated: false
+      }
+    ];
+  }
   let files = [];
   try {
-    files = readdirSync(dir).filter((name) => name.endsWith(".yaml"));
+    files = readdirSync(dir).filter(isOwnedActionFile);
   } catch {
     return [];
   }
   const results = [];
   for (const name of files) {
     const path = join4(dir, name);
-    const id = name.replace(/\.yaml$/, "");
+    const id = actionIdFromFile(name);
+    try {
+      if (lstatSync(path).isSymbolicLink()) {
+        results.push({
+          id,
+          path,
+          status: "incompatible",
+          reason: `Refusing to migrate through inherited action symlink at ${path}. Symlink-inherited corpora are never modified.`,
+          mutated: false
+        });
+        continue;
+      }
+    } catch (err) {
+      results.push({
+        id,
+        path,
+        status: "unreadable",
+        reason: err instanceof Error ? err.message : String(err),
+        mutated: false
+      });
+      continue;
+    }
     let text;
     try {
       text = readFileSync3(path, "utf8");

@@ -78,7 +78,12 @@ import { getWorkerAuthorityRuntime } from '../session/runtime.js';
 import { flowUsesClearState, resolveIosAppFile } from './resolve-ios-app-file.js';
 import { parseAndValidateFlow } from '../domain/maestro-validator.js';
 import { actionReplayPreflight } from '../domain/action-engine-compat.js';
-import { getEngineStatus, type ReplayEngineStatus } from '../domain/engine-pin.js';
+import {
+  getEngineStatus,
+  PINNED_RUNNER_DIAGNOSE_HINT,
+  PINNED_RUNNER_INSTALL_HINT,
+  type ReplayEngineStatus,
+} from '../domain/engine-pin.js';
 
 /** GH #705: the session's attested install receipt, or null outside a session. */
 function boundInstallReceipt(): { platform?: unknown; deviceId?: unknown; appId?: unknown } | null {
@@ -1003,7 +1008,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         };
         let message =
           failure.kind === 'WDA_BOOTSTRAP_FAILED'
-            ? `cdp_run_action: ${args.actionId} failed (WDA_BOOTSTRAP_FAILED) before the first replay step: ${failure.detail}. Re-run the replay (bootstrap retries itself); check network access; inspect ~/.maestro-runner/bin/maestro-runner wda version. No preparation or cache mutation was attempted.`
+            ? `cdp_run_action: ${args.actionId} failed (WDA_BOOTSTRAP_FAILED) before the first replay step: ${failure.detail}. Re-run the replay (bootstrap retries itself); check network access; diagnose the pin-cache runner with ${PINNED_RUNNER_DIAGNOSE_HINT}. Supported correction: ${PINNED_RUNNER_INSTALL_HINT}. Never invoke PATH, ~/.maestro-runner, maestro-cli, or manual login. No preparation or cache mutation was attempted.`
             : `cdp_run_action: ${args.actionId} failed (${failure.kind})${autoRepairEnabled ? ' — failure not auto-repairable' : ' — auto-repair disabled'}: ${firstFailureDetail}`;
         // GH #423: an UNKNOWN with the fallback skipped for CDP reasons was an
         // opaque dead end in the field — say why and what to do next.

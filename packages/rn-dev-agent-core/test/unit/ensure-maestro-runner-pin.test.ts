@@ -1,12 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, chmodSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   MAESTRO_RUNNER_PIN,
+  PINNED_RUNNER_DIAGNOSE_HINT,
+  PINNED_RUNNER_INSTALL_HINT,
   buildReplayEngineStatus,
   doctorPinnedRunner,
   exactPinRefusal,
@@ -153,4 +156,137 @@ test('pin-cache helpers never resolve PATH or ~/.maestro-runner', () => {
     if (prev === undefined) delete process.env.RN_DEV_AGENT_RUNNER_CACHE;
     else process.env.RN_DEV_AGENT_RUNNER_CACHE = prev;
   }
+});
+
+const VERIFY = join(
+  dirname(fileURLToPath(import.meta.url)),
+  '..',
+  '..',
+  '..',
+  '..',
+  'scripts',
+  'verify.sh',
+);
+
+const RN_VERIFY = join(
+  dirname(fileURLToPath(import.meta.url)),
+  '..',
+  '..',
+  '..',
+  '..',
+  'bin',
+  'rn-verify',
+);
+
+function writePinnedStub(cache: string) {
+  const pinDir = join(cache, 'maestro-runner', MAESTRO_RUNNER_PIN.version, 'bin');
+  mkdirSync(pinDir, { recursive: true });
+  const bin = join(pinDir, 'maestro-runner');
+  writeFileSync(bin, '#!/bin/sh\necho maestro-runner 1.1.24\n');
+  chmodSync(bin, 0o755);
+  const sha = createHash('sha256').update(readFileSync(bin)).digest('hex');
+  const manifest = join(cache, 'pin.json');
+  writeFileSync(
+    manifest,
+    JSON.stringify({
+      version: '1.1.24',
+      sha256: {
+        'darwin-arm64': sha,
+        'darwin-x64': sha,
+        'linux-x64': sha,
+        'linux-arm64': sha,
+      },
+      knownQuirks: [],
+    }),
+  );
+  return { bin, manifest };
+}
+
+test('--print-bin emits the pin-cache path only when version and checksum match', () => {
+  const cache = mkdtempSync(join(tmpdir(), 'mr-print-bin-'));
+  const { bin, manifest } = writePinnedStub(cache);
+  const result = spawnSync('bash', [SCRIPT, '--print-bin'], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      RN_DEV_AGENT_RUNNER_CACHE: cache,
+      RN_DEV_AGENT_PIN_MANIFEST: manifest,
+    },
+  });
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout.trim(), bin);
+  assert.doesNotMatch(result.stdout, /Installing maestro-runner/);
+});
+
+test('--print-bin ignores a PATH maestro-runner when the pin-cache is missing', () => {
+  const cache = mkdtempSync(join(tmpdir(), 'mr-print-bin-miss-'));
+  const pathDir = mkdtempSync(join(tmpdir(), 'mr-path-decoy-'));
+  const marker = join(cache, 'path-hit');
+  writeFileSync(
+    join(pathDir, 'maestro-runner'),
+    `#!/bin/sh\necho PATH_HIT > "${marker}"\necho maestro-runner 9.9.9\n`,
+  );
+  chmodSync(join(pathDir, 'maestro-runner'), 0o755);
+  const result = spawnSync('bash', [SCRIPT, '--print-bin'], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      PATH: `${pathDir}:${process.env.PATH ?? ''}`,
+      RN_DEV_AGENT_RUNNER_CACHE: cache,
+      RN_DEV_AGENT_MAESTRO_DOWNLOAD_URL: 'http://127.0.0.1:1/should-not-hit',
+    },
+  });
+  assert.notEqual(result.status, 0);
+  const out = `${result.stdout}${result.stderr}`;
+  assert.match(out, /ensure-maestro-runner|pin-cache|not exactly/);
+  assert.doesNotMatch(out, /PATH_HIT/);
+  assert.throws(() => readFileSync(marker));
+});
+
+test('verify.sh refuses PATH or ~/.maestro-runner and names the supported correction', () => {
+  const cache = mkdtempSync(join(tmpdir(), 'mr-verify-'));
+  const pathDir = mkdtempSync(join(tmpdir(), 'mr-verify-path-'));
+  const marker = join(cache, 'verify-path-hit');
+  writeFileSync(
+    join(pathDir, 'maestro-runner'),
+    `#!/bin/sh\necho PATH_HIT > "${marker}"\necho maestro-runner 9.9.9\n`,
+  );
+  chmodSync(join(pathDir, 'maestro-runner'), 0o755);
+  const result = spawnSync('bash', [VERIFY, '--platform', 'ios', '--flow-dir', cache], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      PATH: `${pathDir}:${process.env.PATH ?? ''}`,
+      HOME: cache,
+      RN_DEV_AGENT_RUNNER_CACHE: cache,
+      RN_DEV_AGENT_MAESTRO_DOWNLOAD_URL: 'http://127.0.0.1:1/should-not-hit',
+    },
+  });
+  assert.equal(result.status, 2);
+  const out = `${result.stdout}${result.stderr}`;
+  assert.match(out, /ensure-maestro-runner\.sh/);
+  assert.doesNotMatch(out, /open\.devicelab\.dev\/install\/maestro-runner/);
+  assert.throws(() => readFileSync(marker));
+});
+
+test('tracked bin/rn-verify resolves the pin helper through its symlink', () => {
+  const cache = mkdtempSync(join(tmpdir(), 'mr-bin-verify-'));
+  const result = spawnSync(RN_VERIFY, ['--platform', 'ios', '--flow-dir', cache], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      RN_DEV_AGENT_RUNNER_CACHE: cache,
+      RN_DEV_AGENT_MAESTRO_DOWNLOAD_URL: 'http://127.0.0.1:1/should-not-hit',
+    },
+  });
+  assert.equal(result.status, 2);
+  const out = `${result.stdout}${result.stderr}`;
+  assert.doesNotMatch(out, /not found next to verify\.sh/);
+  assert.match(out, /ensure-maestro-runner\.sh/);
+});
+
+test('pin install and diagnose hints name both host plugin roots', () => {
+  assert.match(PINNED_RUNNER_INSTALL_HINT, /RN_DEV_AGENT_CODEX_PLUGIN_ROOT/);
+  assert.match(PINNED_RUNNER_DIAGNOSE_HINT, /maestro-runner-pin\.js diagnose/);
+  assert.match(PINNED_RUNNER_DIAGNOSE_HINT, /RN_DEV_AGENT_CODEX_PLUGIN_ROOT/);
 });

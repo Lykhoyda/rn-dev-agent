@@ -121,7 +121,13 @@ test('section b: flow fields match golden values', () => {
     assert.deepEqual(cart.tags, ['cart', 'shopping']);
     assert.deepEqual(cart.params, ['ITEM_ID']);
     assert.equal(cart.produces, null);
-    assert.ok(cart.replay.includes('-e ITEM_ID=...'), 'replay should include ITEM_ID param');
+    assert.ok(cart.replay.includes('cdp_run_action'), 'replay should use cdp_run_action');
+    assert.ok(
+      cart.replay.includes(`projectRoot: "${dir}"`),
+      'canonical yaml replay must include the discovered projectRoot',
+    );
+    assert.ok(cart.replay.includes('ITEM_ID: "..."'), 'replay should include ITEM_ID param');
+    assert.doesNotMatch(cart.replay, /maestro-runner --/);
 
     assert.ok(login, 'login-flow should be present');
     assert.equal(login.appId, 'com.example.testapp');
@@ -273,6 +279,38 @@ test('--section a: only memories section, no flows', () => {
     const out = JSON.parse(raw);
     assert.equal(out.sections.flows.count, 0, 'section a should not include flows');
     assert.equal(out.sections.memories.count, 0, 'no memories in empty fixture');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('yml flows with an id replay through maestro_run using the discovered path', () => {
+  const dir = makeFixture();
+  const ymlPath = join(dir, '.rn-agent', 'actions', 'login-alt.yml');
+  writeFileSync(
+    ymlPath,
+    `# id: login-alt
+# intent: Alternate login
+# tags: [auth]
+# mutates: false
+# status: active
+appId: com.example.testapp
+---
+- tapOn:
+    id: "login-button"
+`,
+  );
+  try {
+    const raw = run(
+      ['--json', '--section', 'b', '--workspace-root', dir, '--memory-cwd', dir],
+      dir,
+    );
+    const out = JSON.parse(raw);
+    const alt = out.sections.flows.items.find((f) => f.id === 'login-alt');
+    assert.ok(alt, 'login-alt yml should be inventoried');
+    assert.ok(alt.replay.includes('maestro_run'), 'yml replay must use maestro_run');
+    assert.ok(alt.replay.includes(`flowPath: "${ymlPath}"`));
+    assert.doesNotMatch(alt.replay, /cdp_run_action/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

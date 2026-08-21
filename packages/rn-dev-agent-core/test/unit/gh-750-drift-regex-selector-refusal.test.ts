@@ -49,10 +49,17 @@ test('gh-750: plain literals and id selectors are not flagged', () => {
   const commands = [
     { tapOn: 'Continue' },
     { tapOn: { id: 'submit-button' } },
-    { assertVisible: '3.5 stars (12 ratings)' },
     { inputText: 'user.*name' },
   ];
   assert.deepEqual(findRegexTextSelectors(commands), []);
+});
+
+test('gh-750: complete regex syntax includes wildcard and grouping forms', () => {
+  assert.deepEqual(findRegexTextSelectors([{ tapOn: 'Log.n' }]), ['Log.n']);
+  assert.deepEqual(findRegexTextSelectors([{ tapOn: '^Login$' }]), ['^Login$']);
+  assert.deepEqual(findRegexTextSelectors([{ assertVisible: '3.5 stars (12 ratings)' }]), [
+    '3.5 stars (12 ratings)',
+  ]);
 });
 
 test('gh-750: drifted runner refuses regex-selector flows with a typed message', () => {

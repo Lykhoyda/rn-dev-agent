@@ -117,9 +117,7 @@ function scanFlows() {
                 continue;
             const params = (text.match(/\$\{([A-Z_][A-Z0-9_]*)\}/g) || []).map((s) => s.slice(2, -1));
             const uniqParams = Array.from(new Set(params));
-            const replay = uniqParams.length
-                ? `maestro-runner --platform ios test ${uniqParams.map((p) => `-e ${p}=...`).join(' ')} ${fp}`
-                : `maestro-runner --platform ios test ${fp}`;
+            const replay = replayHint(meta.id, fp, uniqParams);
             items.push({
                 flow: f.replace(/\.ya?ml$/, ''),
                 path: fp,
@@ -140,6 +138,19 @@ function scanFlows() {
     }
     items.sort((a, b) => a.flow.localeCompare(b.flow));
     return { items: items.slice(0, flags.max), roots };
+}
+function replayHint(id, flowPath, params) {
+    const paramObj = params.length > 0 ? `, params: { ${params.map((p) => `${p}: "..."`).join(', ')} }` : '';
+    const actionsDir = path.dirname(flowPath);
+    const canonicalYaml = id !== null &&
+        path.basename(flowPath) === `${id}.yaml` &&
+        path.basename(actionsDir) === 'actions' &&
+        path.basename(path.dirname(actionsDir)) === '.rn-agent';
+    if (canonicalYaml) {
+        const projectRoot = path.dirname(path.dirname(actionsDir));
+        return `cdp_run_action({ actionId: "${id}", projectRoot: "${projectRoot}", blindProbeMode: "forbid"${paramObj} })`;
+    }
+    return `maestro_run({ flowPath: "${flowPath}"${paramObj} })`;
 }
 function collectFlowRoots(start) {
     // D1208: .rn-agent/actions/ is the single source of plugin-managed flows.

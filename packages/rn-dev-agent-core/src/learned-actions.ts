@@ -169,9 +169,7 @@ function scanFlows(): FlowsResult {
       if (!matchKw(meta.purpose, meta.appId, meta.intent, tagsStr, f, fp)) continue;
       const params = (text.match(/\$\{([A-Z_][A-Z0-9_]*)\}/g) || []).map((s) => s.slice(2, -1));
       const uniqParams = Array.from(new Set(params));
-      const replay = uniqParams.length
-        ? `maestro-runner --platform ios test ${uniqParams.map((p) => `-e ${p}=...`).join(' ')} ${fp}`
-        : `maestro-runner --platform ios test ${fp}`;
+      const replay = replayHint(meta.id, fp, uniqParams);
       items.push({
         flow: f.replace(/\.ya?ml$/, ''),
         path: fp,
@@ -192,6 +190,22 @@ function scanFlows(): FlowsResult {
   }
   items.sort((a, b) => a.flow.localeCompare(b.flow));
   return { items: items.slice(0, flags.max), roots };
+}
+
+function replayHint(id: string | null, flowPath: string, params: string[]): string {
+  const paramObj =
+    params.length > 0 ? `, params: { ${params.map((p) => `${p}: "..."`).join(', ')} }` : '';
+  const actionsDir = path.dirname(flowPath);
+  const canonicalYaml =
+    id !== null &&
+    path.basename(flowPath) === `${id}.yaml` &&
+    path.basename(actionsDir) === 'actions' &&
+    path.basename(path.dirname(actionsDir)) === '.rn-agent';
+  if (canonicalYaml) {
+    const projectRoot = path.dirname(path.dirname(actionsDir));
+    return `cdp_run_action({ actionId: "${id}", projectRoot: "${projectRoot}", blindProbeMode: "forbid"${paramObj} })`;
+  }
+  return `maestro_run({ flowPath: "${flowPath}"${paramObj} })`;
 }
 
 function collectFlowRoots(start: string): string[] {

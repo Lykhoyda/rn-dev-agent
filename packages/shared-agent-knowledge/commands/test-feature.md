@@ -114,6 +114,7 @@ Load the `rn-testing` skill and follow this 8-step protocol in this session:
 - iOS Simulator or Android Emulator running with the app loaded
 - Ready fenced session with the integrated Metro and signed app target
 - Exact maestro-runner `1.1.24` available from rn-dev-agent's pin-cache
+- Replay YAML only through `cdp_run_action` or `maestro_run`. Never invoke PATH `maestro-runner`, `maestro` CLI, or manual login.
 - For Zustand apps: `if (__DEV__) global.__ZUSTAND_STORES__ = { ... }` in app entry
 
 ## Output

@@ -11695,7 +11695,7 @@ var init_maestro_runner_pin = __esm({
 // packages/rn-dev-agent-core/dist/domain/engine-pin.js
 import { execFile as execFileCb2 } from "node:child_process";
 import { promisify as promisify3 } from "node:util";
-var execFile3, MAESTRO_RUNNER_PIN, ACTION_ENGINE_PIN;
+var execFile3, MAESTRO_RUNNER_PIN, ACTION_ENGINE_PIN, HOST_PLUGIN_ROOT, PINNED_RUNNER_INSTALL_HINT, PINNED_RUNNER_DIAGNOSE_HINT;
 var init_engine_pin = __esm({
   "packages/rn-dev-agent-core/dist/domain/engine-pin.js"() {
     "use strict";
@@ -11703,6 +11703,9 @@ var init_engine_pin = __esm({
     execFile3 = promisify3(execFileCb2);
     MAESTRO_RUNNER_PIN = maestro_runner_pin_default;
     ACTION_ENGINE_PIN = `maestro-runner@${MAESTRO_RUNNER_PIN.version}`;
+    HOST_PLUGIN_ROOT = "${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}";
+    PINNED_RUNNER_INSTALL_HINT = `bash ${HOST_PLUGIN_ROOT}/scripts/ensure-maestro-runner.sh`;
+    PINNED_RUNNER_DIAGNOSE_HINT = `node ${HOST_PLUGIN_ROOT}/rn-dev-agent-core/dist/maestro-runner-pin.js diagnose`;
   }
 });
 
