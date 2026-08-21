@@ -215,14 +215,14 @@ export function createMaestroTestAllHandler(deps = {}) {
                     writeFileSync(safeFlowFile, buildMaestroFlow(parsedAppId !== undefined ? { appId: parsedAppId } : {}, [
                         ...commands,
                     ]), 'utf-8');
-                    const executeRunner = (runnerPath) => {
+                    const executeRunner = (runnerPath, prefixArgs = []) => {
                         const remainingTimeout = start + timeout - now();
                         if (remainingTimeout <= 0) {
                             const error = new Error('Maestro flow timeout exhausted before runner execution');
                             Object.assign(error, { code: 'ETIMEDOUT' });
                             throw error;
                         }
-                        return execute(runnerPath, finalArgs, {
+                        return execute(runnerPath, [...prefixArgs, ...finalArgs], {
                             timeout: remainingTimeout,
                             encoding: 'utf8',
                             maxBuffer: 10 * 1024 * 1024,

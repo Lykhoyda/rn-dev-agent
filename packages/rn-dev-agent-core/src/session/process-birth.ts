@@ -62,20 +62,25 @@ export interface VerifiedDarwinProcessBirthHelper {
   requirement: string;
 }
 
+export interface VerifiedNativePublicationHelper {
+  path: string;
+  sha256: string;
+}
+
 const DARWIN_HELPER_MANIFEST = {
-  sourceSha256: '3d3cc684c83f9bd18ea2e56c7e1d62528fe7b78237d7314d73560731fff42255',
-  recipeSha256: 'f22be6188030cc153d327f6c24282d48eaf0e089fd496baa67a54f53bac39843',
-  stableBinarySha256: '4090bd1f4c12b0071da253d45c1334dc92c3f08a6de0ca585de916cdbcf13442',
-  binarySha256: '33e13d0a7d5ac3d5a13829fef40f4aeaf738e7f8e0071c96947ce2289c770e64',
+  sourceSha256: '5cafc275ab929026203e64527f993cd77e2854f1697cdb419b7d901293e1bc48',
+  recipeSha256: 'a1293ae1f70a5da3a4ea9b1b79a095a5f182f7cb39e37521abe87cb1864f625b',
+  stableBinarySha256: 'e5dffbe66f7fa52f8e2554fb397b4b44000d8c092feff35e0c42f5f3e0150c3f',
+  binarySha256: 'dd8346dab2ccb6e3ce11840bbca5f8ea2f4cbd95efae34ddb130f98824a065aa',
   cdhashes: [
-    'a1d6311233d57cab40dfa1341f7f35810896682b',
-    '39e8e81152430e0be6f338c3b00e6b413289641a',
+    '0471a3583ce2363ee96afe3e85951dd5fd154dec',
+    '1998527647f4fef05eae6007fe7a1f945aa7c54d',
   ],
 } as const;
 
 const LINUX_PUBLICATION_HELPER_SHA256 = {
-  x64: '511fe8f830189bfcacb5cfc590371e76cfa4914dce79a07d94a8fecc1c36f416',
-  arm64: '0654c8efac0b2424f274501a16cf227151ab25aeeb4c68333df9ae2b5d7dab15',
+  x64: '3851cbf2d01caf77b282f477365613e6d903caf1aff88ea99e8d855eab9bacfb',
+  arm64: '76ba6597b964d6541ec2657195ee515728f9a1270636275b3a55d110267f34da',
 } as const;
 
 function defaultRun(command: string, args: readonly string[]): string {
@@ -275,6 +280,20 @@ export async function withVerifiedDarwinProcessBirthHelper<T>(
   return callback(verifyDarwinProcessBirthHelper({}));
 }
 
+export function verifiedNativePublicationHelper(): VerifiedNativePublicationHelper {
+  if (process.platform === 'darwin') {
+    const helper = verifyDarwinProcessBirthHelper({});
+    return { path: helper.path, sha256: DARWIN_HELPER_MANIFEST.binarySha256 };
+  }
+  if (process.platform === 'linux' && (process.arch === 'x64' || process.arch === 'arm64')) {
+    return {
+      path: verifiedLinuxPublicationHelper(process.arch),
+      sha256: LINUX_PUBLICATION_HELPER_SHA256[process.arch],
+    };
+  }
+  throw new Error('Native runner execution binding is unavailable on this platform.');
+}
+
 export function publishFileIfUnchangedDarwin(
   targetFd: number,
   targetPath: string,
@@ -317,6 +336,68 @@ export function publishFileIfUnchangedDarwin(
   }
 }
 
+export function linkFileIntoVerifiedDirectory(
+  directoryFd: number,
+  candidatePath: string,
+  targetPath: string,
+): boolean {
+  const directory = fstatSync(directoryFd);
+  if (!directory.isDirectory() || dirname(targetPath) === targetPath) return false;
+  if (process.platform === 'darwin') {
+    const helper = verifyDarwinProcessBirthHelper({});
+    return runVerifiedPublicationHelper(
+      helper.path,
+      DARWIN_HELPER_MANIFEST.binarySha256,
+      [
+        '--link-into-directory',
+        candidatePath,
+        dirname(targetPath),
+        targetPath.slice(dirname(targetPath).length + 1),
+        String(directory.dev),
+        String(directory.ino),
+      ],
+    );
+  }
+  if (process.platform === 'linux' && (process.arch === 'x64' || process.arch === 'arm64')) {
+    const helperPath = verifiedLinuxPublicationHelper(process.arch);
+    return runVerifiedPublicationHelper(
+      helperPath,
+      LINUX_PUBLICATION_HELPER_SHA256[process.arch],
+      [
+        '--link-into-directory',
+        candidatePath,
+        dirname(targetPath),
+        targetPath.slice(dirname(targetPath).length + 1),
+        String(directory.dev),
+        String(directory.ino),
+      ],
+    );
+  }
+  return false;
+}
+
+function runVerifiedPublicationHelper(
+  helperPath: string,
+  expectedSha256: string,
+  args: readonly string[],
+): boolean {
+  const boundPath = `${helperPath}.publish.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}`;
+  copyFileSync(helperPath, boundPath, constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE);
+  chmodSync(boundPath, 0o700);
+  try {
+    if (createHash('sha256').update(readFileSync(boundPath)).digest('hex') !== expectedSha256) {
+      throw new Error('Conditional action publication helper changed before execution.');
+    }
+    execFileSync(boundPath, [...args], { stdio: 'ignore', timeout: 2_000 });
+    return true;
+  } catch (error) {
+    if ((error as { status?: number }).status === 10) return false;
+    throw error;
+  } finally {
+    unlinkSync(boundPath);
+  }
+}
+
 function linuxConditionalPublicationHelperPath(architecture: 'x64' | 'arm64'): string {
   const moduleDirectory = dirname(fileURLToPath(import.meta.url));
   const name = `linux-conditional-publication-${architecture}`;
@@ -330,16 +411,7 @@ function linuxConditionalPublicationHelperPath(architecture: 'x64' | 'arm64'): s
   return candidates[0];
 }
 
-function publishFileIfUnchangedLinux(
-  targetFd: number,
-  targetPath: string,
-  candidatePath: string,
-  expectedPath: string,
-): boolean {
-  if (process.platform !== 'linux' || (process.arch !== 'x64' && process.arch !== 'arm64')) {
-    return false;
-  }
-  const architecture = process.arch;
+function verifiedLinuxPublicationHelper(architecture: 'x64' | 'arm64'): string {
   const helperPath = linuxConditionalPublicationHelperPath(architecture);
   if (realpathSync(helperPath) !== helperPath) {
     throw new Error('Linux conditional publication helper path is not canonical.');
@@ -369,6 +441,20 @@ function publishFileIfUnchangedLinux(
   } finally {
     closeSync(helperFd);
   }
+  return helperPath;
+}
+
+function publishFileIfUnchangedLinux(
+  targetFd: number,
+  targetPath: string,
+  candidatePath: string,
+  expectedPath: string,
+): boolean {
+  if (process.platform !== 'linux' || (process.arch !== 'x64' && process.arch !== 'arm64')) {
+    return false;
+  }
+  const architecture = process.arch;
+  const helperPath = verifiedLinuxPublicationHelper(architecture);
   const target = fstatSync(targetFd);
   if (!target.isFile()) return false;
   const boundPath = `${helperPath}.publish.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}`;

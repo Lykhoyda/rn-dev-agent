@@ -137,14 +137,14 @@ export async function runMaestroInline(yaml, opts, dependencies = {}) {
         const finalArgs = assembleMaestroArgs(baseArgs, runnerReportArgs(runnerReportDir));
         const executionDeadline = Date.now() + timeout;
         const execute = async () => {
-            const spawn = (runnerPath) => {
+            const spawn = (runnerPath, prefixArgs = []) => {
                 const remainingTimeout = executionDeadline - Date.now();
                 if (remainingTimeout <= 0) {
                     const error = new Error('Maestro flow timeout exhausted before runner execution');
                     Object.assign(error, { code: 'ETIMEDOUT' });
                     throw error;
                 }
-                return (dependencies.spawnManaged ?? spawnManagedProcessGroup)(runnerPath, finalArgs, {
+                return (dependencies.spawnManaged ?? spawnManagedProcessGroup)(runnerPath, [...prefixArgs, ...finalArgs], {
                     timeoutMs: remainingTimeout,
                     platform: opts.platform,
                     deviceId: requestedDeviceId,

@@ -10,6 +10,7 @@ import { accessSync, chmodSync, constants, copyFileSync, lstatSync, mkdirSync, m
 import { homedir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { gunzipSync } from 'node:zlib';
+import { verifiedNativePublicationHelper } from '../session/process-birth.js';
 import pinManifest from './maestro-runner-pin.json' with { type: 'json' };
 export const MAESTRO_RUNNER_PIN = Object.freeze({
     version: pinManifest.version,
@@ -541,9 +542,42 @@ export async function withImmediatePinnedRunner(runnerPath, resolveStatus, execu
             createHash('sha256').update(readFileSync(snapshotRunner)).digest('hex') !== expectedSha256) {
             throw new Error('RUNNER_PIN_CHANGED: payload content changed before execution.');
         }
-        return await execute(snapshotRunner);
+        const helper = verifiedNativePublicationHelper();
+        const snapshotHelper = join(snapshotRoot, '.runner-exec');
+        copyFileSync(helper.path, snapshotHelper, constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE);
+        chmodSync(snapshotHelper, 0o500);
+        if (createHash('sha256').update(readFileSync(snapshotHelper)).digest('hex') !== helper.sha256) {
+            throw new Error('RUNNER_PIN_CHANGED: execution binding changed before execution.');
+        }
+        for (const entry of readdirSync(snapshotRoot, { recursive: true, withFileTypes: true })) {
+            const entryPath = join(entry.parentPath, entry.name);
+            if (entry.isDirectory())
+                chmodSync(entryPath, 0o500);
+            else if (entry.isFile())
+                chmodSync(entryPath, entryPath === snapshotRunner ? 0o500 : 0o400);
+        }
+        chmodSync(snapshotRoot, 0o500);
+        const openedRunner = lstatSync(snapshotRunner);
+        return await execute(snapshotHelper, [
+            '--exec-file',
+            snapshotRunner,
+            String(openedRunner.dev),
+            String(openedRunner.ino),
+            '--',
+        ]);
     }
     finally {
+        try {
+            chmodSync(snapshotRoot, 0o700);
+            for (const entry of readdirSync(snapshotRoot, { recursive: true, withFileTypes: true })) {
+                const entryPath = join(entry.parentPath, entry.name);
+                if (entry.isDirectory())
+                    chmodSync(entryPath, 0o700);
+                else if (entry.isFile())
+                    chmodSync(entryPath, 0o600);
+            }
+        }
+        catch { }
         rmSync(snapshotRoot, { recursive: true, force: true });
     }
 }

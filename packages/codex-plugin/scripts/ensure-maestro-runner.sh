@@ -335,15 +335,16 @@ process.exit(1);
 NODE
 }
 
-atomic_exchange_directories() {
-  local left="$1"
-  local right="$2"
+atomic_publish_directories() {
+  local mode="$1"
+  local left="$2"
+  local right="$3"
   local remaining
   remaining="$(remaining_install_seconds)"
   if [ "$remaining" -le 0 ]; then
     return 124
   fi
-  node - "$SCRIPT_DIR" "$left" "$right" "$TEMP_DIR" "$remaining" <<'NODE'
+  node - "$SCRIPT_DIR" "$mode" "$left" "$right" "$TEMP_DIR" "$remaining" <<'NODE'
 const { createHash } = require('node:crypto');
 const {
   chmodSync,
@@ -357,10 +358,11 @@ const { spawnSync } = require('node:child_process');
 const { resolve } = require('node:path');
 
 const scriptDir = process.argv[2];
-const left = process.argv[3];
-const right = process.argv[4];
-const temporaryDirectory = process.argv[5];
-const timeout = Number(process.argv[6]) * 1000;
+const mode = process.argv[3];
+const left = process.argv[4];
+const right = process.argv[5];
+const temporaryDirectory = process.argv[6];
+const timeout = Number(process.argv[7]) * 1000;
 const architecture = process.arch === 'x64' ? 'x64' : process.arch === 'arm64' ? 'arm64' : null;
 const helperName =
   process.platform === 'darwin'
@@ -368,7 +370,7 @@ const helperName =
     : process.platform === 'linux' && architecture
       ? `linux-conditional-publication-${architecture}`
       : null;
-if (!helperName || !Number.isFinite(timeout) || timeout <= 0) process.exit(1);
+if (!helperName || !['--exchange', '--rename-no-replace'].includes(mode) || !Number.isFinite(timeout) || timeout <= 0) process.exit(1);
 const candidates = [
   resolve(scriptDir, '..', 'rn-dev-agent-core', 'dist', 'native', helperName),
   resolve(scriptDir, '..', 'packages', 'rn-dev-agent-core', 'native', helperName),
@@ -398,14 +400,13 @@ for (const candidate of candidates) {
 }
 if (!helper || !digest) process.exit(1);
 const leftBefore = lstatSync(left);
-const rightBefore = lstatSync(right);
-if (
-  !leftBefore.isDirectory() ||
-  leftBefore.isSymbolicLink() ||
-  !rightBefore.isDirectory() ||
-  rightBefore.isSymbolicLink() ||
-  leftBefore.dev !== rightBefore.dev
-) process.exit(1);
+let rightBefore = null;
+try { rightBefore = lstatSync(right); } catch (error) {
+  if (error.code !== 'ENOENT') process.exit(1);
+}
+if (!leftBefore.isDirectory() || leftBefore.isSymbolicLink()) process.exit(1);
+if (mode === '--exchange' && (!rightBefore?.isDirectory() || rightBefore.isSymbolicLink() || leftBefore.dev !== rightBefore.dev)) process.exit(1);
+if (mode === '--rename-no-replace' && rightBefore !== null) process.exit(10);
 const bound = resolve(
   temporaryDirectory,
   `.exchange-helper.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}`,
@@ -414,19 +415,21 @@ copyFileSync(helper, bound, constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE
 chmodSync(bound, 0o700);
 try {
   if (createHash('sha256').update(readFileSync(bound)).digest('hex') !== digest) process.exit(1);
-  const result = spawnSync(bound, ['--exchange', left, right], {
+  const result = spawnSync(bound, [mode, left, right], {
     stdio: 'ignore',
     timeout,
   });
   if (result.error || result.status !== 0) process.exit(result.status ?? 1);
-  const leftAfter = lstatSync(left);
   const rightAfter = lstatSync(right);
-  if (
-    leftAfter.dev !== rightBefore.dev ||
-    leftAfter.ino !== rightBefore.ino ||
-    rightAfter.dev !== leftBefore.dev ||
-    rightAfter.ino !== leftBefore.ino
-  ) process.exit(1);
+  if (rightAfter.dev !== leftBefore.dev || rightAfter.ino !== leftBefore.ino) process.exit(1);
+  if (mode === '--exchange') {
+    const leftAfter = lstatSync(left);
+    if (leftAfter.dev !== rightBefore.dev || leftAfter.ino !== rightBefore.ino) process.exit(1);
+  } else {
+    try { lstatSync(left); process.exit(1); } catch (error) {
+      if (error.code !== 'ENOENT') process.exit(1);
+    }
+  }
 } finally {
   try { unlinkSync(bound); } catch {}
 }
@@ -640,20 +643,27 @@ if ! pin_dir_matches_pin "$STAGED_PIN_DIR"; then
 fi
 
 if [ -e "$PIN_DIR" ]; then
-  if ! atomic_exchange_directories "$PIN_DIR" "$STAGED_PIN_DIR"; then
+  if ! atomic_publish_directories --exchange "$PIN_DIR" "$STAGED_PIN_DIR"; then
     echo "ERROR: failed to atomically publish the validated maestro-runner pin-cache."
     correction
     exit 1
   fi
 else
   require_install_time "payload publication"
-  if ! deadline_run mv "$STAGED_PIN_DIR" "$PIN_DIR"; then
-    echo "ERROR: failed to publish the validated maestro-runner pin-cache."
-    correction
-    exit 1
+  if ! atomic_publish_directories --rename-no-replace "$STAGED_PIN_DIR" "$PIN_DIR"; then
+    if ! pin_dir_matches_pin "$PIN_DIR"; then
+      echo "ERROR: failed to conditionally publish the validated maestro-runner pin-cache."
+      correction
+      exit 1
+    fi
   fi
 fi
 
 require_install_time "payload publication"
+if ! pin_dir_matches_pin "$PIN_DIR"; then
+  echo "ERROR: published maestro-runner pin-cache did not pass final attestation."
+  correction
+  exit 1
+fi
 report_success
 exit 0

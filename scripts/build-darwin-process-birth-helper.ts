@@ -30,6 +30,8 @@ const source = `#include <errno.h>
 #include <sys/types.h>
 #include <unistd.h>
 
+extern char **environ;
+
 static int same_content(int left, int right) {
   struct stat left_stat = {0};
   struct stat right_stat = {0};
@@ -92,7 +94,67 @@ static int publish_if_unchanged(
   return 0;
 }
 
+static int link_into_directory(
+    const char *candidate_path,
+    const char *directory_path,
+    const char *target_name,
+    uint64_t expected_dev,
+    uint64_t expected_ino) {
+  if (!*target_name || strcmp(target_name, ".") == 0 || strcmp(target_name, "..") == 0 ||
+      strchr(target_name, '/') != NULL) return 2;
+  int directory = open(directory_path, O_RDONLY | O_NOFOLLOW | O_DIRECTORY);
+  int candidate = open(candidate_path, O_RDONLY | O_NOFOLLOW);
+  if (directory < 0) return 10;
+  if (candidate < 0) return 11;
+  struct stat directory_stat = {0};
+  struct stat candidate_stat = {0};
+  if (fstat(directory, &directory_stat) != 0 || fstat(candidate, &candidate_stat) != 0 ||
+      !S_ISDIR(directory_stat.st_mode) || !S_ISREG(candidate_stat.st_mode) ||
+      (uint64_t)directory_stat.st_dev != expected_dev ||
+      (uint64_t)directory_stat.st_ino != expected_ino ||
+      directory_stat.st_dev != candidate_stat.st_dev) return 10;
+  if (linkat(AT_FDCWD, candidate_path, directory, target_name, 0) != 0) {
+    return errno == EEXIST ? 10 : 11;
+  }
+  int published = openat(directory, target_name, O_RDONLY | O_NOFOLLOW);
+  struct stat published_stat = {0};
+  if (published < 0 || fstat(published, &published_stat) != 0 ||
+      published_stat.st_dev != candidate_stat.st_dev ||
+      published_stat.st_ino != candidate_stat.st_ino) return 12;
+  return 0;
+}
+
 int main(int argc, char **argv) {
+  if (argc >= 7 && strcmp(argv[1], "--exec-file") == 0) {
+    char *dev_end = NULL;
+    char *ino_end = NULL;
+    errno = 0;
+    uint64_t expected_dev = strtoull(argv[3], &dev_end, 10);
+    uint64_t expected_ino = strtoull(argv[4], &ino_end, 10);
+    if (errno != 0 || dev_end == argv[3] || *dev_end != '\\0' ||
+        ino_end == argv[4] || *ino_end != '\\0' || strcmp(argv[5], "--") != 0) return 2;
+    int executable = open(argv[2], O_RDONLY | O_NOFOLLOW);
+    struct stat executable_stat = {0};
+    if (executable < 0 || fstat(executable, &executable_stat) != 0 ||
+        !S_ISREG(executable_stat.st_mode) || (uint64_t)executable_stat.st_dev != expected_dev ||
+        (uint64_t)executable_stat.st_ino != expected_ino) return 10;
+    struct stat path_stat = {0};
+    if (lstat(argv[2], &path_stat) != 0 || S_ISLNK(path_stat.st_mode) ||
+        path_stat.st_dev != executable_stat.st_dev || path_stat.st_ino != executable_stat.st_ino)
+      return 10;
+    argv[5] = argv[2];
+    execve(argv[2], &argv[5], environ);
+    return 11;
+  }
+  if (argc == 4 && strcmp(argv[1], "--rename-no-replace") == 0) {
+    struct stat source = {0};
+    if (lstat(argv[2], &source) != 0 || !S_ISDIR(source.st_mode)) return 10;
+    if (renamex_np(argv[2], argv[3], RENAME_EXCL) != 0) return errno == EEXIST ? 10 : 11;
+    struct stat published = {0};
+    if (lstat(argv[3], &published) != 0 || published.st_dev != source.st_dev ||
+        published.st_ino != source.st_ino) return 12;
+    return 0;
+  }
   if (argc == 4 && strcmp(argv[1], "--exchange") == 0) {
     struct stat left = {0};
     struct stat right = {0};
@@ -115,6 +177,16 @@ int main(int argc, char **argv) {
     if (errno != 0 || dev_end == argv[5] || *dev_end != '\\0' ||
         ino_end == argv[6] || *ino_end != '\\0') return 2;
     return publish_if_unchanged(argv[2], argv[3], argv[4], expected_dev, expected_ino);
+  }
+  if (argc == 7 && strcmp(argv[1], "--link-into-directory") == 0) {
+    char *dev_end = NULL;
+    char *ino_end = NULL;
+    errno = 0;
+    uint64_t expected_dev = strtoull(argv[5], &dev_end, 10);
+    uint64_t expected_ino = strtoull(argv[6], &ino_end, 10);
+    if (errno != 0 || dev_end == argv[5] || *dev_end != '\\0' ||
+        ino_end == argv[6] || *ino_end != '\\0') return 2;
+    return link_into_directory(argv[2], argv[3], argv[4], expected_dev, expected_ino);
   }
   if (argc == 8 && strcmp(argv[1], "--publish-if-unchanged") == 0 &&
       strcmp(argv[7], "--hold") == 0) {

@@ -12022,6 +12022,19 @@ function verifyDarwinProcessBirthHelper(dependencies) {
 async function withVerifiedDarwinProcessBirthHelper(callback) {
   return callback(verifyDarwinProcessBirthHelper({}));
 }
+function verifiedNativePublicationHelper() {
+  if (process.platform === "darwin") {
+    const helper = verifyDarwinProcessBirthHelper({});
+    return { path: helper.path, sha256: DARWIN_HELPER_MANIFEST.binarySha256 };
+  }
+  if (process.platform === "linux" && (process.arch === "x64" || process.arch === "arm64")) {
+    return {
+      path: verifiedLinuxPublicationHelper(process.arch),
+      sha256: LINUX_PUBLICATION_HELPER_SHA256[process.arch]
+    };
+  }
+  throw new Error("Native runner execution binding is unavailable on this platform.");
+}
 function publishFileIfUnchangedDarwin(targetFd, targetPath, candidatePath, expectedPath) {
   if (process.platform === "linux") {
     return publishFileIfUnchangedLinux(targetFd, targetPath, candidatePath, expectedPath);
@@ -12057,6 +12070,52 @@ function publishFileIfUnchangedDarwin(targetFd, targetPath, candidatePath, expec
     unlinkSync3(boundPath);
   }
 }
+function linkFileIntoVerifiedDirectory(directoryFd, candidatePath, targetPath) {
+  const directory = fstatSync(directoryFd);
+  if (!directory.isDirectory() || dirname3(targetPath) === targetPath)
+    return false;
+  if (process.platform === "darwin") {
+    const helper = verifyDarwinProcessBirthHelper({});
+    return runVerifiedPublicationHelper(helper.path, DARWIN_HELPER_MANIFEST.binarySha256, [
+      "--link-into-directory",
+      candidatePath,
+      dirname3(targetPath),
+      targetPath.slice(dirname3(targetPath).length + 1),
+      String(directory.dev),
+      String(directory.ino)
+    ]);
+  }
+  if (process.platform === "linux" && (process.arch === "x64" || process.arch === "arm64")) {
+    const helperPath = verifiedLinuxPublicationHelper(process.arch);
+    return runVerifiedPublicationHelper(helperPath, LINUX_PUBLICATION_HELPER_SHA256[process.arch], [
+      "--link-into-directory",
+      candidatePath,
+      dirname3(targetPath),
+      targetPath.slice(dirname3(targetPath).length + 1),
+      String(directory.dev),
+      String(directory.ino)
+    ]);
+  }
+  return false;
+}
+function runVerifiedPublicationHelper(helperPath, expectedSha256, args) {
+  const boundPath = `${helperPath}.publish.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}`;
+  copyFileSync(helperPath, boundPath, constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE);
+  chmodSync(boundPath, 448);
+  try {
+    if (createHash3("sha256").update(readFileSync5(boundPath)).digest("hex") !== expectedSha256) {
+      throw new Error("Conditional action publication helper changed before execution.");
+    }
+    execFileSync2(boundPath, [...args], { stdio: "ignore", timeout: 2e3 });
+    return true;
+  } catch (error2) {
+    if (error2.status === 10)
+      return false;
+    throw error2;
+  } finally {
+    unlinkSync3(boundPath);
+  }
+}
 function linuxConditionalPublicationHelperPath(architecture) {
   const moduleDirectory = dirname3(fileURLToPath(import.meta.url));
   const name = `linux-conditional-publication-${architecture}`;
@@ -12070,11 +12129,7 @@ function linuxConditionalPublicationHelperPath(architecture) {
   }
   return candidates[0];
 }
-function publishFileIfUnchangedLinux(targetFd, targetPath, candidatePath, expectedPath) {
-  if (process.platform !== "linux" || process.arch !== "x64" && process.arch !== "arm64") {
-    return false;
-  }
-  const architecture = process.arch;
+function verifiedLinuxPublicationHelper(architecture) {
   const helperPath = linuxConditionalPublicationHelperPath(architecture);
   if (realpathSync(helperPath) !== helperPath) {
     throw new Error("Linux conditional publication helper path is not canonical.");
@@ -12093,6 +12148,14 @@ function publishFileIfUnchangedLinux(targetFd, targetPath, candidatePath, expect
   } finally {
     closeSync(helperFd);
   }
+  return helperPath;
+}
+function publishFileIfUnchangedLinux(targetFd, targetPath, candidatePath, expectedPath) {
+  if (process.platform !== "linux" || process.arch !== "x64" && process.arch !== "arm64") {
+    return false;
+  }
+  const architecture = process.arch;
+  const helperPath = verifiedLinuxPublicationHelper(architecture);
   const target = fstatSync(targetFd);
   if (!target.isFile())
     return false;
@@ -12229,18 +12292,18 @@ var init_process_birth = __esm({
     "use strict";
     init_trusted_system_executable();
     DARWIN_HELPER_MANIFEST = {
-      sourceSha256: "3d3cc684c83f9bd18ea2e56c7e1d62528fe7b78237d7314d73560731fff42255",
-      recipeSha256: "f22be6188030cc153d327f6c24282d48eaf0e089fd496baa67a54f53bac39843",
-      stableBinarySha256: "4090bd1f4c12b0071da253d45c1334dc92c3f08a6de0ca585de916cdbcf13442",
-      binarySha256: "33e13d0a7d5ac3d5a13829fef40f4aeaf738e7f8e0071c96947ce2289c770e64",
+      sourceSha256: "5cafc275ab929026203e64527f993cd77e2854f1697cdb419b7d901293e1bc48",
+      recipeSha256: "a1293ae1f70a5da3a4ea9b1b79a095a5f182f7cb39e37521abe87cb1864f625b",
+      stableBinarySha256: "e5dffbe66f7fa52f8e2554fb397b4b44000d8c092feff35e0c42f5f3e0150c3f",
+      binarySha256: "dd8346dab2ccb6e3ce11840bbca5f8ea2f4cbd95efae34ddb130f98824a065aa",
       cdhashes: [
-        "a1d6311233d57cab40dfa1341f7f35810896682b",
-        "39e8e81152430e0be6f338c3b00e6b413289641a"
+        "0471a3583ce2363ee96afe3e85951dd5fd154dec",
+        "1998527647f4fef05eae6007fe7a1f945aa7c54d"
       ]
     };
     LINUX_PUBLICATION_HELPER_SHA256 = {
-      x64: "511fe8f830189bfcacb5cfc590371e76cfa4914dce79a07d94a8fecc1c36f416",
-      arm64: "0654c8efac0b2424f274501a16cf227151ab25aeeb4c68333df9ae2b5d7dab15"
+      x64: "3851cbf2d01caf77b282f477365613e6d903caf1aff88ea99e8d855eab9bacfb",
+      arm64: "76ba6597b964d6541ec2657195ee515728f9a1270636275b3a55d110267f34da"
     };
     VERIFIED_HELPER_SCRIPT = `
 set -euo pipefail
@@ -24567,8 +24630,41 @@ async function withImmediatePinnedRunner(runnerPath, resolveStatus, execute2) {
     if (!snapshotStat.isFile() || snapshotStat.isSymbolicLink() || !installedPayloadMatchesPin(nodePlatformKey(), snapshotRoot) || createHash4("sha256").update(readFileSync11(snapshotRunner)).digest("hex") !== expectedSha256) {
       throw new Error("RUNNER_PIN_CHANGED: payload content changed before execution.");
     }
-    return await execute2(snapshotRunner);
+    const helper = verifiedNativePublicationHelper();
+    const snapshotHelper = join15(snapshotRoot, ".runner-exec");
+    copyFileSync2(helper.path, snapshotHelper, constants2.COPYFILE_EXCL | constants2.COPYFILE_FICLONE);
+    chmodSync3(snapshotHelper, 320);
+    if (createHash4("sha256").update(readFileSync11(snapshotHelper)).digest("hex") !== helper.sha256) {
+      throw new Error("RUNNER_PIN_CHANGED: execution binding changed before execution.");
+    }
+    for (const entry of readdirSync4(snapshotRoot, { recursive: true, withFileTypes: true })) {
+      const entryPath = join15(entry.parentPath, entry.name);
+      if (entry.isDirectory())
+        chmodSync3(entryPath, 320);
+      else if (entry.isFile())
+        chmodSync3(entryPath, entryPath === snapshotRunner ? 320 : 256);
+    }
+    chmodSync3(snapshotRoot, 320);
+    const openedRunner = lstatSync5(snapshotRunner);
+    return await execute2(snapshotHelper, [
+      "--exec-file",
+      snapshotRunner,
+      String(openedRunner.dev),
+      String(openedRunner.ino),
+      "--"
+    ]);
   } finally {
+    try {
+      chmodSync3(snapshotRoot, 448);
+      for (const entry of readdirSync4(snapshotRoot, { recursive: true, withFileTypes: true })) {
+        const entryPath = join15(entry.parentPath, entry.name);
+        if (entry.isDirectory())
+          chmodSync3(entryPath, 448);
+        else if (entry.isFile())
+          chmodSync3(entryPath, 384);
+      }
+    } catch {
+    }
     rmSync4(snapshotRoot, { recursive: true, force: true });
   }
 }
@@ -24657,6 +24753,7 @@ var MAESTRO_RUNNER_PIN, TRUSTED_DRIFT_SHA256, ACTION_ENGINE_PIN, HOST_PLUGIN_ROO
 var init_engine_pin = __esm({
   "packages/rn-dev-agent-core/dist/domain/engine-pin.js"() {
     "use strict";
+    init_process_birth();
     init_maestro_runner_pin();
     MAESTRO_RUNNER_PIN = Object.freeze({
       version: maestro_runner_pin_default.version,
@@ -25369,6 +25466,21 @@ function pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, publicationPre
   } else if (createExclusive) {
     yamlMode = 384;
   }
+  let sidecarMode = 384;
+  try {
+    const sidecarFd = openSync2(sidecarPath, constants3.O_RDONLY | constants3.O_NOFOLLOW);
+    try {
+      const sidecar = fstatSync2(sidecarFd);
+      if (!sidecar.isFile())
+        return null;
+      sidecarMode = sidecar.mode & 4095;
+    } finally {
+      closeSync2(sidecarFd);
+    }
+  } catch (error2) {
+    if (error2.code !== "ENOENT")
+      return null;
+  }
   const stamp = generateTmpStamp();
   const yamlTmp = `${yamlPath}.tmp.${stamp}`;
   const sidecarTmp = `${sidecarPath}.tmp.${stamp}`;
@@ -25379,7 +25491,7 @@ function pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, publicationPre
   };
   if (publicationPrecondition && !publicationPrecondition())
     return null;
-  atomicWriter._writeFile(sidecarTmp, JSON.stringify(projectedState, null, 2) + "\n");
+  atomicWriter._writeFileWithMode(sidecarTmp, JSON.stringify(projectedState, null, 2) + "\n", sidecarMode);
   if (publicationPrecondition && !publicationPrecondition()) {
     atomicWriter._unlink(sidecarTmp);
     return null;
@@ -25415,7 +25527,7 @@ function pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, publicationPre
     if (priorSidecar === null) {
       atomicWriter._unlink(sidecarPath);
     } else {
-      atomicWriter._writeFile(sidecarTmp, priorSidecar);
+      atomicWriter._writeFileWithMode(sidecarTmp, priorSidecar, sidecarMode);
       atomicWriter._rename(sidecarTmp, sidecarPath);
     }
     atomicWriter._unlink(yamlTmp);
@@ -25431,7 +25543,7 @@ function pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, publicationPre
     ...state,
     lastSeenMtimeMs: finalMtimeMs
   };
-  atomicWriter._writeFile(sidecarTmp, JSON.stringify(finalState, null, 2) + "\n");
+  atomicWriter._writeFileWithMode(sidecarTmp, JSON.stringify(finalState, null, 2) + "\n", sidecarMode);
   atomicWriter._rename(sidecarTmp, sidecarPath);
   return { yamlPath, sidecarPath, finalMtimeMs, refreshedSidecar: true };
 }
@@ -25519,14 +25631,24 @@ var init_atomic_writer = __esm({
       _linkIfAbsent(candidatePath, targetPath, publicationPrecondition) {
         if (publicationPrecondition && !publicationPrecondition())
           return false;
+        let directoryFd;
         try {
-          linkSync(candidatePath, targetPath);
-          return true;
+          directoryFd = openSync2(dirname9(targetPath), constants3.O_RDONLY | constants3.O_NOFOLLOW | constants3.O_DIRECTORY);
         } catch (error2) {
-          if (error2.code === "EEXIST")
-            return false;
-          throw error2;
+          return false;
         }
+        try {
+          const directory = fstatSync2(directoryFd);
+          if (!directory.isDirectory() || publicationPrecondition && !publicationPrecondition()) {
+            return false;
+          }
+          return atomicWriter._linkIntoVerifiedDirectory(directoryFd, candidatePath, targetPath);
+        } finally {
+          closeSync2(directoryFd);
+        }
+      },
+      _linkIntoVerifiedDirectory(directoryFd, candidatePath, targetPath) {
+        return linkFileIntoVerifiedDirectory(directoryFd, candidatePath, targetPath);
       },
       _publishIfUnchanged(candidatePath, targetPath, expectedContent, stamp, publicationPrecondition) {
         let targetFd;
@@ -33282,7 +33404,7 @@ function createMaestroRunHandler(deps = {}) {
             Object.assign(error2, { code: "ETIMEDOUT" });
             throw error2;
           }
-          const executeRunner = (runnerPath) => {
+          const executeRunner = (runnerPath, prefixArgs = []) => {
             beforeDispatch?.();
             const remainingTimeout = flowDeadline - now();
             if (remainingTimeout <= 0) {
@@ -33290,7 +33412,7 @@ function createMaestroRunHandler(deps = {}) {
               Object.assign(error2, { code: "ETIMEDOUT" });
               throw error2;
             }
-            return execute2(runnerPath, finalArgs, {
+            return execute2(runnerPath, [...prefixArgs, ...finalArgs], {
               timeout: remainingTimeout,
               encoding: "utf8",
               maxBuffer: 10 * 1024 * 1024
@@ -34352,14 +34474,14 @@ async function runMaestroInline(yaml2, opts, dependencies = {}) {
     const finalArgs = assembleMaestroArgs(baseArgs, runnerReportArgs(runnerReportDir));
     const executionDeadline = Date.now() + timeout;
     const execute2 = async () => {
-      const spawn10 = (runnerPath) => {
+      const spawn10 = (runnerPath, prefixArgs = []) => {
         const remainingTimeout = executionDeadline - Date.now();
         if (remainingTimeout <= 0) {
           const error2 = new Error("Maestro flow timeout exhausted before runner execution");
           Object.assign(error2, { code: "ETIMEDOUT" });
           throw error2;
         }
-        return (dependencies.spawnManaged ?? spawnManagedProcessGroup)(runnerPath, finalArgs, {
+        return (dependencies.spawnManaged ?? spawnManagedProcessGroup)(runnerPath, [...prefixArgs, ...finalArgs], {
           timeoutMs: remainingTimeout,
           platform: opts.platform,
           deviceId: requestedDeviceId,
@@ -85027,14 +85149,14 @@ function createMaestroTestAllHandler(deps = {}) {
           writeFileSync16(safeFlowFile, buildMaestroFlow(parsedAppId !== void 0 ? { appId: parsedAppId } : {}, [
             ...commands
           ]), "utf-8");
-          const executeRunner = (runnerPath) => {
+          const executeRunner = (runnerPath, prefixArgs = []) => {
             const remainingTimeout = start + timeout - now();
             if (remainingTimeout <= 0) {
               const error2 = new Error("Maestro flow timeout exhausted before runner execution");
               Object.assign(error2, { code: "ETIMEDOUT" });
               throw error2;
             }
-            return execute2(runnerPath, finalArgs, {
+            return execute2(runnerPath, [...prefixArgs, ...finalArgs], {
               timeout: remainingTimeout,
               encoding: "utf8",
               maxBuffer: 10 * 1024 * 1024

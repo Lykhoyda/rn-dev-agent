@@ -37,6 +37,7 @@ struct statx {
 #define O_NOFOLLOW 0x20000
 #define O_CLOEXEC 0x80000
 #define RENAME_EXCHANGE 2
+#define RENAME_NOREPLACE 1
 #define STATX_BASIC_STATS 0x7ff
 #define S_IFMT 0170000
 #define S_IFREG 0100000
@@ -46,9 +47,11 @@ struct statx {
 #define SYS_CLOSE 3
 #define SYS_PREAD64 17
 #define SYS_OPENAT 257
+#define SYS_LINKAT 265
 #define SYS_UNLINKAT 263
 #define SYS_RENAMEAT2 316
 #define SYS_STATX 332
+#define SYS_EXECVEAT 322
 static long syscall6(long number, long a1, long a2, long a3, long a4, long a5, long a6) {
   register long r10 __asm__("r10") = a4;
   register long r8 __asm__("r8") = a5;
@@ -64,9 +67,11 @@ __asm__(".global _start\\n_start:\\nmov (%rsp), %rdi\\nlea 8(%rsp), %rsi\\n"
 #define SYS_CLOSE 57
 #define SYS_PREAD64 67
 #define SYS_OPENAT 56
+#define SYS_LINKAT 37
 #define SYS_UNLINKAT 35
 #define SYS_RENAMEAT2 276
 #define SYS_STATX 291
+#define SYS_EXECVEAT 281
 static long syscall6(long number, long a1, long a2, long a3, long a4, long a5, long a6) {
   register long x0 __asm__("x0") = a1;
   register long x1 __asm__("x1") = a2;
@@ -107,6 +112,12 @@ static int parse_u64(const char *value, u64 *result) {
     parsed = parsed * 10 + digit;
   }
   *result = parsed;
+  return 1;
+}
+static int safe_name(const char *value) {
+  if (!*value || (value[0] == '.' && value[1] == 0) ||
+      (value[0] == '.' && value[1] == '.' && value[2] == 0)) return 0;
+  for (; *value; value++) if (*value == '/') return 0;
   return 1;
 }
 static u64 device_number(const struct statx *value) {
@@ -155,6 +166,43 @@ static int same_content(long left, long right) {
 }
 
 __attribute__((visibility("hidden"))) int helper_main(long argc, char **argv) {
+  if (argc >= 7 && argv[1][0] == '-' && argv[1][1] == '-' && argv[1][2] == 'e' &&
+      argv[1][3] == 'x' && argv[1][4] == 'e' && argv[1][5] == 'c' &&
+      argv[1][6] == '-' && argv[1][7] == 'f' && argv[1][8] == 'i' &&
+      argv[1][9] == 'l' && argv[1][10] == 'e' && argv[1][11] == 0) {
+    long executable_fd = open_read(argv[2]);
+    struct statx executable_stat;
+    u64 expected_dev;
+    u64 expected_ino;
+    if (executable_fd < 0 || !parse_u64(argv[3], &expected_dev) ||
+        !parse_u64(argv[4], &expected_ino) || argv[5][0] != '-' || argv[5][1] != '-' ||
+        argv[5][2] != 0 ||
+        !descriptor_stat(executable_fd, &executable_stat) || !regular(&executable_stat) ||
+        device_number(&executable_stat) != expected_dev || executable_stat.ino != expected_ino)
+      return 10;
+    argv[5] = argv[2];
+    char **environment = argv + argc + 1;
+    char empty = 0;
+    syscall6(SYS_EXECVEAT, executable_fd, (long)&empty, (long)&argv[5],
+             (long)environment, AT_EMPTY_PATH, 0);
+    return 11;
+  }
+  if (argc == 4 && argv[1][0] == '-' && argv[1][1] == '-' && argv[1][2] == 'r' &&
+      argv[1][3] == 'e' && argv[1][4] == 'n' && argv[1][5] == 'a' &&
+      argv[1][6] == 'm' && argv[1][7] == 'e' && argv[1][8] == '-' &&
+      argv[1][9] == 'n' && argv[1][10] == 'o' && argv[1][11] == '-' &&
+      argv[1][12] == 'r' && argv[1][13] == 'e' && argv[1][14] == 'p' &&
+      argv[1][15] == 'l' && argv[1][16] == 'a' && argv[1][17] == 'c' &&
+      argv[1][18] == 'e' && argv[1][19] == 0) {
+    struct statx source_stat;
+    if (!path_stat(argv[2], &source_stat) || !directory(&source_stat)) return 10;
+    long result = syscall6(SYS_RENAMEAT2, AT_FDCWD, (long)argv[2], AT_FDCWD,
+                           (long)argv[3], RENAME_NOREPLACE, 0);
+    if (result != 0) return result == -17 ? 10 : 11;
+    struct statx published_stat;
+    if (!path_stat(argv[3], &published_stat) || !same_file(&published_stat, &source_stat)) return 12;
+    return 0;
+  }
   if (argc == 4 && argv[1][0] == '-' && argv[1][1] == '-' && argv[1][2] == 'e' &&
       argv[1][3] == 'x' && argv[1][4] == 'c' && argv[1][5] == 'h' &&
       argv[1][6] == 'a' && argv[1][7] == 'n' && argv[1][8] == 'g' &&
@@ -172,6 +220,39 @@ __attribute__((visibility("hidden"))) int helper_main(long argc, char **argv) {
     if (!path_stat(argv[2], &published_left) || !path_stat(argv[3], &published_right) ||
         !same_file(&published_left, &right_stat) || !same_file(&published_right, &left_stat))
       return 12;
+    return 0;
+  }
+  if (argc == 7 && argv[1][0] == '-' && argv[1][1] == '-' && argv[1][2] == 'l' &&
+      argv[1][3] == 'i' && argv[1][4] == 'n' && argv[1][5] == 'k' &&
+      argv[1][6] == '-' && argv[1][7] == 'i' && argv[1][8] == 'n' &&
+      argv[1][9] == 't' && argv[1][10] == 'o' && argv[1][11] == '-' &&
+      argv[1][12] == 'd' && argv[1][13] == 'i' && argv[1][14] == 'r' &&
+      argv[1][15] == 'e' && argv[1][16] == 'c' && argv[1][17] == 't' &&
+      argv[1][18] == 'o' && argv[1][19] == 'r' && argv[1][20] == 'y' &&
+      argv[1][21] == 0) {
+    if (!safe_name(argv[4])) return 2;
+    long directory_fd = open_read(argv[3]);
+    long candidate_fd = open_read(argv[2]);
+    struct statx directory_stat;
+    struct statx candidate_stat;
+    u64 expected_dev;
+    u64 expected_ino;
+    if (directory_fd < 0) return 10;
+    if (candidate_fd < 0 || !parse_u64(argv[5], &expected_dev) ||
+        !parse_u64(argv[6], &expected_ino)) return 2;
+    if (!descriptor_stat(directory_fd, &directory_stat) ||
+        !descriptor_stat(candidate_fd, &candidate_stat) || !directory(&directory_stat) ||
+        !regular(&candidate_stat) || device_number(&directory_stat) != expected_dev ||
+        directory_stat.ino != expected_ino ||
+        directory_stat.dev_major != candidate_stat.dev_major ||
+        directory_stat.dev_minor != candidate_stat.dev_minor) return 10;
+    long result = call5(SYS_LINKAT, AT_FDCWD, (long)argv[2], directory_fd, (long)argv[4], 0);
+    if (result != 0) return result == -17 ? 10 : 11;
+    long published_fd = call4(SYS_OPENAT, directory_fd, (long)argv[4],
+                              O_RDONLY | O_NOFOLLOW | O_CLOEXEC, 0);
+    struct statx published_stat;
+    if (published_fd < 0 || !descriptor_stat(published_fd, &published_stat) ||
+        !same_file(&published_stat, &candidate_stat)) return 12;
     return 0;
   }
   if (argc != 7) return 2;

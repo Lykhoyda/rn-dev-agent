@@ -339,7 +339,10 @@ export function createMaestroTestAllHandler(
                   ]),
                   'utf-8',
                 );
-                const executeRunner = (runnerPath: string) => {
+                const executeRunner = (
+                  runnerPath: string,
+                  prefixArgs: readonly string[] = [],
+                ) => {
                   const remainingTimeout = start + timeout - now();
                   if (remainingTimeout <= 0) {
                     const error = new Error(
@@ -348,7 +351,7 @@ export function createMaestroTestAllHandler(
                     Object.assign(error, { code: 'ETIMEDOUT' });
                     throw error;
                   }
-                  return execute(runnerPath, finalArgs, {
+                  return execute(runnerPath, [...prefixArgs, ...finalArgs], {
                     timeout: remainingTimeout,
                     encoding: 'utf8',
                     maxBuffer: 10 * 1024 * 1024,

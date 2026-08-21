@@ -36,7 +36,7 @@
 // `mock.method(atomicWriter, '_writeFile', ...)` to inject failures.
 import { writeFileSync, renameSync, statSync, mkdirSync, existsSync, unlinkSync, readdirSync, openSync, closeSync, chmodSync, fstatSync, lstatSync, readFileSync, linkSync, constants, } from 'node:fs';
 import { dirname, basename } from 'node:path';
-import { probeProcessBirth, publishFileIfUnchangedDarwin } from '../session/process-birth.js';
+import { linkFileIntoVerifiedDirectory, probeProcessBirth, publishFileIfUnchangedDarwin, } from '../session/process-birth.js';
 // Multi-LLM review of PR #109 findings 1+2: `finalMtimeMs = _stat(yaml)`
 // breaks the safety invariant in two scenarios — (a) slow writes where
 // the actual YAML mtime exceeds `projectedMtimeMs` and step 5 happens
@@ -235,6 +235,23 @@ function pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, publicationPre
     else if (createExclusive) {
         yamlMode = 0o600;
     }
+    let sidecarMode = 0o600;
+    try {
+        const sidecarFd = openSync(sidecarPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+        try {
+            const sidecar = fstatSync(sidecarFd);
+            if (!sidecar.isFile())
+                return null;
+            sidecarMode = sidecar.mode & 0o7777;
+        }
+        finally {
+            closeSync(sidecarFd);
+        }
+    }
+    catch (error) {
+        if (error.code !== 'ENOENT')
+            return null;
+    }
     // GH #111: unique stamp per call so two concurrent pairWrites against
     // the same action id never share a tmp namespace. Without this, B's
     // cleanupOrphans could unlink A's in-flight .tmp file and produce an
@@ -250,7 +267,7 @@ function pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, publicationPre
     };
     if (publicationPrecondition && !publicationPrecondition())
         return null;
-    atomicWriter._writeFile(sidecarTmp, JSON.stringify(projectedState, null, 2) + '\n');
+    atomicWriter._writeFileWithMode(sidecarTmp, JSON.stringify(projectedState, null, 2) + '\n', sidecarMode);
     if (publicationPrecondition && !publicationPrecondition()) {
         atomicWriter._unlink(sidecarTmp);
         return null;
@@ -293,7 +310,7 @@ function pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, publicationPre
             atomicWriter._unlink(sidecarPath);
         }
         else {
-            atomicWriter._writeFile(sidecarTmp, priorSidecar);
+            atomicWriter._writeFileWithMode(sidecarTmp, priorSidecar, sidecarMode);
             atomicWriter._rename(sidecarTmp, sidecarPath);
         }
         atomicWriter._unlink(yamlTmp);
@@ -327,7 +344,7 @@ function pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, publicationPre
         ...state,
         lastSeenMtimeMs: finalMtimeMs,
     };
-    atomicWriter._writeFile(sidecarTmp, JSON.stringify(finalState, null, 2) + '\n');
+    atomicWriter._writeFileWithMode(sidecarTmp, JSON.stringify(finalState, null, 2) + '\n', sidecarMode);
     atomicWriter._rename(sidecarTmp, sidecarPath);
     return { yamlPath, sidecarPath, finalMtimeMs, refreshedSidecar: true };
 }
@@ -424,15 +441,26 @@ export const atomicWriter = {
     _linkIfAbsent(candidatePath, targetPath, publicationPrecondition) {
         if (publicationPrecondition && !publicationPrecondition())
             return false;
+        let directoryFd;
         try {
-            linkSync(candidatePath, targetPath);
-            return true;
+            directoryFd = openSync(dirname(targetPath), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY);
         }
         catch (error) {
-            if (error.code === 'EEXIST')
-                return false;
-            throw error;
+            return false;
         }
+        try {
+            const directory = fstatSync(directoryFd);
+            if (!directory.isDirectory() || (publicationPrecondition && !publicationPrecondition())) {
+                return false;
+            }
+            return atomicWriter._linkIntoVerifiedDirectory(directoryFd, candidatePath, targetPath);
+        }
+        finally {
+            closeSync(directoryFd);
+        }
+    },
+    _linkIntoVerifiedDirectory(directoryFd, candidatePath, targetPath) {
+        return linkFileIntoVerifiedDirectory(directoryFd, candidatePath, targetPath);
     },
     _publishIfUnchanged(candidatePath, targetPath, expectedContent, stamp, publicationPrecondition) {
         let targetFd;

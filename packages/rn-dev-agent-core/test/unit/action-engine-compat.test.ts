@@ -384,6 +384,28 @@ test('migration stages every YAML snapshot with the target permissions', (t) => 
   assert.deepEqual(new Set(observedModes), new Set([0o600]));
 });
 
+test('migration preserves restrictive sidecar permissions', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-action-migrate-sidecar-mode-'));
+  const dir = join(root, '.rn-agent', 'actions');
+  mkdirSync(dir, { recursive: true });
+  const actionPath = join(dir, 'checkout.yaml');
+  const sidecarPath = sidecarPathFor(actionPath);
+  const source = actionYaml('checkout');
+  writeFileSync(actionPath, source, { encoding: 'utf8', mode: 0o600 });
+  mkdirSync(join(root, '.rn-agent', 'state'), { recursive: true });
+  const state = freshRuntimeState(() => new Date('2026-01-01T00:00:00Z'), 1);
+  state.lastSeenMtimeMs = statSync(actionPath).mtimeMs;
+  writeFileSync(sidecarPath, `${JSON.stringify(state, null, 2)}\n`, {
+    encoding: 'utf8',
+    mode: 0o600,
+  });
+  const baseline = loadActionMigrationBaseline(actionPath);
+
+  commitMigratedActionText(actionPath, baseline, upsertEnginePinHeader(source).text);
+
+  assert.equal(statSync(sidecarPath).mode & 0o7777, 0o600);
+});
+
 test('action writer never age-reclaims a live process lock', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-action-live-lock-'));
   const dir = join(root, '.rn-agent', 'actions');
@@ -444,8 +466,8 @@ test('action creation refuses an actions-directory symlink swap at publication',
   const displaced = join(root, '.rn-agent', 'actions-original');
   const shared = mkdtempSync(join(tmpdir(), 'rn-action-create-shared-'));
   mkdirSync(dir, { recursive: true });
-  const originalLink = atomicWriter._linkIfAbsent;
-  t.mock.method(atomicWriter, '_linkIfAbsent', (...args) => {
+  const originalLink = atomicWriter._linkIntoVerifiedDirectory;
+  t.mock.method(atomicWriter, '_linkIntoVerifiedDirectory', (...args) => {
     renameSync(dir, displaced);
     symlinkSync(shared, dir, 'dir');
     return originalLink(...args);

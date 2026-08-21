@@ -749,7 +749,10 @@ export function createMaestroRunHandler(
                   Object.assign(error, { code: 'ETIMEDOUT' });
                   throw error;
                 }
-                const executeRunner = (runnerPath: string) => {
+                const executeRunner = (
+                  runnerPath: string,
+                  prefixArgs: readonly string[] = [],
+                ) => {
                   beforeDispatch?.();
                   const remainingTimeout = flowDeadline - now();
                   if (remainingTimeout <= 0) {
@@ -759,7 +762,7 @@ export function createMaestroRunHandler(
                     Object.assign(error, { code: 'ETIMEDOUT' });
                     throw error;
                   }
-                  return execute(runnerPath, finalArgs, {
+                  return execute(runnerPath, [...prefixArgs, ...finalArgs], {
                     timeout: remainingTimeout,
                     encoding: 'utf8',
                     maxBuffer: 10 * 1024 * 1024,
