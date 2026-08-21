@@ -9,6 +9,7 @@ import { classifyLearnedActionPath, isLearnedActionPath, replayCompatibilityPref
 import { parseAndValidateFlow } from './domain/maestro-validator.js';
 import { parseM7Header } from './domain/reusable-action.js';
 import { resolveActionPath } from './domain/action-store.js';
+import { filterWithBoundedRegex } from './domain/bounded-regex.js';
 import { createMaestroRunHandler } from './tools/maestro-run.js';
 const USAGE = 'usage: maestro-runner-pin [diagnose|install|migrate-actions|verify-actions] [--json] [--root <app>]';
 function ensureScriptPath() {
@@ -77,17 +78,9 @@ async function verifyActions(argv) {
         console.error(pinRefusal);
         return 2;
     }
-    let matcher = null;
     if (pattern) {
         if (pattern.length > 256) {
             console.error('verify-actions --pattern must be at most 256 characters');
-            return 2;
-        }
-        try {
-            matcher = new RegExp(pattern, 'i');
-        }
-        catch (err) {
-            console.error(`verify-actions pattern is invalid: ${String(err)}`);
             return 2;
         }
     }
@@ -103,11 +96,15 @@ async function verifyActions(argv) {
         const discovered = learnedCorpus
             ? readdirSync(flowDir)
             : readdirSync(flowDir, { recursive: true });
-        files = discovered
-            .filter((file) => /\.ya?ml$/i.test(file))
-            .filter((file) => matcher?.test(file) ?? true)
-            .map((file) => join(flowDir, file))
-            .sort();
+        const yamlFiles = discovered.filter((file) => /\.ya?ml$/i.test(file));
+        const filtered = pattern
+            ? await filterWithBoundedRegex(yamlFiles, pattern)
+            : { ok: true, matches: yamlFiles };
+        if (!filtered.ok) {
+            console.error(`verify-actions pattern is ${filtered.reason}: ${filtered.message}`);
+            return 2;
+        }
+        files = filtered.matches.map((file) => join(flowDir, file)).sort();
     }
     catch (err) {
         console.error(`verify-actions could not read ${flowDir}: ${String(err)}`);
@@ -125,7 +122,10 @@ async function verifyActions(argv) {
                 throw new Error(actionPathRefusal);
             const text = readFileSync(file, 'utf8');
             const parsed = parseAndValidateFlow(text, { flowDir: dirname(file), flowRoot: flowDir });
-            const id = file.split('/').pop().replace(/\.ya?ml$/i, '');
+            const id = file
+                .split('/')
+                .pop()
+                .replace(/\.ya?ml$/i, '');
             const meta = parseM7Header(text, id);
             const owned = isLearnedActionPath(file);
             if (owned) {

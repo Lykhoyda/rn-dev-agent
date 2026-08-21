@@ -34,7 +34,7 @@
 //
 // Test seam: the public API is on a single exported object so tests can
 // `mock.method(atomicWriter, '_writeFile', ...)` to inject failures.
-import { writeFileSync, renameSync, statSync, mkdirSync, existsSync, unlinkSync, readdirSync, } from 'node:fs';
+import { writeFileSync, renameSync, statSync, mkdirSync, existsSync, unlinkSync, readdirSync, openSync, closeSync, fstatSync, lstatSync, } from 'node:fs';
 import { dirname, basename } from 'node:path';
 // Multi-LLM review of PR #109 findings 1+2: `finalMtimeMs = _stat(yaml)`
 // breaks the safety invariant in two scenarios — (a) slow writes where
@@ -72,6 +72,65 @@ export const ORPHAN_MAX_AGE_MS = 5 * 60 * 1_000;
 function generateTmpStamp() {
     const rand = Math.random().toString(36).slice(2, 10);
     return `${process.pid}.${Date.now().toString(36)}.${rand}`;
+}
+const ACTION_WRITE_LOCK_TIMEOUT_MS = 5_000;
+const ACTION_WRITE_LOCK_STALE_MS = 30_000;
+const lockWaitBuffer = new Int32Array(new SharedArrayBuffer(4));
+function withPairWriteLock(yamlPath, operation) {
+    ensureDir(yamlPath);
+    const lockPath = `${yamlPath}.write.lock`;
+    const deadline = Date.now() + ACTION_WRITE_LOCK_TIMEOUT_MS;
+    let lockFd = null;
+    while (lockFd === null) {
+        try {
+            lockFd = openSync(lockPath, 'wx', 0o600);
+        }
+        catch (err) {
+            if (err.code !== 'EEXIST')
+                throw err;
+            let lockStat;
+            try {
+                lockStat = lstatSync(lockPath);
+            }
+            catch (statError) {
+                if (statError.code === 'ENOENT')
+                    continue;
+                throw statError;
+            }
+            if (!lockStat.isFile() || lockStat.isSymbolicLink()) {
+                throw new Error(`Refusing invalid action write lock at ${lockPath}.`);
+            }
+            if (Date.now() - lockStat.mtimeMs >= ACTION_WRITE_LOCK_STALE_MS) {
+                try {
+                    const current = lstatSync(lockPath);
+                    if (current.dev === lockStat.dev && current.ino === lockStat.ino)
+                        unlinkSync(lockPath);
+                }
+                catch (unlinkError) {
+                    if (unlinkError.code !== 'ENOENT')
+                        throw unlinkError;
+                }
+                continue;
+            }
+            if (Date.now() >= deadline) {
+                throw new Error(`Timed out waiting for action write lock at ${lockPath}.`);
+            }
+            Atomics.wait(lockWaitBuffer, 0, 0, 10);
+        }
+    }
+    const identity = fstatSync(lockFd);
+    try {
+        return operation();
+    }
+    finally {
+        try {
+            const current = lstatSync(lockPath);
+            if (current.dev === identity.dev && current.ino === identity.ino)
+                unlinkSync(lockPath);
+        }
+        catch { }
+        closeSync(lockFd);
+    }
 }
 /**
  * Atomic write of a (YAML, sidecar) pair using sidecar-first ordering.
@@ -220,13 +279,26 @@ export const atomicWriter = {
     _readdir(path) {
         return readdirSync(path);
     },
+    withLock(yamlPath, operation) {
+        return withPairWriteLock(yamlPath, operation);
+    },
     /**
      * Atomic pair-write. Cleans up any orphaned `.tmp` files before
      * starting. Throws on the first failed step — caller decides whether
      * to surface or recover.
      */
     pairWrite(yamlPath, yamlContent, sidecarPath, state) {
-        cleanupOrphans(yamlPath, sidecarPath);
-        return pairWriteImpl(yamlPath, yamlContent, sidecarPath, state);
+        return withPairWriteLock(yamlPath, () => {
+            cleanupOrphans(yamlPath, sidecarPath);
+            return pairWriteImpl(yamlPath, yamlContent, sidecarPath, state);
+        });
+    },
+    pairWriteConditional(yamlPath, yamlContent, sidecarPath, state, precondition) {
+        return withPairWriteLock(yamlPath, () => {
+            if (!precondition())
+                return null;
+            cleanupOrphans(yamlPath, sidecarPath);
+            return pairWriteImpl(yamlPath, yamlContent, sidecarPath, state);
+        });
     },
 };

@@ -122,19 +122,10 @@ test('installer verifies the complete archive before replacing the live pin-cach
   );
   mkdirSync(join(payload, 'bin'), { recursive: true });
   mkdirSync(join(payload, 'drivers'), { recursive: true });
-  writeFileSync(
-    join(payload, 'bin', 'maestro-runner'),
-    '#!/bin/sh\necho maestro-runner 1.1.24\n',
-  );
+  writeFileSync(join(payload, 'bin', 'maestro-runner'), '#!/bin/sh\necho maestro-runner 1.1.24\n');
   chmodSync(join(payload, 'bin', 'maestro-runner'), 0o755);
   writeFileSync(join(payload, 'drivers', 'altered.apk'), 'altered');
-  const packed = spawnSync('tar', [
-    '-czf',
-    archive,
-    '-C',
-    join(root, 'payload'),
-    'maestro-runner',
-  ]);
+  const packed = spawnSync('tar', ['-czf', archive, '-C', join(root, 'payload'), 'maestro-runner']);
   assert.equal(packed.status, 0, String(packed.stderr));
   mkdirSync(dirname(liveBin), { recursive: true });
   writeFileSync(liveBin, '#!/bin/sh\necho existing\n');
@@ -173,11 +164,7 @@ test('installer verifies the complete archive before replacing the live pin-cach
 
 test('installer reclaims a stale ownerless legacy lock', () => {
   const cache = mkdtempSync(join(tmpdir(), 'mr-ownerless-lock-'));
-  const lock = join(
-    cache,
-    'maestro-runner',
-    `.install-${MAESTRO_RUNNER_PIN.version}.lock`,
-  );
+  const lock = join(cache, 'maestro-runner', `.install-${MAESTRO_RUNNER_PIN.version}.lock`);
   mkdirSync(lock, { recursive: true });
   const stale = new Date(Date.now() - 10_000);
   utimesSync(lock, stale, stale);
@@ -197,11 +184,7 @@ test('installer reclaims a stale ownerless legacy lock', () => {
 
 test('installer waits beyond ten seconds for a healthy lock owner', async () => {
   const cache = mkdtempSync(join(tmpdir(), 'mr-lock-wait-'));
-  const lock = join(
-    cache,
-    'maestro-runner',
-    `.install-${MAESTRO_RUNNER_PIN.version}.lock`,
-  );
+  const lock = join(cache, 'maestro-runner', `.install-${MAESTRO_RUNNER_PIN.version}.lock`);
   mkdirSync(dirname(lock), { recursive: true });
   const holder = spawn(
     process.execPath,
@@ -232,6 +215,79 @@ test('installer waits beyond ten seconds for a healthy lock owner', async () => 
   assert.ok(elapsedMs >= 10_000);
   assert.match(`${result.stdout}${result.stderr}`, /failed to download/);
   assert.doesNotMatch(`${result.stdout}${result.stderr}`, /timed out waiting/);
+});
+
+test('installer reclaims an aged lock whose pid was reused', () => {
+  const root = mkdtempSync(join(tmpdir(), 'mr-reused-pid-lock-'));
+  const cache = join(root, 'cache');
+  const lock = join(cache, 'maestro-runner', `.install-${MAESTRO_RUNNER_PIN.version}.lock`);
+  const toolDir = join(root, 'tools');
+  mkdirSync(dirname(lock), { recursive: true });
+  mkdirSync(toolDir);
+  writeFileSync(lock, `${process.pid}\n`);
+  const stale = new Date(Date.now() - 120_000);
+  utimesSync(lock, stale, stale);
+  writeFileSync(join(toolDir, 'sleep'), '#!/bin/sh\nexit 0\n');
+  chmodSync(join(toolDir, 'sleep'), 0o755);
+
+  const result = runEnsure({
+    RN_DEV_AGENT_RUNNER_CACHE: cache,
+    RN_DEV_AGENT_UNAME_S: 'Darwin',
+    RN_DEV_AGENT_UNAME_M: 'arm64',
+    RN_DEV_AGENT_MAESTRO_DOWNLOAD_URL: 'http://127.0.0.1:1/missing.tar.gz',
+    PATH: `${toolDir}:${process.env.PATH ?? ''}`,
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}${result.stderr}`, /failed to download/);
+  assert.doesNotMatch(`${result.stdout}${result.stderr}`, /timed out waiting/);
+  assert.equal(existsSync(lock), false);
+});
+
+test('installer applies one deadline across lock wait and download', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'mr-total-deadline-'));
+  const cache = join(root, 'cache');
+  const lock = join(cache, 'maestro-runner', `.install-${MAESTRO_RUNNER_PIN.version}.lock`);
+  const toolDir = join(root, 'tools');
+  const marker = join(root, 'curl-max-time');
+  mkdirSync(dirname(lock), { recursive: true });
+  mkdirSync(toolDir);
+  writeFileSync(
+    join(toolDir, 'curl'),
+    '#!/bin/sh\nwhile [ "$#" -gt 0 ]; do\n  if [ "$1" = "--max-time" ]; then\n    shift\n    printf "%s" "$1" > "$CURL_TIMEOUT_MARKER"\n  fi\n  shift\ndone\nexit 1\n',
+  );
+  chmodSync(join(toolDir, 'curl'), 0o755);
+  const holder = spawn(
+    process.execPath,
+    [
+      '-e',
+      'const fs=require("node:fs"); const p=process.argv[1]; fs.writeFileSync(p,String(process.pid)); setTimeout(()=>fs.unlinkSync(p),2000);',
+      lock,
+    ],
+    { stdio: 'ignore' },
+  );
+  for (let attempt = 0; attempt < 100 && !existsSync(lock); attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(existsSync(lock), true);
+
+  const result = runEnsure({
+    RN_DEV_AGENT_RUNNER_CACHE: cache,
+    RN_DEV_AGENT_UNAME_S: 'Darwin',
+    RN_DEV_AGENT_UNAME_M: 'arm64',
+    RN_DEV_AGENT_TEST_INSTALL_BUDGET_SECONDS: '15',
+    RN_DEV_AGENT_MAESTRO_DOWNLOAD_URL: 'https://example.invalid/runner.tar.gz',
+    CURL_TIMEOUT_MARKER: marker,
+    PATH: `${toolDir}:${process.env.PATH ?? ''}`,
+  });
+  if (holder.exitCode === null) {
+    await new Promise<void>((resolve) => holder.once('exit', () => resolve()));
+  }
+
+  assert.notEqual(result.status, 0);
+  const maxTime = Number(readFileSync(marker, 'utf8'));
+  assert.ok(maxTime >= 1 && maxTime <= 5);
+  assert.match(`${result.stdout}${result.stderr}`, /failed to download/);
 });
 
 test('pin manifest owns checksums for every supported release archive', () => {
@@ -474,7 +530,10 @@ test('feedback collection uses package-local pin diagnosis without executing amb
   assert.equal(result.status, 0, result.stderr);
   assert.equal(readFileSync(diagnoseMarker, 'utf8'), 'yes');
   assert.throws(() => readFileSync(ambientMarker));
-  assert.equal(JSON.parse(result.stdout).environment.maestro_runner, '1.1.24 (pinned-ok, pin-cache)');
+  assert.equal(
+    JSON.parse(result.stdout).environment.maestro_runner,
+    '1.1.24 (pinned-ok, pin-cache)',
+  );
 });
 
 test('verify.sh refuses PATH or ~/.maestro-runner and names the supported correction', () => {

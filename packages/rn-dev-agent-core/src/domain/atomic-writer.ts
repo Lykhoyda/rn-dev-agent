@@ -43,6 +43,10 @@ import {
   existsSync,
   unlinkSync,
   readdirSync,
+  openSync,
+  closeSync,
+  fstatSync,
+  lstatSync,
 } from 'node:fs';
 import { dirname, basename } from 'node:path';
 import type { ActionRuntimeState } from './reusable-action.js';
@@ -95,6 +99,57 @@ export interface PairWriteResult {
   finalMtimeMs: number;
   /** True iff the optimistic step-5 sidecar refresh ran. */
   refreshedSidecar: boolean;
+}
+
+const ACTION_WRITE_LOCK_TIMEOUT_MS = 5_000;
+const ACTION_WRITE_LOCK_STALE_MS = 30_000;
+const lockWaitBuffer = new Int32Array(new SharedArrayBuffer(4));
+
+function withPairWriteLock<T>(yamlPath: string, operation: () => T): T {
+  ensureDir(yamlPath);
+  const lockPath = `${yamlPath}.write.lock`;
+  const deadline = Date.now() + ACTION_WRITE_LOCK_TIMEOUT_MS;
+  let lockFd: number | null = null;
+  while (lockFd === null) {
+    try {
+      lockFd = openSync(lockPath, 'wx', 0o600);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+      let lockStat;
+      try {
+        lockStat = lstatSync(lockPath);
+      } catch (statError) {
+        if ((statError as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw statError;
+      }
+      if (!lockStat.isFile() || lockStat.isSymbolicLink()) {
+        throw new Error(`Refusing invalid action write lock at ${lockPath}.`);
+      }
+      if (Date.now() - lockStat.mtimeMs >= ACTION_WRITE_LOCK_STALE_MS) {
+        try {
+          const current = lstatSync(lockPath);
+          if (current.dev === lockStat.dev && current.ino === lockStat.ino) unlinkSync(lockPath);
+        } catch (unlinkError) {
+          if ((unlinkError as NodeJS.ErrnoException).code !== 'ENOENT') throw unlinkError;
+        }
+        continue;
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(`Timed out waiting for action write lock at ${lockPath}.`);
+      }
+      Atomics.wait(lockWaitBuffer, 0, 0, 10);
+    }
+  }
+  const identity = fstatSync(lockFd);
+  try {
+    return operation();
+  } finally {
+    try {
+      const current = lstatSync(lockPath);
+      if (current.dev === identity.dev && current.ino === identity.ino) unlinkSync(lockPath);
+    } catch {}
+    closeSync(lockFd);
+  }
 }
 
 /**
@@ -253,6 +308,10 @@ export const atomicWriter = {
     return readdirSync(path);
   },
 
+  withLock<T>(yamlPath: string, operation: () => T): T {
+    return withPairWriteLock(yamlPath, operation);
+  },
+
   /**
    * Atomic pair-write. Cleans up any orphaned `.tmp` files before
    * starting. Throws on the first failed step — caller decides whether
@@ -264,7 +323,23 @@ export const atomicWriter = {
     sidecarPath: string,
     state: ActionRuntimeState,
   ): PairWriteResult {
-    cleanupOrphans(yamlPath, sidecarPath);
-    return pairWriteImpl(yamlPath, yamlContent, sidecarPath, state);
+    return withPairWriteLock(yamlPath, () => {
+      cleanupOrphans(yamlPath, sidecarPath);
+      return pairWriteImpl(yamlPath, yamlContent, sidecarPath, state);
+    });
+  },
+
+  pairWriteConditional(
+    yamlPath: string,
+    yamlContent: string,
+    sidecarPath: string,
+    state: ActionRuntimeState,
+    precondition: () => boolean,
+  ): PairWriteResult | null {
+    return withPairWriteLock(yamlPath, () => {
+      if (!precondition()) return null;
+      cleanupOrphans(yamlPath, sidecarPath);
+      return pairWriteImpl(yamlPath, yamlContent, sidecarPath, state);
+    });
   },
 };

@@ -8319,11 +8319,63 @@ var init_sidecar_io = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/atomic-writer.js
-import { writeFileSync as writeFileSync2, renameSync, statSync as statSync2, mkdirSync as mkdirSync3, existsSync as existsSync2, unlinkSync, readdirSync as readdirSync2 } from "node:fs";
+import { writeFileSync as writeFileSync2, renameSync, statSync as statSync2, mkdirSync as mkdirSync3, existsSync as existsSync2, unlinkSync, readdirSync as readdirSync2, openSync, closeSync, fstatSync, lstatSync as lstatSync3 } from "node:fs";
 import { dirname as dirname4, basename as basename2 } from "node:path";
 function generateTmpStamp() {
   const rand = Math.random().toString(36).slice(2, 10);
   return `${process.pid}.${Date.now().toString(36)}.${rand}`;
+}
+function withPairWriteLock(yamlPath, operation) {
+  ensureDir(yamlPath);
+  const lockPath = `${yamlPath}.write.lock`;
+  const deadline = Date.now() + ACTION_WRITE_LOCK_TIMEOUT_MS;
+  let lockFd = null;
+  while (lockFd === null) {
+    try {
+      lockFd = openSync(lockPath, "wx", 384);
+    } catch (err) {
+      if (err.code !== "EEXIST")
+        throw err;
+      let lockStat;
+      try {
+        lockStat = lstatSync3(lockPath);
+      } catch (statError) {
+        if (statError.code === "ENOENT")
+          continue;
+        throw statError;
+      }
+      if (!lockStat.isFile() || lockStat.isSymbolicLink()) {
+        throw new Error(`Refusing invalid action write lock at ${lockPath}.`);
+      }
+      if (Date.now() - lockStat.mtimeMs >= ACTION_WRITE_LOCK_STALE_MS) {
+        try {
+          const current = lstatSync3(lockPath);
+          if (current.dev === lockStat.dev && current.ino === lockStat.ino)
+            unlinkSync(lockPath);
+        } catch (unlinkError) {
+          if (unlinkError.code !== "ENOENT")
+            throw unlinkError;
+        }
+        continue;
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(`Timed out waiting for action write lock at ${lockPath}.`);
+      }
+      Atomics.wait(lockWaitBuffer, 0, 0, 10);
+    }
+  }
+  const identity = fstatSync(lockFd);
+  try {
+    return operation();
+  } finally {
+    try {
+      const current = lstatSync3(lockPath);
+      if (current.dev === identity.dev && current.ino === identity.ino)
+        unlinkSync(lockPath);
+    } catch {
+    }
+    closeSync(lockFd);
+  }
 }
 function pairWriteImpl(yamlPath, yamlContent, sidecarPath, state) {
   ensureDir(yamlPath);
@@ -8380,12 +8432,15 @@ function cleanupOrphans(yamlPath, sidecarPath) {
     }
   }
 }
-var FUTURE_MTIME_BUFFER_MS, ORPHAN_MAX_AGE_MS, atomicWriter;
+var FUTURE_MTIME_BUFFER_MS, ORPHAN_MAX_AGE_MS, ACTION_WRITE_LOCK_TIMEOUT_MS, ACTION_WRITE_LOCK_STALE_MS, lockWaitBuffer, atomicWriter;
 var init_atomic_writer = __esm({
   "packages/rn-dev-agent-core/dist/domain/atomic-writer.js"() {
     "use strict";
     FUTURE_MTIME_BUFFER_MS = 1e3;
     ORPHAN_MAX_AGE_MS = 5 * 60 * 1e3;
+    ACTION_WRITE_LOCK_TIMEOUT_MS = 5e3;
+    ACTION_WRITE_LOCK_STALE_MS = 3e4;
+    lockWaitBuffer = new Int32Array(new SharedArrayBuffer(4));
     atomicWriter = {
       /** Underlying `fs.writeFileSync(path, content, 'utf8')`. */
       _writeFile(path, content) {
@@ -8417,14 +8472,27 @@ var init_atomic_writer = __esm({
       _readdir(path) {
         return readdirSync2(path);
       },
+      withLock(yamlPath, operation) {
+        return withPairWriteLock(yamlPath, operation);
+      },
       /**
        * Atomic pair-write. Cleans up any orphaned `.tmp` files before
        * starting. Throws on the first failed step — caller decides whether
        * to surface or recover.
        */
       pairWrite(yamlPath, yamlContent, sidecarPath, state) {
-        cleanupOrphans(yamlPath, sidecarPath);
-        return pairWriteImpl(yamlPath, yamlContent, sidecarPath, state);
+        return withPairWriteLock(yamlPath, () => {
+          cleanupOrphans(yamlPath, sidecarPath);
+          return pairWriteImpl(yamlPath, yamlContent, sidecarPath, state);
+        });
+      },
+      pairWriteConditional(yamlPath, yamlContent, sidecarPath, state, precondition) {
+        return withPairWriteLock(yamlPath, () => {
+          if (!precondition())
+            return null;
+          cleanupOrphans(yamlPath, sidecarPath);
+          return pairWriteImpl(yamlPath, yamlContent, sidecarPath, state);
+        });
       }
     };
   }
@@ -8899,7 +8967,7 @@ var init_worktree_repair_remedy = __esm({
 
 // packages/rn-dev-agent-core/dist/session/worktree-inheritance.js
 import { spawnSync } from "node:child_process";
-import { closeSync, existsSync as existsSync5, fstatSync, lstatSync as lstatSync3, mkdirSync as mkdirSync6, openSync, readFileSync as readFileSync5, readlinkSync, realpathSync as realpathSync2, renameSync as renameSync2, statSync as statSync3, symlinkSync, unlinkSync as unlinkSync2 } from "node:fs";
+import { closeSync as closeSync2, existsSync as existsSync5, fstatSync as fstatSync2, lstatSync as lstatSync4, mkdirSync as mkdirSync6, openSync as openSync2, readFileSync as readFileSync5, readlinkSync, realpathSync as realpathSync2, renameSync as renameSync2, statSync as statSync3, symlinkSync, unlinkSync as unlinkSync2 } from "node:fs";
 import { dirname as dirname7, isAbsolute as isAbsolute2, join as join7, relative, resolve as resolve4, sep as sep4 } from "node:path";
 function gitEnvironment() {
   const env = { ...process.env };
@@ -9055,7 +9123,7 @@ function resolveWorktreeLayout(input) {
     return { ...base, refusal: "PRIMARY_APP_MISSING" };
   let primaryAppReal = null;
   try {
-    if (lstatSync3(primaryAppRoot).isDirectory())
+    if (lstatSync4(primaryAppRoot).isDirectory())
       primaryAppReal = canonical(primaryAppRoot);
   } catch {
     primaryAppReal = null;
@@ -9082,7 +9150,7 @@ var init_worktree_inheritance = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/action-store.js
-import { existsSync as existsSync6, lstatSync as lstatSync4, readFileSync as readFileSync6, realpathSync as realpathSync3, statSync as statSync4 } from "node:fs";
+import { existsSync as existsSync6, lstatSync as lstatSync5, readFileSync as readFileSync6, realpathSync as realpathSync3, statSync as statSync4 } from "node:fs";
 import { basename as basename4, dirname as dirname8, join as join8 } from "node:path";
 function assertOwnedActionCorpus(projectRoot) {
   for (const path of [join8(projectRoot, ".rn-agent"), join8(projectRoot, ".rn-agent", "actions")]) {
@@ -9124,7 +9192,7 @@ function canonicalPath(path) {
 }
 function lstatIfPresent(path) {
   try {
-    return lstatSync4(path);
+    return lstatSync5(path);
   } catch (err) {
     if (err.code === "ENOENT")
       return null;
@@ -9246,10 +9314,10 @@ function loadActionMigrationBaseline(filePath) {
 }
 function commitMigratedActionText(filePath, baseline, yamlText) {
   assertWritableActionFile(filePath);
-  if (!migrationBaselineMatches(filePath, baseline))
-    throw migrationConflict(filePath);
   const sidecarPath = sidecarPathFor(filePath);
-  const result = atomicWriter.pairWrite(filePath, yamlText, sidecarPath, baseline.state);
+  const result = atomicWriter.pairWriteConditional(filePath, yamlText, sidecarPath, baseline.state, () => migrationBaselineMatches(filePath, baseline));
+  if (!result)
+    throw migrationConflict(filePath);
   const nextState = { ...baseline.state, lastSeenMtimeMs: result.finalMtimeMs };
   const metadata = parseM7Header(yamlText, basename4(filePath).replace(/\.ya?ml$/i, ""));
   mirrorToDb({
@@ -9304,7 +9372,7 @@ var init_action_store = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/action-engine-compat.js
-import { existsSync as existsSync7, lstatSync as lstatSync5, readdirSync as readdirSync4, realpathSync as realpathSync4 } from "node:fs";
+import { existsSync as existsSync7, lstatSync as lstatSync6, readdirSync as readdirSync4, realpathSync as realpathSync4 } from "node:fs";
 import { basename as basename5, dirname as dirname9, join as join9, resolve as resolve5 } from "node:path";
 function actionEnginePinRefusal(enginePin) {
   if (!enginePin) {
@@ -9432,14 +9500,14 @@ function inheritedActionsCorpusReason(projectRoot) {
   const rnAgentDir = join9(projectRoot, ".rn-agent");
   const actionsDir = join9(rnAgentDir, "actions");
   try {
-    if (lstatSync5(rnAgentDir).isSymbolicLink()) {
+    if (lstatSync6(rnAgentDir).isSymbolicLink()) {
       return `Refusing to migrate through inherited .rn-agent symlink at ${rnAgentDir}. Symlink-inherited corpora are never modified.`;
     }
   } catch {
     return null;
   }
   try {
-    if (lstatSync5(actionsDir).isSymbolicLink()) {
+    if (lstatSync6(actionsDir).isSymbolicLink()) {
       return `Refusing to migrate through inherited .rn-agent/actions symlink at ${actionsDir}. Symlink-inherited corpora are never modified.`;
     }
   } catch {
@@ -9498,7 +9566,7 @@ function migrateLearnedActions(projectRoot) {
       continue;
     }
     try {
-      if (lstatSync5(path).isSymbolicLink()) {
+      if (lstatSync6(path).isSymbolicLink()) {
         results.push({
           id,
           path,
@@ -9616,7 +9684,7 @@ var init_keyboard_guard = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/util/secure-state-file.js
-import { readFileSync as readFileSync7, writeFileSync as writeFileSync3, unlinkSync as unlinkSync3, mkdirSync as mkdirSync7, renameSync as renameSync3, lstatSync as lstatSync6 } from "node:fs";
+import { readFileSync as readFileSync7, writeFileSync as writeFileSync3, unlinkSync as unlinkSync3, mkdirSync as mkdirSync7, renameSync as renameSync3, lstatSync as lstatSync7 } from "node:fs";
 import { join as join10, dirname as dirname10 } from "node:path";
 import { homedir as homedir3 } from "node:os";
 function getStateDir() {
@@ -9634,7 +9702,7 @@ function runnerStatePath(key) {
 }
 function readJsonStateFile(path) {
   try {
-    const stat = lstatSync6(path);
+    const stat = lstatSync7(path);
     if (stat.isSymbolicLink())
       return null;
     return JSON.parse(readFileSync7(path, "utf8"));
@@ -9794,7 +9862,7 @@ var init_trusted_system_executable = __esm({
 // packages/rn-dev-agent-core/dist/session/process-birth.js
 import { execFileSync } from "node:child_process";
 import { createHash as createHash2 } from "node:crypto";
-import { closeSync as closeSync2, constants as constants2, existsSync as existsSync10, fstatSync as fstatSync2, lstatSync as lstatSync7, openSync as openSync2, readFileSync as readFileSync8, readSync, realpathSync as realpathSync5 } from "node:fs";
+import { closeSync as closeSync3, constants as constants2, existsSync as existsSync10, fstatSync as fstatSync3, lstatSync as lstatSync8, openSync as openSync3, readFileSync as readFileSync8, readSync, realpathSync as realpathSync5 } from "node:fs";
 import { dirname as dirname11, join as join12 } from "node:path";
 import { fileURLToPath } from "node:url";
 function defaultRun(command, args) {
@@ -9845,8 +9913,8 @@ function verifyDarwinProcessBirthHelper(dependencies) {
   const helper = (dependencies.helperPath ?? darwinProcessBirthHelperPath)();
   const manifestPath = `${helper}.json`;
   const canonicalize = dependencies.canonicalize ?? realpathSync5;
-  const metadata = dependencies.lstat ?? lstatSync7;
-  const descriptorMetadata = dependencies.fstat ?? fstatSync2;
+  const metadata = dependencies.lstat ?? lstatSync8;
+  const descriptorMetadata = dependencies.fstat ?? fstatSync3;
   const readBinary = dependencies.readBinary ?? ((path) => readFileSync8(path));
   const readDescriptor = dependencies.readDescriptor ?? ((fd2) => {
     const size = descriptorMetadata(fd2).size;
@@ -9860,8 +9928,8 @@ function verifyDarwinProcessBirthHelper(dependencies) {
     }
     return buffer.subarray(0, offset);
   });
-  const open = dependencies.open ?? openSync2;
-  const close = dependencies.close ?? closeSync2;
+  const open = dependencies.open ?? openSync3;
+  const close = dependencies.close ?? closeSync3;
   const uid = dependencies.uid ?? process.getuid?.();
   if (canonicalize(helper) !== helper || canonicalize(manifestPath) !== manifestPath) {
     throw new Error("Darwin process-birth helper path is not canonical");
@@ -10365,7 +10433,7 @@ var init_declared_source_contract = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/nav-graph/storage.js
-import { readFileSync as readFileSync9, writeFileSync as writeFileSync4, existsSync as existsSync11, renameSync as renameSync4, readdirSync as readdirSync5, lstatSync as lstatSync8, mkdirSync as mkdirSync8, realpathSync as realpathSync6 } from "node:fs";
+import { readFileSync as readFileSync9, writeFileSync as writeFileSync4, existsSync as existsSync11, renameSync as renameSync4, readdirSync as readdirSync5, lstatSync as lstatSync9, mkdirSync as mkdirSync8, realpathSync as realpathSync6 } from "node:fs";
 import { join as join14, dirname as dirname12 } from "node:path";
 function isRnProject(dir) {
   const pkgPath = join14(dir, "package.json");
@@ -10395,7 +10463,7 @@ function scanForRnProject(rootDir, maxDepth) {
       continue;
     const full = join14(rootDir, name);
     try {
-      const stat = lstatSync8(full);
+      const stat = lstatSync9(full);
       if (!(stat.isDirectory() || stat.isSymbolicLink()))
         continue;
     } catch {
@@ -10430,7 +10498,7 @@ function collectRnProjects(rootDir, maxDepth, out) {
       continue;
     const full = join14(rootDir, name);
     try {
-      const stat = lstatSync8(full);
+      const stat = lstatSync9(full);
       if (!(stat.isDirectory() || stat.isSymbolicLink()))
         continue;
     } catch {
@@ -13215,11 +13283,67 @@ init_action_engine_compat();
 init_maestro_validator();
 init_reusable_action();
 init_action_store();
-init_maestro_run();
 import { spawnSync as spawnSync2 } from "node:child_process";
 import { existsSync as existsSync17, readFileSync as readFileSync14, readdirSync as readdirSync7 } from "node:fs";
 import { dirname as dirname14, join as join23, resolve as resolve6 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
+
+// packages/rn-dev-agent-core/dist/domain/bounded-regex.js
+import { Worker } from "node:worker_threads";
+var workerSource = `
+const { parentPort, workerData } = require('node:worker_threads');
+try {
+  const matcher = new RegExp(workerData.pattern, 'i');
+  parentPort.postMessage({ matches: workerData.candidates.filter((value) => matcher.test(value)) });
+} catch (error) {
+  parentPort.postMessage({ error: String(error) });
+}
+`;
+function filterWithBoundedRegex(candidates, pattern, timeoutMs = 500) {
+  return new Promise((resolve7) => {
+    const worker = new Worker(workerSource, {
+      eval: true,
+      workerData: { candidates, pattern }
+    });
+    let settled = false;
+    const finish = (result) => {
+      if (settled)
+        return;
+      settled = true;
+      clearTimeout(timer);
+      worker.removeAllListeners();
+      void worker.terminate();
+      resolve7(result);
+    };
+    const timer = setTimeout(() => finish({
+      ok: false,
+      reason: "timeout",
+      message: `pattern evaluation exceeded ${timeoutMs}ms`
+    }), timeoutMs);
+    worker.on("message", (message) => {
+      if (typeof message.error === "string") {
+        finish({ ok: false, reason: "invalid", message: message.error });
+        return;
+      }
+      if (!Array.isArray(message.matches) || !message.matches.every((value) => typeof value === "string")) {
+        finish({ ok: false, reason: "worker", message: "pattern worker returned invalid output" });
+        return;
+      }
+      finish({ ok: true, matches: message.matches });
+    });
+    worker.on("error", (error) => {
+      finish({ ok: false, reason: "worker", message: String(error) });
+    });
+    worker.on("exit", (code) => {
+      if (!settled) {
+        finish({ ok: false, reason: "worker", message: `pattern worker exited with code ${code}` });
+      }
+    });
+  });
+}
+
+// packages/rn-dev-agent-core/dist/maestro-runner-pin.js
+init_maestro_run();
 var USAGE = "usage: maestro-runner-pin [diagnose|install|migrate-actions|verify-actions] [--json] [--root <app>]";
 function ensureScriptPath() {
   const here = dirname14(fileURLToPath2(import.meta.url));
@@ -13283,16 +13407,9 @@ async function verifyActions(argv) {
     console.error(pinRefusal);
     return 2;
   }
-  let matcher = null;
   if (pattern) {
     if (pattern.length > 256) {
       console.error("verify-actions --pattern must be at most 256 characters");
-      return 2;
-    }
-    try {
-      matcher = new RegExp(pattern, "i");
-    } catch (err) {
-      console.error(`verify-actions pattern is invalid: ${String(err)}`);
       return 2;
     }
   }
@@ -13306,7 +13423,13 @@ async function verifyActions(argv) {
   let files;
   try {
     const discovered = learnedCorpus ? readdirSync7(flowDir) : readdirSync7(flowDir, { recursive: true });
-    files = discovered.filter((file) => /\.ya?ml$/i.test(file)).filter((file) => matcher?.test(file) ?? true).map((file) => join23(flowDir, file)).sort();
+    const yamlFiles = discovered.filter((file) => /\.ya?ml$/i.test(file));
+    const filtered = pattern ? await filterWithBoundedRegex(yamlFiles, pattern) : { ok: true, matches: yamlFiles };
+    if (!filtered.ok) {
+      console.error(`verify-actions pattern is ${filtered.reason}: ${filtered.message}`);
+      return 2;
+    }
+    files = filtered.matches.map((file) => join23(flowDir, file)).sort();
   } catch (err) {
     console.error(`verify-actions could not read ${flowDir}: ${String(err)}`);
     return 2;

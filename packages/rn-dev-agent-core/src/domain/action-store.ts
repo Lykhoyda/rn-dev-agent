@@ -318,10 +318,7 @@ function migrationConflict(filePath: string): Error {
   return new Error(`Action changed during migration: ${filePath}. Re-run migration.`);
 }
 
-function migrationBaselineMatches(
-  filePath: string,
-  baseline: ActionMigrationBaseline,
-): boolean {
+function migrationBaselineMatches(filePath: string, baseline: ActionMigrationBaseline): boolean {
   try {
     if (readFileSync(filePath, 'utf8') !== baseline.yamlText) return false;
   } catch {
@@ -349,9 +346,15 @@ export function commitMigratedActionText(
   yamlText: string,
 ): { filePath: string; sidecarPath: string } {
   assertWritableActionFile(filePath);
-  if (!migrationBaselineMatches(filePath, baseline)) throw migrationConflict(filePath);
   const sidecarPath = sidecarPathFor(filePath);
-  const result = atomicWriter.pairWrite(filePath, yamlText, sidecarPath, baseline.state);
+  const result = atomicWriter.pairWriteConditional(
+    filePath,
+    yamlText,
+    sidecarPath,
+    baseline.state,
+    () => migrationBaselineMatches(filePath, baseline),
+  );
+  if (!result) throw migrationConflict(filePath);
   const nextState = { ...baseline.state, lastSeenMtimeMs: result.finalMtimeMs };
   const metadata = parseM7Header(yamlText, basename(filePath).replace(/\.ya?ml$/i, ''));
   mirrorToDb({
@@ -451,23 +454,30 @@ export function actionWasEditedExternally(action: ReusableAction): boolean {
  * common case where no external write happened).
  */
 export function acknowledgeExternalEdit(action: ReusableAction): ReusableAction {
-  let currentMtimeMs: number;
-  try {
-    currentMtimeMs = statSync(action.filePath).mtimeMs;
-  } catch {
-    return action;
-  }
-  if (currentMtimeMs <= action.state.lastSeenMtimeMs) return action;
-  const nextState = markSeen(action.state, currentMtimeMs);
-  saveSidecar(action.filePath, nextState);
+  const nextAction = atomicWriter.withLock(action.filePath, () => {
+    let currentMtimeMs: number;
+    try {
+      currentMtimeMs = statSync(action.filePath).mtimeMs;
+    } catch {
+      return action;
+    }
+    const currentState = loadOrInitSidecar(action.filePath);
+    if (currentMtimeMs <= currentState.lastSeenMtimeMs) {
+      return { ...action, state: currentState };
+    }
+    const nextState = markSeen(currentState, currentMtimeMs);
+    saveSidecar(action.filePath, nextState);
+    return { ...action, state: nextState };
+  });
+  if (nextAction === action) return action;
   // Task 5 (A2): mirror the refreshed mtime baseline to the DB (best-effort,
   // never throws). No record append — this is a baseline-only update.
   mirrorToDb({
     yamlFilePath: action.filePath,
-    state: nextState,
+    state: nextAction.state,
     meta: { appId: action.metadata.appId, status: action.metadata.status, path: action.filePath },
   });
-  return { ...action, state: nextState };
+  return nextAction;
 }
 
 /**
@@ -570,6 +580,13 @@ function runtimeSidecarMatches(sidecarPath: string, expected: ReusableAction['st
   return canonicalRuntimeJson(normalized) === canonicalRuntimeJson(expected);
 }
 
+function runtimeBaselineMatches(filePath: string, expected: ReusableAction['state']): boolean {
+  const sidecarPath = sidecarPathFor(filePath);
+  return existsSync(sidecarPath)
+    ? runtimeSidecarMatches(sidecarPath, expected)
+    : expected.runHistory.length === 0 && expected.repairHistory.length === 0;
+}
+
 /**
  * Persist run telemetry without reserializing the tracked action YAML. The
  * synchronous compare+write is atomic with respect to this MCP process and
@@ -586,18 +603,16 @@ export function saveActionRuntimeWithCAS(
   expected: ReusableAction,
   nextState: ReusableAction['state'],
 ): SaveActionRuntimeCASResult {
-  const sidecarPath = sidecarPathFor(expected.filePath);
-  if (existsSync(sidecarPath)) {
-    if (!runtimeSidecarMatches(sidecarPath, expected.state)) {
+  return atomicWriter.withLock<SaveActionRuntimeCASResult>(expected.filePath, () => {
+    const sidecarPath = sidecarPathFor(expected.filePath);
+    if (!runtimeBaselineMatches(expected.filePath, expected.state)) {
       return { ok: false, conflict: 'EXTERNAL_WRITE' };
     }
-  } else if (expected.state.runHistory.length > 0 || expected.state.repairHistory.length > 0) {
-    return { ok: false, conflict: 'EXTERNAL_WRITE' };
-  }
 
-  saveSidecar(expected.filePath, nextState);
-  expected.state = nextState;
-  return { ok: true, sidecarPath };
+    saveSidecar(expected.filePath, nextState);
+    expected.state = nextState;
+    return { ok: true, sidecarPath };
+  });
 }
 
 /** Byte-preserving lifecycle promotion; comments/body remain exactly intact. */
@@ -627,7 +642,24 @@ export function promoteActionRuntimeWithCAS(
   const marker = /^# status: experimental[ \t]*$/gm;
   if ((yaml.match(marker) ?? []).length !== 1) return { ok: false, conflict: 'EXTERNAL_WRITE' };
   const promoted = yaml.replace(marker, '# status: active');
-  const written = atomicWriter.pairWrite(expected.filePath, promoted, sidecarPath, nextState);
+  const written = atomicWriter.pairWriteConditional(
+    expected.filePath,
+    promoted,
+    sidecarPath,
+    nextState,
+    () => {
+      try {
+        return (
+          runtimeBaselineMatches(expected.filePath, expected.state) &&
+          !actionWasEditedExternally(expected) &&
+          readFileSync(expected.filePath, 'utf8') === yaml
+        );
+      } catch {
+        return false;
+      }
+    },
+  );
+  if (!written) return { ok: false, conflict: 'EXTERNAL_WRITE' };
   expected.state = { ...nextState, lastSeenMtimeMs: written.finalMtimeMs };
   return { ok: true, sidecarPath };
 }
@@ -636,7 +668,9 @@ function assertWritableActionFile(filePath: string): void {
   const actionsDir = dirname(filePath);
   const rnAgentDir = dirname(actionsDir);
   if (basename(actionsDir) !== 'actions' || basename(rnAgentDir) !== '.rn-agent') {
-    throw new Error(`Refusing action mutation outside an owned learned-action corpus: ${filePath}.`);
+    throw new Error(
+      `Refusing action mutation outside an owned learned-action corpus: ${filePath}.`,
+    );
   }
   assertOwnedActionCorpus(dirname(rnAgentDir));
   actionFileExists(filePath);

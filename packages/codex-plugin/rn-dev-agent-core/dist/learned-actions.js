@@ -12,6 +12,7 @@ import { basename, dirname as dirname2, join as join3 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/domain/atomic-writer.js
 var ORPHAN_MAX_AGE_MS = 5 * 60 * 1e3;
+var lockWaitBuffer = new Int32Array(new SharedArrayBuffer(4));
 
 // packages/rn-dev-agent-core/dist/domain/path-safety.js
 import { resolve, sep } from "node:path";

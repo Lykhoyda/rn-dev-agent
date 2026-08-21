@@ -28120,11 +28120,63 @@ var init_sidecar_io = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/atomic-writer.js
-import { writeFileSync as writeFileSync9, renameSync as renameSync7, statSync as statSync10, mkdirSync as mkdirSync14, existsSync as existsSync16, unlinkSync as unlinkSync6, readdirSync as readdirSync6 } from "node:fs";
+import { writeFileSync as writeFileSync9, renameSync as renameSync7, statSync as statSync10, mkdirSync as mkdirSync14, existsSync as existsSync16, unlinkSync as unlinkSync6, readdirSync as readdirSync6, openSync as openSync9, closeSync as closeSync9, fstatSync as fstatSync7, lstatSync as lstatSync12 } from "node:fs";
 import { dirname as dirname13, basename as basename5 } from "node:path";
 function generateTmpStamp() {
   const rand = Math.random().toString(36).slice(2, 10);
   return `${process.pid}.${Date.now().toString(36)}.${rand}`;
+}
+function withPairWriteLock(yamlPath, operation) {
+  ensureDir(yamlPath);
+  const lockPath = `${yamlPath}.write.lock`;
+  const deadline = Date.now() + ACTION_WRITE_LOCK_TIMEOUT_MS;
+  let lockFd = null;
+  while (lockFd === null) {
+    try {
+      lockFd = openSync9(lockPath, "wx", 384);
+    } catch (err) {
+      if (err.code !== "EEXIST")
+        throw err;
+      let lockStat;
+      try {
+        lockStat = lstatSync12(lockPath);
+      } catch (statError) {
+        if (statError.code === "ENOENT")
+          continue;
+        throw statError;
+      }
+      if (!lockStat.isFile() || lockStat.isSymbolicLink()) {
+        throw new Error(`Refusing invalid action write lock at ${lockPath}.`);
+      }
+      if (Date.now() - lockStat.mtimeMs >= ACTION_WRITE_LOCK_STALE_MS) {
+        try {
+          const current = lstatSync12(lockPath);
+          if (current.dev === lockStat.dev && current.ino === lockStat.ino)
+            unlinkSync6(lockPath);
+        } catch (unlinkError) {
+          if (unlinkError.code !== "ENOENT")
+            throw unlinkError;
+        }
+        continue;
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(`Timed out waiting for action write lock at ${lockPath}.`);
+      }
+      Atomics.wait(lockWaitBuffer, 0, 0, 10);
+    }
+  }
+  const identity2 = fstatSync7(lockFd);
+  try {
+    return operation();
+  } finally {
+    try {
+      const current = lstatSync12(lockPath);
+      if (current.dev === identity2.dev && current.ino === identity2.ino)
+        unlinkSync6(lockPath);
+    } catch {
+    }
+    closeSync9(lockFd);
+  }
 }
 function pairWriteImpl(yamlPath, yamlContent, sidecarPath, state) {
   ensureDir(yamlPath);
@@ -28181,12 +28233,15 @@ function cleanupOrphans(yamlPath, sidecarPath) {
     }
   }
 }
-var FUTURE_MTIME_BUFFER_MS, ORPHAN_MAX_AGE_MS, atomicWriter;
+var FUTURE_MTIME_BUFFER_MS, ORPHAN_MAX_AGE_MS, ACTION_WRITE_LOCK_TIMEOUT_MS, ACTION_WRITE_LOCK_STALE_MS, lockWaitBuffer, atomicWriter;
 var init_atomic_writer = __esm({
   "packages/rn-dev-agent-core/dist/domain/atomic-writer.js"() {
     "use strict";
     FUTURE_MTIME_BUFFER_MS = 1e3;
     ORPHAN_MAX_AGE_MS = 5 * 60 * 1e3;
+    ACTION_WRITE_LOCK_TIMEOUT_MS = 5e3;
+    ACTION_WRITE_LOCK_STALE_MS = 3e4;
+    lockWaitBuffer = new Int32Array(new SharedArrayBuffer(4));
     atomicWriter = {
       /** Underlying `fs.writeFileSync(path, content, 'utf8')`. */
       _writeFile(path, content) {
@@ -28218,14 +28273,27 @@ var init_atomic_writer = __esm({
       _readdir(path) {
         return readdirSync6(path);
       },
+      withLock(yamlPath, operation) {
+        return withPairWriteLock(yamlPath, operation);
+      },
       /**
        * Atomic pair-write. Cleans up any orphaned `.tmp` files before
        * starting. Throws on the first failed step — caller decides whether
        * to surface or recover.
        */
       pairWrite(yamlPath, yamlContent, sidecarPath, state) {
-        cleanupOrphans(yamlPath, sidecarPath);
-        return pairWriteImpl(yamlPath, yamlContent, sidecarPath, state);
+        return withPairWriteLock(yamlPath, () => {
+          cleanupOrphans(yamlPath, sidecarPath);
+          return pairWriteImpl(yamlPath, yamlContent, sidecarPath, state);
+        });
+      },
+      pairWriteConditional(yamlPath, yamlContent, sidecarPath, state, precondition) {
+        return withPairWriteLock(yamlPath, () => {
+          if (!precondition())
+            return null;
+          cleanupOrphans(yamlPath, sidecarPath);
+          return pairWriteImpl(yamlPath, yamlContent, sidecarPath, state);
+        });
       }
     };
   }
@@ -28606,7 +28674,7 @@ var init_action_state_store = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/action-store.js
-import { existsSync as existsSync18, lstatSync as lstatSync12, readFileSync as readFileSync20, realpathSync as realpathSync11, statSync as statSync11 } from "node:fs";
+import { existsSync as existsSync18, lstatSync as lstatSync13, readFileSync as readFileSync20, realpathSync as realpathSync11, statSync as statSync11 } from "node:fs";
 import { basename as basename7, dirname as dirname16, join as join24 } from "node:path";
 function actionPathFor(projectRoot, actionId) {
   assertValidActionId(actionId, "actionPathFor");
@@ -28656,7 +28724,7 @@ function canonicalPath2(path) {
 }
 function lstatIfPresent(path) {
   try {
-    return lstatSync12(path);
+    return lstatSync13(path);
   } catch (err) {
     if (err.code === "ENOENT")
       return null;
@@ -28798,22 +28866,29 @@ function actionWasEditedExternally(action) {
   return yamlEditedSinceLastSeen(action.filePath, action.state);
 }
 function acknowledgeExternalEdit(action) {
-  let currentMtimeMs;
-  try {
-    currentMtimeMs = statSync11(action.filePath).mtimeMs;
-  } catch {
+  const nextAction = atomicWriter.withLock(action.filePath, () => {
+    let currentMtimeMs;
+    try {
+      currentMtimeMs = statSync11(action.filePath).mtimeMs;
+    } catch {
+      return action;
+    }
+    const currentState = loadOrInitSidecar(action.filePath);
+    if (currentMtimeMs <= currentState.lastSeenMtimeMs) {
+      return { ...action, state: currentState };
+    }
+    const nextState = markSeen(currentState, currentMtimeMs);
+    saveSidecar(action.filePath, nextState);
+    return { ...action, state: nextState };
+  });
+  if (nextAction === action)
     return action;
-  }
-  if (currentMtimeMs <= action.state.lastSeenMtimeMs)
-    return action;
-  const nextState = markSeen(action.state, currentMtimeMs);
-  saveSidecar(action.filePath, nextState);
   mirrorToDb({
     yamlFilePath: action.filePath,
-    state: nextState,
+    state: nextAction.state,
     meta: { appId: action.metadata.appId, status: action.metadata.status, path: action.filePath }
   });
-  return { ...action, state: nextState };
+  return nextAction;
 }
 function canonicalRuntimeJson(state) {
   return JSON.stringify(state, (_key, value) => {
@@ -28834,18 +28909,20 @@ function runtimeSidecarMatches(sidecarPath, expected) {
   const normalized = typeof onDisk?.lastSeenMtimeMs === "number" ? onDisk : { ...onDisk, lastSeenMtimeMs: expected.lastSeenMtimeMs };
   return canonicalRuntimeJson(normalized) === canonicalRuntimeJson(expected);
 }
+function runtimeBaselineMatches(filePath, expected) {
+  const sidecarPath = sidecarPathFor(filePath);
+  return existsSync18(sidecarPath) ? runtimeSidecarMatches(sidecarPath, expected) : expected.runHistory.length === 0 && expected.repairHistory.length === 0;
+}
 function saveActionRuntimeWithCAS(expected, nextState) {
-  const sidecarPath = sidecarPathFor(expected.filePath);
-  if (existsSync18(sidecarPath)) {
-    if (!runtimeSidecarMatches(sidecarPath, expected.state)) {
+  return atomicWriter.withLock(expected.filePath, () => {
+    const sidecarPath = sidecarPathFor(expected.filePath);
+    if (!runtimeBaselineMatches(expected.filePath, expected.state)) {
       return { ok: false, conflict: "EXTERNAL_WRITE" };
     }
-  } else if (expected.state.runHistory.length > 0 || expected.state.repairHistory.length > 0) {
-    return { ok: false, conflict: "EXTERNAL_WRITE" };
-  }
-  saveSidecar(expected.filePath, nextState);
-  expected.state = nextState;
-  return { ok: true, sidecarPath };
+    saveSidecar(expected.filePath, nextState);
+    expected.state = nextState;
+    return { ok: true, sidecarPath };
+  });
 }
 function promoteActionRuntimeWithCAS(expected, nextState) {
   try {
@@ -28868,7 +28945,15 @@ function promoteActionRuntimeWithCAS(expected, nextState) {
   if ((yaml2.match(marker) ?? []).length !== 1)
     return { ok: false, conflict: "EXTERNAL_WRITE" };
   const promoted = yaml2.replace(marker, "# status: active");
-  const written = atomicWriter.pairWrite(expected.filePath, promoted, sidecarPath, nextState);
+  const written = atomicWriter.pairWriteConditional(expected.filePath, promoted, sidecarPath, nextState, () => {
+    try {
+      return runtimeBaselineMatches(expected.filePath, expected.state) && !actionWasEditedExternally(expected) && readFileSync20(expected.filePath, "utf8") === yaml2;
+    } catch {
+      return false;
+    }
+  });
+  if (!written)
+    return { ok: false, conflict: "EXTERNAL_WRITE" };
   expected.state = { ...nextState, lastSeenMtimeMs: written.finalMtimeMs };
   return { ok: true, sidecarPath };
 }
@@ -28907,7 +28992,7 @@ var init_action_store = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/action-engine-compat.js
-import { existsSync as existsSync19, lstatSync as lstatSync13, readdirSync as readdirSync8, realpathSync as realpathSync12 } from "node:fs";
+import { existsSync as existsSync19, lstatSync as lstatSync14, readdirSync as readdirSync8, realpathSync as realpathSync12 } from "node:fs";
 import { basename as basename8, dirname as dirname17, join as join25, resolve as resolve12 } from "node:path";
 function actionEnginePinRefusal(enginePin) {
   if (!enginePin) {
@@ -30477,7 +30562,7 @@ var init_metro_origin = __esm({
 // packages/rn-dev-agent-core/dist/session/install-authority.js
 import { execFileSync as execFileSync12 } from "node:child_process";
 import { createHash as createHash11 } from "node:crypto";
-import { lstatSync as lstatSync14, readFileSync as readFileSync22, readdirSync as readdirSync10, readlinkSync as readlinkSync4, realpathSync as realpathSync13, statSync as statSync13 } from "node:fs";
+import { lstatSync as lstatSync15, readFileSync as readFileSync22, readdirSync as readdirSync10, readlinkSync as readlinkSync4, realpathSync as realpathSync13, statSync as statSync13 } from "node:fs";
 import { isAbsolute as isAbsolute6, join as join28, relative as relative4 } from "node:path";
 function runText(command, args) {
   return execFileSync12(command, [...args], {
@@ -30615,7 +30700,7 @@ function captureInstalledArtifact(target, dependencies = {}) {
       throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS executable identity is unavailable");
     }
     const files = iosAppFiles(appPath, dependencies);
-    const lstat = dependencies.lstat ?? lstatSync14;
+    const lstat = dependencies.lstat ?? lstatSync15;
     const readLink = dependencies.readLink ?? readlinkSync4;
     const realpath = dependencies.realpath ?? realpathSync13;
     const artifactParts = [];
@@ -34429,7 +34514,7 @@ var init_recover_detached = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/lifecycle/device-lock.js
-import { existsSync as existsSync24, mkdirSync as mkdirSync17, openSync as openSync9, writeSync as writeSync3, closeSync as closeSync9, readFileSync as readFileSync26, unlinkSync as unlinkSync9, writeFileSync as writeFileSync12 } from "node:fs";
+import { existsSync as existsSync24, mkdirSync as mkdirSync17, openSync as openSync10, writeSync as writeSync3, closeSync as closeSync10, readFileSync as readFileSync26, unlinkSync as unlinkSync9, writeFileSync as writeFileSync12 } from "node:fs";
 import { tmpdir as tmpdir9, userInfo as userInfo2 } from "node:os";
 import { join as join32 } from "node:path";
 function defaultProcessAlive3(pid) {
@@ -34544,7 +34629,7 @@ var init_device_lock = __esm({
       create() {
         if (!existsSync24(this.tmpDir))
           mkdirSync17(this.tmpDir, { recursive: true });
-        const fd = openSync9(this.lockPath, "wx");
+        const fd = openSync10(this.lockPath, "wx");
         try {
           const now = this.clock();
           const body = {
@@ -34559,7 +34644,7 @@ var init_device_lock = __esm({
           };
           writeSync3(fd, JSON.stringify(body, null, 2));
         } finally {
-          closeSync9(fd);
+          closeSync10(fd);
         }
         this.acquired = true;
       }
@@ -75132,7 +75217,7 @@ var init_events = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/observability/recorder.js
-import { closeSync as closeSync10, constants as constants7, fstatSync as fstatSync7, openSync as openSync10, readSync as readSync4 } from "node:fs";
+import { closeSync as closeSync11, constants as constants7, fstatSync as fstatSync8, openSync as openSync11, readSync as readSync4 } from "node:fs";
 import { isAbsolute as isAbsolute9 } from "node:path";
 function extractScreenshotPath(result) {
   const data = unwrapResult(result)?.data ?? result?.data;
@@ -75142,8 +75227,8 @@ function extractScreenshotPath(result) {
 function readShotBounded(p) {
   let fd;
   try {
-    fd = openSync10(p, constants7.O_RDONLY | constants7.O_NOFOLLOW | constants7.O_NONBLOCK);
-    const st = fstatSync7(fd);
+    fd = openSync11(p, constants7.O_RDONLY | constants7.O_NOFOLLOW | constants7.O_NONBLOCK);
+    const st = fstatSync8(fd);
     if (!st.isFile() || st.size > MAX_SHOT_BYTES)
       return null;
     const size = Number(st.size);
@@ -75157,7 +75242,7 @@ function readShotBounded(p) {
   } finally {
     if (fd !== void 0) {
       try {
-        closeSync10(fd);
+        closeSync11(fd);
       } catch {
       }
     }
@@ -82192,7 +82277,7 @@ var init_startup_integrity = __esm({
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
 import { createHash as createHash18, randomUUID as randomUUID9 } from "node:crypto";
 import { execFileSync as execFileSync15 } from "node:child_process";
-import { chmodSync as chmodSync4, closeSync as closeSync11, existsSync as existsSync31, fsyncSync, lstatSync as lstatSync15, mkdirSync as mkdirSync19, openSync as openSync11, readFileSync as readFileSync31, realpathSync as realpathSync15, renameSync as renameSync8, unlinkSync as unlinkSync12, writeFileSync as writeFileSync15 } from "node:fs";
+import { chmodSync as chmodSync4, closeSync as closeSync12, existsSync as existsSync31, fsyncSync, lstatSync as lstatSync16, mkdirSync as mkdirSync19, openSync as openSync12, readFileSync as readFileSync31, realpathSync as realpathSync15, renameSync as renameSync8, unlinkSync as unlinkSync12, writeFileSync as writeFileSync15 } from "node:fs";
 import { basename as basename11, dirname as dirname25, extname, isAbsolute as isAbsolute10, join as join45, relative as relative6, resolve as resolve16, sep as sep7 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 function proofActionPayload(unparsedArgs) {
@@ -82474,7 +82559,7 @@ function hasExistingSymlink(root, path) {
   for (let length = 0; length <= parts.length; length += 1) {
     const candidate = resolve16(root, ...parts.slice(0, length));
     try {
-      if (lstatSync15(candidate).isSymbolicLink())
+      if (lstatSync16(candidate).isSymbolicLink())
         return true;
     } catch {
     }
@@ -82503,7 +82588,7 @@ function validCaptureContext(args, expectedRoot) {
 function proofRootExists(args) {
   const proofRoot = join45(args.projectRoot, "docs", "proof", args.runId);
   try {
-    lstatSync15(proofRoot);
+    lstatSync16(proofRoot);
     return true;
   } catch (error2) {
     return error2.code !== "ENOENT";
@@ -82654,17 +82739,17 @@ function writeProofReceiptAtomic(path, receipt2) {
   const temporary = resolve16(directory, `.${randomUUID9()}.proof-receipt.tmp`);
   let descriptor = null;
   try {
-    descriptor = openSync11(temporary, "wx", 384);
+    descriptor = openSync12(temporary, "wx", 384);
     writeFileSync15(descriptor, `${JSON.stringify(receipt2, null, 2)}
 `, "utf8");
     fsyncSync(descriptor);
-    closeSync11(descriptor);
+    closeSync12(descriptor);
     descriptor = null;
     renameSync8(temporary, path);
     chmodSync4(path, 384);
   } catch (error2) {
     if (descriptor !== null)
-      closeSync11(descriptor);
+      closeSync12(descriptor);
     try {
       unlinkSync12(temporary);
     } catch {
@@ -85056,7 +85141,7 @@ var init_nav_graph = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/auto-login.js
-import { lstatSync as lstatSync16, readFileSync as readFileSync32, readdirSync as readdirSync12, realpathSync as realpathSync16 } from "node:fs";
+import { lstatSync as lstatSync17, readFileSync as readFileSync32, readdirSync as readdirSync12, realpathSync as realpathSync16 } from "node:fs";
 import { dirname as dirname27, join as join47, resolve as resolve17 } from "node:path";
 function matchesAuthPattern(routeName) {
   const lower = routeName.toLowerCase();
@@ -85092,8 +85177,8 @@ function findLoginFlow(projectRoot) {
   for (const dir of searchDirs) {
     let files;
     try {
-      const maestroStat = lstatSync16(maestroDir);
-      const dirStat = lstatSync16(dir);
+      const maestroStat = lstatSync17(maestroDir);
+      const dirStat = lstatSync17(dir);
       if (maestroStat.isSymbolicLink() || dirStat.isSymbolicLink()) {
         throw new Error(`Refusing legacy login directory symlink at ${dir}.`);
       }
@@ -85117,7 +85202,7 @@ function findLoginFlow(projectRoot) {
   return null;
 }
 function assertLegacyLoginFlow(projectRoot, flowPath) {
-  const stat2 = lstatSync16(flowPath);
+  const stat2 = lstatSync17(flowPath);
   if (!stat2.isFile() || stat2.isSymbolicLink()) {
     throw new Error(`Refusing legacy login flow symlink at ${flowPath}.`);
   }
@@ -86224,7 +86309,7 @@ var init_maestro_test_all = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/cross-platform-verify.js
-import { readFileSync as readFileSync34, readdirSync as readdirSync14, lstatSync as lstatSync17 } from "node:fs";
+import { readFileSync as readFileSync34, readdirSync as readdirSync14, lstatSync as lstatSync18 } from "node:fs";
 import { join as join50, extname as extname2 } from "node:path";
 function findElement(nodes, query, matchBy) {
   const q = query.toLowerCase();
@@ -86250,7 +86335,7 @@ function discoverTestIDs(dir) {
         continue;
       const full = join50(d, entry);
       try {
-        const st = lstatSync17(full);
+        const st = lstatSync18(full);
         if (st.isSymbolicLink())
           continue;
         if (st.isDirectory()) {
@@ -92445,7 +92530,7 @@ init_lockfile();
 init_parent_watch();
 import { randomUUID as randomUUID12 } from "node:crypto";
 import { spawn as spawn10 } from "node:child_process";
-import { lstatSync as lstatSync18, readFileSync as readFileSync43 } from "node:fs";
+import { lstatSync as lstatSync19, readFileSync as readFileSync43 } from "node:fs";
 import { dirname as dirname34, join as join61, resolve as resolve19 } from "node:path";
 import { fileURLToPath as fileURLToPath8 } from "node:url";
 
@@ -92796,12 +92881,12 @@ if (supervisorFlag.length > 0 && !process.execArgv.includes("--experimental-sqli
 }
 function legacyRepairArtifactPresent(cwd) {
   try {
-    if (lstatSync18(join61(cwd, ".rn-agent")).isSymbolicLink())
+    if (lstatSync19(join61(cwd, ".rn-agent")).isSymbolicLink())
       return true;
   } catch {
   }
   try {
-    lstatSync18(join61(cwd, ".rn-agent.bak"));
+    lstatSync19(join61(cwd, ".rn-agent.bak"));
     return true;
   } catch {
     return false;

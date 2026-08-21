@@ -8,6 +8,23 @@
 #   1 — missing, drifted, checksum mismatch, or unsupported platform
 set -euo pipefail
 
+INSTALL_STARTED_SECONDS=$SECONDS
+INSTALL_BUDGET_SECONDS=110
+if [[ "${RN_DEV_AGENT_TEST_INSTALL_BUDGET_SECONDS:-}" =~ ^[0-9]+$ ]] && [ "$RN_DEV_AGENT_TEST_INSTALL_BUDGET_SECONDS" -ge 12 ] && [ "$RN_DEV_AGENT_TEST_INSTALL_BUDGET_SECONDS" -le "$INSTALL_BUDGET_SECONDS" ]; then
+  INSTALL_BUDGET_SECONDS="$RN_DEV_AGENT_TEST_INSTALL_BUDGET_SECONDS"
+fi
+DOWNLOAD_RESERVE_SECONDS=10
+LOCK_MAX_AGE_SECONDS=115
+
+remaining_install_seconds() {
+  local elapsed=$((SECONDS - INSTALL_STARTED_SECONDS))
+  local remaining=$((INSTALL_BUDGET_SECONDS - elapsed))
+  if [ "$remaining" -lt 0 ]; then
+    remaining=0
+  fi
+  echo "$remaining"
+}
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CANONICAL_PIN_MANIFEST="$SCRIPT_DIR/maestro-runner-pin.json"
 if [ ! -f "$CANONICAL_PIN_MANIFEST" ]; then
@@ -244,14 +261,20 @@ reclaim_stale_lock() {
   elif [ -f "$LOCK_FILE" ]; then
     owner="$(sed -n '1p' "$LOCK_FILE" 2>/dev/null || true)"
   fi
-  if [[ "$owner" =~ ^[0-9]+$ ]] && ! kill -0 "$owner" 2>/dev/null; then
+  age="$(lock_age_seconds "$LOCK_FILE")"
+  if [ "$age" -ge "$LOCK_MAX_AGE_SECONDS" ]; then
+    if [ -d "$LOCK_FILE" ]; then
+      rm -rf "$LOCK_FILE"
+    else
+      rm -f "$LOCK_FILE"
+    fi
+  elif [[ "$owner" =~ ^[0-9]+$ ]] && ! kill -0 "$owner" 2>/dev/null; then
     if [ -d "$LOCK_FILE" ]; then
       rm -rf "$LOCK_FILE"
     else
       rm -f "$LOCK_FILE"
     fi
   elif [ -z "$owner" ]; then
-    age="$(lock_age_seconds "$LOCK_FILE")"
     if [ "$age" -ge 5 ]; then
       if [ -d "$LOCK_FILE" ]; then
         rm -rf "$LOCK_FILE"
@@ -288,7 +311,7 @@ acquire_install_lock() {
       report_success
       exit 0
     fi
-    if [ "$attempts" -ge 900 ]; then
+    if [ "$(remaining_install_seconds)" -le "$DOWNLOAD_RESERVE_SECONDS" ]; then
       if bin_matches_pin; then
         report_success
         exit 0
@@ -336,7 +359,21 @@ echo "Destination: $PIN_DIR"
 
 TEMP_DIR="$(mktemp -d "$RUNNER_CACHE_ROOT/.install-stage.XXXXXX")"
 
-if ! curl -fsSL --connect-timeout 10 --max-time 75 -o "$TEMP_DIR/$ARCHIVE" "$DOWNLOAD_URL"; then
+DOWNLOAD_TIMEOUT_SECONDS=$(($(remaining_install_seconds) - DOWNLOAD_RESERVE_SECONDS))
+if [ "$DOWNLOAD_TIMEOUT_SECONDS" -le 0 ]; then
+  echo "ERROR: maestro-runner install deadline expired before download."
+  correction
+  exit 1
+fi
+if [ "$DOWNLOAD_TIMEOUT_SECONDS" -gt 75 ]; then
+  DOWNLOAD_TIMEOUT_SECONDS=75
+fi
+CONNECT_TIMEOUT_SECONDS=$DOWNLOAD_TIMEOUT_SECONDS
+if [ "$CONNECT_TIMEOUT_SECONDS" -gt 10 ]; then
+  CONNECT_TIMEOUT_SECONDS=10
+fi
+
+if ! curl -fsSL --connect-timeout "$CONNECT_TIMEOUT_SECONDS" --max-time "$DOWNLOAD_TIMEOUT_SECONDS" -o "$TEMP_DIR/$ARCHIVE" "$DOWNLOAD_URL"; then
   echo "ERROR: failed to download $DOWNLOAD_URL"
   correction
   exit 1

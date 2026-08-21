@@ -11468,11 +11468,12 @@ var init_sidecar_io = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/atomic-writer.js
-var ORPHAN_MAX_AGE_MS;
+var ORPHAN_MAX_AGE_MS, lockWaitBuffer;
 var init_atomic_writer = __esm({
   "packages/rn-dev-agent-core/dist/domain/atomic-writer.js"() {
     "use strict";
     ORPHAN_MAX_AGE_MS = 5 * 60 * 1e3;
+    lockWaitBuffer = new Int32Array(new SharedArrayBuffer(4));
   }
 });
 

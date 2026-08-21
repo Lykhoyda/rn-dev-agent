@@ -13,6 +13,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawn } from 'node:child_process';
 import {
   ACTION_ENGINE_PIN,
   MAESTRO_RUNNER_PIN,
@@ -103,10 +104,7 @@ test('selector preflight covers command-specific selector shapes', () => {
     ),
     /Log\.n/,
   );
-  assert.match(
-    String(regexSelectorCapabilityRefusal([{ copyTextFrom: 'Order.*' }])),
-    /Order\.\*/,
-  );
+  assert.match(String(regexSelectorCapabilityRefusal([{ copyTextFrom: 'Order.*' }])), /Order\.\*/);
   assert.match(
     String(
       regexSelectorCapabilityRefusal([
@@ -235,6 +233,48 @@ test('migration commit refuses stale YAML and sidecar baselines', () => {
   assert.equal(readFileSync(actionPath, 'utf8'), source);
 });
 
+test('migration commit validates after acquiring the cross-process write lock', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-action-migrate-lock-'));
+  const dir = join(root, '.rn-agent', 'actions');
+  mkdirSync(dir, { recursive: true });
+  const actionPath = join(dir, 'checkout.yaml');
+  const source = actionYaml('checkout');
+  writeFileSync(actionPath, source, 'utf8');
+  const sidecarPath = sidecarPathFor(actionPath);
+  mkdirSync(join(sidecarPath, '..'), { recursive: true });
+  const initialState = freshRuntimeState(() => new Date('2026-01-01T00:00:00Z'), 1);
+  writeFileSync(sidecarPath, `${JSON.stringify(initialState)}\n`, 'utf8');
+  const baseline = loadActionMigrationBaseline(actionPath);
+  const marker = join(root, 'lock-acquired');
+  const concurrentState = { ...initialState, revision: 9 };
+  const holder = spawn(
+    process.execPath,
+    [
+      '-e',
+      'const fs=require("node:fs"); const [lock,marker,sidecar,state]=process.argv.slice(1); const fd=fs.openSync(lock,"wx"); fs.writeFileSync(marker,"ready"); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,200); fs.writeFileSync(sidecar,state); fs.closeSync(fd); fs.unlinkSync(lock);',
+      `${actionPath}.write.lock`,
+      marker,
+      sidecarPath,
+      `${JSON.stringify(concurrentState)}\n`,
+    ],
+    { stdio: 'ignore' },
+  );
+  for (let attempt = 0; attempt < 100 && !existsSync(marker); attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(existsSync(marker), true);
+
+  assert.throws(
+    () => commitMigratedActionText(actionPath, baseline, upsertEnginePinHeader(source).text),
+    /changed during migration/,
+  );
+  if (holder.exitCode === null) {
+    await new Promise<void>((resolve) => holder.once('exit', () => resolve()));
+  }
+  assert.equal(JSON.parse(readFileSync(sidecarPath, 'utf8')).revision, 9);
+  assert.equal(readFileSync(actionPath, 'utf8'), source);
+});
+
 test('migrateLearnedActions preserves the previous YAML when its atomic write fails', (t) => {
   const root = mkdtempSync(join(tmpdir(), 'rn-action-migrate-atomic-'));
   const dir = join(root, '.rn-agent', 'actions');
@@ -339,9 +379,18 @@ test('migrateLearnedActions refuses yaml and yml action-id collisions without mu
   const results = migrateLearnedActions(root);
 
   assert.equal(results.length, 2);
-  assert.equal(results.every((result) => result.status === 'incompatible'), true);
-  assert.equal(results.every((result) => result.mutated === false), true);
-  assert.equal(results.every((result) => /both login\.yaml and login\.yml/.test(result.reason ?? '')), true);
+  assert.equal(
+    results.every((result) => result.status === 'incompatible'),
+    true,
+  );
+  assert.equal(
+    results.every((result) => result.mutated === false),
+    true,
+  );
+  assert.equal(
+    results.every((result) => /both login\.yaml and login\.yml/.test(result.reason ?? '')),
+    true,
+  );
   assert.equal(readFileSync(yamlPath, 'utf8'), source);
   assert.equal(readFileSync(ymlPath, 'utf8'), source);
 });
@@ -383,7 +432,10 @@ test('cdp_run_action resolves yml actions and refuses extension collisions', asy
     'utf8',
   );
   const collision = await handler({ actionId: 'login', projectRoot: root });
-  assert.match(String(JSON.parse(collision.content[0]!.text).error), /both login\.yaml and login\.yml/);
+  assert.match(
+    String(JSON.parse(collision.content[0]!.text).error),
+    /both login\.yaml and login\.yml/,
+  );
   assert.equal(spawned, false);
 });
 
@@ -423,7 +475,10 @@ test('maestro_generate emits a pinned replayable action without regex waits', as
     name: 'Wait for checkout',
     outputDir,
     appId: 'com.test.app',
-    steps: [{ action: 'wait', waitMs: 5000 }, { action: 'tap', testID: 'checkout' }],
+    steps: [
+      { action: 'wait', waitMs: 5000 },
+      { action: 'tap', testID: 'checkout' },
+    ],
   });
   const envelope = JSON.parse(result.content[0]!.text);
   assert.equal(envelope.ok, true);
@@ -809,11 +864,7 @@ test('maestro_test_all preflights the complete suite before any execution', asyn
   const root = mkdtempSync(join(tmpdir(), 'rn-owned-suite-preflight-'));
   const dir = join(root, '.rn-agent', 'actions');
   mkdirSync(dir, { recursive: true });
-  writeFileSync(
-    join(dir, 'a.yaml'),
-    actionYaml('a', '# enginePin: maestro-runner@1.1.24'),
-    'utf8',
-  );
+  writeFileSync(join(dir, 'a.yaml'), actionYaml('a', '# enginePin: maestro-runner@1.1.24'), 'utf8');
   writeFileSync(
     join(dir, 'b.yaml'),
     actionYaml('b', '# enginePin: maestro-runner@1.1.24', '- copyTextFrom: "Log.n"\n'),

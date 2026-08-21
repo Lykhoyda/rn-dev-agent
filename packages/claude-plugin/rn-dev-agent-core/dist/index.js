@@ -25003,11 +25003,63 @@ var init_sidecar_io = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/atomic-writer.js
-import { writeFileSync as writeFileSync8, renameSync as renameSync3, statSync as statSync5, mkdirSync as mkdirSync9, existsSync as existsSync13, unlinkSync as unlinkSync4, readdirSync as readdirSync5 } from "node:fs";
+import { writeFileSync as writeFileSync8, renameSync as renameSync3, statSync as statSync5, mkdirSync as mkdirSync9, existsSync as existsSync13, unlinkSync as unlinkSync4, readdirSync as readdirSync5, openSync as openSync2, closeSync as closeSync2, fstatSync as fstatSync2, lstatSync as lstatSync7 } from "node:fs";
 import { dirname as dirname9, basename as basename2 } from "node:path";
 function generateTmpStamp() {
   const rand = Math.random().toString(36).slice(2, 10);
   return `${process.pid}.${Date.now().toString(36)}.${rand}`;
+}
+function withPairWriteLock(yamlPath, operation) {
+  ensureDir(yamlPath);
+  const lockPath = `${yamlPath}.write.lock`;
+  const deadline = Date.now() + ACTION_WRITE_LOCK_TIMEOUT_MS;
+  let lockFd = null;
+  while (lockFd === null) {
+    try {
+      lockFd = openSync2(lockPath, "wx", 384);
+    } catch (err) {
+      if (err.code !== "EEXIST")
+        throw err;
+      let lockStat;
+      try {
+        lockStat = lstatSync7(lockPath);
+      } catch (statError) {
+        if (statError.code === "ENOENT")
+          continue;
+        throw statError;
+      }
+      if (!lockStat.isFile() || lockStat.isSymbolicLink()) {
+        throw new Error(`Refusing invalid action write lock at ${lockPath}.`);
+      }
+      if (Date.now() - lockStat.mtimeMs >= ACTION_WRITE_LOCK_STALE_MS) {
+        try {
+          const current = lstatSync7(lockPath);
+          if (current.dev === lockStat.dev && current.ino === lockStat.ino)
+            unlinkSync4(lockPath);
+        } catch (unlinkError) {
+          if (unlinkError.code !== "ENOENT")
+            throw unlinkError;
+        }
+        continue;
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(`Timed out waiting for action write lock at ${lockPath}.`);
+      }
+      Atomics.wait(lockWaitBuffer, 0, 0, 10);
+    }
+  }
+  const identity2 = fstatSync2(lockFd);
+  try {
+    return operation();
+  } finally {
+    try {
+      const current = lstatSync7(lockPath);
+      if (current.dev === identity2.dev && current.ino === identity2.ino)
+        unlinkSync4(lockPath);
+    } catch {
+    }
+    closeSync2(lockFd);
+  }
 }
 function pairWriteImpl(yamlPath, yamlContent, sidecarPath, state) {
   ensureDir(yamlPath);
@@ -25064,12 +25116,15 @@ function cleanupOrphans(yamlPath, sidecarPath) {
     }
   }
 }
-var FUTURE_MTIME_BUFFER_MS, ORPHAN_MAX_AGE_MS, atomicWriter;
+var FUTURE_MTIME_BUFFER_MS, ORPHAN_MAX_AGE_MS, ACTION_WRITE_LOCK_TIMEOUT_MS, ACTION_WRITE_LOCK_STALE_MS, lockWaitBuffer, atomicWriter;
 var init_atomic_writer = __esm({
   "packages/rn-dev-agent-core/dist/domain/atomic-writer.js"() {
     "use strict";
     FUTURE_MTIME_BUFFER_MS = 1e3;
     ORPHAN_MAX_AGE_MS = 5 * 60 * 1e3;
+    ACTION_WRITE_LOCK_TIMEOUT_MS = 5e3;
+    ACTION_WRITE_LOCK_STALE_MS = 3e4;
+    lockWaitBuffer = new Int32Array(new SharedArrayBuffer(4));
     atomicWriter = {
       /** Underlying `fs.writeFileSync(path, content, 'utf8')`. */
       _writeFile(path, content) {
@@ -25101,14 +25156,27 @@ var init_atomic_writer = __esm({
       _readdir(path) {
         return readdirSync5(path);
       },
+      withLock(yamlPath, operation) {
+        return withPairWriteLock(yamlPath, operation);
+      },
       /**
        * Atomic pair-write. Cleans up any orphaned `.tmp` files before
        * starting. Throws on the first failed step — caller decides whether
        * to surface or recover.
        */
       pairWrite(yamlPath, yamlContent, sidecarPath, state) {
-        cleanupOrphans(yamlPath, sidecarPath);
-        return pairWriteImpl(yamlPath, yamlContent, sidecarPath, state);
+        return withPairWriteLock(yamlPath, () => {
+          cleanupOrphans(yamlPath, sidecarPath);
+          return pairWriteImpl(yamlPath, yamlContent, sidecarPath, state);
+        });
+      },
+      pairWriteConditional(yamlPath, yamlContent, sidecarPath, state, precondition) {
+        return withPairWriteLock(yamlPath, () => {
+          if (!precondition())
+            return null;
+          cleanupOrphans(yamlPath, sidecarPath);
+          return pairWriteImpl(yamlPath, yamlContent, sidecarPath, state);
+        });
       }
     };
   }
@@ -25500,7 +25568,7 @@ var init_worktree_repair_remedy = __esm({
 
 // packages/rn-dev-agent-core/dist/session/worktree-inheritance.js
 import { spawnSync } from "node:child_process";
-import { closeSync as closeSync2, existsSync as existsSync15, fstatSync as fstatSync2, lstatSync as lstatSync7, mkdirSync as mkdirSync11, openSync as openSync2, readFileSync as readFileSync14, readlinkSync, realpathSync as realpathSync4, renameSync as renameSync4, statSync as statSync6, symlinkSync, unlinkSync as unlinkSync5 } from "node:fs";
+import { closeSync as closeSync3, existsSync as existsSync15, fstatSync as fstatSync3, lstatSync as lstatSync8, mkdirSync as mkdirSync11, openSync as openSync3, readFileSync as readFileSync14, readlinkSync, realpathSync as realpathSync4, renameSync as renameSync4, statSync as statSync6, symlinkSync, unlinkSync as unlinkSync5 } from "node:fs";
 import { dirname as dirname12, isAbsolute as isAbsolute2, join as join19, relative, resolve as resolve4, sep as sep4 } from "node:path";
 function gitEnvironment() {
   const env = { ...process.env };
@@ -25656,7 +25724,7 @@ function resolveWorktreeLayout(input) {
     return { ...base, refusal: "PRIMARY_APP_MISSING" };
   let primaryAppReal = null;
   try {
-    if (lstatSync7(primaryAppRoot).isDirectory())
+    if (lstatSync8(primaryAppRoot).isDirectory())
       primaryAppReal = canonical(primaryAppRoot);
   } catch {
     primaryAppReal = null;
@@ -25683,7 +25751,7 @@ var init_worktree_inheritance = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/action-store.js
-import { existsSync as existsSync16, lstatSync as lstatSync8, readFileSync as readFileSync15, realpathSync as realpathSync5, statSync as statSync7 } from "node:fs";
+import { existsSync as existsSync16, lstatSync as lstatSync9, readFileSync as readFileSync15, realpathSync as realpathSync5, statSync as statSync7 } from "node:fs";
 import { basename as basename4, dirname as dirname13, join as join20 } from "node:path";
 function actionPathFor(projectRoot, actionId) {
   assertValidActionId(actionId, "actionPathFor");
@@ -25733,7 +25801,7 @@ function canonicalPath(path) {
 }
 function lstatIfPresent(path) {
   try {
-    return lstatSync8(path);
+    return lstatSync9(path);
   } catch (err) {
     if (err.code === "ENOENT")
       return null;
@@ -25875,22 +25943,29 @@ function actionWasEditedExternally(action) {
   return yamlEditedSinceLastSeen(action.filePath, action.state);
 }
 function acknowledgeExternalEdit(action) {
-  let currentMtimeMs;
-  try {
-    currentMtimeMs = statSync7(action.filePath).mtimeMs;
-  } catch {
+  const nextAction = atomicWriter.withLock(action.filePath, () => {
+    let currentMtimeMs;
+    try {
+      currentMtimeMs = statSync7(action.filePath).mtimeMs;
+    } catch {
+      return action;
+    }
+    const currentState = loadOrInitSidecar(action.filePath);
+    if (currentMtimeMs <= currentState.lastSeenMtimeMs) {
+      return { ...action, state: currentState };
+    }
+    const nextState = markSeen(currentState, currentMtimeMs);
+    saveSidecar(action.filePath, nextState);
+    return { ...action, state: nextState };
+  });
+  if (nextAction === action)
     return action;
-  }
-  if (currentMtimeMs <= action.state.lastSeenMtimeMs)
-    return action;
-  const nextState = markSeen(action.state, currentMtimeMs);
-  saveSidecar(action.filePath, nextState);
   mirrorToDb({
     yamlFilePath: action.filePath,
-    state: nextState,
+    state: nextAction.state,
     meta: { appId: action.metadata.appId, status: action.metadata.status, path: action.filePath }
   });
-  return { ...action, state: nextState };
+  return nextAction;
 }
 function canonicalRuntimeJson(state) {
   return JSON.stringify(state, (_key, value) => {
@@ -25911,18 +25986,20 @@ function runtimeSidecarMatches(sidecarPath, expected) {
   const normalized = typeof onDisk?.lastSeenMtimeMs === "number" ? onDisk : { ...onDisk, lastSeenMtimeMs: expected.lastSeenMtimeMs };
   return canonicalRuntimeJson(normalized) === canonicalRuntimeJson(expected);
 }
+function runtimeBaselineMatches(filePath, expected) {
+  const sidecarPath = sidecarPathFor(filePath);
+  return existsSync16(sidecarPath) ? runtimeSidecarMatches(sidecarPath, expected) : expected.runHistory.length === 0 && expected.repairHistory.length === 0;
+}
 function saveActionRuntimeWithCAS(expected, nextState) {
-  const sidecarPath = sidecarPathFor(expected.filePath);
-  if (existsSync16(sidecarPath)) {
-    if (!runtimeSidecarMatches(sidecarPath, expected.state)) {
+  return atomicWriter.withLock(expected.filePath, () => {
+    const sidecarPath = sidecarPathFor(expected.filePath);
+    if (!runtimeBaselineMatches(expected.filePath, expected.state)) {
       return { ok: false, conflict: "EXTERNAL_WRITE" };
     }
-  } else if (expected.state.runHistory.length > 0 || expected.state.repairHistory.length > 0) {
-    return { ok: false, conflict: "EXTERNAL_WRITE" };
-  }
-  saveSidecar(expected.filePath, nextState);
-  expected.state = nextState;
-  return { ok: true, sidecarPath };
+    saveSidecar(expected.filePath, nextState);
+    expected.state = nextState;
+    return { ok: true, sidecarPath };
+  });
 }
 function promoteActionRuntimeWithCAS(expected, nextState) {
   try {
@@ -25945,7 +26022,15 @@ function promoteActionRuntimeWithCAS(expected, nextState) {
   if ((yaml2.match(marker) ?? []).length !== 1)
     return { ok: false, conflict: "EXTERNAL_WRITE" };
   const promoted = yaml2.replace(marker, "# status: active");
-  const written = atomicWriter.pairWrite(expected.filePath, promoted, sidecarPath, nextState);
+  const written = atomicWriter.pairWriteConditional(expected.filePath, promoted, sidecarPath, nextState, () => {
+    try {
+      return runtimeBaselineMatches(expected.filePath, expected.state) && !actionWasEditedExternally(expected) && readFileSync15(expected.filePath, "utf8") === yaml2;
+    } catch {
+      return false;
+    }
+  });
+  if (!written)
+    return { ok: false, conflict: "EXTERNAL_WRITE" };
   expected.state = { ...nextState, lastSeenMtimeMs: written.finalMtimeMs };
   return { ok: true, sidecarPath };
 }
@@ -25984,7 +26069,7 @@ var init_action_store = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/action-engine-compat.js
-import { existsSync as existsSync17, lstatSync as lstatSync9, readdirSync as readdirSync7, realpathSync as realpathSync6 } from "node:fs";
+import { existsSync as existsSync17, lstatSync as lstatSync10, readdirSync as readdirSync7, realpathSync as realpathSync6 } from "node:fs";
 import { basename as basename5, dirname as dirname14, join as join21, resolve as resolve5 } from "node:path";
 function actionEnginePinRefusal(enginePin) {
   if (!enginePin) {
@@ -30327,7 +30412,7 @@ var init_metro_origin = __esm({
 // packages/rn-dev-agent-core/dist/session/install-authority.js
 import { execFileSync as execFileSync6 } from "node:child_process";
 import { createHash as createHash6 } from "node:crypto";
-import { lstatSync as lstatSync10, readFileSync as readFileSync17, readdirSync as readdirSync9, readlinkSync as readlinkSync3, realpathSync as realpathSync8, statSync as statSync9 } from "node:fs";
+import { lstatSync as lstatSync11, readFileSync as readFileSync17, readdirSync as readdirSync9, readlinkSync as readlinkSync3, realpathSync as realpathSync8, statSync as statSync9 } from "node:fs";
 import { isAbsolute as isAbsolute3, join as join24, relative as relative2 } from "node:path";
 function runText(command, args) {
   return execFileSync6(command, [...args], {
@@ -30465,7 +30550,7 @@ function captureInstalledArtifact(target, dependencies = {}) {
       throw new Error("APP_INSTALL_IDENTITY_CHANGED: iOS executable identity is unavailable");
     }
     const files = iosAppFiles(appPath, dependencies);
-    const lstat = dependencies.lstat ?? lstatSync10;
+    const lstat = dependencies.lstat ?? lstatSync11;
     const readLink = dependencies.readLink ?? readlinkSync3;
     const realpath = dependencies.realpath ?? realpathSync8;
     const artifactParts = [];
@@ -34320,7 +34405,7 @@ var init_recover_detached = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/lifecycle/device-lock.js
-import { existsSync as existsSync22, mkdirSync as mkdirSync13, openSync as openSync3, writeSync, closeSync as closeSync3, readFileSync as readFileSync21, unlinkSync as unlinkSync8, writeFileSync as writeFileSync11 } from "node:fs";
+import { existsSync as existsSync22, mkdirSync as mkdirSync13, openSync as openSync4, writeSync, closeSync as closeSync4, readFileSync as readFileSync21, unlinkSync as unlinkSync8, writeFileSync as writeFileSync11 } from "node:fs";
 import { tmpdir as tmpdir9, userInfo } from "node:os";
 import { join as join28 } from "node:path";
 function defaultProcessAlive3(pid) {
@@ -34435,7 +34520,7 @@ var init_device_lock = __esm({
       create() {
         if (!existsSync22(this.tmpDir))
           mkdirSync13(this.tmpDir, { recursive: true });
-        const fd = openSync3(this.lockPath, "wx");
+        const fd = openSync4(this.lockPath, "wx");
         try {
           const now = this.clock();
           const body = {
@@ -34450,7 +34535,7 @@ var init_device_lock = __esm({
           };
           writeSync(fd, JSON.stringify(body, null, 2));
         } finally {
-          closeSync3(fd);
+          closeSync4(fd);
         }
         this.acquired = true;
       }
@@ -60420,14 +60505,14 @@ import { join as join34 } from "node:path";
 // packages/rn-dev-agent-core/dist/session/bound-directory.js
 import { spawn as spawn6 } from "node:child_process";
 import { randomUUID as randomUUID7 } from "node:crypto";
-import { closeSync as closeSync4, constants as constants3, existsSync as existsSync24, fstatSync as fstatSync3, lstatSync as lstatSync12, mkdtempSync, openSync as openSync4, readFileSync as readFileSync24, realpathSync as realpathSync10, renameSync as renameSync7, rmSync as rmSync8, writeFileSync as writeFileSync13 } from "node:fs";
+import { closeSync as closeSync5, constants as constants3, existsSync as existsSync24, fstatSync as fstatSync4, lstatSync as lstatSync13, mkdtempSync, openSync as openSync5, readFileSync as readFileSync24, realpathSync as realpathSync10, renameSync as renameSync7, rmSync as rmSync8, writeFileSync as writeFileSync13 } from "node:fs";
 import { tmpdir as tmpdir10 } from "node:os";
 import { join as join33 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/session/state-root.js
 init_secure_state_file();
 import { randomBytes as randomBytes5, randomUUID as randomUUID6 } from "node:crypto";
-import { chmodSync as chmodSync3, linkSync, lstatSync as lstatSync11, mkdirSync as mkdirSync14, readFileSync as readFileSync23, renameSync as renameSync6, rmSync as rmSync7, statSync as statSync11, writeFileSync as writeFileSync12 } from "node:fs";
+import { chmodSync as chmodSync3, linkSync, lstatSync as lstatSync12, mkdirSync as mkdirSync14, readFileSync as readFileSync23, renameSync as renameSync6, rmSync as rmSync7, statSync as statSync11, writeFileSync as writeFileSync12 } from "node:fs";
 import { join as join32, resolve as resolve8 } from "node:path";
 function fail(code, detail) {
   throw new Error(`${code}: ${detail}`);
@@ -60435,7 +60520,7 @@ function fail(code, detail) {
 function ensurePrivateDirectory(path) {
   try {
     mkdirSync14(path, { recursive: true, mode: 448 });
-    const link = lstatSync11(path);
+    const link = lstatSync12(path);
     const stat2 = statSync11(path);
     if (link.isSymbolicLink() || !link.isDirectory() || typeof process.getuid === "function" && stat2.uid !== process.getuid()) {
       fail("AUTHORITY_STATE_ROOT_UNSAFE", "state directory is not private and user-owned");
@@ -60473,7 +60558,7 @@ function createAuthorityStateLayout(stateDir = getStateDir()) {
 function openAuthorityStateLayout(stateDir) {
   const layout = authorityStateLayout(stateDir);
   try {
-    const registry2 = lstatSync11(layout.registry);
+    const registry2 = lstatSync12(layout.registry);
     if (registry2.isSymbolicLink() || !registry2.isFile()) {
       fail("AUTHORITY_STATE_HOME_UNKNOWN", "requested state home has no regular authority registry");
     }
@@ -60511,7 +60596,7 @@ function getBoundDirectoryJournalKey(layout = createAuthorityStateLayout()) {
     } finally {
       rmSync7(temporary, { force: true });
     }
-    const link = lstatSync11(path);
+    const link = lstatSync12(path);
     const stat2 = statSync11(path);
     const key = readFileSync23(path);
     if (link.isSymbolicLink() || !link.isFile() || key.length !== 32 || typeof process.getuid === "function" && stat2.uid !== process.getuid()) {
@@ -61839,7 +61924,7 @@ function runBoundOperation(directory, request2, dependencies = {}) {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound directory is closed");
   }
   if (directory.descriptor !== void 0) {
-    const retained = fstatSync3(directory.descriptor, { bigint: true });
+    const retained = fstatSync4(directory.descriptor, { bigint: true });
     if (!retained.isDirectory() || retained.dev !== directory.identity.dev || retained.ino !== directory.identity.ino) {
       throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: retained directory identity changed");
     }
@@ -61847,7 +61932,7 @@ function runBoundOperation(directory, request2, dependencies = {}) {
   let current;
   let currentRealPath;
   try {
-    current = lstatSync12(directory.path, { bigint: true });
+    current = lstatSync13(directory.path, { bigint: true });
     currentRealPath = realpathSync10(directory.path);
   } catch {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: bound directory path is unavailable");
@@ -61964,13 +62049,13 @@ function openValidatedDirectory(path, expected) {
   let descriptor;
   let worker;
   try {
-    const before = lstatSync12(path, { bigint: true });
+    const before = lstatSync13(path, { bigint: true });
     if (!before.isDirectory() || before.isSymbolicLink()) {
       throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration ancestor is not a directory");
     }
-    descriptor = openSync4(path, constants3.O_RDONLY | (constants3.O_DIRECTORY ?? 0) | (constants3.O_NOFOLLOW ?? 0));
-    const opened = fstatSync3(descriptor, { bigint: true });
-    const after = lstatSync12(path, { bigint: true });
+    descriptor = openSync5(path, constants3.O_RDONLY | (constants3.O_DIRECTORY ?? 0) | (constants3.O_NOFOLLOW ?? 0));
+    const opened = fstatSync4(descriptor, { bigint: true });
+    const after = lstatSync13(path, { bigint: true });
     const realPath = realpathSync10(path);
     if (!opened.isDirectory() || !sameIdentity(before, opened) || !sameIdentity(after, opened) || expected !== void 0 && (!sameIdentity(expected.identity, opened) || expected.realPath !== realPath)) {
       throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration ancestor changed while opening");
@@ -62000,7 +62085,7 @@ function openValidatedDirectory(path, expected) {
     }
     if (descriptor !== void 0) {
       try {
-        closeSync4(descriptor);
+        closeSync5(descriptor);
       } catch (cleanupError) {
         cleanupErrors.push(cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError)));
       }
@@ -62044,7 +62129,7 @@ function closeBoundDirectory(directory) {
   directory.parent?.children.delete(directory);
   if (directory.descriptor !== void 0) {
     try {
-      closeSync4(directory.descriptor);
+      closeSync5(directory.descriptor);
     } catch (error2) {
       cleanupErrors.push(error2 instanceof Error ? error2 : new Error(String(error2)));
     }
@@ -62791,7 +62876,7 @@ function createBuildLaunchPlan(input) {
 // packages/rn-dev-agent-core/dist/session/managed-metro.js
 import { execFileSync as execFileSync10, spawn as spawn7 } from "node:child_process";
 import { createHash as createHash10, createHmac as createHmac2, timingSafeEqual as timingSafeEqual4 } from "node:crypto";
-import { closeSync as closeSync6, existsSync as existsSync27, fstatSync as fstatSync4, mkdirSync as mkdirSync16, openSync as openSync6, readFileSync as readFileSync27, readSync as readSync2, realpathSync as realpathSync12, rmSync as rmSync10 } from "node:fs";
+import { closeSync as closeSync7, existsSync as existsSync27, fstatSync as fstatSync5, mkdirSync as mkdirSync16, openSync as openSync7, readFileSync as readFileSync27, readSync as readSync2, realpathSync as realpathSync12, rmSync as rmSync10 } from "node:fs";
 init_metro_binding();
 init_trusted_system_executable();
 init_process_birth();
@@ -62889,7 +62974,7 @@ function canonicalAuthorityJson(value) {
 // packages/rn-dev-agent-core/dist/session/managed-metro-enforcement.js
 import { spawnSync as spawnSync2 } from "node:child_process";
 import { createHash as createHash9 } from "node:crypto";
-import { closeSync as closeSync5, constants as constants4, existsSync as existsSync26, mkdirSync as mkdirSync15, openSync as openSync5, readFileSync as readFileSync26, realpathSync as realpathSync11, rmSync as rmSync9, statSync as statSync12, symlinkSync as symlinkSync2, writeSync as writeSync2 } from "node:fs";
+import { closeSync as closeSync6, constants as constants4, existsSync as existsSync26, mkdirSync as mkdirSync15, openSync as openSync6, readFileSync as readFileSync26, realpathSync as realpathSync11, rmSync as rmSync9, statSync as statSync12, symlinkSync as symlinkSync2, writeSync as writeSync2 } from "node:fs";
 import { dirname as dirname17, resolve as resolve9 } from "node:path";
 var DARWIN_SANDBOX_EXECUTABLE = "/usr/bin/sandbox-exec";
 var DARWIN_CODESIGN_EXECUTABLE = "/usr/bin/codesign";
@@ -64698,7 +64783,7 @@ async function stopManagedMetroWithEvidence(binding, input, dependencies = {}) {
 }
 
 // packages/rn-dev-agent-core/dist/session/package-integration.js
-import { closeSync as closeSync7, constants as constants5, fstatSync as fstatSync5, lstatSync as lstatSync13, openSync as openSync7, readFileSync as readFileSync28 } from "node:fs";
+import { closeSync as closeSync8, constants as constants5, fstatSync as fstatSync6, lstatSync as lstatSync14, openSync as openSync8, readFileSync as readFileSync28 } from "node:fs";
 import { basename as basename10, isAbsolute as isAbsolute6, join as join35, relative as relative4, resolve as resolve10, sep as sep6 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/session/metro-authority.js
@@ -68484,7 +68569,7 @@ function assertNoSymlinkPath(root, candidate) {
   for (const component of [root, ...child.split(sep6).filter(Boolean)]) {
     current = component === root ? root : join35(current, component);
     try {
-      if (lstatSync13(current).isSymbolicLink()) {
+      if (lstatSync14(current).isSymbolicLink()) {
         throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration path is symlinked");
       }
     } catch (error2) {
@@ -68496,7 +68581,7 @@ function assertNoSymlinkPath(root, candidate) {
 }
 function regularFileIdentity(root, candidate) {
   assertNoSymlinkPath(root, candidate);
-  const identity2 = lstatSync13(candidate, { bigint: true });
+  const identity2 = lstatSync14(candidate, { bigint: true });
   if (!identity2.isFile()) {
     throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration input is not a regular file");
   }
@@ -68504,16 +68589,16 @@ function regularFileIdentity(root, candidate) {
 }
 function readRegularFile(root, candidate) {
   const before = regularFileIdentity(root, candidate);
-  const descriptor = openSync7(candidate, constants5.O_RDONLY | (constants5.O_NOFOLLOW ?? 0) | (constants5.O_NONBLOCK ?? 0));
+  const descriptor = openSync8(candidate, constants5.O_RDONLY | (constants5.O_NOFOLLOW ?? 0) | (constants5.O_NONBLOCK ?? 0));
   try {
-    const opened = fstatSync5(descriptor, { bigint: true });
+    const opened = fstatSync6(descriptor, { bigint: true });
     const after = regularFileIdentity(root, candidate);
     if (!opened.isFile() || before.dev !== opened.dev || before.ino !== opened.ino || after.dev !== opened.dev || after.ino !== opened.ino) {
       throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: integration input changed while opening");
     }
     return readFileSync28(descriptor, "utf8");
   } finally {
-    closeSync7(descriptor);
+    closeSync8(descriptor);
   }
 }
 function readOptionalRegularFile(root, candidate) {
@@ -68937,7 +69022,7 @@ import { createHash as createHash13 } from "node:crypto";
 init_metro_cwd();
 import { createHash as createHash11, createHmac as createHmac4, randomBytes as randomBytes6, timingSafeEqual as timingSafeEqual6 } from "node:crypto";
 import { execFileSync as execFileSync11 } from "node:child_process";
-import { closeSync as closeSync8, constants as constants6, existsSync as existsSync28, fstatSync as fstatSync6, lstatSync as lstatSync14, openSync as openSync8, readdirSync as readdirSync11, readFileSync as readFileSync29, readlinkSync as readlinkSync4, readSync as readSync3, realpathSync as realpathSync13 } from "node:fs";
+import { closeSync as closeSync9, constants as constants6, existsSync as existsSync28, fstatSync as fstatSync7, lstatSync as lstatSync15, openSync as openSync9, readdirSync as readdirSync11, readFileSync as readFileSync29, readlinkSync as readlinkSync4, readSync as readSync3, realpathSync as realpathSync13 } from "node:fs";
 import { dirname as dirname18, isAbsolute as isAbsolute7, join as join36, relative as relative5, resolve as resolve11 } from "node:path";
 init_declared_source_contract();
 function digest2(parts) {
@@ -69014,9 +69099,9 @@ function updateFramed(hash, part) {
   hash.update(bytes);
 }
 function updateStableFile(hash, path, maximumBytes, framed) {
-  const descriptor = openSync8(path, constants6.O_RDONLY | (constants6.O_NOFOLLOW ?? 0));
+  const descriptor = openSync9(path, constants6.O_RDONLY | (constants6.O_NOFOLLOW ?? 0));
   try {
-    const initial = fstatSync6(descriptor);
+    const initial = fstatSync7(descriptor);
     if (!initial.isFile() || initial.size > maximumBytes) {
       throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input is not bounded");
     }
@@ -69035,13 +69120,13 @@ function updateStableFile(hash, path, maximumBytes, framed) {
     if (readSync3(descriptor, buffer, 0, 1, offset) !== 0) {
       throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input changed while hashing");
     }
-    const final = fstatSync6(descriptor);
+    const final = fstatSync7(descriptor);
     if (final.dev !== initial.dev || final.ino !== initial.ino || final.size !== initial.size || final.mtimeMs !== initial.mtimeMs || final.ctimeMs !== initial.ctimeMs) {
       throw new Error("STRICT_PROOF_UNVERIFIED_METRO_POLICY: runtime input changed while hashing");
     }
     return initial.size;
   } finally {
-    closeSync8(descriptor);
+    closeSync9(descriptor);
   }
 }
 function updateFramedFile(hash, path, maximumBytes) {
@@ -69063,7 +69148,7 @@ function updateDependencyPath(hash, path, label, state) {
     if (current.depth > MAX_STRICT_PROOF_DEPENDENCY_DEPTH) {
       throw new Error("STRICT_PROOF_DEPENDENCY_LIMIT: dependency depth exceeds the limit");
     }
-    const stat2 = lstatSync14(current.path);
+    const stat2 = lstatSync15(current.path);
     updateFramed(hash, current.label);
     updateFramed(hash, String(stat2.mode & 511));
     if (stat2.isSymbolicLink()) {
@@ -69195,7 +69280,7 @@ function metroRuntimeInputs(identity2, authority, readEvidenceHead, verifyRuntim
   const runtimeLoadsPath = authority.evidencePath;
   let runtimeLoadsRaw;
   try {
-    const runtimeLoadsStat = lstatSync14(runtimeLoadsPath);
+    const runtimeLoadsStat = lstatSync15(runtimeLoadsPath);
     if (!runtimeLoadsStat.isFile() || runtimeLoadsStat.size > MAX_STRICT_PROOF_FILE_BYTES) {
       throw new Error("runtime load evidence is not a bounded regular file");
     }
@@ -69618,7 +69703,7 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
   for (const [classification, entry] of sourceEntries) {
     const file = resolve11(identity2.contentRoot, entry);
     assertContained(identity2.contentRoot, file, "STRICT_PROOF_PATH_ESCAPE");
-    const stat2 = lstatSync14(file);
+    const stat2 = lstatSync15(file);
     updateFramed(dirtyHash, classification);
     updateFramed(dirtyHash, entry);
     if (stat2.isFile()) {
@@ -69637,7 +69722,7 @@ function strictProofSourceIdentity(identity2, dependencies = {}) {
       const target = realpathSync13(file);
       assertContained(identity2.contentRoot, target, "STRICT_PROOF_PATH_ESCAPE");
       const link = readlinkSync4(file);
-      const targetStat = lstatSync14(target);
+      const targetStat = lstatSync15(target);
       if (!targetStat.isFile()) {
         throw new Error("STRICT_PROOF_UNSUPPORTED_FILE: untracked symlink target is not a regular file");
       }
@@ -73016,7 +73101,7 @@ init_path_safety();
 init_rn_android_runner_client();
 
 // packages/rn-dev-agent-core/dist/observability/recorder.js
-import { closeSync as closeSync9, constants as constants7, fstatSync as fstatSync7, openSync as openSync9, readSync as readSync4 } from "node:fs";
+import { closeSync as closeSync10, constants as constants7, fstatSync as fstatSync8, openSync as openSync10, readSync as readSync4 } from "node:fs";
 import { isAbsolute as isAbsolute9 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/util/redact.js
@@ -73310,8 +73395,8 @@ function extractScreenshotPath(result) {
 function readShotBounded(p) {
   let fd;
   try {
-    fd = openSync9(p, constants7.O_RDONLY | constants7.O_NOFOLLOW | constants7.O_NONBLOCK);
-    const st = fstatSync7(fd);
+    fd = openSync10(p, constants7.O_RDONLY | constants7.O_NOFOLLOW | constants7.O_NONBLOCK);
+    const st = fstatSync8(fd);
     if (!st.isFile() || st.size > MAX_SHOT_BYTES)
       return null;
     const size = Number(st.size);
@@ -73325,7 +73410,7 @@ function readShotBounded(p) {
   } finally {
     if (fd !== void 0) {
       try {
-        closeSync9(fd);
+        closeSync10(fd);
       } catch {
       }
     }
@@ -79629,7 +79714,7 @@ function createDeviceRecordHandler(deps = {}) {
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
 import { createHash as createHash16, randomUUID as randomUUID8 } from "node:crypto";
 import { execFileSync as execFileSync14 } from "node:child_process";
-import { chmodSync as chmodSync4, closeSync as closeSync10, existsSync as existsSync30, fsyncSync, lstatSync as lstatSync15, mkdirSync as mkdirSync18, openSync as openSync10, readFileSync as readFileSync30, realpathSync as realpathSync14, renameSync as renameSync8, unlinkSync as unlinkSync11, writeFileSync as writeFileSync14 } from "node:fs";
+import { chmodSync as chmodSync4, closeSync as closeSync11, existsSync as existsSync30, fsyncSync, lstatSync as lstatSync16, mkdirSync as mkdirSync18, openSync as openSync11, readFileSync as readFileSync30, realpathSync as realpathSync14, renameSync as renameSync8, unlinkSync as unlinkSync11, writeFileSync as writeFileSync14 } from "node:fs";
 import { basename as basename11, dirname as dirname23, extname, isAbsolute as isAbsolute10, join as join43, relative as relative6, resolve as resolve15, sep as sep7 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 init_action_store();
@@ -80527,7 +80612,7 @@ function hasExistingSymlink(root, path) {
   for (let length = 0; length <= parts.length; length += 1) {
     const candidate = resolve15(root, ...parts.slice(0, length));
     try {
-      if (lstatSync15(candidate).isSymbolicLink())
+      if (lstatSync16(candidate).isSymbolicLink())
         return true;
     } catch {
     }
@@ -80556,7 +80641,7 @@ function validCaptureContext(args, expectedRoot) {
 function proofRootExists(args) {
   const proofRoot = join43(args.projectRoot, "docs", "proof", args.runId);
   try {
-    lstatSync15(proofRoot);
+    lstatSync16(proofRoot);
     return true;
   } catch (error2) {
     return error2.code !== "ENOENT";
@@ -80707,17 +80792,17 @@ function writeProofReceiptAtomic(path, receipt2) {
   const temporary = resolve15(directory, `.${randomUUID8()}.proof-receipt.tmp`);
   let descriptor = null;
   try {
-    descriptor = openSync10(temporary, "wx", 384);
+    descriptor = openSync11(temporary, "wx", 384);
     writeFileSync14(descriptor, `${JSON.stringify(receipt2, null, 2)}
 `, "utf8");
     fsyncSync(descriptor);
-    closeSync10(descriptor);
+    closeSync11(descriptor);
     descriptor = null;
     renameSync8(temporary, path);
     chmodSync4(path, 384);
   } catch (error2) {
     if (descriptor !== null)
-      closeSync10(descriptor);
+      closeSync11(descriptor);
     try {
       unlinkSync11(temporary);
     } catch {
@@ -82983,7 +83068,7 @@ init_project_config();
 init_maestro_validator();
 init_maestro_run();
 init_action_engine_compat();
-import { lstatSync as lstatSync16, readFileSync as readFileSync31, readdirSync as readdirSync12, realpathSync as realpathSync15 } from "node:fs";
+import { lstatSync as lstatSync17, readFileSync as readFileSync31, readdirSync as readdirSync12, realpathSync as realpathSync15 } from "node:fs";
 import { dirname as dirname25, join as join45, resolve as resolve16 } from "node:path";
 var AUTH_ROUTE_PATTERNS = [
   "login",
@@ -83049,8 +83134,8 @@ function findLoginFlow(projectRoot) {
   for (const dir of searchDirs) {
     let files;
     try {
-      const maestroStat = lstatSync16(maestroDir);
-      const dirStat = lstatSync16(dir);
+      const maestroStat = lstatSync17(maestroDir);
+      const dirStat = lstatSync17(dir);
       if (maestroStat.isSymbolicLink() || dirStat.isSymbolicLink()) {
         throw new Error(`Refusing legacy login directory symlink at ${dir}.`);
       }
@@ -83074,7 +83159,7 @@ function findLoginFlow(projectRoot) {
   return null;
 }
 function assertLegacyLoginFlow(projectRoot, flowPath) {
-  const stat2 = lstatSync16(flowPath);
+  const stat2 = lstatSync17(flowPath);
   if (!stat2.isFile() || stat2.isSymbolicLink()) {
     throw new Error(`Refusing legacy login flow symlink at ${flowPath}.`);
   }
@@ -83667,7 +83752,7 @@ function buildGracefulShutdown(deps) {
 // packages/rn-dev-agent-core/dist/lifecycle/lockfile.js
 import { createHash as createHash18 } from "node:crypto";
 import { execFileSync as execFileSync16 } from "node:child_process";
-import { closeSync as closeSync11, existsSync as existsSync31, mkdirSync as mkdirSync19, openSync as openSync11, readFileSync as readFileSync32, statSync as statSync14, unlinkSync as unlinkSync12, writeFileSync as writeFileSync15, writeSync as writeSync3 } from "node:fs";
+import { closeSync as closeSync12, existsSync as existsSync31, mkdirSync as mkdirSync19, openSync as openSync12, readFileSync as readFileSync32, statSync as statSync14, unlinkSync as unlinkSync12, writeFileSync as writeFileSync15, writeSync as writeSync3 } from "node:fs";
 import { tmpdir as tmpdir12, userInfo as userInfo2 } from "node:os";
 import { join as join46, resolve as resolve17 } from "node:path";
 var DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
@@ -83912,11 +83997,11 @@ var Lockfile = class {
     if (!existsSync31(dir)) {
       mkdirSync19(dir, { recursive: true });
     }
-    const fd = openSync11(this.lockPath, "wx");
+    const fd = openSync12(this.lockPath, "wx");
     try {
       writeSync3(fd, JSON.stringify(body, null, 2));
     } finally {
-      closeSync11(fd);
+      closeSync12(fd);
     }
   }
 };
@@ -84421,7 +84506,7 @@ function createMaestroTestAllHandler(deps = {}) {
 init_agent_device_wrapper();
 init_utils();
 init_path_safety();
-import { readFileSync as readFileSync34, readdirSync as readdirSync14, lstatSync as lstatSync17 } from "node:fs";
+import { readFileSync as readFileSync34, readdirSync as readdirSync14, lstatSync as lstatSync18 } from "node:fs";
 import { join as join49, extname as extname2 } from "node:path";
 function findElement(nodes, query, matchBy) {
   const q = query.toLowerCase();
@@ -84449,7 +84534,7 @@ function discoverTestIDs(dir) {
         continue;
       const full = join49(d, entry);
       try {
-        const st = lstatSync17(full);
+        const st = lstatSync18(full);
         if (st.isSymbolicLink())
           continue;
         if (st.isDirectory()) {
