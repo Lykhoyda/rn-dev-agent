@@ -1036,18 +1036,18 @@ var init_process_birth = __esm({
     "use strict";
     init_trusted_system_executable();
     DARWIN_HELPER_MANIFEST = {
-      sourceSha256: "3162ff8a8c561b0b64f5a67df22cda26aef1ff31939d557c1b2901421e616230",
-      recipeSha256: "bd51a1c00d7d62715ed8b9fec2262876ef5a0badac2cf5eb259c60688e7a9b65",
-      stableBinarySha256: "6c0adc43359789b6b37d255653683c047521e8835e12cb602ce4722f1a367258",
-      binarySha256: "0e4f7912ca4454eb9f6a7c5075759241e9dc8fa527a96d1c8a7863d07f5bf046",
+      sourceSha256: "3d3cc684c83f9bd18ea2e56c7e1d62528fe7b78237d7314d73560731fff42255",
+      recipeSha256: "f22be6188030cc153d327f6c24282d48eaf0e089fd496baa67a54f53bac39843",
+      stableBinarySha256: "4090bd1f4c12b0071da253d45c1334dc92c3f08a6de0ca585de916cdbcf13442",
+      binarySha256: "33e13d0a7d5ac3d5a13829fef40f4aeaf738e7f8e0071c96947ce2289c770e64",
       cdhashes: [
-        "61207f3b2bc1b94d1d41dd02d2f75ea505d167db",
-        "2fbf84ca583bbd32b9af872d1ee0a818182022e7"
+        "a1d6311233d57cab40dfa1341f7f35810896682b",
+        "39e8e81152430e0be6f338c3b00e6b413289641a"
       ]
     };
     LINUX_PUBLICATION_HELPER_SHA256 = {
-      x64: "ddce7d82bee5d431981a991e43b3555c4c0d4e10ab3de6d200c8f94e62139d97",
-      arm64: "422a8a803cc0f035c47a4eae6b47b625927c6c120cbc8ae5e1efafe18cae2402"
+      x64: "511fe8f830189bfcacb5cfc590371e76cfa4914dce79a07d94a8fecc1c36f416",
+      arm64: "0654c8efac0b2424f274501a16cf227151ab25aeeb4c68333df9ae2b5d7dab15"
     };
     VERIFIED_HELPER_SCRIPT = `
 set -euo pipefail
@@ -28467,6 +28467,25 @@ function pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, publicationPre
     return null;
   ensureDir(yamlPath);
   ensureDir(sidecarPath);
+  let yamlMode;
+  if (expectedYamlContent !== void 0) {
+    let targetFd;
+    try {
+      targetFd = openSync9(yamlPath, constants7.O_RDONLY | constants7.O_NOFOLLOW);
+    } catch {
+      return null;
+    }
+    try {
+      const target = fstatSync7(targetFd);
+      if (!target.isFile() || readFileSync19(targetFd, "utf8") !== expectedYamlContent)
+        return null;
+      yamlMode = target.mode & 4095;
+    } finally {
+      closeSync9(targetFd);
+    }
+  } else if (createExclusive) {
+    yamlMode = 384;
+  }
   const stamp = generateTmpStamp();
   const yamlTmp = `${yamlPath}.tmp.${stamp}`;
   const sidecarTmp = `${sidecarPath}.tmp.${stamp}`;
@@ -28482,7 +28501,10 @@ function pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, publicationPre
     atomicWriter._unlink(sidecarTmp);
     return null;
   }
-  atomicWriter._writeFile(yamlTmp, yamlContent);
+  if (yamlMode === void 0)
+    atomicWriter._writeFile(yamlTmp, yamlContent);
+  else
+    atomicWriter._writeFileWithMode(yamlTmp, yamlContent, yamlMode);
   if (publicationPrecondition && !publicationPrecondition()) {
     atomicWriter._unlink(sidecarTmp);
     atomicWriter._unlink(yamlTmp);
@@ -28490,8 +28512,13 @@ function pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, publicationPre
   }
   const priorSidecarExisted = publicationPrecondition ? atomicWriter._exists(sidecarPath) : false;
   const priorSidecar = priorSidecarExisted ? readFileSync19(sidecarPath, "utf8") : null;
+  if (publicationPrecondition && !publicationPrecondition()) {
+    atomicWriter._unlink(sidecarTmp);
+    atomicWriter._unlink(yamlTmp);
+    return null;
+  }
   atomicWriter._rename(sidecarTmp, sidecarPath);
-  const yamlPublished = createExclusive ? atomicWriter._linkIfAbsent(yamlTmp, yamlPath) : expectedYamlContent === void 0 ? !yamlPublicationPrecondition || yamlPublicationPrecondition() : atomicWriter._publishIfUnchanged(yamlTmp, yamlPath, expectedYamlContent, stamp, yamlPublicationPrecondition);
+  const yamlPublished = createExclusive ? (!publicationPrecondition || publicationPrecondition()) && atomicWriter._linkIfAbsent(yamlTmp, yamlPath, publicationPrecondition) : expectedYamlContent === void 0 ? !yamlPublicationPrecondition || yamlPublicationPrecondition() : atomicWriter._publishIfUnchanged(yamlTmp, yamlPath, expectedYamlContent, stamp, yamlPublicationPrecondition);
   if (!yamlPublished) {
     if (yamlPublicationPrecondition && !yamlPublicationPrecondition()) {
       try {
@@ -28572,6 +28599,14 @@ var init_atomic_writer = __esm({
       _writeFile(path, content) {
         writeFileSync9(path, content, "utf8");
       },
+      _writeFileWithMode(path, content, mode) {
+        const fd = openSync9(path, "wx", mode);
+        try {
+          writeFileSync9(fd, content, "utf8");
+        } finally {
+          closeSync9(fd);
+        }
+      },
       /** Underlying `fs.renameSync(from, to)`. */
       _rename(from, to) {
         renameSync7(from, to);
@@ -28598,7 +28633,9 @@ var init_atomic_writer = __esm({
       _readdir(path) {
         return readdirSync6(path);
       },
-      _linkIfAbsent(candidatePath, targetPath) {
+      _linkIfAbsent(candidatePath, targetPath, publicationPrecondition) {
+        if (publicationPrecondition && !publicationPrecondition())
+          return false;
         try {
           linkSync2(candidatePath, targetPath);
           return true;
@@ -28623,7 +28660,7 @@ var init_atomic_writer = __esm({
           }
           const expectedPath = `${candidatePath}.expected.${stamp}`;
           chmodSync6(candidatePath, opened.mode & 4095);
-          atomicWriter._writeFile(expectedPath, expectedContent);
+          atomicWriter._writeFileWithMode(expectedPath, expectedContent, opened.mode & 4095);
           try {
             return publishFileIfUnchangedDarwin(targetFd, targetPath, candidatePath, expectedPath);
           } finally {
@@ -28637,6 +28674,25 @@ var init_atomic_writer = __esm({
       },
       withLock(yamlPath, operation) {
         return withPairWriteLock(yamlPath, operation);
+      },
+      writeTextCreateExclusive(yamlPath, content, precondition) {
+        try {
+          return withPairWriteLock(yamlPath, () => {
+            if (!precondition())
+              return false;
+            const candidatePath = `${dirname13(dirname13(dirname13(yamlPath)))}/.rn-action-create.${generateTmpStamp()}`;
+            atomicWriter._writeFileWithMode(candidatePath, content, 384);
+            try {
+              return atomicWriter._linkIfAbsent(candidatePath, yamlPath, precondition);
+            } finally {
+              atomicWriter._unlink(candidatePath);
+            }
+          }, precondition);
+        } catch (error2) {
+          if (error2 === ACTION_WRITE_PRECONDITION)
+            return false;
+          throw error2;
+        }
       },
       /**
        * Atomic pair-write. Cleans up any orphaned `.tmp` files before
@@ -28652,11 +28708,19 @@ var init_atomic_writer = __esm({
           return result;
         });
       },
-      pairWriteCreateExclusive(yamlPath, yamlContent, sidecarPath, state) {
-        return withPairWriteLock(yamlPath, () => {
-          cleanupOrphans(yamlPath, sidecarPath);
-          return pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, void 0, void 0, void 0, true);
-        });
+      pairWriteCreateExclusive(yamlPath, yamlContent, sidecarPath, state, precondition) {
+        try {
+          return withPairWriteLock(yamlPath, () => {
+            if (precondition && !precondition())
+              return null;
+            cleanupOrphans(yamlPath, sidecarPath);
+            return pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, precondition, precondition, void 0, true);
+          }, precondition);
+        } catch (error2) {
+          if (error2 === ACTION_WRITE_PRECONDITION)
+            return null;
+          throw error2;
+        }
       },
       pairWriteConditional(yamlPath, yamlContent, sidecarPath, state, precondition, yamlPublicationPrecondition, expectedYamlContent) {
         try {
@@ -29051,7 +29115,7 @@ var init_action_state_store = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/action-store.js
-import { existsSync as existsSync18, lstatSync as lstatSync13, readFileSync as readFileSync21, realpathSync as realpathSync11, statSync as statSync11, unlinkSync as unlinkSync9, writeFileSync as writeFileSync10 } from "node:fs";
+import { existsSync as existsSync18, lstatSync as lstatSync13, readFileSync as readFileSync21, realpathSync as realpathSync11, statSync as statSync11, unlinkSync as unlinkSync9 } from "node:fs";
 import { basename as basename7, dirname as dirname16, join as join24 } from "node:path";
 function actionPathFor(projectRoot, actionId) {
   assertValidActionId(actionId, "actionPathFor");
@@ -29117,6 +29181,31 @@ function actionFileExists(path) {
   }
   return true;
 }
+function captureOwnedActionPathIdentity(projectRoot, filePath) {
+  const paths = [
+    { path: join24(projectRoot, ".rn-agent"), kind: "directory" },
+    { path: join24(projectRoot, ".rn-agent", "actions"), kind: "directory" }
+  ];
+  if (filePath)
+    paths.push({ path: filePath, kind: "file" });
+  return paths.map(({ path, kind }) => {
+    const stat2 = lstatSync13(path);
+    const valid = !stat2.isSymbolicLink() && (kind === "directory" ? stat2.isDirectory() : stat2.isFile());
+    if (!valid)
+      throw new Error(`Refusing changed learned-action path at ${path}.`);
+    return { path, kind, dev: stat2.dev, ino: stat2.ino };
+  });
+}
+function ownedActionPathIdentityMatches(entries) {
+  try {
+    return entries.every((entry) => {
+      const stat2 = lstatSync13(entry.path);
+      return !stat2.isSymbolicLink() && stat2.dev === entry.dev && stat2.ino === entry.ino && (entry.kind === "directory" ? stat2.isDirectory() : stat2.isFile());
+    });
+  } catch {
+    return false;
+  }
+}
 function resolveActionPath(projectRoot, actionId) {
   assertValidActionId(actionId, "resolveActionPath");
   assertReadableActionCorpus(projectRoot);
@@ -29140,16 +29229,20 @@ function createActionTextExclusive(projectRoot, actionId, yamlText) {
   const yamlPath = actionPathFor(projectRoot, actionId);
   const ymlPath = yamlPath.replace(/\.yaml$/, ".yml");
   return atomicWriter.withLock(yamlPath, () => {
+    const pathIdentity = captureOwnedActionPathIdentity(projectRoot);
+    const pathIsOwned = () => ownedActionPathIdentityMatches(pathIdentity);
     const existing = resolveActionPath(projectRoot, actionId);
     if (existing)
       throw new Error(`Action ${actionId} already exists at ${existing}.`);
-    writeFileSync10(yamlPath, yamlText, { encoding: "utf8", flag: "wx", mode: 384 });
+    if (!atomicWriter.writeTextCreateExclusive(yamlPath, yamlText, pathIsOwned)) {
+      throw new Error(`Action ${actionId} changed during creation.`);
+    }
     try {
-      if (!actionFileExists(ymlPath))
+      if (pathIsOwned() && !actionFileExists(ymlPath))
         return yamlPath;
       throw new Error(`Action ${actionId} changed during creation; keep exactly one extension.`);
     } catch (err) {
-      if (readFileSync21(yamlPath, "utf8") === yamlText)
+      if (pathIsOwned() && readFileSync21(yamlPath, "utf8") === yamlText)
         unlinkSync9(yamlPath);
       throw err;
     }
@@ -29162,10 +29255,12 @@ function writeRecordedActionTransaction(projectRoot, actionId, yamlText, state, 
     if (existingPath && !overwrite)
       return { ok: false, existingPath };
     const filePath = existingPath ?? yamlPath;
+    const pathIdentity = captureOwnedActionPathIdentity(projectRoot, existingPath ?? void 0);
+    const pathIsOwned = () => ownedActionPathIdentityMatches(pathIdentity);
     const sidecarPath = sidecarPathFor(filePath);
     if (!existingPath && existsSync18(sidecarPath))
       return { ok: false, existingPath: null };
-    const written = existingPath ? atomicWriter.pairWrite(filePath, yamlText, sidecarPath, state) : atomicWriter.pairWriteCreateExclusive(filePath, yamlText, sidecarPath, state);
+    const written = existingPath ? atomicWriter.pairWriteConditional(filePath, yamlText, sidecarPath, state, pathIsOwned, pathIsOwned, readFileSync21(filePath, "utf8")) : atomicWriter.pairWriteCreateExclusive(filePath, yamlText, sidecarPath, state, pathIsOwned);
     if (!written)
       return { ok: false, existingPath: resolveActionPath(projectRoot, actionId) };
     return {
@@ -32971,7 +33066,7 @@ var init_authority_gate = __esm({
 // packages/rn-dev-agent-core/dist/tools/maestro-run.js
 import { execFile as execFileCb2 } from "node:child_process";
 import { promisify as promisify3 } from "node:util";
-import { existsSync as existsSync22, readFileSync as readFileSync25, writeFileSync as writeFileSync11 } from "node:fs";
+import { existsSync as existsSync22, readFileSync as readFileSync25, writeFileSync as writeFileSync10 } from "node:fs";
 import { tmpdir as tmpdir7 } from "node:os";
 import { basename as basename10, join as join29, dirname as dirname18 } from "node:path";
 async function runFlowParked(run, opts = {}) {
@@ -33214,7 +33309,7 @@ function createMaestroRunHandler(deps = {}) {
       headerAppId = resolveMaestroFlowAppId(rawAppId || void 0, parsed.appId);
       validatedContent = buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, parsed.commands);
       flowFile = join29(tmpdir7(), `rn-maestro-run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
-      writeFileSync11(flowFile, validatedContent, "utf-8");
+      writeFileSync10(flowFile, validatedContent, "utf-8");
     } catch (err) {
       if (err instanceof MaestroValidationError) {
         return failResult(`Refusing to run Maestro: ${err.message} (Phase 134.1)`);
@@ -33330,7 +33425,7 @@ function createMaestroRunHandler(deps = {}) {
       const relaunchManagedApp = args.relaunchManagedApp ?? deps.relaunchManagedApp ?? managedAuthority.relaunchManagedApp;
       const reproveManagedOrigin = args.reproveManagedOrigin ?? deps.reproveManagedOrigin ?? managedAuthority.reproveManagedOrigin;
       const stageResults = await parkFlow(() => executeMaestroAuthorityStages(validatedCommands, async (commands) => {
-        writeFileSync11(flowFile, buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, [...commands]), "utf-8");
+        writeFileSync10(flowFile, buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, [...commands]), "utf-8");
         const executeOnce = async (beforeDispatch) => {
           if (flowDeadline - now() <= 0) {
             const error2 = new Error("Maestro flow timeout exhausted before the next stage");
@@ -33573,7 +33668,7 @@ function createMaestroRunHandler(deps = {}) {
       return failResult(failAug.message, failAug.meta);
     } finally {
       try {
-        writeFileSync11(flowFile, validatedContent, "utf-8");
+        writeFileSync10(flowFile, validatedContent, "utf-8");
       } finally {
         disposeRunnerReportDir(runnerReportDir);
       }
@@ -34256,7 +34351,7 @@ var init_device_arbiter = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/maestro-invoke.js
-import { writeFileSync as writeFileSync12 } from "node:fs";
+import { writeFileSync as writeFileSync11 } from "node:fs";
 import { join as join30 } from "node:path";
 import { tmpdir as tmpdir8 } from "node:os";
 function yamlEscape(s) {
@@ -34326,7 +34421,7 @@ async function runMaestroInline(yaml2, opts, dependencies = {}) {
     throw err;
   }
   try {
-    writeFileSync12(flowFile, content, "utf-8");
+    writeFileSync11(flowFile, content, "utf-8");
   } catch (err) {
     return {
       passed: false,
@@ -34984,7 +35079,7 @@ var init_recover_detached = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/lifecycle/device-lock.js
-import { existsSync as existsSync24, mkdirSync as mkdirSync18, openSync as openSync10, writeSync as writeSync3, closeSync as closeSync10, readFileSync as readFileSync28, unlinkSync as unlinkSync12, writeFileSync as writeFileSync13 } from "node:fs";
+import { existsSync as existsSync24, mkdirSync as mkdirSync18, openSync as openSync10, writeSync as writeSync3, closeSync as closeSync10, readFileSync as readFileSync28, unlinkSync as unlinkSync12, writeFileSync as writeFileSync12 } from "node:fs";
 import { tmpdir as tmpdir9, userInfo as userInfo2 } from "node:os";
 import { join as join32 } from "node:path";
 function defaultProcessAlive3(pid) {
@@ -35081,7 +35176,7 @@ var init_device_lock = __esm({
           return;
         holder.lastHeartbeat = this.clock();
         try {
-          writeFileSync13(this.lockPath, JSON.stringify(holder, null, 2), "utf8");
+          writeFileSync12(this.lockPath, JSON.stringify(holder, null, 2), "utf8");
         } catch {
         }
       }
@@ -37804,7 +37899,7 @@ __export(rn_android_runner_client_exports, {
 });
 import { spawn as spawn7, execFile as execFile12 } from "node:child_process";
 import { promisify as promisify12 } from "node:util";
-import { existsSync as existsSync25, rmSync as rmSync11, writeFileSync as writeFileSync14 } from "node:fs";
+import { existsSync as existsSync25, rmSync as rmSync11, writeFileSync as writeFileSync13 } from "node:fs";
 import { tmpdir as tmpdir10 } from "node:os";
 import { randomBytes as randomBytes5, randomUUID as randomUUID7 } from "node:crypto";
 import { join as join33 } from "node:path";
@@ -39012,7 +39107,7 @@ async function runAndroid(args) {
     if (!data?.pngBase64)
       return failResult("Android runner screenshot response did not include pngBase64", "SCREENSHOT_FAILED", recovery ? { transportRecovery: recovery } : void 0);
     const outPath = args.outPath ?? join33(tmpdir10(), `rn-android-screenshot-${Date.now()}.png`);
-    writeFileSync14(outPath, Buffer.from(data.pngBase64, "base64"));
+    writeFileSync13(outPath, Buffer.from(data.pngBase64, "base64"));
     return okResult({ path: outPath }, Object.keys(recoveryMeta).length ? { meta: recoveryMeta } : void 0);
   }
   return okResult(resp.data ?? {}, Object.keys(recoveryMeta).length ? { meta: recoveryMeta } : void 0);
@@ -65697,7 +65792,7 @@ var init_ws_origin = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/cdp/state.js
-import { writeFileSync as writeFileSync15, unlinkSync as unlinkSync14 } from "node:fs";
+import { writeFileSync as writeFileSync14, unlinkSync as unlinkSync14 } from "node:fs";
 import { tmpdir as tmpdir11 } from "node:os";
 import { join as join38 } from "node:path";
 function resetState(s) {
@@ -65714,11 +65809,11 @@ function resetState(s) {
 }
 function setActiveFlag(port, target) {
   try {
-    writeFileSync15(CDP_ACTIVE_FLAG, String(process.pid));
+    writeFileSync14(CDP_ACTIVE_FLAG, String(process.pid));
   } catch {
   }
   try {
-    writeFileSync15(CDP_SESSION_FILE, JSON.stringify({
+    writeFileSync14(CDP_SESSION_FILE, JSON.stringify({
       port,
       platform: target?.platform ?? null,
       target: target?.title ?? null,
@@ -82794,7 +82889,7 @@ var init_startup_integrity = __esm({
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
 import { createHash as createHash18, randomUUID as randomUUID9 } from "node:crypto";
 import { execFileSync as execFileSync15 } from "node:child_process";
-import { chmodSync as chmodSync7, closeSync as closeSync12, existsSync as existsSync31, fsyncSync, lstatSync as lstatSync16, mkdirSync as mkdirSync20, openSync as openSync12, readFileSync as readFileSync33, realpathSync as realpathSync15, renameSync as renameSync8, unlinkSync as unlinkSync15, writeFileSync as writeFileSync16 } from "node:fs";
+import { chmodSync as chmodSync7, closeSync as closeSync12, existsSync as existsSync31, fsyncSync, lstatSync as lstatSync16, mkdirSync as mkdirSync20, openSync as openSync12, readFileSync as readFileSync33, realpathSync as realpathSync15, renameSync as renameSync8, unlinkSync as unlinkSync15, writeFileSync as writeFileSync15 } from "node:fs";
 import { basename as basename11, dirname as dirname25, extname, isAbsolute as isAbsolute10, join as join45, relative as relative7, resolve as resolve16, sep as sep8 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 function proofActionPayload(unparsedArgs) {
@@ -83263,7 +83358,7 @@ function writeProofReceiptAtomic(path, receipt2) {
   let descriptor = null;
   try {
     descriptor = openSync12(temporary, "wx", 384);
-    writeFileSync16(descriptor, `${JSON.stringify(receipt2, null, 2)}
+    writeFileSync15(descriptor, `${JSON.stringify(receipt2, null, 2)}
 `, "utf8");
     fsyncSync(descriptor);
     closeSync12(descriptor);
@@ -86538,7 +86633,7 @@ var init_maestro_generate = __esm({
 // packages/rn-dev-agent-core/dist/tools/maestro-test-all.js
 import { execFile as execFileCb19 } from "node:child_process";
 import { promisify as promisify25 } from "node:util";
-import { existsSync as existsSync32, readdirSync as readdirSync13, readFileSync as readFileSync35, writeFileSync as writeFileSync17 } from "node:fs";
+import { existsSync as existsSync32, readdirSync as readdirSync13, readFileSync as readFileSync35, writeFileSync as writeFileSync16 } from "node:fs";
 import { basename as basename13, dirname as dirname29, join as join49, resolve as resolve18 } from "node:path";
 import { tmpdir as tmpdir13 } from "node:os";
 function discoverFlows(dir, pattern, topLevelOnly = false) {
@@ -86690,7 +86785,7 @@ function createMaestroTestAllHandler(deps = {}) {
       const { name } = prepared;
       const start = now();
       const safeFlowFile = join49(tmpdir13(), `rn-maestro-validated-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
-      writeFileSync17(safeFlowFile, prepared.canonical, "utf-8");
+      writeFileSync16(safeFlowFile, prepared.canonical, "utf-8");
       const parsedCommands = prepared.commands;
       const parsedAppId = prepared.appId;
       const appFile = prepared.appFile;
@@ -86713,7 +86808,7 @@ function createMaestroTestAllHandler(deps = {}) {
             Object.assign(error2, { code: "ETIMEDOUT" });
             throw error2;
           }
-          writeFileSync17(safeFlowFile, buildMaestroFlow(parsedAppId !== void 0 ? { appId: parsedAppId } : {}, [
+          writeFileSync16(safeFlowFile, buildMaestroFlow(parsedAppId !== void 0 ? { appId: parsedAppId } : {}, [
             ...commands
           ]), "utf-8");
           const executeRunner = (runnerPath) => {
@@ -87238,7 +87333,7 @@ var init_instrumentation = __esm({
 
 // packages/rn-dev-agent-core/dist/experience/evidence.js
 import { createHash as createHash20, randomUUID as randomUUID10 } from "node:crypto";
-import { chmodSync as chmodSync8, existsSync as existsSync33, mkdirSync as mkdirSync21, readFileSync as readFileSync37, renameSync as renameSync9, unlinkSync as unlinkSync16, writeFileSync as writeFileSync18 } from "node:fs";
+import { chmodSync as chmodSync8, existsSync as existsSync33, mkdirSync as mkdirSync21, readFileSync as readFileSync37, renameSync as renameSync9, unlinkSync as unlinkSync16, writeFileSync as writeFileSync17 } from "node:fs";
 import { homedir as homedir9, platform as hostPlatform, release } from "node:os";
 import { dirname as dirname30, join as join51 } from "node:path";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
@@ -87631,7 +87726,7 @@ var init_evidence = __esm({
             redactionVersion: REDACTION_RULES_VERSION
           });
           const contents = sanitized.map((record2) => JSON.stringify(record2)).join("\n");
-          writeFileSync18(temp, contents.length > 0 ? `${contents}
+          writeFileSync17(temp, contents.length > 0 ? `${contents}
 ` : "", {
             encoding: "utf8",
             flag: "wx",
@@ -89120,7 +89215,7 @@ var init_target = __esm({
 
 // packages/rn-dev-agent-core/dist/domain/e2e-test.js
 import { dirname as dirname32, join as join55 } from "node:path";
-import { mkdirSync as mkdirSync22, writeFileSync as writeFileSync19, renameSync as renameSync10, readFileSync as readFileSync39, readdirSync as readdirSync15, existsSync as existsSync34 } from "node:fs";
+import { mkdirSync as mkdirSync22, writeFileSync as writeFileSync18, renameSync as renameSync10, readFileSync as readFileSync39, readdirSync as readdirSync15, existsSync as existsSync34 } from "node:fs";
 import { createHash as createHash21 } from "node:crypto";
 function e2eDirFor(projectRoot) {
   return join55(projectRoot, ".rn-agent", "e2e");
@@ -89170,7 +89265,7 @@ function freezeLockedTest(projectRoot, source, ctx) {
     flow: source.flow
   };
   const tmp = `${filePath}.tmp`;
-  writeFileSync19(tmp, serializeLockedTest(meta), "utf8");
+  writeFileSync18(tmp, serializeLockedTest(meta), "utf8");
   renameSync10(tmp, filePath);
   return { ...meta, filePath };
 }
@@ -89386,7 +89481,7 @@ var init_lock_e2e_test = __esm({
 
 // packages/rn-dev-agent-core/dist/domain/e2e-run.js
 import { join as join57 } from "node:path";
-import { mkdirSync as mkdirSync23, writeFileSync as writeFileSync20, renameSync as renameSync11, readFileSync as readFileSync42, existsSync as existsSync35 } from "node:fs";
+import { mkdirSync as mkdirSync23, writeFileSync as writeFileSync19, renameSync as renameSync11, readFileSync as readFileSync42, existsSync as existsSync35 } from "node:fs";
 function classifyFlowResult(input) {
   if (input.passed) {
     return {
@@ -89445,7 +89540,7 @@ function e2eRunsDirFor(projectRoot) {
 function writeJsonAtomic(file, value) {
   mkdirSync23(join57(file, ".."), { recursive: true });
   const tmp = `${file}.tmp`;
-  writeFileSync20(tmp, JSON.stringify(value, null, 2), "utf8");
+  writeFileSync19(tmp, JSON.stringify(value, null, 2), "utf8");
   renameSync11(tmp, file);
 }
 function loadIndex(projectRoot) {
@@ -89499,7 +89594,7 @@ var init_e2e_run = __esm({
 
 // packages/rn-dev-agent-core/dist/domain/e2e-run-request.js
 import { join as join58 } from "node:path";
-import { mkdirSync as mkdirSync24, writeFileSync as writeFileSync21, renameSync as renameSync12, readFileSync as readFileSync43, readdirSync as readdirSync16, existsSync as existsSync36 } from "node:fs";
+import { mkdirSync as mkdirSync24, writeFileSync as writeFileSync20, renameSync as renameSync12, readFileSync as readFileSync43, readdirSync as readdirSync16, existsSync as existsSync36 } from "node:fs";
 function requestsDir(projectRoot) {
   return join58(e2eRunsDirFor(projectRoot), "requests");
 }
@@ -89511,7 +89606,7 @@ function writeRequest(projectRoot, req) {
   const file = requestPath(projectRoot, req.runId);
   mkdirSync24(requestsDir(projectRoot), { recursive: true });
   const tmp = `${file}.tmp`;
-  writeFileSync21(tmp, JSON.stringify(req, null, 2), "utf8");
+  writeFileSync20(tmp, JSON.stringify(req, null, 2), "utf8");
   renameSync12(tmp, file);
 }
 function loadRequest(projectRoot, runId) {

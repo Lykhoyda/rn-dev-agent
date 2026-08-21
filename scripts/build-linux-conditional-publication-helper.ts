@@ -40,6 +40,7 @@ struct statx {
 #define STATX_BASIC_STATS 0x7ff
 #define S_IFMT 0170000
 #define S_IFREG 0100000
+#define S_IFDIR 0040000
 
 #if defined(__x86_64__)
 #define SYS_CLOSE 3
@@ -91,9 +92,28 @@ static long call5(long number, long a1, long a2, long a3, long a4, long a5) {
   return syscall6(number, a1, a2, a3, a4, a5, 0);
 }
 static int regular(const struct statx *value) { return (value->mode & S_IFMT) == S_IFREG; }
+static int directory(const struct statx *value) { return (value->mode & S_IFMT) == S_IFDIR; }
 static int same_file(const struct statx *left, const struct statx *right) {
   return left->ino == right->ino && left->dev_major == right->dev_major &&
       left->dev_minor == right->dev_minor;
+}
+static int parse_u64(const char *value, u64 *result) {
+  if (!value || !*value) return 0;
+  u64 parsed = 0;
+  for (const char *cursor = value; *cursor; cursor++) {
+    if (*cursor < '0' || *cursor > '9') return 0;
+    u64 digit = (u64)(*cursor - '0');
+    if (parsed > (~(u64)0 - digit) / 10) return 0;
+    parsed = parsed * 10 + digit;
+  }
+  *result = parsed;
+  return 1;
+}
+static u64 device_number(const struct statx *value) {
+  u64 major = value->dev_major;
+  u64 minor = value->dev_minor;
+  return ((major & 0xfff) << 8) | (minor & 0xff) |
+      ((minor & ~(u64)0xff) << 12) | ((major & ~(u64)0xfff) << 32);
 }
 static long open_read(const char *path) {
   return call4(SYS_OPENAT, AT_FDCWD, (long)path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC, 0);
@@ -135,6 +155,25 @@ static int same_content(long left, long right) {
 }
 
 __attribute__((visibility("hidden"))) int helper_main(long argc, char **argv) {
+  if (argc == 4 && argv[1][0] == '-' && argv[1][1] == '-' && argv[1][2] == 'e' &&
+      argv[1][3] == 'x' && argv[1][4] == 'c' && argv[1][5] == 'h' &&
+      argv[1][6] == 'a' && argv[1][7] == 'n' && argv[1][8] == 'g' &&
+      argv[1][9] == 'e' && argv[1][10] == 0) {
+    struct statx left_stat;
+    struct statx right_stat;
+    if (!path_stat(argv[2], &left_stat) || !path_stat(argv[3], &right_stat) ||
+        !directory(&left_stat) || !directory(&right_stat) ||
+        left_stat.dev_major != right_stat.dev_major || left_stat.dev_minor != right_stat.dev_minor)
+      return 10;
+    if (syscall6(SYS_RENAMEAT2, AT_FDCWD, (long)argv[2], AT_FDCWD,
+                 (long)argv[3], RENAME_EXCHANGE, 0) != 0) return 11;
+    struct statx published_left;
+    struct statx published_right;
+    if (!path_stat(argv[2], &published_left) || !path_stat(argv[3], &published_right) ||
+        !same_file(&published_left, &right_stat) || !same_file(&published_right, &left_stat))
+      return 12;
+    return 0;
+  }
   if (argc != 7) return 2;
   const char *target_path = argv[2];
   const char *candidate_path = argv[3];
@@ -145,8 +184,12 @@ __attribute__((visibility("hidden"))) int helper_main(long argc, char **argv) {
   if (target < 0 || candidate < 0 || expected < 0) return 11;
   struct statx target_stat;
   struct statx candidate_stat;
+  u64 expected_dev;
+  u64 expected_ino;
+  if (!parse_u64(argv[5], &expected_dev) || !parse_u64(argv[6], &expected_ino)) return 2;
   if (!descriptor_stat(target, &target_stat) || !descriptor_stat(candidate, &candidate_stat) ||
       !regular(&target_stat) || !regular(&candidate_stat) ||
+      device_number(&target_stat) != expected_dev || target_stat.ino != expected_ino ||
       target_stat.dev_major != candidate_stat.dev_major ||
       target_stat.dev_minor != candidate_stat.dev_minor || !same_content(target, expected)) return 10;
   if (syscall6(SYS_RENAMEAT2, AT_FDCWD, (long)target_path, AT_FDCWD,

@@ -7,7 +7,7 @@ import path from "node:path";
 import os from "node:os";
 
 // packages/rn-dev-agent-core/dist/domain/action-store.js
-import { existsSync as existsSync3, lstatSync as lstatSync2, readFileSync as readFileSync2, realpathSync as realpathSync2, statSync as statSync2, unlinkSync as unlinkSync2, writeFileSync } from "node:fs";
+import { existsSync as existsSync3, lstatSync as lstatSync2, readFileSync as readFileSync2, realpathSync as realpathSync2, statSync as statSync2, unlinkSync as unlinkSync2 } from "node:fs";
 import { basename, dirname as dirname2, join as join3 } from "node:path";
 
 // packages/rn-dev-agent-core/dist/domain/atomic-writer.js

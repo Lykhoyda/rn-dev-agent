@@ -15,7 +15,7 @@ import {
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   MAESTRO_RUNNER_PIN,
@@ -271,7 +271,7 @@ test('installed fast path refuses a payload changed after verified installation'
   assert.equal(existsSync(executionMarker), false);
 });
 
-test('installer restores the live pin when backup publication fails', () => {
+test('installer keeps the live pin when atomic publication fails', () => {
   const root = mkdtempSync(join(tmpdir(), 'mr-publication-rollback-'));
   const scriptDir = join(root, 'scripts');
   const payload = join(root, 'payload', 'maestro-runner');
@@ -316,29 +316,40 @@ test('installer restores the live pin when backup publication fails', () => {
   const nativeSource = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'native');
   const nativeTarget = join(root, 'rn-dev-agent-core', 'dist', 'native');
   mkdirSync(nativeTarget, { recursive: true });
-  for (const name of ['darwin-process-birth', 'darwin-process-birth.json']) {
+  for (const name of [
+    'darwin-process-birth',
+    'darwin-process-birth.json',
+    'linux-conditional-publication-x64',
+    'linux-conditional-publication-x64.json',
+    'linux-conditional-publication-arm64',
+    'linux-conditional-publication-arm64.json',
+  ]) {
     copyFileSync(join(nativeSource, name), join(nativeTarget, name));
   }
   chmodSync(join(nativeTarget, 'darwin-process-birth'), 0o755);
-  const toolDir = join(root, 'tools');
-  mkdirSync(toolDir);
-  const realMv = (process.env.PATH ?? '')
-    .split(':')
-    .map((entry) => join(entry, 'mv'))
-    .find(existsSync);
-  assert.ok(realMv);
-  writeFileSync(
-    join(toolDir, 'mv'),
-    '#!/bin/sh\n"$REAL_MV" "$@"\ncase "$2" in *.backup.*) exit 124 ;; esac\n',
+  chmodSync(join(nativeTarget, 'linux-conditional-publication-x64'), 0o755);
+  chmodSync(join(nativeTarget, 'linux-conditional-publication-arm64'), 0o755);
+  const failingHelper = join(
+    nativeTarget,
+    process.platform === 'darwin'
+      ? 'darwin-process-birth'
+      : `linux-conditional-publication-${process.arch === 'arm64' ? 'arm64' : 'x64'}`,
   );
-  chmodSync(join(toolDir, 'mv'), 0o755);
+  writeFileSync(failingHelper, '#!/bin/sh\nexit 124\n', 'utf8');
+  chmodSync(failingHelper, 0o755);
+  const failingDigest = createHash('sha256').update(readFileSync(failingHelper)).digest('hex');
+  const helperManifestPath = `${failingHelper}.json`;
+  const helperManifest = JSON.parse(readFileSync(helperManifestPath, 'utf8'));
+  writeFileSync(
+    helperManifestPath,
+    JSON.stringify({ ...helperManifest, binarySha256: failingDigest }),
+    'utf8',
+  );
 
   const result = spawnSync('bash', [copiedScript], {
     encoding: 'utf8',
     env: {
       ...process.env,
-      PATH: `${toolDir}:${process.env.PATH ?? ''}`,
-      REAL_MV: realMv,
       RN_DEV_AGENT_RUNNER_CACHE: cache,
       RN_DEV_AGENT_UNAME_S: 'Darwin',
       RN_DEV_AGENT_UNAME_M: 'arm64',
@@ -349,6 +360,29 @@ test('installer restores the live pin when backup publication fails', () => {
   assert.notEqual(result.status, 0);
   assert.equal(readFileSync(liveMarker, 'utf8'), 'preserve-me');
   assert.equal(existsSync(join(pinDir, 'bin', 'maestro-runner')), true);
+
+  copyFileSync(join(nativeSource, basename(failingHelper)), failingHelper);
+  copyFileSync(
+    join(nativeSource, `${basename(failingHelper)}.json`),
+    `${failingHelper}.json`,
+  );
+  chmodSync(failingHelper, 0o755);
+  const converged = spawnSync('bash', [copiedScript], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      RN_DEV_AGENT_RUNNER_CACHE: cache,
+      RN_DEV_AGENT_UNAME_S: 'Darwin',
+      RN_DEV_AGENT_UNAME_M: 'arm64',
+      RN_DEV_AGENT_MAESTRO_DOWNLOAD_URL: pathToFileURL(archive).href,
+    },
+  });
+  assert.equal(converged.status, 0, `${converged.stdout}${converged.stderr}`);
+  assert.equal(existsSync(liveMarker), false);
+  assert.equal(
+    readFileSync(join(pinDir, 'bin', 'maestro-runner'), 'utf8'),
+    readFileSync(runner, 'utf8'),
+  );
 });
 
 test('installer reclaims a stale ownerless legacy lock', () => {

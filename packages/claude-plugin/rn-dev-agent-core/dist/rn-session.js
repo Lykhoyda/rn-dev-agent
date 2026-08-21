@@ -7913,13 +7913,13 @@ var init_process_birth = __esm({
     "use strict";
     init_trusted_system_executable();
     DARWIN_HELPER_MANIFEST = {
-      sourceSha256: "3162ff8a8c561b0b64f5a67df22cda26aef1ff31939d557c1b2901421e616230",
-      recipeSha256: "bd51a1c00d7d62715ed8b9fec2262876ef5a0badac2cf5eb259c60688e7a9b65",
-      stableBinarySha256: "6c0adc43359789b6b37d255653683c047521e8835e12cb602ce4722f1a367258",
-      binarySha256: "0e4f7912ca4454eb9f6a7c5075759241e9dc8fa527a96d1c8a7863d07f5bf046",
+      sourceSha256: "3d3cc684c83f9bd18ea2e56c7e1d62528fe7b78237d7314d73560731fff42255",
+      recipeSha256: "f22be6188030cc153d327f6c24282d48eaf0e089fd496baa67a54f53bac39843",
+      stableBinarySha256: "4090bd1f4c12b0071da253d45c1334dc92c3f08a6de0ca585de916cdbcf13442",
+      binarySha256: "33e13d0a7d5ac3d5a13829fef40f4aeaf738e7f8e0071c96947ce2289c770e64",
       cdhashes: [
-        "61207f3b2bc1b94d1d41dd02d2f75ea505d167db",
-        "2fbf84ca583bbd32b9af872d1ee0a818182022e7"
+        "a1d6311233d57cab40dfa1341f7f35810896682b",
+        "39e8e81152430e0be6f338c3b00e6b413289641a"
       ]
     };
     VERIFIED_HELPER_SCRIPT = `

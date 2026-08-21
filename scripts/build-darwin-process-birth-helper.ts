@@ -93,6 +93,19 @@ static int publish_if_unchanged(
 }
 
 int main(int argc, char **argv) {
+  if (argc == 4 && strcmp(argv[1], "--exchange") == 0) {
+    struct stat left = {0};
+    struct stat right = {0};
+    if (lstat(argv[2], &left) != 0 || lstat(argv[3], &right) != 0 ||
+        !S_ISDIR(left.st_mode) || !S_ISDIR(right.st_mode) || left.st_dev != right.st_dev) return 10;
+    if (renamex_np(argv[2], argv[3], RENAME_SWAP) != 0) return 11;
+    struct stat published_left = {0};
+    struct stat published_right = {0};
+    if (lstat(argv[2], &published_left) != 0 || lstat(argv[3], &published_right) != 0 ||
+        published_left.st_dev != right.st_dev || published_left.st_ino != right.st_ino ||
+        published_right.st_dev != left.st_dev || published_right.st_ino != left.st_ino) return 12;
+    return 0;
+  }
   if (argc == 7 && strcmp(argv[1], "--publish-if-unchanged") == 0) {
     char *dev_end = NULL;
     char *ino_end = NULL;

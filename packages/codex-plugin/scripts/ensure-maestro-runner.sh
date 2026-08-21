@@ -264,20 +264,8 @@ LOCK_HELD=0
 LOCK_OWNER_FILE=""
 LOCK_OWNER_BIRTH=""
 TEMP_DIR=""
-BACKUP_DIR=""
-PUBLICATION_COMPLETE=0
 
 cleanup() {
-  if [ -n "$BACKUP_DIR" ] && [ -d "$BACKUP_DIR" ] && [ ! -L "$BACKUP_DIR" ]; then
-    if [ "$PUBLICATION_COMPLETE" = "0" ]; then
-      if [ -e "$PIN_DIR" ] || [ -L "$PIN_DIR" ]; then
-        rm -rf "$PIN_DIR"
-      fi
-      mv "$BACKUP_DIR" "$PIN_DIR"
-    else
-      rm -rf "$BACKUP_DIR"
-    fi
-  fi
   if [ -n "$TEMP_DIR" ]; then
     rm -rf "$TEMP_DIR"
   fi
@@ -344,6 +332,104 @@ if (process.platform === 'darwin') {
   }
 }
 process.exit(1);
+NODE
+}
+
+atomic_exchange_directories() {
+  local left="$1"
+  local right="$2"
+  local remaining
+  remaining="$(remaining_install_seconds)"
+  if [ "$remaining" -le 0 ]; then
+    return 124
+  fi
+  node - "$SCRIPT_DIR" "$left" "$right" "$TEMP_DIR" "$remaining" <<'NODE'
+const { createHash } = require('node:crypto');
+const {
+  chmodSync,
+  constants,
+  copyFileSync,
+  lstatSync,
+  readFileSync,
+  unlinkSync,
+} = require('node:fs');
+const { spawnSync } = require('node:child_process');
+const { resolve } = require('node:path');
+
+const scriptDir = process.argv[2];
+const left = process.argv[3];
+const right = process.argv[4];
+const temporaryDirectory = process.argv[5];
+const timeout = Number(process.argv[6]) * 1000;
+const architecture = process.arch === 'x64' ? 'x64' : process.arch === 'arm64' ? 'arm64' : null;
+const helperName =
+  process.platform === 'darwin'
+    ? 'darwin-process-birth'
+    : process.platform === 'linux' && architecture
+      ? `linux-conditional-publication-${architecture}`
+      : null;
+if (!helperName || !Number.isFinite(timeout) || timeout <= 0) process.exit(1);
+const candidates = [
+  resolve(scriptDir, '..', 'rn-dev-agent-core', 'dist', 'native', helperName),
+  resolve(scriptDir, '..', 'packages', 'rn-dev-agent-core', 'native', helperName),
+];
+let helper = null;
+let digest = null;
+for (const candidate of candidates) {
+  try {
+    const helperStat = lstatSync(candidate);
+    const manifestPath = `${candidate}.json`;
+    const manifestStat = lstatSync(manifestPath);
+    if (
+      !helperStat.isFile() ||
+      helperStat.isSymbolicLink() ||
+      !manifestStat.isFile() ||
+      manifestStat.isSymbolicLink() ||
+      (helperStat.mode & 0o022) !== 0 ||
+      (manifestStat.mode & 0o022) !== 0
+    ) continue;
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    const observed = createHash('sha256').update(readFileSync(candidate)).digest('hex');
+    if (observed !== manifest.binarySha256) continue;
+    helper = candidate;
+    digest = observed;
+    break;
+  } catch {}
+}
+if (!helper || !digest) process.exit(1);
+const leftBefore = lstatSync(left);
+const rightBefore = lstatSync(right);
+if (
+  !leftBefore.isDirectory() ||
+  leftBefore.isSymbolicLink() ||
+  !rightBefore.isDirectory() ||
+  rightBefore.isSymbolicLink() ||
+  leftBefore.dev !== rightBefore.dev
+) process.exit(1);
+const bound = resolve(
+  temporaryDirectory,
+  `.exchange-helper.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}`,
+);
+copyFileSync(helper, bound, constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE);
+chmodSync(bound, 0o700);
+try {
+  if (createHash('sha256').update(readFileSync(bound)).digest('hex') !== digest) process.exit(1);
+  const result = spawnSync(bound, ['--exchange', left, right], {
+    stdio: 'ignore',
+    timeout,
+  });
+  if (result.error || result.status !== 0) process.exit(result.status ?? 1);
+  const leftAfter = lstatSync(left);
+  const rightAfter = lstatSync(right);
+  if (
+    leftAfter.dev !== rightBefore.dev ||
+    leftAfter.ino !== rightBefore.ino ||
+    rightAfter.dev !== leftBefore.dev ||
+    rightAfter.ino !== leftBefore.ino
+  ) process.exit(1);
+} finally {
+  try { unlinkSync(bound); } catch {}
+}
 NODE
 }
 
@@ -553,31 +639,19 @@ if ! pin_dir_matches_pin "$STAGED_PIN_DIR"; then
   exit 1
 fi
 
-BACKUP_DIR="$RUNNER_CACHE_ROOT/.${MAESTRO_RUNNER_PIN_VERSION}.backup.$$"
-if [ -e "$BACKUP_DIR" ] || [ -L "$BACKUP_DIR" ]; then
-  echo "ERROR: refusing unexpected maestro-runner install backup path at $BACKUP_DIR."
-  correction
-  exit 1
-fi
 if [ -e "$PIN_DIR" ]; then
-  if ! deadline_run mv "$PIN_DIR" "$BACKUP_DIR"; then
-    echo "ERROR: maestro-runner install deadline expired before publication."
+  if ! atomic_exchange_directories "$PIN_DIR" "$STAGED_PIN_DIR"; then
+    echo "ERROR: failed to atomically publish the validated maestro-runner pin-cache."
     correction
     exit 1
   fi
-fi
-require_install_time "payload publication"
-if ! deadline_run mv "$STAGED_PIN_DIR" "$PIN_DIR"; then
-  if [ -d "$BACKUP_DIR" ] && [ ! -e "$PIN_DIR" ]; then
-    mv "$BACKUP_DIR" "$PIN_DIR"
+else
+  require_install_time "payload publication"
+  if ! deadline_run mv "$STAGED_PIN_DIR" "$PIN_DIR"; then
+    echo "ERROR: failed to publish the validated maestro-runner pin-cache."
+    correction
+    exit 1
   fi
-  echo "ERROR: failed to publish the validated maestro-runner pin-cache."
-  correction
-  exit 1
-fi
-PUBLICATION_COMPLETE=1
-if [ -d "$BACKUP_DIR" ]; then
-  deadline_run rm -rf "$BACKUP_DIR" || true
 fi
 
 require_install_time "payload publication"

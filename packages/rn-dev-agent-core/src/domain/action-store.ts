@@ -126,6 +126,47 @@ function actionFileExists(path: string): boolean {
   return true;
 }
 
+interface OwnedActionPathEntry {
+  path: string;
+  dev: number;
+  ino: number;
+  kind: 'directory' | 'file';
+}
+
+function captureOwnedActionPathIdentity(
+  projectRoot: string,
+  filePath?: string,
+): OwnedActionPathEntry[] {
+  const paths: Array<{ path: string; kind: OwnedActionPathEntry['kind'] }> = [
+    { path: join(projectRoot, '.rn-agent'), kind: 'directory' },
+    { path: join(projectRoot, '.rn-agent', 'actions'), kind: 'directory' },
+  ];
+  if (filePath) paths.push({ path: filePath, kind: 'file' });
+  return paths.map(({ path, kind }) => {
+    const stat = lstatSync(path);
+    const valid =
+      !stat.isSymbolicLink() && (kind === 'directory' ? stat.isDirectory() : stat.isFile());
+    if (!valid) throw new Error(`Refusing changed learned-action path at ${path}.`);
+    return { path, kind, dev: stat.dev, ino: stat.ino };
+  });
+}
+
+function ownedActionPathIdentityMatches(entries: readonly OwnedActionPathEntry[]): boolean {
+  try {
+    return entries.every((entry) => {
+      const stat = lstatSync(entry.path);
+      return (
+        !stat.isSymbolicLink() &&
+        stat.dev === entry.dev &&
+        stat.ino === entry.ino &&
+        (entry.kind === 'directory' ? stat.isDirectory() : stat.isFile())
+      );
+    });
+  } catch {
+    return false;
+  }
+}
+
 export function resolveActionPath(projectRoot: string, actionId: string): string | null {
   assertValidActionId(actionId, 'resolveActionPath');
   assertReadableActionCorpus(projectRoot);
@@ -154,14 +195,18 @@ export function createActionTextExclusive(
   const yamlPath = actionPathFor(projectRoot, actionId);
   const ymlPath = yamlPath.replace(/\.yaml$/, '.yml');
   return atomicWriter.withLock(yamlPath, () => {
+    const pathIdentity = captureOwnedActionPathIdentity(projectRoot);
+    const pathIsOwned = () => ownedActionPathIdentityMatches(pathIdentity);
     const existing = resolveActionPath(projectRoot, actionId);
     if (existing) throw new Error(`Action ${actionId} already exists at ${existing}.`);
-    writeFileSync(yamlPath, yamlText, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+    if (!atomicWriter.writeTextCreateExclusive(yamlPath, yamlText, pathIsOwned)) {
+      throw new Error(`Action ${actionId} changed during creation.`);
+    }
     try {
-      if (!actionFileExists(ymlPath)) return yamlPath;
+      if (pathIsOwned() && !actionFileExists(ymlPath)) return yamlPath;
       throw new Error(`Action ${actionId} changed during creation; keep exactly one extension.`);
     } catch (err) {
-      if (readFileSync(yamlPath, 'utf8') === yamlText) unlinkSync(yamlPath);
+      if (pathIsOwned() && readFileSync(yamlPath, 'utf8') === yamlText) unlinkSync(yamlPath);
       throw err;
     }
   });
@@ -189,11 +234,27 @@ export function writeRecordedActionTransaction(
     const existingPath = resolveActionPath(projectRoot, actionId);
     if (existingPath && !overwrite) return { ok: false, existingPath };
     const filePath = existingPath ?? yamlPath;
+    const pathIdentity = captureOwnedActionPathIdentity(projectRoot, existingPath ?? undefined);
+    const pathIsOwned = () => ownedActionPathIdentityMatches(pathIdentity);
     const sidecarPath = sidecarPathFor(filePath);
     if (!existingPath && existsSync(sidecarPath)) return { ok: false, existingPath: null };
     const written = existingPath
-      ? atomicWriter.pairWrite(filePath, yamlText, sidecarPath, state)
-      : atomicWriter.pairWriteCreateExclusive(filePath, yamlText, sidecarPath, state);
+      ? atomicWriter.pairWriteConditional(
+          filePath,
+          yamlText,
+          sidecarPath,
+          state,
+          pathIsOwned,
+          pathIsOwned,
+          readFileSync(filePath, 'utf8'),
+        )
+      : atomicWriter.pairWriteCreateExclusive(
+          filePath,
+          yamlText,
+          sidecarPath,
+          state,
+          pathIsOwned,
+        );
     if (!written) return { ok: false, existingPath: resolveActionPath(projectRoot, actionId) };
     return {
       ok: true,

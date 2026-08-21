@@ -5,7 +5,7 @@
 // composite. Underpins /run-action, self-repair, and auto-emission —
 // they all read/write through this single chokepoint so schema
 // invariants stay enforced.
-import { existsSync, lstatSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync, } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, realpathSync, statSync, unlinkSync, } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { parseM7Header, serializeM7Header, } from './reusable-action.js';
 import { loadOrInitSidecar, markSeen, saveSidecar, sidecarPathFor, yamlEditedSinceLastSeen, } from './sidecar-io.js';
@@ -101,6 +101,35 @@ function actionFileExists(path) {
     }
     return true;
 }
+function captureOwnedActionPathIdentity(projectRoot, filePath) {
+    const paths = [
+        { path: join(projectRoot, '.rn-agent'), kind: 'directory' },
+        { path: join(projectRoot, '.rn-agent', 'actions'), kind: 'directory' },
+    ];
+    if (filePath)
+        paths.push({ path: filePath, kind: 'file' });
+    return paths.map(({ path, kind }) => {
+        const stat = lstatSync(path);
+        const valid = !stat.isSymbolicLink() && (kind === 'directory' ? stat.isDirectory() : stat.isFile());
+        if (!valid)
+            throw new Error(`Refusing changed learned-action path at ${path}.`);
+        return { path, kind, dev: stat.dev, ino: stat.ino };
+    });
+}
+function ownedActionPathIdentityMatches(entries) {
+    try {
+        return entries.every((entry) => {
+            const stat = lstatSync(entry.path);
+            return (!stat.isSymbolicLink() &&
+                stat.dev === entry.dev &&
+                stat.ino === entry.ino &&
+                (entry.kind === 'directory' ? stat.isDirectory() : stat.isFile()));
+        });
+    }
+    catch {
+        return false;
+    }
+}
 export function resolveActionPath(projectRoot, actionId) {
     assertValidActionId(actionId, 'resolveActionPath');
     assertReadableActionCorpus(projectRoot);
@@ -124,17 +153,21 @@ export function createActionTextExclusive(projectRoot, actionId, yamlText) {
     const yamlPath = actionPathFor(projectRoot, actionId);
     const ymlPath = yamlPath.replace(/\.yaml$/, '.yml');
     return atomicWriter.withLock(yamlPath, () => {
+        const pathIdentity = captureOwnedActionPathIdentity(projectRoot);
+        const pathIsOwned = () => ownedActionPathIdentityMatches(pathIdentity);
         const existing = resolveActionPath(projectRoot, actionId);
         if (existing)
             throw new Error(`Action ${actionId} already exists at ${existing}.`);
-        writeFileSync(yamlPath, yamlText, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+        if (!atomicWriter.writeTextCreateExclusive(yamlPath, yamlText, pathIsOwned)) {
+            throw new Error(`Action ${actionId} changed during creation.`);
+        }
         try {
-            if (!actionFileExists(ymlPath))
+            if (pathIsOwned() && !actionFileExists(ymlPath))
                 return yamlPath;
             throw new Error(`Action ${actionId} changed during creation; keep exactly one extension.`);
         }
         catch (err) {
-            if (readFileSync(yamlPath, 'utf8') === yamlText)
+            if (pathIsOwned() && readFileSync(yamlPath, 'utf8') === yamlText)
                 unlinkSync(yamlPath);
             throw err;
         }
@@ -147,12 +180,14 @@ export function writeRecordedActionTransaction(projectRoot, actionId, yamlText, 
         if (existingPath && !overwrite)
             return { ok: false, existingPath };
         const filePath = existingPath ?? yamlPath;
+        const pathIdentity = captureOwnedActionPathIdentity(projectRoot, existingPath ?? undefined);
+        const pathIsOwned = () => ownedActionPathIdentityMatches(pathIdentity);
         const sidecarPath = sidecarPathFor(filePath);
         if (!existingPath && existsSync(sidecarPath))
             return { ok: false, existingPath: null };
         const written = existingPath
-            ? atomicWriter.pairWrite(filePath, yamlText, sidecarPath, state)
-            : atomicWriter.pairWriteCreateExclusive(filePath, yamlText, sidecarPath, state);
+            ? atomicWriter.pairWriteConditional(filePath, yamlText, sidecarPath, state, pathIsOwned, pathIsOwned, readFileSync(filePath, 'utf8'))
+            : atomicWriter.pairWriteCreateExclusive(filePath, yamlText, sidecarPath, state, pathIsOwned);
         if (!written)
             return { ok: false, existingPath: resolveActionPath(projectRoot, actionId) };
         return {

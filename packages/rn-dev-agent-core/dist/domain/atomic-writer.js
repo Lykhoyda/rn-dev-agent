@@ -213,6 +213,28 @@ function pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, publicationPre
         return null;
     ensureDir(yamlPath);
     ensureDir(sidecarPath);
+    let yamlMode;
+    if (expectedYamlContent !== undefined) {
+        let targetFd;
+        try {
+            targetFd = openSync(yamlPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+        }
+        catch {
+            return null;
+        }
+        try {
+            const target = fstatSync(targetFd);
+            if (!target.isFile() || readFileSync(targetFd, 'utf8') !== expectedYamlContent)
+                return null;
+            yamlMode = target.mode & 0o7777;
+        }
+        finally {
+            closeSync(targetFd);
+        }
+    }
+    else if (createExclusive) {
+        yamlMode = 0o600;
+    }
     // GH #111: unique stamp per call so two concurrent pairWrites against
     // the same action id never share a tmp namespace. Without this, B's
     // cleanupOrphans could unlink A's in-flight .tmp file and produce an
@@ -233,7 +255,10 @@ function pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, publicationPre
         atomicWriter._unlink(sidecarTmp);
         return null;
     }
-    atomicWriter._writeFile(yamlTmp, yamlContent);
+    if (yamlMode === undefined)
+        atomicWriter._writeFile(yamlTmp, yamlContent);
+    else
+        atomicWriter._writeFileWithMode(yamlTmp, yamlContent, yamlMode);
     if (publicationPrecondition && !publicationPrecondition()) {
         atomicWriter._unlink(sidecarTmp);
         atomicWriter._unlink(yamlTmp);
@@ -241,9 +266,15 @@ function pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, publicationPre
     }
     const priorSidecarExisted = publicationPrecondition ? atomicWriter._exists(sidecarPath) : false;
     const priorSidecar = priorSidecarExisted ? readFileSync(sidecarPath, 'utf8') : null;
+    if (publicationPrecondition && !publicationPrecondition()) {
+        atomicWriter._unlink(sidecarTmp);
+        atomicWriter._unlink(yamlTmp);
+        return null;
+    }
     atomicWriter._rename(sidecarTmp, sidecarPath);
     const yamlPublished = createExclusive
-        ? atomicWriter._linkIfAbsent(yamlTmp, yamlPath)
+        ? (!publicationPrecondition || publicationPrecondition()) &&
+            atomicWriter._linkIfAbsent(yamlTmp, yamlPath, publicationPrecondition)
         : expectedYamlContent === undefined
             ? !yamlPublicationPrecondition || yamlPublicationPrecondition()
             : atomicWriter._publishIfUnchanged(yamlTmp, yamlPath, expectedYamlContent, stamp, yamlPublicationPrecondition);
@@ -355,6 +386,15 @@ export const atomicWriter = {
     _writeFile(path, content) {
         writeFileSync(path, content, 'utf8');
     },
+    _writeFileWithMode(path, content, mode) {
+        const fd = openSync(path, 'wx', mode);
+        try {
+            writeFileSync(fd, content, 'utf8');
+        }
+        finally {
+            closeSync(fd);
+        }
+    },
     /** Underlying `fs.renameSync(from, to)`. */
     _rename(from, to) {
         renameSync(from, to);
@@ -381,7 +421,9 @@ export const atomicWriter = {
     _readdir(path) {
         return readdirSync(path);
     },
-    _linkIfAbsent(candidatePath, targetPath) {
+    _linkIfAbsent(candidatePath, targetPath, publicationPrecondition) {
+        if (publicationPrecondition && !publicationPrecondition())
+            return false;
         try {
             linkSync(candidatePath, targetPath);
             return true;
@@ -413,7 +455,7 @@ export const atomicWriter = {
             }
             const expectedPath = `${candidatePath}.expected.${stamp}`;
             chmodSync(candidatePath, opened.mode & 0o7777);
-            atomicWriter._writeFile(expectedPath, expectedContent);
+            atomicWriter._writeFileWithMode(expectedPath, expectedContent, opened.mode & 0o7777);
             try {
                 return publishFileIfUnchangedDarwin(targetFd, targetPath, candidatePath, expectedPath);
             }
@@ -431,6 +473,27 @@ export const atomicWriter = {
     withLock(yamlPath, operation) {
         return withPairWriteLock(yamlPath, operation);
     },
+    writeTextCreateExclusive(yamlPath, content, precondition) {
+        try {
+            return withPairWriteLock(yamlPath, () => {
+                if (!precondition())
+                    return false;
+                const candidatePath = `${dirname(dirname(dirname(yamlPath)))}/.rn-action-create.${generateTmpStamp()}`;
+                atomicWriter._writeFileWithMode(candidatePath, content, 0o600);
+                try {
+                    return atomicWriter._linkIfAbsent(candidatePath, yamlPath, precondition);
+                }
+                finally {
+                    atomicWriter._unlink(candidatePath);
+                }
+            }, precondition);
+        }
+        catch (error) {
+            if (error === ACTION_WRITE_PRECONDITION)
+                return false;
+            throw error;
+        }
+    },
     /**
      * Atomic pair-write. Cleans up any orphaned `.tmp` files before
      * starting. Throws on the first failed step — caller decides whether
@@ -445,11 +508,20 @@ export const atomicWriter = {
             return result;
         });
     },
-    pairWriteCreateExclusive(yamlPath, yamlContent, sidecarPath, state) {
-        return withPairWriteLock(yamlPath, () => {
-            cleanupOrphans(yamlPath, sidecarPath);
-            return pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, undefined, undefined, undefined, true);
-        });
+    pairWriteCreateExclusive(yamlPath, yamlContent, sidecarPath, state, precondition) {
+        try {
+            return withPairWriteLock(yamlPath, () => {
+                if (precondition && !precondition())
+                    return null;
+                cleanupOrphans(yamlPath, sidecarPath);
+                return pairWriteImpl(yamlPath, yamlContent, sidecarPath, state, precondition, precondition, undefined, true);
+            }, precondition);
+        }
+        catch (error) {
+            if (error === ACTION_WRITE_PRECONDITION)
+                return null;
+            throw error;
+        }
     },
     pairWriteConditional(yamlPath, yamlContent, sidecarPath, state, precondition, yamlPublicationPrecondition, expectedYamlContent) {
         try {

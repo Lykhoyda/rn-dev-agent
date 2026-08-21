@@ -39,6 +39,7 @@ import { freshRuntimeState } from '../../dist/domain/reusable-action.js';
 import { sidecarPathFor } from '../../dist/domain/sidecar-io.js';
 import {
   commitMigratedActionText,
+  createActionTextExclusive,
   loadAction,
   loadActionMigrationBaseline,
 } from '../../dist/domain/action-store.js';
@@ -362,6 +363,27 @@ test('migration preserves action permissions and removes displaced YAML', () => 
   );
 });
 
+test('migration stages every YAML snapshot with the target permissions', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-action-migrate-staging-mode-'));
+  const dir = join(root, '.rn-agent', 'actions');
+  mkdirSync(dir, { recursive: true });
+  const actionPath = join(dir, 'checkout.yaml');
+  const source = actionYaml('checkout');
+  writeFileSync(actionPath, source, { encoding: 'utf8', mode: 0o600 });
+  const baseline = loadActionMigrationBaseline(actionPath);
+  const observedModes: number[] = [];
+  const originalWriteWithMode = atomicWriter._writeFileWithMode;
+  t.mock.method(atomicWriter, '_writeFileWithMode', (path, content, mode) => {
+    originalWriteWithMode(path, content, mode);
+    if (path.includes('checkout.yaml.tmp.')) observedModes.push(statSync(path).mode & 0o7777);
+  });
+
+  commitMigratedActionText(actionPath, baseline, upsertEnginePinHeader(source).text);
+
+  assert.ok(observedModes.length >= 2);
+  assert.deepEqual(new Set(observedModes), new Set([0o600]));
+});
+
 test('action writer never age-reclaims a live process lock', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-action-live-lock-'));
   const dir = join(root, '.rn-agent', 'actions');
@@ -416,6 +438,26 @@ test('migration refuses an actions-directory symlink swap at publication', (t) =
   assert.equal(readdirSync(shared).length, 1);
 });
 
+test('action creation refuses an actions-directory symlink swap at publication', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-action-create-swap-'));
+  const dir = join(root, '.rn-agent', 'actions');
+  const displaced = join(root, '.rn-agent', 'actions-original');
+  const shared = mkdtempSync(join(tmpdir(), 'rn-action-create-shared-'));
+  mkdirSync(dir, { recursive: true });
+  const originalLink = atomicWriter._linkIfAbsent;
+  t.mock.method(atomicWriter, '_linkIfAbsent', (...args) => {
+    renameSync(dir, displaced);
+    symlinkSync(shared, dir, 'dir');
+    return originalLink(...args);
+  });
+
+  assert.throws(
+    () => createActionTextExclusive(root, 'checkout', actionYaml('checkout')),
+    /changed during creation/,
+  );
+  assert.deepEqual(readdirSync(shared), []);
+});
+
 test('migrateLearnedActions preserves the previous YAML when its atomic write fails', (t) => {
   const root = mkdtempSync(join(tmpdir(), 'rn-action-migrate-atomic-'));
   const dir = join(root, '.rn-agent', 'actions');
@@ -423,10 +465,10 @@ test('migrateLearnedActions preserves the previous YAML when its atomic write fa
   const actionPath = join(dir, 'checkout.yaml');
   const source = actionYaml('checkout');
   writeFileSync(actionPath, source, 'utf8');
-  const originalWrite = atomicWriter._writeFile;
-  t.mock.method(atomicWriter, '_writeFile', (path: string, content: string) => {
+  const originalWrite = atomicWriter._writeFileWithMode;
+  t.mock.method(atomicWriter, '_writeFileWithMode', (path, content, mode) => {
     if (path.startsWith(`${actionPath}.tmp.`)) throw new Error('ENOSPC');
-    originalWrite(path, content);
+    originalWrite(path, content, mode);
   });
 
   const result = migrateLearnedActions(root).find((row) => row.id === 'checkout');
