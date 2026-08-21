@@ -258,6 +258,37 @@ test('GH #317: UNKNOWN failure + first testID present → CDP/JS fallback fires;
   assert.equal(sidecar.runHistory[0].transport, 'cdp-js');
 });
 
+test('typed runner refusal cannot be laundered through CDP fallback', async () => {
+  project.seedAction('demo', replayFixtureYaml({ id: 'demo', selector: 'fab-create-task' }));
+  let replayDepsCalled = false;
+  const handler = createRunActionHandler({
+    maestroRun: fakeMaestroRun([
+      {
+        ok: false,
+        code: 'ENGINE_PIN_MISMATCH',
+        error: 'Pinned Maestro engine checksum does not match',
+      },
+    ]),
+    replayDeps: () => {
+      replayDepsCalled = true;
+      return {
+        treeFor: async () => ({ testID: 'fab-create-task', children: [] }),
+        pressByTestId: async () => {},
+        typeByTestId: async () => {},
+        launchApp: async () => {},
+        settle: async () => {},
+      };
+    },
+  });
+
+  const result = await handler({ actionId: 'demo', projectRoot: project.root });
+  const env = JSON.parse(result.content[0].text);
+
+  assert.equal(env.code, 'ENGINE_PIN_MISMATCH');
+  assert.equal(replayDepsCalled, false);
+  assert.equal(project.readSidecar('demo').runHistory[0].status, 'fail');
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Test 4: a normal Maestro PASS exposes transport/readback but keeps legacy sidecar encoding
 // ─────────────────────────────────────────────────────────────────────────────

@@ -58,8 +58,11 @@ export function createLoginPrologueHandler(deps) {
         try {
             inventory = await measure('inventory', () => listActions(projectRoot));
             const action = await measure('resolve', async () => loadAction(projectRoot, LOGIN_PROLOGUE_ALIAS));
-            if (!action || !inventory.some((candidate) => candidate.id === LOGIN_PROLOGUE_ALIAS)) {
+            if (!action) {
                 return blocked('LOGIN_ACTION_MISSING', `No exact ${LOGIN_PROLOGUE_ALIAS} learned action was found. Auth-tag or intent inference is not permitted.`);
+            }
+            if (action.metadata.id !== LOGIN_PROLOGUE_ALIAS) {
+                return blocked('LOGIN_ACTION_ID_MISMATCH', `The ${LOGIN_PROLOGUE_ALIAS} action file declares a different action id.`);
             }
             const priorRunIds = new Set(action.state.runHistory
                 .map((record) => record.runId)

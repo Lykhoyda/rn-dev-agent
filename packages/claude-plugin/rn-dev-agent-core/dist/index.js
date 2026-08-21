@@ -32654,11 +32654,12 @@ function missingLoginPrologueOutcome() {
 }
 function persistLoginPrologueOutcome(runtime, registry2, operation, status, outcome) {
   const priorOutcome = readLoginPrologueOutcome(status.bindings.loginPrologue);
+  const overrides = outcome.overrides ?? priorOutcome?.overrides;
   const nextOperation = registry2.replaceBindingsDuringOperation(operation, {
     bindings: {
       loginPrologue: {
         ...outcome,
-        ...priorOutcome?.overrides ? { overrides: priorOutcome.overrides } : {}
+        ...overrides ? { overrides } : {}
       }
     }
   });
@@ -32906,7 +32907,7 @@ function createAuthorityGate(runtime, dependencies) {
         mutation: true,
         liveBundleProbe: tool === "proof_capture"
       } : baseProfile;
-      let runtimeStatus = runtime.status();
+      const runtimeStatus = runtime.status();
       const loginDecision = evaluateLoginPrologueGuard({
         binding: runtimeStatus.available ? runtimeStatus.bindings.loginPrologue : void 0,
         tool,
@@ -32921,24 +32922,6 @@ function createAuthorityGate(runtime, dependencies) {
           overrideRejected: loginDecision.suppliedOverride,
           nextAction: "Repair the exact user-login action and rerun cdp_login_prologue, or supply a supervisorOverrideToken configured by RN_LOGIN_PROLOGUE_OVERRIDE_TOKEN for this mutating call."
         });
-      }
-      if (loginDecision.override) {
-        try {
-          const available = runtime.requireAvailable();
-          const current = runtime.status();
-          const outcome = current.available ? readLoginPrologueOutcome(current.bindings.loginPrologue) : null;
-          if (!outcome) {
-            throw new SessionAuthorityError("LOGIN_PROLOGUE_BLOCKED", "the blocked login prologue state disappeared before override audit");
-          }
-          available.registry.updateBindings(available.session, {
-            bindings: {
-              loginPrologue: appendLoginOverrideAudit(outcome, loginDecision.audit)
-            }
-          });
-          runtimeStatus = runtime.status();
-        } catch (error2) {
-          return authorityFailure(error2);
-        }
       }
       if (profile.kind === "diagnostic") {
         return addMeta2(await handler(...handlerArgs), { authoritative: false });
@@ -33554,6 +33537,15 @@ function createAuthorityGate(runtime, dependencies) {
             }
           });
         }
+        if (loginDecision.override) {
+          const outcome = readLoginPrologueOutcome(status.bindings.loginPrologue);
+          if (outcome?.state !== LOGIN_PROLOGUE_BLOCKED) {
+            throw new SessionAuthorityError("LOGIN_PROLOGUE_BLOCKED", "the blocked login prologue state disappeared before override audit");
+          }
+          const persisted = persistLoginPrologueOutcome(runtime, registry2, operation, status, appendLoginOverrideAudit(outcome, loginDecision.audit));
+          operation = persisted.operation;
+          status = persisted.status;
+        }
         registry2.verifyOperation(operation);
         const snapshotCheckpoint = dependencies.snapshotCaptureCheckpoint?.();
         let result = await registry2.runWithOperation(operation, () => handler(...handlerArgs));
@@ -33689,11 +33681,6 @@ function createAuthorityGate(runtime, dependencies) {
           axes: [...runnerAwareReceiptProfile.axes, "M", "A"]
         } : runnerAwareReceiptProfile;
         const controllerGenerationAdvanced = operation.authorityVersion !== initialOperationAuthorityVersion;
-        if (loginPrologueOutcome?.state === "passed") {
-          const persisted = persistLoginPrologueOutcome(runtime, registry2, operation, status, loginPrologueOutcome);
-          operation = persisted.operation;
-          status = persisted.status;
-        }
         registry2.verifyOperation(operation);
         for (const observation of allBefore) {
           if (controllerGenerationAdvanced && observation.axis === "C")
@@ -33742,6 +33729,11 @@ function createAuthorityGate(runtime, dependencies) {
         }
         if (operation && receiptsCommittable) {
           registry2.commitPlatformAuthorityReceipts(operation);
+        }
+        if (operation && loginPrologueOutcome?.state === "passed") {
+          const persisted = persistLoginPrologueOutcome(runtime, registry2, operation, status, loginPrologueOutcome);
+          operation = persisted.operation;
+          status = persisted.status;
         }
         return addMeta2(result, {
           ...nativeOriginMeta(profile, nativeOriginProven),
@@ -78475,7 +78467,8 @@ function createRunActionHandler(deps = {}) {
       const firstFailureDetail = readMaestroFailureDetail(firstEnv, firstOutput);
       const firstDeviceAuthority = readMaestroDeviceAuthority(firstEnv);
       probeDeviceId = firstDeviceAuthority?.reportedDeviceId ?? observedDeviceId;
-      if (firstEnv.code === "DEVICE_AUTHORITY_MISMATCH") {
+      if (firstEnv.code) {
+        const typedCode = firstEnv.code;
         const autoRepair2 = {
           attempted: false,
           outcome: args.autoRepair === false ? "refused" : "skipped",
@@ -78486,14 +78479,14 @@ function createRunActionHandler(deps = {}) {
           timestamp: (/* @__PURE__ */ new Date()).toISOString(),
           durationMs: Date.now() - t0,
           status: "fail",
-          failureCode: "DEVICE_AUTHORITY_MISMATCH",
+          failureCode: typedCode === "DEVICE_AUTHORITY_MISMATCH" ? "DEVICE_AUTHORITY_MISMATCH" : typedCode === "RECONNECT_TIMEOUT" ? "TIMEOUT" : "UNKNOWN",
           failureDetail: firstFailureDetail.slice(0, 1e3),
           trigger,
           autoRepair: autoRepair2
         });
-        return failResult(`cdp_run_action: ${args.actionId} refused replay authority: ${firstFailureDetail}`, "DEVICE_AUTHORITY_MISMATCH", {
+        return failResult(`cdp_run_action: ${args.actionId} refused replay: ${firstFailureDetail}`, typedCode, {
           actionId: args.actionId,
-          failureKind: "DEVICE_AUTHORITY_MISMATCH",
+          failureKind: typedCode,
           deviceAuthority: firstDeviceAuthority,
           autoRepair: autoRepair2,
           writes: writeDisclosure("none", persisted2)
@@ -78995,8 +78988,11 @@ function createLoginPrologueHandler(deps) {
     try {
       inventory = await measure("inventory", () => listActions(projectRoot));
       const action = await measure("resolve", async () => loadAction(projectRoot, LOGIN_PROLOGUE_ALIAS));
-      if (!action || !inventory.some((candidate) => candidate.id === LOGIN_PROLOGUE_ALIAS)) {
+      if (!action) {
         return blocked("LOGIN_ACTION_MISSING", `No exact ${LOGIN_PROLOGUE_ALIAS} learned action was found. Auth-tag or intent inference is not permitted.`);
+      }
+      if (action.metadata.id !== LOGIN_PROLOGUE_ALIAS) {
+        return blocked("LOGIN_ACTION_ID_MISMATCH", `The ${LOGIN_PROLOGUE_ALIAS} action file declares a different action id.`);
       }
       const priorRunIds = new Set(action.state.runHistory.map((record2) => record2.runId).filter((runId) => typeof runId === "string"));
       const replayArgs = Object.create(Object.getPrototypeOf(args), Object.getOwnPropertyDescriptors(args));

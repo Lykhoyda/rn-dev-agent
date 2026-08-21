@@ -801,7 +801,8 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       const firstDeviceAuthority = readMaestroDeviceAuthority(firstEnv);
       probeDeviceId = firstDeviceAuthority?.reportedDeviceId ?? observedDeviceId;
 
-      if (firstEnv.code === 'DEVICE_AUTHORITY_MISMATCH') {
+      if (firstEnv.code) {
+        const typedCode = firstEnv.code as ToolErrorCode;
         const autoRepair: AutoRepairOutcome = {
           attempted: false,
           outcome: args.autoRepair === false ? 'refused' : 'skipped',
@@ -812,17 +813,22 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           timestamp: new Date().toISOString(),
           durationMs: Date.now() - t0,
           status: 'fail',
-          failureCode: 'DEVICE_AUTHORITY_MISMATCH',
+          failureCode:
+            typedCode === 'DEVICE_AUTHORITY_MISMATCH'
+              ? 'DEVICE_AUTHORITY_MISMATCH'
+              : typedCode === 'RECONNECT_TIMEOUT'
+                ? 'TIMEOUT'
+                : 'UNKNOWN',
           failureDetail: firstFailureDetail.slice(0, 1000),
           trigger,
           autoRepair,
         });
         return failResult(
-          `cdp_run_action: ${args.actionId} refused replay authority: ${firstFailureDetail}`,
-          'DEVICE_AUTHORITY_MISMATCH',
+          `cdp_run_action: ${args.actionId} refused replay: ${firstFailureDetail}`,
+          typedCode,
           {
             actionId: args.actionId,
-            failureKind: 'DEVICE_AUTHORITY_MISMATCH',
+            failureKind: typedCode,
             deviceAuthority: firstDeviceAuthority,
             autoRepair,
             writes: writeDisclosure('none', persisted),

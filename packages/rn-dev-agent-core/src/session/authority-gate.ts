@@ -749,11 +749,12 @@ function persistLoginPrologueOutcome(
   outcome: LoginPrologueOutcome,
 ): { operation: OperationRef; status: SessionStatus } {
   const priorOutcome = readLoginPrologueOutcome(status.bindings.loginPrologue);
+  const overrides = outcome.overrides ?? priorOutcome?.overrides;
   const nextOperation = registry.replaceBindingsDuringOperation(operation, {
     bindings: {
       loginPrologue: {
         ...outcome,
-        ...(priorOutcome?.overrides ? { overrides: priorOutcome.overrides } : {}),
+        ...(overrides ? { overrides } : {}),
       },
     },
   });
@@ -1197,7 +1198,7 @@ export function createAuthorityGate(
                     }
                   : baseProfile;
 
-        let runtimeStatus = runtime.status();
+        const runtimeStatus = runtime.status();
         const loginDecision = evaluateLoginPrologueGuard({
           binding: runtimeStatus.available ? runtimeStatus.bindings.loginPrologue : undefined,
           tool,
@@ -1220,30 +1221,6 @@ export function createAuthorityGate(
             },
           );
         }
-        if (loginDecision.override) {
-          try {
-            const available = runtime.requireAvailable();
-            const current = runtime.status();
-            const outcome = current.available
-              ? readLoginPrologueOutcome(current.bindings.loginPrologue)
-              : null;
-            if (!outcome) {
-              throw new SessionAuthorityError(
-                'LOGIN_PROLOGUE_BLOCKED',
-                'the blocked login prologue state disappeared before override audit',
-              );
-            }
-            available.registry.updateBindings(available.session, {
-              bindings: {
-                loginPrologue: appendLoginOverrideAudit(outcome, loginDecision.audit),
-              },
-            });
-            runtimeStatus = runtime.status();
-          } catch (error) {
-            return authorityFailure(error);
-          }
-        }
-
         if (profile.kind === 'diagnostic') {
           return addMeta(await handler(...handlerArgs), { authoritative: false });
         }
@@ -2050,6 +2027,24 @@ export function createAuthorityGate(
               },
             });
           }
+          if (loginDecision.override) {
+            const outcome = readLoginPrologueOutcome(status.bindings.loginPrologue);
+            if (outcome?.state !== LOGIN_PROLOGUE_BLOCKED) {
+              throw new SessionAuthorityError(
+                'LOGIN_PROLOGUE_BLOCKED',
+                'the blocked login prologue state disappeared before override audit',
+              );
+            }
+            const persisted = persistLoginPrologueOutcome(
+              runtime,
+              registry,
+              operation,
+              status,
+              appendLoginOverrideAudit(outcome, loginDecision.audit),
+            );
+            operation = persisted.operation;
+            status = persisted.status;
+          }
           registry.verifyOperation(operation);
           const snapshotCheckpoint = dependencies.snapshotCaptureCheckpoint?.();
           let result = await registry.runWithOperation(operation, () => handler(...handlerArgs));
@@ -2270,17 +2265,6 @@ export function createAuthorityGate(
           // identity change. An external generation change still fails CAS.
           const controllerGenerationAdvanced =
             operation.authorityVersion !== initialOperationAuthorityVersion;
-          if (loginPrologueOutcome?.state === 'passed') {
-            const persisted = persistLoginPrologueOutcome(
-              runtime,
-              registry,
-              operation,
-              status,
-              loginPrologueOutcome,
-            );
-            operation = persisted.operation;
-            status = persisted.status;
-          }
           registry.verifyOperation(operation);
           for (const observation of allBefore) {
             if (controllerGenerationAdvanced && observation.axis === 'C') continue;
@@ -2357,6 +2341,17 @@ export function createAuthorityGate(
           }
           if (operation && receiptsCommittable) {
             registry.commitPlatformAuthorityReceipts(operation);
+          }
+          if (operation && loginPrologueOutcome?.state === 'passed') {
+            const persisted = persistLoginPrologueOutcome(
+              runtime,
+              registry,
+              operation,
+              status,
+              loginPrologueOutcome,
+            );
+            operation = persisted.operation;
+            status = persisted.status;
           }
           return addMeta(result, {
             ...nativeOriginMeta(profile, nativeOriginProven),

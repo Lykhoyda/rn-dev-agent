@@ -146,6 +146,34 @@ test('login prologue blocks when the exact user-login action is missing', async 
   assert.equal(dispatched, false);
 });
 
+test('login prologue rejects a filename and metadata id mismatch', async (t) => {
+  const project = createTmpProject();
+  t.after(() => project.cleanup());
+  project.seedAction(
+    'user-login',
+    fixtureYaml({ id: 'other-login', intent: 'wrong action identity' }),
+    null,
+  );
+  project.seedAction(
+    'decoy-login',
+    fixtureYaml({ id: 'user-login', intent: 'inventory identity decoy' }),
+    null,
+  );
+  let dispatched = false;
+  const handler = createLoginPrologueHandler({
+    now: deterministicClock(),
+    runAction: async () => {
+      dispatched = true;
+      return okResult({ passed: true });
+    },
+  });
+
+  const envelope = parse(await handler({ projectRoot: project.root }));
+  assert.equal(envelope.code, 'LOGIN_PROLOGUE_BLOCKED');
+  assert.equal(envelope.meta.loginPrologue.failure.code, 'LOGIN_ACTION_ID_MISMATCH');
+  assert.equal(dispatched, false);
+});
+
 for (const failure of [
   { name: 'runner drift', code: 'ENGINE_PIN_MISMATCH' },
   { name: 'selector failure', code: 'TESTID_NOT_FOUND' },
