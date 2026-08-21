@@ -1,6 +1,9 @@
 // GH #397 Phase 1 — engine pin manifest + pure classification truth table.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   MAESTRO_RUNNER_PIN,
   classifyEnginePin,
@@ -21,6 +24,18 @@ test('gh-397: pin constant matches the tested engine', () => {
   assert.match(PIN_HASH, /^[0-9a-f]{64}$/);
   const ids = MAESTRO_RUNNER_PIN.knownQuirks.map((q) => q.id);
   assert.deepEqual(ids, ['android-pre-o-unsupported']);
+});
+
+test('gh-397: exported pin identity is deeply immutable', () => {
+  const checksum = MAESTRO_RUNNER_PIN.sha256[KEY];
+  assert.throws(() => {
+    (MAESTRO_RUNNER_PIN.sha256 as Record<string, string>)[KEY] = 'f'.repeat(64);
+  });
+  assert.throws(() => {
+    (MAESTRO_RUNNER_PIN as { version: string }).version = '9.9.9';
+  });
+  assert.equal(MAESTRO_RUNNER_PIN.version, '1.1.24');
+  assert.equal(MAESTRO_RUNNER_PIN.sha256[KEY], checksum);
 });
 
 test('gh-397: compareVersions is numeric per segment', () => {
@@ -144,6 +159,69 @@ test('gh-397: version drift is diagnosed only after checksum verification', asyn
   assert.equal(newer.pin.status, 'drift-newer');
   assert.equal(newer.version, '1.2.0');
   _resetEngineStatusForTest();
+});
+
+test('gh-397: untrusted versioned cache entries are not reported as drift', async () => {
+  _resetEngineStatusForTest();
+  const previousCache = process.env.RN_DEV_AGENT_RUNNER_CACHE;
+  try {
+    for (const [version, expected] of [
+      ['1.0.9', 'checksum-mismatch'],
+      ['1.2.0', 'unverified'],
+    ] as const) {
+      const cache = mkdtempSync(join(tmpdir(), 'rn-versioned-runner-cache-'));
+      const binDir = join(cache, 'maestro-runner', version, 'bin');
+      const marker = join(cache, 'executed');
+      mkdirSync(binDir, { recursive: true });
+      writeFileSync(
+        join(binDir, 'maestro-runner'),
+        `#!/bin/sh\necho executed > "${marker}"\necho maestro-runner ${version}\n`,
+      );
+      chmodSync(join(binDir, 'maestro-runner'), 0o755);
+      process.env.RN_DEV_AGENT_RUNNER_CACHE = cache;
+
+      const status = await getEngineStatus();
+
+      assert.equal(status.pin.status, expected);
+      assert.equal(status.version, null);
+      assert.equal(status.selectedPath, join(binDir, 'maestro-runner'));
+      assert.throws(() => readFileSync(marker));
+    }
+  } finally {
+    if (previousCache === undefined) delete process.env.RN_DEV_AGENT_RUNNER_CACHE;
+    else process.env.RN_DEV_AGENT_RUNNER_CACHE = previousCache;
+    _resetEngineStatusForTest();
+  }
+});
+
+test('gh-397: trusted historical checksum proves older drift without execution', async () => {
+  _resetEngineStatusForTest();
+  const previousCache = process.env.RN_DEV_AGENT_RUNNER_CACHE;
+  const cache = mkdtempSync(join(tmpdir(), 'rn-trusted-runner-cache-'));
+  const bin = join(cache, 'maestro-runner', '1.0.9', 'bin', 'maestro-runner');
+  mkdirSync(join(bin, '..'), { recursive: true });
+  writeFileSync(bin, '#!/bin/sh\nexit 99\n');
+  chmodSync(bin, 0o755);
+  process.env.RN_DEV_AGENT_RUNNER_CACHE = cache;
+  let executed = false;
+  try {
+    const status = await getEngineStatus({
+      binPath: () => bin,
+      hashFile: () => '7d3777a67f8cc3d5e3927f498ddda8a56c424a10158f7cd4fa494ecc3ed97923',
+      execVersion: async () => {
+        executed = true;
+        return 'maestro-runner 1.0.9';
+      },
+      platformKey: KEY,
+    });
+    assert.equal(status.pin.status, 'drift-older');
+    assert.equal(status.version, '1.0.9');
+    assert.equal(executed, false);
+  } finally {
+    if (previousCache === undefined) delete process.env.RN_DEV_AGENT_RUNNER_CACHE;
+    else process.env.RN_DEV_AGENT_RUNNER_CACHE = previousCache;
+    _resetEngineStatusForTest();
+  }
 });
 
 test('gh-397: getEngineStatus refuses execution when hashing fails', async () => {

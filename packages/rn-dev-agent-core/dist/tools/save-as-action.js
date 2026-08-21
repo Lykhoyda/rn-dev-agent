@@ -16,7 +16,7 @@ import { okResult, failResult } from '../utils.js';
 import { getStoredEvents, getRecordingStartRoute } from './test-recorder.js';
 import { generateMaestro } from './test-recorder-generators.js';
 import { freshRuntimeState } from '../domain/reusable-action.js';
-import { actionPathFor, resolveActionPath } from '../domain/action-store.js';
+import { actionPathFor, assertOwnedActionCorpus, resolveActionPath, } from '../domain/action-store.js';
 import { mirrorToDb } from '../domain/action-state-store.js';
 import { sidecarPathFor } from '../domain/sidecar-io.js';
 import { atomicWriter } from '../domain/atomic-writer.js';
@@ -41,6 +41,7 @@ export function createSaveAsActionHandler() {
         let existingPath;
         try {
             existingPath = resolveActionPath(projectRoot, args.id);
+            assertOwnedActionCorpus(projectRoot);
         }
         catch (err) {
             return failResult(err instanceof Error ? err.message : String(err), 'BAD_FILENAME');

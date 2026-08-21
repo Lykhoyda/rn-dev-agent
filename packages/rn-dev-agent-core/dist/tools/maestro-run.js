@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { basename, join, dirname } from 'node:path';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { getEngineStatus, enginePinCaveat, exactPinRefusal, preOAndroidApiRefusal, isOlderSdkInstallFailure, olderSdkInstallDiagnosis, MAESTRO_RUNNER_MIN_ANDROID_API, } from '../domain/engine-pin.js';
-import { actionReplayPreflight, isLearnedActionPath, replayCompatibilityPreflight, } from '../domain/action-engine-compat.js';
+import { actionReplayPreflight, isLearnedActionPath, replayCompatibilityPreflight, standaloneLearnedActionPathRefusal, } from '../domain/action-engine-compat.js';
 import { parseM7Header } from '../domain/reusable-action.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
 import { resolveBundleId, readExpoSlug } from '../project-config.js';
@@ -438,11 +438,17 @@ export function createMaestroRunHandler(deps = {}) {
                 provenance: engineStatus?.provenance ?? 'none',
             });
         }
+        const learnedActionPathRefusal = args.flowPath
+            ? standaloneLearnedActionPathRefusal(args.flowPath)
+            : null;
+        if (learnedActionPathRefusal) {
+            return failResult(learnedActionPathRefusal, 'BAD_RECORDING');
+        }
         const learnedAction = args.flowPath ? isLearnedActionPath(args.flowPath) : false;
-        const actionMeta = learnedAction && args.flowPath
+        const actionMeta = args.flowPath
             ? parseM7Header(rawYaml, basename(args.flowPath).replace(/\.ya?ml$/i, ''))
             : null;
-        const compatibilityRefusal = learnedAction
+        const compatibilityRefusal = learnedAction || actionMeta !== null
             ? actionReplayPreflight({
                 enginePin: actionMeta?.enginePin,
                 commands: validatedCommands,

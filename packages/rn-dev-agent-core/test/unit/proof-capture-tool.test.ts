@@ -2301,6 +2301,26 @@ test('production action identity reads exact app-root YAML bytes and runtime rev
     version: '7',
     sha256: HASH(ACTION_YAML_BYTES),
   });
+
+  const ymlBytes = ACTION_YAML_BYTES.replaceAll('canonical-proof', 'canonical-yml-proof');
+  await writeFile(join(root, '.rn-agent', 'actions', 'canonical-yml-proof.yml'), ymlBytes);
+  await writeFile(
+    join(root, '.rn-agent', 'state', 'canonical-yml-proof.state.json'),
+    `${JSON.stringify({
+      schemaVersion: 1,
+      revision: 3,
+      updatedAt: '2026-07-13T00:00:00.000Z',
+      lastSeenMtimeMs: 0,
+      runHistory: [],
+      repairHistory: [],
+      stats: { totalRuns: 0, successCount: 0, failureCount: 0, avgDurationMs: 0 },
+    })}\n`,
+  );
+  assert.deepEqual(module.readProofActionIdentity(root, 'canonical-yml-proof'), {
+    id: 'canonical-yml-proof',
+    version: '3',
+    sha256: HASH(ymlBytes),
+  });
   assert.equal(module.readProofActionIdentity(root, 'missing'), null);
 });
 

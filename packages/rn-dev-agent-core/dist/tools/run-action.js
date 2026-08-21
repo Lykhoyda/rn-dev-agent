@@ -27,6 +27,7 @@
 //     intentionally NOT in scope for phase 1 (each repair attempt is a
 //     30s+ device snapshot; cascading retries would be slow and could
 //     mask underlying screen churn).
+import { dirname } from 'node:path';
 import { okResult, failResult } from '../utils.js';
 import { acknowledgeExternalEdit, loadAction, promoteActionRuntimeWithCAS, saveActionRuntimeWithCAS, } from '../domain/action-store.js';
 import { mirrorToDb } from '../domain/action-state-store.js';
@@ -300,7 +301,10 @@ export function createRunActionHandler(deps = {}) {
         const engineStatus = await resolveEngineStatus();
         let preflightCommands;
         try {
-            preflightCommands = parseAndValidateFlow(action.body).commands;
+            preflightCommands = parseAndValidateFlow(action.body, {
+                flowDir: dirname(action.filePath),
+                flowRoot: dirname(action.filePath),
+            }).commands;
         }
         catch (err) {
             return failResult(`Action ${args.actionId} is not valid Maestro YAML: ${err instanceof Error ? err.message : String(err)}`, 'BAD_RECORDING', { actionId: args.actionId, fallback: 'none' });

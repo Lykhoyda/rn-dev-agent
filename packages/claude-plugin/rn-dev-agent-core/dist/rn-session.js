@@ -11695,13 +11695,25 @@ var init_maestro_runner_pin = __esm({
 // packages/rn-dev-agent-core/dist/domain/engine-pin.js
 import { execFile as execFileCb2 } from "node:child_process";
 import { promisify as promisify3 } from "node:util";
-var execFile3, MAESTRO_RUNNER_PIN, ACTION_ENGINE_PIN, HOST_PLUGIN_ROOT, PINNED_RUNNER_INSTALL_HINT, PINNED_RUNNER_DIAGNOSE_HINT;
+var execFile3, MAESTRO_RUNNER_PIN, TRUSTED_DRIFT_SHA256, ACTION_ENGINE_PIN, HOST_PLUGIN_ROOT, PINNED_RUNNER_INSTALL_HINT, PINNED_RUNNER_DIAGNOSE_HINT;
 var init_engine_pin = __esm({
   "packages/rn-dev-agent-core/dist/domain/engine-pin.js"() {
     "use strict";
     init_maestro_runner_pin();
     execFile3 = promisify3(execFileCb2);
-    MAESTRO_RUNNER_PIN = maestro_runner_pin_default;
+    MAESTRO_RUNNER_PIN = Object.freeze({
+      version: maestro_runner_pin_default.version,
+      sha256: Object.freeze({ ...maestro_runner_pin_default.sha256 }),
+      knownQuirks: Object.freeze(maestro_runner_pin_default.knownQuirks.map((quirk) => Object.freeze({ ...quirk })))
+    });
+    TRUSTED_DRIFT_SHA256 = Object.freeze({
+      "1.0.9": Object.freeze({
+        "darwin-arm64": "7d3777a67f8cc3d5e3927f498ddda8a56c424a10158f7cd4fa494ecc3ed97923",
+        "darwin-x64": "36f8a973c3231b6b8125db4a3e131b8c3193aec6774145584b18070be979fd5f",
+        "linux-arm64": "a8e8197c63502fba874ce69b908174d46a47c6539025184e3003e70576d9451e",
+        "linux-x64": "bf7e9ef297c35712e9fad0ad56a65b7fd94e1f30168733cf09459b4ea80c4c3e"
+      })
+    });
     ACTION_ENGINE_PIN = `maestro-runner@${MAESTRO_RUNNER_PIN.version}`;
     HOST_PLUGIN_ROOT = "${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}";
     PINNED_RUNNER_INSTALL_HINT = `bash ${HOST_PLUGIN_ROOT}/scripts/ensure-maestro-runner.sh`;
@@ -11794,6 +11806,24 @@ var init_action_state_store = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/session/worktree-repair-remedy.js
+var WORKTREE_REPAIR_ENTRY, HEADLESS_WORKTREE_REPAIR_COMMAND;
+var init_worktree_repair_remedy = __esm({
+  "packages/rn-dev-agent-core/dist/session/worktree-repair-remedy.js"() {
+    "use strict";
+    WORKTREE_REPAIR_ENTRY = '"${CLAUDE_PLUGIN_ROOT:-${RN_DEV_AGENT_CODEX_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:?set it to the installed rn-dev-agent plugin root, then re-run}}}/rn-dev-agent-core/dist/worktree-inheritance.js"';
+    HEADLESS_WORKTREE_REPAIR_COMMAND = `node ${WORKTREE_REPAIR_ENTRY} repair --app-root "$PWD"`;
+  }
+});
+
+// packages/rn-dev-agent-core/dist/session/worktree-inheritance.js
+var init_worktree_inheritance = __esm({
+  "packages/rn-dev-agent-core/dist/session/worktree-inheritance.js"() {
+    "use strict";
+    init_worktree_repair_remedy();
+  }
+});
+
 // packages/rn-dev-agent-core/dist/domain/action-store.js
 var init_action_store = __esm({
   "packages/rn-dev-agent-core/dist/domain/action-store.js"() {
@@ -11803,6 +11833,7 @@ var init_action_store = __esm({
     init_atomic_writer();
     init_path_safety();
     init_action_state_store();
+    init_worktree_inheritance();
   }
 });
 

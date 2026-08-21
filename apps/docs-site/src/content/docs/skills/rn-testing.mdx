@@ -53,11 +53,7 @@ Per-step timing with maestro-runner + JPEG: ~1.4s (2.2x faster than Maestro + PN
 
 ### Auth Pre-flight
 
-Before testing, checks `cdp_navigation_state` for auth screens. If logged out:
-1. Scans for Maestro subflows (prefer login over registration)
-2. Strips `clearState: true` for Dev Client builds
-3. Wraps subflows with `appId` if missing
-4. Runs the owned subflow through `maestro_run`, then verifies arrival at the main screen; no manual-login fallback
+Before testing, check `cdp_navigation_state` for auth screens. If logged out, select a compatible owned learned action and replay it through `cdp_run_action` on the authority-bound device. Missing or incompatible owned automation is terminal. Never fall back to manual login or an unowned `.maestro` flow; use `cdp_auto_login` only when the user explicitly authorizes legacy per-call recovery, never as durable authority or PR proof.
 
 ### Permission Pre-flight
 

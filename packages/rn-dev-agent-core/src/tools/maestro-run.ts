@@ -19,6 +19,7 @@ import {
   actionReplayPreflight,
   isLearnedActionPath,
   replayCompatibilityPreflight,
+  standaloneLearnedActionPathRefusal,
 } from '../domain/action-engine-compat.js';
 import { parseM7Header } from '../domain/reusable-action.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
@@ -662,12 +663,18 @@ export function createMaestroRunHandler(
         provenance: engineStatus?.provenance ?? 'none',
       });
     }
+    const learnedActionPathRefusal = args.flowPath
+      ? standaloneLearnedActionPathRefusal(args.flowPath)
+      : null;
+    if (learnedActionPathRefusal) {
+      return failResult(learnedActionPathRefusal, 'BAD_RECORDING');
+    }
     const learnedAction = args.flowPath ? isLearnedActionPath(args.flowPath) : false;
     const actionMeta =
-      learnedAction && args.flowPath
+      args.flowPath
         ? parseM7Header(rawYaml, basename(args.flowPath).replace(/\.ya?ml$/i, ''))
         : null;
-    const compatibilityRefusal = learnedAction
+    const compatibilityRefusal = learnedAction || actionMeta !== null
       ? actionReplayPreflight({
           enginePin: actionMeta?.enginePin,
           commands: validatedCommands,

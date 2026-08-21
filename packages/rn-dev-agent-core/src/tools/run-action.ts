@@ -28,6 +28,7 @@
 //     30s+ device snapshot; cascading retries would be slow and could
 //     mask underlying screen churn).
 
+import { dirname } from 'node:path';
 import { okResult, failResult } from '../utils.js';
 import type { ToolResult } from '../utils.js';
 import type { ToolErrorCode } from '../types.js';
@@ -534,7 +535,10 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
     const engineStatus = await resolveEngineStatus();
     let preflightCommands: unknown[];
     try {
-      preflightCommands = parseAndValidateFlow(action.body).commands;
+      preflightCommands = parseAndValidateFlow(action.body, {
+        flowDir: dirname(action.filePath),
+        flowRoot: dirname(action.filePath),
+      }).commands;
     } catch (err) {
       return failResult(
         `Action ${args.actionId} is not valid Maestro YAML: ${err instanceof Error ? err.message : String(err)}`,

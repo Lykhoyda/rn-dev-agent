@@ -180,34 +180,50 @@ const RN_VERIFY = join(
   'rn-verify',
 );
 
-function writePinnedStub(cache: string) {
+const COLLECT_FEEDBACK = join(
+  dirname(fileURLToPath(import.meta.url)),
+  '..',
+  '..',
+  '..',
+  '..',
+  'scripts',
+  'collect-feedback.sh',
+);
+
+test('test manifest cannot redefine canonical checksums or authorize execution', () => {
+  const cache = mkdtempSync(join(tmpdir(), 'mr-checksum-override-'));
+  const marker = join(cache, 'runner-executed');
   const pinDir = join(cache, 'maestro-runner', MAESTRO_RUNNER_PIN.version, 'bin');
   mkdirSync(pinDir, { recursive: true });
   const bin = join(pinDir, 'maestro-runner');
-  writeFileSync(bin, '#!/bin/sh\necho maestro-runner 1.1.24\n');
+  writeFileSync(bin, `#!/bin/sh\necho hit > "${marker}"\necho maestro-runner 1.1.24\n`);
   chmodSync(bin, 0o755);
-  const sha = createHash('sha256').update(readFileSync(bin)).digest('hex');
-  const manifest = join(cache, 'pin.json');
+  const fakeSha = createHash('sha256').update(readFileSync(bin)).digest('hex');
+  const manifest = join(cache, 'same-version-other-checksums.json');
   writeFileSync(
     manifest,
     JSON.stringify({
-      version: '1.1.24',
+      version: MAESTRO_RUNNER_PIN.version,
       sha256: {
-        'darwin-arm64': sha,
-        'darwin-x64': sha,
-        'linux-x64': sha,
-        'linux-arm64': sha,
+        'darwin-arm64': fakeSha,
+        'darwin-x64': fakeSha,
+        'linux-x64': fakeSha,
+        'linux-arm64': fakeSha,
       },
       knownQuirks: [],
     }),
   );
-  return { bin, manifest };
-}
+  const printed = spawnSync('bash', [SCRIPT, '--print-pin-json'], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      RN_DEV_AGENT_TEST_PIN_MANIFEST: manifest,
+    },
+  });
+  assert.equal(printed.status, 0);
+  assert.deepEqual(JSON.parse(printed.stdout), MAESTRO_RUNNER_PIN);
 
-test('--print-bin emits the pin-cache path only when version and checksum match', () => {
-  const cache = mkdtempSync(join(tmpdir(), 'mr-print-bin-'));
-  const { bin, manifest } = writePinnedStub(cache);
-  const result = spawnSync('bash', [SCRIPT, '--print-bin'], {
+  const refused = spawnSync('bash', [SCRIPT, '--print-bin'], {
     encoding: 'utf8',
     env: {
       ...process.env,
@@ -215,9 +231,8 @@ test('--print-bin emits the pin-cache path only when version and checksum match'
       RN_DEV_AGENT_TEST_PIN_MANIFEST: manifest,
     },
   });
-  assert.equal(result.status, 0);
-  assert.equal(result.stdout.trim(), bin);
-  assert.doesNotMatch(result.stdout, /Installing maestro-runner/);
+  assert.notEqual(refused.status, 0);
+  assert.throws(() => readFileSync(marker));
 });
 
 test('--print-bin ignores a PATH maestro-runner when the pin-cache is missing', () => {
@@ -277,8 +292,43 @@ test('test manifest cannot redefine the production pin version', () => {
     },
   });
   assert.notEqual(result.status, 0);
-  assert.match(`${result.stdout}${result.stderr}`, /must be 1\.1\.24/);
+  assert.match(`${result.stdout}${result.stderr}`, /not exactly 1\.1\.24/);
   assert.throws(() => readFileSync(marker));
+});
+
+test('feedback collection uses package-local pin diagnosis without executing ambient runner', () => {
+  const pluginRoot = mkdtempSync(join(tmpdir(), 'rn-feedback-pin-'));
+  const scriptsDir = join(pluginRoot, 'scripts');
+  const runtimeDir = join(pluginRoot, 'rn-dev-agent-core', 'dist');
+  const home = join(pluginRoot, 'home');
+  const ambientDir = join(home, '.maestro-runner', 'bin');
+  const diagnoseMarker = join(pluginRoot, 'diagnose-used');
+  const ambientMarker = join(pluginRoot, 'ambient-used');
+  mkdirSync(scriptsDir, { recursive: true });
+  mkdirSync(runtimeDir, { recursive: true });
+  mkdirSync(ambientDir, { recursive: true });
+  const collector = join(scriptsDir, 'collect-feedback.sh');
+  writeFileSync(collector, readFileSync(COLLECT_FEEDBACK));
+  chmodSync(collector, 0o755);
+  writeFileSync(
+    join(runtimeDir, 'maestro-runner-pin.js'),
+    `const { writeFileSync } = require('node:fs');\nwriteFileSync(${JSON.stringify(diagnoseMarker)}, 'yes');\nconsole.log(JSON.stringify({ status: 'pinned-ok', installedVersion: '1.1.24', pinned: '1.1.24', provenance: 'pin-cache' }));\nprocess.exit(1);\n`,
+  );
+  writeFileSync(
+    join(ambientDir, 'maestro-runner'),
+    `#!/bin/sh\necho ambient > "${ambientMarker}"\necho maestro-runner 9.9.9\n`,
+  );
+  chmodSync(join(ambientDir, 'maestro-runner'), 0o755);
+
+  const result = spawnSync('bash', [collector], {
+    encoding: 'utf8',
+    env: { ...process.env, HOME: home, RN_PROJECT_ROOT: pluginRoot },
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(readFileSync(diagnoseMarker, 'utf8'), 'yes');
+  assert.throws(() => readFileSync(ambientMarker));
+  assert.equal(JSON.parse(result.stdout).environment.maestro_runner, '1.1.24 (pinned-ok, pin-cache)');
 });
 
 test('verify.sh refuses PATH or ~/.maestro-runner and names the supported correction', () => {

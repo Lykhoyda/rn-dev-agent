@@ -23,29 +23,20 @@ manifest_value() {
 }
 
 MAESTRO_RUNNER_PIN_VERSION="$(manifest_value "$CANONICAL_PIN_MANIFEST" version)"
-PIN_MANIFEST="${RN_DEV_AGENT_TEST_PIN_MANIFEST:-$CANONICAL_PIN_MANIFEST}"
-if [ ! -f "$PIN_MANIFEST" ]; then
-  echo "ERROR: maestro-runner test pin manifest is missing."
-  exit 1
-fi
-MANIFEST_VERSION="$(manifest_value "$PIN_MANIFEST" version)"
-if [ "$MANIFEST_VERSION" != "$MAESTRO_RUNNER_PIN_VERSION" ]; then
-  echo "ERROR: maestro-runner pin manifest version must be $MAESTRO_RUNNER_PIN_VERSION."
-  exit 1
-fi
 
 if [ "${1:-}" = "--print-pin-json" ]; then
-  node -e 'const m=require(process.argv[1]); process.stdout.write(JSON.stringify(m))' "$PIN_MANIFEST"
+  node -e 'const m=require(process.argv[1]); process.stdout.write(JSON.stringify(m))' "$CANONICAL_PIN_MANIFEST"
   exit 0
 fi
 
-MAESTRO_RUNNER_PIN_SHA256_DARWIN_ARM64="$(manifest_value "$PIN_MANIFEST" sha256.darwin-arm64)"
-MAESTRO_RUNNER_PIN_SHA256_DARWIN_X64="$(manifest_value "$PIN_MANIFEST" sha256.darwin-x64)"
-MAESTRO_RUNNER_PIN_SHA256_LINUX_X64="$(manifest_value "$PIN_MANIFEST" sha256.linux-x64)"
-MAESTRO_RUNNER_PIN_SHA256_LINUX_ARM64="$(manifest_value "$PIN_MANIFEST" sha256.linux-arm64)"
+MAESTRO_RUNNER_PIN_SHA256_DARWIN_ARM64="$(manifest_value "$CANONICAL_PIN_MANIFEST" sha256.darwin-arm64)"
+MAESTRO_RUNNER_PIN_SHA256_DARWIN_X64="$(manifest_value "$CANONICAL_PIN_MANIFEST" sha256.darwin-x64)"
+MAESTRO_RUNNER_PIN_SHA256_LINUX_X64="$(manifest_value "$CANONICAL_PIN_MANIFEST" sha256.linux-x64)"
+MAESTRO_RUNNER_PIN_SHA256_LINUX_ARM64="$(manifest_value "$CANONICAL_PIN_MANIFEST" sha256.linux-arm64)"
 
 CACHE_PARENT="${RN_DEV_AGENT_RUNNER_CACHE:-$HOME/.cache/rn-dev-agent}"
-PIN_DIR="$CACHE_PARENT/maestro-runner/$MAESTRO_RUNNER_PIN_VERSION"
+RUNNER_CACHE_ROOT="$CACHE_PARENT/maestro-runner"
+PIN_DIR="$RUNNER_CACHE_ROOT/$MAESTRO_RUNNER_PIN_VERSION"
 BIN="$PIN_DIR/bin/maestro-runner"
 DOWNLOAD_BASE="https://open.devicelab.dev/download/maestro-runner"
 
@@ -129,6 +120,14 @@ EXPECTED_SHA="$(expected_sha)"
 if [ -z "$EXPECTED_SHA" ]; then
   unsupported_fail
 fi
+
+for guarded_path in "$RUNNER_CACHE_ROOT" "$PIN_DIR" "$PIN_DIR/bin" "$BIN"; do
+  if [ -L "$guarded_path" ]; then
+    echo "ERROR: refusing maestro-runner pin-cache symlink at $guarded_path."
+    correction
+    exit 1
+  fi
+done
 
 bin_matches_pin() {
   if [ ! -x "$BIN" ]; then

@@ -83,27 +83,16 @@ fi
 # Find flow directory
 if [ -z "$FLOW_DIR" ]; then
   # Walk up from CWD to find .rn-agent/actions/
-  LEGACY_FOUND=""
   DIR="$PWD"
   while [ "$DIR" != "/" ]; do
     if [ -d "$DIR/.rn-agent/actions" ]; then
       FLOW_DIR="$DIR/.rn-agent/actions"
       break
     fi
-    if [ -z "$LEGACY_FOUND" ] && [ -d "$DIR/.maestro/flows" ]; then
-      LEGACY_FOUND="$DIR/.maestro/flows"
-    fi
     DIR=$(dirname "$DIR")
   done
   if [ -z "$FLOW_DIR" ]; then
-    if [ -n "$LEGACY_FOUND" ]; then
-      echo "ERROR: No .rn-agent/actions/ directory found." >&2
-      echo "NOTE: D1208 changed the default flow directory from .maestro/flows/ to .rn-agent/actions/." >&2
-      echo "      Found .maestro/flows/ at $LEGACY_FOUND — run with --flow-dir $LEGACY_FOUND" >&2
-      echo "      to keep prior behavior, or run /rn-dev-agent:setup to scaffold the new layout." >&2
-    else
-      echo "ERROR: No .rn-agent/actions/ directory found. Run /rn-dev-agent:setup or pass --flow-dir explicitly." >&2
-    fi
+    echo "ERROR: No owned .rn-agent/actions/ directory found. Run /rn-dev-agent:setup and migrate or create compatible owned actions." >&2
     exit 2
   fi
 fi

@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import type { ToolResult } from '../utils.js';
 import { okResult, failResult } from '../utils.js';
 import { findProjectRoot } from '../nav-graph/storage.js';
@@ -10,8 +10,14 @@ import {
 } from '../domain/maestro-validator.js';
 import { ACTION_ENGINE_PIN } from '../domain/engine-pin.js';
 import { regexSelectorCapabilityRefusal } from '../domain/action-engine-compat.js';
-import { joinYaml, splitYaml } from '../domain/action-store.js';
+import {
+  assertOwnedActionCorpus,
+  joinYaml,
+  resolveActionPath,
+  splitYaml,
+} from '../domain/action-store.js';
 import { serializeM7Header } from '../domain/reusable-action.js';
+import { isValidActionId } from '../domain/path-safety.js';
 
 interface MaestroStep {
   action: 'tap' | 'fill' | 'assert' | 'scroll' | 'navigate' | 'back' | 'wait' | 'swipe' | 'launch';
@@ -108,16 +114,30 @@ export function createMaestroGenerateHandler(): (args: MaestroGenerateArgs) => P
       return failResult('Cannot determine project root. Pass outputDir explicitly.');
     }
 
-    if (!existsSync(outputDir)) {
-      mkdirSync(outputDir, { recursive: true });
-    }
-
     const sanitizedName = args.name.replace(/[^a-zA-Z0-9_-]/g, '-').toLowerCase();
-    if (!sanitizedName.replace(/-/g, '')) {
-      return failResult('Flow name must contain at least one letter, number, or underscore.');
+    if (!isValidActionId(sanitizedName)) {
+      return failResult(
+        'Flow name must produce an action id that starts with a letter or number and is at most 64 characters.',
+      );
     }
     const fileName = `${sanitizedName}.yaml`;
     const filePath = join(outputDir, fileName);
+
+    try {
+      const learnedProjectRoot =
+        basename(outputDir) === 'actions' && basename(dirname(outputDir)) === '.rn-agent'
+          ? dirname(dirname(outputDir))
+          : null;
+      const existingPath = learnedProjectRoot
+        ? resolveActionPath(learnedProjectRoot, sanitizedName)
+        : [filePath, join(outputDir, `${sanitizedName}.yml`)].find((path) => existsSync(path));
+      if (existingPath) {
+        return failResult(`Action ${sanitizedName} already exists at ${existingPath}.`);
+      }
+      if (learnedProjectRoot) assertOwnedActionCorpus(learnedProjectRoot);
+    } catch (err) {
+      return failResult(err instanceof Error ? err.message : String(err));
+    }
 
     if (args.appId !== undefined && !isValidBundleId(args.appId)) {
       return failResult(`Invalid appId '${String(args.appId).slice(0, 80)}' (Phase 134.1)`);
@@ -153,6 +173,9 @@ export function createMaestroGenerateHandler(): (args: MaestroGenerateArgs) => P
       throw err;
     }
 
+    if (!existsSync(outputDir)) {
+      mkdirSync(outputDir, { recursive: true });
+    }
     writeFileSync(filePath, content, 'utf-8');
 
     return okResult({

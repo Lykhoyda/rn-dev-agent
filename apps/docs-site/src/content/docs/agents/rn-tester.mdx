@@ -41,7 +41,7 @@ Writes a test plan before executing: starting state, steps to exercise, expected
 
 ### Step 2.5: Auth Pre-flight
 
-Checks `cdp_navigation_state` for auth-gated screens. If logged out, discovers and runs an owned login subflow through the exact pin-cache maestro-runner; missing owned automation is terminal rather than a manual-login fallback.
+Checks `cdp_navigation_state` for auth-gated screens. If logged out, selects a compatible owned learned action and replays it through `cdp_run_action` on the authority-bound device. Missing or incompatible owned automation is terminal; `cdp_auto_login` requires explicit authorization for legacy per-call recovery and never counts as durable authority or PR proof.
 
 ### Step 2.6: Permission Pre-flight
 

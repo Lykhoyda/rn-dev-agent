@@ -17,7 +17,7 @@ import {
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
-import { actionPathFor, loadAction } from '../domain/action-store.js';
+import { loadAction, resolveActionPath } from '../domain/action-store.js';
 import {
   hashProofArgs,
   hashProofValue,
@@ -650,7 +650,8 @@ export function readProofActionIdentity(
   actionId: string,
 ): ProofAction | null {
   try {
-    const path = actionPathFor(appProjectRoot, actionId);
+    const path = resolveActionPath(appProjectRoot, actionId);
+    if (!path) return null;
     const bytesBefore = readFileSync(path);
     const action = loadAction(appProjectRoot, actionId);
     const bytesAfter = readFileSync(path);

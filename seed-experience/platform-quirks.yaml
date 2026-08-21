@@ -44,7 +44,7 @@ platform_quirks:
 
     - id: PQ_ANDROID_MAESTRO_GRPC
       quirk: Classic Maestro gRPC driver is unreliable on Android (UNAVAILABLE io exception)
-      workaround: Always use maestro-runner which uses HTTP to UIAutomator2 instead of gRPC
+      workaround: Replay through maestro_run or cdp_run_action, which select the exact verified pin-cache maestro-runner and use HTTP to UIAutomator2 instead of gRPC
       notes: Upstream Maestro issue #998, open since April 2023. maestro-runner eliminates this class of errors entirely.
 
     - id: PQ_ANDROID_TEXT_INPUT_CRASH

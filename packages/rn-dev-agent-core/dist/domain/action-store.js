@@ -5,13 +5,14 @@
 // composite. Underpins /run-action, self-repair, and auto-emission —
 // they all read/write through this single chokepoint so schema
 // invariants stay enforced.
-import { existsSync, readFileSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import { parseM7Header, serializeM7Header, } from './reusable-action.js';
 import { loadOrInitSidecar, markSeen, saveSidecar, sidecarPathFor, yamlEditedSinceLastSeen, } from './sidecar-io.js';
 import { atomicWriter } from './atomic-writer.js';
 import { assertValidActionId, assertWithinDir } from './path-safety.js';
 import { mirrorToDb } from './action-state-store.js';
+import { resolveWorktreeLayout } from '../session/worktree-inheritance.js';
 /**
  * Resolve the canonical YAML path for an action id under a project root.
  * Mirrors the .rn-agent/actions/ convention (D1208 single-folder doctrine,
@@ -27,15 +28,89 @@ import { mirrorToDb } from './action-state-store.js';
 export function actionPathFor(projectRoot, actionId) {
     assertValidActionId(actionId, 'actionPathFor');
     const actionsDir = join(projectRoot, '.rn-agent', 'actions');
+    assertOwnedActionCorpus(projectRoot);
     const fileName = `${actionId}.yaml`;
     assertWithinDir(fileName, actionsDir);
     return join(actionsDir, fileName);
 }
+export function assertOwnedActionCorpus(projectRoot) {
+    for (const path of [join(projectRoot, '.rn-agent'), join(projectRoot, '.rn-agent', 'actions')]) {
+        const stat = lstatIfPresent(path);
+        if (stat?.isSymbolicLink()) {
+            throw new Error(`Refusing learned-action corpus symlink at ${path}.`);
+        }
+    }
+}
+export function assertReadableActionCorpus(projectRoot) {
+    const rnAgentDir = join(projectRoot, '.rn-agent');
+    const actionsDir = join(rnAgentDir, 'actions');
+    const rnAgentStat = lstatIfPresent(rnAgentDir);
+    if (rnAgentStat?.isSymbolicLink()) {
+        throw new Error(`Refusing learned-action corpus symlink at ${rnAgentDir}.`);
+    }
+    const actionsStat = lstatIfPresent(actionsDir);
+    if (!actionsStat?.isSymbolicLink())
+        return;
+    const target = realpathSync(actionsDir);
+    const layout = resolveWorktreeLayout({ cwd: projectRoot, appRoot: projectRoot });
+    const primaryRnAgentDir = 'primaryAppRoot' in layout && layout.primaryAppRoot
+        ? join(layout.primaryAppRoot, '.rn-agent')
+        : null;
+    const primaryActionsDir = primaryRnAgentDir ? join(primaryRnAgentDir, 'actions') : null;
+    const expectedTarget = primaryRnAgentDir &&
+        primaryActionsDir &&
+        'kind' in layout &&
+        layout.kind === 'linked' &&
+        !layout.refusal &&
+        isOwnedDirectory(primaryRnAgentDir) &&
+        isOwnedDirectory(primaryActionsDir)
+        ? canonicalPath(primaryActionsDir)
+        : null;
+    if (!expectedTarget || target !== expectedTarget || !statSync(target).isDirectory()) {
+        throw new Error(`Refusing foreign learned-action corpus symlink at ${actionsDir}.`);
+    }
+}
+function isOwnedDirectory(path) {
+    const stat = lstatIfPresent(path);
+    return Boolean(stat?.isDirectory() && !stat.isSymbolicLink());
+}
+function canonicalPath(path) {
+    try {
+        return realpathSync(path);
+    }
+    catch {
+        return null;
+    }
+}
+function lstatIfPresent(path) {
+    try {
+        return lstatSync(path);
+    }
+    catch (err) {
+        if (err.code === 'ENOENT')
+            return null;
+        throw err;
+    }
+}
+function actionFileExists(path) {
+    const stat = lstatIfPresent(path);
+    if (!stat)
+        return false;
+    if (stat.isSymbolicLink()) {
+        throw new Error(`Refusing inherited action symlink at ${path}.`);
+    }
+    return true;
+}
 export function resolveActionPath(projectRoot, actionId) {
-    const yamlPath = actionPathFor(projectRoot, actionId);
+    assertValidActionId(actionId, 'resolveActionPath');
+    assertReadableActionCorpus(projectRoot);
+    const actionsDir = join(projectRoot, '.rn-agent', 'actions');
+    const fileName = `${actionId}.yaml`;
+    assertWithinDir(fileName, actionsDir);
+    const yamlPath = join(actionsDir, fileName);
     const ymlPath = yamlPath.replace(/\.yaml$/, '.yml');
-    const yamlExists = existsSync(yamlPath);
-    const ymlExists = existsSync(ymlPath);
+    const yamlExists = actionFileExists(yamlPath);
+    const ymlExists = actionFileExists(ymlPath);
     if (yamlExists && ymlExists) {
         throw new Error(`Action ${actionId} is ambiguous because both ${actionId}.yaml and ${actionId}.yml exist; keep exactly one file before replay.`);
     }
@@ -196,6 +271,7 @@ export class SaveActionPreconditionError extends Error {
     }
 }
 export function saveAction(action) {
+    assertWritableActionFile(action.filePath);
     // GH #113: soft-assertion contract enforcement. Both current callers
     // (cdp_repair_action, cdp_record_test_save_as_action) gate this check
     // correctly, but a future caller (e.g. the planned issue-#104
@@ -409,6 +485,12 @@ export function saveActionRuntimeWithCAS(expected, nextState) {
 }
 /** Byte-preserving lifecycle promotion; comments/body remain exactly intact. */
 export function promoteActionRuntimeWithCAS(expected, nextState) {
+    try {
+        assertWritableActionFile(expected.filePath);
+    }
+    catch {
+        return { ok: false, conflict: 'EXTERNAL_WRITE' };
+    }
     const sidecarPath = sidecarPathFor(expected.filePath);
     if (existsSync(sidecarPath)) {
         if (!runtimeSidecarMatches(sidecarPath, expected.state)) {
@@ -431,6 +513,15 @@ export function promoteActionRuntimeWithCAS(expected, nextState) {
     const written = atomicWriter.pairWrite(expected.filePath, promoted, sidecarPath, nextState);
     expected.state = { ...nextState, lastSeenMtimeMs: written.finalMtimeMs };
     return { ok: true, sidecarPath };
+}
+function assertWritableActionFile(filePath) {
+    const actionsDir = dirname(filePath);
+    const rnAgentDir = dirname(actionsDir);
+    if (basename(actionsDir) !== 'actions' || basename(rnAgentDir) !== '.rn-agent') {
+        throw new Error(`Refusing action mutation outside an owned learned-action corpus: ${filePath}.`);
+    }
+    assertOwnedActionCorpus(dirname(rnAgentDir));
+    actionFileExists(filePath);
 }
 /**
  * Update only the M7 metadata of an action without touching the body.

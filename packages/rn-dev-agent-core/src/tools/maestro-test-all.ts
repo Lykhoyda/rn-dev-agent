@@ -1,7 +1,7 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { ToolResult } from '../utils.js';
 import { okResult, failResult, warnResult } from '../utils.js';
@@ -31,10 +31,13 @@ import {
   type ReplayEngineStatus,
 } from '../domain/engine-pin.js';
 import {
+  classifyLearnedActionPath,
   isLearnedActionPath,
   replayCompatibilityPreflight,
+  standaloneLearnedActionPathRefusal,
 } from '../domain/action-engine-compat.js';
 import { parseM7Header } from '../domain/reusable-action.js';
+import { resolveActionPath } from '../domain/action-store.js';
 import { flowUsesClearState, resolveAppFileForClearState } from './resolve-ios-app-file.js';
 import {
   maestroAuthorityRefusal,
@@ -100,9 +103,11 @@ interface PreparedFlow {
   reinstallsApp: boolean;
 }
 
-function discoverFlows(dir: string, pattern?: string): string[] {
+function discoverFlows(dir: string, pattern?: string, topLevelOnly = false): string[] {
   if (!existsSync(dir)) return [];
-  const files = readdirSync(dir, { recursive: true }) as string[];
+  const files = topLevelOnly
+    ? readdirSync(dir)
+    : (readdirSync(dir, { recursive: true }) as string[]);
   const yamls = files
     .filter((f) => f.endsWith('.yaml') || f.endsWith('.yml'))
     .map((f) => join(dir, f))
@@ -175,7 +180,18 @@ export function createMaestroTestAllHandler(
       return failResult('Cannot determine project root. Pass flowDir explicitly.');
     }
 
-    const flows = discoverFlows(flowDir, args.pattern);
+    const resolvedFlowDir = resolve(flowDir);
+    const flowDirClassification = classifyLearnedActionPath(
+      join(resolvedFlowDir, '__action__.yaml'),
+    );
+    if (flowDirClassification === 'descendant') {
+      return failResult(
+        `Refusing to execute learned-action descendants from ${resolvedFlowDir} as standalone flows.`,
+      );
+    }
+    const learnedCorpus = flowDirClassification === 'action';
+    const learnedProjectRoot = learnedCorpus ? dirname(dirname(resolvedFlowDir)) : null;
+    const flows = discoverFlows(flowDir, args.pattern, learnedCorpus);
     if (flows.length === 0) {
       return failResult(
         `No Maestro flows found in ${flowDir}. Generate flows with maestro_generate first.`,
@@ -188,6 +204,15 @@ export function createMaestroTestAllHandler(
       const name = flow.replace(flowDir + '/', '');
       const start = now();
       try {
+        const actionPathRefusal = standaloneLearnedActionPathRefusal(flow);
+        if (actionPathRefusal) throw new Error(actionPathRefusal);
+        if (learnedProjectRoot) {
+          const actionId = basename(flow).replace(/\.ya?ml$/i, '');
+          const resolvedAction = resolveActionPath(learnedProjectRoot, actionId);
+          if (resolvedAction === null || resolve(resolvedAction) !== resolve(flow)) {
+            throw new Error(`Action ${actionId} does not resolve to ${flow}.`);
+          }
+        }
         const yamlText = readFileSync(flow, 'utf-8');
         const parsed = parseAndValidateFlow(yamlText, {
           flowDir: dirname(flow),

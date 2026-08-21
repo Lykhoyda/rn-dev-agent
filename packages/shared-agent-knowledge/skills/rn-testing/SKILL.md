@@ -59,7 +59,7 @@ Do not silently take the cheaper path. The user reviewing your output cannot tel
 
 ### When shortcuts are legitimate
 
-- **Auth pre-flight** (auto-login via deep-link) — bootstrap, not verification surface
+- **Auth pre-flight** (compatible owned action; explicitly authorized legacy helper only when needed) — bootstrap, not verification surface
 - **Permission pre-flight** (granting via `device_permission`) — platform setup, declared upfront
 - **Test data seeding** (via app's test-only fixtures) — declared in the test plan
 - **Explicit user instruction** ("just deep-link to the details screen and check the layout") — user-sanctioned scope
@@ -321,11 +321,11 @@ maestro_run(platform="android", deviceId="<exact emulator serial>", flowPath="fl
 
 ---
 
-## Auth Pre-flight: Auto-login via Maestro Subflows (GH #10)
+## Auth Pre-flight: Owned Learned Actions (GH #10)
 
 Before testing features that require authentication, check if the app is
-on a login/auth screen. If so, use the project's own Maestro subflows
-instead of unreliable manual coordinate taps.
+on a login/auth screen. If so, authentication recovery must use a compatible
+action from the owned learned-action corpus.
 
 ### Detection
 
@@ -337,48 +337,24 @@ typically match: `Login`, `Welcome`, `SignIn`, `Register`, `Onboarding`,
 the Dev Client picker (GH #9), not necessarily auth. Wait 3 seconds and
 retry before concluding the app is logged out.
 
-### Discovery
+### Discovery and execution
 
-Scan for Maestro subflows in the project:
-```bash
-ls .maestro/subflows/ .maestro/ 2>/dev/null
-```
+1. Run `/rn-dev-agent:list-learned-actions login`.
+2. Select one compatible owned action whose metadata establishes authenticated
+   state.
+3. Replay it through `cdp_run_action` on the exact authority-bound device.
+4. Treat any engine-pin, selector, or action-format incompatibility as terminal.
+5. If no compatible owned action exists, stop and report authentication as
+   blocked. Do not use manual taps, `.maestro` flows, ambient runners, or
+   `cdp_auto_login` as an automatic fallback.
 
-**Prefer login over registration** (idempotent, no backend junk):
-1. `login.yaml`, `sign_in.yaml`, `auth.yaml`
-2. `flow_start.yaml` (often includes login)
-3. `register_user.yaml` (last resort — creates accounts)
-
-Read the file to confirm it performs authentication.
-
-### Pre-execution checks
-
-1. **`clearState: true`**: If the subflow contains it and this is a Dev
-   Client build, copy to `/tmp/` and strip the line before running (GH #8).
-2. **Environment variables**: If the flow uses `${EMAIL}`, `${PASSWORD}`,
-   etc., check for `.env` or `.maestro/config.yaml`. Ask the user if needed.
-3. **`appId`**: Subflows often lack `appId`. Wrap them:
-   ```bash
-   cat > /tmp/auth-wrapper.yaml << EOF
-   appId: <bundle-id>
-   ---
-   - launchApp
-   - runFlow:
-       file: $(pwd)/.maestro/subflows/login.yaml
-   EOF
-   ```
-
-### Execution
-
-```text
-maestro_run(platform="<ios|android>", flowPath="/tmp/auth-wrapper.yaml")
-```
-
-If the exact pin is unavailable, STOP and run the package-local setup workflow.
+Only when the user explicitly authorizes legacy per-call navigation recovery may
+`cdp_auto_login` run. It is never durable login authority or PR proof; create or
+migrate an owned compatible action before proof.
 
 ### Verification
 
-After the subflow completes, verify arrival at the main app:
+After replay completes, verify arrival at the main app:
 ```
 cdp_navigation_state → route should be a main screen (Home, Dashboard, Tabs)
 ```
@@ -386,13 +362,11 @@ cdp_navigation_state → route should be a main screen (Home, Dashboard, Tabs)
 ### Rules
 
 - **NEVER** fall back to manual login or an unowned replay flow
-- **NEVER** use `clearState: true` with Dev Client builds (GH #8)
-- **ALWAYS** pass `platform` to `maestro_run`
+- **ALWAYS** use `cdp_run_action` for the owned authentication action
 - **Skip** the notification `permissions` config if testing notification
   permission flows (preserve undetermined state)
-- If no owned login subflow exists, stop and report that authentication cannot
-  proceed through an authorized reusable flow; do not substitute manual login
-  or create an unverified flow during replay
+- If no compatible owned login action exists, stop and report that
+  authentication cannot proceed through an authorized reusable flow
 
 ---
 

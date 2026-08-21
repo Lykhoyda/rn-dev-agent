@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -26,6 +27,7 @@ import { createRunActionHandler } from '../../dist/tools/run-action.js';
 import { createMaestroTestAllHandler } from '../../dist/tools/maestro-test-all.js';
 import { createMaestroRunHandler } from '../../dist/tools/maestro-run.js';
 import { createMaestroGenerateHandler } from '../../dist/tools/maestro-generate.js';
+import { listActions } from '../../dist/domain/action-inventory.js';
 import { runMaestroInline } from '../../dist/maestro-invoke.js';
 import { createTmpProject } from '../helpers/tmp-project.js';
 
@@ -229,6 +231,26 @@ test('migrateLearnedActions expands contained runFlow files before pinning', () 
   assert.match(readFileSync(actionPath, 'utf8'), /enginePin: maestro-runner@1\.1\.24/);
 });
 
+test('migrateLearnedActions refuses yaml and yml action-id collisions without mutation', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-action-migrate-collision-'));
+  const dir = join(root, '.rn-agent', 'actions');
+  mkdirSync(dir, { recursive: true });
+  const yamlPath = join(dir, 'login.yaml');
+  const ymlPath = join(dir, 'login.yml');
+  const source = actionYaml('login');
+  writeFileSync(yamlPath, source, 'utf8');
+  writeFileSync(ymlPath, source, 'utf8');
+
+  const results = migrateLearnedActions(root);
+
+  assert.equal(results.length, 2);
+  assert.equal(results.every((result) => result.status === 'incompatible'), true);
+  assert.equal(results.every((result) => result.mutated === false), true);
+  assert.equal(results.every((result) => /both login\.yaml and login\.yml/.test(result.reason ?? '')), true);
+  assert.equal(readFileSync(yamlPath, 'utf8'), source);
+  assert.equal(readFileSync(ymlPath, 'utf8'), source);
+});
+
 test('migrateLearnedActions reports a non-directory corpus as unreadable', () => {
   const root = mkdtempSync(join(tmpdir(), 'rn-action-unreadable-'));
   mkdirSync(join(root, '.rn-agent'));
@@ -270,6 +292,36 @@ test('cdp_run_action resolves yml actions and refuses extension collisions', asy
   assert.equal(spawned, false);
 });
 
+test('cdp_run_action preflights relative subflows from the action directory', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-action-subflow-replay-'));
+  const dir = join(root, '.rn-agent', 'actions');
+  mkdirSync(join(dir, 'subflows'), { recursive: true });
+  writeFileSync(join(dir, 'subflows', 'steps.yaml'), '- tapOn:\n    id: "continue"\n', 'utf8');
+  writeFileSync(
+    join(dir, 'checkout.yaml'),
+    actionYaml(
+      'checkout',
+      '# enginePin: maestro-runner@1.1.24',
+      '- runFlow: subflows/steps.yaml\n',
+    ),
+    'utf8',
+  );
+  let replayedPath: string | undefined;
+  const handler = createRunActionHandler({
+    maestroRun: async (args) => {
+      replayedPath = args.flowPath;
+      return { content: [{ type: 'text', text: '{"ok":true,"data":{"passed":true}}' }] };
+    },
+    engineStatus: async () => PINNED(),
+  });
+
+  const result = await handler({ actionId: 'checkout', projectRoot: root });
+  const envelope = JSON.parse(result.content[0]!.text);
+
+  assert.equal(envelope.ok, true);
+  assert.equal(replayedPath, join(dir, 'checkout.yaml'));
+});
+
 test('maestro_generate emits a pinned replayable action without regex waits', async () => {
   const outputDir = mkdtempSync(join(tmpdir(), 'rn-maestro-generate-'));
   const result = await createMaestroGenerateHandler()({
@@ -286,6 +338,87 @@ test('maestro_generate emits a pinned replayable action without regex waits', as
   assert.match(generated, /# enginePin: maestro-runner@1\.1\.24/);
   assert.match(generated, /waitForAnimationToEnd/);
   assert.doesNotMatch(generated, /visible:\s*['"]?\.\*/);
+});
+
+test('maestro_generate refuses invalid action ids before writing', async () => {
+  const outputDir = mkdtempSync(join(tmpdir(), 'rn-maestro-generate-invalid-'));
+  for (const name of [' login', 'a'.repeat(65)]) {
+    const result = await createMaestroGenerateHandler()({
+      name,
+      outputDir,
+      steps: [{ action: 'tap', testID: 'continue' }],
+    });
+    assert.equal(JSON.parse(result.content[0]!.text).ok, false);
+  }
+  assert.equal(existsSync(join(outputDir, '-login.yaml')), false);
+  assert.equal(existsSync(join(outputDir, `${'a'.repeat(65)}.yaml`)), false);
+});
+
+test('maestro_generate refuses an existing yml action instead of creating a collision', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-maestro-generate-collision-'));
+  const outputDir = join(root, '.rn-agent', 'actions');
+  mkdirSync(outputDir, { recursive: true });
+  writeFileSync(join(outputDir, 'login.yml'), actionYaml('login'), 'utf8');
+
+  const result = await createMaestroGenerateHandler()({
+    name: 'login',
+    outputDir,
+    steps: [{ action: 'tap', testID: 'continue' }],
+  });
+
+  const envelope = JSON.parse(result.content[0]!.text);
+  assert.equal(envelope.ok, false);
+  assert.match(String(envelope.error), /already exists/);
+  assert.equal(existsSync(join(outputDir, 'login.yaml')), false);
+});
+
+test('maestro_generate refuses symlinked corpus ownership and dangling action links', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-maestro-generate-symlink-'));
+  const rnAgentDir = join(root, '.rn-agent');
+  const externalProject = mkdtempSync(join(tmpdir(), 'rn-maestro-generate-owner-'));
+  const externalDir = join(externalProject, '.rn-agent', 'actions');
+  mkdirSync(rnAgentDir, { recursive: true });
+  mkdirSync(externalDir, { recursive: true });
+  const outputDir = join(rnAgentDir, 'actions');
+  symlinkSync(externalDir, outputDir, 'dir');
+
+  const inherited = await createMaestroGenerateHandler()({
+    name: 'login',
+    outputDir,
+    steps: [{ action: 'tap', testID: 'continue' }],
+  });
+  assert.equal(JSON.parse(inherited.content[0]!.text).ok, false);
+  assert.equal(existsSync(join(externalDir, 'login.yaml')), false);
+
+  const localRoot = mkdtempSync(join(tmpdir(), 'rn-maestro-generate-dangling-'));
+  const localActions = join(localRoot, '.rn-agent', 'actions');
+  mkdirSync(localActions, { recursive: true });
+  symlinkSync(join(localRoot, 'missing.yml'), join(localActions, 'login.yml'));
+  const dangling = await createMaestroGenerateHandler()({
+    name: 'login',
+    outputDir: localActions,
+    steps: [{ action: 'tap', testID: 'continue' }],
+  });
+  assert.equal(JSON.parse(dangling.content[0]!.text).ok, false);
+  assert.equal(existsSync(join(localActions, 'login.yaml')), false);
+});
+
+test('Observe action inventory refuses symlinked corpora and extension collisions', async () => {
+  const inheritedRoot = mkdtempSync(join(tmpdir(), 'rn-action-inventory-symlink-'));
+  const inheritedAgent = join(inheritedRoot, '.rn-agent');
+  const externalDir = mkdtempSync(join(tmpdir(), 'rn-action-inventory-external-'));
+  mkdirSync(inheritedAgent, { recursive: true });
+  writeFileSync(join(externalDir, 'login.yaml'), actionYaml('login'), 'utf8');
+  symlinkSync(externalDir, join(inheritedAgent, 'actions'), 'dir');
+  await assert.rejects(() => listActions(inheritedRoot), /corpus symlink/);
+
+  const collisionRoot = mkdtempSync(join(tmpdir(), 'rn-action-inventory-collision-'));
+  const collisionDir = join(collisionRoot, '.rn-agent', 'actions');
+  mkdirSync(collisionDir, { recursive: true });
+  const source = actionYaml('login');
+  writeFileSync(join(collisionDir, 'login.yaml'), source, 'utf8');
+  writeFileSync(join(collisionDir, 'login.yml'), source, 'utf8');
+  await assert.rejects(() => listActions(collisionRoot), /both login\.yaml and login\.yml/);
 });
 
 test('maestro_run refuses a drifted learned action before spawn', async () => {
@@ -312,6 +445,69 @@ test('maestro_run refuses a drifted learned action before spawn', async () => {
   const body = JSON.parse(result.content[0]!.text);
   assert.equal(body.ok, false);
   assert.match(String(body.error), /1\.0\.9/);
+  assert.equal(spawned, false);
+});
+
+test('maestro_run enforces M7 engine metadata outside the learned-action directory', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'rn-moved-action-'));
+  const flowPath = join(dir, 'login.yaml');
+  writeFileSync(flowPath, actionYaml('login', '# enginePin: maestro-runner@1.0.9'), 'utf8');
+  let spawned = false;
+  const handler = createMaestroRunHandler({
+    getActiveSession: () => ({ platform: 'ios', deviceId: 'SIM', appId: 'com.test.app' }) as never,
+    chooseDispatch: () => ({
+      runner: 'maestro-runner',
+      binPath: '/fake/maestro-runner',
+      buildArgs: () => [],
+    }),
+    resolveEngineStatus: async () => PINNED(),
+    execFile: async () => {
+      spawned = true;
+      return { stdout: '', stderr: '' };
+    },
+  });
+
+  const result = await handler({ platform: 'ios', flowPath });
+  const envelope = JSON.parse(result.content[0]!.text);
+
+  assert.equal(envelope.ok, false);
+  assert.match(String(envelope.error), /maestro-runner@1\.0\.9/);
+  assert.equal(spawned, false);
+});
+
+test('maestro_run refuses ambiguous actions and standalone action descendants', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-action-path-boundary-'));
+  const dir = join(root, '.rn-agent', 'actions');
+  const subflows = join(dir, 'subflows');
+  mkdirSync(subflows, { recursive: true });
+  const source = actionYaml('login', '# enginePin: maestro-runner@1.1.24');
+  writeFileSync(join(dir, 'login.yaml'), source, 'utf8');
+  writeFileSync(join(dir, 'login.yml'), source, 'utf8');
+  const descendant = join(subflows, 'steps.yaml');
+  writeFileSync(descendant, '- tapOn:\n    id: "continue"\n', 'utf8');
+  const descendantAlias = join(root, 'steps-link.yaml');
+  symlinkSync(descendant, descendantAlias);
+  let spawned = false;
+  const handler = createMaestroRunHandler({
+    getActiveSession: () => ({ platform: 'ios', deviceId: 'SIM', appId: 'com.test.app' }) as never,
+    chooseDispatch: () => ({
+      runner: 'maestro-runner',
+      binPath: '/fake/maestro-runner',
+      buildArgs: () => [],
+    }),
+    resolveEngineStatus: async () => PINNED(),
+    execFile: async () => {
+      spawned = true;
+      return { stdout: '', stderr: '' };
+    },
+  });
+
+  for (const flowPath of [join(dir, 'login.yaml'), descendant, descendantAlias]) {
+    const result = await handler({ platform: 'ios', flowPath });
+    const envelope = JSON.parse(result.content[0]!.text);
+    assert.equal(envelope.ok, false);
+    assert.equal(envelope.code, 'BAD_RECORDING');
+  }
   assert.equal(spawned, false);
 });
 
@@ -531,5 +727,68 @@ test('maestro_test_all preflights the complete suite before any execution', asyn
   assert.equal(body.ok, false);
   assert.equal(body.meta.executed, 0);
   assert.match(String(body.meta.results[0].error), /Log\.n|regex/);
+  assert.equal(spawned, false);
+});
+
+test('maestro_test_all refuses action extension collisions before execution', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-owned-suite-collision-'));
+  const dir = join(root, '.rn-agent', 'actions');
+  mkdirSync(dir, { recursive: true });
+  const source = actionYaml('login', '# enginePin: maestro-runner@1.1.24');
+  writeFileSync(join(dir, 'login.yaml'), source, 'utf8');
+  writeFileSync(join(dir, 'login.yml'), source, 'utf8');
+  let spawned = false;
+  const handler = createMaestroTestAllHandler({
+    getActiveSession: () => ({ platform: 'ios', deviceId: 'SIM', appId: 'com.test.app' }) as never,
+    chooseDispatch: () => ({
+      runner: 'maestro-runner',
+      binPath: '/fake/maestro-runner',
+      buildArgs: () => [],
+    }),
+    resolveEngineStatus: async () => PINNED(),
+    execFile: async () => {
+      spawned = true;
+      return { stdout: '', stderr: '' };
+    },
+  });
+
+  const result = await handler({ platform: 'ios', flowDir: dir });
+  const envelope = JSON.parse(result.content[0]!.text);
+
+  assert.equal(envelope.ok, false);
+  assert.equal(envelope.meta.executed, 0);
+  assert.equal(envelope.meta.failed, 2);
+  assert.match(String(envelope.meta.results[0].error), /both login\.yaml and login\.yml/);
+  assert.equal(spawned, false);
+});
+
+test('maestro_test_all refuses a nested action subflow directory', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-owned-suite-descendant-'));
+  const dir = join(root, '.rn-agent', 'actions', 'subflows');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'steps.yaml'), '- tapOn:\n    id: "continue"\n', 'utf8');
+  const directoryAlias = join(root, 'subflow-link');
+  symlinkSync(dir, directoryAlias, 'dir');
+  let spawned = false;
+  const handler = createMaestroTestAllHandler({
+    getActiveSession: () => ({ platform: 'ios', deviceId: 'SIM', appId: 'com.test.app' }) as never,
+    chooseDispatch: () => ({
+      runner: 'maestro-runner',
+      binPath: '/fake/maestro-runner',
+      buildArgs: () => [],
+    }),
+    resolveEngineStatus: async () => PINNED(),
+    execFile: async () => {
+      spawned = true;
+      return { stdout: '', stderr: '' };
+    },
+  });
+
+  for (const flowDir of [dir, directoryAlias]) {
+    const result = await handler({ platform: 'ios', flowDir });
+    const envelope = JSON.parse(result.content[0]!.text);
+    assert.equal(envelope.ok, false);
+    assert.match(String(envelope.error), /descendant/);
+  }
   assert.equal(spawned, false);
 });

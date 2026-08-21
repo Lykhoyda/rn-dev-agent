@@ -9,7 +9,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { CDPClient, } from './cdp-client.js';
-import { okResult, failResult, warnResult, withConnection } from './utils.js';
+import { okResult, failResult, withConnection } from './utils.js';
 import { annotateMutationAbsence } from './verification/mutation-absence.js';
 import { loadVerificationConfig, getCachedProjectRoot } from './verification/config.js';
 import { logger } from './logger.js';
@@ -2438,7 +2438,7 @@ trackedTool('device_batch', 'Execute a sequence of exact-device UI interactions 
         .default('salient')
         .describe('Shape of the batch final_snapshot. salient (default): compact list of only actionable nodes (Button/TextField/Switch/etc) — far fewer tokens. full: complete node list (legacy). none: skip the implicit trailing snapshot entirely (~1,450 ms saved) for action-only batches you verify via expect_*/cdp_store_state.'),
 }, createDeviceBatchHandler(getClient));
-trackedTool('cdp_auto_login', 'Pre-flight check: detect if the app is on a login/auth screen and auto-login via Maestro subflows from the project. Scans .maestro/subflows/ for login.yaml, sign_in.yaml, auth.yaml, flow_start.yaml, register_user.yaml. Returns { loggedIn: true/false, reason, flow }. Call before proof capture or feature testing when app may be logged out.', {
+trackedTool('cdp_auto_login', 'Explicit legacy navigation helper that detects an auth screen and runs one project login subflow through maestro_run on the authority-bound device. It is per-call recovery only, never durable login authority or PR proof; prefer a compatible owned learned action.', {
     appId: z
         .string()
         .optional()
@@ -2455,7 +2455,15 @@ trackedTool('cdp_auto_login', 'Pre-flight check: detect if the app is on a login
         return okResult(result);
     if (result.reason.includes('not on an auth screen'))
         return okResult(result);
-    return warnResult(result, result.reason);
+    return {
+        content: [
+            {
+                type: 'text',
+                text: JSON.stringify({ ok: false, error: result.reason, data: result }),
+            },
+        ],
+        isError: true,
+    };
 }));
 trackedTool('proof_step', 'Atomic proof capture step: navigate to a screen (optional), wait for settlement, verify an element (optional), and take a screenshot. Combines 3-4 tool calls into one. Use in proof flows to reduce tool-call overhead.', {
     screen: z

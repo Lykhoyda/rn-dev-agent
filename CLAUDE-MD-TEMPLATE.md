@@ -568,8 +568,9 @@ the runner's settle engine.
 Before testing **auth-gated features:**
 1. `cdp_navigation_state` — check if on a login screen
 2. Scan `/rn-dev-agent:list-learned-actions login` — a saved login action with `produces: { authenticated: true }` is the preferred prologue (replay via `cdp_run_action`, ~4s; see Hybrid composition)
-3. Otherwise look for `.maestro/subflows/login.yaml`, or `cdp_auto_login` — auto-detects auth screen and runs the login subflow
-4. `cdp_navigation_state` — verify arrival at home/target screen
+3. If no compatible owned action exists, stop and report authentication as blocked. Do not use manual login, `.maestro` flows, ambient runners, or `cdp_auto_login` as an automatic fallback.
+4. Only when the user explicitly authorizes legacy per-call navigation recovery may `cdp_auto_login` run. It is never durable login authority or PR proof; create or migrate an owned compatible action before proof.
+5. `cdp_navigation_state` — verify arrival at home/target screen
 
 Before testing **permission-gated features:**
 1. `device_permission(action="query", permission="<name>")` — check current state

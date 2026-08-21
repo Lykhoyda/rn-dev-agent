@@ -3293,7 +3293,7 @@ trackedTool(
 
 trackedTool(
   'cdp_auto_login',
-  'Pre-flight check: detect if the app is on a login/auth screen and auto-login via Maestro subflows from the project. Scans .maestro/subflows/ for login.yaml, sign_in.yaml, auth.yaml, flow_start.yaml, register_user.yaml. Returns { loggedIn: true/false, reason, flow }. Call before proof capture or feature testing when app may be logged out.',
+  'Explicit legacy navigation helper that detects an auth screen and runs one project login subflow through maestro_run on the authority-bound device. It is per-call recovery only, never durable login authority or PR proof; prefer a compatible owned learned action.',
   {
     appId: z
       .string()
@@ -3309,7 +3309,15 @@ trackedTool(
     if (result === null) return failResult('CDP not connected or helpers not injected');
     if (result.loggedIn) return okResult(result);
     if (result.reason.includes('not on an auth screen')) return okResult(result);
-    return warnResult(result, result.reason);
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: JSON.stringify({ ok: false, error: result.reason, data: result }),
+        },
+      ],
+      isError: true as const,
+    };
   }),
 );
 

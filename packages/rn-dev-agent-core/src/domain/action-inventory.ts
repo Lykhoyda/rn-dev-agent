@@ -1,6 +1,6 @@
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { loadAction } from './action-store.js';
+import { assertReadableActionCorpus, loadAction } from './action-store.js';
 
 import type { ActionSummary } from '../observability/wire-types.js';
 
@@ -10,21 +10,18 @@ export type { ActionSummary } from '../observability/wire-types.js';
 
 export async function listActions(projectRoot: string): Promise<ActionSummary[]> {
   const actionsDir = join(projectRoot, '.rn-agent', 'actions');
+  assertReadableActionCorpus(projectRoot);
   let files: string[];
   try {
     files = readdirSync(actionsDir);
-  } catch {
-    return [];
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw err;
   }
   const yamlFiles = files.filter((f) => /\.ya?ml$/.test(f)).sort();
   const results: ActionSummary[] = [];
   for (const id of [...new Set(yamlFiles.map((file) => file.replace(/\.ya?ml$/, '')))]) {
-    let action;
-    try {
-      action = loadAction(projectRoot, id);
-    } catch {
-      continue;
-    }
+    const action = loadAction(projectRoot, id);
     if (!action) continue;
     const { metadata } = action;
     const summary: ActionSummary = {

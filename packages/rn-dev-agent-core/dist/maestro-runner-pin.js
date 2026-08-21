@@ -5,9 +5,10 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { doctorPinnedRunner, exactPinRefusal, getEngineStatus, MAESTRO_RUNNER_PIN, nodePlatformKey, _resetEngineStatusForTest, } from './domain/engine-pin.js';
 import { migrateLearnedActions } from './domain/action-engine-compat.js';
-import { isLearnedActionPath, replayCompatibilityPreflight, } from './domain/action-engine-compat.js';
+import { classifyLearnedActionPath, isLearnedActionPath, replayCompatibilityPreflight, standaloneLearnedActionPathRefusal, } from './domain/action-engine-compat.js';
 import { parseAndValidateFlow } from './domain/maestro-validator.js';
 import { parseM7Header } from './domain/reusable-action.js';
+import { resolveActionPath } from './domain/action-store.js';
 import { createMaestroRunHandler } from './tools/maestro-run.js';
 const USAGE = 'usage: maestro-runner-pin [diagnose|install|migrate-actions|verify-actions] [--json] [--root <app>]';
 function ensureScriptPath() {
@@ -91,9 +92,18 @@ async function verifyActions(argv) {
         }
     }
     const flowDir = resolve(flowDirArg);
+    const flowDirClassification = classifyLearnedActionPath(join(flowDir, '__action__.yaml'));
+    if (flowDirClassification === 'descendant') {
+        console.error(`Refusing to execute learned-action descendants from ${flowDir}.`);
+        return 2;
+    }
+    const learnedCorpus = flowDirClassification === 'action';
     let files;
     try {
-        files = readdirSync(flowDir, { recursive: true })
+        const discovered = learnedCorpus
+            ? readdirSync(flowDir)
+            : readdirSync(flowDir, { recursive: true });
+        files = discovered
             .filter((file) => /\.ya?ml$/i.test(file))
             .filter((file) => matcher?.test(file) ?? true)
             .map((file) => join(flowDir, file))
@@ -108,19 +118,23 @@ async function verifyActions(argv) {
         return 2;
     }
     const preflightErrors = [];
-    const ownedIds = new Set();
     for (const file of files) {
         try {
+            const actionPathRefusal = standaloneLearnedActionPathRefusal(file);
+            if (actionPathRefusal)
+                throw new Error(actionPathRefusal);
             const text = readFileSync(file, 'utf8');
             const parsed = parseAndValidateFlow(text, { flowDir: dirname(file), flowRoot: flowDir });
             const id = file.split('/').pop().replace(/\.ya?ml$/i, '');
             const meta = parseM7Header(text, id);
             const owned = isLearnedActionPath(file);
-            if (owned && ownedIds.has(id)) {
-                throw new Error(`both ${id}.yaml and ${id}.yml exist; keep exactly one action file`);
+            if (owned) {
+                const projectRoot = dirname(dirname(dirname(file)));
+                const resolvedPath = resolveActionPath(projectRoot, id);
+                if (resolvedPath === null || resolve(resolvedPath) !== resolve(file)) {
+                    throw new Error(`Action ${id} did not resolve to ${file}`);
+                }
             }
-            if (owned)
-                ownedIds.add(id);
             const refusal = replayCompatibilityPreflight({
                 enginePin: meta?.enginePin,
                 commands: parsed.commands,

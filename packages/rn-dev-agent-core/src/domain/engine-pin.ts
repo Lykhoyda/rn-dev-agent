@@ -9,20 +9,33 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { accessSync, constants, lstatSync, readFileSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import pinManifest from './maestro-runner-pin.json' with { type: 'json' };
 
 const execFile = promisify(execFileCb);
 
 interface MaestroRunnerPinManifest {
-  version: string;
-  sha256: Partial<Record<string, string>>;
-  knownQuirks: Array<{ id: string; ref: string; note: string }>;
+  readonly version: string;
+  readonly sha256: Readonly<Partial<Record<string, string>>>;
+  readonly knownQuirks: ReadonlyArray<Readonly<{ id: string; ref: string; note: string }>>;
 }
 
-export const MAESTRO_RUNNER_PIN: MaestroRunnerPinManifest = pinManifest;
+export const MAESTRO_RUNNER_PIN: MaestroRunnerPinManifest = Object.freeze({
+  version: pinManifest.version,
+  sha256: Object.freeze({ ...pinManifest.sha256 }),
+  knownQuirks: Object.freeze(pinManifest.knownQuirks.map((quirk) => Object.freeze({ ...quirk }))),
+});
+
+const TRUSTED_DRIFT_SHA256 = Object.freeze({
+  '1.0.9': Object.freeze({
+    'darwin-arm64': '7d3777a67f8cc3d5e3927f498ddda8a56c424a10158f7cd4fa494ecc3ed97923',
+    'darwin-x64': '36f8a973c3231b6b8125db4a3e131b8c3193aec6774145584b18070be979fd5f',
+    'linux-arm64': 'a8e8197c63502fba874ce69b908174d46a47c6539025184e3003e70576d9451e',
+    'linux-x64': 'bf7e9ef297c35712e9fad0ad56a65b7fd94e1f30168733cf09459b4ea80c4c3e',
+  }),
+});
 
 export const ACTION_ENGINE_PIN = `maestro-runner@${MAESTRO_RUNNER_PIN.version}` as const;
 
@@ -149,9 +162,55 @@ export function pinnedRunnerBinPath(home?: string): string {
   return join(pinCacheRoot(home), 'bin', 'maestro-runner');
 }
 
+function isRegularPinCacheBinary(path: string): boolean {
+  try {
+    const stat = lstatSync(path);
+    const ancestors = [dirname(path), dirname(dirname(path)), dirname(dirname(dirname(path)))];
+    const contained = ancestors.every((ancestor) => {
+      const ancestorStat = lstatSync(ancestor);
+      return ancestorStat.isDirectory() && !ancestorStat.isSymbolicLink();
+    });
+    accessSync(path, constants.X_OK);
+    return contained && stat.isFile() && !stat.isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
 export function getMaestroRunnerPath(): string | null {
   const path = pinnedRunnerBinPath();
-  return existsSync(path) ? path : null;
+  return isRegularPinCacheBinary(path) ? path : null;
+}
+
+function runnerCacheVersionsRoot(): string {
+  return dirname(pinCacheRoot());
+}
+
+function pinCacheVersionForPath(path: string): string | null {
+  if (!isRegularPinCacheBinary(path) || basename(path) !== 'maestro-runner') return null;
+  const versionDir = dirname(dirname(resolve(path)));
+  if (dirname(versionDir) !== resolve(runnerCacheVersionsRoot())) return null;
+  const version = basename(versionDir);
+  return /^\d+(?:\.\d+)*$/.test(version) ? version : null;
+}
+
+function getMaestroRunnerDetectionPath(): string | null {
+  const exact = getMaestroRunnerPath();
+  if (exact) return exact;
+  const root = runnerCacheVersionsRoot();
+  try {
+    const candidates = readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && /^\d+(?:\.\d+)*$/.test(entry.name))
+      .map((entry) => ({
+        version: entry.name,
+        path: join(root, entry.name, 'bin', 'maestro-runner'),
+      }))
+      .filter((candidate) => isRegularPinCacheBinary(candidate.path))
+      .sort((left, right) => compareVersions(right.version, left.version));
+    return candidates[0]?.path ?? null;
+  } catch {
+    return null;
+  }
 }
 
 export function nodePlatformKey(platform = process.platform, arch = process.arch): string {
@@ -428,12 +487,45 @@ function defaultHashFile(bin: string): string | null {
 }
 
 async function detect(resolvers: EngineStatusResolvers): Promise<ReplayEngineStatus> {
-  const binPath = (resolvers.binPath ?? getMaestroRunnerPath)();
+  const binPath = (resolvers.binPath ?? getMaestroRunnerDetectionPath)();
   const platformKey = resolvers.platformKey ?? nodePlatformKey();
   if (!binPath) {
     return buildReplayEngineStatus('not-installed', null, false, {
       selectedPath: null,
       provenance: 'none',
+    });
+  }
+  const cacheVersion = pinCacheVersionForPath(binPath);
+  if (cacheVersion && cacheVersion !== MAESTRO_RUNNER_PIN.version) {
+    let sha256: string | null = null;
+    try {
+      sha256 = (resolvers.hashFile ?? defaultHashFile)(binPath);
+    } catch {
+      sha256 = null;
+    }
+    const expectedSha256 = (
+      TRUSTED_DRIFT_SHA256 as Readonly<
+        Record<string, Readonly<Partial<Record<string, string>>>>
+      >
+    )[cacheVersion]?.[platformKey];
+    if (!expectedSha256 || !sha256) {
+      return buildReplayEngineStatus('unverified', null, false, {
+        selectedPath: binPath,
+        provenance: 'pin-cache',
+      });
+    }
+    if (sha256 !== expectedSha256) {
+      return buildReplayEngineStatus('checksum-mismatch', null, false, {
+        selectedPath: binPath,
+        provenance: 'pin-cache',
+      });
+    }
+    const comparison = compareVersions(cacheVersion, MAESTRO_RUNNER_PIN.version);
+    const cls =
+      comparison < 0 ? 'drift-older' : comparison > 0 ? 'drift-newer' : 'unknown-version';
+    return buildReplayEngineStatus(cls, cacheVersion, false, {
+      selectedPath: binPath,
+      provenance: 'pin-cache',
     });
   }
   let sha256: string | null = null;

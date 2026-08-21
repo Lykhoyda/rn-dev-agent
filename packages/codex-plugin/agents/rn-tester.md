@@ -164,8 +164,8 @@ Write a brief test plan BEFORE executing:
 ### Step 2.5: Auth Pre-flight Check (GH #10)
 
 Before navigating, check if the app is on an auth-gated screen (login,
-welcome, registration, onboarding). If so, attempt auto-login via the
-project's own Maestro subflows instead of unreliable manual taps.
+welcome, registration, onboarding). Authentication recovery must use a
+compatible action from the owned learned-action corpus.
 
 1. Call `cdp_navigation_state`. Check the current route name.
 2. If the navigation state is **empty or minimal**, the app may still
@@ -177,45 +177,20 @@ project's own Maestro subflows instead of unreliable manual taps.
    `Login`, `Welcome`, `SignIn`, `Register`, `Onboarding`, `Auth`,
    `Landing`):
 
-   a. **Scan for Maestro subflows** in the project:
-      ```bash
-      ls .maestro/subflows/ .maestro/ 2>/dev/null
-      ```
-   b. **Identify login flows** by filename — prefer login/session flows
-      over registration (idempotent, no backend junk):
-      - First choice: `login.yaml`, `sign_in.yaml`, `auth.yaml`
-      - Second choice: `flow_start.yaml` (often includes login)
-      - Last resort: `register_user.yaml` (creates new accounts)
-      Read the file to confirm it performs authentication.
-   c. **Pre-execution check**: Read the subflow content. If it contains
-      `clearState: true` and this is a Dev Client build, copy it to
-      `/tmp/` and strip that line before running (GH #8).
-   d. **Check for env variables**: If the subflow uses `${EMAIL}`,
-      `${PASSWORD}`, etc., look for a `.env` or `.maestro/config.yaml`
-      file. If credentials are needed, ask the user.
-   e. **Wrap if needed**: Maestro subflows often lack `appId`. Create a
-      wrapper:
-      ```bash
-      cat > /tmp/auth-wrapper.yaml << EOF
-      appId: <bundle-id from app.json>
-      ---
-      - launchApp
-      - runFlow:
-          file: $(pwd)/.maestro/subflows/login.yaml
-      EOF
-      ```
-   f. **Use the exact platform** from the ready authority session.
-   g. **Run through `maestro_run`** with the exact platform and wrapper path.
-      The tool requires the exact `1.1.24` pin-cache engine before mutation.
-      If the pin is unavailable or drifted, STOP and route to setup. Do not
-      fall back to classic Maestro, manual login, or an unowned flow.
-   h. **Verify arrival** at the home/main screen:
+   a. Run `$rn-dev-agent:list-learned-actions login` and select one compatible
+      owned action whose metadata establishes authenticated state.
+   b. Replay it through `cdp_run_action` on the exact authority-bound device.
+      Any engine-pin, selector, or action-format incompatibility is terminal.
+   c. If no compatible owned action exists, stop and report authentication as
+      blocked. Do not use manual taps, `.maestro` flows, ambient runners, or
+      `cdp_auto_login` as an automatic fallback.
+   d. Only when the user explicitly authorizes legacy per-call navigation
+      recovery may `cdp_auto_login` run. It is never durable login authority or
+      PR proof; create or migrate an owned compatible action before proof.
+   e. **Verify arrival** at the home/main screen:
       ```
       cdp_navigation_state  → confirm route is NOT auth-related
       ```
-   i. If no owned login subflow exists, stop and report that authentication
-      cannot proceed through an authorized reusable flow. Do not substitute
-      manual login or create an unverified flow during the replay.
 
 4. If the route is a main app screen (home, dashboard, tabs, etc.),
    skip this step — the user is already authenticated.

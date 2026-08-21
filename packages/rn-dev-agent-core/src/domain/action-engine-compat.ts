@@ -1,4 +1,11 @@
-import { lstatSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  lstatSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  writeFileSync,
+} from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import {
   ACTION_ENGINE_PIN,
@@ -9,7 +16,7 @@ import {
 } from './engine-pin.js';
 import { parseAndValidateFlow, MaestroValidationError } from './maestro-validator.js';
 import { parseM7Header } from './reusable-action.js';
-import { splitYaml, joinYaml } from './action-store.js';
+import { splitYaml, joinYaml, resolveActionPath } from './action-store.js';
 
 export function actionEnginePinRefusal(enginePin: string | undefined): string | null {
   if (!enginePin) {
@@ -62,8 +69,68 @@ export function replayCompatibilityPreflight(opts: {
 }
 
 export function isLearnedActionPath(path: string): boolean {
-  const parent = dirname(resolve(path));
-  return basename(parent) === 'actions' && basename(dirname(parent)) === '.rn-agent';
+  return classifyLearnedActionPath(path) === 'action';
+}
+
+export function classifyLearnedActionPath(
+  path: string,
+): 'outside' | 'action' | 'descendant' {
+  const lexical = classifyResolvedLearnedActionPath(resolve(path));
+  try {
+    const canonical = classifyResolvedLearnedActionPath(canonicalizeExistingPath(path));
+    if (lexical === canonical) return lexical;
+    if (lexical === 'outside') return canonical;
+    return 'descendant';
+  } catch {
+    return lexical;
+  }
+}
+
+function classifyResolvedLearnedActionPath(
+  path: string,
+): 'outside' | 'action' | 'descendant' {
+  let parent = dirname(path);
+  let direct = true;
+  while (true) {
+    if (basename(parent) === 'actions' && basename(dirname(parent)) === '.rn-agent') {
+      return direct ? 'action' : 'descendant';
+    }
+    const next = dirname(parent);
+    if (next === parent) return 'outside';
+    parent = next;
+    direct = false;
+  }
+}
+
+function canonicalizeExistingPath(path: string): string {
+  let cursor = resolve(path);
+  const suffix: string[] = [];
+  while (!existsSync(cursor)) {
+    const parent = dirname(cursor);
+    if (parent === cursor) return cursor;
+    suffix.unshift(basename(cursor));
+    cursor = parent;
+  }
+  return resolve(realpathSync(cursor), ...suffix);
+}
+
+export function standaloneLearnedActionPathRefusal(path: string): string | null {
+  const classification = classifyLearnedActionPath(path);
+  if (classification === 'outside') return null;
+  if (classification === 'descendant') {
+    return `Refusing to execute learned-action descendant ${path} as a standalone flow.`;
+  }
+  const actionId = basename(path).replace(/\.ya?ml$/i, '');
+  const projectRoot = dirname(dirname(dirname(resolve(path))));
+  try {
+    const resolvedAction = resolveActionPath(projectRoot, actionId);
+    if (resolvedAction === null || resolve(resolvedAction) !== resolve(path)) {
+      return `Action ${actionId} does not resolve uniquely to ${path}.`;
+    }
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err);
+  }
+  return null;
 }
 
 const ENGINE_PIN_LINE = new RegExp(`^#\\s*enginePin\\s*:\\s*.+$`);
@@ -169,6 +236,21 @@ export function migrateLearnedActions(projectRoot: string): ActionMigrationResul
   for (const name of files) {
     const path = join(dir, name);
     const id = actionIdFromFile(name);
+    try {
+      const resolvedPath = resolveActionPath(projectRoot, id);
+      if (resolvedPath !== path) {
+        throw new Error(`Action ${id} does not resolve to ${path}.`);
+      }
+    } catch (err) {
+      results.push({
+        id,
+        path,
+        status: 'incompatible',
+        reason: err instanceof Error ? err.message : String(err),
+        mutated: false,
+      });
+      continue;
+    }
     try {
       if (lstatSync(path).isSymbolicLink()) {
         results.push({

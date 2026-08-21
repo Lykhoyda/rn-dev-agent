@@ -28,6 +28,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { assertReadableActionCorpus, resolveActionPath } from './domain/action-store.js';
 
 interface Flags {
   json: boolean;
@@ -159,9 +160,20 @@ function scanFlows(): FlowsResult {
   const items: FlowItem[] = [];
   for (const root of roots) {
     if (!fs.existsSync(root)) continue;
-    for (const f of fs.readdirSync(root)) {
-      if (!f.endsWith('.yaml') && !f.endsWith('.yml')) continue;
-      const fp = path.join(root, f);
+    const projectRoot = path.dirname(path.dirname(root));
+    assertReadableActionCorpus(projectRoot);
+    const ids = [
+      ...new Set(
+        fs
+          .readdirSync(root)
+          .filter((file) => /\.ya?ml$/.test(file))
+          .map((file) => file.replace(/\.ya?ml$/, '')),
+      ),
+    ];
+    for (const id of ids) {
+      const fp = resolveActionPath(projectRoot, id);
+      if (!fp) continue;
+      const f = path.basename(fp);
       const text = fs.readFileSync(fp, 'utf8');
       const meta = parseFlowMeta(text);
       if (flags.appId && meta.appId !== flags.appId) continue;
@@ -607,7 +619,7 @@ if (want('d')) {
 
 parts.push('---');
 parts.push(
-  '**Reminder:** For any UI flow, replay a matching flow from section B BEFORE composing `device_*` primitives. Manual walks are a fallback. (See `feedback_execute_artifacts_before_manual.md`.)',
+  '**Reminder:** For any UI flow, replay a compatible owned action from section B through `cdp_run_action` before composing `device_*` primitives. Missing or incompatible owned automation is terminal; manual walks are not an authorized fallback.',
 );
 process.stdout.write(parts.join('\n') + '\n');
 process.exit(total === 0 ? 3 : 0);

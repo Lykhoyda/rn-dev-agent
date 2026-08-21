@@ -1,10 +1,8 @@
-import { execFile as execFileCb } from 'node:child_process';
-import { promisify } from 'node:util';
-import { existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import type { CDPClient } from '../cdp-client.js';
+import type { ToolResult } from '../utils.js';
 import { findProjectRoot } from '../nav-graph/storage.js';
-import { getActiveSession } from '../agent-device-wrapper.js';
 import { readAppId } from '../project-config.js';
 import {
   buildMaestroFlow,
@@ -12,11 +10,13 @@ import {
   isValidBundleId,
   MaestroValidationError,
 } from '../domain/maestro-validator.js';
-import { runFlowParked } from './maestro-run.js';
-import { exactPinRefusal, getEngineStatus, getMaestroRunnerPath } from '../domain/engine-pin.js';
+import {
+  createMaestroRunHandler,
+  nestedMaestroAuthorityCallbacks,
+  type MaestroRunArgs,
+} from './maestro-run.js';
 import { regexSelectorCapabilityRefusal } from '../domain/action-engine-compat.js';
-
-const execFile = promisify(execFileCb);
+import { getWorkerAuthorityRuntime } from '../session/runtime.js';
 
 const AUTH_ROUTE_PATTERNS = [
   'login',
@@ -96,31 +96,50 @@ export async function isOnAuthScreen(client: CDPClient): Promise<boolean> {
 }
 
 function findLoginFlow(projectRoot: string): string | null {
-  const searchDirs = [join(projectRoot, '.maestro', 'subflows'), join(projectRoot, '.maestro')];
+  const maestroDir = join(projectRoot, '.maestro');
+  const searchDirs = [join(maestroDir, 'subflows'), maestroDir];
 
   for (const dir of searchDirs) {
-    if (!existsSync(dir)) continue;
-
     let files: string[];
     try {
+      const maestroStat = lstatSync(maestroDir);
+      const dirStat = lstatSync(dir);
+      if (maestroStat.isSymbolicLink() || dirStat.isSymbolicLink()) {
+        throw new Error(`Refusing legacy login directory symlink at ${dir}.`);
+      }
+      if (!maestroStat.isDirectory() || !dirStat.isDirectory()) continue;
       files = readdirSync(dir);
-    } catch {
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
       continue;
     }
 
     for (const candidate of LOGIN_FLOW_PRIORITY) {
       if (files.includes(candidate)) {
-        return join(dir, candidate);
+        return assertLegacyLoginFlow(projectRoot, join(dir, candidate));
       }
     }
 
     const authFile = files.find(
       (f) => /\.(ya?ml)$/.test(f) && AUTH_ROUTE_PATTERNS.some((p) => f.toLowerCase().includes(p)),
     );
-    if (authFile) return join(dir, authFile);
+    if (authFile) return assertLegacyLoginFlow(projectRoot, join(dir, authFile));
   }
 
   return null;
+}
+
+function assertLegacyLoginFlow(projectRoot: string, flowPath: string): string {
+  const stat = lstatSync(flowPath);
+  if (!stat.isFile() || stat.isSymbolicLink()) {
+    throw new Error(`Refusing legacy login flow symlink at ${flowPath}.`);
+  }
+  const maestroDir = resolve(projectRoot, '.maestro');
+  const resolvedFlow = resolve(flowPath);
+  if (resolvedFlow !== maestroDir && !resolvedFlow.startsWith(`${maestroDir}/`)) {
+    throw new Error(`Refusing legacy login flow outside ${maestroDir}.`);
+  }
+  return resolvedFlow;
 }
 
 function stripClearState(yamlContent: string): string {
@@ -130,9 +149,45 @@ function stripClearState(yamlContent: string): string {
     .join('\n');
 }
 
+interface AutoLoginDeps {
+  boundProjectRoot?: () => string | null;
+  projectRoot?: () => string | null;
+  maestroRun?: (args: MaestroRunArgs) => Promise<ToolResult>;
+}
+
+function boundSessionProjectRoot(): string | null {
+  const status = getWorkerAuthorityRuntime().status();
+  return status.available && typeof status.source.appRoot === 'string'
+    ? status.source.appRoot
+    : null;
+}
+
+function canonicalRoot(path: string): string | null {
+  try {
+    return realpathSync(path);
+  } catch {
+    return null;
+  }
+}
+
+function maestroRunFailure(result: ToolResult): string | null {
+  try {
+    const envelope = JSON.parse(result.content[0]?.text ?? '{}') as {
+      ok?: boolean;
+      error?: string;
+      data?: { passed?: boolean };
+    };
+    if (envelope.ok === true && envelope.data?.passed !== false) return null;
+    return envelope.error ?? 'Maestro replay did not report a passing result.';
+  } catch {
+    return 'Maestro replay returned an invalid result.';
+  }
+}
+
 export async function handleAutoLogin(
   client: CDPClient,
-  opts: { appId?: string; platform?: string } = {},
+  opts: { appId?: string; platform?: string; deviceId?: string } = {},
+  deps: AutoLoginDeps = {},
 ): Promise<AutoLoginResult | null> {
   if (!client.isConnected || !client.helpersInjected) return null;
 
@@ -141,45 +196,72 @@ export async function handleAutoLogin(
     return { loggedIn: false, reason: 'App is not on an auth screen' };
   }
 
-  const platform = opts.platform ?? getActiveSession()?.platform;
-  if (!platform) {
+  const platform = opts.platform;
+  if (platform !== 'ios' && platform !== 'android') {
     return {
       loggedIn: false,
       reason:
         'Cannot determine platform. Pass platform="ios" or platform="android" explicitly, or open a device session first.',
     };
   }
-
-  const projectRoot = findProjectRoot();
-  if (!projectRoot) {
+  if (!opts.deviceId) {
     return {
       loggedIn: false,
-      reason: 'Could not find RN project root to scan for Maestro subflows',
+      reason: `Auto-login requires an owned ${platform} session bound to one exact device.`,
     };
   }
 
-  const flowPath = findLoginFlow(projectRoot);
+  const boundProjectRoot = (deps.boundProjectRoot ?? boundSessionProjectRoot)();
+  if (!boundProjectRoot) {
+    return {
+      loggedIn: false,
+      reason: 'Auto-login requires an exact app root from the active session authority.',
+    };
+  }
+  const discoveredProjectRoot = (deps.projectRoot ?? findProjectRoot)();
+  const boundCanonicalRoot = canonicalRoot(boundProjectRoot);
+  const discoveredCanonicalRoot = discoveredProjectRoot
+    ? canonicalRoot(discoveredProjectRoot)
+    : boundCanonicalRoot;
+  if (
+    !boundCanonicalRoot ||
+    !discoveredCanonicalRoot ||
+    discoveredCanonicalRoot !== boundCanonicalRoot
+  ) {
+    return {
+      loggedIn: false,
+      reason: 'Auto-login project discovery does not match the active session app root.',
+    };
+  }
+  const projectRoot = boundCanonicalRoot;
+
+  let flowPath: string | null;
+  try {
+    flowPath = findLoginFlow(projectRoot);
+  } catch (err) {
+    return {
+      loggedIn: false,
+      reason: err instanceof Error ? err.message : String(err),
+    };
+  }
   if (!flowPath) {
     return {
       loggedIn: false,
-      reason: `App is on an auth screen but no Maestro login subflows were found in ${projectRoot}/.maestro/. Create a compatible .maestro/subflows/login.yaml flow before retrying.`,
+      reason:
+        'App is on an auth screen but no explicitly authorized legacy login subflow exists. Recovery cannot proceed; use a compatible owned learned action for durable authentication or proof.',
     };
   }
 
-  const rawAppId = opts.appId ?? readAppId(projectRoot, platform) ?? '';
+  const projectAppId = readAppId(projectRoot, platform);
+  if (opts.appId && projectAppId && opts.appId !== projectAppId) {
+    return {
+      loggedIn: false,
+      reason: 'Auto-login app ID does not match the active session and bound project.',
+      flow: flowPath,
+    };
+  }
+  const rawAppId = opts.appId ?? projectAppId ?? '';
 
-  // Phase 134.1 (deepsec CRITICAL #2): the project-supplied login flow is
-  // attacker-controlled in the prompt-injection threat model. Previously
-  // only `clearState: true` was stripped — `runScript`, `evalScript`,
-  // `startRecording`, and any non-allowlist command sailed through. The
-  // new flow:
-  //   1. Read the project flow + parse it through the central validator,
-  //      which rejects denied commands and unsafe scalars by default.
-  //   2. Validate the appId against the strict bundle-ID regex before
-  //      stamping it into the wrapper header.
-  //   3. Inline the validated commands directly into the wrapper (no
-  //      `runFlow: file: ...` indirection that would re-load the
-  //      unvalidated file from disk at runtime).
   const originalContent = readFileSync(flowPath, 'utf-8');
   const flowContent = stripClearState(originalContent);
 
@@ -212,11 +294,6 @@ export async function handleAutoLogin(
       }
       appIdOpts.appId = rawAppId;
     }
-    // Only prepend `launchApp` if the project flow doesn't already start
-    // with one — multi-LLM review caught that hand-authored login.yaml
-    // files conventionally lead with `- launchApp`, and unconditional
-    // prepending caused a double-launch (slowing auto-login and possibly
-    // clearing in-memory state set by the first launch).
     const first = validatedCommands[0];
     const startsWithLaunchApp =
       first === 'launchApp' ||
@@ -235,40 +312,20 @@ export async function handleAutoLogin(
     throw err;
   }
 
-  const wrapperPath = '/tmp/rn-auto-login-wrapper.yaml';
-  writeFileSync(wrapperPath, wrapperContent, 'utf-8');
-
-  const runnerPath = getMaestroRunnerPath();
-  if (!runnerPath) {
+  const maestroRun = deps.maestroRun ?? createMaestroRunHandler();
+  const managedAuthority = nestedMaestroAuthorityCallbacks(opts);
+  const replay = await maestroRun({
+    inlineYaml: wrapperContent,
+    platform,
+    deviceId: opts.deviceId,
+    timeoutMs: 120_000,
+    ...managedAuthority,
+  });
+  const replayFailure = maestroRunFailure(replay);
+  if (replayFailure) {
     return {
       loggedIn: false,
-      reason:
-        exactPinRefusal(await getEngineStatus().catch(() => null)) ??
-        'Session maestro-runner pin is not installed.',
-    };
-  }
-  const pinRefusal = exactPinRefusal(await getEngineStatus().catch(() => null));
-  if (pinRefusal) {
-    return { loggedIn: false, reason: pinRefusal };
-  }
-
-  try {
-    await runFlowParked(
-      () =>
-        execFile(runnerPath, ['--platform', platform, 'test', wrapperPath], {
-          timeout: 120_000,
-          encoding: 'utf8',
-        }),
-      {
-        platform: platform === 'android' ? 'android' : 'ios',
-        deviceId: getActiveSession()?.deviceId,
-      },
-    );
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return {
-      loggedIn: false,
-      reason: `Maestro login flow failed: ${msg.slice(0, 200)}`,
+      reason: `Maestro login flow failed: ${replayFailure.slice(0, 200)}`,
       flow: flowPath,
     };
   }
