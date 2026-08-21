@@ -5,7 +5,8 @@ import { resolveBundleId, readExpoSlug } from './project-config.js';
 import { buildMaestroFlow, parseAndValidateFlow, isValidBundleId, MaestroValidationError, } from './domain/maestro-validator.js';
 import { chooseMaestroDispatch } from './tools/maestro-dispatch.js';
 import { outputIndicatesFlowFailure } from './domain/maestro-error-parser.js';
-import { exactPinRefusal, getEngineStatus, isOlderSdkInstallFailure, olderSdkInstallDiagnosis, buildReplayEngineStatus, MAESTRO_RUNNER_PIN, } from './domain/engine-pin.js';
+import { exactPinRefusal, getEngineStatus, isOlderSdkInstallFailure, olderSdkInstallDiagnosis, } from './domain/engine-pin.js';
+import { regexSelectorCapabilityRefusal } from './domain/action-engine-compat.js';
 import { resolveAppFileForClearState } from './tools/resolve-ios-app-file.js';
 import { assembleMaestroArgs, runFlowParked } from './tools/maestro-run.js';
 import { getActiveSession } from './agent-device-wrapper.js';
@@ -43,14 +44,9 @@ export async function runMaestroInline(yaml, opts, dependencies = {}) {
     if ('error' in dispatch) {
         return { passed: false, output: '', flowFile: '', error: dispatch.error };
     }
-    const resolveEngineStatus = dependencies.resolveEngineStatus ??
-        (process.env.NODE_TEST_CONTEXT
-            ? async () => buildReplayEngineStatus('pinned-ok', MAESTRO_RUNNER_PIN.version, false, {
-                selectedPath: '/test/pin-cache/maestro-runner/bin/maestro-runner',
-                provenance: 'pin-cache',
-            })
-            : () => getEngineStatus().catch(() => null));
-    const pinRefusal = exactPinRefusal(await resolveEngineStatus());
+    const resolveEngineStatus = dependencies.resolveEngineStatus ?? (() => getEngineStatus().catch(() => null));
+    const engineStatus = await resolveEngineStatus();
+    const pinRefusal = exactPinRefusal(engineStatus);
     if (pinRefusal) {
         return { passed: false, output: '', flowFile: '', error: pinRefusal };
     }
@@ -60,6 +56,10 @@ export async function runMaestroInline(yaml, opts, dependencies = {}) {
     let headerAppId;
     try {
         const parsed = parseAndValidateFlow(yaml, { rejectHeader: true });
+        const selectorRefusal = regexSelectorCapabilityRefusal(parsed.commands);
+        if (selectorRefusal) {
+            return { passed: false, output: '', flowFile, error: selectorRefusal };
+        }
         const appIdOpts = {};
         if (rawAppId && isValidBundleId(rawAppId)) {
             appIdOpts.appId = rawAppId;

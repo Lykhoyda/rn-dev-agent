@@ -1,6 +1,4 @@
-// GH #397 (Story 13 Phase 1): the tested maestro-runner pin. Single source of
-// truth — scripts/ensure-maestro-runner.sh mirrors version+hash and a grep-sync
-// test (gh-397-pin-sync.test.ts) keeps them honest.
+// GH #397 (Story 13 Phase 1): the tested maestro-runner pin.
 //
 // UPGRADE RITUAL (until the Story 06 golden-set harness automates it):
 //   1. Install the candidate: curl -fsSL https://open.devicelab.dev/install/maestro-runner | bash -s -- --version <V>
@@ -14,25 +12,17 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import pinManifest from './maestro-runner-pin.json' with { type: 'json' };
 
 const execFile = promisify(execFileCb);
 
-export const MAESTRO_RUNNER_PIN = {
-  version: '1.1.24',
-  sha256: {
-    'darwin-arm64': '170f12521de83322823dd5fc0ce16e48abeba9952cdbb242670592566c2fd1f3',
-    'darwin-x64': 'af7f5ea044afc72ea780c835f05b32203e443d2e26d310a864bfb2bc84959bf6',
-    'linux-x64': 'e9bdef6f08f855ca1a884f99b54a519a1eae0a342917181a53eb414a5b00d6d8',
-    'linux-arm64': '8d8a6483ad04da2109636b7192398750657801b8a8d512688d1be3b033a105b8',
-  } as Partial<Record<string, string>>,
-  knownQuirks: [
-    {
-      id: 'android-pre-o-unsupported',
-      ref: 'GH #741',
-      note: 'bundled UiAutomator2 server APK declares minSdk 26; API 23-25 installs fail with INSTALL_FAILED_OLDER_SDK',
-    },
-  ],
-} as const;
+interface MaestroRunnerPinManifest {
+  version: string;
+  sha256: Partial<Record<string, string>>;
+  knownQuirks: Array<{ id: string; ref: string; note: string }>;
+}
+
+export const MAESTRO_RUNNER_PIN: MaestroRunnerPinManifest = pinManifest;
 
 export const ACTION_ENGINE_PIN = `maestro-runner@${MAESTRO_RUNNER_PIN.version}` as const;
 
@@ -49,12 +39,10 @@ const PRE_O_REMEDY =
   'paths that fall back to maestro (dev-client picker, system dialogs, device_fill correction), ' +
   'which hit this same limit.';
 
-export type ReplayEngineTier = 'maestro-runner' | 'maestro' | 'maestro-cli';
+export type ReplayEngineTier = 'maestro-runner';
 
-function engineLabel(runner: ReplayEngineTier): string {
-  return runner === 'maestro-runner'
-    ? `the pinned maestro-runner ${MAESTRO_RUNNER_PIN.version}`
-    : 'the Maestro CLI';
+function engineLabel(_runner: ReplayEngineTier): string {
+  return `the pinned maestro-runner ${MAESTRO_RUNNER_PIN.version}`;
 }
 
 export function preOAndroidApiRefusal(apiLevel: number): string | null {
@@ -213,7 +201,8 @@ export function enginePinCaveat(status: ReplayEngineStatus): string | null {
 // GH #750 (B223-class): drifted runners translate Maestro regex text selectors
 // into literal WDA `CONTAINS[c]` predicates that can never match. Only
 // regex-shaped selectors change semantics; plain literals behave identically.
-const REGEX_SHAPED_SELECTOR = /\.\*|\.\+|\\[dDwWsSbB]|\[[^\]]*\]|\|/;
+const REGEX_SHAPED_SELECTOR =
+  /(?:^\^|\$$|\.\*|\.\+|\\[AbBdDsSwWzZ]|\[[^\]]*\]|\(\?(?:[:=!<]|<[=!])|\([^)]*\)|\||\{\d+(?:,\d*)?\}|(?:^|[^\\])[+*?])/;
 const TEXT_SELECTOR_KEYS = new Set([
   'tapOn',
   'doubleTapOn',
@@ -348,14 +337,14 @@ export interface EngineStatusResolvers {
   platformKey?: string;
 }
 
-let cachedStatus: Promise<ReplayEngineStatus> | null = null;
+let testStatus: ReplayEngineStatus | undefined;
 
 export function _resetEngineStatusForTest(): void {
-  cachedStatus = null;
+  testStatus = undefined;
 }
 
 export function _setEngineStatusForTest(s: ReplayEngineStatus): void {
-  cachedStatus = Promise.resolve(s);
+  testStatus = s;
 }
 
 async function defaultExecVersion(bin: string): Promise<string> {
@@ -406,15 +395,9 @@ async function detect(resolvers: EngineStatusResolvers): Promise<ReplayEngineSta
   });
 }
 
-// Single-flight, process-wide: concurrent callers (cdp_status, maestro_run)
-// share one detection promise. `resolvers` exists ONLY for tests, which must
-// pair it with _resetEngineStatusForTest — a resolver call after the cache is
-// warm returns the cached status by design (no per-resolver keying).
 export function getEngineStatus(resolvers?: EngineStatusResolvers): Promise<ReplayEngineStatus> {
-  if (!cachedStatus) {
-    cachedStatus = detect(resolvers ?? {}).catch(() =>
-      buildReplayEngineStatus('unknown-version', null, false),
-    );
-  }
-  return cachedStatus;
+  if (testStatus) return Promise.resolve(testStatus);
+  return detect(resolvers ?? {}).catch(() =>
+    buildReplayEngineStatus('unknown-version', null, false),
+  );
 }

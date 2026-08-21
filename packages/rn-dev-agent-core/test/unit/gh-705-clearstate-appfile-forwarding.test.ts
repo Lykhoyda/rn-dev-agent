@@ -2,7 +2,7 @@
 // reinstall, and cdp_run_action must be able to supply the `.app` at all —
 // its missing `appFile` parameter made the documented advice unfollowable.
 
-import { test } from 'node:test';
+import { afterEach, beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -10,6 +10,17 @@ import { createMaestroRunHandler } from '../../dist/tools/maestro-run.js';
 import { chooseMaestroDispatch } from '../../dist/tools/maestro-dispatch.js';
 import { createRunActionHandler } from '../../dist/tools/run-action.js';
 import { createTmpProject } from '../helpers/tmp-project.js';
+import {
+  _resetEngineStatusForTest,
+  _setEngineStatusForTest,
+  buildReplayEngineStatus,
+  MAESTRO_RUNNER_PIN,
+} from '../../dist/domain/engine-pin.js';
+
+beforeEach(() =>
+  _setEngineStatusForTest(buildReplayEngineStatus('pinned-ok', MAESTRO_RUNNER_PIN.version, false)),
+);
+afterEach(() => _resetEngineStatusForTest());
 
 const EXACT = '5C10B45B-2065-458B-B885-0F83F49747C8';
 const APP_ID = 'com.rndevagent.testapp';

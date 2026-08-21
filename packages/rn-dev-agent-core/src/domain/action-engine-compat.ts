@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import {
   ACTION_ENGINE_PIN,
   MAESTRO_RUNNER_PIN,
@@ -48,6 +48,11 @@ export function actionReplayPreflight(opts: {
   const format = actionEnginePinRefusal(opts.enginePin);
   if (format) return format;
   return regexSelectorCapabilityRefusal(opts.commands);
+}
+
+export function isLearnedActionPath(path: string): boolean {
+  const parent = dirname(resolve(path));
+  return basename(parent) === 'actions' && basename(dirname(parent)) === '.rn-agent';
 }
 
 const ENGINE_PIN_LINE = new RegExp(`^#\\s*enginePin\\s*:\\s*.+$`);
@@ -115,7 +120,7 @@ export function migrateLearnedActions(projectRoot: string): ActionMigrationResul
     }
     let commands: unknown[] = [];
     try {
-      commands = parseAndValidateFlow(text).commands;
+      commands = parseAndValidateFlow(text, { flowDir: dirname(path), flowRoot: dir }).commands;
     } catch (err) {
       const reason = err instanceof MaestroValidationError ? err.message : String(err);
       results.push({ id, path, status: 'unreadable', reason, mutated: false });

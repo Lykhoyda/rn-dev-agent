@@ -1,7 +1,7 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { CDPClient } from '../cdp-client.js';
 import { findProjectRoot } from '../nav-graph/storage.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
@@ -14,6 +14,7 @@ import {
 } from '../domain/maestro-validator.js';
 import { runFlowParked } from './maestro-run.js';
 import { exactPinRefusal, getEngineStatus, getMaestroRunnerPath } from '../domain/engine-pin.js';
+import { regexSelectorCapabilityRefusal } from '../domain/action-engine-compat.js';
 
 const execFile = promisify(execFileCb);
 
@@ -161,7 +162,7 @@ export async function handleAutoLogin(
   if (!flowPath) {
     return {
       loggedIn: false,
-      reason: `App is on an auth screen but no Maestro login subflows found in ${projectRoot}/.maestro/. Create a .maestro/subflows/login.yaml flow or log in manually.`,
+      reason: `App is on an auth screen but no Maestro login subflows were found in ${projectRoot}/.maestro/. Create a compatible .maestro/subflows/login.yaml flow before retrying.`,
     };
   }
 
@@ -184,8 +185,13 @@ export async function handleAutoLogin(
 
   let validatedCommands: unknown[];
   try {
-    const parsed = parseAndValidateFlow(flowContent);
+    const parsed = parseAndValidateFlow(flowContent, {
+      flowDir: dirname(flowPath),
+      flowRoot: join(projectRoot, '.maestro'),
+    });
     validatedCommands = parsed.commands;
+    const selectorRefusal = regexSelectorCapabilityRefusal(validatedCommands);
+    if (selectorRefusal) return { loggedIn: false, reason: selectorRefusal, flow: flowPath };
   } catch (err) {
     const reason =
       err instanceof MaestroValidationError

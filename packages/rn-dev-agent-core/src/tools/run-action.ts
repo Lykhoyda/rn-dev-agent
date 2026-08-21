@@ -7,7 +7,7 @@
 //   1. loadAction(projectRoot, actionId) — fail fast if missing.
 //   2. createMaestroRunHandler() — first attempt (delegates to the
 //      existing `maestro_run` tool, single source of truth for the
-//      maestro-runner / Maestro CLI dispatch tiering).
+//      exact maestro-runner dispatch).
 //   3. On failure: parseMaestroFailure → if SELECTOR_NOT_FOUND and
 //      autoRepair !== false, invoke createRepairActionHandler. On
 //      successful patch, replay maestro once more.
@@ -78,12 +78,7 @@ import { getWorkerAuthorityRuntime } from '../session/runtime.js';
 import { flowUsesClearState, resolveIosAppFile } from './resolve-ios-app-file.js';
 import { parseAndValidateFlow } from '../domain/maestro-validator.js';
 import { actionReplayPreflight } from '../domain/action-engine-compat.js';
-import {
-  buildReplayEngineStatus,
-  getEngineStatus,
-  MAESTRO_RUNNER_PIN,
-  type ReplayEngineStatus,
-} from '../domain/engine-pin.js';
+import { getEngineStatus, type ReplayEngineStatus } from '../domain/engine-pin.js';
 
 /** GH #705: the session's attested install receipt, or null outside a session. */
 function boundInstallReceipt(): { platform?: unknown; deviceId?: unknown; appId?: unknown } | null {
@@ -482,15 +477,7 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
   const resolveAppFile =
     deps.resolveAppFile ??
     ((appId: string, deviceId: string) => resolveIosAppFile(appId, { deviceId }));
-  const resolveEngineStatus =
-    deps.engineStatus ??
-    (process.env.NODE_TEST_CONTEXT
-      ? async () =>
-          buildReplayEngineStatus('pinned-ok', MAESTRO_RUNNER_PIN.version, false, {
-            selectedPath: '/test/pin-cache/maestro-runner/bin/maestro-runner',
-            provenance: 'pin-cache',
-          })
-      : () => getEngineStatus().catch(() => null));
+  const resolveEngineStatus = deps.engineStatus ?? (() => getEngineStatus().catch(() => null));
   return async (args: RunActionArgs): Promise<ToolResult> => {
     if (!args.actionId || typeof args.actionId !== 'string') {
       return failResult('cdp_run_action requires actionId', 'BAD_FILENAME');

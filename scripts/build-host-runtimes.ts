@@ -29,6 +29,7 @@ const observeWebDistSource = join(coreRoot, 'dist', 'observability', 'web-dist')
 const darwinProcessBirthHelper = join(coreRoot, 'native', 'darwin-process-birth');
 const darwinProcessBirthManifest = `${darwinProcessBirthHelper}.json`;
 const sourceMapPath = join(repoRoot, 'packages', 'shared-agent-knowledge', 'source-map.json');
+const maestroRunnerPinManifest = join(coreRoot, 'src', 'domain', 'maestro-runner-pin.json');
 const sourceMap = JSON.parse(readFileSync(sourceMapPath, 'utf8'));
 const codexAdaptation = sourceMap.hostAdaptations?.codex;
 if (!codexAdaptation) {
@@ -315,6 +316,7 @@ for (const hostRoot of [codexPluginRoot, claudePluginRoot]) {
   for (const script of SHARED_HOST_HELPER_SCRIPTS) {
     copyFileSync(join(repoRoot, 'scripts', script), join(hostRoot, 'scripts', script));
   }
+  copyFileSync(maestroRunnerPinManifest, join(hostRoot, 'scripts', 'maestro-runner-pin.json'));
 }
 
 for (const script of CLAUDE_HELPER_SCRIPTS) {

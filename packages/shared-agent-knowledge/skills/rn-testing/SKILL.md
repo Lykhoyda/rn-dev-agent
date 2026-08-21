@@ -11,33 +11,22 @@ testing, network mocking, and store inspection setup.
 
 ---
 
-## Test Runner: maestro-runner (Preferred)
+## Test Runner: exact maestro-runner pin
 
-maestro-runner is a Go-based drop-in replacement for Maestro. Same YAML flow
-syntax, 3-4x faster, no JVM required.
+All YAML replay goes through rn-dev-agent's `maestro_run`,
+`cdp_run_action`, or `cdp_run_e2e_suite` tools. They resolve exactly
+maestro-runner 1.1.24 from the versioned pin-cache and refuse missing, drifted,
+unverified, or checksum-mismatched binaries before UI mutation.
 
-| Metric | Maestro (Java) | maestro-runner (Go) |
-|--------|---------------|---------------------|
-| Binary size | ~300MB (with JVM) | 21MB single binary |
-| Startup time | 2-4s (JVM cold start) | <100ms |
-| Memory | ~400MB | ~30MB |
-| Flow execution | Baseline | 2-3x faster |
-| Install | `brew install maestro` + Java | Single binary download |
-
-```bash
-# Auto-detect runner (prefer maestro-runner)
-if command -v maestro-runner &>/dev/null; then
-  RUNNER="maestro-runner"
-elif command -v maestro &>/dev/null; then
-  RUNNER="maestro"
-else
-  echo "Install: brew install maestro OR download maestro-runner"
-  exit 1
-fi
-
-# Execute flow (identical YAML syntax either way)
-$RUNNER test .maestro/my-flow.yaml
+```text
+node <plugin-root>/rn-dev-agent-core/dist/maestro-runner-pin.js diagnose --json
+bash <plugin-root>/scripts/ensure-maestro-runner.sh
+node <plugin-root>/rn-dev-agent-core/dist/maestro-runner-pin.js diagnose --json
 ```
+
+Success requires `pinned-ok`, version `1.1.24`, provenance `pin-cache`,
+and the versioned selected path. Never resolve replay from PATH,
+`~/.maestro-runner`, or another CLI.
 
 ---
 
@@ -234,7 +223,7 @@ appId: com.example.app
 - assertVisible:
     id: "cart-badge"
 EOF
-maestro-runner --platform <ios|android> test /tmp/step.yaml
+maestro_run(platform="<ios|android>", flowPath="/tmp/step.yaml")
 ```
 
 ---
@@ -305,27 +294,17 @@ grep -r 'testID=' src/ --include="*.tsx" --include="*.ts"
 
 ## Multi-Device Testing
 
-```bash
-# ALWAYS pass --platform explicitly (global flag, before the test subcommand)
-maestro-runner --platform ios test flow.yaml              # iOS
-maestro-runner --platform android test flow.yaml          # Android
-
-# With explicit device ID -- iOS takes the exact simulator UDID
-# (`booted` is ambiguous as soon as a second simulator is up; the exact
-#  UDID is what replay authority is checked against)
-maestro-runner --platform ios --device A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D test flow.yaml
-maestro-runner --platform android --device emulator-5554 test flow.yaml
-
-# Sequential cross-platform
-maestro-runner --platform ios test .maestro/feature.yaml && \
-maestro-runner --platform android test .maestro/feature.yaml
+```text
+maestro_run(platform="ios", flowPath="flow.yaml")
+maestro_run(platform="android", flowPath="flow.yaml")
+maestro_run(platform="ios", deviceId="<exact simulator UDID>", flowPath="flow.yaml")
+maestro_run(platform="android", deviceId="<exact emulator serial>", flowPath="flow.yaml")
 ```
 
 ## Android-Specific Testing Rules (GH #7)
 
-1. **ALWAYS use maestro-runner on Android** — classic Maestro's gRPC driver
-   is unreliable (UNAVAILABLE: io exception). maestro-runner talks directly
-   to UIAutomator2 over HTTP, bypassing the fragile gRPC stack entirely.
+1. **ALWAYS use rn-dev-agent replay tools on Android** — they enforce the exact
+   maestro-runner pin and the authority-bound device.
 
 2. **Text input**: Use `device_fill` for text input on Android. It binds one
    exact input, types through the native runner, and succeeds only after stable
@@ -337,9 +316,6 @@ maestro-runner --platform android test .maestro/feature.yaml
 
 4. **Play Protect**: Google Play Protect on emulators can silently block test
    APK installations. Disable it: Settings > Security > Play Protect.
-
-5. **Port 7001 conflicts**: If you must use classic Maestro, clean stale
-   forwarding rules first: `adb forward --remove-all`
 
 ---
 
@@ -392,13 +368,11 @@ Read the file to confirm it performs authentication.
 
 ### Execution
 
-```bash
-# ALWAYS use maestro-runner (classic Maestro gRPC is unreliable on Android)
-maestro-runner --platform <ios|android> test /tmp/auth-wrapper.yaml
+```text
+maestro_run(platform="<ios|android>", flowPath="/tmp/auth-wrapper.yaml")
 ```
 
-If maestro-runner is not installed, STOP and tell the user to install it.
-Do NOT fall back to classic Maestro.
+If the exact pin is unavailable, STOP and run the package-local setup workflow.
 
 ### Verification
 
@@ -409,9 +383,9 @@ cdp_navigation_state → route should be a main screen (Home, Dashboard, Tabs)
 
 ### Rules
 
-- **NEVER** fall back to classic Maestro for auth flows (GH #7)
+- **NEVER** fall back to manual login or an unowned replay flow
 - **NEVER** use `clearState: true` with Dev Client builds (GH #8)
-- **ALWAYS** pass `--platform` to maestro-runner
+- **ALWAYS** pass `platform` to `maestro_run`
 - **Skip** the notification `permissions` config if testing notification
   permission flows (preserve undetermined state)
 - If no Maestro subflows found, inform the user and ask them to log in
@@ -517,8 +491,7 @@ cdp_store_state(path="auth")           # reads full useAuthStore.getState()
 |------|----------|---------|---------|
 | rn-fast-runner (iOS) | iOS | Live device interaction | In-tree; builds on first use (or pre-build via `xcodebuild build-for-testing`) |
 | rn-android-runner (Android) | Android | Live device interaction | In-tree; build via `./gradlew assembleDebug assembleDebugAndroidTest` |
-| maestro-runner | Recommended | YAML E2E test execution | Single binary download |
-| Maestro | Fallback | YAML E2E test execution | `brew install maestro` |
+| maestro-runner 1.1.24 | Required | YAML E2E test execution | Package pin-cache installer |
 | Xcode + Simulator | iOS | iOS testing | Mac App Store |
 | Android SDK + adb | Android | Android testing | developer.android.com |
 | Node.js >= 18 | Required | CDP MCP server | nodejs.org |

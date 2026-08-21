@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { afterEach, beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   createMaestroRunHandler,
@@ -12,6 +12,17 @@ import {
   releaseAndroidInteractionSlot,
 } from '../../dist/runners/release-android-slot.js';
 import { authorityErrorMeta, SessionAuthorityError } from '../../dist/session/registry.js';
+import {
+  _resetEngineStatusForTest,
+  _setEngineStatusForTest,
+  buildReplayEngineStatus,
+  MAESTRO_RUNNER_PIN,
+} from '../../dist/domain/engine-pin.js';
+
+beforeEach(() =>
+  _setEngineStatusForTest(buildReplayEngineStatus('pinned-ok', MAESTRO_RUNNER_PIN.version, false)),
+);
+afterEach(() => _resetEngineStatusForTest());
 
 const SERIAL = 'emulator-5580';
 const APP_ID = 'dev.example.issue653';

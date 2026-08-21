@@ -1,7 +1,7 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { okResult, failResult, warnResult } from '../utils.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
@@ -10,8 +10,8 @@ import { chooseMaestroDispatch, shouldWarnFallback } from './maestro-dispatch.js
 import { buildMaestroFlow, parseAndValidateFlow, MaestroValidationError, } from '../domain/maestro-validator.js';
 import { assembleMaestroArgs, executeMaestroAuthorityStages, MaestroStageExecutionError, nestedMaestroAuthorityCallbacks, planMaestroAuthorityStages, resolveMaestroFlowAppId, runFlowParked, } from './maestro-run.js';
 import { outputIndicatesFlowFailure } from '../domain/maestro-error-parser.js';
-import { buildReplayEngineStatus, exactPinRefusal, getEngineStatus, isOlderSdkInstallFailure, MAESTRO_RUNNER_PIN, olderSdkInstallDiagnosis, } from '../domain/engine-pin.js';
-import { actionReplayPreflight, regexSelectorCapabilityRefusal, } from '../domain/action-engine-compat.js';
+import { exactPinRefusal, getEngineStatus, isOlderSdkInstallFailure, olderSdkInstallDiagnosis, } from '../domain/engine-pin.js';
+import { actionReplayPreflight, isLearnedActionPath, regexSelectorCapabilityRefusal, } from '../domain/action-engine-compat.js';
 import { parseM7Header } from '../domain/reusable-action.js';
 import { flowUsesClearState, resolveAppFileForClearState } from './resolve-ios-app-file.js';
 import { maestroAuthorityRefusal, sameDevice, verifyMaestroDeviceAuthority, } from '../domain/maestro-device-authority.js';
@@ -53,13 +53,7 @@ export function createMaestroTestAllHandler(deps = {}) {
     const resolveAppFile = deps.resolveAppFile ?? resolveAppFileForClearState;
     const execute = deps.execFile ?? defaultExecFile;
     const now = deps.now ?? Date.now;
-    const resolveEngineStatus = deps.resolveEngineStatus ??
-        (process.env.NODE_TEST_CONTEXT
-            ? async () => buildReplayEngineStatus('pinned-ok', MAESTRO_RUNNER_PIN.version, false, {
-                selectedPath: '/test/pin-cache/maestro-runner/bin/maestro-runner',
-                provenance: 'pin-cache',
-            })
-            : () => getEngineStatus().catch(() => null));
+    const resolveEngineStatus = deps.resolveEngineStatus ?? (() => getEngineStatus().catch(() => null));
     return async (args) => {
         const platform = (args.platform ?? activeSession()?.platform);
         if (!platform) {
@@ -119,12 +113,15 @@ export function createMaestroTestAllHandler(deps = {}) {
             let reinstallsApp = false;
             try {
                 const yamlText = readFileSync(flow, 'utf-8');
-                const parsed = parseAndValidateFlow(yamlText);
+                const parsed = parseAndValidateFlow(yamlText, {
+                    flowDir: dirname(flow),
+                    flowRoot: flowDir,
+                });
                 const flowId = name.replace(/\.ya?ml$/i, '');
                 const meta = parseM7Header(yamlText, flowId);
-                const preflight = meta
+                const preflight = meta || isLearnedActionPath(flow)
                     ? actionReplayPreflight({
-                        enginePin: meta.enginePin,
+                        enginePin: meta?.enginePin,
                         commands: parsed.commands,
                         engineStatus,
                     })

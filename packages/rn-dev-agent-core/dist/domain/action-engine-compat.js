@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { ACTION_ENGINE_PIN, MAESTRO_RUNNER_PIN, exactPinRefusal, findRegexTextSelectors, } from './engine-pin.js';
 import { parseAndValidateFlow, MaestroValidationError } from './maestro-validator.js';
 import { parseM7Header } from './reusable-action.js';
@@ -32,6 +32,10 @@ export function actionReplayPreflight(opts) {
     if (format)
         return format;
     return regexSelectorCapabilityRefusal(opts.commands);
+}
+export function isLearnedActionPath(path) {
+    const parent = dirname(resolve(path));
+    return basename(parent) === 'actions' && basename(dirname(parent)) === '.rn-agent';
 }
 const ENGINE_PIN_LINE = new RegExp(`^#\\s*enginePin\\s*:\\s*.+$`);
 export function upsertEnginePinHeader(text) {
@@ -93,7 +97,7 @@ export function migrateLearnedActions(projectRoot) {
         }
         let commands = [];
         try {
-            commands = parseAndValidateFlow(text).commands;
+            commands = parseAndValidateFlow(text, { flowDir: dirname(path), flowRoot: dir }).commands;
         }
         catch (err) {
             const reason = err instanceof MaestroValidationError ? err.message : String(err);

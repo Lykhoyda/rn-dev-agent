@@ -1,6 +1,6 @@
 // GH #741: pinned maestro-runner 1.0.9 cannot drive Android API 23-25, and
 // RUNNER_OWNERSHIP_MISMATCH advised a status read that repairs nothing.
-import { test } from 'node:test';
+import { afterEach, beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createMaestroRunHandler } from '../../dist/tools/maestro-run.js';
 import type { MaestroDispatch } from '../../dist/tools/maestro-dispatch.js';
@@ -10,7 +10,16 @@ import {
   preOAndroidApiRefusal,
   olderSdkInstallDiagnosis,
   isOlderSdkInstallFailure,
+  _resetEngineStatusForTest,
+  _setEngineStatusForTest,
+  buildReplayEngineStatus,
+  MAESTRO_RUNNER_PIN,
 } from '../../dist/domain/engine-pin.js';
+
+beforeEach(() =>
+  _setEngineStatusForTest(buildReplayEngineStatus('pinned-ok', MAESTRO_RUNNER_PIN.version, false)),
+);
+afterEach(() => _resetEngineStatusForTest());
 
 const SERIAL = 'emulator-5560';
 const APP_ID = 'dev.example.issue741';
@@ -163,14 +172,8 @@ test('GH#741 pure helpers: refusal below the minimum only, diagnosis names the p
   assert.match(olderSdkInstallDiagnosis(), /1\.0\.9|maestro-runner/);
 });
 
-test('GH#741 the diagnosis names the tier that actually rejected the install', () => {
+test('GH#741 the diagnosis names the only supported replay tier', () => {
   assert.match(olderSdkInstallDiagnosis('maestro-runner'), /pinned maestro-runner/);
-  assert.match(olderSdkInstallDiagnosis('maestro-cli'), /Maestro CLI/);
-  assert.doesNotMatch(
-    olderSdkInstallDiagnosis('maestro-cli'),
-    /maestro-runner/,
-    'a CLI-tier reject must not be blamed on the maestro-runner pin',
-  );
 });
 
 test('GH#741 an app-logged token is not an install reject (GH#249 class)', () => {

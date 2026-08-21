@@ -7366,7 +7366,7 @@ var require_dist = __commonJS({
 // packages/rn-dev-agent-core/dist/maestro-runner-pin.js
 import { spawnSync } from "node:child_process";
 import { existsSync as existsSync3 } from "node:fs";
-import { dirname as dirname2, join as join5 } from "node:path";
+import { dirname as dirname3, join as join5 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // packages/rn-dev-agent-core/dist/domain/engine-pin.js
@@ -7376,8 +7376,9 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-var execFile = promisify(execFileCb);
-var MAESTRO_RUNNER_PIN = {
+
+// packages/rn-dev-agent-core/dist/domain/maestro-runner-pin.json
+var maestro_runner_pin_default = {
   version: "1.1.24",
   sha256: {
     "darwin-arm64": "170f12521de83322823dd5fc0ce16e48abeba9952cdbb242670592566c2fd1f3",
@@ -7393,6 +7394,10 @@ var MAESTRO_RUNNER_PIN = {
     }
   ]
 };
+
+// packages/rn-dev-agent-core/dist/domain/engine-pin.js
+var execFile = promisify(execFileCb);
+var MAESTRO_RUNNER_PIN = maestro_runner_pin_default;
 var ACTION_ENGINE_PIN = `maestro-runner@${MAESTRO_RUNNER_PIN.version}`;
 var PINNED_RUNNER_INSTALL_HINT = `bash \${CLAUDE_PLUGIN_ROOT:-<plugin-root>}/scripts/ensure-maestro-runner.sh`;
 function compareVersions(a, b) {
@@ -7465,7 +7470,7 @@ function buildReplayEngineStatus(cls, version, _cliPresent, extras = {}) {
     provenance: extras.provenance ?? (cls === "not-installed" ? "none" : "pin-cache")
   };
 }
-var REGEX_SHAPED_SELECTOR = /\.\*|\.\+|\\[dDwWsSbB]|\[[^\]]*\]|\|/;
+var REGEX_SHAPED_SELECTOR = /(?:^\^|\$$|\.\*|\.\+|\\[AbBdDsSwWzZ]|\[[^\]]*\]|\(\?(?:[:=!<]|<[=!])|\([^)]*\)|\||\{\d+(?:,\d*)?\}|(?:^|[^\\])[+*?])/;
 var TEXT_SELECTOR_KEYS = /* @__PURE__ */ new Set([
   "tapOn",
   "doubleTapOn",
@@ -7535,9 +7540,9 @@ function doctorPinnedRunner(status, platformKey = nodePlatformKey()) {
     correction: ok ? null : pinCorrection(status, platformKey)
   };
 }
-var cachedStatus = null;
+var testStatus;
 function _resetEngineStatusForTest() {
-  cachedStatus = null;
+  testStatus = void 0;
 }
 async function defaultExecVersion(bin) {
   const { stdout, stderr } = await execFile(bin, ["--version"], {
@@ -7585,15 +7590,14 @@ async function detect(resolvers) {
   });
 }
 function getEngineStatus(resolvers) {
-  if (!cachedStatus) {
-    cachedStatus = detect(resolvers ?? {}).catch(() => buildReplayEngineStatus("unknown-version", null, false));
-  }
-  return cachedStatus;
+  if (testStatus)
+    return Promise.resolve(testStatus);
+  return detect(resolvers ?? {}).catch(() => buildReplayEngineStatus("unknown-version", null, false));
 }
 
 // packages/rn-dev-agent-core/dist/domain/action-engine-compat.js
 import { readdirSync, readFileSync as readFileSync3, writeFileSync } from "node:fs";
-import { join as join4 } from "node:path";
+import { basename, dirname as dirname2, join as join4, resolve } from "node:path";
 
 // packages/rn-dev-agent-core/dist/domain/maestro-validator.js
 var import_yaml = __toESM(require_dist(), 1);
@@ -8165,7 +8169,7 @@ function migrateLearnedActions(projectRoot) {
     }
     let commands = [];
     try {
-      commands = parseAndValidateFlow(text).commands;
+      commands = parseAndValidateFlow(text, { flowDir: dirname2(path), flowRoot: dir }).commands;
     } catch (err) {
       const reason = err instanceof MaestroValidationError ? err.message : String(err);
       results.push({ id, path, status: "unreadable", reason, mutated: false });
@@ -8192,7 +8196,7 @@ function migrateLearnedActions(projectRoot) {
 // packages/rn-dev-agent-core/dist/maestro-runner-pin.js
 var USAGE = "usage: maestro-runner-pin [diagnose|install|migrate-actions] [--json] [--root <app>]";
 function ensureScriptPath() {
-  const here = dirname2(fileURLToPath(import.meta.url));
+  const here = dirname3(fileURLToPath(import.meta.url));
   const candidates = [
     join5(here, "..", "..", "..", "scripts", "ensure-maestro-runner.sh"),
     join5(here, "..", "scripts", "ensure-maestro-runner.sh"),

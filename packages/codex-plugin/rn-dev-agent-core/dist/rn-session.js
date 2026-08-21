@@ -11669,15 +11669,11 @@ var init_maestro_validator = __esm({
   }
 });
 
-// packages/rn-dev-agent-core/dist/domain/engine-pin.js
-import { execFile as execFileCb2 } from "node:child_process";
-import { promisify as promisify3 } from "node:util";
-var execFile3, MAESTRO_RUNNER_PIN, ACTION_ENGINE_PIN;
-var init_engine_pin = __esm({
-  "packages/rn-dev-agent-core/dist/domain/engine-pin.js"() {
-    "use strict";
-    execFile3 = promisify3(execFileCb2);
-    MAESTRO_RUNNER_PIN = {
+// packages/rn-dev-agent-core/dist/domain/maestro-runner-pin.json
+var maestro_runner_pin_default;
+var init_maestro_runner_pin = __esm({
+  "packages/rn-dev-agent-core/dist/domain/maestro-runner-pin.json"() {
+    maestro_runner_pin_default = {
       version: "1.1.24",
       sha256: {
         "darwin-arm64": "170f12521de83322823dd5fc0ce16e48abeba9952cdbb242670592566c2fd1f3",
@@ -11693,6 +11689,19 @@ var init_engine_pin = __esm({
         }
       ]
     };
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/engine-pin.js
+import { execFile as execFileCb2 } from "node:child_process";
+import { promisify as promisify3 } from "node:util";
+var execFile3, MAESTRO_RUNNER_PIN, ACTION_ENGINE_PIN;
+var init_engine_pin = __esm({
+  "packages/rn-dev-agent-core/dist/domain/engine-pin.js"() {
+    "use strict";
+    init_maestro_runner_pin();
+    execFile3 = promisify3(execFileCb2);
+    MAESTRO_RUNNER_PIN = maestro_runner_pin_default;
     ACTION_ENGINE_PIN = `maestro-runner@${MAESTRO_RUNNER_PIN.version}`;
   }
 });
@@ -11719,13 +11728,6 @@ var init_maestro_error_parser = __esm({
   "packages/rn-dev-agent-core/dist/domain/maestro-error-parser.js"() {
     "use strict";
     init_ansi();
-  }
-});
-
-// packages/rn-dev-agent-core/dist/tools/resolve-ios-app-file.js
-var init_resolve_ios_app_file = __esm({
-  "packages/rn-dev-agent-core/dist/tools/resolve-ios-app-file.js"() {
-    "use strict";
   }
 });
 
@@ -11811,6 +11813,13 @@ var init_action_engine_compat = __esm({
     init_reusable_action();
     init_action_store();
     ENGINE_PIN_LINE = new RegExp(`^#\\s*enginePin\\s*:\\s*.+$`);
+  }
+});
+
+// packages/rn-dev-agent-core/dist/tools/resolve-ios-app-file.js
+var init_resolve_ios_app_file = __esm({
+  "packages/rn-dev-agent-core/dist/tools/resolve-ios-app-file.js"() {
+    "use strict";
   }
 });
 
@@ -12145,6 +12154,7 @@ var init_maestro_run = __esm({
     init_utils();
     init_engine_pin();
     init_action_engine_compat();
+    init_reusable_action();
     init_agent_device_wrapper();
     init_project_config();
     init_maestro_dispatch();
@@ -12413,6 +12423,7 @@ var init_maestro_invoke = __esm({
     init_maestro_dispatch();
     init_maestro_error_parser();
     init_engine_pin();
+    init_action_engine_compat();
     init_resolve_ios_app_file();
     init_maestro_run();
     init_agent_device_wrapper();

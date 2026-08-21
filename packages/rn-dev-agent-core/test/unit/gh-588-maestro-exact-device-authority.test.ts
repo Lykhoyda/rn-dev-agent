@@ -14,6 +14,17 @@ import {
 } from '../../dist/domain/maestro-device-authority.js';
 import { createRunActionHandler } from '../../dist/tools/run-action.js';
 import { createTmpProject, fixtureYaml } from '../helpers/tmp-project.js';
+import {
+  _resetEngineStatusForTest,
+  _setEngineStatusForTest,
+  buildReplayEngineStatus,
+  MAESTRO_RUNNER_PIN,
+} from '../../dist/domain/engine-pin.js';
+
+beforeEach(() =>
+  _setEngineStatusForTest(buildReplayEngineStatus('pinned-ok', MAESTRO_RUNNER_PIN.version, false)),
+);
+afterEach(() => _resetEngineStatusForTest());
 
 const EXACT = '5C10B45B-2065-458B-B885-0F83F49747C8';
 const FOREIGN = 'A7D2C7C9-A7DE-474D-95F2-7D2DF0EE44D3';
@@ -243,7 +254,7 @@ function envelope(result: { content: Array<{ text: string }> }): Record<string, 
   return JSON.parse(result.content[0].text);
 }
 
-test('exact active UDID is forwarded to maestro-runner and official Maestro before the flow', () => {
+test('exact active UDID is forwarded to maestro-runner before the flow', () => {
   const runner = fakeRunnerDispatch();
   assert.deepEqual(runner.buildArgs('ios', '/tmp/flow.yaml', undefined, EXACT), [
     '--platform',
@@ -254,21 +265,6 @@ test('exact active UDID is forwarded to maestro-runner and official Maestro befo
     '/tmp/flow.yaml',
   ]);
 
-  const cli = chooseMaestroDispatch({
-    platform: 'ios',
-    whichAdb: () => null,
-    whichMaestro: () => '/usr/bin/maestro',
-    maestroRunnerPath: () => null,
-  });
-  if ('error' in cli) throw new Error(cli.error);
-  assert.deepEqual(cli.buildArgs('ios', '/tmp/flow.yaml', undefined, EXACT), [
-    'test',
-    '--platform',
-    'ios',
-    '--udid',
-    EXACT,
-    '/tmp/flow.yaml',
-  ]);
 });
 
 test('actual pinned-device log verifies exact runner and WDA identity, not requested metadata', () => {

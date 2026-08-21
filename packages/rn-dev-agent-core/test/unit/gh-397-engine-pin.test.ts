@@ -83,14 +83,15 @@ test('gh-397: enginePinCaveat only fires on drift/checksum states', () => {
   assert.match(bad, /checksum/i);
 });
 
-test('gh-397: getEngineStatus detects via injected resolvers and caches', async () => {
+test('gh-397: getEngineStatus revalidates across sequential spawn boundaries', async () => {
   _resetEngineStatusForTest();
   let execCalls = 0;
+  let version = '1.1.24';
   const resolvers = {
     binPath: () => '/fake/maestro-runner',
     execVersion: async () => {
       execCalls++;
-      return 'maestro-runner 1.1.24\n  Commit:  9728809';
+      return `maestro-runner ${version}\n  Commit:  9728809`;
     },
     hashFile: () => PIN_HASH,
     cliPresent: () => false,
@@ -99,9 +100,11 @@ test('gh-397: getEngineStatus detects via injected resolvers and caches', async 
   const s1 = await getEngineStatus(resolvers);
   assert.equal(s1.pin.status, 'pinned-ok');
   assert.equal(s1.version, '1.1.24');
+  version = '1.2.0';
   const s2 = await getEngineStatus(resolvers);
-  assert.equal(execCalls, 1, 'second call must hit the cache');
-  assert.equal(s2, s1);
+  assert.equal(execCalls, 2);
+  assert.equal(s2.pin.status, 'drift-newer');
+  assert.equal(s2.version, '1.2.0');
 });
 
 test('gh-397: checksum mismatch is classified before executing --version', async () => {
@@ -139,7 +142,7 @@ test('gh-397: getEngineStatus fails open on resolver errors', async () => {
   _resetEngineStatusForTest();
 });
 
-test('gh-397: _setEngineStatusForTest seeds the cache (for maestro-run tests)', async () => {
+test('gh-397: explicit test status overrides live detection', async () => {
   _resetEngineStatusForTest();
   const seeded = buildReplayEngineStatus('drift-newer', '1.1.0', false);
   _setEngineStatusForTest(seeded);

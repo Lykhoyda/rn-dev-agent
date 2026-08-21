@@ -8,6 +8,7 @@ import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import { runMaestroInline } from '../../dist/maestro-invoke.js';
 import { spawnManagedProcessGroup } from '../../dist/session/managed-automation.js';
+import { buildReplayEngineStatus, MAESTRO_RUNNER_PIN } from '../../dist/domain/engine-pin.js';
 
 function alive(pid: number): boolean {
   try {
@@ -160,6 +161,8 @@ test('inline Maestro cannot pass an output-overflow execution that exits zero', 
         binPath: '/fake/maestro',
         buildArgs: () => [],
       })) as never,
+      resolveEngineStatus: async () =>
+        buildReplayEngineStatus('pinned-ok', MAESTRO_RUNNER_PIN.version, false),
       spawnManaged: async () => ({
         stdout: '',
         stderr: '',

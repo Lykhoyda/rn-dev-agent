@@ -2,7 +2,7 @@ import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { basename, join, dirname } from 'node:path';
 import type { ToolResult } from '../utils.js';
 import { okResult, failResult, warnResult } from '../utils.js';
 import {
@@ -13,11 +13,14 @@ import {
   isOlderSdkInstallFailure,
   olderSdkInstallDiagnosis,
   MAESTRO_RUNNER_MIN_ANDROID_API,
-  MAESTRO_RUNNER_PIN,
-  buildReplayEngineStatus,
   type ReplayEngineStatus,
 } from '../domain/engine-pin.js';
-import { regexSelectorCapabilityRefusal } from '../domain/action-engine-compat.js';
+import {
+  actionReplayPreflight,
+  isLearnedActionPath,
+  regexSelectorCapabilityRefusal,
+} from '../domain/action-engine-compat.js';
+import { parseM7Header } from '../domain/reusable-action.js';
 import { getActiveSession } from '../agent-device-wrapper.js';
 import { resolveBundleId, readExpoSlug } from '../project-config.js';
 import {
@@ -439,14 +442,7 @@ export function createMaestroRunHandler(
   const probeApiLevel = deps.probeAndroidApiLevel ?? defaultProbeAndroidApiLevel;
   const now = deps.now ?? Date.now;
   const resolveEngineStatus =
-    deps.resolveEngineStatus ??
-    (process.env.NODE_TEST_CONTEXT
-      ? async () =>
-          buildReplayEngineStatus('pinned-ok', MAESTRO_RUNNER_PIN.version, false, {
-            selectedPath: '/test/pin-cache/maestro-runner/bin/maestro-runner',
-            provenance: 'pin-cache',
-          })
-      : () => getEngineStatus().catch(() => null));
+    deps.resolveEngineStatus ?? (() => getEngineStatus().catch(() => null));
   return async (args) => {
     // GH #116: validate params shape FIRST so a malformed payload is rejected
     // regardless of platform / dispatch-tier availability. CI envs without
@@ -570,9 +566,6 @@ export function createMaestroRunHandler(
       throw err;
     }
 
-    // B59 + GH #356/B223: tiered dispatch — maestro-runner when viable, Maestro
-    // CLI fallback when iOS-only and adb is missing, and (B223) the Maestro CLI
-    // for Android flows that use hideKeyboard (maestro-runner no-ops it there).
     const dispatch = selectDispatch({ platform, flowHasHideKeyboard } as MaestroDispatchInputs);
     if ('error' in dispatch) {
       return failResult(dispatch.error);
@@ -669,9 +662,20 @@ export function createMaestroRunHandler(
         provenance: engineStatus?.provenance ?? 'none',
       });
     }
-    const regexRefusal = regexSelectorCapabilityRefusal(validatedCommands);
-    if (regexRefusal) {
-      return failResult(regexRefusal, 'ENGINE_PIN_MISMATCH', {
+    const learnedAction = args.flowPath ? isLearnedActionPath(args.flowPath) : false;
+    const actionMeta =
+      learnedAction && args.flowPath
+        ? parseM7Header(rawYaml, basename(args.flowPath).replace(/\.ya?ml$/i, ''))
+        : null;
+    const compatibilityRefusal = learnedAction
+      ? actionReplayPreflight({
+          enginePin: actionMeta?.enginePin,
+          commands: validatedCommands,
+          engineStatus,
+        })
+      : regexSelectorCapabilityRefusal(validatedCommands);
+    if (compatibilityRefusal) {
+      return failResult(compatibilityRefusal, 'ENGINE_PIN_MISMATCH', {
         pin: engineStatus?.pin,
         installedVersion: engineStatus?.version ?? null,
         selectedPath: engineStatus?.selectedPath ?? null,

@@ -8,13 +8,30 @@
 #   1 — missing, drifted, checksum mismatch, or unsupported platform
 set -euo pipefail
 
-# GH #397: install exactly the TESTED engine version. Kept in sync with
-# packages/rn-dev-agent-core/src/domain/engine-pin.ts by gh-397-pin-sync.test.ts.
-MAESTRO_RUNNER_PIN_VERSION="1.1.24"
-MAESTRO_RUNNER_PIN_SHA256_DARWIN_ARM64="170f12521de83322823dd5fc0ce16e48abeba9952cdbb242670592566c2fd1f3"
-MAESTRO_RUNNER_PIN_SHA256_DARWIN_X64="af7f5ea044afc72ea780c835f05b32203e443d2e26d310a864bfb2bc84959bf6"
-MAESTRO_RUNNER_PIN_SHA256_LINUX_X64="e9bdef6f08f855ca1a884f99b54a519a1eae0a342917181a53eb414a5b00d6d8"
-MAESTRO_RUNNER_PIN_SHA256_LINUX_ARM64="8d8a6483ad04da2109636b7192398750657801b8a8d512688d1be3b033a105b8"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PIN_MANIFEST="${RN_DEV_AGENT_PIN_MANIFEST:-$SCRIPT_DIR/maestro-runner-pin.json}"
+if [ ! -f "$PIN_MANIFEST" ]; then
+  PIN_MANIFEST="$SCRIPT_DIR/../packages/rn-dev-agent-core/src/domain/maestro-runner-pin.json"
+fi
+if [ ! -f "$PIN_MANIFEST" ]; then
+  echo "ERROR: maestro-runner pin manifest is missing."
+  exit 1
+fi
+
+manifest_value() {
+  node -e 'const m=require(process.argv[1]); const v=process.argv[2].split(".").reduce((o,k)=>o?.[k],m); if(typeof v!=="string") process.exit(1); process.stdout.write(v)' "$PIN_MANIFEST" "$1"
+}
+
+if [ "${1:-}" = "--print-pin-json" ]; then
+  node -e 'const m=require(process.argv[1]); process.stdout.write(JSON.stringify(m))' "$PIN_MANIFEST"
+  exit 0
+fi
+
+MAESTRO_RUNNER_PIN_VERSION="$(manifest_value version)"
+MAESTRO_RUNNER_PIN_SHA256_DARWIN_ARM64="$(manifest_value sha256.darwin-arm64)"
+MAESTRO_RUNNER_PIN_SHA256_DARWIN_X64="$(manifest_value sha256.darwin-x64)"
+MAESTRO_RUNNER_PIN_SHA256_LINUX_X64="$(manifest_value sha256.linux-x64)"
+MAESTRO_RUNNER_PIN_SHA256_LINUX_ARM64="$(manifest_value sha256.linux-arm64)"
 
 CACHE_PARENT="${RN_DEV_AGENT_RUNNER_CACHE:-$HOME/.cache/rn-dev-agent}"
 PIN_DIR="$CACHE_PARENT/maestro-runner/$MAESTRO_RUNNER_PIN_VERSION"

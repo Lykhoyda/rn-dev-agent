@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -17,6 +17,8 @@ import {
 } from '../../dist/domain/action-engine-compat.js';
 import { createRunActionHandler } from '../../dist/tools/run-action.js';
 import { createMaestroTestAllHandler } from '../../dist/tools/maestro-test-all.js';
+import { createMaestroRunHandler } from '../../dist/tools/maestro-run.js';
+import { runMaestroInline } from '../../dist/maestro-invoke.js';
 import { createTmpProject } from '../helpers/tmp-project.js';
 
 const PINNED = () =>
@@ -68,6 +70,10 @@ test('regex text selectors are refused before any runner spawn', () => {
   assert.match(msg, /No UI mutation/);
 });
 
+test('anchored regex text selectors are refused', () => {
+  assert.match(String(regexSelectorCapabilityRefusal([{ tapOn: '^Login$' }])), /regex/);
+});
+
 test('id selectors pass regex preflight', () => {
   assert.equal(regexSelectorCapabilityRefusal([{ tapOn: { id: 'fab-create-task' } }]), null);
 });
@@ -107,6 +113,106 @@ test('migrateLearnedActions stamps compatible YAML and leaves regex actions unmu
   assert.equal(bad?.status, 'incompatible');
   assert.equal(bad?.mutated, false);
   assert.doesNotMatch(readFileSync(badPath, 'utf8'), /enginePin/);
+});
+
+test('migrateLearnedActions expands contained runFlow files before pinning', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-action-subflow-'));
+  const dir = join(root, '.rn-agent', 'actions');
+  const subflows = join(dir, 'subflows');
+  mkdirSync(subflows, { recursive: true });
+  writeFileSync(join(subflows, 'steps.yaml'), '- tapOn:\n    id: "continue"\n', 'utf8');
+  const actionPath = join(dir, 'with-subflow.yaml');
+  writeFileSync(
+    actionPath,
+    'appId: com.x\n---\n# id: with-subflow\n# intent: do it\n# status: active\n- runFlow: subflows/steps.yaml\n',
+    'utf8',
+  );
+  const result = migrateLearnedActions(root).find((row) => row.id === 'with-subflow');
+  assert.equal(result?.status, 'migrated');
+  assert.match(readFileSync(actionPath, 'utf8'), /enginePin: maestro-runner@1\.1\.24/);
+});
+
+test('maestro_run refuses a drifted learned action before spawn', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-action-direct-'));
+  const dir = join(root, '.rn-agent', 'actions');
+  mkdirSync(dir, { recursive: true });
+  const flowPath = join(dir, 'login.yaml');
+  writeFileSync(flowPath, actionYaml('login', '# enginePin: maestro-runner@1.0.9'), 'utf8');
+  let spawned = false;
+  const handler = createMaestroRunHandler({
+    getActiveSession: () => ({ platform: 'ios', deviceId: 'SIM', appId: 'com.test.app' }) as never,
+    chooseDispatch: () => ({
+      runner: 'maestro-runner',
+      binPath: '/fake/maestro-runner',
+      buildArgs: () => ['test', flowPath],
+    }),
+    resolveEngineStatus: async () => PINNED(),
+    execFile: async () => {
+      spawned = true;
+      return { stdout: '', stderr: '' };
+    },
+  });
+  const result = await handler({ platform: 'ios', flowPath });
+  const body = JSON.parse(result.content[0]!.text);
+  assert.equal(body.ok, false);
+  assert.match(String(body.error), /1\.0\.9/);
+  assert.equal(spawned, false);
+});
+
+test('inline replay refuses selectors before spawn', async () => {
+  let spawned = false;
+  const result = await runMaestroInline(
+    '- tapOn: "^Login$"',
+    { platform: 'ios' },
+    {
+      chooseDispatch: () => ({
+        runner: 'maestro-runner',
+        binPath: '/fake/maestro-runner',
+        buildArgs: () => [],
+      }),
+      resolveEngineStatus: async () => PINNED(),
+      spawnManaged: async () => {
+        spawned = true;
+        throw new Error('must not spawn');
+      },
+    },
+  );
+  assert.equal(result.passed, false);
+  assert.match(String(result.error), /regex/);
+  assert.equal(spawned, false);
+});
+
+test('NODE_TEST_CONTEXT cannot bypass a corrupt pin-cache binary', async () => {
+  const previousCache = process.env.RN_DEV_AGENT_RUNNER_CACHE;
+  const cache = mkdtempSync(join(tmpdir(), 'rn-corrupt-pin-'));
+  const bin = join(cache, 'maestro-runner', MAESTRO_RUNNER_PIN.version, 'bin', 'maestro-runner');
+  mkdirSync(join(bin, '..'), { recursive: true });
+  writeFileSync(bin, '#!/bin/sh\necho maestro-runner 1.1.24\n', 'utf8');
+  chmodSync(bin, 0o755);
+  process.env.RN_DEV_AGENT_RUNNER_CACHE = cache;
+  let spawned = false;
+  try {
+    const handler = createMaestroRunHandler({
+      getActiveSession: () => ({ platform: 'ios', deviceId: 'SIM' }) as never,
+      chooseDispatch: () => ({
+        runner: 'maestro-runner',
+        binPath: bin,
+        buildArgs: () => [],
+      }),
+      execFile: async () => {
+        spawned = true;
+        return { stdout: '', stderr: '' };
+      },
+    });
+    const result = await handler({ platform: 'ios', inlineYaml: '- tapOn: Continue' });
+    const body = JSON.parse(result.content[0]!.text);
+    assert.equal(body.ok, false);
+    assert.match(String(body.error), /checksum/);
+    assert.equal(spawned, false);
+  } finally {
+    if (previousCache === undefined) delete process.env.RN_DEV_AGENT_RUNNER_CACHE;
+    else process.env.RN_DEV_AGENT_RUNNER_CACHE = previousCache;
+  }
 });
 
 test('run-action pin mismatch refuses before maestro and before CDP probe', async () => {
@@ -206,4 +312,30 @@ test('maestro_test_all refuses before spawn when the exact pin is missing', asyn
   assert.equal(spawned, false);
   assert.equal(result.isError, true);
   assert.match(String(body.error), /1\.1\.24|pin-cache|not installed/i);
+});
+
+test('maestro_test_all requires M7 engine metadata in the owned corpus', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-owned-suite-'));
+  const dir = join(root, '.rn-agent', 'actions');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'browse.yaml'), 'appId: com.test.app\n---\n- tapOn: Browse\n');
+  let spawned = false;
+  const handler = createMaestroTestAllHandler({
+    getActiveSession: () => ({ platform: 'ios', deviceId: 'SIM', appId: 'com.test.app' }) as never,
+    chooseDispatch: () => ({
+      runner: 'maestro-runner',
+      binPath: '/fake/maestro-runner',
+      buildArgs: () => [],
+    }),
+    resolveEngineStatus: async () => PINNED(),
+    execFile: async () => {
+      spawned = true;
+      return { stdout: '', stderr: '' };
+    },
+  });
+  const result = await handler({ platform: 'ios', flowDir: dir });
+  const body = JSON.parse(result.content[0]!.text);
+  assert.equal(body.data.failed, 1);
+  assert.match(String(body.data.results[0].error), /not migrated/);
+  assert.equal(spawned, false);
 });
