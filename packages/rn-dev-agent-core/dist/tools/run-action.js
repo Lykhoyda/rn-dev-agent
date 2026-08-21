@@ -285,7 +285,10 @@ export function createRunActionHandler(deps = {}) {
             loaded = loadAction(projectRoot, args.actionId);
         }
         catch (err) {
-            return failResult(err instanceof Error ? err.message : String(err), 'BAD_FILENAME', { actionId: args.actionId, fallback: 'none' });
+            return failResult(err instanceof Error ? err.message : String(err), 'BAD_FILENAME', {
+                actionId: args.actionId,
+                fallback: 'none',
+            });
         }
         if (!loaded) {
             return failResult(`cdp_run_action: action "${args.actionId}" not found at ${projectRoot}/.rn-agent/actions/${args.actionId}.yaml or ${args.actionId}.yml`, 'NO_PROJECT_ROOT', {

@@ -445,7 +445,7 @@ export const atomicWriter = {
         try {
             directoryFd = openSync(dirname(targetPath), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY);
         }
-        catch (error) {
+        catch {
             return false;
         }
         try {

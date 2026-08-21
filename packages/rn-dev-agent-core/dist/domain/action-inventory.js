@@ -15,7 +15,7 @@ export async function listActions(projectRoot) {
     }
     const yamlFiles = files.filter((f) => /\.ya?ml$/.test(f)).sort();
     const results = [];
-    for (const id of [...new Set(yamlFiles.map((file) => file.replace(/\.ya?ml$/, '')))]) {
+    for (const id of new Set(yamlFiles.map((file) => file.replace(/\.ya?ml$/, '')))) {
         const action = loadAction(projectRoot, id);
         if (!action)
             continue;

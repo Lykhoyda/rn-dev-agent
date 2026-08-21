@@ -605,7 +605,7 @@ function expectedPayloadEntries(archive) {
     const archivePath = longPath ?? [prefix, name].filter(Boolean).join("/");
     longPath = null;
     if (type === "L") {
-      longPath = data.toString().replace(/\0.*$/s, "").trim();
+      longPath = data.toString().split("\0")[0].trim();
     } else if (type === "0" || type === "\0" || type === "2" || type === "5") {
       raw.push({ path: archivePath, type, data, link: tarText(header, 157, 100) });
     }
@@ -9252,7 +9252,7 @@ var init_atomic_writer = __esm({
         let directoryFd;
         try {
           directoryFd = openSync2(dirname5(targetPath), constants3.O_RDONLY | constants3.O_NOFOLLOW | constants3.O_DIRECTORY);
-        } catch (error) {
+        } catch {
           return false;
         }
         try {

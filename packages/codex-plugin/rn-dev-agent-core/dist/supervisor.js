@@ -27438,7 +27438,7 @@ function expectedPayloadEntries(archive) {
     const archivePath = longPath ?? [prefix, name].filter(Boolean).join("/");
     longPath = null;
     if (type === "L") {
-      longPath = data.toString().replace(/\0.*$/s, "").trim();
+      longPath = data.toString().split("\0")[0].trim();
     } else if (type === "0" || type === "\0" || type === "2" || type === "5") {
       raw.push({ path: archivePath, type, data, link: tarText(header, 157, 100) });
     }
@@ -28751,7 +28751,7 @@ var init_atomic_writer = __esm({
         let directoryFd;
         try {
           directoryFd = openSync9(dirname13(targetPath), constants7.O_RDONLY | constants7.O_NOFOLLOW | constants7.O_DIRECTORY);
-        } catch (error2) {
+        } catch {
           return false;
         }
         try {
@@ -79419,7 +79419,10 @@ function createRunActionHandler(deps = {}) {
     try {
       loaded = loadAction(projectRoot, args.actionId);
     } catch (err) {
-      return failResult(err instanceof Error ? err.message : String(err), "BAD_FILENAME", { actionId: args.actionId, fallback: "none" });
+      return failResult(err instanceof Error ? err.message : String(err), "BAD_FILENAME", {
+        actionId: args.actionId,
+        fallback: "none"
+      });
     }
     if (!loaded) {
       return failResult(`cdp_run_action: action "${args.actionId}" not found at ${projectRoot}/.rn-agent/actions/${args.actionId}.yaml or ${args.actionId}.yml`, "NO_PROJECT_ROOT", {
@@ -90085,7 +90088,7 @@ async function listActions(projectRoot) {
   }
   const yamlFiles = files.filter((f) => /\.ya?ml$/.test(f)).sort();
   const results = [];
-  for (const id of [...new Set(yamlFiles.map((file) => file.replace(/\.ya?ml$/, "")))]) {
+  for (const id of new Set(yamlFiles.map((file) => file.replace(/\.ya?ml$/, "")))) {
     const action = loadAction(projectRoot, id);
     if (!action)
       continue;
