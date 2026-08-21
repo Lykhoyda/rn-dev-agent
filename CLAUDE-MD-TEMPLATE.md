@@ -50,11 +50,18 @@ exist as YAML).
    selector compatibility; it resolves pin-cache maestro-runner `>= 1.1.24` from
    rn-dev-agent's versioned pin-cache. A passing replay IS your evidence —
    skip ahead to capturing proof.
-3. **Only if no match (or replay fails with a concrete error):** fall back to
+3. **Only if no non-login match (or replay fails with a concrete error):** fall back to
    manual primitives (`device_press` / `device_fill` / `device_find`). When
    you do, **end the session by persisting the verified flow** as a new YAML
    under `<test-app>/.rn-agent/actions/<feature-slug>.yaml` so the next session
    starts at step 2, not step 3.
+
+Authentication is fail-stop: when login is required, call
+`cdp_login_prologue`. It inventories learned actions, resolves only the exact
+`user-login` action, and requires a fresh passing RunRecord. Any missing action,
+runner drift, selector failure, or timeout returns `LOGIN_PROLOGUE_BLOCKED`.
+Do not continue with credentials, ad-hoc Maestro, navigation shortcuts, or
+store mutation after that result.
 
 Manual walks are a fallback, not a default. Codified in
 `feedback_execute_artifacts_before_manual.md`. Enforced as Step 0 of
@@ -76,18 +83,19 @@ manual when state mismatches; never re-walk a flow you already have.
    relevant slice. Note any mismatch with the expected starting state.
 2. **Compose action + manual.** If current state ≠ expected start, scan
    `list-learned-actions` for an action whose `produces` covers the gap.
-   Replay via `cdp_run_action`. Re-verify state. Then continue
+   Replay via `cdp_run_action`; for authentication, use
+   `cdp_login_prologue`. Re-verify state. Then continue
    interactively for the novel part.
 3. **No fully-manual fallback when partial replay would cover half the work.**
-   Login is the cardinal example — if a saved login action exists, use it
-   as a prologue, never re-walk login interactively.
+   Login is the cardinal example — enter through `cdp_login_prologue` and
+   never re-walk login interactively if the exact action is absent or fails.
 
 **Worked example.** User: "tap the cart badge."
 
 - Agent: `cdp_navigation_state` → `LoginScreen` (mismatch with home)
 - Agent: `list-learned-actions` → finds `user-login` with
   `produces: { authenticated: true, route: home }`
-- Agent: `cdp_run_action({ id: "user-login", params: { EMAIL, PASSWORD } })`
+- Agent: `cdp_login_prologue({ params: { EMAIL, PASSWORD } })` → fresh passing RunRecord
 - Agent: `cdp_navigation_state` → `HomeScreen` (state delta closed)
 - Agent: `cdp_component_tree({ filter: "cart" })` → finds `cart-badge` ref
 - Agent: `device_press({ ref: "cart-badge" })`
@@ -182,8 +190,7 @@ The artifact-first rule generalizes from "replay if exact match" to
 2. /rn-dev-agent:list-learned-actions  (or read .rn-agent/actions/ directly)
                                     → finds `user-login` with
                                       produces: { authenticated: true, route: home }
-3. cdp_run_action({                 (deterministic prologue, ~4s)
-     id: "user-login",
+3. cdp_login_prologue({             (deterministic fail-stop prologue)
      params: { EMAIL, PASSWORD }
    })
 4. cdp_navigation_state             → returns "HomeScreen" (state delta closed)
@@ -564,10 +571,9 @@ the runner's settle engine.
 
 Before testing **auth-gated features:**
 1. `cdp_navigation_state` — check if on a login screen
-2. Scan `/rn-dev-agent:list-learned-actions login` — a saved login action with `produces: { authenticated: true }` is the preferred prologue (replay via `cdp_run_action`, ~4s; see Hybrid composition)
-3. If no compatible owned action exists, stop and report authentication as blocked. Do not use manual login, `.maestro` flows, ambient runners, or `cdp_auto_login` as an automatic fallback.
-4. Only when the user explicitly authorizes legacy per-call navigation recovery may `cdp_auto_login` run. It is never durable login authority or PR proof; create or migrate an owned compatible action before proof.
-5. `cdp_navigation_state` — verify arrival at home/target screen
+2. Call `cdp_login_prologue` — it inventories and resolves the exact `user-login` action itself
+3. Require `state: "passed"` plus a fresh passing `runRecord`; only then continue
+4. On `LOGIN_PROLOGUE_BLOCKED`, stop the journey; never fall through to manual credentials, `cdp_auto_login`, or ad-hoc Maestro
 
 Before testing **permission-gated features:**
 1. `device_permission(action="query", permission="<name>")` — check current state

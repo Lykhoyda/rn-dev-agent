@@ -23988,8 +23988,8 @@ var init_registry = __esm({
           const handoff = this.#database.prepare("SELECT token_hash, consumed_ms FROM handoffs WHERE handoff_id = ?").get(input.handoffId);
           const expected = Buffer.from(typeof handoff?.token_hash === "string" ? handoff.token_hash : "", "hex");
           const actual = createHash8("sha256").update(input.token).digest();
-          const tokenMatches = expected.length === actual.length && timingSafeEqual4(expected, actual);
-          if (!row || row.state !== "handoff_cleanup" || row.claim_epoch !== target.claimEpoch || row.worker_instance !== input.targetInstance || cleanup?.handoffId !== input.handoffId || cleanup?.targetSessionId !== target.sessionId || cleanup?.targetClaimEpoch !== target.claimEpoch || typeof handoff?.consumed_ms !== "number" || !tokenMatches) {
+          const tokenMatches2 = expected.length === actual.length && timingSafeEqual4(expected, actual);
+          if (!row || row.state !== "handoff_cleanup" || row.claim_epoch !== target.claimEpoch || row.worker_instance !== input.targetInstance || cleanup?.handoffId !== input.handoffId || cleanup?.targetSessionId !== target.sessionId || cleanup?.targetClaimEpoch !== target.claimEpoch || typeof handoff?.consumed_ms !== "number" || !tokenMatches2) {
             throw new SessionAuthorityError("HANDOFF_NOT_AUTHORIZED", "handoff cleanup resumption requires the original handoff capability");
           }
         });
@@ -32042,6 +32042,69 @@ var init_install_reissue = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/domain/login-prologue.js
+import { createHash as createHash12, timingSafeEqual as timingSafeEqual5 } from "node:crypto";
+function readLoginPrologueOutcome(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return null;
+  const candidate = value;
+  if (candidate.schemaVersion !== 1 || candidate.alias !== LOGIN_PROLOGUE_ALIAS || candidate.state !== "passed" && candidate.state !== LOGIN_PROLOGUE_BLOCKED || typeof candidate.startedAt !== "string" || typeof candidate.endedAt !== "string" || typeof candidate.elapsedMs !== "number" || !Array.isArray(candidate.steps)) {
+    return null;
+  }
+  return candidate;
+}
+function cleanupAllowed(tool, args) {
+  if (tool === "cdp_login_prologue")
+    return true;
+  if (tool === "cdp_disconnect")
+    return true;
+  if (tool === "device_snapshot" && args.action === "close")
+    return true;
+  if (tool === "device_record" && (args.action === "stop" || args.action === "status"))
+    return true;
+  if (tool === "observe" && (args.action === "stop" || args.action === "status"))
+    return true;
+  if (tool === "proof_capture" && (args.action === "discard" || args.action === "status")) {
+    return true;
+  }
+  return tool === "rn_session" && (args.action === "release" || args.action === "stop_metro" || args.action === "cancel_handoff" || args.action === "status");
+}
+function tokenMatches(expected, supplied) {
+  if (!expected || expected.length < 16 || !supplied || supplied.length < 16)
+    return false;
+  const expectedHash = createHash12("sha256").update(expected).digest();
+  const suppliedHash = createHash12("sha256").update(supplied).digest();
+  return timingSafeEqual5(expectedHash, suppliedHash);
+}
+function evaluateLoginPrologueGuard(input) {
+  const outcome = readLoginPrologueOutcome(input.binding);
+  if (outcome?.state !== LOGIN_PROLOGUE_BLOCKED || !input.mutation) {
+    return { allowed: true, override: false };
+  }
+  if (cleanupAllowed(input.tool, input.args))
+    return { allowed: true, override: false };
+  const supplied = typeof input.args.supervisorOverrideToken === "string" ? input.args.supervisorOverrideToken : void 0;
+  if (tokenMatches(input.expectedOverrideToken, supplied)) {
+    return {
+      allowed: true,
+      override: true,
+      audit: { tool: input.tool, usedAt: (input.now ?? (() => /* @__PURE__ */ new Date()))().toISOString() }
+    };
+  }
+  return { allowed: false, suppliedOverride: supplied !== void 0 };
+}
+function appendLoginOverrideAudit(outcome, audit) {
+  return { ...outcome, overrides: [...outcome.overrides ?? [], audit].slice(-20) };
+}
+var LOGIN_PROLOGUE_ALIAS, LOGIN_PROLOGUE_BLOCKED;
+var init_login_prologue = __esm({
+  "packages/rn-dev-agent-core/dist/domain/login-prologue.js"() {
+    "use strict";
+    LOGIN_PROLOGUE_ALIAS = "user-login";
+    LOGIN_PROLOGUE_BLOCKED = "LOGIN_PROLOGUE_BLOCKED";
+  }
+});
+
 // packages/rn-dev-agent-core/dist/session/tool-profiles.js
 function facetsOf(groups, narrowing = {}) {
   const facets = new Set(groups.flatMap((group) => [...groupFacets[group]]));
@@ -32232,7 +32295,7 @@ var init_tool_profiles = __esm({
       "maestro_test_all"
     ];
     hybridMutation = ["cdp_auto_login", "cdp_run_e2e_suite"];
-    optionalHybridMutation = ["cdp_run_action"];
+    optionalHybridMutation = ["cdp_login_prologue", "cdp_run_action"];
     nativeDiagnostic = ["cdp_native_errors"];
     inlineMaestroMutation = /* @__PURE__ */ new Set([
       "device_accept_system_dialog",
@@ -32710,6 +32773,34 @@ function authorityFailure(error2) {
   const code = /^([A-Z][A-Z0-9_]+):/.exec(message)?.[1];
   return failResult(message, code ?? "AUTHORITY_LOST_DURING_OPERATION");
 }
+function parseLoginPrologueOutcome(result) {
+  try {
+    const envelope = JSON.parse(result.content?.[0]?.text ?? "{}");
+    return readLoginPrologueOutcome(envelope.data ?? envelope.meta?.loginPrologue);
+  } catch {
+    return null;
+  }
+}
+function missingLoginPrologueOutcome() {
+  const timestamp = (/* @__PURE__ */ new Date()).toISOString();
+  return {
+    schemaVersion: 1,
+    state: LOGIN_PROLOGUE_BLOCKED,
+    alias: LOGIN_PROLOGUE_ALIAS,
+    startedAt: timestamp,
+    endedAt: timestamp,
+    elapsedMs: 0,
+    steps: [],
+    inventory: { count: 0, actionIds: [] },
+    failure: {
+      code: "LOGIN_PROLOGUE_RESULT_INVALID",
+      detail: "The login prologue returned no valid terminal state."
+    }
+  };
+}
+function isActionReplayTool(tool) {
+  return tool === "cdp_run_action" || tool === "cdp_login_prologue";
+}
 function authorityErrorCode(error2) {
   return error2 instanceof SessionAuthorityError ? error2.code : /^([A-Z][A-Z0-9_]+):/.exec(error2 instanceof Error ? error2.message : String(error2))?.[1];
 }
@@ -32945,10 +33036,43 @@ function createAuthorityGate(runtime, dependencies) {
         mutation: true,
         liveBundleProbe: tool === "proof_capture"
       } : baseProfile;
+      let runtimeStatus = runtime.status();
+      const loginDecision = evaluateLoginPrologueGuard({
+        binding: runtimeStatus.available ? runtimeStatus.bindings.loginPrologue : void 0,
+        tool,
+        args,
+        mutation: profile.mutation,
+        expectedOverrideToken: dependencies.loginSupervisorOverrideToken?.()
+      });
+      delete args.supervisorOverrideToken;
+      if (!loginDecision.allowed) {
+        return failResult("LOGIN_PROLOGUE_BLOCKED: the deterministic login action did not produce an authoritative passing RunRecord; mutating tools are disabled for this session.", "LOGIN_PROLOGUE_BLOCKED", {
+          loginPrologue: runtimeStatus.available ? runtimeStatus.bindings.loginPrologue : void 0,
+          overrideRejected: loginDecision.suppliedOverride,
+          nextAction: "Repair the exact user-login action and rerun cdp_login_prologue, or supply a supervisorOverrideToken configured by RN_LOGIN_PROLOGUE_OVERRIDE_TOKEN for this mutating call."
+        });
+      }
+      if (loginDecision.override) {
+        try {
+          const available = runtime.requireAvailable();
+          const current = runtime.status();
+          const outcome = current.available ? readLoginPrologueOutcome(current.bindings.loginPrologue) : null;
+          if (!outcome) {
+            throw new SessionAuthorityError("LOGIN_PROLOGUE_BLOCKED", "the blocked login prologue state disappeared before override audit");
+          }
+          available.registry.updateBindings(available.session, {
+            bindings: {
+              loginPrologue: appendLoginOverrideAudit(outcome, loginDecision.audit)
+            }
+          });
+          runtimeStatus = runtime.status();
+        } catch (error2) {
+          return authorityFailure(error2);
+        }
+      }
       if (profile.kind === "diagnostic") {
         return addMeta(await handler(...handlerArgs), { authoritative: false });
       }
-      const runtimeStatus = runtime.status();
       if (runtimeStatus.available && runtimeStatus.state === "blocked") {
         return authorityFailure(runtime.blockedContenderError());
       }
@@ -33562,7 +33686,15 @@ function createAuthorityGate(runtime, dependencies) {
         }
         registry2.verifyOperation(operation);
         const snapshotCheckpoint = dependencies.snapshotCaptureCheckpoint?.();
-        const result = await registry2.runWithOperation(operation, () => handler(...handlerArgs));
+        let result = await registry2.runWithOperation(operation, () => handler(...handlerArgs));
+        let loginPrologueOutcome = null;
+        if (tool === "cdp_login_prologue") {
+          loginPrologueOutcome = parseLoginPrologueOutcome(result);
+          if (!loginPrologueOutcome) {
+            loginPrologueOutcome = missingLoginPrologueOutcome();
+            result = failResult("Login prologue returned no valid terminal state.", "LOGIN_PROLOGUE_BLOCKED", { loginPrologue: loginPrologueOutcome });
+          }
+        }
         let runtimeTargetChanged = false;
         const postHandlerRecovery = await reconcileRecoverableRuntime(runtime, dependencies, registry2, operation, status, profile, resultSucceeded(result));
         operation = postHandlerRecovery.operation;
@@ -33585,7 +33717,7 @@ function createAuthorityGate(runtime, dependencies) {
         }
         publishedProofFinalize = tool === "proof_capture" && args.action === "finalize" && resultIsCanonicalSuccess(result);
         const directRuntimeReset = tool === "cdp_reload" || tool === "cdp_restart";
-        const nestedRuntimeReset = tool === "cdp_run_e2e_suite" || tool === "cdp_auto_login" || tool === "cdp_nav_graph" && args.action === "go" || tool === "cdp_run_action" && (optionalBundleClaimed || optionalBundleRecoveryFailed);
+        const nestedRuntimeReset = tool === "cdp_run_e2e_suite" || tool === "cdp_auto_login" || tool === "cdp_nav_graph" && args.action === "go" || isActionReplayTool(tool) && (optionalBundleClaimed || optionalBundleRecoveryFailed);
         const reconcilesRuntimeTarget = directRuntimeReset || nestedRuntimeReset;
         let authorityInvalidated = false;
         if (directRuntimeReset && !resultSucceeded(result)) {
@@ -33600,7 +33732,7 @@ function createAuthorityGate(runtime, dependencies) {
           const metro = status.bindings.metro;
           let bundle = null;
           try {
-            if (tool === "cdp_run_action" && optionalBundleRecoveryFailed) {
+            if (isActionReplayTool(tool) && optionalBundleRecoveryFailed) {
               throw new SessionAuthorityError("BUNDLE_HANDSHAKE_UNAVAILABLE", "reactive bundle authority did not verify");
             }
             if (!dependencies.refreshRuntimeBinding) {
@@ -33620,7 +33752,7 @@ function createAuthorityGate(runtime, dependencies) {
                 nextAction: 'Run rn_session action "pin_dev_client" before another CDP operation.'
               });
             }
-            if (tool === "cdp_run_action" && !optionalBundleClaimed) {
+            if (isActionReplayTool(tool) && !optionalBundleClaimed) {
               authorityInvalidated = true;
             } else {
               throw error2;
@@ -33682,6 +33814,22 @@ function createAuthorityGate(runtime, dependencies) {
           axes: [...runnerAwareReceiptProfile.axes, "M", "A"]
         } : runnerAwareReceiptProfile;
         const controllerGenerationAdvanced = operation.authorityVersion !== initialOperationAuthorityVersion;
+        if (loginPrologueOutcome) {
+          const priorOutcome = readLoginPrologueOutcome(status.bindings.loginPrologue);
+          operation = registry2.replaceBindingsDuringOperation(operation, {
+            bindings: {
+              loginPrologue: {
+                ...loginPrologueOutcome,
+                ...priorOutcome?.overrides ? { overrides: priorOutcome.overrides } : {}
+              }
+            }
+          });
+          const loginStatus = runtime.status();
+          if (!loginStatus.available) {
+            throw new SessionAuthorityError(loginStatus.code, loginStatus.reason);
+          }
+          status = loginStatus;
+        }
         registry2.verifyOperation(operation);
         for (const observation of allBefore) {
           if (controllerGenerationAdvanced && observation.axis === "C")
@@ -33779,6 +33927,7 @@ var init_authority_gate = __esm({
     init_registry();
     init_metro_origin();
     init_install_reissue();
+    init_login_prologue();
     init_tool_profiles();
     optionalBundleAdmission = /* @__PURE__ */ Symbol("optionalBundleAdmission");
     managedNativeOrigin = /* @__PURE__ */ Symbol("managedNativeOrigin");
@@ -40472,7 +40621,7 @@ var init_process_cleanup = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/startup-cleanup.js
-import { createHash as createHash12 } from "node:crypto";
+import { createHash as createHash13 } from "node:crypto";
 import { join as join35 } from "node:path";
 function startupCleanupFailureMessage() {
   return "rn-dev-agent startup cleanup failed: STARTUP_CLEANUP_FAILED\n";
@@ -40583,7 +40732,7 @@ function restoreDeadOwnerIntegration(input, prior, plan, dependencies) {
 function verifiedDeadOwnerManifestSource(appRoot, binding, manifestSha256) {
   if (!/^[0-9a-f]{64}$/.test(manifestSha256))
     return void 0;
-  const verified = (candidate) => typeof candidate === "string" && createHash12("sha256").update(candidate).digest("hex") === manifestSha256 ? candidate : void 0;
+  const verified = (candidate) => typeof candidate === "string" && createHash13("sha256").update(candidate).digest("hex") === manifestSha256 ? candidate : void 0;
   let liveManifest;
   try {
     liveManifest = readPackageIntegrationInputs(appRoot).manifest ?? void 0;
@@ -64872,7 +65021,7 @@ var require_websocket = __commonJS({
     var http = __require("http");
     var net = __require("net");
     var tls = __require("tls");
-    var { randomBytes: randomBytes9, createHash: createHash24 } = __require("crypto");
+    var { randomBytes: randomBytes9, createHash: createHash25 } = __require("crypto");
     var { Duplex, Readable } = __require("stream");
     var { URL: URL2 } = __require("url");
     var PerMessageDeflate2 = require_permessage_deflate();
@@ -65540,7 +65689,7 @@ var require_websocket = __commonJS({
           abortHandshake(websocket, socket, "Invalid Upgrade header");
           return;
         }
-        const digest3 = createHash24("sha1").update(key + GUID).digest("base64");
+        const digest3 = createHash25("sha1").update(key + GUID).digest("base64");
         if (res.headers["sec-websocket-accept"] !== digest3) {
           abortHandshake(websocket, socket, "Invalid Sec-WebSocket-Accept header");
           return;
@@ -65909,7 +66058,7 @@ var require_websocket_server = __commonJS({
     var EventEmitter = __require("events");
     var http = __require("http");
     var { Duplex } = __require("stream");
-    var { createHash: createHash24 } = __require("crypto");
+    var { createHash: createHash25 } = __require("crypto");
     var extension2 = require_extension();
     var PerMessageDeflate2 = require_permessage_deflate();
     var subprotocol2 = require_subprotocol();
@@ -66216,7 +66365,7 @@ var require_websocket_server = __commonJS({
           );
         }
         if (this._state > RUNNING) return abortHandshake(socket, 503);
-        const digest3 = createHash24("sha1").update(key + GUID).digest("base64");
+        const digest3 = createHash25("sha1").update(key + GUID).digest("base64");
         const headers = [
           "HTTP/1.1 101 Switching Protocols",
           "Upgrade: websocket",
@@ -66996,7 +67145,7 @@ var init_events_client = __esm({
 
 // packages/rn-dev-agent-core/dist/cdp/multiplexer.js
 import { createServer as createServer2 } from "node:http";
-import { randomBytes as randomBytes7, timingSafeEqual as timingSafeEqual5 } from "node:crypto";
+import { randomBytes as randomBytes7, timingSafeEqual as timingSafeEqual6 } from "node:crypto";
 import { Buffer as Buffer2 } from "node:buffer";
 function generateCapabilityToken() {
   return randomBytes7(32).toString("base64url");
@@ -67015,7 +67164,7 @@ function verifyConsumerPath(reqUrl, expectedToken) {
   const b = Buffer2.from(expectedToken);
   if (a.length !== b.length)
     return false;
-  return timingSafeEqual5(a, b);
+  return timingSafeEqual6(a, b);
 }
 function parseRNVersion(raw) {
   if (raw === null || raw === void 0)
@@ -73130,7 +73279,7 @@ var init_install_identity_inspection = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/migration-diagnostic.js
-import { createHash as createHash14 } from "node:crypto";
+import { createHash as createHash15 } from "node:crypto";
 import { existsSync as existsSync29, readFileSync as readFileSync31 } from "node:fs";
 import { join as join40 } from "node:path";
 function readPackageIntegrationManifest(appRoot, dependencies) {
@@ -73179,7 +73328,7 @@ function inspectAuthorityMigration(status, dependencies = {}) {
   const integrationBinding = status.bindings.packageIntegration;
   let bindingDiagnostic = null;
   if (integrationBinding) {
-    const manifestVerified = (candidate) => typeof candidate === "string" && typeof integrationBinding.manifestSha256 === "string" && createHash14("sha256").update(candidate).digest("hex") === integrationBinding.manifestSha256;
+    const manifestVerified = (candidate) => typeof candidate === "string" && typeof integrationBinding.manifestSha256 === "string" && createHash15("sha256").update(candidate).digest("hex") === integrationBinding.manifestSha256;
     const manifestAvailable = manifestVerified(onDiskManifestText) || manifestVerified(integrationBinding.restoration?.phase === "started" ? integrationBinding.restoration.manifestSource : void 0) || manifestVerified(integrationBinding.installation?.phase === "started" ? integrationBinding.installation.manifestSource : void 0) || manifestVerified(integrationBinding.manifestSource);
     const effectiveOwnerSessionId = status.sessionId;
     const trustedDigestRecorded = typeof integrationBinding.manifestSha256 === "string" && /^[0-9a-f]{64}$/.test(integrationBinding.manifestSha256);
@@ -73298,6 +73447,7 @@ function projectPublicAuthorityStatus(status, options = {}) {
     observedAt: metroTerminal.observedAt
   } : void 0;
   const sandbox = metro?.runtimeEvidenceAuthority === "managed-sandbox-v1" ? "managed-sandbox-v1" : "unavailable";
+  const loginPrologue = readLoginPrologueOutcome(status.bindings.loginPrologue);
   const phase = derivePublicPhase(status.state, Boolean(status.bindings.pendingBuild));
   return {
     available: true,
@@ -73341,6 +73491,20 @@ function projectPublicAuthorityStatus(status, options = {}) {
     proof: Boolean(status.bindings.proof),
     // ADR §5.2 (L3): strict proof is an opt-in overlay outside the four groups, never a group.
     proofOverlay: { active: Boolean(status.bindings.proof) },
+    ...loginPrologue ? {
+      loginPrologue: {
+        state: loginPrologue.state,
+        alias: loginPrologue.alias,
+        actionId: loginPrologue.actionId,
+        startedAt: loginPrologue.startedAt,
+        endedAt: loginPrologue.endedAt,
+        elapsedMs: loginPrologue.elapsedMs,
+        failureCode: loginPrologue.failure?.code,
+        runId: loginPrologue.runRecord?.runId,
+        overrideCount: loginPrologue.overrides?.length ?? 0,
+        lastOverride: loginPrologue.overrides?.at(-1)
+      }
+    } : {},
     ...options.installIdentity ? { installIdentity: options.installIdentity.verdict } : {},
     // A live axis-I refusal means every gated tool refuses too — status must
     // not read `ready` while that is true. A pending re-issue reads ready only
@@ -73391,13 +73555,14 @@ var init_public_status = __esm({
     "use strict";
     init_migration_diagnostic();
     init_registry();
+    init_login_prologue();
     SELECTED_STATES = /* @__PURE__ */ new Set(["active", "source_bound", "device_claimed", "metro_bound"]);
     RUNNING_STATES = /* @__PURE__ */ new Set(["device_bound", "runtime_bound", "ready"]);
   }
 });
 
 // packages/rn-dev-agent-core/dist/session/build-receipt.js
-import { createHmac as createHmac4, timingSafeEqual as timingSafeEqual6 } from "node:crypto";
+import { createHmac as createHmac4, timingSafeEqual as timingSafeEqual7 } from "node:crypto";
 function serialize(payload) {
   return JSON.stringify(payload);
 }
@@ -73413,7 +73578,7 @@ function verifyBuildReceipt(receipt2, capability, expected) {
   }
   const expectedSignature = Buffer.from(sign(receipt2.payload, capability), "hex");
   const actualSignature = Buffer.from(receipt2.signature, "hex");
-  if (expectedSignature.length !== actualSignature.length || !timingSafeEqual6(expectedSignature, actualSignature)) {
+  if (expectedSignature.length !== actualSignature.length || !timingSafeEqual7(expectedSignature, actualSignature)) {
     throw new Error("BUILD_RECEIPT_INVALID: build receipt signature is invalid");
   }
   for (const [key, value] of Object.entries(expected)) {
@@ -73457,7 +73622,7 @@ var init_device_existence = __esm({
 // packages/rn-dev-agent-core/dist/tools/session.js
 import { dirname as dirname21, isAbsolute as isAbsolute9, join as join41, resolve as resolve15 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
-import { createHash as createHash15 } from "node:crypto";
+import { createHash as createHash16 } from "node:crypto";
 function sameAndroidMetroReverse(current, next) {
   if (!current || !next)
     return current === next;
@@ -73470,7 +73635,7 @@ function sameMetroAuthority(current, next) {
 function verifiedManifestSource(candidate, manifestSha256) {
   if (typeof candidate !== "string" || typeof manifestSha256 !== "string")
     return void 0;
-  return createHash15("sha256").update(candidate).digest("hex") === manifestSha256 ? candidate : void 0;
+  return createHash16("sha256").update(candidate).digest("hex") === manifestSha256 ? candidate : void 0;
 }
 function durableBindingManifestSource(binding) {
   return verifiedManifestSource(binding?.manifestSource, binding?.manifestSha256);
@@ -74413,7 +74578,7 @@ function createSessionHandler(runtime, dependencies = {}) {
             });
           }
           assertPackageIntegrationInactive(status.bindings, input.action);
-          const manifestSha256 = createHash15("sha256").update(manifestSource ?? "").digest("hex");
+          const manifestSha256 = createHash16("sha256").update(manifestSource ?? "").digest("hex");
           if (integrationBinding?.version !== 1 || typeof integrationBinding.installedBySessionId !== "string" || integrationBinding.manifestSha256 !== manifestSha256) {
             throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "integration restoration requires the transferred manifest authority binding");
           }
@@ -74460,7 +74625,7 @@ function createSessionHandler(runtime, dependencies = {}) {
         }
         preview.manifest.metroConfig = metroConfigPath.slice(appRoot.length + 1);
         const expectedManifestSource = installationManifestSource ?? serializePackageIntegrationManifest(preview.manifest);
-        const expectedManifestSha256 = createHash15("sha256").update(expectedManifestSource).digest("hex");
+        const expectedManifestSha256 = createHash16("sha256").update(expectedManifestSource).digest("hex");
         if (installationManifestSource && (integrationBinding?.version !== 1 || integrationBinding.installedBySessionId !== session2.sessionId || integrationBinding.manifestSha256 !== expectedManifestSha256)) {
           throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "integration installation requires the original session manifest authority binding");
         }
@@ -74482,7 +74647,7 @@ function createSessionHandler(runtime, dependencies = {}) {
           if (!installedManifest) {
             throw new Error("SESSION_INTEGRATION_PATH_UNSAFE: applied manifest is unavailable");
           }
-          if (createHash15("sha256").update(installedManifest).digest("hex") !== expectedManifestSha256) {
+          if (createHash16("sha256").update(installedManifest).digest("hex") !== expectedManifestSha256) {
             throw new SessionAuthorityError("SESSION_AUTHORITY_REQUIRED", "applied integration manifest no longer matches its durable installation authority");
           }
           registry2.updateBindings(session2, {
@@ -76489,6 +76654,7 @@ var init_events = __esm({
       "maestro_run",
       "maestro_generate",
       "maestro_test_all",
+      "cdp_login_prologue",
       "cdp_run_action",
       "cdp_repair_action",
       "proof_step",
@@ -79855,6 +80021,7 @@ var init_runtime = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/run-action.js
+import { randomUUID as randomUUID9 } from "node:crypto";
 function boundInstallReceipt() {
   try {
     const status = getWorkerAuthorityRuntime().status();
@@ -80061,6 +80228,23 @@ function createRunActionHandler(deps = {}) {
     const trigger = args.trigger ?? "agent";
     const timeoutMs = args.timeoutMs ?? 12e4;
     const t0 = Date.now();
+    const startedAt = new Date(t0).toISOString();
+    const runId = randomUUID9();
+    const timingSteps = [];
+    const measureStep = async (name, run) => {
+      const stepStartedMs = Date.now();
+      try {
+        return await run();
+      } finally {
+        const stepEndedMs = Date.now();
+        timingSteps.push({
+          name,
+          startedAt: new Date(stepStartedMs).toISOString(),
+          endedAt: new Date(stepEndedMs).toISOString(),
+          elapsedMs: Math.max(0, stepEndedMs - stepStartedMs)
+        });
+      }
+    };
     const activeTarget = targetContext();
     if (args.platform && activeTarget?.platform && activeTarget.platform !== args.platform) {
       return failResult(`cdp_run_action: requested ${args.platform}, but the active session is ${activeTarget.platform}; refusing cross-platform replay.`, "TARGET_SESSION_MISMATCH", { requestedPlatform: args.platform, activeSession: activeTarget });
@@ -80070,7 +80254,22 @@ function createRunActionHandler(deps = {}) {
     const appFile = args.appFile ?? (flowUsesClearState(replayYaml) && receipt2?.platform === "ios" && typeof receipt2.appId === "string" && typeof receipt2.deviceId === "string" ? resolveAppFile(receipt2.appId, receipt2.deviceId) ?? void 0 : void 0);
     let probeDeviceId = null;
     let observedDeviceId = maestroDeviceId ?? null;
-    const persistRunWithDevice = (record2) => proofReplay ? Promise.resolve({ promoted: false, promotionRefused: false }) : persistRun(args.actionId, projectRoot, probeDeviceId ? { ...record2, deviceId: probeDeviceId } : record2);
+    const persistRunWithDevice = (record2) => {
+      if (proofReplay)
+        return Promise.resolve({ promoted: false, promotionRefused: false });
+      const endedMs = Date.now();
+      const timedRecord = {
+        ...record2,
+        runId,
+        timing: {
+          startedAt,
+          endedAt: new Date(endedMs).toISOString(),
+          elapsedMs: Math.max(0, endedMs - t0),
+          steps: [...timingSteps]
+        }
+      };
+      return persistRun(args.actionId, projectRoot, probeDeviceId ? { ...timedRecord, deviceId: probeDeviceId } : timedRecord);
+    };
     const writeDisclosure = (actionYaml = "none", outcome) => ({
       actionYaml: actionYaml === "none" ? { written: false, reason: "repair-not-applied" } : actionYaml === "lifecycle-promotion-refused" ? { written: false, reason: "lifecycle-promotion-refused" } : { written: true, authorized: true, reason: actionYaml },
       runtimeState: proofReplay ? "none" : outcome?.runtimeStateRefused ? "refused-external-write" : "sidecar",
@@ -80101,11 +80300,11 @@ function createRunActionHandler(deps = {}) {
         const probe = replayDeps ? firstReplayTestId(cdpReplayYaml, args.params ?? {}) : null;
         if (replayDeps && probe) {
           const tProbe = Date.now();
-          const probeOutcome = await probeTreeWithRetry(replayDeps, probe, probeRetry);
+          const probeOutcome = await measureStep("proactive-probe", () => probeTreeWithRetry(replayDeps, probe, probeRetry));
           if (probeOutcome.found) {
             const tReplay = Date.now();
             try {
-              const replay = await runCdpReplay(cdpReplayYaml, args.params ?? {}, replayDeps);
+              const replay = await measureStep("proactive-cdp-replay", () => runCdpReplay(cdpReplayYaml, args.params ?? {}, replayDeps));
               const timings_ms = { probe: tReplay - tProbe, replay: Date.now() - tReplay };
               const blindProbe = { atRisk, skippedMaestro: true };
               const autoRepair2 = {
@@ -80160,7 +80359,7 @@ function createRunActionHandler(deps = {}) {
       }
       const tBeforeFirst = Date.now();
       probeDeviceId = null;
-      const firstResult = await maestroRun({
+      const firstResult = await measureStep("maestro-first-attempt", () => maestroRun({
         inlineYaml: replayYaml,
         actionMetadata: action.metadata,
         platform: args.platform,
@@ -80175,7 +80374,7 @@ function createRunActionHandler(deps = {}) {
         reproveManagedOrigin: () => reproveManagedOrigin(args),
         completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
         reissueInstallReceipt: () => reissueInstallReceipt(args)
-      });
+      }));
       const firstAttemptMs = Date.now() - tBeforeFirst;
       const firstEnv = parseEnvelope(firstResult, "maestro_run");
       const firstPassed = firstEnv.ok === true && firstEnv.data?.passed === true;
@@ -80273,7 +80472,7 @@ function createRunActionHandler(deps = {}) {
         } else if (!probe) {
           cdpJsFallback = { attempted: false, reason: "no-probe-testid" };
         } else {
-          const probeOutcome = await probeTreeWithRetry(replayDeps, probe, probeRetry);
+          const probeOutcome = await measureStep("fallback-probe", () => probeTreeWithRetry(replayDeps, probe, probeRetry));
           if (!probeOutcome.found) {
             cdpJsFallback = {
               attempted: false,
@@ -80288,9 +80487,9 @@ function createRunActionHandler(deps = {}) {
               firstAttemptOutput: boundedOutput(firstOutput)
             };
             try {
-              const replay = await runCdpReplay(cdpReplayYaml, args.params ?? {}, replayDeps, {
+              const replay = await measureStep("fallback-cdp-replay", () => runCdpReplay(cdpReplayYaml, args.params ?? {}, replayDeps, {
                 resumeAtSelector: failure.kind === "SELECTOR_NOT_FOUND" ? failure.selector : null
-              });
+              }));
               const status = replay.passed ? "pass" : "fail";
               const autoRepair2 = {
                 attempted: false,
@@ -80384,12 +80583,12 @@ function createRunActionHandler(deps = {}) {
         throw new Error("Internal: isAutoRepairable returned true for non-SELECTOR_NOT_FOUND failure");
       }
       const tBeforeRepair = Date.now();
-      const repairResult = await repairAction({
+      const repairResult = await measureStep("selector-repair", () => repairAction({
         actionId: args.actionId,
         failedSelector: failure.selector,
         projectRoot,
         agentReasoning: `auto-repair from cdp_run_action after maestro failure: ${failure.selector}`
-      });
+      }));
       const repairMs = Date.now() - tBeforeRepair;
       const repairEnv = parseEnvelope(repairResult, "cdp_repair_action");
       const repairPatched = repairEnv.ok === true && repairEnv.data?.patched === true;
@@ -80445,10 +80644,11 @@ function createRunActionHandler(deps = {}) {
       if (!reloadedAction.replay.ok) {
         return failResult(`cdp_run_action: repaired action is not valid Maestro YAML: ${reloadedAction.replay.error}`, "BAD_RECORDING", { actionId: args.actionId });
       }
+      const retryYaml = reloadedAction.replay.yamlText;
       const tBeforeRetry = Date.now();
       probeDeviceId = null;
-      const retryResult = await maestroRun({
-        inlineYaml: reloadedAction.replay.yamlText,
+      const retryResult = await measureStep("maestro-retry", () => maestroRun({
+        inlineYaml: retryYaml,
         actionMetadata: reloadedAction.metadata,
         platform: args.platform,
         appId: args.appId,
@@ -80462,7 +80662,7 @@ function createRunActionHandler(deps = {}) {
         reproveManagedOrigin: () => reproveManagedOrigin(args),
         completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
         reissueInstallReceipt: () => reissueInstallReceipt(args)
-      });
+      }));
       const retryMs = Date.now() - tBeforeRetry;
       const retryEnv = parseEnvelope(retryResult, "maestro_run");
       const retryPassed = retryEnv.ok === true && retryEnv.data?.passed === true;
@@ -80635,6 +80835,158 @@ var init_run_action = __esm({
     init_engine_pin();
     OUTPUT_BUDGET = 500;
     OUTPUT_ELISION = "\n\u2026\n";
+  }
+});
+
+// packages/rn-dev-agent-core/dist/domain/action-inventory.js
+async function listActions(projectRoot, dependencies = {}) {
+  const context = openReadableActionLoadContext(projectRoot);
+  if (!context)
+    return [];
+  const load = dependencies.loadAction ?? loadActionFromContext;
+  const yamlFiles = context.files.filter((f) => /\.ya?ml$/.test(f)).sort();
+  const results = [];
+  for (const id of new Set(yamlFiles.map((file) => file.replace(/\.ya?ml$/, "")))) {
+    if (yamlFiles.includes(`${id}.yaml`) && yamlFiles.includes(`${id}.yml`))
+      continue;
+    const action = load(context, id);
+    if (!action)
+      continue;
+    const { metadata } = action;
+    const summary = {
+      id: metadata.id,
+      intent: metadata.intent,
+      status: metadata.status
+    };
+    if (metadata.params !== void 0)
+      summary.params = metadata.params;
+    if (metadata.mutates !== void 0)
+      summary.mutates = metadata.mutates;
+    if (metadata.appId !== void 0)
+      summary.appId = metadata.appId;
+    results.push(summary);
+  }
+  return results;
+}
+var init_action_inventory = __esm({
+  "packages/rn-dev-agent-core/dist/domain/action-inventory.js"() {
+    "use strict";
+    init_action_store();
+  }
+});
+
+// packages/rn-dev-agent-core/dist/tools/login-prologue.js
+function parseEnvelope2(result) {
+  try {
+    return JSON.parse(result.content[0]?.text ?? "{}");
+  } catch {
+    return { ok: false, code: "BAD_RESPONSE", error: "Action replay returned invalid JSON." };
+  }
+}
+function createLoginPrologueHandler(deps) {
+  const now = deps.now ?? (() => /* @__PURE__ */ new Date());
+  return async (args) => {
+    const projectRoot = args.projectRoot ?? process.cwd();
+    const prologueStarted = now();
+    const steps = [];
+    let inventory = [];
+    const measure = async (name, run) => {
+      const started = now();
+      try {
+        return await run();
+      } finally {
+        const ended = now();
+        steps.push({
+          name,
+          startedAt: started.toISOString(),
+          endedAt: ended.toISOString(),
+          elapsedMs: Math.max(0, ended.getTime() - started.getTime())
+        });
+      }
+    };
+    const finish = (state, extra) => {
+      const ended = now();
+      return {
+        schemaVersion: 1,
+        state,
+        alias: LOGIN_PROLOGUE_ALIAS,
+        startedAt: prologueStarted.toISOString(),
+        endedAt: ended.toISOString(),
+        elapsedMs: Math.max(0, ended.getTime() - prologueStarted.getTime()),
+        steps,
+        inventory: { count: inventory.length, actionIds: inventory.map((action) => action.id) },
+        ...extra
+      };
+    };
+    const blocked = (code, detail, extra = {}) => {
+      const outcome = finish(LOGIN_PROLOGUE_BLOCKED, {
+        failure: { code, detail },
+        ...extra
+      });
+      return failResult(`Login prologue blocked: ${detail}`, "LOGIN_PROLOGUE_BLOCKED", {
+        loginPrologue: outcome
+      });
+    };
+    try {
+      inventory = await measure("inventory", () => listActions(projectRoot));
+      const action = await measure("resolve", async () => loadAction(projectRoot, LOGIN_PROLOGUE_ALIAS));
+      if (!action || !inventory.some((candidate) => candidate.id === LOGIN_PROLOGUE_ALIAS)) {
+        return blocked("LOGIN_ACTION_MISSING", `No exact ${LOGIN_PROLOGUE_ALIAS} learned action was found. Auth-tag or intent inference is not permitted.`);
+      }
+      const priorRunIds = new Set(action.state.runHistory.map((record2) => record2.runId).filter((runId) => typeof runId === "string"));
+      const replayArgs = {
+        ...args,
+        actionId: LOGIN_PROLOGUE_ALIAS,
+        autoRepair: false,
+        forceReload: false,
+        proofReplay: false,
+        blindProbeMode: "forbid",
+        trigger: args.trigger ?? "agent"
+      };
+      let replayResult;
+      try {
+        replayResult = await measure("replay", () => deps.runAction(replayArgs));
+      } catch (error2) {
+        const code = error2 && typeof error2 === "object" && "code" in error2 ? String(error2.code) : "ACTION_REPLAY_THROW";
+        return blocked(code, "The saved login action threw before producing a result.", {
+          actionId: LOGIN_PROLOGUE_ALIAS
+        });
+      }
+      const replay = parseEnvelope2(replayResult);
+      let freshRecord;
+      await measure("verify-run-record", async () => {
+        const reloaded = loadAction(projectRoot, LOGIN_PROLOGUE_ALIAS);
+        freshRecord = reloaded?.state.runHistory.slice().reverse().find((record2) => typeof record2.runId === "string" && !priorRunIds.has(record2.runId));
+      });
+      if (replay.ok !== true || replay.data?.passed !== true) {
+        return blocked(replay.code ?? String(replay.data?.failureKind ?? "ACTION_REPLAY_FAILED"), "The saved login action did not pass; exploratory login is now terminally blocked.", { actionId: LOGIN_PROLOGUE_ALIAS, ...freshRecord ? { runRecord: freshRecord } : {} });
+      }
+      if (!freshRecord || freshRecord.status !== "pass") {
+        return blocked("AUTHORITATIVE_RUN_RECORD_MISSING", "The saved login action reported success without a fresh passing RunRecord.", { actionId: LOGIN_PROLOGUE_ALIAS });
+      }
+      const outcome = finish("passed", {
+        actionId: LOGIN_PROLOGUE_ALIAS,
+        runRecord: freshRecord,
+        actionResult: {
+          transport: replay.data.transport,
+          transportVersion: replay.data.transportVersion,
+          fallback: replay.data.fallback,
+          perStepReadback: replay.data.perStepReadback
+        }
+      });
+      return okResult(outcome);
+    } catch {
+      return blocked("LOGIN_PROLOGUE_INTERNAL_ERROR", "The login prologue failed before it could prove a passing replay.");
+    }
+  };
+}
+var init_login_prologue2 = __esm({
+  "packages/rn-dev-agent-core/dist/tools/login-prologue.js"() {
+    "use strict";
+    init_action_inventory();
+    init_action_store();
+    init_login_prologue();
+    init_utils();
   }
 });
 
@@ -80995,7 +81347,7 @@ async function hideExpoDevMenu(client2, options = {}) {
       break;
     }
     if (attempt < retries)
-      await new Promise((resolve20) => setTimeout(resolve20, retryDelayMs));
+      await new Promise((resolve21) => setTimeout(resolve21, retryDelayMs));
   }
   return successfulCall ? { ...successfulCall, attempts: outcome.attempts } : outcome;
 }
@@ -81109,7 +81461,7 @@ function createDevSettingsHandler(getClient2, dependencies = {}) {
       const call = await hideExpoDevMenu(client2, { retries: 1 });
       if (!call.callSent)
         return failedHideResult(call, before);
-      await (dependencies.settleAfterHide?.() ?? new Promise((resolve20) => setTimeout(resolve20, 300)));
+      await (dependencies.settleAfterHide?.() ?? new Promise((resolve21) => setTimeout(resolve21, 300)));
       const after = probe ? await probe().catch(() => "unknown") : "unknown";
       if (before === "expo_dev_menu" && after === "app") {
         return okResult({
@@ -82963,7 +83315,7 @@ var init_device_deeplink = __esm({
 
 // packages/rn-dev-agent-core/dist/tools/device-record.js
 import { execFile as execFile22 } from "node:child_process";
-import { createHash as createHash16 } from "node:crypto";
+import { createHash as createHash17 } from "node:crypto";
 import { existsSync as existsSync30 } from "node:fs";
 import { promisify as promisify23 } from "node:util";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
@@ -83111,7 +83463,7 @@ function parseStatusOutput(stdout) {
   return active;
 }
 function recordingScope(args) {
-  return createHash16("sha256").update(`${args.sessionId}\0${args.claimEpoch}\0${args.platform}\0${args.deviceId}`).digest("hex");
+  return createHash17("sha256").update(`${args.sessionId}\0${args.claimEpoch}\0${args.platform}\0${args.deviceId}`).digest("hex");
 }
 function bindRecorderSession(runtime, args) {
   const available = runtime.requireAvailable();
@@ -83395,7 +83747,7 @@ var init_device_record = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/proof-capture.js
-import { createHash as createHash17 } from "node:crypto";
+import { createHash as createHash18 } from "node:crypto";
 function canonicalizeProofValue(value) {
   if (Array.isArray(value))
     return value.map(canonicalizeProofValue);
@@ -83407,14 +83759,14 @@ function hashProofArgs(params) {
   return hashProofValue(redact(params));
 }
 function hashProofValue(value) {
-  return createHash17("sha256").update(JSON.stringify(canonicalizeProofValue(value))).digest("hex");
+  return createHash18("sha256").update(JSON.stringify(canonicalizeProofValue(value))).digest("hex");
 }
 function proofRuntimeAuthorityMarker(input) {
   return hashProofValue(input);
 }
 function hashObservedValue(value) {
   const bytes = JSON.stringify(value) ?? String(value);
-  return createHash17("sha256").update(bytes).digest("hex");
+  return createHash18("sha256").update(bytes).digest("hex");
 }
 function resultEnvelope(result) {
   if (!result || typeof result !== "object")
@@ -83937,7 +84289,7 @@ var init_startup_integrity = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
-import { createHash as createHash18, randomUUID as randomUUID9 } from "node:crypto";
+import { createHash as createHash19, randomUUID as randomUUID10 } from "node:crypto";
 import { execFileSync as execFileSync15 } from "node:child_process";
 import { chmodSync as chmodSync7, closeSync as closeSync12, existsSync as existsSync31, fsyncSync, lstatSync as lstatSync16, mkdirSync as mkdirSync20, openSync as openSync12, readFileSync as readFileSync32, realpathSync as realpathSync14, renameSync as renameSync8, unlinkSync as unlinkSync15, writeFileSync as writeFileSync15 } from "node:fs";
 import { basename as basename11, dirname as dirname24, extname, isAbsolute as isAbsolute11, join as join45, relative as relative8, resolve as resolve17, sep as sep9 } from "node:path";
@@ -83973,7 +84325,7 @@ function evidenceTimingReasons(timestamps, videoDurationMs, steps) {
   return reasons;
 }
 function hashBytes(bytes) {
-  return createHash18("sha256").update(bytes).digest("hex");
+  return createHash19("sha256").update(bytes).digest("hex");
 }
 function captureProofWorkerStartup(argv = process.argv, attestation = readStartupIntegrityAttestation()) {
   let executedEntrypointPath = null;
@@ -84198,7 +84550,7 @@ function readProofActionIdentity(appProjectRoot, actionId, dependencies = {}) {
     return {
       id: actionId,
       version: String(action.state.revision),
-      sha256: createHash18("sha256").update(action.yamlText).digest("hex")
+      sha256: createHash19("sha256").update(action.yamlText).digest("hex")
     };
   } catch {
     return null;
@@ -84399,7 +84751,7 @@ function readProofContractAt(moduleUrl = import.meta.url) {
 function writeProofReceiptAtomic(path, receipt2) {
   const directory = dirname24(path);
   mkdirSync20(directory, { recursive: true, mode: 448 });
-  const temporary = resolve17(directory, `.${randomUUID9()}.proof-receipt.tmp`);
+  const temporary = resolve17(directory, `.${randomUUID10()}.proof-receipt.tmp`);
   let descriptor = null;
   try {
     descriptor = openSync12(temporary, "wx", 384);
@@ -85300,7 +85652,7 @@ var init_proof_capture2 = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/proof-media.js
-import { createHash as createHash19 } from "node:crypto";
+import { createHash as createHash20 } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { mkdir as mkdir2, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir as tmpdir12 } from "node:os";
@@ -85335,7 +85687,7 @@ async function hashAcceptedFile(path) {
   }
 }
 async function sha256File2(path) {
-  const hash = createHash19("sha256");
+  const hash = createHash20("sha256");
   const stream = createReadStream(path);
   for await (const chunk of stream)
     hash.update(chunk);
@@ -88399,7 +88751,7 @@ var init_instrumentation = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/experience/evidence.js
-import { createHash as createHash20, randomUUID as randomUUID10 } from "node:crypto";
+import { createHash as createHash21, randomUUID as randomUUID11 } from "node:crypto";
 import { chmodSync as chmodSync8, existsSync as existsSync33, mkdirSync as mkdirSync21, readFileSync as readFileSync36, renameSync as renameSync9, unlinkSync as unlinkSync16, writeFileSync as writeFileSync17 } from "node:fs";
 import { homedir as homedir9, platform as hostPlatform, release } from "node:os";
 import { dirname as dirname29, join as join51 } from "node:path";
@@ -88514,7 +88866,7 @@ function pruneExperienceRecords(records, now, maxRecords = DEFAULT_MAX_RECORDS, 
   }).sort((a, b) => Date.parse(b.lastSeen) - Date.parse(a.lastSeen) || a.signature.localeCompare(b.signature)).slice(0, Math.max(0, maxRecords)).sort((a, b) => a.signature.localeCompare(b.signature));
 }
 function experienceSignature(input) {
-  return createHash20("sha256").update(JSON.stringify([
+  return createHash21("sha256").update(JSON.stringify([
     input.classification,
     input.tool,
     input.normalizedSymptomShape,
@@ -88734,7 +89086,7 @@ var init_evidence = __esm({
           recovery: null,
           cleanup: null,
           classification,
-          evidencePointers: [`event:${randomUUID10()}`],
+          evidencePointers: [`event:${randomUUID11()}`],
           tool,
           status: event.status === "ERROR" ? "ERROR" : "FAIL",
           normalizedSymptomShape,
@@ -88780,13 +89132,13 @@ var init_evidence = __esm({
         existing.lastRecoveredAt = now;
         delete existing.unknownReasons.recovery;
         existing.evidencePointers = boundedPointers(existing.evidencePointers, [
-          `event:${randomUUID10()}`
+          `event:${randomUUID11()}`
         ]);
         this.write(pruneExperienceRecords(records, this.now(), this.maxRecords, this.retentionMs));
       }
       write(records) {
         mkdirSync21(this.directory, { recursive: true, mode: 448 });
-        const temp = join51(this.directory, `.${EXPERIENCE_STORE_NAME}.${process.pid}.${randomUUID10()}`);
+        const temp = join51(this.directory, `.${EXPERIENCE_STORE_NAME}.${process.pid}.${randomUUID11()}`);
         try {
           const sanitized = records.map((record2) => record2.redactionVersion === REDACTION_RULES_VERSION ? record2 : {
             ...sanitizeForEvidence(record2),
@@ -89019,7 +89371,7 @@ var init_live_device = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/observability/e2e-csrf.js
-import { randomBytes as randomBytes8, timingSafeEqual as timingSafeEqual7 } from "node:crypto";
+import { randomBytes as randomBytes8, timingSafeEqual as timingSafeEqual8 } from "node:crypto";
 function makeCsrfToken() {
   return randomBytes8(24).toString("hex");
 }
@@ -89032,7 +89384,7 @@ function isPostAllowed(req, token2) {
     const got = String(gotRaw);
     const a = Buffer.from(got);
     const b = Buffer.from(token2);
-    if (a.length !== b.length || !timingSafeEqual7(a, b)) {
+    if (a.length !== b.length || !timingSafeEqual8(a, b)) {
       return { ok: false, status: 403, reason: "bad csrf token" };
     }
   }
@@ -90283,7 +90635,7 @@ var init_target = __esm({
 // packages/rn-dev-agent-core/dist/domain/e2e-test.js
 import { dirname as dirname31, join as join55 } from "node:path";
 import { mkdirSync as mkdirSync22, writeFileSync as writeFileSync18, renameSync as renameSync10, readFileSync as readFileSync38, readdirSync as readdirSync15, existsSync as existsSync34 } from "node:fs";
-import { createHash as createHash21 } from "node:crypto";
+import { createHash as createHash22 } from "node:crypto";
 function e2eDirFor(projectRoot) {
   return join55(projectRoot, ".rn-agent", "e2e");
 }
@@ -90314,7 +90666,7 @@ function serializeLockedTest(meta) {
 ${meta.flow}`;
 }
 function hashBody(s) {
-  return createHash21("sha256").update(s).digest("hex");
+  return createHash22("sha256").update(s).digest("hex");
 }
 function freezeLockedTest(projectRoot, source, ctx) {
   const filePath = e2ePathFor(projectRoot, source.id);
@@ -91016,43 +91368,6 @@ var init_preflight = __esm({
   }
 });
 
-// packages/rn-dev-agent-core/dist/domain/action-inventory.js
-async function listActions(projectRoot, dependencies = {}) {
-  const context = openReadableActionLoadContext(projectRoot);
-  if (!context)
-    return [];
-  const load = dependencies.loadAction ?? loadActionFromContext;
-  const yamlFiles = context.files.filter((f) => /\.ya?ml$/.test(f)).sort();
-  const results = [];
-  for (const id of new Set(yamlFiles.map((file) => file.replace(/\.ya?ml$/, "")))) {
-    if (yamlFiles.includes(`${id}.yaml`) && yamlFiles.includes(`${id}.yml`))
-      continue;
-    const action = load(context, id);
-    if (!action)
-      continue;
-    const { metadata } = action;
-    const summary = {
-      id: metadata.id,
-      intent: metadata.intent,
-      status: metadata.status
-    };
-    if (metadata.params !== void 0)
-      summary.params = metadata.params;
-    if (metadata.mutates !== void 0)
-      summary.mutates = metadata.mutates;
-    if (metadata.appId !== void 0)
-      summary.appId = metadata.appId;
-    results.push(summary);
-  }
-  return results;
-}
-var init_action_inventory = __esm({
-  "packages/rn-dev-agent-core/dist/domain/action-inventory.js"() {
-    "use strict";
-    init_action_store();
-  }
-});
-
 // packages/rn-dev-agent-core/dist/session/runner-binding.js
 function bindNativeRunner(runtime, target) {
   const { registry: registry2, session: session2 } = runtime.requireAvailable();
@@ -91122,9 +91437,9 @@ var init_runner_binding = __esm({
 
 // packages/rn-dev-agent-core/dist/session/local-authority-probe.js
 import { execFileSync as execFileSync18 } from "node:child_process";
-import { createHash as createHash22 } from "node:crypto";
+import { createHash as createHash23 } from "node:crypto";
 function identity(value) {
-  return createHash22("sha256").update(JSON.stringify(value)).digest("hex");
+  return createHash23("sha256").update(JSON.stringify(value)).digest("hex");
 }
 function objectBinding(status, name) {
   const value = status.bindings[name];
@@ -92038,7 +92353,7 @@ var index_exports = {};
 __export(index_exports, {
   strictProofMonitor: () => strictProofMonitor
 });
-import { createHash as createHash23, createHmac as createHmac5, randomUUID as randomUUID11 } from "node:crypto";
+import { createHash as createHash24, createHmac as createHmac5, randomUUID as randomUUID12 } from "node:crypto";
 import { readFileSync as readFileSync42, rmSync as rmSync12 } from "node:fs";
 import { execFile as execFile23 } from "node:child_process";
 import { promisify as promisify26 } from "node:util";
@@ -92068,7 +92383,10 @@ function trackedTool(name, desc, schema, handler) {
     }
     return result;
   };
-  server2.tool(name, desc, schema, wrapped);
+  server2.tool(name, desc, {
+    ...schema,
+    supervisorOverrideToken: external_exports.string().min(16).optional().describe("Supervisor token for one audited mutation after a blocked login prologue.")
+  }, wrapped);
 }
 async function pinSessionDevClient(status, options, commitBundle) {
   const device = status.bindings.device;
@@ -92521,7 +92839,7 @@ async function main() {
     });
   }
 }
-var pkgPath, pkgVersion, lockfile, diagnosticContractProbe, noLock, client, getClient, configureClientLifecycle, setClient, publishClient, createClient, execFileP, mustOk, makeReplayDeps, server2, strictProofMonitor, experienceRecorder, authorityRuntime, probeForegroundSurface, foreignMetroOriginScanner, createRuntimeAuthorityProbe, localAuthorityProbe, authorityGate, blindProbeContext, mirrorCfg, mirrorManager2, liveEnabled, liveDeps, registeredToolNames, isSessionRuntimeAbsent, persistedAuthorityStatus, getSessionSignerCapability, spawningSupervisorPid, requestWorkerRecycle, sessionHandler, disconnectClientHandler, connectBoundSession, resolveNativeProofDevice, proofReadiness, proofCaptureHandler, e2ePreflight, e2eReload, e2eSuiteHandler, e2eCsrfToken, observeRootResolver, projectRootFor, triggerE2eRun, runActionHandler, observeRunActionHandler, observeTriggerRun, gatedObserveState, shutdown, stopParentWatch;
+var pkgPath, pkgVersion, lockfile, diagnosticContractProbe, noLock, client, getClient, configureClientLifecycle, setClient, publishClient, createClient, execFileP, mustOk, makeReplayDeps, server2, strictProofMonitor, experienceRecorder, authorityRuntime, probeForegroundSurface, foreignMetroOriginScanner, createRuntimeAuthorityProbe, localAuthorityProbe, authorityGate, blindProbeContext, mirrorCfg, mirrorManager2, liveEnabled, liveDeps, registeredToolNames, isSessionRuntimeAbsent, persistedAuthorityStatus, getSessionSignerCapability, spawningSupervisorPid, requestWorkerRecycle, sessionHandler, disconnectClientHandler, connectBoundSession, resolveNativeProofDevice, proofReadiness, proofCaptureHandler, runActionHandler, e2ePreflight, e2eReload, e2eSuiteHandler, e2eCsrfToken, observeRootResolver, projectRootFor, triggerE2eRun, observeRunActionHandler, observeTriggerRun, gatedObserveState, shutdown, stopParentWatch;
 var init_index = __esm({
   "packages/rn-dev-agent-core/dist/index.js"() {
     "use strict";
@@ -92554,6 +92872,7 @@ var init_index = __esm({
     init_repair_action();
     init_save_as_action();
     init_run_action();
+    init_login_prologue2();
     init_cdp_replay_dispatch();
     init_dispatch();
     init_mmkv();
@@ -92793,7 +93112,7 @@ var init_index = __esm({
           runnerInstanceId: runner?.instanceId,
           runnerPid: runner?.pid,
           runnerProcessBirth: runner?.processBirth,
-          runnerCapabilityHash: typeof runner?.capability === "string" ? createHash23("sha256").update(runner.capability).digest("hex") : void 0,
+          runnerCapabilityHash: typeof runner?.capability === "string" ? createHash24("sha256").update(runner.capability).digest("hex") : void 0,
           runnerPort: runner?.port,
           runnerClaim: status.claims.find((claim) => claim.type === "runner")?.key,
           deviceClaim: status.claims.find((claim) => claim.type === "device")?.key
@@ -92926,6 +93245,7 @@ var init_index = __esm({
     });
     localAuthorityProbe = createRuntimeAuthorityProbe(getClient);
     authorityGate = createAuthorityGate(authorityRuntime, {
+      loginSupervisorOverrideToken: () => process.env.RN_LOGIN_PROLOGUE_OVERRIDE_TOKEN,
       probe: async ({ axis, phase, status, tool, args }) => localAuthorityProbe({ axis, phase, status, tool, args }),
       recoverRuntimeConnection: async (status) => {
         const current = getClient();
@@ -92998,7 +93318,7 @@ var init_index = __esm({
           authority: {
             sessionId: status.sessionId,
             claimEpoch: status.claimEpoch,
-            instanceId: randomUUID11(),
+            instanceId: randomUUID12(),
             capability: secret.observeCapability
           }
         };
@@ -93691,7 +94011,7 @@ var init_index = __esm({
           connectedAt: current.connectedAt
         }),
         errorCount: errors.length,
-        errorSha256: createHash23("sha256").update(errorBytes).digest("hex"),
+        errorSha256: createHash24("sha256").update(errorBytes).digest("hex"),
         device: identity2.device,
         runtime: identity2.runtime
       };
@@ -93958,34 +94278,34 @@ var init_index = __esm({
       deviceId: external_exports.string().optional().describe("Authority-bound exact device identifier; normally injected by the session"),
       appId: external_exports.string().optional().describe("Authority-bound app identifier; normally injected by the session")
     }, createRepairActionHandler());
-    trackedTool(
-      "cdp_run_action",
-      `Replay a learned action by id with end-to-end auto-repair. Loads the action from .rn-agent/actions/<actionId>.yaml or .yml, forwards the matching active session's exact device ID to Maestro, rejects mismatched direct runner/WDA evidence, and on a SELECTOR_NOT_FOUND failure automatically invokes cdp_repair_action and retries once. Appends a RunRecord to the sidecar with full auto-repair telemetry (passed/failed/refused/skipped + diff); its Maestro deviceId comes from direct runner evidence, never requested metadata. The repair attempt counts toward cdp_repair_action's 24h budget. Pass autoRepair=false to opt out of auto-repair (returns the raw maestro_run failure verbatim). forceReload defaults true: any human edit to the YAML since the agent's last write is acknowledged as the new baseline so downstream repair does not abort with STALE_TARGET (the right default for active composition). Pass forceReload=false for the strict "respect offline human edits" behavior: a successful replay still appends its RunRecord to the sidecar when only the tracked YAML mtime baseline is stale, while YAML-mutating promotion and repair stay refused. proofReplay=true is reserved for proof_capture rehearsal and requires autoRepair=false plus forceReload=false; it executes without RunRecord, promotion, YAML, sidecar, or DB persistence. The orchestrated home for the L3 self-healing loop \u2014 prefer this over invoking maestro_run + cdp_repair_action manually for any flow you intend to re-run on schedule. blindProbeMode provides per-call control of the proactive CDP/JS compatibility path: inherit (default) honors RN_BLIND_PROBE, allow explicitly enables it for this call, and forbid forces maestro-first for this call.`,
-      {
-        actionId: external_exports.string().describe("Owned action id; resolves one .yaml or .yml file."),
-        projectRoot: external_exports.string().optional().describe("Override project root (default: process.cwd())."),
-        platform: external_exports.enum(["ios", "android"]).optional().describe("Force a specific platform; otherwise auto-detected from the active device session."),
-        appFile: external_exports.string().optional().describe("GH #705: path to the .app Maestro reinstalls from after a clearState uninstall. Normally omit it \u2014 an iOS clearState flow resolves the bundle from the session's attested install receipt, and the receipt is re-issued after the reinstall so later device_*/maestro_run calls keep working."),
-        autoRepair: external_exports.boolean().optional().describe("Auto-repair on SELECTOR_NOT_FOUND failures. Default true. Pass false to disable (e.g. when investigating a failure manually)."),
-        timeoutMs: external_exports.number().optional().describe("Maestro execution timeout per attempt (ms). Default 120_000."),
-        trigger: external_exports.enum(["agent", "ci", "human"]).optional().describe('RunRecord trigger annotation. Default "agent". CI calls should pass "ci".'),
-        forceReload: external_exports.boolean().optional().describe('GH #173: when true (default), acknowledge any human edit to the YAML as the new baseline before running so downstream repair does not abort with STALE_TARGET. Pass false for the strict Phase 129 "respect external edits" behavior (useful for CI replays of fixed baselines).'),
-        proofReplay: external_exports.boolean().optional().describe("Read-only proof rehearsal mode. Requires autoRepair=false and forceReload=false; never writes action YAML, runtime sidecar, or DB state."),
-        blindProbeMode: external_exports.enum(["inherit", "allow", "forbid"]).optional().describe("Per-call proactive CDP/JS compatibility control. inherit (default) honors RN_BLIND_PROBE; allow explicitly enables the at-risk probe even when the process default is disabled; forbid keeps this call maestro-first. Reactive fallback behavior is unchanged."),
-        params: external_exports.record(external_exports.string(), external_exports.string()).optional().describe("Parameter bindings for the action's ${VAR} placeholders, forwarded to maestro as -e KEY=VALUE on the first attempt AND the post-repair retry (GH #116). Keys must match /^[A-Z_][A-Z0-9_]*$/ (validated in maestro_run).")
-      },
-      // GH #186: supply a CDP-backed live-route reader so the route-drift guard is
-      // actually active. Without this the handler defaulted getLiveRoute to a no-op
-      // and the drift branch could never fire, silently routing screen-change
-      // failures into fuzzy selector repair.
-      createRunActionHandler({
-        getLiveRoute: () => readLiveRoute(getClient()),
-        replayDeps: makeReplayDeps,
-        blindProbeContext,
-        targetContext: getActiveSession,
-        claimBundleAuthority: claimOptionalBundleAuthority
-      })
-    );
+    runActionHandler = createRunActionHandler({
+      getLiveRoute: () => readLiveRoute(getClient()),
+      replayDeps: makeReplayDeps,
+      blindProbeContext,
+      targetContext: getActiveSession,
+      claimBundleAuthority: claimOptionalBundleAuthority
+    });
+    trackedTool("cdp_run_action", `Replay a learned action by id with end-to-end auto-repair. Loads the action from .rn-agent/actions/<actionId>.yaml or .yml, forwards the matching active session's exact device ID to Maestro, rejects mismatched direct runner/WDA evidence, and on a SELECTOR_NOT_FOUND failure automatically invokes cdp_repair_action and retries once. Appends a RunRecord to the sidecar with full auto-repair telemetry (passed/failed/refused/skipped + diff); its Maestro deviceId comes from direct runner evidence, never requested metadata. The repair attempt counts toward cdp_repair_action's 24h budget. Pass autoRepair=false to opt out of auto-repair (returns the raw maestro_run failure verbatim). forceReload defaults true: any human edit to the YAML since the agent's last write is acknowledged as the new baseline so downstream repair does not abort with STALE_TARGET (the right default for active composition). Pass forceReload=false for the strict "respect offline human edits" behavior: a successful replay still appends its RunRecord to the sidecar when only the tracked YAML mtime baseline is stale, while YAML-mutating promotion and repair stay refused. proofReplay=true is reserved for proof_capture rehearsal and requires autoRepair=false plus forceReload=false; it executes without RunRecord, promotion, YAML, sidecar, or DB persistence. The orchestrated home for the L3 self-healing loop \u2014 prefer this over invoking maestro_run + cdp_repair_action manually for any flow you intend to re-run on schedule. blindProbeMode provides per-call control of the proactive CDP/JS compatibility path: inherit (default) honors RN_BLIND_PROBE, allow explicitly enables it for this call, and forbid forces maestro-first for this call.`, {
+      actionId: external_exports.string().describe("Owned action id; resolves one .yaml or .yml file."),
+      projectRoot: external_exports.string().optional().describe("Override project root (default: process.cwd())."),
+      platform: external_exports.enum(["ios", "android"]).optional().describe("Force a specific platform; otherwise auto-detected from the active device session."),
+      appFile: external_exports.string().optional().describe("GH #705: path to the .app Maestro reinstalls from after a clearState uninstall. Normally omit it \u2014 an iOS clearState flow resolves the bundle from the session's attested install receipt, and the receipt is re-issued after the reinstall so later device_*/maestro_run calls keep working."),
+      autoRepair: external_exports.boolean().optional().describe("Auto-repair on SELECTOR_NOT_FOUND failures. Default true. Pass false to disable (e.g. when investigating a failure manually)."),
+      timeoutMs: external_exports.number().optional().describe("Maestro execution timeout per attempt (ms). Default 120_000."),
+      trigger: external_exports.enum(["agent", "ci", "human"]).optional().describe('RunRecord trigger annotation. Default "agent". CI calls should pass "ci".'),
+      forceReload: external_exports.boolean().optional().describe('GH #173: when true (default), acknowledge any human edit to the YAML as the new baseline before running so downstream repair does not abort with STALE_TARGET. Pass false for the strict Phase 129 "respect external edits" behavior (useful for CI replays of fixed baselines).'),
+      proofReplay: external_exports.boolean().optional().describe("Read-only proof rehearsal mode. Requires autoRepair=false and forceReload=false; never writes action YAML, runtime sidecar, or DB state."),
+      blindProbeMode: external_exports.enum(["inherit", "allow", "forbid"]).optional().describe("Per-call proactive CDP/JS compatibility control. inherit (default) honors RN_BLIND_PROBE; allow explicitly enables the at-risk probe even when the process default is disabled; forbid keeps this call maestro-first. Reactive fallback behavior is unchanged."),
+      params: external_exports.record(external_exports.string(), external_exports.string()).optional().describe("Parameter bindings for the action's ${VAR} placeholders, forwarded to maestro as -e KEY=VALUE on the first attempt AND the post-repair retry (GH #116). Keys must match /^[A-Z_][A-Z0-9_]*$/ (validated in maestro_run).")
+    }, runActionHandler);
+    trackedTool("cdp_login_prologue", "Inventory learned actions, replay the exact user-login action strictly, and require a fresh passing RunRecord before lifting the session login gate.", {
+      projectRoot: external_exports.string().optional().describe("Override project root (default: process.cwd())."),
+      platform: external_exports.enum(["ios", "android"]).optional().describe("Force a platform; otherwise use the authority-bound device."),
+      appFile: external_exports.string().optional().describe("iOS app artifact used only when the saved action contains clearState."),
+      timeoutMs: external_exports.number().optional().describe("Saved-action timeout in milliseconds."),
+      trigger: external_exports.enum(["agent", "ci", "human"]).optional().describe("RunRecord trigger annotation. Default agent."),
+      params: external_exports.record(external_exports.string(), external_exports.string()).optional().describe("Bindings for the exact user-login action placeholders.")
+    }, createLoginPrologueHandler({ runAction: runActionHandler }));
     trackedTool("cdp_lock_e2e_test", "Promote a verified action into a frozen, locked e2e regression test. Runs the action once strict (no repair); freezes it only if it passes. v1 supports param-free actions only.", {
       actionId: external_exports.string().describe("The action id under .rn-agent/actions to lock"),
       relock: external_exports.boolean().optional().describe("Overwrite an existing locked test"),
@@ -94085,13 +94405,6 @@ var init_index = __esm({
         arbiter.release(L.lease);
       }
     };
-    runActionHandler = createRunActionHandler({
-      getLiveRoute: () => readLiveRoute(getClient()),
-      replayDeps: makeReplayDeps,
-      blindProbeContext,
-      targetContext: getActiveSession,
-      claimBundleAuthority: claimOptionalBundleAuthority
-    });
     observeRunActionHandler = authorityGate.wrap("cdp_run_action", runActionHandler);
     observeTriggerRun = authorityGate.wrap("cdp_run_e2e_suite", async (...raw) => {
       const args = raw[0] ?? {};
@@ -94241,7 +94554,7 @@ var init_index = __esm({
 // packages/rn-dev-agent-core/dist/supervisor.js
 init_lockfile();
 init_parent_watch();
-import { randomUUID as randomUUID12 } from "node:crypto";
+import { randomUUID as randomUUID13 } from "node:crypto";
 import { spawn as spawn10 } from "node:child_process";
 import { lstatSync as lstatSync19, readFileSync as readFileSync43 } from "node:fs";
 import { dirname as dirname33, join as join60, resolve as resolve20 } from "node:path";
@@ -94280,7 +94593,7 @@ init_registry();
 init_managed_metro();
 init_android_metro_reverse();
 init_state_root();
-import { createHash as createHash13, randomBytes as randomBytes6, randomUUID as randomUUID8 } from "node:crypto";
+import { createHash as createHash14, randomBytes as randomBytes6, randomUUID as randomUUID8 } from "node:crypto";
 import { dirname as dirname19 } from "node:path";
 var RELEASABLE_SESSION_STATES = /* @__PURE__ */ new Set([
   "active",
@@ -94410,7 +94723,7 @@ function createSupervisorAuthority(input, dependencies = {}) {
       metroPort,
       observePort,
       ...adoptionRequired ? {
-        recoveryCapabilityHash: createHash13("sha256").update(recoveryCapability).digest("hex"),
+        recoveryCapabilityHash: createHash14("sha256").update(recoveryCapability).digest("hex"),
         adoptionRequired: {
           sessionId: adoptionRequired.sessionId,
           claimEpoch: adoptionRequired.claimEpoch
@@ -94632,7 +94945,7 @@ if (process.env.RN_BRIDGE_SUPERVISOR === "0") {
 `);
   }, spawnWorker2 = function() {
     resolveAuthorityForSpawn2();
-    const workerInstance = randomUUID12();
+    const workerInstance = randomUUID13();
     let workerCwd = process.cwd();
     let spawnAuthorityError = null;
     try {

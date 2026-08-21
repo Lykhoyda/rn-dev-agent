@@ -161,39 +161,20 @@ Write a brief test plan BEFORE executing:
 - Expected outcome at each step (UI + data)
 - Edge cases to verify
 
-### Step 2.5: Auth Pre-flight Check (GH #10)
+### Step 2.5: Deterministic Login Prologue
 
-Before navigating, check if the app is on an auth-gated screen (login,
-welcome, registration, onboarding). Authentication recovery must use a
-compatible action from the project's approved learned-action corpus.
-
-1. Call `cdp_navigation_state`. Check the current route name.
-2. If the navigation state is **empty or minimal**, the app may still
-   be loading (splash screen, token rehydration). Wait 3 seconds and
-   retry `cdp_navigation_state`. If the route remains unavailable, use a
-   device snapshot to distinguish the Dev Client picker from an auth screen;
-   passive `cdp_status` never dismisses UI.
-3. If the route suggests the user is logged out (common patterns:
-   `Login`, `Welcome`, `SignIn`, `Register`, `Onboarding`, `Auth`,
-   `Landing`):
-
-   a. Run `$rn-dev-agent:list-learned-actions login` and select one compatible
-      owned action whose metadata establishes authenticated state.
-   b. Replay it through `cdp_run_action` on the exact authority-bound device.
-      Any engine-pin, selector, or action-format incompatibility is terminal.
-   c. If no compatible owned action exists, stop and report authentication as
-      blocked. Do not use manual taps, `.maestro` flows, ambient runners, or
-      `cdp_auto_login` as an automatic fallback.
-   d. Only when the user explicitly authorizes legacy per-call navigation
-      recovery may `cdp_auto_login` run. It is never durable login authority or
-      PR proof; create or migrate an owned compatible action before proof.
-   e. **Verify arrival** at the home/main screen:
-      ```
-      cdp_navigation_state  → confirm route is NOT auth-related
-      ```
-
-4. If the route is a main app screen (home, dashboard, tabs, etc.),
-   skip this step — the user is already authenticated.
+1. Call `cdp_navigation_state` and distinguish a stable auth route from a
+   loading or Dev Client picker state. If navigation is empty or minimal,
+   wait 3 seconds and retry before concluding the app is signed out.
+2. If the app is signed out, call `cdp_login_prologue`. Do not inspect or
+   explore login controls first.
+3. Continue only with `state: "passed"` and a fresh passing `runRecord`.
+4. Treat `LOGIN_PROLOGUE_BLOCKED` as terminal. Do not enter credentials, run
+   ad-hoc Maestro, inject routes, mutate stores, or navigate to the story. Use
+   read-only diagnostics to repair the exact `user-login` action, then rerun
+   the prologue.
+5. A supervisor override is valid only when supplied out of band for one call;
+   never search for, infer, log, or persist its token.
 
 ### Step 2.6: Permission Pre-flight Check (GH #11)
 

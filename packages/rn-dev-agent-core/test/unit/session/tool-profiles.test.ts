@@ -247,6 +247,15 @@ const GOLDEN: Record<string, GoldenProfile> = {
     mutation: true,
     liveBundleProbe: true,
   },
+  cdp_login_prologue: {
+    kind: 'authoritative',
+    axes: 'CSIMDR',
+    optionalAxes: 'B',
+    managedOrigin: true,
+    managedRunnerPark: true,
+    mutation: true,
+    liveBundleProbe: true,
+  },
   cdp_run_e2e_suite: {
     kind: 'authoritative',
     axes: 'CSIMBDR',

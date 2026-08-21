@@ -28,6 +28,8 @@
 //     30s+ device snapshot; cascading retries would be slow and could
 //     mask underlying screen churn).
 
+import { randomUUID } from 'node:crypto';
+import { dirname } from 'node:path';
 import { okResult, failResult } from '../utils.js';
 import type { ToolResult } from '../utils.js';
 import type { ToolErrorCode } from '../types.js';
@@ -560,6 +562,23 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
     const trigger: 'agent' | 'ci' | 'human' = args.trigger ?? 'agent';
     const timeoutMs = args.timeoutMs ?? 120_000;
     const t0 = Date.now();
+    const startedAt = new Date(t0).toISOString();
+    const runId = randomUUID();
+    const timingSteps: NonNullable<RunRecord['timing']>['steps'] = [];
+    const measureStep = async <T>(name: string, run: () => Promise<T>): Promise<T> => {
+      const stepStartedMs = Date.now();
+      try {
+        return await run();
+      } finally {
+        const stepEndedMs = Date.now();
+        timingSteps.push({
+          name,
+          startedAt: new Date(stepStartedMs).toISOString(),
+          endedAt: new Date(stepEndedMs).toISOString(),
+          elapsedMs: Math.max(0, stepEndedMs - stepStartedMs),
+        });
+      }
+    };
     const activeTarget = targetContext();
     if (args.platform && activeTarget?.platform && activeTarget.platform !== args.platform) {
       return failResult(
@@ -594,14 +613,25 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
     // Maestro was pinned to). Used only when the dispatch produced no receipt,
     // so a clean pass can still clear a device-matched blind-probe latch.
     let observedDeviceId: string | null = maestroDeviceId ?? null;
-    const persistRunWithDevice = (record: RunRecord): Promise<PersistRunOutcome> =>
-      proofReplay
-        ? Promise.resolve({ promoted: false, promotionRefused: false })
-        : persistRun(
-            args.actionId,
-            projectRoot,
-            probeDeviceId ? { ...record, deviceId: probeDeviceId } : record,
-          );
+    const persistRunWithDevice = (record: RunRecord): Promise<PersistRunOutcome> => {
+      if (proofReplay) return Promise.resolve({ promoted: false, promotionRefused: false });
+      const endedMs = Date.now();
+      const timedRecord: RunRecord = {
+        ...record,
+        runId,
+        timing: {
+          startedAt,
+          endedAt: new Date(endedMs).toISOString(),
+          elapsedMs: Math.max(0, endedMs - t0),
+          steps: [...timingSteps],
+        },
+      };
+      return persistRun(
+        args.actionId,
+        projectRoot,
+        probeDeviceId ? { ...timedRecord, deviceId: probeDeviceId } : timedRecord,
+      );
+    };
     const writeDisclosure = (
       actionYaml: WriteDisclosureKind = 'none',
       outcome?: PersistRunOutcome,
@@ -663,11 +693,15 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         const probe = replayDeps ? firstReplayTestId(cdpReplayYaml, args.params ?? {}) : null;
         if (replayDeps && probe) {
           const tProbe = Date.now();
-          const probeOutcome = await probeTreeWithRetry(replayDeps, probe, probeRetry);
+          const probeOutcome = await measureStep('proactive-probe', () =>
+            probeTreeWithRetry(replayDeps, probe, probeRetry),
+          );
           if (probeOutcome.found) {
             const tReplay = Date.now();
             try {
-              const replay = await runCdpReplay(cdpReplayYaml, args.params ?? {}, replayDeps);
+              const replay = await measureStep('proactive-cdp-replay', () =>
+                runCdpReplay(cdpReplayYaml, args.params ?? {}, replayDeps),
+              );
               const timings_ms = { probe: tReplay - tProbe, replay: Date.now() - tReplay };
               const blindProbe = { atRisk, skippedMaestro: true };
               const autoRepair: AutoRepairOutcome = {
@@ -741,22 +775,24 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       // Requested/session metadata is not RunRecord authority. Clear it before
       // dispatch; only direct maestro-runner evidence may repopulate it.
       probeDeviceId = null;
-      const firstResult = await maestroRun({
-        inlineYaml: replayYaml,
-        actionMetadata: action.metadata,
-        platform: args.platform,
-        appId: args.appId,
-        ...(appFile ? { appFile } : {}),
-        deviceId: maestroDeviceId,
-        timeoutMs,
-        params: args.params,
-        claimNativeOrigin: () => claimNativeOrigin(args),
-        completeNativeOrigin: (targetExpected) => completeNativeOrigin(args, targetExpected),
-        relaunchManagedApp: () => relaunchManagedApp(args),
-        reproveManagedOrigin: () => reproveManagedOrigin(args),
-        completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
-        reissueInstallReceipt: () => reissueInstallReceipt(args),
-      });
+      const firstResult = await measureStep('maestro-first-attempt', () =>
+        maestroRun({
+          inlineYaml: replayYaml,
+          actionMetadata: action.metadata,
+          platform: args.platform,
+          appId: args.appId,
+          ...(appFile ? { appFile } : {}),
+          deviceId: maestroDeviceId,
+          timeoutMs,
+          params: args.params,
+          claimNativeOrigin: () => claimNativeOrigin(args),
+          completeNativeOrigin: (targetExpected) => completeNativeOrigin(args, targetExpected),
+          relaunchManagedApp: () => relaunchManagedApp(args),
+          reproveManagedOrigin: () => reproveManagedOrigin(args),
+          completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
+          reissueInstallReceipt: () => reissueInstallReceipt(args),
+        }),
+      );
       const firstAttemptMs = Date.now() - tBeforeFirst;
       const firstEnv = parseEnvelope(firstResult, 'maestro_run');
       const firstPassed = firstEnv.ok === true && firstEnv.data?.passed === true;
@@ -890,7 +926,9 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
         } else if (!probe) {
           cdpJsFallback = { attempted: false, reason: 'no-probe-testid' };
         } else {
-          const probeOutcome = await probeTreeWithRetry(replayDeps, probe, probeRetry);
+          const probeOutcome = await measureStep('fallback-probe', () =>
+            probeTreeWithRetry(replayDeps, probe, probeRetry),
+          );
           if (!probeOutcome.found) {
             cdpJsFallback = {
               attempted: false,
@@ -911,9 +949,11 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
             try {
               // GH #580: resume at the proven failed selector; UNKNOWN failed before
               // any step, so it keeps start-at-zero.
-              const replay = await runCdpReplay(cdpReplayYaml, args.params ?? {}, replayDeps, {
-                resumeAtSelector: failure.kind === 'SELECTOR_NOT_FOUND' ? failure.selector : null,
-              });
+              const replay = await measureStep('fallback-cdp-replay', () =>
+                runCdpReplay(cdpReplayYaml, args.params ?? {}, replayDeps, {
+                  resumeAtSelector: failure.kind === 'SELECTOR_NOT_FOUND' ? failure.selector : null,
+                }),
+              );
               const status = replay.passed ? 'pass' : 'fail';
               const autoRepair: AutoRepairOutcome = {
                 attempted: false,
@@ -1044,12 +1084,14 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
       }
 
       const tBeforeRepair = Date.now();
-      const repairResult = await repairAction({
-        actionId: args.actionId,
-        failedSelector: failure.selector,
-        projectRoot,
-        agentReasoning: `auto-repair from cdp_run_action after maestro failure: ${failure.selector}`,
-      });
+      const repairResult = await measureStep('selector-repair', () =>
+        repairAction({
+          actionId: args.actionId,
+          failedSelector: failure.selector,
+          projectRoot,
+          agentReasoning: `auto-repair from cdp_run_action after maestro failure: ${failure.selector}`,
+        }),
+      );
       const repairMs = Date.now() - tBeforeRepair;
       const repairEnv = parseEnvelope(repairResult, 'cdp_repair_action');
       const repairPatched =
@@ -1132,25 +1174,28 @@ export function createRunActionHandler(deps: RunActionDeps = {}) {
           { actionId: args.actionId },
         );
       }
+      const retryYaml = reloadedAction.replay.yamlText;
 
       const tBeforeRetry = Date.now();
       probeDeviceId = null;
-      const retryResult = await maestroRun({
-        inlineYaml: reloadedAction.replay.yamlText,
-        actionMetadata: reloadedAction.metadata,
-        platform: args.platform,
-        appId: args.appId,
-        ...(appFile ? { appFile } : {}),
-        deviceId: maestroDeviceId,
-        timeoutMs,
-        params: args.params,
-        claimNativeOrigin: () => claimNativeOrigin(args),
-        completeNativeOrigin: (targetExpected) => completeNativeOrigin(args, targetExpected),
-        relaunchManagedApp: () => relaunchManagedApp(args),
-        reproveManagedOrigin: () => reproveManagedOrigin(args),
-        completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
-        reissueInstallReceipt: () => reissueInstallReceipt(args),
-      });
+      const retryResult = await measureStep('maestro-retry', () =>
+        maestroRun({
+          inlineYaml: retryYaml,
+          actionMetadata: reloadedAction.metadata,
+          platform: args.platform,
+          appId: args.appId,
+          ...(appFile ? { appFile } : {}),
+          deviceId: maestroDeviceId,
+          timeoutMs,
+          params: args.params,
+          claimNativeOrigin: () => claimNativeOrigin(args),
+          completeNativeOrigin: (targetExpected) => completeNativeOrigin(args, targetExpected),
+          relaunchManagedApp: () => relaunchManagedApp(args),
+          reproveManagedOrigin: () => reproveManagedOrigin(args),
+          completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
+          reissueInstallReceipt: () => reissueInstallReceipt(args),
+        }),
+      );
       const retryMs = Date.now() - tBeforeRetry;
       const retryEnv = parseEnvelope(retryResult, 'maestro_run');
       const retryPassed = retryEnv.ok === true && retryEnv.data?.passed === true;

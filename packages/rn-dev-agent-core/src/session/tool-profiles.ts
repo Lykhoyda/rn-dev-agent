@@ -89,7 +89,7 @@ const managedNativeMutation = [
 ] as const;
 
 const hybridMutation = ['cdp_auto_login', 'cdp_run_e2e_suite'] as const;
-const optionalHybridMutation = ['cdp_run_action'] as const;
+const optionalHybridMutation = ['cdp_login_prologue', 'cdp_run_action'] as const;
 const nativeDiagnostic = ['cdp_native_errors'] as const;
 const inlineMaestroMutation = new Set<string>([
   'device_accept_system_dialog',

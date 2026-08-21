@@ -13015,6 +13015,13 @@ var init_install_reissue = __esm({
   }
 });
 
+// packages/rn-dev-agent-core/dist/domain/login-prologue.js
+var init_login_prologue = __esm({
+  "packages/rn-dev-agent-core/dist/domain/login-prologue.js"() {
+    "use strict";
+  }
+});
+
 // packages/rn-dev-agent-core/dist/session/tool-profiles.js
 function facetsOf(groups, narrowing = {}) {
   const facets = new Set(groups.flatMap((group) => [...groupFacets[group]]));
@@ -13087,7 +13094,7 @@ var init_tool_profiles = __esm({
       "maestro_test_all"
     ];
     hybridMutation = ["cdp_auto_login", "cdp_run_e2e_suite"];
-    optionalHybridMutation = ["cdp_run_action"];
+    optionalHybridMutation = ["cdp_login_prologue", "cdp_run_action"];
     nativeDiagnostic = ["cdp_native_errors"];
     cdpRead = [
       "cdp_component_state",
@@ -13302,6 +13309,7 @@ var init_authority_gate = __esm({
     init_registry();
     init_metro_origin();
     init_install_reissue();
+    init_login_prologue();
     init_tool_profiles();
     managedNativeOrigin = /* @__PURE__ */ Symbol("managedNativeOrigin");
     managedRunnerPark = /* @__PURE__ */ Symbol("managedRunnerPark");

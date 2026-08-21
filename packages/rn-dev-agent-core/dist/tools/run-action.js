@@ -27,6 +27,7 @@
 //     intentionally NOT in scope for phase 1 (each repair attempt is a
 //     30s+ device snapshot; cascading retries would be slow and could
 //     mask underlying screen churn).
+import { randomUUID } from 'node:crypto';
 import { okResult, failResult } from '../utils.js';
 import { acknowledgeExternalEdit, loadAction, promoteActionRuntimeWithCAS, saveActionRuntimeWithCAS, } from '../domain/action-store.js';
 import { mirrorToDb } from '../domain/action-state-store.js';
@@ -325,6 +326,24 @@ export function createRunActionHandler(deps = {}) {
         const trigger = args.trigger ?? 'agent';
         const timeoutMs = args.timeoutMs ?? 120_000;
         const t0 = Date.now();
+        const startedAt = new Date(t0).toISOString();
+        const runId = randomUUID();
+        const timingSteps = [];
+        const measureStep = async (name, run) => {
+            const stepStartedMs = Date.now();
+            try {
+                return await run();
+            }
+            finally {
+                const stepEndedMs = Date.now();
+                timingSteps.push({
+                    name,
+                    startedAt: new Date(stepStartedMs).toISOString(),
+                    endedAt: new Date(stepEndedMs).toISOString(),
+                    elapsedMs: Math.max(0, stepEndedMs - stepStartedMs),
+                });
+            }
+        };
         const activeTarget = targetContext();
         if (args.platform && activeTarget?.platform && activeTarget.platform !== args.platform) {
             return failResult(`cdp_run_action: requested ${args.platform}, but the active session is ${activeTarget.platform}; refusing cross-platform replay.`, 'TARGET_SESSION_MISMATCH', { requestedPlatform: args.platform, activeSession: activeTarget });
@@ -351,9 +370,22 @@ export function createRunActionHandler(deps = {}) {
         // Maestro was pinned to). Used only when the dispatch produced no receipt,
         // so a clean pass can still clear a device-matched blind-probe latch.
         let observedDeviceId = maestroDeviceId ?? null;
-        const persistRunWithDevice = (record) => proofReplay
-            ? Promise.resolve({ promoted: false, promotionRefused: false })
-            : persistRun(args.actionId, projectRoot, probeDeviceId ? { ...record, deviceId: probeDeviceId } : record);
+        const persistRunWithDevice = (record) => {
+            if (proofReplay)
+                return Promise.resolve({ promoted: false, promotionRefused: false });
+            const endedMs = Date.now();
+            const timedRecord = {
+                ...record,
+                runId,
+                timing: {
+                    startedAt,
+                    endedAt: new Date(endedMs).toISOString(),
+                    elapsedMs: Math.max(0, endedMs - t0),
+                    steps: [...timingSteps],
+                },
+            };
+            return persistRun(args.actionId, projectRoot, probeDeviceId ? { ...timedRecord, deviceId: probeDeviceId } : timedRecord);
+        };
         const writeDisclosure = (actionYaml = 'none', outcome) => ({
             actionYaml: actionYaml === 'none'
                 ? { written: false, reason: 'repair-not-applied' }
@@ -407,11 +439,11 @@ export function createRunActionHandler(deps = {}) {
                 const probe = replayDeps ? firstReplayTestId(cdpReplayYaml, args.params ?? {}) : null;
                 if (replayDeps && probe) {
                     const tProbe = Date.now();
-                    const probeOutcome = await probeTreeWithRetry(replayDeps, probe, probeRetry);
+                    const probeOutcome = await measureStep('proactive-probe', () => probeTreeWithRetry(replayDeps, probe, probeRetry));
                     if (probeOutcome.found) {
                         const tReplay = Date.now();
                         try {
-                            const replay = await runCdpReplay(cdpReplayYaml, args.params ?? {}, replayDeps);
+                            const replay = await measureStep('proactive-cdp-replay', () => runCdpReplay(cdpReplayYaml, args.params ?? {}, replayDeps));
                             const timings_ms = { probe: tReplay - tProbe, replay: Date.now() - tReplay };
                             const blindProbe = { atRisk, skippedMaestro: true };
                             const autoRepair = {
@@ -482,7 +514,7 @@ export function createRunActionHandler(deps = {}) {
             // Requested/session metadata is not RunRecord authority. Clear it before
             // dispatch; only direct maestro-runner evidence may repopulate it.
             probeDeviceId = null;
-            const firstResult = await maestroRun({
+            const firstResult = await measureStep('maestro-first-attempt', () => maestroRun({
                 inlineYaml: replayYaml,
                 actionMetadata: action.metadata,
                 platform: args.platform,
@@ -497,7 +529,7 @@ export function createRunActionHandler(deps = {}) {
                 reproveManagedOrigin: () => reproveManagedOrigin(args),
                 completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
                 reissueInstallReceipt: () => reissueInstallReceipt(args),
-            });
+            }));
             const firstAttemptMs = Date.now() - tBeforeFirst;
             const firstEnv = parseEnvelope(firstResult, 'maestro_run');
             const firstPassed = firstEnv.ok === true && firstEnv.data?.passed === true;
@@ -620,7 +652,7 @@ export function createRunActionHandler(deps = {}) {
                     cdpJsFallback = { attempted: false, reason: 'no-probe-testid' };
                 }
                 else {
-                    const probeOutcome = await probeTreeWithRetry(replayDeps, probe, probeRetry);
+                    const probeOutcome = await measureStep('fallback-probe', () => probeTreeWithRetry(replayDeps, probe, probeRetry));
                     if (!probeOutcome.found) {
                         cdpJsFallback = {
                             attempted: false,
@@ -642,9 +674,9 @@ export function createRunActionHandler(deps = {}) {
                         try {
                             // GH #580: resume at the proven failed selector; UNKNOWN failed before
                             // any step, so it keeps start-at-zero.
-                            const replay = await runCdpReplay(cdpReplayYaml, args.params ?? {}, replayDeps, {
+                            const replay = await measureStep('fallback-cdp-replay', () => runCdpReplay(cdpReplayYaml, args.params ?? {}, replayDeps, {
                                 resumeAtSelector: failure.kind === 'SELECTOR_NOT_FOUND' ? failure.selector : null,
-                            });
+                            }));
                             const status = replay.passed ? 'pass' : 'fail';
                             const autoRepair = {
                                 attempted: false,
@@ -761,12 +793,12 @@ export function createRunActionHandler(deps = {}) {
                 throw new Error('Internal: isAutoRepairable returned true for non-SELECTOR_NOT_FOUND failure');
             }
             const tBeforeRepair = Date.now();
-            const repairResult = await repairAction({
+            const repairResult = await measureStep('selector-repair', () => repairAction({
                 actionId: args.actionId,
                 failedSelector: failure.selector,
                 projectRoot,
                 agentReasoning: `auto-repair from cdp_run_action after maestro failure: ${failure.selector}`,
-            });
+            }));
             const repairMs = Date.now() - tBeforeRepair;
             const repairEnv = parseEnvelope(repairResult, 'cdp_repair_action');
             const repairPatched = repairEnv.ok === true && repairEnv.data?.patched === true;
@@ -828,10 +860,11 @@ export function createRunActionHandler(deps = {}) {
             if (!reloadedAction.replay.ok) {
                 return failResult(`cdp_run_action: repaired action is not valid Maestro YAML: ${reloadedAction.replay.error}`, 'BAD_RECORDING', { actionId: args.actionId });
             }
+            const retryYaml = reloadedAction.replay.yamlText;
             const tBeforeRetry = Date.now();
             probeDeviceId = null;
-            const retryResult = await maestroRun({
-                inlineYaml: reloadedAction.replay.yamlText,
+            const retryResult = await measureStep('maestro-retry', () => maestroRun({
+                inlineYaml: retryYaml,
                 actionMetadata: reloadedAction.metadata,
                 platform: args.platform,
                 appId: args.appId,
@@ -845,7 +878,7 @@ export function createRunActionHandler(deps = {}) {
                 reproveManagedOrigin: () => reproveManagedOrigin(args),
                 completeRunnerPark: () => completeManagedRunnerParkAuthority(args),
                 reissueInstallReceipt: () => reissueInstallReceipt(args),
-            });
+            }));
             const retryMs = Date.now() - tBeforeRetry;
             const retryEnv = parseEnvelope(retryResult, 'maestro_run');
             const retryPassed = retryEnv.ok === true && retryEnv.data?.passed === true;

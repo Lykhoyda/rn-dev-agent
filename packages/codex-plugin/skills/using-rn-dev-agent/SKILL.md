@@ -142,6 +142,7 @@ These apply to every RN task:
 5. **Filter `cdp_component_tree` queries** — never dump the full tree (10K+ tokens wasted)
 6. **Stop at the first red flag** from the agent's red flags list
 7. **Run `$rn-dev-agent:list-learned-actions` BEFORE composing any `device_*` sequence.** If a saved action already covers the request, replay it via `cdp_run_action` (or `$rn-dev-agent:run-action`) first — that path runs the mutates/appId/param pre-flights and auto-repair; reserve raw `maestro_run` for non-action YAML flows. Manual primitives are a fallback, not a default. (Codified in `feedback_execute_artifacts_before_manual.md`. The original failure case: a 7-minute / 11-tool-call manual walk that an existing 23-second Maestro flow would have covered.)
+8. **Enter authenticated journeys through `cdp_login_prologue`.** It resolves only the exact `user-login` action and requires a fresh passing RunRecord. `LOGIN_PROLOGUE_BLOCKED` is terminal for the journey: do not use manual credentials, ad-hoc Maestro, navigation shortcuts, or store mutation afterward.
 
 ### Ask First
 - Adding new dependencies to the user's project

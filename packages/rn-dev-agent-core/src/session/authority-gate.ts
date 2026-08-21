@@ -9,6 +9,14 @@ import { isProvenMetroOriginMismatch } from './metro-origin.js';
 import { reissueInstallBinding } from './install-reissue.js';
 import type { WorkerAuthorityStatus } from './runtime.js';
 import {
+  LOGIN_PROLOGUE_ALIAS,
+  LOGIN_PROLOGUE_BLOCKED,
+  appendLoginOverrideAudit,
+  evaluateLoginPrologueGuard,
+  readLoginPrologueOutcome,
+  type LoginPrologueOutcome,
+} from '../domain/login-prologue.js';
+import {
   authorityProfileFor,
   requiresExactInstalledArtifact,
   type AuthorityAxis,
@@ -65,6 +73,7 @@ interface AuthorityGateDependencies {
   reissueInstallBinding?(
     install: Record<string, unknown> | undefined,
   ): Record<string, unknown> | null;
+  loginSupervisorOverrideToken?(): string | undefined;
 }
 
 const optionalBundleAdmission = Symbol('optionalBundleAdmission');
@@ -702,6 +711,40 @@ function authorityFailure(error: unknown): ToolResult {
   );
 }
 
+function parseLoginPrologueOutcome(result: unknown): LoginPrologueOutcome | null {
+  try {
+    const envelope = JSON.parse((result as ToolResult).content?.[0]?.text ?? '{}') as {
+      data?: unknown;
+      meta?: { loginPrologue?: unknown };
+    };
+    return readLoginPrologueOutcome(envelope.data ?? envelope.meta?.loginPrologue);
+  } catch {
+    return null;
+  }
+}
+
+function missingLoginPrologueOutcome(): LoginPrologueOutcome {
+  const timestamp = new Date().toISOString();
+  return {
+    schemaVersion: 1,
+    state: LOGIN_PROLOGUE_BLOCKED,
+    alias: LOGIN_PROLOGUE_ALIAS,
+    startedAt: timestamp,
+    endedAt: timestamp,
+    elapsedMs: 0,
+    steps: [],
+    inventory: { count: 0, actionIds: [] },
+    failure: {
+      code: 'LOGIN_PROLOGUE_RESULT_INVALID',
+      detail: 'The login prologue returned no valid terminal state.',
+    },
+  };
+}
+
+function isActionReplayTool(tool: string): boolean {
+  return tool === 'cdp_run_action' || tool === 'cdp_login_prologue';
+}
+
 function authorityErrorCode(error: unknown): string | undefined {
   return error instanceof SessionAuthorityError
     ? error.code
@@ -1131,10 +1174,56 @@ export function createAuthorityGate(
                     }
                   : baseProfile;
 
+        let runtimeStatus = runtime.status();
+        const loginDecision = evaluateLoginPrologueGuard({
+          binding: runtimeStatus.available ? runtimeStatus.bindings.loginPrologue : undefined,
+          tool,
+          args,
+          mutation: profile.mutation,
+          expectedOverrideToken: dependencies.loginSupervisorOverrideToken?.(),
+        });
+        delete args.supervisorOverrideToken;
+        if (!loginDecision.allowed) {
+          return failResult(
+            'LOGIN_PROLOGUE_BLOCKED: the deterministic login action did not produce an authoritative passing RunRecord; mutating tools are disabled for this session.',
+            'LOGIN_PROLOGUE_BLOCKED',
+            {
+              loginPrologue: runtimeStatus.available
+                ? runtimeStatus.bindings.loginPrologue
+                : undefined,
+              overrideRejected: loginDecision.suppliedOverride,
+              nextAction:
+                'Repair the exact user-login action and rerun cdp_login_prologue, or supply a supervisorOverrideToken configured by RN_LOGIN_PROLOGUE_OVERRIDE_TOKEN for this mutating call.',
+            },
+          );
+        }
+        if (loginDecision.override) {
+          try {
+            const available = runtime.requireAvailable();
+            const current = runtime.status();
+            const outcome = current.available
+              ? readLoginPrologueOutcome(current.bindings.loginPrologue)
+              : null;
+            if (!outcome) {
+              throw new SessionAuthorityError(
+                'LOGIN_PROLOGUE_BLOCKED',
+                'the blocked login prologue state disappeared before override audit',
+              );
+            }
+            available.registry.updateBindings(available.session, {
+              bindings: {
+                loginPrologue: appendLoginOverrideAudit(outcome, loginDecision.audit),
+              },
+            });
+            runtimeStatus = runtime.status();
+          } catch (error) {
+            return authorityFailure(error);
+          }
+        }
+
         if (profile.kind === 'diagnostic') {
           return addMeta(await handler(...handlerArgs), { authoritative: false });
         }
-        const runtimeStatus = runtime.status();
         if (runtimeStatus.available && runtimeStatus.state === 'blocked') {
           return authorityFailure(runtime.blockedContenderError());
         }
@@ -1940,7 +2029,19 @@ export function createAuthorityGate(
           }
           registry.verifyOperation(operation);
           const snapshotCheckpoint = dependencies.snapshotCaptureCheckpoint?.();
-          const result = await registry.runWithOperation(operation, () => handler(...handlerArgs));
+          let result = await registry.runWithOperation(operation, () => handler(...handlerArgs));
+          let loginPrologueOutcome: LoginPrologueOutcome | null = null;
+          if (tool === 'cdp_login_prologue') {
+            loginPrologueOutcome = parseLoginPrologueOutcome(result);
+            if (!loginPrologueOutcome) {
+              loginPrologueOutcome = missingLoginPrologueOutcome();
+              result = failResult(
+                'Login prologue returned no valid terminal state.',
+                'LOGIN_PROLOGUE_BLOCKED',
+                { loginPrologue: loginPrologueOutcome },
+              );
+            }
+          }
           let runtimeTargetChanged = false;
           const postHandlerRecovery = await reconcileRecoverableRuntime(
             runtime,
@@ -1983,7 +2084,7 @@ export function createAuthorityGate(
             tool === 'cdp_run_e2e_suite' ||
             tool === 'cdp_auto_login' ||
             (tool === 'cdp_nav_graph' && args.action === 'go') ||
-            (tool === 'cdp_run_action' && (optionalBundleClaimed || optionalBundleRecoveryFailed));
+            (isActionReplayTool(tool) && (optionalBundleClaimed || optionalBundleRecoveryFailed));
           const reconcilesRuntimeTarget = directRuntimeReset || nestedRuntimeReset;
           let authorityInvalidated = false;
           if (directRuntimeReset && !resultSucceeded(result)) {
@@ -2003,7 +2104,7 @@ export function createAuthorityGate(
             const metro = status.bindings.metro as Record<string, unknown> | undefined;
             let bundle: Record<string, unknown> | null = null;
             try {
-              if (tool === 'cdp_run_action' && optionalBundleRecoveryFailed) {
+              if (isActionReplayTool(tool) && optionalBundleRecoveryFailed) {
                 throw new SessionAuthorityError(
                   'BUNDLE_HANDSHAKE_UNAVAILABLE',
                   'reactive bundle authority did not verify',
@@ -2035,7 +2136,7 @@ export function createAuthorityGate(
                     'Run rn_session action "pin_dev_client" before another CDP operation.',
                 });
               }
-              if (tool === 'cdp_run_action' && !optionalBundleClaimed) {
+              if (isActionReplayTool(tool) && !optionalBundleClaimed) {
                 authorityInvalidated = true;
               } else {
                 throw error;
@@ -2135,6 +2236,22 @@ export function createAuthorityGate(
           // identity change. An external generation change still fails CAS.
           const controllerGenerationAdvanced =
             operation.authorityVersion !== initialOperationAuthorityVersion;
+          if (loginPrologueOutcome) {
+            const priorOutcome = readLoginPrologueOutcome(status.bindings.loginPrologue);
+            operation = registry.replaceBindingsDuringOperation(operation, {
+              bindings: {
+                loginPrologue: {
+                  ...loginPrologueOutcome,
+                  ...(priorOutcome?.overrides ? { overrides: priorOutcome.overrides } : {}),
+                },
+              },
+            });
+            const loginStatus = runtime.status();
+            if (!loginStatus.available) {
+              throw new SessionAuthorityError(loginStatus.code, loginStatus.reason);
+            }
+            status = loginStatus;
+          }
           registry.verifyOperation(operation);
           for (const observation of allBefore) {
             if (controllerGenerationAdvanced && observation.axis === 'C') continue;

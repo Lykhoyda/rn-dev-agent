@@ -2,6 +2,7 @@ import type { InstallIdentityInspection } from './install-identity-inspection.js
 import { inspectAuthorityMigration } from './migration-diagnostic.js';
 import { authorityRemedyNextAction, type RecoveryRequirementInspection } from './registry.js';
 import type { WorkerAuthorityStatus } from './runtime.js';
+import { readLoginPrologueOutcome } from '../domain/login-prologue.js';
 
 interface BoundedHandle {
   token?: unknown;
@@ -148,6 +149,7 @@ export function projectPublicAuthorityStatus(
     : undefined;
   const sandbox =
     metro?.runtimeEvidenceAuthority === 'managed-sandbox-v1' ? 'managed-sandbox-v1' : 'unavailable';
+  const loginPrologue = readLoginPrologueOutcome(status.bindings.loginPrologue);
   const phase = derivePublicPhase(status.state, Boolean(status.bindings.pendingBuild));
   return {
     available: true,
@@ -191,6 +193,22 @@ export function projectPublicAuthorityStatus(
     proof: Boolean(status.bindings.proof),
     // ADR §5.2 (L3): strict proof is an opt-in overlay outside the four groups, never a group.
     proofOverlay: { active: Boolean(status.bindings.proof) },
+    ...(loginPrologue
+      ? {
+          loginPrologue: {
+            state: loginPrologue.state,
+            alias: loginPrologue.alias,
+            actionId: loginPrologue.actionId,
+            startedAt: loginPrologue.startedAt,
+            endedAt: loginPrologue.endedAt,
+            elapsedMs: loginPrologue.elapsedMs,
+            failureCode: loginPrologue.failure?.code,
+            runId: loginPrologue.runRecord?.runId,
+            overrideCount: loginPrologue.overrides?.length ?? 0,
+            lastOverride: loginPrologue.overrides?.at(-1),
+          },
+        }
+      : {}),
     ...(options.installIdentity ? { installIdentity: options.installIdentity.verdict } : {}),
     // A live axis-I refusal means every gated tool refuses too — status must
     // not read `ready` while that is true. A pending re-issue reads ready only

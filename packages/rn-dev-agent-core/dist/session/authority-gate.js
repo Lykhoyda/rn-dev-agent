@@ -5,6 +5,7 @@ import { failResult } from '../utils.js';
 import { authorityErrorMeta, SessionAuthorityError, shortAuthorityIdentity } from './registry.js';
 import { isProvenMetroOriginMismatch } from './metro-origin.js';
 import { reissueInstallBinding } from './install-reissue.js';
+import { LOGIN_PROLOGUE_ALIAS, LOGIN_PROLOGUE_BLOCKED, appendLoginOverrideAudit, evaluateLoginPrologueGuard, readLoginPrologueOutcome, } from '../domain/login-prologue.js';
 import { authorityProfileFor, requiresExactInstalledArtifact, } from './tool-profiles.js';
 const optionalBundleAdmission = Symbol('optionalBundleAdmission');
 const managedNativeOrigin = Symbol('managedNativeOrigin');
@@ -423,6 +424,35 @@ function authorityFailure(error) {
     const code = /^([A-Z][A-Z0-9_]+):/.exec(message)?.[1];
     return failResult(message, code ?? 'AUTHORITY_LOST_DURING_OPERATION');
 }
+function parseLoginPrologueOutcome(result) {
+    try {
+        const envelope = JSON.parse(result.content?.[0]?.text ?? '{}');
+        return readLoginPrologueOutcome(envelope.data ?? envelope.meta?.loginPrologue);
+    }
+    catch {
+        return null;
+    }
+}
+function missingLoginPrologueOutcome() {
+    const timestamp = new Date().toISOString();
+    return {
+        schemaVersion: 1,
+        state: LOGIN_PROLOGUE_BLOCKED,
+        alias: LOGIN_PROLOGUE_ALIAS,
+        startedAt: timestamp,
+        endedAt: timestamp,
+        elapsedMs: 0,
+        steps: [],
+        inventory: { count: 0, actionIds: [] },
+        failure: {
+            code: 'LOGIN_PROLOGUE_RESULT_INVALID',
+            detail: 'The login prologue returned no valid terminal state.',
+        },
+    };
+}
+function isActionReplayTool(tool) {
+    return tool === 'cdp_run_action' || tool === 'cdp_login_prologue';
+}
 function authorityErrorCode(error) {
     return error instanceof SessionAuthorityError
         ? error.code
@@ -735,10 +765,48 @@ export function createAuthorityGate(runtime, dependencies) {
                                 liveBundleProbe: tool === 'proof_capture',
                             }
                             : baseProfile;
+            let runtimeStatus = runtime.status();
+            const loginDecision = evaluateLoginPrologueGuard({
+                binding: runtimeStatus.available ? runtimeStatus.bindings.loginPrologue : undefined,
+                tool,
+                args,
+                mutation: profile.mutation,
+                expectedOverrideToken: dependencies.loginSupervisorOverrideToken?.(),
+            });
+            delete args.supervisorOverrideToken;
+            if (!loginDecision.allowed) {
+                return failResult('LOGIN_PROLOGUE_BLOCKED: the deterministic login action did not produce an authoritative passing RunRecord; mutating tools are disabled for this session.', 'LOGIN_PROLOGUE_BLOCKED', {
+                    loginPrologue: runtimeStatus.available
+                        ? runtimeStatus.bindings.loginPrologue
+                        : undefined,
+                    overrideRejected: loginDecision.suppliedOverride,
+                    nextAction: 'Repair the exact user-login action and rerun cdp_login_prologue, or supply a supervisorOverrideToken configured by RN_LOGIN_PROLOGUE_OVERRIDE_TOKEN for this mutating call.',
+                });
+            }
+            if (loginDecision.override) {
+                try {
+                    const available = runtime.requireAvailable();
+                    const current = runtime.status();
+                    const outcome = current.available
+                        ? readLoginPrologueOutcome(current.bindings.loginPrologue)
+                        : null;
+                    if (!outcome) {
+                        throw new SessionAuthorityError('LOGIN_PROLOGUE_BLOCKED', 'the blocked login prologue state disappeared before override audit');
+                    }
+                    available.registry.updateBindings(available.session, {
+                        bindings: {
+                            loginPrologue: appendLoginOverrideAudit(outcome, loginDecision.audit),
+                        },
+                    });
+                    runtimeStatus = runtime.status();
+                }
+                catch (error) {
+                    return authorityFailure(error);
+                }
+            }
             if (profile.kind === 'diagnostic') {
                 return addMeta(await handler(...handlerArgs), { authoritative: false });
             }
-            const runtimeStatus = runtime.status();
             if (runtimeStatus.available && runtimeStatus.state === 'blocked') {
                 return authorityFailure(runtime.blockedContenderError());
             }
@@ -1411,7 +1479,15 @@ export function createAuthorityGate(runtime, dependencies) {
                 }
                 registry.verifyOperation(operation);
                 const snapshotCheckpoint = dependencies.snapshotCaptureCheckpoint?.();
-                const result = await registry.runWithOperation(operation, () => handler(...handlerArgs));
+                let result = await registry.runWithOperation(operation, () => handler(...handlerArgs));
+                let loginPrologueOutcome = null;
+                if (tool === 'cdp_login_prologue') {
+                    loginPrologueOutcome = parseLoginPrologueOutcome(result);
+                    if (!loginPrologueOutcome) {
+                        loginPrologueOutcome = missingLoginPrologueOutcome();
+                        result = failResult('Login prologue returned no valid terminal state.', 'LOGIN_PROLOGUE_BLOCKED', { loginPrologue: loginPrologueOutcome });
+                    }
+                }
                 let runtimeTargetChanged = false;
                 const postHandlerRecovery = await reconcileRecoverableRuntime(runtime, dependencies, registry, operation, status, profile, resultSucceeded(result));
                 operation = postHandlerRecovery.operation;
@@ -1440,7 +1516,7 @@ export function createAuthorityGate(runtime, dependencies) {
                 const nestedRuntimeReset = tool === 'cdp_run_e2e_suite' ||
                     tool === 'cdp_auto_login' ||
                     (tool === 'cdp_nav_graph' && args.action === 'go') ||
-                    (tool === 'cdp_run_action' && (optionalBundleClaimed || optionalBundleRecoveryFailed));
+                    (isActionReplayTool(tool) && (optionalBundleClaimed || optionalBundleRecoveryFailed));
                 const reconcilesRuntimeTarget = directRuntimeReset || nestedRuntimeReset;
                 let authorityInvalidated = false;
                 if (directRuntimeReset && !resultSucceeded(result)) {
@@ -1455,7 +1531,7 @@ export function createAuthorityGate(runtime, dependencies) {
                     const metro = status.bindings.metro;
                     let bundle = null;
                     try {
-                        if (tool === 'cdp_run_action' && optionalBundleRecoveryFailed) {
+                        if (isActionReplayTool(tool) && optionalBundleRecoveryFailed) {
                             throw new SessionAuthorityError('BUNDLE_HANDSHAKE_UNAVAILABLE', 'reactive bundle authority did not verify');
                         }
                         if (!dependencies.refreshRuntimeBinding) {
@@ -1476,7 +1552,7 @@ export function createAuthorityGate(runtime, dependencies) {
                                 nextAction: 'Run rn_session action "pin_dev_client" before another CDP operation.',
                             });
                         }
-                        if (tool === 'cdp_run_action' && !optionalBundleClaimed) {
+                        if (isActionReplayTool(tool) && !optionalBundleClaimed) {
                             authorityInvalidated = true;
                         }
                         else {
@@ -1561,6 +1637,22 @@ export function createAuthorityGate(runtime, dependencies) {
                 // Verify that exact advanced fence first, then tolerate only its C
                 // identity change. An external generation change still fails CAS.
                 const controllerGenerationAdvanced = operation.authorityVersion !== initialOperationAuthorityVersion;
+                if (loginPrologueOutcome) {
+                    const priorOutcome = readLoginPrologueOutcome(status.bindings.loginPrologue);
+                    operation = registry.replaceBindingsDuringOperation(operation, {
+                        bindings: {
+                            loginPrologue: {
+                                ...loginPrologueOutcome,
+                                ...(priorOutcome?.overrides ? { overrides: priorOutcome.overrides } : {}),
+                            },
+                        },
+                    });
+                    const loginStatus = runtime.status();
+                    if (!loginStatus.available) {
+                        throw new SessionAuthorityError(loginStatus.code, loginStatus.reason);
+                    }
+                    status = loginStatus;
+                }
                 registry.verifyOperation(operation);
                 for (const observation of allBefore) {
                     if (controllerGenerationAdvanced && observation.axis === 'C')

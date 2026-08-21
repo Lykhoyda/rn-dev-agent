@@ -120,6 +120,21 @@ function fixture() {
   return { calls, registry, runtime, status };
 }
 
+function loginOutcome(state, failure) {
+  return {
+    schemaVersion: 1,
+    state,
+    alias: 'user-login',
+    actionId: 'user-login',
+    startedAt: '2026-08-21T10:00:00.000Z',
+    endedAt: '2026-08-21T10:00:00.100Z',
+    elapsedMs: 100,
+    steps: [],
+    inventory: { count: 1, actionIds: ['user-login'] },
+    ...(failure ? { failure } : {}),
+  };
+}
+
 test('authoritative tools receive preflight/postflight receipts and an immediate CAS', async () => {
   const { calls, runtime } = fixture();
   const gate = createAuthorityGate(runtime, {
@@ -2606,4 +2621,114 @@ test('iOS hard reset returns a typed failure for conflicting session arguments',
 
   assert.equal(envelope.ok, false);
   assert.equal(envelope.code, 'DEVICE_AUTHORITY_MISMATCH');
+});
+
+test('a failed login prologue becomes a durable terminal mutation gate', async () => {
+  const { runtime, status } = fixture();
+  const blocked = loginOutcome('LOGIN_PROLOGUE_BLOCKED', {
+    code: 'ENGINE_PIN_MISMATCH',
+    detail: 'runner drift',
+  });
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+  });
+
+  const prologueResult = await gate.wrap('cdp_login_prologue', async () =>
+    failResult('blocked', 'LOGIN_PROLOGUE_BLOCKED', { loginPrologue: blocked }),
+  )({});
+  assert.equal(JSON.parse(prologueResult.content[0].text).code, 'LOGIN_PROLOGUE_BLOCKED');
+  assert.equal(status.bindings.loginPrologue.state, 'LOGIN_PROLOGUE_BLOCKED');
+
+  for (const [tool, args] of [
+    ['cdp_evaluate', { expression: 'credential()' }],
+    ['cdp_interact', { action: 'press', testID: 'submit' }],
+    ['device_fill', { text: 'secret' }],
+    ['maestro_run', { yaml: '- tapOn: Login' }],
+    ['cdp_navigate', { route: 'Story' }],
+    ['cdp_mmkv', { action: 'set', key: 'auth', value: 'token' }],
+  ]) {
+    let dispatched = false;
+    const result = await gate.wrap(tool, async () => {
+      dispatched = true;
+      return okResult({});
+    })(args);
+    const envelope = JSON.parse(result.content[0].text);
+    assert.equal(envelope.code, 'LOGIN_PROLOGUE_BLOCKED', `${tool} must be blocked`);
+    assert.equal(dispatched, false, `${tool} must not dispatch`);
+  }
+
+  let readDispatched = false;
+  const readResult = await gate.wrap('cdp_component_tree', async () => {
+    readDispatched = true;
+    return okResult({ tree: [] });
+  })({});
+  assert.equal(JSON.parse(readResult.content[0].text).ok, true);
+  assert.equal(readDispatched, true);
+});
+
+test('a supervisor token authorizes one blocked mutation and records a redacted audit', async () => {
+  const { runtime, status } = fixture();
+  status.bindings.loginPrologue = loginOutcome('LOGIN_PROLOGUE_BLOCKED', {
+    code: 'TESTID_NOT_FOUND',
+    detail: 'selector drift',
+  });
+  const expectedToken = 'supervisor-token-123456';
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+    loginSupervisorOverrideToken: () => expectedToken,
+  });
+
+  let invalidDispatched = false;
+  const invalid = await gate.wrap('cdp_evaluate', async () => {
+    invalidDispatched = true;
+    return okResult({});
+  })({ expression: 'mutate()', supervisorOverrideToken: 'incorrect-token-1234' });
+  assert.equal(JSON.parse(invalid.content[0].text).code, 'LOGIN_PROLOGUE_BLOCKED');
+  assert.equal(invalidDispatched, false);
+
+  let handlerArgs;
+  const allowed = await gate.wrap('cdp_evaluate', async (args) => {
+    handlerArgs = args;
+    return okResult({ allowed: true });
+  })({ expression: 'mutate()', supervisorOverrideToken: expectedToken });
+  assert.equal(JSON.parse(allowed.content[0].text).ok, true);
+  assert.equal(handlerArgs.supervisorOverrideToken, undefined);
+  assert.deepEqual(
+    status.bindings.loginPrologue.overrides.map(({ tool }) => tool),
+    ['cdp_evaluate'],
+  );
+  assert.equal(JSON.stringify(status.bindings.loginPrologue).includes(expectedToken), false);
+});
+
+test('rerunning the exact login prologue discharges the terminal gate after a passing result', async () => {
+  const { runtime, status } = fixture();
+  status.bindings.loginPrologue = loginOutcome('LOGIN_PROLOGUE_BLOCKED', {
+    code: 'RECONNECT_TIMEOUT',
+    detail: 'timeout',
+  });
+  const passed = {
+    ...loginOutcome('passed'),
+    runRecord: {
+      runId: 'fresh-login-run',
+      timestamp: '2026-08-21T10:00:00.100Z',
+      durationMs: 100,
+      status: 'pass',
+      trigger: 'agent',
+    },
+  };
+  const gate = createAuthorityGate(runtime, {
+    probe: async ({ axis }) => ({ axis, identity: `${axis}-identity` }),
+  });
+
+  const prologueResult = await gate.wrap('cdp_login_prologue', async () => okResult(passed))({});
+  assert.equal(JSON.parse(prologueResult.content[0].text).ok, true);
+  assert.equal(status.bindings.loginPrologue.state, 'passed');
+
+  let dispatched = false;
+  const mutationResult = await gate.wrap('cdp_evaluate', async () => {
+    dispatched = true;
+    return okResult({ allowed: true });
+  })({ expression: 'continueJourney()' });
+  assert.equal(JSON.parse(mutationResult.content[0].text).ok, true);
+  assert.equal(dispatched, true);
 });

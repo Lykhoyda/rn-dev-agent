@@ -60,7 +60,7 @@ Do not silently take the cheaper path. The user reviewing your output cannot tel
 
 ### When shortcuts are legitimate
 
-- **Auth pre-flight** (compatible owned action; explicitly authorized legacy helper only when needed) — bootstrap, not verification surface
+- **Auth pre-flight** (`cdp_login_prologue` with a passing RunRecord) — bootstrap, not verification surface
 - **Permission pre-flight** (granting via `device_permission`) — platform setup, declared upfront
 - **Test data seeding** (via app's test-only fixtures) — declared in the test plan
 - **Explicit user instruction** ("just deep-link to the details screen and check the layout") — user-sanctioned scope
@@ -322,52 +322,32 @@ maestro_run(platform="android", deviceId="<exact emulator serial>", flowPath="fl
 
 ---
 
-## Auth Pre-flight: Approved Learned Actions (GH #10)
+## Auth Pre-flight: Deterministic Login Prologue
 
-Before testing features that require authentication, check if the app is
-on a login/auth screen. If so, authentication recovery must use a compatible
-action from the project's approved learned-action corpus.
+Before testing an authenticated feature, read the route with
+`cdp_navigation_state`. If the app is signed out, call
+`cdp_login_prologue` before any exploratory login interaction. The tool
+inventories learned actions, resolves only `.rn-agent/actions/user-login.yaml`,
+and replays it with conservative runner and selector safety checks.
 
-### Detection
+Continue only when the result has `state: "passed"` and a fresh passing
+`runRecord`. The returned prologue and RunRecord timing fields separate
+inventory, resolution, replay, verification, and transport time.
 
-Call `cdp_navigation_state` and check the route name. Auth-related routes
-typically match: `Login`, `Welcome`, `SignIn`, `Register`, `Onboarding`,
-`Auth`, `Landing`.
+`LOGIN_PROLOGUE_BLOCKED` is a terminal journey boundary. A missing action,
+runner drift, selector failure, timeout, or missing fresh RunRecord must not
+fall through to manual credential entry, `cdp_auto_login`, raw or ad-hoc
+Maestro, route injection, navigation shortcuts, or store mutation. Read-only
+diagnostics and cleanup remain available; repair the exact saved action and
+rerun the prologue.
 
-**Caution**: An empty navigation state may be a splash screen (loading) or
-the Dev Client picker (GH #9), not necessarily auth. Wait 3 seconds and
-retry before concluding the app is logged out.
+An empty navigation state may be a splash screen or Dev Client picker, not
+necessarily auth. Wait 3 seconds and retry before concluding the app is logged
+out.
 
-### Discovery and execution
-
-1. Run `/rn-dev-agent:list-learned-actions login`.
-2. Select one compatible owned action whose metadata establishes authenticated
-   state.
-3. Replay it through `cdp_run_action` on the exact authority-bound device.
-4. Treat any engine-pin, selector, or action-format incompatibility as terminal.
-5. If no compatible owned action exists, stop and report authentication as
-   blocked. Do not use manual taps, `.maestro` flows, ambient runners, or
-   `cdp_auto_login` as an automatic fallback.
-
-Only when the user explicitly authorizes legacy per-call navigation recovery may
-`cdp_auto_login` run. It is never durable login authority or PR proof; create or
-migrate an owned compatible action before proof.
-
-### Verification
-
-After replay completes, verify arrival at the main app:
-```
-cdp_navigation_state → route should be a main screen (Home, Dashboard, Tabs)
-```
-
-### Rules
-
-- **NEVER** fall back to manual login or an unowned replay flow
-- **ALWAYS** use `cdp_run_action` for the owned authentication action
-- **Skip** the notification `permissions` config if testing notification
-  permission flows (preserve undetermined state)
-- If no compatible owned login action exists, stop and report that
-  authentication cannot proceed through an authorized reusable flow
+A supervisor may authorize one otherwise-blocked mutation only with an
+out-of-band token configured as `RN_LOGIN_PROLOGUE_OVERRIDE_TOKEN` and supplied
+as `supervisorOverrideToken`. Never infer, discover, log, or persist that token.
 
 ---
 
