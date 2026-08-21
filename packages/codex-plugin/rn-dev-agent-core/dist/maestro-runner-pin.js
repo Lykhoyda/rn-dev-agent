@@ -56,6 +56,12 @@ var init_maestro_runner_pin = __esm({
         "linux-x64": "e9bdef6f08f855ca1a884f99b54a519a1eae0a342917181a53eb414a5b00d6d8",
         "linux-arm64": "8d8a6483ad04da2109636b7192398750657801b8a8d512688d1be3b033a105b8"
       },
+      archiveSha256: {
+        "darwin-arm64": "0b5b0f087815c5ff348e74a6dd7df260ed50a5588d5ff3e224c66a60d948c936",
+        "darwin-x64": "2ecc5c55d9437ee820691faf43097b5ba8d1ff797db49da9c96ac2631aac03c5",
+        "linux-x64": "f1963b7e3f8bf598d3b14f998fef3dc690e579906f340636cfd9350dea1d67b0",
+        "linux-arm64": "605db5645b161b610e999bcf8235650d41aac8929bbd0f818a592d13b958f148"
+      },
       knownQuirks: [
         {
           id: "android-pre-o-unsupported",
@@ -189,7 +195,7 @@ function pinArchiveCoords(platformKey) {
   }
 }
 function buildReplayEngineStatus(cls, version, _cliPresent, extras = {}) {
-  const engine = cls === "not-installed" ? "none" : "maestro-runner";
+  const engine = cls === "pinned-ok" ? "maestro-runner" : "none";
   return {
     engine,
     version,
@@ -292,6 +298,9 @@ function pinCorrection(status, platformKey = nodePlatformKey()) {
     case "unknown-version":
       return `Session maestro-runner version could not be read. ${install2}`;
     case "unverified":
+      if (status.version && compareVersions(status.version, pinned) > 0) {
+        return `Session pin-cache contains an unverified newer maestro-runner entry ${installed}; its directory name is not trusted binary evidence and it will not be executed. ${install2}`;
+      }
       return `Session maestro-runner ${installed} could not be checksum-verified on ${platformKey}. ${install2}`;
     case "pinned-ok":
       return `Session maestro-runner ${pinned} is selected from the pin-cache.`;
@@ -358,14 +367,8 @@ async function detect(resolvers) {
       });
     }
     const comparison = compareVersions(cacheVersion, MAESTRO_RUNNER_PIN.version);
-    if (!expectedSha2562 && comparison > 0) {
-      return buildReplayEngineStatus("drift-newer", cacheVersion, false, {
-        selectedPath: binPath,
-        provenance: "pin-cache"
-      });
-    }
     if (!expectedSha2562) {
-      return buildReplayEngineStatus("unverified", null, false, {
+      return buildReplayEngineStatus("unverified", cacheVersion, false, {
         selectedPath: binPath,
         provenance: "pin-cache"
       });
@@ -428,6 +431,7 @@ var init_engine_pin = __esm({
     MAESTRO_RUNNER_PIN = Object.freeze({
       version: maestro_runner_pin_default.version,
       sha256: Object.freeze({ ...maestro_runner_pin_default.sha256 }),
+      archiveSha256: Object.freeze({ ...maestro_runner_pin_default.archiveSha256 }),
       knownQuirks: Object.freeze(maestro_runner_pin_default.knownQuirks.map((quirk) => Object.freeze({ ...quirk })))
     });
     TRUSTED_DRIFT_SHA256 = Object.freeze({
@@ -4442,10 +4446,10 @@ var require_resolve_block_map = __commonJS({
       let offset = bm.offset;
       let commentEnd = null;
       for (const collItem of bm.items) {
-        const { start, key, sep: sep4, value } = collItem;
+        const { start, key, sep: sep5, value } = collItem;
         const keyProps = resolveProps.resolveProps(start, {
           indicator: "explicit-key-ind",
-          next: key ?? sep4?.[0],
+          next: key ?? sep5?.[0],
           offset,
           onError,
           parentIndent: bm.indent,
@@ -4459,7 +4463,7 @@ var require_resolve_block_map = __commonJS({
             else if ("indent" in key && key.indent !== bm.indent)
               onError(offset, "BAD_INDENT", startColMsg);
           }
-          if (!keyProps.anchor && !keyProps.tag && !sep4) {
+          if (!keyProps.anchor && !keyProps.tag && !sep5) {
             commentEnd = keyProps.end;
             if (keyProps.comment) {
               if (map.comment)
@@ -4483,7 +4487,7 @@ var require_resolve_block_map = __commonJS({
         ctx.atKey = false;
         if (utilMapIncludes.mapIncludes(ctx, map.items, keyNode))
           onError(keyStart, "DUPLICATE_KEY", "Map keys must be unique");
-        const valueProps = resolveProps.resolveProps(sep4 ?? [], {
+        const valueProps = resolveProps.resolveProps(sep5 ?? [], {
           indicator: "map-value-ind",
           next: value,
           offset: keyNode.range[2],
@@ -4499,7 +4503,7 @@ var require_resolve_block_map = __commonJS({
             if (ctx.options.strict && keyProps.start < valueProps.found.offset - 1024)
               onError(keyNode.range, "KEY_OVER_1024_CHARS", "The : indicator must be at most 1024 chars after the start of an implicit block mapping key");
           }
-          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : composeEmptyNode(ctx, offset, sep4, null, valueProps, onError);
+          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : composeEmptyNode(ctx, offset, sep5, null, valueProps, onError);
           if (ctx.schema.compat)
             utilFlowIndentCheck.flowIndentCheck(bm.indent, value, onError);
           offset = valueNode.range[2];
@@ -4590,7 +4594,7 @@ var require_resolve_end = __commonJS({
       let comment = "";
       if (end) {
         let hasSpace = false;
-        let sep4 = "";
+        let sep5 = "";
         for (const token2 of end) {
           const { source, type } = token2;
           switch (type) {
@@ -4604,13 +4608,13 @@ var require_resolve_end = __commonJS({
               if (!comment)
                 comment = cb;
               else
-                comment += sep4 + cb;
-              sep4 = "";
+                comment += sep5 + cb;
+              sep5 = "";
               break;
             }
             case "newline":
               if (comment)
-                sep4 += source;
+                sep5 += source;
               hasSpace = true;
               break;
             default:
@@ -4653,18 +4657,18 @@ var require_resolve_flow_collection = __commonJS({
       let offset = fc.offset + fc.start.source.length;
       for (let i = 0; i < fc.items.length; ++i) {
         const collItem = fc.items[i];
-        const { start, key, sep: sep4, value } = collItem;
+        const { start, key, sep: sep5, value } = collItem;
         const props = resolveProps.resolveProps(start, {
           flow: fcName,
           indicator: "explicit-key-ind",
-          next: key ?? sep4?.[0],
+          next: key ?? sep5?.[0],
           offset,
           onError,
           parentIndent: fc.indent,
           startOnNewline: false
         });
         if (!props.found) {
-          if (!props.anchor && !props.tag && !sep4 && !value) {
+          if (!props.anchor && !props.tag && !sep5 && !value) {
             if (i === 0 && props.comma)
               onError(props.comma, "UNEXPECTED_TOKEN", `Unexpected , in ${fcName}`);
             else if (i < fc.items.length - 1)
@@ -4718,8 +4722,8 @@ var require_resolve_flow_collection = __commonJS({
             }
           }
         }
-        if (!isMap && !sep4 && !props.found) {
-          const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep4, null, props, onError);
+        if (!isMap && !sep5 && !props.found) {
+          const valueNode = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, sep5, null, props, onError);
           coll.items.push(valueNode);
           offset = valueNode.range[2];
           if (isBlock(value))
@@ -4731,7 +4735,7 @@ var require_resolve_flow_collection = __commonJS({
           if (isBlock(key))
             onError(keyNode.range, "BLOCK_IN_FLOW", blockMsg);
           ctx.atKey = false;
-          const valueProps = resolveProps.resolveProps(sep4 ?? [], {
+          const valueProps = resolveProps.resolveProps(sep5 ?? [], {
             flow: fcName,
             indicator: "map-value-ind",
             next: value,
@@ -4742,8 +4746,8 @@ var require_resolve_flow_collection = __commonJS({
           });
           if (valueProps.found) {
             if (!isMap && !props.found && ctx.options.strict) {
-              if (sep4)
-                for (const st of sep4) {
+              if (sep5)
+                for (const st of sep5) {
                   if (st === valueProps.found)
                     break;
                   if (st.type === "newline") {
@@ -4760,7 +4764,7 @@ var require_resolve_flow_collection = __commonJS({
             else
               onError(valueProps.start, "MISSING_CHAR", `Missing , or : between ${fcName} items`);
           }
-          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep4, null, valueProps, onError) : null;
+          const valueNode = value ? composeNode(ctx, value, valueProps, onError) : valueProps.found ? composeEmptyNode(ctx, valueProps.end, sep5, null, valueProps, onError) : null;
           if (valueNode) {
             if (isBlock(value))
               onError(valueNode.range, "BLOCK_IN_FLOW", blockMsg);
@@ -4940,7 +4944,7 @@ var require_resolve_block_scalar = __commonJS({
           chompStart = i + 1;
       }
       let value = "";
-      let sep4 = "";
+      let sep5 = "";
       let prevMoreIndented = false;
       for (let i = 0; i < contentStart; ++i)
         value += lines[i][0].slice(trimIndent) + "\n";
@@ -4957,24 +4961,24 @@ var require_resolve_block_scalar = __commonJS({
           indent = "";
         }
         if (type === Scalar.Scalar.BLOCK_LITERAL) {
-          value += sep4 + indent.slice(trimIndent) + content;
-          sep4 = "\n";
+          value += sep5 + indent.slice(trimIndent) + content;
+          sep5 = "\n";
         } else if (indent.length > trimIndent || content[0] === "	") {
-          if (sep4 === " ")
-            sep4 = "\n";
-          else if (!prevMoreIndented && sep4 === "\n")
-            sep4 = "\n\n";
-          value += sep4 + indent.slice(trimIndent) + content;
-          sep4 = "\n";
+          if (sep5 === " ")
+            sep5 = "\n";
+          else if (!prevMoreIndented && sep5 === "\n")
+            sep5 = "\n\n";
+          value += sep5 + indent.slice(trimIndent) + content;
+          sep5 = "\n";
           prevMoreIndented = true;
         } else if (content === "") {
-          if (sep4 === "\n")
+          if (sep5 === "\n")
             value += "\n";
           else
-            sep4 = "\n";
+            sep5 = "\n";
         } else {
-          value += sep4 + content;
-          sep4 = " ";
+          value += sep5 + content;
+          sep5 = " ";
           prevMoreIndented = false;
         }
       }
@@ -5156,25 +5160,25 @@ var require_resolve_flow_scalar = __commonJS({
       if (!match)
         return source;
       let res = match[1];
-      let sep4 = " ";
+      let sep5 = " ";
       let pos = first.lastIndex;
       line.lastIndex = pos;
       while (match = line.exec(source)) {
         if (match[1] === "") {
-          if (sep4 === "\n")
-            res += sep4;
+          if (sep5 === "\n")
+            res += sep5;
           else
-            sep4 = "\n";
+            sep5 = "\n";
         } else {
-          res += sep4 + match[1];
-          sep4 = " ";
+          res += sep5 + match[1];
+          sep5 = " ";
         }
         pos = line.lastIndex;
       }
       const last = /[ \t]*(.*)/sy;
       last.lastIndex = pos;
       match = last.exec(source);
-      return res + sep4 + (match?.[1] ?? "");
+      return res + sep5 + (match?.[1] ?? "");
     }
     function doubleQuotedValue(source, onError) {
       let res = "";
@@ -5984,14 +5988,14 @@ var require_cst_stringify = __commonJS({
         }
       }
     }
-    function stringifyItem({ start, key, sep: sep4, value }) {
+    function stringifyItem({ start, key, sep: sep5, value }) {
       let res = "";
       for (const st of start)
         res += st.source;
       if (key)
         res += stringifyToken(key);
-      if (sep4)
-        for (const st of sep4)
+      if (sep5)
+        for (const st of sep5)
           res += st.source;
       if (value)
         res += stringifyToken(value);
@@ -7158,18 +7162,18 @@ var require_parser = __commonJS({
         if (this.type === "map-value-ind") {
           const prev = getPrevProps(this.peek(2));
           const start = getFirstKeyStartProps(prev);
-          let sep4;
+          let sep5;
           if (scalar.end) {
-            sep4 = scalar.end;
-            sep4.push(this.sourceToken);
+            sep5 = scalar.end;
+            sep5.push(this.sourceToken);
             delete scalar.end;
           } else
-            sep4 = [this.sourceToken];
+            sep5 = [this.sourceToken];
           const map = {
             type: "block-map",
             offset: scalar.offset,
             indent: scalar.indent,
-            items: [{ start, key: scalar, sep: sep4 }]
+            items: [{ start, key: scalar, sep: sep5 }]
           };
           this.onKeyLine = true;
           this.stack[this.stack.length - 1] = map;
@@ -7322,15 +7326,15 @@ var require_parser = __commonJS({
                 } else if (isFlowToken(it.key) && !includesToken(it.sep, "newline")) {
                   const start2 = getFirstKeyStartProps(it.start);
                   const key = it.key;
-                  const sep4 = it.sep;
-                  sep4.push(this.sourceToken);
+                  const sep5 = it.sep;
+                  sep5.push(this.sourceToken);
                   delete it.key;
                   delete it.sep;
                   this.stack.push({
                     type: "block-map",
                     offset: this.offset,
                     indent: this.indent,
-                    items: [{ start: start2, key, sep: sep4 }]
+                    items: [{ start: start2, key, sep: sep5 }]
                   });
                 } else if (start.length > 0) {
                   it.sep = it.sep.concat(start, this.sourceToken);
@@ -7524,13 +7528,13 @@ var require_parser = __commonJS({
             const prev = getPrevProps(parent);
             const start = getFirstKeyStartProps(prev);
             fixFlowSeqItems(fc);
-            const sep4 = fc.end.splice(1, fc.end.length);
-            sep4.push(this.sourceToken);
+            const sep5 = fc.end.splice(1, fc.end.length);
+            sep5.push(this.sourceToken);
             const map = {
               type: "block-map",
               offset: fc.offset,
               indent: fc.indent,
-              items: [{ start, key: fc, sep: sep4 }]
+              items: [{ start, key: fc, sep: sep5 }]
             };
             this.onKeyLine = true;
             this.stack[this.stack.length - 1] = map;
@@ -8144,6 +8148,23 @@ var init_maestro_validator = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/reusable-action.js
+function freshRuntimeState(now = () => /* @__PURE__ */ new Date(), mtimeMs = 0) {
+  const ts = now().toISOString();
+  return {
+    schemaVersion: 1,
+    revision: 1,
+    updatedAt: ts,
+    lastSeenMtimeMs: mtimeMs,
+    runHistory: [],
+    repairHistory: [],
+    stats: {
+      totalRuns: 0,
+      successCount: 0,
+      failureCount: 0,
+      avgDurationMs: 0
+    }
+  };
+}
 function parseM7Header(yamlText, fallbackId) {
   const lines = yamlText.split("\n");
   const meta = {};
@@ -8227,6 +8248,25 @@ var init_reusable_action = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/session/runtime-paths.js
+import { chmodSync, lstatSync as lstatSync2, mkdirSync } from "node:fs";
+import { join as join3, resolve as resolve2 } from "node:path";
+function privateDirectory(path) {
+  mkdirSync(path, { recursive: true, mode: 448 });
+  const stat = lstatSync2(path);
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    throw new Error("SESSION_RUNTIME_ROOT_UNSAFE: runtime root must be a real directory");
+  }
+  chmodSync(path, 448);
+  return path;
+}
+function sessionRuntimeRoot(projectRoot) {
+  const configured = process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT;
+  return configured ? privateDirectory(resolve2(configured)) : join3(resolve2(projectRoot), ".rn-agent");
+}
+function sessionStateDirectory(projectRoot) {
+  const path = join3(sessionRuntimeRoot(projectRoot), "state");
+  return process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT ? privateDirectory(path) : path;
+}
 var init_runtime_paths = __esm({
   "packages/rn-dev-agent-core/dist/session/runtime-paths.js"() {
     "use strict";
@@ -8234,6 +8274,42 @@ var init_runtime_paths = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/sidecar-io.js
+import { existsSync, readFileSync as readFileSync3, writeFileSync, mkdirSync as mkdirSync2, statSync } from "node:fs";
+import { join as join4, dirname as dirname3 } from "node:path";
+function sidecarPathFor(yamlFilePath) {
+  const dir = dirname3(yamlFilePath);
+  const parent = dirname3(dir);
+  const filename = yamlFilePath.replace(/\.ya?ml$/i, ".state.json");
+  const base = filename.split(/[\\/]/).pop();
+  const stateDirectory = process.env.RN_DEV_AGENT_SESSION_RUNTIME_ROOT ? sessionStateDirectory(dirname3(parent)) : join4(parent, "state");
+  return join4(stateDirectory, base);
+}
+function loadOrInitSidecar(yamlFilePath, now = () => /* @__PURE__ */ new Date()) {
+  const path = sidecarPathFor(yamlFilePath);
+  if (existsSync(path)) {
+    try {
+      const text = readFileSync3(path, "utf8");
+      const parsed = JSON.parse(text);
+      if (parsed && parsed.schemaVersion === 1 && typeof parsed.revision === "number" && typeof parsed.updatedAt === "string" && Array.isArray(parsed.runHistory) && Array.isArray(parsed.repairHistory) && typeof parsed.stats === "object") {
+        if (typeof parsed.lastSeenMtimeMs !== "number") {
+          try {
+            parsed.lastSeenMtimeMs = statSync(yamlFilePath).mtimeMs;
+          } catch {
+            parsed.lastSeenMtimeMs = 0;
+          }
+        }
+        return parsed;
+      }
+    } catch {
+    }
+  }
+  let mtimeMs = 0;
+  try {
+    mtimeMs = statSync(yamlFilePath).mtimeMs;
+  } catch {
+  }
+  return freshRuntimeState(now, mtimeMs);
+}
 var init_sidecar_io = __esm({
   "packages/rn-dev-agent-core/dist/domain/sidecar-io.js"() {
     "use strict";
@@ -8243,16 +8319,119 @@ var init_sidecar_io = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/atomic-writer.js
-var ORPHAN_MAX_AGE_MS;
+import { writeFileSync as writeFileSync2, renameSync, statSync as statSync2, mkdirSync as mkdirSync3, existsSync as existsSync2, unlinkSync, readdirSync as readdirSync2 } from "node:fs";
+import { dirname as dirname4, basename as basename2 } from "node:path";
+function generateTmpStamp() {
+  const rand = Math.random().toString(36).slice(2, 10);
+  return `${process.pid}.${Date.now().toString(36)}.${rand}`;
+}
+function pairWriteImpl(yamlPath, yamlContent, sidecarPath, state) {
+  ensureDir(yamlPath);
+  ensureDir(sidecarPath);
+  const stamp = generateTmpStamp();
+  const yamlTmp = `${yamlPath}.tmp.${stamp}`;
+  const sidecarTmp = `${sidecarPath}.tmp.${stamp}`;
+  const projectedMtimeMs = Date.now() + FUTURE_MTIME_BUFFER_MS;
+  const projectedState = {
+    ...state,
+    lastSeenMtimeMs: projectedMtimeMs
+  };
+  atomicWriter._writeFile(sidecarTmp, JSON.stringify(projectedState, null, 2) + "\n");
+  atomicWriter._rename(sidecarTmp, sidecarPath);
+  atomicWriter._writeFile(yamlTmp, yamlContent);
+  atomicWriter._rename(yamlTmp, yamlPath);
+  const actualMtimeMs = atomicWriter._statMtimeMs(yamlPath);
+  const finalMtimeMs = Math.max(actualMtimeMs, projectedMtimeMs);
+  const finalState = {
+    ...state,
+    lastSeenMtimeMs: finalMtimeMs
+  };
+  atomicWriter._writeFile(sidecarTmp, JSON.stringify(finalState, null, 2) + "\n");
+  atomicWriter._rename(sidecarTmp, sidecarPath);
+  return { yamlPath, sidecarPath, finalMtimeMs, refreshedSidecar: true };
+}
+function ensureDir(filePath) {
+  const dir = dirname4(filePath);
+  if (!atomicWriter._exists(dir))
+    atomicWriter._mkdir(dir);
+}
+function cleanupOrphans(yamlPath, sidecarPath) {
+  const now = Date.now();
+  for (const targetPath of [yamlPath, sidecarPath]) {
+    const dir = dirname4(targetPath);
+    const prefix = `${basename2(targetPath)}.tmp.`;
+    let entries;
+    try {
+      entries = atomicWriter._readdir(dir);
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.startsWith(prefix))
+        continue;
+      const orphanPath = `${dir}/${entry}`;
+      try {
+        const mtimeMs = atomicWriter._statMtimeMs(orphanPath);
+        if (now - mtimeMs < ORPHAN_MAX_AGE_MS)
+          continue;
+        atomicWriter._unlink(orphanPath);
+      } catch {
+      }
+    }
+  }
+}
+var FUTURE_MTIME_BUFFER_MS, ORPHAN_MAX_AGE_MS, atomicWriter;
 var init_atomic_writer = __esm({
   "packages/rn-dev-agent-core/dist/domain/atomic-writer.js"() {
     "use strict";
+    FUTURE_MTIME_BUFFER_MS = 1e3;
     ORPHAN_MAX_AGE_MS = 5 * 60 * 1e3;
+    atomicWriter = {
+      /** Underlying `fs.writeFileSync(path, content, 'utf8')`. */
+      _writeFile(path, content) {
+        writeFileSync2(path, content, "utf8");
+      },
+      /** Underlying `fs.renameSync(from, to)`. */
+      _rename(from, to) {
+        renameSync(from, to);
+      },
+      /** Underlying `fs.statSync(path).mtimeMs`. */
+      _statMtimeMs(path) {
+        return statSync2(path).mtimeMs;
+      },
+      /** Underlying `fs.existsSync(path)`. Routed through the seam so test
+       *  cases for ensureDir / cleanupOrphans can simulate exotic failures
+       *  (PR #109 review). */
+      _exists(path) {
+        return existsSync2(path);
+      },
+      /** Underlying `fs.mkdirSync(path, { recursive: true })`. */
+      _mkdir(path) {
+        mkdirSync3(path, { recursive: true });
+      },
+      /** Underlying `fs.unlinkSync(path)`. Used by orphan-cleanup. */
+      _unlink(path) {
+        unlinkSync(path);
+      },
+      /** Underlying `fs.readdirSync(path)`. Used by GH #111 prefix-scan cleanup. */
+      _readdir(path) {
+        return readdirSync2(path);
+      },
+      /**
+       * Atomic pair-write. Cleans up any orphaned `.tmp` files before
+       * starting. Throws on the first failed step — caller decides whether
+       * to surface or recover.
+       */
+      pairWrite(yamlPath, yamlContent, sidecarPath, state) {
+        cleanupOrphans(yamlPath, sidecarPath);
+        return pairWriteImpl(yamlPath, yamlContent, sidecarPath, state);
+      }
+    };
   }
 });
 
 // packages/rn-dev-agent-core/dist/domain/path-safety.js
-import { resolve as resolve2, sep as sep2 } from "node:path";
+import { resolve as resolve3, sep as sep2 } from "node:path";
 function isValidActionId(s) {
   if (typeof s !== "string")
     return false;
@@ -8269,8 +8448,8 @@ function assertValidActionId(s, context) {
   }
 }
 function assertWithinDir(child, baseDir) {
-  const resolvedBase = resolve2(baseDir);
-  const resolvedChild = resolve2(baseDir, child);
+  const resolvedBase = resolve3(baseDir);
+  const resolvedChild = resolve3(baseDir, child);
   if (resolvedChild === resolvedBase)
     return;
   const baseWithSep = resolvedBase.endsWith(sep2) ? resolvedBase : resolvedBase + sep2;
@@ -8294,8 +8473,8 @@ var init_path_safety = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/logger.js
-import { createWriteStream, mkdirSync, existsSync } from "node:fs";
-import { join as join3 } from "node:path";
+import { createWriteStream, mkdirSync as mkdirSync4, existsSync as existsSync3 } from "node:fs";
+import { join as join5 } from "node:path";
 import { tmpdir, homedir as homedir2 } from "node:os";
 function resolveLogPath() {
   if (process.argv.includes("--diagnostic-contract-probe"))
@@ -8305,48 +8484,406 @@ function resolveLogPath() {
   const pluginData = process.env.CLAUDE_PLUGIN_DATA;
   if (pluginData) {
     try {
-      if (!existsSync(pluginData))
-        mkdirSync(pluginData, { recursive: true });
-      return join3(pluginData, "cdp-bridge.log");
+      if (!existsSync3(pluginData))
+        mkdirSync4(pluginData, { recursive: true });
+      return join5(pluginData, "cdp-bridge.log");
     } catch {
     }
   }
-  const fallbackDir = join3(homedir2(), ".claude", "logs");
+  const fallbackDir = join5(homedir2(), ".claude", "logs");
   try {
-    if (!existsSync(fallbackDir))
-      mkdirSync(fallbackDir, { recursive: true });
-    return join3(fallbackDir, "rn-dev-agent-cdp-bridge.log");
+    if (!existsSync3(fallbackDir))
+      mkdirSync4(fallbackDir, { recursive: true });
+    return join5(fallbackDir, "rn-dev-agent-cdp-bridge.log");
   } catch {
   }
-  return join3(tmpdir(), "rn-dev-agent-cdp-bridge.log");
+  return join5(tmpdir(), "rn-dev-agent-cdp-bridge.log");
 }
-var configuredLevel, logFilePath;
+function getLogStream() {
+  if (!logFilePath)
+    return null;
+  if (!logStream) {
+    try {
+      logStream = createWriteStream(logFilePath, { flags: "a" });
+      logStream.on("error", () => {
+      });
+    } catch {
+      return null;
+    }
+  }
+  return logStream;
+}
+function shouldLog(level) {
+  return LEVEL_ORDER[level] >= LEVEL_ORDER[configuredLevel];
+}
+function formatMessage(level, tag, msg2) {
+  const ts = (/* @__PURE__ */ new Date()).toISOString();
+  return `${ts} [${level.toUpperCase()}] [${tag}] ${msg2}`;
+}
+function writeLog(level, tag, msg2) {
+  if (!shouldLog(level))
+    return;
+  const formatted = formatMessage(level, tag, msg2);
+  if (level === "error" || level === "warn") {
+    console.error(formatted);
+  } else if (configuredLevel === "debug" || configuredLevel === "info") {
+    console.error(formatted);
+  }
+  const stream = getLogStream();
+  if (stream) {
+    try {
+      stream.write(formatted + "\n");
+    } catch {
+    }
+  }
+}
+var LEVEL_ORDER, configuredLevel, logFilePath, logStream, logger;
 var init_logger = __esm({
   "packages/rn-dev-agent-core/dist/logger.js"() {
     "use strict";
+    LEVEL_ORDER = { debug: 0, info: 1, warn: 2, error: 3 };
     configuredLevel = process.env.LOG_LEVEL ?? process.env.RN_DEV_AGENT_LOG_LEVEL ?? "warn";
     logFilePath = resolveLogPath();
+    logStream = null;
+    logger = {
+      debug: (tag, msg2) => writeLog("debug", tag, msg2),
+      info: (tag, msg2) => writeLog("info", tag, msg2),
+      warn: (tag, msg2) => writeLog("warn", tag, msg2),
+      error: (tag, msg2) => writeLog("error", tag, msg2),
+      get logFilePath() {
+        return logFilePath;
+      },
+      get level() {
+        return configuredLevel;
+      }
+    };
   }
 });
 
 // packages/rn-dev-agent-core/dist/domain/action-db.js
 import { createRequire } from "node:module";
-var _require;
+import { existsSync as existsSync4, mkdirSync as mkdirSync5, readdirSync as readdirSync3, readFileSync as readFileSync4 } from "node:fs";
+import { dirname as dirname5, join as join6 } from "node:path";
+function loadSqlite() {
+  try {
+    const mod = _require("node:sqlite");
+    return mod.DatabaseSync ?? null;
+  } catch {
+    return null;
+  }
+}
+function openActionDb(projectRoot, opts = {}) {
+  const Ctor = opts.sqliteCtor === void 0 ? loadSqlite() : opts.sqliteCtor;
+  if (!Ctor)
+    return null;
+  try {
+    const dbPath = join6(sessionStateDirectory(projectRoot), "actions.db");
+    mkdirSync5(dirname5(dbPath), { recursive: true });
+    const db = new Ctor(dbPath);
+    db.exec(SCHEMA);
+    for (const alter of [
+      "ALTER TABLE run_records ADD COLUMN device_id TEXT",
+      "ALTER TABLE run_records ADD COLUMN blind_probe_json TEXT"
+    ]) {
+      try {
+        db.exec(alter);
+      } catch (e) {
+        if (!String(e).includes("duplicate column name"))
+          throw e;
+      }
+    }
+    const handle = {
+      db,
+      close: () => db.close(),
+      insertRunRecord(actionId, record) {
+        db.exec("BEGIN IMMEDIATE");
+        try {
+          const dup = db.prepare("SELECT 1 FROM run_records WHERE action_id = ? AND ts = ? LIMIT 1").get(actionId, record.timestamp);
+          if (dup) {
+            db.exec("COMMIT");
+            return;
+          }
+          db.prepare(`INSERT INTO run_records
+               (action_id, ts, trigger, status, failure_code, failure_detail,
+                transport, auto_repair_json, duration_ms, device_id, blind_probe_json)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(actionId, record.timestamp, record.trigger, record.status, record.failureCode ?? null, record.failureDetail ?? null, record.transport ?? null, record.autoRepair ? JSON.stringify(record.autoRepair) : null, record.durationMs, record.deviceId ?? null, record.blindProbe ? JSON.stringify(record.blindProbe) : null);
+          db.prepare(`DELETE FROM run_records
+             WHERE action_id = ?
+               AND id NOT IN (
+                 SELECT id FROM run_records
+                 WHERE action_id = ?
+                 ORDER BY id DESC
+                 LIMIT ${RUN_HISTORY_MAX}
+               )`).run(actionId, actionId);
+          db.exec("COMMIT");
+        } catch (e) {
+          db.exec("ROLLBACK");
+          throw e;
+        }
+      },
+      insertRepairRecord(actionId, record) {
+        db.exec("BEGIN IMMEDIATE");
+        try {
+          const dup = db.prepare("SELECT 1 FROM repair_records WHERE action_id = ? AND ts = ? LIMIT 1").get(actionId, record.timestamp);
+          if (dup) {
+            db.exec("COMMIT");
+            return;
+          }
+          db.prepare(`INSERT INTO repair_records
+               (action_id, ts, failure_code, diff_json, duration_ms, agent_reasoning)
+             VALUES (?,?,?,?,?,?)`).run(actionId, record.timestamp, record.failureCode, JSON.stringify(record.diff ?? {}), record.durationMs, record.agentReasoning ?? null);
+          db.prepare(`DELETE FROM repair_records
+             WHERE action_id = ?
+               AND id NOT IN (
+                 SELECT id FROM repair_records
+                 WHERE action_id = ?
+                 ORDER BY id DESC
+                 LIMIT ${REPAIR_HISTORY_MAX}
+               )`).run(actionId, actionId);
+          db.exec("COMMIT");
+        } catch (e) {
+          db.exec("ROLLBACK");
+          throw e;
+        }
+      },
+      upsertIndex(actionId, fields) {
+        db.prepare(`INSERT INTO actions_index
+             (id, app_id, path, content_hash, status, revision,
+              created_at, updated_at, mtime_baseline, stats_json)
+           VALUES (?,?,?,?,?,?,?,?,?,?)
+           ON CONFLICT(id) DO UPDATE SET
+             app_id         = COALESCE(excluded.app_id,         actions_index.app_id),
+             path           = COALESCE(excluded.path,           actions_index.path),
+             content_hash   = COALESCE(excluded.content_hash,   actions_index.content_hash),
+             status         = COALESCE(excluded.status,         actions_index.status),
+             revision       = COALESCE(excluded.revision,       actions_index.revision),
+             updated_at     = COALESCE(excluded.updated_at,     actions_index.updated_at),
+             mtime_baseline = COALESCE(excluded.mtime_baseline, actions_index.mtime_baseline),
+             stats_json     = COALESCE(excluded.stats_json,     actions_index.stats_json)`).run(actionId, fields.appId ?? null, fields.path ?? null, fields.contentHash ?? null, fields.status ?? null, fields.revision ?? null, fields.updatedAt ?? null, fields.updatedAt ?? null, fields.mtimeBaseline ?? null, fields.statsJson ?? null);
+      },
+      loadState(actionId) {
+        const idx = db.prepare("SELECT * FROM actions_index WHERE id = ?").get(actionId);
+        if (!idx)
+          return null;
+        const runRows = db.prepare("SELECT * FROM run_records WHERE action_id = ? ORDER BY id ASC").all(actionId);
+        const repairRows = db.prepare("SELECT * FROM repair_records WHERE action_id = ? ORDER BY id ASC").all(actionId);
+        const runHistory = runRows.map((r) => {
+          const rec = {
+            timestamp: String(r.ts),
+            durationMs: Number(r.duration_ms),
+            status: r.status,
+            trigger: r.trigger
+          };
+          if (r.failure_code)
+            rec.failureCode = r.failure_code;
+          if (r.failure_detail)
+            rec.failureDetail = String(r.failure_detail);
+          if (r.transport === "cdp-js")
+            rec.transport = "cdp-js";
+          if (r.auto_repair_json)
+            rec.autoRepair = JSON.parse(String(r.auto_repair_json));
+          if (r.device_id)
+            rec.deviceId = String(r.device_id);
+          if (r.blind_probe_json) {
+            try {
+              rec.blindProbe = JSON.parse(String(r.blind_probe_json));
+            } catch {
+            }
+          }
+          return rec;
+        });
+        const repairHistory = repairRows.map((r) => {
+          const rec = {
+            timestamp: String(r.ts),
+            failureCode: r.failure_code,
+            diff: r.diff_json ? JSON.parse(String(r.diff_json)) : {},
+            durationMs: Number(r.duration_ms)
+          };
+          if (r.agent_reasoning)
+            rec.agentReasoning = String(r.agent_reasoning);
+          return rec;
+        });
+        const stats = idx.stats_json ? JSON.parse(String(idx.stats_json)) : { totalRuns: 0, successCount: 0, failureCount: 0, avgDurationMs: 0 };
+        return {
+          schemaVersion: 1,
+          revision: Number(idx.revision) || 1,
+          updatedAt: String(idx.updated_at ?? (/* @__PURE__ */ new Date(0)).toISOString()),
+          lastSeenMtimeMs: Number(idx.mtime_baseline) || 0,
+          runHistory,
+          repairHistory,
+          stats
+        };
+      },
+      recentRepairCount(actionId, sinceIso) {
+        const row = db.prepare(`SELECT COUNT(*) as cnt FROM repair_records
+           WHERE action_id = ? AND ts >= ?`).get(actionId, sinceIso);
+        return row.cnt;
+      },
+      migrateSidecars() {
+        const stateDir = join6(projectRoot, ".rn-agent", "state");
+        if (!existsSync4(stateDir))
+          return { migrated: 0 };
+        let migrated = 0;
+        for (const f of readdirSync3(stateDir)) {
+          if (!f.endsWith(".state.json"))
+            continue;
+          const id = f.replace(/\.state\.json$/, "");
+          const exists = db.prepare("SELECT 1 FROM actions_index WHERE id = ?").get(id);
+          if (exists)
+            continue;
+          try {
+            const parsed = JSON.parse(readFileSync4(join6(stateDir, f), "utf8"));
+            if (parsed?.schemaVersion !== 1)
+              continue;
+            if (!Array.isArray(parsed.runHistory) || !Array.isArray(parsed.repairHistory)) {
+              continue;
+            }
+            for (const r of parsed.runHistory) {
+              handle.insertRunRecord(id, r);
+            }
+            for (const r of parsed.repairHistory) {
+              handle.insertRepairRecord(id, r);
+            }
+            handle.upsertIndex(id, {
+              revision: parsed.revision,
+              statsJson: JSON.stringify(parsed.stats),
+              mtimeBaseline: parsed.lastSeenMtimeMs,
+              updatedAt: parsed.updatedAt
+            });
+            migrated++;
+          } catch {
+          }
+        }
+        return { migrated };
+      }
+    };
+    return handle;
+  } catch {
+    return null;
+  }
+}
+var _require, SCHEMA, RUN_HISTORY_MAX, REPAIR_HISTORY_MAX;
 var init_action_db = __esm({
   "packages/rn-dev-agent-core/dist/domain/action-db.js"() {
     "use strict";
     init_runtime_paths();
     _require = createRequire(import.meta.url);
+    SCHEMA = `
+PRAGMA busy_timeout=5000;
+PRAGMA journal_mode=WAL;
+
+CREATE TABLE IF NOT EXISTS actions_index (
+  id             TEXT PRIMARY KEY,
+  app_id         TEXT,
+  path           TEXT,
+  content_hash   TEXT,
+  status         TEXT,
+  revision       INTEGER,
+  created_at     INTEGER,
+  updated_at     INTEGER,
+  mtime_baseline INTEGER,
+  stats_json     TEXT
+);
+
+CREATE TABLE IF NOT EXISTS run_records (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  action_id       TEXT,
+  ts              TEXT,
+  trigger         TEXT,
+  status          TEXT,
+  failure_code    TEXT,
+  failure_detail  TEXT,
+  transport       TEXT,
+  auto_repair_json TEXT,
+  duration_ms     INTEGER,
+  device_id       TEXT,
+  blind_probe_json TEXT
+);
+
+CREATE TABLE IF NOT EXISTS repair_records (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  action_id        TEXT,
+  ts               TEXT,
+  failure_code     TEXT,
+  diff_json        TEXT,
+  duration_ms      INTEGER,
+  agent_reasoning  TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_run_action    ON run_records(action_id);
+CREATE INDEX IF NOT EXISTS idx_repair_action ON repair_records(action_id);
+CREATE INDEX IF NOT EXISTS idx_index_app     ON actions_index(app_id);
+`;
+    RUN_HISTORY_MAX = 50;
+    REPAIR_HISTORY_MAX = 25;
   }
 });
 
 // packages/rn-dev-agent-core/dist/domain/action-state-store.js
+import { basename as basename3, dirname as dirname6, sep as sep3 } from "node:path";
+function dbFor(projectRoot) {
+  if (dbCache.has(projectRoot))
+    return dbCache.get(projectRoot) ?? null;
+  const handle = sqliteCtorOverride === void 0 ? openActionDb(projectRoot) : openActionDb(projectRoot, { sqliteCtor: sqliteCtorOverride });
+  if (handle) {
+    try {
+      handle.migrateSidecars();
+    } catch (err) {
+      logger.debug(TAG, `migrateSidecars failed for ${projectRoot}: ${String(err)}`);
+    }
+  }
+  dbCache.set(projectRoot, handle);
+  return handle;
+}
+function mirrorToDb(opts) {
+  const { yamlFilePath, state, newRunRecord, newRepairRecord, meta } = opts;
+  try {
+    const projectRoot = opts.projectRoot ?? projectRootFromYaml(yamlFilePath);
+    if (!projectRoot)
+      return;
+    const handle = dbFor(projectRoot);
+    if (!handle)
+      return;
+    const actionId = idOf(yamlFilePath);
+    handle.upsertIndex(actionId, {
+      appId: meta?.appId,
+      path: meta?.path,
+      contentHash: meta?.contentHash,
+      status: meta?.status,
+      revision: state.revision,
+      statsJson: JSON.stringify(state.stats),
+      mtimeBaseline: state.lastSeenMtimeMs,
+      updatedAt: state.updatedAt
+    });
+    if (newRunRecord)
+      handle.insertRunRecord(actionId, newRunRecord);
+    if (newRepairRecord)
+      handle.insertRepairRecord(actionId, newRepairRecord);
+  } catch (err) {
+    logger.debug(TAG, `DB mirror failed for ${idOf(yamlFilePath)} (authoritative write succeeded): ${String(err)}`);
+  }
+}
+function projectRootFromYaml(yamlFilePath) {
+  const actionsDir = dirname6(yamlFilePath);
+  const rnAgentDir = dirname6(actionsDir);
+  const root2 = dirname6(rnAgentDir);
+  if (basename3(actionsDir) !== "actions" || basename3(rnAgentDir) !== ".rn-agent") {
+    return null;
+  }
+  if (!root2 || root2 === sep3)
+    return null;
+  return root2;
+}
+var TAG, sqliteCtorOverride, dbCache, idOf;
 var init_action_state_store = __esm({
   "packages/rn-dev-agent-core/dist/domain/action-state-store.js"() {
     "use strict";
     init_logger();
     init_action_db();
     init_sidecar_io();
+    TAG = "action-state-store";
+    dbCache = /* @__PURE__ */ new Map();
+    idOf = (yamlFilePath) => basename3(yamlFilePath).replace(/\.ya?ml$/i, "");
   }
 });
 
@@ -8362,8 +8899,8 @@ var init_worktree_repair_remedy = __esm({
 
 // packages/rn-dev-agent-core/dist/session/worktree-inheritance.js
 import { spawnSync } from "node:child_process";
-import { closeSync, existsSync as existsSync2, fstatSync, lstatSync as lstatSync2, mkdirSync as mkdirSync2, openSync, readFileSync as readFileSync3, readlinkSync, realpathSync as realpathSync2, renameSync, statSync, symlinkSync, unlinkSync } from "node:fs";
-import { dirname as dirname3, isAbsolute as isAbsolute2, join as join4, relative, resolve as resolve3, sep as sep3 } from "node:path";
+import { closeSync, existsSync as existsSync5, fstatSync, lstatSync as lstatSync3, mkdirSync as mkdirSync6, openSync, readFileSync as readFileSync5, readlinkSync, realpathSync as realpathSync2, renameSync as renameSync2, statSync as statSync3, symlinkSync, unlinkSync as unlinkSync2 } from "node:fs";
+import { dirname as dirname7, isAbsolute as isAbsolute2, join as join7, relative, resolve as resolve4, sep as sep4 } from "node:path";
 function gitEnvironment() {
   const env = { ...process.env };
   for (const key of GIT_ENV_OVERRIDES)
@@ -8392,15 +8929,15 @@ function contained(parent, child) {
   if (parent === child)
     return true;
   const rel = relative(parent, child);
-  return rel !== "" && !rel.startsWith(`..${sep3}`) && rel !== ".." && !isAbsolute2(rel);
+  return rel !== "" && !rel.startsWith(`..${sep4}`) && rel !== ".." && !isAbsolute2(rel);
 }
 function toPosix(path) {
-  return sep3 === "/" ? path : path.split(sep3).join("/");
+  return sep4 === "/" ? path : path.split(sep4).join("/");
 }
 function isRnAppRoot(directory) {
-  const manifest = join4(directory, "package.json");
+  const manifest = join7(directory, "package.json");
   try {
-    const parsed = JSON.parse(readFileSync3(manifest, "utf8"));
+    const parsed = JSON.parse(readFileSync5(manifest, "utf8"));
     const deps = { ...parsed.dependencies, ...parsed.devDependencies };
     return Boolean(deps["react-native"] || deps["expo"]);
   } catch {
@@ -8440,7 +8977,7 @@ function verifiedPrimaries(worktreeRoot, commonDir) {
     if (!candidate)
       continue;
     try {
-      if (!statSync(candidate).isDirectory())
+      if (!statSync3(candidate).isDirectory())
         continue;
     } catch {
       continue;
@@ -8489,7 +9026,7 @@ function resolveWorktreeLayout(input) {
   const commonDir = canonical(commonRaw.stdout);
   if (!worktreeRoot || !gitDir || !commonDir)
     return { refusal: "GIT_UNAVAILABLE" };
-  const appRootInput = canonical(input.appRoot ? resolve3(input.appRoot) : cwd);
+  const appRootInput = canonical(input.appRoot ? resolve4(input.appRoot) : cwd);
   if (!appRootInput)
     return { refusal: "NOT_RN_APP" };
   if (!contained(worktreeRoot, appRootInput))
@@ -8513,12 +9050,12 @@ function resolveWorktreeLayout(input) {
   if (primaries.length > 1)
     return { ...base, refusal: "AMBIGUOUS" };
   const primaryRoot = primaries[0];
-  const primaryAppRoot = appRelative === "." ? primaryRoot : join4(primaryRoot, appRelative);
+  const primaryAppRoot = appRelative === "." ? primaryRoot : join7(primaryRoot, appRelative);
   if (!contained(primaryRoot, primaryAppRoot))
     return { ...base, refusal: "PRIMARY_APP_MISSING" };
   let primaryAppReal = null;
   try {
-    if (lstatSync2(primaryAppRoot).isDirectory())
+    if (lstatSync3(primaryAppRoot).isDirectory())
       primaryAppReal = canonical(primaryAppRoot);
   } catch {
     primaryAppReal = null;
@@ -8545,11 +9082,19 @@ var init_worktree_inheritance = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/action-store.js
-import { existsSync as existsSync3, lstatSync as lstatSync3, readFileSync as readFileSync4, realpathSync as realpathSync3, statSync as statSync2 } from "node:fs";
-import { basename as basename2, dirname as dirname4, join as join5 } from "node:path";
+import { existsSync as existsSync6, lstatSync as lstatSync4, readFileSync as readFileSync6, realpathSync as realpathSync3, statSync as statSync4 } from "node:fs";
+import { basename as basename4, dirname as dirname8, join as join8 } from "node:path";
+function assertOwnedActionCorpus(projectRoot) {
+  for (const path of [join8(projectRoot, ".rn-agent"), join8(projectRoot, ".rn-agent", "actions")]) {
+    const stat = lstatIfPresent(path);
+    if (stat?.isSymbolicLink()) {
+      throw new Error(`Refusing learned-action corpus symlink at ${path}.`);
+    }
+  }
+}
 function assertReadableActionCorpus(projectRoot) {
-  const rnAgentDir = join5(projectRoot, ".rn-agent");
-  const actionsDir = join5(rnAgentDir, "actions");
+  const rnAgentDir = join8(projectRoot, ".rn-agent");
+  const actionsDir = join8(rnAgentDir, "actions");
   const rnAgentStat = lstatIfPresent(rnAgentDir);
   if (rnAgentStat?.isSymbolicLink()) {
     throw new Error(`Refusing learned-action corpus symlink at ${rnAgentDir}.`);
@@ -8559,10 +9104,10 @@ function assertReadableActionCorpus(projectRoot) {
     return;
   const target = realpathSync3(actionsDir);
   const layout = resolveWorktreeLayout({ cwd: projectRoot, appRoot: projectRoot });
-  const primaryRnAgentDir = "primaryAppRoot" in layout && layout.primaryAppRoot ? join5(layout.primaryAppRoot, ".rn-agent") : null;
-  const primaryActionsDir = primaryRnAgentDir ? join5(primaryRnAgentDir, "actions") : null;
+  const primaryRnAgentDir = "primaryAppRoot" in layout && layout.primaryAppRoot ? join8(layout.primaryAppRoot, ".rn-agent") : null;
+  const primaryActionsDir = primaryRnAgentDir ? join8(primaryRnAgentDir, "actions") : null;
   const expectedTarget = primaryRnAgentDir && primaryActionsDir && "kind" in layout && layout.kind === "linked" && !layout.refusal && isOwnedDirectory(primaryRnAgentDir) && isOwnedDirectory(primaryActionsDir) ? canonicalPath(primaryActionsDir) : null;
-  if (!expectedTarget || target !== expectedTarget || !statSync2(target).isDirectory()) {
+  if (!expectedTarget || target !== expectedTarget || !statSync4(target).isDirectory()) {
     throw new Error(`Refusing foreign learned-action corpus symlink at ${actionsDir}.`);
   }
 }
@@ -8579,7 +9124,7 @@ function canonicalPath(path) {
 }
 function lstatIfPresent(path) {
   try {
-    return lstatSync3(path);
+    return lstatSync4(path);
   } catch (err) {
     if (err.code === "ENOENT")
       return null;
@@ -8598,10 +9143,10 @@ function actionFileExists(path) {
 function resolveActionPath(projectRoot, actionId) {
   assertValidActionId(actionId, "resolveActionPath");
   assertReadableActionCorpus(projectRoot);
-  const actionsDir = join5(projectRoot, ".rn-agent", "actions");
+  const actionsDir = join8(projectRoot, ".rn-agent", "actions");
   const fileName = `${actionId}.yaml`;
   assertWithinDir(fileName, actionsDir);
-  const yamlPath = join5(actionsDir, fileName);
+  const yamlPath = join8(actionsDir, fileName);
   const ymlPath = yamlPath.replace(/\.yaml$/, ".yml");
   const yamlExists = actionFileExists(yamlPath);
   const ymlExists = actionFileExists(ymlPath);
@@ -8673,6 +9218,33 @@ function joinYaml(parts) {
     out.push(b);
   return out.join("\n");
 }
+function commitMigratedActionText(filePath, yamlText) {
+  assertWritableActionFile(filePath);
+  const state = loadOrInitSidecar(filePath);
+  const sidecarPath = sidecarPathFor(filePath);
+  const result = atomicWriter.pairWrite(filePath, yamlText, sidecarPath, state);
+  const nextState = { ...state, lastSeenMtimeMs: result.finalMtimeMs };
+  const metadata = parseM7Header(yamlText, basename4(filePath).replace(/\.ya?ml$/i, ""));
+  mirrorToDb({
+    yamlFilePath: filePath,
+    state: nextState,
+    meta: {
+      appId: metadata?.appId,
+      status: metadata?.status,
+      path: filePath
+    }
+  });
+  return { filePath, sidecarPath };
+}
+function assertWritableActionFile(filePath) {
+  const actionsDir = dirname8(filePath);
+  const rnAgentDir = dirname8(actionsDir);
+  if (basename4(actionsDir) !== "actions" || basename4(rnAgentDir) !== ".rn-agent") {
+    throw new Error(`Refusing action mutation outside an owned learned-action corpus: ${filePath}.`);
+  }
+  assertOwnedActionCorpus(dirname8(rnAgentDir));
+  actionFileExists(filePath);
+}
 var init_action_store = __esm({
   "packages/rn-dev-agent-core/dist/domain/action-store.js"() {
     "use strict";
@@ -8686,8 +9258,8 @@ var init_action_store = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/action-engine-compat.js
-import { existsSync as existsSync4, lstatSync as lstatSync4, readFileSync as readFileSync5, readdirSync as readdirSync2, realpathSync as realpathSync4, writeFileSync } from "node:fs";
-import { basename as basename3, dirname as dirname5, join as join6, resolve as resolve4 } from "node:path";
+import { existsSync as existsSync7, lstatSync as lstatSync5, readFileSync as readFileSync7, readdirSync as readdirSync4, realpathSync as realpathSync4 } from "node:fs";
+import { basename as basename5, dirname as dirname9, join as join9, resolve as resolve5 } from "node:path";
 function actionEnginePinRefusal(enginePin) {
   if (!enginePin) {
     return `Action is not migrated to ${ACTION_ENGINE_PIN}. Run node <plugin-root>/rn-dev-agent-core/dist/maestro-runner-pin.js migrate-actions --root <app> before replay. Incompatible actions are terminal \u2014 no manual fallback.`;
@@ -8721,7 +9293,7 @@ function isLearnedActionPath(path) {
   return classifyLearnedActionPath(path) === "action";
 }
 function classifyLearnedActionPath(path) {
-  const lexical = classifyResolvedLearnedActionPath(resolve4(path));
+  const lexical = classifyResolvedLearnedActionPath(resolve5(path));
   try {
     const canonical2 = classifyResolvedLearnedActionPath(canonicalizeExistingPath(path));
     if (lexical === canonical2)
@@ -8734,13 +9306,13 @@ function classifyLearnedActionPath(path) {
   }
 }
 function classifyResolvedLearnedActionPath(path) {
-  let parent = dirname5(path);
+  let parent = dirname9(path);
   let direct = true;
   while (true) {
-    if (basename3(parent) === "actions" && basename3(dirname5(parent)) === ".rn-agent") {
+    if (basename5(parent) === "actions" && basename5(dirname9(parent)) === ".rn-agent") {
       return direct ? "action" : "descendant";
     }
-    const next = dirname5(parent);
+    const next = dirname9(parent);
     if (next === parent)
       return "outside";
     parent = next;
@@ -8748,16 +9320,16 @@ function classifyResolvedLearnedActionPath(path) {
   }
 }
 function canonicalizeExistingPath(path) {
-  let cursor = resolve4(path);
+  let cursor = resolve5(path);
   const suffix = [];
-  while (!existsSync4(cursor)) {
-    const parent = dirname5(cursor);
+  while (!existsSync7(cursor)) {
+    const parent = dirname9(cursor);
     if (parent === cursor)
       return cursor;
-    suffix.unshift(basename3(cursor));
+    suffix.unshift(basename5(cursor));
     cursor = parent;
   }
-  return resolve4(realpathSync4(cursor), ...suffix);
+  return resolve5(realpathSync4(cursor), ...suffix);
 }
 function standaloneLearnedActionPathRefusal(path) {
   const classification = classifyLearnedActionPath(path);
@@ -8766,11 +9338,11 @@ function standaloneLearnedActionPathRefusal(path) {
   if (classification === "descendant") {
     return `Refusing to execute learned-action descendant ${path} as a standalone flow.`;
   }
-  const actionId = basename3(path).replace(/\.ya?ml$/i, "");
-  const projectRoot = dirname5(dirname5(dirname5(resolve4(path))));
+  const actionId = basename5(path).replace(/\.ya?ml$/i, "");
+  const projectRoot = dirname9(dirname9(dirname9(resolve5(path))));
   try {
     const resolvedAction = resolveActionPath(projectRoot, actionId);
-    if (resolvedAction === null || resolve4(resolvedAction) !== resolve4(path)) {
+    if (resolvedAction === null || resolve5(resolvedAction) !== resolve5(path)) {
       return `Action ${actionId} does not resolve uniquely to ${path}.`;
     }
   } catch (err) {
@@ -8811,17 +9383,17 @@ function actionIdFromFile(name) {
   return name.replace(/\.ya?ml$/, "");
 }
 function inheritedActionsCorpusReason(projectRoot) {
-  const rnAgentDir = join6(projectRoot, ".rn-agent");
-  const actionsDir = join6(rnAgentDir, "actions");
+  const rnAgentDir = join9(projectRoot, ".rn-agent");
+  const actionsDir = join9(rnAgentDir, "actions");
   try {
-    if (lstatSync4(rnAgentDir).isSymbolicLink()) {
+    if (lstatSync5(rnAgentDir).isSymbolicLink()) {
       return `Refusing to migrate through inherited .rn-agent symlink at ${rnAgentDir}. Symlink-inherited corpora are never modified.`;
     }
   } catch {
     return null;
   }
   try {
-    if (lstatSync4(actionsDir).isSymbolicLink()) {
+    if (lstatSync5(actionsDir).isSymbolicLink()) {
       return `Refusing to migrate through inherited .rn-agent/actions symlink at ${actionsDir}. Symlink-inherited corpora are never modified.`;
     }
   } catch {
@@ -8830,7 +9402,7 @@ function inheritedActionsCorpusReason(projectRoot) {
   return null;
 }
 function migrateLearnedActions(projectRoot) {
-  const dir = join6(projectRoot, ".rn-agent", "actions");
+  const dir = join9(projectRoot, ".rn-agent", "actions");
   const inherited = inheritedActionsCorpusReason(projectRoot);
   if (inherited) {
     return [
@@ -8845,7 +9417,7 @@ function migrateLearnedActions(projectRoot) {
   }
   let files = [];
   try {
-    files = readdirSync2(dir).filter(isOwnedActionFile);
+    files = readdirSync4(dir).filter(isOwnedActionFile);
   } catch (err) {
     const code = err.code;
     if (code === "ENOENT")
@@ -8862,7 +9434,7 @@ function migrateLearnedActions(projectRoot) {
   }
   const results = [];
   for (const name of files) {
-    const path = join6(dir, name);
+    const path = join9(dir, name);
     const id = actionIdFromFile(name);
     try {
       const resolvedPath = resolveActionPath(projectRoot, id);
@@ -8880,7 +9452,7 @@ function migrateLearnedActions(projectRoot) {
       continue;
     }
     try {
-      if (lstatSync4(path).isSymbolicLink()) {
+      if (lstatSync5(path).isSymbolicLink()) {
         results.push({
           id,
           path,
@@ -8902,7 +9474,7 @@ function migrateLearnedActions(projectRoot) {
     }
     let text;
     try {
-      text = readFileSync5(path, "utf8");
+      text = readFileSync7(path, "utf8");
     } catch (err) {
       results.push({
         id,
@@ -8926,7 +9498,7 @@ function migrateLearnedActions(projectRoot) {
     }
     let commands = [];
     try {
-      commands = parseAndValidateFlow(text, { flowDir: dirname5(path), flowRoot: dir }).commands;
+      commands = parseAndValidateFlow(text, { flowDir: dirname9(path), flowRoot: dir }).commands;
     } catch (err) {
       const reason = err instanceof MaestroValidationError ? err.message : String(err);
       results.push({ id, path, status: "unreadable", reason, mutated: false });
@@ -8938,8 +9510,20 @@ function migrateLearnedActions(projectRoot) {
       continue;
     }
     const updated = upsertEnginePinHeader(text);
-    if (updated.changed)
-      writeFileSync(path, updated.text, "utf8");
+    if (updated.changed) {
+      try {
+        commitMigratedActionText(path, updated.text);
+      } catch (err) {
+        results.push({
+          id,
+          path,
+          status: "unreadable",
+          reason: err instanceof Error ? err.message : String(err),
+          mutated: false
+        });
+        continue;
+      }
+    }
     results.push({
       id,
       path,
@@ -8985,41 +9569,41 @@ var init_keyboard_guard = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/util/secure-state-file.js
-import { readFileSync as readFileSync6, writeFileSync as writeFileSync2, unlinkSync as unlinkSync2, mkdirSync as mkdirSync3, renameSync as renameSync2, lstatSync as lstatSync5 } from "node:fs";
-import { join as join7, dirname as dirname6 } from "node:path";
+import { readFileSync as readFileSync8, writeFileSync as writeFileSync3, unlinkSync as unlinkSync3, mkdirSync as mkdirSync7, renameSync as renameSync3, lstatSync as lstatSync6 } from "node:fs";
+import { join as join10, dirname as dirname10 } from "node:path";
 import { homedir as homedir3 } from "node:os";
 function getStateDir() {
   if (process.env.XDG_STATE_HOME) {
-    return join7(process.env.XDG_STATE_HOME, "rn-dev-agent");
+    return join10(process.env.XDG_STATE_HOME, "rn-dev-agent");
   }
   if (process.platform === "darwin") {
-    return join7(homedir3(), "Library", "Application Support", "rn-dev-agent");
+    return join10(homedir3(), "Library", "Application Support", "rn-dev-agent");
   }
-  return join7(homedir3(), ".rn-dev-agent");
+  return join10(homedir3(), ".rn-dev-agent");
 }
 function runnerStatePath(key) {
   const safe = key.replace(/[^A-Za-z0-9._:-]/g, "_");
-  return join7(getStateDir(), "runner-state", `${safe}.json`);
+  return join10(getStateDir(), "runner-state", `${safe}.json`);
 }
 function readJsonStateFile(path) {
   try {
-    const stat = lstatSync5(path);
+    const stat = lstatSync6(path);
     if (stat.isSymbolicLink())
       return null;
-    return JSON.parse(readFileSync6(path, "utf8"));
+    return JSON.parse(readFileSync8(path, "utf8"));
   } catch {
     return null;
   }
 }
 function writeJsonStateFileAtomic(path, value) {
-  mkdirSync3(dirname6(path), { recursive: true });
+  mkdirSync7(dirname10(path), { recursive: true });
   const tmpPath = `${path}.tmp.${process.pid}`;
-  writeFileSync2(tmpPath, JSON.stringify(value), { encoding: "utf8", mode: 384 });
-  renameSync2(tmpPath, path);
+  writeFileSync3(tmpPath, JSON.stringify(value), { encoding: "utf8", mode: 384 });
+  renameSync3(tmpPath, path);
 }
 function deleteStateFile(path) {
   try {
-    unlinkSync2(path);
+    unlinkSync3(path);
   } catch {
   }
 }
@@ -9042,8 +9626,8 @@ var init_secure_state_file = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/runners/runtime-paths.js
-import { existsSync as existsSync5, statSync as statSync3 } from "node:fs";
-import { join as join8 } from "node:path";
+import { existsSync as existsSync8, statSync as statSync5 } from "node:fs";
+import { join as join11 } from "node:path";
 function compactUnique(paths) {
   const out = [];
   for (const path of paths) {
@@ -9055,7 +9639,7 @@ function compactUnique(paths) {
 }
 function isDirectory(path) {
   try {
-    return statSync3(path).isDirectory();
+    return statSync5(path).isDirectory();
   } catch {
     return false;
   }
@@ -9066,21 +9650,21 @@ function candidateNativeRunnerDirs(runnerName, baseDir = import.meta.dirname) {
   const codexPluginRoot = process.env.RN_DEV_AGENT_CODEX_PLUGIN_ROOT;
   const claudePluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
   return compactUnique([
-    runnerRoot ? join8(runnerRoot, runnerName) : void 0,
-    repoRoot ? join8(repoRoot, "packages", runnerName) : void 0,
-    repoRoot ? join8(repoRoot, "scripts", runnerName) : void 0,
-    codexPluginRoot ? join8(codexPluginRoot, "scripts", runnerName) : void 0,
-    claudePluginRoot ? join8(claudePluginRoot, "..", runnerName) : void 0,
-    claudePluginRoot ? join8(claudePluginRoot, "..", "..", "packages", runnerName) : void 0,
-    claudePluginRoot ? join8(claudePluginRoot, "..", "..", "scripts", runnerName) : void 0,
-    claudePluginRoot ? join8(claudePluginRoot, "scripts", runnerName) : void 0,
+    runnerRoot ? join11(runnerRoot, runnerName) : void 0,
+    repoRoot ? join11(repoRoot, "packages", runnerName) : void 0,
+    repoRoot ? join11(repoRoot, "scripts", runnerName) : void 0,
+    codexPluginRoot ? join11(codexPluginRoot, "scripts", runnerName) : void 0,
+    claudePluginRoot ? join11(claudePluginRoot, "..", runnerName) : void 0,
+    claudePluginRoot ? join11(claudePluginRoot, "..", "..", "packages", runnerName) : void 0,
+    claudePluginRoot ? join11(claudePluginRoot, "..", "..", "scripts", runnerName) : void 0,
+    claudePluginRoot ? join11(claudePluginRoot, "scripts", runnerName) : void 0,
     // Bundled Codex runtime: <plugin>/rn-dev-agent-core/dist.
-    join8(baseDir, "..", "..", "scripts", runnerName),
+    join11(baseDir, "..", "..", "scripts", runnerName),
     // Source checkout: packages/rn-dev-agent-core/dist/runners.
     // Also covers the legacy scripts/cdp-bridge/dist/runners layout.
-    join8(baseDir, "..", "..", "..", runnerName),
+    join11(baseDir, "..", "..", "..", runnerName),
     // Legacy source checkout: packages/rn-dev-agent-core/dist/runners before runner package split.
-    join8(baseDir, "..", "..", "..", "..", "scripts", runnerName)
+    join11(baseDir, "..", "..", "..", "..", "scripts", runnerName)
   ]);
 }
 function resolveNativeRunnerDir(runnerName, baseDir = import.meta.dirname) {
@@ -9124,7 +9708,7 @@ var init_transport_recovery = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/util/trusted-system-executable.js
-import { existsSync as existsSync6 } from "node:fs";
+import { existsSync as existsSync9 } from "node:fs";
 import { win32 } from "node:path";
 function trustedWindowsRoots(environment) {
   return [
@@ -9132,7 +9716,7 @@ function trustedWindowsRoots(environment) {
   ];
 }
 function resolveTrustedSystemExecutable(executable, platform, dependencies = {}) {
-  const exists = dependencies.exists ?? existsSync6;
+  const exists = dependencies.exists ?? existsSync9;
   const environment = dependencies.environment ?? process.env;
   let candidates;
   if (platform === "win32" && executable === "powershell") {
@@ -9163,8 +9747,8 @@ var init_trusted_system_executable = __esm({
 // packages/rn-dev-agent-core/dist/session/process-birth.js
 import { execFileSync } from "node:child_process";
 import { createHash as createHash2 } from "node:crypto";
-import { closeSync as closeSync2, constants as constants2, existsSync as existsSync7, fstatSync as fstatSync2, lstatSync as lstatSync6, openSync as openSync2, readFileSync as readFileSync7, readSync, realpathSync as realpathSync5 } from "node:fs";
-import { dirname as dirname7, join as join9 } from "node:path";
+import { closeSync as closeSync2, constants as constants2, existsSync as existsSync10, fstatSync as fstatSync2, lstatSync as lstatSync7, openSync as openSync2, readFileSync as readFileSync9, readSync, realpathSync as realpathSync5 } from "node:fs";
+import { dirname as dirname11, join as join12 } from "node:path";
 import { fileURLToPath } from "node:url";
 function defaultRun(command, args) {
   try {
@@ -9193,13 +9777,13 @@ function token(parts) {
   return createHash2("sha256").update(parts.join("\0")).digest("hex");
 }
 function darwinProcessBirthHelperPath() {
-  const moduleDirectory = dirname7(fileURLToPath(import.meta.url));
+  const moduleDirectory = dirname11(fileURLToPath(import.meta.url));
   const candidates = [
-    join9(moduleDirectory, "native", "darwin-process-birth"),
-    join9(moduleDirectory, "..", "native", "darwin-process-birth")
+    join12(moduleDirectory, "native", "darwin-process-birth"),
+    join12(moduleDirectory, "..", "native", "darwin-process-birth")
   ];
   for (const candidate of candidates) {
-    if (existsSync7(candidate))
+    if (existsSync10(candidate))
       return candidate;
   }
   return candidates[0];
@@ -9214,9 +9798,9 @@ function verifyDarwinProcessBirthHelper(dependencies) {
   const helper = (dependencies.helperPath ?? darwinProcessBirthHelperPath)();
   const manifestPath = `${helper}.json`;
   const canonicalize = dependencies.canonicalize ?? realpathSync5;
-  const metadata = dependencies.lstat ?? lstatSync6;
+  const metadata = dependencies.lstat ?? lstatSync7;
   const descriptorMetadata = dependencies.fstat ?? fstatSync2;
-  const readBinary = dependencies.readBinary ?? ((path) => readFileSync7(path));
+  const readBinary = dependencies.readBinary ?? ((path) => readFileSync9(path));
   const readDescriptor = dependencies.readDescriptor ?? ((fd2) => {
     const size = descriptorMetadata(fd2).size;
     const buffer = Buffer.alloc(size);
@@ -9288,7 +9872,7 @@ function probeRecordedProcessBirth(pid, dependencies) {
   if (!Number.isSafeInteger(pid) || pid <= 0)
     return { status: "unknown" };
   const platform = dependencies.platform ?? process.platform;
-  const read = dependencies.read ?? ((path) => readFileSync7(path, "utf8"));
+  const read = dependencies.read ?? ((path) => readFileSync9(path, "utf8"));
   const run = dependencies.run ?? defaultRun;
   const runVerifiedHelper = dependencies.runVerifiedHelper ?? defaultRunVerifiedHelper;
   try {
@@ -9426,7 +10010,7 @@ print -r -- "$result"
 });
 
 // packages/rn-dev-agent-core/dist/runners/rn-fast-runner-client.js
-import { join as join10 } from "node:path";
+import { join as join13 } from "node:path";
 function resolveReadyTimeoutMs() {
   const raw = Number(process.env.RN_FAST_RUNNER_READY_TIMEOUT_MS);
   return Number.isFinite(raw) && raw > 0 ? raw : 3e4;
@@ -9648,7 +10232,7 @@ async function reapStaleFastRunner(deps = {}) {
     return;
   }
   const spawnedChild = runnerProcess?.pid === state.pid ? runnerProcess : null;
-  const spawnedExit = spawnedChild ? new Promise((resolve6) => spawnedChild.once("exit", () => resolve6())) : null;
+  const spawnedExit = spawnedChild ? new Promise((resolve7) => spawnedChild.once("exit", () => resolve7())) : null;
   try {
     sendSignal(state.pid, "SIGTERM");
   } catch {
@@ -9697,9 +10281,9 @@ var init_rn_fast_runner_client = __esm({
     runnerState = null;
     lastKnownCapabilities = [];
     quiescenceAnnouncementPending = false;
-    REBUILD_LOCK_DIR = join10(FAST_RUNNER_PROJECT, "build", ".rebuild-lock");
+    REBUILD_LOCK_DIR = join13(FAST_RUNNER_PROJECT, "build", ".rebuild-lock");
     REBUILD_LOCK_STALE_MS = 15 * 6e4;
-    REBUILD_BUDGET_FILE = join10(FAST_RUNNER_PROJECT, "build", "commands-rebuild.json");
+    REBUILD_BUDGET_FILE = join13(FAST_RUNNER_PROJECT, "build", "commands-rebuild.json");
     fetchImpl = globalThis.fetch;
   }
 });
@@ -9734,14 +10318,14 @@ var init_declared_source_contract = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/nav-graph/storage.js
-import { readFileSync as readFileSync8, writeFileSync as writeFileSync3, existsSync as existsSync8, renameSync as renameSync3, readdirSync as readdirSync3, lstatSync as lstatSync7, mkdirSync as mkdirSync4, realpathSync as realpathSync6 } from "node:fs";
-import { join as join11, dirname as dirname8 } from "node:path";
+import { readFileSync as readFileSync10, writeFileSync as writeFileSync4, existsSync as existsSync11, renameSync as renameSync4, readdirSync as readdirSync5, lstatSync as lstatSync8, mkdirSync as mkdirSync8, realpathSync as realpathSync6 } from "node:fs";
+import { join as join14, dirname as dirname12 } from "node:path";
 function isRnProject(dir) {
-  const pkgPath = join11(dir, "package.json");
-  if (!existsSync8(pkgPath))
+  const pkgPath = join14(dir, "package.json");
+  if (!existsSync11(pkgPath))
     return false;
   try {
-    const pkg = JSON.parse(readFileSync8(pkgPath, "utf-8"));
+    const pkg = JSON.parse(readFileSync10(pkgPath, "utf-8"));
     const deps = { ...pkg.dependencies, ...pkg.devDependencies };
     return !!(deps["react-native"] || deps["expo"]);
   } catch {
@@ -9753,7 +10337,7 @@ function scanForRnProject(rootDir, maxDepth) {
     return null;
   let entries;
   try {
-    entries = readdirSync3(rootDir);
+    entries = readdirSync5(rootDir);
   } catch {
     return null;
   }
@@ -9762,9 +10346,9 @@ function scanForRnProject(rootDir, maxDepth) {
   for (const name of entries) {
     if (name.startsWith(".") || name === "node_modules")
       continue;
-    const full = join11(rootDir, name);
+    const full = join14(rootDir, name);
     try {
-      const stat = lstatSync7(full);
+      const stat = lstatSync8(full);
       if (!(stat.isDirectory() || stat.isSymbolicLink()))
         continue;
     } catch {
@@ -9788,7 +10372,7 @@ function collectRnProjects(rootDir, maxDepth, out) {
     return;
   let entries;
   try {
-    entries = readdirSync3(rootDir);
+    entries = readdirSync5(rootDir);
   } catch {
     return;
   }
@@ -9797,9 +10381,9 @@ function collectRnProjects(rootDir, maxDepth, out) {
   for (const name of entries) {
     if (name.startsWith(".") || name === "node_modules")
       continue;
-    const full = join11(rootDir, name);
+    const full = join14(rootDir, name);
     try {
-      const stat = lstatSync7(full);
+      const stat = lstatSync8(full);
       if (!(stat.isDirectory() || stat.isSymbolicLink()))
         continue;
     } catch {
@@ -9817,11 +10401,11 @@ function collectRnProjects(rootDir, maxDepth, out) {
   }
 }
 function readProjectBundleId(projectRoot) {
-  const appJsonPath = join11(projectRoot, "app.json");
-  if (!existsSync8(appJsonPath))
+  const appJsonPath = join14(projectRoot, "app.json");
+  if (!existsSync11(appJsonPath))
     return null;
   try {
-    const raw = JSON.parse(readFileSync8(appJsonPath, "utf-8"));
+    const raw = JSON.parse(readFileSync10(appJsonPath, "utf-8"));
     const iosId = raw.expo?.ios?.bundleIdentifier ?? raw.ios?.bundleIdentifier;
     const androidId = raw.expo?.android?.package ?? raw.android?.package;
     if (typeof iosId === "string" && iosId.length > 0)
@@ -9855,7 +10439,7 @@ function findProjectRoot(opts = {}) {
         walkupHit = walkupHit ?? dir;
         break;
       }
-      const parent = join11(dir, "..");
+      const parent = join14(dir, "..");
       if (parent === dir)
         break;
       dir = parent;
@@ -9864,7 +10448,7 @@ function findProjectRoot(opts = {}) {
   if (!targetBundleId && walkupHit)
     return walkupHit;
   const cwd = process.cwd();
-  const parentOfCwd = join11(cwd, "..");
+  const parentOfCwd = join14(cwd, "..");
   if (targetBundleId) {
     const all = [];
     collectRnProjects(cwd, 0, all);
@@ -10015,15 +10599,15 @@ var init_sources = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/project-config.js
-import { existsSync as existsSync9, readFileSync as readFileSync9 } from "node:fs";
-import { join as join12 } from "node:path";
+import { existsSync as existsSync12, readFileSync as readFileSync11 } from "node:fs";
+import { join as join15 } from "node:path";
 function readAppId(projectRoot, platform) {
   for (const filename of ["app.json", "app.config.json"]) {
-    const p = join12(projectRoot, filename);
-    if (!existsSync9(p))
+    const p = join15(projectRoot, filename);
+    if (!existsSync12(p))
       continue;
     try {
-      const raw = JSON.parse(readFileSync9(p, "utf-8"));
+      const raw = JSON.parse(readFileSync11(p, "utf-8"));
       const expo = raw.expo ?? raw;
       const iosBundleId = expo?.ios?.bundleIdentifier;
       const androidPkg = expo?.android?.package;
@@ -10047,11 +10631,11 @@ function readExpoSlug() {
   if (!projectRoot)
     return null;
   for (const filename of ["app.json", "app.config.json"]) {
-    const p = join12(projectRoot, filename);
-    if (!existsSync9(p))
+    const p = join15(projectRoot, filename);
+    if (!existsSync12(p))
       continue;
     try {
-      const raw = JSON.parse(readFileSync9(p, "utf-8"));
+      const raw = JSON.parse(readFileSync11(p, "utf-8"));
       return raw.expo?.slug ?? null;
     } catch {
       continue;
@@ -10069,11 +10653,11 @@ var init_project_config = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/agent-device-wrapper.js
-import { join as join13 } from "node:path";
+import { join as join16 } from "node:path";
 import { createHash as createHash3 } from "node:crypto";
 function getSessionFilePath() {
   const projectId = createHash3("sha256").update(process.cwd()).digest("hex").slice(0, 12);
-  return join13(getStateDir(), `session-${projectId}.json`);
+  return join16(getStateDir(), `session-${projectId}.json`);
 }
 function getActiveSession() {
   return activeSession;
@@ -10137,7 +10721,7 @@ var init_free_port = __esm({
 // packages/rn-dev-agent-core/dist/runners/rn-android-runner-client.js
 import { spawn as spawn2, execFile as execFile4 } from "node:child_process";
 import { promisify as promisify4 } from "node:util";
-import { join as join14 } from "node:path";
+import { join as join17 } from "node:path";
 function androidStatePath(serial) {
   return runnerStatePath(`android-${serial}`);
 }
@@ -10260,11 +10844,11 @@ var init_rn_android_runner_client = __esm({
     init_authority_store();
     execFileAsync2 = promisify4(execFile4);
     RN_ANDROID_RUNNER_DIR = resolveNativeRunnerDir("rn-android-runner");
-    GRADLEW = join14(RN_ANDROID_RUNNER_DIR, "gradlew");
-    APK_APP = join14(RN_ANDROID_RUNNER_DIR, "app", "build", "outputs", "apk", "debug", "app-debug.apk");
-    APK_TEST = join14(RN_ANDROID_RUNNER_DIR, "app", "build", "outputs", "apk", "androidTest", "debug", "app-debug-androidTest.apk");
-    ANDROID_REBUILD_ROOT = join14(RN_ANDROID_RUNNER_DIR, "app", "build");
-    ANDROID_REBUILD_LOCK_DATABASE = join14(ANDROID_REBUILD_ROOT, ".authority-rebuild", "lock.sqlite");
+    GRADLEW = join17(RN_ANDROID_RUNNER_DIR, "gradlew");
+    APK_APP = join17(RN_ANDROID_RUNNER_DIR, "app", "build", "outputs", "apk", "debug", "app-debug.apk");
+    APK_TEST = join17(RN_ANDROID_RUNNER_DIR, "app", "build", "outputs", "apk", "androidTest", "debug", "app-debug-androidTest.apk");
+    ANDROID_REBUILD_ROOT = join17(RN_ANDROID_RUNNER_DIR, "app", "build");
+    ANDROID_REBUILD_LOCK_DATABASE = join17(ANDROID_REBUILD_ROOT, ".authority-rebuild", "lock.sqlite");
     ANDROID_REBUILD_LOCK_STALE_MS = 15 * 6e4;
     ADB_CLEANUP_TIMEOUT_MS = 5e3;
     runnerProcess2 = null;
@@ -10496,18 +11080,18 @@ var init_maestro_error_parser = __esm({
 
 // packages/rn-dev-agent-core/dist/tools/resolve-ios-app-file.js
 import { execFileSync as execFileSync2 } from "node:child_process";
-import { existsSync as existsSync10, cpSync, rmSync, mkdirSync as mkdirSync5, readdirSync as readdirSync4, statSync as statSync4 } from "node:fs";
+import { existsSync as existsSync13, cpSync, rmSync, mkdirSync as mkdirSync9, readdirSync as readdirSync6, statSync as statSync6 } from "node:fs";
 import { tmpdir as tmpdir2 } from "node:os";
-import { join as join15, basename as basename4 } from "node:path";
+import { join as join18, basename as basename6 } from "node:path";
 function flowUsesClearState(flowText) {
   return /clearState:\s*true\b/.test(flowText) || /^[ \t]*-[ \t]*clearState[ \t]*$/m.test(flowText);
 }
 function defaultSnapshotApp(appPath) {
   try {
-    const destDir = join15(tmpdir2(), "rn-appfile-snapshots");
-    const dest = join15(destDir, basename4(appPath));
+    const destDir = join18(tmpdir2(), "rn-appfile-snapshots");
+    const dest = join18(destDir, basename6(appPath));
     rmSync(dest, { recursive: true, force: true });
-    mkdirSync5(destDir, { recursive: true });
+    mkdirSync9(destDir, { recursive: true });
     try {
       execFileSync2("cp", ["-Rc", appPath, dest], { timeout: 3e4, stdio: "ignore" });
     } catch {
@@ -10519,7 +11103,7 @@ function defaultSnapshotApp(appPath) {
   }
 }
 function resolveIosAppFile(bundleId, deps = {}) {
-  const exists = deps.exists ?? existsSync10;
+  const exists = deps.exists ?? existsSync13;
   const getAppContainer = deps.getAppContainer ?? defaultGetAppContainer;
   const snapshotApp = deps.snapshotApp ?? defaultSnapshotApp;
   const fromContainer = getAppContainer(bundleId, deps.deviceId);
@@ -10672,9 +11256,9 @@ var init_maestro_device_authority = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/maestro-runner-report.js
-import { existsSync as existsSync11, readFileSync as readFileSync10, rmSync as rmSync2 } from "node:fs";
+import { existsSync as existsSync14, readFileSync as readFileSync12, rmSync as rmSync2 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
-import { join as join16 } from "node:path";
+import { join as join19 } from "node:path";
 function idsFrom(value, keys) {
   if (!value || typeof value !== "object")
     return [];
@@ -10698,11 +11282,11 @@ function containerDeviceIdsFrom(value) {
   return idsFrom(value, CONTAINER_DEVICE_ID_KEYS);
 }
 function reportDeviceIds(reportDir) {
-  const reportPath = join16(reportDir, "report.json");
-  if (!existsSync11(reportPath))
+  const reportPath = join19(reportDir, "report.json");
+  if (!existsSync14(reportPath))
     return { ids: [], strength: "none" };
   try {
-    const report = JSON.parse(readFileSync10(reportPath, "utf8"));
+    const report = JSON.parse(readFileSync12(reportPath, "utf8"));
     const flows = Array.isArray(report.flows) ? report.flows : [];
     const devices = [report.device, ...flows.map((flow) => flow?.device)];
     const strong = [
@@ -10725,7 +11309,7 @@ function reportDeviceIds(reportDir) {
 function createRunnerReportDir(runner, prefix) {
   if (runner !== "maestro-runner")
     return null;
-  return join16(tmpdir3(), `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  return join19(tmpdir3(), `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
 }
 function runnerReportArgs(reportDir) {
   return reportDir ? ["--output", reportDir, "--flatten"] : [];
@@ -10739,12 +11323,12 @@ function collectDirectRunnerEvidence(reportDir, output) {
     reportDeviceIds: report.ids,
     reportDeviceIdStrength: report.strength
   };
-  const logPath = join16(reportDir, "maestro-runner.log");
-  if (!existsSync11(logPath))
+  const logPath = join19(reportDir, "maestro-runner.log");
+  if (!existsSync14(logPath))
     return evidence;
   try {
     evidence.output = `${output}
-${readFileSync10(logPath, "utf8")}`;
+${readFileSync12(logPath, "utf8")}`;
   } catch {
   }
   return evidence;
@@ -11401,14 +11985,14 @@ var init_recovery = __esm({
 
 // packages/rn-dev-agent-core/dist/runners/ensure-single-runner.js
 import { homedir as homedir4 } from "node:os";
-import { join as join17 } from "node:path";
+import { join as join20 } from "node:path";
 var DAEMON_JSON, DAEMON_LOCK;
 var init_ensure_single_runner = __esm({
   "packages/rn-dev-agent-core/dist/runners/ensure-single-runner.js"() {
     "use strict";
     init_discovery();
-    DAEMON_JSON = join17(homedir4(), ".agent-device", "daemon.json");
-    DAEMON_LOCK = join17(homedir4(), ".agent-device", "daemon.lock");
+    DAEMON_JSON = join20(homedir4(), ".agent-device", "daemon.json");
+    DAEMON_LOCK = join20(homedir4(), ".agent-device", "daemon.lock");
   }
 });
 
@@ -11771,9 +12355,9 @@ var init_tap_latency = __esm({
 // packages/rn-dev-agent-core/dist/runners/release-android-slot.js
 import { execFile as execFileCb10 } from "node:child_process";
 import { promisify as promisify13 } from "node:util";
-import { existsSync as existsSync12, readFileSync as readFileSync11, unlinkSync as unlinkSync3 } from "node:fs";
+import { existsSync as existsSync15, readFileSync as readFileSync13, unlinkSync as unlinkSync4 } from "node:fs";
 import { homedir as homedir5 } from "node:os";
-import { join as join18 } from "node:path";
+import { join as join21 } from "node:path";
 function isProtectedPid(pid, selfPid, parentPid) {
   return pid === selfPid || pid === parentPid;
 }
@@ -11790,7 +12374,7 @@ function defaultDeps() {
     resolveSerial: (deviceId) => deviceId ? ["-s", deviceId] : getAdbSerial(),
     readDaemonPid: () => {
       try {
-        const parsed = JSON.parse(readFileSync11(DAEMON_JSON2, "utf8"));
+        const parsed = JSON.parse(readFileSync13(DAEMON_JSON2, "utf8"));
         return typeof parsed.pid === "number" ? parsed.pid : null;
       } catch {
         return null;
@@ -11806,9 +12390,9 @@ function defaultDeps() {
     },
     protectedPids: () => ({ selfPid: process.pid, parentPid: process.ppid }),
     kill: (pid, sig) => process.kill(pid, sig),
-    fileExists: (p) => existsSync12(p),
-    removeFile: (p) => unlinkSync3(p),
-    delay: (ms) => new Promise((resolve6) => setTimeout(resolve6, ms)),
+    fileExists: (p) => existsSync15(p),
+    removeFile: (p) => unlinkSync4(p),
+    delay: (ms) => new Promise((resolve7) => setTimeout(resolve7, ms)),
     killLegacy: () => process.env.RN_DEVICE_KILL_LEGACY !== "0",
     now: () => Date.now()
   };
@@ -11920,8 +12504,8 @@ var init_release_android_slot = __esm({
     init_rn_android_runner_client();
     init_agent_device_wrapper();
     execFile13 = promisify13(execFileCb10);
-    DAEMON_JSON2 = join18(homedir5(), ".agent-device", "daemon.json");
-    DAEMON_LOCK2 = join18(homedir5(), ".agent-device", "daemon.lock");
+    DAEMON_JSON2 = join21(homedir5(), ".agent-device", "daemon.json");
+    DAEMON_LOCK2 = join21(homedir5(), ".agent-device", "daemon.lock");
     DAEMON_FILES = [DAEMON_JSON2, DAEMON_LOCK2];
     SIGKILL_GRACE_MS = 500;
     ADB_TIMEOUT_MS = 5e3;
@@ -11942,9 +12526,9 @@ var init_release_android_slot = __esm({
 // packages/rn-dev-agent-core/dist/tools/maestro-run.js
 import { execFile as execFileCb11 } from "node:child_process";
 import { promisify as promisify14 } from "node:util";
-import { existsSync as existsSync13, readFileSync as readFileSync12, writeFileSync as writeFileSync4 } from "node:fs";
+import { existsSync as existsSync16, readFileSync as readFileSync14, writeFileSync as writeFileSync5 } from "node:fs";
 import { tmpdir as tmpdir4 } from "node:os";
-import { basename as basename5, join as join19, dirname as dirname9 } from "node:path";
+import { basename as basename7, join as join22, dirname as dirname13 } from "node:path";
 async function runFlowParked(run, opts = {}) {
   const stale = opts.markCdpStale ?? markCdpStale;
   try {
@@ -12164,11 +12748,11 @@ function createMaestroRunHandler(deps = {}) {
     if (args.inlineYaml) {
       rawYaml = args.inlineYaml;
     } else if (args.flowPath) {
-      if (!existsSync13(args.flowPath)) {
+      if (!existsSync16(args.flowPath)) {
         return failResult(`Flow file not found: ${args.flowPath}`);
       }
       try {
-        rawYaml = readFileSync12(args.flowPath, "utf-8");
+        rawYaml = readFileSync14(args.flowPath, "utf-8");
       } catch (err) {
         return failResult(`Failed to read flow file: ${err.message}`);
       }
@@ -12176,7 +12760,7 @@ function createMaestroRunHandler(deps = {}) {
       return failResult("Provide either flowPath or inlineYaml.");
     }
     try {
-      const runFlowOpts = args.flowPath ? { flowDir: dirname9(args.flowPath), flowRoot: dirname9(args.flowPath) } : {};
+      const runFlowOpts = args.flowPath ? { flowDir: dirname13(args.flowPath), flowRoot: dirname13(args.flowPath) } : {};
       const parsed = parseAndValidateFlow(rawYaml, runFlowOpts);
       planMaestroAuthorityStages(parsed.commands);
       validatedCommands = parsed.commands;
@@ -12184,8 +12768,8 @@ function createMaestroRunHandler(deps = {}) {
       const rawAppId = resolveAppId(args.appId, platform);
       headerAppId = resolveMaestroFlowAppId(rawAppId || void 0, parsed.appId);
       validatedContent = buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, parsed.commands);
-      flowFile = join19(tmpdir4(), `rn-maestro-run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
-      writeFileSync4(flowFile, validatedContent, "utf-8");
+      flowFile = join22(tmpdir4(), `rn-maestro-run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
+      writeFileSync5(flowFile, validatedContent, "utf-8");
     } catch (err) {
       if (err instanceof MaestroValidationError) {
         return failResult(`Refusing to run Maestro: ${err.message} (Phase 134.1)`);
@@ -12261,7 +12845,7 @@ function createMaestroRunHandler(deps = {}) {
       return failResult(learnedActionPathRefusal, "BAD_RECORDING");
     }
     const learnedAction = args.flowPath ? isLearnedActionPath(args.flowPath) : false;
-    const actionMeta = args.flowPath ? parseM7Header(rawYaml, basename5(args.flowPath).replace(/\.ya?ml$/i, "")) : null;
+    const actionMeta = args.flowPath ? parseM7Header(rawYaml, basename7(args.flowPath).replace(/\.ya?ml$/i, "")) : null;
     const compatibilityRefusal = learnedAction || actionMeta !== null ? actionReplayPreflight({
       enginePin: actionMeta?.enginePin,
       commands: validatedCommands,
@@ -12301,7 +12885,7 @@ function createMaestroRunHandler(deps = {}) {
       const relaunchManagedApp = args.relaunchManagedApp ?? deps.relaunchManagedApp ?? managedAuthority.relaunchManagedApp;
       const reproveManagedOrigin = args.reproveManagedOrigin ?? deps.reproveManagedOrigin ?? managedAuthority.reproveManagedOrigin;
       const stageResults = await parkFlow(() => executeMaestroAuthorityStages(validatedCommands, async (commands) => {
-        writeFileSync4(flowFile, buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, [...commands]), "utf-8");
+        writeFileSync5(flowFile, buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, [...commands]), "utf-8");
         const executeOnce = async (beforeDispatch) => {
           const remainingTimeout = flowDeadline - now();
           if (remainingTimeout <= 0) {
@@ -12528,7 +13112,7 @@ function createMaestroRunHandler(deps = {}) {
       return failResult(failAug.message, failAug.meta);
     } finally {
       try {
-        writeFileSync4(flowFile, validatedContent, "utf-8");
+        writeFileSync5(flowFile, validatedContent, "utf-8");
       } finally {
         disposeRunnerReportDir(runnerReportDir);
       }
@@ -12586,18 +13170,18 @@ init_reusable_action();
 init_action_store();
 init_maestro_run();
 import { spawnSync as spawnSync2 } from "node:child_process";
-import { existsSync as existsSync14, readFileSync as readFileSync13, readdirSync as readdirSync5 } from "node:fs";
-import { dirname as dirname10, join as join20, resolve as resolve5 } from "node:path";
+import { existsSync as existsSync17, readFileSync as readFileSync15, readdirSync as readdirSync7 } from "node:fs";
+import { dirname as dirname14, join as join23, resolve as resolve6 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 var USAGE = "usage: maestro-runner-pin [diagnose|install|migrate-actions|verify-actions] [--json] [--root <app>]";
 function ensureScriptPath() {
-  const here = dirname10(fileURLToPath2(import.meta.url));
+  const here = dirname14(fileURLToPath2(import.meta.url));
   const candidates = [
-    join20(here, "..", "..", "..", "scripts", "ensure-maestro-runner.sh"),
-    join20(here, "..", "scripts", "ensure-maestro-runner.sh"),
-    join20(here, "..", "..", "scripts", "ensure-maestro-runner.sh")
+    join23(here, "..", "..", "..", "scripts", "ensure-maestro-runner.sh"),
+    join23(here, "..", "scripts", "ensure-maestro-runner.sh"),
+    join23(here, "..", "..", "scripts", "ensure-maestro-runner.sh")
   ];
-  return candidates.find((path) => existsSync14(path)) ?? candidates[0];
+  return candidates.find((path) => existsSync17(path)) ?? candidates[0];
 }
 async function diagnose(json2) {
   _resetEngineStatusForTest();
@@ -12665,8 +13249,8 @@ async function verifyActions(argv) {
       return 2;
     }
   }
-  const flowDir = resolve5(flowDirArg);
-  const flowDirClassification = classifyLearnedActionPath(join20(flowDir, "__action__.yaml"));
+  const flowDir = resolve6(flowDirArg);
+  const flowDirClassification = classifyLearnedActionPath(join23(flowDir, "__action__.yaml"));
   if (flowDirClassification === "descendant") {
     console.error(`Refusing to execute learned-action descendants from ${flowDir}.`);
     return 2;
@@ -12674,8 +13258,8 @@ async function verifyActions(argv) {
   const learnedCorpus = flowDirClassification === "action";
   let files;
   try {
-    const discovered = learnedCorpus ? readdirSync5(flowDir) : readdirSync5(flowDir, { recursive: true });
-    files = discovered.filter((file) => /\.ya?ml$/i.test(file)).filter((file) => matcher?.test(file) ?? true).map((file) => join20(flowDir, file)).sort();
+    const discovered = learnedCorpus ? readdirSync7(flowDir) : readdirSync7(flowDir, { recursive: true });
+    files = discovered.filter((file) => /\.ya?ml$/i.test(file)).filter((file) => matcher?.test(file) ?? true).map((file) => join23(flowDir, file)).sort();
   } catch (err) {
     console.error(`verify-actions could not read ${flowDir}: ${String(err)}`);
     return 2;
@@ -12690,15 +13274,15 @@ async function verifyActions(argv) {
       const actionPathRefusal = standaloneLearnedActionPathRefusal(file);
       if (actionPathRefusal)
         throw new Error(actionPathRefusal);
-      const text = readFileSync13(file, "utf8");
-      const parsed = parseAndValidateFlow(text, { flowDir: dirname10(file), flowRoot: flowDir });
+      const text = readFileSync15(file, "utf8");
+      const parsed = parseAndValidateFlow(text, { flowDir: dirname14(file), flowRoot: flowDir });
       const id = file.split("/").pop().replace(/\.ya?ml$/i, "");
       const meta = parseM7Header(text, id);
       const owned = isLearnedActionPath(file);
       if (owned) {
-        const projectRoot = dirname10(dirname10(dirname10(file)));
+        const projectRoot = dirname14(dirname14(dirname14(file)));
         const resolvedPath = resolveActionPath(projectRoot, id);
-        if (resolvedPath === null || resolve5(resolvedPath) !== resolve5(file)) {
+        if (resolvedPath === null || resolve6(resolvedPath) !== resolve6(file)) {
           throw new Error(`Action ${id} did not resolve to ${file}`);
         }
       }

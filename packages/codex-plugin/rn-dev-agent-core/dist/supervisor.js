@@ -27191,6 +27191,12 @@ var init_maestro_runner_pin = __esm({
         "linux-x64": "e9bdef6f08f855ca1a884f99b54a519a1eae0a342917181a53eb414a5b00d6d8",
         "linux-arm64": "8d8a6483ad04da2109636b7192398750657801b8a8d512688d1be3b033a105b8"
       },
+      archiveSha256: {
+        "darwin-arm64": "0b5b0f087815c5ff348e74a6dd7df260ed50a5588d5ff3e224c66a60d948c936",
+        "darwin-x64": "2ecc5c55d9437ee820691faf43097b5ba8d1ff797db49da9c96ac2631aac03c5",
+        "linux-x64": "f1963b7e3f8bf598d3b14f998fef3dc690e579906f340636cfd9350dea1d67b0",
+        "linux-arm64": "605db5645b161b610e999bcf8235650d41aac8929bbd0f818a592d13b958f148"
+      },
       knownQuirks: [
         {
           id: "android-pre-o-unsupported",
@@ -27324,7 +27330,7 @@ function pinArchiveCoords(platformKey) {
   }
 }
 function buildReplayEngineStatus(cls, version2, _cliPresent, extras = {}) {
-  const engine = cls === "not-installed" ? "none" : "maestro-runner";
+  const engine = cls === "pinned-ok" ? "maestro-runner" : "none";
   return {
     engine,
     version: version2,
@@ -27427,6 +27433,9 @@ function pinCorrection(status, platformKey = nodePlatformKey()) {
     case "unknown-version":
       return `Session maestro-runner version could not be read. ${install}`;
     case "unverified":
+      if (status.version && compareVersions(status.version, pinned) > 0) {
+        return `Session pin-cache contains an unverified newer maestro-runner entry ${installed}; its directory name is not trusted binary evidence and it will not be executed. ${install}`;
+      }
       return `Session maestro-runner ${installed} could not be checksum-verified on ${platformKey}. ${install}`;
     case "pinned-ok":
       return `Session maestro-runner ${pinned} is selected from the pin-cache.`;
@@ -27475,14 +27484,8 @@ async function detect(resolvers) {
       });
     }
     const comparison = compareVersions(cacheVersion, MAESTRO_RUNNER_PIN.version);
-    if (!expectedSha2562 && comparison > 0) {
-      return buildReplayEngineStatus("drift-newer", cacheVersion, false, {
-        selectedPath: binPath,
-        provenance: "pin-cache"
-      });
-    }
     if (!expectedSha2562) {
-      return buildReplayEngineStatus("unverified", null, false, {
+      return buildReplayEngineStatus("unverified", cacheVersion, false, {
         selectedPath: binPath,
         provenance: "pin-cache"
       });
@@ -27545,6 +27548,7 @@ var init_engine_pin = __esm({
     MAESTRO_RUNNER_PIN = Object.freeze({
       version: maestro_runner_pin_default.version,
       sha256: Object.freeze({ ...maestro_runner_pin_default.sha256 }),
+      archiveSha256: Object.freeze({ ...maestro_runner_pin_default.archiveSha256 }),
       knownQuirks: Object.freeze(maestro_runner_pin_default.knownQuirks.map((quirk) => Object.freeze({ ...quirk })))
     });
     TRUSTED_DRIFT_SHA256 = Object.freeze({
@@ -28903,7 +28907,7 @@ var init_action_store = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/domain/action-engine-compat.js
-import { existsSync as existsSync19, lstatSync as lstatSync13, readFileSync as readFileSync21, readdirSync as readdirSync8, realpathSync as realpathSync12, writeFileSync as writeFileSync10 } from "node:fs";
+import { existsSync as existsSync19, lstatSync as lstatSync13, readFileSync as readFileSync21, readdirSync as readdirSync8, realpathSync as realpathSync12 } from "node:fs";
 import { basename as basename8, dirname as dirname17, join as join25, resolve as resolve12 } from "node:path";
 function actionEnginePinRefusal(enginePin) {
   if (!enginePin) {
@@ -32454,7 +32458,7 @@ var init_authority_gate = __esm({
 // packages/rn-dev-agent-core/dist/tools/maestro-run.js
 import { execFile as execFileCb3 } from "node:child_process";
 import { promisify as promisify4 } from "node:util";
-import { existsSync as existsSync22, readFileSync as readFileSync24, writeFileSync as writeFileSync11 } from "node:fs";
+import { existsSync as existsSync22, readFileSync as readFileSync24, writeFileSync as writeFileSync10 } from "node:fs";
 import { tmpdir as tmpdir7 } from "node:os";
 import { basename as basename10, join as join29, dirname as dirname18 } from "node:path";
 async function runFlowParked(run, opts = {}) {
@@ -32697,7 +32701,7 @@ function createMaestroRunHandler(deps = {}) {
       headerAppId = resolveMaestroFlowAppId(rawAppId || void 0, parsed.appId);
       validatedContent = buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, parsed.commands);
       flowFile = join29(tmpdir7(), `rn-maestro-run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
-      writeFileSync11(flowFile, validatedContent, "utf-8");
+      writeFileSync10(flowFile, validatedContent, "utf-8");
     } catch (err) {
       if (err instanceof MaestroValidationError) {
         return failResult(`Refusing to run Maestro: ${err.message} (Phase 134.1)`);
@@ -32813,7 +32817,7 @@ function createMaestroRunHandler(deps = {}) {
       const relaunchManagedApp = args.relaunchManagedApp ?? deps.relaunchManagedApp ?? managedAuthority.relaunchManagedApp;
       const reproveManagedOrigin = args.reproveManagedOrigin ?? deps.reproveManagedOrigin ?? managedAuthority.reproveManagedOrigin;
       const stageResults = await parkFlow(() => executeMaestroAuthorityStages(validatedCommands, async (commands) => {
-        writeFileSync11(flowFile, buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, [...commands]), "utf-8");
+        writeFileSync10(flowFile, buildMaestroFlow(headerAppId ? { appId: headerAppId } : {}, [...commands]), "utf-8");
         const executeOnce = async (beforeDispatch) => {
           const remainingTimeout = flowDeadline - now();
           if (remainingTimeout <= 0) {
@@ -33040,7 +33044,7 @@ function createMaestroRunHandler(deps = {}) {
       return failResult(failAug.message, failAug.meta);
     } finally {
       try {
-        writeFileSync11(flowFile, validatedContent, "utf-8");
+        writeFileSync10(flowFile, validatedContent, "utf-8");
       } finally {
         disposeRunnerReportDir(runnerReportDir);
       }
@@ -33723,7 +33727,7 @@ var init_device_arbiter = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/maestro-invoke.js
-import { writeFileSync as writeFileSync12 } from "node:fs";
+import { writeFileSync as writeFileSync11 } from "node:fs";
 import { join as join30 } from "node:path";
 import { tmpdir as tmpdir8 } from "node:os";
 function yamlEscape(s) {
@@ -33793,7 +33797,7 @@ async function runMaestroInline(yaml2, opts, dependencies = {}) {
     throw err;
   }
   try {
-    writeFileSync12(flowFile, content, "utf-8");
+    writeFileSync11(flowFile, content, "utf-8");
   } catch (err) {
     return {
       passed: false,
@@ -34425,7 +34429,7 @@ var init_recover_detached = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/lifecycle/device-lock.js
-import { existsSync as existsSync24, mkdirSync as mkdirSync17, openSync as openSync9, writeSync as writeSync3, closeSync as closeSync9, readFileSync as readFileSync27, unlinkSync as unlinkSync9, writeFileSync as writeFileSync13 } from "node:fs";
+import { existsSync as existsSync24, mkdirSync as mkdirSync17, openSync as openSync9, writeSync as writeSync3, closeSync as closeSync9, readFileSync as readFileSync27, unlinkSync as unlinkSync9, writeFileSync as writeFileSync12 } from "node:fs";
 import { tmpdir as tmpdir9, userInfo as userInfo2 } from "node:os";
 import { join as join32 } from "node:path";
 function defaultProcessAlive3(pid) {
@@ -34522,7 +34526,7 @@ var init_device_lock = __esm({
           return;
         holder.lastHeartbeat = this.clock();
         try {
-          writeFileSync13(this.lockPath, JSON.stringify(holder, null, 2), "utf8");
+          writeFileSync12(this.lockPath, JSON.stringify(holder, null, 2), "utf8");
         } catch {
         }
       }
@@ -37245,7 +37249,7 @@ __export(rn_android_runner_client_exports, {
 });
 import { spawn as spawn7, execFile as execFile13 } from "node:child_process";
 import { promisify as promisify13 } from "node:util";
-import { existsSync as existsSync25, rmSync as rmSync10, writeFileSync as writeFileSync14 } from "node:fs";
+import { existsSync as existsSync25, rmSync as rmSync10, writeFileSync as writeFileSync13 } from "node:fs";
 import { tmpdir as tmpdir10 } from "node:os";
 import { randomBytes as randomBytes5, randomUUID as randomUUID7 } from "node:crypto";
 import { join as join33 } from "node:path";
@@ -38453,7 +38457,7 @@ async function runAndroid(args) {
     if (!data?.pngBase64)
       return failResult("Android runner screenshot response did not include pngBase64", "SCREENSHOT_FAILED", recovery ? { transportRecovery: recovery } : void 0);
     const outPath = args.outPath ?? join33(tmpdir10(), `rn-android-screenshot-${Date.now()}.png`);
-    writeFileSync14(outPath, Buffer.from(data.pngBase64, "base64"));
+    writeFileSync13(outPath, Buffer.from(data.pngBase64, "base64"));
     return okResult({ path: outPath }, Object.keys(recoveryMeta).length ? { meta: recoveryMeta } : void 0);
   }
   return okResult(resp.data ?? {}, Object.keys(recoveryMeta).length ? { meta: recoveryMeta } : void 0);
@@ -65138,7 +65142,7 @@ var init_ws_origin = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/cdp/state.js
-import { writeFileSync as writeFileSync15, unlinkSync as unlinkSync11 } from "node:fs";
+import { writeFileSync as writeFileSync14, unlinkSync as unlinkSync11 } from "node:fs";
 import { tmpdir as tmpdir11 } from "node:os";
 import { join as join38 } from "node:path";
 function resetState(s) {
@@ -65155,11 +65159,11 @@ function resetState(s) {
 }
 function setActiveFlag(port, target) {
   try {
-    writeFileSync15(CDP_ACTIVE_FLAG, String(process.pid));
+    writeFileSync14(CDP_ACTIVE_FLAG, String(process.pid));
   } catch {
   }
   try {
-    writeFileSync15(CDP_SESSION_FILE, JSON.stringify({
+    writeFileSync14(CDP_SESSION_FILE, JSON.stringify({
       port,
       platform: target?.platform ?? null,
       target: target?.title ?? null,
@@ -77401,7 +77405,14 @@ function generateMaestro(events, opts = {}) {
         break;
     }
   }
-  return lines.join("\n") + "\n";
+  const yaml2 = lines.join("\n") + "\n";
+  if (opts.id && opts.intent) {
+    const commands = parseAndValidateFlow(yaml2).commands;
+    const refusal = regexSelectorCapabilityRefusal(commands);
+    if (refusal)
+      throw new Error(refusal);
+  }
+  return yaml2;
 }
 function generateDetox(events, opts = {}) {
   const lines = [];
@@ -77499,6 +77510,8 @@ var init_test_recorder_generators = __esm({
     "use strict";
     import_yaml3 = __toESM(require_dist(), 1);
     init_engine_pin();
+    init_action_engine_compat();
+    init_maestro_validator();
     TAP_TO_NAV_WINDOW_MS = 1e3;
   }
 });
@@ -77630,7 +77643,12 @@ function createRecordTestGenerateHandler() {
       mutates: args.mutates,
       status: args.status
     };
-    const text = args.format === "maestro" ? generateMaestro(storedEvents, opts) : generateDetox(storedEvents, opts);
+    let text;
+    try {
+      text = args.format === "maestro" ? generateMaestro(storedEvents, opts) : generateDetox(storedEvents, opts);
+    } catch (err) {
+      return failResult(err instanceof Error ? err.message : String(err), "BAD_RECORDING");
+    }
     return okResult({
       format: args.format,
       eventCount: storedEvents.length,
@@ -77797,17 +77815,22 @@ function createSaveAsActionHandler() {
     }
     const status = args.status ?? "experimental";
     const startRoute = getRecordingStartRoute() ?? void 0;
-    const yamlText = generateMaestro(events, {
-      testName: args.testName ?? args.intent,
-      bundleId: args.bundleId,
-      startRoute,
-      id: args.id,
-      intent: args.intent,
-      tags: args.tags,
-      mutates: args.mutates,
-      status,
-      produces: args.produces
-    });
+    let yamlText;
+    try {
+      yamlText = generateMaestro(events, {
+        testName: args.testName ?? args.intent,
+        bundleId: args.bundleId,
+        startRoute,
+        id: args.id,
+        intent: args.intent,
+        tags: args.tags,
+        mutates: args.mutates,
+        status,
+        produces: args.produces
+      });
+    } catch (err) {
+      return failResult(err instanceof Error ? err.message : String(err), "BAD_RECORDING");
+    }
     const sidecarPath = sidecarPathFor(filePath);
     const initialState = freshRuntimeState(() => /* @__PURE__ */ new Date(), 0);
     const writeResult = atomicWriter.pairWrite(filePath, yamlText, sidecarPath, initialState);
@@ -82169,7 +82192,7 @@ var init_startup_integrity = __esm({
 // packages/rn-dev-agent-core/dist/tools/proof-capture.js
 import { createHash as createHash18, randomUUID as randomUUID9 } from "node:crypto";
 import { execFileSync as execFileSync15 } from "node:child_process";
-import { chmodSync as chmodSync4, closeSync as closeSync11, existsSync as existsSync31, fsyncSync, lstatSync as lstatSync15, mkdirSync as mkdirSync19, openSync as openSync11, readFileSync as readFileSync32, realpathSync as realpathSync15, renameSync as renameSync8, unlinkSync as unlinkSync12, writeFileSync as writeFileSync16 } from "node:fs";
+import { chmodSync as chmodSync4, closeSync as closeSync11, existsSync as existsSync31, fsyncSync, lstatSync as lstatSync15, mkdirSync as mkdirSync19, openSync as openSync11, readFileSync as readFileSync32, realpathSync as realpathSync15, renameSync as renameSync8, unlinkSync as unlinkSync12, writeFileSync as writeFileSync15 } from "node:fs";
 import { basename as basename11, dirname as dirname25, extname, isAbsolute as isAbsolute10, join as join45, relative as relative6, resolve as resolve16, sep as sep7 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 function proofActionPayload(unparsedArgs) {
@@ -82632,7 +82655,7 @@ function writeProofReceiptAtomic(path, receipt2) {
   let descriptor = null;
   try {
     descriptor = openSync11(temporary, "wx", 384);
-    writeFileSync16(descriptor, `${JSON.stringify(receipt2, null, 2)}
+    writeFileSync15(descriptor, `${JSON.stringify(receipt2, null, 2)}
 `, "utf8");
     fsyncSync(descriptor);
     closeSync11(descriptor);
@@ -85754,7 +85777,7 @@ var init_graceful_shutdown = __esm({
 });
 
 // packages/rn-dev-agent-core/dist/tools/maestro-generate.js
-import { existsSync as existsSync32, mkdirSync as mkdirSync20, writeFileSync as writeFileSync17 } from "node:fs";
+import { existsSync as existsSync32, mkdirSync as mkdirSync20, writeFileSync as writeFileSync16 } from "node:fs";
 import { basename as basename12, dirname as dirname28, join as join48 } from "node:path";
 function stepToMaestroCommands(step) {
   const ALLOWED_DIRECTIONS = /* @__PURE__ */ new Set(["up", "down", "left", "right"]);
@@ -85871,7 +85894,7 @@ function createMaestroGenerateHandler() {
     if (!existsSync32(outputDir)) {
       mkdirSync20(outputDir, { recursive: true });
     }
-    writeFileSync17(filePath, content, "utf-8");
+    writeFileSync16(filePath, content, "utf-8");
     return okResult({
       generated: true,
       path: filePath,
@@ -85897,7 +85920,7 @@ var init_maestro_generate = __esm({
 // packages/rn-dev-agent-core/dist/tools/maestro-test-all.js
 import { execFile as execFileCb20 } from "node:child_process";
 import { promisify as promisify26 } from "node:util";
-import { existsSync as existsSync33, readdirSync as readdirSync13, readFileSync as readFileSync34, writeFileSync as writeFileSync18 } from "node:fs";
+import { existsSync as existsSync33, readdirSync as readdirSync13, readFileSync as readFileSync34, writeFileSync as writeFileSync17 } from "node:fs";
 import { basename as basename13, dirname as dirname29, join as join49, resolve as resolve18 } from "node:path";
 import { tmpdir as tmpdir13 } from "node:os";
 function discoverFlows(dir, pattern, topLevelOnly = false) {
@@ -86049,7 +86072,7 @@ function createMaestroTestAllHandler(deps = {}) {
       const { name } = prepared;
       const start = now();
       const safeFlowFile = join49(tmpdir13(), `rn-maestro-validated-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.yaml`);
-      writeFileSync18(safeFlowFile, prepared.canonical, "utf-8");
+      writeFileSync17(safeFlowFile, prepared.canonical, "utf-8");
       const parsedCommands = prepared.commands;
       const parsedAppId = prepared.appId;
       const appFile = prepared.appFile;
@@ -86073,7 +86096,7 @@ function createMaestroTestAllHandler(deps = {}) {
             Object.assign(error2, { code: "ETIMEDOUT" });
             throw error2;
           }
-          writeFileSync18(safeFlowFile, buildMaestroFlow(parsedAppId !== void 0 ? { appId: parsedAppId } : {}, [
+          writeFileSync17(safeFlowFile, buildMaestroFlow(parsedAppId !== void 0 ? { appId: parsedAppId } : {}, [
             ...commands
           ]), "utf-8");
           return execute2(flowDispatch.binPath, finalArgs, {
@@ -86581,7 +86604,7 @@ var init_instrumentation = __esm({
 
 // packages/rn-dev-agent-core/dist/experience/evidence.js
 import { createHash as createHash20, randomUUID as randomUUID10 } from "node:crypto";
-import { chmodSync as chmodSync5, existsSync as existsSync34, mkdirSync as mkdirSync21, readFileSync as readFileSync36, renameSync as renameSync9, unlinkSync as unlinkSync13, writeFileSync as writeFileSync19 } from "node:fs";
+import { chmodSync as chmodSync5, existsSync as existsSync34, mkdirSync as mkdirSync21, readFileSync as readFileSync36, renameSync as renameSync9, unlinkSync as unlinkSync13, writeFileSync as writeFileSync18 } from "node:fs";
 import { homedir as homedir9, platform as hostPlatform, release } from "node:os";
 import { dirname as dirname30, join as join51 } from "node:path";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
@@ -86974,7 +86997,7 @@ var init_evidence = __esm({
             redactionVersion: REDACTION_RULES_VERSION
           });
           const contents = sanitized.map((record2) => JSON.stringify(record2)).join("\n");
-          writeFileSync19(temp, contents.length > 0 ? `${contents}
+          writeFileSync18(temp, contents.length > 0 ? `${contents}
 ` : "", {
             encoding: "utf8",
             flag: "wx",
@@ -88463,7 +88486,7 @@ var init_target = __esm({
 
 // packages/rn-dev-agent-core/dist/domain/e2e-test.js
 import { dirname as dirname32, join as join55 } from "node:path";
-import { mkdirSync as mkdirSync22, writeFileSync as writeFileSync20, renameSync as renameSync10, readFileSync as readFileSync38, readdirSync as readdirSync15, existsSync as existsSync35 } from "node:fs";
+import { mkdirSync as mkdirSync22, writeFileSync as writeFileSync19, renameSync as renameSync10, readFileSync as readFileSync38, readdirSync as readdirSync15, existsSync as existsSync35 } from "node:fs";
 import { createHash as createHash21 } from "node:crypto";
 function e2eDirFor(projectRoot) {
   return join55(projectRoot, ".rn-agent", "e2e");
@@ -88513,7 +88536,7 @@ function freezeLockedTest(projectRoot, source, ctx) {
     flow: source.flow
   };
   const tmp = `${filePath}.tmp`;
-  writeFileSync20(tmp, serializeLockedTest(meta), "utf8");
+  writeFileSync19(tmp, serializeLockedTest(meta), "utf8");
   renameSync10(tmp, filePath);
   return { ...meta, filePath };
 }
@@ -88729,7 +88752,7 @@ var init_lock_e2e_test = __esm({
 
 // packages/rn-dev-agent-core/dist/domain/e2e-run.js
 import { join as join57 } from "node:path";
-import { mkdirSync as mkdirSync23, writeFileSync as writeFileSync21, renameSync as renameSync11, readFileSync as readFileSync41, existsSync as existsSync36 } from "node:fs";
+import { mkdirSync as mkdirSync23, writeFileSync as writeFileSync20, renameSync as renameSync11, readFileSync as readFileSync41, existsSync as existsSync36 } from "node:fs";
 function classifyFlowResult(input) {
   if (input.passed) {
     return {
@@ -88788,7 +88811,7 @@ function e2eRunsDirFor(projectRoot) {
 function writeJsonAtomic(file, value) {
   mkdirSync23(join57(file, ".."), { recursive: true });
   const tmp = `${file}.tmp`;
-  writeFileSync21(tmp, JSON.stringify(value, null, 2), "utf8");
+  writeFileSync20(tmp, JSON.stringify(value, null, 2), "utf8");
   renameSync11(tmp, file);
 }
 function loadIndex(projectRoot) {
@@ -88842,7 +88865,7 @@ var init_e2e_run = __esm({
 
 // packages/rn-dev-agent-core/dist/domain/e2e-run-request.js
 import { join as join58 } from "node:path";
-import { mkdirSync as mkdirSync24, writeFileSync as writeFileSync22, renameSync as renameSync12, readFileSync as readFileSync42, readdirSync as readdirSync16, existsSync as existsSync37 } from "node:fs";
+import { mkdirSync as mkdirSync24, writeFileSync as writeFileSync21, renameSync as renameSync12, readFileSync as readFileSync42, readdirSync as readdirSync16, existsSync as existsSync37 } from "node:fs";
 function requestsDir(projectRoot) {
   return join58(e2eRunsDirFor(projectRoot), "requests");
 }
@@ -88854,7 +88877,7 @@ function writeRequest(projectRoot, req) {
   const file = requestPath(projectRoot, req.runId);
   mkdirSync24(requestsDir(projectRoot), { recursive: true });
   const tmp = `${file}.tmp`;
-  writeFileSync22(tmp, JSON.stringify(req, null, 2), "utf8");
+  writeFileSync21(tmp, JSON.stringify(req, null, 2), "utf8");
   renameSync12(tmp, file);
 }
 function loadRequest(projectRoot, runId) {

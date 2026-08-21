@@ -5,6 +5,8 @@
 // RecordedEvent[] shape and emit replayable test code.
 import { stringify as yamlStringify } from 'yaml';
 import { ACTION_ENGINE_PIN } from '../domain/engine-pin.js';
+import { regexSelectorCapabilityRefusal } from '../domain/action-engine-compat.js';
+import { parseAndValidateFlow } from '../domain/maestro-validator.js';
 /**
  * CDP-013: serialise a user-controlled string as a single-line YAML scalar.
  * Quoting / escaping rules are delegated to the `yaml` package, which picks
@@ -245,7 +247,14 @@ export function generateMaestro(events, opts = {}) {
                 break;
         }
     }
-    return lines.join('\n') + '\n';
+    const yaml = lines.join('\n') + '\n';
+    if (opts.id && opts.intent) {
+        const commands = parseAndValidateFlow(yaml).commands;
+        const refusal = regexSelectorCapabilityRefusal(commands);
+        if (refusal)
+            throw new Error(refusal);
+    }
+    return yaml;
 }
 // --- Detox JS ---
 export function generateDetox(events, opts = {}) {

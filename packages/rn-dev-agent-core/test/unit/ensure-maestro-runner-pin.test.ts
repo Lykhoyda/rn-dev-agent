@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   MAESTRO_RUNNER_PIN,
   PINNED_RUNNER_DIAGNOSE_HINT,
@@ -98,6 +98,63 @@ test('newer stub in pin-cache is also refused', () => {
   assert.notEqual(result.status, 0);
   const out = `${result.stdout}${result.stderr}`;
   assert.match(out, /Converging|not exactly 1\.1\.24/);
+});
+
+test('installer verifies the complete archive before replacing the live pin-cache', () => {
+  const root = mkdtempSync(join(tmpdir(), 'mr-archive-pin-'));
+  const cache = join(root, 'cache');
+  const payload = join(root, 'payload', 'maestro-runner');
+  const archive = join(root, 'maestro-runner.tar.gz');
+  const liveBin = join(
+    cache,
+    'maestro-runner',
+    MAESTRO_RUNNER_PIN.version,
+    'bin',
+    'maestro-runner',
+  );
+  mkdirSync(join(payload, 'bin'), { recursive: true });
+  mkdirSync(join(payload, 'drivers'), { recursive: true });
+  writeFileSync(
+    join(payload, 'bin', 'maestro-runner'),
+    '#!/bin/sh\necho maestro-runner 1.1.24\n',
+  );
+  chmodSync(join(payload, 'bin', 'maestro-runner'), 0o755);
+  writeFileSync(join(payload, 'drivers', 'altered.apk'), 'altered');
+  const packed = spawnSync('tar', [
+    '-czf',
+    archive,
+    '-C',
+    join(root, 'payload'),
+    'maestro-runner',
+  ]);
+  assert.equal(packed.status, 0, String(packed.stderr));
+  mkdirSync(dirname(liveBin), { recursive: true });
+  writeFileSync(liveBin, '#!/bin/sh\necho existing\n');
+  chmodSync(liveBin, 0o755);
+
+  const result = runEnsure({
+    RN_DEV_AGENT_RUNNER_CACHE: cache,
+    RN_DEV_AGENT_UNAME_S: 'Darwin',
+    RN_DEV_AGENT_UNAME_M: 'arm64',
+    RN_DEV_AGENT_MAESTRO_DOWNLOAD_URL: pathToFileURL(archive).href,
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}${result.stderr}`, /archive checksum/);
+  assert.equal(readFileSync(liveBin, 'utf8'), '#!/bin/sh\necho existing\n');
+  assert.throws(() => readFileSync(join(dirname(dirname(liveBin)), 'drivers', 'altered.apk')));
+});
+
+test('pin manifest owns checksums for every supported release archive', () => {
+  assert.deepEqual(Object.keys(MAESTRO_RUNNER_PIN.archiveSha256).sort(), [
+    'darwin-arm64',
+    'darwin-x64',
+    'linux-arm64',
+    'linux-x64',
+  ]);
+  for (const digest of Object.values(MAESTRO_RUNNER_PIN.archiveSha256)) {
+    assert.match(digest, /^[a-f0-9]{64}$/);
+  }
 });
 
 test('doctorPinnedRunner truth table names missing/older/newer/checksum/unsupported', () => {

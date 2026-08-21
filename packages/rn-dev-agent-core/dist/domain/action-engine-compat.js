@@ -1,9 +1,9 @@
-import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, writeFileSync, } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { ACTION_ENGINE_PIN, MAESTRO_RUNNER_PIN, exactPinRefusal, findRegexTextSelectors, } from './engine-pin.js';
 import { parseAndValidateFlow, MaestroValidationError } from './maestro-validator.js';
 import { parseM7Header } from './reusable-action.js';
-import { splitYaml, joinYaml, resolveActionPath } from './action-store.js';
+import { commitMigratedActionText, splitYaml, joinYaml, resolveActionPath, } from './action-store.js';
 export function actionEnginePinRefusal(enginePin) {
     if (!enginePin) {
         return (`Action is not migrated to ${ACTION_ENGINE_PIN}. Run ` +
@@ -273,8 +273,21 @@ export function migrateLearnedActions(projectRoot) {
             continue;
         }
         const updated = upsertEnginePinHeader(text);
-        if (updated.changed)
-            writeFileSync(path, updated.text, 'utf8');
+        if (updated.changed) {
+            try {
+                commitMigratedActionText(path, updated.text);
+            }
+            catch (err) {
+                results.push({
+                    id,
+                    path,
+                    status: 'unreadable',
+                    reason: err instanceof Error ? err.message : String(err),
+                    mutated: false,
+                });
+                continue;
+            }
+        }
         results.push({
             id,
             path,

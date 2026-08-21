@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -28,7 +29,11 @@ import { createRunActionHandler } from '../../dist/tools/run-action.js';
 import { createMaestroTestAllHandler } from '../../dist/tools/maestro-test-all.js';
 import { createMaestroRunHandler } from '../../dist/tools/maestro-run.js';
 import { createMaestroGenerateHandler } from '../../dist/tools/maestro-generate.js';
+import { generateMaestro } from '../../dist/tools/test-recorder-generators.js';
 import { listActions } from '../../dist/domain/action-inventory.js';
+import { atomicWriter } from '../../dist/domain/atomic-writer.js';
+import { freshRuntimeState } from '../../dist/domain/reusable-action.js';
+import { sidecarPathFor } from '../../dist/domain/sidecar-io.js';
 import { runMaestroInline } from '../../dist/maestro-invoke.js';
 import { createTmpProject } from '../helpers/tmp-project.js';
 
@@ -169,6 +174,58 @@ test('migrateLearnedActions stamps compatible YAML and leaves regex actions unmu
   assert.equal(bad?.status, 'incompatible');
   assert.equal(bad?.mutated, false);
   assert.doesNotMatch(readFileSync(badPath, 'utf8'), /enginePin/);
+});
+
+test('migrateLearnedActions atomically rebaselines an existing action sidecar', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-action-migrate-state-'));
+  const dir = join(root, '.rn-agent', 'actions');
+  mkdirSync(dir, { recursive: true });
+  const actionPath = join(dir, 'checkout.yaml');
+  writeFileSync(actionPath, actionYaml('checkout'), 'utf8');
+  const sidecarPath = sidecarPathFor(actionPath);
+  mkdirSync(join(sidecarPath, '..'), { recursive: true });
+  const priorState = {
+    ...freshRuntimeState(() => new Date('2026-01-01T00:00:00Z'), 1),
+    revision: 7,
+  };
+  writeFileSync(sidecarPath, `${JSON.stringify(priorState)}\n`, 'utf8');
+
+  const result = migrateLearnedActions(root).find((row) => row.id === 'checkout');
+  const nextState = JSON.parse(readFileSync(sidecarPath, 'utf8'));
+
+  assert.equal(result?.status, 'migrated');
+  assert.equal(nextState.revision, 7);
+  assert.ok(nextState.lastSeenMtimeMs >= statSync(actionPath).mtimeMs);
+});
+
+test('migrateLearnedActions preserves the previous YAML when its atomic write fails', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'rn-action-migrate-atomic-'));
+  const dir = join(root, '.rn-agent', 'actions');
+  mkdirSync(dir, { recursive: true });
+  const actionPath = join(dir, 'checkout.yaml');
+  const source = actionYaml('checkout');
+  writeFileSync(actionPath, source, 'utf8');
+  const originalWrite = atomicWriter._writeFile;
+  t.mock.method(atomicWriter, '_writeFile', (path: string, content: string) => {
+    if (path.startsWith(`${actionPath}.tmp.`)) throw new Error('ENOSPC');
+    originalWrite(path, content);
+  });
+
+  const result = migrateLearnedActions(root).find((row) => row.id === 'checkout');
+
+  assert.equal(result?.status, 'unreadable');
+  assert.equal(readFileSync(actionPath, 'utf8'), source);
+});
+
+test('recorder refuses to stamp regex-shaped selectors as compatible actions', () => {
+  assert.throws(
+    () =>
+      generateMaestro([{ type: 'tap', label: 'Log.n', t: 1 }], {
+        id: 'open-log',
+        intent: 'Open the visible log',
+      }),
+    /regex text selectors.*Log\.n/,
+  );
 });
 
 test('migrateLearnedActions refuses inherited .rn-agent/actions symlinks', () => {

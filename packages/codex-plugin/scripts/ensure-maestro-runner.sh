@@ -33,6 +33,10 @@ MAESTRO_RUNNER_PIN_SHA256_DARWIN_ARM64="$(manifest_value "$CANONICAL_PIN_MANIFES
 MAESTRO_RUNNER_PIN_SHA256_DARWIN_X64="$(manifest_value "$CANONICAL_PIN_MANIFEST" sha256.darwin-x64)"
 MAESTRO_RUNNER_PIN_SHA256_LINUX_X64="$(manifest_value "$CANONICAL_PIN_MANIFEST" sha256.linux-x64)"
 MAESTRO_RUNNER_PIN_SHA256_LINUX_ARM64="$(manifest_value "$CANONICAL_PIN_MANIFEST" sha256.linux-arm64)"
+MAESTRO_RUNNER_ARCHIVE_SHA256_DARWIN_ARM64="$(manifest_value "$CANONICAL_PIN_MANIFEST" archiveSha256.darwin-arm64)"
+MAESTRO_RUNNER_ARCHIVE_SHA256_DARWIN_X64="$(manifest_value "$CANONICAL_PIN_MANIFEST" archiveSha256.darwin-x64)"
+MAESTRO_RUNNER_ARCHIVE_SHA256_LINUX_X64="$(manifest_value "$CANONICAL_PIN_MANIFEST" archiveSha256.linux-x64)"
+MAESTRO_RUNNER_ARCHIVE_SHA256_LINUX_ARM64="$(manifest_value "$CANONICAL_PIN_MANIFEST" archiveSha256.linux-arm64)"
 
 CACHE_PARENT="${RN_DEV_AGENT_RUNNER_CACHE:-$HOME/.cache/rn-dev-agent}"
 RUNNER_CACHE_ROOT="$CACHE_PARENT/maestro-runner"
@@ -84,6 +88,16 @@ expected_sha() {
   esac
 }
 
+expected_archive_sha() {
+  case "$(node_platform_key)" in
+    darwin-arm64) echo "$MAESTRO_RUNNER_ARCHIVE_SHA256_DARWIN_ARM64" ;;
+    darwin-x64) echo "$MAESTRO_RUNNER_ARCHIVE_SHA256_DARWIN_X64" ;;
+    linux-x64) echo "$MAESTRO_RUNNER_ARCHIVE_SHA256_LINUX_X64" ;;
+    linux-arm64) echo "$MAESTRO_RUNNER_ARCHIVE_SHA256_LINUX_ARM64" ;;
+    *) echo "" ;;
+  esac
+}
+
 file_sha() {
   if command -v shasum >/dev/null 2>&1; then
     shasum -a 256 "$1" | awk '{print $1}'
@@ -95,7 +109,16 @@ file_sha() {
 }
 
 installed_version() {
-  perl -e 'alarm 5; exec @ARGV' -- "$1" --version 2>&1 | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo ""
+  node - "$1" <<'NODE'
+const { spawnSync } = require('node:child_process');
+const result = spawnSync(process.argv[2], ['--version'], {
+  encoding: 'utf8',
+  timeout: 5000,
+});
+const output = `${result.stdout ?? ''}\n${result.stderr ?? ''}`;
+const version = output.match(/[0-9]+\.[0-9]+\.[0-9]+/);
+if (version) process.stdout.write(version[0]);
+NODE
 }
 
 correction() {
@@ -117,7 +140,8 @@ fi
 OS="$(platform_key)"
 ARCH="$(archive_arch)"
 EXPECTED_SHA="$(expected_sha)"
-if [ -z "$EXPECTED_SHA" ]; then
+EXPECTED_ARCHIVE_SHA="$(expected_archive_sha)"
+if [ -z "$EXPECTED_SHA" ] || [ -z "$EXPECTED_ARCHIVE_SHA" ]; then
   unsupported_fail
 fi
 
@@ -129,20 +153,25 @@ for guarded_path in "$RUNNER_CACHE_ROOT" "$PIN_DIR" "$PIN_DIR/bin" "$BIN"; do
   fi
 done
 
-bin_matches_pin() {
-  if [ ! -x "$BIN" ]; then
+bin_path_matches_pin() {
+  local path="$1"
+  if [ ! -x "$path" ]; then
     return 1
   fi
   local v got
-  got="$(file_sha "$BIN")"
+  got="$(file_sha "$path")"
   if [ -z "$got" ] || [ "$got" != "$EXPECTED_SHA" ]; then
     return 1
   fi
-  v="$(installed_version "$BIN")"
+  v="$(installed_version "$path")"
   if [ "$v" != "$MAESTRO_RUNNER_PIN_VERSION" ]; then
     return 1
   fi
   return 0
+}
+
+bin_matches_pin() {
+  bin_path_matches_pin "$BIN"
 }
 
 report_success() {
@@ -169,6 +198,67 @@ if [ "${1:-}" = "--print-bin" ]; then
   exit 1
 fi
 
+LOCK_DIR="$RUNNER_CACHE_ROOT/.install-${MAESTRO_RUNNER_PIN_VERSION}.lock"
+LOCK_HELD=0
+TEMP_DIR=""
+
+cleanup() {
+  if [ -n "$TEMP_DIR" ]; then
+    rm -rf "$TEMP_DIR"
+  fi
+  if [ "$LOCK_HELD" = "1" ] && [ -d "$LOCK_DIR" ] && [ ! -L "$LOCK_DIR" ]; then
+    local owner
+    owner="$(sed -n '1p' "$LOCK_DIR/pid" 2>/dev/null || true)"
+    if [ "$owner" = "$$" ]; then
+      rm -rf "$LOCK_DIR"
+    fi
+  fi
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+acquire_install_lock() {
+  mkdir -p "$RUNNER_CACHE_ROOT"
+  local attempts=0 owner=""
+  while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+    if [ -L "$LOCK_DIR" ]; then
+      echo "ERROR: refusing maestro-runner install lock symlink at $LOCK_DIR."
+      correction
+      exit 1
+    fi
+    owner="$(sed -n '1p' "$LOCK_DIR/pid" 2>/dev/null || true)"
+    if [[ "$owner" =~ ^[0-9]+$ ]] && ! kill -0 "$owner" 2>/dev/null; then
+      rm -rf "$LOCK_DIR"
+      continue
+    fi
+    attempts=$((attempts + 1))
+    if [ "$attempts" -ge 100 ]; then
+      echo "ERROR: timed out waiting for maestro-runner pin-cache install lock."
+      correction
+      exit 1
+    fi
+    sleep 0.1
+  done
+  LOCK_HELD=1
+  printf '%s\n' "$$" > "$LOCK_DIR/pid"
+}
+
+acquire_install_lock
+
+for guarded_path in "$RUNNER_CACHE_ROOT" "$PIN_DIR" "$PIN_DIR/bin" "$BIN"; do
+  if [ -L "$guarded_path" ]; then
+    echo "ERROR: refusing maestro-runner pin-cache symlink at $guarded_path."
+    correction
+    exit 1
+  fi
+done
+
+if bin_matches_pin; then
+  report_success
+  exit 0
+fi
+
 if [ -x "$BIN" ]; then
   GOT_SHA="$(file_sha "$BIN")"
   GOT_V=""
@@ -185,13 +275,18 @@ echo "Installing maestro-runner $MAESTRO_RUNNER_PIN_VERSION into the session pin
 echo "Destination: $PIN_DIR"
 
 TEMP_DIR="$(mktemp -d)"
-cleanup() {
-  rm -rf "$TEMP_DIR"
-}
-trap cleanup EXIT INT TERM
 
-if ! curl -fsSL --connect-timeout 10 --max-time 180 -o "$TEMP_DIR/$ARCHIVE" "$DOWNLOAD_URL"; then
+if ! curl -fsSL --connect-timeout 10 --max-time 75 -o "$TEMP_DIR/$ARCHIVE" "$DOWNLOAD_URL"; then
   echo "ERROR: failed to download $DOWNLOAD_URL"
+  correction
+  exit 1
+fi
+
+GOT_ARCHIVE_SHA="$(file_sha "$TEMP_DIR/$ARCHIVE")"
+if [ -z "$GOT_ARCHIVE_SHA" ] || [ "$GOT_ARCHIVE_SHA" != "$EXPECTED_ARCHIVE_SHA" ]; then
+  echo "ERROR: downloaded archive checksum does not match the $MAESTRO_RUNNER_PIN_VERSION pin manifest."
+  echo "  expected archive sha256: $EXPECTED_ARCHIVE_SHA"
+  echo "  got archive sha256:      ${GOT_ARCHIVE_SHA:-unhashed}"
   correction
   exit 1
 fi
@@ -220,28 +315,49 @@ else
   exit 1
 fi
 
-mkdir -p "$PIN_DIR"
-rm -rf "$PIN_DIR/bin" "$PIN_DIR/drivers"
-cp -R "$SRC/." "$PIN_DIR/"
-chmod +x "$BIN"
+STAGED_PIN_DIR="$TEMP_DIR/pin"
+mkdir -p "$STAGED_PIN_DIR"
+cp -R "$SRC/." "$STAGED_PIN_DIR/"
+STAGED_BIN="$STAGED_PIN_DIR/bin/maestro-runner"
+chmod +x "$STAGED_BIN"
 if [ "$(platform_key)" = "darwin" ]; then
-  xattr -d com.apple.quarantine "$BIN" 2>/dev/null || true
+  xattr -d com.apple.quarantine "$STAGED_BIN" 2>/dev/null || true
 fi
 
-if ! bin_matches_pin; then
-  GOT_SHA="$(file_sha "$BIN")"
+if ! bin_path_matches_pin "$STAGED_BIN"; then
+  GOT_SHA="$(file_sha "$STAGED_BIN")"
   GOT_V=""
   if [ -n "$GOT_SHA" ] && [ "$GOT_SHA" = "$EXPECTED_SHA" ]; then
-    GOT_V="$(installed_version "$BIN")"
+    GOT_V="$(installed_version "$STAGED_BIN")"
   fi
   echo "ERROR: just-installed binary is not exactly $MAESTRO_RUNNER_PIN_VERSION."
   echo "  expected version: $MAESTRO_RUNNER_PIN_VERSION"
   echo "  got version:      ${GOT_V:-unknown}"
   echo "  expected sha256:  $EXPECTED_SHA"
   echo "  got sha256:       ${GOT_SHA:-unhashed}"
-  rm -f "$BIN"
   correction
   exit 1
+fi
+
+BACKUP_DIR="$RUNNER_CACHE_ROOT/.${MAESTRO_RUNNER_PIN_VERSION}.backup.$$"
+if [ -e "$BACKUP_DIR" ] || [ -L "$BACKUP_DIR" ]; then
+  echo "ERROR: refusing unexpected maestro-runner install backup path at $BACKUP_DIR."
+  correction
+  exit 1
+fi
+if [ -e "$PIN_DIR" ]; then
+  mv "$PIN_DIR" "$BACKUP_DIR"
+fi
+if ! mv "$STAGED_PIN_DIR" "$PIN_DIR"; then
+  if [ -d "$BACKUP_DIR" ] && [ ! -e "$PIN_DIR" ]; then
+    mv "$BACKUP_DIR" "$PIN_DIR"
+  fi
+  echo "ERROR: failed to publish the validated maestro-runner pin-cache."
+  correction
+  exit 1
+fi
+if [ -d "$BACKUP_DIR" ]; then
+  rm -rf "$BACKUP_DIR"
 fi
 
 report_success

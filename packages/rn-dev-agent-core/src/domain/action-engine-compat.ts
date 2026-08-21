@@ -4,7 +4,6 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
-  writeFileSync,
 } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import {
@@ -16,7 +15,12 @@ import {
 } from './engine-pin.js';
 import { parseAndValidateFlow, MaestroValidationError } from './maestro-validator.js';
 import { parseM7Header } from './reusable-action.js';
-import { splitYaml, joinYaml, resolveActionPath } from './action-store.js';
+import {
+  commitMigratedActionText,
+  splitYaml,
+  joinYaml,
+  resolveActionPath,
+} from './action-store.js';
 
 export function actionEnginePinRefusal(enginePin: string | undefined): string | null {
   if (!enginePin) {
@@ -312,7 +316,20 @@ export function migrateLearnedActions(projectRoot: string): ActionMigrationResul
       continue;
     }
     const updated = upsertEnginePinHeader(text);
-    if (updated.changed) writeFileSync(path, updated.text, 'utf8');
+    if (updated.changed) {
+      try {
+        commitMigratedActionText(path, updated.text);
+      } catch (err) {
+        results.push({
+          id,
+          path,
+          status: 'unreadable',
+          reason: err instanceof Error ? err.message : String(err),
+          mutated: false,
+        });
+        continue;
+      }
+    }
     results.push({
       id,
       path,

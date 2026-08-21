@@ -308,6 +308,28 @@ export class SaveActionPreconditionError extends Error {
   }
 }
 
+export function commitMigratedActionText(
+  filePath: string,
+  yamlText: string,
+): { filePath: string; sidecarPath: string } {
+  assertWritableActionFile(filePath);
+  const state = loadOrInitSidecar(filePath);
+  const sidecarPath = sidecarPathFor(filePath);
+  const result = atomicWriter.pairWrite(filePath, yamlText, sidecarPath, state);
+  const nextState = { ...state, lastSeenMtimeMs: result.finalMtimeMs };
+  const metadata = parseM7Header(yamlText, basename(filePath).replace(/\.ya?ml$/i, ''));
+  mirrorToDb({
+    yamlFilePath: filePath,
+    state: nextState,
+    meta: {
+      appId: metadata?.appId,
+      status: metadata?.status,
+      path: filePath,
+    },
+  });
+  return { filePath, sidecarPath };
+}
+
 export function saveAction(action: ReusableAction): { filePath: string; sidecarPath: string } {
   assertWritableActionFile(action.filePath);
   // GH #113: soft-assertion contract enforcement. Both current callers

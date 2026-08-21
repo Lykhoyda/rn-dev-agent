@@ -151,17 +151,25 @@ export function createSaveAsActionHandler() {
     // generateMaestro emits the appId top section + M7 header + body
     // when bundleId + M7 fields are supplied. Mirrors what hand-authored
     // .rn-agent/actions/*.yaml files look like.
-    const yamlText = generateMaestro(events, {
-      testName: args.testName ?? args.intent,
-      bundleId: args.bundleId,
-      startRoute,
-      id: args.id,
-      intent: args.intent,
-      tags: args.tags,
-      mutates: args.mutates,
-      status,
-      produces: args.produces,
-    });
+    let yamlText: string;
+    try {
+      yamlText = generateMaestro(events, {
+        testName: args.testName ?? args.intent,
+        bundleId: args.bundleId,
+        startRoute,
+        id: args.id,
+        intent: args.intent,
+        tags: args.tags,
+        mutates: args.mutates,
+        status,
+        produces: args.produces,
+      });
+    } catch (err) {
+      return failResult(
+        err instanceof Error ? err.message : String(err),
+        'BAD_RECORDING',
+      );
+    }
 
     // Issue #101: sidecar-first atomic pair-write. The atomicWriter
     // owns `lastSeenMtimeMs` correctness (overrides whatever we seed in

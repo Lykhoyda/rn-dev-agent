@@ -16,6 +16,7 @@ const execFile = promisify(execFileCb);
 export const MAESTRO_RUNNER_PIN = Object.freeze({
     version: pinManifest.version,
     sha256: Object.freeze({ ...pinManifest.sha256 }),
+    archiveSha256: Object.freeze({ ...pinManifest.archiveSha256 }),
     knownQuirks: Object.freeze(pinManifest.knownQuirks.map((quirk) => Object.freeze({ ...quirk }))),
 });
 const TRUSTED_DRIFT_SHA256 = Object.freeze({
@@ -172,8 +173,7 @@ export function pinArchiveCoords(platformKey) {
     }
 }
 export function buildReplayEngineStatus(cls, version, _cliPresent, extras = {}) {
-    // Ambient Maestro CLI is never a session engine. Missing pin-cache → none.
-    const engine = cls === 'not-installed' ? 'none' : 'maestro-runner';
+    const engine = cls === 'pinned-ok' ? 'maestro-runner' : 'none';
     return {
         engine,
         version,
@@ -334,6 +334,10 @@ export function pinCorrection(status, platformKey = nodePlatformKey()) {
         case 'unknown-version':
             return `Session maestro-runner version could not be read. ${install}`;
         case 'unverified':
+            if (status.version && compareVersions(status.version, pinned) > 0) {
+                return (`Session pin-cache contains an unverified newer maestro-runner entry ${installed}; ` +
+                    `its directory name is not trusted binary evidence and it will not be executed. ${install}`);
+            }
             return `Session maestro-runner ${installed} could not be checksum-verified on ${platformKey}. ${install}`;
         case 'pinned-ok':
             return `Session maestro-runner ${pinned} is selected from the pin-cache.`;
@@ -405,14 +409,8 @@ async function detect(resolvers) {
             });
         }
         const comparison = compareVersions(cacheVersion, MAESTRO_RUNNER_PIN.version);
-        if (!expectedSha256 && comparison > 0) {
-            return buildReplayEngineStatus('drift-newer', cacheVersion, false, {
-                selectedPath: binPath,
-                provenance: 'pin-cache',
-            });
-        }
         if (!expectedSha256) {
-            return buildReplayEngineStatus('unverified', null, false, {
+            return buildReplayEngineStatus('unverified', cacheVersion, false, {
                 selectedPath: binPath,
                 provenance: 'pin-cache',
             });

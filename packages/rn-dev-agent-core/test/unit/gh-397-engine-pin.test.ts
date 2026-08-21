@@ -83,6 +83,7 @@ test('gh-397: buildReplayEngineStatus picks engine + carries quirk ids', () => {
   assert.ok(ok.quirks.includes('android-pre-o-unsupported'));
   assert.equal(buildReplayEngineStatus('not-installed', null, true).engine, 'none');
   assert.equal(buildReplayEngineStatus('not-installed', null, false).engine, 'none');
+  assert.equal(buildReplayEngineStatus('unverified', '1.2.0', false).engine, 'none');
 });
 
 test('gh-397: enginePinCaveat only fires on drift/checksum states', () => {
@@ -168,7 +169,7 @@ test('gh-397: newer cache drift is reported without executing its binary', async
   try {
     for (const [version, expected, expectedVersion] of [
       ['1.0.9', 'checksum-mismatch', null],
-      ['1.2.0', 'drift-newer', '1.2.0'],
+      ['1.2.0', 'unverified', '1.2.0'],
     ] as const) {
       const cache = mkdtempSync(join(tmpdir(), 'rn-versioned-runner-cache-'));
       const binDir = join(cache, 'maestro-runner', version, 'bin');
@@ -189,6 +190,11 @@ test('gh-397: newer cache drift is reported without executing its binary', async
       assert.equal(status.version, expectedVersion);
       assert.equal(doctor.installedVersion, expectedVersion);
       assert.equal(status.selectedPath, join(binDir, 'maestro-runner'));
+      assert.equal(status.engine, 'none');
+      if (version === '1.2.0') {
+        assert.match(String(doctor.correction), /unverified newer/);
+        assert.match(String(doctor.correction), /will not be executed/);
+      }
       assert.throws(() => readFileSync(marker));
     }
   } finally {
@@ -244,7 +250,7 @@ test('gh-397: getEngineStatus refuses execution when hashing fails', async () =>
     platformKey: KEY,
   });
   assert.equal(s.pin.status, 'unverified');
-  assert.equal(s.engine, 'maestro-runner');
+  assert.equal(s.engine, 'none');
   assert.equal(execCalls, 0);
   _resetEngineStatusForTest();
 });

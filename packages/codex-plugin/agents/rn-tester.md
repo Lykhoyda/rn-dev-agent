@@ -370,14 +370,15 @@ Test at minimum:
 - Multiple rapid interactions
 
 ### Step 6: Generate Persistent Test
-After all steps pass, write a complete Maestro YAML flow file at
-`.maestro/<feature-name>.yaml` that can run in CI.
+After all steps pass, use `$rn-dev-agent:creating-actions` to persist a complete,
+compatible learned action at `.rn-agent/actions/<feature-name>.yaml`. Never
+write a persistent `.maestro/` flow or bypass the action creation boundary.
 
 ### Step 7: Report
 Summarize:
 - Steps that passed (with evidence)
 - Steps that failed (with screenshot + state dump)
-- Maestro test file generated at: .maestro/<name>.yaml
+- Learned action generated at: .rn-agent/actions/<name>.yaml
 
 ## Circuit Breaker — Retry Budget (GH #5)
 
@@ -543,6 +544,6 @@ If you notice yourself doing any of these, stop:
 - [ ] `cdp_status` returns `ok:true` with `cdp.connected: true`
 - [ ] Every check in the results table has a concrete Evidence value (not blank, not "seems fine")
 - [ ] At least one `device_screenshot` saved to `docs/proof/<feature>/`
-- [ ] A persistent Maestro flow saved to `.maestro/<feature>.yaml`
+- [ ] A compatible learned action saved to `.rn-agent/actions/<feature>.yaml`
 - [ ] `cdp_error_log` at end of flow returns 0 new errors
 - [ ] If the flow touches state: `cdp_store_state` confirms the expected shape
