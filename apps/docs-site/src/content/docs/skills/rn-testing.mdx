@@ -11,16 +11,12 @@ Activates when Claude encounters tasks involving Maestro tests, E2E flows, testI
 
 ## Key Knowledge Areas
 
-### Test Runner: maestro-runner (preferred)
+### Test Runner: exact maestro-runner pin
 
-A Go-based drop-in replacement for Maestro with the same YAML syntax:
-
-| Metric | Maestro (Java) | maestro-runner (Go) |
-|--------|---------------|---------------------|
-| Binary size | ~300MB (with JVM) | 21MB |
-| Startup time | 2-4s | &lt;100ms |
-| Memory | ~400MB | ~30MB |
-| Flow execution | Baseline | 2-3x faster |
+All YAML replay uses rn-dev-agent's tools and exactly maestro-runner `1.1.24`
+from the versioned pin-cache. Missing, drifted, unverified, checksum-mismatched,
+or unsupported runners are terminal before UI mutation; PATH, brew Maestro,
+and `~/.maestro-runner` are never replay engines.
 
 ### Critical Timing Rule
 
@@ -61,7 +57,7 @@ Before testing, checks `cdp_navigation_state` for auth screens. If logged out:
 1. Scans for Maestro subflows (prefer login over registration)
 2. Strips `clearState: true` for Dev Client builds
 3. Wraps subflows with `appId` if missing
-4. Runs via maestro-runner, verifies arrival at main screen
+4. Runs the owned subflow through `maestro_run`, then verifies arrival at the main screen; no manual-login fallback
 
 ### Permission Pre-flight
 

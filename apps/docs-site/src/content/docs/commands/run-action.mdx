@@ -10,7 +10,7 @@ Replay a saved action — login, navigate to a screen, complete a multi-step flo
 ## Usage
 
 ```
-/rn-dev-agent:run-action <name> [-e KEY=VALUE ...] [--platform ios|android] [--dry-run]
+/rn-dev-agent:run-action <name> [-e KEY=VALUE ...] [--platform ios|android]
 ```
 
 ## Examples
@@ -18,7 +18,6 @@ Replay a saved action — login, navigate to a screen, complete a multi-step flo
 ```
 /rn-dev-agent:run-action wizard-create-task -e TITLE="Buy milk" -e PRIORITY=high
 /rn-dev-agent:run-action user-login --platform android
-/rn-dev-agent:run-action mark-all-done --dry-run
 ```
 
 ## How match works
@@ -33,7 +32,10 @@ Before replay, the command reads `rn_session({ action: "status" })`. A blocked s
 
 - `-e KEY=VALUE` — fills `${KEY}` placeholders inside the action body. Repeatable.
 - `--platform ios|android` — requires an exact match with the bound session platform; it never chooses among booted devices.
-- `--dry-run` — print the resolved replay command without executing.
+
+Replay always goes through `cdp_run_action`, which verifies the exact
+maestro-runner `1.1.24` pin-cache engine and the action's `enginePin` before
+any UI mutation.
 
 ## Self-repair
 

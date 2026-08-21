@@ -117,7 +117,7 @@ Present the data in a clear format:
 - Metro: session allocated and bound
 - Other local sessions: 1
 - legacy agent-device: not installed
-- maestro-runner: 1.2.0
+- maestro-runner: 1.1.24 (pin-cache, pinned-ok)
 
 **Recent tool activity (last 5):**
 - cdp_status → PASS (120ms)

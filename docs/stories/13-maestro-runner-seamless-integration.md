@@ -1,6 +1,6 @@
 # Story 13 — Seamless integration with the existing maestro-runner (Go)
 
-**Status:** Proposed (2026-07-02) — replaces Story 07 as the near-term replay direction (D1291; Story 07 postponed, kept as the documented escalation path)
+**Status:** Historical proposal (2026-07-02). The implemented replay contract has superseded Phase 1: see the [Actions guide](../../apps/docs-site/src/content/docs/actions/index.mdx#engine-version-pinning) for the authoritative current behavior.
 **Epic:** [Maestro adoption](README.md)
 **Impact:** Replay stays on the proven Go maestro-runner engine, but the seams — version drift, WDA-blind 40 s doomed attempts, Android hideKeyboard no-op, narrow fallback grammar, no fast iteration mode — get closed so the integration feels first-party
 **Effort:** M (phased; each phase lands independently)
@@ -8,9 +8,9 @@
 
 ## Problem
 
-maestro-runner (DeviceLab.dev Go implementation, currently v1.0.9 at `~/.maestro-runner/bin/maestro-runner`, Maestro CLI as fallback — `maestro-invoke.ts:46-49`) is the replay engine for `cdp_run_action`, `maestro_run`, and the e2e suite. The engine itself is solid; the **integration seams** are where sessions bleed time and trust:
+At proposal time, maestro-runner (DeviceLab.dev Go implementation, then v1.0.9 at `~/.maestro-runner/bin/maestro-runner`, with Maestro CLI as fallback) was the replay engine for `cdp_run_action`, `maestro_run`, and the e2e suite. The engine itself was solid; the **integration seams** were where sessions bled time and trust:
 
-1. **No version pinning or compat gate.** `ensure-maestro-runner.sh` installs whatever it installs; upstream behavior changes arrive silently (B223/#369 — v1.0.9 no-ops `hideKeyboard` on Android — was discovered mid-verification, not at upgrade time). The upstream drift tracker (#227) is a manual routine, not a gate.
+1. **No version pinning or compat gate at proposal time.** `ensure-maestro-runner.sh` installed whatever it installed; upstream behavior changes arrived silently (B223/#369 — v1.0.9 no-ops `hideKeyboard` on Android — was discovered mid-verification, not at upgrade time). The upstream drift tracker (#227) was a manual routine, not a gate.
 2. **WDA-blind runtimes burn ~40 s before the fallback engages.** On iOS 26.x bridgeless, every replay pays a doomed "Building WDA…" attempt before the reactive CDP fallback fires (`2026-06-19-317-...-phase2-design.md` accepted this deliberately, deferring a proactive probe).
 3. **The CDP fallback grammar is deliberately narrow** (id-only selectors, actions-only, small step subset). Actions with `tapOn: text:` remain WDA-only; `maestro_run`/suite have no fallback at all (#334 tracks exactly this extension).
 4. **Keyboard handling depends on a runner verb that is broken upstream** (`hideKeyboard` no-op on Android, B223), while we have working host-side dismissal (keyboard guard #356/#370, JS-first dismissal #379, repair-time injection idea #371) that isn't wired into the replay path.

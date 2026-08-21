@@ -1,7 +1,7 @@
 ---
 command: run-action
 description: Execute a learned Maestro flow ("action") by name with optional -e KEY=VALUE parameters. Looks the flow up via packages/rn-dev-agent-core/dist/learned-actions.js (same inventory as /rn-dev-agent:list-learned-actions), then replays it via cdp_run_action — auto-repair-aware orchestration with structured RunRecords (GH #116). Counterpart to /list-learned-actions — list discovers, run executes.
-argument-hint: <action-name> [-e KEY=VALUE ...] [--platform ios|android] [--no-auto-repair] [--dry-run]
+argument-hint: <action-name> [-e KEY=VALUE ...] [--platform ios|android] [--no-auto-repair]
 allowed-tools: Bash, Read, Glob, mcp__plugin_rn-dev-agent_cdp__rn_session, mcp__plugin_rn-dev-agent_cdp__cdp_run_action
 ---
 
@@ -21,26 +21,24 @@ without `.yaml`). Substring + case-insensitive — `task-create` will match
 ## Argument parsing
 
 The first positional arg is the action name (required). Subsequent args are
-passed through to `maestro-runner` verbatim:
+parsed into the `cdp_run_action` request:
 
 - `-e KEY=VALUE` — environment variable for `${KEY}` placeholders in the flow. Keys must match `[A-Z_][A-Z0-9_]*` (Maestro convention) — anything else is rejected by `cdp_run_action` / `maestro_run` (GH #116).
 - `--platform <ios|android>` — must match the current ready session; omitted values are filled from that session
 - `--no-auto-repair` — opt out of `cdp_repair_action` retry on `SELECTOR_NOT_FOUND` (default: auto-repair on)
-- `--dry-run` — print the resolved replay command without executing it (bash-only path; bypasses `cdp_run_action`)
 
 Example calls:
 
 ```
 /rn-dev-agent:run-action wizard-create-task -e TITLE="Buy milk" -e PRIORITY=high -e TAG=feature -e DESC="Test"
 /rn-dev-agent:run-action mark-all-done --platform android
-/rn-dev-agent:run-action wizard-create-task --dry-run -e TITLE=foo -e PRIORITY=low -e TAG=bug -e DESC=test
 /rn-dev-agent:run-action mark-all-done --no-auto-repair    # surface the raw failure without patching
 ```
 
 ## Protocol
 
 1. **Parse arguments.** First word of `$ARGUMENTS` is the action name. Detect
-   `--platform`, `--dry-run`, `--no-auto-repair`, and collect every
+   `--platform`, `--no-auto-repair`, and collect every
    `-e KEY=VALUE` pair into a `params` object (key must match
    `[A-Z_][A-Z0-9_]*`; reject malformed early — `cdp_run_action` will
    refuse them anyway, but catching at parse time gives a clearer
@@ -78,7 +76,7 @@ Example calls:
      **warn the user explicitly** and ask for confirmation before running.
      Mention that destructive flows can create duplicate backend rows when
      replayed multiple times — suggest using a timestamp-suffixed TITLE
-     parameter or running with `--dry-run` first.
+     parameter.
    - Only once the session is not `blocked`: require one ready session, and
      check the flow's `appId:` and optional platform against its exact app and
      platform bindings. A mismatch is not repairable by choosing another
@@ -105,11 +103,8 @@ Example calls:
      trigger: "agent"                    // or "human" / "ci" based on context
    }
    ```
-   If `--dry-run`, do NOT call `cdp_run_action`. Print the resolved call
-   shape (the JSON args object as above) plus the would-be Maestro CLI
-   `maestro-runner --platform <PLATFORM> test -e K=V ... <FLOW_PATH>` and
-   stop. The `cdp_run_action` tool always executes, so a separate
-   bash-print path is necessary for dry-run.
+   `cdp_run_action` resolves only the exact `1.1.24` pin-cache engine and
+   refuses an incompatible or missing action `enginePin` before UI mutation.
 
 6. **Execute via MCP**:
    ```
@@ -210,9 +205,9 @@ Next step: <single concrete suggestion>
 | `/rn-dev-agent:debug-screen` | Step 0a: same — replay the matching flow to deterministically reproduce the bug |
 | `/rn-dev-agent:proof-capture` | Future: replay an existing flow under recording to produce the proof video without manually walking the UI |
 
-These commands run the underlying script + maestro-runner directly rather
-than literally invoking `/rn-dev-agent:run-action` (slash commands cannot
-reliably call other slash commands), but the contract is the same.
+These commands resolve the action inventory and call `cdp_run_action` directly
+rather than literally invoking `/rn-dev-agent:run-action` (slash commands
+cannot reliably call other slash commands), but the contract is the same.
 
 ## Failure modes to flag
 

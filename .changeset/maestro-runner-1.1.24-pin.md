@@ -3,4 +3,4 @@
 "rn-dev-agent-plugin": minor
 ---
 
-Pin session replay to maestro-runner 1.1.24 in the pin-cache only. Setup/doctor converge and verify that exact version; learned actions carry `enginePin: maestro-runner@1.1.24`; incompatible selectors and pin drift are terminal with no Maestro CLI fallback.
+Pin session replay to pin-cache maestro-runner 1.1.24, make setup and doctor converge and verify that exact version, require learned actions to carry `enginePin: maestro-runner@1.1.24`, and refuse incompatible selectors or pin drift without a Maestro CLI fallback.

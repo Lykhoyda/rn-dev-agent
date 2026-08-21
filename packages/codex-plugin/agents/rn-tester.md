@@ -90,8 +90,7 @@ jq '.sections.flows.items[] | {flow, path, params, replay}' /tmp/learned-actions
 **Decide:**
 1. **Exact match** (filename or first-comment-block contains the feature
    keyword AND `appId` matches the test-app): replay it via
-   `/rn-dev-agent:run-action <flow-name>` or directly with
-   `maestro-runner --platform <ios|android> test [-e KEY=VALUE …] <path>`.
+   `$rn-dev-agent:run-action <flow-name>` or `cdp_run_action`.
    A passing replay IS evidence — proceed to Step 6 (Generate / Refresh)
    and Step 7 (Report). Skip the rest.
 2. **Partial match** (covers part of the flow, e.g. login is automated but
@@ -206,21 +205,17 @@ project's own Maestro subflows instead of unreliable manual taps.
       EOF
       ```
    f. **Use the exact platform** from the ready authority session.
-   g. **Run with maestro-runner** (required — classic Maestro is
-      unreliable on Android, GH #7):
-      ```bash
-      maestro-runner --platform <ios|android> test /tmp/auth-wrapper.yaml
-      ```
-      If maestro-runner is not installed, STOP and tell the user to
-      install it. Do NOT fall back to classic Maestro.
+   g. **Run through `maestro_run`** with the exact platform and wrapper path.
+      The tool requires the exact `1.1.24` pin-cache engine before mutation.
+      If the pin is unavailable or drifted, STOP and route to setup. Do not
+      fall back to classic Maestro, manual login, or an unowned flow.
    h. **Verify arrival** at the home/main screen:
       ```
       cdp_navigation_state  → confirm route is NOT auth-related
       ```
-   i. If no Maestro subflows found, inform the user:
-      "App appears to be logged out but no Maestro login subflows
-      found in .maestro/. Please log in manually or create a
-      .maestro/subflows/login.yaml flow."
+   i. If no owned login subflow exists, stop and report that authentication
+      cannot proceed through an authorized reusable flow. Do not substitute
+      manual login or create an unverified flow during the replay.
 
 4. If the route is a main app screen (home, dashboard, tabs, etc.),
    skip this step — the user is already authenticated.
@@ -364,10 +359,7 @@ For EACH step in the flow:
    - assertVisible:
        id: "cart-badge"
    EOF
-   # ALWAYS use maestro-runner (not classic maestro) — especially on Android
-   # where classic Maestro's gRPC driver is unreliable (GH #7)
-   # --platform is a GLOBAL flag (before the test subcommand)
-   maestro-runner --platform <ios|android> test /tmp/step.yaml
+   maestro_run(platform="<ios|android>", flowPath="/tmp/step.yaml")
    ```
 
    **Android text input**: Use `device_fill` for long strings, Unicode, and

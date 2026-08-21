@@ -2487,7 +2487,7 @@ trackedTool('proof_step', 'Atomic proof capture step: navigate to a screen (opti
         .optional()
         .describe('Label for this proof step (e.g. "After adding item to cart")'),
 }, createProofStepHandler(getClient));
-trackedTool('maestro_run', 'Execute a Maestro flow via maestro-runner. Pass flowPath for an existing .yaml file, or inlineYaml for ephemeral flows. Uses UIAutomator2 on Android and XCTest on iOS. A matching active device session, explicit deviceId, or Android ANDROID_SERIAL is forwarded as an exact --device/--udid target; maestro-runner success is rejected unless its direct device/WDA evidence matches. Does NOT require CDP — works even when app is crashed or on native screens.', {
+trackedTool('maestro_run', 'Execute a Maestro flow through the exact pinned runner. The session resolves maestro-runner 1.1.24 only from its versioned pin-cache. Pass flowPath for an existing .yaml file, or inlineYaml for ephemeral flows. Missing, drifted, unverified, checksum-mismatched, or unsupported engines are refused before UI mutation. Uses UIAutomator2 on Android and XCTest on iOS. A matching active device session, explicit deviceId, or Android ANDROID_SERIAL is forwarded as an exact --device/--udid target; success is rejected unless direct device/WDA evidence matches. Does NOT require CDP — works even when app is crashed or on native screens.', {
     flowPath: z.string().optional().describe('Path to a .yaml flow file to execute'),
     inlineYaml: z
         .string()

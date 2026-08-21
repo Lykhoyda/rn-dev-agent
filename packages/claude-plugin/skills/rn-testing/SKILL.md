@@ -232,7 +232,8 @@ maestro_run(platform="<ios|android>", flowPath="/tmp/step.yaml")
 
 Every reusable Maestro flow MUST declare an M7 metadata header — `# key: value`
 comment lines above the body (Maestro ignores them; the inventory and the
-`/run-action` pre-flight parse them). The 5 inventory keys (summary — the
+`/run-action` pre-flight parse them). The five inventory keys plus the required
+replay-engine pin (summary — the
 **canonical definition** lives in the creating-actions skill's
 `references/m7-header-reference.md`; if they disagree, that reference wins):
 
@@ -243,14 +244,15 @@ comment lines above the body (Maestro ignores them; the inventory and the
 | `tags` | `[a, b, c]` lower-case kebab | feature area (auth, tasks), operation (create, delete), markers (smoke, regression) |
 | `mutates` | `true`/`false` | persistent residue? drives the `/run-action` confirmation gate; missing parses as `null` and renders as `-` (`pre-M7` for legacy headers; `?` marks an unparseable value) |
 | `status` | `experimental` \| `active` \| `deprecated` | start `experimental`; first clean replay promotes; `deprecated` = never replay |
+| `enginePin` | `maestro-runner@1.1.24` | required for replay; missing or different pins are terminal before UI mutation |
 
 **Auto-generated flows** from `cdp_record_test_generate` populate these fields
 when supplied via `GenerateOpts.id|intent|tags|mutates|status` (see
 `tools/test-recorder-generators.ts`). `maestro_generate` and **hand-written
-flows** must add the header manually before the flow is considered reusable.
+flows** must add the header manually before the flow is considered replayable.
 
-**Verification rule:** before approving a new flow for the artifact-first
-inventory, confirm the header carries all 5 keys.
+**Verification rule:** before approving a new flow for replay, confirm the
+header carries all five inventory keys plus `enginePin`.
 
 For the full authoring workflow (inventory dedup, selector grounding, the
 ASCII flow diagram, optional fields — `params`, `appId`, `produces`,

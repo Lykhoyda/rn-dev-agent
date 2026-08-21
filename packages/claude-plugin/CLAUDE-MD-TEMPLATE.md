@@ -46,9 +46,9 @@ exist as YAML).
    current project.
 2. **If a flow matches your intent:** replay it first.
    `/rn-dev-agent:run-action <flow-name> [-e KEY=VALUE …]` — pre-flights
-   mutates flag, appId match, and parameter coverage; falls back to direct
-   `maestro-runner --platform <ios|android> test … <flow-path>` if you
-   need to inspect the run yourself. A passing replay IS your evidence —
+   mutates flag, appId match, parameter coverage, action engine pin, and
+   selector compatibility; it resolves exactly maestro-runner `1.1.24` from
+   rn-dev-agent's versioned pin-cache. A passing replay IS your evidence —
    skip ahead to capturing proof.
 3. **Only if no match (or replay fails with a concrete error):** fall back to
    manual primitives (`device_press` / `device_fill` / `device_find`). When
@@ -393,7 +393,7 @@ before proof recordings.
 - **Run all flows:** `maestro_test_all` — regression suite across all `.rn-agent/actions/` flows
 - **Freeze a proven action as a regression test:** `/rn-dev-agent:lock-e2e <action-id>` (calls `cdp_lock_e2e_test`) — runs the action once strict (no auto-repair) and freezes it to `.rn-agent/e2e/` only if it passes. Parameterized actions need their params covered by the project's e2e config, or they're refused.
 - **Run the locked suite:** `cdp_run_e2e_suite` — replays all locked tests strict, persists a suite-run report with verdict + per-test results (also runnable from the observe UI's e2e tab)
-- Prefer `maestro-runner` over classic Maestro (3x faster, no JVM)
+- Replay uses only the exact pin-cache maestro-runner `1.1.24`; missing or drifted pins are terminal and never fall back to classic Maestro
 
 #### "I need to capture proof for a PR"
 - **Single proof step:** `proof_step` — navigate + verify + screenshot in one atomic call

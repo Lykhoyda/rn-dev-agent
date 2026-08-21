@@ -69,7 +69,7 @@ JSON shape (abridged):
           "appId": "com.example.app",
           "purpose": "Add an item to the cart and verify the badge increments",
           "params": ["ITEM_ID", "QTY"],
-          "replay": "maestro-runner --platform ios test -e ITEM_ID=... -e QTY=... /.../cart-add-item.yaml"
+          "replay": "display-only legacy command; execute through cdp_run_action"
         }
       ]
     },
@@ -94,6 +94,10 @@ explicitly names any **flows** that match their current intent — those should
 be replayed via `cdp_run_action` (or `/rn-dev-agent:run-action`) before any
 manual `device_*` walk. Per `feedback_execute_artifacts_before_manual.md`:
 manual primitives are a fallback, not a default.
+
+Treat the inventory's legacy `replay` string as display-only. Execute owned
+actions through `cdp_run_action` so replay resolves the exact `1.1.24`
+pin-cache engine and enforces `enginePin` and selector preflight.
 
 **This listing is read-only discovery and grants no replay authority.** A flow
 is listed whenever it exists on disk, including while the session is `blocked`

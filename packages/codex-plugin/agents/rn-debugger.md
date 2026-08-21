@@ -94,8 +94,7 @@ jq '.sections.flows.items[] | {flow, path, params, replay}' /tmp/learned-actions
 ```
 
 **Decide:**
-1. **Match found**: replay the flow first.
-   `maestro-runner --platform <ios|android> test [-e KEY=VAL …] <path>`.
+1. **Match found**: replay the flow first through `cdp_run_action`.
    - If it **fails** with the same symptom the user reported, you have a
      deterministic reproduction. Capture the failure output, then proceed
      to Step 1 with the failing screen as your starting state.
@@ -250,9 +249,7 @@ After the fix:
        id: "<element-id>"
    - assertVisible: "<expected-text>"
    EOF
-   # ALWAYS use maestro-runner (not classic maestro) — required on Android (GH #7)
-   # --platform is a GLOBAL flag (before the test subcommand)
-   maestro-runner --platform <ios|android> test /tmp/verify.yaml
+   maestro_run(platform="<ios|android>", flowPath="/tmp/verify.yaml")
    ```
 
 ## Critical Rules

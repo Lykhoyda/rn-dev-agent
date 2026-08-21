@@ -78,7 +78,7 @@ read-only and prints the exact commands for the user to confirm and run.
 | CDP bridge deps | Yes | Yes |
 | rn-fast-runner (iOS) | iOS targets only | Prebuilt artifact on releases; one-time `xcodebuild build-for-testing` fallback |
 | rn-android-runner (Android) | Android targets only | Prebuilt artifact on releases; Gradle build fallback on first use |
-| [maestro-runner](https://github.com/devicelab-dev/maestro-runner) | Yes | Yes (pinned engine, checksum-verified) |
+| [maestro-runner](https://github.com/devicelab-dev/maestro-runner) | Yes | Yes (exact `1.1.24` pin-cache engine, checksum-verified) |
 | iOS Simulator / Android Emulator | One platform | No |
 | Session-bound Metro | Yes | Project integration starts or validates it through literal `pnpm ios` / `pnpm android` |
 | CDP connection | Yes | `rn_session` owns the binding; `cdp_status` is passive and `cdp_connect` pins the exact target |
@@ -187,7 +187,7 @@ The committed tool surface is asserted in CI against a golden registry (`package
 
 - **Self-healing taps** — a stale `@ref` is re-bound by identity (testID/label/role, unique match only). Opt out with `RN_SELF_HEAL=0`. A dispatched tap is never replayed because its effect is uncertain: on iOS an unchanged tap stays a success carrying `meta.noUiChange`, and on Android a tap whose effect cannot be observed fails (`INTERACTION_EFFECT_UNVERIFIED`, `mutation: possible`) rather than reporting success.
 - **Quiescence bypass (iOS)** — XCTest's private idle-wait is disabled by default so apps with Reanimated/looping animations can't hang queries (the same WebDriverAgent-lineage technique Maestro uses). Opt out with `RN_QUIESCENCE_BYPASS=0`.
-- **Engine pinning** — maestro-runner installs a tested pin, checksum-verified fail-closed; replay results and `/doctor` report drift.
+- **Engine pinning** — setup installs exactly maestro-runner `1.1.24` in the versioned pin-cache and verifies its version and checksum fail-closed; replay and `/doctor` refuse missing or drifted engines.
 - **Degraded-runtime detection** — when taps succeed but the app doesn't respond, results carry a "simulator likely wedged, reboot it" hint instead of a misleading "element not found."
 
 ## Specialized agents
@@ -238,7 +238,7 @@ Claude Code / Codex
      iOS Simulator           Android Emulator
 
       Device lifecycle (boot / install / launch): xcrun simctl + adb
-      E2E test execution: maestro-runner (pinned) / Maestro (fallback)
+      E2E test execution: maestro-runner 1.1.24 (pin-cache only)
 ```
 
 [Architecture details](https://lykhoyda.github.io/rn-dev-agent/architecture/)
